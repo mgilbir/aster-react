@@ -1,0 +1,37 @@
+{
+  "name": "@aster/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "d3-array": "^3.2.4",
+    "d3-format": "^3.1.0",
+    "d3-scale": "^4.0.2",
+    "d3-shape": "^3.2.0",
+    "d3-time": "^3.1.0",
+    "d3-time-format": "^4.1.0",
+    "vega-expression": "^6.2.1",
+    "vega-format": "^2.1.2",
+    "vega-interpreter": "^2.3.1",
+    "vega-time": "^3.2.1",
+    "vega-util": "^2.1.0",
+    "vega-scale": "^8.1.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "vega": "^6.3.1",
+    "vega-lite": "^6.4.3"
+  }
+}

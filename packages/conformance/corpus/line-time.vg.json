@@ -1,0 +1,98 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 400,
+  "height": 300,
+  "padding": 5,
+  "background": "white",
+  "autosize": "none",
+  "data": [
+    {
+      "name": "table",
+      "values": [
+        {
+          "t": 1704067200000,
+          "v": 10
+        },
+        {
+          "t": 1706745600000,
+          "v": 20
+        },
+        {
+          "t": 1709251200000,
+          "v": 15
+        },
+        {
+          "t": 1711929600000,
+          "v": 25
+        }
+      ]
+    }
+  ],
+  "scales": [
+    {
+      "name": "x",
+      "type": "time",
+      "domain": {
+        "data": "table",
+        "field": "t"
+      },
+      "range": "width",
+      "nice": true
+    },
+    {
+      "name": "y",
+      "type": "linear",
+      "domain": {
+        "data": "table",
+        "field": "v"
+      },
+      "range": [
+        {
+          "signal": "height"
+        },
+        0
+      ],
+      "nice": true
+    }
+  ],
+  "axes": [
+    {
+      "scale": "x",
+      "orient": "bottom",
+      "grid": true,
+      "labels": false
+    },
+    {
+      "scale": "y",
+      "orient": "left",
+      "grid": true,
+      "labels": false
+    }
+  ],
+  "marks": [
+    {
+      "type": "line",
+      "from": {
+        "data": "table"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "scale": "x",
+            "field": "t"
+          },
+          "y": {
+            "scale": "y",
+            "field": "v"
+          },
+          "stroke": {
+            "value": "steelblue"
+          },
+          "strokeWidth": {
+            "value": 2
+          }
+        }
+      }
+    }
+  ]
+}

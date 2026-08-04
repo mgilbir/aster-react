@@ -1,0 +1,13 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "width": 400,
+  "height": 300,
+  "padding": 5,
+  "autosize": "none",
+  "data": { "name": "table", "values": [{ "x": 0.5, "y": 1.2 }, { "x": 1.5, "y": 3.4 }, { "x": 2.5, "y": 2.1 }] },
+  "mark": "point",
+  "encoding": {
+    "x": { "field": "x", "type": "quantitative", "axis": { "labels": false, "title": null } },
+    "y": { "field": "y", "type": "quantitative", "axis": { "labels": false, "title": null } }
+  }
+}

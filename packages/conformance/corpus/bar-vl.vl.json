@@ -1,0 +1,13 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "width": 400,
+  "height": 300,
+  "padding": 5,
+  "autosize": "none",
+  "data": { "name": "table", "values": [{ "city": "NY", "pop": 8 }, { "city": "LA", "pop": 4 }, { "city": "CH", "pop": 3 }] },
+  "mark": "bar",
+  "encoding": {
+    "x": { "field": "city", "type": "nominal", "axis": { "labels": false, "title": null } },
+    "y": { "field": "pop", "type": "quantitative", "axis": { "labels": false, "title": null } }
+  }
+}
