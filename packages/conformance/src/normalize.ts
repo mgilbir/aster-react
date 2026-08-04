@@ -44,7 +44,7 @@ export function canonicalizeSvg(svg: string): CanonicalResult {
     } else if (el.tag === 'text') {
       const text = textOf(el)
       records.push(
-        `text|${x + numAttr(el.attrs['x'])}|${y + numAttr(el.attrs['y'])}|${text}|${styleOf(el)}`,
+        `text|${num(x + numAttr(el.attrs['x']))}|${num(y + numAttr(el.attrs['y']))}|${text}|${styleOf(el)}`,
       )
     } else if (el.tag === 'polygon') {
       const pts = (el.attrs['points'] ?? '')
@@ -86,7 +86,7 @@ function styleOf(el: XmlEl): string {
   for (const k of keys) {
     const v = el.attrs[k]
     if (v === undefined) continue
-    if (k === 'opacity' && roundIn(v) === '1') continue // no-op default
+    if (k === 'opacity' && (roundIn(v) === '1' || roundIn(v) === '0')) continue // default opacity
     parts.push(`${k}=${roundIn(v)}`)
   }
   return parts.join(';')
@@ -105,7 +105,7 @@ function num(v: number | string): string {
   if (!Number.isFinite(n)) return String(n)
   const r = Math.round(n * 10 ** PRECISION) / 10 ** PRECISION
   const s = String(r)
-  return s.endsWith('.000') ? s.slice(0, -4) : s.replace(/\.?0+$/, '')
+  return s.endsWith('.000') ? s.slice(0, -4) : (s.includes('.') ? s.replace(/\.?0+$/, '') : s)
 }
 
 /** Apply a translate offset and rounding to an SVG path `d` (absolute commands). */

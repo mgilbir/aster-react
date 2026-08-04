@@ -73,7 +73,7 @@ function isGroup(item: SceneItem): item is SceneGroup {
 /** Render an axis leaf shape (line or text). */
 function renderLeaf(it: SceneItem): string {
   if (it.text != null) {
-    return `<text x="${num(it.x ?? 0)}" y="${num(it.y ?? 0)}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${attr('fill', it.fill)}>${esc(String(it.text))}</text>`
+    return `<text x="${num(it.x ?? 0)}" y="${num(it.y ?? 0)}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${attr('fill', it.fill)}${attr('opacity', it.opacity)}>${esc(String(it.text))}</text>`
   }
   const x2 = it.x2 ?? it.x ?? 0
   const y2 = it.y2 ?? it.y ?? 0
@@ -226,7 +226,7 @@ function renderTexts(group: SceneGroup): string {
   let out = `<g class="mark-text role-mark" role="graphics-symbol" aria-roledescription="text mark container">`
   for (const it of itemsOf(group)) {
     if (it.text == null) continue
-    out += `<text x="${num(it.x ?? 0)}" y="${num(it.y ?? 0)}"${attr('align', it.align)}${attr('baseline', it.baseline)}${attr('fill', it.fill)}${attr('angle', it.angle)}>${esc(String(it.text))}</text>`
+    out += `<text x="${num(it.x ?? 0)}" y="${num(it.y ?? 0)}"${attr('align', it.align)}${attr('baseline', it.baseline)}${attr('fill', it.fill)}${attr("opacity", it.opacity)}${attr("angle", it.angle)}>${esc(String(it.text))}</text>`
   }
   out += '</g>'
   return out

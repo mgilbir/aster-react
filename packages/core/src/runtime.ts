@@ -18,6 +18,7 @@ import type {
   SceneRoot,
   SizeSpec,
 } from './types.js'
+import { tickFormat } from 'vega-scale'
 
 const DEFAULT_SIZE = 500
 
@@ -395,7 +396,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     }
   }
 
-  const labelFormat = axisLabelFormat(axis, scale)
+  const count = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 5 : 5
+  const labelFormat = axisLabelFormat(axis, scale, count)
   const tickSize = axis.tickSize ?? 5
   const labelPadding = axis.labelPadding ?? 2
 
@@ -411,15 +413,14 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       items.push(tick)
     }
     if (axis.labels !== false) {
-      const text = String(labelFormat(t))
-      const label: SceneItem = { text, x: 0, y: 0 }
+      const rawV = Math.round(scale(t) as number * 1000) / 1000
+      const label: SceneItem = { text: String(labelFormat(t)), x: 0, y: 0 }
       const align = axis.labelAlign ?? (orient === 'left' ? 'right' : orient === 'right' ? 'left' : 'center')
       const baseline = axis.labelBaseline ?? (orient === 'top' ? 'bottom' : orient === 'bottom' ? 'top' : 'middle')
-      if (orient === 'left') { label.x = -tickSize - labelPadding; label.y = v + 3 }
-      else if (orient === 'right') { label.x = tickSize + labelPadding; label.y = v + 3 }
-      else if (orient === 'bottom') { label.x = v; label.y = tickSize + labelPadding }
-      else { label.x = v; label.y = -tickSize - labelPadding }
-      label.align = align as SceneItem['align']
+      if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = rawV + 3.5; label.align = align as SceneItem['align'] }
+      else if (orient === 'right') { label.x = ctx.width + tickSize + labelPadding + 0.5; label.y = rawV + 3.5; label.align = align as SceneItem['align'] }
+      else if (orient === 'bottom') { label.x = rawV + 0.5; label.y = ctx.height + 15 + 0.5; label.align = align as SceneItem['align'] }
+      else { label.x = rawV + 0.5; label.y = -tickSize - 10 + 0.5; label.align = align as SceneItem['align'] }
       label.baseline = baseline as SceneItem['baseline']
       label.fill = '#000'
       items.push(label)
@@ -443,8 +444,11 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
         ? String(ctx.runtime.expr(title.signal)({}, ctx.signalParams))
         : String(title)
     const t: SceneItem = { text, x: 0, y: 0 }
-    if (orient === 'bottom') { t.x = ctx.width / 2; t.y = ctx.height + 30; t.align = 'center'; t.baseline = 'top' }
-    else if (orient === 'left') { t.x = -30; t.y = ctx.height / 2; t.align = 'center'; t.baseline = 'bottom'; t.angle = -90 }
+    if (orient === 'bottom')  { t.x = ctx.width / 2 + 0.5; t.y = ctx.height + 30 + 0.5; t.align = 'center'; t.baseline = 'top' }
+    else if (orient === 'top') { t.x = ctx.width / 2 + 0.5; t.y = -tickSize - 10 + 0.5; t.align = 'center'; t.baseline = 'bottom' }
+    else if (orient === 'left') { t.x = -tickSize - labelPadding - 28 + 0.5; t.y = ctx.height / 2 + 0.5; t.align = 'center' }
+    else if (orient === 'right') { t.x = ctx.width + tickSize + labelPadding + 28 + 0.5; t.y = ctx.height / 2 + 0.5; t.align = 'center' }
+    t.fill = '#000'
     items.push(t)
   }
 
@@ -468,12 +472,20 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
   return scaleTicks(scale, count)
 }
 
-function axisLabelFormat(axis: CompiledAxis, scale: Scale): (v: unknown) => string {
-  const fmt = (axis.encode?.labels?.text as EncodeValue | undefined)
-  return (v) => {
-    if (fmt && typeof fmt === 'object' && 'signal' in fmt) {
-      return String((fmt as { signal: string }).signal)
-    }
-    return String(v)
+function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number): (v: unknown) => string {
+  const specFmt = (axis.encode?.labels?.text as EncodeValue | undefined)
+  if (specFmt && typeof specFmt === 'object' && 'signal' in specFmt && specFmt.signal) {
+    return () => String(specFmt.signal)
   }
+  const fmtType = (specFmt && typeof specFmt === 'object' && 'formatType' in specFmt && specFmt.formatType) ? String(specFmt.formatType) : undefined
+  const fmt = (specFmt && typeof specFmt === 'object' && 'format' in specFmt && specFmt.format) ? String(specFmt.format) : undefined
+  if (fmtType === 'time' || scale.type === 'time' || scale.type === 'utc') {
+    const L = locale(defaultLocale)
+    return fmt ? L.timeFormat(fmt) : L.timeFormat('%b %d')
+  }
+  if (scale.type !== 'linear' && scale.type !== 'log' && scale.type !== 'pow' && scale.type !== 'sqrt' && scale.type !== 'symlog') {
+    return (v) => String(v)
+  }
+  const L = locale(defaultLocale)
+  return L.format(fmt || '.1f')
 }
