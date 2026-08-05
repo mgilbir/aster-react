@@ -1,0 +1,17 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "width": 400,
+  "height": 300,
+  "padding": 5,
+  "autosize": "none",
+  "params": [{ "name": "shift", "value": 10, "bind": { "input": "range", "min": 0, "max": 30 } }],
+  "data": { "name": "table", "values": [
+    { "x": 0, "y": 2 }, { "x": 1, "y": 4 }, { "x": 2, "y": 3 }, { "x": 3, "y": 5 }
+  ] },
+  "transform": [{ "calculate": "datum.y + shift", "as": "y2" }],
+  "mark": "line",
+  "encoding": {
+    "x": { "field": "x", "type": "quantitative" },
+    "y": { "field": "y2", "type": "quantitative" }
+  }
+}

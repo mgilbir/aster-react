@@ -528,6 +528,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   const labelFormat = axisLabelFormat(axis, scale, count)
   const tickSize = axis.tickSize ?? 5
   const labelPadding = axis.labelPadding ?? 2
+  let maxLabelLen = 0
 
   for (const t of ticks) {
     const v = pos(t)
@@ -543,6 +544,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     if (axis.labels !== false) {
       const rawV = Math.round(scale(t) as number * 1000) / 1000
       const label: SceneItem = { text: String(labelFormat(t)), x: 0, y: 0 }
+      maxLabelLen = Math.max(maxLabelLen, (label.text as string).length)
       const align = axis.labelAlign ?? (orient === 'left' ? 'right' : orient === 'right' ? 'left' : 'center')
       const baseline = axis.labelBaseline ?? (orient === 'top' ? 'bottom' : orient === 'bottom' ? 'top' : 'middle')
       if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = rawV + 3.5; label.align = align as SceneItem['align'] }
@@ -554,6 +556,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       items.push(label)
     }
   }
+
+  const labelWidth = Math.floor(0.8 * maxLabelLen * 10)
 
   if (axis.domain !== false) {
     const domainLine: SceneItem = { x: 0, y: 0, x2: 0, y2: 0 }
@@ -574,8 +578,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     const t: SceneItem = { text, x: 0, y: 0 }
     if (orient === 'bottom')  { t.x = ctx.width / 2 + 0.5; t.y = ctx.height + (scale.bandwidth ? 28 : 30) + 0.5; t.align = 'center'; t.baseline = 'top' }
     else if (orient === 'top') { t.x = ctx.width / 2 + 0.5; t.y = -tickSize - 10 + 0.5; t.align = 'center'; t.baseline = 'bottom' }
-    else if (orient === 'left') { t.x = -tickSize - labelPadding - 28 + 0.5; t.y = ctx.height / 2 + 0.5; t.align = 'center' }
-    else if (orient === 'right') { t.x = ctx.width + tickSize + labelPadding + 28 + 0.5; t.y = ctx.height / 2 + 0.5; t.align = 'center' }
+    else if (orient === 'left') { t.x = -(tickSize + labelPadding + labelWidth + 3.5); t.y = ctx.height / 2 + 0.5; t.align = 'center' }
+    else if (orient === 'right') { t.x = ctx.width + tickSize + labelPadding + labelWidth + 4.5; t.y = ctx.height / 2 + 0.5; t.align = 'center' }
     t.fill = '#000'
     items.push(t)
   }
