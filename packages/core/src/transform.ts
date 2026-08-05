@@ -161,10 +161,11 @@ export function sortRows(rows: Row[], sort?: SortSpec): Row[] {
 
 function binRows(rows: Row[], t: Extract<CompiledTransform, { type: 'bin' }>, ctx: TransformContext): Row[] {
   const values = fieldValues(rows, t.field)
+  const extentLo = resolveExtent(t.extent, ctx)
   let lo: number, hi: number
-  if (t.extent) {
-    lo = t.extent[0]
-    hi = t.extent[1]
+  if (extentLo) {
+    lo = extentLo[0]
+    hi = extentLo[1]
   } else if (values.length) {
     lo = Math.min(...values)
     hi = Math.max(...values)
@@ -172,20 +173,103 @@ function binRows(rows: Row[], t: Extract<CompiledTransform, { type: 'bin' }>, ct
     lo = 0
     hi = 1
   }
+
   const span = hi - lo
-  const step = t.step ?? span / (t.maxbins ?? 20)
-  const steps = Math.max(1, Math.ceil(span / step))
+  // Use vega-statistics/bin.js algorithm for step computation
+  const step = computeBinStep(span, t.maxbins)
+  // Nice the extent: start = floor(lo/step)*step, stop = ceil(hi/step)*step
+  // with a small epsilon to handle floating point precision
+  const eps = computeBinEps(step)
+  const start = lo < Math.floor(lo / step + eps) * step
+    ? Math.floor(lo / step + eps) * step - step
+    : Math.floor(lo / step + eps) * step
+  const stop = Math.ceil(hi / step) * step
+
+  // Set the bins signal if the transform specifies one
+  if (t.signal) {
+    ctx.signals[t.signal] = { start, stop, step }
+  }
+
   const [startField, endField] = t.as
   return rows.map((r) => {
     const v = r[t.field]
-    if (typeof v !== 'number' || !Number.isFinite(v)) return { ...r, [startField]: undefined, [endField]: undefined }
-    let b = Math.floor((v - lo) / step)
-    if (b < 0) b = 0
-    if (b > steps) b = steps
-    const b0 = lo + b * step
-    const b1 = lo + Math.min(b + 1, steps) * step
+    if (typeof v !== 'number' || !Number.isFinite(v)) {
+      return { ...r, [startField]: undefined, [endField]: undefined }
+    }
+    if (v < start || v >= stop) {
+      return { ...r, [startField]: undefined, [endField]: undefined }
+    }
+    const bIdx = Math.floor((v - start) / step)
+    const b0 = start + bIdx * step
+    const b1 = start + Math.min(bIdx + 1, (stop - start) / step) * step
     return { ...r, [startField]: b0, [endField]: b1 }
   })
+}
+
+function resolveExtent(
+  extent: unknown,
+  ctx: TransformContext,
+): [number, number] | undefined {
+  if (!extent) return undefined
+  if (Array.isArray(extent) && extent.length === 2) {
+    const [a, b] = extent
+    if (typeof a === 'number' && typeof b === 'number') return [a, b]
+  }
+  if (extent && typeof extent === 'object' && 'signal' in extent) {
+    const v = ctx.signals[(extent as { signal: string }).signal]
+    if (Array.isArray(v) && v.length === 2 && typeof v[0] === 'number' && typeof v[1] === 'number') {
+      return [v[0], v[1]]
+    }
+  }
+  return undefined
+}
+
+/**
+ * Compute a "nice" step size using the vega-statistics/bin.js algorithm.
+ * This produces a step that is a power of a base (default 10), adjusted
+ * so that ceil(span/step) <= maxbins, then refined by dividing by factors.
+ */
+function computeBinStep(span: number, maxbins: number | undefined): number {
+  if (span <= 0 || !Number.isFinite(span)) return 1
+  const m = maxbins ?? 20
+  if (m < 1) return span
+
+  const base = 10
+  const logb = Math.log(base)
+
+  // Initial step: power of base that is close to span/maxbins
+  const level = Math.ceil(Math.log(m) / logb)
+  const raw = Math.round(Math.log(span) / logb) - level
+  let step = Math.pow(base, raw)
+  if (step <= 0) step = 1
+
+  // Increase step if too many bins
+  while (Math.ceil(span / step) > m) {
+    step *= base
+  }
+
+  // Decrease step if allowed (try dividing by each factor)
+  for (const div of [5, 2]) {
+    const v = step / div
+    if (v > 0 && span / v <= m) {
+      step = v
+    }
+  }
+
+  return step
+}
+
+/**
+ * Compute epsilon for nice extent rounding.
+ * Matches vega-statistics/bin.js: eps = base^(-precision-1) where precision
+ * is derived from the step's log.
+ */
+function computeBinEps(step: number): number {
+  if (step <= 0) return 0.01
+  const logb = Math.log(10)
+  const vlog = Math.log(step)
+  const precision = vlog >= 0 ? 0 : ~~(-vlog / logb) + 1
+  return Math.pow(10, -precision - 1)
 }
 
 // ---------------------------------------------------------------------------

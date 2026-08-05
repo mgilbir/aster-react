@@ -18,6 +18,8 @@ export interface ScaleContext {
   width: number
   height: number
   signals: Record<string, unknown>
+  /** Evaluate a JS expression string and return the result. */
+  evaluate?: (expr: string) => unknown
   /** Collect values of `field` across a named dataset. */
   dataField: (dataName: string, field: string) => unknown[]
 }
@@ -60,17 +62,11 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
     if (c.padding != null) s.padding?.(c.padding)
     if (c.paddingInner != null) s.paddingInner?.(c.paddingInner)
     if (c.paddingOuter != null) s.paddingOuter?.(c.paddingOuter)
-    if (c.zero !== undefined && !c.zero) { /* skip zero for color scales */ }
   }
 
-  // For non-scheme color scales, still apply zero if applicable
-  // For other types, apply remaining settings
   if (CONTINUOUS_TYPES.has(type) && typeof range0 !== 'string') {
     if (c.reverse) s.range(s.range().slice().reverse() as unknown[])
-  } else if (!CONTINUOUS_TYPES.has(type)) {
-    // Already handled above
   } else if (c.domainMin != null || c.domainMax != null) {
-    // Color schemes with domain overrides
     applyDomainMinMax(s, c.domainMin, c.domainMax)
   }
   if (c.exponent != null) s.exponent?.(c.exponent)
@@ -90,7 +86,45 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   if (c.constant != null) s.constant?.(c.constant)
   if (c.base != null) s.base?.(c.base)
 
+  // Set scale.bins if specified in the scale config.
+  // When scale.bins is set, vega-scale's tickValues/tickCount functions
+  // use validTicks(scale, scale.bins, count) instead of scale.ticks(count),
+  // which generates ticks from the actual bin boundaries.
+  if (c.bins) {
+    const binsVal = resolveBins(c.bins as { signal?: string }, ctx)
+    if (binsVal && typeof binsVal === 'object' && 'start' in binsVal && 'stop' in binsVal && 'step' in binsVal) {
+      const b = binsVal as { start: number; stop: number; step: number }
+      // Generate bin boundary array: [start, start+step, ..., stop]
+      const binArray: number[] = []
+      for (let v = b.start; v <= b.stop + b.step * 0.5; v += b.step) {
+        binArray.push(Math.round(v * 1e10) / 1e10)
+      }
+      ;(s as any).bins = binArray
+    }
+  }
+
   return s
+}
+
+function resolveBins(
+  bins: { signal?: string } | undefined | string,
+  ctx: ScaleContext,
+): Record<string, number> | undefined {
+  if (!bins) return undefined
+  if (typeof bins === 'string') {
+    const v = ctx.signals[bins]
+    if (v && typeof v === 'object' && 'start' in v && 'stop' in v && 'step' in v) {
+      return v as Record<string, number>
+    }
+    return undefined
+  }
+  if (bins.signal) {
+    const v = ctx.signals[bins.signal]
+    if (v && typeof v === 'object' && 'start' in v && 'stop' in v && 'step' in v) {
+      return v as Record<string, number>
+    }
+  }
+  return undefined
 }
 
 function applyNice(s: Scale, nice: boolean | number) {
@@ -118,23 +152,42 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
   if (Array.isArray(domain)) return domain.slice()
   if (domain && typeof domain === 'object' && !Array.isArray(domain)) {
     if ('signal' in domain && domain.signal) {
+      // Try a plain signal name lookup first
       const v = ctx.signals[domain.signal]
-      if (v == null) throw new Error(`[aster] unresolved signal in scale domain: ${domain.signal}`)
-      return Array.isArray(v) ? (v as unknown[]) : [v]
+      if (v != null) {
+        return Array.isArray(v) ? (v as unknown[]) : [v]
+      }
+      // Not a plain signal name — the signal name might be a JS expression string
+      // that references a bins object (e.g. "[bin_maxbins_10_v_bins.start, bin_maxbins_10_v_bins.stop]").
+      // Find the bins signal name embedded in the expression and expand it.
+      // Pattern: "[<name>.start, <name>.stop]" or similar
+      const binsMatch = domain.signal.match(/\[([^\]]*\.start)[\s,\s]*([^\]]*\.stop)?\]/)
+      if (binsMatch) {
+        const propExpr = binsMatch[1] as string  // e.g. "bin_maxbins_10_v_bins.start"
+        const dotIdx = propExpr.lastIndexOf('.')
+        if (dotIdx > 0) {
+          const sigKey = propExpr.substring(0, dotIdx)  // e.g. "bin_maxbins_10_v_bins"
+          const sigVal = ctx.signals[sigKey]
+          if (sigVal && typeof sigVal === 'object') {
+            const startVal = (sigVal as Record<string, unknown>).start
+            const stopVal = (sigVal as Record<string, unknown>).stop
+            if (typeof startVal === 'number' && typeof stopVal === 'number') {
+              return [startVal, stopVal]
+            }
+          }
+        }
+      }
+      throw new Error(`[aster] unresolved signal in scale domain: ${domain.signal}`)
     }
     if ('data' in domain) {
       const { data, field, fields } = domain as { data: string; field?: string; fields?: string[] }
       const fieldsToCollect = fields ?? (field ? [field] : [])
       const all: unknown[] = []
       for (const f of fieldsToCollect) {
-        for (const v of ctx.dataField(data, f)) all.push(v)
+        for (const val of ctx.dataField(data, f)) all.push(val)
       }
       if (CONTINUOUS_TYPES.has(type)) {
         if (type === 'time' || type === 'utc') {
-          // For time scales, do NOT convert date-string domains to numeric timestamps.
-          // This matches Vega's parser/extent behavior where extent on date strings
-          // returns strings which D3's scaleTime converts to Invalid Date — producing
-          // the same scale domain and no ticks/grid as Vega's output.
           const dates = all.filter(
             (v) => v instanceof Date && Number.isFinite(v.getTime()),
           ) as Date[]
@@ -142,11 +195,8 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
             const ms = dates.map((d) => d.getTime())
             return [Math.min(...ms), Math.max(...ms)]
           }
-          // Return raw values (numbers or strings) for extent
-          // D3 scaleTime will parse/convert internally, matching Vega's runtime.
           const nums = all.filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
           if (nums.length) return [Math.min(...nums), Math.max(...nums)]
-          // Fall through to raw values (strings or mixed)
         }
         const finite = all.filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
         if (!finite.length) return []
@@ -154,7 +204,6 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
       }
       let vals = distinctValues(all)
       if ((domain as { sort?: unknown }).sort === true) {
-        // Sort domain alphabetically (Vega default for nominal scales)
         vals.sort((a, b) => (a as string) < (b as string) ? -1 : (a as string) > (b as string) ? 1 : 0)
       }
       return vals
@@ -211,19 +260,29 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext): unknown[] | string 
 }
 
 /** Tick helpers reused from vega-scale (used by the axis runtime). */
-export function scaleTicks(s: Scale, count?: number, size?: number, _step?: number): unknown[] {
+export function scaleTicks(s: Scale, count?: number, _size?: number, _step?: number): unknown[] {
   // For time/utc scales: use the scale range width so vega-scale computes
   // an appropriate tick count that matches vega's output.
   if ((s.type === 'time' || s.type === 'utc') && count == null) {
     const range = s.range() as number[]
     if (range.length >= 2) {
       const lo = range[0]!
-      const hi = range[range.length - 1]!
+      const hi = range[range.length - 1] ?? 0
       const sw = Math.abs(hi - lo)
       return (vs as any).tickValues(s, undefined, sw * 1.01) as unknown[]
     }
   }
-  // Default: use vega-scale's default tick behavior.
-  // Pass size to let vega-scale compute the optimal tick count.
-  return (vs as any).tickValues(s, count, size) as unknown[]
+  // For linear scales with bins: use tickValues which respects scale.bins
+  // If bins is set, vega-scale's tickValues uses validTicks() which generates
+  // ticks from the bin boundary values instead of d3's default tick algorithm.
+  if (count != null) {
+    return (vs as any).tickValues(s, count) as unknown[]
+  }
+  // Fallback: use d3-scale's ticks with the scale range
+  const range = s.range() as number[]
+  if (range.length >= 2) {
+    const span = Math.abs((range[range.length - 1] ?? 0) - (range[0] ?? 0))
+    return (vs as any).tickValues(s, undefined, span) as unknown[]
+  }
+  return []
 }
