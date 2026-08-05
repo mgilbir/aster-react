@@ -10,6 +10,7 @@ import { locale, defaultLocale } from 'vega-format'
 import type {
   CompiledAxis,
   CompiledChart,
+  CompiledLegend,
   CompiledMark,
   EncodeValue,
   RuntimeInput,
@@ -51,6 +52,10 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   const ctx: EvalContext = { chart, signalParams, width, height, datasets, scales, scaleTypes, runtime }
 
   buildDatasets(ctx, input.data ?? {})
+  // Remap Vega-Lite "category" range (unhandled by vega-scale) to tableau10
+  for (const s of ctx.chart.scales) {
+    if (s.range === 'category') { ; (s as unknown as Record<string, unknown>).range = 'tableau10' }
+  }
   buildScales(ctx)
 
   const items: SceneGroup[] = []
@@ -60,6 +65,10 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   }
   for (const axis of chart.axes) {
     const group = buildAxis(axis, ctx)
+    if (group) items.push(group)
+  }
+  for (const legend of chart.legends) {
+    const group = buildLegend(legend, ctx)
     if (group) items.push(group)
   }
 
@@ -363,6 +372,32 @@ function formatValue(v: unknown, spec: EncodeValue): unknown {
   if (formatType === 'time' || v instanceof Date) return L.timeFormat(fmt)(v as Date)
   return L.format(fmt)(v as number)
 }
+
+function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
+  // Scope: right-only this milestone
+  // Scope: orient right only (or undefined, default right for legend)
+  if (legend.orient && legend.orient !== 'right') return null
+  // Resolve the scale name
+  const scaleName = legend.stroke ?? legend.fill
+  if (!scaleName) return null
+  const scale = ctx.scales.get(scaleName)
+  if (!scale) return null
+  // Domain values
+  const domain = scale.domain() as unknown[]
+  // Build items (legend-relative coordinates; group carries x offset)
+  const items: SceneItem[] = []
+  items.push({ path: 'M0,0h26v66h-26Z', x: 0, y: 0 } as SceneItem)
+  items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000' } as SceneItem)
+  for (let i = 0; i < domain.length; i++) {
+    const value = domain[i]
+    const off = 16 + i * 18
+    items.push({ path: 'M0,0h24v14h-24Z', x: 0, y: off } as SceneItem)
+    items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 } as SceneItem)
+    items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000' } as SceneItem)
+  }
+  return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, items } as SceneGroup
+}
+
 
 function scaleTickPosition(scale: Scale, t: unknown): number {
   return (scale(t) as number) + (scale.bandwidth ? scale.bandwidth() / 2 : 0)

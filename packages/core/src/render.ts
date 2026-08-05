@@ -33,9 +33,11 @@ function renderGroup(group: SceneGroup): string {
   const type = group.marktype
   if (!type || type === 'group') {
     // axis / legend / nested group whose items may be leaf shapes
+    let transform = ''
+    if (group.x != null || group.y != null) transform = ` transform="translate(${num(group.x ?? 0)},${num(group.y ?? 0)})"`
     let out = '<g class="mark-group"'
     if (group.role) out += ` role="${group.role}"`
-    out += '>'
+    out += `${transform}>`
     for (const item of group.items ?? []) {
       if (isGroup(item)) out += renderGroup(item)
       else out += renderLeaf(item)
@@ -70,8 +72,19 @@ function isGroup(item: SceneItem): item is SceneGroup {
   return (item as SceneGroup).marktype !== undefined || Array.isArray((item as SceneGroup).items)
 }
 
-/** Render an axis leaf shape (line or text). */
+/** Render an anchor leaf shape (path, symbol, text, line). */
 function renderLeaf(it: SceneItem): string {
+  // Path items
+  if (it.path != null) {
+    return `<path d="${it.path}"${attr('fill', it.fill)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+  }
+  // Symbol items (circle arc path)
+  if (it.shape != null && it.radius != null) {
+    const rNum = num(it.radius)
+    const d = `M${rNum},0A${rNum},${rNum},0,1,1,${-rNum},0A${rNum},${rNum},0,1,1,${rNum},0`
+    const t = `transform="translate(${num(it.x ?? 0)},${num(it.y ?? 0)})"`
+    return `<path ${t} d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+  }
   if (it.text != null) {
     return `<text x="${num(it.x ?? 0)}" y="${num(it.y ?? 0)}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${attr('fill', it.fill)}${attr('opacity', it.opacity)}>${esc(String(it.text))}</text>`
   }
