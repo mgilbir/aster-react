@@ -26,6 +26,7 @@ declare module 'vega-scale' {
   export function tickCount(scale: Scale, count: number, size?: number, step?: number): number
   export function tickValues(scale: Scale, count: number, size?: number, step?: number): unknown[]
   export function tickFormat(
+    locale: unknown,
     scale: Scale,
     count: number,
     specifier?: string,

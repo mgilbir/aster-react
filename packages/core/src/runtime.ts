@@ -419,7 +419,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       const baseline = axis.labelBaseline ?? (orient === 'top' ? 'bottom' : orient === 'bottom' ? 'top' : 'middle')
       if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = rawV + 3.5; label.align = align as SceneItem['align'] }
       else if (orient === 'right') { label.x = ctx.width + tickSize + labelPadding + 0.5; label.y = rawV + 3.5; label.align = align as SceneItem['align'] }
-      else if (orient === 'bottom') { label.x = rawV + 0.5; label.y = ctx.height + 15 + 0.5; label.align = align as SceneItem['align'] }
+      else if (orient === 'bottom') { if (scale.bandwidth) { label.x = (scale(t) as number) + scale.bandwidth() / 2; label.y = ctx.height + 7 + 0.5 } else { label.x = rawV + 0.5; label.y = ctx.height + 15 + 0.5 } label.align = align as SceneItem['align'] }
       else { label.x = rawV + 0.5; label.y = -tickSize - 10 + 0.5; label.align = align as SceneItem['align'] }
       label.baseline = baseline as SceneItem['baseline']
       label.fill = '#000'
@@ -444,7 +444,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
         ? String(ctx.runtime.expr(title.signal)({}, ctx.signalParams))
         : String(title)
     const t: SceneItem = { text, x: 0, y: 0 }
-    if (orient === 'bottom')  { t.x = ctx.width / 2 + 0.5; t.y = ctx.height + 30 + 0.5; t.align = 'center'; t.baseline = 'top' }
+    if (orient === 'bottom')  { t.x = ctx.width / 2 + 0.5; t.y = ctx.height + (scale.bandwidth ? 28 : 30) + 0.5; t.align = 'center'; t.baseline = 'top' }
     else if (orient === 'top') { t.x = ctx.width / 2 + 0.5; t.y = -tickSize - 10 + 0.5; t.align = 'center'; t.baseline = 'bottom' }
     else if (orient === 'left') { t.x = -tickSize - labelPadding - 28 + 0.5; t.y = ctx.height / 2 + 0.5; t.align = 'center' }
     else if (orient === 'right') { t.x = ctx.width + tickSize + labelPadding + 28 + 0.5; t.y = ctx.height / 2 + 0.5; t.align = 'center' }
@@ -487,5 +487,6 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number): (v: u
     return (v) => String(v)
   }
   const L = locale(defaultLocale)
-  return L.format(fmt || '.1f')
+  return tickFormat(L, scale, count, fmt)
+
 }
