@@ -9,9 +9,10 @@ export interface ChartProps {
   ariaLabel?: string
   className?: string
   style?: React.CSSProperties
+  signals?: Record<string, unknown>
 }
 
-export function Chart({ spec, data, width, height, ariaLabel, className, style }: ChartProps) {
+export function Chart({ spec, data, width, height, ariaLabel, className, style, signals }: ChartProps) {
   const containerRef = React.useRef<HTMLDivElement>(null)
   const [measured, setMeasured] = React.useState<{ width: number; height: number }>({
     width: 600,
@@ -41,11 +42,11 @@ export function Chart({ spec, data, width, height, ariaLabel, className, style }
 
   const markup = React.useMemo(() => {
     try {
-      return renderSpec(spec, { data, width: renderWidth, height: renderHeight })
+      return renderSpec(spec, { data, width: renderWidth, height: renderHeight, signals })
     } catch (err) {
       return null
     }
-  }, [spec, data, renderWidth, renderHeight])
+  }, [spec, data, renderWidth, renderHeight, signals])
 
   if (markup === null) {
     return <div role="alert" style={style}>Chart render failed</div>
