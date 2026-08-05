@@ -18,8 +18,10 @@ import type {
   SceneItem,
   SceneRoot,
   SizeSpec,
+  VgSpec,
 } from './types.js'
 import { tickFormat } from 'vega-scale'
+import { compileChart } from './compiler.js'
 
 const DEFAULT_SIZE = 500
 
@@ -35,7 +37,22 @@ interface EvalContext {
   _defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }> }>
 }
 
-export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
+/**
+ * @public
+ * Shared chart metadata extracted from a Vega spec.
+ */
+export interface ChartInfo {
+  width: number
+  height: number
+  padding: { top: number; right: number; bottom: number; left: number }
+  scales: Map<string, Scale>
+}
+
+/**
+ * Prepare the shared EvalContext used by both evaluateChart and getChartInfo.
+ * This is a single source-of-truth for signal/size/dataset/scale setup.
+ */
+function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx: EvalContext; width: number; height: number } {
   const signals = { ...chart.signals, ...input.signals }
   const width = resolveSize(chart.width, input.width, signals)
   const height = resolveSize(chart.height, input.height, signals)
@@ -60,30 +77,51 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   }
   buildScales(ctx)
 
+  return { ctx, width, height }
+}
+
+export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
+  const { ctx, width, height } = prepareChartCtx(chart, input)
+
   const items: SceneGroup[] = []
-  for (const mark of chart.marks) {
+  for (const mark of ctx.chart.marks) {
     const group = evaluateMark(mark, ctx)
     if (group) items.push(group)
   }
-  for (const axis of chart.axes) {
+  for (const axis of ctx.chart.axes) {
     const group = buildAxis(axis, ctx)
     if (group) items.push(group)
   }
-  for (const legend of chart.legends) {
+  for (const legend of ctx.chart.legends) {
     const group = buildLegend(legend, ctx)
     if (group) items.push(group)
   }
 
   const scene: SceneRoot = {
-    width: width + chart.padding.left + chart.padding.right,
-    height: height + chart.padding.top + chart.padding.bottom,
-    background: chart.background,
-    frameStroke: chart.frameStroke,
-    padding: chart.padding,
+    width: width + ctx.chart.padding.left + ctx.chart.padding.right,
+    height: height + ctx.chart.padding.top + ctx.chart.padding.bottom,
+    background: ctx.chart.background,
+    frameStroke: ctx.chart.frameStroke,
+    padding: ctx.chart.padding,
     items,
   }
-  if (defs.length) scene.defs = defs
+  if (ctx._defs.length) scene.defs = ctx._defs
   return scene
+}
+
+/**
+ * Compute chart metadata (size, padding, scales) without building the full scene.
+ * Useful for interaction, brushing, crosshair, etc.
+ */
+export function getChartInfo(spec: VgSpec, input: RuntimeInput = {}): ChartInfo {
+  const chart = compileChart(spec)
+  const { ctx, width, height } = prepareChartCtx(chart, input)
+  return {
+    width,
+    height,
+    padding: ctx.chart.padding,
+    scales: ctx.scales,
+  }
 }
 
 function resolveSize(size: SizeSpec, override: number | undefined, signals: Record<string, unknown>): number {

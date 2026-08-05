@@ -19,14 +19,15 @@ export type {
   VgSpec,
 } from './types.js'
 export { compileChart } from './compiler.js'
-export { evaluateChart } from './runtime.js'
+export { evaluateChart, getChartInfo } from './runtime.js'
+export type { ChartInfo } from './runtime.js'
 export { renderSceneToSvg } from './render.js'
 export { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 export { buildScale, type Scale } from './scales.js'
 export { applyTransforms, sortRows, type Row } from './transform.js'
 
 import { compileChart } from './compiler.js'
-import { evaluateChart } from './runtime.js'
+import { evaluateChart, getChartInfo } from './runtime.js'
 import { renderSceneToSvg } from './render.js'
 import type { RuntimeInput, VgSpec } from './types.js'
 
