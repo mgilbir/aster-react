@@ -12,18 +12,48 @@ export interface ChartProps {
 }
 
 export function Chart({ spec, data, width, height, ariaLabel, className, style }: ChartProps) {
+  const containerRef = React.useRef<HTMLDivElement>(null)
+  const [measured, setMeasured] = React.useState<{ width: number; height: number }>({
+    width: 600,
+    height: 400,
+  })
+
+  const useOverrides = width != null && height != null
+
+  React.useEffect(() => {
+    if (useOverrides) return
+    const el = containerRef.current
+    if (!el) return
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver((entries) => {
+        const { width: w, height: h } = entries[0]?.contentRect ?? {}
+        if (w && h) {
+          setMeasured({ width: w, height: h })
+        }
+      })
+      observer.observe(el)
+      return () => observer.disconnect()
+    }
+  }, [useOverrides])
+
+  const renderWidth = useOverrides ? width : measured.width
+  const renderHeight = useOverrides ? height : measured.height
+
   const markup = React.useMemo(() => {
     try {
-      return renderSpec(spec, { data, width, height })
+      return renderSpec(spec, { data, width: renderWidth, height: renderHeight })
     } catch (err) {
       return null
     }
-  }, [spec, data, width, height])
+  }, [spec, data, renderWidth, renderHeight])
+
   if (markup === null) {
     return <div role="alert" style={style}>Chart render failed</div>
   }
+
   return (
     <div
+      ref={containerRef}
       role={ariaLabel ? 'img' : undefined}
       aria-label={ariaLabel}
       className={className}
