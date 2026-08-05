@@ -1,7 +1,14 @@
 packages:
   - packages/*
+  - apps/*
+
+allowBuilds:
+  workerd: set this to true or false
 
 onlyBuiltDependencies:
   - esbuild
-allowBuilds:
-  esbuild: false
+  - workerd
+
+# wrangler (demo deploy tool) bundles workerd; its postinstall download is
+# only needed for `wrangler dev`, not for static-assets deploys.
+strictDepBuilds: false

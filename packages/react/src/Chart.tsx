@@ -99,9 +99,8 @@ export function Chart({
   const handlePointerDown = React.useCallback(
     (e: React.PointerEvent) => {
       if (!hasInteraction) return
-      const el = (e.target as HTMLElement).closest('svg')?.parentElement
-      if (!el) return
-      const rect = el.getBoundingClientRect()
+      const rect = containerRef.current?.getBoundingClientRect()
+      if (!rect) return
       const x = e.clientX - rect.left
       const y = e.clientY - rect.top
       setDragPixelStart({ x, y })
@@ -116,9 +115,8 @@ export function Chart({
   const handlePointerMove = React.useCallback(
     (e: React.PointerEvent) => {
       if (!isDragging || dragPixelStart == null || !hasInteraction) return
-      const el = (e.target as HTMLElement).closest('svg')?.parentElement
-      if (!el) return
-      const rect = el.getBoundingClientRect()
+      const rect = containerRef.current?.getBoundingClientRect()
+      if (!rect) return
       const x = e.clientX - rect.left
       const y = e.clientY - rect.top
       setDragPixelEnd({ x, y })
@@ -137,12 +135,11 @@ export function Chart({
         setIsDragging(false)
         return
       }
-      const el = (e.target as HTMLElement).closest('svg')?.parentElement
-      if (!el) {
+      const rect = containerRef.current?.getBoundingClientRect()
+      if (!rect) {
         setIsDragging(false)
         return
       }
-      const rect = el.getBoundingClientRect()
       const x = e.clientX - rect.left
       const y = e.clientY - rect.top
 

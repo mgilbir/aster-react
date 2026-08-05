@@ -32,6 +32,7 @@ export interface RuntimeInput {
 // ---------------------------------------------------------------------------
 
 export interface CompiledChart {
+  autosize?: string
   width: SizeSpec
   height: SizeSpec
   padding: { top: number; right: number; bottom: number; left: number }

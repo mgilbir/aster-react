@@ -80,29 +80,116 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
   return { ctx, width, height }
 }
 
+
+// ===========================================================================
+// Shared axis/legend + padding computation — used by both evaluateChart and getChartInfo
+// ===========================================================================
+
+interface AxisLegendResult {
+  groups: SceneGroup[]
+  padding: { top: number; right: number; bottom: number; left: number }
+}
+
+function buildAxisAndLegend(
+  ctx: EvalContext,
+  width: number,
+  height: number,
+  basePadding: { top: number; right: number; bottom: number; left: number },
+): AxisLegendResult {
+  const groups: SceneGroup[] = []
+
+  for (const axis of ctx.chart.axes) {
+    const group = buildAxis(axis, ctx)
+    if (group) groups.push(group)
+  }
+  for (const legend of ctx.chart.legends) {
+    const group = buildLegend(legend, ctx)
+    if (group) groups.push(group)
+  }
+
+  const pad = computeGuidePadding(groups, width, height, basePadding)
+  return { groups, padding: pad }
+}
+
+function computeGuidePadding(
+  items: SceneGroup[],
+  width: number,
+  height: number,
+  base: { top: number; right: number; bottom: number; left: number },
+): { top: number; right: number; bottom: number; left: number } {
+  let minX = 0
+  let maxX = width
+  let minY = 0
+  let maxY = height
+  const M = 5
+
+  for (const group of items) {
+    if (group.role === 'axis') {
+      const subItems = group.items ?? []
+      for (const s of subItems) {
+        if (s.text != null) {
+          const sx = s.x ?? 0
+          const sy = s.y ?? 0
+          minX = Math.min(minX, sx)
+          maxX = Math.max(maxX, sx)
+          minY = Math.min(minY, sy)
+          maxY = Math.max(maxY, sy)
+        }
+      }
+    } else if (group.role === 'legend') {
+      const gx = group.x ?? 0
+      const gy = group.y ?? 0
+      const gw = group.width ?? 0
+      const gh = group.height ?? 0
+      minX = Math.min(minX, gx)
+      maxX = Math.max(maxX, gx + gw)
+      minY = Math.min(minY, gy)
+      maxY = Math.max(maxY, gy + gh)
+    }
+  }
+
+  return {
+    left:   Math.max(base.left,   M + Math.max(0, -minX)),
+    right:  Math.max(base.right,  M + Math.max(0, maxX - width)),
+    top:    Math.max(base.top,    M + Math.max(0, -minY)),
+    bottom: Math.max(base.bottom, M + Math.max(0, maxY - height)),
+  }
+}
+
 export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
   const { ctx, width, height } = prepareChartCtx(chart, input)
 
   const items: SceneGroup[] = []
+
+  // 1) Build marks (plot area)
   for (const mark of ctx.chart.marks) {
     const group = evaluateMark(mark, ctx)
     if (group) items.push(group)
   }
-  for (const axis of ctx.chart.axes) {
-    const group = buildAxis(axis, ctx)
-    if (group) items.push(group)
-  }
-  for (const legend of ctx.chart.legends) {
-    const group = buildLegend(legend, ctx)
-    if (group) items.push(group)
+
+  // 2) Build axes + legends and compute padding
+  const { groups: guideGroups, padding } = buildAxisAndLegend(ctx, width, height, ctx.chart.padding)
+
+  // Merge guide groups into items
+  for (const g of guideGroups) items.push(g)
+
+  // 3) Build the scene
+  let sceneWidth: number
+  let sceneHeight: number
+  if (ctx.chart.autosize !== 'none') {
+    sceneWidth = width + padding.left + padding.right
+    sceneHeight = height + padding.top + padding.bottom
+  } else {
+    sceneWidth = width + ctx.chart.padding.left + ctx.chart.padding.right
+    sceneHeight = height + ctx.chart.padding.top + ctx.chart.padding.bottom
   }
 
   const scene: SceneRoot = {
-    width: width + ctx.chart.padding.left + ctx.chart.padding.right,
-    height: height + ctx.chart.padding.top + ctx.chart.padding.bottom,
+    width: sceneWidth,
+    height: sceneHeight,
     background: ctx.chart.background,
     frameStroke: ctx.chart.frameStroke,
-    padding: ctx.chart.padding,
+    padding: ctx.chart.autosize === 'none' ? ctx.chart.padding : padding,
     items,
   }
   if (ctx._defs.length) scene.defs = ctx._defs
@@ -116,16 +203,20 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
 export function getChartInfo(spec: VgSpec, input: RuntimeInput = {}): ChartInfo {
   const chart = compileChart(spec)
   const { ctx, width, height } = prepareChartCtx(chart, input)
+
+  // Build axes+legends and compute the same padding that evaluateChart uses
+  const { padding } = buildAxisAndLegend(ctx, width, height, chart.padding)
+
   return {
     width,
     height,
-    padding: ctx.chart.padding,
+    padding: chart.autosize === 'none' ? chart.padding : padding,
     scales: ctx.scales,
   }
 }
 
 function resolveSize(size: SizeSpec, override: number | undefined, signals: Record<string, unknown>): number {
-  if (typeof size === 'number') return size
+  if (typeof size === 'number' && Number.isFinite(size)) return size
   if (size && typeof size === 'object') {
     if ('signal' in size) {
       const v = signals[size.signal]
@@ -500,6 +591,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       role: 'legend',
       x: ctx.width + 18,
       y: 0,
+      width: 42,
+      height: 16 + L,
       items,
     }
     if (stops.length) {
@@ -523,7 +616,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
       items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000' })
     }
-    return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, items }
+    return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, width: 26, height: 16 + 18 * n, items }
   }
 
   // --- 'bottom' ---
@@ -539,7 +632,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       items.push({ shape: 'circle', radius: 5, x: sx + 6, y: 22, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
       items.push({ text: String(value), x: sx + 16, y: 25, align: 'left', fill: '#000' })
     }
-    return { marktype: 'group', role: 'legend', x: 0, y: ctx.height + 50, items }
+    return { marktype: 'group', role: 'legend', x: 0, y: ctx.height + 50, width: bgW, height: 30, items }
   }
 
   // Unsupported

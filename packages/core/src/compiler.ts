@@ -31,6 +31,7 @@ export function compileChart(spec: VgSpec): CompiledChart {
   const width = resolveSizeSpec(spec.width)
   const height = resolveSizeSpec(spec.height)
   const frameStroke = resolveFrameStroke(spec)
+  const autosize = resolveAutosize(spec.autosize)
 
   const data: CompiledData[] = []
   for (const d of (spec.data as Array<Record<string, unknown>>) ?? []) {
@@ -58,6 +59,7 @@ export function compileChart(spec: VgSpec): CompiledChart {
   }
 
   return {
+    autosize,
     width,
     height,
     padding,
@@ -70,6 +72,16 @@ export function compileChart(spec: VgSpec): CompiledChart {
     marks,
     signals,
   }
+}
+
+/** Parse autosize field: string like 'none'/'pad'/'fit' OR {type: 'none'} -> the type string or undefined. */
+function resolveAutosize(value: unknown): string | undefined {
+  if (value == null) return undefined
+  if (typeof value === 'string') return value || undefined
+  if (value && typeof value === 'object') {
+    return ((value as Record<string, unknown>).type as string) || undefined
+  }
+  return undefined
 }
 
 function resolveFrameStroke(spec: VgSpec): string | undefined {
