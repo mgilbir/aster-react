@@ -20,6 +20,18 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   const frameD = scene.frameStroke ? `M0.5,0.5h${plotW}v${plotH}h-${plotW}Z` : `M0,0h${plotW}v${plotH}h-${plotW}Z`
   out += `<path class="background" aria-hidden="true" d="${frameD}"${scene.frameStroke ? ` stroke="${scene.frameStroke}"` : ''}/>`
   out += '<g>'
+  // Emit gradient defs before mark shapes
+  if (scene.defs?.length) {
+    out += '<defs>'
+    for (const def of scene.defs) {
+      out += `<linearGradient id="${def.id}" x1="0" x2="0" y1="1" y2="0">`
+      for (const stop of def.colorStops) {
+        out += `<stop offset="${stop.offset}" stop-color="${stop.color}"/>`
+      }
+      out += '</linearGradient>'
+    }
+    out += '</defs>'
+  }
   for (const node of scene.items) {
     out += renderGroup(node)
   }

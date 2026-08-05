@@ -5,7 +5,7 @@
  */
 import { compileExpr, type ExpressionRuntime } from './expression.js'
 import { applyTransforms, sortRows, type Row } from './transform.js'
-import { buildScale, scaleTicks, type Scale } from './scales.js'
+import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
 import { locale, defaultLocale } from 'vega-format'
 import type {
   CompiledAxis,
@@ -32,6 +32,7 @@ interface EvalContext {
   scales: Map<string, Scale>
   scaleTypes: Map<string, string>
   runtime: ExpressionRuntime
+  _defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }> }>
 }
 
 export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
@@ -49,7 +50,8 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
     expr: (expr) => compileExpr(expr, runtime),
   }
 
-  const ctx: EvalContext = { chart, signalParams, width, height, datasets, scales, scaleTypes, runtime }
+  const defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }> }> = []
+  const ctx: EvalContext = { chart, signalParams, width, height, datasets, scales, scaleTypes, runtime, _defs: defs }
 
   buildDatasets(ctx, input.data ?? {})
   // Remap Vega-Lite "category" range (unhandled by vega-scale) to tableau10
@@ -72,7 +74,7 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
     if (group) items.push(group)
   }
 
-  const scene = {
+  const scene: SceneRoot = {
     width: width + chart.padding.left + chart.padding.right,
     height: height + chart.padding.top + chart.padding.bottom,
     background: chart.background,
@@ -80,7 +82,8 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
     padding: chart.padding,
     items,
   }
-  return scene as SceneRoot
+  if (defs.length) scene.defs = defs
+  return scene
 }
 
 function resolveSize(size: SizeSpec, override: number | undefined, signals: Record<string, unknown>): number {
@@ -373,50 +376,114 @@ function formatValue(v: unknown, spec: EncodeValue): unknown {
   return L.format(fmt)(v as number)
 }
 
+
 function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
   // Resolve the scale name
   const scaleName = legend.stroke ?? legend.fill
   if (!scaleName) return null
   const scale = ctx.scales.get(scaleName)
   if (!scale) return null
+  const scaleType = ctx.scaleTypes.get(scaleName) ?? ''
   // Domain values
   const domain = scale.domain() as unknown[]
-  const n = domain.length
-
+  const d0 = domain[0]
+  const d1 = domain[domain.length - 1]
   const orient = legend.orient ?? 'right'
+
+  // --- Gradient legend (continuous scale + gradientLength) ---
+  if (CONTINUOUS_TYPES.has(scaleType) && legend.gradientLength != null) {
+    // Resolve gradientLength: number, signal object, or fallback to 200
+    let GL: number = 200
+    if (typeof legend.gradientLength === 'number') {
+      GL = legend.gradientLength
+    } else if (legend.gradientLength && typeof legend.gradientLength === 'object' && 'signal' in legend.gradientLength) {
+      const signalVal = (legend.gradientLength as { signal: string }).signal
+      if (signalVal) {
+        const v = ctx.runtime.expr(signalVal)({}, ctx.signalParams)
+        GL = typeof v === 'number' ? v : 200
+      }
+    }
+    const gradientLength = GL
+    const L = Math.max(64, Math.min(gradientLength, 200))
+
+    // Compute tick values using scale.ticks with L/50 as hint
+    const tickNums = scale.ticks ? scale.ticks(L / 50) : []
+
+    const items: SceneItem[] = []
+    // Background box (0,0 to 42, 16+L)
+    items.push({ path: `M0,0h42v${16 + L}h-42Z`, x: 0, y: 0 })
+    // Gradient rect at legend-relative (0, 16), 16xL
+    items.push({
+      path: `M0,0h16v${L}h-16Z`,
+      x: 0, y: 16,
+      fill: 'url(#gradient_0)',
+      stroke: '#ddd',
+      strokeWidth: 0,
+      opacity: 0.7,
+    })
+    // Title
+    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000' })
+    // Labels
+    const d0n = typeof d0 === 'number' ? d0 : 0
+    const d1n = typeof d1 === 'number' ? d1 : 1
+    for (const t of tickNums) {
+      const tNum = typeof t === 'number' ? t : 0
+      const yPos = 16 + 3 + L * ((d1n - tNum) / (d1n - d0n))
+      items.push({ text: String(tNum), x: 18, y: yPos, align: 'left', fill: '#000' })
+    }
+    // Gradient def from scale's interpolator
+    const colorScale = scale as ColorScale
+    const stops = colorScale.interpolator
+      ? Array.from({ length: 17 }, (_, i) => ({
+          offset: i / 16,
+          color: String((colorScale.interpolator as () => (t: number) => unknown)?.()(i / 16)),
+        }))
+      : []
+    const group: SceneGroup = {
+      marktype: 'group',
+      role: 'legend',
+      x: ctx.width + 18,
+      y: 0,
+      items,
+    }
+    if (stops.length) {
+      ctx._defs.push({ id: 'gradient_0', colorStops: stops })
+    }
+    return group
+  }
+
+  // --- Symbol legend (discrete) ---
+  const n = domain.length
 
   // --- 'right' (default) ---
   if (orient === 'right' || orient === undefined) {
     const items: SceneItem[] = []
-    items.push({ path: 'M0,0h26v66h-26Z', x: 0, y: 0 } as SceneItem)
-    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000' } as SceneItem)
+    items.push({ path: 'M0,0h26v66h-26Z', x: 0, y: 0 })
+    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000' })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
       const off = 16 + i * 18
-      items.push({ path: 'M0,0h24v14h-24Z', x: 0, y: off } as SceneItem)
-      items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 } as SceneItem)
-      items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000' } as SceneItem)
+      items.push({ path: 'M0,0h24v14h-24Z', x: 0, y: off })
+      items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
+      items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000' })
     }
-    return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, items } as SceneGroup
+    return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, items }
   }
 
   // --- 'bottom' ---
   if (orient === 'bottom') {
     const bgW = 36 * n - 12
     const items: SceneItem[] = []
-    // Background box
-    items.push({ path: `M0,0h${bgW}v30h-${bgW}Z`, x: 0, y: 0 } as SceneItem)
-    // Title
-    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000' } as SceneItem)
-    // Entries laid out horizontally
+    items.push({ path: `M0,0h${bgW}v30h-${bgW}Z`, x: 0, y: 0 })
+    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000' })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
       const sx = i * 36
-      items.push({ path: 'M0,0h24v14h-24Z', x: sx, y: 16 } as SceneItem)
-      items.push({ shape: 'circle', radius: 5, x: sx + 6, y: 22, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 } as SceneItem)
-      items.push({ text: String(value), x: sx + 16, y: 25, align: 'left', fill: '#000' } as SceneItem)
+      items.push({ path: 'M0,0h24v14h-24Z', x: sx, y: 16 })
+      items.push({ shape: 'circle', radius: 5, x: sx + 6, y: 22, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
+      items.push({ text: String(value), x: sx + 16, y: 25, align: 'left', fill: '#000' })
     }
-    return { marktype: 'group', role: 'legend', x: 0, y: ctx.height + 50, items } as SceneGroup
+    return { marktype: 'group', role: 'legend', x: 0, y: ctx.height + 50, items }
   }
 
   // Unsupported

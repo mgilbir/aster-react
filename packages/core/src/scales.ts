@@ -7,6 +7,13 @@ import type { CompiledScale, ScaleDomain, ScaleRange } from './types.js'
 
 export type Scale = vs.Scale
 
+type SchemeFn = (t: number) => unknown
+
+export interface ColorScale extends Scale {
+  interpolate(interpolator: () => SchemeFn): this
+  interpolator?: () => SchemeFn
+}
+
 export interface ScaleContext {
   width: number
   height: number
@@ -15,7 +22,7 @@ export interface ScaleContext {
   dataField: (dataName: string, field: string) => unknown[]
 }
 
-const CONTINUOUS_TYPES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential'])
+export const CONTINUOUS_TYPES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential'])
 const INCLUDE_ZERO_TYPES = new Set(['linear', 'pow', 'sqrt'])
 const TIME_SCALE_TYPES = new Set(['time', 'utc'])
 
@@ -28,11 +35,47 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   const domain = resolveDomain(type, c.domain, ctx)
   s.domain(domain)
 
-  const range = resolveRange(c.range, ctx)
-  if (Array.isArray(range)) s.range(range as unknown[])
-  else s.range(range as never)
+  const range0 = resolveRange(c.range, ctx)
+  // Handle continuous schemes: scheme strings like 'blues' for color interpolation
+  if (typeof range0 === 'string' && CONTINUOUS_TYPES.has(type)) {
+    const schemeFn = vs.scheme(range0)
+    if (typeof schemeFn === 'function') {
+      s.range([0, 1])
+      const cs = s as ColorScale
+      cs.interpolate(() => schemeFn as SchemeFn)
+      cs.interpolator = () => schemeFn as SchemeFn
+    } else {
+      s.range(range0 as never)
+    }
+  } else {
+    s.range(range0 as never)
+  }
 
-  if (c.reverse) s.range(s.range().slice().reverse() as unknown[])
+  // Don't reverse for scheme-based color: range [0,1] is the normalized domain
+  // Also skip zero/padding/round/clamp for color scales
+  if (!CONTINUOUS_TYPES.has(type)) {
+    if (c.reverse) s.range(s.range().slice().reverse() as unknown[])
+    if (c.round) s.round?.(true)
+    if (c.clamp) s.clamp?.(true)
+    if (c.padding != null) s.padding?.(c.padding)
+    if (c.paddingInner != null) s.paddingInner?.(c.paddingInner)
+    if (c.paddingOuter != null) s.paddingOuter?.(c.paddingOuter)
+    if (c.zero !== undefined && !c.zero) { /* skip zero for color scales */ }
+  }
+
+  // For non-scheme color scales, still apply zero if applicable
+  // For other types, apply remaining settings
+  if (CONTINUOUS_TYPES.has(type) && typeof range0 !== 'string') {
+    if (c.reverse) s.range(s.range().slice().reverse() as unknown[])
+  } else if (!CONTINUOUS_TYPES.has(type)) {
+    // Already handled above
+  } else if (c.domainMin != null || c.domainMax != null) {
+    // Color schemes with domain overrides
+    applyDomainMinMax(s, c.domainMin, c.domainMax)
+  }
+  if (c.exponent != null) s.exponent?.(c.exponent)
+  if (c.constant != null) s.constant?.(c.constant)
+  if (c.base != null) s.base?.(c.base)
   if (c.round) s.round?.(true)
   if (c.clamp) s.clamp?.(true)
   if (c.padding != null) s.padding?.(c.padding)
@@ -133,7 +176,7 @@ function distinctValues(values: unknown[]): unknown[] {
   return out
 }
 
-function resolveRange(range: ScaleRange, ctx: ScaleContext): unknown[] {
+function resolveRange(range: ScaleRange, ctx: ScaleContext): unknown[] | string {
   if (Array.isArray(range)) {
     return range.map((r) => {
       if (r && typeof r === 'object' && 'signal' in r) {
@@ -151,9 +194,11 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext): unknown[] {
       case 'height':
         return [0, ctx.height]
       default: {
-        const scheme = vs.scheme(range)
-        if (scheme) return (typeof scheme === 'function' ? scheme() : scheme) as unknown[]
-        throw new Error(`[aster] unsupported scale range "${range}"`)
+        const name = range === 'ramp' ? 'blues' : range
+        const scheme = vs.scheme(name)
+        if (typeof scheme === 'function') return name
+        if (scheme) return scheme as unknown[]
+        throw new Error(`[aster] unsupported scale range "${name}"`)
       }
     }
   }

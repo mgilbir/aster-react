@@ -217,6 +217,8 @@ export interface SceneRoot {
   frameStroke?: string
   padding?: { top: number; right: number; bottom: number; left: number }
   items: SceneGroup[]
+  /** Gradient definitions for use by fill="url(#...)" references. */
+  defs?: Array<{ id: string; colorStops: Array<{ offset: number; color: string }> }>
   name?: string
   ariaRole?: string
   ariaLabel?: string
