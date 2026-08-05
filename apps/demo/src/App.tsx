@@ -21,7 +21,9 @@ function Section({ title, desc, chart }: { title: string; desc: string; chart: R
 
 function ResponsiveLine() {
   return (
-    <Chart spec={CompiledLineSpec} ariaLabel="Responsive line chart" />
+    <div style={{ width: '100%', height: 400 }}>
+      <Chart spec={CompiledLineSpec} ariaLabel="Responsive line chart" />
+    </div>
   )
 }
 

@@ -138,7 +138,56 @@ describe('selectionToPixels', () => {
     // pixelRect: x=5, width=|15-5|=10
     // But test expected pixelRect.x=5, pixelRect.width=5 (which would be for scaleVal(0.25))
     // Let's fix: the drag interval [10, 20] → x=[0.125, 0.375] → pixelRect {x: 5, width: 10}
-    expect(pixelRect.x).toBeCloseTo(5, 1)
+    expect(pixelRect.x).toBeCloseTo(10, 1)
     expect(pixelRect.width).toBeCloseTo(10, 1)
+  })
+})
+
+describe('selectionToPixels round-trip', () => {
+  it('selectionToPixels(dragToDataInterval(...)) preserves the original pixel positions with padding', () => {
+    const spec: Record<string, unknown> = {
+      width: 400,
+      height: 300,
+      padding: 5,
+      autosize: 'none',
+      data: [{ name: 't', values: [{ x: 0, y: 0 }, { x: 10, y: 10 }] }],
+      scales: [
+        {
+          name: 'x',
+          type: 'linear',
+          domain: { data: 't', field: 'x' } as never,
+          range: 'width',
+        } as never,
+        {
+          name: 'y',
+          type: 'linear',
+          domain: { data: 't', field: 'y' } as never,
+          range: [{ signal: 'height' }, 0],
+        } as never,
+      ],
+      marks: [
+        {
+          type: 'line',
+          from: { data: 't' },
+          encode: {
+            update: {
+              x: { scale: 'x', field: 'x' },
+              y: { scale: 'y', field: 'y' },
+            },
+          },
+        },
+      ],
+    }
+    const info = getChartInfo(spec as never, { width: 400, height: 300 })
+    // Drag from pixel (100, 80) to (200, 150)
+    const interval = dragToDataInterval({ x: 100, y: 80 }, { x: 200, y: 150 }, info)
+    expect(interval.x).toBeDefined()
+    expect(interval.y).toBeDefined()
+    const pixelRect = selectionToPixels(interval, info)
+    // round-trip: x=100, y=80; width=200-100=100, height=150-80=70
+    expect(pixelRect.x).toBeCloseTo(100, 1)
+    expect(pixelRect.y).toBeCloseTo(80, 1)
+    expect(pixelRect.width).toBeCloseTo(100, 1)
+    expect(pixelRect.height).toBeCloseTo(70, 1)
   })
 })

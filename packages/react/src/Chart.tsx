@@ -200,7 +200,7 @@ export function Chart({
       style={outerStyle}
     >
       {hasInteraction && (
-        <div
+        <div data-testid="chart-brush-overlay"
           style={{ position: 'absolute', inset: 0, zIndex: 10 }}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}

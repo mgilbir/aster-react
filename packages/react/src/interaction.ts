@@ -62,7 +62,7 @@ export function selectionToPixels(
     const [x0, x1] = selection.x
     const px0 = scaleVal(xScale, x0)
     const px1 = scaleVal(xScale, x1)
-    x = Math.min(px0, px1)
+    x = Math.min(px0, px1) + info.padding.left
     width = Math.abs(px1 - px0)
   }
 
@@ -70,7 +70,7 @@ export function selectionToPixels(
     const [y0, y1] = selection.y
     const py0 = scaleVal(yScale, y0)
     const py1 = scaleVal(yScale, y1)
-    y = Math.min(py0, py1)
+    y = Math.min(py0, py1) + info.padding.top
     height = Math.abs(py1 - py0)
   }
 
