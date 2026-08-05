@@ -41,7 +41,7 @@ describe('compiler', () => {
     expect(chart.marks[0]!.name).not.toBe('')
   })
 
-  it('static signal value lands in chart.signals; signal with on is skipped', () => {
+  it('static and event-driven signals retain their declared value', () => {
     const spec = {
       signals: [
         { name: 'width', value: 400 },
@@ -52,6 +52,6 @@ describe('compiler', () => {
     const chart = compileChart(spec)
     expect(chart.signals.width).toBe(400)
     expect(chart.signals.height).toBe(300)
-    expect(chart.signals.click).toBeUndefined()
+    expect(chart.signals.click).toBe(0)
   })
 })

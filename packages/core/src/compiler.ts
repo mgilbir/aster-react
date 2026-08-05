@@ -93,8 +93,7 @@ function resolveSignals(signals?: Array<Record<string, unknown>>): Record<string
   for (const s of signals ?? []) {
     if (!s || typeof s !== 'object') continue
     const name = s.name as string
-    const hasEventUpdate = Array.isArray(s.on) && s.on.length > 0
-    if (hasEventUpdate) continue // event-driven signals: deferred (reactive mode)
+    // Static mode: we ignore `on` event streams but keep declared default values.
     const value = s.value ?? s.init
     if (value !== undefined) out[name] = value
   }

@@ -163,42 +163,48 @@ function evaluateMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | null {
     throw new Error('[aster] nested group marks (facet/concat/layer) not supported yet')
   }
   const source = mark.from?.data
-  if (!source) return null
-  let rows = (ctx.datasets.get(source) ?? []).map((r) => ({ ...r }))
-  if (mark.sort) rows = sortRows(rows, mark.sort)
 
-  // Sort rect marks by their scale y field so rendering order matches vega:
-  // bars with smaller y-value render first (appear at the front).
-  if (mark.type === 'rect') {
-    const enc = mark.encode?.update
-    if (enc) {
-      for (const key of ['y', 'yc'] as const) {
-        const val = enc[key]
-        if (val && typeof val === 'object' && 'field' in val) {
-          const f = (val as { field: string }).field
-          rows = [...rows].sort((a: Row, b: Row) => {
-            const av = a[f]
-            const bv = b[f]
-            return (typeof bv === 'number' ? bv : 0) - (typeof av === 'number' ? av : 0)
-          })
-          break
+  let items: SceneItem[]
+  if (source) {
+    let rows = (ctx.datasets.get(source) ?? []).map((r) => ({ ...r }))
+    if (mark.sort) rows = sortRows(rows, mark.sort)
+
+    // Sort rect marks by their scale y field so rendering order matches vega:
+    // bars with smaller y-value render first (appear at the front).
+    if (mark.type === 'rect') {
+      const enc = mark.encode?.update
+      if (enc) {
+        for (const key of ['y', 'yc'] as const) {
+          const val = enc[key]
+          if (val && typeof val === 'object' && 'field' in val) {
+            const f = (val as { field: string }).field
+            rows = [...rows].sort((a: Row, b: Row) => {
+              const av = a[f]
+              const bv = b[f]
+              return (typeof bv === 'number' ? bv : 0) - (typeof av === 'number' ? av : 0)
+            })
+            break
+          }
         }
       }
     }
-  }
 
-  const update = mark.encode?.update ?? mark.encode?.enter ?? {}
-  const items: SceneItem[] = []
-  for (const row of rows) {
-    const item = resolveEncodeSet(update, row, ctx, mark.type)
-    item.datum = row
-    items.push(item)
+    const update = mark.encode?.update ?? mark.encode?.enter ?? {}
+    items = rows.map((row) => {
+      const res = resolveEncodeSet(update, row, ctx, mark.type)
+      res.datum = row
+      return res
+    })
+  } else {
+    const update = mark.encode?.update ?? mark.encode?.enter ?? {}
+    items = [resolveEncodeSet(update, {}, ctx, mark.type)]
   }
 
   return {
     marktype: mark.type,
     name: mark.name,
     role: 'mark',
+    clip: mark.clip === true,
     items,
   }
 }
@@ -257,9 +263,17 @@ function resolveEncodeProperty(
   if (Array.isArray(spec)) {
     for (const cond of spec) {
       if (cond && typeof cond === 'object' && 'test' in cond && typeof cond.test === 'string') {
-        const test = ctx.runtime.expr(cond.test)
-        if (test(datum, ctx.signalParams)) {
-          return resolveEncodeValueInternal(cond, datum, ctx)
+        try {
+          const test = ctx.runtime.expr(cond.test)
+          if (test(datum, ctx.signalParams)) {
+            try {
+              return resolveEncodeValueInternal(cond, datum, ctx)
+            } catch {
+              return undefined
+            }
+          }
+        } catch {
+          // Expression evaluation failed (e.g., datum has no field); skip condition
         }
       }
     }
@@ -272,7 +286,11 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   if (value == null || typeof value !== 'object') return value
   // 1. Signal always takes priority - evaluate the expression
   if ('signal' in value && value.signal !== undefined) {
-    return ctx.runtime.expr(value.signal as string)(datum, ctx.signalParams)
+    try {
+      return ctx.runtime.expr(value.signal as string)(datum, ctx.signalParams)
+    } catch {
+      return undefined
+    }
   }
   // 2. Scale resolution - maps a value (or datum field) through a scale
   if ('scale' in value) {

@@ -20,63 +20,82 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   const frameD = scene.frameStroke ? `M0.5,0.5h${plotW}v${plotH}h-${plotW}Z` : `M0,0h${plotW}v${plotH}h-${plotW}Z`
   out += `<path class="background" aria-hidden="true" d="${frameD}"${scene.frameStroke ? ` stroke="${scene.frameStroke}"` : ''}/>`
   out += '<g>'
-  // Emit gradient defs before mark shapes
-  if (scene.defs?.length) {
+  // Collect clip refs during rendering
+  const clipN = { current: 0 }
+  for (const node of scene.items) {
+    out += renderGroup(node, plotW, plotH, clipN)
+  }
+  out += '</g>'
+  out += '<path class="foreground" aria-hidden="true" d="" display="none"/>'
+  out += '</g></g></g>'
+
+  // Emit defs at SVG root level (gradients + clip paths)
+  if (scene.defs?.length || clipN.current > 0) {
     out += '<defs>'
-    for (const def of scene.defs) {
+    for (const def of scene.defs ?? []) {
       out += `<linearGradient id="${def.id}" x1="0" x2="0" y1="1" y2="0">`
       for (const stop of def.colorStops) {
         out += `<stop offset="${stop.offset}" stop-color="${stop.color}"/>`
       }
       out += '</linearGradient>'
     }
+    for (let i = 1; i <= clipN.current; i++) {
+      out += `<clipPath id="clip${i}"><rect x="0" y="0" width="${plotW}" height="${plotH}"/></clipPath>`
+    }
     out += '</defs>'
   }
-  for (const node of scene.items) {
-    out += renderGroup(node)
-  }
-  out += '</g>'
-  out += '<path class="foreground" aria-hidden="true" d="" display="none"/>'
-  out += '</g></g></g></svg>'
+
+  out += '</svg>'
   return out
 }
 
-function renderGroup(group: SceneGroup): string {
+function renderGroup(group: SceneGroup, plotW?: number, plotH?: number, clipN?: { current: number }): string {
   const type = group.marktype
+  const needsClip = clipN
+    && group.clip === true
+    && plotW != null
+    && plotH != null
+
   if (!type || type === 'group') {
     // axis / legend / nested group whose items may be leaf shapes
     let transform = ''
     if (group.x != null || group.y != null) transform = ` transform="translate(${num(group.x ?? 0)},${num(group.y ?? 0)})"`
-    let out = '<g class="mark-group"'
-    if (group.role) out += ` role="${group.role}"`
-    out += `${transform}>`
-    for (const item of group.items ?? []) {
-      if (isGroup(item)) out += renderGroup(item)
-      else out += renderLeaf(item)
+    let out2 = '<g class="mark-group"'
+    if (group.role) out2 += ` role="${group.role}"`
+    if (needsClip) {
+      const clipId = ++clipN.current
+      out2 += ` clip-path="url(#clip${clipId})"`
     }
-    out += '</g>'
-    return out
+    out2 += `${transform}>`
+    for (const item of group.items ?? []) {
+      if (isGroup(item)) out2 += renderGroup(item, plotW, plotH, clipN)
+      else out2 += renderLeaf(item)
+    }
+    out2 += '</g>'
+    return out2
   }
 
+  // For mark groups, wrap in a clip'd outer <g> if needed
+  const inner = switchMarkup(type, group)
+
+  if (needsClip && clipN) {
+    const clipId = ++clipN.current
+    return `<g clip-path="url(#clip${clipId})">${inner}</g>`
+  }
+  return inner
+}
+
+function switchMarkup(type: string, group: SceneGroup): string {
   switch (type) {
-    case 'line':
-      return renderLine(group)
-    case 'area':
-      return renderArea(group)
-    case 'symbol':
-      return renderSymbols(group)
-    case 'rect':
-      return renderRects(group)
-    case 'rule':
-      return renderRules(group)
-    case 'text':
-      return renderTexts(group)
-    case 'path':
-      return renderPaths(group)
-    case 'arc':
-      return renderArcs(group)
-    default:
-      return ''
+    case 'line': return renderLine(group)
+    case 'area': return renderArea(group)
+    case 'symbol': return renderSymbols(group)
+    case 'rect': return renderRects(group)
+    case 'rule': return renderRules(group)
+    case 'text': return renderTexts(group)
+    case 'path': return renderPaths(group)
+    case 'arc': return renderArcs(group)
+    default: return ''
   }
 }
 
