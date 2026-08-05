@@ -374,9 +374,6 @@ function formatValue(v: unknown, spec: EncodeValue): unknown {
 }
 
 function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
-  // Scope: right-only this milestone
-  // Scope: orient right only (or undefined, default right for legend)
-  if (legend.orient && legend.orient !== 'right') return null
   // Resolve the scale name
   const scaleName = legend.stroke ?? legend.fill
   if (!scaleName) return null
@@ -384,19 +381,48 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
   if (!scale) return null
   // Domain values
   const domain = scale.domain() as unknown[]
-  // Build items (legend-relative coordinates; group carries x offset)
-  const items: SceneItem[] = []
-  items.push({ path: 'M0,0h26v66h-26Z', x: 0, y: 0 } as SceneItem)
-  items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000' } as SceneItem)
-  for (let i = 0; i < domain.length; i++) {
-    const value = domain[i]
-    const off = 16 + i * 18
-    items.push({ path: 'M0,0h24v14h-24Z', x: 0, y: off } as SceneItem)
-    items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 } as SceneItem)
-    items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000' } as SceneItem)
+  const n = domain.length
+
+  const orient = legend.orient ?? 'right'
+
+  // --- 'right' (default) ---
+  if (orient === 'right' || orient === undefined) {
+    const items: SceneItem[] = []
+    items.push({ path: 'M0,0h26v66h-26Z', x: 0, y: 0 } as SceneItem)
+    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000' } as SceneItem)
+    for (let i = 0; i < n; i++) {
+      const value = domain[i]
+      const off = 16 + i * 18
+      items.push({ path: 'M0,0h24v14h-24Z', x: 0, y: off } as SceneItem)
+      items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 } as SceneItem)
+      items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000' } as SceneItem)
+    }
+    return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, items } as SceneGroup
   }
-  return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, items } as SceneGroup
+
+  // --- 'bottom' ---
+  if (orient === 'bottom') {
+    const bgW = 36 * n - 12
+    const items: SceneItem[] = []
+    // Background box
+    items.push({ path: `M0,0h${bgW}v30h-${bgW}Z`, x: 0, y: 0 } as SceneItem)
+    // Title
+    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000' } as SceneItem)
+    // Entries laid out horizontally
+    for (let i = 0; i < n; i++) {
+      const value = domain[i]
+      const sx = i * 36
+      items.push({ path: 'M0,0h24v14h-24Z', x: sx, y: 16 } as SceneItem)
+      items.push({ shape: 'circle', radius: 5, x: sx + 6, y: 22, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 } as SceneItem)
+      items.push({ text: String(value), x: sx + 16, y: 25, align: 'left', fill: '#000' } as SceneItem)
+    }
+    return { marktype: 'group', role: 'legend', x: 0, y: ctx.height + 50, items } as SceneGroup
+  }
+
+  // Unsupported
+  return null
 }
+
 
 
 function scaleTickPosition(scale: Scale, t: unknown): number {
