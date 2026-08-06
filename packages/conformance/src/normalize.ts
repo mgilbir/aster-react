@@ -137,9 +137,21 @@ function translatePath(d: string, tx: number, ty: number): string {
     const val = parseFloat(m[2]!)
     i += m[0].length
     let offset = 0
-    if (cmd === 'H' || cmd === 'h') offset = tx
-    else if (cmd === 'V' || cmd === 'v') offset = ty
-    else offset = paramIdx % 2 === 0 ? tx : ty
+    if (cmd === 'A' || cmd === 'a') {
+      // A/a has 7 params: [rx, ry, x-rotation, large-arc-flag, sweep-flag, x, y]
+      // Only params 5 (x) and 6 (y) should be translated
+      if (paramIdx === 5) offset = tx
+      else if (paramIdx === 6) offset = ty
+      // params 0-4: no offset (defaults to 0)
+    } else if (cmd === 'H' || cmd === 'h') {
+      offset = tx
+    } else if (cmd === 'V' || cmd === 'v') {
+      offset = ty
+    } else if (paramIdx % 2 === 0) {
+      offset = tx
+    } else {
+      offset = ty
+    }
     paramIdx++
     out += num(val + offset)
   }

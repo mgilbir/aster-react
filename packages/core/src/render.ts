@@ -270,7 +270,18 @@ function renderTexts(group: SceneGroup): string {
   let out = `<g class="mark-text role-mark" role="graphics-symbol" aria-roledescription="text mark container">`
   for (const it of itemsOf(group)) {
     if (it.text == null) continue
-    out += `<text x="${num(it.x ?? 0)}" y="${num(it.y ?? 0)}"${attr('align', it.align)}${attr('baseline', it.baseline)}${attr('fill', it.fill)}${attr("opacity", it.opacity)}${attr("angle", it.angle)}>${esc(String(it.text))}</text>`
+    // Vega's text renderer adds baseline offset:
+    // top → 0.79 * fontSize, middle → 0.30 * fontSize, bottom → -0.21 * fontSize
+    const fontSize = (it as Record<string, unknown>).fontSize as number | undefined ?? 10
+    const baseline = it.baseline ?? 'alphabetic'
+    const baseY = it.y ?? 0
+    let bsOffset = 0
+    if (baseline === 'top') bsOffset = 0.79 * fontSize
+    else if (baseline === 'middle') bsOffset = 0.30 * fontSize
+    else if (baseline === 'bottom') bsOffset = -0.21 * fontSize
+    // alphabetic / default → 0 (no offset)
+    const y = num(baseY + bsOffset)
+    out += `<text x="${num(it.x ?? 0)}" y="${y}"${attr('align', it.align)}${attr('baseline', it.baseline)}${attr('fill', it.fill)}${attr("opacity", it.opacity)}${attr("angle", it.angle)}>${esc(String(it.text))}</text>`
   }
   out += '</g>'
   return out
@@ -307,6 +318,15 @@ function arcPath(cx: number, cy: number, r: number, r0: number, a0: number, a1: 
   const p0y = cy + r * Math.sin(a0)
   const p1x = cx + r * Math.cos(a1)
   const p1y = cy + r * Math.sin(a1)
+  // When r0 === 0, omit inner arc and line-to-center (d3-arc produces simpler path)
+  if (r0 === 0) {
+    return [
+      `M${num(p0x)},${num(p0y)}`,
+      `A${num(r)},${num(r)},0,${large},1,${num(p1x)},${num(p1y)}`,
+      `L${cx},${cy}`,
+      'Z',
+    ].join('')
+  }
   const i0x = cx + r0 * Math.cos(a1)
   const i0y = cy + r0 * Math.sin(a1)
   const i1x = cx + r0 * Math.cos(a0)

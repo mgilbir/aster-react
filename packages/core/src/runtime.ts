@@ -329,6 +329,13 @@ function evaluateMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | null {
     items = [resolveEncodeSet(update, {}, ctx, mark.type)]
   }
 
+  // Apply arc style default: strokeWidth=1.5
+  if (Array.isArray(mark.style) ? mark.style.includes('arc') : mark.style === 'arc') {
+    for (const it of items) {
+      if (it.strokeWidth == null) it.strokeWidth = 1.5
+    }
+  }
+
   return {
     marktype: mark.type,
     name: mark.name,
@@ -416,13 +423,22 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   // 1. Signal always takes priority - evaluate the expression
   if ('signal' in value && value.signal !== undefined) {
     try {
-      return ctx.runtime.expr(value.signal as string)(datum, ctx.signalParams)
+      let result = ctx.runtime.expr(value.signal as string)(datum, ctx.signalParams)
+      if (result != null && typeof result === 'number') {
+        const multVal = (value as { mult?: number }).mult
+        if (typeof multVal === 'number') result *= multVal
+        const offsetVal = (value as { offset?: number }).offset
+        if (typeof offsetVal === 'number') result += offsetVal
+      }
+      return result
     } catch {
       return undefined
     }
   }
   // 2. Scale resolution - maps a value (or datum field) through a scale
   if ('scale' in value) {
+    const multVal = (value as { mult?: number }).mult
+    const offsetVal = (value as { offset?: number }).offset
     const scale = ctx.scales.get(value.scale as string)
     const field = (value as { field?: unknown }).field
     const bandSpec = (value as { band?: boolean | number | { signal: string } }).band
@@ -498,17 +514,35 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
       position += offset
     }
     
+    // Apply mult/offset after scale resolution (only if they are actual numbers, not signal objects)
+    if (typeof multVal === 'number') position = position * multVal
+    if (typeof offsetVal === 'number') position = position + offsetVal
     return position
   }
   if ('field' in value) {
-    const v = datum[value.field as string]
-    return formatValue(v, value)
+    let v = datum[value.field as string]
+    if (v != null && typeof v === 'number') {
+      const multValField = (value as { mult?: number }).mult
+      if (multValField != null) v *= multValField
+      const offsetValField = (value as { offset?: number }).offset
+      if (offsetValField != null) v += offsetValField
+      v = formatValue(v, value)
+    }
+    return v
   }
   if ('value' in value) {
     const v = value.value
-    return typeof v === 'object' && v != null && 'signal' in v
-      ? resolveEncodeValueInternal(v as EncodeValue, datum, ctx)
-      : v
+    let result = typeof v === 'object' && v != null && 'signal' in v
+      ? (resolveEncodeValueInternal(v as EncodeValue, datum, ctx) as number)
+      : (v as number)
+    // Apply mult/offset
+    if (typeof result === 'number' && Number.isFinite(result)) {
+      const multVal = (value as { mult?: number }).mult
+      if (multVal != null) result *= multVal
+      const offsetVal = (value as { offset?: number }).offset
+      if (offsetVal != null) result += offsetVal
+    }
+    return result
   }
   return undefined
 }
@@ -606,17 +640,31 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
 
   // --- 'right' (default) ---
   if (orient === 'right' || orient === undefined) {
+    // Detect fill vs stroke legend channel and legend encode style.
+    // Fill legends (e.g. arc-pie): fill=color, no stroke, opacity=1, step=13, box=11
+    // Stroke legends (e.g. legend-scatter): stroke=color, no fill, opacity=0.7, step=18, box=14
+    const colorProp = legend.fill ? 'fill' : 'stroke'
+    const isStrokeLegend = !legend.fill
+    // For fill legends use Vega defaults; for stroke legends use the styled (scatter) params
+    const entryStep = isStrokeLegend ? 18 : 13
+    const boxHeight = isStrokeLegend ? 14 : 11
+    const bgHeight = 16 + boxHeight + entryStep * (n - 1)
+
     const items: SceneItem[] = []
-    items.push({ path: 'M0,0h26v66h-26Z', x: 0, y: 0 })
+    items.push({ path: `M0,0h26v${bgHeight}h-26Z`, x: 0, y: 0 })
     items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000' })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
-      const off = 16 + i * 18
-      items.push({ path: 'M0,0h24v14h-24Z', x: 0, y: off })
-      items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
+      const off = 16 + i * entryStep
+      items.push({ path: `M0,0h24v${boxHeight}h-24Z`, x: 0, y: off })
+      if (colorProp === 'fill') {
+        items.push({ shape: 'circle', radius: 5, x: 6, y: off + boxHeight / 2, fill: String(scale(value)), strokeWidth: 1.5 })
+      } else {
+        items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
+      }
       items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000' })
     }
-    return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, width: 26, height: 16 + 18 * n, items }
+    return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, width: 26, height: bgHeight, items }
   }
 
   // --- 'bottom' ---
