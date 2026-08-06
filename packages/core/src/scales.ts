@@ -243,7 +243,16 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext): unknown[] | string 
       case 'height':
         return [0, ctx.height]
       default: {
-        const name = range === 'ramp' ? 'blues' : range
+        // Named ranges map to vega's config.defaults range entries (a continuous
+        // scheme unless overridden). `range: "heatmap"` (vega-lite's default for
+        // quantitative color) resolves to the yellowgreenblue scheme.
+        const aliases: Record<string, string> = {
+          ramp: 'blues',
+          heatmap: 'yellowgreenblue',
+          ordinal: 'blues',
+          diverging: 'blueorange',
+        }
+        const name = aliases[range] ?? range
         const scheme = vs.scheme(name)
         if (typeof scheme === 'function') return name
         if (scheme) return scheme as unknown[]

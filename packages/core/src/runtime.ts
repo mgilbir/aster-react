@@ -27,6 +27,16 @@ import { compileChart } from './compiler.js'
 
 const DEFAULT_SIZE = 500
 
+/**
+ * Global gradient id counter, mirroring vega-scenegraph's module-level
+ * `gradient_id`. Vega assigns `gradient_<n>` from a process-global counter that
+ * is never reset, so the ids a spec receives depend on how many gradient legends
+ * earlier specs in the same process already rendered. Matching that counter here
+ * keeps the emitted `url(#gradient_n)` references in lockstep with vega when
+ * both renderers run in the same process (as the conformance harness does).
+ */
+let gradientIdCounter = 0
+
 interface EvalContext {
   chart: CompiledChart
   signalParams: Record<string, unknown>
@@ -37,6 +47,8 @@ interface EvalContext {
   scaleTypes: Map<string, string>
   runtime: ExpressionRuntime
   _defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }> }>
+  /** Cached facet grid layout (computed once per chart). */
+  _facetLayout?: FacetGridLayout | null
 }
 
 /**
@@ -521,13 +533,22 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | Scen
   }
   // Header groups
   if (mark.name.includes('header')) {
-    if (orient === 'column' && mark.name === 'row_header') return buildColumnFacetRowHeader(mark, ctx)
-    if (orient === 'column' && mark.name === 'column_header') return buildColumnHeaderGroup(mark, ctx)
+    if (mark.name === 'row_header') {
+      if (orient === 'column') return buildColumnFacetRowHeader(mark, ctx)
+      return buildRowHeaderGroup(mark, ctx)
+    }
+    if (mark.name === 'column_header') {
+      if (orient === 'column' || isTrellis(ctx)) return buildColumnHeaderGroup(mark, ctx)
+      return buildRowHeaderGroup(mark, ctx)
+    }
     return buildRowHeaderGroup(mark, ctx)
   }
   // Footer groups
   if (mark.name.includes('footer')) {
-    if (orient === 'column') return buildColumnFooterGroupColumn(mark, ctx)
+    if (mark.name === 'column_footer') {
+      if (orient === 'column' || isTrellis(ctx)) return buildColumnFooterGroupColumn(mark, ctx)
+      return buildColumnFooterGroup(mark, ctx)
+    }
     return buildColumnFooterGroup(mark, ctx)
   }
   throw new Error('[aster] unsupported group mark: ' + mark.name)
@@ -548,52 +569,195 @@ function inlineGroupRows(rows: Row[], keys: string[]): Row[][] {
 const ROW_SPACING = 29
 const COLUMN_SPACING = 29
 
-function buildFacetCellGroup(
+/**
+ * Facet grid layout, mirroring vega's trellisLayout/gridLayout with
+ * `align: all`, `bounds: full` and the vega-lite default layout padding (20).
+ * Cell positions are a uniform grid: cell (row r, column c) sits at
+ * (c * colAdvance, r * rowAdvance), where the advances account for the actual
+ * content bounds of every cell (mark extents may stick out past the cell box).
+ */
+interface FacetGridLayout {
+  cellWidth: number
+  cellHeight: number
+  colAdvance: number
+  rowAdvance: number
+  ncols: number
+  nrows: number
+  gridX1: number
+  gridY1: number
+  gridX2: number
+  gridY2: number
+}
+
+const FACET_LAYOUT_PADDING = 20
+
+/** Relative content bounds of a built facet cell (axes span the cell box). */
+function cellContentBounds(cell: SceneGroup, cellW: number, cellH: number): { x1: number; y1: number; x2: number; y2: number } {
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity
+  const add = (bx1: number, by1: number, bx2: number, by2: number) => {
+    x1 = Math.min(x1, bx1); y1 = Math.min(y1, by1)
+    x2 = Math.max(x2, bx2); y2 = Math.max(y2, by2)
+  }
+  for (const item of cell.items ?? []) {
+    const g = item as SceneGroup
+    if (g.role === 'axis') {
+      // Grid axes span the full cell; vega reports their extent as the cell box.
+      add(0, 0, cellW, cellH)
+      continue
+    }
+    if (g.marktype && g.marktype !== 'group' && Array.isArray(g.items)) {
+      for (const p of g.items ?? []) {
+        const it = p as SceneItem & { size?: number; strokeWidth?: number; x2?: number; y2?: number }
+        const x = it.x ?? 0, y = it.y ?? 0
+        if (g.marktype === 'symbol') {
+          // vega symbol bounds: center ± (radius + 2 * strokeWidth)
+          const size = it.size ?? 30
+          const sw = it.strokeWidth ?? 2
+          const half = Math.sqrt(size) / 2 + 2 * sw
+          add(x - half, y - half, x + half, y + half)
+        } else if (g.marktype === 'rect') {
+          let w = it.width, h = it.height
+          let x0 = x, y0 = y
+          if (w == null && it.x2 != null) { w = Math.abs(it.x2 - x0); x0 = Math.min(x0, it.x2) }
+          if (h == null && it.y2 != null) { h = Math.abs(it.y2 - y0); y0 = Math.min(y0, it.y2) }
+          if (w != null && h != null) add(x0, y0, x0 + w, y0 + h)
+        } else if (g.marktype === 'rule' || g.marktype === 'line') {
+          add(x, y, it.x2 ?? x, it.y2 ?? y)
+        } else if (g.marktype === 'text') {
+          add(x, y, x, y)
+        }
+      }
+    }
+  }
+  if (!Number.isFinite(x1)) return { x1: 0, y1: 0, x2: cellW, y2: cellH }
+  return { x1, y1, x2, y2 }
+}
+
+/**
+ * Compute the vega-compatible facet grid layout from the built cells.
+ * `bounds` are each cell's content bounds; the group's 0.5px stroke expands
+ * the union by 0.5 on every side, which is what vega feeds into gridLayout.
+ */
+function computeFacetGridLayout(
+  cells: SceneGroup[],
+  cellWidth: number,
+  cellHeight: number,
+  ncols: number,
+  nrows: number,
+): FacetGridLayout {
+  const PAD = FACET_LAYOUT_PADDING
+  const n = cells.length
+  const bounds = cells.map((c) => cellContentBounds(c, cellWidth, cellHeight))
+  const xOff = new Array<number>(n).fill(0)
+  const yOff = new Array<number>(n).fill(0)
+  let xMax = 0, yMax = 0
+  for (let i = 0; i < n; i++) {
+    const b = bounds[i]!
+    // vega expands each cell's bounds by half the group stroke width (0.5) on
+    // every side before feeding them into gridLayout.
+    const bx1 = b.x1 - 0.5, by1 = b.y1 - 0.5, bx2 = b.x2 + 0.5, by2 = b.y2 + 0.5
+    xOff[i] = PAD + Math.max(0, Math.ceil(-bx1))
+    yOff[i] = PAD + Math.max(0, Math.ceil(-by1))
+    xMax = Math.max(xMax, Math.ceil(bx2))
+    yMax = Math.max(yMax, Math.ceil(by2))
+  }
+  // First column / first row start at the origin.
+  for (let i = 0; i < n; i++) {
+    if (i % ncols === 0) xOff[i] = 0
+    if (i < ncols) yOff[i] = 0
+  }
+  // align: all — every non-first column/row shares one offset.
+  let offX = 0
+  for (let i = 0; i < n; i++) if (i % ncols !== 0) offX = Math.max(offX, xOff[i]!)
+  for (let i = 0; i < n; i++) if (i % ncols !== 0) xOff[i] = offX + xMax
+  let offY = 0
+  for (let i = ncols; i < n; i++) offY = Math.max(offY, yOff[i]!)
+  for (let i = ncols; i < n; i++) yOff[i] = offY + yMax
+  const colAdvance = ncols > 1 ? offX + xMax : 0
+  const rowAdvance = nrows > 1 ? offY + yMax : 0
+
+  // Union bounds of the positioned grid (used to center titles).
+  let gridX1 = Infinity, gridY1 = Infinity, gridX2 = -Infinity, gridY2 = -Infinity
+  for (let i = 0; i < n; i++) {
+    const b = bounds[i]!
+    const bx1 = b.x1 - 0.5, by1 = b.y1 - 0.5, bx2 = b.x2 + 0.5, by2 = b.y2 + 0.5
+    const cx = (i % ncols) * colAdvance
+    const cy = Math.floor(i / ncols) * rowAdvance
+    gridX1 = Math.min(gridX1, cx + bx1)
+    gridY1 = Math.min(gridY1, cy + by1)
+    gridX2 = Math.max(gridX2, cx + bx2)
+    gridY2 = Math.max(gridY2, cy + by2)
+  }
+
+  return { cellWidth, cellHeight, colAdvance, rowAdvance, ncols, nrows, gridX1, gridY1, gridX2, gridY2 }
+}
+
+/**
+ * Build the facet cells (unpositioned at 0,0) and compute the shared grid
+ * layout. Cached on the context so every facet mark uses identical advances.
+ */
+function getFacetLayout(ctx: EvalContext, prebuilt?: SceneGroup[]): FacetGridLayout | null {
+  if (ctx._facetLayout !== undefined) return ctx._facetLayout
+  const cm = findCellMark(ctx)
+  const facet = (cm?.from as any)?.facet as { name: string; data: string; groupby: string[] } | undefined
+  if (!cm || !facet) { ctx._facetLayout = null; return null }
+  const cells = prebuilt ?? buildFacetCells(cm, facet, ctx)
+  const { width: cellWidth, height: cellHeight } = readCellSize(cm, ctx, 500, 500)
+  const colDom = ctx.datasets.get('column_domain')
+  const rowDom = ctx.datasets.get('row_domain')
+  const ncols = colDom && colDom.length ? colDom.length : 1
+  const nrows = rowDom && rowDom.length ? rowDom.length : 1
+  const layout = computeFacetGridLayout(cells, cellWidth, cellHeight, ncols, nrows)
+  ctx._facetLayout = layout
+  return layout
+}
+
+/** Whether this chart is a wrapped 2D trellis (both row and column facets). */
+function isTrellis(ctx: EvalContext): boolean {
+  const cm = findCellMark(ctx)
+  const gb = (cm?.from as any)?.facet?.groupby
+  if (!Array.isArray(gb) || gb.length < 2) return false
+  let hasRow = false, hasCol = false
+  for (const d of ctx.chart.data) {
+    if (d.name === 'row_domain') hasRow = true
+    else if (d.name === 'column_domain') hasCol = true
+  }
+  return hasRow && hasCol
+}
+
+/**
+ * Build the facet cell groups. In a 2D trellis the facet key is (row, column):
+ * cells are arranged in a grid and each cell's data is its (r, c) slice.
+ */
+function buildFacetCells(
   mark: CompiledMark,
   facet: { name: string; data: string; groupby: string[] },
   ctx: EvalContext,
 ): SceneGroup[] {
   const rows = ctx.datasets.get(facet.data) ?? []
-  const grouped = inlineGroupRows(rows, facet.groupby)
+  let grouped = inlineGroupRows(rows, facet.groupby)
   if (!grouped.length) return []
-
-  let cellWidth = 500, cellHeight = 500
-  const enc = mark.encode?.update
-  if (enc) {
-    const ws = (enc.width as { signal?: string } | undefined)?.signal
-    const hs = (enc.height as { signal?: string } | undefined)?.signal
-    if (ws !== undefined && ctx.signalParams[ws] !== undefined && !Array.isArray(ctx.signalParams[ws]))
-      cellWidth = Number(ctx.signalParams[ws])
-    if (hs !== undefined && ctx.signalParams[hs] !== undefined && !Array.isArray(ctx.signalParams[hs]))
-      cellHeight = Number(ctx.signalParams[hs])
+  // A 2D facet lays cells out row-major; order groups by their facet keys so
+  // the grid mapping is stable regardless of the data's insertion order.
+  if (facet.groupby.length > 1) {
+    grouped = grouped.slice().sort((a, b) => {
+      for (const f of facet.groupby) {
+        const av = String(a[0]?.[f] ?? '')
+        const bv = String(b[0]?.[f] ?? '')
+        if (av < bv) return -1
+        if (av > bv) return 1
+      }
+      return 0
+    })
   }
 
-  const firstKey = facet.groupby[0]!
-  const valueSet = new Set<string>()
-  for (const r of rows) valueSet.add(String(r[firstKey]))
-  let facetValues = [...valueSet]
-  if (mark.sort?.field) {
-    try {
-      const expr = ctx.runtime.expr(mark.sort.field as string)
-      facetValues.sort((a, b) => {
-        const cmp = expr({ _aster_a: a, _aster_b: b }, ctx.signalParams) as number
-        return Number(cmp ?? 0)
-      })
-    } catch {}
-  }
-
-  const orient = getFacetOrientation(ctx)
-  const isRow = orient !== 'column'
-  const spacing = isRow ? ROW_SPACING : COLUMN_SPACING
+  const { width: cellWidth, height: cellHeight } = readCellSize(mark, ctx, 500, 500)
+  const saved = ctx.datasets.get(facet.name)
   const result: SceneGroup[] = []
 
-  for (let gi = 0; gi < grouped.length; gi++) {
-    const g = grouped[gi]!
+  for (const g of grouped) {
     if (!g.length) continue
     ctx.datasets.set(facet.name, g)
-
-    const cellX = isRow ? 0 : gi * (cellWidth + spacing)
-    const cellY = isRow ? gi * (cellHeight + spacing) : 0
 
     const tmpCtx: EvalContext = { ...ctx, width: cellWidth, height: cellHeight }
     const nestedItems: SceneItem[] = []
@@ -623,10 +787,30 @@ function buildFacetCellGroup(
       items: cellItems,
       clip: mark.clip === true,
       width: cellWidth, height: cellHeight,
-      x: cellX, y: cellY,
+      x: 0, y: 0,
     })
   }
+
+  if (saved !== undefined) ctx.datasets.set(facet.name, saved)
+  else ctx.datasets.delete(facet.name)
   return result
+}
+
+function buildFacetCellGroup(
+  mark: CompiledMark,
+  facet: { name: string; data: string; groupby: string[] },
+  ctx: EvalContext,
+): SceneGroup[] {
+  const cells = buildFacetCells(mark, facet, ctx)
+  if (!cells.length) return cells
+  const layout = getFacetLayout(ctx, cells)
+  if (!layout) return cells
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i]!
+    cell.x = (i % layout.ncols) * layout.colAdvance
+    cell.y = Math.floor(i / layout.ncols) * layout.rowAdvance
+  }
+  return cells
 }
 
 function buildRowHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup[] {
@@ -659,6 +843,10 @@ function buildRowHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup[]
 
   const result: SceneGroup[] = []
   const src = sortedRows ?? rows
+  // In a trellis the vertical advance between row headers comes from the grid
+  // layout; single facets fall back to the fixed spacing.
+  const layout = getFacetLayout(ctx)
+  const rowAdvance = layout ? layout.rowAdvance : cellHeight + ROW_SPACING
   for (let i = 0; i < src.length; i++) {
     const row = src[i]
     if (!row) continue
@@ -685,7 +873,7 @@ function buildRowHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup[]
         text: labelVal, x: -50, y: cellHeight / 2,
         angle: -90, align: 'center' as const, baseline: 'middle' as const, fill: '#000',
       }],
-      width: grpW, x: -1, y: i * (cellHeight + ROW_SPACING),
+      width: grpW, x: -1, y: i * rowAdvance,
     })
   }
   return result
@@ -722,7 +910,9 @@ function buildColumnFooterGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
   // Vega positions the column-footer group immediately below the last cell
   // (y = (n-1)*step + cellHeight + 1) with zero height, so the bottom axis
   // inside it is laid out at y=0. We build the axis with height=0 to match.
-  const footerY = (n - 1) * (cellHeight + ROW_SPACING) + cellHeight + 1
+  const layout = getFacetLayout(ctx)
+  const rowAdvance = layout ? layout.rowAdvance : cellHeight + ROW_SPACING
+  const footerY = (n - 1) * rowAdvance + cellHeight + 1
 
   const tmpCtx: EvalContext = { ...ctx, width: cellWidth, height: 0 }
   const axisItems: SceneItem[] = []
@@ -749,20 +939,26 @@ function buildRowTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | 
   const cm = findCellMark(ctx)
   if (!cm) return null
 
-  const facet = (cm.from as any)?.facet as { data: string; groupby: string[] } | undefined
-  let cellHeight = 500, n = 1
-  if (facet) {
-    const rows = ctx.datasets.get(facet.data) ?? []
-    const fkey: string = facet.groupby[0]!
-    n = rows.length ? new Set(rows.map((r: Row) => String(r[fkey]))).size : 1
+  const layout = getFacetLayout(ctx)
+  let centerY: number
+  if (layout) {
+    // Vega centers the row title at the vertical midpoint of the grid bounds.
+    centerY = Math.round(layout.gridY1 + 0.5 * (layout.gridY2 - layout.gridY1))
+  } else {
+    const facet = (cm.from as any)?.facet as { data: string; groupby: string[] } | undefined
+    let cellHeight = 500, n = 1
+    if (facet) {
+      const rows = ctx.datasets.get(facet.data) ?? []
+      const fkey: string = facet.groupby[0]!
+      n = rows.length ? new Set(rows.map((r: Row) => String(r[fkey]))).size : 1
+    }
+    if (cm.encode?.update?.height) {
+      const hs = (cm.encode.update.height as { signal?: string } | undefined)?.signal
+      if (hs !== undefined && ctx.signalParams[hs] !== undefined && !Array.isArray(ctx.signalParams[hs]))
+        cellHeight = Number(ctx.signalParams[hs])
+    }
+    centerY = Math.round(((n - 1) * (ROW_SPACING + cellHeight) + cellHeight) / 2)
   }
-  if (cm.encode?.update?.height) {
-    const hs = (cm.encode.update.height as { signal?: string } | undefined)?.signal
-    if (hs !== undefined && ctx.signalParams[hs] !== undefined && !Array.isArray(ctx.signalParams[hs]))
-      cellHeight = Number(ctx.signalParams[hs])
-  }
-
-  const centerY = Math.round(((n - 1) * (ROW_SPACING + cellHeight) + cellHeight) / 2)
 
   const tm = mark as any
   let titleText = 'Label'
@@ -834,9 +1030,11 @@ function buildColumnHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
   const rows = ctx.datasets.get(mark.from!.data!) ?? []
   if (!rows.length) return []
 
-  const fkey: string = facet.groupby[0]!
+  // The column field is the last facet key ('c' in a row×column trellis).
+  const fkey: string = facet.groupby[facet.groupby.length - 1]!
   const orient = getFacetOrientation(ctx)
-  const spacing = orient === 'column' ? COLUMN_SPACING : ROW_SPACING
+  const layout = getFacetLayout(ctx)
+  const step = layout ? layout.colAdvance : cellWidth + (orient === 'column' ? COLUMN_SPACING : ROW_SPACING)
 
   let sortedRows: Row[] = rows
   if (mark.sort?.field) {
@@ -852,7 +1050,7 @@ function buildColumnHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
   const result: SceneGroup[] = []
   sortedRows.forEach((row, i) => {
     const labelVal = String((row as Record<string, unknown>)[fkey])
-    const cellX = i * (cellWidth + spacing)
+    const cellX = i * step
     result.push({
       marktype: 'group', name: mark.name, role: 'column-header',
       items: [
@@ -875,10 +1073,14 @@ function buildColumnFooterGroupColumn(mark: CompiledMark, ctx: EvalContext): Sce
   const rows = ctx.datasets.get(mark.from!.data!) ?? []
   if (!rows.length) return []
 
-  const fkey: string = facet.groupby[0]!
+  const fkey: string = facet.groupby[facet.groupby.length - 1]!
   const orient = getFacetOrientation(ctx)
-  const spacing = orient === 'column' ? COLUMN_SPACING : ROW_SPACING
-  const footerY = cellHeight + 1
+  const layout = getFacetLayout(ctx)
+  const step = layout ? layout.colAdvance : cellWidth + (orient === 'column' ? COLUMN_SPACING : ROW_SPACING)
+  // Footer sits below the last row of cells: (nrows-1) advances + cell height + 1.
+  const footerY = layout
+    ? (layout.nrows - 1) * layout.rowAdvance + cellHeight + 1
+    : cellHeight + 1
 
   let sortedRows: Row[] = rows
   if (mark.sort?.field) {
@@ -893,7 +1095,7 @@ function buildColumnFooterGroupColumn(mark: CompiledMark, ctx: EvalContext): Sce
 
   const result: SceneGroup[] = []
   sortedRows.forEach((row, i) => {
-    const cellX = i * (cellWidth + spacing)
+    const cellX = i * step
     // Axis sits at the TOP of the footer group, so ctx.height = 0.
     const tmpCtx: EvalContext = { ...ctx, width: cellWidth, height: 0 }
     const items: SceneItem[] = []
@@ -953,8 +1155,12 @@ function cellGroupXBounds(cells: SceneGroup[]): { minX: number; maxX: number } {
 /** Column-facet: horizontal title centered above the columns. */
 function buildColumnTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | null {
   const cellMark = findCellMark(ctx)
+  const layout = getFacetLayout(ctx)
   let centerX: number
-  if (cellMark) {
+  if (layout) {
+    // Vega centers the column title at the horizontal midpoint of the grid bounds.
+    centerX = Math.round(layout.gridX1 + 0.5 * (layout.gridX2 - layout.gridX1))
+  } else if (cellMark) {
     const cells = buildFacetCellGroup(cellMark, (cellMark.from as any).facet, ctx)
     const { minX, maxX } = cellGroupXBounds(cells)
     centerX = Math.round((minX + maxX) / 2)
@@ -1374,29 +1580,59 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const gradientLength = GL
     const L = Math.max(64, Math.min(gradientLength, 200))
 
+    // Vega numbers gradient defs from a global counter; replicate that so the
+    // `url(#gradient_n)` references match the oracle (which runs in-process).
+    const gradientId = 'gradient_' + gradientIdCounter++
+
     // Compute tick values using scale.ticks with L/50 as hint
     const tickNums = scale.ticks ? scale.ticks(L / 50) : []
 
+    // The gradient rect inherits the legend's gradient encode opacity (vega-lite
+    // emits opacity 0.7 for stroke legends, 1 otherwise).
+    let gradientOpacity = 1
+    const gradEncode = (legend as unknown as { encode?: { gradient?: { update?: { opacity?: EncodeValue } } } }).encode?.gradient?.update?.opacity
+    if (gradEncode && typeof gradEncode === 'object' && 'value' in gradEncode) {
+      const ov = (gradEncode as { value?: unknown }).value
+      if (typeof ov === 'number') gradientOpacity = ov
+    }
+
+    // Outer background width = the wider of the label run (labels sit at x=18,
+    // ~8px per character at 10px) and the title (11px bold, vega's estimate is
+    // `~~(0.8 * len * fontSize)`).
+    const labelStrs = tickNums.map((t) => String(typeof t === 'number' ? t : 0))
+    const maxLabelLen = labelStrs.reduce((m, s) => Math.max(m, s.length), 0)
+    const titleStr = String(legend.title ?? '')
+    const titleWidth = titleStr.length > 0 ? ~~(0.8 * titleStr.length * 11) : 0
+    const outerWidth = Math.max(18 + 8 * maxLabelLen, titleWidth)
+
     const items: SceneItem[] = []
-    // Background box (0,0 to 42, 16+L)
-    items.push({ path: `M0,0h42v${16 + L}h-42Z`, x: 0, y: 0 })
+    // Background box (0,0 to outerWidth, 16+L)
+    items.push({ path: `M0,0h${outerWidth}v${16 + L}h-${outerWidth}Z`, x: 0, y: 0 })
     // Gradient rect at legend-relative (0, 16), 16xL
     items.push({
       path: `M0,0h16v${L}h-16Z`,
       x: 0, y: 16,
-      fill: 'url(#gradient_0)',
+      fill: `url(#${gradientId})`,
       stroke: '#ddd',
       strokeWidth: 0,
-      opacity: 0.7,
+      opacity: gradientOpacity,
     })
     // Title
-    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000' })
-    // Labels
+    items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000' })
+    // Labels. Vega positions each label at (1 - perc) * L and then shifts it by
+    // the text baseline offset (labels flush against the gradient edges get
+    // top/bottom baselines), rounding to whole pixels. Replicate that here.
     const d0n = typeof d0 === 'number' ? d0 : 0
     const d1n = typeof d1 === 'number' ? d1 : 1
+    const LABEL_FONT_SIZE = 10
     for (const t of tickNums) {
       const tNum = typeof t === 'number' ? t : 0
-      const yPos = 16 + 3 + L * ((d1n - tNum) / (d1n - d0n))
+      const perc = d1n !== d0n ? (tNum - d0n) / (d1n - d0n) : 0
+      const baselineOffset =
+        perc <= 0 ? -0.21 * LABEL_FONT_SIZE
+        : perc >= 1 ? 0.79 * LABEL_FONT_SIZE
+        : 0.3 * LABEL_FONT_SIZE
+      const yPos = Math.round(16 + (1 - perc) * L + baselineOffset)
       items.push({ text: String(tNum), x: 18, y: yPos, align: 'left', fill: '#000' })
     }
     // Gradient def from scale's interpolator
@@ -1412,12 +1648,12 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       role: 'legend',
       x: ctx.width + 18,
       y: 0,
-      width: 42,
+      width: outerWidth,
       height: 16 + L,
       items,
     }
     if (stops.length) {
-      ctx._defs.push({ id: 'gradient_0', colorStops: stops })
+      ctx._defs.push({ id: gradientId, colorStops: stops })
     }
     return group
   }
@@ -1558,8 +1794,12 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       maxLabelLen = Math.max(maxLabelLen, (label.text as string).length)
       const align = axis.labelAlign ?? (orient === 'left' ? 'right' : orient === 'right' ? 'left' : 'center')
       const baseline = axis.labelBaseline ?? (orient === 'top' ? 'bottom' : orient === 'bottom' ? 'top' : 'middle')
-      if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = rawV + 3.5; label.align = align as SceneItem['align'] }
-      else if (orient === 'right') { label.x = ctx.width + tickSize + labelPadding + 0.5; label.y = rawV + 3.5; label.align = align as SceneItem['align'] }
+      // For band scales the label y is anchored to the band center (matching
+      // vega, which places it at bandCenter - 0.5 and shifts by the middle
+      // baseline); continuous scales anchor to the raw scale value.
+      const bandLabelY = scale.bandwidth ? v + 3 : rawV + 3.5
+      if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align'] }
+      else if (orient === 'right') { label.x = ctx.width + tickSize + labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align'] }
       else if (orient === 'bottom') { if (scale.bandwidth) { label.x = (scale(t) as number) + scale.bandwidth() / 2; label.y = ctx.height + 7 + 0.5 } else { label.x = rawV + 0.5; label.y = ctx.height + 15 + 0.5 } label.align = align as SceneItem['align'] }
       else { label.x = rawV + 0.5; label.y = -tickSize - 10 + 0.5; label.align = align as SceneItem['align'] }
       label.baseline = baseline as SceneItem['baseline']
