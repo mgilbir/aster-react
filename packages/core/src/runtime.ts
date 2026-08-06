@@ -1455,7 +1455,18 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const value = domain[i]
       const off = 16 + i * entryStep
       items.push({ path: `M0,0h${entryWidth}v${boxHeight}h-${entryWidth}Z`, x: 0, y: off })
-      if (colorProp === 'fill') {
+      const symbolType = legend.symbolType ?? 'circle'
+      // vega renders the legend entry symbol in the shape requested by the
+      // legend's symbolType (vega-lite uses 'square' for rect/bar marks,
+      // 'circle' otherwise). A square symbol is a centered 10x10 path; a
+      // circle is an arc path of the same radius.
+      if (symbolType === 'square') {
+        if (colorProp === 'fill') {
+          items.push({ path: 'M-5,-5h10v10h-10Z', x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5 })
+        } else {
+          items.push({ path: 'M-5,-5h10v10h-10Z', x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
+        }
+      } else if (colorProp === 'fill') {
         items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5 })
       } else {
         items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })

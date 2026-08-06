@@ -1,0 +1,20 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "width": 400, "height": 300, "padding": 5, "autosize": "none",
+  "data": { "name": "table", "values": [
+    { "x": 1, "y": 4, "yerr": 1 }, { "x": 2, "y": 5, "yerr": 1.5 }, { "x": 3, "y": 3, "yerr": 0.5 }
+  ]},
+  "layer": [
+    { "mark": "point", "encoding": { "x": { "field": "x", "type": "quantitative" }, "y": { "field": "y", "type": "quantitative" } } },
+    { "mark": "rule", "encoding": {
+        "x": { "field": "x", "type": "quantitative" },
+        "y": { "field": "y_lower", "type": "quantitative" },
+        "y2": { "field": "y_upper", "type": "quantitative" }
+      },
+      "transform": [
+        { "calculate": "datum.y - datum.yerr", "as": "y_lower" },
+        { "calculate": "datum.y + datum.yerr", "as": "y_upper" }
+      ]
+    }
+  ]
+}
