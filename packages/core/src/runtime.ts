@@ -321,6 +321,7 @@ function buildScales(ctx: EvalContext): void {
       width: ctx.width,
       height: ctx.height,
       signals: scaleSignals,
+      evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
       dataField: (dataName, field) => {
         const rows = ctx.datasets.get(dataName) ?? []
         const out: unknown[] = []
