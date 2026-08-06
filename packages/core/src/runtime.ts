@@ -542,7 +542,7 @@ function buildRowHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup[]
     result.push({
       marktype: 'group', name: mark.name, role: 'row-header',
       items: [...axisItems, {
-        text: labelVal, x: 0, y: cellHeight / 2,
+        text: labelVal, x: -50, y: cellHeight / 2,
         angle: -90, align: 'center' as const, baseline: 'middle' as const, fill: '#000',
       }],
       width: grpW, x: -1, y: i * (cellHeight + ROW_SPACING),
@@ -563,6 +563,11 @@ function buildColumnFooterGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
 
   let cellWidth = ctx.width, cellHeight = 500
   const enc = cm.encode?.update ?? {}
+  // If height not in encode (col_footer doesn't have it), read from signalParams
+  if (enc?.height === undefined || !enc.height) {
+    if (ctx.signalParams["child_height"] !== undefined && !Array.isArray(ctx.signalParams["child_height"]))
+      cellHeight = Number(ctx.signalParams["child_height"])
+  }
   if (enc?.width) {
     const ws = (enc.width as { signal?: string } | undefined)?.signal
     if (ws !== undefined && ctx.signalParams[ws] !== undefined && !Array.isArray(ctx.signalParams[ws]))
@@ -574,7 +579,7 @@ function buildColumnFooterGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
       cellHeight = Number(ctx.signalParams[hs])
   }
 
-  const footerY = (n - 1) * (cellHeight + ROW_SPACING) + cellHeight + 1
+  const footerY = (n - 1) * (cellHeight + ROW_SPACING) + 1
 
   const tmpCtx: EvalContext = { ...ctx, width: cellWidth, height: cellHeight }
   const axisItems: SceneItem[] = []
@@ -608,7 +613,7 @@ function buildRowTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | 
       cellHeight = Number(ctx.signalParams[hs])
   }
 
-  const centerY = ((n - 1) * (ROW_SPACING + cellHeight) + cellHeight) / 2
+  const centerY = Math.round(((n - 1) * (ROW_SPACING + cellHeight) + cellHeight) / 2)
 
   const tm = mark as any
   let titleText = 'Label'
@@ -624,8 +629,15 @@ function buildRowTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | 
   const pad = ctx.chart.padding
   return {
     marktype: 'group', name: mark.name, role: 'row-title',
-    items: [{ text: titleText, x: 0, y: 0, angle: -90, align: 'center' as const, baseline: 'middle' as const, fill: '#000' }],
-    x: -(pad.left + 35), y: centerY,
+    items: [
+        { text: titleText, x: -21, y: 0, angle: -90, align: 'center' as const, baseline: 'middle' as const, fill: '#000' },
+        { path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0 },
+        { path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0 },
+        { path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0 },
+        { path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0, stroke: '#ddd' },
+        { path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0, stroke: '#ddd' },
+      ],
+    x: -61, y: centerY,
   }
 }
 

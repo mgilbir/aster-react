@@ -160,6 +160,7 @@ function translatePath(d: string, tx: number, ty: number): string {
 
 /** Skip paths that have no real geometry (zero-area placeholders like `M0,0h0v0h0Z`). */
 function isDegeneratePath(d: string): boolean {
+  if (d.includes('NaN')) return false
   const nonCmd = d.replace(/[A-Za-z]/g, '')
   const nums = nonCmd.match(/-?\d+\.?\d*/g) || []
   if (nums.length === 0) return true
