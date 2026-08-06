@@ -103,6 +103,12 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
         return p !== undefined ? { ...r, [as as string]: p } : r
       })
     }
+    case 'kde':
+      return kdeRows(rows, t as Record<string, unknown>)
+    case 'quantile':
+      return quantileRows(rows, t as Record<string, unknown>)
+    case 'regression':
+      return regressionRows(rows, t as Record<string, unknown>)
     case 'identifier':
       return rows
     default:
@@ -307,7 +313,12 @@ function imputeGroup(
   const keys = sorted.map((r) => r[t.key])
   if (!keys.length) return sorted
   if (keys.every((k) => typeof k === 'number')) {
-    const step = t.step ?? defaultStep(keys as number[])
+    // Vega only ever adds tuples for `keyvals` that are missing; without
+    // explicit keyvals it never fabricates keys. We approximate that by
+    // interpolating only integer grids (or when an explicit `step` is given),
+    // so e.g. KDE/quantile density outputs (dense non-integer keys) pass
+    // through unchanged like they do in vega.
+    const step = t.step ?? (keys.every((k) => Number.isInteger(k)) ? defaultStep(keys as number[]) : 0)
     if (!(step > 0)) return sorted
     const values = (keys as number[]).filter((k) => Number.isFinite(k))
     if (!values.length) return sorted
@@ -640,4 +651,443 @@ export function geoJSONPath(geo: unknown): string | undefined {
     return out
   }
   return undefined
+}
+
+// ---------------------------------------------------------------------------
+// kde / quantile / regression
+//
+// These are "generating" transforms: they consume the input rows and produce a
+// fresh set of tuples (each output row carries only the groupby dims plus the
+// transform's own `as` fields), matching vega's semantics. The arithmetic below
+// mirrors vega-statistics (and the d3-array functions it wraps) operation for
+// operation so the conformance oracle and our output agree to the bit.
+// ---------------------------------------------------------------------------
+
+// -- shared numeric helpers (d3-array compatible) ------------------------------
+
+function ascendingNum(a: number, b: number): number {
+  return a == null || b == null ? NaN : a < b ? -1 : a > b ? 1 : a >= b ? 0 : NaN
+}
+
+/** d3-array `range(start, stop, step)` (numeric output only). */
+function d3Range(start: number, stop: number, step: number): number[] {
+  start = +start
+  stop = +stop
+  step = +step
+  const n = Math.max(0, Math.ceil((stop - start) / step)) | 0
+  const out: number[] = new Array(n)
+  for (let i = 0; i < n; i++) out[i] = start + i * step
+  return out
+}
+
+/** d3-array `quantileSorted(values, p)` — values must be sorted ascending. */
+function quantileSorted(values: number[], p: number): number | undefined {
+  const n = values.length
+  if (!n || Number.isNaN((p = +p))) return undefined
+  if (p <= 0 || n < 2) return +values[0]!
+  if (p >= 1) return +values[n - 1]!
+  const i = (n - 1) * p
+  const i0 = Math.floor(i)
+  const value0 = +values[i0]!
+  const value1 = +values[i0 + 1]!
+  return value0 + (value1 - value0) * (i - i0)
+}
+
+/** d3-array `variance` (sample variance, Welford-style online update). */
+function varianceSample(values: number[]): number | undefined {
+  let count = 0
+  let mean = 0
+  let sum = 0
+  for (let raw of values) {
+    const value = +raw
+    if (value != null && value >= value) {
+      const delta = value - mean
+      mean += delta / ++count
+      sum += delta * (value - mean)
+    }
+  }
+  if (count > 1) return sum / (count - 1)
+  return undefined
+}
+
+/** d3-array `deviation` (sample standard deviation). */
+function deviationOf(values: number[]): number | undefined {
+  const v = varianceSample(values)
+  return v ? Math.sqrt(v) : v
+}
+
+/** d3-array `extent` over numeric field values. */
+function extentOf(values: unknown[]): [number, number] | undefined {
+  let min: number | undefined
+  let max: number | undefined
+  for (const raw of values) {
+    if (raw != null) {
+      const value = +raw
+      if (min === undefined) {
+        if (value >= value) min = max = value
+      } else {
+        if (min > value) min = value
+        if (max! < value) max = value
+      }
+    }
+  }
+  return min === undefined ? undefined : [min, max!]
+}
+
+// -- kde (vega-statistics randomKDE + sampleCurve) -----------------------------
+
+const SQRT2PI = Math.sqrt(2 * Math.PI)
+
+/** Gaussian (standard normal) density function — matches vega-statistics. */
+function gaussianPdf(z: number): number {
+  return Math.exp(-0.5 * z * z) / SQRT2PI
+}
+
+/** West (2009) approximation of the standard normal CDF — matches vega-statistics. */
+function gaussianCdf(value: number): number {
+  const z = Math.abs(value)
+  let cd: number
+  if (z > 37) {
+    cd = 0
+  } else {
+    const exp = Math.exp((-z * z) / 2)
+    let sum: number
+    if (z < 7.07106781186547) {
+      sum = 3.52624965998911e-02 * z + 0.700383064443688
+      sum = sum * z + 6.37396220353165
+      sum = sum * z + 33.912866078383
+      sum = sum * z + 112.079291497871
+      sum = sum * z + 221.213596169931
+      sum = sum * z + 220.206867912376
+      cd = exp * sum
+      sum = 8.83883476483184e-02 * z + 1.75566716318264
+      sum = sum * z + 16.064177579207
+      sum = sum * z + 86.7807322029461
+      sum = sum * z + 296.564248779674
+      sum = sum * z + 637.333633378831
+      sum = sum * z + 793.826512519948
+      sum = sum * z + 440.413735824752
+      cd = cd / sum
+    } else {
+      sum = z + 0.65
+      sum = z + 4 / sum
+      sum = z + 3 / sum
+      sum = z + 2 / sum
+      sum = z + 1 / sum
+      cd = exp / sum / 2.506628274631
+    }
+  }
+  return value > 0 ? 1 - cd : cd
+}
+
+/**
+ * Silverman's rule-of-thumb bandwidth (vega-statistics `estimateBandwidth`):
+ * 1.06 * min(sample stdev, IQR/1.34) * n^-0.2.
+ */
+function estimateBandwidth(array: number[]): number {
+  const n = array.length
+  const d = deviationOf(array)
+  const q = quartilesOf(array)
+  const h = (q[2]! - q[0]!) / 1.34
+  const v = Math.min(d!, h) || d || Math.abs(q[0]!) || 1
+  return 1.06 * v * Math.pow(n, -0.2)
+}
+
+function quartilesOf(values: number[]): number[] {
+  const filtered: number[] = []
+  for (const raw of values) {
+    const value = +raw
+    if (value != null && value >= value) filtered.push(value)
+  }
+  filtered.sort(ascendingNum)
+  return [
+    quantileSorted(filtered, 0.25)!,
+    quantileSorted(filtered, 0.5)!,
+    quantileSorted(filtered, 0.75)!,
+  ]
+}
+
+/**
+ * Kernel density estimator over a support array with automatic bandwidth
+ * (mirrors vega-statistics `randomKDE`).
+ */
+function kdeDist(support: unknown[], bandwidth: number | undefined) {
+  const kernel = { pdf: gaussianPdf, cdf: gaussianCdf }
+  let n = 0
+
+  const dist = {
+    data(_: unknown[]) {
+      support = _
+      n = _ ? _.length : 0
+      return dist.bandwidth(bandwidth)
+    },
+    bandwidth(_: number | undefined) {
+      bandwidth = _
+      if (!bandwidth && support) bandwidth = estimateBandwidth(support as number[])
+      return dist
+    },
+    pdf(x: number) {
+      let y = 0
+      for (let i = 0; i < n; ++i) {
+        y += kernel.pdf((x - Number(support[i])) / bandwidth!)
+      }
+      return y / bandwidth! / n
+    },
+    cdf(x: number) {
+      let y = 0
+      for (let i = 0; i < n; ++i) {
+        y += kernel.cdf((x - Number(support[i])) / bandwidth!)
+      }
+      return y / n
+    },
+  }
+
+  return dist.data(support)
+}
+
+const MIN_RADIANS = 0.5 * Math.PI / 180
+
+/**
+ * Adaptively sample an interpolated function over a domain extent
+ * (mirrors vega-statistics `sampleCurve`).
+ */
+function sampleCurve(f: (x: number) => number, extent: [number, number], minSteps: number, maxSteps: number): number[][] {
+  minSteps = minSteps || 25
+  maxSteps = Math.max(minSteps, maxSteps || 200)
+
+  const point = (x: number) => [x, f(x)]
+  const minX = extent[0]
+  const maxX = extent[1]
+  const span = maxX - minX
+  const stop = span / maxSteps
+  const prev = [point(minX)]
+  const next: number[][] = []
+
+  if (minSteps === maxSteps) {
+    // no adaptation, sample uniform grid directly and return
+    for (let i = 1; i < maxSteps; ++i) {
+      prev.push(point(minX + (i / minSteps) * span))
+    }
+    prev.push(point(maxX))
+    return prev
+  } else {
+    // sample minimum points on uniform grid
+    // then move on to perform adaptive refinement
+    next.push(point(maxX))
+    for (let i = minSteps; --i > 0;) {
+      next.push(point(minX + (i / minSteps) * span))
+    }
+  }
+
+  let p0 = prev[0]!
+  let p1 = next[next.length - 1]!
+
+  const sx = 1 / span
+  const sy = scaleY(p0[1]!, next)
+
+  while (p1) {
+    // midpoint for potential curve subdivision
+    const pm = point((p0[0]! + p1[0]!) / 2)
+    const dx = pm[0]! - p0[0]! >= stop
+
+    if (dx && angleDelta(p0, pm, p1, sx, sy) > MIN_RADIANS) {
+      next.push(pm)
+    } else {
+      p0 = p1
+      prev.push(p1)
+      next.pop()
+    }
+    p1 = next[next.length - 1]!
+  }
+
+  return prev
+}
+
+function scaleY(init: number, points: number[][]): number {
+  let ymin = init
+  let ymax = init
+  for (const p of points) {
+    const y = p[1]!
+    if (y < ymin) ymin = y
+    if (y > ymax) ymax = y
+  }
+  return 1 / (ymax - ymin)
+}
+
+function angleDelta(p: number[], q: number[], r: number[], sx: number, sy: number): number {
+  const a0 = Math.atan2(sy * (r[1]! - p[1]!), sx * (r[0]! - p[0]!))
+  const a1 = Math.atan2(sy * (q[1]! - p[1]!), sx * (q[0]! - p[0]!))
+  return Math.abs(a0 - a1)
+}
+
+function kdeRows(rows: Row[], t: Record<string, unknown>): Row[] {
+  const field = t.field as string
+  const as = (t.as as [string, string]) ?? ['value', 'density']
+  const groupby = (t.groupby as string[]) ?? []
+  const cumulative = t.cumulative === true
+  const counts = t.counts === true
+  const bandwidth = t.bandwidth as number | undefined
+  const resolve = (t.resolve as string) ?? 'independent'
+  const steps = t.steps as number | undefined
+  const minsteps0 = steps ?? ((t.minsteps as number | undefined) ?? 25)
+  const maxsteps0 = steps ?? ((t.maxsteps as number | undefined) ?? 200)
+
+  let domain = t.extent as [number, number] | undefined
+  let minsteps = minsteps0
+  let maxsteps = maxsteps0
+
+  if (resolve === 'shared') {
+    // all densities share a single domain and curve resolution, enabling stacking
+    if (!domain) {
+      const vals = collectField(rows, field).filter(isFiniteNumber)
+      domain = vals.length ? [Math.min(...vals), Math.max(...vals)] : [0, 1]
+    }
+    minsteps = maxsteps = steps ?? maxsteps0
+  }
+
+  const groups = groupby.length ? groupRows(rows, groupby) : [rows]
+  const out: Row[] = []
+  for (const g of groups) {
+    const support = g.map((r) => r[field])
+    const dist = kdeDist(support, bandwidth)
+    const scale = counts ? g.length : 1
+    const local = domain ?? extentOf(support)
+    if (!local) continue
+    const curve = sampleCurve((x) => (cumulative ? dist.cdf(x) : dist.pdf(x)), local, minsteps, maxsteps)
+    for (const v of curve) {
+      const row: Row = {}
+      for (const k of groupby) row[k] = g[0]?.[k]
+      row[as[0]] = v[0]!
+      row[as[1]] = v[1]! * scale
+      out.push(row)
+    }
+  }
+  return out
+}
+
+// -- quantile (vega-transforms Quantile) ----------------------------------------
+
+function quantileRows(rows: Row[], t: Record<string, unknown>): Row[] {
+  const field = t.field as string
+  const as = (t.as as [string, string]) ?? ['prob', 'value']
+  const groupby = (t.groupby as string[]) ?? []
+  const step = (t.step as number | undefined) ?? 0.01
+  const EPSILON = 1e-14
+  const probs = (t.probs as number[] | undefined) ?? d3Range(step / 2, 1 - EPSILON, step)
+
+  const groups = groupby.length ? groupRows(rows, groupby) : [rows]
+  const out: Row[] = []
+  for (const g of groups) {
+    const values = quantilesOf(g, field, probs)
+    for (let i = 0; i < probs.length; i++) {
+      const row: Row = {}
+      for (const k of groupby) row[k] = g[0]?.[k]
+      row[as[0]] = probs[i]
+      row[as[1]] = values[i]
+      out.push(row)
+    }
+  }
+  return out
+}
+
+function quantilesOf(rows: Row[], field: string, probs: number[]): number[] {
+  const values: number[] = []
+  for (const r of rows) {
+    const raw = r[field]
+    if (raw != null && raw !== '') {
+      const v = +raw
+      if (v >= v) values.push(v)
+    }
+  }
+  values.sort(ascendingNum)
+  return probs.map((p) => quantileSorted(values, p) as number)
+}
+
+// -- regression (vega-regression, linear/constant) -------------------------------
+
+/**
+ * Ordinary least squares linear regression over rows, using the same online
+ * mean update order as vega-statistics `regressionLinear`.
+ */
+function linearFit(rows: Row[], xField: string, yField: string): { predict: (x: number) => number } {
+  let X = 0
+  let Y = 0
+  let XY = 0
+  let X2 = 0
+  let n = 0
+  for (const d of rows) {
+    const rawU = d[xField]
+    const rawV = d[yField]
+    if (rawU == null || rawV == null) continue
+    const u = +rawU
+    const v = +rawV
+    if (u >= u && v >= v) {
+      ++n
+      X += (u - X) / n
+      Y += (v - Y) / n
+      XY += (u * v - XY) / n
+      X2 += (u * u - X2) / n
+    }
+  }
+  const delta = X2 - X * X
+  const slope = Math.abs(delta) < 1e-24 ? 0 : (XY - X * Y) / delta
+  const intercept = Y - slope * X
+  return { predict: (x) => intercept + slope * x }
+}
+
+/** Mean of valid y values (vega-regression `regressionConstant`). */
+function constantMean(rows: Row[], yField: string): number {
+  let sum = 0
+  let n = 0
+  for (const d of rows) {
+    const raw = d[yField]
+    if (raw != null && raw !== '') {
+      const v = +raw
+      if (v >= v) {
+        sum += v
+        n++
+      }
+    }
+  }
+  return n ? sum / n : NaN
+}
+
+function regressionRows(rows: Row[], t: Record<string, unknown>): Row[] {
+  const xField = t.x as string
+  const yField = t.y as string
+  const method = (t.method as string) ?? 'linear'
+  const as = (t.as as [string, string]) ?? [xField, yField]
+  const groupby = (t.groupby as string[]) ?? []
+  const order = (t.order as number | undefined) ?? 3
+  // degrees of freedom (vega-regression): linear/constant/exp/log/pow -> 1
+  const dof = method === 'poly' ? order : 1
+
+  if (method !== 'linear' && method !== 'constant') {
+    throw new Error(`[aster] unsupported regression method "${method}"`)
+  }
+
+  const groups = groupby.length ? groupRows(rows, groupby) : [rows]
+  const out: Row[] = []
+  for (const g of groups) {
+    if (g.length <= dof) continue // not enough points to fit
+    const model = linearFit(g, xField, yField)
+    if (t.params === true) {
+      // parameter vector form (coef, rSquared) — not needed by the corpus
+      continue
+    }
+    const domain = (t.extent as [number, number] | undefined) ?? extentOf(g.map((r) => r[xField]))
+    if (!domain) continue
+    if (method === 'linear' || method === 'constant') {
+      // only the two end points are needed for a straight line
+      const constantY = method === 'constant' ? constantMean(g, yField) : undefined
+      for (const x of domain) {
+        const row: Row = {}
+        for (const k of groupby) row[k] = g[0]?.[k]
+        row[as[0]] = x
+        row[as[1]] = constantY ?? model.predict(x)
+        out.push(row)
+      }
+    }
+  }
+  return out
 }

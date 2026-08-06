@@ -506,8 +506,10 @@ function evaluateMark(
         // Raw geoshape mark: the datum itself is the GeoJSON geometry.
         path = geoJSONPath(datum)
       } else {
+        // The path may come from a geoshape transform (datum.shape) or from a
+        // `path` data field on a shape mark.
         const shape = datum.shape
-        path = typeof shape === 'string' ? shape : undefined
+        path = typeof shape === 'string' ? shape : (typeof datum.path === 'string' ? datum.path : undefined)
       }
       if (path) it.path = path
     }

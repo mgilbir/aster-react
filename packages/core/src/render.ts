@@ -93,9 +93,11 @@ function switchMarkup(type: string, group: SceneGroup): string {
     case 'rect': return renderRects(group)
     case 'rule': return renderRules(group)
     case 'text': return renderTexts(group)
+    case 'trail': return renderTrail(group)
     case 'path': return renderPaths(group)
     case 'shape': return renderPaths(group)
     case 'geoshape': return renderPaths(group)
+    case 'image': return renderImages(group)
     case 'arc': return renderArcs(group)
     default: return ''
   }
@@ -301,10 +303,89 @@ function renderTexts(group: SceneGroup): string {
 }
 
 function renderPaths(group: SceneGroup): string {
-  let out = `<g class="mark-path role-mark">`
+  let out = `<g class="mark-path role-mark" role="graphics-symbol" aria-roledescription="path mark container">`
   for (const it of itemsOf(group)) {
     if (!it.path) continue
-    out += `<path d="${it.path}"${attr('fill', it.fill)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}/>`
+    // Position the path at its item x/y (vega renders path marks with a
+    // translate transform; items whose path already encodes absolute
+    // coordinates (e.g. geoshape output) have x=y=0 and emit no transform).
+    const tx = num(it.x ?? 0)
+    const ty = num(it.y ?? 0)
+    const transform = (tx !== '0' || ty !== '0') ? ` transform="translate(${tx},${ty})"` : ''
+    out += `<path${transform} d="${it.path}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+  }
+  out += '</g>'
+  return out
+}
+
+/**
+ * Trail mark: a line whose width varies along its length (per-item `size`).
+ * Vega renders the trail as a single tapered polygon path (per pair of
+ * consecutive points a closed segment: two perpendicular edge offsets plus
+ * semicircular arcs around each endpoint), stroked with the first item's
+ * stroke/strokeWidth. This mirrors vega's trail shape algorithm (d3-trail).
+ */
+function renderTrail(group: SceneGroup): string {
+  let out = `<g class="mark-trail role-mark" role="graphics-symbol" aria-roledescription="trail mark container">`
+  const items = itemsOf(group)
+  if (items.length > 1) {
+    const d = trailPath(items)
+    if (d) {
+      const first = items[0]!
+      out += `<path d="${d}"${attr('stroke', first.stroke)}${attr('stroke-width', first.strokeWidth)}${attr('opacity', first.opacity)}/>`
+    }
+  }
+  out += '</g>'
+  return out
+}
+
+/** Compute the vega/d3-trail polygon path for a run of trail items. */
+function trailPath(items: SceneItem[]): string {
+  let out = ''
+  let ready = false
+  let x1 = 0, y1 = 0, r1 = 0
+  for (const it of items) {
+    const x2 = it.x as number
+    const y2 = it.y as number
+    const r2 = ((it.size as number) ?? 1) / 2
+    if (ready) {
+      const ux0 = y1 - y2
+      const uy0 = x2 - x1
+      if (ux0 || uy0) {
+        const ud = Math.hypot(ux0, uy0)
+        const ux = ux0 / ud
+        const uy = uy0 / ud
+        const rx = ux * r1
+        const ry = uy * r1
+        // Tapered segment: two perpendicular edge offsets and semicircular
+        // end caps (SVG arcs with large-arc=1, sweep=1, matching d3-path).
+        out += `M${num(x1 - rx)},${num(y1 - ry)}`
+        out += `L${num(x2 - ux * r2)},${num(y2 - uy * r2)}`
+        out += `A${num(r2)},${num(r2)},0,1,1,${num(x2 + r2 * ux)},${num(y2 + r2 * uy)}`
+        out += `L${num(x1 + rx)},${num(y1 + ry)}`
+        out += `A${num(r1)},${num(r1)},0,1,1,${num(x1 - r1 * ux)},${num(y1 - r1 * uy)}`
+        out += 'Z'
+      } else {
+        // Identical consecutive points: a full circle cap around the point.
+        out += `L${num(x2 + r2)},${num(y2)}A${num(r2)},${num(r2)},0,1,1,${num(x2 - r2)},${num(y2)}A${num(r2)},${num(r2)},0,1,1,${num(x2 + r2)},${num(y2)}Z`
+      }
+    } else {
+      ready = true
+    }
+    x1 = x2
+    y1 = y2
+    r1 = r2
+  }
+  return out
+}
+
+function renderImages(group: SceneGroup): string {
+  let out = `<g class="mark-image role-mark" role="graphics-symbol" aria-roledescription="image mark container">`
+  for (const it of itemsOf(group)) {
+    if (it.url == null || it.x == null || it.y == null) continue
+    const w = it.width ?? 0
+    const h = it.height ?? 0
+    out += `<image xlink:href="${esc(String(it.url))}" transform="translate(${num(it.x)},${num(it.y)})" width="${num(w)}" height="${num(h)}" preserveAspectRatio="${it.aspect === false ? 'none' : 'xMidYMid'}"/>`
   }
   out += '</g>'
   return out
