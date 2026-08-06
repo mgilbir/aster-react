@@ -183,6 +183,12 @@ export interface CompiledMark {
   sort?: SortSpec
   encode?: Record<string, Record<string, EncodeValue | EncodeValue[]>>
   transform?: CompiledTransform[]
+  /** Group mark title (for axis/row titles). */
+  title?: unknown
+  /** Nested marks within a group. */
+  marks?: CompiledMark[]
+  /** Axis specifications within a group. */
+  axes?: unknown[]
 }
 
 export type EncodeValue =

@@ -28,8 +28,11 @@ export function compileChart(spec: VgSpec): CompiledChart {
   const signals = resolveSignals(spec.signals as Array<Record<string, unknown>> | undefined)
   const background = (spec.background as string | null | undefined) ?? null
   const padding = normalizePadding(spec.padding as unknown)
-  const width = resolveSizeSpec(spec.width)
-  const height = resolveSizeSpec(spec.height)
+  // Collect signal names before resolving them
+  const sigNames = (spec.signals as Array<Record<string, unknown>> | undefined)?.map(s => (s as any)?.name || '').filter(Boolean) ?? []
+  // We don't have the resolved signal values yet, so just use raw width/height
+  const width = typeof spec.width === 'number' ? spec.width : (typeof spec.width === 'object' ? spec.width as SizeSpec : DEFAULT_SIZE)
+  const height = typeof spec.height === 'number' ? spec.height : (typeof spec.height === 'object' ? spec.height as SizeSpec : DEFAULT_SIZE)
   const frameStroke = resolveFrameStroke(spec)
   const autosize = resolveAutosize(spec.autosize)
 
@@ -94,11 +97,22 @@ function resolveFrameStroke(spec: VgSpec): string | undefined {
   return typeof viewStroke === 'string' ? viewStroke : typeof cellStroke === 'string' ? cellStroke : undefined
 }
 
-function resolveSizeSpec(value: unknown): SizeSpec {
+function resolveSizeSpec(value: unknown, signalNames: string[]): SizeSpec {
   if (typeof value === 'number') return value
   if (value && typeof value === 'object') return value as SizeSpec
-  return 500
+  if (value === undefined && signalNames.length > 0) {
+    // Try width/height signal names that Vega-Lite commonly uses
+    for (const name of signalNames) {
+      if (name.includes('width') || name.includes('height')) {
+        // This is likely the chart dimension signal — return it so it can be resolved at runtime
+        return { signal: name }
+      }
+    }
+  }
+  return DEFAULT_SIZE
 }
+
+const DEFAULT_SIZE = 500
 
 function resolveSignals(signals?: Array<Record<string, unknown>>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
@@ -201,6 +215,9 @@ function compileMark(m: Record<string, unknown>): CompiledMark {
   if (m.key !== undefined) out.key = m.key as string
   if (m.sort !== undefined) out.sort = m.sort as CompiledMark['sort']
   if (m.encode !== undefined) out.encode = m.encode as CompiledMark['encode']
+  if (m.title !== undefined) out.title = m.title as CompiledMark['title']
+  if (m.marks !== undefined) out.marks = m.marks as CompiledMark['marks']
+  if ((m as any).axes !== undefined) out.axes = (m as any).axes
   if (Array.isArray(m.transform)) {
     out.transform = (m.transform as Array<Record<string, unknown>>).map(compileTransform)
   }

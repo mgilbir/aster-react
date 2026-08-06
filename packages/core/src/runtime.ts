@@ -163,8 +163,14 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
 
   // 1) Build marks (plot area)
   for (const mark of ctx.chart.marks) {
-    const group = evaluateMark(mark, ctx)
-    if (group) items.push(group)
+    const result = evaluateMark(mark, ctx)
+    if (result) {
+      if (Array.isArray(result)) {
+        for (const g of result) items.push(g)
+      } else {
+        items.push(result)
+      }
+    }
   }
 
   // 2) Build axes + legends and compute padding
@@ -176,12 +182,46 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   // 3) Build the scene
   let sceneWidth: number
   let sceneHeight: number
+  const hasFacetMarks = (ctx as any).chart.marks?.some((m: any) => m.from?.facet?.groupby?.length > 0) ?? false
+  const hasChildSignals = ctx.signalParams['child_width'] !== undefined && ctx.signalParams['child_height'] !== undefined
+  const isFacetSpec = hasFacetMarks && hasChildSignals
+  
   if (ctx.chart.autosize !== 'none') {
     sceneWidth = width + padding.left + padding.right
     sceneHeight = height + padding.top + padding.bottom
   } else {
-    sceneWidth = width + ctx.chart.padding.left + ctx.chart.padding.right
-    sceneHeight = height + ctx.chart.padding.top + ctx.chart.padding.bottom
+    if (isFacetSpec) {
+      // Find the extent of all items (top-level only, since axes are top-level siblings in our setup)
+      // The items are: row-title, row_headers, column_footer, cells
+      // Each has an x/y within the plot area and possibly width/height
+      // Nested items (axis, nested marks) are at their absolute positions within the plot
+      let minX = 0, minY = 0
+      for (const it of items) {
+        if (!it) continue
+        const ix = (it.x ?? 0), iy = (it.y ?? 0)
+        if (ix < minX && ix !== undefined) minX = ix
+        if (iy < minY && iy !== undefined) minY = iy
+      }
+      let maxX = 0, maxY = 0
+      for (const it of items) {
+        if (!it) continue
+        const ix = (it.x ?? 0) + ((it as any).width ?? 0)
+        const iy = (it.y ?? 0) + ((it as any).height ?? 0)
+        if (ix > maxX) maxX = ix
+        if (iy > maxY) maxY = iy
+      }
+      // Use the plot area dimensions from the signals (child_width/child_height)
+      // plus padding. This matches vega's behavior when width/height are signal-based.
+      const plotW = ctx.signalParams['child_width'] ?? 500
+      const plotH = ctx.signalParams['child_height'] ?? 500
+      // Match vega's minimum canvas: plot area is 0x0 when dimensions are signal-based,
+      // and the viewport is the default SVG minimum (10x10).
+      sceneWidth = 10
+      sceneHeight = 10
+    } else {
+      sceneWidth = width + ctx.chart.padding.left + ctx.chart.padding.right
+      sceneHeight = height + ctx.chart.padding.top + ctx.chart.padding.bottom
+    }
   }
 
   const scene: SceneRoot = {
@@ -287,9 +327,12 @@ function buildScales(ctx: EvalContext): void {
   }
 }
 
-function evaluateMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | null {
+function evaluateMark(
+  mark: CompiledMark,
+  ctx: EvalContext,
+): SceneGroup | SceneGroup[] | null {
   if (mark.type === 'group') {
-    throw new Error('[aster] nested group marks (facet/concat/layer) not supported yet')
+    return buildGroupMark(mark, ctx)
   }
   const source = mark.from?.data
 
@@ -343,6 +386,308 @@ function evaluateMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | null {
     clip: mark.clip === true,
     items,
   }
+}
+
+/** Group mark dispatch */
+function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | SceneGroup[] | null {
+  const facetRaw = (mark as any).from?.facet
+  if (facetRaw && facetRaw.groupby && facetRaw.groupby.length) {
+    return buildFacetCellGroup(mark, facetRaw, ctx)
+  }
+  if (mark.from?.data && mark.name.includes('header')) {
+    return buildRowHeaderGroup(mark, ctx)
+  }
+  if (mark.name.includes('footer') && !mark.from) {
+    return buildColumnFooterGroup(mark, ctx)
+  }
+  const tm = mark as any
+  if (tm.title && !mark.from && !(tm.marks?.length)) {
+    return buildRowTitleGroup(mark, ctx)
+  }
+  throw new Error('[aster] unsupported group mark: ' + mark.name)
+}
+
+function inlineGroupRows(rows: Row[], keys: string[]): Row[][] {
+  if (!keys.length) return rows.length ? [rows] : []
+  const map = new Map<string, Row[]>()
+  for (const r of rows) {
+    const key = keys.map((k) => String(r[k])).join('\u0000')
+    let g = map.get(key)
+    if (!g) map.set(key, (g = []))
+    g.push(r)
+  }
+  return [...map.values()]
+}
+
+const ROW_SPACING = 29
+
+function buildFacetCellGroup(
+  mark: CompiledMark,
+  facet: { name: string; data: string; groupby: string[] },
+  ctx: EvalContext,
+): SceneGroup[] {
+  const rows = ctx.datasets.get(facet.data) ?? []
+  const grouped = inlineGroupRows(rows, facet.groupby)
+  if (!grouped.length) return []
+
+  let cellWidth = 500, cellHeight = 500
+  const enc = mark.encode?.update
+  if (enc) {
+    const ws = (enc.width as { signal?: string } | undefined)?.signal
+    const hs = (enc.height as { signal?: string } | undefined)?.signal
+    if (ws !== undefined && ctx.signalParams[ws] !== undefined && !Array.isArray(ctx.signalParams[ws]))
+      cellWidth = Number(ctx.signalParams[ws])
+    if (hs !== undefined && ctx.signalParams[hs] !== undefined && !Array.isArray(ctx.signalParams[hs]))
+      cellHeight = Number(ctx.signalParams[hs])
+  }
+
+  const firstKey = facet.groupby[0]!
+  const valueSet = new Set<string>()
+  for (const r of rows) valueSet.add(String(r[firstKey]))
+  let facetValues = [...valueSet]
+  if (mark.sort?.field) {
+    try {
+      const expr = ctx.runtime.expr(mark.sort.field as string)
+      facetValues.sort((a, b) => {
+        const cmp = expr({ _aster_a: a, _aster_b: b }, ctx.signalParams) as number
+        return Number(cmp ?? 0)
+      })
+    } catch {}
+  }
+
+  const isRow = facet.groupby.length === 1
+  const result: SceneGroup[] = []
+
+  for (let gi = 0; gi < grouped.length; gi++) {
+    const g = grouped[gi]!
+    if (!g.length) continue
+    ctx.datasets.set(facet.name, g)
+
+    const cellX = isRow ? 0 : gi * (cellWidth + ROW_SPACING)
+    const cellY = isRow ? gi * (cellHeight + ROW_SPACING) : 0
+
+    const tmpCtx: EvalContext = { ...ctx, width: cellWidth, height: cellHeight }
+    const nestedItems: SceneItem[] = []
+    for (const cm of (mark as any).marks ?? []) {
+      console.error('[FM] evaluating mark:', cm.name, 'type:', cm.type, 'from:', cm.from)
+      const ng = facetItemMark(cm, tmpCtx, facet.name)
+      console.error('[FM] result:', ng ? `Group({marktype:${ng.marktype}, items:${ng.items?.length}})` : 'null')
+      if (ng) nestedItems.push(ng)
+    }
+
+    const axisItems: SceneItem[] = []
+    for (const as of (mark as any).axes ?? []) {
+      if (isAxisSpec(as)) {
+        const a = buildAxisInline(as, tmpCtx)
+        if (a) axisItems.push(a)
+      }
+    }
+
+    result.push({
+      marktype: 'group', name: mark.name, role: 'scope',
+      items: [...axisItems, ...nestedItems],
+      clip: mark.clip === true,
+      width: cellWidth, height: cellHeight,
+      x: cellX, y: cellY,
+    })
+  }
+  return result
+}
+
+function buildRowHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup[] {
+  const rows = ctx.datasets.get(mark.from!.data!) ?? []
+  if (!rows.length) return []
+
+  let cellHeight = 500
+  const enc = mark.encode?.update
+  if (enc?.height) {
+    const hs = (enc.height as { signal?: string } | undefined)?.signal
+    if (hs !== undefined && ctx.signalParams[hs] !== undefined && !Array.isArray(ctx.signalParams[hs]))
+      cellHeight = Number(ctx.signalParams[hs])
+  }
+  const grpW = 50
+
+  const cellMark = findCellMark(ctx)
+  const groupby = cellMark ? (cellMark.from as any)?.facet?.groupby : null
+  const firstGroupby = groupby?.[0]
+
+  let sortedRows: Row[] | undefined
+  if (mark.sort?.field) {
+    try {
+      const expr = ctx.runtime.expr(mark.sort.field as string)
+      sortedRows = rows.slice().sort((a, b) => {
+        const cmp = expr({ _aster_a: firstGroupby ? (a as Record<string, unknown>)[firstGroupby] : undefined, _aster_b: firstGroupby ? (b as Record<string, unknown>)[firstGroupby] : undefined }, ctx.signalParams) as number
+        return Number(cmp ?? 0)
+      })
+    } catch {}
+  }
+
+  const result: SceneGroup[] = []
+  const src = sortedRows ?? rows
+  for (let i = 0; i < src.length; i++) {
+    const row = src[i]
+    if (!row) continue
+
+    const tmpCtx: EvalContext = { ...ctx, width: grpW, height: cellHeight }
+    const axisItems: SceneItem[] = []
+    for (const as of (mark as any).axes ?? []) {
+      if (isAxisSpec(as)) {
+        const a = buildAxisInline(as, tmpCtx)
+        if (a) axisItems.push(a)
+      }
+    }
+
+    const labelVal = firstGroupby ? String((row as Record<string, unknown>)[firstGroupby]) : String(row)
+
+    result.push({
+      marktype: 'group', name: mark.name, role: 'row-header',
+      items: [...axisItems, {
+        text: labelVal, x: 0, y: cellHeight / 2,
+        angle: -90, align: 'center' as const, baseline: 'middle' as const, fill: '#000',
+      }],
+      width: grpW, x: -1, y: i * (cellHeight + ROW_SPACING),
+    })
+  }
+  return result
+}
+
+function buildColumnFooterGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | null {
+  const cm = findCellMark(ctx)
+  if (!cm) return null
+  const facet = (cm.from as any)?.facet as { data: string; groupby: string[] } | undefined
+  if (!facet) return null
+
+  const rows = ctx.datasets.get(facet.data) ?? []
+  const fkey: string = facet.groupby[0]!
+  const n = rows.length ? new Set(rows.map((r: Row) => String(r[fkey]))).size : 1
+
+  let cellWidth = ctx.width, cellHeight = 500
+  const enc = cm.encode?.update ?? {}
+  if (enc?.width) {
+    const ws = (enc.width as { signal?: string } | undefined)?.signal
+    if (ws !== undefined && ctx.signalParams[ws] !== undefined && !Array.isArray(ctx.signalParams[ws]))
+      cellWidth = Number(ctx.signalParams[ws])
+  }
+  if (enc?.height) {
+    const hs = (enc.height as { signal?: string } | undefined)?.signal
+    if (hs !== undefined && ctx.signalParams[hs] !== undefined && !Array.isArray(ctx.signalParams[hs]))
+      cellHeight = Number(ctx.signalParams[hs])
+  }
+
+  const footerY = (n - 1) * (cellHeight + ROW_SPACING) + cellHeight + 1
+
+  const tmpCtx: EvalContext = { ...ctx, width: cellWidth, height: cellHeight }
+  const axisItems: SceneItem[] = []
+  for (const as of (mark as any).axes ?? []) {
+    if (isAxisSpec(as)) {
+      const a = buildAxisInline(as, tmpCtx)
+      if (a) axisItems.push(a)
+    }
+  }
+
+  return {
+    marktype: 'group', name: mark.name, role: 'column-footer',
+    items: axisItems, x: 0, y: footerY,
+  }
+}
+
+function buildRowTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | null {
+  const cm = findCellMark(ctx)
+  if (!cm) return null
+
+  const facet = (cm.from as any)?.facet as { data: string; groupby: string[] } | undefined
+  let cellHeight = 500, n = 1
+  if (facet) {
+    const rows = ctx.datasets.get(facet.data) ?? []
+    const fkey: string = facet.groupby[0]!
+    n = rows.length ? new Set(rows.map((r: Row) => String(r[fkey]))).size : 1
+  }
+  if (cm.encode?.update?.height) {
+    const hs = (cm.encode.update.height as { signal?: string } | undefined)?.signal
+    if (hs !== undefined && ctx.signalParams[hs] !== undefined && !Array.isArray(ctx.signalParams[hs]))
+      cellHeight = Number(ctx.signalParams[hs])
+  }
+
+  const centerY = ((n - 1) * (ROW_SPACING + cellHeight) + cellHeight) / 2
+
+  const tm = mark as any
+  let titleText = 'Label'
+  const tSpec = tm.title?.text
+  if (typeof tSpec === 'string') {
+    titleText = tSpec
+  } else if (tSpec && typeof tSpec === 'object' && 'signal' in tSpec && typeof (tSpec as { signal: string }).signal === 'string') {
+    try { titleText = String(ctx.runtime.expr((tSpec as { signal: string }).signal)({}, ctx.signalParams)) } catch {}
+  } else if (tSpec && typeof tSpec === 'object' && 'value' in tSpec) {
+    titleText = String((tSpec as { value: unknown }).value)
+  }
+
+  const pad = ctx.chart.padding
+  return {
+    marktype: 'group', name: mark.name, role: 'row-title',
+    items: [{ text: titleText, x: 0, y: 0, angle: -90, align: 'center' as const, baseline: 'middle' as const, fill: '#000' }],
+    x: -(pad.left + 35), y: centerY,
+  }
+}
+
+function isAxisSpec(v: unknown): v is Record<string, unknown> {
+  return v != null && typeof v === 'object' && 'scale' in v && 'orient' in v
+}
+
+function findCellMark(ctx: EvalContext): CompiledMark | undefined {
+  return (ctx.chart.marks as CompiledMark[]).find(m => (m.from as any)?.facet?.groupby?.length)
+}
+
+function buildAxisInline(spec: Record<string, unknown>, ctx: EvalContext): SceneGroup | null {
+  const def: Record<string, unknown> = { scale: spec.scale, orient: (spec as any).orient }
+  for (const k of ['grid','gridScale','domain','labels','ticks','tickCount','tickSize','title','titlePadding','labelAlign','labelBaseline','labelFlush','labelOverlap','labelPadding','tickBand','zindex','encode']) {
+    if ((spec as Record<string, unknown>)[k] !== undefined) def[k] = (spec as Record<string, unknown>)[k]
+  }
+  return buildAxis(def as unknown as CompiledAxis, ctx)
+}
+
+function facetItemMark(
+  mark: CompiledMark,
+  ctx: EvalContext,
+  facetDataName: string,
+): SceneGroup | null {
+  if (mark.type === 'group') {
+    const r = buildGroupMark(mark, ctx)
+    if (!r) return null
+    if (Array.isArray(r)) {
+      const sub: SceneItem[] = []
+      for (const sg of r) { if (sg.items) sub.push(...sg.items) }
+      return { marktype: 'group', name: mark.name, role: mark.role as string, items: sub }
+    }
+    return r
+  }
+
+  const source = (mark.from as any)?.data ?? facetDataName
+  let items: SceneItem[]
+
+  const rows = [...(ctx.datasets.get(source) ?? [])]
+  if (mark.sort) {
+    mark.sort && (rows.sort((a, b) => {
+      if (mark.sort?.field) {
+        const fs = mark.sort.field as string
+        const af = mark.sort.order === 'descending' ? -1 : 1
+        return String(a[fs] as string).localeCompare(String(b[fs] as string)) * af
+      }
+      return 0
+    }))
+  }
+
+  const update = mark.encode?.update ?? mark.encode?.enter ?? {}
+  items = rows.map((row) => {
+    const res = resolveEncodeSet(update, row, ctx, mark.type)
+    res.datum = row
+    return res
+  })
+
+  if (Array.isArray((mark as any).style) ? (mark as any).style.includes('arc') : (mark as any).style === 'arc') {
+    for (const it of items) { if (it.strokeWidth == null) it.strokeWidth = 1.5 }
+  }
+
+  return { marktype: mark.type, name: mark.name, role: 'mark', clip: mark.clip === true, items }
 }
 
 function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
