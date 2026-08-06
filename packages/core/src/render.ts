@@ -94,6 +94,8 @@ function switchMarkup(type: string, group: SceneGroup): string {
     case 'rule': return renderRules(group)
     case 'text': return renderTexts(group)
     case 'path': return renderPaths(group)
+    case 'shape': return renderPaths(group)
+    case 'geoshape': return renderPaths(group)
     case 'arc': return renderArcs(group)
     default: return ''
   }

@@ -92,6 +92,17 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
         values.length === 0 ? [Infinity, -Infinity] : [Math.min(...values), Math.max(...values)]
       return rows
     }
+    case 'geoshape': {
+      // Vega's geoshape transform turns each datum's GeoJSON geometry into an
+      // SVG path (default field is the whole datum, default output 'shape').
+      const as = (t as { as?: unknown }).as ?? 'shape'
+      const field = (t as { field?: unknown }).field
+      return rows.map((r) => {
+        const geo = field == null || field === 'datum' ? r : r[field as string]
+        const p = geoJSONPath(geo)
+        return p !== undefined ? { ...r, [as as string]: p } : r
+      })
+    }
     case 'identifier':
       return rows
     default:
@@ -507,25 +518,126 @@ function stackRows(rows: Row[], t: Extract<CompiledTransform, { type: 'stack' }>
   const groupby = t.groupby ?? []
   const groups = groupby.length ? groupRows(rows, groupby) : [rows]
   const [startField, endField] = t.as
-  const out: Row[] = []
+
+  // vega's stack (vega-encode Stack.partition) computes the max group sum
+  // across ALL groups; the `center` offset anchors each group's baseline at
+  // (max - groupSum) / 2 so the largest group sits on zero and smaller groups
+  // float above it (the streamgraph layout). `normalize` rescales each group
+  // to [0, 1]. `zero` (default) stacks positives upward, negatives downward.
+  let max = 0
+  const sums: number[] = []
   for (const g of groups) {
-    const ordered = sortRows(g, t.sort)
-    let acc = 0
-    const total = ordered.reduce((s, r) => s + (Number(r[t.field]) || 0), 0)
-    for (const r of ordered) {
-      const value = Number(r[t.field]) || 0
-      let start = acc
-      let end = acc + value
-      if (t.offset === 'normalize') {
-        start = total === 0 ? 0 : start / total
-        end = total === 0 ? 0 : end / total
-      } else if (t.offset === 'center') {
-        start -= total / 2
-        end -= total / 2
+    const s = g.reduce((a, r) => a + Math.abs(Number(r[t.field]) || 0), 0)
+    sums.push(s)
+    if (s > max) max = s
+  }
+
+  const out: Row[] = []
+  for (let gi = 0; gi < groups.length; gi++) {
+    const ordered = sortRows(groups[gi]!, t.sort)
+    const total = sums[gi]!
+    if (t.offset === 'normalize') {
+      const scale = total === 0 ? 0 : 1 / total
+      let last = 0
+      for (const r of ordered) {
+        const start = last
+        const end = (last += scale * Math.abs(Number(r[t.field]) || 0))
+        out.push({ ...r, [startField]: start, [endField]: end })
       }
-      acc += value
-      out.push({ ...r, [startField]: start, [endField]: end })
+    } else if (t.offset === 'center') {
+      let last = (max - total) / 2
+      for (const r of ordered) {
+        const start = last
+        const end = (last += Math.abs(Number(r[t.field]) || 0))
+        out.push({ ...r, [startField]: start, [endField]: end })
+      }
+    } else {
+      let lastPos = 0
+      let lastNeg = 0
+      for (const r of ordered) {
+        const v = Number(r[t.field]) || 0
+        if (v < 0) {
+          const start = lastNeg
+          const end = (lastNeg += v)
+          out.push({ ...r, [startField]: start, [endField]: end })
+        } else {
+          const start = lastPos
+          const end = (lastPos += v)
+          out.push({ ...r, [startField]: start, [endField]: end })
+        }
+      }
     }
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// geoshape: GeoJSON -> SVG path (identity projection)
+// ---------------------------------------------------------------------------
+
+function fmtCoord(v: unknown): string {
+  const n = typeof v === 'number' ? v : Number(v)
+  if (!Number.isFinite(n)) return String(v)
+  return String(Math.round(n * 1000) / 1000)
+}
+
+/** Build the SVG path for a GeoJSON polygon ring (closing point omitted). */
+function ringPath(ring: unknown[]): string {
+  if (!ring.length) return ''
+  const pts = ring as unknown[][]
+  const n = pts.length
+  let d = `M${fmtCoord(pts[0]![0])},${fmtCoord(pts[0]![1])}`
+  for (let i = 1; i < n; i++) {
+    // GeoJSON rings repeat the first point at the end; d3-geo omits it because
+    // the path closes with Z.
+    if (i === n - 1 && pts[i]![0] === pts[0]![0] && pts[i]![1] === pts[0]![1]) break
+    d += `L${fmtCoord(pts[i]![0])},${fmtCoord(pts[i]![1])}`
+  }
+  return d + 'Z'
+}
+
+function lineStringPath(pts: unknown[][]): string {
+  if (!pts.length) return ''
+  let d = `M${fmtCoord(pts[0]![0])},${fmtCoord(pts[0]![1])}`
+  for (let i = 1; i < pts.length; i++) d += `L${fmtCoord(pts[i]![0])},${fmtCoord(pts[i]![1])}`
+  return d
+}
+
+/**
+ * Convert a GeoJSON geometry (or Feature / FeatureCollection) into an SVG path
+ * string using an identity projection (no projection). Returns undefined when
+ * the geometry type is not handled.
+ */
+export function geoJSONPath(geo: unknown): string | undefined {
+  if (geo == null || typeof geo !== 'object') return undefined
+  const g = geo as { type?: string; geometry?: unknown; coordinates?: unknown; features?: unknown[] }
+  if (g.type === 'Feature') return geoJSONPath(g.geometry)
+  if (g.type === 'FeatureCollection' && Array.isArray(g.features)) {
+    let out = ''
+    for (const f of g.features) {
+      const p = geoJSONPath(f)
+      if (p !== undefined) out += p
+    }
+    return out || undefined
+  }
+  const coords = g.coordinates
+  if (g.type === 'Polygon' && Array.isArray(coords)) {
+    return (coords as unknown[][]).map(ringPath).join('')
+  }
+  if (g.type === 'MultiPolygon' && Array.isArray(coords)) {
+    let out = ''
+    for (const poly of coords as unknown[][][]) {
+      for (const ring of poly) out += ringPath(ring)
+    }
+    return out
+  }
+  if (g.type === 'LineString' && Array.isArray(coords)) {
+    return lineStringPath(coords as unknown[][])
+  }
+  if (g.type === 'MultiLineString' && Array.isArray(coords)) {
+    let out = ''
+    for (const line of coords as unknown[][][]) out += lineStringPath(line)
+    return out
+  }
+  return undefined
 }

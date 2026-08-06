@@ -4,7 +4,7 @@
  * eagerly per call; the caller re-evaluates when inputs change.
  */
 import { compileExpr, type ExpressionRuntime } from './expression.js'
-import { applyTransforms, sortRows, type Row } from './transform.js'
+import { applyTransforms, sortRows, type Row, geoJSONPath } from './transform.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
 import { locale } from 'vega-format'
 import type {
@@ -49,6 +49,8 @@ interface EvalContext {
   _defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }> }>
   /** Cached facet grid layout (computed once per chart). */
   _facetLayout?: FacetGridLayout | null
+  /** Cached 2D repeat (scatter matrix) concat grid layout (computed once per chart). */
+  _concatGrid?: ConcatGridState | null
 }
 
 /**
@@ -201,6 +203,10 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   const isFacetSpec = hasFacetMarks && hasChildSignals
   const isConcat = isConcatSpec(ctx.chart)
   const isVerticalConcat = isConcat && ctx.signalParams['childWidth'] === undefined && ctx.signalParams['childHeight'] !== undefined
+  // A 2D repeat (e.g. scatter matrix) compiles to a concat whose cells use both
+  // childWidth AND childHeight signals; vega renders such a chart at the SVG
+  // minimum viewport (10x10) because both dimensions are signal-based.
+  const is2DConcat = isConcat && ctx.signalParams['childWidth'] !== undefined && ctx.signalParams['childHeight'] !== undefined
   
   if (ctx.chart.autosize !== 'none') {
     sceneWidth = width + padding.left + padding.right
@@ -235,7 +241,12 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
       sceneWidth = 10
       sceneHeight = 10
     } else if (isConcat) {
-      if (isVerticalConcat) {
+      if (is2DConcat) {
+        // 2D repeat grid (scatter matrix): both cell dimensions are
+        // signal-based, so vega renders the viewport at the SVG minimum (10x10).
+        sceneWidth = 10
+        sceneHeight = 10
+      } else if (isVerticalConcat) {
         // Vconcat with signal-based cell height and explicit width: vega renders
         // the viewport at the SVG minimum height (10) but uses the real chart width.
         sceneWidth = width + ctx.chart.padding.left + ctx.chart.padding.right
@@ -438,6 +449,13 @@ function evaluateMark(
   if (source) {
     let rows = (ctx.datasets.get(source) ?? []).map((r) => ({ ...r }))
     if (mark.sort) rows = sortRows(rows, mark.sort)
+    // Mark-level transforms (e.g. geoshape) modify the datum before encoding.
+    if (mark.transform?.length) {
+      rows = applyTransforms(rows, mark.transform, {
+        runtime: ctx.runtime,
+        signals: ctx.signalParams,
+      })
+    }
 
     // Sort rect marks by their scale y field so rendering order matches vega:
     // bars with smaller y-value render first (appear at the front).
@@ -474,6 +492,24 @@ function evaluateMark(
   if (Array.isArray(mark.style) ? mark.style.includes('arc') : mark.style === 'arc') {
     for (const it of items) {
       if (it.strokeWidth == null) it.strokeWidth = 1.5
+    }
+  }
+
+  // Shape/geoshape marks: turn the GeoJSON-derived path (from a geoshape
+  // transform or from the datum itself) into a rendered path item.
+  if (mark.type === 'shape' || mark.type === 'geoshape') {
+    for (const it of items) {
+      const datum = (it as { datum?: Row }).datum
+      if (!datum) continue
+      let path: string | undefined
+      if (mark.type === 'geoshape' && typeof datum.shape !== 'string') {
+        // Raw geoshape mark: the datum itself is the GeoJSON geometry.
+        path = geoJSONPath(datum)
+      } else {
+        const shape = datum.shape
+        path = typeof shape === 'string' ? shape : undefined
+      }
+      if (path) it.path = path
     }
   }
 
@@ -775,12 +811,23 @@ function buildFacetCells(
     }
 
     const cellItems: SceneItem[] = [...axisItems, ...nestedItems]
-    // Each facet cell carries a 0.5px-inset stroke='#ddd' background the size of
-    // the cell, matching vega's `style: cell` default background path.
-    cellItems.push({
-      path: `M0.5,0.5h${cellWidth}v${cellHeight}h-${cellWidth}Z`,
-      x: 0, y: 0, stroke: '#ddd',
-    } as SceneItem)
+    // Each facet cell carries a background path the size of the cell, matching
+    // vega's group background. Cells with the `cell` style (stroke #ddd, 0.5px
+    // inset) are the spatial facet cells of facet/trellis charts; plain group
+    // marks (e.g. vega-lite's faceted area `pathgroup`) render a bare full-size
+    // path with no stroke.
+    const cellStyle = Array.isArray(mark.style) ? mark.style.includes('cell') : mark.style === 'cell'
+    if (cellStyle) {
+      cellItems.push({
+        path: `M0.5,0.5h${cellWidth}v${cellHeight}h-${cellWidth}Z`,
+        x: 0, y: 0, stroke: '#ddd',
+      } as SceneItem)
+    } else {
+      cellItems.push({
+        path: `M0,0h${cellWidth}v${cellHeight}h-${cellWidth}Z`,
+        x: 0, y: 0,
+      } as SceneItem)
+    }
 
     result.push({
       marktype: 'group', name: mark.name, role: 'scope',
@@ -996,6 +1043,14 @@ function readCellSize(mark: CompiledMark, ctx: EvalContext, defW: number, defH: 
       width = Number(ctx.signalParams[ws])
     if (hs !== undefined && ctx.signalParams[hs] !== undefined && !Array.isArray(ctx.signalParams[hs]))
       height = Number(ctx.signalParams[hs])
+    // vega-lite emits `{field: {group: "width"}}` / `{field: {group: "height"}}`
+    // for group marks that take their size from the enclosing group (e.g. the
+    // faceted `pathgroup` around stacked areas). Resolve those to the enclosing
+    // group's dimensions.
+    const wg = (enc.width as { field?: { group?: string } } | undefined)?.field?.group
+    const hg = (enc.height as { field?: { group?: string } } | undefined)?.field?.group
+    if (wg === 'width') width = ctx.width
+    if (hg === 'height') height = ctx.height
   }
   return { width, height }
 }
@@ -1189,25 +1244,75 @@ function buildColumnTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup
 }
 
 // ===========================================================================
-// Concat support (horizontal and vertical)
+// Concat support (horizontal, vertical, and 2D repeat grids)
 // ===========================================================================
 
 const CONCAT_BASE_SPACING = 29
 const TITLE_FONT_SIZE = 11
+/** Vega-lite emits `layout: {padding: 20, ...}` for repeat grids (scatter matrix). */
+const CONCAT_GRID_PADDING = 20
 
-/** Build a single concat cell group mark (point/bar/etc. with its own axes). */
-function buildConcatGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup {
-  // Cell index = position among the concat group marks in the chart's mark
-  // list. vega-lite names plain h/vconcat cells `concat_<n>_group` and repeat
-  // cells `child__<field>_group`; the array order is the layout order for both,
-  // so the ordinal position is the reliable index.
-  const concatMarks = (ctx.chart.marks as CompiledMark[]).filter(m => isConcatGroupMark(m))
-  const idx = Math.max(0, concatMarks.indexOf(mark))
+interface ConcatGridState {
+  ncols: number
+  colAdvance: number
+  rowAdvance: number
+  /** All concat cells built once and positioned in the grid, keyed by mark name. */
+  cells: Map<string, SceneGroup>
+}
+
+/** Whether this chart is a 2D repeat concat (both childWidth and childHeight signals present). */
+function is2DRepeatConcat(ctx: EvalContext): boolean {
+  return ctx.signalParams['childWidth'] !== undefined && ctx.signalParams['childHeight'] !== undefined
+}
+
+/** Parse a vega-lite repeat cell name `child__row_<r>column_<c>_group`. */
+function repeatCellRC(name: string): { row: string; col: string } | null {
+  const m = /^child__row_(.+)column_(.+)_group$/.exec(name)
+  return m ? { row: m[1]!, col: m[2]! } : null
+}
+
+/**
+ * Compute the shared grid layout for a 2D repeat concat (scatter matrix) and
+ * build all cells positioned in it. Cached on the context. Mirrors vega's
+ * gridLayout with `align: all`, `bounds: full` and the vega-lite repeat layout
+ * padding (20). Cells are laid out row-major: cell i sits at
+ * ((i % ncols) * colAdvance, floor(i / ncols) * rowAdvance).
+ */
+function getConcatGridState(ctx: EvalContext): ConcatGridState | null {
+  if (ctx._concatGrid !== undefined) return ctx._concatGrid
+  ctx._concatGrid = null
+  const marks = (ctx.chart.marks as CompiledMark[]).filter(m => isConcatGroupMark(m))
+  if (!is2DRepeatConcat(ctx) || marks.length < 2) return null
+  const rcs = marks.map(m => repeatCellRC(m.name ?? ''))
+  if (rcs.some(r => !r)) return null
+  const ncols = new Set(rcs.map(r => r!.col)).size
+  if (ncols < 2) return null
+  const { width: cw, height: ch } = readCellSize(marks[0]!, ctx, 500, 500)
+  const cells = marks.map(m => buildConcatCellBody(m, ctx))
+  const bounds = cells.map(c => concatCellLocalBounds(c, cw, ch))
+  let offX = 0, xMax = 0, offY = 0, yMax = 0
+  for (let i = 0; i < cells.length; i++) {
+    const b = bounds[i]!
+    if (i % ncols !== 0) offX = Math.max(offX, CONCAT_GRID_PADDING + Math.max(0, Math.ceil(-b.x1)))
+    if (i >= ncols) offY = Math.max(offY, CONCAT_GRID_PADDING + Math.max(0, Math.ceil(-b.y1)))
+    xMax = Math.max(xMax, Math.ceil(b.x2))
+    yMax = Math.max(yMax, Math.ceil(b.y2))
+  }
+  const colAdvance = offX + xMax
+  const rowAdvance = offY + yMax
+  for (let i = 0; i < cells.length; i++) {
+    cells[i]!.x = (i % ncols) * colAdvance
+    cells[i]!.y = Math.floor(i / ncols) * rowAdvance
+  }
+  const byName = new Map<string, SceneGroup>()
+  marks.forEach((m, i) => byName.set(m.name, cells[i]!))
+  ctx._concatGrid = { ncols, colAdvance, rowAdvance, cells: byName }
+  return ctx._concatGrid
+}
+
+/** Build a concat cell group with all its content but no layout position. */
+function buildConcatCellBody(mark: CompiledMark, ctx: EvalContext): SceneGroup {
   const { width: cellWidth, height: cellHeight } = readCellSize(mark, ctx, 500, 500)
-  // Vertical concat (vconcat) uses a childHeight signal; horizontal concat uses
-  // childWidth. vega-lite emits exactly one of the two for a concat layout.
-  const isVertical = ctx.signalParams['childWidth'] === undefined && ctx.signalParams['childHeight'] !== undefined
-
   const tmpCtx: EvalContext = { ...ctx, width: cellWidth, height: cellHeight }
   const axisItems: SceneItem[] = []
   for (const as of (mark as any).axes ?? []) {
@@ -1216,42 +1321,11 @@ function buildConcatGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup {
       if (a) axisItems.push(a)
     }
   }
-
-  let cellX = 0
-  let cellY = 0
-  if (isVertical) {
-    // Vertical concat stacks cells top-to-bottom. The per-cell vertical advance
-    // must clear the cell's bottom x-axis extent (labels + title below the plot)
-    // plus the base spacing — the vertical analog of the horizontal advance.
-    let xAxisExtent = 0
-    for (const ag of axisItems) {
-      for (const it of (ag as SceneGroup).items ?? []) {
-        if ((it as SceneItem).text != null && typeof (it as SceneItem).y === 'number' && (it as SceneItem).y! > cellHeight) {
-          xAxisExtent = Math.max(xAxisExtent, Math.ceil((it as SceneItem).y! - cellHeight - 0.5))
-        }
-      }
-    }
-    cellY = idx * (cellHeight + CONCAT_BASE_SPACING + xAxisExtent)
-  } else {
-    // Determine the per-cell horizontal advance from the y-axis left extent so the
-    // next cell's y-axis clears this cell's content + base spacing.
-    let yAxisExtent = 0
-    for (const ag of axisItems) {
-      for (const it of (ag as SceneGroup).items ?? []) {
-        if ((it as SceneItem).text != null && typeof (it as SceneItem).x === 'number' && (it as SceneItem).x! < 0) {
-          yAxisExtent = Math.max(yAxisExtent, Math.ceil(Math.abs((it as SceneItem).x as number) + TITLE_FONT_SIZE + 0.5))
-        }
-      }
-    }
-    cellX = idx * (cellWidth + CONCAT_BASE_SPACING + yAxisExtent)
-  }
-
   const nestedItems: SceneItem[] = []
   for (const cm of (mark as any).marks ?? []) {
     const ng = facetItemMark(cm, tmpCtx, '')
     if (ng) nestedItems.push(ng)
   }
-
   return {
     marktype: 'group', name: mark.name, role: 'scope',
     items: [...axisItems, ...nestedItems, {
@@ -1261,8 +1335,119 @@ function buildConcatGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup {
       x: 0, y: 0, stroke: '#ddd',
     } as SceneItem],
     width: cellWidth, height: cellHeight,
-    x: cellX, y: cellY,
+    x: 0, y: 0,
   }
+}
+
+/** Build a single concat cell group mark (point/bar/etc. with its own axes). */
+function buildConcatGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup {
+  // 2D repeat (scatter matrix): return the cell from the shared grid layout.
+  const grid = getConcatGridState(ctx)
+  if (grid) return grid.cells.get(mark.name)!
+
+  const cell = buildConcatCellBody(mark, ctx)
+  const { width: cellWidth, height: cellHeight } = readCellSize(mark, ctx, 500, 500)
+  // Cell index = position among the concat group marks in the chart's mark
+  // list. vega-lite names plain h/vconcat cells `concat_<n>_group` and repeat
+  // cells `child__<field>_group`; the array order is the layout order for both,
+  // so the ordinal position is the reliable index.
+  const concatMarks = (ctx.chart.marks as CompiledMark[]).filter(m => isConcatGroupMark(m))
+  const idx = Math.max(0, concatMarks.indexOf(mark))
+  // Vertical concat (vconcat) uses a childHeight signal; horizontal concat uses
+  // childWidth. vega-lite emits exactly one of the two for a concat layout.
+  const isVertical = ctx.signalParams['childWidth'] === undefined && ctx.signalParams['childHeight'] !== undefined
+
+  const textItems: Array<{ x: number; y: number }> = []
+  const collectTexts = (items: SceneItem[]): void => {
+    for (const it of items) {
+      const g = it as SceneGroup
+      if (Array.isArray(g.items)) {
+        collectTexts(g.items)
+      } else if (it.text != null && it.x != null && it.y != null) {
+        textItems.push({ x: it.x, y: it.y })
+      }
+    }
+  }
+  collectTexts(cell.items ?? [])
+
+  let cellX = 0
+  let cellY = 0
+  if (isVertical) {
+    // Vertical concat stacks cells top-to-bottom. The per-cell vertical advance
+    // must clear the cell's bottom x-axis extent (labels + title below the plot)
+    // plus the base spacing — the vertical analog of the horizontal advance.
+    let xAxisExtent = 0
+    for (const it of textItems) {
+      if (it.y > cellHeight) xAxisExtent = Math.max(xAxisExtent, Math.ceil(it.y - cellHeight - 0.5))
+    }
+    cellY = idx * (cellHeight + CONCAT_BASE_SPACING + xAxisExtent)
+  } else {
+    // Determine the per-cell horizontal advance from the y-axis left extent so the
+    // next cell's y-axis clears this cell's content + base spacing.
+    let yAxisExtent = 0
+    for (const it of textItems) {
+      if (it.x < 0) yAxisExtent = Math.max(yAxisExtent, Math.ceil(Math.abs(it.x) + TITLE_FONT_SIZE + 0.5))
+    }
+    cellX = idx * (cellWidth + CONCAT_BASE_SPACING + yAxisExtent)
+  }
+
+  cell.x = cellX
+  cell.y = cellY
+  return cell
+}
+
+/**
+ * Compute the local content bounds of a built concat cell the way vega bounds
+ * its cell group marks. Mirrors vega-scenegraph's text/rule/symbol bound rules
+ * so that the grid advances computed by getConcatGridState match vega's
+ * gridLayout (align: all, bounds: full) exactly:
+ *  - the cell box is the starting extent;
+ *  - symbols expand by radius + 2 * strokeWidth (miter join);
+ *  - a rotated (left/right axis) title reaches one font-size left/right of its
+ *    anchor plus vega's half-pixel axis offset + group stroke expansion;
+ *  - a bottom axis title sits one (fontSize - round(0.8*fontSize)) below its
+ *    anchor (vega bounds titles with an alphabetic baseline during layout).
+ */
+function concatCellLocalBounds(cell: SceneGroup, cellW: number, cellH: number): { x1: number; y1: number; x2: number; y2: number } {
+  let x1 = 0, y1 = 0, x2 = cellW, y2 = cellH
+  const walk = (items: SceneItem[], ox: number, oy: number, marktype?: string): void => {
+    for (const it of items) {
+      const g = it as SceneGroup
+      if (Array.isArray(g.items)) {
+        walk(g.items, ox + (g.x ?? 0), oy + (g.y ?? 0), g.marktype)
+        continue
+      }
+      const x = ox + (it.x ?? 0)
+      const y = oy + (it.y ?? 0)
+      if (it.text != null) {
+        // Left/right axis titles are rotated ±90°: they extend one font-size
+        // beyond their anchor on the outside. Vega's group bound excludes the
+        // axis's half-pixel offset but the cell stroke adds it back, netting a
+        // 1px overshoot over the anchor.
+        if (x < 0) {
+          const fontSize = (it as unknown as Record<string, unknown>).fontSize as number | undefined ?? TITLE_FONT_SIZE
+          x1 = Math.min(x1, x - fontSize - 1)
+        } else if (y > cellH) {
+          // Bottom axis title: vega bounds it with an alphabetic baseline, so
+          // its bottom sits (fontSize - round(0.8*fontSize)) below the anchor.
+          const fontSize = (it as unknown as Record<string, unknown>).fontSize as number | undefined ?? TITLE_FONT_SIZE
+          y2 = Math.max(y2, y + (fontSize - Math.round(0.8 * fontSize)))
+        }
+      } else if (marktype === 'symbol' || it.size != null) {
+        const size = it.size ?? 30
+        const sw = it.strokeWidth ?? 2
+        // Vega's symbol bound adds the (miter) stroke extent and the cell
+        // group's stroke expansion carries a further half pixel on each side.
+        const ext = Math.sqrt(size) / 2 + 2 * sw + 0.5
+        x1 = Math.min(x1, x - ext)
+        y1 = Math.min(y1, y - ext)
+        x2 = Math.max(x2, x + ext)
+        y2 = Math.max(y2, y + ext)
+      }
+    }
+  }
+  walk(cell.items ?? [], cell.x ?? 0, cell.y ?? 0, cell.marktype)
+  return { x1, y1, x2, y2 }
 }
 
 function isAxisSpec(v: unknown): v is Record<string, unknown> {
