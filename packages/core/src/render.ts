@@ -107,7 +107,13 @@ function isGroup(item: SceneItem): item is SceneGroup {
 function renderLeaf(it: SceneItem): string {
   // Path items
   if (it.path != null) {
-    return `<path d="${it.path}"${attr('fill', it.fill)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+    // Apply the item's x/y as a translate so legend/entry paths (whose `d`
+    // starts at M0,0) land at their intended position, matching vega's
+    // nested-scope transforms. Items with x=y=0 emit no transform.
+    const tx = num(it.x ?? 0)
+    const ty = num(it.y ?? 0)
+    const transform = (tx !== '0' || ty !== '0') ? ` transform="translate(${tx},${ty})"` : ''
+    return `<path${transform} d="${it.path}"${attr('fill', it.fill)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
   }
   // Symbol items (circle arc path)
   if (it.shape != null && it.radius != null) {
@@ -244,14 +250,19 @@ function renderRects(group: SceneGroup): string {
           }
     let w = it.width
     let h = it.height
-    if (w == null && it.x2 != null) w = it.x2 - (it.x as number)
-    if (h == null && it.y2 != null) h = it.y2 - (it.y as number)
+    // When x2/y2 are present, vega normalizes the rect so that x is the min
+    // edge and width is positive (same for y). This keeps the path winding
+    // consistent (positive h first) regardless of which edge is "x" vs "x2".
+    let x0 = it.x as number
+    let y0 = it.y as number
+    if (w == null && it.x2 != null) { w = Math.abs((it.x2 as number) - x0); x0 = Math.min(x0, it.x2 as number) }
+    if (h == null && it.y2 != null) { h = Math.abs((it.y2 as number) - y0); y0 = Math.min(y0, it.y2 as number) }
     if (w == null || h == null) continue
     // vega renders rect marks as path elements
-    out += `<path d="M${num(it.x)},${num(it.y)}h${num(w)}v${num(h)}h${num(-w)}Z"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+    out += `<path d="M${num(x0)},${num(y0)}h${num(w)}v${num(h)}h${num(-w)}Z"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
   }
     out += '</g>'
-  return out
+    return out
 }
 
 function renderRules(group: SceneGroup): string {

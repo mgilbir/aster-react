@@ -134,7 +134,7 @@ function translatePath(d: string, tx: number, ty: number): string {
       i++
       continue
     }
-    const val = parseFloat(m[2]!)
+    const val = parseFloat(m[0])
     i += m[0].length
     let offset = 0
     if (cmd === 'A' || cmd === 'a') {
