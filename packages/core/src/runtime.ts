@@ -547,10 +547,12 @@ function buildFacetCellGroup(
     }
 
     const cellItems: SceneItem[] = [...axisItems, ...nestedItems]
-    // Column facets lay cells horizontally with a stroke='#ddd' cell background.
-    if (!isRow) {
-      cellItems.push({ path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0, stroke: '#ddd' } as SceneItem)
-    }
+    // Each facet cell carries a 0.5px-inset stroke='#ddd' background the size of
+    // the cell, matching vega's `style: cell` default background path.
+    cellItems.push({
+      path: `M0.5,0.5h${cellWidth}v${cellHeight}h-${cellWidth}Z`,
+      x: 0, y: 0, stroke: '#ddd',
+    } as SceneItem)
 
     result.push({
       marktype: 'group', name: mark.name, role: 'scope',
@@ -610,7 +612,12 @@ function buildRowHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup[]
 
     result.push({
       marktype: 'group', name: mark.name, role: 'row-header',
-      items: [...axisItems, {
+      items: [{
+        // Vega's row-header group has a zero-width, full-height background
+        // path (M0,0h0vHh0Z) — degenerate but non-zero, so it survives
+        // canonicalization and contributes a `path|...` record.
+        path: `M0,0h0v${cellHeight}h0Z`, x: 0, y: 0,
+      } as SceneItem, ...axisItems, {
         text: labelVal, x: -50, y: cellHeight / 2,
         angle: -90, align: 'center' as const, baseline: 'middle' as const, fill: '#000',
       }],
@@ -648,9 +655,12 @@ function buildColumnFooterGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
       cellHeight = Number(ctx.signalParams[hs])
   }
 
-  const footerY = (n - 1) * (cellHeight + ROW_SPACING) + 1
+  // Vega positions the column-footer group immediately below the last cell
+  // (y = (n-1)*step + cellHeight + 1) with zero height, so the bottom axis
+  // inside it is laid out at y=0. We build the axis with height=0 to match.
+  const footerY = (n - 1) * (cellHeight + ROW_SPACING) + cellHeight + 1
 
-  const tmpCtx: EvalContext = { ...ctx, width: cellWidth, height: cellHeight }
+  const tmpCtx: EvalContext = { ...ctx, width: cellWidth, height: 0 }
   const axisItems: SceneItem[] = []
   for (const as of (mark as any).axes ?? []) {
     if (isAxisSpec(as)) {
@@ -661,7 +671,13 @@ function buildColumnFooterGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
 
   return {
     marktype: 'group', name: mark.name, role: 'column-footer',
-    items: axisItems, x: 0, y: footerY,
+    items: [{
+      // Vega's column-footer group has a zero-height, full-width background
+      // path (M0,0hWv0h-WZ) — degenerate but non-zero width, surviving
+      // canonicalization as a `path|...` record.
+      path: `M0,0h${cellWidth}v0h-${cellWidth}Z`, x: 0, y: 0,
+    } as SceneItem, ...axisItems],
+    x: 0, y: footerY,
   }
 }
 
@@ -700,11 +716,6 @@ function buildRowTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | 
     marktype: 'group', name: mark.name, role: 'row-title',
     items: [
         { text: titleText, x: -21, y: 0, angle: -90, align: 'center' as const, baseline: 'middle' as const, fill: '#000' },
-        { path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0 },
-        { path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0 },
-        { path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0 },
-        { path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0, stroke: '#ddd' },
-        { path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0, stroke: '#ddd' },
       ],
     x: -61, y: centerY,
   }
@@ -740,8 +751,9 @@ function buildColumnFacetRowHeader(mark: CompiledMark, ctx: EvalContext): SceneG
       if (a) items.push(a)
     }
   }
-  // row_header background placeholder (non-degenerate h/v → plain NaN path)
-  items.push({ path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0 } as SceneItem)
+  // row_header background: zero-width, full-height path (M0,0h0vHh0Z), matching
+  // vega's degenerate-but-non-zero group background (survives canonicalization).
+  items.push({ path: `M0,0h0v${cellHeight}h0Z`, x: 0, y: 0 } as SceneItem)
   return [{
     marktype: 'group', name: mark.name, role: 'row-header',
     items,
@@ -781,7 +793,8 @@ function buildColumnHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
       marktype: 'group', name: mark.name, role: 'column-header',
       items: [
         { text: labelVal, x: cellWidth / 2, y: -12, align: 'center' as const, fill: '#000' },
-        { path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0 } as SceneItem,
+        // column-header background: zero-height, full-width path (M0,0hWv0h-WZ).
+        { path: `M0,0h${cellWidth}v0h-${cellWidth}Z`, x: 0, y: 0 } as SceneItem,
       ],
       x: cellX, y: -8, width: cellWidth, height: 0,
     })
@@ -826,7 +839,8 @@ function buildColumnFooterGroupColumn(mark: CompiledMark, ctx: EvalContext): Sce
         if (a) items.push(a)
       }
     }
-    items.push({ path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0 } as SceneItem)
+    // column-footer background: zero-height, full-width path (M0,0hWv0h-WZ).
+    items.push({ path: `M0,0h${cellWidth}v0h-${cellWidth}Z`, x: 0, y: 0 } as SceneItem)
     result.push({
       marktype: 'group', name: mark.name, role: 'column-footer',
       items,
@@ -947,7 +961,12 @@ function buildConcatGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup {
 
   return {
     marktype: 'group', name: mark.name, role: 'scope',
-    items: [...axisItems, ...nestedItems, { path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0, stroke: '#ddd' } as SceneItem],
+    items: [...axisItems, ...nestedItems, {
+      // Each concat cell has a 0.5px-inset stroke='#ddd' background the size
+      // of the cell, matching vega's `style: cell` default background path.
+      path: `M0.5,0.5h${cellWidth}v${cellHeight}h-${cellWidth}Z`,
+      x: 0, y: 0, stroke: '#ddd',
+    } as SceneItem],
     width: cellWidth, height: cellHeight,
     x: cellX, y: 0,
   }
@@ -988,7 +1007,12 @@ function facetItemMark(
   const source = (mark.from as any)?.data ?? facetDataName
   let items: SceneItem[]
 
-  const rows = [...(ctx.datasets.get(source) ?? [])]
+  // Copy each row so resolveEncodeSet (which writes resolved values back into
+  // the datum) cannot corrupt the shared dataset. This matters when the same
+  // cell data is built more than once (e.g. buildColumnTitleGroup rebuilds the
+  // cells to compute the title center); without copies the second pass would
+  // re-scale already-scaled values.
+  const rows = (ctx.datasets.get(source) ?? []).map((r) => ({ ...r }))
   if (mark.sort) {
     mark.sort && (rows.sort((a, b) => {
       if (mark.sort?.field) {
@@ -1330,13 +1354,24 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const boxHeight = isStrokeLegend ? 14 : 11
     const bgHeight = 16 + boxHeight + entryStep * (n - 1)
 
+    // Vega measures text width as ~~(0.8 * len * fontSize) when no canvas is
+    // available (vega-scenegraph estimateWidth). Labels render at 10px, the
+    // legend title at 11px bold. The entry content width is the symbol offset
+    // (16) plus the widest label; the outer background spans the larger of the
+    // entry content and the title.
+    const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
+    const entryWidth = 16 + 8 * maxLabelLen
+    const titleStr = String(legend.title ?? '')
+    const titleWidth = titleStr.length > 0 ? ~~(0.8 * titleStr.length * 11) : 0
+    const outerWidth = Math.max(entryWidth, titleWidth)
+
     const items: SceneItem[] = []
-    items.push({ path: `M0,0h26v${bgHeight}h-26Z`, x: 0, y: 0 })
-    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000' })
+    items.push({ path: `M0,0h${outerWidth}v${bgHeight}h-${outerWidth}Z`, x: 0, y: 0 })
+    items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000' })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
       const off = 16 + i * entryStep
-      items.push({ path: `M0,0h24v${boxHeight}h-24Z`, x: 0, y: off })
+      items.push({ path: `M0,0h${entryWidth}v${boxHeight}h-${entryWidth}Z`, x: 0, y: off })
       if (colorProp === 'fill') {
         items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5 })
       } else {
@@ -1344,19 +1379,24 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       }
       items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000' })
     }
-    return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, width: 26, height: bgHeight, items }
+    return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, width: outerWidth, height: bgHeight, items }
   }
 
   // --- 'bottom' ---
   if (orient === 'bottom') {
-    const bgW = 36 * n - 12
+    // Per-entry step = entry content width (symbol offset 16 + label width) +
+    // 12px gap. Outer width = step * n - 12 (last entry has no trailing gap).
+    const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
+    const entryWidth = 16 + 8 * maxLabelLen
+    const step = entryWidth + 12
+    const bgW = step * n - 12
     const items: SceneItem[] = []
     items.push({ path: `M0,0h${bgW}v30h-${bgW}Z`, x: 0, y: 0 })
     items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000' })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
-      const sx = i * 36
-      items.push({ path: 'M0,0h24v14h-24Z', x: sx, y: 16 })
+      const sx = i * step
+      items.push({ path: `M0,0h${entryWidth}v14h-${entryWidth}Z`, x: sx, y: 16 })
       items.push({ shape: 'circle', radius: 5, x: sx + 6, y: 22, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
       items.push({ text: String(value), x: sx + 16, y: 25, align: 'left', fill: '#000' })
     }
