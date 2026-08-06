@@ -416,6 +416,25 @@ function joinAggregateRows(rows: Row[], t: Extract<CompiledTransform, { type: 'j
   })
 }
 
+function sortFieldsOf(sort: SortSpec | undefined): string[] | null {
+  if (!sort?.field) return null
+  return Array.isArray(sort.field) ? sort.field : [sort.field]
+}
+
+/**
+ * Peer test for the window `rank` / `dense_rank` ops, matching vega's window
+ * comparator: two sorted rows are peers iff their sort keys are equal on every
+ * sort field. With no sort, vega uses `constant(-1)` (every row is its own peer
+ * group), so we return `false` to force a fresh rank each row.
+ */
+function isPeer(a: Row, b: Row, fields: string[] | null): boolean {
+  if (!fields) return false
+  for (const f of fields) {
+    if (a[f] !== b[f]) return false
+  }
+  return true
+}
+
 function windowRows(rows: Row[], t: Extract<CompiledTransform, { type: 'window' }>): Row[] {
   const sorted = sortRows(rows, t.sort)
   const groupby = t.groupby ?? []
@@ -423,12 +442,20 @@ function windowRows(rows: Row[], t: Extract<CompiledTransform, { type: 'window' 
   const ops = t.ops ?? []
   const as = t.as ?? []
   const groups = groupby.length ? groupRows(sorted, groupby) : [sorted]
+  const sortFields = sortFieldsOf(t.sort)
   const out: Row[] = []
   for (const g of groups) {
     const n = g.length
-    const cum: Record<string, number> = {}
+    // rank / dense_rank state, advanced per row using the sort-comparator peer
+    // test (matches vega WindowOps.rank / .dense_rank).
+    let rank = 1
+    let drank = 1
     for (let i = 0; i < n; i++) {
-      const r = { ...g[i] }
+      if (i > 0 && !isPeer(g[i - 1]!, g[i]!, sortFields)) {
+        rank = i + 1
+        drank++
+      }
+      const r = { ...g[i]! }
       ops.forEach((op, j) => {
         const name = as[j] ?? `${op}_${fields[j]}`
         const field = fields[j]
@@ -438,10 +465,10 @@ function windowRows(rows: Row[], t: Extract<CompiledTransform, { type: 'window' 
             r[name] = i + 1
             break
           case 'rank':
-            r[name] = i + 1
+            r[name] = rank
             break
           case 'dense_rank':
-            r[name] = i + 1
+            r[name] = drank
             break
           case 'first_value':
             r[name] = field == null ? undefined : g[0]?.[field]

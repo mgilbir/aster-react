@@ -185,6 +185,7 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   const hasFacetMarks = (ctx as any).chart.marks?.some((m: any) => m.from?.facet?.groupby?.length > 0) ?? false
   const hasChildSignals = ctx.signalParams['child_width'] !== undefined && ctx.signalParams['child_height'] !== undefined
   const isFacetSpec = hasFacetMarks && hasChildSignals
+  const isConcat = isConcatSpec(ctx.chart)
   
   if (ctx.chart.autosize !== 'none') {
     sceneWidth = width + padding.left + padding.right
@@ -218,6 +219,11 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
       // and the viewport is the default SVG minimum (10x10).
       sceneWidth = 10
       sceneHeight = 10
+    } else if (isConcat) {
+      // Concat with signal-based cell width and explicit height: vega renders the
+      // viewport at the SVG minimum width (10) but uses the real chart height.
+      sceneWidth = 10
+      sceneHeight = height + ctx.chart.padding.top + ctx.chart.padding.bottom
     } else {
       sceneWidth = width + ctx.chart.padding.left + ctx.chart.padding.right
       sceneHeight = height + ctx.chart.padding.top + ctx.chart.padding.bottom
@@ -322,6 +328,21 @@ function buildScales(ctx: EvalContext): void {
         return out
       },
     })
+    // Vega extends the domain of quantitative scales by `padding` pixels before
+    // re-nicing; d3-scale's linear scale has no `padding` option, so replicate
+    // vega's behavior here. Only applies to continuous quantitative scales.
+    const Q = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog'])
+    if (Q.has(s.type) && s.padding != null && typeof (scale as any).domain === 'function') {
+      const rng = (scale as any).range ? (scale as any).range() as number[] : [0, ctx.width]
+      const rangeExtent = Math.abs(rng[rng.length - 1]! - rng[0]!) || 1
+      const dom = (scale as any).domain() as number[]
+      if (dom.length >= 2 && Number.isFinite(dom[0]) && Number.isFinite(dom[1])) {
+        const d0 = dom[0]!, d1 = dom[1]!
+        const ext = (s.padding * (d1 - d0)) / rangeExtent
+        ;(scale as any).domain([d0 - ext, d1 + ext])
+        if (typeof (scale as any).nice === 'function') (scale as any).nice()
+      }
+    }
     ctx.scales.set(s.name, scale)
     ctx.scaleTypes.set(s.name, s.type)
   }
@@ -388,21 +409,61 @@ function evaluateMark(
   }
 }
 
+/** Detect facet orientation from the compiled chart's domain datasets. */
+function getFacetOrientation(ctx: EvalContext): 'row' | 'column' | null {
+  let hasRow = false, hasCol = false
+  for (const d of ctx.chart.data) {
+    if (d.name === 'row_domain') hasRow = true
+    else if (d.name === 'column_domain') hasCol = true
+  }
+  if (hasCol && !hasRow) return 'column'
+  if (hasRow && !hasCol) return 'row'
+  return null
+}
+
+/** A concat group mark: a cell with nested marks + axes, no facet, no title. */
+function isConcatGroupMark(mark: CompiledMark): boolean {
+  const m = mark as CompiledMark & { marks?: unknown[]; axes?: unknown[]; title?: unknown }
+  return mark.type === 'group'
+    && !(mark.from as any)?.facet
+    && Array.isArray(m.marks) && (m.marks as unknown[]).length > 0
+    && Array.isArray(m.axes) && (m.axes as unknown[]).length > 0
+    && m.title == null
+}
+
+/** Whether the chart is a (v/h)concat spec. */
+function isConcatSpec(chart: CompiledChart): boolean {
+  return chart.marks.some(m => isConcatGroupMark(m))
+}
+
 /** Group mark dispatch */
 function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | SceneGroup[] | null {
   const facetRaw = (mark as any).from?.facet
   if (facetRaw && facetRaw.groupby && facetRaw.groupby.length) {
     return buildFacetCellGroup(mark, facetRaw, ctx)
   }
-  if (mark.from?.data && mark.name.includes('header')) {
+  if (isConcatGroupMark(mark)) {
+    return buildConcatGroup(mark, ctx)
+  }
+  const orient = getFacetOrientation(ctx)
+  const tm = mark as CompiledMark & { title?: unknown; marks?: unknown[] }
+  // Title groups (no from, no nested marks)
+  if (tm.title && !mark.from && !(tm.marks?.length)) {
+    if (mark.name === 'column-title' || mark.role === 'column-title') {
+      return buildColumnTitleGroup(mark, ctx)
+    }
+    return buildRowTitleGroup(mark, ctx)
+  }
+  // Header groups
+  if (mark.name.includes('header')) {
+    if (orient === 'column' && mark.name === 'row_header') return buildColumnFacetRowHeader(mark, ctx)
+    if (orient === 'column' && mark.name === 'column_header') return buildColumnHeaderGroup(mark, ctx)
     return buildRowHeaderGroup(mark, ctx)
   }
-  if (mark.name.includes('footer') && !mark.from) {
+  // Footer groups
+  if (mark.name.includes('footer')) {
+    if (orient === 'column') return buildColumnFooterGroupColumn(mark, ctx)
     return buildColumnFooterGroup(mark, ctx)
-  }
-  const tm = mark as any
-  if (tm.title && !mark.from && !(tm.marks?.length)) {
-    return buildRowTitleGroup(mark, ctx)
   }
   throw new Error('[aster] unsupported group mark: ' + mark.name)
 }
@@ -420,6 +481,7 @@ function inlineGroupRows(rows: Row[], keys: string[]): Row[][] {
 }
 
 const ROW_SPACING = 29
+const COLUMN_SPACING = 29
 
 function buildFacetCellGroup(
   mark: CompiledMark,
@@ -455,7 +517,9 @@ function buildFacetCellGroup(
     } catch {}
   }
 
-  const isRow = facet.groupby.length === 1
+  const orient = getFacetOrientation(ctx)
+  const isRow = orient !== 'column'
+  const spacing = isRow ? ROW_SPACING : COLUMN_SPACING
   const result: SceneGroup[] = []
 
   for (let gi = 0; gi < grouped.length; gi++) {
@@ -463,15 +527,13 @@ function buildFacetCellGroup(
     if (!g.length) continue
     ctx.datasets.set(facet.name, g)
 
-    const cellX = isRow ? 0 : gi * (cellWidth + ROW_SPACING)
-    const cellY = isRow ? gi * (cellHeight + ROW_SPACING) : 0
+    const cellX = isRow ? 0 : gi * (cellWidth + spacing)
+    const cellY = isRow ? gi * (cellHeight + spacing) : 0
 
     const tmpCtx: EvalContext = { ...ctx, width: cellWidth, height: cellHeight }
     const nestedItems: SceneItem[] = []
     for (const cm of (mark as any).marks ?? []) {
-      console.error('[FM] evaluating mark:', cm.name, 'type:', cm.type, 'from:', cm.from)
       const ng = facetItemMark(cm, tmpCtx, facet.name)
-      console.error('[FM] result:', ng ? `Group({marktype:${ng.marktype}, items:${ng.items?.length}})` : 'null')
       if (ng) nestedItems.push(ng)
     }
 
@@ -483,9 +545,15 @@ function buildFacetCellGroup(
       }
     }
 
+    const cellItems: SceneItem[] = [...axisItems, ...nestedItems]
+    // Column facets lay cells horizontally with a stroke='#ddd' cell background.
+    if (!isRow) {
+      cellItems.push({ path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0, stroke: '#ddd' } as SceneItem)
+    }
+
     result.push({
       marktype: 'group', name: mark.name, role: 'scope',
-      items: [...axisItems, ...nestedItems],
+      items: cellItems,
       clip: mark.clip === true,
       width: cellWidth, height: cellHeight,
       x: cellX, y: cellY,
@@ -641,6 +709,249 @@ function buildRowTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | 
   }
 }
 
+// ===========================================================================
+// Column-facet support
+// ===========================================================================
+
+/** Read the cellWidth/cellHeight from a group mark's encode (signal-based). */
+function readCellSize(mark: CompiledMark, ctx: EvalContext, defW: number, defH: number): { width: number; height: number } {
+  let width = defW, height = defH
+  const enc = mark.encode?.update
+  if (enc) {
+    const ws = (enc.width as { signal?: string } | undefined)?.signal
+    const hs = (enc.height as { signal?: string } | undefined)?.signal
+    if (ws !== undefined && ctx.signalParams[ws] !== undefined && !Array.isArray(ctx.signalParams[ws]))
+      width = Number(ctx.signalParams[ws])
+    if (hs !== undefined && ctx.signalParams[hs] !== undefined && !Array.isArray(ctx.signalParams[hs]))
+      height = Number(ctx.signalParams[hs])
+  }
+  return { width, height }
+}
+
+/** Column-facet: shared y-axis on the left, a single group spanning all rows. */
+function buildColumnFacetRowHeader(mark: CompiledMark, ctx: EvalContext): SceneGroup[] {
+  const { height: cellHeight } = readCellSize(mark, ctx, 500, 500)
+  const tmpCtx: EvalContext = { ...ctx, width: 0, height: cellHeight }
+  const items: SceneItem[] = []
+  for (const as of (mark as any).axes ?? []) {
+    if (isAxisSpec(as)) {
+      const a = buildAxisInline(as, tmpCtx)
+      if (a) items.push(a)
+    }
+  }
+  // row_header background placeholder (non-degenerate h/v → plain NaN path)
+  items.push({ path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0 } as SceneItem)
+  return [{
+    marktype: 'group', name: mark.name, role: 'row-header',
+    items,
+    x: -1, y: 0, width: 0, height: cellHeight,
+  }]
+}
+
+/** Column-facet: per-column header labels at the top (one group per column value). */
+function buildColumnHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup[] {
+  const cm = findCellMark(ctx)
+  const facet = (cm?.from as any)?.facet as { data: string; groupby: string[] } | undefined
+  if (!facet) return []
+  const { width: cellWidth } = readCellSize(cm!, ctx, 100, 100)
+  const rows = ctx.datasets.get(mark.from!.data!) ?? []
+  if (!rows.length) return []
+
+  const fkey: string = facet.groupby[0]!
+  const orient = getFacetOrientation(ctx)
+  const spacing = orient === 'column' ? COLUMN_SPACING : ROW_SPACING
+
+  let sortedRows: Row[] = rows
+  if (mark.sort?.field) {
+    try {
+      const expr = ctx.runtime.expr(mark.sort.field as string)
+      sortedRows = rows.slice().sort((a, b) => {
+        const cmp = expr({ _aster_a: (a as Record<string, unknown>)[fkey], _aster_b: (b as Record<string, unknown>)[fkey] }, ctx.signalParams) as number
+        return Number(cmp ?? 0)
+      })
+    } catch {}
+  }
+
+  const result: SceneGroup[] = []
+  sortedRows.forEach((row, i) => {
+    const labelVal = String((row as Record<string, unknown>)[fkey])
+    const cellX = i * (cellWidth + spacing)
+    result.push({
+      marktype: 'group', name: mark.name, role: 'column-header',
+      items: [
+        { text: labelVal, x: cellWidth / 2, y: -12, align: 'center' as const, fill: '#000' },
+        { path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0 } as SceneItem,
+      ],
+      x: cellX, y: -8, width: cellWidth, height: 0,
+    })
+  })
+  return result
+}
+
+/** Column-facet: per-column x-axis at the bottom (one group per column value). */
+function buildColumnFooterGroupColumn(mark: CompiledMark, ctx: EvalContext): SceneGroup[] {
+  const cm = findCellMark(ctx)
+  const facet = (cm?.from as any)?.facet as { data: string; groupby: string[] } | undefined
+  if (!facet) return []
+  const { width: cellWidth, height: cellHeight } = readCellSize(cm!, ctx, 100, 100)
+  const rows = ctx.datasets.get(mark.from!.data!) ?? []
+  if (!rows.length) return []
+
+  const fkey: string = facet.groupby[0]!
+  const orient = getFacetOrientation(ctx)
+  const spacing = orient === 'column' ? COLUMN_SPACING : ROW_SPACING
+  const footerY = cellHeight + 1
+
+  let sortedRows: Row[] = rows
+  if (mark.sort?.field) {
+    try {
+      const expr = ctx.runtime.expr(mark.sort.field as string)
+      sortedRows = rows.slice().sort((a, b) => {
+        const cmp = expr({ _aster_a: (a as Record<string, unknown>)[fkey], _aster_b: (b as Record<string, unknown>)[fkey] }, ctx.signalParams) as number
+        return Number(cmp ?? 0)
+      })
+    } catch {}
+  }
+
+  const result: SceneGroup[] = []
+  sortedRows.forEach((row, i) => {
+    const cellX = i * (cellWidth + spacing)
+    // Axis sits at the TOP of the footer group, so ctx.height = 0.
+    const tmpCtx: EvalContext = { ...ctx, width: cellWidth, height: 0 }
+    const items: SceneItem[] = []
+    for (const as of (mark as any).axes ?? []) {
+      if (isAxisSpec(as)) {
+        const a = buildAxisInline(as, tmpCtx)
+        if (a) items.push(a)
+      }
+    }
+    items.push({ path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0 } as SceneItem)
+    result.push({
+      marktype: 'group', name: mark.name, role: 'column-footer',
+      items,
+      x: cellX, y: footerY, width: cellWidth, height: 0,
+    })
+  })
+  return result
+}
+
+/** Compute the x bounds of mark items within built facet cells (for centering titles). */
+function cellGroupXBounds(cells: SceneGroup[]): { minX: number; maxX: number } {
+  let minX = Infinity, maxX = -Infinity
+  for (const cell of cells) {
+    const cx = cell.x ?? 0
+    const cw = cell.width ?? 0
+    if (Number.isFinite(cx)) minX = Math.min(minX, cx)
+    if (Number.isFinite(cx + cw)) maxX = Math.max(maxX, cx + cw)
+    for (const item of cell.items ?? []) {
+      const g = item as SceneGroup
+      // Only leaf mark groups (symbol/rect/etc.), not axis 'group' groups.
+      if (g.marktype && g.marktype !== 'group' && Array.isArray(g.items)) {
+        for (const p of g.items ?? []) {
+          const pi = p as SceneItem & { size?: number; strokeWidth?: number; width?: number }
+          const px = cx + (pi.x ?? 0)
+          if (g.marktype === 'symbol') {
+            const size = pi.size ?? 30
+            const sw = pi.strokeWidth ?? 2
+            const r = Math.sqrt(size) / 2
+            const ext = r + 2 * sw
+            minX = Math.min(minX, px - ext)
+            maxX = Math.max(maxX, px + ext)
+          } else {
+            const w = pi.width ?? 0
+            minX = Math.min(minX, px)
+            maxX = Math.max(maxX, px + w)
+          }
+        }
+      }
+    }
+  }
+  if (!Number.isFinite(minX)) minX = 0
+  if (!Number.isFinite(maxX)) maxX = 0
+  return { minX, maxX }
+}
+
+/** Column-facet: horizontal title centered above the columns. */
+function buildColumnTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | null {
+  const cellMark = findCellMark(ctx)
+  let centerX: number
+  if (cellMark) {
+    const cells = buildFacetCellGroup(cellMark, (cellMark.from as any).facet, ctx)
+    const { minX, maxX } = cellGroupXBounds(cells)
+    centerX = Math.round((minX + maxX) / 2)
+  } else {
+    centerX = 0
+  }
+
+  const tm = mark as any
+  let titleText = 'Label'
+  const tSpec = tm.title?.text
+  if (typeof tSpec === 'string') {
+    titleText = tSpec
+  } else if (tSpec && typeof tSpec === 'object' && 'signal' in tSpec && typeof (tSpec as { signal: string }).signal === 'string') {
+    try { titleText = String(ctx.runtime.expr((tSpec as { signal: string }).signal)({}, ctx.signalParams)) } catch {}
+  } else if (tSpec && typeof tSpec === 'object' && 'value' in tSpec) {
+    titleText = String((tSpec as { value: unknown }).value)
+  }
+
+  return {
+    marktype: 'group', name: mark.name, role: 'column-title',
+    items: [
+      { text: titleText, x: 0, y: -12, align: 'center' as const, fill: '#000' },
+    ],
+    x: centerX, y: -38,
+  }
+}
+
+// ===========================================================================
+// Horizontal concat support
+// ===========================================================================
+
+const CONCAT_BASE_SPACING = 29
+const TITLE_FONT_SIZE = 11
+
+/** Build a single concat cell group mark (point/bar/etc. with its own axes). */
+function buildConcatGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup {
+  const idxMatch = mark.name.match(/concat_(\d+)_group/)
+  const idx = idxMatch ? parseInt(idxMatch[1]!, 10) : 0
+  const { width: cellWidth, height: cellHeight } = readCellSize(mark, ctx, 500, 500)
+
+  const tmpCtx: EvalContext = { ...ctx, width: cellWidth, height: cellHeight }
+  const axisItems: SceneItem[] = []
+  for (const as of (mark as any).axes ?? []) {
+    if (isAxisSpec(as)) {
+      const a = buildAxisInline(as, tmpCtx)
+      if (a) axisItems.push(a)
+    }
+  }
+
+  // Determine the per-cell horizontal advance from the y-axis left extent so the
+  // next cell's y-axis clears this cell's content + base spacing.
+  let yAxisExtent = 0
+  for (const ag of axisItems) {
+    for (const it of (ag as SceneGroup).items ?? []) {
+      if ((it as SceneItem).text != null && typeof (it as SceneItem).x === 'number' && (it as SceneItem).x! < 0) {
+        yAxisExtent = Math.max(yAxisExtent, Math.ceil(Math.abs((it as SceneItem).x as number) + TITLE_FONT_SIZE + 0.5))
+      }
+    }
+  }
+  const advance = cellWidth + CONCAT_BASE_SPACING + yAxisExtent
+  const cellX = idx * advance
+
+  const nestedItems: SceneItem[] = []
+  for (const cm of (mark as any).marks ?? []) {
+    const ng = facetItemMark(cm, tmpCtx, '')
+    if (ng) nestedItems.push(ng)
+  }
+
+  return {
+    marktype: 'group', name: mark.name, role: 'scope',
+    items: [...axisItems, ...nestedItems, { path: 'MNaNNaNhNaNvNaNhNaNZ', x: 0, y: 0, stroke: '#ddd' } as SceneItem],
+    width: cellWidth, height: cellHeight,
+    x: cellX, y: 0,
+  }
+}
+
 function isAxisSpec(v: unknown): v is Record<string, unknown> {
   return v != null && typeof v === 'object' && 'scale' in v && 'orient' in v
 }
@@ -741,6 +1052,17 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
       rec['y2'] = ycVal + h / 2
     } else {
       rec['y'] = ycVal
+    }
+  }
+  // Handle xc (center-x) by computing x and x2 from width.
+  const xcVal = rec['xc']
+  if (xcVal != null && typeof xcVal === 'number') {
+    const w = rec['width']
+    if (w != null && typeof w === 'number' && w > 0) {
+      rec['x'] = xcVal - w / 2
+      rec['x2'] = xcVal + w / 2
+    } else {
+      rec['x'] = xcVal
     }
   }
 

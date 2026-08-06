@@ -5,6 +5,8 @@ import {
   CompiledInteractiveBrushSpec,
   CompiledHistogramSpec,
   CompiledLegendScatterSpec,
+  CompiledPieSpec,
+  CompiledTextLabelSpec,
 } from './compiled'
 import { Chart } from '@aster/react'
 import type { SelectionInterval } from '@aster/react'
@@ -86,6 +88,22 @@ function LegendScatter() {
   )
 }
 
+function PieDonut() {
+  return (
+    <div className="chart-container" style={{ alignItems: 'flex-start' }}>
+      <Chart spec={CompiledPieSpec} ariaLabel="Pie/donut chart" width={200} height={200} />
+    </div>
+  )
+}
+
+function TextLabels() {
+  return (
+    <div className="chart-container">
+      <Chart spec={CompiledTextLabelSpec} ariaLabel="Text labels" width={400} height={300} />
+    </div>
+  )
+}
+
 export function App() {
   return (
     <div className="app">
@@ -112,6 +130,8 @@ export function App() {
       <Section title="3. Interactive Brush Selection" desc="Click and drag on the scatter plot to select a data interval. Persisted via the Chart's 'brush' prop. Click 'Clear' to reset." chart={<InteractiveBrush />} />
       <Section title="4. Histogram — Auto-Bin Binning" desc="The mark='bar' encoding with bin: true counts occurrences into bins automatically." chart={<Histogram />} />
       <Section title="5. Scatter Plot — Legend" desc="Color encodes the 'cat' dimension, generating an automatic legend on the right." chart={<LegendScatter />} />
+      <Section title="6. Pie / Donut" desc="An arc mark with innerRadius renders a donut chart. Theta encodes 'value'; color encodes 'cat' with an automatic legend." chart={<PieDonut />} />
+      <Section title="7. Text Labels" desc="The text mark renders a label string at each (x, y) point, sourced from the 'label' field." chart={<TextLabels />} />
     </div>
   )
 }

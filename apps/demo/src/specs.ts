@@ -74,3 +74,40 @@ export const LegendScatterSpec = {
     color: { field: 'cat', type: 'nominal' },
   },
 }
+
+export const PieSpec = {
+  $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
+  width: 200,
+  height: 200,
+  padding: 5,
+  data: { name: 'table', values: [
+    { cat: 'Alpha', value: 4 },
+    { cat: 'Beta', value: 6 },
+    { cat: 'Gamma', value: 3 },
+    { cat: 'Delta', value: 7 },
+  ] },
+  mark: { type: 'arc', innerRadius: 50 },
+  encoding: {
+    theta: { field: 'value', type: 'quantitative' },
+    color: { field: 'cat', type: 'nominal' },
+  },
+}
+
+export const TextLabelSpec = {
+  $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
+  width: 400,
+  height: 300,
+  padding: 5,
+  data: { name: 'table', values: [
+    { x: 1, y: 2, label: 'Start' },
+    { x: 2, y: 4, label: 'Middle' },
+    { x: 3, y: 3, label: 'Peak' },
+    { x: 4, y: 5, label: 'End' },
+  ] },
+  mark: 'text',
+  encoding: {
+    x: { field: 'x', type: 'quantitative' },
+    y: { field: 'y', type: 'quantitative' },
+    text: { field: 'label', type: 'nominal' },
+  },
+}
