@@ -7,6 +7,9 @@ import {
   CompiledLegendScatterSpec,
   CompiledPieSpec,
   CompiledTextLabelSpec,
+  CompiledHeatmapSpec,
+  CompiledStackedBarSpec,
+  CompiledLayerSpec,
 } from './compiled'
 import { Chart } from '@aster/react'
 import type { SelectionInterval } from '@aster/react'
@@ -104,6 +107,30 @@ function TextLabels() {
   )
 }
 
+function Heatmap() {
+  return (
+    <div className="chart-container" style={{ alignItems: 'flex-start' }}>
+      <Chart spec={CompiledHeatmapSpec} ariaLabel="Heatmap" width={300} height={200} />
+    </div>
+  )
+}
+
+function StackedBar() {
+  return (
+    <div className="chart-container">
+      <Chart spec={CompiledStackedBarSpec} ariaLabel="Stacked bar" width={400} height={300} />
+    </div>
+  )
+}
+
+function LayeredAreaLine() {
+  return (
+    <div className="chart-container">
+      <Chart spec={CompiledLayerSpec} ariaLabel="Layered area + line" width={400} height={300} />
+    </div>
+  )
+}
+
 export function App() {
   return (
     <div className="app">
@@ -132,6 +159,9 @@ export function App() {
       <Section title="5. Scatter Plot — Legend" desc="Color encodes the 'cat' dimension, generating an automatic legend on the right." chart={<LegendScatter />} />
       <Section title="6. Pie / Donut" desc="An arc mark with innerRadius renders a donut chart. Theta encodes 'value'; color encodes 'cat' with an automatic legend." chart={<PieDonut />} />
       <Section title="7. Text Labels" desc="The text mark renders a label string at each (x, y) point, sourced from the 'label' field." chart={<TextLabels />} />
+      <Section title="8. Heatmap" desc="A rect mark with band scales for both axes and a quantitative color scale, rendered as a gradient heatmap with a color legend." chart={<Heatmap />} />
+      <Section title="9. Stacked Bar" desc="Bars stacked per category via a color-encoded nominal dimension, with an automatic color legend." chart={<StackedBar />} />
+      <Section title="10. Layered Area + Line" desc="A layer combining an area mark with an overlaid line mark on the same quantitative scales." chart={<LayeredAreaLine />} />
     </div>
   )
 }

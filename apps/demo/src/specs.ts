@@ -111,3 +111,51 @@ export const TextLabelSpec = {
     text: { field: 'label', type: 'nominal' },
   },
 }
+
+export const HeatmapSpec = {
+  $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
+  width: 300,
+  height: 200,
+  padding: 5,
+  data: { name: 'table', values: [
+    { row: 'A', col: 'X', val: 1 }, { row: 'A', col: 'Y', val: 3 }, { row: 'A', col: 'Z', val: 2 },
+    { row: 'B', col: 'X', val: 4 }, { row: 'B', col: 'Y', val: 2 }, { row: 'B', col: 'Z', val: 5 },
+  ] },
+  mark: 'rect',
+  encoding: {
+    x: { field: 'col', type: 'nominal' },
+    y: { field: 'row', type: 'nominal' },
+    color: { field: 'val', type: 'quantitative' },
+  },
+}
+
+export const StackedBarSpec = {
+  $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
+  width: 400,
+  height: 300,
+  padding: 5,
+  data: { name: 'table', values: [
+    { cat: 'A', group: 'X', val: 3 }, { cat: 'A', group: 'Y', val: 5 },
+    { cat: 'B', group: 'X', val: 4 }, { cat: 'B', group: 'Y', val: 2 },
+  ] },
+  mark: 'bar',
+  encoding: {
+    x: { field: 'cat', type: 'nominal' },
+    y: { field: 'val', type: 'quantitative' },
+    color: { field: 'group', type: 'nominal' },
+  },
+}
+
+export const LayerSpec = {
+  $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
+  width: 400,
+  height: 300,
+  padding: 5,
+  data: { name: 'table', values: [
+    { x: 1, y: 2 }, { x: 2, y: 4 }, { x: 3, y: 3 }, { x: 4, y: 5 },
+  ] },
+  layer: [
+    { mark: 'area', encoding: { x: { field: 'x', type: 'quantitative' }, y: { field: 'y', type: 'quantitative' } } },
+    { mark: 'line', encoding: { x: { field: 'x', type: 'quantitative' }, y: { field: 'y', type: 'quantitative' } } },
+  ],
+}

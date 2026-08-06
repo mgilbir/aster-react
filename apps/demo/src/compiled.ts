@@ -1,5 +1,16 @@
 import * as vl from 'vega-lite'
-import { LineSpec, ParamBoundSpec, InteractiveBrushSpec, HistogramSpec, LegendScatterSpec, PieSpec, TextLabelSpec } from './specs.js'
+import {
+  LineSpec,
+  ParamBoundSpec,
+  InteractiveBrushSpec,
+  HistogramSpec,
+  LegendScatterSpec,
+  PieSpec,
+  TextLabelSpec,
+  HeatmapSpec,
+  StackedBarSpec,
+  LayerSpec,
+} from './specs.js'
 
 function compile(spec: Record<string, unknown>): Record<string, unknown> {
   return vl.compile(spec as never).spec as Record<string, unknown>
@@ -12,3 +23,6 @@ export const CompiledHistogramSpec = compile(HistogramSpec)
 export const CompiledLegendScatterSpec = compile(LegendScatterSpec)
 export const CompiledPieSpec = compile(PieSpec)
 export const CompiledTextLabelSpec = compile(TextLabelSpec)
+export const CompiledHeatmapSpec = compile(HeatmapSpec)
+export const CompiledStackedBarSpec = compile(StackedBarSpec)
+export const CompiledLayerSpec = compile(LayerSpec)
