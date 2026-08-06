@@ -1338,7 +1338,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const off = 16 + i * entryStep
       items.push({ path: `M0,0h24v${boxHeight}h-24Z`, x: 0, y: off })
       if (colorProp === 'fill') {
-        items.push({ shape: 'circle', radius: 5, x: 6, y: off + boxHeight / 2, fill: String(scale(value)), strokeWidth: 1.5 })
+        items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5 })
       } else {
         items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
       }

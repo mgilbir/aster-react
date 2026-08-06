@@ -323,8 +323,21 @@ function renderArcs(group: SceneGroup): string {
   return out
 }
 
-function arcPath(cx: number, cy: number, r: number, r0: number, a0: number, a1: number): string {
-  const large = Math.abs(a1 - a0) > Math.PI ? 1 : 0
+function arcPath(cx: number, cy: number, r: number, r0: number, a0in: number, a1in: number): string {
+  // d3-arc measures angles from the +x axis and rotates by -π/2 so that
+  // angle 0 points up (12 o'clock). Match that reference frame here.
+  const a0 = a0in - Math.PI / 2
+  const a1 = a1in - Math.PI / 2
+  // d3-arc draws the outer arc clockwise when a1 > a0, counterclockwise
+  // otherwise; the SVG sweep flag mirrors that (1 = clockwise in SVG's
+  // y-down coordinate system).
+  const cw = a1 > a0
+  const sweep = cw ? 1 : 0
+  // da is the positive sweep magnitude; the large-arc flag is set when the
+  // arc spans at least half a turn (d3-path uses `da >= π`).
+  let da = Math.abs(a1 - a0)
+  if (da >= 2 * Math.PI) da = da % (2 * Math.PI)
+  const large = da >= Math.PI ? 1 : 0
   const p0x = cx + r * Math.cos(a0)
   const p0y = cy + r * Math.sin(a0)
   const p1x = cx + r * Math.cos(a1)
@@ -333,7 +346,7 @@ function arcPath(cx: number, cy: number, r: number, r0: number, a0: number, a1: 
   if (r0 === 0) {
     return [
       `M${num(p0x)},${num(p0y)}`,
-      `A${num(r)},${num(r)},0,${large},1,${num(p1x)},${num(p1y)}`,
+      `A${num(r)},${num(r)},0,${large},${sweep},${num(p1x)},${num(p1y)}`,
       `L${cx},${cy}`,
       'Z',
     ].join('')
@@ -344,9 +357,9 @@ function arcPath(cx: number, cy: number, r: number, r0: number, a0: number, a1: 
   const i1y = cy + r0 * Math.sin(a0)
   return [
     `M${num(p0x)},${num(p0y)}`,
-    `A${num(r)},${num(r)},0,${large},1,${num(p1x)},${num(p1y)}`,
+    `A${num(r)},${num(r)},0,${large},${sweep},${num(p1x)},${num(p1y)}`,
     `L${num(i0x)},${num(i0y)}`,
-    `A${num(r0)},${num(r0)},0,${large},0,${num(i1x)},${num(i1y)}`,
+    `A${num(r0)},${num(r0)},0,${large},${sweep ? 0 : 1},${num(i1x)},${num(i1y)}`,
     'Z',
   ].join('')
 }
