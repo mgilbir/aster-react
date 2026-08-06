@@ -6,7 +6,7 @@
 import { compileExpr, type ExpressionRuntime } from './expression.js'
 import { applyTransforms, sortRows, type Row } from './transform.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
-import { locale, defaultLocale } from 'vega-format'
+import { locale } from 'vega-format'
 import type {
   CompiledAxis,
   CompiledChart,
@@ -1554,7 +1554,7 @@ function formatValue(v: unknown, spec: EncodeValue): unknown {
   const formatType = (spec as { formatType?: unknown }).formatType
   if (format === undefined) return v
   const fmt = format as string
-  const L = locale(defaultLocale)
+  const L = locale(undefined)
   if (formatType === 'time' || v instanceof Date) return L.timeFormat(fmt)(v as Date)
   return L.format(fmt)(v as number)
 }
@@ -1780,7 +1780,12 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     }
   }
 
-  const count = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 5 : 5
+  // The approximate tick count used for label formatting. When the axis omits
+  // tickCount, vega's axis ticks operator defaults to 10 (see vega-encode
+  // AxisTicks: `_.count == null ? 10 : _.count`); matching that matters for
+  // log-scale labels, whose formatter only labels a subset of ticks depending
+  // on the count.
+  const count = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 10 : 10
   const labelFormat = axisLabelFormat(axis, scale, count)
   const tickSize = axis.tickSize ?? 5
   const labelPadding = axis.labelPadding ?? 2
@@ -1872,13 +1877,17 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number): (v: u
   const fmtType = (specFmt && typeof specFmt === 'object' && 'formatType' in specFmt && specFmt.formatType) ? String(specFmt.formatType) : undefined
   const fmt = (specFmt && typeof specFmt === 'object' && 'format' in specFmt && specFmt.format) ? String(specFmt.format) : undefined
   if (fmtType === 'time' || scale.type === 'time' || scale.type === 'utc') {
-    const L = locale(defaultLocale)
-    return fmt ? L.timeFormat(fmt) : L.timeFormat('%b %d')
+    const L = locale(undefined)
+    // With no explicit format vega uses the time multi-format, which picks a
+    // specifier per tick interval (e.g. '%B' for month ticks, '%b %d' for
+    // day/week ticks). The `undefined` argument is passed explicitly to satisfy
+    // the strict local type shim for vega-format.
+    return fmt ? L.timeFormat(fmt) : L.timeFormat(undefined as unknown as string)
   }
   if (scale.type !== 'linear' && scale.type !== 'log' && scale.type !== 'pow' && scale.type !== 'sqrt' && scale.type !== 'symlog') {
     return (v) => String(v)
   }
-  const L = locale(defaultLocale)
+  const L = locale(undefined)
   return tickFormat(L, scale, count, fmt)
 
 }
