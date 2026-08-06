@@ -13,6 +13,9 @@ import {
   CompiledDonutSpec,
   CompiledRegressionSpec,
   CompiledStreamgraphSpec,
+  CompiledBubbleSpec,
+  CompiledCandlestickSpec,
+  CompiledColorSchemeSpec,
 } from './compiled'
 import { Chart } from '@aster/react'
 import type { SelectionInterval } from '@aster/react'
@@ -158,6 +161,30 @@ function Streamgraph() {
   )
 }
 
+function Bubble() {
+  return (
+    <div className="chart-container">
+      <Chart spec={CompiledBubbleSpec} ariaLabel="Bubble chart" width={400} height={300} />
+    </div>
+  )
+}
+
+function Candlestick() {
+  return (
+    <div className="chart-container">
+      <Chart spec={CompiledCandlestickSpec} ariaLabel="Candlestick chart" width={400} height={300} />
+    </div>
+  )
+}
+
+function ColorScheme() {
+  return (
+    <div className="chart-container">
+      <Chart spec={CompiledColorSchemeSpec} ariaLabel="Color scheme scatter" width={400} height={300} />
+    </div>
+  )
+}
+
 export function App() {
   return (
     <div className="app">
@@ -192,6 +219,9 @@ export function App() {
       <Section title="11. Donut Chart" desc="An arc mark with a larger innerRadius renders a donut with the theta channel encoding 'value' and color encoding 'cat'." chart={<Donut />} />
       <Section title="12. Regression Line" desc="A linear regression transform fits a line to the point data, overlaid as a line layer on the same axes." chart={<Regression />} />
       <Section title="13. Streamgraph" desc="Stacked area marks offset around the center (stack: 'center') produce a streamgraph over the temporal axis." chart={<Streamgraph />} />
+      <Section title="14. Bubble Chart" desc="A point mark with the size channel encoding 'size' quantitatively scales the marker area, producing a bubble chart." chart={<Bubble />} />
+      <Section title="15. Candlestick" desc="A layered rule (low-high wick) and bar (open-close body) renders a candlestick chart. Bar color is conditioned on the open/close relationship: green when close is above open, red otherwise." chart={<Candlestick />} />
+      <Section title="16. Color Scheme Scatter" desc="A nominal color scale with an explicit range maps each category to a fixed palette, driving both marker color and the legend." chart={<ColorScheme />} />
     </div>
   )
 }

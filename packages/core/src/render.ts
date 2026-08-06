@@ -90,6 +90,7 @@ function switchMarkup(type: string, group: SceneGroup): string {
     case 'line': return renderLine(group)
     case 'area': return renderArea(group)
     case 'symbol': return renderSymbols(group)
+    case 'circle': return renderCircles(group)
     case 'rect': return renderRects(group)
     case 'rule': return renderRules(group)
     case 'text': return renderTexts(group)
@@ -234,13 +235,27 @@ function renderSymbols(group: SceneGroup): string {
     const size = (it.size as number) ?? 30
     const r = Math.sqrt(size) / 2
     const d = `M${num(r)},0A${num(r)},${num(r)},0,1,1,${num(-r)},0A${num(r)},${num(r)},0,1,1,${num(r)},0`
-    // Vega-Lite: point marks default fill="transparent", stroke from scale or default
-    // Vega default: point marks have strokeWidth=2
+    // Vega-Lite: point marks default fill="transparent", stroke from scale or default.
+    // The strokeWidth default (2px for the point/circle/square styles) is baked
+    // into the item at mark-build time; a raw vega symbol mark with a stroke but
+    // no style carries no default width.
     // Only output fill if it's explicitly set to a non-default value (transparent is SVG default for paths)
-    const sw = it.strokeWidth ?? (it.stroke != null ? 2 : undefined)
-    // Don't output fill="transparent" — it's the default fill for paths and shouldn't be in the SVG
     const fillAttr = it.fill != null && it.fill !== 'transparent' ? ` fill="${it.fill}"` : ''
-    out += `<path transform="translate(${num(it.x)},${num(it.y)})" d="${d}"${fillAttr}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', sw)}${attr('opacity', it.opacity)}/>`
+    out += `<path transform="translate(${num(it.x)},${num(it.y)})" d="${d}"${fillAttr}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+  }
+  out += '</g>'
+  return out
+}
+
+/** Circle mark: renders `<circle cx cy r>` elements (radius from `radius` or size). */
+function renderCircles(group: SceneGroup): string {
+  let out = `<g class="mark-circle role-mark" role="graphics-symbol" aria-roledescription="circle mark container">`
+  for (const it of itemsOf(group)) {
+    if (it.x == null || it.y == null) continue
+    const r = it.radius != null
+      ? it.radius
+      : Math.sqrt((it.size as number) ?? 30) / 2
+    out += `<circle cx="${num(it.x)}" cy="${num(it.y)}" r="${num(r)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
   }
   out += '</g>'
   return out
@@ -287,15 +302,17 @@ function renderTexts(group: SceneGroup): string {
   let out = `<g class="mark-text role-mark" role="graphics-symbol" aria-roledescription="text mark container">`
   for (const it of itemsOf(group)) {
     if (it.text == null) continue
-    // Vega's text renderer adds baseline offset:
-    // top → 0.79 * fontSize, middle → 0.30 * fontSize, bottom → -0.21 * fontSize
-    const fontSize = (it as Record<string, unknown>).fontSize as number | undefined ?? 10
+    // Vega's text renderer adds a baseline offset (rounded to whole px, vega
+    // util/text.js `offset`):
+    //   top → round(0.79 * fontSize), middle → round(0.30 * fontSize),
+    //   bottom → round(-0.21 * fontSize), default fontSize is 11.
+    const fontSize = (it as Record<string, unknown>).fontSize as number | undefined ?? 11
     const baseline = it.baseline ?? 'alphabetic'
     const baseY = it.y ?? 0
     let bsOffset = 0
-    if (baseline === 'top') bsOffset = 0.79 * fontSize
-    else if (baseline === 'middle') bsOffset = 0.30 * fontSize
-    else if (baseline === 'bottom') bsOffset = -0.21 * fontSize
+    if (baseline === 'top') bsOffset = Math.round(0.79 * fontSize)
+    else if (baseline === 'middle') bsOffset = Math.round(0.30 * fontSize)
+    else if (baseline === 'bottom') bsOffset = Math.round(-0.21 * fontSize)
     // alphabetic / default → 0 (no offset)
     const y = num(baseY + bsOffset)
     out += `<text x="${num(it.x ?? 0)}" y="${y}"${attr('align', it.align)}${attr('baseline', it.baseline)}${attr('fill', it.fill)}${attr("opacity", it.opacity)}${attr("angle", it.angle)}>${esc(String(it.text))}</text>`

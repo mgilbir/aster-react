@@ -13,6 +13,9 @@ import {
   DonutSpec,
   RegressionSpec,
   StreamgraphSpec,
+  BubbleSpec,
+  CandlestickSpec,
+  ColorSchemeSpec,
 } from './specs.js'
 
 function compile(spec: Record<string, unknown>): Record<string, unknown> {
@@ -32,3 +35,6 @@ export const CompiledLayerSpec = compile(LayerSpec)
 export const CompiledDonutSpec = compile(DonutSpec)
 export const CompiledRegressionSpec = compile(RegressionSpec)
 export const CompiledStreamgraphSpec = compile(StreamgraphSpec)
+export const CompiledBubbleSpec = compile(BubbleSpec)
+export const CompiledCandlestickSpec = compile(CandlestickSpec)
+export const CompiledColorSchemeSpec = compile(ColorSchemeSpec)

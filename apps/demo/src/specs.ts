@@ -209,3 +209,57 @@ export const StreamgraphSpec = {
     color: { field: 'cat', type: 'nominal' },
   },
 }
+
+export const BubbleSpec = {
+  $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
+  width: 400, height: 300, padding: 5,
+  data: { name: 'table', values: [
+    { x: 1, y: 2, size: 100 }, { x: 2, y: 4, size: 300 },
+    { x: 3, y: 3, size: 200 }, { x: 4, y: 5, size: 400 }
+  ]},
+  mark: 'point',
+  encoding: {
+    x: { field: 'x', type: 'quantitative' },
+    y: { field: 'y', type: 'quantitative' },
+    size: { field: 'size', type: 'quantitative' }
+  }
+}
+
+export const CandlestickSpec = {
+  $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
+  width: 400, height: 300, padding: 5,
+  data: { name: 'table', values: [
+    { date: '2024-01-01', open: 3, close: 5, low: 2, high: 6 },
+    { date: '2024-01-02', open: 5, close: 4, low: 3, high: 7 },
+    { date: '2024-01-03', open: 4, close: 6, low: 3, high: 8 }
+  ]},
+  layer: [
+    { mark: 'rule', encoding: {
+        x: { field: 'date', type: 'temporal' },
+        y: { field: 'low', type: 'quantitative' },
+        y2: { field: 'high', type: 'quantitative' }
+      }
+    },
+    { mark: 'bar', encoding: {
+        x: { field: 'date', type: 'temporal' },
+        y: { field: 'open', type: 'quantitative' },
+        y2: { field: 'close', type: 'quantitative' },
+        color: { condition: { test: 'datum.open < datum.close', value: '#2ca02c' }, value: '#d62728' }
+      }
+    }
+  ]
+}
+
+export const ColorSchemeSpec = {
+  $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
+  width: 400, height: 300, padding: 5,
+  data: { name: 'table', values: [
+    { x: 1, y: 2, cat: 'A' }, { x: 2, y: 4, cat: 'B' }, { x: 3, y: 3, cat: 'C' }
+  ]},
+  mark: 'point',
+  encoding: {
+    x: { field: 'x', type: 'quantitative' },
+    y: { field: 'y', type: 'quantitative' },
+    color: { field: 'cat', type: 'nominal', scale: { range: ['#1f77b4', '#ff7f0e', '#2ca02c'] } }
+  }
+}

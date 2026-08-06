@@ -51,6 +51,8 @@ interface EvalContext {
   _facetLayout?: FacetGridLayout | null
   /** Cached 2D repeat (scatter matrix) concat grid layout (computed once per chart). */
   _concatGrid?: ConcatGridState | null
+  /** Hierarchy trees built by `stratify` transforms, keyed by data source name. */
+  hierarchies: Map<string, unknown>
 }
 
 /**
@@ -84,7 +86,7 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
   }
 
   const defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }> }> = []
-  const ctx: EvalContext = { chart, signalParams, width, height, datasets, scales, scaleTypes, runtime, _defs: defs }
+  const ctx: EvalContext = { chart, signalParams, width, height, datasets, scales, scaleTypes, runtime, _defs: defs, hierarchies: new Map() }
 
   buildDatasets(ctx, input.data ?? {})
   // Remap Vega-Lite "category" range (unhandled by vega-scale) to tableau10
@@ -342,7 +344,8 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
           if (!ctx.datasets.has(name) && sources.has(name)) build(name, new Set())
           return ctx.datasets.get(name)
         },
-      })
+        hierarchies: ctx.hierarchies,
+      }, d.name)
     }
     ctx.datasets.set(name, rows)
     return rows
@@ -445,7 +448,8 @@ function evaluateMark(
       rows = applyTransforms(rows, mark.transform, {
         runtime: ctx.runtime,
         signals: ctx.signalParams,
-      })
+        hierarchies: ctx.hierarchies,
+      }, source)
     }
 
     // Sort rect marks by their scale y field so rendering order matches vega:
@@ -485,6 +489,18 @@ function evaluateMark(
       if (it.strokeWidth == null) it.strokeWidth = 1.5
     }
   }
+
+  // Text marks encoded in polar coordinates (`radius` + `theta`, e.g. pie
+  // labels): vega's text renderer offsets the anchor by
+  // `radius * (cos(theta - π/2), sin(theta - π/2))` from the item's x/y.
+  if (mark.type === 'text') {
+    applyTextPolar(items)
+  }
+
+  // The vega-lite point/circle/square styles default stroked symbols to
+  // strokeWidth=2 (vega config `style.point` etc.). A raw vega symbol mark
+  // without those styles carries no default width.
+  applySymbolStyleDefaults(mark, items)
 
   // Shape/geoshape marks: turn the GeoJSON-derived path (from a geoshape
   // transform or from the datum itself) into a rendered path item.
@@ -1506,7 +1522,48 @@ function facetItemMark(
     for (const it of items) { if (it.strokeWidth == null) it.strokeWidth = 1.5 }
   }
 
+  if (mark.type === 'text') {
+    applyTextPolar(items)
+  }
+
+  applySymbolStyleDefaults(mark, items)
+
   return { marktype: mark.type, name: mark.name, role: 'mark', clip: mark.clip === true, items }
+}
+
+/**
+ * Bake the style-level symbol defaults vega applies at parse time: the
+ * vega-lite `point`/`circle`/`square` styles set strokeWidth=2 for symbols
+ * (applied even when the symbol has no stroke — the SVG renderer emits the
+ * width regardless). Raw vega symbol marks (no style) keep vega's mark
+ * default (no stroke width).
+ */
+function applySymbolStyleDefaults(mark: CompiledMark, items: SceneItem[]): void {
+  if (mark.type !== 'symbol') return
+  const styles = Array.isArray(mark.style) ? mark.style : [mark.style]
+  if (!styles.some((s) => s === 'point' || s === 'circle' || s === 'square')) return
+  for (const it of items) {
+    if (it.strokeWidth == null) it.strokeWidth = 2
+  }
+}
+
+/**
+ * Bake a text item's polar `radius`/`theta` encoding into its x/y anchor,
+ * mirroring vega-scenegraph's `anchorPoint` (theta is measured clockwise from
+ * 12 o'clock, hence the -π/2 offset).
+ */
+function applyTextPolar(items: SceneItem[]): void {
+  for (const it of items) {
+    const radius = it.radius
+    if (radius == null || radius === 0) continue
+    const x = it.x ?? 0
+    const y = it.y ?? 0
+    const t = (it.theta ?? 0) - Math.PI / 2
+    it.x = x + radius * Math.cos(t)
+    it.y = y + radius * Math.sin(t)
+    delete (it as Record<string, unknown>).radius
+    delete (it as Record<string, unknown>).theta
+  }
 }
 
 function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
@@ -1967,6 +2024,13 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const boxHeight = isStrokeLegend ? 14 : 11
     const bgHeight = 16 + boxHeight + entryStep * (n - 1)
 
+    // Symbol opacity from the legend's `symbols.update.opacity` encode
+    // (vega-lite emits 0.7 for colored point/circle legends, absent otherwise).
+    const symOpacityEnc = (legend as unknown as { encode?: { symbols?: { update?: { opacity?: EncodeValue } } } }).encode?.symbols?.update?.opacity
+    const symbolOpacity = symOpacityEnc && typeof symOpacityEnc === 'object' && 'value' in symOpacityEnc
+      ? (symOpacityEnc as { value?: unknown }).value
+      : (isStrokeLegend ? 0.7 : undefined)
+
     // Vega measures text width as ~~(0.8 * len * fontSize) when no canvas is
     // available (vega-scenegraph estimateWidth). Labels render at 10px, the
     // legend title at 11px bold. The entry content width is the symbol offset
@@ -1992,12 +2056,12 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       // circle is an arc path of the same radius.
       if (symbolType === 'square') {
         if (colorProp === 'fill') {
-          items.push({ path: 'M-5,-5h10v10h-10Z', x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5 })
+          items.push({ path: 'M-5,-5h10v10h-10Z', x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5, ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
         } else {
           items.push({ path: 'M-5,-5h10v10h-10Z', x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
         }
       } else if (colorProp === 'fill') {
-        items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5 })
+        items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5, ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
       } else {
         items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
       }
@@ -2039,7 +2103,11 @@ function scaleTickPosition(scale: Scale, t: unknown): number {
 
 function roundedPos(scale: Scale, t: unknown): number {
   const pos = scaleTickPosition(scale, t)
-  if (scale.bandwidth) return Math.floor(pos)
+  const bw = scale.bandwidth ? scale.bandwidth() : 0
+  // Band scales: vega applies the `axisBand` tickOffset (-0.5) correction and
+  // rounds — equivalent to flooring the band center. Point scales have a
+  // zero-width band and round the plain scale value.
+  if (bw > 0) return Math.floor(pos)
   return Math.round(pos)
 }
 
@@ -2099,7 +2167,21 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       const bandLabelY = scale.bandwidth ? v + 3 : rawV + 3.5
       if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align'] }
       else if (orient === 'right') { label.x = ctx.width + tickSize + labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align'] }
-      else if (orient === 'bottom') { if (scale.bandwidth) { label.x = (scale(t) as number) + scale.bandwidth() / 2; label.y = ctx.height + 7 + 0.5 } else { label.x = rawV + 0.5; label.y = ctx.height + 15 + 0.5 } label.align = align as SceneItem['align'] }
+      else if (orient === 'bottom') {
+        if (scale.bandwidth) {
+          const bw = scale.bandwidth()
+          // Point scales (bw = 0) miss the band-scale `axisBand` tickOffset
+          // (-0.5) that cancels vega's +0.5 axis-group translate, so their
+          // label anchor needs the +0.5 baked in; band labels net to
+          // scale(t) + bw/2.
+          label.x = (scale(t) as number) + bw / 2 + (bw > 0 ? 0 : 0.5)
+          label.y = ctx.height + 7 + 0.5
+        } else {
+          label.x = rawV + 0.5
+          label.y = ctx.height + 15 + 0.5
+        }
+        label.align = align as SceneItem['align']
+      }
       else { label.x = rawV + 0.5; label.y = -tickSize - 10 + 0.5; label.align = align as SceneItem['align'] }
       label.baseline = baseline as SceneItem['baseline']
       label.fill = '#000'

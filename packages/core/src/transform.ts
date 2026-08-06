@@ -11,6 +11,8 @@ export interface TransformContext {
   signals: Record<string, unknown>
   /** Cross-dataset lookup (used by 'lookup', deferred). */
   datasets?: (name: string) => unknown[] | undefined
+  /** Hierarchy trees built by the `stratify` transform, keyed by data source name. */
+  hierarchies?: Map<string, unknown>
 }
 
 export type Row = Record<string, unknown>
@@ -19,15 +21,16 @@ export function applyTransforms(
   rows: Row[],
   transforms: CompiledTransform[],
   ctx: TransformContext,
+  sourceName?: string,
 ): Row[] {
   let out = rows
   for (const t of transforms) {
-    out = applyTransform(out, t, ctx)
+    out = applyTransform(out, t, ctx, sourceName)
   }
   return out
 }
 
-function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext): Row[] {
+function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext, sourceName?: string): Row[] {
   switch (t.type) {
     case 'formula': {
       const expr = compileExprTransform(t.expr, ctx)
@@ -120,12 +123,22 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
       return loessRows(rows, t as Record<string, unknown>)
     case 'lookup':
       return lookupRows(rows, t as Record<string, unknown>, ctx)
-    case 'stratify':
+    case 'stratify': {
       // Vega's Stratify transform builds a hierarchy from flat parent/child
       // data but emits the ORIGINAL tuples unchanged: depth/height/y layout
       // fields are only added by tree layout transforms (tree, treelinks),
       // not by stratify itself. A pass-through reproduces the oracle output.
+      // The built tree is stashed on the transform context (keyed by the data
+      // source name) so a later tree-layout transform such as `pack` can lay
+      // it out, mirroring vega's `pulse.source.root` handoff.
+      if (sourceName && ctx.hierarchies) {
+        const strat = t as { key?: string; parentKey?: string }
+        ctx.hierarchies.set(sourceName, buildStratifyTree(rows, strat.key, strat.parentKey))
+      }
       return rows
+    }
+    case 'pack':
+      return packRows(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'sequence':
       return sequenceRows(t as Record<string, unknown>)
     case 'graticule':
@@ -1423,6 +1436,499 @@ function lookupRows(rows: Row[], t: Record<string, unknown>, ctx: TransformConte
     }
     return out
   })
+}
+
+// ---------------------------------------------------------------------------
+// stratify / pack (d3-hierarchy circle packing)
+//
+// The vega `pack` transform wraps d3-hierarchy's `pack` layout, which assigns
+// x/y/r to every node. To match the oracle bit-for-bit the d3 algorithm is
+// ported operation-for-operation (packSiblingsRandom + the Welzl-style
+// minimal-enclosing-circle computation in pack/enclose.js). The layout needs
+// the tree that a preceding `stratify` transform built; vega threads it through
+// `pulse.source.root`, we thread it through `TransformContext.hierarchies`.
+// ---------------------------------------------------------------------------
+
+interface HierNode {
+  data: Row
+  children: HierNode[]
+  parent: HierNode | null
+  depth: number
+  x: number
+  y: number
+  r: number
+  value: number
+}
+
+/** Build a hierarchy tree from flat id/parent-id tuples (d3 `stratify`). */
+function buildStratifyTree(rows: Row[], key?: string, parentKey?: string): HierNode {
+  if (!key) throw new Error('[aster] stratify requires a key field')
+  const byKey = new Map<unknown, HierNode>()
+  for (const r of rows) {
+    byKey.set(r[key], { data: r, children: [], parent: null, depth: 0, x: 0, y: 0, r: 0, value: 0 })
+  }
+  let root: HierNode | null = null
+  for (const r of rows) {
+    const node = byKey.get(r[key])
+    if (!node) continue
+    const pid = parentKey ? r[parentKey] : undefined
+    if (pid == null || pid === '') {
+      root = node
+    } else {
+      const parent = byKey.get(pid)
+      if (parent) {
+        parent.children.push(node)
+        node.parent = parent
+      }
+    }
+  }
+  if (!root) root = byKey.get(rows[0]?.[key]) ?? null
+  if (!root) throw new Error('[aster] stratify: no root node found')
+  eachBefore(root, (node) => {
+    node.depth = node.parent ? node.parent.depth + 1 : 0
+  })
+  return root
+}
+
+/** Pre-order traversal (d3 `node.eachBefore`). */
+function eachBefore(root: HierNode, fn: (node: HierNode) => void): void {
+  const nodes: (HierNode | undefined)[] = [root]
+  let node: HierNode | undefined
+  while ((node = nodes.pop()) != null) {
+    fn(node)
+    const children = node.children
+    if (children.length) {
+      for (let i = children.length - 1; i >= 0; i--) nodes.push(children[i])
+    }
+  }
+}
+
+/** Post-order traversal (d3 `node.eachAfter`). */
+function eachAfter(root: HierNode, fn: (node: HierNode) => void): void {
+  const nodes: (HierNode | undefined)[] = [root]
+  const next: HierNode[] = []
+  let node: HierNode | undefined = root
+  while (node != null) {
+    next.push(node)
+    const children = node.children
+    if (children.length) {
+      for (let i = children.length - 1; i >= 0; i--) nodes.push(children[i])
+    }
+    node = nodes.pop()
+  }
+  while ((node = next.pop()) != null) fn(node)
+}
+
+/** Sort the children of every node (vega HierarchyLayout: `root.sort(compare)`). */
+function sortTreeChildren(root: HierNode, sort: SortSpec): void {
+  const fields = Array.isArray(sort.field) ? sort.field : [sort.field]
+  const orders = Array.isArray(sort.order) ? sort.order : [sort.order ?? 'ascending']
+  const field = fields[0] as string
+  const dir = (orders[0] ?? 'ascending') === 'descending' ? -1 : 1
+  const ascending = (u: unknown, v: unknown): number => {
+    const ua = u as number | string
+    const va = v as number | string
+    if ((ua < va || u == null) && v != null) return -1
+    if ((ua > va || v == null) && u != null) return 1
+    return 0
+  }
+  eachBefore(root, (node) => {
+    const children = node.children
+    if (children.length > 1) {
+      const idx = new Map<HierNode, number>()
+      children.forEach((c, i) => idx.set(c, i))
+      children.sort((a, b) => {
+        const c = ascending(a.data[field], b.data[field]) * dir
+        return c !== 0 ? c : idx.get(a)! - idx.get(b)!
+      })
+    }
+  })
+}
+
+/** The vega `pack` transform: layout the stratify-built tree and write x/y/r/depth/children. */
+function packRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext, sourceName?: string): Row[] {
+  const root = sourceName ? (ctx.hierarchies?.get(sourceName) as HierNode | undefined) : undefined
+  if (!root) {
+    throw new Error('[aster] pack transform requires a preceding stratify transform on the same data source')
+  }
+  const as = (t.as as string[] | undefined) ?? ['x', 'y', 'r', 'depth', 'children']
+  const field = t.field as string | undefined
+  const radius = t.radius as string | undefined
+  const size = t.size as number[] | undefined
+  const padding = (t.padding as number | undefined) ?? 0
+  const sort = t.sort as SortSpec | undefined
+
+  // root.sum(field): each node's value is its own plus its descendants'.
+  eachAfter(root, (node) => {
+    let sum = field != null ? Number(node.data[field]) || 0 : 1
+    for (const c of node.children) sum += c.value
+    node.value = sum
+  })
+
+  if (sort?.field) sortTreeChildren(root, sort)
+
+  const dx = size?.[0] ?? 1
+  const dy = size?.[1] ?? 1
+  packLayout(root, dx, dy, padding, radius)
+
+  eachBefore(root, (node) => {
+    const d = node.data
+    d[as[0]!] = node.x
+    d[as[1]!] = node.y
+    d[as[2]!] = node.r
+    d[as[3]!] = node.depth
+    d[as[4]!] = node.children.length
+  })
+
+  return rows
+}
+
+// -- d3-hierarchy pack layout -------------------------------------------------
+
+/** Linear congruential generator with the exact constants d3-hierarchy uses. */
+function packLcg(): () => number {
+  let s = 1
+  return () => (s = (1664525 * s + 1013904223) % 4294967296) / 4294967296
+}
+
+function packLayout(root: HierNode, dx: number, dy: number, padding: number, radius?: string): void {
+  const random = packLcg()
+  root.x = dx / 2
+  root.y = dy / 2
+
+  // radiusLeaf: leaves get r from the radius accessor (default sqrt(value)).
+  eachBefore(root, (node) => {
+    if (!node.children.length) {
+      node.r = radius != null
+        ? Math.max(0, Number(node.data[radius]) || 0)
+        : Math.max(0, Math.sqrt(node.value) || 0)
+    }
+  })
+
+  // packChildrenRandom(padding, k, random) twice, as d3 does.
+  eachAfter(root, packChildrenOnce(0, 1, random))
+  eachAfter(root, packChildrenOnce(padding, root.r / Math.min(dx, dy), random))
+
+  // translateChild: scale everything into the target box around the root.
+  const k = Math.min(dx, dy) / (2 * root.r)
+  eachBefore(root, (node) => {
+    node.r *= k
+    const parent = node.parent
+    if (parent) {
+      node.x = parent.x + k * node.x
+      node.y = parent.y + k * node.y
+    }
+  })
+}
+
+function packChildrenOnce(padValue: number, k: number, random: () => number) {
+  return (node: HierNode): void => {
+    if (!node.children.length) return
+    const children = node.children
+    const r = padValue * k || 0
+    if (r) for (let i = 0; i < children.length; ++i) children[i]!.r += r
+    const e = packSiblingsRandom(children, random)
+    if (r) for (let i = 0; i < children.length; ++i) children[i]!.r -= r
+    node.r = e + r
+  }
+}
+
+function packPlace(b: HierNode, a: HierNode, c: HierNode): void {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const d2 = dx * dx + dy * dy
+  if (d2) {
+    let a2 = a.r + c.r; a2 *= a2
+    let b2 = b.r + c.r; b2 *= b2
+    if (a2 > b2) {
+      const x = (d2 + b2 - a2) / (2 * d2)
+      const y = Math.sqrt(Math.max(0, b2 / d2 - x * x))
+      c.x = b.x - x * dx - y * dy
+      c.y = b.y - x * dy + y * dx
+    } else {
+      const x = (d2 + a2 - b2) / (2 * d2)
+      const y = Math.sqrt(Math.max(0, a2 / d2 - x * x))
+      c.x = a.x + x * dx - y * dy
+      c.y = a.y + x * dy + y * dx
+    }
+  } else {
+    c.x = a.x + c.r
+    c.y = a.y
+  }
+}
+
+function packIntersects(a: HierNode, b: HierNode): boolean {
+  const dr = a.r + b.r - 1e-6
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  return dr > 0 && dr * dr > dx * dx + dy * dy
+}
+
+function packScore(node: PackChain): number {
+  const a = node._
+  const b = node.next!._
+  const ab = a.r + b.r
+  const dx = (a.x * b.r + b.x * a.r) / ab
+  const dy = (a.y * b.r + b.y * a.r) / ab
+  return dx * dx + dy * dy
+}
+
+/** Circular doubly-linked chain node wrapping a circle (d3 pack/siblings.js). */
+class PackChain {
+  _: HierNode
+  next: PackChain | null
+  previous: PackChain | null
+
+  constructor(circle: HierNode) {
+    this._ = circle
+    this.next = null
+    this.previous = null
+  }
+}
+
+/**
+ * Pack a set of sibling circles (d3 `packSiblingsRandom`), mutating each
+ * circle's x/y and returning the radius of the enclosing circle.
+ */
+function packSiblingsRandom(circles: HierNode[], random: () => number): number {
+  const n = circles.length
+  if (!n) return 0
+
+  let a: HierNode | PackChain
+  let b: HierNode | PackChain
+  let c: PackChain
+  let i: number
+  let j: PackChain | null
+  let k: PackChain | null
+  let sj: number
+  let sk: number
+  let aa: number
+  let ca: number
+
+  // Place the first circle.
+  a = circles[0]!
+  a.x = 0; a.y = 0
+  if (!(n > 1)) return a.r
+
+  // Place the second circle.
+  b = circles[1]!
+  a.x = -b.r; b.x = a.r; b.y = 0
+  if (!(n > 2)) return a.r + b.r
+
+  // Place the third circle.
+  c = new PackChain(circles[2]!)
+  packPlace(b, a, c._)
+
+  // Initialize the front-chain using the first three circles a, b and c.
+  a = new PackChain(a as HierNode)
+  b = new PackChain(b as HierNode)
+  // d3: `a.next = c.previous = b; b.next = a.previous = c; c.next = b.previous = a`
+  a.next = b
+  c.previous = b
+  b.next = c
+  a.previous = c
+  c.next = a
+  b.previous = a
+
+    // Attempt to place each remaining circle…
+    let guard = 0
+    pack: for (i = 3; i < n; ++i) {
+      packPlace((a as PackChain)._, (b as PackChain)._, circles[i]!)
+      c = new PackChain(circles[i]!)
+
+      // Find the closest intersecting circle on the front-chain, if any.
+      j = b.next
+      k = a.previous
+      sj = b._.r
+      sk = a._.r
+      do {
+        if (++guard > 100000) throw new Error('[aster] pack: front-chain walk did not terminate')
+        if (sj <= sk) {
+        if (packIntersects(j!._, c._)) {
+          b = j!
+          a.next = b
+          b.previous = a
+          --i
+          continue pack
+        }
+        sj += j!._.r
+        j = j!.next
+      } else {
+        if (packIntersects(k!._, c._)) {
+          a = k!
+          a.next = b
+          b.previous = a
+          --i
+          continue pack
+        }
+        sk += k!._.r
+        k = k!.previous
+      }
+    } while (j !== k!.next)
+
+    // Success! Insert the new circle c between a and b. d3: `a.next =
+    // b.previous = b = c` — the new circle becomes the new `b`.
+    c.previous = a as PackChain
+    c.next = b as PackChain
+    ;(a as PackChain).next = c
+    ;(b as PackChain).previous = c
+    b = c
+
+    // Compute the new closest circle pair to the centroid.
+    aa = packScore(a as PackChain)
+    while ((c = c.next!) !== b) {
+      if ((ca = packScore(c)) < aa) {
+        a = c
+        aa = ca
+      }
+    }
+    b = a.next!
+  }
+
+  // Compute the enclosing circle of the front chain.
+  const front: HierNode[] = [(b as PackChain)._]
+  c = b as PackChain
+  while ((c = c.next!) !== b) front.push(c._)
+  const enc = packEncloseRandom(front, random)
+
+  // Translate the circles to put the enclosing circle around the origin.
+  for (i = 0; i < n; ++i) {
+    const circ = circles[i]!
+    circ.x -= enc.x
+    circ.y -= enc.y
+  }
+
+  return enc.r
+}
+
+/** Fisher-Yates shuffle (d3-array `shuffle`). */
+function packShuffle<T>(array: T[], random: () => number): T[] {
+  let m = array.length
+  let t: T
+  let i: number
+  while (m) {
+    i = random() * m-- | 0
+    t = array[m]!
+    array[m] = array[i]!
+    array[i] = t
+  }
+  return array
+}
+
+/**
+ * Minimal enclosing circle (d3 `packEncloseRandom` — Welzl's algorithm with a
+ * randomized basis search).
+ */
+function packEncloseRandom(circles: HierNode[], random: () => number): HierNode {
+  let i = 0
+  const n = (circles = packShuffle(Array.from(circles), random)).length
+  let B: HierNode[] = []
+  let p: HierNode
+  let e: HierNode | undefined
+
+  while (i < n) {
+    p = circles[i]!
+    if (e && packEnclosesWeak(e, p)) ++i
+    else { e = packEncloseBasis(B = packExtendBasis(B, p)); i = 0 }
+  }
+  return e!
+}
+
+function packExtendBasis(B: HierNode[], p: HierNode): HierNode[] {
+  if (packEnclosesWeakAll(p, B)) return [p]
+
+  // If we get here then B must have at least one element.
+  for (let i = 0; i < B.length; ++i) {
+    if (packEnclosesNot(p, B[i]!)
+      && packEnclosesWeakAll(packEncloseBasis2(B[i]!, p), B)) {
+      return [B[i]!, p]
+    }
+  }
+
+  // If we get here then B must have at least two elements.
+  for (let i = 0; i < B.length - 1; ++i) {
+    for (let j = i + 1; j < B.length; ++j) {
+      if (packEnclosesNot(packEncloseBasis2(B[i]!, B[j]!), p)
+        && packEnclosesNot(packEncloseBasis2(B[i]!, p), B[j]!)
+        && packEnclosesNot(packEncloseBasis2(B[j]!, p), B[i]!)
+        && packEnclosesWeakAll(packEncloseBasis3(B[i]!, B[j]!, p), B)) {
+        return [B[i]!, B[j]!, p]
+      }
+    }
+  }
+
+  throw new Error('[aster] pack: unable to find enclosing circle')
+}
+
+function packEnclosesNot(a: HierNode, b: HierNode): boolean {
+  const dr = a.r - b.r
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  return dr < 0 || dr * dr < dx * dx + dy * dy
+}
+
+function packEnclosesWeak(a: HierNode, b: HierNode): boolean {
+  const dr = a.r - b.r + Math.max(a.r, b.r, 1) * 1e-9
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  return dr > 0 && dr * dr > dx * dx + dy * dy
+}
+
+function packEnclosesWeakAll(a: HierNode, B: HierNode[]): boolean {
+  for (let i = 0; i < B.length; ++i) {
+    if (!packEnclosesWeak(a, B[i]!)) return false
+  }
+  return true
+}
+
+function packEncloseBasis1(a: HierNode): HierNode {
+  return { x: a.x, y: a.y, r: a.r } as HierNode
+}
+
+function packEncloseBasis2(a: HierNode, b: HierNode): HierNode {
+  const x1 = a.x, y1 = a.y, r1 = a.r
+  const x2 = b.x, y2 = b.y, r2 = b.r
+  const x21 = x2 - x1, y21 = y2 - y1, r21 = r2 - r1
+  const l = Math.sqrt(x21 * x21 + y21 * y21)
+  return {
+    x: (x1 + x2 + x21 / l * r21) / 2,
+    y: (y1 + y2 + y21 / l * r21) / 2,
+    r: (l + r1 + r2) / 2,
+  } as HierNode
+}
+
+function packEncloseBasis3(a: HierNode, b: HierNode, c: HierNode): HierNode {
+  const x1 = a.x, y1 = a.y, r1 = a.r
+  const x2 = b.x, y2 = b.y, r2 = b.r
+  const x3 = c.x, y3 = c.y, r3 = c.r
+  const a2 = x1 - x2
+  const a3 = x1 - x3
+  const b2 = y1 - y2
+  const b3 = y1 - y3
+  const c2 = r2 - r1
+  const c3 = r3 - r1
+  const d1 = x1 * x1 + y1 * y1 - r1 * r1
+  const d2 = d1 - x2 * x2 - y2 * y2 + r2 * r2
+  const d3 = d1 - x3 * x3 - y3 * y3 + r3 * r3
+  const ab = a3 * b2 - a2 * b3
+  const xa = (b2 * d3 - b3 * d2) / (ab * 2) - x1
+  const xb = (b3 * c2 - b2 * c3) / ab
+  const ya = (a3 * d2 - a2 * d3) / (ab * 2) - y1
+  const yb = (a2 * c3 - a3 * c2) / ab
+  const A = xb * xb + yb * yb - 1
+  const B = 2 * (r1 + xa * xb + ya * yb)
+  const C = xa * xa + ya * ya - r1 * r1
+  const r = -(Math.abs(A) > 1e-6 ? (B + Math.sqrt(B * B - 4 * A * C)) / (2 * A) : C / B)
+  return { x: x1 + xa + xb * r, y: y1 + ya + yb * r, r } as HierNode
+}
+
+function packEncloseBasis(B: HierNode[]): HierNode {
+  switch (B.length) {
+    case 1: return packEncloseBasis1(B[0]!)
+    case 2: return packEncloseBasis2(B[0]!, B[1]!)
+    case 3: return packEncloseBasis3(B[0]!, B[1]!, B[2]!)
+    default: throw new Error('[aster] pack: bad basis size')
+  }
 }
 
 /**
