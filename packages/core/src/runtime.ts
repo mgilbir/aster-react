@@ -376,21 +376,6 @@ function buildScales(ctx: EvalContext): void {
         return out
       },
     })
-    // Vega extends the domain of quantitative scales by `padding` pixels before
-    // re-nicing; d3-scale's linear scale has no `padding` option, so replicate
-    // vega's behavior here. Only applies to continuous quantitative scales.
-    const Q = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog'])
-    if (Q.has(s.type) && s.padding != null && typeof (scale as any).domain === 'function') {
-      const rng = (scale as any).range ? (scale as any).range() as number[] : [0, ctx.width]
-      const rangeExtent = Math.abs(rng[rng.length - 1]! - rng[0]!) || 1
-      const dom = (scale as any).domain() as number[]
-      if (dom.length >= 2 && Number.isFinite(dom[0]) && Number.isFinite(dom[1])) {
-        const d0 = dom[0]!, d1 = dom[1]!
-        const ext = (s.padding * (d1 - d0)) / rangeExtent
-        ;(scale as any).domain([d0 - ext, d1 + ext])
-        if (typeof (scale as any).nice === 'function') (scale as any).nice()
-      }
-    }
     ctx.scales.set(s.name, scale)
     ctx.scaleTypes.set(s.name, s.type)
   }
@@ -1754,8 +1739,8 @@ function formatValue(v: unknown, spec: EncodeValue): unknown {
 
 
 function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
-  // Resolve the scale name
-  const scaleName = legend.stroke ?? legend.fill
+  // Resolve the scale name (fill/stroke color legends, or size legends).
+  const scaleName = legend.stroke ?? legend.fill ?? legend.size
   if (!scaleName) return null
   const scale = ctx.scales.get(scaleName)
   if (!scale) return null
@@ -1858,6 +1843,113 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       ctx._defs.push({ id: gradientId, colorStops: stops })
     }
     return group
+  }
+
+  // --- Size legend (symbol legend driven by the size scale) ---
+  // Vega renders a `size` channel legend as a symbol legend whose symbols are
+  // sized by the size scale and whose entries are packed vertically according
+  // to the symbol bounds. This mirrors vega's LegendEntries + legend layout:
+  //   datum.size  = scale(value)                      (area; radius = sqrt/2)
+  //   datum.sizeD = max(ceil(sqrt(size)+strokeWidth), fontSize=10)
+  //   offset      = max sizeD
+  //   symbol x    = offset/2,  label x = offset + labelOffset(4)
+  //   symbol y    = sizeD/2,   label y = sizeD/2 + 3 (middle baseline)
+  // Entry heights/offsets derive from the symbol+label bounds:
+  //   b.y1 = min(y - extent, y - 5), b.y2 = max(y + extent, y + 5)
+  // where extent = r + 3 (stroke miter inflation) when the symbol is stroked,
+  // else r. The single-column grid packs entries with rowPadding=2.
+  if (legend.size != null && legend.fill == null && legend.stroke == null) {
+    const sizeScale = ctx.scales.get(legend.size)
+    if (!sizeScale) return null
+    if (orient !== 'right' && orient !== undefined) return null
+    // Legend tick values (vega: labelValues(scale, 5)); drop the first value
+    // when it maps to size zero (vega#717).
+    let ticks = ((sizeScale as { ticks?: (n?: number) => unknown[] }).ticks?.(5) ?? []) as unknown[]
+    if (ticks.length > 1 && Number(sizeScale(ticks[0])) === 0) ticks = ticks.slice(1)
+    if (ticks.length === 0) return null
+
+    // Symbol stroke/opacity from the legend's symbols encode (vega-lite emits
+    // stroke=#4c78a8, opacity=0.7, fill=transparent for size legends).
+    const symEncode = (legend.encode?.symbols?.update ?? {}) as Record<string, EncodeValue>
+    const encVal = (k: string): unknown => {
+      const v = symEncode[k]
+      return v && typeof v === 'object' && 'value' in v ? (v as { value: unknown }).value : undefined
+    }
+    const strokeColor = encVal('stroke')
+    const opacity = (encVal('opacity') as number) ?? 0.7
+    const strokeWidth = 1.5
+    const fontSize = 10
+    const labelOffset = 4
+    const rowPadding = 2
+    const symbolType = legend.symbolType ?? 'circle'
+
+    const entries = ticks.map((v) => {
+      const size = Number(sizeScale(v)) || 0
+      const r = Math.sqrt(size) / 2
+      const sizeD = Math.max(Math.ceil(Math.sqrt(size) + strokeWidth), fontSize)
+      return { value: v, size, r, sizeD }
+    })
+    const offset = entries.reduce((m, e) => Math.max(m, e.sizeD), 0)
+    const symbolX = offset / 2
+    const labelX = offset + labelOffset
+
+    // Per-entry vertical bounds (symbol +/- extent, label +/- 5).
+    const hasStroke = strokeColor != null
+    const b = entries.map((e) => {
+      const ext = symbolType === 'square' ? (hasStroke ? e.sizeD / 2 : e.r) : (hasStroke ? e.r + 3 : e.r)
+      const y = e.sizeD / 2
+      return { y1: Math.min(y - ext, y - 5), y2: Math.max(y + ext, y + 5) }
+    })
+    // Single-column vertical grid layout (align 'each', rowPadding 2).
+    const yOff: number[] = [0]
+    for (let i = 1; i < entries.length; i++) {
+      const o = rowPadding + (b[i]!.y1 < 0 ? Math.ceil(-b[i]!.y1) : 0)
+      yOff.push(o + Math.ceil(b[i - 1]!.y2))
+    }
+    const yPos: number[] = []
+    let acc = 0
+    for (let i = 0; i < entries.length; i++) {
+      acc += yOff[i]!
+      yPos.push(acc)
+    }
+    const scopesHeight = acc + b[b.length - 1]!.y2
+
+    // Widths: labels render at 10px (~8px/char), title at 11px bold.
+    const maxLabelLen = entries.reduce((m, e) => Math.max(m, String(e.value).length), 0)
+    const entryWidth = labelX + 8 * maxLabelLen
+    const titleStr = String(legend.title ?? '')
+    const titleWidth = titleStr.length > 0 ? ~~(0.8 * titleStr.length * 11) : 0
+    const outerWidth = Math.max(entryWidth, titleWidth)
+    const bgHeight = 16 + scopesHeight
+
+    const items: SceneItem[] = []
+    items.push({ path: `M0,0h${outerWidth}v${bgHeight}h-${outerWidth}Z`, x: 0, y: 0 })
+    items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000' })
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i]!
+      const ey = 16 + yPos[i]!
+      const sy = ey + e.sizeD / 2
+      items.push({ path: `M0,0h${entryWidth}v${b[i]!.y2}h-${entryWidth}Z`, x: 0, y: ey })
+      if (symbolType === 'square') {
+        const w = Math.sqrt(e.size)
+        items.push({
+          path: `M${-w / 2},${-w / 2}h${w}v${w}h${-w}Z`,
+          x: symbolX,
+          y: sy,
+          ...(strokeColor != null ? { stroke: String(strokeColor), strokeWidth, opacity } : {}),
+        })
+      } else {
+        items.push({
+          shape: 'circle',
+          radius: e.r,
+          x: symbolX,
+          y: sy,
+          ...(strokeColor != null ? { stroke: String(strokeColor), strokeWidth, opacity } : {}),
+        })
+      }
+      items.push({ text: String(e.value), x: labelX, y: sy + 3, align: 'left', fill: '#000' })
+    }
+    return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, width: outerWidth, height: bgHeight, items }
   }
 
   // --- Symbol legend (discrete) ---

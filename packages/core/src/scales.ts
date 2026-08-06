@@ -81,6 +81,12 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   const zero = !TIME_SCALE_TYPES.has(type) && (c.zero ?? INCLUDE_ZERO_TYPES.has(type))
   if (zero) applyZero(s)
   if (c.domainMin != null || c.domainMax != null) applyDomainMinMax(s, c.domainMin, c.domainMax)
+  // Vega's Scale transform adjusts continuous domains for minimum pixel
+  // padding (`padDomain`): the domain is zoomed out around its midpoint so the
+  // extreme data values land `padding` px inside the range. Applies to all
+  // continuous scales (linear/log/pow/sqrt/symlog/time/utc), matching vega's
+  // `includePad(type)` guard.
+  if (CONTINUOUS_TYPES.has(type) && c.padding != null) applyPixelPadding(s, c.padding)
   if (c.nice) applyNice(s, c.nice)
   if (c.exponent != null) s.exponent?.(c.exponent)
   if (c.constant != null) s.constant?.(c.constant)
@@ -146,6 +152,28 @@ function applyDomainMinMax(s: Scale, min?: number, max?: number) {
   if (min != null) d[0] = min
   if (max != null) d[1] = max
   s.domain(d)
+}
+
+/**
+ * vega-encode `padDomain`: zoom a continuous scale domain out around its
+ * midpoint so the extreme domain values sit `pad` px inside the range
+ * (`frac = span / (span - 2*pad)`, `zoomLinear` around `(d0+d1)/2`).
+ */
+function applyPixelPadding(s: Scale, pad: number) {
+  const range = s.range() as number[]
+  if (range.length < 2) return
+  const span = Math.abs((range[range.length - 1] ?? 0) - (range[0] ?? 0))
+  if (!(span > 0)) return
+  const domain = (s.domain() as number[]).slice()
+  if (domain.length < 2 || domain[0] === domain[domain.length - 1]) return
+  if (!Number.isFinite(Number(domain[0])) || !Number.isFinite(Number(domain[domain.length - 1]))) return
+  const frac = span / (span - 2 * pad)
+  const d0 = Number(domain[0])
+  const d1 = Number(domain[domain.length - 1])
+  const da = (d0 + d1) / 2
+  domain[0] = (da + (d0 - da) * frac) as unknown as number
+  domain[domain.length - 1] = (da + (d1 - da) * frac) as unknown as number
+  s.domain(domain)
 }
 
 function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): unknown[] {

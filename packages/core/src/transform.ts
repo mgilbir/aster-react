@@ -120,6 +120,16 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
       return loessRows(rows, t as Record<string, unknown>)
     case 'lookup':
       return lookupRows(rows, t as Record<string, unknown>, ctx)
+    case 'stratify':
+      // Vega's Stratify transform builds a hierarchy from flat parent/child
+      // data but emits the ORIGINAL tuples unchanged: depth/height/y layout
+      // fields are only added by tree layout transforms (tree, treelinks),
+      // not by stratify itself. A pass-through reproduces the oracle output.
+      return rows
+    case 'sequence':
+      return sequenceRows(t as Record<string, unknown>)
+    case 'graticule':
+      return graticuleRows(t as Record<string, unknown>)
     case 'identifier':
       return rows
     default:
@@ -689,6 +699,97 @@ function d3Range(start: number, stop: number, step: number): number[] {
   const out: number[] = new Array(n)
   for (let i = 0; i < n; i++) out[i] = start + i * step
   return out
+}
+
+// ---------------------------------------------------------------------------
+// sequence / graticule (generating transforms)
+// ---------------------------------------------------------------------------
+
+/**
+ * The vega `sequence` transform: generate tuples for a numeric range
+ * `[start, stop)` in `step` increments (d3-array range semantics), writing each
+ * value to the `as` field (default `data`).
+ */
+function sequenceRows(t: Record<string, unknown>): Row[] {
+  const start = t.start == null ? 0 : Number(t.start)
+  const stop = Number(t.stop)
+  const step = t.step == null ? 1 : Number(t.step)
+  const as = (t.as as string | undefined) ?? 'data'
+  return d3Range(start, stop, step).map((v) => ({ [as]: v }))
+}
+
+const GEO_EPSILON = 1e-6
+
+/** d3-geo graticuleX: latitude samples along a meridian (step 90, clipped). */
+function graticuleX(y0: number, y1: number, dy: number): (x: number) => number[][] {
+  const y = d3Range(y0, y1 - GEO_EPSILON, dy).concat(y1)
+  return (x) => y.map((yy) => [x, yy])
+}
+
+/** d3-geo graticuleY: longitude samples along a parallel (precision spacing). */
+function graticuleY(x0: number, x1: number, dx: number): (y: number) => number[][] {
+  const x = d3Range(x0, x1 - GEO_EPSILON, dx).concat(x1)
+  return (yy) => x.map((xx) => [xx, yy])
+}
+
+/**
+ * The vega `graticule` transform: generate a single GeoJSON MultiLineString
+ * geometry of latitude/longitude grid lines (d3-geo `geoGraticule` algorithm).
+ * Reproduced operation-for-operation so the generated coordinates (and the
+ * identity-projected SVG paths rendered from them) match the oracle to the bit.
+ */
+function graticuleRows(t: Record<string, unknown>): Row[] {
+  let x0 = -180, x1 = 180, X0 = -180, X1 = 180
+  let y0 = -80 - GEO_EPSILON, y1 = 80 + GEO_EPSILON
+  let Y0 = -90 + GEO_EPSILON, Y1 = 90 - GEO_EPSILON
+  let dx = 10, dy = 10, DX = 90, DY = 360
+  let precision = 2.5
+
+  const recompute = () => {
+    X = graticuleX(Y0, Y1, 90)
+    Y = graticuleY(X0, X1, precision)
+    x = graticuleX(y0, y1, 90)
+    y = graticuleY(x0, x1, precision)
+  }
+  let X: (v: number) => number[][] = () => []
+  let Y: (v: number) => number[][] = () => []
+  let x: (v: number) => number[][] = () => []
+  let y: (v: number) => number[][] = () => []
+
+  const extentMajor = (e: number[][]) => {
+    X0 = e[0]![0]!, X1 = e[1]![0]!, Y0 = e[0]![1]!, Y1 = e[1]![1]!
+    recompute()
+  }
+  const extentMinor = (e: number[][]) => {
+    x0 = e[0]![0]!, x1 = e[1]![0]!, y0 = e[0]![1]!, y1 = e[1]![1]!
+    recompute()
+  }
+  const stepMajor = (s: number[]) => { DX = s[0]!, DY = s[1]! }
+  const stepMinor = (s: number[]) => { dx = s[0]!, dy = s[1]! }
+
+  // d3-geo geoGraticule default configuration
+  extentMajor([[-180, -90 + GEO_EPSILON], [180, 90 - GEO_EPSILON]])
+  extentMinor([[-180, -80 - GEO_EPSILON], [180, 80 + GEO_EPSILON]])
+
+  // Apply spec parameters in key order (as vega's Graticule.transform does).
+  for (const key of Object.keys(t)) {
+    const v = t[key]
+    if (key === 'extent' && Array.isArray(v)) { extentMajor(v as number[][]); extentMinor(v as number[][]) }
+    else if (key === 'extentMajor' && Array.isArray(v)) extentMajor(v as number[][])
+    else if (key === 'extentMinor' && Array.isArray(v)) extentMinor(v as number[][])
+    else if (key === 'step' && Array.isArray(v)) { stepMajor(v as number[]); stepMinor(v as number[]) }
+    else if (key === 'stepMajor' && Array.isArray(v)) stepMajor(v as number[])
+    else if (key === 'stepMinor' && Array.isArray(v)) stepMinor(v as number[])
+    else if (key === 'precision' && typeof v === 'number') { precision = v; recompute() }
+  }
+
+  const lines = (): number[][][] =>
+    d3Range(Math.ceil(X0 / DX) * DX, X1, DX).map(X)
+      .concat(d3Range(Math.ceil(Y0 / DY) * DY, Y1, DY).map(Y))
+      .concat(d3Range(Math.ceil(x0 / dx) * dx, x1, dx).filter((xx) => Math.abs(xx % DX) > GEO_EPSILON).map(x))
+      .concat(d3Range(Math.ceil(y0 / dy) * dy, y1, dy).filter((yy) => Math.abs(yy % DY) > GEO_EPSILON).map(y))
+
+  return [{ type: 'MultiLineString', coordinates: lines() }]
 }
 
 /** d3-array `quantileSorted(values, p)` — values must be sorted ascending. */

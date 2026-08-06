@@ -1,0 +1,1 @@
+{"$schema":"https://vega.github.io/schema/vega/v6.json","width":400,"height":300,"padding":5,"autosize":"none","data":[{"name":"table","transform":[{"type":"graticule","step":[30,30]}]}],"marks":[{"type":"shape","from":{"data":"table"},"transform":[{"type":"geoshape"}],"encode":{"update":{"stroke":{"value":"#ddd"},"strokeWidth":{"value":1},"fill":{"value":null}}}}]}
