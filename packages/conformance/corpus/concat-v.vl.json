@@ -1,0 +1,11 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5, "autosize": "none",
+  "data": { "name": "table", "values": [
+    { "x": 1, "y": 2 }, { "x": 2, "y": 4 }, { "x": 3, "y": 3 }
+  ]},
+  "vconcat": [
+    { "mark": "point", "encoding": { "x": { "field": "x", "type": "quantitative" }, "y": { "field": "y", "type": "quantitative" } } },
+    { "mark": "bar", "encoding": { "x": { "field": "x", "type": "quantitative" }, "y": { "field": "y", "type": "quantitative" } } }
+  ]
+}

@@ -12,8 +12,10 @@ import type {
   CompiledChart,
   CompiledLegend,
   CompiledMark,
+  CompiledScale,
   EncodeValue,
   RuntimeInput,
+  ScaleDomain,
   SceneGroup,
   SceneItem,
   SceneRoot,
@@ -186,6 +188,7 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   const hasChildSignals = ctx.signalParams['child_width'] !== undefined && ctx.signalParams['child_height'] !== undefined
   const isFacetSpec = hasFacetMarks && hasChildSignals
   const isConcat = isConcatSpec(ctx.chart)
+  const isVerticalConcat = isConcat && ctx.signalParams['childWidth'] === undefined && ctx.signalParams['childHeight'] !== undefined
   
   if (ctx.chart.autosize !== 'none') {
     sceneWidth = width + padding.left + padding.right
@@ -220,10 +223,17 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
       sceneWidth = 10
       sceneHeight = 10
     } else if (isConcat) {
-      // Concat with signal-based cell width and explicit height: vega renders the
-      // viewport at the SVG minimum width (10) but uses the real chart height.
-      sceneWidth = 10
-      sceneHeight = height + ctx.chart.padding.top + ctx.chart.padding.bottom
+      if (isVerticalConcat) {
+        // Vconcat with signal-based cell height and explicit width: vega renders
+        // the viewport at the SVG minimum height (10) but uses the real chart width.
+        sceneWidth = width + ctx.chart.padding.left + ctx.chart.padding.right
+        sceneHeight = 10
+      } else {
+        // Concat with signal-based cell width and explicit height: vega renders the
+        // viewport at the SVG minimum width (10) but uses the real chart height.
+        sceneWidth = 10
+        sceneHeight = height + ctx.chart.padding.top + ctx.chart.padding.bottom
+      }
     } else {
       sceneWidth = width + ctx.chart.padding.left + ctx.chart.padding.right
       sceneHeight = height + ctx.chart.padding.top + ctx.chart.padding.bottom
@@ -317,6 +327,14 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
 function buildScales(ctx: EvalContext): void {
   const scaleSignals = ctx.signalParams
   for (const s of ctx.chart.scales) {
+    // Vega-lite emits `{ fields: [{data, field}, ...] }` domains for layered
+    // charts (several datasets contribute to one shared scale). scales.ts only
+    // understands single-dataset domains, so resolve the multi-dataset form
+    // here into a concrete domain before building the scale.
+    const multiDomain = resolveMultiDatasetDomain(s.domain, ctx)
+    if (multiDomain) {
+      ;(s as unknown as { domain: unknown }).domain = concreteDomain(s, multiDomain)
+    }
     const scale = buildScale(s, {
       width: ctx.width,
       height: ctx.height,
@@ -347,6 +365,52 @@ function buildScales(ctx: EvalContext): void {
     ctx.scales.set(s.name, scale)
     ctx.scaleTypes.set(s.name, s.type)
   }
+}
+
+/**
+ * Resolve a vega-lite "multi-dataset" scale domain — `{ fields: [{data, field},
+ * ...] }` (layered charts) — into a concrete domain array. Returns null when the
+ * domain is not in that form, so scales.ts handles everything else unchanged.
+ */
+function resolveMultiDatasetDomain(domain: ScaleDomain, ctx: EvalContext): unknown[] | null {
+  if (!domain || typeof domain !== 'object' || Array.isArray(domain)) return null
+  if ('signal' in domain) return null
+  const fields = (domain as { fields?: unknown }).fields
+  if (!Array.isArray(fields) || !fields.length) return null
+  const refs = fields as unknown[]
+  if (!refs.every((f) => f != null && typeof f === 'object' && typeof (f as { data?: unknown }).data === 'string' && typeof (f as { field?: unknown }).field === 'string')) {
+    return null
+  }
+  const all: unknown[] = []
+  for (const f of refs) {
+    const ref = f as { data: string; field: string }
+    const rows = ctx.datasets.get(ref.data) ?? []
+    for (const r of rows) all.push((r as Row)[ref.field])
+  }
+  return all
+}
+
+/** Collapse collected multi-dataset values into the concrete domain for a scale type. */
+function concreteDomain(scale: CompiledScale, values: unknown[]): unknown[] {
+  const type = scale.type
+  if (type === 'time' || type === 'utc') {
+    const ms: number[] = []
+    for (const v of values) {
+      const d = v instanceof Date ? v : typeof v === 'string' || typeof v === 'number' ? new Date(v) : null
+      if (d && Number.isFinite(d.getTime())) ms.push(d.getTime())
+    }
+    return ms.length ? [Math.min(...ms), Math.max(...ms)] : []
+  }
+  if (CONTINUOUS_TYPES.has(type)) {
+    const finite = values.filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
+    return finite.length ? [Math.min(...finite), Math.max(...finite)] : []
+  }
+  // Discrete scales: distinct values (sorted when the domain requests it).
+  const distinct: unknown[] = []
+  for (const v of values) if (!distinct.some((x) => x === v)) distinct.push(v)
+  const sort = (scale.domain as { sort?: unknown }).sort
+  if (sort === true) distinct.sort((a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0)
+  return distinct
 }
 
 function evaluateMark(
@@ -919,7 +983,7 @@ function buildColumnTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup
 }
 
 // ===========================================================================
-// Horizontal concat support
+// Concat support (horizontal and vertical)
 // ===========================================================================
 
 const CONCAT_BASE_SPACING = 29
@@ -930,6 +994,9 @@ function buildConcatGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup {
   const idxMatch = mark.name.match(/concat_(\d+)_group/)
   const idx = idxMatch ? parseInt(idxMatch[1]!, 10) : 0
   const { width: cellWidth, height: cellHeight } = readCellSize(mark, ctx, 500, 500)
+  // Vertical concat (vconcat) uses a childHeight signal; horizontal concat uses
+  // childWidth. vega-lite emits exactly one of the two for a concat layout.
+  const isVertical = ctx.signalParams['childWidth'] === undefined && ctx.signalParams['childHeight'] !== undefined
 
   const tmpCtx: EvalContext = { ...ctx, width: cellWidth, height: cellHeight }
   const axisItems: SceneItem[] = []
@@ -940,18 +1007,34 @@ function buildConcatGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup {
     }
   }
 
-  // Determine the per-cell horizontal advance from the y-axis left extent so the
-  // next cell's y-axis clears this cell's content + base spacing.
-  let yAxisExtent = 0
-  for (const ag of axisItems) {
-    for (const it of (ag as SceneGroup).items ?? []) {
-      if ((it as SceneItem).text != null && typeof (it as SceneItem).x === 'number' && (it as SceneItem).x! < 0) {
-        yAxisExtent = Math.max(yAxisExtent, Math.ceil(Math.abs((it as SceneItem).x as number) + TITLE_FONT_SIZE + 0.5))
+  let cellX = 0
+  let cellY = 0
+  if (isVertical) {
+    // Vertical concat stacks cells top-to-bottom. The per-cell vertical advance
+    // must clear the cell's bottom x-axis extent (labels + title below the plot)
+    // plus the base spacing — the vertical analog of the horizontal advance.
+    let xAxisExtent = 0
+    for (const ag of axisItems) {
+      for (const it of (ag as SceneGroup).items ?? []) {
+        if ((it as SceneItem).text != null && typeof (it as SceneItem).y === 'number' && (it as SceneItem).y! > cellHeight) {
+          xAxisExtent = Math.max(xAxisExtent, Math.ceil((it as SceneItem).y! - cellHeight - 0.5))
+        }
       }
     }
+    cellY = idx * (cellHeight + CONCAT_BASE_SPACING + xAxisExtent)
+  } else {
+    // Determine the per-cell horizontal advance from the y-axis left extent so the
+    // next cell's y-axis clears this cell's content + base spacing.
+    let yAxisExtent = 0
+    for (const ag of axisItems) {
+      for (const it of (ag as SceneGroup).items ?? []) {
+        if ((it as SceneItem).text != null && typeof (it as SceneItem).x === 'number' && (it as SceneItem).x! < 0) {
+          yAxisExtent = Math.max(yAxisExtent, Math.ceil(Math.abs((it as SceneItem).x as number) + TITLE_FONT_SIZE + 0.5))
+        }
+      }
+    }
+    cellX = idx * (cellWidth + CONCAT_BASE_SPACING + yAxisExtent)
   }
-  const advance = cellWidth + CONCAT_BASE_SPACING + yAxisExtent
-  const cellX = idx * advance
 
   const nestedItems: SceneItem[] = []
   for (const cm of (mark as any).marks ?? []) {
@@ -968,7 +1051,7 @@ function buildConcatGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup {
       x: 0, y: 0, stroke: '#ddd',
     } as SceneItem],
     width: cellWidth, height: cellHeight,
-    x: cellX, y: 0,
+    x: cellX, y: cellY,
   }
 }
 
