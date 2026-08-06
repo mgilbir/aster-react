@@ -143,6 +143,12 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
       return sequenceRows(t as Record<string, unknown>)
     case 'graticule':
       return graticuleRows(t as Record<string, unknown>)
+    case 'wordcloud':
+      return wordcloudRows(rows, t as Record<string, unknown>, ctx)
+    case 'voronoi':
+      return voronoiRows(rows, t as Record<string, unknown>, ctx)
+    case 'label':
+      return labelRows(rows, t as Record<string, unknown>, ctx)
     case 'identifier':
       return rows
     default:
@@ -173,6 +179,26 @@ function fieldValues(rows: Row[], field: string): number[] {
     if (typeof v === 'number' && Number.isFinite(v)) out.push(v)
   }
   return out
+}
+
+/**
+ * Resolve a `[w, h]` size parameter whose entries may be numbers or signal
+ * references (e.g. `[{signal: "width"}, {signal: "height"}]`). Returns
+ * undefined when the parameter is missing or cannot be resolved.
+ */
+function resolveSizeParam(size: unknown, ctx: TransformContext): [number, number] | undefined {
+  if (!Array.isArray(size) || size.length !== 2) return undefined
+  const resolve = (v: unknown): number | undefined => {
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+    if (v != null && typeof v === 'object' && 'signal' in v) {
+      const sv = ctx.signals[(v as { signal: string }).signal]
+      if (typeof sv === 'number' && Number.isFinite(sv)) return sv
+    }
+    return undefined
+  }
+  const a = resolve(size[0])
+  const b = resolve(size[1])
+  return a !== undefined && b !== undefined ? [a, b] : undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -1929,6 +1955,1348 @@ function packEncloseBasis(B: HierNode[]): HierNode {
     case 3: return packEncloseBasis3(B[0]!, B[1]!, B[2]!)
     default: throw new Error('[aster] pack: bad basis size')
   }
+}
+
+// ---------------------------------------------------------------------------
+// wordcloud (d3-cloud layout, simplified)
+//
+// Vega's wordcloud transform wraps d3-cloud, which needs a 2d canvas to sprite
+// glyphs. In a headless process there is no canvas, so the oracle skips the
+// layout entirely for empty input; this implementation provides a deterministic
+// stand-in that mirrors d3-cloud's structure: words sorted by size descending,
+// placed on an archimedean spiral from the centre with a bounding-box overlap
+// test (using the vega-scenegraph width estimate 0.8 * chars * fontSize, the
+// same estimate vega falls back to when no canvas is available).
+// ---------------------------------------------------------------------------
+
+function wordcloudRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+  const size = resolveSizeParam(t.size, ctx) ?? [500, 500]
+  const as = (t.as as string[] | undefined) ?? ['x', 'y', 'font', 'fontSize', 'fontStyle', 'fontWeight', 'angle']
+  const textField = t.text as string | undefined
+  const font = (t.font as string) ?? 'sans-serif'
+  const fontStyle = (t.fontStyle as string) ?? 'normal'
+  const fontWeight = (t.fontWeight as string) ?? 'normal'
+  const rotate = Number(t.rotate ?? 0)
+  const padding = Number(t.padding ?? 1)
+  const [W, H] = size
+
+  // Font-size accessor: an explicit number, a field reference (`{field}`) or a
+  // string field name; default 14. When the accessor is field-based, vega maps
+  // the field values through a sqrt scale into `fontSizeRange` ([10, 50]).
+  const rawFontSize = t.fontSize
+  const fsize = (d: Row): number => {
+    let v: unknown
+    if (rawFontSize != null && typeof rawFontSize === 'object' && 'field' in rawFontSize) {
+      v = getField(d, (rawFontSize as { field: string }).field)
+    } else if (rawFontSize != null && typeof rawFontSize === 'object' && 'signal' in rawFontSize) {
+      v = ctx.signals[(rawFontSize as { signal: string }).signal]
+    } else if (typeof rawFontSize === 'number') {
+      v = rawFontSize
+    } else if (typeof rawFontSize === 'string') {
+      v = getField(d, rawFontSize)
+    } else {
+      v = 14
+    }
+    return v == null || v === '' ? 14 : Number(v)
+  }
+  const fsizeValues = rows.map(fsize).filter((v) => Number.isFinite(v))
+  const fsizeExtent = fsizeValues.length ? [Math.min(...fsizeValues), Math.max(...fsizeValues)] : undefined
+  const fsizeRange = (t.fontSizeRange as [number, number] | undefined) ?? [10, 50]
+  const scaleFontSize = (v: number): number => {
+    if (!fsizeExtent || fsizeExtent[0] === fsizeExtent[1]) return fsizeRange[0]
+    const t0 = (v - fsizeExtent[0]!) / (fsizeExtent[1]! - fsizeExtent[0]!)
+    return fsizeRange[0] + Math.sqrt(t0) * (fsizeRange[1]! - fsizeRange[0])
+  }
+
+  interface CloudWord {
+    datum: Row
+    text: string
+    size: number
+    w: number
+    h: number
+    x: number
+    y: number
+    placed: boolean
+  }
+
+  // Build + sort words by size descending (d3-cloud's `.sort((a,b) => b.size - a.size)`).
+  const words: CloudWord[] = rows
+    .map((r) => {
+      const s = ~~(scaleFontSize(fsize(r)) + 1e-14)
+      const text = textField ? String(getField(r, textField) ?? '') : ''
+      return {
+        datum: r,
+        text,
+        size: s,
+        // vega-scenegraph `estimateWidth`: 0.8 * chars * fontSize; height ≈ fontSize.
+        w: text.length ? 0.8 * text.length * s : 0,
+        h: s,
+        x: 0,
+        y: 0,
+        placed: false,
+      }
+    })
+    .sort((a, b) => b.size - a.size)
+
+  const cx = W >> 1
+  const cy = H >> 1
+  const placed: CloudWord[] = []
+  const collides = (w: CloudWord): boolean => {
+    const hw = w.w / 2 + padding
+    const hh = w.h / 2 + padding
+    for (const p of placed) {
+      const phw = p.w / 2 + padding
+      const phh = p.h / 2 + padding
+      if (w.x + hw <= p.x - phw || w.x - hw >= p.x + phw || w.y + hh <= p.y - phh || w.y - hh >= p.y + phh) continue
+      return true
+    }
+    return false
+  }
+
+  // Archimedean spiral placement: `[e * (t*.1) * cos(t), t*.1 * sin(t)]` with
+  // e = 1 for a square layout, snapped to whole pixels, clipped to the box.
+  for (const w of words) {
+    const hw = w.w / 2 + padding
+    const hh = w.h / 2 + padding
+    let t = 0
+    for (let attempt = 0; attempt < 10000; attempt++) {
+      const theta = t * 0.1
+      const x = cx + Math.round(theta * Math.cos(theta))
+      const y = cy + Math.round(theta * Math.sin(theta))
+      if (x - hw >= 0 && y - hh >= 0 && x + hw <= W && y + hh <= H) {
+        w.x = x
+        w.y = y
+        if (!collides(w)) {
+          w.placed = true
+          break
+        }
+      }
+      t += 1
+    }
+    if (w.placed) placed.push(w)
+  }
+
+  // Write layout results back onto the input rows. Unplaced words get null
+  // coordinates (vega writes NaN, which serializes to null).
+  const out: Row[] = []
+  for (const r of rows) {
+    const w = words.find((cw) => cw.datum === r)
+    if (w && w.placed) {
+      out.push({
+        ...r,
+        [as[0]!]: w.x,
+        [as[1]!]: w.y,
+        [as[2]!]: font,
+        [as[3]!]: w.size,
+        [as[4]!]: fontStyle,
+        [as[5]!]: fontWeight,
+        [as[6]!]: rotate,
+      })
+    } else {
+      out.push({ ...r, [as[0]!]: null, [as[1]!]: null, [as[3]!]: 0 })
+    }
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// voronoi (d3-delaunay `Delaunay.from(...).voronoi(bounds).cellPolygon(i)` port)
+//
+// The vega `voronoi` transform builds a Delaunay triangulation of the input
+// points and emits, per tuple, an `as` field holding the tuple's Voronoi cell
+// clipped to the `size`/`extent` rectangle as an SVG path. d3-delaunay cannot
+// be imported directly (it is not a dependency of this package), so the
+// algorithm is ported operation-for-operation from delaunator@5 + d3-delaunay@6
+// (orient2d uses the plain double-precision cross product, whose sign matches
+// robust-predicates for coordinates in the double-exact range).
+// ---------------------------------------------------------------------------
+
+const DELAUNATOR_EPSILON = Math.pow(2, -52)
+
+function delaunatorOrient2d(ax: number, ay: number, bx: number, by: number, cx: number, cy: number): number {
+  return (ay - cy) * (bx - cx) - (ax - cx) * (by - cy)
+}
+
+function delaunatorPseudoAngle(dx: number, dy: number): number {
+  const p = dx / (Math.abs(dx) + Math.abs(dy))
+  return (dy > 0 ? 3 - p : 1 + p) / 4
+}
+
+function delaunatorDist(ax: number, ay: number, bx: number, by: number): number {
+  const dx = ax - bx
+  const dy = ay - by
+  return dx * dx + dy * dy
+}
+
+function delaunatorInCircle(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, px: number, py: number): boolean {
+  const dx = ax - px
+  const dy = ay - py
+  const ex = bx - px
+  const ey = by - py
+  const fx = cx - px
+  const fy = cy - py
+  const ap = dx * dx + dy * dy
+  const bp = ex * ex + ey * ey
+  const cp = fx * fx + fy * fy
+  return dx * (ey * cp - bp * fy) - dy * (ex * cp - bp * fx) + ap * (ex * fy - ey * fx) < 0
+}
+
+function delaunatorCircumradius(ax: number, ay: number, bx: number, by: number, cx: number, cy: number): number {
+  const dx = bx - ax
+  const dy = by - ay
+  const ex = cx - ax
+  const ey = cy - ay
+  const bl = dx * dx + dy * dy
+  const cl = ex * ex + ey * ey
+  const d = 0.5 / (dx * ey - dy * ex)
+  const x = (ey * bl - dy * cl) * d
+  const y = (dx * cl - ex * bl) * d
+  return x * x + y * y
+}
+
+function delaunatorCircumcenter(ax: number, ay: number, bx: number, by: number, cx: number, cy: number): { x: number; y: number } {
+  const dx = bx - ax
+  const dy = by - ay
+  const ex = cx - ax
+  const ey = cy - ay
+  const bl = dx * dx + dy * dy
+  const cl = ex * ex + ey * ey
+  const d = 0.5 / (dx * ey - dy * ex)
+  return { x: ax + (ey * bl - dy * cl) * d, y: ay + (dx * cl - ex * bl) * d }
+}
+
+function delaunatorQuicksort(ids: Uint32Array, dists: Float64Array, left: number, right: number): void {
+  if (right - left <= 20) {
+    for (let i = left + 1; i <= right; i++) {
+      const temp = ids[i]!
+      const tempDist = dists[temp]!
+      let j = i - 1
+      while (j >= left && (dists[ids[j]!] as number) > tempDist) ids[j + 1] = ids[j--]!
+      ids[j + 1] = temp
+    }
+  } else {
+    const median = (left + right) >> 1
+    let i = left + 1
+    let j = right
+    delaunatorSwap(ids, median, i)
+    if ((dists[ids[left]!] as number) > (dists[ids[right]!] as number)) delaunatorSwap(ids, left, right)
+    if ((dists[ids[i]!] as number) > (dists[ids[right]!] as number)) delaunatorSwap(ids, i, right)
+    if ((dists[ids[left]!] as number) > (dists[ids[i]!] as number)) delaunatorSwap(ids, left, i)
+
+    const temp = ids[i]!
+    const tempDist = dists[temp]!
+    while (true) {
+      do i++
+      while ((dists[ids[i]!] as number) < tempDist)
+      do j--
+      while ((dists[ids[j]!] as number) > tempDist)
+      if (j < i) break
+      delaunatorSwap(ids, i, j)
+    }
+    ids[left + 1] = ids[j]!
+    ids[j] = temp
+
+    if (right - i + 1 >= j - left) {
+      delaunatorQuicksort(ids, dists, i, right)
+      delaunatorQuicksort(ids, dists, left, j - 1)
+    } else {
+      delaunatorQuicksort(ids, dists, left, j - 1)
+      delaunatorQuicksort(ids, dists, i, right)
+    }
+  }
+}
+
+function delaunatorSwap(arr: Uint32Array, i: number, j: number): void {
+  const tmp = arr[i]!
+  arr[i] = arr[j]!
+  arr[j] = tmp
+}
+
+/** Port of delaunator@5's Delaunator (Bowyer-Watson incremental triangulation). */
+class DelaunatorPort {
+  coords: Float64Array
+  _triangles: Uint32Array
+  _halfedges: Int32Array
+  _hashSize: number
+  _hullPrev: Uint32Array
+  _hullNext: Uint32Array
+  _hullTri: Uint32Array
+  _hullHash: Int32Array
+  _ids: Uint32Array
+  _dists: Float64Array
+  trianglesLen = 0
+  _cx = 0
+  _cy = 0
+  _hullStart = 0
+  hull: Uint32Array
+  triangles: Uint32Array
+  halfedges: Int32Array
+
+  constructor(coords: Float64Array) {
+    this.coords = coords
+    const n = coords.length >> 1
+    const maxTriangles = Math.max(2 * n - 5, 0)
+    this._triangles = new Uint32Array(maxTriangles * 3)
+    this._halfedges = new Int32Array(maxTriangles * 3)
+    this._hashSize = Math.ceil(Math.sqrt(n))
+    this._hullPrev = new Uint32Array(n)
+    this._hullNext = new Uint32Array(n)
+    this._hullTri = new Uint32Array(n)
+    this._hullHash = new Int32Array(this._hashSize)
+    this._ids = new Uint32Array(n)
+    this._dists = new Float64Array(n)
+    this.hull = this._triangles
+    this.triangles = this._triangles
+    this.halfedges = this._halfedges
+    this.update()
+  }
+
+  update(): void {
+    const coords = this.coords
+    const hullPrev = this._hullPrev
+    const hullNext = this._hullNext
+    const hullTri = this._hullTri
+    const hullHash = this._hullHash
+    const n = coords.length >> 1
+
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (let i = 0; i < n; i++) {
+      const x = coords[2 * i]!
+      const y = coords[2 * i + 1]!
+      if (x < minX) minX = x
+      if (y < minY) minY = y
+      if (x > maxX) maxX = x
+      if (y > maxY) maxY = y
+      this._ids[i] = i
+    }
+    const cx = (minX + maxX) / 2
+    const cy = (minY + maxY) / 2
+
+    let i0 = 0
+    let i1 = 0
+    let i2 = 0
+
+    for (let i = 0, minDist = Infinity; i < n; i++) {
+      const d = delaunatorDist(cx, cy, coords[2 * i]!, coords[2 * i + 1]!)
+      if (d < minDist) {
+        i0 = i
+        minDist = d
+      }
+    }
+    const i0x = coords[2 * i0]!
+    const i0y = coords[2 * i0 + 1]!
+
+    for (let i = 0, minDist = Infinity; i < n; i++) {
+      if (i === i0) continue
+      const d = delaunatorDist(i0x, i0y, coords[2 * i]!, coords[2 * i + 1]!)
+      if (d < minDist && d > 0) {
+        i1 = i
+        minDist = d
+      }
+    }
+    let i1x = coords[2 * i1]!
+    let i1y = coords[2 * i1 + 1]!
+
+    let minRadius = Infinity
+    for (let i = 0; i < n; i++) {
+      if (i === i0 || i === i1) continue
+      const r = delaunatorCircumradius(i0x, i0y, i1x, i1y, coords[2 * i]!, coords[2 * i + 1]!)
+      if (r < minRadius) {
+        i2 = i
+        minRadius = r
+      }
+    }
+    let i2x = coords[2 * i2]!
+    let i2y = coords[2 * i2 + 1]!
+
+    if (minRadius === Infinity) {
+      for (let i = 0; i < n; i++) {
+        this._dists[i] = (coords[2 * i]! - coords[0]!) || (coords[2 * i + 1]! - coords[1]!)
+      }
+      delaunatorQuicksort(this._ids, this._dists, 0, n - 1)
+      const hull = new Uint32Array(n)
+      let j = 0
+      for (let i = 0, d0 = -Infinity; i < n; i++) {
+        const id = this._ids[i]!
+        const d = this._dists[id]!
+        if (d > d0) {
+          hull[j++] = id
+          d0 = d
+        }
+      }
+      this.hull = hull.subarray(0, j)
+      this.triangles = new Uint32Array(0)
+      this.halfedges = new Int32Array(0)
+      return
+    }
+
+    if (delaunatorOrient2d(i0x, i0y, i1x, i1y, i2x, i2y) < 0) {
+      const i = i1
+      const x = i1x
+      const y = i1y
+      i1 = i2
+      i1x = i2x
+      i1y = i2y
+      i2 = i
+      i2x = x
+      i2y = y
+    }
+
+    const center = delaunatorCircumcenter(i0x, i0y, i1x, i1y, i2x, i2y)
+    this._cx = center.x
+    this._cy = center.y
+
+    for (let i = 0; i < n; i++) {
+      this._dists[i] = delaunatorDist(coords[2 * i]!, coords[2 * i + 1]!, center.x, center.y)
+    }
+    delaunatorQuicksort(this._ids, this._dists, 0, n - 1)
+
+    this._hullStart = i0
+    let hullSize = 3
+
+    hullNext[i0] = hullPrev[i2] = i1
+    hullNext[i1] = hullPrev[i0] = i2
+    hullNext[i2] = hullPrev[i1] = i0
+
+    hullTri[i0] = 0
+    hullTri[i1] = 1
+    hullTri[i2] = 2
+
+    hullHash.fill(-1)
+    hullHash[this._hashKey(i0x, i0y)] = i0
+    hullHash[this._hashKey(i1x, i1y)] = i1
+    hullHash[this._hashKey(i2x, i2y)] = i2
+
+    this.trianglesLen = 0
+    this._addTriangle(i0, i1, i2, -1, -1, -1)
+
+    for (let k = 0, xp = 0, yp = 0; k < this._ids.length; k++) {
+      const i = this._ids[k]!
+      const x = coords[2 * i]!
+      const y = coords[2 * i + 1]!
+
+      if (k > 0 && Math.abs(x - xp) <= DELAUNATOR_EPSILON && Math.abs(y - yp) <= DELAUNATOR_EPSILON) continue
+      xp = x
+      yp = y
+
+      if (i === i0 || i === i1 || i === i2) continue
+
+      let start = 0
+      for (let j = 0, key = this._hashKey(x, y); j < this._hashSize; j++) {
+        start = hullHash[(key + j) % this._hashSize]!
+        if (start !== -1 && start !== hullNext[start]) break
+      }
+
+      start = hullPrev[start]!
+      let e = start
+      let q: number
+      while ((q = hullNext[e]!), delaunatorOrient2d(x, y, coords[2 * e]!, coords[2 * e + 1]!, coords[2 * q]!, coords[2 * q + 1]!) >= 0) {
+        e = q
+        if (e === start) {
+          e = -1
+          break
+        }
+      }
+      if (e === -1) continue
+
+      let t = this._addTriangle(e, i, hullNext[e]!, -1, -1, hullTri[e]!)
+
+      hullTri[i] = this._legalize(t + 2)
+      hullTri[e] = t
+      hullSize++
+
+      let nEdge = hullNext[e]!
+      while ((q = hullNext[nEdge]!), delaunatorOrient2d(x, y, coords[2 * nEdge]!, coords[2 * nEdge + 1]!, coords[2 * q]!, coords[2 * q + 1]!) < 0) {
+        t = this._addTriangle(nEdge, i, q, hullTri[i]!, -1, hullTri[nEdge]!)
+        hullTri[i] = this._legalize(t + 2)
+        hullNext[nEdge] = nEdge
+        hullSize--
+        nEdge = q
+      }
+
+      if (e === start) {
+        while ((q = hullPrev[e]!), delaunatorOrient2d(x, y, coords[2 * q]!, coords[2 * q + 1]!, coords[2 * e]!, coords[2 * e + 1]!) < 0) {
+          t = this._addTriangle(q, i, e, -1, hullTri[e]!, hullTri[q]!)
+          this._legalize(t + 2)
+          hullTri[q] = t
+          hullNext[e] = e
+          hullSize--
+          e = q
+        }
+      }
+
+      this._hullStart = hullPrev[i] = e
+      hullNext[e] = hullPrev[nEdge] = i
+      hullNext[i] = nEdge
+
+      hullHash[this._hashKey(x, y)] = i
+      hullHash[this._hashKey(coords[2 * e]!, coords[2 * e + 1]!)] = e
+    }
+
+    this.hull = new Uint32Array(hullSize)
+    for (let i = 0, e = this._hullStart; i < hullSize; i++) {
+      this.hull[i] = e
+      e = hullNext[e]!
+    }
+
+    this.triangles = this._triangles.subarray(0, this.trianglesLen)
+    this.halfedges = this._halfedges.subarray(0, this.trianglesLen)
+  }
+
+  _hashKey(x: number, y: number): number {
+    return Math.floor(delaunatorPseudoAngle(x - this._cx, y - this._cy) * this._hashSize) % this._hashSize
+  }
+
+  _legalize(a: number): number {
+    const triangles = this._triangles
+    const halfedges = this._halfedges
+    const coords = this.coords
+    const stack: number[] = []
+
+    let i = 0
+    let ar = 0
+    while (true) {
+      const b = halfedges[a]!
+
+      const a0 = a - (a % 3)
+      ar = a0 + ((a + 2) % 3)
+
+      if (b === -1) {
+        if (i === 0) break
+        a = stack[--i]!
+        continue
+      }
+
+      const b0 = b - (b % 3)
+      const al = a0 + ((a + 1) % 3)
+      const bl = b0 + ((b + 2) % 3)
+
+      const p0 = triangles[ar]!
+      const pr = triangles[a]!
+      const pl = triangles[al]!
+      const p1 = triangles[bl]!
+
+      const illegal = delaunatorInCircle(
+        coords[2 * p0]!, coords[2 * p0 + 1]!,
+        coords[2 * pr]!, coords[2 * pr + 1]!,
+        coords[2 * pl]!, coords[2 * pl + 1]!,
+        coords[2 * p1]!, coords[2 * p1 + 1]!,
+      )
+
+      if (illegal) {
+        triangles[a] = p1
+        triangles[b] = p0
+
+        const hbl = halfedges[bl]!
+
+        if (hbl === -1) {
+          let e = this._hullStart
+          do {
+            if (this._hullTri[e] === bl) {
+              this._hullTri[e] = a
+              break
+            }
+            e = this._hullPrev[e]!
+          } while (e !== this._hullStart)
+        }
+        this._link(a, hbl)
+        this._link(b, halfedges[ar]!)
+        this._link(ar, bl)
+
+        const br = b0 + ((b + 1) % 3)
+        stack[i++] = br
+      } else {
+        if (i === 0) break
+        a = stack[--i]!
+      }
+    }
+
+    return ar
+  }
+
+  _link(a: number, b: number): void {
+    this._halfedges[a] = b
+    if (b !== -1) this._halfedges[b] = a
+  }
+
+  _addTriangle(i0: number, i1: number, i2: number, a: number, b: number, c: number): number {
+    const t = this.trianglesLen
+
+    this._triangles[t] = i0
+    this._triangles[t + 1] = i1
+    this._triangles[t + 2] = i2
+
+    this._link(t, a)
+    this._link(t + 1, b)
+    this._link(t + 2, c)
+
+    this.trianglesLen += 3
+
+    return t
+  }
+}
+
+interface DelaunayPort {
+  points: Float64Array
+  inedges: Int32Array
+  _hullIndex: Int32Array
+  halfedges: Int32Array
+  hull: Uint32Array
+  triangles: Uint32Array
+  collinear?: Int32Array
+}
+
+/** `Delaunay.from(rows, xField, yField)` + `Delaunay._init` (d3-delaunay@6). */
+function buildDelaunay(rows: Row[], xField: string, yField: string): DelaunayPort {
+  const n = rows.length
+  const coords = new Float64Array(n * 2)
+  for (let i = 0; i < n; i++) {
+    coords[i * 2] = Number(rows[i]![xField])
+    coords[i * 2 + 1] = Number(rows[i]![yField])
+  }
+  const del = new DelaunatorPort(coords)
+  const d: DelaunayPort = {
+    points: del.coords,
+    inedges: new Int32Array(n),
+    _hullIndex: new Int32Array(n),
+    halfedges: del.halfedges,
+    hull: del.hull,
+    triangles: del.triangles,
+  }
+
+  // Delaunay._init: collinear detection + jitter, then inedges / hullIndex.
+  const collinearCheck = (): boolean => {
+    const { triangles, points } = d
+    for (let i = 0; i < triangles.length; i += 3) {
+      const a = 2 * triangles[i]!
+      const b = 2 * triangles[i + 1]!
+      const c = 2 * triangles[i + 2]!
+      const cross =
+        (points[c]! - points[a]!) * (points[b + 1]! - points[a + 1]!) -
+        (points[b]! - points[a]!) * (points[c + 1]! - points[a + 1]!)
+      if (cross > 1e-10) return false
+    }
+    return true
+  }
+
+  if (d.hull.length > 2 && collinearCheck()) {
+    const collinear = Int32Array.from({ length: n }, (_, i) => i).sort(
+      (i, j) => d.points[2 * i]! - d.points[2 * j]! || d.points[2 * i + 1]! - d.points[2 * j + 1]!,
+    )
+    const e = collinear[0]!
+    const f = collinear[collinear.length - 1]!
+    const r = 1e-8 * Math.hypot(d.points[2 * f + 1]! - d.points[2 * e + 1]!, d.points[2 * f]! - d.points[2 * e]!)
+    for (let i = 0; i < n; i++) {
+      const x = d.points[2 * i]!
+      const y = d.points[2 * i + 1]!
+      const p: [number, number] = [x + Math.sin(x + y) * r, y + Math.cos(x - y) * r]
+      d.points[2 * i] = p[0]
+      d.points[2 * i + 1] = p[1]
+    }
+    const del2 = new DelaunatorPort(d.points)
+    d.halfedges = del2.halfedges
+    d.hull = del2.hull
+    d.triangles = del2.triangles
+    d.collinear = collinear
+  } else {
+    d.collinear = undefined
+  }
+
+  const inedges = d.inedges.fill(-1)
+  const hullIndex = d._hullIndex.fill(-1)
+  const { halfedges, hull, triangles } = d
+
+  for (let e = 0, ne = halfedges.length; e < ne; ++e) {
+    const p = triangles[e % 3 === 2 ? e - 2 : e + 1]!
+    if (halfedges[e] === -1 || inedges[p] === -1) inedges[p] = e
+  }
+  for (let i = 0, nh = hull.length; i < nh; ++i) {
+    hullIndex[hull[i]!] = i
+  }
+
+  if (hull.length <= 2 && hull.length > 0) {
+    d.triangles = new Int32Array(3).fill(-1) as unknown as Uint32Array
+    d.halfedges = new Int32Array(3).fill(-1)
+    d.triangles[0] = hull[0]!
+    inedges[hull[0]!] = 1
+    if (hull.length === 2) {
+      inedges[hull[1]!] = 0
+      d.triangles[1] = hull[1]!
+      d.triangles[2] = hull[1]!
+    }
+  }
+
+  return d
+}
+
+interface VoronoiPort {
+  delaunay: DelaunayPort
+  circumcenters: Float64Array
+  vectors: Float64Array
+  xmin: number
+  ymin: number
+  xmax: number
+  ymax: number
+}
+
+/** `delaunay.voronoi([xmin, ymin, xmax, ymax])` + Voronoi._init (d3-delaunay@6). */
+function buildVoronoi(delaunay: DelaunayPort, bounds: [number, number, number, number]): VoronoiPort {
+  const v: VoronoiPort = {
+    delaunay,
+    circumcenters: new Float64Array(delaunay.points.length * 2),
+    vectors: new Float64Array(delaunay.points.length * 2),
+    xmin: bounds[0],
+    ymin: bounds[1],
+    xmax: bounds[2],
+    ymax: bounds[3],
+  }
+  const { points, hull, triangles } = delaunay
+  const vectors = v.vectors
+  let bx: number | undefined
+  let by: number | undefined
+
+  const circumcenters = (v.circumcenters = v.circumcenters.subarray(0, (triangles.length / 3) * 2))
+  for (let i = 0, j = 0, n = triangles.length; i < n; i += 3, j += 2) {
+    const t1 = triangles[i]! * 2
+    const t2 = triangles[i + 1]! * 2
+    const t3 = triangles[i + 2]! * 2
+    const x1 = points[t1]!
+    const y1 = points[t1 + 1]!
+    const x2 = points[t2]!
+    const y2 = points[t2 + 1]!
+    const x3 = points[t3]!
+    const y3 = points[t3 + 1]!
+
+    const dx = x2 - x1
+    const dy = y2 - y1
+    const ex = x3 - x1
+    const ey = y3 - y1
+    const ab = (dx * ey - dy * ex) * 2
+
+    let x: number
+    let y: number
+    if (Math.abs(ab) < 1e-9) {
+      if (bx === undefined || by === undefined) {
+        bx = 0
+        by = 0
+        for (const i of hull) {
+          bx += points[i * 2]!
+          by += points[i * 2 + 1]!
+        }
+        bx /= hull.length
+        by /= hull.length
+      }
+      const a = 1e9 * Math.sign((bx - x1) * ey - (by - y1) * ex)
+      x = (x1 + x3) / 2 - a * ey
+      y = (y1 + y3) / 2 + a * ex
+    } else {
+      const d = 1 / ab
+      const bl = dx * dx + dy * dy
+      const cl = ex * ex + ey * ey
+      x = x1 + (ey * bl - dy * cl) * d
+      y = y1 + (dx * cl - ex * bl) * d
+    }
+    circumcenters[j] = x
+    circumcenters[j + 1] = y
+  }
+
+  let h = hull[hull.length - 1]!
+  let p0: number
+  let p1 = h * 4
+  let x0: number
+  let x1 = points[2 * h]!
+  let y0: number
+  let y1 = points[2 * h + 1]!
+  vectors.fill(0)
+  for (let i = 0; i < hull.length; ++i) {
+    h = hull[i]!
+    p0 = p1
+    x0 = x1
+    y0 = y1
+    p1 = h * 4
+    x1 = points[2 * h]!
+    y1 = points[2 * h + 1]!
+    vectors[p0 + 2] = vectors[p1] = y0 - y1
+    vectors[p0 + 3] = vectors[p1 + 1] = x1 - x0
+  }
+
+  return v
+}
+
+/** d3-delaunay `Voronoi._regioncode`. */
+function voronoiRegioncode(v: VoronoiPort, x: number, y: number): number {
+  return (x < v.xmin ? 0b0001 : x > v.xmax ? 0b0010 : 0b0000) | (y < v.ymin ? 0b0100 : y > v.ymax ? 0b1000 : 0b0000)
+}
+
+/** d3-delaunay `Voronoi._edgecode`. */
+function voronoiEdgecode(v: VoronoiPort, x: number, y: number): number {
+  return (x === v.xmin ? 0b0001 : x === v.xmax ? 0b0010 : 0b0000) | (y === v.ymin ? 0b0100 : y === v.ymax ? 0b1000 : 0b0000)
+}
+
+/** d3-delaunay `Voronoi._clipSegment`. */
+function voronoiClipSegment(v: VoronoiPort, x0: number, y0: number, x1: number, y1: number, c0: number, c1: number): [number, number, number, number] | null {
+  const flip = c0 < c1
+  if (flip) {
+    const t = [x1, y1, x0, y0, c1, c0]
+    x0 = t[0]!
+    y0 = t[1]!
+    x1 = t[2]!
+    y1 = t[3]!
+    c0 = t[4]!
+    c1 = t[5]!
+  }
+  while (true) {
+    if (c0 === 0 && c1 === 0) return flip ? [x1, y1, x0, y0] : [x0, y0, x1, y1]
+    if (c0 & c1) return null
+    let x = 0
+    let y = 0
+    let c = c0 || c1
+    if (c & 0b1000) {
+      x = x0 + ((x1 - x0) * (v.ymax - y0)) / (y1 - y0)
+      y = v.ymax
+    } else if (c & 0b0100) {
+      x = x0 + ((x1 - x0) * (v.ymin - y0)) / (y1 - y0)
+      y = v.ymin
+    } else if (c & 0b0010) {
+      y = y0 + ((y1 - y0) * (v.xmax - x0)) / (x1 - x0)
+      x = v.xmax
+    } else {
+      y = y0 + ((y1 - y0) * (v.xmin - x0)) / (x1 - x0)
+      x = v.xmin
+    }
+    if (c0) {
+      x0 = x
+      y0 = y
+      c0 = voronoiRegioncode(v, x0, y0)
+    } else {
+      x1 = x
+      y1 = y
+      c1 = voronoiRegioncode(v, x1, y1)
+    }
+  }
+}
+
+/** d3-delaunay `Voronoi._cell(i)`: the (unclipped) circumcenter polygon. */
+function voronoiCell(v: VoronoiPort, i: number): number[] | null {
+  const { circumcenters } = v
+  const { inedges, halfedges, triangles } = v.delaunay
+  const e0 = inedges[i]!
+  if (e0 === -1) return null
+  const points: number[] = []
+  let e = e0
+  do {
+    const t = Math.floor(e / 3)
+    points.push(circumcenters[t * 2]!, circumcenters[t * 2 + 1]!)
+    e = e % 3 === 2 ? e - 2 : e + 1
+    if (triangles[e]! !== i) break
+    e = halfedges[e]!
+  } while (e !== e0 && e !== -1)
+  return points
+}
+
+/** d3-delaunay `Voronoi._edge(i, e0, e1, P, j)`: insert rectangle corners. */
+function voronoiEdge(v: VoronoiPort, i: number, e0: number, e1: number, P: number[], j: number): number {
+  while (e0 !== e1) {
+    let x = 0
+    let y = 0
+    switch (e0) {
+      case 0b0101:
+        e0 = 0b0100
+        continue
+      case 0b0100:
+        e0 = 0b0110
+        x = v.xmax
+        y = v.ymin
+        break
+      case 0b0110:
+        e0 = 0b0010
+        continue
+      case 0b0010:
+        e0 = 0b1010
+        x = v.xmax
+        y = v.ymax
+        break
+      case 0b1010:
+        e0 = 0b1000
+        continue
+      case 0b1000:
+        e0 = 0b1001
+        x = v.xmin
+        y = v.ymax
+        break
+      case 0b1001:
+        e0 = 0b0001
+        continue
+      case 0b0001:
+        e0 = 0b0101
+        x = v.xmin
+        y = v.ymin
+        break
+    }
+    if ((P[j] !== x || P[j + 1] !== y) && voronoiContains(v, i, x, y)) {
+      P.splice(j, 0, x, y)
+      j += 2
+    }
+  }
+  return j
+}
+
+/** d3-delaunay `Voronoi._project(x0, y0, vx, vy)`. */
+function voronoiProject(v: VoronoiPort, x0: number, y0: number, vx: number, vy: number): [number, number] | null {
+  let t = Infinity
+  let x = 0
+  let y = 0
+  let c: number
+  if (vy < 0) {
+    if (y0 <= v.ymin) return null
+    if ((c = (v.ymin - y0) / vy) < t) {
+      y = v.ymin
+      x = x0 + (t = c) * vx
+    }
+  } else if (vy > 0) {
+    if (y0 >= v.ymax) return null
+    if ((c = (v.ymax - y0) / vy) < t) {
+      y = v.ymax
+      x = x0 + (t = c) * vx
+    }
+  }
+  if (vx > 0) {
+    if (x0 >= v.xmax) return null
+    if ((c = (v.xmax - x0) / vx) < t) {
+      x = v.xmax
+      y = y0 + (t = c) * vy
+    }
+  } else if (vx < 0) {
+    if (x0 <= v.xmin) return null
+    if ((c = (v.xmin - x0) / vx) < t) {
+      x = v.xmin
+      y = y0 + (t = c) * vy
+    }
+  }
+  return [x, y]
+}
+
+/** d3-delaunay `Voronoi._clipFinite(i, points)`. */
+function voronoiClipFinite(v: VoronoiPort, i: number, points: number[]): number[] | null {
+  const n = points.length
+  let P: number[] | null = null
+  let x0 = 0
+  let y0 = 0
+  let x1 = points[n - 2]!
+  let y1 = points[n - 1]!
+  let c0 = 0
+  let c1 = voronoiRegioncode(v, x1, y1)
+  let e0 = 0
+  let e1 = 0
+  for (let j = 0; j < n; j += 2) {
+    x0 = x1
+    y0 = y1
+    x1 = points[j]!
+    y1 = points[j + 1]!
+    c0 = c1
+    c1 = voronoiRegioncode(v, x1, y1)
+    if (c0 === 0 && c1 === 0) {
+      e0 = e1
+      e1 = 0
+      if (P) P.push(x1, y1)
+      else P = [x1, y1]
+    } else {
+      let S: [number, number, number, number] | null
+      let sx0 = 0
+      let sy0 = 0
+      let sx1 = 0
+      let sy1 = 0
+      if (c0 === 0) {
+        S = voronoiClipSegment(v, x0, y0, x1, y1, c0, c1)
+        if (S === null) continue
+        sx0 = S[0]
+        sy0 = S[1]
+        sx1 = S[2]
+        sy1 = S[3]
+      } else {
+        S = voronoiClipSegment(v, x1, y1, x0, y0, c1, c0)
+        if (S === null) continue
+        sx1 = S[0]
+        sy1 = S[1]
+        sx0 = S[2]
+        sy0 = S[3]
+        e0 = e1
+        e1 = voronoiEdgecode(v, sx0, sy0)
+        if (P && e0 && e1) voronoiEdge(v, i, e0, e1, P, P.length)
+        if (P) P.push(sx0, sy0)
+        else P = [sx0, sy0]
+      }
+      e0 = e1
+      e1 = voronoiEdgecode(v, sx1, sy1)
+      if (e0 && e1) voronoiEdge(v, i, e0, e1, P!, P!.length)
+      if (P) P.push(sx1, sy1)
+      else P = [sx1, sy1]
+    }
+  }
+  if (P) {
+    e0 = e1
+    e1 = voronoiEdgecode(v, P[0]!, P[1]!)
+    if (e0 && e1) voronoiEdge(v, i, e0, e1, P, P.length)
+  } else if (voronoiContains(v, i, (v.xmin + v.xmax) / 2, (v.ymin + v.ymax) / 2)) {
+    return [v.xmax, v.ymin, v.xmax, v.ymax, v.xmin, v.ymax, v.xmin, v.ymin]
+  }
+  return P
+}
+
+/** d3-delaunay `Voronoi._clipInfinite(i, points, vx0, vy0, vxn, vyn)`. */
+function voronoiClipInfinite(v: VoronoiPort, i: number, points: number[], vx0: number, vy0: number, vxn: number, vyn: number): number[] | null {
+  let P: number[] | null = Array.from(points)
+  let p: [number, number] | null
+  if ((p = voronoiProject(v, P[0]!, P[1]!, vx0, vy0))) P.unshift(p[0], p[1])
+  if ((p = voronoiProject(v, P[P.length - 2]!, P[P.length - 1]!, vxn, vyn))) P.push(p[0], p[1])
+  if ((P = voronoiClipFinite(v, i, P))) {
+    for (let j = 0, n = P.length, c0: number, c1 = voronoiEdgecode(v, P[n - 2]!, P[n - 1]!); j < n; j += 2) {
+      c0 = c1
+      c1 = voronoiEdgecode(v, P[j]!, P[j + 1]!)
+      if (c0 && c1) {
+        j = voronoiEdge(v, i, c0, c1, P, j)
+        n = P.length
+      }
+    }
+  } else if (voronoiContains(v, i, (v.xmin + v.xmax) / 2, (v.ymin + v.ymax) / 2)) {
+    P = [v.xmin, v.ymin, v.xmax, v.ymin, v.xmax, v.ymax, v.xmin, v.ymax]
+  }
+  return P
+}
+
+/** d3-delaunay `Voronoi._simplify(P)`. */
+function voronoiSimplify(P: number[] | null): number[] | null {
+  if (P && P.length > 4) {
+    for (let i = 0; i < P.length; i += 2) {
+      const j = (i + 2) % P.length
+      const k = (i + 4) % P.length
+      if ((P[i] === P[j] && P[j] === P[k]) || (P[i + 1] === P[j + 1] && P[j + 1] === P[k + 1])) {
+        P.splice(j, 2)
+        i -= 2
+      }
+    }
+    if (!P.length) P = null
+  }
+  return P
+}
+
+/** d3-delaunay `Voronoi.contains(i, x, y)` via `Delaunay._step`. */
+function voronoiContains(v: VoronoiPort, i: number, x: number, y: number): boolean {
+  return delaunayStep(v.delaunay, i, x, y) === i
+}
+
+/** d3-delaunay `Delaunay._step(i, x, y)`. */
+function delaunayStep(d: DelaunayPort, i: number, x: number, y: number): number {
+  const { inedges, hull, _hullIndex, halfedges, triangles, points } = d
+  if (inedges[i] === -1 || !points.length) return (i + 1) % (points.length >> 1)
+  let c = i
+  let dc = Math.pow(x - points[i * 2]!, 2) + Math.pow(y - points[i * 2 + 1]!, 2)
+  const e0 = inedges[i]!
+  let e = e0
+  do {
+    const t = triangles[e]!
+    const dt = Math.pow(x - points[t * 2]!, 2) + Math.pow(y - points[t * 2 + 1]!, 2)
+    if (dt < dc) {
+      dc = dt
+      c = t
+    }
+    e = e % 3 === 2 ? e - 2 : e + 1
+    if (triangles[e] !== i) break
+    e = halfedges[e]!
+    if (e === -1) {
+      e = hull[(_hullIndex[i]! + 1) % hull.length]!
+      if (e !== t) {
+        if (Math.pow(x - points[e * 2]!, 2) + Math.pow(y - points[e * 2 + 1]!, 2) < dc) return e
+      }
+      break
+    }
+  } while (e !== e0)
+  return c
+}
+
+/** d3-delaunay `Voronoi._clip(i)` → flat `[x0, y0, x1, y1, ...]` array. */
+function voronoiClip(v: VoronoiPort, i: number): number[] | null {
+  if (i === 0 && v.delaunay.hull.length === 1) {
+    return [v.xmax, v.ymin, v.xmax, v.ymax, v.xmin, v.ymax, v.xmin, v.ymin]
+  }
+  const points = voronoiCell(v, i)
+  if (points === null) return null
+  const { vectors } = v
+  const vv = i * 4
+  return voronoiSimplify(
+    vectors[vv] || vectors[vv + 1]
+      ? voronoiClipInfinite(v, i, points, vectors[vv]!, vectors[vv + 1]!, vectors[vv + 2]!, vectors[vv + 3]!)
+      : voronoiClipFinite(v, i, points),
+  )
+}
+
+/**
+ * d3-delaunay `Voronoi.renderCell` + vega's `toPathString`: build the cell
+ * polygon (omitting duplicate vertices and the closing point) and serialize it
+ * as an SVG path `M…L…L…Z`.
+ */
+function voronoiCellPath(v: VoronoiPort, i: number): string | null {
+  const clipped = voronoiClip(v, i)
+  if (clipped === null || clipped.length === 0) return null
+  // renderCell: drop consecutive duplicate vertices, closePath appends the
+  // first point (stripped by toPathString).
+  const pairs: Array<[number, number]> = []
+  let n = clipped.length
+  while (clipped[0] === clipped[n - 2] && clipped[1] === clipped[n - 1] && n > 1) n -= 2
+  for (let k = 2; k < n; k += 2) {
+    if (clipped[k] !== clipped[k - 2] || clipped[k + 1] !== clipped[k - 1]) {
+      pairs.push([clipped[k]!, clipped[k + 1]!])
+    }
+  }
+  const first: [number, number] = [clipped[0]!, clipped[1]!]
+  if (pairs.length === 0) return null
+  const last = pairs[pairs.length - 1]!
+  if (last[0] === first[0] && last[1] === first[1]) pairs.pop()
+  if (pairs.length === 0) return null
+  return 'M' + first.join(',') + pairs.map((p) => 'L' + p.join(',')).join('') + 'Z'
+}
+
+/** The vega `voronoi` transform: Delaunay triangulation → clipped cell paths. */
+function voronoiRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+  const as = (t.as as string | undefined) ?? 'path'
+  const xField = t.x as string
+  const yField = t.y as string
+  const size = resolveSizeParam(t.size, ctx)
+  let bounds: [number, number, number, number]
+  if (size) {
+    bounds = [0, 0, size[0], size[1]]
+  } else if (Array.isArray(t.extent) && t.extent.length === 2) {
+    const e = t.extent as [[number, number], [number, number]]
+    bounds = [e[0][0], e[0][1], e[1][0], e[1][1]]
+  } else {
+    bounds = [-1e5, -1e5, 1e5, 1e5]
+  }
+
+  // Nothing to do if no data (matches vega's early return).
+  if (!rows.length) return rows
+
+  const delaunay = buildDelaunay(rows, xField, yField)
+  const voronoi = buildVoronoi(delaunay, bounds)
+  return rows.map((r, i) => {
+    const clipped = voronoiClip(voronoi, i)
+    const isPoint = clipped !== null && clipped.length === 4 && clipped[0] === clipped[2] && clipped[1] === clipped[3]
+    const path = isPoint ? null : voronoiCellPath(voronoi, i)
+    return { ...r, [as]: path }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// label (vega-label, plain-data path)
+//
+// The vega `label` transform places each datum's text label relative to its
+// base-mark boundary. For plain data tuples (no mark context — `marktype` is
+// undefined) the boundary is the tuple's own (x, y), and labels are placed
+// anchor-by-anchor (default order starts top-left with offset 1) into a
+// coarse bitmap used for overlap detection. This port covers exactly that
+// path (the mark-based path needs a canvas and is not reachable in a headless
+// process). Output fields default to [x, y, opacity, align, baseline].
+// ---------------------------------------------------------------------------
+
+const LABEL_ANCHOR_CODE: Record<string, number> = {
+  'top-left': 0x0,
+  top: 0x1,
+  'top-right': 0x2,
+  left: 0x4,
+  middle: 0x5,
+  right: 0x6,
+  'bottom-left': 0x8,
+  bottom: 0x9,
+  'bottom-right': 0xa,
+}
+
+const LABEL_ALIGNS = ['right', 'center', 'left']
+const LABEL_BASELINES = ['bottom', 'middle', 'top']
+
+/** Row-major bit array (vega-label `util/Bitmap.js`). */
+function labelBitmap(w: number, h: number) {
+  const SIZE = 32
+  const RIGHT0 = new Uint32Array(SIZE + 1)
+  const RIGHT1 = new Uint32Array(SIZE + 1)
+  RIGHT1[0] = 0
+  RIGHT0[0] = ~RIGHT1[0]
+  for (let i = 1; i <= SIZE; ++i) {
+    RIGHT1[i] = (RIGHT1[i - 1]! << 1) | 1
+    RIGHT0[i] = ~RIGHT1[i]!
+  }
+  const array = new Uint32Array(~~((w * h + SIZE) / SIZE))
+  return {
+    array,
+    outOfBounds: (x: number, y: number, x2: number, y2: number): boolean => x < 0 || y < 0 || y2 >= h || x2 >= w,
+    getRange: (x: number, y: number, x2: number, y2: number): boolean => {
+      let r = y2
+      for (; r >= y; --r) {
+        const start = r * w + x
+        const end = r * w + x2
+        const indexStart = start >>> 5
+        const indexEnd = end >>> 5
+        if (indexStart === indexEnd) {
+          if (array[indexStart]! & RIGHT0[start & 31]! & RIGHT1[(end & 31) + 1]!) return true
+        } else {
+          if (array[indexStart]! & RIGHT0[start & 31]!) return true
+          if (array[indexEnd]! & RIGHT1[(end & 31) + 1]!) return true
+          for (let i = indexStart + 1; i < indexEnd; ++i) {
+            if (array[i]) return true
+          }
+        }
+      }
+      return false
+    },
+    setRange: (x: number, y: number, x2: number, y2: number): void => {
+      for (; y <= y2; ++y) {
+        const start = y * w + x
+        const end = y * w + x2
+        const indexStart = start >>> 5
+        const indexEnd = end >>> 5
+        if (indexStart === indexEnd) {
+          array[indexStart]! |= RIGHT0[start & 31]! & RIGHT1[(end & 31) + 1]!
+        } else {
+          array[indexStart]! |= RIGHT0[start & 31]!
+          array[indexEnd]! |= RIGHT1[(end & 31) + 1]!
+          for (let i = indexStart + 1; i < indexEnd; ++i) array[i] = 0xffffffff
+        }
+      }
+    },
+  }
+}
+
+/**
+ * The vega `label` transform. Each datum's label is placed relative to its own
+ * (x, y): the default anchor sweep starts at top-left with offset 1, which for
+ * well-separated points is free — each label lands at `x - offset/√2` with
+ * `y` NaN (the datum carries no `fontSize`), which vega serializes as `null`.
+ */
+function labelRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+  if (!rows.length) return rows
+  const size = resolveSizeParam(t.size, ctx)
+  if (!size || size.length !== 2) {
+    throw new Error('[aster] label transform requires a [width, height] size parameter')
+  }
+
+  const as = (t.as as string[] | undefined) ?? ['x', 'y', 'opacity', 'align', 'baseline']
+  const rawOffset = t.offset == null ? 1 : t.offset
+  const offsets = (Array.isArray(rawOffset) ? rawOffset : [rawOffset]).map((v) => Number(v) || 0)
+  const anchors = (t.anchor as string[] | undefined) ?? [
+    'top-left', 'left', 'bottom-left', 'top', 'bottom', 'top-right', 'right', 'bottom-right',
+  ]
+  const positions = Math.max(offsets.length, anchors.length)
+  const offs: number[] = []
+  const anc: number[] = []
+  for (let i = 0; i < positions; i++) {
+    offs[i] = offsets[Math.min(i, offsets.length - 1)]!
+    const name = anchors[Math.min(i, anchors.length - 1)]!
+    anc[i] = LABEL_ANCHOR_CODE[name] ?? 0
+  }
+
+  // scaler (vega-label `util/scaler.js`) with padding 0.
+  const [width, height] = size
+  const ratio = Math.max(1, Math.sqrt((width * height) / 1e6))
+  const bw = ~~((width + ratio) / ratio)
+  const bh = ~~((height + ratio) / ratio)
+  const scale = (_: number): number => ~~(_ / ratio)
+
+  // baseBitmaps: mark each datum's anchor point (x, y) in the bitmap.
+  const bm = labelBitmap(bw, bh)
+  for (const r of rows) {
+    const x = ~~(Number(r.x) / ratio)
+    const y = ~~(Number(r.y) / ratio)
+    if (x >= 0 && y >= 0 && x < bw && y < bh) {
+      bm.array[(y * bw + x) >>> 5]! |= 1 << ((y * bw + x) & 31)
+    }
+  }
+
+  const n = positions
+  const boundary = (r: Row): number[] => {
+    const x = Number(r.x)
+    const y = Number(r.y)
+    return [x, x, x, y, y, y]
+  }
+
+  const out: Row[] = []
+  for (const r of rows) {
+    const b = boundary(r)
+    const textHeight = r.fontSize as number | undefined
+    const rawText = r.text as string | undefined
+    let placedX: number | undefined
+    let placedY: number | undefined
+    let placedAnchor = -1
+    let textWidth = 0
+
+    for (let i = 0; i < n; ++i) {
+      const dx = (anc[i]! & 0x3) - 1
+      const dy = ((anc[i]! >>> 2) & 0x3) - 1
+
+      const sizeFactor = dx && dy ? Math.SQRT1_2 : 1
+      const insideFactor = offs[i]! < 0 ? -1 : 1
+
+      const x1 = b[1 + dx]! + offs[i]! * dx * sizeFactor
+      // `textHeight` is the datum's fontSize (undefined for plain data → NaN
+      // in the y arithmetic, exactly as vega computes it).
+      const yc = b[4 + dy]! + (insideFactor * (textHeight as number) * dy) / 2 + offs[i]! * dy * sizeFactor
+      const y1 = yc - (textHeight as number) / 2
+      const y2 = yc + (textHeight as number) / 2
+
+      const _x1 = scale(x1)
+      const _y1 = scale(y1)
+      const _y2 = scale(y2)
+
+      if (!textWidth) {
+        if (bm.outOfBounds(_x1, _x1, _y1, _y2) || bm.getRange(_x1, _y1, _x1, _y2)) {
+          continue
+        }
+        // vega-scenegraph estimateWidth: 0.8 * chars * fontSize (no canvas).
+        textWidth = ~~(0.8 * String(rawText ?? '').length * (textHeight ?? 11))
+      }
+
+      const xc = x1 + (insideFactor * textWidth * dx) / 2
+      const nx1 = xc - textWidth / 2
+      const nx2 = xc + textWidth / 2
+
+      const _nx1 = scale(nx1)
+      const _nx2 = scale(nx2)
+
+      if (bm.outOfBounds(_nx1, _y1, _nx2, _y2) || bm.getRange(_nx1, _y1, _nx2, _y2)) {
+        continue
+      }
+
+      placedX = !dx ? xc : dx * insideFactor < 0 ? nx2 : nx1
+      placedY = !dy ? yc : dy * insideFactor < 0 ? y2 : y1
+      placedAnchor = i
+      bm.setRange(_nx1, _y1, _nx2, _y2)
+      break
+    }
+
+    if (placedAnchor === -1) {
+      out.push({
+        ...r,
+        [as[0]!]: null,
+        [as[1]!]: null,
+        [as[2]!]: 0,
+        [as[3]!]: undefined,
+        [as[4]!]: undefined,
+      })
+    } else {
+      const dx = (anc[placedAnchor]! & 0x3) - 1
+      const dy = ((anc[placedAnchor]! >>> 2) & 0x3) - 1
+      const insideFactor = offs[placedAnchor]! < 0 ? -1 : 1
+      out.push({
+        ...r,
+        [as[0]!]: placedX ?? null,
+        [as[1]!]: Number.isFinite(placedY as number) ? (placedY as number) : null,
+        [as[2]!]: 1,
+        [as[3]!]: LABEL_ALIGNS[dx * insideFactor + 1],
+        [as[4]!]: LABEL_BASELINES[dy * insideFactor + 1],
+      })
+    }
+  }
+  return out
 }
 
 /**
