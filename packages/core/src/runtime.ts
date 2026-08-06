@@ -1197,8 +1197,12 @@ const TITLE_FONT_SIZE = 11
 
 /** Build a single concat cell group mark (point/bar/etc. with its own axes). */
 function buildConcatGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup {
-  const idxMatch = mark.name.match(/concat_(\d+)_group/)
-  const idx = idxMatch ? parseInt(idxMatch[1]!, 10) : 0
+  // Cell index = position among the concat group marks in the chart's mark
+  // list. vega-lite names plain h/vconcat cells `concat_<n>_group` and repeat
+  // cells `child__<field>_group`; the array order is the layout order for both,
+  // so the ordinal position is the reliable index.
+  const concatMarks = (ctx.chart.marks as CompiledMark[]).filter(m => isConcatGroupMark(m))
+  const idx = Math.max(0, concatMarks.indexOf(mark))
   const { width: cellWidth, height: cellHeight } = readCellSize(mark, ctx, 500, 500)
   // Vertical concat (vconcat) uses a childHeight signal; horizontal concat uses
   // childWidth. vega-lite emits exactly one of the two for a concat layout.
@@ -1390,6 +1394,9 @@ function resolveEncodeProperty(
 ): unknown {
   if (spec == null) return undefined
   if (Array.isArray(spec)) {
+    // Vega conditional encode: entries are tested in order; the first matching
+    // `test` wins, and an entry with no `test` is the unconditional fallback
+    // (the "otherwise" value).
     for (const cond of spec) {
       if (cond && typeof cond === 'object' && 'test' in cond && typeof cond.test === 'string') {
         try {
@@ -1404,6 +1411,8 @@ function resolveEncodeProperty(
         } catch {
           // Expression evaluation failed (e.g., datum has no field); skip condition
         }
+      } else if (cond && typeof cond === 'object') {
+        return resolveEncodeValueInternal(cond, datum, ctx)
       }
     }
     return undefined

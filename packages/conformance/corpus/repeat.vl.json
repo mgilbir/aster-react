@@ -1,0 +1,15 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "width": 100, "height": 100, "padding": 5, "autosize": "none",
+  "data": { "name": "table", "values": [
+    { "a": 1, "b": 3, "c": 2 }, { "a": 2, "b": 4, "c": 5 }, { "a": 3, "b": 2, "c": 4 }, { "a": 4, "b": 5, "c": 3 }
+  ]},
+  "repeat": ["a", "b", "c"],
+  "spec": {
+    "mark": "point",
+    "encoding": {
+      "x": { "field": { "repeat": "repeat" }, "type": "quantitative" },
+      "y": { "field": "a", "type": "quantitative" }
+    }
+  }
+}
