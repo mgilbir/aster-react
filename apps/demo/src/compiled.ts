@@ -10,6 +10,9 @@ import {
   HeatmapSpec,
   StackedBarSpec,
   LayerSpec,
+  DonutSpec,
+  RegressionSpec,
+  StreamgraphSpec,
 } from './specs.js'
 
 function compile(spec: Record<string, unknown>): Record<string, unknown> {
@@ -26,3 +29,6 @@ export const CompiledTextLabelSpec = compile(TextLabelSpec)
 export const CompiledHeatmapSpec = compile(HeatmapSpec)
 export const CompiledStackedBarSpec = compile(StackedBarSpec)
 export const CompiledLayerSpec = compile(LayerSpec)
+export const CompiledDonutSpec = compile(DonutSpec)
+export const CompiledRegressionSpec = compile(RegressionSpec)
+export const CompiledStreamgraphSpec = compile(StreamgraphSpec)

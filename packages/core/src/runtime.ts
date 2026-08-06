@@ -4,7 +4,7 @@
  * eagerly per call; the caller re-evaluates when inputs change.
  */
 import { compileExpr, type ExpressionRuntime } from './expression.js'
-import { applyTransforms, sortRows, type Row, geoJSONPath } from './transform.js'
+import { applyTransforms, sortRows, getField, type Row, geoJSONPath } from './transform.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
 import { locale } from 'vega-format'
 import type {
@@ -336,6 +336,12 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       rows = applyTransforms(rows, d.transform, {
         runtime: ctx.runtime,
         signals: ctx.signalParams,
+        // Cross-dataset access for the `lookup` transform. Build the referenced
+        // dataset on demand (it may be declared after this one in the spec).
+        datasets: (name) => {
+          if (!ctx.datasets.has(name) && sources.has(name)) build(name, new Set())
+          return ctx.datasets.get(name)
+        },
       })
     }
     ctx.datasets.set(name, rows)
@@ -366,7 +372,7 @@ function buildScales(ctx: EvalContext): void {
       dataField: (dataName, field) => {
         const rows = ctx.datasets.get(dataName) ?? []
         const out: unknown[] = []
-        for (const r of rows) out.push(r[field])
+        for (const r of rows) out.push(getField(r, field))
         return out
       },
     })
@@ -1657,7 +1663,7 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
     // Get the value to scale
     let raw: unknown
     if (field != null) {
-      raw = datum[field as string]
+      raw = getField(datum, field as string)
     } else {
       raw = (value as { value?: unknown }).value
     }
@@ -1709,7 +1715,7 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
     return position
   }
   if ('field' in value) {
-    let v = datum[value.field as string]
+    let v = getField(datum, value.field as string)
     if (v != null && typeof v === 'number') {
       const multValField = (value as { mult?: number }).mult
       if (multValField != null) v *= multValField
@@ -2028,9 +2034,20 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
         ? String(ctx.runtime.expr(title.signal)({}, ctx.signalParams))
         : String(title)
     const t: SceneItem = { text, x: 0, y: 0 }
-    if (orient === 'bottom')  { t.x = ctx.width / 2 + 0.5; t.y = ctx.height + (scale.bandwidth ? 28 : 30) + 0.5; t.align = 'center'; t.baseline = 'top' }
+    // Vega clears the laid-out tick+label extent before anchoring the title.
+    // When the domain is empty no ticks/labels are produced, the extent is 0,
+    // and the title sits closer to the axis (titlePadding + baseline shift).
+    const hasTickMarks = ticks.length > 0
+    if (orient === 'bottom') {
+      t.x = ctx.width / 2 + 0.5
+      t.y = ctx.height + (hasTickMarks ? (scale.bandwidth ? 28 : 30) : 13) + 0.5
+      t.align = 'center'; t.baseline = 'top'
+    }
     else if (orient === 'top') { t.x = ctx.width / 2 + 0.5; t.y = -tickSize - 10 + 0.5; t.align = 'center'; t.baseline = 'bottom' }
-    else if (orient === 'left') { t.x = -(tickSize + labelPadding + labelWidth + 3.5); t.y = ctx.height / 2 + 0.5; t.align = 'center' }
+    else if (orient === 'left') {
+      t.x = -((hasTickMarks && axis.labels !== false ? labelPadding : 0) + (hasTickMarks ? tickSize : 0) + labelWidth + 3.5)
+      t.y = ctx.height / 2 + 0.5; t.align = 'center'
+    }
     else if (orient === 'right') { t.x = ctx.width + tickSize + labelPadding + labelWidth + 4.5; t.y = ctx.height / 2 + 0.5; t.align = 'center' }
     t.fill = '#000'
     items.push(t)

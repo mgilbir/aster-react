@@ -159,3 +159,53 @@ export const LayerSpec = {
     { mark: 'line', encoding: { x: { field: 'x', type: 'quantitative' }, y: { field: 'y', type: 'quantitative' } } },
   ],
 }
+
+export const DonutSpec = {
+  $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
+  width: 200,
+  height: 200,
+  padding: 5,
+  data: { name: 'table', values: [
+    { cat: 'Alpha', value: 4 }, { cat: 'Beta', value: 6 },
+    { cat: 'Gamma', value: 3 }, { cat: 'Delta', value: 7 },
+  ] },
+  mark: { type: 'arc', innerRadius: 60 },
+  encoding: {
+    theta: { field: 'value', type: 'quantitative' },
+    color: { field: 'cat', type: 'nominal' },
+  },
+}
+
+export const RegressionSpec = {
+  $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
+  width: 400,
+  height: 300,
+  padding: 5,
+  data: { name: 'table', values: [
+    { x: 1, y: 2.1 }, { x: 2, y: 3.9 }, { x: 3, y: 6.2 },
+    { x: 4, y: 7.8 }, { x: 5, y: 10.1 }, { x: 6, y: 12.2 },
+  ] },
+  layer: [
+    { mark: 'point', encoding: { x: { field: 'x', type: 'quantitative' }, y: { field: 'y', type: 'quantitative' } } },
+    { mark: 'line', encoding: { x: { field: 'x', type: 'quantitative' }, y: { field: 'y2', type: 'quantitative' } },
+      transform: [{ regression: 'y', on: 'x', as: 'y2' }] },
+  ],
+}
+
+export const StreamgraphSpec = {
+  $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
+  width: 400,
+  height: 300,
+  padding: 5,
+  data: { name: 'table', values: [
+    { date: '2024-01', cat: 'A', val: 3 }, { date: '2024-01', cat: 'B', val: 5 },
+    { date: '2024-02', cat: 'A', val: 4 }, { date: '2024-02', cat: 'B', val: 2 },
+    { date: '2024-03', cat: 'A', val: 2 }, { date: '2024-03', cat: 'B', val: 6 },
+  ] },
+  mark: 'area',
+  encoding: {
+    x: { field: 'date', type: 'temporal' },
+    y: { field: 'val', type: 'quantitative', stack: 'center' },
+    color: { field: 'cat', type: 'nominal' },
+  },
+}

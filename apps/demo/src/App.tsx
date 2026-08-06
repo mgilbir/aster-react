@@ -10,6 +10,9 @@ import {
   CompiledHeatmapSpec,
   CompiledStackedBarSpec,
   CompiledLayerSpec,
+  CompiledDonutSpec,
+  CompiledRegressionSpec,
+  CompiledStreamgraphSpec,
 } from './compiled'
 import { Chart } from '@aster/react'
 import type { SelectionInterval } from '@aster/react'
@@ -131,6 +134,30 @@ function LayeredAreaLine() {
   )
 }
 
+function Donut() {
+  return (
+    <div className="chart-container" style={{ alignItems: 'flex-start' }}>
+      <Chart spec={CompiledDonutSpec} ariaLabel="Donut chart" width={200} height={200} />
+    </div>
+  )
+}
+
+function Regression() {
+  return (
+    <div className="chart-container">
+      <Chart spec={CompiledRegressionSpec} ariaLabel="Regression line" width={400} height={300} />
+    </div>
+  )
+}
+
+function Streamgraph() {
+  return (
+    <div className="chart-container">
+      <Chart spec={CompiledStreamgraphSpec} ariaLabel="Streamgraph" width={400} height={300} />
+    </div>
+  )
+}
+
 export function App() {
   return (
     <div className="app">
@@ -162,6 +189,9 @@ export function App() {
       <Section title="8. Heatmap" desc="A rect mark with band scales for both axes and a quantitative color scale, rendered as a gradient heatmap with a color legend." chart={<Heatmap />} />
       <Section title="9. Stacked Bar" desc="Bars stacked per category via a color-encoded nominal dimension, with an automatic color legend." chart={<StackedBar />} />
       <Section title="10. Layered Area + Line" desc="A layer combining an area mark with an overlaid line mark on the same quantitative scales." chart={<LayeredAreaLine />} />
+      <Section title="11. Donut Chart" desc="An arc mark with a larger innerRadius renders a donut with the theta channel encoding 'value' and color encoding 'cat'." chart={<Donut />} />
+      <Section title="12. Regression Line" desc="A linear regression transform fits a line to the point data, overlaid as a line layer on the same axes." chart={<Regression />} />
+      <Section title="13. Streamgraph" desc="Stacked area marks offset around the center (stack: 'center') produce a streamgraph over the temporal axis." chart={<Streamgraph />} />
     </div>
   )
 }

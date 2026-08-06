@@ -52,23 +52,30 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
       return out
     }
     case 'flatten': {
+      // Vega's Flatten derives the output length as
+      //   arrays.reduce((l, a) => Math.max(l, a.length), 0)
+      // which collapses to NaN (→ no output rows at all) the moment any field
+      // is not array-typed, and writes `null` for missing array slots.
       const fields = t.fields
+      const as = t.as ?? []
+      const index = (t as { index?: string }).index
       const out: Row[] = []
       for (const r of rows) {
         const arrays = fields.map((f) => r[f])
-        if (arrays.some((a) => !Array.isArray(a))) {
-          // no array fields: keep row as-is
-          out.push(r)
-          continue
+        let maxlen = 0
+        for (const a of arrays) {
+          const len = (a as { length?: number } | null | undefined)?.length
+          maxlen = len == null ? NaN : Math.max(maxlen, len)
         }
-        const length = Math.max(...arrays.map((a) => (Array.isArray(a) ? a.length : 1)))
-        for (let i = 0; i < length; i++) {
+        if (!(maxlen > 0)) continue
+        for (let i = 0; i < maxlen; i++) {
           const row: Row = { ...r }
           fields.forEach((f, j) => {
-            const a = arrays[j] as unknown[]
-            const key = t.as?.[j] ?? f
-            row[key] = Array.isArray(a) ? a[i] : a
+            const a = arrays[j]
+            const v = (a as unknown[] | null | undefined)?.[i]
+            row[as[j] ?? f] = v == null ? null : v
           })
+          if (index !== undefined) row[index] = i
           out.push(row)
         }
       }
@@ -109,6 +116,10 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
       return quantileRows(rows, t as Record<string, unknown>)
     case 'regression':
       return regressionRows(rows, t as Record<string, unknown>)
+    case 'loess':
+      return loessRows(rows, t as Record<string, unknown>)
+    case 'lookup':
+      return lookupRows(rows, t as Record<string, unknown>, ctx)
     case 'identifier':
       return rows
     default:
@@ -1090,4 +1101,240 @@ function regressionRows(rows: Row[], t: Record<string, unknown>): Row[] {
     }
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// loess (vega-statistics regression/loess.js — science.js adaptation)
+// ---------------------------------------------------------------------------
+
+const LOESS_MAX_ITERS = 2
+const LOESS_EPSILON = 1e-12
+
+/** Tricube weighting kernel. */
+function loessTricube(x: number): number {
+  return (x = 1 - x * x * x) * x * x
+}
+
+/** Ordinary least squares from normalized sums (vega-statistics `ols`). */
+function loessOls(uX: number, uY: number, uXY: number, uX2: number): [number, number] {
+  const delta = uX2 - uX * uX
+  const slope = Math.abs(delta) < 1e-24 ? 0 : (uXY - uX * uY) / delta
+  const intercept = uY - slope * uX
+  return [intercept, slope]
+}
+
+/** Advance the sliding window of nearest neighbors over sorted x values. */
+function loessUpdateInterval(xv: Float64Array, i: number, interval: [number, number]): void {
+  const val = xv[i]!
+  let left = interval[0]
+  let right = interval[1] + 1
+  if (right >= xv.length) return
+  // step right if distance to new right edge is <= distance to old left edge
+  // (step when equal to ensure movement over duplicate x values)
+  while (i > left && (xv[right]! - val) <= (val - xv[left]!)) {
+    interval[0] = ++left
+    interval[1] = right
+    ++right
+  }
+}
+
+/** Median (d3-array `median`, i.e. R-7 quantile at p=0.5). */
+function loessMedian(values: Float64Array): number {
+  const arr = Array.from(values).sort(ascendingNum)
+  return quantileSorted(arr, 0.5) as number
+}
+
+/**
+ * Locally weighted scatterplot smoothing for one group, mirroring
+ * vega-statistics' `loess` operation for operation (mean-centering, the robust
+ * bisquare re-weighting loop, and the output pass that averages duplicate x
+ * values via online update and adds the means back).
+ */
+function loessFit(rows: Row[], xField: string, yField: string, bandwidth: number): number[][] {
+  // filter valid points and sort by x (vega-statistics `points` with sort)
+  const data: Array<[number, number]> = []
+  for (const d of rows) {
+    const rawU = d[xField]
+    const rawV = d[yField]
+    if (rawU == null || rawV == null) continue
+    const u = +rawU
+    const v = +rawV
+    if (u >= u && v >= v) data.push([u, v])
+  }
+  data.sort((a, b) => a[0] - b[0])
+
+  const n = data.length
+  const X = new Float64Array(n)
+  const Y = new Float64Array(n)
+  let i = 0
+  let ux = 0
+  let uy = 0
+  for (const [xv, yv] of data) {
+    X[i] = xv
+    Y[i] = yv
+    ++i
+    ux += (xv - ux) / i
+    uy += (yv - uy) / i
+  }
+  // mean center the data
+  for (i = 0; i < n; ++i) {
+    X[i] = X[i]! - ux
+    Y[i] = Y[i]! - uy
+  }
+
+  // # nearest neighbors
+  const bw = Math.max(2, ~~(bandwidth * n))
+  const yhat = new Float64Array(n)
+  const residuals = new Float64Array(n)
+  const robustWeights = new Float64Array(n).fill(1)
+
+  for (let iter = -1; ++iter <= LOESS_MAX_ITERS;) {
+    const interval: [number, number] = [0, bw - 1]
+
+    for (i = 0; i < n; ++i) {
+      const dx = X[i]!
+      const i0 = interval[0]
+      const i1 = interval[1]
+      const edge = (dx - X[i0]!) > (X[i1]! - dx) ? i0 : i1
+
+      let W = 0
+      let Xw = 0
+      let Yw = 0
+      let XY = 0
+      let X2 = 0
+      const denom = 1 / Math.abs(X[edge]! - dx || 1) // avoid singularity!
+
+      for (let k = i0; k <= i1; ++k) {
+        const xk = X[k]!
+        const yk = Y[k]!
+        const w = loessTricube(Math.abs(dx - xk) * denom) * robustWeights[k]!
+        const xkw = xk * w
+        W += w
+        Xw += xkw
+        Yw += yk * w
+        XY += yk * xkw
+        X2 += xk * xkw
+      }
+
+      // linear regression fit
+      const [a, b] = loessOls(Xw / W, Yw / W, XY / W, X2 / W)
+      yhat[i] = a + b * dx
+      residuals[i] = Math.abs(Y[i]! - yhat[i]!)
+
+      loessUpdateInterval(X, i + 1, interval)
+    }
+
+    if (iter === LOESS_MAX_ITERS) break
+
+    const medianResidual = loessMedian(residuals)
+    if (Math.abs(medianResidual) < LOESS_EPSILON) break
+
+    for (i = 0; i < n; ++i) {
+      const arg = residuals[i]! / (6 * medianResidual)
+      // default to epsilon (rather than zero) for large deviations, keeping
+      // weights tiny but non-zero to prevent singularities
+      let w: number
+      robustWeights[i] = arg >= 1 ? LOESS_EPSILON : ((w = 1 - arg * arg) * w)
+    }
+  }
+
+  // generate smoothed output points, averaging repeated x values
+  const out: number[][] = []
+  let cnt = 0
+  let prev: number[] = []
+  for (i = 0; i < n; ++i) {
+    const v = X[i]! + ux
+    if (prev[0] === v) {
+      prev[1] = prev[1]! + (yhat[i]! - prev[1]!) / ++cnt
+    } else {
+      cnt = 0
+      prev[1] = prev[1]! + uy
+      prev = [v, yhat[i]!]
+      out.push(prev)
+    }
+  }
+  prev[1] = prev[1]! + uy
+  return out
+}
+
+function loessRows(rows: Row[], t: Record<string, unknown>): Row[] {
+  const xField = t.x as string
+  const yField = t.y as string
+  const groupby = (t.groupby as string[]) ?? []
+  const bandwidth = (t.bandwidth as number | undefined) ?? 0.3
+  const as = (t.as as [string, string] | undefined) ?? [xField, yField]
+
+  const groups = groupby.length ? groupRows(rows, groupby) : [rows]
+  const out: Row[] = []
+  for (const g of groups) {
+    const pts = loessFit(g, xField, yField, bandwidth)
+    for (const p of pts) {
+      const row: Row = {}
+      for (const k of groupby) row[k] = g[0]?.[k]
+      row[as[0]] = p[0]
+      row[as[1]] = p[1]
+      out.push(row)
+    }
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// lookup (vega-transforms Lookup)
+// ---------------------------------------------------------------------------
+
+/**
+ * Extend tuples by joining them with values from a lookup table (by key).
+ * Without an explicit `values` list each `as` field receives the entire matched
+ * row object; with `values` it receives the named sub-field of the match.
+ * A failed lookup yields the `default` (null unless specified).
+ */
+function lookupRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+  const from = t.from as string
+  const key = t.key as string
+  const fields = (t.fields as string[]) ?? []
+  const as = (t.as as string[] | undefined) ?? fields
+  const values = t.values as string[] | undefined
+  const defaultValue = t.default == null ? null : t.default
+
+  const source = (ctx.datasets?.(from) ?? []) as Row[]
+  const index = new Map<unknown, Row>()
+  for (const r of source) {
+    const k = r[key]
+    if (k !== undefined && !index.has(k)) index.set(k, r)
+  }
+
+  const n = fields.length
+  const m = values?.length ?? 0
+  return rows.map((r) => {
+    const out: Row = { ...r }
+    if (values) {
+      for (let i = 0; i < n; i++) {
+        const v = index.get(r[fields[i]!])
+        for (let j = 0; j < m; j++) {
+          out[as[i * m + j]!] = v == null ? defaultValue : (v as Row)[values[j]!]
+        }
+      }
+    } else {
+      for (let i = 0; i < n; i++) {
+        out[as[i]!] = index.get(r[fields[i]!]) ?? defaultValue
+      }
+    }
+    return out
+  })
+}
+
+/**
+ * Resolve a (possibly dotted) field path against a row. Vega treats dotted
+ * field names as nested-object access (e.g. `lookup_result.label` reads
+ * `datum["lookup_result"]["label"]`).
+ */
+export function getField(row: Row, path: string): unknown {
+  if (!path.includes('.')) return row[path]
+  let v: unknown = row
+  for (const part of path.split('.')) {
+    if (v == null || typeof v !== 'object') return undefined
+    v = (v as Record<string, unknown>)[part]
+  }
+  return v
 }
