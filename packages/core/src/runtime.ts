@@ -2289,8 +2289,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
           case 'triangle-right': { const h = r * 0.866; d = `M${-h},0L${h},${-r}L${h},${r}Z`; break }
           case 'triangle-left': { const h = r * 0.866; d = `M${h},0L${-h},${-r}L${-h},${r}Z`; break }
           case 'cross': {
-            const w = r * 0.3
-            d = `M${-w},${-r}h${2*w}v${-(r-w)}h${-(r-w)}v${-2*w}h${-2*w}v${2*w}h${-(r-w)}v${r-w}h${2*w}Z`
+            const s = r / 2.5
+            d = `M${-r},${-s}L${-r},${s}L${-s},${s}L${-s},${r}L${s},${r}L${s},${s}L${r},${s}L${r},${-s}L${s},${-s}L${s},${-r}L${-s},${-r}L${-s},${-s}Z`
             break
           }
           default: d = `M${r},0A${r},${r},0,1,1,${-r},0A${r},${r},0,1,1,${r},0`; break

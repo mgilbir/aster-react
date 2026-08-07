@@ -415,23 +415,25 @@ function symbolPath(shape: string | undefined, r: number): string {
     case 'square':
       return `M${num(-r)},${num(-r)}h${num(2 * r)}v${num(2 * r)}h${num(-2 * r)}Z`
     case 'cross': {
-      const w = r * 0.3
+      const s = r / 2.5
       return [
-        `M${num(-w)},${num(-r)}`,
-        `h${num(2 * w)}`,
-        `v${num(-(r - w))}`,
-        `h${num(-(r - w))}`,
-        `v${num(-2 * w)}`,
-        `h${num(-2 * w)}`,
-        `v${num(2 * w)}`,
-        `h${num(-(r - w))}`,
-        `v${num(r - w)}`,
-        `h${num(2 * w)}`,
+        `M${num(-r)},${num(-s)}`,
+        `L${num(-r)},${num(s)}`,
+        `L${num(-s)},${num(s)}`,
+        `L${num(-s)},${num(r)}`,
+        `L${num(s)},${num(r)}`,
+        `L${num(s)},${num(s)}`,
+        `L${num(r)},${num(s)}`,
+        `L${num(r)},${num(-s)}`,
+        `L${num(s)},${num(-s)}`,
+        `L${num(s)},${num(-r)}`,
+        `L${num(-s)},${num(-r)}`,
+        `L${num(-s)},${num(-s)}`,
         'Z',
       ].join('')
     }
     case 'diamond':
-      return `M0,${num(-r)}L${num(r)},0L0,${num(r)}L${num(-r)},0Z`
+      return `M${num(-r)},0L0,${num(-r)}L${num(r)},0L0,${num(r)}Z`
     case 'triangle-up': {
       const h = r * 0.866
       return `M0,${num(-h)}L${num(-r)},${num(h)}L${num(r)},${num(h)}Z`
