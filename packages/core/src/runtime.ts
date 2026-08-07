@@ -587,27 +587,42 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | Scen
     }
     return buildRowTitleGroup(mark, ctx)
   }
+  const name = mark.name
   // Header groups
-  if (mark.name.includes('header')) {
-    if (mark.name === 'row_header') {
+  if (name && name.includes('header')) {
+    if (name === 'row_header') {
       if (orient === 'column') return buildColumnFacetRowHeader(mark, ctx)
       return buildRowHeaderGroup(mark, ctx)
     }
-    if (mark.name === 'column_header') {
+    if (name === 'column_header') {
       if (orient === 'column' || isTrellis(ctx)) return buildColumnHeaderGroup(mark, ctx)
       return buildRowHeaderGroup(mark, ctx)
     }
     return buildRowHeaderGroup(mark, ctx)
   }
   // Footer groups
-  if (mark.name.includes('footer')) {
-    if (mark.name === 'column_footer') {
+  if (name && name.includes('footer')) {
+    if (name === 'column_footer') {
       if (orient === 'column' || isTrellis(ctx)) return buildColumnFooterGroupColumn(mark, ctx)
       return buildColumnFooterGroup(mark, ctx)
     }
     return buildColumnFooterGroup(mark, ctx)
   }
-  throw new Error('[aster] unsupported group mark: ' + mark.name)
+  // Unnamed container groups (e.g. nested scope within facet cells for
+  // VL-compiled bar/area charts): build a simple group whose items are
+  // the rendered inner marks.
+  if (tm.marks?.length) {
+    const items: SceneItem[] = []
+    for (const cm of tm.marks) {
+      const r = evaluateMark(cm as CompiledMark, ctx)
+      if (r) {
+        if (Array.isArray(r)) { for (const g of r) items.push(g) }
+        else items.push(r)
+      }
+    }
+    return { marktype: 'group', name, role: (mark.role as string) ?? 'scope', items, clip: mark.clip === true }
+  }
+  throw new Error('[aster] unsupported group mark: ' + (name ?? '<unnamed>'))
 }
 
 function inlineGroupRows(rows: Row[], keys: string[]): Row[][] {
@@ -870,6 +885,30 @@ function buildFacetCellGroup(
 ): SceneGroup[] {
   const cells = buildFacetCells(mark, facet, ctx)
   if (!cells.length) return cells
+  // When the facet group has a scale-based x encode (e.g. VL bar charts with
+  // cornerRadius compile to a faceted group where each cell is positioned at
+  // the band scale position), resolve each cell's x from the scale rather
+  // than using the grid layout.
+  const xEnc = (mark as any).encode?.update?.x
+  if (xEnc && typeof xEnc === 'object' && 'scale' in xEnc && 'field' in xEnc) {
+    const xScale = ctx.scales.get(xEnc.scale as string)
+    const fieldName = xEnc.field as string
+    if (xScale) {
+      const rows = ctx.datasets.get(facet.data) ?? []
+      const grouped = inlineGroupRows(rows, facet.groupby)
+      for (let i = 0; i < cells.length; i++) {
+        const g = grouped[i]
+        if (g && g.length > 0) {
+          const catVal = g[0]?.[fieldName]
+          const pos = xScale(catVal as string | number)
+          if (typeof pos === 'number' && Number.isFinite(pos) && cells[i]) {
+            cells[i]!.x = pos
+          }
+        }
+      }
+      return cells
+    }
+  }
   const layout = getFacetLayout(ctx, cells)
   if (!layout) return cells
   for (let i = 0; i < cells.length; i++) {
@@ -1061,8 +1100,19 @@ function readCellSize(mark: CompiledMark, ctx: EvalContext, defW: number, defH: 
     const hs = (enc.height as { signal?: string } | undefined)?.signal
     if (ws !== undefined && ctx.signalParams[ws] !== undefined && !Array.isArray(ctx.signalParams[ws]))
       width = Number(ctx.signalParams[ws])
+    else if (ws !== undefined)
+      // Signal expression (e.g. "max(0.25, bandwidth('x'))") — evaluate it
+      try {
+        const v = ctx.runtime.expr(ws)({}, ctx.signalParams)
+        if (typeof v === 'number' && Number.isFinite(v)) width = v
+      } catch { /* fall through to default */ }
     if (hs !== undefined && ctx.signalParams[hs] !== undefined && !Array.isArray(ctx.signalParams[hs]))
       height = Number(ctx.signalParams[hs])
+    else if (hs !== undefined)
+      try {
+        const v = ctx.runtime.expr(hs)({}, ctx.signalParams)
+        if (typeof v === 'number' && Number.isFinite(v)) height = v
+      } catch { /* fall through to default */ }
     // vega-lite emits `{field: {group: "width"}}` / `{field: {group: "height"}}`
     // for group marks that take their size from the enclosing group (e.g. the
     // faceted `pathgroup` around stacked areas). Resolve those to the enclosing
@@ -1795,6 +1845,25 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
     return position
   }
   if ('field' in value) {
+    // Handle Vega group field references: {field: {group: "width"}} etc.
+    // These reference the enclosing group's scenegraph properties.
+    const fieldSpec = value.field as unknown
+    if (fieldSpec != null && typeof fieldSpec === 'object' && !Array.isArray(fieldSpec) && 'group' in (fieldSpec as Record<string, unknown>)) {
+      const groupKey = (fieldSpec as { group: string }).group
+      let v: unknown
+      if (groupKey === 'width') v = ctx.width
+      else if (groupKey === 'height') v = ctx.height
+      else if (groupKey === 'x') v = 0
+      else if (groupKey === 'y') v = 0
+      else v = 0
+      if (v != null && typeof v === 'number') {
+        const multValField = (value as { mult?: number }).mult
+        if (multValField != null) v *= multValField
+        const offsetValField = (value as { offset?: number }).offset
+        if (offsetValField != null) v += offsetValField
+      }
+      return v
+    }
     let v = getField(datum, value.field as string)
     if (v != null && typeof v === 'number') {
       const multValField = (value as { mult?: number }).mult

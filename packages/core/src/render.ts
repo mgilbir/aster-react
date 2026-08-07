@@ -6,6 +6,7 @@
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import {
   line as d3Line,
+  area as d3Area,
   curveLinear,
   curveBasis,
   curveBasisClosed,
@@ -293,44 +294,103 @@ function renderLine(group: SceneGroup): string {
 
 function renderArea(group: SceneGroup): string {
   const items = itemsOf(group)
-  let path = ''
-  let penDown = false
   const pts: Array<{ x: number; y: number; y2: number; defined: boolean }> = items.map((it) => ({
     x: it.x as number,
     y: it.y as number,
     y2: it.y2 as number,
     defined: it.defined !== false && it.x != null && it.y != null,
   }))
-  for (let i = 0; i < pts.length; i++) {
-    const p = pts[i]!
-    if (!p.defined) {
-      // close the current area segment
-      if (penDown) {
-        for (let j = i - 1; j >= 0; j--) {
-          const q = pts[j]!
-          if (!q.defined) break
-          path += `L${num(q.x)},${num(q.y2)}`
+
+  // Check for curve interpolation (Vega's `interpolate` encode)
+  const firstItem = items[0] as Record<string, unknown> | undefined
+  const interpolate = firstItem?.interpolate as string | undefined
+  const orient = firstItem?.orient as string | undefined
+  const tension = firstItem?.tension as number | undefined
+
+  let path = ''
+  if (interpolate && interpolate !== 'linear') {
+    const curve = resolveCurve(interpolate, orient)
+    if (curve) {
+      let curveFn: unknown = curve
+      if (tension != null && curveFn) {
+        const cf = curveFn as Record<string, ((v: number) => unknown) | undefined>
+        if (interpolate === 'bundle' && typeof cf.beta === 'function') {
+          curveFn = cf.beta(tension)
+        } else if ((interpolate === 'cardinal' || interpolate === 'cardinal-open' || interpolate === 'cardinal-closed') && typeof cf.tension === 'function') {
+          curveFn = cf.tension(tension)
+        } else if ((interpolate === 'catmull-rom' || interpolate === 'catmull-rom-open' || interpolate === 'catmull-rom-closed') && typeof cf.alpha === 'function') {
+          curveFn = cf.alpha(tension)
         }
-        path += 'Z'
-        penDown = false
       }
-      continue
-    }
-    if (!penDown) {
-      path += `M${num(p.x)},${num(p.y)}`
-      penDown = true
-    } else {
-      path += `L${num(p.x)},${num(p.y)}`
+      type AreaPt = { x: number; y0: number; y1: number; defined: boolean }
+      const areaGen = d3Area<AreaPt>()
+        .x((d: AreaPt) => d.x)
+        .y0((d: AreaPt) => d.y0)
+        .y1((d: AreaPt) => d.y1)
+        .defined((d: AreaPt) => d.defined)
+        .curve(curveFn as Parameters<ReturnType<typeof d3Area<AreaPt>>['curve']>[0])
+
+      // Build contiguous runs of defined points
+      const runs: Array<AreaPt> = pts.map((p) => ({
+        x: p.x,
+        y0: p.y2,
+        y1: p.y,
+        defined: p.defined,
+      }))
+      // Split into segments at undefined points
+      const segments: Array<Array<AreaPt>> = []
+      let current: Array<AreaPt> = []
+      for (const r of runs) {
+        if (!r.defined) {
+          if (current.length > 1) segments.push(current)
+          current = []
+        } else {
+          current.push(r)
+        }
+      }
+      if (current.length > 1) segments.push(current)
+
+      for (const seg of segments) {
+        const d = areaGen(seg)
+        if (d) path += d
+      }
     }
   }
-  if (penDown) {
-    for (let j = pts.length - 1; j >= 0; j--) {
-      const q = pts[j]!
-      if (!q.defined) break
-      path += `L${num(q.x)},${num(q.y2)}`
+
+  // Fallback: linear interpolation (or if curve failed)
+  if (!path) {
+    let penDown = false
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i]!
+      if (!p.defined) {
+        if (penDown) {
+          for (let j = i - 1; j >= 0; j--) {
+            const q = pts[j]!
+            if (!q.defined) break
+            path += `L${num(q.x)},${num(q.y2)}`
+          }
+          path += 'Z'
+          penDown = false
+        }
+        continue
+      }
+      if (!penDown) {
+        path += `M${num(p.x)},${num(p.y)}`
+        penDown = true
+      } else {
+        path += `L${num(p.x)},${num(p.y)}`
+      }
     }
-    path += 'Z'
+    if (penDown) {
+      for (let j = pts.length - 1; j >= 0; j--) {
+        const q = pts[j]!
+        if (!q.defined) break
+        path += `L${num(q.x)},${num(q.y2)}`
+      }
+      path += 'Z'
+    }
   }
+
   if (!path) return ''
   const fill = items[0]?.fill
   const fillOpacity = items[0]?.fillOpacity
@@ -438,8 +498,39 @@ function renderRects(group: SceneGroup): string {
     if (w == null && it.x2 != null) { w = Math.abs((it.x2 as number) - x0); x0 = Math.min(x0, it.x2 as number) }
     if (h == null && it.y2 != null) { h = Math.abs((it.y2 as number) - y0); y0 = Math.min(y0, it.y2 as number) }
     if (w == null || h == null) continue
-    // vega renders rect marks as path elements
-    out += `<path d="M${num(x0)},${num(y0)}h${num(w)}v${num(h)}h${num(-w)}Z"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+    // vega renders rect marks as path elements, with optional cornerRadius
+    const cr = (it as Record<string, unknown>).cornerRadius as number | undefined ?? 0
+    let d: string
+    if (cr > 0 && cr < w / 2 && cr < h / 2) {
+      // Use cubic bezier approximation of circular arcs (matching vega-scenegraph).
+      // k = 4/3 * (sqrt(2) - 1) ≈ 0.5522847498
+      const k = 0.5522847498
+      const r = Math.min(cr, w / 2, h / 2)
+      const kr = k * r
+      const x1 = x0 + r
+      const y1 = y0
+      const x2 = x0 + w - r
+      const y2 = y0
+      const x3 = x0 + w
+      const y3 = y0 + r
+      const x4 = x0 + w
+      const y4 = y0 + h - r
+      const x5 = x0 + w - r
+      const y5 = y0 + h
+      const x6 = x0 + r
+      const y6 = y0 + h
+      const x7 = x0
+      const y7 = y0 + h - r
+      const x8 = x0
+      const y8 = y0 + r
+      d = `M${num(x1)},${num(y1)}L${num(x2)},${num(y2)}C${num(x2 + kr)},${num(y2)},${num(x3)},${num(y2 + kr)},${num(x3)},${num(y3)}`
+        + `L${num(x4)},${num(y4)}C${num(x4)},${num(y4 + kr)},${num(x5 + kr)},${num(y5)},${num(x5)},${num(y5)}`
+        + `L${num(x6)},${num(y6)}C${num(x6 - kr)},${num(y6)},${num(x7)},${num(y7 + kr)},${num(x7)},${num(y7)}`
+        + `L${num(x8)},${num(y8)}C${num(x8)},${num(y8 - kr)},${num(x1 - kr)},${num(y1)},${num(x1)},${num(y1)}Z`
+    } else {
+      d = `M${num(x0)},${num(y0)}h${num(w)}v${num(h)}h${num(-w)}Z`
+    }
+    out += `<path d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
   }
     out += '</g>'
     return out
@@ -470,6 +561,7 @@ function renderTexts(group: SceneGroup): string {
     //   top → round(0.79 * fontSize), middle → round(0.30 * fontSize),
     //   bottom → round(-0.21 * fontSize), default fontSize is 11.
     const fontSize = (it as Record<string, unknown>).fontSize as number | undefined ?? 11
+    const fontWeight = (it as Record<string, unknown>).fontWeight as string | number | undefined
     const baseline = it.baseline ?? 'alphabetic'
     const baseY = it.y ?? 0
     let bsOffset = 0
@@ -478,7 +570,8 @@ function renderTexts(group: SceneGroup): string {
     else if (baseline === 'bottom') bsOffset = Math.round(-0.21 * fontSize)
     // alphabetic / default → 0 (no offset)
     const y = num(baseY + bsOffset)
-    out += `<text x="${num(it.x ?? 0)}" y="${y}"${attr('align', it.align)}${attr('baseline', it.baseline)}${attr('fill', it.fill)}${attr("opacity", it.opacity)}${attr("angle", it.angle)}>${esc(String(it.text))}</text>`
+    const textAnchor = it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle'
+    out += `<text x="${num(it.x ?? 0)}" y="${y}"${attr('text-anchor', textAnchor)}${attr('font-size', fontSize !== 11 ? fontSize : undefined)}${attr('font-weight', fontWeight)}${attr('fill', it.fill)}${attr("opacity", it.opacity)}${attr("angle", it.angle)}>${esc(String(it.text))}</text>`
   }
   out += '</g>'
   return out
