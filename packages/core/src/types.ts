@@ -147,6 +147,8 @@ export interface CompiledAxis {
   labelPadding?: number
   labelAngle?: number
   tickBand?: string
+  format?: string
+  formatType?: string
   zindex?: number
   encode?: Record<string, Record<string, EncodeValue>>
 }

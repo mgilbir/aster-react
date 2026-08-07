@@ -185,7 +185,7 @@ function compileAxis(a: Record<string, unknown>): CompiledAxis {
     scale: a.scale as string,
     orient: a.orient as CompiledAxis['orient'],
   }
-  for (const key of ['grid', 'gridScale', 'domain', 'labels', 'ticks', 'tickCount', 'tickMinStep', 'tickSize', 'title', 'titlePadding', 'labelAlign', 'labelBaseline', 'labelFlush', 'labelOverlap', 'labelPadding', 'labelAngle', 'tickBand', 'zindex'] as const) {
+  for (const key of ['grid', 'gridScale', 'domain', 'labels', 'ticks', 'tickCount', 'tickMinStep', 'tickSize', 'title', 'titlePadding', 'labelAlign', 'labelBaseline', 'labelFlush', 'labelOverlap', 'labelPadding', 'labelAngle', 'tickBand', 'format', 'formatType', 'zindex'] as const) {
     if (a[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = a[key]
   }
   if (a.encode !== undefined) out.encode = a.encode as CompiledAxis['encode']

@@ -2342,8 +2342,12 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number): (v: u
   if (specFmt && typeof specFmt === 'object' && 'signal' in specFmt && specFmt.signal) {
     return () => String(specFmt.signal)
   }
-  const fmtType = (specFmt && typeof specFmt === 'object' && 'formatType' in specFmt && specFmt.formatType) ? String(specFmt.formatType) : undefined
-  const fmt = (specFmt && typeof specFmt === 'object' && 'format' in specFmt && specFmt.format) ? String(specFmt.format) : undefined
+  const fmtType = (specFmt && typeof specFmt === 'object' && 'formatType' in specFmt && specFmt.formatType)
+    ? String(specFmt.formatType)
+    : (axis.formatType ? axis.formatType : undefined)
+  const fmt = (specFmt && typeof specFmt === 'object' && 'format' in specFmt && specFmt.format)
+    ? String(specFmt.format)
+    : (axis.format ? axis.format : undefined)
   if (fmtType === 'time' || scale.type === 'time' || scale.type === 'utc') {
     const L = locale(undefined)
     // With no explicit format vega uses the time multi-format, which picks a
