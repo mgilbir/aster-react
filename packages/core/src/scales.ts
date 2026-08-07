@@ -322,6 +322,13 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext): unknown[] | string 
     if (v == null) throw new Error(`[aster] unresolved signal range: ${range.signal}`)
     return Array.isArray(v) ? (v as unknown[]) : [v]
   }
+  // Vega-lite emits `{ scheme: "blues" }` (or `{ scheme: "blues", extent: [...] }`)
+  // for sequential/diverging color scales.  Resolve to the scheme name string so
+  // buildScale's continuous-scheme branch picks it up.
+  if (range && typeof range === 'object' && 'scheme' in range) {
+    const schemeName = (range as { scheme: string }).scheme
+    if (typeof schemeName === 'string') return schemeName
+  }
   throw new Error(`[aster] unsupported scale range value`)
 }
 

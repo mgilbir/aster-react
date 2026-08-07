@@ -447,6 +447,8 @@ const AGGR: Record<string, (values: number[], rows: Row[]) => number> = {
     const m = Math.floor(s.length / 2)
     return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2
   },
+  q1: (v) => quantileSorted(v.slice().filter(isFiniteNumber).sort((a, b) => a - b), 0.25) as number,
+  q3: (v) => quantileSorted(v.slice().filter(isFiniteNumber).sort((a, b) => a - b), 0.75) as number,
   distinct: (v, rows) => new Set(v).size,
   valid: (v) => v.filter((x) => Number.isFinite(x)).length,
   missing: (v, rows) => rows.length - v.filter((x) => Number.isFinite(x)).length,

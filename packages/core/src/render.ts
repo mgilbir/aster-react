@@ -275,6 +275,7 @@ function renderLine(group: SceneGroup): string {
     for (let i = 0; i < runs.length; i++) {
       const r = runs[i]!
       if (!r.defined) {
+        if (penDown) path += 'Z'
         penDown = false
         continue
       }
