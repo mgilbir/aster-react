@@ -139,6 +139,8 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
     }
     case 'pack':
       return packRows(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'treemap':
+      return treemapRows(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'sequence':
       return sequenceRows(t as Record<string, unknown>)
     case 'graticule':
@@ -1484,6 +1486,11 @@ interface HierNode {
   y: number
   r: number
   value: number
+  /** Treemap bounding rectangle (d3-hierarchy node.x0/x1/y0/y1). */
+  x0?: number
+  y0?: number
+  x1?: number
+  y1?: number
 }
 
 /** Build a hierarchy tree from flat id/parent-id tuples (d3 `stratify`). */
@@ -1954,6 +1961,229 @@ function packEncloseBasis(B: HierNode[]): HierNode {
     case 2: return packEncloseBasis2(B[0]!, B[1]!)
     case 3: return packEncloseBasis3(B[0]!, B[1]!, B[2]!)
     default: throw new Error('[aster] pack: bad basis size')
+  }
+}
+
+// ---------------------------------------------------------------------------
+// treemap (d3-hierarchy treemap layout — squarify tiling)
+//
+// The vega `treemap` transform wraps d3-hierarchy's `treemap` layout, which
+// assigns x0/y0/x1/y1 to every node. The layout needs the tree that a
+// preceding `stratify` transform built; we thread it through
+// `TransformContext.hierarchies` just like `pack` does.
+//
+// The implementation follows d3-hierarchy@3.1.2 source:
+//   src/treemap/index.js   — positionNode + paddingStack
+//   src/treemap/squarify.js — squarifyRatio + worst + row grouping
+//   src/treemap/dice.js    — horizontal splitting
+//   src/treemap/slice.js   — vertical splitting
+//   src/treemap/round.js   — integer rounding
+// ---------------------------------------------------------------------------
+
+const PHI = (1 + Math.sqrt(5)) / 2
+
+/** The vega `treemap` transform: layout the stratify-built tree via squarify. */
+function treemapRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext, sourceName?: string): Row[] {
+  const root = sourceName ? (ctx.hierarchies?.get(sourceName) as HierNode | undefined) : undefined
+  if (!root) {
+    throw new Error('[aster] treemap transform requires a preceding stratify transform on the same data source')
+  }
+  const field = t.field as string | undefined
+  const sort = t.sort as SortSpec | undefined
+  const round = t.round === true
+  const padding = (t.padding as number) ?? 0
+  const paddingInner = (t.paddingInner as number) ?? padding
+  const paddingOuter = (t.paddingOuter as number) ?? padding
+  const paddingTop = (t.paddingTop as number) ?? paddingOuter
+  const paddingRight = (t.paddingRight as number) ?? paddingOuter
+  const paddingBottom = (t.paddingBottom as number) ?? paddingOuter
+  const paddingLeft = (t.paddingLeft as number) ?? paddingOuter
+  const as = (t.as as string[]) ?? ['x0', 'y0', 'x1', 'y1']
+  const ratio = (t.ratio as number) ?? PHI
+  const size = t.size as number[] | undefined
+  // d3-hierarchy default treemap size is [1, 1]
+  const dx = size?.[0] ?? 1
+  const dy = size?.[1] ?? 1
+
+  // root.sum(field): each node's value is its own plus its descendants'.
+  eachAfter(root, (node) => {
+    let sum = field != null ? Number(node.data[field]) || 0 : 1
+    for (const c of node.children) sum += c.value
+    node.value = sum
+  })
+
+  if (sort?.field) sortTreeChildren(root, sort)
+
+  // --- d3-hierarchy treemap: eachBefore(positionNode) -----------------------
+  // Root initial bounds
+  root.x0 = 0; root.y0 = 0; root.x1 = dx; root.y1 = dy
+
+  // paddingStack[i] stores the half-inner-padding to shrink nodes at depth i.
+  // depth 0 is always 0 (root is not shrunk).
+  const paddingStack = [0]
+
+  eachBefore(root, (node) => {
+    // 1. Shrink node bounds by the padding stored for this depth.
+    const p = paddingStack[node.depth] ?? 0
+    let nx0 = node.x0! + p
+    let ny0 = node.y0! + p
+    let nx1 = node.x1! - p
+    let ny1 = node.y1! - p
+    if (nx1 < nx0) nx0 = nx1 = (nx0 + nx1) / 2
+    if (ny1 < ny0) ny0 = ny1 = (ny0 + ny1) / 2
+    node.x0 = nx0; node.y0 = ny0; node.x1 = nx1; node.y1 = ny1
+
+    // 2. If this node has children, compute the tiling area and tile them.
+    if (node.children.length) {
+      // Store inner padding for children's depth
+      const ip = paddingInner / 2
+      paddingStack[node.depth + 1] = ip
+
+      // Outer padding minus inner-half for the tiling area
+      let tx0 = nx0 + paddingLeft - ip
+      let ty0 = ny0 + paddingTop - ip
+      let tx1 = nx1 - paddingRight - ip
+      let ty1 = ny1 - paddingBottom - ip
+      if (tx1 < tx0) tx0 = tx1 = (tx0 + tx1) / 2
+      if (ty1 < ty0) ty0 = ty1 = (ty0 + ty1) / 2
+
+      treemapSquarify(node, tx0, ty0, tx1, ty1, ratio)
+    }
+  })
+
+  // Round if requested
+  if (round) {
+    eachBefore(root, (node) => {
+      node.x0 = Math.round(node.x0!)
+      node.y0 = Math.round(node.y0!)
+      node.x1 = Math.round(node.x1!)
+      node.y1 = Math.round(node.y1!)
+    })
+  }
+
+  // Write results back to rows
+  eachBefore(root, (node) => {
+    const d = node.data
+    d[as[0]!] = node.x0
+    d[as[1]!] = node.y0
+    d[as[2]!] = node.x1
+    d[as[3]!] = node.y1
+    d.x = (node.x0! + node.x1!) / 2
+    d.y = (node.y0! + node.y1!) / 2
+    d.width = node.x1! - node.x0!
+    d.height = node.y1! - node.y0!
+  })
+
+  return rows
+}
+
+/**
+ * Squarify tiling — port of d3-hierarchy's `squarifyRatio`.
+ *
+ * Groups children into rows that minimise the worst aspect ratio, then
+ * places each row as a slice or dice within the available rectangle.
+ */
+function treemapSquarify(
+  parent: HierNode,
+  x0: number, y0: number, x1: number, y1: number,
+  ratio: number,
+): void {
+  const nodes = parent.children
+  const n = nodes.length
+  if (!n) return
+
+  let i0 = 0
+  let i1 = 0
+  let value = parent.value
+
+  while (i0 < n) {
+    let dx = x1 - x0
+    let dy = y1 - y0
+
+    // Find the next non-empty node.
+    let sumValue: number
+    do { sumValue = nodes[i1]!.value; i1++ } while (!sumValue && i1 < n)
+    let minValue = sumValue
+    let maxValue = sumValue
+
+    const alpha = Math.max(dy / dx, dx / dy) / (value * ratio)
+    let beta = sumValue * sumValue * alpha
+    let minRatio = Math.max(maxValue / beta, beta / minValue)
+
+    // Keep adding nodes while the aspect ratio maintains or improves.
+    for (; i1 < n; ++i1) {
+      const nodeValue = nodes[i1]!.value
+      sumValue += nodeValue
+      if (nodeValue < minValue) minValue = nodeValue
+      if (nodeValue > maxValue) maxValue = nodeValue
+      beta = sumValue * sumValue * alpha
+      const newRatio = Math.max(maxValue / beta, beta / minValue)
+      if (newRatio > minRatio) { sumValue -= nodeValue; break }
+      minRatio = newRatio
+    }
+
+    // Position the row (slice or dice) and advance the remaining rectangle.
+    dx = x1 - x0; dy = y1 - y0
+    const dice = dx < dy
+    if (dice) {
+      // dice: children split the x-axis, row spans a y-band
+      const yEnd = value ? y0 + dy * sumValue / value : y1
+      treemapDice(nodes, i0, i1, x0, y0, x1, yEnd)
+      y0 = yEnd
+    } else {
+      // slice: children split the y-axis, row spans an x-band
+      const xEnd = value ? x0 + dx * sumValue / value : x1
+      treemapSlice(nodes, i0, i1, x0, y0, xEnd, y1)
+      x0 = xEnd
+    }
+
+    value -= sumValue
+    i0 = i1
+  }
+}
+
+/**
+ * Horizontal splitting — port of d3-hierarchy's `treemap/dice.js`.
+ * Children split the x-axis within [x0, y0]–[x1, y1].
+ */
+function treemapDice(
+  nodes: HierNode[], i0: number, i1: number,
+  x0: number, y0: number, x1: number, y1: number,
+): void {
+  const n = i1 - i0
+  if (n <= 0) return
+  // Compute total value of the slice
+  let total = 0
+  for (let i = i0; i < i1; i++) total += nodes[i]!.value
+  const k = total && (x1 - x0) / total
+  let x = x0
+  for (let i = i0; i < i1; i++) {
+    const node = nodes[i]!
+    node.x0 = x; node.y0 = y0; node.y1 = y1
+    x += node.value * k
+    node.x1 = x
+  }
+}
+
+/**
+ * Vertical splitting — port of d3-hierarchy's `treemap/slice.js`.
+ * Children split the y-axis within [x0, y0]–[x1, y1].
+ */
+function treemapSlice(
+  nodes: HierNode[], i0: number, i1: number,
+  x0: number, y0: number, x1: number, y1: number,
+): void {
+  const n = i1 - i0
+  if (n <= 0) return
+  let total = 0
+  for (let i = i0; i < i1; i++) total += nodes[i]!.value
+  const k = total && (y1 - y0) / total
+  let y = y0
+  for (let i = i0; i < i1; i++) {
+    const node = nodes[i]!
+    node.x0 = x0; node.x1 = x1; node.y0 = y
+    y += node.value * k
+    node.y1 = y
   }
 }
 
