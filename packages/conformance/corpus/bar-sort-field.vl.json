@@ -1,0 +1,1 @@
+{"$schema":"https://vega.github.io/schema/vega-lite/v6.json","width":400,"height":300,"padding":5,"autosize":"none","data":{"name":"table","values":[{"cat":"Banana","val":3},{"cat":"Apple","val":5},{"cat":"Cherry","val":2}]},"mark":"bar","encoding":{"x":{"field":"cat","type":"nominal","sort":{"field":"val","order":"descending"}},"y":{"field":"val","type":"quantitative"}}}

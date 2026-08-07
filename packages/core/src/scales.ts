@@ -22,6 +22,8 @@ export interface ScaleContext {
   evaluate?: (expr: string) => unknown
   /** Collect values of `field` across a named dataset. */
   dataField: (dataName: string, field: string) => unknown[]
+  /** Return all rows of a named dataset (for aggregate sort). */
+  dataRows?: (dataName: string) => Record<string, unknown>[]
 }
 
 export const CONTINUOUS_TYPES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential'])
@@ -237,11 +239,30 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
       } else if (sortSpec === 'descending') {
         vals.sort((a, b) => (a as string) > (b as string) ? -1 : (a as string) < (b as string) ? 1 : 0)
       } else if (sortSpec && typeof sortSpec === 'object' && !Array.isArray(sortSpec)) {
-        const order = (sortSpec as { order?: string }).order
-        if (order === 'descending') {
-          vals.sort((a, b) => (a as string) > (b as string) ? -1 : (a as string) < (b as string) ? 1 : 0)
-        } else if (order === 'ascending' || !order) {
-          vals.sort((a, b) => (a as string) < (b as string) ? -1 : (a as string) > (b as string) ? 1 : 0)
+        const ss = sortSpec as { op?: string; field?: string; order?: string }
+        if (ss.op && ss.field && ctx.dataRows) {
+          // Aggregate sort: group rows by domain field, compute op per group, sort
+          const domainField = (domain as { field: string }).field
+          const dataName = (domain as { data: string }).data
+          const rows = ctx.dataRows(dataName)
+          const agg = new Map<unknown, number>()
+          for (const r of rows) {
+            const key = r[domainField]
+            const val = typeof r[ss.field] === 'number' ? r[ss.field] as number : Number(r[ss.field]) || 0
+            agg.set(key, (agg.get(key) ?? 0) + val)
+          }
+          const desc = ss.order === 'descending'
+          vals.sort((a, b) => {
+            const av = agg.get(a) ?? 0, bv = agg.get(b) ?? 0
+            return desc ? bv - av : av - bv
+          })
+        } else {
+          const order = ss.order
+          if (order === 'descending') {
+            vals.sort((a, b) => (a as string) > (b as string) ? -1 : (a as string) < (b as string) ? 1 : 0)
+          } else if (order === 'ascending' || !order) {
+            vals.sort((a, b) => (a as string) < (b as string) ? -1 : (a as string) > (b as string) ? 1 : 0)
+          }
         }
       }
       return vals

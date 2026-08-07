@@ -378,6 +378,7 @@ function buildScales(ctx: EvalContext): void {
         for (const r of rows) out.push(getField(r, field))
         return out
       },
+      dataRows: (dataName) => (ctx.datasets.get(dataName) ?? []) as Record<string, unknown>[],
     })
     ctx.scales.set(s.name, scale)
     ctx.scaleTypes.set(s.name, s.type)
