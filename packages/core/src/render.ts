@@ -291,9 +291,10 @@ function renderLine(group: SceneGroup): string {
     const stroke = group.items?.[0]?.stroke
     const strokeWidth = group.items?.[0]?.strokeWidth
     const opacity = group.items?.[0]?.opacity
+    const strokeDash = group.items?.[0]?.strokeDash
     // Vega default: line marks have strokeWidth=2
     const sw = strokeWidth ?? (stroke != null ? 2 : undefined)
-    out += `<path d="${path}"${stroke ? ` stroke="${stroke}"` : ''}${sw != null ? ` stroke-width="${num(sw)}"` : ''}${opacity != null ? ` opacity="${num(opacity)}"` : ''}/>`
+    out += `<path d="${path}"${stroke ? ` stroke="${stroke}"` : ''}${sw != null ? ` stroke-width="${num(sw)}"` : ''}${attr('stroke-dasharray', strokeDash)}${opacity != null ? ` opacity="${num(opacity)}"` : ''}/>`
   }
   out += '</g>'
   return out
@@ -555,14 +556,18 @@ function renderTexts(group: SceneGroup): string {
     const fontWeight = (it as Record<string, unknown>).fontWeight as string | number | undefined
     const baseline = it.baseline ?? 'alphabetic'
     const baseY = it.y ?? 0
+    const angle = it.angle
+    // When text is rotated, Vega renders with dy for baseline offset rather
+    // than baking it into y; for non-rotated text the offset goes into y.
+    const isRotated = angle != null && angle !== 0
     let bsOffset = 0
     if (baseline === 'top') bsOffset = Math.round(0.79 * fontSize)
     else if (baseline === 'middle') bsOffset = Math.round(0.30 * fontSize)
     else if (baseline === 'bottom') bsOffset = Math.round(-0.21 * fontSize)
     // alphabetic / default → 0 (no offset)
-    const y = num(baseY + bsOffset)
+    const y = isRotated ? num(baseY) : num(baseY + bsOffset)
     const textAnchor = it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle'
-    out += `<text x="${num(it.x ?? 0)}" y="${y}"${attr('text-anchor', textAnchor)}${attr('font-size', fontSize !== 11 ? fontSize : undefined)}${attr('font-weight', fontWeight)}${attr('fill', it.fill)}${attr("opacity", it.opacity)}${attr("angle", it.angle)}>${esc(String(it.text))}</text>`
+    out += `<text x="${num(it.x ?? 0)}" y="${y}"${isRotated && bsOffset ? ` dy="${num(bsOffset)}"` : ''}${attr('text-anchor', textAnchor)}${attr('font-size', fontSize !== 11 ? fontSize : undefined)}${attr('font-weight', fontWeight)}${attr('fill', it.fill)}${attr("opacity", it.opacity)}${attr("angle", it.angle)}>${esc(String(it.text))}</text>`
   }
   out += '</g>'
   return out
