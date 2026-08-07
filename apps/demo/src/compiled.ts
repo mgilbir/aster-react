@@ -16,6 +16,8 @@ import {
   BubbleSpec,
   CandlestickSpec,
   ColorSchemeSpec,
+  GroupedBarSpec,
+  RadarSpec,
 } from './specs.js'
 
 function compile(spec: Record<string, unknown>): Record<string, unknown> {
@@ -38,3 +40,6 @@ export const CompiledStreamgraphSpec = compile(StreamgraphSpec)
 export const CompiledBubbleSpec = compile(BubbleSpec)
 export const CompiledCandlestickSpec = compile(CandlestickSpec)
 export const CompiledColorSchemeSpec = compile(ColorSchemeSpec)
+export const CompiledGroupedBarSpec = compile(GroupedBarSpec)
+// RadarSpec is a raw Vega spec — pass directly, no vl.compile needed
+export const CompiledRadarSpec = RadarSpec as Record<string, unknown>

@@ -234,7 +234,15 @@ function renderSymbols(group: SceneGroup): string {
     if (it.x == null || it.y == null) continue
     const size = (it.size as number) ?? 30
     const r = Math.sqrt(size) / 2
-    const d = `M${num(r)},0A${num(r)},${num(r)},0,1,1,${num(-r)},0A${num(r)},${num(r)},0,1,1,${num(r)},0`
+    const shape = (it as Record<string, unknown>).shape as string | undefined
+    let d: string
+    if (shape === 'square') {
+      // Square symbol: centered rect (vega-scenegraph symbol square shape)
+      d = `M${num(-r)},${num(-r)}h${num(2 * r)}v${num(2 * r)}h${num(-2 * r)}Z`
+    } else {
+      // Default: circle arc path
+      d = `M${num(r)},0A${num(r)},${num(r)},0,1,1,${num(-r)},0A${num(r)},${num(r)},0,1,1,${num(r)},0`
+    }
     // Vega-Lite: point marks default fill="transparent", stroke from scale or default.
     // The strokeWidth default (2px for the point/circle/square styles) is baked
     // into the item at mark-build time; a raw vega symbol mark with a stroke but

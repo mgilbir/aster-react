@@ -263,3 +263,67 @@ export const ColorSchemeSpec = {
     color: { field: 'cat', type: 'nominal', scale: { range: ['#1f77b4', '#ff7f0e', '#2ca02c'] } }
   }
 }
+
+export const GroupedBarSpec = {
+  $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
+  width: 400, height: 300, padding: 5,
+  data: { name: 'table', values: [
+    { cat: 'A', group: 'X', val: 3 }, { cat: 'A', group: 'Y', val: 5 },
+    { cat: 'B', group: 'X', val: 4 }, { cat: 'B', group: 'Y', val: 2 }
+  ]},
+  mark: 'bar',
+  encoding: {
+    x: { field: 'cat', type: 'nominal' },
+    y: { field: 'val', type: 'quantitative' },
+    color: { field: 'group', type: 'nominal' },
+    xOffset: { field: 'group', type: 'nominal' }
+  }
+}
+
+export const RadarSpec = {
+  $schema: 'https://vega.github.io/schema/vega/v6.json',
+  width: 200, height: 200, padding: 5,
+  data: [{ name: 'table', values: [
+    { axis: 'A', value: 3 }, { axis: 'B', value: 5 },
+    { axis: 'C', value: 4 }, { axis: 'D', value: 2 }, { axis: 'E', value: 5 }
+  ]}],
+  scales: [
+    { name: 'r', type: 'linear', domain: { data: 'table', field: 'value' }, range: [0, 80], zero: true },
+    { name: 'theta', type: 'ordinal', domain: { data: 'table', field: 'axis', sort: true }, range: [0, 6.283185307179586] }
+  ],
+  marks: [{
+    type: 'group',
+    marks: [
+      { type: 'line', from: { data: 'table' }, encode: {
+        update: {
+          x: { signal: "100 + scale('r',datum.value) * cos(scale('theta',datum.axis))" },
+          y: { signal: "100 + scale('r',datum.value) * sin(scale('theta',datum.axis))" },
+          stroke: { value: 'steelblue' }, strokeWidth: { value: 2 }, fill: { value: 'steelblue' }, fillOpacity: { value: 0.3 }
+        }
+      }},
+      { type: 'rule', from: { data: 'table' }, encode: {
+        update: {
+          x: { value: 100 }, y: { value: 100 },
+          x2: { signal: "100 + scale('r',datum.value) * cos(scale('theta',datum.axis))" },
+          y2: { signal: "100 + scale('r',datum.value) * sin(scale('theta',datum.axis))" },
+          stroke: { value: '#ccc' }, strokeWidth: { value: 1 }
+        }
+      }},
+      { type: 'text', from: { data: 'table' }, encode: {
+        update: {
+          x: { signal: "100 + (90) * cos(scale('theta',datum.axis))" },
+          y: { signal: "100 + (90) * sin(scale('theta',datum.axis))" },
+          text: { field: 'axis' }, align: { value: 'center' }, baseline: { value: 'middle' },
+          fill: { value: '#333' }, fontSize: { value: 12 }
+        }
+      }},
+      { type: 'symbol', from: { data: 'table' }, encode: {
+        update: {
+          x: { signal: "100 + scale('r',datum.value) * cos(scale('theta',datum.axis))" },
+          y: { signal: "100 + scale('r',datum.value) * sin(scale('theta',datum.axis))" },
+          fill: { value: 'steelblue' }, size: { value: 40 }
+        }
+      }}
+    ]
+  }]
+}

@@ -16,6 +16,8 @@ import {
   CompiledBubbleSpec,
   CompiledCandlestickSpec,
   CompiledColorSchemeSpec,
+  CompiledGroupedBarSpec,
+  CompiledRadarSpec,
 } from './compiled'
 import { Chart } from '@aster/react'
 import type { SelectionInterval } from '@aster/react'
@@ -185,6 +187,22 @@ function ColorScheme() {
   )
 }
 
+function GroupedBar() {
+  return (
+    <div className="chart-container">
+      <Chart spec={CompiledGroupedBarSpec} ariaLabel="Grouped bar chart" width={400} height={300} />
+    </div>
+  )
+}
+
+function Radar() {
+  return (
+    <div className="chart-container" style={{ justifyContent: 'center' }}>
+      <Chart spec={CompiledRadarSpec} ariaLabel="Radar spider chart" width={200} height={200} />
+    </div>
+  )
+}
+
 export function App() {
   return (
     <div className="app">
@@ -222,6 +240,8 @@ export function App() {
       <Section title="14. Bubble Chart" desc="A point mark with the size channel encoding 'size' quantitatively scales the marker area, producing a bubble chart." chart={<Bubble />} />
       <Section title="15. Candlestick" desc="A layered rule (low-high wick) and bar (open-close body) renders a candlestick chart. Bar color is conditioned on the open/close relationship: green when close is above open, red otherwise." chart={<Candlestick />} />
       <Section title="16. Color Scheme Scatter" desc="A nominal color scale with an explicit range maps each category to a fixed palette, driving both marker color and the legend." chart={<ColorScheme />} />
+      <Section title="17. Grouped Bar Chart" desc="Bars grouped side-by-side per category using the xOffset channel, with color encoding the group dimension." chart={<GroupedBar />} />
+      <Section title="18. Radar / Spider Chart" desc="A raw Vega spec with radial axes and a polygon line connecting data points at each axis, with dots and labels." chart={<Radar />} />
     </div>
   )
 }
