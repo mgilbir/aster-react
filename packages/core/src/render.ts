@@ -419,7 +419,7 @@ function renderArcs(group: SceneGroup): string {
     const r0 = (it.innerRadius as number) ?? 0
     const a0 = (it.startAngle as number) ?? 0
     const a1 = (it.endAngle as number) ?? 0
-    out += `<path d="${arcPath(x, y, r, r0, a0, a1)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}/>`
+    out += `<path d="${arcPath(x, y, r, r0, a0, a1)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${it.stroke != null ? attr('stroke-width', it.strokeWidth) : ''}/>`
   }
   out += '</g>'
   return out

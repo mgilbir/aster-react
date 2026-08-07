@@ -139,6 +139,8 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
     }
     case 'pack':
       return packRows(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'partition':
+      return partitionRows(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'treemap':
       return treemapRows(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'sequence':
@@ -1482,6 +1484,7 @@ interface HierNode {
   children: HierNode[]
   parent: HierNode | null
   depth: number
+  height: number
   x: number
   y: number
   r: number
@@ -1498,7 +1501,7 @@ function buildStratifyTree(rows: Row[], key?: string, parentKey?: string): HierN
   if (!key) throw new Error('[aster] stratify requires a key field')
   const byKey = new Map<unknown, HierNode>()
   for (const r of rows) {
-    byKey.set(r[key], { data: r, children: [], parent: null, depth: 0, x: 0, y: 0, r: 0, value: 0 })
+    byKey.set(r[key], { data: r, children: [], parent: null, depth: 0, height: 0, x: 0, y: 0, r: 0, value: 0 })
   }
   let root: HierNode | null = null
   for (const r of rows) {
@@ -1519,6 +1522,9 @@ function buildStratifyTree(rows: Row[], key?: string, parentKey?: string): HierN
   if (!root) throw new Error('[aster] stratify: no root node found')
   eachBefore(root, (node) => {
     node.depth = node.parent ? node.parent.depth + 1 : 0
+  })
+  eachAfter(root, (node) => {
+    node.height = node.children.length ? Math.max(...node.children.map(c => c.height)) + 1 : 0
   })
   return root
 }
@@ -1962,6 +1968,121 @@ function packEncloseBasis(B: HierNode[]): HierNode {
     case 3: return packEncloseBasis3(B[0]!, B[1]!, B[2]!)
     default: throw new Error('[aster] pack: bad basis size')
   }
+}
+
+// ---------------------------------------------------------------------------
+// partition (d3-hierarchy partition layout)
+//
+// The vega `partition` transform wraps d3-hierarchy's `partition` layout,
+// which assigns x0/y0/x1/y1 to every node. The layout is used for sunburst
+// and icicle charts: the x-axis represents proportional value (angular span
+// for sunburst) and the y-axis represents depth bands (radial bands).
+//
+// The implementation follows d3-hierarchy@3.1.2 source:
+//   src/partition.js       — partition layout (dx/dy/padding/round)
+//   src/treemap/dice.js    — horizontal splitting
+//   src/treemap/round.js   — integer rounding
+// ---------------------------------------------------------------------------
+
+/**
+ * d3-hierarchy partition dice: split children along the x-axis using the
+ * parent's accumulated value as denominator (matching d3-hierarchy's
+ * treemap/dice.js which uses `parent.value`).
+ */
+function partitionDice(parent: HierNode, x0: number, y0: number, x1: number, y1: number): void {
+  const nodes = parent.children
+  const n = nodes.length
+  if (!n) return
+  const k = parent.value && (x1 - x0) / parent.value
+  let x = x0
+  for (let i = 0; i < n; i++) {
+    const node = nodes[i]!
+    node.y0 = y0
+    node.y1 = y1
+    node.x0 = x
+    x += node.value * k
+    node.x1 = x
+  }
+}
+
+/** The vega `partition` transform: layout the stratify-built tree via d3 partition. */
+function partitionRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext, sourceName?: string): Row[] {
+  const root = sourceName ? (ctx.hierarchies?.get(sourceName) as HierNode | undefined) : undefined
+  if (!root) {
+    throw new Error('[aster] partition transform requires a preceding stratify transform on the same data source')
+  }
+  const field = t.field as string | undefined
+  const sort = t.sort as SortSpec | undefined
+  const round = t.round === true
+  const padding = (t.padding as number) ?? 0
+  const as = (t.as as string[]) ?? ['x0', 'y0', 'x1', 'y1', 'depth', 'children']
+  const size = t.size as number[] | undefined
+  // d3-hierarchy default partition size is [1, 1]
+  const dx = size?.[0] ?? 1
+  const dy = size?.[1] ?? 1
+
+  // root.sum(field): each node's value is its own plus its descendants'.
+  eachAfter(root, (node) => {
+    let sum = field != null ? Number(node.data[field]) || 0 : 1
+    for (const c of node.children) sum += c.value
+    node.value = sum
+  })
+
+  if (sort?.field) sortTreeChildren(root, sort)
+
+  // d3-hierarchy partition layout
+  const n = root.height + 1
+  root.x0 = padding
+  root.y0 = padding
+  root.x1 = dx
+  root.y1 = dy / n
+
+  eachBefore(root, (node) => {
+    if (node.children.length) {
+      // d3-hierarchy partition: treemapDice splits children along x-axis
+      // within the next depth band (y range). Unlike the treemap version,
+      // the partition dice uses parent.value (not sum of children) as the
+      // denominator because the parent's x range [x0,x1] represents its
+      // full accumulated value.
+      const y0 = dy * (node.depth + 1) / n
+      const y1 = dy * (node.depth + 2) / n
+      partitionDice(node, node.x0!, y0, node.x1!, y1)
+    }
+    // Apply padding and clamping (d3-hierarchy partition positionNode)
+    let x0 = node.x0!
+    let y0 = node.y0!
+    let x1 = node.x1! - padding
+    let y1 = node.y1! - padding
+    if (x1 < x0) x0 = x1 = (x0 + x1) / 2
+    if (y1 < y0) y0 = y1 = (y0 + y1) / 2
+    node.x0 = x0
+    node.y0 = y0
+    node.x1 = x1
+    node.y1 = y1
+  })
+
+  // Round if requested
+  if (round) {
+    eachBefore(root, (node) => {
+      node.x0 = Math.round(node.x0!)
+      node.y0 = Math.round(node.y0!)
+      node.x1 = Math.round(node.x1!)
+      node.y1 = Math.round(node.y1!)
+    })
+  }
+
+  // Write results back to rows (mirrors vega HierarchyLayout setFields)
+  eachBefore(root, (node) => {
+    const d = node.data
+    d[as[0]!] = node.x0
+    d[as[1]!] = node.y0
+    d[as[2]!] = node.x1
+    d[as[3]!] = node.y1
+    d[as[4]!] = node.depth
+    d[as[5]!] = node.children.length
+  })
+
+  return rows
 }
 
 // ---------------------------------------------------------------------------
