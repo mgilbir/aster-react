@@ -145,6 +145,7 @@ export interface CompiledAxis {
   labelFlush?: boolean | number
   labelOverlap?: boolean | string
   labelPadding?: number
+  labelAngle?: number
   tickBand?: string
   zindex?: number
   encode?: Record<string, Record<string, EncodeValue>>

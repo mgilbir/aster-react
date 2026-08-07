@@ -253,11 +253,25 @@ function distinctValues(values: unknown[]): unknown[] {
   return out
 }
 
+function resolveRangeSignal(signal: string, ctx: ScaleContext): unknown {
+  // Try direct signal name lookup first
+  const v = ctx.signals[signal]
+  if (v != null) return v
+  // Not a plain signal name — try evaluating as a Vega expression (e.g. "bandwidth('x')")
+  if (ctx.evaluate) {
+    try {
+      const result = ctx.evaluate(signal)
+      if (result != null) return result
+    } catch { /* fall through to error */ }
+  }
+  return undefined
+}
+
 function resolveRange(range: ScaleRange, ctx: ScaleContext): unknown[] | string {
   if (Array.isArray(range)) {
     return range.map((r) => {
       if (r && typeof r === 'object' && 'signal' in r) {
-        const v = ctx.signals[(r as { signal: string }).signal]
+        const v = resolveRangeSignal((r as { signal: string }).signal, ctx)
         if (v == null) throw new Error(`[aster] unresolved signal range element: ${(r as { signal: string }).signal}`)
         return v
       }
@@ -289,7 +303,7 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext): unknown[] | string 
     }
   }
   if (range && typeof range === 'object' && 'signal' in range) {
-    const v = ctx.signals[range.signal]
+    const v = resolveRangeSignal(range.signal, ctx)
     if (v == null) throw new Error(`[aster] unresolved signal range: ${range.signal}`)
     return Array.isArray(v) ? (v as unknown[]) : [v]
   }

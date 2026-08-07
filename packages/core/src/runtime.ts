@@ -1743,6 +1743,17 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
       let offset: number
       if (typeof offsetSpec === 'number') {
         offset = offsetSpec
+      } else if (offsetSpec && typeof offsetSpec === 'object' && 'scale' in offsetSpec) {
+        // Scale-based offset (e.g. from Vega-Lite's xOffset encoding):
+        // { scale: "xOffset", field: "group" }
+        const offScale = ctx.scales.get((offsetSpec as { scale: string }).scale)
+        if (offScale) {
+          const offField = (offsetSpec as { field?: string }).field
+          const offRaw = offField ? getField(datum, offField) : undefined
+          offset = offRaw !== undefined ? offScale(offRaw) as number : 0
+        } else {
+          offset = 0
+        }
       } else if (offsetSpec && typeof offsetSpec === 'object' && 'signal' in offsetSpec) {
         offset = ctx.runtime.expr(offsetSpec.signal as string)(datum, ctx.signalParams) as number
       } else {
@@ -2193,10 +2204,17 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
 
   if (axis.domain !== false) {
     const domainLine: SceneItem = { x: 0, y: 0, x2: 0, y2: 0 }
-    if (orient === 'left') { domainLine.x = 0.5; domainLine.x2 = 0.5; domainLine.y = 0.5; domainLine.y2 = ctx.height + 0.5 }
-    else if (orient === 'right') { domainLine.x = ctx.width + 0.5; domainLine.x2 = ctx.width + 0.5; domainLine.y = 0.5; domainLine.y2 = ctx.height + 0.5 }
-    else if (orient === 'bottom') { domainLine.x = 0.5; domainLine.x2 = ctx.width + 0.5; domainLine.y = ctx.height + 0.5; domainLine.y2 = ctx.height + 0.5 }
-    else { domainLine.x = 0.5; domainLine.x2 = ctx.width + 0.5; domainLine.y = 0.5; domainLine.y2 = 0.5 }
+    // Compute the scale range extent for the axis domain line.
+    // For non-band scales, the range values determine the axis extent.
+    const scaleRange = scale.range() as number[]
+    const rangeStart: number = scaleRange.length > 0 ? Number(scaleRange[0]) || 0 : 0
+    const rangeEnd: number = scaleRange.length > 0 ? Number(scaleRange[scaleRange.length - 1]) || 0 : 0
+    const axisStart = Math.min(rangeStart, rangeEnd)
+    const axisEnd = Math.max(rangeStart, rangeEnd)
+    if (orient === 'left') { domainLine.x = 0.5; domainLine.x2 = 0.5; domainLine.y = axisStart + 0.5; domainLine.y2 = axisEnd + 0.5 }
+    else if (orient === 'right') { domainLine.x = ctx.width + 0.5; domainLine.x2 = ctx.width + 0.5; domainLine.y = axisStart + 0.5; domainLine.y2 = axisEnd + 0.5 }
+    else if (orient === 'bottom') { domainLine.x = axisStart + 0.5; domainLine.x2 = axisEnd + 0.5; domainLine.y = ctx.height + 0.5; domainLine.y2 = ctx.height + 0.5 }
+    else { domainLine.x = axisStart + 0.5; domainLine.x2 = axisEnd + 0.5; domainLine.y = 0.5; domainLine.y2 = 0.5 }
     domainLine.stroke = '#888'; domainLine.strokeWidth = 1
     items.push(domainLine)
   }
@@ -2214,7 +2232,12 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     const hasTickMarks = ticks.length > 0
     if (orient === 'bottom') {
       t.x = ctx.width / 2 + 0.5
-      t.y = ctx.height + (hasTickMarks ? (scale.bandwidth ? 28 : 30) : 13) + 0.5
+      if (axis.labelAngle === 270 && maxLabelLen > 0) {
+        const labelExtent = Math.floor(0.8 * maxLabelLen * 10)
+        t.y = ctx.height + 0.5 + tickSize + labelPadding + labelExtent + 4 + 11 - 2
+      } else {
+        t.y = ctx.height + (hasTickMarks ? (scale.bandwidth ? 28 : 30) : 13) + 0.5
+      }
       t.align = 'center'; t.baseline = 'top'
     }
     else if (orient === 'top') { t.x = ctx.width / 2 + 0.5; t.y = -tickSize - 10 + 0.5; t.align = 'center'; t.baseline = 'bottom' }
