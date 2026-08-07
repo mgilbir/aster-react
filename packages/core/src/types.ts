@@ -241,6 +241,8 @@ export interface SceneGroup extends SceneItem {
   /** Nested scene items (children of a group). */
   items?: SceneNode[]
   clip?: boolean
+  /** Pre-computed rounded-rect path `d` for clip-path defs (when cornerRadius > 0). */
+  clipPathD?: string
 }
 
 export type SceneNode = SceneGroup

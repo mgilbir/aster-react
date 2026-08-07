@@ -79,7 +79,7 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   out += `<path class="background" aria-hidden="true" d="${frameD}"${scene.frameStroke ? ` stroke="${scene.frameStroke}"` : ''}/>`
   out += '<g>'
   // Collect clip refs during rendering
-  const clipN = { current: 0 }
+  const clipN = { current: 0, paths: [] as (string | null)[] }
   for (const node of scene.items) {
     out += renderGroup(node, plotW, plotH, clipN)
   }
@@ -98,7 +98,12 @@ export function renderSceneToSvg(scene: SceneRoot): string {
       out += '</linearGradient>'
     }
     for (let i = 1; i <= clipN.current; i++) {
-      out += `<clipPath id="clip${i}"><rect x="0" y="0" width="${plotW}" height="${plotH}"/></clipPath>`
+      const d = clipN.paths[i - 1]
+      if (d) {
+        out += `<clipPath id="clip${i}"><path d="${d}"/></clipPath>`
+      } else {
+        out += `<clipPath id="clip${i}"><rect x="0" y="0" width="${plotW}" height="${plotH}"/></clipPath>`
+      }
     }
     out += '</defs>'
   }
@@ -107,7 +112,7 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   return out
 }
 
-function renderGroup(group: SceneGroup, plotW?: number, plotH?: number, clipN?: { current: number }): string {
+function renderGroup(group: SceneGroup, plotW?: number, plotH?: number, clipN?: { current: number; paths: (string | null)[] }): string {
   const type = group.marktype
   const needsClip = clipN
     && group.clip === true
@@ -122,6 +127,7 @@ function renderGroup(group: SceneGroup, plotW?: number, plotH?: number, clipN?: 
     if (group.role) out2 += ` role="${group.role}"`
     if (needsClip) {
       const clipId = ++clipN.current
+      clipN.paths.push(group.clipPathD ?? null)
       out2 += ` clip-path="url(#clip${clipId})"`
     }
     out2 += `${transform}>`
@@ -138,6 +144,7 @@ function renderGroup(group: SceneGroup, plotW?: number, plotH?: number, clipN?: 
 
   if (needsClip && clipN) {
     const clipId = ++clipN.current
+    clipN.paths.push(group.clipPathD ?? null)
     return `<g clip-path="url(#clip${clipId})">${inner}</g>`
   }
   return inner
@@ -502,31 +509,15 @@ function renderRects(group: SceneGroup): string {
     const cr = (it as Record<string, unknown>).cornerRadius as number | undefined ?? 0
     let d: string
     if (cr > 0 && cr < w / 2 && cr < h / 2) {
-      // Use cubic bezier approximation of circular arcs (matching vega-scenegraph).
-      // k = 4/3 * (sqrt(2) - 1) ≈ 0.5522847498
-      const k = 0.5522847498
-      const r = Math.min(cr, w / 2, h / 2)
-      const kr = k * r
-      const x1 = x0 + r
-      const y1 = y0
-      const x2 = x0 + w - r
-      const y2 = y0
-      const x3 = x0 + w
-      const y3 = y0 + r
-      const x4 = x0 + w
-      const y4 = y0 + h - r
-      const x5 = x0 + w - r
-      const y5 = y0 + h
-      const x6 = x0 + r
-      const y6 = y0 + h
-      const x7 = x0
-      const y7 = y0 + h - r
-      const x8 = x0
-      const y8 = y0 + r
-      d = `M${num(x1)},${num(y1)}L${num(x2)},${num(y2)}C${num(x2 + kr)},${num(y2)},${num(x3)},${num(y2 + kr)},${num(x3)},${num(y3)}`
-        + `L${num(x4)},${num(y4)}C${num(x4)},${num(y4 + kr)},${num(x5 + kr)},${num(y5)},${num(x5)},${num(y5)}`
-        + `L${num(x6)},${num(y6)}C${num(x6 - kr)},${num(y6)},${num(x7)},${num(y7 + kr)},${num(x7)},${num(y7)}`
-        + `L${num(x8)},${num(y8)}C${num(x8)},${num(y8 - kr)},${num(x1 - kr)},${num(y1)},${num(x1)},${num(y1)}Z`
+      // Match vega-scenegraph's rounded rect: control point offset = r - r*cos(pi/4)
+      // which equals r * (1 - cos(45°)) = r * (1 - √2/2) ≈ r * 0.2928932188
+      const k = 1 - Math.SQRT1_2 // ≈ 0.2928932188
+      const r = cr
+      const kr = r * k
+      d = `M${num(x0 + r)},${num(y0)}L${num(x0 + w - r)},${num(y0)}C${num(x0 + w - r + kr)},${num(y0)},${num(x0 + w)},${num(y0 + r - kr)},${num(x0 + w)},${num(y0 + r)}`
+        + `L${num(x0 + w)},${num(y0 + h - r)}C${num(x0 + w)},${num(y0 + h - r + kr)},${num(x0 + w - r + kr)},${num(y0 + h)},${num(x0 + w - r)},${num(y0 + h)}`
+        + `L${num(x0 + r)},${num(y0 + h)}C${num(x0 + r - kr)},${num(y0 + h)},${num(x0)},${num(y0 + h - r + kr)},${num(x0)},${num(y0 + h - r)}`
+        + `L${num(x0)},${num(y0 + r)}C${num(x0)},${num(y0 + r - kr)},${num(x0 + r - kr)},${num(y0)},${num(x0 + r)},${num(y0)}Z`
     } else {
       d = `M${num(x0)},${num(y0)}h${num(w)}v${num(h)}h${num(-w)}Z`
     }

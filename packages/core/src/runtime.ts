@@ -620,7 +620,19 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | Scen
         else items.push(r)
       }
     }
-    return { marktype: 'group', name, role: (mark.role as string) ?? 'scope', items, clip: mark.clip === true }
+    // Vega auto-clips groups that have cornerRadius: extract the value from
+    // the group encode and, when >0, emit a rounded-rect clip path matching
+    // the group's plot-area dimensions.
+    const grEnc = (mark as any).encode?.update
+    const grCR = grEnc?.cornerRadius
+    const grpCR = grCR && typeof grCR === 'object' && 'value' in grCR
+      ? (grCR as { value: number }).value
+      : (typeof grCR === 'number' ? grCR : 0)
+    const grpClip = mark.clip === true || grpCR > 0
+    const grpClipD = grpCR > 0
+      ? roundedRectPath(0, 0, ctx.width, ctx.height, Math.min(grpCR, ctx.width / 2, ctx.height / 2))
+      : undefined
+    return { marktype: 'group', name, role: (mark.role as string) ?? 'scope', items, clip: grpClip, ...(grpClipD ? { clipPathD: grpClipD } : {}) }
   }
   throw new Error('[aster] unsupported group mark: ' + (name ?? '<unnamed>'))
 }
@@ -797,6 +809,55 @@ function isTrellis(ctx: EvalContext): boolean {
 }
 
 /**
+ * Walk a scene subtree and find the first item with y and y2 set (a rect mark
+ * item). Returns the absolute height |y2 - y|, or null if not found.
+ */
+function findBarHeight(items: SceneItem[]): number | null {
+  for (const item of items) {
+    const group = item as SceneGroup
+    if ((group.marktype !== undefined || Array.isArray(group.items)) && group.items) {
+      const h = findBarHeight(group.items)
+      if (h != null) return h
+    } else {
+      const it = item as Record<string, unknown>
+      if (it.y != null && it.y2 != null && typeof it.y === 'number' && typeof it.y2 === 'number') {
+        return Math.abs(it.y2 - it.y)
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * Generate an SVG path for a rounded rectangle with corner radius r,
+ * using cubic bezier approximation matching vega-scenegraph (k ≈ 0.5523).
+ */
+function roundedRectPath(x: number, y: number, w: number, h: number, r: number): string {
+  // vega-scenegraph uses C = 0.448084975506 (from spencermortensen.com/articles/bezier-circle)
+  // CP1 offset = r * (1 - C) (the larger offset, away from the corner)
+  // CP2 offset = r * C (the smaller offset, closer to the end point)
+  const c = 0.448084975506
+  const kr1 = r * (1 - c) // CP1 offset (from start, toward end)
+  const kr2 = r * c       // CP2 offset (from end, toward start)
+  const fmt = (v: number) => {
+    const n = Math.round(v * 1000) / 1000
+    return String(n)
+  }
+  const x1 = x + r, y1 = y
+  const x2 = x + w - r, y2 = y
+  const x3 = x + w, y3 = y + r
+  const x4 = x + w, y4 = y + h - r
+  const x5 = x + w - r, y5 = y + h
+  const x6 = x + r, y6 = y + h
+  const x7 = x, y7 = y + h - r
+  const x8 = x, y8 = y + r
+  return `M${fmt(x1)},${fmt(y1)}L${fmt(x2)},${fmt(y2)}C${fmt(x2 + kr1)},${fmt(y2)},${fmt(x3)},${fmt(y3 - kr1)},${fmt(x3)},${fmt(y3)}`
+    + `L${fmt(x4)},${fmt(y4)}C${fmt(x4)},${fmt(y4 + kr1)},${fmt(x5 + kr1)},${fmt(y5)},${fmt(x5)},${fmt(y5)}`
+    + `L${fmt(x6)},${fmt(y6)}C${fmt(x6 - kr1)},${fmt(y6)},${fmt(x7)},${fmt(y7 + kr1)},${fmt(x7)},${fmt(y7)}`
+    + `L${fmt(x8)},${fmt(y8)}C${fmt(x8)},${fmt(y8 - kr1)},${fmt(x1 - kr1)},${fmt(y1)},${fmt(x1)},${fmt(y1)}Z`
+}
+
+/**
  * Build the facet cell groups. In a 2D trellis the facet key is (row, column):
  * cells are arranged in a grid and each cell's data is its (r, c) slice.
  */
@@ -851,8 +912,32 @@ function buildFacetCells(
     // inset) are the spatial facet cells of facet/trellis charts; plain group
     // marks (e.g. vega-lite's faceted area `pathgroup`) render a bare full-size
     // path with no stroke.
+    //
+    // When the facet group has cornerRadius, vega renders the group background
+    // as a rounded rect matching the bar's actual dimensions (y2-y height from
+    // the encode), and the inner scope background as a zero-height path.
     const cellStyle = Array.isArray(mark.style) ? mark.style.includes('cell') : mark.style === 'cell'
-    if (cellStyle) {
+    // Extract cornerRadius from the group's encode
+    const grEnc = (mark as any).encode?.update
+    const grCR = grEnc?.cornerRadius
+    const cellCornerRadius = grCR && typeof grCR === 'object' && 'value' in grCR
+      ? (grCR as { value: number }).value
+      : (typeof grCR === 'number' ? grCR : 0)
+    // Compute the actual bar height from the nested rect items
+    const barH = findBarHeight(nestedItems)
+    const bgH = barH ?? cellHeight
+    if (cellCornerRadius > 0 && barH != null) {
+      // Vega renders the group background as a rounded rect with cornerRadius
+      const cr = Math.min(cellCornerRadius, cellWidth / 2, bgH / 2)
+      const bgPath = roundedRectPath(0, 0, cellWidth, bgH, cr)
+      cellItems.push({ path: bgPath, x: 0, y: 0 } as SceneItem)
+      // Inner scope background: zero-height path (vega default for groups
+      // without explicit height)
+      cellItems.push({
+        path: `M0,0h${cellWidth}v0h-${cellWidth}Z`,
+        x: 0, y: 0,
+      } as SceneItem)
+    } else if (cellStyle) {
       cellItems.push({
         path: `M0.5,0.5h${cellWidth}v${cellHeight}h-${cellWidth}Z`,
         x: 0, y: 0, stroke: '#ddd',
@@ -867,9 +952,10 @@ function buildFacetCells(
     result.push({
       marktype: 'group', name: mark.name, role: 'scope',
       items: cellItems,
-      clip: mark.clip === true,
+      clip: mark.clip === true || cellCornerRadius > 0,
       width: cellWidth, height: cellHeight,
       x: 0, y: 0,
+      ...(cellCornerRadius > 0 && barH != null ? { clipPathD: roundedRectPath(0, 0, cellWidth, bgH, Math.min(cellCornerRadius, cellWidth / 2, bgH / 2)) } : {}),
     })
   }
 
