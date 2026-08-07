@@ -289,10 +289,14 @@ function renderRects(group: SceneGroup): string {
 function renderRules(group: SceneGroup): string {
   let out = `<g class="mark-rule role-mark" role="graphics-symbol" aria-roledescription="rule mark container">`
   for (const it of itemsOf(group)) {
-    if (it.x == null || it.y == null) continue
-    const x2 = it.x2 ?? it.x
-    const y2 = it.y2 ?? it.y
-    out += `<line x1="${num(it.x)}" y1="${num(it.y)}" x2="${num(x2)}" y2="${num(y2)}"${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
+    // Vega defaults undefined x/y to 0 (scenegraph item defaults), so even
+    // degenerate rules with unresolved fields render as zero-length lines at
+    // the origin rather than being skipped.
+    const x = it.x ?? 0
+    const y = it.y ?? 0
+    const x2 = it.x2 ?? x
+    const y2 = it.y2 ?? y
+    out += `<line x1="${num(x)}" y1="${num(y)}" x2="${num(x2)}" y2="${num(y2)}"${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
   }
   out += '</g>'
   return out
