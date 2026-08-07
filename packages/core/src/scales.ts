@@ -231,8 +231,18 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
         return [Math.min(...finite), Math.max(...finite)]
       }
       let vals = distinctValues(all)
-      if ((domain as { sort?: unknown }).sort === true) {
+      const sortSpec = (domain as { sort?: unknown }).sort
+      if (sortSpec === true || sortSpec === 'ascending') {
         vals.sort((a, b) => (a as string) < (b as string) ? -1 : (a as string) > (b as string) ? 1 : 0)
+      } else if (sortSpec === 'descending') {
+        vals.sort((a, b) => (a as string) > (b as string) ? -1 : (a as string) < (b as string) ? 1 : 0)
+      } else if (sortSpec && typeof sortSpec === 'object' && !Array.isArray(sortSpec)) {
+        const order = (sortSpec as { order?: string }).order
+        if (order === 'descending') {
+          vals.sort((a, b) => (a as string) > (b as string) ? -1 : (a as string) < (b as string) ? 1 : 0)
+        } else if (order === 'ascending' || !order) {
+          vals.sort((a, b) => (a as string) < (b as string) ? -1 : (a as string) > (b as string) ? 1 : 0)
+        }
       }
       return vals
     }

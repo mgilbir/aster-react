@@ -426,7 +426,18 @@ function concreteDomain(scale: CompiledScale, values: unknown[]): unknown[] {
   const distinct: unknown[] = []
   for (const v of values) if (!distinct.some((x) => x === v)) distinct.push(v)
   const sort = (scale.domain as { sort?: unknown }).sort
-  if (sort === true) distinct.sort((a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0)
+  if (sort === true || sort === 'ascending') {
+    distinct.sort((a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0)
+  } else if (sort === 'descending') {
+    distinct.sort((a, b) => String(a) > String(b) ? -1 : String(a) < String(b) ? 1 : 0)
+  } else if (sort && typeof sort === 'object' && !Array.isArray(sort)) {
+    const order = (sort as { order?: string }).order
+    if (order === 'descending') {
+      distinct.sort((a, b) => String(a) > String(b) ? -1 : String(a) < String(b) ? 1 : 0)
+    } else if (order === 'ascending' || !order) {
+      distinct.sort((a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0)
+    }
+  }
   return distinct
 }
 

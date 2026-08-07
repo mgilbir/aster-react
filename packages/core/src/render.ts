@@ -4,6 +4,63 @@
  * reference renderer; the conformance diff compares normalized geometry.
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
+import {
+  line as d3Line,
+  curveLinear,
+  curveBasis,
+  curveBasisClosed,
+  curveBasisOpen,
+  curveBundle,
+  curveCardinal,
+  curveCardinalClosed,
+  curveCardinalOpen,
+  curveCatmullRom,
+  curveCatmullRomClosed,
+  curveCatmullRomOpen,
+  curveLinearClosed,
+  curveMonotoneX,
+  curveMonotoneY,
+  curveNatural,
+  curveStep,
+  curveStepAfter,
+  curveStepBefore,
+} from 'd3-shape'
+
+/**
+ * Map Vega interpolation names to d3-shape curve constructors.
+ * Matches vega-scenegraph/src/path/curves.js.
+ */
+const CURVE_MAP: Record<string, unknown> = {
+  'basis': curveBasis,
+  'basis-closed': curveBasisClosed,
+  'basis-open': curveBasisOpen,
+  'bundle': curveBundle,
+  'cardinal': curveCardinal,
+  'cardinal-closed': curveCardinalClosed,
+  'cardinal-open': curveCardinalOpen,
+  'catmull-rom': curveCatmullRom,
+  'catmull-rom-closed': curveCatmullRomClosed,
+  'catmull-rom-open': curveCatmullRomOpen,
+  'linear': curveLinear,
+  'linear-closed': curveLinearClosed,
+  'monotone-x': curveMonotoneX,
+  'monotone-y': curveMonotoneY,
+  'natural': curveNatural,
+  'step': curveStep,
+  'step-after': curveStepAfter,
+  'step-before': curveStepBefore,
+}
+
+/**
+ * Resolve a Vega interpolation name to a d3-shape curve.
+ * For "monotone" without axis qualifier, vega defaults to monotoneX (vertical).
+ */
+function resolveCurve(interpolate: string, orient?: string): unknown {
+  if (interpolate === 'monotone') {
+    return orient === 'horizontal' ? curveMonotoneY : curveMonotoneX
+  }
+  return CURVE_MAP[interpolate] ?? null
+}
 
 export function renderSceneToSvg(scene: SceneRoot): string {
   const W = scene.width
@@ -142,29 +199,86 @@ function itemsOf(group: SceneGroup): SceneItem[] {
 function renderLine(group: SceneGroup): string {
   const items = itemsOf(group)
   let out = `<g class="mark-line role-mark" role="graphics-symbol" aria-roledescription="line mark container">`
-  let d = ''
-  let start = -1
-  const runs: Array<{ x: number; y: number; defined: boolean }> = items.map((it) => ({
-    x: it.x as number,
-    y: it.y as number,
-    defined: it.defined !== false && it.x != null && it.y != null,
-  }))
-  // build contiguous runs of defined points
+
+  // Check if this line has curve interpolation (Vega's `interpolate` encode)
+  const firstItem = items[0] as Record<string, unknown> | undefined
+  const interpolate = firstItem?.interpolate as string | undefined
+  const orient = firstItem?.orient as string | undefined
+  const tension = firstItem?.tension as number | undefined
+
   let path = ''
-  let penDown = false
-  for (let i = 0; i < runs.length; i++) {
-    const r = runs[i]!
-    if (!r.defined) {
-      penDown = false
-      continue
-    }
-    if (!penDown) {
-      path += `M${num(r.x)},${num(r.y)}`
-      penDown = true
-    } else {
-      path += `L${num(r.x)},${num(r.y)}`
+  if (interpolate && interpolate !== 'linear') {
+    // Use d3-shape for curve interpolation
+    const curve = resolveCurve(interpolate, orient)
+    if (curve) {
+      let curveFn: unknown = curve
+      // Apply tension for curves that support it (bundle, cardinal, cardinal-open, cardinal-closed)
+      if (tension != null && curveFn) {
+        const cf = curveFn as Record<string, ((v: number) => unknown) | undefined>
+        if (interpolate === 'bundle' && typeof cf.beta === 'function') {
+          curveFn = cf.beta(tension)
+        } else if ((interpolate === 'cardinal' || interpolate === 'cardinal-open' || interpolate === 'cardinal-closed') && typeof cf.tension === 'function') {
+          curveFn = cf.tension(tension)
+        } else if ((interpolate === 'catmull-rom' || interpolate === 'catmull-rom-open' || interpolate === 'catmull-rom-closed') && typeof cf.alpha === 'function') {
+          curveFn = cf.alpha(tension)
+        }
+      }
+      type Pt = { x: number; y: number; defined: boolean }
+      const lineGen = d3Line<Pt>()
+        .x((d: Pt) => d.x)
+        .y((d: Pt) => d.y)
+        .defined((d: Pt) => d.defined)
+        .curve(curveFn as Parameters<ReturnType<typeof d3Line<Pt>>['curve']>[0])
+
+      // Build contiguous runs of defined points (same as linear path)
+      const runs: Array<{ x: number; y: number; defined: boolean }> = items.map((it) => ({
+        x: it.x as number,
+        y: it.y as number,
+        defined: it.defined !== false && it.x != null && it.y != null,
+      }))
+      // Split into segments at undefined points and generate curve per segment
+      const segments: Array<Array<{ x: number; y: number; defined: boolean }>> = []
+      let current: Array<{ x: number; y: number; defined: boolean }> = []
+      for (const r of runs) {
+        if (!r.defined) {
+          if (current.length > 1) segments.push(current)
+          current = []
+        } else {
+          current.push(r)
+        }
+      }
+      if (current.length > 1) segments.push(current)
+
+      for (const seg of segments) {
+        const d = lineGen(seg)
+        if (d) path += d
+      }
     }
   }
+
+  // Fallback: linear interpolation (or if curve failed)
+  if (!path) {
+    const runs: Array<{ x: number; y: number; defined: boolean }> = items.map((it) => ({
+      x: it.x as number,
+      y: it.y as number,
+      defined: it.defined !== false && it.x != null && it.y != null,
+    }))
+    let penDown = false
+    for (let i = 0; i < runs.length; i++) {
+      const r = runs[i]!
+      if (!r.defined) {
+        penDown = false
+        continue
+      }
+      if (!penDown) {
+        path += `M${num(r.x)},${num(r.y)}`
+        penDown = true
+      } else {
+        path += `L${num(r.x)},${num(r.y)}`
+      }
+    }
+  }
+
   if (path) {
     const stroke = group.items?.[0]?.stroke
     const strokeWidth = group.items?.[0]?.strokeWidth
@@ -174,8 +288,6 @@ function renderLine(group: SceneGroup): string {
     out += `<path d="${path}"${stroke ? ` stroke="${stroke}"` : ''}${sw != null ? ` stroke-width="${num(sw)}"` : ''}${opacity != null ? ` opacity="${num(opacity)}"` : ''}/>`
   }
   out += '</g>'
-  void start
-  void d
   return out
 }
 
