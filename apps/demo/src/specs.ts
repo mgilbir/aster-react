@@ -289,7 +289,7 @@ export const RadarSpec = {
   ]}],
   scales: [
     { name: 'r', type: 'linear', domain: { data: 'table', field: 'value' }, range: [0, 80], zero: true },
-    { name: 'theta', type: 'ordinal', domain: { data: 'table', field: 'axis', sort: true }, range: [0, 6.283185307179586] }
+    { name: 'theta', type: 'point', domain: { data: 'table', field: 'axis', sort: true }, range: [0, 6.283185307179586] }
   ],
   marks: [{
     type: 'group',
