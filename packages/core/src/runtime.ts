@@ -1583,11 +1583,27 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
     }
   }
 
+  // Resolve the `defined` signal BEFORE datum mutation. Vega evaluates
+  // `defined` against the original data tuple (before scale resolution),
+  // so expressions like `isValid(datum["y"])` must see the raw data
+  // value (null), not the scaled pixel position.
+  const definedSpecIdx = signalSpecs.findIndex(s => s.key === 'defined')
+  let definedValue: unknown
+  if (definedSpecIdx !== -1) {
+    const definedSpec = signalSpecs[definedSpecIdx]!
+    definedValue = resolveEncodeProperty(definedSpec.spec, datum, ctx)
+    signalSpecs.splice(definedSpecIdx, 1)
+  }
+
   // Pass 2: resolve signal-value pairs. datum gets the resolved values appended.
   const item: SceneItem = {}
   for (const k in ctxItem) {
     datum[k as keyof Row] = ctxItem[k] as unknown
     ;(item as unknown as Record<string, unknown>)[k] = ctxItem[k]
+  }
+  // Apply the pre-resolved `defined` value (from before datum mutation).
+  if (definedValue !== undefined) {
+    ;(item as unknown as Record<string, unknown>)['defined'] = definedValue
   }
   for (const { key, spec } of signalSpecs) {
     const resolved = resolveEncodeProperty(spec, datum, ctx)
@@ -1807,8 +1823,8 @@ function formatValue(v: unknown, spec: EncodeValue): unknown {
 
 
 function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
-  // Resolve the scale name (fill/stroke color legends, or size legends).
-  const scaleName = legend.stroke ?? legend.fill ?? legend.size
+  // Resolve the scale name (fill/stroke color legends, size legends, or shape legends).
+  const scaleName = legend.shape ?? legend.stroke ?? legend.fill ?? legend.size
   if (!scaleName) return null
   const scale = ctx.scales.get(scaleName)
   if (!scale) return null
@@ -2030,17 +2046,30 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // Stroke legends (e.g. legend-scatter): stroke=color, no fill, opacity=0.7, step=18, box=14
     const colorProp = legend.fill ? 'fill' : 'stroke'
     const isStrokeLegend = !legend.fill
-    // For fill legends use Vega defaults; for stroke legends use the styled (scatter) params
-    const entryStep = isStrokeLegend ? 18 : 13
-    const boxHeight = isStrokeLegend ? 14 : 11
+    const symType = legend.symbolType ?? 'circle'
+    // Vega legend dimensions depend on the symbolType:
+    // - symbolType "stroke" (line symbols): step=13, box=11, offset=22
+    // - symbolType "circle" with stroke channel (scatter-like): step=18, box=14, offset=18
+    // - fill channel: step=13, box=11, offset=18
+    const isStrokeType = symType === 'stroke'
+    const entryStep = isStrokeType ? 13 : (isStrokeLegend ? 18 : 13)
+    const boxHeight = isStrokeType ? 11 : (isStrokeLegend ? 14 : 11)
+    const legendOffset = isStrokeType ? 22 : 18
     const bgHeight = 16 + boxHeight + entryStep * (n - 1)
 
     // Symbol opacity from the legend's `symbols.update.opacity` encode
     // (vega-lite emits 0.7 for colored point/circle legends, absent otherwise).
+    // Stroke-type legends (horizontal lines) use opacity=1 by default.
     const symOpacityEnc = (legend as unknown as { encode?: { symbols?: { update?: { opacity?: EncodeValue } } } }).encode?.symbols?.update?.opacity
     const symbolOpacity = symOpacityEnc && typeof symOpacityEnc === 'object' && 'value' in symOpacityEnc
       ? (symOpacityEnc as { value?: unknown }).value
-      : (isStrokeLegend ? 0.7 : undefined)
+      : (isStrokeLegend && !isStrokeType ? 0.7 : undefined)
+
+    // Stroke color for shape legends from the legend's encode (vega-lite emits stroke="#4c78a8").
+    const symStrokeEnc = (legend as unknown as { encode?: { symbols?: { update?: { stroke?: EncodeValue } } } }).encode?.symbols?.update?.stroke
+    const legendStrokeColor = symStrokeEnc && typeof symStrokeEnc === 'object' && 'value' in symStrokeEnc
+      ? (symStrokeEnc as { value?: unknown }).value
+      : undefined
 
     // Vega measures text width as ~~(0.8 * len * fontSize) when no canvas is
     // available (vega-scenegraph estimateWidth). Labels render at 10px, the
@@ -2059,13 +2088,51 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     for (let i = 0; i < n; i++) {
       const value = domain[i]
       const off = 16 + i * entryStep
-      items.push({ path: `M0,0h${entryWidth}v${boxHeight}h-${entryWidth}Z`, x: 0, y: off })
+      // For shape legends, compute per-entry swatch height based on the
+      // symbol's actual stroke bounds.  Vega's boundStroke expands path
+      // bounds by e = max(strokeWidth/2, miterLimit*strokeWidth/2).
+      // With default strokeWidth=1.5 and miterLimit=4, e=3.
+      // The symbol is at y=6 inside the entry, so the swatch height is:
+      //   symbolY(6) + extentY + strokeExpand(3)
+      // where extentY = r for most shapes, r*sin(60°) for triangle-up/down.
+      let entryBoxHeight = boxHeight
+      if (legend.shape) {
+        const sn = String(scale(value))
+        const symR = 5
+        const extentY = (sn === 'triangle-up' || sn === 'triangle-down') ? symR * Math.sqrt(3) / 2 : symR
+        entryBoxHeight = 6 + extentY + 3
+      }
+      items.push({ path: `M0,0h${entryWidth}v${entryBoxHeight}h-${entryWidth}Z`, x: 0, y: off })
       const symbolType = legend.symbolType ?? 'circle'
       // vega renders the legend entry symbol in the shape requested by the
-      // legend's symbolType (vega-lite uses 'square' for rect/bar marks,
-      // 'circle' otherwise). A square symbol is a centered 10x10 path; a
-      // circle is an arc path of the same radius.
-      if (symbolType === 'square') {
+      // legend's symbolType. For "stroke" type, render a horizontal line.
+      // For shape channel legends, render the actual shape from the scale.
+      if (legend.shape) {
+        // Shape legend: the scale returns shape names, use them as symbol shapes.
+        // The stroke color comes from the legend encode or defaults to the first stroke color.
+        const shapeName = String(scale(value))
+        const shapeStroke = legendStrokeColor ?? '#4c78a8'
+        const shapeOpacity = symbolOpacity != null ? symbolOpacity as number : 0.7
+        const r = 5
+        let d: string
+        switch (shapeName) {
+          case 'square': d = `M${-r},${-r}h${2*r}v${2*r}h${-2*r}Z`; break
+          case 'diamond': d = `M0,${-r}L${r},0L0,${r}L${-r},0Z`; break
+          case 'triangle-up': { const h = r * 0.866; d = `M0,${-h}L${-r},${h}L${r},${h}Z`; break }
+          case 'triangle-down': { const h = r * 0.866; d = `M0,${h}L${-r},${-h}L${r},${-h}Z`; break }
+          case 'triangle-right': { const h = r * 0.866; d = `M${-h},0L${h},${-r}L${h},${r}Z`; break }
+          case 'triangle-left': { const h = r * 0.866; d = `M${h},0L${-h},${-r}L${-h},${r}Z`; break }
+          case 'cross': {
+            const w = r * 0.3
+            d = `M${-w},${-r}h${2*w}v${-(r-w)}h${-(r-w)}v${-2*w}h${-2*w}v${2*w}h${-(r-w)}v${r-w}h${2*w}Z`
+            break
+          }
+          default: d = `M${r},0A${r},${r},0,1,1,${-r},0A${r},${r},0,1,1,${r},0`; break
+        }
+        items.push({ path: d, x: 6, y: off + 6, stroke: String(shapeStroke), strokeWidth: 1.5, opacity: shapeOpacity })
+      } else if (symbolType === 'stroke') {
+        items.push({ path: `M-5,0L5,0`, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5 })
+      } else if (symbolType === 'square') {
         if (colorProp === 'fill') {
           items.push({ path: 'M-5,-5h10v10h-10Z', x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5, ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
         } else {
@@ -2078,7 +2145,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       }
       items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000' })
     }
-    return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, width: outerWidth, height: bgHeight, items }
+    return { marktype: 'group', role: 'legend', x: ctx.width + legendOffset, y: 0, width: outerWidth, height: bgHeight, items }
   }
 
   // --- 'bottom' ---

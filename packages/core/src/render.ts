@@ -228,6 +228,52 @@ function renderArea(group: SceneGroup): string {
   return out
 }
 
+/** Generate an SVG path d attribute for a given symbol shape and radius. */
+function symbolPath(shape: string | undefined, r: number): string {
+  switch (shape) {
+    case 'square':
+      return `M${num(-r)},${num(-r)}h${num(2 * r)}v${num(2 * r)}h${num(-2 * r)}Z`
+    case 'cross': {
+      const w = r * 0.3
+      return [
+        `M${num(-w)},${num(-r)}`,
+        `h${num(2 * w)}`,
+        `v${num(-(r - w))}`,
+        `h${num(-(r - w))}`,
+        `v${num(-2 * w)}`,
+        `h${num(-2 * w)}`,
+        `v${num(2 * w)}`,
+        `h${num(-(r - w))}`,
+        `v${num(r - w)}`,
+        `h${num(2 * w)}`,
+        'Z',
+      ].join('')
+    }
+    case 'diamond':
+      return `M0,${num(-r)}L${num(r)},0L0,${num(r)}L${num(-r)},0Z`
+    case 'triangle-up': {
+      const h = r * 0.866
+      return `M0,${num(-h)}L${num(-r)},${num(h)}L${num(r)},${num(h)}Z`
+    }
+    case 'triangle-down': {
+      const h = r * 0.866
+      return `M0,${num(h)}L${num(-r)},${num(-h)}L${num(r)},${num(-h)}Z`
+    }
+    case 'triangle-right': {
+      const h = r * 0.866
+      return `M${num(-h)},0L${num(h)},${num(-r)}L${num(h)},${num(r)}Z`
+    }
+    case 'triangle-left': {
+      const h = r * 0.866
+      return `M${num(h)},0L${num(-h)},${num(-r)}L${num(-h)},${num(r)}Z`
+    }
+    case 'stroke':
+      return `M${num(-r)},0L${num(r)},0`
+    default:
+      return `M${num(r)},0A${num(r)},${num(r)},0,1,1,${num(-r)},0A${num(r)},${num(r)},0,1,1,${num(r)},0`
+  }
+}
+
 function renderSymbols(group: SceneGroup): string {
   let out = `<g class="mark-symbol role-mark" role="graphics-symbol" aria-roledescription="symbol mark container">`
   for (const it of itemsOf(group)) {
@@ -235,14 +281,7 @@ function renderSymbols(group: SceneGroup): string {
     const size = (it.size as number) ?? 30
     const r = Math.sqrt(size) / 2
     const shape = (it as Record<string, unknown>).shape as string | undefined
-    let d: string
-    if (shape === 'square') {
-      // Square symbol: centered rect (vega-scenegraph symbol square shape)
-      d = `M${num(-r)},${num(-r)}h${num(2 * r)}v${num(2 * r)}h${num(-2 * r)}Z`
-    } else {
-      // Default: circle arc path
-      d = `M${num(r)},0A${num(r)},${num(r)},0,1,1,${num(-r)},0A${num(r)},${num(r)},0,1,1,${num(r)},0`
-    }
+    const d = symbolPath(shape, r)
     // Vega-Lite: point marks default fill="transparent", stroke from scale or default.
     // The strokeWidth default (2px for the point/circle/square styles) is baked
     // into the item at mark-build time; a raw vega symbol mark with a stroke but

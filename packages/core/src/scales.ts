@@ -288,6 +288,11 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext): unknown[] | string 
         // Named ranges map to vega's config.defaults range entries (a continuous
         // scheme unless overridden). `range: "heatmap"` (vega-lite's default for
         // quantitative color) resolves to the yellowgreenblue scheme.
+        // Vega config default ranges for non-scheme ranges
+        const directRanges: Record<string, unknown[]> = {
+          symbol: ['circle', 'square', 'triangle-up', 'cross', 'diamond', 'triangle-right', 'triangle-down', 'triangle-left'],
+        }
+        if (directRanges[range]) return directRanges[range]
         const aliases: Record<string, string> = {
           ramp: 'blues',
           heatmap: 'yellowgreenblue',
