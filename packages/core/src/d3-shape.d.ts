@@ -27,6 +27,9 @@ declare module 'd3-shape' {
   export interface Area<Datum> {
     (data: Datum[]): string | null
     x(x: ((d: Datum, i: number, data: Datum[]) => number) | number): this
+    x0(x0: ((d: Datum, i: number, data: Datum[]) => number) | number): this
+    x1(x1: ((d: Datum, i: number, data: Datum[]) => number) | number): this
+    y(y: ((d: Datum, i: number, data: Datum[]) => number) | number): this
     y0(y0: ((d: Datum, i: number, data: Datum[]) => number) | number): this
     y1(y1: ((d: Datum, i: number, data: Datum[]) => number) | number): this
     defined(defined: ((d: Datum, i: number, data: Datum[]) => boolean) | boolean): this

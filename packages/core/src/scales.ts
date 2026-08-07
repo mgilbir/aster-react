@@ -314,7 +314,7 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext): unknown[] | string 
       case 'width':
         return [0, ctx.width]
       case 'height':
-        return [0, ctx.height]
+        return [ctx.height, 0]
       default: {
         // Named ranges map to vega's config.defaults range entries (a continuous
         // scheme unless overridden). `range: "heatmap"` (vega-lite's default for

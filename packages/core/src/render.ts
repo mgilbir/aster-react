@@ -303,18 +303,30 @@ function renderLine(group: SceneGroup): string {
 
 function renderArea(group: SceneGroup): string {
   const items = itemsOf(group)
-  const pts: Array<{ x: number; y: number; y2: number; defined: boolean }> = items.map((it) => ({
-    x: it.x as number,
-    y: it.y as number,
-    y2: it.y2 as number,
-    defined: it.defined !== false && it.x != null && it.y != null,
-  }))
 
   // Check for curve interpolation (Vega's `interpolate` encode)
   const firstItem = items[0] as Record<string, unknown> | undefined
   const interpolate = firstItem?.interpolate as string | undefined
   const orient = firstItem?.orient as string | undefined
   const tension = firstItem?.tension as number | undefined
+  const isHorizontal = orient === 'horizontal'
+
+  // For horizontal areas: y is the independent axis, x/x2 are the value axes.
+  // For vertical areas (default): x is the independent axis, y/y2 are the value axes.
+  const pts: Array<{ pos: number; val: number; val2: number; defined: boolean }> = items.map((it) => ({
+    pos: isHorizontal ? (it.y as number) : (it.x as number),
+    val: isHorizontal ? (it.x as number) : (it.y as number),
+    val2: isHorizontal ? ((it.x2 as number) ?? 0) : (it.y2 as number),
+    defined: it.defined !== false && it.x != null && it.y != null,
+  }))
+
+  // Sort items by position. Vega sorts by the dependent axis value, which
+  // produces ascending position for vertical areas (x ascending) and
+  // descending position for horizontal areas (y descending in SVG coords,
+  // i.e. data y ascending mapped through an inverted y scale).
+  if (isHorizontal) {
+    pts.sort((a, b) => b.pos - a.pos)
+  }
 
   let path = ''
   if (interpolate && interpolate !== 'linear') {
@@ -331,37 +343,71 @@ function renderArea(group: SceneGroup): string {
           curveFn = cf.alpha(tension)
         }
       }
-      type AreaPt = { x: number; y0: number; y1: number; defined: boolean }
-      const areaGen = d3Area<AreaPt>()
-        .x((d: AreaPt) => d.x)
-        .y0((d: AreaPt) => d.y0)
-        .y1((d: AreaPt) => d.y1)
-        .defined((d: AreaPt) => d.defined)
-        .curve(curveFn as Parameters<ReturnType<typeof d3Area<AreaPt>>['curve']>[0])
 
-      // Build contiguous runs of defined points
-      const runs: Array<AreaPt> = pts.map((p) => ({
-        x: p.x,
-        y0: p.y2,
-        y1: p.y,
-        defined: p.defined,
-      }))
-      // Split into segments at undefined points
-      const segments: Array<Array<AreaPt>> = []
-      let current: Array<AreaPt> = []
-      for (const r of runs) {
-        if (!r.defined) {
-          if (current.length > 1) segments.push(current)
-          current = []
-        } else {
-          current.push(r)
+      if (isHorizontal) {
+        // Horizontal area: d3 area with y as the cross-axis, x0/x1 as value axes
+        type AreaPt = { y: number; x0: number; x1: number; defined: boolean }
+        const areaGen = d3Area<AreaPt>()
+          .y((d: AreaPt) => d.y)
+          .x0((d: AreaPt) => d.x0)
+          .x1((d: AreaPt) => d.x1)
+          .defined((d: AreaPt) => d.defined)
+          .curve(curveFn as Parameters<ReturnType<typeof d3Area<AreaPt>>['curve']>[0])
+
+        const runs: Array<AreaPt> = pts.map((p) => ({
+          y: p.pos,
+          x0: p.val2,
+          x1: p.val,
+          defined: p.defined,
+        }))
+        const segments: Array<Array<AreaPt>> = []
+        let current: Array<AreaPt> = []
+        for (const r of runs) {
+          if (!r.defined) {
+            if (current.length > 1) segments.push(current)
+            current = []
+          } else {
+            current.push(r)
+          }
         }
-      }
-      if (current.length > 1) segments.push(current)
+        if (current.length > 1) segments.push(current)
 
-      for (const seg of segments) {
-        const d = areaGen(seg)
-        if (d) path += d
+        for (const seg of segments) {
+          const d = areaGen(seg)
+          if (d) path += d
+        }
+      } else {
+        // Vertical area (default)
+        type AreaPt = { x: number; y0: number; y1: number; defined: boolean }
+        const areaGen = d3Area<AreaPt>()
+          .x((d: AreaPt) => d.x)
+          .y0((d: AreaPt) => d.y0)
+          .y1((d: AreaPt) => d.y1)
+          .defined((d: AreaPt) => d.defined)
+          .curve(curveFn as Parameters<ReturnType<typeof d3Area<AreaPt>>['curve']>[0])
+
+        const runs: Array<AreaPt> = pts.map((p) => ({
+          x: p.pos,
+          y0: p.val2,
+          y1: p.val,
+          defined: p.defined,
+        }))
+        const segments: Array<Array<AreaPt>> = []
+        let current: Array<AreaPt> = []
+        for (const r of runs) {
+          if (!r.defined) {
+            if (current.length > 1) segments.push(current)
+            current = []
+          } else {
+            current.push(r)
+          }
+        }
+        if (current.length > 1) segments.push(current)
+
+        for (const seg of segments) {
+          const d = areaGen(seg)
+          if (d) path += d
+        }
       }
     }
   }
@@ -376,7 +422,11 @@ function renderArea(group: SceneGroup): string {
           for (let j = i - 1; j >= 0; j--) {
             const q = pts[j]!
             if (!q.defined) break
-            path += `L${num(q.x)},${num(q.y2)}`
+            if (isHorizontal) {
+              path += `L${num(q.val2)},${num(q.pos)}`
+            } else {
+              path += `L${num(q.pos)},${num(q.val2)}`
+            }
           }
           path += 'Z'
           penDown = false
@@ -384,17 +434,29 @@ function renderArea(group: SceneGroup): string {
         continue
       }
       if (!penDown) {
-        path += `M${num(p.x)},${num(p.y)}`
+        if (isHorizontal) {
+          path += `M${num(p.val)},${num(p.pos)}`
+        } else {
+          path += `M${num(p.pos)},${num(p.val)}`
+        }
         penDown = true
       } else {
-        path += `L${num(p.x)},${num(p.y)}`
+        if (isHorizontal) {
+          path += `L${num(p.val)},${num(p.pos)}`
+        } else {
+          path += `L${num(p.pos)},${num(p.val)}`
+        }
       }
     }
     if (penDown) {
       for (let j = pts.length - 1; j >= 0; j--) {
         const q = pts[j]!
         if (!q.defined) break
-        path += `L${num(q.x)},${num(q.y2)}`
+        if (isHorizontal) {
+          path += `L${num(q.val2)},${num(q.pos)}`
+        } else {
+          path += `L${num(q.pos)},${num(q.val2)}`
+        }
       }
       path += 'Z'
     }
