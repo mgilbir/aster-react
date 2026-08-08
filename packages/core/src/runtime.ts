@@ -120,9 +120,21 @@ function buildAxisAndLegend(
     const group = buildAxis(axis, ctx)
     if (group) groups.push(group)
   }
+  // Stack right-oriented legends vertically below each other (matching vega's
+  // legend layout). Each legend's y is offset by the cumulative height of all
+  // preceding right-oriented legends plus a small gap.
+  let rightLegendY = 0
+  const LEGEND_GAP = 8
   for (const legend of ctx.chart.legends) {
+    const orient = legend.orient ?? 'right'
     const group = buildLegend(legend, ctx)
-    if (group) groups.push(group)
+    if (group) {
+      if (orient === 'right' || orient === undefined) {
+        group.y = rightLegendY
+        rightLegendY += (group.height ?? 0) + LEGEND_GAP
+      }
+      groups.push(group)
+    }
   }
 
   const pad = computeGuidePadding(groups, width, height, basePadding)
@@ -2172,9 +2184,12 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const labelX = offset + labelOffset
 
     // Per-entry vertical bounds (symbol +/- extent, label +/- 5).
+    // Vega's boundStroke always inflates symbol bounds by miter*strokeWidth/2 = 3
+    // (with default strokeWidth=1.5 and miterLimit=4), even when the symbol has
+    // no explicit stroke color. Match that unconditionally for circle symbols.
     const hasStroke = strokeColor != null
     const b = entries.map((e) => {
-      const ext = symbolType === 'square' ? (hasStroke ? e.sizeD / 2 : e.r) : (hasStroke ? e.r + 3 : e.r)
+      const ext = symbolType === 'square' ? (hasStroke ? e.sizeD / 2 : e.r) : e.r + 3
       const y = e.sizeD / 2
       return { y1: Math.min(y - ext, y - 5), y2: Math.max(y + ext, y + 5) }
     })
@@ -2208,13 +2223,19 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const ey = 16 + yPos[i]!
       const sy = ey + e.sizeD / 2
       items.push({ path: `M0,0h${entryWidth}v${b[i]!.y2}h-${entryWidth}Z`, x: 0, y: ey })
+      // Vega always renders size legend symbols with a default stroke (#888)
+      // and opacity (0.7), even when the legend encode doesn't specify them.
+      const symStroke = strokeColor != null ? String(strokeColor) : '#888'
+      const symOpacity = opacity ?? 0.7
       if (symbolType === 'square') {
         const w = Math.sqrt(e.size)
         items.push({
           path: `M${-w / 2},${-w / 2}h${w}v${w}h${-w}Z`,
           x: symbolX,
           y: sy,
-          ...(strokeColor != null ? { stroke: String(strokeColor), strokeWidth, opacity } : {}),
+          stroke: symStroke,
+          strokeWidth,
+          opacity: symOpacity,
         })
       } else {
         items.push({
@@ -2222,7 +2243,9 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
           radius: e.r,
           x: symbolX,
           y: sy,
-          ...(strokeColor != null ? { stroke: String(strokeColor), strokeWidth, opacity } : {}),
+          stroke: symStroke,
+          strokeWidth,
+          opacity: symOpacity,
         })
       }
       items.push({ text: String(e.value), x: labelX, y: sy + 3, align: 'left', fill: '#000' })
@@ -2647,7 +2670,23 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
     }
   }
   if (scale.type === 'time' || scale.type === 'utc') {
-    return scaleTicks(scale, count)
+    const timeTicks = scaleTicks(scale, count)
+    // When tickMinStep is specified, filter time ticks so consecutive values
+    // are at least tickMinStep apart (matching vega's AxisTicks behavior).
+    if (tickMinStep != null && tickMinStep > 0 && timeTicks.length > 1) {
+      const toNum = (v: unknown): number => v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Number(v)
+      const filtered: unknown[] = [timeTicks[0]]
+      let last = toNum(timeTicks[0])
+      for (let i = 1; i < timeTicks.length; i++) {
+        const t = toNum(timeTicks[i])
+        if (Math.abs(t - last) >= tickMinStep - 1e-6) {
+          filtered.push(timeTicks[i])
+          last = t
+        }
+      }
+      return filtered
+    }
+    return timeTicks
   }
 
   const ticks = scaleTicks(scale, count)
