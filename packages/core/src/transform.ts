@@ -153,6 +153,8 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
       return voronoiRows(rows, t as Record<string, unknown>, ctx)
     case 'label':
       return labelRows(rows, t as Record<string, unknown>, ctx)
+    case 'timeunit':
+      return timeunitRows(rows, t as Record<string, unknown>)
     case 'identifier':
       return rows
     default:
@@ -835,6 +837,101 @@ function graticuleRows(t: Record<string, unknown>): Row[] {
       .concat(d3Range(Math.ceil(y0 / dy) * dy, y1, dy).filter((yy) => Math.abs(yy % DY) > GEO_EPSILON).map(y))
 
   return [{ type: 'MultiLineString', coordinates: lines() }]
+}
+
+// ---------------------------------------------------------------------------
+// timeunit — Vega-Lite's temporal binning transform
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonical order of time units from coarsest to finest (matches vega-time).
+ * The "finest" unit in a set determines what gets incremented for the end date.
+ */
+const TIME_UNIT_ORDER = ['year', 'quarter', 'month', 'week', 'date', 'hours', 'minutes', 'seconds', 'milliseconds']
+
+function timeunitRows(rows: Row[], t: Record<string, unknown>): Row[] {
+  const field = t.field as string
+  const units = (t.units as string[]) ?? []
+  const as = (t.as as [string, string]) ?? [field + '_start', field + '_end']
+
+  return rows.map((r) => {
+    const v = r[field]
+    const d = v instanceof Date ? v : new Date(v as string | number)
+    if (!Number.isFinite(d.getTime())) {
+      return { ...r, [as[0]]: null, [as[1]]: null }
+    }
+    const start = timeFloor(d, units)
+    const end = timeOffset(start, units)
+    return { ...r, [as[0]]: start, [as[1]]: end }
+  })
+}
+
+/**
+ * Floor a Date to the start of the specified time unit(s).
+ * E.g. timeFloor(date, ['month']) → 1st of the month 00:00:00.000 UTC.
+ */
+function timeFloor(d: Date, units: string[]): Date {
+  const u = new Date(d.getTime())
+  const ms = u.getUTCMilliseconds()
+  const s = u.getUTCSeconds()
+  const m = u.getUTCHours()
+  const min = u.getUTCMinutes()
+  const h = u.getUTCHours()
+  const date = u.getUTCDate()
+  const month = u.getUTCMonth()
+  const year = u.getUTCFullYear()
+
+  if (!units.includes('milliseconds')) u.setUTCMilliseconds(0)
+  if (!units.includes('seconds')) u.setUTCSeconds(0)
+  if (!units.includes('minutes')) u.setUTCMinutes(0)
+  if (!units.includes('hours')) u.setUTCHours(0)
+  if (!units.includes('date') && !units.includes('week')) u.setUTCDate(1)
+  if (units.includes('week')) {
+    // Floor to the start of the week (Sunday). Vega uses Sunday as week start.
+    const dayOfWeek = u.getUTCDay()
+    u.setUTCDate(u.getUTCDate() - dayOfWeek)
+  }
+  if (!units.includes('month') && !units.includes('quarter')) u.setUTCMonth(0)
+  if (units.includes('quarter')) {
+    // Floor to the start of the quarter
+    u.setUTCMonth(Math.floor(month / 3) * 3)
+  }
+  // Year is always floored
+
+  return u
+}
+
+/**
+ * Offset a Date by one step of the finest time unit in the set.
+ * E.g. timeOffset(date, ['month']) → 1st of the next month.
+ */
+function timeOffset(d: Date, units: string[]): Date {
+  const u = new Date(d.getTime())
+  // Find the finest unit
+  let finestIdx = TIME_UNIT_ORDER.length
+  for (const unit of units) {
+    const idx = TIME_UNIT_ORDER.indexOf(unit)
+    if (idx >= 0 && idx < finestIdx) finestIdx = idx
+  }
+  if (finestIdx >= TIME_UNIT_ORDER.length) {
+    // No recognized units — just add 1ms
+    u.setTime(u.getTime() + 1)
+    return u
+  }
+  const finest = TIME_UNIT_ORDER[finestIdx]!
+
+  switch (finest) {
+    case 'year': u.setUTCFullYear(u.getUTCFullYear() + 1); break
+    case 'quarter': u.setUTCMonth(u.getUTCMonth() + 3); break
+    case 'month': u.setUTCMonth(u.getUTCMonth() + 1); break
+    case 'week': u.setUTCDate(u.getUTCDate() + 7); break
+    case 'date': u.setUTCDate(u.getUTCDate() + 1); break
+    case 'hours': u.setUTCHours(u.getUTCHours() + 1); break
+    case 'minutes': u.setUTCMinutes(u.getUTCMinutes() + 1); break
+    case 'seconds': u.setUTCSeconds(u.getUTCSeconds() + 1); break
+    case 'milliseconds': u.setUTCMilliseconds(u.getUTCMilliseconds() + 1); break
+  }
+  return u
 }
 
 /** d3-array `quantileSorted(values, p)` — values must be sorted ascending. */

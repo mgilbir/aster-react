@@ -2005,6 +2005,16 @@ function formatValue(v: unknown, spec: EncodeValue): unknown {
   return L.format(fmt)(v as number)
 }
 
+/**
+ * Compute the effective content width for legend positioning.
+ * For faceted charts, the actual content width is the cell width (from
+ * child_width signal), not the top-level ctx.width which defaults to 500.
+ */
+function legendContentWidth(ctx: EvalContext): number {
+  const cw = ctx.signalParams['child_width']
+  if (typeof cw === 'number' && Number.isFinite(cw) && cw < ctx.width) return cw
+  return ctx.width
+}
 
 function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
   // Resolve the scale name (fill/stroke color legends, size legends, or shape legends).
@@ -2217,7 +2227,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       }
       items.push({ text: String(e.value), x: labelX, y: sy + 3, align: 'left', fill: '#000' })
     }
-    return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, width: outerWidth, height: bgHeight, items }
+    return { marktype: 'group', role: 'legend', x: legendContentWidth(ctx) + 18, y: 0, width: outerWidth, height: bgHeight, items }
   }
 
   // --- Band legend (quantile / quantize / threshold) ---
@@ -2229,7 +2239,17 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     if (bandCount > 0 && orient === 'right' || orient === undefined) {
       const SWATCH_W = 16
       const SWATCH_H = Math.max(25, Math.floor(200 / bandCount))
-      const outerWidth = 50
+      const sortedDomain = [...domain].filter((v): v is number => typeof v === 'number').sort((a, b) => a - b)
+      const isThreshold = scaleType === 'threshold'
+      let outerWidth: number
+      if (isThreshold) {
+        // Threshold: labels are integer domain values, compute width from content
+        const maxLabelLen = sortedDomain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
+        outerWidth = SWATCH_W + 2 + 8 * Math.max(maxLabelLen, 1)
+      } else {
+        // Quantile/quantize: vega uses a fixed width of 50
+        outerWidth = 50
+      }
       const bgH = bandCount * SWATCH_H
       const items: SceneItem[] = []
       // Background box
@@ -2240,20 +2260,20 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         items.push({ path: `M0,${y}h${SWATCH_W}v${SWATCH_H}h-${SWATCH_W}Z`, x: 0, y: 0, fill: String(rangeVals[i]), stroke: '#ddd', strokeWidth: 0, opacity: 1 })
       }
       // Labels at breakpoints (skip the first which is empty)
-      const sortedDomain = [...domain].filter((v): v is number => typeof v === 'number').sort((a, b) => a - b)
       for (let i = 1; i < bandCount; i++) {
         const y = (bandCount - i) * SWATCH_H + 3
-        // Compute the quantile breakpoint value
         const nVals = sortedDomain.length
         const idx = Math.ceil(i * nVals / bandCount) - 1
         const rawVal = idx >= 0 && idx < nVals ? sortedDomain[idx] : undefined
-        // Format with one decimal place to match Vega's legend format
-        const label = rawVal !== undefined ? (Number.isInteger(rawVal) ? rawVal + '.0' : String(rawVal)) : ''
+        // Quantile/quantize: format with ".0" for integers; threshold: plain integers
+        const label = rawVal !== undefined
+          ? (isThreshold ? String(rawVal) : (Number.isInteger(rawVal) ? rawVal + '.0' : String(rawVal)))
+          : ''
         items.push({ text: label, x: 18, y, align: 'left', fill: '#000' })
       }
       // Empty label at the bottom
       items.push({ text: '', x: 18, y: bgH - 2, align: 'left', fill: '#000' })
-      return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, width: outerWidth, height: bgH, items }
+      return { marktype: 'group', role: 'legend', x: legendContentWidth(ctx) + 18, y: 0, width: outerWidth, height: bgH, items }
     }
   }
 
@@ -2378,7 +2398,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       }
       items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000' })
     }
-    return { marktype: 'group', role: 'legend', x: ctx.width + legendOffset, y: 0, width: outerWidth, height: bgHeight, items }
+    return { marktype: 'group', role: 'legend', x: legendContentWidth(ctx) + legendOffset, y: 0, width: outerWidth, height: bgHeight, items }
   }
 
   // --- 'bottom' ---
@@ -2450,7 +2470,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   // log-scale labels, whose formatter only labels a subset of ticks depending
   // on the count.
   const count = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 10 : 10
-  const labelFormat = axisLabelFormat(axis, scale, count)
+  const labelFormat = axisLabelFormat(axis, scale, count, ctx)
   const tickSize = axis.tickSize ?? 5
   const labelPadding = axis.labelPadding ?? 2
   let maxLabelLen = 0
@@ -2561,16 +2581,95 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
   let count: number | undefined
   if (typeof axis.tickCount === 'number') count = axis.tickCount
   else if (axis.tickCount && typeof axis.tickCount === 'object') {
-    const expr = axis.tickCount.signal
+    const expr = (axis.tickCount as { signal?: string }).signal
     if (expr !== undefined) {
       const v = ctx.runtime.expr(expr)({}, ctx.signalParams)
       count = typeof v === 'number' ? v : undefined
     }
   }
-  return scaleTicks(scale, count)
+  // Resolve tickMinStep (may be a number or a signal expression).
+  let tickMinStep: number | undefined
+  if (typeof axis.tickMinStep === 'number') {
+    tickMinStep = axis.tickMinStep
+  } else if (axis.tickMinStep && typeof axis.tickMinStep === 'object') {
+    const sig = (axis.tickMinStep as { signal?: string }).signal
+    if (sig !== undefined) {
+      try {
+        const v = ctx.runtime.expr(sig)({}, ctx.signalParams)
+        if (typeof v === 'number' && Number.isFinite(v)) tickMinStep = v
+      } catch { /* ignore */ }
+    }
+  }
+
+  // For continuous non-time scales with tickMinStep but no tickCount, generate
+  // ticks directly from the scale domain using the step value.
+  // For time/utc scales, d3's time ticks already produce calendar-aligned
+  // intervals, so we use scaleTicks normally and apply tickMinStep as a filter.
+  if (tickMinStep != null && tickMinStep > 0 && count == null
+      && scale.type !== 'time' && scale.type !== 'utc') {
+    const rawDomain = scale.domain()
+    const toNum = (v: unknown): number => v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Number(v)
+    if (rawDomain.length >= 2) {
+      const d0 = toNum(rawDomain[0])
+      const d1 = toNum(rawDomain[rawDomain.length - 1])
+      if (Number.isFinite(d0) && Number.isFinite(d1)) {
+        const ticks: unknown[] = []
+        const eps = tickMinStep * 1e-9
+        for (let v = d0; v <= d1 + eps; v += tickMinStep) {
+          ticks.push(v)
+        }
+        return ticks
+      }
+    }
+  }
+
+  // For time/utc scales, generate calendar-aligned ticks when tickMinStep is
+  // specified (matching vega's AxisTicks behavior). The tickMinStep signal
+  // encodes the duration of a calendar unit (e.g. one month in ms). We step
+  // through calendar months from the domain start to end to produce ticks that
+  // align to month boundaries, avoiding the problem of fixed-interval stepping
+  // across months of different lengths.
+  if ((scale.type === 'time' || scale.type === 'utc') && tickMinStep != null && tickMinStep > 0 && count == null) {
+    const rawDomain = scale.domain()
+    if (rawDomain.length >= 2) {
+      const toD = (v: unknown): Date => v instanceof Date ? v : new Date(Number(v))
+      const d0 = toD(rawDomain[0])
+      const d1 = toD(rawDomain[rawDomain.length - 1])
+      if (Number.isFinite(d0.getTime()) && Number.isFinite(d1.getTime())) {
+        const ticks: unknown[] = []
+        const cur = new Date(d0.getTime())
+        while (cur.getTime() <= d1.getTime() + 1000) {
+          ticks.push(new Date(cur.getTime()))
+          cur.setUTCMonth(cur.getUTCMonth() + 1)
+        }
+        return ticks
+      }
+    }
+  }
+  if (scale.type === 'time' || scale.type === 'utc') {
+    return scaleTicks(scale, count)
+  }
+
+  const ticks = scaleTicks(scale, count)
+  // When tickMinStep is specified, filter ticks so consecutive values are at
+  // least tickMinStep apart (matching vega's AxisTicks + tickMinStep filter).
+  if (tickMinStep != null && tickMinStep > 0 && ticks.length > 1) {
+    const toNum = (v: unknown): number => v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Number(v)
+    const filtered: unknown[] = [ticks[0]]
+    let last = toNum(ticks[0])
+    for (let i = 1; i < ticks.length; i++) {
+      const t = toNum(ticks[i])
+      if (Math.abs(t - last) >= tickMinStep - 1e-6) {
+        filtered.push(ticks[i])
+        last = t
+      }
+    }
+    return filtered
+  }
+  return ticks
 }
 
-function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number): (v: unknown) => string {
+function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: EvalContext): (v: unknown) => string {
   const specFmt = (axis.encode?.labels?.text as EncodeValue | undefined)
   if (specFmt && typeof specFmt === 'object' && 'signal' in specFmt && specFmt.signal) {
     return () => String(specFmt.signal)
@@ -2578,9 +2677,19 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number): (v: u
   const fmtType = (specFmt && typeof specFmt === 'object' && 'formatType' in specFmt && specFmt.formatType)
     ? String(specFmt.formatType)
     : (axis.formatType ? axis.formatType : undefined)
-  const fmt = (specFmt && typeof specFmt === 'object' && 'format' in specFmt && specFmt.format)
-    ? String(specFmt.format)
-    : (axis.format ? axis.format : undefined)
+  // Resolve format: may be a string or a signal expression.
+  let fmt: string | undefined
+  const rawFmt = (specFmt && typeof specFmt === 'object' && 'format' in specFmt && specFmt.format)
+    ? specFmt.format
+    : (axis.format ?? undefined)
+  if (typeof rawFmt === 'string') {
+    fmt = rawFmt
+  } else if (rawFmt && typeof rawFmt === 'object' && 'signal' in (rawFmt as Record<string, unknown>) && ctx) {
+    try {
+      const v = ctx.runtime.expr((rawFmt as { signal: string }).signal)({}, ctx.signalParams)
+      if (typeof v === 'string') fmt = v
+    } catch { /* fall through */ }
+  }
   if (fmtType === 'time' || scale.type === 'time' || scale.type === 'utc') {
     const L = locale(undefined)
     // With no explicit format vega uses the time multi-format, which picks a
