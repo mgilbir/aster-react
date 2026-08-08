@@ -272,6 +272,7 @@ function renderLine(group: SceneGroup): string {
       defined: it.defined !== false && it.x != null && it.y != null,
     }))
     let penDown = false
+    let hasLine = false
     for (let i = 0; i < runs.length; i++) {
       const r = runs[i]!
       if (!r.defined) {
@@ -284,8 +285,11 @@ function renderLine(group: SceneGroup): string {
         penDown = true
       } else {
         path += `L${num(r.x)},${num(r.y)}`
+        hasLine = true
       }
     }
+    // Vega appends Z for degenerate single-point line segments (only M, no L).
+    if (penDown && !hasLine) path += 'Z'
   }
 
   if (path) {

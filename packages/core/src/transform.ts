@@ -279,10 +279,14 @@ function binRows(rows: Row[], t: Extract<CompiledTransform, { type: 'bin' }>, ct
     if (typeof v !== 'number' || !Number.isFinite(v)) {
       return { ...r, [startField]: undefined, [endField]: undefined }
     }
-    if (v < start || v >= stop) {
+    if (v < start || v > stop) {
       return { ...r, [startField]: undefined, [endField]: undefined }
     }
-    const bIdx = Math.floor((v - start) / step)
+    // Clamp v to stop - step, matching vega-transforms Bin: values at or
+    // beyond the last bin boundary are assigned to the final bin rather than
+    // being dropped. This mirrors vega's `Math.min(v, stop - step)`.
+    const clamped = Math.min(v, stop - step)
+    const bIdx = Math.floor((clamped - start) / step)
     const b0 = start + bIdx * step
     const b1 = start + Math.min(bIdx + 1, (stop - start) / step) * step
     return { ...r, [startField]: b0, [endField]: b1 }
