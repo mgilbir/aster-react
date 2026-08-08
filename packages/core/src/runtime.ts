@@ -2220,6 +2220,43 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, width: outerWidth, height: bgHeight, items }
   }
 
+  // --- Band legend (quantile / quantize / threshold) ---
+  // Vega renders these scale types as a "band" legend: rectangular color
+  // swatches for each range value with text labels at quantile breakpoints.
+  if ((scaleType === 'quantile' || scaleType === 'quantize' || scaleType === 'threshold') && orient === 'right' || orient === undefined) {
+    const rangeVals = scale.range() as string[]
+    const bandCount = rangeVals.length
+    if (bandCount > 0 && orient === 'right' || orient === undefined) {
+      const SWATCH_W = 16
+      const SWATCH_H = Math.max(25, Math.floor(200 / bandCount))
+      const outerWidth = 50
+      const bgH = bandCount * SWATCH_H
+      const items: SceneItem[] = []
+      // Background box
+      items.push({ path: `M0,0h${outerWidth}v${bgH}h-${outerWidth}Z`, x: 0, y: 0 })
+      // Band swatches (top-to-bottom: last range color first)
+      for (let i = 0; i < bandCount; i++) {
+        const y = (bandCount - 1 - i) * SWATCH_H
+        items.push({ path: `M0,${y}h${SWATCH_W}v${SWATCH_H}h-${SWATCH_W}Z`, x: 0, y: 0, fill: String(rangeVals[i]), stroke: '#ddd', strokeWidth: 0, opacity: 1 })
+      }
+      // Labels at breakpoints (skip the first which is empty)
+      const sortedDomain = [...domain].filter((v): v is number => typeof v === 'number').sort((a, b) => a - b)
+      for (let i = 1; i < bandCount; i++) {
+        const y = (bandCount - i) * SWATCH_H + 3
+        // Compute the quantile breakpoint value
+        const nVals = sortedDomain.length
+        const idx = Math.ceil(i * nVals / bandCount) - 1
+        const rawVal = idx >= 0 && idx < nVals ? sortedDomain[idx] : undefined
+        // Format with one decimal place to match Vega's legend format
+        const label = rawVal !== undefined ? (Number.isInteger(rawVal) ? rawVal + '.0' : String(rawVal)) : ''
+        items.push({ text: label, x: 18, y, align: 'left', fill: '#000' })
+      }
+      // Empty label at the bottom
+      items.push({ text: '', x: 18, y: bgH - 2, align: 'left', fill: '#000' })
+      return { marktype: 'group', role: 'legend', x: ctx.width + 18, y: 0, width: outerWidth, height: bgH, items }
+    }
+  }
+
   // --- Symbol legend (discrete) ---
   const n = domain.length
 
