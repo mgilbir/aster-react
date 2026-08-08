@@ -630,6 +630,33 @@ function renderTexts(group: SceneGroup): string {
     // Apply dx/dy offsets from encode (data-driven positioning).
     const dx = (it as Record<string, unknown>).dx as number | undefined ?? 0
     const dy = (it as Record<string, unknown>).dy as number | undefined ?? 0
+    // Vega text `limit`: maximum pixel width. Text exceeding the limit is
+    // truncated with an ellipsis. Mirrors vega-scenegraph/src/util/text.js
+    // `truncate()` using the estimate width fn: ~~(0.8 * str.length * fontSize).
+    let text = String(it.text)
+    const limit = (it as Record<string, unknown>).limit as number | undefined
+    if (limit != null && limit > 0) {
+      const estimateW = (s: string) => ~~(0.8 * s.length * fontSize)
+      if (estimateW(text) < limit) {
+        // fits, no truncation needed
+      } else {
+        const ellipsis = '\u2026'
+        const lo = 0
+        let hi = text.length
+        let lim = limit - estimateW(ellipsis) // subtract ellipsis budget
+        // Binary search: find longest prefix where estimateW(prefix) < lim
+        let best = 0
+        { let lo2 = lo; let hi2 = hi
+          while (lo2 < hi2) {
+            const mid = 1 + ((lo2 + hi2) >>> 1)
+            if (estimateW(text.slice(0, mid)) < lim) lo2 = mid
+            else hi2 = mid - 1
+          }
+          best = lo2
+        }
+        text = text.slice(0, best) + ellipsis
+      }
+    }
     // When text is rotated, Vega renders with dy for baseline offset rather
     // than baking it into y; for non-rotated text the offset goes into y.
     const isRotated = angle != null && angle !== 0
@@ -641,7 +668,7 @@ function renderTexts(group: SceneGroup): string {
     const x = num(baseX + dx)
     const y = isRotated ? num(baseY + dy) : num(baseY + dy + bsOffset)
     const textAnchor = it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle'
-    out += `<text x="${x}" y="${y}"${isRotated && bsOffset ? ` dy="${num(bsOffset)}"` : ''}${attr('text-anchor', textAnchor)}${attr('font-size', fontSize !== 11 ? fontSize : undefined)}${attr('font-weight', fontWeight)}${attr('fill', it.fill)}${attr("opacity", it.opacity)}${attr("angle", it.angle)}>${esc(String(it.text))}</text>`
+    out += `<text x="${x}" y="${y}"${isRotated && bsOffset ? ` dy="${num(bsOffset)}"` : ''}${attr('text-anchor', textAnchor)}${attr('font-size', fontSize !== 11 ? fontSize : undefined)}${attr('font-weight', fontWeight)}${attr('fill', it.fill)}${attr("opacity", it.opacity)}${attr("angle", it.angle)}>${esc(text)}</text>`
   }
   out += '</g>'
   return out
