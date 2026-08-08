@@ -256,7 +256,11 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
             const av = agg.get(a) ?? 0, bv = agg.get(b) ?? 0
             return desc ? bv - av : av - bv
           })
-        } else {
+        } else if (!ss.field || ss.field === 'key') {
+          // Alphabetical sort: {order: "descending"} or {order: "descending", field: "key"}
+          // The "key" field is a Vega-Lite marker for alphabetical sort.
+          // When sort has a real field but no op (e.g. {field: "val", order: "descending"}),
+          // Vega does not sort the domain — preserve insertion order.
           const order = ss.order
           if (order === 'descending') {
             vals.sort((a, b) => (a as string) > (b as string) ? -1 : (a as string) < (b as string) ? 1 : 0)
