@@ -2211,6 +2211,9 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // Detect fill vs stroke legend channel and legend encode style.
     // Fill legends (e.g. arc-pie): fill=color, no stroke, opacity=1, step=13, box=11
     // Stroke legends (e.g. legend-scatter): stroke=color, no fill, opacity=0.7, step=18, box=14
+    // A fill legend whose symbols carry a stroke encode (e.g. filled point with
+    // stroke="#333") uses the stroke-legend dimensions because the stroke widens
+    // the symbol bounding box.
     const colorProp = legend.fill ? 'fill' : 'stroke'
     const isStrokeLegend = !legend.fill
     const symType = legend.symbolType ?? 'circle'
@@ -2219,8 +2222,20 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // - symbolType "circle" with stroke channel (scatter-like): step=18, box=14, offset=18
     // - fill channel: step=13, box=11, offset=18
     const isStrokeType = symType === 'stroke'
-    const entryStep = isStrokeType ? 13 : (isStrokeLegend ? 18 : 13)
-    const boxHeight = isStrokeType ? 11 : (isStrokeLegend ? 14 : 11)
+
+    // Extract symbol stroke color early — it affects legend dimensions when
+    // the channel is fill (stroke widens the symbol bounding box).
+    const symStrokeEnc = (legend as unknown as { encode?: { symbols?: { update?: { stroke?: EncodeValue } } } }).encode?.symbols?.update?.stroke
+    const legendStrokeColor = symStrokeEnc && typeof symStrokeEnc === 'object' && 'value' in symStrokeEnc
+      ? (symStrokeEnc as { value?: unknown }).value
+      : undefined
+
+    // When a fill legend's symbols have an explicit stroke encode, Vega uses
+    // the larger stroke-legend entry dimensions (step=18, box=14) to account
+    // for the expanded symbol bounding box.
+    const hasSymbolStroke = legendStrokeColor != null && colorProp === 'fill'
+    const entryStep = isStrokeType ? 13 : ((isStrokeLegend || hasSymbolStroke) ? 18 : 13)
+    const boxHeight = isStrokeType ? 11 : ((isStrokeLegend || hasSymbolStroke) ? 14 : 11)
     const legendOffset = isStrokeType ? 22 : 18
 
     // Symbol opacity from the legend's `symbols.update.opacity` encode
@@ -2230,12 +2245,6 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const symbolOpacity = symOpacityEnc && typeof symOpacityEnc === 'object' && 'value' in symOpacityEnc
       ? (symOpacityEnc as { value?: unknown }).value
       : (isStrokeLegend && !isStrokeType ? 0.7 : undefined)
-
-    // Stroke color for shape legends from the legend's encode (vega-lite emits stroke="#4c78a8").
-    const symStrokeEnc = (legend as unknown as { encode?: { symbols?: { update?: { stroke?: EncodeValue } } } }).encode?.symbols?.update?.stroke
-    const legendStrokeColor = symStrokeEnc && typeof symStrokeEnc === 'object' && 'value' in symStrokeEnc
-      ? (symStrokeEnc as { value?: unknown }).value
-      : undefined
 
     // Vega measures text width as ~~(0.8 * len * fontSize) when no canvas is
     // available (vega-scenegraph estimateWidth). Labels render at 10px, the
@@ -2304,12 +2313,12 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         items.push({ path: `M-5,0L5,0`, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5 })
       } else if (symbolType === 'square') {
         if (colorProp === 'fill') {
-          items.push({ path: 'M-5,-5h10v10h-10Z', x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5, ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
+          items.push({ path: 'M-5,-5h10v10h-10Z', x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5, ...(legendStrokeColor != null ? { stroke: String(legendStrokeColor) } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
         } else {
           items.push({ path: 'M-5,-5h10v10h-10Z', x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
         }
       } else if (colorProp === 'fill') {
-        items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5, ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
+        items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5, ...(legendStrokeColor != null ? { stroke: String(legendStrokeColor) } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
       } else {
         items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
       }
