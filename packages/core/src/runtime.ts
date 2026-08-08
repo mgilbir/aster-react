@@ -2222,7 +2222,6 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const entryStep = isStrokeType ? 13 : (isStrokeLegend ? 18 : 13)
     const boxHeight = isStrokeType ? 11 : (isStrokeLegend ? 14 : 11)
     const legendOffset = isStrokeType ? 22 : 18
-    const bgHeight = 16 + boxHeight + entryStep * (n - 1)
 
     // Symbol opacity from the legend's `symbols.update.opacity` encode
     // (vega-lite emits 0.7 for colored point/circle legends, absent otherwise).
@@ -2248,13 +2247,17 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const titleStr = String(legend.title ?? '')
     const titleWidth = titleStr.length > 0 ? ~~(0.8 * titleStr.length * 11) : 0
     const outerWidth = Math.max(entryWidth, titleWidth)
+    // Vega includes the title row (16px) in the legend background only when
+    // a title is present.
+    const titleRow = titleStr ? 16 : 0
+    const bgHeight = titleRow + boxHeight + entryStep * (n - 1)
 
     const items: SceneItem[] = []
     items.push({ path: `M0,0h${outerWidth}v${bgHeight}h-${outerWidth}Z`, x: 0, y: 0 })
-    items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000' })
+    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000' })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
-      const off = 16 + i * entryStep
+      const off = titleRow + i * entryStep
       // For shape legends, compute per-entry swatch height based on the
       // symbol's actual stroke bounds.  Vega's boundStroke expands path
       // bounds by e = max(strokeWidth/2, miterLimit*strokeWidth/2).

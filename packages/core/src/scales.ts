@@ -39,7 +39,7 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   const domain = resolveDomain(type, c.domain, ctx)
   s.domain(domain)
 
-  const range0 = resolveRange(c.range, ctx)
+  const range0 = resolveRange(c.range, ctx, type)
   // Handle continuous schemes: scheme strings like 'blues' for color interpolation
   if (typeof range0 === 'string' && CONTINUOUS_TYPES.has(type)) {
     const schemeFn = vs.scheme(range0)
@@ -298,7 +298,7 @@ function resolveRangeSignal(signal: string, ctx: ScaleContext): unknown {
   return undefined
 }
 
-function resolveRange(range: ScaleRange, ctx: ScaleContext): unknown[] | string {
+function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string): unknown[] | string {
   if (Array.isArray(range)) {
     return range.map((r) => {
       if (r && typeof r === 'object' && 'signal' in r) {
@@ -314,6 +314,12 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext): unknown[] | string 
       case 'width':
         return [0, ctx.width]
       case 'height':
+        // Vega resolves "height" to [0, height] for band/ordinal/point scales
+        // (natural top-to-bottom direction) and [height, 0] for continuous scales
+        // (inverted y-axis).
+        if (scaleType === 'band' || scaleType === 'ordinal' || scaleType === 'point') {
+          return [0, ctx.height]
+        }
         return [ctx.height, 0]
       default: {
         // Named ranges map to vega's config.defaults range entries (a continuous
