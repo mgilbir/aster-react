@@ -258,8 +258,13 @@ function binRows(rows: Row[], t: Extract<CompiledTransform, { type: 'bin' }>, ct
   }
 
   const span = hi - lo
-  // Use vega-statistics/bin.js algorithm for step computation
-  const step = computeBinStep(span, t.maxbins)
+  // When an explicit step is provided (e.g. VL {"bin":{"step":2}}), use it
+  // directly instead of computing one from maxbins — this matches vega-
+  // transforms Bin which treats `step` as authoritative.
+  const explicitStep = (t as Record<string, unknown>).step
+  const step = typeof explicitStep === 'number' && explicitStep > 0
+    ? explicitStep
+    : computeBinStep(span, t.maxbins)
   // Nice the extent: start = floor(lo/step)*step, stop = ceil(hi/step)*step
   // with a small epsilon to handle floating point precision
   const eps = computeBinEps(step)
