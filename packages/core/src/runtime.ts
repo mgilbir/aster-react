@@ -944,10 +944,27 @@ function buildFacetCells(
         x: 0, y: 0, stroke: '#ddd',
       } as SceneItem)
     } else {
-      cellItems.push({
-        path: `M0,0h${cellWidth}v${cellHeight}h-${cellWidth}Z`,
-        x: 0, y: 0,
-      } as SceneItem)
+      // Check if the group mark has explicit width/height signals in its
+      // encode. VL-compiled facet cells always do (either {signal:...} or
+      // {field:{group:...}}); raw Vega facet cells (from.from.facet without
+      // encode signals) don't, in which case Vega renders a zero-height
+      // scope background that is degenerate after canonicalization.
+      const grEnc = (mark as any).encode?.update
+      const hasExplicitSize = grEnc && (
+        (grEnc.width && typeof grEnc.width === 'object' && ('signal' in grEnc.width || ('field' in grEnc.width && typeof grEnc.width.field === 'object'))) ||
+        (grEnc.height && typeof grEnc.height === 'object' && ('signal' in grEnc.height || ('field' in grEnc.height && typeof grEnc.height.field === 'object')))
+      )
+      if (hasExplicitSize) {
+        cellItems.push({
+          path: `M0,0h${cellWidth}v${cellHeight}h-${cellWidth}Z`,
+          x: 0, y: 0,
+        } as SceneItem)
+      } else {
+        cellItems.push({
+          path: `M0,0h0v0h0Z`,
+          x: 0, y: 0,
+        } as SceneItem)
+      }
     }
 
     result.push({

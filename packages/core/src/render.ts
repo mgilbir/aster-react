@@ -620,8 +620,12 @@ function renderTexts(group: SceneGroup): string {
     const fontSize = (it as Record<string, unknown>).fontSize as number | undefined ?? 11
     const fontWeight = (it as Record<string, unknown>).fontWeight as string | number | undefined
     const baseline = it.baseline ?? 'alphabetic'
+    const baseX = it.x ?? 0
     const baseY = it.y ?? 0
     const angle = it.angle
+    // Apply dx/dy offsets from encode (data-driven positioning).
+    const dx = (it as Record<string, unknown>).dx as number | undefined ?? 0
+    const dy = (it as Record<string, unknown>).dy as number | undefined ?? 0
     // When text is rotated, Vega renders with dy for baseline offset rather
     // than baking it into y; for non-rotated text the offset goes into y.
     const isRotated = angle != null && angle !== 0
@@ -630,9 +634,10 @@ function renderTexts(group: SceneGroup): string {
     else if (baseline === 'middle') bsOffset = Math.round(0.30 * fontSize)
     else if (baseline === 'bottom') bsOffset = Math.round(-0.21 * fontSize)
     // alphabetic / default → 0 (no offset)
-    const y = isRotated ? num(baseY) : num(baseY + bsOffset)
+    const x = num(baseX + dx)
+    const y = isRotated ? num(baseY + dy) : num(baseY + dy + bsOffset)
     const textAnchor = it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle'
-    out += `<text x="${num(it.x ?? 0)}" y="${y}"${isRotated && bsOffset ? ` dy="${num(bsOffset)}"` : ''}${attr('text-anchor', textAnchor)}${attr('font-size', fontSize !== 11 ? fontSize : undefined)}${attr('font-weight', fontWeight)}${attr('fill', it.fill)}${attr("opacity", it.opacity)}${attr("angle", it.angle)}>${esc(String(it.text))}</text>`
+    out += `<text x="${x}" y="${y}"${isRotated && bsOffset ? ` dy="${num(bsOffset)}"` : ''}${attr('text-anchor', textAnchor)}${attr('font-size', fontSize !== 11 ? fontSize : undefined)}${attr('font-weight', fontWeight)}${attr('fill', it.fill)}${attr("opacity", it.opacity)}${attr("angle", it.angle)}>${esc(String(it.text))}</text>`
   }
   out += '</g>'
   return out

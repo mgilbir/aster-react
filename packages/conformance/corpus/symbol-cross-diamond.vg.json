@@ -1,0 +1,33 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 400,
+  "height": 300,
+  "padding": 5,
+  "autosize": "none",
+  "data": [
+    {
+      "name": "table",
+      "values": [
+        {"x":100,"y":100,"shape":"cross","size":200},
+        {"x":200,"y":100,"shape":"diamond","size":200},
+        {"x":300,"y":100,"shape":"triangle-up","size":200},
+        {"x":100,"y":200,"shape":"triangle-down","size":200}
+      ]
+    }
+  ],
+  "marks": [
+    {
+      "type": "symbol",
+      "from": {"data": "table"},
+      "encode": {
+        "update": {
+          "x": {"field": "x"},
+          "y": {"field": "y"},
+          "shape": {"field": "shape"},
+          "size": {"field": "size"},
+          "fill": {"value": "steelblue"}
+        }
+      }
+    }
+  ]
+}
