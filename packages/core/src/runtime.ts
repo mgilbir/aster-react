@@ -2688,7 +2688,17 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: 
     try {
       const v = ctx.runtime.expr((rawFmt as { signal: string }).signal)({}, ctx.signalParams)
       if (typeof v === 'string') fmt = v
-    } catch { /* fall through */ }
+    } catch {
+      // Fallback: evaluate timeUnitSpecifier(...) inline when the expression
+      // engine doesn't have it.  This is the common case for Vega-Lite
+      // temporal axes whose format signal is
+      //   timeUnitSpecifier(["month"], {"year-month":"%b %Y ", ...})
+      const sig = (rawFmt as { signal: string }).signal
+      if (ctx) {
+        const resolved = evalTimeUnitSpecifier(sig)
+        if (resolved !== undefined) fmt = resolved
+      }
+    }
   }
   if (fmtType === 'time' || scale.type === 'time' || scale.type === 'utc') {
     const L = locale(undefined)
@@ -2704,4 +2714,57 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: 
   const L = locale(undefined)
   return tickFormat(L, scale, count, fmt)
 
+}
+
+// ---------------------------------------------------------------------------
+// timeUnitSpecifier — inline fallback for Vega-Lite temporal axis format
+// signals.  Mirrors vega-time/src/units.js `timeUnitSpecifier`.
+// ---------------------------------------------------------------------------
+
+const TU_ORDER: Record<string, number> = {
+  year: 1, quarter: 2, month: 3, week: 4, date: 5,
+  day: 6, dayofyear: 7, hours: 8, minutes: 9, seconds: 10, milliseconds: 11,
+}
+const TU_DEFAULTS: Record<string, string> = {
+  year: '%Y ', quarter: 'Q%q ', month: '%b ', date: '%d ',
+  week: 'W%U ', day: '%a ', dayofyear: '%j ',
+  hours: '%H:00', minutes: '00:%M', seconds: ':%S', milliseconds: '.%L',
+  'year-month': '%Y-%m ', 'year-month-date': '%Y-%m-%d ', 'hours-minutes': '%H:%M',
+}
+
+/**
+ * Evaluate a `timeUnitSpecifier(["unit", ...], {overrides})` expression string.
+ * Returns the resolved format string, or undefined when the string does not match.
+ */
+function evalTimeUnitSpecifier(sig: string): string | undefined {
+  const m = /^\s*timeUnitSpecifier\(\s*(\[.*?\])\s*(?:,\s*(\{.*?\}))?\s*\)\s*$/.exec(sig)
+  if (!m) return undefined
+  let units: string[]
+  try { units = JSON.parse(m[1]!) } catch { return undefined }
+  if (!Array.isArray(units)) return undefined
+  let overrides: Record<string, string> = {}
+  if (m[2]) {
+    try { overrides = JSON.parse(m[2]!) } catch { /* ignore */ }
+  }
+  const u = units.slice()
+    .filter((unit) => unit in TU_ORDER)
+    .sort((a, b) => (TU_ORDER[a] ?? 99) - (TU_ORDER[b] ?? 99))
+  const s = { ...TU_DEFAULTS, ...overrides }
+  let fmt = ''
+  let start = 0
+  const n = u.length
+  while (start < n) {
+    let found = false
+    for (let end = n; end > start; --end) {
+      const key = u.slice(start, end).join('-')
+      if (s[key] != null) {
+        fmt += s[key]
+        start = end
+        found = true
+        break
+      }
+    }
+    if (!found) break
+  }
+  return fmt.trim() || undefined
 }
