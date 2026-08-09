@@ -2385,10 +2385,15 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       // For shape channel legends, render the actual shape from the scale.
       if (legend.shape) {
         // Shape legend: the scale returns shape names, use them as symbol shapes.
-        // The stroke color comes from the legend encode or defaults to the first stroke color.
+        // The stroke color comes from the legend encode or defaults to #888
+        // (Vega's default symbol stroke for shape legends).
         const shapeName = String(scale(value))
-        const shapeStroke = legendStrokeColor ?? '#4c78a8'
-        const shapeOpacity = symbolOpacity != null ? symbolOpacity as number : 0.7
+        const shapeStroke = legendStrokeColor ?? '#888'
+        // For shape legends, use the encode opacity directly (not the isStrokeLegend
+        // fallback which always gives 0.7). When no encode exists, Vega defaults to 1.
+        const shapeOpacity = symOpacityEnc && typeof symOpacityEnc === 'object' && 'value' in symOpacityEnc
+          ? ((symOpacityEnc as { value?: unknown }).value as number ?? 0.7)
+          : 1
         const r = 5
         let d: string
         switch (shapeName) {
