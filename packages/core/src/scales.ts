@@ -39,7 +39,20 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   const domain = resolveDomain(type, c.domain, ctx)
   s.domain(domain)
 
-  const range0 = resolveRange(c.range, ctx, type)
+  // When the scale has a `scheme` property but no `range`, resolve the scheme
+  // to a concrete range.  Vega resolves `scheme` during the Scale encode
+  // transform; for ordinal scales this yields the scheme's color array.
+  let effectiveRange = c.range
+  if (effectiveRange == null && c.scheme) {
+    const schemeArr = vs.scheme(c.scheme)
+    if (Array.isArray(schemeArr)) {
+      effectiveRange = schemeArr as unknown as ScaleRange
+    } else if (typeof schemeArr === 'function') {
+      // Continuous scheme used as ordinal fallback: generate enough colors.
+      effectiveRange = schemeArr as unknown as ScaleRange
+    }
+  }
+  const range0 = resolveRange(effectiveRange, ctx, type)
   // Handle continuous schemes: scheme strings like 'blues' for color interpolation
   if (typeof range0 === 'string' && CONTINUOUS_TYPES.has(type)) {
     const schemeFn = vs.scheme(range0)
@@ -83,6 +96,15 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   const zero = !TIME_SCALE_TYPES.has(type) && (c.zero ?? INCLUDE_ZERO_TYPES.has(type))
   if (zero) applyZero(s)
   if (c.domainMin != null || c.domainMax != null) applyDomainMinMax(s, c.domainMin, c.domainMax)
+  // Vega's Scale transform splices domainMid into the domain array so that the
+  // midpoint value is explicitly represented as a domain breakpoint.  The
+  // resulting piecewise-linear scale maps domainMid to a range value that
+  // maintains the same slope established by the surrounding domain/range pairs.
+  // The splice happens after zero/domainMin/domainMax (which establish the
+  // baseline domain) and before nice (which rounds the domain boundaries).
+  if (c.domainMid != null && CONTINUOUS_TYPES.has(type)) {
+    applyDomainMid(s, c.domainMid)
+  }
   // Vega's Scale transform adjusts continuous domains for minimum pixel
   // padding (`padDomain`): the domain is zoomed out around its midpoint so the
   // extreme data values land `padding` px inside the range. Applies to all
@@ -153,6 +175,23 @@ function applyDomainMinMax(s: Scale, min?: number, max?: number) {
   const d = (s.domain() as number[]).slice()
   if (min != null) d[0] = min
   if (max != null) d[1] = max
+  s.domain(d)
+}
+
+/**
+ * Vega's Scale transform: splice domainMid into the continuous domain array so
+ * the midpoint is an explicit breakpoint.  The splice position mirrors Vega's
+ * logic exactly: `i = mid > d[n] ? n+1 : mid < d[0] ? 0 : n`.  When the
+ * midpoint falls inside the domain, it is inserted before the last element
+ * (index n), creating a 3-element domain.  The range is left untouched; d3
+ * handles mismatched domain/range lengths by extrapolating beyond the last
+ * range value, matching vega-encode's behaviour.
+ */
+function applyDomainMid(s: Scale, mid: number) {
+  const d = (s.domain() as number[]).slice()
+  const n = d.length - 1 || 1
+  const i = mid > d[n]! ? n + 1 : mid < d[0]! ? 0 : n
+  d.splice(i, 0, mid)
   s.domain(d)
 }
 
