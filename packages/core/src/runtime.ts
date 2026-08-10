@@ -2109,6 +2109,11 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const d0n = typeof d0 === 'number' ? d0 : 0
     const d1n = typeof d1 === 'number' ? d1 : 1
     const LABEL_FONT_SIZE = 10
+    // Vega formats gradient legend labels with the locale formatter, which uses
+    // the Unicode minus sign (U+2212) for negative values. Match that by using
+    // the locale number formatter rather than String().
+    const LL = locale(undefined)
+    const legendFmt = LL.format('.1~f')
     for (const t of tickNums) {
       const tNum = typeof t === 'number' ? t : 0
       const perc = d1n !== d0n ? (tNum - d0n) / (d1n - d0n) : 0
@@ -2117,7 +2122,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         : perc >= 1 ? Math.round(0.79 * LABEL_FONT_SIZE)
         : 0.3 * LABEL_FONT_SIZE
       const yPos = titleH + (1 - perc) * L + baselineOffset
-      items.push({ text: String(tNum), x: 18, y: yPos, align: 'left', fill: '#000' })
+      items.push({ text: legendFmt(tNum), x: 18, y: yPos, align: 'left', fill: '#000' })
     }
     // Gradient def from scale's interpolator
     const colorScale = scale as ColorScale

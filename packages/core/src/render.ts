@@ -469,8 +469,11 @@ function renderArea(group: SceneGroup): string {
   if (!path) return ''
   const fill = items[0]?.fill
   const fillOpacity = items[0]?.fillOpacity
+  const stroke = items[0]?.stroke
+  const strokeWidth = items[0]?.strokeWidth
+  const strokeOpacity = items[0]?.strokeOpacity
   let out = `<g class="mark-area role-mark" role="graphics-symbol" aria-roledescription="area mark container">`
-  out += `<path d="${path}"${fill ? ` fill="${fill}"` : ''}${fillOpacity != null ? ` fill-opacity="${num(fillOpacity)}"` : ''}/>`
+  out += `<path d="${path}"${fill ? ` fill="${fill}"` : ''}${fillOpacity != null ? ` fill-opacity="${num(fillOpacity)}"` : ''}${attr('stroke', stroke)}${attr('stroke-width', strokeWidth)}${attr('stroke-opacity', strokeOpacity)}/>`
   out += '</g>'
   return out
 }
