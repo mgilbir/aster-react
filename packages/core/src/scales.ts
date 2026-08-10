@@ -10,8 +10,8 @@ export type Scale = vs.Scale
 type SchemeFn = (t: number) => unknown
 
 export interface ColorScale extends Scale {
-  interpolate(interpolator: () => SchemeFn): this
-  interpolator?: () => SchemeFn
+  interpolate?(interpolator: () => SchemeFn): this
+  interpolator?(fn?: SchemeFn): this | SchemeFn
 }
 
 export interface ScaleContext {
@@ -48,8 +48,10 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
     if (Array.isArray(schemeArr)) {
       effectiveRange = schemeArr as unknown as ScaleRange
     } else if (typeof schemeArr === 'function') {
-      // Continuous scheme used as ordinal fallback: generate enough colors.
-      effectiveRange = schemeArr as unknown as ScaleRange
+      // Continuous scheme (e.g. 'viridis', 'blues'): pass the scheme name as
+      // a string so the continuous interpolation path handles it, rather than
+      // passing the interpolator function through resolveRange.
+      effectiveRange = c.scheme as unknown as ScaleRange
     }
   }
   const range0 = resolveRange(effectiveRange, ctx, type)
@@ -59,7 +61,12 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
     if (typeof schemeFn === 'function') {
       s.range([0, 1])
       const cs = s as ColorScale
-      cs.interpolate(() => schemeFn as SchemeFn)
+      // d3 sequential/diverging scales use .interpolator() (not .interpolate)
+      if (typeof cs.interpolator === 'function') {
+        cs.interpolator(schemeFn as SchemeFn)
+      } else if (typeof (cs as any).interpolate === 'function') {
+        (cs as any).interpolate(() => schemeFn as SchemeFn)
+      }
       cs.interpolator = () => schemeFn as SchemeFn
     } else {
       s.range(range0 as never)

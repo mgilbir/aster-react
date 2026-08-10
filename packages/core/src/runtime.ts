@@ -2042,7 +2042,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
   const orient = legend.orient ?? 'right'
 
   // --- Gradient legend (continuous scale + gradientLength) ---
-  if (CONTINUOUS_TYPES.has(scaleType) && legend.gradientLength != null) {
+  // Vega defaults to gradient legends for interpolating scales (sequential,
+  // diverging) even without an explicit gradientLength.
+  const isInterpolating = scaleType === 'sequential'
+  if (CONTINUOUS_TYPES.has(scaleType) && (legend.gradientLength != null || isInterpolating)) {
     // Resolve gradientLength: number, signal object, or fallback to 200
     let GL: number = 200
     if (typeof legend.gradientLength === 'number') {
@@ -2083,19 +2086,23 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const outerWidth = Math.max(18 + 8 * maxLabelLen, titleWidth)
 
     const items: SceneItem[] = []
-    // Background box (0,0 to outerWidth, 16+L)
-    items.push({ path: `M0,0h${outerWidth}v${16 + L}h-${outerWidth}Z`, x: 0, y: 0 })
-    // Gradient rect at legend-relative (0, 16), 16xL
+    // Title height: 16px when a title is present, 0 otherwise.
+    const titleH = titleStr.length > 0 ? 16 : 0
+    // Background box (0,0 to outerWidth, titleH+L)
+    items.push({ path: `M0,0h${outerWidth}v${titleH + L}h-${outerWidth}Z`, x: 0, y: 0 })
+    // Gradient rect at legend-relative (0, titleH), 16xL
     items.push({
       path: `M0,0h16v${L}h-16Z`,
-      x: 0, y: 16,
+      x: 0, y: titleH,
       fill: `url(#${gradientId})`,
       stroke: '#ddd',
       strokeWidth: 0,
       opacity: gradientOpacity,
     })
     // Title
-    items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000' })
+    if (titleStr.length > 0) {
+      items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000' })
+    }
     // Labels. Vega positions each label at (1 - perc) * L and then shifts it by
     // the text baseline offset (labels flush against the gradient edges get
     // top/bottom baselines), rounding to whole pixels. Replicate that here.
@@ -2109,7 +2116,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         perc <= 0 ? -0.21 * LABEL_FONT_SIZE
         : perc >= 1 ? 0.79 * LABEL_FONT_SIZE
         : 0.3 * LABEL_FONT_SIZE
-      const yPos = Math.round(16 + (1 - perc) * L + baselineOffset)
+      const yPos = Math.round(titleH + (1 - perc) * L + baselineOffset)
       items.push({ text: String(tNum), x: 18, y: yPos, align: 'left', fill: '#000' })
     }
     // Gradient def from scale's interpolator
@@ -2126,7 +2133,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       x: ctx.width + 18,
       y: 0,
       width: outerWidth,
-      height: 16 + L,
+      height: titleH + L,
       items,
     }
     if (stops.length) {
