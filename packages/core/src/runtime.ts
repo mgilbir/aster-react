@@ -2269,8 +2269,20 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         // Threshold: labels are integer domain values, compute width from content
         const maxLabelLen = sortedDomain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
         outerWidth = SWATCH_W + 2 + 8 * Math.max(maxLabelLen, 1)
+      } else if (scaleType === 'quantize') {
+        // Quantize: compute width from content (label at breakpoint)
+        let maxLabelLen = 1
+        if (sortedDomain.length >= 2) {
+          const d0 = sortedDomain[0]!
+          const d1 = sortedDomain[sortedDomain.length - 1]!
+          for (let i = 1; i < bandCount; i++) {
+            const rawVal = d0 + (d1 - d0) * i / bandCount
+            maxLabelLen = Math.max(maxLabelLen, String(Math.round(rawVal * 1e10) / 1e10).length)
+          }
+        }
+        outerWidth = SWATCH_W + 2 + 8 * Math.max(maxLabelLen, 1)
       } else {
-        // Quantile/quantize: vega uses a fixed width of 50
+        // Quantile: vega uses a fixed width of 50
         outerWidth = 50
       }
       const bgH = bandCount * SWATCH_H
@@ -2285,12 +2297,20 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       // Labels at breakpoints (skip the first which is empty)
       for (let i = 1; i < bandCount; i++) {
         const y = (bandCount - i) * SWATCH_H + 3
-        const nVals = sortedDomain.length
-        const idx = Math.ceil(i * nVals / bandCount) - 1
-        const rawVal = idx >= 0 && idx < nVals ? sortedDomain[idx] : undefined
+        let rawVal: number | undefined
+        if (scaleType === 'quantize' && sortedDomain.length >= 2) {
+          // Quantize: breakpoints are evenly spaced across the domain extent
+          const d0 = sortedDomain[0]!
+          const d1 = sortedDomain[sortedDomain.length - 1]!
+          rawVal = d0 + (d1 - d0) * i / bandCount
+        } else {
+          const nVals = sortedDomain.length
+          const idx = Math.ceil(i * nVals / bandCount) - 1
+          rawVal = idx >= 0 && idx < nVals ? sortedDomain[idx] : undefined
+        }
         // Quantile/quantize: format with ".0" for integers; threshold: plain integers
         const label = rawVal !== undefined
-          ? (isThreshold ? String(rawVal) : (Number.isInteger(rawVal) ? rawVal + '.0' : String(rawVal)))
+          ? (isThreshold ? String(rawVal) : (scaleType === 'quantize' ? String(Math.round(rawVal * 1e10) / 1e10) : (Number.isInteger(rawVal) ? rawVal + '.0' : String(rawVal))))
           : ''
         items.push({ text: label, x: 18, y, align: 'left', fill: '#000' })
       }
@@ -2346,8 +2366,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // Vega measures text width as ~~(0.8 * len * fontSize) when no canvas is
     // available (vega-scenegraph estimateWidth). Labels render at 10px, the
     // legend title at 11px bold. The entry content width is the symbol offset
-    // (16) plus the widest label; the outer background spans the larger of the
-    // entry content and the title.
+    // (16 or 20 for stroke legends) plus the widest label; the outer background
+    // spans the larger of the entry content and the title.
     const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
     const entryWidth = 16 + 8 * maxLabelLen
     const titleStr = String(legend.title ?? '')
@@ -2417,7 +2437,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         if (colorProp === 'fill') {
           items.push({ path: 'M-5,-5h10v10h-10Z', x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5, ...(legendStrokeColor != null ? { stroke: String(legendStrokeColor) } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
         } else {
-          items.push({ path: 'M-5,-5h10v10h-10Z', x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
+          items.push({ path: 'M-5,-5h10v10h-10Z', x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5 })
         }
       } else if (colorProp === 'fill') {
         items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5, ...(legendStrokeColor != null ? { stroke: String(legendStrokeColor) } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })

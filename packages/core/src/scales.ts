@@ -26,7 +26,7 @@ export interface ScaleContext {
   dataRows?: (dataName: string) => Record<string, unknown>[]
 }
 
-export const CONTINUOUS_TYPES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential'])
+export const CONTINUOUS_TYPES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential', 'quantize'])
 const INCLUDE_ZERO_TYPES = new Set(['linear', 'pow', 'sqrt'])
 const TIME_SCALE_TYPES = new Set(['time', 'utc'])
 
