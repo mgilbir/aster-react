@@ -2113,10 +2113,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const tNum = typeof t === 'number' ? t : 0
       const perc = d1n !== d0n ? (tNum - d0n) / (d1n - d0n) : 0
       const baselineOffset =
-        perc <= 0 ? -0.21 * LABEL_FONT_SIZE
-        : perc >= 1 ? 0.79 * LABEL_FONT_SIZE
+        perc <= 0 ? Math.round(-0.21 * LABEL_FONT_SIZE)
+        : perc >= 1 ? Math.round(0.79 * LABEL_FONT_SIZE)
         : 0.3 * LABEL_FONT_SIZE
-      const yPos = Math.round(titleH + (1 - perc) * L + baselineOffset)
+      const yPos = titleH + (1 - perc) * L + baselineOffset
       items.push({ text: String(tNum), x: 18, y: yPos, align: 'left', fill: '#000' })
     }
     // Gradient def from scale's interpolator
