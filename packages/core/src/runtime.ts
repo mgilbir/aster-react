@@ -2373,7 +2373,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const symOpacityEnc = (legend as unknown as { encode?: { symbols?: { update?: { opacity?: EncodeValue } } } }).encode?.symbols?.update?.opacity
     const symbolOpacity = symOpacityEnc && typeof symOpacityEnc === 'object' && 'value' in symOpacityEnc
       ? (symOpacityEnc as { value?: unknown }).value
-      : (isStrokeLegend && !isStrokeType ? 0.7 : undefined)
+      : undefined
 
     // Vega measures text width as ~~(0.8 * len * fontSize) when no canvas is
     // available (vega-scenegraph estimateWidth). Labels render at 10px, the
@@ -2454,7 +2454,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       } else if (colorProp === 'fill') {
         items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5, ...(legendStrokeColor != null ? { stroke: String(legendStrokeColor) } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
       } else {
-        items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
+        items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
       }
       items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000' })
     }
