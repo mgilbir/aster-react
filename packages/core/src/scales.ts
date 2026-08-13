@@ -61,13 +61,18 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
     if (typeof schemeFn === 'function') {
       s.range([0, 1])
       const cs = s as ColorScale
+      // When reverse is requested, wrap the interpolator so it maps t → original(1-t),
+      // reversing the color mapping without replacing the range.
+      const effectiveSchemeFn: SchemeFn = c.reverse
+        ? ((t: number) => (schemeFn as (t: number) => unknown)(1 - t) as unknown) as SchemeFn
+        : schemeFn as SchemeFn
       // d3 sequential/diverging scales use .interpolator() (not .interpolate)
       if (typeof cs.interpolator === 'function') {
-        cs.interpolator(schemeFn as SchemeFn)
+        cs.interpolator(effectiveSchemeFn)
       } else if (typeof (cs as any).interpolate === 'function') {
-        (cs as any).interpolate(() => schemeFn as SchemeFn)
+        (cs as any).interpolate(() => effectiveSchemeFn)
       }
-      cs.interpolator = () => schemeFn as SchemeFn
+      cs.interpolator = () => effectiveSchemeFn
     } else {
       s.range(range0 as never)
     }
