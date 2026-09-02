@@ -17,7 +17,8 @@ geoRegistry.buildProjection = (spec, width, height) =>
   buildProjection(spec as Parameters<typeof buildProjection>[0], width, height)
 geoRegistry.projectedPath = (projection, geo) =>
   projectedPath(projection as Parameters<typeof projectedPath>[0], geo)
-const makeContour = d3Contours as unknown as () => { smooth(b: boolean): ReturnType<typeof makeContour>; size(s: [number, number]): (v: number[], t: number[]) => unknown[] }
+// d3-contour@4's generator sets thresholds via `.thresholds(array)`, then is
+// called as `contours(values)` — it has no 2-arg form (vega's fork does).
 geoRegistry.contourRun = (values, thresholds, size, smooth) =>
-  (makeContour().smooth(smooth).size(size)(values as number[], thresholds) ?? []) as ContourFeature[]
+  (d3Contours().smooth(smooth).size(size).thresholds(thresholds)(values as unknown as number[]) ?? []) as ContourFeature[]
 

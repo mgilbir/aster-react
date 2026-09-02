@@ -929,6 +929,8 @@ export function arcPath(cx: number, cy: number, r: number, r0: number, a0in: num
 
 function attr(name: string, value: unknown): string {
   if (value == null) return ''
+  // Vega's SVG renderer omits a 'transparent' paint value (fill/stroke).
+  if (value === 'transparent') return ''
   if (Array.isArray(value)) return ` ${name}="${value.join(',')}"`
   if (typeof value === 'number') return ` ${name}="${num(value)}"`
   return ` ${name}="${esc(String(value))}"`
