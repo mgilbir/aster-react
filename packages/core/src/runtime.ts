@@ -448,15 +448,19 @@ function contentBoundsOf(chart: CompiledChart, items: SceneNode[], width: number
       const angle = (it as Record<string, unknown>).angle as number | undefined
       const anchor = it.align
       if (angle) {
-        // Vega's text bounds set the unrotated (w × h) box anchored at (x,y),
-        // then rotate the box about the anchor and take the axis-aligned hull
-        // (Bounds.rotate). Replicate that so a ±90° axis title's x-extent comes
-        // from its vertical offset from the anchor, not a guessed constant.
-        const ascent = 0.78 * fs, descent = 0.22 * fs
+        // Vega's text bounds (svg.js `bound`): the unrotated box is
+        //   x: [x + (align offset), + w]
+        //   y: [y + offset(item) - round(0.8h), + h]   (h = fontSize)
+        // then rotated about the anchor (x, y) and the axis-aligned hull taken
+        // (Bounds.rotate). `offset(item)` is the baseline correction.
+        const h = fs
+        const boff = it.baseline === 'top' ? Math.round(0.79 * h)
+          : it.baseline === 'middle' ? Math.round(0.30 * h)
+          : it.baseline === 'bottom' ? Math.round(-0.21 * h) : 0
         const bx1 = anchor === 'center' ? ox - w / 2 : anchor === 'right' ? ox - w : ox
-        const by1 = it.baseline === 'top' ? oy : it.baseline === 'middle' ? oy - fs / 2 : oy - ascent
+        const by1 = oy + boff - Math.round(0.8 * h)
         const bx2 = bx1 + w
-        const by2 = by1 + (ascent + descent)
+        const by2 = by1 + h
         const rad = (angle * Math.PI) / 180
         const cos = Math.cos(rad), sin = Math.sin(rad)
         let mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity
@@ -3179,12 +3183,12 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       t.x = (hasTickMarks && axis.labels === false)
         ? -(tickSize + titlePadding)
         : -((hasTickMarks && axis.labels !== false ? labelPadding : 0) + (hasTickMarks ? tickSize : 0) + labelWidth + 3.5)
-      t.y = ctx.height / 2 + 0.5; t.align = 'center'
-      // Vega rotates left/right axis titles; record the angle so bounds treat
-      // the title's extent as vertical (height along x, text length along y).
+      t.y = ctx.height / 2 + 0.5; t.align = 'center'; t.baseline = 'bottom'
+      // Vega rotates left/right axis titles (angle ∓90, baseline bottom); the
+      // content-bounds scan then uses vega's exact rotated text bbox.
       ;(t as Record<string, unknown>).angle = (axis as { titleAngle?: number }).titleAngle ?? -90
     }
-    else if (orient === 'right') { t.x = ctx.width + tickSize + labelPadding + labelWidth + 4.5; t.y = ctx.height / 2 + 0.5; t.align = 'center'; ;(t as Record<string, unknown>).angle = (axis as { titleAngle?: number }).titleAngle ?? 90 }
+    else if (orient === 'right') { t.x = ctx.width + tickSize + labelPadding + labelWidth + 4.5; t.y = ctx.height / 2 + 0.5; t.align = 'center'; t.baseline = 'bottom'; ;(t as Record<string, unknown>).angle = (axis as { titleAngle?: number }).titleAngle ?? 90 }
     t.fill = '#000'
     items.push(t)
   }
