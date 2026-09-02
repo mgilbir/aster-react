@@ -448,12 +448,25 @@ function contentBoundsOf(chart: CompiledChart, items: SceneNode[], width: number
       const angle = (it as Record<string, unknown>).angle as number | undefined
       const anchor = it.align
       if (angle) {
-        // Rotated text: its visual extent is vertical — width becomes ~fontSize
-        // (the line height) on x, and the text length runs along y.
-        const lineW = fs
-        const lx1 = ox - lineW / 2
-        const ly1 = anchor === 'center' ? oy - w / 2 : anchor === 'right' ? oy - w : oy
-        grow(lx1, ly1, lx1 + lineW, ly1 + w)
+        // Vega's text bounds set the unrotated (w × h) box anchored at (x,y),
+        // then rotate the box about the anchor and take the axis-aligned hull
+        // (Bounds.rotate). Replicate that so a ±90° axis title's x-extent comes
+        // from its vertical offset from the anchor, not a guessed constant.
+        const ascent = 0.78 * fs, descent = 0.22 * fs
+        const bx1 = anchor === 'center' ? ox - w / 2 : anchor === 'right' ? ox - w : ox
+        const by1 = it.baseline === 'top' ? oy : it.baseline === 'middle' ? oy - fs / 2 : oy - ascent
+        const bx2 = bx1 + w
+        const by2 = by1 + (ascent + descent)
+        const rad = (angle * Math.PI) / 180
+        const cos = Math.cos(rad), sin = Math.sin(rad)
+        let mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity
+        for (const [px, py] of [[bx1, by1], [bx2, by1], [bx1, by2], [bx2, by2]] as [number, number][]) {
+          const rx = ox + (px - ox) * cos - (py - oy) * sin
+          const ry = oy + (px - ox) * sin + (py - oy) * cos
+          mnx = Math.min(mnx, rx); mny = Math.min(mny, ry)
+          mxx = Math.max(mxx, rx); mxy = Math.max(mxy, ry)
+        }
+        grow(mnx, mny, mxx, mxy)
       } else {
         let lx1: number
         if (anchor === 'center') lx1 = ox - w / 2
