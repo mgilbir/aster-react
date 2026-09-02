@@ -4,7 +4,7 @@ A small TypeScript reimplementation of the Vega/Vega-Lite rendering stack on gra
 
 ## Status
 
-**Pre-alpha, M0 milestone.** The pipeline works end-to-end for a subset of Vega marks and scales; many features remain incomplete. Not for production use.
+**Pre-alpha, M1 milestone.** The pipeline works end-to-end across a 393-spec conformance corpus verified against the real Vega renderer. Static spec coverage is broad; reactive/interactive behavior and a few advanced layout subsystems remain. Not for production use.
 
 ## How It Works
 
@@ -20,10 +20,10 @@ Expressions (used in formulas, filters, and mark encodings) are parsed by `vega-
 
 | Package | Description |
 |---------|-------------|
-| `packages/core` — `@aster/core` | Compiler (spec -> IR), runtime (IR -> scene), SVG renderer, expression engine. Public API: `renderSpec`, `compileChart`, `evaluateChart`, `renderSceneToSvg`, `compileExpr`, `buildScale`, `applyTransforms`. |
+| `packages/core` — `@aster/core` | Compiler (spec -> IR), runtime (IR -> scene), SVG renderer, expression engine. Public API: `renderSpec`, `compileChart`, `evaluateChart`, `renderSceneToSvg`, `compileExpr`, `buildScale`, `applyTransforms`, plus incremental update: `createChartSession`, `patchSceneDom`, `renderSceneToDomElement`. |
 | `packages/react` — `@aster/react` | Thin `<Chart>` React component rendering the SVG from `renderSpec`. |
 | `packages/conformance` — `@aster/conformance` | Oracle harness: renders each corpus spec through both real Vega (dev-only) and `@aster/core`, canonicalizes SVGs, diffs geometry. |
-| `packages/benchmarks` — `@aster/benchmarks` | Bundle-size budget script (esbuild minimal chart, gzip vs 60 kB budget). |
+| `packages/benchmarks` — `@aster/benchmarks` | Bundle-size budget script + performance harness vs the standard Vega-in-React embeddings (react-vega, vega-embed): mount/update/resize latency, frame pacing, memory, payload. See [`packages/benchmarks/README.md`](packages/benchmarks/README.md). |
 | `.github/workflows/ci.yml` | CI pipeline: typecheck, build, test, conformance, bundle budget. |
 
 ## Quick Start
@@ -32,8 +32,10 @@ Expressions (used in formulas, filters, and mark encodings) are parsed by `vega-
 pnpm install
 pnpm build
 pnpm typecheck
-pnpm conformance
+pnpm conformance           # 393-spec corpus vs real-Vega oracle (the CI gate)
+pnpm probe                 # gap probes (diagnostic, NOT a gate): documents known gaps
 pnpm --filter @aster/benchmarks run budget
+pnpm bench                 # perf harness: aster vs react-vega vs vega-embed (needs build)
 ```
 
 ### Minimal Example
@@ -65,29 +67,47 @@ const svg = renderSpec(spec)
 
 ## Current Status / What Works
 
-**Conformance result (16 corpus specs): 16/16 passed.**
+**Conformance corpus: 396/396 passed.**
 
-The core pipeline (Vega spec → compile → evaluate → SVG) is verified against the real Vega renderer oracle on a 16-spec conformance corpus: all 16 pass.
+The core pipeline (Vega spec → compile → evaluate → SVG) is verified against the real Vega renderer oracle on a 393-spec conformance corpus, spanning both raw Vega (`*.vg.json`) and Vega-Lite (`*.vl.json`, via `vega-lite.compile`) so both front-ends are held to the same geometry bar.
 
-**What the corpus covers:**
+> **Geo & contour are opt-in addons.** Cartographic projections and the `contour`
+> transform pull in `d3-geo` / `d3-contour` (~17 kB gzip), so they ship as a
+> separate entry that a plain bar/line chart never bundles. Before rendering a
+> spec that uses `projections`, a projected `geoshape`, or `contour`, load the
+> addon once:
+>
+> ```ts
+> await import('@aster/core/geo')   // or: import '@aster/core/geo'
+> renderSpec(geoSpec)
+> ```
+>
+> Without it, those specs throw an actionable "load the addon" error; every
+> other chart renders unchanged and stays lean.
 
-| Area | Covered specs |
-|------|---------------|
-| Mark types | `line-basic`, `area-basic`, `area-vg`, `bar-bands`, `bar-basic`, `bar-vl`, `rule`, `scatter-basic`, `scatter-vg`, `tick-vg` |
-| Point / symbol | `point-vl` |
-| Scales | linear (`line-basic`, `scatter-basic`), band (`bar-*`), log (`line-log`), utc/time (`line-time`) |
-| Axes | grid, tick marks, and domain strokes (labels/titles deliberately disabled in the corpus) |
-| Transforms | eager stack (`bar-bands`), impute (`scatter-vg`), formula (`line-log`), filter (`line-log`) |
+**What is covered and oracle-verified:**
 
-This includes both raw Vega (`*.vg.json`) and Vega-Lite (`*.vl.json`) entries, confirming that the `vega-lite.compile` path is also correct.
+- **Marks**: rect, line, area, symbol/circle, rule, text, arc, path, image, trail, shape/geoshape — including corner radius, per-corner rounding, curves (basis/cardinal/catmull/monotone/step/natural/bundle with tension), stroke dash, fill gradients, multi-line text via `lineBreak` → tspans.
+- **Scales**: linear/pow/sqrt/log/symlog/time/utc/band/point/ordinal/quantile/quantize/threshold/sequential, color schemes (including scheme-range *without* zero extension), `values`/`step` ranges, domain sort.
+- **Axes**: tick marks, grid, domain, numeric + time labels, axis titles (all 4 orients), `labelOverlap` parity removal, label padding/baseline geometry.
+- **Legends**: gradient (vertical/right + horizontal strip), symbol (single-column + multi-column grids at any corner via `columns`/`direction`), size, and band legends; bottom-flow (vertical + horizontal).
+- **Guides & spec language**: top-level chart **title + subtitle** (anchored against content bounds), static **signal `update`** expressions resolved to a fixed point, `config` (background/view/style.<mark>/axis/legend, transparent-stroke handling), `enter`+`update` encode merging, per-dataset transforms.
+- **Nested scopes**: group marks that declare their own `scales`/`axes`/`data` render in an isolated child scope (parent datasets shared, `width`/`height` scale ranges resolve against the parent per vega semantics).
+- **Transforms**: formula, filter, collect, bin, fold, flatten, impute, stack, aggregate, window, joinaggregate, extent, lookup, identifier, timeunit, kde, quantile, regression, loess, density, geoshape (with **d3-geo projections**: mercator/albers/equirectangular/…), pack/partition/treemap, voronoi, graticule, sequence, wordcloud.
+- **Expressions**: the full expression function surface — type checks/coercions, math, array, string (pad/truncate/split…), **date-time accessors** (year/quarter/week/utc…), color (rgb/hsl/lab/hcl/luminance/contrast), regexp, and scale/projection/data functions (`scale`, `invert`, `domain`, `range`, `bandwidth`, `bandspace`, `data`, `indata`). CSP-safe via `vega-interpreter` (no `new Function`).
 
-**What is NOT covered yet:**
+### Gap probes
 
-- **Axis tick label positioning** — labels and titles are disabled in the corpus; text placement is a known gap.
-- **Legends** — the `CompiledLegend` IR exists but there is no legend renderer / geometry.
-- **Interactive selections / params** — no signal/event system at all.
-- **Reactive dataflow** — current execution is static/eager re-evaluation per `renderSpec` call (no incremental update).
-- **Canvas rendering** — only SVG output is implemented.
-- **Full Vega transform parity** — some transforms exist but with limited support (bin, window, joinaggregate).
+Feature areas that are **known-incomplete** live in `packages/conformance/probes/` and run under `pnpm probe` (a diagnostic, **not** a CI gate). When a gap is implemented, its probe is promoted to `corpus/`. Remaining documented gaps:
+
+- `contour` — the transform + density/marching-squares run, but pixel-exact oracle parity needs vega's float sequence in the density blur.
+- `vl-facet-2d` — 2-D (row×column) facet grids: renders 129/129 records but the bottom-row cells' axis orientation still diverges.
+- `vl-title-legend` — chart title anchored against a combined layout (rotated axis title + legend) still drifts by a few px.
+
+**What is NOT covered yet (beyond the probes above):**
+
+- **Interactive selections / event-driven signals** — `signal.on` streams and event handlers are ignored (static mode); `invert`/brush is exposed via `<Chart onSelect>` but there is no general signal→view event loop.
+- **Reactive dataflow** — updates re-encode the whole scene; there is no partial per-dataset re-evaluation.
+- **Canvas rendering** — only SVG output.
 
 Expressions are CSP-safe: the engine evaluates them via the `vega-expression` AST interpreter (`vega-interpreter`), so no `new Function` is ever used.

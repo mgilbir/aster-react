@@ -1,0 +1,24 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "data": { "values": [
+    { "cat": "A", "grp": "x", "sub": "p", "v": 28 },
+    { "cat": "B", "grp": "x", "sub": "p", "v": 55 },
+    { "cat": "A", "grp": "x", "sub": "q", "v": 43 },
+    { "cat": "B", "grp": "x", "sub": "q", "v": 91 },
+    { "cat": "A", "grp": "y", "sub": "p", "v": 81 },
+    { "cat": "B", "grp": "y", "sub": "p", "v": 53 },
+    { "cat": "A", "grp": "y", "sub": "q", "v": 73 },
+    { "cat": "B", "grp": "y", "sub": "q", "v": 35 }
+  ] },
+  "width": 150,
+  "height": 120,
+  "autosize": "none",
+  "facet": { "row": { "field": "grp", "type": "nominal" }, "column": { "field": "sub", "type": "nominal" } },
+  "spec": {
+    "mark": "bar",
+    "encoding": {
+      "x": { "field": "cat", "type": "nominal", "axis": { "labelAngle": 0 } },
+      "y": { "field": "v", "type": "quantitative" }
+    }
+  }
+}

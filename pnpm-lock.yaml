@@ -59,10 +59,56 @@ importers:
         version: 4.118.0
 
   packages/benchmarks:
+    dependencies:
+      '@aster/core':
+        specifier: workspace:*
+        version: link:../core
+      '@aster/react':
+        specifier: workspace:*
+        version: link:../react
     devDependencies:
+      '@types/jsdom':
+        specifier: ^30.0.0
+        version: 30.0.0
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.2.18
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: ^19.2.4
+        version: 19.2.4(@types/react@19.2.18)
       esbuild:
         specifier: ^0.25.0
         version: 0.25.12
+      jsdom:
+        specifier: ^30.0.1
+        version: 30.0.1
+      playwright:
+        specifier: ^1.62.1
+        version: 1.62.1
+      react:
+        specifier: ^19.2.8
+        version: 19.2.8
+      react-dom:
+        specifier: ^19.2.8
+        version: 19.2.8(react@19.2.8)
+      react-vega:
+        specifier: ^8.0.0
+        version: 8.0.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vega-embed@7.1.0(vega-lite@6.4.3(vega@6.3.1))(vega@6.3.1))
+      tsx:
+        specifier: ^4.23.4
+        version: 4.23.4
+      vega:
+        specifier: ^6.3.1
+        version: 6.3.1
+      vega-embed:
+        specifier: ^7.1.0
+        version: 7.1.0(vega-lite@6.4.3(vega@6.3.1))(vega@6.3.1)
+      vega-lite:
+        specifier: ^6.4.3
+        version: 6.4.3(vega@6.3.1)
 
   packages/conformance:
     dependencies:
@@ -91,9 +137,18 @@ importers:
       d3-array:
         specifier: ^3.2.4
         version: 3.2.4
+      d3-color:
+        specifier: ^3.1.0
+        version: 3.1.0
+      d3-contour:
+        specifier: ^4.0.2
+        version: 4.0.2
       d3-format:
         specifier: ^3.1.0
         version: 3.1.2
+      d3-geo:
+        specifier: ^3.1.1
+        version: 3.1.1
       d3-scale:
         specifier: ^4.0.2
         version: 4.0.2
@@ -125,6 +180,15 @@ importers:
         specifier: ^2.1.0
         version: 2.1.2
     devDependencies:
+      '@types/d3-color':
+        specifier: ^3.1.3
+        version: 3.1.3
+      '@types/d3-contour':
+        specifier: ^3.0.6
+        version: 3.0.6
+      '@types/d3-geo':
+        specifier: ^3.1.1
+        version: 3.1.1
       typescript:
         specifier: ^5.8.0
         version: 5.9.3
@@ -1024,6 +1088,18 @@ packages:
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
+  '@types/d3-array@3.2.2':
+    resolution: {integrity: sha512-hOLWVbm7uRza0BYXpIIW5pxfrKe0W+D5lrFiAEYR+pb6w3N2SwSMaJbXdUfSEv+dT4MfHBLtn5js0LAWaO6otw==}
+
+  '@types/d3-color@3.1.3':
+    resolution: {integrity: sha512-iO90scth9WAbmgv7ogoq57O9YpKmFBbmoEoCHDB2xMBY0+/KVrqAaCDyCE16dUspeOvIxFFRI+0sEtqDqy2b4A==}
+
+  '@types/d3-contour@3.0.6':
+    resolution: {integrity: sha512-BjzLgXGnCWjUSYGfH1cpdo41/hgdWETu4YxpezoztawmqsvCeep+8QGfiY6YbDvfgHz/DkjeIkkZVJavB4a3rg==}
+
+  '@types/d3-geo@3.1.1':
+    resolution: {integrity: sha512-65Emv9fQiQQqphLlRkuQ5ypPsOmWPhtBGCMv61JDPEPMvsx+gzhGf74yw1a78xFKPj6zw4AgQICJoQv0vK9M2w==}
+
   '@types/deep-eql@4.0.2':
     resolution: {integrity: sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw==}
 
@@ -1032,6 +1108,9 @@ packages:
 
   '@types/geojson@7946.0.16':
     resolution: {integrity: sha512-6C8nqWur3j98U6+lXDfTUWIfgvZU+EumvpHKcYjujKH7woYyLj2sUmff0tRhrqM7BohUw7Pz3ZB1jj2gW9Fvmg==}
+
+  '@types/jsdom@30.0.0':
+    resolution: {integrity: sha512-uAHGxujGE0cDaKGdK28zgDotFtNA7MKq5DXl8LrfdxdCI8VHcg15oJz+amHTChPNI5JpgEPQWc2xFdrw3em/nQ==}
 
   '@types/node@22.20.1':
     resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
@@ -1043,6 +1122,9 @@ packages:
 
   '@types/react@19.2.18':
     resolution: {integrity: sha512-AnzbBERsrLKtk2XSfTbYRLjQPdy116Sty4q+T+Bp3IC4l6jNBvreVPAHmpq9qhXQM7CXZPjLVmGMw9sy+hxQ3w==}
+
+  '@types/tough-cookie@4.0.5':
+    resolution: {integrity: sha512-/Ad8+nIOV7Rl++6f1BdKxFSMgmoqEoYbHRpPcx3JEfv8VRsQe9Z4mCXeJBzxs7mbHY/XOZZuXlRNfhpVPbs6ZA==}
 
   '@vitejs/plugin-react@4.7.0':
     resolution: {integrity: sha512-gUu9hwfWvvEDBBmgtAowQCojwZmJ5mcLn3aufeCsitijs3+f2NsrPtlAWIR6OPiqljl96GVCUbLe0HyqIpVaoA==}
@@ -1153,6 +1235,10 @@ packages:
 
   d3-color@3.1.0:
     resolution: {integrity: sha512-zg/chbXyeBtMQ1LbD/WSoW2DpC3I0mpmPdW+ynRTj/x2DAWYrIY7qeZIHidozwV24m4iavr15lNwIwLxRmOxhA==}
+    engines: {node: '>=12'}
+
+  d3-contour@4.0.2:
+    resolution: {integrity: sha512-4EzFTRIikzs47RGmdxbeUvLWtGedDUNkTcmzoeyg4sP/dvCexO47AaQL7VKy/gul85TOxw+IBgA8US2xwbToNA==}
     engines: {node: '>=12'}
 
   d3-delaunay@6.0.4:
@@ -1289,6 +1375,12 @@ packages:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
 
+  fast-deep-equal@3.1.3:
+    resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
+
+  fast-json-patch@3.1.1:
+    resolution: {integrity: sha512-vf6IHUX2SBcA+5/+4883dsIjpBTqmfBjmYiWK1savxQmFk4JfBMLa7ynTYOs1Rolp/T1betJxHiGD3g1Mn8lUQ==}
+
   fdir@6.5.0:
     resolution: {integrity: sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==}
     engines: {node: '>=12.0.0'}
@@ -1297,6 +1389,11 @@ packages:
     peerDependenciesMeta:
       picomatch:
         optional: true
+
+  fsevents@2.3.2:
+    resolution: {integrity: sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==}
+    engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
+    os: [darwin]
 
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
@@ -1414,6 +1511,16 @@ packages:
     resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
     engines: {node: '>=12'}
 
+  playwright-core@1.62.1:
+    resolution: {integrity: sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  playwright@1.62.1:
+    resolution: {integrity: sha512-0M+L3LAD8/nm554LOla9Ayx0j0tmFZ0FBcoQ7F1VuVHpM/XpiC8RcDzBQB8W5+hA8L22THxELzeF+2WcUzvcLg==}
+    engines: {node: '>=20'}
+    hasBin: true
+
   postcss@8.5.25:
     resolution: {integrity: sha512-DTPx3RWSSnWyzLxQnlH0rJP+EW5ekl16ZU4/psbIhA0e53kJfdgaN5vKM+xP7yJtXVu+nfdVFmlgFDEKAe4Pyw==}
     engines: {node: ^10 || ^12 || >=14}
@@ -1430,6 +1537,13 @@ packages:
   react-refresh@0.17.0:
     resolution: {integrity: sha512-z6F7K9bV85EfseRCp2bzrpyQ0Gkw1uLoCel9XBVWPg/TjRj94SkJzUTGfOa4bs7iJvBWtQG0Wq7wnI0syw3EBQ==}
     engines: {node: '>=0.10.0'}
+
+  react-vega@8.0.0:
+    resolution: {integrity: sha512-euye4Gec2ScnUK1zbSA2tzZXUwBmbba8bfbzaRVhdEJTGQfaD78bSgqrccrl9b2fKZS1TZXR0NADEHVe6nxvBg==}
+    peerDependencies:
+      react: ^17 || ^18 || ^19
+      react-dom: ^17 || ^18 || ^19
+      vega-embed: ^7
 
   react@19.2.8:
     resolution: {integrity: sha512-PWaYA1L/q9u2u7xYQi+Y3L3Yfnie7XyLeaJICV1MGD6LprsBxcAqGjYyr0eY3p+QdsA+x/Irkt4Qif8D63+Sbw==}
@@ -1561,6 +1675,9 @@ packages:
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
+  undici-types@8.10.1:
+    resolution: {integrity: sha512-ZpkgovMu+ALwfuo6Bgys8H82gHJ25d4ARMB51FD2BeLnUCDRgY6N3caWk3N6CtKR77gHmRKYHnLF723owNYPNA==}
+
   undici@7.28.0:
     resolution: {integrity: sha512-cRZYrTDwWznlnRiPjggAGxZXanty6M8RV1ff8Wm4LWXBp7/IG8v5DnOm74DtUBp9OONpK75YlPnIjQqX0dBDtA==}
     engines: {node: '>=20.18.1'}
@@ -1586,6 +1703,12 @@ packages:
 
   vega-dataflow@6.1.2:
     resolution: {integrity: sha512-0/HBBlzPERh0wV5kUOh/N4aAAmb3rB18Kfpej+nWvDIjPk3dixTapNkVVkoA9CsB5dY5bY+HNqiM/Pp4XPduGQ==}
+
+  vega-embed@7.1.0:
+    resolution: {integrity: sha512-ZmEIn5XJrQt7fSh2lwtSdXG/9uf3yIqZnvXFEwBJRppiBgrEWZcZbj6VK3xn8sNTFQ+sQDXW5sl/6kmbAW3s5A==}
+    peerDependencies:
+      vega: '*'
+      vega-lite: '*'
 
   vega-encode@5.2.1:
     resolution: {integrity: sha512-YuvJ66z6FQRtu0n0IYxsJp7BpliXVgaxNsur0Fqic10/a5TLMQmDYURPUcrtWViAMpqKgdNMyxnmr0ZQ4bjwCA==}
@@ -1648,14 +1771,26 @@ packages:
   vega-scenegraph@5.2.1:
     resolution: {integrity: sha512-tWolI3s/cjU5g8evEjpxJqgqKQ2IJv1FoPXqvNuviLNdylP1I/h5iF5RY08Cz4jkuP9zircSskFEBsHylD1dgQ==}
 
+  vega-schema-url-parser@3.0.2:
+    resolution: {integrity: sha512-xAnR7KAvNPYewI3O0l5QGdT8Tv0+GCZQjqfP39cW/hbe/b3aYMAQ39vm8O2wfXUHzm04xTe7nolcsx8WQNVLRQ==}
+
   vega-selections@6.1.4:
     resolution: {integrity: sha512-qR5feBL8xq5BjoG3rf7e2WKle/cn5Fa9pBFMBnzoOYp4nTA0GYDoKuOjZkftibsQcmdST0HzPjSrS14jH3TCQw==}
 
   vega-statistics@2.0.0:
     resolution: {integrity: sha512-dGPfDXnBlgXbZF3oxtkb8JfeRXd5TYHx25Z/tIoaa9jWua4Vf/AoW2wwh8J1qmMy8J03/29aowkp1yk4DOPazQ==}
 
+  vega-themes@3.0.0:
+    resolution: {integrity: sha512-1iFiI3BNmW9FrsLnDLx0ZKEddsCitRY3XmUAwp6qmp+p+IXyJYc9pfjlVj9E6KXBPfm4cQyU++s0smKNiWzO4g==}
+    peerDependencies:
+      vega: '*'
+      vega-lite: '*'
+
   vega-time@3.2.1:
     resolution: {integrity: sha512-SXo1klLYPsmBdSj9itYSuFMmCpwnnIvQS8jWFxsCTnyWcPaBQKz0kf2M7DqTysi34KTk+6ws4kqZg11XMWnIYA==}
+
+  vega-tooltip@1.0.0:
+    resolution: {integrity: sha512-P1R0JP29v0qnTuwzCQ0SPJlkjAzr6qeyj+H4VgUFSykHmHc1OBxda//XBaFDl/bZgIscEMvjKSjZpXd84x3aZQ==}
 
   vega-transforms@5.2.1:
     resolution: {integrity: sha512-csKiYXJFa0YY5lubP1wc8b99SJ8nHLG/sOWvKFpW3CfDfjp8LoB0exrxgtIoClCsngAguKiuZVDwQZxBhPJZwA==}
@@ -2477,11 +2612,31 @@ snapshots:
       '@types/deep-eql': 4.0.2
       assertion-error: 2.0.1
 
+  '@types/d3-array@3.2.2': {}
+
+  '@types/d3-color@3.1.3': {}
+
+  '@types/d3-contour@3.0.6':
+    dependencies:
+      '@types/d3-array': 3.2.2
+      '@types/geojson': 7946.0.16
+
+  '@types/d3-geo@3.1.1':
+    dependencies:
+      '@types/geojson': 7946.0.16
+
   '@types/deep-eql@4.0.2': {}
 
   '@types/estree@1.0.9': {}
 
   '@types/geojson@7946.0.16': {}
+
+  '@types/jsdom@30.0.0':
+    dependencies:
+      '@types/node': 22.20.1
+      '@types/tough-cookie': 4.0.5
+      parse5: 8.0.1
+      undici-types: 8.10.1
 
   '@types/node@22.20.1':
     dependencies:
@@ -2494,6 +2649,8 @@ snapshots:
   '@types/react@19.2.18':
     dependencies:
       csstype: 3.2.3
+
+  '@types/tough-cookie@4.0.5': {}
 
   '@vitejs/plugin-react@4.7.0(supports-color@10.2.2)(vite@6.4.3(@types/node@22.20.1)(tsx@4.23.4))':
     dependencies:
@@ -2611,6 +2768,10 @@ snapshots:
       internmap: 2.0.3
 
   d3-color@3.1.0: {}
+
+  d3-contour@4.0.2:
+    dependencies:
+      d3-array: 3.2.4
 
   d3-delaunay@6.0.4:
     dependencies:
@@ -2778,9 +2939,16 @@ snapshots:
 
   expect-type@1.4.0: {}
 
+  fast-deep-equal@3.1.3: {}
+
+  fast-json-patch@3.1.1: {}
+
   fdir@6.5.0(picomatch@4.0.5):
     optionalDependencies:
       picomatch: 4.0.5
+
+  fsevents@2.3.2:
+    optional: true
 
   fsevents@2.3.3:
     optional: true
@@ -2889,6 +3057,14 @@ snapshots:
 
   picomatch@4.0.5: {}
 
+  playwright-core@1.62.1: {}
+
+  playwright@1.62.1:
+    dependencies:
+      playwright-core: 1.62.1
+    optionalDependencies:
+      fsevents: 2.3.2
+
   postcss@8.5.25:
     dependencies:
       nanoid: 3.3.16
@@ -2903,6 +3079,13 @@ snapshots:
       scheduler: 0.27.0
 
   react-refresh@0.17.0: {}
+
+  react-vega@8.0.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vega-embed@7.1.0(vega-lite@6.4.3(vega@6.3.1))(vega@6.3.1)):
+    dependencies:
+      fast-deep-equal: 3.1.3
+      react: 19.2.8
+      react-dom: 19.2.8(react@19.2.8)
+      vega-embed: 7.1.0(vega-lite@6.4.3(vega@6.3.1))(vega@6.3.1)
 
   react@19.2.8: {}
 
@@ -3059,6 +3242,8 @@ snapshots:
 
   undici-types@6.21.0: {}
 
+  undici-types@8.10.1: {}
+
   undici@7.28.0: {}
 
   undici@8.10.0: {}
@@ -3086,6 +3271,19 @@ snapshots:
       vega-format: 2.1.2
       vega-loader: 5.1.2
       vega-util: 2.1.2
+
+  vega-embed@7.1.0(vega-lite@6.4.3(vega@6.3.1))(vega@6.3.1):
+    dependencies:
+      fast-json-patch: 3.1.1
+      json-stringify-pretty-compact: 4.0.0
+      semver: 7.8.5
+      tslib: 2.8.1
+      vega: 6.3.1
+      vega-interpreter: 2.3.1
+      vega-lite: 6.4.3(vega@6.3.1)
+      vega-schema-url-parser: 3.0.2
+      vega-themes: 3.0.0(vega-lite@6.4.3(vega@6.3.1))(vega@6.3.1)
+      vega-tooltip: 1.0.0
 
   vega-encode@5.2.1:
     dependencies:
@@ -3224,6 +3422,8 @@ snapshots:
       vega-scale: 8.1.2
       vega-util: 2.1.2
 
+  vega-schema-url-parser@3.0.2: {}
+
   vega-selections@6.1.4:
     dependencies:
       d3-array: 3.2.4
@@ -3234,10 +3434,19 @@ snapshots:
     dependencies:
       d3-array: 3.2.4
 
+  vega-themes@3.0.0(vega-lite@6.4.3(vega@6.3.1))(vega@6.3.1):
+    dependencies:
+      vega: 6.3.1
+      vega-lite: 6.4.3(vega@6.3.1)
+
   vega-time@3.2.1:
     dependencies:
       d3-array: 3.2.4
       d3-time: 3.1.0
+      vega-util: 2.1.2
+
+  vega-tooltip@1.0.0:
+    dependencies:
       vega-util: 2.1.2
 
   vega-transforms@5.2.1:

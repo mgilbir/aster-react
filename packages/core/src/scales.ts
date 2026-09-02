@@ -54,7 +54,24 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
       effectiveRange = c.scheme as unknown as ScaleRange
     }
   }
-  const range0 = resolveRange(effectiveRange, ctx, type)
+  // Band/point scales with a step-based range (`{step: N}` or
+  // `{step: {signal}}`, emitted by Vega-Lite for facet/fit layouts): the step
+  // fully determines the range given the domain count, so set `.step()` and
+  // skip `.range()`.
+  const stepRange = effectiveRange && typeof effectiveRange === 'object' && !Array.isArray(effectiveRange) && 'step' in (effectiveRange as object)
+    ? (effectiveRange as unknown as { step: unknown }).step
+    : undefined
+  let range0: unknown[] | string
+  if (stepRange !== undefined) {
+    const stepVal = typeof stepRange === 'number' ? stepRange
+      : stepRange && typeof stepRange === 'object' && 'signal' in stepRange
+        ? (resolveRangeSignal((stepRange as { signal: string }).signal, ctx) as number)
+        : NaN
+    ;(s as { step?: (n: number) => unknown }).step?.(stepVal)
+    range0 = s.range() as unknown[]
+  } else {
+    range0 = resolveRange(effectiveRange, ctx, type)
+  }
   // Handle continuous schemes: scheme strings like 'blues' for color interpolation
   if (typeof range0 === 'string' && CONTINUOUS_TYPES.has(type)) {
     const schemeFn = vs.scheme(range0)
@@ -105,7 +122,11 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   if (c.paddingInner != null) s.paddingInner?.(c.paddingInner)
   if (c.paddingOuter != null) s.paddingOuter?.(c.paddingOuter)
 
-  const zero = !TIME_SCALE_TYPES.has(type) && (c.zero ?? INCLUDE_ZERO_TYPES.has(type))
+  // A continuous scale whose range resolves to a color scheme is a sequential
+  // color scale; vega never applies `zero` extension to it (the domain maps
+  // directly onto [0,1] of the interpolator).
+  const isColorScheme = CONTINUOUS_TYPES.has(type) && typeof range0 === 'string'
+  const zero = !TIME_SCALE_TYPES.has(type) && !isColorScheme && (c.zero ?? INCLUDE_ZERO_TYPES.has(type))
   if (zero) applyZero(s)
   if (c.domainMin != null || c.domainMax != null) applyDomainMinMax(s, c.domainMin, c.domainMax)
   // Vega's Scale transform splices domainMid into the domain array so that the
@@ -333,8 +354,11 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
 
 function distinctValues(values: unknown[]): unknown[] {
   const out: unknown[] = []
+  const seen = new Set<unknown>()
   for (const v of values) {
-    if (!out.some((x) => x === v)) out.push(v)
+    if (seen.has(v)) continue
+    seen.add(v)
+    out.push(v)
   }
   return out
 }

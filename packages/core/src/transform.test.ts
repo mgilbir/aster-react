@@ -83,12 +83,21 @@ describe('transform', () => {
       expect(result[1]!.val).toBe(20)
     })
 
-    it('impute fills numeric gap', () => {
+    it('impute fills missing keys from the cross-group domain (vega semantics)', () => {
+      const rows = [{ g: 'a', y: 2019, v: 10 }, { g: 'b', y: 2021, v: 30 }]
+      const result = applyTransforms(rows, [{ type: 'impute', field: 'v', key: 'y', groupby: ['g'], method: 'value', value: 0 }], ctx)
+      expect(result).toHaveLength(4)
+      const imputedA = result.find((r) => r.g === 'a' && r.y === 2021)
+      expect(imputedA).toBeDefined()
+      expect(imputedA!.v).toBe(0)
+      expect(imputedA!._impute).toBe(true)
+    })
+
+    it('impute does not fabricate keys between observed values (vega semantics)', () => {
       const rows = [{ y: 2019, v: 10 }, { y: 2021, v: 30 }]
       const result = applyTransforms(rows, [{ type: 'impute', field: 'v', key: 'y', method: 'value', value: 0 }], ctx)
-      const gap = result.find((r) => r.y === 2020)
-      expect(gap).toBeDefined()
-      expect(gap!.v).toBe(0)
+      expect(result.find((r) => r.y === 2020)).toBeUndefined()
+      expect(result).toHaveLength(2)
     })
 
     it('sortRows ascending', () => {

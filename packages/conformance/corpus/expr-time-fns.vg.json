@@ -1,0 +1,35 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 400,
+  "height": 300,
+  "padding": 5,
+  "autosize": "none",
+  "data": [
+    { "name": "table", "values": [
+      { "d": "2021-03-15T00:00:00Z", "v": 28 },
+      { "d": "2021-07-20T00:00:00Z", "v": 55 },
+      { "d": "2022-01-05T00:00:00Z", "v": 43 }
+    ], "transform": [
+      { "type": "formula", "expr": "toDate(datum.d)", "as": "dd" },
+      { "type": "formula", "expr": "year(datum.dd)", "as": "yy" },
+      { "type": "formula", "expr": "month(datum.dd) + date(datum.dd) / 31", "as": "mm" },
+      { "type": "filter", "expr": "utcyear(datum.dd) >= 2021 && quarter(datum.dd) < 5" }
+    ] }
+  ],
+  "scales": [
+    { "name": "xscale", "type": "linear", "domain": { "data": "table", "field": "mm" }, "range": "width" },
+    { "name": "yscale", "type": "linear", "domain": { "data": "table", "field": "v" }, "nice": true, "range": "height" }
+  ],
+  "axes": [ { "orient": "bottom", "scale": "xscale", "labels": false }, { "orient": "left", "scale": "yscale", "labels": false } ],
+  "marks": [
+    {
+      "type": "text", "from": { "data": "table" }, "encode": {
+        "update": {
+          "x": { "scale": "xscale", "field": "mm" }, "y": { "scale": "yscale", "field": "v" },
+          "text": { "signal": "utcFormat(datum.dd, '%b %Y') + ':' + format(datum.v, '.1f')" },
+          "align": { "value": "center" }, "fill": { "value": "black" }
+        }
+      }
+    }
+  ]
+}

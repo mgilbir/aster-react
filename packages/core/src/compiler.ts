@@ -9,7 +9,10 @@ import type {
   CompiledData,
   CompiledLegend,
   CompiledMark,
+  CompiledProjection,
   CompiledScale,
+  CompiledSignalDef,
+  CompiledTitle,
   CompiledTransform,
   EncodeValue,
   ScaleDomain,
@@ -25,8 +28,13 @@ export function compileChart(spec: VgSpec): CompiledChart {
     throw new Error('[aster] compileChart expects a Vega spec object')
   }
 
-  const signals = resolveSignals(spec.signals as Array<Record<string, unknown>> | undefined)
-  const background = (spec.background as string | null | undefined) ?? null
+  const signalDefs = compileSignalDefs(spec.signals as Array<Record<string, unknown>> | undefined)
+  const signals = resolveSignals(signalDefs)
+  const cfg = (spec.config ?? {}) as Record<string, unknown>
+  const cfgStyle = (cfg.style ?? {}) as Record<string, Record<string, unknown>>
+  const cfgAxis = (cfg.axis ?? {}) as Record<string, unknown>
+  const cfgLegend = (cfg.legend ?? {}) as Record<string, unknown>
+  const background = (spec.background as string | null | undefined) ?? (cfg.background as string | null | undefined) ?? null
   const padding = normalizePadding(spec.padding as unknown)
   // Collect signal names before resolving them
   const sigNames = (spec.signals as Array<Record<string, unknown>> | undefined)?.map(s => (s as any)?.name || '').filter(Boolean) ?? []
@@ -48,17 +56,24 @@ export function compileChart(spec: VgSpec): CompiledChart {
 
   const axes: CompiledAxis[] = []
   for (const a of (spec.axes as Array<Record<string, unknown>>) ?? []) {
-    axes.push(compileAxis(a))
+    axes.push(compileAxis(applyConfigDefaults(a, cfgAxis)))
   }
 
   const legends: CompiledLegend[] = []
   for (const l of (spec.legends as Array<Record<string, unknown>>) ?? []) {
-    legends.push(compileLegend(l))
+    legends.push(compileLegend(applyConfigDefaults(l, cfgLegend)))
   }
 
   const marks: CompiledMark[] = []
   for (const m of (spec.marks as Array<Record<string, unknown>>) ?? []) {
-    marks.push(compileMark(m))
+    marks.push(compileMark(m, cfgStyle))
+  }
+
+  const title = compileTitle(spec.title, spec.config as Record<string, unknown> | undefined)
+
+  const projections: CompiledProjection[] = []
+  for (const pr of (spec.projections as Array<Record<string, unknown>>) ?? []) {
+    projections.push(compileProjection(pr))
   }
 
   return {
@@ -74,7 +89,36 @@ export function compileChart(spec: VgSpec): CompiledChart {
     legends,
     marks,
     signals,
+    signalDefs,
+    title,
+    projections,
   }
+}
+
+/**
+ * Parse a projection definition. Numeric parameters may be literal, a
+ * `{signal}` object (resolved at runtime), or an expression string (e.g.
+ * `"[width / 2, height / 2]"`).
+ */
+function compileProjection(pr: Record<string, unknown>): CompiledProjection {
+  const num = (v: unknown): number | { signal: string } | undefined =>
+    typeof v === 'number' ? v : v && typeof v === 'object' && 'signal' in v ? { signal: String((v as { signal: unknown }).signal) } : undefined
+  const tup = (v: unknown): [number, number] | { signal: string } | undefined => {
+    if (Array.isArray(v)) return [Number(v[0]), Number(v[1])]
+    if (typeof v === 'string') return { signal: v }
+    if (v && typeof v === 'object' && 'signal' in v) return { signal: String((v as { signal: unknown }).signal) }
+    return undefined
+  }
+  const out: CompiledProjection = { name: pr.name as string, type: (pr.type as string) ?? 'mercator' }
+  if (pr.scale != null) out.scale = num(pr.scale)
+  if (pr.translate != null) out.translate = tup(pr.translate)
+  if (pr.center != null) out.center = tup(pr.center)
+  if (pr.rotate != null) out.rotate = tup(pr.rotate) as [number, number] | [number, number, number] | { signal: string }
+  if (pr.precision != null) out.precision = num(pr.precision)
+  if (pr.clipAngle != null) out.clipAngle = num(pr.clipAngle)
+  if (pr.reflectX != null) out.reflectX = !!pr.reflectX
+  if (pr.reflectY != null) out.reflectY = !!pr.reflectY
+  return out
 }
 
 /** Parse autosize field: string like 'none'/'pad'/'fit' OR {type: 'none'} -> the type string or undefined. */
@@ -94,7 +138,9 @@ function resolveFrameStroke(spec: VgSpec): string | undefined {
   const config = spec.config as { view?: { stroke?: unknown }; style?: { cell?: { stroke?: unknown } } } | undefined
   const viewStroke = config?.view?.stroke
   const cellStroke = config?.style?.cell?.stroke
-  return typeof viewStroke === 'string' ? viewStroke : typeof cellStroke === 'string' ? cellStroke : undefined
+  const stroke = typeof viewStroke === 'string' ? viewStroke : typeof cellStroke === 'string' ? cellStroke : undefined
+  // Vega serializes a 'transparent' frame stroke as no stroke at all.
+  return stroke === 'transparent' ? undefined : stroke
 }
 
 function resolveSizeSpec(value: unknown, signalNames: string[]): SizeSpec {
@@ -114,14 +160,29 @@ function resolveSizeSpec(value: unknown, signalNames: string[]): SizeSpec {
 
 const DEFAULT_SIZE = 500
 
-function resolveSignals(signals?: Array<Record<string, unknown>>): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
+function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSignalDef[] {
+  const out: CompiledSignalDef[] = []
   for (const s of signals ?? []) {
     if (!s || typeof s !== 'object') continue
-    const name = s.name as string
-    // Static mode: we ignore `on` event streams but keep declared default values.
+    const def: CompiledSignalDef = { name: s.name as string }
     const value = s.value ?? s.init
-    if (value !== undefined) out[name] = value
+    if (value !== undefined) def.value = value
+    if (typeof s.update === 'string') def.update = s.update
+    if (Array.isArray(s.on)) {
+      // A signal may set its value from events; the first event `update` acts as
+      // the static initial value when there is no declared value.
+      const first = (s.on as Array<Record<string, unknown>>).find((o) => typeof o?.update === 'string')
+      if (value === undefined && first) def.update = first.update as string
+    }
+    out.push(def)
+  }
+  return out
+}
+
+function resolveSignals(defs: CompiledSignalDef[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const s of defs) {
+    if (s.value !== undefined) out[s.name] = s.value
   }
   return out
 }
@@ -185,7 +246,7 @@ function compileAxis(a: Record<string, unknown>): CompiledAxis {
     scale: a.scale as string,
     orient: a.orient as CompiledAxis['orient'],
   }
-  for (const key of ['grid', 'gridScale', 'domain', 'labels', 'ticks', 'tickCount', 'tickMinStep', 'tickSize', 'title', 'titlePadding', 'labelAlign', 'labelBaseline', 'labelFlush', 'labelOverlap', 'labelPadding', 'labelAngle', 'tickBand', 'format', 'formatType', 'zindex'] as const) {
+  for (const key of ['grid', 'gridScale', 'domain', 'labels', 'ticks', 'tickCount', 'tickMinStep', 'tickSize', 'title', 'titlePadding', 'labelAlign', 'labelBaseline', 'labelFlush', 'labelOverlap', 'labelPadding', 'labelAngle', 'tickBand', 'format', 'formatType', 'zindex', 'values'] as const) {
     if (a[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = a[key]
   }
   if (a.encode !== undefined) out.encode = a.encode as CompiledAxis['encode']
@@ -194,17 +255,92 @@ function compileAxis(a: Record<string, unknown>): CompiledAxis {
 
 function compileLegend(l: Record<string, unknown>): CompiledLegend {
   const out: CompiledLegend = {}
-  for (const key of ['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeDash', 'orient', 'title', 'offset', 'padding', 'gradientLength', 'gradientThickness', 'symbolSize', 'symbolType', 'zindex', 'type'] as const) {
+  for (const key of ['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeDash', 'orient', 'direction', 'columns', 'title', 'offset', 'padding', 'gradientLength', 'gradientThickness', 'symbolSize', 'symbolType', 'zindex', 'type'] as const) {
     if (l[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = l[key]
   }
   if (l.encode !== undefined) out.encode = l.encode as CompiledLegend['encode']
   return out
 }
 
-function compileMark(m: Record<string, unknown>): CompiledMark {
+function compileTitle(value: unknown, config?: Record<string, unknown>): CompiledTitle | undefined {
+  if (value == null) return undefined
+  const spec = typeof value === 'string' ? { text: value } : (value as Record<string, unknown>)
+  const cfg = (config?.title ?? {}) as Record<string, unknown>
+  // Defaults mirror vega's config.title block (orient top, anchor middle,
+  // offset 4, subtitlePadding 3) and the vega-theme title style
+  // (fontSize 13, fontWeight bold).
+  const text = typeof spec.text === 'string' ? spec.text : String(spec.text ?? '')
+  const fontSize = (spec.fontSize as number | undefined) ?? (cfg.fontSize as number | undefined) ?? 13
+  return {
+    text,
+    subtitle: typeof spec.subtitle === 'string' ? spec.subtitle : spec.subtitle != null ? String(spec.subtitle) : undefined,
+    orient: (spec.orient as CompiledTitle['orient']) ?? (cfg.orient as CompiledTitle['orient']) ?? 'top',
+    anchor: (spec.anchor as CompiledTitle['anchor']) ?? (cfg.anchor as CompiledTitle['anchor']) ?? 'middle',
+    offset: (spec.offset as number | undefined) ?? (cfg.offset as number | undefined) ?? 4,
+    subtitlePadding: (spec.subtitlePadding as number | undefined) ?? (cfg.subtitlePadding as number | undefined) ?? 3,
+    fontSize,
+    fontWeight: (spec.fontWeight as CompiledTitle['fontWeight']) ?? (cfg.fontWeight as CompiledTitle['fontWeight']) ?? 'bold',
+    font: (spec.font as string | undefined) ?? (cfg.font as string | undefined),
+    color: (spec.color as string | undefined) ?? (cfg.color as string | undefined) ?? '#000',
+    dx: (spec.dx as number | undefined) ?? (cfg.dx as number | undefined),
+    dy: (spec.dy as number | undefined) ?? (cfg.dy as number | undefined),
+    limit: (spec.limit as number | undefined) ?? (cfg.limit as number | undefined),
+    lineBreak: (spec.lineBreak as string | undefined) ?? (cfg.lineBreak as string | undefined),
+    frame: (spec.frame as string | undefined) ?? (cfg.frame as string | undefined),
+    encode: spec.encode as CompiledTitle['encode'],
+  }
+}
+
+/** Fill properties from a config block (e.g. config.axis) for keys the spec omits. */
+function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string, unknown>): Record<string, unknown> {
+  if (!defaults || typeof defaults !== 'object') return o
+  const out: Record<string, unknown> = { ...defaults, ...o }
+  return out
+}
+
+/**
+ * Apply config.style defaults (marktype style first, then named styles, last
+ * wins) as encode channels the mark does not encode. This mirrors vega's style
+ * lookup order (vega-parser/mark.js + vega-encode's style encoder).
+ */
+function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string, Record<string, unknown>>): void {
+  const names = new Set<string>()
+  if (m.type) names.add(String(m.type))
+  const style = m.style
+  if (typeof style === 'string') names.add(style)
+  else if (Array.isArray(style)) for (const s of style) names.add(String(s))
+  const props: Record<string, unknown> = {}
+  for (const name of names) {
+    const st = cfgStyle[name]
+    if (st && typeof st === 'object') Object.assign(props, st)
+  }
+  if (!Object.keys(props).length) return
+  const enc = (m.encode ?? {}) as Record<string, Record<string, EncodeValue | EncodeValue[]>>
+  const update = { ...(enc.enter ?? {}), ...(enc.update ?? {}) }
+  m.encode = { ...enc, update }
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'name' || k === 'interactive' || k === 'zindex' || k === 'style') continue
+    if (k in update) continue
+    update[k] = (v && typeof v === 'object' && ('value' in v || 'signal' in v || 'field' in v))
+      ? (v as EncodeValue)
+      : { value: v }
+  }
+}
+
+function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Record<string, unknown>>): CompiledMark {
+  const m = { ...m0 }
+  if (cfgStyle) applyStyleDefaults(m, cfgStyle)
   const out: CompiledMark = {
     type: m.type as string,
     name: (m.name as string) ?? 'marks',
+  }
+  // Vega evaluates `enter` when an item is created and `update` on every
+  // pulse; in static rendering every item is created, so the effective set is
+  // `enter` overridden per-channel by `update`.
+  if (m.encode !== undefined) {
+    const enc = m.encode as Record<string, Record<string, EncodeValue | EncodeValue[]>>
+    const merged = { ...(enc.enter ?? {}), ...(enc.update ?? {}) }
+    out.encode = { ...enc, update: merged }
   }
   if (m.role !== undefined) out.role = m.role as string
   if (m.style !== undefined) out.style = m.style as string | string[]
@@ -214,10 +350,11 @@ function compileMark(m: Record<string, unknown>): CompiledMark {
   if (m.zindex !== undefined) out.zindex = m.zindex as number
   if (m.key !== undefined) out.key = m.key as string
   if (m.sort !== undefined) out.sort = m.sort as CompiledMark['sort']
-  if (m.encode !== undefined) out.encode = m.encode as CompiledMark['encode']
   if (m.title !== undefined) out.title = m.title as CompiledMark['title']
-  if (m.marks !== undefined) out.marks = m.marks as CompiledMark['marks']
-  if ((m as any).axes !== undefined) out.axes = (m as any).axes
+  if (m.marks !== undefined) out.marks = (m.marks as Array<Record<string, unknown>>).map((nm) => compileMark(nm, cfgStyle))
+  if ((m as any).axes !== undefined) out.axes = ((m as any).axes as Array<Record<string, unknown>>).map(compileAxis)
+  if ((m as any).scales !== undefined) out.scales = ((m as any).scales as Array<Record<string, unknown>>).map(compileScale)
+  if ((m as any).data !== undefined) out.data = ((m as any).data as Array<Record<string, unknown>>).map(compileData)
   if (Array.isArray(m.transform)) {
     out.transform = (m.transform as Array<Record<string, unknown>>).map(compileTransform)
   }

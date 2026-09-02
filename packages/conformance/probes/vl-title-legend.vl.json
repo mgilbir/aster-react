@@ -1,0 +1,16 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "name": "chart",
+  "description": "A simple bar chart with embedded data.",
+  "title": { "text": "Revenue", "subtitle": "by month", "anchor": "start" },
+  "data": { "values": [ { "a": "A", "b": 28 }, { "a": "B", "b": 55 }, { "a": "C", "b": 43 } ] },
+  "width": 400,
+  "height": 300,
+  "autosize": "none",
+  "mark": "bar",
+  "encoding": {
+    "x": { "field": "a", "type": "nominal", "axis": { "labelAngle": 0, "title": "Category" } },
+    "y": { "field": "b", "type": "quantitative", "axis": { "title": "Amount" } },
+    "color": { "field": "a", "type": "nominal", "legend": { "title": "Groups" } }
+  }
+}

@@ -39,5 +39,9 @@ jobs:
       - name: Conformance
         run: pnpm conformance
 
+      - name: Gap probes (diagnostic, non-blocking)
+        run: pnpm probe
+        continue-on-error: true
+
       - name: Bundle budget
         run: pnpm --filter @aster/benchmarks run budget

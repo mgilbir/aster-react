@@ -8,7 +8,13 @@
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
-    "conformance": "pnpm --filter @aster/conformance run conformance"
+    "conformance": "pnpm --filter @aster/conformance run conformance",
+    "probe": "pnpm --filter @aster/conformance run probe",
+    "bench": "pnpm --filter @aster/benchmarks run bench",
+    "bench:runtime": "pnpm --filter @aster/benchmarks run bench:runtime",
+    "bench:memory": "pnpm --filter @aster/benchmarks run bench:memory",
+    "bench:bundle": "pnpm --filter @aster/benchmarks run bench:bundle",
+    "bench:browser": "pnpm --filter @aster/benchmarks run bench:browser"
   },
   "devDependencies": {
     "esbuild": "~0.25.12",

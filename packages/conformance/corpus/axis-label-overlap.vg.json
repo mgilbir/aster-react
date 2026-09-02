@@ -1,0 +1,34 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 200,
+  "height": 300,
+  "padding": 5,
+  "autosize": "none",
+  "data": [
+    { "name": "table", "values": [
+      { "w": "January", "v": 28 }, { "w": "February", "v": 55 }, { "w": "March", "v": 43 },
+      { "w": "April", "v": 91 }, { "w": "May", "v": 81 }, { "w": "June", "v": 53 },
+      { "w": "July", "v": 73 }, { "w": "August", "v": 35 }, { "w": "September", "v": 26 },
+      { "w": "October", "v": 66 }, { "w": "November", "v": 48 }, { "w": "December", "v": 31 }
+    ] }
+  ],
+  "scales": [
+    { "name": "xscale", "type": "band", "domain": { "data": "table", "field": "w" }, "range": "width", "padding": 0.1 },
+    { "name": "yscale", "type": "linear", "domain": { "data": "table", "field": "v" }, "nice": true, "range": "height" }
+  ],
+  "axes": [
+    { "orient": "bottom", "scale": "xscale", "labelOverlap": true, "labelAngle": 0 },
+    { "orient": "left", "scale": "yscale", "tickCount": 5, "labels": false }
+  ],
+  "marks": [
+    {
+      "type": "rect", "from": { "data": "table" }, "encode": {
+        "update": {
+          "x": { "scale": "xscale", "field": "w" }, "width": { "scale": "xscale", "band": 1 },
+          "y": { "scale": "yscale", "field": "v" }, "y2": { "scale": "yscale", "value": 0 },
+          "fill": { "value": "steelblue" }
+        }
+      }
+    }
+  ]
+}

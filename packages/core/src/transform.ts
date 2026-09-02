@@ -5,6 +5,7 @@
  */
 import type { CompiledTransform, SortSpec } from './types.js'
 import type { ExpressionRuntime } from './expression.js'
+import { geoRegistry, requireGeo } from './registry.js'
 
 export interface TransformContext {
   runtime: ExpressionRuntime
@@ -13,6 +14,8 @@ export interface TransformContext {
   datasets?: (name: string) => unknown[] | undefined
   /** Hierarchy trees built by the `stratify` transform, keyed by data source name. */
   hierarchies?: Map<string, unknown>
+  /** Cartographic projections, for the `geoshape` transform's `projection` param. */
+  projections?: Map<string, unknown>
 }
 
 export type Row = Record<string, unknown>
@@ -105,11 +108,17 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
     case 'geoshape': {
       // Vega's geoshape transform turns each datum's GeoJSON geometry into an
       // SVG path (default field is the whole datum, default output 'shape').
+      // With a `projection` param the geometry is projected first.
       const as = (t as { as?: unknown }).as ?? 'shape'
       const field = (t as { field?: unknown }).field
+      const projName = (t as { projection?: unknown }).projection
+      const projection = projName != null ? ctx.projections?.get(String(projName)) : undefined
+      if (projection != null && !geoRegistry.projectedPath) requireGeo() // throws: addon not loaded
       return rows.map((r) => {
         const geo = field == null || field === 'datum' ? r : r[field as string]
-        const p = geoJSONPath(geo)
+        const p = projection != null
+          ? geoRegistry.projectedPath!(projection, geo)
+          : geoJSONPath(geo)
         return p !== undefined ? { ...r, [as as string]: p } : r
       })
     }
@@ -147,6 +156,8 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
       return sequenceRows(t as Record<string, unknown>)
     case 'graticule':
       return graticuleRows(t as Record<string, unknown>)
+    case 'contour':
+      return contourRows(rows, t as Record<string, unknown>, ctx)
     case 'wordcloud':
       return wordcloudRows(rows, t as Record<string, unknown>, ctx)
     case 'voronoi':
@@ -373,52 +384,35 @@ function imputeRows(
   t: { field: string; groupby?: string[]; key: string; method?: string; value?: unknown; step?: number },
 ): Row[] {
   const groups = t.groupby?.length ? groupRows(rows, t.groupby) : [rows]
+  const keyvals = (t as { keyvals?: unknown[] }).keyvals ?? []
+  const domain = Array.from(new Set([...rows.map((r) => r[t.key]), ...keyvals]))
+    .filter((k) => k != null)
+    .sort((a, b) => (a! < b! ? -1 : a! > b! ? 1 : 0))
   const out: Row[] = []
   for (const g of groups) {
-    out.push(...imputeGroup(g, t))
+    out.push(...imputeGroup(g, t, domain))
   }
   return out
 }
 
 function imputeGroup(
   group: Row[],
-  t: { field: string; key: string; method?: string; value?: unknown; step?: number },
+  t: { field: string; key: string; method?: string; value?: unknown },
+  domain: unknown[],
 ): Row[] {
   const sorted = group.slice().sort((a, b) => (a[t.key]! < b[t.key]! ? -1 : a[t.key]! > b[t.key]! ? 1 : 0))
-  const keys = sorted.map((r) => r[t.key])
-  if (!keys.length) return sorted
-  if (keys.every((k) => typeof k === 'number')) {
-    // Vega only ever adds tuples for `keyvals` that are missing; without
-    // explicit keyvals it never fabricates keys. We approximate that by
-    // interpolating only integer grids (or when an explicit `step` is given),
-    // so e.g. KDE/quantile density outputs (dense non-integer keys) pass
-    // through unchanged like they do in vega.
-    const step = t.step ?? (keys.every((k) => Number.isInteger(k)) ? defaultStep(keys as number[]) : 0)
-    if (!(step > 0)) return sorted
-    const values = (keys as number[]).filter((k) => Number.isFinite(k))
-    if (!values.length) return sorted
-    const lo = Math.min(...values)
-    const hi = Math.max(...values)
-    const present = new Set(values)
-    const imputeValue = imputeStat(sorted, t)
-    const out: Row[] = []
-    for (let k = lo; k <= hi; k += step) {
-      if (present.has(k)) {
-        out.push(sorted.find((r) => r[t.key] === k)!)
-      } else {
-        out.push({ ...sorted[0]!, [t.key]: k, [t.field]: imputeValue })
-      }
-    }
-    return out
+  const present = new Map<unknown, Row>()
+  for (const r of sorted) present.set(r[t.key], r)
+  // Vega's Impute only adds tuples for keys present in the cross-group domain
+  // (plus explicit `keyvals`); it never interpolates new keys.
+  const imputed: Row[] = []
+  let value = NaN
+  for (const kVal of domain) {
+    if (present.has(kVal)) continue
+    const v = Number.isNaN(value) ? (value = imputeStat(sorted, t)) : value
+    imputed.push({ ...sorted[0]!, _impute: true, [t.key]: kVal, [t.field]: v })
   }
-  // non-numeric keys: no imputation
-  return sorted
-}
-
-function defaultStep(keys: number[]): number {
-  const span = Math.max(...keys) - Math.min(...keys)
-  if (keys.every((k) => Number.isInteger(k))) return 1
-  return span > 0 ? span / 30 : 1
+  return sorted.concat(imputed.sort((a, b) => (a[t.key]! < b[t.key]! ? -1 : a[t.key]! > b[t.key]! ? 1 : 0)))
 }
 
 function imputeStat(group: Row[], t: { field: string; method?: string; value?: unknown }): number {
@@ -851,6 +845,189 @@ function graticuleRows(t: Record<string, unknown>): Row[] {
 // ---------------------------------------------------------------------------
 // timeunit — Vega-Lite's temporal binning transform
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// contour (generating transform) — vega's Contour: density2D grid -> d3-contour
+// marching squares -> coordinate post-transform. Ported to match the oracle.
+// ---------------------------------------------------------------------------
+
+function d3TickStep(start: number, stop: number, count: number): number {
+  const step0 = Math.abs(stop - start) / Math.max(0, count)
+  let step1 = Math.pow(10, Math.floor(Math.log(step0) / Math.LN10))
+  const error = step0 / step1
+  if (error >= Math.sqrt(50)) step1 *= 10
+  else if (error >= Math.sqrt(10)) step1 *= 5
+  else if (error >= Math.sqrt(2)) step1 *= 2
+  return stop < start ? -step1 : step1
+}
+
+/** vega Contour `quantize(k, nice, zero)` -> threshold generator. */
+function contourQuantize(k: number, nice: boolean, zero: boolean): (values: Float32Array | number[]) => number[] {
+  return (values) => {
+    let mn: number | undefined
+    let mx: number | undefined
+    const arr = values as ArrayLike<number>
+    for (let i = 0; i < arr.length; i++) {
+      const v = arr[i]!
+      if (v == null || v !== v) continue
+      if (mn === undefined) { mn = v; mx = v; continue }
+      if (v < mn) mn = v
+      if (v > mx!) mx = v
+    }
+    if (mn === undefined) mn = NaN
+    if (mx === undefined) mx = NaN
+    const mnv = mn as number
+    const mxv = mx as number
+    const start = zero ? Math.min(mnv, 0) : mnv
+    const stop = mxv
+    const span = stop - start
+    const step = nice ? d3TickStep(start, stop, k) : span / (k + 1)
+    return d3Range(start + step, stop, step)
+  }
+}
+
+function blurX(n: number, m: number, source: Float32Array, target: Float32Array, r: number): void {
+  const w = (r << 1) + 1
+  for (let j = 0; j < m; ++j) {
+    for (let i = 0, sr = 0; i < n + r; ++i) {
+      if (i < n) sr += source[i + j * n]!
+      if (i >= r) {
+        if (i >= w) sr -= source[i - w + j * n]!
+        target[i - r + j * n] = sr / Math.min(i + 1, n - 1 + w - i, w)
+      }
+    }
+  }
+}
+function blurY(n: number, m: number, source: Float32Array, target: Float32Array, r: number): void {
+  const w = (r << 1) + 1
+  for (let i = 0; i < n; ++i) {
+    for (let j = 0, sr = 0; j < m + r; ++j) {
+      if (j < m) sr += source[i + j * n]!
+      if (j >= r) {
+        if (j >= w) sr -= source[i + (j - w) * n]!
+        target[i + (j - r) * n] = sr / Math.min(j + 1, m - 1 + w - j, w)
+      }
+    }
+  }
+}
+function bwRadius(bw: number, data: number[]): number {
+  const v = bw >= 0 ? bw : estimateBandwidth(data)
+  return Math.round((Math.sqrt(4 * v * v + 1) - 1) / 2)
+}
+
+interface DensityGrid { values: Float32Array; scale: number; width: number; height: number; x1: number; y1: number }
+
+function density2D(
+  xs: number[], ys: number[], weights: number[],
+  dx: number, dy: number, bandwidth: [number, number], k: number,
+): DensityGrid {
+  const rx = bwRadius(bandwidth[0], xs) >> k
+  const ry = bwRadius(bandwidth[1], ys) >> k
+  const ox = rx ? rx + 2 : 0
+  const oy = ry ? ry + 2 : 0
+  const n = 2 * ox + (dx >> k)
+  const m = 2 * oy + (dy >> k)
+  const values0 = new Float32Array(n * m)
+  const values1 = new Float32Array(n * m)
+  let values = values0
+  for (let d = 0; d < xs.length; d++) {
+    const xi = ox + (xs[d]! >> k)
+    const yi = oy + (ys[d]! >> k)
+    if (xi >= 0 && xi < n && yi >= 0 && yi < m) values0[xi + yi * n]! += weights[d]!
+  }
+  if (rx > 0 && ry > 0) {
+    blurX(n, m, values0, values1, rx); blurY(n, m, values1, values0, ry)
+    blurX(n, m, values0, values1, rx); blurY(n, m, values1, values0, ry)
+    blurX(n, m, values0, values1, rx); blurY(n, m, values1, values0, ry)
+  } else if (rx > 0) {
+    blurX(n, m, values0, values1, rx); blurX(n, m, values1, values0, rx); blurX(n, m, values0, values1, rx); values = values1
+  } else if (ry > 0) {
+    blurY(n, m, values0, values1, ry); blurY(n, m, values1, values0, ry); blurY(n, m, values0, values1, ry); values = values1
+  }
+  let sum = 0
+  for (let i = 0; i < values.length; i++) sum += values[i]!
+  const s = Math.pow(2, -2 * k)
+  for (let i = 0; i < values.length; i++) values[i]! *= s
+  return { values, scale: 1 << k, width: n, height: m, x1: ox, y1: oy }
+}
+
+function contourPost(grid: DensityGrid, sx: number, sy: number): (geometry: { coordinates: unknown }) => unknown {
+  const x1 = grid.x1 || 0
+  const y1 = grid.y1 || 0
+  const flip = sx * sy < 0
+  const transformPoint = (c: number[]) => { c[0] = (c[0]! - x1) * sx; c[1] = (c[1]! - y1) * sy }
+  const transformRing = (c: number[][]) => { if (flip) c.reverse(); c.forEach(transformPoint) }
+  const transformPolygon = (c: number[][][]) => c.forEach(transformRing)
+  return (geometry) => { (geometry.coordinates as number[][][][]).forEach(transformPolygon); return geometry }
+}
+
+function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+  // size: [w, h] numbers, signal objects, or a single signal expression.
+  let size: [number, number]
+  if (Array.isArray(t.size)) {
+    const rs = resolveSizeParam(t.size, ctx)
+    size = rs ?? [Number(resolveNum(t.size[0], ctx)) || 500, Number(resolveNum(t.size[1], ctx)) || 500]
+  } else {
+    const resolved = resolveNum(t.size, ctx)
+    size = Array.isArray(resolved) ? [Number(resolved[0]), Number(resolved[1])] : [resolved ?? 500, resolved ?? 500]
+  }
+  const [dx, dy] = size
+  const k = t.cellSize ? Math.floor(Math.log(Number(t.cellSize)) / Math.LN2) : 2
+
+  // Build the value grid either from a raw `values` array or from point tuples.
+  let gridValues: Float32Array | number[]
+  let post: ((g: { coordinates: unknown }) => unknown) | null = null
+  let gridSize: [number, number] = size
+  if (Array.isArray(t.values)) {
+    gridValues = t.values as number[]
+  } else {
+    const xf = t.x != null ? accessorField(String(t.x)) : null
+    const yf = t.y != null ? accessorField(String(t.y)) : null
+    const wf = t.weight != null ? accessorField(String(t.weight)) : null
+    const xs: number[] = []
+    const ys: number[] = []
+    const ws: number[] = []
+    for (const r of rows) {
+      xs.push(Number(xf ? xf(r) : (r as { x?: unknown }).x))
+      ys.push(Number(yf ? yf(r) : (r as { y?: unknown }).y))
+      ws.push(Number(wf ? wf(r) : 1))
+    }
+    const bw: [number, number] = Array.isArray(t.bandwidth) ? [Number(t.bandwidth[0]), Number((t.bandwidth as number[])[1] ?? t.bandwidth[0])]
+      : t.bandwidth != null ? [Number(t.bandwidth), Number(t.bandwidth)] : [-1, -1]
+    const grid = density2D(xs, ys, ws, dx, dy, bw, k)
+    gridValues = grid.values
+    gridSize = [grid.width, grid.height]
+    post = contourPost(grid, grid.scale, grid.scale)
+  }
+
+  const thresholds = Array.isArray(t.thresholds) ? (t.thresholds as number[])
+    : contourQuantize(Number(t.count ?? 10), !!t.nice, false)(gridValues)
+
+  const contourRun = geoRegistry.contourRun
+  if (!contourRun) requireGeo() // throws: geo addon not loaded
+  const features = contourRun!(gridValues, thresholds, gridSize, t.smooth !== false)
+  // d3-contour returns {type, value, coordinates} directly; vega ingests each
+  // as the tuple (top-level fields), after a coordinate post-transform that
+  // maps grid indices back to pixel space. `as` is ignored by vega's Contour.
+  return features.map((f) => {
+    if (post) (post as (g: { coordinates: unknown }) => unknown)({ coordinates: f.coordinates })
+    return { type: f.type, value: f.value, coordinates: f.coordinates } as Row
+  })
+}
+
+function resolveNum(v: unknown, ctx: TransformContext): number | number[] | undefined {
+  if (typeof v === 'number') return v
+  if (v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)) {
+    try {
+      const r = ctx.runtime.expr(String((v as { signal: string }).signal))({}, ctx.signals)
+      return Array.isArray(r) ? (r as number[]) : (typeof r === 'number' ? r : undefined)
+    } catch { return undefined }
+  }
+  return undefined
+}
+function accessorField(name: string): (row: Row) => unknown {
+  return (row) => getField(row, name)
+}
 
 /**
  * Canonical order of time units from coarsest to finest (matches vega-time).

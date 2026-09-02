@@ -1,0 +1,119 @@
+{
+ "$schema": "https://vega.github.io/schema/vega/v6.json",
+ "width": 400,
+ "height": 300,
+ "padding": 5,
+ "autosize": "none",
+ "data": [
+  {
+   "name": "table",
+   "values": [
+    {
+     "a": "alpha",
+     "b": 28
+    },
+    {
+     "a": "beta",
+     "b": 55
+    },
+    {
+     "a": "gamma",
+     "b": 43
+    },
+    {
+     "a": "delta",
+     "b": 91
+    }
+   ]
+  }
+ ],
+ "scales": [
+  {
+   "name": "xscale",
+   "type": "band",
+   "domain": {
+    "data": "table",
+    "field": "a"
+   },
+   "range": "width"
+  },
+  {
+   "name": "yscale",
+   "type": "linear",
+   "domain": {
+    "data": "table",
+    "field": "b"
+   },
+   "range": "height"
+  },
+  {
+   "name": "cs",
+   "type": "ordinal",
+   "domain": {
+    "data": "table",
+    "field": "a"
+   },
+   "range": [
+    "#4e79a7",
+    "#f28e2b",
+    "#e15759",
+    "#76b7b2"
+   ]
+  }
+ ],
+ "legends": [
+  {
+   "fill": "cs",
+   "title": "Categories",
+   "orient": "top-left",
+   "direction": "horizontal",
+   "columns": 2,
+   "symbolType": "square",
+   "offset": 5
+  }
+ ],
+ "axes": [
+  {
+   "orient": "bottom",
+   "scale": "xscale",
+   "labels": false
+  },
+  {
+   "orient": "left",
+   "scale": "yscale",
+   "labels": false
+  }
+ ],
+ "marks": [
+  {
+   "type": "rect",
+   "from": {
+    "data": "table"
+   },
+   "encode": {
+    "update": {
+     "x": {
+      "scale": "xscale",
+      "field": "a"
+     },
+     "width": {
+      "scale": "xscale",
+      "band": 1
+     },
+     "y": {
+      "scale": "yscale",
+      "field": "b"
+     },
+     "y2": {
+      "scale": "yscale",
+      "value": 0
+     },
+     "fill": {
+      "scale": "cs",
+      "field": "a"
+     }
+    }
+   }
+  }
+ ]
+}

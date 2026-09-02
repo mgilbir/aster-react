@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "conformance": "tsx src/run.ts"
+    "conformance": "tsx src/run.ts",
+    "probe": "tsx src/probe.ts"
   },
   "dependencies": {
     "@aster/core": "workspace:*",

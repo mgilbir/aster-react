@@ -1,0 +1,30 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 400,
+  "height": 300,
+  "padding": 5,
+  "autosize": "none",
+  "data": [
+    { "name": "table", "values": [ { "g": "multi\nline", "v": 55 }, { "g": "second", "v": 30 } ] }
+  ],
+  "scales": [
+    { "name": "xscale", "type": "band", "domain": { "data": "table", "field": "g" }, "range": "width" },
+    { "name": "yscale", "type": "linear", "domain": { "data": "table", "field": "v" }, "range": "height" }
+  ],
+  "axes": [ { "orient": "bottom", "scale": "xscale", "labels": false } ],
+  "marks": [
+    {
+      "type": "text", "from": { "data": "table" }, "encode": {
+        "update": {
+          "x": { "signal": "scale('xscale', datum.g) + bandwidth('xscale') / 2" },
+          "y": { "scale": "yscale", "field": "v" },
+          "text": { "field": "g" },
+          "lineBreak": { "value": "\n" },
+          "align": { "value": "center" },
+          "baseline": { "value": "bottom" },
+          "fill": { "value": "black" }
+        }
+      }
+    }
+  ]
+}

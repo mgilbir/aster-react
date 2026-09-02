@@ -3,7 +3,7 @@ dist/
 *.tsbuildinfo
 coverage/
 .vega-golden/
-.tmp/
+.tmp*/
 .DS_Store
 *.log
 .env

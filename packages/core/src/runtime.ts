@@ -6,6 +6,7 @@
 import { compileExpr, type ExpressionRuntime } from './expression.js'
 import { applyTransforms, sortRows, getField, type Row, geoJSONPath } from './transform.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
+import { geoRegistry, requireGeo } from './registry.js'
 import { locale } from 'vega-format'
 import type {
   CompiledAxis,
@@ -18,6 +19,7 @@ import type {
   ScaleDomain,
   SceneGroup,
   SceneItem,
+  SceneNode,
   SceneRoot,
   SizeSpec,
   VgSpec,
@@ -45,8 +47,9 @@ interface EvalContext {
   datasets: Map<string, Row[]>
   scales: Map<string, Scale>
   scaleTypes: Map<string, string>
+  projections: Map<string, unknown>
   runtime: ExpressionRuntime
-  _defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }> }>
+  _defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }>
   /** Cached facet grid layout (computed once per chart). */
   _facetLayout?: FacetGridLayout | null
   /** Cached 2D repeat (scatter matrix) concat grid layout (computed once per chart). */
@@ -85,17 +88,99 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
     expr: (expr) => compileExpr(expr, runtime),
   }
 
-  const defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }> }> = []
-  const ctx: EvalContext = { chart, signalParams, width, height, datasets, scales, scaleTypes, runtime, _defs: defs, hierarchies: new Map() }
+  const defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }> = []
+  const ctx: EvalContext = { chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new Map(), runtime, _defs: defs, hierarchies: new Map() }
 
-  buildDatasets(ctx, input.data ?? {})
   // Remap Vega-Lite "category" range (unhandled by vega-scale) to tableau10
   for (const s of ctx.chart.scales) {
     if (s.range === 'category') { ; (s as unknown as Record<string, unknown>).range = 'tableau10' }
   }
+  // Resolve signal `update` expressions, datasets, and scales to a fixed
+  // point. Signals can reference data/scales and vice versa (e.g. brush-bounded
+  // domains), which vega handles reactively; we emulate the initial pulse.
+  buildProjections(ctx)
+  buildDatasets(ctx, input.data ?? {})
+  let changed = true
+  let rounds = 0
+  while (changed && rounds < 3) {
+    changed = resolveSignalUpdates(ctx)
+    buildScales(ctx)
+    if (changed) {
+      ctx.datasets.clear()
+      ctx.hierarchies.clear()
+      buildDatasets(ctx, input.data ?? {})
+    }
+    rounds++
+  }
+  resolveSignalUpdates(ctx)
   buildScales(ctx)
+  buildProjections(ctx)
 
   return { ctx, width, height }
+}
+
+/** Build d3-geo projections from the compiled spec, resolving signal params. */
+function buildProjections(ctx: EvalContext): void {
+  if (!ctx.chart.projections?.length) return
+  const build = requireGeo() // throws an actionable error if the geo addon is absent
+  const evalNum = (v: unknown): number | undefined => {
+    if (typeof v === 'number') return v
+    if (v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)) {
+      try { const r = ctx.runtime.expr(String((v as { signal: string }).signal))({}, ctx.signalParams); return typeof r === 'number' ? r : undefined } catch { return undefined }
+    }
+    return undefined
+  }
+  const evalTup = (v: unknown): [number, number] | undefined => {
+    if (Array.isArray(v)) return [Number(v[0]), Number(v[1])]
+    if (v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)) {
+      try {
+        const r = ctx.runtime.expr(String((v as { signal: string }).signal))({}, ctx.signalParams)
+        if (Array.isArray(r)) return [Number(r[0]), Number(r[1])]
+      } catch { /* ignore */ }
+    }
+    return undefined
+  }
+  for (const p of ctx.chart.projections) {
+    ctx.projections.set(p.name, build({
+      name: p.name,
+      type: p.type,
+      scale: evalNum(p.scale),
+      translate: evalTup(p.translate),
+      center: evalTup(p.center),
+      rotate: evalTup(p.rotate),
+      precision: evalNum(p.precision),
+      clipAngle: evalNum(p.clipAngle),
+      reflectX: p.reflectX,
+      reflectY: p.reflectY,
+    }, ctx.width, ctx.height))
+  }
+}
+
+/**
+ * Evaluate static signal `update` expressions in declaration order against the
+ * current signal params (vega-expression rewrites bare identifiers to the
+ * `$`-prefixed params our interpreter binds). Expressions that depend on not-yet
+ * resolved values throw and are skipped for this round. Returns whether any
+ * value changed (drives the fixed-point loop).
+ */
+function resolveSignalUpdates(ctx: EvalContext): boolean {
+  const defs = ctx.chart.signalDefs
+  if (!defs?.length) return false
+  let changed = false
+  for (const def of defs) {
+    if (!def.update) continue
+    try {
+      const value = ctx.runtime.expr(def.update)(undefined, ctx.signalParams)
+      if (value !== undefined && value !== ctx.signalParams[def.name]) {
+        ctx.signalParams[def.name] = value
+        ctx.chart.signals[def.name] = value
+        changed = true
+      }
+    } catch {
+      // Unresolved dependency this round; keep previous value.
+    }
+  }
+  return changed
 }
 
 
@@ -209,6 +294,12 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   // Merge guide groups into items
   for (const g of guideGroups) items.push(g)
 
+  // 2b) Top-level title. Vega's title layout anchors against the *content*
+  // bounds (plot rect unioned with axis/legend/mark overflow):
+  //   orient top: x = anchorPos(x1..x2), y = y1 - height - offset
+  const titleGroup = buildTitleGroup(ctx.chart, items, width, height)
+  if (titleGroup) items.push(titleGroup)
+
   // 3) Build the scene
   let sceneWidth: number
   let sceneHeight: number
@@ -308,18 +399,182 @@ export function getChartInfo(spec: VgSpec, input: RuntimeInput = {}): ChartInfo 
   }
 }
 
+/**
+ * Estimate a text string's rendered width using vega-scenegraph's headless
+ * estimate: `~~(0.8 * text.length * fontSize)`.
+ */
+function estimateTextWidth(text: string, fontSize: number): number {
+  return ~~(0.8 * text.length * fontSize)
+}
+
+/**
+ * View content bounds used by vega's `titleLayout` (the root group's bounds:
+ * plot rect unioned with axis/legend/mark overflow). Axis line overflow is
+ * calibrated to vega's measured bounds (tick end ± half-stroke; labels via the
+ * same text estimator vega uses when no canvas is available).
+ */
+interface ContentBounds { x1: number; y1: number; x2: number; y2: number }
+
+function contentBoundsOf(chart: CompiledChart, items: SceneNode[], width: number, height: number): ContentBounds {
+  const b: ContentBounds = { x1: 0, y1: 0, x2: width, y2: height }
+  // Axis tick marks (labels handled by the item scan below).
+  for (const axis of chart.axes) {
+    const tickSize = typeof axis.tickSize === 'number' ? axis.tickSize : 5
+    const ticksOn = axis.ticks !== false
+    if (!ticksOn) continue
+    switch (axis.orient) {
+      case 'left': b.x1 = Math.min(b.x1, -(tickSize + 0.5)); break
+      case 'right': b.x2 = Math.max(b.x2, width + tickSize + 0.5); break
+      case 'top': b.y1 = Math.min(b.y1, -(tickSize + 0.5)); break
+      default: b.y2 = Math.max(b.y2, height + tickSize + 0.5); break
+    }
+  }
+  const grow = (x1: number, y1: number, x2: number, y2: number) => {
+    b.x1 = Math.min(b.x1, x1); b.y1 = Math.min(b.y1, y1)
+    b.x2 = Math.max(b.x2, x2); b.y2 = Math.max(b.y2, y2)
+  }
+  const walk = (node: SceneNode, tx: number, ty: number) => {
+    const ox = tx + (node.x ?? 0)
+    const oy = ty + (node.y ?? 0)
+    const children = (node as SceneGroup).items
+    if (Array.isArray(children)) {
+      for (const c of children) walk(c, ox, oy)
+      return
+    }
+    const it = node as SceneItem
+    if (it.text != null) {
+      const fs = (it as Record<string, unknown>).fontSize as number | undefined ?? 11
+      const w = estimateTextWidth(String(it.text), fs)
+      const angle = (it as Record<string, unknown>).angle as number | undefined
+      const anchor = it.align
+      if (angle) {
+        // Rotated text: its visual extent is vertical — width becomes ~fontSize
+        // (the line height) on x, and the text length runs along y.
+        const lineW = fs
+        const lx1 = ox - lineW / 2
+        const ly1 = anchor === 'center' ? oy - w / 2 : anchor === 'right' ? oy - w : oy
+        grow(lx1, ly1, lx1 + lineW, ly1 + w)
+      } else {
+        let lx1: number
+        if (anchor === 'center') lx1 = ox - w / 2
+        else if (anchor === 'right') lx1 = ox - w
+        else lx1 = ox
+        // Vega text bounds: ascent 0.78*fs above the drawn baseline. Our raw y is
+        // pre-baseline-offset, so `top` draws at y+0.79fs (bounds ≈ y..y+fs).
+        if (it.baseline === 'top') grow(lx1, oy, lx1 + w, oy + fs)
+        else if (it.baseline === 'middle') grow(lx1, oy - fs / 2, lx1 + w, oy + fs / 2)
+        else grow(lx1, oy - fs, lx1 + w, oy)
+      }
+    } else if (it.width != null && it.height != null) {
+      grow(ox, oy, ox + (it.width ?? 0), oy + (it.height ?? 0))
+    } else if (it.radius != null) {
+      const sw = (it.strokeWidth ?? (it.stroke ? 1 : 0)) / 2
+      grow(ox - it.radius - sw, oy - it.radius - sw, ox + it.radius + sw, oy + it.radius + sw)
+    }
+  }
+  for (const node of items) walk(node, 0, 0)
+  return b
+}
+
+function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number, height: number): SceneGroup | null {
+  const title = chart.title
+  if (!title || !title.text) return null
+  const vb = title.frame === 'group'
+    ? { x1: 0, y1: 0, x2: width, y2: height }
+    : contentBoundsOf(chart, items, width, height)
+
+  // Title (and subtitle) text sizes. Vega's default subtitle style is
+  // fontSize 11, non-bold.
+  const titleH = title.fontSize
+  const hasSub = !!title.subtitle
+  const subFs = 11
+  const subH = hasSub ? subFs : 0
+  const groupH = titleH + (hasSub ? title.subtitlePadding + subH : 0)
+  const titleW = estimateTextWidth(title.text, title.fontSize)
+  const subW = hasSub ? estimateTextWidth(title.subtitle!, subFs) : 0
+  const groupW = Math.max(titleW, subW)
+
+  const pos = title.anchor === 'start'
+    ? (title.orient === 'left' || title.orient === 'right' ? vb.y1 : vb.x1)
+    : title.anchor === 'end'
+      ? (title.orient === 'left' || title.orient === 'right' ? vb.y2 : vb.x2)
+      : title.orient === 'left' || title.orient === 'right'
+        ? (vb.y1 + vb.y2) / 2
+        : (vb.x1 + vb.x2) / 2
+
+  let x = 0
+  let y = 0
+  switch (title.orient) {
+    case 'bottom': x = pos; y = vb.y2 + title.offset; break
+    case 'left': x = vb.x1 - groupW - title.offset; y = pos; break
+    case 'right': x = vb.x2 + title.offset; y = pos; break
+    default: x = pos; y = vb.y1 - groupH - title.offset; break
+  }
+
+  // Text align within the group: center anchors the text at group center.
+  const align: SceneItem['align'] =
+    title.anchor === 'start' ? 'left' : title.anchor === 'end' ? 'right' : 'center'
+
+  const textChildren: SceneNode[] = [
+    {
+      marktype: 'text',
+      role: 'title-text',
+      items: [{
+        x: 0,
+        y: 0,
+        text: title.text,
+        align,
+        baseline: 'top',
+        fontSize: title.fontSize,
+        fontWeight: title.fontWeight,
+        fill: title.color,
+        dy: title.dy,
+      } as SceneItem],
+    } as SceneGroup,
+  ]
+
+  if (hasSub) {
+    textChildren.push({
+      marktype: 'text',
+      role: 'title-subtitle',
+      items: [{
+        x: 0,
+        y: titleH + title.subtitlePadding,
+        text: title.subtitle!,
+        align,
+        baseline: 'top',
+        fontSize: subFs,
+        fontWeight: title.fontWeight,
+        fill: title.color,
+        dy: title.dy,
+      } as SceneItem],
+    } as SceneGroup)
+  }
+
+  return {
+    marktype: 'group',
+    role: 'title',
+    x,
+    y,
+    width: groupW,
+    height: groupH,
+    items: textChildren,
+  }
+}
+
 function resolveSize(size: SizeSpec, override: number | undefined, signals: Record<string, unknown>): number {
+  if (override != null) return override
   if (typeof size === 'number' && Number.isFinite(size)) return size
   if (size && typeof size === 'object') {
     if ('signal' in size) {
       const v = signals[size.signal]
-      return override ?? (typeof v === 'number' ? v : DEFAULT_SIZE)
+      return typeof v === 'number' ? v : DEFAULT_SIZE
     }
     if ('step' in size) {
       throw new Error('[aster] width/height {step} sizing is not supported yet')
     }
   }
-  return override ?? DEFAULT_SIZE
+  return DEFAULT_SIZE
 }
 
 function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): void {
@@ -357,6 +612,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
           return ctx.datasets.get(name)
         },
         hierarchies: ctx.hierarchies,
+        projections: ctx.projections,
       }, d.name)
     }
     ctx.datasets.set(name, rows)
@@ -473,6 +729,7 @@ function evaluateMark(
         runtime: ctx.runtime,
         signals: ctx.signalParams,
         hierarchies: ctx.hierarchies,
+        projections: ctx.projections,
       }, source)
     }
 
@@ -546,6 +803,16 @@ function evaluateMark(
     }
   }
 
+  // Path marks whose `path` channel resolves to a GeoJSON object (e.g. the
+  // output of a `contour` transform) render that geometry in pixel space,
+  // matching vega's path-mark geo handling.
+  if (mark.type === 'path') {
+    for (const it of items) {
+      const p = it.path as unknown
+      if (p && typeof p === 'object') it.path = geoJSONPath(p) ?? undefined
+    }
+  }
+
   return {
     marktype: mark.type,
     name: mark.name,
@@ -570,8 +837,13 @@ function getFacetOrientation(ctx: EvalContext): 'row' | 'column' | null {
 /** A concat group mark: a cell with nested marks + axes, no facet, no title. */
 function isConcatGroupMark(mark: CompiledMark): boolean {
   const m = mark as CompiledMark & { marks?: unknown[]; axes?: unknown[]; title?: unknown }
+  // A (v/h)concat cell has nested marks+axes but NO scales/data of its own —
+  // concat cells share the top-level scales. A group declaring its own scales
+  // is a scoped group (nested scope), not a concat cell.
   return mark.type === 'group'
     && !(mark.from as any)?.facet
+    && !(m as any).scales?.length
+    && !(m as any).data?.length
     && Array.isArray(m.marks) && (m.marks as unknown[]).length > 0
     && Array.isArray(m.axes) && (m.axes as unknown[]).length > 0
     && m.title == null
@@ -625,6 +897,12 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | Scen
   // VL-compiled bar/area charts): build a simple group whose items are
   // the rendered inner marks.
   if (tm.marks?.length) {
+    // A group that declares its own scales/axes/data needs an isolated child
+    // scope: scales resolve against the group's width/height, and nested axes/
+    // marks resolve scale references within the child. Groups without local
+    // scales just render children in the parent scope.
+    const hasLocalScope = !!((mark as any).scales?.length || (mark as any).axes?.length || (mark as any).data?.length)
+    if (hasLocalScope) return buildScopedGroup(mark, ctx)
     const items: SceneItem[] = []
     for (const cm of tm.marks) {
       const r = evaluateMark(cm as CompiledMark, ctx)
@@ -648,6 +926,95 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | Scen
     return { marktype: 'group', name, role: (mark.role as string) ?? 'scope', items, clip: grpClip, ...(grpClipD ? { clipPathD: grpClipD } : {}) }
   }
   throw new Error('[aster] unsupported group mark: ' + (name ?? '<unnamed>'))
+}
+
+/**
+ * Build a group mark that owns its scope: its own scales (resolved against the
+ * group's width/height), nested axes, and nested marks, while sharing the
+ * parent's datasets and expression runtime. Vega evaluates a group as a nested
+ * dataflow scope; here we build the child maps and render into them.
+ */
+function buildScopedGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | null {
+  const grEnc = (mark.encode?.update ?? {}) as Record<string, EncodeValue>
+  // Resolve the group's own geometry against the PARENT scope (its x/y/width/
+  // height may reference top-level signals like `groupW`).
+  const geo = resolveEncodeSet(grEnc, {}, ctx, 'group')
+  const gw = typeof geo.width === 'number' ? geo.width : ctx.width
+  const gh = typeof geo.height === 'number' ? geo.height : ctx.height
+
+  const childScaleMap = new Map<string, Scale>()
+  const childTypeMap = new Map<string, string>()
+  for (const s of (mark as any).scales ?? []) {
+    const cs = s as CompiledScale
+    // Vega's scale signal refs (`width`/`height`) resolve against the TOP-LEVEL
+    // chart scope (parent), not the group's own encode dimensions. That's why a
+    // nested group's y-axis domain spans 300 even though the group is 130 tall.
+    const scale = buildScale(cs, {
+      width: ctx.width,
+      height: ctx.height,
+      signals: ctx.signalParams,
+      evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
+      dataField: (dn, field) => {
+        const rows = ctx.datasets.get(dn) ?? []
+        const out: unknown[] = []
+        for (const r of rows) out.push(getField(r, field))
+        return out
+      },
+      dataRows: (dn) => (ctx.datasets.get(dn) ?? []) as Record<string, unknown>[],
+    })
+    childScaleMap.set(cs.name, scale)
+    childTypeMap.set(cs.name, cs.type)
+  }
+
+  const child: EvalContext = {
+    ...ctx,
+    width: gw,
+    height: gh,
+    scales: childScaleMap,
+    scaleTypes: childTypeMap,
+  }
+
+  const items: SceneItem[] = []
+  // Vega draws the group background rect first (fill = view/cell default, or the
+  // encode's fill; stroke/cornerRadius from the encode).
+  {
+    const stroke = geo.stroke as string | undefined
+    const fill = geo.fill as string | undefined
+    const cr = (geo.cornerRadius as number | undefined) ?? 0
+    // Vega insets the group background by half a pixel (0.5) like the frame.
+    const bgPath = cr > 0
+      ? roundedRectPath(0.5, 0.5, gw, gh, Math.min(cr, gw / 2, gh / 2))
+      : `M0.5,0.5h${gw}v${gh}h-${gw}Z`
+    const sw = geo.strokeWidth as number | undefined
+    items.push({ path: bgPath, x: 0, y: 0, ...(fill ? { fill } : {}), ...(stroke ? { stroke, ...(sw != null ? { strokeWidth: sw } : {}) } : {}) } as SceneItem)
+  }
+
+  for (const as of (mark as any).axes ?? []) {
+    if (isAxisSpec(as)) {
+      const a = buildAxisInline(as, child)
+      if (a) items.push(a)
+    }
+  }
+  for (const cm of (mark.marks ?? [])) {
+    const r = evaluateMark(cm as CompiledMark, child)
+    if (r) {
+      if (Array.isArray(r)) { for (const g of r) items.push(g) }
+      else items.push(r)
+    }
+  }
+
+  const grpClip = mark.clip === true
+  return {
+    marktype: 'group',
+    name: mark.name,
+    role: (mark.role as string) ?? 'scope',
+    x: typeof geo.x === 'number' ? geo.x : 0,
+    y: typeof geo.y === 'number' ? geo.y : 0,
+    width: gw,
+    height: gh,
+    items,
+    clip: grpClip,
+  }
 }
 
 function inlineGroupRows(rows: Row[], keys: string[]): Row[][] {
@@ -2066,6 +2433,38 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
 
     // Compute tick values using scale.ticks with L/50 as hint
     const tickNums = scale.ticks ? scale.ticks(L / 50) : []
+    const titleStr0 = String(legend.title ?? '')
+    const titleH0 = titleStr0.length > 0 ? 16 : 0
+
+    // --- horizontal gradient strip (top/bottom orient, or direction:horizontal) ---
+    // Vega lays the strip out left→right: title at y=9, the gradient rect at
+    // y=titleH (height=gradientThickness 16), labels beneath at the fractional
+    // position along the strip. Calibrated to the oracle.
+    if (legend.direction === 'horizontal' || orient === 'bottom' || orient === 'top') {
+      const thickness = legend.gradientThickness ?? 16
+      const d0n = typeof d0 === 'number' ? d0 : 0
+      const d1n = typeof d1 === 'number' ? d1 : 1
+      const LL = locale(undefined)
+      const legendFmt = LL.format('.1~f')
+      const items: SceneItem[] = []
+      const bgW = gradientLength
+      const bgH = titleH0 + thickness + 12
+      items.push({ path: `M0,0h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0 })
+      if (titleStr0) items.push({ text: titleStr0, x: 0, y: 9, align: 'left', fill: '#000' })
+      items.push({ path: `M0,0h${gradientLength}v${thickness}h-${gradientLength}Z`, x: 0, y: titleH0, fill: `url(#${gradientId})`, stroke: '#ddd', strokeWidth: 0, opacity: 1 })
+      for (const t of tickNums) {
+        const tNum = typeof t === 'number' ? t : 0
+        const perc = d1n !== d0n ? (tNum - d0n) / (d1n - d0n) : 0
+        items.push({ text: legendFmt(tNum), x: perc * gradientLength, y: titleH0 + thickness + 10, align: 'center', fill: '#000' })
+      }
+      const colorScale = scale as ColorScale
+      const stops = colorScale.interpolator
+        ? Array.from({ length: 17 }, (_, i) => ({ offset: i / 16, color: String((colorScale.interpolator as () => (t: number) => unknown)?.()(i / 16)) }))
+        : []
+      if (stops.length) ctx._defs.push({ id: gradientId, colorStops: stops, direction: 'horizontal' })
+      const groupY = orient === 'top' ? 0 : ctx.height + 24
+      return { marktype: 'group', role: 'legend', x: 0, y: groupY, width: bgW, height: bgH, items }
+    }
 
     // The gradient rect inherits the legend's gradient encode opacity (vega-lite
     // emits opacity 0.7 for stroke legends, 1 otherwise).
@@ -2463,8 +2862,28 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
 
   // --- 'bottom' ---
   if (orient === 'bottom') {
-    // Per-entry step = entry content width (symbol offset 16 + label width) +
-    // 12px gap. Outer width = step * n - 12 (last entry has no trailing gap).
+    const titleStr = String(legend.title ?? '')
+    // Vertical flow (raw Vega default `symbolDirection: vertical`): entries
+    // stack at 18px row step, each row 14px tall with symbol at (6,6) and
+    // label at (16,9). Group sits at height+24 (oracle line-grid-dash).
+    if (legend.direction !== 'horizontal') {
+      const rowStep = 18
+      const rowHeight = 14
+      const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
+      const entryWidth = 16 + 8 * maxLabelLen
+      const items: SceneItem[] = []
+      // Legend background spans the whole entry column.
+      items.push({ path: `M0,0h${entryWidth}v${n * rowStep - (rowStep - rowHeight)}h-${entryWidth}Z`, x: 0, y: 0 })
+      for (let i = 0; i < n; i++) {
+        const ey = i * rowStep
+        items.push({ path: `M0,0h${entryWidth}v${rowHeight}h-${entryWidth}Z`, x: 0, y: ey })
+        items.push({ shape: 'circle', radius: 5, x: 6, y: ey + 6, stroke: String(scale(domain[i])), strokeWidth: 1.5, opacity: 1 })
+        items.push({ text: String(domain[i]), x: 16, y: ey + 9, align: 'left', fill: '#000' })
+      }
+      return { marktype: 'group', role: 'legend', x: 0, y: ctx.height + 24, width: entryWidth, height: n * rowStep - 4, items }
+    }
+    // Horizontal flow (Vega-Lite emits `direction: horizontal` for bottom
+    // legends with a title). Per-entry step = entry content width + 12px gap.
     const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
     const entryWidth = 16 + 8 * maxLabelLen
     const step = entryWidth + 12
@@ -2480,6 +2899,53 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       items.push({ text: String(value), x: sx + 16, y: 25, align: 'left', fill: '#000' })
     }
     return { marktype: 'group', role: 'legend', x: 0, y: ctx.height + 50, width: bgW, height: 30, items }
+  }
+
+  // --- corner orents (top-left / top-right / bottom-left / bottom-right) ---
+  // Discrete symbol legends laid out as a row-major grid honoring `columns` and
+  // `direction`. Geometry calibrated to the oracle for a fill/square legend with
+  // columns:2 (entryWidth=16+8*maxLabelLen, columnPadding=10, rowPadding=2,
+  // fill boxHeight=11/rowStep=13; group at (offset, offset) from the corner).
+  if (/^(top|bottom)-(left|right)$/.test(orient) && !legend.size && !legend.gradientLength) {
+    const colorProp = legend.fill ? 'fill' : 'stroke'
+    const symType = legend.symbolType ?? 'circle'
+    const isStrokeLegend = !legend.fill
+    const boxHeight = isStrokeLegend ? 14 : 11
+    const rowStep = isStrokeLegend ? 18 : 13
+    const columnPadding = 10, rowPadding = 2
+    const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
+    const entryWidth = 16 + 8 * maxLabelLen
+    const cols = legend.direction === 'vertical' ? 1 : Math.min(legend.columns ?? n, n)
+    const rows = Math.ceil(n / cols)
+    const titleStr = String(legend.title ?? '')
+    const titleRow = titleStr ? 16 : 0
+    const titleWidth = titleStr ? ~~(0.8 * titleStr.length * 11) : 0
+    const gridW = cols * entryWidth + (cols - 1) * columnPadding
+    const gridH = titleRow + rows * boxHeight + (rows - 1) * rowPadding
+    const outerWidth = Math.max(gridW, titleWidth)
+    const offset = legend.offset ?? 0
+    const groupX = orient.endsWith('right') ? ctx.width - outerWidth - offset : offset
+    const groupY = orient.startsWith('bottom') ? ctx.height - gridH - offset : offset
+    const items: SceneItem[] = []
+    items.push({ path: `M0,0h${outerWidth}v${gridH}h-${outerWidth}Z`, x: 0, y: 0 })
+    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000' })
+    for (let i = 0; i < n; i++) {
+      const value = domain[i]
+      const ex = (i % cols) * (entryWidth + columnPadding)
+      const ey = titleRow + Math.floor(i / cols) * rowStep
+      items.push({ path: `M0,0h${entryWidth}v${boxHeight}h-${entryWidth}Z`, x: ex, y: ey })
+      if (symType === 'square') {
+        items.push(colorProp === 'fill'
+          ? { path: 'M-5,-5h10v10h-10Z', x: ex + 6, y: ey + 6, fill: String(scale(value)), strokeWidth: 1.5 }
+          : { path: 'M-5,-5h10v10h-10Z', x: ex + 6, y: ey + 6, stroke: String(scale(value)), strokeWidth: 1.5 })
+      } else {
+        items.push(colorProp === 'fill'
+          ? { shape: 'circle', radius: 5, x: ex + 6, y: ey + 6, fill: String(scale(value)), strokeWidth: 1.5 }
+          : { shape: 'circle', radius: 5, x: ex + 6, y: ey + 6, stroke: String(scale(value)), strokeWidth: 1.5 })
+      }
+      items.push({ text: String(value), x: ex + 16, y: ey + 9, align: 'left', fill: '#000' })
+    }
+    return { marktype: 'group', role: 'legend', x: groupX, y: groupY, width: outerWidth, height: gridH, items }
   }
 
   // Unsupported
@@ -2534,6 +3000,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   const tickSize = axis.tickSize ?? 5
   const labelPadding = axis.labelPadding ?? 2
   let maxLabelLen = 0
+  const labels: SceneItem[] = []
 
   for (const t of ticks) {
     const v = pos(t)
@@ -2552,6 +3019,13 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       maxLabelLen = Math.max(maxLabelLen, (label.text as string).length)
       const align = axis.labelAlign ?? (orient === 'left' ? 'right' : orient === 'right' ? 'left' : 'center')
       const baseline = axis.labelBaseline ?? (orient === 'top' ? 'bottom' : orient === 'bottom' ? 'top' : 'middle')
+      // Vega bottom/top axis labels: y = tickSize + labelPadding +
+      // round(0.8 * labelFontSize) from the axis line (oracle-calibrated).
+      // Rotated labels get no baseline-top offset (it folds into the rotate
+      // translate applied by vega's renderer).
+      const labelFs = 10
+      const labelAngle = typeof axis.labelAngle === 'number' ? axis.labelAngle : 0
+      const axisOffset = tickSize + labelPadding + (labelAngle ? 0 : Math.round(0.8 * labelFs))
       // For band scales the label y is anchored to the band center (matching
       // vega, which places it at bandCenter - 0.5 and shifts by the middle
       // baseline); continuous scales anchor to the raw scale value.
@@ -2566,17 +3040,75 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
           // label anchor needs the +0.5 baked in; band labels net to
           // scale(t) + bw/2.
           label.x = (scale(t) as number) + bw / 2 + (bw > 0 ? 0 : 0.5)
-          label.y = ctx.height + 7 + 0.5
         } else {
           label.x = rawV + 0.5
-          label.y = ctx.height + 15 + 0.5
         }
+        label.y = ctx.height + axisOffset + 0.5
         label.align = align as SceneItem['align']
+        label.fontSize = labelFs
       }
       else { label.x = rawV + 0.5; label.y = -tickSize - 10 + 0.5; label.align = align as SceneItem['align'] }
       label.baseline = baseline as SceneItem['baseline']
       label.fill = '#000'
+      labels.push(label)
       items.push(label)
+    }
+  }
+
+  // Vega's axis `labelOverlap` runs the Overlap transform over the label
+  // items: labels that would collide are hidden with opacity 0 (they stay in
+  // the scene). `true` falls back to the parity method (hide alternating
+  // labels until none overlap); 'greedy' hides items colliding with the
+  // last kept item. Bounds use the same headless text estimate vega uses.
+  if (axis.labelOverlap && labels.length >= 3) {
+    const sep = 0
+    const boundsOf = (it: SceneItem) => {
+      const w = estimateTextWidth(String(it.text ?? ''), (it as { fontSize?: number }).fontSize ?? 10)
+      const x = it.x ?? 0
+      const x1 = it.align === 'right' ? x - w : it.align === 'center' ? x - w / 2 : x
+      const y = it.y ?? 0
+      return { x1, x2: x1 + w, y1: y, y2: y + 10 }
+    }
+    const intersects = (a: ReturnType<typeof boundsOf>, b: ReturnType<typeof boundsOf>) =>
+      sep > Math.max(b.x1 - a.x2, a.x1 - b.x2, b.y1 - a.y2, a.y1 - b.y2)
+    const hasOverlap = (list: SceneItem[]) => {
+      for (let i = 1; i < list.length; i++) {
+        if (i > 0 && intersects(boundsOf(list[i - 1]!), boundsOf(list[i]!))) return true
+      }
+      return false
+    }
+    for (const it of labels) it.opacity = 1
+    let kept = labels
+    if (hasOverlap(kept)) {
+      if (axis.labelOverlap === 'greedy') {
+        do {
+          const next: SceneItem[] = []
+          let prev: ReturnType<typeof boundsOf> | null = null
+          for (let i = 0; i < kept.length; i++) {
+            const it = kept[i]!
+            const b = boundsOf(it)
+            if (i === 0 || !prev || !intersects(prev, b)) { next.push(it); prev = b }
+            else it.opacity = 0
+          }
+          kept = next
+        } while (kept.length >= 3 && hasOverlap(kept))
+      } else {
+        do {
+          const next: SceneItem[] = []
+          for (let i = 0; i < kept.length; i++) {
+            if (i % 2) kept[i]!.opacity = 0
+            else next.push(kept[i]!)
+          }
+          kept = next
+        } while (kept.length >= 3 && hasOverlap(kept))
+      }
+      // Vega: if fewer than 3 labels survive and the last source label was
+      // hidden, un-hide it and hide the last survivor instead.
+      const last = labels[labels.length - 1]!
+      if (kept.length < 3 && !last.opacity) {
+        if (kept.length > 1) kept[kept.length - 1]!.opacity = 0
+        last.opacity = 1
+      }
     }
   }
 
@@ -2610,22 +3142,36 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     // When the domain is empty no ticks/labels are produced, the extent is 0,
     // and the title sits closer to the axis (titlePadding + baseline shift).
     const hasTickMarks = ticks.length > 0
+    const ticksOn = axis.ticks !== false && hasTickMarks
+    const labelsOn = axis.labels !== false && hasTickMarks
+    const titlePadding = (axis as { titlePadding?: number }).titlePadding ?? 4
+    // Vega lays out the axis title beyond the axis content bounds:
+    //   extent = (ticks ? tickSize + 0.5 : 0) + (labels ? labelPadding + 9.5 : 0)
+    //   title  = extent + titlePadding + baseline offset (9 = round(0.79*11))
+    // (calibrated against the oracle for ticks/labels/titlePadding variants).
     if (orient === 'bottom') {
       t.x = ctx.width / 2 + 0.5
       if (axis.labelAngle === 270 && maxLabelLen > 0) {
         const labelExtent = Math.floor(0.8 * maxLabelLen * 10)
         t.y = ctx.height + 0.5 + tickSize + labelPadding + labelExtent + 4 + 11 - 2
       } else {
-        t.y = ctx.height + (hasTickMarks ? (scale.bandwidth ? 28 : 30) : 13) + 0.5
+        const ext = 0.5 + (ticksOn ? tickSize + 0.5 : 0) + (labelsOn ? labelPadding + 9.5 : 0)
+        t.y = ctx.height + ext + titlePadding + 9
       }
       t.align = 'center'; t.baseline = 'top'
     }
     else if (orient === 'top') { t.x = ctx.width / 2 + 0.5; t.y = -tickSize - 10 + 0.5; t.align = 'center'; t.baseline = 'bottom' }
     else if (orient === 'left') {
-      t.x = -((hasTickMarks && axis.labels !== false ? labelPadding : 0) + (hasTickMarks ? tickSize : 0) + labelWidth + 3.5)
+      // Ticks present + labels off: the title sits at tickSize + titlePadding.
+      t.x = (hasTickMarks && axis.labels === false)
+        ? -(tickSize + titlePadding)
+        : -((hasTickMarks && axis.labels !== false ? labelPadding : 0) + (hasTickMarks ? tickSize : 0) + labelWidth + 3.5)
       t.y = ctx.height / 2 + 0.5; t.align = 'center'
+      // Vega rotates left/right axis titles; record the angle so bounds treat
+      // the title's extent as vertical (height along x, text length along y).
+      ;(t as Record<string, unknown>).angle = (axis as { titleAngle?: number }).titleAngle ?? -90
     }
-    else if (orient === 'right') { t.x = ctx.width + tickSize + labelPadding + labelWidth + 4.5; t.y = ctx.height / 2 + 0.5; t.align = 'center' }
+    else if (orient === 'right') { t.x = ctx.width + tickSize + labelPadding + labelWidth + 4.5; t.y = ctx.height / 2 + 0.5; t.align = 'center'; ;(t as Record<string, unknown>).angle = (axis as { titleAngle?: number }).titleAngle ?? 90 }
     t.fill = '#000'
     items.push(t)
   }
@@ -2638,6 +3184,22 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
 }
 
 function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[] {
+  // Explicit `values` override any generated ticks (vega AxisTicks sorts them).
+  if (axis.values !== undefined) {
+    let vs: unknown = axis.values
+    if (vs && typeof vs === 'object' && !Array.isArray(vs) && 'signal' in (vs as Record<string, unknown>)) {
+      try {
+        vs = ctx.runtime.expr((vs as { signal: string }).signal)({}, ctx.signalParams)
+      } catch {
+        return []
+      }
+    }
+    if (Array.isArray(vs)) {
+      const toNum = (v: unknown): number => v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Number(v)
+      return vs.filter((v) => v != null).sort((a, b) => toNum(a) - toNum(b))
+    }
+    return []
+  }
   let count: number | undefined
   if (typeof axis.tickCount === 'number') count = axis.tickCount
   else if (axis.tickCount && typeof axis.tickCount === 'object') {

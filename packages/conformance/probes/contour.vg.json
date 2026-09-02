@@ -1,0 +1,26 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 400,
+  "height": 300,
+  "padding": 5,
+  "autosize": "none",
+  "data": [
+    { "name": "pts", "values": [
+      { "x": 20, "y": 30, "v": 5 }, { "x": 25, "y": 35, "v": 8 }, { "x": 200, "y": 150, "v": 3 },
+      { "x": 220, "y": 160, "v": 6 }, { "x": 210, "y": 140, "v": 9 }, { "x": 350, "y": 40, "v": 4 },
+      { "x": 100, "y": 200, "v": 7 }, { "x": 300, "y": 250, "v": 2 }, { "x": 150, "y": 100, "v": 6 }
+    ] },
+    { "name": "contours", "source": "pts", "transform": [
+      { "type": "contour", "count": 8, "x": "x", "y": "y", "size": { "signal": "[width, height]" }, "as": "contours" }
+    ] }
+  ],
+  "marks": [
+    {
+      "type": "shape", "from": { "data": "contours" },
+      "transform": [ { "type": "geoshape" } ],
+      "encode": { "update": {
+        "fill": { "value": "transparent" }, "stroke": { "value": "steelblue" }
+      } }
+    }
+  ]
+}

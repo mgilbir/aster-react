@@ -1,0 +1,31 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 400,
+  "height": 300,
+  "padding": 5,
+  "autosize": "none",
+  "config": {
+    "background": "#f5f5f5",
+    "view": { "stroke": "transparent" },
+    "axis": { "grid": true, "domain": false, "labels": false },
+    "style": { "rect": { "fill": "tomato", "cornerRadius": 3 } }
+  },
+  "data": [
+    { "name": "table", "values": [ { "a": "A", "b": 28 }, { "a": "B", "b": 55 }, { "a": "C", "b": 43 } ] }
+  ],
+  "scales": [
+    { "name": "xscale", "type": "band", "domain": { "data": "table", "field": "a" }, "range": "width", "padding": 0.05 },
+    { "name": "yscale", "type": "linear", "domain": { "data": "table", "field": "b" }, "nice": true, "range": "height" }
+  ],
+  "axes": [ { "orient": "bottom", "scale": "xscale" }, { "orient": "left", "scale": "yscale" } ],
+  "marks": [
+    {
+      "type": "rect", "from": { "data": "table" }, "style": ["rect"], "encode": {
+        "update": {
+          "x": { "scale": "xscale", "field": "a" }, "width": { "scale": "xscale", "band": 1 },
+          "y": { "scale": "yscale", "field": "b" }, "y2": { "scale": "yscale", "value": 0 }
+        }
+      }
+    }
+  ]
+}

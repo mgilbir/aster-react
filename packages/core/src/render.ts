@@ -91,7 +91,8 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   if (scene.defs?.length || clipN.current > 0) {
     out += '<defs>'
     for (const def of scene.defs ?? []) {
-      out += `<linearGradient id="${def.id}" x1="0" x2="0" y1="1" y2="0">`
+      const horiz = def.direction === 'horizontal'
+      out += horiz ? `<linearGradient id="${def.id}" x1="0" x2="1" y1="0" y2="0">` : `<linearGradient id="${def.id}" x1="0" x2="0" y1="1" y2="0">`
       for (const stop of def.colorStops) {
         out += `<stop offset="${stop.offset}" stop-color="${stop.color}"/>`
       }
@@ -193,7 +194,8 @@ function renderLeaf(it: SceneItem): string {
     return `<path ${t} d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
   }
   if (it.text != null) {
-    return `<text x="${num(it.x ?? 0)}" y="${num(it.y ?? 0)}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${attr('fill', it.fill)}${attr('opacity', it.opacity)}>${esc(String(it.text))}</text>`
+    const fontSize = (it as Record<string, unknown>).fontSize as number | undefined
+    return `<text x="${num(it.x ?? 0)}" y="${num(it.y ?? 0)}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('fill', it.fill)}${attr('opacity', it.opacity)}>${esc(String(it.text))}</text>`
   }
   const x2 = it.x2 ?? it.x ?? 0
   const y2 = it.y2 ?? it.y ?? 0
@@ -207,6 +209,25 @@ function itemsOf(group: SceneGroup): SceneItem[] {
 function renderLine(group: SceneGroup): string {
   const items = itemsOf(group)
   let out = `<g class="mark-line role-mark" role="graphics-symbol" aria-roledescription="line mark container">`
+  const pathInfo = computeLinePath(group)
+  if (pathInfo) {
+    const { path, stroke, sw, strokeDash, opacity } = pathInfo
+    out += `<path d="${path}"${stroke ? ` stroke="${stroke}"` : ''}${sw != null ? ` stroke-width="${num(sw)}"` : ''}${attr('stroke-dasharray', strokeDash)}${opacity != null ? ` opacity="${num(opacity)}"` : ''}/>`
+  }
+  out += '</g>'
+  return out
+}
+
+/** Shared line-path geometry for the string renderer and the DOM patcher. */
+export function computeLinePath(group: SceneGroup): {
+  path: string
+  stroke?: string
+  sw?: number
+  strokeDash?: number[]
+  opacity?: number
+} | null {
+  const items = itemsOf(group)
+  if (!items.length) return null
 
   // Check if this line has curve interpolation (Vega's `interpolate` encode)
   const firstItem = items[0] as Record<string, unknown> | undefined
@@ -292,20 +313,25 @@ function renderLine(group: SceneGroup): string {
     if (penDown && !hasLine) path += 'Z'
   }
 
-  if (path) {
-    const stroke = group.items?.[0]?.stroke
-    const strokeWidth = group.items?.[0]?.strokeWidth
-    const opacity = group.items?.[0]?.opacity
-    const strokeDash = group.items?.[0]?.strokeDash
-    // Vega default: line marks have strokeWidth=2
-    const sw = strokeWidth ?? (stroke != null ? 2 : undefined)
-    out += `<path d="${path}"${stroke ? ` stroke="${stroke}"` : ''}${sw != null ? ` stroke-width="${num(sw)}"` : ''}${attr('stroke-dasharray', strokeDash)}${opacity != null ? ` opacity="${num(opacity)}"` : ''}/>`
-  }
-  out += '</g>'
-  return out
+  if (!path) return null
+  const stroke = group.items?.[0]?.stroke as string | undefined
+  const strokeWidth = group.items?.[0]?.strokeWidth as number | undefined
+  const opacity = group.items?.[0]?.opacity as number | undefined
+  const strokeDash = group.items?.[0]?.strokeDash as number[] | undefined
+  // Vega default: line marks have strokeWidth=2
+  const sw = strokeWidth ?? (stroke != null ? 2 : undefined)
+  return { path, stroke, sw, strokeDash, opacity }
 }
 
-function renderArea(group: SceneGroup): string {
+/** Shared area-path geometry for the string renderer and the DOM patcher. */
+export function computeAreaPath(group: SceneGroup): {
+  path: string
+  fill?: string | { gradient: string }
+  fillOpacity?: number
+  stroke?: string | { gradient: string }
+  strokeWidth?: number
+  strokeOpacity?: number
+} | null {
   const items = itemsOf(group)
 
   // Check for curve interpolation (Vega's `interpolate` encode)
@@ -466,20 +492,30 @@ function renderArea(group: SceneGroup): string {
     }
   }
 
-  if (!path) return ''
-  const fill = items[0]?.fill
-  const fillOpacity = items[0]?.fillOpacity
-  const stroke = items[0]?.stroke
-  const strokeWidth = items[0]?.strokeWidth
-  const strokeOpacity = items[0]?.strokeOpacity
+  if (!path) return null
+  return {
+    path,
+    fill: items[0]?.fill as string | { gradient: string } | undefined,
+    fillOpacity: items[0]?.fillOpacity as number | undefined,
+    stroke: items[0]?.stroke as string | { gradient: string } | undefined,
+    strokeWidth: items[0]?.strokeWidth as number | undefined,
+    strokeOpacity: items[0]?.strokeOpacity as number | undefined,
+  }
+}
+
+function renderArea(group: SceneGroup): string {
+  const info = computeAreaPath(group)
   let out = `<g class="mark-area role-mark" role="graphics-symbol" aria-roledescription="area mark container">`
-  out += `<path d="${path}"${fill ? ` fill="${fill}"` : ''}${fillOpacity != null ? ` fill-opacity="${num(fillOpacity)}"` : ''}${attr('stroke', stroke)}${attr('stroke-width', strokeWidth)}${attr('stroke-opacity', strokeOpacity)}/>`
+  if (info) {
+    const { path, fill, fillOpacity, stroke, strokeWidth, strokeOpacity } = info
+    out += `<path d="${path}"${fill ? ` fill="${fill}"` : ''}${fillOpacity != null ? ` fill-opacity="${num(fillOpacity)}"` : ''}${attr('stroke', stroke)}${attr('stroke-width', strokeWidth)}${attr('stroke-opacity', strokeOpacity)}/>`
+  }
   out += '</g>'
   return out
 }
 
 /** Generate an SVG path d attribute for a given symbol shape and radius. */
-function symbolPath(shape: string | undefined, r: number): string {
+export function symbolPath(shape: string | undefined, r: number): string {
   switch (shape) {
     case 'square':
       return `M${num(-r)},${num(-r)}h${num(2 * r)}v${num(2 * r)}h${num(-2 * r)}Z`
@@ -561,43 +597,60 @@ function renderCircles(group: SceneGroup): string {
 }
 
 function renderRects(group: SceneGroup): string {
-    let out = `<g class="mark-rect role-mark" role="graphics-symbol" aria-roledescription="rect mark container">`
-    for (const it of itemsOf(group).slice().reverse()) {
-    if (typeof it.fill === 'string' && it.fill.includes('steel')) {
-          }
-    let w = it.width
-    let h = it.height
-    // Vega-scenegraph renders rects with undefined positions at (0,0)
-    // (`item.x || 0`, `item.y || 0`), so default missing x/y to 0 rather than
-    // dropping the rect.
-    let x0 = it.x as number | undefined ?? 0
-    let y0 = it.y as number | undefined ?? 0
-    // When x2/y2 are present, vega normalizes the rect so that x is the min
-    // edge and width is positive (same for y). This keeps the path winding
-    // consistent (positive h first) regardless of which edge is "x" vs "x2".
-    if (w == null && it.x2 != null) { w = Math.abs((it.x2 as number) - x0); x0 = Math.min(x0, it.x2 as number) }
-    if (h == null && it.y2 != null) { h = Math.abs((it.y2 as number) - y0); y0 = Math.min(y0, it.y2 as number) }
-    if (w == null || h == null) continue
-    // vega renders rect marks as path elements, with optional cornerRadius
-    const cr = (it as Record<string, unknown>).cornerRadius as number | undefined ?? 0
-    let d: string
-    if (cr > 0 && cr < w / 2 && cr < h / 2) {
-      // Match vega-scenegraph's rounded rect: control point offset = r - r*cos(pi/4)
-      // which equals r * (1 - cos(45°)) = r * (1 - √2/2) ≈ r * 0.2928932188
-      const k = 1 - Math.SQRT1_2 // ≈ 0.2928932188
-      const r = cr
-      const kr = r * k
-      d = `M${num(x0 + r)},${num(y0)}L${num(x0 + w - r)},${num(y0)}C${num(x0 + w - r + kr)},${num(y0)},${num(x0 + w)},${num(y0 + r - kr)},${num(x0 + w)},${num(y0 + r)}`
-        + `L${num(x0 + w)},${num(y0 + h - r)}C${num(x0 + w)},${num(y0 + h - r + kr)},${num(x0 + w - r + kr)},${num(y0 + h)},${num(x0 + w - r)},${num(y0 + h)}`
-        + `L${num(x0 + r)},${num(y0 + h)}C${num(x0 + r - kr)},${num(y0 + h)},${num(x0)},${num(y0 + h - r + kr)},${num(x0)},${num(y0 + h - r)}`
-        + `L${num(x0)},${num(y0 + r)}C${num(x0)},${num(y0 + r - kr)},${num(x0 + r - kr)},${num(y0)},${num(x0 + r)},${num(y0)}Z`
-    } else {
-      d = `M${num(x0)},${num(y0)}h${num(w)}v${num(h)}h${num(-w)}Z`
-    }
+  let out = `<g class="mark-rect role-mark" role="graphics-symbol" aria-roledescription="rect mark container">`
+  for (const it of itemsOf(group).slice().reverse()) {
+    const d = rectItemPath(it)
+    if (d == null) continue
     out += `<path d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
   }
-    out += '</g>'
-    return out
+  out += '</g>'
+  return out
+}
+
+/**
+ * Shared rect geometry for the string renderer and the DOM patcher.
+ * Vega renders rect marks as path elements (with optional cornerRadius).
+ * Returns null when the item has no resolvable width/height.
+ */
+export function rectItemPath(it: SceneItem): string | null {
+  let w = it.width
+  let h = it.height
+  // Vega-scenegraph renders rects with undefined positions at (0,0)
+  // (`item.x || 0`, `item.y || 0`), so default missing x/y to 0 rather than
+  // dropping the rect.
+  let x0 = it.x as number | undefined ?? 0
+  let y0 = it.y as number | undefined ?? 0
+  // When x2/y2 are present, vega normalizes the rect so that x is the min
+  // edge and width is positive (same for y). This keeps the path winding
+  // consistent (positive h first) regardless of which edge is "x" vs "x2".
+  if (w == null && it.x2 != null) { w = Math.abs((it.x2 as number) - x0); x0 = Math.min(x0, it.x2 as number) }
+  if (h == null && it.y2 != null) { h = Math.abs((it.y2 as number) - y0); y0 = Math.min(y0, it.y2 as number) }
+  if (w == null || h == null) return null
+  // Vega's rounded-rect path builder (vega-scenegraph/path/rectangle.js):
+  // per-corner radii clamped to min(w,h)/2, quarter arcs approximated by
+  // cubics with C = 0.448084975506.
+  const rec = it as Record<string, unknown>
+  const cr = (rec.cornerRadius as number | undefined) ?? 0
+  const s = Math.min(w, h) / 2
+  const clampR = (v: unknown) => Math.max(0, Math.min(typeof v === 'number' ? v : cr, s))
+  const tl = clampR(rec.cornerRadiusTopLeft)
+  const tr = clampR(rec.cornerRadiusTopRight)
+  const br = clampR(rec.cornerRadiusBottomRight)
+  const bl = clampR(rec.cornerRadiusBottomLeft)
+  if (tl > 0 || tr > 0 || bl > 0 || br > 0) {
+    const C = 0.448084975506
+    const x2 = x0 + w
+    const y2 = y0 + h
+    return `M${num(x0 + tl)},${num(y0)}L${num(x2 - tr)},${num(y0)}`
+      + `C${num(x2 - C * tr)},${num(y0)},${num(x2)},${num(y0 + C * tr)},${num(x2)},${num(y0 + tr)}`
+      + `L${num(x2)},${num(y2 - br)}`
+      + `C${num(x2)},${num(y2 - C * br)},${num(x2 - C * br)},${num(y2)},${num(x2 - br)},${num(y2)}`
+      + `L${num(x0 + bl)},${num(y2)}`
+      + `C${num(x0 + C * bl)},${num(y2)},${num(x0)},${num(y2 - C * bl)},${num(x0)},${num(y2 - bl)}`
+      + `L${num(x0)},${num(y0 + tl)}`
+      + `C${num(x0)},${num(y0 + C * tl)},${num(x0 + C * tl)},${num(y0)},${num(x0 + tl)},${num(y0)}Z`
+  }
+  return `M${num(x0)},${num(y0)}h${num(w)}v${num(h)}h${num(-w)}Z`
 }
 
 function renderRules(group: SceneGroup): string {
@@ -619,62 +672,114 @@ function renderRules(group: SceneGroup): string {
 function renderTexts(group: SceneGroup): string {
   let out = `<g class="mark-text role-mark" role="graphics-symbol" aria-roledescription="text mark container">`
   for (const it of itemsOf(group)) {
-    if (it.text == null) continue
-    // Vega's text renderer adds a baseline offset (rounded to whole px, vega
-    // util/text.js `offset`):
-    //   top → round(0.79 * fontSize), middle → round(0.30 * fontSize),
-    //   bottom → round(-0.21 * fontSize), default fontSize is 11.
-    const fontSize = (it as Record<string, unknown>).fontSize as number | undefined ?? 11
-    const fontWeight = (it as Record<string, unknown>).fontWeight as string | number | undefined
-    const baseline = it.baseline ?? 'alphabetic'
-    const baseX = it.x ?? 0
-    const baseY = it.y ?? 0
-    const angle = it.angle
-    // Apply dx/dy offsets from encode (data-driven positioning).
-    const dx = (it as Record<string, unknown>).dx as number | undefined ?? 0
-    const dy = (it as Record<string, unknown>).dy as number | undefined ?? 0
-    // Vega text `limit`: maximum pixel width. Text exceeding the limit is
-    // truncated with an ellipsis. Mirrors vega-scenegraph/src/util/text.js
-    // `truncate()` using the estimate width fn: ~~(0.8 * str.length * fontSize).
-    let text = String(it.text)
-    const limit = (it as Record<string, unknown>).limit as number | undefined
-    if (limit != null && limit > 0) {
-      const estimateW = (s: string) => ~~(0.8 * s.length * fontSize)
-      if (estimateW(text) < limit) {
-        // fits, no truncation needed
-      } else {
-        const ellipsis = '\u2026'
-        const lo = 0
-        let hi = text.length
-        let lim = limit - estimateW(ellipsis) // subtract ellipsis budget
-        // Binary search: find longest prefix where estimateW(prefix) < lim
-        let best = 0
-        { let lo2 = lo; let hi2 = hi
-          while (lo2 < hi2) {
-            const mid = 1 + ((lo2 + hi2) >>> 1)
-            if (estimateW(text.slice(0, mid)) < lim) lo2 = mid
-            else hi2 = mid - 1
-          }
-          best = lo2
-        }
-        text = text.slice(0, best) + ellipsis
+    const d = textItemDesc(it)
+    if (d == null) continue
+    // Vega's SVG text renderer emits the first line as the text element's
+    // content and each following line as `<tspan x="0" dy="lineHeight">`
+    // (vega-scenegraph svg.js `textLines`).
+    // Single-line text renders as a plain text node (vega `m.text`); only
+    // genuinely multi-line items use tspans.
+    let inner = ''
+    if (d.lines.length === 1) {
+      inner = esc(d.text)
+    } else {
+      for (let i = 0; i < d.lines.length; i++) {
+        inner += i === 0
+          ? `<tspan>${esc(d.lines[i]!)}</tspan>`
+          : `<tspan x="0" dy="${num(d.lineHeight)}">${esc(d.lines[i]!)}</tspan>`
       }
     }
-    // When text is rotated, Vega renders with dy for baseline offset rather
-    // than baking it into y; for non-rotated text the offset goes into y.
-    const isRotated = angle != null && angle !== 0
-    let bsOffset = 0
-    if (baseline === 'top') bsOffset = Math.round(0.79 * fontSize)
-    else if (baseline === 'middle') bsOffset = Math.round(0.30 * fontSize)
-    else if (baseline === 'bottom') bsOffset = Math.round(-0.21 * fontSize)
-    // alphabetic / default → 0 (no offset)
-    const x = num(baseX + dx)
-    const y = isRotated ? num(baseY + dy) : num(baseY + dy + bsOffset)
-    const textAnchor = it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle'
-    out += `<text x="${x}" y="${y}"${isRotated && bsOffset ? ` dy="${num(bsOffset)}"` : ''}${attr('text-anchor', textAnchor)}${attr('font-size', fontSize !== 11 ? fontSize : undefined)}${attr('font-weight', fontWeight)}${attr('fill', it.fill)}${attr("opacity", it.opacity)}${attr("angle", it.angle)}>${esc(text)}</text>`
+    out += `<text x="${d.x}" y="${d.y}"${d.dyAttr}${d.attrs.map(([k, v]) => attr(k, v)).join('')}>${inner}</text>`
   }
   out += '</g>'
   return out
+}
+
+/** Split a text item into lines the way vega-scenegraph's `textLines` does. */
+function textLinesOf(it: SceneItem): string[] {
+  const raw = it.text as unknown
+  const lineBreak = (it as Record<string, unknown>).lineBreak as string | undefined
+  if (Array.isArray(raw)) {
+    return raw.length > 1 ? raw.map((l) => String(l).trim()) : [String(raw[0] ?? '').trim()]
+  }
+  const text = raw == null ? '' : String(raw)
+  if (lineBreak && text) return text.split(lineBreak).map((l) => l.trim())
+  return [text.trim()]
+}
+
+/**
+ * Shared text-mark geometry for the string renderer and the DOM patcher.
+ * Returns null for items with no text content. `x`/`y` are pre-formatted;
+ * `attrs` is the ordered presentation-attribute list (fill, anchor, ...).
+ */
+export function textItemDesc(it: SceneItem): {
+  x: string
+  y: string
+  dyAttr: string
+  attrs: Array<[string, unknown]>
+  text: string
+  /** Rendered lines after split/truncate; length > 1 means tspans follow. */
+  lines: string[]
+  lineHeight: number
+} | null {
+  if (it.text == null) return null
+  // Vega's text renderer adds a baseline offset (rounded to whole px, vega
+  // util/text.js `offset`):
+  //   top → round(0.79 * fontSize), middle → round(0.30 * fontSize),
+  //   bottom → round(-0.21 * fontSize), default fontSize is 11.
+  const fontSize = (it as Record<string, unknown>).fontSize as number | undefined ?? 11
+  const fontWeight = (it as Record<string, unknown>).fontWeight as string | number | undefined
+  const baseline = it.baseline ?? 'alphabetic'
+  const baseX = it.x ?? 0
+  const baseY = it.y ?? 0
+  const angle = it.angle
+  // Apply dx/dy offsets from encode (data-driven positioning).
+  const dx = (it as Record<string, unknown>).dx as number | undefined ?? 0
+  const dy = (it as Record<string, unknown>).dy as number | undefined ?? 0
+  const lines = textLinesOf(it).map((l) => truncateToLimit(it, l, fontSize))
+  const lineHeight = (it as Record<string, unknown>).lineHeight as number | undefined ?? fontSize + 2
+  const text = lines[0]!
+  // When text is rotated, Vega renders with dy for baseline offset rather
+  // than baking it into y; for non-rotated text the offset goes into y.
+  const isRotated = angle != null && angle !== 0
+  let bsOffset = 0
+  if (baseline === 'top') bsOffset = Math.round(0.79 * fontSize)
+  else if (baseline === 'middle') bsOffset = Math.round(0.30 * fontSize)
+  else if (baseline === 'bottom') bsOffset = Math.round(-0.21 * fontSize)
+  // alphabetic / default → 0 (no offset)
+  const x = num(baseX + dx)
+  const y = isRotated ? num(baseY + dy) : num(baseY + dy + bsOffset)
+  const textAnchor = it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle'
+  const attrs: Array<[string, unknown]> = []
+  if (textAnchor != null) attrs.push(['text-anchor', textAnchor])
+  attrs.push(['font-size', fontSize !== 11 ? fontSize : undefined])
+  attrs.push(['font-weight', fontWeight])
+  attrs.push(['fill', it.fill])
+  attrs.push(['opacity', it.opacity])
+  attrs.push(['angle', it.angle])
+  return { x, y, dyAttr: isRotated && bsOffset ? ` dy="${num(bsOffset)}"` : '', attrs, text, lines, lineHeight }
+}
+
+/**
+ * Vega text `limit`: maximum pixel width, truncated with an ellipsis.
+ * Mirrors vega-scenegraph/src/util/text.js `truncate()` using the estimate
+ * width fn: ~~(0.8 * str.length * fontSize).
+ */
+function truncateToLimit(it: SceneItem, text: string, fontSize: number): string {
+  const limit = (it as Record<string, unknown>).limit as number | undefined
+  if (limit == null || !(limit > 0) || !text.length) return text
+  const estimateW = (s: string) => ~~(0.8 * s.length * fontSize)
+  if (estimateW(text) < limit) return text
+  const ellipsis = ((it as Record<string, unknown>).ellipsis as string | undefined) ?? '\u2026'
+  const lim = limit - estimateW(ellipsis)
+  let lo = 0
+  let hi = text.length
+  while (lo < hi) {
+    const mid = 1 + ((lo + hi) >>> 1)
+    if (estimateW(text.slice(0, mid)) < lim) lo = mid
+    else hi = mid - 1
+  }
+  return text.slice(0, lo) + ellipsis
 }
 
 function renderPaths(group: SceneGroup): string {
@@ -715,7 +820,7 @@ function renderTrail(group: SceneGroup): string {
 }
 
 /** Compute the vega/d3-trail polygon path for a run of trail items. */
-function trailPath(items: SceneItem[]): string {
+export function trailPath(items: SceneItem[]): string {
   let out = ''
   let ready = false
   let x1 = 0, y1 = 0, r1 = 0
@@ -781,7 +886,7 @@ function renderArcs(group: SceneGroup): string {
   return out
 }
 
-function arcPath(cx: number, cy: number, r: number, r0: number, a0in: number, a1in: number): string {
+export function arcPath(cx: number, cy: number, r: number, r0: number, a0in: number, a1in: number): string {
   // d3-arc measures angles from the +x axis and rotates by -π/2 so that
   // angle 0 points up (12 o'clock). Match that reference frame here.
   const a0 = a0in - Math.PI / 2
@@ -829,12 +934,20 @@ function attr(name: string, value: unknown): string {
   return ` ${name}="${esc(String(value))}"`
 }
 
+const ESC_CACHE = new Map<string, string>()
+
 function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  const cached = ESC_CACHE.get(s)
+  if (cached !== undefined) return cached
+  const out = s.includes('&') || s.includes('<') || s.includes('>') || s.includes('"')
+    ? s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    : s
+  if (ESC_CACHE.size < 2048) ESC_CACHE.set(s, out)
+  return out
 }
 
-function num(x: number): string {
+export function num(x: number): string {
   if (!Number.isFinite(x)) return String(x)
-  const r = Math.round(x * 1000) / 1000
-  return String(r)
+  if (Number.isInteger(x)) return String(x)
+  return String(Math.round(x * 1000) / 1000)
 }

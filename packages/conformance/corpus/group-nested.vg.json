@@ -1,0 +1,43 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 400,
+  "height": 300,
+  "padding": 5,
+  "autosize": "none",
+  "signals": [ { "name": "groupW", "update": "width - 10" } ],
+  "data": [
+    { "name": "table", "values": [ { "a": "A", "b": 28 }, { "a": "B", "b": 55 }, { "a": "C", "b": 43 } ] },
+    { "name": "sub", "source": "table", "transform": [ { "type": "filter", "expr": "datum.b < 50" } ] }
+  ],
+  "marks": [
+    {
+      "type": "group",
+      "encode": { "update": { "x": { "value": 5 }, "y": { "value": 5 }, "width": { "signal": "groupW" }, "height": { "value": 130 }, "stroke": { "value": "#ccc" }, "cornerRadius": { "value": 4 } } },
+      "scales": [
+        { "name": "xs", "type": "band", "domain": { "data": "table", "field": "a" }, "range": "width", "padding": 0.1 },
+        { "name": "ys", "type": "linear", "domain": { "data": "table", "field": "b" }, "nice": true, "range": "height" }
+      ],
+      "axes": [ { "orient": "bottom", "scale": "xs", "labels": false }, { "orient": "left", "scale": "ys", "labels": false } ],
+      "marks": [
+        { "type": "rect", "from": { "data": "table" }, "encode": { "update": {
+          "x": { "scale": "xs", "field": "a" }, "width": { "scale": "xs", "band": 1 },
+          "y": { "scale": "ys", "field": "b" }, "y2": { "scale": "ys", "value": 0 },
+          "fill": { "value": "steelblue" } } } }
+      ]
+    },
+    {
+      "type": "group",
+      "encode": { "update": { "x": { "value": 5 }, "y": { "value": 150 }, "width": { "signal": "groupW" }, "height": { "value": 130 }, "stroke": { "value": "#ccc" } } },
+      "scales": [
+        { "name": "xs2", "type": "band", "domain": { "data": "sub", "field": "a" }, "range": "width", "padding": 0.1 },
+        { "name": "ys2", "type": "linear", "domain": { "data": "sub", "field": "b" }, "nice": true, "range": "height" }
+      ],
+      "axes": [ { "orient": "bottom", "scale": "xs2", "labels": false } ],
+      "marks": [
+        { "type": "symbol", "from": { "data": "sub" }, "encode": { "update": {
+          "x": { "scale": "xs2", "field": "a", "band": 0.5 }, "y": { "scale": "ys2", "field": "b" },
+          "size": { "value": 121 }, "fill": { "value": "firebrick" } } } }
+      ]
+    }
+  ]
+}

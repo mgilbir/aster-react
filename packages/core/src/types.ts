@@ -31,6 +31,19 @@ export interface RuntimeInput {
 // CompiledChart — the IR emitted by compileChart()
 // ---------------------------------------------------------------------------
 
+export interface CompiledProjection {
+  name: string
+  type: string
+  scale?: number | { signal: string }
+  translate?: [number, number] | { signal: string }
+  center?: [number, number] | { signal: string }
+  rotate?: [number, number] | [number, number, number] | { signal: string }
+  precision?: number | { signal: string }
+  clipAngle?: number | { signal: string }
+  reflectX?: boolean
+  reflectY?: boolean
+}
+
 export interface CompiledChart {
   autosize?: string
   width: SizeSpec
@@ -46,6 +59,38 @@ export interface CompiledChart {
   marks: CompiledMark[]
   /** Resolved static signal values (width/height and any provided overrides). */
   signals: Record<string, unknown>
+  /** Raw signal definitions, including `update` expressions for static resolution. */
+  signalDefs?: CompiledSignalDef[]
+  /** Top-level chart title (string or object form, defaults merged from config.title). */
+  title?: CompiledTitle
+  /** Cartographic projections referenced by geo marks / the geoshape transform. */
+  projections?: CompiledProjection[]
+}
+
+export interface CompiledTitle {
+  text: string
+  subtitle?: string
+  orient: 'top' | 'bottom' | 'left' | 'right'
+  anchor: 'start' | 'middle' | 'end'
+  offset: number
+  subtitlePadding: number
+  fontSize: number
+  fontWeight?: string | number
+  font?: string
+  color: string
+  dx?: number
+  dy?: number
+  limit?: number
+  lineBreak?: string
+  frame?: string
+  encode?: Record<string, Record<string, EncodeValue>>
+}
+
+export interface CompiledSignalDef {
+  name: string
+  value?: unknown
+  /** Static (`update`) expression; event-driven `on` handlers are ignored. */
+  update?: string
 }
 
 export interface CompiledData {
@@ -70,7 +115,7 @@ export type CompiledTransform =
   | { type: 'extent'; field: string; signal: string }
   | { type: 'collect'; sort?: SortSpec }
   | { type: 'joinaggregate'; groupby?: string[]; fields?: (string | null)[]; ops?: string[]; as?: string[] }
-  | { type: 'impute'; field: string; key: string; groupby?: string[]; method?: string; value?: unknown; step?: number }
+  | { type: 'impute'; field: string; key: string; groupby?: string[]; method?: string; value?: unknown }
   | { type: 'identifier' }
   | { [name: string]: unknown }
 
@@ -147,6 +192,7 @@ export interface CompiledAxis {
   labelPadding?: number
   labelAngle?: number
   tickBand?: string
+  values?: unknown[] | { signal: string }
   format?: string
   formatType?: string
   zindex?: number
@@ -161,6 +207,8 @@ export interface CompiledLegend {
   opacity?: string
   strokeDash?: string
   orient?: string
+  direction?: string
+  columns?: number
   title?: string | { signal: string }
   offset?: number
   padding?: number
@@ -190,8 +238,14 @@ export interface CompiledMark {
   title?: unknown
   /** Nested marks within a group. */
   marks?: CompiledMark[]
-  /** Axis specifications within a group. */
-  axes?: unknown[]
+  /** Axis specifications within a group (nested scope). */
+  axes?: CompiledAxis[]
+  /** Scale specifications within a group (resolved against the group's size). */
+  scales?: CompiledScale[]
+  /** Data sets declared within a group's scope. */
+  data?: CompiledData[]
+  /** Cartographic projections declared within a group's scope. */
+  projections?: CompiledProjection[]
 }
 
 export type EncodeValue =
@@ -228,7 +282,7 @@ export interface SceneRoot {
   padding?: { top: number; right: number; bottom: number; left: number }
   items: SceneGroup[]
   /** Gradient definitions for use by fill="url(#...)" references. */
-  defs?: Array<{ id: string; colorStops: Array<{ offset: number; color: string }> }>
+  defs?: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }>
   name?: string
   ariaRole?: string
   ariaLabel?: string
@@ -274,6 +328,13 @@ export interface SceneItem {
   dx?: number
   dy?: number
   limit?: number
+  lineBreak?: string
+  lineHeight?: number
+  ellipsis?: string
+  font?: string
+  fontSize?: number
+  fontWeight?: string | number
+  fontStyle?: string
   // symbol
   shape?: string
   // image
@@ -290,6 +351,10 @@ export interface SceneItem {
   strokeLineJoin?: string
   opacity?: number
   cornerRadius?: number
+  cornerRadiusTopLeft?: number
+  cornerRadiusTopRight?: number
+  cornerRadiusBottomLeft?: number
+  cornerRadiusBottomRight?: number
   zindex?: number
   cursor?: string
   // accessibility

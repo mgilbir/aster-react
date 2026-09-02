@@ -31,18 +31,30 @@ Expression evaluation uses two pure Vega packages:
 - **vega-expression** (`parseExpression`) — parses the Vega expression DSL into an AST.
 - **vega-interpreter** (`expressionInterpreter`) — evaluates that AST via a CSP-safe interpreter (no `new Function`).
 
-A custom function context is bound to the runtime's scale and data lookups, plus format functions (`vega-format`, `vega-time`, `vega-util`). The context lives in `packages/core/src/expression.ts`:
+A custom function context is bound to the runtime's scale and data lookups, plus the type/array/string/math utilities (`vega-util`), date-time units (`vega-time`), color parsing (`d3-color`), and formatting (`vega-format`). The context lives in `packages/core/src/expression.ts` and mirrors the documented `vega-functions` surface, including:
 
-| Function | Purpose |
-|----------|---------|
-| `scale(name, value?)` | Look up a scale by name; call it if value provided |
-| `bandwidth(name)` | Get the band width of an ordinal/band scale |
-| `data(name)` | Resolve rows of a dataset by name |
-| `format / timeFormat / utcFormat / monthFormat / dayFormat` | Numeric and time formatting |
+| Group | Functions |
+|-------|-----------|
+| Scale / projection / data | `scale`, `invert`, `domain`, `range`, `bandwidth`, `bandspace`, `copy`, `data`, `indata`, `pluck` |
+| Date-time | `year/quarter/month/week/day/date/hours/…` (+ all `utc*` variants), `datetime`, `utc`, `time`, `timeOffset`/`utcOffset`, `timeSequence`/`utcSequence`, `dayofyear`, `timezoneoffset`, `now` |
+| Array | `extent`, `clamp`, `lerp`, `sequence`, `slice`, `reverse`, `sort`, `join`, `peek`, `span`, `inrange`, `clampRange`, `indexof`, `lastindexof` |
+| String | `truncate`, `pad`, `upper`, `lower`, `split`, `trim`, `replace`, `substring`, `test`/`regexp`, `parseFloat`/`parseInt` |
+| Color | `rgb`, `hsl`, `lab`, `hcl`, `luminance`, `contrast` |
+| Formatting | `format`, `timeFormat`/`utcFormat`, `timeParse`/`utcParse`, `timeUnitSpecifier`, `month*`/`day*` |
 
-Type-assertion utilities (`isValid`, `isInvalid`, `isArray`, etc.) come from `vega-util`. Signal values are exposed as `$`-prefixed parameters to `compileExpr`, matching Vega convention (`$width`, `$height`, etc.).
+Signal values are exposed as `$`-prefixed parameters to `compileExpr`, matching Vega convention (`$width`, `$height`, etc.). Signal `update` expressions are resolved to a fixed point in the runtime (see `resolveSignalUpdates`), so a scale range/domain or an encoding can reference a derived signal such as `{"signal": "cx"}` where `cx` is `update: "width / 2"`. Event-driven `signal.on` handlers are intentionally ignored (static mode).
 
-The reason only pure packages are reused — and **not** `vega-functions`, `vega-dataflow`, or `vega-scenegraph` — is to avoid runtime leakage. `vega-dataflow` carries reactive graphs, operators, and signals that are explicitly not part of M0. `vega-scenegraph` carries a mutable node tree that the SVG serializer replaces with a pure function. The result is a smaller, simpler runtime with no hidden dataflow layer.
+The reason only pure packages are reused — and **not** `vega-functions`, `vega-dataflow`, or `vega-scenegraph` — is to avoid runtime leakage. `vega-dataflow` carries reactive graphs, operators, and signals that are explicitly not part of the eager model. `vega-scenegraph` carries a mutable node tree that the SVG serializer replaces with a pure function. The result is a smaller, simpler runtime with no hidden dataflow layer.
+
+## Config & style resolution
+
+`compileChart` reads `spec.config` and applies it as encode/property defaults (encode always wins): `config.background` → root background, `config.view` / `config.style.cell` → frame stroke (a `transparent` stroke serializes as *no* stroke), `config.style.<marktype|name>` → mark encode defaults (e.g. a `rect` style's `fill`/`cornerRadius`), and `config.axis` / `config.legend` → guide defaults. The chart `title` (string or object, with `subtitle`) merges from `config.title` and the vega-theme style defaults (fontSize 13, bold, offset 4, subtitlePadding 3).
+
+## Geo projections & the addon boundary
+
+`packages/core/src/geo.ts` builds d3-geo projections (`mercator`, `albers`, `albersUsa`, `equirectangular`, `orthographic`, …) from the compiled `projections` spec, resolving `scale`/`translate`/`center`/`rotate` signal params against the runtime; the `geoshape` transform and shape marks route geometry through `geoPath(projection)` (identity pixel-space path when no projection is named).
+
+Because `d3-geo` + `d3-contour` are ~17 kB gzip and only a small fraction of specs use them, they are **not** reachable from the `@aster/core` barrel. The core code paths consult a small injection registry (`packages/core/src/registry.ts`, `geoRegistry`); the `@aster/core/geo` addon entry imports the d3 modules and registers `buildProjection` / `projectedPath` / `contourRun`. A chart that uses a projection or the `contour` transform without the addon loaded gets an actionable "load `@aster/core/geo` first" error; every other chart renders with a lean base bundle. This keeps `renderSpec` of a bar/line chart byte-for-byte the size it was before geo/contour existed.
 
 ## Scales
 
@@ -99,34 +111,47 @@ M0 corpus conventions:
 
 - Specs MUST set explicit numeric `width` and `height`.
 - `autosize` must be `'none'` so layout is deterministic and comparable.
-- Specs avoid tick labels / titles (text marks) where possible — text positioning is a known gap.
 
-The canonicalizer (`packages/conformance/src/normalize.ts`) is the correctness gate: a spec passes only if the two SVGs have identical canonical geometry.
+The canonicalizer (`packages/conformance/src/normalize.ts`) is the correctness gate: a spec passes only if the two SVGs have identical canonical geometry. Text labels, axis titles, and the chart title are all verified — headless text metrics are matched by reimplementing Vega's estimate width (`~~(0.8 · len · fontSize)`) and its `labelOverlap` parity/greedy removal.
+
+### Gap probes (`packages/conformance/probes/`)
+
+Areas that are **known-incomplete** are captured as feature probes under `probes/` and run via `pnpm probe`. A probe renders the same oracle diff as the corpus but is a *diagnostic, not a CI gate*: its failure documents a real gap, and when the gap is implemented the probe is promoted into `corpus/`. The current backlog: `contour` (density-blur float parity), `vl-facet-2d` (2-D facet grid axis orientation in the bottom-row cells), `vl-title-legend` (chart title anchored against a combined rotated-axis-title + legend layout).
 
 ## Known Limitations / Roadmap
 
 | Area | Status | Notes |
 |------|--------|-------|
-| Tick label positioning | Partial | Line positions often wrong; text placement diverges |
-| Legend rendering | Not started | `CompiledLegend` IR exists but no renderer |
-| Title positioning | Not started | `CompiledAxis.title` parsed but not positioned in SVG |
-| Reactive dataflow | Not started | `renderSpec` is static/eager; future: incremental update |
-| Interactions | Not started | No signal/event system |
-| Binning parity | Partial | `bin` transform exists but not full Vega parity |
-| Vega-Lite coverage | Partial | Depends on `vega-lite.compile` producing valid Vega |
-| More marks | Partial | Arc, area, line, rect, rule, symbol, text, path implemented; some geometry differs |
+| Marks | Done | rect/line/area/symbol/rule/text/arc/path/image/trail/shape, incl. curves, gradients, corner radii, `lineBreak` tspans |
+| Scales | Done | incl. scheme ranges (no zero-extension), `values`/`step`, projections via d3-geo |
+| Axes | Done | ticks, grid, domain, labels, titles (4 orients), `labelOverlap` |
+| Legends | Done | gradient (vertical + horizontal), symbol (single + multi-column grids at any corner), size, band, bottom flow |
+| Title | Done | top-level title + subtitle, anchored to content bounds (incl. rotated axis-title bounds) |
+| Config | Done | background/view/style/axis/legend/title defaults |
+| Expressions | Done | full vega-functions surface (date, color, array, string, scale) — CSP-safe |
+| Nested scopes | Done | group marks with their own `scales`/`axes`/`data` render in an isolated child scope |
+| Signals | Partial | `update` expressions resolved to a fixed point; **event-driven `signal.on` ignored** |
+| Reactive dataflow | Open | updates re-encode the whole scene; no per-dataset incremental re-evaluation |
+| Interactions | Open | no general signal→view event loop |
+| Canvas rendering | Open | SVG only |
+| Contour | Open | transform implemented; geometry diverges from oracle in the density blur (probe) |
+| 2-D facet (VL) | Open | row×column facet grid renders but bottom-row cell axis orientation diverges (probe) |
+| Binning parity | Partial | `bin` covers common cases; not every Vega option |
 
 ## Verification Commands
 
 ```bash
-# Typecheck (core, react pass; conformance has known node-type errors)
+# Typecheck (all packages pass)
 pnpm typecheck
 
 # Build
 pnpm build
 
-# Conformance — geometry diff against real Vega oracle
+# Conformance — 393-spec geometry diff against the real Vega oracle (the gate)
 pnpm conformance
+
+# Gap probes — diagnostic only, documents known-incomplete features
+pnpm probe
 
 # Bundle budget (esbuild, 60 kB gzip target)
 pnpm --filter @aster/benchmarks run budget

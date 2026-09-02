@@ -86,7 +86,10 @@ function styleOf(el: XmlEl): string {
   for (const k of keys) {
     const v = el.attrs[k]
     if (v === undefined) continue
-    if (k === 'opacity' && (roundIn(v) === '1' || roundIn(v) === '0')) continue // default opacity
+    // Skip the default opacity; also skip explicit 0 (vega renders
+    // label-overlap-hidden labels as invisible DOM nodes that we do not
+    // reproduce — hidden labels have no visual geometry).
+    if (k === 'opacity' && (roundIn(v) === '1' || roundIn(v) === '0')) continue
     parts.push(`${k}=${roundIn(v)}`)
   }
   return parts.join(';')
@@ -168,11 +171,17 @@ function isDegeneratePath(d: string): boolean {
 }
 
 function textOf(el: XmlEl): string {
-  let s = ''
-  for (const c of el.children) {
-    if (typeof c === 'string') s += c
+  // Vega renders multi-line text as a leading text node plus `<tspan>`
+  // children; join all of them (and nested elements) with newlines.
+  const parts: string[] = []
+  const collect = (e: XmlEl) => {
+    for (const c of e.children) {
+      if (typeof c === 'string') parts.push(c)
+      else collect(c)
+    }
   }
-  return s.trim()
+  collect(el)
+  return parts.join('\n').trim()
 }
 
 function parseTransform(t: string | undefined): { x: number; y: number } {

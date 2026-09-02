@@ -1,0 +1,39 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 400,
+  "height": 300,
+  "padding": 5,
+  "autosize": "none",
+  "signals": [
+    { "name": "cx", "update": "width / 2" },
+    { "name": "cy", "update": "height / 2" },
+    { "name": "r", "update": "min(cx, cy) - 20" },
+    { "name": "innerR", "update": "r * 0.5" }
+  ],
+  "data": [
+    {
+      "name": "table",
+      "values": [ { "part": "a", "value": 3 }, { "part": "b", "value": 5 }, { "part": "c", "value": 2 } ],
+      "transform": [
+        { "type": "stack", "sort": { "field": "part" }, "field": "value", "offset": "normalize", "as": ["s", "e"] },
+        { "type": "formula", "expr": "datum.s * 6.283185307179586", "as": "start" },
+        { "type": "formula", "expr": "datum.e * 6.283185307179586", "as": "end" }
+      ]
+    }
+  ],
+  "scales": [
+    { "name": "color", "type": "ordinal", "domain": { "data": "table", "field": "part" }, "range": ["#4572c7", "#aa4643", "#89a54e"] }
+  ],
+  "marks": [
+    {
+      "type": "arc", "from": { "data": "table" }, "encode": {
+        "update": {
+          "x": { "signal": "cx" }, "y": { "signal": "cy" },
+          "startAngle": { "field": "start" }, "endAngle": { "field": "end" },
+          "innerRadius": { "signal": "innerR" }, "outerRadius": { "signal": "r" },
+          "fill": { "scale": "color", "field": "part" }
+        }
+      }
+    }
+  ]
+}
