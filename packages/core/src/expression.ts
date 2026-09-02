@@ -150,7 +150,7 @@ function truncate(value: unknown, count: number, align = 'right', ellipsis = '\u
   if (str.length <= count) return str
   const len = Math.max(0, count - ellipsis.length)
   const half = Math.floor(len / 2)
-  if (align === 'left') return ellipsis + (len > half ? str.slice(-len + half) + str.slice(str.length - half) : str.slice(-len))
+  if (align === 'left') return ellipsis + str.slice(str.length - len)
   if (align === 'center') return str.slice(0, half) + ellipsis + str.slice(str.length - (len - half))
   return str.slice(0, len) + ellipsis
 }
@@ -257,6 +257,8 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
       stop === undefined ? numericSequence(start) : step === undefined ? numericSequence(start, stop) : numericSequence(start, stop, step),
     slice: sliceFn,
     sort: (seq: unknown) => (seq as unknown[]).slice().sort((a, b) => ascending(a as never, b as never)),
+    merge: mergeObj,
+    modify: (set: unknown, value: unknown, signal?: unknown) => set, // event-only; static no-op returns the set
     span: (arr: unknown) => { const a = arr as number[]; return a[a.length - 1]! - a[0]! },
     pluck: (value: unknown, name: unknown) => pluck(value, name),
     // strings
