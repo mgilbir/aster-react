@@ -67,8 +67,16 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
       : stepRange && typeof stepRange === 'object' && 'signal' in stepRange
         ? (resolveRangeSignal((stepRange as { signal: string }).signal, ctx) as number)
         : NaN
-    ;(s as { step?: (n: number) => unknown }).step?.(stepVal)
-    range0 = s.range() as unknown[]
+    // vega-scale's band `.step()` setter does NOT re-expand the range (it only
+    // derives step from an explicit range), so compute the range ourselves:
+    //   rangeEnd = step * bandSpace(count, paddingInner, paddingOuter)
+    const count = ((s as unknown as { domain: () => unknown[] }).domain() ?? []).length
+    const pInner = c.paddingInner ?? c.padding ?? 0
+    const pOuter = c.paddingOuter ?? c.padding ?? 0
+    const rangeEnd = Number.isFinite(stepVal) ? stepVal * vs.bandSpace(count, pInner, pOuter) : 1
+    ;(s as { range: (r: number[]) => unknown }).range([0, rangeEnd])
+    if (Number.isFinite(stepVal)) (s as { step?: (n: number) => unknown }).step?.(stepVal)
+    range0 = [0, rangeEnd]
   } else {
     range0 = resolveRange(effectiveRange, ctx, type)
   }
