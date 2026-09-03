@@ -92,6 +92,7 @@ export function compileChart(spec: VgSpec): CompiledChart {
     signalDefs,
     title,
     projections,
+    layout: (spec.layout as Record<string, unknown> | undefined) ?? undefined,
   }
 }
 

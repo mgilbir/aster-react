@@ -26,6 +26,8 @@ import type {
 } from './types.js'
 import { tickFormat } from 'vega-scale'
 import { compileChart } from './compiler.js'
+import { trellisLayout } from './trellis.js'
+import { boundAxisGroup, Bounds, boundLeaf } from './bounds.js'
 
 const DEFAULT_SIZE = 500
 
@@ -300,12 +302,20 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   const titleGroup = buildTitleGroup(ctx.chart, items, width, height)
   if (titleGroup) items.push(titleGroup)
 
-  // 3) Build the scene
-  let sceneWidth: number
-  let sceneHeight: number
+  // 2c) Trellis layout (vega's ViewLayout/trellisLayout port). Facet charts
+  // with both row and column domains run the exact grid + header + title
+  // layout over the built items, deriving every position from measured
+  // bounds (same algorithms and arithmetic as vega).
   const hasFacetMarks = (ctx as any).chart.marks?.some((m: any) => m.from?.facet?.groupby?.length > 0) ?? false
   const hasChildSignals = ctx.signalParams['child_width'] !== undefined && ctx.signalParams['child_height'] !== undefined
   const isFacetSpec = hasFacetMarks && hasChildSignals
+  if (isFacetSpec && isTrellis(ctx)) {
+    applyTrellisLayout(items, ctx)
+  }
+
+  // 3) Build the scene
+  let sceneWidth: number
+  let sceneHeight: number
   const isConcat = isConcatSpec(ctx.chart)
   const isVerticalConcat = isConcat && ctx.signalParams['childWidth'] === undefined && ctx.signalParams['childHeight'] !== undefined
   // A 2D repeat (e.g. scatter matrix) compiles to a concat whose cells use both
@@ -496,7 +506,7 @@ function contentBoundsOf(chart: CompiledChart, items: SceneNode[], width: number
 function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number, height: number): SceneGroup | null {
   const title = chart.title
   if (!title || !title.text) return null
-  const vb = title.frame === 'group'
+  let vb = title.frame === 'group'
     ? { x1: 0, y1: 0, x2: width, y2: height }
     : contentBoundsOf(chart, items, width, height)
 
@@ -509,6 +519,21 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
   const groupH = titleH + (hasSub ? title.subtitlePadding + subH : 0)
   const titleW = estimateTextWidth(title.text, title.fontSize)
   const subW = hasSub ? estimateTextWidth(title.subtitle!, subFs) : 0
+  // vega's layoutGroup viewBounds: [0,0,w,h] ∪ default marks ∪ axis/legend
+  // bounds ∪ headers. Axis marks measure in the axis-internal frame; our
+  // scene bakes the 0.5px axis delta into the axis leaves — shift it out.
+  if (title.frame !== 'group') {
+    const b = new Bounds().set(0, 0, width, height)
+    for (const g of items as SceneGroup[]) {
+      if (g.role === 'title') continue
+      const bb = g.role === 'axis'
+        ? boundAxisGroup(g as SceneGroup)
+        : boundLeaf(new Bounds(), g as SceneItem)
+      b.union(bb)
+    }
+    vb = { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
+  }
+
   const groupW = Math.max(titleW, subW)
 
   const pos = title.anchor === 'start'
@@ -1810,6 +1835,139 @@ function buildColumnTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup
       { text: titleText, x: 0, y: -12, align: 'center' as const, fill: '#000' },
     ],
     x: centerX, y: -38,
+  }
+}
+
+// ===========================================================================
+// Trellis layout (exact port of vega's ViewLayout/trellisLayout)
+// ===========================================================================
+
+/** vega-lite's facet header/title offset (`layout.offset.{rowTitle,columnTitle}`). */
+const FACET_TITLE_OFFSET = 10
+/** Guide-label font size (vega config style 'guide-label'). */
+const GUIDE_LABEL_FONT_SIZE = 10
+
+/**
+ * Run the exact trellis layout over the built facet items:
+ * 1. Position row-header facet labels with vega's header titleLayout law
+ *    (x = viewBounds.x1 - titleWidth - offset, y = header height / 2), where
+ *    viewBounds is the header content bounds excluding the label itself.
+ * 2. Run the ported grid + header + title layout (trellisLayout), which
+ *    positions cells, headers, footers and titles from measured bounds.
+ */
+function applyTrellisLayout(items: SceneGroup[], ctx: EvalContext): void {
+  // Vega's facet cells start at (0,0); gridLayout then derives their offsets
+  // as (target − current). Our builders pre-position cells, which would
+  // collapse the deltas — reset to the origin first.
+  for (const g of items) {
+    if (g.role === 'scope' || g.role === 'mark') {
+      g.x = 0
+      g.y = 0
+    }
+  }
+  for (const g of items) {
+    if (g.role === 'row-header') positionRowHeaderLabel(g, ctx)
+    else if (g.role === 'column-header') positionColumnHeaderLabel(g)
+  }
+  trellisLayout({ marktype: 'group', items } as unknown as SceneGroup, resolveTrellisOpt(ctx))
+}
+
+/** Resolve the root layout options (vega-lite facet defaults + spec layout). */
+function resolveTrellisOpt(ctx: EvalContext): Record<string, unknown> {
+  const layout = (ctx.chart.layout ?? {}) as Record<string, unknown>
+  const opt: Record<string, unknown> = { ...layout }
+  let columns = opt.columns
+  if (columns && typeof columns === 'object' && 'signal' in (columns as Record<string, unknown>)) {
+    try {
+      const v = ctx.runtime.expr(String((columns as { signal: string }).signal))({}, ctx.signalParams)
+      columns = typeof v === 'number' ? v : undefined
+    } catch {
+      columns = undefined
+    }
+  }
+  if (typeof columns !== 'number' || !(columns > 0)) {
+    const colDom = ctx.datasets.get('column_domain')
+    columns = colDom && colDom.length ? colDom.length : 1
+  }
+  opt.columns = columns
+  // Vega-lite facet layout defaults (mirrors the compiled facet layout spec).
+  if (opt.padding == null) opt.padding = 20
+  if (opt.bounds == null) opt.bounds = 'full'
+  if (opt.align == null) opt.align = 'all'
+  if (opt.offset == null) opt.offset = { rowTitle: 10, columnTitle: 10 }
+  return opt
+}
+
+function isLeafItem(it: SceneItem): boolean {
+  return (it as SceneGroup).marktype === undefined && !Array.isArray((it as SceneGroup).items)
+}
+
+/**
+ * Row-header facet label (vega: the header scope's own titleLayout with
+ * orient left, frame group): the label anchors at
+ *   x = viewBounds.x1 - titleWidth - offset,  y = header height / 2
+ * with align center, baseline top, rotated -90. viewBounds is the header's
+ * content bounds (base rect + axis content) *excluding* the label.
+ */
+function positionRowHeaderLabel(header: SceneGroup, ctx: EvalContext): void {
+  const items = header.items ?? []
+  let label: SceneItem | null = null
+  for (const it of items) {
+    if (!isLeafItem(it as SceneItem)) continue
+    if ((it as SceneItem).text != null) label = it as SceneItem
+  }
+  if (!label) return
+  const b = new Bounds()
+  for (const it of items) {
+    if (it === label) continue
+    const child = it as SceneGroup
+    const bb = boundLeaf(new Bounds(), it as SceneItem)
+    if ((child as SceneGroup).role === 'axis') {
+      // vega measures axis marks in the axis-internal frame; our scene bakes
+      // the 0.5px axis delta into the leaves — shift it back out
+      bb.translate(-0.5, -0.5)
+    }
+    b.union(bb)
+  }
+  if (header.width || header.height) b.add(0, 0).add(header.width || 0, header.height || 0)
+  boundStrokeGroupBounds(b, header)
+  const x1 = b.empty() ? 0 : Math.min(0, b.x1)
+  label.x = x1 - GUIDE_LABEL_FONT_SIZE - FACET_TITLE_OFFSET
+  // vega anchors the label at the vertical midpoint of the header scope
+  let h = header.height
+  if (h == null) {
+    const cm = findCellMark(ctx)
+    h = readCellSize(cm!, ctx, 500, 500).height
+  }
+  label.y = h / 2
+  label.baseline = 'top'
+  ;(label as Record<string, unknown>).fontSize = GUIDE_LABEL_FONT_SIZE
+}
+
+/**
+ * Column-header facet label (orient top, frame group): x = width / 2,
+ * y = viewBounds.y1 - titleHeight - offset. Our column-header label renders
+ * at the equivalent alphabetic-baseline position; only the font size
+ * (guide-label 10px) must match vega for exact bounds.
+ */
+function positionColumnHeaderLabel(header: SceneGroup): void {
+  const items = header.items ?? []
+  let label: SceneItem | null = null
+  for (const it of items) {
+    if (!isLeafItem(it as SceneItem)) continue
+    if ((it as SceneItem).text != null) label = it as SceneItem
+  }
+  if (!label) return
+  ;(label as Record<string, unknown>).fontSize = GUIDE_LABEL_FONT_SIZE
+}
+
+/** Group-node stroke expansion (vega's boundStroke on the group item). */
+function boundStrokeGroupBounds(b: Bounds, group: SceneGroup): void {
+  const g = group as unknown as SceneItem
+  const rec = g as Record<string, unknown>
+  if (g.stroke && g.opacity !== 0 && g.strokeOpacity !== 0) {
+    const sw = g.strokeWidth != null ? +g.strokeWidth : 1
+    b.expand((rec.strokeCap === 'square' ? Math.SQRT2 : 1) * sw / 2)
   }
 }
 
@@ -3145,6 +3303,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     else if (orient === 'bottom') { domainLine.x = axisStart + 0.5; domainLine.x2 = axisEnd + 0.5; domainLine.y = ctx.height + 0.5; domainLine.y2 = ctx.height + 0.5 }
     else { domainLine.x = axisStart + 0.5; domainLine.x2 = axisEnd + 0.5; domainLine.y = 0.5; domainLine.y2 = 0.5 }
     domainLine.stroke = '#888'; domainLine.strokeWidth = 1
+    ;(domainLine as Record<string, unknown>)._domain = true
     items.push(domainLine)
   }
 
@@ -3197,7 +3356,12 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     marktype: 'group',
     role: 'axis',
     items,
-  }
+    // axis geometry for the vega-faithful bounds port (boundAxisGroup):
+    // the spine rect extends [0, range] along the axis line
+    ...(orient === 'left' || orient === 'right'
+      ? { axis: { orient, range: ctx.height } }
+      : { axis: { orient, range: ctx.width } }),
+  } as SceneGroup
 }
 
 function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[] {

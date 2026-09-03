@@ -116,7 +116,7 @@ The canonicalizer (`packages/conformance/src/normalize.ts`) is the correctness g
 
 ### Gap probes (`packages/conformance/probes/`)
 
-Areas that are **known-incomplete** are captured as feature probes under `probes/` and run via `pnpm probe`. A probe renders the same oracle diff as the corpus but is a *diagnostic, not a CI gate*: its failure documents a real gap, and when the gap is implemented the probe is promoted into `corpus/`. The current backlog: `contour` (density-blur float parity), `vl-facet-2d` (2-D facet grid axis orientation in the bottom-row cells), `vl-title-legend` (chart title anchored against a combined rotated-axis-title + legend layout).
+Areas that are **known-incomplete** are captured as feature probes under `probes/` and run via `pnpm probe`. A probe renders the same oracle diff as the corpus but is a *diagnostic, not a CI gate*: its failure documents a real gap, and when the gap is implemented the probe is promoted into `corpus/`. The backlog is currently empty: the former `contour`, `vl-facet-2d` and `vl-title-legend` probes were implemented and promoted into `corpus/`. Facet/trellis positioning runs the exact vega algorithms (`src/bounds.ts` + `src/trellis.ts`), so new facet gaps should show up as corpus diffs, not layout guesses.
 
 ## Known Limitations / Roadmap
 
@@ -147,7 +147,7 @@ pnpm typecheck
 # Build
 pnpm build
 
-# Conformance — 393-spec geometry diff against the real Vega oracle (the gate)
+# Conformance — 399-spec geometry diff against the real Vega oracle (the gate)
 pnpm conformance
 
 # Gap probes — diagnostic only, documents known-incomplete features

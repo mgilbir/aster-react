@@ -65,6 +65,8 @@ export interface CompiledChart {
   title?: CompiledTitle
   /** Cartographic projections referenced by geo marks / the geoshape transform. */
   projections?: CompiledProjection[]
+  /** Root-level trellis layout options (vega spec `layout`), when present. */
+  layout?: Record<string, unknown>
 }
 
 export interface CompiledTitle {

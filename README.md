@@ -4,7 +4,7 @@ A small TypeScript reimplementation of the Vega/Vega-Lite rendering stack on gra
 
 ## Status
 
-**Pre-alpha, M1 milestone.** The pipeline works end-to-end across a 393-spec conformance corpus verified against the real Vega renderer. Static spec coverage is broad; reactive/interactive behavior and a few advanced layout subsystems remain. Not for production use.
+**Pre-alpha, M1 milestone.** The pipeline works end-to-end across a 399-spec conformance corpus verified against the real Vega renderer. Static spec coverage is broad; reactive/interactive behavior and a few advanced layout subsystems remain. Not for production use.
 
 ## How It Works
 
@@ -32,7 +32,7 @@ Expressions (used in formulas, filters, and mark encodings) are parsed by `vega-
 pnpm install
 pnpm build
 pnpm typecheck
-pnpm conformance           # 393-spec corpus vs real-Vega oracle (the CI gate)
+pnpm conformance           # 399-spec corpus vs real-Vega oracle (the CI gate)
 pnpm probe                 # gap probes (diagnostic, NOT a gate): documents known gaps
 pnpm --filter @aster/benchmarks run budget
 pnpm bench                 # perf harness: aster vs react-vega vs vega-embed (needs build)
@@ -67,9 +67,9 @@ const svg = renderSpec(spec)
 
 ## Current Status / What Works
 
-**Conformance corpus: 396/396 passed.**
+**Conformance corpus: 399/399 passed.**
 
-The core pipeline (Vega spec → compile → evaluate → SVG) is verified against the real Vega renderer oracle on a 393-spec conformance corpus, spanning both raw Vega (`*.vg.json`) and Vega-Lite (`*.vl.json`, via `vega-lite.compile`) so both front-ends are held to the same geometry bar.
+The core pipeline (Vega spec → compile → evaluate → SVG) is verified against the real Vega renderer oracle on a 399-spec conformance corpus, spanning both raw Vega (`*.vg.json`) and Vega-Lite (`*.vl.json`, via `vega-lite.compile`) so both front-ends are held to the same geometry bar.
 
 > **Geo & contour are opt-in addons.** Cartographic projections and the `contour`
 > transform pull in `d3-geo` / `d3-contour` (~17 kB gzip), so they ship as a
@@ -96,13 +96,19 @@ The core pipeline (Vega spec → compile → evaluate → SVG) is verified again
 - **Transforms**: formula, filter, collect, bin, fold, flatten, impute, stack, aggregate, window, joinaggregate, extent, lookup, identifier, timeunit, kde, quantile, regression, loess, density, geoshape (with **d3-geo projections**: mercator/albers/equirectangular/…), pack/partition/treemap, voronoi, graticule, sequence, wordcloud.
 - **Expressions**: the full expression function surface — type checks/coercions, math, array, string (pad/truncate/split…), **date-time accessors** (year/quarter/week/utc…), color (rgb/hsl/lab/hcl/luminance/contrast), regexp, and scale/projection/data functions (`scale`, `invert`, `domain`, `range`, `bandwidth`, `bandspace`, `data`, `indata`). CSP-safe via `vega-interpreter` (no `new Function`).
 
+**Facet / trellis layout is a faithful port.** The exact vega-scenegraph
+bounds arithmetic (`Bounds`, `boundStroke`, text/rule/rect/group/path bounds —
+curve extrema and arc sampling included) and vega-view's trellis pass
+(`gridLayout`, `layoutHeaders`, `layoutTitle` with the floor/ceil margin
+aggregations) live in `packages/core/src/bounds.ts` and `trellis.ts`; facet
+charts position cells, headers, footers and titles from measured bounds with
+the same numbers vega computes.
+
 ### Gap probes
 
-Feature areas that are **known-incomplete** live in `packages/conformance/probes/` and run under `pnpm probe` (a diagnostic, **not** a CI gate). When a gap is implemented, its probe is promoted to `corpus/`. Remaining documented gaps:
-
-- `contour` — the transform + density/marching-squares run, but pixel-exact oracle parity needs vega's float sequence in the density blur.
-- `vl-facet-2d` — 2-D (row×column) facet grids: renders 129/129 records but the bottom-row cells' axis orientation still diverges.
-- `vl-title-legend` — chart title anchored against a combined layout (rotated axis title + legend) still drifts by a few px.
+The probe backlog is empty: every documented gap has been implemented and its
+probe promoted into `corpus/` (the probes directory is kept as the intake for
+future gaps; `pnpm probe` runs it and passes vacuously today).
 
 **What is NOT covered yet (beyond the probes above):**
 
