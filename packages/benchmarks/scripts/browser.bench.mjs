@@ -44,8 +44,12 @@ await build({
   jsx: 'automatic',
   logLevel: 'warning',
   alias: {
+    // exact paths so the addon subpaths (@aster/core/dom etc.) resolve
     '@aster/react': join(PKG_DIR, '..', 'react', 'dist', 'index.js'),
     '@aster/core': join(PKG_DIR, '..', 'core', 'dist', 'index.js'),
+    '@aster/core/dom': join(PKG_DIR, '..', 'core', 'dist', 'addon-dom.js'),
+    '@aster/core/geo': join(PKG_DIR, '..', 'core', 'dist', 'addon-geo.js'),
+    '@aster/core/transforms': join(PKG_DIR, '..', 'core', 'dist', 'addon-transforms.js'),
   },
 })
 
@@ -56,7 +60,12 @@ writeFileSync(
 <body><div id="stage"></div><script src="./bench.js"></script></body></html>`,
 )
 
-const browser = await chromium.launch({ headless: true })
+const browser = await chromium.launch({
+  headless: true,
+  // Container-safe: /dev/shm can be tiny where CI runs, and the JS heap of a
+  // 100k-point scene page needs more than Chromium's conservative default.
+  args: ['--disable-dev-shm-usage', '--js-flags=--max-old-space-size=4096'],
+})
 const page = await browser.newPage()
 page.on('pageerror', (e) => console.error('[page]', e.message))
 await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
