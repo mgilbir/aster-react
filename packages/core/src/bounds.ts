@@ -657,7 +657,21 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
     const leaf = it as SceneItem
     if ((leaf as Record<string, unknown>)._domain) continue
     const bb = new Bounds()
-    boundLeaf(bb, leaf)
+    // Axis labels render via renderLeaf, which emits the item `y` as the glyph
+    // baseline with no offset, so the guide builders bake vega's baseline
+    // shift into `y`. boundLeaf only undoes that bake for middle-baseline
+    // leaves (left/right axes); bottom-axis labels (fontSize 10, baseline top)
+    // need the same unbake or their extent lands 8px too low. Vega boxes text
+    // around the *item* position, so subtract the baked baseline offset here.
+    const fsLeaf = leaf.fontSize as number | undefined
+    if (orient === 'bottom' && leaf.text != null && (leaf as SceneGroup).marktype === undefined && fsLeaf === 10 && leaf.baseline === 'top') {
+      const savedY = leaf.y
+      ;(leaf as Record<string, unknown>).y = (leaf.y ?? 0) - baselineOffset(leaf)
+      boundText(bb, leaf)
+      ;(leaf as Record<string, unknown>).y = savedY
+    } else {
+      boundLeaf(bb, leaf)
+    }
     bb.translate(-0.5, -0.5)
     b.union(bb)
     tickLabelBounds.union(bb)
