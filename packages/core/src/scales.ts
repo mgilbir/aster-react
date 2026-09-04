@@ -291,6 +291,7 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
     }
     if ('data' in domain) {
       const { data, field, fields } = domain as { data: string; field?: string; fields?: string[] }
+      const domainDataRows = ctx.dataRows ? ctx.dataRows(data) : undefined
       const fieldsToCollect = fields ?? (field ? [field] : [])
       const all: unknown[] = []
       for (const f of fieldsToCollect) {
@@ -312,7 +313,13 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
         if (!finite.length) return []
         return [Math.min(...finite), Math.max(...finite)]
       }
-      let vals = distinctValues(all)
+      // `all` is freshly collected per call via ctx.dataField; cache the
+      // distinct pass by the underlying rows identity when available.
+      // Single-field domains only: multi-field collection stays uncached.
+      const vals = (domainDataRows && fields == null && field != null
+        ? distinctValuesCached(domainDataRows, field, (rws, fld) =>
+            (ctx.dataField ?? ((_d: string, _f: string) => []))(data, fld))
+        : distinctValues(all)).slice()
       const sortSpec = (domain as { sort?: unknown }).sort
       if (sortSpec === true || sortSpec === 'ascending') {
         vals.sort((a, b) => (a as string) < (b as string) ? -1 : (a as string) > (b as string) ? 1 : 0)
@@ -358,6 +365,26 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
     return Array.isArray(v) ? (v as unknown[]) : [v]
   }
   return []
+}
+
+// Per-dataset-identity cache for ordinal domain collection. The same (rows,
+// field) pair is collected multiple times per evaluate (scale domain, axis
+// build, legend); the rows array identity changes whenever transforms rerun,
+// so a WeakMap is naturally invalidated between evaluates.
+const distinctCache = new WeakMap<unknown[], Map<string, unknown[]>>()
+
+function distinctValuesCached(rows: unknown[], field: string, collect: (rows: unknown[], field: string) => unknown[]): unknown[] {
+  let byField = distinctCache.get(rows)
+  if (!byField) {
+    byField = new Map()
+    distinctCache.set(rows, byField)
+  }
+  let vals = byField.get(field)
+  if (!vals) {
+    vals = distinctValues(collect(rows, field))
+    byField.set(field, vals)
+  }
+  return vals
 }
 
 function distinctValues(values: unknown[]): unknown[] {

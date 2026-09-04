@@ -3,7 +3,7 @@
  * renderer-neutral SceneRoot. Static execution mode: everything is evaluated
  * eagerly per call; the caller re-evaluates when inputs change.
  */
-import { compileExpr, type ExpressionRuntime } from './expression.js'
+import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { applyTransforms, sortRows, getField, type Row, geoJSONPath } from './transform.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
 import { geoRegistry, requireGeo } from './registry.js'
@@ -84,10 +84,23 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
   const datasets = new Map<string, Row[]>()
   const scales = new Map<string, Scale>()
   const scaleTypes = new Map<string, string>()
+  // Expression compile cache: compileExpr parses an AST per call, and the
+  // encode path calls expr() per row (conditional tests, signal values).
+  // The compiled closure reads scales/datasets lazily at call time, so one
+  // cache per runtime (per evaluateChart) is sound and bounded by the number
+  // of distinct expression strings in the spec.
+  const exprCache = new Map<string, CompiledExpr>()
   const runtime: ExpressionRuntime = {
     scale: (name) => scales.get(name),
     data: (name) => datasets.get(name),
-    expr: (expr) => compileExpr(expr, runtime),
+    expr: (expr) => {
+      let compiled = exprCache.get(expr)
+      if (!compiled) {
+        compiled = compileExpr(expr, runtime)
+        exprCache.set(expr, compiled)
+      }
+      return compiled
+    },
   }
 
   const defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }> = []
@@ -2285,18 +2298,50 @@ function applyTextPolar(items: SceneItem[]): void {
   }
 }
 
-function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
-  // Pass 1: resolve all non-signal values and accumulate them.
-  const ctxItem: Record<string, unknown> = {}
-  const signalSpecs: Array<{ key: string; spec: EncodeValue | EncodeValue[] }> = []
+interface EncodePlan {
+  /** Non-signal keys, in spec order. */
+  plainKeys: string[]
+  /** Signal-valued keys (excluding `defined`), in spec order. */
+  signalKeys: string[]
+  /** The `defined` signal spec, resolved before datum mutation. */
+  definedSpec: EncodeValue | EncodeValue[] | undefined
+}
 
+// Per-encode-object plan. The key scan + signal/plain partition is invariant
+// across the rows of a mark; hoisting it removes an Object.keys allocation and
+// an array partition per row (10k rows -> 1 scan).
+const encodePlanCache = new WeakMap<object, EncodePlan>()
+
+function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): EncodePlan {
+  let plan = encodePlanCache.get(encode)
+  if (plan) return plan
+  const plainKeys: string[] = []
+  const signalKeys: string[] = []
+  let definedSpec: EncodeValue | EncodeValue[] | undefined
   for (const key of Object.keys(encode)) {
     const spec = encode[key]
     if (typeof spec === 'object' && spec != null && 'signal' in spec) {
-      signalSpecs.push({ key, spec })
+      if (key === 'defined') {
+        definedSpec = spec
+        continue
+      }
+      signalKeys.push(key)
       continue
     }
-    const resolved = resolveEncodeProperty(spec, datum, ctx)
+    plainKeys.push(key)
+  }
+  plan = { plainKeys, signalKeys, definedSpec }
+  encodePlanCache.set(encode, plan)
+  return plan
+}
+
+function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
+  const plan = encodePlan(encode)
+
+  // Pass 1: resolve all non-signal values and accumulate them.
+  const ctxItem: Record<string, unknown> = {}
+  for (const key of plan.plainKeys) {
+    const resolved = resolveEncodeProperty(encode[key], datum, ctx)
     if (resolved !== undefined) {
       ctxItem[key] = resolved
     }
@@ -2306,12 +2351,9 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
   // `defined` against the original data tuple (before scale resolution),
   // so expressions like `isValid(datum["y"])` must see the raw data
   // value (null), not the scaled pixel position.
-  const definedSpecIdx = signalSpecs.findIndex(s => s.key === 'defined')
   let definedValue: unknown
-  if (definedSpecIdx !== -1) {
-    const definedSpec = signalSpecs[definedSpecIdx]!
-    definedValue = resolveEncodeProperty(definedSpec.spec, datum, ctx)
-    signalSpecs.splice(definedSpecIdx, 1)
+  if (plan.definedSpec !== undefined) {
+    definedValue = resolveEncodeProperty(plan.definedSpec, datum, ctx)
   }
 
   // Pass 2: resolve signal-value pairs. datum gets the resolved values appended.
@@ -2324,8 +2366,8 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
   if (definedValue !== undefined) {
     ;(item as unknown as Record<string, unknown>)['defined'] = definedValue
   }
-  for (const { key, spec } of signalSpecs) {
-    const resolved = resolveEncodeProperty(spec, datum, ctx)
+  for (const key of plan.signalKeys) {
+    const resolved = resolveEncodeProperty(encode[key], datum, ctx)
     if (resolved !== undefined) {
       ;(item as unknown as Record<string, unknown>)[key] = resolved
     }
