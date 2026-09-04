@@ -373,22 +373,3 @@ function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Reco
   }
   return out
 }
-
-/** Resolve a vega signal-typed value against known static signals. */
-export function resolveEncodeValue(
-  value: EncodeValue,
-  signals: Record<string, unknown>,
-): unknown {
-  if (value && typeof value === 'object') {
-    if ('signal' in value && value.signal !== undefined) {
-      const name = value.signal as string
-      const resolved = signals[name]
-      if (resolved === undefined) {
-        throw new Error(`[aster] unresolved signal "${name}" (reactive signals not yet supported)`)
-      }
-      return resolved
-    }
-    if ('value' in value) return value.value
-  }
-  return value
-}
