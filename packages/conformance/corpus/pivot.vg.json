@@ -1,0 +1,46 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 300,
+  "height": 200,
+  "padding": 5,
+  "autosize": "none",
+  "data": [
+    {
+      "name": "table",
+      "values": [
+        { "g": "a", "cat": "x", "v": 5 },
+        { "g": "a", "cat": "y", "v": 3 },
+        { "g": "b", "cat": "x", "v": 7 },
+        { "g": "b", "cat": "y", "v": 1 }
+      ]
+    },
+    {
+      "name": "pivot",
+      "source": "table",
+      "transform": [{ "type": "pivot", "field": "cat", "value": "v", "groupby": ["g"], "op": "sum" }]
+    }
+  ],
+  "scales": [
+    { "name": "x", "type": "band", "domain": { "data": "pivot", "field": "g" }, "range": "width", "paddingOuter": 0.1, "paddingInner": 0.2 },
+    { "name": "y", "type": "linear", "domain": { "data": "pivot", "field": "x" }, "range": "height", "zero": true, "nice": true }
+  ],
+  "axes": [
+    { "orient": "bottom", "scale": "x" },
+    { "orient": "left", "scale": "y" }
+  ],
+  "marks": [
+    {
+      "type": "rect",
+      "from": { "data": "pivot" },
+      "encode": {
+        "update": {
+          "x": { "scale": "x", "field": "g" },
+          "width": { "scale": "x", "band": 0.5 },
+          "y": { "scale": "y", "field": "x" },
+          "y2": { "scale": "y", "value": 0 },
+          "fill": { "value": "steelblue" }
+        }
+      }
+    }
+  ]
+}

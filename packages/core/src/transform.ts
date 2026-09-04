@@ -184,6 +184,8 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
       return timeunitRows(rows, t as Record<string, unknown>)
     case 'identifier':
       return rows
+    case 'pivot':
+      return pivotRows(rows, t as Record<string, unknown>)
     default:
       throw new Error(`[aster] unsupported transform type "${(t as { type: string }).type}"`)
   }
@@ -506,6 +508,49 @@ function aggregateRows(rows: Row[], t: Extract<CompiledTransform, { type: 'aggre
   const ops = t.ops ?? []
   const as = t.as ?? []
   return groupRows(rows, groupby).map((g) => aggregateGroup(g, groupby, fields, ops, as))
+}
+
+/**
+ * Pivot: aggregate selected value fields to become new fields, one per unique
+ * pivot-field value (vga's Pivot transform is an aggregate over an accessor that
+ * yields `value(d)` when `key(d)===k` and NaN otherwise, so non-matching rows are
+ * skipped). Pivot keys are the sorted unique values of `field` (optionally capped
+ * by `limit`); the output has the `groupby` fields plus one field per key.
+ */
+function pivotRows(rows: Row[], t: Record<string, unknown>): Row[] {
+  const keyField = t.field as string
+  const valueField = t.value as string | undefined
+  const op = (t.op as string | undefined) || 'sum'
+  const groupby = (t.groupby as string[] | undefined) ?? []
+  const limit = (t.limit as number | undefined) || 0
+
+  const keySet = new Set<unknown>()
+  for (const r of rows) keySet.add(r[keyField])
+  const keys = [...keySet].filter((k) => k != null)
+  keys.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+  const capped = limit ? keys.slice(0, limit) : keys
+  if (!capped.length) return []
+  const as = capped.map((k) => String(k))
+
+  const groups = groupby.length ? groupRows(rows, groupby) : rows.length ? [rows] : []
+  const out: Row[] = []
+  for (const g of groups) {
+    const row: Row = {}
+    for (const k of groupby) row[k] = g[0]?.[k]
+    capped.forEach((k, i) => {
+      if (op === 'count') {
+        // Vega's `count` op pivots on the number of matching rows per cell.
+        row[as[i]!] = valueField == null ? g.length : g.filter((r) => r[keyField] === k).length
+      } else {
+        const fn = AGGR[op]
+        if (!fn) throw new Error(`[aster] unsupported aggregate op "${op}"`)
+        const subset = valueField == null ? [] : g.filter((r) => r[keyField] === k)
+        row[as[i]!] = fn(valueField == null ? [] : fieldValues(subset, valueField), subset)
+      }
+    })
+    out.push(row)
+  }
+  return out
 }
 
 function joinAggregateRows(rows: Row[], t: Extract<CompiledTransform, { type: 'joinaggregate' }>): Row[] {

@@ -59,6 +59,24 @@ describe('transform', () => {
       expect(bRow!.sum).toBe(30)
     })
 
+    it('pivot aggregates a value field into per-key columns', () => {
+      const rows = [
+        { g: 'a', cat: 'x', v: 5 },
+        { g: 'a', cat: 'y', v: 3 },
+        { g: 'b', cat: 'x', v: 7 },
+        { g: 'b', cat: 'y', v: 1 },
+      ]
+      const result = applyTransforms(rows, [{ type: 'pivot', field: 'cat', value: 'v', groupby: ['g'], op: 'sum' }], ctx)
+      expect(result).toHaveLength(2)
+      const a = result.find((r) => r.g === 'a')!
+      const b = result.find((r) => r.g === 'b')!
+      // pivot keys sort ascending: x before y
+      expect(a.x).toBe(5)
+      expect(a.y).toBe(3)
+      expect(b.x).toBe(7)
+      expect(b.y).toBe(1)
+    })
+
     it('window running sum in sort order', () => {
       const rows = [
         { t: 3, v: 30 },
