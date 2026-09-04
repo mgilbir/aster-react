@@ -1,0 +1,36 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 200,
+  "height": 200,
+  "padding": 5,
+  "data": [
+    {
+      "name": "table",
+      "url": "data:text/csv,category,value%0AA,28%0AB,55%0AC,43%0AD,91",
+      "format": { "type": "csv" }
+    }
+  ],
+  "scales": [
+    { "name": "x", "type": "band", "domain": { "data": "table", "field": "category" }, "range": "width", "padding": 0.05 },
+    { "name": "y", "type": "linear", "domain": { "data": "table", "field": "value" }, "range": "height", "nice": true }
+  ],
+  "axes": [
+    { "orient": "bottom", "scale": "x" },
+    { "orient": "left", "scale": "y" }
+  ],
+  "marks": [
+    {
+      "type": "rect",
+      "from": { "data": "table" },
+      "encode": {
+        "update": {
+          "x": { "scale": "x", "field": "category" },
+          "width": { "scale": "x", "band": 1 },
+          "y": { "scale": "y", "field": "value" },
+          "y2": { "scale": "y", "value": 0 },
+          "fill": { "value": "#4c78a8" }
+        }
+      }
+    }
+  ]
+}

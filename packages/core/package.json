@@ -21,6 +21,10 @@
     "./dom": {
       "types": "./dist/addon-dom.d.ts",
       "default": "./dist/addon-dom.js"
+    },
+    "./load": {
+      "types": "./dist/addon-load.d.ts",
+      "default": "./dist/addon-load.js"
     }
   },
   "scripts": {
@@ -31,12 +35,14 @@
     "d3-array": "^3.2.4",
     "d3-color": "^3.1.0",
     "d3-contour": "^4.0.2",
+    "d3-dsv": "^3.0.1",
     "d3-format": "^3.1.0",
     "d3-geo": "^3.1.1",
     "d3-scale": "^4.0.2",
     "d3-shape": "^3.2.0",
     "d3-time": "^3.1.0",
     "d3-time-format": "^4.1.0",
+    "topojson-client": "^3.1.0",
     "vega-expression": "^6.2.1",
     "vega-format": "^2.1.2",
     "vega-interpreter": "^2.3.1",

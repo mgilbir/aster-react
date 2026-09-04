@@ -309,9 +309,14 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
           const nums = all.filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
           if (nums.length) return [Math.min(...nums), Math.max(...nums)]
         }
-        const finite = all.filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
-        if (!finite.length) return []
-        return [Math.min(...finite), Math.max(...finite)]
+        // d3-scale coerces the domain through +d (strings like "28" become
+        // numbers); vega feeds it whatever the data holds. Keep strings that
+        // coerce, drop the rest — same observable behavior as d3.
+        const coercible = all.filter(
+          (v) => (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(+v)),
+        ) as number[]
+        if (!coercible.length) return []
+        return [Math.min(...coercible), Math.max(...coercible)]
       }
       // `all` is freshly collected per call via ctx.dataField; cache the
       // distinct pass by the underlying rows identity when available.

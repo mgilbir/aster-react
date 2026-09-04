@@ -57,3 +57,18 @@ export function requireTransform(type: string): TransformFn {
   if (!fn) throw new Error(`[aster] this spec uses the "${type}" transform; load the addon first: await import("@aster/core/transforms")`)
   return fn
 }
+
+export type DataFormatReader = (data: unknown, format: Record<string, unknown>) => Record<string, unknown>[]
+
+/**
+ * Registry for text-format data readers (csv/tsv/dsv/topojson). The core
+ * ships the JSON reader and the `format.parse` type coercion; text formats
+ * and URL fetching are registered by the `@aster/core/load` addon.
+ */
+export const dataFormatRegistry = new Map<string, DataFormatReader>()
+
+export function requireDataFormat(type: string): DataFormatReader {
+  const reader = dataFormatRegistry.get(type)
+  if (!reader) throw new Error(`[aster] this spec reads "${type}" data; load the addon first: await import("@aster/core/load")`)
+  return reader
+}

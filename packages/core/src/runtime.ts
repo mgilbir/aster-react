@@ -4,6 +4,7 @@
  * eagerly per call; the caller re-evaluates when inputs change.
  */
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
+import { readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, sortRows, getField, type Row, geoJSONPath } from './transform.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
 import { geoRegistry, requireGeo } from './registry.js'
@@ -260,10 +261,24 @@ function computeGuidePadding(
         if (s.text != null) {
           const sx = s.x ?? 0
           const sy = s.y ?? 0
-          minX = Math.min(minX, sx)
-          maxX = Math.max(maxX, sx)
-          minY = Math.min(minY, sy)
-          maxY = Math.max(maxY, sy)
+          // Vega's autosize accounts for the full rendered text box, not the
+          // anchor: width from the estimate, height from the font size, per
+          // align/baseline (bounds.text == svg text bound). Axis guide labels
+          // default to the guide-label font size (10), matching vega config.
+          const fs = (s as Record<string, unknown>).fontSize as number | undefined ?? 10
+          const w = estimateTextWidth(String(s.text), fs)
+          const align = s.align
+          const x1 = align === 'center' ? sx - w / 2 : align === 'right' ? sx - w : sx
+          const x2 = align === 'center' ? sx + w / 2 : align === 'right' ? sx : sx + w
+          let y1: number
+          let y2: number
+          if (s.baseline === 'top') { y1 = sy; y2 = sy + fs }
+          else if (s.baseline === 'middle') { y1 = sy - fs / 2; y2 = sy + fs / 2 }
+          else { y1 = sy - fs; y2 = sy }
+          minX = Math.min(minX, x1)
+          maxX = Math.max(maxX, x2)
+          minY = Math.min(minY, y1)
+          maxY = Math.max(maxY, y2)
         }
       }
     } else if (group.role === 'legend') {
@@ -650,9 +665,23 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
     let rows: Row[]
     if ('source' in d && (d as CompiledChart['data'][number] & { source: string }).source) {
       const src = (d as CompiledChart['data'][number] & { source: string }).source
-      rows = build(src, seen).map((r) => ({ ...r }))
-    } else if (d.values) {
-      rows = (inputData[name] as Row[]) ?? (d.values as Row[]).map((r) => ({ ...r }))
+      const srcDef = ctx.chart.data.find((sd) => sd.name === src)
+      if ((d as { format?: DataFormatSpec }).format && srcDef?.values != null) {
+        // Vega applies a derived dataset's `format` when (re-)parsing its
+        // source's raw values (e.g. source = inline Topology, format =
+        // topojson feature extraction).
+        rows = readData(srcDef.values, (d as { format?: DataFormatSpec }).format)
+      } else {
+        rows = build(src, seen).map((r) => ({ ...r }))
+      }
+    } else if (d.values != null) {
+      if (inputData[name]) {
+        rows = readData(inputData[name], d.format)
+      } else {
+        // vega-loader read semantics: object arrays pass through format.parse
+        // coercion; string values are parsed by the registered reader.
+        rows = readData(d.values, d.format)
+      }
     } else {
       rows = ((inputData[name] as Row[]) ?? []).map((r) => ({ ...r }))
     }

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 200,
+  "height": 200,
+  "padding": 5,
+  "data": [
+    {
+      "name": "table",
+      "values": [{ "x": "3", "y": "2024-01-01" }, { "x": "9", "y": "2024-06-01" }, { "x": "5", "y": "2024-12-01" }],
+      "format": { "parse": { "x": "number", "y": "date" } }
+    }
+  ],
+  "scales": [
+    { "name": "x", "type": "linear", "domain": { "data": "table", "field": "x" }, "range": "width" },
+    { "name": "y", "type": "time", "domain": { "data": "table", "field": "y" }, "range": "height" }
+  ],
+  "marks": [
+    {
+      "type": "symbol",
+      "from": { "data": "table" },
+      "encode": {
+        "update": {
+          "x": { "scale": "x", "field": "x" },
+          "y": { "scale": "y", "field": "y" },
+          "size": { "value": 60 },
+          "fill": { "value": "#4c78a8" }
+        }
+      }
+    }
+  ]
+}
