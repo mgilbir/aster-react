@@ -60,6 +60,8 @@ for (const entry of ENTRIES) {
     alias: {
       '@aster/react': join(MONOREPO_ROOT, 'packages', 'react', 'dist', 'index.js'),
       '@aster/core': join(MONOREPO_ROOT, 'packages', 'core', 'dist', 'index.js'),
+      '@aster/core/dom': join(MONOREPO_ROOT, 'packages', 'core', 'dist', 'addon-dom.js'),
+      '@aster/core/signals': join(MONOREPO_ROOT, 'packages', 'core', 'dist', 'signals.js'),
     },
   })
   const buf = readFileSync(outPath)

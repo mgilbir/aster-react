@@ -49,6 +49,8 @@ await build({
     '@aster/core': join(PKG_DIR, '..', 'core', 'dist', 'index.js'),
     '@aster/core/dom': join(PKG_DIR, '..', 'core', 'dist', 'addon-dom.js'),
     '@aster/core/geo': join(PKG_DIR, '..', 'core', 'dist', 'addon-geo.js'),
+    '@aster/core/signals': join(PKG_DIR, '..', 'core', 'dist', 'signals.js'),
+    '@aster/core/load': join(PKG_DIR, '..', 'core', 'dist', 'addon-load.js'),
     '@aster/core/transforms': join(PKG_DIR, '..', 'core', 'dist', 'addon-transforms.js'),
   },
 })
