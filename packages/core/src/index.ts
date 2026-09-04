@@ -33,6 +33,9 @@ export { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expres
 export { buildScale, type Scale } from './scales.js'
 export { applyTransforms, sortRows, type Row } from './transform.js'
 export { geoRegistry, transformRegistry, requireTransform, type GeoRegistry, type ContourFeature, type TransformFn } from './registry.js'
+// The event-driven signal loop (`@aster/core/signals`: bindSceneSignals etc.)
+// ships as an opt-in addon like the DOM patcher; hosts using signal.on streams
+// import it explicitly.
 // Geo projections (`@aster/core/geo`), the rare-layout transforms
 // (`@aster/core/transforms`: kde/quantile/regression/loess, pack/partition/
 // treemap, wordcloud, voronoi) and URL/text-format data loading

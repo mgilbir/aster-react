@@ -84,6 +84,11 @@ function syncValues(chart: CompiledChart, spec: VgSpec): void {
 export interface ChartSession {
   /** Evaluate `spec` + `input`, returning the cached scene when nothing changed. */
   evaluate(spec: VgSpec, input?: RuntimeInput): SceneRoot
+  /**
+   * Metadata for the last evaluation: the compiled chart (with signalDefs for
+   * the event loop) and the scene. Null before the first evaluate.
+   */
+  last: () => { chart: CompiledChart; scene: SceneRoot } | null
 }
 
 export function createChartSession(): ChartSession {
@@ -119,5 +124,6 @@ export function createChartSession(): ChartSession {
       lastKey = key
       return lastScene
     },
+    last: () => (lastChart && lastScene ? { chart: lastChart, scene: lastScene } : null),
   }
 }

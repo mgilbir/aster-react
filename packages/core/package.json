@@ -25,6 +25,10 @@
     "./load": {
       "types": "./dist/addon-load.d.ts",
       "default": "./dist/addon-load.js"
+    },
+    "./signals": {
+      "types": "./dist/signals.d.ts",
+      "default": "./dist/signals.js"
     }
   },
   "scripts": {

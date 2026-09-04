@@ -393,6 +393,10 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
     padding: ctx.chart.autosize === 'none' ? ctx.chart.padding : padding,
     items,
   }
+  // Event-loop wiring (non-serialized internals)
+  ;(scene as unknown as { runtime?: unknown }).runtime = ctx.runtime
+  ;(scene as unknown as { signalParams?: Record<string, unknown> }).signalParams = ctx.signalParams
+  ;(scene as unknown as { compiled?: unknown }).compiled = ctx.chart
   if (ctx._defs.length) scene.defs = ctx._defs
   return scene
 }
@@ -838,23 +842,18 @@ function evaluateMark(
   // Text marks encoded in polar coordinates (`radius` + `theta`, e.g. pie
   // labels): vega's text renderer offsets the anchor by
   // `radius * (cos(theta - π/2), sin(theta - π/2))` from the item's x/y.
-  if (mark.type === 'line' || mark.type === 'area') {
-    // Vega's mark defaults: line {stroke: '#4c78a8', strokeWidth: 2},
-    // area {fill: '#4c78a8'} — apply when the encode leaves them out.
+  // Vega's mark defaults (vega.js defaults()): line {strokeWidth: 2},
+  // area {fill: '#4c78a8'}, text {fill: '#000'} — applied when the encode
+  // leaves the property unspecified.
+  if (mark.type === 'line' || mark.type === 'area' || mark.type === 'text') {
+    const fill = mark.type === 'text' ? '#000' : mark.type === 'area' ? '#4c78a8' : undefined
     for (const it of items) {
       const rec = it as unknown as Record<string, unknown>
+      if (fill !== undefined && rec.fill === undefined) rec.fill = fill
       if (mark.type === 'line' && rec.strokeWidth === undefined) rec.strokeWidth = 2
-      if (mark.type === 'area' && rec.fill === undefined) rec.fill = '#4c78a8'
     }
   }
   if (mark.type === 'text') {
-    // Vega's mark defaults give text marks fill #000 when the encode leaves
-    // it unspecified (vega.js defaults(): text: {fill: '#000'}).
-    for (const it of items) {
-      if ((it as Record<string, unknown>).fill === undefined) {
-        ;(it as unknown as Record<string, unknown>).fill = '#000'
-      }
-    }
     applyTextPolar(items)
   }
 

@@ -91,8 +91,24 @@ export interface CompiledTitle {
 export interface CompiledSignalDef {
   name: string
   value?: unknown
-  /** Static (`update`) expression; event-driven `on` handlers are ignored. */
+  /** Static (`update`) expression, resolved to a fixed point. */
   update?: string
+  /** Event-driven handlers (`signal.on` streams), bound by the host. */
+  on?: SignalOnDef[]
+}
+
+/** One `signal.on` entry (vega SignalStream spec subset). */
+export interface SignalOnDef {
+  /** Event selector: 'mousemove', 'click', 'wheel', or a view-style string. */
+  events: string
+  /** Update expression; `event`, `datum` and signal refs are in scope. */
+  update?: string
+  /** Optional: only fire when a specific mark/datum is targeted. */
+  between?: unknown[]
+  throttle?: number
+  debounce?: number
+  consume?: boolean
+  force?: boolean
 }
 
 export interface CompiledData {
@@ -279,6 +295,10 @@ export interface EncodeConditional {
 export interface SceneRoot {
   width: number
   height: number
+  /** @internal The expression runtime for this evaluation (event-loop wiring). */
+  runtime?: unknown
+  /** @internal The compiled chart for this evaluation. */
+  compiled?: unknown
   background?: string | null
   frameStroke?: string
   padding?: { top: number; right: number; bottom: number; left: number }

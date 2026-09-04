@@ -43,7 +43,7 @@ export interface ExpressionRuntime {
   expr: (expr: string) => CompiledExpr
 }
 
-export type CompiledExpr = (datum: unknown, params?: Record<string, unknown>) => unknown
+export type CompiledExpr = (datum: unknown, params?: Record<string, unknown>, event?: unknown) => unknown
 
 const L = locale(defaultLocale)
 
@@ -358,12 +358,21 @@ export function compileExpr(expr: string, runtime: ExpressionRuntime): CompiledE
   const ast = parseExpression(expr)
   const functions = createFunctionContext(runtime)
   const evalParam = expressionInterpreter.parameter({ functions }, { ast })
-  return (datum, params) => {
+  const evalHandler = expressionInterpreter.handler({ functions }, { ast })
+  const compiled = (datum: unknown, params: unknown, event?: unknown) => {
     // Signal values are exposed to expressions as $-prefixed params (vega convention).
     const p: Record<string, unknown> = {}
     if (params) {
-      for (const key of Object.keys(params)) p[`$${key}`] = params[key]
+      for (const key of Object.keys(params as Record<string, unknown>)) p[`$${key}`] = (params as Record<string, unknown>)[key]
     }
-    return evalParam(datum, p)
+    // vega-interpreter's handler arity: (params, event) with
+    // datum = event.item.datum — our event facade carries both.
+    if (event != null) {
+      const h = evalHandler as unknown as (p: Record<string, unknown> | undefined, e: unknown) => unknown
+      return h(p, event)
+    }
+    const e2 = evalParam as unknown as (d: unknown, p: Record<string, unknown> | undefined) => unknown
+    return e2(datum, p)
   }
+  return compiled as CompiledExpr
 }

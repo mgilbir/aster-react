@@ -12,6 +12,7 @@ import type {
   CompiledProjection,
   CompiledScale,
   CompiledSignalDef,
+  SignalOnDef,
   CompiledTitle,
   CompiledTransform,
   EncodeValue,
@@ -174,6 +175,17 @@ function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSi
       // the static initial value when there is no declared value.
       const first = (s.on as Array<Record<string, unknown>>).find((o) => typeof o?.update === 'string')
       if (value === undefined && first) def.update = first.update as string
+      // Keep the full event-stream spec: the host binds these via
+      // bindSignalEvents (signals.ts) to drive the event loop.
+      const on = (s.on as SignalOnDef[]).map((o) => ({
+        events: o.events,
+        ...(typeof o.update === 'string' ? { update: o.update } : {}),
+        ...(o.between != null ? { between: o.between } : {}),
+        ...(o.throttle != null ? { throttle: o.throttle } : {}),
+        ...(o.debounce != null ? { debounce: o.debounce } : {}),
+        ...(o.consume != null ? { consume: o.consume } : {}),
+      })) as SignalOnDef[]
+      def.on = on
     }
     out.push(def)
   }

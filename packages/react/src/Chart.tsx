@@ -9,6 +9,7 @@ import {
 // string-mode host never bundles it, while <Chart> (which supports the
 // `incremental` path) pulls it in explicitly.
 import { createChartSession, patchSceneDom, renderSceneToDomElement } from '@aster/core/dom'
+import { bindSceneSignals, stampDatumAttrs, type SignalBinding } from '@aster/core/signals'
 import { dragToDataInterval, selectionToPixels, type SelectionInterval } from './interaction.js'
 
 export interface ChartProps {
@@ -30,6 +31,17 @@ export interface ChartProps {
   signals?: Record<string, unknown>
   onSelect?: (interval: SelectionInterval | null) => void
   brush?: SelectionInterval | null
+  /**
+   * Event-driven signals (vega-react's `signalListeners` convention): handlers
+   * called when a signal changes, whether driven by the spec's `signal.on`
+   * DOM event streams or by the imperative path. The chart re-renders with
+   * the updated signal values after each event.
+   */
+  signalListeners?: Record<string, (name: string, value: unknown) => void>
+  /** Internal: shared listeners (the event loop drives these). */
+  onSignal?: (name: string, value: unknown) => void
+  /** Disable the spec-driven event loop (defaults to on when the spec has signal.on streams). */
+  interactive?: boolean
 }
 
 export function Chart({
@@ -44,6 +56,9 @@ export function Chart({
   onSelect,
   brush,
   incremental,
+  signalListeners,
+  onSignal,
+  interactive = true,
 }: ChartProps) {
   const containerRef = React.useRef<HTMLDivElement>(null)
   const [measured, setMeasured] = React.useState<{ width: number; height: number }>({
@@ -100,8 +115,35 @@ export function Chart({
   }, [incremental, scene])
 
   const svgHostRef = React.useRef<HTMLDivElement>(null)
+  // Event-driven signals (vega's event loop): bind the spec's `signal.on`
+  // streams to the rendered svg; each event updates the signal store, and the
+  // chart re-renders with the updated values via `eventSignals`.
+  const signalBindingRef = React.useRef<SignalBinding | null>(null)
+  const [eventSignals, setEventSignals] = React.useState<Record<string, unknown>>({})
+  React.useLayoutEffect(() => {
+    if (!interactive || !scene) return
+    const host = svgHostRef.current
+    const svg = (host?.firstElementChild as SVGSVGElement | null) ?? null
+    if (!svg) return
+    const hasStreams = (scene as unknown as { compiled?: { signalDefs?: Array<{ on?: unknown[] }> } }).compiled?.signalDefs?.some((d) => d.on?.length) ?? false
+    if (!hasStreams && !signalListeners && !onSignal) return
+    signalBindingRef.current?.detach()
+    stampDatumAttrs(scene.items)
+    signalBindingRef.current = bindSceneSignals(svg, scene, { ...signals, ...eventSignals }, {
+      onSignal: (name, value, all) => {
+        setEventSignals((prev) => ({ ...prev, ...all }))
+        signalListeners?.[name]?.(name, value)
+        onSignal?.(name, value)
+      },
+    })
+    return () => {
+      signalBindingRef.current?.detach()
+      signalBindingRef.current = null
+    }
+  })
+
   // Incremental updates: create the <svg> once, then patch changed attributes
-  // in place instead of re-parsing the whole markup every render.
+  // in place instead of re-serializing and re-parsing the whole markup every render.
   React.useLayoutEffect(() => {
     if (!incremental || !scene) return
     const host = svgHostRef.current

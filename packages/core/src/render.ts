@@ -175,7 +175,13 @@ function isGroup(item: SceneItem): item is SceneGroup {
 }
 
 /** Render an anchor leaf shape (path, symbol, text, line). */
+function dataDatumAttr(it: SceneItem): string {
+  const v = (it as unknown as { dataDatum?: string }).dataDatum
+  return v ? ` data-datum="${esc(v)}"` : ''
+}
+
 function renderLeaf(it: SceneItem): string {
+  const dd = dataDatumAttr(it)
   // Path items
   if (it.path != null) {
     // Apply the item's x/y as a translate so legend/entry paths (whose `d`
@@ -184,14 +190,14 @@ function renderLeaf(it: SceneItem): string {
     const tx = num(it.x ?? 0)
     const ty = num(it.y ?? 0)
     const transform = (tx !== '0' || ty !== '0') ? ` transform="translate(${tx},${ty})"` : ''
-    return `<path${transform} d="${it.path}"${attr('fill', it.fill)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+    return `<path${transform}${dd} d="${it.path}"${attr('fill', it.fill)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
   }
   // Symbol items (circle arc path)
   if (it.shape != null && it.radius != null) {
     const rNum = num(it.radius)
     const d = `M${rNum},0A${rNum},${rNum},0,1,1,${-rNum},0A${rNum},${rNum},0,1,1,${rNum},0`
     const t = `transform="translate(${num(it.x ?? 0)},${num(it.y ?? 0)})"`
-    return `<path ${t} d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+    return `<path ${t}${dd} d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
   }
   if (it.text != null) {
     const fontSize = (it as Record<string, unknown>).fontSize as number | undefined
@@ -601,7 +607,7 @@ function renderRects(group: SceneGroup): string {
   for (const it of itemsOf(group).slice().reverse()) {
     const d = rectItemPath(it)
     if (d == null) continue
-    out += `<path d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+    out += `<path${dataDatumAttr(it)} d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
   }
   out += '</g>'
   return out
