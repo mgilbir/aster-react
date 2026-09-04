@@ -1,0 +1,45 @@
+{
+ "width": 200,
+ "height": 100,
+ "padding": 5,
+ "data": [
+  {
+   "name": "t",
+   "values": [
+    {
+     "k": "a",
+     "v": 4
+    },
+    {
+     "k": "b",
+     "v": 6
+    },
+    {
+     "k": "c",
+     "v": 10
+    }
+   ],
+   "transform": [
+    {
+     "type": "pie",
+     "field": "v"
+    }
+   ]
+  }
+ ],
+ "marks": [
+  {
+   "type": "text",
+   "from": {
+    "data": "t"
+   },
+   "encode": {
+    "update": {
+     "text": {
+      "signal": "datum.k + \":\" + datum.startAngle + \":\" + datum.endAngle"
+     }
+    }
+   }
+  }
+ ]
+}

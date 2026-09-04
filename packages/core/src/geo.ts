@@ -53,15 +53,17 @@ export interface ResolvedProjection {
 }
 
 /**
- * Build a d3-geo projection from a compiled spec. Vega defaults the translate
- * to the plot centre and applies per-type default scale/center/rotate. When the
- * type is unknown we fall back to mercator (vega's default projection type).
+ * Build a d3-geo projection from a compiled spec. Vega applies only the
+ * parameters the spec provides — scale/translate/etc otherwise keep d3's own
+ * per-type defaults (e.g. mercator translate [480, 250] regardless of chart
+ * size; verified against the oracle on a 200x100 chart). When the type is
+ * unknown we fall back to mercator (vega's default projection type).
  */
-export function buildProjection(spec: ResolvedProjection, width: number, height: number): GeoProjection {
+export function buildProjection(spec: ResolvedProjection, _width: number, _height: number): GeoProjection {
   const factory = FACTORIES[spec.type] ?? geoMercator
   const p = factory()
   if (spec.scale != null) p.scale(spec.scale)
-  p.translate(spec.translate ?? [width / 2, height / 2])
+  if (spec.translate != null) p.translate(spec.translate)
   if (spec.center) p.center(spec.center)
   if (spec.rotate) p.rotate(spec.rotate as [number, number, number])
   if (spec.precision != null) p.precision(spec.precision)

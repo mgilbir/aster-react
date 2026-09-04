@@ -124,6 +124,22 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
     }
     case 'kde':
       return requireTransform('kde')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'pie':
+      return requireTransform('pie')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'cross':
+      return requireTransform('cross')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'countpattern':
+      return requireTransform('countpattern')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'dotbin':
+      return requireTransform('dotbin')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'geopoint':
+      return requireTransform('geopoint')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'geojson':
+      return requireTransform('geojson')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'linkpath':
+      return requireTransform('linkpath')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'project':
+      return requireTransform('project')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'quantile':
       return requireTransform('quantile')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'regression':

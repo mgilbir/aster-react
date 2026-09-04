@@ -209,12 +209,7 @@ interface AxisLegendResult {
   padding: { top: number; right: number; bottom: number; left: number }
 }
 
-function buildAxisAndLegend(
-  ctx: EvalContext,
-  width: number,
-  height: number,
-  basePadding: { top: number; right: number; bottom: number; left: number },
-): AxisLegendResult {
+function buildAxisAndLegend(ctx: EvalContext): { groups: SceneGroup[] } {
   const groups: SceneGroup[] = []
 
   for (const axis of ctx.chart.axes) {
@@ -238,8 +233,7 @@ function buildAxisAndLegend(
     }
   }
 
-  const pad = computeGuidePadding(groups, width, height, basePadding)
-  return { groups, padding: pad }
+  return { groups }
 }
 
 function computeGuidePadding(
@@ -248,56 +242,34 @@ function computeGuidePadding(
   height: number,
   base: { top: number; right: number; bottom: number; left: number },
 ): { top: number; right: number; bottom: number; left: number } {
+  // Vega's autosize unions the *recursive* bounds of every top-level guide
+  // (axis/legend) and mark into the viewBounds and grows the padding by the
+  // overflow. Measure each group with the exact vega bounds port: axes via
+  // the axisLayout spine semantics, everything else via the recursive
+  // item-union (same as vega-scenegraph's bound pass).
   let minX = 0
   let maxX = width
   let minY = 0
   let maxY = height
-  const M = 5
 
   for (const group of items) {
-    if (group.role === 'axis') {
-      const subItems = group.items ?? []
-      for (const s of subItems) {
-        if (s.text != null) {
-          const sx = s.x ?? 0
-          const sy = s.y ?? 0
-          // Vega's autosize accounts for the full rendered text box, not the
-          // anchor: width from the estimate, height from the font size, per
-          // align/baseline (bounds.text == svg text bound). Axis guide labels
-          // default to the guide-label font size (10), matching vega config.
-          const fs = (s as Record<string, unknown>).fontSize as number | undefined ?? 10
-          const w = estimateTextWidth(String(s.text), fs)
-          const align = s.align
-          const x1 = align === 'center' ? sx - w / 2 : align === 'right' ? sx - w : sx
-          const x2 = align === 'center' ? sx + w / 2 : align === 'right' ? sx : sx + w
-          let y1: number
-          let y2: number
-          if (s.baseline === 'top') { y1 = sy; y2 = sy + fs }
-          else if (s.baseline === 'middle') { y1 = sy - fs / 2; y2 = sy + fs / 2 }
-          else { y1 = sy - fs; y2 = sy }
-          minX = Math.min(minX, x1)
-          maxX = Math.max(maxX, x2)
-          minY = Math.min(minY, y1)
-          maxY = Math.max(maxY, y2)
-        }
-      }
-    } else if (group.role === 'legend') {
-      const gx = group.x ?? 0
-      const gy = group.y ?? 0
-      const gw = group.width ?? 0
-      const gh = group.height ?? 0
-      minX = Math.min(minX, gx)
-      maxX = Math.max(maxX, gx + gw)
-      minY = Math.min(minY, gy)
-      maxY = Math.max(maxY, gy + gh)
-    }
+    const b = group.role === 'axis'
+      ? boundAxisGroup(group)
+      : boundLeaf(new Bounds(), group as unknown as SceneItem)
+    if (b.empty()) continue
+    minX = Math.min(minX, b.x1)
+    maxX = Math.max(maxX, b.x2)
+    minY = Math.min(minY, b.y1)
+    maxY = Math.max(maxY, b.y2)
   }
 
+  // vega's viewSizeLayout (autosize pad): origin = spec padding + the ceil'd
+  // overflow of the viewBounds on each side — no extra margin.
   return {
-    left:   Math.max(base.left,   M + Math.max(0, -minX)),
-    right:  Math.max(base.right,  M + Math.max(0, maxX - width)),
-    top:    Math.max(base.top,    M + Math.max(0, -minY)),
-    bottom: Math.max(base.bottom, M + Math.max(0, maxY - height)),
+    left:   base.left   + Math.max(0, Math.ceil(-minX)),
+    right:  base.right  + Math.max(0, Math.ceil(maxX - width)),
+    top:    base.top    + Math.max(0, Math.ceil(-minY)),
+    bottom: base.bottom + Math.max(0, Math.ceil(maxY - height)),
   }
 }
 
@@ -319,7 +291,7 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   }
 
   // 2) Build axes + legends and compute padding
-  const { groups: guideGroups, padding } = buildAxisAndLegend(ctx, width, height, ctx.chart.padding)
+  const { groups: guideGroups } = buildAxisAndLegend(ctx)
 
   // Merge guide groups into items
   for (const g of guideGroups) items.push(g)
@@ -340,6 +312,13 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   if (isFacetSpec && isTrellis(ctx)) {
     applyTrellisLayout(items, ctx)
   }
+
+  // 2d) Vega's viewSizeLayout unions the recursive bounds of EVERY top-level
+  // mark (frame/axis/legend/title + plain marks) into the viewBounds and grows
+  // the autosize padding by the overflow. Measured with the exact vega bounds
+  // port (axes via the axisLayout spine semantics; everything else via the
+  // recursive item union), after the trellis layout has positioned items.
+  const padding = computeGuidePadding(items, width, height, ctx.chart.padding)
 
   // 3) Build the scene
   let sceneWidth: number
@@ -426,13 +405,14 @@ export function getChartInfo(spec: VgSpec, input: RuntimeInput = {}): ChartInfo 
   const chart = compileChart(spec)
   const { ctx, width, height } = prepareChartCtx(chart, input)
 
-  // Build axes+legends and compute the same padding that evaluateChart uses
-  const { padding } = buildAxisAndLegend(ctx, width, height, chart.padding)
+  // Build the full scene (cheap relative to the caller's own render pass) so
+  // the padding matches evaluateChart's viewSizeLayout computation exactly.
+  const scene = evaluateChart(chart, input)
 
   return {
     width,
     height,
-    padding: chart.autosize === 'none' ? chart.padding : padding,
+    padding: chart.autosize === 'none' ? chart.padding : (scene.padding ?? chart.padding),
     scales: ctx.scales,
   }
 }
@@ -858,7 +838,23 @@ function evaluateMark(
   // Text marks encoded in polar coordinates (`radius` + `theta`, e.g. pie
   // labels): vega's text renderer offsets the anchor by
   // `radius * (cos(theta - π/2), sin(theta - π/2))` from the item's x/y.
+  if (mark.type === 'line' || mark.type === 'area') {
+    // Vega's mark defaults: line {stroke: '#4c78a8', strokeWidth: 2},
+    // area {fill: '#4c78a8'} — apply when the encode leaves them out.
+    for (const it of items) {
+      const rec = it as unknown as Record<string, unknown>
+      if (mark.type === 'line' && rec.strokeWidth === undefined) rec.strokeWidth = 2
+      if (mark.type === 'area' && rec.fill === undefined) rec.fill = '#4c78a8'
+    }
+  }
   if (mark.type === 'text') {
+    // Vega's mark defaults give text marks fill #000 when the encode leaves
+    // it unspecified (vega.js defaults(): text: {fill: '#000'}).
+    for (const it of items) {
+      if ((it as Record<string, unknown>).fill === undefined) {
+        ;(it as unknown as Record<string, unknown>).fill = '#000'
+      }
+    }
     applyTextPolar(items)
   }
 

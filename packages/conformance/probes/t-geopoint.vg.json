@@ -1,0 +1,54 @@
+{
+ "width": 200,
+ "height": 100,
+ "projections": [
+  {
+   "name": "p",
+   "type": "mercator"
+  }
+ ],
+ "data": [
+  {
+   "name": "t",
+   "values": [
+    {
+     "lon": 0,
+     "lat": 0
+    },
+    {
+     "lon": 10,
+     "lat": 20
+    }
+   ],
+   "transform": [
+    {
+     "type": "geopoint",
+     "projection": "p",
+     "fields": [
+      "lon",
+      "lat"
+     ],
+     "as": [
+      "px",
+      "py"
+     ]
+    }
+   ]
+  }
+ ],
+ "marks": [
+  {
+   "type": "text",
+   "from": {
+    "data": "t"
+   },
+   "encode": {
+    "update": {
+     "text": {
+      "signal": "datum.px + \",\" + datum.py"
+     }
+    }
+   }
+  }
+ ]
+}

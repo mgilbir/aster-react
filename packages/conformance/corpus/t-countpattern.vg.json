@@ -1,0 +1,54 @@
+{
+ "width": 200,
+ "height": 100,
+ "padding": 5,
+ "data": [
+  {
+   "name": "t",
+   "values": [
+    {
+     "text": "alpha beta alpha"
+    }
+   ],
+   "transform": [
+    {
+     "type": "countpattern",
+     "field": "text"
+    }
+   ]
+  },
+  {
+   "name": "t2",
+   "source": "t"
+  }
+ ],
+ "scales": [
+  {
+   "name": "c",
+   "type": "linear",
+   "domain": {
+    "data": "t2",
+    "field": "count"
+   },
+   "range": [
+    0,
+    1
+   ]
+  }
+ ],
+ "marks": [
+  {
+   "type": "text",
+   "from": {
+    "data": "t2"
+   },
+   "encode": {
+    "update": {
+     "text": {
+      "signal": "datum.text + \":\" + datum.count"
+     }
+    }
+   }
+  }
+ ]
+}

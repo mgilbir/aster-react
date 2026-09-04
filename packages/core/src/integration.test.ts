@@ -78,7 +78,9 @@ describe('integration', () => {
       ],
     }
     const svg = renderSpec(spec, { width: 700, height: 500 })
-    expect(svg).toContain('width="710"')
+    // oracle (real vega): 718x514, translate (9,9) — autosize padding =
+    // spec padding (5) + ceil(line miter stroke overflow, sw 2 -> e 4).
+    expect(svg).toContain('width="718"')
     expect(svg).toContain('M0,0h700v500h-700Z')
     expect(svg).toContain('M0,250L350,0L700,125')
   })

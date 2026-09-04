@@ -1,0 +1,48 @@
+{
+ "width": 200,
+ "height": 100,
+ "padding": 5,
+ "data": [
+  {
+   "name": "t",
+   "values": [
+    {
+     "v": 2,
+     "k": "q"
+    },
+    {
+     "v": 5,
+     "k": "r"
+    }
+   ],
+   "transform": [
+    {
+     "type": "project",
+     "fields": [
+      "v",
+      "k"
+     ],
+     "as": [
+      "vv",
+      "kk"
+     ]
+    }
+   ]
+  }
+ ],
+ "marks": [
+  {
+   "type": "text",
+   "from": {
+    "data": "t"
+   },
+   "encode": {
+    "update": {
+     "text": {
+      "signal": "datum.vv + \"/\" + datum.kk"
+     }
+    }
+   }
+  }
+ ]
+}

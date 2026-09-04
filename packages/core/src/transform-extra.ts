@@ -2425,3 +2425,338 @@ transformRegistry.set('partition', partitionRows)
 transformRegistry.set('treemap', treemapRows)
 transformRegistry.set('wordcloud', wordcloudRows)
 transformRegistry.set('voronoi', voronoiRows)
+
+// ---------------------------------------------------------------------------
+// pie (vega Pie layout) — modifies rows with start/end angle fields
+// ---------------------------------------------------------------------------
+
+/** Pie and donut chart layout (vega Pie, ported operation-for-operation). */
+function pieRows(rows: Row[], t: Record<string, unknown>): Row[] {
+  const as = (t.as as [string, string]) ?? ['startAngle', 'endAngle']
+  const startAngleField = as[0]!
+  const endAngleField = as[1]!
+  const field = (t.field as string | undefined) ?? null
+  const start = (t.startAngle as number | undefined) ?? 0
+  const stop = (t.endAngle as number | undefined) != null ? (t.endAngle as number) : 2 * Math.PI
+  const values = rows.map((r) => (field ? (getField(r, field) as number) : 1))
+  const n = values.length
+  let a = start
+  const k = (stop - start) / values.reduce((acc, v) => acc + (+v || 0), 0)
+  const index = Array.from({ length: n }, (_, i) => i)
+  if (t.sort) {
+    index.sort((x, y) => values[x]! - values[y]!)
+  }
+  const out = rows.map((r) => ({ ...r }))
+  for (let i = 0; i < n; ++i) {
+    const v = values[index[i]!]!
+    out[index[i]!]![startAngleField] = a
+    a += v * k
+    out[index[i]!]![endAngleField] = a
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// cross (vega Cross: self cross-product, generating)
+// ---------------------------------------------------------------------------
+
+function crossRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+  const as = (t.as as [string, string]) ?? ['a', 'b']
+  const a = as[0]!
+  const b = as[1]!
+  const filter = t.filter as string | undefined
+  const test = filter && ctx.runtime.expr(filter)
+  const out: Row[] = []
+  const n = rows.length
+  for (let i = 0; i < n; ++i) {
+    const left = rows[i]!
+    for (let j = 0; j < n; ++j) {
+      const cand: Row = { [a]: left, [b]: rows[j]! }
+      if (!test || test(cand, ctx.signals)) {
+        out.push(cand)
+      }
+    }
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// countpattern (vega CountPattern)
+// ---------------------------------------------------------------------------
+
+function countpatternRows(rows: Row[], t: Record<string, unknown>): Row[] {
+  const field = t.field as string
+  const as = (t.as as [string, string]) ?? ['text', 'count']
+  const cs = t.case as string | undefined
+  const match = new RegExp((t.pattern as string | undefined) ?? '[\\w\']+', 'g')
+  const stop = new RegExp('^' + (t.stopwords as string | undefined ?? '') + '$', 'i')
+  const tokenize = (text: string): string[] => {
+    let s = text
+    if (cs === 'upper') s = text.toUpperCase()
+    else if (cs === 'lower') s = text.toLowerCase()
+    return (s.match(match) ?? []).map(String)
+  }
+  const counts = new Map<string, number>()
+  for (const r of rows) {
+    const raw = getField(r, field)
+    if (raw == null) continue
+    for (const tok of tokenize(raw as string)) {
+      if (!stop.test(tok)) counts.set(tok, (counts.get(tok) ?? 0) + 1)
+    }
+  }
+  const out: Row[] = []
+  for (const [text, count] of counts) {
+    if (count > 0) out.push({ [as[0]!]: text, [as[1]!]: count })
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// dotbin (vega DotBin) — dot density binning (Wilkinson 1999), ported from
+// vega's util/dotbin.js including the variance-smoothing pass.
+// ---------------------------------------------------------------------------
+
+function dotbinValues(array: number[], step: number, smooth: boolean): Float64Array {
+  const n = array.length
+  const v = new Float64Array(n)
+  let i = 0
+  let j = 1
+  let a = array[0]!
+  let b = a
+  let w = a + step
+  for (; j < n; ++j) {
+    const x = array[j]!
+    if (x >= w) {
+      b = (a + b) / 2
+      for (; i < j; ++i) v[i] = b
+      w = x + step
+      a = x
+    }
+    b = x
+  }
+  b = (a + b) / 2
+  for (; i < j; ++i) v[i] = b
+  if (smooth) {
+    // smoothing: swap points between adjacent stacks (within step*1.25)
+    const thresh = step + step / 4
+    let sa = 0
+    let sb = 1
+    while (sb < n && v[sb] === v[sa]) ++sb
+    while (sb < n) {
+      let sc = sb + 1
+      while (sc < n && v[sb] === v[sc]) ++sc
+      if (v[sb]! - v[sb - 1]! < thresh) {
+        const d = sb + ((sa + sc - sb - sb) >> 1)
+        let dd = d
+        while (dd < sb) v[dd++] = v[sb]!
+        dd = d
+        while (dd > sb) v[dd--] = v[sa]!
+      }
+      sa = sb
+      sb = sc
+    }
+  }
+  return v
+}
+
+function dotbinRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+  const field = t.field as string
+  const as = (t.as as string | undefined) ?? 'bin'
+  const groupby = (t.groupby as string[] | undefined) ?? []
+  const values = rows.map((r) => getField(r, field) as number)
+  const extent = values.reduce<[number, number]>(([lo, hi], v) => [Math.min(lo, v), Math.max(hi, v)], [Infinity, -Infinity])
+  const step = (t.step as number | undefined) ?? (extent[1] - extent[0]) / 30
+  const smooth = t.smooth === true
+  // stable sort by field value within groups (vega stableCompare)
+  const groups = new Map<string, number[]>()
+  if (groupby.length) {
+    for (let i = 0; i < rows.length; ++i) {
+      const key = groupby.map((f) => String(getField(rows[i]!, f))).join('|')
+      let g = groups.get(key)
+      if (!g) { g = []; groups.set(key, g) }
+      g.push(i)
+    }
+  } else {
+    groups.set('', rows.map((_, i) => i))
+  }
+  const sorted = rows.map((r, i) => ({ r, i }))
+  sorted.sort((p, q) => (values[p.i] as number) - (values[q.i] as number))
+  // compute bins per group over the sorted indices
+  const out = rows.map((r) => ({ ...r }))
+  const groupIndices = new Map<string, number[]>()
+  for (const { i } of sorted) {
+    const key = groupby.map((f) => String(getField(rows[i]!, f))).join('|')
+    let g = groupIndices.get(key)
+    if (!g) { g = []; groupIndices.set(key, g) }
+    g.push(i)
+  }
+  for (const g of groupIndices.values()) {
+    const gvals = g.map((i) => values[i] as number)
+    const bins = dotbinValues(gvals, step, smooth)
+    for (let k = 0; k < g.length; ++k) {
+      out[g[k]!]![as] = bins[k]
+    }
+  }
+  void ctx
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// geopoint (vega-geo GeoPoint) — lon/lat -> x/y through a named projection
+// ---------------------------------------------------------------------------
+
+function geopointRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+  const projName = String(t.projection)
+  const projection = ctx.projections?.get(projName)
+  if (!projection) throw new Error(`[aster] geopoint: unknown projection "${projName}"`)
+  const fields = (t.fields as [string, string]) ?? ['lon', 'lat']
+  const as = (t.as as [string, string]) ?? ['x', 'y']
+  const proj = projection as (p: [number, number]) => [number, number] | null
+  return rows.map((r) => {
+    const xy = proj([getField(r, fields[0]!) as number, getField(r, fields[1]!) as number])
+    return xy ? { ...r, [as[0]!]: xy[0], [as[1]!]: xy[1] } : { ...r, [as[0]!]: undefined, [as[1]!]: undefined }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// geojson (vega-geo GeoJSON) — consolidate points/features into one GeoJSON
+// object (the transform's value, consumed by projection fit); rows unchanged.
+// ---------------------------------------------------------------------------
+
+function geojsonRows(rows: Row[], t: Record<string, unknown>): Row[] {
+  const fields = (t.fields as [string, string] | undefined) ?? null
+  const geojsonField = t.geojson as string | undefined
+  const features: unknown[] = []
+  const points: [number, number][] = []
+  for (const r of rows) {
+    if (geojsonField) {
+      const geo = getField(r, geojsonField)
+      if (geo != null) features.push(geo)
+    } else if (fields) {
+      points.push([getField(r, fields[0]!) as number, getField(r, fields[1]!) as number])
+    }
+  }
+  let geo: Record<string, unknown>
+  if (points.length) {
+    geo = { type: 'MultiPoint', coordinates: points }
+  } else if (features.length === 1) {
+    geo = features[0] as Record<string, unknown>
+  } else {
+    geo = { type: 'FeatureCollection', features }
+  }
+  // vega exposes the consolidated value to the projection fit machinery; the
+  // rows themselves pass through unchanged.
+  void geo
+  return rows
+}
+
+// ---------------------------------------------------------------------------
+// linkpath (vega-geo LinkPath) — edge paths between source/target points
+// ---------------------------------------------------------------------------
+
+const linkLine = (sx: number, sy: number, tx: number, ty: number) => 'M' + sx + ',' + sy + 'L' + tx + ',' + ty
+const linkLineR = (sa: number, sr: number, ta: number, tr: number) => linkLine(sr * Math.cos(sa), sr * Math.sin(sa), tr * Math.cos(ta), tr * Math.sin(ta))
+const linkArc = (sx: number, sy: number, tx: number, ty: number) => {
+  const dx = tx - sx
+  const dy = ty - sy
+  const rr = Math.hypot(dx, dy) / 2
+  const ra = (180 * Math.atan2(dy, dx)) / Math.PI
+  return 'M' + sx + ',' + sy + 'A' + rr + ',' + rr + ' ' + ra + ' 0 1' + ' ' + tx + ',' + ty
+}
+const linkArcR = (sa: number, sr: number, ta: number, tr: number) => linkArc(sr * Math.cos(sa), sr * Math.sin(sa), tr * Math.cos(ta), tr * Math.sin(ta))
+const linkCurve = (sx: number, sy: number, tx: number, ty: number) => {
+  const dx = tx - sx
+  const dy = ty - sy
+  const ix = 0.2 * (dx + dy)
+  const iy = 0.2 * (dy - dx)
+  return 'M' + sx + ',' + sy + 'C' + (sx + ix) + ',' + (sy + iy) + ' ' + (tx + iy) + ',' + (ty - ix) + ' ' + tx + ',' + ty
+}
+const linkCurveR = (sa: number, sr: number, ta: number, tr: number) => linkCurve(sr * Math.cos(sa), sr * Math.sin(sa), tr * Math.cos(ta), tr * Math.sin(ta))
+const linkOrthoX = (sx: number, sy: number, tx: number, ty: number) => 'M' + sx + ',' + sy + 'V' + ty + 'H' + tx
+const linkOrthoY = (sx: number, sy: number, tx: number, ty: number) => 'M' + sx + ',' + sy + 'H' + tx + 'V' + ty
+const linkOrthoR = (sa: number, sr: number, ta: number, tr: number) => {
+  const sc = Math.cos(sa)
+  const ss = Math.sin(sa)
+  const tc = Math.cos(ta)
+  const ts = Math.sin(ta)
+  const sf = Math.abs(ta - sa) > Math.PI ? ta <= sa : ta > sa
+  return 'M' + sr * sc + ',' + sr * ss + 'A' + sr + ',' + sr + ' 0 0,' + (sf ? 1 : 0) + ' ' + sr * tc + ',' + sr * ts + 'L' + tr * tc + ',' + tr * ts
+}
+const linkDiagonalX = (sx: number, sy: number, tx: number, ty: number) => {
+  const m = (sx + tx) / 2
+  return 'M' + sx + ',' + sy + 'C' + m + ',' + sy + ' ' + m + ',' + ty + ' ' + tx + ',' + ty
+}
+const linkDiagonalY = (sx: number, sy: number, tx: number, ty: number) => {
+  const m = (sy + ty) / 2
+  return 'M' + sx + ',' + sy + 'C' + sx + ',' + m + ' ' + tx + ',' + m + ' ' + tx + ',' + ty
+}
+const linkDiagonalR = (sa: number, sr: number, ta: number, tr: number) => {
+  const sc = Math.cos(sa)
+  const ss = Math.sin(sa)
+  const tc = Math.cos(ta)
+  const ts = Math.sin(ta)
+  const mr = (sr + tr) / 2
+  return 'M' + sr * sc + ',' + sr * ss + 'C' + mr * sc + ',' + mr * ss + ' ' + mr * tc + ',' + mr * ts + ' ' + tr * tc + ',' + tr * ts
+}
+
+const LINK_PATHS: Record<string, (sx: number, sy: number, tx: number, ty: number) => string> = {
+  line: linkLine,
+  'line-radial': linkLineR,
+  arc: linkArc,
+  'arc-radial': linkArcR,
+  curve: linkCurve,
+  'curve-radial': linkCurveR,
+  'orthogonal-horizontal': linkOrthoX,
+  'orthogonal-vertical': linkOrthoY,
+  'orthogonal-radial': linkOrthoR,
+  'diagonal-horizontal': linkDiagonalX,
+  'diagonal-vertical': linkDiagonalY,
+  'diagonal-radial': linkDiagonalR,
+}
+
+function linkpathRows(rows: Row[], t: Record<string, unknown>): Row[] {
+  const sxField = (t.sourceX as string | undefined) ?? 'source.x'
+  const syField = (t.sourceY as string | undefined) ?? 'source.y'
+  const txField = (t.targetX as string | undefined) ?? 'target.x'
+  const tyField = (t.targetY as string | undefined) ?? 'target.y'
+  const as = (t.as as string | undefined) ?? 'path'
+  const orient = (t.orient as string | undefined) ?? 'vertical'
+  const shape = (t.shape as string | undefined) ?? 'line'
+  const path = LINK_PATHS[shape + '-' + orient] ?? LINK_PATHS[shape]
+  if (!path) throw new Error(`[aster] linkpath unsupported type: ${shape}${t.orient ? '-' + orient : ''}`)
+  return rows.map((r) => ({
+    ...r,
+    [as]: path(
+      getField(r, sxField) as number,
+      getField(r, syField) as number,
+      getField(r, txField) as number,
+      getField(r, tyField) as number,
+    ),
+  }))
+}
+
+// ---------------------------------------------------------------------------
+// project (vega Project) — derive rows from named fields
+// ---------------------------------------------------------------------------
+
+function projectRows(rows: Row[], t: Record<string, unknown>): Row[] {
+  const fields = (t.fields as string[] | undefined) ?? []
+  const as = (t.as as (string | undefined)[] | undefined) ?? []
+  return rows.map((r) => {
+    const out: Row = {}
+    for (let i = 0; i < fields.length; ++i) {
+      out[as[i] ?? fields[i]!] = getField(r, fields[i]!)
+    }
+    return out
+  })
+}
+
+// -- addon registration ------------------------------------------------------
+transformRegistry.set('pie', pieRows)
+transformRegistry.set('cross', crossRows)
+transformRegistry.set('countpattern', countpatternRows)
+transformRegistry.set('dotbin', dotbinRows)
+transformRegistry.set('geopoint', geopointRows)
+transformRegistry.set('geojson', geojsonRows)
+transformRegistry.set('linkpath', linkpathRows)
+transformRegistry.set('project', projectRows)

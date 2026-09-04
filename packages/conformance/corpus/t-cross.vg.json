@@ -1,0 +1,50 @@
+{
+ "width": 200,
+ "height": 100,
+ "padding": 5,
+ "data": [
+  {
+   "name": "t",
+   "values": [
+    {
+     "x": 1
+    },
+    {
+     "x": 2
+    },
+    {
+     "x": 3
+    }
+   ],
+   "transform": [
+    {
+     "type": "cross",
+     "as": [
+      "l",
+      "r"
+     ]
+    },
+    {
+     "type": "formula",
+     "expr": "datum.l.x + datum.r.x",
+     "as": "sum"
+    }
+   ]
+  }
+ ],
+ "marks": [
+  {
+   "type": "text",
+   "from": {
+    "data": "t"
+   },
+   "encode": {
+    "update": {
+     "text": {
+      "signal": "datum.l.x + \"/\" + datum.r.x + \"=\" + datum.sum"
+     }
+    }
+   }
+  }
+ ]
+}
