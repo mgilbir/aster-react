@@ -4,7 +4,7 @@ A small TypeScript reimplementation of the Vega/Vega-Lite rendering stack on gra
 
 ## Status
 
-**Pre-alpha, M0 milestone.** The pipeline works end-to-end for a subset of Vega marks and scales; many features remain incomplete. Not for production use.
+**Pre-alpha.** The pipeline works end-to-end, verified against the real Vega renderer on a 406-spec conformance corpus (marks, scales, axes, legends, titles, config, expressions, signals, grouping, trellis faceting, and URL data loaders). Not for production use.
 
 ## How It Works
 
@@ -23,7 +23,7 @@ Expressions (used in formulas, filters, and mark encodings) are parsed by `vega-
 | `packages/core` — `@aster/core` | Compiler (spec -> IR), runtime (IR -> scene), SVG renderer, expression engine. Public API: `renderSpec`, `compileChart`, `evaluateChart`, `renderSceneToSvg`, `compileExpr`, `buildScale`, `applyTransforms`. |
 | `packages/react` — `@aster/react` | Thin `<Chart>` React component rendering the SVG from `renderSpec`. |
 | `packages/conformance` — `@aster/conformance` | Oracle harness: renders each corpus spec through both real Vega (dev-only) and `@aster/core`, canonicalizes SVGs, diffs geometry. |
-| `packages/benchmarks` — `@aster/benchmarks` | Bundle-size budget script (esbuild minimal chart, gzip vs 60 kB budget). |
+| `packages/benchmarks` — `@aster/benchmarks` | Runtime/memory/bundle/browser performance harness comparing `<Chart>` vs react-vega and vega-embed; includes the core `renderSpec` gzip budget gate. |
 | `.github/workflows/ci.yml` | CI pipeline: typecheck, build, test, conformance, bundle budget. |
 
 ## Quick Start
@@ -65,29 +65,19 @@ const svg = renderSpec(spec)
 
 ## Current Status / What Works
 
-**Conformance result (16 corpus specs): 16/16 passed.**
+**Conformance result (406 corpus specs): 406/406 passed.** The core pipeline (Vega spec → compile → evaluate → SVG, plus the React `<Chart>` wrapper) is diffed against the real Vega renderer oracle on a 406-spec conformance corpus: all pass. This covers marks (line/area/bar/rule/scatter/symbol/rect/text/arc/path/image/trail/shape, with curves/gradients/corner-radii), band/linear/log/pow/time scales, axes (ticks/grid/labels/titles/`labelOverlap`), legends (gradient and symbol, at any corner), titles, config/style defaults, full vega expression surface, nested scopes, trellis/facet-2d layout, contour, geo projections, and URL data loaders.
 
-The core pipeline (Vega spec → compile → evaluate → SVG) is verified against the real Vega renderer oracle on a 16-spec conformance corpus: all 16 pass.
-
-**What the corpus covers:**
-
-| Area | Covered specs |
-|------|---------------|
-| Mark types | `line-basic`, `area-basic`, `area-vg`, `bar-bands`, `bar-basic`, `bar-vl`, `rule`, `scatter-basic`, `scatter-vg`, `tick-vg` |
-| Point / symbol | `point-vl` |
-| Scales | linear (`line-basic`, `scatter-basic`), band (`bar-*`), log (`line-log`), utc/time (`line-time`) |
-| Axes | grid, tick marks, and domain strokes (labels/titles deliberately disabled in the corpus) |
-| Transforms | eager stack (`bar-bands`), impute (`scatter-vg`), formula (`line-log`), filter (`line-log`) |
-
-This includes both raw Vega (`*.vg.json`) and Vega-Lite (`*.vl.json`) entries, confirming that the `vega-lite.compile` path is also correct.
+Both raw Vega (`*.vg.json`) and Vega-Lite (`*.vl.json`) entries are included, confirming the `vega-lite.compile` path is correct.
 
 **What is NOT covered yet:**
 
-- **Axis tick label positioning** — labels and titles are disabled in the corpus; text placement is a known gap.
-- **Legends** — the `CompiledLegend` IR exists but there is no legend renderer / geometry.
-- **Interactive selections / params** — no signal/event system at all.
-- **Reactive dataflow** — current execution is static/eager re-evaluation per `renderSpec` call (no incremental update).
 - **Canvas rendering** — only SVG output is implemented.
-- **Full Vega transform parity** — some transforms exist but with limited support (bin, window, joinaggregate).
+- **Full reactive dataflow** — the session fingerprints identical renders (returns the cached scene) and partially re-evaluates only the marks whose dataset changed, but the datum set is still eagerly re-encoded per update; there is no per-datum source/target pulse graph.
+- **Full Vega transform parity** — `bin` covers common cases but not every Vega option; `window`/`joinaggregate`/`impute` hold for common shapes.
+- **[io] tracing/other rare layout transforms** — the opt-in addon covers `kde`/`quantile`/`regression`/`loess`/`pack`/`partition`/`treemap`/`wordcloud`/`voronoi`.
 
 Expressions are CSP-safe: the engine evaluates them via the `vega-expression` AST interpreter (`vega-interpreter`), so no `new Function` is ever used.
+
+## Performance
+
+Compared against react-vega and the official vega-embed tutorial (see `packages/benchmarks`): on a browser bar chart @1000 points the incremental path (now the default in `<Chart>`) drops long frames from 30.3% → 1.1%, retains ~0 MB heap per update, and `@aster/react <Chart>` is ~86 kB gzip vs react-vega's 289 kB.

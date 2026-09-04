@@ -54,15 +54,17 @@ The reason only pure packages are reused — and **not** `vega-functions`, `vega
 
 `packages/core/src/geo.ts` builds d3-geo projections (`mercator`, `albers`, `albersUsa`, `equirectangular`, `orthographic`, …) from the compiled `projections` spec, resolving `scale`/`translate`/`center`/`rotate` signal params against the runtime; the `geoshape` transform and shape marks route geometry through `geoPath(projection)` (identity pixel-space path when no projection is named).
 
-Because heavy feature areas are only used by a small fraction of specs, they are **not** reachable from the `@aster/core` barrel. The core code paths consult injection registries (`packages/core/src/registry.ts`: `geoRegistry`, `transformRegistry`); three addon entries register their implementations:
+Because heavy feature areas are only used by a small fraction of specs, they are **not** reachable from the `@aster/core` barrel. The core code paths consult injection registries (`packages/core/src/registry.ts`: `geoRegistry`, `transformRegistry`, `dataFormatRegistry`); five opt-in addon entries register their implementations:
 
 | Addon | Registers |
 |---|---|
 | `@aster/core/geo` | d3-geo projections (`buildProjection`, `projectedPath`) and d3-contour (`contourRun`) |
 | `@aster/core/transforms` | the rare-layout transforms — `kde`, `quantile`, `regression`, `loess`, `pack`, `partition`, `treemap`, `wordcloud`, `voronoi` (implementations in `transform-extra.ts`) |
-| `@aster/core/dom` | the incremental DOM patcher (`patchSceneDom`, `sceneToDomDesc`, `createChartSession`) used by `<Chart incremental>` |
+| `@aster/core/load` | the text-format readers (`csv`/`tsv`/`dsv` via d3-dsv, `topojson` via topojson-client) and `loadSpecData`, which fetches every `url` dataset and inlines its values so the synchronous pipeline runs unchanged |
+| `@aster/core/dom` | the incremental DOM patcher (`patchSceneDom`, `sceneToDomDesc`, `createChartSession`); `<Chart>` now defaults to this path |
+| `@aster/core/signals` | the signal→view event loop (`bindSceneSignals`, `stampDatumAttrs`) that binds a spec's `signal.on` streams to the rendered svg |
 
-A spec that uses a gated feature without its addon loaded gets an actionable "load `@aster/core/...` first" error; every other chart renders with a lean base bundle (79 kB gzip for `renderSpec`, vs react-vega's 289 kB — see `packages/benchmarks/scripts/budget.mjs` for the per-family breakdown and why the original 60 kB target was re-baselined).
+A spec that uses a gated feature without its addon loaded gets an actionable "load `@aster/core/...` first" error; every other chart renders with a lean base bundle — `@aster/react <Chart>` is ~86 kB gzip vs react-vega's 289 kB (see `packages/benchmarks/scripts/bundle-size.mjs`; `budget.mjs` gates the core `renderSpec` payload and explains why the original 60 kB target was re-baselined).
 
 ## Scales
 
@@ -124,7 +126,7 @@ The canonicalizer (`packages/conformance/src/normalize.ts`) is the correctness g
 
 ### Gap probes (`packages/conformance/probes/`)
 
-Areas that are **known-incomplete** are captured as feature probes under `probes/` and run via `pnpm probe`. A probe renders the same oracle diff as the corpus but is a *diagnostic, not a CI gate*: its failure documents a real gap, and when the gap is implemented the probe is promoted into `corpus/`. The backlog is currently empty: the former `contour`, `vl-facet-2d` and `vl-title-legend` probes were implemented and promoted into `corpus/`. Facet/trellis positioning runs the exact vega algorithms (`src/bounds.ts` + `src/trellis.ts`), so new facet gaps should show up as corpus diffs, not layout guesses.
+Areas that are **known-incomplete** are captured as feature probes under `probes/` and run via `pnpm probe`. A probe renders the same oracle diff as the corpus but is a *diagnostic, not a CI gate*: its failure documents a real gap, and when the gap is implemented the probe is promoted into `corpus/`. The former `contour`, `vl-facet-2d`, `vl-title-legend` and `data-url-csv` probes were implemented and promoted into `corpus/` — URL datasets now resolve via `loadSpecData` (the `@aster/core/load` addon) inside the conformance harness, matching how a real host fetches them. Facet/trellis positioning runs the exact vega algorithms (`src/bounds.ts` + `src/trellis.ts`), so new facet gaps should show up as corpus diffs, not layout guesses.
 
 ## Known Limitations / Roadmap
 
@@ -138,12 +140,14 @@ Areas that are **known-incomplete** are captured as feature probes under `probes
 | Config | Done | background/view/style/axis/legend/title defaults |
 | Expressions | Done | full vega-functions surface (date, color, array, string, scale) — CSP-safe |
 | Nested scopes | Done | group marks with their own `scales`/`axes`/`data` render in an isolated child scope |
-| Signals | Partial | `update` expressions resolved to a fixed point; **event-driven `signal.on` ignored** |
-| Reactive dataflow | Open | updates re-encode the whole scene; no per-dataset incremental re-evaluation |
-| Interactions | Open | no general signal→view event loop |
+| Signals | Done | `update` resolved to a fixed point, plus event-driven `signal.on` streams via the signal→view event loop (`@aster/core/signals`) |
+| Interactions | Done | brush/selection (`onSelect`/`brush`), drag overlays, and the spec-driven signal event loop in `<Chart>` |
+| Data loaders | Done | `url` datasets with `csv`/`tsv`/`dsv`/`topojson` formats via `loadSpecData` (`@aster/core/load`); inline JSON + `format.parse` work in core |
+| Reactive dataflow | Partial | session fingerprinting returns the cached scene when nothing changed, and partial re-evaluation rebuilds only the marks whose dataset changed; the datum set is still eagerly re-encoded per update |
+| Incremental DOM | Done | `<Chart>` defaults to `patchSceneDom` (keeps the `<svg>`, patches changed attributes); the full string is serialized once for the first render so SSR + hydration match |
 | Canvas rendering | Open | SVG only |
-| Contour | Open | transform implemented; geometry diverges from oracle in the density blur (probe) |
-| 2-D facet (VL) | Open | row×column facet grid renders but bottom-row cell axis orientation diverges (probe) |
+| Contour | Done | implemented and promoted into `corpus/` |
+| 2-D facet (VL) | Done | row×column facet grid verified against the oracle |
 | Binning parity | Partial | `bin` covers common cases; not every Vega option |
 
 ## Verification Commands
@@ -155,7 +159,7 @@ pnpm typecheck
 # Build
 pnpm build
 
-# Conformance — 399-spec geometry diff against the real Vega oracle (the gate)
+# Conformance — 406-spec geometry diff against the real Vega oracle (the gate)
 pnpm conformance
 
 # Gap probes — diagnostic only, documents known-incomplete features

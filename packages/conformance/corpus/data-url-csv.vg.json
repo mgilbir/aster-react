@@ -3,6 +3,7 @@
   "width": 200,
   "height": 200,
   "padding": 5,
+  "autosize": "none",
   "data": [
     {
       "name": "table",

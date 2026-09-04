@@ -13,6 +13,7 @@ import * as vl from 'vega-lite'
 import '@aster/core/geo' // registers d3-geo/d3-contour for geo/projection/contour specs
 import '@aster/core/transforms' // registers kde/regression/loess/pack/treemap/wordcloud/voronoi
 import { renderSpec } from '@aster/core'
+import { loadSpecData } from '@aster/core/load'
 import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
@@ -37,7 +38,11 @@ function loadProbes(dir: string): ProbeEntry[] {
 async function runOne(entry: ProbeEntry) {
   try {
     const spec = entry.kind === 'vg' ? entry.spec : (vl.compile(entry.spec as any).spec as unknown as Record<string, unknown>)
-    const [oracleSvg, ourSvg] = await Promise.all([renderWithVega(spec), Promise.resolve(renderSpec(spec))])
+    const [oracleSvg, ourSvg] = await Promise.all([
+      renderWithVega(spec),
+      // url datasets resolve through the load addon, exactly what a real host does
+      loadSpecData(spec as never).then((loaded) => renderSpec(loaded as never)),
+    ])
     const diffs = diffCanonical(canonicalizeSvg(oracleSvg), canonicalizeSvg(ourSvg))
     return { pass: diffs.length === 0, diffs }
   } catch (err) {
