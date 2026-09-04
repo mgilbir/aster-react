@@ -54,7 +54,15 @@ The reason only pure packages are reused — and **not** `vega-functions`, `vega
 
 `packages/core/src/geo.ts` builds d3-geo projections (`mercator`, `albers`, `albersUsa`, `equirectangular`, `orthographic`, …) from the compiled `projections` spec, resolving `scale`/`translate`/`center`/`rotate` signal params against the runtime; the `geoshape` transform and shape marks route geometry through `geoPath(projection)` (identity pixel-space path when no projection is named).
 
-Because `d3-geo` + `d3-contour` are ~17 kB gzip and only a small fraction of specs use them, they are **not** reachable from the `@aster/core` barrel. The core code paths consult a small injection registry (`packages/core/src/registry.ts`, `geoRegistry`); the `@aster/core/geo` addon entry imports the d3 modules and registers `buildProjection` / `projectedPath` / `contourRun`. A chart that uses a projection or the `contour` transform without the addon loaded gets an actionable "load `@aster/core/geo` first" error; every other chart renders with a lean base bundle. This keeps `renderSpec` of a bar/line chart byte-for-byte the size it was before geo/contour existed.
+Because heavy feature areas are only used by a small fraction of specs, they are **not** reachable from the `@aster/core` barrel. The core code paths consult injection registries (`packages/core/src/registry.ts`: `geoRegistry`, `transformRegistry`); three addon entries register their implementations:
+
+| Addon | Registers |
+|---|---|
+| `@aster/core/geo` | d3-geo projections (`buildProjection`, `projectedPath`) and d3-contour (`contourRun`) |
+| `@aster/core/transforms` | the rare-layout transforms — `kde`, `quantile`, `regression`, `loess`, `pack`, `partition`, `treemap`, `wordcloud`, `voronoi` (implementations in `transform-extra.ts`) |
+| `@aster/core/dom` | the incremental DOM patcher (`patchSceneDom`, `sceneToDomDesc`, `createChartSession`) used by `<Chart incremental>` |
+
+A spec that uses a gated feature without its addon loaded gets an actionable "load `@aster/core/...` first" error; every other chart renders with a lean base bundle (79 kB gzip for `renderSpec`, vs react-vega's 289 kB — see `packages/benchmarks/scripts/budget.mjs` for the per-family breakdown and why the original 60 kB target was re-baselined).
 
 ## Scales
 
@@ -153,6 +161,6 @@ pnpm conformance
 # Gap probes — diagnostic only, documents known-incomplete features
 pnpm probe
 
-# Bundle budget (esbuild, 60 kB gzip target)
+# Bundle budget (esbuild, 80 kB gzip target — see budget.mjs for the breakdown)
 pnpm --filter @aster/benchmarks run budget
 ```

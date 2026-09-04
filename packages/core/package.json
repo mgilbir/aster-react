@@ -13,6 +13,14 @@
     "./geo": {
       "types": "./dist/addon-geo.d.ts",
       "import": "./dist/addon-geo.js"
+    },
+    "./transforms": {
+      "types": "./dist/addon-transforms.d.ts",
+      "default": "./dist/addon-transforms.js"
+    },
+    "./dom": {
+      "types": "./dist/addon-dom.d.ts",
+      "default": "./dist/addon-dom.js"
     }
   },
   "scripts": {

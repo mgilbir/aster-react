@@ -1,13 +1,14 @@
 import * as React from 'react'
 import {
   getChartInfo,
-  createChartSession,
   renderSceneToSvg,
-  patchSceneDom,
-  renderSceneToDomElement,
   type ChartInfo,
   type SceneRoot,
 } from '@aster/core'
+// The incremental DOM patcher ships as the `@aster/core/dom` addon: a
+// string-mode host never bundles it, while <Chart> (which supports the
+// `incremental` path) pulls it in explicitly.
+import { createChartSession, patchSceneDom, renderSceneToDomElement } from '@aster/core/dom'
 import { dragToDataInterval, selectionToPixels, type SelectionInterval } from './interaction.js'
 
 export interface ChartProps {

@@ -3,6 +3,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as vl from 'vega-lite'
 import '@aster/core/geo' // registers d3-geo/d3-contour for geo/projection/contour specs
+import '@aster/core/transforms' // registers kde/regression/loess/pack/treemap/wordcloud/voronoi
 import { renderSpec } from '@aster/core'
 import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg } from './normalize.js'

@@ -25,15 +25,19 @@ export { compileChart } from './compiler.js'
 export { evaluateChart, getChartInfo } from './runtime.js'
 export type { ChartInfo } from './runtime.js'
 export { renderSceneToSvg } from './render.js'
-export { patchSceneDom, renderSceneToDomElement, sceneToDomDesc, type DomDesc } from './dom.js'
-export { createChartSession, type ChartSession } from './session.js'
+// The incremental DOM patcher ships as an opt-in addon (`@aster/core/dom`);
+// string-mode hosts never need it. To keep the DOM path working without
+// touching the addon entry, the re-exports live there.
+export { type DomDesc } from './dom.js'
 export { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 export { buildScale, type Scale } from './scales.js'
 export { applyTransforms, sortRows, type Row } from './transform.js'
-export { geoRegistry, type GeoRegistry, type ContourFeature } from './registry.js'
-// Geo projections (`@aster/core/geo`) and the `contour` transform are optional
-// addons so a plain bar/line chart never bundles d3-geo / d3-contour. Load the
-// addon before rendering a geo/contour spec: `await import('@aster/core/geo')`.
+export { geoRegistry, transformRegistry, requireTransform, type GeoRegistry, type ContourFeature, type TransformFn } from './registry.js'
+// Geo projections (`@aster/core/geo`) and the rare-layout transforms
+// (`@aster/core/transforms`: kde/quantile/regression/loess, pack/partition/
+// treemap, wordcloud, voronoi) are optional addons so a plain bar/line/scatter
+// chart never bundles them. Load an addon before rendering a spec that needs
+// it: `await import('@aster/core/geo')` / `await import('@aster/core/transforms')`.
 
 import { compileChart } from './compiler.js'
 import { evaluateChart, getChartInfo } from './runtime.js'

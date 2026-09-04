@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { createChartSession, renderSceneToSvg } from './index.js'
+import { renderSceneToSvg } from './index.js'
+import { createChartSession } from './addon-dom.js'
 import type { VgSpec } from './types.js'
 
 const specWith = (values: Array<{ x: number; y: number }>, strokeWidth = 2): VgSpec =>

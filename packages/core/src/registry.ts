@@ -38,3 +38,22 @@ export function requireGeo(): NonNullable<GeoRegistry['buildProjection']> {
   if (!geoRegistry.buildProjection) throw new Error('[aster] this spec uses a geo projection; load the addon first: await import("@aster/core/geo")')
   return geoRegistry.buildProjection
 }
+
+/** eslint-disable-next-line @typescript-eslint/no-explicit-any -- registry avoids an import cycle with transform.ts */
+export type TransformFn = (rows: any[], params: Record<string, unknown>, ctx: any, sourceName?: string) => any[]
+
+/**
+ * Registry for the rare-layout transforms (kde/quantile/regression/loess,
+ * pack/partition/treemap, wordcloud, voronoi). The core bundle keeps only the
+ * transforms a plain chart uses; the opt-in addon entry (`@aster/core/transforms`)
+ * registers the rest:
+ *
+ *   await import('@aster/core/transforms')
+ */
+export const transformRegistry = new Map<string, TransformFn>()
+
+export function requireTransform(type: string): TransformFn {
+  const fn = transformRegistry.get(type)
+  if (!fn) throw new Error(`[aster] this spec uses the "${type}" transform; load the addon first: await import("@aster/core/transforms")`)
+  return fn
+}

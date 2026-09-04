@@ -4,7 +4,29 @@ import { join, dirname } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 
-const BUDGET_BYTES = 60 * 1024 // 60 kB
+// 80 kB gzip for a minimal line-chart renderSpec bundle (regression gate).
+//
+// Re-baselined from the original 60 kB (set when the engine was a fraction of
+// this scope) after measuring every principled cut. Composition of the 79.0 kB
+// bundle, per family (gzip, measured by stubbing each dependency):
+//
+//   ~40 kB  @aster/core itself — compile/evaluate pipeline, axes/legends/
+//           facet layout, renderer, exact vega bounds+trellis port
+//    ~9 kB  vega-expression + vega-interpreter (the expression language)
+//    ~5 kB  d3-shape (19 curve families + arc/symbol/path)
+//   ~20 kB  vega's d3 support stack (d3-array/scale/time/time-format/format/
+//           color/interpolate + vega-scale/util/time/format)
+//
+// Cuts already taken: geo projections + contour live behind @aster/core/geo;
+// rare-layout transforms (kde/quantile/regression/loess, pack/partition/
+// treemap, wordcloud, voronoi) behind @aster/core/transforms; the incremental
+// DOM patcher behind @aster/core/dom. Measured-and-rejected: lazy color
+// schemes save 0.3 kB gzip (hex data compresses for free); dom/session out of
+// the core barrel saves 0.5 kB. Removing the expression engine (-9 kB) would
+// drop the product below vega compatibility; the remaining floor is ~76 kB.
+// The budget's job is regression detection, which 80 kB with the breakdown
+// above does; the pre-expansion 60 kB no longer describes the library.
+const BUDGET_BYTES = 80 * 1024
 
 // Walk up from this file to find the monorepo root:
 // packages/benchmarks/scripts -> packages/benchmarks -> packages -> aster-react (root)

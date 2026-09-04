@@ -6,7 +6,8 @@
  */
 import * as React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { compileChart, evaluateChart, renderSceneToSvg, patchSceneDom, sceneToDomDesc, type SceneRoot } from '@aster/core'
+import { compileChart, evaluateChart, renderSceneToSvg, type SceneRoot } from '@aster/core'
+import { patchSceneDom, sceneToDomDesc } from '@aster/core/dom'
 import { BenchEmbed, type EmbedName } from './embeds.js'
 import { buildSpec, genValues, type ChartKind } from './fixtures.js'
 import { timeWork, waitForSettle, waitForSvg } from './settle.js'

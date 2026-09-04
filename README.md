@@ -71,19 +71,18 @@ const svg = renderSpec(spec)
 
 The core pipeline (Vega spec → compile → evaluate → SVG) is verified against the real Vega renderer oracle on a 399-spec conformance corpus, spanning both raw Vega (`*.vg.json`) and Vega-Lite (`*.vl.json`, via `vega-lite.compile`) so both front-ends are held to the same geometry bar.
 
-> **Geo & contour are opt-in addons.** Cartographic projections and the `contour`
-> transform pull in `d3-geo` / `d3-contour` (~17 kB gzip), so they ship as a
-> separate entry that a plain bar/line chart never bundles. Before rendering a
-> spec that uses `projections`, a projected `geoshape`, or `contour`, load the
-> addon once:
+> **Heavy feature areas are opt-in addons.** Three addons keep a plain bar/line/
+> scatter chart lean (~79 kB gzip; react-vega's minimum is 289 kB):
 >
-> ```ts
-> await import('@aster/core/geo')   // or: import '@aster/core/geo'
-> renderSpec(geoSpec)
-> ```
+> | Addon | Unlocks | Loads |
+> |---|---|---|
+> | `@aster/core/geo` | projections, projected `geoshape`, `contour` (d3-geo/d3-contour) | `await import('@aster/core/geo')` |
+> | `@aster/core/transforms` | `kde`, `quantile`, `regression`, `loess`, `pack`, `partition`, `treemap`, `wordcloud`, `voronoi` | `await import('@aster/core/transforms')` |
+> | `@aster/core/dom` | the incremental DOM patcher behind `<Chart incremental>` (pulled in automatically by `@aster/react`) | `await import('@aster/core/dom')` |
 >
-> Without it, those specs throw an actionable "load the addon" error; every
-> other chart renders unchanged and stays lean.
+> Without the matching addon, those specs throw an actionable "load the addon"
+> error; every other chart renders unchanged and stays lean. A spec render that
+> never touches the heavy paths bundles none of them.
 
 **What is covered and oracle-verified:**
 
