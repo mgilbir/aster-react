@@ -120,19 +120,17 @@ export function Chart({
   // Recompute chart info when deps change
   const [chartInfoKey, setChartInfoKey] = React.useState<number>(0)
   React.useEffect(() => {
-    if (hasInteraction) {
-      let info: ChartInfo | null = null
-      try {
-        info = getChartInfo(spec, { width: renderWidth, height: renderHeight })
-      } catch { /* ignore */ }
-      chartInfoRef.current = info
-      chartInfoCacheIdx.current++
-      setChartInfoKey(chartInfoCacheIdx.current)
-    } else {
-      chartInfoRef.current = null
-      chartInfoCacheIdx.current++
-      setChartInfoKey(chartInfoCacheIdx.current)
-    }
+    // Interaction-only: without a selection handler the chart info is unused,
+    // and forcing a state update here would re-render (and re-commit the svg)
+    // a second time on every spec change.
+    if (!hasInteraction) return
+    let info: ChartInfo | null = null
+    try {
+      info = getChartInfo(spec, { width: renderWidth, height: renderHeight })
+    } catch { /* ignore */ }
+    chartInfoRef.current = info
+    chartInfoCacheIdx.current++
+    setChartInfoKey(chartInfoCacheIdx.current)
   }, [hasInteraction, spec, renderWidth, renderHeight])
 
   // Memoize to avoid recalculating
