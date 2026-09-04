@@ -25,6 +25,16 @@ export interface RuntimeInput {
   height?: number
   /** Static signal values for signals that are referenced but not event-driven. */
   signals?: Record<string, unknown>
+  /**
+   * Partial re-evaluation: the names of datasets whose VALUES changed since
+   * the previous evaluate (the datasets' transform pipeline re-runs, and only
+   * the marks drawing from them — directly or via a derived source chain —
+   * are rebuilt). Unaffected marks reuse the previous scene's groups, so an
+   * update to one dataset skips re-encoding every other mark. Scales rebuild
+   * whenever any dataset changed (domains may span datasets). When omitted,
+   * all datasets are treated as changed (the safe default).
+   */
+  changedDatasets?: string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +75,8 @@ export interface CompiledChart {
   title?: CompiledTitle
   /** Cartographic projections referenced by geo marks / the geoshape transform. */
   projections?: CompiledProjection[]
+  /** @internal Partial re-evaluation memo: the last scene's top-level groups. */
+  __prevItems?: unknown
   /** Root-level trellis layout options (vega spec `layout`), when present. */
   layout?: Record<string, unknown>
 }

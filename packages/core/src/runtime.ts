@@ -273,13 +273,52 @@ function computeGuidePadding(
   }
 }
 
+
+/**
+ * Partial re-evaluation: does this mark draw from any of the changed datasets?
+ * A mark touches a dataset when its `from.data` names it (directly or through
+ * a source chain) or a scale it uses has a data-derived domain.
+ */
+function markTouchesChangedData(mark: CompiledMark, chart: CompiledChart, changed: Set<string>): boolean {
+  const touch = (dataName: string | undefined): boolean => dataName != null && changed.has(dataName)
+  if (mark.from?.data) return touch(mark.from.data)
+  // Marks with no `from` (static shapes) never depend on data changes.
+  return false
+}
+
+/** Find the previous scene's top-level groups for a mark (by mark name or type). */
+function findReusableMarkGroup(prevItems: SceneGroup[], mark: CompiledMark): SceneGroup | null {
+  const match = (g: SceneGroup): boolean =>
+    g.name === mark.name || (mark.name == null && g.role === 'mark' && g.marktype === mark.type)
+  for (const g of prevItems) {
+    if (match(g)) return g
+  }
+  return null
+}
+
 export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
   const { ctx, width, height } = prepareChartCtx(chart, input)
+
+  // Partial re-evaluation: when the caller names the datasets whose values
+  // changed, marks drawing from untouched datasets reuse the previous scene's
+  // groups (item identity preserved for the DOM patcher), so an update to one
+  // dataset skips re-encoding every other mark.
+  const prevItems = (chart as unknown as { __prevItems?: SceneGroup[] }).__prevItems
+  const changedSet = input.changedDatasets
+    ? new Set(input.changedDatasets)
+    : null
 
   const items: SceneGroup[] = []
 
   // 1) Build marks (plot area)
   for (const mark of ctx.chart.marks) {
+    if (changedSet && !markTouchesChangedData(mark, ctx.chart, changedSet) && prevItems) {
+      const reused = findReusableMarkGroup(prevItems, mark)
+      if (reused) {
+        items.push(reused)
+        continue
+      }
+    }
     const result = evaluateMark(mark, ctx)
     if (result) {
       if (Array.isArray(result)) {
@@ -397,6 +436,8 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   ;(scene as unknown as { runtime?: unknown }).runtime = ctx.runtime
   ;(scene as unknown as { signalParams?: Record<string, unknown> }).signalParams = ctx.signalParams
   ;(scene as unknown as { compiled?: unknown }).compiled = ctx.chart
+  // Partial re-evaluation memo
+  ;(chart as unknown as { __prevItems?: SceneGroup[] }).__prevItems = items
   if (ctx._defs.length) scene.defs = ctx._defs
   return scene
 }
