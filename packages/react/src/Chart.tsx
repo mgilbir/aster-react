@@ -22,8 +22,11 @@ export interface ChartProps {
    * Incremental DOM updates: instead of re-serializing and re-parsing the whole
    * SVG on every spec/data change, keep the <svg> element and patch only the
    * attributes that changed (vega-scenegraph's SVG update strategy).
-   * Costs a slightly slower first mount; dramatically cheaper updates.
-   * SSR-safe: server renders the string markup; patching only runs in the browser.
+   * On by default: it is dramatically cheaper on updates for the common
+   * dashboard case (mostly-stable axes/legends) and leaks less heap. Set to
+   * false for a single string render when you only need static output.
+   * SSR-safe: the first render emits the full string markup (server + hydration
+   * match); patching only runs in the browser on subsequent updates.
    */
   incremental?: boolean
   className?: string
@@ -55,7 +58,7 @@ export function Chart({
   signals,
   onSelect,
   brush,
-  incremental,
+  incremental = true,
   signalListeners,
   onSignal,
   interactive = true,
@@ -109,8 +112,13 @@ export function Chart({
     }
   }, [spec, data, renderWidth, renderHeight, signals])
 
+  // Incremental is the default: we still serialize the full SVG for the first
+  // render (so server output and client hydration carry the markup), then the
+  // patcher owns the <svg> and we stop re-serializing on later updates.
+  const hasPatchedRef = React.useRef(false)
   const markup = React.useMemo<string | null>(() => {
-    if (incremental || scene == null) return null
+    if (scene == null) return null
+    if (incremental && hasPatchedRef.current) return null
     return renderSceneToSvg(scene)
   }, [incremental, scene])
 
@@ -154,6 +162,7 @@ export function Chart({
     } else {
       host.replaceChildren(renderSceneToDomElement(scene))
     }
+    hasPatchedRef.current = true
   }, [incremental, scene])
 
   const hasInteraction = onSelect != null || brush != null
