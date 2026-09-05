@@ -897,14 +897,19 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       const prevOutputs = chartMetaData.__prevDatasetOutputs
       const changes = ctx.dataChanges?.get(name)
       const paramsUnchanged = paramFpOf(ctx.signalParams) === chartMetaData.__paramFp
-      const agg = d.transform.length === 1 ? (d.transform[0] as Record<string, unknown> | undefined) : null
+      const single = d.transform.length === 1 ? (d.transform[0] as Record<string, unknown> | undefined) : null
+      const isAgg = single?.type === 'aggregate'
+      const isJoinAgg = single?.type === 'joinaggregate'
       let aggUpdated = false
-      // Incremental aggregate: re-aggregate only the groups touched by the
-      // changeset. Safe only when no changed row switches group (a group-membership
-      // change would add/remove/reorder output rows), which would require a full
-      // re-derive. Maintained via a persistent group index on the chart.
-      if (agg && agg.type === 'aggregate' && ctx.incremental && changes && paramsUnchanged) {
-        const groupby = (agg.groupby as string[] | undefined) ?? []
+      // Incremental group transforms (aggregate/joinaggregate): re-aggregate only
+      // the groups touched by the changeset. Safe only when no changed row
+      // switches group (a membership change would add/remove/reorder output
+      // rows), which requires a full re-derive. Maintained via a persistent
+      // group index on the chart. aggregate emits one row per group;
+      // joinaggregate merges the group aggregate onto each (1:1) row.
+      if ((isAgg || isJoinAgg) && ctx.incremental && changes && paramsUnchanged) {
+        const groupby = (single!.groupby as string[] | undefined) ?? []
+        const t = single!
         let state = chartMetaData.__aggState?.get(name)
         if (state && state.rowKey.length === rows.length) {
           const dirty = new Set<string>()
@@ -916,28 +921,46 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
             dirty.add(k)
           }
           if (safe && dirty.size) {
-            const apply = (gRows: Row[]): Row[] => applyTransforms(gRows, [{ type: 'aggregate', groupby, fields: agg.fields as never, ops: agg.ops as never, as: agg.as as never } as never], {
+            const apply = (gRows: Row[]): Row[] => applyTransforms(gRows, [{ type: t.type, groupby, fields: t.fields as never, ops: t.ops as never, as: t.as as never } as never], {
               runtime: ctx.runtime,
               signals: ctx.signalParams,
               datasets: (n) => ctx.datasets.get(n) ?? [],
               hierarchies: ctx.hierarchies,
               projections: ctx.projections,
             }, d.name)
-            for (const g of dirty) {
-              const idxs = state!.keyToIdx.get(g)
-              if (!idxs) { safe = false; break }
-              const derived = apply(idxs.map((idx) => rows[idx]!))
-              if (derived[0] != null) state!.outByKey.set(g, derived[0])
-            }
-            if (safe) {
-              const out = state!.outOrder.map((k) => state!.outByKey.get(k)!)
-              state!.out = out
-              rows = out
-              chartMetaData.__aggState!.set(name, state!)
-              aggUpdated = true
-              // Pulse: the output rows that changed are the dirty groups'
-              // aggregate rows (their positions in the output order).
-              outputChanges = new Set([...dirty].map((g) => state!.outOrder.indexOf(g)))
+            if (isAgg) {
+              for (const g of dirty) {
+                const idxs = state!.keyToIdx.get(g)
+                if (!idxs) { safe = false; break }
+                const derived = apply(idxs.map((idx) => rows[idx]!))
+                if (derived[0] != null) state!.outByKey.set(g, derived[0])
+              }
+              if (safe) {
+                const out = state!.outOrder.map((k) => state!.outByKey.get(k)!)
+                state!.out = out
+                rows = out
+                chartMetaData.__aggState!.set(name, state!)
+                aggUpdated = true
+                // Pulse: the output rows that changed are the dirty groups'
+                // aggregate rows (their positions in the output order).
+                outputChanges = new Set([...dirty].map((g) => state!.outOrder.indexOf(g)))
+              }
+            } else {
+              const out = state!.out
+              for (const g of dirty) {
+                const idxs = state!.keyToIdx.get(g)
+                if (!idxs) { safe = false; break }
+                const derived = apply(idxs.map((idx) => rows[idx]!))
+                derived.forEach((r, j) => { out[idxs[j]!] = r })
+              }
+              if (safe) {
+                rows = out
+                const allDirty = new Set<number>()
+                for (const g of dirty) for (const idx of state!.keyToIdx.get(g)!) allDirty.add(idx)
+                outputChanges = allDirty
+                chartMetaData.__aggState!.set(name, state!)
+                aggUpdated = true
+              }
             }
           }
         }
@@ -986,11 +1009,12 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
           projections: ctx.projections,
         }, d.name)
       }
-      // Refresh the persistent aggregate index whenever the aggregate was fully
-      // re-derived (first eval, an unsafe changeset, or a non-incremental path).
-      if (agg && (agg as { type: string }).type === 'aggregate' && !aggUpdated) {
+      // Refresh the persistent group index whenever the group transform was
+      // fully re-derived (first eval, an unsafe changeset, or a non-incremental
+      // path).
+      if ((isAgg || isJoinAgg) && !aggUpdated) {
         if (!chartMetaData.__aggState) chartMetaData.__aggState = new Map()
-        chartMetaData.__aggState.set(name, buildAggState(inputRows, (agg as { groupby?: string[] }).groupby ?? [], rows))
+        chartMetaData.__aggState.set(name, buildAggState(inputRows, (single as { groupby?: string[] }).groupby ?? [], rows))
       }
     }
     ctx.datasets.set(name, rows)
@@ -1222,7 +1246,7 @@ function evaluateMark(
     // objects for unchanged indices so the DOM patcher skips them and the
     // re-encode of those items is skipped entirely (including the row clone).
     if (canReuseItems(mark, ctx, source, rows.length, prevGroup, rectSorts)) {
-      const changes = ctx.dataChanges!.get(source)!
+      const changes = ctx.datasetChanges!.get(source)!
       const prevItems = prevGroup!.items as SceneItem[]
       // Reuse the previous group's item ARRAY in place and replace only the
       // changed indices — an O(changed) splice instead of an O(n) rebuild, the
