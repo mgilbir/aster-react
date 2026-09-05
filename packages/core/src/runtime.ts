@@ -3329,7 +3329,20 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
         label.align = align as SceneItem['align']
         label.fontSize = labelFs
       }
-      else { label.x = rawV + 0.5; label.y = -tickSize - 10 + 0.5; label.align = align as SceneItem['align'] }
+      else {
+        // Top axis: mirror the bottom-axis band handling so labels anchor to
+        // the band center (point scales bake the +0.5 that cancels the
+        // axis-group translate).
+        if (scale.bandwidth) {
+          const bw = scale.bandwidth()
+          label.x = (scale(t) as number) + bw / 2 + (bw > 0 ? 0 : 0.5)
+        } else {
+          label.x = rawV + 0.5
+        }
+        label.y = -(tickSize + labelPadding) + Math.round(-0.21 * labelFs) + 0.5
+        label.align = align as SceneItem['align']
+        label.fontSize = labelFs
+      }
       label.baseline = baseline as SceneItem['baseline']
       label.fill = '#000'
       labels.push(label)
