@@ -296,8 +296,18 @@ function findReusableMarkGroup(prevItems: SceneGroup[], mark: CompiledMark): Sce
   return null
 }
 
-export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
-  const { ctx, width, height } = prepareChartCtx(chart, input)
+/**
+ * Build the scene content (marks, axes/legends, title, trellis) and the
+ * autosize padding at a given content size. Extracted from evaluateChart so
+ * `fit`/`fit-x`/`fit-y` can re-run at a shrinking content size and converge.
+ */
+function buildContent(
+  chart: CompiledChart,
+  input: RuntimeInput,
+  cw: number,
+  ch: number,
+): { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; isFacetSpec: boolean } {
+  const { ctx, width, height } = prepareChartCtx(chart, { ...input, width: cw, height: ch })
 
   // Partial re-evaluation: when the caller names the datasets whose values
   // changed, marks drawing from untouched datasets reuse the previous scene's
@@ -331,20 +341,13 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
 
   // 2) Build axes + legends and compute padding
   const { groups: guideGroups } = buildAxisAndLegend(ctx)
-
-  // Merge guide groups into items
   for (const g of guideGroups) items.push(g)
 
-  // 2b) Top-level title. Vega's title layout anchors against the *content*
-  // bounds (plot rect unioned with axis/legend/mark overflow):
-  //   orient top: x = anchorPos(x1..x2), y = y1 - height - offset
+  // 2b) Top-level title.
   const titleGroup = buildTitleGroup(ctx.chart, items, width, height)
   if (titleGroup) items.push(titleGroup)
 
-  // 2c) Trellis layout (vega's ViewLayout/trellisLayout port). Facet charts
-  // with both row and column domains run the exact grid + header + title
-  // layout over the built items, deriving every position from measured
-  // bounds (same algorithms and arithmetic as vega).
+  // 2c) Trellis layout (vega's ViewLayout/trellisLayout port).
   const hasFacetMarks = (ctx as any).chart.marks?.some((m: any) => m.from?.facet?.groupby?.length > 0) ?? false
   const hasChildSignals = ctx.signalParams['child_width'] !== undefined && ctx.signalParams['child_height'] !== undefined
   const isFacetSpec = hasFacetMarks && hasChildSignals
@@ -352,12 +355,47 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
     applyTrellisLayout(items, ctx)
   }
 
-  // 2d) Vega's viewSizeLayout unions the recursive bounds of EVERY top-level
-  // mark (frame/axis/legend/title + plain marks) into the viewBounds and grows
-  // the autosize padding by the overflow. Measured with the exact vega bounds
-  // port (axes via the axisLayout spine semantics; everything else via the
-  // recursive item union), after the trellis layout has positioned items.
+  // 2d) viewSizeLayout padding (overflow) after the trellis layout.
   const padding = computeGuidePadding(items, width, height, ctx.chart.padding)
+  return { items, padding, ctx, width, height, isFacetSpec }
+}
+
+export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
+  const auto = chart.autosize
+  const base = chart.padding
+  const signals = { ...chart.signals, ...input.signals }
+  const initialW = resolveSize(chart.width, input.width, signals)
+  const initialH = resolveSize(chart.height, input.height, signals)
+
+  // `fit`/`fit-x`/`fit-y` shrink the *content* to fit a fixed viewport, then
+  // vega re-runs layout (resizeView) so scales are rebuilt at the fitted size.
+  // Reproduce that by iterating the content size to a fixed point.
+  let cw = initialW
+  let ch = initialH
+  let built = buildContent(chart, input, cw, ch)
+  if (auto === 'fit' || auto === 'fit-x' || auto === 'fit-y') {
+    for (let i = 0; i < 5; i++) {
+      const oL = built.padding.left - base.left
+      const oR = built.padding.right - base.right
+      const oT = built.padding.top - base.top
+      const oB = built.padding.bottom - base.bottom
+      let nw = cw
+      let nh = ch
+      // vega shrinks content against the *fixed* viewport (viewWidth/viewHeight),
+      // not the current content: content = viewport - overflow.
+      if (auto === 'fit') { nw = Math.max(0, initialW - oL - oR); nh = Math.max(0, initialH - oT - oB) }
+      else if (auto === 'fit-x') { nw = Math.max(0, initialW - oL - oR); nh = ch }
+      else { nw = cw; nh = Math.max(0, initialH - oT - oB) }
+      if (nw === cw && nh === ch) break
+      cw = nw
+      ch = nh
+      built = buildContent(chart, { ...input, changedDatasets: undefined }, cw, ch)
+    }
+  }
+  const { ctx, width, height } = built
+  const items = built.items
+  const padding = built.padding
+  const isFacetSpec = built.isFacetSpec
 
   // 3) Build the scene
   let sceneWidth: number
@@ -3477,10 +3515,13 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     role: 'axis',
     items,
     // axis geometry for the vega-faithful bounds port (boundAxisGroup):
-    // the spine rect extends [0, range] along the axis line
+    // `range` is the spine extent along the axis line; `baseline` is the
+    // perpendicular position of the axis line (content bottom for bottom,
+    // content top for top, 0 for left, content right for right). These diverge
+    // once autosize fit shrinks width != height, so both are needed.
     ...(orient === 'left' || orient === 'right'
-      ? { axis: { orient, range: ctx.height } }
-      : { axis: { orient, range: ctx.width } }),
+      ? { axis: { orient, range: ctx.height, baseline: orient === 'right' ? ctx.width : 0 } }
+      : { axis: { orient, range: ctx.width, baseline: orient === 'bottom' ? ctx.height : 0 } }),
   } as SceneGroup
 }
 

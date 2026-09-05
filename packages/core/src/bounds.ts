@@ -649,9 +649,13 @@ export function boundLeaf(bounds: Bounds, it: SceneItem): Bounds {
  */
 export function boundAxisGroup(axis: SceneGroup): Bounds {
   const b = new Bounds()
-  const meta = (axis as Record<string, unknown>).axis as { orient: string; range: number } | undefined
+  const meta = (axis as Record<string, unknown>).axis as { orient: string; range: number; baseline?: number } | undefined
   const orient = meta?.orient ?? 'left'
   const range = meta?.range ?? 0
+  // The axis line's perpendicular position: for top/bottom axes it sits at the
+  // content edge (content top/bottom), not the spine's along-axis extent
+  // (`range`). They diverge when autosize fit makes width != height.
+  const baseline = meta?.baseline ?? (orient === 'left' || orient === 'right' ? 0 : range)
   const tickLabelBounds = new Bounds()
   for (const it of axis.items ?? []) {
     const leaf = it as SceneItem
@@ -692,10 +696,10 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
     b.add(range, 0).add(range + s, range)
   } else if (orient === 'top') {
     s = tickLabelBounds.empty() ? 0 : -Math.min(0, tickLabelBounds.y1)
-    b.add(0, -s).add(range, 0)
+    b.add(0, -s).add(range, baseline)
   } else {
-    s = tickLabelBounds.empty() ? 0 : Math.max(range, tickLabelBounds.y2) - range
-    b.add(0, range).add(range, range + s)
+    s = tickLabelBounds.empty() ? 0 : Math.max(baseline, tickLabelBounds.y2) - baseline
+    b.add(0, baseline).add(range, baseline + s)
   }
   return b
 }
