@@ -99,3 +99,45 @@ describe('NaN fix (Bug 1)', () => {
     expect(scene.width).toBeGreaterThan(0)
   })
 })
+
+describe('partial re-evaluation (reactive dataflow)', () => {
+  const spec = {
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    width: 100,
+    height: 100,
+    autosize: 'none',
+    data: [
+      { name: 'src', values: [{ v: 1 }, { v: 3 }] },
+      { name: 'derived', source: 'src', transform: [{ type: 'formula', expr: 'datum.v * 2', as: 'y2' }] },
+    ],
+    scales: [
+      { name: 'y', type: 'linear', domain: { data: 'derived', field: 'y2' }, range: 'height', zero: true, nice: true },
+    ],
+    marks: [
+      { type: 'rect', from: { data: 'derived' }, encode: { update: { x: { value: 0 }, y: { scale: 'y', field: 'y2' }, y2: { scale: 'y', value: 0 }, height: { value: 5 } } } },
+    ],
+  } as never
+
+  const rectGroup = (scene: import('./types.js').SceneRoot) =>
+    scene.items.find((g) => (g as { marktype?: string }).marktype === 'rect')!
+
+  it('rebuilds a mark when a source-chain dataset changes (not stale reuse)', () => {
+    const chart = compileChart(spec)
+    const s1 = evaluateChart(chart, { data: { src: [{ v: 1 }, { v: 3 }] } })
+    const g1 = rectGroup(s1)
+    // `derived` (source: src) changes too; changedDatasets names only `src`.
+    const s2 = evaluateChart(chart, { data: { src: [{ v: 5 }, { v: 7 }] }, changedDatasets: ['src'] })
+    const g2 = rectGroup(s2)
+    expect(g2).not.toBe(g1)
+  })
+
+  it('reuses a mark unaffected by the changed dataset', () => {
+    const chart = compileChart(spec)
+    const s1 = evaluateChart(chart, { data: { src: [{ v: 1 }, { v: 3 }] } })
+    const g1 = rectGroup(s1)
+    // Change an unrelated dataset name; the mark (from `derived`) is untouched.
+    const s2 = evaluateChart(chart, { data: { other: [] }, changedDatasets: ['other'] })
+    const g2 = rectGroup(s2)
+    expect(g2).toBe(g1)
+  })
+})

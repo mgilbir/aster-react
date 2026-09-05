@@ -12,6 +12,7 @@ import { locale } from 'vega-format'
 import type {
   CompiledAxis,
   CompiledChart,
+  CompiledData,
   CompiledLegend,
   CompiledMark,
   CompiledScale,
@@ -275,14 +276,62 @@ function computeGuidePadding(
 
 
 /**
- * Partial re-evaluation: does this mark draw from any of the changed datasets?
- * A mark touches a dataset when its `from.data` names it (directly or through
- * a source chain) or a scale it uses has a data-derived domain.
+ * The set of datasets affected by a change, closed transitively over `source`
+ * chains: a derived dataset (source: A) changes whenever A changes.
  */
+function affectedDatasets(chart: CompiledChart, changed: Set<string>): Set<string> {
+  const affected = new Set(changed)
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const d of chart.data) {
+      const src = (d as CompiledData & { source?: string }).source
+      if (src && affected.has(src) && !affected.has(d.name)) {
+        affected.add(d.name)
+        grew = true
+      }
+    }
+  }
+  return affected
+}
+
+/** Collect the scale names a mark references in its encode (recursive). */
+function collectMarkScales(mark: CompiledMark): Set<string> {
+  const out = new Set<string>()
+  const enc = (mark as { encode?: Record<string, Record<string, unknown>> }).encode
+  if (!enc) return out
+  const walk = (v: unknown): void => {
+    if (v == null || typeof v !== 'object') return
+    if (Array.isArray(v)) { for (const x of v) walk(x); return }
+    const rec = v as Record<string, unknown>
+    if (typeof rec.scale === 'string') out.add(rec.scale)
+    for (const k of Object.keys(rec)) walk(rec[k])
+  }
+  for (const stage of Object.keys(enc)) walk(enc[stage])
+  return out
+}
+
+/** A data-derived scale domain referencing an affected dataset. */
+function hasAffectedDomain(domain: ScaleDomain, affected: Set<string>): boolean {
+  if (domain && typeof domain === 'object' && !Array.isArray(domain)) {
+    const dataRef = (domain as { data?: unknown }).data
+    if (typeof dataRef === 'string' && affected.has(dataRef)) return true
+  }
+  return false
+}
+
 function markTouchesChangedData(mark: CompiledMark, chart: CompiledChart, changed: Set<string>): boolean {
-  const touch = (dataName: string | undefined): boolean => dataName != null && changed.has(dataName)
-  if (mark.from?.data) return touch(mark.from.data)
-  // Marks with no `from` (static shapes) never depend on data changes.
+  // Marks with no `from` and no data-derived scale domain (static shapes)
+  // never depend on data changes.
+  const affected = affectedDatasets(chart, changed)
+  if (mark.from?.data && affected.has(mark.from.data)) return true
+  // A mark can draw from an unaffected dataset but be positioned by a scale
+  // whose domain spans a changed dataset; the reused group would hold stale
+  // positions, so treat it as touched.
+  for (const name of collectMarkScales(mark)) {
+    const scale = chart.scales.find((s) => s.name === name)
+    if (scale && hasAffectedDomain(scale.domain, affected)) return true
+  }
   return false
 }
 
