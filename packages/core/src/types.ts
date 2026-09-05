@@ -351,6 +351,9 @@ export interface SceneItem {
   /** @internal Differential-update generation: set when an item is (re)encoded; a DOM
    * patch skips subtrees whose item was not touched this eval. */
   __gen?: number
+  /** @internal Cached DOM descriptor for a reused (unchanged) item, so the DOM
+   * desc is not rebuilt from scratch every patch. */
+  __domDesc?: unknown
   // geometry
   x?: number
   y?: number

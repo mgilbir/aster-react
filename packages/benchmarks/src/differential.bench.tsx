@@ -36,6 +36,9 @@ async function main(): Promise<void> {
   const warmup = 2
 
   const { compileChart, evaluateChart } = await import('@aster/core')
+  const { patchSceneDom, renderSceneToDomElement } = await import('@aster/core/dom')
+  const { setupJsdom } = await import('./jsdom-env.js')
+  setupJsdom()
 
   const pts = (n: number) => Array.from({ length: n }, (_, i) => ({ x: i % 100, y: i % 100 }))
   const few = (n: number): number[] => {
@@ -80,6 +83,7 @@ async function main(): Promise<void> {
   ]
 
   const data: string[][] = []
+  const domData: string[][] = []
   for (const c of cases) {
     const chart = compileChart(c.spec)
     const initial = c.next(points)
@@ -95,9 +99,39 @@ async function main(): Promise<void> {
     const d = summarize(diff)
     const f = summarize(full)
     data.push([c.name, String(points), fmt(f.median), fmt(d.median), (f.median / d.median).toFixed(1) + 'x'])
+
+    // DOM-patch measurement: the incremental DOM patcher skips unchanged
+    // subtrees, so a stable update only descends into the changed items. Use a
+    // smaller chart (jsdom patching is O(n) and slow at 50k nodes).
+    const domPts = Math.min(points, 4000)
+    const domChanged = few(domPts)
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    // Mount via patchSceneDom (like <Chart incremental>), so the patch cache
+    // (LAST) is populated — the DOM-subtree skip only engages from the second
+    // patch onward.
+    const mountHost = document.createElement('div')
+    mountHost.innerHTML = '<svg></svg>'
+    const svg = mountHost.firstElementChild as Element
+    const mountScene = evaluateChart(compileChart(c.spec), { data: c.next(domPts) })
+    patchSceneDom(svg, mountScene)
+    host.appendChild(svg)
+    const patchFull: number[] = []
+    const patchDiff: number[] = []
+    const chart2 = compileChart(c.spec)
+    const domData2 = c.next(domPts)
+    for (let r = 0; r < Math.min(reps, 3); r++) {
+      patchFull.push(time(() => patchSceneDom(svg, evaluateChart(chart2, { data: domData2 }))))
+      patchDiff.push(time(() => patchSceneDom(svg, evaluateChart(chart2, { data: domData2, dataChanges: { t: domChanged } }))))
+    }
+    const pd = summarize(patchDiff)
+    const pf = summarize(patchFull)
+    domData.push([c.name, String(domPts), fmt(pf.median), fmt(pd.median), (pf.median / pd.median).toFixed(1) + 'x'])
+    host.remove()
   }
 
   console.log(table('differential scene eval (changed-set vs full re-encode)', ['case', 'points', 'full (ms)', 'diff (ms)', 'speedup'], data))
+  console.log(table('differential DOM patch (scene eval + patchSceneDom)', ['case', 'points', 'full (ms)', 'diff (ms)', 'speedup'], domData))
 }
 
 main().catch((e) => { console.error(e); process.exit(1) })

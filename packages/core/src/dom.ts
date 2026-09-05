@@ -44,6 +44,15 @@ function isClean(it: SceneItem): boolean {
   return CURRENT_GEN != null && it.__gen != null && it.__gen !== CURRENT_GEN
 }
 
+/** Build (or reuse, for a clean item) the DOM descriptor for a scene item. */
+function cachedDesc(it: SceneItem, build: () => DomDesc): DomDesc {
+  const cached = it.__domDesc as DomDesc | undefined
+  if (isClean(it) && cached) return { ...cached, clean: true }
+  const desc = build()
+  it.__domDesc = desc
+  return desc
+}
+
 /** Attribute pairs for presentation props, mirroring `attr()` semantics (null = absent). */
 function props(pairs: Array<[string, unknown]>): Array<[string, string]> {
   const out: Array<[string, string]> = []
@@ -182,7 +191,7 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
     case 'symbol':
       return items
         .filter((it) => it.x != null && it.y != null)
-        .map((it) => {
+        .map((it) => cachedDesc(it, () => {
           const size = (it.size as number) ?? 30
           const r = Math.sqrt(size) / 2
           return {
@@ -201,7 +210,7 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
             ],
             clean: isClean(it),
           }
-        })
+        }))
     case 'rect':
       return items
         .slice()
@@ -219,7 +228,7 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
               ['opacity', it.opacity],
             ]),
           ]
-          return { tag: 'path', attrs, clean: isClean(it) }
+          return cachedDesc(it, () => ({ tag: 'path', attrs, clean: isClean(it) }))
         })
         .filter((x): x is NonNullable<typeof x> => x != null)
     case 'circle':
@@ -227,7 +236,7 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
         .filter((it) => it.x != null && it.y != null)
         .map((it) => {
           const r = it.radius != null ? it.radius : Math.sqrt((it.size as number) ?? 30) / 2
-          return {
+          return cachedDesc(it, () => ({
             tag: 'circle',
             attrs: [
               ['cx', num(it.x!)],
@@ -236,13 +245,13 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
               ...props([['fill', it.fill], ['fill-opacity', it.fillOpacity], ['stroke', it.stroke], ['stroke-width', it.strokeWidth], ['opacity', it.opacity]]),
             ],
             clean: isClean(it),
-          }
+          }))
         })
     case 'rule':
       return items.map((it) => {
         const x = it.x ?? 0
         const y = it.y ?? 0
-        return {
+        return cachedDesc(it, () => ({
           tag: 'line',
           attrs: [
             ['x1', num(x)],
@@ -252,7 +261,7 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
             ...props([['stroke', it.stroke], ['stroke-width', it.strokeWidth], ['stroke-dasharray', it.strokeDash], ['opacity', it.opacity]]),
           ],
           clean: isClean(it),
-        }
+        }))
       })
     case 'text':
       return items
@@ -265,8 +274,8 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
             if (m?.[1]) attrs.push(['dy', m[1]])
           }
           attrs.push(...props(d.attrs))
-          if (d.lines.length === 1) return { tag: 'text', attrs, text: d.text, clean: isClean(it) }
-          return {
+          if (d.lines.length === 1) return cachedDesc(it, () => ({ tag: 'text', attrs, text: d.text, clean: isClean(it) }))
+          return cachedDesc(it, () => ({
             tag: 'text',
             attrs,
             clean: isClean(it),
@@ -275,7 +284,7 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
               attrs: i === 0 ? [] : ([['x', '0'], ['dy', num(d.lineHeight)]] as Array<[string, string]>),
               text: line,
             })),
-          } as const
+          } as const))
         })
         .filter((d): d is NonNullable<typeof d> => d != null)
     case 'path':
@@ -290,12 +299,12 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
           if (tx !== '0' || ty !== '0') attrs.push(['transform', `translate(${tx},${ty})`])
           attrs.push(['d', String(it.path)])
           attrs.push(...props([['fill', it.fill], ['fill-opacity', it.fillOpacity], ['stroke', it.stroke], ['stroke-width', it.strokeWidth], ['opacity', it.opacity]]))
-          return { tag: 'path', attrs, clean: isClean(it) }
+          return cachedDesc(it, () => ({ tag: 'path', attrs, clean: isClean(it) }))
         })
     case 'image':
       return items
         .filter((it) => it.url != null && it.x != null && it.y != null)
-        .map((it) => ({
+        .map((it) => cachedDesc(it, () => ({
           tag: 'image',
           attrs: [
             ['xlink:href', String(it.url)],
@@ -305,7 +314,7 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
             ['preserveAspectRatio', it.aspect === false ? 'none' : 'xMidYMid'],
           ],
           clean: isClean(it),
-        }))
+        })))
     case 'arc':
       return items.map((it) => {
         const x = it.x as number
@@ -314,14 +323,14 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
         const r0 = (it.innerRadius as number) ?? 0
         const a0 = (it.startAngle as number) ?? 0
         const a1 = (it.endAngle as number) ?? 0
-        return {
+        return cachedDesc(it, () => ({
           tag: 'path',
           attrs: [
             ['d', arcPath(x, y, r, r0, a0, a1)],
             ...props([['fill', it.fill], ['fill-opacity', it.fillOpacity], ['stroke', it.stroke], ['stroke-width', it.stroke != null ? it.strokeWidth : undefined]]),
           ],
           clean: isClean(it),
-        }
+        }))
       })
     default:
       return []
@@ -362,7 +371,7 @@ function groupDesc(group: SceneGroup, plotW: number, plotH: number, clips: ClipC
     const children: DomDesc[] = []
     for (const item of group.items ?? []) {
       const isGroup = (item as SceneGroup).marktype !== undefined || Array.isArray((item as SceneGroup).items)
-      const d = isGroup ? groupDesc(item as SceneGroup, plotW, plotH, clips) : leafDesc(item)
+      const d = isGroup ? groupDesc(item as SceneGroup, plotW, plotH, clips) : cachedDesc(item, () => leafDesc(item))
       if (d) children.push(d)
     }
     return g('g', attrs, children)

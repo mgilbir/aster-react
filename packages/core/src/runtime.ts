@@ -1249,7 +1249,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
 
 function buildScales(ctx: EvalContext): void {
   const scaleSignals = ctx.signalParams
-  const chartMeta = ctx.chart as unknown as { __cachedScales?: Map<string, { scale: Scale; multi: boolean }>; __scaleDomain?: Map<string, { data: string; field: string; lo: number; hi: number; oldVals: number[]; finite: boolean }>; __paramFp?: string }
+  const chartMeta = ctx.chart as unknown as { __cachedScales?: Map<string, { scale: Scale; multi: boolean }>; __scaleDomain?: Map<string, { data: string; field: string; lo: number; hi: number; oldVals: number[]; loCount: number; hiCount: number; finite: boolean }>; __paramFp?: string }
   const cached = chartMeta.__cachedScales ?? (chartMeta.__cachedScales = new Map())
   const domainCache = chartMeta.__scaleDomain ?? (chartMeta.__scaleDomain = new Map())
   // A scale whose domain references none of the affected datasets (closed over
@@ -1289,11 +1289,17 @@ function buildScales(ctx: EvalContext): void {
         const rows = ctx.datasets.get(dom.data) ?? []
         if (prevDom && prevDom.finite && changes && changes.size && prevDom.oldVals.length === rows.length) {
           let stable = true
+          let loCount = prevDom.loCount
+          let hiCount = prevDom.hiCount
           for (const i of changes) {
             if (i < 0 || i >= rows.length) { stable = false; break }
             const newV = Number((rows[i] as Row)[dom.field])
             const oldV = prevDom.oldVals[i]!
-            if (newV < prevDom.lo || newV > prevDom.hi || oldV === prevDom.lo || oldV === prevDom.hi) { stable = false; break }
+            if (newV < prevDom.lo || newV > prevDom.hi) { stable = false; break }
+            // A changed row at the boundary only moves the domain if it was the
+            // last row holding that boundary (another row may still keep it).
+            if (oldV === prevDom.lo && --loCount <= 0) { stable = false; break }
+            if (oldV === prevDom.hi && --hiCount <= 0) { stable = false; break }
           }
           reuse = stable
         }
@@ -1327,12 +1333,16 @@ function buildScales(ctx: EvalContext): void {
       const rows = ctx.datasets.get(dom.data) ?? []
       const vals = rows.map((r) => Number((r as Row)[dom.field]))
       const finite = vals.filter((v) => Number.isFinite(v))
+      const lo = finite.length ? Math.min(...finite) : 0
+      const hi = finite.length ? Math.max(...finite) : 1
       domainCache.set(s.name, {
         data: dom.data,
         field: dom.field,
-        lo: finite.length ? Math.min(...finite) : 0,
-        hi: finite.length ? Math.max(...finite) : 1,
+        lo,
+        hi,
         oldVals: vals,
+        loCount: finite.length ? vals.filter((v) => v === lo).length : 0,
+        hiCount: finite.length ? vals.filter((v) => v === hi).length : 0,
         finite: finite.length > 0,
       })
     }

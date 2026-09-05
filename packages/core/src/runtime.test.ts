@@ -481,6 +481,23 @@ describe('per-datum differential update', () => {
     expect((it[1] as { __gen?: number }).__gen).toBe(gen)
   })
 
+  it('reuses a continuous scale when a boundary row moves but another holds the min', () => {
+    const ts = {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 200, height: 200, autosize: 'none',
+      data: [{ name: 't', values: [{ v: 1 }, { v: 3 }, { v: 1 }, { v: 7 }] }],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: { data: 't', field: 'v' }, range: 'height', zero: true, nice: true }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', value: 0 }, y: { scale: 'y', field: 'v' }, size: { value: 40 } } } }],
+    } as never
+    const chart = compileChart(ts)
+    const y = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => it.y)
+    evaluateChart(chart, { data: { t: [{ v: 1 }, { v: 3 }, { v: 1 }, { v: 7 }] } })
+    // index 0 (v:1 -> 2); index 2 still holds min 1, so the domain [1,7] is unchanged.
+    const inc = evaluateChart(chart, { data: { t: [{ v: 2 }, { v: 3 }, { v: 1 }, { v: 7 }] }, dataChanges: { t: [0] } })
+    const full = evaluateChart(chart, { data: { t: [{ v: 2 }, { v: 3 }, { v: 1 }, { v: 7 }] } })
+    expect(y(inc)).toEqual(y(full))
+  })
+
   it('does NOT reuse a discrete (band) scale when a new category enters (correct output)', () => {
     const ts = {
       $schema: 'https://vega.github.io/schema/vega/v6.json',
