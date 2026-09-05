@@ -90,7 +90,9 @@ function styleOf(el: XmlEl): string {
     // label-overlap-hidden labels as invisible DOM nodes that we do not
     // reproduce — hidden labels have no visual geometry).
     if (k === 'opacity' && (roundIn(v) === '1' || roundIn(v) === '0')) continue
-    parts.push(`${k}=${roundIn(v)}`)
+    // Gradient ids are internal (aster/vega both emit `gradient_N` but the exact
+    // index can differ across re-evaluations); canonicalize the reference.
+    parts.push(`${k}=${roundIn(v).replace(/url\(#gradient_\d+\)/g, 'url(#gradient)')}`)
   }
   return parts.join(';')
 }
