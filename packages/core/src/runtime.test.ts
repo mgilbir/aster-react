@@ -399,6 +399,45 @@ describe('per-datum differential update', () => {
     expect(lab(inc)).toEqual(lab(full)) // source unchanged -> both [y,y]
   })
 
+  it('incremental flatten equals full re-derive when array lengths are stable', () => {
+    const ts = {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 200, height: 200, autosize: 'none',
+      data: [{ name: 't', values: [{ id: 'r1', vals: [10, 20] }, { id: 'r2', vals: [30] }], transform: [{ type: 'flatten', fields: ['vals'] }] }],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'vals' }, y: { value: 0 }, size: { value: 40 } } } }],
+    } as never
+    const chart = compileChart(ts)
+    const vals = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { vals?: number } }).datum?.vals)
+    const init = [{ id: 'r1', vals: [10, 20] }, { id: 'r2', vals: [30] }]
+    const changed = [{ id: 'r1', vals: [11, 20] }, { id: 'r2', vals: [30] }] // same array length
+    evaluateChart(chart, { data: { t: init } })
+    const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } })
+    const full = evaluateChart(chart, { data: { t: changed } })
+    expect(vals(inc)).toEqual(vals(full))
+  })
+
+  it('non-incrementable transforms (collect/impute) fall back to a correct full re-derive', () => {
+    const clock = { $schema: 'https://vega.github.io/schema/vega/v6.json', width: 100, height: 100, autosize: 'none' } as const
+    const scale = { name: 'x', type: 'linear', domain: [0, 10], range: 'width' }
+    const yScale = { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }
+    const sym = { type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'v' }, y: { value: 0 }, size: { value: 40 } } } }
+    // collect: sorts by v descending (reorder) — a changed row re-sorts.
+    const collectChart = compileChart({ ...clock, data: [{ name: 't', values: [{ v: 1 }, { v: 4 }, { v: 2 }], transform: [{ type: 'collect', sort: { field: 'v', order: 'descending' } }] }], scales: [scale, yScale], marks: [sym] } as never)
+    const vs = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { v?: number } }).datum?.v)
+    evaluateChart(collectChart, { data: { t: [{ v: 1 }, { v: 4 }, { v: 2 }] } })
+    const cInc = evaluateChart(collectChart, { data: { t: [{ v: 5 }, { v: 4 }, { v: 2 }] }, dataChanges: { t: [0] } })
+    const cFull = evaluateChart(collectChart, { data: { t: [{ v: 5 }, { v: 4 }, { v: 2 }] } })
+    expect(vs(cInc)).toEqual(vs(cFull)) // [5,4,2] sorted desc, deterministic
+    // impute: fills a missing key per group.
+    const imputeChart = compileChart({ ...clock, data: [{ name: 't', values: [{ g: 'a', k: 1, v: 5 }, { g: 'a', k: 3, v: 9 }], transform: [{ type: 'impute', field: 'v', key: 'k', groupby: ['g'], method: 'value', value: 0 }] }], scales: [scale, yScale], marks: [sym] } as never)
+    const iv = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { v?: number } }).datum?.v)
+    evaluateChart(imputeChart, { data: { t: [{ g: 'a', k: 1, v: 5 }, { g: 'a', k: 3, v: 9 }] } })
+    const iInc = evaluateChart(imputeChart, { data: { t: [{ g: 'a', k: 1, v: 6 }, { g: 'a', k: 3, v: 9 }] }, dataChanges: { t: [0] } })
+    const iFull = evaluateChart(imputeChart, { data: { t: [{ g: 'a', k: 1, v: 6 }, { g: 'a', k: 3, v: 9 }] } })
+    expect(iv(iInc)).toEqual(iv(iFull))
+  })
+
   it('falls back to full re-derive when a changed row switches group', () => {
     const ts = {
       $schema: 'https://vega.github.io/schema/vega/v6.json',

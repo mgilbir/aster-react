@@ -910,6 +910,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
         __filterPassed?: Map<string, boolean[]>
         __binState?: Map<string, { lo: number; hi: number; start: number; stop: number; step: number; out: Row[]; oldVals: number[] }>
         __foldState?: Map<string, { n: number; out: Row[] }>
+        __flattenState?: Map<string, { offsets: number[]; sizes: number[]; out: Row[] }>
         __paramFp?: string
       }
       const prevOutputs = chartMetaData.__prevDatasetOutputs
@@ -1006,6 +1007,46 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
           for (const i of changes) if (i >= 0 && i < rows.length / n) for (let j = 0; j < n; j++) allDirty.add(i * n + j)
           outputChanges = allDirty
           aggUpdated = true
+        }
+      }
+      // Incremental flatten: each row expands to `size[i]` rows (the max array
+      // length across its fields), placed at a cached per-row offset. Safe only
+      // when every changed row's arrays retain their length (so its index block
+      // stays fixed); a changed expand count shifts the offsets -> full re-derive.
+      if (single?.type === 'flatten' && ctx.incremental && changes && paramsUnchanged) {
+        const fs = chartMetaData.__flattenState?.get(name)
+        const fields = (single as { fields?: string[] }).fields ?? []
+        const sizeOf = (r: Row): number => {
+          let maxlen = 0
+          for (const f of fields) {
+            const a = (r as Record<string, unknown>)[f]
+            const len = Array.isArray(a) ? a.length : (a as { length?: number })?.length
+            maxlen = len == null ? NaN : Math.max(maxlen, len)
+          }
+          return Number.isFinite(maxlen) && maxlen > 0 ? maxlen : 0
+        }
+        if (fs && fs.offsets.length === rows.length) {
+          let safe = true
+          for (const i of changes) {
+            if (i < 0 || i >= rows.length) { safe = false; break }
+            if (sizeOf(rows[i]!) !== fs.sizes[i]) { safe = false; break }
+          }
+          if (safe) {
+            const out = fs.out
+            for (const i of changes) {
+              if (i < 0 || i >= rows.length) continue
+              const n = fs.sizes[i]!
+              const derived = applyTransforms([rows[i]!], [single as never], {
+                runtime: ctx.runtime, signals: ctx.signalParams, datasets: (x) => ctx.datasets.get(x) ?? [], hierarchies: ctx.hierarchies, projections: ctx.projections,
+              }, d.name)
+              for (let j = 0; j < n && j < derived.length; j++) out[fs.offsets[i]! + j] = derived[j]!
+            }
+            rows = out
+            const allDirty = new Set<number>()
+            for (const i of changes) if (i >= 0 && i < fs.offsets.length) for (let j = 0; j < fs.sizes[i]!; j++) allDirty.add(fs.offsets[i]! + j)
+            outputChanges = allDirty
+            aggUpdated = true
+          }
         }
       }
       // Incremental group transforms (aggregate/joinaggregate/window/stack):
@@ -1165,6 +1206,26 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       if (single?.type === 'fold' && !aggUpdated) {
         if (!chartMetaData.__foldState) chartMetaData.__foldState = new Map()
         chartMetaData.__foldState.set(name, { n: ((single as { fields?: unknown[] }).fields ?? []).length, out: rows })
+      }
+      if (single?.type === 'flatten' && !aggUpdated) {
+        const fields = (single as { fields?: string[] }).fields ?? []
+        const offsets: number[] = []
+        const sizes: number[] = []
+        let pos = 0
+        for (const r of inputRows) {
+          let maxlen = 0
+          for (const f of fields) {
+            const a = (r as Record<string, unknown>)[f]
+            const len = Array.isArray(a) ? a.length : (a as { length?: number })?.length
+            maxlen = len == null ? NaN : Math.max(maxlen, len)
+          }
+          const size = Number.isFinite(maxlen) && maxlen > 0 ? maxlen : 0
+          offsets.push(pos)
+          sizes.push(size)
+          pos += size
+        }
+        if (!chartMetaData.__flattenState) chartMetaData.__flattenState = new Map()
+        chartMetaData.__flattenState.set(name, { offsets, sizes, out: rows })
       }
     }
     ctx.datasets.set(name, rows)
