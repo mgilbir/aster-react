@@ -1,6 +1,62 @@
 import { describe, it, expect } from 'vitest'
 import { compileChart } from './compiler.js'
 import { evaluateChart, getChartInfo } from './runtime.js'
+import { renderSceneToSvg } from './index.js'
+
+/** Deterministic PRNG for the differential fuzz test. */
+function mulberry32(seed: number): () => number {
+  let a = seed
+  return () => {
+    a |= 0
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+const BASE = { $schema: 'https://vega.github.io/schema/vega/v6.json', width: 200, height: 200, autosize: 'none' } as const
+const sc = (name: string, dom: unknown) => ({ name, type: 'linear', domain: dom, range: 'width' })
+const ysc = (name: string, dom: unknown) => ({ name, type: 'linear', domain: dom, range: 'height', zero: true, nice: true })
+const sym = (field: string) => ({ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field }, y: { scale: 'y', value: 0 }, size: { value: 40 } } } })
+
+function fuzzSpecs(): Array<{ name: string; spec: Record<string, unknown> }> {
+  const n = 12
+  const rows = Array.from({ length: n }, (_, i) => ({ x: i % 4, y: i % 5, g: 'g' + (i % 3), v: i }))
+  const specs: Array<{ name: string; spec: Record<string, unknown> }> = [
+    { name: 'symbol', spec: { ...BASE, data: [{ name: 't', values: rows }], scales: [sc('x', [0, 10]), ysc('y', [0, 10])], marks: [sym('x')] } as never },
+    { name: 'formula', spec: { ...BASE, data: [{ name: 't', values: rows, transform: [{ type: 'formula', expr: 'datum.x * 2', as: 'x2' }] }], scales: [sc('x', [0, 10]), ysc('y', [0, 10])], marks: [sym('x2')] } as never },
+    { name: 'aggregate', spec: { ...BASE, data: [{ name: 't', values: rows, transform: [{ type: 'aggregate', groupby: ['g'], fields: ['v'], ops: ['sum'], as: ['s'] }] }], scales: [sc('x', [0, 10]), ysc('y', [0, 10])], marks: [sym('s')] } as never },
+    { name: 'joinaggregate', spec: { ...BASE, data: [{ name: 't', values: rows, transform: [{ type: 'joinaggregate', groupby: ['g'], fields: ['v'], ops: ['sum'], as: ['s'] }] }], scales: [sc('x', [0, 10]), ysc('y', [0, 10])], marks: [sym('s')] } as never },
+    { name: 'filter', spec: { ...BASE, data: [{ name: 't', values: rows, transform: [{ type: 'filter', expr: 'datum.x > 1' }] }], scales: [sc('x', [0, 10]), ysc('y', [0, 10])], marks: [sym('x')] } as never },
+    { name: 'bin', spec: { ...BASE, data: [{ name: 't', values: rows, transform: [{ type: 'bin', field: 'x', extent: [0, 4], as: ['b0', 'b1'] }] }], scales: [sc('x', [0, 4]), ysc('y', [0, 10])], marks: [sym('b0')] } as never },
+    { name: 'band-scale', spec: { ...BASE, data: [{ name: 't', values: rows }], scales: [{ name: 'x', type: 'band', domain: { data: 't', field: 'g' }, range: 'width', paddingOuter: 0.1, paddingInner: 0.2 }, ysc('y', [0, 10])], marks: [sym('x')] } as never },
+  ]
+  return specs
+}
+
+describe('differential fuzz (incremental === full re-derive)', () => {
+  it('matches full re-derive across random changesets and specs', () => {
+    const rand = mulberry32(0xC0FFEE)
+    for (const { name, spec } of fuzzSpecs()) {
+      const chart = compileChart(spec)
+      const n = 12
+      const base = Array.from({ length: n }, (_, i) => ({ x: i % 4, y: i % 5, g: 'g' + (i % 3), v: i }))
+      for (let trial = 0; trial < 8; trial++) {
+        // random changeset (subset of indices, random new values, same length/order)
+        const changed: number[] = []
+        const next = base.map((r, i) => {
+          if (rand() < 0.25) { changed.push(i); return { ...r, x: (r.x + 1) % 4, y: (r.y + 1) % 5, v: r.v + 1 } }
+          return r
+        })
+        evaluateChart(chart, { data: { t: base } })
+        const inc = evaluateChart(chart, { data: { t: next }, dataChanges: { t: changed } })
+        const full = evaluateChart(chart, { data: { t: next } })
+        expect(renderSceneToSvg(inc), `${name} trial ${trial}`).toBe(renderSceneToSvg(full))
+      }
+    }
+  })
+})
 
 describe('autosize compilation', () => {
   it('parses string autosize as-is', () => {
