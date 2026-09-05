@@ -7,10 +7,11 @@
     "budget": "node scripts/budget.mjs",
     "bench:bundle": "tsx scripts/bundle-size.mjs",
     "bench:runtime": "tsx src/runtime.bench.tsx",
+    "bench:differential": "tsx src/differential.bench.tsx",
     "bench:memory": "node --expose-gc --import tsx src/memory.bench.tsx",
     "bench:browser": "tsx scripts/browser.bench.mjs",
     "bench:pipeline": "tsx src/pipeline.bench.tsx",
-    "bench": "pnpm bench:runtime && pnpm bench:memory && pnpm bench:bundle && pnpm bench:browser",
+    "bench": "pnpm bench:runtime && pnpm bench:differential && pnpm bench:memory && pnpm bench:bundle && pnpm bench:browser",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
