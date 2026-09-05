@@ -805,20 +805,54 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       rows = ((inputData[name] as Row[]) ?? []).map((r) => ({ ...r }))
     }
     if (d.transform.length) {
-      rows = applyTransforms(rows, d.transform, {
-        runtime: ctx.runtime,
-        signals: ctx.signalParams,
-        // Cross-dataset access for the `lookup` transform. Build the referenced
-        // dataset on demand (it may be declared after this one in the spec).
-        datasets: (name) => {
-          if (!ctx.datasets.has(name) && sources.has(name)) build(name, new Set())
-          return ctx.datasets.get(name)
-        },
-        hierarchies: ctx.hierarchies,
-        projections: ctx.projections,
-      }, d.name)
+      const prevOutputs = (ctx.chart as unknown as { __prevDatasetOutputs?: Map<string, Row[]> }).__prevDatasetOutputs
+      const changes = ctx.dataChanges?.get(name)
+      // Row-wise transforms (formula/identifier) map index to index, so the
+      // output rows for indices not in the changeset are unchanged and can be
+      // reused. A global transform (filter/aggregate/stack/bin/...) invalidates
+      // every output row, so fall back to a full re-derive.
+      const rowwise = d.transform.every((tm) => tm.type === 'formula' || tm.type === 'identifier')
+      const cached = prevOutputs?.get(name)
+      if (changes && rowwise && cached && cached.length === rows.length) {
+        const apply = (single: Row[]): Row[] => applyTransforms(single, d.transform, {
+          runtime: ctx.runtime,
+          signals: ctx.signalParams,
+          datasets: (n) => ctx.datasets.get(n) ?? [],
+          hierarchies: ctx.hierarchies,
+          projections: ctx.projections,
+        }, d.name)
+        const via = changes.size < rows.length / 2 ? changes : null
+        if (via) {
+          const out = cached.slice()
+          for (const i of via) {
+            if (i < 0 || i >= out.length) continue
+            const derived = apply([rows[i]!])
+            if (derived[0] != null) out[i] = derived[0]
+          }
+          rows = out
+        } else {
+          rows = apply(rows)
+        }
+      } else {
+        rows = applyTransforms(rows, d.transform, {
+          runtime: ctx.runtime,
+          signals: ctx.signalParams,
+          // Cross-dataset access for the `lookup` transform. Build the referenced
+          // dataset on demand (it may be declared after this one in the spec).
+          datasets: (name) => {
+            if (!ctx.datasets.has(name) && sources.has(name)) build(name, new Set())
+            return ctx.datasets.get(name)
+          },
+          hierarchies: ctx.hierarchies,
+          projections: ctx.projections,
+        }, d.name)
+      }
     }
     ctx.datasets.set(name, rows)
+    // Cache the derived output for the next per-datum update.
+    const chartMeta = ctx.chart as unknown as { __prevDatasetOutputs?: Map<string, Row[]> }
+    if (!chartMeta.__prevDatasetOutputs) chartMeta.__prevDatasetOutputs = new Map()
+    chartMeta.__prevDatasetOutputs.set(name, rows)
     return rows
   }
 

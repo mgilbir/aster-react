@@ -193,4 +193,30 @@ describe('per-datum differential update', () => {
     const after = symbolItems(s2)
     expect(after[0]).not.toBe(before[0])
   })
+
+  it('re-derives only changed rows through a row-wise dataset transform', () => {
+    const ts = {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 200,
+      height: 200,
+      autosize: 'none',
+      data: [{ name: 't', values: [{ v: 1 }, { v: 3 }, { v: 5 }], transform: [{ type: 'formula', expr: 'datum.v * 2', as: 'y2' }] }],
+      scales: [
+        { name: 'x', type: 'linear', domain: [0, 20], range: 'width' },
+        { name: 'y', type: 'linear', domain: [0, 20], range: 'height' },
+      ],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'y2' }, y: { scale: 'y', value: 0 }, size: { value: 40 } } } }],
+    } as never
+    const chart = compileChart(ts)
+    const items = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!
+    const s1 = evaluateChart(chart, { data: { t: [{ v: 1 }, { v: 3 }, { v: 5 }] } })
+    const before = [...items(s1)]
+    const beforeDatums = before.map((it) => (it as { datum?: { y2?: number } }).datum?.y2)
+    const s2 = evaluateChart(chart, { data: { t: [{ v: 1 }, { v: 4 }, { v: 5 }] }, dataChanges: { t: [1] } })
+    const after = items(s2)
+    expect(after[0]).toBe(before[0]) // unchanged item reused
+    expect((after[0] as { datum?: { y2?: number } }).datum?.y2).toBe(beforeDatums[0]) // output row reused
+    expect(after[1]).not.toBe(before[1]) // changed item re-encoded
+    expect((after[1] as { datum?: { y2?: number } }).datum?.y2).toBe(8) // v=4 -> y2=8
+  })
 })
