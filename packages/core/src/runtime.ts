@@ -1199,6 +1199,15 @@ function evaluateMark(
     }
   }
 
+  // The differential path reuses the previous group's item array in place, so
+  // the mark is genuinely persistent: return the same group object (identity
+  // preserved for the DOM patcher / scene consumers) rather than allocate a new
+  // container each eval. A fresh group (items array rebuilt) is still returned
+  // as new.
+  if (prevGroup && items === prevGroup.items) {
+    prevGroup.items = items
+    return prevGroup
+  }
   return {
     marktype: mark.type,
     name: mark.name,

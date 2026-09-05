@@ -179,6 +179,10 @@ describe('per-datum differential update', () => {
     expect(after[2]).toBe(before[2])
     expect(after[1]).not.toBe(before[1]) // changed -> re-encoded
     expect((after[1] as { x?: number }).x).not.toBe((before[1] as { x?: number }).x)
+    // The mark GROUP (not just its items) is persistent across the differential
+    // update — a genuinely live, in-place-spliced mark like vega's.
+    const group = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!
+    expect(group(s2)).toBe(group(s1))
   })
 
   it('falls back to full re-encode when an index is out of range', () => {
