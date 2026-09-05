@@ -60,6 +60,8 @@ interface EvalContext {
   _concatGrid?: ConcatGridState | null
   /** Hierarchy trees built by `stratify` transforms, keyed by data source name. */
   hierarchies: Map<string, unknown>
+  /** Per-datum differential update: dataset name -> indices whose rows changed. */
+  dataChanges?: Map<string, Set<number>>
 }
 
 /**
@@ -107,6 +109,9 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
 
   const defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }> = []
   const ctx: EvalContext = { chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new Map(), runtime, _defs: defs, hierarchies: new Map() }
+  if (input.dataChanges) {
+    ctx.dataChanges = new Map(Object.entries(input.dataChanges).map(([name, idxs]) => [name, new Set(idxs)]))
+  }
 
   // Remap Vega-Lite "category" range (unhandled by vega-scale) to tableau10
   for (const s of ctx.chart.scales) {
@@ -363,8 +368,9 @@ function buildContent(
   // groups (item identity preserved for the DOM patcher), so an update to one
   // dataset skips re-encoding every other mark.
   const prevItems = (chart as unknown as { __prevItems?: SceneGroup[] }).__prevItems
-  const changedSet = input.changedDatasets
-    ? new Set(input.changedDatasets)
+  // A per-datum changeset also marks its dataset as changed (it re-evaluates).
+  const changedSet = (input.changedDatasets || input.dataChanges)
+    ? new Set([...(input.changedDatasets ?? []), ...Object.keys(input.dataChanges ?? {})])
     : null
 
   const items: SceneGroup[] = []
@@ -378,7 +384,8 @@ function buildContent(
         continue
       }
     }
-    const result = evaluateMark(mark, ctx)
+    const prevGroup = prevItems ? findReusableMarkGroup(prevItems, mark) : null
+    const result = evaluateMark(mark, ctx, prevGroup)
     if (result) {
       if (Array.isArray(result)) {
         for (const g of result) items.push(g)
@@ -906,9 +913,42 @@ function concreteDomain(scale: CompiledScale, values: unknown[]): unknown[] {
   return distinct
 }
 
+/**
+ * Per-datum differential reuse is safe only when publishing the changed indices
+ * actually captures every reason a *row* re-encodes to a different item:
+ *  - the source dataset has a published changeset (index alignment),
+ *  - row length/order is unchanged (no mark sort, no reordering transform),
+ *  - the mark uses no scale whose data-domain spans a changed dataset (otherwise
+ *    an unchanged row's position shifts when the domain recomputes).
+ */
+function canReuseItems(
+  mark: CompiledMark,
+  ctx: EvalContext,
+  source: string,
+  rowCount: number,
+  prevGroup: SceneGroup | null | undefined,
+  rectSorts: boolean,
+): boolean {
+  if (!ctx.dataChanges) return false
+  const changes = ctx.dataChanges.get(source)
+  if (!changes || !prevGroup) return false
+  const prevItems = prevGroup.items as SceneItem[]
+  if (rowCount !== prevItems.length) return false
+  if (mark.sort || mark.transform?.length || rectSorts) return false
+  // Build the affected dataset closure from the changesets (and any dataset
+  // flags), then bail if the mark references a scale with an affected domain.
+  const affected = affectedDatasets(ctx.chart, new Set(ctx.dataChanges.keys()))
+  for (const name of collectMarkScales(mark)) {
+    const scale = ctx.chart.scales.find((s) => s.name === name)
+    if (scale && hasAffectedDomain(scale.domain, affected)) return false
+  }
+  return true
+}
+
 function evaluateMark(
   mark: CompiledMark,
   ctx: EvalContext,
+  prevGroup?: SceneGroup | null,
 ): SceneGroup | SceneGroup[] | null {
   if (mark.type === 'group') {
     return buildGroupMark(mark, ctx)
@@ -931,6 +971,7 @@ function evaluateMark(
 
     // Sort rect marks by their scale y field so rendering order matches vega:
     // bars with smaller y-value render first (appear at the front).
+    let rectSorts = false
     if (mark.type === 'rect') {
       const enc = mark.encode?.update
       if (enc) {
@@ -943,6 +984,7 @@ function evaluateMark(
               const bv = b[f]
               return (typeof bv === 'number' ? bv : 0) - (typeof av === 'number' ? av : 0)
             })
+            rectSorts = true
             break
           }
         }
@@ -950,11 +992,27 @@ function evaluateMark(
     }
 
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
-    items = rows.map((row) => {
-      const res = resolveEncodeSet(update, row, ctx, mark.type)
-      res.datum = row
-      return res
-    })
+    // Per-datum differential update: when the source dataset published a
+    // changeset and reuse is provably safe (no reordering, unchanged length, no
+    // scale whose data-domain spans a changed dataset), keep the previous item
+    // objects for unchanged indices so the DOM patcher skips them and the
+    // re-encode of those items is skipped entirely.
+    if (canReuseItems(mark, ctx, source, rows.length, prevGroup, rectSorts)) {
+      const changes = ctx.dataChanges!.get(source)!
+      const prevItems = prevGroup!.items as SceneItem[]
+      items = rows.map((row, i) => {
+        if (!changes.has(i) && prevItems[i]) return prevItems[i]
+        const res = resolveEncodeSet(update, row, ctx, mark.type)
+        res.datum = row
+        return res
+      })
+    } else {
+      items = rows.map((row) => {
+        const res = resolveEncodeSet(update, row, ctx, mark.type)
+        res.datum = row
+        return res
+      })
+    }
   } else {
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
     items = [resolveEncodeSet(update, {}, ctx, mark.type)]

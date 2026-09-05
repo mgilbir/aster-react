@@ -35,6 +35,16 @@ export interface RuntimeInput {
    * all datasets are treated as changed (the safe default).
    */
   changedDatasets?: string[]
+  /**
+   * Per-datum differential update: for each dataset, the indices (into the NEW
+   * row array, unchanged length/order) whose values changed. Marks drawing from
+   * a dataset with a changeset reuse the previous item objects for unchanged
+   * indices (identity preserved for the DOM patcher, re-encode skipped) — only
+   * when that is provably safe: the mark uses no scale whose data-domain spans a
+   * changed dataset and the published rows keep the same length/order. Omit to
+   * fully re-encode (safe default).
+   */
+  dataChanges?: Record<string, number[]>
 }
 
 // ---------------------------------------------------------------------------

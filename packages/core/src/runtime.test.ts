@@ -141,3 +141,54 @@ describe('partial re-evaluation (reactive dataflow)', () => {
     expect(g2).toBe(g1)
   })
 })
+
+describe('per-datum differential update', () => {
+  // Symbol mark at fixed-scale positions (domains [0,10], not data-derived), so
+  // an unchanged row re-encodes to an identical item and can be reused.
+  const spec = {
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    width: 200,
+    height: 200,
+    autosize: 'none',
+    data: [{ name: 't', values: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] }],
+    scales: [
+      { name: 'x', type: 'linear', domain: [0, 10], range: 'width' },
+      { name: 'y', type: 'linear', domain: [0, 10], range: 'height' },
+    ],
+    marks: [
+      { type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 50 } } } },
+    ],
+  } as never
+
+  const symbolItems = (scene: import('./types.js').SceneRoot) =>
+    scene.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!
+
+  it('reuses unchanged items and re-encodes only changed indices', () => {
+    const chart = compileChart(spec)
+    const s1 = evaluateChart(chart, { data: { t: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] } })
+    const before = symbolItems(s1)
+    // Row index 1 changes (x 2 -> 5); indices 0 and 2 are unchanged.
+    const s2 = evaluateChart(chart, {
+      data: { t: [{ x: 1, y: 1 }, { x: 5, y: 2 }, { x: 3, y: 3 }] },
+      dataChanges: { t: [1] },
+    })
+    const after = symbolItems(s2)
+    expect(after[0]).toBe(before[0]) // unchanged -> same object (identity preserved)
+    expect(after[2]).toBe(before[2])
+    expect(after[1]).not.toBe(before[1]) // changed -> re-encoded
+    expect((after[1] as { x?: number }).x).not.toBe((before[1] as { x?: number }).x)
+  })
+
+  it('falls back to full re-encode when an index is out of range', () => {
+    const chart = compileChart(spec)
+    const s1 = evaluateChart(chart, { data: { t: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] } })
+    const before = symbolItems(s1)
+    // Length mismatch -> index alignment is invalid -> no reuse.
+    const s2 = evaluateChart(chart, {
+      data: { t: [{ x: 1, y: 1 }, { x: 2, y: 2 }] },
+      dataChanges: { t: [0] },
+    })
+    const after = symbolItems(s2)
+    expect(after[0]).not.toBe(before[0])
+  })
+})
