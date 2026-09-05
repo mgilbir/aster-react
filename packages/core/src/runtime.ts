@@ -87,6 +87,10 @@ interface EvalContext {
   hierarchies: Map<string, unknown>
   /** Per-datum differential update: dataset name -> indices whose rows changed. */
   dataChanges?: Map<string, Set<number>>
+  /** Datasets affected by this update (dataChanges ∪ changedDatasets, closed over source chains). */
+  affected: Set<string>
+  /** True when the caller supplied change info (so incremental reuse is allowed). */
+  incremental: boolean
 }
 
 /**
@@ -133,10 +137,13 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
   }
 
   const defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }> = []
-  const ctx: EvalContext = { chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new Map(), runtime, _defs: defs, hierarchies: new Map() }
+  const ctx: EvalContext = { chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new Map(), runtime, _defs: defs, hierarchies: new Map(), affected: new Set(), incremental: false }
   if (input.dataChanges) {
     ctx.dataChanges = new Map(Object.entries(input.dataChanges).map(([name, idxs]) => [name, new Set(idxs)]))
   }
+  const changedNames = new Set([...(input.changedDatasets ?? []), ...(ctx.dataChanges ? ctx.dataChanges.keys() : [])])
+  ctx.affected = affectedDatasets(chart, changedNames)
+  ctx.incremental = changedNames.size > 0
 
   // Remap Vega-Lite "category" range (unhandled by vega-scale) to tableau10
   for (const s of ctx.chart.scales) {
@@ -897,14 +904,29 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
 
 function buildScales(ctx: EvalContext): void {
   const scaleSignals = ctx.signalParams
+  const chartMeta = ctx.chart as unknown as { __cachedScales?: Map<string, { scale: Scale; multi: boolean }>; __paramFp?: string }
+  const cached = chartMeta.__cachedScales ?? (chartMeta.__cachedScales = new Map())
+  // A scale whose domain references none of the affected datasets (closed over
+  // source chains) and whose size/signal params are unchanged is identical to
+  // the previous eval's scale — reuse it and skip the O(n) domain re-scan.
+  const paramsUnchanged = paramFpOf(ctx.signalParams) === chartMeta.__paramFp
   for (const s of ctx.chart.scales) {
     // Vega-lite emits `{ fields: [{data, field}, ...] }` domains for layered
     // charts (several datasets contribute to one shared scale). scales.ts only
     // understands single-dataset domains, so resolve the multi-dataset form
     // here into a concrete domain before building the scale.
     const multiDomain = resolveMultiDatasetDomain(s.domain, ctx)
+    const prev = cached.get(s.name)
     if (multiDomain) {
+      // A multi-dataset domain resolves to a concrete array in-place (the IR is
+      // mutated), so it can never be safely reused — always re-resolve/rebuild.
+      if (prev?.multi) { ctx.scales.set(s.name, prev.scale); ctx.scaleTypes.set(s.name, s.type); continue }
       ;(s as unknown as { domain: unknown }).domain = concreteDomain(s, multiDomain)
+    }
+    if (ctx.incremental && !multiDomain && !prev?.multi && paramsUnchanged && prev && !domainReferencesAffected(s.domain, ctx.affected)) {
+      ctx.scales.set(s.name, prev.scale)
+      ctx.scaleTypes.set(s.name, s.type)
+      continue
     }
     const scale = buildScale(s, {
       width: ctx.width,
@@ -921,7 +943,21 @@ function buildScales(ctx: EvalContext): void {
     })
     ctx.scales.set(s.name, scale)
     ctx.scaleTypes.set(s.name, s.type)
+    cached.set(s.name, { scale, multi: multiDomain != null })
   }
+}
+
+/** True when a scale domain references an affected dataset (data or multi-field). */
+function domainReferencesAffected(domain: ScaleDomain, affected: Set<string>): boolean {
+  if (domain && typeof domain === 'object' && !Array.isArray(domain)) {
+    const d = (domain as { data?: unknown }).data
+    if (typeof d === 'string' && affected.has(d)) return true
+    const fields = (domain as { fields?: Array<{ data?: string }> }).fields
+    if (Array.isArray(fields)) {
+      for (const f of fields) if (f && typeof f.data === 'string' && affected.has(f.data)) return true
+    }
+  }
+  return false
 }
 
 /**
@@ -1007,12 +1043,11 @@ function canReuseItems(
   // formula, so the previously-encoded items would be stale. Only reuse when the
   // expression params are identical to the previous eval.
   if (paramFpOf(ctx.signalParams) !== (ctx.chart as unknown as { __prevParamFp?: string }).__prevParamFp) return false
-  // Build the affected dataset closure from the changesets (and any dataset
-  // flags), then bail if the mark references a scale with an affected domain.
-  const affected = affectedDatasets(ctx.chart, new Set(ctx.dataChanges.keys()))
+  // Bail if the mark references a scale with an affected data-domain (its
+  // positions would shift when the domain recomputes).
   for (const name of collectMarkScales(mark)) {
     const scale = ctx.chart.scales.find((s) => s.name === name)
-    if (scale && hasAffectedDomain(scale.domain, affected)) return false
+    if (scale && domainReferencesAffected(scale.domain, ctx.affected)) return false
   }
   return true
 }
