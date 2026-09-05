@@ -438,6 +438,25 @@ describe('per-datum differential update', () => {
     expect(iv(iInc)).toEqual(iv(iFull))
   })
 
+  it('reuses an affected data-domain scale when its domain is stable (correct output)', () => {
+    const ts = {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 200, height: 200, autosize: 'none',
+      data: [{ name: 't', values: [{ v: 1 }, { v: 3 }, { v: 5 }, { v: 7 }] }],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: { data: 't', field: 'v' }, range: 'height', zero: true, nice: true }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', value: 0 }, y: { scale: 'y', field: 'v' }, size: { value: 40 } } } }],
+    } as never
+    const chart = compileChart(ts)
+    const y = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { y?: number }).y)
+    const init = [{ v: 1 }, { v: 3 }, { v: 5 }, { v: 7 }]
+    const changed = [{ v: 1 }, { v: 4 }, { v: 5 }, { v: 7 }] // index 1 (3->4) stays within [1,7]; old not a boundary
+    evaluateChart(chart, { data: { t: init } })
+    const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [1] } })
+    const full = evaluateChart(chart, { data: { t: changed } })
+    // Domain [1,7] unchanged, so the reused scale yields identical positions.
+    expect(y(inc)).toEqual(y(full))
+  })
+
   it('falls back to full re-derive when a changed row switches group', () => {
     const ts = {
       $schema: 'https://vega.github.io/schema/vega/v6.json',

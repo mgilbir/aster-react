@@ -1245,8 +1245,9 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
 
 function buildScales(ctx: EvalContext): void {
   const scaleSignals = ctx.signalParams
-  const chartMeta = ctx.chart as unknown as { __cachedScales?: Map<string, { scale: Scale; multi: boolean }>; __paramFp?: string }
+  const chartMeta = ctx.chart as unknown as { __cachedScales?: Map<string, { scale: Scale; multi: boolean }>; __scaleDomain?: Map<string, { data: string; field: string; lo: number; hi: number; oldVals: number[] }>; __paramFp?: string }
   const cached = chartMeta.__cachedScales ?? (chartMeta.__cachedScales = new Map())
+  const domainCache = chartMeta.__scaleDomain ?? (chartMeta.__scaleDomain = new Map())
   // A scale whose domain references none of the affected datasets (closed over
   // source chains) and whose size/signal params are unchanged is identical to
   // the previous eval's scale — reuse it and skip the O(n) domain re-scan.
@@ -1264,10 +1265,35 @@ function buildScales(ctx: EvalContext): void {
       if (prev?.multi) { ctx.scales.set(s.name, prev.scale); ctx.scaleTypes.set(s.name, s.type); continue }
       ;(s as unknown as { domain: unknown }).domain = concreteDomain(s, multiDomain)
     }
-    if (ctx.incremental && !multiDomain && !prev?.multi && paramsUnchanged && prev && !domainReferencesAffected(s.domain, ctx.affected)) {
-      ctx.scales.set(s.name, prev.scale)
-      ctx.scaleTypes.set(s.name, s.type)
-      continue
+    if (ctx.incremental && !multiDomain && !prev?.multi && paramsUnchanged && prev) {
+      let reuse = !domainReferencesAffected(s.domain, ctx.affected)
+      // An affected single-data-domain scale can still be reused when its domain
+      // is provably unchanged: no changed row extends [lo,hi] and no changed row's
+      // old value sat at a boundary (which could move the min/max). This skips the
+      // O(n) domain re-scan for the common case (few points change, domain holds).
+      const dom = (typeof s.domain === 'object' && !Array.isArray(s.domain) && typeof (s.domain as { data?: unknown }).data === 'string')
+        ? (s.domain as { data: string; field: string })
+        : null
+      if (!reuse && dom) {
+        const prevDom = domainCache.get(s.name)
+        const changes = ctx.dataChanges?.get(dom.data)
+        const rows = ctx.datasets.get(dom.data) ?? []
+        if (prevDom && changes && changes.size && prevDom.oldVals.length === rows.length) {
+          let stable = true
+          for (const i of changes) {
+            if (i < 0 || i >= rows.length) { stable = false; break }
+            const newV = Number((rows[i] as Row)[dom.field])
+            const oldV = prevDom.oldVals[i]!
+            if (newV < prevDom.lo || newV > prevDom.hi || oldV === prevDom.lo || oldV === prevDom.hi) { stable = false; break }
+          }
+          reuse = stable
+        }
+      }
+      if (reuse) {
+        ctx.scales.set(s.name, prev.scale)
+        ctx.scaleTypes.set(s.name, s.type)
+        continue
+      }
     }
     const scale = buildScale(s, {
       width: ctx.width,
@@ -1285,6 +1311,21 @@ function buildScales(ctx: EvalContext): void {
     ctx.scales.set(s.name, scale)
     ctx.scaleTypes.set(s.name, s.type)
     cached.set(s.name, { scale, multi: multiDomain != null })
+    // Track the domain extent for a single-data-domain scale so it can be reused
+    // on a later per-datum update when the domain is provably unchanged.
+    if (typeof s.domain === 'object' && !Array.isArray(s.domain) && typeof (s.domain as { data?: unknown }).data === 'string') {
+      const dom = s.domain as { data: string; field: string }
+      const rows = ctx.datasets.get(dom.data) ?? []
+      const vals = rows.map((r) => Number((r as Row)[dom.field]))
+      const finite = vals.filter((v) => Number.isFinite(v))
+      domainCache.set(s.name, {
+        data: dom.data,
+        field: dom.field,
+        lo: finite.length ? Math.min(...finite) : 0,
+        hi: finite.length ? Math.max(...finite) : 1,
+        oldVals: vals,
+      })
+    }
   }
 }
 
