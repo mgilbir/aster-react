@@ -194,6 +194,18 @@ describe('per-datum differential update', () => {
     expect(after[0]).not.toBe(before[0])
   })
 
+  it('invalidates reuse when a size/signal param changes', () => {
+    // Item positions use range 'width'; a width change shifts every position, so
+    // the previously-encoded items would be stale if reused.
+    const chart = compileChart(spec)
+    const s1 = evaluateChart(chart, { data: { t: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] }, width: 200 })
+    const beforeItems = [...symbolItems(s1)]
+    const s2 = evaluateChart(chart, { data: { t: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] }, dataChanges: { t: [1] }, width: 300 })
+    const afterItems = symbolItems(s2)
+    // Same values, but width changed -> positions re-encoded, not reused.
+    expect(afterItems[0]).not.toBe(beforeItems[0])
+  })
+
   it('re-derives only changed rows through a row-wise dataset transform', () => {
     const ts = {
       $schema: 'https://vega.github.io/schema/vega/v6.json',

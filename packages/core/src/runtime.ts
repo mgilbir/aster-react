@@ -33,6 +33,31 @@ import { boundAxisGroup, Bounds, boundLeaf } from './bounds.js'
 
 const DEFAULT_SIZE = 500
 
+// Reference identities for expression parameters (width/height/signals). A
+// parameter change (a new signal object, e.g. a brush extent) must invalidate
+// any row-wise transform cache that depends on it.
+const PARAM_IDS = new WeakMap<object, number>()
+let PARAM_SEQ = 0
+function paramRefId(v: unknown): number {
+  if (v === null || (typeof v !== 'object' && typeof v !== 'function')) return -1
+  let id = PARAM_IDS.get(v as object)
+  if (id === undefined) {
+    id = ++PARAM_SEQ
+    PARAM_IDS.set(v as object, id)
+  }
+  return id
+}
+
+/** Fingerprint the expression params a row-wise transform can reference. */
+function paramFpOf(params: Record<string, unknown>): string {
+  const parts: string[] = []
+  for (const k of Object.keys(params).sort()) {
+    const v = params[k]
+    parts.push(`${k}=${typeof v === 'object' ? '#' + paramRefId(v) : String(v)}`)
+  }
+  return parts.join('\u0001')
+}
+
 /**
  * Global gradient id counter, mirroring vega-scenegraph's module-level
  * `gradient_id`. Vega assigns `gradient_<n>` from a process-global counter that
@@ -137,6 +162,13 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
   resolveSignalUpdates(ctx)
   buildScales(ctx)
   buildProjections(ctx)
+
+  // Record the expression params for the next per-datum update; buildDatasets
+  // (during this prepare) and canReuseItems (after) compare the current params
+  // against the *previous* eval's to decide whether caches/reuse are valid.
+  const chartMeta = ctx.chart as unknown as { __paramFp?: string; __prevParamFp?: string }
+  chartMeta.__prevParamFp = chartMeta.__paramFp
+  chartMeta.__paramFp = paramFpOf(signalParams)
 
   return { ctx, width, height }
 }
@@ -810,10 +842,12 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       // Row-wise transforms (formula/identifier) map index to index, so the
       // output rows for indices not in the changeset are unchanged and can be
       // reused. A global transform (filter/aggregate/stack/bin/...) invalidates
-      // every output row, so fall back to a full re-derive.
+      // every output row, and a change to any expression parameter (width or a
+      // signal) invalidates every formula, so both fall back to a full re-derive.
       const rowwise = d.transform.every((tm) => tm.type === 'formula' || tm.type === 'identifier')
+      const paramsUnchanged = paramFpOf(ctx.signalParams) === (ctx.chart as unknown as { __paramFp?: string }).__paramFp
       const cached = prevOutputs?.get(name)
-      if (changes && rowwise && cached && cached.length === rows.length) {
+      if (changes && rowwise && paramsUnchanged && cached && cached.length === rows.length) {
         const apply = (single: Row[]): Row[] => applyTransforms(single, d.transform, {
           runtime: ctx.runtime,
           signals: ctx.signalParams,
@@ -969,6 +1003,10 @@ function canReuseItems(
   const prevItems = prevGroup.items as SceneItem[]
   if (rowCount !== prevItems.length) return false
   if (mark.sort || mark.transform?.length || rectSorts) return false
+  // A change to width/height or any signal shifts scale ranges and every
+  // formula, so the previously-encoded items would be stale. Only reuse when the
+  // expression params are identical to the previous eval.
+  if (paramFpOf(ctx.signalParams) !== (ctx.chart as unknown as { __prevParamFp?: string }).__prevParamFp) return false
   // Build the affected dataset closure from the changesets (and any dataset
   // flags), then bail if the mark references a scale with an affected domain.
   const affected = affectedDatasets(ctx.chart, new Set(ctx.dataChanges.keys()))
