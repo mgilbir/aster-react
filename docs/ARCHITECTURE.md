@@ -135,6 +135,7 @@ Areas that are **known-incomplete** are captured as feature probes under `probes
 | Marks | Done | rect/line/area/symbol/rule/text/arc/path/image/trail/shape, incl. curves, gradients, corner radii, `lineBreak` tspans |
 | Scales | Done | incl. scheme ranges (no zero-extension), `values`/`step`, projections via d3-geo |
 | Axes | Done | ticks, grid, domain, labels, titles (4 orients), `labelOverlap` |
+| Autosize | Done | `none`/`pad`/`fit`/`fit-x`/`fit-y` (viewSizeLayout parity: pad grows the viewport, fit shrinks content to a fixed viewport, iterating to a fixed point) |
 | Legends | Done | gradient (vertical + horizontal), symbol (single + multi-column grids at any corner), size, band, bottom flow |
 | Title | Done | top-level title + subtitle, anchored to content bounds (incl. rotated axis-title bounds) |
 | Config | Done | background/view/style/axis/legend/title defaults |
