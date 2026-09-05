@@ -1008,18 +1008,17 @@ function evaluateMark(
     if (canReuseItems(mark, ctx, source, rows.length, prevGroup, rectSorts)) {
       const changes = ctx.dataChanges!.get(source)!
       const prevItems = prevGroup!.items as SceneItem[]
-      items = new Array(rows.length)
-      for (let i = 0; i < rows.length; i++) {
-        const prev = prevItems[i]
-        if (!changes.has(i) && prev) {
-          items[i] = prev
-          continue
-        }
+      // Reuse the previous group's item ARRAY in place and replace only the
+      // changed indices — an O(changed) splice instead of an O(n) rebuild, the
+      // persistent-scene behavior that vega's pulse graph gives us.
+      for (const i of changes) {
+        if (i < 0 || i >= prevItems.length) continue
         const row = { ...(rows[i] as Row) }
         const res = resolveEncodeSet(update, row, ctx, mark.type)
         res.datum = row
-        items[i] = res
+        prevItems[i] = res
       }
+      items = prevItems
     } else {
       items = rows.map((row) => {
         const copy = rowsCloned ? row : { ...row }

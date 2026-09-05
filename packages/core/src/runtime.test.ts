@@ -166,7 +166,9 @@ describe('per-datum differential update', () => {
   it('reuses unchanged items and re-encodes only changed indices', () => {
     const chart = compileChart(spec)
     const s1 = evaluateChart(chart, { data: { t: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] } })
-    const before = symbolItems(s1)
+    // Snapshot the item references: the differential path reuses the same item
+    // array in place (persistent scene), so `before` must not alias it.
+    const before = [...symbolItems(s1)]
     // Row index 1 changes (x 2 -> 5); indices 0 and 2 are unchanged.
     const s2 = evaluateChart(chart, {
       data: { t: [{ x: 1, y: 1 }, { x: 5, y: 2 }, { x: 3, y: 3 }] },
