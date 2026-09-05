@@ -1026,7 +1026,12 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       // reused. A global transform (filter/aggregate/stack/bin/...) invalidates
       // every output row, and a change to any expression parameter (width or a
       // signal) invalidates every formula, so both fall back to a full re-derive.
-      const rowwise = d.transform.every((tm) => tm.type === 'formula' || tm.type === 'identifier')
+      // Row-wise transforms preserve index/length: formula/identifier always, and
+      // bin with a fixed numeric extent (its thresholds are constant, so a changed
+      // row re-bins independently of the others).
+      const rowwise = d.transform.every(
+        (tm) => tm.type === 'formula' || tm.type === 'identifier' || (tm.type === 'bin' && Array.isArray((tm as { extent?: unknown }).extent)),
+      )
       const cached = prevOutputs?.get(name)
       if (aggUpdated) {
         // Incremental aggregate already produced the output; nothing to do.
