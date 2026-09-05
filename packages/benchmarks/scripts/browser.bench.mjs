@@ -161,6 +161,25 @@ if (KINDS.length > 0) {
   console.log('')
 }
 
+// 8b) Synchronous differential staging: isolates the dataflow (evaluateChart +
+// patchSceneDom) for the differential path against the full re-encode, without
+// the settle protocol that dominates the React-level metric.
+if (KINDS.length > 0) {
+  const dg = await page.evaluate(([p, r]) => window.__bench.differentialStages(p, r), [POINTS, 9])
+  console.log(
+    table(
+      `differential staging (fixed-scale symbol @ ${POINTS} pts, ~1% changed) — ms median`,
+      ['path', 'full', 'differential', 'speedup'],
+      [
+        ['evaluateChart', fmt(summarize(dg.fullEval).median, 2), fmt(summarize(dg.diffEval).median, 2), `${(summarize(dg.fullEval).median / summarize(dg.diffEval).median).toFixed(1)}x`],
+        ['patchSceneDom', fmt(summarize(dg.fullPatch).median, 2), fmt(summarize(dg.diffPatch).median, 2), `${(summarize(dg.fullPatch).median / summarize(dg.diffPatch).median).toFixed(1)}x`],
+        ['evaluate + patch', fmt(summarize(dg.fullEval).median + summarize(dg.fullPatch).median, 2), fmt(summarize(dg.diffEval).median + summarize(dg.diffPatch).median, 2), `${((summarize(dg.fullEval).median + summarize(dg.fullPatch).median) / (summarize(dg.diffEval).median + summarize(dg.diffPatch).median)).toFixed(1)}x`],
+      ],
+    ),
+  )
+  console.log('')
+}
+
 // 9) Heap over a churn run: mount -> 30 updates -> unmount, x5
 if (cdp) for (const kind of KINDS) for (const embed of EMBEDS) {
     await page.evaluate(() => window.__bench.reset())

@@ -23,6 +23,7 @@ export interface BenchApi {
   stages(kind: ChartKind, points: number, reps: number): Promise<{ evaluate: number[]; desc: number[]; patch: number[]; swap: number[]; stringPath: number[]; noopPatch: number[] }>
   stableRerenders(embed: EmbedName, kind: ChartKind, points: number, reps: number): Promise<{ ms: number[]; mutations: number[] }>
   differentialUpdates(embed: EmbedName, points: number, reps: number): Promise<number[]>
+  differentialStages(points: number, reps: number): Promise<{ diffEval: number[]; diffPatch: number[]; fullEval: number[]; fullPatch: number[] }>
   domNodes(): number
   reset(): void
 }
@@ -283,6 +284,56 @@ async function differentialUpdates(embed: EmbedName, points: number, reps: numbe
   return out
 }
 
+/** Synchronous per-update cost for the differential (1% changed) vs full path —
+ * isolates the dataflow (evaluateChart + patchSceneDom) without the settle
+ * protocol that dominates the React-level `differentialUpdates` metric. */
+async function differentialStages(points: number, reps: number) {
+  teardown()
+  const spec: Record<string, unknown> = {
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    width: 600,
+    height: 400,
+    autosize: 'none',
+    data: [{ name: 'table', values: Array.from({ length: points }, (_, i) => ({ x: i % 100, y: i % 100 })) }],
+    scales: [
+      { name: 'x', type: 'linear', domain: [0, 100], range: 'width' },
+      { name: 'y', type: 'linear', domain: [0, 100], range: 'height' },
+    ],
+    marks: [{ type: 'symbol', from: { data: 'table' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 40 } } } }],
+  }
+  const rows = (spec.data as Array<{ values: Array<{ x: number; y: number }> }>)[0]!.values
+  const changed = Array.from({ length: Math.max(1, Math.floor(points / 100)) }, (_, i) => (i * 997) % points)
+  const next = rows.map((r, j) => (changed.includes(j) ? { x: r.x, y: (r.y + 1) % 100 } : r))
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const chart = compileChart(spec as never)
+  const mountScene = evaluateChart(chart, { data: { table: rows } })
+  host.innerHTML = renderSceneToSvg(mountScene)
+  const svg = host.querySelector('svg')!
+  const diffEval: number[] = []
+  const diffPatch: number[] = []
+  const fullEval: number[] = []
+  const fullPatch: number[] = []
+  for (let r = 0; r < reps; r++) {
+    const d0 = performance.now()
+    const diffScene = evaluateChart(chart, { data: { table: next }, dataChanges: { table: changed } })
+    const d1 = performance.now()
+    patchSceneDom(svg, diffScene)
+    const d2 = performance.now()
+    diffEval.push(d1 - d0)
+    diffPatch.push(d2 - d1)
+    const f0 = performance.now()
+    const fullScene = evaluateChart(chart, { data: { table: next } })
+    const f1 = performance.now()
+    patchSceneDom(svg, fullScene)
+    const f2 = performance.now()
+    fullEval.push(f1 - f0)
+    fullPatch.push(f2 - f1)
+  }
+  host.remove()
+  return { diffEval, diffPatch, fullEval, fullPatch }
+}
+
 const api: BenchApi = {
   mounts: firstRenderMs,
   updates: updateLatencies,
@@ -292,6 +343,7 @@ const api: BenchApi = {
   stages,
   stableRerenders,
   differentialUpdates,
+  differentialStages,
   domNodes: () => (session ? session.host.querySelectorAll('*').length : 0),
   reset: teardown,
 }
