@@ -49,6 +49,10 @@ function cachedDesc(it: SceneItem, build: () => DomDesc): DomDesc {
   const cached = it.__domDesc as DomDesc | undefined
   if (isClean(it) && cached) return { ...cached, clean: true }
   const desc = build()
+  // Tooltips/events read the datum off the DOM element; carry it on the desc so
+  // the incremental patch emits the same data-datum the string renderer does.
+  const datum = (it as unknown as { dataDatum?: string }).dataDatum
+  if (datum != null) desc.attrs.push(['data-datum', datum])
   it.__domDesc = desc
   return desc
 }

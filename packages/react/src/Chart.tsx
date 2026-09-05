@@ -53,6 +53,12 @@ export interface ChartProps {
   onSignal?: (name: string, value: unknown) => void
   /** Disable the spec-driven event loop (defaults to on when the spec has signal.on streams). */
   interactive?: boolean
+  /**
+   * Show a tooltip on hover over a mark: the datum's fields rendered as
+   * `key: value` at the cursor. Reads the `data-datum` attribute that
+   * stampDatumAttrs stamps onto scene items. Off by default.
+   */
+  tooltip?: boolean
 }
 
 export function Chart({
@@ -71,6 +77,7 @@ export function Chart({
   signalListeners,
   onSignal,
   interactive = true,
+  tooltip = false,
 }: ChartProps) {
   const containerRef = React.useRef<HTMLDivElement>(null)
   const [measured, setMeasured] = React.useState<{ width: number; height: number }>({
@@ -85,6 +92,7 @@ export function Chart({
   const [dragEndData, setDragEndData] = React.useState<SelectionInterval | null>(null)
   const [dragPixelStart, setDragPixelStart] = React.useState<{ x: number; y: number } | null>(null)
   const [dragPixelEnd, setDragPixelEnd] = React.useState<{ x: number; y: number } | null>(null)
+  const [tooltipInfo, setTooltipInfo] = React.useState<{ datum: Record<string, unknown>; x: number; y: number } | null>(null)
 
   const useOverrides = width != null && height != null
 
@@ -115,11 +123,15 @@ export function Chart({
 
   const scene = React.useMemo<SceneRoot | null>(() => {
     try {
-      return sessionRef.current!.evaluate(spec, { data, dataChanges, width: renderWidth, height: renderHeight, signals })
+      const sc = sessionRef.current!.evaluate(spec, { data, dataChanges, width: renderWidth, height: renderHeight, signals })
+      // Tooltips read data-datum off the DOM; stamp the datum onto scene items
+      // before the markup/patch so the attribute is rendered.
+      if (tooltip) stampDatumAttrs(sc.items)
+      return sc
     } catch (err) {
       return null
     }
-  }, [spec, data, dataChanges, renderWidth, renderHeight, signals])
+  }, [spec, data, dataChanges, renderWidth, renderHeight, signals, tooltip])
 
   // Incremental is the default: we still serialize the full SVG for the first
   // render (so server output and client hydration carry the markup), then the
@@ -268,6 +280,26 @@ export function Chart({
     [isDragging, dragPixelStart, hasInteraction, onSelect],
   )
 
+  const handleTooltipMove = React.useCallback(
+    (e: React.MouseEvent) => {
+      if (!tooltip) return
+      const el = e.target as HTMLElement
+      const raw = el.dataset?.datum
+      if (!raw) { setTooltipInfo(null); return }
+      const rect = containerRef.current?.getBoundingClientRect()
+      if (!rect) return
+      try {
+        const datum = JSON.parse(raw) as Record<string, unknown>
+        setTooltipInfo({ datum, x: e.clientX - rect.left, y: e.clientY - rect.top })
+      } catch { setTooltipInfo(null) }
+    },
+    [tooltip],
+  )
+
+  const handleTooltipLeave = React.useCallback(() => {
+    if (tooltip) setTooltipInfo(null)
+  }, [tooltip])
+
   // Brush pixel rect from persisted brush prop
   const brushPixelRect = React.useMemo(() => {
     if (!brush || chartInfo == null) return null
@@ -300,6 +332,8 @@ export function Chart({
       aria-label={ariaLabel}
       className={className}
       style={outerStyle}
+      onMouseMove={handleTooltipMove}
+      onMouseLeave={handleTooltipLeave}
     >
       {hasInteraction && (
         <div data-testid="chart-brush-overlay"
@@ -348,6 +382,30 @@ export function Chart({
         style={{ position: 'relative', zIndex: 1 }}
         {...(markup != null ? { dangerouslySetInnerHTML: { __html: markup } } : {})}
       />
+      {tooltipInfo != null && (
+        <div
+          data-testid="chart-tooltip"
+          style={{
+            position: 'absolute',
+            left: tooltipInfo.x + 12,
+            top: tooltipInfo.y + 12,
+            zIndex: 20,
+            pointerEvents: 'none',
+            background: 'rgba(0,0,0,0.85)',
+            color: '#fff',
+            padding: '4px 8px',
+            borderRadius: 4,
+            fontSize: 12,
+            fontFamily: 'system-ui, sans-serif',
+            maxWidth: 240,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {Object.entries(tooltipInfo.datum).map(([k, v]) => (
+            <div key={k}><strong>{k}:</strong> {String(v)}</div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
