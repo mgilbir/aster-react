@@ -22,6 +22,7 @@ export interface BenchApi {
   autoResize(embed: EmbedName, kind: ChartKind, points: number, widths: number[]): Promise<number[]>
   stages(kind: ChartKind, points: number, reps: number): Promise<{ evaluate: number[]; desc: number[]; patch: number[]; swap: number[]; stringPath: number[]; noopPatch: number[] }>
   stableRerenders(embed: EmbedName, kind: ChartKind, points: number, reps: number): Promise<{ ms: number[]; mutations: number[] }>
+  differentialUpdates(embed: EmbedName, points: number, reps: number): Promise<number[]>
   domNodes(): number
   reset(): void
 }
@@ -252,6 +253,36 @@ async function stableRerenders(embed: EmbedName, kind: ChartKind, points: number
   return { ms, mutations }
 }
 
+/** Stable-update differential probe: a fixed-scale symbol chart where only ~1% of
+ * points change per update, so the reactive dataflow reuses unchanged items and
+ * DOM subtrees. Measures the per-datum update latency for the aster path. */
+async function differentialUpdates(embed: EmbedName, points: number, reps: number): Promise<number[]> {
+  const spec = {
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    width: 600,
+    height: 400,
+    autosize: 'none',
+    data: [{ name: 'table', values: Array.from({ length: points }, (_, i) => ({ x: i % 100, y: i % 100 })) }],
+    scales: [
+      { name: 'x', type: 'linear', domain: [0, 100], range: 'width' },
+      { name: 'y', type: 'linear', domain: [0, 100], range: 'height' },
+    ],
+    marks: [{ type: 'symbol', from: { data: 'table' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 40 } } } }],
+  }
+  const rows = (spec.data[0] as { values: Array<{ x: number; y: number }> }).values
+  const s = mountSession(embed, spec)
+  await waitForSvg(s.host)
+  const changed = Array.from({ length: Math.max(1, Math.floor(points / 100)) }, (_, i) => (i * 997) % points)
+  const out: number[] = []
+  for (let i = 0; i < reps; i++) {
+    const next = rows.map((r, j) => (changed.includes(j) ? { x: r.x, y: (r.y + 1) % 100 } : r))
+    const t0 = performance.now()
+    s.root.render(h(BenchEmbed, { name: embed, spec, width: 600, height: 400, data: { table: next }, dataChanges: { table: changed } }))
+    out.push(await timeWork(s.host, { quietFrames: 2, t0 }))
+  }
+  return out
+}
+
 const api: BenchApi = {
   mounts: firstRenderMs,
   updates: updateLatencies,
@@ -260,6 +291,7 @@ const api: BenchApi = {
   autoResize,
   stages,
   stableRerenders,
+  differentialUpdates,
   domNodes: () => (session ? session.host.querySelectorAll('*').length : 0),
   reset: teardown,
 }

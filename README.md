@@ -81,3 +81,13 @@ Expressions are CSP-safe: the engine evaluates them via the `vega-expression` AS
 ## Performance
 
 Compared against react-vega and the official vega-embed tutorial (see `packages/benchmarks`): on a browser bar chart @1000 points the incremental path (now the default in `<Chart>`) drops long frames from 30.3% → 1.1%, retains ~0 MB heap per update, and `@aster/react <Chart>` is ~86 kB gzip vs react-vega's 289 kB.
+
+### Reactive differential updates
+
+For charts where only a fraction of the data changes between renders, pass `dataChanges` to `<Chart>` (dataset → indices whose rows changed, with a same-length immutable `data` replacement):
+
+```tsx
+<Chart spec={spec} data={newRows} dataChanges={{ table: changedIndices }} />
+```
+
+The reactive dataflow re-derives only the changed rows, reuses unchanged scene items and DOM subtrees, and reuses scales whose domain is unchanged. `pnpm bench:differential` measures the win at 50k points / 1% changed: row-wise (`formula`) ~16x, fixed-scale symbol ~8x, and `aggregate` ~1.5x faster than a full re-encode. The `dataChanges` (and dataset) transforms must preserve row length/order; `window`/`stack` with a `sort` and the geo/layout operators fall back to a full re-derive.

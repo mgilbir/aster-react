@@ -29,6 +29,9 @@ export interface EmbedProps {
   width: number
   height: number
   responsive?: boolean
+  /** Per-datum differential update (aster only): data override + changed indices. */
+  data?: Record<string, unknown[]>
+  dataChanges?: Record<string, number[]>
 }
 
 const options: Record<string, unknown> = {
@@ -54,9 +57,9 @@ function useContainerWidth(
   }, [ref, onWidth, enabled])
 }
 
-function AsterEmbed({ spec, width, height, responsive, dom }: EmbedProps & { dom?: boolean }) {
-  if (responsive) return <AsterChart spec={spec} incremental={dom} />
-  return <AsterChart spec={spec} width={width} height={height} incremental={dom} />
+function AsterEmbed({ spec, width, height, responsive, dom, data, dataChanges }: EmbedProps & { dom?: boolean; data?: Record<string, unknown[]>; dataChanges?: Record<string, number[]> }) {
+  if (responsive) return <AsterChart spec={spec} data={data} dataChanges={dataChanges} incremental={dom} />
+  return <AsterChart spec={spec} data={data} dataChanges={dataChanges} width={width} height={height} incremental={dom} />
 }
 
 function ReactVegaEmbed({ spec, width, height, responsive }: EmbedProps) {

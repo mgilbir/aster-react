@@ -131,6 +131,15 @@ for (const kind of KINDS) for (const embed of EMBEDS) {
     const st = await page.evaluate(([e, k, p, r]) => window.__bench.stableRerenders(e, k, p, r), [embed, kind, POINTS, 7])
     put(`stable:${kind}`, embed, { ms: summarize(st.ms), mutations: st.mutations })
   }
+
+  // 7b) Per-datum differential update (aster only): ~1% of points change, so the
+  // reactive dataflow reuses unchanged items/DOM subtrees. Measures the real
+  // browser O(changed) update vs the full re-encode in `updates`.
+  {
+    await page.evaluate(() => window.__bench.reset())
+    const diff = await page.evaluate(([e, p, r]) => window.__bench.differentialUpdates(e, p, r), [embed, POINTS, REPS])
+    put(`diff:${kind}`, embed, summarize(diff))
+  }
 }
 
 // 8) aster-internal stage decomposition (once, on the first kind)
