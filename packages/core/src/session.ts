@@ -85,10 +85,32 @@ export interface ChartSession {
   /** Evaluate `spec` + `input`, returning the cached scene when nothing changed. */
   evaluate(spec: VgSpec, input?: RuntimeInput): SceneRoot
   /**
+   * Imperative per-datum update of the last compiled chart (no spec re-pass):
+   * pass `{ data, dataChanges, signals, width, height }`; the session re-evaluates
+   * the chart compiled by the most recent `evaluate`, reusing unchanged scene
+   * items. Requires a prior `evaluate` (returns null otherwise).
+   */
+  change(input?: RuntimeInput): SceneRoot | null
+  /**
    * Metadata for the last evaluation: the compiled chart (with signalDefs for
    * the event loop) and the scene. Null before the first evaluate.
    */
   last: () => { chart: CompiledChart; scene: SceneRoot } | null
+}
+
+/** Fingerprint a spec + input for the no-op cache (skeleton + data refs + size/signals). */
+function fingerprint(spec: VgSpec, input: RuntimeInput): string {
+  const parts: string[] = []
+  const skeleton = skeletonOf(spec)
+  dataKeyOf(spec, input, parts)
+  parts.push(`w=${input.width ?? ''}`, `h=${input.height ?? ''}`)
+  for (const name of Object.keys(input.signals ?? {}).sort()) {
+    const v = input.signals![name]
+    parts.push(
+      typeof v === 'object' || typeof v === 'function' ? `s ${name}=#${refId(v)}` : `s ${name}=${String(v)}`,
+    )
+  }
+  return `${skeleton}\u0000${parts.join('\u0001')}`
 }
 
 export function createChartSession(): ChartSession {
@@ -96,20 +118,12 @@ export function createChartSession(): ChartSession {
   let lastSkeleton = ''
   let lastChart: CompiledChart | null = null
   let lastScene: SceneRoot | null = null
+  let lastSpec: VgSpec | null = null
 
   return {
     evaluate(spec, input = {}) {
-      const parts: string[] = []
       const skeleton = skeletonOf(spec)
-      dataKeyOf(spec, input, parts)
-      parts.push(`w=${input.width ?? ''}`, `h=${input.height ?? ''}`)
-      for (const name of Object.keys(input.signals ?? {}).sort()) {
-        const v = input.signals![name]
-        parts.push(
-          typeof v === 'object' || typeof v === 'function' ? `s ${name}=#${refId(v)}` : `s ${name}=${String(v)}`,
-        )
-      }
-      const key = `${skeleton}\u0000${parts.join('\u0001')}`
+      const key = fingerprint(spec, input)
       // A per-datum changeset implies the data values changed (often in place, so
       // the array identity — and thus the fingerprint — is unchanged), so the
       // no-op cache must not short-circuit the differential re-evaluation.
@@ -123,8 +137,18 @@ export function createChartSession(): ChartSession {
         // spec's value references — point it at the current ones before evaluating.
         syncValues(lastChart, spec)
       }
+      lastSpec = spec
       lastScene = evaluateChart(lastChart, input)
       lastKey = key
+      return lastScene
+    },
+    change(input = {}) {
+      // Imperative per-datum update of the last compiled chart. No spec re-pass:
+      // the host drives changes via data/dataChanges/signals. Requires a prior
+      // evaluate (we need a compiled chart + spec to fingerprint against).
+      if (!lastChart || !lastSpec) return null
+      lastScene = evaluateChart(lastChart, input)
+      lastKey = fingerprint(lastSpec, input)
       return lastScene
     },
     last: () => (lastChart && lastScene ? { chart: lastChart, scene: lastScene } : null),

@@ -52,6 +52,25 @@ describe('createChartSession', () => {
     expect(renderSceneToSvg(b)).not.toBe(renderSceneToSvg(a))
   })
 
+  it('change() imperatively updates the last compiled chart with dataChanges', () => {
+    const session = createChartSession()
+    const spec = specWith([{ x: 0, y: 1 }, { x: 1, y: 2 }])
+    const a = session.evaluate(spec, { width: 400, height: 300 })
+    const changed = [{ x: 0, y: 1 }, { x: 1, y: 9 }]
+    // No spec re-pass: change drives the update via data + dataChanges.
+    const b = session.change({ data: { table: changed }, dataChanges: { table: [1] }, width: 400, height: 300 })
+    expect(b).not.toBeNull()
+    expect(b).not.toBe(a)
+    expect(renderSceneToSvg(b!)).not.toBe(renderSceneToSvg(a))
+    // A subsequent identical no-op evaluate is a cache hit.
+    expect(session.evaluate(spec, { width: 400, height: 300, data: { table: changed } })).toBe(b)
+  })
+
+  it('change() returns null before the first evaluate', () => {
+    const session = createChartSession()
+    expect(session.change({ data: { table: [] } })).toBeNull()
+  })
+
   it('invalidates when the data array is replaced', () => {
     const session = createChartSession()
     const a = session.evaluate(specWith([{ x: 0, y: 1 }, { x: 1, y: 5 }]), { width: 400, height: 300 })
