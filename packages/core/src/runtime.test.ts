@@ -35,6 +35,68 @@ function fuzzSpecs(): Array<{ name: string; spec: Record<string, unknown> }> {
   return specs
 }
 
+describe('differential multi-dataset / source-chain / signal interaction', () => {
+  const fs = (values: Array<{ x: number; y: number }>) => ({
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    width: 200, height: 200, autosize: 'none',
+    data: [{ name: 't', values }],
+    scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
+    marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 40 } } } }],
+  } as never)
+  const xs = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => it.x)
+
+  it('applies multi-dataset changesets', () => {
+    const spec = { $schema: 'https://vega.github.io/schema/vega/v6.json', width: 200, height: 200, autosize: 'none',
+      data: [{ name: 'a', values: [{ x: 1, y: 1 }, { x: 2, y: 2 }] }, { name: 'b', values: [{ x: 3, y: 3 }, { x: 4, y: 4 }] }],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
+      marks: [
+        { type: 'symbol', from: { data: 'a' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { value: 0 }, size: { value: 40 } } } },
+        { type: 'symbol', from: { data: 'b' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { value: 0 }, size: { value: 40 } } } },
+      ] } as never
+    const chart = compileChart(spec)
+    const data = { a: [{ x: 1, y: 1 }, { x: 2, y: 2 }], b: [{ x: 3, y: 3 }, { x: 4, y: 4 }] }
+    const next = { a: [{ x: 5, y: 1 }, { x: 2, y: 2 }], b: [{ x: 3, y: 3 }, { x: 8, y: 4 }] }
+    evaluateChart(chart, { data })
+    const inc = evaluateChart(chart, { data: next, dataChanges: { a: [0], b: [1] } })
+    const full = evaluateChart(chart, { data: next })
+    expect(renderSceneToSvg(inc)).toBe(renderSceneToSvg(full))
+  })
+
+  it('propagates a changeset through a source-chain derived dataset', () => {
+    const spec = { $schema: 'https://vega.github.io/schema/vega/v6.json', width: 200, height: 200, autosize: 'none',
+      data: [
+        { name: 'src', values: [{ x: 1 }, { x: 3 }] },
+        { name: 'derived', source: 'src', transform: [{ type: 'formula', expr: 'datum.x * 2', as: 'y2' }] },
+      ],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
+      marks: [{ type: 'symbol', from: { data: 'derived' }, encode: { update: { x: { scale: 'x', field: 'y2' }, y: { value: 0 }, size: { value: 40 } } } }],
+    } as never
+    const chart = compileChart(spec)
+    const src = [{ x: 1 }, { x: 3 }]
+    evaluateChart(chart, { data: { src } })
+    const nextSrc = [{ x: 2 }, { x: 3 }]
+    const inc = evaluateChart(chart, { data: { src: nextSrc }, dataChanges: { src: [0] } })
+    const full = evaluateChart(chart, { data: { src: nextSrc } })
+    expect(renderSceneToSvg(inc)).toBe(renderSceneToSvg(full)) // derived re-derives to [4,6]
+  })
+
+  it('applies dataChanges while a (unchanged) signal drives the scale', () => {
+    const spec = { $schema: 'https://vega.github.io/schema/vega/v6.json', width: 200, height: 200, autosize: 'none',
+      data: [{ name: 't', values: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] }],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: { signal: 'hi' }, range: 'height', zero: true }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 40 } } } }],
+    } as never
+    const chart = compileChart(spec)
+    const data = { t: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] }
+    const next = { t: [{ x: 1, y: 1 }, { x: 2, y: 8 }, { x: 3, y: 3 }] }
+    evaluateChart(chart, { data, signals: { hi: 10 } })
+    // signal unchanged (params stable) -> differential runs; scale domain {signal:'hi'}
+    const inc = evaluateChart(chart, { data: next, dataChanges: { t: [1] }, signals: { hi: 10 } })
+    const full = evaluateChart(chart, { data: next, signals: { hi: 10 } })
+    expect(renderSceneToSvg(inc)).toBe(renderSceneToSvg(full))
+  })
+})
+
 describe('differential fuzz (incremental === full re-derive)', () => {
   it('matches full re-derive across random changesets and specs', () => {
     const rand = mulberry32(0xC0FFEE)

@@ -438,6 +438,14 @@ function markTouchesChangedData(mark: CompiledMark, chart: CompiledChart, change
 
 /** Find the previous scene's top-level groups for a mark (by mark name or type). */
 function findReusableMarkGroup(prevItems: SceneGroup[], mark: CompiledMark): SceneGroup | null {
+  // Prefer the mark's source dataset (unambiguous for layered charts with
+  // multiple same-type marks); fall back to name, then role+marktype.
+  const src = mark.from?.data as string | undefined
+  if (src != null) {
+    for (const g of prevItems) {
+      if ((g as SceneGroup & { __source?: string }).__source === src) return g
+    }
+  }
   const match = (g: SceneGroup): boolean =>
     g.name === mark.name || (mark.name == null && g.role === 'mark' && g.marktype === mark.type)
   for (const g of prevItems) {
@@ -1626,6 +1634,7 @@ function evaluateMark(
     role: 'mark',
     clip: mark.clip === true,
     items,
+    __source: mark.from?.data,
   }
 }
 

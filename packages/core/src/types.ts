@@ -341,6 +341,8 @@ export interface SceneGroup extends SceneItem {
   clip?: boolean
   /** Pre-computed rounded-rect path `d` for clip-path defs (when cornerRadius > 0). */
   clipPathD?: string
+  /** @internal The mark's source dataset, used to match a mark to its previous group. */
+  __source?: string
 }
 
 export type SceneNode = SceneGroup
