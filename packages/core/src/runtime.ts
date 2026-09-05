@@ -48,6 +48,40 @@ function paramRefId(v: unknown): number {
   return id
 }
 
+/** Persistent per-group index for incremental `aggregate` re-derivation. */
+interface AggState {
+  groupby: string[]
+  /** Input row index -> group key (same length as the input rows). */
+  rowKey: string[]
+  /** Group key -> input row indices belonging to it. */
+  keyToIdx: Map<string, number[]>
+  /** Output row order (group keys, first-occurrence order). */
+  outOrder: string[]
+  /** Group key -> aggregate output row. */
+  outByKey: Map<string, Row>
+  out: Row[]
+}
+
+function groupKeyOf(row: Row, groupby: string[]): string {
+  return groupby.map((k) => String(row[k])).join('\u0000')
+}
+
+function buildAggState(input: Row[], groupby: string[], out: Row[]): AggState {
+  const rowKey = new Array<string>(input.length)
+  const keyToIdx = new Map<string, number[]>()
+  for (let i = 0; i < input.length; i++) {
+    const k = groupKeyOf(input[i]!, groupby)
+    rowKey[i] = k
+    let arr = keyToIdx.get(k)
+    if (!arr) keyToIdx.set(k, (arr = []))
+    arr.push(i)
+  }
+  const outOrder = [...keyToIdx.keys()]
+  const outByKey = new Map<string, Row>()
+  outOrder.forEach((k, idx) => outByKey.set(k, out[idx]!))
+  return { groupby, rowKey, keyToIdx, outOrder, outByKey, out }
+}
+
 /** Fingerprint the expression params a row-wise transform can reference. */
 function paramFpOf(params: Record<string, unknown>): string {
   const parts: string[] = []
@@ -843,18 +877,68 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
     } else {
       rows = ((inputData[name] as Row[]) ?? []).map((r) => ({ ...r }))
     }
+    const inputRows = rows
     if (d.transform.length) {
-      const prevOutputs = (ctx.chart as unknown as { __prevDatasetOutputs?: Map<string, Row[]> }).__prevDatasetOutputs
+      const chartMetaData = ctx.chart as unknown as {
+        __prevDatasetOutputs?: Map<string, Row[]>
+        __aggState?: Map<string, AggState>
+        __paramFp?: string
+      }
+      const prevOutputs = chartMetaData.__prevDatasetOutputs
       const changes = ctx.dataChanges?.get(name)
+      const paramsUnchanged = paramFpOf(ctx.signalParams) === chartMetaData.__paramFp
+      const agg = d.transform.length === 1 ? (d.transform[0] as Record<string, unknown> | undefined) : null
+      let aggUpdated = false
+      // Incremental aggregate: re-aggregate only the groups touched by the
+      // changeset. Safe only when no changed row switches group (a group-membership
+      // change would add/remove/reorder output rows), which would require a full
+      // re-derive. Maintained via a persistent group index on the chart.
+      if (agg && agg.type === 'aggregate' && ctx.incremental && changes && paramsUnchanged) {
+        const groupby = (agg.groupby as string[] | undefined) ?? []
+        let state = chartMetaData.__aggState?.get(name)
+        if (state && state.rowKey.length === rows.length) {
+          const dirty = new Set<string>()
+          let safe = true
+          for (const i of changes) {
+            if (i < 0 || i >= rows.length) { safe = false; break }
+            const k = groupKeyOf(rows[i]!, groupby)
+            if (state!.rowKey[i] !== k) { safe = false; break }
+            dirty.add(k)
+          }
+          if (safe && dirty.size) {
+            const apply = (gRows: Row[]): Row[] => applyTransforms(gRows, [{ type: 'aggregate', groupby, fields: agg.fields as never, ops: agg.ops as never, as: agg.as as never } as never], {
+              runtime: ctx.runtime,
+              signals: ctx.signalParams,
+              datasets: (n) => ctx.datasets.get(n) ?? [],
+              hierarchies: ctx.hierarchies,
+              projections: ctx.projections,
+            }, d.name)
+            for (const g of dirty) {
+              const idxs = state!.keyToIdx.get(g)
+              if (!idxs) { safe = false; break }
+              const derived = apply(idxs.map((idx) => rows[idx]!))
+              if (derived[0] != null) state!.outByKey.set(g, derived[0])
+            }
+            if (safe) {
+              const out = state!.outOrder.map((k) => state!.outByKey.get(k)!)
+              state!.out = out
+              rows = out
+              chartMetaData.__aggState!.set(name, state!)
+              aggUpdated = true
+            }
+          }
+        }
+      }
       // Row-wise transforms (formula/identifier) map index to index, so the
       // output rows for indices not in the changeset are unchanged and can be
       // reused. A global transform (filter/aggregate/stack/bin/...) invalidates
       // every output row, and a change to any expression parameter (width or a
       // signal) invalidates every formula, so both fall back to a full re-derive.
       const rowwise = d.transform.every((tm) => tm.type === 'formula' || tm.type === 'identifier')
-      const paramsUnchanged = paramFpOf(ctx.signalParams) === (ctx.chart as unknown as { __paramFp?: string }).__paramFp
       const cached = prevOutputs?.get(name)
-      if (changes && rowwise && paramsUnchanged && cached && cached.length === rows.length) {
+      if (aggUpdated) {
+        // Incremental aggregate already produced the output; nothing to do.
+      } else if (changes && rowwise && paramsUnchanged && cached && cached.length === rows.length) {
         const apply = (single: Row[]): Row[] => applyTransforms(single, d.transform, {
           runtime: ctx.runtime,
           signals: ctx.signalParams,
@@ -887,6 +971,12 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
           hierarchies: ctx.hierarchies,
           projections: ctx.projections,
         }, d.name)
+      }
+      // Refresh the persistent aggregate index whenever the aggregate was fully
+      // re-derived (first eval, an unsafe changeset, or a non-incremental path).
+      if (agg && (agg as { type: string }).type === 'aggregate' && !aggUpdated) {
+        if (!chartMetaData.__aggState) chartMetaData.__aggState = new Map()
+        chartMetaData.__aggState.set(name, buildAggState(inputRows, (agg as { groupby?: string[] }).groupby ?? [], rows))
       }
     }
     ctx.datasets.set(name, rows)
@@ -1039,6 +1129,12 @@ function canReuseItems(
   const prevItems = prevGroup.items as SceneItem[]
   if (rowCount !== prevItems.length) return false
   if (mark.sort || mark.transform?.length || rectSorts) return false
+  // dataChanges indices refer to the *input* rows; a mark drawing from a
+  // transformed dataset reads the *output* rows, which only preserve index/length
+  // for row-wise transforms. A global transform (filter/aggregate/stack/...) can
+  // reorder or resize the output, so per-item reuse would misalign — bail.
+  const srcData = ctx.chart.data.find((d) => d.name === source)
+  if (srcData?.transform?.some((tm) => tm.type !== 'formula' && tm.type !== 'identifier')) return false
   // A change to width/height or any signal shifts scale ranges and every
   // formula, so the previously-encoded items would be stale. Only reuse when the
   // expression params are identical to the previous eval.

@@ -210,6 +210,50 @@ describe('per-datum differential update', () => {
     expect(afterItems[0]).not.toBe(beforeItems[0])
   })
 
+  it('incremental aggregate equals full re-derive (unchanged groups only)', () => {
+    const ts = {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 200, height: 200, autosize: 'none',
+      data: [{ name: 't', values: [{ g: 'a', v: 1 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }], transform: [{ type: 'aggregate', groupby: ['g'], fields: ['v'], ops: ['sum'], as: ['s'] }] }],
+      scales: [
+        { name: 'x', type: 'band', domain: { data: 't', field: 'g' }, range: 'width', paddingOuter: 0.1, paddingInner: 0.2 },
+        { name: 'y', type: 'linear', domain: { data: 't', field: 's' }, range: 'height', zero: true, nice: true },
+      ],
+      marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'g' }, width: { scale: 'x', band: 1 }, y: { scale: 'y', field: 's' }, y2: { scale: 'y', value: 0 } } } }],
+    } as never
+    const chart = compileChart(ts)
+    const sums = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'rect')!.items!.map((it) => (it as { datum?: { s?: number } }).datum?.s)
+    const init = [{ g: 'a', v: 1 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }]
+    const changed = [{ g: 'a', v: 3 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }]
+    evaluateChart(chart, { data: { t: init } })
+    const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } })
+    const full = evaluateChart(chart, { data: { t: changed } })
+    // groups 'a'(3+2=5) and 'b'(12); order should be identical incrementally vs full.
+    expect(sums(inc)).toEqual(sums(full))
+  })
+
+  it('falls back to full re-derive when a changed row switches group', () => {
+    const ts = {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 200, height: 200, autosize: 'none',
+      data: [{ name: 't', values: [{ g: 'a', v: 1 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }], transform: [{ type: 'aggregate', groupby: ['g'], fields: ['v'], ops: ['sum'], as: ['s'] }] }],
+      scales: [
+        { name: 'x', type: 'band', domain: { data: 't', field: 'g' }, range: 'width', paddingOuter: 0.1, paddingInner: 0.2 },
+        { name: 'y', type: 'linear', domain: { data: 't', field: 's' }, range: 'height', zero: true, nice: true },
+      ],
+      marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'g' }, width: { scale: 'x', band: 1 }, y: { scale: 'y', field: 's' }, y2: { scale: 'y', value: 0 } } } }],
+    } as never
+    const chart = compileChart(ts)
+    const sums = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'rect')!.items!.map((it) => (it as { datum?: { s?: number } }).datum?.s)
+    const init = [{ g: 'a', v: 1 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }]
+    // index 0 switches group a -> b
+    const switched = [{ g: 'b', v: 3 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }]
+    evaluateChart(chart, { data: { t: init } })
+    const inc = evaluateChart(chart, { data: { t: switched }, dataChanges: { t: [0] } })
+    const full = evaluateChart(chart, { data: { t: switched } })
+    expect(sums(inc)).toEqual(sums(full))
+  })
+
   it('re-derives only changed rows through a row-wise dataset transform', () => {
     const ts = {
       $schema: 'https://vega.github.io/schema/vega/v6.json',
