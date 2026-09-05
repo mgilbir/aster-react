@@ -222,6 +222,19 @@ for (const kind of KINDS) {
     ),
   )
   console.log('')
+  // Differential update: ~1% of points change, so aster's reactive dataflow
+  // reuses unchanged items/DOM subtrees (only aster/asterDom use dataChanges).
+  console.log(
+    table(
+      'differential update — ~1% points change (aster only)',
+      ['embed', 'update (ms)'],
+      ['aster', 'asterDom'].map((e) => {
+        const d = g('diff', e)
+        return [e, d ? `${fmt(d.median)} / ${fmt(d.p95)}` : 'n/a']
+      }),
+    ),
+  )
+  console.log('')
 }
 await browser.close()
 rmSync(OUT_DIR, { recursive: true, force: true })
