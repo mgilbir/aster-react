@@ -457,6 +457,30 @@ describe('per-datum differential update', () => {
     expect(y(inc)).toEqual(y(full))
   })
 
+  it('stamps reused items as clean and changed items dirty (DOM-subtree skip basis)', () => {
+    const ts = {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 200, height: 200, autosize: 'none',
+      data: [{ name: 't', values: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] }],
+      scales: [
+        { name: 'x', type: 'linear', domain: [0, 10], range: 'width' },
+        { name: 'y', type: 'linear', domain: [0, 10], range: 'height' },
+      ],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 50 } } } }],
+    } as never
+    const chart = compileChart(ts)
+    const items = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!
+    evaluateChart(chart, { data: { t: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] } })
+    const s2 = evaluateChart(chart, { data: { t: [{ x: 1, y: 1 }, { x: 5, y: 2 }, { x: 3, y: 3 }] }, dataChanges: { t: [1] } })
+    const gen = (s2 as unknown as { __itemGen?: number }).__itemGen
+    const it = items(s2)
+    // unchanged indices keep a previous generation -> clean (skippable by the patcher)
+    expect((it[0] as { __gen?: number }).__gen).not.toBe(gen)
+    expect((it[2] as { __gen?: number }).__gen).not.toBe(gen)
+    // changed index has the current generation -> dirty (patched)
+    expect((it[1] as { __gen?: number }).__gen).toBe(gen)
+  })
+
   it('falls back to full re-derive when a changed row switches group', () => {
     const ts = {
       $schema: 'https://vega.github.io/schema/vega/v6.json',

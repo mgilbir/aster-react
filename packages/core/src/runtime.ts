@@ -515,6 +515,9 @@ function buildContent(
 export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
   const auto = chart.autosize
   const base = chart.padding
+  // Differential-update generation: incremented each eval so an unchanged (reused)
+  // item keeps its previous generation and the DOM patcher can skip it.
+  ;(chart as unknown as { __gen?: number }).__gen = ((chart as unknown as { __gen?: number }).__gen ?? 0) + 1
   const signals = { ...chart.signals, ...input.signals }
   const initialW = resolveSize(chart.width, input.width, signals)
   const initialH = resolveSize(chart.height, input.height, signals)
@@ -626,6 +629,7 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   ;(scene as unknown as { runtime?: unknown }).runtime = ctx.runtime
   ;(scene as unknown as { signalParams?: Record<string, unknown> }).signalParams = ctx.signalParams
   ;(scene as unknown as { compiled?: unknown }).compiled = ctx.chart
+  ;(scene as unknown as { __itemGen?: number }).__itemGen = (chart as unknown as { __gen?: number }).__gen
   // Partial re-evaluation memo
   ;(chart as unknown as { __prevItems?: SceneGroup[] }).__prevItems = items
   if (ctx._defs.length) scene.defs = ctx._defs
@@ -1502,26 +1506,33 @@ function evaluateMark(
       const prevItems = prevGroup!.items as SceneItem[]
       // Reuse the previous group's item ARRAY in place and replace only the
       // changed indices — an O(changed) splice instead of an O(n) rebuild, the
-      // persistent-scene behavior that vega's pulse graph gives us.
+      // persistent-scene behavior that vega's pulse graph gives us. Reused items
+      // keep their previous generation; changed items get the current one.
+      const gen = (ctx.chart as unknown as { __gen?: number }).__gen ?? 0
       for (const i of changes) {
         if (i < 0 || i >= prevItems.length) continue
         const row = { ...(rows[i] as Row) }
         const res = resolveEncodeSet(update, row, ctx, mark.type)
         res.datum = row
+        res.__gen = gen
         prevItems[i] = res
       }
       items = prevItems
     } else {
+      const gen = (ctx.chart as unknown as { __gen?: number }).__gen ?? 0
       items = rows.map((row) => {
         const copy = rowsCloned ? row : { ...row }
         const res = resolveEncodeSet(update, copy, ctx, mark.type)
         res.datum = copy
+        res.__gen = gen
         return res
       })
     }
   } else {
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
-    items = [resolveEncodeSet(update, {}, ctx, mark.type)]
+    const res = resolveEncodeSet(update, {}, ctx, mark.type)
+    res.__gen = (ctx.chart as unknown as { __gen?: number }).__gen ?? 0
+    items = [res]
   }
 
   // Apply arc style default: strokeWidth=1.5

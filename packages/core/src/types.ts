@@ -348,6 +348,9 @@ export type SceneNode = SceneGroup
 export interface SceneItem {
   // mark identity
   mark?: { role?: string; name?: string }
+  /** @internal Differential-update generation: set when an item is (re)encoded; a DOM
+   * patch skips subtrees whose item was not touched this eval. */
+  __gen?: number
   // geometry
   x?: number
   y?: number

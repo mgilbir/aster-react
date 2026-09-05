@@ -29,9 +29,20 @@ export interface DomDesc {
   attrs: Array<[string, string]>
   text?: string
   children?: DomDesc[]
+  /** @internal True when the underlying scene item was not touched this eval, so
+   * the patcher can skip this subtree (its DOM already reflects it). */
+  clean?: boolean
 }
 
 const str = (v: string | number | undefined): string => (typeof v === 'number' ? num(v) : String(v))
+
+// Differential-update generation stamped on scene items by evaluateChart. An
+// item whose __gen differs from the current generation was reused (unchanged), so
+// its DOM subtree can be skipped during the next patch.
+let CURRENT_GEN: number | undefined
+function isClean(it: SceneItem): boolean {
+  return CURRENT_GEN != null && it.__gen != null && it.__gen !== CURRENT_GEN
+}
 
 /** Attribute pairs for presentation props, mirroring `attr()` semantics (null = absent). */
 function props(pairs: Array<[string, unknown]>): Array<[string, string]> {
@@ -65,7 +76,7 @@ function leafDesc(it: SceneItem): DomDesc {
     if (tx !== '0' || ty !== '0') attrs.push(['transform', `translate(${tx},${ty})`])
     attrs.push(['d', String(it.path)])
     attrs.push(...props([['fill', it.fill], ['stroke', it.stroke], ['stroke-width', it.strokeWidth], ['opacity', it.opacity]]))
-    return { tag: 'path', attrs }
+    return { tag: 'path', attrs, clean: isClean(it) }
   }
   if (it.shape != null && it.radius != null) {
     const rNum = num(it.radius)
@@ -83,6 +94,7 @@ function leafDesc(it: SceneItem): DomDesc {
           ['opacity', it.opacity],
         ]),
       ],
+      clean: isClean(it),
     }
   }
   if (it.text != null) {
@@ -98,6 +110,7 @@ function leafDesc(it: SceneItem): DomDesc {
         ]),
       ],
       text: String(it.text),
+      clean: isClean(it),
     }
   }
   const x2 = it.x2 ?? it.x ?? 0
@@ -116,6 +129,7 @@ function leafDesc(it: SceneItem): DomDesc {
         ['opacity', it.opacity],
       ]),
     ],
+    clean: isClean(it),
   }
 }
 
@@ -185,6 +199,7 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
                 ['opacity', it.opacity],
               ]),
             ],
+            clean: isClean(it),
           }
         })
     case 'rect':
@@ -194,21 +209,19 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
         .map((it) => {
           const d = rectItemPath(it)
           if (d == null) return null
-          return {
-            tag: 'path',
-            attrs: [
-              ['d', d],
-              ...props([
-                ['fill', it.fill],
-                ['fill-opacity', it.fillOpacity],
-                ['stroke', it.stroke],
-                ['stroke-width', it.strokeWidth],
-                ['opacity', it.opacity],
-              ]),
-            ],
-          }
+          const attrs: Array<[string, string]> = [
+            ['d', d],
+            ...props([
+              ['fill', it.fill],
+              ['fill-opacity', it.fillOpacity],
+              ['stroke', it.stroke],
+              ['stroke-width', it.strokeWidth],
+              ['opacity', it.opacity],
+            ]),
+          ]
+          return { tag: 'path', attrs, clean: isClean(it) }
         })
-        .filter((x): x is DomDesc => x != null)
+        .filter((x): x is NonNullable<typeof x> => x != null)
     case 'circle':
       return items
         .filter((it) => it.x != null && it.y != null)
@@ -222,6 +235,7 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
               ['r', num(r)],
               ...props([['fill', it.fill], ['fill-opacity', it.fillOpacity], ['stroke', it.stroke], ['stroke-width', it.strokeWidth], ['opacity', it.opacity]]),
             ],
+            clean: isClean(it),
           }
         })
     case 'rule':
@@ -237,30 +251,33 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
             ['y2', num(it.y2 ?? y)],
             ...props([['stroke', it.stroke], ['stroke-width', it.strokeWidth], ['stroke-dasharray', it.strokeDash], ['opacity', it.opacity]]),
           ],
+          clean: isClean(it),
         }
       })
     case 'text':
       return items
-        .map((it) => textItemDesc(it))
-        .filter((d): d is NonNullable<typeof d> => d != null)
-        .map((d) => {
+        .map((it) => {
+          const d = textItemDesc(it)
+          if (d == null) return null
           const attrs: Array<[string, string]> = [['x', d.x], ['y', d.y]]
           if (d.dyAttr) {
             const m = d.dyAttr.match(/dy="([^"]*)"/)
             if (m?.[1]) attrs.push(['dy', m[1]])
           }
           attrs.push(...props(d.attrs))
-          if (d.lines.length === 1) return { tag: 'text', attrs, text: d.text }
+          if (d.lines.length === 1) return { tag: 'text', attrs, text: d.text, clean: isClean(it) }
           return {
             tag: 'text',
             attrs,
+            clean: isClean(it),
             children: d.lines.map((line, i) => ({
               tag: 'tspan',
-              attrs: i === 0 ? [] : [['x', '0'], ['dy', num(d.lineHeight)]],
+              attrs: i === 0 ? [] : ([['x', '0'], ['dy', num(d.lineHeight)]] as Array<[string, string]>),
               text: line,
             })),
           } as const
         })
+        .filter((d): d is NonNullable<typeof d> => d != null)
     case 'path':
     case 'shape':
     case 'geoshape':
@@ -273,7 +290,7 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
           if (tx !== '0' || ty !== '0') attrs.push(['transform', `translate(${tx},${ty})`])
           attrs.push(['d', String(it.path)])
           attrs.push(...props([['fill', it.fill], ['fill-opacity', it.fillOpacity], ['stroke', it.stroke], ['stroke-width', it.strokeWidth], ['opacity', it.opacity]]))
-          return { tag: 'path', attrs }
+          return { tag: 'path', attrs, clean: isClean(it) }
         })
     case 'image':
       return items
@@ -287,6 +304,7 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
             ['height', num(it.height ?? 0)],
             ['preserveAspectRatio', it.aspect === false ? 'none' : 'xMidYMid'],
           ],
+          clean: isClean(it),
         }))
     case 'arc':
       return items.map((it) => {
@@ -302,6 +320,7 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
             ['d', arcPath(x, y, r, r0, a0, a1)],
             ...props([['fill', it.fill], ['fill-opacity', it.fillOpacity], ['stroke', it.stroke], ['stroke-width', it.stroke != null ? it.strokeWidth : undefined]]),
           ],
+          clean: isClean(it),
         }
       })
     default:
@@ -359,6 +378,7 @@ function groupDesc(group: SceneGroup, plotW: number, plotH: number, clips: ClipC
 }
 
 export function sceneToDomDesc(scene: SceneRoot): DomDesc {
+  CURRENT_GEN = (scene as unknown as { __itemGen?: number }).__itemGen
   const W = scene.width
   const H = scene.height
   const pad = scene.padding ?? { top: 0, right: 0, bottom: 0, left: 0 }
@@ -471,6 +491,11 @@ function syncAttrsFromDom(el: Element, desc: DomDesc): void {
 function patchEl(el: Element, desc: DomDesc): void {
   const last = LAST.get(el)
   LAST.set(el, desc)
+
+  // DOM-subtree skip: a desc node whose scene item was reused (unchanged this
+  // eval) is identical to the previous patch, so the element already matches and
+  // we can avoid descending into it entirely.
+  if (desc.clean && last) return
 
   // Attributes: fast path compares against the cached descriptor.
   if (last && sameAttrNames(last.attrs, desc.attrs)) {
