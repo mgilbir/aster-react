@@ -350,7 +350,7 @@ function resolveExtent(
  * This produces a step that is a power of a base (default 10), adjusted
  * so that ceil(span/step) <= maxbins, then refined by dividing by factors.
  */
-function computeBinStep(span: number, maxbins: number | undefined): number {
+export function computeBinStep(span: number, maxbins: number | undefined): number {
   if (span <= 0 || !Number.isFinite(span)) return 1
   const m = maxbins ?? 20
   if (m < 1) return span
@@ -385,7 +385,7 @@ function computeBinStep(span: number, maxbins: number | undefined): number {
  * Matches vega-statistics/bin.js: eps = base^(-precision-1) where precision
  * is derived from the step's log.
  */
-function computeBinEps(step: number): number {
+export function computeBinEps(step: number): number {
   if (step <= 0) return 0.01
   const logb = Math.log(10)
   const vlog = Math.log(step)

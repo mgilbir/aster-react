@@ -325,6 +325,24 @@ describe('per-datum differential update', () => {
     expect(b0(inc)).toEqual(b0(full))
   })
 
+  it('incremental bin (data-derived extent) equals full re-derive when extent is stable', () => {
+    const ts = {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 200, height: 200, autosize: 'none',
+      data: [{ name: 't', values: [{ v: 1 }, { v: 3 }, { v: 5 }, { v: 7 }], transform: [{ type: 'bin', field: 'v', as: ['b0', 'b1'] }] }],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'b0' }, y: { value: 0 }, size: { value: 40 } } } }],
+    } as never
+    const chart = compileChart(ts)
+    const b0 = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { b0?: number } }).datum?.b0)
+    const init = [{ v: 1 }, { v: 3 }, { v: 5 }, { v: 7 }]
+    const changed = [{ v: 2 }, { v: 3 }, { v: 5 }, { v: 7 }] // stays within extent, old not at boundary
+    evaluateChart(chart, { data: { t: init } })
+    const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } })
+    const full = evaluateChart(chart, { data: { t: changed } })
+    expect(b0(inc)).toEqual(b0(full))
+  })
+
   it('falls back to full re-derive when a changed row switches group', () => {
     const ts = {
       $schema: 'https://vega.github.io/schema/vega/v6.json',

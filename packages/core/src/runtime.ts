@@ -5,7 +5,7 @@
  */
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { readData, type DataFormatSpec } from './data-format.js'
-import { applyTransforms, sortRows, getField, type Row, geoJSONPath } from './transform.js'
+import { applyTransforms, sortRows, getField, type Row, geoJSONPath, computeBinStep, computeBinEps } from './transform.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
 import { geoRegistry, requireGeo } from './registry.js'
 import { locale } from 'vega-format'
@@ -908,6 +908,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
         __prevDatasetOutputs?: Map<string, Row[]>
         __aggState?: Map<string, AggState>
         __filterPassed?: Map<string, boolean[]>
+        __binState?: Map<string, { lo: number; hi: number; start: number; stop: number; step: number; out: Row[]; oldVals: number[] }>
         __paramFp?: string
       }
       const prevOutputs = chartMetaData.__prevDatasetOutputs
@@ -917,6 +918,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       const isAgg = single?.type === 'aggregate'
       const isJoinAgg = single?.type === 'joinaggregate'
       const isFilter = single?.type === 'filter'
+      const isBinData = single?.type === 'bin' && !Array.isArray((single as { extent?: unknown }).extent)
       const isGrouped = (single?.type === 'window' || single?.type === 'stack')
         && ((single as { groupby?: unknown }).groupby as string[] | undefined)?.length
         && (single as { sort?: unknown }).sort == null
@@ -944,6 +946,41 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
             rows = out
             if (!chartMetaData.__filterPassed) chartMetaData.__filterPassed = new Map()
             chartMetaData.__filterPassed.set(name, newPassed)
+            aggUpdated = true
+          }
+        }
+      }
+      // Incremental bin (data-derived extent): re-bin only changed rows when the
+      // extent is unchanged. The extent shifts only if a changed row's new value
+      // falls outside [lo, hi], or its old value was at the boundary (the min or
+      // max may move), so those cases fall back to a full re-derive.
+      if (isBinData && ctx.incremental && changes && paramsUnchanged) {
+        const bs = chartMetaData.__binState?.get(name)
+        const field = (single as { field?: string }).field ?? ''
+        const as = (single as { as?: string[] }).as ?? ['b0', 'b1']
+        if (bs && bs.oldVals.length === rows.length) {
+          let safe = true
+          for (const i of changes) {
+            if (i < 0 || i >= rows.length) { safe = false; break }
+            const newV = Number((rows[i] as Record<string, unknown>)[field])
+            const oldV = bs.oldVals[i]!
+            if (newV < bs.lo || newV > bs.hi || oldV === bs.lo || oldV === bs.hi) { safe = false; break }
+          }
+          if (safe) {
+            const out = bs.out
+            for (const i of changes) {
+              if (i < 0 || i >= out.length) continue
+              const v = Number((rows[i] as Record<string, unknown>)[field])
+              const row = rows[i]!
+              if (!Number.isFinite(v) || v < bs.start || v > bs.stop) {
+                out[i] = { ...row, [as[0]!]: undefined, [as[1]!]: undefined }
+              } else {
+                const b0 = bs.start + Math.floor((v - bs.start) / bs.step) * bs.step
+                out[i] = { ...row, [as[0]!]: b0, [as[1]!]: b0 + bs.step }
+              }
+            }
+            rows = out
+            outputChanges = new Set(changes)
             aggUpdated = true
           }
         }
@@ -1082,6 +1119,21 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
         const expr = (single as { expr?: string }).expr ?? ''
         const fn = (row: Row): boolean => { try { return Boolean(ctx.runtime.expr(expr)(row, ctx.signalParams)) } catch { return false } }
         chartMetaData.__filterPassed.set(name, inputRows.map((r) => fn(r)))
+      }
+      if (isBinData && !aggUpdated) {
+        const field = (single as { field?: string }).field ?? ''
+        const vals = inputRows.map((r) => Number((r as Record<string, unknown>)[field]))
+        const finite = vals.filter((v) => Number.isFinite(v))
+        const lo = finite.length ? Math.min(...finite) : 0
+        const hi = finite.length ? Math.max(...finite) : 1
+        const span = hi - lo
+        const explicitStep = (single as { step?: number }).step
+        const step = typeof explicitStep === 'number' && explicitStep > 0 ? explicitStep : computeBinStep(span, (single as { maxbins?: number }).maxbins)
+        const eps = computeBinEps(step)
+        const start = lo < Math.floor(lo / step + eps) * step ? Math.floor(lo / step + eps) * step - step : Math.floor(lo / step + eps) * step
+        const stop = Math.ceil(hi / step) * step
+        if (!chartMetaData.__binState) chartMetaData.__binState = new Map()
+        chartMetaData.__binState.set(name, { lo, hi, start, stop, step, out: rows, oldVals: vals })
       }
     }
     ctx.datasets.set(name, rows)
