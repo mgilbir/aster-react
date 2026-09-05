@@ -48,7 +48,7 @@ function paramRefId(v: unknown): number {
   return id
 }
 
-/** Persistent per-group index for incremental `aggregate` re-derivation. */
+/** Persistent per-group index for incremental group transforms. */
 interface AggState {
   groupby: string[]
   /** Input row index -> group key (same length as the input rows). */
@@ -57,8 +57,12 @@ interface AggState {
   keyToIdx: Map<string, number[]>
   /** Output row order (group keys, first-occurrence order). */
   outOrder: string[]
-  /** Group key -> aggregate output row. */
+  /** Group key -> aggregate output row (aggregate only). */
   outByKey: Map<string, Row>
+  /** Group key -> start index in the grouped output array (window/stack). */
+  groupStart: Map<string, number>
+  /** Group key -> number of output rows it contributes. */
+  groupSize: Map<string, number>
   out: Row[]
 }
 
@@ -79,7 +83,18 @@ function buildAggState(input: Row[], groupby: string[], out: Row[]): AggState {
   const outOrder = [...keyToIdx.keys()]
   const outByKey = new Map<string, Row>()
   outOrder.forEach((k, idx) => outByKey.set(k, out[idx]!))
-  return { groupby, rowKey, keyToIdx, outOrder, outByKey, out }
+  // Grouped outputs (window/stack) place a group's rows contiguously; track
+  // each group's start index and size so dirty groups can be spliced in place.
+  const groupStart = new Map<string, number>()
+  const groupSize = new Map<string, number>()
+  let pos = 0
+  for (const k of outOrder) {
+    const size = keyToIdx.get(k)!.length
+    groupStart.set(k, pos)
+    groupSize.set(k, size)
+    pos += size
+  }
+  return { groupby, rowKey, keyToIdx, outOrder, outByKey, groupStart, groupSize, out }
 }
 
 /** Fingerprint the expression params a row-wise transform can reference. */
@@ -900,16 +915,19 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       const single = d.transform.length === 1 ? (d.transform[0] as Record<string, unknown> | undefined) : null
       const isAgg = single?.type === 'aggregate'
       const isJoinAgg = single?.type === 'joinaggregate'
+      const isGrouped = (single?.type === 'window' || single?.type === 'stack')
+        && ((single as { groupby?: unknown }).groupby as string[] | undefined)?.length
+        && (single as { sort?: unknown }).sort == null
+      const t = single!
       let aggUpdated = false
-      // Incremental group transforms (aggregate/joinaggregate): re-aggregate only
-      // the groups touched by the changeset. Safe only when no changed row
-      // switches group (a membership change would add/remove/reorder output
-      // rows), which requires a full re-derive. Maintained via a persistent
-      // group index on the chart. aggregate emits one row per group;
-      // joinaggregate merges the group aggregate onto each (1:1) row.
-      if ((isAgg || isJoinAgg) && ctx.incremental && changes && paramsUnchanged) {
+      // Incremental group transforms (aggregate/joinaggregate/window/stack):
+      // re-derive only the groups touched by the changeset. Safe only when no
+      // changed row switches group (a membership change would add/remove/reorder
+      // output rows), which requires a full re-derive. aggregate emits one row per
+      // group; joinaggregate merges the group aggregate onto each (1:1) row;
+      // window/stack emit a grouped (contiguous per group) output.
+      if ((isAgg || isJoinAgg || isGrouped) && ctx.incremental && changes && paramsUnchanged) {
         const groupby = (single!.groupby as string[] | undefined) ?? []
-        const t = single!
         let state = chartMetaData.__aggState?.get(name)
         if (state && state.rowKey.length === rows.length) {
           const dirty = new Set<string>()
@@ -921,7 +939,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
             dirty.add(k)
           }
           if (safe && dirty.size) {
-            const apply = (gRows: Row[]): Row[] => applyTransforms(gRows, [{ type: t.type, groupby, fields: t.fields as never, ops: t.ops as never, as: t.as as never } as never], {
+            const apply = (gRows: Row[]): Row[] => applyTransforms(gRows, [t as never], {
               runtime: ctx.runtime,
               signals: ctx.signalParams,
               datasets: (n) => ctx.datasets.get(n) ?? [],
@@ -941,8 +959,6 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
                 rows = out
                 chartMetaData.__aggState!.set(name, state!)
                 aggUpdated = true
-                // Pulse: the output rows that changed are the dirty groups'
-                // aggregate rows (their positions in the output order).
                 outputChanges = new Set([...dirty].map((g) => state!.outOrder.indexOf(g)))
               }
             } else {
@@ -951,12 +967,24 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
                 const idxs = state!.keyToIdx.get(g)
                 if (!idxs) { safe = false; break }
                 const derived = apply(idxs.map((idx) => rows[idx]!))
-                derived.forEach((r, j) => { out[idxs[j]!] = r })
+                if (isJoinAgg) {
+                  derived.forEach((r, j) => { out[idxs[j]!] = r })
+                } else {
+                  const start = state!.groupStart.get(g)!
+                  derived.forEach((r, j) => { out[start + j] = r })
+                }
               }
               if (safe) {
                 rows = out
                 const allDirty = new Set<number>()
-                for (const g of dirty) for (const idx of state!.keyToIdx.get(g)!) allDirty.add(idx)
+                for (const g of dirty) {
+                  if (isJoinAgg) {
+                    for (const idx of state!.keyToIdx.get(g)!) allDirty.add(idx)
+                  } else {
+                    const start = state!.groupStart.get(g)!
+                    for (let j = 0; j < state!.keyToIdx.get(g)!.length; j++) allDirty.add(start + j)
+                  }
+                }
                 outputChanges = allDirty
                 chartMetaData.__aggState!.set(name, state!)
                 aggUpdated = true
@@ -1012,7 +1040,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       // Refresh the persistent group index whenever the group transform was
       // fully re-derived (first eval, an unsafe changeset, or a non-incremental
       // path).
-      if ((isAgg || isJoinAgg) && !aggUpdated) {
+      if ((isAgg || isJoinAgg || isGrouped) && !aggUpdated) {
         if (!chartMetaData.__aggState) chartMetaData.__aggState = new Map()
         chartMetaData.__aggState.set(name, buildAggState(inputRows, (single as { groupby?: string[] }).groupby ?? [], rows))
       }
