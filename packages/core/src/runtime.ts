@@ -907,6 +907,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       const chartMetaData = ctx.chart as unknown as {
         __prevDatasetOutputs?: Map<string, Row[]>
         __aggState?: Map<string, AggState>
+        __filterPassed?: Map<string, boolean[]>
         __paramFp?: string
       }
       const prevOutputs = chartMetaData.__prevDatasetOutputs
@@ -915,11 +916,38 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       const single = d.transform.length === 1 ? (d.transform[0] as Record<string, unknown> | undefined) : null
       const isAgg = single?.type === 'aggregate'
       const isJoinAgg = single?.type === 'joinaggregate'
+      const isFilter = single?.type === 'filter'
       const isGrouped = (single?.type === 'window' || single?.type === 'stack')
         && ((single as { groupby?: unknown }).groupby as string[] | undefined)?.length
         && (single as { sort?: unknown }).sort == null
       const t = single!
       let aggUpdated = false
+      // Incremental filter: re-evaluate the predicate only for changed rows and
+      // rebuild the (input-order) filtered output from the cached per-row pass
+      // status. The output length/order may change (rows dropped/kept), so the
+      // mark is not per-item reusable; the win is the O(n) predicate eval.
+      if (isFilter && ctx.incremental && changes && paramsUnchanged) {
+        const cachedPassed = chartMetaData.__filterPassed?.get(name)
+        const expr = (single as { expr?: string }).expr ?? ''
+        if (cachedPassed && cachedPassed.length === rows.length) {
+          let saw = false
+          for (const i of changes) if (i >= 0 && i < rows.length) { saw = true; break }
+          if (saw) {
+            const fn = (row: Row): boolean => { try { return Boolean(ctx.runtime.expr(expr)(row, ctx.signalParams)) } catch { return false } }
+            const newPassed = new Array<boolean>(rows.length)
+            const out: Row[] = []
+            for (let i = 0; i < rows.length; i++) {
+              const passed = changes.has(i) ? fn(rows[i]!) : cachedPassed[i]!
+              newPassed[i] = passed
+              if (passed) out.push(rows[i]!)
+            }
+            rows = out
+            if (!chartMetaData.__filterPassed) chartMetaData.__filterPassed = new Map()
+            chartMetaData.__filterPassed.set(name, newPassed)
+            aggUpdated = true
+          }
+        }
+      }
       // Incremental group transforms (aggregate/joinaggregate/window/stack):
       // re-derive only the groups touched by the changeset. Safe only when no
       // changed row switches group (a membership change would add/remove/reorder
@@ -1043,6 +1071,12 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       if ((isAgg || isJoinAgg || isGrouped) && !aggUpdated) {
         if (!chartMetaData.__aggState) chartMetaData.__aggState = new Map()
         chartMetaData.__aggState.set(name, buildAggState(inputRows, (single as { groupby?: string[] }).groupby ?? [], rows))
+      }
+      if (isFilter && !aggUpdated) {
+        if (!chartMetaData.__filterPassed) chartMetaData.__filterPassed = new Map()
+        const expr = (single as { expr?: string }).expr ?? ''
+        const fn = (row: Row): boolean => { try { return Boolean(ctx.runtime.expr(expr)(row, ctx.signalParams)) } catch { return false } }
+        chartMetaData.__filterPassed.set(name, inputRows.map((r) => fn(r)))
       }
     }
     ctx.datasets.set(name, rows)

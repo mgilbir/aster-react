@@ -289,6 +289,24 @@ describe('per-datum differential update', () => {
     expect(y1(inc)).toEqual(y1(full)) // 'a' cumulative -> [3,5]; 'b' -> [5,12]
   })
 
+  it('incremental filter equals full re-derive', () => {
+    const ts = {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 200, height: 200, autosize: 'none',
+      data: [{ name: 't', values: [{ v: 1 }, { v: 3 }, { v: 5 }, { v: 7 }], transform: [{ type: 'filter', expr: 'datum.v > 2' }] }],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'v' }, y: { value: 0 }, size: { value: 40 } } } }],
+    } as never
+    const chart = compileChart(ts)
+    const vs = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { v?: number } }).datum?.v)
+    const init = [{ v: 1 }, { v: 3 }, { v: 5 }, { v: 7 }]
+    const changed = [{ v: 4 }, { v: 3 }, { v: 5 }, { v: 7 }] // index 0 now passes
+    evaluateChart(chart, { data: { t: init } }) // -> [3,5,7]
+    const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } }) // -> [4,3,5,7]
+    const full = evaluateChart(chart, { data: { t: changed } })
+    expect(vs(inc)).toEqual(vs(full))
+  })
+
   it('falls back to full re-derive when a changed row switches group', () => {
     const ts = {
       $schema: 'https://vega.github.io/schema/vega/v6.json',
