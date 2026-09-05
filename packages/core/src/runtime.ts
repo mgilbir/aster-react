@@ -125,6 +125,13 @@ interface EvalContext {
   affected: Set<string>
   /** True when the caller supplied change info (so incremental reuse is allowed). */
   incremental: boolean
+  /**
+   * Pulse propagation: the *output* row indices that changed per dataset,
+   * derived from the transform pipeline (row-wise -> same indices; aggregate ->
+   * dirty groups' output positions). null/absent means the dataset was fully
+   * re-derived (not incrementally safe for downstream item reuse).
+   */
+  datasetChanges?: Map<string, Set<number> | null>
 }
 
 /**
@@ -178,6 +185,7 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
   const changedNames = new Set([...(input.changedDatasets ?? []), ...(ctx.dataChanges ? ctx.dataChanges.keys() : [])])
   ctx.affected = affectedDatasets(chart, changedNames)
   ctx.incremental = changedNames.size > 0
+  ctx.datasetChanges = new Map()
 
   // Remap Vega-Lite "category" range (unhandled by vega-scale) to tableau10
   for (const s of ctx.chart.scales) {
@@ -849,6 +857,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
     if (!d) {
       const rows = (inputData[name] as Row[]) ?? []
       ctx.datasets.set(name, rows)
+      ctx.datasetChanges?.set(name, ctx.dataChanges?.get(name) ?? null)
       return rows
     }
     if (seen.has(name)) throw new Error(`[aster] circular data reference: ${name}`)
@@ -878,6 +887,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       rows = ((inputData[name] as Row[]) ?? []).map((r) => ({ ...r }))
     }
     const inputRows = rows
+    let outputChanges: Set<number> | null = null
     if (d.transform.length) {
       const chartMetaData = ctx.chart as unknown as {
         __prevDatasetOutputs?: Map<string, Row[]>
@@ -925,6 +935,9 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
               rows = out
               chartMetaData.__aggState!.set(name, state!)
               aggUpdated = true
+              // Pulse: the output rows that changed are the dirty groups'
+              // aggregate rows (their positions in the output order).
+              outputChanges = new Set([...dirty].map((g) => state!.outOrder.indexOf(g)))
             }
           }
         }
@@ -955,6 +968,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
             if (derived[0] != null) out[i] = derived[0]
           }
           rows = out
+          outputChanges = new Set(via)
         } else {
           rows = apply(rows)
         }
@@ -980,6 +994,8 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       }
     }
     ctx.datasets.set(name, rows)
+    if (!d.transform.length) outputChanges = ctx.dataChanges?.get(name) ?? null
+    ctx.datasetChanges?.set(name, outputChanges)
     // Cache the derived output for the next per-datum update.
     const chartMeta = ctx.chart as unknown as { __prevDatasetOutputs?: Map<string, Row[]> }
     if (!chartMeta.__prevDatasetOutputs) chartMeta.__prevDatasetOutputs = new Map()
@@ -1123,18 +1139,15 @@ function canReuseItems(
   prevGroup: SceneGroup | null | undefined,
   rectSorts: boolean,
 ): boolean {
-  if (!ctx.dataChanges) return false
-  const changes = ctx.dataChanges.get(source)
+  if (!ctx.datasetChanges) return false
+  // Pulse propagation: the *output* row indices that changed for this source
+  // (row-wise -> same indices; aggregate -> dirty groups' positions). null/absent
+  // means the dataset was fully re-derived, so per-item reuse would be wrong.
+  const changes = ctx.datasetChanges.get(source)
   if (!changes || !prevGroup) return false
   const prevItems = prevGroup.items as SceneItem[]
   if (rowCount !== prevItems.length) return false
   if (mark.sort || mark.transform?.length || rectSorts) return false
-  // dataChanges indices refer to the *input* rows; a mark drawing from a
-  // transformed dataset reads the *output* rows, which only preserve index/length
-  // for row-wise transforms. A global transform (filter/aggregate/stack/...) can
-  // reorder or resize the output, so per-item reuse would misalign — bail.
-  const srcData = ctx.chart.data.find((d) => d.name === source)
-  if (srcData?.transform?.some((tm) => tm.type !== 'formula' && tm.type !== 'identifier')) return false
   // A change to width/height or any signal shifts scale ranges and every
   // formula, so the previously-encoded items would be stale. Only reuse when the
   // expression params are identical to the previous eval.
