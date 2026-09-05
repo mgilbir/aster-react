@@ -343,6 +343,42 @@ describe('per-datum differential update', () => {
     expect(b0(inc)).toEqual(b0(full))
   })
 
+  it('incremental fold equals full re-derive', () => {
+    const ts = {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 200, height: 200, autosize: 'none',
+      data: [{ name: 't', values: [{ id: 'r1', a: 1, b: 2 }, { id: 'r2', a: 3, b: 4 }], transform: [{ type: 'fold', fields: ['a', 'b'], as: ['key', 'val'] }] }],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'val' }, y: { value: 0 }, size: { value: 40 } } } }],
+    } as never
+    const chart = compileChart(ts)
+    const vals = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { val?: number } }).datum?.val)
+    const init = [{ id: 'r1', a: 1, b: 2 }, { id: 'r2', a: 3, b: 4 }]
+    const changed = [{ id: 'r1', a: 5, b: 2 }, { id: 'r2', a: 3, b: 4 }] // r1 fold -> [5,2]
+    evaluateChart(chart, { data: { t: init } }) // -> [1,2,3,4]
+    const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } }) // -> [5,2,3,4]
+    const full = evaluateChart(chart, { data: { t: changed } })
+    expect(vals(inc)).toEqual(vals(full))
+  })
+
+  it('incremental timeunit equals full re-derive', () => {
+    const ts = {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 200, height: 200, autosize: 'none',
+      data: [{ name: 't', values: [{ d: '2024-01-05' }, { d: '2024-02-10' }], transform: [{ type: 'timeunit', field: 'd', units: ['month'], as: ['t0', 't1'] }] }],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 't0' }, y: { value: 0 }, size: { value: 40 } } } }],
+    } as never
+    const chart = compileChart(ts)
+    const t0 = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => String((it as { datum?: { t0?: unknown } }).datum?.t0))
+    const init = [{ d: '2024-01-05' }, { d: '2024-02-10' }]
+    const changed = [{ d: '2024-01-20' }, { d: '2024-02-10' }]
+    evaluateChart(chart, { data: { t: init } })
+    const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } })
+    const full = evaluateChart(chart, { data: { t: changed } })
+    expect(t0(inc)).toEqual(t0(full))
+  })
+
   it('falls back to full re-derive when a changed row switches group', () => {
     const ts = {
       $schema: 'https://vega.github.io/schema/vega/v6.json',

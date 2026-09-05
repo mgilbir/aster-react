@@ -909,6 +909,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
         __aggState?: Map<string, AggState>
         __filterPassed?: Map<string, boolean[]>
         __binState?: Map<string, { lo: number; hi: number; start: number; stop: number; step: number; out: Row[]; oldVals: number[] }>
+        __foldState?: Map<string, { n: number; out: Row[] }>
         __paramFp?: string
       }
       const prevOutputs = chartMetaData.__prevDatasetOutputs
@@ -983,6 +984,28 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
             outputChanges = new Set(changes)
             aggUpdated = true
           }
+        }
+      }
+      // Incremental fold: each input row expands to exactly n output rows
+      // (index = inputIndex*n + fieldIndex), so a changed row's contiguous block
+      // is re-derived in place when the input length is unchanged.
+      if (single?.type === 'fold' && ctx.incremental && changes && paramsUnchanged) {
+        const fs = chartMetaData.__foldState?.get(name)
+        const n = ((single as { fields?: unknown[] }).fields ?? []).length
+        if (fs && fs.n === n && fs.out.length === rows.length * n) {
+          const out = fs.out
+          for (const i of changes) {
+            if (i < 0 || i >= rows.length) continue
+            const derived = applyTransforms([rows[i]!], [single as never], {
+              runtime: ctx.runtime, signals: ctx.signalParams, datasets: (x) => ctx.datasets.get(x) ?? [], hierarchies: ctx.hierarchies, projections: ctx.projections,
+            }, d.name)
+            for (let j = 0; j < n && j < derived.length; j++) out[i * n + j] = derived[j]!
+          }
+          rows = out
+          const allDirty = new Set<number>()
+          for (const i of changes) if (i >= 0 && i < rows.length / n) for (let j = 0; j < n; j++) allDirty.add(i * n + j)
+          outputChanges = allDirty
+          aggUpdated = true
         }
       }
       // Incremental group transforms (aggregate/joinaggregate/window/stack):
@@ -1063,11 +1086,11 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       // reused. A global transform (filter/aggregate/stack/bin/...) invalidates
       // every output row, and a change to any expression parameter (width or a
       // signal) invalidates every formula, so both fall back to a full re-derive.
-      // Row-wise transforms preserve index/length: formula/identifier always, and
-      // bin with a fixed numeric extent (its thresholds are constant, so a changed
-      // row re-bins independently of the others).
+      // Row-wise transforms preserve index/length: formula/identifier/timeunit
+      // always, and bin with a fixed numeric extent (its thresholds are constant,
+      // so a changed row re-bins independently of the others).
       const rowwise = d.transform.every(
-        (tm) => tm.type === 'formula' || tm.type === 'identifier' || (tm.type === 'bin' && Array.isArray((tm as { extent?: unknown }).extent)),
+        (tm) => tm.type === 'formula' || tm.type === 'identifier' || tm.type === 'timeunit' || (tm.type === 'bin' && Array.isArray((tm as { extent?: unknown }).extent)),
       )
       const cached = prevOutputs?.get(name)
       if (aggUpdated) {
@@ -1134,6 +1157,10 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
         const stop = Math.ceil(hi / step) * step
         if (!chartMetaData.__binState) chartMetaData.__binState = new Map()
         chartMetaData.__binState.set(name, { lo, hi, start, stop, step, out: rows, oldVals: vals })
+      }
+      if (single?.type === 'fold' && !aggUpdated) {
+        if (!chartMetaData.__foldState) chartMetaData.__foldState = new Map()
+        chartMetaData.__foldState.set(name, { n: ((single as { fields?: unknown[] }).fields ?? []).length, out: rows })
       }
     }
     ctx.datasets.set(name, rows)
