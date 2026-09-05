@@ -379,6 +379,26 @@ describe('per-datum differential update', () => {
     expect(t0(inc)).toEqual(t0(full))
   })
 
+  it('incremental lookup equals full re-derive when its source is unaffected', () => {
+    const ts = {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 200, height: 200, autosize: 'none',
+      data: [
+        { name: 'src', values: [{ id: 1, label: 'x' }, { id: 2, label: 'y' }] },
+        { name: 't', values: [{ k: 1 }, { k: 2 }], transform: [{ type: 'lookup', from: 'src', key: 'id', fields: ['k'], values: ['label'], as: ['lab'] }] },
+      ],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', value: 0 }, y: { value: 0 }, size: { value: 40 } } } }],
+    } as never
+    const chart = compileChart(ts)
+    const lab = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { lab?: string } }).datum?.lab)
+    const src = [{ id: 1, label: 'x' }, { id: 2, label: 'y' }]
+    evaluateChart(chart, { data: { src, t: [{ k: 1 }, { k: 2 }] } }) // -> [x,y]
+    const inc = evaluateChart(chart, { data: { src, t: [{ k: 2 }, { k: 2 }] }, dataChanges: { t: [0] } }) // -> [y,y]
+    const full = evaluateChart(chart, { data: { src, t: [{ k: 2 }, { k: 2 }] } })
+    expect(lab(inc)).toEqual(lab(full)) // source unchanged -> both [y,y]
+  })
+
   it('falls back to full re-derive when a changed row switches group', () => {
     const ts = {
       $schema: 'https://vega.github.io/schema/vega/v6.json',

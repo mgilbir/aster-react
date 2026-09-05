@@ -1087,10 +1087,14 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       // every output row, and a change to any expression parameter (width or a
       // signal) invalidates every formula, so both fall back to a full re-derive.
       // Row-wise transforms preserve index/length: formula/identifier/timeunit
-      // always, and bin with a fixed numeric extent (its thresholds are constant,
-      // so a changed row re-bins independently of the others).
+      // always; bin with a fixed numeric extent (constant thresholds); lookup when
+      // its source dataset is unaffected (its join result is unchanged for
+      // unchanged rows — a row's lookup only needs re-deriving when the row
+      // changed).
       const rowwise = d.transform.every(
-        (tm) => tm.type === 'formula' || tm.type === 'identifier' || tm.type === 'timeunit' || (tm.type === 'bin' && Array.isArray((tm as { extent?: unknown }).extent)),
+        (tm) => tm.type === 'formula' || tm.type === 'identifier' || tm.type === 'timeunit'
+          || (tm.type === 'bin' && Array.isArray((tm as { extent?: unknown }).extent))
+          || (tm.type === 'lookup' && !ctx.affected.has((tm as { from?: string }).from ?? '')),
       )
       const cached = prevOutputs?.get(name)
       if (aggUpdated) {
