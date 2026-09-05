@@ -15,6 +15,14 @@ import { dragToDataInterval, selectionToPixels, type SelectionInterval } from '.
 export interface ChartProps {
   spec: Record<string, unknown>
   data?: Record<string, unknown[]>
+  /**
+   * Per-datum differential update: for each named dataset, the indices (into the
+   * new row array, unchanged length/order) whose values changed. The reactive
+   * dataflow re-derives only the changed rows and reuses unchanged scene items
+   * and DOM subtrees. Combine with an immutable `data` replacement (new array) of
+   * the same length/order. When omitted, updates re-encode fully.
+   */
+  dataChanges?: Record<string, number[]>
   width?: number
   height?: number
   ariaLabel?: string
@@ -50,6 +58,7 @@ export interface ChartProps {
 export function Chart({
   spec,
   data,
+  dataChanges,
   width,
   height,
   ariaLabel,
@@ -106,11 +115,11 @@ export function Chart({
 
   const scene = React.useMemo<SceneRoot | null>(() => {
     try {
-      return sessionRef.current!.evaluate(spec, { data, width: renderWidth, height: renderHeight, signals })
+      return sessionRef.current!.evaluate(spec, { data, dataChanges, width: renderWidth, height: renderHeight, signals })
     } catch (err) {
       return null
     }
-  }, [spec, data, renderWidth, renderHeight, signals])
+  }, [spec, data, dataChanges, renderWidth, renderHeight, signals])
 
   // Incremental is the default: we still serialize the full SVG for the first
   // render (so server output and client hydration carry the markup), then the

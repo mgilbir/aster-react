@@ -110,7 +110,10 @@ export function createChartSession(): ChartSession {
         )
       }
       const key = `${skeleton}\u0000${parts.join('\u0001')}`
-      if (key === lastKey && lastScene) return lastScene
+      // A per-datum changeset implies the data values changed (often in place, so
+      // the array identity — and thus the fingerprint — is unchanged), so the
+      // no-op cache must not short-circuit the differential re-evaluation.
+      if (!input.dataChanges && key === lastKey && lastScene) return lastScene
 
       if (skeleton !== lastSkeleton || !lastChart) {
         lastChart = compileChart(spec)

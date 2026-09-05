@@ -41,6 +41,17 @@ describe('createChartSession', () => {
     expect(b).toBe(a)
   })
 
+  it('re-evaluates on a per-datum dataChanges even when the data array identity is unchanged', () => {
+    const session = createChartSession()
+    const values = [{ x: 0, y: 1 }, { x: 1, y: 2 }]
+    const a = session.evaluate(specWith(values), { width: 400, height: 300 })
+    // In-place mutation (same array reference) + a per-datum changeset.
+    values[1]!.y = 9
+    const b = session.evaluate(specWith(values), { width: 400, height: 300, dataChanges: { table: [1] } })
+    expect(b).not.toBe(a)
+    expect(renderSceneToSvg(b)).not.toBe(renderSceneToSvg(a))
+  })
+
   it('invalidates when the data array is replaced', () => {
     const session = createChartSession()
     const a = session.evaluate(specWith([{ x: 0, y: 1 }, { x: 1, y: 5 }]), { width: 400, height: 300 })
