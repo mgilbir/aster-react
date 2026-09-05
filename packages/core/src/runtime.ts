@@ -957,16 +957,24 @@ function evaluateMark(
 
   let items: SceneItem[]
   if (source) {
-    let rows = (ctx.datasets.get(source) ?? []).map((r) => ({ ...r }))
-    if (mark.sort) rows = sortRows(rows, mark.sort)
-    // Mark-level transforms (e.g. geoshape) modify the datum before encoding.
-    if (mark.transform?.length) {
-      rows = applyTransforms(rows, mark.transform, {
-        runtime: ctx.runtime,
-        signals: ctx.signalParams,
-        hierarchies: ctx.hierarchies,
-        projections: ctx.projections,
-      }, source)
+    const rawRows = ctx.datasets.get(source) ?? []
+    // Only clone rows when the pipeline will re-encode them all (a mark-level
+    // sort or transform); the differential path reads the raw rows and clones
+    // just the changed indices, so an unchanged row is never copied.
+    let rows: Row[] = rawRows
+    let rowsCloned = false
+    if (mark.sort || mark.transform?.length) {
+      rows = rawRows.map((r) => ({ ...r }))
+      rowsCloned = true
+      if (mark.sort) rows = sortRows(rows, mark.sort)
+      if (mark.transform?.length) {
+        rows = applyTransforms(rows, mark.transform, {
+          runtime: ctx.runtime,
+          signals: ctx.signalParams,
+          hierarchies: ctx.hierarchies,
+          projections: ctx.projections,
+        }, source)
+      }
     }
 
     // Sort rect marks by their scale y field so rendering order matches vega:
@@ -996,20 +1004,27 @@ function evaluateMark(
     // changeset and reuse is provably safe (no reordering, unchanged length, no
     // scale whose data-domain spans a changed dataset), keep the previous item
     // objects for unchanged indices so the DOM patcher skips them and the
-    // re-encode of those items is skipped entirely.
+    // re-encode of those items is skipped entirely (including the row clone).
     if (canReuseItems(mark, ctx, source, rows.length, prevGroup, rectSorts)) {
       const changes = ctx.dataChanges!.get(source)!
       const prevItems = prevGroup!.items as SceneItem[]
-      items = rows.map((row, i) => {
-        if (!changes.has(i) && prevItems[i]) return prevItems[i]
+      items = new Array(rows.length)
+      for (let i = 0; i < rows.length; i++) {
+        const prev = prevItems[i]
+        if (!changes.has(i) && prev) {
+          items[i] = prev
+          continue
+        }
+        const row = { ...(rows[i] as Row) }
         const res = resolveEncodeSet(update, row, ctx, mark.type)
         res.datum = row
-        return res
-      })
+        items[i] = res
+      }
     } else {
       items = rows.map((row) => {
-        const res = resolveEncodeSet(update, row, ctx, mark.type)
-        res.datum = row
+        const copy = rowsCloned ? row : { ...row }
+        const res = resolveEncodeSet(update, copy, ctx, mark.type)
+        res.datum = copy
         return res
       })
     }
