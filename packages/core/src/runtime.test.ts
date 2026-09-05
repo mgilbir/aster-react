@@ -481,6 +481,25 @@ describe('per-datum differential update', () => {
     expect((it[1] as { __gen?: number }).__gen).toBe(gen)
   })
 
+  it('does NOT reuse a discrete (band) scale when a new category enters (correct output)', () => {
+    const ts = {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 200, height: 200, autosize: 'none',
+      data: [{ name: 't', values: [{ g: 'a', v: 1 }, { g: 'b', v: 3 }] }],
+      scales: [
+        { name: 'x', type: 'band', domain: { data: 't', field: 'g' }, range: 'width', paddingOuter: 0.1, paddingInner: 0.2 },
+        { name: 'y', type: 'linear', domain: [0, 10], range: 'height' },
+      ],
+      marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'g' }, width: { scale: 'x', band: 1 }, y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 } } } }],
+    } as never
+    const chart = compileChart(ts)
+    const x = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'rect')!.items!.map((it) => Math.round((it as { x?: number }).x! * 10) / 10)
+    evaluateChart(chart, { data: { t: [{ g: 'a', v: 1 }, { g: 'b', v: 3 }] } })
+    const inc = evaluateChart(chart, { data: { t: [{ g: 'z', v: 1 }, { g: 'b', v: 3 }] }, dataChanges: { t: [0] } })
+    const full = evaluateChart(chart, { data: { t: [{ g: 'z', v: 1 }, { g: 'b', v: 3 }] } })
+    expect(x(inc)).toEqual(x(full)) // new category 'z' -> domain rebuilt
+  })
+
   it('falls back to full re-derive when a changed row switches group', () => {
     const ts = {
       $schema: 'https://vega.github.io/schema/vega/v6.json',

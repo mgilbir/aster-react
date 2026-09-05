@@ -1249,7 +1249,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
 
 function buildScales(ctx: EvalContext): void {
   const scaleSignals = ctx.signalParams
-  const chartMeta = ctx.chart as unknown as { __cachedScales?: Map<string, { scale: Scale; multi: boolean }>; __scaleDomain?: Map<string, { data: string; field: string; lo: number; hi: number; oldVals: number[] }>; __paramFp?: string }
+  const chartMeta = ctx.chart as unknown as { __cachedScales?: Map<string, { scale: Scale; multi: boolean }>; __scaleDomain?: Map<string, { data: string; field: string; lo: number; hi: number; oldVals: number[]; finite: boolean }>; __paramFp?: string }
   const cached = chartMeta.__cachedScales ?? (chartMeta.__cachedScales = new Map())
   const domainCache = chartMeta.__scaleDomain ?? (chartMeta.__scaleDomain = new Map())
   // A scale whose domain references none of the affected datasets (closed over
@@ -1275,14 +1275,19 @@ function buildScales(ctx: EvalContext): void {
       // is provably unchanged: no changed row extends [lo,hi] and no changed row's
       // old value sat at a boundary (which could move the min/max). This skips the
       // O(n) domain re-scan for the common case (few points change, domain holds).
+      const CONTINUOUS = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc'])
       const dom = (typeof s.domain === 'object' && !Array.isArray(s.domain) && typeof (s.domain as { data?: unknown }).data === 'string')
         ? (s.domain as { data: string; field: string })
         : null
-      if (!reuse && dom) {
+      // Domain-stability reuse is only sound for continuous scales over numeric
+      // values: a discrete (band/ordinal) domain is a *set* of values, so a changed
+      // row introducing a new category changes the domain even though no min/max
+      // moved. Restrict reuse to continuous scales with finite domain values.
+      if (!reuse && dom && CONTINUOUS.has(s.type)) {
         const prevDom = domainCache.get(s.name)
         const changes = ctx.dataChanges?.get(dom.data)
         const rows = ctx.datasets.get(dom.data) ?? []
-        if (prevDom && changes && changes.size && prevDom.oldVals.length === rows.length) {
+        if (prevDom && prevDom.finite && changes && changes.size && prevDom.oldVals.length === rows.length) {
           let stable = true
           for (const i of changes) {
             if (i < 0 || i >= rows.length) { stable = false; break }
@@ -1328,6 +1333,7 @@ function buildScales(ctx: EvalContext): void {
         lo: finite.length ? Math.min(...finite) : 0,
         hi: finite.length ? Math.max(...finite) : 1,
         oldVals: vals,
+        finite: finite.length > 0,
       })
     }
   }
