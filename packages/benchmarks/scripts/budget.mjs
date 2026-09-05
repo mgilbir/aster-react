@@ -28,7 +28,10 @@ import { fileURLToPath } from 'node:url'
 // above does; the pre-expansion 60 kB no longer describes the library.
 // (80 -> 81: the event-loop wiring gained ~0.2 kB gzip of genuinely required
 // code — scene runtime/compiled metadata + vega mark defaults.)
-const BUDGET_BYTES = 81 * 1024
+// (81 -> 85: the reactive differential engine — per-datum dataChanges re-derive,
+// persistent scene/items, incremental scales/transforms, DOM-subtree skip, the
+// imperative session.change() — is a deliberate feature addition, ~3 kB gzip.)
+const BUDGET_BYTES = 85 * 1024
 
 // Walk up from this file to find the monorepo root:
 // packages/benchmarks/scripts -> packages/benchmarks -> packages -> aster-react (root)
