@@ -3969,6 +3969,13 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   const pos = (t: unknown) => roundedPos(scale, t)
 
   if (axis.grid) {
+    // Apply the axis `encode.grid` (vega's grid-line encoding) so specs can set
+    // strokeDash/stroke/opacity etc. on the grid marks.
+    const gridEnc = axis.encode?.grid
+    const gridUpdate = gridEnc?.update ?? gridEnc?.enter ?? {}
+    const gridStyle = Object.keys(gridUpdate).length
+      ? resolveEncodeSet(gridUpdate as Record<string, EncodeValue | EncodeValue[]>, {}, ctx, 'line')
+      : {}
     for (const t of ticks) {
       const v = pos(t)
       const item: SceneItem = { x: 0, y: 0, x2: 0, y2: 0 }
@@ -3977,7 +3984,10 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       } else {
         item.x = v + 0.5; item.x2 = v + 0.5; item.y = 0.5; item.y2 = ctx.height + 0.5
       }
-      item.stroke = '#ddd'; item.strokeWidth = 1
+      item.stroke = gridStyle.stroke ?? '#ddd'
+      item.strokeWidth = gridStyle.strokeWidth ?? 1
+      if (gridStyle.strokeDash != null) item.strokeDash = gridStyle.strokeDash
+      if (gridStyle.opacity != null) item.opacity = gridStyle.opacity
       items.push(item)
     }
   }
