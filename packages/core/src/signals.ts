@@ -51,9 +51,23 @@ const SUPPORTED_EVENTS = new Set([
   'click', 'dblclick', 'wheel', 'keydown', 'keyup', 'touchstart', 'touchmove', 'touchend',
 ])
 
-/** Parse a vega event selector: space-separated simple event names. */
-export function parseEventSelector(selector: string): string[] {
-  return selector.split(/\s+/).filter((s) => s.length > 0 && SUPPORTED_EVENTS.has(s))
+/**
+ * Parse a vega event selector into the simple event names we can bind.
+ * Accepts either a space-separated string ("mousemove mouseup") or an array of
+ * event-stream descriptors — the form vega-lite emits for selection signals —
+ * e.g. `[{ source: 'window', type: 'mousemove' }, ...]`.
+ */
+export function parseEventSelector(selector: unknown): string[] {
+  const parts: string[] = []
+  if (typeof selector === 'string') {
+    parts.push(...selector.split(/\s+/))
+  } else if (Array.isArray(selector)) {
+    for (const s of selector) {
+      const t = typeof s === 'string' ? s : (s as { type?: unknown } | null)?.type
+      if (typeof t === 'string') parts.push(t)
+    }
+  }
+  return parts.filter((s) => s.length > 0 && SUPPORTED_EVENTS.has(s))
 }
 
 /**

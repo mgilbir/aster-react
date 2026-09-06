@@ -22,6 +22,55 @@ import {
 import { Chart } from '@aster/react'
 import type { SelectionInterval } from '@aster/react'
 
+const SPECS: Array<{ title: string; desc: string; spec: Record<string, unknown>; render: () => React.ReactNode; span?: string }> = [
+  { title: 'Responsive Line', desc: 'Spec-level signals drive width/height; resizes with the container.', spec: CompiledLineSpec, render: () => <ResponsiveLine /> },
+  { title: 'Bound Parameter', desc: 'A bound signal updates Y values live via the slider.', spec: CompiledParamBoundSpec, render: () => <BoundParam /> },
+  { title: 'Interactive Brush', desc: 'Drag to select a data interval; persisted via the brush prop.', spec: CompiledInteractiveBrushSpec, render: () => <InteractiveBrush /> },
+  { title: 'Histogram', desc: 'Bar encoding with bin:true auto-bins occurrences.', spec: CompiledHistogramSpec, render: () => <Histogram />, span: 'wide' },
+  { title: 'Scatter + Legend', desc: 'Color encodes a category dimension with an automatic legend.', spec: CompiledLegendScatterSpec, render: () => <LegendScatter /> },
+  { title: 'Pie / Donut', desc: 'Arc marks with innerRadius render donuts; theta encodes value.', spec: CompiledPieSpec, render: () => <PieDonut /> },
+  { title: 'Text Labels', desc: 'Text marks render a label at each (x, y) point.', spec: CompiledTextLabelSpec, render: () => <TextLabels /> },
+  { title: 'Heatmap', desc: 'Band scales + a quantitative color scale render a gradient heatmap.', spec: CompiledHeatmapSpec, render: () => <Heatmap /> },
+  { title: 'Stacked Bar', desc: 'Bars stacked per category with an automatic color legend.', spec: CompiledStackedBarSpec, render: () => <StackedBar /> },
+  { title: 'Layered Area + Line', desc: 'An area mark overlaid with a line on shared scales.', spec: CompiledLayerSpec, render: () => <LayeredAreaLine />, span: 'wide' },
+  { title: 'Donut Chart', desc: 'A larger innerRadius arc renders a donut with a legend.', spec: CompiledDonutSpec, render: () => <Donut /> },
+  { title: 'Regression Line', desc: 'A regression transform fits a line to point data.', spec: CompiledRegressionSpec, render: () => <Regression /> },
+  { title: 'Streamgraph', desc: 'Stacked areas offset around the center produce a streamgraph.', spec: CompiledStreamgraphSpec, render: () => <Streamgraph />, span: 'wide' },
+  { title: 'Bubble Chart', desc: 'The size channel quantitatively scales marker area.', spec: CompiledBubbleSpec, render: () => <Bubble /> },
+  { title: 'Candlestick', desc: 'Rule + bar layers render OHLC, colored by direction.', spec: CompiledCandlestickSpec, render: () => <Candlestick /> },
+  { title: 'Color Scheme', desc: 'A nominal scale with an explicit palette drives color + legend.', spec: CompiledColorSchemeSpec, render: () => <ColorScheme /> },
+  { title: 'Grouped Bar', desc: 'Bars grouped side-by-side via the xOffset channel.', spec: CompiledGroupedBarSpec, render: () => <GroupedBar /> },
+  { title: 'Radar / Spider', desc: 'A raw Vega spec with radial axes and a polygon line.', spec: CompiledRadarSpec, render: () => <Radar />, span: 'wide' },
+]
+
+// ----- Interactive showcases of the reactive dataflow engine -----
+
+function LiveDataChanges() {
+  const [data, setData] = React.useState(() => Array.from({ length: 60 }, (_, i) => ({ x: i, y: 50 + Math.round(40 * Math.sin(i / 5)) })))
+  const seed = React.useRef(0)
+  React.useEffect(() => {
+    const id = window.setInterval(() => {
+      seed.current++
+      const changed = (seed.current * 7) % data.length
+      setData((prev) => prev.map((r, i) => (i === changed ? { ...r, y: 10 + Math.round(80 * Math.random()) } : r)))
+    }, 700)
+    return () => window.clearInterval(id)
+  }, [data.length])
+  return (
+    <div className="chart-container">
+      <Chart spec={CompiledLineSpec} width={560} height={260} data={{ table: data }} dataChanges={{ table: [(seed.current * 7) % data.length] }} ariaLabel="Live incremental line chart" />
+    </div>
+  )
+}
+
+function TooltipDemo() {
+  return (
+    <div className="chart-container">
+      <Chart spec={CompiledLegendScatterSpec} width={480} height={300} tooltip ariaLabel="Scatter with tooltips" />
+    </div>
+  )
+}
+
 function Section({ title, desc, chart }: { title: string; desc: string; chart: React.ReactNode }) {
   return (
     <section className="section">
@@ -60,12 +109,8 @@ function BoundParam() {
 
 function InteractiveBrush() {
   const [brush, setBrush] = React.useState<SelectionInterval | null>(null)
-  const onSelect = React.useCallback((interval: SelectionInterval | null) => {
-    setBrush(interval)
-  }, [])
-  const clear = React.useCallback(() => {
-    setBrush(null)
-  }, [])
+  const onSelect = React.useCallback((interval: SelectionInterval | null) => setBrush(interval), [])
+  const clear = React.useCallback(() => setBrush(null), [])
   return (
     <>
       <div className="controls">
@@ -207,41 +252,118 @@ export function App() {
   return (
     <div className="app">
       <style>{`
+        :root {
+          --bg: #0b0f17; --bg-soft: #111826; --card: #141c2c; --border: #24304a;
+          --text: #e8edf6; --muted: #93a1bd; --accent: #4f8cff; --accent2: #7aa2ff;
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1a1a1a; background: #fafafa; }
-        .app { max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem; }
-        h1 { font-size: 1.75rem; margin-bottom: 0.25rem; }
-        .subtitle { color: #666; margin-bottom: 2rem; font-size: 1.05rem; }
-        .section { margin-bottom: 2.5rem; }
-        .section h2 { font-size: 1.25rem; margin-bottom: 0.25rem; }
-        .desc { color: #555; margin-bottom: 0.75rem; font-size: 0.95rem; line-height: 1.5; }
-        .chart-container { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 1rem; display: flex; overflow-x: auto; }
-        .controls { margin-top: 0.5rem; display: flex; align-items: center; gap: 1rem; font-size: 0.9rem; color: #444; }
-        .controls input[type="range"] { width: 200px; }
-        button { background: #3b82f6; color: #fff; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
-        button:hover { background: #2563eb; }
-        .selection-info { font-size: 0.85rem; color: #555; margin-top: 0.5rem; font-family: monospace; }
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: var(--text); background: radial-gradient(1200px 600px at 20% -10%, #16213b 0%, var(--bg) 55%) fixed; min-height: 100vh; }
+        .app { max-width: 1160px; margin: 0 auto; padding: 0 1.5rem 4rem; }
+        .hero { padding: 3.5rem 0 2.5rem; }
+        .eyebrow { color: var(--accent2); font-size: 0.85rem; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 600; margin-bottom: 0.75rem; }
+        h1 { font-size: clamp(2.2rem, 5vw, 3.2rem); line-height: 1.05; letter-spacing: -0.03em; }
+        .subtitle { color: var(--muted); font-size: 1.15rem; margin-top: 0.9rem; max-width: 46rem; line-height: 1.6; }
+        .hero-stats { display: flex; gap: 2rem; margin-top: 1.6rem; flex-wrap: wrap; }
+        .hero-stats div { font-size: 0.9rem; color: var(--muted); }
+        .hero-stats b { display: block; color: var(--text); font-size: 1.3rem; }
+        nav.toc { position: sticky; top: 0; z-index: 20; display: flex; gap: 0.5rem; flex-wrap: wrap; padding: 0.9rem 0; backdrop-filter: blur(8px); background: rgba(11,15,23,0.7); border-bottom: 1px solid var(--border); margin-bottom: 1.5rem; }
+        nav.toc a { color: var(--muted); text-decoration: none; font-size: 0.85rem; padding: 0.35rem 0.7rem; border-radius: 999px; }
+        nav.toc a:hover { color: var(--text); background: var(--bg-soft); }
+        h2 { font-size: 1.5rem; letter-spacing: -0.02em; margin-bottom: 0.25rem; }
+        .section-head { margin: 2.5rem 0 1.25rem; }
+        .section-head .desc { color: var(--muted); font-size: 0.95rem; max-width: 44rem; }
+        .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; }
+        .feature { background: linear-gradient(180deg, var(--card), var(--bg-soft)); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
+        .feature h3 { font-size: 1.05rem; margin-bottom: 0.4rem; color: var(--accent2); }
+        .feature p { color: var(--muted); font-size: 0.9rem; line-height: 1.55; }
+        .showcase { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr)); gap: 1.25rem; }
+        .showcase .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
+        .showcase .card h3 { font-size: 1.05rem; margin-bottom: 0.4rem; }
+        .showcase .card p { color: var(--muted); font-size: 0.9rem; margin-bottom: 0.9rem; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); gap: 1.25rem; }
+        .section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
+        .section.wide { grid-column: 1 / -1; }
+        .section h2 { font-size: 1.05rem; margin-bottom: 0.25rem; }
+        .section .desc { color: var(--muted); font-size: 0.88rem; margin-bottom: 0.75rem; line-height: 1.5; }
+        .chart-container { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; display: flex; align-items: center; justify-content: center; overflow-x: auto; }
+        .controls { margin-top: 0.5rem; display: flex; align-items: center; gap: 1rem; font-size: 0.9rem; color: var(--muted); }
+        .controls input[type="range"] { width: 200px; accent-color: var(--accent); }
+        button { background: var(--accent); color: #fff; border: none; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+        button:hover { background: var(--accent2); }
+        .selection-info { font-size: 0.85rem; color: var(--muted); margin-top: 0.5rem; font-family: monospace; }
+        footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem; }
       `}</style>
-      <h1>Aster Charts</h1>
-      <p className="subtitle">Chart engine demos — Vega/Vega-Lite specs rendered via React</p>
-      <Section title="1. Responsive Line" desc="A line chart using spec-level signals for width/height. Resizes with the container via ResizeObserver." chart={<ResponsiveLine />} />
-      <Section title="2. Bound Param — Shifted Line" desc="A line chart where a parameter 'shift' is bound to the range input below, shifting all Y values by delta." chart={<BoundParam />} />
-      <Section title="3. Interactive Brush Selection" desc="Click and drag on the scatter plot to select a data interval. Persisted via the Chart's 'brush' prop. Click 'Clear' to reset." chart={<InteractiveBrush />} />
-      <Section title="4. Histogram — Auto-Bin Binning" desc="The mark='bar' encoding with bin: true counts occurrences into bins automatically." chart={<Histogram />} />
-      <Section title="5. Scatter Plot — Legend" desc="Color encodes the 'cat' dimension, generating an automatic legend on the right." chart={<LegendScatter />} />
-      <Section title="6. Pie / Donut" desc="An arc mark with innerRadius renders a donut chart. Theta encodes 'value'; color encodes 'cat' with an automatic legend." chart={<PieDonut />} />
-      <Section title="7. Text Labels" desc="The text mark renders a label string at each (x, y) point, sourced from the 'label' field." chart={<TextLabels />} />
-      <Section title="8. Heatmap" desc="A rect mark with band scales for both axes and a quantitative color scale, rendered as a gradient heatmap with a color legend." chart={<Heatmap />} />
-      <Section title="9. Stacked Bar" desc="Bars stacked per category via a color-encoded nominal dimension, with an automatic color legend." chart={<StackedBar />} />
-      <Section title="10. Layered Area + Line" desc="A layer combining an area mark with an overlaid line mark on the same quantitative scales." chart={<LayeredAreaLine />} />
-      <Section title="11. Donut Chart" desc="An arc mark with a larger innerRadius renders a donut with the theta channel encoding 'value' and color encoding 'cat'." chart={<Donut />} />
-      <Section title="12. Regression Line" desc="A linear regression transform fits a line to the point data, overlaid as a line layer on the same axes." chart={<Regression />} />
-      <Section title="13. Streamgraph" desc="Stacked area marks offset around the center (stack: 'center') produce a streamgraph over the temporal axis." chart={<Streamgraph />} />
-      <Section title="14. Bubble Chart" desc="A point mark with the size channel encoding 'size' quantitatively scales the marker area, producing a bubble chart." chart={<Bubble />} />
-      <Section title="15. Candlestick" desc="A layered rule (low-high wick) and bar (open-close body) renders a candlestick chart. Bar color is conditioned on the open/close relationship: green when close is above open, red otherwise." chart={<Candlestick />} />
-      <Section title="16. Color Scheme Scatter" desc="A nominal color scale with an explicit range maps each category to a fixed palette, driving both marker color and the legend." chart={<ColorScheme />} />
-      <Section title="17. Grouped Bar Chart" desc="Bars grouped side-by-side per category using the xOffset channel, with color encoding the group dimension." chart={<GroupedBar />} />
-      <Section title="18. Radar / Spider Chart" desc="A raw Vega spec with radial axes and a polygon line connecting data points at each axis, with dots and labels." chart={<Radar />} />
+
+      <header className="hero">
+        <div className="eyebrow">Vega-compatible chart engine</div>
+        <h1>Aster Charts</h1>
+        <p className="subtitle">
+          A fast, Vega/Vega-Lite-compatible chart engine for React. Accurate rendering, a tiny bundle,
+          and a reactive dataflow that re-renders only the marks that changed.
+        </p>
+        <div className="hero-stats">
+          <div><b>406+</b> conformance specs</div>
+          <div><b>86 kB</b> gzip bundle</div>
+          <div><b>~9x</b> faster stable updates</div>
+          <div><b>0</b> leaks</div>
+        </div>
+      </header>
+
+      <nav className="toc">
+        <a href="#features">Features</a>
+        <a href="#reactive">Reactive dataflow</a>
+        <a href="#gallery">Gallery</a>
+      </nav>
+
+      <section id="features">
+        <div className="section-head">
+          <h2>Built to be exact, built to be fast</h2>
+          <p className="desc">Aster renders Vega and Vega-Lite specs against the real Vega oracle, then optimizes the update path.</p>
+        </div>
+        <div className="features">
+          <div className="feature"><h3>Oracle-verified</h3><p>Geometry diffed against the actual Vega renderer on a 400+ spec conformance corpus.</p></div>
+          <div className="feature"><h3>Tiny &amp; tree-shakeable</h3><p>~86 kB gzip for the React chart, with geo, transforms, and the DOM patcher behind opt-in addons.</p></div>
+          <div className="feature"><h3>Incremental DOM</h3><p>Patches only changed attributes and skips unchanged subtrees on updates.</p></div>
+          <div className="feature"><h3>Reactive dataflow</h3><p>Per-datum updates re-derive only the changed rows, reusing unchanged marks, items, and scales.</p></div>
+        </div>
+      </section>
+
+      <section id="reactive">
+        <div className="section-head">
+          <h2>Reactive dataflow — live</h2>
+          <p className="desc">The charts below exercise the new reactive engine: a live per-datum update via <code>dataChanges</code>, and hover tooltips.</p>
+        </div>
+        <div className="showcase">
+          <div className="card">
+            <h3>Live incremental update</h3>
+            <p>One point changes every 700ms. The engine re-derives only that row and reuses the rest — O(changed), not O(n).</p>
+            <LiveDataChanges />
+          </div>
+          <div className="card">
+            <h3>Hover tooltips</h3>
+            <p>Hover any mark to read its datum, via <code>tooltip</code>.</p>
+            <TooltipDemo />
+          </div>
+        </div>
+      </section>
+
+      <section id="gallery">
+        <div className="section-head">
+          <h2>Gallery</h2>
+          <p className="desc">Every mark type, scale, axis, legend, and interaction, rendered by Aster.</p>
+        </div>
+        <div className="grid">
+          {SPECS.map((s) => (
+            <div key={s.title} className={`section ${s.span === 'wide' ? 'wide' : ''}`}>
+              <h2>{s.title}</h2>
+              <p className="desc">{s.desc}</p>
+              {s.render()}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <footer>Built with <a href="https://github.com/mgilbir/aster-react" style={{ color: 'var(--accent2)' }}>aster-react</a>.</footer>
     </div>
   )
 }
