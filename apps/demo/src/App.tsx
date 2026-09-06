@@ -42,6 +42,22 @@ const DEFAULT_SPEC = {
   },
 }
 
+/** Resolve a spec's width/height, honoring a `height` signal (Vega's view height). */
+function specSize(spec: Record<string, unknown>): { width?: number; height?: number } {
+  const width = typeof spec.width === 'number' ? spec.width : undefined
+  let height = typeof spec.height === 'number' ? spec.height : undefined
+  const signals = (spec.signals as Array<Record<string, unknown>> | undefined) ?? []
+  const heightSig = signals.find((s) => s.name === 'height')
+  if (height == null && heightSig) {
+    if (typeof heightSig.value === 'number') height = heightSig.value
+    else if (typeof heightSig.update === 'string') {
+      const src = signals.find((s) => s.name === heightSig.update)
+      if (src && typeof src.value === 'number') height = src.value
+    }
+  }
+  return { width, height }
+}
+
 function SpecPlayground() {
   const [text, setText] = React.useState(() => JSON.stringify(DEFAULT_SPEC, null, 2))
   const [error, setError] = React.useState<string | null>(null)
@@ -61,6 +77,7 @@ function SpecPlayground() {
     }, 400)
     return () => window.clearTimeout(id)
   }, [text])
+  const size = chart ? specSize(chart) : {}
   return (
     <div className="playground">
       <textarea
@@ -71,7 +88,15 @@ function SpecPlayground() {
         aria-label="Paste a Vega or Vega-Lite spec"
       />
       <div className="playground-chart">
-        {error ? <div className="error">{error}</div> : chart && <Chart spec={chart} width={420} height={300} tooltip ariaLabel="Rendered spec" />}
+        {error ? <div className="error">{error}</div> : chart && (
+          <Chart
+            spec={chart}
+            width={size.width ?? 420}
+            height={size.height ?? 300}
+            tooltip
+            ariaLabel="Rendered spec"
+          />
+        )}
         {!error && <p className="hint">Paste a Vega (<code>$schema</code> vega) or Vega-Lite spec. Vega-Lite is compiled automatically.</p>}
       </div>
     </div>
