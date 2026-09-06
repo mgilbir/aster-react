@@ -282,16 +282,18 @@ export function Chart({
 
   const handleTooltipMove = React.useCallback(
     (e: React.MouseEvent) => {
-      if (!tooltip) return
-      const el = e.target as HTMLElement
-      const raw = el.dataset?.datum
-      if (!raw) { setTooltipInfo(null); return }
-      const rect = containerRef.current?.getBoundingClientRect()
-      if (!rect) return
-      try {
-        const datum = JSON.parse(raw) as Record<string, unknown>
-        setTooltipInfo({ datum, x: e.clientX - rect.left, y: e.clientY - rect.top })
-      } catch { setTooltipInfo(null) }
+    if (!tooltip) return
+    // The hovered element may be a parent/child of the mark (e.g. a tspan or an
+    // axis line above it); walk up to the nearest element carrying data-datum.
+    const el = (e.target as HTMLElement).closest?.('[data-datum]') as HTMLElement | null
+    const raw = el?.dataset?.datum
+    if (!raw) { setTooltipInfo(null); return }
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    try {
+      const datum = JSON.parse(raw) as Record<string, unknown>
+      setTooltipInfo({ datum, x: e.clientX - rect.left, y: e.clientY - rect.top })
+    } catch { setTooltipInfo(null) }
     },
     [tooltip],
   )

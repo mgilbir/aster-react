@@ -122,7 +122,7 @@ function LiveDataChanges() {
 function TooltipDemo() {
   return (
     <div className="chart-container">
-      <Chart spec={CompiledLegendScatterSpec} width={440} height={300} tooltip ariaLabel="Scatter with tooltips" />
+      <Chart spec={CompiledStackedBarSpec} width={440} height={300} tooltip ariaLabel="Bars with tooltips" />
     </div>
   )
 }
