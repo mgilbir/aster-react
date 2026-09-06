@@ -305,6 +305,10 @@ function Radar() {
 }
 
 export function App() {
+  const [dark, setDark] = React.useState(true)
+  React.useEffect(() => {
+    document.body.dataset.mode = dark ? 'dark' : 'light'
+  }, [dark])
   return (
     <div className="app">
       <style>{`
@@ -312,10 +316,14 @@ export function App() {
           --bg: #0b0f17; --bg-soft: #111826; --card: #141c2c; --border: #24304a;
           --text: #e8edf6; --muted: #93a1bd; --accent: #4f8cff; --accent2: #7aa2ff;
         }
+        [data-mode="light"] {
+          --bg: #f5f7fb; --bg-soft: #ffffff; --card: #ffffff; --border: #d9e1ee;
+          --text: #1a2233; --muted: #5c6b87; --accent: #2563eb; --accent2: #1d4ed8;
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: var(--text); background: radial-gradient(1200px 600px at 20% -10%, #16213b 0%, var(--bg) 55%) fixed; min-height: 100vh; }
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: var(--text); background: var(--bg); min-height: 100vh; }
         .app { max-width: 1160px; margin: 0 auto; padding: 0 1.5rem 4rem; }
-        .hero { padding: 3.5rem 0 2.5rem; }
+        .hero { position: relative; padding: 3.5rem 0 2.5rem; }
         .eyebrow { color: var(--accent2); font-size: 0.85rem; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 600; margin-bottom: 0.75rem; }
         h1 { font-size: clamp(2.2rem, 5vw, 3.2rem); line-height: 1.05; letter-spacing: -0.03em; }
         .subtitle { color: var(--muted); font-size: 1.15rem; margin-top: 0.9rem; max-width: 46rem; line-height: 1.6; }
@@ -341,12 +349,15 @@ export function App() {
         .section.wide { grid-column: 1 / -1; }
         .section h2 { font-size: 1.05rem; margin-bottom: 0.25rem; }
         .section .desc { color: var(--muted); font-size: 0.88rem; margin-bottom: 0.75rem; line-height: 1.5; }
-        .chart-container { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; display: flex; align-items: center; justify-content: safe center; overflow: auto; }
+        /* The chart area is a light 'canvas' so transparent/pasted specs (default
+           black text) stay readable in either page mode. */
+        .chart-container { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; display: flex; align-items: center; justify-content: safe center; overflow: auto; }
+        .mode-toggle { position: absolute; top: 1.4rem; right: 1.5rem; background: var(--card); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; border-radius: 999px; cursor: pointer; font-size: 0.85rem; }
         .playground-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
         .playground { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
         @media (max-width: 760px) { .playground { grid-template-columns: 1fr; } }
         .spec-editor { width: 100%; min-height: 340px; background: var(--bg-soft); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
-        .playground-chart { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.75rem; background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; overflow: auto; }
+        .playground-chart { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.75rem; background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; overflow: auto; }
         .playground-chart .hint { color: var(--muted); font-size: 0.82rem; text-align: center; }
         .playground-chart .error { color: #ff8a8a; font-size: 0.85rem; font-family: ui-monospace, monospace; }
         .controls { margin-top: 0.5rem; display: flex; align-items: center; gap: 1rem; font-size: 0.9rem; color: var(--muted); }
@@ -358,6 +369,9 @@ export function App() {
       `}</style>
 
       <header className="hero">
+        <button className="mode-toggle" onClick={() => setDark((d) => !d)} aria-label="Toggle dark/light mode">
+          {dark ? '☀️ Light' : '🌙 Dark'}
+        </button>
         <div className="eyebrow">Vega-compatible chart engine</div>
         <h1>Aster Charts</h1>
         <p className="subtitle">

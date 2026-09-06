@@ -26,6 +26,9 @@ importers:
 
   apps/demo:
     dependencies:
+      '@aster/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@aster/react':
         specifier: workspace:*
         version: link:../../packages/react
