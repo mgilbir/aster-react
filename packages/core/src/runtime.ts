@@ -167,7 +167,11 @@ export interface ChartInfo {
 function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx: EvalContext; width: number; height: number } {
   const signals = { ...chart.signals, ...input.signals }
   const width = resolveSize(chart.width, input.width, signals)
-  const height = resolveSize(chart.height, input.height, signals)
+  // A Vega spec can define the chart height as a `height` signal (a special
+  // signal that doubles as the view size), e.g. `signals:[{name:'height',
+  // update: ...}]`, without a top-level numeric height. It's resolved later by
+  // resolveSignalUpdates, so apply the fallback after that (see below).
+  let height = resolveSize(chart.height, input.height, signals)
   const signalParams = { width, height, ...signals }
 
   const datasets = new Map<string, Row[]>()
@@ -225,6 +229,16 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
   }
   resolveSignalUpdates(ctx)
   buildScales(ctx)
+  // A Vega spec can define the chart height as a `height` signal (a special
+  // signal that doubles as the view size), e.g. `signals:[{name:'height',
+  // update: ...}]`, without a top-level numeric height. Honor it now that the
+  // signal is resolved so the content is not defaulted to 500.
+  const hasHeightSignal = (chart.signalDefs ?? []).some((s) => s.name === 'height')
+  if (height === DEFAULT_SIZE && hasHeightSignal && typeof ctx.signalParams.height === 'number') {
+    height = ctx.signalParams.height
+    ctx.height = height
+    buildScales(ctx)
+  }
   buildProjections(ctx)
 
   // Record the expression params for the next per-datum update; buildDatasets

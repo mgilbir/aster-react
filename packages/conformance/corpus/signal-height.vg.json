@@ -1,0 +1,30 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 200,
+  "padding": 5,
+  "autosize": "none",
+  "signals": [
+    { "name": "cellHeight", "value": 150 },
+    { "name": "height", "update": "cellHeight" }
+  ],
+  "data": [
+    { "name": "table", "values": [
+      { "v": 5 }, { "v": 9 }, { "v": 2 }
+    ] }
+  ],
+  "scales": [
+    { "name": "x", "type": "band", "domain": { "data": "table", "field": "v" }, "range": "width", "paddingOuter": 0.1, "paddingInner": 0.2 },
+    { "name": "y", "type": "linear", "domain": { "data": "table", "field": "v" }, "range": "height", "zero": true, "nice": true }
+  ],
+  "marks": [
+    {
+      "type": "rect", "from": { "data": "table" }, "encode": {
+        "update": {
+          "x": { "scale": "x", "field": "v" }, "width": { "scale": "x", "band": 1 },
+          "y": { "scale": "y", "field": "v" }, "y2": { "scale": "y", "value": 0 },
+          "fill": { "value": "steelblue" }
+        }
+      }
+    }
+  ]
+}
