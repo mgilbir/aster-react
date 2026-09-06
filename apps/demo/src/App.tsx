@@ -1,4 +1,5 @@
 import * as React from 'react'
+import * as vl from 'vega-lite'
 import {
   CompiledLineSpec,
   CompiledParamBoundSpec,
@@ -21,6 +22,61 @@ import {
 } from './compiled'
 import { Chart } from '@aster/react'
 import type { SelectionInterval } from '@aster/react'
+
+/** Center a chart and let its container scroll instead of clipping on overflow. */
+function Fit({ children }: { children: React.ReactNode }) {
+  return <div style={{ width: 'max-content', margin: '0 auto' }}>{children}</div>
+}
+
+const DEFAULT_SPEC = {
+  $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
+  width: 420,
+  height: 300,
+  padding: 5,
+  data: { values: [{ c: 'A', v: 28 }, { c: 'B', v: 55 }, { c: 'C', v: 43 }, { c: 'D', v: 91 }, { c: 'E', v: 81 }, { c: 'F', v: 53 }] },
+  mark: 'bar',
+  encoding: {
+    x: { field: 'c', type: 'nominal' },
+    y: { field: 'v', type: 'quantitative' },
+    color: { field: 'c', type: 'nominal', legend: null },
+  },
+}
+
+function SpecPlayground() {
+  const [text, setText] = React.useState(() => JSON.stringify(DEFAULT_SPEC, null, 2))
+  const [error, setError] = React.useState<string | null>(null)
+  const [chart, setChart] = React.useState<Record<string, unknown> | null>(() => {
+    try { return vl.compile(DEFAULT_SPEC as never).spec as Record<string, unknown> } catch { return null }
+  })
+  React.useEffect(() => {
+    const id = window.setTimeout(() => {
+      try {
+        const parsed = JSON.parse(text) as Record<string, unknown>
+        const isVl = String(parsed.$schema ?? '').includes('vega-lite')
+        setChart(isVl ? (vl.compile(parsed as never).spec as Record<string, unknown>) : parsed)
+        setError(null)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    }, 400)
+    return () => window.clearTimeout(id)
+  }, [text])
+  return (
+    <div className="playground">
+      <textarea
+        className="spec-editor"
+        spellCheck={false}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        aria-label="Paste a Vega or Vega-Lite spec"
+      />
+      <div className="playground-chart">
+        {error ? <div className="error">{error}</div> : chart && <Chart spec={chart} width={420} height={300} tooltip ariaLabel="Rendered spec" />}
+        {!error && <p className="hint">Paste a Vega (<code>$schema</code> vega) or Vega-Lite spec. Vega-Lite is compiled automatically.</p>}
+      </div>
+    </div>
+  )
+}
 
 const SPECS: Array<{ title: string; desc: string; spec: Record<string, unknown>; render: () => React.ReactNode; span?: string }> = [
   { title: 'Responsive Line', desc: 'Spec-level signals drive width/height; resizes with the container.', spec: CompiledLineSpec, render: () => <ResponsiveLine /> },
@@ -58,7 +114,7 @@ function LiveDataChanges() {
   }, [data.length])
   return (
     <div className="chart-container">
-      <Chart spec={CompiledLineSpec} width={560} height={260} data={{ table: data }} dataChanges={{ table: [(seed.current * 7) % data.length] }} ariaLabel="Live incremental line chart" />
+      <Chart spec={CompiledLineSpec} width={480} height={260} data={{ table: data }} dataChanges={{ table: [(seed.current * 7) % data.length] }} ariaLabel="Live incremental line chart" />
     </div>
   )
 }
@@ -66,7 +122,7 @@ function LiveDataChanges() {
 function TooltipDemo() {
   return (
     <div className="chart-container">
-      <Chart spec={CompiledLegendScatterSpec} width={480} height={300} tooltip ariaLabel="Scatter with tooltips" />
+      <Chart spec={CompiledLegendScatterSpec} width={440} height={300} tooltip ariaLabel="Scatter with tooltips" />
     </div>
   )
 }
@@ -276,16 +332,23 @@ export function App() {
         .feature { background: linear-gradient(180deg, var(--card), var(--bg-soft)); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
         .feature h3 { font-size: 1.05rem; margin-bottom: 0.4rem; color: var(--accent2); }
         .feature p { color: var(--muted); font-size: 0.9rem; line-height: 1.55; }
-        .showcase { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr)); gap: 1.25rem; }
+        .showcase { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(600px, 100%), 1fr)); gap: 1.25rem; }
         .showcase .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
         .showcase .card h3 { font-size: 1.05rem; margin-bottom: 0.4rem; }
         .showcase .card p { color: var(--muted); font-size: 0.9rem; margin-bottom: 0.9rem; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); gap: 1.25rem; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(560px, 100%), 1fr)); gap: 1.25rem; }
         .section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
         .section.wide { grid-column: 1 / -1; }
         .section h2 { font-size: 1.05rem; margin-bottom: 0.25rem; }
         .section .desc { color: var(--muted); font-size: 0.88rem; margin-bottom: 0.75rem; line-height: 1.5; }
-        .chart-container { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; display: flex; align-items: center; justify-content: center; overflow-x: auto; }
+        .chart-container { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; display: flex; align-items: center; justify-content: safe center; overflow: auto; }
+        .playground-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
+        .playground { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+        @media (max-width: 760px) { .playground { grid-template-columns: 1fr; } }
+        .spec-editor { width: 100%; min-height: 340px; background: var(--bg-soft); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+        .playground-chart { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.75rem; background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; overflow: auto; }
+        .playground-chart .hint { color: var(--muted); font-size: 0.82rem; text-align: center; }
+        .playground-chart .error { color: #ff8a8a; font-size: 0.85rem; font-family: ui-monospace, monospace; }
         .controls { margin-top: 0.5rem; display: flex; align-items: center; gap: 1rem; font-size: 0.9rem; color: var(--muted); }
         .controls input[type="range"] { width: 200px; accent-color: var(--accent); }
         button { background: var(--accent); color: #fff; border: none; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
@@ -312,6 +375,7 @@ export function App() {
       <nav className="toc">
         <a href="#features">Features</a>
         <a href="#reactive">Reactive dataflow</a>
+        <a href="#playground">Playground</a>
         <a href="#gallery">Gallery</a>
       </nav>
 
@@ -337,13 +401,23 @@ export function App() {
           <div className="card">
             <h3>Live incremental update</h3>
             <p>One point changes every 700ms. The engine re-derives only that row and reuses the rest — O(changed), not O(n).</p>
-            <LiveDataChanges />
+            <div className="chart-container"><LiveDataChanges /></div>
           </div>
           <div className="card">
             <h3>Hover tooltips</h3>
             <p>Hover any mark to read its datum, via <code>tooltip</code>.</p>
-            <TooltipDemo />
+            <div className="chart-container"><TooltipDemo /></div>
           </div>
+        </div>
+      </section>
+
+      <section id="playground">
+        <div className="section-head">
+          <h2>Spec playground</h2>
+          <p className="desc">Paste any Vega or Vega-Lite spec on the left and see it rendered live on the right.</p>
+        </div>
+        <div className="playground-wrap">
+          <SpecPlayground />
         </div>
       </section>
 
@@ -357,7 +431,7 @@ export function App() {
             <div key={s.title} className={`section ${s.span === 'wide' ? 'wide' : ''}`}>
               <h2>{s.title}</h2>
               <p className="desc">{s.desc}</p>
-              {s.render()}
+              <div className="chart-container">{s.render()}</div>
             </div>
           ))}
         </div>
