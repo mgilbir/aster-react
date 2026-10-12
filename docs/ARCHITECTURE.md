@@ -1,5 +1,12 @@
 # Aster Charts Architecture
 
+> **Superseded sections.** The decision to reuse pure Vega packages
+> (`vega-expression`, `vega-scale`, …) in the runtime has been reversed:
+> [ADR 0001](adr/0001-own-the-engine.md) commits the engine to reimplementing that
+> stack, verified against pinned oracle vectors. The sections below describe the
+> inherited design where it still stands, and are updated as each phase of
+> [ROADMAP.md](ROADMAP.md) replaces the package it borrows.
+
 ## Pipeline Overview
 
 The rendering pipeline transforms a Vega (or Vega-Lite) spec into an SVG string through three stages:

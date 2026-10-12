@@ -1,0 +1,1644 @@
+{
+  "suites": {
+    "toBoolean": {
+      "oracle": "vega-util@2.1.2",
+      "cases": [
+        {
+          "args": [
+            null
+          ],
+          "want": null
+        },
+        {
+          "args": [
+            {
+              "$": "undef"
+            }
+          ],
+          "want": null
+        },
+        {
+          "args": [
+            ""
+          ],
+          "want": null
+        },
+        {
+          "args": [
+            "false"
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            "true"
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "False"
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "0"
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            "1"
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "00"
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "0.0"
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            " "
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            0
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            1
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            -1
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            false
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            true
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            {
+              "$": "nan"
+            }
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            {
+              "$": "inf"
+            }
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            []
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            {}
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            [
+              0
+            ]
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            [
+              1
+            ]
+          ],
+          "want": true
+        }
+      ]
+    },
+    "toNumber": {
+      "oracle": "vega-util@2.1.2",
+      "cases": [
+        {
+          "args": [
+            null
+          ],
+          "want": null
+        },
+        {
+          "args": [
+            {
+              "$": "undef"
+            }
+          ],
+          "want": null
+        },
+        {
+          "args": [
+            ""
+          ],
+          "want": null
+        },
+        {
+          "args": [
+            "12"
+          ],
+          "want": 12
+        },
+        {
+          "args": [
+            "12.5"
+          ],
+          "want": 12.5
+        },
+        {
+          "args": [
+            "-3"
+          ],
+          "want": -3
+        },
+        {
+          "args": [
+            "abc"
+          ],
+          "want": {
+            "$": "nan"
+          }
+        },
+        {
+          "args": [
+            "0x10"
+          ],
+          "want": 16
+        },
+        {
+          "args": [
+            " 42 "
+          ],
+          "want": 42
+        },
+        {
+          "args": [
+            "1e3"
+          ],
+          "want": 1000
+        },
+        {
+          "args": [
+            ".5"
+          ],
+          "want": 0.5
+        },
+        {
+          "args": [
+            "Infinity"
+          ],
+          "want": {
+            "$": "inf"
+          }
+        },
+        {
+          "args": [
+            "-Infinity"
+          ],
+          "want": {
+            "$": "-inf"
+          }
+        },
+        {
+          "args": [
+            "  "
+          ],
+          "want": 0
+        },
+        {
+          "args": [
+            "12px"
+          ],
+          "want": {
+            "$": "nan"
+          }
+        },
+        {
+          "args": [
+            12
+          ],
+          "want": 12
+        },
+        {
+          "args": [
+            0
+          ],
+          "want": 0
+        },
+        {
+          "args": [
+            {
+              "$": "-0"
+            }
+          ],
+          "want": {
+            "$": "-0"
+          }
+        },
+        {
+          "args": [
+            false
+          ],
+          "want": 0
+        },
+        {
+          "args": [
+            true
+          ],
+          "want": 1
+        },
+        {
+          "args": [
+            {
+              "$": "nan"
+            }
+          ],
+          "want": {
+            "$": "nan"
+          }
+        },
+        {
+          "args": [
+            {
+              "$": "inf"
+            }
+          ],
+          "want": {
+            "$": "inf"
+          }
+        },
+        {
+          "args": [
+            []
+          ],
+          "want": 0
+        },
+        {
+          "args": [
+            [
+              5
+            ]
+          ],
+          "want": 5
+        },
+        {
+          "args": [
+            [
+              5,
+              6
+            ]
+          ],
+          "want": {
+            "$": "nan"
+          }
+        },
+        {
+          "args": [
+            {}
+          ],
+          "want": {
+            "$": "nan"
+          }
+        }
+      ]
+    },
+    "toDate": {
+      "oracle": "vega-util@2.1.2",
+      "cases": [
+        {
+          "args": [
+            null
+          ],
+          "want": null
+        },
+        {
+          "args": [
+            {
+              "$": "undef"
+            }
+          ],
+          "want": null
+        },
+        {
+          "args": [
+            ""
+          ],
+          "want": null
+        },
+        {
+          "args": [
+            0
+          ],
+          "want": 0
+        },
+        {
+          "args": [
+            12345.5
+          ],
+          "want": 12345.5
+        },
+        {
+          "args": [
+            -1000
+          ],
+          "want": -1000
+        },
+        {
+          "args": [
+            {
+              "$": "date",
+              "ms": 0
+            }
+          ],
+          "want": {
+            "$": "date",
+            "ms": 0
+          }
+        },
+        {
+          "args": [
+            {
+              "$": "date",
+              "ms": 1622548800000
+            }
+          ],
+          "want": {
+            "$": "date",
+            "ms": 1622548800000
+          }
+        },
+        {
+          "args": [
+            "2020-01-02T03:04:05.678Z"
+          ],
+          "want": 1577934245678
+        },
+        {
+          "args": [
+            "2020-06-15T12:30:45+02:00"
+          ],
+          "want": 1592217045000
+        },
+        {
+          "args": [
+            "2020-01-02"
+          ],
+          "want": 1577923200000
+        },
+        {
+          "args": [
+            "1970-01-01T00:00:00.000Z"
+          ],
+          "want": 0
+        },
+        {
+          "args": [
+            "Jan 1, 2020"
+          ],
+          "want": 1577836800000
+        },
+        {
+          "args": [
+            "Jan 1, 2020 12:30:45"
+          ],
+          "want": 1577881845000
+        },
+        {
+          "args": [
+            "not a date"
+          ],
+          "want": {
+            "$": "nan"
+          }
+        },
+        {
+          "args": [
+            "2020-13-45"
+          ],
+          "want": {
+            "$": "nan"
+          }
+        }
+      ]
+    },
+    "toString": {
+      "oracle": "vega-util@2.1.2",
+      "cases": [
+        {
+          "args": [
+            null
+          ],
+          "want": null
+        },
+        {
+          "args": [
+            {
+              "$": "undef"
+            }
+          ],
+          "want": null
+        },
+        {
+          "args": [
+            ""
+          ],
+          "want": null
+        },
+        {
+          "args": [
+            0
+          ],
+          "want": "0"
+        },
+        {
+          "args": [
+            {
+              "$": "-0"
+            }
+          ],
+          "want": "0"
+        },
+        {
+          "args": [
+            false
+          ],
+          "want": "false"
+        },
+        {
+          "args": [
+            true
+          ],
+          "want": "true"
+        },
+        {
+          "args": [
+            {
+              "$": "nan"
+            }
+          ],
+          "want": "NaN"
+        },
+        {
+          "args": [
+            {
+              "$": "inf"
+            }
+          ],
+          "want": "Infinity"
+        },
+        {
+          "args": [
+            "x"
+          ],
+          "want": "x"
+        },
+        {
+          "args": [
+            []
+          ],
+          "want": ""
+        },
+        {
+          "args": [
+            [
+              1,
+              2
+            ]
+          ],
+          "want": "1,2"
+        },
+        {
+          "args": [
+            {}
+          ],
+          "want": "[object Object]"
+        },
+        {
+          "args": [
+            {
+              "a": 1
+            }
+          ],
+          "want": "[object Object]"
+        },
+        {
+          "args": [
+            {
+              "$": "symbol",
+              "desc": "s"
+            }
+          ],
+          "want": {
+            "$": "throw",
+            "name": "TypeError"
+          }
+        }
+      ]
+    },
+    "isArray": {
+      "oracle": "vega-util@2.1.2",
+      "cases": [
+        {
+          "args": [
+            []
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            [
+              1
+            ]
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            {}
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            "x"
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            null
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            {
+              "$": "undef"
+            }
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            0
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            true
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            {
+              "$": "int8array"
+            }
+          ],
+          "want": false
+        }
+      ]
+    },
+    "isBoolean": {
+      "oracle": "vega-util@2.1.2",
+      "cases": [
+        {
+          "args": [
+            true
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            false
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            0
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            1
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            ""
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            "true"
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            null
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            {
+              "$": "undef"
+            }
+          ],
+          "want": false
+        }
+      ]
+    },
+    "isDate": {
+      "oracle": "vega-util@2.1.2",
+      "cases": [
+        {
+          "args": [
+            {
+              "$": "date",
+              "ms": 0
+            }
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            {
+              "$": "date",
+              "ms": null
+            }
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            0
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            "2020-01-01"
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            null
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            {
+              "$": "undef"
+            }
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            1791831774927
+          ],
+          "want": false
+        }
+      ]
+    },
+    "isNumber": {
+      "oracle": "vega-util@2.1.2",
+      "cases": [
+        {
+          "args": [
+            0
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            {
+              "$": "-0"
+            }
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            {
+              "$": "nan"
+            }
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            {
+              "$": "inf"
+            }
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "1"
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            null
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            {
+              "$": "undef"
+            }
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            true
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            {
+              "$": "date",
+              "ms": 0
+            }
+          ],
+          "want": false
+        }
+      ]
+    },
+    "isObject": {
+      "oracle": "vega-util@2.1.2",
+      "cases": [
+        {
+          "args": [
+            {}
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            []
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            null
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            {
+              "$": "undef"
+            }
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            0
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            ""
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            "x"
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            true
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            {
+              "$": "date",
+              "ms": 0
+            }
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            {
+              "$": "fn"
+            }
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            {
+              "$": "re",
+              "src": "a",
+              "flags": ""
+            }
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            {
+              "$": "symbol",
+              "desc": "s"
+            }
+          ],
+          "want": false
+        }
+      ]
+    },
+    "isRegExp": {
+      "oracle": "vega-util@2.1.2",
+      "cases": [
+        {
+          "args": [
+            {
+              "$": "re",
+              "src": "a",
+              "flags": ""
+            }
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            {
+              "$": "re",
+              "src": "a",
+              "flags": "g"
+            }
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "/a/"
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            "a"
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            null
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            {
+              "$": "undef"
+            }
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            0
+          ],
+          "want": false
+        }
+      ]
+    },
+    "isString": {
+      "oracle": "vega-util@2.1.2",
+      "cases": [
+        {
+          "args": [
+            ""
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "x"
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            0
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            null
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            {
+              "$": "undef"
+            }
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            false
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            []
+          ],
+          "want": false
+        }
+      ]
+    },
+    "extent": {
+      "oracle": "vega-util@2.1.2",
+      "cases": [
+        {
+          "args": [
+            []
+          ],
+          "want": [
+            {
+              "$": "undef"
+            },
+            {
+              "$": "undef"
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              3,
+              1,
+              2
+            ]
+          ],
+          "want": [
+            1,
+            3
+          ]
+        },
+        {
+          "args": [
+            [
+              null,
+              2,
+              {
+                "$": "nan"
+              },
+              1
+            ]
+          ],
+          "want": [
+            1,
+            2
+          ]
+        },
+        {
+          "args": [
+            [
+              "b",
+              "a"
+            ]
+          ],
+          "want": [
+            "a",
+            "b"
+          ]
+        },
+        {
+          "args": [
+            [
+              1,
+              "2"
+            ]
+          ],
+          "want": [
+            1,
+            "2"
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "$": "-0"
+              },
+              0
+            ]
+          ],
+          "want": [
+            {
+              "$": "-0"
+            },
+            {
+              "$": "-0"
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "$": "nan"
+              }
+            ]
+          ],
+          "want": [
+            {
+              "$": "undef"
+            },
+            {
+              "$": "undef"
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              null,
+              {
+                "$": "undef"
+              }
+            ]
+          ],
+          "want": [
+            {
+              "$": "undef"
+            },
+            {
+              "$": "undef"
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              0,
+              1,
+              2,
+              3
+            ]
+          ],
+          "want": [
+            0,
+            3
+          ]
+        },
+        {
+          "args": [
+            [
+              "10",
+              "9"
+            ]
+          ],
+          "want": [
+            "10",
+            "9"
+          ]
+        },
+        {
+          "args": [
+            [
+              true,
+              false
+            ]
+          ],
+          "want": [
+            false,
+            true
+          ]
+        }
+      ]
+    },
+    "ascending": {
+      "oracle": "vega-util@2.1.2",
+      "cases": [
+        {
+          "args": [
+            1,
+            2
+          ],
+          "want": -1
+        },
+        {
+          "args": [
+            2,
+            1
+          ],
+          "want": 1
+        },
+        {
+          "args": [
+            1,
+            1
+          ],
+          "want": 0
+        },
+        {
+          "args": [
+            null,
+            1
+          ],
+          "want": -1
+        },
+        {
+          "args": [
+            1,
+            null
+          ],
+          "want": 1
+        },
+        {
+          "args": [
+            null,
+            null
+          ],
+          "want": 0
+        },
+        {
+          "args": [
+            {
+              "$": "undef"
+            },
+            null
+          ],
+          "want": 0
+        },
+        {
+          "args": [
+            {
+              "$": "undef"
+            },
+            {
+              "$": "undef"
+            }
+          ],
+          "want": 0
+        },
+        {
+          "args": [
+            "a",
+            "b"
+          ],
+          "want": -1
+        },
+        {
+          "args": [
+            "b",
+            "a"
+          ],
+          "want": 1
+        },
+        {
+          "args": [
+            "a",
+            "a"
+          ],
+          "want": 0
+        },
+        {
+          "args": [
+            "a",
+            10
+          ],
+          "want": 0
+        },
+        {
+          "args": [
+            {
+              "$": "nan"
+            },
+            1
+          ],
+          "want": -1
+        },
+        {
+          "args": [
+            1,
+            {
+              "$": "nan"
+            }
+          ],
+          "want": 1
+        },
+        {
+          "args": [
+            {
+              "$": "date",
+              "ms": 2
+            },
+            {
+              "$": "date",
+              "ms": 1
+            }
+          ],
+          "want": 1
+        },
+        {
+          "args": [
+            {
+              "$": "date",
+              "ms": 1
+            },
+            {
+              "$": "date",
+              "ms": 2
+            }
+          ],
+          "want": -1
+        },
+        {
+          "args": [
+            {
+              "$": "date",
+              "ms": 1
+            },
+            2
+          ],
+          "want": -1
+        },
+        {
+          "args": [
+            {
+              "$": "-0"
+            },
+            0
+          ],
+          "want": 0
+        },
+        {
+          "args": [
+            0,
+            {
+              "$": "-0"
+            }
+          ],
+          "want": 0
+        },
+        {
+          "args": [
+            "",
+            "a"
+          ],
+          "want": -1
+        },
+        {
+          "args": [
+            true,
+            false
+          ],
+          "want": 1
+        }
+      ]
+    },
+    "pluck": {
+      "oracle": "vega-functions@6.1.3",
+      "cases": [
+        {
+          "args": [
+            [
+              {
+                "a": 1
+              },
+              {
+                "a": 2
+              },
+              {
+                "b": 3
+              }
+            ],
+            "a"
+          ],
+          "want": [
+            1,
+            2,
+            {
+              "$": "undef"
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "a": {
+                  "b": 1
+                }
+              }
+            ],
+            "a.b"
+          ],
+          "want": [
+            1
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "a": 1
+              }
+            ],
+            "missing"
+          ],
+          "want": [
+            {
+              "$": "undef"
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "a": 1
+              }
+            ],
+            "a[0]"
+          ],
+          "want": [
+            {
+              "$": "undef"
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "a": 1
+              }
+            ],
+            ""
+          ],
+          "want": [
+            {
+              "a": 1
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "a": 1
+              }
+            ],
+            0
+          ],
+          "want": [
+            {
+              "a": 1
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              "x",
+              "y"
+            ],
+            "0"
+          ],
+          "want": [
+            "x",
+            "y"
+          ]
+        },
+        {
+          "args": [
+            {
+              "a": 5
+            },
+            "a"
+          ],
+          "want": 5
+        },
+        {
+          "args": [
+            null,
+            "a"
+          ],
+          "want": {
+            "$": "throw",
+            "name": "TypeError"
+          }
+        }
+      ]
+    },
+    "field": {
+      "oracle": "vega-util@2.1.2",
+      "kind": "accessor",
+      "cases": [
+        {
+          "args": [
+            "a"
+          ],
+          "want": {
+            "fields": [
+              "a"
+            ],
+            "fname": "a",
+            "on": {
+              "a": 42
+            },
+            "value": 42
+          }
+        },
+        {
+          "args": [
+            "a.b"
+          ],
+          "want": {
+            "fields": [
+              "a.b"
+            ],
+            "fname": "a.b",
+            "on": {
+              "a": {
+                "b": "v"
+              }
+            },
+            "value": "v"
+          }
+        },
+        {
+          "args": [
+            "a[0]"
+          ],
+          "want": {
+            "fields": [
+              "a[0]"
+            ],
+            "fname": "a[0]",
+            "on": {
+              "a": [
+                7
+              ]
+            },
+            "value": 7
+          }
+        },
+        {
+          "args": [
+            "a",
+            "custom"
+          ],
+          "want": {
+            "fields": [
+              "a"
+            ],
+            "fname": "custom",
+            "on": {
+              "a": 1
+            },
+            "value": 1
+          }
+        },
+        {
+          "args": [
+            "a['b.c']"
+          ],
+          "want": {
+            "fields": [
+              "a['b.c']"
+            ],
+            "fname": "a['b.c']",
+            "on": {
+              "a": {
+                "b.c": 9
+              }
+            },
+            "value": 9
+          }
+        },
+        {
+          "args": [
+            "a[\"b\"]"
+          ],
+          "want": {
+            "fields": [
+              "a[\"b\"]"
+            ],
+            "fname": "a[\"b\"]",
+            "on": {
+              "a": {
+                "b": 2
+              }
+            },
+            "value": 2
+          }
+        },
+        {
+          "args": [
+            "a\\.b"
+          ],
+          "want": {
+            "fields": [
+              "a.b"
+            ],
+            "fname": "a.b",
+            "on": {
+              "a.b": "dotted",
+              "ab": "joined"
+            },
+            "value": "dotted"
+          }
+        },
+        {
+          "args": [
+            "a[b"
+          ],
+          "want": {
+            "$": "throw",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "a]b"
+          ],
+          "want": {
+            "$": "throw",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "a'b"
+          ],
+          "want": {
+            "$": "throw",
+            "name": "Error"
+          }
+        }
+      ]
+    }
+  }
+}

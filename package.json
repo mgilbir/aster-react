@@ -14,7 +14,10 @@
     "bench:runtime": "pnpm --filter @aster/benchmarks run bench:runtime",
     "bench:memory": "pnpm --filter @aster/benchmarks run bench:memory",
     "bench:bundle": "pnpm --filter @aster/benchmarks run bench:bundle",
-    "bench:browser": "pnpm --filter @aster/benchmarks run bench:browser"
+    "bench:browser": "pnpm --filter @aster/benchmarks run bench:browser",
+    "check:deps": "node scripts/check-deps.mjs",
+    "vectors": "pnpm --filter @aster/conformance run vectors",
+    "check": "pnpm check:deps && pnpm typecheck && pnpm build && pnpm test && pnpm conformance && pnpm --filter @aster/benchmarks run budget"
   },
   "devDependencies": {
     "esbuild": "~0.25.12",

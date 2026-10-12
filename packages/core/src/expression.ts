@@ -5,10 +5,10 @@
  * expression DSL to an AST, and `vega-interpreter` evaluates that AST (CSP-safe,
  * no `new Function`). We supply the *function context* — the semantics of
  * `vega-functions` that our runtime needs — bound to our scales/data, plus the
- * type/array/string/math utilities and formatting functions from `vega-util`,
- * `vega-format`, `vega-time` and `d3-color` (all pure). This keeps expression
- * semantics byte-compatible with vega while staying independent of vega's
- * runtime packages.
+ * type/array/string/math utilities from `./util.js` (an oracle-vector-tested
+ * port), and formatting functions from `vega-format`, `vega-time` and
+ * `d3-color` (all pure). This keeps expression semantics byte-compatible with
+ * vega while staying independent of vega's runtime packages.
  */
 import { parseExpression } from 'vega-expression'
 import { expressionInterpreter } from 'vega-interpreter'
@@ -31,8 +31,8 @@ function numericSequence(start: number, stop?: number, step?: number): number[] 
 import { rgb, hsl, lab, hcl } from 'd3-color'
 import {
   accessor, ascending, extent, isArray, isBoolean, isDate, isNumber, isObject,
-  isRegExp, isString, toBoolean, toDate, toNumber, toString,
-} from 'vega-util'
+  isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck,
+} from './util.js'
 
 export interface ExpressionRuntime {
   /** Scale lookup by name. Returns the scale callable, or undefined. */
@@ -169,10 +169,6 @@ function inrange(value: unknown, range: unknown): boolean {
   const v = value as number
   return lo < hi ? v >= lo && v <= hi : v >= hi && v <= lo
 }
-function pluck(value: unknown, name: unknown): unknown {
-  const f = (accessor as unknown as (path: string) => (d: unknown) => unknown)(String(name))
-  return isArray(value) ? (value as unknown[]).map(f) : f(value)
-}
 function mergeObj(...objs: unknown[]): unknown {
   return Object.assign({}, ...objs)
 }
@@ -260,7 +256,7 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
     merge: mergeObj,
     modify: (set: unknown, value: unknown, signal?: unknown) => set, // event-only; static no-op returns the set
     span: (arr: unknown) => { const a = arr as number[]; return a[a.length - 1]! - a[0]! },
-    pluck: (value: unknown, name: unknown) => pluck(value, name),
+    pluck,
     // strings
     lower: (value: unknown) => String(value).toLowerCase(),
     pad,

@@ -1,16 +1,16 @@
 /**
  * Vega data-format semantics (port of vega-loader's `read`, `parse` and the
- * JSON reader — oracle-identical type coercion via vega-util's converters,
- * which are already part of the expression bundle).
+ * JSON reader — oracle-identical type coercion via the ported converters in
+ * `./util.js`, replayed against the pinned oracle's vectors).
  *
  * Text formats that need real parsers (csv/tsv/dsv via d3-dsv, topojson via
  * topojson-client) and URL fetching live in the `@aster/core/load` addon,
  * which registers them into `dataFormatRegistry`.
  */
-import { toBoolean, toDate, toNumber, toString } from 'vega-util'
 import { dataFormatRegistry } from './registry.js'
+import { toBoolean, toDate, toNumber, toString } from './util.js'
 
-/** vega-loader's typeParsers, backed by vega-util (exact same functions). */
+/** vega-loader's typeParsers, backed by the ported converters (oracle-vector-tested). */
 export const typeParsers: Record<string, (v: unknown) => unknown> = {
   boolean: toBoolean,
   integer: toNumber,
