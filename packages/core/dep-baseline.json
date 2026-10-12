@@ -12,10 +12,6 @@
     "src/addon-geo.ts": [
       "d3-contour"
     ],
-    "src/addon-load.ts": [
-      "d3-dsv",
-      "topojson-client"
-    ],
     "src/geo.ts": [
       "d3-geo"
     ],
@@ -26,14 +22,12 @@
   "deps": [
     "d3-array",
     "d3-contour",
-    "d3-dsv",
     "d3-format",
     "d3-geo",
     "d3-scale",
     "d3-shape",
     "d3-time",
     "d3-time-format",
-    "topojson-client",
     "vega-scale"
   ]
 }

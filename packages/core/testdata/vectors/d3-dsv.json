@@ -1,0 +1,592 @@
+{
+  "suites": {
+    "dsvParse": {
+      "oracle": "d3-dsv@3.0.1",
+      "kind": "fn",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            "a,b,c\n1,2,3\n4,5,6"
+          ],
+          "want": [
+            {
+              "a": "1",
+              "b": "2",
+              "c": "3"
+            },
+            {
+              "a": "4",
+              "b": "5",
+              "c": "6"
+            }
+          ]
+        },
+        {
+          "args": [
+            "a,b\n\"quoted,comma\",2\n\"say \"\"hi\"\"\",3"
+          ],
+          "want": [
+            {
+              "a": "quoted,comma",
+              "b": "2"
+            },
+            {
+              "a": "say \"hi\"",
+              "b": "3"
+            }
+          ]
+        },
+        {
+          "args": [
+            "a,b\n1\n2,3"
+          ],
+          "want": [
+            {
+              "a": "1",
+              "b": ""
+            },
+            {
+              "a": "2",
+              "b": "3"
+            }
+          ]
+        },
+        {
+          "args": [
+            "a,b,c\n1,2"
+          ],
+          "want": [
+            {
+              "a": "1",
+              "b": "2",
+              "c": ""
+            }
+          ]
+        },
+        {
+          "args": [
+            "a,b\n,\n,"
+          ],
+          "want": [
+            {
+              "a": "",
+              "b": ""
+            },
+            {
+              "a": "",
+              "b": ""
+            }
+          ]
+        },
+        {
+          "args": [
+            "a,b\r\n1,2\r\n3,4"
+          ],
+          "want": [
+            {
+              "a": "1",
+              "b": "2"
+            },
+            {
+              "a": "3",
+              "b": "4"
+            }
+          ]
+        },
+        {
+          "args": [
+            "a,b\n1,2\n"
+          ],
+          "want": [
+            {
+              "a": "1",
+              "b": "2"
+            }
+          ]
+        },
+        {
+          "args": [
+            "a,b\n1,2"
+          ],
+          "want": [
+            {
+              "a": "1",
+              "b": "2"
+            }
+          ]
+        },
+        {
+          "args": [
+            "name,zero,flag\n\"x\",0,true"
+          ],
+          "want": [
+            {
+              "flag": "true",
+              "name": "x",
+              "zero": "0"
+            }
+          ]
+        },
+        {
+          "args": [
+            "a,b\n\"multi\nline\",2"
+          ],
+          "want": [
+            {
+              "a": "multi\nline",
+              "b": "2"
+            }
+          ]
+        },
+        {
+          "args": [
+            "a;b\n1;2"
+          ],
+          "want": [
+            {
+              "a;b": "1;2"
+            }
+          ]
+        }
+      ]
+    },
+    "dsvParseSemi": {
+      "oracle": "d3-dsv@3.0.1",
+      "kind": "fn",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            "a;b\n1;2"
+          ],
+          "want": [
+            [
+              "a",
+              "b"
+            ],
+            [
+              "1",
+              "2"
+            ]
+          ]
+        }
+      ]
+    },
+    "dsvParseTab": {
+      "oracle": "d3-dsv@3.0.1",
+      "kind": "fn",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            "a\ta\n1\t2"
+          ],
+          "want": [
+            [
+              "a",
+              "a"
+            ],
+            [
+              "1",
+              "2"
+            ]
+          ]
+        }
+      ]
+    },
+    "dsvParseRows": {
+      "oracle": "d3-dsv@3.0.1",
+      "kind": "fn",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            "a,b,c\n1,2,3\n4,5,6"
+          ],
+          "want": [
+            [
+              "a",
+              "b",
+              "c"
+            ],
+            [
+              "1",
+              "2",
+              "3"
+            ],
+            [
+              "4",
+              "5",
+              "6"
+            ]
+          ]
+        },
+        {
+          "args": [
+            "a,b\n\"quoted,comma\",2\n\"say \"\"hi\"\"\",3"
+          ],
+          "want": [
+            [
+              "a",
+              "b"
+            ],
+            [
+              "quoted,comma",
+              "2"
+            ],
+            [
+              "say \"hi\"",
+              "3"
+            ]
+          ]
+        },
+        {
+          "args": [
+            "a,b\n1\n2,3"
+          ],
+          "want": [
+            [
+              "a",
+              "b"
+            ],
+            [
+              "1"
+            ],
+            [
+              "2",
+              "3"
+            ]
+          ]
+        },
+        {
+          "args": [
+            "a,b,c\n1,2"
+          ],
+          "want": [
+            [
+              "a",
+              "b",
+              "c"
+            ],
+            [
+              "1",
+              "2"
+            ]
+          ]
+        },
+        {
+          "args": [
+            "a,b\n,\n,"
+          ],
+          "want": [
+            [
+              "a",
+              "b"
+            ],
+            [
+              "",
+              ""
+            ],
+            [
+              "",
+              ""
+            ]
+          ]
+        },
+        {
+          "args": [
+            "a,b\r\n1,2\r\n3,4"
+          ],
+          "want": [
+            [
+              "a",
+              "b"
+            ],
+            [
+              "1",
+              "2"
+            ],
+            [
+              "3",
+              "4"
+            ]
+          ]
+        },
+        {
+          "args": [
+            "a,b\n1,2\n"
+          ],
+          "want": [
+            [
+              "a",
+              "b"
+            ],
+            [
+              "1",
+              "2"
+            ]
+          ]
+        },
+        {
+          "args": [
+            "a,b\n1,2"
+          ],
+          "want": [
+            [
+              "a",
+              "b"
+            ],
+            [
+              "1",
+              "2"
+            ]
+          ]
+        },
+        {
+          "args": [
+            "name,zero,flag\n\"x\",0,true"
+          ],
+          "want": [
+            [
+              "name",
+              "zero",
+              "flag"
+            ],
+            [
+              "x",
+              "0",
+              "true"
+            ]
+          ]
+        },
+        {
+          "args": [
+            "a,b\n\"multi\nline\",2"
+          ],
+          "want": [
+            [
+              "a",
+              "b"
+            ],
+            [
+              "multi\nline",
+              "2"
+            ]
+          ]
+        },
+        {
+          "args": [
+            "a;b\n1;2"
+          ],
+          "want": [
+            [
+              "a;b"
+            ],
+            [
+              "1;2"
+            ]
+          ]
+        },
+        {
+          "args": [
+            "a\ta\n1\t2"
+          ],
+          "want": [
+            [
+              "a\ta"
+            ],
+            [
+              "1\t2"
+            ]
+          ]
+        },
+        {
+          "args": [
+            "x\n\"leading"
+          ],
+          "want": [
+            [
+              "x"
+            ],
+            [
+              "leading"
+            ]
+          ]
+        },
+        {
+          "args": [
+            "a,b\n\"\" ,2"
+          ],
+          "want": [
+            [
+              "a",
+              "b"
+            ],
+            [
+              "",
+              "",
+              "2"
+            ]
+          ]
+        }
+      ]
+    },
+    "dsvParseCustom": {
+      "oracle": "d3-dsv@3.0.1",
+      "kind": "dsvcustom",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            "a,b\n1,2\n3,4"
+          ],
+          "variant": "rowPlusIndex",
+          "want": [
+            {
+              "a": "1",
+              "b": "2",
+              "i": 0
+            },
+            {
+              "a": "3",
+              "b": "4",
+              "i": 1
+            }
+          ]
+        },
+        {
+          "args": [
+            "a,b\n1,2"
+          ],
+          "variant": "pickA",
+          "want": [
+            "1"
+          ]
+        },
+        {
+          "args": [
+            "a,b\n1,2"
+          ],
+          "variant": "dropOdd",
+          "want": [
+            {
+              "a": "1",
+              "b": "2"
+            }
+          ]
+        }
+      ]
+    },
+    "dsvFormat": {
+      "oracle": "d3-dsv@3.0.1",
+      "kind": "fn",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            [
+              {
+                "a": 1,
+                "b": "x,y"
+              },
+              {
+                "a": 2,
+                "b": "say \"hi\""
+              }
+            ]
+          ],
+          "want": "a,b\n1,\"x,y\"\n2,\"say \"\"hi\"\"\""
+        },
+        {
+          "args": [
+            [
+              {
+                "a": null,
+                "b": {
+                  "$": "undef"
+                }
+              },
+              {
+                "a": 0,
+                "b": false
+              }
+            ]
+          ],
+          "want": "a,b\n,\n0,false"
+        },
+        {
+          "args": [
+            [
+              {
+                "a": {
+                  "$": "date",
+                  "ms": 1705276800000
+                },
+                "b": {
+                  "$": "date",
+                  "ms": 1718454645500
+                }
+              }
+            ]
+          ],
+          "want": "a,b\n2024-01-15,2024-06-15T12:30:45.500Z"
+        },
+        {
+          "args": [
+            [
+              {
+                "a": "plain",
+                "b": "has\nnewline"
+              }
+            ]
+          ],
+          "want": "a,b\nplain,\"has\nnewline\""
+        }
+      ]
+    },
+    "dsvFormatRow": {
+      "oracle": "d3-dsv@3.0.1",
+      "kind": "fn",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            [
+              [
+                1,
+                "x,y"
+              ]
+            ]
+          ],
+          "want": "\"1,x,y\""
+        },
+        {
+          "args": [
+            [
+              [
+                "say \"\"hi\"\"",
+                null
+              ]
+            ]
+          ],
+          "want": "\"say \"\"\"\"hi\"\"\"\",\""
+        },
+        {
+          "args": [
+            [
+              [
+                {
+                  "$": "date",
+                  "ms": 1704067200000
+                },
+                "z"
+              ]
+            ]
+          ],
+          "want": "\"Mon Jan 01 2024 00:00:00 GMT+0000 (Coordinated Universal Time),z\""
+        }
+      ]
+    }
+  }
+}

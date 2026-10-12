@@ -42,17 +42,27 @@ import {
 import { locale, type Locale } from './locale.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
 import { interpret } from './expr-interpreter.js'
+import { dsvFormat } from './dsv.js'
+import { feature as topoFeature, mesh as topoMesh } from './topojson.js'
 
 const vectorsDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'testdata', 'vectors')
 
 interface VectorFile {
   suites: Record<string, Suite>
 }
+interface TopoObjectLike {
+  type: string
+  objects?: Record<string, unknown>
+  properties?: Record<string, unknown>
+  [key: string]: unknown
+}
+
 interface Suite {
   oracle: string
-  kind?: 'fn' | 'accessor' | 'color' | 'apply1' | 'interval' | 'specifier' | 'ast' | 'eval'
+  kind?: 'fn' | 'accessor' | 'color' | 'apply1' | 'interval' | 'specifier' | 'ast' | 'eval' | 'dsvcustom' | 'topomesh'
+  variant?: string
   tz?: string
-  cases: Array<{ args: unknown[]; want: unknown }>
+  cases: Array<{ args: unknown[]; want: unknown; variant?: string }>
 }
 
 /** Tagged value -> the runtime value it stood for (mirror of the generator's `enc`). */
@@ -121,6 +131,20 @@ const fns: Record<string, (...args: any[]) => any> = {
   formatSpecifier, precisionFixed, precisionPrefix, precisionRound, tickStep,
   localeTimeParse: (spec: string, str: string) => locale().timeParse(spec)(str),
   localeUtcParse: (spec: string, str: string) => locale().utcParse(spec)(str),
+  dsvParse: (text: string) => {
+    const rows = dsvFormat(',').parse(text) as Record<string, string>[] & { columns?: string[] }
+    // the columns annotation does not survive the vector codec (arrays encode
+    // positionally on both sides); the row objects are the contract
+    return rows.map((r) => ({ ...r }))
+  },
+  dsvParseSemi: (text: string) => dsvFormat(';').parseRows(text),
+  dsvParseTab: (text: string) => dsvFormat('\t').parseRows(text),
+  dsvParseRows: (text: string) => dsvFormat(',').parseRows(text),
+  dsvFormat: (rows: ArrayLike<Record<string, unknown>>) => dsvFormat(',').format(rows),
+  dsvFormatRow: (row: readonly unknown[]) => dsvFormat(',').formatRow(row),
+  topoFeatureCollection: (topology: never) => topoFeature(topology, (topology as { objects: { squares: never } }).objects.squares),
+  topoFeatureNamed: (topology: never, name: string) => topoFeature(topology, name),
+  topoMesh: (topology: never) => topoMesh(topology),
 }
 
 const applyFns: Record<string, (...args: any[]) => any> = {
@@ -172,13 +196,13 @@ function proj(c: unknown): unknown {
   }
 }
 
-function expectSuite(name: string, suite: Suite, run: (args: unknown[], want: unknown) => void): void {
+function expectSuite(name: string, suite: Suite, run: (args: unknown[], want: unknown, extra?: { variant?: string }) => void): void {
   describe(name, () => {
     it(`matches ${suite.oracle} (${suite.cases.length} cases)`, () => {
       // The suite records the zone it was pinned to (local-time behaviour,
       // DST transitions); Node re-reads process.env.TZ per call.
       if (suite.tz) process.env.TZ = suite.tz
-      for (const { args, want } of suite.cases) run(args.map(dec), want)
+      for (const { args, want, variant } of suite.cases) run(args.map(dec), want, { variant })
     })
   })
 }
@@ -285,6 +309,31 @@ for (const file of files) {
           const datum = (want as { on: unknown }).on
           const value = call(f as (...a: never[]) => unknown, [dec(datum)])
           expect(enc({ fields: f.fields, fname: f.fname, on: datum, value })).toEqual(want)
+        })
+        continue
+      }
+      if (suite.kind === 'dsvcustom') {
+        const converters: Record<string, (row: Record<string, string>, i: number) => unknown> = {
+          rowPlusIndex: (row, i) => ({ ...row, i }),
+          pickA: (row) => row.a,
+          dropOdd: (row, i) => (i % 2 === 0 ? row : null),
+        }
+        expectSuite(name, suite, (args, want, extra) => {
+          const built = dsvFormat(',').parse(args[0] as string, converters[extra!.variant!])
+          expect(enc(built)).toEqual(want)
+        })
+        continue
+      }
+      if (suite.kind === 'topomesh') {
+        const filters: Record<string, undefined | ((a: TopoObjectLike, b: TopoObjectLike) => boolean)> = {
+          interior: (a, b) => a === b,
+          any: undefined,
+          byName: (a, b) => (a as { properties?: { name?: string } }).properties?.name === (b as { properties?: { name?: string } }).properties?.name,
+        }
+        expectSuite(name, suite, (args, want, extra) => {
+          const [topology, objName] = args as [TopoObjectLike, string]
+          const got = topoMesh(topology as never, (topology as { objects: Record<string, unknown> }).objects[objName] as never, filters[extra!.variant!] as never)
+          expect(enc(got)).toEqual(want)
         })
         continue
       }

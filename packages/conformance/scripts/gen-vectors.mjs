@@ -179,6 +179,8 @@ const vegaExpression = await loadPkg('vega-expression')
 const vegaInterpreter = await loadPkg('vega-interpreter')
 const ve = vegaExpression
 const vi = vegaInterpreter
+const d3Dsv = await loadPkg('d3-dsv')
+const topojsonClient = await loadPkg('topojson-client')
 
 const BACKSLASH = String.fromCharCode(92)
 /** The string `a\.b` (a, backslash, dot, b) — an escaped dot. */
@@ -743,6 +745,231 @@ function callEval(ve, vi, code, datum, params) {
   return evalParam(datum, params)
 }
 
+
+// --- the d3-dsv + topojson-client surface @aster/core reimplements ------------
+
+// named converter/filter variants the replay reconstructs
+
+const deltaArcs = [
+  [[0, 0], [1, 0], [0, 1]],   // arc 0: bottom of left square
+  [[1, 0], [0, 1]],           // arc 1: shared edge, bottom->top
+  [[1, 0], [0, 1], [-1, 0]],  // arc 2: bottom of right square
+  [[-1, 0], [0, -1], [1, 0]], // arc 3: top of right square (reversed use)
+  [[0, -1], [-1, 0], [1, 0]], // arc 4: top of left square
+]
+
+const quantized = {
+  type: 'Topology',
+  transform: { scale: [10, 10], translate: [0, 0] },
+  arcs: deltaArcs,
+  objects: {
+    squares: {
+      type: 'GeometryCollection',
+      geometries: [
+        { type: 'Polygon', arcs: [[0, 1, ~4]], properties: { name: 'left' }, id: 'L' },
+        { type: 'Polygon', arcs: [[~1, 2, 3]], properties: { name: 'right' } },
+      ],
+    },
+    border: { type: 'LineString', arcs: [1] },
+    point: { type: 'Point', coordinates: [2, 3] },
+  },
+}
+
+const absolute = {
+  type: 'Topology',
+  arcs: [
+    [[0, 0], [10, 0], [10, 10]],
+    [[10, 0], [10, 10]],
+    [[10, 0], [20, 0], [20, 10]],
+    [[20, 10], [10, 10], [0, 10]],
+    [[0, 10], [0, 0], [10, 0]],
+  ],
+  objects: {
+    squares: {
+      type: 'GeometryCollection',
+      geometries: [
+        { type: 'Polygon', arcs: [[0, 1, ~4]], properties: { name: 'left' }, id: 'L' },
+        { type: 'Polygon', arcs: [[~1, 2, 3]], properties: { name: 'right' } },
+      ],
+    },
+    border: { type: 'LineString', arcs: [1] },
+    point: { type: 'Point', coordinates: [20, 30] },
+  },
+}
+
+const dsvConverters = {
+  rowPlusIndex: (row, i) => ({ ...row, i }),
+  pickA: (row) => row.a,
+  dropOdd: (row, i) => i % 2 === 0 ? row : null,
+}
+
+const topologies = { quantized, absolute }
+
+const topoFilters = {
+  interior: (a, b) => a === b,
+  any: undefined,
+  byName: (a, b) => a.properties?.name === b.properties?.name,
+}
+
+const topoSuites = {
+  topoFeatureCollection: {
+    oracle: oracleOf('topojson-client'),
+    kind: 'fn',
+    tz: TZ_UTC,
+    cases: [quantized, absolute].map((t) => ({
+      args: [enc(t)].map(enc),
+      want: enc(call((t) => topojsonClient.feature(t, t.objects.squares), [t])),
+    })),
+  },
+  topoFeatureNamed: {
+    oracle: oracleOf('topojson-client'),
+    kind: 'fn',
+    tz: TZ_UTC,
+    cases: [['squares', quantized], ['border', quantized], ['point', quantized]].map(([name, t]) => ({
+      args: [t, name].map(enc),
+      want: enc(call((t, n) => topojsonClient.feature(t, n), [t, name])),
+    })),
+  },
+  topoMesh: {
+    oracle: oracleOf('topojson-client'),
+    kind: 'fn',
+    tz: TZ_UTC,
+    cases: [quantized, absolute].map((t) => ({
+      args: [enc(t)].map(enc),
+      want: enc(call((t) => topojsonClient.mesh(t), [t])),
+    })),
+  },
+  // named arc-filter variants, reconstructed by the replay
+  topoMeshFiltered: {
+    oracle: oracleOf('topojson-client'),
+    kind: 'topomesh',
+    tz: TZ_UTC,
+    cases: [
+      ['quantized', 'squares', 'interior'],
+      ['quantized', 'border', 'any'],
+      ['absolute', 'squares', 'byName'],
+    ].map(([t, name, variant]) => ({
+      args: [topologies[t], name].map(enc),
+      variant,
+      want: enc(call((t, n, v) => topojsonClient.mesh(t, t.objects[n], topoFilters[v]), [topologies[t], name, variant])),
+    })),
+  },
+  topoMeshOuter: {
+    oracle: oracleOf('topojson-client'),
+    kind: 'topomesh',
+    tz: TZ_UTC,
+    cases: [['quantized', 'squares', 'interior']].map(([t, name, variant]) => ({
+      args: [topologies[t], name].map(enc),
+      variant,
+      want: enc(call((t, n, v) => topojsonClient.mesh(t, t.objects[n], topoFilters[v]), [topologies[t], name, variant])),
+    })),
+  },
+}
+
+const dsvTexts = [
+  'a,b,c\n1,2,3\n4,5,6',
+  'a,b\n"quoted,comma",2\n"say ""hi""",3',
+  'a,b\n1\n2,3',            // ragged rows
+  'a,b,c\n1,2',              // short rows
+  'a,b\n,\n,',
+  'a,b\r\n1,2\r\n3,4',    // CRLF
+  'a,b\n1,2\n',             // trailing newline
+  'a,b\n1,2',                // no trailing newline
+  'name,zero,flag\n"x",0,true',
+  'a,b\n"multi\nline",2',
+  'a;b\n1;2',                // (parsed with ';' delimiter below)
+  'a\ta\n1\t2',            // (parsed with tab below)
+  'x\n"leading',             // unterminated quote: parser consumes to EOF
+  'a,b\n"" ,2',
+]
+
+const dsvSuites = {
+  dsvParse: {
+    oracle: oracleOf('d3-dsv'),
+    kind: 'fn',
+    tz: TZ_UTC,
+    cases: dsvTexts.slice(0, 11).map((text) => ({
+      args: [text].map(enc),
+      want: enc(call((t) => {
+        const rows = d3Dsv.dsvFormat(',').parse(t)
+        const out = rows.map((r) => ({ ...r }))
+        out.columns = rows.columns
+        return out
+      }, [text])),
+    })),
+  },
+  dsvParseSemi: {
+    oracle: oracleOf('d3-dsv'),
+    kind: 'fn',
+    tz: TZ_UTC,
+    cases: [dsvTexts[10]].map((text) => ({
+      args: [text].map(enc),
+      want: enc(call((t) => d3Dsv.dsvFormat(';').parseRows(t), [text])),
+    })),
+  },
+  dsvParseTab: {
+    oracle: oracleOf('d3-dsv'),
+    kind: 'fn',
+    tz: TZ_UTC,
+    cases: [dsvTexts[11]].map((text) => ({
+      args: [text].map(enc),
+      want: enc(call((t) => d3Dsv.dsvFormat('\t').parseRows(t), [text])),
+    })),
+  },
+  dsvParseRows: {
+    oracle: oracleOf('d3-dsv'),
+    kind: 'fn',
+    tz: TZ_UTC,
+    cases: dsvTexts.map((text) => ({
+      args: [text].map(enc),
+      want: enc(call((t) => d3Dsv.dsvFormat(',').parseRows(t), [text])),
+    })),
+  },
+  // named row-converter variants, reconstructed by the replay
+  dsvParseCustom: {
+    oracle: oracleOf('d3-dsv'),
+    kind: 'dsvcustom',
+    tz: TZ_UTC,
+    cases: [
+      ['a,b\n1,2\n3,4', 'rowPlusIndex'],
+      ['a,b\n1,2', 'pickA'],
+      ['a,b\n1,2', 'dropOdd'],
+    ].map(([text, variant]) => ({
+      args: [text].map(enc),
+      variant,
+      want: enc(call((t, v) => d3Dsv.dsvFormat(',').parse(t, dsvConverters[v]), [text, variant])),
+    })),
+  },
+  dsvFormat: {
+    oracle: oracleOf('d3-dsv'),
+    kind: 'fn',
+    tz: TZ_UTC,
+    cases: [
+      [{ a: 1, b: 'x,y' }, { a: 2, b: 'say "hi"' }],
+      [{ a: null, b: undefined }, { a: 0, b: false }],
+      [{ a: new Date(Date.UTC(2024, 0, 15)), b: new Date(Date.UTC(2024, 5, 15, 12, 30, 45, 500)) }],
+      [{ a: 'plain', b: 'has\nnewline' }],
+    ].map((rows) => ({
+      args: [enc(rows)],
+      want: enc(call((r) => d3Dsv.dsvFormat(',').format(r), [rows])),
+    })),
+  },
+  dsvFormatRow: {
+    oracle: oracleOf('d3-dsv'),
+    kind: 'fn',
+    tz: TZ_UTC,
+    cases: [
+      [[1, 'x,y']], [['say ""hi""', null]], [[new Date(Date.UTC(2024, 0, 1)), 'z']],
+    ].map((row) => ({
+      args: [enc(row)],
+      want: enc(call((r) => d3Dsv.dsvFormat(',').formatRow(r), [row])),
+    })),
+  },
+}
+
+// A small topology: a 2x1 grid of two squares sharing an edge (arc 1),
+// with quantized coordinates, plus the same geometry unquantized.
+
 const files = {
   'vega-util.json': { suites: utilSuites },
   'd3-color.json': { suites: colorSuites },
@@ -750,6 +977,8 @@ const files = {
   'd3-format.json': { suites: formatSuites },
   'vega-format.json': { suites: localeSuites },
   'vega-expression.json': { suites: expressionSuites },
+  'd3-dsv.json': { suites: dsvSuites },
+  'topojson-client.json': { suites: topoSuites },
 }
 
 const destDir = join(here, '..', '..', 'core', 'testdata', 'vectors')

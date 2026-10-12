@@ -1,0 +1,2050 @@
+{
+  "suites": {
+    "topoFeatureCollection": {
+      "oracle": "topojson-client@3.1.0",
+      "kind": "fn",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            {
+              "arcs": [
+                [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ],
+                  [
+                    -1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ]
+              ],
+              "objects": {
+                "border": {
+                  "arcs": [
+                    1
+                  ],
+                  "type": "LineString"
+                },
+                "point": {
+                  "coordinates": [
+                    2,
+                    3
+                  ],
+                  "type": "Point"
+                },
+                "squares": {
+                  "geometries": [
+                    {
+                      "arcs": [
+                        [
+                          0,
+                          1,
+                          -5
+                        ]
+                      ],
+                      "id": "L",
+                      "properties": {
+                        "name": "left"
+                      },
+                      "type": "Polygon"
+                    },
+                    {
+                      "arcs": [
+                        [
+                          -2,
+                          2,
+                          3
+                        ]
+                      ],
+                      "properties": {
+                        "name": "right"
+                      },
+                      "type": "Polygon"
+                    }
+                  ],
+                  "type": "GeometryCollection"
+                }
+              },
+              "transform": {
+                "scale": [
+                  10,
+                  10
+                ],
+                "translate": [
+                  0,
+                  0
+                ]
+              },
+              "type": "Topology"
+            }
+          ],
+          "want": {
+            "features": [
+              {
+                "geometry": {
+                  "coordinates": [
+                    [
+                      [
+                        0,
+                        0
+                      ],
+                      [
+                        10,
+                        0
+                      ],
+                      [
+                        10,
+                        0
+                      ],
+                      [
+                        0,
+                        -10
+                      ],
+                      [
+                        -10,
+                        -10
+                      ],
+                      [
+                        0,
+                        -10
+                      ]
+                    ]
+                  ],
+                  "type": "Polygon"
+                },
+                "id": "L",
+                "properties": {
+                  "name": "left"
+                },
+                "type": "Feature"
+              },
+              {
+                "geometry": {
+                  "coordinates": [
+                    [
+                      [
+                        10,
+                        10
+                      ],
+                      [
+                        10,
+                        0
+                      ],
+                      [
+                        10,
+                        10
+                      ],
+                      [
+                        -10,
+                        0
+                      ],
+                      [
+                        -10,
+                        -10
+                      ],
+                      [
+                        0,
+                        -10
+                      ]
+                    ]
+                  ],
+                  "type": "Polygon"
+                },
+                "properties": {
+                  "name": "right"
+                },
+                "type": "Feature"
+              }
+            ],
+            "type": "FeatureCollection"
+          }
+        },
+        {
+          "args": [
+            {
+              "arcs": [
+                [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    10,
+                    0
+                  ],
+                  [
+                    10,
+                    10
+                  ]
+                ],
+                [
+                  [
+                    10,
+                    0
+                  ],
+                  [
+                    10,
+                    10
+                  ]
+                ],
+                [
+                  [
+                    10,
+                    0
+                  ],
+                  [
+                    20,
+                    0
+                  ],
+                  [
+                    20,
+                    10
+                  ]
+                ],
+                [
+                  [
+                    20,
+                    10
+                  ],
+                  [
+                    10,
+                    10
+                  ],
+                  [
+                    0,
+                    10
+                  ]
+                ],
+                [
+                  [
+                    0,
+                    10
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    10,
+                    0
+                  ]
+                ]
+              ],
+              "objects": {
+                "border": {
+                  "arcs": [
+                    1
+                  ],
+                  "type": "LineString"
+                },
+                "point": {
+                  "coordinates": [
+                    20,
+                    30
+                  ],
+                  "type": "Point"
+                },
+                "squares": {
+                  "geometries": [
+                    {
+                      "arcs": [
+                        [
+                          0,
+                          1,
+                          -5
+                        ]
+                      ],
+                      "id": "L",
+                      "properties": {
+                        "name": "left"
+                      },
+                      "type": "Polygon"
+                    },
+                    {
+                      "arcs": [
+                        [
+                          -2,
+                          2,
+                          3
+                        ]
+                      ],
+                      "properties": {
+                        "name": "right"
+                      },
+                      "type": "Polygon"
+                    }
+                  ],
+                  "type": "GeometryCollection"
+                }
+              },
+              "type": "Topology"
+            }
+          ],
+          "want": {
+            "features": [
+              {
+                "geometry": {
+                  "coordinates": [
+                    [
+                      [
+                        0,
+                        0
+                      ],
+                      [
+                        10,
+                        0
+                      ],
+                      [
+                        10,
+                        0
+                      ],
+                      [
+                        10,
+                        0
+                      ],
+                      [
+                        0,
+                        0
+                      ],
+                      [
+                        0,
+                        10
+                      ]
+                    ]
+                  ],
+                  "type": "Polygon"
+                },
+                "id": "L",
+                "properties": {
+                  "name": "left"
+                },
+                "type": "Feature"
+              },
+              {
+                "geometry": {
+                  "coordinates": [
+                    [
+                      [
+                        10,
+                        10
+                      ],
+                      [
+                        10,
+                        0
+                      ],
+                      [
+                        20,
+                        0
+                      ],
+                      [
+                        20,
+                        10
+                      ],
+                      [
+                        10,
+                        10
+                      ],
+                      [
+                        0,
+                        10
+                      ]
+                    ]
+                  ],
+                  "type": "Polygon"
+                },
+                "properties": {
+                  "name": "right"
+                },
+                "type": "Feature"
+              }
+            ],
+            "type": "FeatureCollection"
+          }
+        }
+      ]
+    },
+    "topoFeatureNamed": {
+      "oracle": "topojson-client@3.1.0",
+      "kind": "fn",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            {
+              "arcs": [
+                [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ],
+                  [
+                    -1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ]
+              ],
+              "objects": {
+                "border": {
+                  "arcs": [
+                    1
+                  ],
+                  "type": "LineString"
+                },
+                "point": {
+                  "coordinates": [
+                    2,
+                    3
+                  ],
+                  "type": "Point"
+                },
+                "squares": {
+                  "geometries": [
+                    {
+                      "arcs": [
+                        [
+                          0,
+                          1,
+                          -5
+                        ]
+                      ],
+                      "id": "L",
+                      "properties": {
+                        "name": "left"
+                      },
+                      "type": "Polygon"
+                    },
+                    {
+                      "arcs": [
+                        [
+                          -2,
+                          2,
+                          3
+                        ]
+                      ],
+                      "properties": {
+                        "name": "right"
+                      },
+                      "type": "Polygon"
+                    }
+                  ],
+                  "type": "GeometryCollection"
+                }
+              },
+              "transform": {
+                "scale": [
+                  10,
+                  10
+                ],
+                "translate": [
+                  0,
+                  0
+                ]
+              },
+              "type": "Topology"
+            },
+            "squares"
+          ],
+          "want": {
+            "features": [
+              {
+                "geometry": {
+                  "coordinates": [
+                    [
+                      [
+                        0,
+                        0
+                      ],
+                      [
+                        10,
+                        0
+                      ],
+                      [
+                        10,
+                        0
+                      ],
+                      [
+                        0,
+                        -10
+                      ],
+                      [
+                        -10,
+                        -10
+                      ],
+                      [
+                        0,
+                        -10
+                      ]
+                    ]
+                  ],
+                  "type": "Polygon"
+                },
+                "id": "L",
+                "properties": {
+                  "name": "left"
+                },
+                "type": "Feature"
+              },
+              {
+                "geometry": {
+                  "coordinates": [
+                    [
+                      [
+                        10,
+                        10
+                      ],
+                      [
+                        10,
+                        0
+                      ],
+                      [
+                        10,
+                        10
+                      ],
+                      [
+                        -10,
+                        0
+                      ],
+                      [
+                        -10,
+                        -10
+                      ],
+                      [
+                        0,
+                        -10
+                      ]
+                    ]
+                  ],
+                  "type": "Polygon"
+                },
+                "properties": {
+                  "name": "right"
+                },
+                "type": "Feature"
+              }
+            ],
+            "type": "FeatureCollection"
+          }
+        },
+        {
+          "args": [
+            {
+              "arcs": [
+                [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ],
+                  [
+                    -1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ]
+              ],
+              "objects": {
+                "border": {
+                  "arcs": [
+                    1
+                  ],
+                  "type": "LineString"
+                },
+                "point": {
+                  "coordinates": [
+                    2,
+                    3
+                  ],
+                  "type": "Point"
+                },
+                "squares": {
+                  "geometries": [
+                    {
+                      "arcs": [
+                        [
+                          0,
+                          1,
+                          -5
+                        ]
+                      ],
+                      "id": "L",
+                      "properties": {
+                        "name": "left"
+                      },
+                      "type": "Polygon"
+                    },
+                    {
+                      "arcs": [
+                        [
+                          -2,
+                          2,
+                          3
+                        ]
+                      ],
+                      "properties": {
+                        "name": "right"
+                      },
+                      "type": "Polygon"
+                    }
+                  ],
+                  "type": "GeometryCollection"
+                }
+              },
+              "transform": {
+                "scale": [
+                  10,
+                  10
+                ],
+                "translate": [
+                  0,
+                  0
+                ]
+              },
+              "type": "Topology"
+            },
+            "border"
+          ],
+          "want": {
+            "geometry": {
+              "coordinates": [
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ]
+              ],
+              "type": "LineString"
+            },
+            "properties": {},
+            "type": "Feature"
+          }
+        },
+        {
+          "args": [
+            {
+              "arcs": [
+                [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ],
+                  [
+                    -1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ]
+              ],
+              "objects": {
+                "border": {
+                  "arcs": [
+                    1
+                  ],
+                  "type": "LineString"
+                },
+                "point": {
+                  "coordinates": [
+                    2,
+                    3
+                  ],
+                  "type": "Point"
+                },
+                "squares": {
+                  "geometries": [
+                    {
+                      "arcs": [
+                        [
+                          0,
+                          1,
+                          -5
+                        ]
+                      ],
+                      "id": "L",
+                      "properties": {
+                        "name": "left"
+                      },
+                      "type": "Polygon"
+                    },
+                    {
+                      "arcs": [
+                        [
+                          -2,
+                          2,
+                          3
+                        ]
+                      ],
+                      "properties": {
+                        "name": "right"
+                      },
+                      "type": "Polygon"
+                    }
+                  ],
+                  "type": "GeometryCollection"
+                }
+              },
+              "transform": {
+                "scale": [
+                  10,
+                  10
+                ],
+                "translate": [
+                  0,
+                  0
+                ]
+              },
+              "type": "Topology"
+            },
+            "point"
+          ],
+          "want": {
+            "geometry": {
+              "coordinates": [
+                20,
+                30
+              ],
+              "type": "Point"
+            },
+            "properties": {},
+            "type": "Feature"
+          }
+        }
+      ]
+    },
+    "topoMesh": {
+      "oracle": "topojson-client@3.1.0",
+      "kind": "fn",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            {
+              "arcs": [
+                [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ],
+                  [
+                    -1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ]
+              ],
+              "objects": {
+                "border": {
+                  "arcs": [
+                    1
+                  ],
+                  "type": "LineString"
+                },
+                "point": {
+                  "coordinates": [
+                    2,
+                    3
+                  ],
+                  "type": "Point"
+                },
+                "squares": {
+                  "geometries": [
+                    {
+                      "arcs": [
+                        [
+                          0,
+                          1,
+                          -5
+                        ]
+                      ],
+                      "id": "L",
+                      "properties": {
+                        "name": "left"
+                      },
+                      "type": "Polygon"
+                    },
+                    {
+                      "arcs": [
+                        [
+                          -2,
+                          2,
+                          3
+                        ]
+                      ],
+                      "properties": {
+                        "name": "right"
+                      },
+                      "type": "Polygon"
+                    }
+                  ],
+                  "type": "GeometryCollection"
+                }
+              },
+              "transform": {
+                "scale": [
+                  10,
+                  10
+                ],
+                "translate": [
+                  0,
+                  0
+                ]
+              },
+              "type": "Topology"
+            }
+          ],
+          "want": {
+            "coordinates": [
+              [
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ]
+              ],
+              [
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ]
+              ],
+              [
+                [
+                  -10,
+                  0
+                ],
+                [
+                  -10,
+                  -10
+                ],
+                [
+                  0,
+                  -10
+                ],
+                [
+                  -10,
+                  -10
+                ],
+                [
+                  0,
+                  -10
+                ]
+              ],
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ]
+              ]
+            ],
+            "type": "MultiLineString"
+          }
+        },
+        {
+          "args": [
+            {
+              "arcs": [
+                [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    10,
+                    0
+                  ],
+                  [
+                    10,
+                    10
+                  ]
+                ],
+                [
+                  [
+                    10,
+                    0
+                  ],
+                  [
+                    10,
+                    10
+                  ]
+                ],
+                [
+                  [
+                    10,
+                    0
+                  ],
+                  [
+                    20,
+                    0
+                  ],
+                  [
+                    20,
+                    10
+                  ]
+                ],
+                [
+                  [
+                    20,
+                    10
+                  ],
+                  [
+                    10,
+                    10
+                  ],
+                  [
+                    0,
+                    10
+                  ]
+                ],
+                [
+                  [
+                    0,
+                    10
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    10,
+                    0
+                  ]
+                ]
+              ],
+              "objects": {
+                "border": {
+                  "arcs": [
+                    1
+                  ],
+                  "type": "LineString"
+                },
+                "point": {
+                  "coordinates": [
+                    20,
+                    30
+                  ],
+                  "type": "Point"
+                },
+                "squares": {
+                  "geometries": [
+                    {
+                      "arcs": [
+                        [
+                          0,
+                          1,
+                          -5
+                        ]
+                      ],
+                      "id": "L",
+                      "properties": {
+                        "name": "left"
+                      },
+                      "type": "Polygon"
+                    },
+                    {
+                      "arcs": [
+                        [
+                          -2,
+                          2,
+                          3
+                        ]
+                      ],
+                      "properties": {
+                        "name": "right"
+                      },
+                      "type": "Polygon"
+                    }
+                  ],
+                  "type": "GeometryCollection"
+                }
+              },
+              "type": "Topology"
+            }
+          ],
+          "want": {
+            "coordinates": [
+              [
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ]
+              ],
+              [
+                [
+                  10,
+                  0
+                ],
+                [
+                  20,
+                  0
+                ],
+                [
+                  20,
+                  10
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ]
+              ],
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ]
+              ]
+            ],
+            "type": "MultiLineString"
+          }
+        }
+      ]
+    },
+    "topoMeshFiltered": {
+      "oracle": "topojson-client@3.1.0",
+      "kind": "topomesh",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            {
+              "arcs": [
+                [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ],
+                  [
+                    -1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ]
+              ],
+              "objects": {
+                "border": {
+                  "arcs": [
+                    1
+                  ],
+                  "type": "LineString"
+                },
+                "point": {
+                  "coordinates": [
+                    2,
+                    3
+                  ],
+                  "type": "Point"
+                },
+                "squares": {
+                  "geometries": [
+                    {
+                      "arcs": [
+                        [
+                          0,
+                          1,
+                          -5
+                        ]
+                      ],
+                      "id": "L",
+                      "properties": {
+                        "name": "left"
+                      },
+                      "type": "Polygon"
+                    },
+                    {
+                      "arcs": [
+                        [
+                          -2,
+                          2,
+                          3
+                        ]
+                      ],
+                      "properties": {
+                        "name": "right"
+                      },
+                      "type": "Polygon"
+                    }
+                  ],
+                  "type": "GeometryCollection"
+                }
+              },
+              "transform": {
+                "scale": [
+                  10,
+                  10
+                ],
+                "translate": [
+                  0,
+                  0
+                ]
+              },
+              "type": "Topology"
+            },
+            "squares"
+          ],
+          "variant": "interior",
+          "want": {
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ]
+              ],
+              [
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ]
+              ],
+              [
+                [
+                  -10,
+                  0
+                ],
+                [
+                  -10,
+                  -10
+                ],
+                [
+                  0,
+                  -10
+                ],
+                [
+                  -10,
+                  -10
+                ],
+                [
+                  0,
+                  -10
+                ]
+              ]
+            ],
+            "type": "MultiLineString"
+          }
+        },
+        {
+          "args": [
+            {
+              "arcs": [
+                [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ],
+                  [
+                    -1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ]
+              ],
+              "objects": {
+                "border": {
+                  "arcs": [
+                    1
+                  ],
+                  "type": "LineString"
+                },
+                "point": {
+                  "coordinates": [
+                    2,
+                    3
+                  ],
+                  "type": "Point"
+                },
+                "squares": {
+                  "geometries": [
+                    {
+                      "arcs": [
+                        [
+                          0,
+                          1,
+                          -5
+                        ]
+                      ],
+                      "id": "L",
+                      "properties": {
+                        "name": "left"
+                      },
+                      "type": "Polygon"
+                    },
+                    {
+                      "arcs": [
+                        [
+                          -2,
+                          2,
+                          3
+                        ]
+                      ],
+                      "properties": {
+                        "name": "right"
+                      },
+                      "type": "Polygon"
+                    }
+                  ],
+                  "type": "GeometryCollection"
+                }
+              },
+              "transform": {
+                "scale": [
+                  10,
+                  10
+                ],
+                "translate": [
+                  0,
+                  0
+                ]
+              },
+              "type": "Topology"
+            },
+            "border"
+          ],
+          "variant": "any",
+          "want": {
+            "coordinates": [
+              [
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ]
+              ]
+            ],
+            "type": "MultiLineString"
+          }
+        },
+        {
+          "args": [
+            {
+              "arcs": [
+                [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    10,
+                    0
+                  ],
+                  [
+                    10,
+                    10
+                  ]
+                ],
+                [
+                  [
+                    10,
+                    0
+                  ],
+                  [
+                    10,
+                    10
+                  ]
+                ],
+                [
+                  [
+                    10,
+                    0
+                  ],
+                  [
+                    20,
+                    0
+                  ],
+                  [
+                    20,
+                    10
+                  ]
+                ],
+                [
+                  [
+                    20,
+                    10
+                  ],
+                  [
+                    10,
+                    10
+                  ],
+                  [
+                    0,
+                    10
+                  ]
+                ],
+                [
+                  [
+                    0,
+                    10
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    10,
+                    0
+                  ]
+                ]
+              ],
+              "objects": {
+                "border": {
+                  "arcs": [
+                    1
+                  ],
+                  "type": "LineString"
+                },
+                "point": {
+                  "coordinates": [
+                    20,
+                    30
+                  ],
+                  "type": "Point"
+                },
+                "squares": {
+                  "geometries": [
+                    {
+                      "arcs": [
+                        [
+                          0,
+                          1,
+                          -5
+                        ]
+                      ],
+                      "id": "L",
+                      "properties": {
+                        "name": "left"
+                      },
+                      "type": "Polygon"
+                    },
+                    {
+                      "arcs": [
+                        [
+                          -2,
+                          2,
+                          3
+                        ]
+                      ],
+                      "properties": {
+                        "name": "right"
+                      },
+                      "type": "Polygon"
+                    }
+                  ],
+                  "type": "GeometryCollection"
+                }
+              },
+              "type": "Topology"
+            },
+            "squares"
+          ],
+          "variant": "byName",
+          "want": {
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ]
+              ],
+              [
+                [
+                  10,
+                  0
+                ],
+                [
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  10
+                ]
+              ],
+              [
+                [
+                  10,
+                  0
+                ],
+                [
+                  20,
+                  0
+                ],
+                [
+                  20,
+                  10
+                ]
+              ],
+              [
+                [
+                  20,
+                  10
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ]
+              ]
+            ],
+            "type": "MultiLineString"
+          }
+        }
+      ]
+    },
+    "topoMeshOuter": {
+      "oracle": "topojson-client@3.1.0",
+      "kind": "topomesh",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            {
+              "arcs": [
+                [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
+                ],
+                [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ],
+                  [
+                    -1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ],
+                [
+                  [
+                    0,
+                    -1
+                  ],
+                  [
+                    -1,
+                    0
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ]
+              ],
+              "objects": {
+                "border": {
+                  "arcs": [
+                    1
+                  ],
+                  "type": "LineString"
+                },
+                "point": {
+                  "coordinates": [
+                    2,
+                    3
+                  ],
+                  "type": "Point"
+                },
+                "squares": {
+                  "geometries": [
+                    {
+                      "arcs": [
+                        [
+                          0,
+                          1,
+                          -5
+                        ]
+                      ],
+                      "id": "L",
+                      "properties": {
+                        "name": "left"
+                      },
+                      "type": "Polygon"
+                    },
+                    {
+                      "arcs": [
+                        [
+                          -2,
+                          2,
+                          3
+                        ]
+                      ],
+                      "properties": {
+                        "name": "right"
+                      },
+                      "type": "Polygon"
+                    }
+                  ],
+                  "type": "GeometryCollection"
+                }
+              },
+              "transform": {
+                "scale": [
+                  10,
+                  10
+                ],
+                "translate": [
+                  0,
+                  0
+                ]
+              },
+              "type": "Topology"
+            },
+            "squares"
+          ],
+          "variant": "interior",
+          "want": {
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ]
+              ],
+              [
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ]
+              ],
+              [
+                [
+                  -10,
+                  0
+                ],
+                [
+                  -10,
+                  -10
+                ],
+                [
+                  0,
+                  -10
+                ],
+                [
+                  -10,
+                  -10
+                ],
+                [
+                  0,
+                  -10
+                ]
+              ]
+            ],
+            "type": "MultiLineString"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,7 +1,7 @@
 /**
  * Opt-in data-loading addon. Importing (or dynamic-importing) this module
- * registers the text-format readers (csv/tsv/dsv via d3-dsv, topojson via
- * topojson-client) and provides `loadSpecData`, which resolves every `url`
+ * registers the text-format readers (csv/tsv/dsv via the owned d3-dsv port,
+ * topojson via the owned topojson-client port) and provides `loadSpecData`, which resolves every `url`
  * dataset in a spec into inline values:
  *
  *   import { loadSpecData } from '@aster/core/load'
@@ -11,8 +11,8 @@
  * (vega-loader-identical semantics ship in the core); csv/tsv/dsv/topojson
  * strings and URL datasets need it.
  */
-import { dsvFormat } from 'd3-dsv'
-import { feature as topoFeature, mesh as topoMesh } from 'topojson-client'
+import { dsvFormat } from './dsv.js'
+import { feature as topoFeature, mesh as topoMesh } from './topojson.js'
 import { dataFormatRegistry } from './registry.js'
 import { readData, type DataFormatSpec, type inferTypes as _inferTypes } from './data-format.js'
 import type { VgSpec } from './types.js'
