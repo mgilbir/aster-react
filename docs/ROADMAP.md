@@ -92,10 +92,32 @@ Aster React already owns its top layer — spec compiler, eager runtime, scene, 
 serializer, bounds, transforms, DOM patcher, signals. The from-scratch work is the
 **library layer beneath it** and the **Vega-Lite compiler beside it**.
 
-### Runtime dependency audit (what must go)
+### Runtime dependency audit
 
-| Borrowed package | Used in | What it supplies | Replacement is |
+The ratchet (`scripts/check-deps.mjs` + per-package `dep-baseline.json`) tracks this
+table; the two must agree.
+
+| Borrowed package | Used in | Status | Replacement |
 |---|---|---|---|
+| `vega-util` | `data-format.ts`, `expression.ts` | **replaced** — `src/util.ts` (PR 1) | coercion, predicates, access paths, `extent`/`ascending`, `pluck` |
+| `d3-color` | `expression.ts` | **replaced** — `src/color.ts` (PR 2) | CSS parse, RGB/HSL/Lab/HCL |
+| `vega-time` + `d3-time` | `expression.ts` | **replaced** — `src/time.ts` (PR 3) | interval engine, units, floors, offsets, sequences |
+| `vega-format` + `d3-format` + `d3-time-format` | `expression.ts`, `runtime.ts` | **replaced** — `src/format.ts`, `src/time-format.ts`, `src/locale.ts` (PR 4) | specifier grammar, strftime engine, locale facade |
+| `vega-expression` + `vega-interpreter` | `expression.ts` | **replaced** — `src/expr-parser.ts`, `src/expr-interpreter.ts` (PR 5) | the DSL parser and CSP-safe evaluator |
+| `d3-dsv` + `topojson-client` | `addon-load.ts` | **replaced** — `src/dsv.ts`, `src/topojson.ts` (PR 6) | DSV state machine, TopoJSON feature/mesh |
+| `d3-shape` | `render.ts` | **replaced** — `src/shape.ts` (PR 7) | Path serializer, line/area, 19 curve families |
+| `vega-scale` | `scales.ts`, `runtime.ts` | **remaining** | 16 scale types, tick generation, 68 schemes |
+| `d3-geo` | `geo.ts` | **remaining** (addon) | projections, geoPath, measures |
+| `d3-contour` | `addon-geo.ts` | **remaining** (addon) | marching squares |
+| `d3-array`, `d3-scale`, `d3-time`, `d3-time-format`, `d3-format` | declared, unused directly | **remaining** (manifest cleanup with their phases) | d3-array's `tickStep` already lives in `src/format.ts` |
+| `vega`, `vega-lite` | conformance/benchmarks/demo only | **keep** (the pinned oracle) | — |
+
+Oracle-vector totals: **4,822 cases** across nine recorded libraries, replayed on
+every `pnpm test` run; time-dependent suites carry the zone they were recorded
+under (America/New_York for the DST cases) and both sides pin `process.env.TZ`
+per suite.
+
+---|---|---|---|
 | `vega-expression` | `expression.ts` | expression lexer/parser → AST | own parser |
 | `vega-interpreter` | `expression.ts` | CSP-safe AST evaluator | own interpreter |
 | `vega-format` | `expression.ts`, `runtime.ts`, `data-format.ts` | locale, `format`/`timeFormat`/`tickFormat` | own d3-format/d3-time-format-compatible layer |
