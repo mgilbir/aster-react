@@ -12,7 +12,7 @@
  */
 import { parseExpression } from 'vega-expression'
 import { expressionInterpreter } from 'vega-interpreter'
-import { locale, defaultLocale } from 'vega-format'
+import { locale } from './locale.js'
 import { bandSpace } from 'vega-scale'
 import {
   timeOffset, utcOffset, timeSequence, utcSequence,
@@ -45,7 +45,11 @@ export interface ExpressionRuntime {
 
 export type CompiledExpr = (datum: unknown, params?: Record<string, unknown>, event?: unknown) => unknown
 
-const L = locale(defaultLocale)
+// The default locale — upstream's expression `format` goes through
+// vega-format's default locale (grouping included). The inherited code passed
+// the `defaultLocale` function itself as a locale definition, which silently
+// dropped grouping; the locale-vector suite pins the grouped behaviour.
+const L = locale()
 
 function isValid(value: unknown): boolean {
   return value != null && value === value

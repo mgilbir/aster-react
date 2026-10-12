@@ -39,7 +39,11 @@ import { fileURLToPath } from 'node:url'
 // (90 -> 92: the calendar module replaces vega-time + the d3-time interval
 // engine (intervals, floors, offsets, sequences, unit specifiers; DST covered
 // by vectors recorded under America/New_York) — ~1.8 kB gzip.)
-const BUDGET_BYTES = 92 * 1024
+// (92 -> 96: the format layer replaces vega-format + d3-format +
+// d3-time-format — specifier grammar, locale tables, the strftime engine, the
+// tick formatters (formatFloat/formatSpan) and the memoized locale facade;
+// 1749 oracle-vector cases — ~4.7 kB gzip.)
+const BUDGET_BYTES = 96 * 1024
 
 // Walk up from this file to find the monorepo root:
 // packages/benchmarks/scripts -> packages/benchmarks -> packages -> aster-react (root)

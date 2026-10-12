@@ -3,11 +3,9 @@
     "src/expression.ts": [
       "vega-expression",
       "vega-interpreter",
-      "vega-format",
       "vega-scale"
     ],
     "src/runtime.ts": [
-      "vega-format",
       "vega-scale"
     ],
     "src/scales.ts": [
@@ -39,7 +37,6 @@
     "d3-time-format",
     "topojson-client",
     "vega-expression",
-    "vega-format",
     "vega-interpreter",
     "vega-scale"
   ]

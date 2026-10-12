@@ -172,6 +172,9 @@ const vegaFunctions = await loadPkg('vega-functions')
 const d3Color = await loadPkg('d3-color')
 const vegaTime = await loadPkg('vega-time')
 const d3Time = await loadPkg('d3-time')
+const d3Format = await loadPkg('d3-format')
+const d3Array = await loadPkg('d3-array')
+const vegaFormat = await loadPkg('vega-format')
 
 const BACKSLASH = String.fromCharCode(92)
 /** The string `a\.b` (a, backslash, dot, b) — an escaped dot. */
@@ -488,13 +491,137 @@ const colorSuites = {
   ]),
 }
 
-// --- write -------------------------------------------------------------------
+// --- the d3-format + vega-format surface @aster/core reimplements ------------
 
-// One file per library, so a suite's growth does not churn unrelated diffs.
+const formatSpecs = [
+  'd', 'f', '.2f', '.0f', 'g', '.3g', 's', '.2s', 'e', '.2e', '%', '.1%',
+  'r', '.3r', 'p', '.2p', '~g', '~s', ',.2f', ',d', '08.3f', '>10.2f',
+  '<10.2f', '^10.2f', '=10.2f', '+$, .2f', '#x', '#o', '#X', 'b', 'n', '',
+  '.12g', '.1f', 'c', '5', '.5', ',', '~', 'x', 'X', 'o',
+]
+const invalidFormatSpecs = ['zzz', '.zzf', '10.2.3f', '#', '+', 'q']
+
+const formatValues = [
+  0, -0, 1, -1, 1.5, -1.5, 12345.678, 0.5, 2 / 3, 100, 255, 0.000001, 1e-7,
+  1e15, 1e21, 1e22, NaN, Infinity, -Infinity, -1234.5678, 987654321.123,
+  0.1, 1e-21, 42,
+]
+
+const specifierProjection = (spec) => {
+  const s = d3Format.formatSpecifier(spec)
+  return { ...s, str: s.toString() }
+}
+
+const fnSuiteTz = (pkg, cases, build) => ({
+  oracle: oracleOf(pkg),
+  kind: 'fn',
+  tz: TZ_UTC,
+  cases: cases.map((args) => ({ args: args.map(enc), want: enc(call(build, args)) })),
+})
+
+const formatSuites = {
+  // d3.format(spec)(value)
+  format: {
+    oracle: oracleOf('d3-format'),
+    kind: 'apply1',
+    tz: TZ_UTC,
+    cases: formatSpecs.flatMap((spec) => formatValues.map((v) => ({
+      args: [spec, v].map(enc),
+      want: enc(call((s, v) => d3Format.format(s)(v), [spec, v])),
+    }))),
+  },
+  // d3.formatPrefix(spec, value)(x)
+  formatPrefix: {
+    oracle: oracleOf('d3-format'),
+    kind: 'apply1',
+    tz: TZ_UTC,
+    cases: ['.2s', 's', '.0s', '.3s'].flatMap((spec) =>
+      [0, 1, 999, 1000, 1500, 1e6, 2.5e9, -3.7e12, 7e15].flatMap((ref) =>
+        [ref, ref * 0.5, 1].map((v) => ({
+          args: [spec, ref, v].map(enc),
+          want: enc(call((s, r, v) => d3Format.formatPrefix(s, r)(v), [spec, ref, v])),
+        })),
+      )),
+  },
+  formatSpecifier: {
+    oracle: oracleOf('d3-format'),
+    kind: 'specifier',
+    tz: TZ_UTC,
+    cases: [...formatSpecs, ...invalidFormatSpecs].map((spec) => ({
+      args: [spec].map(enc),
+      want: enc(call(specifierProjection, [spec])),
+    })),
+  },
+  precisionFixed: fnSuiteTz('d3-format', [[1], [0.1], [0.01], [0.001], [0.25], [1e-7], [10], [0], [NaN]], (s) => d3Format.precisionFixed(s)),
+  precisionPrefix: fnSuiteTz('d3-format', [[1, 1], [0.1, 100], [0.001, 2.5e9], [10, 1e3], [0.25, 50], [1e-7, 1e9]], (s, v) => d3Format.precisionPrefix(s, v)),
+  precisionRound: fnSuiteTz('d3-format', [[1, 10], [0.1, 100], [0.001, 2.5e9], [10, 1e3], [0.25, 50], [0.5, 0.75]], (s, m) => d3Format.precisionRound(s, m)),
+  // d3-array's tickStep backs formatSpan and (later) the scale ticks
+  tickStep: fnSuiteTz('d3-array', [[0, 1, 10], [0, 10, 3], [1, 0, 10], [0, 1, 5], [0.5, 1.5, 7], [-1, 1, 4], [0, 100, 7], [1.2, 3.4, 6], [0, 1, 1]], (a, b, c) => d3Array.tickStep(a, b, c)),
+}
+
+// --- the vega-format facade (locale) ------------------------------------------
+
+// The facade surface, bound to the default locale like a host would. Each
+// suite is built through tzSuite, which pins the zone BEFORE the cases are
+// computed - the recording zone is part of the pinned semantics.
+const localeFns = {
+  localeFormat: (spec) => vegaFormat.locale(undefined).format(spec),
+  localeFormatFloat: (spec) => vegaFormat.locale(undefined).formatFloat(spec),
+  localeFormatSpan: (a, b, c, spec) => vegaFormat.locale(undefined).formatSpan(a, b, c, spec),
+  localeTimeFormat: (spec) => vegaFormat.locale(undefined).timeFormat(spec),
+  localeUtcFormat: (spec) => vegaFormat.locale(undefined).utcFormat(spec),
+  localeTimeParse: (spec, str) => vegaFormat.locale(undefined).timeParse(spec)(str),
+  localeUtcParse: (spec, str) => vegaFormat.locale(undefined).utcParse(spec)(str),
+}
+
+const localeNumberSpecs = ['', ',', '.1f', '.2~f', '~g', '.3g', 'd', 's']
+const localeValues = [0, 1, -1, 0.25, 1234.5678, 1234567.89, -0.5]
+
+const localeSuites = {
+  localeFormat: tzSuite('apply1', 'vega-format', localeFns, 'localeFormat', TZ_UTC,
+    localeNumberSpecs.flatMap((spec) => localeValues.map((v) => [spec, v]))),
+  localeFormatFloat: tzSuite('apply1', 'vega-format', localeFns, 'localeFormatFloat', TZ_UTC,
+    ['', '~g', 'e', '%', '.2f', 's'].flatMap((spec) =>
+      [0, 1, 0.123456789012, 123456.789012345, -42.5].map((v) => [spec, v]))),
+  localeFormatSpan: tzSuite('apply1', 'vega-format', localeFns, 'localeFormatSpan', TZ_UTC,
+    [[0, 1, 10], [0, 100, 5], [0, 1e6, 8], [-50, 50, 6], [0, 0.5, 5]].flatMap(([start, stop, count]) =>
+      ['', 'f', 's', 'g', '.2f'].flatMap((spec) =>
+        [start, stop / 2, stop].map((v) => [start, stop, count, spec, v])))),
+  localeTimeFormat: tzSuite('apply1', 'vega-format', localeFns, 'localeTimeFormat', TZ_DST,
+    [
+      '%Y-%m-%d', '%H:%M:%S', '%I %p', '%B %Y', '%b %d', '%A', '%a', '%j',
+      '%U', '%W', '%V', '%G', '%C', '%Z', '%%', '%x', '%X', '%c', '%e', '%-d',
+      '%_m', '%0e', '%q', '%s', '%Q', '%L', '%f', '%y', '%g',
+    ].flatMap((spec) => dstDates.map((d) => [spec, d]))
+      .concat([
+        // multi-format objects pick a specifier per tick interval
+        { year: '%Y', month: '%b', date: '%d' },
+        { seconds: ':%S', minutes: '%H:%M', hours: '%H %p' },
+        {},
+      ].flatMap((spec) => dstDates.map((d) => [spec, d])))),
+  localeUtcFormat: tzSuite('apply1', 'vega-format', localeFns, 'localeUtcFormat', TZ_UTC,
+    ['%Y-%m-%dT%H:%M:%S', '%B %Y', '%H:%M', '%j', '%V', '%s'].flatMap((spec) => dstDates.map((d) => [spec, d]))),
+  localeTimeParse: tzSuite('fn', 'vega-format', localeFns, 'localeTimeParse', TZ_DST, [
+    ['%Y-%m-%d', '2024-03-10'], ['%m/%d/%Y', '03/10/2024'], ['%B %d, %Y', 'March 10, 2024'],
+    ['%b %d, %Y', 'Mar 10, 2024'], ['%H:%M', '14:30'], ['%I %p', '2 PM'],
+    ['%j', '070'], ['%U', '10'], ['%V', '11'], ['%G-W11-4', '2024-W11-4'],
+    ['%Y-%m-%dT%H:%M:%S', '2024-03-10T14:30:45'], ['%Y-%m-%dT%H:%M:%S%Z', '2024-03-10T14:30:45+0200'],
+    ['%Y-%m-%dT%H:%M:%S%Z', '2024-03-10T14:30:45Z'], ['%s', '1710082245'], ['%Q', '1710082245000'],
+    ['%A', 'Sunday'], ['%p', 'PM'], ['garbage', '2024-03-10'], ['%Y-%m-%d', 'not a date'],
+    ['%Y-%m-%d', '2024-03-10T12:00:00'], ['%d/%m/%Y', '10/13/2024'],
+  ]),
+  localeUtcParse: tzSuite('fn', 'vega-format', localeFns, 'localeUtcParse', TZ_UTC, [
+    ['%Y-%m-%dT%H:%M:%S', '2024-03-10T14:30:45'], ['%Y-%m-%d', '2024-03-10'],
+    ['%H:%M', '14:30'], ['%s', '1710082245'], ['%Y-%m-%dT%H:%M:%S%Z', '2024-03-10T14:30:45+0200'],
+  ]),
+}
+
 const files = {
   'vega-util.json': { suites: utilSuites },
   'd3-color.json': { suites: colorSuites },
   'vega-time.json': { suites: timeSuites },
+  'd3-format.json': { suites: formatSuites },
+  'vega-format.json': { suites: localeSuites },
 }
 
 const destDir = join(here, '..', '..', 'core', 'testdata', 'vectors')

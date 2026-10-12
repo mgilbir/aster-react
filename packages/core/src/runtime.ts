@@ -8,7 +8,7 @@ import { readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, sortRows, getField, type Row, geoJSONPath, computeBinStep, computeBinEps } from './transform.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
 import { geoRegistry, requireGeo } from './registry.js'
-import { locale } from 'vega-format'
+import { locale } from './locale.js'
 import type {
   CompiledAxis,
   CompiledChart,

@@ -128,12 +128,21 @@ importers:
       '@types/node':
         specifier: ^22.20.1
         version: 22.20.1
+      d3-array:
+        specifier: 3.2.4
+        version: 3.2.4
       d3-color:
         specifier: 3.1.0
         version: 3.1.0
+      d3-format:
+        specifier: 3.1.2
+        version: 3.1.2
       d3-time:
         specifier: 3.1.0
         version: 3.1.0
+      d3-time-format:
+        specifier: 4.1.0
+        version: 4.1.0
       tsx:
         specifier: ^4.19.0
         version: 4.23.4
@@ -197,9 +206,6 @@ importers:
       vega-expression:
         specifier: ^6.2.1
         version: 6.2.1
-      vega-format:
-        specifier: ^2.1.2
-        version: 2.1.2
       vega-interpreter:
         specifier: ^2.3.1
         version: 2.3.1

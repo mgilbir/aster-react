@@ -34,6 +34,12 @@ import {
   utcdayofyear, utcOffset, utcSequence, utcweek, week,
   type TimeInterval,
 } from './time.js'
+import {
+  format as numberFormat, formatPrefix as numberFormatPrefix, formatSpecifier,
+  precisionFixed, precisionPrefix, precisionRound, tickStep,
+  type FormatSpecifier,
+} from './format.js'
+import { locale, type Locale } from './locale.js'
 
 const vectorsDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'testdata', 'vectors')
 
@@ -42,7 +48,7 @@ interface VectorFile {
 }
 interface Suite {
   oracle: string
-  kind?: 'fn' | 'accessor' | 'color' | 'apply1' | 'interval'
+  kind?: 'fn' | 'accessor' | 'color' | 'apply1' | 'interval' | 'specifier'
   tz?: string
   cases: Array<{ args: unknown[]; want: unknown }>
 }
@@ -109,6 +115,19 @@ const fns: Record<string, (...args: any[]) => any> = {
   isObject, isRegExp, isString, extent, ascending, pluck,
   timeOffset, utcOffset, timeSequence, utcSequence, dayofyear, utcdayofyear,
   week, utcweek, timeUnitSpecifier, timeUnits, timeFloor, utcFloor,
+  formatSpecifier, precisionFixed, precisionPrefix, precisionRound, tickStep,
+  localeTimeParse: (spec: string, str: string) => locale().timeParse(spec)(str),
+  localeUtcParse: (spec: string, str: string) => locale().utcParse(spec)(str),
+}
+
+const applyFns: Record<string, (...args: any[]) => any> = {
+  format: (spec) => numberFormat(spec),
+  formatPrefix: (spec, ref) => numberFormatPrefix(spec, ref),
+  localeFormat: (spec) => locale().format(spec),
+  localeFormatFloat: (spec) => locale().formatFloat(spec),
+  localeFormatSpan: (a, b, c, spec) => locale().formatSpan(a, b, c, spec),
+  localeTimeFormat: (spec) => locale().timeFormat(spec),
+  localeUtcFormat: (spec) => locale().utcFormat(spec),
 }
 
 const accessorFactories: Record<string, (...args: any[]) => any> = { field }
@@ -200,12 +219,31 @@ for (const file of files) {
         continue
       }
       if (suite.kind === 'apply1') {
-        const fn = fns[name]
+        const fn = applyFns[name] ?? fns[name]
         if (!fn) throw new Error(`no port for apply1 suite "${name}"`)
         expectSuite(name, suite, (args, want) => {
-          // build with all but the last arg, apply to the last
-          const built = (fn as (...a: any[]) => any)(...args.slice(0, -1))
+          // build with all but the last arg, apply to the last; a malformed
+          // specifier throws at build time, and the throw is the recorded want
+          const built = call((fn as (...a: any[]) => any) as (...a: never[]) => unknown, args.slice(0, -1))
+          const thrown = built !== null && typeof built === 'object' && (built as { $?: string }).$ === 'throw'
+          if (thrown) {
+            expect(enc(built)).toEqual(want)
+            return
+          }
           expect(enc(call(built as (...a: never[]) => unknown, [args[args.length - 1]]))).toEqual(want)
+        })
+        continue
+      }
+      if (suite.kind === 'specifier') {
+        expectSuite(name, suite, (args, want) => {
+          // project the parsed specifier: every own field plus its string form
+          const spec = call(formatSpecifier, args) as FormatSpecifier | { $: string }
+          if (spec !== null && typeof spec === 'object' && (spec as { $?: string }).$ === 'throw') {
+            expect(enc(spec)).toEqual(want)
+            return
+          }
+          const s = spec as unknown as Record<string, unknown>
+          expect(enc({ ...s, str: s.toString?.() })).toEqual(want)
         })
         continue
       }
