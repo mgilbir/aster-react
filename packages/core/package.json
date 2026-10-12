@@ -37,8 +37,6 @@
   },
   "dependencies": {},
   "devDependencies": {
-    "@types/d3-contour": "^3.0.6",
-    "@types/d3-geo": "^3.1.1",
     "typescript": "^5.8.0",
     "vega": "^6.3.1",
     "vega-lite": "^6.4.3",
