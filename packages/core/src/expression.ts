@@ -17,7 +17,7 @@ import { bandSpace } from 'vega-scale'
 import {
   timeOffset, utcOffset, timeSequence, utcSequence,
   dayofyear, utcdayofyear, week, utcweek, timeUnitSpecifier,
-} from 'vega-time'
+} from './time.js'
 
 /** d3-array's range: arithmetic sequence [start, stop) by step. */
 function numericSequence(start: number, stop?: number, step?: number): number[] {

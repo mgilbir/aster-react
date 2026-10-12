@@ -56,12 +56,12 @@ function enc(v) {
   return v
 }
 
-/** Call fn, capturing a throw as a tagged value. */
+/** Call fn, capturing a throw as a tagged value (type and message both pinned). */
 function call(fn, args) {
   try {
     return fn(...args)
   } catch (err) {
-    return { $: 'throw', name: err.name }
+    return { $: 'throw', name: err.name, message: err.message }
   }
 }
 
@@ -170,6 +170,8 @@ async function loadPkg(pkgName) {
 const vegaUtil = await loadPkg('vega-util')
 const vegaFunctions = await loadPkg('vega-functions')
 const d3Color = await loadPkg('d3-color')
+const vegaTime = await loadPkg('vega-time')
+const d3Time = await loadPkg('d3-time')
 
 const BACKSLASH = String.fromCharCode(92)
 /** The string `a\.b` (a, backslash, dot, b) — an escaped dot. */
@@ -257,7 +259,184 @@ const utilSuites = {
   ]),
 }
 
-// --- the d3-color surface @aster/core reimplements ----------------------------
+// --- the vega-time + d3-time surface @aster/core reimplements -----------------
+// Suites carry the `tz` they were recorded under; the replay pins process.env.TZ
+// per suite (Node re-reads it). UTC covers the calendar engine; a DST-observing
+// zone covers the local-time paths, including the spring and autumn transitions.
+
+const TZ_UTC = 'UTC'
+const TZ_DST = 'America/New_York'
+
+function tzSuite(kind, pkgName, mod, name, tz, cases) {
+  const f = mod[name]
+  if (typeof f !== 'function') throw new Error(`oracle export missing: ${name}`)
+  const isApply1 = kind === 'apply1'
+  const apply = isApply1
+    ? (...a) => f(...a.slice(0, -1))(...a.slice(-1)) // build with all but the last arg, apply to the last
+    : (...a) => f(...a)
+  // Record under the zone the suite declares — local-time behaviour and DST
+  // transitions are part of the pinned semantics. Node re-reads TZ per call.
+  process.env.TZ = tz
+  return {
+    oracle: oracleOf(pkgName),
+    kind,
+    tz,
+    cases: cases.map((args) => ({ args: args.map(enc), want: enc(call(apply, args)) })),
+  }
+}
+
+// Timestamps chosen to straddle the 2024 US transitions (2024-03-10 02:00 local,
+// 2024-11-03 02:00 local) plus an ambiguous/absolute pair for each.
+const dstDates = [
+  '2024-03-09T12:00:00Z', '2024-03-10T05:30:00Z', '2024-03-10T06:30:00Z',
+  '2024-11-02T12:00:00Z', '2024-11-03T04:30:00Z', '2024-11-03T05:30:00Z',
+  '2024-01-15T12:00:00Z', '2024-07-15T12:00:00Z', '1970-01-01T00:00:00Z',
+  '1999-12-31T23:59:59Z', '2000-02-29T00:00:00Z',
+].map((s) => new Date(s))
+
+const unitsList = [
+  ['year'], ['quarter'], ['month'], ['week'], ['date'], ['day'], ['hours'],
+  ['minutes'], ['seconds'], ['milliseconds'], ['year', 'month', 'date'],
+  ['year', 'month'], ['year', 'hours'], ['hours', 'minutes'],
+  ['year', 'month', 'date', 'hours', 'minutes', 'seconds'],
+  ['year', 'quarter'], ['year', 'week', 'day'], ['year', 'dayofyear'],
+  ['year', 'date', 'hours'], ['seconds', 'minutes', 'hours'],
+]
+
+const offsetCases = []
+for (const unit of ['year', 'quarter', 'month', 'week', 'date', 'day', 'hours', 'minutes', 'seconds', 'milliseconds']) {
+  for (const d of dstDates) {
+    offsetCases.push([unit, d, 1], [unit, d, 3], [unit, d, -2], [unit, d, 12])
+  }
+}
+
+const sequenceUnits = [
+  // [unit, start, stop, step] — windows sized to the unit so a sequence stays
+  // in the thousands of entries, not the hundreds of millions
+  ['year', '2000-01-01T00:00:00Z', '2012-01-01T00:00:00Z'],
+  ['quarter', '2023-01-01T00:00:00Z', '2024-10-01T00:00:00Z'],
+  ['month', '2023-01-01T00:00:00Z', '2024-10-01T00:00:00Z'],
+  ['week', '2024-01-01T00:00:00Z', '2024-03-15T00:00:00Z'],
+  ['date', '2024-01-01T00:00:00Z', '2024-01-20T00:00:00Z'],
+  ['hours', '2024-03-08T00:00:00Z', '2024-03-13T00:00:00Z'],
+  ['minutes', '2024-03-10T05:00:00Z', '2024-03-10T05:30:00Z'],
+  ['seconds', '2024-03-10T05:29:00Z', '2024-03-10T05:29:30Z'],
+  ['milliseconds', '2024-03-10T05:29:00.000Z', '2024-03-10T05:29:00.100Z'],
+  ['year', '2023-01-01T00:00:00Z', '2031-01-01T00:00:00Z', 2],
+  ['month', '2023-01-01T00:00:00Z', '2024-10-01T00:00:00Z', 3],
+  ['date', '2024-03-08T00:00:00Z', '2024-03-20T00:00:00Z', 2],
+  ['hours', '2024-11-01T00:00:00Z', '2024-11-06T00:00:00Z', 6],
+  ['date', '2024-06-01T00:00:00Z', '2024-06-10T00:00:00Z', 0],
+  ['minutes', '2024-03-10T05:00:00Z', '2024-03-10T05:01:00Z', 30],
+]
+const sequenceCases = sequenceUnits.map((u) => [
+  u[0], new Date(u[1]), new Date(u[2]), u[3] !== undefined ? Number(u[3]) : undefined,
+])
+
+const floorCases = []
+for (const units of unitsList) {
+  for (const d of dstDates.slice(0, 8)) {
+    floorCases.push([units, undefined, d], [units, 5, d], [units, 3, d])
+  }
+}
+// 'year' with step 5 floors across 2024 fine; 'hours'/'minutes' steps are the
+// interesting ones under DST.
+
+const dayHelpers = dstDates.map((d) => [d])
+
+const specifierCases = [
+  [['year']], [['year', 'month']], [['year', 'month', 'date']],
+  [['year', 'quarter']], [['year', 'week', 'day']], [['hours', 'minutes']],
+  [['year', 'month', 'date', 'hours', 'minutes', 'seconds', 'milliseconds']],
+  [['year', 'date']], [['month', 'date']], [['dayofyear']],
+  [['year', 'month'], { year: 'Y', month: 'M' }],
+  [['hours', 'minutes', 'seconds'], { hours: 'H', minutes: 'M', seconds: 'S' }],
+]
+
+const unitValidation = [
+  [['year']], [['month', 'year']], [['nope']], [[]],
+  [['year', 'week']], [['week', 'day']], [['year', 'quarter', 'date']],
+  [['date', 'dayofyear']], [['hours', 'date', 'month']], [['year', 'hours', 'minutes']],
+]
+
+const intervalOps = [
+  ['floor', '2024-03-10T05:30:00Z', undefined],
+  ['ceil', '2024-03-10T05:30:00Z', undefined],
+  ['round', '2024-03-10T05:30:00Z', undefined],
+  ['offset', '2024-03-10T05:30:00Z', 2],
+  ['offset', '2024-11-03T04:30:00Z', -3],
+]
+
+const timeSuites = {
+  timeOffset: tzSuite('fn', 'vega-time', vegaTime, 'timeOffset', TZ_DST, offsetCases),
+  utcOffset: tzSuite('fn', 'vega-time', vegaTime, 'utcOffset', TZ_UTC, offsetCases),
+  timeSequence: tzSuite('fn', 'vega-time', vegaTime, 'timeSequence', TZ_DST, sequenceCases),
+  utcSequence: tzSuite('fn', 'vega-time', vegaTime, 'utcSequence', TZ_UTC, sequenceCases),
+  dayofyear: tzSuite('fn', 'vega-time', vegaTime, 'dayofyear', TZ_DST, dayHelpers),
+  week: tzSuite('fn', 'vega-time', vegaTime, 'week', TZ_DST, dayHelpers),
+  utcdayofyear: tzSuite('fn', 'vega-time', vegaTime, 'utcdayofyear', TZ_UTC, dayHelpers),
+  utcweek: tzSuite('fn', 'vega-time', vegaTime, 'utcweek', TZ_UTC, dayHelpers),
+  timeUnitSpecifier: tzSuite('fn', 'vega-time', vegaTime, 'timeUnitSpecifier', TZ_UTC, specifierCases),
+  timeUnits: tzSuite('fn', 'vega-time', vegaTime, 'timeUnits', TZ_UTC, unitValidation),
+  // localDate/utcDate and the day/week helpers are internal to upstream's build;
+  // they are exercised transitively by the floor and offset suites above.
+  timeFloor: tzSuite('apply1', 'vega-time', vegaTime, 'timeFloor', TZ_DST, floorCases),
+  utcFloor: tzSuite('apply1', 'vega-time', vegaTime, 'utcFloor', TZ_UTC, floorCases),
+  d3Intervals: (() => {
+    process.env.TZ = TZ_DST
+    return {
+      oracle: oracleOf('d3-time'),
+      kind: 'interval',
+      tz: TZ_DST,
+      cases: ['timeMillisecond', 'timeSecond', 'timeMinute', 'timeHour', 'timeDay', 'timeWeek', 'timeMonth', 'timeYear']
+        .flatMap((unit) => intervalOps.map(([op, date, step]) => ({
+          args: [unit, op, new Date(date), step].filter((a) => a !== undefined).map(enc),
+          want: enc(callInterval(d3Time, unit, op, new Date(date), step)),
+        })))
+        .concat(
+          ['timeDay', 'timeWeek', 'timeMonth', 'timeYear'].flatMap((unit) => [
+            { args: [unit, 'count', new Date('2024-01-01'), new Date('2025-01-01')].map(enc), want: enc(callIntervalCount(d3Time, unit, '2024-01-01', '2025-01-01')) },
+            { args: [unit, 'range', new Date('2024-01-01'), new Date('2024-03-01')].map(enc), want: enc(callIntervalRange(d3Time, unit, '2024-01-01', '2024-03-01')) },
+            { args: [unit, 'every3_range', new Date('2024-01-01'), new Date('2024-07-01')].map(enc), want: enc(callIntervalEveryRange(d3Time, unit, '2024-01-01', '2024-07-01')) },
+          ]),
+        ),
+    }
+  })(),
+  utcIntervals: (() => {
+    process.env.TZ = TZ_UTC
+    return {
+      oracle: oracleOf('d3-time'),
+      kind: 'interval',
+      tz: TZ_UTC,
+      cases: ['utcMillisecond', 'utcSecond', 'utcMinute', 'utcHour', 'utcDay', 'utcWeek', 'utcMonth', 'utcYear']
+        .flatMap((unit) => intervalOps.map(([op, date, step]) => ({
+          args: [unit, op, new Date(date), step].filter((a) => a !== undefined).map(enc),
+          want: enc(callInterval(d3Time, unit, op, new Date(date), step)),
+        }))),
+    }
+  })(),
+}
+
+function callInterval(mod, unit, op, date, step) {
+  const ival = mod[unit]
+  if (op === 'floor') return ival.floor(date)
+  if (op === 'ceil') return ival.ceil(date)
+  if (op === 'round') return ival.round(date)
+  if (op === 'offset') return ival.offset(date, step)
+  throw new Error(`unsupported interval op ${op}`)
+}
+
+function callIntervalCount(mod, unit, start, end) {
+  return mod[unit].count(new Date(start), new Date(end))
+}
+
+function callIntervalRange(mod, unit, start, end) {
+  return mod[unit].range(new Date(start), new Date(end))
+}
+
+function callIntervalEveryRange(mod, unit, start, end) {
+  return mod[unit].every(3).range(new Date(start), new Date(end))
+}
 
 const parseSpecs = [
   // hex forms
@@ -315,6 +494,7 @@ const colorSuites = {
 const files = {
   'vega-util.json': { suites: utilSuites },
   'd3-color.json': { suites: colorSuites },
+  'vega-time.json': { suites: timeSuites },
 }
 
 const destDir = join(here, '..', '..', 'core', 'testdata', 'vectors')

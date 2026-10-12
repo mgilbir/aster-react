@@ -49,8 +49,7 @@
     "vega-expression": "^6.2.1",
     "vega-format": "^2.1.2",
     "vega-interpreter": "^2.3.1",
-    "vega-scale": "^8.1.2",
-    "vega-time": "^3.2.1"
+    "vega-scale": "^8.1.2"
   },
   "devDependencies": {
     "@types/d3-contour": "^3.0.6",

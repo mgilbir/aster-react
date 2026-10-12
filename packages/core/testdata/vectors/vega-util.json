@@ -567,6 +567,7 @@
           ],
           "want": {
             "$": "throw",
+            "message": "Cannot convert a Symbol value to a string",
             "name": "TypeError"
           }
         }
@@ -741,7 +742,7 @@
         },
         {
           "args": [
-            1791832639757
+            1791835089914
           ],
           "want": false
         }
@@ -1487,6 +1488,7 @@
           ],
           "want": {
             "$": "throw",
+            "message": "Cannot read properties of null (reading 'a')",
             "name": "TypeError"
           }
         }
@@ -1617,7 +1619,8 @@
           ],
           "want": {
             "$": "throw",
-            "name": "Error"
+            "name": "Error",
+            "message": "Access path missing closing bracket: a[b"
           }
         },
         {
@@ -1626,7 +1629,8 @@
           ],
           "want": {
             "$": "throw",
-            "name": "Error"
+            "name": "Error",
+            "message": "Access path missing open bracket: a]b"
           }
         },
         {
@@ -1635,7 +1639,8 @@
           ],
           "want": {
             "$": "throw",
-            "name": "Error"
+            "name": "Error",
+            "message": "Access path missing closing quote: a'b"
           }
         }
       ]

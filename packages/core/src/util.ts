@@ -44,6 +44,54 @@ export function isString(value: unknown): value is string {
   return typeof value === 'string'
 }
 
+export function isFunction(value: unknown): value is (...args: never[]) => unknown {
+  return typeof value === 'function'
+}
+
+// --- small collection helpers ------------------------------------------------
+
+/** Wrap a value in an array unless it already is one; `null`/`undefined` give `[]`. */
+export function array(_: unknown): unknown[] {
+  return _ != null ? (isArray(_) ? (_ as unknown[]).slice() : [_]) : []
+}
+
+/** A function returning the given value (the value itself if already a function). */
+export function constant<T>(_: T): (...args: never[]) => T {
+  return isFunction(_ as unknown) ? (_ as (...args: never[]) => T) : () => _
+}
+
+/** The last element of an array (`undefined` for empty). */
+export function peek<T>(array: readonly T[]): T | undefined {
+  return array[array.length - 1]
+}
+
+/** An object map of the array's (stringified) values to `true`. */
+export function toSet(_: readonly unknown[]): Record<string, true> {
+  const s: Record<string, true> = {}
+  const n = _.length
+  for (let i = 0; i < n; ++i) s[_[i] + ''] = true
+  return s
+}
+
+/**
+ * Copy the *own enumerable* properties of each source onto the target, in
+ * order — upstream's `extend` uses `for…in`, so prototype chains are walked
+ * for inherited enumerables too; plain sources behave like `Object.assign`.
+ */
+export function extend<T extends object>(_: T, ...args: unknown[]): T {
+  for (const arg of args) {
+    for (const k in arg as Record<string, unknown>) {
+      (_ as Record<string, unknown>)[k] = (arg as Record<string, unknown>)[k]
+    }
+  }
+  return _
+}
+
+/** Own-property check that never hits an inherited `hasOwnProperty`. */
+export function hasOwnProperty(object: unknown, property: string | number | symbol): boolean {
+  return Object.hasOwn(object as object, property)
+}
+
 // --- type coercion -----------------------------------------------------------
 
 /**
@@ -296,6 +344,17 @@ export function extent<T>(
   }
   return [min, max]
 }
+
+// --- accessors (constant accessor factories) ---------------------------------
+
+/** The `id` field accessor. */
+export const id = field('id')
+/** The identity accessor. */
+export const identity = accessor((_) => _, [], 'identity')
+export const zero = accessor(() => 0, [], 'zero')
+export const one = accessor(() => 1, [], 'one')
+export const truthy = accessor(() => true, [], 'true')
+export const falsy = accessor(() => false, [], 'false')
 
 // --- expression helpers ------------------------------------------------------
 

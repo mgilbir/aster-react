@@ -36,7 +36,10 @@ import { fileURLToPath } from 'node:url'
 // oracle-vector-tested) is the first owned library; it replaces d3-color and
 // costs ~3.5 kB gzip. Later owned libraries re-baseline this gate the same way,
 // each with its measured cost recorded here.)
-const BUDGET_BYTES = 90 * 1024
+// (90 -> 92: the calendar module replaces vega-time + the d3-time interval
+// engine (intervals, floors, offsets, sequences, unit specifiers; DST covered
+// by vectors recorded under America/New_York) — ~1.8 kB gzip.)
+const BUDGET_BYTES = 92 * 1024
 
 // Walk up from this file to find the monorepo root:
 // packages/benchmarks/scripts -> packages/benchmarks -> packages -> aster-react (root)

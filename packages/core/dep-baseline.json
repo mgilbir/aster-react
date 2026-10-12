@@ -4,8 +4,7 @@
       "vega-expression",
       "vega-interpreter",
       "vega-format",
-      "vega-scale",
-      "vega-time"
+      "vega-scale"
     ],
     "src/runtime.ts": [
       "vega-format",
@@ -42,7 +41,6 @@
     "vega-expression",
     "vega-format",
     "vega-interpreter",
-    "vega-scale",
-    "vega-time"
+    "vega-scale"
   ]
 }

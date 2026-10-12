@@ -131,6 +131,9 @@ importers:
       d3-color:
         specifier: 3.1.0
         version: 3.1.0
+      d3-time:
+        specifier: 3.1.0
+        version: 3.1.0
       tsx:
         specifier: ^4.19.0
         version: 4.23.4
@@ -203,9 +206,6 @@ importers:
       vega-scale:
         specifier: ^8.1.2
         version: 8.1.2
-      vega-time:
-        specifier: ^3.2.1
-        version: 3.2.1
     devDependencies:
       '@types/d3-contour':
         specifier: ^3.0.6

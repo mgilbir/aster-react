@@ -27,6 +27,13 @@ import {
   toDate, toNumber, toString, type Accessor,
 } from './util.js'
 import { color, gray, hcl, hsl, lab, lch, rgb } from './color.js'
+import {
+  millisecond, second, timeDay, timeFloor, timeHour, timeMinute, timeMonth,
+  timeWeek, timeYear, utcDay, utcFloor, utcHour, utcMinute, utcMonth, utcWeek,
+  utcYear, dayofyear, timeOffset, timeSequence, timeUnitSpecifier, timeUnits,
+  utcdayofyear, utcOffset, utcSequence, utcweek, week,
+  type TimeInterval,
+} from './time.js'
 
 const vectorsDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'testdata', 'vectors')
 
@@ -35,7 +42,8 @@ interface VectorFile {
 }
 interface Suite {
   oracle: string
-  kind?: 'fn' | 'accessor' | 'color'
+  kind?: 'fn' | 'accessor' | 'color' | 'apply1' | 'interval'
+  tz?: string
   cases: Array<{ args: unknown[]; want: unknown }>
 }
 
@@ -89,7 +97,7 @@ function call(fn: (...args: never[]) => unknown, args: unknown[]): unknown {
   try {
     return (fn as (...a: unknown[]) => unknown)(...args)
   } catch (err) {
-    return { $: 'throw', name: (err as Error).name }
+    return { $: 'throw', name: (err as Error).name, message: (err as Error).message }
   }
 }
 
@@ -99,12 +107,22 @@ function call(fn: (...args: never[]) => unknown, args: unknown[]): unknown {
 const fns: Record<string, (...args: any[]) => any> = {
   toBoolean, toDate, toNumber, toString, isArray, isBoolean, isDate, isNumber,
   isObject, isRegExp, isString, extent, ascending, pluck,
+  timeOffset, utcOffset, timeSequence, utcSequence, dayofyear, utcdayofyear,
+  week, utcweek, timeUnitSpecifier, timeUnits, timeFloor, utcFloor,
 }
 
 const accessorFactories: Record<string, (...args: any[]) => any> = { field }
 
 const colorFactories: Record<string, (...args: any[]) => any> = {
   parse: color, color, rgb, hsl, lab, hcl, gray, lch,
+}
+
+/** The d3-time interval names the suites reference, mapped to the port. */
+const intervals: Record<string, TimeInterval> = {
+  timeMillisecond: millisecond, timeSecond: second,
+  timeMinute, timeHour, timeDay, timeWeek, timeMonth, timeYear,
+  utcMillisecond: millisecond, utcSecond: second,
+  utcMinute, utcHour, utcDay, utcWeek, utcMonth, utcYear,
 }
 
 function colorFields(c: unknown): Record<string, unknown> {
@@ -135,6 +153,9 @@ function proj(c: unknown): unknown {
 function expectSuite(name: string, suite: Suite, run: (args: unknown[], want: unknown) => void): void {
   describe(name, () => {
     it(`matches ${suite.oracle} (${suite.cases.length} cases)`, () => {
+      // The suite records the zone it was pinned to (local-time behaviour,
+      // DST transitions); Node re-reads process.env.TZ per call.
+      if (suite.tz) process.env.TZ = suite.tz
       for (const { args, want } of suite.cases) run(args.map(dec), want)
     })
   })
@@ -155,6 +176,36 @@ for (const file of files) {
         if (!factory) throw new Error(`no port for color suite "${name}"`)
         expectSuite(name, suite, (args, want) => {
           expect(enc(proj(call(factory, args)))).toEqual(want)
+        })
+        continue
+      }
+      if (suite.kind === 'interval') {
+        expectSuite(name, suite, (args, want) => {
+          const [unit, op, a, b] = args as [string, string, Date, number]
+          const ival = intervals[unit]
+          if (!ival) throw new Error(`no interval "${unit}"`)
+          let got: unknown
+          switch (op) {
+            case 'floor': got = ival.floor(a); break
+            case 'ceil': got = ival.ceil(a); break
+            case 'round': got = ival.round(a); break
+            case 'offset': got = ival.offset(a, b); break
+            case 'count': got = ival.count!(a, b); break
+            case 'range': got = ival.range(a, b); break
+            case 'every3_range': got = ival.every!(3)!.range(a, b); break
+            default: throw new Error(`unsupported interval op "${op}"`)
+          }
+          expect(enc(got)).toEqual(want)
+        })
+        continue
+      }
+      if (suite.kind === 'apply1') {
+        const fn = fns[name]
+        if (!fn) throw new Error(`no port for apply1 suite "${name}"`)
+        expectSuite(name, suite, (args, want) => {
+          // build with all but the last arg, apply to the last
+          const built = (fn as (...a: any[]) => any)(...args.slice(0, -1))
+          expect(enc(call(built as (...a: never[]) => unknown, [args[args.length - 1]]))).toEqual(want)
         })
         continue
       }
