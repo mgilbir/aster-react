@@ -94,11 +94,31 @@ serializer, bounds, transforms, DOM patcher, signals. The from-scratch work is t
 
 ### Runtime dependency audit
 
-The ratchet (`scripts/check-deps.mjs` + per-package `dep-baseline.json`) tracks this
-table; the two must agree.
+**COMPLETE.** `@aster/core` has zero runtime dependencies on `vega-*`, `d3-*`, or
+`topojson-*`. The ratchet (`scripts/check-deps.mjs`, per-package
+`dep-baseline.json`) holds with an empty baseline and fails CI on any banned
+import or dependency.
 
-| Borrowed package | Used in | Status | Replacement |
-|---|---|---|---|
+| Borrowed package | Replacement | Verified by |
+|---|---|---|
+| `vega-util` | `src/util.ts` | util vectors |
+| `d3-color` | `src/color.ts` | colour projections |
+| `vega-time` + `d3-time` | `src/time.ts` | interval/DST vectors (America/New_York) |
+| `vega-format` + `d3-format` + `d3-time-format` | `src/format.ts`, `src/time-format.ts`, `src/locale.ts` | specifier + locale vectors |
+| `vega-expression` + `vega-interpreter` | `src/expr-parser.ts`, `src/expr-interpreter.ts` | AST + eval vectors |
+| `d3-dsv` + `topojson-client` | `src/dsv.ts`, `src/topojson.ts` | DSV + topology vectors |
+| `d3-shape` | `src/shape.ts` | 256 curve/line/area vectors |
+| `vega-scale` (d3-scale, d3-array, d3-interpolate, internmap) | `src/arr.ts`, `src/interp.ts`, `src/scale-d3.ts`, `src/scale.ts` | 173 scale/scheme/tick vectors |
+| `d3-geo` | `src/geo-lib.ts`, `src/geo-projections.ts` | 18 projection/vector op-program cases |
+| `d3-contour` | `src/contour.ts` | 30 marching-squares cases |
+
+**5,043 oracle-vector cases** recorded from pinned upstream packages replay on
+every `pnpm test` run. Time-dependent suites carry the zone they were recorded
+under (America/New_York for the DST cases). SVG conformance against real Vega
+holds at 413/413, and the bundle sits at 82.5 kB gzip against the 96 kB budget —
+smaller than the borrowed tree it replaced.
+
+---|---|---|---|
 | `vega-util` | `data-format.ts`, `expression.ts` | **replaced** — `src/util.ts` (PR 1) | coercion, predicates, access paths, `extent`/`ascending`, `pluck` |
 | `d3-color` | `expression.ts` | **replaced** — `src/color.ts` (PR 2) | CSS parse, RGB/HSL/Lab/HCL |
 | `vega-time` + `d3-time` | `expression.ts` | **replaced** — `src/time.ts` (PR 3) | interval engine, units, floors, offsets, sequences |
