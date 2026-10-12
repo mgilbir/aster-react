@@ -44,6 +44,7 @@ import { parseExpression, type AstNode } from './expr-parser.js'
 import { interpret } from './expr-interpreter.js'
 import { dsvFormat } from './dsv.js'
 import { feature as topoFeature, mesh as topoMesh } from './topojson.js'
+import * as scalePort from './scale.js'
 import {
   line as shapeLine, area as shapeArea, curveBasis, curveBasisClosed, curveBasisOpen,
   curveBundle, curveCardinal, curveCardinalClosed, curveCardinalOpen, curveCatmullRom,
@@ -73,7 +74,7 @@ interface TopoObjectLike {
 
 interface Suite {
   oracle: string
-  kind?: 'fn' | 'accessor' | 'color' | 'apply1' | 'interval' | 'specifier' | 'ast' | 'eval' | 'dsvcustom' | 'topomesh'
+  kind?: 'fn' | 'accessor' | 'color' | 'apply1' | 'interval' | 'specifier' | 'ast' | 'eval' | 'dsvcustom' | 'topomesh' | 'scale' | 'vsticks'
   variant?: string
   tz?: string
   cases: Array<{ args: unknown[]; want: unknown; variant?: string }>
@@ -159,6 +160,16 @@ const fns: Record<string, (...args: any[]) => any> = {
   topoFeatureCollection: (topology: never) => topoFeature(topology, (topology as { objects: { squares: never } }).objects.squares),
   topoFeatureNamed: (topology: never, name: string) => topoFeature(topology, name),
   topoMesh: (topology: never) => topoMesh(topology),
+  scheme: (name: string) => {
+    const s = scalePort.scheme(name)
+    if (Array.isArray(s)) return s
+    if (typeof s === 'function') {
+      const ts: unknown[] = []
+      for (let i = 0; i <= 20; ++i) ts.push((s as (t: number) => unknown)(i / 20))
+      return ts
+    }
+    return s
+  },
   shape: (curveName: string, opts: Record<string, number>, points: number[][]) => {
     let factory = SHAPE_CURVES[curveName] as CurveFactory
     if (opts.beta !== undefined) factory = factory.beta!(opts.beta)
@@ -236,6 +247,62 @@ function expectSuite(name: string, suite: Suite, run: (args: unknown[], want: un
       for (const { args, want, variant } of suite.cases) run(args.map(dec), want, { variant })
     })
   })
+}
+
+/**
+ * Execute a recorded op program against a scale from the port. Mirrors the
+ * generator's runScaleOps exactly: ops run in order, each op contributes one
+ * result, throws tagged.
+ */
+function runScaleOps(scaleApi: typeof scalePort, type: string, dates: boolean, ops: [string, ...unknown[]][]): unknown[] {
+  const s = (scaleApi.scale(type) as unknown as () => any)()
+  const results: unknown[] = []
+  const D = (v: unknown) => (dates && v != null ? new Date(v as number) : v)
+  for (const [name, ...args] of ops) {
+    results.push(
+      call(() => {
+        switch (name) {
+          case 'domain':
+            s.domain(dates ? (args[0] as number[]).map(D) : args[0])
+            return s.domain()
+          case 'range': s.range(args[0]); return s.range()
+          case 'rangeRound': s.rangeRound(args[0]); return s.range()
+          case 'clamp': return s.clamp(args[0])
+          case 'unknown': return s.unknown(args[0])
+          case 'nice': s.nice(args[0]); return s.domain()
+          case 'base': return s.base(args[0])
+          case 'exponent': return s.exponent(args[0])
+          case 'constant': return s.constant(args[0])
+          case 'round': return s.round(args[0])
+          case 'padding': return s.padding(args[0])
+          case 'paddingInner': return s.paddingInner(args[0])
+          case 'paddingOuter': return s.paddingOuter(args[0])
+          case 'align': return s.align(args[0])
+          case 'invert': return s.invert(D(args[0]))
+          case 'invertRange': return s.invertRange(args[0])
+          case 'invertExtent': return s.invertExtent(args[0])
+          case 'ticks': return s.ticks ? s.ticks(args[0] ?? undefined) : undefined
+          case 'tickFormat': {
+            const fmt = s.tickFormat(args[0] ?? undefined, args[1] ?? undefined)
+            return (args.slice(2) as unknown[]).map((v) => fmt(D(v)))
+          }
+          case 'copy': {
+            const c = s.copy()
+            c.domain(args[0] !== undefined ? (dates ? (args[0] as number[]).map(D) : args[0]) : s.domain())
+            return [c.domain(), s.domain(), c(s(args.length ? args[0] : undefined) === undefined ? null : (s.domain() as unknown[])[0])]
+          }
+          case 'bandwidth': return s.bandwidth()
+          case 'step': return s.step()
+          case 'thresholds': return s.thresholds()
+          case 'quantiles': return s.quantiles()
+          case 'bins': s.bins = args[0]; return s.bins
+          case 'call': return s(D(args[0]))
+          default: throw new Error('unknown op ' + name)
+        }
+      }, []),
+    )
+  }
+  return results
 }
 
 // --- load every vector file and replay by kind -------------------------------
@@ -364,6 +431,46 @@ for (const file of files) {
         expectSuite(name, suite, (args, want, extra) => {
           const [topology, objName] = args as [TopoObjectLike, string]
           const got = topoMesh(topology as never, (topology as { objects: Record<string, unknown> }).objects[objName] as never, filters[extra!.variant!] as never)
+          expect(enc(got)).toEqual(want)
+        })
+        continue
+      }
+      if (suite.kind === 'scale') {
+        expectSuite(name, suite, (args, want) => {
+          const [type, dates, ops] = args as [string, boolean, [string, ...unknown[]][]]
+          expect(enc(runScaleOps(scalePort, type, dates, ops))).toEqual(want)
+        })
+        continue
+      }
+      if (suite.kind === 'vsticks') {
+        const makeScale = (type: string, domain: unknown[], dates: boolean) => {
+          const s = (scalePort.scale(type) as () => any)()
+          s.domain(dates ? domain.map((v) => new Date(v as number)) : domain)
+          return s
+        }
+        expectSuite(name, suite, (args, want) => {
+          const [op, type, domain, a, b, c] = args as [string, string, unknown[], unknown, unknown, unknown]
+          let got: unknown
+          switch (op) {
+            case 'tickCount':
+              got = call(() => scalePort.tickCount(makeScale(type, domain, false), a as number, b == null ? undefined : (b as number)), [])
+              break
+            case 'tickValues':
+              got = call(() => scalePort.tickValues(makeScale(type, domain, c as boolean), a ?? undefined), [])
+              break
+            case 'tickValuesInterval':
+              got = call(() => {
+                const s = makeScale(type, domain, c as boolean)
+                const count = b != null ? { interval: a, step: b } : a
+                return scalePort.tickValues(s, scalePort.tickCount(s, count))
+              }, [])
+              break
+            case 'bandSpace':
+              got = call(() => scalePort.bandSpace(type as unknown as number, domain as unknown as number, a as unknown as number), [])
+              break
+            default:
+              throw new Error(`unsupported vsticks op "${op}"`)
+          }
           expect(enc(got)).toEqual(want)
         })
         continue

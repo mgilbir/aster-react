@@ -1,14 +1,5 @@
 {
   "imports": {
-    "src/expression.ts": [
-      "vega-scale"
-    ],
-    "src/runtime.ts": [
-      "vega-scale"
-    ],
-    "src/scales.ts": [
-      "vega-scale"
-    ],
     "src/addon-geo.ts": [
       "d3-contour"
     ],
@@ -17,13 +8,7 @@
     ]
   },
   "deps": [
-    "d3-array",
     "d3-contour",
-    "d3-format",
-    "d3-geo",
-    "d3-scale",
-    "d3-time",
-    "d3-time-format",
-    "vega-scale"
+    "d3-geo"
   ]
 }

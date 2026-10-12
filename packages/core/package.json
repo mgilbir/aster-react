@@ -36,14 +36,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "d3-array": "^3.2.4",
     "d3-contour": "^4.0.2",
-    "d3-format": "^3.1.0",
-    "d3-geo": "^3.1.1",
-    "d3-scale": "^4.0.2",
-    "d3-time": "^3.1.0",
-    "d3-time-format": "^4.1.0",
-    "vega-scale": "^8.1.2"
+    "d3-geo": "^3.1.1"
   },
   "devDependencies": {
     "@types/d3-contour": "^3.0.6",

@@ -11,7 +11,7 @@
  * and the format layer (`./locale.js`).
  */
 import { locale } from './locale.js'
-import { bandSpace } from 'vega-scale'
+import { bandSpace } from './scale.js'
 import { parseExpression } from './expr-parser.js'
 import { expressionInterpreter } from './expr-interpreter.js'
 import {

@@ -215,6 +215,17 @@ export const utcDay = timeInterval((date) => {
 })
 export const utcDays = utcDay.range
 
+export const unixDay = timeInterval((date) => {
+  date.setUTCHours(0, 0, 0, 0)
+}, (date, step) => {
+  date.setUTCDate(date.getUTCDate() + (step as number))
+}, (start, end) => {
+  return (+end - +start) / durationDay
+}, (date) => {
+  return Math.floor(+date / durationDay)
+})
+export const unixDays = unixDay.range
+
 function timeWeekday(i: number): TimeInterval {
   return timeInterval((date) => {
     date.setDate(date.getDate() - (date.getDay() + 7 - i) % 7)

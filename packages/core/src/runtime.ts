@@ -26,7 +26,7 @@ import type {
   SizeSpec,
   VgSpec,
 } from './types.js'
-import { tickFormat } from 'vega-scale'
+import { tickFormat } from './scale.js'
 import { compileChart } from './compiler.js'
 import { trellisLayout } from './trellis.js'
 import { boundAxisGroup, Bounds, boundLeaf } from './bounds.js'
@@ -3470,8 +3470,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // Outer background width = the wider of the label run (labels sit at x=18,
     // ~8px per character at 10px) and the title (11px bold, vega's estimate is
     // `~~(0.8 * len * fontSize)`).
-    const labelStrs = tickNums.map((t) => String(typeof t === 'number' ? t : 0))
-    const maxLabelLen = labelStrs.reduce((m, s) => Math.max(m, s.length), 0)
+    const labelStrs = tickNums.map((t: unknown) => String(typeof t === 'number' ? t : 0))
+    const maxLabelLen = labelStrs.reduce((m: number, s: string) => Math.max(m, s.length), 0)
     const titleStr = String(legend.title ?? '')
     const titleWidth = titleStr.length > 0 ? ~~(0.8 * titleStr.length * 11) : 0
     const outerWidth = Math.max(18 + 8 * maxLabelLen, titleWidth)

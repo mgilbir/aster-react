@@ -182,30 +182,12 @@ importers:
 
   packages/core:
     dependencies:
-      d3-array:
-        specifier: ^3.2.4
-        version: 3.2.4
       d3-contour:
         specifier: ^4.0.2
         version: 4.0.2
-      d3-format:
-        specifier: ^3.1.0
-        version: 3.1.2
       d3-geo:
         specifier: ^3.1.1
         version: 3.1.1
-      d3-scale:
-        specifier: ^4.0.2
-        version: 4.0.2
-      d3-time:
-        specifier: ^3.1.0
-        version: 3.1.0
-      d3-time-format:
-        specifier: ^4.1.0
-        version: 4.1.0
-      vega-scale:
-        specifier: ^8.1.2
-        version: 8.1.2
     devDependencies:
       '@types/d3-contour':
         specifier: ^3.0.6

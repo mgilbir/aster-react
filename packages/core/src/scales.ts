@@ -1,8 +1,9 @@
 /**
- * Scale construction. Reuses `vega-scale` (pure: d3 + vega-util/vega-time only)
- * so scale types, schemes, and tick logic match vega exactly.
+ * Scale construction. The scale layer is owned (ported from d3-scale and
+ * vega-scale behind oracle vectors) so scale types, schemes, and tick logic
+ * match vega exactly.
  */
-import * as vs from 'vega-scale'
+import * as vs from './scale.js'
 import type { CompiledScale, ScaleDomain, ScaleRange } from './types.js'
 
 export type Scale = vs.Scale
@@ -158,7 +159,7 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   if (c.base != null) s.base?.(c.base)
 
   // Set scale.bins if specified in the scale config.
-  // When scale.bins is set, vega-scale's tickValues/tickCount functions
+  // When scale.bins is set, the tickValues/tickCount helpers
   // use validTicks(scale, scale.bins, count) instead of scale.ticks(count),
   // which generates ticks from the actual bin boundaries.
   if (c.bins) {
