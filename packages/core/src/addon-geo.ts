@@ -11,7 +11,7 @@
  */
 import { geoRegistry, type ContourFeature } from './registry.js'
 import { buildProjection, projectedPath } from './geo.js'
-import { contours as d3Contours } from 'd3-contour'
+import d3Contours from './contour.js'
 
 geoRegistry.buildProjection = (spec, width, height) =>
   buildProjection(spec as Parameters<typeof buildProjection>[0], width, height)

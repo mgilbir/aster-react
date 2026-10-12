@@ -134,12 +134,18 @@ importers:
       d3-color:
         specifier: 3.1.0
         version: 3.1.0
+      d3-contour:
+        specifier: 4.0.2
+        version: 4.0.2
       d3-dsv:
         specifier: 3.0.1
         version: 3.0.1
       d3-format:
         specifier: 3.1.2
         version: 3.1.2
+      d3-geo:
+        specifier: 3.1.1
+        version: 3.1.1
       d3-shape:
         specifier: 3.2.0
         version: 3.2.0
@@ -181,13 +187,6 @@ importers:
         version: 2.1.2
 
   packages/core:
-    dependencies:
-      d3-contour:
-        specifier: ^4.0.2
-        version: 4.0.2
-      d3-geo:
-        specifier: ^3.1.1
-        version: 3.1.1
     devDependencies:
       '@types/d3-contour':
         specifier: ^3.0.6

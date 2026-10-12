@@ -270,6 +270,56 @@ export function quantileSorted<V>(values: readonly V[], p: number, valueof: (d: 
   return value0 + (value1 - value0) * (i - i0)
 }
 
+/**
+ * Exact floating-point summation (d3-array's Adder, via fsum.js).
+ * https://github.com/python/cpython/blob/a74eea238f5baba15797e2e8b570d153bc8690a7/Modules/mathmodule.c#L1423
+ */
+export class Adder {
+  private readonly _partials = new Float64Array(32)
+  private _n = 0
+  add(x: number): this {
+    const p = this._partials
+    let i = 0
+    for (let j = 0; j < this._n && j < 32; j++) {
+      const y = p[j]!
+      const hi = x + y
+      const lo = Math.abs(x) < Math.abs(y) ? x - (hi - y) : y - (hi - x)
+      if (lo) p[i++] = lo
+      x = hi
+    }
+    p[i] = x
+    this._n = i + 1
+    return this
+  }
+  valueOf(): number {
+    const p = this._partials
+    let n = this._n
+    let x: number, y: number, lo = 0, hi = 0
+    if (n > 0) {
+      hi = p[--n]!
+      while (n > 0) {
+        x = hi
+        y = p[--n]!
+        hi = x + y
+        lo = y - (hi - x)
+        if (lo) break
+      }
+      if (n > 0 && ((lo < 0 && p[n - 1]! < 0) || (lo > 0 && p[n - 1]! > 0))) {
+        y = lo * 2
+        x = hi + y
+        if (y == x - hi) hi = x
+      }
+    }
+    return hi
+  }
+}
+
+export function merge(arrays: readonly unknown[][]): unknown[] {
+  const out: unknown[] = []
+  for (const a of arrays) for (const v of a) out.push(v)
+  return out
+}
+
 // ---- internmap (2.0.3) ------------------------------------------------------
 
 function keyof(value: unknown): unknown {

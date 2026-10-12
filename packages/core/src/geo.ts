@@ -1,15 +1,25 @@
 /**
- * Cartographic projections for geo marks, built on d3-geo (the same library
- * vega uses). A projection turns lon/lat geometry into pixel coordinates; the
- * geoshape transform / shape marks then render it to an SVG path.
+ * Cartographic projections for geo marks, built on the owned d3-geo port (the
+ * same library vega uses). A projection turns lon/lat geometry into pixel
+ * coordinates; the geoshape transform / shape marks then render it to an SVG
+ * path.
  */
 import {
-  geoPath, geoAlbers, geoAlbersUsa, geoAzimuthalEqualArea,
-  geoAzimuthalEquidistant, geoConicConformal,
-  geoConicEqualArea, geoConicEquidistant, geoEqualEarth, geoEquirectangular,
-  geoGnomonic, geoMercator, geoNaturalEarth1, geoOrthographic, geoStereographic,
-  geoTransverseMercator, type GeoProjection,
-} from 'd3-geo'
+  geoPath, albers as geoAlbers, albersUsa as geoAlbersUsa,
+  azimuthalEqualArea as geoAzimuthalEqualArea,
+  azimuthalEquidistant as geoAzimuthalEquidistant,
+  conicConformal as geoConicConformal,
+  conicEqualArea as geoConicEqualArea,
+  conicEquidistant as geoConicEquidistant,
+  equalEarth as geoEqualEarth, equirectangular as geoEquirectangular,
+  gnomonic as geoGnomonic, mercator as geoMercatorDefault,
+  naturalEarth1 as geoNaturalEarth1, orthographic as geoOrthographic,
+  stereographic as geoStereographic, transverseMercator as geoTransverseMercator,
+} from './geo-projections.js'
+
+type GeoProjection = any
+
+const geoMercator: () => any = geoMercatorDefault
 
 type Factory = () => GeoProjection
 const FACTORIES: Record<string, Factory> = {

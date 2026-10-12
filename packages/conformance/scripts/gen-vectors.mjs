@@ -1320,6 +1320,138 @@ const scaleSuites = {
   },
 }
 
+
+// --- the d3-geo / d3-contour surface @aster/core reimplements -----------------
+
+const d3Geo = await loadPkg('d3-geo')
+const d3Contour = await loadPkg('d3-contour')
+
+// Shared GeoJSON samples, referenced by name in the op programs.
+const geoSamples = {
+  poly1: { type: 'Polygon', coordinates: [[[-10, -10], [10, -10], [10, 10], [-10, 10], [-10, -10]]] },
+  polyAntimeridian: { type: 'Polygon', coordinates: [[[170, -20], [-170, -20], [-170, 20], [170, 20], [170, -20]]] },
+  mpoly: { type: 'MultiPolygon', coordinates: [
+    [[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]],
+    [[[20, 20], [30, 20], [30, 30], [20, 30], [20, 20]]],
+  ] },
+  line: { type: 'LineString', coordinates: [[-120, 40], [-100, 35], [-80, 30], [-60, 45]] },
+  points: { type: 'MultiPoint', coordinates: [[0, 0], [45, 45], [-120, -60], [179.9, 60]] },
+  sphere: { type: 'Sphere' },
+}
+geoSamples.feature = { type: 'Feature', geometry: geoSamples.poly1 }
+geoSamples.collection = { type: 'FeatureCollection', features: [
+  { type: 'Feature', geometry: geoSamples.poly1 },
+  { type: 'Feature', geometry: geoSamples.line },
+] }
+
+/**
+ * Run a recorded op program against a d3-geo projection. Mirrors the replay:
+ * each op contributes one result (path strings, measures, projected points).
+ */
+function runGeoOps(type, ops) {
+  const factories = {
+    albers: d3Geo.geoAlbers, albersUsa: d3Geo.geoAlbersUsa,
+    azimuthalEqualArea: d3Geo.geoAzimuthalEqualArea, azimuthalEquidistant: d3Geo.geoAzimuthalEquidistant,
+    conicConformal: d3Geo.geoConicConformal, conicEqualArea: d3Geo.geoConicEqualArea,
+    conicEquidistant: d3Geo.geoConicEquidistant, equalEarth: d3Geo.geoEqualEarth,
+    equirectangular: d3Geo.geoEquirectangular, gnomonic: d3Geo.geoGnomonic,
+    mercator: d3Geo.geoMercator, naturalEarth1: d3Geo.geoNaturalEarth1,
+    orthographic: d3Geo.geoOrthographic, stereographic: d3Geo.geoStereographic,
+    transverseMercator: d3Geo.geoTransverseMercator,
+  }
+  const p = factories[type]()
+  const results = []
+  for (const [name, ...args] of ops) {
+    results.push(
+      call(() => {
+        switch (name) {
+          case 'scale': p.scale(args[0]); return p.scale()
+          case 'translate': p.translate(args[0]); return p.translate()
+          case 'center': p.center(args[0]); return p.center()
+          case 'rotate': p.rotate(args[0]); return p.rotate()
+          case 'precision': p.precision(args[0]); return p.precision()
+          case 'clipAngle': p.clipAngle(args[0]); return p.clipAngle()
+          case 'parallels': p.parallels(args[0]); return p.parallels()
+          case 'reflectX': p.reflectX(args[0]); return p.reflectX()
+          case 'reflectY': p.reflectY(args[0]); return p.reflectY()
+          case 'path': return d3Geo.geoPath(p)(geoSamples[args[0]])
+          case 'area': return d3Geo.geoPath(p).area(geoSamples[args[0]])
+          case 'bounds': return d3Geo.geoPath(p).bounds(geoSamples[args[0]])
+          case 'centroid': return d3Geo.geoPath(p).centroid(geoSamples[args[0]])
+          case 'measure': return d3Geo.geoPath(p).measure(geoSamples[args[0]])
+          case 'call': return p(args[0])
+          case 'invert': return p.invert ? p.invert(args[0]) : undefined
+          default: throw new Error('unknown geo op ' + name)
+        }
+      }, []),
+    )
+  }
+  return results
+}
+
+const geoPrograms = [
+  { type: 'mercator', ops: [['scale', 200], ['translate', [200, 150]], ['path', 'poly1'], ['call', [0, 0]], ['invert', [200, 150]], ['path', 'sphere'], ['bounds', 'poly1'], ['centroid', 'poly1'], ['area', 'poly1'], ['measure', 'line']] },
+  { type: 'mercator', ops: [['scale', 100], ['translate', [200, 150]], ['path', 'polyAntimeridian'], ['clipAngle', 60], ['path', 'polyAntimeridian'], ['precision', 0.1], ['path', 'line']] },
+  { type: 'mercator', ops: [['scale', 200], ['translate', [200, 150]], ['reflectX', true], ['path', 'poly1'], ['reflectY', true], ['path', 'poly1'], ['reflectX', false]] },
+  { type: 'mercator', ops: [['scale', 200], ['translate', [200, 150]], ['path', 'points'], ['path', 'feature'], ['path', 'collection']] },
+  { type: 'albers', ops: [['path', 'poly1'], ['call', [-96, 38.7]], ['invert', [480, 250]], ['centroid', 'mpoly'], ['bounds', 'mpoly']] },
+  { type: 'albersUsa', ops: [['path', 'poly1'], ['call', [-96, 38.7]], ['call', [-150, 62]], ['call', [-157, 20]], ['invert', [480, 250]], ['precision', 0.5], ['path', 'line']] },
+  { type: 'azimuthalEqualArea', ops: [['scale', 200], ['translate', [200, 150]], ['path', 'poly1'], ['path', 'sphere'], ['call', [0, 0]], ['invert', [200, 150]], ['clipAngle', 90], ['path', 'sphere']] },
+  { type: 'azimuthalEquidistant', ops: [['scale', 200], ['translate', [200, 150]], ['path', 'poly1'], ['call', [0, 90]], ['invert', [200, 150]]] },
+  { type: 'conicConformal', ops: [['scale', 200], ['translate', [200, 150]], ['path', 'poly1'], ['parallels', [30, 30]], ['call', [0, 30]], ['rotate', [10, -20]], ['path', 'poly1']] },
+  { type: 'conicEqualArea', ops: [['scale', 200], ['translate', [200, 150]], ['path', 'poly1'], ['call', [0, 33]], ['invert', [200, 150]]] },
+  { type: 'conicEquidistant', ops: [['scale', 200], ['translate', [200, 150]], ['path', 'poly1'], ['call', [0, 14]], ['invert', [200, 150]]] },
+  { type: 'equalEarth', ops: [['scale', 200], ['translate', [200, 150]], ['path', 'poly1'], ['path', 'sphere'], ['call', [0, 0]], ['invert', [200, 150]]] },
+  { type: 'equirectangular', ops: [['scale', 200], ['translate', [200, 150]], ['path', 'poly1'], ['call', [10, 20]], ['invert', [200, 150]], ['rotate', [0, 0, 45]], ['path', 'line']] },
+  { type: 'gnomonic', ops: [['scale', 200], ['translate', [200, 150]], ['path', 'poly1'], ['call', [0, 0]], ['invert', [200, 150]]] },
+  { type: 'naturalEarth1', ops: [['scale', 200], ['translate', [200, 150]], ['path', 'poly1'], ['path', 'sphere'], ['call', [0, 0]], ['invert', [200, 150]]] },
+  { type: 'orthographic', ops: [['scale', 200], ['translate', [200, 150]], ['path', 'poly1'], ['path', 'sphere'], ['call', [0, 45]], ['invert', [200, 150]], ['rotate', [-45, -30]], ['path', 'sphere']] },
+  { type: 'stereographic', ops: [['scale', 200], ['translate', [200, 150]], ['path', 'poly1'], ['call', [0, 0]], ['invert', [200, 150]]] },
+  { type: 'transverseMercator', ops: [['scale', 200], ['translate', [200, 150]], ['path', 'poly1'], ['call', [0, 0]], ['invert', [200, 150]], ['center', [10, 0]], ['path', 'poly1']] },
+]
+
+const geoCases = geoPrograms.map(({ type, ops }) => ({
+  args: [type, ops].map(enc),
+  want: enc(runGeoOps(type, ops)),
+}))
+
+// d3-contour: marching squares over fixed grids
+const contourGrids = {
+  peak: [0.1, 0.2, 0.3, 0.2, 0.1, 0.2, 0.5, 0.8, 0.5, 0.2, 0.3, 0.8, 1.0, 0.8, 0.3, 0.2, 0.5, 0.8, 0.5, 0.2, 0.1, 0.2, 0.3, 0.2, 0.1],
+  mixed: [1, 2, NaN, 4, 5, 6, 7, 8, 9, 1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 2, 3, 4, 5, 6, 7],
+  flat: new Array(16).fill(2.5),
+}
+const contourCases = []
+for (const [gridName, values] of Object.entries(contourGrids)) {
+  for (const size of [[5, 5], [4, 6]]) {
+    if (gridName === 'flat' && size[0] === 4) continue
+    for (const thresholds of [[0.3], [0.25, 0.5, 0.75], [0.5]]) {
+      for (const smooth of [true, false]) {
+        contourCases.push({
+          args: [values, thresholds, size, smooth].map(enc),
+          want: enc(call((v, t, s, sm) =>
+            d3Contour.contours().smooth(sm).size(s).thresholds(t)(v), [values, thresholds, size, smooth])),
+        })
+      }
+    }
+  }
+}
+
+const geoSuites = {
+  geo: {
+    oracle: oracleOf('d3-geo'),
+    kind: 'geo',
+    tz: TZ_UTC,
+    cases: geoCases,
+  },
+  contour: {
+    oracle: oracleOf('d3-contour'),
+    kind: 'contour',
+    tz: TZ_UTC,
+    cases: contourCases,
+  },
+}
+
 const files = {
   'vega-util.json': { suites: utilSuites },
   'd3-color.json': { suites: colorSuites },
@@ -1331,6 +1463,7 @@ const files = {
   'topojson-client.json': { suites: topoSuites },
   'd3-shape.json': { suites: d3ShapeSuites },
   'vega-scale.json': { suites: scaleSuites },
+  'd3-geo.json': { suites: geoSuites },
 }
 
 const destDir = join(here, '..', '..', 'core', 'testdata', 'vectors')

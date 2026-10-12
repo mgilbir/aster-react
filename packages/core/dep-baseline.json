@@ -1,14 +1,4 @@
 {
-  "imports": {
-    "src/addon-geo.ts": [
-      "d3-contour"
-    ],
-    "src/geo.ts": [
-      "d3-geo"
-    ]
-  },
-  "deps": [
-    "d3-contour",
-    "d3-geo"
-  ]
+  "imports": {},
+  "deps": []
 }

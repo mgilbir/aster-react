@@ -45,6 +45,8 @@ import { interpret } from './expr-interpreter.js'
 import { dsvFormat } from './dsv.js'
 import { feature as topoFeature, mesh as topoMesh } from './topojson.js'
 import * as scalePort from './scale.js'
+import * as geoPort from './geo-projections.js'
+import contoursPort from './contour.js'
 import {
   line as shapeLine, area as shapeArea, curveBasis, curveBasisClosed, curveBasisOpen,
   curveBundle, curveCardinal, curveCardinalClosed, curveCardinalOpen, curveCatmullRom,
@@ -74,7 +76,7 @@ interface TopoObjectLike {
 
 interface Suite {
   oracle: string
-  kind?: 'fn' | 'accessor' | 'color' | 'apply1' | 'interval' | 'specifier' | 'ast' | 'eval' | 'dsvcustom' | 'topomesh' | 'scale' | 'vsticks'
+  kind?: 'fn' | 'accessor' | 'color' | 'apply1' | 'interval' | 'specifier' | 'ast' | 'eval' | 'dsvcustom' | 'topomesh' | 'scale' | 'vsticks' | 'geo' | 'contour'
   variant?: string
   tz?: string
   cases: Array<{ args: unknown[]; want: unknown; variant?: string }>
@@ -431,6 +433,77 @@ for (const file of files) {
         expectSuite(name, suite, (args, want, extra) => {
           const [topology, objName] = args as [TopoObjectLike, string]
           const got = topoMesh(topology as never, (topology as { objects: Record<string, unknown> }).objects[objName] as never, filters[extra!.variant!] as never)
+          expect(enc(got)).toEqual(want)
+        })
+        continue
+      }
+      if (suite.kind === 'geo') {
+        const geoSamples: Record<string, unknown> = {
+          poly1: { type: 'Polygon', coordinates: [[[-10, -10], [10, -10], [10, 10], [-10, 10], [-10, -10]]] },
+          polyAntimeridian: { type: 'Polygon', coordinates: [[[170, -20], [-170, -20], [-170, 20], [170, 20], [170, -20]]] },
+          mpoly: { type: 'MultiPolygon', coordinates: [
+            [[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]],
+            [[[20, 20], [30, 20], [30, 30], [20, 30], [20, 20]]],
+          ] },
+          line: { type: 'LineString', coordinates: [[-120, 40], [-100, 35], [-80, 30], [-60, 45]] },
+          points: { type: 'MultiPoint', coordinates: [[0, 0], [45, 45], [-120, -60], [179.9, 60]] },
+          sphere: { type: 'Sphere' },
+          feature: undefined,
+          collection: undefined,
+        }
+        geoSamples.feature = { type: 'Feature', geometry: geoSamples.poly1 }
+        geoSamples.collection = { type: 'FeatureCollection', features: [
+          { type: 'Feature', geometry: geoSamples.poly1 },
+          { type: 'Feature', geometry: geoSamples.line },
+        ] }
+        const geoFactories: Record<string, () => any> = {
+          albers: geoPort.albers, albersUsa: geoPort.albersUsa,
+          azimuthalEqualArea: geoPort.azimuthalEqualArea, azimuthalEquidistant: geoPort.azimuthalEquidistant,
+          conicConformal: geoPort.conicConformal, conicEqualArea: geoPort.conicEqualArea,
+          conicEquidistant: geoPort.conicEquidistant, equalEarth: geoPort.equalEarth,
+          equirectangular: geoPort.equirectangular, gnomonic: geoPort.gnomonic,
+          mercator: geoPort.mercator, naturalEarth1: geoPort.naturalEarth1,
+          orthographic: geoPort.orthographic, stereographic: geoPort.stereographic,
+          transverseMercator: geoPort.transverseMercator,
+        }
+        expectSuite(name, suite, (args, want) => {
+          const [type, ops] = args as [string, [string, ...unknown[]][]]
+          const p: any = geoFactories[type]!()
+          const results: unknown[] = []
+          for (const [op, ...oa] of ops) {
+            results.push(
+              call(() => {
+                switch (op) {
+                  case 'scale': p.scale(oa[0]); return p.scale()
+                  case 'translate': p.translate(oa[0]); return p.translate()
+                  case 'center': p.center(oa[0]); return p.center()
+                  case 'rotate': p.rotate(oa[0]); return p.rotate()
+                  case 'precision': p.precision(oa[0]); return p.precision()
+                  case 'clipAngle': p.clipAngle(oa[0]); return p.clipAngle()
+                  case 'parallels': p.parallels(oa[0]); return p.parallels()
+                  case 'reflectX': p.reflectX(oa[0]); return p.reflectX()
+                  case 'reflectY': p.reflectY(oa[0]); return p.reflectY()
+                  case 'path': return geoPort.geoPath(p)(geoSamples[oa[0] as string])
+                  case 'area': return geoPort.geoPath(p).area(geoSamples[oa[0] as string])
+                  case 'bounds': return geoPort.geoPath(p).bounds(geoSamples[oa[0] as string])
+                  case 'centroid': return geoPort.geoPath(p).centroid(geoSamples[oa[0] as string])
+                  case 'measure': return geoPort.geoPath(p).measure(geoSamples[oa[0] as string])
+                  case 'call': return (p as (pt: unknown) => unknown)(oa[0])
+                  case 'invert': return p.invert ? p.invert(oa[0]) : undefined
+                  default: throw new Error('unknown geo op ' + op)
+                }
+              }, []),
+            )
+          }
+          expect(enc(results)).toEqual(want)
+        })
+        continue
+      }
+      if (suite.kind === 'contour') {
+        expectSuite(name, suite, (args, want) => {
+          const [values, thresholds, size, smooth] = args as [number[], number[], [number, number], boolean]
+          const got = call((v: number[], t: number[], s: [number, number], sm: boolean) =>
+            contoursPort().smooth(sm).size(s).thresholds(t)(v) as unknown, [values, thresholds, size, smooth])
           expect(enc(got)).toEqual(want)
         })
         continue
