@@ -180,6 +180,7 @@ const vegaInterpreter = await loadPkg('vega-interpreter')
 const ve = vegaExpression
 const vi = vegaInterpreter
 const d3Dsv = await loadPkg('d3-dsv')
+const d3Shape = await loadPkg('d3-shape')
 const topojsonClient = await loadPkg('topojson-client')
 
 const BACKSLASH = String.fromCharCode(92)
@@ -970,6 +971,99 @@ const dsvSuites = {
 // A small topology: a 2x1 grid of two squares sharing an edge (arc 1),
 // with quantized coordinates, plus the same geometry unquantized.
 
+
+// --- the d3-shape surface @aster/core reimplements -----------------------------
+// Every curve family across point sets of varied size (including gaps,
+// duplicate points, and fractional coordinates), plus area generation.
+
+const curveFamilies = [
+  ['curveBasis', {}], ['curveBasisClosed', {}], ['curveBasisOpen', {}],
+  ['curveBundle', {}], ['curveBundle', { beta: 0.5 }], ['curveBundle', { beta: 0 }],
+  ['curveCardinal', {}], ['curveCardinal', { tension: 0.7 }],
+  ['curveCardinalClosed', {}], ['curveCardinalClosed', { tension: 0.3 }],
+  ['curveCardinalOpen', {}], ['curveCardinalOpen', { tension: 0.3 }],
+  ['curveCatmullRom', {}], ['curveCatmullRom', { alpha: 0.3 }], ['curveCatmullRom', { alpha: 1 }],
+  ['curveCatmullRomClosed', {}], ['curveCatmullRomClosed', { alpha: 0.7 }],
+  ['curveCatmullRomOpen', {}], ['curveCatmullRomOpen', { alpha: 0.7 }],
+  ['curveLinear', {}], ['curveLinearClosed', {}],
+  ['curveMonotoneX', {}], ['curveMonotoneY', {}],
+  ['curveNatural', {}], ['curveStep', {}], ['curveStepAfter', {}], ['curveStepBefore', {}],
+]
+
+const pointSets = [
+  [],
+  [[0, 0]],
+  [[0, 0], [10, 10]],
+  [[0, 0], [10, 10], [20, 0]],
+  [[136, 137], [205, 131.923], [241, 125.864], [274.891, 111.908], [305, 116.538]],
+  [[0, 0], [10, 10], [10, 10], [20, 0]],       // duplicate points (monotone skips)
+  [[0, 0], [-15.5, 22.25], [1000.125, -3.5], [7, 7], [7, 7], [0, 0]],
+  [[5, 5], [5, 5], [5, 5]],                     // all coincident
+  [[100, 0], [0, 100], [100, 200], [0, 300]],   // zigzag
+]
+
+function oracleLine(curveName, opts, points) {
+  let factory = d3Shape[curveName]
+  if (opts.beta !== undefined) factory = factory.beta(opts.beta)
+  if (opts.tension !== undefined) factory = factory.tension(opts.tension)
+  if (opts.alpha !== undefined) factory = factory.alpha(opts.alpha)
+  return d3Shape.line().x((d) => d[0]).y((d) => d[1]).curve(factory)(points)
+}
+
+function oracleArea(curveName, opts, points) {
+  let factory = d3Shape[curveName]
+  if (opts.beta !== undefined) factory = factory.beta(opts.beta)
+  if (opts.tension !== undefined) factory = factory.tension(opts.tension)
+  if (opts.alpha !== undefined) factory = factory.alpha(opts.alpha)
+  return d3Shape.area().x((d) => d[0]).y0((d) => d[1]).y1((d) => d[2]).curve(factory)(points)
+}
+
+const shapeCases = []
+for (const [curve, opts] of curveFamilies) {
+  for (const points of pointSets) {
+    shapeCases.push({ args: [curve, opts, points].map(enc), want: enc(call(oracleLine, [curve, opts, points])) })
+  }
+}
+// gaps: line().defined splits into segments; area closes back along y0
+const gapPoints = [[0, 0, true], [10, 10, true], [20, 20, false], [30, 30, true], [40, 40, true]]
+for (const [curve, opts] of [['curveLinear', {}], ['curveBasis', {}], ['curveMonotoneX', {}], ['curveStep', {}]]) {
+  shapeCases.push({
+    args: [curve, opts, gapPoints].map(enc),
+    want: enc(call((c, o, p) => {
+      let factory = d3Shape[c]
+      return d3Shape.line().x((d) => d[0]).y((d) => d[1]).defined((d) => d[2]).curve(factory)(p)
+    }, [curve, opts, gapPoints])),
+  })
+}
+const areaPoints = [
+  [[0, 0, 50], [10, 10, 60], [20, 20, 70]],
+  [[136, 137, 40], [205, 131.923, 45], [241, 125.864, 50]],
+  [[0, 0, 50], [10, 10, 60], [20, 20, 70], [30, 30, 80, false], [40, 40, 90]],  // defined via length
+]
+const shapeAreaCases = []
+for (const [curve, opts] of [['curveLinear', {}], ['curveBasis', {}], ['curveMonotoneX', {}]]) {
+  for (const points of areaPoints) {
+    shapeAreaCases.push({
+      args: [curve, opts, points.map((d) => d.slice(0, 3))].map(enc),
+      want: enc(call(oracleArea, [curve, opts, points.map((d) => d.slice(0, 3))])),
+    })
+  }
+}
+
+const d3ShapeSuites = {
+  shape: {
+    oracle: oracleOf('d3-shape'),
+    kind: 'fn',
+    tz: TZ_UTC,
+    cases: shapeCases,
+  },
+  shapeArea: {
+    oracle: oracleOf('d3-shape'),
+    kind: 'fn',
+    tz: TZ_UTC,
+    cases: shapeAreaCases,
+  },
+}
 const files = {
   'vega-util.json': { suites: utilSuites },
   'd3-color.json': { suites: colorSuites },
@@ -979,6 +1073,7 @@ const files = {
   'vega-expression.json': { suites: expressionSuites },
   'd3-dsv.json': { suites: dsvSuites },
   'topojson-client.json': { suites: topoSuites },
+  'd3-shape.json': { suites: d3ShapeSuites },
 }
 
 const destDir = join(here, '..', '..', 'core', 'testdata', 'vectors')

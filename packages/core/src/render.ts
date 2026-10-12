@@ -25,7 +25,7 @@ import {
   curveStep,
   curveStepAfter,
   curveStepBefore,
-} from 'd3-shape'
+} from './shape.js'
 
 /**
  * Map Vega interpolation names to d3-shape curve constructors.
@@ -259,11 +259,11 @@ export function computeLinePath(group: SceneGroup): {
         }
       }
       type Pt = { x: number; y: number; defined: boolean }
-      const lineGen = d3Line<Pt>()
-        .x((d: Pt) => d.x)
-        .y((d: Pt) => d.y)
-        .defined((d: Pt) => d.defined)
-        .curve(curveFn as Parameters<ReturnType<typeof d3Line<Pt>>['curve']>[0])
+      const lineGen = d3Line()
+        .x((d) => (d as Pt).x)
+        .y((d) => (d as Pt).y)
+        .defined((d) => (d as Pt).defined)
+        .curve(curveFn as never)
 
       // Build contiguous runs of defined points (same as linear path)
       const runs: Array<{ x: number; y: number; defined: boolean }> = items.map((it) => ({
@@ -383,12 +383,12 @@ export function computeAreaPath(group: SceneGroup): {
       if (isHorizontal) {
         // Horizontal area: d3 area with y as the cross-axis, x0/x1 as value axes
         type AreaPt = { y: number; x0: number; x1: number; defined: boolean }
-        const areaGen = d3Area<AreaPt>()
-          .y((d: AreaPt) => d.y)
-          .x0((d: AreaPt) => d.x0)
-          .x1((d: AreaPt) => d.x1)
-          .defined((d: AreaPt) => d.defined)
-          .curve(curveFn as Parameters<ReturnType<typeof d3Area<AreaPt>>['curve']>[0])
+        const areaGen = d3Area()
+          .y((d: unknown) => (d as AreaPt).y)
+          .x0((d: unknown) => (d as AreaPt).x0)
+          .x1((d: unknown) => (d as AreaPt).x1)
+          .defined((d: unknown) => (d as AreaPt).defined)
+          .curve(curveFn as never)
 
         const runs: Array<AreaPt> = pts.map((p) => ({
           y: p.pos,
@@ -415,12 +415,12 @@ export function computeAreaPath(group: SceneGroup): {
       } else {
         // Vertical area (default)
         type AreaPt = { x: number; y0: number; y1: number; defined: boolean }
-        const areaGen = d3Area<AreaPt>()
-          .x((d: AreaPt) => d.x)
-          .y0((d: AreaPt) => d.y0)
-          .y1((d: AreaPt) => d.y1)
-          .defined((d: AreaPt) => d.defined)
-          .curve(curveFn as Parameters<ReturnType<typeof d3Area<AreaPt>>['curve']>[0])
+        const areaGen = d3Area()
+          .x((d: unknown) => (d as AreaPt).x)
+          .y0((d: unknown) => (d as AreaPt).y0)
+          .y1((d: unknown) => (d as AreaPt).y1)
+          .defined((d: unknown) => (d as AreaPt).defined)
+          .curve(curveFn as never)
 
         const runs: Array<AreaPt> = pts.map((p) => ({
           x: p.pos,

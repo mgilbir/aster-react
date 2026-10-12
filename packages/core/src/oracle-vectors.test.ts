@@ -44,12 +44,26 @@ import { parseExpression, type AstNode } from './expr-parser.js'
 import { interpret } from './expr-interpreter.js'
 import { dsvFormat } from './dsv.js'
 import { feature as topoFeature, mesh as topoMesh } from './topojson.js'
+import {
+  line as shapeLine, area as shapeArea, curveBasis, curveBasisClosed, curveBasisOpen,
+  curveBundle, curveCardinal, curveCardinalClosed, curveCardinalOpen, curveCatmullRom,
+  curveCatmullRomClosed, curveCatmullRomOpen, curveLinear, curveLinearClosed,
+  curveMonotoneX, curveMonotoneY, curveNatural, curveStep, curveStepAfter,
+  curveStepBefore, type CurveFactory,
+} from './shape.js'
 
 const vectorsDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'testdata', 'vectors')
 
 interface VectorFile {
   suites: Record<string, Suite>
 }
+const SHAPE_CURVES: Record<string, CurveFactory> = {
+  curveBasis, curveBasisClosed, curveBasisOpen, curveBundle, curveCardinal,
+  curveCardinalClosed, curveCardinalOpen, curveCatmullRom, curveCatmullRomClosed,
+  curveCatmullRomOpen, curveLinear, curveLinearClosed, curveMonotoneX,
+  curveMonotoneY, curveNatural, curveStep, curveStepAfter, curveStepBefore,
+}
+
 interface TopoObjectLike {
   type: string
   objects?: Record<string, unknown>
@@ -145,6 +159,23 @@ const fns: Record<string, (...args: any[]) => any> = {
   topoFeatureCollection: (topology: never) => topoFeature(topology, (topology as { objects: { squares: never } }).objects.squares),
   topoFeatureNamed: (topology: never, name: string) => topoFeature(topology, name),
   topoMesh: (topology: never) => topoMesh(topology),
+  shape: (curveName: string, opts: Record<string, number>, points: number[][]) => {
+    let factory = SHAPE_CURVES[curveName] as CurveFactory
+    if (opts.beta !== undefined) factory = factory.beta!(opts.beta)
+    if (opts.tension !== undefined) factory = factory.tension!(opts.tension)
+    if (opts.alpha !== undefined) factory = factory.alpha!(opts.alpha)
+    // point sets carrying a third element were recorded through .defined
+    const gen = shapeLine().x((d: unknown) => (d as number[])[0] as number).y((d: unknown) => (d as number[])[1] as number)
+    if (points.some((p) => p.length > 2)) gen.defined((d: unknown) => (d as number[])[2] as unknown as boolean)
+    return gen.curve(factory)(points)
+  },
+  shapeArea: (curveName: string, opts: Record<string, number>, points: number[][]) => {
+    let factory = SHAPE_CURVES[curveName] as CurveFactory
+    if (opts.beta !== undefined) factory = factory.beta!(opts.beta)
+    if (opts.tension !== undefined) factory = factory.tension!(opts.tension)
+    if (opts.alpha !== undefined) factory = factory.alpha!(opts.alpha)
+    return shapeArea().x((d: unknown) => (d as number[])[0] as number).y0((d: unknown) => (d as number[])[1] as number).y1((d: unknown) => (d as number[])[2] as number).curve(factory)(points)
+  },
 }
 
 const applyFns: Record<string, (...args: any[]) => any> = {
