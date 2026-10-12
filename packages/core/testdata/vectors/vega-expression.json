@@ -1,0 +1,3173 @@
+{
+  "suites": {
+    "parse": {
+      "oracle": "vega-expression@6.2.1",
+      "kind": "ast",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            "1"
+          ],
+          "want": {
+            "raw": "1",
+            "type": "Literal",
+            "value": 1
+          }
+        },
+        {
+          "args": [
+            "1.5"
+          ],
+          "want": {
+            "raw": "1.5",
+            "type": "Literal",
+            "value": 1.5
+          }
+        },
+        {
+          "args": [
+            ".5"
+          ],
+          "want": {
+            "raw": ".5",
+            "type": "Literal",
+            "value": 0.5
+          }
+        },
+        {
+          "args": [
+            "0x1f"
+          ],
+          "want": {
+            "raw": "0x1f",
+            "type": "Literal",
+            "value": 31
+          }
+        },
+        {
+          "args": [
+            "017"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Octal literals are not allowed in strict mode.",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "1e3"
+          ],
+          "want": {
+            "raw": "1e3",
+            "type": "Literal",
+            "value": 1000
+          }
+        },
+        {
+          "args": [
+            "1E+3"
+          ],
+          "want": {
+            "raw": "1E+3",
+            "type": "Literal",
+            "value": 1000
+          }
+        },
+        {
+          "args": [
+            "\"abc\""
+          ],
+          "want": {
+            "raw": "\"abc\"",
+            "type": "Literal",
+            "value": "abc"
+          }
+        },
+        {
+          "args": [
+            "'abc'"
+          ],
+          "want": {
+            "raw": "'abc'",
+            "type": "Literal",
+            "value": "abc"
+          }
+        },
+        {
+          "args": [
+            "\"a\\u00e9b\""
+          ],
+          "want": {
+            "raw": "\"a\\u00e9b\"",
+            "type": "Literal",
+            "value": "aéb"
+          }
+        },
+        {
+          "args": [
+            "true"
+          ],
+          "want": {
+            "raw": "true",
+            "type": "Literal",
+            "value": true
+          }
+        },
+        {
+          "args": [
+            "false"
+          ],
+          "want": {
+            "raw": "false",
+            "type": "Literal",
+            "value": false
+          }
+        },
+        {
+          "args": [
+            "null"
+          ],
+          "want": {
+            "raw": "null",
+            "type": "Literal",
+            "value": null
+          }
+        },
+        {
+          "args": [
+            "NaN"
+          ],
+          "want": {
+            "name": "NaN",
+            "type": "Identifier"
+          }
+        },
+        {
+          "args": [
+            "PI"
+          ],
+          "want": {
+            "name": "PI",
+            "type": "Identifier"
+          }
+        },
+        {
+          "args": [
+            "E"
+          ],
+          "want": {
+            "name": "E",
+            "type": "Identifier"
+          }
+        },
+        {
+          "args": [
+            "MAX_VALUE"
+          ],
+          "want": {
+            "name": "MAX_VALUE",
+            "type": "Identifier"
+          }
+        },
+        {
+          "args": [
+            "a"
+          ],
+          "want": {
+            "name": "a",
+            "type": "Identifier"
+          }
+        },
+        {
+          "args": [
+            "datum"
+          ],
+          "want": {
+            "name": "datum",
+            "type": "Identifier"
+          }
+        },
+        {
+          "args": [
+            "item"
+          ],
+          "want": {
+            "name": "item",
+            "type": "Identifier"
+          }
+        },
+        {
+          "args": [
+            "event"
+          ],
+          "want": {
+            "name": "event",
+            "type": "Identifier"
+          }
+        },
+        {
+          "args": [
+            "$signal"
+          ],
+          "want": {
+            "name": "$signal",
+            "type": "Identifier"
+          }
+        },
+        {
+          "args": [
+            "_value"
+          ],
+          "want": {
+            "name": "_value",
+            "type": "Identifier"
+          }
+        },
+        {
+          "args": [
+            "if"
+          ],
+          "want": {
+            "name": "if",
+            "type": "Identifier"
+          }
+        },
+        {
+          "args": [
+            "a + b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "+",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a - b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "-",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a * b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "*",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a / b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "/",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a % b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "%",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a === b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "===",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a || b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "||",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "LogicalExpression"
+          }
+        },
+        {
+          "args": [
+            "a && b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "&&",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "LogicalExpression"
+          }
+        },
+        {
+          "args": [
+            "!a"
+          ],
+          "want": {
+            "argument": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "!",
+            "prefix": true,
+            "type": "UnaryExpression"
+          }
+        },
+        {
+          "args": [
+            "-a"
+          ],
+          "want": {
+            "argument": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "-",
+            "prefix": true,
+            "type": "UnaryExpression"
+          }
+        },
+        {
+          "args": [
+            "+a"
+          ],
+          "want": {
+            "argument": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "+",
+            "prefix": true,
+            "type": "UnaryExpression"
+          }
+        },
+        {
+          "args": [
+            "~a"
+          ],
+          "want": {
+            "argument": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "~",
+            "prefix": true,
+            "type": "UnaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a < b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "<",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a > b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": ">",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a <= b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "<=",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a >= b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": ">=",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a == b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "==",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a != b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "!=",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a === b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "===",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a !== b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "!==",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a & b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "&",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a | b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "|",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a ^ b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "^",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a << b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "<<",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a >> b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": ">>",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a >>> b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": ">>>",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a + b * c"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "+",
+            "right": {
+              "left": {
+                "name": "b",
+                "type": "Identifier"
+              },
+              "operator": "*",
+              "right": {
+                "name": "c",
+                "type": "Identifier"
+              },
+              "type": "BinaryExpression"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "(a + b) * c"
+          ],
+          "want": {
+            "left": {
+              "left": {
+                "name": "a",
+                "type": "Identifier"
+              },
+              "operator": "+",
+              "right": {
+                "name": "b",
+                "type": "Identifier"
+              },
+              "type": "BinaryExpression"
+            },
+            "operator": "*",
+            "right": {
+              "name": "c",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a + b + c"
+          ],
+          "want": {
+            "left": {
+              "left": {
+                "name": "a",
+                "type": "Identifier"
+              },
+              "operator": "+",
+              "right": {
+                "name": "b",
+                "type": "Identifier"
+              },
+              "type": "BinaryExpression"
+            },
+            "operator": "+",
+            "right": {
+              "name": "c",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a < b && c > d || !e"
+          ],
+          "want": {
+            "left": {
+              "left": {
+                "left": {
+                  "name": "a",
+                  "type": "Identifier"
+                },
+                "operator": "<",
+                "right": {
+                  "name": "b",
+                  "type": "Identifier"
+                },
+                "type": "BinaryExpression"
+              },
+              "operator": "&&",
+              "right": {
+                "left": {
+                  "name": "c",
+                  "type": "Identifier"
+                },
+                "operator": ">",
+                "right": {
+                  "name": "d",
+                  "type": "Identifier"
+                },
+                "type": "BinaryExpression"
+              },
+              "type": "LogicalExpression"
+            },
+            "operator": "||",
+            "right": {
+              "argument": {
+                "name": "e",
+                "type": "Identifier"
+              },
+              "operator": "!",
+              "prefix": true,
+              "type": "UnaryExpression"
+            },
+            "type": "LogicalExpression"
+          }
+        },
+        {
+          "args": [
+            "a ? b : c"
+          ],
+          "want": {
+            "alternate": {
+              "name": "c",
+              "type": "Identifier"
+            },
+            "consequent": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "test": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "type": "ConditionalExpression"
+          }
+        },
+        {
+          "args": [
+            "a ? b : c ? d : e"
+          ],
+          "want": {
+            "alternate": {
+              "alternate": {
+                "name": "e",
+                "type": "Identifier"
+              },
+              "consequent": {
+                "name": "d",
+                "type": "Identifier"
+              },
+              "test": {
+                "name": "c",
+                "type": "Identifier"
+              },
+              "type": "ConditionalExpression"
+            },
+            "consequent": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "test": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "type": "ConditionalExpression"
+          }
+        },
+        {
+          "args": [
+            "a ? b ? c : d : e"
+          ],
+          "want": {
+            "alternate": {
+              "name": "e",
+              "type": "Identifier"
+            },
+            "consequent": {
+              "alternate": {
+                "name": "d",
+                "type": "Identifier"
+              },
+              "consequent": {
+                "name": "c",
+                "type": "Identifier"
+              },
+              "test": {
+                "name": "b",
+                "type": "Identifier"
+              },
+              "type": "ConditionalExpression"
+            },
+            "test": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "type": "ConditionalExpression"
+          }
+        },
+        {
+          "args": [
+            "datum.value"
+          ],
+          "want": {
+            "computed": false,
+            "object": {
+              "name": "datum",
+              "type": "Identifier"
+            },
+            "property": {
+              "member": true,
+              "name": "value",
+              "type": "Identifier"
+            },
+            "type": "MemberExpression"
+          }
+        },
+        {
+          "args": [
+            "datum[\"a b\"]"
+          ],
+          "want": {
+            "computed": true,
+            "object": {
+              "name": "datum",
+              "type": "Identifier"
+            },
+            "property": {
+              "raw": "\"a b\"",
+              "type": "Literal",
+              "value": "a b"
+            },
+            "type": "MemberExpression"
+          }
+        },
+        {
+          "args": [
+            "datum[0]"
+          ],
+          "want": {
+            "computed": true,
+            "object": {
+              "name": "datum",
+              "type": "Identifier"
+            },
+            "property": {
+              "raw": "0",
+              "type": "Literal",
+              "value": 0
+            },
+            "type": "MemberExpression"
+          }
+        },
+        {
+          "args": [
+            "datum.a.b"
+          ],
+          "want": {
+            "computed": false,
+            "object": {
+              "computed": false,
+              "object": {
+                "name": "datum",
+                "type": "Identifier"
+              },
+              "property": {
+                "member": true,
+                "name": "a",
+                "type": "Identifier"
+              },
+              "type": "MemberExpression"
+            },
+            "property": {
+              "member": true,
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "MemberExpression"
+          }
+        },
+        {
+          "args": [
+            "datum[\"a\"][\"b\"]"
+          ],
+          "want": {
+            "computed": true,
+            "object": {
+              "computed": true,
+              "object": {
+                "name": "datum",
+                "type": "Identifier"
+              },
+              "property": {
+                "raw": "\"a\"",
+                "type": "Literal",
+                "value": "a"
+              },
+              "type": "MemberExpression"
+            },
+            "property": {
+              "raw": "\"b\"",
+              "type": "Literal",
+              "value": "b"
+            },
+            "type": "MemberExpression"
+          }
+        },
+        {
+          "args": [
+            "datum.map.length"
+          ],
+          "want": {
+            "computed": false,
+            "object": {
+              "computed": false,
+              "object": {
+                "name": "datum",
+                "type": "Identifier"
+              },
+              "property": {
+                "member": true,
+                "name": "map",
+                "type": "Identifier"
+              },
+              "type": "MemberExpression"
+            },
+            "property": {
+              "member": true,
+              "name": "length",
+              "type": "Identifier"
+            },
+            "type": "MemberExpression"
+          }
+        },
+        {
+          "args": [
+            "fn(a, b)"
+          ],
+          "want": {
+            "arguments": [
+              {
+                "name": "a",
+                "type": "Identifier"
+              },
+              {
+                "name": "b",
+                "type": "Identifier"
+              }
+            ],
+            "callee": {
+              "name": "fn",
+              "type": "Identifier"
+            },
+            "type": "CallExpression"
+          }
+        },
+        {
+          "args": [
+            "fn()"
+          ],
+          "want": {
+            "arguments": [],
+            "callee": {
+              "name": "fn",
+              "type": "Identifier"
+            },
+            "type": "CallExpression"
+          }
+        },
+        {
+          "args": [
+            "datum.fn(a)"
+          ],
+          "want": {
+            "arguments": [
+              {
+                "name": "a",
+                "type": "Identifier"
+              }
+            ],
+            "callee": {
+              "computed": false,
+              "object": {
+                "name": "datum",
+                "type": "Identifier"
+              },
+              "property": {
+                "member": true,
+                "name": "fn",
+                "type": "Identifier"
+              },
+              "type": "MemberExpression"
+            },
+            "type": "CallExpression"
+          }
+        },
+        {
+          "args": [
+            "fn(a)(b)"
+          ],
+          "want": {
+            "arguments": [
+              {
+                "name": "b",
+                "type": "Identifier"
+              }
+            ],
+            "callee": {
+              "arguments": [
+                {
+                  "name": "a",
+                  "type": "Identifier"
+                }
+              ],
+              "callee": {
+                "name": "fn",
+                "type": "Identifier"
+              },
+              "type": "CallExpression"
+            },
+            "type": "CallExpression"
+          }
+        },
+        {
+          "args": [
+            "[1, 2, 3]"
+          ],
+          "want": {
+            "elements": [
+              {
+                "raw": "1",
+                "type": "Literal",
+                "value": 1
+              },
+              {
+                "raw": "2",
+                "type": "Literal",
+                "value": 2
+              },
+              {
+                "raw": "3",
+                "type": "Literal",
+                "value": 3
+              }
+            ],
+            "type": "ArrayExpression"
+          }
+        },
+        {
+          "args": [
+            "[]"
+          ],
+          "want": {
+            "elements": [],
+            "type": "ArrayExpression"
+          }
+        },
+        {
+          "args": [
+            "[a, [b, c]]"
+          ],
+          "want": {
+            "elements": [
+              {
+                "name": "a",
+                "type": "Identifier"
+              },
+              {
+                "elements": [
+                  {
+                    "name": "b",
+                    "type": "Identifier"
+                  },
+                  {
+                    "name": "c",
+                    "type": "Identifier"
+                  }
+                ],
+                "type": "ArrayExpression"
+              }
+            ],
+            "type": "ArrayExpression"
+          }
+        },
+        {
+          "args": [
+            "{a: 1}"
+          ],
+          "want": {
+            "properties": [
+              {
+                "key": {
+                  "name": "a",
+                  "type": "Identifier"
+                },
+                "kind": "init",
+                "type": "Property",
+                "value": {
+                  "raw": "1",
+                  "type": "Literal",
+                  "value": 1
+                }
+              }
+            ],
+            "type": "ObjectExpression"
+          }
+        },
+        {
+          "args": [
+            "{\"a b\": 1, c: d}"
+          ],
+          "want": {
+            "properties": [
+              {
+                "key": {
+                  "raw": "\"a b\"",
+                  "type": "Literal",
+                  "value": "a b"
+                },
+                "kind": "init",
+                "type": "Property",
+                "value": {
+                  "raw": "1",
+                  "type": "Literal",
+                  "value": 1
+                }
+              },
+              {
+                "key": {
+                  "name": "c",
+                  "type": "Identifier"
+                },
+                "kind": "init",
+                "type": "Property",
+                "value": {
+                  "name": "d",
+                  "type": "Identifier"
+                }
+              }
+            ],
+            "type": "ObjectExpression"
+          }
+        },
+        {
+          "args": [
+            "{}"
+          ],
+          "want": {
+            "properties": [],
+            "type": "ObjectExpression"
+          }
+        },
+        {
+          "args": [
+            "if (a, b, c)"
+          ],
+          "want": {
+            "arguments": [
+              {
+                "name": "a",
+                "type": "Identifier"
+              },
+              {
+                "name": "b",
+                "type": "Identifier"
+              },
+              {
+                "name": "c",
+                "type": "Identifier"
+              }
+            ],
+            "callee": {
+              "name": "if",
+              "type": "Identifier"
+            },
+            "type": "CallExpression"
+          }
+        },
+        {
+          "args": [
+            "upper(datum.name)"
+          ],
+          "want": {
+            "arguments": [
+              {
+                "computed": false,
+                "object": {
+                  "name": "datum",
+                  "type": "Identifier"
+                },
+                "property": {
+                  "member": true,
+                  "name": "name",
+                  "type": "Identifier"
+                },
+                "type": "MemberExpression"
+              }
+            ],
+            "callee": {
+              "name": "upper",
+              "type": "Identifier"
+            },
+            "type": "CallExpression"
+          }
+        },
+        {
+          "args": [
+            "_space(1)"
+          ],
+          "want": {
+            "arguments": [
+              {
+                "raw": "1",
+                "type": "Literal",
+                "value": 1
+              }
+            ],
+            "callee": {
+              "name": "_space",
+              "type": "Identifier"
+            },
+            "type": "CallExpression"
+          }
+        },
+        {
+          "args": [
+            "datum.list[0] + datum.list[1]"
+          ],
+          "want": {
+            "left": {
+              "computed": true,
+              "object": {
+                "computed": false,
+                "object": {
+                  "name": "datum",
+                  "type": "Identifier"
+                },
+                "property": {
+                  "member": true,
+                  "name": "list",
+                  "type": "Identifier"
+                },
+                "type": "MemberExpression"
+              },
+              "property": {
+                "raw": "0",
+                "type": "Literal",
+                "value": 0
+              },
+              "type": "MemberExpression"
+            },
+            "operator": "+",
+            "right": {
+              "computed": true,
+              "object": {
+                "computed": false,
+                "object": {
+                  "name": "datum",
+                  "type": "Identifier"
+                },
+                "property": {
+                  "member": true,
+                  "name": "list",
+                  "type": "Identifier"
+                },
+                "type": "MemberExpression"
+              },
+              "property": {
+                "raw": "1",
+                "type": "Literal",
+                "value": 1
+              },
+              "type": "MemberExpression"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a in b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "in",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a instanceof b"
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "instanceof",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "indatum(\"table\", datum.x)"
+          ],
+          "want": {
+            "arguments": [
+              {
+                "raw": "\"table\"",
+                "type": "Literal",
+                "value": "table"
+              },
+              {
+                "computed": false,
+                "object": {
+                  "name": "datum",
+                  "type": "Identifier"
+                },
+                "property": {
+                  "member": true,
+                  "name": "x",
+                  "type": "Identifier"
+                },
+                "type": "MemberExpression"
+              }
+            ],
+            "callee": {
+              "name": "indatum",
+              "type": "Identifier"
+            },
+            "type": "CallExpression"
+          }
+        },
+        {
+          "args": [
+            "/ab+c/g"
+          ],
+          "want": {
+            "raw": "/ab+c/g",
+            "regex": {
+              "flags": "g",
+              "pattern": "ab+c"
+            },
+            "type": "Literal",
+            "value": {
+              "$": "re",
+              "src": "ab+c",
+              "flags": "g"
+            }
+          }
+        },
+        {
+          "args": [
+            "/[a-z]/i"
+          ],
+          "want": {
+            "raw": "/[a-z]/i",
+            "regex": {
+              "flags": "i",
+              "pattern": "[a-z]"
+            },
+            "type": "Literal",
+            "value": {
+              "$": "re",
+              "src": "[a-z]",
+              "flags": "i"
+            }
+          }
+        },
+        {
+          "args": [
+            "/\\d/"
+          ],
+          "want": {
+            "raw": "/\\d/",
+            "regex": {
+              "flags": "",
+              "pattern": "\\d"
+            },
+            "type": "Literal",
+            "value": {
+              "$": "re",
+              "src": "\\d",
+              "flags": ""
+            }
+          }
+        },
+        {
+          "args": [
+            "/x/u"
+          ],
+          "want": {
+            "raw": "/x/u",
+            "regex": {
+              "flags": "u",
+              "pattern": "x"
+            },
+            "type": "Literal",
+            "value": {
+              "$": "re",
+              "src": "x",
+              "flags": "u"
+            }
+          }
+        },
+        {
+          "args": [
+            "/(?:)/"
+          ],
+          "want": {
+            "raw": "/(?:)/",
+            "regex": {
+              "flags": "",
+              "pattern": "(?:)"
+            },
+            "type": "Literal",
+            "value": {
+              "$": "re",
+              "src": "(?:)",
+              "flags": ""
+            }
+          }
+        },
+        {
+          "args": [
+            "\"\""
+          ],
+          "want": {
+            "raw": "\"\"",
+            "type": "Literal",
+            "value": ""
+          }
+        },
+        {
+          "args": [
+            "''"
+          ],
+          "want": {
+            "raw": "''",
+            "type": "Literal",
+            "value": ""
+          }
+        },
+        {
+          "args": [
+            "  a  +  b  "
+          ],
+          "want": {
+            "left": {
+              "name": "a",
+              "type": "Identifier"
+            },
+            "operator": "+",
+            "right": {
+              "name": "b",
+              "type": "Identifier"
+            },
+            "type": "BinaryExpression"
+          }
+        },
+        {
+          "args": [
+            "a\tb"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Unexpect token after expression.",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "ab"
+          ],
+          "want": {
+            "name": "ab",
+            "type": "Identifier"
+          }
+        },
+        {
+          "args": [
+            "(((a)))"
+          ],
+          "want": {
+            "name": "a",
+            "type": "Identifier"
+          }
+        },
+        {
+          "args": [
+            "$signal"
+          ],
+          "want": {
+            "name": "$signal",
+            "type": "Identifier"
+          }
+        }
+      ]
+    },
+    "parseError": {
+      "oracle": "vega-expression@6.2.1",
+      "kind": "ast",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            "1 +"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Unexpected end of input",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "a = 1"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Unexpect token after expression.",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "a, b"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Disabled.",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "function () {}"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Disabled.",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "++a"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Disabled.",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "a++"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Disabled.",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "typeof a"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Disabled.",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "void 0"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Disabled.",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "delete a.b"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Disabled.",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "var a"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Disabled.",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "new A()"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Disabled.",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "\"unterminated"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Unexpected token ILLEGAL",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "'x"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Unexpected token ILLEGAL",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "1x"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Unexpected token ILLEGAL",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "09"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Unexpected token ILLEGAL",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "0x"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Unexpected token ILLEGAL",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "#"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Unexpected token ILLEGAL",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "a..b"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Unexpected token .",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "{a: 1, a: 2}"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Duplicate data property in object literal not allowed in strict mode",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "while (a)"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Disabled.",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "case 1"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Disabled.",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "\\u0041"
+          ],
+          "want": {
+            "name": "A",
+            "type": "Identifier"
+          }
+        },
+        {
+          "args": [
+            "."
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Unexpected token .",
+            "name": "Error"
+          }
+        }
+      ]
+    },
+    "evalLang": {
+      "oracle": "vega-interpreter@2.3.1",
+      "kind": "eval",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            "1 + 2 * 3",
+            null,
+            null
+          ],
+          "want": 7
+        },
+        {
+          "args": [
+            "(1 + 2) * 3",
+            null,
+            null
+          ],
+          "want": 9
+        },
+        {
+          "args": [
+            "2 * 3 + 1",
+            null,
+            null
+          ],
+          "want": 7
+        },
+        {
+          "args": [
+            "10 / 4",
+            null,
+            null
+          ],
+          "want": 2.5
+        },
+        {
+          "args": [
+            "7 % 3",
+            null,
+            null
+          ],
+          "want": 1
+        },
+        {
+          "args": [
+            "1 + \"a\"",
+            null,
+            null
+          ],
+          "want": "1a"
+        },
+        {
+          "args": [
+            "\"a\" + 1",
+            null,
+            null
+          ],
+          "want": "a1"
+        },
+        {
+          "args": [
+            "\"1\" == 1",
+            null,
+            null
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "\"1\" === 1",
+            null,
+            null
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            "null == undefined",
+            null,
+            null
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "null === undefined",
+            null,
+            null
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            "NaN === NaN",
+            null,
+            null
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "1/0",
+            null,
+            null
+          ],
+          "want": {
+            "$": "inf"
+          }
+        },
+        {
+          "args": [
+            "-0 === 0",
+            null,
+            null
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "1/-0",
+            null,
+            null
+          ],
+          "want": {
+            "$": "-inf"
+          }
+        },
+        {
+          "args": [
+            "!\"a\"",
+            null,
+            null
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            "~0",
+            null,
+            null
+          ],
+          "want": -1
+        },
+        {
+          "args": [
+            "-\"5\"",
+            null,
+            null
+          ],
+          "want": -5
+        },
+        {
+          "args": [
+            "+true",
+            null,
+            null
+          ],
+          "want": 1
+        },
+        {
+          "args": [
+            "true ? 1 : 2",
+            null,
+            null
+          ],
+          "want": 1
+        },
+        {
+          "args": [
+            "false ? 1 : 2",
+            null,
+            null
+          ],
+          "want": 2
+        },
+        {
+          "args": [
+            "null || \"fallback\"",
+            null,
+            null
+          ],
+          "want": "fallback"
+        },
+        {
+          "args": [
+            "0 && \"never\"",
+            null,
+            null
+          ],
+          "want": 0
+        },
+        {
+          "args": [
+            "\"a\" && \"b\"",
+            null,
+            null
+          ],
+          "want": "b"
+        },
+        {
+          "args": [
+            "1 < 2 < 3",
+            null,
+            null
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "3 > 2 > 1",
+            null,
+            null
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            "\"b\" > \"a\"",
+            null,
+            null
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "\"a\" > 1",
+            null,
+            null
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            "undefined + 1",
+            null,
+            null
+          ],
+          "want": {
+            "$": "nan"
+          }
+        },
+        {
+          "args": [
+            "null + 1",
+            null,
+            null
+          ],
+          "want": 1
+        },
+        {
+          "args": [
+            "[1, 2, 3]",
+            null,
+            null
+          ],
+          "want": [
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "args": [
+            "[1, 2, 3][1]",
+            null,
+            null
+          ],
+          "want": 2
+        },
+        {
+          "args": [
+            "({a: 1}).a",
+            null,
+            null
+          ],
+          "want": 1
+        },
+        {
+          "args": [
+            "({a: 1, b: \"x\"}).b",
+            null,
+            null
+          ],
+          "want": "x"
+        },
+        {
+          "args": [
+            "({})",
+            null,
+            null
+          ],
+          "want": {}
+        },
+        {
+          "args": [
+            "PI",
+            null,
+            null
+          ],
+          "want": 3.141592653589793
+        },
+        {
+          "args": [
+            "E",
+            null,
+            null
+          ],
+          "want": 2.718281828459045
+        },
+        {
+          "args": [
+            "LN10",
+            null,
+            null
+          ],
+          "want": 2.302585092994046
+        },
+        {
+          "args": [
+            "MAX_VALUE",
+            null,
+            null
+          ],
+          "want": 1.7976931348623157e+308
+        },
+        {
+          "args": [
+            "NaN",
+            null,
+            null
+          ],
+          "want": {
+            "$": "undef"
+          }
+        },
+        {
+          "args": [
+            "abs(-5)",
+            null,
+            null
+          ],
+          "want": 5
+        },
+        {
+          "args": [
+            "max(1, 2, 3)",
+            null,
+            null
+          ],
+          "want": 3
+        },
+        {
+          "args": [
+            "min(4, 2)",
+            null,
+            null
+          ],
+          "want": 2
+        },
+        {
+          "args": [
+            "round(2.5)",
+            null,
+            null
+          ],
+          "want": 3
+        },
+        {
+          "args": [
+            "ceil(1.2)",
+            null,
+            null
+          ],
+          "want": 2
+        },
+        {
+          "args": [
+            "floor(-1.2)",
+            null,
+            null
+          ],
+          "want": -2
+        },
+        {
+          "args": [
+            "pow(2, 10)",
+            null,
+            null
+          ],
+          "want": 1024
+        },
+        {
+          "args": [
+            "sqrt(16)",
+            null,
+            null
+          ],
+          "want": 4
+        },
+        {
+          "args": [
+            "isNaN(NaN)",
+            null,
+            null
+          ],
+          "want": false
+        },
+        {
+          "args": [
+            "isFinite(1)",
+            null,
+            null
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "upper(\"abc\")",
+            null,
+            null
+          ],
+          "want": "ABC"
+        },
+        {
+          "args": [
+            "lower(\"ABC\")",
+            null,
+            null
+          ],
+          "want": "abc"
+        },
+        {
+          "args": [
+            "trim(\"  x  \")",
+            null,
+            null
+          ],
+          "want": "x"
+        },
+        {
+          "args": [
+            "split(\"a,b\", \",\")",
+            null,
+            null
+          ],
+          "want": [
+            "a",
+            "b"
+          ]
+        },
+        {
+          "args": [
+            "indexof(\"abc\", \"b\")",
+            null,
+            null
+          ],
+          "want": 1
+        },
+        {
+          "args": [
+            "lastindexof(\"abc\", \"c\")",
+            null,
+            null
+          ],
+          "want": 2
+        },
+        {
+          "args": [
+            "substring(\"abcdef\", 1, 3)",
+            null,
+            null
+          ],
+          "want": "bc"
+        },
+        {
+          "args": [
+            "length([1, 2, 3])",
+            null,
+            null
+          ],
+          "want": 3
+        },
+        {
+          "args": [
+            "join([\"a\", \"b\"], \"-\")",
+            null,
+            null
+          ],
+          "want": "a-b"
+        },
+        {
+          "args": [
+            "reverse([1, 2, 3])",
+            null,
+            null
+          ],
+          "want": [
+            3,
+            2,
+            1
+          ]
+        },
+        {
+          "args": [
+            "sort([3, 1, 2])",
+            null,
+            null
+          ],
+          "want": [
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "args": [
+            "parseFloat(\"1.5\")",
+            null,
+            null
+          ],
+          "want": 1.5
+        },
+        {
+          "args": [
+            "parseInt(\"12px\")",
+            null,
+            null
+          ],
+          "want": 12
+        },
+        {
+          "args": [
+            "replace(\"aaa\", \"a\", \"b\")",
+            null,
+            null
+          ],
+          "want": "baa"
+        },
+        {
+          "args": [
+            "year(datetime(2024, 2, 10))",
+            null,
+            null
+          ],
+          "want": 2024
+        },
+        {
+          "args": [
+            "month(datetime(2024, 2, 10))",
+            null,
+            null
+          ],
+          "want": 2
+        },
+        {
+          "args": [
+            "utcyear(datetime(2024, 2, 10))",
+            null,
+            null
+          ],
+          "want": 2024
+        },
+        {
+          "args": [
+            "date(datetime(2024, 2, 10))",
+            null,
+            null
+          ],
+          "want": 10
+        },
+        {
+          "args": [
+            "regexp(\"a+\")",
+            null,
+            null
+          ],
+          "want": {
+            "$": "re",
+            "src": "a+",
+            "flags": ""
+          }
+        },
+        {
+          "args": [
+            "test(/b/, \"abc\")",
+            null,
+            null
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "test(\"b\", \"abc\")",
+            null,
+            null
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "encodeURIComponent(\"a b\")",
+            null,
+            null
+          ],
+          "want": "a%20b"
+        },
+        {
+          "args": [
+            "clamp(5, 0, 3)",
+            null,
+            null
+          ],
+          "want": 3
+        },
+        {
+          "args": [
+            "clamp(-5, 0, 3)",
+            null,
+            null
+          ],
+          "want": 0
+        }
+      ]
+    },
+    "evalDatum": {
+      "oracle": "vega-interpreter@2.3.1",
+      "kind": "eval",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            "datum.a + datum.b",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": 3
+        },
+        {
+          "args": [
+            "datum[\"a b\"]",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": 3
+        },
+        {
+          "args": [
+            "datum.list[0] + datum.list[1]",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": 3
+        },
+        {
+          "args": [
+            "datum.nested.deep",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": true
+        },
+        {
+          "args": [
+            "datum.name + \"!\"",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": "hello!"
+        },
+        {
+          "args": [
+            "upper(datum.name)",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": "HELLO"
+        },
+        {
+          "args": [
+            "datum.a > 1 ? \"big\" : \"small\"",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": "small"
+        },
+        {
+          "args": [
+            "datum.s * 2",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": 10
+        },
+        {
+          "args": [
+            "+datum.s",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": 5
+        },
+        {
+          "args": [
+            "datum.a + $shift",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": {
+            "$": "nan"
+          }
+        },
+        {
+          "args": [
+            "datum.b * $bound",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": {
+            "$": "nan"
+          }
+        },
+        {
+          "args": [
+            "datum.flag ? datum.a : datum.b",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": 1
+        },
+        {
+          "args": [
+            "if (datum.a > 0, datum.a, -datum.a)",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": 1
+        },
+        {
+          "args": [
+            "max(datum.a, datum.b, $shift)",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": {
+            "$": "nan"
+          }
+        },
+        {
+          "args": [
+            "length(datum.list)",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": 2
+        },
+        {
+          "args": [
+            "datum.missing",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": {
+            "$": "undef"
+          }
+        },
+        {
+          "args": [
+            "datum.nested.missing",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": {
+            "$": "undef"
+          }
+        },
+        {
+          "args": [
+            "clamp(datum.a + $shift, 0, $bound)",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {
+              "bound": 10,
+              "shift": 5
+            }
+          ],
+          "want": {
+            "$": "nan"
+          }
+        }
+      ]
+    },
+    "evalSecurity": {
+      "oracle": "vega-interpreter@2.3.1",
+      "kind": "eval",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            "undefinedFn(1)",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {}
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Cannot read properties of undefined (reading 'apply')",
+            "name": "TypeError"
+          }
+        },
+        {
+          "args": [
+            "a.b.c",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {}
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Cannot read properties of undefined (reading 'b')",
+            "name": "TypeError"
+          }
+        },
+        {
+          "args": [
+            "null.x",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {}
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Cannot read properties of null (reading 'x')",
+            "name": "TypeError"
+          }
+        },
+        {
+          "args": [
+            "{}.x.y",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {}
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Cannot read properties of undefined (reading 'y')",
+            "name": "TypeError"
+          }
+        },
+        {
+          "args": [
+            "Function(\"return 1\")()",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {}
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Cannot read properties of undefined (reading 'startsWith')",
+            "name": "TypeError"
+          }
+        },
+        {
+          "args": [
+            "datum.constructor",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {}
+          ],
+          "want": {
+            "$": "fn"
+          }
+        },
+        {
+          "args": [
+            "({toString: 1})",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {}
+          ],
+          "want": {}
+        },
+        {
+          "args": [
+            "eval(\"1+1\")",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {}
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Cannot read properties of undefined (reading 'apply')",
+            "name": "TypeError"
+          }
+        },
+        {
+          "args": [
+            "setTimeout(null, 0)",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {}
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Cannot read properties of undefined (reading 'apply')",
+            "name": "TypeError"
+          }
+        },
+        {
+          "args": [
+            "a in b",
+            {
+              "a": 1,
+              "a b": 3,
+              "b": 2,
+              "flag": true,
+              "list": [
+                1,
+                2
+              ],
+              "name": "hello",
+              "nested": {
+                "deep": true
+              },
+              "s": "5"
+            },
+            {}
+          ],
+          "want": {
+            "$": "throw",
+            "message": "Ops[n.operator] is not a function",
+            "name": "TypeError"
+          }
+        }
+      ]
+    }
+  }
+}

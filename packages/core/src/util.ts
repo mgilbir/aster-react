@@ -92,6 +92,18 @@ export function hasOwnProperty(object: unknown, property: string | number | symb
   return Object.hasOwn(object as object, property)
 }
 
+/**
+ * Object property names the expression evaluator refuses (prototype
+ * accessors and Object.prototype methods) — vega-util's
+ * `DisallowedObjectProperties`, ported so the interpreter's security
+ * blocklist is ours.
+ */
+export const DisallowedObjectProperties: ReadonlySet<string> = new Set([
+  'constructor', '__defineGetter__', '__defineSetter__', 'hasOwnProperty',
+  '__lookupGetter__', '__lookupSetter__', 'isPrototypeOf', 'propertyIsEnumerable',
+  'toString', 'valueOf', 'toLocaleString', '__proto__',
+])
+
 // --- type coercion -----------------------------------------------------------
 
 /**

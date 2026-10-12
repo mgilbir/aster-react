@@ -1,8 +1,6 @@
 {
   "imports": {
     "src/expression.ts": [
-      "vega-expression",
-      "vega-interpreter",
       "vega-scale"
     ],
     "src/runtime.ts": [
@@ -36,8 +34,6 @@
     "d3-time",
     "d3-time-format",
     "topojson-client",
-    "vega-expression",
-    "vega-interpreter",
     "vega-scale"
   ]
 }

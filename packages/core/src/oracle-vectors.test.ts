@@ -40,6 +40,8 @@ import {
   type FormatSpecifier,
 } from './format.js'
 import { locale, type Locale } from './locale.js'
+import { parseExpression, type AstNode } from './expr-parser.js'
+import { interpret } from './expr-interpreter.js'
 
 const vectorsDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'testdata', 'vectors')
 
@@ -48,7 +50,7 @@ interface VectorFile {
 }
 interface Suite {
   oracle: string
-  kind?: 'fn' | 'accessor' | 'color' | 'apply1' | 'interval' | 'specifier'
+  kind?: 'fn' | 'accessor' | 'color' | 'apply1' | 'interval' | 'specifier' | 'ast' | 'eval'
   tz?: string
   cases: Array<{ args: unknown[]; want: unknown }>
 }
@@ -89,6 +91,7 @@ function enc(v: unknown): unknown {
   }
   if (v instanceof Date) return { $: 'date', ms: v.getTime() }
   if (v instanceof RegExp) return { $: 're', src: v.source, flags: v.flags }
+  if (typeof v === 'function') return { $: 'fn' }
   if (Array.isArray(v)) return v.map(enc)
   if (v !== null && typeof v === 'object') {
     const o: Record<string, unknown> = {}
@@ -231,6 +234,25 @@ for (const file of files) {
             return
           }
           expect(enc(call(built as (...a: never[]) => unknown, [args[args.length - 1]]))).toEqual(want)
+        })
+        continue
+      }
+      if (suite.kind === 'ast') {
+        expectSuite(name, suite, (args, want) => {
+          expect(enc(call(parseExpression as (...a: never[]) => unknown, args as [string]))).toEqual(want)
+        })
+        continue
+      }
+      if (suite.kind === 'eval') {
+        expectSuite(name, suite, (args, want) => {
+          // evaluate with an empty host table: the evaluator's own default
+          // function table (ported from vega-interpreter) supplies the core
+          const [code, datum, params] = args as [string, unknown, Record<string, unknown>]
+          const got = call(() => {
+            const ast = parseExpression(code)
+            return interpret(ast, {}, params ?? {}, datum)
+          }, [])
+          expect(enc(got)).toEqual(want)
         })
         continue
       }

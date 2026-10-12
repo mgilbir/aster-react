@@ -1,19 +1,19 @@
 /**
  * Expression engine.
  *
- * We reuse the spec language's own grammar: `vega-expression` parses the
- * expression DSL to an AST, and `vega-interpreter` evaluates that AST (CSP-safe,
- * no `new Function`). We supply the *function context* — the semantics of
+ * The expression DSL is parsed by our port of vega-expression's parser
+ * (`./expr-parser.ts`) and evaluated by our port of vega-interpreter's
+ * CSP-safe AST evaluator (`./expr-interpreter.ts`) — no `new Function`.
+ * This module supplies the *function context* — the semantics of
  * `vega-functions` that our runtime needs — bound to our scales/data, plus
  * owned, oracle-vector-tested ports: the type/array/string/math utilities
- * (`./util.js`), the colour spaces (`./color.js`), and formatting functions
- * from `vega-format` and `vega-time` (all pure). This keeps expression
- * semantics byte-compatible with vega while the stack is brought in-house.
+ * (`./util.js`), the colour spaces (`./color.js`), the calendar (`./time.js`)
+ * and the format layer (`./locale.js`).
  */
-import { parseExpression } from 'vega-expression'
-import { expressionInterpreter } from 'vega-interpreter'
 import { locale } from './locale.js'
 import { bandSpace } from 'vega-scale'
+import { parseExpression } from './expr-parser.js'
+import { expressionInterpreter } from './expr-interpreter.js'
 import {
   timeOffset, utcOffset, timeSequence, utcSequence,
   dayofyear, utcdayofyear, week, utcweek, timeUnitSpecifier,
