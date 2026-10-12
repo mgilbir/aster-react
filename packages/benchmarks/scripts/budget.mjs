@@ -31,7 +31,12 @@ import { fileURLToPath } from 'node:url'
 // (81 -> 85: the reactive differential engine — per-datum dataChanges re-derive,
 // persistent scene/items, incremental scales/transforms, DOM-subtree skip, the
 // imperative session.change() — is a deliberate feature addition, ~3 kB gzip.)
-const BUDGET_BYTES = 85 * 1024
+// (85 -> 90: ADR 0001 — the engine owns its stack instead of importing it. The
+// colour module (CSS parser, 148 named colours, RGB/HSL/Lab/HCL conversions,
+// oracle-vector-tested) is the first owned library; it replaces d3-color and
+// costs ~3.5 kB gzip. Later owned libraries re-baseline this gate the same way,
+// each with its measured cost recorded here.)
+const BUDGET_BYTES = 90 * 1024
 
 // Walk up from this file to find the monorepo root:
 // packages/benchmarks/scripts -> packages/benchmarks -> packages -> aster-react (root)

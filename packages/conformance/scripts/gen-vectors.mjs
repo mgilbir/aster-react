@@ -8,8 +8,9 @@
  * dependency is dropped. This mirrors the sibling projects' method (Go's
  * `testdata/upstream-vectors`, Kotlin's `test-fixtures/upstream-vectors`).
  *
- * The oracle packages are devDependencies of @aster/conformance, pinned to
- * the exact versions the runtime previously depended on. Run with:
+ * One output file per library. The oracle packages are devDependencies of
+ * @aster/conformance, pinned to the exact versions the runtime previously
+ * depended on. Run with:
  *
  *   pnpm --filter @aster/conformance run vectors
  *
@@ -61,6 +62,46 @@ function call(fn, args) {
     return fn(...args)
   } catch (err) {
     return { $: 'throw', name: err.name }
+  }
+}
+
+// --- colour projection -------------------------------------------------------
+// Colour objects are projected to plain data: the constructor name, every own
+// field, the format methods, `displayable`, and one level of brighter/darker/
+// clamp/rgb conversions. The replay test mirrors this exactly.
+
+function colorFields(c) {
+  const o = {}
+  for (const k of Object.keys(c)) o[k] = enc(c[k])
+  return o
+}
+
+function proj(c) {
+  if (c == null) return c
+  return {
+    type: c.constructor.name,
+    fields: colorFields(c),
+    formatRgb: c.formatRgb(),
+    formatHex: c.formatHex(),
+    formatHex8: c.formatHex8(),
+    formatHsl: c.formatHsl(),
+    displayable: c.displayable(),
+    brighter: colorFields(c.brighter()),
+    brighter2: colorFields(c.brighter(2)),
+    darker: colorFields(c.darker()),
+    clamp: c.clamp ? colorFields(c.clamp()) : null,
+    rgb: colorFields(c.rgb()),
+  }
+}
+
+/** Wrap a colour-constructor suite: every case is `fn(...args)` -> projection. */
+function colorSuite(pkgName, mod, name, cases) {
+  const f = mod[name]
+  if (typeof f !== 'function') throw new Error(`oracle export missing: ${name}`)
+  return {
+    oracle: oracleOf(pkgName),
+    kind: 'color',
+    cases: cases.map((args) => ({ args: args.map(enc), want: enc(proj(call(f, args))) })),
   }
 }
 
@@ -128,6 +169,7 @@ async function loadPkg(pkgName) {
 
 const vegaUtil = await loadPkg('vega-util')
 const vegaFunctions = await loadPkg('vega-functions')
+const d3Color = await loadPkg('d3-color')
 
 const BACKSLASH = String.fromCharCode(92)
 /** The string `a\.b` (a, backslash, dot, b) — an escaped dot. */
@@ -215,16 +257,75 @@ const utilSuites = {
   ]),
 }
 
+// --- the d3-color surface @aster/core reimplements ----------------------------
+
+const parseSpecs = [
+  // hex forms
+  '#f00', '#ff0000', '#ff000080', '#f000', '#F00', '#ff', '#fffffff', '#',
+  // rgb()/rgba() integer and percent
+  'rgb(255, 0, 0)', 'rgb(255,128,0)', 'rgb( 100% , 0% , 0% )',
+  'rgba(255, 0, 0, 0.5)', 'rgba(0,0,0,0)', 'rgba(10,20,30,1)',
+  'rgb(1,2,3,0.5)', 'rgb(1 2 3)', 'rgb (1,2,3)', 'rgb(-5,10,300)',
+  // hsl()/hsla()
+  'hsl(120, 50%, 50%)', 'hsl(120,50%,50%)', 'hsla(120,50%,50%,0.5)',
+  'hsl(0,0%,0%)', 'hsl(0,0%,100%)', 'hsl(0,0%,50%)',
+  'hsl(120,50%,0%)', 'hsl(120,50%,100%)', 'hsl(120,0%,50%)',
+  'hsl(-120,50%,50%)', 'hsl(480,50%,50%)', 'hsl(120,150%,50%)',
+  // named, transparent, junk
+  'red', 'rebeccapurple', 'lime', 'gray', 'grey', 'darkslategray',
+  'darkslategrey', 'steelblue', 'transparent', 'none', '', 'notacolor',
+  'REDBLUE', 'red ', ' steelblue', 'red\t', 'rgb(255,0,0) ',
+]
+
+const colorSuites = {
+  parse: colorSuite('d3-color', d3Color, 'color', parseSpecs.map((s) => [s])),
+  rgb: colorSuite('d3-color', d3Color, 'rgb', [
+    ...parseSpecs.map((s) => [s]),
+    [255, 128, 0], [255, 128, 0, 0.5], [255, 128, 0, '0.5'], [255, 128, 0, 0],
+    [255.7, 128.2, 0.9, 0.1], [300, 0, 0], [-5, 0, 0], [NaN, 0, 0],
+    [0, 0, 0], [255, 255, 255], [128, 128, 128, 0],
+  ]),
+  hsl: colorSuite('d3-color', d3Color, 'hsl', [
+    ...parseSpecs.map((s) => [s]),
+    [120, 0.5, 0.5], [120, 0.5, 0.5, 0.5], [120, 0.5, 0.5, 0],
+    [-240, 1, 0.5], [480, 1, 0.5], [0, 0, 0], [0, 0, 1],
+    [0, 1, 0.5], [120, 1.5, 0.5], [120, 0.5, 1.5], [120, NaN, 0.5],
+  ]),
+  lab: colorSuite('d3-color', d3Color, 'lab', [
+    ...parseSpecs.map((s) => [s]),
+    [50, 40, 20], [50, -40, -20], [100, 0, 0], [0, 0, 0],
+    [50, NaN, 20], [50, 40, NaN], [50, 40, 20, 0.5],
+    [-10, 0, 0], [200, 0, 0],
+  ]),
+  hcl: colorSuite('d3-color', d3Color, 'hcl', [
+    ...parseSpecs.map((s) => [s]),
+    [120, 40, 50], [0, 0, 50], [120, 40, 50, 0.5], [-120, 40, 50],
+    [120, 0, 50], [120, 40, 0], [120, 40, 100], [120, 40, 200],
+    [120, NaN, 50], [0, 0, 0], [0, 0, 100],
+  ]),
+  gray: colorSuite('d3-color', d3Color, 'gray', [[0], [50], [100], [50, 0.5], [NaN]]),
+  lch: colorSuite('d3-color', d3Color, 'lch', [
+    [50, 40, 120], [50, 40, 120, 0.5], [50, 0, 0],
+  ]),
+}
+
 // --- write -------------------------------------------------------------------
 
-const suites = {}
-for (const [name, suite] of Object.entries(utilSuites)) suites[name] = suite
+// One file per library, so a suite's growth does not churn unrelated diffs.
+const files = {
+  'vega-util.json': { suites: utilSuites },
+  'd3-color.json': { suites: colorSuites },
+}
 
-const out = { suites }
-const dest = join(here, '..', '..', 'core', 'testdata', 'vectors', 'vega-util.json')
-mkdirSync(dirname(dest), { recursive: true })
-writeFileSync(dest, JSON.stringify(out, null, 2) + '\n')
+const destDir = join(here, '..', '..', 'core', 'testdata', 'vectors')
+mkdirSync(destDir, { recursive: true })
 
 let n = 0
-for (const s of Object.values(suites)) n += s.cases.length
-console.log(`[vectors] wrote ${n} cases across ${Object.keys(suites).length} suites -> ${dest}`)
+for (const [file, doc] of Object.entries(files)) {
+  const dest = join(destDir, file)
+  writeFileSync(dest, JSON.stringify(doc, null, 2) + '\n')
+  const cases = Object.values(doc.suites).reduce((m, s) => m + s.cases.length, 0)
+  n += cases
+  console.log(`[vectors] wrote ${cases} cases across ${Object.keys(doc.suites).length} suites -> ${dest}`)
+}
+console.log(`[vectors] ${n} cases in total`)

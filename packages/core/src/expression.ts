@@ -4,11 +4,11 @@
  * We reuse the spec language's own grammar: `vega-expression` parses the
  * expression DSL to an AST, and `vega-interpreter` evaluates that AST (CSP-safe,
  * no `new Function`). We supply the *function context* — the semantics of
- * `vega-functions` that our runtime needs — bound to our scales/data, plus the
- * type/array/string/math utilities from `./util.js` (an oracle-vector-tested
- * port), and formatting functions from `vega-format`, `vega-time` and
- * `d3-color` (all pure). This keeps expression semantics byte-compatible with
- * vega while staying independent of vega's runtime packages.
+ * `vega-functions` that our runtime needs — bound to our scales/data, plus
+ * owned, oracle-vector-tested ports: the type/array/string/math utilities
+ * (`./util.js`), the colour spaces (`./color.js`), and formatting functions
+ * from `vega-format` and `vega-time` (all pure). This keeps expression
+ * semantics byte-compatible with vega while the stack is brought in-house.
  */
 import { parseExpression } from 'vega-expression'
 import { expressionInterpreter } from 'vega-interpreter'
@@ -28,7 +28,7 @@ function numericSequence(start: number, stop?: number, step?: number): number[] 
   for (let i = 0; i < len; i++) out[i] = start + i * step
   return out
 }
-import { rgb, hsl, lab, hcl } from 'd3-color'
+import { rgb, hsl, lab, hcl } from './color.js'
 import {
   accessor, ascending, extent, isArray, isBoolean, isDate, isNumber, isObject,
   isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck,

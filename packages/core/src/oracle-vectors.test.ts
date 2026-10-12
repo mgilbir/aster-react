@@ -1,12 +1,17 @@
 /**
  * Replay of the oracle vectors recorded from the pinned upstream packages
- * (`packages/conformance/scripts/gen-vectors.mjs` -> `testdata/vectors/`).
+ * (`packages/conformance/scripts/gen-vectors.mjs` -> `testdata/vectors/*.json`).
  *
  * Every suite asserts the port's output matches the oracle's exactly —
- * including `NaN`, `-0`, `undefined`, thrown errors and `Date` identity —
- * which is what licenses dropping the upstream dependency.
+ * including `NaN`, `-0`, `undefined`, thrown errors, `Date` identity and
+ * colour projections — which is what licenses dropping the upstream
+ * dependency. One suite kind per shape:
+ *
+ *   'fn'       — plain functions: `fn(...args)` -> want
+ *   'accessor' — accessor factories: report fields/name and the value on a datum
+ *   'color'    — colour constructors: project the object's fields and methods
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -21,17 +26,16 @@ import {
   isBoolean, isDate, isNumber, isObject, isRegExp, isString, pluck, toBoolean,
   toDate, toNumber, toString, type Accessor,
 } from './util.js'
+import { color, gray, hcl, hsl, lab, lch, rgb } from './color.js'
 
-const here = dirname(fileURLToPath(import.meta.url))
-const file = join(here, '..', 'testdata', 'vectors', 'vega-util.json')
-const { suites } = JSON.parse(readFileSync(file, 'utf8')) as VectorFile
+const vectorsDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'testdata', 'vectors')
 
 interface VectorFile {
   suites: Record<string, Suite>
 }
 interface Suite {
   oracle: string
-  kind?: string
+  kind?: 'fn' | 'accessor' | 'color'
   cases: Array<{ args: unknown[]; want: unknown }>
 }
 
@@ -80,60 +84,107 @@ function enc(v: unknown): unknown {
   return v
 }
 
-/** Call the port, capturing a throw as the tagged value the vectors record. */
-function call(fn: (...args: any[]) => any, args: unknown[]): unknown {
+/** Call fn, capturing a throw as the tagged value the vectors record. */
+function call(fn: (...args: never[]) => unknown, args: unknown[]): unknown {
   try {
-    return fn(...args)
+    return (fn as (...a: unknown[]) => unknown)(...args)
   } catch (err) {
     return { $: 'throw', name: (err as Error).name }
   }
 }
 
-// A dispatch table across differently-typed oracle surfaces; the vector
-// replay calls each through the tagged-value codec, so the signatures meet here.
+// --- suite kinds -------------------------------------------------------------
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const fns: Record<string, (...args: any[]) => any> = {
   toBoolean, toDate, toNumber, toString, isArray, isBoolean, isDate, isNumber,
   isObject, isRegExp, isString, extent, ascending, pluck,
 }
 
-describe('vega-util oracle vectors', () => {
-  for (const [name, suite] of Object.entries(suites)) {
-    if (suite.kind === 'accessor') {
-      describe(`${name} (accessor factory)`, () => {
-        it(`matches ${suite.oracle}`, () => {
-          const factory = name === 'field' ? field : accessor
-          for (const { args, want } of suite.cases) {
-            const decoded = args.map((a) => dec(a) as never)
-            const got = call(factory as (...a: any[]) => any, decoded)
-            const thrown = got !== null && typeof got === 'object' && (got as { $?: string }).$ === 'throw'
-            if (thrown) {
-              // malformed path: the factory itself threw, as recorded
-              expect(enc(got)).toEqual(want)
-              continue
-            }
-            // rebuild the recorded shape: reported fields/name + value on the datum
-            const f = got as Accessor
-            const datum = (want as { on: unknown }).on
-            const value = call(f, [dec(datum)])
-            expect(enc({ fields: f.fields, fname: f.fname, on: datum, value })).toEqual(want)
-          }
-        })
-      })
-      continue
-    }
-    const fn = fns[name]
-    if (!fn) throw new Error(`no port for vector suite "${name}"`)
-    describe(name, () => {
-      it(`matches ${suite.oracle} (${suite.cases.length} cases)`, () => {
-        for (const { args, want } of suite.cases) {
-          const decoded = args.map(dec)
-          expect(enc(call(fn, decoded))).toEqual(want)
-        }
-      })
-    })
+const accessorFactories: Record<string, (...args: any[]) => any> = { field }
+
+const colorFactories: Record<string, (...args: any[]) => any> = {
+  parse: color, color, rgb, hsl, lab, hcl, gray, lch,
+}
+
+function colorFields(c: unknown): Record<string, unknown> {
+  const o: Record<string, unknown> = {}
+  for (const k of Object.keys(c as object)) o[k] = enc((c as Record<string, unknown>)[k])
+  return o
+}
+
+function proj(c: unknown): unknown {
+  if (c == null) return c
+  const o = c as any
+  return {
+    type: o.constructor.name,
+    fields: colorFields(c),
+    formatRgb: o.formatRgb(),
+    formatHex: o.formatHex(),
+    formatHex8: o.formatHex8(),
+    formatHsl: o.formatHsl(),
+    displayable: o.displayable(),
+    brighter: colorFields(o.brighter()),
+    brighter2: colorFields(o.brighter(2)),
+    darker: colorFields(o.darker()),
+    clamp: o.clamp ? colorFields(o.clamp()) : null,
+    rgb: colorFields(o.rgb()),
   }
-})
+}
+
+function expectSuite(name: string, suite: Suite, run: (args: unknown[], want: unknown) => void): void {
+  describe(name, () => {
+    it(`matches ${suite.oracle} (${suite.cases.length} cases)`, () => {
+      for (const { args, want } of suite.cases) run(args.map(dec), want)
+    })
+  })
+}
+
+// --- load every vector file and replay by kind -------------------------------
+
+const files = readdirSync(vectorsDir).filter((f) => f.endsWith('.json')).sort()
+expect(files.length).toBeGreaterThan(0)
+
+for (const file of files) {
+  const { suites } = JSON.parse(readFileSync(join(vectorsDir, file), 'utf8')) as VectorFile
+
+  describe(`oracle vectors: ${file}`, () => {
+    for (const [name, suite] of Object.entries(suites)) {
+      if (suite.kind === 'color') {
+        const factory = colorFactories[name]
+        if (!factory) throw new Error(`no port for color suite "${name}"`)
+        expectSuite(name, suite, (args, want) => {
+          expect(enc(proj(call(factory, args)))).toEqual(want)
+        })
+        continue
+      }
+      if (suite.kind === 'accessor') {
+        const factory = accessorFactories[name]
+        if (!factory) throw new Error(`no port for accessor suite "${name}"`)
+        expectSuite(`${name} (accessor factory)`, suite, (args, want) => {
+          const got = call(factory, args)
+          const thrown = got !== null && typeof got === 'object' && (got as { $?: string }).$ === 'throw'
+          if (thrown) {
+            // malformed path: the factory itself threw, as recorded
+            expect(enc(got)).toEqual(want)
+            return
+          }
+          // rebuild the recorded shape: reported fields/name + value on the datum
+          const f = got as Accessor
+          const datum = (want as { on: unknown }).on
+          const value = call(f as (...a: never[]) => unknown, [dec(datum)])
+          expect(enc({ fields: f.fields, fname: f.fname, on: datum, value })).toEqual(want)
+        })
+        continue
+      }
+      const fn = fns[name]
+      if (!fn) throw new Error(`no port for vector suite "${name}"`)
+      expectSuite(name, suite, (args, want) => {
+        expect(enc(call(fn, args))).toEqual(want)
+      })
+    }
+  })
+}
 
 describe('vector codec self-check', () => {
   it('enc/dec round-trips the tagged values the suites rely on', () => {
@@ -144,14 +195,6 @@ describe('vector codec self-check', () => {
     // NaN and -0 need Object.is semantics
     expect(Number.isNaN(dec(enc(NaN)))).toBe(true)
     expect(Object.is(dec(enc(-0)), -0)).toBe(true)
-  })
-
-  it('covers every suite the file ships (no silent skips)', () => {
-    expect(Object.keys(suites).sort()).toEqual([
-      'ascending', 'field', 'isArray', 'isBoolean', 'isDate', 'isNumber',
-      'isObject', 'isRegExp', 'isString', 'pluck', 'extent', 'toBoolean',
-      'toDate', 'toNumber', 'toString',
-    ].sort())
   })
 })
 
