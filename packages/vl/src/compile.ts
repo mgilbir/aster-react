@@ -1149,6 +1149,8 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       if (k === 'title') continue
       lg[k] = v
     }
+    // top/bottom legends lay their entries out horizontally
+    if (lg.orient === 'bottom' || lg.orient === 'top') lg.direction = lg.direction ?? 'horizontal'
     legends.push(lg)
   }
   return legends
