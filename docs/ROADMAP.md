@@ -336,10 +336,17 @@ way Go and Kotlin do), then by rendering both compiled specs.
   schema declares (7,549 cases — matching the Go floor) and diffs each against
   upstream vega. **6,019/7,549 pass (80%)**: all encode/config mark families,
   arcs (a full d3-arc port: padAngle, cornerRadius, radius swaps, degenerate
-  radii), trails, scales, titles. Remaining clusters: projections (the d3-geo
-  clip/rotate subsystem, ~950), legend orients (the legendGroupLayout port,
-  ~240 — the first cut regressed the corpus and was reverted), axis tick/label
-  properties (~200), trellis layout (33), config-range (11).
+  radii), trails, scales, titles. Projections: DONE —
+  1104/1105 (was ~340). The whole cluster traced to vega lowercasing
+  projection type names (multi-word types silently fell back to mercator)
+  plus the missing Mollweide/geoIdentity ports, vega-projection's persistent
+  per-projection geoPath (pointRadius), rotate gamma dropped in tuple
+  coercion, and empty-path/null-position bounds semantics. One residual case
+  (azimuthalequalarea-clipAngle-0) differs by a 1.7e-6 px fp epsilon in d3's
+  clip-intersection arithmetic. Remaining clusters: legend orients (the
+  legendGroupLayout port, ~240 — the first cut regressed the corpus and was
+  reverted), axis tick/label properties (~200), trellis layout (33),
+  config-range (11).
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
 
