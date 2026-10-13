@@ -22,6 +22,7 @@ import {
   trailPath,
   arcPath,
 } from './render.js'
+import { baselineOffset } from './bounds.js'
 
 /** Minimal 2D context surface used by the renderer. */
 export interface CanvasLike {
@@ -616,7 +617,11 @@ function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | unde
     if (it.text == null) return
     lines = [String(it.text)]
     x = it.x ?? 0
-    y = it.y ?? 0
+    // The SVG leaf renderer bakes the baseline shift into y for unrotated
+    // text (rotated text keeps the offset in the rotate frame) — mirror it.
+    const ang = (it as Record<string, unknown>).angle as number | undefined
+    const bl = it.baseline as string | undefined
+    y = (it.y ?? 0) + (bl && bl !== 'alphabetic' && !(ang != null && ang !== 0) ? baselineOffset(it) : 0)
     angle = undefined
     lineHeight = 0
   } else {

@@ -42,11 +42,11 @@ describe('vega-exact bounds', () => {
     expect(b.y2).toBeCloseTo(48 + e, 10)
   })
 
-  it('bounds guide-label leaves with the baked baseline offset undone', () => {
-    // our axis label leaves bake vega's middle offset into y; the bound must
-    // box around the item position: leaf (−6.5, 3.5) ≡ item (−6.5, 0.5)
+  it('bounds guide-label leaves at vega\'s raw item position', () => {
+    // guide labels carry vega's raw item y (the baseline shift is the
+    // renderer's bake): item (−6.5, 0.5), baseline middle, fs 10
     const b = new Bounds()
-    boundLeaf(b, { x: -6.5, y: 3.5, text: '55', align: 'right', baseline: 'middle', fill: '#000' })
+    boundLeaf(b, { x: -6.5, y: 0.5, text: '55', align: 'right', baseline: 'middle', fontSize: 10, fill: '#000' })
     expect([b.x1, b.y1, b.x2, b.y2]).toEqual([-22.5, -4.5, -6.5, 5.5])
   })
 
@@ -66,11 +66,11 @@ describe('vega-exact bounds', () => {
       axis: { orient: 'left', range: 300 },
       items: [
         { x: 0.5, y: 0.5, x2: -4.5, y2: 0.5, stroke: '#888', strokeWidth: 1 },
-        { x: -6.5, y: 3.5, text: '55', align: 'right', baseline: 'middle', fill: '#000' },
+        { x: -6.5, y: 0.5, text: '55', align: 'right', baseline: 'middle', fontSize: 10, fill: '#000' },
       ],
     } as unknown as SceneGroup
     const b = boundAxisGroup(axis)
-    // ticks shifted (−0.5): [-5.5, -0.5, 0.5, 0.5]; label shifted: [-23, -5, -6.5, 5.5]
+    // ticks shifted (−0.5): [-5.5, -0.5, 0.5, 0.5]; label raw: [-23, -5, -6.5, 5.5]
     // spine: s = 23 → [-23, 0, 0, 300]
     expect([b.x1, b.y1, b.x2, b.y2]).toEqual([-23, -5, 0.5, 300])
   })
