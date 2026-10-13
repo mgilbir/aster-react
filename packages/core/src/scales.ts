@@ -324,6 +324,14 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
       }
       const merged = mergeUnionDomain(type, all)
       if (merged) return merged
+      // discrete union (band/point): the distinct values, sorted per the
+      // domain's sort flag
+      const present = all.filter((v) => v != null)
+      const distinct = Array.from(new Set(present))
+      if ((domain as { sort?: unknown }).sort === true || (domain as { sort?: unknown }).sort === 'ascending') {
+        distinct.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+      }
+      return distinct
     }
     if ('data' in domain) {
       const { data, field, fields } = domain as { data: string; field?: string; fields?: string[] }

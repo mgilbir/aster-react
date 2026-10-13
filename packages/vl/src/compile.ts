@@ -76,6 +76,7 @@ export function compile(input: VLSpec): VLSpec {
   const hasEncFacet = isObject(enc.facet) || enc.row != null || enc.column != null
   if (isObject(spec.facet) || (isObject(spec.spec) && hasTopFacet(spec))) return compileFaceted(spec)
   if (hasEncFacet && spec.spec == null) return compileFaceted(spec)
+  if (isObject(spec.mark) && (spec.mark as Record<string, unknown>).type === 'boxplot') return compileBoxplot(spec)
   if (spec.concat || spec.hconcat || spec.vconcat) return compileConcat(spec)
   return compileUnit(spec)
 }
@@ -663,6 +664,182 @@ function compileConcat(spec: VLSpec): VLSpec {
   out.scales = scales
   if (legends.length) out.legends = legends
   if (spec.title) out.title = spec.title
+  return out
+}
+
+// --- boxplot composite -------------------------------------------------------
+
+/** Expand a boxplot composite mark into the layered aggregate structure
+ * vega-lite compiles it to: outliers, whisker rules, the box and the median
+ * bar (five marks over nine datasets). Vertical orientation only. */
+function compileBoxplot(spec: VLSpec): VLSpec {
+  const markDef = spec.mark as Record<string, unknown>
+  const extent = (markDef.extent as number) ?? 1.5
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, Record<string, unknown>>) : {}
+  const xDef = enc.x
+  const yDef = enc.y
+  if (!xDef?.field || !yDef?.field) throw new Error('[aster/vl] boxplot requires x and y fields')
+  const isDiscreteX = (xDef.type as string) === 'nominal' || (xDef.type as string) === 'ordinal'
+  if (!isDiscreteX) throw new Error('[aster/vl] horizontal boxplot not supported yet')
+  const dim = xDef.field as string
+  const F = yDef.field as string
+  const lowerBox = `lower_box_${F}`
+  const upperBox = `upper_box_${F}`
+  const midBox = `mid_box_${F}`
+  const minF = `min_${F}`
+  const maxF = `max_${F}`
+  const lowerW = `lower_whisker_${F}`
+  const upperW = `upper_whisker_${F}`
+  const q = JSON.stringify(F)
+  const outlierExpr =
+    `(datum[${q}] < datum['${lowerBox}'] - ${extent} * (datum['${upperBox}'] - datum['${lowerBox}'])) || ` +
+    `(datum[${q}] > datum['${upperBox}'] + ${extent} * (datum['${upperBox}'] - datum['${lowerBox}']))`
+  const inlierExpr =
+    `(datum['${lowerBox}'] - ${extent} * (datum['${upperBox}'] - datum['${lowerBox}']) <= datum[${q}]) && ` +
+    `(datum[${q}] <= datum['${upperBox}'] + ${extent} * (datum['${upperBox}'] - datum['${lowerBox}']))`
+  const validExpr = (f: string): string => `isValid(datum[${JSON.stringify(f)}]) && isFinite(+datum[${JSON.stringify(f)}])`
+
+  const sourceName = isObject(spec.data) && (spec.data as Record<string, unknown>).name != null
+    ? (spec.data as Record<string, unknown>).name as string
+    : 'source_0'
+  const source: Record<string, unknown> = { ...(isObject(spec.data) ? spec.data : {}), name: sourceName }
+
+  const bandX = { scale: 'x', field: dim, band: 0.5 }
+  const marks: Record<string, unknown>[] = [
+    {
+      name: 'layer_0_layer_0_marks',
+      type: 'symbol',
+      style: ['point'],
+      from: { data: 'data_2' },
+      encode: { update: {
+        opacity: { value: 0.7 },
+        fill: { value: 'transparent' },
+        stroke: { value: '#4c78a8' },
+        ariaRoleDescription: { value: 'point' },
+        x: bandX,
+        y: { scale: 'y', field: F },
+      } },
+    },
+    {
+      name: 'layer_0_layer_1_layer_0_marks',
+      type: 'rule',
+      style: ['rule'],
+      from: { data: 'data_4' },
+      encode: { update: {
+        stroke: { value: 'black' },
+        x: bandX,
+        y: { scale: 'y', field: lowerW },
+        y2: { scale: 'y', field: lowerBox },
+      } },
+    },
+    {
+      name: 'layer_0_layer_1_layer_1_marks',
+      type: 'rule',
+      style: ['rule'],
+      from: { data: 'data_5' },
+      encode: { update: {
+        stroke: { value: 'black' },
+        x: bandX,
+        y: { scale: 'y', field: upperBox },
+        y2: { scale: 'y', field: upperW },
+      } },
+    },
+    {
+      name: 'layer_1_layer_0_marks',
+      type: 'rect',
+      style: ['box'],
+      from: { data: 'data_7' },
+      encode: { update: {
+        ariaRoleDescription: { value: 'box' },
+        fill: { value: '#4c78a8' },
+        xc: bandX,
+        width: { value: 14 },
+        y: { scale: 'y', field: lowerBox },
+        y2: { scale: 'y', field: upperBox },
+      } },
+    },
+    {
+      name: 'layer_1_layer_1_marks',
+      type: 'rect',
+      style: ['box'],
+      from: { data: 'data_8' },
+      encode: { update: {
+        opacity: { value: 0.7 },
+        fill: [{ test: `datum['${lowerBox}'] >= datum['${upperBox}']`, value: '#4c78a8' }, { value: 'white' }],
+        xc: bandX,
+        width: { value: 14 },
+        yc: { scale: 'y', field: midBox },
+        height: { value: 1 },
+      } },
+    },
+  ]
+
+  const data: Record<string, unknown>[] = [
+    source,
+    { name: 'data_1', source: sourceName, transform: [{ type: 'joinaggregate', as: [lowerBox, upperBox], ops: ['q1', 'q3'], fields: [F, F], groupby: [dim] }] },
+    { name: 'data_2', source: 'data_1', transform: [{ type: 'filter', expr: outlierExpr }, { type: 'filter', expr: validExpr(F) }] },
+    {
+      name: 'data_3',
+      source: 'data_1',
+      transform: [
+        { type: 'filter', expr: inlierExpr },
+        { type: 'aggregate', groupby: [dim], ops: ['min', 'max', 'min', 'max'], fields: [F, F, lowerBox, upperBox], as: [lowerW, upperW, lowerBox, upperBox] },
+      ],
+    },
+    { name: 'data_4', source: 'data_3', transform: [{ type: 'filter', expr: validExpr(lowerW) }] },
+    { name: 'data_5', source: 'data_3', transform: [{ type: 'filter', expr: validExpr(upperBox) }] },
+    { name: 'data_6', source: sourceName, transform: [{ type: 'aggregate', groupby: [dim], ops: ['q1', 'q3', 'median', 'min', 'max'], fields: [F, F, F, F, F], as: [lowerBox, upperBox, midBox, minF, maxF] }] },
+    { name: 'data_7', source: 'data_6', transform: [{ type: 'filter', expr: validExpr(lowerBox) }] },
+    { name: 'data_8', source: 'data_6', transform: [{ type: 'filter', expr: validExpr(midBox) }] },
+  ]
+
+  const domainEntry = (data: string, field: string): unknown => ({ data, field })
+  const scales: ScaleSpec[] = [
+    {
+      name: 'x',
+      type: 'band',
+      domain: { fields: ['data_2', 'data_4', 'data_5', 'data_7', 'data_8'].map((d) => domainEntry(d, dim)), sort: true },
+      range: [0, { signal: 'width' }],
+      paddingInner: 0,
+      paddingOuter: 0,
+    },
+    {
+      name: 'y',
+      type: 'linear',
+      domain: {
+        fields: [
+          domainEntry('data_2', F),
+          domainEntry('data_4', lowerW),
+          domainEntry('data_4', lowerBox),
+          domainEntry('data_5', upperBox),
+          domainEntry('data_5', upperW),
+          domainEntry('data_7', lowerBox),
+          domainEntry('data_7', upperBox),
+          domainEntry('data_8', midBox),
+        ],
+      },
+      range: [{ signal: 'height' }, 0],
+      zero: true,
+      nice: true,
+    },
+  ]
+
+  const out: Record<string, unknown> = {}
+  if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
+  out.autosize = spec.autosize ?? 'none'
+  out.background = spec.background ?? 'white'
+  out.padding = spec.padding ?? 5
+  out.width = spec.width ?? 200
+  out.height = spec.height ?? 200
+  out.style = 'cell'
+  out.data = data
+  out.marks = marks
+  out.scales = scales
+  out.axes = [
+    { scale: 'y', orient: 'left', gridScale: 'x', grid: true, tickCount: { signal: 'ceil(height/40)' }, domain: false, labels: false, aria: false, maxExtent: 0, minExtent: 0, ticks: false, zindex: 0 },
+    { scale: 'x', orient: 'bottom', grid: false, title: channelTitle(xDef as never), labelAlign: 'right', labelAngle: 270, labelBaseline: 'middle', zindex: 0 },
+    { scale: 'y', orient: 'left', grid: false, title: channelTitle(yDef as never), labelOverlap: true, tickCount: { signal: 'ceil(height/40)' }, zindex: 0 },
+  ]
   return out
 }
 
