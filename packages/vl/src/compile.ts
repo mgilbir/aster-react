@@ -444,9 +444,11 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       domain: positionalDomain(def, dataName, mark, orient),
       range: effRange,
     }
-    if (type === 'linear') {
-      const zeroDefault = zeroDefaultFor(mark, channel, orient)
-      sc.zero = (def.scale?.zero as boolean | undefined) ?? zeroDefault
+    if (type === 'linear' || type === 'log') {
+      const zeroDefault = type === 'log' ? false : zeroDefaultFor(mark, channel, orient)
+      if (type === 'linear' || def.scale?.zero != null) {
+        sc.zero = (def.scale?.zero as boolean | undefined) ?? zeroDefault
+      }
       sc.nice = (def.scale?.nice as unknown) ?? true
       if (def.bin) {
         const maxbins = isObject(def.bin) && (def.bin.maxbins as number | undefined) ? (def.bin.maxbins as number) : 10
@@ -551,7 +553,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         name: 'color',
         type: 'ordinal',
         domain: sortedDomain(colorDef, dataName),
-        range: colorDef.scale?.scheme ?? 'category',
+        range: (colorDef.scale?.range as unknown) ?? colorDef.scale?.scheme ?? 'category',
       })
     } else {
       scales.push({
@@ -662,7 +664,7 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
     if (title !== null) labelAxis.title = title
     if (isContinuousScaleType(sc.type)) {
       if (def.channel === 'x') labelAxis.labelFlush = true
-      labelAxis.labelOverlap = true
+      labelAxis.labelOverlap = sc.type === 'log' ? 'greedy' : true
       labelAxis.tickCount = def.bin
         ? { signal: def.channel === 'x' ? 'ceil(width/10)' : 'ceil(height/10)' }
         : tickCountSignal
@@ -1058,9 +1060,39 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
     out.overlayFilled = ptFilled ?? ptType === 'circle'
   }
+  // conditional encodings (including value-only channels, which parseChannel
+  // skips — e.g. color: {condition: {...}, value: 'steelblue'})
+  const conditionalChannels: { channel: string; cond: Record<string, unknown>; fallback: unknown }[] = []
+  for (const [channel, def] of Object.entries(spec.encoding as Record<string, Record<string, unknown>> ?? {})) {
+    if (def && typeof def === 'object' && def.condition && typeof def.condition === 'object') {
+      conditionalChannels.push({ channel, cond: def.condition as Record<string, unknown>, fallback: def.value })
+    }
+  }
+  applyCondition(update, conditionalChannels, mark, isObject(spec.mark) && spec.mark.filled === true)
+
   // user overrides: encoding.update-style custom encodings are out of scope here
   void spec
   return out
+}
+
+/**
+ * Vega-Lite conditional encodings: for every channel whose def carries a
+ * `condition`, emit the vega conditional array [{test, value|field...},
+ * {value|field...}] over the (already built) unconditional encoding.
+ */
+function applyCondition(update: Record<string, unknown>, channels: { channel: string; cond: Record<string, unknown>; fallback: unknown }[], mark: string, markFilled?: boolean): void {
+  for (const { channel: ch, cond, fallback } of channels) {
+    // the color channel materialises as stroke or fill depending on the mark
+    const channel = ch === 'color' ? (mark === 'point' && !markFilled ? 'stroke' : 'fill') : ch
+    // the channel's own `value` is the fallback; the mark default only backs it up
+    const base = fallback !== undefined ? { value: fallback } : update[channel]
+    if (base == null) continue
+    const entry: Record<string, unknown> = { test: cond.test as string }
+    for (const k of ['value', 'field', 'datum', 'scale', 'signal'] as const) {
+      if (cond[k] !== undefined) entry[k] = cond[k]
+    }
+    update[channel] = [entry, base]
+  }
 }
 
 function definedSignal(xDef?: FieldDef | null, yDef?: FieldDef | null): unknown {
