@@ -42,9 +42,13 @@ export interface CanvasLike {
   stroke(): void
   fillRect(x: number, y: number, w: number, h: number): void
   setLineDash(dashes: number[]): void
-  fillText(text: string, x: number, y: number, multi?: boolean): void
+  // `maxWidthOrMulti` doubles as the multi-line marker (renderers pass a
+  // boolean when the item has wrapped lines); the DOM `maxWidth` overload is
+  // never used by this renderer.
+  fillText(text: string, x: number, y: number, maxWidthOrMulti?: number | boolean): void
   drawImage?(image: unknown, dx: number, dy: number, dw?: number, dh?: number): void
   createLinearGradient(x0: number, y0: number, x1: number, y1: number): GradientLike
+  scale(x: number, y: number): void
   fillStyle: unknown
   strokeStyle: unknown
   globalAlpha: number
@@ -349,7 +353,7 @@ export function renderSceneToCanvas(scene: SceneRoot, ctx: CanvasLike, opts: Ren
 
   ctx.save()
   if (opts.dpr != null && opts.dpr !== 1) {
-    ctx.translate(opts.dpr, opts.dpr)
+    ctx.scale(opts.dpr, opts.dpr)
   }
   ctx.miterLimit = 4
 

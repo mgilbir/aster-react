@@ -29,6 +29,10 @@
     "./signals": {
       "types": "./dist/signals.d.ts",
       "default": "./dist/signals.js"
+    },
+    "./canvas": {
+      "types": "./dist/canvas.d.ts",
+      "default": "./dist/canvas.js"
     }
   },
   "scripts": {

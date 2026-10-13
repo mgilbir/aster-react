@@ -7,8 +7,10 @@ import {
 } from '@aster/core'
 // The incremental DOM patcher ships as the `@aster/core/dom` addon: a
 // string-mode host never bundles it, while <Chart> (which supports the
-// `incremental` path) pulls it in explicitly.
+// `incremental` path) pulls it in explicitly. The canvas renderer is likewise
+// opt-in (`@aster/core/canvas`) so SVG-only hosts never bundle it.
 import { createChartSession, patchSceneDom, renderSceneToDomElement } from '@aster/core/dom'
+import { renderSceneToCanvas } from '@aster/core/canvas'
 import { bindSceneSignals, stampDatumAttrs, type SignalBinding } from '@aster/core/signals'
 import { dragToDataInterval, selectionToPixels, type SelectionInterval } from './interaction.js'
 
@@ -37,6 +39,14 @@ export interface ChartProps {
    * match); patching only runs in the browser on subsequent updates.
    */
   incremental?: boolean
+  /**
+   * Rendering backend: `'svg'` (default, SSR-safe) or `'canvas'`. Both render
+   * the same scene through the shared geometry engine. Canvas handles
+   * devicePixelRatio and redraws on every scene change; the DOM tooltip and
+   * the spec-driven signal event loop are SVG-only (they read the rendered
+   * DOM). Selection brushing works in both.
+   */
+  renderer?: 'svg' | 'canvas'
   className?: string
   style?: React.CSSProperties
   signals?: Record<string, unknown>
@@ -74,6 +84,7 @@ export function Chart({
   onSelect,
   brush,
   incremental = true,
+  renderer = 'svg',
   signalListeners,
   onSignal,
   interactive = true,
@@ -139,18 +150,20 @@ export function Chart({
   const hasPatchedRef = React.useRef(false)
   const markup = React.useMemo<string | null>(() => {
     if (scene == null) return null
+    if (renderer === 'canvas') return null
     if (incremental && hasPatchedRef.current) return null
     return renderSceneToSvg(scene)
-  }, [incremental, scene])
+  }, [incremental, renderer, scene])
 
   const svgHostRef = React.useRef<HTMLDivElement>(null)
+  const canvasRef = React.useRef<HTMLCanvasElement>(null)
   // Event-driven signals (vega's event loop): bind the spec's `signal.on`
   // streams to the rendered svg; each event updates the signal store, and the
   // chart re-renders with the updated values via `eventSignals`.
   const signalBindingRef = React.useRef<SignalBinding | null>(null)
   const [eventSignals, setEventSignals] = React.useState<Record<string, unknown>>({})
   React.useLayoutEffect(() => {
-    if (!interactive || !scene) return
+    if (!interactive || !scene || renderer === 'canvas') return
     const host = svgHostRef.current
     const svg = (host?.firstElementChild as SVGSVGElement | null) ?? null
     if (!svg) return
@@ -174,7 +187,7 @@ export function Chart({
   // Incremental updates: create the <svg> once, then patch changed attributes
   // in place instead of re-serializing and re-parsing the whole markup every render.
   React.useLayoutEffect(() => {
-    if (!incremental || !scene) return
+    if (!incremental || !scene || renderer === 'canvas') return
     const host = svgHostRef.current
     if (!host) return
     const existing = host.firstElementChild
@@ -185,6 +198,28 @@ export function Chart({
     }
     hasPatchedRef.current = true
   }, [incremental, scene])
+
+  // Canvas backend: size the backing store for devicePixelRatio and redraw the
+  // whole scene whenever it changes (cheap relative to SVG serialization for
+  // dense marks; no listeners to leak — every redraw is a full repaint).
+  React.useLayoutEffect(() => {
+    if (renderer !== 'canvas' || !scene) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const dpr = typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1
+    const w = Math.max(1, Math.round(scene.width))
+    const h = Math.max(1, Math.round(scene.height))
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr)
+      canvas.height = Math.round(h * dpr)
+    } else {
+      const ctx0 = canvas.getContext('2d')
+      ctx0?.clearRect(0, 0, canvas.width, canvas.height)
+    }
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    renderSceneToCanvas(scene, ctx, { dpr })
+  }, [renderer, scene])
 
   const hasInteraction = onSelect != null || brush != null
   const chartInfoRef = React.useRef<ChartInfo | null>(null)
@@ -379,11 +414,19 @@ export function Chart({
           )}
         </div>
       )}
-      <div
-        ref={svgHostRef}
-        style={{ position: 'relative', zIndex: 1 }}
-        {...(markup != null ? { dangerouslySetInnerHTML: { __html: markup } } : {})}
-      />
+      {renderer === 'canvas' ? (
+        <canvas
+          ref={canvasRef}
+          data-testid="chart-canvas"
+          style={{ position: 'relative', zIndex: 1, width: scene.width, height: scene.height, display: 'block' }}
+        />
+      ) : (
+        <div
+          ref={svgHostRef}
+          style={{ position: 'relative', zIndex: 1 }}
+          {...(markup != null ? { dangerouslySetInnerHTML: { __html: markup } } : {})}
+        />
+      )}
       {tooltipInfo != null && (
         <div
           data-testid="chart-tooltip"

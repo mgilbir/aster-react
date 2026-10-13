@@ -46,6 +46,7 @@ function makeRecordingCtx(): { ctx: CanvasLike; records: DrawRecord[] } {
     save() { stack.push([tx, ty]) },
     restore() { const t = stack.pop(); if (t) { tx = t[0]; ty = t[1] } },
     translate(x, y) { tx += x; ty += y },
+    scale(x) { tx *= x; ty *= x },
     beginPath() { ops = [] },
     moveTo(x, y) { ops.push(`M${fmt(x + tx)},${fmt(y + ty)}`) },
     lineTo(x, y) { ops.push(`L${fmt(x + tx)},${fmt(y + ty)}`) },
