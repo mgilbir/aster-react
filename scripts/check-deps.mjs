@@ -27,6 +27,7 @@ const ROOT = process.cwd()
 const PACKAGES = [
   { dir: 'packages/core', baseline: 'packages/core/dep-baseline.json' },
   { dir: 'packages/react', baseline: 'packages/react/dep-baseline.json' },
+  { dir: 'packages/vl', baseline: 'packages/vl/dep-baseline.json' },
 ]
 
 /** The oracle stack: everything on the "own the engine" list. */

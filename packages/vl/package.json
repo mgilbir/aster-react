@@ -1,0 +1,16 @@
+{
+  "name": "@aster/vl",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "From-scratch Vega-Lite compiler: Vega-Lite -> Vega, verified against the vega-lite oracle by rendering parity.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  }
+}

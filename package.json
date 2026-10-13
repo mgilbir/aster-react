@@ -17,7 +17,8 @@
     "bench:browser": "pnpm --filter @aster/benchmarks run bench:browser",
     "check:deps": "node scripts/check-deps.mjs",
     "vectors": "pnpm --filter @aster/conformance run vectors",
-    "check": "pnpm check:deps && pnpm typecheck && pnpm build && pnpm test && pnpm conformance && pnpm --filter @aster/benchmarks run budget"
+    "check": "pnpm check:deps && pnpm typecheck && pnpm build && pnpm test && pnpm conformance && pnpm --filter @aster/benchmarks run budget",
+    "conformance-vl": "pnpm --filter @aster/conformance run conformance-vl"
   },
   "devDependencies": {
     "esbuild": "~0.25.12",

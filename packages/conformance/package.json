@@ -9,12 +9,14 @@
     "conformance": "tsx src/run.ts",
     "conformance:diff": "tsx src/diff.ts",
     "probe": "tsx src/probe.ts",
-    "vectors": "node scripts/gen-vectors.mjs"
+    "vectors": "node scripts/gen-vectors.mjs",
+    "conformance-vl": "tsx src/run-vl.ts"
   },
   "dependencies": {
     "@aster/core": "workspace:*",
     "vega": "^6.3.1",
-    "vega-lite": "^6.4.3"
+    "vega-lite": "^6.4.3",
+    "@aster/vl": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
