@@ -1653,32 +1653,14 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
   // disables it (vega-lite merges per-field legends)
   const legendSuppressed = (def: FieldDef): boolean =>
     fields.some((f) => f.field === def.field && f.legend === null)
-  const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
-  if (sizeDef && sizeDef.legend !== null && !legendSuppressed(sizeDef)) {
-    legends.push({
-      size: 'size',
-      symbolType: 'circle',
-      title: legendTitle(sizeDef, sizeDef.legend ?? {}),
-      encode: { symbols: { update: { fill: { value: 'transparent' }, stroke: { value: C.blue }, opacity: { value: markOpacity ?? C.pointOpacity } } } },
-    })
-  }
-  const opacityLegendDef = fields.find((f) => f.channel === 'opacity' && f.field)
-  if (opacityLegendDef && opacityLegendDef.legend !== null && !legendSuppressed(opacityLegendDef)) {
-    legends.push({
-      opacity: 'opacity',
-      symbolType: 'circle',
-      title: legendTitle(opacityLegendDef, opacityLegendDef.legend ?? {}),
-      encode: { symbols: { update: { fill: { value: 'transparent' }, stroke: { value: C.blue } } } },
-    })
-  }
-  const shapeDefL = fields.find((f) => f.channel === 'shape' && f.field)
-  if (shapeDefL && shapeDefL.legend !== null && !legendSuppressed(shapeDefL)) {
-    legends.push({
-      shape: 'shape',
-      symbolType: 'circle',
-      title: legendTitle(shapeDefL, shapeDefL.legend ?? {}),
-      encode: { symbols: { update: { fill: { value: 'transparent' }, stroke: { value: C.blue }, opacity: { value: markOpacity ?? C.pointOpacity } } } },
-    })
+  // vega-lite emits legends in a fixed channel order (color, size, shape,
+  // opacity) regardless of the encoding's key order — verified by probing
+  // vl.compile with permuted encodings.
+  const legendsByKey: Record<string, Record<string, unknown>> = {}
+  const order: string[] = []
+  const push = (key: string, lg: Record<string, unknown>): void => {
+    legendsByKey[key] = lg
+    order.push(key)
   }
   const colorDef = fields.find((f) => f.channel === 'color' && f.field)
   if (colorDef && colorDef.legend !== null && !legendSuppressed(colorDef)) {
@@ -1716,8 +1698,40 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     }
     // top/bottom legends lay their entries out horizontally
     if (lg.orient === 'bottom' || lg.orient === 'top') lg.direction = lg.direction ?? 'horizontal'
-    legends.push(lg)
+    push('color', lg)
   }
+  const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
+  if (sizeDef && sizeDef.legend !== null && !legendSuppressed(sizeDef)) {
+    // vega-lite gives a standalone size legend the default symbol stroke
+    // (#4c78a8) but drops it when a color legend coexists.
+    const sizeSymUpdate: Record<string, unknown> = { fill: { value: 'transparent' }, opacity: { value: markOpacity ?? C.pointOpacity } }
+    if (!colorDef || colorDef.legend === null || legendSuppressed(colorDef)) sizeSymUpdate.stroke = { value: C.blue }
+    push('size', {
+      size: 'size',
+      symbolType: 'circle',
+      title: legendTitle(sizeDef, sizeDef.legend ?? {}),
+      encode: { symbols: { update: sizeSymUpdate } },
+    })
+  }
+  const shapeDefL = fields.find((f) => f.channel === 'shape' && f.field)
+  if (shapeDefL && shapeDefL.legend !== null && !legendSuppressed(shapeDefL)) {
+    push('shape', {
+      shape: 'shape',
+      symbolType: 'circle',
+      title: legendTitle(shapeDefL, shapeDefL.legend ?? {}),
+      encode: { symbols: { update: { fill: { value: 'transparent' }, stroke: { value: C.blue }, opacity: { value: markOpacity ?? C.pointOpacity } } } },
+    })
+  }
+  const opacityLegendDef = fields.find((f) => f.channel === 'opacity' && f.field)
+  if (opacityLegendDef && opacityLegendDef.legend !== null && !legendSuppressed(opacityLegendDef)) {
+    push('opacity', {
+      opacity: 'opacity',
+      symbolType: 'circle',
+      title: legendTitle(opacityLegendDef, opacityLegendDef.legend ?? {}),
+      encode: { symbols: { update: { fill: { value: 'transparent' }, stroke: { value: C.blue } } } },
+    })
+  }
+  for (const key of order) legends.push(legendsByKey[key]!)
   return legends
 }
 
