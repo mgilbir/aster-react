@@ -350,11 +350,11 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   anchors, 18px offset, 8px margins, corner orients, start/middle/end), and
   the anchor-bound rules (xBounds = vertical axes, yBounds = horizontal,
   group-typed marks = ScopeRole union into both, grid marks excluded). Orient
-  sweep 14/18; the remaining 4 are ±1-3px title/scope-bound epsilons on the sweep
-  base (left/bottom orients). Remaining legend clusters: entry-level
-  properties (columns, padding, tickCount, cornerRadius, title align/anchor,
-  fillColor, direction) ~200 cases. Then axis tick/label properties (~200),
-  trellis layout (33), config-range (11).
+  sweep 14/18; the remaining 4 are ±1-3px title/scope-bound epsilons on the
+  sweep base (left/bottom orients). Axis title style properties landed
+  (fontSize/weight/opacity/color/angle/align/baseline/X/Y). Remaining
+  clusters: legend entry-level properties (~200), axis label/tick properties
+  + titleAnchor/Angle/Y (~150), trellis layout (33), config-range (11).
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
 
