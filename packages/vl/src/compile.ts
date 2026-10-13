@@ -823,7 +823,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     } else if (m === 'point' || m === 'line' || m === 'text') {
       lg.stroke = 'color'
       if (isDiscreteType(colorDef.type)) {
-        lg.symbolType = 'circle'
+        lg.symbolType = mark === 'line' ? 'stroke' : 'circle'
         lg.encode = { symbols: { update: { fill: { value: 'transparent' }, opacity: { value: C.pointOpacity } } } }
       } else {
         lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
@@ -1075,6 +1075,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
 
   // stacked area with a series channel: one faceted area per series (pathgroup)
   const colorDefSeries = fields.find((f) => f.channel === 'color' && f.field)
+  const detailDefSeries = fields.find((f) => f.channel === 'detail' && f.field)
+  const seriesForFacet = colorDefSeries ?? detailDefSeries
   const stackedNow = (yDef != null && isStacked(yDef, mark, orient)) || (xDef != null && isStacked(xDef, mark, orient))
   if (mark === 'area' && stackedNow && colorDefSeries) {
     markSpec.name = 'layer_0_marks'
@@ -1106,8 +1108,41 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     out[0] = group
   }
 
-  // line/area with a point overlay: expand to a symbol mark over a filtered clone
+  // line marks split by a series channel (color or detail): one line per group
   const pointOverlay = isObject(spec.mark) ? spec.mark.point : undefined
+  if (mark === 'line' && (colorDefSeries || detailDefSeries) && !pointOverlay) {
+    markSpec.name = 'layer_0_marks'
+    const innerUpdate = { ...update }
+    if (colorDefSeries) innerUpdate.stroke = { scale: 'color', field: aggFieldName(colorDefSeries) }
+    const group: Record<string, unknown> = {
+      name: 'pathgroup',
+      type: 'group',
+      from: {
+        facet: {
+          name: 'faceted_path_main',
+          data: dataName,
+          groupby: [colorDefSeries, detailDefSeries].filter(Boolean).map((f) => aggFieldName(f as FieldDef)),
+        },
+      },
+      encode: {
+        update: {
+          width: { field: { group: 'width' } },
+          height: { field: { group: 'height' } },
+        },
+      },
+      marks: [{
+        name: 'marks',
+        type: 'line',
+        style: ['line'],
+        sort: { field: aggFieldName(xDef ?? yDef!) },
+        from: { data: 'faceted_path_main' },
+        encode: { update: innerUpdate },
+      }],
+    }
+    out[0] = group
+  }
+
+  // line/area with a point overlay: expand to a symbol mark over a filtered clone
   if ((mark === 'line' || mark === 'area') && pointOverlay) {
     const ptType = isObject(pointOverlay) ? ((pointOverlay.type as string) ?? 'circle') : 'circle'
     const ptFilled = isObject(pointOverlay) ? (pointOverlay.filled as boolean | undefined) : undefined
