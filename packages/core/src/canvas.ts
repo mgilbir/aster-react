@@ -771,15 +771,17 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
     }
     case 'arc': {
       for (const it of group.items ?? []) {
-        const x = it.x as number
-        const y = it.y as number
         const r = (it.outerRadius as number) ?? (it.radius as number) ?? 0
         const r0 = (it.innerRadius as number) ?? 0
         const a0 = (it.startAngle as number) ?? 0
         const a1 = (it.endAngle as number) ?? 0
+        // The SVG renderer emits the arc path around (0,0) translated by the
+        // item position; trace the same local path with the item offset.
+        const cr = (it as Record<string, unknown>).cornerRadius as number | undefined ?? 0
+        const pa = (it as Record<string, unknown>).padAngle as number | undefined ?? 0
         ctx.beginPath()
-        const segs = parsePathData(arcPath(x, y, r, r0, a0, a1))
-        tracePath(ctx, segs)
+        const segs = parsePathData(arcPath(0, 0, r, r0, a0, a1, cr, pa))
+        tracePath(ctx, segs, it.x ?? 0, it.y ?? 0)
         paintPath(ctx, segs, it, defs, 'auto')
       }
       return
