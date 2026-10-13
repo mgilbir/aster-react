@@ -192,10 +192,9 @@ function renderLeaf(it: SceneItem): string {
     const transform = (tx !== '0' || ty !== '0') ? ` transform="translate(${tx},${ty})"` : ''
     return `<path${transform}${dd} d="${it.path}"${attr('fill', it.fill)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
   }
-  // Symbol items (circle arc path)
+  // Symbol items (shape path; 'circle' renders the arc form)
   if (it.shape != null && it.radius != null) {
-    const rNum = num(it.radius)
-    const d = `M${rNum},0A${rNum},${rNum},0,1,1,${-rNum},0A${rNum},${rNum},0,1,1,${rNum},0`
+    const d = symbolPath(it.shape as string, it.radius as number)
     const t = `transform="translate(${num(it.x ?? 0)},${num(it.y ?? 0)})"`
     return `<path ${t}${dd} d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
   }
@@ -556,14 +555,40 @@ export function symbolPath(shape: string | undefined, r: number): string {
     }
     case 'triangle-right': {
       const h = r * 0.866
-      return `M${num(-h)},0L${num(h)},${num(-r)}L${num(h)},${num(r)}Z`
+      return `M${num(h)},0L${num(-h)},${num(-r)}L${num(-h)},${num(r)}Z`
     }
     case 'triangle-left': {
       const h = r * 0.866
-      return `M${num(h)},0L${num(-h)},${num(-r)}L${num(-h)},${num(r)}Z`
+      return `M${num(-h)},0L${num(h)},${num(-r)}L${num(h)},${num(r)}Z`
     }
     case 'stroke':
       return `M${num(-r)},0L${num(r)},0`
+    case 'arrow': {
+      const st = r / 7
+      const t = r / 2.5
+      const v = r / 8
+      return [
+        `M${num(-st)},${num(r)}`,
+        `L${num(st)},${num(r)}`,
+        `L${num(st)},${num(-v)}`,
+        `L${num(t)},${num(-v)}`,
+        'L0,' + num(-r),
+        `L${num(-t)},${num(-v)}`,
+        `L${num(-st)},${num(-v)}`,
+        'Z',
+      ].join('')
+    }
+    case 'wedge': {
+      const h = r * Math.sqrt(3) / 2
+      const o = h - r * (Math.sqrt(3) / 3)
+      const b = r / 4
+      return `M0,${num(-h - o)}L${num(-b)},${num(h - o)}L${num(b)},${num(h - o)}Z`
+    }
+    case 'triangle': {
+      const h = r * Math.sqrt(3) / 2
+      const o = h - r * (Math.sqrt(3) / 3)
+      return `M0,${num(-h - o)}L${num(-r)},${num(h - o)}L${num(r)},${num(h - o)}Z`
+    }
     default:
       return `M${num(r)},0A${num(r)},${num(r)},0,1,1,${num(-r)},0A${num(r)},${num(r)},0,1,1,${num(r)},0`
   }

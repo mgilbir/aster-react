@@ -30,6 +30,7 @@ import { tickFormat } from './scale.js'
 import { compileChart } from './compiler.js'
 import { trellisLayout } from './trellis.js'
 import { boundAxisGroup, boundGroupItem, Bounds, boundLeaf } from './bounds.js'
+import { symbolPath } from './render.js'
 
 const DEFAULT_SIZE = 500
 
@@ -4138,21 +4139,30 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // (16 or 20 for stroke legends) plus the widest label; the outer background
     // spans the larger of the entry content and the title.
     const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
-    const entryWidth = 16 + 8 * maxLabelLen
+    // Entry layout parameters (vega defaults via the legend config).
+    const labelOffset = (legend as { labelOffset?: number }).labelOffset ?? 4
+    const rowPadding = (legend as { rowPadding?: number }).rowPadding ?? 2
+    const labelColor = (legend as { labelColor?: string }).labelColor ?? '#000'
+    const labelOpacity = (legend as { labelOpacity?: number }).labelOpacity
+    const labelFontWeight = (legend as { labelFontWeight?: string | number }).labelFontWeight
+    const labelFontStyle = (legend as { labelFontStyle?: string }).labelFontStyle
+    const titleColor = (legend as { titleColor?: string }).titleColor ?? '#000'
+    const titleOpacity = (legend as { titleOpacity?: number }).titleOpacity
+    const entryWidth = 12 + labelOffset + 8 * maxLabelLen
     const titleStr = String(legend.title ?? '')
     const titleWidth = titleStr.length > 0 ? ~~(0.8 * titleStr.length * 11) : 0
     const outerWidth = Math.max(entryWidth, titleWidth)
     // Vega includes the title row (16px) in the legend background only when
     // a title is present.
     const titleRow = titleStr ? 16 : 0
-    const bgHeight = titleRow + boxHeight + entryStep * (n - 1)
+    const bgHeight = titleRow + boxHeight + (entryStep + rowPadding - 2) * (n - 1)
 
     const items: SceneItem[] = []
     items.push({ path: `M0,0h${outerWidth}v${bgHeight}h-${outerWidth}Z`, x: 0, y: 0 })
-    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
+    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: titleColor, fontSize: 11, ...(titleOpacity != null ? { opacity: titleOpacity } : {}) })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
-      const off = titleRow + i * entryStep
+      const off = titleRow + i * (entryStep + rowPadding - 2)
       // For shape legends, compute per-entry swatch height based on the
       // symbol's actual stroke bounds.  Vega's boundStroke expands path
       // bounds by e = max(strokeWidth/2, miterLimit*strokeWidth/2).
@@ -4190,8 +4200,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
           case 'diamond': d = `M0,${-r}L${r},0L0,${r}L${-r},0Z`; break
           case 'triangle-up': { const h = r * 0.866; d = `M0,${-h}L${-r},${h}L${r},${h}Z`; break }
           case 'triangle-down': { const h = r * 0.866; d = `M0,${h}L${-r},${-h}L${r},${-h}Z`; break }
-          case 'triangle-right': { const h = r * 0.866; d = `M${-h},0L${h},${-r}L${h},${r}Z`; break }
-          case 'triangle-left': { const h = r * 0.866; d = `M${h},0L${-h},${-r}L${-h},${r}Z`; break }
+          case 'triangle-right': { const h = r * 0.866; d = `M${h},0L${-h},${-r}L${-h},${r}Z`; break }
+          case 'triangle-left': { const h = r * 0.866; d = `M${-h},0L${h},${-r}L${h},${r}Z`; break }
           case 'cross': {
             const s = r / 2.5
             d = `M${-r},${-s}L${-r},${s}L${-s},${s}L${-s},${r}L${s},${r}L${s},${s}L${r},${s}L${r},${-s}L${s},${-s}L${s},${-r}L${-s},${-r}L${-s},${-s}Z`
@@ -4201,19 +4211,29 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         }
         items.push({ path: d, x: 6, y: off + 6, stroke: String(shapeStroke), strokeWidth: 1.5, opacity: shapeOpacity })
       } else if (symbolType === 'stroke') {
-        items.push({ path: `M-5,0L5,0`, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5 })
-      } else if (symbolType === 'square') {
-        if (colorProp === 'fill') {
-          items.push({ path: 'M-5,-5h10v10h-10Z', x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5, ...(legendStrokeColor != null ? { stroke: String(legendStrokeColor) } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
-        } else {
-          items.push({ path: 'M-5,-5h10v10h-10Z', x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5 })
-        }
-      } else if (colorProp === 'fill') {
-        items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5, ...(legendStrokeColor != null ? { stroke: String(legendStrokeColor) } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
+        // the shape is a line but the channel paints it: a fill legend fills
+        // the symbol, a stroke legend strokes it
+        const paint = colorProp === 'fill' ? { fill: String(scale(value)) } : { stroke: String(scale(value)) }
+        items.push({ path: `M-5,0L5,0`, x: 6, y: off + 6, strokeWidth: 1.5, ...paint })
       } else {
-        items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
+        const symPath = symbolPath(symbolType, 5)
+        if (colorProp === 'fill') {
+          items.push({ path: symPath, x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5, ...(legendStrokeColor != null ? { stroke: String(legendStrokeColor) } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
+        } else {
+          items.push({ path: symPath, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
+        }
       }
-      items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000', fontSize: 10 })
+      items.push({
+        text: String(value),
+        x: 12 + labelOffset,
+        y: off + 9,
+        align: 'left',
+        fill: labelColor,
+        fontSize: 10,
+        ...(labelOpacity != null ? { opacity: labelOpacity } : {}),
+        ...(labelFontWeight != null ? { fontWeight: labelFontWeight } : {}),
+        ...(labelFontStyle != null ? { fontStyle: labelFontStyle } : {}),
+      })
     }
     return { marktype: 'group', role: 'legend', x: 0, y: 0, width: outerWidth, height: bgHeight, items }
   }
