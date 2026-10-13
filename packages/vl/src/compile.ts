@@ -184,7 +184,14 @@ function compileLayered(spec: VLSpec): VLSpec {
   if (axes.length) out.axes = axes
   const legends: Record<string, unknown>[] = []
   for (const p of parsed) {
-    for (const lg of buildLegends(p.fields, p.mark, isObject(p.markRaw) ? (p.markRaw.opacity as number | undefined) : undefined, isObject(p.markRaw) && p.markRaw.filled === true)) {
+    for (const lg of buildLegends(
+      p.fields,
+      p.mark,
+      isObject(p.markRaw) ? (p.markRaw.opacity as number | undefined) : undefined,
+      isObject(p.markRaw) && p.markRaw.filled === true,
+      isObject(p.markRaw) ? (p.markRaw.stroke as string | undefined) : undefined,
+      isObject(p.markRaw) ? (p.markRaw.strokeWidth as number | undefined) : undefined,
+    )) {
       if (!legends.some((x) => JSON.stringify(x) === JSON.stringify(lg))) legends.push(lg)
     }
   }
@@ -720,7 +727,11 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         sc.bins = { signal: `bin_maxbins_${maxbins}_${def.field}_bins` }
       }
       const measureChannel = orient === 'vertical' ? 'y' : 'x'
-      if ((mark === 'bar' || mark === 'rect') && channel !== measureChannel) sc.padding = 5
+      // rect marks with two discrete channels (heatmaps) use unpadded bands
+      const otherChannel = channel === 'x' ? 'y' : 'x'
+      const otherDef = fields.find((f) => f.channel === otherChannel)
+      const bothDiscrete = mark === 'rect' && otherDef != null && isDiscreteType(otherDef.type)
+      if ((mark === 'bar' || (mark === 'rect' && !bothDiscrete)) && channel !== measureChannel) sc.padding = 5
       // binned scales: no zero/nice; domain comes from bin start/end
       if (def.bin) {
         delete sc.zero
@@ -729,8 +740,8 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       }
     } else if (type === 'band') {
       const hasOffset = fields.some((f) => f.channel === 'xOffset' || f.channel === 'yOffset')
-      const defaultInner = mark === 'tick' ? 0.25 : hasOffset ? 0.2 : C.barPaddingInner
-      const defaultOuter = mark === 'tick' ? 0.125 : hasOffset ? 0.2 : C.barPaddingInner / 2
+      const defaultInner = mark === 'tick' ? 0.25 : mark === 'rect' ? 0 : hasOffset ? 0.2 : C.barPaddingInner
+      const defaultOuter = mark === 'tick' ? 0.125 : mark === 'rect' ? 0 : hasOffset ? 0.2 : C.barPaddingInner / 2
       sc.paddingInner = (def.scale?.paddingInner as number | undefined) ?? defaultInner
       sc.paddingOuter = (def.scale?.paddingOuter as number | undefined) ?? defaultOuter
       sc.padding = def.scale?.padding as number | undefined
@@ -837,7 +848,9 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         name: 'color',
         type: 'linear',
         domain: { data: dataName, field: aggFieldName(colorDef) },
-        range: 'ramp',
+        // vega-lite's quantitative color range: 'heatmap' scheme for
+        // rect/geoshape marks, a ramp otherwise
+        range: mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp',
         zero: false,
       })
     }
@@ -985,7 +998,7 @@ function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null): un
 
 // --- legends -----------------------------------------------------------------
 
-function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean): Record<string, unknown>[] {
+function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number): Record<string, unknown>[] {
   const legends: Record<string, unknown>[] = []
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
   if (sizeDef && sizeDef.legend !== null) {
@@ -1024,7 +1037,11 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       lg.fill = 'color'
       lg.symbolType = m === 'bar' || m === 'rect' ? 'square' : 'circle'
       if (m !== 'bar' && m !== 'rect') {
-        lg.encode = { symbols: { update: { opacity: { value: markOpacity ?? C.pointOpacity } } } }
+        const symUpdate: Record<string, unknown> = { opacity: { value: markOpacity ?? C.pointOpacity } }
+        // the mark's stroke propagates onto the legend symbols (widening
+        // vega's entry bounds)
+        if (markStroke) symUpdate.stroke = { value: markStroke }
+        lg.encode = { symbols: { update: symUpdate } }
       }
     } else if (m === 'point' || m === 'line' || m === 'text') {
       lg.stroke = 'color'
@@ -1112,6 +1129,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         if (stacked) {
           update.y = { scale: 'y', field: `${yDef.field}_end` }
           update.y2 = { scale: 'y', field: `${yDef.field}_start` }
+        } else if (positionalScaleType(mark, yDef) === 'band') {
+          // nominal/ordinal y (heatmap-style rect marks): band cell height
+          update.y = { scale: 'y', field: aggFieldName(yDef) }
+          update.height = { signal: `max(0.25, bandwidth('y'))` }
         } else {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
           if (mark === 'bar') update.y2 = { scale: 'y', value: 0 }
@@ -1151,6 +1172,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         if (stackedX) {
           update.x = { scale: 'x', field: `${xDef.field}_end` }
           update.x2 = { scale: 'x', field: `${xDef.field}_start` }
+        } else if (!stackedX && positionalScaleType(mark, xDef) === 'band' && !xOffsetPresent) {
+          update.x = { scale: 'x', field: aggFieldName(xDef) }
+          update.width = { signal: `max(0.25, bandwidth('x'))` }
         } else {
           update.x = { scale: 'x', field: aggFieldName(xDef) }
           if (mark === 'bar') update.x2 = { scale: 'x', value: 0 }
@@ -1524,7 +1548,14 @@ export function compileUnit(spec: VLSpec): VLSpec {
   out.scales = buildScales(spec, fields, mark, orient, data.dataName, width, height, data.seriesFields)
   const axes = buildAxes(fields, mark, orient, out.scales as ScaleSpec[])
   if (axes.length) out.axes = axes
-  const legends = buildLegends(fields, mark, markOpacity, isObject(markRaw) && markRaw.filled === true)
+  const legends = buildLegends(
+    fields,
+    mark,
+    markOpacity,
+    isObject(markRaw) && markRaw.filled === true,
+    isObject(markRaw) ? (markRaw.stroke as string | undefined) : undefined,
+    isObject(markRaw) ? (markRaw.strokeWidth as number | undefined) : undefined,
+  )
   if (legends.length) out.legends = legends
   if (spec.title) out.title = spec.title
   if (spec.description) out.description = spec.description
