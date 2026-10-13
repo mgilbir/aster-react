@@ -2225,16 +2225,22 @@ export function compileUnit(spec: VLSpec): VLSpec {
   }
 
   const data = buildData(spec, fields, mark, orient)
-  const width = (spec.width as unknown) ?? 200
-  const height = (spec.height as unknown) ?? 200
+  // vega-lite's default sizing: continuous dimensions get 300, discrete
+  // dimensions size from the band step (bandspace(domain length) * step)
+  const xDefS = fields.find((f) => f.channel === 'x')
+  const yDefS = fields.find((f) => f.channel === 'y')
+  const xStepForm = xDefS != null && ['band', 'point'].includes(positionalScaleType(mark, xDefS))
+  const yStepForm = yDefS != null && ['band', 'point'].includes(positionalScaleType(mark, yDefS))
+  const width = (spec.width as unknown) ?? (xStepForm ? 0 : 300)
+  const height = (spec.height as unknown) ?? (yStepForm ? 0 : 300)
 
   const out: Record<string, unknown> = {}
   if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
   out.autosize = spec.autosize ?? 'pad'
   out.background = spec.background ?? 'white'
   out.padding = spec.padding ?? 5
-  out.width = width
-  out.height = height
+  out.width = spec.width ?? (xStepForm ? undefined : width)
+  out.height = spec.height ?? (yStepForm ? undefined : height)
   // theta-only views (pie/donut) get vega-lite's unstyled 'view' frame — no
   // cell stroke, no half-pixel inset
   out.style = mark === 'arc' ? 'view' : 'cell'
@@ -2289,6 +2295,26 @@ export function compileUnit(spec: VLSpec): VLSpec {
     ;(out.data as Record<string, unknown>[]).push(builtMarks.overlayData)
   }
   out.scales = buildScales(spec, fields, mark, orient, data.dataName, width, height, data.seriesFields)
+  // discrete-dimension sizing: the scale spans steps and the view size is a
+  // signal over the domain cardinality
+  const sizeSignals: Record<string, unknown>[] = []
+  const applyStepForm = (channel: 'x' | 'y', defS: FieldDef | undefined, stepForm: boolean): void => {
+    if (!stepForm || !defS) return
+    const sc = (out.scales as ScaleSpec[]).find((s) => s.name === channel)
+    if (!sc) return
+    const stepName = `${channel}_step`
+    sc.range = { step: { signal: stepName } }
+    const pi = (sc.paddingInner as number) ?? (sc.padding as number) ?? 0
+    const po = (sc.paddingOuter as number) ?? (sc.padding as number) ?? 0
+    sizeSignals.push({ name: stepName, value: 20 })
+    sizeSignals.push({
+      name: channel === 'x' ? 'width' : 'height',
+      update: `bandspace(domain('${channel}').length, ${pi}, ${po}) * ${stepName}`,
+    })
+  }
+  applyStepForm('x', xDefS, xStepForm && spec.width == null)
+  applyStepForm('y', yDefS, yStepForm && spec.height == null)
+  if (sizeSignals.length) out.signals = [...(out.signals as Record<string, unknown>[] ?? []), ...sizeSignals]
   // the point overlay's dataset joins the size domain union
   if (builtMarks.overlayData) {
     const sizeDefU = fields.find((f) => f.channel === 'size' && f.field)

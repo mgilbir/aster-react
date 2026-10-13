@@ -667,12 +667,12 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
     // leaves (left/right axes); bottom/top-axis labels (fontSize 10, baseline
     // top/bottom) need the same unbake or their extent lands off. Vega boxes
     // text around the *item* position, so subtract the baked baseline offset.
-    const fsLeaf = leaf.fontSize as number | undefined
+    const fsLeaf = (leaf.fontSize as number | undefined) ?? 11
     const leafBaseline = leaf.baseline as string | undefined
     if (
       leaf.text != null &&
       (leaf as SceneGroup).marktype === undefined &&
-      fsLeaf === 10 &&
+      (fsLeaf === 10 || fsLeaf === 11) &&
       (leafBaseline === 'top' || leafBaseline === 'bottom')
     ) {
       const savedY = leaf.y

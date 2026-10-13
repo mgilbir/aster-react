@@ -166,7 +166,7 @@ export interface ChartInfo {
  */
 function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx: EvalContext; width: number; height: number } {
   const signals = { ...chart.signals, ...input.signals }
-  const width = resolveSize(chart.width, input.width, signals)
+  let width = resolveSize(chart.width, input.width, signals)
   // A Vega spec can define the chart height as a `height` signal (a special
   // signal that doubles as the view size), e.g. `signals:[{name:'height',
   // update: ...}]`, without a top-level numeric height. It's resolved later by
@@ -238,6 +238,24 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
     height = ctx.signalParams.height
     ctx.height = height
     buildScales(ctx)
+  }
+  // A `width` signal whose update references a scale domain (vega-lite's
+  // step-sized band dimensions: bandspace(domain('x').length, ...) * x_step)
+  // must be re-evaluated now that the scales — and their domains — exist.
+  if (width === DEFAULT_SIZE && (chart.signalDefs ?? []).some((s) => s.name === 'width')) {
+    const def = (chart.signalDefs ?? []).find((s) => s.name === 'width')
+    const update = def?.update as string | undefined
+    if (typeof update === 'string') {
+      try {
+        const v = ctx.runtime.expr(update)({}, ctx.signalParams) as unknown
+        if (typeof v === 'number' && Number.isFinite(v)) {
+          width = v
+          ctx.width = v
+          ctx.signalParams.width = v
+          buildScales(ctx)
+        }
+      } catch { /* leave the default */ }
+    }
   }
   buildProjections(ctx)
 

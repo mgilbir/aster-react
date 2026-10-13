@@ -359,7 +359,11 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
         const coercible = all.filter(
           (v) => (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(+v)),
         ) as number[]
-        if (!coercible.length) return []
+        if (!coercible.length) {
+          // vega's multi-field aggregate domain bottoms out at [0, 0] over an
+          // empty dataset; a single-field domain stays empty (no ticks)
+          return fieldsToCollect.length > 1 ? [0, 0] : []
+        }
         return [Math.min(...coercible), Math.max(...coercible)]
       }
       // `all` is freshly collected per call via ctx.dataField; cache the
