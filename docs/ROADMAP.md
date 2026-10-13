@@ -277,7 +277,7 @@ workstream for one focused engineer.
 **Status: in progress.** `@aster/vl` (zero-dependency workspace package) compiles
 Vega-Lite -> Vega, verified by rendering parity against the pinned
 `vega-lite` oracle through `pnpm conformance-vl` (per-spec multiset diffs of
-canonicalized SVG records). **72/125 corpus entries pass** with exact rendered output. Covered: unit specs for bar/point/circle/square/line/area/tick/text,
+canonicalized SVG records). **82/125 corpus entries pass** with exact rendered output. Covered: unit specs for bar/point/circle/square/line/area/tick/text,
 positional/color/size/opacity/shape channels across all four data types,
 linear/band/point scale defaults, stack pipelines (single- and multi-series,
 impute vs filter variants), aggregate/count, binning with the bins-signal
@@ -285,10 +285,12 @@ domain and offset-encoded bars, timeUnit pipelines with timeUnitSpecifier
 formats and tickMinStep semantics, grid/label axis split with VL's tickCount
 signals, legends, and mark-def properties. Also covered: stack center/normalize offsets, xOffset/yOffset grouped
 bars, tick marks, aggregated domain sorts, log scales with greedy overlap,
-explicit color ranges, and conditional encodings. Remaining: text baseline
-metrics (1px), legend backgrounds, facet/concat/layer/repeat composition,
-arc/theta, boxplot/errorbar composites, vega-transform passthrough specs,
-params.
+explicit color ranges, conditional encodings, vega-transform passthrough
+(calculate/filter/flatten/fold/window/quantile/kde/density), the KDE
+shared-grid sampling semantics, and line marks split by color/detail
+channels via faceted pathgroups. Remaining: facet/concat/layer/repeat
+composition (13 specs), arc/theta pie marks (5), text baseline metrics
+(1px), legend backgrounds, boxplot/errorbar composites, params.
 
 
 The whole grammar, verified property-by-property against `vega-lite.compile` (the same
