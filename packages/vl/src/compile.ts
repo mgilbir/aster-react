@@ -69,9 +69,18 @@ function array(v: unknown): unknown[] {
 export function compile(input: VLSpec): VLSpec {
   const spec = input
   if (isObject(spec.layer) || Array.isArray(spec.layer)) return compileLayered(spec)
-  if (isObject(spec.facet) || isObject(spec.spec)) throw new Error('[aster/vl] facet composition not supported yet')
-  if (spec.concat || spec.hconcat || spec.vconcat) throw new Error('[aster/vl] concat composition not supported yet')
+  // facet forms: top-level {facet, spec}, encoding.facet {row?, column?}, or
+  // the encoding shorthand row/column channels
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  const hasEncFacet = isObject(enc.facet) || enc.row != null || enc.column != null
+  if (isObject(spec.facet) || (isObject(spec.spec) && hasTopFacet(spec))) return compileFaceted(spec)
+  if (hasEncFacet && spec.spec == null) return compileFaceted(spec)
+  if (spec.concat || spec.hconcat || spec.vconcat) return compileConcat(spec)
   return compileUnit(spec)
+}
+
+function hasTopFacet(spec: VLSpec): boolean {
+  return isObject(spec.facet) || (spec.encoding != null && isObject((spec.encoding as Record<string, unknown>).facet))
 }
 
 // --- layer composition -------------------------------------------------------
@@ -296,6 +305,330 @@ function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
       out.push(first)
     }
   }
+  return out
+}
+
+// --- facet composition -------------------------------------------------------
+
+/** Compile a faceted chart (encoding.facet / top-level facet + spec). */
+function compileFaceted(spec: VLSpec): VLSpec {
+  const facetDef = isObject(spec.facet) ? (spec.facet as Record<string, unknown>) : undefined
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  const encFacet = isObject(enc.facet) ? (enc.facet as Record<string, unknown>) : undefined
+  const rowDef = (facetDef?.row ?? encFacet?.row ?? enc.row) as Record<string, unknown> | undefined
+  const colDef = (facetDef?.column ?? encFacet?.column ?? enc.column) as Record<string, unknown> | undefined
+  // the inner unit: top-level facet form uses spec.spec; the encoding form
+  // strips the facet channel from the encoding
+  let innerSpec: VLSpec
+  if (isObject(spec.spec)) {
+    innerSpec = { ...(spec.spec as VLSpec) }
+    if (!isObject(innerSpec.data) && isObject(spec.data)) innerSpec.data = spec.data
+  } else {
+    const enc = { ...(isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}) }
+    delete enc.facet
+    delete enc.row
+    delete enc.column
+    innerSpec = { ...spec, encoding: enc }
+  }
+  const inner = compileUnit(innerSpec)
+
+  const rowField = rowDef?.field as string | undefined
+  const colField = colDef?.field as string | undefined
+  const unitWidth = typeof spec.width === 'number' ? spec.width : 300
+  const unitHeight = typeof spec.height === 'number' ? spec.height : 300
+
+  // patch the inner scales' ranges onto the child size signals and rename the
+  // tickCount size references
+  const patchSizeRefs = (node: Record<string, unknown>): void => {
+    const s = JSON.stringify(node).replace(/\bwidth\/40\)/g, 'child_width/40)').replace(/\bheight\/40\)/g, 'child_height/40)')
+    return void s
+  }
+  const renameSizeSignals = (v: unknown): unknown => {
+    if (typeof v === 'string') {
+      return v.replace(/ceil\(width\/40\)/g, 'ceil(child_width/40)').replace(/ceil\(height\/40\)/g, 'ceil(child_height/40)')
+        .replace(/ceil\(width\/10\)/g, 'ceil(child_width/10)').replace(/ceil\(height\/10\)/g, 'ceil(child_height/10)')
+    }
+    return v
+  }
+  const walkRename = (node: unknown): void => {
+    if (Array.isArray(node)) { node.forEach(walkRename); return }
+    if (node != null && typeof node === 'object') {
+      for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+        if (k === 'signal' && typeof v === 'string') {
+          ;(node as Record<string, unknown>)[k] = renameSizeSignals(v)
+        } else if (k === 'tickCount' && v != null && typeof v === 'object' && 'signal' in (v as object)) {
+          ;(node as Record<string, unknown>)[k] = { signal: renameSizeSignals((v as { signal: string }).signal) }
+        } else {
+          walkRename(v)
+        }
+      }
+    }
+  }
+  for (const sc of inner.scales as ScaleSpec[]) {
+    if (sc.name === 'x') sc.range = [0, { signal: 'child_width' }]
+    if (sc.name === 'y') sc.range = [{ signal: 'child_height' }, 0]
+  }
+  walkRename(inner.axes ?? [])
+  walkRename(inner.marks)
+
+  // split the inner axes: grid axes stay in the cell, label axes move to the
+  // row header (y) / column footer (x)
+  const gridAxes: Record<string, unknown>[] = []
+  const yLabelAxes: Record<string, unknown>[] = []
+  const xLabelAxes: Record<string, unknown>[] = []
+  for (const a of (inner.axes ?? []) as Record<string, unknown>[]) {
+    if (a.grid === true) gridAxes.push(a)
+    else if (a.orient === 'left' || a.orient === 'right') yLabelAxes.push(a)
+    else xLabelAxes.push(a)
+  }
+
+  // child marks read the facet dataset
+  const childMarks = (inner.marks as Record<string, unknown>[]).map((m) => {
+    const c = { ...m }
+    const from = (c.from as { data?: string } | undefined) ?? {}
+    if (from.data === 'data_0' || from.data == null) c.from = { ...from, data: 'facet' }
+    return c
+  })
+
+  const facetGroupby = [rowField, colField].filter(Boolean) as string[]
+  const datumRef = (f: string): string => `datum[${JSON.stringify(f)}]`
+  const parentTitle = (f: string): unknown => ({
+    text: { signal: `isValid(parent[${JSON.stringify(f)}]) ? parent[${JSON.stringify(f)}] : ""+parent[${JSON.stringify(f)}]` },
+    orient: 'left',
+    style: 'guide-label',
+    frame: 'group',
+    offset: 10,
+  })
+
+  const marks: Record<string, unknown>[] = []
+  if (rowField) {
+    marks.push({ name: 'row-title', type: 'group', role: 'row-title', title: { text: rowField, orient: 'left', style: 'guide-title', offset: 10 } })
+  }
+  if (colField) {
+    marks.push({ name: 'column-title', type: 'group', role: 'column-title', title: { text: colField, style: 'guide-title', offset: 10 } })
+  }
+  // row header: carries the y label axis (+ per-row titles when row-faceted)
+  marks.push({
+    name: 'row_header',
+    type: 'group',
+    role: 'row-header',
+    ...(rowField ? {
+      from: { data: 'row_domain' },
+      sort: { field: datumRef(rowField), order: 'ascending' },
+      title: parentTitle(rowField),
+    } : {}),
+    encode: { update: { height: { signal: 'child_height' } } },
+    ...(yLabelAxes.length ? { axes: yLabelAxes } : {}),
+  })
+  if (colField) {
+    marks.push({
+      name: 'column_header',
+      type: 'group',
+      role: 'column-header',
+      from: { data: 'column_domain' },
+      sort: { field: datumRef(colField), order: 'ascending' },
+      title: (() => { const t = parentTitle(colField) as Record<string, unknown>; delete t.orient; return t })(),
+      encode: { update: { width: { signal: 'child_width' } } },
+    })
+  }
+  marks.push({
+    name: 'column_footer',
+    type: 'group',
+    role: 'column-footer',
+    ...(colField ? {
+      from: { data: 'column_domain' },
+      sort: { field: datumRef(colField), order: 'ascending' },
+    } : {}),
+    encode: { update: { width: { signal: 'child_width' } } },
+    ...(xLabelAxes.length ? { axes: xLabelAxes } : {}),
+  })
+  marks.push({
+    name: 'cell',
+    type: 'group',
+    style: 'cell',
+    from: { facet: { name: 'facet', data: 'data_0', groupby: facetGroupby } },
+    sort: { field: facetGroupby.map(datumRef), order: facetGroupby.map(() => 'ascending') },
+    encode: { update: { width: { signal: 'child_width' }, height: { signal: 'child_height' } } },
+    ...(gridAxes.length ? { axes: gridAxes } : {}),
+    marks: childMarks,
+  })
+
+  // facet domain datasets
+  const data = [...(inner.data as Record<string, unknown>[])]
+  if (colField) data.push({ name: 'column_domain', source: 'data_0', transform: [{ type: 'aggregate', groupby: [colField] }] })
+  if (rowField) data.push({ name: 'row_domain', source: 'data_0', transform: [{ type: 'aggregate', groupby: [rowField] }] })
+
+  const out: Record<string, unknown> = {}
+  if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
+  out.autosize = spec.autosize ?? 'none'
+  out.background = spec.background ?? 'white'
+  out.padding = spec.padding ?? 5
+  out.data = data
+  out.signals = [
+    { name: 'child_width', value: unitWidth },
+    { name: 'child_height', value: unitHeight },
+  ]
+  out.layout = {
+    padding: 20,
+    offset: {
+      ...(rowField ? { rowTitle: 10 } : {}),
+      ...(colField ? { columnTitle: 10 } : {}),
+    },
+    columns: colField ? { signal: "length(data('column_domain'))" } : 1,
+    bounds: 'full',
+    align: 'all',
+  }
+  out.marks = marks
+  out.scales = inner.scales
+  if (inner.axes == null) delete inner.axes
+  if (inner.legends && (inner.legends as unknown[]).length) out.legends = inner.legends
+  if (spec.title) out.title = spec.title
+  void patchSizeRefs
+  return out
+}
+
+// --- concat composition ------------------------------------------------------
+
+/** Rename every data reference in a compiled unit (datasets, scale domains,
+ * mark sources) per the mapping. */
+function renameDataRefs(node: unknown, map: Map<string, string>): void {
+  if (Array.isArray(node)) { node.forEach((n) => renameDataRefs(n, map)); return }
+  if (node == null || typeof node !== 'object') return
+  const obj = node as Record<string, unknown>
+  if (typeof obj.data === 'string') {
+    const r = map.get(obj.data)
+    if (r) obj.data = r
+  }
+  for (const v of Object.values(obj)) {
+    if (v != null && typeof v === 'object') renameDataRefs(v, map)
+  }
+}
+
+const SCALE_CHANNELS = ['x', 'y', 'color', 'size', 'opacity', 'shape', 'theta', 'xOffset', 'yOffset']
+
+/** Prefix a unit's scale names and rewrite all references. */
+function prefixScaleRefs(node: unknown, prefix: string): void {
+  if (Array.isArray(node)) { node.forEach((n) => prefixScaleRefs(n, prefix)); return }
+  if (node == null || typeof node !== 'object') return
+  const obj = node as Record<string, unknown>
+  if (typeof obj.scale === 'string') obj.scale = prefix + obj.scale
+  if (typeof obj.gridScale === 'string') obj.gridScale = prefix + obj.gridScale
+  for (const v of Object.values(obj)) {
+    if (v != null && typeof v === 'object') prefixScaleRefs(v, prefix)
+  }
+}
+
+/** Compile an hconcat/vconcat/concat spec: one group per child with its own
+ * prefixed scales and axes, a shared source, and per-child pipelines. */
+function compileConcat(spec: VLSpec): VLSpec {
+  const horizontal = spec.hconcat != null
+  const children = ((spec.hconcat ?? spec.vconcat ?? spec.concat) as VLSpec[]) ?? []
+  const sharedSource = isObject(spec.data) && (spec.data as Record<string, unknown>).name != null
+    ? (spec.data as Record<string, unknown>).name as string
+    : 'source_0'
+
+  const data: Record<string, unknown>[] = []
+  const emittedSources = new Set<string>()
+  let nextData = 1
+  const marks: Record<string, unknown>[] = []
+  const scales: ScaleSpec[] = []
+  const legends: Record<string, unknown>[] = []
+  let childWidth: number | undefined
+  let childHeight: number | undefined
+
+  children.forEach((child, i) => {
+    const unitSpec: VLSpec = { ...child }
+    if (!isObject(unitSpec.data) && isObject(spec.data)) unitSpec.data = spec.data
+    const unit = compileUnit(unitSpec)
+    const unitData = unit.data as Record<string, unknown>[]
+    const map = new Map<string, string>()
+    // shared source
+    const srcEntry = unitData[0]!
+    const srcName = srcEntry.name as string
+    if (srcName === 'source_0') {
+      map.set('source_0', sharedSource)
+      if (!emittedSources.has(sharedSource)) {
+        data.push({ ...srcEntry, name: sharedSource })
+        emittedSources.add(sharedSource)
+      }
+    } else if (!emittedSources.has(srcName)) {
+      data.push(srcEntry)
+      emittedSources.add(srcName)
+    }
+    // derived datasets
+    for (const d of unitData.slice(1)) {
+      const newName = `data_${nextData++}`
+      map.set(d.name as string, newName)
+      data.push({ ...d, name: newName, source: (d.source as string) === 'source_0' ? map.get('source_0') ?? sharedSource : d.source })
+    }
+    renameDataRefs(unit.scales, map)
+    renameDataRefs(unit.marks, map)
+    renameDataRefs(unit.axes ?? [], map)
+
+    const prefix = `concat_${i}_`
+    for (const sc of unit.scales as ScaleSpec[]) {
+      if (SCALE_CHANNELS.includes(sc.name)) sc.name = prefix + sc.name
+      // children size to the shared child dimension signal
+      if (sc.name === `${prefix}x` && horizontal) sc.range = [0, { signal: 'childWidth' }]
+      if (sc.name === `${prefix}y` && !horizontal) sc.range = [{ signal: 'childHeight' }, 0]
+      scales.push(sc)
+    }
+    // tickCount expressions reference the child width
+    const renameWidth = (node: unknown): void => {
+      if (Array.isArray(node)) { node.forEach(renameWidth); return }
+      if (node != null && typeof node === 'object') {
+        for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+          if (k === 'signal' && typeof v === 'string') {
+            ;(node as Record<string, unknown>)[k] = horizontal
+              ? v.replace(/ceil\(width\/40\)/g, 'ceil(childWidth/40)').replace(/ceil\(width\/10\)/g, 'ceil(childWidth/10)')
+              : v.replace(/ceil\(height\/40\)/g, 'ceil(childHeight/40)').replace(/ceil\(height\/10\)/g, 'ceil(childHeight/10)')
+          } else if (v != null && typeof v === 'object') renameWidth(v)
+        }
+      }
+    }
+    renameWidth(unit.axes ?? [])
+    prefixScaleRefs(unit.marks, prefix)
+    prefixScaleRefs(unit.axes ?? [], prefix)
+    prefixScaleRefs(unit.legends ?? [], prefix)
+    for (const lg of (unit.legends ?? []) as Record<string, unknown>[]) legends.push(lg)
+
+    const w = typeof child.width === 'number' ? child.width : undefined
+    const h = typeof child.height === 'number' ? child.height : undefined
+    if (childWidth === undefined) childWidth = w ?? 300
+    if (childHeight === undefined) childHeight = h ?? 300
+    marks.push({
+      name: `concat_${i}_group`,
+      type: 'group',
+      style: 'cell',
+      encode: {
+        update: {
+          width: w != null ? { value: w } : horizontal ? { signal: 'childWidth' } : { signal: 'width' },
+          height: h != null ? { value: h } : horizontal ? { signal: 'height' } : { signal: 'childHeight' },
+        },
+      },
+      marks: unit.marks as Record<string, unknown>[],
+      ...(unit.axes && (unit.axes as unknown[]).length ? { axes: unit.axes } : {}),
+    })
+  })
+
+  const out: Record<string, unknown> = {}
+  if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
+  out.autosize = spec.autosize ?? 'none'
+  out.background = spec.background ?? 'white'
+  out.padding = spec.padding ?? 5
+  out.data = data
+  if (horizontal) {
+    out.height = childHeight
+    out.signals = [{ name: 'childWidth', value: childWidth }]
+  } else {
+    out.width = childWidth
+    out.signals = [{ name: 'childHeight', value: childHeight }]
+  }
+  out.layout = { padding: 20, bounds: 'full', align: 'each', ...(horizontal ? {} : { columns: 1 }) }
+  out.marks = marks
+  out.scales = scales
+  if (legends.length) out.legends = legends
+  if (spec.title) out.title = spec.title
   return out
 }
 
