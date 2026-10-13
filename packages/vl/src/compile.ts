@@ -262,7 +262,10 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
       if (t.calculate != null) { transforms.push({ type: 'formula', expr: t.calculate, as: t.as }); continue }
       if (t.fold != null) { transforms.push({ type: 'fold', fields: t.fold, as: t.as ?? ['key', 'value'] }); continue }
       if (t.flatten != null) { transforms.push({ type: 'flatten', fields: t.flatten, as: t.as }); continue }
-      if (t.density != null) { transforms.push({ type: 'kde', field: t.density, as: t.as ?? ['value', 'density'] }); continue }
+      if (t.density != null) {
+        transforms.push({ type: 'kde', field: t.density, as: t.as ?? ['value', 'density'], resolve: 'shared' })
+        continue
+      }
       for (const k of ['flatten', 'collect', 'countpattern', 'cross', 'joinaggregate', 'kde', 'loess', 'lookup', 'pivot', 'quantile', 'regression', 'stack', 'window', 'impute', 'bin', 'timeunit', 'aggregate', 'sample', 'density']) {
         if ((t as Record<string, unknown>)[k] != null) {
           // bare-keyed VL transforms: {quantile: field} / {kde: field} etc.
