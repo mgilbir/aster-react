@@ -4,6 +4,7 @@
  * reference renderer; the conformance diff compares normalized geometry.
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
+import { baselineOffset } from './bounds.js'
 import {
   line as d3Line,
   area as d3Area,
@@ -201,7 +202,18 @@ function renderLeaf(it: SceneItem): string {
   if (it.text != null) {
     const fontSize = (it as Record<string, unknown>).fontSize as number | undefined
     const fam = (it as Record<string, unknown>).font as string | undefined
-    return `<text x="${num(it.x ?? 0)}" y="${num(it.y ?? 0)}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('font-family', fam)}${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}>${esc(String(it.text))}</text>`
+    // Vega's renderer shifts text down by the baseline offset (util/text.js
+    // `offset`); guide builders emit vega's raw item y, so the bake happens
+    // here, exactly where vega applies it. Rotated text keeps the offset in
+    // the rotate frame (vega emits `translate(x,y) rotate(a) translate(0,off)`
+    // — the item y stays raw), so no bake when an angle is present.
+    const baseline = it.baseline as string | undefined
+    const angle = (it as Record<string, unknown>).angle as number | undefined
+    const bOff = baseline && baseline !== 'alphabetic' && !(angle != null && angle !== 0)
+      ? baselineOffset(it)
+      : 0
+    const y = num((it.y ?? 0) + bOff)
+    return `<text x="${num(it.x ?? 0)}" y="${y}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('font-family', fam)}${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}>${esc(String(it.text))}</text>`
   }
   const x2 = it.x2 ?? it.x ?? 0
   const y2 = it.y2 ?? it.y ?? 0

@@ -709,44 +709,32 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
     if ((leaf as Record<string, unknown>)._domain) continue
     if ((leaf as Record<string, unknown>)._grid) continue
     const bb = new Bounds()
-    // Axis labels render via renderLeaf, which emits the item `y` as the glyph
-    // baseline with no offset, so the guide builders bake vega's baseline
-    // shift into `y`. boundLeaf only undoes that bake for middle-baseline
-    // leaves (left/right axes); bottom/top-axis labels (fontSize 10, baseline
-    // top/bottom) need the same unbake or their extent lands off. Vega boxes
-    // text around the *item* position, so subtract the baked baseline offset.
-    const fsLeaf = (leaf.fontSize as number | undefined) ?? 11
-    const leafBaseline = leaf.baseline as string | undefined
-    if (
-      leaf.text != null &&
-      (leaf as SceneGroup).marktype === undefined &&
-      (fsLeaf === 10 || fsLeaf === 11) &&
-      (leafBaseline === 'top' || leafBaseline === 'bottom')
-    ) {
-      const savedY = leaf.y
-      ;(leaf as Record<string, unknown>).y = (leaf.y ?? 0) - baselineOffset(leaf)
-      boundText(bb, leaf)
-      ;(leaf as Record<string, unknown>).y = savedY
-    } else {
-      boundLeaf(bb, leaf)
-    }
+    // Guide leaves carry vega's raw item positions (the baseline shift is the
+    // renderer's bake), so boundText's baseline-aware boxing applies directly.
+    boundLeaf(bb, leaf)
     bb.translate(-0.5, -0.5)
     b.union(bb)
     tickLabelBounds.union(bb)
   }
-  // spine rect per orient; s = tick/label extent beyond the axis line
+  // spine rect per orient; s = tick/label extent beyond the axis line,
+  // clamped by the axis minExtent/maxExtent (vega axisLayout:
+  // s = max(minExtent, min(maxExtent, bound)))
+  const metaX = (axis as Record<string, unknown>).axis as { minExtent?: number; maxExtent?: number } | undefined
+  const minE = metaX?.minExtent ?? 0
+  const maxE = metaX?.maxExtent ?? 200
+  const clampS = (v: number): number => Math.max(minE, Math.min(maxE, v))
   let s: number
   if (orient === 'left') {
-    s = tickLabelBounds.empty() ? 0 : -Math.min(0, tickLabelBounds.x1)
+    s = tickLabelBounds.empty() ? 0 : clampS(-Math.min(0, tickLabelBounds.x1))
     b.add(-s, 0).add(0, range)
   } else if (orient === 'right') {
-    s = tickLabelBounds.empty() ? 0 : Math.max(range, tickLabelBounds.x2) - range
+    s = tickLabelBounds.empty() ? 0 : clampS(Math.max(range, tickLabelBounds.x2) - range)
     b.add(range, 0).add(range + s, range)
   } else if (orient === 'top') {
-    s = tickLabelBounds.empty() ? 0 : -Math.min(0, tickLabelBounds.y1)
+    s = tickLabelBounds.empty() ? 0 : clampS(-Math.min(0, tickLabelBounds.y1))
     b.add(0, -s).add(range, baseline)
   } else {
-    s = tickLabelBounds.empty() ? 0 : Math.max(baseline, tickLabelBounds.y2) - baseline
+    s = tickLabelBounds.empty() ? 0 : clampS(Math.max(baseline, tickLabelBounds.y2) - baseline)
     b.add(0, baseline).add(range, baseline + s)
   }
   return b
@@ -776,26 +764,14 @@ function boundIsolated(it: SceneItem): Bounds {
     return bounds.translate(it.x || 0, it.y || 0)
   }
   if (it.text != null && (it as SceneGroup).marktype === undefined) {
-    // Bare text leaves render via renderLeaf, which emits the item y as the
-    // glyph baseline with no baseline offset; our guide builders bake vega's
-    // baseline offset into the leaf y. Vega boxes text around the *item*
-    // position, so undo the baked offset (guide-label fontSize 10) and box
-    // with vega's formula.
-    const fsLeaf = (it.fontSize as number | undefined)
-    let yItem = it.y ?? 0
-    let fsEff = fsLeaf ?? 11
-    if (fsLeaf == null && it.baseline === 'middle') {
-      // guide-label leaves render at the glyph baseline (renderLeaf applies no
-      // offset; the builder baked vega's middle offset into y) — undo it
-      yItem = (it.y ?? 0) - Math.round(0.30 * 10)
-      fsEff = 10
-    }
-    const savedY = it.y
+    // Bare text leaves carry vega's raw item y (the baseline shift is the
+    // renderer's bake) and vega's guide-label fontSize — 10 when the builder
+    // left it unset on a baseline-shifted label, 11 otherwise (guide titles).
+    const fsLeaf = it.fontSize as number | undefined
+    const fsEff = fsLeaf ?? (it.baseline != null && it.baseline !== 'alphabetic' ? 10 : 11)
     const savedFs = it.fontSize
-    ;(it as Record<string, unknown>).y = yItem
     ;(it as Record<string, unknown>).fontSize = fsEff
     const out = boundText(bounds, it)
-    ;(it as Record<string, unknown>).y = savedY
     ;(it as Record<string, unknown>).fontSize = savedFs
     return out
   }

@@ -29,7 +29,7 @@ import type {
 import { tickFormat } from './scale.js'
 import { compileChart } from './compiler.js'
 import { trellisLayout } from './trellis.js'
-import { boundAxisGroup, boundGroupItem, Bounds, boundLeaf } from './bounds.js'
+import { baselineOffset, boundAxisGroup, boundGroupItem, Bounds, boundLeaf } from './bounds.js'
 import { symbolPath } from './render.js'
 
 const DEFAULT_SIZE = 500
@@ -3148,18 +3148,22 @@ function buildConcatGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup {
   // childWidth. vega-lite emits exactly one of the two for a concat layout.
   const isVertical = ctx.signalParams['childWidth'] === undefined && ctx.signalParams['childHeight'] !== undefined
 
-  const textItems: Array<{ x: number; y: number }> = []
+  const textItems: SceneItem[] = []
   const collectTexts = (items: SceneItem[]): void => {
     for (const it of items) {
       const g = it as SceneGroup
       if (Array.isArray(g.items)) {
         collectTexts(g.items)
       } else if (it.text != null && it.x != null && it.y != null) {
-        textItems.push({ x: it.x, y: it.y })
+        textItems.push(it)
       }
     }
   }
   collectTexts(cell.items ?? [])
+  // Guide leaves carry vega's raw item y (the baseline shift is the
+  // renderer's); the extent measure needs the rendered position.
+  const renderedY = (it: SceneItem): number =>
+    (it.y ?? 0) + (it.baseline && !(it.angle != null && it.angle !== 0) ? baselineOffset(it) : 0)
 
   let cellX = 0
   let cellY = 0
@@ -3169,7 +3173,8 @@ function buildConcatGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup {
     // plus the base spacing — the vertical analog of the horizontal advance.
     let xAxisExtent = 0
     for (const it of textItems) {
-      if (it.y > cellHeight) xAxisExtent = Math.max(xAxisExtent, Math.ceil(it.y - cellHeight - 0.5))
+      const y = renderedY(it)
+      if (y > cellHeight) xAxisExtent = Math.max(xAxisExtent, Math.ceil(y - cellHeight - 0.5))
     }
     cellY = idx * (cellHeight + CONCAT_BASE_SPACING + xAxisExtent)
   } else {
@@ -3177,7 +3182,8 @@ function buildConcatGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup {
     // next cell's y-axis clears this cell's content + base spacing.
     let yAxisExtent = 0
     for (const it of textItems) {
-      if (it.x < 0) yAxisExtent = Math.max(yAxisExtent, Math.ceil(Math.abs(it.x) + TITLE_FONT_SIZE + 0.5))
+      const x = it.x ?? 0
+      if (x < 0) yAxisExtent = Math.max(yAxisExtent, Math.ceil(Math.abs(x) + TITLE_FONT_SIZE + 0.5))
     }
     cellX = idx * (cellWidth + CONCAT_BASE_SPACING + yAxisExtent)
   }
@@ -3220,9 +3226,13 @@ function concatCellLocalBounds(cell: SceneGroup, cellW: number, cellH: number): 
           x1 = Math.min(x1, x - fontSize - 1)
         } else if (y > cellH) {
           // Bottom axis title: vega bounds it with an alphabetic baseline, so
-          // its bottom sits (fontSize - round(0.8*fontSize)) below the anchor.
+          // its bottom sits (fontSize - round(0.8*fontSize)) below the anchor;
+          // guide leaves carry the raw y, so add the baseline shift back.
           const fontSize = (it as unknown as Record<string, unknown>).fontSize as number | undefined ?? TITLE_FONT_SIZE
-          y2 = Math.max(y2, y + (fontSize - Math.round(0.8 * fontSize)))
+          const boff = (it as SceneItem).baseline && !(it.angle != null && it.angle !== 0)
+            ? baselineOffset(it as SceneItem)
+            : 0
+          y2 = Math.max(y2, y + boff + (fontSize - Math.round(0.8 * fontSize)))
         }
       } else if (marktype === 'symbol' || it.size != null) {
         const size = it.size ?? 30
@@ -4324,19 +4334,21 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       maxLabelLen = Math.max(maxLabelLen, (label.text as string).length)
       const align = axis.labelAlign ?? (orient === 'left' ? 'right' : orient === 'right' ? 'left' : 'center')
       const baseline = axis.labelBaseline ?? (orient === 'top' ? 'bottom' : orient === 'bottom' ? 'top' : 'middle')
-      // Vega bottom/top axis labels: y = tickSize + labelPadding +
-      // round(0.8 * labelFontSize) from the axis line (oracle-calibrated).
-      // Rotated labels get no baseline-top offset (it folds into the rotate
-      // translate applied by vega's renderer).
+      // Vega axis labels (vega-encode axisLabels): the label y is the raw
+      // extent — tickSize + labelPadding beyond the axis line for bottom/top,
+      // the scale position for left/right — with the baseline shift applied
+      // by the renderer (renderLeaf bakes baselineOffset when the item
+      // carries an explicit baseline). Rotated labels keep the historical
+      // bake (the rotation folds the offset into vega's rotate translate).
       const labelFs = axis.labelFontSize ?? 10
       const labelAngle = typeof axis.labelAngle === 'number' ? axis.labelAngle : 0
-      const axisOffset = tickSize + labelPadding + (labelAngle ? 0 : Math.round(0.8 * labelFs))
-      // For band scales the label y is anchored to the band center (matching
-      // vega, which places it at bandCenter - 0.5 and shifts by the middle
-      // baseline); continuous scales anchor to the raw scale value.
-      const bandLabelY = scale.bandwidth ? v + Math.round(0.3 * labelFs) : rawV + Math.round(0.3 * labelFs) + 0.5
-      if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align']; if (axis.labelFontSize != null) label.fontSize = labelFs }
-      else if (orient === 'right') { label.x = ctx.width + tickSize + labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align']; if (axis.labelFontSize != null) label.fontSize = labelFs }
+      // Vega's renderer folds the baseline offset into the item position for
+      // unrotated text but applies it inside the rotate frame for rotated
+      // text — so rotated labels carry no baseline (no bake anywhere).
+      label.fontSize = labelFs
+      const bandLabelY = scale.bandwidth ? v : rawV + 0.5
+      if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align'] }
+      else if (orient === 'right') { label.x = ctx.width + tickSize + labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align'] }
       else if (orient === 'bottom') {
         if (scale.bandwidth) {
           const bw = scale.bandwidth()
@@ -4348,9 +4360,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
         } else {
           label.x = rawV + 0.5
         }
-        label.y = ctx.height + axisOffset + 0.5
+        label.y = ctx.height + tickSize + labelPadding + 0.5
         label.align = align as SceneItem['align']
-        label.fontSize = labelFs
       }
       else {
         // Top axis: mirror the bottom-axis band handling so labels anchor to
@@ -4362,11 +4373,10 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
         } else {
           label.x = rawV + 0.5
         }
-        label.y = -(tickSize + labelPadding) + Math.round(-0.21 * labelFs) + 0.5
+        label.y = -(tickSize + labelPadding) + 0.5
         label.align = align as SceneItem['align']
-        label.fontSize = labelFs
       }
-      label.baseline = baseline as SceneItem['baseline']
+      label.baseline = labelAngle ? undefined : (baseline as SceneItem['baseline'])
       label.fill = axis.labelColor ?? '#000'
       if (axis.labelOpacity != null) label.fillOpacity = axis.labelOpacity
       labels.push(label)
@@ -4494,34 +4504,59 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     const titleX = (axis as { titleX?: number }).titleX
     const titleY = (axis as { titleY?: number }).titleY
 
+    // The title y is vega's raw layout position; the baseline shift is the
+    // renderer's (renderLeaf bakes baselineOffset for explicit baselines).
+    // vega's axisTitleLayout anchors the title at v = s + dl + titlePadding,
+    // where s is the clamped tick+label extent (axisLayout:
+    // s = max(minExtent, min(maxExtent, bounds.y2))). Our items bake the
+    // 0.5px axis-group delta, hence the ±0.5 on the absolute positions.
+    const minE = axis.minExtent ?? 0
+    const maxE = axis.maxExtent ?? 200
+    const clampS = (v: number): number => Math.max(minE, Math.min(maxE, v))
+    const titleLabelFs = axis.labelFontSize ?? 10
+    const labelBaselineEff = String(axis.labelBaseline ?? (orient === 'top' ? 'bottom' : orient === 'bottom' ? 'top' : 'middle'))
+    const labelLh = titleLabelFs + 2
+    const labelBoff = Math.round(
+      labelBaselineEff === 'top' ? 0.79 * titleLabelFs
+      : labelBaselineEff === 'middle' ? 0.30 * titleLabelFs
+      : labelBaselineEff === 'bottom' ? -0.21 * titleLabelFs
+      : labelBaselineEff === 'line-top' ? 0.29 * titleLabelFs + 0.5 * labelLh
+      : labelBaselineEff === 'line-bottom' ? 0.29 * titleLabelFs - 0.5 * labelLh
+      : 0,
+    )
+    // tick+label extent along the perpendicular (axis-internal frame)
+    const sTick = ticksOn ? tickSize + 0.5 : -Infinity
+    const sLabel = labelsOn ? tickSize + labelPadding + (labelBoff - Math.round(0.8 * titleLabelFs)) + titleLabelFs : -Infinity
+    const sBoth = Math.max(sTick, sLabel)
+
     if (orient === 'bottom') {
       t.x = ctx.width / 2 + 0.5
       if (axis.labelAngle === 270 && maxLabelLen > 0) {
         const labelExtent = Math.floor(0.8 * maxLabelLen * 10)
-        t.y = ctx.height + 0.5 + tickSize + labelPadding + labelExtent + 4 + titleFs - 2
+        t.y = ctx.height + 0.5 + clampS(tickSize + labelPadding + labelExtent) + titlePadding
       } else {
-        const ext = 0.5 + (ticksOn ? tickSize + 0.5 : 0) + (labelsOn ? labelPadding + 9.5 : 0)
-        t.y = ctx.height + ext + titlePadding + baseUp
+        const s = sBoth === -Infinity ? 0 : clampS(sBoth)
+        t.y = ctx.height + 0.5 + s + titlePadding
       }
-      t.align = 'center'; t.baseline = 'top'
+      t.align = 'center'; t.baseline = titleBaseline ?? 'top'
     }
     else if (orient === 'top') {
       t.x = ctx.width / 2 + 0.5
-      t.y = 0.5 - ((ticksOn ? tickSize + 0.5 : 0) + (labelsOn ? labelPadding + 9.5 : 0) + titlePadding) - (titleFs - baseUp)
-      t.align = 'center'; t.baseline = 'bottom'
+      const s = sBoth === -Infinity ? 0 : clampS(sBoth)
+      t.y = 0.5 - (s + 0.5 + titlePadding)
+      t.align = 'center'; t.baseline = titleBaseline ?? 'bottom'
     }
-    else if (orient === 'left') {
-      // Ticks present + labels off: the title sits at tickSize + titlePadding.
-      t.x = (hasTickMarks && axis.labels === false)
-        ? -(tickSize + titlePadding)
-        : -((hasTickMarks && axis.labels !== false ? labelPadding : 0) + (hasTickMarks ? tickSize : 0) + labelWidth + 3.5)
-      t.y = ctx.height / 2 + 0.5; t.align = 'center'; t.baseline = 'bottom'
-      ;(t as Record<string, unknown>).angle = (axis as { titleAngle?: number }).titleAngle ?? -90
-    }
-    else if (orient === 'right') {
-      t.x = ctx.width + (hasTickMarks && axis.labels === false ? tickSize + titlePadding : tickSize + labelPadding + labelWidth + 4.5)
-      t.y = ctx.height / 2 + 0.5; t.align = 'center'; t.baseline = 'bottom'
-      ;(t as Record<string, unknown>).angle = (axis as { titleAngle?: number }).titleAngle ?? 90
+    else if (orient === 'left' || orient === 'right') {
+      // vega measures s from the tick+label mark bounds (the tick stroke adds
+      // its 0.5 expansion); when the axis produced no ticks/labels the bounds
+      // are empty and s = 0.
+      const sTickLR = hasTickMarks ? tickSize + 0.5 : -Infinity
+      const sLabelLR = hasTickMarks && axis.labels !== false ? tickSize + labelPadding + labelWidth : -Infinity
+      const sLR0 = Math.max(sTickLR, sLabelLR)
+      const sLR = sLR0 === -Infinity ? 0 : clampS(sLR0)
+      t.x = orient === 'left' ? -(sLR + titlePadding) + 0.5 : ctx.width + sLR + titlePadding + 0.5
+      t.y = ctx.height / 2 + 0.5; t.align = 'center'; t.baseline = titleBaseline ?? 'bottom'
+      ;(t as Record<string, unknown>).angle = (axis as { titleAngle?: number }).titleAngle ?? (orient === 'left' ? -90 : 90)
     }
     // Explicit titleX/titleY override the layout (axis-internal +0.5 origin).
     if (titleX != null) t.x = titleX + 0.5
