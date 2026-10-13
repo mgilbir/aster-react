@@ -33,6 +33,10 @@
     "./canvas": {
       "types": "./dist/canvas.d.ts",
       "default": "./dist/canvas.js"
+    },
+    "./hit": {
+      "types": "./dist/hit.d.ts",
+      "default": "./dist/hit.js"
     }
   },
   "scripts": {

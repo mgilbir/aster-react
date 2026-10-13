@@ -84,6 +84,50 @@ describe('Chart renderer="canvas"', () => {
     })
   })
 
+  it('shows a tooltip via the scene hit index in canvas mode', async () => {
+    const spec = {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 100,
+      height: 100,
+      padding: 0,
+      autosize: 'none',
+      data: [{ name: 'table', values: [{ cat: 'a', v: 5 }, { cat: 'b', v: 7 }] }],
+      scales: [
+        { name: 'x', type: 'band', domain: { data: 'table', field: 'cat' } as never, range: [0, 100] as never },
+        { name: 'y', type: 'linear', domain: [0, 10] as never, range: [100, 0] as never },
+      ],
+      marks: [{
+        type: 'rect',
+        from: { data: 'table' },
+        encode: {
+          enter: {
+            x: { scale: 'x', field: 'cat' }, width: { scale: 'x', band: 1 },
+            y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 },
+            fill: { value: '#4c78a8' },
+          },
+        },
+      }],
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => {
+      root.render(<Chart spec={spec} width={100} height={100} renderer="canvas" tooltip />)
+    })
+    // The first bar spans x [0,50); hover at (20, 80) — inside the bar (v=5 →
+    // y from 50 to 100) — and the tooltip should carry the datum.
+    const canvas = container.querySelector('canvas')!
+    await act(async () => {
+      canvas.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 80, bubbles: true }))
+    })
+    const tip = container.querySelector('[data-testid="chart-tooltip"]')
+    expect(tip?.textContent).toContain('cat')
+    expect(tip?.textContent).toContain('a')
+    await act(async () => {
+      root.unmount()
+    })
+  })
+
   it('SSR renders empty for canvas mode without throwing', async () => {
     const { renderToString } = await import('react-dom/server')
     const html = renderToString(<Chart spec={makeSpec()} renderer="canvas" />)

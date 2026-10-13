@@ -1,0 +1,131 @@
+import { describe, expect, it } from 'vitest'
+import { buildHitIndex } from './hit.js'
+import { evaluateChart } from './runtime.js'
+import { compileChart } from './compiler.js'
+import type { SceneRoot } from './types.js'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+describe('buildHitIndex', () => {
+  it('resolves rect marks by containment', () => {
+    const scene = {
+      width: 100,
+      height: 100,
+      items: [{
+        marktype: 'rect',
+        items: [
+          { x: 0, y: 0, width: 40, height: 40, fill: '#4c78a8', datum: { x: 'a' } },
+          { x: 50, y: 0, width: 40, height: 40, fill: '#e45756', datum: { x: 'b' } },
+        ],
+      }],
+    } as unknown as SceneRoot
+    const index = buildHitIndex(scene)
+    expect(index.query(20, 20)?.item.datum).toEqual({ x: 'a' })
+    expect(index.query(70, 20)?.item.datum).toEqual({ x: 'b' })
+    expect(index.query(45, 20)).toBeNull()
+    expect(index.query(-5, 5)).toBeNull()
+  })
+
+  it('resolves symbols within radius + slack', () => {
+    const scene = {
+      width: 100,
+      height: 100,
+      items: [{
+        marktype: 'symbol',
+        items: [
+          { x: 50, y: 50, size: 100, fill: '#4c78a8', datum: { v: 1 } },
+        ],
+      }],
+    } as unknown as SceneRoot
+    const index = buildHitIndex(scene)
+    expect(index.query(50, 50)?.item.datum).toEqual({ v: 1 })
+    // r = sqrt(100)/2 = 5; + strokeWidth/2 + 2 = 7.5
+    expect(index.query(56, 50)?.item.datum).toEqual({ v: 1 })
+    expect(index.query(60, 50)).toBeNull()
+  })
+
+  it('resolves rules by distance to the segment', () => {
+    const scene = {
+      width: 100,
+      height: 100,
+      items: [{
+        marktype: 'rule',
+        items: [{ x: 0, y: 50, x2: 100, y2: 50, stroke: '#888', datum: { axis: 'y' } }],
+      }],
+    } as unknown as SceneRoot
+    const index = buildHitIndex(scene)
+    expect(index.query(50, 51)?.item.datum).toEqual({ axis: 'y' })
+    expect(index.query(50, 60)).toBeNull()
+  })
+
+  it('respects paint order on overlap (rects paint first item on top)', () => {
+    const scene = {
+      width: 100,
+      height: 100,
+      items: [{
+        marktype: 'rect',
+        items: [
+          { x: 0, y: 0, width: 40, height: 40, fill: '#4c78a8', datum: { n: 1 } },
+          { x: 10, y: 10, width: 40, height: 40, fill: '#e45756', datum: { n: 2 } },
+        ],
+      }],
+    } as unknown as SceneRoot
+    const index = buildHitIndex(scene)
+    // The renderer paints rect items reversed: item 0 lands on top.
+    expect(index.query(20, 20)?.item.datum).toEqual({ n: 1 })
+    expect(index.query(45, 45)?.item.datum).toEqual({ n: 2 })
+    expect(index.query(5, 5)?.item.datum).toEqual({ n: 1 })
+  })
+
+  it('skips unpainted rect items', () => {
+    const scene = {
+      width: 100,
+      height: 100,
+      items: [{ marktype: 'rect', items: [{ x: 0, y: 0, width: 10, height: 10 }] }],
+    } as unknown as SceneRoot
+    const index = buildHitIndex(scene)
+    expect(index.size()).toBe(0)
+    expect(index.query(5, 5)).toBeNull()
+  })
+
+  it('grid and linear modes agree across the vega corpus', () => {
+    const dir = join(dirname(fileURLToPath(import.meta.url)), '../../conformance/corpus')
+    let names: string[]
+    try {
+      names = readdirSync(dir).filter((f) => f.endsWith('.vg.json'))
+    } catch {
+      names = []
+    }
+    expect(names.length).toBeGreaterThan(250)
+    let checked = 0
+    let hitCount = 0
+    for (const name of names) {
+      const doc = JSON.parse(readFileSync(join(dir, name), 'utf8'))
+      const spec = doc.spec ?? doc
+      let scene: SceneRoot
+      try {
+        scene = evaluateChart(compileChart(spec), {})
+      } catch {
+        continue
+      }
+      const index = buildHitIndex(scene)
+      if (index.size() === 0) continue
+      checked++
+      // probe a deterministic lattice; both code paths must agree exactly
+      for (let i = 0; i < 12; i++) {
+        const x = ((i * 37) % Math.max(1, scene.width)) + 0.5
+        const y = ((i * 53) % Math.max(1, scene.height)) + 0.5
+        // force each mode: rebuild with a huge cell (linear) vs default (grid)
+        const linear = buildHitIndex(scene, 1e9).query(x, y)
+        const auto = index.query(x, y)
+        const linKey = linear ? JSON.stringify(linear.item.datum ?? linear.marktype) : 'null'
+        const autoKey = auto ? JSON.stringify(auto.item.datum ?? auto.marktype) : 'null'
+        expect(autoKey).toBe(linKey)
+        if (auto != null) hitCount++
+      }
+    }
+    expect(checked).toBeGreaterThan(100)
+    expect(hitCount).toBeGreaterThan(50)
+  })
+})

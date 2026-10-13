@@ -11,6 +11,7 @@ import {
 // opt-in (`@aster/core/canvas`) so SVG-only hosts never bundle it.
 import { createChartSession, patchSceneDom, renderSceneToDomElement } from '@aster/core/dom'
 import { renderSceneToCanvas } from '@aster/core/canvas'
+import { buildHitIndex, type HitIndex } from '@aster/core/hit'
 import { bindSceneSignals, stampDatumAttrs, type SignalBinding } from '@aster/core/signals'
 import { dragToDataInterval, selectionToPixels, type SelectionInterval } from './interaction.js'
 
@@ -132,6 +133,7 @@ export function Chart({
   const sessionRef = React.useRef<ReturnType<typeof createChartSession> | null>(null)
   if (sessionRef.current == null) sessionRef.current = createChartSession()
 
+  const sceneGenRef = React.useRef(0)
   const scene = React.useMemo<SceneRoot | null>(() => {
     try {
       const sc = sessionRef.current!.evaluate(spec, { data, dataChanges, width: renderWidth, height: renderHeight, signals })
@@ -143,6 +145,8 @@ export function Chart({
       return null
     }
   }, [spec, data, dataChanges, renderWidth, renderHeight, signals, tooltip])
+  if (scene != null) sceneGenRef.current++
+  const sceneGen = sceneGenRef.current
 
   // Incremental is the default: we still serialize the full SVG for the first
   // render (so server output and client hydration carry the markup), then the
@@ -157,6 +161,9 @@ export function Chart({
 
   const svgHostRef = React.useRef<HTMLDivElement>(null)
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
+  // Canvas-mode hit testing: the tooltip resolves marks through the scene hit
+  // index instead of DOM attributes (canvas has none). Rebuilt per scene.
+  const hitIndexRef = React.useRef<{ idx: number; index: HitIndex | null }>({ idx: 0, index: null })
   // Event-driven signals (vega's event loop): bind the spec's `signal.on`
   // streams to the rendered svg; each event updates the signal store, and the
   // chart re-renders with the updated values via `eventSignals`.
@@ -318,19 +325,29 @@ export function Chart({
   const handleTooltipMove = React.useCallback(
     (e: React.MouseEvent) => {
     if (!tooltip) return
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    if (renderer === 'canvas') {
+      // Canvas backend: resolve through the scene hit index.
+      if (hitIndexRef.current.index == null || hitIndexRef.current.idx !== sceneGen) {
+        hitIndexRef.current = scene ? { idx: sceneGen, index: buildHitIndex(scene) } : { idx: 0, index: null }
+      }
+      const target = hitIndexRef.current.index?.query(e.clientX - rect.left, e.clientY - rect.top)
+      const datum = target?.item.datum as Record<string, unknown> | undefined
+      setTooltipInfo(datum != null && typeof datum === 'object' ? { datum, x: e.clientX - rect.left, y: e.clientY - rect.top } : null)
+      return
+    }
     // The hovered element may be a parent/child of the mark (e.g. a tspan or an
     // axis line above it); walk up to the nearest element carrying data-datum.
     const el = (e.target as HTMLElement).closest?.('[data-datum]') as HTMLElement | null
     const raw = el?.dataset?.datum
     if (!raw) { setTooltipInfo(null); return }
-    const rect = containerRef.current?.getBoundingClientRect()
-    if (!rect) return
     try {
       const datum = JSON.parse(raw) as Record<string, unknown>
       setTooltipInfo({ datum, x: e.clientX - rect.left, y: e.clientY - rect.top })
     } catch { setTooltipInfo(null) }
     },
-    [tooltip],
+    [tooltip, renderer],
   )
 
   const handleTooltipLeave = React.useCallback(() => {

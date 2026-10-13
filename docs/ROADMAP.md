@@ -337,10 +337,13 @@ way Go and Kotlin do), then by rendering both compiled specs.
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
 
-### R9 — Rendering targets: SVG and Canvas (L, must)
+### R9 — Rendering targets: SVG and Canvas (L, must) — R9.1/R9.2 DONE
 
 Both backends render the same scene, so the engine stays single-sourced; only the
-final walk differs.
+final walk differs. **Done:** `@aster/core/canvas` renderer replays the shared
+geometry (path-data parser) with an 8-test record-differential over all 288 vega
+corpus scenes (zero diffs), and `<Chart renderer="canvas">` with dpr backing
+stores, full-scene repaints, and SSR safety.
 
 - **R9.1** Canvas renderer over the scene, parity-tested against the SVG path
   (same geometry, paint, clipping, text, gradients).
