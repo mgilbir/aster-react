@@ -54,6 +54,7 @@ const C = {
   pointPadding: 0.5,
   pointOpacity: 0.7,
   bandSize: 5,
+  continuousBandSize: 5,
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -167,6 +168,22 @@ function compileLayered(spec: VLSpec): VLSpec {
   })
   out.data = data
 
+  // y2/x2 endpoint fields extend the layer's positional scale domain
+  parsed.forEach((p, i) => {
+    for (const [main, second] of [['y', 'y2'], ['x', 'x2']] as const) {
+      const d2 = p.fields.find((f) => f.channel === second && f.field)
+      if (!d2) continue
+      const sc = perLayerScales[i]?.find((s) => s.name === main)
+      if (!sc) continue
+      const d = sc.domain as { data?: string; field?: string; fields?: unknown } | undefined
+      if (d && typeof d === 'object' && !Array.isArray(d) && typeof d.data === 'string') {
+        const fieldList = Array.isArray(d.fields) ? [...d.fields as string[]] : [d.field as string]
+        if (!fieldList.includes(d2.field)) fieldList.push(d2.field as string)
+        sc.domain = { data: d.data, fields: fieldList }
+      }
+    }
+  })
+
   // independent y resolution (dual-axis layers): each layer's y scale gets a
   // unique name; the first layer keeps the left axis with grid, subsequent
   // layers move to a right axis without grid
@@ -230,12 +247,17 @@ function compileLayered(spec: VLSpec): VLSpec {
     const layersWith = parsed.filter((p) => p.fields.some((f) => f.channel === ch && f.axis !== null))
     if (!layersWith.length) continue
     const base = layersWith[0]!
+    const second = ch === 'y' ? 'y2' : 'x2'
     const titles = layersWith
       .map((p) => {
         const f = p.fields.find((q) => q.channel === ch)!
         return ((f.axis as Record<string, unknown> | null | undefined)?.title as string) ?? (channelTitle(f) as string)
       })
       .filter(Boolean)
+    for (const p of parsed) {
+      const d2 = p.fields.find((f) => f.channel === second && f.field)
+      if (d2) titles.push(d2.field as string)
+    }
     const uniq = Array.from(new Set(titles))
     const axisFields = base.fields.filter((f) => f.channel === ch).map((f) =>
       uniq.length > 1 ? ({ ...f, title: uniq.join(', ') } as FieldDef) : f,
@@ -295,12 +317,20 @@ function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
       }
       for (const s of list) collect(s.domain)
       const sameData = entries.length > 0 && entries.every((e) => e.data === entries[0]!.data)
-      out.push({
+      const merged: ScaleSpec = {
         ...first,
         domain: sameData
           ? { data: entries[0]!.data, fields: Array.from(new Set(entries.map((e) => e.field))) }
           : { fields: entries },
-      })
+      }
+      // merge the boolean/numeric scale props across layers (a padding or
+      // zero on any layer's scale applies to the union)
+      for (const s of list) {
+        if (s.padding != null) merged.padding = Math.max(merged.padding ?? 0, s.padding)
+        if (s.nice === true) merged.nice = true
+        if (s.zero === true) merged.zero = true
+      }
+      out.push(merged)
     } else {
       out.push(first)
     }
@@ -1521,7 +1551,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (orient === 'vertical') {
       if (xDef) {
         const sc = positionalScaleType(mark, xDef)
-        if (xDef.timeUnit) {
+        if (xDef.timeUnit == null && !xDef.bin && xDef.type === 'temporal') {
+          // a plain temporal dimension centers the bar with the continuous
+          // band size (vega-lite's continuousBandSize)
+          update.xc = { scale: 'x', field: aggFieldName(xDef) }
+          update.width = { value: C.continuousBandSize }
+        } else if (xDef.timeUnit) {
           const endF = JSON.stringify(timeUnitField(xDef) + '_end')
           const startF = JSON.stringify(timeUnitField(xDef))
           const scName = 'x'
@@ -1548,8 +1583,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.width = { value: C.bandSize }
         }
       }
+      const y2DefB = fields.find((f) => f.channel === 'y2' && f.field)
       if (yDef) {
-        if (stacked) {
+        if (y2DefB) {
+          update.y = { scale: 'y', field: aggFieldName(yDef) }
+          update.y2 = { scale: 'y', field: y2DefB.field }
+        } else if (stacked) {
           update.y = { scale: 'y', field: `${yDef.field}_end` }
           update.y2 = { scale: 'y', field: `${yDef.field}_start` }
         } else if (positionalScaleType(mark, yDef) === 'band') {
@@ -1564,7 +1603,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     } else {
       if (yDef) {
         const sc = positionalScaleType(mark, yDef)
-        if (yDef.timeUnit) {
+        if (yDef.timeUnit == null && !yDef.bin && yDef.type === 'temporal') {
+          update.yc = { scale: 'y', field: aggFieldName(yDef) }
+          update.height = { value: C.continuousBandSize }
+        } else if (yDef.timeUnit) {
           const endF = JSON.stringify(timeUnitField(yDef) + '_end')
           const startF = JSON.stringify(timeUnitField(yDef))
           const off = (sign: string) =>
@@ -1709,9 +1751,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       update.width = { value: 1 }
     }
   } else if (mark === 'rule') {
-    update.stroke = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? C.blue }
+    update.stroke = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? 'black' }
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
     if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef) }
+    const x2Def = fields.find((f) => f.channel === 'x2' && f.field)
+    const y2Def = fields.find((f) => f.channel === 'y2' && f.field)
+    if (x2Def) update.x2 = { scale: 'x', field: x2Def.field }
+    if (y2Def) update.y2 = { scale: 'y', field: y2Def.field }
   } else if (mark === 'text') {
     update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? 'black' }
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
