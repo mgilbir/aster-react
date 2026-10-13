@@ -363,8 +363,10 @@ Interaction is a first-class deliverable, not a wrapper around an imperative vie
 Everything below is expressed in React terms: controlled/uncontrolled props, hooks,
 callbacks, and `useSyncExternalStore` where a session holds external state.
 
-- **R10.1** Scene hit index (uniform grid above a threshold) so hover, click, touch
-  and tooltips resolve a mark without walking the DOM.
+- **R10.1 — DONE.** Scene hit index (`@aster/core/hit`, uniform grid above a
+  threshold, vega-matching pick semantics, paint-order resolution) so hover,
+  click, touch and tooltips resolve a mark without walking the DOM. Wired into
+  `<Chart renderer="canvas">` tooltips.
 - **R10.2** Declarative selection: controlled/uncontrolled interval brush, point/click
   selection, and a `select` value type, with `onSelect` like the existing brush.
 - **R10.3** Pan and zoom: wheel, drag, pinch and keyboard, exposed as props and as a
