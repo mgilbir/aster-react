@@ -73,8 +73,8 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   if (scene.background) out += `<rect width="${W}" height="${H}" fill="${scene.background}"/>`
   out += `<g fill="none" stroke-miterlimit="4" transform="translate(${pad.left},${pad.top})">`
   out += `<g class="mark-group role-frame root" role="graphics-object" aria-roledescription="group mark container"><g transform="translate(0,0)">`
-  const plotW = scene.width - pad.left - pad.right
-  const plotH = scene.height - pad.top - pad.bottom
+  const plotW = scene.plotWidth ?? scene.width - pad.left - pad.right
+  const plotH = scene.plotHeight ?? scene.height - pad.top - pad.bottom
   const frameD = scene.frameStroke ? `M0.5,0.5h${plotW}v${plotH}h-${plotW}Z` : `M0,0h${plotW}v${plotH}h-${plotW}Z`
   out += `<path class="background" aria-hidden="true" d="${frameD}"${scene.frameStroke ? ` stroke="${scene.frameStroke}"` : ''}/>`
   out += '<g>'
@@ -572,7 +572,8 @@ export function symbolPath(shape: string | undefined, r: number): string {
 function renderSymbols(group: SceneGroup): string {
   let out = `<g class="mark-symbol role-mark" role="graphics-symbol" aria-roledescription="symbol mark container">`
   for (const it of itemsOf(group)) {
-    if (it.x == null || it.y == null) continue
+    // A null position (a geopoint the projection refused) renders at the
+    // origin: vega emits `translate(null,null)`, which SVG treats as (0,0).
     const size = (it.size as number) ?? 30
     const r = Math.sqrt(size) / 2
     const shape = (it as Record<string, unknown>).shape as string | undefined
@@ -583,7 +584,7 @@ function renderSymbols(group: SceneGroup): string {
     // no style carries no default width.
     // Only output fill if it's explicitly set to a non-default value (transparent is SVG default for paths)
     const fillAttr = it.fill != null && it.fill !== 'transparent' ? ` fill="${it.fill}"` : ''
-    out += `<path transform="translate(${num(it.x)},${num(it.y)})" d="${d}"${fillAttr}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
+    out += `<path transform="translate(${num(it.x ?? 0)},${num(it.y ?? 0)})" d="${d}"${fillAttr}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
   }
   out += '</g>'
   return out

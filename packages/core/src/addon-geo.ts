@@ -16,7 +16,7 @@ import d3Contours from './contour.js'
 
 geoRegistry.buildProjection = (spec, width, height) =>
   buildProjection(spec as Parameters<typeof buildProjection>[0], width, height)
-geoRegistry.projectedPath = (projection, geo) =>
+geoRegistry.projectedPath = (projection, geo): string =>
   projectedPath(projection as Parameters<typeof projectedPath>[0], geo)
 // the contour generator sets thresholds via `.thresholds(array)`, then is
 // called as `contours(values)` — it has no 2-arg form (vega's fork does).

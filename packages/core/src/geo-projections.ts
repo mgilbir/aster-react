@@ -159,7 +159,7 @@ export function projectionMutator(projectAt: any): any {
     return arguments.length
       ? ((postclip =
           _ == null
-            ? ((x0 = y0 = x1 = y1 = null), identityFn)
+            ? ((x0 = y0 = x1 = y1 = null as unknown as number), identityFn)
             : (clipRectangle((x0 = +(_ as any)[0][0]), (y0 = +(_ as any)[0][1]), (x1 = +(_ as any)[1][0]), (y1 = +(_ as any)[1][1])) as any)),
         reset())
       : x0 == null
@@ -884,6 +884,147 @@ naturalEarth1Raw.invert = function (x: number, y: number): number[] {
 
 export function naturalEarth1(): any {
   return projectionRaw(naturalEarth1Raw).scale(175.295)
+}
+
+// ---- mollweide.js (d3-geo-projection) ---------------------------------------
+
+export function mollweideBromleyTheta(cp: number, phi: number): number {
+  const cpsinPhi = cp * sin(phi)
+  let i = 30
+  let delta: number
+  do phi -= delta = (phi + sin(phi) - cpsinPhi) / (1 + cos(phi))
+  while (abs(delta) > epsilon && --i > 0)
+  return phi / 2
+}
+
+export function mollweideBromleyRaw(cx: number, cy: number, cp: number): any {
+  function forward(lambda: number, phi: number): number[] {
+    return [cx * lambda * cos((phi = mollweideBromleyTheta(cp, phi))), cy * sin(phi)]
+  }
+  forward.invert = function (x: number, y: number): number[] {
+    y = asin(y / cy)
+    return [x / (cx * cos(y)), asin((2 * y + sin(2 * y)) / cp)]
+  }
+  return forward
+}
+
+const sqrt2 = msqrt(2)
+
+export const mollweideRaw = mollweideBromleyRaw(sqrt2 / halfPi, sqrt2, pi)
+
+export function mollweide(): any {
+  return projectionRaw(mollweideRaw).scale(169.529)
+}
+
+// ---- identity.js ------------------------------------------------------------
+
+/**
+ * d3-geo's geoIdentity: an equirectangular pass-through with scale/translate,
+ * reflection, angle and an optional post-clip rectangle. No preclip/resample:
+ * geometry coordinates are used as-is (planar).
+ */
+export function geoIdentity(): any {
+  let k = 1
+  let tx = 0
+  let ty = 0
+  let sx = 1
+  let sy = 1
+  let alpha = 0
+  let ca = 1
+  let sa = 0
+  let x0: number | null = null
+  let y0 = 0
+  let x1 = 0
+  let y1 = 0
+  let kx = 1
+  let ky = 1
+  let postclip: any = identityFn
+  let cache: any
+  let cacheStream: any
+
+  const transform = transformer({
+    point(this: { stream: { point(x: number, y: number): void } }, x: number, y: number) {
+      const p = projection([x, y]) as number[]
+      this.stream.point(p[0]!, p[1]!)
+    },
+  } as Record<string, unknown>)
+
+  function reset(): any {
+    kx = k * sx
+    ky = k * sy
+    cache = cacheStream = null
+    return projection
+  }
+
+  function projection(p: number[]): number[] {
+    let x = p[0]! * kx
+    let y = p[1]! * ky
+    if (alpha) {
+      const t = y * ca - x * sa
+      x = x * ca + y * sa
+      y = t
+    }
+    return [x + tx, y + ty]
+  }
+  projection.invert = function (p: number[]): number[] {
+    let x = p[0]! - tx
+    let y = p[1]! - ty
+    if (alpha) {
+      const t = y * ca + x * sa
+      x = x * ca - y * sa
+      y = t
+    }
+    return [x / kx, y / ky]
+  }
+  projection.stream = function (stream: any): any {
+    return cache && cacheStream === stream ? cache : (cache = transform(postclip((cacheStream = stream))))
+  }
+  projection.postclip = function (_?: any): any {
+    return arguments.length ? ((postclip = _), (x0 = y0 = x1 = y1 = null as unknown as number), reset()) : postclip
+  }
+  projection.clipExtent = function (_?: number[][] | null): any {
+    if (!arguments.length) return x0 == null ? null : [[x0, y0], [x1, y1]]
+    if (_ == null) {
+      x0 = y0 = x1 = y1 = null as unknown as number
+      postclip = identityFn
+    } else {
+      const e = _ as number[][]
+      x0 = +e[0]![0]!
+      y0 = +e[0]![1]!
+      x1 = +e[1]![0]!
+      y1 = +e[1]![1]!
+      postclip = clipRectangle(x0, y0, x1, y1)
+    }
+    return reset()
+  }
+  projection.scale = function (_?: number): any {
+    return arguments.length ? ((k = +_!), reset()) : k
+  }
+  projection.translate = function (_?: number[]): any {
+    return arguments.length ? ((tx = +_![0]!), (ty = +_![1]!), reset()) : [tx, ty]
+  }
+  projection.angle = function (_?: number): any {
+    return arguments.length ? ((alpha = ((_ as number) % 360) * radians), (sa = sin(alpha)), (ca = cos(alpha)), reset()) : alpha * degrees
+  }
+  projection.reflectX = function (_?: boolean): any {
+    return arguments.length ? ((sx = _ ? -1 : 1), reset()) : sx < 0
+  }
+  projection.reflectY = function (_?: boolean): any {
+    return arguments.length ? ((sy = _ ? -1 : 1), reset()) : sy < 0
+  }
+  projection.fitExtent = function (extent: number[][], object: any): any {
+    return fitExtent(projection, extent, object)
+  }
+  projection.fitSize = function (size: number[], object: any): any {
+    return fitSize(projection, size, object)
+  }
+  projection.fitWidth = function (width: number, object: any): any {
+    return fitWidth(projection, width, object)
+  }
+  projection.fitHeight = function (height: number, object: any): any {
+    return fitHeight(projection, height, object)
+  }
+  return projection
 }
 
 // ---- transverseMercator.js --------------------------------------------------

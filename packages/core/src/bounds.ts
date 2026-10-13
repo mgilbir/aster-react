@@ -763,6 +763,9 @@ function boundIsolated(it: SceneItem): Bounds {
     // Miter expansion applies only to mark items; our baked group-background
     // paths (stroke without an explicit strokeWidth) expand non-miter, like
     // vega's group stroke bound.
+    // An empty path (a geo shape entirely clipped away) bounds to nothing:
+    // vega's boundPath leaves the bounds untouched, so no stroke expansion.
+    if (it.path === '') return bounds
     boundsFromPath(bounds, it.path)
     boundStroke(bounds, it, it.strokeWidth != null)
     return bounds.translate(it.x || 0, it.y || 0)
@@ -813,9 +816,11 @@ function boundIsolated(it: SceneItem): Bounds {
     // rule (x2/y2 line segment)
     return boundRule(bounds, it)
   }
-  if (it.x != null || it.y != null) {
+  if (it.x != null || it.y != null || it.size != null) {
     // point symbol without an explicit shape/radius: default circle, size 30
-    // (our symbol renderer defaults `size ?? 30`)
+    // (our symbol renderer defaults `size ?? 30`). A symbol with a null
+    // position (a geopoint the projection refused) still bounds as a circle
+    // at (0,0): vega's `x - r` coerces null to 0 (albersusa sweep case).
     const r = Math.sqrt(((it.size as number) ?? 30)) / 2
     const x = it.x ?? 0
     const y = it.y ?? 0

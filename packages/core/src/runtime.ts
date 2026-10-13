@@ -280,11 +280,14 @@ function buildProjections(ctx: EvalContext): void {
     }
     return undefined
   }
-  const evalTup = (v: unknown): [number, number] | undefined => {
+  const evalTup = (v: unknown): [number, number] | [number, number, number] | undefined => {
+    // keep a third element: rotate's gamma component
+    if (Array.isArray(v) && v.length > 2) return [Number(v[0]), Number(v[1]), Number(v[2])]
     if (Array.isArray(v)) return [Number(v[0]), Number(v[1])]
     if (v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)) {
       try {
         const r = ctx.runtime.expr(String((v as { signal: string }).signal))({}, ctx.signalParams)
+        if (Array.isArray(r) && r.length > 2) return [Number(r[0]), Number(r[1]), Number(r[2])]
         if (Array.isArray(r)) return [Number(r[0]), Number(r[1])]
       } catch { /* ignore */ }
     }
@@ -673,9 +676,17 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
     }
   }
 
+  // The frame background plot rect: the content size. Only set when the
+  // viewport is derived from the content (autosize pad / explicit sizes) —
+  // the signal-based minimum-viewport cases (10x10) keep deriving the rect
+  // by subtraction, where the zero plot is the vega-matching result.
+  const isMinViewport = isFacetSpec || (isConcat && (is2DConcat || sceneWidth === 10 || sceneHeight === 10))
+  const carryPlot = !isMinViewport
   const scene: SceneRoot = {
     width: sceneWidth,
     height: sceneHeight,
+    plotWidth: carryPlot ? width : undefined,
+    plotHeight: carryPlot ? height : undefined,
     background: ctx.chart.background,
     frameStroke: ctx.chart.frameStroke,
     padding: ctx.chart.autosize === 'none' ? ctx.chart.padding : padding,
@@ -1659,7 +1670,7 @@ function evaluateMark(
         const shape = datum.shape
         path = typeof shape === 'string' ? shape : (typeof datum.path === 'string' ? datum.path : undefined)
       }
-      if (path) it.path = path
+      if (path !== undefined) it.path = path
     }
   }
 

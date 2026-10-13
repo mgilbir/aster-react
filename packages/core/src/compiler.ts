@@ -105,7 +105,9 @@ export function compileChart(spec: VgSpec): CompiledChart {
 function compileProjection(pr: Record<string, unknown>): CompiledProjection {
   const num = (v: unknown): number | { signal: string } | undefined =>
     typeof v === 'number' ? v : v && typeof v === 'object' && 'signal' in v ? { signal: String((v as { signal: unknown }).signal) } : undefined
-  const tup = (v: unknown): [number, number] | { signal: string } | undefined => {
+  const tup = (v: unknown): [number, number] | [number, number, number] | { signal: string } | undefined => {
+    // keep a third element: rotate's gamma component
+    if (Array.isArray(v) && v.length > 2) return [Number(v[0]), Number(v[1]), Number(v[2])] as [number, number, number]
     if (Array.isArray(v)) return [Number(v[0]), Number(v[1])]
     if (typeof v === 'string') return { signal: v }
     if (v && typeof v === 'object' && 'signal' in v) return { signal: String((v as { signal: unknown }).signal) }
@@ -113,8 +115,8 @@ function compileProjection(pr: Record<string, unknown>): CompiledProjection {
   }
   const out: CompiledProjection = { name: pr.name as string, type: (pr.type as string) ?? 'mercator' }
   if (pr.scale != null) out.scale = num(pr.scale)
-  if (pr.translate != null) out.translate = tup(pr.translate)
-  if (pr.center != null) out.center = tup(pr.center)
+  if (pr.translate != null) out.translate = tup(pr.translate) as [number, number] | { signal: string }
+  if (pr.center != null) out.center = tup(pr.center) as [number, number] | { signal: string }
   if (pr.rotate != null) out.rotate = tup(pr.rotate) as [number, number] | [number, number, number] | { signal: string }
   if (pr.precision != null) out.precision = num(pr.precision)
   if (pr.clipAngle != null) out.clipAngle = num(pr.clipAngle)
@@ -128,7 +130,13 @@ function compileProjection(pr: Record<string, unknown>): CompiledProjection {
   let hasParams = false
   for (const [k, v] of Object.entries(pr)) {
     if (known.has(k) || v == null) continue
-    params[k] = num(v) ?? tup(v) ?? (typeof v === 'boolean' ? v : Array.isArray(v) ? v.map((x) => (typeof x === 'number' ? x : x)) : v)
+    // Nested arrays (clipExtent [[x0,y0],[x1,y1]]) pass through verbatim:
+    // num/tup would coerce the inner arrays to NaN.
+    params[k] =
+      num(v) ??
+      (Array.isArray(v) ? v.map((x) => (typeof x === 'number' ? Number(x) : x)) : undefined) ??
+      tup(v) ??
+      (typeof v === 'boolean' ? v : v)
     hasParams = true
   }
   if (hasParams) out.params = params

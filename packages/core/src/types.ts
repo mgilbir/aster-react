@@ -319,6 +319,11 @@ export interface EncodeConditional {
 export interface SceneRoot {
   width: number
   height: number
+  /** Content (plot) size: the frame background rect. With autosize pad the
+   *  totals can overflow far past fp precision (huge geo clip bounds), so the
+   *  plot rect is carried separately rather than derived by subtraction. */
+  plotWidth?: number
+  plotHeight?: number
   /** @internal The expression runtime for this evaluation (event-loop wiring). */
   runtime?: unknown
   /** @internal The compiled chart for this evaluation. */

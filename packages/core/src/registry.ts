@@ -23,7 +23,7 @@ export interface GeoRegistry {
   /** d3-geo projection builder (see geo.ts); null until the addon is loaded. */
   buildProjection: ((spec: unknown, width: number, height: number) => unknown) | null
   /** GeoJSON -> SVG path through a d3-geo projection; null until loaded. */
-  projectedPath: ((projection: unknown, geo: unknown) => string | undefined) | null
+  projectedPath: ((projection: unknown, geo: unknown) => string) | null
   /** d3-contour marching squares over a raster grid; null until loaded. */
   contourRun: ((values: number[] | Float32Array, thresholds: number[], size: [number, number], smooth: boolean) => ContourFeature[]) | null
 }
