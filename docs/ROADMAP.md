@@ -274,6 +274,20 @@ workstream for one focused engineer.
 
 ### R7 — Vega-Lite compiler (XL — its own program)
 
+**Status: in progress.** `@aster/vl` (zero-dependency workspace package) compiles
+Vega-Lite -> Vega, verified by rendering parity against the pinned
+`vega-lite` oracle through `pnpm conformance-vl` (per-spec multiset diffs of
+canonicalized SVG records). **53/125 corpus entries pass** with exact rendered
+output. Covered: unit specs for bar/point/circle/square/line/area/tick/text,
+positional/color/size/opacity/shape channels across all four data types,
+linear/band/point scale defaults, stack pipelines (single- and multi-series,
+impute vs filter variants), aggregate/count, binning with the bins-signal
+domain and offset-encoded bars, grid/label axis split with VL's tickCount
+signals, legends, and mark-def properties. Remaining: timeUnit axes, stack
+offset variants (center/normalize), facet/concat/layer/repeat composition,
+arc/theta, boxplot/errorbar composites, params.
+
+
 The whole grammar, verified property-by-property against `vega-lite.compile` (the same
 way Go and Kotlin do), then by rendering both compiled specs.
 

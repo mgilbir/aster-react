@@ -81,9 +81,19 @@ function parseChannel(channel: string, def: unknown): FieldDef | null {
   if (Array.isArray(def)) throw new Error(`[aster/vl] channel arrays not supported: ${channel}`)
   const raw = def as ChannelDef
   if (raw.field === undefined) {
-    if (raw.value !== undefined || raw.datum !== undefined || raw.expr !== undefined) {
-      // value-only encodings are folded into the mark; no scale/data role
-      return null
+    if (raw.aggregate === 'count') {
+      // count has no field: synthesise one for the pipeline
+      return {
+        channel,
+        field: '__count',
+        type: normalizeType(raw.type, raw),
+        aggregate: 'count',
+        axis: raw.axis === null ? null : isObject(raw.axis) ? (raw.axis as Record<string, unknown>) : undefined,
+        scale: isObject(raw.scale) ? (raw.scale as Record<string, unknown>) : undefined,
+        legend: raw.legend === null ? null : isObject(raw.legend) ? (raw.legend as Record<string, unknown>) : undefined,
+        title: raw.title,
+        raw,
+      }
     }
     return null
   }
@@ -120,6 +130,7 @@ const isContinuousScaleType = (t: string) => t === 'linear' || t === 'log' || t 
 
 export function channelTitle(def: FieldDef): unknown {
   if (def.title !== undefined) return def.title
+  if (def.bin) return `${def.field} (binned)`
   if (def.timeUnit) return `${def.field} (${timeUnitShort(def.timeUnit)})`
   if (def.aggregate) {
     if (def.aggregate === 'count') return 'Count of Records'
@@ -166,6 +177,28 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
   // type casts (formula) — the oracle emits them around impute/stack pipelines
   // (quantitative -> toNumber, temporal -> toDate)
 
+  // binning: extent + bin transforms ahead of any aggregate
+  const binFields = fields.filter((f) => f.bin)
+  const binSignals = new Map<string, { startField: string; endField: string; binsSignal: string }>()
+  for (const f of binFields) {
+    const maxbins = isObject(f.bin) && (f.bin.maxbins as number | undefined) ? (f.bin.maxbins as number) : 10
+    const base = `bin_maxbins_${maxbins}_${f.field}`
+    const extentSignal = `${base}_extent`
+    const startField = `${base}`
+    const endField = `${base}_end`
+    const binsSignal = `${base}_bins`
+    transforms.push({ type: 'extent', field: f.field, signal: extentSignal })
+    transforms.push({
+      type: 'bin',
+      field: f.field,
+      as: [startField, endField],
+      signal: binsSignal,
+      extent: { signal: extentSignal },
+      maxbins,
+    })
+    binSignals.set(f.field, { startField, endField, binsSignal })
+  }
+
   const hasAggregate = fields.some((f) => f.aggregate)
   const yDef = fields.find((f) => f.channel === 'y')
   const xDef = fields.find((f) => f.channel === 'x')
@@ -176,10 +209,11 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
   const dimension = dimensionChannel === 'x' ? xDef : yDef
   const continuousDimension = dimension != null && !isDiscreteType(dimension.type)
   // the oracle skips casts only in the discrete-dimension stack+filter pipeline
-  const skipCasts = (mark === 'bar' || mark === 'area') &&
+  const skipCasts = binFields.length > 0 ||
+    ((mark === 'bar' || mark === 'area') &&
     !fields.some((f) => f.aggregate) &&
     fields.some((f) => f.channel === (orient === 'vertical' ? 'y' : 'x') && f.type === 'quantitative') &&
-    !continuousDimension
+    !continuousDimension)
   if (!skipCasts) {
     for (const f of fields) {
       if (castDone.has(f.field)) continue
@@ -192,13 +226,19 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     }
   }
 
-  if (hasAggregate) {
+  if (hasAggregate || binFields.length) {
     const groupby: string[] = []
     const fieldsOut: Record<string, unknown>[] = []
+    let hasCount = false
     for (const f of fields) {
+      if (f.bin) {
+        const bin = binSignals.get(f.field)!
+        groupby.push(bin.startField, bin.endField)
+        continue
+      }
       if (f.aggregate) {
         if (f.aggregate === 'count') {
-          fieldsOut.push({ op: 'count', as: 'count' })
+          hasCount = true
         } else {
           fieldsOut.push({ op: f.aggregate, field: f.field, as: aggregateAs(f) })
         }
@@ -206,7 +246,19 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
         groupby.push(aggFieldName(f))
       }
     }
-    transforms.push({ type: 'aggregate', groupby, fields: fieldsOut })
+    // a binned measure without an explicit aggregate counts records
+    const measureBinned = (orient === 'vertical' ? yDef : xDef)?.bin
+    if (fieldsOut.length === 0 && (hasCount || (measureBinned && !hasAggregate))) hasCount = true
+    if (hasCount) fieldsOut.push({ op: 'count', as: '__count', field: null })
+    if (fieldsOut.length || groupby.length) {
+      transforms.push({ type: 'aggregate', groupby, ops: fieldsOut.map((o) => o.op), fields: fieldsOut.map((o) => o.field ?? null), as: fieldsOut.map((o) => o.as) })
+    }
+    // binned pipelines filter invalid bins
+    if (binFields.length) {
+      const bf = binFields[0]!
+      const bin = binSignals.get(bf.field)!
+      transforms.push({ type: 'filter', expr: `isValid(datum[${JSON.stringify(bin.startField)}]) && isFinite(+datum[${JSON.stringify(bin.startField)}])` })
+    }
   } else if (stackable && measure && measure.type === 'quantitative' && !measure.bin) {
     // stacked bar/area: continuous dimensions impute gaps; discrete ones filter
     const dimField = dimensionChannel === 'x' ? xDef?.field : yDef?.field
@@ -247,13 +299,17 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
 }
 
 function aggregateAs(f: FieldDef): string {
-  return f.bin ? `${f.field}_bin_mean` : `${f.aggregate}_${f.field}`
+  return `${f.aggregate}_${f.field}`
 }
 
 function aggFieldName(f: FieldDef): string {
-  if (f.bin) return f.timeUnit ? timeUnitField(f) : `${f.field}_bin`
+  if (f.bin) {
+    const maxbins = isObject(f.bin) && (f.bin.maxbins as number | undefined) ? (f.bin.maxbins as number) : 10
+    return `bin_maxbins_${maxbins}_${f.field}`
+  }
   if (f.timeUnit) return timeUnitField(f)
-  if (f.aggregate) return f.aggregate === 'count' ? 'count' : aggregateAs(f)
+  if (f.aggregate === 'count') return f.field === '__count' ? '__count' : '__count'
+  if (f.aggregate) return aggregateAs(f)
   return f.field
 }
 
@@ -340,6 +396,10 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       const zeroDefault = zeroDefaultFor(mark, channel, orient)
       sc.zero = (def.scale?.zero as boolean | undefined) ?? zeroDefault
       sc.nice = (def.scale?.nice as unknown) ?? true
+      if (def.bin) {
+        const maxbins = isObject(def.bin) && (def.bin.maxbins as number | undefined) ? (def.bin.maxbins as number) : 10
+        sc.bins = { signal: `bin_maxbins_${maxbins}_${def.field}_bins` }
+      }
       const measureChannel = orient === 'vertical' ? 'y' : 'x'
       if ((mark === 'bar' || mark === 'rect') && channel !== measureChannel) sc.padding = 5
       // binned scales: no zero/nice; domain comes from bin start/end
@@ -449,7 +509,8 @@ function zeroDefaultFor(mark: string, channel: string, orient: string): boolean 
 
 function positionalDomain(def: FieldDef, dataName: string, mark: string, orient: string): unknown {
   if (def.bin) {
-    return { data: dataName, fields: [`${def.field}_bin_start`, `${def.field}_bin_end`] }
+    const maxbins = isObject(def.bin) && (def.bin.maxbins as number | undefined) ? (def.bin.maxbins as number) : 10
+    return { signal: `[bin_maxbins_${maxbins}_${def.field}_bins.start, bin_maxbins_${maxbins}_${def.field}_bins.stop]` }
   }
   if (isDiscreteType(def.type)) return sortedDomain(def, dataName)
   const measureChannel = orient === 'vertical' ? 'y' : 'x'
@@ -487,7 +548,7 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
     const userAxis = def.axis
     if (userAxis === null) continue
     const sc = scaleByName.get(def.channel)!
-    const grid = (userAxis?.grid as boolean | undefined) ?? isContinuousScaleType(sc.type)
+    const grid = (userAxis?.grid as boolean | undefined) ?? (isContinuousScaleType(sc.type) && !def.bin)
     const tickCountSignal = def.channel === 'x' ? { signal: 'ceil(width/40)' } : { signal: 'ceil(height/40)' }
     const orientSide = def.channel === 'x' ? 'bottom' : 'left'
     const gridScale = def.channel === 'x' ? (scaleByName.get('y') ? 'y' : undefined) : scaleByName.get('x') ? 'x' : undefined
@@ -520,7 +581,9 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
     if (isContinuousScaleType(sc.type)) {
       if (def.channel === 'x') labelAxis.labelFlush = true
       labelAxis.labelOverlap = true
-      labelAxis.tickCount = tickCountSignal
+      labelAxis.tickCount = def.bin
+        ? { signal: def.channel === 'x' ? 'ceil(width/10)' : 'ceil(height/10)' }
+        : tickCountSignal
     } else if (def.channel === 'x' && (sc.type === 'band' || sc.type === 'point')) {
       // vega-lite 6 rotates nominal x labels
       labelAxis.labelAlign = 'right'
@@ -640,7 +703,15 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (orient === 'vertical') {
       if (xDef) {
         const sc = positionalScaleType(mark, xDef)
-        if (sc === 'band') {
+        if (xDef.bin) {
+          const bm = isObject(xDef.bin) && (xDef.bin.maxbins as number | undefined) ? (xDef.bin.maxbins as number) : 10
+          const endF = JSON.stringify(`bin_maxbins_${bm}_${xDef.field}_end`)
+          const startF = JSON.stringify(`bin_maxbins_${bm}_${xDef.field}`)
+          const off = (sign: string) =>
+            `0.5 + (abs(scale("x", datum[${endF}]) - scale("x", datum[${startF}])) < 0.25 ? ${sign}0.5 * (0.25 - (abs(scale("x", datum[${endF}]) - scale("x", datum[${startF}])))) : ${sign === '+' ? '-0.5' : '0.5'})`
+          update.x = { scale: 'x', field: JSON.parse(endF), offset: { signal: off('+') } }
+          update.x2 = { scale: 'x', field: JSON.parse(startF), offset: { signal: off('-') } }
+        } else if (sc === 'band') {
           update.x = { scale: 'x', field: aggFieldName(xDef) }
           update.width = { signal: `max(0.25, bandwidth('x'))` }
         } else {
@@ -654,13 +725,21 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.y2 = { scale: 'y', field: `${yDef.field}_start` }
         } else {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
-          if (mark === 'bar') update.y2 = { value: 0 }
+          if (mark === 'bar') update.y2 = { scale: 'y', value: 0 }
         }
       }
     } else {
       if (yDef) {
         const sc = positionalScaleType(mark, yDef)
-        if (sc === 'band') {
+        if (yDef.bin) {
+          const bm = isObject(yDef.bin) && (yDef.bin.maxbins as number | undefined) ? (yDef.bin.maxbins as number) : 10
+          const endF = JSON.stringify(`bin_maxbins_${bm}_${yDef.field}_end`)
+          const startF = JSON.stringify(`bin_maxbins_${bm}_${yDef.field}`)
+          const off = (sign: string) =>
+            `0.5 + (abs(scale("y", datum[${endF}]) - scale("y", datum[${startF}])) < 0.25 ? ${sign}0.5 * (0.25 - (abs(scale("y", datum[${endF}]) - scale("y", datum[${startF}])))) : ${sign === '+' ? '-0.5' : '0.5'})`
+          update.y = { scale: 'y', field: JSON.parse(endF), offset: { signal: off('+') } }
+          update.y2 = { scale: 'y', field: JSON.parse(startF), offset: { signal: off('-') } }
+        } else if (sc === 'band') {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
           update.height = { signal: `max(0.25, bandwidth('y'))` }
         } else {
@@ -675,7 +754,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.x2 = { scale: 'x', field: `${xDef.field}_start` }
         } else {
           update.x = { scale: 'x', field: aggFieldName(xDef) }
-          if (mark === 'bar') update.x2 = { value: 0 }
+          if (mark === 'bar') update.x2 = { scale: 'x', value: 0 }
         }
       }
     }
