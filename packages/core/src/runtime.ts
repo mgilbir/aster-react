@@ -364,7 +364,8 @@ function buildAxisAndLegend(ctx: EvalContext): { groups: SceneGroup[] } {
   }
   // Stack right-oriented legends vertically below each other (matching vega's
   // legend layout). Each legend's y is offset by the cumulative height of all
-  // preceding right-oriented legends plus a small gap.
+  // preceding right-oriented legends plus a small gap. Full multi-orient
+  // layout (left/top/bottom anchors) needs vega's legendGroupLayout port.
   let rightLegendY = 0
   const LEGEND_GAP = 8
   for (const legend of ctx.chart.legends) {
