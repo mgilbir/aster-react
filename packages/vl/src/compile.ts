@@ -1599,7 +1599,9 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
     if (isContinuousScaleType(sc.type)) {
       if (def.channel === 'x') labelAxis.labelFlush = true
       labelAxis.labelOverlap = sc.type === 'log' ? 'greedy' : true
-      labelAxis.tickCount = def.bin
+      // log axes carry no explicit tickCount — vega's axis defaults to 10,
+      // which drives the log label filter (3/30/300 stay visible)
+      if (sc.type !== 'log') labelAxis.tickCount = def.bin
         ? { signal: def.channel === 'x' ? 'ceil(width/10)' : 'ceil(height/10)' }
         : tickCountSignal
       if (def.timeUnit) {
