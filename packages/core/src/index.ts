@@ -25,6 +25,7 @@ export { compileChart } from './compiler.js'
 export { evaluateChart, getChartInfo } from './runtime.js'
 export type { ChartInfo } from './runtime.js'
 export { renderSceneToSvg } from './render.js'
+export { renderSceneToCanvas, parsePathData, canonicalPath, tracePath, type CanvasLike, type GradientLike, type RenderCanvasOptions } from './canvas.js'
 // The incremental DOM patcher ships as an opt-in addon (`@aster/core/dom`);
 // string-mode hosts never need it. To keep the DOM path working without
 // touching the addon entry, the re-exports live there.

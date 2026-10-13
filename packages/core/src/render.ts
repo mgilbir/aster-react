@@ -201,7 +201,8 @@ function renderLeaf(it: SceneItem): string {
   }
   if (it.text != null) {
     const fontSize = (it as Record<string, unknown>).fontSize as number | undefined
-    return `<text x="${num(it.x ?? 0)}" y="${num(it.y ?? 0)}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('fill', it.fill)}${attr('opacity', it.opacity)}>${esc(String(it.text))}</text>`
+    const fam = (it as Record<string, unknown>).font as string | undefined
+    return `<text x="${num(it.x ?? 0)}" y="${num(it.y ?? 0)}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('font-family', fam)}${attr('fill', it.fill)}${attr('opacity', it.opacity)}>${esc(String(it.text))}</text>`
   }
   const x2 = it.x2 ?? it.x ?? 0
   const y2 = it.y2 ?? it.y ?? 0
@@ -763,6 +764,7 @@ export function textItemDesc(it: SceneItem): {
   if (textAnchor != null) attrs.push(['text-anchor', textAnchor])
   attrs.push(['font-size', fontSize !== 11 ? fontSize : undefined])
   attrs.push(['font-weight', fontWeight])
+  attrs.push(['font-family', (it as Record<string, unknown>).font as string | undefined])
   attrs.push(['fill', it.fill])
   attrs.push(['opacity', it.opacity])
   attrs.push(['angle', it.angle])
