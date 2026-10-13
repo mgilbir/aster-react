@@ -141,7 +141,7 @@ function compileLayered(spec: VLSpec): VLSpec {
   if (castTransforms.length) data.push({ name: 'data_0', source: 'source_0', transform: castTransforms })
   let nextData = castTransforms.length ? 1 : 0
   const perLayerScales: ScaleSpec[][] = []
-  const marks: Record<string, unknown>[] = []
+  const perLayerMarks: Record<string, unknown>[][] = []
   parsed.forEach((p, i) => {
     if (p.pipeline.length) {
       const dataName = `data_${++nextData}`
@@ -152,20 +152,72 @@ function compileLayered(spec: VLSpec): VLSpec {
     }
     const builtMarks = buildMarks(p.l, p.fields, p.mark, p.orient, p.dataName, p.markSize) as Record<string, unknown>[] & { overlayData?: Record<string, unknown> }
     for (const m of builtMarks) if ((m as { name?: string }).name === 'marks') (m as { name?: string }).name = `layer_${i}_marks`
-    marks.push(...builtMarks)
+    perLayerMarks.push(builtMarks)
     if (builtMarks.overlayData) data.push(builtMarks.overlayData)
     perLayerScales.push(buildScales(p.l, p.fields, p.mark, p.orient, p.dataName, width, height, p.seriesFields))
   })
   out.data = data
+
+  // independent y resolution (dual-axis layers): each layer's y scale gets a
+  // unique name; the first layer keeps the left axis with grid, subsequent
+  // layers move to a right axis without grid
+  const indepY = (isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).scale)
+    ? ((spec.resolve as Record<string, Record<string, unknown>>).scale as Record<string, unknown>).y === 'independent'
+    : false)
+  if (indepY) {
+    const firstY = parsed.findIndex((p) => p.fields.some((f) => f.channel === 'y'))
+    parsed.forEach((p, i) => {
+      const yScale = perLayerScales[i]?.find((s) => s.name === 'y')
+      if (!yScale || !p.fields.some((f) => f.channel === 'y')) return
+      yScale.name = `layer_${i}_y`
+      const rewrite = (m: Record<string, unknown>): void => {
+        const enc = (m.encode as { update?: Record<string, unknown> } | undefined)?.update
+        if (enc) {
+          for (const k of ['y', 'y2']) {
+            const v = enc[k] as Record<string, unknown> | undefined
+            if (v && v.scale === 'y') v.scale = `layer_${i}_y`
+          }
+        }
+        for (const sub of (m.marks as Record<string, unknown>[] | undefined) ?? []) rewrite(sub)
+      }
+      for (const m of perLayerMarks[i] ?? []) rewrite(m)
+    })
+  }
+
+  const marks: Record<string, unknown>[] = perLayerMarks.flat()
   out.marks = marks
 
-  const scales = mergeLayerScales(perLayerScales)
+  // with independent y, the y scales stay per-layer (renamed); the remaining
+  // scales still merge across layers
+  const scales = indepY
+    ? [...mergeLayerScales(perLayerScales.map((ls) => ls.filter((s) => s.name !== 'y'))), ...perLayerScales.flat().filter((s) => s.name.endsWith('_y') && s.name.startsWith('layer_'))]
+    : mergeLayerScales(perLayerScales)
   out.scales = scales
 
   // axes: one per positional channel, from the first layer that encodes it,
   // with the axis title unioned across layers (vega-lite joins ', ')
   const axes: Record<string, unknown>[] = []
+  const firstYLayer = parsed.findIndex((p) => p.fields.some((f) => f.channel === 'y'))
   for (const ch of ['x', 'y'] as const) {
+    if (ch === 'y' && indepY) {
+      parsed.forEach((p, i) => {
+        const yDef = p.fields.find((f) => f.channel === 'y' && f.axis !== null)
+        if (!yDef || !perLayerScales[i]?.some((s) => s.name === `layer_${i}_y`)) return
+        const isFirst = i === firstYLayer
+        const axisDefs = buildAxes([yDef], p.mark, p.orient, perLayerScales[i]!, `layer_${i}_y`)
+        for (const a of axisDefs) {
+          ;(a as Record<string, unknown>).scale = `layer_${i}_y`
+          const gridAxis = (a as Record<string, unknown>).gridScale != null
+          if (!isFirst) {
+            // subsequent independent y axes: right-orient, no grid
+            ;(a as Record<string, unknown>).orient = (a as Record<string, unknown>).orient === 'left' ? 'right' : (a as Record<string, unknown>).orient
+            if (gridAxis) continue
+          }
+          axes.push(a)
+        }
+      })
+      continue
+    }
     const layersWith = parsed.filter((p) => p.fields.some((f) => f.channel === ch && f.axis !== null))
     if (!layersWith.length) continue
     const base = layersWith[0]!
@@ -179,7 +231,7 @@ function compileLayered(spec: VLSpec): VLSpec {
     const axisFields = base.fields.filter((f) => f.channel === ch).map((f) =>
       uniq.length > 1 ? ({ ...f, title: uniq.join(', ') } as FieldDef) : f,
     )
-    for (const a of buildAxes(axisFields, base.mark, base.orient, scales as ScaleSpec[])) axes.push(a)
+    for (const a of buildAxes(axisFields, base.mark, base.orient, scales as ScaleSpec[], undefined, ch === 'x' && indepY ? `layer_${firstYLayer}_y` : undefined)) axes.push(a)
   }
   if (axes.length) out.axes = axes
   const legends: Record<string, unknown>[] = []
@@ -940,7 +992,7 @@ function sortedDomain(def: FieldDef, dataName: string): unknown {
 
 // --- axes --------------------------------------------------------------------
 
-function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: ScaleSpec[]): Record<string, unknown>[] {
+function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: ScaleSpec[], scaleName?: string, gridScaleOverride?: string): Record<string, unknown>[] {
   const axes: Record<string, unknown>[] = []
   const scaleByName = new Map(scales.map((s) => [s.name, s]))
 
@@ -948,11 +1000,17 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
     if (!POSITIONAL.has(def.channel) || (def.channel !== 'x' && def.channel !== 'y')) continue
     const userAxis = def.axis
     if (userAxis === null) continue
-    const sc = scaleByName.get(def.channel)!
+    const sc = scaleByName.get(scaleName ?? def.channel)!
     const grid = (userAxis?.grid as boolean | undefined) ?? (isContinuousScaleType(sc.type) && !def.bin)
     const tickCountSignal = def.channel === 'x' ? { signal: 'ceil(width/40)' } : { signal: 'ceil(height/40)' }
     const orientSide = def.channel === 'x' ? 'bottom' : 'left'
-    const gridScale = def.channel === 'x' ? (scaleByName.get('y') ? 'y' : undefined) : scaleByName.get('x') ? 'x' : undefined
+    const gridScale = def.channel === 'x'
+      ? (gridScaleOverride ?? (scaleByName.get('y') ? 'y' : undefined))
+      : scaleByName.get('x')
+        ? 'x'
+        : scaleByName.get('x') === undefined && scales.some((s) => s.name.endsWith('_y'))
+          ? undefined
+          : undefined
 
     if (grid && gridScale) {
       const gridAxis: Record<string, unknown> = {
@@ -978,7 +1036,7 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
 
     const title = axisTitle(def, userAxis)
     const labelAxis: Record<string, unknown> = {
-      scale: def.channel,
+      scale: scaleName ?? def.channel,
       orient: orientSide,
       grid: false,
       zindex: 0,
@@ -1361,7 +1419,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (!styleChannels.has(channel)) continue
     if (def.condition && typeof def.condition === 'object') continue
     if (def.value === undefined) continue
-    const ch = channel === 'color' ? (mark === 'point' && !markFilled ? 'stroke' : 'fill') : channel
+    const ch = channel === 'color' ? ((mark === 'point' || mark === 'line') && !markFilled ? 'stroke' : 'fill') : channel
     update[ch] = { value: def.value }
   }
   const conditionalChannels: { channel: string; cond: Record<string, unknown>; fallback: unknown }[] = []
@@ -1501,7 +1559,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
 function applyCondition(update: Record<string, unknown>, channels: { channel: string; cond: Record<string, unknown>; fallback: unknown }[], mark: string, markFilled?: boolean): void {
   for (const { channel: ch, cond, fallback } of channels) {
     // the color channel materialises as stroke or fill depending on the mark
-    const channel = ch === 'color' ? (mark === 'point' && !markFilled ? 'stroke' : 'fill') : ch
+    const channel = ch === 'color' ? ((mark === 'point' || mark === 'line') && !markFilled ? 'stroke' : 'fill') : ch
     // the channel's own `value` is the fallback; the mark default only backs it up
     const base = fallback !== undefined ? { value: fallback } : update[channel]
     if (base == null) continue
