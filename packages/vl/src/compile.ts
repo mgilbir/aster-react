@@ -68,10 +68,174 @@ function array(v: unknown): unknown[] {
 
 export function compile(input: VLSpec): VLSpec {
   const spec = input
-  if (isObject(spec.layer) || Array.isArray(spec.layer)) throw new Error('[aster/vl] layer composition not supported yet')
+  if (isObject(spec.layer) || Array.isArray(spec.layer)) return compileLayered(spec)
   if (isObject(spec.facet) || isObject(spec.spec)) throw new Error('[aster/vl] facet composition not supported yet')
   if (spec.concat || spec.hconcat || spec.vconcat) throw new Error('[aster/vl] concat composition not supported yet')
   return compileUnit(spec)
+}
+
+// --- layer composition -------------------------------------------------------
+
+/** Compile a multi-layer spec: shared source + casts, per-layer pipelines,
+ * unioned positional scales, one mark group per layer. */
+function compileLayered(spec: VLSpec): VLSpec {
+  const layers = (Array.isArray(spec.layer) ? spec.layer : [spec.layer]) as VLSpec[]
+  const width = spec.width ?? 200
+  const height = spec.height ?? 200
+
+  interface ParsedLayer {
+    l: VLSpec
+    mark: string
+    markRaw: unknown
+    markSize?: number
+    fields: FieldDef[]
+    orient: string
+    pipeline: Record<string, unknown>[]
+    seriesFields: FieldDef[]
+    dataName: string
+  }
+  const parsed: ParsedLayer[] = layers.map((l) => {
+    const markRaw = l.mark
+    const mark = typeof markRaw === 'string' ? markRaw : isObject(markRaw) ? (markRaw.type as string) : 'point'
+    const encoding = {
+      ...(isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}),
+      ...(isObject(l.encoding) ? (l.encoding as Record<string, unknown>) : {}),
+    }
+    const fields: FieldDef[] = []
+    for (const [channel, def] of Object.entries(encoding)) {
+      const f = parseChannel(channel, def)
+      if (f) fields.push(f)
+    }
+    let orient = 'vertical'
+    if (mark === 'bar' || mark === 'area' || mark === 'rule' || mark === 'tick') {
+      const xDef = fields.find((f) => f.channel === 'x')
+      const yDef = fields.find((f) => f.channel === 'y')
+      const markOrient = isObject(markRaw) ? (markRaw.orient as string | undefined) : undefined
+      if (markOrient) orient = markOrient
+      else if (yDef && isDiscreteType(yDef.type) && (!xDef || !isDiscreteType(xDef.type))) orient = 'horizontal'
+    }
+    return { l, mark, markRaw, markSize: isObject(markRaw) ? (markRaw.size as number | undefined) : undefined, fields, orient, pipeline: [], seriesFields: [], dataName: 'data_0' }
+  })
+
+  const out: Record<string, unknown> = {}
+  if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
+  out.autosize = spec.autosize ?? 'pad'
+  out.background = spec.background ?? 'white'
+  out.padding = spec.padding ?? 5
+  out.width = width
+  out.height = height
+  out.style = 'cell'
+
+  // data: shared source + casts (data_0), then one derived dataset per layer
+  // that needs a pipeline; layers without transforms read data_0 directly
+  const castDone = new Set<string>()
+  const castTransforms: Record<string, unknown>[] = []
+  for (const p of parsed) {
+    const d = buildData(p.l, p.fields, p.mark, p.orient, castDone)
+    castTransforms.push(...d.casts)
+    p.pipeline = d.pipeline
+    p.seriesFields = d.seriesFields
+  }
+  const data: Record<string, unknown>[] = [{ ...(isObject(spec.data) ? spec.data : {}), name: 'source_0' }]
+  const castsName = castTransforms.length ? 'data_0' : 'source_0'
+  if (castTransforms.length) data.push({ name: 'data_0', source: 'source_0', transform: castTransforms })
+  let nextData = castTransforms.length ? 1 : 0
+  const perLayerScales: ScaleSpec[][] = []
+  const marks: Record<string, unknown>[] = []
+  parsed.forEach((p, i) => {
+    if (p.pipeline.length) {
+      const dataName = `data_${++nextData}`
+      data.push({ name: dataName, source: castsName, transform: p.pipeline })
+      p.dataName = dataName
+    } else {
+      p.dataName = castsName
+    }
+    const builtMarks = buildMarks(p.l, p.fields, p.mark, p.orient, p.dataName, p.markSize) as Record<string, unknown>[] & { overlayData?: Record<string, unknown> }
+    for (const m of builtMarks) if ((m as { name?: string }).name === 'marks') (m as { name?: string }).name = `layer_${i}_marks`
+    marks.push(...builtMarks)
+    if (builtMarks.overlayData) data.push(builtMarks.overlayData)
+    perLayerScales.push(buildScales(p.l, p.fields, p.mark, p.orient, p.dataName, width, height, p.seriesFields))
+  })
+  out.data = data
+  out.marks = marks
+
+  const scales = mergeLayerScales(perLayerScales)
+  out.scales = scales
+
+  // axes: one per positional channel, from the first layer that encodes it,
+  // with the axis title unioned across layers (vega-lite joins ', ')
+  const axes: Record<string, unknown>[] = []
+  for (const ch of ['x', 'y'] as const) {
+    const layersWith = parsed.filter((p) => p.fields.some((f) => f.channel === ch && f.axis !== null))
+    if (!layersWith.length) continue
+    const base = layersWith[0]!
+    const titles = layersWith
+      .map((p) => {
+        const f = p.fields.find((q) => q.channel === ch)!
+        return ((f.axis as Record<string, unknown> | null | undefined)?.title as string) ?? (channelTitle(f) as string)
+      })
+      .filter(Boolean)
+    const uniq = Array.from(new Set(titles))
+    const axisFields = base.fields.filter((f) => f.channel === ch).map((f) =>
+      uniq.length > 1 ? ({ ...f, title: uniq.join(', ') } as FieldDef) : f,
+    )
+    for (const a of buildAxes(axisFields, base.mark, base.orient, scales as ScaleSpec[])) axes.push(a)
+  }
+  if (axes.length) out.axes = axes
+  const legends: Record<string, unknown>[] = []
+  for (const p of parsed) {
+    for (const lg of buildLegends(p.fields, p.mark, isObject(p.markRaw) ? (p.markRaw.opacity as number | undefined) : undefined, isObject(p.markRaw) && p.markRaw.filled === true)) {
+      if (!legends.some((x) => JSON.stringify(x) === JSON.stringify(lg))) legends.push(lg)
+    }
+  }
+  if (legends.length) out.legends = legends
+  if (spec.title) out.title = spec.title
+  if (spec.description) out.description = spec.description
+  return out
+}
+
+/** Union per-layer positional scale domains into a single scale per name. */
+function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
+  const byName = new Map<string, ScaleSpec[]>()
+  for (const ls of perLayer) {
+    for (const s of ls) {
+      const list = byName.get(s.name)
+      if (list) list.push(s)
+      else byName.set(s.name, [s])
+    }
+  }
+  const out: ScaleSpec[] = []
+  for (const [name, list] of byName) {
+    const first = list[0]!
+    if (list.length === 1 || list.every((s) => JSON.stringify(s) === JSON.stringify(first))) {
+      out.push(first)
+      continue
+    }
+    if (name === 'x' || name === 'y') {
+      // union domain: collect the per-layer domain field entries
+      const entries: Array<{ data: string; field: string }> = []
+      const collect = (domain: unknown): void => {
+        if (domain == null || typeof domain !== 'object') return
+        const d = domain as { data?: string; field?: string; fields?: unknown }
+        if (typeof d.data === 'string' && typeof d.field === 'string') {
+          entries.push({ data: d.data, field: d.field })
+        } else if (Array.isArray(d.fields)) {
+          for (const f of d.fields) collect(f)
+        }
+      }
+      for (const s of list) collect(s.domain)
+      const sameData = entries.length > 0 && entries.every((e) => e.data === entries[0]!.data)
+      out.push({
+        ...first,
+        domain: sameData
+          ? { data: entries[0]!.data, fields: Array.from(new Set(entries.map((e) => e.field))) }
+          : { fields: entries },
+      })
+    } else {
+      out.push(first)
+    }
+  }
+  return out
 }
 
 // --- channel parsing ---------------------------------------------------------
@@ -162,18 +326,23 @@ function timeUnitShort(u: string): string {
 interface DataPipeline {
   sourceName: string
   transforms: Record<string, unknown>[]
+  /** type-cast formulas only (shared across layers in layered compilation) */
+  casts: Record<string, unknown>[]
+  /** everything after the casts (bin/theta/user/aggregate/stack pipelines) */
+  pipeline: Record<string, unknown>[]
   /** the name of the final derived dataset */
   dataName: string
   seriesFields: FieldDef[]
 }
 
-function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: string): DataPipeline {
+function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: string, castDoneIn?: Set<string>): DataPipeline {
   let seriesFields: FieldDef[] = []
   const source: Record<string, unknown> = isObject(spec.data) ? { ...spec.data } : {}
   const sourceName = (source.name as string) ?? 'source_0'
   source.name = sourceName
-  const transforms: Record<string, unknown>[] = []
-  const castDone = new Set<string>()
+  const casts: Record<string, unknown>[] = []
+  const pipeline: Record<string, unknown>[] = []
+  const castDone = castDoneIn ?? new Set<string>()
 
   // type casts (formula) — the oracle emits them around impute/stack pipelines
   // (quantitative -> toNumber, temporal -> toDate)
@@ -188,8 +357,8 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     const startField = `${base}`
     const endField = `${base}_end`
     const binsSignal = `${base}_bins`
-    transforms.push({ type: 'extent', field: f.field, signal: extentSignal })
-    transforms.push({
+    pipeline.push({ type: 'extent', field: f.field, signal: extentSignal })
+    pipeline.push({
       type: 'bin',
       field: f.field,
       as: [startField, endField],
@@ -206,7 +375,7 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
   const thetaDef = fields.find((f) => f.channel === 'theta' && f.field)
   if (mark === 'arc' && thetaDef) {
     const colorF = fields.find((f) => f.channel === 'color' && f.field)
-    transforms.push({
+    pipeline.push({
       type: 'stack',
       groupby: [],
       field: thetaDef.field,
@@ -214,7 +383,7 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
       as: [`${thetaDef.field}_start`, `${thetaDef.field}_end`],
       offset: 'zero',
     })
-    transforms.push({ type: 'filter', expr: `isValid(datum[${JSON.stringify(thetaDef.field)}]) && isFinite(+datum[${JSON.stringify(thetaDef.field)}])` })
+    pipeline.push({ type: 'filter', expr: `isValid(datum[${JSON.stringify(thetaDef.field)}]) && isFinite(+datum[${JSON.stringify(thetaDef.field)}])` })
   }
 
   // channel roles shared by the pipeline stages below
@@ -238,9 +407,9 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
       if (castDone.has(f.field)) continue
       castDone.add(f.field)
       if (f.type === 'quantitative') {
-        transforms.push({ type: 'formula', expr: `toNumber(datum[${JSON.stringify(f.field)}])`, as: f.field })
+        casts.push({ type: 'formula', expr: `toNumber(datum[${JSON.stringify(f.field)}])`, as: f.field })
       } else if (f.type === 'temporal') {
-        transforms.push({ type: 'formula', expr: `toDate(datum[${JSON.stringify(f.field)}])`, as: f.field })
+        casts.push({ type: 'formula', expr: `toDate(datum[${JSON.stringify(f.field)}])`, as: f.field })
       }
     }
   }
@@ -275,12 +444,12 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     const type = t.type as string
     if (type === undefined) {
       // a bare VL transform object like {filter: expr} / {calculate: expr, as}
-      if (t.filter != null) { transforms.push({ type: 'filter', expr: t.filter }); continue }
-      if (t.calculate != null) { transforms.push({ type: 'formula', expr: t.calculate, as: t.as }); continue }
-      if (t.fold != null) { transforms.push({ type: 'fold', fields: t.fold, as: t.as ?? ['key', 'value'] }); continue }
-      if (t.flatten != null) { transforms.push({ type: 'flatten', fields: t.flatten, as: t.as }); continue }
+      if (t.filter != null) { pipeline.push({ type: 'filter', expr: t.filter }); continue }
+      if (t.calculate != null) { pipeline.push({ type: 'formula', expr: t.calculate, as: t.as }); continue }
+      if (t.fold != null) { pipeline.push({ type: 'fold', fields: t.fold, as: t.as ?? ['key', 'value'] }); continue }
+      if (t.flatten != null) { pipeline.push({ type: 'flatten', fields: t.flatten, as: t.as }); continue }
       if (t.density != null) {
-        transforms.push({ type: 'kde', field: t.density, as: t.as ?? ['value', 'density'], resolve: 'shared' })
+        pipeline.push({ type: 'kde', field: t.density, as: t.as ?? ['value', 'density'], resolve: 'shared' })
         continue
       }
       for (const k of ['flatten', 'collect', 'countpattern', 'cross', 'joinaggregate', 'kde', 'loess', 'lookup', 'pivot', 'quantile', 'regression', 'stack', 'window', 'impute', 'bin', 'timeunit', 'aggregate', 'sample', 'density']) {
@@ -291,23 +460,23 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
           const next: Record<string, unknown> = { ...t, type: k }
           if (fielded.has(k) && next.field == null) next.field = (t as Record<string, unknown>)[k]
           delete next[k]
-          transforms.push(next)
+          pipeline.push(next)
           break
         }
       }
       continue
     }
     if (type === 'calculate') {
-      transforms.push({ type: 'formula', expr: t.expr, as: t.as })
+      pipeline.push({ type: 'formula', expr: t.expr, as: t.as })
     } else {
-      transforms.push(t)
+      pipeline.push(t)
     }
   }
 
   // timeUnit: the timeunit transform floors each date to the unit
   const tuFields = fields.filter((f) => f.timeUnit && f.field)
   for (const f of tuFields) {
-    transforms.push({
+    pipeline.push({
       field: f.field,
       type: 'timeunit',
       units: timeUnitUnits(f.timeUnit!),
@@ -342,13 +511,13 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     if (fieldsOut.length === 0 && (hasCount || (measureBinned && !hasAggregate))) hasCount = true
     if (hasCount) fieldsOut.push({ op: 'count', as: '__count', field: null })
     if (fieldsOut.length || groupby.length) {
-      transforms.push({ type: 'aggregate', groupby, ops: fieldsOut.map((o) => o.op), fields: fieldsOut.map((o) => o.field ?? null), as: fieldsOut.map((o) => o.as) })
+      pipeline.push({ type: 'aggregate', groupby, ops: fieldsOut.map((o) => o.op), fields: fieldsOut.map((o) => o.field ?? null), as: fieldsOut.map((o) => o.as) })
     }
     // binned pipelines filter invalid bins
     if (binFields.length) {
       const bf = binFields[0]!
       const bin = binSignals.get(bf.field)!
-      transforms.push({ type: 'filter', expr: `isValid(datum[${JSON.stringify(bin.startField)}]) && isFinite(+datum[${JSON.stringify(bin.startField)}])` })
+      pipeline.push({ type: 'filter', expr: `isValid(datum[${JSON.stringify(bin.startField)}]) && isFinite(+datum[${JSON.stringify(bin.startField)}])` })
     }
   } else if (stackable && measure && measure.type === 'quantitative' && !measure.bin) {
     // stacked bar/area: continuous dimensions impute gaps; discrete ones filter
@@ -359,7 +528,7 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     const stackField = measure.field
     const startEnd = [`${stackField}_start`, `${stackField}_end`]
     if (continuousDimension) {
-      transforms.push({
+      pipeline.push({
         type: 'impute',
         field: stackField,
         groupby: seriesFields.map((f) => aggFieldName(f)),
@@ -369,7 +538,7 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
       })
     }
     const xOffsetPresent = fields.some((f) => f.channel === 'xOffset' || f.channel === 'yOffset')
-    transforms.push({
+    pipeline.push({
       type: 'stack',
       groupby: xOffsetPresent ? [dimField, ...seriesFields.map((f) => aggFieldName(f))].filter(Boolean) : [dimField].filter(Boolean),
       field: stackField,
@@ -379,7 +548,7 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     })
     if (!continuousDimension) {
       const f = JSON.stringify(stackField)
-      transforms.push({ type: 'filter', expr: `isValid(datum[${f}]) && isFinite(+datum[${f}])` })
+      pipeline.push({ type: 'filter', expr: `isValid(datum[${f}]) && isFinite(+datum[${f}])` })
     }
   }
 
@@ -391,17 +560,18 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
         const f2 = JSON.stringify(f.field)
         return `isValid(datum[${f2}]) && isFinite(+datum[${f2}])`
       })
-      const last = transforms[transforms.length - 1]!
+      const last = pipeline[pipeline.length - 1]!
       if (last.type !== 'filter' || last.expr !== parts.join(' && ')) {
-        transforms.push({ type: 'filter', expr: parts.join(' && ') })
+        pipeline.push({ type: 'filter', expr: parts.join(' && ') })
       }
     }
   }
 
+  const transforms = [...casts, ...pipeline]
   const dataName = transforms.length ? 'data_0' : sourceName
   const data: Record<string, unknown>[] = [source]
   if (transforms.length) data.push({ name: 'data_0', source: sourceName, transform: transforms })
-  return { sourceName, transforms, dataName, seriesFields }
+  return { sourceName, transforms, casts, pipeline, dataName, seriesFields }
 }
 
 function aggregateAs(f: FieldDef): string {
