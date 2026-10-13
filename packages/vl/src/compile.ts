@@ -152,9 +152,11 @@ interface DataPipeline {
   transforms: Record<string, unknown>[]
   /** the name of the final derived dataset */
   dataName: string
+  seriesFields: FieldDef[]
 }
 
 function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: string): DataPipeline {
+  let seriesFields: FieldDef[] = []
   const source: Record<string, unknown> = isObject(spec.data) ? { ...spec.data } : {}
   const sourceName = (source.name as string) ?? 'source_0'
   source.name = sourceName
@@ -210,24 +212,25 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     const dimField = dimensionChannel === 'x' ? xDef?.field : yDef?.field
     const colorDef = fields.find((f) => f.channel === 'color')
     const detailDefs = fields.filter((f) => f.channel === 'detail')
-    const seriesFields = [colorDef, ...detailDefs].filter(Boolean) as FieldDef[]
+    seriesFields = [colorDef, ...detailDefs].filter(Boolean) as FieldDef[]
     const stackField = measure.field
     const startEnd = [`${stackField}_start`, `${stackField}_end`]
-    if (continuousDimension && !seriesFields.length && dimField) {
+    if (continuousDimension) {
       transforms.push({
         type: 'impute',
         field: stackField,
-        groupby: [],
-        key: dimField,
+        groupby: seriesFields.map((f) => aggFieldName(f)),
+        key: dimField!,
         method: 'value',
         value: 0,
       })
     }
+    const xOffsetPresent = fields.some((f) => f.channel === 'xOffset' || f.channel === 'yOffset')
     transforms.push({
       type: 'stack',
-      groupby: [dimField, ...seriesFields.map((f) => aggFieldName(f))].filter(Boolean),
+      groupby: xOffsetPresent ? [dimField, ...seriesFields.map((f) => aggFieldName(f))].filter(Boolean) : [dimField].filter(Boolean),
       field: stackField,
-      sort: { field: seriesFields.map((f) => aggFieldName(f)), order: [] },
+      sort: { field: seriesFields.map((f) => aggFieldName(f)), order: seriesFields.map(() => 'descending') },
       as: startEnd,
       offset: measureStackOffset(measure),
     })
@@ -240,7 +243,7 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
   const dataName = transforms.length ? 'data_0' : sourceName
   const data: Record<string, unknown>[] = [source]
   if (transforms.length) data.push({ name: 'data_0', source: sourceName, transform: transforms })
-  return { sourceName, transforms, dataName, }
+  return { sourceName, transforms, dataName, seriesFields }
 }
 
 function aggregateAs(f: FieldDef): string {
@@ -312,7 +315,7 @@ function positionalScaleType(mark: string, def: FieldDef): string {
   return 'linear'
 }
 
-function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: string, dataName: string, width: unknown, height: unknown): ScaleSpec[] {
+function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: string, dataName: string, width: unknown, height: unknown, series: FieldDef[] = []): ScaleSpec[] {
   const scales: ScaleSpec[] = []
   const xDef = fields.find((f) => f.channel === 'x')
   const yDef = fields.find((f) => f.channel === 'y')
@@ -577,11 +580,14 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     const userLegend = colorDef.legend ?? {}
     const lg: Record<string, unknown> = { title: legendTitle(colorDef, userLegend) }
     const filled = mark === 'circle' || mark === 'square' || (mark === 'point' && markFilled === true)
+    const m = mark as string
     if (filled) {
       lg.fill = 'color'
-      lg.symbolType = 'circle'
-      lg.encode = { symbols: { update: { opacity: { value: markOpacity ?? C.pointOpacity } } } }
-    } else if (mark === 'point' || mark === 'line' || mark === 'text') {
+      lg.symbolType = m === 'bar' || m === 'rect' ? 'square' : 'circle'
+      if (m !== 'bar' && m !== 'rect') {
+        lg.encode = { symbols: { update: { opacity: { value: markOpacity ?? C.pointOpacity } } } }
+      }
+    } else if (m === 'point' || m === 'line' || m === 'text') {
       lg.stroke = 'color'
       if (isDiscreteType(colorDef.type)) {
         lg.symbolType = 'circle'
@@ -592,6 +598,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       }
     } else {
       lg.fill = 'color'
+      if (mark === 'bar' || mark === 'rect') lg.symbolType = 'square'
       if (!isDiscreteType(colorDef.type)) lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
     }
     for (const [k, v] of Object.entries(userLegend)) {
@@ -793,6 +800,39 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
 
   const out: BuiltMarks = [markSpec]
 
+  // stacked area with a series channel: one faceted area per series (pathgroup)
+  const colorDefSeries = fields.find((f) => f.channel === 'color' && f.field)
+  const stackedNow = (yDef != null && isStacked(yDef, mark, orient)) || (xDef != null && isStacked(xDef, mark, orient))
+  if (mark === 'area' && stackedNow && colorDefSeries) {
+    markSpec.name = 'layer_0_marks'
+    const group: Record<string, unknown> = {
+      name: 'pathgroup',
+      type: 'group',
+      from: {
+        facet: {
+          name: 'faceted_path_main',
+          data: dataName,
+          groupby: [aggFieldName(colorDefSeries)],
+        },
+      },
+      encode: {
+        update: {
+          width: { field: { group: 'width' } },
+          height: { field: { group: 'height' } },
+        },
+      },
+      marks: [{
+        name: 'marks',
+        type: 'area',
+        style: ['area'],
+        sort: { field: aggFieldName(xDef ?? yDef!) },
+        from: { data: 'faceted_path_main' },
+        encode: { update },
+      }],
+    }
+    out[0] = group
+  }
+
   // line/area with a point overlay: expand to a symbol mark over a filtered clone
   const pointOverlay = isObject(spec.mark) ? spec.mark.point : undefined
   if ((mark === 'line' || mark === 'area') && pointOverlay) {
@@ -890,7 +930,7 @@ export function compileUnit(spec: VLSpec): VLSpec {
   if (builtMarks.overlayData) {
     ;(out.data as Record<string, unknown>[]).push(builtMarks.overlayData)
   }
-  out.scales = buildScales(spec, fields, mark, orient, data.dataName, width, height)
+  out.scales = buildScales(spec, fields, mark, orient, data.dataName, width, height, data.seriesFields)
   const axes = buildAxes(fields, mark, orient, out.scales as ScaleSpec[])
   if (axes.length) out.axes = axes
   const legends = buildLegends(fields, mark, markOpacity, isObject(markRaw) && markRaw.filled === true)
