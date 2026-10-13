@@ -3961,8 +3961,95 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
   // --- Symbol legend (discrete) ---
   const n = domain.length
 
-  // --- 'right' (default) ---
-  if (orient === 'right' || orient === undefined) {
+
+  // --- 'bottom' ---
+  if (orient === 'bottom') {
+    const titleStr = String(legend.title ?? '')
+    // Vertical flow (raw Vega default `symbolDirection: vertical`): entries
+    // stack at 18px row step, each row 14px tall with symbol at (6,6) and
+    // label at (16,9). Group sits at height+24 (oracle line-grid-dash).
+    if (legend.direction !== 'horizontal') {
+      const rowStep = 18
+      const rowHeight = 14
+      const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
+      const entryWidth = 16 + 8 * maxLabelLen
+      const items: SceneItem[] = []
+      // Legend background spans the whole entry column.
+      items.push({ path: `M0,0h${entryWidth}v${n * rowStep - (rowStep - rowHeight)}h-${entryWidth}Z`, x: 0, y: 0 })
+      for (let i = 0; i < n; i++) {
+        const ey = i * rowStep
+        items.push({ path: `M0,0h${entryWidth}v${rowHeight}h-${entryWidth}Z`, x: 0, y: ey })
+        items.push({ shape: 'circle', radius: 5, x: 6, y: ey + 6, stroke: String(scale(domain[i])), strokeWidth: 1.5, opacity: 1 })
+        items.push({ text: String(domain[i]), x: 16, y: ey + 9, align: 'left', fill: '#000', fontSize: 10 })
+      }
+      return { marktype: 'group', role: 'legend', x: 0, y: 0, width: entryWidth, height: n * rowStep - 4, items }
+    }
+    // Horizontal flow (Vega-Lite emits `direction: horizontal` for bottom
+    // legends with a title). Per-entry step = entry content width + 12px gap.
+    const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
+    const entryWidth = 16 + 8 * maxLabelLen
+    const step = entryWidth + 12
+    const bgW = step * n - 12
+    const items: SceneItem[] = []
+    items.push({ path: `M0,0h${bgW}v30h-${bgW}Z`, x: 0, y: 0 })
+    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
+    for (let i = 0; i < n; i++) {
+      const value = domain[i]
+      const sx = i * step
+      items.push({ path: `M0,0h${entryWidth}v14h-${entryWidth}Z`, x: sx, y: 16 })
+      items.push({ shape: 'circle', radius: 5, x: sx + 6, y: 22, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
+      items.push({ text: String(value), x: sx + 16, y: 25, align: 'left', fill: '#000', fontSize: 10 })
+    }
+    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: 30, items }
+  }
+
+  // --- corner orents (top-left / top-right / bottom-left / bottom-right) ---
+  // Discrete symbol legends laid out as a row-major grid honoring `columns` and
+  // `direction`. Geometry calibrated to the oracle for a fill/square legend with
+  // columns:2 (entryWidth=16+8*maxLabelLen, columnPadding=10, rowPadding=2,
+  // fill boxHeight=11/rowStep=13; group at (offset, offset) from the corner).
+  if (/^(top|bottom)-(left|right)$/.test(orient) && !legend.size && !legend.gradientLength && legend.columns != null) {
+    const colorProp = legend.fill ? 'fill' : 'stroke'
+    const symType = legend.symbolType ?? 'circle'
+    const isStrokeLegend = !legend.fill
+    const boxHeight = isStrokeLegend ? 14 : 11
+    const rowStep = isStrokeLegend ? 18 : 13
+    const columnPadding = 10, rowPadding = 2
+    const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
+    const entryWidth = 16 + 8 * maxLabelLen
+    const cols = legend.direction === 'vertical' ? 1 : Math.min(legend.columns ?? n, n)
+    const rows = Math.ceil(n / cols)
+    const titleStr = String(legend.title ?? '')
+    const titleRow = titleStr ? 16 : 0
+    const titleWidth = titleStr ? ~~(0.8 * titleStr.length * 11) : 0
+    const gridW = cols * entryWidth + (cols - 1) * columnPadding
+    const gridH = titleRow + rows * boxHeight + (rows - 1) * rowPadding
+    const outerWidth = Math.max(gridW, titleWidth)
+    const items: SceneItem[] = []
+    items.push({ path: `M0,0h${outerWidth}v${gridH}h-${outerWidth}Z`, x: 0, y: 0 })
+    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
+    for (let i = 0; i < n; i++) {
+      const value = domain[i]
+      const ex = (i % cols) * (entryWidth + columnPadding)
+      const ey = titleRow + Math.floor(i / cols) * rowStep
+      items.push({ path: `M0,0h${entryWidth}v${boxHeight}h-${entryWidth}Z`, x: ex, y: ey })
+      if (symType === 'square') {
+        items.push(colorProp === 'fill'
+          ? { path: 'M-5,-5h10v10h-10Z', x: ex + 6, y: ey + 6, fill: String(scale(value)), strokeWidth: 1.5 }
+          : { path: 'M-5,-5h10v10h-10Z', x: ex + 6, y: ey + 6, stroke: String(scale(value)), strokeWidth: 1.5 })
+      } else {
+        items.push(colorProp === 'fill'
+          ? { shape: 'circle', radius: 5, x: ex + 6, y: ey + 6, fill: String(scale(value)), strokeWidth: 1.5 }
+          : { shape: 'circle', radius: 5, x: ex + 6, y: ey + 6, stroke: String(scale(value)), strokeWidth: 1.5 })
+      }
+      items.push({ text: String(value), x: ex + 16, y: ey + 9, align: 'left', fill: '#000', fontSize: 10 })
+    }
+    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: outerWidth, height: gridH, items }
+  }
+
+  // --- Symbol legend geometry (orient-independent: vertical entries; the
+  // grid anchor in buildAxisAndLegend positions every orient) ---
+  {
     // Detect fill vs stroke legend channel and legend encode style.
     // Fill legends (e.g. arc-pie): fill=color, no stroke, opacity=1, step=13, box=11
     // Stroke legends (e.g. legend-scatter): stroke=color, no fill, opacity=0.7, step=18, box=14
@@ -4085,91 +4172,6 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000', fontSize: 10 })
     }
     return { marktype: 'group', role: 'legend', x: 0, y: 0, width: outerWidth, height: bgHeight, items }
-  }
-
-  // --- 'bottom' ---
-  if (orient === 'bottom') {
-    const titleStr = String(legend.title ?? '')
-    // Vertical flow (raw Vega default `symbolDirection: vertical`): entries
-    // stack at 18px row step, each row 14px tall with symbol at (6,6) and
-    // label at (16,9). Group sits at height+24 (oracle line-grid-dash).
-    if (legend.direction !== 'horizontal') {
-      const rowStep = 18
-      const rowHeight = 14
-      const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
-      const entryWidth = 16 + 8 * maxLabelLen
-      const items: SceneItem[] = []
-      // Legend background spans the whole entry column.
-      items.push({ path: `M0,0h${entryWidth}v${n * rowStep - (rowStep - rowHeight)}h-${entryWidth}Z`, x: 0, y: 0 })
-      for (let i = 0; i < n; i++) {
-        const ey = i * rowStep
-        items.push({ path: `M0,0h${entryWidth}v${rowHeight}h-${entryWidth}Z`, x: 0, y: ey })
-        items.push({ shape: 'circle', radius: 5, x: 6, y: ey + 6, stroke: String(scale(domain[i])), strokeWidth: 1.5, opacity: 1 })
-        items.push({ text: String(domain[i]), x: 16, y: ey + 9, align: 'left', fill: '#000', fontSize: 10 })
-      }
-      return { marktype: 'group', role: 'legend', x: 0, y: 0, width: entryWidth, height: n * rowStep - 4, items }
-    }
-    // Horizontal flow (Vega-Lite emits `direction: horizontal` for bottom
-    // legends with a title). Per-entry step = entry content width + 12px gap.
-    const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
-    const entryWidth = 16 + 8 * maxLabelLen
-    const step = entryWidth + 12
-    const bgW = step * n - 12
-    const items: SceneItem[] = []
-    items.push({ path: `M0,0h${bgW}v30h-${bgW}Z`, x: 0, y: 0 })
-    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
-    for (let i = 0; i < n; i++) {
-      const value = domain[i]
-      const sx = i * step
-      items.push({ path: `M0,0h${entryWidth}v14h-${entryWidth}Z`, x: sx, y: 16 })
-      items.push({ shape: 'circle', radius: 5, x: sx + 6, y: 22, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
-      items.push({ text: String(value), x: sx + 16, y: 25, align: 'left', fill: '#000', fontSize: 10 })
-    }
-    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: 30, items }
-  }
-
-  // --- corner orents (top-left / top-right / bottom-left / bottom-right) ---
-  // Discrete symbol legends laid out as a row-major grid honoring `columns` and
-  // `direction`. Geometry calibrated to the oracle for a fill/square legend with
-  // columns:2 (entryWidth=16+8*maxLabelLen, columnPadding=10, rowPadding=2,
-  // fill boxHeight=11/rowStep=13; group at (offset, offset) from the corner).
-  if (/^(top|bottom)-(left|right)$/.test(orient) && !legend.size && !legend.gradientLength) {
-    const colorProp = legend.fill ? 'fill' : 'stroke'
-    const symType = legend.symbolType ?? 'circle'
-    const isStrokeLegend = !legend.fill
-    const boxHeight = isStrokeLegend ? 14 : 11
-    const rowStep = isStrokeLegend ? 18 : 13
-    const columnPadding = 10, rowPadding = 2
-    const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
-    const entryWidth = 16 + 8 * maxLabelLen
-    const cols = legend.direction === 'vertical' ? 1 : Math.min(legend.columns ?? n, n)
-    const rows = Math.ceil(n / cols)
-    const titleStr = String(legend.title ?? '')
-    const titleRow = titleStr ? 16 : 0
-    const titleWidth = titleStr ? ~~(0.8 * titleStr.length * 11) : 0
-    const gridW = cols * entryWidth + (cols - 1) * columnPadding
-    const gridH = titleRow + rows * boxHeight + (rows - 1) * rowPadding
-    const outerWidth = Math.max(gridW, titleWidth)
-    const items: SceneItem[] = []
-    items.push({ path: `M0,0h${outerWidth}v${gridH}h-${outerWidth}Z`, x: 0, y: 0 })
-    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
-    for (let i = 0; i < n; i++) {
-      const value = domain[i]
-      const ex = (i % cols) * (entryWidth + columnPadding)
-      const ey = titleRow + Math.floor(i / cols) * rowStep
-      items.push({ path: `M0,0h${entryWidth}v${boxHeight}h-${entryWidth}Z`, x: ex, y: ey })
-      if (symType === 'square') {
-        items.push(colorProp === 'fill'
-          ? { path: 'M-5,-5h10v10h-10Z', x: ex + 6, y: ey + 6, fill: String(scale(value)), strokeWidth: 1.5 }
-          : { path: 'M-5,-5h10v10h-10Z', x: ex + 6, y: ey + 6, stroke: String(scale(value)), strokeWidth: 1.5 })
-      } else {
-        items.push(colorProp === 'fill'
-          ? { shape: 'circle', radius: 5, x: ex + 6, y: ey + 6, fill: String(scale(value)), strokeWidth: 1.5 }
-          : { shape: 'circle', radius: 5, x: ex + 6, y: ey + 6, stroke: String(scale(value)), strokeWidth: 1.5 })
-      }
-      items.push({ text: String(value), x: ex + 16, y: ey + 9, align: 'left', fill: '#000', fontSize: 10 })
-    }
-    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: outerWidth, height: gridH, items }
   }
 
   // Unsupported
