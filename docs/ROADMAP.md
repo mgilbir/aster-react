@@ -337,7 +337,8 @@ way Go and Kotlin do), then by rendering both compiled specs.
   upstream vega. **6,019/7,549 pass (80%)**: all encode/config mark families,
   arcs (a full d3-arc port: padAngle, cornerRadius, radius swaps, degenerate
   radii), trails, scales, titles. Remaining clusters: projections (the d3-geo
-  clip/rotate subsystem, ~950), legend orients (~240), axis tick/label
+  clip/rotate subsystem, ~950), legend orients (the legendGroupLayout port,
+  ~240 — the first cut regressed the corpus and was reverted), axis tick/label
   properties (~200), trellis layout (33), config-range (11).
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
