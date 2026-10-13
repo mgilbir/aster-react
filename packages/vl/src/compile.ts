@@ -199,7 +199,7 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     binSignals.set(f.field, { startField, endField, binsSignal })
   }
 
-  const hasAggregate = fields.some((f) => f.aggregate)
+  // channel roles shared by the pipeline stages below
   const yDef = fields.find((f) => f.channel === 'y')
   const xDef = fields.find((f) => f.channel === 'x')
   const stackable = mark === 'bar' || mark === 'area'
@@ -208,6 +208,7 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
   const measure = orient === 'vertical' ? yDef : xDef
   const dimension = dimensionChannel === 'x' ? xDef : yDef
   const continuousDimension = dimension != null && !isDiscreteType(dimension.type)
+
   // the oracle skips casts only in the discrete-dimension stack+filter pipeline
   const skipCasts = binFields.length > 0 ||
     ((mark === 'bar' || mark === 'area') &&
@@ -225,6 +226,18 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
       }
     }
   }
+  // timeUnit: the timeunit transform floors each date to the unit
+  const tuFields = fields.filter((f) => f.timeUnit && f.field)
+  for (const f of tuFields) {
+    transforms.push({
+      field: f.field,
+      type: 'timeunit',
+      units: timeUnitUnits(f.timeUnit!),
+      as: [timeUnitField(f), `${timeUnitField(f)}_end`],
+    })
+  }
+
+  const hasAggregate = fields.some((f) => f.aggregate)
 
   if (hasAggregate || binFields.length) {
     const groupby: string[] = []
@@ -247,7 +260,7 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
       }
     }
     // a binned measure without an explicit aggregate counts records
-    const measureBinned = (orient === 'vertical' ? yDef : xDef)?.bin
+    const measureBinned = measure?.bin
     if (fieldsOut.length === 0 && (hasCount || (measureBinned && !hasAggregate))) hasCount = true
     if (hasCount) fieldsOut.push({ op: 'count', as: '__count', field: null })
     if (fieldsOut.length || groupby.length) {
@@ -341,6 +354,44 @@ function timeUnitFormula(u: string, field: string): [string, string] | null {
 
 function timeUnitField(f: FieldDef): string {
   return `${f.timeUnit}_${f.field}`
+}
+
+const TIME_UNIT_UNITS: Record<string, string[]> = {
+  year: ['year'], quarter: ['quarter'], month: ['month'], week: ['year', 'week'],
+  date: ['year', 'month', 'date'], day: ['year', 'month', 'date'], dayofyear: ['month', 'date'],
+  hours: ['year', 'month', 'date', 'hours'], minutes: ['year', 'month', 'date', 'hours', 'minutes'],
+  seconds: ['year', 'month', 'date', 'hours', 'minutes', 'seconds'],
+  milliseconds: ['year', 'month', 'date', 'hours', 'minutes', 'seconds', 'milliseconds'],
+  yearquarter: ['year', 'quarter'], yearmonth: ['year', 'month'],
+  yearmonthdate: ['year', 'month', 'date'], yearweek: ['year', 'week'],
+  yeardayofyear: ['year', 'dayofyear'], quartermonth: ['quarter', 'month'],
+  monthdate: ['year', 'month', 'date'], monthday: ['month', 'date'],
+  hoursminutes: ['hours', 'minutes'], minutesseconds: ['minutes', 'seconds'],
+  secondsmilliseconds: ['seconds', 'milliseconds'], datehours: ['date', 'hours'],
+  dayhours: ['day', 'hours'], dayminutes: ['day', 'minutes'],
+  dateminutes: ['date', 'minutes'], daysseconds: ['day', 'seconds'],
+  dateseconds: ['date', 'seconds'],
+}
+function timeUnitUnits(u: string): string[] {
+  return TIME_UNIT_UNITS[u] ?? [u]
+}
+
+/** vega-lite's tickMinStep signal for a time unit: the duration of one unit. */
+function timeUnitMinStepSignal(u: string): string | null {
+  const dt = (y: number, mo: number) => `datetime(${y}, ${mo}, 1, 0, 0, 0, 0)`
+  switch (u) {
+    case 'year': case 'yearquarter': case 'yearmonth': case 'yearmonthdate':
+    case 'yearweek': case 'yeardayofyear':
+      return `${dt(2002, 0)} - ${dt(2001, 0)}`
+    case 'quarter': case 'quartermonth':
+      return `${dt(2001, 3)} - ${dt(2001, 0)}`
+    case 'month': case 'monthdate': case 'monthday':
+      return `${dt(2001, 1)} - ${dt(2001, 0)}`
+    case 'week': case 'date': case 'day': case 'dayofyear':
+      return null
+    default:
+      return null
+  }
 }
 
 function measureStackOffset(measure: FieldDef): unknown {
@@ -512,6 +563,9 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
     const maxbins = isObject(def.bin) && (def.bin.maxbins as number | undefined) ? (def.bin.maxbins as number) : 10
     return { signal: `[bin_maxbins_${maxbins}_${def.field}_bins.start, bin_maxbins_${maxbins}_${def.field}_bins.stop]` }
   }
+  if (def.timeUnit && (mark === 'bar' || mark === 'rect')) {
+    return { data: dataName, fields: [timeUnitField(def), `${timeUnitField(def)}_end`] }
+  }
   if (isDiscreteType(def.type)) return sortedDomain(def, dataName)
   const measureChannel = orient === 'vertical' ? 'y' : 'x'
   const stacked = isStacked(def, mark, orient)
@@ -554,7 +608,7 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
     const gridScale = def.channel === 'x' ? (scaleByName.get('y') ? 'y' : undefined) : scaleByName.get('x') ? 'x' : undefined
 
     if (grid && gridScale) {
-      axes.push({
+      const gridAxis: Record<string, unknown> = {
         scale: def.channel,
         orient: orientSide,
         gridScale,
@@ -567,7 +621,12 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
         minExtent: 0,
         ticks: false,
         zindex: 0,
-      })
+      }
+      if (def.timeUnit) {
+        const stepExpr = timeUnitMinStepSignal(def.timeUnit)
+        if (stepExpr) gridAxis.tickMinStep = { signal: stepExpr }
+      }
+      axes.push(gridAxis)
     }
 
     const title = axisTitle(def, userAxis)
@@ -584,6 +643,15 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       labelAxis.tickCount = def.bin
         ? { signal: def.channel === 'x' ? 'ceil(width/10)' : 'ceil(height/10)' }
         : tickCountSignal
+      if (def.timeUnit) {
+        const units = JSON.stringify(timeUnitUnits(def.timeUnit))
+        labelAxis.format = {
+          signal: `timeUnitSpecifier(${units}, {"year-month":"%b %Y ","year-month-date":"%b %d, %Y "})`,
+        }
+        // the minimum tick step is one unit: expressed as a datetime difference
+        const stepExpr = timeUnitMinStepSignal(def.timeUnit)
+        if (stepExpr) labelAxis.tickMinStep = { signal: stepExpr }
+      }
     } else if (def.channel === 'x' && (sc.type === 'band' || sc.type === 'point')) {
       // vega-lite 6 rotates nominal x labels
       labelAxis.labelAlign = 'right'
@@ -703,7 +771,15 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (orient === 'vertical') {
       if (xDef) {
         const sc = positionalScaleType(mark, xDef)
-        if (xDef.bin) {
+        if (xDef.timeUnit) {
+          const endF = JSON.stringify(timeUnitField(xDef) + '_end')
+          const startF = JSON.stringify(timeUnitField(xDef))
+          const scName = 'x'
+          const off = (sign: string) =>
+            `0.5 + (abs(scale("${scName}", datum[${endF}]) - scale("${scName}", datum[${startF}])) < 0.25 ? ${sign}0.5 * (0.25 - (abs(scale("${scName}", datum[${endF}]) - scale("${scName}", datum[${startF}])))) : ${sign === '+' ? '-0.5' : '0.5'})`
+          update.x = { scale: 'x', field: JSON.parse(endF), offset: { signal: off('+') } }
+          update.x2 = { scale: 'x', field: JSON.parse(startF), offset: { signal: off('-') } }
+        } else if (xDef.bin) {
           const bm = isObject(xDef.bin) && (xDef.bin.maxbins as number | undefined) ? (xDef.bin.maxbins as number) : 10
           const endF = JSON.stringify(`bin_maxbins_${bm}_${xDef.field}_end`)
           const startF = JSON.stringify(`bin_maxbins_${bm}_${xDef.field}`)
@@ -731,7 +807,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     } else {
       if (yDef) {
         const sc = positionalScaleType(mark, yDef)
-        if (yDef.bin) {
+        if (yDef.timeUnit) {
+          const endF = JSON.stringify(timeUnitField(yDef) + '_end')
+          const startF = JSON.stringify(timeUnitField(yDef))
+          const off = (sign: string) =>
+            `0.5 + (abs(scale("y", datum[${endF}]) - scale("y", datum[${startF}])) < 0.25 ? ${sign}0.5 * (0.25 - (abs(scale("y", datum[${endF}]) - scale("y", datum[${startF}])))) : ${sign === '+' ? '-0.5' : '0.5'})`
+          update.y = { scale: 'y', field: JSON.parse(endF), offset: { signal: off('+') } }
+          update.y2 = { scale: 'y', field: JSON.parse(startF), offset: { signal: off('-') } }
+        } else if (yDef.bin) {
           const bm = isObject(yDef.bin) && (yDef.bin.maxbins as number | undefined) ? (yDef.bin.maxbins as number) : 10
           const endF = JSON.stringify(`bin_maxbins_${bm}_${yDef.field}_end`)
           const startF = JSON.stringify(`bin_maxbins_${bm}_${yDef.field}`)
@@ -787,6 +870,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef) }
     if (sizeDef) update.size = { scale: 'size', field: aggFieldName(sizeDef) }
     if (shapeDef && !filled) update.shape = { scale: 'shape', field: aggFieldName(shapeDef) }
+    void 0
   } else if (mark === 'line') {
     const markStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
     const markStrokeWidth = isObject(spec.mark) ? (spec.mark.strokeWidth as number | undefined) : undefined

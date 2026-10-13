@@ -4247,6 +4247,22 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
     }
   }
 
+  // vega-encode passes tickMinStep into tickCount, which clamps the tick
+  // count to one tick per minimum step: count = min(count, span/minstep + 1).
+  // The calendar stepping below handles the count==null time-scale case.
+  if (tickMinStep != null && tickMinStep > 0 && count != null
+      && (scale.type === 'time' || scale.type === 'utc')) {
+    const rawDomain = scale.domain()
+    if (rawDomain.length >= 2) {
+      const toNum = (v: unknown): number => v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Number(v)
+      const d0 = toNum(rawDomain[0])
+      const d1 = toNum(rawDomain[rawDomain.length - 1])
+      if (Number.isFinite(d0) && Number.isFinite(d1) && d1 > d0) {
+        count = Math.min(count as number, Math.floor((d1 - d0) / tickMinStep || 1) + 1)
+      }
+    }
+  }
+
   // For continuous non-time scales with tickMinStep but no tickCount, generate
   // ticks directly from the scale domain using the step value.
   // For time/utc scales, d3's time ticks already produce calendar-aligned
@@ -4293,23 +4309,10 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
     }
   }
   if (scale.type === 'time' || scale.type === 'utc') {
-    const timeTicks = scaleTicks(scale, count)
-    // When tickMinStep is specified, filter time ticks so consecutive values
-    // are at least tickMinStep apart (matching vega's AxisTicks behavior).
-    if (tickMinStep != null && tickMinStep > 0 && timeTicks.length > 1) {
-      const toNum = (v: unknown): number => v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Number(v)
-      const filtered: unknown[] = [timeTicks[0]]
-      let last = toNum(timeTicks[0])
-      for (let i = 1; i < timeTicks.length; i++) {
-        const t = toNum(timeTicks[i])
-        if (Math.abs(t - last) >= tickMinStep - 1e-6) {
-          filtered.push(timeTicks[i])
-          last = t
-        }
-      }
-      return filtered
-    }
-    return timeTicks
+    // vega applies tickMinStep through tickCount's count reduction (the
+    // calendar stepping above handles the count==null case); the tick values
+    // themselves come straight from the scale's calendar ticks.
+    return scaleTicks(scale, count)
   }
 
   const ticks = scaleTicks(scale, count)
