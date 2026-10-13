@@ -134,7 +134,9 @@ function compileLayered(spec: VLSpec): VLSpec {
   out.padding = spec.padding ?? 5
   out.width = width
   out.height = height
-  out.style = 'cell'
+  // theta-only layered views (pie labels) use the unstyled 'view' frame
+  const anyXY = parsed.some((p) => p.fields.some((f) => f.channel === 'x' || f.channel === 'y'))
+  out.style = anyXY ? 'cell' : 'view'
 
   // data: shared source + casts (data_0), then one derived dataset per layer
   // that needs a pipeline; layers without transforms read data_0 directly
@@ -274,6 +276,9 @@ function compileLayered(spec: VLSpec): VLSpec {
       isObject(p.markRaw) ? (p.markRaw.stroke as string | undefined) : undefined,
       isObject(p.markRaw) ? (p.markRaw.strokeWidth as number | undefined) : undefined,
     )) {
+      // one legend per scale channel (vega resolves shared legends across layers)
+      const ch = lg.fill ?? lg.stroke ?? lg.shape ?? lg.size ?? lg.opacity
+      if (typeof ch === 'string' && legends.some((x) => (x.fill ?? x.stroke ?? x.shape ?? x.size ?? x.opacity) === ch)) continue
       if (!legends.some((x) => JSON.stringify(x) === JSON.stringify(lg))) legends.push(lg)
     }
   }
@@ -1272,11 +1277,14 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
 
   // theta scale (arc marks): the stacked start/end fields span [0, 2pi]
   const thetaDef = fields.find((f) => f.channel === 'theta' && f.field)
-  if (mark === 'arc' && thetaDef) {
+  if ((mark === 'arc' || mark === 'text') && thetaDef) {
     scales.push({
       name: 'theta',
       type: 'linear',
-      domain: { data: dataName, fields: [`${thetaDef.field}_start`, `${thetaDef.field}_end`] },
+      // arc layers stack theta (start/end); plain text layers read the field
+      domain: mark === 'arc'
+        ? { data: dataName, fields: [`${thetaDef.field}_start`, `${thetaDef.field}_end`] }
+        : { data: dataName, field: thetaDef.field },
       range: [0, 6.283185307179586],
       zero: true,
     })
@@ -1771,8 +1779,19 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (y2Def) update.y2 = { scale: 'y', field: y2Def.field }
   } else if (mark === 'text') {
     update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? 'black' }
-    if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
-    if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef) }
+    const thetaDefT = fields.find((f) => f.channel === 'theta' && f.field)
+    if (thetaDefT) {
+      // polar text (pie labels): anchored at the view center, offset by
+      // radius along theta
+      update.x = { signal: 'width', mult: 0.5 }
+      update.y = { signal: 'height', mult: 0.5 }
+      update.theta = { scale: 'theta', field: thetaDefT.field }
+      const mRadius = isObject(spec.mark) ? (spec.mark.radius as number | undefined) : undefined
+      if (mRadius != null) update.radius = { value: mRadius }
+    } else {
+      if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
+      if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef) }
+    }
     const textDef = fields.find((f) => f.channel === 'text')
     if (textDef?.field) {
       const f = JSON.stringify(textDef.field)

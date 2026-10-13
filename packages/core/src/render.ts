@@ -81,7 +81,7 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   // Collect clip refs during rendering
   const clipN = { current: 0, paths: [] as (string | null)[] }
   for (const node of scene.items) {
-    out += renderGroup(node, plotW, plotH, clipN)
+    out += renderGroup(node, plotW, plotH, clipN, W, H)
   }
   out += '</g>'
   out += '<path class="foreground" aria-hidden="true" d="" display="none"/>'
@@ -113,7 +113,7 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   return out
 }
 
-function renderGroup(group: SceneGroup, plotW?: number, plotH?: number, clipN?: { current: number; paths: (string | null)[] }): string {
+function renderGroup(group: SceneGroup, plotW?: number, plotH?: number, clipN?: { current: number; paths: (string | null)[] }, viewW?: number, viewH?: number): string {
   const type = group.marktype
   const needsClip = clipN
     && group.clip === true
@@ -133,7 +133,7 @@ function renderGroup(group: SceneGroup, plotW?: number, plotH?: number, clipN?: 
     }
     out2 += `${transform}>`
     for (const item of group.items ?? []) {
-      if (isGroup(item)) out2 += renderGroup(item, plotW, plotH, clipN)
+      if (isGroup(item)) out2 += renderGroup(item, plotW, plotH, clipN, viewW, viewH)
       else out2 += renderLeaf(item)
     }
     out2 += '</g>'
