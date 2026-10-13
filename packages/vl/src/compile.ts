@@ -248,14 +248,13 @@ function compileLayered(spec: VLSpec): VLSpec {
     if (!layersWith.length) continue
     const base = layersWith[0]!
     const second = ch === 'y' ? 'y2' : 'x2'
-    const titles = layersWith
-      .map((p) => {
-        const f = p.fields.find((q) => q.channel === ch)!
-        return ((f.axis as Record<string, unknown> | null | undefined)?.title as string) ?? (channelTitle(f) as string)
-      })
-      .filter(Boolean)
-    for (const p of parsed) {
-      const d2 = p.fields.find((f) => f.channel === second && f.field)
+    // per layer: the channel's title followed by its endpoint field
+    const titles: string[] = []
+    for (const p of layersWith) {
+      const f = p.fields.find((q) => q.channel === ch)!
+      const t = ((f.axis as Record<string, unknown> | null | undefined)?.title as string) ?? (channelTitle(f) as string)
+      if (t) titles.push(t)
+      const d2 = p.fields.find((q) => q.channel === second && q.field)
       if (d2) titles.push(d2.field as string)
     }
     const uniq = Array.from(new Set(titles))
@@ -1158,6 +1157,17 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       domain: positionalDomain(def, dataName, mark, orient),
       range: effRange,
     }
+    const measureChannel = orient === 'vertical' ? 'y' : 'x'
+    // rect marks with two discrete channels (heatmaps) use unpadded bands
+    const otherChannel = channel === 'x' ? 'y' : 'x'
+    const otherDef = fields.find((f) => f.channel === otherChannel)
+    const bothDiscrete = mark === 'rect' && otherDef != null && isDiscreteType(otherDef.type)
+    // bar/rect marks pad the dimension channel; timeUnit dimensions use the
+    // offset-encoded band layout instead and stay unpadded
+    if (
+      (mark === 'bar' || (mark === 'rect' && !bothDiscrete)) && channel !== measureChannel &&
+      !def.timeUnit
+    ) sc.padding = 5
     if (type === 'linear' || type === 'log') {
       const zeroDefault = type === 'log' ? false : zeroDefaultFor(mark, channel, orient)
       if (type === 'linear' || def.scale?.zero != null) {
@@ -1168,12 +1178,6 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         const maxbins = isObject(def.bin) && (def.bin.maxbins as number | undefined) ? (def.bin.maxbins as number) : 10
         sc.bins = { signal: `bin_maxbins_${maxbins}_${def.field}_bins` }
       }
-      const measureChannel = orient === 'vertical' ? 'y' : 'x'
-      // rect marks with two discrete channels (heatmaps) use unpadded bands
-      const otherChannel = channel === 'x' ? 'y' : 'x'
-      const otherDef = fields.find((f) => f.channel === otherChannel)
-      const bothDiscrete = mark === 'rect' && otherDef != null && isDiscreteType(otherDef.type)
-      if ((mark === 'bar' || (mark === 'rect' && !bothDiscrete)) && channel !== measureChannel) sc.padding = 5
       // binned scales: no zero/nice; domain comes from bin start/end
       // (zero must be explicitly false — a missing key means the engine's
       // linear default kicks in and extends the domain to 0)
@@ -1425,10 +1429,17 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
         labelAxis.format = '.0%'
       }
     } else if (def.channel === 'x' && (sc.type === 'band' || sc.type === 'point')) {
-      // vega-lite 6 rotates nominal x labels
-      labelAxis.labelAlign = 'right'
-      labelAxis.labelAngle = 270
-      labelAxis.labelBaseline = 'middle'
+      // an explicit labelAngle replaces the default nominal-x rotation
+      const userLabelAngle = (userAxis as Record<string, unknown> | null | undefined)?.labelAngle
+      if (userLabelAngle !== undefined) {
+        labelAxis.labelAngle = userLabelAngle
+        if (userLabelAngle === 0) labelAxis.labelBaseline = 'top'
+      } else {
+        // vega-lite 6 rotates nominal x labels
+        labelAxis.labelAlign = 'right'
+        labelAxis.labelAngle = 270
+        labelAxis.labelBaseline = 'middle'
+      }
     }
     if (userAxis) {
       for (const [k, v] of Object.entries(userAxis)) {
