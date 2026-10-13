@@ -67,7 +67,7 @@ export function compileChart(spec: VgSpec): CompiledChart {
 
   const marks: CompiledMark[] = []
   for (const m of (spec.marks as Array<Record<string, unknown>>) ?? []) {
-    marks.push(compileMark(m, cfgStyle))
+    marks.push(compileMark(m, cfgStyle, cfg as Record<string, Record<string, unknown>> | undefined))
   }
 
   const title = compileTitle(spec.title, spec.config as Record<string, unknown> | undefined)
@@ -316,13 +316,24 @@ function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string
  * wins) as encode channels the mark does not encode. This mirrors vega's style
  * lookup order (vega-parser/mark.js + vega-encode's style encoder).
  */
-function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string, Record<string, unknown>>): void {
+function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>): void {
   const names = new Set<string>()
   if (m.type) names.add(String(m.type))
   const style = m.style
   if (typeof style === 'string') names.add(style)
   else if (Array.isArray(style)) for (const s of style) names.add(String(s))
   const props: Record<string, unknown> = {}
+  // vega's per-marktype config block (config.arc etc.) seeds the defaults;
+  // named styles then override.
+  if (m.type && cfgMarktype) {
+    const st = cfgMarktype[String(m.type)]
+    if (st && typeof st === 'object') {
+      // vega's per-marktype config block seeds every channel except the
+      // solid paints (config.arc.stroke/fill are ignored — verified by sweep).
+      for (const k of ['fill', 'stroke']) delete st[k]
+      Object.assign(props, st)
+    }
+  }
   for (const name of names) {
     const st = cfgStyle[name]
     if (st && typeof st === 'object') Object.assign(props, st)
@@ -340,9 +351,9 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
   }
 }
 
-function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Record<string, unknown>>): CompiledMark {
+function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>): CompiledMark {
   const m = { ...m0 }
-  if (cfgStyle) applyStyleDefaults(m, cfgStyle)
+  if (cfgStyle || cfgMarktype) applyStyleDefaults(m, cfgStyle ?? {}, cfgMarktype)
   const out: CompiledMark = {
     type: m.type as string,
     name: (m.name as string) ?? 'marks',
@@ -364,7 +375,7 @@ function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Reco
   if (m.key !== undefined) out.key = m.key as string
   if (m.sort !== undefined) out.sort = m.sort as CompiledMark['sort']
   if (m.title !== undefined) out.title = m.title as CompiledMark['title']
-  if (m.marks !== undefined) out.marks = (m.marks as Array<Record<string, unknown>>).map((nm) => compileMark(nm, cfgStyle))
+  if (m.marks !== undefined) out.marks = (m.marks as Array<Record<string, unknown>>).map((nm) => compileMark(nm, cfgStyle, cfgMarktype))
   if ((m as any).axes !== undefined) out.axes = ((m as any).axes as Array<Record<string, unknown>>).map(compileAxis)
   if ((m as any).scales !== undefined) out.scales = ((m as any).scales as Array<Record<string, unknown>>).map(compileScale)
   if ((m as any).data !== undefined) out.data = ((m as any).data as Array<Record<string, unknown>>).map(compileData)

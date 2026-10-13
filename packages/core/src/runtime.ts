@@ -399,11 +399,14 @@ function computeGuidePadding(
 
   // vega's viewSizeLayout (autosize pad): origin = spec padding + the ceil'd
   // overflow of the viewBounds on each side — no extra margin.
+  // Epsilon guard: vega's rotated-text bounds land on exact integers where
+  // our fp path can be off by 1 ulp; ceil would otherwise grow the padding.
+  const EPS = 1e-9
   return {
-    left:   base.left   + Math.max(0, Math.ceil(-minX)),
-    right:  base.right  + Math.max(0, Math.ceil(maxX - width)),
-    top:    base.top    + Math.max(0, Math.ceil(-minY)),
-    bottom: base.bottom + Math.max(0, Math.ceil(maxY - height)),
+    left:   base.left   + Math.max(0, Math.ceil(-minX - EPS)),
+    right:  base.right  + Math.max(0, Math.ceil(maxX - width - EPS)),
+    top:    base.top    + Math.max(0, Math.ceil(-minY - EPS)),
+    bottom: base.bottom + Math.max(0, Math.ceil(maxY - height - EPS)),
   }
 }
 
@@ -790,6 +793,12 @@ function contentBoundsOf(chart: CompiledChart, items: SceneNode[], width: number
   return b
 }
 
+/** Vega's titleLayout tempBounds width for left/right titles (rotated text). */
+function subMarkX(titleFs: number, subFs: number, hasSub: boolean): number {
+  if (!hasSub) return titleFs
+  return Math.max(titleFs, titleFs + 3 + subFs / 2)
+}
+
 function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number, height: number): SceneGroup | null {
   const title = chart.title
   if (!title || !title.text) return null
@@ -801,9 +810,13 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
   // fontSize 11, non-bold.
   const titleH = title.fontSize
   const hasSub = !!title.subtitle
-  const subFs = 11
-  const subH = hasSub ? subFs : 0
-  const groupH = titleH + (hasSub ? title.subtitlePadding + subH : 0)
+  // Vega probes: subtitle fontSize 12; the subtitle mark sits at
+  // titleBoundHeight + 3 below the title; the layout height is
+  // titleFs + 2 + subFs (the subtitle text bound rides -1 from its mark y).
+  const subFs = 12
+  const subMarkY = titleH + 3
+  const layoutH = hasSub ? titleH + 2 + subFs : titleH
+  const titleOffset = title.offset ?? 4
   const titleW = estimateTextWidth(title.text, title.fontSize)
   const subW = hasSub ? estimateTextWidth(title.subtitle!, subFs) : 0
   // vega's layoutGroup viewBounds: [0,0,w,h] ∪ default marks ∪ axis/legend
@@ -831,13 +844,16 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
         ? (vb.y1 + vb.y2) / 2
         : (vb.x1 + vb.x2) / 2
 
+  // Layout extents mirror vega's tempBounds union: for top/bottom the union
+  // height = subMarkY - 1 + subFs (subtitle bound) ∪ title (fs); for left/right
+  // the union width = subMarkX + subFs/2 (rotated subtitle) ∪ title (fs).
   let x = 0
   let y = 0
   switch (title.orient) {
-    case 'bottom': x = pos; y = vb.y2 + title.offset; break
-    case 'left': x = vb.x1 - groupW - title.offset; y = pos; break
-    case 'right': x = vb.x2 + title.offset; y = pos; break
-    default: x = pos; y = vb.y1 - groupH - title.offset; break
+    case 'bottom': x = pos; y = vb.y2 + titleOffset; break
+    case 'left': x = vb.x1 - (subMarkX(titleH, subFs, hasSub)) - titleOffset; y = pos; break
+    case 'right': x = vb.x2 + (subMarkX(titleH, subFs, hasSub)) + titleOffset; y = pos; break
+    default: x = pos; y = vb.y1 - layoutH - titleOffset; break
   }
 
   // Text align within the group: center anchors the text at group center.
@@ -853,7 +869,8 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
         y: 0,
         text: title.text,
         align,
-        baseline: 'top',
+        baseline: title.orient === 'left' || title.orient === 'right' ? 'middle' : 'top',
+        angle: title.orient === 'left' ? -90 : title.orient === 'right' ? 90 : undefined,
         fontSize: title.fontSize,
         fontWeight: title.fontWeight,
         fill: title.color,
@@ -867,11 +884,12 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
       marktype: 'text',
       role: 'title-subtitle',
       items: [{
-        x: 0,
-        y: titleH + title.subtitlePadding,
+        x: title.orient === 'left' || title.orient === 'right' ? subMarkX(titleH, subFs, true) : 0,
+        y: title.orient === 'left' || title.orient === 'right' ? 0 : subMarkY,
         text: title.subtitle!,
         align,
-        baseline: 'top',
+        baseline: title.orient === 'left' || title.orient === 'right' ? 'middle' : 'top',
+        angle: title.orient === 'left' ? -90 : title.orient === 'right' ? 90 : undefined,
         fontSize: subFs,
         fontWeight: title.fontWeight,
         fill: title.color,
@@ -885,8 +903,6 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
     role: 'title',
     x,
     y,
-    width: groupW,
-    height: groupH,
     items: textChildren,
   }
 }
@@ -1589,13 +1605,6 @@ function evaluateMark(
     const res = resolveEncodeSet(update, {}, ctx, mark.type)
     res.__gen = (ctx.chart as unknown as { __gen?: number }).__gen ?? 0
     items = [res]
-  }
-
-  // Apply arc style default: strokeWidth=1.5
-  if (Array.isArray(mark.style) ? mark.style.includes('arc') : mark.style === 'arc') {
-    for (const it of items) {
-      if (it.strokeWidth == null) it.strokeWidth = 1.5
-    }
   }
 
   // Text marks encoded in polar coordinates (`radius` + `theta`, e.g. pie
@@ -3460,12 +3469,12 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const bgW = gradientLength
       const bgH = titleH0 + thickness + 12
       items.push({ path: `M0,0h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0 })
-      if (titleStr0) items.push({ text: titleStr0, x: 0, y: 9, align: 'left', fill: '#000' })
+      if (titleStr0) items.push({ text: titleStr0, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
       items.push({ path: `M0,0h${gradientLength}v${thickness}h-${gradientLength}Z`, x: 0, y: titleH0, fill: `url(#${gradientId})`, stroke: '#ddd', strokeWidth: 0, opacity: 1 })
       for (const t of tickNums) {
         const tNum = typeof t === 'number' ? t : 0
         const perc = d1n !== d0n ? (tNum - d0n) / (d1n - d0n) : 0
-        items.push({ text: legendFmt(tNum), x: perc * gradientLength, y: titleH0 + thickness + 10, align: 'center', fill: '#000' })
+        items.push({ text: legendFmt(tNum), x: perc * gradientLength, y: titleH0 + thickness + 10, align: 'center', fill: '#000', fontSize: 10 })
       }
       const colorScale = scale as ColorScale
       const stops = colorScale.interpolator
@@ -3510,7 +3519,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     })
     // Title
     if (titleStr.length > 0) {
-      items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000' })
+      items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
     }
     // Labels. Vega positions each label at (1 - perc) * L and then shifts it by
     // the text baseline offset (labels flush against the gradient edges get
@@ -3531,7 +3540,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         : perc >= 1 ? Math.round(0.79 * LABEL_FONT_SIZE)
         : 0.3 * LABEL_FONT_SIZE
       const yPos = titleH + (1 - perc) * L + baselineOffset
-      items.push({ text: legendFmt(tNum), x: 18, y: yPos, align: 'left', fill: '#000' })
+      items.push({ text: legendFmt(tNum), x: 18, y: yPos, align: 'left', fill: '#000', fontSize: 10 })
     }
     // Gradient def from scale's interpolator
     const colorScale = scale as ColorScale
@@ -3638,7 +3647,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
 
     const items: SceneItem[] = []
     items.push({ path: `M0,0h${outerWidth}v${bgHeight}h-${outerWidth}Z`, x: 0, y: 0 })
-    items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000' })
+    items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]!
       const ey = 16 + yPos[i]!
@@ -3669,7 +3678,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
           opacity: symOpacity,
         })
       }
-      items.push({ text: String(e.value), x: labelX, y: sy + 3, align: 'left', fill: '#000' })
+      items.push({ text: String(e.value), x: labelX, y: sy + 3, align: 'left', fill: '#000', fontSize: 10 })
     }
     return { marktype: 'group', role: 'legend', x: legendContentWidth(ctx) + 18, y: 0, width: outerWidth, height: bgHeight, items }
   }
@@ -3733,7 +3742,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         const label = rawVal !== undefined
           ? (isThreshold ? String(rawVal) : (scaleType === 'quantize' ? String(Math.round(rawVal * 1e10) / 1e10) : (Number.isInteger(rawVal) ? rawVal + '.0' : String(rawVal))))
           : ''
-        items.push({ text: label, x: 18, y, align: 'left', fill: '#000' })
+        items.push({ text: label, x: 18, y, align: 'left', fill: '#000', fontSize: 10 })
       }
       // Empty label at the bottom
       items.push({ text: '', x: 18, y: bgH - 2, align: 'left', fill: '#000' })
@@ -3801,7 +3810,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
 
     const items: SceneItem[] = []
     items.push({ path: `M0,0h${outerWidth}v${bgHeight}h-${outerWidth}Z`, x: 0, y: 0 })
-    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000' })
+    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
       const off = titleRow + i * entryStep
@@ -3865,7 +3874,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       } else {
         items.push({ shape: 'circle', radius: 5, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
       }
-      items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000' })
+      items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000', fontSize: 10 })
     }
     return { marktype: 'group', role: 'legend', x: legendContentWidth(ctx) + legendOffset, y: 0, width: outerWidth, height: bgHeight, items }
   }
@@ -3888,7 +3897,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         const ey = i * rowStep
         items.push({ path: `M0,0h${entryWidth}v${rowHeight}h-${entryWidth}Z`, x: 0, y: ey })
         items.push({ shape: 'circle', radius: 5, x: 6, y: ey + 6, stroke: String(scale(domain[i])), strokeWidth: 1.5, opacity: 1 })
-        items.push({ text: String(domain[i]), x: 16, y: ey + 9, align: 'left', fill: '#000' })
+        items.push({ text: String(domain[i]), x: 16, y: ey + 9, align: 'left', fill: '#000', fontSize: 10 })
       }
       return { marktype: 'group', role: 'legend', x: 0, y: ctx.height + 24, width: entryWidth, height: n * rowStep - 4, items }
     }
@@ -3900,13 +3909,13 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const bgW = step * n - 12
     const items: SceneItem[] = []
     items.push({ path: `M0,0h${bgW}v30h-${bgW}Z`, x: 0, y: 0 })
-    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000' })
+    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
       const sx = i * step
       items.push({ path: `M0,0h${entryWidth}v14h-${entryWidth}Z`, x: sx, y: 16 })
       items.push({ shape: 'circle', radius: 5, x: sx + 6, y: 22, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
-      items.push({ text: String(value), x: sx + 16, y: 25, align: 'left', fill: '#000' })
+      items.push({ text: String(value), x: sx + 16, y: 25, align: 'left', fill: '#000', fontSize: 10 })
     }
     return { marktype: 'group', role: 'legend', x: 0, y: ctx.height + 50, width: bgW, height: 30, items }
   }
@@ -3938,7 +3947,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const groupY = orient.startsWith('bottom') ? ctx.height - gridH - offset : offset
     const items: SceneItem[] = []
     items.push({ path: `M0,0h${outerWidth}v${gridH}h-${outerWidth}Z`, x: 0, y: 0 })
-    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000' })
+    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
       const ex = (i % cols) * (entryWidth + columnPadding)
@@ -3953,7 +3962,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
           ? { shape: 'circle', radius: 5, x: ex + 6, y: ey + 6, fill: String(scale(value)), strokeWidth: 1.5 }
           : { shape: 'circle', radius: 5, x: ex + 6, y: ey + 6, stroke: String(scale(value)), strokeWidth: 1.5 })
       }
-      items.push({ text: String(value), x: ex + 16, y: ey + 9, align: 'left', fill: '#000' })
+      items.push({ text: String(value), x: ex + 16, y: ey + 9, align: 'left', fill: '#000', fontSize: 10 })
     }
     return { marktype: 'group', role: 'legend', x: groupX, y: groupY, width: outerWidth, height: gridH, items }
   }
@@ -4183,6 +4192,16 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     //   extent = (ticks ? tickSize + 0.5 : 0) + (labels ? labelPadding + 9.5 : 0)
     //   title  = extent + titlePadding + baseline offset (9 = round(0.79*11))
     // (calibrated against the oracle for ticks/labels/titlePadding variants).
+    // Axis titles: our axis items carry absolute coordinates that bake in the
+    // axis group origin (0.5, 0.5) — vega renders its axis group at that
+    // offset and positions the title inside it, so the absolute equivalents
+    // are (all verified against oracle canonical records):
+    //   bottom: (w/2+0.5, h + 0.5 + [tick+0.5+labelPad+9.5+titlePad] + 9)
+    //   top:    (w/2+0.5, 0.5 - [tick+0.5+labelPad+9.5+titlePad] - 2)
+    //   left:   (-(tick+labelPad+labelWidth+3.5), h/2 + 0.5)   angle -90
+    //   right:  (w + tick+labelPad+labelWidth+4.5, h/2 + 0.5)  angle 90
+    // The +9/-2 are the baseline offsets (fs 11, top/bottom), baked for
+    // angle-0 titles; rotated titles render translate+rotate+offset.
     if (orient === 'bottom') {
       t.x = ctx.width / 2 + 0.5
       if (axis.labelAngle === 270 && maxLabelLen > 0) {
@@ -4194,18 +4213,26 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       }
       t.align = 'center'; t.baseline = 'top'
     }
-    else if (orient === 'top') { t.x = ctx.width / 2 + 0.5; t.y = -tickSize - 10 + 0.5; t.align = 'center'; t.baseline = 'bottom' }
+    else if (orient === 'top') {
+      t.x = ctx.width / 2 + 0.5
+      t.y = 0.5 - ((ticksOn ? tickSize + 0.5 : 0) + (labelsOn ? labelPadding + 9.5 : 0) + titlePadding) - 2
+      t.align = 'center'; t.baseline = 'bottom'
+    }
     else if (orient === 'left') {
       // Ticks present + labels off: the title sits at tickSize + titlePadding.
       t.x = (hasTickMarks && axis.labels === false)
         ? -(tickSize + titlePadding)
         : -((hasTickMarks && axis.labels !== false ? labelPadding : 0) + (hasTickMarks ? tickSize : 0) + labelWidth + 3.5)
       t.y = ctx.height / 2 + 0.5; t.align = 'center'; t.baseline = 'bottom'
-      // Vega rotates left/right axis titles (angle ∓90, baseline bottom); the
-      // content-bounds scan then uses vega's exact rotated text bbox.
       ;(t as Record<string, unknown>).angle = (axis as { titleAngle?: number }).titleAngle ?? -90
     }
-    else if (orient === 'right') { t.x = ctx.width + tickSize + labelPadding + labelWidth + 4.5; t.y = ctx.height / 2 + 0.5; t.align = 'center'; t.baseline = 'bottom'; ;(t as Record<string, unknown>).angle = (axis as { titleAngle?: number }).titleAngle ?? 90 }
+    else if (orient === 'right') {
+      t.x = ctx.width + (hasTickMarks && axis.labels === false ? tickSize + titlePadding : tickSize + labelPadding + labelWidth + 4.5)
+      t.y = ctx.height / 2 + 0.5; t.align = 'center'; t.baseline = 'bottom'
+      ;(t as Record<string, unknown>).angle = (axis as { titleAngle?: number }).titleAngle ?? 90
+    }
+    // Vega emits font-size 11 on axis titles explicitly (bounds + canvas font).
+    ;(t as Record<string, unknown>).fontSize = 11
     t.fill = '#000'
     items.push(t)
   }

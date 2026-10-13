@@ -891,51 +891,215 @@ function renderArcs(group: SceneGroup): string {
     const r0 = (it.innerRadius as number) ?? 0
     const a0 = (it.startAngle as number) ?? 0
     const a1 = (it.endAngle as number) ?? 0
-    out += `<path d="${arcPath(x, y, r, r0, a0, a1)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${it.stroke != null ? attr('stroke-width', it.strokeWidth) : ''}/>`
+    // Vega emits the arc path around (0,0) with a per-item translate; the
+    // local coordinates round to 3 decimals independently of the (often
+    // fractional) position, which the canonical diff depends on.
+    // vega's arc attr emits every defined paint property (stroke-width even
+    // without a stroke, opacity, dash arrays).
+    const cr = (it as Record<string, unknown>).cornerRadius as number | undefined ?? 0
+    const pa = (it as Record<string, unknown>).padAngle as number | undefined ?? 0
+    out += `<path transform="translate(${num(x)},${num(y)})" d="${arcPath(0, 0, r, r0, a0, a1, cr, pa)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-linecap', it.strokeLineCap)}${attr('stroke-linejoin', it.strokeLineJoin)}/>`
   }
   out += '</g>'
   return out
 }
 
-export function arcPath(cx: number, cy: number, r: number, r0: number, a0in: number, a1in: number): string {
-  // d3-arc measures angles from the +x axis and rotates by -π/2 so that
-  // angle 0 points up (12 o'clock). Match that reference frame here.
-  const a0 = a0in - Math.PI / 2
-  const a1 = a1in - Math.PI / 2
-  // d3-arc draws the outer arc clockwise when a1 > a0, counterclockwise
-  // otherwise; the SVG sweep flag mirrors that (1 = clockwise in SVG's
-  // y-down coordinate system).
-  const cw = a1 > a0
-  const sweep = cw ? 1 : 0
-  // da is the positive sweep magnitude; the large-arc flag is set when the
-  // arc spans at least half a turn (d3-path uses `da >= π`).
-  let da = Math.abs(a1 - a0)
-  if (da >= 2 * Math.PI) da = da % (2 * Math.PI)
-  const large = da >= Math.PI ? 1 : 0
-  const p0x = cx + r * Math.cos(a0)
-  const p0y = cy + r * Math.sin(a0)
-  const p1x = cx + r * Math.cos(a1)
-  const p1y = cy + r * Math.sin(a1)
-  // When r0 === 0, omit inner arc and line-to-center (d3-arc produces simpler path)
-  if (r0 === 0) {
-    return [
-      `M${num(p0x)},${num(p0y)}`,
-      `A${num(r)},${num(r)},0,${large},${sweep},${num(p1x)},${num(p1y)}`,
-      `L${cx},${cy}`,
-      'Z',
-    ].join('')
+/**
+ * d3-arc port (d3-shape/src/arc.js): the annular-sector path with padAngle
+ * and cornerRadius, emitted around (0,0) — vega translates per item. The
+ * emitter mirrors d3-path (moveTo/lineTo/arc with large-arc/sweep flags) so
+ * the rounding matches the reference renderer exactly.
+ */
+const ARC_EPSILON = 1e-12
+
+class PathEmitter {
+  private s = ''
+  private x1 = 0
+  private y1 = 0
+  private hasPoint = false
+  moveTo(x: number, y: number): void { this.s += `M${num(x)},${num(y)}`; this.x1 = x; this.y1 = y; this.hasPoint = true }
+  lineTo(x: number, y: number): void { this.s += `L${num(x)},${num(y)}`; this.x1 = x; this.y1 = y; this.hasPoint = true }
+  arc(x: number, y: number, r: number, a0: number, a1: number, ccw = false): void {
+    const x0 = x + r * Math.cos(a0)
+    const y0 = y + r * Math.sin(a0)
+    if (!this.hasPoint) this.moveTo(x0, y0)
+    else if (Math.abs(this.x1 - x0) > ARC_EPSILON || Math.abs(this.y1 - y0) > ARC_EPSILON) this.lineTo(x0, y0)
+    if (!(r > ARC_EPSILON)) return
+    // d3-path: da folds the wrap; a complete circle draws two arcs through the
+    // antipode; large-arc uses >= PI.
+    let da = ccw ? a0 - a1 : a1 - a0
+    if (da < 0) da = (da % (2 * Math.PI)) + 2 * Math.PI
+    const sweep = ccw ? 0 : 1
+    const x2 = x + r * Math.cos(a1)
+    const y2 = y + r * Math.sin(a1)
+    if (da > 2 * Math.PI - ARC_EPSILON) {
+      // complete circle: two half arcs through the antipode
+      this.s += `A${num(r)},${num(r)},0,1,${sweep},${num(x - (x0 - x))},${num(y - (y0 - y))}`
+      this.s += `A${num(r)},${num(r)},0,1,${sweep},${num(x0)},${num(y0)}`
+      this.x1 = x0; this.y1 = y0
+    } else if (da > ARC_EPSILON) {
+      this.s += `A${num(r)},${num(r)},0,${da >= Math.PI ? 1 : 0},${sweep},${num(x2)},${num(y2)}`
+      this.x1 = x2; this.y1 = y2
+    }
   }
-  const i0x = cx + r0 * Math.cos(a1)
-  const i0y = cy + r0 * Math.sin(a1)
-  const i1x = cx + r0 * Math.cos(a0)
-  const i1y = cy + r0 * Math.sin(a0)
-  return [
-    `M${num(p0x)},${num(p0y)}`,
-    `A${num(r)},${num(r)},0,${large},${sweep},${num(p1x)},${num(p1y)}`,
-    `L${num(i0x)},${num(i0y)}`,
-    `A${num(r0)},${num(r0)},0,${large},${sweep ? 0 : 1},${num(i1x)},${num(i1y)}`,
-    'Z',
-  ].join('')
+  closePath(): void { if (this.s) this.s += 'Z' }
+  toString(): string { return this.s }
+}
+
+function cornerTangents(x0: number, y0: number, x1: number, y1: number, r1: number, rc: number, cw: boolean): { cx: number; cy: number; x01: number; y01: number; x11: number; y11: number } {
+  const x01 = x0 - x1
+  const y01 = y0 - y1
+  const lo = (cw ? rc : -rc) / Math.sqrt(x01 * x01 + y01 * y01)
+  const ox = lo * y01
+  const oy = -lo * x01
+  const x11 = x0 + ox
+  const y11 = y0 + oy
+  const x10 = x1 + ox
+  const y10 = y1 + oy
+  const x00 = (x11 + x10) / 2
+  const y00 = (y11 + y10) / 2
+  const dx = x10 - x11
+  const dy = y10 - y11
+  const d2 = dx * dx + dy * dy
+  const r = r1 - rc
+  const D = x11 * y10 - x10 * y11
+  const d = (dy < 0 ? -1 : 1) * Math.sqrt(Math.max(0, r * r * d2 - D * D))
+  let cx0 = (D * dy - dx * d) / d2
+  let cy0 = (-D * dx - dy * d) / d2
+  const cx1 = (D * dy + dx * d) / d2
+  const cy1 = (-D * dx + dy * d) / d2
+  const dx0 = cx0 - x00
+  const dy0 = cy0 - y00
+  const dx1 = cx1 - x00
+  const dy1 = cy1 - y00
+  if (dx0 * dx0 + dy0 * dy0 > dx1 * dx1 + dy1 * dy1) { cx0 = cx1; cy0 = cy1 }
+  return { cx: cx0, cy: cy0, x01: -ox, y01: -oy, x11: cx0 * (r1 / r - 1), y11: cy0 * (r1 / r - 1) }
+}
+
+const arcAbs = Math.abs
+const arcAcos = Math.acos
+const arcAtan2 = Math.atan2
+// d3-shape math.js asin clamps to +/-halfPi (needed for padAngle > span).
+const arcAsin = (x: number): number => (x > 1 ? Math.PI / 2 : x < -1 ? -Math.PI / 2 : Math.asin(x))
+
+export function arcPath(cx: number, cy: number, rIn: number, r0In: number, a0in: number, a1in: number, cornerRadius = 0, padAngle = 0): string {
+  const ctx = new PathEmitter()
+  let r0 = r0In
+  let r1 = rIn
+  let a0 = a0in - Math.PI / 2
+  let a1 = a1in - Math.PI / 2
+  const da0abs = arcAbs(a1 - a0)
+  const cw = a1 > a0
+  if (r1 < r0) { const t = r1; r1 = r0; r0 = t }
+  if (!(r1 > ARC_EPSILON)) {
+    // point
+    ctx.moveTo(0, 0)
+    ctx.closePath()
+    return (ctx as unknown as { toString(): string }).toString()
+  }
+  if (da0abs > 2 * Math.PI - ARC_EPSILON) {
+    // circle or annulus
+    ctx.moveTo(r1 * Math.cos(a0), r1 * Math.sin(a0))
+    ctx.arc(0, 0, r1, a0, a1, !cw)
+    if (r0 > ARC_EPSILON) {
+      ctx.moveTo(r0 * Math.cos(a1), r0 * Math.sin(a1))
+      ctx.arc(0, 0, r0, a1, a0, cw)
+    }
+    ctx.closePath()
+    return (ctx as unknown as { toString(): string }).toString()
+  }
+  let a01 = a0
+  let a11 = a1
+  let a00 = a0
+  let a10 = a1
+  let daF = da0abs
+  let daS = da0abs
+  const ap = padAngle / 2
+  const rp = ap > ARC_EPSILON ? Math.sqrt(r0 * r0 + r1 * r1) : 0
+  const rcLimit = Math.min(arcAbs(r1 - r0) / 2, cornerRadius)
+  let rc = rcLimit
+  let rc0 = rc
+  let rc1 = rc
+  if (rp > ARC_EPSILON) {
+    const p0 = arcAsin((rp / r0) * Math.sin(ap))
+    const p1 = arcAsin((rp / r1) * Math.sin(ap))
+    if ((daF -= p0 * 2) > ARC_EPSILON) { const pp0 = p0 * (cw ? 1 : -1); a00 += pp0; a10 -= pp0 }
+    else { daF = 0; a00 = a10 = (a0 + a1) / 2 }
+    if ((daS -= p1 * 2) > ARC_EPSILON) { const pp1 = p1 * (cw ? 1 : -1); a01 += pp1; a11 -= pp1 }
+    else { daS = 0; a01 = a11 = (a0 + a1) / 2 }
+  }
+  const x01 = r1 * Math.cos(a01)
+  const y01 = r1 * Math.sin(a01)
+  const x10 = r0 * Math.cos(a10)
+  const y10 = r0 * Math.sin(a10)
+  let x11 = 0
+  let y11 = 0
+  let x00 = 0
+  let y00 = 0
+  if (rc > ARC_EPSILON) {
+    x11 = r1 * Math.cos(a11)
+    y11 = r1 * Math.sin(a11)
+    x00 = r0 * Math.cos(a00)
+    y00 = r0 * Math.sin(a00)
+    if (da0abs < Math.PI) {
+      const oc = intersectArc(x01, y01, x00, y00, x11, y11, x10, y10)
+      if (oc) {
+        const ax = x01 - oc[0]
+        const ay = y01 - oc[1]
+        const bx = x11 - oc[0]
+        const by = y11 - oc[1]
+        const kc = 1 / Math.sin(arcAcos((ax * bx + ay * by) / (Math.sqrt(ax * ax + ay * ay) * Math.sqrt(bx * bx + by * by))) / 2)
+        const lc = Math.sqrt(oc[0] * oc[0] + oc[1] * oc[1])
+        rc0 = Math.min(rc, (r0 - lc) / (kc - 1))
+        rc1 = Math.min(rc, (r1 - lc) / (kc + 1))
+      } else {
+        rc0 = rc1 = 0
+      }
+    }
+  }
+  if (!(daS > ARC_EPSILON)) ctx.moveTo(x01, y01)
+  else if (rc1 > ARC_EPSILON) {
+    const t0 = cornerTangents(x00, y00, x01, y01, r1, rc1, cw)
+    const t1 = cornerTangents(x11, y11, x10, y10, r1, rc1, cw)
+    ctx.moveTo(t0.cx + t0.x01, t0.cy + t0.y01)
+    if (rc1 < rc) ctx.arc(t0.cx, t0.cy, rc1, arcAtan2(t0.y01, t0.x01), arcAtan2(t1.y01, t1.x01), !cw)
+    else {
+      ctx.arc(t0.cx, t0.cy, rc1, arcAtan2(t0.y01, t0.x01), arcAtan2(t0.y11, t0.x11), !cw)
+      ctx.arc(0, 0, r1, arcAtan2(t0.cy + t0.y11, t0.cx + t0.x11), arcAtan2(t1.cy + t1.y11, t1.cx + t1.x11), !cw)
+      ctx.arc(t1.cx, t1.cy, rc1, arcAtan2(t1.y11, t1.x11), arcAtan2(t1.y01, t1.x01), !cw)
+    }
+  } else {
+    ctx.moveTo(x01, y01)
+    ctx.arc(0, 0, r1, a01, a11, !cw)
+  }
+  if (!(r0 > ARC_EPSILON) || !(daF > ARC_EPSILON)) ctx.lineTo(x10, y10)
+  else if (rc0 > ARC_EPSILON) {
+    const t0 = cornerTangents(x10, y10, x11, y11, r0, -rc0, cw)
+    const t1 = cornerTangents(x01, y01, x00, y00, r0, -rc0, cw)
+    ctx.lineTo(t0.cx + t0.x01, t0.cy + t0.y01)
+    if (rc0 < rc) ctx.arc(t0.cx, t0.cy, rc0, arcAtan2(t0.y01, t0.x01), arcAtan2(t1.y01, t1.x01), !cw)
+    else {
+      ctx.arc(t0.cx, t0.cy, rc0, arcAtan2(t0.y01, t0.x01), arcAtan2(t0.y11, t0.x11), !cw)
+      ctx.arc(0, 0, r0, arcAtan2(t0.cy + t0.y11, t0.cx + t0.x11), arcAtan2(t1.cy + t1.y11, t1.cx + t1.x11), cw)
+      ctx.arc(t1.cx, t1.cy, rc0, arcAtan2(t1.y11, t1.x11), arcAtan2(t1.y01, t1.x01), !cw)
+    }
+  } else {
+    ctx.arc(0, 0, r0, a10, a00, cw)
+  }
+  ctx.closePath()
+  void cx; void cy
+  return (ctx as unknown as { toString(): string }).toString()
+}
+
+function intersectArc(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number): [number, number] | undefined {
+  const x10 = x1 - x0
+  const y10 = y1 - y0
+  const x32 = x3 - x2
+  const y32 = y3 - y2
+  const t = y32 * x10 - x32 * y10
+  if (t * t < ARC_EPSILON) return undefined
+  const tt = (x32 * (y0 - y2) - y32 * (x0 - x2)) / t
+  return [x0 + tt * x10, y0 + tt * y10]
 }
 
 function attr(name: string, value: unknown): string {

@@ -227,8 +227,51 @@ export function baselineOffset(item: SceneItem): number {
 // Mark bounds — ports of marks/{text,rect,rule}.js bound + path tracing
 // ---------------------------------------------------------------------------
 
+/** Bbox of an annular sector (vega arc item semantics, angles from 12 o'clock). */
+export function boundArcItem(bounds: Bounds, it: SceneItem): Bounds {
+  const cx = it.x ?? 0
+  const cy = it.y ?? 0
+  const r = (it.outerRadius ?? it.radius ?? 0) as number
+  const r0 = (it.innerRadius ?? 0) as number
+  // d3-arc measures angles from the +y-up axis (12 o'clock); our path frame
+  // rotates by -PI/2 so the path angle t maps to the direction
+  // (cos(t - PI/2), sin(t - PI/2)) in y-down canvas coordinates.
+  const a0 = ((it.startAngle ?? 0) as number) - Math.PI / 2
+  let a1 = ((it.endAngle ?? 0) as number) - Math.PI / 2
+  let da = a1 - a0
+  if (da >= 2 * Math.PI) da = da % (2 * Math.PI)
+  a1 = a0 + da
+  const add = (rad: number, ang: number): void => {
+    bounds.add(cx + rad * Math.cos(ang), cy + rad * Math.sin(ang))
+  }
+  add(r, a0)
+  add(r, a1)
+  // cardinal directions inside the span
+  for (const card of [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2, 2 * Math.PI]) {
+    for (const laps of [-2 * Math.PI, 0, 2 * Math.PI]) {
+      const c = card + laps
+      if (c > a0 && c < a1) add(r, c)
+    }
+  }
+  if (r0 > 0) {
+    add(r0, a0)
+    add(r0, a1)
+    for (const card of [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2, 2 * Math.PI]) {
+      for (const laps of [-2 * Math.PI, 0, 2 * Math.PI]) {
+        const c = card + laps
+        if (c > a0 && c < a1) add(r0, c)
+      }
+    }
+  } else {
+    // pie sector: the apex is part of the shape
+    bounds.add(cx, cy)
+  }
+  boundStroke(bounds, it, it.strokeWidth != null)
+  return bounds
+}
+
 /** marks/text.js `bound` — exact (multi-line, align, angle rotation). */
-export function boundText(bounds: Bounds, item: SceneItem): Bounds {
+function boundText(bounds: Bounds, item: SceneItem): Bounds {
   const h = fontSize(item)
   const a = item.align
   const x = item.x || 0
@@ -707,6 +750,13 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
 /** Bound a single leaf item into an isolated Bounds (vega's per-item bounds). */
 function boundIsolated(it: SceneItem): Bounds {
   const bounds = new Bounds()
+  // Arc items: the geometry is angular (outerRadius/innerRadius/angles), not a
+  // stored path — bound the annular sector analytically (vega bounds the
+  // d3-arc path through the recording context; the analytic bbox matches to
+  // the canonical precision).
+  if (it.path == null && (it.outerRadius != null || it.innerRadius != null || it.startAngle != null || it.endAngle != null)) {
+    return boundArcItem(bounds, it)
+  }
   if (it.path != null) {
     // path/symbol/arc/geoshape items: trace the emitted path, then
     // boundStroke, then translate by item x/y (markItemPath bound).
