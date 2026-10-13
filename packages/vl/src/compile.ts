@@ -471,6 +471,7 @@ function timeUnitMinStepSignal(u: string): string | null {
 }
 
 function measureStackOffset(measure: FieldDef): unknown {
+  if (measure.stack === 'wiggle') return 'zero'
   if (measure.stack != null) return isObject(measure.stack) ? (measure.stack.offset ?? 'zero') : measure.stack
   return 'zero'
 }
@@ -676,7 +677,11 @@ function isStacked(def: FieldDef, mark: string, orient: string): boolean {
   if (mark !== 'bar' && mark !== 'area') return false
   const measureChannel = orient === 'vertical' ? 'y' : 'x'
   if (def.channel !== measureChannel) return false
-  return def.type === 'quantitative' && !def.aggregate && !def.bin
+  if (def.type !== 'quantitative' || def.aggregate || def.bin) return false
+  // vega-lite v6 compiles the 'wiggle' stack offset to a plain unstacked
+  // measure (vega's Stack transform only supports zero/center/normalize)
+  if (def.stack === 'wiggle') return false
+  return true
 }
 
 function sortedDomain(def: FieldDef, dataName: string): unknown {
@@ -994,6 +999,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   } else if (mark === 'area') {
     update.orient = { value: orient }
     const areaStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
+    const areaInterpolate = isObject(spec.mark) ? (spec.mark.interpolate as string | undefined) : undefined
+    if (areaInterpolate) update.interpolate = { value: areaInterpolate }
+    const areaFillOpacity = isObject(spec.mark) ? (spec.mark.fillOpacity as number | undefined) : undefined
+    if (areaFillOpacity != null) update.fillOpacity = { value: areaFillOpacity }
     if (areaStroke) update.stroke = { value: areaStroke }
     update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? C.blue }
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
@@ -1004,7 +1013,19 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         update.y2 = { scale: 'y', field: `${yDef.field}_start` }
       } else {
         update.y = { scale: 'y', field: aggFieldName(yDef) }
-        update.y2 = { value: 0 }
+        // anchored through the scale so the baseline tracks scale(0), not the
+        // group-local pixel origin (matters inside faceted pathgroups)
+        update.y2 = { scale: 'y', value: 0 }
+      }
+    }
+    if (xDef && orient === 'horizontal') {
+      const stackedX = isStacked(xDef, mark, orient)
+      if (stackedX) {
+        update.x = { scale: 'x', field: `${xDef.field}_end` }
+        update.x2 = { scale: 'x', field: `${xDef.field}_start` }
+      } else if (yDef == null || !stacked) {
+        // vertical baselines anchor through the scale as well
+        update.x2 = { scale: 'x', value: 0 }
       }
     }
     update.defined = definedSignal(xDef, yDef)
@@ -1073,12 +1094,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
 
   const out: BuiltMarks = [markSpec]
 
-  // stacked area with a series channel: one faceted area per series (pathgroup)
+  // area with a series channel: one faceted area per series (pathgroup) —
+  // vega-lite emits this for stacked and unstacked areas alike
   const colorDefSeries = fields.find((f) => f.channel === 'color' && f.field)
   const detailDefSeries = fields.find((f) => f.channel === 'detail' && f.field)
   const seriesForFacet = colorDefSeries ?? detailDefSeries
   const stackedNow = (yDef != null && isStacked(yDef, mark, orient)) || (xDef != null && isStacked(xDef, mark, orient))
-  if (mark === 'area' && stackedNow && colorDefSeries) {
+  if (mark === 'area' && colorDefSeries) {
     markSpec.name = 'layer_0_marks'
     const group: Record<string, unknown> = {
       name: 'pathgroup',
