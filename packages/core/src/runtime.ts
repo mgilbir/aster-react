@@ -4274,7 +4274,20 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   const orient = axis.orient
   const ticks = axisTicks(axis, scale, ctx)
   const items: SceneItem[] = []
-  const pos = (t: unknown) => roundedPos(scale, t)
+  // vega's tick position (axisTicks tickPos): the ticks/grid sit at
+  // scale + bandPosition*bandWidth + tickOffset, rounded when tickRound is on
+  // (the default); for band scales the `axisBand` style supplies the -0.5
+  // tickOffset default, which an explicit tickOffset replaces. floor() of the
+  // band center is round(x - 0.5), so the default matches the old behavior.
+  const bw = scale.bandwidth ? scale.bandwidth() : 0
+  const isBand = bw > 0
+  const bandPos = axis.bandPosition ?? 0.5
+  const tickOffsetEff = axis.tickOffset ?? (isBand ? -0.5 : 0)
+  const tickRoundOn = axis.tickRound !== false
+  const pos = (t: unknown): number => {
+    const raw = (scale(t) as number) + (isBand ? bandPos * bw : 0) + tickOffsetEff
+    return tickRoundOn ? Math.round(raw) : raw
+  }
 
   if (axis.grid) {
     // Apply the axis `encode.grid` (vega's grid-line encoding) so specs can set
@@ -4346,33 +4359,25 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       // unrotated text but applies it inside the rotate frame for rotated
       // text — so rotated labels carry no baseline (no bake anywhere).
       label.fontSize = labelFs
+      // Labels anchor at the unrounded scale + 0.5*bandWidth + tickOffset
+      // (the axisBand -0.5 default folds against our baked +0.5 group delta)
+      // + labelOffset — bandPosition and tickRound do not reach them (vega's
+      // axisLabels tickPos keeps band 0.5 and no round of its own).
+      const rawOf = (scale(t) as number) + (isBand ? 0.5 * bw : 0)
+      const labelOffset = axis.labelOffset ?? 0
       const bandLabelY = scale.bandwidth ? v : rawV + 0.5
       if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align'] }
       else if (orient === 'right') { label.x = ctx.width + tickSize + labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align'] }
       else if (orient === 'bottom') {
-        if (scale.bandwidth) {
-          const bw = scale.bandwidth()
-          // Point scales (bw = 0) miss the band-scale `axisBand` tickOffset
-          // (-0.5) that cancels vega's +0.5 axis-group translate, so their
-          // label anchor needs the +0.5 baked in; band labels net to
-          // scale(t) + bw/2.
-          label.x = (scale(t) as number) + bw / 2 + (bw > 0 ? 0 : 0.5)
-        } else {
-          label.x = rawV + 0.5
-        }
+        // Point scales (bw = 0) miss the band-scale `axisBand` tickOffset
+        // (-0.5) that cancels vega's +0.5 axis-group translate, so their
+        // label anchor needs the +0.5 baked in.
+        label.x = rawOf + tickOffsetEff + 0.5 + labelOffset
         label.y = ctx.height + tickSize + labelPadding + 0.5
         label.align = align as SceneItem['align']
       }
       else {
-        // Top axis: mirror the bottom-axis band handling so labels anchor to
-        // the band center (point scales bake the +0.5 that cancels the
-        // axis-group translate).
-        if (scale.bandwidth) {
-          const bw = scale.bandwidth()
-          label.x = (scale(t) as number) + bw / 2 + (bw > 0 ? 0 : 0.5)
-        } else {
-          label.x = rawV + 0.5
-        }
+        label.x = rawOf + tickOffsetEff + 0.5 + labelOffset
         label.y = -(tickSize + labelPadding) + 0.5
         label.align = align as SceneItem['align']
       }

@@ -279,7 +279,7 @@ function compileAxis(a: Record<string, unknown>): CompiledAxis {
     scale: a.scale as string,
     orient: a.orient as CompiledAxis['orient'],
   }
-  for (const key of ['grid', 'gridScale', 'domain', 'labels', 'ticks', 'tickCount', 'tickMinStep', 'tickSize', 'title', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleAngle', 'titleAlign', 'titleBaseline', 'titleX', 'titleY', 'labelAlign', 'labelBaseline', 'labelFlush', 'labelOverlap', 'labelPadding', 'labelAngle', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelLimit', 'bandPosition', 'tickColor', 'tickWidth', 'tickDash', 'tickOffset', 'tickRound', 'tickExtra', 'domainColor', 'domainWidth', 'domainDash', 'domainOpacity', 'maxExtent', 'minExtent', 'titleAnchor', 'titleLimit', 'translate', 'position', 'offset', 'tickBand', 'format', 'formatType', 'zindex', 'values'] as const) {
+  for (const key of ['grid', 'gridScale', 'domain', 'labels', 'ticks', 'tickCount', 'tickMinStep', 'tickSize', 'title', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleAngle', 'titleAlign', 'titleBaseline', 'titleX', 'titleY', 'labelAlign', 'labelBaseline', 'labelFlush', 'labelOverlap', 'labelPadding', 'labelAngle', 'labelOffset', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelLimit', 'bandPosition', 'tickColor', 'tickWidth', 'tickDash', 'tickOffset', 'tickRound', 'tickExtra', 'domainColor', 'domainWidth', 'domainDash', 'domainOpacity', 'maxExtent', 'minExtent', 'titleAnchor', 'titleLimit', 'translate', 'position', 'offset', 'tickBand', 'format', 'formatType', 'zindex', 'values'] as const) {
     if (a[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = a[key]
   }
   if (a.encode !== undefined) out.encode = a.encode as CompiledAxis['encode']
@@ -328,6 +328,10 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
 function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string, unknown>): Record<string, unknown> {
   if (!defaults || typeof defaults !== 'object') return o
   const out: Record<string, unknown> = { ...defaults, ...o }
+  // vega's `axisBand` style (tickOffset -0.5) sits AFTER config.axis in the
+  // guide lookup, so a config.tickOffset cannot override it on band-scale
+  // axes — drop the config value and let the runtime default apply.
+  if ('tickOffset' in defaults && !('tickOffset' in o)) delete out.tickOffset
   return out
 }
 

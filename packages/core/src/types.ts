@@ -242,6 +242,7 @@ export interface CompiledAxis {
   labelOverlap?: boolean | string
   labelPadding?: number
   labelAngle?: number
+  labelOffset?: number
   labelColor?: string
   labelOpacity?: number
   labelFontSize?: number
