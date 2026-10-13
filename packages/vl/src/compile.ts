@@ -1671,7 +1671,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
   } else if (mark === 'point' || mark === 'circle' || mark === 'square') {
     const filled = mark !== 'point' || (isObject(spec.mark) && spec.mark.filled === true)
-    const markColor = isObject(spec.mark) ? (spec.mark.color as string | undefined) : undefined
+    const markColor = isObject(spec.mark)
+      ? ((spec.mark.color as string | undefined) ?? (spec.mark.fill as string | undefined))
+      : undefined
     const markOpacity = isObject(spec.mark) ? (spec.mark.opacity as number | undefined) : undefined
     const markStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
     const markStrokeWidth = isObject(spec.mark) ? (spec.mark.strokeWidth as number | undefined) : undefined
@@ -1719,7 +1721,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const areaFillOpacity = isObject(spec.mark) ? (spec.mark.fillOpacity as number | undefined) : undefined
     if (areaFillOpacity != null) update.fillOpacity = { value: areaFillOpacity }
     if (areaStroke) update.stroke = { value: areaStroke }
-    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? C.blue }
+    const areaFill = isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined
+    update.fill = colorDef
+      ? { scale: 'color', field: aggFieldName(colorDef) }
+      : { value: areaFill ?? markColor ?? C.blue }
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
     if (yDef) {
       const stacked = isStacked(yDef, mark, orient)
@@ -1805,6 +1810,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
     update.align = { value: 'center' }
     update.baseline = { value: 'middle' }
+    const mFontSize = isObject(spec.mark) ? (spec.mark.fontSize as number | undefined) : undefined
+    if (mFontSize != null) update.fontSize = { value: mFontSize }
+    const mFontWeight = isObject(spec.mark) ? (spec.mark.fontWeight as unknown) : undefined
+    if (mFontWeight != null) update.fontWeight = { value: mFontWeight }
   } else if (mark === 'arc') {
     const thetaDefA = fields.find((f) => f.channel === 'theta' && f.field)
     const thetaF = thetaDefA!.field
