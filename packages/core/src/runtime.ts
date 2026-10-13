@@ -4131,7 +4131,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const symOpacityEnc = (legend as unknown as { encode?: { symbols?: { update?: { opacity?: EncodeValue } } } }).encode?.symbols?.update?.opacity
     const symbolOpacity = symOpacityEnc && typeof symOpacityEnc === 'object' && 'value' in symOpacityEnc
       ? (symOpacityEnc as { value?: unknown }).value
-      : undefined
+      : (legend as { symbolOpacity?: number }).symbolOpacity
 
     // Vega measures text width as ~~(0.8 * len * fontSize) when no canvas is
     // available (vega-scenegraph estimateWidth). Labels render at 10px, the
@@ -4159,7 +4159,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
 
     const items: SceneItem[] = []
     items.push({ path: `M0,0h${outerWidth}v${bgHeight}h-${outerWidth}Z`, x: 0, y: 0 })
-    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: titleColor, fontSize: 11, ...(titleOpacity != null ? { opacity: titleOpacity } : {}) })
+    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: titleColor, fontSize: 11, ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
       const off = titleRow + i * (entryStep + rowPadding - 2)
@@ -4230,7 +4230,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         align: 'left',
         fill: labelColor,
         fontSize: 10,
-        ...(labelOpacity != null ? { opacity: labelOpacity } : {}),
+        ...(labelOpacity != null ? { fillOpacity: labelOpacity } : {}),
         ...(labelFontWeight != null ? { fontWeight: labelFontWeight } : {}),
         ...(labelFontStyle != null ? { fontStyle: labelFontStyle } : {}),
       })
@@ -4313,7 +4313,9 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       else if (orient === 'right') { tick.x = ctx.width + 0.5; tick.x2 = ctx.width + tickSize + 0.5; tick.y = v + 0.5; tick.y2 = v + 0.5 }
       else if (orient === 'bottom') { tick.x = v + 0.5; tick.x2 = v + 0.5; tick.y = ctx.height + 0.5; tick.y2 = ctx.height + tickSize + 0.5 }
       else { tick.x = v + 0.5; tick.x2 = v + 0.5; tick.y = 0.5; tick.y2 = -tickSize + 0.5 }
-      tick.stroke = '#888'; tick.strokeWidth = 1
+      tick.stroke = axis.tickColor ?? '#888'
+      tick.strokeWidth = axis.tickWidth ?? 1
+      if (axis.tickDash) tick.strokeDash = axis.tickDash
       items.push(tick)
     }
     if (axis.labels !== false) {
@@ -4326,15 +4328,15 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       // round(0.8 * labelFontSize) from the axis line (oracle-calibrated).
       // Rotated labels get no baseline-top offset (it folds into the rotate
       // translate applied by vega's renderer).
-      const labelFs = 10
+      const labelFs = axis.labelFontSize ?? 10
       const labelAngle = typeof axis.labelAngle === 'number' ? axis.labelAngle : 0
       const axisOffset = tickSize + labelPadding + (labelAngle ? 0 : Math.round(0.8 * labelFs))
       // For band scales the label y is anchored to the band center (matching
       // vega, which places it at bandCenter - 0.5 and shifts by the middle
       // baseline); continuous scales anchor to the raw scale value.
-      const bandLabelY = scale.bandwidth ? v + 3 : rawV + 3.5
-      if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align'] }
-      else if (orient === 'right') { label.x = ctx.width + tickSize + labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align'] }
+      const bandLabelY = scale.bandwidth ? v + Math.round(0.3 * labelFs) : rawV + Math.round(0.3 * labelFs) + 0.5
+      if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align']; if (axis.labelFontSize != null) label.fontSize = labelFs }
+      else if (orient === 'right') { label.x = ctx.width + tickSize + labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align']; if (axis.labelFontSize != null) label.fontSize = labelFs }
       else if (orient === 'bottom') {
         if (scale.bandwidth) {
           const bw = scale.bandwidth()
@@ -4365,7 +4367,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
         label.fontSize = labelFs
       }
       label.baseline = baseline as SceneItem['baseline']
-      label.fill = '#000'
+      label.fill = axis.labelColor ?? '#000'
+      if (axis.labelOpacity != null) label.fillOpacity = axis.labelOpacity
       labels.push(label)
       items.push(label)
     }
@@ -4428,7 +4431,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     }
   }
 
-  const labelWidth = Math.floor(0.8 * maxLabelLen * 10)
+  const labelWidth = Math.floor(0.8 * maxLabelLen * (axis.labelFontSize ?? 10))
 
   if (axis.domain !== false) {
     const domainLine: SceneItem = { x: 0, y: 0, x2: 0, y2: 0 }
@@ -4443,7 +4446,10 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     else if (orient === 'right') { domainLine.x = ctx.width + 0.5; domainLine.x2 = ctx.width + 0.5; domainLine.y = axisStart + 0.5; domainLine.y2 = axisEnd + 0.5 }
     else if (orient === 'bottom') { domainLine.x = axisStart + 0.5; domainLine.x2 = axisEnd + 0.5; domainLine.y = ctx.height + 0.5; domainLine.y2 = ctx.height + 0.5 }
     else { domainLine.x = axisStart + 0.5; domainLine.x2 = axisEnd + 0.5; domainLine.y = 0.5; domainLine.y2 = 0.5 }
-    domainLine.stroke = '#888'; domainLine.strokeWidth = 1
+    domainLine.stroke = axis.domainColor ?? '#888'
+    domainLine.strokeWidth = axis.domainWidth ?? 1
+    if (axis.domainDash) domainLine.strokeDash = axis.domainDash
+    if (axis.domainOpacity != null) domainLine.strokeOpacity = axis.domainOpacity
     ;(domainLine as Record<string, unknown>)._domain = true
     items.push(domainLine)
   }
@@ -4525,7 +4531,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     // Vega emits font-size 11 on axis titles explicitly (bounds + canvas font).
     ;(t as Record<string, unknown>).fontSize = titleFs
     if (titleWeight != null) (t as Record<string, unknown>).fontWeight = titleWeight
-    if (titleOpacity != null) (t as Record<string, unknown>).opacity = titleOpacity
+    if (titleOpacity != null) t.fillOpacity = titleOpacity
     t.fill = titleColor ?? '#000'
     items.push(t)
   }

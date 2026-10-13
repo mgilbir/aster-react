@@ -279,7 +279,7 @@ function compileAxis(a: Record<string, unknown>): CompiledAxis {
     scale: a.scale as string,
     orient: a.orient as CompiledAxis['orient'],
   }
-  for (const key of ['grid', 'gridScale', 'domain', 'labels', 'ticks', 'tickCount', 'tickMinStep', 'tickSize', 'title', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleAngle', 'titleAlign', 'titleBaseline', 'titleX', 'titleY', 'labelAlign', 'labelBaseline', 'labelFlush', 'labelOverlap', 'labelPadding', 'labelAngle', 'tickBand', 'format', 'formatType', 'zindex', 'values'] as const) {
+  for (const key of ['grid', 'gridScale', 'domain', 'labels', 'ticks', 'tickCount', 'tickMinStep', 'tickSize', 'title', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleAngle', 'titleAlign', 'titleBaseline', 'titleX', 'titleY', 'labelAlign', 'labelBaseline', 'labelFlush', 'labelOverlap', 'labelPadding', 'labelAngle', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelLimit', 'bandPosition', 'tickColor', 'tickWidth', 'tickDash', 'tickOffset', 'tickRound', 'tickExtra', 'domainColor', 'domainWidth', 'domainDash', 'domainOpacity', 'maxExtent', 'minExtent', 'titleAnchor', 'titleLimit', 'translate', 'position', 'offset', 'tickBand', 'format', 'formatType', 'zindex', 'values'] as const) {
     if (a[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = a[key]
   }
   if (a.encode !== undefined) out.encode = a.encode as CompiledAxis['encode']
@@ -288,7 +288,7 @@ function compileAxis(a: Record<string, unknown>): CompiledAxis {
 
 function compileLegend(l: Record<string, unknown>): CompiledLegend {
   const out: CompiledLegend = {}
-  for (const key of ['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeDash', 'orient', 'direction', 'columns', 'title', 'offset', 'padding', 'gradientLength', 'gradientThickness', 'symbolSize', 'symbolType', 'zindex', 'type', 'tickCount', 'symbolStrokeWidth', 'symbolOffset', 'labelAlign', 'labelBaseline', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelFontWeight', 'labelFontStyle', 'labelOffset', 'labelLimit', 'rowPadding', 'columnPadding', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleBaseline', 'titleAlign', 'titleAnchor', 'titleAngle', 'titleLimit', 'gridAlign', 'clipHeight', 'cornerRadius', 'fillColor', 'strokeColor', 'labelOverlap', 'symbolLimit'] as const) {
+  for (const key of ['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeDash', 'orient', 'direction', 'columns', 'title', 'offset', 'padding', 'gradientLength', 'gradientThickness', 'symbolSize', 'symbolType', 'zindex', 'type', 'tickCount', 'symbolStrokeWidth', 'symbolOffset', 'symbolOpacity', 'labelAlign', 'labelBaseline', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelFontWeight', 'labelFontStyle', 'labelOffset', 'labelLimit', 'rowPadding', 'columnPadding', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleBaseline', 'titleAlign', 'titleAnchor', 'titleAngle', 'titleLimit', 'gridAlign', 'clipHeight', 'cornerRadius', 'fillColor', 'strokeColor', 'labelOverlap', 'symbolLimit'] as const) {
     if (l[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = l[key]
   }
   if (l.encode !== undefined) out.encode = l.encode as CompiledLegend['encode']
@@ -343,8 +343,13 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
   if (typeof style === 'string') names.add(style)
   else if (Array.isArray(style)) for (const s of style) names.add(String(s))
   const props: Record<string, unknown> = {}
-  // vega's per-marktype config block (config.arc etc.) seeds the defaults;
-  // named styles then override.
+  // vega's generic mark block (config.mark) seeds every mark's defaults;
+  // the per-marktype block (config.arc etc.) then overrides, and named
+  // styles override both.
+  if (cfgMarktype) {
+    const gm = cfgMarktype['mark']
+    if (gm && typeof gm === 'object') Object.assign(props, gm)
+  }
   if (m.type && cfgMarktype) {
     const st = cfgMarktype[String(m.type)]
     if (st && typeof st === 'object') {

@@ -634,7 +634,7 @@ function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | unde
   ctx.textAlign = it.align === 'right' ? 'right' : it.align === 'left' ? 'left' : 'center'
   ctx.textBaseline = 'alphabetic'
   const fill = it.fill ?? '#000'
-  ctx.globalAlpha = (it.opacity ?? 1) as number
+  ctx.globalAlpha = ((it.opacity ?? 1) as number) * ((it.fillOpacity ?? 1) as number)
   const paint = resolvePaint(fill as string | { gradient: string }, ctx, defs, null)
   ctx.fillStyle = (paint ?? '#000') as string
   if (angle != null && angle !== 0) {

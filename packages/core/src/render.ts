@@ -201,11 +201,11 @@ function renderLeaf(it: SceneItem): string {
   if (it.text != null) {
     const fontSize = (it as Record<string, unknown>).fontSize as number | undefined
     const fam = (it as Record<string, unknown>).font as string | undefined
-    return `<text x="${num(it.x ?? 0)}" y="${num(it.y ?? 0)}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('font-family', fam)}${attr('fill', it.fill)}${attr('opacity', it.opacity)}>${esc(String(it.text))}</text>`
+    return `<text x="${num(it.x ?? 0)}" y="${num(it.y ?? 0)}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('font-family', fam)}${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}>${esc(String(it.text))}</text>`
   }
   const x2 = it.x2 ?? it.x ?? 0
   const y2 = it.y2 ?? it.y ?? 0
-  return `<line x1="${num(it.x ?? 0)}" y1="${num(it.y ?? 0)}" x2="${num(x2)}" y2="${num(y2)}"${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
+  return `<line x1="${num(it.x ?? 0)}" y1="${num(it.y ?? 0)}" x2="${num(x2)}" y2="${num(y2)}"${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-opacity', it.strokeOpacity)}${attr('opacity', it.opacity)}/>`
 }
 
 function itemsOf(group: SceneGroup): SceneItem[] {
@@ -217,8 +217,8 @@ function renderLine(group: SceneGroup): string {
   let out = `<g class="mark-line role-mark" role="graphics-symbol" aria-roledescription="line mark container">`
   const pathInfo = computeLinePath(group)
   if (pathInfo) {
-    const { path, stroke, sw, strokeDash, opacity } = pathInfo
-    out += `<path d="${path}"${stroke ? ` stroke="${stroke}"` : ''}${sw != null ? ` stroke-width="${num(sw)}"` : ''}${attr('stroke-dasharray', strokeDash)}${opacity != null ? ` opacity="${num(opacity)}"` : ''}/>`
+    const { path, stroke, sw, strokeDash, opacity, fillOpacity } = pathInfo
+    out += `<path d="${path}"${stroke ? ` stroke="${stroke}"` : ''}${sw != null ? ` stroke-width="${num(sw)}"` : ''}${attr('stroke-dasharray', strokeDash)}${attr('fill-opacity', fillOpacity)}${opacity != null ? ` opacity="${num(opacity)}"` : ''}/>`
   }
   out += '</g>'
   return out
@@ -231,6 +231,7 @@ export function computeLinePath(group: SceneGroup): {
   sw?: number
   strokeDash?: number[]
   opacity?: number
+  fillOpacity?: number
 } | null {
   const items = itemsOf(group)
   if (!items.length) return null
@@ -324,9 +325,10 @@ export function computeLinePath(group: SceneGroup): {
   const strokeWidth = group.items?.[0]?.strokeWidth as number | undefined
   const opacity = group.items?.[0]?.opacity as number | undefined
   const strokeDash = group.items?.[0]?.strokeDash as number[] | undefined
+  const fillOpacity = group.items?.[0]?.fillOpacity as number | undefined
   // Vega default: line marks have strokeWidth=2
   const sw = strokeWidth ?? (stroke != null ? 2 : undefined)
-  return { path, stroke, sw, strokeDash, opacity }
+  return { path, stroke, sw, strokeDash, opacity, fillOpacity }
 }
 
 /** Shared area-path geometry for the string renderer and the DOM patcher. */
@@ -699,7 +701,7 @@ function renderRules(group: SceneGroup): string {
     const y = it.y ?? 0
     const x2 = it.x2 ?? x
     const y2 = it.y2 ?? y
-    out += `<line x1="${num(x)}" y1="${num(y)}" x2="${num(x2)}" y2="${num(y2)}"${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
+    out += `<line x1="${num(x)}" y1="${num(y)}" x2="${num(x2)}" y2="${num(y2)}"${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-opacity', it.strokeOpacity)}${attr('opacity', it.opacity)}/>`
   }
   out += '</g>'
   return out
@@ -792,6 +794,9 @@ export function textItemDesc(it: SceneItem): {
   attrs.push(['font-weight', fontWeight])
   attrs.push(['font-family', (it as Record<string, unknown>).font as string | undefined])
   attrs.push(['fill', it.fill])
+  attrs.push(['fill-opacity', (it as Record<string, unknown>).fillOpacity])
+  attrs.push(['stroke', it.stroke])
+  attrs.push(['stroke-opacity', (it as Record<string, unknown>).strokeOpacity])
   attrs.push(['opacity', it.opacity])
   attrs.push(['angle', it.angle])
   return { x, y, dyAttr: isRotated && bsOffset ? ` dy="${num(bsOffset)}"` : '', attrs, text, lines, lineHeight }

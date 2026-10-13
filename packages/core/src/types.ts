@@ -242,6 +242,28 @@ export interface CompiledAxis {
   labelOverlap?: boolean | string
   labelPadding?: number
   labelAngle?: number
+  labelColor?: string
+  labelOpacity?: number
+  labelFontSize?: number
+  labelLimit?: number
+  bandPosition?: number
+  tickColor?: string
+  tickWidth?: number
+  tickDash?: number[]
+  tickOffset?: number
+  tickRound?: boolean | number
+  tickExtra?: boolean
+  domainColor?: string
+  domainWidth?: number
+  domainDash?: number[]
+  domainOpacity?: number
+  maxExtent?: number
+  minExtent?: number
+  titleAnchor?: string
+  titleLimit?: number
+  translate?: number | number[]
+  position?: number
+  offset?: number
   tickBand?: string
   values?: unknown[] | { signal: string }
   format?: string
@@ -269,6 +291,7 @@ export interface CompiledLegend {
   symbolType?: string
   tickCount?: number | string | { signal: string }
   symbolStrokeWidth?: number
+  symbolOpacity?: number
   symbolOffset?: number
   labelAlign?: string
   labelBaseline?: string

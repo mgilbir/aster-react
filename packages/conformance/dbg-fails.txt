@@ -1,0 +1,1078 @@
+  [differ] axis-orient-left (axis.orient): root: svg|346|246 vs svg|346|224
+  [differ] axis-orient-right (axis.orient): root: svg|392|246 vs svg|392|224
+  [differ] axis-maxExtent-0 (axis.maxExtent): root: svg|330|183 vs svg|330|198
+  [differ] axis-maxExtent-0.5 (axis.maxExtent): root: svg|330|183 vs svg|330|198
+  [differ] axis-maxExtent-8 (axis.maxExtent): root: svg|330|189 vs svg|330|198
+  [differ] axis-maxExtent--4 (axis.maxExtent): root: svg|330|183 vs svg|330|198
+  [differ] axis-offset-0.5 (axis.offset): root: svg|330|199 vs svg|330|198
+  [differ] axis-offset-8 (axis.offset): root: svg|330|206 vs svg|330|198
+  [differ] axis-offset--4 (axis.offset): root: svg|330|194 vs svg|330|198
+  [differ] axis-position-0.5 (axis.position): record[0]: line|127|161.5|127|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-position-8 (axis.position): record[0]: line|134.5|161.5|134.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-position--4 (axis.position): record[0]: line|122.5|161.5|122.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-bandPosition-0 (axis.bandPosition): record[0]: line|104.5|161.5|104.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-bandPosition-8 (axis.bandPosition): root: svg|559|198 vs svg|330|198
+  [differ] axis-bandPosition--4 (axis.bandPosition): root: svg|456|198 vs svg|330|198
+  [differ] axis-translate-0 (axis.translate): record[0]: line|126|161|126|166|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-translate-8 (axis.translate): record[0]: line|134|169|134|174|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-translate--4 (axis.translate): record[0]: line|122|157|122|162|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-titleAnchor-start (axis.titleAnchor): record[25]: text|16.5|101.5|amount|fill=#0  |  text|151.5|191.5|category|fill=#0
+  [differ] axis-titleAnchor-end (axis.titleAnchor): record[25]: text|16.5|101.5|amount|fill=#0  |  text|151.5|191.5|category|fill=#0
+  [differ] axis-titleAngle-0.5 (axis.titleAngle): root: svg|330|199 vs svg|330|198
+  [differ] axis-titleAngle-8 (axis.titleAngle): root: svg|330|203 vs svg|330|198
+  [differ] axis-titleAngle--4 (axis.titleAngle): root: svg|330|201 vs svg|330|198
+  [differ] axis-titleY-0 (axis.titleY): root: svg|330|183 vs svg|330|187
+  [differ] axis-titleY-0.5 (axis.titleY): root: svg|330|183 vs svg|330|187
+  [differ] axis-titleY-8 (axis.titleY): root: svg|330|185 vs svg|330|183
+  [differ] axis-titleY--4 (axis.titleY): root: svg|330|183 vs svg|330|191
+  [differ] axis-titleBaseline-middle (axis.titleBaseline): root: svg|330|192 vs svg|330|201
+  [differ] axis-titleBaseline-bottom (axis.titleBaseline): root: svg|330|187 vs svg|330|198
+  [differ] axis-titleBaseline-alphabetic (axis.titleBaseline): root: svg|330|189 vs svg|330|198
+  [differ] axis-titleBaseline-line-top (axis.titleBaseline): root: svg|330|199 vs svg|330|208
+  [differ] axis-titleBaseline-line-bottom (axis.titleBaseline): root: svg|330|186 vs svg|330|195
+  [differ] axis-titleFontSize-8 (axis.titleFontSize): root: svg|330|195 vs svg|330|201
+  [differ] axis-titleFontSize--4 (axis.titleFontSize): root: svg|330|187 vs svg|330|184
+  [differ] axis-titleLimit-0.5 (axis.titleLimit): record[25]: text|151.5|191.5|…|fill=#0  |  text|151.5|191.5|category|fill=#0
+  [differ] axis-titleLimit-8 (axis.titleLimit): record[25]: text|151.5|191.5|…|fill=#0  |  text|151.5|191.5|category|fill=#0
+  [differ] axis-titleOpacity-0 (axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=0  |  text|151.5|191.5|category|fill=#0
+  [differ] axis-titleOpacity-0.5 (axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=0.5  |  text|151.5|191.5|category|fill=#0;opacity=0.5
+  [differ] axis-titleOpacity-8 (axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=8  |  text|151.5|191.5|category|fill=#0;opacity=8
+  [differ] axis-titleOpacity--4 (axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=-4  |  text|151.5|191.5|category|fill=#0;opacity=-4
+  [differ] axis-domainColor-b35a1f (axis.domainColor): record[9]: line|51.5|161.5|251.5|161.5|stroke=#b35a1f;stroke-width=1  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
+  [differ] axis-domainDash-4_2 (axis.domainDash): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1;stroke-dasharray=4,2  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
+  [differ] axis-domainWidth-0 (axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=0  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
+  [differ] axis-domainWidth-0.5 (axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=0.5  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
+  [differ] axis-domainWidth-8 (axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=8  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
+  [differ] axis-domainWidth--4 (axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=-4  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
+  [differ] axis-ticks-false (axis.ticks): record[20]: text|126.61|171.5|beta|fill=#0  |  text|126.61|176.5|beta|fill=#0
+  [differ] axis-tickBand-extent (axis.tickBand): record[0]: line|100.5|161.5|100.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-tickColor-b35a1f (axis.tickColor): record[0]: line|126.5|161.5|126.5|166.5|stroke=#b35a1f;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-tickDash-4_2 (axis.tickDash): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1;stroke-dasharray=4,2  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-tickOffset-0 (axis.tickOffset): record[0]: line|127.5|161.5|127.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-tickOffset-0.5 (axis.tickOffset): record[0]: line|127.5|161.5|127.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-tickOffset-8 (axis.tickOffset): record[0]: line|135.5|161.5|135.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-tickOffset--4 (axis.tickOffset): record[0]: line|123.5|161.5|123.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-tickRound-false (axis.tickRound): record[0]: line|126.61|161.5|126.61|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at AxisTicks.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/AxisTicks.js:36:17)
+    at AxisTicks.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at AxisTicks.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at AxisTicks.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/AxisTicks.js:36:17)
+    at AxisTicks.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at AxisTicks.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at AxisTicks.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/AxisTicks.js:36:17)
+    at AxisTicks.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at AxisTicks.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+  [node-error] axis-tickCount-millisecond: Cannot read properties of undefined (reading 'marktype')
+  [node-error] axis-tickCount-second: Cannot read properties of undefined (reading 'marktype')
+  [node-error] axis-tickCount-minute: Cannot read properties of undefined (reading 'marktype')
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at AxisTicks.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/AxisTicks.js:36:17)
+    at AxisTicks.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at AxisTicks.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at AxisTicks.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/AxisTicks.js:36:17)
+    at AxisTicks.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at AxisTicks.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at AxisTicks.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/AxisTicks.js:36:17)
+    at AxisTicks.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at AxisTicks.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+  [differ] axis-tickWidth-0 (axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=0  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-tickWidth-0.5 (axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=0.5  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-tickWidth-8 (axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=8  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-tickWidth--4 (axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=-4  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at AxisTicks.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/AxisTicks.js:36:17)
+    at AxisTicks.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at AxisTicks.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at AxisTicks.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/AxisTicks.js:36:17)
+    at AxisTicks.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at AxisTicks.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+  [node-error] axis-tickCount-hour: Cannot read properties of undefined (reading 'marktype')
+  [node-error] axis-tickCount-day: Cannot read properties of undefined (reading 'marktype')
+  [node-error] axis-tickCount-week: Cannot read properties of undefined (reading 'marktype')
+  [node-error] axis-tickCount-month: Cannot read properties of undefined (reading 'marktype')
+  [node-error] axis-tickCount-year: Cannot read properties of undefined (reading 'marktype')
+  [differ] axis-tickExtra-true (axis.tickExtra): record[11]: line|55.5|161.5|55.5|166.5|stroke=#888;stroke-width=1  |  line|77.5|161.5|77.5|166.5|stroke=#888;stroke-width=1
+  [differ] axis-tickMinStep-0.5 (axis.tickMinStep): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1  |  line|46.5|113.5|51.5|113.5|stroke=#888;stroke-width=1
+  [differ] axis-tickMinStep-8 (axis.tickMinStep): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1  |  line|46.5|113.5|51.5|113.5|stroke=#888;stroke-width=1
+  [differ] axis-labelBaseline-middle (axis.labelBaseline): root: svg|330|193 vs svg|330|198
+  [differ] axis-labelBaseline-bottom (axis.labelBaseline): root: svg|330|188 vs svg|330|198
+  [differ] axis-labelBaseline-alphabetic (axis.labelBaseline): root: svg|330|190 vs svg|330|198
+  [differ] axis-labelBaseline-line-top (axis.labelBaseline): root: svg|330|199 vs svg|330|198
+  [differ] axis-labelBaseline-line-bottom (axis.labelBaseline): root: svg|330|187 vs svg|330|198
+  [differ] axis-labelAngle-0.5 (axis.labelAngle): root: svg|330|199 vs svg|330|198
+  [differ] axis-labelAngle-8 (axis.labelAngle): root: svg|330|201 vs svg|330|198
+  [differ] axis-labelAngle--4 (axis.labelAngle): root: svg|330|200 vs svg|330|198
+  [differ] axis-labelColor-b35a1f (axis.labelColor): record[24]: text|126.61|176.5|beta|fill=#b35a1f  |  text|126.61|176.5|beta|fill=#0
+  [differ] axis-labelFontSize-0 (axis.labelFontSize): root: svg|330|188 vs svg|330|198
+  [differ] axis-labelFontSize-0.5 (axis.labelFontSize): root: svg|330|189 vs svg|330|198
+  [differ] axis-labelFontSize-8 (axis.labelFontSize): root: svg|330|196 vs svg|330|198
+  [differ] axis-labelFontSize--4 (axis.labelFontSize): root: svg|330|188 vs svg|330|198
+  [differ] axis-labelLimit-0.5 (axis.labelLimit): record[24]: text|126.61|176.5|…|fill=#0  |  text|126.61|176.5|beta|fill=#0
+  [differ] axis-labelLimit-8 (axis.labelLimit): record[24]: text|126.61|176.5|…|fill=#0  |  text|126.61|176.5|beta|fill=#0
+  [differ] axis-labelOpacity-0 (axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=0  |  text|126.61|176.5|beta|fill=#0
+  [differ] axis-labelOpacity-0.5 (axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=0.5  |  text|126.61|176.5|beta|fill=#0
+  [differ] axis-labelOpacity-8 (axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=8  |  text|126.61|176.5|beta|fill=#0
+  [differ] axis-labelOpacity--4 (axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=-4  |  text|126.61|176.5|beta|fill=#0
+  [differ] axis-labelOffset-0.5 (axis.labelOffset): record[24]: text|127.11|176.5|beta|fill=#0  |  text|126.61|176.5|beta|fill=#0
+  [differ] axis-labelOffset-8 (axis.labelOffset): record[24]: text|134.61|176.5|beta|fill=#0  |  text|126.61|176.5|beta|fill=#0
+  [differ] axis-labelOffset--4 (axis.labelOffset): record[24]: text|122.61|176.5|beta|fill=#0  |  text|126.61|176.5|beta|fill=#0
+  [differ] legend-direction-horizontal (legend.direction): root: svg|454|198 vs svg|330|198
+  [differ] legend-orient-left (legend.orient): root: svg|330|198 vs svg|331|198
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+  [differ] legend-orient-bottom (legend.orient): root: svg|256|269 vs svg|256|266
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+  [differ] legend-tickCount-millisecond (legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] legend-tickCount-second (legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] legend-tickCount-minute (legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] legend-tickCount-hour (legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] legend-tickCount-day (legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] legend-tickCount-week (legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] legend-tickCount-month (legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] legend-tickCount-year (legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] legend-symbolLimit-0.5 (legend.symbolLimit): root: svg|358|198 vs svg|330|198
+  [differ] legend-symbolLimit--4 (legend.symbolLimit): root: svg|358|198 vs svg|330|198
+  [differ] legend-cornerRadius-0.5 (legend.cornerRadius): record[15]: path|M269.541L324.541C324.7764132541.22432541.5L32593.5C32593.776324.77694324.594L269.594C269.2249426993.77626993.5L26941.5C26941.224269.22441269.541Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-cornerRadius-8 (legend.cornerRadius): record[15]: path|M26957h325v68h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-fillColor-b35a1f (legend.fillColor): record[15]: path|M26941h325v94h213Z|fill=#b35a1f  |  path|M26941h325v94h213Z|
+  [differ] legend-padding-0.5 (legend.padding): root: svg|331|198 vs svg|330|198
+  [differ] legend-padding-8 (legend.padding): root: svg|346|198 vs svg|330|198
+  [differ] legend-padding--4 (legend.padding): root: svg|322|198 vs svg|330|198
+  [differ] legend-strokeColor-b35a1f (legend.strokeColor): root: svg|331|198 vs svg|330|198
+  [differ] legend-titleAlign-right (legend.titleAlign): root: svg|382|198 vs svg|330|198
+  [differ] legend-titleAlign-center (legend.titleAlign): root: svg|356|198 vs svg|330|198
+  [differ] legend-titleAnchor-middle (legend.titleAnchor): record[31]: text|285|66|north|fill=#0  |  text|269|50|region|fill=#0
+  [differ] legend-titleAnchor-end (legend.titleAnchor): record[31]: text|285|66|north|fill=#0  |  text|269|50|region|fill=#0
+  [differ] legend-titleBaseline-middle (legend.titleBaseline): record[31]: text|269|44|region|fill=#0  |  text|269|50|region|fill=#0
+  [differ] legend-titleBaseline-bottom (legend.titleBaseline): record[31]: text|269|39|region|fill=#0  |  text|269|50|region|fill=#0
+  [differ] legend-titleBaseline-alphabetic (legend.titleBaseline): record[31]: text|269|41|region|fill=#0  |  text|269|50|region|fill=#0
+  [differ] legend-titleBaseline-line-top (legend.titleBaseline): record[31]: text|269|51|region|fill=#0  |  text|269|50|region|fill=#0
+  [differ] legend-titleBaseline-line-bottom (legend.titleBaseline): record[31]: text|269|38|region|fill=#0  |  text|269|50|region|fill=#0
+  [differ] legend-titleFontSize-0 (legend.titleFontSize): record[15]: path|M26941h325v83h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-titleFontSize-0.5 (legend.titleFontSize): record[15]: path|M26941h325v84h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-titleFontSize-8 (legend.titleFontSize): record[15]: path|M26941h325v91h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-titleFontSize--4 (legend.titleFontSize): root: svg|349|198 vs svg|330|198
+  [differ] legend-titleLimit-0.5 (legend.titleLimit): record[31]: text|269|50|…|fill=#0  |  text|269|50|region|fill=#0
+  [differ] legend-titleLimit-8 (legend.titleLimit): record[31]: text|269|50|…|fill=#0  |  text|269|50|region|fill=#0
+  [differ] legend-titleOpacity-0 (legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=0  |  text|269|50|region|fill=#0
+  [differ] legend-titleOpacity-0.5 (legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=0.5  |  text|269|50|region|fill=#0;opacity=0.5
+  [differ] legend-titleOpacity-8 (legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=8  |  text|269|50|region|fill=#0;opacity=8
+  [differ] legend-titleOpacity--4 (legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=-4  |  text|269|50|region|fill=#0;opacity=-4
+  [differ] legend-titleOrient-left (legend.titleOrient): root: svg|387|198 vs svg|330|198
+  [differ] legend-titleOrient-right (legend.titleOrient): root: svg|387|198 vs svg|330|198
+  [differ] legend-titleOrient-bottom (legend.titleOrient): record[15]: path|M26941h325v52h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-titlePadding-0 (legend.titlePadding): record[15]: path|M26941h325v89h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-titlePadding-0.5 (legend.titlePadding): record[15]: path|M26941h325v90h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-titlePadding-8 (legend.titlePadding): record[15]: path|M26941h325v97h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-titlePadding--4 (legend.titlePadding): record[15]: path|M26941h325v85h213Z|  |  path|M26941h325v94h213Z|
+ERROR RangeError: Invalid array length
+    at gridLayout (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/layout/grid.js:85:37)
+    at trellisLayout (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/layout/grid.js:242:18)
+    at group (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/ViewLayout.js:32:21)
+    at Array.forEach (<anonymous>)
+    at ViewLayout.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/ViewLayout.js:31:18)
+    at ViewLayout.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at ViewLayout.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+ERROR RangeError: Invalid array length
+    at gridLayout (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/layout/grid.js:85:37)
+    at trellisLayout (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/layout/grid.js:242:18)
+    at group (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/ViewLayout.js:32:21)
+    at Array.forEach (<anonymous>)
+    at ViewLayout.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/ViewLayout.js:31:18)
+    at ViewLayout.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at ViewLayout.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+  [differ] legend-clipHeight-0.5 (legend.clipHeight): record[15]: path|M26941h325v89h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-clipHeight-8 (legend.clipHeight): record[15]: path|M26941h325v90h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-columns-0.5 (legend.columns): root: svg|210|130 vs svg|330|198
+  [differ] legend-clipHeight--4 (legend.clipHeight): record[15]: path|M26941h325v84h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-columns-0 (legend.columns): root: svg|454|198 vs svg|330|198
+  [differ] legend-columns--4 (legend.columns): root: svg|210|130 vs svg|330|198
+  [differ] legend-columns-8 (legend.columns): root: svg|454|198 vs svg|330|198
+  [differ] legend-rowPadding--4 (legend.rowPadding): record[15]: path|M26941h325v90h213Z|  |  path|M26941h325v82h213Z|
+  [differ] legend-symbolDash-4_2 (legend.symbolDash): record[19]: path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5;stroke-dasharray=4,2  |  path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5
+  [differ] legend-symbolOffset-0.5 (legend.symbolOffset): root: svg|331|198 vs svg|330|198
+  [differ] legend-symbolOffset-8 (legend.symbolOffset): root: svg|338|198 vs svg|330|198
+  [differ] legend-symbolOffset--4 (legend.symbolOffset): root: svg|326|198 vs svg|330|198
+  [differ] legend-symbolOpacity-0.5 (legend.symbolOpacity): record[19]: path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5;opacity=0.5  |  path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5
+  [differ] legend-symbolOpacity-8 (legend.symbolOpacity): record[19]: path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5;opacity=8  |  path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5
+  [differ] legend-symbolOpacity--4 (legend.symbolOpacity): record[19]: path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5;opacity=-4  |  path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5
+  [differ] legend-symbolSize-0 (legend.symbolSize): root: svg|328|198 vs svg|330|198
+  [differ] legend-symbolSize-0.5 (legend.symbolSize): root: svg|328|198 vs svg|330|198
+  [differ] legend-symbolSize-8 (legend.symbolSize): root: svg|328|198 vs svg|330|198
+  [differ] legend-symbolSize--4 (legend.symbolSize): root: svg|326|198 vs svg|330|198
+  [differ] legend-symbolStrokeColor-b35a1f (legend.symbolStrokeColor): record[15]: path|M26941h325v107h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-symbolStrokeWidth-0 (legend.symbolStrokeWidth): root: svg|328|198 vs svg|330|198
+  [differ] legend-symbolStrokeWidth-0.5 (legend.symbolStrokeWidth): root: svg|329|198 vs svg|330|198
+  [differ] legend-symbolStrokeWidth-8 (legend.symbolStrokeWidth): root: svg|336|198 vs svg|330|198
+  [differ] legend-symbolStrokeWidth--4 (legend.symbolStrokeWidth): root: svg|328|198 vs svg|330|198
+  [differ] legend-labelAlign-right (legend.labelAlign): root: svg|326|198 vs svg|330|198
+  [differ] legend-labelAlign-center (legend.labelAlign): root: svg|326|198 vs svg|330|198
+  [differ] legend-labelBaseline-top (legend.labelBaseline): record[15]: path|M26941h325v109h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-labelBaseline-bottom (legend.labelBaseline): record[15]: path|M26941h325v102h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-labelBaseline-alphabetic (legend.labelBaseline): record[15]: path|M26941h325v98h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-labelBaseline-line-top (legend.labelBaseline): record[15]: path|M26941h325v112h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-labelBaseline-line-bottom (legend.labelBaseline): record[15]: path|M26941h325v104h213Z|  |  path|M26941h325v94h213Z|
+  [differ] legend-labelFontSize-0 (legend.labelFontSize): root: svg|326|198 vs svg|330|198
+  [differ] legend-labelFontSize-0.5 (legend.labelFontSize): root: svg|326|198 vs svg|330|198
+  [differ] legend-labelFontSize-8 (legend.labelFontSize): root: svg|326|198 vs svg|330|198
+  [differ] legend-labelFontSize--4 (legend.labelFontSize): root: svg|326|198 vs svg|330|198
+  [differ] legend-labelLimit-0.5 (legend.labelLimit): root: svg|326|198 vs svg|330|198
+  [differ] legend-labelLimit-8 (legend.labelLimit): root: svg|326|198 vs svg|330|198
+  [differ] legend-labelOffset-0.5 (legend.labelOffset): record[15]: path|M26941h322v94h216Z|  |  path|M26941h321.5v94h216.5Z|
+  [differ] legend-labelOpacity-0 (legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=0  |  text|285|66|north|fill=#0
+  [differ] legend-labelOpacity-0.5 (legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=0.5  |  text|285|66|north|fill=#0;opacity=0.5
+  [differ] legend-labelOpacity-8 (legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=8  |  text|285|66|north|fill=#0;opacity=8
+  [differ] legend-labelOpacity--4 (legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=-4  |  text|285|66|north|fill=#0;opacity=-4
+  [differ] title-orient-none (title.orient): root: svg|367|167 vs svg|330|198
+  [differ] title-orient-left (title.orient): record[25]: text|158.61|150.5|beta|fill=#0  |  text|11|88.5|Quarterly totals|fill=#0
+  [differ] title-orient-right (title.orient): root: svg|361|177 vs svg|384|177
+  [differ] title-frame-group (title.frame): root: svg|330|198 vs svg|330|193
+  [differ] title-limit-0.5 (title.limit): record[27]: text|165|15|…|fill=#0  |  text|165|15|Quarterly totals|fill=#0
+  [differ] title-limit-8 (title.limit): record[27]: text|165|15|…|fill=#0  |  text|165|15|Quarterly totals|fill=#0
+  [differ] title-align-left (title.align): root: svg|336|198 vs svg|330|198
+  [differ] title-align-right (title.align): root: svg|336|198 vs svg|330|198
+  [differ] title-angle-0.5 (title.angle): root: svg|330|202 vs svg|330|198
+  [differ] title-angle-8 (title.angle): root: svg|330|250 vs svg|330|198
+  [differ] title-angle--4 (title.angle): root: svg|330|225 vs svg|330|198
+  [differ] title-baseline-middle (title.baseline): root: svg|330|205 vs svg|330|198
+  [differ] title-baseline-bottom (title.baseline): root: svg|330|212 vs svg|330|198
+  [differ] title-baseline-alphabetic (title.baseline): root: svg|330|209 vs svg|330|198
+  [differ] title-baseline-line-top (title.baseline): root: svg|330|197 vs svg|330|198
+  [differ] title-baseline-line-bottom (title.baseline): root: svg|330|213 vs svg|330|198
+  [differ] title-dx-0.5 (title.dx): record[27]: text|165.5|15|Quarterly totals|fill=#0  |  text|165|15|Quarterly totals|fill=#0
+  [differ] title-dx-8 (title.dx): record[27]: text|173|15|Quarterly totals|fill=#0  |  text|165|15|Quarterly totals|fill=#0
+  [differ] title-dx--4 (title.dx): record[27]: text|161|15|Quarterly totals|fill=#0  |  text|165|15|Quarterly totals|fill=#0
+  [differ] title-color-b35a1f (title.color): record[28]: text|165|30|by region|fill=#0  |  text|165|30|by region|fill=#b35a1f
+  [differ] title-fontSize--4 (title.fontSize): root: svg|330|197 vs svg|330|185
+  [differ] title-subtitleColor-b35a1f (title.subtitleColor): record[28]: text|165|30|by region|fill=#b35a1f  |  text|165|30|by region|fill=#0
+  [differ] title-subtitleFontSize-0 (title.subtitleFontSize): root: svg|330|187 vs svg|330|198
+  [differ] title-subtitleFontSize-0.5 (title.subtitleFontSize): root: svg|330|188 vs svg|330|198
+  [differ] title-subtitleFontSize-8 (title.subtitleFontSize): root: svg|330|195 vs svg|330|198
+  [differ] title-subtitleFontSize--4 (title.subtitleFontSize): root: svg|330|187 vs svg|330|198
+  [differ] title-subtitlePadding-0 (title.subtitlePadding): root: svg|330|195 vs svg|330|198
+  [differ] title-subtitlePadding-0.5 (title.subtitlePadding): root: svg|330|196 vs svg|330|198
+  [differ] title-subtitlePadding-8 (title.subtitlePadding): root: svg|330|203 vs svg|330|198
+  [differ] title-subtitlePadding--4 (title.subtitlePadding): root: svg|330|191 vs svg|330|198
+  [differ] scale-paddingInner-8 (scale.paddingInner): record[0]: line|119.5|161.5|119.5|166.5|stroke=#888;stroke-width=1  |  line|120.5|161.5|120.5|166.5|stroke=#888;stroke-width=1
+  [differ] scale-padding-8 (scale.padding): record[24]: text|131|176.5|beta|fill=#0  |  text|131.5|176.5|beta|fill=#0
+  [differ] scale-align-0 (scale.align): record[0]: line|121.5|161.5|121.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] scale-align-8 (scale.align): record[0]: line|131.5|161.5|131.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] scale-align--4 (scale.align): record[0]: line|121.5|161.5|121.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] scale-linear-round-true (scale-linear.round): record[18]: path|M130.80591A4.4724.472011121.86191A4.4724.472011130.80591|fill=steelblue  |  path|M130.80590.842A4.4724.472011121.86190.842A4.4724.472011130.80590.842|fill=steelblue
+  [differ] scale-sqrt-padding-0.5 (scale-sqrt.padding): root: svg|248|151 vs svg|248|152
+  [differ] scale-sqrt-padding-8 (scale-sqrt.padding): root: svg|256|152 vs svg|256|151
+  [differ] scale-sqrt-padding--4 (scale-sqrt.padding): root: svg|248|156 vs svg|248|154
+  [differ] scale-sqrt-round-true (scale-sqrt.round): record[18]: path|M130.80561A4.4724.472011121.86161A4.4724.472011130.80561|fill=steelblue  |  path|M130.80561.451A4.4724.472011121.86161.451A4.4724.472011130.80561.451|fill=steelblue
+  [differ] scale-log-zero-true (scale-log.zero): root: svg|225|152 vs svg|225|147
+  [differ] scale-log-padding-0.5 (scale-log.padding): root: svg|256|152 vs svg|225|147
+  [differ] scale-log-padding-8 (scale-log.padding): root: svg|272|147 vs svg|225|147
+  [differ] scale-log-padding--4 (scale-log.padding): root: svg|256|156 vs svg|256|225
+  [differ] scale-log-round-true (scale-log.round): record[30]: path|M155.47276A4.4724.472011146.52876A4.4724.472011155.47276|fill=steelblue  |  path|M155.47275.504A4.4724.472011146.52875.504A4.4724.472011155.47275.504|fill=steelblue
+  [differ] scale-pow-exponent--4 (scale-pow.exponent): root: svg|248|152 vs svg|248|153
+  [differ] scale-pow-round-true (scale-pow.round): record[18]: path|M130.80591A4.4724.472011121.86191A4.4724.472011130.80591|fill=steelblue  |  path|M130.80590.842A4.4724.472011121.86190.842A4.4724.472011130.80590.842|fill=steelblue
+  [differ] scale-symlog-constant-0 (scale-symlog.constant): root: svg|248|152 vs svg|248|153
+  [differ] scale-symlog-padding-0.5 (scale-symlog.padding): root: svg|248|151 vs svg|248|152
+  [differ] scale-symlog-padding-8 (scale-symlog.padding): root: svg|256|151 vs svg|256|152
+  [differ] scale-symlog-padding--4 (scale-symlog.padding): root: svg|248|156 vs svg|248|157
+  [differ] scale-symlog-round-true (scale-symlog.round): record[17]: path|M130.80566A4.4724.472011121.86166A4.4724.472011130.80566|fill=steelblue  |  path|M130.80565.694A4.4724.472011121.86165.694A4.4724.472011130.80565.694|fill=steelblue
+  [differ] scale-time-nice-day (scale-time.nice): root: svg|296|152 vs svg|304|152
+  [differ] scale-time-nice-week (scale-time.nice): root: svg|296|151 vs svg|304|152
+  [differ] scale-time-nice-year (scale-time.nice): record[5]: line|94.5|110.5|99.5|110.5|stroke=#888;stroke-width=1  |  line|94.5|115.5|99.5|115.5|stroke=#888;stroke-width=1
+  [differ] scale-time-round-true (scale-time.round): record[13]: path|M195.47288A4.4724.472011186.52888A4.4724.472011195.47288|fill=steelblue  |  path|M195.47288.462A4.4724.472011186.52888.462A4.4724.472011195.47288.462|fill=steelblue
+  [differ] scale-utc-nice-day (scale-utc.nice): root: svg|296|152 vs svg|304|152
+  [differ] scale-utc-nice-week (scale-utc.nice): root: svg|296|151 vs svg|304|152
+  [differ] scale-utc-nice-year (scale-utc.nice): record[5]: line|94.5|110.5|99.5|110.5|stroke=#888;stroke-width=1  |  line|94.5|115.5|99.5|115.5|stroke=#888;stroke-width=1
+  [differ] scale-utc-round-true (scale-utc.round): record[13]: path|M195.47288A4.4724.472011186.52888A4.4724.472011195.47288|fill=steelblue  |  path|M195.47288.462A4.4724.472011186.52888.462A4.4724.472011195.47288.462|fill=steelblue
+  [differ] scale-threshold-nice-true (scale-threshold.nice): record[21]: text|16.5|69.5|amount|fill=#0  |  text|16.5|65.5|amount|fill=#0
+  [differ] scale-threshold-nice-false (scale-threshold.nice): record[21]: text|16.5|69.5|amount|fill=#0  |  text|16.5|65.5|amount|fill=#0
+  [differ] scale-threshold-zero-true (scale-threshold.zero): record[21]: text|16.5|69.5|amount|fill=#0  |  text|16.5|65.5|amount|fill=#0
+  [differ] scale-threshold-zero-false (scale-threshold.zero): record[21]: text|16.5|69.5|amount|fill=#0  |  text|16.5|65.5|amount|fill=#0
+  [differ] scale-threshold-round-true (scale-threshold.round): record[21]: text|16.5|69.5|amount|fill=#0  |  text|16.5|65.5|amount|fill=#0
+  [differ] scale-threshold-round-false (scale-threshold.round): record[21]: text|16.5|69.5|amount|fill=#0  |  text|16.5|65.5|amount|fill=#0
+  [differ] scale-quantile-round-true (scale-quantile.round): record[24]: text|16.5|69.5|amount|fill=#0  |  text|16.5|65.5|amount|fill=#0
+  [differ] scale-quantile-round-false (scale-quantile.round): record[24]: text|16.5|69.5|amount|fill=#0  |  text|16.5|65.5|amount|fill=#0
+  [differ] scale-bin-ordinal-round-true (scale-bin-ordinal.round): record[23]: text|16.5|69.5|amount|fill=#0  |  text|16.5|65.5|amount|fill=#0
+  [differ] scale-bin-ordinal-round-false (scale-bin-ordinal.round): record[23]: text|16.5|69.5|amount|fill=#0  |  text|16.5|65.5|amount|fill=#0
+  [differ] scale-ordinal-domainImplicit-true (scale-ordinal.domainImplicit): root: svg|248|153 vs svg|248|147
+  [differ] scale-ordinal-domainImplicit-false (scale-ordinal.domainImplicit): root: svg|248|153 vs svg|248|147
+  [differ] scale-ordinal-round-true (scale-ordinal.round): root: svg|248|153 vs svg|248|147
+  [differ] scale-ordinal-round-false (scale-ordinal.round): root: svg|248|153 vs svg|248|147
+  [differ] scale-point-padding-0 (scale-point.padding): root: svg|248|152 vs svg|248|153
+  [differ] scale-point-padding-0.5 (scale-point.padding): record[27]: text|36.5|118.5|95|fill=#0  |  text|36.5|118|95|fill=#0
+  [differ] scale-point-padding-8 (scale-point.padding): record[27]: text|36.5|111.357|95|fill=#0  |  text|36.5|111|95|fill=#0
+  [differ] scale-point-padding--4 (scale-point.padding): root: svg|248|152 vs svg|248|153
+  [differ] scale-point-paddingOuter-0 (scale-point.paddingOuter): root: svg|248|152 vs svg|248|153
+  [differ] scale-point-paddingOuter-0.5 (scale-point.paddingOuter): record[27]: text|36.5|118.5|95|fill=#0  |  text|36.5|118|95|fill=#0
+  [differ] scale-point-paddingOuter-8 (scale-point.paddingOuter): record[27]: text|36.5|111.357|95|fill=#0  |  text|36.5|111|95|fill=#0
+  [differ] scale-point-paddingOuter--4 (scale-point.paddingOuter): root: svg|248|152 vs svg|248|153
+  [differ] scale-point-align-0 (scale-point.align): root: svg|248|152 vs svg|248|153
+  [differ] scale-point-align-0.5 (scale-point.align): root: svg|248|152 vs svg|248|153
+  [differ] scale-point-align-8 (scale-point.align): root: svg|248|152 vs svg|248|153
+  [differ] scale-point-align--4 (scale-point.align): root: svg|248|152 vs svg|248|153
+  [differ] scale-point-round-true (scale-point.round): root: svg|248|152 vs svg|248|153
+  [differ] scale-point-round-false (scale-point.round): root: svg|248|152 vs svg|248|153
+  [engine-error] scale-identity-nice-true: [aster] unsupported scale range value
+  [engine-error] scale-identity-nice-false: [aster] unsupported scale range value
+  [engine-error] scale-identity-round-true: [aster] unsupported scale range value
+  [engine-error] scale-identity-round-false: [aster] unsupported scale range value
+  [differ] config-range-category-scheme_dark2 (config-range.category): record[0]: path|M10.36623h53.293v21h-43.293Z|fill=rgb(168, 206, 229)  |  path|M10.36623h53.293v21h-43.293Z|fill=b
+  [differ] config-range-category-552255_225522_222255_552222 (config-range.category): record[0]: path|M10.36623h53.293v21h-43.293Z|fill=rgb(168, 206, 229)  |  path|M10.36623h53.293v21h-43.293Z|fill=b
+  [differ] config-range-ordinal-scheme_greens (config-range.ordinal): record[0]: path|M10.36623h53.293v21h-43.293Z|fill=rgb(171, 221, 165)  |  path|M10.36623h53.293v21h-43.293Z|fill=b
+  [differ] config-range-ordinal-scheme_greys_count_3 (config-range.ordinal): record[0]: path|M10.36623h53.293v21h-43.293Z|fill=rgb(196, 196, 196)  |  path|M10.36623h53.293v21h-43.293Z|fill=b
+  [differ] config-range-heatmap-scheme_magma (config-range.heatmap): record[0]: path|M10.36623h53.293v21h-43.293Z|fill=rgb(168, 206, 229)  |  path|M10.36623h53.293v21h-43.293Z|fill=b
+  [differ] config-range-ramp-scheme_purples (config-range.ramp): record[0]: path|M10.36623h53.293v21h-43.293Z|fill=rgb(168, 206, 229)  |  path|M10.36623h53.293v21h-43.293Z|fill=b
+  [differ] config-range-ramp-scheme_purples_extent_1_0 (config-range.ramp): record[0]: path|M10.36623h53.293v21h-43.293Z|fill=rgb(168, 206, 229)  |  path|M10.36623h53.293v21h-43.293Z|fill=b
+  [differ] config-range-diverging-scheme_purplegreen (config-range.diverging): record[0]: path|M10.36623h53.293v21h-43.293Z|fill=rgb(168, 206, 229)  |  path|M10.36623h53.293v21h-43.293Z|fill=b
+  [differ] config-range-diverging-scheme_purplegreen_extent_1_0 (config-range.diverging): record[0]: path|M10.36623h53.293v21h-43.293Z|fill=rgb(168, 206, 229)  |  path|M10.36623h53.293v21h-43.293Z|fill=b
+  [differ] config-range-symbol-circle_triangle-up_wedge (config-range.symbol): record[0]: path|M10.36623h53.293v21h-43.293Z|fill=rgb(168, 206, 229)  |  path|M10.36623h53.293v21h-43.293Z|fill=b
+  [differ] config-range-symbol-wedge_triangle (config-range.symbol): record[0]: path|M10.36623h53.293v21h-43.293Z|fill=rgb(168, 206, 229)  |  path|M10.36623h53.293v21h-43.293Z|fill=b
+  [differ] view-width-0 (view.width): record[34]: text|74.5|191.5|category|fill=#0  |  text|74.5|176.5|alpha|fill=#0
+  [differ] view-width--4 (view.width): record[6]: line|74.5|161.5|74.5|161.5|stroke=#888;stroke-width=1  |  line|70.5|161.5|70.5|166.5|stroke=#888;stroke-width=1
+  [differ] view-height-0 (view.height): root: svg|330|120 vs svg|330|118
+  [differ] view-height-0.5 (view.height): root: svg|330|120.5 vs svg|330|118.5
+  [differ] view-height-8 (view.height): root: svg|330|116 vs svg|330|114
+  [differ] view-height--4 (view.height): root: svg|330|122 vs svg|330|120
+  [differ] view-autosize-type_fit_contains_padding (view.autosize): root: svg|200|120 vs svg|210|130
+  [differ] layout-align-all (layout.align): root: svg|970|192 vs svg|510|510
+ERROR RangeError: Invalid array length
+    at gridLayout (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/layout/grid.js:85:37)
+    at trellisLayout (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/layout/grid.js:242:18)
+    at group (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/ViewLayout.js:32:21)
+    at Array.forEach (<anonymous>)
+    at ViewLayout.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/ViewLayout.js:31:18)
+    at ViewLayout.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at ViewLayout.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+  [differ] layout-align-each (layout.align): root: svg|970|192 vs svg|510|510
+  [differ] layout-align-none (layout.align): root: svg|970|192 vs svg|510|510
+  [differ] layout-bounds-full (layout.bounds): root: svg|970|192 vs svg|510|510
+ERROR RangeError: Invalid array length
+    at gridLayout (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/layout/grid.js:85:37)
+    at trellisLayout (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/layout/grid.js:242:18)
+    at group (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/ViewLayout.js:32:21)
+    at Array.forEach (<anonymous>)
+    at ViewLayout.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/ViewLayout.js:31:18)
+    at ViewLayout.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at ViewLayout.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+  [differ] layout-bounds-flush (layout.bounds): root: svg|454|192 vs svg|510|510
+  [differ] layout-center-true (layout.center): root: svg|970|192 vs svg|510|510
+  [differ] layout-columns-0.5 (layout.columns): root: svg|310|180 vs svg|510|510
+  [differ] layout-center-false (layout.center): root: svg|970|192 vs svg|510|510
+  [differ] layout-columns-0 (layout.columns): root: svg|1942|192 vs svg|510|510
+  [differ] layout-columns--4 (layout.columns): root: svg|310|180 vs svg|510|510
+  [differ] layout-columns-8 (layout.columns): root: svg|1942|192 vs svg|510|510
+  [differ] layout-padding-0 (layout.padding): root: svg|946|192 vs svg|510|510
+  [differ] layout-padding-0.5 (layout.padding): root: svg|947|192 vs svg|510|510
+  [differ] layout-padding-8 (layout.padding): root: svg|962|192 vs svg|510|510
+  [differ] layout-padding--4 (layout.padding): root: svg|938|192 vs svg|510|510
+  [differ] layout-offset-0 (layout.offset): root: svg|970|192 vs svg|510|510
+  [differ] layout-offset-0.5 (layout.offset): root: svg|970|192 vs svg|510|510
+  [differ] layout-offset-8 (layout.offset): root: svg|970|192 vs svg|510|510
+  [differ] layout-offset--4 (layout.offset): root: svg|970|192 vs svg|510|510
+  [differ] layout-headerBand-0 (layout.headerBand): root: svg|970|192 vs svg|510|510
+  [differ] layout-headerBand-0.5 (layout.headerBand): root: svg|970|192 vs svg|510|510
+  [differ] layout-headerBand-8 (layout.headerBand): root: svg|970|192 vs svg|510|510
+  [differ] layout-headerBand--4 (layout.headerBand): root: svg|970|192 vs svg|510|510
+  [differ] layout-footerBand-0 (layout.footerBand): root: svg|970|192 vs svg|510|510
+  [differ] layout-footerBand-0.5 (layout.footerBand): root: svg|970|192 vs svg|510|510
+  [differ] layout-footerBand-8 (layout.footerBand): root: svg|970|192 vs svg|510|510
+  [differ] layout-footerBand--4 (layout.footerBand): root: svg|970|192 vs svg|510|510
+  [differ] layout-titleBand-0 (layout.titleBand): root: svg|970|192 vs svg|510|510
+  [differ] layout-titleBand-0.5 (layout.titleBand): root: svg|970|192 vs svg|510|510
+  [differ] layout-titleBand-8 (layout.titleBand): root: svg|970|192 vs svg|510|510
+  [differ] layout-titleBand--4 (layout.titleBand): root: svg|970|192 vs svg|510|510
+  [differ] layout-titleAnchor-start (layout.titleAnchor): root: svg|970|192 vs svg|510|510
+  [differ] layout-titleAnchor-end (layout.titleAnchor): root: svg|970|192 vs svg|510|510
+  [differ] config-axis-maxExtent-0 (config-axis.maxExtent): root: svg|315|183 vs svg|330|198
+  [differ] config-axis-maxExtent-0.5 (config-axis.maxExtent): root: svg|315|183 vs svg|330|198
+  [differ] config-axis-maxExtent-8 (config-axis.maxExtent): root: svg|315|189 vs svg|330|198
+  [differ] config-axis-maxExtent--4 (config-axis.maxExtent): root: svg|315|183 vs svg|330|198
+  [differ] config-axis-offset-0.5 (config-axis.offset): root: svg|331|199 vs svg|330|198
+  [differ] config-axis-offset-8 (config-axis.offset): root: svg|338|206 vs svg|330|198
+  [differ] config-axis-offset--4 (config-axis.offset): root: svg|326|194 vs svg|330|198
+  [differ] config-axis-bandPosition-0 (config-axis.bandPosition): record[0]: line|104.5|161.5|104.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-axis-bandPosition-8 (config-axis.bandPosition): root: svg|559|198 vs svg|330|198
+  [differ] config-axis-bandPosition--4 (config-axis.bandPosition): root: svg|456|198 vs svg|330|198
+  [differ] config-axis-translate-0 (config-axis.translate): record[0]: line|126|161|126|166|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-axis-translate-8 (config-axis.translate): record[0]: line|134|169|134|174|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-axis-translate--4 (config-axis.translate): record[0]: line|122|157|122|162|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-axis-titlePadding-0 (config-axis.titlePadding): root: svg|326|194 vs svg|330|194
+  [differ] config-axis-titlePadding-0.5 (config-axis.titlePadding): root: svg|327|195 vs svg|330|195
+  [differ] config-axis-titlePadding-8 (config-axis.titlePadding): root: svg|334|202 vs svg|330|202
+  [differ] config-axis-titlePadding--4 (config-axis.titlePadding): root: svg|322|190 vs svg|330|190
+  [differ] config-axis-titleAnchor-start (config-axis.titleAnchor): record[25]: text|16.5|161.5|amount|fill=#0  |  text|151.5|191.5|category|fill=#0
+  [differ] config-axis-titleAnchor-end (config-axis.titleAnchor): record[25]: text|16.5|41.5|amount|fill=#0  |  text|151.5|191.5|category|fill=#0
+  [differ] config-axis-titleAngle-0 (config-axis.titleAngle): record[34]: text|31.5|99.5|amount|fill=#0  |  text|31.5|101.5|amount|fill=#0
+  [differ] config-axis-titleAngle-0.5 (config-axis.titleAngle): root: svg|345|199 vs svg|345|198
+  [differ] config-axis-titleAngle-8 (config-axis.titleAngle): root: svg|345|203 vs svg|345|198
+  [differ] config-axis-titleAngle--4 (config-axis.titleAngle): root: svg|346|201 vs svg|346|198
+  [differ] config-axis-titleY-0 (config-axis.titleY): root: svg|330|204 vs svg|330|202
+  [differ] config-axis-titleY-0.5 (config-axis.titleY): root: svg|330|204 vs svg|330|202
+  [differ] config-axis-titleY-8 (config-axis.titleY): root: svg|330|198 vs svg|330|194
+  [differ] config-axis-titleY--4 (config-axis.titleY): root: svg|330|208 vs svg|330|206
+  [differ] config-axis-titleBaseline-middle (config-axis.titleBaseline): root: svg|325|192 vs svg|325|201
+  [differ] config-axis-titleBaseline-bottom (config-axis.titleBaseline): root: svg|330|187 vs svg|330|198
+  [differ] config-axis-titleBaseline-alphabetic (config-axis.titleBaseline): root: svg|328|189 vs svg|328|198
+  [differ] config-axis-titleBaseline-line-top (config-axis.titleBaseline): root: svg|318|199 vs svg|318|208
+  [differ] config-axis-titleBaseline-line-bottom (config-axis.titleBaseline): root: svg|331|186 vs svg|331|195
+  [differ] config-axis-titleFontSize-8 (config-axis.titleFontSize): root: svg|327|195 vs svg|327|201
+  [differ] config-axis-titleFontSize--4 (config-axis.titleFontSize): root: svg|319|187 vs svg|319|184
+  [differ] config-axis-titleLimit-0.5 (config-axis.titleLimit): record[25]: text|151.5|191.5|…|fill=#0  |  text|151.5|191.5|category|fill=#0
+  [differ] config-axis-titleLimit-8 (config-axis.titleLimit): record[25]: text|151.5|191.5|…|fill=#0  |  text|151.5|191.5|category|fill=#0
+  [differ] config-axis-titleOpacity-0 (config-axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=0  |  text|151.5|191.5|category|fill=#0
+  [differ] config-axis-titleOpacity-0.5 (config-axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=0.5  |  text|151.5|191.5|category|fill=#0;opacity=0.5
+  [differ] config-axis-titleOpacity-8 (config-axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=8  |  text|151.5|191.5|category|fill=#0;opacity=8
+  [differ] config-axis-titleOpacity--4 (config-axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=-4  |  text|151.5|191.5|category|fill=#0;opacity=-4
+  [differ] config-axis-domainColor-b35a1f (config-axis.domainColor): record[9]: line|51.5|161.5|251.5|161.5|stroke=#b35a1f;stroke-width=1  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
+  [differ] config-axis-domainDash-4_2 (config-axis.domainDash): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1;stroke-dasharray=4,2  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
+  [differ] config-axis-domainWidth-0 (config-axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=0  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
+  [differ] config-axis-domainWidth-0.5 (config-axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=0.5  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
+  [differ] config-axis-domainWidth-8 (config-axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=8  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
+  [differ] config-axis-domainWidth--4 (config-axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=-4  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
+  [differ] config-axis-ticks-false (config-axis.ticks): root: svg|325|193 vs svg|330|193
+  [differ] config-axis-tickBand-extent (config-axis.tickBand): record[0]: line|100.5|161.5|100.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-axis-tickColor-b35a1f (config-axis.tickColor): record[0]: line|126.5|161.5|126.5|166.5|stroke=#b35a1f;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-axis-tickDash-4_2 (config-axis.tickDash): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1;stroke-dasharray=4,2  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-axis-tickOffset-0.5 (config-axis.tickOffset): record[3]: line|46.5|114.5|51.5|114.5|stroke=#888;stroke-width=1  |  line|46.5|113.5|51.5|113.5|stroke=#888;stroke-width=1
+  [differ] config-axis-tickOffset-8 (config-axis.tickOffset): root: svg|330|193 vs svg|330|198
+  [differ] config-axis-tickOffset--4 (config-axis.tickOffset): root: svg|330|202 vs svg|330|198
+  [differ] config-axis-tickRound-false (config-axis.tickRound): record[0]: line|126.61|161.5|126.61|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-axis-tickWidth-0 (config-axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=0  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-axis-tickWidth-0.5 (config-axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=0.5  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-axis-tickWidth-8 (config-axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=8  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-axis-tickWidth--4 (config-axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=-4  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-axis-tickExtra-true (config-axis.tickExtra): record[6]: line|46.5|161.5|51.5|161.5|stroke=#888;stroke-width=1  |  line|46.5|41.5|51.5|41.5|stroke=#888;stroke-width=1
+  [differ] config-axis-tickMinStep-0.5 (config-axis.tickMinStep): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1  |  line|46.5|113.5|51.5|113.5|stroke=#888;stroke-width=1
+  [differ] config-axis-tickMinStep-8 (config-axis.tickMinStep): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1  |  line|46.5|113.5|51.5|113.5|stroke=#888;stroke-width=1
+  [differ] config-axis-labelAlign-left (config-axis.labelAlign): root: svg|306|198 vs svg|330|198
+  [differ] config-axis-labelAlign-center (config-axis.labelAlign): root: svg|318|198 vs svg|330|198
+  [differ] config-axis-labelBaseline-top (config-axis.labelBaseline): root: svg|330|194 vs svg|330|199
+  [differ] config-axis-labelBaseline-middle (config-axis.labelBaseline): root: svg|330|193 vs svg|330|198
+  [differ] config-axis-labelBaseline-bottom (config-axis.labelBaseline): root: svg|330|193 vs svg|330|199
+  [differ] config-axis-labelBaseline-alphabetic (config-axis.labelBaseline): root: svg|330|193 vs svg|330|199
+  [differ] config-axis-labelBaseline-line-top (config-axis.labelBaseline): root: svg|330|195 vs svg|330|194
+  [differ] config-axis-labelBaseline-line-bottom (config-axis.labelBaseline): root: svg|330|193 vs svg|330|202
+  [differ] config-axis-labelFlush-true (config-axis.labelFlush): root: svg|330|194 vs svg|330|198
+  [differ] config-axis-labelAngle-0.5 (config-axis.labelAngle): root: svg|331|200 vs svg|330|198
+  [differ] config-axis-labelAngle-8 (config-axis.labelAngle): root: svg|331|205 vs svg|330|198
+  [differ] config-axis-labelAngle--4 (config-axis.labelAngle): root: svg|331|200 vs svg|330|198
+  [differ] config-axis-labelColor-b35a1f (config-axis.labelColor): record[24]: text|126.61|176.5|beta|fill=#b35a1f  |  text|126.61|176.5|beta|fill=#0
+  [differ] config-axis-labelFontSize-0 (config-axis.labelFontSize): root: svg|306|184 vs svg|330|198
+  [differ] config-axis-labelFontSize-0.5 (config-axis.labelFontSize): root: svg|307|185 vs svg|330|198
+  [differ] config-axis-labelFontSize-8 (config-axis.labelFontSize): root: svg|325|195 vs svg|330|198
+  [differ] config-axis-labelFontSize--4 (config-axis.labelFontSize): root: svg|306|185 vs svg|330|198
+  [differ] config-axis-labelLimit-0.5 (config-axis.labelLimit): root: svg|314|198 vs svg|330|198
+  [differ] config-axis-labelLimit-8 (config-axis.labelLimit): root: svg|314|198 vs svg|330|198
+  [differ] config-axis-labelOpacity-0 (config-axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=0  |  text|126.61|176.5|beta|fill=#0
+  [differ] config-axis-labelOpacity-0.5 (config-axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=0.5  |  text|126.61|176.5|beta|fill=#0
+  [differ] config-axis-labelOpacity-8 (config-axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=8  |  text|126.61|176.5|beta|fill=#0
+  [differ] config-axis-labelOpacity--4 (config-axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=-4  |  text|126.61|176.5|beta|fill=#0
+  [differ] config-axis-labelOffset-0.5 (config-axis.labelOffset): record[24]: text|127.11|176.5|beta|fill=#0  |  text|126.61|176.5|beta|fill=#0
+  [differ] config-axis-labelOffset-8 (config-axis.labelOffset): root: svg|330|194 vs svg|330|198
+  [differ] config-axis-labelOffset--4 (config-axis.labelOffset): root: svg|330|202 vs svg|330|198
+  [differ] config-legend-direction-horizontal (config-legend.direction): root: svg|454|198 vs svg|330|198
+  [differ] config-legend-orient-left (config-legend.orient): root: svg|330|198 vs svg|331|198
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+  [differ] config-legend-orient-bottom (config-legend.orient): root: svg|256|269 vs svg|256|266
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+ERROR Error: Only time and utc scales accept interval strings.
+    at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
+    at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
+    at LegendEntries.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-encode@5.2.1/node_modules/vega-encode/src/LegendEntries.js:43:17)
+    at LegendEntries.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at LegendEntries.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+    at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
+    at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
+  [differ] config-legend-tickCount-millisecond (config-legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] config-legend-tickCount-second (config-legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] config-legend-tickCount-minute (config-legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] config-legend-tickCount-hour (config-legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] config-legend-tickCount-day (config-legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] config-legend-tickCount-week (config-legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] config-legend-tickCount-month (config-legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] config-legend-tickCount-year (config-legend.tickCount): record[6]: line|129|5|129|10|stroke=#888;stroke-width=1  |  line|129|125|129|130|stroke=#888;stroke-width=1
+  [differ] config-legend-symbolLimit-0.5 (config-legend.symbolLimit): root: svg|358|198 vs svg|330|198
+  [differ] config-legend-symbolLimit--4 (config-legend.symbolLimit): root: svg|358|198 vs svg|330|198
+  [differ] config-legend-cornerRadius-0.5 (config-legend.cornerRadius): record[15]: path|M269.541L324.541C324.7764132541.22432541.5L32593.5C32593.776324.77694324.594L269.594C269.2249426993.77626993.5L26941.5C26941.224269.22441269.541Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-cornerRadius-8 (config-legend.cornerRadius): record[15]: path|M26957h325v68h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-fillColor-b35a1f (config-legend.fillColor): record[15]: path|M26941h325v94h213Z|fill=#b35a1f  |  path|M26941h325v94h213Z|
+  [differ] config-legend-padding-0.5 (config-legend.padding): root: svg|331|198 vs svg|330|198
+  [differ] config-legend-padding-8 (config-legend.padding): root: svg|346|198 vs svg|330|198
+  [differ] config-legend-padding--4 (config-legend.padding): root: svg|322|198 vs svg|330|198
+  [differ] config-legend-strokeColor-b35a1f (config-legend.strokeColor): root: svg|331|198 vs svg|330|198
+  [differ] config-legend-titleAlign-right (config-legend.titleAlign): root: svg|382|198 vs svg|330|198
+  [differ] config-legend-titleAlign-center (config-legend.titleAlign): root: svg|356|198 vs svg|330|198
+  [differ] config-legend-titleAnchor-middle (config-legend.titleAnchor): record[31]: text|285|66|north|fill=#0  |  text|269|50|region|fill=#0
+  [differ] config-legend-titleAnchor-end (config-legend.titleAnchor): record[31]: text|285|66|north|fill=#0  |  text|269|50|region|fill=#0
+  [differ] config-legend-titleBaseline-middle (config-legend.titleBaseline): record[31]: text|269|44|region|fill=#0  |  text|269|50|region|fill=#0
+  [differ] config-legend-titleBaseline-bottom (config-legend.titleBaseline): record[31]: text|269|39|region|fill=#0  |  text|269|50|region|fill=#0
+  [differ] config-legend-titleBaseline-alphabetic (config-legend.titleBaseline): record[31]: text|269|41|region|fill=#0  |  text|269|50|region|fill=#0
+  [differ] config-legend-titleBaseline-line-top (config-legend.titleBaseline): record[31]: text|269|51|region|fill=#0  |  text|269|50|region|fill=#0
+  [differ] config-legend-titleBaseline-line-bottom (config-legend.titleBaseline): record[31]: text|269|38|region|fill=#0  |  text|269|50|region|fill=#0
+  [differ] config-legend-titleFontSize-0 (config-legend.titleFontSize): record[15]: path|M26941h325v83h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-titleFontSize-0.5 (config-legend.titleFontSize): record[15]: path|M26941h325v84h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-titleFontSize-8 (config-legend.titleFontSize): record[15]: path|M26941h325v91h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-titleFontSize--4 (config-legend.titleFontSize): root: svg|349|198 vs svg|330|198
+  [differ] config-legend-titleLimit-0.5 (config-legend.titleLimit): record[31]: text|269|50|…|fill=#0  |  text|269|50|region|fill=#0
+  [differ] config-legend-titleLimit-8 (config-legend.titleLimit): record[31]: text|269|50|…|fill=#0  |  text|269|50|region|fill=#0
+  [differ] config-legend-titleOpacity-0 (config-legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=0  |  text|269|50|region|fill=#0
+  [differ] config-legend-titleOpacity-0.5 (config-legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=0.5  |  text|269|50|region|fill=#0;opacity=0.5
+  [differ] config-legend-titleOpacity-8 (config-legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=8  |  text|269|50|region|fill=#0;opacity=8
+  [differ] config-legend-titleOpacity--4 (config-legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=-4  |  text|269|50|region|fill=#0;opacity=-4
+  [differ] config-legend-titleOrient-left (config-legend.titleOrient): root: svg|387|198 vs svg|330|198
+  [differ] config-legend-titleOrient-right (config-legend.titleOrient): root: svg|387|198 vs svg|330|198
+  [differ] config-legend-titleOrient-bottom (config-legend.titleOrient): record[15]: path|M26941h325v52h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-titlePadding-0 (config-legend.titlePadding): record[15]: path|M26941h325v89h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-titlePadding-0.5 (config-legend.titlePadding): record[15]: path|M26941h325v90h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-titlePadding-8 (config-legend.titlePadding): record[15]: path|M26941h325v97h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-titlePadding--4 (config-legend.titlePadding): record[15]: path|M26941h325v85h213Z|  |  path|M26941h325v94h213Z|
+ERROR RangeError: Invalid array length
+    at gridLayout (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/layout/grid.js:85:37)
+    at trellisLayout (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/layout/grid.js:242:18)
+    at group (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/ViewLayout.js:32:21)
+    at Array.forEach (<anonymous>)
+    at ViewLayout.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/ViewLayout.js:31:18)
+    at ViewLayout.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at ViewLayout.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+ERROR RangeError: Invalid array length
+    at gridLayout (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/layout/grid.js:85:37)
+    at trellisLayout (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/layout/grid.js:242:18)
+    at group (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/ViewLayout.js:32:21)
+    at Array.forEach (<anonymous>)
+    at ViewLayout.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/ViewLayout.js:31:18)
+    at ViewLayout.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at ViewLayout.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+  [differ] config-legend-clipHeight-0.5 (config-legend.clipHeight): record[15]: path|M26941h325v89h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-clipHeight-8 (config-legend.clipHeight): record[15]: path|M26941h325v90h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-clipHeight--4 (config-legend.clipHeight): record[15]: path|M26941h325v84h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-columns-0.5 (config-legend.columns): root: svg|210|130 vs svg|330|198
+  [differ] config-legend-columns-0 (config-legend.columns): root: svg|454|198 vs svg|330|198
+  [differ] config-legend-columns--4 (config-legend.columns): root: svg|210|130 vs svg|330|198
+  [differ] config-legend-columns-8 (config-legend.columns): root: svg|454|198 vs svg|330|198
+  [differ] config-legend-rowPadding--4 (config-legend.rowPadding): record[15]: path|M26941h325v90h213Z|  |  path|M26941h325v82h213Z|
+  [differ] config-legend-symbolDash-4_2 (config-legend.symbolDash): record[19]: path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5;stroke-dasharray=4,2  |  path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5
+  [differ] config-legend-symbolOffset-0.5 (config-legend.symbolOffset): root: svg|331|198 vs svg|330|198
+  [differ] config-legend-symbolOffset-8 (config-legend.symbolOffset): root: svg|338|198 vs svg|330|198
+  [differ] config-legend-symbolOffset--4 (config-legend.symbolOffset): root: svg|326|198 vs svg|330|198
+  [differ] config-legend-symbolOpacity-0.5 (config-legend.symbolOpacity): record[19]: path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5;opacity=0.5  |  path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5
+  [differ] config-legend-symbolOpacity-8 (config-legend.symbolOpacity): record[19]: path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5;opacity=8  |  path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5
+  [differ] config-legend-symbolOpacity--4 (config-legend.symbolOpacity): record[19]: path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5;opacity=-4  |  path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5
+  [differ] config-legend-symbolSize-0 (config-legend.symbolSize): root: svg|328|198 vs svg|330|198
+  [differ] config-legend-symbolSize-0.5 (config-legend.symbolSize): root: svg|328|198 vs svg|330|198
+  [differ] config-legend-symbolSize-8 (config-legend.symbolSize): root: svg|328|198 vs svg|330|198
+  [differ] config-legend-symbolSize--4 (config-legend.symbolSize): root: svg|326|198 vs svg|330|198
+  [differ] config-legend-symbolStrokeColor-b35a1f (config-legend.symbolStrokeColor): record[15]: path|M26941h325v107h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-symbolStrokeWidth-0 (config-legend.symbolStrokeWidth): root: svg|328|198 vs svg|330|198
+  [differ] config-legend-symbolStrokeWidth-0.5 (config-legend.symbolStrokeWidth): root: svg|329|198 vs svg|330|198
+  [differ] config-legend-symbolStrokeWidth-8 (config-legend.symbolStrokeWidth): root: svg|336|198 vs svg|330|198
+  [differ] config-legend-symbolStrokeWidth--4 (config-legend.symbolStrokeWidth): root: svg|328|198 vs svg|330|198
+  [differ] config-legend-labelAlign-right (config-legend.labelAlign): root: svg|326|198 vs svg|330|198
+  [differ] config-legend-labelAlign-center (config-legend.labelAlign): root: svg|326|198 vs svg|330|198
+  [differ] config-legend-labelBaseline-top (config-legend.labelBaseline): record[15]: path|M26941h325v109h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-labelBaseline-bottom (config-legend.labelBaseline): record[15]: path|M26941h325v102h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-labelBaseline-alphabetic (config-legend.labelBaseline): record[15]: path|M26941h325v98h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-labelBaseline-line-top (config-legend.labelBaseline): record[15]: path|M26941h325v112h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-labelBaseline-line-bottom (config-legend.labelBaseline): record[15]: path|M26941h325v104h213Z|  |  path|M26941h325v94h213Z|
+  [differ] config-legend-labelFontSize-0 (config-legend.labelFontSize): root: svg|326|198 vs svg|330|198
+  [differ] config-legend-labelFontSize-0.5 (config-legend.labelFontSize): root: svg|326|198 vs svg|330|198
+  [differ] config-legend-labelFontSize-8 (config-legend.labelFontSize): root: svg|326|198 vs svg|330|198
+  [differ] config-legend-labelFontSize--4 (config-legend.labelFontSize): root: svg|326|198 vs svg|330|198
+  [differ] config-legend-labelLimit-0.5 (config-legend.labelLimit): root: svg|326|198 vs svg|330|198
+  [differ] config-legend-labelLimit-8 (config-legend.labelLimit): root: svg|326|198 vs svg|330|198
+  [differ] config-legend-labelOffset-0.5 (config-legend.labelOffset): record[15]: path|M26941h322v94h216Z|  |  path|M26941h321.5v94h216.5Z|
+  [differ] config-legend-labelOpacity-0 (config-legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=0  |  text|285|66|north|fill=#0
+  [differ] config-legend-labelOpacity-0.5 (config-legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=0.5  |  text|285|66|north|fill=#0;opacity=0.5
+  [differ] config-legend-labelOpacity-8 (config-legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=8  |  text|285|66|north|fill=#0;opacity=8
+  [differ] config-legend-labelOpacity--4 (config-legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=-4  |  text|285|66|north|fill=#0;opacity=-4
+  [differ] config-title-orient-none (config-title.orient): root: svg|367|167 vs svg|330|198
+  [differ] config-title-orient-left (config-title.orient): record[25]: text|158.61|150.5|beta|fill=#0  |  text|11|88.5|Quarterly totals|fill=#0
+  [differ] config-title-orient-right (config-title.orient): root: svg|361|177 vs svg|384|177
+  [differ] config-title-frame-group (config-title.frame): root: svg|330|198 vs svg|330|193
+  [differ] config-title-limit-0.5 (config-title.limit): record[27]: text|165|15|…|fill=#0  |  text|165|15|Quarterly totals|fill=#0
+  [differ] config-title-limit-8 (config-title.limit): record[27]: text|165|15|…|fill=#0  |  text|165|15|Quarterly totals|fill=#0
+  [differ] config-title-align-left (config-title.align): root: svg|336|198 vs svg|330|198
+  [differ] config-title-align-right (config-title.align): root: svg|336|198 vs svg|330|198
+  [differ] config-title-angle-0.5 (config-title.angle): root: svg|330|202 vs svg|330|198
+  [differ] config-title-angle-8 (config-title.angle): root: svg|330|250 vs svg|330|198
+  [differ] config-title-angle--4 (config-title.angle): root: svg|330|225 vs svg|330|198
+  [differ] config-title-baseline-middle (config-title.baseline): root: svg|330|205 vs svg|330|198
+  [differ] config-title-baseline-bottom (config-title.baseline): root: svg|330|212 vs svg|330|198
+  [differ] config-title-baseline-alphabetic (config-title.baseline): root: svg|330|209 vs svg|330|198
+  [differ] config-title-baseline-line-top (config-title.baseline): root: svg|330|197 vs svg|330|198
+  [differ] config-title-baseline-line-bottom (config-title.baseline): root: svg|330|213 vs svg|330|198
+  [differ] config-title-dx-0.5 (config-title.dx): record[27]: text|165.5|15|Quarterly totals|fill=#0  |  text|165|15|Quarterly totals|fill=#0
+  [differ] config-title-dx-8 (config-title.dx): record[27]: text|173|15|Quarterly totals|fill=#0  |  text|165|15|Quarterly totals|fill=#0
+  [differ] config-title-dx--4 (config-title.dx): record[27]: text|161|15|Quarterly totals|fill=#0  |  text|165|15|Quarterly totals|fill=#0
+  [differ] config-title-color-b35a1f (config-title.color): record[28]: text|165|30|by region|fill=#0  |  text|165|30|by region|fill=#b35a1f
+  [differ] config-title-fontSize--4 (config-title.fontSize): root: svg|330|197 vs svg|330|185
+  [differ] config-title-subtitleColor-b35a1f (config-title.subtitleColor): record[28]: text|165|30|by region|fill=#b35a1f  |  text|165|30|by region|fill=#0
+  [differ] config-title-subtitleFontSize-0 (config-title.subtitleFontSize): root: svg|330|187 vs svg|330|198
+  [differ] config-title-subtitleFontSize-0.5 (config-title.subtitleFontSize): root: svg|330|188 vs svg|330|198
+  [differ] config-title-subtitleFontSize-8 (config-title.subtitleFontSize): root: svg|330|195 vs svg|330|198
+  [differ] config-title-subtitleFontSize--4 (config-title.subtitleFontSize): root: svg|330|187 vs svg|330|198
+  [differ] config-title-subtitlePadding-0 (config-title.subtitlePadding): root: svg|330|195 vs svg|330|198
+  [differ] config-title-subtitlePadding-0.5 (config-title.subtitlePadding): root: svg|330|196 vs svg|330|198
+  [differ] config-title-subtitlePadding-8 (config-title.subtitlePadding): root: svg|330|203 vs svg|330|198
+  [differ] config-title-subtitlePadding--4 (config-title.subtitlePadding): root: svg|330|191 vs svg|330|198
+  [differ] config-rect-x2-0 (config-rect.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-rect-x2-0.5 (config-rect.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-rect-x2-8 (config-rect.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-rect-x2--4 (config-rect.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-rect-yc-0 (config-rect.yc): root: svg|330|248 vs svg|330|198
+  [differ] config-rect-yc-0.5 (config-rect.yc): root: svg|330|248 vs svg|330|198
+  [differ] config-rect-yc-8 (config-rect.yc): root: svg|330|240 vs svg|330|198
+  [differ] config-rect-yc--4 (config-rect.yc): root: svg|330|252 vs svg|330|198
+  [differ] config-rect-height-0 (config-rect.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v41h7.098Z|fill=steelblue
+  [differ] config-rect-height-0.5 (config-rect.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v41.5h7.098Z|fill=steelblue
+  [differ] config-rect-height-8 (config-rect.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v49h7.098Z|fill=steelblue
+  [differ] config-rect-height--4 (config-rect.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v37h7.098Z|fill=steelblue
+  [differ] config-rect-strokeDash-4_2 (config-rect.strokeDash): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-dasharray=4,2  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-text-fillOpacity-0 (config-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=0  |  text|126.61|95|beta|fill=#333333
+  [differ] config-text-fillOpacity-0.5 (config-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=0.5  |  text|126.61|95|beta|fill=#333333
+  [differ] config-text-fillOpacity-8 (config-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=8  |  text|126.61|95|beta|fill=#333333
+  [differ] config-text-fillOpacity--4 (config-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=-4  |  text|126.61|95|beta|fill=#333333
+  [differ] config-text-strokeWidth-0 (config-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=0  |  text|126.61|95|beta|fill=#333333
+  [differ] config-text-strokeWidth-0.5 (config-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=0.5  |  text|126.61|95|beta|fill=#333333
+  [differ] config-text-strokeWidth-8 (config-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=8  |  text|126.61|95|beta|fill=#333333
+  [differ] config-text-strokeWidth--4 (config-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=-4  |  text|126.61|95|beta|fill=#333333
+  [differ] config-text-strokeDash-4_2 (config-text.strokeDash): record[21]: text|126.61|95|beta|fill=#333333;stroke-dasharray=4,2  |  text|126.61|95|beta|fill=#333333
+  [differ] config-line-fillOpacity-0 (config-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=0;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
+  [differ] config-line-fillOpacity-0.5 (config-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=0.5;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
+  [differ] config-line-fillOpacity-8 (config-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=8;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
+  [differ] config-line-fillOpacity--4 (config-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=-4;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
+  [differ] config-area-yc-0 (config-area.yc): root: svg|330|248 vs svg|330|198
+  [differ] config-area-yc-0.5 (config-area.yc): root: svg|330|248 vs svg|330|198
+  [differ] config-area-yc-8 (config-area.yc): root: svg|330|240 vs svg|330|198
+  [differ] config-area-yc--4 (config-area.yc): root: svg|330|252 vs svg|330|198
+  [differ] config-area-opacity-0.5 (config-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=0.5  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
+  [differ] config-area-opacity-8 (config-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=8  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
+  [differ] config-area-opacity--4 (config-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=-4  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
+  [differ] config-area-strokeDash-4_2 (config-area.strokeDash): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;stroke-dasharray=4,2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
+ERROR TypeError: output.areaStart is not a function
+    at area (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/d3-shape@3.2.0/node_modules/d3-shape/src/area.js:37:18)
+    at shape (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scenegraph@5.2.1/node_modules/vega-scenegraph/src/path/shapes.js:66:22)
+    at bound (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scenegraph@5.2.1/node_modules/vega-scenegraph/src/marks/markMultiItemPath.js:19:7)
+    at boundItem (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/Bound.js:79:10)
+    at Bound.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/Bound.js:29:20)
+    at Bound.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at Bound.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+  [node-error] config-area-interpolate-bundle: output.areaStart is not a function
+  [differ] config-area-orient-horizontal (config-area.orient): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.17151.8L175.39109.4L126.6195L77.829127.4Z|fill=steelblue  |  path|M77.829127.4L175.39109.4L126.6195L224.17151.8L5151.8L5195L51109.4L51127.4Z|fill=steelblue
+  [differ] config-rule-xc-0 (config-rule.xc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|175.5|161.5|175.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-rule-xc-0.5 (config-rule.xc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|175.5|161.5|175.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-rule-xc-8 (config-rule.xc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|175.5|161.5|175.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-rule-xc--4 (config-rule.xc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|175.5|161.5|175.5|166.5|stroke=#888;stroke-width=1
+  [differ] config-rule-yc-0 (config-rule.yc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|126.61|41|126.61|161|stroke=#333333;stroke-width=2
+  [differ] config-rule-yc-0.5 (config-rule.yc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|126.61|41.5|126.61|161|stroke=#333333;stroke-width=2
+  [differ] config-rule-yc-8 (config-rule.yc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|126.61|49|126.61|161|stroke=#333333;stroke-width=2
+  [differ] config-rule-yc--4 (config-rule.yc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|126.61|37|126.61|161|stroke=#333333;stroke-width=2
+  [differ] config-rule-fillOpacity-0 (config-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=0;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
+  [differ] config-rule-fillOpacity-0.5 (config-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=0.5;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
+  [differ] config-rule-fillOpacity-8 (config-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=8;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
+  [differ] config-rule-fillOpacity--4 (config-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=-4;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
+  [differ] config-path-strokeDash-4_2 (config-path.strokeDash): record[12]: path|M118.6195L126.6183L134.6195Z|fill=steelblue;stroke-dasharray=4,2  |  path|M118.6195L126.6183L134.6195Z|fill=steelblue
+  [differ] config-path-angle--4 (config-path.angle): root: svg|330|207 vs svg|330|198
+  [differ] config-path-scaleY-8 (config-path.scaleY): root: svg|330|279 vs svg|330|198
+  [differ] config-mark-x2-0 (config-mark.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-x2-0.5 (config-mark.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-x2-8 (config-mark.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-x2--4 (config-mark.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-xc-0 (config-mark.xc): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-xc-0.5 (config-mark.xc): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-xc-8 (config-mark.xc): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-xc--4 (config-mark.xc): record[12]: path|M25.049109.4h94.902v92.6h7.098Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-yc-0 (config-mark.yc): root: svg|330|248 vs svg|330|198
+  [differ] config-mark-yc-0.5 (config-mark.yc): root: svg|330|248 vs svg|330|198
+  [differ] config-mark-yc-8 (config-mark.yc): root: svg|330|240 vs svg|330|198
+  [differ] config-mark-yc--4 (config-mark.yc): root: svg|330|252 vs svg|330|198
+  [differ] config-mark-opacity-0.5 (config-mark.opacity): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;opacity=0.5  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-opacity-8 (config-mark.opacity): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;opacity=8  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-opacity--4 (config-mark.opacity): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;opacity=-4  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-fillOpacity-0 (config-mark.fillOpacity): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;fill-opacity=0  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-fillOpacity-0.5 (config-mark.fillOpacity): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;fill-opacity=0.5  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-fillOpacity-8 (config-mark.fillOpacity): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;fill-opacity=8  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-fillOpacity--4 (config-mark.fillOpacity): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;fill-opacity=-4  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-strokeWidth-0 (config-mark.strokeWidth): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-width=0  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-strokeWidth-0.5 (config-mark.strokeWidth): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-width=0.5  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-strokeWidth-8 (config-mark.strokeWidth): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-width=8  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-strokeWidth--4 (config-mark.strokeWidth): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-width=-4  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-strokeDash-4_2 (config-mark.strokeDash): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-dasharray=4,2  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-cornerRadius-0.5 (config-mark.cornerRadius): record[12]: path|M105.15995L148.06195C148.33795148.56195.224148.56195.5L148.561160.5C148.561160.776148.337161148.061161L105.159161C104.883161104.659160.776104.659160.5L104.65995.5C104.65995.224104.88395105.15995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-cornerRadius-8 (config-mark.cornerRadius): record[12]: path|M112.65995L140.56195C144.97695148.56198.585148.561103L148.561153C148.561157.415144.976161140.561161L112.659161C108.243161104.659157.415104.659153L104.659103C104.65998.585108.24395112.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-cornerRadiusTopLeft-0.5 (config-mark.cornerRadiusTopLeft): record[12]: path|M105.15995L148.56195C148.56195148.56195148.56195L148.561161C148.561161148.561161148.561161L104.659161C104.659161104.659161104.659161L104.65995.5C104.65995.224104.88395105.15995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-cornerRadiusTopLeft-8 (config-mark.cornerRadiusTopLeft): record[12]: path|M112.65995L148.56195C148.56195148.56195148.56195L148.561161C148.561161148.561161148.561161L104.659161C104.659161104.659161104.659161L104.659103C104.65998.585108.24395112.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-cornerRadiusTopRight-0.5 (config-mark.cornerRadiusTopRight): record[12]: path|M104.65995L148.06195C148.33795148.56195.224148.56195.5L148.561161C148.561161148.561161148.561161L104.659161C104.659161104.659161104.659161L104.65995C104.65995104.65995104.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-cornerRadiusTopRight-8 (config-mark.cornerRadiusTopRight): record[12]: path|M104.65995L140.56195C144.97695148.56198.585148.561103L148.561161C148.561161148.561161148.561161L104.659161C104.659161104.659161104.659161L104.65995C104.65995104.65995104.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-cornerRadiusBottomRight-0.5 (config-mark.cornerRadiusBottomRight): record[12]: path|M104.65995L148.56195C148.56195148.56195148.56195L148.561160.5C148.561160.776148.337161148.061161L104.659161C104.659161104.659161104.659161L104.65995C104.65995104.65995104.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-cornerRadiusBottomRight-8 (config-mark.cornerRadiusBottomRight): record[12]: path|M104.65995L148.56195C148.56195148.56195148.56195L148.561153C148.561157.415144.976161140.561161L104.659161C104.659161104.659161104.659161L104.65995C104.65995104.65995104.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-cornerRadiusBottomLeft-0.5 (config-mark.cornerRadiusBottomLeft): record[12]: path|M104.65995L148.56195C148.56195148.56195148.56195L148.561161C148.561161148.561161148.561161L105.159161C104.883161104.659160.776104.659160.5L104.65995C104.65995104.65995104.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-cornerRadiusBottomLeft-8 (config-mark.cornerRadiusBottomLeft): record[12]: path|M104.65995L148.56195C148.56195148.56195148.56195L148.561161C148.561161148.561161148.561161L112.659161C108.243161104.659157.415104.659153L104.65995C104.65995104.65995104.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-style-x2-0 (config-style.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-style-x2-0.5 (config-style.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-style-x2-8 (config-style.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-style-x2--4 (config-style.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-style-yc-0 (config-style.yc): root: svg|330|248 vs svg|330|198
+  [differ] config-style-yc-0.5 (config-style.yc): root: svg|330|248 vs svg|330|198
+  [differ] config-style-yc-8 (config-style.yc): root: svg|330|240 vs svg|330|198
+  [differ] config-style-yc--4 (config-style.yc): root: svg|330|252 vs svg|330|198
+  [differ] config-style-height-0 (config-style.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v41h7.098Z|fill=steelblue
+  [differ] config-style-height-0.5 (config-style.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v41.5h7.098Z|fill=steelblue
+  [differ] config-style-height-8 (config-style.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v49h7.098Z|fill=steelblue
+  [differ] config-style-height--4 (config-style.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v37h7.098Z|fill=steelblue
+  [differ] config-style-strokeDash-4_2 (config-style.strokeDash): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-dasharray=4,2  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] projection-azimuthalequalarea-clipAngle-0 (projection-azimuthalequalarea.clipAngle): root: svg|250|254 vs svg|250|252
+  [differ] encode-rect-x2-0 (encode-rect.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] encode-rect-x2-0.5 (encode-rect.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] encode-rect-x2-8 (encode-rect.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] encode-rect-x2--4 (encode-rect.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] encode-rect-yc-0 (encode-rect.yc): root: svg|330|248 vs svg|330|198
+  [differ] encode-rect-yc-0.5 (encode-rect.yc): root: svg|330|248 vs svg|330|198
+  [differ] encode-rect-yc-8 (encode-rect.yc): root: svg|330|240 vs svg|330|198
+  [differ] encode-rect-yc--4 (encode-rect.yc): root: svg|330|252 vs svg|330|198
+  [differ] encode-rect-height-0 (encode-rect.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v41h7.098Z|fill=steelblue
+  [differ] encode-rect-height-0.5 (encode-rect.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v41.5h7.098Z|fill=steelblue
+  [differ] encode-rect-height-8 (encode-rect.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v49h7.098Z|fill=steelblue
+  [differ] encode-rect-height--4 (encode-rect.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v37h7.098Z|fill=steelblue
+  [differ] encode-rect-strokeDash-4_2 (encode-rect.strokeDash): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-dasharray=4,2  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] encode-symbol-size-0 (encode-symbol.size): record[12]: path|M26941h325v94h213Z|  |  path|M126.6195A00011126.6195A00011126.6195|fill=steelblue
+  [differ] encode-symbol-size--4 (encode-symbol.size): record[20]: path|MNaN126.61|fill=steelblue  |  path|MNaN126.61ANaNNaN126.6196127.61NaN126.61ANaNNaN126.6196127.61NaN126.61|fill=steelblue
+  [differ] encode-text-fillOpacity-0 (encode-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=0  |  text|126.61|95|beta|fill=#333333
+  [differ] encode-text-fillOpacity-0.5 (encode-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=0.5  |  text|126.61|95|beta|fill=#333333
+  [differ] encode-text-fillOpacity-8 (encode-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=8  |  text|126.61|95|beta|fill=#333333
+  [differ] encode-text-fillOpacity--4 (encode-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=-4  |  text|126.61|95|beta|fill=#333333
+  [differ] encode-text-stroke-b35a1f (encode-text.stroke): record[21]: text|126.61|95|beta|fill=#333333;stroke=#b35a1f  |  text|126.61|95|beta|fill=#333333
+  [differ] encode-text-strokeWidth-0 (encode-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=0  |  text|126.61|95|beta|fill=#333333
+  [differ] encode-text-strokeWidth-0.5 (encode-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=0.5  |  text|126.61|95|beta|fill=#333333
+  [differ] encode-text-strokeWidth-8 (encode-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=8  |  text|126.61|95|beta|fill=#333333
+  [differ] encode-text-strokeWidth--4 (encode-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=-4  |  text|126.61|95|beta|fill=#333333
+  [differ] encode-text-strokeDash-4_2 (encode-text.strokeDash): record[21]: text|126.61|95|beta|fill=#333333;stroke-dasharray=4,2  |  text|126.61|95|beta|fill=#333333
+  [differ] encode-line-fill-b35a1f (encode-line.fill): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill=#b35a1f;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
+  [differ] encode-line-fillOpacity-0 (encode-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=0;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
+  [differ] encode-line-fillOpacity-0.5 (encode-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=0.5;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
+  [differ] encode-line-fillOpacity-8 (encode-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=8;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
+  [differ] encode-line-fillOpacity--4 (encode-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=-4;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
+  [differ] encode-area-yc-0 (encode-area.yc): root: svg|330|248 vs svg|330|198
+  [differ] encode-area-yc-0.5 (encode-area.yc): root: svg|330|248 vs svg|330|198
+  [differ] encode-area-yc-8 (encode-area.yc): root: svg|330|240 vs svg|330|198
+  [differ] encode-area-yc--4 (encode-area.yc): root: svg|330|252 vs svg|330|198
+  [differ] encode-area-opacity-0.5 (encode-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=0.5  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
+  [differ] encode-area-opacity-8 (encode-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=8  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
+  [differ] encode-area-opacity--4 (encode-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=-4  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
+  [differ] encode-area-strokeDash-4_2 (encode-area.strokeDash): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;stroke-dasharray=4,2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
+ERROR TypeError: output.areaStart is not a function
+    at area (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/d3-shape@3.2.0/node_modules/d3-shape/src/area.js:37:18)
+    at shape (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scenegraph@5.2.1/node_modules/vega-scenegraph/src/path/shapes.js:66:22)
+    at bound (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scenegraph@5.2.1/node_modules/vega-scenegraph/src/marks/markMultiItemPath.js:19:7)
+    at boundItem (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/Bound.js:79:10)
+    at Bound.transform (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view-transforms@5.2.1/node_modules/vega-view-transforms/src/Bound.js:29:20)
+    at Bound.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:54:22)
+    at Bound.run (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/Transform.js:32:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:70:17)
+    at View.evaluate (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-view@6.1.2/node_modules/vega-view/src/View.js:154:39)
+    at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
+  [node-error] encode-area-interpolate-bundle: output.areaStart is not a function
+  [differ] encode-area-orient-horizontal (encode-area.orient): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.17151.8L175.39109.4L126.6195L77.829127.4Z|fill=steelblue  |  path|M77.829127.4L175.39109.4L126.6195L224.17151.8L5151.8L5195L51109.4L51127.4Z|fill=steelblue
+  [differ] encode-rule-xc-0 (encode-rule.xc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|175.5|161.5|175.5|166.5|stroke=#888;stroke-width=1
+  [differ] encode-rule-xc-0.5 (encode-rule.xc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|175.5|161.5|175.5|166.5|stroke=#888;stroke-width=1
+  [differ] encode-rule-xc-8 (encode-rule.xc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|175.5|161.5|175.5|166.5|stroke=#888;stroke-width=1
+  [differ] encode-rule-xc--4 (encode-rule.xc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|175.5|161.5|175.5|166.5|stroke=#888;stroke-width=1
+  [differ] encode-rule-yc-0 (encode-rule.yc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|126.61|41|126.61|161|stroke=#333333;stroke-width=2
+  [differ] encode-rule-yc-0.5 (encode-rule.yc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|126.61|41.5|126.61|161|stroke=#333333;stroke-width=2
+  [differ] encode-rule-yc-8 (encode-rule.yc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|126.61|49|126.61|161|stroke=#333333;stroke-width=2
+  [differ] encode-rule-yc--4 (encode-rule.yc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|126.61|37|126.61|161|stroke=#333333;stroke-width=2
+  [differ] encode-rule-fill-b35a1f (encode-rule.fill): record[1]: line|126.61|95|126.61|161|fill=#b35a1f;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
+  [differ] encode-rule-fillOpacity-0 (encode-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=0;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
+  [differ] encode-rule-fillOpacity-0.5 (encode-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=0.5;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
+  [differ] encode-rule-fillOpacity-8 (encode-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=8;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
+  [differ] encode-rule-fillOpacity--4 (encode-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=-4;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
+  [differ] encode-path-strokeDash-4_2 (encode-path.strokeDash): record[12]: path|M118.6195L126.6183L134.6195Z|fill=steelblue;stroke-dasharray=4,2  |  path|M118.6195L126.6183L134.6195Z|fill=steelblue
+  [differ] encode-path-angle--4 (encode-path.angle): root: svg|330|207 vs svg|330|198
+  [differ] encode-path-scaleY-8 (encode-path.scaleY): root: svg|330|279 vs svg|330|198
+  [node-error] encode-trail-size--4: negative radius: -2
+[vega-schema] FAILING (673):
+  axis-orient-left
+  axis-orient-right
+  axis-maxExtent-0
+  axis-maxExtent-0.5
+  axis-maxExtent-8
+  axis-maxExtent--4
+  axis-offset-0.5
+  axis-offset-8
+  axis-offset--4
+  axis-position-0.5
+  axis-position-8
+  axis-position--4
+  axis-bandPosition-0
+  axis-bandPosition-8
+  axis-bandPosition--4
+  axis-translate-0
+  axis-translate-8
+  axis-translate--4
+  axis-titleAnchor-start
+  axis-titleAnchor-end
+  axis-titleAngle-0.5
+  axis-titleAngle-8
+  axis-titleAngle--4
+  axis-titleY-0
+  axis-titleY-0.5
+  axis-titleY-8
+  axis-titleY--4
+  axis-titleBaseline-middle
+  axis-titleBaseline-bottom
+  axis-titleBaseline-alphabetic
+  axis-titleBaseline-line-top
+  axis-titleBaseline-line-bottom
+  axis-titleFontSize-8
+  axis-titleFontSize--4
+  axis-titleLimit-0.5
+  axis-titleLimit-8
+  axis-titleOpacity-0
+  axis-titleOpacity-0.5
+  axis-titleOpacity-8
+  axis-titleOpacity--4
+  ... and 644 more
