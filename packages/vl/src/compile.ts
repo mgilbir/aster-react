@@ -812,9 +812,11 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       const bothDiscrete = mark === 'rect' && otherDef != null && isDiscreteType(otherDef.type)
       if ((mark === 'bar' || (mark === 'rect' && !bothDiscrete)) && channel !== measureChannel) sc.padding = 5
       // binned scales: no zero/nice; domain comes from bin start/end
+      // (zero must be explicitly false — a missing key means the engine's
+      // linear default kicks in and extends the domain to 0)
       if (def.bin) {
-        delete sc.zero
-        delete sc.nice
+        sc.zero = false
+        sc.nice = false
         delete sc.padding
       }
     } else if (type === 'band') {
