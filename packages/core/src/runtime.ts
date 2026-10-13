@@ -4412,20 +4412,32 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     //   right:  (w + tick+labelPad+labelWidth+4.5, h/2 + 0.5)  angle 90
     // The +9/-2 are the baseline offsets (fs 11, top/bottom), baked for
     // angle-0 titles; rotated titles render translate+rotate+offset.
+    // Title style properties (vega applies them through the title layout;
+    // the baseline offsets scale with the resolved fontSize).
+    const titleFs = (axis as { titleFontSize?: number }).titleFontSize ?? 11
+    const baseUp = Math.round(0.79 * titleFs)
+    const titleOpacity = (axis as { titleOpacity?: number }).titleOpacity
+    const titleColor = (axis as { titleColor?: string }).titleColor
+    const titleWeight = (axis as { titleFontWeight?: string | number }).titleFontWeight
+    const titleAlign = (axis as { titleAlign?: string }).titleAlign
+    const titleBaseline = (axis as { titleBaseline?: string }).titleBaseline
+    const titleX = (axis as { titleX?: number }).titleX
+    const titleY = (axis as { titleY?: number }).titleY
+
     if (orient === 'bottom') {
       t.x = ctx.width / 2 + 0.5
       if (axis.labelAngle === 270 && maxLabelLen > 0) {
         const labelExtent = Math.floor(0.8 * maxLabelLen * 10)
-        t.y = ctx.height + 0.5 + tickSize + labelPadding + labelExtent + 4 + 11 - 2
+        t.y = ctx.height + 0.5 + tickSize + labelPadding + labelExtent + 4 + titleFs - 2
       } else {
         const ext = 0.5 + (ticksOn ? tickSize + 0.5 : 0) + (labelsOn ? labelPadding + 9.5 : 0)
-        t.y = ctx.height + ext + titlePadding + 9
+        t.y = ctx.height + ext + titlePadding + baseUp
       }
       t.align = 'center'; t.baseline = 'top'
     }
     else if (orient === 'top') {
       t.x = ctx.width / 2 + 0.5
-      t.y = 0.5 - ((ticksOn ? tickSize + 0.5 : 0) + (labelsOn ? labelPadding + 9.5 : 0) + titlePadding) - 2
+      t.y = 0.5 - ((ticksOn ? tickSize + 0.5 : 0) + (labelsOn ? labelPadding + 9.5 : 0) + titlePadding) - (titleFs - baseUp)
       t.align = 'center'; t.baseline = 'bottom'
     }
     else if (orient === 'left') {
@@ -4441,9 +4453,16 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       t.y = ctx.height / 2 + 0.5; t.align = 'center'; t.baseline = 'bottom'
       ;(t as Record<string, unknown>).angle = (axis as { titleAngle?: number }).titleAngle ?? 90
     }
+    // Explicit titleX/titleY override the layout (axis-internal +0.5 origin).
+    if (titleX != null) t.x = titleX + 0.5
+    if (titleY != null) t.y = titleY + 0.5
+    if (titleAlign != null) t.align = titleAlign as SceneItem['align']
+    if (titleBaseline != null) t.baseline = titleBaseline as SceneItem['baseline']
     // Vega emits font-size 11 on axis titles explicitly (bounds + canvas font).
-    ;(t as Record<string, unknown>).fontSize = 11
-    t.fill = '#000'
+    ;(t as Record<string, unknown>).fontSize = titleFs
+    if (titleWeight != null) (t as Record<string, unknown>).fontWeight = titleWeight
+    if (titleOpacity != null) (t as Record<string, unknown>).opacity = titleOpacity
+    t.fill = titleColor ?? '#000'
     items.push(t)
   }
 

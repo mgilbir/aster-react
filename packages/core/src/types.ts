@@ -227,6 +227,15 @@ export interface CompiledAxis {
   tickSize?: number
   title?: string | { signal: string }
   titlePadding?: number
+  titleFontSize?: number
+  titleFontWeight?: string | number
+  titleOpacity?: number
+  titleColor?: string
+  titleAngle?: number
+  titleAlign?: string
+  titleBaseline?: string
+  titleX?: number
+  titleY?: number
   labelAlign?: string
   labelBaseline?: string
   labelFlush?: boolean | number
