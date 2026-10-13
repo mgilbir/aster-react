@@ -29,7 +29,7 @@ import type {
 import { tickFormat } from './scale.js'
 import { compileChart } from './compiler.js'
 import { trellisLayout } from './trellis.js'
-import { boundAxisGroup, Bounds, boundLeaf } from './bounds.js'
+import { boundAxisGroup, boundGroupItem, Bounds, boundLeaf } from './bounds.js'
 
 const DEFAULT_SIZE = 500
 
@@ -358,29 +358,214 @@ interface AxisLegendResult {
   padding: { top: number; right: number; bottom: number; left: number }
 }
 
-function buildAxisAndLegend(ctx: EvalContext): { groups: SceneGroup[] } {
+function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { groups: SceneGroup[] } {
   const groups: SceneGroup[] = []
+  // vega's layoutGroup walks the content children together with the guides:
+  // the anchor bounds scan the content items too.
+  const anchorItems = [...contentItems]
 
   for (const axis of ctx.chart.axes) {
     const group = buildAxis(axis, ctx)
-    if (group) groups.push(group)
-  }
-  // Stack right-oriented legends vertically below each other (matching vega's
-  // legend layout). Each legend's y is offset by the cumulative height of all
-  // preceding right-oriented legends plus a small gap. Full multi-orient
-  // layout (left/top/bottom anchors) needs vega's legendGroupLayout port.
-  let rightLegendY = 0
-  const LEGEND_GAP = 8
-  for (const legend of ctx.chart.legends) {
-    const orient = legend.orient ?? 'right'
-    const group = buildLegend(legend, ctx)
     if (group) {
-      if (orient === 'right' || orient === undefined) {
-        group.y = rightLegendY
-        rightLegendY += (group.height ?? 0) + LEGEND_GAP
-      }
       groups.push(group)
+      anchorItems.push(group)
     }
+  }
+
+  // Vega's legend layout (layoutGroup + legendParams + gridLayout): build each
+  // legend at local (0,0), then position the orient groups with the grid
+  // algorithm — vertical stacking for left/right (one column), a horizontal
+  // row for top/bottom/none-direction (one row), anchored outside the axis
+  // bounds with the 18px offset and an 8px margin between legends.
+  const built = ctx.chart.legends
+    .map((legend) => ({ legend, group: buildLegend(legend, ctx) }))
+    .filter((x): x is { legend: CompiledLegend; group: SceneGroup } => x.group !== null)
+
+  if (built.length) {
+    // legendParams anchors on the axis bounds only: xBounds unions the
+    // vertical (left/right) axes, yBounds the horizontal ones; marks live in
+    // viewBounds and never reach the anchor.
+    let xb = { x1: 0, y1: 0, x2: ctx.width, y2: ctx.height }
+    let yb = { x1: 0, y1: 0, x2: ctx.width, y2: ctx.height }
+    for (const g of anchorItems) {
+      // vega's getRole: every top-level group-typed mark is a scope and
+      // unions into BOTH anchor bounds; axis marks split by orientation.
+      if (g.marktype === 'group' && (g.role === 'scope' || g.role === 'mark')) {
+        // vega's scope bound is the recursive child union (plus the group
+        // rect) — clipped cells still measure their children.
+        const b = boundGroupItem(new Bounds(), g)
+        xb.x1 = Math.min(xb.x1, b.x1)
+        xb.y1 = Math.min(xb.y1, b.y1)
+        xb.x2 = Math.max(xb.x2, b.x2)
+        xb.y2 = Math.max(xb.y2, b.y2)
+        yb.x1 = Math.min(yb.x1, b.x1)
+        yb.y1 = Math.min(yb.y1, b.y1)
+        yb.x2 = Math.max(yb.x2, b.x2)
+        yb.y2 = Math.max(yb.y2, b.y2)
+        continue
+      }
+      if (g.role !== 'axis') continue
+      const meta = (g as unknown as { axis?: { orient: string } }).axis
+      const b = boundAxisGroup(g)
+      const isY = meta ? meta.orient === 'left' || meta.orient === 'right' : false
+      const t = isY ? xb : yb
+      t.x1 = Math.min(t.x1, b.x1)
+      t.y1 = Math.min(t.y1, b.y1)
+      t.x2 = Math.max(t.x2, b.x2)
+      t.y2 = Math.max(t.y2, b.y2)
+    }
+
+    // group legends by orient ('none' skips the grid: vega leaves the item
+    // at its unlayouted position, which is the origin)
+    const byOrient = new Map<string, { legend: CompiledLegend; group: SceneGroup }[]>()
+    for (const x of built) {
+      const orient = x.legend.orient ?? 'right'
+      if (orient === 'none') continue
+      const list = byOrient.get(orient) ?? []
+      list.push(x)
+      byOrient.set(orient, list)
+    }
+
+    for (const [orient, list] of byOrient) {
+      if (process.env.ASTER_DEBUG_LEG) console.error('[leg]', orient, 'xb', JSON.stringify(xb), 'yb', JSON.stringify(yb), 'W', ctx.width, 'H', ctx.height)
+      const n = list.length
+      // columns: vertical direction (left/right) stacks in one column; the
+      // horizontal default lays all legends out in one row.
+      const ncols = orient === 'left' || orient === 'right' ? 1 : n
+      const nrows = Math.max(1, Math.ceil(n / ncols))
+      // flush boxes: legendLayout zeroes x/y and sizes the legend to
+      // ceil(childBounds + 2*padding) — our group.width/height.
+      const boxes = list.map((x) => ({ x1: 0, y1: 0, x2: x.group.width ?? 0, y2: x.group.height ?? 0 }))
+      const xOffset = boxes.map((b) => 8 + (b.x1 < 0 ? Math.ceil(-b.x1) : 0))
+      const yOffset = boxes.map((b) => 8 + (b.y1 < 0 ? Math.ceil(-b.y1) : 0))
+      const xExtent = Array<number>(ncols).fill(0)
+      const yExtent = Array<number>(nrows).fill(0)
+      boxes.forEach((b, i) => {
+        const c = i % ncols, r = ~~(i / ncols)
+        xExtent[c] = Math.max(xExtent[c]!, Math.ceil(b.x2))
+        yExtent[r] = Math.max(yExtent[r]!, Math.ceil(b.y2))
+      })
+      for (let i = 0; i < n; i++) {
+        if (i % ncols === 0) xOffset[i] = 0
+        if (i < ncols) yOffset[i] = 0
+      }
+      // gridAlign 'each': each column/row offset rides on the previous
+      // column/row extent.
+      for (let c = 1; c < ncols; c++) {
+        let off = 0
+        for (let i = c; i < n; i += ncols) off = Math.max(off, xOffset[i]!)
+        for (let i = c; i < n; i += ncols) xOffset[i] = off + xExtent[c - 1]!
+      }
+      for (let r = 1; r < nrows; r++) {
+        let off = 0
+        for (let i = r * ncols, m = Math.min(i + ncols, n); i < m; i++) off = Math.max(off, yOffset[i]!)
+        for (let i = r * ncols, m = Math.min(i + ncols, n); i < m; i++) yOffset[i] = off + yExtent[r - 1]!
+      }
+      const dx: number[] = []
+      let acc = 0
+      for (let i = 0; i < n; i++) {
+        acc = xOffset[i]! + (i % ncols ? acc : 0)
+        dx.push(acc)
+      }
+      const dy: number[] = Array<number>(n).fill(0)
+      for (let c = 0; c < ncols; c++) {
+        let y = 0
+        for (let i = c; i < n; i += ncols) {
+          y += yOffset[i]!
+          dy[i] = y
+        }
+      }
+      // laid-out block bounds (flush boxes translated by dx/dy)
+      let bx1 = Infinity, by1 = Infinity, bx2 = -Infinity, by2 = -Infinity
+      boxes.forEach((b, i) => {
+        bx1 = Math.min(bx1, b.x1 + dx[i]!)
+        by1 = Math.min(by1, b.y1 + dy[i]!)
+        bx2 = Math.max(bx2, b.x2 + dx[i]!)
+        by2 = Math.max(by2, b.y2 + dy[i]!)
+      })
+      const bw = bx2 - bx1
+      const bh = by2 - by1
+
+      // anchor: offset = the legends' own offset (max) else the config
+      // default 18; anchor = start/middle/end (default start).
+      let specOffset: number | undefined = undefined
+      for (const x of list) {
+        const o = x.legend.offset
+        if (typeof o === 'number') specOffset = specOffset === undefined ? o : Math.max(specOffset, o)
+      }
+      const offset = specOffset ?? 18
+      const anchor = (list[0]!.legend as { anchor?: unknown }).anchor
+      const aEnd = anchor === 'end'
+      const aMiddle = anchor === 'middle'
+      const mult = aEnd ? 1 : aMiddle ? 0.5 : 0
+      const W = ctx.width
+      const H = ctx.height
+      let x: number
+      let y: number
+      let colEnd = false
+      let rowEnd = false
+      switch (orient) {
+        case 'left':
+          x = Math.floor(xb.x1) - offset
+          y = mult * H
+          colEnd = true
+          rowEnd = aEnd
+          break
+        case 'right':
+          x = Math.ceil(xb.x2) + offset
+          y = mult * H
+          rowEnd = aEnd
+          break
+        case 'top':
+          x = mult * W
+          y = Math.floor(yb.y1) - offset
+          colEnd = aEnd
+          rowEnd = true
+          break
+        case 'bottom':
+          x = mult * W
+          y = Math.ceil(yb.y2) + offset
+          colEnd = aEnd
+          break
+        case 'top-left':
+          x = offset
+          y = offset
+          break
+        case 'top-right':
+          x = W - offset
+          y = offset
+          colEnd = true
+          break
+        case 'bottom-left':
+          x = offset
+          y = H - offset
+          rowEnd = true
+          break
+        case 'bottom-right':
+          x = W - offset
+          y = H - offset
+          colEnd = true
+          rowEnd = true
+          break
+        default:
+          x = Math.ceil(xb.x2) + offset
+          y = mult * H
+          rowEnd = aEnd
+          break
+      }
+      if (colEnd) x -= bw
+      if (rowEnd) y -= bh
+      void aMiddle
+      x = Math.round(x)
+      y = Math.round(y)
+      list.forEach((x1, i) => {
+        x1.group.x = x + dx[i]!
+        x1.group.y = y + dy[i]!
+      })
+      void aMiddle
+    }
+
+    for (const x of built) groups.push(x.group)
   }
 
   return { groups }
@@ -550,8 +735,9 @@ function buildContent(
     }
   }
 
-  // 2) Build axes + legends and compute padding
-  const { groups: guideGroups } = buildAxisAndLegend(ctx)
+  // 2) Build axes + legends and compute padding (the anchor needs the
+  // content items: vega's scope groups extend the anchor bounds)
+  const { groups: guideGroups } = buildAxisAndLegend(ctx, items)
   for (const g of guideGroups) items.push(g)
 
   // 2b) Top-level title.
@@ -3505,8 +3691,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         ? Array.from({ length: 17 }, (_, i) => ({ offset: i / 16, color: String((colorScale.interpolator as () => (t: number) => unknown)?.()(i / 16)) }))
         : []
       if (stops.length) ctx._defs.push({ id: gradientId, colorStops: stops, direction: 'horizontal' })
-      const groupY = orient === 'top' ? 0 : ctx.height + 24
-      return { marktype: 'group', role: 'legend', x: 0, y: groupY, width: bgW, height: bgH, items }
+      return { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: bgH, items }
     }
 
     // The gradient rect inherits the legend's gradient encode opacity (vega-lite
@@ -3577,7 +3762,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const group: SceneGroup = {
       marktype: 'group',
       role: 'legend',
-      x: ctx.width + 18,
+      x: 0,
       y: 0,
       width: outerWidth,
       height: titleH + L,
@@ -3605,7 +3790,6 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
   if (legend.size != null && legend.fill == null && legend.stroke == null) {
     const sizeScale = ctx.scales.get(legend.size)
     if (!sizeScale) return null
-    if (orient !== 'right' && orient !== undefined) return null
     // Legend tick values (vega: labelValues(scale, 5)); drop the first value
     // when it maps to size zero (vega#717).
     let ticks = ((sizeScale as { ticks?: (n?: number) => unknown[] }).ticks?.(5) ?? []) as unknown[]
@@ -3704,7 +3888,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       }
       items.push({ text: String(e.value), x: labelX, y: sy + 3, align: 'left', fill: '#000', fontSize: 10 })
     }
-    return { marktype: 'group', role: 'legend', x: legendContentWidth(ctx) + 18, y: 0, width: outerWidth, height: bgHeight, items }
+    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: outerWidth, height: bgHeight, items }
   }
 
   // --- Band legend (quantile / quantize / threshold) ---
@@ -3770,7 +3954,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       }
       // Empty label at the bottom
       items.push({ text: '', x: 18, y: bgH - 2, align: 'left', fill: '#000' })
-      return { marktype: 'group', role: 'legend', x: legendContentWidth(ctx) + 18, y: 0, width: outerWidth, height: bgH, items }
+      return { marktype: 'group', role: 'legend', x: 0, y: 0, width: outerWidth, height: bgH, items }
     }
   }
 
@@ -3900,7 +4084,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       }
       items.push({ text: String(value), x: 16, y: off + 9, align: 'left', fill: '#000', fontSize: 10 })
     }
-    return { marktype: 'group', role: 'legend', x: legendContentWidth(ctx) + legendOffset, y: 0, width: outerWidth, height: bgHeight, items }
+    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: outerWidth, height: bgHeight, items }
   }
 
   // --- 'bottom' ---
@@ -3923,7 +4107,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         items.push({ shape: 'circle', radius: 5, x: 6, y: ey + 6, stroke: String(scale(domain[i])), strokeWidth: 1.5, opacity: 1 })
         items.push({ text: String(domain[i]), x: 16, y: ey + 9, align: 'left', fill: '#000', fontSize: 10 })
       }
-      return { marktype: 'group', role: 'legend', x: 0, y: ctx.height + 24, width: entryWidth, height: n * rowStep - 4, items }
+      return { marktype: 'group', role: 'legend', x: 0, y: 0, width: entryWidth, height: n * rowStep - 4, items }
     }
     // Horizontal flow (Vega-Lite emits `direction: horizontal` for bottom
     // legends with a title). Per-entry step = entry content width + 12px gap.
@@ -3941,7 +4125,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       items.push({ shape: 'circle', radius: 5, x: sx + 6, y: 22, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
       items.push({ text: String(value), x: sx + 16, y: 25, align: 'left', fill: '#000', fontSize: 10 })
     }
-    return { marktype: 'group', role: 'legend', x: 0, y: ctx.height + 50, width: bgW, height: 30, items }
+    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: 30, items }
   }
 
   // --- corner orents (top-left / top-right / bottom-left / bottom-right) ---
@@ -3966,9 +4150,6 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const gridW = cols * entryWidth + (cols - 1) * columnPadding
     const gridH = titleRow + rows * boxHeight + (rows - 1) * rowPadding
     const outerWidth = Math.max(gridW, titleWidth)
-    const offset = legend.offset ?? 0
-    const groupX = orient.endsWith('right') ? ctx.width - outerWidth - offset : offset
-    const groupY = orient.startsWith('bottom') ? ctx.height - gridH - offset : offset
     const items: SceneItem[] = []
     items.push({ path: `M0,0h${outerWidth}v${gridH}h-${outerWidth}Z`, x: 0, y: 0 })
     if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
@@ -3988,7 +4169,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       }
       items.push({ text: String(value), x: ex + 16, y: ey + 9, align: 'left', fill: '#000', fontSize: 10 })
     }
-    return { marktype: 'group', role: 'legend', x: groupX, y: groupY, width: outerWidth, height: gridH, items }
+    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: outerWidth, height: gridH, items }
   }
 
   // Unsupported
@@ -4039,6 +4220,9 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       item.strokeWidth = gridStyle.strokeWidth ?? 1
       if (gridStyle.strokeDash != null) item.strokeDash = gridStyle.strokeDash
       if (gridStyle.opacity != null) item.opacity = gridStyle.opacity
+      // Vega's axisLayout bounds union only the ticks and labels marks; the
+      // grid mark never extends the axis bound (nor the view bounds).
+      ;(item as Record<string, unknown>)._grid = true
       items.push(item)
     }
   }

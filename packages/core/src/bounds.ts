@@ -645,7 +645,11 @@ export function boundTypedMark(bounds: Bounds, mark: SceneGroup): Bounds {
       const pathInfo = computeLinePath(mark)
       if (pathInfo) {
         boundsFromPath(bounds, pathInfo.path)
-        boundStroke(bounds, items[0] ?? {}, true)
+        // the renderer resolves vega's default line/area strokeWidth=2 at
+        // draw time; the bound must measure the same geometry
+        const it0 = { ...(items[0] ?? {}) } as Record<string, unknown>
+        if (it0.stroke != null && it0.strokeWidth == null) it0.strokeWidth = 2
+        boundStroke(bounds, it0 as SceneItem, true)
       }
       return bounds
     }
@@ -703,6 +707,7 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
   for (const it of axis.items ?? []) {
     const leaf = it as SceneItem
     if ((leaf as Record<string, unknown>)._domain) continue
+    if ((leaf as Record<string, unknown>)._grid) continue
     const bb = new Bounds()
     // Axis labels render via renderLeaf, which emits the item `y` as the glyph
     // baseline with no offset, so the guide builders bake vega's baseline
