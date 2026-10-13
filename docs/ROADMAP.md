@@ -352,9 +352,18 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   group-typed marks = ScopeRole union into both, grid marks excluded). Orient
   sweep 14/18; the remaining 4 are ±1-3px title/scope-bound epsilons on the
   sweep base (left/bottom orients). Axis title style properties landed
-  (fontSize/weight/opacity/color/angle/align/baseline/X/Y). Remaining
-  clusters: legend entry-level properties (~200), axis label/tick properties
-  + titleAnchor/Angle/Y (~150), trellis layout (33), config-range (11).
+  (fontSize/weight/opacity/color/angle/align/baseline/X/Y). Legend entry
+  surface landed: symbolType (all vega shapes incl. arrow/wedge/triangle —
+  triangle-left/right span 2h, not 2r), label/title color/opacity/font
+  attributes, labelOffset/rowPadding, tickCount interval-string failure
+  emulation (dataflow abort → axes-only scene at raw coords). Remaining
+  clusters: the entry-height formula (sizeD/2 + max(symHalf, labelFs/2)
+  reproduces fill 11, stroke 14, stroke-type 11 — but the stroke legend's
+  grid step is 16 oracle vs our calibrated 18 with titles; needs a
+  legendEntryLayout port), labelBaseline/titlePadding/titleFontSize dims,
+  symbolSize/symbolStrokeWidth dims, labelLimit/columns/labelOverlap.
+  Then axis label/tick properties + titleAnchor/Angle/Y (~150), trellis
+  layout (33), config-range (11).
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
 
