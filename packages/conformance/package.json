@@ -10,7 +10,11 @@
     "conformance:diff": "tsx src/diff.ts",
     "probe": "tsx src/probe.ts",
     "vectors": "node scripts/gen-vectors.mjs",
-    "conformance-vl": "tsx src/run-vl.ts"
+    "conformance-vl": "tsx src/run-vl.ts",
+    "sweep-vega": "tsx src/run-sweep.ts vega-schema",
+    "sweep-vl": "tsx src/run-sweep.ts vega-lite-schema",
+    "sweep-values": "tsx src/run-sweep.ts values",
+    "sweep-signals": "tsx src/run-sweep.ts signals"
   },
   "dependencies": {
     "@aster/core": "workspace:*",

@@ -290,7 +290,18 @@ function buildProjections(ctx: EvalContext): void {
     }
     return undefined
   }
+  const evalAny = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map((x) => (x != null && typeof x === 'object' && 'signal' in (x as Record<string, unknown>) ? evalAny(x) : x))
+    if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string') return v
+    if (v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)) {
+      try { return ctx.runtime.expr(String((v as { signal: string }).signal))({}, ctx.signalParams) } catch { return undefined }
+    }
+    return v
+  }
   for (const p of ctx.chart.projections) {
+    const params: Record<string, unknown> | undefined = p.params
+      ? Object.fromEntries(Object.entries(p.params).map(([k, v]) => [k, evalAny(v)]))
+      : undefined
     ctx.projections.set(p.name, build({
       name: p.name,
       type: p.type,
@@ -302,6 +313,7 @@ function buildProjections(ctx: EvalContext): void {
       clipAngle: evalNum(p.clipAngle),
       reflectX: p.reflectX,
       reflectY: p.reflectY,
+      params,
     }, ctx.width, ctx.height))
   }
 }

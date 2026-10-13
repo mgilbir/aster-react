@@ -62,6 +62,8 @@ export interface CompiledProjection {
   clipAngle?: number | { signal: string }
   reflectX?: boolean
   reflectY?: boolean
+  /** Projection-specific parameters (parallels, pointRadius, clipExtent, ...) */
+  params?: Record<string, unknown>
 }
 
 export interface CompiledChart {

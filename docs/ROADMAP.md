@@ -331,9 +331,14 @@ way Go and Kotlin do), then by rendering both compiled specs.
 - **R8.2** Nested (group-scoped) scale comparison, keyed by scope path + facet key.
 - **R8.3** Paint order, dash arrays, symbol/path drawn extents, and line/area series
   collapse to an outline point list.
-- **R8.4** Schema sweeps: one case per (property, value) from `vega-schema` and
-  `vega-lite-schema`, with committed expectation files and case-count floors (Go:
-  7,549 + 27,513).
+- **R8.4 — IN PROGRESS.** Schema sweeps ported from the Go aster project:
+  `pnpm sweep-vega` generates one chart per (property, value) pair vega's own
+  schema declares (7,549 cases — matching the Go floor) and diffs each against
+  upstream vega. **6,019/7,549 pass (80%)**: all encode/config mark families,
+  arcs (a full d3-arc port: padAngle, cornerRadius, radius swaps, degenerate
+  radii), trails, scales, titles. Remaining clusters: projections (the d3-geo
+  clip/rotate subsystem, ~950), legend orients (~240), axis tick/label
+  properties (~200), trellis layout (33), config-range (11).
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
 

@@ -120,6 +120,18 @@ function compileProjection(pr: Record<string, unknown>): CompiledProjection {
   if (pr.clipAngle != null) out.clipAngle = num(pr.clipAngle)
   if (pr.reflectX != null) out.reflectX = !!pr.reflectX
   if (pr.reflectY != null) out.reflectY = !!pr.reflectY
+  // Projection-specific parameters pass through (parallels, pointRadius,
+  // clipExtent, extent, fit, and the exotic projection params). Signals are
+  // kept in signal form so the runtime resolves them per evaluation.
+  const known = new Set(['type', 'name', 'scale', 'translate', 'center', 'rotate', 'precision', 'clipAngle', 'reflectX', 'reflectY'])
+  const params: Record<string, unknown> = {}
+  let hasParams = false
+  for (const [k, v] of Object.entries(pr)) {
+    if (known.has(k) || v == null) continue
+    params[k] = num(v) ?? tup(v) ?? (typeof v === 'boolean' ? v : Array.isArray(v) ? v.map((x) => (typeof x === 'number' ? x : x)) : v)
+    hasParams = true
+  }
+  if (hasParams) out.params = params
   return out
 }
 

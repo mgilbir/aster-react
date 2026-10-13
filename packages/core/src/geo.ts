@@ -60,6 +60,7 @@ export interface ResolvedProjection {
   clipAngle?: number
   reflectX?: boolean
   reflectY?: boolean
+  params?: Record<string, unknown>
 }
 
 /**
@@ -80,6 +81,24 @@ export function buildProjection(spec: ResolvedProjection, _width: number, _heigh
   if (spec.clipAngle != null) p.clipAngle(spec.clipAngle)
   if (spec.reflectX != null && 'reflectX' in p) (p as unknown as { reflectX(b: boolean): unknown }).reflectX(spec.reflectX)
   if (spec.reflectY != null && 'reflectY' in p) (p as unknown as { reflectY(b: boolean): unknown }).reflectY(spec.reflectY)
+  // Projection-specific parameters (parallels, pointRadius, clipExtent, ...):
+  // applied when the projection factory supports them, mirroring vega's
+  // projection param application.
+  const extras = spec.params
+  if (extras) {
+    for (const [k, v] of Object.entries(extras)) {
+      if (k === 'type' || k === 'name' || v == null) continue
+      const fn = (p as unknown as Record<string, unknown>)[k]
+      if (typeof fn === 'function') {
+        try {
+          ;(p as unknown as Record<string, (x?: unknown) => unknown>)[k]!(v)
+        } catch {
+          /* projection rejects the parameter */
+        }
+      }
+      void fn
+    }
+  }
   return p
 }
 
