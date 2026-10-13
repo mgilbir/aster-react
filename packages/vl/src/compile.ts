@@ -1470,8 +1470,12 @@ function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null): un
 
 function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number): Record<string, unknown>[] {
   const legends: Record<string, unknown>[] = []
+  // a field's legend is suppressed when ANY channel bound to the same field
+  // disables it (vega-lite merges per-field legends)
+  const legendSuppressed = (def: FieldDef): boolean =>
+    fields.some((f) => f.field === def.field && f.legend === null)
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
-  if (sizeDef && sizeDef.legend !== null) {
+  if (sizeDef && sizeDef.legend !== null && !legendSuppressed(sizeDef)) {
     legends.push({
       size: 'size',
       symbolType: 'circle',
@@ -1480,7 +1484,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     })
   }
   const opacityLegendDef = fields.find((f) => f.channel === 'opacity' && f.field)
-  if (opacityLegendDef && opacityLegendDef.legend !== null) {
+  if (opacityLegendDef && opacityLegendDef.legend !== null && !legendSuppressed(opacityLegendDef)) {
     legends.push({
       opacity: 'opacity',
       symbolType: 'circle',
@@ -1489,7 +1493,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     })
   }
   const shapeDefL = fields.find((f) => f.channel === 'shape' && f.field)
-  if (shapeDefL && shapeDefL.legend !== null) {
+  if (shapeDefL && shapeDefL.legend !== null && !legendSuppressed(shapeDefL)) {
     legends.push({
       shape: 'shape',
       symbolType: 'circle',
@@ -1498,7 +1502,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     })
   }
   const colorDef = fields.find((f) => f.channel === 'color' && f.field)
-  if (colorDef && colorDef.legend !== null) {
+  if (colorDef && colorDef.legend !== null && !legendSuppressed(colorDef)) {
     const userLegend = colorDef.legend ?? {}
     const lg: Record<string, unknown> = { title: legendTitle(colorDef, userLegend) }
     const filled = mark === 'circle' || mark === 'square' || (mark === 'point' && markFilled === true)
@@ -2045,6 +2049,15 @@ export function compileUnit(spec: VLSpec): VLSpec {
       ]
     : [{ ...(isObject(spec.data) ? spec.data : {}), name: 'source_0' }]
   const builtMarks = buildMarks(spec, fields, mark, orient, data.dataName, markSize) as Record<string, unknown>[] & { overlayData?: Record<string, unknown> }
+  // VL params with a static value become vega signals (expression refs like
+  // `datum.y + shift` resolve against them). Interactive binds are ignored —
+  // the value acts as the initial (and only) state.
+  if (Array.isArray(spec.params) && spec.params.length) {
+    const signals = (spec.params as Record<string, unknown>[])
+      .filter((p) => p.name && p.value !== undefined)
+      .map((p) => ({ name: p.name, value: p.value }))
+    if (signals.length) out.signals = signals
+  }
   out.marks = builtMarks
   if (builtMarks.overlayData) {
     ;(out.data as Record<string, unknown>[]).push(builtMarks.overlayData)
