@@ -343,10 +343,18 @@ way Go and Kotlin do), then by rendering both compiled specs.
   per-projection geoPath (pointRadius), rotate gamma dropped in tuple
   coercion, and empty-path/null-position bounds semantics. One residual case
   (azimuthalequalarea-clipAngle-0) differs by a 1.7e-6 px fp epsilon in d3's
-  clip-intersection arithmetic. Remaining clusters: legend orients (the
-  legendGroupLayout port, ~240 — the first cut regressed the corpus and was
-  reverted), axis tick/label properties (~200), trellis layout (33),
-  config-range (11).
+  clip-intersection arithmetic.
+
+Legend orients: the legendParams + gridLayout port is in — vertical-entry
+  symbol geometry for every orient, the grid anchor (floor/ceil axis-bound
+  anchors, 18px offset, 8px margins, corner orients, start/middle/end), and
+  the anchor-bound rules (xBounds = vertical axes, yBounds = horizontal,
+  group-typed marks = ScopeRole union into both, grid marks excluded). Orient
+  sweep 14/18; the remaining 4 are ±1-3px title/scope-bound epsilons on the sweep
+  base (left/bottom orients). Remaining legend clusters: entry-level
+  properties (columns, padding, tickCount, cornerRadius, title align/anchor,
+  fillColor, direction) ~200 cases. Then axis tick/label properties (~200),
+  trellis layout (33), config-range (11).
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
 
