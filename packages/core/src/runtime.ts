@@ -380,6 +380,10 @@ function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { gro
   const built = ctx.chart.legends
     .map((legend) => ({ legend, group: buildLegend(legend, ctx) }))
     .filter((x): x is { legend: CompiledLegend; group: SceneGroup } => x.group !== null)
+    // A legend whose entries failed to build (an invalid tickCount interval
+    // string) degenerates to a zero-size group with no items: vega still
+    // creates it, but it renders nothing and takes no layout space.
+    .filter((x) => !(x.group.width === 0 && x.group.height === 0 && (x.group.items?.length ?? 0) === 0))
 
   if (built.length) {
     // legendParams anchors on the axis bounds only: xBounds unions the
@@ -702,6 +706,39 @@ function buildContent(
   ch: number,
 ): { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; isFacetSpec: boolean } {
   const { ctx, width, height } = prepareChartCtx(chart, { ...input, width: cw, height: ch })
+
+  // A legend tickCount interval string on a non-time scale makes vega's
+  // LegendEntries transform throw; the dataflow run aborts before any guide
+  // layout or mark encoding, so the view renders a bare empty frame.
+  const brokenLegend = ctx.chart.legends.some((l) => {
+    const tc = (l as { tickCount?: unknown }).tickCount
+    if (typeof tc !== 'string') return false
+    const st = l.fill ?? l.stroke ?? l.size ?? l.shape
+    const t = st ? ctx.scaleTypes.get(st) : undefined
+    return t !== 'time' && t !== 'utc'
+  })
+  if (brokenLegend) {
+    // the axes encoded before the failure; the marks/legend/title (downstream
+    // in the dataflow) never did, and no guide layout ran (base padding only,
+    // axis overflow unmeasured)
+    const axisGroups: SceneGroup[] = []
+    for (const axis of ctx.chart.axes) {
+      const g = buildAxis(axis, ctx)
+      if (g) {
+        // no axisLayout ran, so the items keep their raw internal coords:
+        // cancel the 0.5 render delta our builder bakes in
+        axisGroups.push({ marktype: 'group', role: 'axis', x: -0.5, y: -0.5, items: [g] })
+      }
+    }
+    return {
+      items: axisGroups,
+      padding: { ...chart.padding },
+      ctx,
+      width,
+      height,
+      isFacetSpec: false,
+    }
+  }
 
   // Partial re-evaluation: when the caller names the datasets whose values
   // changed, marks drawing from untouched datasets reuse the previous scene's
@@ -3631,6 +3668,13 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
   const scale = ctx.scales.get(scaleName)
   if (!scale) return null
   const scaleType = ctx.scaleTypes.get(scaleName) ?? ''
+  // A tickCount interval string ('day', 'month', ...) is only legal on time
+  // scales: vega's LegendEntries transform throws, the dataflow swallows the
+  // error and the legend renders with no entries (an empty degenerate group).
+  const tickCountRaw = (legend as { tickCount?: unknown }).tickCount
+  if (typeof tickCountRaw === 'string' && scaleType !== 'time' && scaleType !== 'utc') {
+    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: 0, height: 0, items: [] }
+  }
   // Domain values
   const domain = scale.domain() as unknown[]
   const d0 = domain[0]

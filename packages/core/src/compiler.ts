@@ -288,7 +288,7 @@ function compileAxis(a: Record<string, unknown>): CompiledAxis {
 
 function compileLegend(l: Record<string, unknown>): CompiledLegend {
   const out: CompiledLegend = {}
-  for (const key of ['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeDash', 'orient', 'direction', 'columns', 'title', 'offset', 'padding', 'gradientLength', 'gradientThickness', 'symbolSize', 'symbolType', 'zindex', 'type'] as const) {
+  for (const key of ['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeDash', 'orient', 'direction', 'columns', 'title', 'offset', 'padding', 'gradientLength', 'gradientThickness', 'symbolSize', 'symbolType', 'zindex', 'type', 'tickCount', 'symbolStrokeWidth', 'symbolOffset', 'labelAlign', 'labelBaseline', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelFontWeight', 'labelFontStyle', 'labelOffset', 'labelLimit', 'rowPadding', 'columnPadding', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleBaseline', 'titleAlign', 'titleAnchor', 'titleAngle', 'titleLimit', 'gridAlign', 'clipHeight', 'cornerRadius', 'fillColor', 'strokeColor', 'labelOverlap', 'symbolLimit'] as const) {
     if (l[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = l[key]
   }
   if (l.encode !== undefined) out.encode = l.encode as CompiledLegend['encode']

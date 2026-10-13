@@ -267,6 +267,37 @@ export interface CompiledLegend {
   gradientThickness?: number
   symbolSize?: number
   symbolType?: string
+  tickCount?: number | string | { signal: string }
+  symbolStrokeWidth?: number
+  symbolOffset?: number
+  labelAlign?: string
+  labelBaseline?: string
+  labelColor?: string
+  labelOpacity?: number
+  labelFontSize?: number
+  labelFontWeight?: string | number
+  labelFontStyle?: string
+  labelOffset?: number
+  labelLimit?: number
+  rowPadding?: number
+  columnPadding?: number
+  titlePadding?: number
+  titleFontSize?: number
+  titleFontWeight?: string | number
+  titleOpacity?: number
+  titleColor?: string
+  titleBaseline?: string
+  titleAlign?: string
+  titleAnchor?: string
+  titleAngle?: number
+  titleLimit?: number
+  gridAlign?: string
+  clipHeight?: number
+  cornerRadius?: number
+  fillColor?: string
+  strokeColor?: string
+  labelOverlap?: boolean | string
+  symbolLimit?: number
   encode?: Record<string, Record<string, EncodeValue>>
   zindex?: number
   type?: 'gradient' | 'symbol'
