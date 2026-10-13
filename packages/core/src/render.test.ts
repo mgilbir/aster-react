@@ -29,7 +29,7 @@ function makeRectGroup(x: number, y: number, w: number, h: number): SceneGroup {
     marktype: 'rect',
     name: 'rects',
     role: 'mark',
-    items: [{ x, y, width: w, height: h } as SceneItem],
+    items: [{ x, y, width: w, height: h, fill: '#4c78a8' } as SceneItem],
   }
 }
 

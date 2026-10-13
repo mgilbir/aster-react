@@ -2013,6 +2013,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     throw new Error(`[aster/vl] mark type not supported yet: ${mark}`)
   }
 
+  // interval selections: the static brush marks (empty initial extent).
+  // The interactive signal apparatus is interactive-only; the static render
+  // shows the zero-size brush background clipped to the plot.
+  const intervalParams = Array.isArray(spec.params)
+    ? (spec.params as Record<string, unknown>[]).filter((p) => isObject(p.select) && (p.select as Record<string, unknown>).type === 'interval')
+    : []
+  void intervalParams
+
   // conditional encodings and value-only channels (both skipped by
   // parseChannel — e.g. color: {condition: {...}, value: 'steelblue'} or
   // fill: {value: 'steelblue'}) materialise onto the built update here, ahead
@@ -2247,6 +2255,36 @@ export function compileUnit(spec: VLSpec): VLSpec {
     if (signals.length) out.signals = signals
   }
   out.marks = builtMarks
+  // interval-selection brush marks (vega-lite emits them around the unit's
+  // marks: the shaded background first, the interactive brush frame after)
+  if (Array.isArray(spec.params)) {
+    const brushMarks: Record<string, unknown>[] = []
+    for (const p of spec.params as Record<string, unknown>[]) {
+      if (!isObject(p.select) || (p.select as Record<string, unknown>).type !== 'interval') continue
+      const name = p.name as string
+      const zero = { value: 0 }
+      brushMarks.push(
+        {
+          name: `${name}_brush_bg`,
+          type: 'rect',
+          style: [`${name}_brush_bg`],
+          clip: true,
+          encode: { update: { x: zero, y: zero, x2: zero, y2: zero, fill: { value: '#333' }, fillOpacity: { value: 0.125 } } },
+        },
+        {
+          name: `${name}_brush`,
+          type: 'rect',
+          style: [`${name}_brush`],
+          clip: true,
+          encode: { update: { x: zero, y: zero, x2: zero, y2: zero, stroke: { value: null } } },
+        },
+      )
+    }
+    if (brushMarks.length && builtMarks.length) {
+      // order: brush bg, unit marks, brush frame
+      out.marks = [brushMarks[0]!, ...builtMarks, ...brushMarks.slice(1)]
+    }
+  }
   if (builtMarks.overlayData) {
     ;(out.data as Record<string, unknown>[]).push(builtMarks.overlayData)
   }

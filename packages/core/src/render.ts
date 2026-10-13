@@ -605,6 +605,9 @@ function renderCircles(group: SceneGroup): string {
 function renderRects(group: SceneGroup): string {
   let out = `<g class="mark-rect role-mark" role="graphics-symbol" aria-roledescription="rect mark container">`
   for (const it of itemsOf(group).slice().reverse()) {
+    // vega paints a rect only when it has a fill or stroke; unpainted items
+    // (e.g. the selection brush frame with a null stroke) are skipped
+    if (it.fill == null && it.stroke == null) continue
     const d = rectItemPath(it)
     if (d == null) continue
     out += `<path${dataDatumAttr(it)} d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`

@@ -220,6 +220,8 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
         .slice()
         .reverse()
         .map((it) => {
+          // vega paints a rect only when it has a fill or stroke
+          if (it.fill == null && it.stroke == null) return null
           const d = rectItemPath(it)
           if (d == null) return null
           const attrs: Array<[string, string]> = [

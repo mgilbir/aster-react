@@ -277,7 +277,7 @@ workstream for one focused engineer.
 **Status: in progress.** `@aster/vl` (zero-dependency workspace package) compiles
 Vega-Lite -> Vega, verified by rendering parity against the pinned
 `vega-lite` oracle through `pnpm conformance-vl` (per-spec multiset diffs of
-canonicalized SVG records). **120/125 corpus entries pass** with exact rendered output. Covered: unit specs for bar/point/circle/square/line/area/tick/text,
+canonicalized SVG records). **121/125 corpus entries pass** with exact rendered output. Covered: unit specs for bar/point/circle/square/line/area/tick/text,
 positional/color/size/opacity/shape channels across all four data types,
 linear/band/point scale defaults, stack pipelines (single- and multi-series,
 impute vs filter variants), aggregate/count, binning with the bins-signal
@@ -294,8 +294,9 @@ domains (incl. dual-axis independent y resolution), facet and concat
 layouts, heatmaps, the boxplot composite, axis labelAngle, size-driven
 line widths, static params, and per-field legend suppression, and log-axis label filtering (vega's
 log axes carry no explicit tickCount — the axis default of 10 drives the
-3/30/300 label filter). Remaining:
-interactive interval selections (R10), repeat grids (vega-lite 6 renders
+3/30/300 label filter). Interval selections render their static brush marks (clipped zero-size
+shading; the engine skips unpainted rect items, as vega does). Remaining:
+repeat grids (vega-lite 6 renders
 the corpus repeat specs as degenerate single units), gradient size-legend
 geometry, log-scale label thinning (text metrics), and a no-data corner
 case.

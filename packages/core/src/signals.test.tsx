@@ -76,7 +76,7 @@ describe('event-driven signals', () => {
       width: 100, height: 100,
       signals: [{ name: 'hit', value: '', on: [{ events: 'click', update: 'isValid(datum) ? datum.tag + "" : "none"' }] }],
       data: [{ name: 't', values: [{ tag: 'A' }] }],
-      marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { value: 50 }, height: { value: 50 } } } }],
+      marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { value: 50 }, height: { value: 50 }, fill: { value: '#4c78a8' } } } }],
     } as unknown as VgSpec
     const host = document.createElement('div')
     document.body.appendChild(host)
