@@ -219,6 +219,8 @@ function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
         const d = domain as { data?: string; field?: string; fields?: unknown }
         if (typeof d.data === 'string' && typeof d.field === 'string') {
           entries.push({ data: d.data, field: d.field })
+        } else if (typeof d.data === 'string' && Array.isArray(d.fields)) {
+          for (const f of d.fields) if (typeof f === 'string') entries.push({ data: d.data, field: f })
         } else if (Array.isArray(d.fields)) {
           for (const f of d.fields) collect(f)
         }
@@ -1294,6 +1296,28 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     throw new Error(`[aster/vl] mark type not supported yet: ${mark}`)
   }
 
+  // conditional encodings and value-only channels (both skipped by
+  // parseChannel — e.g. color: {condition: {...}, value: 'steelblue'} or
+  // fill: {value: 'steelblue'}) materialise onto the built update here, ahead
+  // of the pathgroup/overlay expansions so copies pick them up
+  const markFilled = isObject(spec.mark) && spec.mark.filled === true
+  const styleChannels = new Set(['color', 'fill', 'fillOpacity', 'stroke', 'strokeWidth', 'opacity', 'strokeDash', 'size', 'shape'])
+  for (const [channel, def] of Object.entries(spec.encoding as Record<string, Record<string, unknown>> ?? {})) {
+    if (!def || typeof def !== 'object' || def.field != null || def.aggregate === 'count') continue
+    if (!styleChannels.has(channel)) continue
+    if (def.condition && typeof def.condition === 'object') continue
+    if (def.value === undefined) continue
+    const ch = channel === 'color' ? (mark === 'point' && !markFilled ? 'stroke' : 'fill') : channel
+    update[ch] = { value: def.value }
+  }
+  const conditionalChannels: { channel: string; cond: Record<string, unknown>; fallback: unknown }[] = []
+  for (const [channel, def] of Object.entries(spec.encoding as Record<string, Record<string, unknown>> ?? {})) {
+    if (def && typeof def === 'object' && def.condition && typeof def.condition === 'object') {
+      conditionalChannels.push({ channel, cond: def.condition as Record<string, unknown>, fallback: def.value })
+    }
+  }
+  applyCondition(update, conditionalChannels, mark, markFilled)
+
   const markSpec: Record<string, unknown> = {
     name: 'marks',
     type: mark === 'bar' || mark === 'tick' ? 'rect' : mark === 'point' || mark === 'circle' || mark === 'square' ? 'symbol' : mark,
@@ -1407,16 +1431,6 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
     out.overlayFilled = ptFilled ?? ptType === 'circle'
   }
-  // conditional encodings (including value-only channels, which parseChannel
-  // skips — e.g. color: {condition: {...}, value: 'steelblue'})
-  const conditionalChannels: { channel: string; cond: Record<string, unknown>; fallback: unknown }[] = []
-  for (const [channel, def] of Object.entries(spec.encoding as Record<string, Record<string, unknown>> ?? {})) {
-    if (def && typeof def === 'object' && def.condition && typeof def.condition === 'object') {
-      conditionalChannels.push({ channel, cond: def.condition as Record<string, unknown>, fallback: def.value })
-    }
-  }
-  applyCondition(update, conditionalChannels, mark, isObject(spec.mark) && spec.mark.filled === true)
-
   // user overrides: encoding.update-style custom encodings are out of scope here
   void spec
   return out

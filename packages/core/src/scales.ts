@@ -259,6 +259,26 @@ function applyPixelPadding(s: Scale, pad: number) {
   s.domain(domain)
 }
 
+/** Continuous-domain reduction shared by the union forms. Returns null when
+ * the values are not reducible to a continuous domain (caller falls through). */
+function mergeUnionDomain(type: string, all: unknown[]): [number, number] | [Date, Date] | null {
+  if (type === 'time' || type === 'utc') {
+    const dates = all.filter((v) => v instanceof Date && Number.isFinite((v as Date).getTime())) as Date[]
+    if (dates.length) {
+      const ms = dates.map((d) => d.getTime())
+      return [new Date(Math.min(...ms)), new Date(Math.max(...ms))]
+    }
+    const nums = all.filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
+    if (nums.length) return [Math.min(...nums), Math.max(...nums)]
+    return null
+  }
+  const coercible = all.filter(
+    (v) => (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(+v)),
+  ) as number[]
+  if (!coercible.length) return null
+  return [Math.min(...coercible), Math.max(...coercible)]
+}
+
 function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): unknown[] {
   if (Array.isArray(domain)) return domain.slice()
   if (domain && typeof domain === 'object' && !Array.isArray(domain)) {
@@ -289,6 +309,21 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
         }
       }
       throw new Error(`[aster] unresolved signal in scale domain: ${domain.signal}`)
+    }
+    // union domain: {fields: [{data, field}, ...]} — vega's multi-dataset
+    // union form used by layered charts
+    if ('fields' in domain && Array.isArray((domain as { fields?: unknown }).fields) &&
+        (domain as { fields?: unknown[] }).fields!.some((f) => f != null && typeof f === 'object')) {
+      const all: unknown[] = []
+      for (const f of (domain as { fields: unknown[] }).fields) {
+        if (f == null || typeof f !== 'object') continue
+        const e = f as { data?: string; field?: string }
+        if (typeof e.data === 'string' && typeof e.field === 'string') {
+          for (const val of ctx.dataField(e.data, e.field)) all.push(val)
+        }
+      }
+      const merged = mergeUnionDomain(type, all)
+      if (merged) return merged
     }
     if ('data' in domain) {
       const { data, field, fields } = domain as { data: string; field?: string; fields?: string[] }
