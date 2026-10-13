@@ -200,6 +200,23 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     binSignals.set(f.field, { startField, endField, binsSignal })
   }
 
+  // arc marks: theta stacking (pie layout). vega-lite stacks the theta
+  // measure over the whole data (no groupby), sorted by the series field,
+  // then filters invalid theta values.
+  const thetaDef = fields.find((f) => f.channel === 'theta' && f.field)
+  if (mark === 'arc' && thetaDef) {
+    const colorF = fields.find((f) => f.channel === 'color' && f.field)
+    transforms.push({
+      type: 'stack',
+      groupby: [],
+      field: thetaDef.field,
+      sort: colorF ? { field: [colorF.field], order: ['ascending'] } : { field: [], order: [] },
+      as: [`${thetaDef.field}_start`, `${thetaDef.field}_end`],
+      offset: 'zero',
+    })
+    transforms.push({ type: 'filter', expr: `isValid(datum[${JSON.stringify(thetaDef.field)}]) && isFinite(+datum[${JSON.stringify(thetaDef.field)}])` })
+  }
+
   // channel roles shared by the pipeline stages below
   const yDef = fields.find((f) => f.channel === 'y')
   const xDef = fields.find((f) => f.channel === 'x')
@@ -621,6 +638,18 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
     })
   }
 
+  // theta scale (arc marks): the stacked start/end fields span [0, 2pi]
+  const thetaDef = fields.find((f) => f.channel === 'theta' && f.field)
+  if (mark === 'arc' && thetaDef) {
+    scales.push({
+      name: 'theta',
+      type: 'linear',
+      domain: { data: dataName, fields: [`${thetaDef.field}_start`, `${thetaDef.field}_end`] },
+      range: [0, 6.283185307179586],
+      zero: true,
+    })
+  }
+
   // color scale
   const colorDef = fields.find((f) => f.channel === 'color' && f.field)
   if (colorDef) {
@@ -1023,7 +1052,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       if (stackedX) {
         update.x = { scale: 'x', field: `${xDef.field}_end` }
         update.x2 = { scale: 'x', field: `${xDef.field}_start` }
-      } else if (yDef == null || !stacked) {
+      } else if (yDef == null || !isStacked(yDef, mark, orient)) {
         // vertical baselines anchor through the scale as well
         update.x2 = { scale: 'x', value: 0 }
       }
@@ -1075,6 +1104,22 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
     update.align = { value: 'center' }
     update.baseline = { value: 'middle' }
+  } else if (mark === 'arc') {
+    const thetaDefA = fields.find((f) => f.channel === 'theta' && f.field)
+    const thetaF = thetaDefA!.field
+    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? C.blue }
+    if (markOpacity != null) update.opacity = { value: markOpacity }
+    update.x = { signal: 'width', mult: 0.5 }
+    update.y = { signal: 'height', mult: 0.5 }
+    const arcMark = spec.mark
+    const mOuter = isObject(arcMark) ? (arcMark.outerRadius as number | undefined) : undefined
+    const mInner = isObject(arcMark) ? (arcMark.innerRadius as number | undefined) : undefined
+    update.outerRadius = mOuter != null ? { value: mOuter } : { signal: 'min(width,height)/2' }
+    update.innerRadius = { value: mInner ?? 0 }
+    // the outer arc closes at the series' stacked END angle; the sweep runs
+    // from value_end (startAngle) to value_start (endAngle)
+    update.startAngle = { scale: 'theta', field: `${thetaF}_end` }
+    update.endAngle = { scale: 'theta', field: `${thetaF}_start` }
   } else {
     throw new Error(`[aster/vl] mark type not supported yet: ${mark}`)
   }
@@ -1278,7 +1323,9 @@ export function compileUnit(spec: VLSpec): VLSpec {
   out.padding = spec.padding ?? 5
   out.width = width
   out.height = height
-  out.style = 'cell'
+  // theta-only views (pie/donut) get vega-lite's unstyled 'view' frame — no
+  // cell stroke, no half-pixel inset
+  out.style = mark === 'arc' ? 'view' : 'cell'
   out.data = data.transforms.length
     ? [
         { ...(isObject(spec.data) ? spec.data : {}), name: 'source_0' },
