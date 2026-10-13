@@ -799,7 +799,8 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         name: 'size',
         type: 'linear',
         domain: sizeDef.scale?.domain ?? { data: dataName, field: aggFieldName(sizeDef) },
-        range: sizeDef.scale?.range ?? [4, 361],
+        // line marks map size onto stroke width [1,4]; symbol marks onto area
+        range: sizeDef.scale?.range ?? (mark === 'line' ? [1, 4] : [4, 361]),
         zero: true,
       }
       if (sizeDef.scale) {
@@ -1243,6 +1244,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const markStrokeWidth = isObject(spec.mark) ? (spec.mark.strokeWidth as number | undefined) : undefined
     update.stroke = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markStroke ?? markColor ?? C.blue }
     if (markStrokeWidth) update.strokeWidth = { value: markStrokeWidth }
+    // the size channel maps to line width
+    if (sizeDef) update.strokeWidth = { scale: 'size', field: aggFieldName(sizeDef) }
     const markInterpolate = isObject(spec.mark) ? (spec.mark.interpolate as string | undefined) : undefined
     if (markInterpolate) update.interpolate = { value: markInterpolate }
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
@@ -1422,7 +1425,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
 
   // line marks split by a series channel (color or detail): one line per group
   const pointOverlay = isObject(spec.mark) ? spec.mark.point : undefined
-  if (mark === 'line' && (colorDefSeries || detailDefSeries) && !pointOverlay) {
+  if (mark === 'line' && (colorDefSeries || detailDefSeries || (mark === 'line' && sizeDef))) {
     markSpec.name = 'layer_0_marks'
     const innerUpdate = { ...update }
     if (colorDefSeries) innerUpdate.stroke = { scale: 'color', field: aggFieldName(colorDefSeries) }
@@ -1433,7 +1436,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         facet: {
           name: 'faceted_path_main',
           data: dataName,
-          groupby: [colorDefSeries, detailDefSeries].filter(Boolean).map((f) => aggFieldName(f as FieldDef)),
+          groupby: [colorDefSeries, detailDefSeries, mark === 'line' ? sizeDef : undefined]
+            .filter(Boolean)
+            .map((f) => aggFieldName(f as FieldDef)),
         },
       },
       encode: {
@@ -1465,6 +1470,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       y: yDef ? { scale: 'y', field: aggFieldName(yDef) } : undefined,
       shape: { value: ptType },
     }
+    if (sizeDef) overlayUpdate.size = { scale: 'size', field: aggFieldName(sizeDef) }
     delete overlayUpdate.x2
     const overlayName = 'layer_1_marks'
     markSpec.name = 'layer_0_marks'
@@ -1573,6 +1579,21 @@ export function compileUnit(spec: VLSpec): VLSpec {
     ;(out.data as Record<string, unknown>[]).push(builtMarks.overlayData)
   }
   out.scales = buildScales(spec, fields, mark, orient, data.dataName, width, height, data.seriesFields)
+  // the point overlay's dataset joins the size domain union
+  if (builtMarks.overlayData) {
+    const sizeDefU = fields.find((f) => f.channel === 'size' && f.field)
+    if (sizeDefU) {
+      const sc = (out.scales as ScaleSpec[]).find((s) => s.name === 'size')
+      if (sc && !sizeDefU.scale?.domain) {
+        sc.domain = {
+          fields: [
+            { data: data.dataName, field: aggFieldName(sizeDefU) },
+            { data: (builtMarks.overlayData as { name: string }).name, field: aggFieldName(sizeDefU) },
+          ],
+        }
+      }
+    }
+  }
   const axes = buildAxes(fields, mark, orient, out.scales as ScaleSpec[])
   if (axes.length) out.axes = axes
   const legends = buildLegends(
