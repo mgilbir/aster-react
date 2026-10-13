@@ -296,10 +296,10 @@ line widths, static params, and per-field legend suppression, and log-axis label
 log axes carry no explicit tickCount — the axis default of 10 drives the
 3/30/300 label filter). Interval selections render their static brush marks (clipped zero-size
 shading; the engine skips unpainted rect items, as vega does). Remaining:
-repeat grids (vega-lite 6 renders
-the corpus repeat specs as degenerate single units), gradient size-legend
-geometry, log-scale label thinning (text metrics), and a no-data corner
-case.
+repeat grids (vega-lite 6 renders the corpus repeat specs as degenerate
+single units), the size-legend entry geometry (vega's per-entry bounds
+from exact text metrics), and the log-scale label-thinning text metrics
+(the labels themselves already match).
 
 
 The whole grammar, verified property-by-property against `vega-lite.compile` (the same
