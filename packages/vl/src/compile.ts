@@ -406,7 +406,25 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
   const continuousDimension = dimension != null && !isDiscreteType(dimension.type)
 
   // the oracle skips casts only in the discrete-dimension stack+filter pipeline
-  const skipCasts = binFields.length > 0 ||
+  const userTransforms = Array.isArray(spec.transform) ? (spec.transform as Record<string, unknown>[]) : []
+  const GENERATING = new Set(['regression', 'quantile', 'loess', 'kde', 'density'])
+  const lastUser = userTransforms.length
+    ? (userTransforms[userTransforms.length - 1] as Record<string, unknown>)
+    : undefined
+  const lastUserType = lastUser == null
+    ? undefined
+    : (lastUser.type as string | undefined) ?? GENERATING.has(Object.keys(lastUser)[0] ?? '') ? Object.keys(lastUser)[0] : undefined
+  // a generating transform that ends the pipeline REPLACES the data feeding
+  // the mark — vega-lite skips both the type casts and the invalid-value
+  // filter in that case (e.g. {regression: y, on: x})
+  const generatingEnd = lastUser != null && GENERATING.has(lastUserType ?? '')
+    ? !(
+        fields.some((f) => f.aggregate) ||
+        (measure != null && isStacked(measure, mark, orient)) ||
+        (mark === 'arc' && thetaDef != null)
+      )
+    : false
+  const skipCasts = binFields.length > 0 || generatingEnd ||
     ((mark === 'bar' || mark === 'area') &&
     !fields.some((f) => f.aggregate) &&
     fields.some((f) => f.channel === (orient === 'vertical' ? 'y' : 'x') && f.type === 'quantitative') &&
@@ -424,7 +442,6 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
   }
   // user transforms (calculate/filter/flatten/fold/window/...): they pass
   // through as vega transforms ahead of any encoding pipeline
-  const userTransforms = Array.isArray(spec.transform) ? (spec.transform as Record<string, unknown>[]) : []
   for (const t0 of userTransforms) {
     let t = t0
     const type0 = t.type as string
@@ -465,10 +482,19 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
         if ((t as Record<string, unknown>)[k] != null) {
           // bare-keyed VL transforms: {quantile: field} / {kde: field} etc.
           // compile to vega {type, field, ...} forms
-          const fielded = new Set(['quantile', 'kde', 'regression', 'loess', 'bin', 'timeunit', 'countpattern', 'pivot'])
+          const fielded = new Set(['quantile', 'kde', 'bin', 'timeunit', 'countpattern', 'pivot'])
           const next: Record<string, unknown> = { ...t, type: k }
           if (fielded.has(k) && next.field == null) next.field = (t as Record<string, unknown>)[k]
           delete next[k]
+          // vega-lite compiles {regression: y, on: x} and {loess: y, on: x} to
+          // vega's x/y-parameter form
+          if (k === 'regression' || k === 'loess') {
+            next.y = (t as Record<string, unknown>)[k]
+            next.x = next.on ?? next.x
+            next.as = next.as ?? [next.x, next.y]
+            delete next.field
+            delete next.on
+          }
           pipeline.push(next)
           break
         }
@@ -562,7 +588,8 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
   }
 
   // with user transforms, vl filters invalid values out of the measure fields
-  if (userTransforms.length) {
+  // (skipped when a generating transform replaces the data entirely)
+  if (userTransforms.length && !generatingEnd) {
     const quantFields = fields.filter((f) => f.type === 'quantitative' && f.field && f.field !== '__count')
     if (quantFields.length) {
       const parts = quantFields.map((f) => {
