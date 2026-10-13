@@ -188,17 +188,15 @@ function kdeRows(rows: Row[], t: Record<string, unknown>): Row[] {
   const maxsteps0 = steps ?? ((t.maxsteps as number | undefined) ?? 200)
 
   let domain = t.extent as [number, number] | undefined
-  let minsteps = minsteps0
-  let maxsteps = maxsteps0
 
-  if (resolve === 'shared') {
-    // all densities share a single domain and curve resolution, enabling stacking
-    if (!domain) {
-      const vals = collectField(rows, field).filter(isFiniteNumber)
-      domain = vals.length ? [Math.min(...vals), Math.max(...vals)] : [0, 1]
-    }
-    minsteps = maxsteps = steps ?? maxsteps0
+  if (resolve === 'shared' && !domain) {
+    // all densities share a single domain (the union across groups)
+    const vals = collectField(rows, field).filter(isFiniteNumber)
+    domain = vals.length ? [Math.min(...vals), Math.max(...vals)] : [0, 1]
   }
+
+  const minsteps = minsteps0
+  const maxsteps = maxsteps0
 
   const groups = groupby.length ? groupRows(rows, groupby) : [rows]
   const out: Row[] = []

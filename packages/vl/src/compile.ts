@@ -227,6 +227,63 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
       }
     }
   }
+  // user transforms (calculate/filter/flatten/fold/window/...): they pass
+  // through as vega transforms ahead of any encoding pipeline
+  const userTransforms = Array.isArray(spec.transform) ? (spec.transform as Record<string, unknown>[]) : []
+  for (const t0 of userTransforms) {
+    let t = t0
+    const type0 = t.type as string
+    if (type0 === undefined && Array.isArray(t.window)) {
+      // vega-lite window form: {window: [{op, as, params?}], sort, groupby}
+      const winOps: unknown[] = []
+      const winFields: unknown[] = []
+      const winAs: unknown[] = []
+      const winParams: unknown[] = []
+      for (const w of t.window as Record<string, unknown>[]) {
+        winOps.push(w.op)
+        winFields.push(w.field ?? null)
+        winAs.push(w.as ?? w.op)
+        winParams.push(w.param ?? w.params ?? null)
+      }
+      t = {
+        type: 'window',
+        ops: winOps,
+        fields: winFields,
+        as: winAs,
+        params: winParams,
+        sort: (t.sort as { field?: string | string[]; order?: string | string[] }) ?? {},
+        groupby: t.groupby ?? [],
+      }
+    }
+    const type = t.type as string
+    if (type === undefined) {
+      // a bare VL transform object like {filter: expr} / {calculate: expr, as}
+      if (t.filter != null) { transforms.push({ type: 'filter', expr: t.filter }); continue }
+      if (t.calculate != null) { transforms.push({ type: 'formula', expr: t.calculate, as: t.as }); continue }
+      if (t.fold != null) { transforms.push({ type: 'fold', fields: t.fold, as: t.as ?? ['key', 'value'] }); continue }
+      if (t.flatten != null) { transforms.push({ type: 'flatten', fields: t.flatten, as: t.as }); continue }
+      if (t.density != null) { transforms.push({ type: 'kde', field: t.density, as: t.as ?? ['value', 'density'] }); continue }
+      for (const k of ['flatten', 'collect', 'countpattern', 'cross', 'joinaggregate', 'kde', 'loess', 'lookup', 'pivot', 'quantile', 'regression', 'stack', 'window', 'impute', 'bin', 'timeunit', 'aggregate', 'sample', 'density']) {
+        if ((t as Record<string, unknown>)[k] != null) {
+          // bare-keyed VL transforms: {quantile: field} / {kde: field} etc.
+          // compile to vega {type, field, ...} forms
+          const fielded = new Set(['quantile', 'kde', 'regression', 'loess', 'bin', 'timeunit', 'countpattern', 'pivot'])
+          const next: Record<string, unknown> = { ...t, type: k }
+          if (fielded.has(k) && next.field == null) next.field = (t as Record<string, unknown>)[k]
+          delete next[k]
+          transforms.push(next)
+          break
+        }
+      }
+      continue
+    }
+    if (type === 'calculate') {
+      transforms.push({ type: 'formula', expr: t.expr, as: t.as })
+    } else {
+      transforms.push(t)
+    }
+  }
+
   // timeUnit: the timeunit transform floors each date to the unit
   const tuFields = fields.filter((f) => f.timeUnit && f.field)
   for (const f of tuFields) {
@@ -303,6 +360,21 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     if (!continuousDimension) {
       const f = JSON.stringify(stackField)
       transforms.push({ type: 'filter', expr: `isValid(datum[${f}]) && isFinite(+datum[${f}])` })
+    }
+  }
+
+  // with user transforms, vl filters invalid values out of the measure fields
+  if (userTransforms.length) {
+    const quantFields = fields.filter((f) => f.type === 'quantitative' && f.field && f.field !== '__count')
+    if (quantFields.length) {
+      const parts = quantFields.map((f) => {
+        const f2 = JSON.stringify(f.field)
+        return `isValid(datum[${f2}]) && isFinite(+datum[${f2}])`
+      })
+      const last = transforms[transforms.length - 1]!
+      if (last.type !== 'filter' || last.expr !== parts.join(' && ')) {
+        transforms.push({ type: 'filter', expr: parts.join(' && ') })
+      }
     }
   }
 
