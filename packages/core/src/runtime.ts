@@ -4169,7 +4169,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
 
     const items: SceneItem[] = []
     items.push({ path: `M0,0h${outerWidth}v${bgHeight}h-${outerWidth}Z`, x: 0, y: 0 })
-    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: titleColor, fontSize: 11, ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
+    const titleLimit = (legend as { titleLimit?: number }).titleLimit
+    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: titleColor, fontSize: 11, ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
       const off = titleRow + i * (entryStep + rowPadding - 2)
@@ -4359,6 +4360,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       // unrotated text but applies it inside the rotate frame for rotated
       // text — so rotated labels carry no baseline (no bake anywhere).
       label.fontSize = labelFs
+      label.limit = axis.labelLimit ?? 180
       // Labels anchor at the unrounded scale + 0.5*bandWidth + tickOffset
       // (the axisBand -0.5 default folds against our baked +0.5 group delta)
       // + labelOffset — bandPosition and tickRound do not reach them (vega's
@@ -4570,6 +4572,9 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     if (titleBaseline != null) t.baseline = titleBaseline as SceneItem['baseline']
     // Vega emits font-size 11 on axis titles explicitly (bounds + canvas font).
     ;(t as Record<string, unknown>).fontSize = titleFs
+    if ((axis as { titleLimit?: number }).titleLimit != null) {
+      t.limit = (axis as { titleLimit?: number }).titleLimit
+    }
     if (titleWeight != null) (t as Record<string, unknown>).fontWeight = titleWeight
     if (titleOpacity != null) t.fillOpacity = titleOpacity
     t.fill = titleColor ?? '#000'

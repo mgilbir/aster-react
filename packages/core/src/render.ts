@@ -181,6 +181,24 @@ function dataDatumAttr(it: SceneItem): string {
   return v ? ` data-datum="${esc(v)}"` : ''
 }
 
+/** Vega text `limit` truncation for bare guide leaves (estimate-width path). */
+function truncateLeaf(text: string, it: SceneItem, fontSize: number): string {
+  const limit = (it as Record<string, unknown>).limit as number | undefined
+  if (limit == null || !(limit > 0) || !text.length) return text
+  const estimateW = (str: string) => ~~(0.8 * str.length * fontSize)
+  if (estimateW(text) < limit) return text
+  const ellipsis = ((it as Record<string, unknown>).ellipsis as string | undefined) ?? '\u2026'
+  const lim = limit - estimateW(ellipsis)
+  let lo = 0
+  let hi = text.length
+  while (lo < hi) {
+    const mid = 1 + ((lo + hi) >>> 1)
+    if (estimateW(text.slice(0, mid)) < lim) lo = mid
+    else hi = mid - 1
+  }
+  return text.slice(0, lo) + ellipsis
+}
+
 function renderLeaf(it: SceneItem): string {
   const dd = dataDatumAttr(it)
   // Path items
@@ -213,7 +231,9 @@ function renderLeaf(it: SceneItem): string {
       ? baselineOffset(it)
       : 0
     const y = num((it.y ?? 0) + bOff)
-    return `<text x="${num(it.x ?? 0)}" y="${y}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('font-family', fam)}${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}>${esc(String(it.text))}</text>`
+    const raw = String(it.text)
+    const text = truncateLeaf(raw, it, fontSize ?? 11)
+    return `<text x="${num(it.x ?? 0)}" y="${y}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('font-family', fam)}${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}>${esc(text)}</text>`
   }
   const x2 = it.x2 ?? it.x ?? 0
   const y2 = it.y2 ?? it.y ?? 0
