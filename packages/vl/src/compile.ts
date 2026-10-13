@@ -106,6 +106,7 @@ function parseChannel(channel: string, def: unknown): FieldDef | null {
     bin: raw.bin,
     timeUnit: raw.timeUnit as string | undefined,
     sort: raw.sort,
+    stack: raw.stack,
     axis: raw.axis === null ? null : isObject(raw.axis) ? (raw.axis as Record<string, unknown>) : undefined,
     scale: isObject(raw.scale) ? (raw.scale as Record<string, unknown>) : undefined,
     legend: raw.legend === null ? null : isObject(raw.legend) ? (raw.legend as Record<string, unknown>) : undefined,
@@ -417,8 +418,8 @@ interface ScaleSpec {
 function positionalScaleType(mark: string, def: FieldDef): string {
   if (def.scale?.type) return def.scale.type as string
   if (def.type === 'temporal') return 'time'
-  if (def.type === 'nominal') return mark === 'bar' || mark === 'rect' ? 'band' : 'point'
-  if (def.type === 'ordinal') return mark === 'bar' || mark === 'rect' ? 'band' : 'point'
+  if (def.type === 'nominal') return mark === 'bar' || mark === 'rect' || mark === 'tick' ? 'band' : 'point'
+  if (def.type === 'ordinal') return mark === 'bar' || mark === 'rect' || mark === 'tick' ? 'band' : 'point'
   return 'linear'
 }
 
@@ -460,8 +461,11 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         delete sc.padding
       }
     } else if (type === 'band') {
-      sc.paddingInner = (def.scale?.paddingInner as number | undefined) ?? C.barPaddingInner
-      sc.paddingOuter = (def.scale?.paddingOuter as number | undefined) ?? C.barPaddingInner / 2
+      const hasOffset = fields.some((f) => f.channel === 'xOffset' || f.channel === 'yOffset')
+      const defaultInner = mark === 'tick' ? 0.25 : hasOffset ? 0.2 : C.barPaddingInner
+      const defaultOuter = mark === 'tick' ? 0.125 : hasOffset ? 0.2 : C.barPaddingInner / 2
+      sc.paddingInner = (def.scale?.paddingInner as number | undefined) ?? defaultInner
+      sc.paddingOuter = (def.scale?.paddingOuter as number | undefined) ?? defaultOuter
       sc.padding = def.scale?.padding as number | undefined
     } else if (type === 'point') {
       sc.padding = (def.scale?.padding as number | undefined) ?? C.pointPadding
@@ -513,6 +517,21 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       zero: false,
     })
   }
+  // xOffset/yOffset band scales
+  for (const ch of ['xOffset', 'yOffset'] as const) {
+    const offDef = fields.find((f) => f.channel === ch && f.field)
+    if (offDef) {
+      // the offset scale spans the dimension band's inner width
+      const dimChannel = ch === 'xOffset' ? 'x' : 'y'
+      scales.push({
+        name: ch,
+        type: 'band',
+        domain: sortedDomain(offDef, dataName),
+        range: [0, { signal: `bandwidth('${dimChannel}')` }],
+      })
+    }
+  }
+
   // shape scale
   const shapeDefS = fields.find((f) => f.channel === 'shape' && f.field)
   if (shapeDefS) {
@@ -566,6 +585,7 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
   if (def.timeUnit && (mark === 'bar' || mark === 'rect')) {
     return { data: dataName, fields: [timeUnitField(def), `${timeUnitField(def)}_end`] }
   }
+  if (def.stack === 'normalize') return [0, 1]
   if (isDiscreteType(def.type)) return sortedDomain(def, dataName)
   const measureChannel = orient === 'vertical' ? 'y' : 'x'
   const stacked = isStacked(def, mark, orient)
@@ -586,6 +606,9 @@ function sortedDomain(def: FieldDef, dataName: string): unknown {
   const base: Record<string, unknown> = { data: dataName, field: aggFieldName(def) }
   if (def.sort === false || def.sort === 'none') return base
   if (def.sort === 'descending') return { ...base, sort: { order: 'descending' } }
+  if (isObject(def.sort) && def.sort.field != null) {
+    return { ...base, sort: { op: 'sum', field: def.sort.field as string, order: (def.sort.order as string) ?? 'ascending' } }
+  }
   if (isObject(def.sort) && def.sort.order === 'descending') return { ...base, sort: { order: 'descending' } }
   // default: sorted by the (possibly aggregated) field ascending
   return { ...base, sort: true }
@@ -651,6 +674,8 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
         // the minimum tick step is one unit: expressed as a datetime difference
         const stepExpr = timeUnitMinStepSignal(def.timeUnit)
         if (stepExpr) labelAxis.tickMinStep = { signal: stepExpr }
+      } else if (def.stack === 'normalize') {
+        labelAxis.format = '.0%'
       }
     } else if (def.channel === 'x' && (sc.type === 'band' || sc.type === 'point')) {
       // vega-lite 6 rotates nominal x labels
@@ -762,6 +787,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const shapeDef = fields.find((f) => f.channel === 'shape' && f.field)
   const opacityDef = fields.find((f) => f.channel === 'opacity' && f.field)
   const update: Record<string, unknown> = {}
+  const xOffsetPresent = fields.some((f) => f.channel === 'xOffset' && f.field)
+  const yOffsetPresent = fields.some((f) => f.channel === 'yOffset' && f.field)
 
   if (mark === 'bar' || mark === 'rect') {
     update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? C.blue }
@@ -789,7 +816,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.x2 = { scale: 'x', field: JSON.parse(startF), offset: { signal: off('-') } }
         } else if (sc === 'band') {
           update.x = { scale: 'x', field: aggFieldName(xDef) }
-          update.width = { signal: `max(0.25, bandwidth('x'))` }
+          if (xOffsetPresent) {
+            update.x = { scale: 'x', field: aggFieldName(xDef), offset: { scale: 'xOffset', field: aggFieldName(fields.find((f) => f.channel === 'xOffset')!) } }
+          }
+          update.width = { signal: `max(0.25, bandwidth('${xOffsetPresent ? 'xOffset' : 'x'}'))` }
         } else {
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
           update.width = { value: C.bandSize }
@@ -824,7 +854,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.y2 = { scale: 'y', field: JSON.parse(startF), offset: { signal: off('-') } }
         } else if (sc === 'band') {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
-          update.height = { signal: `max(0.25, bandwidth('y'))` }
+          if (yOffsetPresent) {
+            update.y = { scale: 'y', field: aggFieldName(yDef), offset: { scale: 'yOffset', field: aggFieldName(fields.find((f) => f.channel === 'yOffset')!) } }
+          }
+          update.height = { signal: `max(0.25, bandwidth('${yOffsetPresent ? 'yOffset' : 'y'}'))` }
         } else {
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
           update.height = { value: C.bandSize }
@@ -950,7 +983,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
 
   const markSpec: Record<string, unknown> = {
     name: 'marks',
-    type: mark === 'bar' ? 'rect' : mark === 'point' || mark === 'circle' || mark === 'square' ? 'symbol' : mark,
+    type: mark === 'bar' || mark === 'tick' ? 'rect' : mark === 'point' || mark === 'circle' || mark === 'square' ? 'symbol' : mark,
     style: [mark],
     from: { data: dataName },
     encode: { update },
