@@ -823,7 +823,8 @@ function renderTrail(group: SceneGroup): string {
     const d = trailPath(items)
     if (d) {
       const first = items[0]!
-      out += `<path d="${d}"${attr('stroke', first.stroke)}${attr('stroke-width', first.strokeWidth)}${attr('opacity', first.opacity)}/>`
+      // vega's trail path carries the full paint set from the first item.
+      out += `<path d="${d}"${attr('fill', first.fill)}${attr('fill-opacity', first.fillOpacity)}${attr('opacity', first.opacity)}${attr('stroke', first.stroke)}${attr('stroke-width', first.strokeWidth)}${attr('stroke-dasharray', first.strokeDash)}/>`
     }
   }
   out += '</g>'
@@ -836,9 +837,16 @@ export function trailPath(items: SceneItem[]): string {
   let ready = false
   let x1 = 0, y1 = 0, r1 = 0
   for (const it of items) {
+    // vega's trail generator: `size || 1` (a zero size falls back to 1) and
+    // `defined === false` breaks the segment (the polygon ends; a new run
+    // starts at the next defined point).
+    if (it.defined === false) {
+      ready = false
+      continue
+    }
     const x2 = it.x as number
     const y2 = it.y as number
-    const r2 = ((it.size as number) ?? 1) / 2
+    const r2 = ((it.size as number) || 1) / 2
     if (ready) {
       const ux0 = y1 - y2
       const uy0 = x2 - x1
