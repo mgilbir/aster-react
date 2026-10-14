@@ -3448,28 +3448,39 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
       ;(item as unknown as Record<string, unknown>)[key] = resolved
     }
   }
-  // Post-process: handle yc (center-y) by computing y and y2 from height.
+  // Post-process: vega parse/mark `adjustSpatial` — resolve x2/xc/y2/yc into
+  // x/y/width/height. Rule marks skip it entirely (their x2/y2 are line
+  // endpoints, not edges); rect/group/image swap so x/y is the min edge.
+  // x2/y2 overwrite an encoded width/height; xc/yc only set x/y.
   const rec = item as unknown as Record<string, unknown>
-  const ycVal = rec['yc']
-  if (ycVal != null && typeof ycVal === 'number') {
-    const h = rec['height']
-    if (h != null && typeof h === 'number' && h > 0) {
-      rec['y'] = ycVal - h / 2
-      rec['y2'] = ycVal + h / 2
-    } else {
-      rec['y'] = ycVal
+  if (marktype !== 'rule') {
+    const canSwap = marktype === 'rect' || marktype === 'group' || marktype === 'image'
+    const num = (v: unknown): number | null =>
+      v != null && typeof v === 'number' && Number.isFinite(v) ? v : null
+    const x2 = num(rec['x2'])
+    const xc = num(rec['xc'])
+    const y2 = num(rec['y2'])
+    const yc = num(rec['yc'])
+    if (x2 != null) {
+      const x = num(rec['x'])
+      if (x != null) {
+        if (canSwap && x > x2) { rec['x'] = x2; rec['x2'] = x }
+        rec['width'] = (rec['x2'] as number) - (rec['x'] as number)
+      } else {
+        rec['x'] = x2 - (num(rec['width']) ?? 0)
+      }
     }
-  }
-  // Handle xc (center-x) by computing x and x2 from width.
-  const xcVal = rec['xc']
-  if (xcVal != null && typeof xcVal === 'number') {
-    const w = rec['width']
-    if (w != null && typeof w === 'number' && w > 0) {
-      rec['x'] = xcVal - w / 2
-      rec['x2'] = xcVal + w / 2
-    } else {
-      rec['x'] = xcVal
+    if (xc != null) rec['x'] = xc - (num(rec['width']) ?? 0) / 2
+    if (y2 != null) {
+      const y = num(rec['y'])
+      if (y != null) {
+        if (canSwap && y > y2) { rec['y'] = y2; rec['y2'] = y }
+        rec['height'] = (rec['y2'] as number) - (rec['y'] as number)
+      } else {
+        rec['y'] = y2 - (num(rec['height']) ?? 0)
+      }
     }
+    if (yc != null) rec['y'] = yc - (num(rec['height']) ?? 0) / 2
   }
 
   return item
