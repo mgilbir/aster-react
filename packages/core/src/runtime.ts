@@ -589,8 +589,12 @@ function measureGuideGroup(g: SceneGroup): Bounds {
   if (lb) return lb
   if (g.role === 'legend') {
     // legendLayout sets item.bounds = [x, y, x+width, y+height] (the outer
-    // box incl. padding), anchored at the laid-out group position.
-    return new Bounds().set(g.x ?? 0, g.y ?? 0, (g.x ?? 0) + (g.width ?? 0), (g.y ?? 0) + (g.height ?? 0))
+    // box incl. padding), anchored at the laid-out group position. A legend
+    // border stroke boundStrokes the outer rect (+0.5 per side, vega
+    // legendLayout: boundStroke(bounds.set(x, y, x + w, y + h), item)).
+    const stroked = (g.items as SceneItem[] | undefined)?.some((it) => it.stroke != null && it.path != null)
+    const se = stroked ? 0.5 : 0
+    return new Bounds().set((g.x ?? 0) - se, (g.y ?? 0) - se, (g.x ?? 0) + (g.width ?? 0) + se, (g.y ?? 0) + (g.height ?? 0) + se)
   }
   return boundLeaf(new Bounds(), g as unknown as SceneItem)
 }
@@ -4419,7 +4423,12 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // its default radius/stroke. A negative symbolSize makes sqrt NaN, which
     // vega's bounds silently drop (NaN comparisons are false) — the entry
     // falls back to the label fontSize, so clamp to 0 for the offset math.
-    const symbolSizeP = Math.max(0, (legend as { symbolSize?: number }).symbolSize ?? 100)
+    // A negative symbolSize makes vega's offset NaN (ceil(sqrt(negative)) =
+    // NaN): the entry bounds go NaN and drop out of the legend bounds, so the
+    // legend renders title-only, sized by the title bound alone.
+    const symbolSizeRaw = (legend as { symbolSize?: number }).symbolSize ?? 100
+    const symbolSizeNaN = !(symbolSizeRaw >= 0)
+    const symbolSizeP = symbolSizeNaN ? 100 : symbolSizeRaw
     const symSwP = (legend as { symbolStrokeWidth?: number }).symbolStrokeWidth ?? 1.5
     const symbolDash = (legend as { symbolDash?: number[] }).symbolDash
     const labelFs = (legend as { labelFontSize?: number }).labelFontSize ?? 10
@@ -4431,7 +4440,29 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // shifts the whole content.
     const legendPad = (legend as { padding?: number }).padding ?? 0
     const labelLimit = (legend as { labelLimit?: number }).labelLimit ?? 160
-    const entryWidth = symbolOffset + offset + labelOffset + Math.min(~~(0.8 * maxLabelLen * labelFs), labelLimit)
+    // vega's label bound (marks/text bound) width runs the limit truncation
+    // BEFORE measuring: estimateWidth applies textValue, so the bound is the
+    // width of the *truncated* text (the ellipsis is part of the limit budget,
+    // vega util/text.js truncate). labelAlign changes the text anchor and —
+    // through the bound — how far the label extends past its anchor: left
+    // w, center w/2, right 0.
+    const labelAlign = (legend as { labelAlign?: string }).labelAlign ?? 'left'
+    const labelW = (len: number) => {
+      const full = ~~(0.8 * len * labelFs)
+      if (!(labelLimit > 0) || !len || full < labelLimit) return full
+      const ellW = ~~(0.8 * labelFs)
+      const lim = labelLimit - ellW
+      let lo = 0
+      let hi = len
+      while (lo < hi) {
+        const mid = 1 + ((lo + hi) >>> 1)
+        if (~~(0.8 * mid * labelFs) < lim) lo = mid
+        else hi = mid - 1
+      }
+      return ~~(0.8 * lo * labelFs) + ellW
+    }
+    const labelExtend = (w: number) => labelAlign === 'right' ? 0 : labelAlign === 'center' ? w / 2 : w
+    const entryWidth = symbolOffset + offset + labelOffset + labelExtend(labelW(maxLabelLen))
     const titleStr = String(legend.title ?? '')
     const titleWidth = titleStr.length > 0 ? ~~(0.8 * titleStr.length * titleFs) : 0
     const outerWidth = Math.ceil(Math.max(entryWidth, titleWidth)) + 2 * legendPad
@@ -4490,7 +4521,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const colPad = (legend as { columnPadding?: number }).columnPadding ?? 10
     const ncols = direction === 'horizontal' ? n : Math.max(1, specColumns ?? 1)
     const nrows = Math.max(1, Math.ceil(n / ncols))
-    const natW = domain.map((v: unknown) => symbolOffset + offset + labelOffset + ~~(0.8 * String(v).length * labelFs))
+    const natW = domain.map((v: unknown) => symbolOffset + offset + labelOffset + labelExtend(labelW(String(v).length)))
     const colExtent = Array<number>(ncols).fill(0)
     const rowExtent = Array<number>(nrows).fill(0)
     domain.forEach((_: unknown, i: number) => {
@@ -4538,31 +4569,50 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const entryX = legendPad + shift + (titleOrient === 'left' && titleStr ? titleWidth + titlePad : 0)
     const entryBaseY = titleOrient === 'top' && titleStr ? titleRow : 0
     let contentX2 = 0
-    domain.forEach((_: unknown, i: number) => {
-      contentX2 = Math.max(contentX2, entryX + colX[i % ncols]! + colExtent[i % ncols]!)
-    })
+    if (!symbolSizeNaN) {
+      domain.forEach((_: unknown, i: number) => {
+        contentX2 = Math.max(contentX2, entryX + colX[i % ncols]! + colExtent[i % ncols]!)
+      })
+    }
     // vega legendLayout: w = ceil(bounds.width + 2*padding) where the bound is
     // anchored at x1=y1=padding, i.e. w = ceil(contentMax + padding).
-    const bgW = Math.ceil(Math.max(
-      contentX2,
-      (titleStr ? titleX + shift + (tAlign === 'right' ? 0 : tAlign === 'center' ? titleWidth / 2 : titleWidth) : 0),
-    ) + legendPad)
-    const entriesY2 = legendPad + entryBaseY + rowY[nrows - 1]! + Math.ceil(swatchH)
+    const bgW = symbolSizeNaN
+      ? Math.ceil((titleStr ? titleX + shift + (tAlign === 'right' ? 0 : tAlign === 'center' ? titleWidth / 2 : titleWidth) : 0) + legendPad)
+      : Math.ceil(Math.max(
+        contentX2,
+        (titleStr ? titleX + shift + (tAlign === 'right' ? 0 : tAlign === 'center' ? titleWidth / 2 : titleWidth) : 0),
+      ) + legendPad)
+    const entriesY2 = symbolSizeNaN ? 0 : legendPad + entryBaseY + rowY[nrows - 1]! + Math.ceil(swatchH)
     const bgH = Math.ceil(Math.max(
-      entriesY2,
+      symbolSizeNaN ? (titleStr ? titleY + titleFs : 0) : entriesY2,
       titleOrient === 'bottom' && titleStr ? titleY + titleFs : 0,
     ) + legendPad)
 
     const items: SceneItem[] = []
     const legendCornerRadius = (legend as { cornerRadius?: number }).cornerRadius
     const legendFillColor = (legend as { fillColor?: string }).fillColor
-    items.push({ path: `M0,0h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0, ...(legendFillColor != null ? { fill: legendFillColor } : {}), ...(legendCornerRadius != null ? { cornerRadius: legendCornerRadius } : {}) })
+    // The legend border stroke (legend.strokeColor): the border rect insets
+    // half a pixel (crisp 1px stroke) and carries no explicit strokeWidth
+    // (the renderer default 1 applies); vega's legendLayout boundStrokes the
+    // outer rect, expanding the legend bounds by 1 on width and height.
+    const legendBorderColor = (legend as { strokeColor?: string }).strokeColor
+    // cornerRadius > 0 renders the border as a rounded rect at full size
+    // (vega's rectangle path with the corner radii); a border stroke insets
+    // the path half a pixel (crisp 1px stroke) without changing the size.
+    const bgX = legendBorderColor != null ? 0.5 : 0
+    const bgY = legendBorderColor != null ? 0.5 : 0
+    const bgPath = legendCornerRadius && legendCornerRadius > 0
+      ? roundedRectPath(bgX, bgY, bgW, bgH, Math.min(legendCornerRadius, bgW / 2, bgH / 2))
+      : legendBorderColor != null
+        ? `M${bgX},${bgY}h${bgW}v${bgH}h-${bgW}Z`
+        : `M0,0h${bgW}v${bgH}h-${bgW}Z`
+    items.push({ path: bgPath, x: 0, y: 0, ...(legendFillColor != null ? { fill: legendFillColor } : {}), ...(legendBorderColor != null ? { stroke: String(legendBorderColor) } : {}) })
     const titleLimit = (legend as { titleLimit?: number }).titleLimit
     const titleBaseline = (legend as { titleBaseline?: string }).titleBaseline
     // vega's legend title item sits at (padding, padding) with baseline top;
     // the renderer bakes the baseline offset. titleBaseline overrides it.
     if (titleStr) items.push({ text: titleStr, x: titleX + shift, y: titleY, baseline: (titleBaseline ?? tBaseline) as 'top', align: tAlign, fill: titleColor, fontSize: titleFs, ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; !symbolSizeNaN && i < n; i++) {
       const value = domain[i]
       const off = entryBaseY + rowY[~~(i / ncols)]!
       const colOff = colX[i % ncols]!
@@ -4631,7 +4681,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         x: entryX + colOff + symbolOffset + offset + labelOffset,
         y: legendPad + off + offset / 2,
         baseline: lblBaseline as 'middle',
-        align: 'left',
+        align: labelAlign as 'left',
         fill: labelColor,
         fontSize: labelFs,
         limit: labelLimit,
