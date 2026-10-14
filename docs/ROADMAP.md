@@ -371,14 +371,23 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   `titleAngle`/`labelAngle` rotate (baseline folded inside the rotate frame),
   and the title extent now comes from the real tick+label item bounds
   (stroke expansion and rotation included) instead of an analytic extent.
-  Corpus 413/413. Sweep 7363/7549 (97.5%). Remaining: legend 29 +
-  config-legend 29, layout 33, config-range 11, scale families ~48
-  (point 14, symlog/log 5 each, identity/time/utc/sqrt 4 each, pow 2,
-  linear 1), axis 4 + config-axis 9 (orient left/right span the scale range
-  rather than the view size; tickBand extent and tickExtra are unported;
-  config tickOffset/labelOffset/labelFlush couple into the view margins),
-  view 4, title 3 + config-title 3, encode leftovers (area/path/symbol 2
-  each, trail 1), and 7 refused-render mismatches (identity nice/round
+  Corpus 413/413. Sweep 7408/7549 (98.1%). A later scale round landed
+  vega's continuous-scale `round` (via interpolateRound), interval-string
+  `nice` through the tickCount util, band `align` (dropped by buildScale)
+  and the type-keyed axisBand tickOffset, the vega-util zoom family for
+  padDomain (log/sqrt/pow/symlog zoom in their transform spaces),
+  point-scale labels at the raw scale position (the rounded tick position
+  skewed view bounds by a pixel), and NaN-safe degenerate legend symbols.
+  Remaining: legend 28 + config-legend 28 (the entry layout is still
+  heuristic — 8px/char label widths — and wants a text-measured rework:
+  labelAlign/labelLimit/columns/clipHeight/cornerRadius/symbolLimit),
+  layout 33 (trellis grid layout is unported), config-range 11, axis 4 +
+  config-axis 9 (orient left/right span the scale range rather than the
+  view size; tickBand extent and tickExtra are unported; config
+  tickOffset/labelOffset/labelFlush couple into the view margins), view 3,
+  title 3 + config-title 3 (1-ulp rotated-text epsilons, orient none),
+  scale singles (log zero-degenerate domain, pow/symlog extreme params),
+  encode-path scaleY, and 7 refused-render mismatches (identity nice/round
   engine-errors, area-interpolate-bundle and trail-size node-errors).
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
