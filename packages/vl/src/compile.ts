@@ -896,6 +896,78 @@ function normalizeType(t: unknown, def: ChannelDef): string {
 const isDiscreteType = (t: string) => t === 'nominal' || t === 'ordinal'
 const isContinuousScaleType = (t: string) => t === 'linear' || t === 'log' || t === 'pow' || t === 'sqrt' || t === 'symlog' || t === 'time' || t === 'utc'
 
+// --- config ------------------------------------------------------------------
+
+/**
+ * Vega-Lite resolves its config into Vega-level pieces (probed against
+ * vl.compile): guide blocks (axis/axisX/axisY/axisBand/axisOrient, legend,
+ * header, range) forward verbatim into the Vega config; config.mark forwards
+ * as config.mark; per-mark-type blocks become config.style[type]; config.view
+ * becomes the 'cell' style; config.title splits onto 'group-title' (color ->
+ * fill) and 'group-subtitle' (align/baseline/limit); config.font seeds the
+ * guide/title/text styles; config.scale applies straight to the scales; the
+ * VL-only keys (invalid, filled, binSpacing, continuousBandSize, bandSize,
+ * thickness, point, line, color, the view sizing props) are stripped.
+ */
+const VL_ONLY_MARK_KEYS = new Set(['invalid', 'filled', 'binSpacing', 'continuousBandSize', 'bandSize', 'thickness', 'point', 'line', 'color'])
+const VIEW_DROPPED_KEYS = new Set(['discreteWidth', 'discreteHeight', 'continuousWidth', 'continuousHeight', 'step'])
+const MARK_TYPE_BLOCKS = ['bar', 'point', 'line', 'area', 'text', 'tick', 'rect', 'arc', 'rule', 'trail', 'circle', 'square', 'geoshape', 'image']
+
+export function assembleConfig(spec: VLSpec): Record<string, unknown> | undefined {
+  const user = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
+  if (!user) return undefined
+  const out: Record<string, unknown> = {}
+  const style: Record<string, Record<string, unknown>> = {}
+  const strip = (block: Record<string, unknown>): Record<string, unknown> =>
+    Object.fromEntries(Object.entries(block).filter(([k]) => !VL_ONLY_MARK_KEYS.has(k)))
+  for (const k of ['axis', 'axisX', 'axisY', 'axisBand', 'axisLeft', 'axisRight', 'axisTop', 'axisBottom', 'legend', 'header', 'headerRow', 'headerColumn', 'headerFacet', 'range']) {
+    if (isObject(user[k])) out[k] = user[k]
+  }
+  if (isObject(user.mark)) out.mark = strip(user.mark)
+  for (const t of MARK_TYPE_BLOCKS) {
+    if (isObject(user[t])) style[t] = strip(user[t])
+  }
+  if (isObject(user.view)) {
+    style.cell = Object.fromEntries(Object.entries(user.view).filter(([k]) => !VIEW_DROPPED_KEYS.has(k)))
+  }
+  if (isObject(user.title)) {
+    const gt: Record<string, unknown> = {}
+    const gs: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(user.title)) {
+      if (k === 'anchor' || k === 'offset' || k === 'orient') continue
+      if (k === 'color') gt.fill = v
+      else gt[k] = v
+      if (k === 'align' || k === 'baseline' || k === 'limit') gs[k] = v
+    }
+    if (Object.keys(gt).length) style['group-title'] = gt
+    if (Object.keys(gs).length) style['group-subtitle'] = gs
+  }
+  if (typeof user.font === 'string') {
+    for (const name of ['guide-label', 'guide-title', 'group-title', 'group-subtitle', 'text']) {
+      style[name] = { ...style[name], font: user.font }
+    }
+  }
+  if (Object.keys(style).length) out.style = style
+  return Object.keys(out).length ? out : undefined
+}
+
+/** Apply config.scale to the compiled positional scales (round on x/y;
+ * nice/zero on continuous quantitative ones — the color scale gets none). */
+function applyScaleConfig(scales: ScaleSpec[], user: Record<string, unknown> | undefined): void {
+  const sc = isObject(user?.scale) ? (user!.scale as Record<string, unknown>) : undefined
+  if (!sc) return
+  for (const s of scales) {
+    if (s.name !== 'x' && s.name !== 'y') continue
+    if (sc.round !== undefined) s.round = Boolean(sc.round)
+    if (isContinuousScaleType(String(s.type)) && !isTimeScaleType(String(s.type))) {
+      if (sc.nice !== undefined) s.nice = sc.nice
+      if (sc.zero !== undefined) s.zero = Boolean(sc.zero)
+    }
+  }
+}
+
+const isTimeScaleType = (t: string) => t === 'time' || t === 'utc'
+
 // --- titles ------------------------------------------------------------------
 
 export function channelTitle(def: FieldDef): unknown {
@@ -1546,7 +1618,7 @@ function sortedDomain(def: FieldDef, dataName: string): unknown {
 
 // --- axes --------------------------------------------------------------------
 
-function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: ScaleSpec[], scaleName?: string, gridScaleOverride?: string): Record<string, unknown>[] {
+function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: ScaleSpec[], scaleName?: string, gridScaleOverride?: string, config?: Record<string, unknown>): Record<string, unknown>[] {
   const axes: Record<string, unknown>[] = []
   const scaleByName = new Map(scales.map((s) => [s.name, s]))
 
@@ -1596,6 +1668,15 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       zindex: 0,
     }
     if (title !== null) labelAxis.title = title
+    // vega-lite merges config.axisBand into band-scale axis definitions
+    // (probed: the def carries the block's properties, user def winning)
+    const axisBand = isObject(config?.axisBand) ? (config!.axisBand as Record<string, unknown>) : undefined
+    if (sc.type === 'band' && axisBand) {
+      for (const [k, v] of Object.entries(axisBand)) {
+        if (k === 'grid' || k === 'title' || k === 'orient' || k === 'scale') continue
+        if (labelAxis[k] === undefined) labelAxis[k] = v
+      }
+    }
     if (isContinuousScaleType(sc.type)) {
       if (def.channel === 'x') labelAxis.labelFlush = true
       labelAxis.labelOverlap = sc.type === 'log' ? 'greedy' : true
@@ -1786,26 +1867,36 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const update: Record<string, unknown> = {}
   const xOffsetPresent = fields.some((f) => f.channel === 'xOffset' && f.field)
   const yOffsetPresent = fields.some((f) => f.channel === 'yOffset' && f.field)
+  // config resolution (getMarkPropOrConfig): the mark def first, then the
+  // mark-type config block, then the generic config.mark block
+  const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
+  const cfgType = isObject(userConfig?.[mark]) ? (userConfig![mark] as Record<string, unknown>) : undefined
+  const cfgMark = isObject(userConfig?.mark) ? (userConfig!.mark as Record<string, unknown>) : undefined
+  const cfgColor = (cfgType?.color ?? cfgMark?.color) as string | undefined
+  const cfgFill = (cfgType?.fill ?? cfgMark?.fill) as string | undefined
+  const cfgStroke = (cfgType?.stroke ?? cfgMark?.stroke) as string | undefined
 
   if (mark === 'bar' || mark === 'rect') {
     // getMarkPropOrConfig precedence (probed): markDef.fill overrides the
-    // color channel; markDef.color is only the fallback when no channel;
+    // color channel; the channel beats config fill; config beats markDef.color;
     // filled:false moves the colour onto stroke (bar fills transparent, rect
     // drops fill entirely) and markDef.fill is ignored.
     const markDef = isObject(spec.mark) ? spec.mark : undefined
     const filled = markDef?.filled !== false
+    const cfgPaint = (p: string): unknown => markDef?.[p] ?? cfgType?.[p] ?? cfgMark?.[p]
     if (!filled) {
       if (mark === 'bar') update.fill = { value: 'transparent' }
       update.stroke = colorDef
         ? { scale: 'color', field: aggFieldName(colorDef) }
-        : { value: (markDef?.stroke as string | undefined) ?? markColor ?? C.blue }
+        : { value: (markDef?.stroke as string | undefined) ?? (cfgType?.stroke as string | undefined) ?? (cfgMark?.stroke as string | undefined) ?? markColor ?? C.blue }
     } else {
       update.fill = markDef?.fill != null
         ? { value: markDef.fill }
         : colorDef
           ? { scale: 'color', field: aggFieldName(colorDef) }
-          : { value: markColor ?? C.blue }
-      if (markDef?.stroke != null) update.stroke = { value: markDef.stroke }
+          : { value: (cfgType?.fill as string | undefined) ?? (cfgMark?.fill as string | undefined) ?? (cfgType?.color as string | undefined) ?? (cfgMark?.color as string | undefined) ?? markColor ?? C.blue }
+      const stroke = markDef?.stroke ?? cfgType?.stroke ?? cfgMark?.stroke
+      if (stroke != null) update.stroke = { value: stroke }
     }
     if (markOpacity != null) update.opacity = { value: markOpacity }
     // pass-through mark-def paint props (getMarkPropOrConfig reads each
@@ -1815,7 +1906,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
     // bar rounds its ends with a clip (rect's cornerRadius needs no clip);
     // cornerRadiusEnd rounds the leading edge per orientation
-    if (mark === 'bar' && (markDef?.cornerRadius != null || markDef?.cornerRadiusEnd != null)) update.clip = { value: true }
+    const cornerRadius = markDef?.cornerRadius ?? cfgType?.cornerRadius ?? cfgMark?.cornerRadius
+    if (mark === 'bar' && (cornerRadius != null || markDef?.cornerRadiusEnd != null)) update.clip = { value: true }
+    if (cornerRadius != null && update.cornerRadius === undefined) update.cornerRadius = { value: cornerRadius }
     if (markDef?.cornerRadiusEnd != null && mark === 'bar') {
       const [a, b] = orient === 'horizontal' ? ['TopRight', 'BottomRight'] : ['TopLeft', 'TopRight']
       update[`cornerRadius${a}`] = { value: markDef.cornerRadiusEnd }
@@ -1932,8 +2025,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (filled) {
       update.fill = colorDef
         ? { scale: 'color', field: aggFieldName(colorDef) }
-        : { value: markColor ?? C.blue }
-      if (markStroke) update.stroke = { value: markStroke }
+        : { value: markColor ?? cfgFill ?? cfgColor ?? C.blue }
+      const st = markStroke ?? cfgStroke
+      if (st != null) update.stroke = { value: st }
       if (markStrokeWidth) update.strokeWidth = { value: markStrokeWidth }
       update.opacity = { value: markOpacity ?? C.pointOpacity }
       update.shape = { value: mark }
@@ -1942,10 +2036,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       update.opacity = opacityDef
         ? { scale: 'opacity', field: aggFieldName(opacityDef) }
         : { value: markOpacity ?? C.pointOpacity }
-      update.fill = { value: 'transparent' }
+      // an unfilled point keeps its stroke-mode defaults; a config fill
+      // (point.fill / mark.fill) still fills it (probed)
+      const ptFill = (isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined) ?? cfgFill
+      update.fill = ptFill != null ? { value: ptFill } : { value: 'transparent' }
       update.stroke = colorDef
         ? { scale: 'color', field: aggFieldName(colorDef) }
-        : { value: markColor ?? C.blue }
+        : { value: markColor ?? cfgStroke ?? cfgColor ?? C.blue }
     }
     update.ariaRoleDescription = { value: mark }
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
@@ -1956,7 +2053,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   } else if (mark === 'line') {
     const markStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
     const markStrokeWidth = isObject(spec.mark) ? (spec.mark.strokeWidth as number | undefined) : undefined
-    update.stroke = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markStroke ?? markColor ?? C.blue }
+    update.stroke = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markStroke ?? cfgStroke ?? cfgColor ?? markColor ?? C.blue }
     if (markStrokeWidth) update.strokeWidth = { value: markStrokeWidth }
     // the size channel maps to line width
     if (sizeDef) update.strokeWidth = { scale: 'size', field: aggFieldName(sizeDef) }
@@ -1976,7 +2073,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const areaFill = isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined
     update.fill = colorDef
       ? { scale: 'color', field: aggFieldName(colorDef) }
-      : { value: areaFill ?? markColor ?? C.blue }
+      : { value: areaFill ?? markColor ?? cfgFill ?? cfgColor ?? C.blue }
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
     if (yDef) {
       const stacked = isStacked(yDef, mark, orient)
@@ -2003,7 +2100,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     update.defined = definedSignal(xDef, yDef)
   } else if (mark === 'tick') {
     update.opacity = { value: markOpacity ?? C.pointOpacity }
-    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? C.blue }
+    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? cfgFill ?? cfgColor ?? C.blue }
     update.ariaRoleDescription = { value: 'tick' }
     if (orient === 'vertical') {
       if (xDef) {
@@ -2031,7 +2128,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       update.width = { value: 1 }
     }
   } else if (mark === 'rule') {
-    update.stroke = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? 'black' }
+    update.stroke = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? cfgStroke ?? cfgColor ?? 'black' }
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
     if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef) }
     const x2Def = fields.find((f) => f.channel === 'x2' && f.field)
@@ -2039,7 +2136,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (x2Def) update.x2 = { scale: 'x', field: x2Def.field }
     if (y2Def) update.y2 = { scale: 'y', field: y2Def.field }
   } else if (mark === 'text') {
-    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? 'black' }
+    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? cfgFill ?? cfgColor ?? 'black' }
     const thetaDefT = fields.find((f) => f.channel === 'theta' && f.field)
     if (thetaDefT) {
       // polar text (pie labels): anchored at the view center, offset by
@@ -2069,7 +2166,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   } else if (mark === 'arc') {
     const thetaDefA = fields.find((f) => f.channel === 'theta' && f.field)
     const thetaF = thetaDefA!.field
-    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? C.blue }
+    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? cfgFill ?? cfgColor ?? C.blue }
     if (markOpacity != null) update.opacity = { value: markOpacity }
     update.x = { signal: 'width', mult: 0.5 }
     update.y = { signal: 'height', mult: 0.5 }
@@ -2209,7 +2306,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const ptFilled = isObject(pointOverlay) ? (pointOverlay.filled as boolean | undefined) : undefined
     const overlayUpdate: Record<string, unknown> = {
       opacity: { value: 1 },
-      fill: { value: markColor ?? C.blue },
+      fill: { value: markColor ?? cfgFill ?? cfgColor ?? C.blue },
       x: xDef ? { scale: 'x', field: aggFieldName(xDef) } : undefined,
       y: yDef ? { scale: 'y', field: aggFieldName(yDef) } : undefined,
       shape: { value: ptType },
@@ -2308,10 +2405,13 @@ export function compileUnit(spec: VLSpec): VLSpec {
   const height = (spec.height as unknown) ?? (yStepForm ? 0 : 300)
 
   const out: Record<string, unknown> = {}
+  const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
   if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
   out.autosize = spec.autosize ?? 'pad'
-  out.background = spec.background ?? 'white'
-  out.padding = spec.padding ?? 5
+  out.background = spec.background ?? (userConfig?.background as string | undefined) ?? 'white'
+  out.padding = spec.padding ?? (userConfig?.padding as unknown) ?? 5
+  const assembledConfig = assembleConfig(spec)
+  if (assembledConfig) out.config = assembledConfig
   out.width = spec.width ?? (xStepForm ? undefined : width)
   out.height = spec.height ?? (yStepForm ? undefined : height)
   // theta-only views (pie/donut) get vega-lite's unstyled 'view' frame — no
@@ -2368,6 +2468,7 @@ export function compileUnit(spec: VLSpec): VLSpec {
     ;(out.data as Record<string, unknown>[]).push(builtMarks.overlayData)
   }
   out.scales = buildScales(spec, fields, mark, orient, data.dataName, width, height, data.seriesFields)
+  applyScaleConfig(out.scales as ScaleSpec[], isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined)
   // discrete-dimension sizing: the scale spans steps and the view size is a
   // signal over the domain cardinality
   const sizeSignals: Record<string, unknown>[] = []
@@ -2403,7 +2504,7 @@ export function compileUnit(spec: VLSpec): VLSpec {
       }
     }
   }
-  const axes = buildAxes(fields, mark, orient, out.scales as ScaleSpec[])
+  const axes = buildAxes(fields, mark, orient, out.scales as ScaleSpec[], undefined, undefined, userConfig)
   if (axes.length) out.axes = axes
   const legends = buildLegends(
     fields,

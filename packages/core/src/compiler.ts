@@ -34,6 +34,9 @@ export function compileChart(spec: VgSpec): CompiledChart {
   const cfg = (spec.config ?? {}) as Record<string, unknown>
   const cfgStyle = (cfg.style ?? {}) as Record<string, Record<string, unknown>>
   const cfgAxis = (cfg.axis ?? {}) as Record<string, unknown>
+  const cfgAxisX = (cfg.axisX ?? {}) as Record<string, unknown>
+  const cfgAxisY = (cfg.axisY ?? {}) as Record<string, unknown>
+  const cfgAxisBand = (cfg.axisBand ?? {}) as Record<string, unknown>
   const cfgLegend = (cfg.legend ?? {}) as Record<string, unknown>
   const background = (spec.background as string | null | undefined) ?? (cfg.background as string | null | undefined) ?? null
   const padding = normalizePadding(spec.padding as unknown)
@@ -61,7 +64,17 @@ export function compileChart(spec: VgSpec): CompiledChart {
 
   const axes: CompiledAxis[] = []
   for (const a of (spec.axes as Array<Record<string, unknown>>) ?? []) {
-    axes.push(compileAxis(applyConfigDefaults(a, cfgAxis, scales)))
+    // vega axisConfig precedence (vega-parser axisConfig): axis < axisX/axisY
+    // (by orient) < axis<Orient> < axisBand (band scales) — later wins; the
+    // axis def itself then wins over every block.
+    const orient = String(a.orient ?? '')
+    const defaults: Record<string, unknown> = { ...cfgAxis }
+    Object.assign(defaults, orient === 'top' || orient === 'bottom' ? cfgAxisX : cfgAxisY)
+    const orientBlock = (cfg as Record<string, Record<string, unknown>>)[`axis${orient.charAt(0).toUpperCase()}${orient.slice(1)}`]
+    if (orient && typeof orientBlock === 'object') Object.assign(defaults, orientBlock)
+    const sc = scales.find((s) => s.name === a.scale)
+    if (sc?.type === 'band') Object.assign(defaults, cfgAxisBand)
+    axes.push(compileAxis(applyConfigDefaults(a, defaults, scales)))
   }
 
   const legends: CompiledLegend[] = []
