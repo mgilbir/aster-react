@@ -1123,6 +1123,7 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
         fontWeight: title.fontWeight,
         fill: title.color,
         dy: title.dy,
+        ...(title.limit != null ? { limit: title.limit } : {}),
       } as SceneItem],
     } as SceneGroup,
   ]
@@ -1139,7 +1140,8 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
         baseline: title.orient === 'left' || title.orient === 'right' ? 'middle' : 'top',
         angle: title.orient === 'left' ? -90 : title.orient === 'right' ? 90 : undefined,
         fontSize: subFs,
-        fontWeight: title.fontWeight,
+        fontWeight: title.font,
+        ...(title.limit != null ? { limit: title.limit } : {}),
         fill: title.color,
         dy: title.dy,
       } as SceneItem],

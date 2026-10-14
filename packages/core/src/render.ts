@@ -828,6 +828,8 @@ export function textItemDesc(it: SceneItem): {
   attrs.push(['fill', it.fill])
   attrs.push(['fill-opacity', (it as Record<string, unknown>).fillOpacity])
   attrs.push(['stroke', it.stroke])
+  attrs.push(['stroke-width', it.strokeWidth])
+  attrs.push(['stroke-dasharray', it.strokeDash])
   attrs.push(['stroke-opacity', (it as Record<string, unknown>).strokeOpacity])
   attrs.push(['opacity', it.opacity])
   attrs.push(['angle', it.angle])
