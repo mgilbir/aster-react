@@ -512,25 +512,28 @@ function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { gro
       let rowEnd = false
       switch (orient) {
         case 'left':
-          x = Math.floor(xb.x1) - offset
+          // Epsilon guard: our axis bounds can be off vega's by 1 ulp (rotated
+          // title fp), and floor/ceil would turn that into a whole pixel of
+          // legend anchor shift (see computeGuidePadding's EPS note).
+          x = Math.floor(xb.x1 + 1e-9) - offset
           y = mult * H
           colEnd = true
           rowEnd = aEnd
           break
         case 'right':
-          x = Math.ceil(xb.x2) + offset
+          x = Math.ceil(xb.x2 - 1e-9) + offset
           y = mult * H
           rowEnd = aEnd
           break
         case 'top':
           x = mult * W
-          y = Math.floor(yb.y1) - offset
+          y = Math.floor(yb.y1 + 1e-9) - offset
           colEnd = aEnd
           rowEnd = true
           break
         case 'bottom':
           x = mult * W
-          y = Math.ceil(yb.y2) + offset
+          y = Math.ceil(yb.y2 - 1e-9) + offset
           colEnd = aEnd
           break
         case 'top-left':
@@ -4272,29 +4275,12 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
 
 
   // --- 'bottom' ---
-  if (orient === 'bottom') {
-    const titleStr = String(legend.title ?? '')
-    // Vertical flow (raw Vega default `symbolDirection: vertical`): entries
-    // stack at 18px row step, each row 14px tall with symbol at (6,6) and
-    // label at (16,9). Group sits at height+24 (oracle line-grid-dash).
-    if (legend.direction !== 'horizontal') {
-      const rowStep = 18
-      const rowHeight = 14
-      const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
-      const entryWidth = 16 + 8 * maxLabelLen
-      const items: SceneItem[] = []
-      // Legend background spans the whole entry column.
-      items.push({ path: `M0,0h${entryWidth}v${n * rowStep - (rowStep - rowHeight)}h-${entryWidth}Z`, x: 0, y: 0 })
-      for (let i = 0; i < n; i++) {
-        const ey = i * rowStep
-        items.push({ path: `M0,0h${entryWidth}v${rowHeight}h-${entryWidth}Z`, x: 0, y: ey })
-        items.push({ shape: 'circle', radius: 5, x: 6, y: ey + 6, stroke: String(scale(domain[i])), strokeWidth: 1.5, opacity: 1 })
-        items.push({ text: String(domain[i]), x: 16, y: ey + 9, align: 'left', fill: '#000', fontSize: 10 })
-      }
-      return { marktype: 'group', role: 'legend', x: 0, y: 0, width: entryWidth, height: n * rowStep - 4, items }
-    }
-    // Horizontal flow (Vega-Lite emits `direction: horizontal` for bottom
-    // legends with a title). Per-entry step = entry content width + 12px gap.
+  // Horizontal flow (Vega-Lite emits `direction: horizontal` for bottom
+  // legends with a title). Per-entry step = entry content width + 12px gap.
+  // Everything else falls through to the orient-independent symbol block
+  // below, whose 13px step and title row match the oracle for every orient
+  // (the grid anchor does the positioning) — including bottom verticals.
+  if (orient === 'bottom' && legend.direction === 'horizontal') {
     const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
     const entryWidth = 16 + 8 * maxLabelLen
     const step = entryWidth + 12
@@ -4310,6 +4296,26 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       items.push({ text: String(value), x: sx + 16, y: 25, align: 'left', fill: '#000', fontSize: 10 })
     }
     return { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: 30, items }
+  }
+
+  // --- bottom vertical stroke legends (calibrated: line-grid-dash) ---
+  // Entries stack at 18px row step, each row 14px tall with symbol at (6,6)
+  // and label at (16,9). Group sits at height+24.
+  if (orient === 'bottom' && !legend.fill) {
+    const rowStep = 18
+    const rowHeight = 14
+    const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
+    const entryWidth = 16 + 8 * maxLabelLen
+    const items: SceneItem[] = []
+    // Legend background spans the whole entry column.
+    items.push({ path: `M0,0h${entryWidth}v${n * rowStep - (rowStep - rowHeight)}h-${entryWidth}Z`, x: 0, y: 0 })
+    for (let i = 0; i < n; i++) {
+      const ey = i * rowStep
+      items.push({ path: `M0,0h${entryWidth}v${rowHeight}h-${entryWidth}Z`, x: 0, y: ey })
+      items.push({ shape: 'circle', radius: 5, x: 6, y: ey + 6, stroke: String(scale(domain[i])), strokeWidth: 1.5, opacity: 1 })
+      items.push({ text: String(domain[i]), x: 16, y: ey + 9, align: 'left', fill: '#000', fontSize: 10 })
+    }
+    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: entryWidth, height: n * rowStep - 4, items }
   }
 
   // --- corner orents (top-left / top-right / bottom-left / bottom-right) ---
