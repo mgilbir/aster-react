@@ -351,20 +351,20 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   the anchor-bound rules (xBounds = vertical axes, yBounds = horizontal,
   group-typed marks = ScopeRole union into both, grid marks excluded). Orient
   sweep 14/18; the remaining 4 are ±1-3px title/scope-bound epsilons on the
-  sweep base (left/bottom orients). Two rounds landed the vega-faithful
-  axis baseline architecture, the tick-position model
-  (bandPosition/tickOffset/tickRound/labelOffset), translate/offset,
-  minExtent/maxExtent clamps, opacity-channel fidelity, symbolType, the
-  legend entry-grid model measured from oracle dumps (offset =
-  max(ceil(sqrt(symbolSize)+symbolStrokeWidth), labelFontSize), swatch =
-  label/symbol bound union, grid step = rowPadding + bound lift +
-  ceil(entry height), titleRow = titleFontSize + titlePadding, inner
-  padding, labelLimit caps), text stroke paint, title/subtitle/label
-  limits, and rule xc/yc config-ignore semantics. Sweep 7127/7549.
-  Remaining: legend baselines/columns/clipHeight/titleOrient/tickCount
-  (~60), title orient/align/angle/baseline/frame (~20), layout (14),
-  config-rect/style x2/yc/height (~25), encode-rect/area (~20),
-  tickMinStep (8), symbolSize/symbolLimit anchor interactions (6).
+  sweep base (left/bottom orients). Three rounds landed the vega-faithful
+  axis baseline architecture, the tick-position model, translate/offset,
+  the legend entry-grid model, text stroke paint, title/subtitle limits,
+  rule xc/yc config-ignore, the vega-exact title layout (baseline, align,
+  angle, dx, subtitle color/size/padding, bound-union positioning via
+  boundText), the adjustSpatial port (x2/y2 override width/height,
+  rect/group/image swap, rules skip; area baseline reads y+height), mark
+  paint attrs (opacity/dasharray/fill on path/rect/rule/line/area), and
+  the legend title baseline + legendBounds anchoring. Sweep 7271/7549
+  (96.3%). Remaining: legend 44 (titleAnchor/Align/Orient, columns,
+  clipHeight, symbolLimit, tickCount, direction, orient), axis 32 +
+  config-axis 29, layout 33, config-range 11, scale families ~50
+  (heterogeneous round/nice/padding/align roots), view 4, title/
+  encode-path/symbol leftovers ~14.
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
 
