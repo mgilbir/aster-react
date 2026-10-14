@@ -1132,7 +1132,10 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
   let sBound: Bounds | undefined
   if (hasSub) {
     sx = isLR ? (orient === 'left' ? tBound.width() + subPad : -(tBound.width() + subPad)) : 0
-    sy = isLR ? 0 : tBound.height() + subPad
+    // vega's subtitle-offset switch covers top/bottom/left/right only — orient
+    // 'none' matches no case, so the subtitle keeps the title's own offset
+    // (sx=sy=0) and overlaps it.
+    sy = isLR || orient === 'none' ? 0 : tBound.height() + subPad
     sBound = boundText(new Bounds(), {
       x: sx, y: sy, text: title.subtitle!, align, baseline, angle,
       fontSize: subFs, fontWeight: title.subtitleFontWeight, dx, dy,
