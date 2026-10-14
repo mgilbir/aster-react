@@ -4519,7 +4519,12 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const direction = (legend as { direction?: string }).direction ?? 'vertical'
     const specColumns = (legend as { columns?: number }).columns
     const colPad = (legend as { columnPadding?: number }).columnPadding ?? 10
-    const ncols = direction === 'horizontal' ? n : Math.max(1, specColumns ?? 1)
+    // Entry columns (vega gridLayout: `ncols = opt.columns || groups.length`):
+    // unspecified → one column; 0 → every entry is its own column (falsy
+    // columns falls through to the group count).
+    const ncols = direction === 'horizontal'
+      ? n
+      : specColumns == null ? 1 : (specColumns > 0 ? specColumns : n)
     const nrows = Math.max(1, Math.ceil(n / ncols))
     const natW = domain.map((v: unknown) => symbolOffset + offset + labelOffset + labelExtend(labelW(String(v).length)))
     const colExtent = Array<number>(ncols).fill(0)
