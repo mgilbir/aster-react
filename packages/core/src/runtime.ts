@@ -125,6 +125,8 @@ interface EvalContext {
   width: number
   height: number
   datasets: Map<string, Row[]>
+  /** A legend tickCount threw: the whole layout aborts (raw-guide mode). */
+  rawGuides?: boolean
   scales: Map<string, Scale>
   scaleTypes: Map<string, string>
   projections: Map<string, unknown>
@@ -200,6 +202,21 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
 
   const defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }> = []
   const ctx: EvalContext = { chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new Map(), runtime, _defs: defs, hierarchies: new Map(), affected: new Set(), incremental: false }
+  // A legend whose tickCount is an interval string on a non-time scale makes
+  // vega's LegendEntries throw: the dataflow logs the error and the ViewLayout
+  // transform never runs — the whole scene renders at raw encode positions
+  // (no axis layout, no title layout, default view size).
+  ctx.rawGuides = chart.legends.some((l) => {
+    if (typeof l.tickCount === 'string') {
+      const scaleName = l.shape ?? l.stroke ?? l.fill ?? l.size
+      const t = scaleName ? chart.scales.find((sc) => sc.name === scaleName)?.type : undefined
+      if (t !== 'time' && t !== 'utc') return true
+    }
+    // A non-integer/negative `columns` makes vega's gridLayout throw
+    // (Array(columns) with a length that is not a valid uint32-ish int).
+    if (typeof l.columns === 'number' && (l.columns > 0 ? !Number.isInteger(l.columns) : l.columns !== 0)) return true
+    return false
+  })
   if (input.dataChanges) {
     ctx.dataChanges = new Map(Object.entries(input.dataChanges).map(([name, idxs]) => [name, new Set(idxs)]))
   }
@@ -371,8 +388,14 @@ function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { gro
   for (const axis of ctx.chart.axes) {
     const group = buildAxis(axis, ctx)
     if (group) {
-      groups.push(group)
-      anchorItems.push(group)
+      // Raw-guide mode: the axisLayout never ran, so the builder's baked 0.5
+      // render delta must be cancelled by the group translate (vega's raw
+      // items sit at their encode positions with no delta).
+      const wrapped = ctx.rawGuides
+        ? ({ marktype: 'group', role: 'axis', x: -0.5, y: -0.5, items: [group] } as SceneGroup)
+        : group
+      groups.push(wrapped)
+      anchorItems.push(wrapped)
     }
   }
 
@@ -435,6 +458,9 @@ function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { gro
     }
 
     for (const [orient, list] of byOrient) {
+      // Raw-guide mode skips the legend grid: the groups stay at (0,0) (the
+      // built legends are pushed unpositioned below).
+      if (ctx.rawGuides) continue
       if (process.env.ASTER_DEBUG_LEG) console.error('[leg]', orient, 'xb', JSON.stringify(xb), 'yb', JSON.stringify(yb), 'W', ctx.width, 'H', ctx.height)
       const n = list.length
       // columns: vertical direction (left/right) stacks in one column; the
@@ -734,39 +760,6 @@ function buildContent(
 ): { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; isFacetSpec: boolean } {
   const { ctx, width, height } = prepareChartCtx(chart, { ...input, width: cw, height: ch })
 
-  // A legend tickCount interval string on a non-time scale makes vega's
-  // LegendEntries transform throw; the dataflow run aborts before any guide
-  // layout or mark encoding, so the view renders a bare empty frame.
-  const brokenLegend = ctx.chart.legends.some((l) => {
-    const tc = (l as { tickCount?: unknown }).tickCount
-    if (typeof tc !== 'string') return false
-    const st = l.fill ?? l.stroke ?? l.size ?? l.shape
-    const t = st ? ctx.scaleTypes.get(st) : undefined
-    return t !== 'time' && t !== 'utc'
-  })
-  if (brokenLegend) {
-    // the axes encoded before the failure; the marks/legend/title (downstream
-    // in the dataflow) never did, and no guide layout ran (base padding only,
-    // axis overflow unmeasured)
-    const axisGroups: SceneGroup[] = []
-    for (const axis of ctx.chart.axes) {
-      const g = buildAxis(axis, ctx)
-      if (g) {
-        // no axisLayout ran, so the items keep their raw internal coords:
-        // cancel the 0.5 render delta our builder bakes in
-        axisGroups.push({ marktype: 'group', role: 'axis', x: -0.5, y: -0.5, items: [g] })
-      }
-    }
-    return {
-      items: axisGroups,
-      padding: { ...chart.padding },
-      ctx,
-      width,
-      height,
-      isFacetSpec: false,
-    }
-  }
-
   // Partial re-evaluation: when the caller names the datasets whose values
   // changed, marks drawing from untouched datasets reuse the previous scene's
   // groups (item identity preserved for the DOM patcher), so an update to one
@@ -805,7 +798,7 @@ function buildContent(
   for (const g of guideGroups) items.push(g)
 
   // 2b) Top-level title.
-  const titleGroup = buildTitleGroup(ctx.chart, items, width, height)
+  const titleGroup = buildTitleGroup(ctx.chart, items, width, height, ctx.rawGuides)
   if (titleGroup) items.push(titleGroup)
 
   // 2c) Trellis layout (vega's ViewLayout/trellisLayout port).
@@ -821,7 +814,7 @@ function buildContent(
   // `columns`) aborts vega's whole ViewLayout transform: the scene renders
   // unlayouted — cells at their encoded anchors — with the default padding
   // and no overflow growth (the dataflow logs the error and continues).
-  const padding = (ctx as unknown as { __layoutError?: boolean }).__layoutError
+  const padding = (ctx as unknown as { __layoutError?: boolean }).__layoutError || ctx.rawGuides
     ? ctx.chart.padding
     : computeGuidePadding(items, width, height, ctx.chart.padding)
   return { items, padding, ctx, width, height, isFacetSpec }
@@ -1082,7 +1075,7 @@ function contentBoundsOf(chart: CompiledChart, items: SceneNode[], width: number
  * title text at (0,0) and the subtitle at (sx,sy); the group is positioned
  * outside the viewBounds by the union of the two text bounds.
  */
-function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number, height: number): SceneGroup | null {
+function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number, height: number, raw = false): SceneGroup | null {
   const title = chart.title
   if (!title || !title.text) return null
   const orient = title.orient ?? 'top'
@@ -1137,7 +1130,9 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
     // vega's subtitle-offset switch covers top/bottom/left/right only — orient
     // 'none' matches no case, so the subtitle keeps the title's own offset
     // (sx=sy=0) and overlaps it.
-    sy = isLR || orient === 'none' ? 0 : tBound.height() + subPad
+    // Raw-guide mode: the titleLayout never ran — the subtitle keeps the
+    // title's own offset (0,0), overlapping it.
+    sy = isLR || orient === 'none' || raw ? 0 : tBound.height() + subPad
     sBound = boundText(new Bounds(), {
       x: sx, y: sy, text: title.subtitle!, align, baseline, angle,
       fontSize: subFs, fontWeight: title.subtitleFontWeight, dx, dy,
@@ -1155,6 +1150,7 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
     case 'none': x = 0; y = 0; break
     default: x = pos; y = vb.y1 - temp.height() - offset; break
   }
+  if (raw) { x = 0; y = 0 }
 
   const textChildren: SceneNode[] = [
     {
@@ -3951,7 +3947,13 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
   // error and the legend renders with no entries (an empty degenerate group).
   const tickCountRaw = (legend as { tickCount?: unknown }).tickCount
   if (typeof tickCountRaw === 'string' && scaleType !== 'time' && scaleType !== 'utc') {
-    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: 0, height: 0, items: [] }
+    // vega's LegendEntries throws (the pulse aborts downstream of it): the
+    // entries vanish but the legend title — whose encode ran earlier — stays
+    // at its raw (0,0) position.
+    const titleStr = String(legend.title ?? '')
+    const items: SceneItem[] = []
+    if (titleStr) items.push({ text: titleStr, x: 0, y: 0, align: 'left', baseline: 'top', fill: '#000', fontSize: 11 })
+    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: 0, height: 0, items }
   }
   // Domain values
   const domain = scale.domain() as unknown[]
@@ -4540,9 +4542,17 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // Entry columns (vega gridLayout: `ncols = opt.columns || groups.length`):
     // unspecified → one column; 0 → every entry is its own column (falsy
     // columns falls through to the group count).
+    // A non-integer/negative `columns` makes vega's legend gridLayout throw
+    // (invalid array length) — the layout aborts and the legend stays at its
+    // raw (0,0) position with the base one-column content (raw-guide mode
+    // skips the placement). The entry columns for those behave as if
+    // unspecified: i % 0.5 and i % -4 both keep the dataflow's column 0.
     const ncols = direction === 'horizontal'
       ? n
-      : specColumns == null ? 1 : (specColumns > 0 ? specColumns : n)
+      : specColumns == null ? 1
+        : specColumns === 0 ? n
+          : specColumns > 0 ? (Number.isInteger(specColumns) ? specColumns : 1)
+            : 1
     const nrows = Math.max(1, Math.ceil(n / ncols))
     const natW = domain.map((v: unknown) => symbolOffset + offset + labelOffset + labelExtend(labelW(String(v).length)))
     const colExtent = Array<number>(ncols).fill(0)
@@ -4579,18 +4589,21 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     } else {
       titleX = legendPad + anchorOffX
     }
+    if (ctx.rawGuides) { titleX = 0; titleY = 0 }
     // default align (vega exprAlign): left/right titleOrient → 'left' (non-
     // vgrad); otherwise anchor-derived start→left, end→right, middle→center.
     const tAlign = (specTitleAlign ?? (titleOrient === 'left' || titleOrient === 'right'
       ? 'left'
       : titleAnchor === 'end' ? 'right' : titleAnchor === 'middle' ? 'center' : 'left')) as 'left' | 'center' | 'right'
     const overhang = tAlign === 'right' ? titleWidth : tAlign === 'center' ? titleWidth / 2 : 0
-    const shift = titleStr ? Math.max(0, Math.round(legendPad + overhang - titleX)) : 0
+    const shift = titleStr && !ctx.rawGuides ? Math.max(0, Math.round(legendPad + overhang - titleX)) : 0
     // entry block base: top titles push entries down by the title row;
     // left titles push them right by title width + padding; right/bottom
     // leave the entries at the padding origin.
-    const entryX = legendPad + shift + (titleOrient === 'left' && titleStr ? titleWidth + titlePad : 0)
-    const entryBaseY = titleOrient === 'top' && titleStr ? titleRow : 0
+    // Raw-guide mode: the legendGroupLayout never ran — the entries keep
+    // their encode positions (no title-row shift, no padding shifts).
+    const entryX = ctx.rawGuides ? 0 : legendPad + shift + (titleOrient === 'left' && titleStr ? titleWidth + titlePad : 0)
+    const entryBaseY = ctx.rawGuides ? 0 : titleOrient === 'top' && titleStr ? titleRow : 0
     let contentX2 = 0
     if (!symbolSizeNaN) {
       domain.forEach((_: unknown, i: number) => {
@@ -4624,7 +4637,11 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // the path half a pixel (crisp 1px stroke) without changing the size.
     const bgX = legendBorderColor != null ? 0.5 : 0
     const bgY = legendBorderColor != null ? 0.5 : 0
-    const bgPath = legendCornerRadius && legendCornerRadius > 0
+    // Raw-guide mode: the legend item's size is a layout product — the
+    // background stays a degenerate placeholder (vega drops it).
+    const bgPath = ctx.rawGuides
+      ? 'M0,0h0v0h0Z'
+      : legendCornerRadius && legendCornerRadius > 0
       ? roundedRectPath(bgX, bgY, bgW, bgH, Math.min(legendCornerRadius, bgW / 2, bgH / 2))
       : legendBorderColor != null
         ? `M${bgX},${bgY}h${bgW}v${bgH}h-${bgW}Z`
@@ -4637,8 +4654,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     if (titleStr) items.push({ text: titleStr, x: titleX + shift, y: titleY, baseline: (titleBaseline ?? tBaseline) as 'top', align: tAlign, fill: titleColor, fontSize: titleFs, ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
     for (let i = 0; !symbolSizeNaN && i < n; i++) {
       const value = domain[i]
-      const off = entryBaseY + rowY[~~(i / ncols)]!
-      const colOff = colX[i % ncols]!
+      // Raw-guide mode: the entry rows never got their layout offsets — every
+      // entry sits at its encode position (0), overlapping.
+      const off = ctx.rawGuides ? 0 : entryBaseY + rowY[~~(i / ncols)]!
+      const colOff = ctx.rawGuides ? 0 : colX[i % ncols]!
       // For shape legends, compute per-entry swatch height based on the
       // symbol's actual stroke bounds.  Vega's boundStroke expands path
       // bounds by e = max(strokeWidth/2, miterLimit*strokeWidth/2).
@@ -4653,7 +4672,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         const extentY = (sn === 'triangle-up' || sn === 'triangle-down') ? symR * Math.sqrt(3) / 2 : symR
         entryBoxHeight = 6 + extentY + 3
       }
-      items.push({ path: `M0,0h${colExtent[i % ncols]}v${entryBoxHeight}h-${colExtent[i % ncols]}Z`, x: entryX + colOff, y: legendPad + off })
+      // Raw-guide mode: the entry backgrounds are bound-derived boxes — the
+      // layout never ran, so they stay degenerate placeholders (vega drops
+      // them).
+      items.push({ path: ctx.rawGuides ? 'M0,0h0v0h0Z' : `M0,0h${colExtent[i % ncols]}v${entryBoxHeight}h-${colExtent[i % ncols]}Z`, x: entryX + colOff, y: legendPad + off })
       const symbolType = legend.symbolType ?? 'circle'
       // vega renders the legend entry symbol in the shape requested by the
       // legend's symbolType. For "stroke" type, render a horizontal line.
@@ -5056,6 +5078,16 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       t.y = anchorLerp + 0.5; t.align = 'center'; t.baseline = titleBaseline ?? 'bottom'
       ;(t as Record<string, unknown>).angle = titleAngle ?? (orient === 'left' ? -90 : 90)
     }
+    // Raw-guide mode: the axisTitleLayout never ran, so the title keeps its
+    // encode position — the lerp along the axis, and 0 across (the s+extent
+    // offset is a layout product). The -0.5 raw shift then lands it at 0.
+    if (ctx.rawGuides) {
+      // the raw dys for bottom drops the height origin; the title must land
+      // at 0 across (bottom/top) or 0 along (left/right) after it.
+      if (orient === 'bottom') t.y = ctx.height + 0.5
+      else if (orient === 'top') t.y = 0.5
+      else t.x = 0.5
+    }
     // Explicit titleX/titleY are the vega title mark's group-relative x/y,
     // and the axis group sits at (0.5, ±0.5|height+0.5) per orient (vega
     // axisLayout: top y=-offset, bottom y=height+offset, left x=-offset,
@@ -5094,8 +5126,13 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   // `position` anchors the whole axis group along its line (vega axisLayout:
   // x = position for top/bottom, y = position for left/right).
   const posOff = typeof axis.position === 'number' ? axis.position : 0
-  const dxs = tr + (orient === 'left' ? -off : orient === 'right' ? off : posOff)
-  const dys = tr + (orient === 'bottom' ? off : orient === 'top' ? -off : posOff)
+  // Raw-guide mode (the layout aborted): the items keep their encode-frame
+  // positions — the axis group sits at (0,0); only the perpendicular origin
+  // (height/width) is dropped, which axisLayout would have applied. The
+  // buildAxisAndLegend wrapper's -0.5 already cancels the baked delta.
+  const dxs = ctx.rawGuides ? (orient === 'right' ? -ctx.width : 0) : tr + (orient === 'left' ? -off : orient === 'right' ? off : posOff)
+  const dys = ctx.rawGuides ? (orient === 'bottom' ? -ctx.height : 0) : tr + (orient === 'bottom' ? off : orient === 'top' ? -off : posOff)
+  if (process.env.ASTER_DBG_RAW) console.error('[raw]', orient, 'raw', ctx.rawGuides, 'dxs', dxs, 'dys', dys, 'n', items.length)
   if (dxs || dys) {
     for (const it of items) {
       const rec = it as Record<string, unknown>
@@ -5116,8 +5153,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     // content top for top, 0 for left, content right for right). These diverge
     // once autosize fit shrinks width != height, so both are needed.
     ...(orient === 'left' || orient === 'right'
-      ? { axis: { orient, range: ctx.height, baseline: orient === 'right' ? ctx.width : 0, translate: typeof axis.translate === 'number' ? axis.translate : 0.5, position: posOff } }
-      : { axis: { orient, range: ctx.width, baseline: orient === 'bottom' ? ctx.height : 0, translate: typeof axis.translate === 'number' ? axis.translate : 0.5, position: posOff } }),
+      ? { axis: { orient, range: ctx.height, baseline: orient === 'right' ? ctx.width : 0, translate: ctx.rawGuides ? 0 : (typeof axis.translate === 'number' ? axis.translate : 0.5), position: posOff } }
+      : { axis: { orient, range: ctx.width, baseline: orient === 'bottom' ? ctx.height : 0, translate: ctx.rawGuides ? 0 : (typeof axis.translate === 'number' ? axis.translate : 0.5), position: posOff } }),
   } as SceneGroup
 }
 

@@ -66,7 +66,7 @@ export function compileChart(spec: VgSpec): CompiledChart {
 
   const legends: CompiledLegend[] = []
   for (const l of (spec.legends as Array<Record<string, unknown>>) ?? []) {
-    legends.push(compileLegend(applyConfigDefaults(l, cfgLegend)))
+    legends.push(compileLegend(applyConfigDefaults(l, cfgLegend, undefined, true)))
   }
 
   const marks: CompiledMark[] = []
@@ -337,7 +337,7 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
 }
 
 /** Fill properties from a config block (e.g. config.axis) for keys the spec omits. */
-function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string, unknown>, scales?: CompiledScale[]): Record<string, unknown> {
+function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string, unknown>, scales?: CompiledScale[], isLegend = false): Record<string, unknown> {
   if (!defaults || typeof defaults !== 'object') return o
   const out: Record<string, unknown> = { ...defaults, ...o }
   // vega's `axisBand` style (tickOffset -0.5) is consulted through the guide
@@ -359,8 +359,10 @@ function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string
   // the `lookup(spec, config)` every other property goes through — so a config
   // block's copy is dead upstream.  Drop it too, or a config theme would both
   // retick every axis and refuse interval strings the oracle never sees.
-  for (const k of ['tickCount', 'values', 'tickMinStep', 'format', 'formatType']) {
-    if (k in defaults && !(k in o)) delete out[k]
+  if (!isLegend) {
+    for (const k of ['tickCount', 'values', 'tickMinStep', 'format', 'formatType']) {
+      if (k in defaults && !(k in o)) delete out[k]
+    }
   }
   return out
 }
