@@ -5,6 +5,7 @@
  */
 import * as vs from './scale.js'
 import { interpolateRound } from './interp.js'
+import { quantizeInterpolator } from './scale.js'
 import type { CompiledScale, ScaleDomain, ScaleRange } from './types.js'
 
 export type Scale = vs.Scale
@@ -66,7 +67,7 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   const stepRange = effectiveRange && typeof effectiveRange === 'object' && !Array.isArray(effectiveRange) && 'step' in (effectiveRange as object)
     ? (effectiveRange as unknown as { step: unknown }).step
     : undefined
-  let range0: unknown[] | string
+  let range0: unknown[] | string | { __asterScheme: string; __asterExtent?: number[] }
   if (stepRange !== undefined) {
     const stepVal = typeof stepRange === 'number' ? stepRange
       : stepRange && typeof stepRange === 'object' && 'signal' in stepRange
@@ -83,19 +84,27 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
     if (Number.isFinite(stepVal)) (s as { step?: (n: number) => unknown }).step?.(stepVal)
     range0 = [0, rangeEnd]
   } else {
-    range0 = resolveRange(effectiveRange, ctx, type)
+    range0 = resolveRange(effectiveRange, ctx, type, (s.domain() as unknown[]).length)
   }
   // Handle continuous schemes: scheme strings like 'blues' for color interpolation
-  if (typeof range0 === 'string' && CONTINUOUS_TYPES.has(type)) {
-    const schemeFn = vs.scheme(range0)
+  const isSchemeRef = range0 != null && typeof range0 === 'object' && '__asterScheme' in (range0 as object)
+  if ((typeof range0 === 'string' || isSchemeRef) && CONTINUOUS_TYPES.has(type)) {
+    const ref = range0 as string | { __asterScheme: string; __asterExtent?: number[] }
+    const schemeName = typeof ref === 'string' ? ref : ref.__asterScheme
+    const schemeExtent = typeof ref === 'string' ? undefined : ref.__asterExtent
+    const schemeFn = vs.scheme(schemeName)
     if (typeof schemeFn === 'function') {
       s.range([0, 1])
       const cs = s as ColorScale
-      // When reverse is requested, wrap the interpolator so it maps t → original(1-t),
-      // reversing the color mapping without replacing the range.
-      const effectiveSchemeFn: SchemeFn = c.reverse
-        ? ((t: number) => (schemeFn as (t: number) => unknown)(1 - t) as unknown) as SchemeFn
-        : schemeFn as SchemeFn
+      // vega configureScheme/adjustScheme: the interpolator samples the
+      // scheme across flip(extent ?? [0,1], reverse) — reverse folds into
+      // the extent flip, and configureRange returns before any range flip
+      // for interpolating scales.
+      const e0 = schemeExtent ? schemeExtent[0]! : 0
+      const e1 = schemeExtent ? schemeExtent[1]! : 1
+      const a = c.reverse ? e1 : e0
+      const b = c.reverse ? e0 : e1
+      const effectiveSchemeFn: SchemeFn = ((t: number) => (schemeFn as (t: number) => unknown)(a + t * (b - a)) as unknown) as SchemeFn
       // d3 sequential/diverging scales use .interpolator() (not .interpolate)
       if (typeof cs.interpolator === 'function') {
         cs.interpolator(effectiveSchemeFn)
@@ -122,7 +131,9 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
     if (c.align != null) s.align?.(c.align)
   }
 
-  if (CONTINUOUS_TYPES.has(type) && typeof range0 !== 'string') {
+  // interpolating (scheme) scales return from configureRange before the
+  // range flip — reverse is folded into the extent-sampled interpolator
+  if (CONTINUOUS_TYPES.has(type) && typeof range0 !== 'string' && !isSchemeRef) {
     if (c.reverse) s.range(s.range().slice().reverse() as unknown[])
   } else if (c.domainMin != null || c.domainMax != null) {
     applyDomainMinMax(s, c.domainMin, c.domainMax)
@@ -148,7 +159,7 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   // A continuous scale whose range resolves to a color scheme is a sequential
   // color scale; vega never applies `zero` extension to it (the domain maps
   // directly onto [0,1] of the interpolator).
-  const isColorScheme = CONTINUOUS_TYPES.has(type) && typeof range0 === 'string'
+  const isColorScheme = CONTINUOUS_TYPES.has(type) && (typeof range0 === 'string' || isSchemeRef)
   const zero = !TIME_SCALE_TYPES.has(type) && !isColorScheme && (c.zero ?? INCLUDE_ZERO_TYPES.has(type))
   if (zero) applyZero(s)
   if (c.domainMin != null || c.domainMax != null) applyDomainMinMax(s, c.domainMin, c.domainMax)
@@ -521,7 +532,7 @@ function resolveRangeSignal(signal: string, ctx: ScaleContext): unknown {
   return undefined
 }
 
-function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string): unknown[] | string {
+function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string, domainCount = 0): unknown[] | string | { __asterScheme: string; __asterExtent?: number[] } {
   if (Array.isArray(range)) {
     return range.map((r) => {
       if (r && typeof r === 'object' && 'signal' in r) {
@@ -556,12 +567,20 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string):
           if (Array.isArray(cfg)) return cfg
           if (cfg && typeof cfg === 'object' && 'scheme' in cfg) {
             const schemeName = (cfg as { scheme: string }).scheme
+            const extent = (cfg as { extent?: number[] }).extent
             if (scaleType === 'band' || scaleType === 'ordinal' || scaleType === 'point') {
               const colors = vs.scheme(schemeName)
               if (Array.isArray(colors)) return colors
-              if (colors) return colors as unknown[]
+              if (typeof colors === 'function') {
+                // vega configureScheme: a continuous scheme on a discrete
+                // scale quantizes to the DOMAIN cardinality (schemeCount
+                // applies only to quantile/quantize)
+                return quantizeInterpolator(colors as (t: number) => unknown, Math.max(domainCount, 1)) as unknown[]
+              }
+              throw new Error(`Unrecognized scale scheme: ${schemeName}`)
             }
-            return schemeName
+            // continuous: thread the extent through to the interpolator
+            return extent ? { __asterScheme: schemeName, __asterExtent: extent } : schemeName
           }
           throw new Error(`Unrecognized scale range value: ${JSON.stringify(range)}`)
         }
@@ -573,15 +592,24 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string):
           symbol: ['circle', 'square', 'triangle-up', 'cross', 'diamond', 'triangle-right', 'triangle-down', 'triangle-left'],
         }
         if (directRanges[range]) return directRanges[range]
-        const aliases: Record<string, string> = {
-          ramp: 'blues',
-          heatmap: 'yellowgreenblue',
-          ordinal: 'blues',
-          diverging: 'blueorange',
+        // vega's config.js defaults: diverging carries extent [1, 0] (the
+        // default reads the scheme backwards — and a user entry REPLACES the
+        // default wholesale, so {scheme} alone reads forwards)
+        const aliases: Record<string, { scheme: string; extent?: number[] }> = {
+          ramp: { scheme: 'blues' },
+          heatmap: { scheme: 'yellowgreenblue' },
+          ordinal: { scheme: 'blues' },
+          diverging: { scheme: 'blueorange', extent: [1, 0] },
         }
-        const name = aliases[range] ?? range
+        const entry = aliases[range]
+        const name = entry ? entry.scheme : range
         const scheme = vs.scheme(name)
-        if (typeof scheme === 'function') return name
+        if (typeof scheme === 'function') {
+          if (scaleType === 'band' || scaleType === 'ordinal' || scaleType === 'point') {
+            return quantizeInterpolator(scheme as (t: number) => unknown, Math.max(domainCount, 1)) as unknown[]
+          }
+          return entry?.extent ? { __asterScheme: name, __asterExtent: entry.extent } : name
+        }
         if (scheme) return scheme as unknown[]
         throw new Error(`[aster] unsupported scale range "${name}"`)
       }
@@ -597,7 +625,8 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string):
   // buildScale's continuous-scheme branch picks it up.
   if (range && typeof range === 'object' && 'scheme' in range) {
     const schemeName = (range as { scheme: string }).scheme
-    if (typeof schemeName === 'string') return schemeName
+    const extent = (range as { extent?: number[] }).extent
+    if (typeof schemeName === 'string') return extent ? { __asterScheme: schemeName, __asterExtent: extent } : schemeName
   }
   throw new Error(`[aster] unsupported scale range value`)
 }
