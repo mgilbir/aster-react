@@ -359,12 +359,27 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   boundText), the adjustSpatial port (x2/y2 override width/height,
   rect/group/image swap, rules skip; area baseline reads y+height), mark
   paint attrs (opacity/dasharray/fill on path/rect/rule/line/area), and
-  the legend title baseline + legendBounds anchoring. Sweep 7271/7549
-  (96.3%). Remaining: legend 44 (titleAnchor/Align/Orient, columns,
-  clipHeight, symbolLimit, tickCount, direction, orient), axis 32 +
-  config-axis 29, layout 33, config-range 11, scale families ~50
-  (heterogeneous round/nice/padding/align roots), view 4, title/
-  encode-path/symbol leftovers ~14.
+  the legend title baseline + legendBounds anchoring. A later round ported
+  the vega axisLayout semantics exactly: `ticks:false` zeroes the effective
+  tickSize, interval-string `tickCount` refuses on non-time scales (and
+  resolves to calendar intervals on time/utc), config-axis drops the
+  lookup-bypassed props (`tickCount`/`values`/`tickMinStep`/`format`/
+  `formatType`/`position`) and yields `tickOffset` to the axisBand style on
+  band scales, axis `position` shifts the group along its line,
+  `titleAnchor` snaps the title to the scale range ends and drives align,
+  `titleX`/`titleY` resolve against the per-orient group origin,
+  `titleAngle`/`labelAngle` rotate (baseline folded inside the rotate frame),
+  and the title extent now comes from the real tick+label item bounds
+  (stroke expansion and rotation included) instead of an analytic extent.
+  Corpus 413/413. Sweep 7363/7549 (97.5%). Remaining: legend 29 +
+  config-legend 29, layout 33, config-range 11, scale families ~48
+  (point 14, symlog/log 5 each, identity/time/utc/sqrt 4 each, pow 2,
+  linear 1), axis 4 + config-axis 9 (orient left/right span the scale range
+  rather than the view size; tickBand extent and tickExtra are unported;
+  config tickOffset/labelOffset/labelFlush couple into the view margins),
+  view 4, title 3 + config-title 3, encode leftovers (area/path/symbol 2
+  each, trail 1), and 7 refused-render mismatches (identity nice/round
+  engine-errors, area-interpolate-bundle and trail-size node-errors).
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
 
