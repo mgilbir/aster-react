@@ -812,11 +812,8 @@ export function textItemDesc(it: SceneItem): {
   // When text is rotated, Vega renders with dy for baseline offset rather
   // than baking it into y; for non-rotated text the offset goes into y.
   const isRotated = angle != null && angle !== 0
-  let bsOffset = 0
-  if (baseline === 'top') bsOffset = Math.round(0.79 * fontSize)
-  else if (baseline === 'middle') bsOffset = Math.round(0.30 * fontSize)
-  else if (baseline === 'bottom') bsOffset = Math.round(-0.21 * fontSize)
-  // alphabetic / default → 0 (no offset)
+  // vega util/text.js `offset` — shared with the bounds port (bounds.ts).
+  const bsOffset = baseline && baseline !== 'alphabetic' ? baselineOffset(it as SceneItem) : 0
   const x = num(baseX + dx)
   const y = isRotated ? num(baseY + dy) : num(baseY + dy + bsOffset)
   const textAnchor = it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle'

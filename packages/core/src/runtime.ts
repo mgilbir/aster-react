@@ -29,7 +29,7 @@ import type {
 import { tickFormat } from './scale.js'
 import { compileChart } from './compiler.js'
 import { trellisLayout } from './trellis.js'
-import { baselineOffset, boundAxisGroup, boundGroupItem, Bounds, boundLeaf } from './bounds.js'
+import { baselineOffset, boundAxisGroup, boundGroupItem, boundLeaf, boundText, Bounds } from './bounds.js'
 import { symbolPath } from './render.js'
 
 const DEFAULT_SIZE = 500
@@ -1041,72 +1041,84 @@ function contentBoundsOf(chart: CompiledChart, items: SceneNode[], width: number
   return b
 }
 
-/** Vega's titleLayout tempBounds width for left/right titles (rotated text). */
-function subMarkX(titleFs: number, subFs: number, hasSub: boolean): number {
-  if (!hasSub) return titleFs
-  return Math.max(titleFs, titleFs + 3 + subFs / 2)
-}
-
+/**
+ * Vega's titleLayout (vega-view titleLayout) port: the title group holds the
+ * title text at (0,0) and the subtitle at (sx,sy); the group is positioned
+ * outside the viewBounds by the union of the two text bounds.
+ */
 function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number, height: number): SceneGroup | null {
   const title = chart.title
   if (!title || !title.text) return null
-  let vb = title.frame === 'group'
-    ? { x1: 0, y1: 0, x2: width, y2: height }
-    : contentBoundsOf(chart, items, width, height)
-
-  // Title (and subtitle) text sizes. Vega's default subtitle style is
-  // fontSize 11, non-bold.
-  const titleH = title.fontSize
+  const orient = title.orient ?? 'top'
+  const isLR = orient === 'left' || orient === 'right'
   const hasSub = !!title.subtitle
-  // Vega probes: subtitle fontSize 12; the subtitle mark sits at
-  // titleBoundHeight + 3 below the title; the layout height is
-  // titleFs + 2 + subFs (the subtitle text bound rides -1 from its mark y).
-  const subFs = 12
-  const subMarkY = titleH + 3
-  const layoutH = hasSub ? titleH + 2 + subFs : titleH
-  const titleOffset = title.offset ?? 4
-  const titleW = estimateTextWidth(title.text, title.fontSize)
-  const subW = hasSub ? estimateTextWidth(title.subtitle!, subFs) : 0
-  // vega's layoutGroup viewBounds: [0,0,w,h] ∪ default marks ∪ axis/legend
-  // bounds ∪ headers. Axis marks measure in the axis-internal frame; our
-  // scene bakes the 0.5px axis delta into the axis leaves — shift it out.
-  if (title.frame !== 'group') {
-    const b = new Bounds().set(0, 0, width, height)
-    for (const g of items as SceneGroup[]) {
-      if (g.role === 'title') continue
-      const bb = g.role === 'axis'
-        ? boundAxisGroup(g as SceneGroup)
-        : boundLeaf(new Bounds(), g as SceneItem)
-      b.union(bb)
-    }
-    vb = { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
+  const subFs = title.subtitleFontSize ?? 12
+  const subPad = title.subtitlePadding ?? 3
+  const offset = title.offset ?? 4
+  const baseline = title.baseline ?? 'top'
+  const align = (title.align as SceneItem['align'] | undefined) ??
+    (title.anchor === 'start' ? 'left' : title.anchor === 'end' ? 'right' : 'center')
+  const angle = title.angle ?? (orient === 'left' ? -90 : orient === 'right' ? 90 : 0)
+  const dx = title.dx ?? 0
+  const dy = title.dy ?? 0
+
+  // viewBounds: [0,0,w,h] ∪ marks ∪ axis/legend bounds (axes measured in the
+  // axis-internal frame; our scene bakes the 0.5px axis delta into the leaves
+  // — shift it out). The title unions in afterwards, as in vega's layoutGroup.
+  const b = new Bounds().set(0, 0, width, height)
+  for (const g of items as SceneGroup[]) {
+    if (g.role === 'title') continue
+    const bb = g.role === 'axis'
+      ? boundAxisGroup(g as SceneGroup)
+      : boundLeaf(new Bounds(), g as SceneItem)
+    b.union(bb)
   }
+  const vb = { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
 
-  const groupW = Math.max(titleW, subW)
+  // anchor position: frame=content maps over the viewBounds; frame=group over
+  // the group box. For vertical titles start/end run along y (left: y2→y1).
+  let start = 0
+  let end = isLR ? height : width
+  if (title.frame !== 'group') {
+    if (orient === 'left') { start = vb.y2; end = vb.y1 }
+    else if (orient === 'right') { start = vb.y1; end = vb.y2 }
+    else { start = vb.x1; end = vb.x2 }
+  } else if (orient === 'left') {
+    start = height; end = 0
+  }
+  const pos = title.anchor === 'start' ? start : title.anchor === 'end' ? end : (start + end) / 2
 
-  const pos = title.anchor === 'start'
-    ? (title.orient === 'left' || title.orient === 'right' ? vb.y1 : vb.x1)
-    : title.anchor === 'end'
-      ? (title.orient === 'left' || title.orient === 'right' ? vb.y2 : vb.x2)
-      : title.orient === 'left' || title.orient === 'right'
-        ? (vb.y1 + vb.y2) / 2
-        : (vb.x1 + vb.x2) / 2
+  // Text bounds (vega marks/text bound): the title at (0,0); the subtitle at
+  // (sx,sy) where sy = titleBound.height + subtitlePadding (top/bottom) and
+  // sx = ±(titleBound.width + subtitlePadding) (left/right).
+  const tBound = boundText(new Bounds(), {
+    x: 0, y: 0, text: title.text, align, baseline, angle,
+    fontSize: title.fontSize, fontWeight: title.fontWeight, font: title.font,
+    dx, dy, ...(title.limit != null ? { limit: title.limit } : {}),
+  } as SceneItem)
+  let sx = 0
+  let sy = 0
+  let sBound: Bounds | undefined
+  if (hasSub) {
+    sx = isLR ? (orient === 'left' ? tBound.width() + subPad : -(tBound.width() + subPad)) : 0
+    sy = isLR ? 0 : tBound.height() + subPad
+    sBound = boundText(new Bounds(), {
+      x: sx, y: sy, text: title.subtitle!, align, baseline, angle,
+      fontSize: subFs, fontWeight: title.subtitleFontWeight, dx, dy,
+      ...(title.limit != null ? { limit: title.limit } : {}),
+    } as SceneItem)
+  }
+  const temp = sBound ? new Bounds().set(tBound.x1, tBound.y1, tBound.x2, tBound.y2).union(sBound) : tBound
 
-  // Layout extents mirror vega's tempBounds union: for top/bottom the union
-  // height = subMarkY - 1 + subFs (subtitle bound) ∪ title (fs); for left/right
-  // the union width = subMarkX + subFs/2 (rotated subtitle) ∪ title (fs).
   let x = 0
   let y = 0
-  switch (title.orient) {
-    case 'bottom': x = pos; y = vb.y2 + titleOffset; break
-    case 'left': x = vb.x1 - (subMarkX(titleH, subFs, hasSub)) - titleOffset; y = pos; break
-    case 'right': x = vb.x2 + (subMarkX(titleH, subFs, hasSub)) + titleOffset; y = pos; break
-    default: x = pos; y = vb.y1 - layoutH - titleOffset; break
+  switch (orient) {
+    case 'left': x = vb.x1 - temp.width() - offset; y = pos; break
+    case 'right': x = vb.x2 + temp.width() + offset; y = pos; break
+    case 'bottom': x = pos; y = vb.y2 + offset; break
+    case 'none': x = 0; y = 0; break
+    default: x = pos; y = vb.y1 - temp.height() - offset; break
   }
-
-  // Text align within the group: center anchors the text at group center.
-  const align: SceneItem['align'] =
-    title.anchor === 'start' ? 'left' : title.anchor === 'end' ? 'right' : 'center'
 
   const textChildren: SceneNode[] = [
     {
@@ -1117,12 +1129,13 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
         y: 0,
         text: title.text,
         align,
-        baseline: title.orient === 'left' || title.orient === 'right' ? 'middle' : 'top',
-        angle: title.orient === 'left' ? -90 : title.orient === 'right' ? 90 : undefined,
+        baseline,
+        angle: angle || undefined,
         fontSize: title.fontSize,
         fontWeight: title.fontWeight,
         fill: title.color,
-        dy: title.dy,
+        dx,
+        dy,
         ...(title.limit != null ? { limit: title.limit } : {}),
       } as SceneItem],
     } as SceneGroup,
@@ -1133,17 +1146,18 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
       marktype: 'text',
       role: 'title-subtitle',
       items: [{
-        x: title.orient === 'left' || title.orient === 'right' ? subMarkX(titleH, subFs, true) : 0,
-        y: title.orient === 'left' || title.orient === 'right' ? 0 : subMarkY,
+        x: sx,
+        y: sy,
         text: title.subtitle!,
         align,
-        baseline: title.orient === 'left' || title.orient === 'right' ? 'middle' : 'top',
-        angle: title.orient === 'left' ? -90 : title.orient === 'right' ? 90 : undefined,
+        baseline,
+        angle: angle || undefined,
         fontSize: subFs,
-        fontWeight: title.font,
+        fontWeight: title.subtitleFontWeight,
+        fill: title.subtitleColor ?? '#000',
+        dx,
+        dy,
         ...(title.limit != null ? { limit: title.limit } : {}),
-        fill: title.color,
-        dy: title.dy,
       } as SceneItem],
     } as SceneGroup)
   }

@@ -271,7 +271,7 @@ export function boundArcItem(bounds: Bounds, it: SceneItem): Bounds {
 }
 
 /** marks/text.js `bound` — exact (multi-line, align, angle rotation). */
-function boundText(bounds: Bounds, item: SceneItem): Bounds {
+export function boundText(bounds: Bounds, item: SceneItem): Bounds {
   const h = fontSize(item)
   const a = item.align
   const x = item.x || 0

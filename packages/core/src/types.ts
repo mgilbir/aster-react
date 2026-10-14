@@ -96,7 +96,7 @@ export interface CompiledChart {
 export interface CompiledTitle {
   text: string
   subtitle?: string
-  orient: 'top' | 'bottom' | 'left' | 'right'
+  orient: 'top' | 'bottom' | 'left' | 'right' | 'none'
   anchor: 'start' | 'middle' | 'end'
   offset: number
   subtitlePadding: number
@@ -104,6 +104,12 @@ export interface CompiledTitle {
   fontWeight?: string | number
   font?: string
   color: string
+  baseline?: string
+  align?: string
+  angle?: number
+  subtitleColor?: string
+  subtitleFontSize?: number
+  subtitleFontWeight?: string | number
   dx?: number
   dy?: number
   limit?: number
