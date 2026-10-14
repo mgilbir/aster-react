@@ -4822,11 +4822,25 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   // the bandwidth is non-zero — so a band scale with paddingInner 1 (bw 0)
   // still gets the -0.5 tickOffset default.
   const isBand = scale.type === 'band'
-  const bandPos = axis.bandPosition ?? 0.5
-  const tickOffsetEff = axis.tickOffset ?? (isBand ? -0.5 : 0)
+  // vega guide-util tickBand: 'extent' forces band 1 / offset 0 / extra on;
+  // 'middle' forces band 0.5 with extra off; unset keeps bandPosition and
+  // the tickExtra flag.
+  const tickBandV = axis.tickBand as string | undefined
+  const extentTicks = tickBandV === 'extent'
+  const bandPos = extentTicks ? 1 : (tickBandV == null ? (axis.bandPosition ?? 0.5) : 0.5)
+  const tickExtraOn = extentTicks ? true : (tickBandV == null ? axis.tickExtra === true : false)
+  const tickOffsetEff = extentTicks ? 0 : (axis.tickOffset ?? (isBand ? -0.5 : 0))
   const tickRoundOn = axis.tickRound !== false
-  const pos = (t: unknown): number => {
-    const raw = (scale(t) as number) + (isBand ? bandPos * bw : 0) + tickOffsetEff
+  // vega's AxisTicks `extra`: one more entry pegged to the FIRST tick value
+  // (empty label); its scale encode REPLACES the scale+bandwidth term with
+  // the raw scale of that value (entry.js: `datum.extra ? _scale(s, v0) :
+  // _scale(s, v) + _bandwidth(s)*band`), then offset and round apply.
+  const tickEntries = ticks.map((v) => ({ value: v, extra: false }))
+  if (tickExtraOn && ticks.length) tickEntries.push({ value: ticks[0]!, extra: true })
+  const pos = (t: unknown, isExtra = false): number => {
+    const raw = (scale(isExtra ? ticks[0]! : t) as number)
+      + (isExtra ? 0 : isBand ? bandPos * bw : 0)
+      + tickOffsetEff
     return tickRoundOn ? Math.round(raw) : raw
   }
 
@@ -4838,8 +4852,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     const gridStyle = Object.keys(gridUpdate).length
       ? resolveEncodeSet(gridUpdate as Record<string, EncodeValue | EncodeValue[]>, {}, ctx, 'line')
       : {}
-    for (const t of ticks) {
-      const v = pos(t)
+    for (const te of tickEntries) {
+      const v = pos(te.value, te.extra)
       const item: SceneItem = { x: 0, y: 0, x2: 0, y2: 0 }
       if (orient === 'left' || orient === 'right') {
         item.x = 0.5; item.x2 = ctx.width + 0.5; item.y = v + 0.5; item.y2 = v + 0.5
@@ -4872,8 +4886,9 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   const tickItems: SceneItem[] = []
   const labels: SceneItem[] = []
 
-  for (const t of ticks) {
-    const v = pos(t)
+  for (const te of tickEntries) {
+    const t = te.value
+    const v = pos(t, te.extra)
     if (axis.ticks !== false) {
       const tick: SceneItem = { x: 0, y: 0, x2: 0, y2: 0 }
       if (orient === 'left') { tick.x = 0.5; tick.x2 = -tickSize + 0.5; tick.y = v + 0.5; tick.y2 = v + 0.5 }
@@ -4887,8 +4902,10 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       items.push(tick)
     }
     if (axis.labels !== false) {
-      const rawV = Math.round(scale(t) as number * 1000) / 1000
-      const label: SceneItem = { text: String(labelFormat(t)), x: 0, y: 0 }
+      // vega's AxisTicks extra entry: an empty label whose scale lookup
+      // (datum.value undefined) lands on NaN — the renderer's || 0 pins it
+      // to the axis origin (only the perpendicular coordinate is real)
+      const label: SceneItem = { text: te.extra ? '' : String(labelFormat(t)), x: 0, y: 0 }
       const align = axis.labelAlign ?? (orient === 'left' ? 'right' : orient === 'right' ? 'left' : 'center')
       const baseline = axis.labelBaseline ?? (orient === 'top' ? 'bottom' : orient === 'bottom' ? 'top' : 'middle')
       // Vega axis labels (vega-encode axisLabels): the label y is the raw
@@ -4910,26 +4927,59 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       // axisLabels tickPos keeps band 0.5 and no round of its own).
       const rawOf = (scale(t) as number) + (isBand ? 0.5 * bw : 0)
       const labelOffset = axis.labelOffset ?? 0
-      // Band scales label at the rounded tick position (pos); every other
-      // scale — including point, whose bandwidth() exists but is 0 — labels
-      // at the raw scale position + the 0.5px group bake. Keying on
+      // The along-axis label coordinate: vega's axisLabels position labels at
+      // the UNROUNDED tick position (band 0.5 + tickOffset — tickRound never
+      // reaches them) + labelOffset, for every orient. Keying on
       // `scale.bandwidth` alone silently rounded point-scale labels, which
       // skewed the view bounds (top margin ceil(-y1)) by a pixel.
-      const bandLabelY = isBand ? v : rawV + 0.5
-      if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align'] }
-      else if (orient === 'right') { label.x = ctx.width + tickSize + labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align'] }
+      const alongLabel = rawOf + tickOffsetEff + 0.5 + labelOffset
+      // vega's labelFlush (axis-labels.js): within labelFlush px of a range
+      // endpoint the label align (x orients) or baseline (y orients) flips to
+      // the endpoint side (vega-util flush: left needs l < r && l <= t, right
+      // just r <= t); with a nonzero labelFlushOffset the flushed labels also
+      // dx/dy inward — but only when the user did not pin labelAlign /
+      // labelBaseline. The flush compares the RAW scale(value).
+      const labelFlushRaw = axis.labelFlush as number | boolean | null | undefined
+      const flushOn = labelFlushRaw != null && (labelFlushRaw === 0 || !!labelFlushRaw)
+      const flushT = labelFlushRaw === true ? 1 : typeof labelFlushRaw === 'number' ? labelFlushRaw : 0
+      const flushOffset = (axis as { labelFlushOffset?: number }).labelFlushOffset ?? 0
+      const flushPick = (value: number, a: string | number, b: string | number, c: string | number): string | number => {
+        const rangeArr = scale.range() as number[]
+        let lo = Number(rangeArr[0])
+        let hi = Number(rangeArr[rangeArr.length - 1])
+        if (hi < lo) { const tmp = lo; lo = hi; hi = tmp }
+        const l = Math.abs(value - lo)
+        const r = Math.abs(hi - value)
+        return l < r && l <= flushT ? a : r <= flushT ? b : c
+      }
+      const rawScalePos = te.extra ? NaN : (scale(t) as number)
+      let alignEff = align
+      let baselineEff = baseline
+      let dxv = 0
+      let dyv = 0
+      if (flushOn) {
+        if (orient === 'bottom' || orient === 'top') {
+          if (axis.labelAlign == null) alignEff = flushPick(rawScalePos, 'left', 'right', 'center') as string
+          if (flushOffset && axis.labelAlign == null) dxv = flushPick(rawScalePos, -flushOffset, flushOffset, 0) as number
+        } else {
+          if (axis.labelBaseline == null) baselineEff = flushPick(rawScalePos, 'top', 'bottom', 'middle') as string
+          if (flushOffset && axis.labelBaseline == null) dyv = flushPick(rawScalePos, -flushOffset, flushOffset, 0) as number
+        }
+      }
+      if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = (te.extra ? 0.5 : alongLabel) + dyv; label.align = alignEff as SceneItem['align'] }
+      else if (orient === 'right') { label.x = ctx.width + tickSize + labelPadding + 0.5; label.y = (te.extra ? 0.5 : alongLabel) + dyv; label.align = alignEff as SceneItem['align'] }
       else if (orient === 'bottom') {
         // Point scales (bw = 0) miss the band-scale `axisBand` tickOffset
         // (-0.5) that cancels vega's +0.5 axis-group translate, so their
         // label anchor needs the +0.5 baked in.
-        label.x = rawOf + tickOffsetEff + 0.5 + labelOffset
+        label.x = (te.extra ? 0.5 : alongLabel) + dxv
         label.y = ctx.height + tickSize + labelPadding + 0.5
-        label.align = align as SceneItem['align']
+        label.align = alignEff as SceneItem['align']
       }
       else {
-        label.x = rawOf + tickOffsetEff + 0.5 + labelOffset
+        label.x = (te.extra ? 0.5 : alongLabel) + dxv
         label.y = -(tickSize + labelPadding) + 0.5
-        label.align = align as SceneItem['align']
+        label.align = alignEff as SceneItem['align']
       }
       // vega keeps the label baseline on rotated labels too: the renderer
       // folds the baseline offset inside the rotate frame (translate(x,y)
@@ -4937,7 +4987,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       // the same, so the item carries the baseline either way — stripping it
       // shifts the rotated bbox by the baseline offset and skews the root
       // bounds by a pixel or two.
-      label.baseline = baseline as SceneItem['baseline']
+      label.baseline = baselineEff as SceneItem['baseline']
       // vega's axisLabels: labelAngle is an update patch on the text mark's
       // angle — the renderer folds the baseline offset inside the rotate frame
       // (hence no explicit baseline above when rotated).
@@ -5190,18 +5240,25 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     }
   }
 
+  // vega axis encode: `range: abs(span(range(scale)))` — the spine extent
+  const sr = scale.range() as number[]
+  const axisRangeSpan = sr.length > 1 ? Math.abs(Number(sr[sr.length - 1]) - Number(sr[0])) : 0
+
   return {
     marktype: 'group',
     role: 'axis',
     items,
     // axis geometry for the vega-faithful bounds port (boundAxisGroup):
-    // `range` is the spine extent along the axis line; `baseline` is the
-    // perpendicular position of the axis line (content bottom for bottom,
-    // content top for top, 0 for left, content right for right). These diverge
-    // once autosize fit shrinks width != height, so both are needed.
+    // `range` is the spine extent along the axis line — vega's axis encode
+    // sets `range: abs(span(range(scale)))`, the SCALE's absolute range span
+    // (a left axis over a width-ranged scale spans the width, not the view
+    // height); `baseline` is the perpendicular position of the axis line
+    // (content bottom for bottom, content top for top, 0 for left, content
+    // right for right). These diverge once autosize fit shrinks width !=
+    // height, so both are needed.
     ...(orient === 'left' || orient === 'right'
-      ? { axis: { orient, range: ctx.height, baseline: orient === 'right' ? ctx.width : 0, translate: ctx.rawGuides ? 0 : (typeof axis.translate === 'number' ? axis.translate : 0.5), position: posOff } }
-      : { axis: { orient, range: ctx.width, baseline: orient === 'bottom' ? ctx.height : 0, translate: ctx.rawGuides ? 0 : (typeof axis.translate === 'number' ? axis.translate : 0.5), position: posOff } }),
+      ? { axis: { orient, range: axisRangeSpan, baseline: orient === 'right' ? ctx.width : 0, translate: ctx.rawGuides ? 0 : (typeof axis.translate === 'number' ? axis.translate : 0.5), position: posOff } }
+      : { axis: { orient, range: axisRangeSpan, baseline: orient === 'bottom' ? ctx.height : 0, translate: ctx.rawGuides ? 0 : (typeof axis.translate === 'number' ? axis.translate : 0.5), position: posOff } }),
   } as SceneGroup
 }
 
