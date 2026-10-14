@@ -368,6 +368,12 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
     if (st && typeof st === 'object') Object.assign(props, st)
   }
   if (!Object.keys(props).length) return
+  // rule marks have no xc/yc semantics in vega: config/style channels for
+  // them are silently ignored (only an explicit mark encode reaches them)
+  if (String(m.type) === 'rule') {
+    delete props.xc
+    delete props.yc
+  }
   const enc = (m.encode ?? {}) as Record<string, Record<string, EncodeValue | EncodeValue[]>>
   const update = { ...(enc.enter ?? {}), ...(enc.update ?? {}) }
   m.encode = { ...enc, update }
