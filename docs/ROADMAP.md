@@ -371,7 +371,7 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   `titleAngle`/`labelAngle` rotate (baseline folded inside the rotate frame),
   and the title extent now comes from the real tick+label item bounds
   (stroke expansion and rotation included) instead of an analytic extent.
-  Corpus 413/413. Sweep 7408/7549 (98.1%). A later scale round landed
+  Corpus 413/413. Sweep 7410/7549 (98.2%). A later scale round landed
   vega's continuous-scale `round` (via interpolateRound), interval-string
   `nice` through the tickCount util, band `align` (dropped by buildScale)
   and the type-keyed axisBand tickOffset, the vega-util zoom family for
