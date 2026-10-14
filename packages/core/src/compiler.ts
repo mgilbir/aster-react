@@ -378,43 +378,49 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
   const style = m.style
   if (typeof style === 'string') names.add(style)
   else if (Array.isArray(style)) for (const s of style) names.add(String(s))
-  const props: Record<string, unknown> = {}
-  // vega's generic mark block (config.mark) seeds every mark's defaults;
-  // the per-marktype block (config.arc etc.) then overrides, and named
-  // styles override both.
-  if (cfgMarktype) {
-    const gm = cfgMarktype['mark']
-    if (gm && typeof gm === 'object') Object.assign(props, gm)
-  }
-  if (m.type && cfgMarktype) {
-    const st = cfgMarktype[String(m.type)]
-    if (st && typeof st === 'object') {
-      // vega's per-marktype config block seeds every channel except the
-      // solid paints (config.arc.stroke/fill are ignored — verified by sweep).
-      for (const k of ['fill', 'stroke']) delete st[k]
-      Object.assign(props, st)
-    }
-  }
-  for (const name of names) {
-    const st = cfgStyle[name]
-    if (st && typeof st === 'object') Object.assign(props, st)
-  }
-  if (!Object.keys(props).length) return
-  // rule marks have no xc/yc semantics in vega: config/style channels for
-  // them are silently ignored (only an explicit mark encode reaches them)
-  if (String(m.type) === 'rule') {
-    delete props.xc
-    delete props.yc
-  }
   const enc = (m.encode ?? {}) as Record<string, Record<string, EncodeValue | EncodeValue[]>>
   const update = { ...(enc.enter ?? {}), ...(enc.update ?? {}) }
   m.encode = { ...enc, update }
-  for (const [k, v] of Object.entries(props)) {
-    if (k === 'name' || k === 'interactive' || k === 'zindex' || k === 'style') continue
-    if (k in update) continue
-    update[k] = (v && typeof v === 'object' && ('value' in v || 'signal' in v || 'field' in v))
-      ? (v as EncodeValue)
-      : { value: v }
+  // vega-parser defaults.js applies sources in precedence order (config
+  // blocks, then styles, last wins) with a per-source skip rule: the config
+  // phase guards the solid paints — a config fill/stroke default is skipped
+  // whenever EITHER paint is encoded (defaults.js: `(key === 'fill' || key
+  // === 'stroke') && (has('fill', encode) || has('stroke', encode))`), while
+  // style blocks only skip channels the mark itself encodes.
+  const sources: Array<{ props: Record<string, unknown>; pairGuard: boolean }> = []
+  const markProps: Record<string, unknown> = {}
+  // vega's generic mark block (config.mark) seeds every mark's defaults;
+  // the per-marktype block (config.arc etc.) then overrides.
+  if (cfgMarktype) {
+    const gm = cfgMarktype['mark']
+    if (gm && typeof gm === 'object') Object.assign(markProps, gm)
+  }
+  if (m.type && cfgMarktype) {
+    const st = cfgMarktype[String(m.type)]
+    if (st && typeof st === 'object') Object.assign(markProps, st)
+  }
+  sources.push({ props: markProps, pairGuard: true })
+  for (const name of names) {
+    const st = cfgStyle[name]
+    if (st && typeof st === 'object') sources.push({ props: st, pairGuard: false })
+  }
+  // rule marks have no xc/yc semantics in vega: config/style channels for
+  // them are silently ignored (only an explicit mark encode reaches them)
+  const isRule = String(m.type) === 'rule'
+  for (const { props, pairGuard } of sources) {
+    for (const [k, v] of Object.entries(props)) {
+      if (k === 'name' || k === 'interactive' || k === 'zindex' || k === 'style') continue
+      if (isRule && (k === 'xc' || k === 'yc')) continue
+      let skip = k in update
+      if (!skip && pairGuard && (k === 'fill' || k === 'stroke')) {
+        skip = 'fill' in update || 'stroke' in update
+      }
+      if (!skip) {
+        update[k] = (v && typeof v === 'object' && ('value' in v || 'signal' in v || 'field' in v))
+          ? (v as EncodeValue)
+          : { value: v }
+      }
+    }
   }
 }
 
