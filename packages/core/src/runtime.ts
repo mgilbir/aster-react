@@ -4569,6 +4569,10 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
         label.align = align as SceneItem['align']
       }
       label.baseline = labelAngle ? undefined : (baseline as SceneItem['baseline'])
+      // vega's axisLabels: labelAngle is an update patch on the text mark's
+      // angle — the renderer folds the baseline offset inside the rotate frame
+      // (hence no explicit baseline above when rotated).
+      if (labelAngle) (label as Record<string, unknown>).angle = labelAngle
       label.fill = axis.labelColor ?? '#000'
       if (axis.labelOpacity != null) label.fillOpacity = axis.labelOpacity
       labels.push(label)
@@ -4695,6 +4699,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     const titleBaseline = (axis as { titleBaseline?: string }).titleBaseline
     const titleX = (axis as { titleX?: number }).titleX
     const titleY = (axis as { titleY?: number }).titleY
+    const titleAnchor = (axis as { titleAnchor?: string }).titleAnchor
+    const titleAngle = (axis as { titleAngle?: number }).titleAngle
 
     // The title y is vega's raw layout position; the baseline shift is the
     // renderer's (renderLeaf bakes baselineOffset for explicit baselines).
@@ -4721,8 +4727,18 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     const sLabel = labelsOn ? tickSize + labelPadding + (labelBoff - Math.round(0.8 * titleLabelFs)) + titleLabelFs : -Infinity
     const sBoth = Math.max(sTick, sLabel)
 
+    // vega's axis title anchor (axis-title.js): the position is the signal
+    // `lerp(range(scale), item.anchor === 'start' ? 0 : item.anchor === 'end'
+    // ? 1 : 0.5)` — along the axis for top/bottom (x), across for left/right
+    // (y) — and the align signal is `anchor === 'start' ? 'left' :
+    // anchor === 'end' ? 'right' : 'center'`.
+    const rng = (scale.range?.() as number[] | undefined) ?? []
+    const r0 = Array.isArray(rng) ? (rng[0] as number) ?? 0 : 0
+    const r1 = Array.isArray(rng) ? (rng[rng.length - 1] as number) ?? 0 : 0
+    const anchorLerp = titleAnchor === 'start' ? r0 : titleAnchor === 'end' ? r1 : (r0 + r1) / 2
+
     if (orient === 'bottom') {
-      t.x = ctx.width / 2 + 0.5
+      t.x = anchorLerp + 0.5
       if (axis.labelAngle === 270 && maxLabelLen > 0) {
         const labelExtent = Math.floor(0.8 * maxLabelLen * 10)
         t.y = ctx.height + 0.5 + clampS(tickSize + labelPadding + labelExtent) + titlePadding
@@ -4733,7 +4749,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       t.align = 'center'; t.baseline = titleBaseline ?? 'top'
     }
     else if (orient === 'top') {
-      t.x = ctx.width / 2 + 0.5
+      t.x = anchorLerp + 0.5
       const s = sBoth === -Infinity ? 0 : clampS(sBoth)
       t.y = 0.5 - (s + 0.5 + titlePadding)
       t.align = 'center'; t.baseline = titleBaseline ?? 'bottom'
@@ -4747,14 +4763,27 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       const sLR0 = Math.max(sTickLR, sLabelLR)
       const sLR = sLR0 === -Infinity ? 0 : clampS(sLR0)
       t.x = orient === 'left' ? -(sLR + titlePadding) + 0.5 : ctx.width + sLR + titlePadding + 0.5
-      t.y = ctx.height / 2 + 0.5; t.align = 'center'; t.baseline = titleBaseline ?? 'bottom'
-      ;(t as Record<string, unknown>).angle = (axis as { titleAngle?: number }).titleAngle ?? (orient === 'left' ? -90 : 90)
+      t.y = anchorLerp + 0.5; t.align = 'center'; t.baseline = titleBaseline ?? 'bottom'
+      ;(t as Record<string, unknown>).angle = titleAngle ?? (orient === 'left' ? -90 : 90)
     }
-    // Explicit titleX/titleY override the layout (axis-internal +0.5 origin).
-    if (titleX != null) t.x = titleX + 0.5
-    if (titleY != null) t.y = titleY + 0.5
+    // Explicit titleX/titleY are the vega title mark's group-relative x/y,
+    // and the axis group sits at (0.5, ±0.5|height+0.5) per orient (vega
+    // axisLayout: top y=-offset, bottom y=height+offset, left x=-offset,
+    // right x=width+offset; delta = translate ?? 0.5) — so resolve them
+    // against the baked absolute origin.
+    if (titleX != null) t.x = titleX + (orient === 'right' ? ctx.width + 0.5 : 0.5)
+    if (titleY != null) t.y = titleY + (orient === 'bottom' ? ctx.height + 0.5 : 0.5)
     if (titleAlign != null) t.align = titleAlign as SceneItem['align']
+    else if (titleAnchor === 'start') t.align = 'left'
+    else if (titleAnchor === 'end') t.align = 'right'
     if (titleBaseline != null) t.baseline = titleBaseline as SceneItem['baseline']
+    // vega's axis-title: titleAngle is a require-update patch on the mark's
+    // angle — the enter default is 0 for horizontal orients (±90 for
+    // vertical, applied in the branches above), and an explicit titleAngle
+    // overrides either.
+    if (titleAngle != null && orient !== 'left' && orient !== 'right') {
+      ;(t as Record<string, unknown>).angle = titleAngle
+    }
     // Vega emits font-size 11 on axis titles explicitly (bounds + canvas font).
     ;(t as Record<string, unknown>).fontSize = titleFs
     if ((axis as { titleLimit?: number }).titleLimit != null) {
@@ -4772,8 +4801,11 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   const trRaw = axis.translate
   const tr = (typeof trRaw === 'number' ? trRaw : 0.5) - 0.5
   const off = axis.offset ?? 0
-  const dxs = tr + (orient === 'left' ? -off : orient === 'right' ? off : 0)
-  const dys = tr + (orient === 'bottom' ? off : orient === 'top' ? -off : 0)
+  // `position` anchors the whole axis group along its line (vega axisLayout:
+  // x = position for top/bottom, y = position for left/right).
+  const posOff = typeof axis.position === 'number' ? axis.position : 0
+  const dxs = tr + (orient === 'left' ? -off : orient === 'right' ? off : posOff)
+  const dys = tr + (orient === 'bottom' ? off : orient === 'top' ? -off : posOff)
   if (dxs || dys) {
     for (const it of items) {
       const rec = it as Record<string, unknown>
@@ -4794,8 +4826,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     // content top for top, 0 for left, content right for right). These diverge
     // once autosize fit shrinks width != height, so both are needed.
     ...(orient === 'left' || orient === 'right'
-      ? { axis: { orient, range: ctx.height, baseline: orient === 'right' ? ctx.width : 0, translate: typeof axis.translate === 'number' ? axis.translate : 0.5 } }
-      : { axis: { orient, range: ctx.width, baseline: orient === 'bottom' ? ctx.height : 0, translate: typeof axis.translate === 'number' ? axis.translate : 0.5 } }),
+      ? { axis: { orient, range: ctx.height, baseline: orient === 'right' ? ctx.width : 0, translate: typeof axis.translate === 'number' ? axis.translate : 0.5, position: posOff } }
+      : { axis: { orient, range: ctx.width, baseline: orient === 'bottom' ? ctx.height : 0, translate: typeof axis.translate === 'number' ? axis.translate : 0.5, position: posOff } }),
   } as SceneGroup
 }
 
@@ -4875,8 +4907,11 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
   // ticks directly from the scale domain using the step value.
   // For time/utc scales, d3's time ticks already produce calendar-aligned
   // intervals, so we use scaleTicks normally and apply tickMinStep as a filter.
+  // Band/point scales are excluded: vega's tickValues returns their domain
+  // directly (no .ticks method), so neither count nor minstep reach the ticks.
   if (tickMinStep != null && tickMinStep > 0 && count == null
-      && scale.type !== 'time' && scale.type !== 'utc') {
+      && scale.type !== 'time' && scale.type !== 'utc'
+      && scale.type !== 'band' && scale.type !== 'point') {
     const rawDomain = scale.domain()
     const toNum = (v: unknown): number => v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Number(v)
     if (rawDomain.length >= 2) {
@@ -4926,7 +4961,10 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
   const ticks = scaleTicks(scale, count)
   // When tickMinStep is specified, filter ticks so consecutive values are at
   // least tickMinStep apart (matching vega's AxisTicks + tickMinStep filter).
-  if (tickMinStep != null && tickMinStep > 0 && ticks.length > 1) {
+  // Band/point scales: their domain comes through untouched (no .ticks), so
+  // no filtering — see the generation guard above.
+  if (tickMinStep != null && tickMinStep > 0 && ticks.length > 1
+      && scale.type !== 'band' && scale.type !== 'point') {
     const toNum = (v: unknown): number => v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Number(v)
     const filtered: unknown[] = [ticks[0]]
     let last = toNum(ticks[0])

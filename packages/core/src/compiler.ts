@@ -334,10 +334,10 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
 function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string, unknown>): Record<string, unknown> {
   if (!defaults || typeof defaults !== 'object') return o
   const out: Record<string, unknown> = { ...defaults, ...o }
-  // vega's `axisBand` style (tickOffset -0.5) sits AFTER config.axis in the
-  // guide lookup, so a config.tickOffset cannot override it on band-scale
-  // axes — drop the config value and let the runtime default apply.
-  if ('tickOffset' in defaults && !('tickOffset' in o)) delete out.tickOffset
+  // `position` is read as `spec.position` in vega's buildAxisEncode — never
+  // through the `lookup(spec, config)` — so a config block's copy is dead
+  // upstream.  Drop it too, or a config theme would reshift every axis.
+  if ('position' in defaults && !('position' in o)) delete out.position
   // `tickCount`, `values`, `tickMinStep`, `format` and `formatType` are read as
   // `spec.tickCount` (and friends) in vega's guide operators — never through
   // the `lookup(spec, config)` every other property goes through — so a config

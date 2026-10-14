@@ -724,18 +724,21 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
   const maxE = metaX?.maxExtent ?? 200
   const clampS = (v: number): number => Math.max(minE, Math.min(maxE, v))
   let s: number
+  // `position` anchors the axis along its line (vega axisLayout applies the
+  // group translate (x, y) to the whole bounds, spine rect included).
+  const pos = (meta as { position?: number } | undefined)?.position ?? 0
   if (orient === 'left') {
     s = tickLabelBounds.empty() ? 0 : clampS(-Math.min(0, tickLabelBounds.x1))
-    b.add(-s, 0).add(0, range)
+    b.add(-s, pos).add(0, pos + range)
   } else if (orient === 'right') {
     s = tickLabelBounds.empty() ? 0 : clampS(Math.max(range, tickLabelBounds.x2) - range)
-    b.add(range, 0).add(range + s, range)
+    b.add(range, pos).add(range + s, pos + range)
   } else if (orient === 'top') {
     s = tickLabelBounds.empty() ? 0 : clampS(-Math.min(0, tickLabelBounds.y1))
-    b.add(0, -s).add(range, baseline)
+    b.add(pos, -s).add(pos + range, baseline)
   } else {
     s = tickLabelBounds.empty() ? 0 : clampS(Math.max(baseline, tickLabelBounds.y2) - baseline)
-    b.add(0, baseline).add(range, baseline + s)
+    b.add(pos, baseline).add(pos + range, baseline + s)
   }
   return b
 }
