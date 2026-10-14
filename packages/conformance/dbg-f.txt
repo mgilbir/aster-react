@@ -607,11 +607,6 @@ ERROR RangeError: Invalid array length
   [differ] config-title-orient-none (config-title.orient): record[40]: text|88|19|by region|fill=#0  |  text|88|20|Quarterly totals|fill=#0
   [differ] config-title-orient-left (config-title.orient): root: svg|362|177 vs svg|361|177
   [differ] config-title-angle--4 (config-title.angle): record[28]: text|165|39.237|by region|fill=#0  |  text|165|39.238|by region|fill=#0
-  [differ] config-rect-strokeDash-4_2 (config-rect.strokeDash): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-dasharray=4,2  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-area-opacity-0.5 (config-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=0.5  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
-  [differ] config-area-opacity-8 (config-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=8  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
-  [differ] config-area-opacity--4 (config-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=-4  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
-  [differ] config-area-strokeDash-4_2 (config-area.strokeDash): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;stroke-dasharray=4,2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
 ERROR TypeError: output.areaStart is not a function
     at area (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/d3-shape@3.2.0/node_modules/d3-shape/src/area.js:37:18)
     at shape (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scenegraph@5.2.1/node_modules/vega-scenegraph/src/path/shapes.js:66:22)
@@ -625,21 +620,12 @@ ERROR TypeError: output.areaStart is not a function
     at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
   [node-error] config-area-interpolate-bundle: output.areaStart is not a function
   [differ] config-area-orient-horizontal (config-area.orient): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.17151.8L175.39109.4L126.6195L77.829127.4Z|fill=steelblue  |  path|M77.829127.4L175.39109.4L126.6195L224.17151.8L5151.8L5195L51109.4L51127.4Z|fill=steelblue
-  [differ] config-path-strokeDash-4_2 (config-path.strokeDash): record[12]: path|M118.6195L126.6183L134.6195Z|fill=steelblue;stroke-dasharray=4,2  |  path|M118.6195L126.6183L134.6195Z|fill=steelblue
   [differ] config-path-angle--4 (config-path.angle): root: svg|330|207 vs svg|330|198
   [differ] config-path-scaleY-8 (config-path.scaleY): root: svg|330|279 vs svg|330|198
   [differ] config-mark-stroke-b35a1f (config-mark.stroke): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke=#b35a1f
-  [differ] config-mark-strokeDash-4_2 (config-mark.strokeDash): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-dasharray=4,2  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-style-strokeDash-4_2 (config-style.strokeDash): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-dasharray=4,2  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
   [differ] projection-azimuthalequalarea-clipAngle-0 (projection-azimuthalequalarea.clipAngle): root: svg|250|254 vs svg|250|252
-  [differ] encode-rect-strokeDash-4_2 (encode-rect.strokeDash): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-dasharray=4,2  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
   [differ] encode-symbol-size-0 (encode-symbol.size): record[12]: path|M26941h325v94h213Z|  |  path|M126.6195A00011126.6195A00011126.6195|fill=steelblue
   [differ] encode-symbol-size--4 (encode-symbol.size): record[20]: path|MNaN126.61|fill=steelblue  |  path|MNaN126.61ANaNNaN126.6196127.61NaN126.61ANaNNaN126.6196127.61NaN126.61|fill=steelblue
-  [differ] encode-line-fill-b35a1f (encode-line.fill): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill=#b35a1f;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
-  [differ] encode-area-opacity-0.5 (encode-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=0.5  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
-  [differ] encode-area-opacity-8 (encode-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=8  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
-  [differ] encode-area-opacity--4 (encode-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=-4  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
-  [differ] encode-area-strokeDash-4_2 (encode-area.strokeDash): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;stroke-dasharray=4,2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
 ERROR TypeError: output.areaStart is not a function
     at area (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/d3-shape@3.2.0/node_modules/d3-shape/src/area.js:37:18)
     at shape (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scenegraph@5.2.1/node_modules/vega-scenegraph/src/path/shapes.js:66:22)
@@ -653,12 +639,10 @@ ERROR TypeError: output.areaStart is not a function
     at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
   [node-error] encode-area-interpolate-bundle: output.areaStart is not a function
   [differ] encode-area-orient-horizontal (encode-area.orient): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.17151.8L175.39109.4L126.6195L77.829127.4Z|fill=steelblue  |  path|M77.829127.4L175.39109.4L126.6195L224.17151.8L5151.8L5195L51109.4L51127.4Z|fill=steelblue
-  [differ] encode-rule-fill-b35a1f (encode-rule.fill): record[1]: line|126.61|95|126.61|161|fill=#b35a1f;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
-  [differ] encode-path-strokeDash-4_2 (encode-path.strokeDash): record[12]: path|M118.6195L126.6183L134.6195Z|fill=steelblue;stroke-dasharray=4,2  |  path|M118.6195L126.6183L134.6195Z|fill=steelblue
   [differ] encode-path-angle--4 (encode-path.angle): root: svg|330|207 vs svg|330|198
   [differ] encode-path-scaleY-8 (encode-path.scaleY): root: svg|330|279 vs svg|330|198
   [node-error] encode-trail-size--4: negative radius: -2
-[vega-schema] FAILING (297):
+[vega-schema] FAILING (281):
   axis-orient-top
   axis-orient-left
   axis-orient-right
@@ -699,4 +683,4 @@ ERROR TypeError: output.areaStart is not a function
   legend-tickCount-minute
   legend-tickCount-hour
   legend-tickCount-day
-  ... and 268 more
+  ... and 252 more

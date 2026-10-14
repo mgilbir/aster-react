@@ -237,7 +237,7 @@ function renderLeaf(it: SceneItem): string {
   }
   const x2 = it.x2 ?? it.x ?? 0
   const y2 = it.y2 ?? it.y ?? 0
-  return `<line x1="${num(it.x ?? 0)}" y1="${num(it.y ?? 0)}" x2="${num(x2)}" y2="${num(y2)}"${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-opacity', it.strokeOpacity)}${attr('opacity', it.opacity)}/>`
+  return `<line x1="${num(it.x ?? 0)}" y1="${num(it.y ?? 0)}" x2="${num(x2)}" y2="${num(y2)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-opacity', it.strokeOpacity)}${attr('opacity', it.opacity)}/>`
 }
 
 function itemsOf(group: SceneGroup): SceneItem[] {
@@ -249,8 +249,8 @@ function renderLine(group: SceneGroup): string {
   let out = `<g class="mark-line role-mark" role="graphics-symbol" aria-roledescription="line mark container">`
   const pathInfo = computeLinePath(group)
   if (pathInfo) {
-    const { path, stroke, sw, strokeDash, opacity, fillOpacity } = pathInfo
-    out += `<path d="${path}"${stroke ? ` stroke="${stroke}"` : ''}${sw != null ? ` stroke-width="${num(sw)}"` : ''}${attr('stroke-dasharray', strokeDash)}${attr('fill-opacity', fillOpacity)}${opacity != null ? ` opacity="${num(opacity)}"` : ''}/>`
+    const { path, stroke, sw, strokeDash, opacity, fillOpacity, fill } = pathInfo
+    out += `<path d="${path}"${attr('fill', fill)}${stroke ? ` stroke="${stroke}"` : ''}${sw != null ? ` stroke-width="${num(sw)}"` : ''}${attr('stroke-dasharray', strokeDash)}${attr('fill-opacity', fillOpacity)}${opacity != null ? ` opacity="${num(opacity)}"` : ''}/>`
   }
   out += '</g>'
   return out
@@ -264,6 +264,7 @@ export function computeLinePath(group: SceneGroup): {
   strokeDash?: number[]
   opacity?: number
   fillOpacity?: number
+  fill?: string
 } | null {
   const items = itemsOf(group)
   if (!items.length) return null
@@ -360,7 +361,15 @@ export function computeLinePath(group: SceneGroup): {
   const fillOpacity = group.items?.[0]?.fillOpacity as number | undefined
   // Vega default: line marks have strokeWidth=2
   const sw = strokeWidth ?? (stroke != null ? 2 : undefined)
-  return { path, stroke, sw, strokeDash, opacity, fillOpacity }
+  return {
+    path,
+    stroke,
+    sw,
+    strokeDash,
+    opacity,
+    fillOpacity,
+    fill: (items[0] as Record<string, unknown> | undefined)?.fill as string | undefined,
+  }
 }
 
 /** Shared area-path geometry for the string renderer and the DOM patcher. */
@@ -371,6 +380,8 @@ export function computeAreaPath(group: SceneGroup): {
   stroke?: string | { gradient: string }
   strokeWidth?: number
   strokeOpacity?: number
+  opacity?: number
+  strokeDash?: string
 } | null {
   const items = itemsOf(group)
 
@@ -545,6 +556,8 @@ export function computeAreaPath(group: SceneGroup): {
     stroke: items[0]?.stroke as string | { gradient: string } | undefined,
     strokeWidth: items[0]?.strokeWidth as number | undefined,
     strokeOpacity: items[0]?.strokeOpacity as number | undefined,
+    opacity: items[0]?.opacity as number | undefined,
+    strokeDash: items[0]?.strokeDash as string | undefined,
   }
 }
 
@@ -552,8 +565,8 @@ function renderArea(group: SceneGroup): string {
   const info = computeAreaPath(group)
   let out = `<g class="mark-area role-mark" role="graphics-symbol" aria-roledescription="area mark container">`
   if (info) {
-    const { path, fill, fillOpacity, stroke, strokeWidth, strokeOpacity } = info
-    out += `<path d="${path}"${fill ? ` fill="${fill}"` : ''}${fillOpacity != null ? ` fill-opacity="${num(fillOpacity)}"` : ''}${attr('stroke', stroke)}${attr('stroke-width', strokeWidth)}${attr('stroke-opacity', strokeOpacity)}/>`
+    const { path, fill, fillOpacity, stroke, strokeWidth, strokeOpacity, opacity, strokeDash } = info
+    out += `<path d="${path}"${fill ? ` fill="${fill}"` : ''}${fillOpacity != null ? ` fill-opacity="${num(fillOpacity)}"` : ''}${attr('stroke', stroke)}${attr('stroke-width', strokeWidth)}${attr('stroke-dasharray', strokeDash)}${attr('stroke-opacity', strokeOpacity)}${attr('opacity', opacity)}/>`
   }
   out += '</g>'
   return out
@@ -676,7 +689,7 @@ function renderRects(group: SceneGroup): string {
     if (it.fill == null && it.stroke == null) continue
     const d = rectItemPath(it)
     if (d == null) continue
-    out += `<path${dataDatumAttr(it)} d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+    out += `<path${dataDatumAttr(it)} d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
   }
   out += '</g>'
   return out
@@ -738,7 +751,7 @@ function renderRules(group: SceneGroup): string {
     const y = it.y ?? 0
     const x2 = it.x2 ?? x
     const y2 = it.y2 ?? y
-    out += `<line x1="${num(x)}" y1="${num(y)}" x2="${num(x2)}" y2="${num(y2)}"${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-opacity', it.strokeOpacity)}${attr('opacity', it.opacity)}/>`
+    out += `<line x1="${num(x)}" y1="${num(y)}" x2="${num(x2)}" y2="${num(y2)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-opacity', it.strokeOpacity)}${attr('opacity', it.opacity)}/>`
   }
   out += '</g>'
   return out
@@ -870,7 +883,7 @@ function renderPaths(group: SceneGroup): string {
     const tx = num(it.x ?? 0)
     const ty = num(it.y ?? 0)
     const transform = (tx !== '0' || ty !== '0') ? ` transform="translate(${tx},${ty})"` : ''
-    out += `<path${transform} d="${it.path}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+    out += `<path${transform} d="${it.path}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
   }
   out += '</g>'
   return out
