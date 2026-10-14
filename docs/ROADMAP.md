@@ -401,14 +401,43 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   overhang shift, legendBounds anchors x1/y1 at the padding clamping
   overhang), and the legend border (not symbol) stroke as the only
   boundStroke on the outer rect.
-  Remaining: config-range 11 (config.range now threads into the scale range lookup; the residual mismatch is base-geometry archaeology), axis 4 +
-  config-axis 9 (orient left/right span the scale range rather than the
-  view size; tickBand extent and tickExtra are unported; config
-  tickOffset/labelOffset/labelFlush couple into the view margins), view 3,
-  title 3 + config-title 3 (1-ulp rotated-text epsilons, orient none),
-  scale singles (log zero-degenerate domain, pow/symlog extreme params),
-  encode-path scaleY (fixed), and 7 refused-render mismatches (identity nice/round
-  engine-errors, area-interpolate-bundle and trail-size node-errors).
+  A config-range round ported the scheme-range semantics: a named range
+  resolves through config.range then vega's defaults (diverging carries
+  extent [1,0]; a user entry replaces the default wholesale), a continuous
+  scheme on a discrete scale quantizes to the domain cardinality, and the
+  interpolator samples across flip(extent ?? [0,1], reverse) with the
+  scale treated as a color scale (vega's scaleKey coerces linear+scheme to
+  sequential-linear, which skips includeZero). An axis round ported
+  tickBand ('extent' forces band 1/offset 0/extra on; 'middle' forces
+  0.5), the AxisTicks extra entry (pegged to the first tick value, empty
+  label, the scale+bandwidth term replaced by the raw scale of that
+  value), unrounded label positions for every orient, the axis encode
+  `range: abs(span(range(scale)))` spine extent, and labelFlush
+  (align/baseline flips within the threshold of the range endpoints,
+  labelFlushOffset dx/dy inward). config-mark closed the fill/stroke pair
+  rule (a config fill/stroke default is skipped when either paint is
+  encoded).
+
+  **R8.4 floor — 21 cases (sweep 7528/7549, 99.7%):** the remaining
+  disagreements, promoted as the sweep's own failing probes (R8.5):
+  title-angle--4 + config-title-angle--4 (a 0.001px rotated-text-bound
+  epsilon), title-orient-left + config-title-orient-left (1px rotated
+  title-bound epsilon), scale-log-zero-true / scale-pow-exponent--4 /
+  scale-symlog-constant-0 (degenerate-domain padding archaeology),
+  scale-identity-nice/round ×4 (our engine refuses a range value vega
+  renders — the identity range lookup is unported), view-width--4 /
+  view-height--4 (negative view dims: degenerate tick/label geometry),
+  encode/config-area-orient-horizontal (horizontal area path point
+  order), encode/config-path-angle--4 (negative-angle path bounds),
+  projection-azimuthalequalarea-clipAngle-0 (a 1.7e-6px fp epsilon in
+  d3's clip intersection), and 3 refused-render mismatches
+  (encode/config-area-interpolate-bundle: vega's own bound pass crashes
+  in d3-shape; encode-trail-size--4: vega refuses a negative radius).
+
+  The **vega-lite sweep** now runs (the lite cases compile both VL
+  compilers to Vega before rendering): baseline 10937 ok / 15581 differ /
+  935 engine / 43 node — that surface is @aster/vl's drift, tracked
+  separately from this floor.
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
 
