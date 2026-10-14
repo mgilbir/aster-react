@@ -4202,12 +4202,15 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const titleOpacity = (legend as { titleOpacity?: number }).titleOpacity
     const titleFs = (legend as { titleFontSize?: number }).titleFontSize ?? 11
     const titlePad = (legend as { titlePadding?: number }).titlePadding ?? 5
+    // legendGroupLayout shifts the entries by title.bounds.height() +
     // vega's legend encoder: the symbol/label offset = max over the entries of
     // ceil(sqrt(symbolSize) + symbolStrokeWidth) vs the label fontSize; the
     // symbol sits at offset/2, the label at offset + labelOffset. Only the
     // layout math sees symbolSize/symbolStrokeWidth — the painted symbol keeps
-    // its default radius/stroke.
-    const symbolSizeP = (legend as { symbolSize?: number }).symbolSize ?? 100
+    // its default radius/stroke. A negative symbolSize makes sqrt NaN, which
+    // vega's bounds silently drop (NaN comparisons are false) — the entry
+    // falls back to the label fontSize, so clamp to 0 for the offset math.
+    const symbolSizeP = Math.max(0, (legend as { symbolSize?: number }).symbolSize ?? 100)
     const symSwP = (legend as { symbolStrokeWidth?: number }).symbolStrokeWidth ?? 1.5
     const symbolDash = (legend as { symbolDash?: number[] }).symbolDash
     const labelFs = (legend as { labelFontSize?: number }).labelFontSize ?? 10

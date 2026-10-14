@@ -642,7 +642,12 @@ export function symbolPath(shape: string | undefined, r: number): string {
       return `M0,${num(-h - o)}L${num(-r)},${num(h - o)}L${num(r)},${num(h - o)}Z`
     }
     default:
-      return `M${num(r)},0A${num(r)},${num(r)},0,1,1,${num(-r)},0A${num(r)},${num(r)},0,1,1,${num(r)},0`
+      // d3-symbol's circle through a canvas arc: with r=0 the arc adds
+      // nothing and the path degenerates to its moveTo ('M0,0') — matching
+      // vega's renderer, whose canonicalization then drops the empty path.
+      return r > 0
+        ? `M${num(r)},0A${num(r)},${num(r)},0,1,1,${num(-r)},0A${num(r)},${num(r)},0,1,1,${num(r)},0`
+        : 'M0,0'
   }
 }
 
