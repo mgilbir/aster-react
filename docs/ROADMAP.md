@@ -381,7 +381,7 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   Remaining: legend 28 + config-legend 28 (the entry layout is still
   heuristic — 8px/char label widths — and wants a text-measured rework:
   labelAlign/labelLimit/columns/clipHeight/cornerRadius/symbolLimit),
-  layout 0 (the trellis family now passes), config-range 11, axis 4 +
+  config-range 11, axis 4 +
   config-axis 9 (orient left/right span the scale range rather than the
   view size; tickBand extent and tickExtra are unported; config
   tickOffset/labelOffset/labelFlush couple into the view margins), view 3,
