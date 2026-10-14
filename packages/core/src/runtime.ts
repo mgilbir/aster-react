@@ -4244,18 +4244,100 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const step = isStrokeType ? 13 : rowPadding + offsetValue + Math.ceil(swatchH)
     const bgHeight = Math.ceil(titleRow + Math.ceil(swatchH) + step * (n - 1)) + 2 * legendPad
 
+    // vega legendGroupLayout + legendTitleOffset: the title sits relative to
+    // the entry block per titleOrient; titleAnchor positions it along the
+    // entry extent (sX = entry bound x2 − pad, sY = entry bound y2 − pad);
+    // titleAlign changes the text anchor, and a title whose bound pokes left
+    // of the padding shifts the whole legend right by the overhang.
+    const titleOrient = (legend as { titleOrient?: string }).titleOrient ?? 'top'
+    const specTitleAnchor = (legend as { titleAnchor?: string }).titleAnchor
+    const titleAnchor = specTitleAnchor ?? ((titleOrient === 'left' || titleOrient === 'right') ? 'middle' : 'start')
+    const specTitleAlign = (legend as { titleAlign?: string }).titleAlign
+    // entry grid (vega legendEntryLayout + gridLayout semantics): the
+    // direction/columns choose the column count; each column's extent is the
+    // widest natural entry (16+label part), rows stack by extent+rowPadding,
+    // columns by extent+columnPadding (default 10).
+    const direction = (legend as { direction?: string }).direction ?? 'vertical'
+    const specColumns = (legend as { columns?: number }).columns
+    const colPad = (legend as { columnPadding?: number }).columnPadding ?? 10
+    const ncols = direction === 'horizontal' ? n : Math.max(1, specColumns ?? 1)
+    const nrows = Math.max(1, Math.ceil(n / ncols))
+    const natW = domain.map((v: unknown) => symbolOffset + offset + labelOffset + ~~(0.8 * String(v).length * labelFs))
+    const colExtent = Array<number>(ncols).fill(0)
+    const rowExtent = Array<number>(nrows).fill(0)
+    domain.forEach((_: unknown, i: number) => {
+      const c = i % ncols
+      const r = ~~(i / ncols)
+      colExtent[c] = Math.max(colExtent[c]!, natW[i]!)
+      rowExtent[r] = Math.max(rowExtent[r]!, Math.ceil(swatchH))
+    })
+    const colX: number[] = []
+    let acc = 0
+    for (let c = 0; c < ncols; c++) { colX.push(acc); acc += colExtent[c]! + colPad }
+    const rowY: number[] = []
+    acc = 0
+    for (let r = 0; r < nrows; r++) { rowY.push(acc); acc += rowExtent[r]! + rowPadding + offsetValue }
+    const sX = colExtent[0]!
+    const sY = rowY[nrows - 1]! + Math.ceil(swatchH)
+    const anchorOffX = titleAnchor === 'end' ? sX : titleAnchor === 'middle' ? Math.round(sX / 2) : 0
+    const anchorOffY = titleAnchor === 'end' ? sY : titleAnchor === 'middle' ? Math.round(sY / 2) : 0
+    let titleX = legendPad
+    let titleY = legendPad
+    let tBaseline: 'top' | 'middle' | 'bottom' = 'top'
+    if (titleOrient === 'left') {
+      tBaseline = titleAnchor === 'end' ? 'bottom' : titleAnchor === 'middle' ? 'middle' : 'top'
+      titleY = legendPad + anchorOffY
+    } else if (titleOrient === 'right') {
+      tBaseline = titleAnchor === 'end' ? 'bottom' : titleAnchor === 'middle' ? 'middle' : 'top'
+      titleX = legendPad + sX + titlePad
+      titleY = legendPad + anchorOffY
+    } else if (titleOrient === 'bottom') {
+      titleY = legendPad + sY + titlePad
+      titleX = legendPad + anchorOffX
+    } else {
+      titleX = legendPad + anchorOffX
+    }
+    // default align (vega exprAlign): left/right titleOrient → 'left' (non-
+    // vgrad); otherwise anchor-derived start→left, end→right, middle→center.
+    const tAlign = (specTitleAlign ?? (titleOrient === 'left' || titleOrient === 'right'
+      ? 'left'
+      : titleAnchor === 'end' ? 'right' : titleAnchor === 'middle' ? 'center' : 'left')) as 'left' | 'center' | 'right'
+    const overhang = tAlign === 'right' ? titleWidth : tAlign === 'center' ? titleWidth / 2 : 0
+    const shift = titleStr ? Math.max(0, Math.round(legendPad + overhang - titleX)) : 0
+    // entry block base: top titles push entries down by the title row;
+    // left titles push them right by title width + padding; right/bottom
+    // leave the entries at the padding origin.
+    const entryX = legendPad + shift + (titleOrient === 'left' && titleStr ? titleWidth + titlePad : 0)
+    const entryBaseY = titleOrient === 'top' && titleStr ? titleRow : 0
+    let contentX2 = 0
+    domain.forEach((_: unknown, i: number) => {
+      contentX2 = Math.max(contentX2, entryX + colX[i % ncols]! + colExtent[i % ncols]!)
+    })
+    // vega legendLayout: w = ceil(bounds.width + 2*padding) where the bound is
+    // anchored at x1=y1=padding, i.e. w = ceil(contentMax + padding).
+    const bgW = Math.ceil(Math.max(
+      contentX2,
+      (titleStr ? titleX + shift + (tAlign === 'right' ? 0 : tAlign === 'center' ? titleWidth / 2 : titleWidth) : 0),
+    ) + legendPad)
+    const entriesY2 = legendPad + entryBaseY + rowY[nrows - 1]! + Math.ceil(swatchH)
+    const bgH = Math.ceil(Math.max(
+      entriesY2,
+      titleOrient === 'bottom' && titleStr ? titleY + titleFs : 0,
+    ) + legendPad)
+
     const items: SceneItem[] = []
     const legendCornerRadius = (legend as { cornerRadius?: number }).cornerRadius
     const legendFillColor = (legend as { fillColor?: string }).fillColor
-    items.push({ path: `M0,0h${outerWidth}v${bgHeight}h-${outerWidth}Z`, x: 0, y: 0, ...(legendFillColor != null ? { fill: legendFillColor } : {}), ...(legendCornerRadius != null ? { cornerRadius: legendCornerRadius } : {}) })
+    items.push({ path: `M0,0h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0, ...(legendFillColor != null ? { fill: legendFillColor } : {}), ...(legendCornerRadius != null ? { cornerRadius: legendCornerRadius } : {}) })
     const titleLimit = (legend as { titleLimit?: number }).titleLimit
     const titleBaseline = (legend as { titleBaseline?: string }).titleBaseline
     // vega's legend title item sits at (padding, padding) with baseline top;
     // the renderer bakes the baseline offset. titleBaseline overrides it.
-    if (titleStr) items.push({ text: titleStr, x: legendPad, y: legendPad, baseline: (titleBaseline ?? 'top') as 'top', align: 'left', fill: titleColor, fontSize: titleFs, ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
+    if (titleStr) items.push({ text: titleStr, x: titleX + shift, y: titleY, baseline: (titleBaseline ?? tBaseline) as 'top', align: tAlign, fill: titleColor, fontSize: titleFs, ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
-      const off = titleRow + i * step
+      const off = entryBaseY + rowY[~~(i / ncols)]!
+      const colOff = colX[i % ncols]!
       // For shape legends, compute per-entry swatch height based on the
       // symbol's actual stroke bounds.  Vega's boundStroke expands path
       // bounds by e = max(strokeWidth/2, miterLimit*strokeWidth/2).
@@ -4270,7 +4352,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         const extentY = (sn === 'triangle-up' || sn === 'triangle-down') ? symR * Math.sqrt(3) / 2 : symR
         entryBoxHeight = 6 + extentY + 3
       }
-      items.push({ path: `M0,0h${entryWidth}v${entryBoxHeight}h-${entryWidth}Z`, x: legendPad, y: legendPad + off })
+      items.push({ path: `M0,0h${colExtent[i % ncols]}v${entryBoxHeight}h-${colExtent[i % ncols]}Z`, x: entryX + colOff, y: legendPad + off })
       const symbolType = legend.symbolType ?? 'circle'
       // vega renders the legend entry symbol in the shape requested by the
       // legend's symbolType. For "stroke" type, render a horizontal line.
@@ -4307,18 +4389,18 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         // the shape is a line but the channel paints it: a fill legend fills
         // the symbol, a stroke legend strokes it
         const paint = colorProp === 'fill' ? { fill: String(scale(value)) } : { stroke: String(scale(value)) }
-        items.push({ path: `M-5,0L5,0`, x: legendPad + symbolOffset + offset / 2, y: legendPad + off + offset / 2, strokeWidth: 1.5, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...paint })
+        items.push({ path: `M-5,0L5,0`, x: entryX + colOff + symbolOffset + offset / 2, y: legendPad + off + offset / 2, strokeWidth: 1.5, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...paint })
       } else {
         const symPath = symbolPath(symbolType, symR)
         if (colorProp === 'fill') {
-          items.push({ path: symPath, x: legendPad + symbolOffset + offset / 2, y: legendPad + off + offset / 2, fill: String(scale(value)), strokeWidth: symSwP, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...(legendStrokeColor != null ? { stroke: String(legendStrokeColor) } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
+          items.push({ path: symPath, x: entryX + colOff + symbolOffset + offset / 2, y: legendPad + off + offset / 2, fill: String(scale(value)), strokeWidth: symSwP, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...(legendStrokeColor != null ? { stroke: String(legendStrokeColor) } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
         } else {
-          items.push({ path: symPath, x: legendPad + symbolOffset + offset / 2, y: legendPad + off + offset / 2, stroke: String(scale(value)), strokeWidth: symSwP, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
+          items.push({ path: symPath, x: entryX + colOff + symbolOffset + offset / 2, y: legendPad + off + offset / 2, stroke: String(scale(value)), strokeWidth: symSwP, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
         }
       }
       items.push({
         text: String(value),
-        x: legendPad + symbolOffset + offset + labelOffset,
+        x: entryX + colOff + symbolOffset + offset + labelOffset,
         y: legendPad + off + offset / 2 + Math.round(0.3 * labelFs),
         align: 'left',
         fill: labelColor,
@@ -4329,7 +4411,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         ...(labelFontStyle != null ? { fontStyle: labelFontStyle } : {}),
       })
     }
-    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: outerWidth, height: bgHeight, items }
+    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: bgH, items }
   }
 
   // Unsupported
