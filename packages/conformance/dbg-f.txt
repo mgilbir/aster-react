@@ -608,10 +608,6 @@ ERROR RangeError: Invalid array length
   [differ] config-title-orient-left (config-title.orient): root: svg|362|177 vs svg|361|177
   [differ] config-title-angle--4 (config-title.angle): record[28]: text|165|39.237|by region|fill=#0  |  text|165|39.238|by region|fill=#0
   [differ] config-rect-strokeDash-4_2 (config-rect.strokeDash): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-dasharray=4,2  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-area-yc-0 (config-area.yc): record[20]: path|M77.82974.2L126.6158L175.3965.2L224.17136.4L224.171145.6L175.39116.8L126.61124L77.829107.8Z|fill=steelblue  |  path|M77.82974.2L126.6158L175.3965.2L224.17136.4L224.171211L175.39211L126.61211L77.829211Z|fill=steelblue
-  [differ] config-area-yc-0.5 (config-area.yc): record[20]: path|M77.82974.7L126.6158.5L175.3965.7L224.17136.9L224.171146.1L175.39117.3L126.61124.5L77.829108.3Z|fill=steelblue  |  path|M77.82974.7L126.6158.5L175.3965.7L224.17136.9L224.171211L175.39211L126.61211L77.829211Z|fill=steelblue
-  [differ] config-area-yc-8 (config-area.yc): record[20]: path|M77.82974.2L126.6158L175.3965.2L224.17136.4L224.171145.6L175.39116.8L126.61124L77.829107.8Z|fill=steelblue  |  path|M77.82974.2L126.6158L175.3965.2L224.17136.4L224.171203L175.39203L126.61203L77.829203Z|fill=steelblue
-  [differ] config-area-yc--4 (config-area.yc): record[20]: path|M77.82974.2L126.6158L175.3965.2L224.17136.4L224.171145.6L175.39116.8L126.61124L77.829107.8Z|fill=steelblue  |  path|M77.82974.2L126.6158L175.3965.2L224.17136.4L224.171215L175.39215L126.61215L77.829215Z|fill=steelblue
   [differ] config-area-opacity-0.5 (config-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=0.5  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
   [differ] config-area-opacity-8 (config-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=8  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
   [differ] config-area-opacity--4 (config-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=-4  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
@@ -640,10 +636,6 @@ ERROR TypeError: output.areaStart is not a function
   [differ] encode-symbol-size-0 (encode-symbol.size): record[12]: path|M26941h325v94h213Z|  |  path|M126.6195A00011126.6195A00011126.6195|fill=steelblue
   [differ] encode-symbol-size--4 (encode-symbol.size): record[20]: path|MNaN126.61|fill=steelblue  |  path|MNaN126.61ANaNNaN126.6196127.61NaN126.61ANaNNaN126.6196127.61NaN126.61|fill=steelblue
   [differ] encode-line-fill-b35a1f (encode-line.fill): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill=#b35a1f;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
-  [differ] encode-area-yc-0 (encode-area.yc): record[20]: path|M77.82974.2L126.6158L175.3965.2L224.17136.4L224.171145.6L175.39116.8L126.61124L77.829107.8Z|fill=steelblue  |  path|M77.82974.2L126.6158L175.3965.2L224.17136.4L224.171211L175.39211L126.61211L77.829211Z|fill=steelblue
-  [differ] encode-area-yc-0.5 (encode-area.yc): record[20]: path|M77.82974.7L126.6158.5L175.3965.7L224.17136.9L224.171146.1L175.39117.3L126.61124.5L77.829108.3Z|fill=steelblue  |  path|M77.82974.7L126.6158.5L175.3965.7L224.17136.9L224.171211L175.39211L126.61211L77.829211Z|fill=steelblue
-  [differ] encode-area-yc-8 (encode-area.yc): record[20]: path|M77.82974.2L126.6158L175.3965.2L224.17136.4L224.171145.6L175.39116.8L126.61124L77.829107.8Z|fill=steelblue  |  path|M77.82974.2L126.6158L175.3965.2L224.17136.4L224.171203L175.39203L126.61203L77.829203Z|fill=steelblue
-  [differ] encode-area-yc--4 (encode-area.yc): record[20]: path|M77.82974.2L126.6158L175.3965.2L224.17136.4L224.171145.6L175.39116.8L126.61124L77.829107.8Z|fill=steelblue  |  path|M77.82974.2L126.6158L175.3965.2L224.17136.4L224.171215L175.39215L126.61215L77.829215Z|fill=steelblue
   [differ] encode-area-opacity-0.5 (encode-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=0.5  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
   [differ] encode-area-opacity-8 (encode-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=8  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
   [differ] encode-area-opacity--4 (encode-area.opacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue;opacity=-4  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8L224.171161L175.39161L126.61161L77.829161Z|fill=steelblue
@@ -666,7 +658,7 @@ ERROR TypeError: output.areaStart is not a function
   [differ] encode-path-angle--4 (encode-path.angle): root: svg|330|207 vs svg|330|198
   [differ] encode-path-scaleY-8 (encode-path.scaleY): root: svg|330|279 vs svg|330|198
   [node-error] encode-trail-size--4: negative radius: -2
-[vega-schema] FAILING (305):
+[vega-schema] FAILING (297):
   axis-orient-top
   axis-orient-left
   axis-orient-right
@@ -707,4 +699,4 @@ ERROR TypeError: output.areaStart is not a function
   legend-tickCount-minute
   legend-tickCount-hour
   legend-tickCount-day
-  ... and 276 more
+  ... and 268 more

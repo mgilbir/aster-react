@@ -383,10 +383,15 @@ export function computeAreaPath(group: SceneGroup): {
 
   // For horizontal areas: y is the independent axis, x/x2 are the value axes.
   // For vertical areas (default): x is the independent axis, y/y2 are the value axes.
+  // Vega's area shape reads the baseline as y0 = y + height (d3-shape area
+  // y0 accessor `yh`), NOT the raw y2 — adjustSpatial folds x2/y2 into
+  // width/height, so the baseline follows the (possibly yc-shifted) y.
   const pts: Array<{ pos: number; val: number; val2: number; defined: boolean }> = items.map((it) => ({
     pos: isHorizontal ? (it.y as number) : (it.x as number),
     val: isHorizontal ? (it.x as number) : (it.y as number),
-    val2: isHorizontal ? ((it.x2 as number) ?? 0) : (it.y2 as number),
+    val2: isHorizontal
+      ? (it.x ?? 0) + ((it.width as number | undefined) ?? (((it.x2 as number) ?? 0) - (it.x ?? 0)))
+      : (it.y ?? 0) + ((it.height as number | undefined) ?? (((it.y2 as number) ?? 0) - (it.y ?? 0))),
     defined: it.defined !== false && it.x != null && it.y != null,
   }))
 
