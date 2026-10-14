@@ -434,6 +434,7 @@ function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Reco
   if (m.key !== undefined) out.key = m.key as string
   if (m.sort !== undefined) out.sort = m.sort as CompiledMark['sort']
   if (m.title !== undefined) out.title = m.title as CompiledMark['title']
+  if (m.layout !== undefined) out.layout = m.layout as Record<string, unknown>
   if (m.marks !== undefined) out.marks = (m.marks as Array<Record<string, unknown>>).map((nm) => compileMark(nm, cfgStyle, cfgMarktype))
   if ((m as any).axes !== undefined) out.axes = ((m as any).axes as Array<Record<string, unknown>>).map(compileAxis)
   if ((m as any).scales !== undefined) out.scales = ((m as any).scales as Array<Record<string, unknown>>).map(compileScale)

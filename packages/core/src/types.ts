@@ -358,6 +358,8 @@ export interface CompiledMark {
   scales?: CompiledScale[]
   /** Data sets declared within a group's scope. */
   data?: CompiledData[]
+  /** Group mark grid layout (vega-native trellis `layout` def). */
+  layout?: Record<string, unknown>
   /** Cartographic projections declared within a group's scope. */
   projections?: CompiledProjection[]
 }

@@ -29,7 +29,7 @@ import type {
 import { tickFormat } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { trellisLayout } from './trellis.js'
+import { trellisLayout, measureBounds } from './trellis.js'
 import { baselineOffset, boundAxisGroup, boundGroupItem, boundLeaf, boundText, Bounds } from './bounds.js'
 import { symbolPath } from './render.js'
 
@@ -585,6 +585,8 @@ function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { gro
  */
 function measureGuideGroup(g: SceneGroup): Bounds {
   if (g.role === 'axis') return boundAxisGroup(g)
+  const lb = (g as unknown as Record<string, unknown>)._layoutBounds as Bounds | undefined
+  if (lb) return lb
   if (g.role === 'legend') {
     // legendLayout sets item.bounds = [x, y, x+width, y+height] (the outer
     // box incl. padding), anchored at the laid-out group position.
@@ -806,7 +808,13 @@ function buildContent(
   }
 
   // 2d) viewSizeLayout padding (overflow) after the trellis layout.
-  const padding = computeGuidePadding(items, width, height, ctx.chart.padding)
+  // A trellis layout that throws (vega's gridLayout does on e.g. fractional
+  // `columns`) aborts vega's whole ViewLayout transform: the scene renders
+  // unlayouted — cells at their encoded anchors — with the default padding
+  // and no overflow growth (the dataflow logs the error and continues).
+  const padding = (ctx as unknown as { __layoutError?: boolean }).__layoutError
+    ? ctx.chart.padding
+    : computeGuidePadding(items, width, height, ctx.chart.padding)
   return { items, padding, ctx, width, height, isFacetSpec }
 }
 
@@ -1987,8 +1995,209 @@ function isConcatSpec(chart: CompiledChart): boolean {
   return chart.marks.some(m => isConcatGroupMark(m))
 }
 
+/**
+ * A vega-native trellis: a group mark with a `layout` def whose children are
+ * facet cells. Each cell is its own scope (own scales/axes/marks, facet rows
+ * as the facet's dataset, the group key as the `parent` datum), and the cells
+ * run through the grid layout (trellisLayout) with the layout def. Mirrors
+ * vega's ViewLayout: `if (_.layout) trellisLayout(view, group, _.layout)`.
+ */
+function buildTrellisGroup(
+  mark: CompiledMark & { layout: Record<string, unknown> },
+  ctx: EvalContext,
+): SceneGroup | SceneGroup[] | null {
+  const layoutDef = mark.layout
+  const children = ((mark as { marks?: unknown[] }).marks ?? []) as CompiledMark[]
+  const cells: SceneGroup[] = []
+  for (const child of children) {
+    const facet = (child as { from?: { facet?: { name: string; data: string; groupby: string[] } } }).from?.facet
+    if (facet?.groupby?.length) {
+      const rows = ctx.datasets.get(facet.data) ?? []
+      const grouped = inlineGroupRows(rows, facet.groupby)
+      for (const g of grouped) {
+        if (!g.length) continue
+        const cell = buildTrellisCell(child, facet, g, ctx)
+        if (cell) cells.push(cell)
+      }
+    } else {
+      const r = evaluateMark(child, ctx)
+      if (r) {
+        if (Array.isArray(r)) cells.push(...r)
+        else cells.push(r)
+      }
+    }
+  }
+  // The trellis container's own scope: vega renders a zero-size background
+  // (the cells' geometry is the grid's, not the container's).
+  const outer: SceneGroup = {
+    marktype: 'group',
+    name: mark.name,
+    role: (mark.role as string) ?? 'scope',
+    items: cells as SceneItem[],
+    width: ctx.width,
+    height: ctx.height,
+    x: 0,
+    y: 0,
+  }
+  const bg: SceneItem = { path: 'M0,0h0v0h0Z', x: 0, y: 0 }
+  outer.items = [bg, ...(cells as SceneItem[])]
+  try {
+    trellisLayout(outer, layoutDef as Record<string, unknown>)
+  } catch {
+    // vega's dataflow logs the layout error and renders the scene unlayouted:
+    // cells keep their encoded (0,0) anchors and the view skips overflow growth.
+    ;(ctx as unknown as { __layoutError?: boolean }).__layoutError = true
+  }
+  // The container's layout bounds: vega's frame bound = the union of the cell
+  // groups' own layout bounds (each cell measured like its layout pass does).
+  // boundLeaf would re-measure the baked axis deltas (+0.5 per cell) and grow
+  // the view padding by a pixel.
+  const gb = new Bounds()
+  for (const c of cells) gb.union(measureBounds(c))
+  ;(outer as unknown as Record<string, unknown>)._layoutBounds = gb
+  return outer
+}
+
+/** One trellis facet cell: a scoped group with the cell's own scales, axes,
+ * marks and title, sized by its encode against the facet key datum. */
+function buildTrellisCell(
+  mark: CompiledMark,
+  facet: { name: string; data: string; groupby: string[] },
+  rows: Row[],
+  ctx: EvalContext,
+): SceneGroup | null {
+  // The facet key datum: the groupby values (vega's facet group datum carries
+  // exactly the grouping keys, which is why cells read `w`/`h` off it).
+  const datum: Row = {}
+  for (const k of facet.groupby) datum[k] = rows[0]?.[k]
+
+  // The cell's own geometry resolves against the facet datum. Note the child
+  // scope's width/height SIGNALS stay the outer chart's (vega does not bind
+  // the encoded item size into the child scope signals), matching
+  // buildScopedGroup's documented quirk.
+  const enc = (mark.encode?.enter ?? {}) as Record<string, EncodeValue>
+  const encU = (mark.encode?.update ?? {}) as Record<string, EncodeValue>
+  const geo = resolveEncodeSet({ ...enc, ...encU }, datum, ctx, 'group')
+  const gw = typeof geo.width === 'number' ? geo.width : ctx.width
+  const gh = typeof geo.height === 'number' ? geo.height : ctx.height
+
+  const childScaleMap = new Map<string, Scale>()
+  const childTypeMap = new Map<string, string>()
+  for (const s of (mark as { scales?: CompiledScale[] }).scales ?? []) {
+    const scale = buildScale(s, {
+      width: ctx.width,
+      height: ctx.height,
+      signals: ctx.signalParams,
+      evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
+      dataField: (dn, field) => {
+        const rws = ctx.datasets.get(dn) ?? []
+        const out: unknown[] = []
+        for (const r of rws) out.push(getField(r, field))
+        return out
+      },
+      dataRows: (dn) => (ctx.datasets.get(dn) ?? []) as Record<string, unknown>[],
+    })
+    childScaleMap.set(s.name, scale)
+    childTypeMap.set(s.name, s.type)
+  }
+
+  const childCtx: EvalContext = {
+    ...ctx,
+    width: gw,
+    height: gh,
+    // Child scales shadow same-named parent scales; everything else inherits
+    // (the cell's rect fill names the top-level `colour` scale).
+    scales: new Map([...ctx.scales, ...childScaleMap]),
+    scaleTypes: new Map([...ctx.scaleTypes, ...childTypeMap]),
+    // vega's facet scope defines a `parent` signal per cell: the facet key
+    // datum (compileExpr exposes params to expressions $-prefixed).
+    signalParams: { ...ctx.signalParams, parent: datum },
+  }
+  const saved = ctx.datasets.get(facet.name)
+  ctx.datasets.set(facet.name, rows)
+
+  const items: SceneItem[] = []
+  // Cell background: the encoded size, no fill, no inset (vega group
+  // background defaults to transparent and the facet cell encodes both dims).
+  items.push({ path: `M0,0h${gw}v${gh}h-${gw}Z`, x: 0, y: 0 } as SceneItem)
+
+  for (const as of (mark as { axes?: unknown[] }).axes ?? []) {
+    if (isAxisSpec(as)) {
+      const a = buildAxisInline(as as Record<string, unknown>, childCtx)
+      if (a) items.push(a)
+    }
+  }
+  for (const cm of (mark as { marks?: unknown[] }).marks ?? []) {
+    const r = evaluateMark(cm as CompiledMark, childCtx)
+    if (r) {
+      if (Array.isArray(r)) { for (const g of r) items.push(g) }
+      else items.push(r)
+    }
+  }
+
+  // The cell title (vega layoutGroup → titleLayout within the group): centered
+  // over the cell's measured bounds, sitting titlePadding + one text height
+  // above the cell's top edge (text bound height = the fontSize).
+  const titleSpec = (mark as { title?: { text?: unknown; signal?: string; fontSize?: number; fontWeight?: unknown; color?: string } }).title
+  if (titleSpec) {
+    const fs = titleSpec.fontSize ?? 11
+    let text = ''
+    const raw = titleSpec.text
+    if (raw != null) {
+      if (typeof raw === 'object' && 'signal' in raw) {
+        try {
+          text = String(ctx.runtime.expr((raw as { signal: string }).signal)({}, { ...ctx.signalParams, parent: datum }))
+        } catch { text = '' }
+      } else {
+        text = String(raw)
+      }
+    }
+    const b = measureBounds({ marktype: 'group', items, x: 0, y: 0, width: gw, height: gh } as SceneGroup)
+    const pos = b.empty() ? 0 : (b.x1 + b.x2) / 2
+    const titleOffset = 4
+    const titleGroup: SceneGroup = {
+      marktype: 'group',
+      role: 'title',
+      x: pos,
+      y: -(fs + titleOffset),
+      items: [{
+        marktype: 'text',
+        role: 'title-text',
+        items: [{
+          x: 0, y: 0, text,
+          align: 'center', baseline: 'top',
+          fontSize: fs,
+          fontWeight: (titleSpec.fontWeight ?? 'bold') as SceneItem['fontWeight'],
+          fill: titleSpec.color ?? '#000',
+        } as SceneItem],
+      } as unknown as SceneItem],
+    }
+    items.push(titleGroup as unknown as SceneItem)
+  }
+
+  if (saved !== undefined) ctx.datasets.set(facet.name, saved)
+  else ctx.datasets.delete(facet.name)
+
+  return {
+    marktype: 'group',
+    name: mark.name,
+    role: (mark.role as string) ?? 'scope',
+    items,
+    width: gw,
+    height: gh,
+    x: 0,
+    y: 0,
+  }
+}
+
 /** Group mark dispatch */
 function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | SceneGroup[] | null {
+  // A vega-native trellis: a group mark carrying a `layout` def lays its facet
+  // children out through the grid layout (vega ViewLayout: `if (_.layout)
+  // trellisLayout(view, group, _.layout)`).
+  if ((mark as { layout?: unknown }).layout) {
+    return buildTrellisGroup(mark as CompiledMark & { layout: Record<string, unknown> }, ctx)
+  }
   const facetRaw = (mark as any).from?.facet
   if (facetRaw && facetRaw.groupby && facetRaw.groupby.length) {
     return buildFacetCellGroup(mark, facetRaw, ctx)

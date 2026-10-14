@@ -115,7 +115,7 @@ function isGridOnlyAxis(g: SceneGroup): boolean {
   return !hasText
 }
 
-function measureBounds(item: SceneGroup): Bounds {
+export function measureBounds(item: SceneGroup): Bounds {
   const b = new Bounds()
   for (const it of item.items ?? []) {
     const leaf = it as SceneItem
