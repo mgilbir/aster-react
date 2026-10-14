@@ -538,8 +538,20 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot): void 
     const ty = it.y ?? 0
     ctx.beginPath()
     const segs = parsePathData(it.path)
+    // A clipped legend symbol (clipHeight): clip to the entry's laid-out
+    // rect (0,0,w,h) in the item's local frame, matching the SVG renderer's
+    // clipPath defs.
+    const clip = (it as unknown as Record<string, unknown>)._clip as { w: number; h: number } | undefined
+    if (clip) {
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(tx, ty, clip.w, clip.h)
+      ctx.clip()
+    }
+    ctx.beginPath()
     tracePath(ctx, segs, tx, ty)
     paintPath(ctx, segs, it, defs, 'auto')
+    if (clip) ctx.restore()
     return
   }
   // Symbol items (circle arc path): the SVG leaf renderer draws

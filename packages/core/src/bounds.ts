@@ -215,7 +215,12 @@ function estimateWidth(text: string, currentFontHeight: number): number {
 }
 
 export function textWidth(item: SceneItem, line: unknown): number {
-  return fontSize(item) <= 0 || !(line = textValue(item, line)) ? 0 : estimateWidth(line as string, fontSize(item))
+  // vega's estimateWidth (the no-canvas path textMetrics uses) has no
+  // fontSize guard: `~~(0.8 * len * fontSize)` — negative font sizes measure
+  // negative (the text bound then flips through Bounds.set). The `<= 0`
+  // guard lives only in the canvas measureWidth path.
+  const text = textValue(item, line)
+  return estimateWidth(String(text ?? ''), fontSize(item))
 }
 
 /** util/text.js `offset(item)` — baseline correction, exact. */

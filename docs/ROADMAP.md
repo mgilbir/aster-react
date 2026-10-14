@@ -371,17 +371,37 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   `titleAngle`/`labelAngle` rotate (baseline folded inside the rotate frame),
   and the title extent now comes from the real tick+label item bounds
   (stroke expansion and rotation included) instead of an analytic extent.
-  Corpus 413/413. Sweep 7484/7549 (99.1%). A raw-guide round landed the layout-abort state: a throwing legend (tickCount interval strings, fractional/negative columns) aborts vega's whole ViewLayout — the axes/titles/legends now render at their raw encode positions (no translate delta, no perpendicular origins, degenerate boxes), the origin stays at the padding, and the view skips overflow growth. A layout/title round landed: legend anchor epsilon floors/ceils (1-ulp axis-bound guard), orient-bottom fill legends through the orient-independent block, title orient 'none' (vega's subtitle-offset switch has no case for it), and autosize contains:'padding'. A legend round landed the text-measured entry semantics: labelAlign drives both the text anchor and the bound extension (left w, center w/2, right 0), labelLimit width runs vega's limit truncation (the ellipsis inside the limit budget, util/text.js truncate) before measuring, the border strokeColor insets the rect half a pixel and boundStrokes the legend bounds, cornerRadius renders the rounded border at full size, and falsy `columns` lays one entry per column (opt.columns || groups.length). The vega-native trellis is in: a group mark with a `layout` def builds facet cells as scoped groups (facet key as the `parent` signal, cell encodes, scoped scales resolving against the outer scope signals, per-cell axes and titles) and runs them through the gridLayout port; a throwing layout renders unlayouted with default padding, as vega's dataflow does. A later scale round landed
+  Corpus 413/413. Sweep 7503/7549 (99.4%). A raw-guide round landed the layout-abort state: a throwing legend (tickCount interval strings, fractional/negative columns) aborts vega's whole ViewLayout — the axes/titles/legends now render at their raw encode positions (no translate delta, no perpendicular origins, degenerate boxes), the origin stays at the padding, and the view skips overflow growth. A layout/title round landed: legend anchor epsilon floors/ceils (1-ulp axis-bound guard), orient-bottom fill legends through the orient-independent block, title orient 'none' (vega's subtitle-offset switch has no case for it), and autosize contains:'padding'. A legend round landed the text-measured entry semantics: labelAlign drives both the text anchor and the bound extension (left w, center w/2, right 0), labelLimit width runs vega's limit truncation (the ellipsis inside the limit budget, util/text.js truncate) before measuring, the border strokeColor insets the rect half a pixel and boundStrokes the legend bounds, cornerRadius renders the rounded border at full size, and falsy `columns` lays one entry per column (opt.columns || groups.length). The vega-native trellis is in: a group mark with a `layout` def builds facet cells as scoped groups (facet key as the `parent` signal, cell encodes, scoped scales resolving against the outer scope signals, per-cell axes and titles) and runs them through the gridLayout port; a throwing layout renders unlayouted with default padding, as vega's dataflow does. A later scale round landed
   vega's continuous-scale `round` (via interpolateRound), interval-string
   `nice` through the tickCount util, band `align` (dropped by buildScale)
   and the type-keyed axisBand tickOffset, the vega-util zoom family for
   padDomain (log/sqrt/pow/symlog zoom in their transform spaces),
   point-scale labels at the raw scale position (the rounded tick position
   skewed view bounds by a pixel), and NaN-safe degenerate legend symbols.
-  Remaining: legend 9 + config-legend 9 (clipHeight's non-monotonic
-  clipped-entry semantics; symbolLimit and the negative font sizes interact
-  with vega's bounds sentinels; symbolSize -4 NaN archaeology; orient
-  bottom 3px), config-range 11 (config.range now threads into the scale range lookup; the residual mismatch is base-geometry archaeology), axis 4 +
+  A legend round read the upstream render state directly (scenegraph dumps
+  mid-pipeline) and ported the whole symbol-legend entry pipeline exactly:
+  LegendEntries symbolLimit semantics (values.slice(0, limit-1) + the
+  '…N entries' ellipsis entry whose offset datum collapses to 0 over the
+  empty slice — symbolLimit 0.5 and −4 produce identical output), the
+  sizeExpression datum (max(ceil(sqrt(symbolSize)+strokeWidth), fontSize);
+  a negative symbolSize makes it NaN — the symbol path degenerates to its
+  'MNaN,0' moveTo, the item bounds stay at their ±MAX_VALUE sentinels where
+  unions no-op, and the `x || 0` anchor coercion pins the paints to the
+  frame origin), the label x chaining symbolOffset before labelOffset
+  (encoder(symbolOffset) + .offset), truthy clipHeight (entry y =
+  clipHeight/2, the (0,0)/(0,clipHeight) corner points unioned into the
+  entry bound, per-entry clipPath defs over the laid-out entry rect in both
+  renderers), MEASURED per-entry bounds (boundText for labels — negative
+  font sizes flip through Bounds.set normalization, and textWidth dropped
+  its canvas-only fontSize guard; traced paths + miter stroke expansion for
+  symbols), gridLayout's float column widths vs ceil'd advance extents with
+  offsetValue lifts, column-major cell fill for vertical legends (the
+  row/index sort), legendEntryLayout/legendGroupLayout/legendLayout sizing
+  (title bound height drives the entry row, normalized title-bound x1 the
+  overhang shift, legendBounds anchors x1/y1 at the padding clamping
+  overhang), and the legend border (not symbol) stroke as the only
+  boundStroke on the outer rect.
+  Remaining: config-range 11 (config.range now threads into the scale range lookup; the residual mismatch is base-geometry archaeology), axis 4 +
   config-axis 9 (orient left/right span the scale range rather than the
   view size; tickBand extent and tickExtra are unported; config
   tickOffset/labelOffset/labelFlush couple into the view margins), view 3,

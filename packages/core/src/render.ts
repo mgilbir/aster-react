@@ -80,7 +80,7 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   out += `<path class="background" aria-hidden="true" d="${frameD}"${scene.frameStroke ? ` stroke="${scene.frameStroke}"` : ''}/>`
   out += '<g>'
   // Collect clip refs during rendering
-  const clipN = { current: 0, paths: [] as (string | null)[] }
+  const clipN = { current: 0, paths: [] as (string | null)[], rects: [] as ({ w: number; h: number } | null)[] }
   for (const node of scene.items) {
     out += renderGroup(node, plotW, plotH, clipN, W, H)
   }
@@ -101,8 +101,13 @@ export function renderSceneToSvg(scene: SceneRoot): string {
     }
     for (let i = 1; i <= clipN.current; i++) {
       const d = clipN.paths[i - 1]
+      const r = clipN.rects[i - 1]
       if (d) {
         out += `<clipPath id="clip${i}"><path d="${d}"/></clipPath>`
+      } else if (r) {
+        // vega's clip (SVGStringRenderer): the clipped item's own width and
+        // height at (0,0) in its local frame
+        out += `<clipPath id="clip${i}"><rect x="0" y="0" width="${num(r.w)}" height="${num(r.h)}"/></clipPath>`
       } else {
         out += `<clipPath id="clip${i}"><rect x="0" y="0" width="${plotW}" height="${plotH}"/></clipPath>`
       }
@@ -114,7 +119,7 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   return out
 }
 
-function renderGroup(group: SceneGroup, plotW?: number, plotH?: number, clipN?: { current: number; paths: (string | null)[] }, viewW?: number, viewH?: number): string {
+function renderGroup(group: SceneGroup, plotW?: number, plotH?: number, clipN?: { current: number; paths: (string | null)[]; rects: ({ w: number; h: number } | null)[] }, viewW?: number, viewH?: number): string {
   const type = group.marktype
   const needsClip = clipN
     && group.clip === true
@@ -135,7 +140,7 @@ function renderGroup(group: SceneGroup, plotW?: number, plotH?: number, clipN?: 
     out2 += `${transform}>`
     for (const item of group.items ?? []) {
       if (isGroup(item)) out2 += renderGroup(item, plotW, plotH, clipN, viewW, viewH)
-      else out2 += renderLeaf(item)
+      else out2 += renderLeaf(item, clipN)
     }
     out2 += '</g>'
     return out2
@@ -199,17 +204,28 @@ function truncateLeaf(text: string, it: SceneItem, fontSize: number): string {
   return text.slice(0, lo) + ellipsis
 }
 
-function renderLeaf(it: SceneItem): string {
+function renderLeaf(it: SceneItem, clipN?: { current: number; paths: (string | null)[]; rects: ({ w: number; h: number } | null)[] }): string {
   const dd = dataDatumAttr(it)
   // Path items
   if (it.path != null) {
+    // A clipped legend symbol (clipHeight): vega's SVGStringRenderer hangs
+    // the clip-path on the symbol's mark group and defs a rect over the
+    // containing entry's laid-out width/height.
+    let clipAttr = ''
+    const clip = (it as Record<string, unknown>)._clip as { w: number; h: number } | undefined
+    if (clip && clipN) {
+      const clipId = ++clipN.current
+      clipN.paths.push(null)
+      clipN.rects.push(clip)
+      clipAttr = ` clip-path="url(#clip${clipId})"`
+    }
     // Apply the item's x/y as a translate so legend/entry paths (whose `d`
     // starts at M0,0) land at their intended position, matching vega's
     // nested-scope transforms. Items with x=y=0 emit no transform.
     const tx = num(it.x ?? 0)
     const ty = num(it.y ?? 0)
     const transform = (tx !== '0' || ty !== '0') ? ` transform="translate(${tx},${ty})"` : ''
-    return `<path${transform}${dd} d="${it.path}"${attr('fill', it.fill)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
+    return `<path${transform}${dd}${clipAttr} d="${it.path}"${attr('fill', it.fill)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
   }
   // Symbol items (shape path; 'circle' renders the arc form)
   if (it.shape != null && it.radius != null) {
@@ -230,10 +246,12 @@ function renderLeaf(it: SceneItem): string {
     const bOff = baseline && baseline !== 'alphabetic' && !(angle != null && angle !== 0)
       ? baselineOffset(it)
       : 0
-    const y = num((it.y ?? 0) + bOff)
+    // vega's text attr anchors through anchorPoint's `item.x || 0` coercion —
+    // a NaN position renders at the origin before the baseline offset is added
+    const y = num((it.y || 0) + bOff)
     const raw = String(it.text)
     const text = truncateLeaf(raw, it, fontSize ?? 11)
-    return `<text x="${num(it.x ?? 0)}" y="${y}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('font-family', fam)}${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}>${esc(text)}</text>`
+    return `<text x="${num(it.x || 0)}" y="${y}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('font-family', fam)}${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}>${esc(text)}</text>`
   }
   const x2 = it.x2 ?? it.x ?? 0
   const y2 = it.y2 ?? it.y ?? 0
@@ -642,12 +660,12 @@ export function symbolPath(shape: string | undefined, r: number): string {
       return `M0,${num(-h - o)}L${num(-r)},${num(h - o)}L${num(r)},${num(h - o)}Z`
     }
     default:
-      // d3-symbol's circle through a canvas arc: with r=0 the arc adds
-      // nothing and the path degenerates to its moveTo ('M0,0') — matching
-      // vega's renderer, whose canonicalization then drops the empty path.
+      // d3-symbol's circle through a canvas arc: the arcs only render for a
+      // truthy radius, so with r=0 the path degenerates to its moveTo
+      // ('M0,0') and with r=NaN to 'MNaN,0' — matching vega's renderer.
       return r > 0
         ? `M${num(r)},0A${num(r)},${num(r)},0,1,1,${num(-r)},0A${num(r)},${num(r)},0,1,1,${num(r)},0`
-        : 'M0,0'
+        : r === 0 ? 'M0,0' : `M${num(r)},0`
   }
 }
 

@@ -621,9 +621,12 @@ function measureGuideGroup(g: SceneGroup): Bounds {
   if (g.role === 'legend') {
     // legendLayout sets item.bounds = [x, y, x+width, y+height] (the outer
     // box incl. padding), anchored at the laid-out group position. A legend
-    // border stroke boundStrokes the outer rect (+0.5 per side, vega
-    // legendLayout: boundStroke(bounds.set(x, y, x + w, y + h), item)).
-    const stroked = (g.items as SceneItem[] | undefined)?.some((it) => it.stroke != null && it.path != null)
+    // border stroke (legend.strokeColor) boundStrokes the outer rect (+0.5
+    // per side, vega legendLayout: boundStroke(bounds.set(x, y, x + w, y +
+    // h), item)) — symbol strokes don't touch the legend bounds.
+    const stroked = (g as unknown as Record<string, unknown>)._borderStroke === true
+      || ((g as unknown as Record<string, unknown>)._borderStroke === undefined
+        && (g.items as SceneItem[] | undefined)?.some((it) => it.stroke != null && it.path != null))
     const se = stroked ? 0.5 : 0
     return new Bounds().set((g.x ?? 0) - se, (g.y ?? 0) - se, (g.x ?? 0) + (g.width ?? 0) + se, (g.y ?? 0) + (g.height ?? 0) + se)
   }
@@ -4401,13 +4404,17 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       ? (symStrokeEnc as { value?: unknown }).value
       : (legend as { symbolStrokeColor?: string }).symbolStrokeColor
 
-    // When a fill legend's symbols have an explicit stroke encode, Vega uses
-    // the larger stroke-legend entry dimensions (step=18, box=14) to account
-    // for the expanded symbol bounding box.
-    const hasSymbolStroke = legendStrokeColor != null && colorProp === 'fill'
-    const entryStep = isStrokeType ? 13 : ((isStrokeLegend || hasSymbolStroke) ? 18 : 13)
-    const boxHeight = isStrokeType ? 11 : ((isStrokeLegend || hasSymbolStroke) ? 14 : 11)
-    const legendOffset = isStrokeType ? 22 : 18
+    // --- vega's entry pipeline, ported end to end: LegendEntries → the
+    // symbol/label encodes → the scenegraph Bound pass → the entry group's
+    // gridLayout → legendEntryLayout / legendGroupLayout / legendLayout.
+    // Everything downstream reads MEASURED per-entry bounds. The label bound
+    // comes from boundText (align/limit/fontSize aware — negative font sizes
+    // flip through Bounds.set's normalization), the symbol bound from the
+    // traced path (a negative symbolSize makes the radius NaN: the path
+    // degenerates to its moveTo, the item bounds stay at their ±MAX_VALUE
+    // sentinels, and sentinel unions no-op), and a truthy clipHeight unions
+    // the entry group's own (0,0)/(0,clipHeight) corner points into the
+    // entry bound.
 
     // Symbol opacity from the legend's `symbols.update.opacity` encode
     // (vega-lite emits 0.7 for colored point/circle legends, absent otherwise).
@@ -4417,16 +4424,47 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       ? (symOpacityEnc as { value?: unknown }).value
       : (legend as { symbolOpacity?: number }).symbolOpacity
 
-    // Vega measures text width as ~~(0.8 * len * fontSize) when no canvas is
-    // available (vega-scenegraph estimateWidth). Labels render at 10px, the
-    // legend title at 11px bold. The entry content width is the symbol offset
-    // (16 or 20 for stroke legends) plus the widest label; the outer background
-    // spans the larger of the entry content and the title.
-    const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
-    // Entry layout parameters (vega defaults via the legend config).
+    const symbolSizeRaw = (legend as { symbolSize?: number }).symbolSize ?? 100
+    const symSwP = (legend as { symbolStrokeWidth?: number }).symbolStrokeWidth ?? 1.5
+    const symbolDash = (legend as { symbolDash?: number[] }).symbolDash
+    const labelFs = (legend as { labelFontSize?: number }).labelFontSize ?? 10
+    // symbol path radius: sqrt of the symbol size encode (NaN for negative
+    // sizes — the circle path degenerates to its moveTo and bounds to nothing)
+    const symR = Math.sqrt(symbolSizeRaw) / 2
+
+    // LegendEntries (vega-encode): symbolLimit caps the entry list —
+    // values.slice(0, limit-1) plus a trailing '…N entries' entry whose value
+    // is values[items.length]. The offset datum = max over the SLICED items
+    // of the size expression (0 when the slice is empty — the ellipsis-only
+    // legend collapses to offset 0); the size datum = the size expression
+    // (constant here — the size channel routes through the same expression).
+    // A negative symbolSize makes the expression NaN (sqrt of a negative),
+    // which flows through the layout as NaN item positions: vega's `x || 0`
+    // anchor coercion renders them at the origin.
+    const limitRaw = (legend as { symbolLimit?: number }).symbolLimit
+    const limit = limitRaw == null ? NaN : +limitRaw
+    const limitHits = !!(limit && domain.length > limit)
+    const entryValues = limitHits ? domain.slice(0, limit - 1) : domain
+    // legend.js sizeExpression: max(ceil(sqrt(size)+strokeWidth), fontSize)
+    const sizeExpr = Math.max(Math.ceil(Math.sqrt(symbolSizeRaw) + symSwP), labelFs)
+    const offsetDatum = entryValues.length ? Math.max(0, sizeExpr) : 0
+    const entries = entryValues.map((v: unknown) => ({ value: v, label: String(v) }))
+    if (limitHits) {
+      entries.push({ value: domain[entryValues.length], label: `…${domain.length - entryValues.length} entries` })
+    }
+    const n = entries.length
+
+    // clipHeight: a truthy value moves the symbol/label y encode to
+    // clipHeight/2 (from the per-entry size datum), carries height=clipHeight
+    // into the entry bound (the noBound encode switches off), and clips each
+    // entry's symbols with a clipPath over the laid-out entry rect.
+    const clipHeightRaw = (legend as { clipHeight?: number }).clipHeight
+    const hasClip = clipHeightRaw != null ? !!clipHeightRaw : false
+
     const labelOffset = (legend as { labelOffset?: number }).labelOffset ?? 4
     const symbolOffset = (legend as { symbolOffset?: number }).symbolOffset ?? 0
     const rowPadding = Math.max((legend as { rowPadding?: number }).rowPadding ?? 2, 0)
+    const colPad = (legend as { columnPadding?: number }).columnPadding ?? 10
     const labelColor = (legend as { labelColor?: string }).labelColor ?? '#000'
     const labelOpacity = (legend as { labelOpacity?: number }).labelOpacity
     const labelFontWeight = (legend as { labelFontWeight?: string | number }).labelFontWeight
@@ -4435,144 +4473,144 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const titleOpacity = (legend as { titleOpacity?: number }).titleOpacity
     const titleFs = (legend as { titleFontSize?: number }).titleFontSize ?? 11
     const titlePad = (legend as { titlePadding?: number }).titlePadding ?? 5
-    // legendGroupLayout shifts the entries by title.bounds.height() +
-    // vega's legend encoder: the symbol/label offset = max over the entries of
-    // ceil(sqrt(symbolSize) + symbolStrokeWidth) vs the label fontSize; the
-    // symbol sits at offset/2, the label at offset + labelOffset. Only the
-    // layout math sees symbolSize/symbolStrokeWidth — the painted symbol keeps
-    // its default radius/stroke. A negative symbolSize makes sqrt NaN, which
-    // vega's bounds silently drop (NaN comparisons are false) — the entry
-    // falls back to the label fontSize, so clamp to 0 for the offset math.
-    // A negative symbolSize makes vega's offset NaN (ceil(sqrt(negative)) =
-    // NaN): the entry bounds go NaN and drop out of the legend bounds, so the
-    // legend renders title-only, sized by the title bound alone.
-    const symbolSizeRaw = (legend as { symbolSize?: number }).symbolSize ?? 100
-    const symbolSizeNaN = !(symbolSizeRaw >= 0)
-    const symbolSizeP = symbolSizeNaN ? 100 : symbolSizeRaw
-    const symSwP = (legend as { symbolStrokeWidth?: number }).symbolStrokeWidth ?? 1.5
-    const symbolDash = (legend as { symbolDash?: number[] }).symbolDash
-    const labelFs = (legend as { labelFontSize?: number }).labelFontSize ?? 10
-    const offset = Math.max(Math.ceil(Math.sqrt(symbolSizeP) + symSwP), labelFs)
-    // legendGroupLayout shifts the entries by title.bounds.height() +
-    // titlePadding — the title bound height is the fontSize itself.
-
-    // vega's legendLayout: w = ceil(bounds + 2*padding); the inner padding
+    const labelLimit = (legend as { labelLimit?: number }).labelLimit ?? 160
+    const labelAlign = (legend as { labelAlign?: string }).labelAlign ?? 'left'
+    const lblBaseline = (legend as { labelBaseline?: string }).labelBaseline ?? 'middle'
+    const titleStr = String(legend.title ?? '')
+    // vega legendLayout: w = ceil(bounds + 2*padding); the inner padding
     // shifts the whole content.
     const legendPad = (legend as { padding?: number }).padding ?? 0
-    const labelLimit = (legend as { labelLimit?: number }).labelLimit ?? 160
-    // vega's label bound (marks/text bound) width runs the limit truncation
-    // BEFORE measuring: estimateWidth applies textValue, so the bound is the
-    // width of the *truncated* text (the ellipsis is part of the limit budget,
-    // vega util/text.js truncate). labelAlign changes the text anchor and —
-    // through the bound — how far the label extends past its anchor: left
-    // w, center w/2, right 0.
-    const labelAlign = (legend as { labelAlign?: string }).labelAlign ?? 'left'
-    const labelW = (len: number) => {
-      const full = ~~(0.8 * len * labelFs)
-      if (!(labelLimit > 0) || !len || full < labelLimit) return full
-      const ellW = ~~(0.8 * labelFs)
-      const lim = labelLimit - ellW
-      let lo = 0
-      let hi = len
-      while (lo < hi) {
-        const mid = 1 + ((lo + hi) >>> 1)
-        if (~~(0.8 * mid * labelFs) < lim) lo = mid
-        else hi = mid - 1
-      }
-      return ~~(0.8 * lo * labelFs) + ellW
-    }
-    const labelExtend = (w: number) => labelAlign === 'right' ? 0 : labelAlign === 'center' ? w / 2 : w
-    const entryWidth = symbolOffset + offset + labelOffset + labelExtend(labelW(maxLabelLen))
-    const titleStr = String(legend.title ?? '')
-    const titleWidth = titleStr.length > 0 ? ~~(0.8 * titleStr.length * titleFs) : 0
-    const outerWidth = Math.ceil(Math.max(entryWidth, titleWidth)) + 2 * legendPad
-    // legendGroupLayout shifts the entries by title.bounds.height() +
-    // titlePadding — the title bound height is the fontSize itself.
-    const titleRow = titleStr ? titleFs + titlePad : 0
-    // The entry swatch spans the entry's full bound: the label extent
-    // (offset/2 + baseline bake - round(0.8*fs) + fs) unioned with the symbol
-    // extent (offset/2 + radius, stroke-expanded for stroke-channel legends).
-    // label bound is baseline-aware (vega boundText): the label sits at
-    // offset/2 with the labelBaseline; the swatch = the label/symbol bound
-    // union and the grid lifts entries whose bound pokes above y=0.
-    const lblBaseline = (legend as { labelBaseline?: string }).labelBaseline ?? 'middle'
-    const lblOff = lblBaseline === 'top' ? Math.round(0.79 * labelFs)
-      : lblBaseline === 'middle' ? Math.round(0.3 * labelFs)
-        : lblBaseline === 'bottom' ? -Math.round(0.21 * labelFs)
-          : lblBaseline === 'line-top' ? Math.round(0.29 * labelFs + 0.5 * (labelFs + 2))
-            : lblBaseline === 'line-bottom' ? Math.round(0.29 * labelFs - 0.5 * (labelFs + 2))
-              : 0
-    const labelY1 = offset / 2 + lblOff - Math.round(0.8 * labelFs)
-    const labelY2 = labelY1 + labelFs
-    const symR = Math.sqrt(symbolSizeP) / 2
-    // symbols painted with a stroke (the stroke channel or a stroke encode)
-    // expand their bound by the miter join (4 * sw / 2 with sw 1.5); the
-    // line-shaped "stroke" symbolType keeps the calibrated 11/13 dims
-    const symExpand = isStrokeType ? 0 : (isStrokeLegend || hasSymbolStroke ? 3 : 0)
-    const symY1 = offset / 2 - symR - symExpand
-    const symY2 = offset / 2 + symR + symExpand
-    const swatchH = isStrokeType ? 11 : Math.max(labelY2, symY2)
-    // the grid's dy = rowPadding + offsetValue(b.y1) + ceil(entry height): the
-    // offsetValue lifts entries whose stroke-expanded symbol or label bound
-    // pokes above y=0, and the grid rounds the extent up (the swatch rect
-    // itself stays float)
-    const offsetValue = isStrokeType ? 0 : (() => {
-      const minY = Math.min(labelY1, symY1)
-      return minY < 0 ? Math.ceil(-minY) : 0
-    })()
-    const step = isStrokeType ? 13 : rowPadding + offsetValue + Math.ceil(swatchH)
-    const bgHeight = Math.ceil(titleRow + Math.ceil(swatchH) + step * (n - 1)) + 2 * legendPad
 
-    // vega legendGroupLayout + legendTitleOffset: the title sits relative to
-    // the entry block per titleOrient; titleAnchor positions it along the
-    // entry extent (sX = entry bound x2 − pad, sY = entry bound y2 − pad);
-    // titleAlign changes the text anchor, and a title whose bound pokes left
-    // of the padding shifts the whole legend right by the overhang.
-    const titleOrient = (legend as { titleOrient?: string }).titleOrient ?? 'top'
-    const specTitleAnchor = (legend as { titleAnchor?: string }).titleAnchor
-    const titleAnchor = specTitleAnchor ?? ((titleOrient === 'left' || titleOrient === 'right') ? 'middle' : 'start')
-    const specTitleAlign = (legend as { titleAlign?: string }).titleAlign
-    // entry grid (vega legendEntryLayout + gridLayout semantics): the
-    // direction/columns choose the column count; each column's extent is the
-    // widest natural entry (16+label part), rows stack by extent+rowPadding,
-    // columns by extent+columnPadding (default 10).
+    // columns truthiness drives the x encode signal `(columns) ? datum.offset
+    // : datum.size` — spec.columns 0 and horizontal direction (entryColumns
+    // falls back to +isVertical = 0) read the size datum instead of the
+    // offset datum.
     const direction = (legend as { direction?: string }).direction ?? 'vertical'
     const specColumns = (legend as { columns?: number }).columns
-    const colPad = (legend as { columnPadding?: number }).columnPadding ?? 10
+    const colsFlag = specColumns != null ? specColumns : direction === 'vertical' ? 1 : 0
+    const colsTruthy = !!colsFlag
+
     // Entry columns (vega gridLayout: `ncols = opt.columns || groups.length`):
     // unspecified → one column; 0 → every entry is its own column (falsy
     // columns falls through to the group count).
     // A non-integer/negative `columns` makes vega's legend gridLayout throw
     // (invalid array length) — the layout aborts and the legend stays at its
     // raw (0,0) position with the base one-column content (raw-guide mode
-    // skips the placement). The entry columns for those behave as if
-    // unspecified: i % 0.5 and i % -4 both keep the dataflow's column 0.
+    // skips the placement).
     const ncols = direction === 'horizontal'
       ? n
       : specColumns == null ? 1
         : specColumns === 0 ? n
           : specColumns > 0 ? (Number.isInteger(specColumns) ? specColumns : 1)
             : 1
+    // gridLayout consumes the entries in their row/column sort order: a
+    // vertical legend sorts by (row, index) with row = index % nrows, so the
+    // cells fill COLUMN-major (entry i → column ⌊i/nrows⌋, row i % nrows);
+    // horizontal fills row-major.
+    const colMajor = direction !== 'horizontal' && Number.isInteger(specColumns) && (specColumns as number) >= 1
+    const nrowsMajor = Math.max(1, Math.ceil(n / ncols))
+    const colOf = (i: number): number => (colMajor ? ~~(i / nrowsMajor) : i % ncols)
+    const rowOf = (i: number): number => (colMajor ? i % nrowsMajor : ~~(i / ncols))
+
+    // --- per-entry encoded positions and measured bounds (the Bound pass) ---
+    // symbol x = (columns ? offset : size)/2 + symbolOffset; label x =
+    // (columns ? offset : size) + labelOffset (no halving); y = clipHeight/2
+    // when clipped, else the size datum/2.
+    const symDs: string[] = []
+    const ebs: Bounds[] = []
+    const yIs: number[] = []
+    const xSymIs: number[] = []
+    const xLblIs: number[] = []
+    for (const e of entries) {
+      const yI = hasClip ? (clipHeightRaw as number) / 2 : sizeExpr / 2
+      const xSymI = (colsTruthy ? offsetDatum : sizeExpr) / 2 + symbolOffset
+      const xLblI = (colsTruthy ? offsetDatum : sizeExpr) + symbolOffset + labelOffset
+      yIs.push(yI); xSymIs.push(xSymI); xLblIs.push(xLblI)
+      const symD = legend.shape
+        ? symbolPath(String(scale(e.value)), 5)
+        : symType === 'stroke'
+          ? 'M-5,0L5,0'
+          : symbolPath(symType, symR)
+      symDs.push(symD)
+      // symbol bound: traced path + stroke expansion (miter), translated by
+      // the item position with vega's `|| 0` NaN coercion — NaN positions
+      // leave the sentinel bounds untouched and the union no-ops. The stroke
+      // follows the channel: a fill legend strokes only via symbolStrokeColor.
+      const symItem = {
+        path: symD, x: xSymI, y: yI, strokeWidth: symSwP, opacity: symbolOpacity,
+        stroke: legend.shape
+          ? String(legendStrokeColor ?? '#888')
+          : symType === 'stroke'
+            ? (colorProp === 'stroke' ? String(scale(e.value)) : undefined)
+            : (colorProp === 'fill' ? (legendStrokeColor != null ? String(legendStrokeColor) : undefined) : String(scale(e.value))),
+      } as unknown as SceneItem
+      const symB = boundLeaf(new Bounds(), symItem)
+      // label bound: boundText (truncation via limit, align-aware x1, negative
+      // fontSize flips through set())
+      const lblB = boundText(new Bounds(), {
+        text: e.label, x: xLblI, y: yI, align: labelAlign, baseline: lblBaseline,
+        fontSize: labelFs, limit: labelLimit,
+        ...(labelFontWeight != null ? { fontWeight: labelFontWeight } : {}),
+        ...(labelFontStyle != null ? { fontStyle: labelFontStyle } : {}),
+      } as unknown as SceneItem)
+      const eb = new Bounds().union(symB).union(lblB)
+      // entry group bound: (clip || width || height) && !noBound adds the
+      // corner points (0,0) and (width, height) — the width encodes 0
+      if (hasClip) eb.add(0, 0).add(0, clipHeightRaw as number)
+      ebs.push(eb)
+    }
+
+    // grid extents (gridLayout): columns/rows advance by the CEILed extents,
+    // offsetValue lifts cells whose bound pokes above/left of 0; the entry
+    // background rect uses the FLOAT column width and the entry's own bound
+    // height (legendEntryLayout: width = max bounds.x2 per column, height =
+    // bounds.y2 - y).
+    const colW = Array<number>(ncols).fill(0)
+    const colAdv = Array<number>(ncols).fill(0)
     const nrows = Math.max(1, Math.ceil(n / ncols))
-    const natW = domain.map((v: unknown) => symbolOffset + offset + labelOffset + labelExtend(labelW(String(v).length)))
-    const colExtent = Array<number>(ncols).fill(0)
     const rowExtent = Array<number>(nrows).fill(0)
-    domain.forEach((_: unknown, i: number) => {
-      const c = i % ncols
-      const r = ~~(i / ncols)
-      colExtent[c] = Math.max(colExtent[c]!, natW[i]!)
-      rowExtent[r] = Math.max(rowExtent[r]!, Math.ceil(swatchH))
+    let offValueX = 0
+    let offValueY = 0
+    entries.forEach((_e, i) => {
+      const eb = ebs[i]!
+      if (eb.empty()) return
+      const c = colOf(i)
+      const r = rowOf(i)
+      colW[c] = Math.max(colW[c]!, eb.x2)
+      colAdv[c] = Math.max(colAdv[c]!, Math.ceil(eb.x2))
+      rowExtent[r] = Math.max(rowExtent[r]!, Math.ceil(eb.y2))
+      offValueX = Math.max(offValueX, eb.x1 < 0 ? Math.ceil(-eb.x1) : 0)
+      offValueY = Math.max(offValueY, eb.y1 < 0 ? Math.ceil(-eb.y1) : 0)
     })
     const colX: number[] = []
     let acc = 0
-    for (let c = 0; c < ncols; c++) { colX.push(acc); acc += colExtent[c]! + colPad }
+    for (let c = 0; c < ncols; c++) { colX.push(acc); acc += colAdv[c]! + colPad + (c > 0 ? offValueX : 0) }
     const rowY: number[] = []
     acc = 0
-    for (let r = 0; r < nrows; r++) { rowY.push(acc); acc += rowExtent[r]! + rowPadding + offsetValue }
-    const sX = colExtent[0]!
-    const sY = rowY[nrows - 1]! + Math.ceil(swatchH)
-    const anchorOffX = titleAnchor === 'end' ? sX : titleAnchor === 'middle' ? Math.round(sX / 2) : 0
-    const anchorOffY = titleAnchor === 'end' ? sY : titleAnchor === 'middle' ? Math.round(sY / 2) : 0
+    for (let r = 0; r < nrows; r++) { rowY.push(acc); acc += rowExtent[r]! + rowPadding + offValueY }
+    // vega legendTitleOffset reads the (shifted) entry container bounds:
+    // s = e.bounds.x2/y2 − item.padding — the max grid-positioned extent.
+    let sX = 0
+    let sY = 0
+    entries.forEach((_e, i) => {
+      const eb = ebs[i]!
+      if (eb.empty()) return
+      sX = Math.max(sX, (colX[colOf(i)] ?? 0) + eb.x2)
+      sY = Math.max(sY, (rowY[rowOf(i)] ?? 0) + eb.y2)
+    })
+
+    // vega legendGroupLayout + legendTitleOffset: the title sits relative to
+    // the entry block per titleOrient; top/right titles anchor along the
+    // entry x extent (sX = entry bound x2 − pad), left/right/bottom along the
+    // y extent (sY = entry bound y2 − pad); titleAlign changes the text
+    // anchor, and a title whose bound pokes left of the padding shifts the
+    // whole legend right by the overhang.
+    const titleOrient = (legend as { titleOrient?: string }).titleOrient ?? 'top'
+    const specTitleAnchor = (legend as { titleAnchor?: string }).titleAnchor
+    const titleAnchor = specTitleAnchor ?? ((titleOrient === 'left' || titleOrient === 'right') ? 'middle' : 'start')
+    const specTitleAlign = (legend as { titleAlign?: string }).titleAlign
+    const anchorOffX = titleAnchor === 'end' ? Math.round(sX) : titleAnchor === 'middle' ? Math.round(sX / 2) : 0
+    const anchorOffY = titleAnchor === 'end' ? Math.round(sY) : titleAnchor === 'middle' ? Math.round(sY / 2) : 0
     let titleX = legendPad
     let titleY = legendPad
     let tBaseline: 'top' | 'middle' | 'bottom' = 'top'
@@ -4581,10 +4619,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       titleY = legendPad + anchorOffY
     } else if (titleOrient === 'right') {
       tBaseline = titleAnchor === 'end' ? 'bottom' : titleAnchor === 'middle' ? 'middle' : 'top'
-      titleX = legendPad + sX + titlePad
+      titleX = legendPad + Math.round(sX) + titlePad
       titleY = legendPad + anchorOffY
     } else if (titleOrient === 'bottom') {
-      titleY = legendPad + sY + titlePad
+      titleY = legendPad + Math.round(sY) + titlePad
       titleX = legendPad + anchorOffX
     } else {
       titleX = legendPad + anchorOffX
@@ -4595,34 +4633,57 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const tAlign = (specTitleAlign ?? (titleOrient === 'left' || titleOrient === 'right'
       ? 'left'
       : titleAnchor === 'end' ? 'right' : titleAnchor === 'middle' ? 'center' : 'left')) as 'left' | 'center' | 'right'
-    const overhang = tAlign === 'right' ? titleWidth : tAlign === 'center' ? titleWidth / 2 : 0
-    const shift = titleStr && !ctx.rawGuides ? Math.max(0, Math.round(legendPad + overhang - titleX)) : 0
+    const titleLimit = (legend as { titleLimit?: number }).titleLimit
+    const titleBaseline = (legend as { titleBaseline?: string }).titleBaseline
+    // title bound (legendGroupLayout reads title.bounds: the Bound-pass text
+    // bound at the title's pre-shift position — height drives the entry row,
+    // width the left-title shift, x1 the overhang)
+    const tBound = titleStr
+      ? boundText(new Bounds(), {
+          x: titleX, y: titleY, text: titleStr, align: tAlign,
+          baseline: (titleBaseline ?? tBaseline) as SceneItem['baseline'],
+          fontSize: titleFs, ...(titleLimit != null ? { limit: titleLimit } : {}),
+        } as unknown as SceneItem)
+      : new Bounds().set(0, 0, 0, 0)
+    // container shifts (legendGroupLayout): top titles push the entries down
+    // by the title bound height + padding; left titles push them right by
+    // ceil(title bound width) + padding.
+    const titleRow = titleStr && !ctx.rawGuides ? tBound.height() + titlePad : 0
+    const leftShift = titleStr && !ctx.rawGuides && titleOrient === 'left' ? Math.ceil(tBound.width()) + titlePad : 0
+    // overhang: a title bound poking left of the padding shifts the entries
+    // AND the title right by the overhang (vega translates both)
+    const shift = titleStr && !ctx.rawGuides ? Math.max(0, Math.round(legendPad - tBound.x1)) : 0
     // entry block base: top titles push entries down by the title row;
     // left titles push them right by title width + padding; right/bottom
     // leave the entries at the padding origin.
     // Raw-guide mode: the legendGroupLayout never ran — the entries keep
     // their encode positions (no title-row shift, no padding shifts).
-    const entryX = ctx.rawGuides ? 0 : legendPad + shift + (titleOrient === 'left' && titleStr ? titleWidth + titlePad : 0)
+    const entryX = ctx.rawGuides ? 0 : legendPad + shift + leftShift
     const entryBaseY = ctx.rawGuides ? 0 : titleOrient === 'top' && titleStr ? titleRow : 0
-    let contentX2 = 0
-    if (!symbolSizeNaN) {
-      domain.forEach((_: unknown, i: number) => {
-        contentX2 = Math.max(contentX2, entryX + colX[i % ncols]! + colExtent[i % ncols]!)
-      })
+
+    // vega legendBounds: union the entry + title bounds, anchor x1/y1 at the
+    // padding (clamping any overhang), then w/h = ceil(width + 2*padding).
+    const lb = new Bounds()
+    entries.forEach((_e, i) => {
+      const eb = ebs[i]!
+      if (eb.empty()) return
+      const ex = ctx.rawGuides ? 0 : entryX + (colX[colOf(i)] ?? 0)
+      const ey = ctx.rawGuides ? 0 : legendPad + entryBaseY + (rowY[rowOf(i)] ?? 0)
+      lb.add(ex + eb.x1, ey + eb.y1).add(ex + eb.x2, ey + eb.y2)
+    })
+    if (titleStr && !ctx.rawGuides) {
+      const tb = tBound.clone().translate(shift, 0)
+      lb.add(tb.x1, tb.y1).add(tb.x2, tb.y2)
     }
-    // vega legendLayout: w = ceil(bounds.width + 2*padding) where the bound is
-    // anchored at x1=y1=padding, i.e. w = ceil(contentMax + padding).
-    const bgW = symbolSizeNaN
-      ? Math.ceil((titleStr ? titleX + shift + (tAlign === 'right' ? 0 : tAlign === 'center' ? titleWidth / 2 : titleWidth) : 0) + legendPad)
-      : Math.ceil(Math.max(
-        contentX2,
-        (titleStr ? titleX + shift + (tAlign === 'right' ? 0 : tAlign === 'center' ? titleWidth / 2 : titleWidth) : 0),
-      ) + legendPad)
-    const entriesY2 = symbolSizeNaN ? 0 : legendPad + entryBaseY + rowY[nrows - 1]! + Math.ceil(swatchH)
-    const bgH = Math.ceil(Math.max(
-      symbolSizeNaN ? (titleStr ? titleY + titleFs : 0) : entriesY2,
-      titleOrient === 'bottom' && titleStr ? titleY + titleFs : 0,
-    ) + legendPad)
+    if (lb.empty()) {
+      // empty legends anchor their upper-right corner at the padding
+      lb.x2 = legendPad
+      lb.y2 = legendPad
+    }
+    lb.x1 = legendPad
+    lb.y1 = legendPad
+    const bgW = Math.ceil(lb.width() + 2 * legendPad)
+    const bgH = Math.ceil(lb.height() + 2 * legendPad)
 
     const items: SceneItem[] = []
     const legendCornerRadius = (legend as { cornerRadius?: number }).cornerRadius
@@ -4647,84 +4708,67 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         ? `M${bgX},${bgY}h${bgW}v${bgH}h-${bgW}Z`
         : `M0,0h${bgW}v${bgH}h-${bgW}Z`
     items.push({ path: bgPath, x: 0, y: 0, ...(legendFillColor != null ? { fill: legendFillColor } : {}), ...(legendBorderColor != null ? { stroke: String(legendBorderColor) } : {}) })
-    const titleLimit = (legend as { titleLimit?: number }).titleLimit
-    const titleBaseline = (legend as { titleBaseline?: string }).titleBaseline
+    // vega's legendLayout boundStrokes the outer rect only for the legend's
+    // own border stroke — symbol strokes must not expand the legend bounds.
+    const borderStroke = legendBorderColor != null
     // vega's legend title item sits at (padding, padding) with baseline top;
     // the renderer bakes the baseline offset. titleBaseline overrides it.
     if (titleStr) items.push({ text: titleStr, x: titleX + shift, y: titleY, baseline: (titleBaseline ?? tBaseline) as 'top', align: tAlign, fill: titleColor, fontSize: titleFs, ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
-    for (let i = 0; !symbolSizeNaN && i < n; i++) {
-      const value = domain[i]
+    for (let i = 0; i < n; i++) {
+      const e = entries[i]!
+      const eb = ebs[i]!
+      const value = e.value
       // Raw-guide mode: the entry rows never got their layout offsets — every
       // entry sits at its encode position (0), overlapping.
-      const off = ctx.rawGuides ? 0 : entryBaseY + rowY[~~(i / ncols)]!
-      const colOff = ctx.rawGuides ? 0 : colX[i % ncols]!
-      // For shape legends, compute per-entry swatch height based on the
-      // symbol's actual stroke bounds.  Vega's boundStroke expands path
-      // bounds by e = max(strokeWidth/2, miterLimit*strokeWidth/2).
-      // With default strokeWidth=1.5 and miterLimit=4, e=3.
-      // The symbol is at y=6 inside the entry, so the swatch height is:
-      //   symbolY(6) + extentY + strokeExpand(3)
-      // where extentY = r for most shapes, r*sin(60°) for triangle-up/down.
-      let entryBoxHeight = swatchH
-      if (legend.shape) {
-        const sn = String(scale(value))
-        const symR = 5
-        const extentY = (sn === 'triangle-up' || sn === 'triangle-down') ? symR * Math.sqrt(3) / 2 : symR
-        entryBoxHeight = 6 + extentY + 3
-      }
+      const off = ctx.rawGuides ? 0 : entryBaseY + (rowY[rowOf(i)] ?? 0)
+      const colOff = ctx.rawGuides ? 0 : (colX[colOf(i)] ?? 0)
+      const colWc = colW[colOf(i)] ?? 0
+      // The entry background: legendEntryLayout sizes it to the column's max
+      // bound width (float) and the entry's own bound height (bounds.y2 − y).
       // Raw-guide mode: the entry backgrounds are bound-derived boxes — the
       // layout never ran, so they stay degenerate placeholders (vega drops
       // them).
-      items.push({ path: ctx.rawGuides ? 'M0,0h0v0h0Z' : `M0,0h${colExtent[i % ncols]}v${entryBoxHeight}h-${colExtent[i % ncols]}Z`, x: entryX + colOff, y: legendPad + off })
-      const symbolType = legend.symbolType ?? 'circle'
+      items.push({ path: ctx.rawGuides ? 'M0,0h0v0h0Z' : `M0,0h${colWc}v${eb.y2}h-${colWc}Z`, x: entryX + colOff, y: legendPad + off })
       // vega renders the legend entry symbol in the shape requested by the
-      // legend's symbolType. For "stroke" type, render a horizontal line.
-      // For shape channel legends, render the actual shape from the scale.
+      // legend's symbolType; the measured path (symDs) matches the painted one.
+      // vega coerces the NaN encode positions to 0 (anchorPoint/translateItem
+      // `|| 0`) INSIDE the entry frame — the container/grid shifts still apply,
+      // so zero the NaN part here rather than poisoning the whole sum
+      const symX = entryX + colOff + (xSymIs[i]! || 0)
+      const symY = legendPad + off + (yIs[i]! || 0)
       if (legend.shape) {
-        // Shape legend: the scale returns shape names, use them as symbol shapes.
-        // The stroke color comes from the legend encode or defaults to #888
-        // (Vega's default symbol stroke for shape legends).
+        // Shape legend: the scale returns shape names; the stroke color comes
+        // from the legend encode or defaults to #888 (vega's default symbol
+        // stroke for shape legends). The encode opacity applies directly (not
+        // the isStrokeLegend fallback): no encode → 1.
         const shapeName = String(scale(value))
         const shapeStroke = legendStrokeColor ?? '#888'
-        // For shape legends, use the encode opacity directly (not the isStrokeLegend
-        // fallback which always gives 0.7). When no encode exists, Vega defaults to 1.
         const shapeOpacity = symOpacityEnc && typeof symOpacityEnc === 'object' && 'value' in symOpacityEnc
           ? ((symOpacityEnc as { value?: unknown }).value as number ?? 0.7)
           : 1
-        const r = 5
-        let d: string
-        switch (shapeName) {
-          case 'square': d = `M${-r},${-r}h${2*r}v${2*r}h${-2*r}Z`; break
-          case 'diamond': d = `M0,${-r}L${r},0L0,${r}L${-r},0Z`; break
-          case 'triangle-up': { const h = r * 0.866; d = `M0,${-h}L${-r},${h}L${r},${h}Z`; break }
-          case 'triangle-down': { const h = r * 0.866; d = `M0,${h}L${-r},${-h}L${r},${-h}Z`; break }
-          case 'triangle-right': { const h = r * 0.866; d = `M${h},0L${-h},${-r}L${-h},${r}Z`; break }
-          case 'triangle-left': { const h = r * 0.866; d = `M${-h},0L${h},${-r}L${h},${r}Z`; break }
-          case 'cross': {
-            const s = r / 2.5
-            d = `M${-r},${-s}L${-r},${s}L${-s},${s}L${-s},${r}L${s},${r}L${s},${s}L${r},${s}L${r},${-s}L${s},${-s}L${s},${-r}L${-s},${-r}L${-s},${-s}Z`
-            break
-          }
-          default: d = `M${r},0A${r},${r},0,1,1,${-r},0A${r},${r},0,1,1,${r},0`; break
-        }
-        items.push({ path: d, x: 6, y: off + 6, stroke: String(shapeStroke), strokeWidth: 1.5, opacity: shapeOpacity })
-      } else if (symbolType === 'stroke') {
+        items.push({ path: symDs[i]!, x: symX, y: symY, stroke: String(shapeStroke), strokeWidth: 1.5, opacity: shapeOpacity })
+      } else if (symType === 'stroke') {
         // the shape is a line but the channel paints it: a fill legend fills
         // the symbol, a stroke legend strokes it
         const paint = colorProp === 'fill' ? { fill: String(scale(value)) } : { stroke: String(scale(value)) }
-        items.push({ path: `M-5,0L5,0`, x: entryX + colOff + symbolOffset + offset / 2, y: legendPad + off + offset / 2, strokeWidth: 1.5, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...paint })
+        items.push({ path: symDs[i]!, x: symX, y: symY, strokeWidth: 1.5, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...paint })
       } else {
-        const symPath = symbolPath(symbolType, symR)
         if (colorProp === 'fill') {
-          items.push({ path: symPath, x: entryX + colOff + symbolOffset + offset / 2, y: legendPad + off + offset / 2, fill: String(scale(value)), strokeWidth: symSwP, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...(legendStrokeColor != null ? { stroke: String(legendStrokeColor) } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
+          items.push({ path: symDs[i]!, x: symX, y: symY, fill: String(scale(value)), strokeWidth: symSwP, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...(legendStrokeColor != null ? { stroke: String(legendStrokeColor) } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
         } else {
-          items.push({ path: symPath, x: entryX + colOff + symbolOffset + offset / 2, y: legendPad + off + offset / 2, stroke: String(scale(value)), strokeWidth: symSwP, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
+          items.push({ path: symDs[i]!, x: symX, y: symY, stroke: String(scale(value)), strokeWidth: symSwP, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
         }
       }
+      // clipHeight clips the entry's symbols with a clipPath over the
+      // laid-out entry rect (vega's guideMark clip + SVGStringRenderer clip:
+      // rect (0,0,entry.width,entry.height) in the entry's local frame)
+      if (hasClip && !ctx.rawGuides) {
+        ;(items[items.length - 1] as Record<string, unknown>)._clip = { w: colWc, h: eb.y2 }
+      }
       items.push({
-        text: String(value),
-        x: entryX + colOff + symbolOffset + offset + labelOffset,
-        y: legendPad + off + offset / 2,
+        text: e.label,
+        x: entryX + colOff + (xLblIs[i]! || 0),
+        y: legendPad + off + (yIs[i]! || 0),
         baseline: lblBaseline as 'middle',
         align: labelAlign as 'left',
         fill: labelColor,
@@ -4735,7 +4779,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         ...(labelFontStyle != null ? { fontStyle: labelFontStyle } : {}),
       })
     }
-    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: bgH, items }
+    const out: SceneGroup = { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: bgH, items }
+    ;(out as unknown as Record<string, unknown>)._borderStroke = borderStroke
+    return out
+
   }
 
   // Unsupported
