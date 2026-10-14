@@ -4463,7 +4463,11 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   // tickOffset default, which an explicit tickOffset replaces. floor() of the
   // band center is round(x - 0.5), so the default matches the old behavior.
   const bw = scale.bandwidth ? scale.bandwidth() : 0
-  const isBand = bw > 0
+  // vega's axisBand style keys on the scale TYPE (axis-config.js:
+  // `scaleType(spec.scale) === 'band' && config.axisBand`) — not on whether
+  // the bandwidth is non-zero — so a band scale with paddingInner 1 (bw 0)
+  // still gets the -0.5 tickOffset default.
+  const isBand = scale.type === 'band'
   const bandPos = axis.bandPosition ?? 0.5
   const tickOffsetEff = axis.tickOffset ?? (isBand ? -0.5 : 0)
   const tickRoundOn = axis.tickRound !== false
@@ -4552,7 +4556,12 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       // axisLabels tickPos keeps band 0.5 and no round of its own).
       const rawOf = (scale(t) as number) + (isBand ? 0.5 * bw : 0)
       const labelOffset = axis.labelOffset ?? 0
-      const bandLabelY = scale.bandwidth ? v : rawV + 0.5
+      // Band scales label at the rounded tick position (pos); every other
+      // scale — including point, whose bandwidth() exists but is 0 — labels
+      // at the raw scale position + the 0.5px group bake. Keying on
+      // `scale.bandwidth` alone silently rounded point-scale labels, which
+      // skewed the view bounds (top margin ceil(-y1)) by a pixel.
+      const bandLabelY = isBand ? v : rawV + 0.5
       if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align'] }
       else if (orient === 'right') { label.x = ctx.width + tickSize + labelPadding + 0.5; label.y = bandLabelY; label.align = align as SceneItem['align'] }
       else if (orient === 'bottom') {

@@ -198,7 +198,7 @@ export interface CompiledScale {
   domain: ScaleDomain
   range: ScaleRange
   zero?: boolean
-  nice?: boolean | number
+  nice?: boolean | number | string
   reverse?: boolean
   clamp?: boolean
   round?: boolean

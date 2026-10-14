@@ -4,6 +4,7 @@
  * match vega exactly.
  */
 import * as vs from './scale.js'
+import { interpolateRound } from './interp.js'
 import type { CompiledScale, ScaleDomain, ScaleRange } from './types.js'
 
 export type Scale = vs.Scale
@@ -115,6 +116,7 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
     if (c.padding != null) s.padding?.(c.padding)
     if (c.paddingInner != null) s.paddingInner?.(c.paddingInner)
     if (c.paddingOuter != null) s.paddingOuter?.(c.paddingOuter)
+    if (c.align != null) s.align?.(c.align)
   }
 
   if (CONTINUOUS_TYPES.has(type) && typeof range0 !== 'string') {
@@ -125,7 +127,16 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   if (c.exponent != null) s.exponent?.(c.exponent)
   if (c.constant != null) s.constant?.(c.constant)
   if (c.base != null) s.base?.(c.base)
-  if (c.round) s.round?.(true)
+  // vega's Scale transform configures rounding as `scale.round(round)` when
+  // the scale has the method (band/point), else `scale.interpolate(
+  // interpolateRound)` — continuous scales have no round method, so their
+  // rounding goes through the range interpolator.
+  if (c.round) {
+    if (typeof s.round === 'function') s.round(true)
+    else if (typeof (s as unknown as { interpolate?: unknown }).interpolate === 'function') {
+      ;(s as unknown as { interpolate: (f: unknown) => unknown }).interpolate(interpolateRound)
+    }
+  }
   if (c.clamp) s.clamp?.(true)
   if (c.padding != null) s.padding?.(c.padding)
   if (c.paddingInner != null) s.paddingInner?.(c.paddingInner)
@@ -152,7 +163,7 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   // extreme data values land `padding` px inside the range. Applies to all
   // continuous scales (linear/log/pow/sqrt/symlog/time/utc), matching vega's
   // `includePad(type)` guard.
-  if (CONTINUOUS_TYPES.has(type) && c.padding != null) applyPixelPadding(s, c.padding)
+  if (CONTINUOUS_TYPES.has(type) && c.padding != null) applyPixelPadding(s, c, c.padding)
   if (c.nice) applyNice(s, c.nice)
   if (c.exponent != null) s.exponent?.(c.exponent)
   if (c.constant != null) s.constant?.(c.constant)
@@ -199,9 +210,13 @@ function resolveBins(
   return undefined
 }
 
-function applyNice(s: Scale, nice: boolean | number) {
+function applyNice(s: Scale, nice: boolean | number | string) {
   if (!s.nice) return
-  if (typeof nice === 'number') s.nice(vs.tickCount(s, nice))
+  // vega's Scale transform: `scale.nice((_.nice !== true && tickCount(scale,
+  // _.nice)) || null)` — every non-true nice goes through the tickCount util,
+  // which resolves an interval string against the scale (time/utc → calendar
+  // interval; anything else refuses, as upstream does).
+  if (nice !== true) s.nice(vs.tickCount(s as never, nice) ?? null)
   else s.nice()
 }
 
@@ -240,9 +255,11 @@ function applyDomainMid(s: Scale, mid: number) {
 /**
  * vega-encode `padDomain`: zoom a continuous scale domain out around its
  * midpoint so the extreme domain values sit `pad` px inside the range
- * (`frac = span / (span - 2*pad)`, `zoomLinear` around `(d0+d1)/2`).
+ * (`frac = span / (span - 2*pad)`). The zoom runs in the scale's transform
+ * space: log zooms logarithmically, sqrt/pow exponentially, symlog through
+ * log1p (vega-util zoom.js); everything else linearly.
  */
-function applyPixelPadding(s: Scale, pad: number) {
+function applyPixelPadding(s: Scale, c: CompiledScale, pad: number) {
   const range = s.range() as number[]
   if (range.length < 2) return
   const span = Math.abs((range[range.length - 1] ?? 0) - (range[0] ?? 0))
@@ -251,12 +268,48 @@ function applyPixelPadding(s: Scale, pad: number) {
   if (domain.length < 2 || domain[0] === domain[domain.length - 1]) return
   if (!Number.isFinite(Number(domain[0])) || !Number.isFinite(Number(domain[domain.length - 1]))) return
   const frac = span / (span - 2 * pad)
-  const d0 = Number(domain[0])
-  const d1 = Number(domain[domain.length - 1])
-  const da = (d0 + d1) / 2
-  domain[0] = (da + (d0 - da) * frac) as unknown as number
-  domain[domain.length - 1] = (da + (d1 - da) * frac) as unknown as number
+  const type = c.type
+  const d =
+    type === 'log' ? zoomLog(domain, frac)
+    : type === 'sqrt' ? zoomPow(domain, frac, 0.5)
+    : type === 'pow' ? zoomPow(domain, frac, (c.exponent as number) || 1)
+    : type === 'symlog' ? zoomSymlog(domain, frac, (c.constant as number) || 1)
+    : zoomLinear(domain, frac)
+  domain[0] = d[0] as unknown as number
+  domain[domain.length - 1] = d[1] as unknown as number
   s.domain(domain)
+}
+
+// ---- vega-util zoom.js (domain-space zooming for padDomain) ----------------
+
+const zoomExp = (sign: number) => (x: number) => sign * Math.exp(x)
+const zoomLogF = (sign: number) => (x: number) => Math.log(sign * x)
+const zoomSymlogF = (c: number) => (x: number) => Math.sign(x) * Math.log1p(Math.abs(x / c))
+const zoomSymexpF = (c: number) => (x: number) => Math.sign(x) * Math.expm1(Math.abs(x)) * c
+const zoomPowF = (exponent: number) => (x: number) => x < 0 ? -Math.pow(-x, exponent) : Math.pow(x, exponent)
+
+function zoomDomain(domain: number[], frac: number, lift: (x: number) => number, ground: (x: number) => number): [number, number] {
+  const d0 = lift(domain[0]!)
+  const d1 = lift(domain[domain.length - 1]!)
+  const da = (d0 + d1) / 2
+  return [ground(da + (d0 - da) * frac), ground(da + (d1 - da) * frac)]
+}
+
+function zoomLinear(domain: number[], frac: number): [number, number] {
+  return zoomDomain(domain, frac, Number, (x) => x)
+}
+
+function zoomLog(domain: number[], frac: number): [number, number] {
+  const sign = Math.sign(domain[0]!)
+  return zoomDomain(domain, frac, zoomLogF(sign), zoomExp(sign))
+}
+
+function zoomPow(domain: number[], frac: number, exponent: number): [number, number] {
+  return zoomDomain(domain, frac, zoomPowF(exponent), zoomPowF(1 / exponent))
+}
+
+function zoomSymlog(domain: number[], frac: number, constant: number): [number, number] {
+  return zoomDomain(domain, frac, zoomSymlogF(constant), zoomSymexpF(constant))
 }
 
 /** Continuous-domain reduction shared by the union forms. Returns null when
