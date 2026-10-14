@@ -576,6 +576,22 @@ function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { gro
   return { groups }
 }
 
+/**
+ * Measure a top-level guide group the way vega's layoutGroup does: axes via
+ * the spine semantics, legends via the legendBounds anchor (the item bound is
+ * forced to x1=y1=padding, so negative text overhangs don't leak into the
+ * viewBounds), everything else recursively.
+ */
+function measureGuideGroup(g: SceneGroup): Bounds {
+  if (g.role === 'axis') return boundAxisGroup(g)
+  if (g.role === 'legend') {
+    // legendLayout sets item.bounds = [x, y, x+width, y+height] (the outer
+    // box incl. padding), anchored at the laid-out group position.
+    return new Bounds().set(g.x ?? 0, g.y ?? 0, (g.x ?? 0) + (g.width ?? 0), (g.y ?? 0) + (g.height ?? 0))
+  }
+  return boundLeaf(new Bounds(), g as unknown as SceneItem)
+}
+
 function computeGuidePadding(
   items: SceneGroup[],
   width: number,
@@ -593,9 +609,7 @@ function computeGuidePadding(
   let maxY = height
 
   for (const group of items) {
-    const b = group.role === 'axis'
-      ? boundAxisGroup(group)
-      : boundLeaf(new Bounds(), group as unknown as SceneItem)
+    const b = measureGuideGroup(group)
     if (b.empty()) continue
     minX = Math.min(minX, b.x1)
     maxX = Math.max(maxX, b.x2)
@@ -1068,10 +1082,7 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
   const b = new Bounds().set(0, 0, width, height)
   for (const g of items as SceneGroup[]) {
     if (g.role === 'title') continue
-    const bb = g.role === 'axis'
-      ? boundAxisGroup(g as SceneGroup)
-      : boundLeaf(new Bounds(), g as SceneItem)
-    b.union(bb)
+    b.union(measureGuideGroup(g))
   }
   const vb = { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
 
@@ -3936,7 +3947,9 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const bgHeight = 16 + scopesHeight
 
     const items: SceneItem[] = []
-    items.push({ path: `M0,0h${outerWidth}v${bgHeight}h-${outerWidth}Z`, x: 0, y: 0 })
+    const legendCornerRadius = (legend as { cornerRadius?: number }).cornerRadius
+    const legendFillColor = (legend as { fillColor?: string }).fillColor
+    items.push({ path: `M0,0h${outerWidth}v${bgHeight}h-${outerWidth}Z`, x: 0, y: 0, ...(legendFillColor != null ? { fill: legendFillColor } : {}), ...(legendCornerRadius != null ? { cornerRadius: legendCornerRadius } : {}) })
     items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]!
@@ -4232,9 +4245,14 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const bgHeight = Math.ceil(titleRow + Math.ceil(swatchH) + step * (n - 1)) + 2 * legendPad
 
     const items: SceneItem[] = []
-    items.push({ path: `M0,0h${outerWidth}v${bgHeight}h-${outerWidth}Z`, x: 0, y: 0 })
+    const legendCornerRadius = (legend as { cornerRadius?: number }).cornerRadius
+    const legendFillColor = (legend as { fillColor?: string }).fillColor
+    items.push({ path: `M0,0h${outerWidth}v${bgHeight}h-${outerWidth}Z`, x: 0, y: 0, ...(legendFillColor != null ? { fill: legendFillColor } : {}), ...(legendCornerRadius != null ? { cornerRadius: legendCornerRadius } : {}) })
     const titleLimit = (legend as { titleLimit?: number }).titleLimit
-    if (titleStr) items.push({ text: titleStr, x: legendPad, y: legendPad + Math.round(0.79 * titleFs), align: 'left', fill: titleColor, fontSize: titleFs, ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
+    const titleBaseline = (legend as { titleBaseline?: string }).titleBaseline
+    // vega's legend title item sits at (padding, padding) with baseline top;
+    // the renderer bakes the baseline offset. titleBaseline overrides it.
+    if (titleStr) items.push({ text: titleStr, x: legendPad, y: legendPad, baseline: (titleBaseline ?? 'top') as 'top', align: 'left', fill: titleColor, fontSize: titleFs, ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
       const off = titleRow + i * step
