@@ -351,22 +351,20 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   the anchor-bound rules (xBounds = vertical axes, yBounds = horizontal,
   group-typed marks = ScopeRole union into both, grid marks excluded). Orient
   sweep 14/18; the remaining 4 are ±1-3px title/scope-bound epsilons on the
-  sweep base (left/bottom orients). This round landed the vega-faithful
-  axis baseline architecture (renderLeaf bakes the baseline shift; guide
-  leaves carry raw positions; bounds are baseline-aware without unbakes),
-  the tick-position model (bandPosition/tickOffset/tickRound/labelOffset
-  with the axisBand -0.5 style default), minExtent/maxExtent clamps,
-  opacity-channel fidelity (fill-opacity/stroke-opacity on text/line/
-  rule/line marks; config.mark seeds mark defaults), tickColor/tickWidth/
-  tickDash/domainColor/domainWidth/domainDash/domainOpacity,
-  labelColor/labelOpacity/labelFontSize, symbolType (all shapes),
-  tickCount failure emulation, labelLimit/titleLimit truncation and
-  legend-titleLimit. Sweep 7045/7549 (axis- 440/516). Remaining: axis
-  titleY/translate/offset/position/titleAngle/labelAngle/titleAnchor/
-  tickMinStep (~55), the legend entry-grid port (labelBaseline/
-  titleBaseline/symbolSize dims, labelLimit/columns/clipHeight/
-  titleOrient ~140), trellis layout (14), chart-title props (20),
-  config-mark/text/style (~40).
+  sweep base (left/bottom orients). Two rounds landed the vega-faithful
+  axis baseline architecture, the tick-position model
+  (bandPosition/tickOffset/tickRound/labelOffset), translate/offset,
+  minExtent/maxExtent clamps, opacity-channel fidelity, symbolType, the
+  legend entry-grid model measured from oracle dumps (offset =
+  max(ceil(sqrt(symbolSize)+symbolStrokeWidth), labelFontSize), swatch =
+  label/symbol bound union, grid step = rowPadding + bound lift +
+  ceil(entry height), titleRow = titleFontSize + titlePadding, inner
+  padding, labelLimit caps), text stroke paint, title/subtitle/label
+  limits, and rule xc/yc config-ignore semantics. Sweep 7127/7549.
+  Remaining: legend baselines/columns/clipHeight/titleOrient/tickCount
+  (~60), title orient/align/angle/baseline/frame (~20), layout (14),
+  config-rect/style x2/yc/height (~25), encode-rect/area (~20),
+  tickMinStep (8), symbolSize/symbolLimit anchor interactions (6).
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
 
