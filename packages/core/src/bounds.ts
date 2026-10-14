@@ -696,7 +696,7 @@ export function boundLeaf(bounds: Bounds, it: SceneItem): Bounds {
  */
 export function boundAxisGroup(axis: SceneGroup): Bounds {
   const b = new Bounds()
-  const meta = (axis as Record<string, unknown>).axis as { orient: string; range: number; baseline?: number } | undefined
+  const meta = (axis as Record<string, unknown>).axis as { orient: string; range: number; baseline?: number; translate?: number } | undefined
   const orient = meta?.orient ?? 'left'
   const range = meta?.range ?? 0
   // The axis line's perpendicular position: for top/bottom axes it sits at the
@@ -712,7 +712,7 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
     // Guide leaves carry vega's raw item positions (the baseline shift is the
     // renderer's bake), so boundText's baseline-aware boxing applies directly.
     boundLeaf(bb, leaf)
-    bb.translate(-0.5, -0.5)
+    bb.translate(-(meta?.translate ?? 0.5), -(meta?.translate ?? 0.5))
     b.union(bb)
     tickLabelBounds.union(bb)
   }

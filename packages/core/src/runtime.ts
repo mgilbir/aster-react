@@ -4619,6 +4619,24 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     items.push(t)
   }
 
+  // `translate` replaces the 0.5px axis-group delta and `offset` shifts the
+  // whole axis perpendicular to its line (vega axisLayout: x = -offset for
+  // left, y = height + offset for bottom, ...).
+  const trRaw = axis.translate
+  const tr = (typeof trRaw === 'number' ? trRaw : 0.5) - 0.5
+  const off = axis.offset ?? 0
+  const dxs = tr + (orient === 'left' ? -off : orient === 'right' ? off : 0)
+  const dys = tr + (orient === 'bottom' ? off : orient === 'top' ? -off : 0)
+  if (dxs || dys) {
+    for (const it of items) {
+      const rec = it as Record<string, unknown>
+      if (rec.x != null) rec.x = (rec.x as number) + dxs
+      if (rec.y != null) rec.y = (rec.y as number) + dys
+      if (rec.x2 != null) rec.x2 = (rec.x2 as number) + dxs
+      if (rec.y2 != null) rec.y2 = (rec.y2 as number) + dys
+    }
+  }
+
   return {
     marktype: 'group',
     role: 'axis',
@@ -4629,8 +4647,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     // content top for top, 0 for left, content right for right). These diverge
     // once autosize fit shrinks width != height, so both are needed.
     ...(orient === 'left' || orient === 'right'
-      ? { axis: { orient, range: ctx.height, baseline: orient === 'right' ? ctx.width : 0 } }
-      : { axis: { orient, range: ctx.width, baseline: orient === 'bottom' ? ctx.height : 0 } }),
+      ? { axis: { orient, range: ctx.height, baseline: orient === 'right' ? ctx.width : 0, translate: typeof axis.translate === 'number' ? axis.translate : 0.5 } }
+      : { axis: { orient, range: ctx.width, baseline: orient === 'bottom' ? ctx.height : 0, translate: typeof axis.translate === 'number' ? axis.translate : 0.5 } }),
   } as SceneGroup
 }
 
