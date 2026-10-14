@@ -939,10 +939,55 @@ function renderTrail(group: SceneGroup): string {
 }
 
 /** Compute the vega/d3-trail polygon path for a run of trail items. */
+/** Full-precision coordinate formatting: vega's trail 'd' comes from the
+ * d3-path buffer, whose stringifier emits JS number strings verbatim (unlike
+ * the rounded rect/area emitters). */
+const fp = (x: number): string => String(x)
+
 export function trailPath(items: SceneItem[]): string {
+  // Exact emulation of vega's trail generator through the d3-path buffer:
+  // coordinates emit as JS number strings (full precision), arc endpoints
+  // recompute through cos/sin of the segment angle (not the normalized
+  // vector), and coincident points suppress the L.
   let out = ''
   let ready = false
   let x1 = 0, y1 = 0, r1 = 0
+  // d3-path state: last emitted point (null = path empty)
+  let px: number | null = null
+  let py: number | null = null
+  const EPS = 1e-12
+  const moveTo = (x: number, y: number): void => {
+    out += `M${fp(x)},${fp(y)}`
+    px = x; py = y
+  }
+  const lineTo = (x: number, y: number): void => {
+    if (px === null || py === null) { moveTo(x, y); return }
+    if (Math.abs(px - x) > EPS || Math.abs(py - y) > EPS) {
+      out += `L${fp(x)},${fp(y)}`
+      px = x; py = y
+    }
+  }
+  const arc = (x: number, y: number, r: number, a0: number, a1: number): void => {
+    const dx = r * Math.cos(a0)
+    const dy = r * Math.sin(a0)
+    const x0 = x + dx
+    const y0 = y + dy
+    lineTo(x0, y0)
+    if (!r) return
+    let da = a1 - a0
+    if (da < 0) da = (da % (2 * Math.PI)) + 2 * Math.PI
+    if (da > 2 * Math.PI - EPS) {
+      // complete circle: two arcs
+      out += `A${fp(r)},${fp(r)},0,1,1,${fp(x - dx)},${fp(y - dy)}`
+      out += `A${fp(r)},${fp(r)},0,1,1,${fp(x0)},${fp(y0)}`
+      px = x0; py = y0
+    } else if (da > EPS) {
+      const ex = x + r * Math.cos(a1)
+      const ey = y + r * Math.sin(a1)
+      out += `A${fp(r)},${fp(r)},0,${da >= Math.PI ? 1 : 0},1,${fp(ex)},${fp(ey)}`
+      px = ex; py = ey
+    }
+  }
   for (const it of items) {
     // vega's trail generator: `size || 1` (a zero size falls back to 1) and
     // `defined === false` breaks the segment (the polygon ends; a new run
@@ -961,19 +1006,18 @@ export function trailPath(items: SceneItem[]): string {
         const ud = Math.hypot(ux0, uy0)
         const ux = ux0 / ud
         const uy = uy0 / ud
-        const rx = ux * r1
-        const ry = uy * r1
-        // Tapered segment: two perpendicular edge offsets and semicircular
-        // end caps (SVG arcs with large-arc=1, sweep=1, matching d3-path).
-        out += `M${num(x1 - rx)},${num(y1 - ry)}`
-        out += `L${num(x2 - ux * r2)},${num(y2 - uy * r2)}`
-        out += `A${num(r2)},${num(r2)},0,1,1,${num(x2 + r2 * ux)},${num(y2 + r2 * uy)}`
-        out += `L${num(x1 + rx)},${num(y1 + ry)}`
-        out += `A${num(r1)},${num(r1)},0,1,1,${num(x1 - r1 * ux)},${num(y1 - r1 * uy)}`
+        // segment angle; the arc endpoints go through cos/sin of it
+        const t = Math.atan2(uy0, ux0)
+        moveTo(x1 - ux * r1, y1 - uy * r1)
+        lineTo(x2 - ux * r2, y2 - uy * r2)
+        arc(x2, y2, r2, t - Math.PI, t)
+        lineTo(x1 + ux * r1, y1 + uy * r1)
+        arc(x1, y1, r1, t, t + Math.PI)
         out += 'Z'
       } else {
         // Identical consecutive points: a full circle cap around the point.
-        out += `L${num(x2 + r2)},${num(y2)}A${num(r2)},${num(r2)},0,1,1,${num(x2 - r2)},${num(y2)}A${num(r2)},${num(r2)},0,1,1,${num(x2 + r2)},${num(y2)}Z`
+        arc(x2, y2, r2, 0, 2 * Math.PI)
+        out += 'Z'
       }
     } else {
       ready = true

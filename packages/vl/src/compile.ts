@@ -2196,6 +2196,23 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // from value_end (startAngle) to value_start (endAngle)
     update.startAngle = { scale: 'theta', field: `${thetaF}_end` }
     update.endAngle = { scale: 'theta', field: `${thetaF}_start` }
+  } else if (mark === 'trail') {
+    // trail: a stroked-by-size line — fill default, size channel/def, sorted
+    // along the dimension (probed)
+    update.fill = colorDef
+      ? { scale: 'color', field: aggFieldName(colorDef) }
+      : { value: markColor ?? markFill ?? cfgFill ?? cfgColor ?? C.blue }
+    if (markOpacity != null) update.opacity = { value: markOpacity }
+    for (const p of ['strokeWidth', 'strokeDash', 'strokeCap', 'fillOpacity', 'blend'] as const) {
+      if (isObject(spec.mark) && (spec.mark as Record<string, unknown>)[p] !== undefined) update[p] = { value: (spec.mark as Record<string, unknown>)[p] }
+    }
+    const trailStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
+    if (trailStroke != null) update.stroke = { value: trailStroke }
+    if (markSize != null) update.size = { value: markSize }
+    if (sizeDef) update.size = { scale: 'size', field: aggFieldName(sizeDef) }
+    if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
+    if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef) }
+    update.defined = definedSignal(xDef, yDef)
   } else {
     throw new Error(`[aster/vl] mark type not supported yet: ${mark}`)
   }
@@ -2237,10 +2254,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     from: { data: dataName },
     encode: { update },
   }
-  // order: line/area sort by the dimension field
+  // order: line/area sort by the dimension field; trail sorts by x (probed)
   if (mark === 'line' || mark === 'area') {
     const dim = orient === 'vertical' ? xDef : yDef
     if (dim && !dim.timeUnit) markSpec.sort = { field: aggFieldName(dim) }
+  }
+  if (mark === 'trail') {
+    markSpec.sort = { field: orient === 'horizontal' ? 'y' : 'x' }
   }
 
   const out: BuiltMarks = [markSpec]

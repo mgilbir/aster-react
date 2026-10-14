@@ -475,6 +475,38 @@ const AGGR: Record<string, (values: number[], rows: Row[]) => number> = {
   distinct: (v, rows) => new Set(v).size,
   valid: (v) => v.filter((x) => Number.isFinite(x)).length,
   missing: (v, rows) => rows.length - v.filter((x) => Number.isFinite(x)).length,
+  // vega-statistics: sample variance (n-1), population variance (n); the
+  // stdev family are their square roots, stderr = stdev/sqrt(n)
+  variance: (v) => {
+    const n = v.length
+    if (n < 2) return NaN
+    const m = v.reduce((a, b) => a + b, 0) / n
+    return v.reduce((a, b) => a + (b - m) * (b - m), 0) / (n - 1)
+  },
+  variancep: (v) => {
+    const n = v.length
+    if (!n) return NaN
+    const m = v.reduce((a, b) => a + b, 0) / n
+    return v.reduce((a, b) => a + (b - m) * (b - m), 0) / n
+  },
+  stdev: (v) => {
+    const n = v.length
+    if (n < 2) return NaN
+    const m = v.reduce((a, b) => a + b, 0) / n
+    return Math.sqrt(v.reduce((a, b) => a + (b - m) * (b - m), 0) / (n - 1))
+  },
+  stdevp: (v) => {
+    const n = v.length
+    if (!n) return NaN
+    const m = v.reduce((a, b) => a + b, 0) / n
+    return Math.sqrt(v.reduce((a, b) => a + (b - m) * (b - m), 0) / n)
+  },
+  stderr: (v) => {
+    const n = v.length
+    if (n < 2) return NaN
+    const m = v.reduce((a, b) => a + b, 0) / n
+    return Math.sqrt(v.reduce((a, b) => a + (b - m) * (b - m), 0) / (n - 1)) / Math.sqrt(n)
+  },
 }
 
 function aggregateGroup(rows: Row[], groupby: string[], fields: (string | null)[], ops: string[], as: string[]): Row {
@@ -482,6 +514,11 @@ function aggregateGroup(rows: Row[], groupby: string[], fields: (string | null)[
   for (const g of groupby) row[g] = rows[0]?.[g]
   ops.forEach((op, i) => {
     const field = fields[i]
+    // vega's `values` op ignores the field and emits the group's tuples
+    if (op === 'values') {
+      row[as[i] ?? 'values'] = rows
+      return
+    }
     const values = field == null ? [] : fieldValues(rows, field)
     const fn = AGGR[op]
     if (!fn) throw new Error(`[aster] unsupported aggregate op "${op}"`)

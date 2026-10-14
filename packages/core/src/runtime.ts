@@ -1939,6 +1939,12 @@ function evaluateMark(
   // without those styles carries no default width.
   applySymbolStyleDefaults(mark, items)
 
+  // vega's built-in 'trail' style (vega-parser defaults): size defaults to
+  // the default stroke width (2) — the trail generator halves it per point.
+  if (Array.isArray((mark as any).style) ? (mark as any).style.includes('trail') : (mark as any).style === 'trail') {
+    for (const it of items) { if ((it as Record<string, unknown>).size == null) (it as Record<string, unknown>).size = 2 }
+  }
+
   // Shape/geoshape marks: turn the GeoJSON-derived path (from a geoshape
   // transform or from the datum itself) into a rendered path item.
   if (mark.type === 'shape' || mark.type === 'geoshape') {
@@ -3576,6 +3582,11 @@ function facetItemMark(
 
   if (Array.isArray((mark as any).style) ? (mark as any).style.includes('arc') : (mark as any).style === 'arc') {
     for (const it of items) { if (it.strokeWidth == null) it.strokeWidth = 1.5 }
+  }
+  // vega's built-in 'trail' style (vega-parser defaults): size defaults to
+  // the default stroke width (2) — the trail generator halves it per point.
+  if (Array.isArray((mark as any).style) ? (mark as any).style.includes('trail') : (mark as any).style === 'trail') {
+    for (const it of items) { if (it.size == null) it.size = 2 }
   }
 
   if (mark.type === 'text') {
