@@ -4228,7 +4228,18 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // The entry swatch spans the entry's full bound: the label extent
     // (offset/2 + baseline bake - round(0.8*fs) + fs) unioned with the symbol
     // extent (offset/2 + radius, stroke-expanded for stroke-channel legends).
-    const labelY2 = offset / 2 + Math.round(0.3 * labelFs) - Math.round(0.8 * labelFs) + labelFs
+    // label bound is baseline-aware (vega boundText): the label sits at
+    // offset/2 with the labelBaseline; the swatch = the label/symbol bound
+    // union and the grid lifts entries whose bound pokes above y=0.
+    const lblBaseline = (legend as { labelBaseline?: string }).labelBaseline ?? 'middle'
+    const lblOff = lblBaseline === 'top' ? Math.round(0.79 * labelFs)
+      : lblBaseline === 'middle' ? Math.round(0.3 * labelFs)
+        : lblBaseline === 'bottom' ? -Math.round(0.21 * labelFs)
+          : lblBaseline === 'line-top' ? Math.round(0.29 * labelFs + 0.5 * (labelFs + 2))
+            : lblBaseline === 'line-bottom' ? Math.round(0.29 * labelFs - 0.5 * (labelFs + 2))
+              : 0
+    const labelY1 = offset / 2 + lblOff - Math.round(0.8 * labelFs)
+    const labelY2 = labelY1 + labelFs
     const symR = Math.sqrt(symbolSizeP) / 2
     // symbols painted with a stroke (the stroke channel or a stroke encode)
     // expand their bound by the miter join (4 * sw / 2 with sw 1.5); the
@@ -4238,9 +4249,13 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const symY2 = offset / 2 + symR + symExpand
     const swatchH = isStrokeType ? 11 : Math.max(labelY2, symY2)
     // the grid's dy = rowPadding + offsetValue(b.y1) + ceil(entry height): the
-    // offsetValue lifts entries whose stroke-expanded symbol pokes above y=0,
-    // and the grid rounds the extent up (the swatch rect itself stays float)
-    const offsetValue = isStrokeType ? 0 : (symY1 < 0 ? Math.ceil(-symY1) : 0)
+    // offsetValue lifts entries whose stroke-expanded symbol or label bound
+    // pokes above y=0, and the grid rounds the extent up (the swatch rect
+    // itself stays float)
+    const offsetValue = isStrokeType ? 0 : (() => {
+      const minY = Math.min(labelY1, symY1)
+      return minY < 0 ? Math.ceil(-minY) : 0
+    })()
     const step = isStrokeType ? 13 : rowPadding + offsetValue + Math.ceil(swatchH)
     const bgHeight = Math.ceil(titleRow + Math.ceil(swatchH) + step * (n - 1)) + 2 * legendPad
 
@@ -4401,7 +4416,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       items.push({
         text: String(value),
         x: entryX + colOff + symbolOffset + offset + labelOffset,
-        y: legendPad + off + offset / 2 + Math.round(0.3 * labelFs),
+        y: legendPad + off + offset / 2,
+        baseline: lblBaseline as 'middle',
         align: 'left',
         fill: labelColor,
         fontSize: labelFs,
