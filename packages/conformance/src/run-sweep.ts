@@ -18,6 +18,7 @@ import '@aster/core/geo'
 import '@aster/core/transforms'
 import { renderSpec } from '@aster/core'
 import { loadSpecData } from '@aster/core/load'
+import { compile as compileVL } from '@aster/vl'
 import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
@@ -72,10 +73,35 @@ interface Status {
 }
 
 async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'both-refused' | 'node-error' | 'engine-error' | 'differ'> {
+  // Vega-Lite cases compare the compiled Vega: upstream vl.compile vs
+  // @aster/vl, each rendered through its own engine (a VL defect lives in
+  // the spec it emits — see the sweep's header note).
+  let vgSpec = c.spec as Record<string, unknown>
+  let ourVgSpec = c.spec as Record<string, unknown>
+  if (c.lite) {
+    try {
+      vgSpec = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, unknown> } }).compile(c.spec).spec
+    } catch (e) {
+      // upstream refuses to compile: an agreement only if we refuse too
+      try {
+        compileVL(c.spec as never)
+        console.error(`  [node-error] ${c.name}: ${(e as Error).message.split('\n')[0]}`)
+        return 'node-error'
+      } catch {
+        return 'both-refused'
+      }
+    }
+    try {
+      ourVgSpec = compileVL(c.spec as never) as unknown as Record<string, unknown>
+    } catch (e) {
+      console.error(`  [engine-error] ${c.name}: ${(e as Error).message.split('\n')[0]}`)
+      return 'engine-error'
+    }
+  }
   let oracleSvg: string | null = null
   let oracleErr = ''
   try {
-    const runtime = vega.parse(c.spec as never)
+    const runtime = vega.parse(vgSpec as never)
     const view = new (vega as any).View(runtime, { renderer: 'none' })
     try {
       await view.runAsync()
@@ -96,7 +122,7 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
   let ourSvg: string | null = null
   let ourErr = ''
   try {
-    const loaded = await loadSpecData(c.spec as never)
+    const loaded = await loadSpecData(ourVgSpec as never)
     ourSvg = renderSpec(loaded as never)
   } catch (e) {
     ourErr = (e as Error).message
