@@ -27,6 +27,7 @@ import type {
   VgSpec,
 } from './types.js'
 import { tickFormat } from './scale.js'
+import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { trellisLayout } from './trellis.js'
 import { baselineOffset, boundAxisGroup, boundGroupItem, boundLeaf, boundText, Bounds } from './bounds.js'
@@ -4817,6 +4818,22 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
   }
   let count: number | undefined
   if (typeof axis.tickCount === 'number') count = axis.tickCount
+  else if (typeof axis.tickCount === 'string' || (axis.tickCount && typeof axis.tickCount === 'object' && !('signal' in (axis.tickCount as Record<string, unknown>)) && 'interval' in (axis.tickCount as Record<string, unknown>))) {
+    // vega's tickCount util resolves an interval string against the scale:
+    // legal only on time/utc scales, where it becomes a calendar interval the
+    // scale's ticks consume; anything else refuses upstream (so "both refuse"
+    // is agreement).  `{interval, step}` objects resolve the interval and
+    // widen it with `every(step)`.
+    const raw = typeof axis.tickCount === 'string' ? axis.tickCount : (axis.tickCount as { interval?: unknown }).interval
+    const step = typeof axis.tickCount === 'object' && axis.tickCount !== null ? (axis.tickCount as { step?: unknown }).step : undefined
+    if (typeof raw !== 'string') throw new Error('Invalid tick count.')
+    if (scale.type !== 'time' && scale.type !== 'utc') {
+      throw new Error('Only time and utc scales accept interval strings.')
+    }
+    const ival = scale.type === 'time' ? timeIntervalFor(raw) : utcIntervalFor(raw)
+    if (!ival) throw new Error(`[aster] unknown time interval: ${raw}`)
+    count = (step != null ? (ival as { every?: (n: number) => unknown }).every?.(step as number) : ival) as unknown as number
+  }
   else if (axis.tickCount && typeof axis.tickCount === 'object') {
     const expr = (axis.tickCount as { signal?: string }).signal
     if (expr !== undefined) {
@@ -4841,7 +4858,7 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
   // vega-encode passes tickMinStep into tickCount, which clamps the tick
   // count to one tick per minimum step: count = min(count, span/minstep + 1).
   // The calendar stepping below handles the count==null time-scale case.
-  if (tickMinStep != null && tickMinStep > 0 && count != null
+  if (tickMinStep != null && tickMinStep > 0 && count != null && typeof count === 'number'
       && (scale.type === 'time' || scale.type === 'utc')) {
     const rawDomain = scale.domain()
     if (rawDomain.length >= 2) {

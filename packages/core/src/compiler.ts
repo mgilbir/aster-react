@@ -338,6 +338,14 @@ function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string
   // guide lookup, so a config.tickOffset cannot override it on band-scale
   // axes — drop the config value and let the runtime default apply.
   if ('tickOffset' in defaults && !('tickOffset' in o)) delete out.tickOffset
+  // `tickCount`, `values`, `tickMinStep`, `format` and `formatType` are read as
+  // `spec.tickCount` (and friends) in vega's guide operators — never through
+  // the `lookup(spec, config)` every other property goes through — so a config
+  // block's copy is dead upstream.  Drop it too, or a config theme would both
+  // retick every axis and refuse interval strings the oracle never sees.
+  for (const k of ['tickCount', 'values', 'tickMinStep', 'format', 'formatType']) {
+    if (k in defaults && !(k in o)) delete out[k]
+  }
   return out
 }
 
