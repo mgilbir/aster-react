@@ -371,7 +371,7 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   `titleAngle`/`labelAngle` rotate (baseline folded inside the rotate frame),
   and the title extent now comes from the real tick+label item bounds
   (stroke expansion and rotation included) instead of an analytic extent.
-  Corpus 413/413. Sweep 7410/7549 (98.2%). A later scale round landed
+  Corpus 413/413. Sweep 7443/7549 (98.6%). The vega-native trellis is in: a group mark with a `layout` def builds facet cells as scoped groups (facet key as the `parent` signal, cell encodes, scoped scales resolving against the outer scope signals, per-cell axes and titles) and runs them through the gridLayout port; a throwing layout renders unlayouted with default padding, as vega's dataflow does. A later scale round landed
   vega's continuous-scale `round` (via interpolateRound), interval-string
   `nice` through the tickCount util, band `align` (dropped by buildScale)
   and the type-keyed axisBand tickOffset, the vega-util zoom family for
@@ -381,13 +381,13 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   Remaining: legend 28 + config-legend 28 (the entry layout is still
   heuristic — 8px/char label widths — and wants a text-measured rework:
   labelAlign/labelLimit/columns/clipHeight/cornerRadius/symbolLimit),
-  layout 33 (trellis grid layout is unported), config-range 11, axis 4 +
+  layout 0 (the trellis family now passes), config-range 11, axis 4 +
   config-axis 9 (orient left/right span the scale range rather than the
   view size; tickBand extent and tickExtra are unported; config
   tickOffset/labelOffset/labelFlush couple into the view margins), view 3,
   title 3 + config-title 3 (1-ulp rotated-text epsilons, orient none),
   scale singles (log zero-degenerate domain, pow/symlog extreme params),
-  encode-path scaleY, and 7 refused-render mismatches (identity nice/round
+  encode-path scaleY (fixed), and 7 refused-render mismatches (identity nice/round
   engine-errors, area-interpolate-bundle and trail-size node-errors).
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
