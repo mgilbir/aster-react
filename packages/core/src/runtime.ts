@@ -626,7 +626,9 @@ function measureGuideGroup(g: SceneGroup): Bounds {
     // h), item)) — symbol strokes don't touch the legend bounds.
     const stroked = (g as unknown as Record<string, unknown>)._borderStroke === true
       || ((g as unknown as Record<string, unknown>)._borderStroke === undefined
-        && (g.items as SceneItem[] | undefined)?.some((it) => it.stroke != null && it.path != null))
+        // vega's boundStroke expands by strokeWidth/2 — a zero-width stroke
+        // (the gradient rect's #ddd) does not move the bounds.
+        && (g.items as SceneItem[] | undefined)?.some((it) => it.stroke != null && it.path != null && (it.strokeWidth ?? 1) > 0))
     const se = stroked ? 0.5 : 0
     return new Bounds().set((g.x ?? 0) - se, (g.y ?? 0) - se, (g.x ?? 0) + (g.width ?? 0) + se, (g.y ?? 0) + (g.height ?? 0) + se)
   }
@@ -663,6 +665,13 @@ function computeGuidePadding(
   // Epsilon guard: vega's rotated-text bounds land on exact integers where
   // our fp path can be off by 1 ulp; ceil would otherwise grow the padding.
   const EPS = 1e-9
+  if (process.env.ASTER_DEBUG_PAD) {
+    for (const group of items) {
+      const b = measureGuideGroup(group)
+      console.error(`[pad] ${group.role ?? '?'} bounds=[${b.x1},${b.y1},${b.x2},${b.y2}] w=${width} h=${height}`)
+    }
+    console.error(`[pad] overflow L=${-minX} T=${-minY} R=${maxX - width} B=${maxY - height}`)
+  }
   return {
     left:   base.left   + Math.max(0, Math.ceil(-minX - EPS)),
     right:  base.right  + Math.max(0, Math.ceil(maxX - width - EPS)),
@@ -4018,7 +4027,12 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         ? Array.from({ length: 17 }, (_, i) => ({ offset: i / 16, color: String((colorScale.interpolator as () => (t: number) => unknown)?.()(i / 16)) }))
         : []
       if (stops.length) ctx._defs.push({ id: gradientId, colorStops: stops, direction: 'horizontal' })
-      return { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: bgH, items }
+      const gradientGroup = { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: bgH, items } as SceneGroup
+      // vega legendLayout boundStrokes the outer rect with the legend's OWN
+      // stroke (legend.strokeColor) — the gradient rect's decorative #ddd
+      // zero-width stroke is not the group's and must not expand the bounds.
+      ;(gradientGroup as unknown as Record<string, unknown>)._borderStroke = false
+      return gradientGroup
     }
 
     // The gradient rect inherits the legend's gradient encode opacity (vega-lite
@@ -4177,19 +4191,32 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const entryWidth = labelX + 8 * maxLabelLen
     const titleStr = String(legend.title ?? '')
     const titleWidth = titleStr.length > 0 ? ~~(0.8 * titleStr.length * 11) : 0
-    const outerWidth = Math.max(entryWidth, titleWidth)
-    const bgHeight = 16 + scopesHeight
+    // vega legendLayout: w = ceil(bounds.width() + 2*padding), same for h —
+    // the fractional entry-stack height lands on the ceil (117 not 116.914).
+    const outerWidth = Math.ceil(Math.max(entryWidth, titleWidth))
+    const bgHeight = Math.ceil(16 + scopesHeight)
+    // Legend padding: vega's legendGroupLayout shifts the content origin by
+    // (padding, padding) and legendLayout sizes the box w + 2*padding (ceil'd
+    // above with the pad included here, not in outerWidth/bgHeight).
+    const legendPad = (legend as { padding?: number }).padding ?? 0
+    const boxW = Math.ceil(outerWidth + 2 * legendPad)
+    const boxH = Math.ceil(bgHeight + 2 * legendPad)
+    // The legend border (legend.strokeColor) insets the background half a
+    // pixel and boundStrokes the legend bounds; symbol strokes never do.
+    const borderColor = (legend as { strokeColor?: string }).strokeColor
 
     const items: SceneItem[] = []
     const legendCornerRadius = (legend as { cornerRadius?: number }).cornerRadius
     const legendFillColor = (legend as { fillColor?: string }).fillColor
-    items.push({ path: `M0,0h${outerWidth}v${bgHeight}h-${outerWidth}Z`, x: 0, y: 0, ...(legendFillColor != null ? { fill: legendFillColor } : {}), ...(legendCornerRadius != null ? { cornerRadius: legendCornerRadius } : {}) })
-    items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
+    const bgX = borderColor != null ? 0.5 : 0
+    const bgY = borderColor != null ? 0.5 : 0
+    items.push({ path: `M${bgX},${bgY}h${boxW}v${boxH}h-${boxW}Z`, x: 0, y: 0, ...(legendFillColor != null ? { fill: legendFillColor } : {}), ...(legendCornerRadius != null ? { cornerRadius: legendCornerRadius } : {}), ...(borderColor != null ? { stroke: String(borderColor) } : {}) })
+    items.push({ text: titleStr, x: 0 + legendPad, y: 9 + legendPad, align: 'left', fill: '#000', fontSize: 11 })
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]!
-      const ey = 16 + yPos[i]!
+      const ey = 16 + legendPad + yPos[i]!
       const sy = ey + e.sizeD / 2
-      items.push({ path: `M0,0h${entryWidth}v${b[i]!.y2}h-${entryWidth}Z`, x: 0, y: ey })
+      items.push({ path: `M0,0h${entryWidth}v${b[i]!.y2}h-${entryWidth}Z`, x: 0 + legendPad, y: ey })
       // Vega always renders size legend symbols with a default stroke (#888)
       // and opacity (0.7), even when the legend encode doesn't specify them.
       const symStroke = strokeColor != null ? String(strokeColor) : '#888'
@@ -4198,7 +4225,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         const w = Math.sqrt(e.size)
         items.push({
           path: `M${-w / 2},${-w / 2}h${w}v${w}h${-w}Z`,
-          x: symbolX,
+          x: symbolX + legendPad,
           y: sy,
           stroke: symStroke,
           strokeWidth,
@@ -4208,16 +4235,18 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         items.push({
           shape: 'circle',
           radius: e.r,
-          x: symbolX,
+          x: symbolX + legendPad,
           y: sy,
           stroke: symStroke,
           strokeWidth,
           opacity: symOpacity,
         })
       }
-      items.push({ text: String(e.value), x: labelX, y: sy + 3, align: 'left', fill: '#000', fontSize: 10 })
+      items.push({ text: String(e.value), x: labelX + legendPad, y: sy + 3, align: 'left', fill: '#000', fontSize: 10 })
     }
-    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: outerWidth, height: bgHeight, items }
+    const out: SceneGroup = { marktype: 'group', role: 'legend', x: 0, y: 0, width: boxW, height: boxH, items }
+    ;(out as unknown as Record<string, unknown>)._borderStroke = borderColor != null
+    return out
   }
 
   // --- Band legend (quantile / quantize / threshold) ---

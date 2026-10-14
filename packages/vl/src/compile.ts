@@ -1696,6 +1696,13 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       if (k === 'title') continue
       lg[k] = v
     }
+    // strip the VL-only keys and the other type's keys (upstream parity): a
+    // gradient legend drops symbol*, a symbol legend drops gradient*
+    const isGradient = 'gradientLength' in lg
+    for (const k of Object.keys(lg)) {
+      if (k === 'title' || k === 'encode' || k === 'fill' || k === 'stroke' || k === 'shape' || k === 'size' || k === 'opacity') continue
+      if (isGradient ? (k.startsWith('symbol') || k === 'gradientStroke') : k.startsWith('gradient')) delete lg[k]
+    }
     // top/bottom legends lay their entries out horizontally
     if (lg.orient === 'bottom' || lg.orient === 'top') lg.direction = lg.direction ?? 'horizontal'
     push('color', lg)
@@ -1706,30 +1713,36 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     // (#4c78a8) but drops it when a color legend coexists.
     const sizeSymUpdate: Record<string, unknown> = { fill: { value: 'transparent' }, opacity: { value: markOpacity ?? C.pointOpacity } }
     if (!colorDef || colorDef.legend === null || legendSuppressed(colorDef)) sizeSymUpdate.stroke = { value: C.blue }
-    push('size', {
+    const sizeLg: Record<string, unknown> = {
       size: 'size',
       symbolType: 'circle',
       title: legendTitle(sizeDef, sizeDef.legend ?? {}),
       encode: { symbols: { update: sizeSymUpdate } },
-    })
+    }
+    forwardLegendProps(sizeDef.legend ?? {}, sizeLg, false)
+    push('size', sizeLg)
   }
   const shapeDefL = fields.find((f) => f.channel === 'shape' && f.field)
   if (shapeDefL && shapeDefL.legend !== null && !legendSuppressed(shapeDefL)) {
-    push('shape', {
+    const shapeLg: Record<string, unknown> = {
       shape: 'shape',
       symbolType: 'circle',
       title: legendTitle(shapeDefL, shapeDefL.legend ?? {}),
       encode: { symbols: { update: { fill: { value: 'transparent' }, stroke: { value: C.blue }, opacity: { value: markOpacity ?? C.pointOpacity } } } },
-    })
+    }
+    forwardLegendProps(shapeDefL.legend ?? {}, shapeLg, false)
+    push('shape', shapeLg)
   }
   const opacityLegendDef = fields.find((f) => f.channel === 'opacity' && f.field)
   if (opacityLegendDef && opacityLegendDef.legend !== null && !legendSuppressed(opacityLegendDef)) {
-    push('opacity', {
+    const opLg: Record<string, unknown> = {
       opacity: 'opacity',
       symbolType: 'circle',
       title: legendTitle(opacityLegendDef, opacityLegendDef.legend ?? {}),
       encode: { symbols: { update: { fill: { value: 'transparent' }, stroke: { value: C.blue } } } },
-    })
+    }
+    forwardLegendProps(opacityLegendDef.legend ?? {}, opLg, false)
+    push('opacity', opLg)
   }
   for (const key of order) legends.push(legendsByKey[key]!)
   return legends
@@ -1738,6 +1751,21 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
 function legendTitle(def: FieldDef, userLegend: Record<string, unknown>): unknown {
   if ('title' in userLegend) return userLegend.title
   return channelTitle(def)
+}
+
+/**
+ * Forward the user's legend properties onto the compiled legend (vega-lite
+ * copies the legend definition through verbatim minus the VL-only keys and
+ * the keys that belong to the other legend type — probed: a symbol legend
+ * drops gradient*, a gradient legend drops symbol*; both drop disable, type,
+ * symbolWidth).
+ */
+function forwardLegendProps(userLegend: Record<string, unknown>, lg: Record<string, unknown>, isGradient: boolean): void {
+  for (const [k, v] of Object.entries(userLegend)) {
+    if (k === 'title' || k === 'encode' || k === 'disable' || k === 'type' || k === 'symbolWidth') continue
+    if (isGradient ? (k.startsWith('symbol') || k === 'gradientStroke') : k.startsWith('gradient')) continue
+    lg[k] = v
+  }
 }
 
 // --- marks -------------------------------------------------------------------
@@ -1760,8 +1788,39 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const yOffsetPresent = fields.some((f) => f.channel === 'yOffset' && f.field)
 
   if (mark === 'bar' || mark === 'rect') {
-    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? C.blue }
+    // getMarkPropOrConfig precedence (probed): markDef.fill overrides the
+    // color channel; markDef.color is only the fallback when no channel;
+    // filled:false moves the colour onto stroke (bar fills transparent, rect
+    // drops fill entirely) and markDef.fill is ignored.
+    const markDef = isObject(spec.mark) ? spec.mark : undefined
+    const filled = markDef?.filled !== false
+    if (!filled) {
+      if (mark === 'bar') update.fill = { value: 'transparent' }
+      update.stroke = colorDef
+        ? { scale: 'color', field: aggFieldName(colorDef) }
+        : { value: (markDef?.stroke as string | undefined) ?? markColor ?? C.blue }
+    } else {
+      update.fill = markDef?.fill != null
+        ? { value: markDef.fill }
+        : colorDef
+          ? { scale: 'color', field: aggFieldName(colorDef) }
+          : { value: markColor ?? C.blue }
+      if (markDef?.stroke != null) update.stroke = { value: markDef.stroke }
+    }
     if (markOpacity != null) update.opacity = { value: markOpacity }
+    // pass-through mark-def paint props (getMarkPropOrConfig reads each
+    // straight off the definition; vega renders the ones it knows)
+    for (const p of ['strokeWidth', 'strokeDash', 'strokeCap', 'strokeJoin', 'fillOpacity', 'cornerRadius', 'angle', 'cursor', 'blend'] as const) {
+      if (markDef?.[p] !== undefined) update[p] = { value: markDef[p] }
+    }
+    // bar rounds its ends with a clip (rect's cornerRadius needs no clip);
+    // cornerRadiusEnd rounds the leading edge per orientation
+    if (mark === 'bar' && (markDef?.cornerRadius != null || markDef?.cornerRadiusEnd != null)) update.clip = { value: true }
+    if (markDef?.cornerRadiusEnd != null && mark === 'bar') {
+      const [a, b] = orient === 'horizontal' ? ['TopRight', 'BottomRight'] : ['TopLeft', 'TopRight']
+      update[`cornerRadius${a}`] = { value: markDef.cornerRadiusEnd }
+      update[`cornerRadius${b}`] = { value: markDef.cornerRadiusEnd }
+    }
     if (mark === 'bar') update.ariaRoleDescription = { value: 'bar' }
     const stacked = yDef && isStacked(yDef, mark, orient)
     if (orient === 'vertical') {
