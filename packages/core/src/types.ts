@@ -68,6 +68,9 @@ export interface CompiledProjection {
 
 export interface CompiledChart {
   autosize?: string
+  /** vega autosize `contains` (viewSizeLayout's contains: 'padding' makes the
+   * spec'd width/height include the padding). */
+  autosizeContains?: string
   width: SizeSpec
   height: SizeSpec
   padding: { top: number; right: number; bottom: number; left: number }

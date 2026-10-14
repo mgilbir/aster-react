@@ -44,6 +44,9 @@ export function compileChart(spec: VgSpec): CompiledChart {
   const height = typeof spec.height === 'number' ? spec.height : (typeof spec.height === 'object' ? spec.height as SizeSpec : DEFAULT_SIZE)
   const frameStroke = resolveFrameStroke(spec)
   const autosize = resolveAutosize(spec.autosize)
+  const autosizeContains = spec.autosize && typeof spec.autosize === 'object'
+    ? ((spec.autosize as Record<string, unknown>).contains as string) || undefined
+    : undefined
 
   const data: CompiledData[] = []
   for (const d of (spec.data as Array<Record<string, unknown>>) ?? []) {
@@ -93,6 +96,7 @@ export function compileChart(spec: VgSpec): CompiledChart {
     signalDefs,
     title,
     projections,
+    autosizeContains,
     layout: (spec.layout as Record<string, unknown> | undefined) ?? undefined,
   }
 }

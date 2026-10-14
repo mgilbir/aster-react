@@ -850,10 +850,14 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
       let nw = cw
       let nh = ch
       // vega shrinks content against the *fixed* viewport (viewWidth/viewHeight),
-      // not the current content: content = viewport - overflow.
-      if (auto === 'fit') { nw = Math.max(0, initialW - oL - oR); nh = Math.max(0, initialH - oT - oB) }
-      else if (auto === 'fit-x') { nw = Math.max(0, initialW - oL - oR); nh = ch }
-      else { nw = cw; nh = Math.max(0, initialH - oT - oB) }
+      // not the current content: content = viewport - overflow. With autosize
+      // contains:'padding' the spec'd width/height INCLUDE the padding
+      // (viewSizeLayout subtracts it before fitting).
+      const padW = chart.autosizeContains === 'padding' ? base.left + base.right : 0
+      const padH = chart.autosizeContains === 'padding' ? base.top + base.bottom : 0
+      if (auto === 'fit') { nw = Math.max(0, initialW - padW - oL - oR); nh = Math.max(0, initialH - padH - oT - oB) }
+      else if (auto === 'fit-x') { nw = Math.max(0, initialW - padW - oL - oR); nh = ch }
+      else { nw = cw; nh = Math.max(0, initialH - padH - oT - oB) }
       if (nw === cw && nh === ch) break
       cw = nw
       ch = nh
