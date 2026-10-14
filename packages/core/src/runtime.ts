@@ -4511,7 +4511,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   // encode sets to 0 when ticks are off.
   const tickSize = axis.ticks === false ? 0 : (axis.tickSize ?? 5)
   const labelPadding = axis.labelPadding ?? 2
-  let maxLabelLen = 0
+  const tickItems: SceneItem[] = []
   const labels: SceneItem[] = []
 
   for (const t of ticks) {
@@ -4525,12 +4525,12 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       tick.stroke = axis.tickColor ?? '#888'
       tick.strokeWidth = axis.tickWidth ?? 1
       if (axis.tickDash) tick.strokeDash = axis.tickDash
+      tickItems.push(tick)
       items.push(tick)
     }
     if (axis.labels !== false) {
       const rawV = Math.round(scale(t) as number * 1000) / 1000
       const label: SceneItem = { text: String(labelFormat(t)), x: 0, y: 0 }
-      maxLabelLen = Math.max(maxLabelLen, (label.text as string).length)
       const align = axis.labelAlign ?? (orient === 'left' ? 'right' : orient === 'right' ? 'left' : 'center')
       const baseline = axis.labelBaseline ?? (orient === 'top' ? 'bottom' : orient === 'bottom' ? 'top' : 'middle')
       // Vega axis labels (vega-encode axisLabels): the label y is the raw
@@ -4568,7 +4568,13 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
         label.y = -(tickSize + labelPadding) + 0.5
         label.align = align as SceneItem['align']
       }
-      label.baseline = labelAngle ? undefined : (baseline as SceneItem['baseline'])
+      // vega keeps the label baseline on rotated labels too: the renderer
+      // folds the baseline offset inside the rotate frame (translate(x,y)
+      // rotate(a) translate(dx,dy)) and the bound (marks/text.js bound) does
+      // the same, so the item carries the baseline either way — stripping it
+      // shifts the rotated bbox by the baseline offset and skews the root
+      // bounds by a pixel or two.
+      label.baseline = baseline as SceneItem['baseline']
       // vega's axisLabels: labelAngle is an update patch on the text mark's
       // angle — the renderer folds the baseline offset inside the rotate frame
       // (hence no explicit baseline above when rotated).
@@ -4636,8 +4642,6 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       }
     }
   }
-
-  const labelWidth = Math.floor(0.8 * maxLabelLen * (axis.labelFontSize ?? 10))
 
   if (axis.domain !== false) {
     const domainLine: SceneItem = { x: 0, y: 0, x2: 0, y2: 0 }
@@ -4708,24 +4712,28 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     // where s is the clamped tick+label extent (axisLayout:
     // s = max(minExtent, min(maxExtent, bounds.y2))). Our items bake the
     // 0.5px axis-group delta, hence the ±0.5 on the absolute positions.
+    // vega's axisLayout unions the actual tick+label item bounds — stroke
+    // expansion and label rotation included — and anchors the title beyond
+    // them: s = the perpendicular extent clamped by minExtent/maxExtent
+    // (dl = multiLineOffset(title) is 0 for the single-line titles here).
+    // Our items bake the 0.5px axis-group delta, so the line-relative extent
+    // subtracts the baked line position per orient.
+    const guideB = new Bounds()
+    for (const it of [...tickItems, ...labels]) {
+      const bb = new Bounds()
+      boundLeaf(bb, it)
+      guideB.union(bb)
+    }
     const minE = axis.minExtent ?? 0
     const maxE = axis.maxExtent ?? 200
     const clampS = (v: number): number => Math.max(minE, Math.min(maxE, v))
-    const titleLabelFs = axis.labelFontSize ?? 10
-    const labelBaselineEff = String(axis.labelBaseline ?? (orient === 'top' ? 'bottom' : orient === 'bottom' ? 'top' : 'middle'))
-    const labelLh = titleLabelFs + 2
-    const labelBoff = Math.round(
-      labelBaselineEff === 'top' ? 0.79 * titleLabelFs
-      : labelBaselineEff === 'middle' ? 0.30 * titleLabelFs
-      : labelBaselineEff === 'bottom' ? -0.21 * titleLabelFs
-      : labelBaselineEff === 'line-top' ? 0.29 * titleLabelFs + 0.5 * labelLh
-      : labelBaselineEff === 'line-bottom' ? 0.29 * titleLabelFs - 0.5 * labelLh
-      : 0,
-    )
-    // tick+label extent along the perpendicular (axis-internal frame)
-    const sTick = ticksOn ? tickSize + 0.5 : -Infinity
-    const sLabel = labelsOn ? tickSize + labelPadding + (labelBoff - Math.round(0.8 * titleLabelFs)) + titleLabelFs : -Infinity
-    const sBoth = Math.max(sTick, sLabel)
+    const sFor = (o: string): number => {
+      if (guideB.empty()) return 0
+      if (o === 'bottom') return clampS(guideB.y2 - (ctx.height + 0.5))
+      if (o === 'top') return clampS(0.5 - guideB.y1)
+      if (o === 'left') return clampS(0.5 - guideB.x1)
+      return clampS(guideB.x2 - (ctx.width + 0.5))
+    }
 
     // vega's axis title anchor (axis-title.js): the position is the signal
     // `lerp(range(scale), item.anchor === 'start' ? 0 : item.anchor === 'end'
@@ -4739,29 +4747,17 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
 
     if (orient === 'bottom') {
       t.x = anchorLerp + 0.5
-      if (axis.labelAngle === 270 && maxLabelLen > 0) {
-        const labelExtent = Math.floor(0.8 * maxLabelLen * 10)
-        t.y = ctx.height + 0.5 + clampS(tickSize + labelPadding + labelExtent) + titlePadding
-      } else {
-        const s = sBoth === -Infinity ? 0 : clampS(sBoth)
-        t.y = ctx.height + 0.5 + s + titlePadding
-      }
+      t.y = ctx.height + 0.5 + sFor('bottom') + titlePadding
       t.align = 'center'; t.baseline = titleBaseline ?? 'top'
     }
     else if (orient === 'top') {
       t.x = anchorLerp + 0.5
-      const s = sBoth === -Infinity ? 0 : clampS(sBoth)
-      t.y = 0.5 - (s + 0.5 + titlePadding)
+      // the top group sits at y = 0.5 (delta only), so no line offset to add
+      t.y = 0.5 - (sFor('top') + titlePadding)
       t.align = 'center'; t.baseline = titleBaseline ?? 'bottom'
     }
     else if (orient === 'left' || orient === 'right') {
-      // vega measures s from the tick+label mark bounds (the tick stroke adds
-      // its 0.5 expansion); when the axis produced no ticks/labels the bounds
-      // are empty and s = 0.
-      const sTickLR = hasTickMarks ? tickSize + 0.5 : -Infinity
-      const sLabelLR = hasTickMarks && axis.labels !== false ? tickSize + labelPadding + labelWidth : -Infinity
-      const sLR0 = Math.max(sTickLR, sLabelLR)
-      const sLR = sLR0 === -Infinity ? 0 : clampS(sLR0)
+      const sLR = sFor(orient)
       t.x = orient === 'left' ? -(sLR + titlePadding) + 0.5 : ctx.width + sLR + titlePadding + 0.5
       t.y = anchorLerp + 0.5; t.align = 'center'; t.baseline = titleBaseline ?? 'bottom'
       ;(t as Record<string, unknown>).angle = titleAngle ?? (orient === 'left' ? -90 : 90)

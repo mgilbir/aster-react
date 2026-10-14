@@ -57,7 +57,7 @@ export function compileChart(spec: VgSpec): CompiledChart {
 
   const axes: CompiledAxis[] = []
   for (const a of (spec.axes as Array<Record<string, unknown>>) ?? []) {
-    axes.push(compileAxis(applyConfigDefaults(a, cfgAxis)))
+    axes.push(compileAxis(applyConfigDefaults(a, cfgAxis, scales)))
   }
 
   const legends: CompiledLegend[] = []
@@ -331,9 +331,19 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
 }
 
 /** Fill properties from a config block (e.g. config.axis) for keys the spec omits. */
-function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string, unknown>): Record<string, unknown> {
+function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string, unknown>, scales?: CompiledScale[]): Record<string, unknown> {
   if (!defaults || typeof defaults !== 'object') return o
   const out: Record<string, unknown> = { ...defaults, ...o }
+  // vega's `axisBand` style (tickOffset -0.5) is consulted through the guide
+  // fallback BEFORE config.axis on band-scale axes (axis-config.js: `band =
+  // scaleType === 'band' && config.axisBand`), so a config.tickOffset cannot
+  // override it there — but on every other scale the config value applies.
+  // Drop the config value only for band-scale axes and let the runtime
+  // default (the -0.5) apply.
+  if ('tickOffset' in defaults && !('tickOffset' in o) && scales) {
+    const sc = scales.find((s) => s.name === o.scale)
+    if (sc && (sc.type === 'band')) delete out.tickOffset
+  }
   // `position` is read as `spec.position` in vega's buildAxisEncode — never
   // through the `lookup(spec, config)` — so a config block's copy is dead
   // upstream.  Drop it too, or a config theme would reshift every axis.
