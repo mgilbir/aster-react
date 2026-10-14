@@ -4505,7 +4505,10 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   // on the count.
   const count = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 10 : 10
   const labelFormat = axisLabelFormat(axis, scale, count, ctx)
-  const tickSize = axis.tickSize ?? 5
+  // ticks:false hides the marks AND zeroes the effective tick size: vega's
+  // axisLabels/titles position off the tickSize signal, which the axis
+  // encode sets to 0 when ticks are off.
+  const tickSize = axis.ticks === false ? 0 : (axis.tickSize ?? 5)
   const labelPadding = axis.labelPadding ?? 2
   let maxLabelLen = 0
   const labels: SceneItem[] = []
