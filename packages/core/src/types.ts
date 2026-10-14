@@ -293,6 +293,8 @@ export interface CompiledLegend {
   tickCount?: number | string | { signal: string }
   symbolStrokeWidth?: number
   symbolOpacity?: number
+  symbolDash?: number[]
+  symbolStrokeColor?: string
   symbolOffset?: number
   labelAlign?: string
   labelBaseline?: string

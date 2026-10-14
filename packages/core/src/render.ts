@@ -209,13 +209,13 @@ function renderLeaf(it: SceneItem): string {
     const tx = num(it.x ?? 0)
     const ty = num(it.y ?? 0)
     const transform = (tx !== '0' || ty !== '0') ? ` transform="translate(${tx},${ty})"` : ''
-    return `<path${transform}${dd} d="${it.path}"${attr('fill', it.fill)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+    return `<path${transform}${dd} d="${it.path}"${attr('fill', it.fill)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
   }
   // Symbol items (shape path; 'circle' renders the arc form)
   if (it.shape != null && it.radius != null) {
     const d = symbolPath(it.shape as string, it.radius as number)
     const t = `transform="translate(${num(it.x ?? 0)},${num(it.y ?? 0)})"`
-    return `<path ${t}${dd} d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+    return `<path ${t}${dd} d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
   }
   if (it.text != null) {
     const fontSize = (it as Record<string, unknown>).fontSize as number | undefined

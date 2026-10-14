@@ -4125,7 +4125,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const symStrokeEnc = (legend as unknown as { encode?: { symbols?: { update?: { stroke?: EncodeValue } } } }).encode?.symbols?.update?.stroke
     const legendStrokeColor = symStrokeEnc && typeof symStrokeEnc === 'object' && 'value' in symStrokeEnc
       ? (symStrokeEnc as { value?: unknown }).value
-      : undefined
+      : (legend as { symbolStrokeColor?: string }).symbolStrokeColor
 
     // When a fill legend's symbols have an explicit stroke encode, Vega uses
     // the larger stroke-legend entry dimensions (step=18, box=14) to account
@@ -4151,29 +4151,66 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
     // Entry layout parameters (vega defaults via the legend config).
     const labelOffset = (legend as { labelOffset?: number }).labelOffset ?? 4
-    const rowPadding = (legend as { rowPadding?: number }).rowPadding ?? 2
+    const symbolOffset = (legend as { symbolOffset?: number }).symbolOffset ?? 0
+    const rowPadding = Math.max((legend as { rowPadding?: number }).rowPadding ?? 2, 0)
     const labelColor = (legend as { labelColor?: string }).labelColor ?? '#000'
     const labelOpacity = (legend as { labelOpacity?: number }).labelOpacity
     const labelFontWeight = (legend as { labelFontWeight?: string | number }).labelFontWeight
     const labelFontStyle = (legend as { labelFontStyle?: string }).labelFontStyle
     const titleColor = (legend as { titleColor?: string }).titleColor ?? '#000'
     const titleOpacity = (legend as { titleOpacity?: number }).titleOpacity
-    const entryWidth = 12 + labelOffset + 8 * maxLabelLen
+    const titleFs = (legend as { titleFontSize?: number }).titleFontSize ?? 11
+    const titlePad = (legend as { titlePadding?: number }).titlePadding ?? 5
+    // vega's legend encoder: the symbol/label offset = max over the entries of
+    // ceil(sqrt(symbolSize) + symbolStrokeWidth) vs the label fontSize; the
+    // symbol sits at offset/2, the label at offset + labelOffset. Only the
+    // layout math sees symbolSize/symbolStrokeWidth — the painted symbol keeps
+    // its default radius/stroke.
+    const symbolSizeP = (legend as { symbolSize?: number }).symbolSize ?? 100
+    const symSwP = (legend as { symbolStrokeWidth?: number }).symbolStrokeWidth ?? 1.5
+    const symbolDash = (legend as { symbolDash?: number[] }).symbolDash
+    const labelFs = (legend as { labelFontSize?: number }).labelFontSize ?? 10
+    const offset = Math.max(Math.ceil(Math.sqrt(symbolSizeP) + symSwP), labelFs)
+    // legendGroupLayout shifts the entries by title.bounds.height() +
+    // titlePadding — the title bound height is the fontSize itself.
+
+    // vega's legendLayout: w = ceil(bounds + 2*padding); the inner padding
+    // shifts the whole content.
+    const legendPad = (legend as { padding?: number }).padding ?? 0
+    const labelLimit = (legend as { labelLimit?: number }).labelLimit ?? 160
+    const entryWidth = symbolOffset + offset + labelOffset + Math.min(~~(0.8 * maxLabelLen * labelFs), labelLimit)
     const titleStr = String(legend.title ?? '')
-    const titleWidth = titleStr.length > 0 ? ~~(0.8 * titleStr.length * 11) : 0
-    const outerWidth = Math.max(entryWidth, titleWidth)
-    // Vega includes the title row (16px) in the legend background only when
-    // a title is present.
-    const titleRow = titleStr ? 16 : 0
-    const bgHeight = titleRow + boxHeight + (entryStep + rowPadding - 2) * (n - 1)
+    const titleWidth = titleStr.length > 0 ? ~~(0.8 * titleStr.length * titleFs) : 0
+    const outerWidth = Math.ceil(Math.max(entryWidth, titleWidth)) + 2 * legendPad
+    // legendGroupLayout shifts the entries by title.bounds.height() +
+    // titlePadding — the title bound height is the fontSize itself.
+    const titleRow = titleStr ? titleFs + titlePad : 0
+    // The entry swatch spans the entry's full bound: the label extent
+    // (offset/2 + baseline bake - round(0.8*fs) + fs) unioned with the symbol
+    // extent (offset/2 + radius, stroke-expanded for stroke-channel legends).
+    const labelY2 = offset / 2 + Math.round(0.3 * labelFs) - Math.round(0.8 * labelFs) + labelFs
+    const symR = Math.sqrt(symbolSizeP) / 2
+    // symbols painted with a stroke (the stroke channel or a stroke encode)
+    // expand their bound by the miter join (4 * sw / 2 with sw 1.5); the
+    // line-shaped "stroke" symbolType keeps the calibrated 11/13 dims
+    const symExpand = isStrokeType ? 0 : (isStrokeLegend || hasSymbolStroke ? 3 : 0)
+    const symY1 = offset / 2 - symR - symExpand
+    const symY2 = offset / 2 + symR + symExpand
+    const swatchH = isStrokeType ? 11 : Math.max(labelY2, symY2)
+    // the grid's dy = rowPadding + offsetValue(b.y1) + ceil(entry height): the
+    // offsetValue lifts entries whose stroke-expanded symbol pokes above y=0,
+    // and the grid rounds the extent up (the swatch rect itself stays float)
+    const offsetValue = isStrokeType ? 0 : (symY1 < 0 ? Math.ceil(-symY1) : 0)
+    const step = isStrokeType ? 13 : rowPadding + offsetValue + Math.ceil(swatchH)
+    const bgHeight = Math.ceil(titleRow + Math.ceil(swatchH) + step * (n - 1)) + 2 * legendPad
 
     const items: SceneItem[] = []
     items.push({ path: `M0,0h${outerWidth}v${bgHeight}h-${outerWidth}Z`, x: 0, y: 0 })
     const titleLimit = (legend as { titleLimit?: number }).titleLimit
-    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: titleColor, fontSize: 11, ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
+    if (titleStr) items.push({ text: titleStr, x: legendPad, y: legendPad + Math.round(0.79 * titleFs), align: 'left', fill: titleColor, fontSize: titleFs, ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
-      const off = titleRow + i * (entryStep + rowPadding - 2)
+      const off = titleRow + i * step
       // For shape legends, compute per-entry swatch height based on the
       // symbol's actual stroke bounds.  Vega's boundStroke expands path
       // bounds by e = max(strokeWidth/2, miterLimit*strokeWidth/2).
@@ -4181,14 +4218,14 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       // The symbol is at y=6 inside the entry, so the swatch height is:
       //   symbolY(6) + extentY + strokeExpand(3)
       // where extentY = r for most shapes, r*sin(60°) for triangle-up/down.
-      let entryBoxHeight = boxHeight
+      let entryBoxHeight = swatchH
       if (legend.shape) {
         const sn = String(scale(value))
         const symR = 5
         const extentY = (sn === 'triangle-up' || sn === 'triangle-down') ? symR * Math.sqrt(3) / 2 : symR
         entryBoxHeight = 6 + extentY + 3
       }
-      items.push({ path: `M0,0h${entryWidth}v${entryBoxHeight}h-${entryWidth}Z`, x: 0, y: off })
+      items.push({ path: `M0,0h${entryWidth}v${entryBoxHeight}h-${entryWidth}Z`, x: legendPad, y: legendPad + off })
       const symbolType = legend.symbolType ?? 'circle'
       // vega renders the legend entry symbol in the shape requested by the
       // legend's symbolType. For "stroke" type, render a horizontal line.
@@ -4225,22 +4262,23 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         // the shape is a line but the channel paints it: a fill legend fills
         // the symbol, a stroke legend strokes it
         const paint = colorProp === 'fill' ? { fill: String(scale(value)) } : { stroke: String(scale(value)) }
-        items.push({ path: `M-5,0L5,0`, x: 6, y: off + 6, strokeWidth: 1.5, ...paint })
+        items.push({ path: `M-5,0L5,0`, x: legendPad + symbolOffset + offset / 2, y: legendPad + off + offset / 2, strokeWidth: 1.5, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...paint })
       } else {
-        const symPath = symbolPath(symbolType, 5)
+        const symPath = symbolPath(symbolType, symR)
         if (colorProp === 'fill') {
-          items.push({ path: symPath, x: 6, y: off + 6, fill: String(scale(value)), strokeWidth: 1.5, ...(legendStrokeColor != null ? { stroke: String(legendStrokeColor) } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
+          items.push({ path: symPath, x: legendPad + symbolOffset + offset / 2, y: legendPad + off + offset / 2, fill: String(scale(value)), strokeWidth: symSwP, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...(legendStrokeColor != null ? { stroke: String(legendStrokeColor) } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
         } else {
-          items.push({ path: symPath, x: 6, y: off + 6, stroke: String(scale(value)), strokeWidth: 1.5, ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
+          items.push({ path: symPath, x: legendPad + symbolOffset + offset / 2, y: legendPad + off + offset / 2, stroke: String(scale(value)), strokeWidth: symSwP, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
         }
       }
       items.push({
         text: String(value),
-        x: 12 + labelOffset,
-        y: off + 9,
+        x: legendPad + symbolOffset + offset + labelOffset,
+        y: legendPad + off + offset / 2 + Math.round(0.3 * labelFs),
         align: 'left',
         fill: labelColor,
-        fontSize: 10,
+        fontSize: labelFs,
+        limit: labelLimit,
         ...(labelOpacity != null ? { fillOpacity: labelOpacity } : {}),
         ...(labelFontWeight != null ? { fontWeight: labelFontWeight } : {}),
         ...(labelFontStyle != null ? { fontStyle: labelFontStyle } : {}),

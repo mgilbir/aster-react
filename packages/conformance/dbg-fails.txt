@@ -1,18 +1,12 @@
+  [differ] axis-orient-top (axis.orient): root: svg|330|198 vs svg|330|189
   [differ] axis-orient-left (axis.orient): root: svg|346|246 vs svg|346|224
   [differ] axis-orient-right (axis.orient): root: svg|392|246 vs svg|392|224
-  [differ] axis-maxExtent-0 (axis.maxExtent): root: svg|330|183 vs svg|330|198
-  [differ] axis-maxExtent-0.5 (axis.maxExtent): root: svg|330|183 vs svg|330|198
-  [differ] axis-maxExtent-8 (axis.maxExtent): root: svg|330|189 vs svg|330|198
-  [differ] axis-maxExtent--4 (axis.maxExtent): root: svg|330|183 vs svg|330|198
   [differ] axis-offset-0.5 (axis.offset): root: svg|330|199 vs svg|330|198
   [differ] axis-offset-8 (axis.offset): root: svg|330|206 vs svg|330|198
   [differ] axis-offset--4 (axis.offset): root: svg|330|194 vs svg|330|198
   [differ] axis-position-0.5 (axis.position): record[0]: line|127|161.5|127|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
   [differ] axis-position-8 (axis.position): record[0]: line|134.5|161.5|134.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
   [differ] axis-position--4 (axis.position): record[0]: line|122.5|161.5|122.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] axis-bandPosition-0 (axis.bandPosition): record[0]: line|104.5|161.5|104.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] axis-bandPosition-8 (axis.bandPosition): root: svg|559|198 vs svg|330|198
-  [differ] axis-bandPosition--4 (axis.bandPosition): root: svg|456|198 vs svg|330|198
   [differ] axis-translate-0 (axis.translate): record[0]: line|126|161|126|166|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
   [differ] axis-translate-8 (axis.translate): record[0]: line|134|169|134|174|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
   [differ] axis-translate--4 (axis.translate): record[0]: line|122|157|122|162|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
@@ -21,38 +15,12 @@
   [differ] axis-titleAngle-0.5 (axis.titleAngle): root: svg|330|199 vs svg|330|198
   [differ] axis-titleAngle-8 (axis.titleAngle): root: svg|330|203 vs svg|330|198
   [differ] axis-titleAngle--4 (axis.titleAngle): root: svg|330|201 vs svg|330|198
-  [differ] axis-titleY-0 (axis.titleY): root: svg|330|183 vs svg|330|187
-  [differ] axis-titleY-0.5 (axis.titleY): root: svg|330|183 vs svg|330|187
+  [differ] axis-titleY-0 (axis.titleY): record[25]: text|151.5|170.5|category|fill=#0  |  text|151.5|50.5|category|fill=#0
+  [differ] axis-titleY-0.5 (axis.titleY): record[25]: text|151.5|171|category|fill=#0  |  text|151.5|51|category|fill=#0
   [differ] axis-titleY-8 (axis.titleY): root: svg|330|185 vs svg|330|183
-  [differ] axis-titleY--4 (axis.titleY): root: svg|330|183 vs svg|330|191
-  [differ] axis-titleBaseline-middle (axis.titleBaseline): root: svg|330|192 vs svg|330|201
-  [differ] axis-titleBaseline-bottom (axis.titleBaseline): root: svg|330|187 vs svg|330|198
-  [differ] axis-titleBaseline-alphabetic (axis.titleBaseline): root: svg|330|189 vs svg|330|198
-  [differ] axis-titleBaseline-line-top (axis.titleBaseline): root: svg|330|199 vs svg|330|208
-  [differ] axis-titleBaseline-line-bottom (axis.titleBaseline): root: svg|330|186 vs svg|330|195
-  [differ] axis-titleFontSize-8 (axis.titleFontSize): root: svg|330|195 vs svg|330|201
-  [differ] axis-titleFontSize--4 (axis.titleFontSize): root: svg|330|187 vs svg|330|184
-  [differ] axis-titleLimit-0.5 (axis.titleLimit): record[25]: text|151.5|191.5|…|fill=#0  |  text|151.5|191.5|category|fill=#0
-  [differ] axis-titleLimit-8 (axis.titleLimit): record[25]: text|151.5|191.5|…|fill=#0  |  text|151.5|191.5|category|fill=#0
-  [differ] axis-titleOpacity-0 (axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=0  |  text|151.5|191.5|category|fill=#0
-  [differ] axis-titleOpacity-0.5 (axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=0.5  |  text|151.5|191.5|category|fill=#0;opacity=0.5
-  [differ] axis-titleOpacity-8 (axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=8  |  text|151.5|191.5|category|fill=#0;opacity=8
-  [differ] axis-titleOpacity--4 (axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=-4  |  text|151.5|191.5|category|fill=#0;opacity=-4
-  [differ] axis-domainColor-b35a1f (axis.domainColor): record[9]: line|51.5|161.5|251.5|161.5|stroke=#b35a1f;stroke-width=1  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
-  [differ] axis-domainDash-4_2 (axis.domainDash): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1;stroke-dasharray=4,2  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
-  [differ] axis-domainWidth-0 (axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=0  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
-  [differ] axis-domainWidth-0.5 (axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=0.5  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
-  [differ] axis-domainWidth-8 (axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=8  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
-  [differ] axis-domainWidth--4 (axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=-4  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
-  [differ] axis-ticks-false (axis.ticks): record[20]: text|126.61|171.5|beta|fill=#0  |  text|126.61|176.5|beta|fill=#0
+  [differ] axis-titleY--4 (axis.titleY): record[25]: text|151.5|166.5|category|fill=#0  |  text|151.5|46.5|category|fill=#0
+  [differ] axis-ticks-false (axis.ticks): root: svg|330|193 vs svg|330|198
   [differ] axis-tickBand-extent (axis.tickBand): record[0]: line|100.5|161.5|100.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] axis-tickColor-b35a1f (axis.tickColor): record[0]: line|126.5|161.5|126.5|166.5|stroke=#b35a1f;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] axis-tickDash-4_2 (axis.tickDash): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1;stroke-dasharray=4,2  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] axis-tickOffset-0 (axis.tickOffset): record[0]: line|127.5|161.5|127.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] axis-tickOffset-0.5 (axis.tickOffset): record[0]: line|127.5|161.5|127.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] axis-tickOffset-8 (axis.tickOffset): record[0]: line|135.5|161.5|135.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] axis-tickOffset--4 (axis.tickOffset): record[0]: line|123.5|161.5|123.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] axis-tickRound-false (axis.tickRound): record[0]: line|126.61|161.5|126.61|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
 ERROR Error: Only time and utc scales accept interval strings.
     at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
     at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
@@ -122,10 +90,6 @@ ERROR Error: Only time and utc scales accept interval strings.
     at View.runAsync (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-dataflow@6.1.2/node_modules/vega-dataflow/src/dataflow/run.js:153:25)
     at runOneCase (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:81:18)
     at <anonymous> (/home/mgilbir/Projects/mgilbir/aster-react/packages/conformance/src/run-sweep.ts:153:29)
-  [differ] axis-tickWidth-0 (axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=0  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] axis-tickWidth-0.5 (axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=0.5  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] axis-tickWidth-8 (axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=8  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] axis-tickWidth--4 (axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=-4  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
 ERROR Error: Only time and utc scales accept interval strings.
     at error (file:///home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-util@2.1.2/node_modules/vega-util/build/error.js:2:11)
     at scale (/home/mgilbir/Projects/mgilbir/aster-react/node_modules/.pnpm/vega-scale@8.1.2/node_modules/vega-scale/build/vega-scale.js:762:10)
@@ -156,28 +120,10 @@ ERROR Error: Only time and utc scales accept interval strings.
   [differ] axis-tickExtra-true (axis.tickExtra): record[11]: line|55.5|161.5|55.5|166.5|stroke=#888;stroke-width=1  |  line|77.5|161.5|77.5|166.5|stroke=#888;stroke-width=1
   [differ] axis-tickMinStep-0.5 (axis.tickMinStep): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1  |  line|46.5|113.5|51.5|113.5|stroke=#888;stroke-width=1
   [differ] axis-tickMinStep-8 (axis.tickMinStep): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1  |  line|46.5|113.5|51.5|113.5|stroke=#888;stroke-width=1
-  [differ] axis-labelBaseline-middle (axis.labelBaseline): root: svg|330|193 vs svg|330|198
-  [differ] axis-labelBaseline-bottom (axis.labelBaseline): root: svg|330|188 vs svg|330|198
-  [differ] axis-labelBaseline-alphabetic (axis.labelBaseline): root: svg|330|190 vs svg|330|198
-  [differ] axis-labelBaseline-line-top (axis.labelBaseline): root: svg|330|199 vs svg|330|198
-  [differ] axis-labelBaseline-line-bottom (axis.labelBaseline): root: svg|330|187 vs svg|330|198
   [differ] axis-labelAngle-0.5 (axis.labelAngle): root: svg|330|199 vs svg|330|198
   [differ] axis-labelAngle-8 (axis.labelAngle): root: svg|330|201 vs svg|330|198
   [differ] axis-labelAngle--4 (axis.labelAngle): root: svg|330|200 vs svg|330|198
-  [differ] axis-labelColor-b35a1f (axis.labelColor): record[24]: text|126.61|176.5|beta|fill=#b35a1f  |  text|126.61|176.5|beta|fill=#0
-  [differ] axis-labelFontSize-0 (axis.labelFontSize): root: svg|330|188 vs svg|330|198
-  [differ] axis-labelFontSize-0.5 (axis.labelFontSize): root: svg|330|189 vs svg|330|198
-  [differ] axis-labelFontSize-8 (axis.labelFontSize): root: svg|330|196 vs svg|330|198
-  [differ] axis-labelFontSize--4 (axis.labelFontSize): root: svg|330|188 vs svg|330|198
-  [differ] axis-labelLimit-0.5 (axis.labelLimit): record[24]: text|126.61|176.5|…|fill=#0  |  text|126.61|176.5|beta|fill=#0
-  [differ] axis-labelLimit-8 (axis.labelLimit): record[24]: text|126.61|176.5|…|fill=#0  |  text|126.61|176.5|beta|fill=#0
-  [differ] axis-labelOpacity-0 (axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=0  |  text|126.61|176.5|beta|fill=#0
-  [differ] axis-labelOpacity-0.5 (axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=0.5  |  text|126.61|176.5|beta|fill=#0
-  [differ] axis-labelOpacity-8 (axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=8  |  text|126.61|176.5|beta|fill=#0
-  [differ] axis-labelOpacity--4 (axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=-4  |  text|126.61|176.5|beta|fill=#0
-  [differ] axis-labelOffset-0.5 (axis.labelOffset): record[24]: text|127.11|176.5|beta|fill=#0  |  text|126.61|176.5|beta|fill=#0
-  [differ] axis-labelOffset-8 (axis.labelOffset): record[24]: text|134.61|176.5|beta|fill=#0  |  text|126.61|176.5|beta|fill=#0
-  [differ] axis-labelOffset--4 (axis.labelOffset): record[24]: text|122.61|176.5|beta|fill=#0  |  text|126.61|176.5|beta|fill=#0
+  [differ] axis-labelFontSize--4 (axis.labelFontSize): root: svg|330|188 vs svg|330|187
   [differ] legend-direction-horizontal (legend.direction): root: svg|454|198 vs svg|330|198
   [differ] legend-orient-left (legend.orient): root: svg|330|198 vs svg|331|198
 ERROR Error: Only time and utc scales accept interval strings.
@@ -299,12 +245,6 @@ ERROR Error: Only time and utc scales accept interval strings.
   [differ] legend-titleFontSize-0.5 (legend.titleFontSize): record[15]: path|M26941h325v84h213Z|  |  path|M26941h325v94h213Z|
   [differ] legend-titleFontSize-8 (legend.titleFontSize): record[15]: path|M26941h325v91h213Z|  |  path|M26941h325v94h213Z|
   [differ] legend-titleFontSize--4 (legend.titleFontSize): root: svg|349|198 vs svg|330|198
-  [differ] legend-titleLimit-0.5 (legend.titleLimit): record[31]: text|269|50|…|fill=#0  |  text|269|50|region|fill=#0
-  [differ] legend-titleLimit-8 (legend.titleLimit): record[31]: text|269|50|…|fill=#0  |  text|269|50|region|fill=#0
-  [differ] legend-titleOpacity-0 (legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=0  |  text|269|50|region|fill=#0
-  [differ] legend-titleOpacity-0.5 (legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=0.5  |  text|269|50|region|fill=#0;opacity=0.5
-  [differ] legend-titleOpacity-8 (legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=8  |  text|269|50|region|fill=#0;opacity=8
-  [differ] legend-titleOpacity--4 (legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=-4  |  text|269|50|region|fill=#0;opacity=-4
   [differ] legend-titleOrient-left (legend.titleOrient): root: svg|387|198 vs svg|330|198
   [differ] legend-titleOrient-right (legend.titleOrient): root: svg|387|198 vs svg|330|198
   [differ] legend-titleOrient-bottom (legend.titleOrient): record[15]: path|M26941h325v52h213Z|  |  path|M26941h325v94h213Z|
@@ -346,9 +286,6 @@ ERROR RangeError: Invalid array length
   [differ] legend-symbolOffset-0.5 (legend.symbolOffset): root: svg|331|198 vs svg|330|198
   [differ] legend-symbolOffset-8 (legend.symbolOffset): root: svg|338|198 vs svg|330|198
   [differ] legend-symbolOffset--4 (legend.symbolOffset): root: svg|326|198 vs svg|330|198
-  [differ] legend-symbolOpacity-0.5 (legend.symbolOpacity): record[19]: path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5;opacity=0.5  |  path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5
-  [differ] legend-symbolOpacity-8 (legend.symbolOpacity): record[19]: path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5;opacity=8  |  path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5
-  [differ] legend-symbolOpacity--4 (legend.symbolOpacity): record[19]: path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5;opacity=-4  |  path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5
   [differ] legend-symbolSize-0 (legend.symbolSize): root: svg|328|198 vs svg|330|198
   [differ] legend-symbolSize-0.5 (legend.symbolSize): root: svg|328|198 vs svg|330|198
   [differ] legend-symbolSize-8 (legend.symbolSize): root: svg|328|198 vs svg|330|198
@@ -372,10 +309,6 @@ ERROR RangeError: Invalid array length
   [differ] legend-labelLimit-0.5 (legend.labelLimit): root: svg|326|198 vs svg|330|198
   [differ] legend-labelLimit-8 (legend.labelLimit): root: svg|326|198 vs svg|330|198
   [differ] legend-labelOffset-0.5 (legend.labelOffset): record[15]: path|M26941h322v94h216Z|  |  path|M26941h321.5v94h216.5Z|
-  [differ] legend-labelOpacity-0 (legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=0  |  text|285|66|north|fill=#0
-  [differ] legend-labelOpacity-0.5 (legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=0.5  |  text|285|66|north|fill=#0;opacity=0.5
-  [differ] legend-labelOpacity-8 (legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=8  |  text|285|66|north|fill=#0;opacity=8
-  [differ] legend-labelOpacity--4 (legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=-4  |  text|285|66|north|fill=#0;opacity=-4
   [differ] title-orient-none (title.orient): root: svg|367|167 vs svg|330|198
   [differ] title-orient-left (title.orient): record[25]: text|158.61|150.5|beta|fill=#0  |  text|11|88.5|Quarterly totals|fill=#0
   [differ] title-orient-right (title.orient): root: svg|361|177 vs svg|384|177
@@ -481,10 +414,7 @@ ERROR RangeError: Invalid array length
   [differ] config-range-symbol-wedge_triangle (config-range.symbol): record[0]: path|M10.36623h53.293v21h-43.293Z|fill=rgb(168, 206, 229)  |  path|M10.36623h53.293v21h-43.293Z|fill=b
   [differ] view-width-0 (view.width): record[34]: text|74.5|191.5|category|fill=#0  |  text|74.5|176.5|alpha|fill=#0
   [differ] view-width--4 (view.width): record[6]: line|74.5|161.5|74.5|161.5|stroke=#888;stroke-width=1  |  line|70.5|161.5|70.5|166.5|stroke=#888;stroke-width=1
-  [differ] view-height-0 (view.height): root: svg|330|120 vs svg|330|118
-  [differ] view-height-0.5 (view.height): root: svg|330|120.5 vs svg|330|118.5
-  [differ] view-height-8 (view.height): root: svg|330|116 vs svg|330|114
-  [differ] view-height--4 (view.height): root: svg|330|122 vs svg|330|120
+  [differ] view-height--4 (view.height): record[0]: line|126.5|64.5|126.5|69.5|stroke=#888;stroke-width=1  |  line|126.5|60.5|126.5|65.5|stroke=#888;stroke-width=1
   [differ] view-autosize-type_fit_contains_padding (view.autosize): root: svg|200|120 vs svg|210|130
   [differ] layout-align-all (layout.align): root: svg|970|192 vs svg|510|510
 ERROR RangeError: Invalid array length
@@ -541,91 +471,39 @@ ERROR RangeError: Invalid array length
   [differ] layout-titleBand--4 (layout.titleBand): root: svg|970|192 vs svg|510|510
   [differ] layout-titleAnchor-start (layout.titleAnchor): root: svg|970|192 vs svg|510|510
   [differ] layout-titleAnchor-end (layout.titleAnchor): root: svg|970|192 vs svg|510|510
-  [differ] config-axis-maxExtent-0 (config-axis.maxExtent): root: svg|315|183 vs svg|330|198
-  [differ] config-axis-maxExtent-0.5 (config-axis.maxExtent): root: svg|315|183 vs svg|330|198
-  [differ] config-axis-maxExtent-8 (config-axis.maxExtent): root: svg|315|189 vs svg|330|198
-  [differ] config-axis-maxExtent--4 (config-axis.maxExtent): root: svg|315|183 vs svg|330|198
   [differ] config-axis-offset-0.5 (config-axis.offset): root: svg|331|199 vs svg|330|198
   [differ] config-axis-offset-8 (config-axis.offset): root: svg|338|206 vs svg|330|198
   [differ] config-axis-offset--4 (config-axis.offset): root: svg|326|194 vs svg|330|198
-  [differ] config-axis-bandPosition-0 (config-axis.bandPosition): record[0]: line|104.5|161.5|104.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] config-axis-bandPosition-8 (config-axis.bandPosition): root: svg|559|198 vs svg|330|198
-  [differ] config-axis-bandPosition--4 (config-axis.bandPosition): root: svg|456|198 vs svg|330|198
   [differ] config-axis-translate-0 (config-axis.translate): record[0]: line|126|161|126|166|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
   [differ] config-axis-translate-8 (config-axis.translate): record[0]: line|134|169|134|174|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
   [differ] config-axis-translate--4 (config-axis.translate): record[0]: line|122|157|122|162|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] config-axis-titlePadding-0 (config-axis.titlePadding): root: svg|326|194 vs svg|330|194
-  [differ] config-axis-titlePadding-0.5 (config-axis.titlePadding): root: svg|327|195 vs svg|330|195
-  [differ] config-axis-titlePadding-8 (config-axis.titlePadding): root: svg|334|202 vs svg|330|202
-  [differ] config-axis-titlePadding--4 (config-axis.titlePadding): root: svg|322|190 vs svg|330|190
   [differ] config-axis-titleAnchor-start (config-axis.titleAnchor): record[25]: text|16.5|161.5|amount|fill=#0  |  text|151.5|191.5|category|fill=#0
   [differ] config-axis-titleAnchor-end (config-axis.titleAnchor): record[25]: text|16.5|41.5|amount|fill=#0  |  text|151.5|191.5|category|fill=#0
-  [differ] config-axis-titleAngle-0 (config-axis.titleAngle): record[34]: text|31.5|99.5|amount|fill=#0  |  text|31.5|101.5|amount|fill=#0
   [differ] config-axis-titleAngle-0.5 (config-axis.titleAngle): root: svg|345|199 vs svg|345|198
   [differ] config-axis-titleAngle-8 (config-axis.titleAngle): root: svg|345|203 vs svg|345|198
   [differ] config-axis-titleAngle--4 (config-axis.titleAngle): root: svg|346|201 vs svg|346|198
-  [differ] config-axis-titleY-0 (config-axis.titleY): root: svg|330|204 vs svg|330|202
-  [differ] config-axis-titleY-0.5 (config-axis.titleY): root: svg|330|204 vs svg|330|202
-  [differ] config-axis-titleY-8 (config-axis.titleY): root: svg|330|198 vs svg|330|194
-  [differ] config-axis-titleY--4 (config-axis.titleY): root: svg|330|208 vs svg|330|206
-  [differ] config-axis-titleBaseline-middle (config-axis.titleBaseline): root: svg|325|192 vs svg|325|201
-  [differ] config-axis-titleBaseline-bottom (config-axis.titleBaseline): root: svg|330|187 vs svg|330|198
-  [differ] config-axis-titleBaseline-alphabetic (config-axis.titleBaseline): root: svg|328|189 vs svg|328|198
-  [differ] config-axis-titleBaseline-line-top (config-axis.titleBaseline): root: svg|318|199 vs svg|318|208
-  [differ] config-axis-titleBaseline-line-bottom (config-axis.titleBaseline): root: svg|331|186 vs svg|331|195
-  [differ] config-axis-titleFontSize-8 (config-axis.titleFontSize): root: svg|327|195 vs svg|327|201
-  [differ] config-axis-titleFontSize--4 (config-axis.titleFontSize): root: svg|319|187 vs svg|319|184
-  [differ] config-axis-titleLimit-0.5 (config-axis.titleLimit): record[25]: text|151.5|191.5|…|fill=#0  |  text|151.5|191.5|category|fill=#0
-  [differ] config-axis-titleLimit-8 (config-axis.titleLimit): record[25]: text|151.5|191.5|…|fill=#0  |  text|151.5|191.5|category|fill=#0
-  [differ] config-axis-titleOpacity-0 (config-axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=0  |  text|151.5|191.5|category|fill=#0
-  [differ] config-axis-titleOpacity-0.5 (config-axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=0.5  |  text|151.5|191.5|category|fill=#0;opacity=0.5
-  [differ] config-axis-titleOpacity-8 (config-axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=8  |  text|151.5|191.5|category|fill=#0;opacity=8
-  [differ] config-axis-titleOpacity--4 (config-axis.titleOpacity): record[25]: text|151.5|191.5|category|fill=#0;fill-opacity=-4  |  text|151.5|191.5|category|fill=#0;opacity=-4
-  [differ] config-axis-domainColor-b35a1f (config-axis.domainColor): record[9]: line|51.5|161.5|251.5|161.5|stroke=#b35a1f;stroke-width=1  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
-  [differ] config-axis-domainDash-4_2 (config-axis.domainDash): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1;stroke-dasharray=4,2  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
-  [differ] config-axis-domainWidth-0 (config-axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=0  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
-  [differ] config-axis-domainWidth-0.5 (config-axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=0.5  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
-  [differ] config-axis-domainWidth-8 (config-axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=8  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
-  [differ] config-axis-domainWidth--4 (config-axis.domainWidth): record[9]: line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=-4  |  line|51.5|161.5|251.5|161.5|stroke=#888;stroke-width=1
-  [differ] config-axis-ticks-false (config-axis.ticks): root: svg|325|193 vs svg|330|193
+  [differ] config-axis-titleY-0 (config-axis.titleY): record[25]: text|151.5|191.5|category|fill=#0  |  text|151.5|71.5|category|fill=#0
+  [differ] config-axis-titleY-0.5 (config-axis.titleY): record[25]: text|151.5|192|category|fill=#0  |  text|151.5|72|category|fill=#0
+  [differ] config-axis-titleY-8 (config-axis.titleY): root: svg|330|198 vs svg|330|196
+  [differ] config-axis-titleY--4 (config-axis.titleY): record[25]: text|151.5|191.5|category|fill=#0  |  text|151.5|71.5|category|fill=#0
+  [differ] config-axis-ticks-false (config-axis.ticks): root: svg|325|193 vs svg|330|198
   [differ] config-axis-tickBand-extent (config-axis.tickBand): record[0]: line|100.5|161.5|100.5|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] config-axis-tickColor-b35a1f (config-axis.tickColor): record[0]: line|126.5|161.5|126.5|166.5|stroke=#b35a1f;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] config-axis-tickDash-4_2 (config-axis.tickDash): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1;stroke-dasharray=4,2  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
   [differ] config-axis-tickOffset-0.5 (config-axis.tickOffset): record[3]: line|46.5|114.5|51.5|114.5|stroke=#888;stroke-width=1  |  line|46.5|113.5|51.5|113.5|stroke=#888;stroke-width=1
   [differ] config-axis-tickOffset-8 (config-axis.tickOffset): root: svg|330|193 vs svg|330|198
   [differ] config-axis-tickOffset--4 (config-axis.tickOffset): root: svg|330|202 vs svg|330|198
-  [differ] config-axis-tickRound-false (config-axis.tickRound): record[0]: line|126.61|161.5|126.61|166.5|stroke=#888;stroke-width=1  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] config-axis-tickWidth-0 (config-axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=0  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] config-axis-tickWidth-0.5 (config-axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=0.5  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] config-axis-tickWidth-8 (config-axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=8  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
-  [differ] config-axis-tickWidth--4 (config-axis.tickWidth): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=-4  |  line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1
   [differ] config-axis-tickExtra-true (config-axis.tickExtra): record[6]: line|46.5|161.5|51.5|161.5|stroke=#888;stroke-width=1  |  line|46.5|41.5|51.5|41.5|stroke=#888;stroke-width=1
   [differ] config-axis-tickMinStep-0.5 (config-axis.tickMinStep): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1  |  line|46.5|113.5|51.5|113.5|stroke=#888;stroke-width=1
   [differ] config-axis-tickMinStep-8 (config-axis.tickMinStep): record[0]: line|126.5|161.5|126.5|166.5|stroke=#888;stroke-width=1  |  line|46.5|113.5|51.5|113.5|stroke=#888;stroke-width=1
   [differ] config-axis-labelAlign-left (config-axis.labelAlign): root: svg|306|198 vs svg|330|198
   [differ] config-axis-labelAlign-center (config-axis.labelAlign): root: svg|318|198 vs svg|330|198
-  [differ] config-axis-labelBaseline-top (config-axis.labelBaseline): root: svg|330|194 vs svg|330|199
-  [differ] config-axis-labelBaseline-middle (config-axis.labelBaseline): root: svg|330|193 vs svg|330|198
-  [differ] config-axis-labelBaseline-bottom (config-axis.labelBaseline): root: svg|330|193 vs svg|330|199
-  [differ] config-axis-labelBaseline-alphabetic (config-axis.labelBaseline): root: svg|330|193 vs svg|330|199
-  [differ] config-axis-labelBaseline-line-top (config-axis.labelBaseline): root: svg|330|195 vs svg|330|194
-  [differ] config-axis-labelBaseline-line-bottom (config-axis.labelBaseline): root: svg|330|193 vs svg|330|202
   [differ] config-axis-labelFlush-true (config-axis.labelFlush): root: svg|330|194 vs svg|330|198
-  [differ] config-axis-labelAngle-0.5 (config-axis.labelAngle): root: svg|331|200 vs svg|330|198
-  [differ] config-axis-labelAngle-8 (config-axis.labelAngle): root: svg|331|205 vs svg|330|198
-  [differ] config-axis-labelAngle--4 (config-axis.labelAngle): root: svg|331|200 vs svg|330|198
-  [differ] config-axis-labelColor-b35a1f (config-axis.labelColor): record[24]: text|126.61|176.5|beta|fill=#b35a1f  |  text|126.61|176.5|beta|fill=#0
-  [differ] config-axis-labelFontSize-0 (config-axis.labelFontSize): root: svg|306|184 vs svg|330|198
-  [differ] config-axis-labelFontSize-0.5 (config-axis.labelFontSize): root: svg|307|185 vs svg|330|198
-  [differ] config-axis-labelFontSize-8 (config-axis.labelFontSize): root: svg|325|195 vs svg|330|198
-  [differ] config-axis-labelFontSize--4 (config-axis.labelFontSize): root: svg|306|185 vs svg|330|198
+  [differ] config-axis-labelAngle-0.5 (config-axis.labelAngle): root: svg|331|200 vs svg|330|201
+  [differ] config-axis-labelAngle-8 (config-axis.labelAngle): root: svg|331|205 vs svg|330|201
+  [differ] config-axis-labelAngle--4 (config-axis.labelAngle): root: svg|331|200 vs svg|330|201
+  [differ] config-axis-labelFontSize--4 (config-axis.labelFontSize): root: svg|306|185 vs svg|305|184
   [differ] config-axis-labelLimit-0.5 (config-axis.labelLimit): root: svg|314|198 vs svg|330|198
   [differ] config-axis-labelLimit-8 (config-axis.labelLimit): root: svg|314|198 vs svg|330|198
-  [differ] config-axis-labelOpacity-0 (config-axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=0  |  text|126.61|176.5|beta|fill=#0
-  [differ] config-axis-labelOpacity-0.5 (config-axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=0.5  |  text|126.61|176.5|beta|fill=#0
-  [differ] config-axis-labelOpacity-8 (config-axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=8  |  text|126.61|176.5|beta|fill=#0
-  [differ] config-axis-labelOpacity--4 (config-axis.labelOpacity): record[24]: text|126.61|176.5|beta|fill=#0;fill-opacity=-4  |  text|126.61|176.5|beta|fill=#0
-  [differ] config-axis-labelOffset-0.5 (config-axis.labelOffset): record[24]: text|127.11|176.5|beta|fill=#0  |  text|126.61|176.5|beta|fill=#0
+  [differ] config-axis-labelOffset-0.5 (config-axis.labelOffset): record[27]: text|165|15.5|Quarterly totals|fill=#0  |  text|165|15|Quarterly totals|fill=#0
   [differ] config-axis-labelOffset-8 (config-axis.labelOffset): root: svg|330|194 vs svg|330|198
   [differ] config-axis-labelOffset--4 (config-axis.labelOffset): root: svg|330|202 vs svg|330|198
   [differ] config-legend-direction-horizontal (config-legend.direction): root: svg|454|198 vs svg|330|198
@@ -749,12 +627,6 @@ ERROR Error: Only time and utc scales accept interval strings.
   [differ] config-legend-titleFontSize-0.5 (config-legend.titleFontSize): record[15]: path|M26941h325v84h213Z|  |  path|M26941h325v94h213Z|
   [differ] config-legend-titleFontSize-8 (config-legend.titleFontSize): record[15]: path|M26941h325v91h213Z|  |  path|M26941h325v94h213Z|
   [differ] config-legend-titleFontSize--4 (config-legend.titleFontSize): root: svg|349|198 vs svg|330|198
-  [differ] config-legend-titleLimit-0.5 (config-legend.titleLimit): record[31]: text|269|50|…|fill=#0  |  text|269|50|region|fill=#0
-  [differ] config-legend-titleLimit-8 (config-legend.titleLimit): record[31]: text|269|50|…|fill=#0  |  text|269|50|region|fill=#0
-  [differ] config-legend-titleOpacity-0 (config-legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=0  |  text|269|50|region|fill=#0
-  [differ] config-legend-titleOpacity-0.5 (config-legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=0.5  |  text|269|50|region|fill=#0;opacity=0.5
-  [differ] config-legend-titleOpacity-8 (config-legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=8  |  text|269|50|region|fill=#0;opacity=8
-  [differ] config-legend-titleOpacity--4 (config-legend.titleOpacity): record[31]: text|269|50|region|fill=#0;fill-opacity=-4  |  text|269|50|region|fill=#0;opacity=-4
   [differ] config-legend-titleOrient-left (config-legend.titleOrient): root: svg|387|198 vs svg|330|198
   [differ] config-legend-titleOrient-right (config-legend.titleOrient): root: svg|387|198 vs svg|330|198
   [differ] config-legend-titleOrient-bottom (config-legend.titleOrient): record[15]: path|M26941h325v52h213Z|  |  path|M26941h325v94h213Z|
@@ -796,9 +668,6 @@ ERROR RangeError: Invalid array length
   [differ] config-legend-symbolOffset-0.5 (config-legend.symbolOffset): root: svg|331|198 vs svg|330|198
   [differ] config-legend-symbolOffset-8 (config-legend.symbolOffset): root: svg|338|198 vs svg|330|198
   [differ] config-legend-symbolOffset--4 (config-legend.symbolOffset): root: svg|326|198 vs svg|330|198
-  [differ] config-legend-symbolOpacity-0.5 (config-legend.symbolOpacity): record[19]: path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5;opacity=0.5  |  path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5
-  [differ] config-legend-symbolOpacity-8 (config-legend.symbolOpacity): record[19]: path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5;opacity=8  |  path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5
-  [differ] config-legend-symbolOpacity--4 (config-legend.symbolOpacity): record[19]: path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5;opacity=-4  |  path|M28063A5501127063A5501128063|fill=#4c78a8;stroke-width=1.5
   [differ] config-legend-symbolSize-0 (config-legend.symbolSize): root: svg|328|198 vs svg|330|198
   [differ] config-legend-symbolSize-0.5 (config-legend.symbolSize): root: svg|328|198 vs svg|330|198
   [differ] config-legend-symbolSize-8 (config-legend.symbolSize): root: svg|328|198 vs svg|330|198
@@ -822,10 +691,6 @@ ERROR RangeError: Invalid array length
   [differ] config-legend-labelLimit-0.5 (config-legend.labelLimit): root: svg|326|198 vs svg|330|198
   [differ] config-legend-labelLimit-8 (config-legend.labelLimit): root: svg|326|198 vs svg|330|198
   [differ] config-legend-labelOffset-0.5 (config-legend.labelOffset): record[15]: path|M26941h322v94h216Z|  |  path|M26941h321.5v94h216.5Z|
-  [differ] config-legend-labelOpacity-0 (config-legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=0  |  text|285|66|north|fill=#0
-  [differ] config-legend-labelOpacity-0.5 (config-legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=0.5  |  text|285|66|north|fill=#0;opacity=0.5
-  [differ] config-legend-labelOpacity-8 (config-legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=8  |  text|285|66|north|fill=#0;opacity=8
-  [differ] config-legend-labelOpacity--4 (config-legend.labelOpacity): record[32]: text|285|66|north|fill=#0;fill-opacity=-4  |  text|285|66|north|fill=#0;opacity=-4
   [differ] config-title-orient-none (config-title.orient): root: svg|367|167 vs svg|330|198
   [differ] config-title-orient-left (config-title.orient): record[25]: text|158.61|150.5|beta|fill=#0  |  text|11|88.5|Quarterly totals|fill=#0
   [differ] config-title-orient-right (config-title.orient): root: svg|361|177 vs svg|384|177
@@ -869,19 +734,11 @@ ERROR RangeError: Invalid array length
   [differ] config-rect-height-8 (config-rect.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v49h7.098Z|fill=steelblue
   [differ] config-rect-height--4 (config-rect.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v37h7.098Z|fill=steelblue
   [differ] config-rect-strokeDash-4_2 (config-rect.strokeDash): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-dasharray=4,2  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-text-fillOpacity-0 (config-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=0  |  text|126.61|95|beta|fill=#333333
-  [differ] config-text-fillOpacity-0.5 (config-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=0.5  |  text|126.61|95|beta|fill=#333333
-  [differ] config-text-fillOpacity-8 (config-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=8  |  text|126.61|95|beta|fill=#333333
-  [differ] config-text-fillOpacity--4 (config-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=-4  |  text|126.61|95|beta|fill=#333333
   [differ] config-text-strokeWidth-0 (config-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=0  |  text|126.61|95|beta|fill=#333333
   [differ] config-text-strokeWidth-0.5 (config-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=0.5  |  text|126.61|95|beta|fill=#333333
   [differ] config-text-strokeWidth-8 (config-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=8  |  text|126.61|95|beta|fill=#333333
   [differ] config-text-strokeWidth--4 (config-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=-4  |  text|126.61|95|beta|fill=#333333
   [differ] config-text-strokeDash-4_2 (config-text.strokeDash): record[21]: text|126.61|95|beta|fill=#333333;stroke-dasharray=4,2  |  text|126.61|95|beta|fill=#333333
-  [differ] config-line-fillOpacity-0 (config-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=0;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
-  [differ] config-line-fillOpacity-0.5 (config-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=0.5;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
-  [differ] config-line-fillOpacity-8 (config-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=8;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
-  [differ] config-line-fillOpacity--4 (config-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=-4;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
   [differ] config-area-yc-0 (config-area.yc): root: svg|330|248 vs svg|330|198
   [differ] config-area-yc-0.5 (config-area.yc): root: svg|330|248 vs svg|330|198
   [differ] config-area-yc-8 (config-area.yc): root: svg|330|240 vs svg|330|198
@@ -911,10 +768,6 @@ ERROR TypeError: output.areaStart is not a function
   [differ] config-rule-yc-0.5 (config-rule.yc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|126.61|41.5|126.61|161|stroke=#333333;stroke-width=2
   [differ] config-rule-yc-8 (config-rule.yc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|126.61|49|126.61|161|stroke=#333333;stroke-width=2
   [differ] config-rule-yc--4 (config-rule.yc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|126.61|37|126.61|161|stroke=#333333;stroke-width=2
-  [differ] config-rule-fillOpacity-0 (config-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=0;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
-  [differ] config-rule-fillOpacity-0.5 (config-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=0.5;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
-  [differ] config-rule-fillOpacity-8 (config-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=8;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
-  [differ] config-rule-fillOpacity--4 (config-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=-4;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
   [differ] config-path-strokeDash-4_2 (config-path.strokeDash): record[12]: path|M118.6195L126.6183L134.6195Z|fill=steelblue;stroke-dasharray=4,2  |  path|M118.6195L126.6183L134.6195Z|fill=steelblue
   [differ] config-path-angle--4 (config-path.angle): root: svg|330|207 vs svg|330|198
   [differ] config-path-scaleY-8 (config-path.scaleY): root: svg|330|279 vs svg|330|198
@@ -922,36 +775,16 @@ ERROR TypeError: output.areaStart is not a function
   [differ] config-mark-x2-0.5 (config-mark.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
   [differ] config-mark-x2-8 (config-mark.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
   [differ] config-mark-x2--4 (config-mark.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-xc-0 (config-mark.xc): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-xc-0.5 (config-mark.xc): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-xc-8 (config-mark.xc): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-xc--4 (config-mark.xc): record[12]: path|M25.049109.4h94.902v92.6h7.098Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
   [differ] config-mark-yc-0 (config-mark.yc): root: svg|330|248 vs svg|330|198
   [differ] config-mark-yc-0.5 (config-mark.yc): root: svg|330|248 vs svg|330|198
   [differ] config-mark-yc-8 (config-mark.yc): root: svg|330|240 vs svg|330|198
   [differ] config-mark-yc--4 (config-mark.yc): root: svg|330|252 vs svg|330|198
-  [differ] config-mark-opacity-0.5 (config-mark.opacity): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;opacity=0.5  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-opacity-8 (config-mark.opacity): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;opacity=8  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-opacity--4 (config-mark.opacity): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;opacity=-4  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-fillOpacity-0 (config-mark.fillOpacity): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;fill-opacity=0  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-fillOpacity-0.5 (config-mark.fillOpacity): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;fill-opacity=0.5  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-fillOpacity-8 (config-mark.fillOpacity): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;fill-opacity=8  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-fillOpacity--4 (config-mark.fillOpacity): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;fill-opacity=-4  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-strokeWidth-0 (config-mark.strokeWidth): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-width=0  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-strokeWidth-0.5 (config-mark.strokeWidth): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-width=0.5  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-strokeWidth-8 (config-mark.strokeWidth): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-width=8  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-strokeWidth--4 (config-mark.strokeWidth): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-width=-4  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
+  [differ] config-mark-height-0 (config-mark.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v41h7.098Z|fill=steelblue
+  [differ] config-mark-height-0.5 (config-mark.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v41.5h7.098Z|fill=steelblue
+  [differ] config-mark-height-8 (config-mark.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v49h7.098Z|fill=steelblue
+  [differ] config-mark-height--4 (config-mark.height): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v37h7.098Z|fill=steelblue
+  [differ] config-mark-stroke-b35a1f (config-mark.stroke): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke=#b35a1f
   [differ] config-mark-strokeDash-4_2 (config-mark.strokeDash): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-dasharray=4,2  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-cornerRadius-0.5 (config-mark.cornerRadius): record[12]: path|M105.15995L148.06195C148.33795148.56195.224148.56195.5L148.561160.5C148.561160.776148.337161148.061161L105.159161C104.883161104.659160.776104.659160.5L104.65995.5C104.65995.224104.88395105.15995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-cornerRadius-8 (config-mark.cornerRadius): record[12]: path|M112.65995L140.56195C144.97695148.56198.585148.561103L148.561153C148.561157.415144.976161140.561161L112.659161C108.243161104.659157.415104.659153L104.659103C104.65998.585108.24395112.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-cornerRadiusTopLeft-0.5 (config-mark.cornerRadiusTopLeft): record[12]: path|M105.15995L148.56195C148.56195148.56195148.56195L148.561161C148.561161148.561161148.561161L104.659161C104.659161104.659161104.659161L104.65995.5C104.65995.224104.88395105.15995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-cornerRadiusTopLeft-8 (config-mark.cornerRadiusTopLeft): record[12]: path|M112.65995L148.56195C148.56195148.56195148.56195L148.561161C148.561161148.561161148.561161L104.659161C104.659161104.659161104.659161L104.659103C104.65998.585108.24395112.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-cornerRadiusTopRight-0.5 (config-mark.cornerRadiusTopRight): record[12]: path|M104.65995L148.06195C148.33795148.56195.224148.56195.5L148.561161C148.561161148.561161148.561161L104.659161C104.659161104.659161104.659161L104.65995C104.65995104.65995104.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-cornerRadiusTopRight-8 (config-mark.cornerRadiusTopRight): record[12]: path|M104.65995L140.56195C144.97695148.56198.585148.561103L148.561161C148.561161148.561161148.561161L104.659161C104.659161104.659161104.659161L104.65995C104.65995104.65995104.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-cornerRadiusBottomRight-0.5 (config-mark.cornerRadiusBottomRight): record[12]: path|M104.65995L148.56195C148.56195148.56195148.56195L148.561160.5C148.561160.776148.337161148.061161L104.659161C104.659161104.659161104.659161L104.65995C104.65995104.65995104.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-cornerRadiusBottomRight-8 (config-mark.cornerRadiusBottomRight): record[12]: path|M104.65995L148.56195C148.56195148.56195148.56195L148.561153C148.561157.415144.976161140.561161L104.659161C104.659161104.659161104.659161L104.65995C104.65995104.65995104.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-cornerRadiusBottomLeft-0.5 (config-mark.cornerRadiusBottomLeft): record[12]: path|M104.65995L148.56195C148.56195148.56195148.56195L148.561161C148.561161148.561161148.561161L105.159161C104.883161104.659160.776104.659160.5L104.65995C104.65995104.65995104.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
-  [differ] config-mark-cornerRadiusBottomLeft-8 (config-mark.cornerRadiusBottomLeft): record[12]: path|M104.65995L148.56195C148.56195148.56195148.56195L148.561161C148.561161148.561161148.561161L112.659161C108.243161104.659157.415104.659153L104.65995C104.65995104.65995104.65995Z|fill=steelblue  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
   [differ] config-style-x2-0 (config-style.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
   [differ] config-style-x2-0.5 (config-style.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
   [differ] config-style-x2-8 (config-style.x2): record[12]: path|M26941h325v94h213Z|  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
@@ -981,21 +814,12 @@ ERROR TypeError: output.areaStart is not a function
   [differ] encode-rect-strokeDash-4_2 (encode-rect.strokeDash): record[12]: path|M104.65995h94.902v107h7.098Z|fill=steelblue;stroke-dasharray=4,2  |  path|M104.65995h94.902v107h7.098Z|fill=steelblue
   [differ] encode-symbol-size-0 (encode-symbol.size): record[12]: path|M26941h325v94h213Z|  |  path|M126.6195A00011126.6195A00011126.6195|fill=steelblue
   [differ] encode-symbol-size--4 (encode-symbol.size): record[20]: path|MNaN126.61|fill=steelblue  |  path|MNaN126.61ANaNNaN126.6196127.61NaN126.61ANaNNaN126.6196127.61NaN126.61|fill=steelblue
-  [differ] encode-text-fillOpacity-0 (encode-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=0  |  text|126.61|95|beta|fill=#333333
-  [differ] encode-text-fillOpacity-0.5 (encode-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=0.5  |  text|126.61|95|beta|fill=#333333
-  [differ] encode-text-fillOpacity-8 (encode-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=8  |  text|126.61|95|beta|fill=#333333
-  [differ] encode-text-fillOpacity--4 (encode-text.fillOpacity): record[21]: text|126.61|95|beta|fill=#333333;fill-opacity=-4  |  text|126.61|95|beta|fill=#333333
-  [differ] encode-text-stroke-b35a1f (encode-text.stroke): record[21]: text|126.61|95|beta|fill=#333333;stroke=#b35a1f  |  text|126.61|95|beta|fill=#333333
   [differ] encode-text-strokeWidth-0 (encode-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=0  |  text|126.61|95|beta|fill=#333333
   [differ] encode-text-strokeWidth-0.5 (encode-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=0.5  |  text|126.61|95|beta|fill=#333333
   [differ] encode-text-strokeWidth-8 (encode-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=8  |  text|126.61|95|beta|fill=#333333
   [differ] encode-text-strokeWidth--4 (encode-text.strokeWidth): record[21]: text|126.61|95|beta|fill=#333333;stroke-width=-4  |  text|126.61|95|beta|fill=#333333
   [differ] encode-text-strokeDash-4_2 (encode-text.strokeDash): record[21]: text|126.61|95|beta|fill=#333333;stroke-dasharray=4,2  |  text|126.61|95|beta|fill=#333333
   [differ] encode-line-fill-b35a1f (encode-line.fill): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill=#b35a1f;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
-  [differ] encode-line-fillOpacity-0 (encode-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=0;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
-  [differ] encode-line-fillOpacity-0.5 (encode-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=0.5;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
-  [differ] encode-line-fillOpacity-8 (encode-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=8;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
-  [differ] encode-line-fillOpacity--4 (encode-line.fillOpacity): record[20]: path|M77.829127.4L126.6195L175.39109.4L224.17151.8|fill-opacity=-4;stroke=steelblue;stroke-width=2  |  path|M77.829127.4L126.6195L175.39109.4L224.17151.8|stroke=steelblue;stroke-width=2
   [differ] encode-area-yc-0 (encode-area.yc): root: svg|330|248 vs svg|330|198
   [differ] encode-area-yc-0.5 (encode-area.yc): root: svg|330|248 vs svg|330|198
   [differ] encode-area-yc-8 (encode-area.yc): root: svg|330|240 vs svg|330|198
@@ -1026,30 +850,20 @@ ERROR TypeError: output.areaStart is not a function
   [differ] encode-rule-yc-8 (encode-rule.yc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|126.61|49|126.61|161|stroke=#333333;stroke-width=2
   [differ] encode-rule-yc--4 (encode-rule.yc): record[1]: line|126.61|95|126.61|161|stroke=#333333;stroke-width=2  |  line|126.61|37|126.61|161|stroke=#333333;stroke-width=2
   [differ] encode-rule-fill-b35a1f (encode-rule.fill): record[1]: line|126.61|95|126.61|161|fill=#b35a1f;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
-  [differ] encode-rule-fillOpacity-0 (encode-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=0;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
-  [differ] encode-rule-fillOpacity-0.5 (encode-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=0.5;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
-  [differ] encode-rule-fillOpacity-8 (encode-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=8;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
-  [differ] encode-rule-fillOpacity--4 (encode-rule.fillOpacity): record[1]: line|126.61|95|126.61|161|fill-opacity=-4;stroke=#333333;stroke-width=2  |  line|126.61|95|126.61|161|stroke=#333333;stroke-width=2
   [differ] encode-path-strokeDash-4_2 (encode-path.strokeDash): record[12]: path|M118.6195L126.6183L134.6195Z|fill=steelblue;stroke-dasharray=4,2  |  path|M118.6195L126.6183L134.6195Z|fill=steelblue
   [differ] encode-path-angle--4 (encode-path.angle): root: svg|330|207 vs svg|330|198
   [differ] encode-path-scaleY-8 (encode-path.scaleY): root: svg|330|279 vs svg|330|198
   [node-error] encode-trail-size--4: negative radius: -2
-[vega-schema] FAILING (673):
+[vega-schema] FAILING (493):
+  axis-orient-top
   axis-orient-left
   axis-orient-right
-  axis-maxExtent-0
-  axis-maxExtent-0.5
-  axis-maxExtent-8
-  axis-maxExtent--4
   axis-offset-0.5
   axis-offset-8
   axis-offset--4
   axis-position-0.5
   axis-position-8
   axis-position--4
-  axis-bandPosition-0
-  axis-bandPosition-8
-  axis-bandPosition--4
   axis-translate-0
   axis-translate-8
   axis-translate--4
@@ -1062,17 +876,23 @@ ERROR TypeError: output.areaStart is not a function
   axis-titleY-0.5
   axis-titleY-8
   axis-titleY--4
-  axis-titleBaseline-middle
-  axis-titleBaseline-bottom
-  axis-titleBaseline-alphabetic
-  axis-titleBaseline-line-top
-  axis-titleBaseline-line-bottom
-  axis-titleFontSize-8
-  axis-titleFontSize--4
-  axis-titleLimit-0.5
-  axis-titleLimit-8
-  axis-titleOpacity-0
-  axis-titleOpacity-0.5
-  axis-titleOpacity-8
-  axis-titleOpacity--4
-  ... and 644 more
+  axis-ticks-false
+  axis-tickBand-extent
+  axis-tickCount-millisecond
+  axis-tickCount-second
+  axis-tickCount-minute
+  axis-tickCount-hour
+  axis-tickCount-day
+  axis-tickCount-week
+  axis-tickCount-month
+  axis-tickCount-year
+  axis-tickExtra-true
+  axis-tickMinStep-0.5
+  axis-tickMinStep-8
+  axis-labelAngle-0.5
+  axis-labelAngle-8
+  axis-labelAngle--4
+  axis-labelFontSize--4
+  legend-direction-horizontal
+  legend-orient-left
+  ... and 464 more
