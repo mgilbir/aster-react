@@ -252,8 +252,13 @@ export function boundArcItem(bounds: Bounds, it: SceneItem): Bounds {
   // (cos(t - PI/2), sin(t - PI/2)) in y-down canvas coordinates.
   const a0 = ((it.startAngle ?? 0) as number) - Math.PI / 2
   let a1 = ((it.endAngle ?? 0) as number) - Math.PI / 2
+  // sweep length in (0, 2π]: our stack emits descending arcs (start > end),
+  // and the swept point set is direction-independent for bounding — vega's
+  // bound context normalizes the arc the same way (swaps sa/ea, samples the
+  // interior points aligned to 90°).
   let da = a1 - a0
-  if (da >= 2 * Math.PI) da = da % (2 * Math.PI)
+  if (da >= 2 * Math.PI || da <= -2 * Math.PI) da = 2 * Math.PI
+  else if (da < 0) da += 2 * Math.PI
   a1 = a0 + da
   const add = (rad: number, ang: number): void => {
     bounds.add(cx + rad * Math.cos(ang), cy + rad * Math.sin(ang))
@@ -280,7 +285,10 @@ export function boundArcItem(bounds: Bounds, it: SceneItem): Bounds {
     // pie sector: the apex is part of the shape
     bounds.add(cx, cy)
   }
-  boundStroke(bounds, it, it.strokeWidth != null)
+  // vega's arc bound always expands with miter semantics (vega-scenegraph
+  // bound/arc.js: boundStroke(bounds, item, true)) — the miterLimit default
+  // of 4 makes the conservative expansion 2px per side at strokeWidth 1.
+  boundStroke(bounds, it, true)
   return bounds
 }
 
@@ -651,7 +659,7 @@ export function boundMark(node: SceneNode, out?: Bounds): Bounds {
 }
 
 /** Bound a typed (non-group) mark: per-type geometry. */
-export function boundTypedMark(bounds: Bounds, mark: SceneGroup): Bounds {
+export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = false): Bounds {
   const items = (mark.items ?? []) as SceneItem[]
   switch (mark.marktype) {
     case 'line':
@@ -678,13 +686,17 @@ export function boundTypedMark(bounds: Bounds, mark: SceneGroup): Bounds {
       return bounds
     }
     default:
-      for (const it of items) boundLeaf(bounds, it)
+      // vega's arc/path/symbol bounds always expand with miter semantics
+      // (vega-scenegraph bound.js: boundStroke(bounds, item, true)) — the
+      // miterLimit default of 4 makes the expansion miterLimit*sw/2 per side
+      const miter = miterPaths || mark.marktype === 'arc' || mark.marktype === 'path' || mark.marktype === 'symbol'
+      for (const it of items) boundLeaf(bounds, it, miter)
       return bounds
   }
 }
 
 /** Bound one leaf item (or nested group/mark item) into `bounds`. */
-export function boundLeaf(bounds: Bounds, it: SceneItem): Bounds {
+export function boundLeaf(bounds: Bounds, it: SceneItem, miterPaths = false): Bounds {
   const mt = (it as SceneGroup).marktype
   const hasItems = Array.isArray((it as SceneGroup).items)
   if (mt === 'group' || (mt === undefined && hasItems)) {
@@ -696,9 +708,9 @@ export function boundLeaf(bounds: Bounds, it: SceneItem): Bounds {
   }
   if (mt !== undefined && hasItems) {
     // typed mark nested inside a group: union its per-item bounds
-    return boundTypedMark(bounds, it as unknown as SceneGroup)
+    return boundTypedMark(bounds, it as unknown as SceneGroup, miterPaths)
   }
-  return bounds.union(boundIsolated(it))
+  return bounds.union(boundIsolated(it, miterPaths))
 }
 
 /**
@@ -758,7 +770,7 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
 }
 
 /** Bound a single leaf item into an isolated Bounds (vega's per-item bounds). */
-function boundIsolated(it: SceneItem): Bounds {
+function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
   const bounds = new Bounds()
   // Arc items: the geometry is angular (outerRadius/innerRadius/angles), not a
   // stored path — bound the annular sector analytically (vega bounds the
@@ -787,7 +799,7 @@ function boundIsolated(it: SceneItem): Bounds {
       const fy = syP ?? 1
       bounds.scale(fx, fy)
     }
-    boundStroke(bounds, it, it.strokeWidth != null)
+    boundStroke(bounds, it, miterPaths || it.strokeWidth != null)
     return bounds.translate(it.x || 0, it.y || 0)
   }
   if (it.text != null && (it as SceneGroup).marktype === undefined) {

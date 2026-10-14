@@ -1772,6 +1772,9 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       lg.fill = 'color'
       if (mark === 'bar' || mark === 'rect') lg.symbolType = 'square'
       if (!isDiscreteType(colorDef.type)) lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
+      // the mark's stroke propagates onto a symbol legend's entries (probed:
+      // bar/rect/arc with markDef.stroke emit symbols.stroke)
+      else if (markStroke) lg.encode = { symbols: { update: { stroke: { value: markStroke } } } }
     }
     for (const [k, v] of Object.entries(userLegend)) {
       if (k === 'title') continue
@@ -1857,6 +1860,7 @@ interface BuiltMarks extends Array<Record<string, unknown>> {
 }
 function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: string, dataName: string, markSize?: number): BuiltMarks {
   const markColor = isObject(spec.mark) ? (spec.mark.color as string | undefined) : undefined
+  const markFill = isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined
   const markOpacity = isObject(spec.mark) ? (spec.mark.opacity as number | undefined) : undefined
   const xDef = fields.find((f) => f.channel === 'x')
   const yDef = fields.find((f) => f.channel === 'y')
@@ -2016,16 +2020,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
   } else if (mark === 'point' || mark === 'circle' || mark === 'square') {
     const filled = mark !== 'point' || (isObject(spec.mark) && spec.mark.filled === true)
-    const markColor = isObject(spec.mark)
-      ? ((spec.mark.color as string | undefined) ?? (spec.mark.fill as string | undefined))
-      : undefined
     const markOpacity = isObject(spec.mark) ? (spec.mark.opacity as number | undefined) : undefined
     const markStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
     const markStrokeWidth = isObject(spec.mark) ? (spec.mark.strokeWidth as number | undefined) : undefined
     if (filled) {
       update.fill = colorDef
         ? { scale: 'color', field: aggFieldName(colorDef) }
-        : { value: markColor ?? cfgFill ?? cfgColor ?? C.blue }
+        : { value: markColor ?? markFill ?? cfgFill ?? cfgColor ?? C.blue }
       const st = markStroke ?? cfgStroke
       if (st != null) update.stroke = { value: st }
       if (markStrokeWidth) update.strokeWidth = { value: markStrokeWidth }
@@ -2059,6 +2060,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (sizeDef) update.strokeWidth = { scale: 'size', field: aggFieldName(sizeDef) }
     const markInterpolate = isObject(spec.mark) ? (spec.mark.interpolate as string | undefined) : undefined
     if (markInterpolate) update.interpolate = { value: markInterpolate }
+    // a line's markDef.fill fills the line's area (vega paints line marks);
+    // the stroke default stays
+    const lineFill = isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined
+    if (lineFill != null) update.fill = { value: lineFill }
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
     if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef) }
     update.defined = definedSignal(xDef, yDef)
@@ -2100,7 +2105,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     update.defined = definedSignal(xDef, yDef)
   } else if (mark === 'tick') {
     update.opacity = { value: markOpacity ?? C.pointOpacity }
-    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? cfgFill ?? cfgColor ?? C.blue }
+    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? markFill ?? cfgFill ?? cfgColor ?? C.blue }
     update.ariaRoleDescription = { value: 'tick' }
     if (orient === 'vertical') {
       if (xDef) {
@@ -2129,6 +2134,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
   } else if (mark === 'rule') {
     update.stroke = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? cfgStroke ?? cfgColor ?? 'black' }
+    const ruleFill = isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined
+    if (ruleFill != null) update.fill = { value: ruleFill }
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
     if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef) }
     const x2Def = fields.find((f) => f.channel === 'x2' && f.field)
@@ -2136,7 +2143,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (x2Def) update.x2 = { scale: 'x', field: x2Def.field }
     if (y2Def) update.y2 = { scale: 'y', field: y2Def.field }
   } else if (mark === 'text') {
-    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? cfgFill ?? cfgColor ?? 'black' }
+    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? markFill ?? cfgFill ?? cfgColor ?? 'black' }
+    const textStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
+    const tStroke = textStroke ?? cfgStroke
+    if (tStroke != null) update.stroke = { value: tStroke }
     const thetaDefT = fields.find((f) => f.channel === 'theta' && f.field)
     if (thetaDefT) {
       // polar text (pie labels): anchored at the view center, offset by
@@ -2166,7 +2176,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   } else if (mark === 'arc') {
     const thetaDefA = fields.find((f) => f.channel === 'theta' && f.field)
     const thetaF = thetaDefA!.field
-    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? cfgFill ?? cfgColor ?? C.blue }
+    update.fill = markFill != null
+      ? { value: markFill }
+      : colorDef
+        ? { scale: 'color', field: aggFieldName(colorDef) }
+        : { value: markColor ?? cfgFill ?? cfgColor ?? C.blue }
+    const arcStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
+    const aStroke = arcStroke ?? cfgStroke
+    if (aStroke != null) update.stroke = { value: aStroke }
     if (markOpacity != null) update.opacity = { value: markOpacity }
     update.x = { signal: 'width', mult: 0.5 }
     update.y = { signal: 'height', mult: 0.5 }
@@ -2506,12 +2523,18 @@ export function compileUnit(spec: VLSpec): VLSpec {
   }
   const axes = buildAxes(fields, mark, orient, out.scales as ScaleSpec[], undefined, undefined, userConfig)
   if (axes.length) out.axes = axes
+  // the legend symbols' stroke resolves through getMarkPropOrConfig
+  // (markDef.stroke ?? config[type].stroke ?? config.mark.stroke — probed:
+  // config.arc.stroke propagates onto the arc legend's symbols)
+  const lgStroke = (isObject(markRaw) ? (markRaw.stroke as string | undefined) : undefined)
+    ?? (isObject(userConfig?.[mark]) ? ((userConfig![mark] as Record<string, unknown>).stroke as string | undefined) : undefined)
+    ?? (isObject(userConfig?.mark) ? ((userConfig!.mark as Record<string, unknown>).stroke as string | undefined) : undefined)
   const legends = buildLegends(
     fields,
     mark,
     markOpacity,
     isObject(markRaw) && markRaw.filled === true,
-    isObject(markRaw) ? (markRaw.stroke as string | undefined) : undefined,
+    lgStroke,
     isObject(markRaw) ? (markRaw.strokeWidth as number | undefined) : undefined,
   )
   if (legends.length) out.legends = legends
