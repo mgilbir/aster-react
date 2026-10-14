@@ -75,6 +75,15 @@ export class Bounds {
     return this
   }
 
+  /** vega Bounds.scale: multiply both extents (NaN-safe like add). */
+  scale(sx: number, sy: number): this {
+    this.x1 *= sx
+    this.y1 *= sy
+    this.x2 *= sx
+    this.y2 *= sy
+    return this
+  }
+
   expand(d: number): this {
     this.x1 -= d
     this.y1 -= d
@@ -763,6 +772,16 @@ function boundIsolated(it: SceneItem): Bounds {
     // vega's boundPath leaves the bounds untouched, so no stroke expansion.
     if (it.path === '') return bounds
     boundsFromPath(bounds, it.path)
+    // path marks carry scaleX/scaleY: vega's path bound renders the parsed
+    // path through pathRender(ctx, x, y, sx, sy) — the path scales about its
+    // local origin before the item translate.
+    const sxP = (it as Record<string, unknown>).scaleX as number | undefined
+    const syP = (it as Record<string, unknown>).scaleY as number | undefined
+    if ((sxP != null && sxP !== 1) || (syP != null && syP !== 1)) {
+      const fx = sxP ?? 1
+      const fy = syP ?? 1
+      bounds.scale(fx, fy)
+    }
     boundStroke(bounds, it, it.strokeWidth != null)
     return bounds.translate(it.x || 0, it.y || 0)
   }

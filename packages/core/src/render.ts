@@ -885,9 +885,13 @@ function renderPaths(group: SceneGroup): string {
     // Position the path at its item x/y (vega renders path marks with a
     // translate transform; items whose path already encodes absolute
     // coordinates (e.g. geoshape output) have x=y=0 and emit no transform).
+    // vega's transformItem appends scale(sx,sy) when the item carries it.
     const tx = num(it.x ?? 0)
     const ty = num(it.y ?? 0)
-    const transform = (tx !== '0' || ty !== '0') ? ` transform="translate(${tx},${ty})"` : ''
+    const sxp = (it as Record<string, unknown>).scaleX as number | undefined
+    const syp = (it as Record<string, unknown>).scaleY as number | undefined
+    const scaleT = (sxp != null && sxp !== 1) || (syp != null && syp !== 1) ? ` scale(${sxp ?? 1},${syp ?? 1})` : ''
+    const transform = (tx !== '0' || ty !== '0' || scaleT) ? ` transform="translate(${tx},${ty})${scaleT}"` : ''
     out += `<path${transform} d="${it.path}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
   }
   out += '</g>'
