@@ -68,6 +68,8 @@ export interface CompiledProjection {
 
 export interface CompiledChart {
   autosize?: string
+  /** `config.range` — named range lookup for scales. */
+  configRange?: Record<string, unknown>
   /** vega autosize `contains` (viewSizeLayout's contains: 'padding' makes the
    * spec'd width/height include the padding). */
   autosizeContains?: string

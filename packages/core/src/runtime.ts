@@ -208,9 +208,11 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
   ctx.incremental = changedNames.size > 0
   ctx.datasetChanges = new Map()
 
-  // Remap Vega-Lite "category" range (unhandled by vega-scale) to tableau10
+  // Remap Vega-Lite "category" range (unhandled by vega-scale) to tableau10 —
+  // unless a config.range.category shadows it (vega's range lookup consults
+  // the config block first).
   for (const s of ctx.chart.scales) {
-    if (s.range === 'category') { ; (s as unknown as Record<string, unknown>).range = 'tableau10' }
+    if (s.range === 'category' && !chart.configRange?.category) { ; (s as unknown as Record<string, unknown>).range = 'tableau10' }
   }
   // Resolve signal `update` expressions, datasets, and scales to a fixed
   // point. Signals can reference data/scales and vice versa (e.g. brush-bounded
@@ -1668,6 +1670,7 @@ function buildScales(ctx: EvalContext): void {
       width: ctx.width,
       height: ctx.height,
       signals: scaleSignals,
+      configRange: ctx.chart.configRange,
       evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
       dataField: (dataName, field) => {
         const rows = ctx.datasets.get(dataName) ?? []
@@ -2102,6 +2105,7 @@ function buildTrellisCell(
       width: ctx.width,
       height: ctx.height,
       signals: ctx.signalParams,
+      configRange: ctx.chart.configRange,
       evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
       dataField: (dn, field) => {
         const rws = ctx.datasets.get(dn) ?? []
@@ -2309,6 +2313,7 @@ function buildScopedGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | nu
       width: ctx.width,
       height: ctx.height,
       signals: ctx.signalParams,
+      configRange: ctx.chart.configRange,
       evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
       dataField: (dn, field) => {
         const rows = ctx.datasets.get(dn) ?? []

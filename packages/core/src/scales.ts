@@ -20,6 +20,9 @@ export interface ScaleContext {
   width: number
   height: number
   signals: Record<string, unknown>
+  /** `config.range` — a named range ('category', 'ramp', ...) resolves through
+   * it before the built-in aliases (vega-parser's range lookup). */
+  configRange?: Record<string, unknown>
   /** Evaluate a JS expression string and return the result. */
   evaluate?: (expr: string) => unknown
   /** Collect values of `field` across a named dataset. */
@@ -542,6 +545,26 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string):
         }
         return [ctx.height, 0]
       default: {
+        // A `config.range.<name>` entry resolves first (vega-parser's range
+        // lookup: the config block shadows the built-in range definitions).
+        // An array is the palette itself; a `{scheme}` object resolves to the
+        // scheme colors (ordinal) or keeps the scheme name (continuous, where
+        // the interpolator needs the name); anything else refuses upstream
+        // ('Unrecognized scale range value').
+        const cfg = ctx.configRange?.[range]
+        if (cfg != null) {
+          if (Array.isArray(cfg)) return cfg
+          if (cfg && typeof cfg === 'object' && 'scheme' in cfg) {
+            const schemeName = (cfg as { scheme: string }).scheme
+            if (scaleType === 'band' || scaleType === 'ordinal' || scaleType === 'point') {
+              const colors = vs.scheme(schemeName)
+              if (Array.isArray(colors)) return colors
+              if (colors) return colors as unknown[]
+            }
+            return schemeName
+          }
+          throw new Error(`Unrecognized scale range value: ${JSON.stringify(range)}`)
+        }
         // Named ranges map to vega's config.defaults range entries (a continuous
         // scheme unless overridden). `range: "heatmap"` (vega-lite's default for
         // quantitative color) resolves to the yellowgreenblue scheme.
