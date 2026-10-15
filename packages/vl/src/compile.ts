@@ -2285,10 +2285,16 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     update.x = { signal: 'width', mult: 0.5 }
     update.y = { signal: 'height', mult: 0.5 }
     const arcMark = spec.mark
-    const mOuter = isObject(arcMark) ? (arcMark.outerRadius as number | undefined) : undefined
+    const mOuter = isObject(arcMark) ? ((arcMark.outerRadius as number | undefined) ?? (arcMark.radius as number | undefined)) : undefined
     const mInner = isObject(arcMark) ? (arcMark.innerRadius as number | undefined) : undefined
-    update.outerRadius = mOuter != null ? { value: mOuter } : { signal: 'min(width,height)/2' }
-    update.innerRadius = { value: mInner ?? 0 }
+    // outerRadius resolves markDef.outerRadius ?? markDef.radius ??
+    // config.arc.outerRadius ?? config.arc.radius ?? the half-extent signal
+    update.outerRadius = mOuter != null
+      ? { value: mOuter }
+      : ((cfgType?.outerRadius as number | undefined) ?? (cfgType?.radius as number | undefined)) != null
+        ? { value: (cfgType?.outerRadius as number | undefined) ?? (cfgType?.radius as number | undefined) }
+        : { signal: 'min(width,height)/2' }
+    update.innerRadius = { value: mInner ?? (cfgType?.innerRadius as number | undefined) ?? 0 }
     // the outer arc closes at the series' stacked END angle; the sweep runs
     // from value_end (startAngle) to value_start (endAngle)
     update.startAngle = { scale: 'theta', field: `${thetaF}_end` }
