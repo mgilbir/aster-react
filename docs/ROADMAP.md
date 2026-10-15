@@ -437,24 +437,29 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   The **vega-lite sweep** now runs (the lite cases compile both VL
   compilers to Vega before rendering): baseline 10937 ok / 15581 differ /
   935 engine / 43 node — that surface is @aster/vl's drift, tracked
-  separately from this floor. Four rounds closed the bulk of it:
-  23357 ok / 3973 differ / 122 engine / 36 node of 27513 (85%).
+  separately from this floor. Seven rounds closed the bulk of it:
+  25149 ok / 2181 differ / 122 engine / 36 node of 27513 (91%).
   Closed clusters: the config layer (config forwarding into the Vega
   spec — guide blocks, mark -> config.mark, per-type blocks ->
-  style[type], view -> cell, title -> group-title/group-subtitle,
-  scale applied to the scales — plus getMarkPropOrConfig paint
-  resolution into the encodes), mark-def paint props for every mark
-  type (fill/color/stroke precedence, filled:false, cornerRadiusEnd),
-  legend paint properties (gradient + size builders), the trail mark
-  (compile + vega's built-in trail style size 2 + d3-path-exact trail
-  path geometry), the miter-expansion arc/path/symbol bounds, the
-  descending-sweep arc bound normalization, and the variance/stdev/
-  stderr/values aggregate ops. Remaining residue: guide-legend
-  layout tails (columns/titlePadding/clipHeight/titleOrient),
-  config-axis tails, facet/header compile (encoding-column,
-  guide-header-column render 10x10), trail x/yOffset tails, and the
-  17 bogus-op (exponentialb) engine refusals where vega logs and
-  empties the dataset.
+  style[type], view -> cell with stroke/fill on the frame, title ->
+  group-title/group-subtitle, scale applied to the scales — plus
+  getMarkPropOrConfig paint resolution into the encodes for every mark
+  type), legend paint properties (gradient + size builders), the facet
+  view (grid-derived view sizing, degenerate root frame, header labels
+  evaluating the title signal against vega's parent scope, forwarded
+  label*/title* props, unwhitelisted facet axes, half-pixel guide
+  bounds), the trail mark (compile + vega's built-in trail style size 2
+  + d3-path-exact trail path geometry), the miter-expansion
+  arc/path/symbol bounds, the descending-sweep arc bound
+  normalization, grid/axis paint (gridColor through the compiled axis),
+  tick thickness/size semantics, and the variance/stdev/stderr/values
+  aggregate ops. Remaining residue: discrete-scheme piecewise sampling
+  (vega's scheme accessor emits a longer sampled palette than the raw
+  scheme array), guide-legend layout tails (columns/clipHeight/
+  titleOrient), facet-aggregate domains (the facet field's aggregate
+  must join the child pipeline and name the facet groupby), and the 17
+  bogus-op (exponentialb) engine refusals where vega logs and empties
+  the dataset.
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
 
