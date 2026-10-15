@@ -2196,30 +2196,39 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const tickDef = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : undefined
     if (tickDef?.cornerRadius !== undefined) update.cornerRadius = { value: tickDef.cornerRadius }
     update.ariaRoleDescription = { value: 'tick' }
+    // the band dimension resolves markDef.size ?? config tick
+    // size/discreteBandSize ?? the bandwidth signal; the short dimension is
+    // markDef.thickness ?? config tick thickness ?? 1 (probed)
+    const tickBand = (tickDef?.size
+      ?? (cfgType?.size as number | undefined)
+      ?? (cfgType?.discreteBandSize as number | undefined)) as number | undefined
+    const tickThick = (tickDef?.thickness
+      ?? (cfgType?.thickness as number | undefined)
+      ?? 1) as number
     if (orient === 'vertical') {
       if (xDef) {
         if (positionalScaleType(mark, xDef) === 'band') {
           update.x = { scale: 'x', field: aggFieldName(xDef) }
-          update.width = tickDef?.size != null ? { value: tickDef.size } : { signal: `max(0.25, bandwidth('x'))` }
+          update.width = tickBand != null ? { value: tickBand } : { signal: `max(0.25, bandwidth('x'))` }
         } else {
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
           update.width = { value: C.bandSize }
         }
       }
       if (yDef) update.yc = { scale: 'y', field: aggFieldName(yDef) }
-      update.height = { value: (tickDef?.thickness as number | undefined) ?? 1 }
+      update.height = { value: tickThick }
     } else {
       if (yDef) {
         if (positionalScaleType(mark, yDef) === 'band') {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
-          update.height = tickDef?.size != null ? { value: tickDef.size } : { signal: `max(0.25, bandwidth('y'))` }
+          update.height = tickBand != null ? { value: tickBand } : { signal: `max(0.25, bandwidth('y'))` }
         } else {
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
           update.height = { value: C.bandSize }
         }
       }
       if (xDef) update.xc = { scale: 'x', field: aggFieldName(xDef) }
-      update.width = { value: (tickDef?.thickness as number | undefined) ?? 1 }
+      update.width = { value: tickThick }
     }
   } else if (mark === 'rule') {
     update.stroke = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? cfgStroke ?? cfgColor ?? 'black' }
