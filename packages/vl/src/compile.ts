@@ -1597,13 +1597,22 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         range: (colorDef.scale?.range as unknown) ?? colorDef.scale?.scheme ?? 'category',
       })
     } else {
+      const cs = colorDef.scale ?? {}
       scales.push({
         name: 'color',
         type: 'linear',
         domain: { data: dataName, field: aggFieldName(colorDef) },
         // vega-lite's quantitative color range: 'heatmap' scheme for
-        // rect/geoshape marks, a ramp otherwise
-        range: mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp',
+        // rect/geoshape marks, a ramp otherwise; a domainMid makes it
+        // diverging; an explicit scheme replaces the range (probed)
+        ...(cs.scheme != null ? { scheme: cs.scheme } : { range: cs.domainMid != null ? 'diverging' : mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp' }),
+        // vega-lite sets the colorspace for continuous color scales (probed:
+        // interpolate hcl on ramp/scheme/diverging alike)
+        interpolate: 'hcl',
+        ...(cs.domainMin !== undefined ? { domainMin: cs.domainMin } : {}),
+        ...(cs.domainMax !== undefined ? { domainMax: cs.domainMax } : {}),
+        ...(cs.domainMid !== undefined ? { domainMid: cs.domainMid } : {}),
+        ...(cs.bins !== undefined ? { bins: cs.bins } : {}),
         zero: false,
       })
     }

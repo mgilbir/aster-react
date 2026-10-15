@@ -6,6 +6,7 @@
 import * as vs from './scale.js'
 import { interpolateRound } from './interp.js'
 import { quantizeInterpolator } from './scale.js'
+import { hcl, rgb } from './color.js'
 import type { CompiledScale, ScaleDomain, ScaleRange } from './types.js'
 
 export type Scale = vs.Scale
@@ -35,6 +36,39 @@ export interface ScaleContext {
 export const CONTINUOUS_TYPES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential', 'quantize'])
 const INCLUDE_ZERO_TYPES = new Set(['linear', 'pow', 'sqrt'])
 const TIME_SCALE_TYPES = new Set(['time', 'utc'])
+
+/** d3-interpolate's hcl interpolator: hue takes the shortest arc (the ±360
+ * correction), chroma/luminance/opacity interpolate linearly; the result
+ * formats as `rgb(r, g, b)` like every engine color. */
+function interpolateHclStrings(a: string, b: string): (t: number) => string {
+  const A = hcl(a)
+  const B = hcl(b)
+  const dh = B.h - A.h
+  const hStep = dh > 180 || dh < -180 ? dh - 360 * Math.round(dh / 360) : dh
+  return (t) => {
+    const c = hcl(A.h + t * hStep, A.c + t * (B.c - A.c), A.l + t * (B.l - A.l), A.opacity + t * (B.opacity - A.opacity))
+    return c.formatRgb()
+  }
+}
+
+/** vega-scale interpolateColors: d3-array piecewise over colorspace
+ * interpolators (type 'hcl' or the 'rgb' fallback). */
+function piecewiseColors(palette: string[], type?: string): (t: number) => string {
+  const n = palette.length - 1
+  if (n < 1) return () => palette[0]!
+  const segs = palette.slice(0, -1).map((c, i) => {
+    if (type === 'hcl') return interpolateHclStrings(c, palette[i + 1]!)
+    const A = rgb(c)
+    const B = rgb(palette[i + 1]!)
+    return (t: number) => rgb(A.r + t * (B.r - A.r), A.g + t * (B.g - A.g), A.b + t * (B.b - A.b), A.opacity + t * (B.opacity - A.opacity)).formatRgb()
+  })
+  return (t) => {
+    if (t <= 0) return palette[0]!
+    if (t >= 1) return palette[n]!
+    const i = Math.min(Math.floor(t * n), n - 1)
+    return segs[i]!(t * n - i)
+  }
+}
 
 export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   const type = c.type
@@ -112,6 +146,16 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
         (cs as any).interpolate(() => effectiveSchemeFn)
       }
       cs.interpolator = () => effectiveSchemeFn
+    } else if (Array.isArray(schemeFn)) {
+      // a discrete-color scheme on a continuous scale: vega-scale
+      // interpolateColors(piecewise(interpolate(type||'rgb'), palette)) —
+      // the palette is sampled piecewise in the scale's colorspace
+      // (vega-lite emits interpolate 'hcl' for these)
+      const fn = piecewiseColors(schemeFn as string[], c.interpolate)
+      s.range([0, 1])
+      const cs = s as ColorScale
+      if (typeof cs.interpolator === 'function') cs.interpolator(fn as unknown as SchemeFn)
+      cs.interpolator = () => fn as unknown as SchemeFn
     } else {
       s.range(range0 as never)
     }
