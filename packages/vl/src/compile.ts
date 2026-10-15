@@ -2262,6 +2262,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (mFontSize != null) update.fontSize = { value: mFontSize }
     const mFontWeight = isObject(spec.mark) ? (spec.mark.fontWeight as unknown) : undefined
     if (mFontWeight != null) update.fontWeight = { value: mFontWeight }
+    // pass-through text mark props (probed: size maps to fontSize, radius to
+    // the polar radius; the paint/offset props go straight through)
+    const markPaint = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : undefined
+    if (markPaint?.size != null) update.fontSize = { value: markPaint.size }
+    for (const p of ['strokeWidth', 'dx', 'dy', 'fillOpacity', 'opacity', 'angle', 'baseline', 'align'] as const) {
+      if (markPaint?.[p] !== undefined) update[p] = { value: markPaint[p] }
+    }
+    if (markPaint?.outerRadius != null) update.radius = { value: markPaint.outerRadius }
   } else if (mark === 'arc') {
     const thetaDefA = fields.find((f) => f.channel === 'theta' && f.field)
     const thetaF = thetaDefA!.field
