@@ -462,6 +462,8 @@ const AGGR: Record<string, (values: number[], rows: Row[]) => number> = {
   sum: (v) => v.reduce((a, b) => a + b, 0),
   product: (v) => v.reduce((a, b) => a * b, 1),
   mean: (v) => (v.length ? v.reduce((a, b) => a + b, 0) / v.length : NaN),
+  // vega's `average` is a pure alias of mean (AggregateOps: req ['mean'])
+  average: (v) => (v.length ? v.reduce((a, b) => a + b, 0) / v.length : NaN),
   min: (v) => Math.min(...v),
   max: (v) => Math.max(...v),
   median: (v) => {
@@ -509,7 +511,7 @@ const AGGR: Record<string, (values: number[], rows: Row[]) => number> = {
   },
 }
 
-function aggregateGroup(rows: Row[], groupby: string[], fields: (string | null)[], ops: string[], as: string[]): Row {
+function aggregateGroup(rows: Row[], groupby: string[], fields: (string | null)[], ops: string[], as: string[], aggregateParams?: (number | null)[]): Row {
   const row: Row = {}
   for (const g of groupby) row[g] = rows[0]?.[g]
   ops.forEach((op, i) => {
@@ -517,6 +519,24 @@ function aggregateGroup(rows: Row[], groupby: string[], fields: (string | null)[
     // vega's `values` op ignores the field and emits the group's tuples
     if (op === 'values') {
       row[as[i] ?? 'values'] = rows
+      return
+    }
+    // the exponential measures fold over the rows in order with the ratio
+    // from `aggregate_params` (vega Transform init(m, r); VL emits none, so
+    // the ratio is null → 0 and the fold collapses to the last valid value)
+    if (op === 'exponential' || op === 'exponentialb') {
+      const r = Number(aggregateParams?.[i] ?? 0) || 0
+      let exp = 0
+      let valid = 0
+      for (const r2 of rows) {
+        const v = field == null ? undefined : r2[field]
+        if (v == null || !Number.isFinite(Number(v))) continue
+        valid++
+        exp = r * exp + Number(v)
+      }
+      row[as[i] ?? `${op}_${field}`] = op === 'exponential'
+        ? exp * (1 - r) / (1 - Math.pow(r, valid))
+        : exp * (1 - r)
       return
     }
     const values = field == null ? [] : fieldValues(rows, field)
@@ -544,7 +564,7 @@ function aggregateRows(rows: Row[], t: Extract<CompiledTransform, { type: 'aggre
   const fields = t.fields ?? []
   const ops = t.ops ?? []
   const as = t.as ?? []
-  return groupRows(rows, groupby).map((g) => aggregateGroup(g, groupby, fields, ops, as))
+  return groupRows(rows, groupby).map((g) => aggregateGroup(g, groupby, fields, ops, as, t.aggregate_params))
 }
 
 /**

@@ -160,7 +160,7 @@ export type CompiledTransform =
   | { type: 'formula'; expr: string; as: string }
   | { type: 'filter'; expr: string }
   | { type: 'bin'; field: string; as: [string, string]; extent?: number[] | { signal: string }; step?: number; maxbins?: number; nice?: boolean; anchor?: number; signal?: string }
-  | { type: 'aggregate'; groupby?: string[]; fields?: (string | null)[]; ops?: string[]; as?: string[] }
+  | { type: 'aggregate'; groupby?: string[]; fields?: (string | null)[]; ops?: string[]; as?: string[]; aggregate_params?: (number | null)[] }
   | { type: 'window'; sort?: SortSpec; groupby?: string[]; fields?: (string | null)[]; ops?: string[]; as?: string[]; frame?: [number | null, number | null]; ignorePeers?: boolean }
   | { type: 'stack'; groupby?: string[]; field: string; sort?: SortSpec; as: [string, string]; offset?: 'zero' | 'normalize' | 'center'; }
   | { type: 'fold'; fields: string[]; as: [string, string] }

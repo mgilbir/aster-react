@@ -1252,7 +1252,11 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
         } else {
           fieldsOut.push({ op: f.aggregate, field: f.field, as: aggregateAs(f) })
         }
-      } else if (!f.bin && (f.channel === dimensionChannel || f.channel === 'color' || f.channel === 'detail')) {
+      } else if (!f.bin && f.field) {
+        // vega-lite groups by every non-aggregated field: the dimension,
+        // color/detail, and any other channel's raw field (an aggregate on
+        // one channel groups by the other channels — probed: x-aggregate
+        // over a quantitative y groups by y)
         groupby.push(aggFieldName(f))
       }
     }
@@ -1921,7 +1925,11 @@ interface BuiltMarks extends Array<Record<string, unknown>> {
   overlayData?: Record<string, unknown>
   overlayFilled?: boolean
 }
-function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: string, dataName: string, markSize?: number): BuiltMarks {
+function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: string, dataName: string, markSize?: number): BuiltMarks {  // vega-lite's DEFAULT_REDUCED_OPACITY (0.7) applies to point/tick/circle/
+  // square only when the encoding is NOT aggregate (init.ts opacity())
+  const isAggregateEnc = fields.some((f) => f.aggregate)
+  const pointOpacityDefault = isAggregateEnc ? undefined : C.pointOpacity
+
   const markColor = isObject(spec.mark) ? (spec.mark.color as string | undefined) : undefined
   const markFill = isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined
   const markOpacity = isObject(spec.mark) ? (spec.mark.opacity as number | undefined) : undefined
@@ -2093,13 +2101,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       const st = markStroke ?? cfgStroke
       if (st != null) update.stroke = { value: st }
       if (markStrokeWidth) update.strokeWidth = { value: markStrokeWidth }
-      update.opacity = { value: markOpacity ?? C.pointOpacity }
+      if (markOpacity != null || pointOpacityDefault != null) update.opacity = { value: markOpacity ?? pointOpacityDefault }
       update.shape = { value: mark }
       if (markSize) update.size = { value: markSize }
     } else {
       update.opacity = opacityDef
         ? { scale: 'opacity', field: aggFieldName(opacityDef) }
-        : { value: markOpacity ?? C.pointOpacity }
+        : (markOpacity != null || pointOpacityDefault != null ? { value: markOpacity ?? pointOpacityDefault } : undefined)
+      if (update.opacity === undefined) delete update.opacity
       // an unfilled point keeps its stroke-mode defaults; a config fill
       // (point.fill / mark.fill) still fills it (probed)
       const ptFill = (isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined) ?? cfgFill
@@ -2168,7 +2177,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
     update.defined = definedSignal(xDef, yDef)
   } else if (mark === 'tick') {
-    update.opacity = { value: markOpacity ?? C.pointOpacity }
+    if (markOpacity != null || pointOpacityDefault != null) update.opacity = { value: markOpacity ?? pointOpacityDefault }
     update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? markFill ?? cfgFill ?? cfgColor ?? C.blue }
     const tickStroke = (isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined) ?? cfgStroke
     if (tickStroke != null) update.stroke = { value: tickStroke }
