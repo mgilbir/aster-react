@@ -352,6 +352,9 @@ function compileFaceted(spec: VLSpec): VLSpec {
   const encFacet = isObject(enc.facet) ? (enc.facet as Record<string, unknown>) : undefined
   const rowDef = (facetDef?.row ?? encFacet?.row ?? enc.row) as Record<string, unknown> | undefined
   const colDef = (facetDef?.column ?? encFacet?.column ?? enc.column) as Record<string, unknown> | undefined
+  // header label formatting reads the channel def (type + format)
+  const normalizeHeaderDef = (def: Record<string, unknown> | undefined): FieldDef | undefined =>
+    def ? parseChannel('column', def) ?? undefined : undefined
   // the inner unit: top-level facet form uses spec.spec; the encoding form
   // strips the facet channel from the encoding
   let innerSpec: VLSpec
@@ -427,13 +430,26 @@ function compileFaceted(spec: VLSpec): VLSpec {
 
   const facetGroupby = [rowField, colField].filter(Boolean) as string[]
   const datumRef = (f: string): string => `datum[${JSON.stringify(f)}]`
-  const parentTitle = (f: string): unknown => ({
-    text: { signal: `isValid(parent[${JSON.stringify(f)}]) ? parent[${JSON.stringify(f)}] : ""+parent[${JSON.stringify(f)}]` },
-    orient: 'left',
-    style: 'guide-label',
-    frame: 'group',
-    offset: 10,
-  })
+  // header label signal: a header format formats the parent value (number
+  // format for ordinal/nominal, timeFormat for temporal — probed)
+  const parentTitle = (f: string, def?: { type?: string; raw?: Record<string, unknown> }): unknown => {
+    const fmt = def?.raw ? (def.raw.format as string | undefined) : undefined
+    let text: unknown
+    if (fmt) {
+      text = { signal: def?.type === 'temporal' ? `timeFormat(parent[${JSON.stringify(f)}], ${JSON.stringify(fmt)})` : `format(parent[${JSON.stringify(f)}], ${JSON.stringify(fmt)})` }
+    } else if (def?.type === 'temporal') {
+      text = { signal: `timeFormat(parent[${JSON.stringify(f)}], "%b %d, %Y")` }
+    } else {
+      text = { signal: `isValid(parent[${JSON.stringify(f)}]) ? parent[${JSON.stringify(f)}] : ""+parent[${JSON.stringify(f)}]` }
+    }
+    return {
+      text,
+      orient: 'left',
+      style: 'guide-label',
+      frame: 'group',
+      offset: 10,
+    }
+  }
 
   const marks: Record<string, unknown>[] = []
   if (rowField) {
@@ -450,7 +466,7 @@ function compileFaceted(spec: VLSpec): VLSpec {
     ...(rowField ? {
       from: { data: 'row_domain' },
       sort: { field: datumRef(rowField), order: 'ascending' },
-      title: parentTitle(rowField),
+      title: parentTitle(rowField, normalizeHeaderDef(rowDef)),
     } : {}),
     encode: { update: { height: { signal: 'child_height' } } },
     ...(yLabelAxes.length ? { axes: yLabelAxes } : {}),
@@ -462,7 +478,7 @@ function compileFaceted(spec: VLSpec): VLSpec {
       role: 'column-header',
       from: { data: 'column_domain' },
       sort: { field: datumRef(colField), order: 'ascending' },
-      title: (() => { const t = parentTitle(colField) as Record<string, unknown>; delete t.orient; return t })(),
+      title: (() => { const t = parentTitle(colField, normalizeHeaderDef(colDef)) as Record<string, unknown>; delete t.orient; return t })(),
       encode: { update: { width: { signal: 'child_width' } } },
     })
   }
@@ -495,7 +511,7 @@ function compileFaceted(spec: VLSpec): VLSpec {
 
   const out: Record<string, unknown> = {}
   if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
-  out.autosize = spec.autosize ?? 'none'
+  out.autosize = spec.autosize
   out.background = spec.background ?? 'white'
   out.padding = spec.padding ?? 5
   out.data = data
@@ -648,7 +664,7 @@ function compileConcat(spec: VLSpec): VLSpec {
 
   const out: Record<string, unknown> = {}
   if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
-  out.autosize = spec.autosize ?? 'none'
+  out.autosize = spec.autosize
   out.background = spec.background ?? 'white'
   out.padding = spec.padding ?? 5
   out.data = data
@@ -826,7 +842,7 @@ function compileBoxplot(spec: VLSpec): VLSpec {
 
   const out: Record<string, unknown> = {}
   if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
-  out.autosize = spec.autosize ?? 'none'
+  out.autosize = spec.autosize
   out.background = spec.background ?? 'white'
   out.padding = spec.padding ?? 5
   out.width = spec.width ?? 200
