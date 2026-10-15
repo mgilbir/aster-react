@@ -437,8 +437,8 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   The **vega-lite sweep** now runs (the lite cases compile both VL
   compilers to Vega before rendering): baseline 10937 ok / 15581 differ /
   935 engine / 43 node — that surface is @aster/vl's drift, tracked
-  separately from this floor. Seven rounds closed the bulk of it:
-  25149 ok / 2181 differ / 122 engine / 36 node of 27513 (91%).
+  separately from this floor. Thirteen rounds closed the bulk of it:
+  25284 ok / 2097 differ / 71 engine / 36 node of 27513 (92%).
   Closed clusters: the config layer (config forwarding into the Vega
   spec — guide blocks, mark -> config.mark, per-type blocks ->
   style[type], view -> cell with stroke/fill on the frame, title ->
@@ -453,13 +453,19 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   arc/path/symbol bounds, the descending-sweep arc bound
   normalization, grid/axis paint (gridColor through the compiled axis),
   tick thickness/size semantics, and the variance/stdev/stderr/values
-  aggregate ops. Remaining residue: discrete-scheme piecewise sampling
-  (vega's scheme accessor emits a longer sampled palette than the raw
-  scheme array), guide-legend layout tails (columns/clipHeight/
-  titleOrient), facet-aggregate domains (the facet field's aggregate
-  must join the child pipeline and name the facet groupby), and the 17
-  bogus-op (exponentialb) engine refusals where vega logs and empties
-  the dataset.
+  aggregate ops. Also closed: legend title-row metrics (titlePadding/titleFontSize),
+  text-mark pass-through props, aggregate groupby over every
+  non-aggregated field, the DEFAULT_REDUCED_OPACITY non-aggregate rule,
+  the facet view's grid sizing and header labels, tick band/thickness
+  config fallbacks, bar band-align/size semantics, and the arc radius
+  resolution chain. Remaining residue: discrete-scheme piecewise
+  sampling (vega's scheme accessor emits a longer sampled palette than
+  the raw scheme array), the ci0/ci1 bootstrap (Math.random inside
+  vega — the oracle is nondeterministic there by design), guide-legend
+  layout tails (columns/clipHeight/titleOrient), the row-facet title's
+  rotated-bound epsilon (the R8.4 metric class), config-point's
+  cross-block geometry props, and per-property one-offs below 5 cases
+  per family.
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
 
