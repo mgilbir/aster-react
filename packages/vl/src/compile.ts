@@ -431,9 +431,15 @@ function compileFaceted(spec: VLSpec): VLSpec {
   const facetGroupby = [rowField, colField].filter(Boolean) as string[]
   const datumRef = (f: string): string => `datum[${JSON.stringify(f)}]`
   // header label signal: a header format formats the parent value (number
-  // format for ordinal/nominal, timeFormat for temporal — probed)
+  // format for ordinal/nominal, timeFormat for temporal — probed). The
+  // header def's label* props map onto the title def (labelColor→color,
+  // labelFontSize→fontSize, labelPadding→offset, labelAngle→angle with
+  // derived baseline/align).
   const parentTitle = (f: string, def?: { type?: string; raw?: Record<string, unknown> }): unknown => {
-    const fmt = def?.raw ? (def.raw.format as string | undefined) : undefined
+    // config.header seeds the defaults; the channel's own header def wins
+    const cfgHeader = (isObject(spec.config) ? (spec.config as Record<string, unknown>).header : undefined) as Record<string, unknown> | undefined
+    const hdr = { ...(cfgHeader ?? {}), ...(def?.raw?.header as Record<string, unknown> | undefined ?? {}) }
+    const fmt = hdr?.format as string | undefined
     let text: unknown
     if (fmt) {
       text = { signal: def?.type === 'temporal' ? `timeFormat(parent[${JSON.stringify(f)}], ${JSON.stringify(fmt)})` : `format(parent[${JSON.stringify(f)}], ${JSON.stringify(fmt)})` }
@@ -442,13 +448,26 @@ function compileFaceted(spec: VLSpec): VLSpec {
     } else {
       text = { signal: `isValid(parent[${JSON.stringify(f)}]) ? parent[${JSON.stringify(f)}] : ""+parent[${JSON.stringify(f)}]` }
     }
-    return {
+    const t: Record<string, unknown> = {
       text,
       orient: 'left',
       style: 'guide-label',
       frame: 'group',
-      offset: 10,
+      offset: (hdr?.labelPadding as number | undefined) ?? 10,
     }
+    if (hdr?.labelColor != null) t.color = hdr.labelColor
+    if (hdr?.labelFontSize != null) t.fontSize = hdr.labelFontSize
+    if (hdr?.labelFont != null) t.font = hdr.labelFont
+    if (hdr?.labelFontWeight != null) t.fontWeight = hdr.labelFontWeight
+    if (hdr?.labelLimit != null) t.limit = hdr.labelLimit
+    if (hdr?.labelAngle != null) {
+      t.angle = hdr.labelAngle
+      // vega derives baseline/align from the angle (guide-label default
+      // middle/right for rotated labels — probed: angle 30 → bottom/right)
+      t.baseline = 'bottom'
+      t.align = 'right'
+    }
+    return t
   }
 
   const marks: Record<string, unknown>[] = []
@@ -456,7 +475,19 @@ function compileFaceted(spec: VLSpec): VLSpec {
     marks.push({ name: 'row-title', type: 'group', role: 'row-title', title: { text: rowField, orient: 'left', style: 'guide-title', offset: 10 } })
   }
   if (colField) {
-    marks.push({ name: 'column-title', type: 'group', role: 'column-title', title: { text: colField, style: 'guide-title', offset: 10 } })
+    const cfgHeader = (isObject(spec.config) ? (spec.config as Record<string, unknown>).header : undefined) as Record<string, unknown> | undefined
+    const hdrC = { ...(cfgHeader ?? {}), ...(colDef?.header as Record<string, unknown> | undefined ?? {}) }
+    const ct: Record<string, unknown> = { text: colField, style: 'guide-title', offset: (hdrC.titlePadding as number | undefined) ?? 10 }
+    if (hdrC.titleColor != null) ct.color = hdrC.titleColor
+    if (hdrC.titleFontSize != null) ct.fontSize = hdrC.titleFontSize
+    if (hdrC.titleFont != null) ct.font = hdrC.titleFont
+    if (hdrC.titleFontWeight != null) ct.fontWeight = hdrC.titleFontWeight
+    if (hdrC.titleLimit != null) ct.limit = hdrC.titleLimit
+    if (hdrC.titleAngle != null) { ct.angle = hdrC.titleAngle; ct.baseline = 'bottom'; ct.align = 'right' }
+    if (hdrC.titleOrient != null) ct.orient = hdrC.titleOrient
+    if (hdrC.titleBaseline != null) ct.baseline = hdrC.titleBaseline
+    if (hdrC.titleAlign != null) ct.align = hdrC.titleAlign
+    marks.push({ name: 'column-title', type: 'group', role: 'column-title', title: ct })
   }
   // row header: carries the y label axis (+ per-row titles when row-faceted)
   marks.push({

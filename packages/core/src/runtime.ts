@@ -618,6 +618,12 @@ function measureGuideGroup(g: SceneGroup): Bounds {
   if (g.role === 'axis') return boundAxisGroup(g)
   const lb = (g as unknown as Record<string, unknown>)._layoutBounds as Bounds | undefined
   if (lb) return lb
+  // Facet row-headers/footers carry axes whose items bake the crisp +0.5
+  // axis delta; vega's gridLayout reads the pre-delta extents, so the view
+  // padding sees the bound shifted half a pixel up/left.
+  if (g.role === 'row-header' || g.role === 'column-footer') {
+    return boundLeaf(new Bounds(), g as unknown as SceneItem).translate(-0.5, -0.5)
+  }
   if (g.role === 'legend') {
     // legendLayout sets item.bounds = [x, y, x+width, y+height] (the outer
     // box incl. padding), anchored at the laid-out group position. A legend
@@ -817,8 +823,26 @@ function buildContent(
   const hasFacetMarks = (ctx as any).chart.marks?.some((m: any) => m.from?.facet?.groupby?.length > 0) ?? false
   const hasChildSignals = ctx.signalParams['child_width'] !== undefined && ctx.signalParams['child_height'] !== undefined
   const isFacetSpec = hasFacetMarks && hasChildSignals
-  if (isFacetSpec && isTrellis(ctx)) {
-    applyTrellisLayout(items, ctx)
+  // vega sizes a faceted view from the laid-out grid: the root group's
+  // width/height come from the trellis gridLayout (columns × child_width +
+  // paddings), not from any spec width — the spec's are signal-based. The
+  // guides (headers/footers/titles) live OUTSIDE the group bounds and grow
+  // the padding by their overflow.
+  let facetWidth = width
+  let facetHeight = height
+  if (isFacetSpec) {
+    if (isTrellis(ctx)) applyTrellisLayout(items, ctx)
+    const childW = ctx.signalParams['child_width'] as number
+    const childH = ctx.signalParams['child_height'] as number
+    facetWidth = 0
+    facetHeight = 0
+    for (const it of items) {
+      if (it.role !== 'scope') continue
+      const x2 = (it.x ?? 0) + childW
+      const y2 = (it.y ?? 0) + childH
+      if (x2 > facetWidth) facetWidth = x2
+      if (y2 > facetHeight) facetHeight = y2
+    }
   }
 
   // 2d) viewSizeLayout padding (overflow) after the trellis layout.
@@ -828,8 +852,8 @@ function buildContent(
   // and no overflow growth (the dataflow logs the error and continues).
   const padding = (ctx as unknown as { __layoutError?: boolean }).__layoutError || ctx.rawGuides
     ? ctx.chart.padding
-    : computeGuidePadding(items, width, height, ctx.chart.padding)
-  return { items, padding, ctx, width, height, isFacetSpec }
+    : computeGuidePadding(items, facetWidth, facetHeight, ctx.chart.padding)
+  return { items, padding, ctx, width: facetWidth, height: facetHeight, isFacetSpec }
 }
 
 export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
@@ -950,8 +974,10 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   const scene: SceneRoot = {
     width: sceneWidth,
     height: sceneHeight,
-    plotWidth: carryPlot ? width : undefined,
-    plotHeight: carryPlot ? height : undefined,
+    // a faceted root frame has no explicit extent in vega's scenegraph — its
+    // background path is degenerate (M0,0h0v0h0Z), not the plot rect
+    plotWidth: isFacetSpec ? 0 : carryPlot ? width : undefined,
+    plotHeight: isFacetSpec ? 0 : carryPlot ? height : undefined,
     background: ctx.chart.background,
     frameStroke: ctx.chart.frameStroke,
     padding: ctx.chart.autosize === 'none' ? ctx.chart.padding : padding,
@@ -2777,6 +2803,22 @@ function buildFacetCellGroup(
   return cells
 }
 
+/** The label a facet header/title renders: the group's title signal
+ * evaluated with the facet row as `parent` (vega's parent scope); a plain
+ * string title is used verbatim, otherwise the facet value. */
+function facetHeaderLabel(mark: CompiledMark, row: Row, fkey: string, ctx: EvalContext): string {
+  const titleDef = (mark as unknown as { title?: { text?: unknown } }).title
+  const t = titleDef?.text
+  if (typeof t === 'string') return t
+  if (t && typeof t === 'object' && 'signal' in (t as Record<string, unknown>)) {
+    try {
+      const sig = String((t as Record<string, unknown>).signal).replace(/\bparent\b/g, 'datum')
+      return String(ctx.runtime.expr(sig)(row, ctx.signalParams))
+    } catch { /* fall through to the raw value */ }
+  }
+  return String((row as Record<string, unknown>)[fkey])
+}
+
 function buildRowHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup[] {
   const rows = ctx.datasets.get(mark.from!.data!) ?? []
   if (!rows.length) return []
@@ -2824,7 +2866,7 @@ function buildRowHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup[]
       }
     }
 
-    const labelVal = firstGroupby ? String((row as Record<string, unknown>)[firstGroupby]) : String(row)
+    const labelVal = facetHeaderLabel(mark, row, firstGroupby ?? '', ctx)
 
     result.push({
       marktype: 'group', name: mark.name, role: 'row-header',
@@ -3031,17 +3073,21 @@ function buildColumnHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
   }
 
   const result: SceneGroup[] = []
+  const hdrTitle = (mark as unknown as { title?: Record<string, unknown> }).title ?? {}
   sortedRows.forEach((row, i) => {
-    const labelVal = String((row as Record<string, unknown>)[fkey])
+    // the header label evaluates the group's title signal with the facet row
+    // as `parent` (vega evaluates the title against the facet datum); a
+    // format() on a non-number yields NaN there, mirroring upstream
+    const labelVal = facetHeaderLabel(mark, row, fkey, ctx)
     const cellX = i * step
     result.push({
       marktype: 'group', name: mark.name, role: 'column-header',
       items: [
-        { text: labelVal, x: cellWidth / 2, y: -12, align: 'center' as const, fill: '#000' },
+        { text: labelVal, x: cellWidth / 2, y: -12, align: (hdrTitle.align as 'center') ?? 'center', fill: (hdrTitle.color as string) ?? '#000', fontSize: (hdrTitle.fontSize as number) ?? 10, ...(hdrTitle.font != null ? { font: hdrTitle.font as string } : {}), ...(hdrTitle.fontWeight != null ? { fontWeight: hdrTitle.fontWeight as SceneItem['fontWeight'] } : {}), ...(hdrTitle.limit != null ? { limit: hdrTitle.limit as number } : {}) },
         // column-header background: zero-height, full-width path (M0,0hWv0h-WZ).
         { path: `M0,0h${cellWidth}v0h-${cellWidth}Z`, x: 0, y: 0 } as SceneItem,
       ],
-      x: cellX, y: -8, width: cellWidth, height: 0,
+      x: cellX, y: -1, width: cellWidth, height: 0,
     })
   })
   return result
@@ -3161,13 +3207,15 @@ function buildColumnTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup
   } else if (tSpec && typeof tSpec === 'object' && 'value' in tSpec) {
     titleText = String((tSpec as { value: unknown }).value)
   }
+  const tDef = (tm.title ?? {}) as Record<string, unknown>
 
   return {
     marktype: 'group', name: mark.name, role: 'column-title',
     items: [
-      { text: titleText, x: 0, y: -12, align: 'center' as const, fill: '#000' },
+      // the guide-title style: 11px bold (vega config style['guide-title'])
+      { text: titleText, x: 0, y: -12, align: (tDef.align as 'center') ?? 'center', fill: (tDef.color as string) ?? '#000', fontSize: (tDef.fontSize as number) ?? 11, fontWeight: (tDef.fontWeight as 'bold') ?? 'bold', ...(tDef.font != null ? { font: tDef.font as string } : {}), ...(tDef.limit != null ? { limit: tDef.limit as number } : {}) },
     ],
-    x: centerX, y: -38,
+    x: centerX, y: -31,
   }
 }
 
@@ -3530,10 +3578,9 @@ function findCellMark(ctx: EvalContext): CompiledMark | undefined {
 }
 
 function buildAxisInline(spec: Record<string, unknown>, ctx: EvalContext): SceneGroup | null {
-  const def: Record<string, unknown> = { scale: spec.scale, orient: (spec as any).orient }
-  for (const k of ['grid','gridScale','domain','labels','ticks','tickCount','tickSize','title','titlePadding','labelAlign','labelBaseline','labelFlush','labelOverlap','labelPadding','tickBand','zindex','encode']) {
-    if ((spec as Record<string, unknown>)[k] !== undefined) def[k] = (spec as Record<string, unknown>)[k]
-  }
+  // forward the whole axis spec (labelAngle, fonts, colors, ...): a whitelist
+  // here silently dropped the facet axes' label rotation and paint props
+  const def: Record<string, unknown> = { ...spec }
   return buildAxis(def as unknown as CompiledAxis, ctx)
 }
 
