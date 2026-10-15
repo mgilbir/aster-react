@@ -46,6 +46,7 @@ export function compileChart(spec: VgSpec): CompiledChart {
   const width = typeof spec.width === 'number' ? spec.width : (typeof spec.width === 'object' ? spec.width as SizeSpec : DEFAULT_SIZE)
   const height = typeof spec.height === 'number' ? spec.height : (typeof spec.height === 'object' ? spec.height as SizeSpec : DEFAULT_SIZE)
   const frameStroke = resolveFrameStroke(spec)
+  const frameFill = resolveFrameFill(spec)
   const autosize = resolveAutosize(spec.autosize)
   const configRange = (cfg as { range?: Record<string, unknown> }).range
   const autosizeContains = spec.autosize && typeof spec.autosize === 'object'
@@ -101,6 +102,7 @@ export function compileChart(spec: VgSpec): CompiledChart {
     padding,
     background,
     frameStroke,
+    frameFill,
     data,
     scales,
     axes,
@@ -172,14 +174,24 @@ function resolveAutosize(value: unknown): string | undefined {
   return undefined
 }
 
+/** The cell background fill (config.view.fill → config.style.cell.fill). */
+function resolveFrameFill(spec: VgSpec): string | undefined {
+  const config = spec.config as { view?: { fill?: unknown }; style?: { cell?: { fill?: unknown } } } | undefined
+  const fill = typeof config?.style?.cell?.fill === 'string' ? config.style.cell.fill
+    : typeof config?.view?.fill === 'string' ? config.view.fill : undefined
+  return fill === 'transparent' ? undefined : fill
+}
+
 function resolveFrameStroke(spec: VgSpec): string | undefined {
   const style = spec.style
   const hasCell = Array.isArray(style) ? style.includes('cell') : style === 'cell'
-  if (hasCell) return '#ddd'
   const config = spec.config as { view?: { stroke?: unknown }; style?: { cell?: { stroke?: unknown } } } | undefined
+  // the cell style's stroke (config.view.stroke → config.style.cell.stroke)
+  // overrides vega's default #ddd frame
+  const cellStroke = typeof config?.style?.cell?.stroke === 'string' ? config.style.cell.stroke : undefined
+  if (hasCell) return cellStroke === 'transparent' ? undefined : cellStroke ?? '#ddd'
   const viewStroke = config?.view?.stroke
-  const cellStroke = config?.style?.cell?.stroke
-  const stroke = typeof viewStroke === 'string' ? viewStroke : typeof cellStroke === 'string' ? cellStroke : undefined
+  const stroke = typeof viewStroke === 'string' ? viewStroke : cellStroke
   // Vega serializes a 'transparent' frame stroke as no stroke at all.
   return stroke === 'transparent' ? undefined : stroke
 }
@@ -298,7 +310,7 @@ function compileAxis(a: Record<string, unknown>): CompiledAxis {
     scale: a.scale as string,
     orient: a.orient as CompiledAxis['orient'],
   }
-  for (const key of ['grid', 'gridScale', 'domain', 'labels', 'ticks', 'tickCount', 'tickMinStep', 'tickSize', 'title', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleAngle', 'titleAlign', 'titleBaseline', 'titleX', 'titleY', 'labelAlign', 'labelBaseline', 'labelFlush', 'labelFlushOffset', 'labelOverlap', 'labelPadding', 'labelAngle', 'labelOffset', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelLimit', 'bandPosition', 'tickColor', 'tickWidth', 'tickDash', 'tickOffset', 'tickRound', 'tickExtra', 'domainColor', 'domainWidth', 'domainDash', 'domainOpacity', 'maxExtent', 'minExtent', 'titleAnchor', 'titleLimit', 'translate', 'position', 'offset', 'tickBand', 'format', 'formatType', 'zindex', 'values'] as const) {
+  for (const key of ['grid', 'gridColor', 'gridWidth', 'gridDash', 'gridOpacity', 'gridCap', 'gridScale', 'domain', 'labels', 'ticks', 'tickCount', 'tickMinStep', 'tickSize', 'title', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleAngle', 'titleAlign', 'titleBaseline', 'titleX', 'titleY', 'labelAlign', 'labelBaseline', 'labelFlush', 'labelFlushOffset', 'labelOverlap', 'labelPadding', 'labelAngle', 'labelOffset', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelFont', 'labelFontStyle', 'labelFontWeight', 'labelLimit', 'labelExpr', 'bandPosition', 'tickColor', 'tickWidth', 'tickDash', 'tickOffset', 'tickRound', 'tickExtra', 'domainColor', 'domainWidth', 'domainDash', 'domainOpacity', 'domainCap', 'maxExtent', 'minExtent', 'titleAnchor', 'titleLimit', 'titleFont', 'titleLineHeight', 'translate', 'position', 'offset', 'tickBand', 'format', 'formatType', 'zindex', 'values', 'aria', 'description'] as const) {
     if (a[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = a[key]
   }
   if (a.encode !== undefined) out.encode = a.encode as CompiledAxis['encode']

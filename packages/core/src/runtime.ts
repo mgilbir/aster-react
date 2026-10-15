@@ -980,6 +980,7 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
     plotHeight: isFacetSpec ? 0 : carryPlot ? height : undefined,
     background: ctx.chart.background,
     frameStroke: ctx.chart.frameStroke,
+    frameFill: (ctx.chart as unknown as { frameFill?: string }).frameFill,
     padding: ctx.chart.autosize === 'none' ? ctx.chart.padding : padding,
     items,
   }
@@ -4973,7 +4974,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       } else {
         item.x = v + 0.5; item.x2 = v + 0.5; item.y = 0.5; item.y2 = ctx.height + 0.5
       }
-      item.stroke = gridStyle.stroke ?? '#ddd'
+      item.stroke = gridStyle.stroke ?? (axis as { gridColor?: string }).gridColor ?? '#ddd'
       item.strokeWidth = gridStyle.strokeWidth ?? 1
       if (gridStyle.strokeDash != null) item.strokeDash = gridStyle.strokeDash
       if (gridStyle.opacity != null) item.opacity = gridStyle.opacity

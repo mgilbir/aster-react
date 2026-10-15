@@ -413,7 +413,7 @@ export function sceneToDomDesc(scene: SceneRoot): DomDesc {
       ['aria-roledescription', 'group mark container'],
     ], [
       g('g', [['transform', 'translate(0,0)']], [
-        { tag: 'path', attrs: [['class', 'background'], ['aria-hidden', 'true'], ['d', frameD], ...(scene.frameStroke ? [['stroke', String(scene.frameStroke)]] as Array<[string, string]> : [])] },
+        { tag: 'path', attrs: [['class', 'background'], ['aria-hidden', 'true'], ['d', frameD], ...(scene.frameFill ? [['fill', String(scene.frameFill)]] as Array<[string, string]> : []), ...(scene.frameStroke ? [['stroke', String(scene.frameStroke)]] as Array<[string, string]> : [])] },
         g('g', [], (scene.items ?? []).map((n) => groupDesc(n, plotW, plotH, clips)).filter((x): x is DomDesc => x != null)),
         { tag: 'path', attrs: [['class', 'foreground'], ['aria-hidden', 'true'], ['d', ''], ['display', 'none']] },
       ]),

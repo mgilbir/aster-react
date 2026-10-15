@@ -77,7 +77,7 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   const plotW = scene.plotWidth ?? scene.width - pad.left - pad.right
   const plotH = scene.plotHeight ?? scene.height - pad.top - pad.bottom
   const frameD = scene.frameStroke ? `M0.5,0.5h${plotW}v${plotH}h-${plotW}Z` : `M0,0h${plotW}v${plotH}h-${plotW}Z`
-  out += `<path class="background" aria-hidden="true" d="${frameD}"${scene.frameStroke ? ` stroke="${scene.frameStroke}"` : ''}/>`
+  out += `<path class="background" aria-hidden="true" d="${frameD}"${scene.frameFill ? ` fill="${scene.frameFill}"` : ''}${scene.frameStroke ? ` stroke="${scene.frameStroke}"` : ''}/>`
   out += '<g>'
   // Collect clip refs during rendering
   const clipN = { current: 0, paths: [] as (string | null)[], rects: [] as ({ w: number; h: number } | null)[] }

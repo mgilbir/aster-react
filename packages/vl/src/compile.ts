@@ -1704,6 +1704,13 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
         const stepExpr = timeUnitMinStepSignal(def.timeUnit)
         if (stepExpr) gridAxis.tickMinStep = { signal: stepExpr }
       }
+      // the user's grid-affecting props land on the grid axis too (upstream
+      // merges grid+labels into one axis; ours splits them)
+      if (userAxis) {
+        for (const gk of ['gridColor', 'gridWidth', 'gridDash', 'gridOpacity', 'gridCap', 'tickOffset', 'translate', 'tickBand', 'tickExtra'] as const) {
+          if ((userAxis as Record<string, unknown>)[gk] !== undefined) gridAxis[gk] = (userAxis as Record<string, unknown>)[gk]
+        }
+      }
       axes.push(gridAxis)
     }
 
@@ -2088,9 +2095,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       // (point.fill / mark.fill) still fills it (probed)
       const ptFill = (isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined) ?? cfgFill
       update.fill = ptFill != null ? { value: ptFill } : { value: 'transparent' }
+      const ptStroke = (isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined) ?? markColor ?? cfgStroke ?? cfgColor ?? C.blue
       update.stroke = colorDef
         ? { scale: 'color', field: aggFieldName(colorDef) }
-        : { value: markColor ?? cfgStroke ?? cfgColor ?? C.blue }
+        : { value: ptStroke }
     }
     update.ariaRoleDescription = { value: mark }
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
@@ -2153,31 +2161,35 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   } else if (mark === 'tick') {
     update.opacity = { value: markOpacity ?? C.pointOpacity }
     update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? markFill ?? cfgFill ?? cfgColor ?? C.blue }
+    const tickStroke = (isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined) ?? cfgStroke
+    if (tickStroke != null) update.stroke = { value: tickStroke }
+    const tickDef = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : undefined
+    if (tickDef?.cornerRadius !== undefined) update.cornerRadius = { value: tickDef.cornerRadius }
     update.ariaRoleDescription = { value: 'tick' }
     if (orient === 'vertical') {
       if (xDef) {
         if (positionalScaleType(mark, xDef) === 'band') {
           update.x = { scale: 'x', field: aggFieldName(xDef) }
-          update.width = { signal: `max(0.25, bandwidth('x'))` }
+          update.width = tickDef?.size != null ? { value: tickDef.size } : { signal: `max(0.25, bandwidth('x'))` }
         } else {
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
           update.width = { value: C.bandSize }
         }
       }
       if (yDef) update.yc = { scale: 'y', field: aggFieldName(yDef) }
-      update.height = { value: 1 }
+      update.height = { value: (tickDef?.thickness as number | undefined) ?? 1 }
     } else {
       if (yDef) {
         if (positionalScaleType(mark, yDef) === 'band') {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
-          update.height = { signal: `max(0.25, bandwidth('y'))` }
+          update.height = tickDef?.size != null ? { value: tickDef.size } : { signal: `max(0.25, bandwidth('y'))` }
         } else {
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
           update.height = { value: C.bandSize }
         }
       }
       if (xDef) update.xc = { scale: 'x', field: aggFieldName(xDef) }
-      update.width = { value: 1 }
+      update.width = { value: (tickDef?.thickness as number | undefined) ?? 1 }
     }
   } else if (mark === 'rule') {
     update.stroke = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? cfgStroke ?? cfgColor ?? 'black' }
