@@ -2010,7 +2010,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           // a plain temporal dimension centers the bar with the continuous
           // band size (vega-lite's continuousBandSize)
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
-          update.width = { value: C.continuousBandSize }
+          update.width = { value: (cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize }
         } else if (xDef.timeUnit) {
           const endF = JSON.stringify(timeUnitField(xDef) + '_end')
           const startF = JSON.stringify(timeUnitField(xDef))
@@ -2028,11 +2028,29 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.x = { scale: 'x', field: JSON.parse(endF), offset: { signal: off('+') } }
           update.x2 = { scale: 'x', field: JSON.parse(startF), offset: { signal: off('-') } }
         } else if (sc === 'band') {
-          update.x = { scale: 'x', field: aggFieldName(xDef) }
-          if (xOffsetPresent) {
-            update.x = { scale: 'x', field: aggFieldName(xDef), offset: { scale: 'xOffset', field: aggFieldName(fields.find((f) => f.channel === 'xOffset')!) } }
+          // BarConfig band alignment/size (probed): align 'right' anchors
+          // the bar with x2 at the band position; a size/discreteBandSize
+          // centers a fixed-width bar in the band; otherwise the bar spans
+          // the band
+          const barAlign = mark === 'bar' ? (cfgType?.align as string | undefined) : undefined
+          const barSize = mark === 'bar'
+            ? ((markDef?.size
+              ?? (cfgType?.size as number | undefined)
+              ?? (cfgType?.discreteBandSize as number | undefined)) as number | undefined)
+            : undefined
+          if (barAlign === 'right' && !xOffsetPresent) {
+            update.x2 = { scale: 'x', field: aggFieldName(xDef) }
+            update.width = { signal: `max(0.25, bandwidth('x'))` }
+          } else if (barSize != null && !xOffsetPresent) {
+            update.xc = { scale: 'x', field: aggFieldName(xDef), band: 0.5 }
+            update.width = { value: barSize }
+          } else {
+            update.x = { scale: 'x', field: aggFieldName(xDef) }
+            if (xOffsetPresent) {
+              update.x = { scale: 'x', field: aggFieldName(xDef), offset: { scale: 'xOffset', field: aggFieldName(fields.find((f) => f.channel === 'xOffset')!) } }
+            }
+            update.width = { signal: `max(0.25, bandwidth('${xOffsetPresent ? 'xOffset' : 'x'}'))` }
           }
-          update.width = { signal: `max(0.25, bandwidth('${xOffsetPresent ? 'xOffset' : 'x'}'))` }
         } else {
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
           update.width = { value: C.bandSize }
@@ -2060,7 +2078,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         const sc = positionalScaleType(mark, yDef)
         if (yDef.timeUnit == null && !yDef.bin && yDef.type === 'temporal') {
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
-          update.height = { value: C.continuousBandSize }
+          update.height = { value: (cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize }
         } else if (yDef.timeUnit) {
           const endF = JSON.stringify(timeUnitField(yDef) + '_end')
           const startF = JSON.stringify(timeUnitField(yDef))
