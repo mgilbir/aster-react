@@ -4071,7 +4071,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // Compute tick values using scale.ticks with L/50 as hint
     const tickNums = scale.ticks ? scale.ticks(L / 50) : []
     const titleStr0 = String(legend.title ?? '')
-    const titleH0 = titleStr0.length > 0 ? 16 : 0
+    const titlePad0 = (legend as { titlePadding?: number }).titlePadding ?? 5
+    const titleH0 = titleStr0.length > 0 ? titleFs0 + titlePad0 : 0
 
     // --- horizontal gradient strip (top/bottom orient, or direction:horizontal) ---
     // Vega lays the strip out left→right: title at y=9, the gradient rect at
@@ -4089,7 +4090,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const bgX0 = borderColor0 != null ? 0.5 : 0
       const bgY0 = borderColor0 != null ? 0.5 : 0
       items.push({ path: `M${bgX0},${bgY0}h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
-      if (titleStr0) items.push({ text: titleStr0, x: 0, y: 9, align: 'left', fill: titleColor0, fontSize: titleFs0, ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
+      if (titleStr0) items.push({ text: titleStr0, x: 0, y: (titleFs0 * 9) / 11, align: 'left', fill: titleColor0, fontSize: titleFs0, ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
       items.push({ path: `M0,0h${gradientLength}v${thickness}h-${gradientLength}Z`, x: 0, y: titleH0, fill: `url(#${gradientId})`, stroke: gradStrokeColor, strokeWidth: gradStrokeWidth, opacity: gradOpacityProp ?? 1 })
       for (const t of tickNums) {
         const tNum = typeof t === 'number' ? t : 0
@@ -4129,7 +4130,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
 
     const items: SceneItem[] = []
     // Title height: 16px when a title is present, 0 otherwise.
-    const titleH = titleStr.length > 0 ? 16 : 0
+    const titleH = titleStr.length > 0 ? titleFs0 + titlePad0 : 0
     // Background box (0,0 to outerWidth, titleH+L) — the legend's own border
     // stroke (legend.strokeColor) insets the rect half a pixel; fillColor
     // paints it.
@@ -4147,7 +4148,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     })
     // Title
     if (titleStr.length > 0) {
-      items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: titleColor0, fontSize: titleFs0, ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
+      items.push({ text: titleStr, x: 0, y: (titleFs0 * 9) / 11, align: 'left', fill: titleColor0, fontSize: titleFs0, ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
     }
     // Labels. Vega positions each label at (1 - perc) * L and then shifts it by
     // the text baseline offset (labels flush against the gradient edges get
@@ -4254,10 +4255,12 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // (with default strokeWidth=1.5 and miterLimit=4), even when the symbol has
     // no explicit stroke color. Match that unconditionally for circle symbols.
     const hasStroke = strokeColor != null
+    // the label's bound half-height (fontSize/2) floors each entry row
+    const halfLabel = fontSize / 2
     const b = entries.map((e) => {
       const ext = symbolType === 'square' ? (hasStroke ? e.sizeD / 2 : e.r) : e.r + 3
       const y = e.sizeD / 2
-      return { y1: Math.min(y - ext, y - 5), y2: Math.max(y + ext, y + 5) }
+      return { y1: Math.min(y - ext, y - halfLabel), y2: Math.max(y + ext, y + halfLabel) }
     })
     // Single-column vertical grid layout (align 'each', rowPadding 2).
     const yOff: number[] = [0]
@@ -4275,11 +4278,14 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
 
     // Widths: labels render at 10px (~8px/char), title at 11px bold.
     const maxLabelLen = entries.reduce((m, e) => Math.max(m, String(e.value).length), 0)
-    const entryWidth = labelX + 8 * maxLabelLen
+    const entryWidth = labelX + 0.8 * fontSize * maxLabelLen
     const titleStr = String(legend.title ?? '')
     const titleWidth = titleStr.length > 0 ? ~~(0.8 * titleStr.length * titleFsS) : 0
     const outerWidth = Math.ceil(Math.max(entryWidth, titleWidth))
-    const bgHeight = Math.ceil(16 + scopesHeight)
+    // the title row: the title text's bound height + legend titlePadding
+    // (vega's legendGroupLayout: entries sit below title bound + titlePad)
+    const titleRowH = titleFsS + ((legend as { titlePadding?: number }).titlePadding ?? 5)
+    const bgHeight = Math.ceil(titleRowH + scopesHeight)
     // Legend padding: vega's legendGroupLayout shifts the content origin by
     // (padding, padding) and legendLayout sizes the box w + 2*padding (ceil'd
     // above with the pad included here, not in outerWidth/bgHeight).
@@ -4296,10 +4302,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const bgX = borderColor != null ? 0.5 : 0
     const bgY = borderColor != null ? 0.5 : 0
     items.push({ path: `M${bgX},${bgY}h${boxW}v${boxH}h-${boxW}Z`, x: 0, y: 0, ...(legendFillColor != null ? { fill: legendFillColor } : {}), ...(legendCornerRadius != null ? { cornerRadius: legendCornerRadius } : {}), ...(borderColor != null ? { stroke: String(borderColor) } : {}) })
-    items.push({ text: titleStr, x: 0 + legendPad, y: 9 + legendPad, align: 'left', fill: titleColorS, fontSize: titleFsS, ...(titleOpacityS != null ? { fillOpacity: titleOpacityS } : {}) })
+    items.push({ text: titleStr, x: 0 + legendPad, y: (titleFsS * 9) / 11 + legendPad, align: 'left', fill: titleColorS, fontSize: titleFsS, ...(titleOpacityS != null ? { fillOpacity: titleOpacityS } : {}) })
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]!
-      const ey = 16 + legendPad + yPos[i]!
+      const ey = titleRowH + legendPad + yPos[i]!
       const sy = ey + e.sizeD / 2
       items.push({ path: `M0,0h${entryWidth}v${b[i]!.y2}h-${entryWidth}Z`, x: 0 + legendPad, y: ey })
       // Vega always renders size legend symbols with a default stroke (#888)
@@ -4327,7 +4333,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
           opacity: symOpacity,
         })
       }
-      items.push({ text: String(e.value), x: labelX + legendPad, y: sy + 3, align: 'left', fill: labelColorS, fontSize, ...(labelOpacityS != null ? { fillOpacity: labelOpacityS } : {}) })
+      items.push({ text: String(e.value), x: labelX + legendPad, y: sy + 0.3 * fontSize, align: 'left', fill: labelColorS, fontSize, ...(labelOpacityS != null ? { fillOpacity: labelOpacityS } : {}) })
     }
     const out: SceneGroup = { marktype: 'group', role: 'legend', x: 0, y: 0, width: boxW, height: boxH, items }
     ;(out as unknown as Record<string, unknown>)._borderStroke = borderColor != null
