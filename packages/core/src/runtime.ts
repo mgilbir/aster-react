@@ -2867,7 +2867,15 @@ function buildRowHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup[]
       }
     }
 
-    const labelVal = facetHeaderLabel(mark, row, firstGroupby ?? '', ctx)
+
+    // a header without a title def renders no label (probed: an aggregated
+    // row facet's row_header has no title and no label text)
+    const labelItems: SceneItem[] = (mark as unknown as { title?: unknown }).title != null
+      ? [{
+          text: facetHeaderLabel(mark, row, firstGroupby ?? '', ctx), x: -50, y: cellHeight / 2,
+          angle: -90, align: 'center' as const, baseline: 'middle' as const, fill: '#000',
+        }]
+      : []
 
     result.push({
       marktype: 'group', name: mark.name, role: 'row-header',
@@ -2876,10 +2884,7 @@ function buildRowHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup[]
         // path (M0,0h0vHh0Z) — degenerate but non-zero, so it survives
         // canonicalization and contributes a `path|...` record.
         path: `M0,0h0v${cellHeight}h0Z`, x: 0, y: 0,
-      } as SceneItem, ...axisItems, {
-        text: labelVal, x: -50, y: cellHeight / 2,
-        angle: -90, align: 'center' as const, baseline: 'middle' as const, fill: '#000',
-      }],
+      } as SceneItem, ...axisItems, ...labelItems],
       width: grpW, x: -1, y: i * rowAdvance,
     })
   }
@@ -2979,12 +2984,30 @@ function buildRowTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | 
   }
 
   const pad = ctx.chart.padding
+  // The title sits left of the row-header's bound. The trellis path is
+  // calibrated at -61 (its header carries the axis labels but the grid
+  // layout offsets differ); the single-facet path reads the built header's
+  // bound (the axis title's extent) minus the title offset+bound (30).
+  let titleX = -61
+  if (isTrellis(ctx)) {
+    titleX = -61
+  } else {
+    const headerMark = ctx.chart.marks.find((m) => m.name === 'row_header')
+    if (headerMark) {
+      const headers = buildRowHeaderGroup(headerMark, ctx)
+      const hb = new Bounds()
+      for (const h of headers) hb.union(measureGuideGroup(h))
+      if (!hb.empty()) titleX = Math.ceil(hb.x1) - 30
+    } else {
+      titleX = -77
+    }
+  }
   return {
     marktype: 'group', name: mark.name, role: 'row-title',
     items: [
         { text: titleText, x: -21, y: 0, angle: -90, align: 'center' as const, baseline: 'middle' as const, fill: '#000' },
       ],
-    x: -61, y: centerY,
+    x: titleX, y: centerY,
   }
 }
 

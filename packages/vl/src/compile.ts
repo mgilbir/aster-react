@@ -370,8 +370,14 @@ function compileFaceted(spec: VLSpec): VLSpec {
   }
   const inner = compileUnit(innerSpec)
 
-  const rowField = rowDef?.field as string | undefined
-  const colField = colDef?.field as string | undefined
+  // the facet fields: an aggregated facet def keys everything on the
+  // aggregated name (probed: column {aggregate: 'average', field: 't'}
+  // names the facet 'average_t', aggregates the child pipeline grouped by
+  // the inner groupby, and titles the column 'Average of t')
+  const rowFd = rowDef ? parseChannel('row', rowDef) : null
+  const colFd = colDef ? parseChannel('column', colDef) : null
+  const rowField = rowFd ? aggFieldName(rowFd) : undefined
+  const colField = colFd ? aggFieldName(colFd) : undefined
   const unitWidth = typeof spec.width === 'number' ? spec.width : 300
   const unitHeight = typeof spec.height === 'number' ? spec.height : 300
 
@@ -472,12 +478,12 @@ function compileFaceted(spec: VLSpec): VLSpec {
 
   const marks: Record<string, unknown>[] = []
   if (rowField) {
-    marks.push({ name: 'row-title', type: 'group', role: 'row-title', title: { text: rowField, orient: 'left', style: 'guide-title', offset: 10 } })
+    marks.push({ name: 'row-title', type: 'group', role: 'row-title', title: { text: rowFd ? channelTitle(rowFd) : rowField, orient: 'left', style: 'guide-title', offset: 10 } })
   }
   if (colField) {
     const cfgHeader = (isObject(spec.config) ? (spec.config as Record<string, unknown>).header : undefined) as Record<string, unknown> | undefined
     const hdrC = { ...(cfgHeader ?? {}), ...(colDef?.header as Record<string, unknown> | undefined ?? {}) }
-    const ct: Record<string, unknown> = { text: colField, style: 'guide-title', offset: (hdrC.titlePadding as number | undefined) ?? 10 }
+    const ct: Record<string, unknown> = { text: colFd ? channelTitle(colFd) : colField, style: 'guide-title', offset: (hdrC.titlePadding as number | undefined) ?? 10 }
     if (hdrC.titleColor != null) ct.color = hdrC.titleColor
     if (hdrC.titleFontSize != null) ct.fontSize = hdrC.titleFontSize
     if (hdrC.titleFont != null) ct.font = hdrC.titleFont
@@ -497,7 +503,9 @@ function compileFaceted(spec: VLSpec): VLSpec {
     ...(rowField ? {
       from: { data: 'row_domain' },
       sort: { field: datumRef(rowField), order: 'ascending' },
-      title: parentTitle(rowField, normalizeHeaderDef(rowDef)),
+      // an aggregated ROW facet drops the header's title def entirely
+      // (probed: the oracle's row_header has no title for it)
+      ...(rowFd?.aggregate ? {} : { title: parentTitle(rowField, normalizeHeaderDef(rowDef)) }),
     } : {}),
     encode: { update: { height: { signal: 'child_height' } } },
     ...(yLabelAxes.length ? { axes: yLabelAxes } : {}),
@@ -537,6 +545,10 @@ function compileFaceted(spec: VLSpec): VLSpec {
 
   // facet domain datasets
   const data = [...(inner.data as Record<string, unknown>[])]
+  // probed: an aggregated facet def does NOT aggregate the child pipeline —
+  // every facet reference (cell groupby, domain, stack series, header label)
+  // keys on the aggregated name, which the pipeline never computes, so the
+  // facet collapses to a single (undefined) group exactly like upstream
   if (colField) data.push({ name: 'column_domain', source: 'data_0', transform: [{ type: 'aggregate', groupby: [colField] }] })
   if (rowField) data.push({ name: 'row_domain', source: 'data_0', transform: [{ type: 'aggregate', groupby: [rowField] }] })
 
