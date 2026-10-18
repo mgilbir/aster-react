@@ -70,10 +70,10 @@ All gates re-run from the working tree after the parity iteration.
 | `pnpm test` | 241 tests / 25 files, all pass |
 | `pnpm conformance` | **413 / 413** SVG geometry vs real Vega |
 | `pnpm conformance-vl` | **125 / 125** (incl. repeat, scatter-matrix, vl-facet-2d) |
-| `pnpm sweep-vl` (27,513 VL schema cases) | **96.7%** — 26,609 ok, 774 differ, 69 engine-error, 37 node-error, 24 both-refused |
+| `pnpm sweep-vl` (27,513 VL schema cases) | **96.9%** — 26,663 ok, 720 differ, 69 engine-error, 37 node-error, 24 both-refused |
 | `pnpm conformance:browser` (Chromium, live canvas text metrics) | **413 / 413** |
 | `pnpm probe` | 2 / 2 |
-| bundle budget (`@aster/core` `renderSpec`) | 93.9 kB gzip / 96 kB — pass |
+| bundle budget (`@aster/core` `renderSpec`) | 94.2 kB gzip / 96 kB — pass |
 | `pnpm bench:browser` | aster 16.7 ms median frames / 2.2% long frames vs react-vega 26.8 ms / 98.1%; heap-churn retained ~0 MB |
 
 Engine fixes from the parity iteration (closing the corpus and browser gates):
@@ -116,7 +116,7 @@ Second-pass engine fixes (closing the arc/theta/radius and legend families):
 - **Aggregates**: the variance family (variance/stdev/stderr and population
   variants) yields undefined below two valid values (→ zero-size rects).
 
-Third-pass engine fixes (the schema-sweep iteration, 94.8% → 96.7%):
+Third-pass engine fixes (the schema-sweep iteration, 94.8% → 96.9%):
 
 - **Stack law**: ported vega-lite's `potentialStackedChannel` rules — explicit
   `stack:false/null`, ranged marks, and an aggregate anywhere in the encoding
@@ -136,10 +136,16 @@ Third-pass engine fixes (the schema-sweep iteration, 94.8% → 96.7%):
   legends tick/opacity geometry was added.
 - **Facets/guides/config**: row-facet title bounds follow vega's title
   baseline; column-header labels honor label font/angle/baseline/offset;
-  timeUnit facet fields get child-dataflow transforms; axis grid width/dash
-  and singular time intervals (`hour`/`minute`/…) resolve; config
-  `width`/`height`/`size`/`filled`/alignment and bar/rect/tick geometry
-  resolve through the mark compiler while inert style geometry is ignored.
+  column-title padding/angle/baseline and timeUnit facet fields resolve;
+  axis grid width/dash and singular time intervals (`hour`/`minute`/…)
+  resolve; config `width`/`height`/`size`/`filled`/alignment and
+  bar/rect/tick geometry resolve through the mark compiler while inert
+  style geometry is ignored.
+- **Aggregate semantics**: string/date-bearing `min`/`max`/`distinct`/
+  `valid`/`missing` use raw values, empty `sum`/`product`/`median`/quantiles
+  match vega, numeric aggregate color scales (`count`/`distinct`/…), gradient
+  labels on degenerate domains, and size-legend labels on the [0,1] domain
+  are aligned.
 - **Facets**: timeUnit facet fields get their cast + timeunit transforms in the
   child dataflow, and header titles/labels format timeUnit values.
 - **Scales/legends**: discrete positional channels coerce unsupported scale
@@ -149,7 +155,7 @@ Third-pass engine fixes (the schema-sweep iteration, 94.8% → 96.7%):
   tick placement (with explicit `gradientLength`/`gradientThickness`/
   `labelOffset`/label-size honored).
 
-Remaining sweep residue (774 differ + 106 error cases) is a long tail across
+Remaining sweep residue (720 differ + 106 error cases) is a long tail across
 ~40 property families — per-property legend-layout tails (columns,
 titleOrient, clipHeight, orient), config `axis`/`header` blocks, row-facet
 header widths, guide-scale ranges/domains, and per-family one-offs — see the
@@ -522,7 +528,7 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   compilers to Vega before rendering): baseline 10937 ok / 15581 differ /
   935 engine / 43 node — that surface is @aster/vl's drift, tracked
   separately from this floor. Parity rounds closed the bulk of it:
-  26609 ok / 774 differ / 69 engine / 37 node of 27513 (96.7%).
+  26663 ok / 720 differ / 69 engine / 37 node of 27513 (96.9%).
   Closed clusters: the config layer (config forwarding into the Vega
   spec — guide blocks, mark -> config.mark, per-type blocks ->
   style[type], view -> cell with stroke/fill on the frame, title ->

@@ -3361,7 +3361,7 @@ function buildColumnTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup
     marktype: 'group', name: mark.name, role: 'column-title',
     items: [
       // the guide-title style: 11px bold (vega config style['guide-title'])
-      { text: titleText, x: 0, y: -12, align: (tDef.align as 'center') ?? 'center', fill: (tDef.color as string) ?? '#000', fontSize: (tDef.fontSize as number) ?? 11, fontWeight: (tDef.fontWeight as 'bold') ?? 'bold', ...(tDef.font != null ? { font: tDef.font as string } : {}), ...(tDef.limit != null ? { limit: tDef.limit as number } : {}) },
+      { text: titleText, x: 0, y: -(((tDef.offset as number | undefined) ?? 10) + 2), align: (tDef.align as 'center') ?? 'center', ...(tDef.baseline != null ? { baseline: tDef.baseline as SceneItem['baseline'] } : {}), ...(tDef.angle != null ? { angle: tDef.angle as number } : {}), fill: (tDef.color as string) ?? '#000', fontSize: (tDef.fontSize as number) ?? 11, fontWeight: (tDef.fontWeight as 'bold') ?? 'bold', ...(tDef.font != null ? { font: tDef.font as string } : {}), ...(tDef.limit != null ? { limit: tDef.limit as number } : {}) },
     ],
     x: centerX, y: -31,
   }
@@ -4196,10 +4196,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
   // the format as a timeUnitSpecifier(...) signal, which must be resolved to
   // its strftime specifier before formatting.
   const legendLabel = (v: unknown): string => {
-    if (v == null) return ''
     const L = locale(undefined)
     let fmt = (legend as { format?: unknown }).format
     const fmtType = (legend as { formatType?: unknown }).formatType
+    if (v == null) return fmtType === 'time' ? '' : String(v)
     if (fmt != null && typeof fmt === 'object' && 'signal' in (fmt as Record<string, unknown>)) {
       const sig = String((fmt as { signal: string }).signal)
       try {
@@ -4297,7 +4297,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const d0n = typeof d0 === 'number' ? d0 : 0
       const d1n = typeof d1 === 'number' ? d1 : 1
       const LL = locale(undefined)
-      const legendFmt = LL.format((legend as { format?: string }).format ?? '.1~f')
+      const legendFmt = LL.format((legend as { format?: string }).format ?? (d0n === d1n ? '.6f' : '.1~f'))
       const items: SceneItem[] = []
       const bgW = gradientLength
       const bgH = titleH0 + thickness + 12
@@ -4309,7 +4309,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       items.push({ path: `M0,0h${gradientLength}v${thickness}h-${gradientLength}Z`, x: 0, y: titleH0, fill: `url(#${gradientId})`, stroke: gradStrokeColor, strokeWidth: gradStrokeWidth, opacity: gradOpacityProp ?? 1 })
       for (const t of tickNums) {
         const tNum = typeof t === 'number' ? t : 0
-        const perc = d1n !== d0n ? (tNum - d0n) / (d1n - d0n) : 0
+        const perc = d1n !== d0n ? (tNum - d0n) / (d1n - d0n) : 0.5
         items.push({ text: legendFmt(tNum), x: perc * gradientLength, y: titleH0 + thickness + 10, align: 'center', fill: labelColor0, fontSize: labelFs0, ...(labelOpacity0 != null ? { fillOpacity: labelOpacity0 } : {}) })
       }
       const colorScale = scale as ColorScale
@@ -4381,10 +4381,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // the Unicode minus sign (U+2212) for negative values. Match that by using
     // the locale number formatter rather than String().
     const LL = locale(undefined)
-    const legendFmt = LL.format((legend as { format?: string }).format ?? '.1~f')
+    const legendFmt = LL.format((legend as { format?: string }).format ?? (d0n === d1n ? '.6f' : '.1~f'))
     for (const t of tickNums) {
       const tNum = typeof t === 'number' ? t : 0
-      const perc = d1n !== d0n ? (tNum - d0n) / (d1n - d0n) : 0
+      const perc = d1n !== d0n ? (tNum - d0n) / (d1n - d0n) : 0.5
       const baselineOffset =
         perc <= 0 ? Math.round(-0.21 * LABEL_FONT_SIZE)
         : perc >= 1 ? Math.round(0.79 * LABEL_FONT_SIZE)
@@ -4437,6 +4437,9 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     let ticks = ((sizeScale as { ticks?: (n?: number) => unknown[] }).ticks?.(5) ?? []) as unknown[]
     if (ticks.length > 1 && Number(sizeScale(ticks[0])) === 0) ticks = ticks.slice(1)
     if (ticks.length === 0) return null
+    const sizeDomain = sizeScale.domain() as number[]
+    const sizeDegenerate = sizeDomain.length >= 2 && (sizeDomain[0] === sizeDomain[sizeDomain.length - 1] || (sizeDomain[0] === 0 && sizeDomain[sizeDomain.length - 1] === 1))
+    const sizeLabel = (v: unknown): string => sizeDegenerate && typeof v === 'number' ? v.toFixed(1) : legendLabel(v)
 
     // Symbol stroke/opacity from the legend's symbols encode (vega-lite emits
     // stroke=#4c78a8, opacity=0.7, fill=transparent for size legends).
@@ -4499,7 +4502,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
 
     // Widths: labels render at 10px, title at 11px bold (vega measures both
     // via textMetrics).
-    const maxLabelW = entries.reduce((m, e) => Math.max(m, nominalTextWidth(legendLabel(e.value), fontSize)), 0)
+    const maxLabelW = entries.reduce((m, e) => Math.max(m, nominalTextWidth(sizeLabel(e.value), fontSize)), 0)
     const entryWidth = labelX + maxLabelW
     const titleStr = String(legend.title ?? '')
     const titleWidth = titleStr.length > 0 ? nominalTextWidth(titleStr, titleFsS, 'bold') : 0
@@ -4555,7 +4558,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
           opacity: symOpacity,
         })
       }
-      items.push({ text: legendLabel(e.value), x: labelX + legendPad, y: sy + 0.3 * fontSize, align: 'left', fill: labelColorS, fontSize, ...(labelOpacityS != null ? { fillOpacity: labelOpacityS } : {}) })
+      items.push({ text: sizeLabel(e.value), x: labelX + legendPad, y: sy + 0.3 * fontSize, align: 'left', fill: labelColorS, fontSize, ...(labelOpacityS != null ? { fillOpacity: labelOpacityS } : {}) })
     }
     const out: SceneGroup = { marktype: 'group', role: 'legend', x: 0, y: 0, width: boxW, height: boxH, items }
     ;(out as unknown as Record<string, unknown>)._borderStroke = borderColor != null

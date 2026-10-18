@@ -460,21 +460,21 @@ function imputeStat(group: Row[], t: { field: string; method?: string; value?: u
 
 const AGGR: Record<string, (values: number[], rows: Row[]) => number | undefined> = {
   count: (_v, rows) => rows.length,
-  sum: (v) => v.reduce((a, b) => a + b, 0),
-  product: (v) => v.reduce((a, b) => a * b, 1),
+  sum: (v) => (v.length ? v.reduce((a, b) => a + b, 0) : NaN),
+  product: (v) => (v.length ? v.reduce((a, b) => a * b, 1) : NaN),
   mean: (v) => (v.length ? v.reduce((a, b) => a + b, 0) / v.length : NaN),
   // vega's `average` is a pure alias of mean (AggregateOps: req ['mean'])
   average: (v) => (v.length ? v.reduce((a, b) => a + b, 0) / v.length : NaN),
   min: (v) => Math.min(...v),
   max: (v) => Math.max(...v),
   median: (v) => {
-    if (!v.length) return NaN
+    if (!v.length) return undefined
     const s = v.slice().sort((a, b) => a - b)
     const m = Math.floor(s.length / 2)
     return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2
   },
-  q1: (v) => quantileSorted(v.slice().filter(isFiniteNumber).sort((a, b) => a - b), 0.25) as number,
-  q3: (v) => quantileSorted(v.slice().filter(isFiniteNumber).sort((a, b) => a - b), 0.75) as number,
+  q1: (v) => (v.length ? quantileSorted(v.slice().filter(isFiniteNumber).sort((a, b) => a - b), 0.25) as number : undefined),
+  q3: (v) => (v.length ? quantileSorted(v.slice().filter(isFiniteNumber).sort((a, b) => a - b), 0.75) as number : undefined),
   distinct: (v, rows) => new Set(v).size,
   valid: (v) => v.filter((x) => Number.isFinite(x)).length,
   missing: (v, rows) => rows.length - v.filter((x) => Number.isFinite(x)).length,
@@ -550,6 +550,36 @@ export function aggregateGroup(rows: Row[], groupby: string[], fields: (string |
       return
     }
     const values = field == null ? [] : fieldValues(rows, field)
+    const rawValues = field == null ? [] : rows.map((r) => r[field])
+    const present = rawValues.filter((v) => v != null && !(typeof v === 'number' && !Number.isFinite(v)))
+    // String/date-bearing ops use the raw values (vega's AggregateOps measure
+    // distinguishes numeric-only ops from valid/min/max/distinct).
+    if (op === 'distinct') {
+      row[as[i] ?? `distinct_${field}`] = new Set(present).size
+      return
+    }
+    if (op === 'valid') {
+      row[as[i] ?? `valid_${field}`] = present.length
+      return
+    }
+    if (op === 'missing') {
+      row[as[i] ?? `missing_${field}`] = rows.length - present.length
+      return
+    }
+    if (op === 'min' || op === 'max') {
+      if (!present.length) {
+        row[as[i] ?? `${op}_${field}`] = undefined
+        return
+      }
+      const cmp = (a: unknown, b: unknown): number => {
+        const av = a instanceof Date ? a.getTime() : a as number | string
+        const bv = b instanceof Date ? b.getTime() : b as number | string
+        return av < bv ? -1 : av > bv ? 1 : 0
+      }
+      const best = present.reduce((a, b) => (op === 'min' ? (cmp(b, a) < 0 ? b : a) : (cmp(b, a) > 0 ? b : a)))
+      row[as[i] ?? `${op}_${field}`] = best
+      return
+    }
     const fn = AGGR[op]
     if (!fn) throw new Error(`[aster] unsupported aggregate op "${op}"`)
     row[as[i] ?? `${op}_${field}`] = fn(values, rows)

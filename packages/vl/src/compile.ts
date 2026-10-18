@@ -1452,6 +1452,7 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
   const skipCasts = binFields.length > 0 || generatingEnd ||
     ((mark === 'bar' || mark === 'area') &&
     !fields.some((f) => f.aggregate) &&
+    !fields.some((f) => f.timeUnit) &&
     fields.some((f) => f.channel === (orient === 'vertical' ? 'y' : 'x') && f.type === 'quantitative') &&
     !continuousDimension)
   if (!skipCasts) {
@@ -1999,8 +2000,9 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
 
   // color scale
   const colorDef = fields.find((f) => f.channel === 'color' && f.field)
+  const numericAggregate = colorDef?.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(colorDef.aggregate)
   if (colorDef) {
-    if (isDiscreteType(colorDef.type)) {
+    if (isDiscreteType(colorDef.type) && !numericAggregate) {
       scales.push({
         name: 'color',
         type: 'ordinal',
@@ -2263,6 +2265,8 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     const filled = mark === 'circle' || mark === 'square'
       || (mark === 'point' && markFilled === true)
       || (mark === 'arc' && markFilled !== false)
+    const colorContinuous = !isDiscreteType(colorDef.type)
+      || (colorDef.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(colorDef.aggregate))
     const m = mark as string
     if (filled) {
       lg.fill = 'color'
@@ -2284,11 +2288,11 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     } else if (m === 'arc') {
       // an unfilled arc paints by stroke: the legend is a stroke legend
       lg.stroke = 'color'
-      if (isDiscreteType(colorDef.type)) lg.symbolType = 'circle'
+      if (!colorContinuous) lg.symbolType = 'circle'
       else lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
     } else if (m === 'point' || m === 'line' || m === 'text') {
       lg.stroke = 'color'
-      if (isDiscreteType(colorDef.type)) {
+      if (!colorContinuous) {
         lg.symbolType = mark === 'line' ? 'stroke' : 'circle'
         lg.encode = { symbols: { update: { fill: { value: 'transparent' }, opacity: { value: reducedOpacity ?? 1 } } } }
       } else {
@@ -2298,7 +2302,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     } else {
       lg.fill = 'color'
       if (mark === 'bar' || mark === 'rect') lg.symbolType = 'square'
-      if (!isDiscreteType(colorDef.type)) {
+      if (colorContinuous) {
         lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
         if (markOpacity != null) lg.encode = { gradient: { update: { opacity: { value: markOpacity } } } }
       } else {
