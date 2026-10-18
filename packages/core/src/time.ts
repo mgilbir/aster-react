@@ -484,9 +484,13 @@ const timeIntervals: Record<string, TimeInterval> = {
   [DAY]: timeDay,
   [DAYOFYEAR]: timeDay,
   [HOURS]: timeHour,
+  hour: timeHour,
   [MINUTES]: timeMinute,
+  minute: timeMinute,
   [SECONDS]: second as unknown as TimeInterval,
+  second: second as unknown as TimeInterval,
   [MILLISECONDS]: millisecond,
+  millisecond,
 }
 
 const utcIntervals: Record<string, TimeInterval> = {
@@ -498,9 +502,13 @@ const utcIntervals: Record<string, TimeInterval> = {
   [DAY]: utcDay,
   [DAYOFYEAR]: utcDay,
   [HOURS]: utcHour,
+  hour: utcHour,
   [MINUTES]: utcMinute,
+  minute: utcMinute,
   [SECONDS]: second as unknown as TimeInterval,
+  second: second as unknown as TimeInterval,
   [MILLISECONDS]: millisecond,
+  millisecond,
 }
 
 export function timeIntervalFor(unit: string): TimeInterval | undefined {

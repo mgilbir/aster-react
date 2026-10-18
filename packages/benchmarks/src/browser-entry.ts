@@ -6,6 +6,7 @@
  */
 import * as React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { flushSync } from 'react-dom'
 import { compileChart, evaluateChart, renderSceneToSvg, type SceneRoot } from '@aster/core'
 import { patchSceneDom, sceneToDomDesc } from '@aster/core/dom'
 import { BenchEmbed, type EmbedName } from './embeds.js'
@@ -43,33 +44,49 @@ function teardown(): void {
   session = null
 }
 
-function mountSession(embed: EmbedName, spec: Record<string, unknown>, responsive = false): Session {
+function prepareSession(embed: EmbedName, responsive = false): Session {
   // (session.responsive is recorded below; mismatched callers remount)
   teardown()
   const host = document.createElement('div')
   host.style.width = '600px'
   document.body.appendChild(host)
   const root = createRoot(host)
+  session = { host, root, responsive }
+  return session
+}
+
+function renderSession(s: Session, embed: EmbedName, spec: Record<string, unknown>): void {
   // A spec with numeric width/height is authoritative in both engines; for
   // container-driven sizing the spec must omit them so runtime/view sizes win.
+  const responsive = s.responsive
   const mountSpec = responsive ? (() => { const { width: _w, height: _h, ...rest } = spec; return rest })() : spec
-  root.render(h(BenchEmbed, {
+  s.root.render(h(BenchEmbed, {
     name: embed,
     spec: mountSpec,
     width: Number(spec.width),
     height: Number(spec.height),
     responsive,
   }))
-  session = { host, root, responsive }
-  return session
+}
+
+function mountSession(embed: EmbedName, spec: Record<string, unknown>, responsive = false): Session {
+  const s = prepareSession(embed, responsive)
+  renderSession(s, embed, spec)
+  return s
 }
 
 /** Time from render() to a painted chart svg: one rAF past quiescence. */
 async function firstRenderMs(embed: EmbedName, kind: ChartKind, points: number): Promise<number> {
-  const t0 = performance.now()
-  const s = mountSession(embed, buildSpec(kind, genValues(kind, points, 1), 600, 400))
+  const s = prepareSession(embed, false)
+  const spec = buildSpec(kind, genValues(kind, points, 1), 600, 400)
   // work = time of the last DOM mutation; paint follows on the next frame.
-  return timeWork(s.host, { quietFrames: 1, t0, requireSvg: true })
+  // Trigger-based: the observer must attach before the render commits (t0 is
+  // taken inside waitForSettle, microseconds before the trigger fires).
+  return timeWork(s.host, {
+    quietFrames: 1,
+    requireSvg: true,
+    trigger: () => renderSession(s, embed, spec),
+  })
 }
 
 /** Warm the embed (lazy init, JIT) so mount numbers reflect steady state. */
@@ -94,9 +111,9 @@ async function updateLatencies(embed: EmbedName, kind: ChartKind, points: number
   const s = await ensureSession(embed, kind, points)
   for (let i = 0; i < reps; i++) {
     const spec = buildSpec(kind, genValues(kind, points, i + 2), 600, 400)
-    const t0 = performance.now()
-    s.root.render(h(BenchEmbed, { name: embed, spec, width: 600, height: 400 }))
-    out.push(await timeWork(s.host, { quietFrames: 2, t0 }))
+    // Trigger-based: observe, then render (a synchronous aster commit
+    // completes before an observe-after-trigger would attach).
+    out.push(await timeWork(s.host, { quietFrames: 2, trigger: () => s.root.render(h(BenchEmbed, { name: embed, spec, width: 600, height: 400 })) }))
   }
   return out
 }
@@ -137,9 +154,7 @@ async function resizeLatencies(embed: EmbedName, kind: ChartKind, points: number
   for (let i = 0; i < reps; i++) {
     const w = widths[i % widths.length]!
     const spec = buildSpec(kind, genValues(kind, points, 1), w, 400)
-    const t0 = performance.now()
-    s.root.render(h(BenchEmbed, { name: embed, spec, width: w, height: 400 }))
-    out.push(await timeWork(s.host, { quietFrames: 2, t0 }))
+    out.push(await timeWork(s.host, { quietFrames: 2, trigger: () => s.root.render(h(BenchEmbed, { name: embed, spec, width: w, height: 400 })) }))
   }
   return out
 }
@@ -242,12 +257,14 @@ async function stableRerenders(embed: EmbedName, kind: ChartKind, points: number
     let muts = 0
     const obs = new MutationObserver((r) => { muts += r.length })
     obs.observe(s.host, { childList: true, subtree: true, attributes: true, characterData: true })
-    const t0 = performance.now()
     // fresh spec object each render (React-inline-literal pattern) over a
-    // STABLE values array: content is identical, identity is not.
-    s.root.render(h(BenchEmbed, { name: embed, spec: { ...spec }, width: 600, height: 400 }))
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    // STABLE values array: content is identical, identity is not. flushSync
+    // measures the actual synchronous work instead of frame-quantized wall
+    // time (a 2-rAF wait reports ~33ms even when nothing happens).
+    const t0 = performance.now()
+    flushSync(() => s.root.render(h(BenchEmbed, { name: embed, spec: { ...spec }, width: 600, height: 400 })))
     ms.push(performance.now() - t0)
+    await new Promise((r) => requestAnimationFrame(r))
     obs.disconnect()
     mutations.push(muts)
   }
@@ -275,11 +292,22 @@ async function differentialUpdates(embed: EmbedName, points: number, reps: numbe
   await waitForSvg(s.host)
   const changed = Array.from({ length: Math.max(1, Math.floor(points / 100)) }, (_, i) => (i * 997) % points)
   const out: number[] = []
+  let cur = rows
   for (let i = 0; i < reps; i++) {
-    const next = rows.map((r, j) => (changed.includes(j) ? { x: r.x, y: (r.y + 1) % 100 } : r))
-    const t0 = performance.now()
-    s.root.render(h(BenchEmbed, { name: embed, spec, width: 600, height: 400, data: { table: next }, dataChanges: { table: changed } }))
-    out.push(await timeWork(s.host, { quietFrames: 2, t0 }))
+    // Derive from the PREVIOUS rep's rows so every update carries real changes
+    // (re-deriving from the original would produce identical content from rep
+    // 2 on — zero mutations — and the settle protocol would report a
+    // frame-quantized fallback instead of work time).
+    const bump = i + 1
+    const next = cur.map((r, j) => (changed.includes(j) ? { x: r.x, y: (r.y + bump) % 100 } : r))
+    cur = next
+    // Trigger-based: observe, then render — aster's differential commit is
+    // synchronous, so observe-after-trigger misses it (falls back to a
+    // frame-quantized ~2-frame "settled" time).
+    out.push(await timeWork(s.host, {
+      quietFrames: 2,
+      trigger: () => s.root.render(h(BenchEmbed, { name: embed, spec, width: 600, height: 400, data: { table: next }, dataChanges: { table: changed } })),
+    }))
   }
   return out
 }

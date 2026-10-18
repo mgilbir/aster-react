@@ -32,7 +32,9 @@ async function main(): Promise<boolean> {
     const name = f.replace(/\.vl\.json$/, '')
     if (filter && !name.includes(filter)) continue
     const doc = JSON.parse(readFileSync(join(CORPUS_DIR, f), 'utf8'))
-    const spec = doc.spec ?? doc
+    // Unwrap only true wrapper docs ({ spec: ... } without a $schema of its own);
+    // VL repeat/facet specs carry a nested `spec` child we must NOT unwrap.
+    const spec = doc.$schema ? doc : (doc.spec ?? doc)
     try {
       const oracleVg = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, unknown> } }).compile(spec).spec
       const ourVg = compileOurs(spec)

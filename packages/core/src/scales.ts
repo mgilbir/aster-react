@@ -63,8 +63,8 @@ function piecewiseColors(palette: string[], type?: string): (t: number) => strin
     return (t: number) => rgb(A.r + t * (B.r - A.r), A.g + t * (B.g - A.g), A.b + t * (B.b - A.b), A.opacity + t * (B.opacity - A.opacity)).formatRgb()
   })
   return (t) => {
-    if (t <= 0) return palette[0]!
-    if (t >= 1) return palette[n]!
+    if (t <= 0) return rgb(palette[0]!).formatRgb()
+    if (t >= 1) return rgb(palette[n]!).formatRgb()
     const i = Math.min(Math.floor(t * n), n - 1)
     return segs[i]!(t * n - i)
   }
@@ -155,6 +155,7 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
       s.range([0, 1])
       const cs = s as ColorScale
       if (typeof cs.interpolator === 'function') cs.interpolator(fn as unknown as SchemeFn)
+      else if (typeof (cs as any).interpolate === 'function') (cs as any).interpolate(() => fn)
       cs.interpolator = () => fn as unknown as SchemeFn
     } else {
       s.range(range0 as never)
@@ -204,7 +205,8 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   // color scale; vega never applies `zero` extension to it (the domain maps
   // directly onto [0,1] of the interpolator).
   const isColorScheme = CONTINUOUS_TYPES.has(type) && (typeof range0 === 'string' || isSchemeRef)
-  const zero = !TIME_SCALE_TYPES.has(type) && !isColorScheme && (c.zero ?? INCLUDE_ZERO_TYPES.has(type))
+  const zero = !TIME_SCALE_TYPES.has(type)
+    && (c.zero != null ? c.zero : (!isColorScheme && INCLUDE_ZERO_TYPES.has(type)))
   if (zero) applyZero(s)
   if (c.domainMin != null || c.domainMax != null) applyDomainMinMax(s, c.domainMin, c.domainMax)
   // Vega's Scale transform splices domainMid into the domain array so that the
@@ -383,9 +385,11 @@ function mergeUnionDomain(type: string, all: unknown[]): [number, number] | [Dat
     if (nums.length) return [Math.min(...nums), Math.max(...nums)]
     return null
   }
-  const coercible = all.filter(
-    (v) => (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(+v)),
-  ) as number[]
+  const coercible = all
+    .map((v) => v instanceof Date ? v.getTime() : v)
+    .filter(
+      (v) => (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(+v)),
+    ) as number[]
   if (!coercible.length) return null
   return [Math.min(...coercible), Math.max(...coercible)]
 }
@@ -467,9 +471,11 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
         // d3-scale coerces the domain through +d (strings like "28" become
         // numbers); vega feeds it whatever the data holds. Keep strings that
         // coerce, drop the rest — same observable behavior as d3.
-        const coercible = all.filter(
-          (v) => (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(+v)),
-        ) as number[]
+        const coercible = all
+          .map((v) => v instanceof Date ? v.getTime() : v)
+          .filter(
+            (v) => (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(+v)),
+          ) as number[]
         if (!coercible.length) {
           // vega's multi-field aggregate domain bottoms out at [0, 0] over an
           // empty dataset; a single-field domain stays empty (no ticks)

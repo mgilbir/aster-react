@@ -628,13 +628,15 @@ function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | unde
   if (raw) {
     if (it.text == null) return
     lines = [String(it.text)]
-    x = it.x ?? 0
     // The SVG leaf renderer bakes the baseline shift into y for unrotated
-    // text (rotated text keeps the offset in the rotate frame) — mirror it.
+    // text; rotated text keeps the offset in the rotate frame (translate(x,y)
+    // rotate(a), dy applied inside) — mirror that split.
     const ang = (it as Record<string, unknown>).angle as number | undefined
     const bl = it.baseline as string | undefined
-    y = (it.y ?? 0) + (bl && bl !== 'alphabetic' && !(ang != null && ang !== 0) ? baselineOffset(it) : 0)
-    angle = undefined
+    const rotated = ang != null && ang !== 0
+    x = it.x ?? 0
+    y = (it.y ?? 0) + (bl && bl !== 'alphabetic' && !rotated ? baselineOffset(it) : 0)
+    angle = rotated ? ang : undefined
     lineHeight = 0
   } else {
     const d = textItemDesc(it)
@@ -655,9 +657,12 @@ function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | unde
   const paint = resolvePaint(fill as string | { gradient: string }, ctx, defs, null)
   ctx.fillStyle = (paint ?? '#000') as string
   if (angle != null && angle !== 0) {
+    // vega applies the baseline offset inside the rotate frame (translate(0,off)
+    // after rotate) — mirror it on canvas via the fillText y.
+    const dyR = raw && it.baseline && it.baseline !== 'alphabetic' ? baselineOffset(it) : 0
     ctx.translate(x, y)
     ctx.rotate((angle * Math.PI) / 180)
-    ctx.fillText(lines[0]!, 0, 0)
+    ctx.fillText(lines[0]!, 0, dyR)
     for (let i = 1; i < lines.length; i++) ctx.fillText(lines[i]!, 0, i * lineHeight)
   } else {
     const multi = lines.length > 1

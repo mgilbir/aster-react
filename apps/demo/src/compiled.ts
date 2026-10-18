@@ -1,4 +1,4 @@
-import * as vl from 'vega-lite'
+import { compile } from '@aster/vl'
 import {
   LineSpec,
   ParamBoundSpec,
@@ -20,26 +20,34 @@ import {
   RadarSpec,
 } from './specs.js'
 
-function compile(spec: Record<string, unknown>): Record<string, unknown> {
-  return vl.compile(spec as never).spec as Record<string, unknown>
+/**
+ * Vega-Lite compilation for the demo runs through @aster/vl — the from-scratch
+ * compiler in this repo. No npm vega-lite in the render path: the oracle column
+ * on the page is the only place the official toolchain appears, and it is
+ * lazy-loaded separately.
+ */
+function compileSpec(spec: Record<string, unknown>): Record<string, unknown> {
+  return String(spec.$schema ?? '').includes('vega-lite')
+    ? (compile(spec as never) as Record<string, unknown>)
+    : spec
 }
 
-export const CompiledLineSpec = compile(LineSpec)
-export const CompiledParamBoundSpec = compile(ParamBoundSpec)
-export const CompiledInteractiveBrushSpec = compile(InteractiveBrushSpec)
-export const CompiledHistogramSpec = compile(HistogramSpec)
-export const CompiledLegendScatterSpec = compile(LegendScatterSpec)
-export const CompiledPieSpec = compile(PieSpec)
-export const CompiledTextLabelSpec = compile(TextLabelSpec)
-export const CompiledHeatmapSpec = compile(HeatmapSpec)
-export const CompiledStackedBarSpec = compile(StackedBarSpec)
-export const CompiledLayerSpec = compile(LayerSpec)
-export const CompiledDonutSpec = compile(DonutSpec)
-export const CompiledRegressionSpec = compile(RegressionSpec)
-export const CompiledStreamgraphSpec = compile(StreamgraphSpec)
-export const CompiledBubbleSpec = compile(BubbleSpec)
-export const CompiledCandlestickSpec = compile(CandlestickSpec)
-export const CompiledColorSchemeSpec = compile(ColorSchemeSpec)
-export const CompiledGroupedBarSpec = compile(GroupedBarSpec)
-// RadarSpec is a raw Vega spec — pass directly, no vl.compile needed
+export const CompiledLineSpec = compileSpec(LineSpec)
+export const CompiledParamBoundSpec = compileSpec(ParamBoundSpec)
+export const CompiledInteractiveBrushSpec = compileSpec(InteractiveBrushSpec)
+export const CompiledHistogramSpec = compileSpec(HistogramSpec)
+export const CompiledLegendScatterSpec = compileSpec(LegendScatterSpec)
+export const CompiledPieSpec = compileSpec(PieSpec)
+export const CompiledTextLabelSpec = compileSpec(TextLabelSpec)
+export const CompiledHeatmapSpec = compileSpec(HeatmapSpec)
+export const CompiledStackedBarSpec = compileSpec(StackedBarSpec)
+export const CompiledLayerSpec = compileSpec(LayerSpec)
+export const CompiledDonutSpec = compileSpec(DonutSpec)
+export const CompiledRegressionSpec = compileSpec(RegressionSpec)
+export const CompiledStreamgraphSpec = compileSpec(StreamgraphSpec)
+export const CompiledBubbleSpec = compileSpec(BubbleSpec)
+export const CompiledCandlestickSpec = compileSpec(CandlestickSpec)
+export const CompiledColorSchemeSpec = compileSpec(ColorSchemeSpec)
+export const CompiledGroupedBarSpec = compileSpec(GroupedBarSpec)
+// RadarSpec is a raw Vega spec — pass directly, no VL compile needed
 export const CompiledRadarSpec = RadarSpec as Record<string, unknown>

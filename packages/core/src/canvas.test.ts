@@ -170,8 +170,23 @@ function svgRecords(svg: string): DrawRecord[] {
     if (tok.startsWith('<text')) {
       const attrs = tok.slice(0, tok.indexOf('>'))
       const inner = tok.slice(tok.indexOf('>') + 1, tok.lastIndexOf('</text>'))
-      const x = Number(attrOf(attrs, 'x') ?? 0) + tx
-      const y = Number(attrOf(attrs, 'y') ?? 0) + ty
+      const angleAttr = attrOf(attrs, 'angle')
+      // angled text emits transform="translate(x,y) rotate(a)" (no x/y attrs)
+      const tmatch = /transform="translate\(([-\d.]+)(?:,([-\d.]+))?\) rotate\(([-\d.]+)\)"/.exec(attrs)
+      let x: number, y: number, rot: string
+      if (tmatch) {
+        x = Number(tmatch[1]) + tx
+        y = Number(tmatch[2] ?? 0) + ty
+        rot = `;rot=${fmtN(Number(tmatch[3]) * Math.PI / 180)}`
+        // the baseline offset rides as a dy in the rotated frame (canvas
+        // applies it as the fillText y inside the rotate)
+        const dy = attrOf(attrs, 'dy')
+        if (dy) y += Number(dy)
+      } else {
+        x = Number(attrOf(attrs, 'x') ?? 0) + tx
+        y = Number(attrOf(attrs, 'y') ?? 0) + ty
+        rot = angleAttr && angleAttr !== '0' ? `;rot=${fmtN(Number(angleAttr) * Math.PI / 180)}` : ''
+      }
       const anchor = attrOf(attrs, 'text-anchor') ?? 'middle'
       const align = anchor === 'start' ? 'left' : anchor === 'end' ? 'right' : 'center'
       const fs = attrOf(attrs, 'font-size')
@@ -181,8 +196,6 @@ function svgRecords(svg: string): DrawRecord[] {
       const op = Number(attrOf(attrs, 'opacity') ?? 1)
       if (inner.includes('<tspan')) continue // multi-line: excluded from parity
       const content = inner
-      const angleAttr = attrOf(attrs, 'angle')
-      const rot = angleAttr && angleAttr !== '0' ? `;rot=${fmtN(Number(angleAttr) * Math.PI / 180)}` : ''
       const fam = attrOf(attrs, 'font-family') ?? 'sans-serif'
       records.push({ kind: 'text', path: '', paint: `t=${content};x=${fmtN(x)};y=${fmtN(y)};align=${align};font=${[fw, `${fsNum}px`, fam].filter(Boolean).join(' ')}${rot};style=style=${fill};alpha=${fmtN(op)}` })
       continue

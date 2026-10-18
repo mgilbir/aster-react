@@ -57,12 +57,9 @@ for (const entry of ENTRIES) {
     external: ['react', 'react-dom', 'react/jsx-runtime'],
     define: { 'process.env.NODE_ENV': '"production"' },
     logLevel: 'silent',
-    alias: {
-      '@aster/react': join(MONOREPO_ROOT, 'packages', 'react', 'dist', 'index.js'),
-      '@aster/core': join(MONOREPO_ROOT, 'packages', 'core', 'dist', 'index.js'),
-      '@aster/core/dom': join(MONOREPO_ROOT, 'packages', 'core', 'dist', 'addon-dom.js'),
-      '@aster/core/signals': join(MONOREPO_ROOT, 'packages', 'core', 'dist', 'signals.js'),
-    },
+    // No manual aliases: workspace deps resolve through node_modules symlinks
+    // and each package's package.json "exports" map, which stays correct as
+    // @aster/core grows subpath exports (dom, canvas, hit, ...).
   })
   const buf = readFileSync(outPath)
   rows.push([entry.label, kb(buf.length), kb(gzipSync(buf).length), kb(brotliCompressSync(buf).length)])

@@ -30,7 +30,7 @@ const hasRenderedSvg = (target: Node): boolean => {
 
 export async function waitForSettle(
   target: Node,
-  opts: { quietFrames?: number; timeoutMs?: number; t0?: number; requireSvg?: boolean } = {},
+  opts: { quietFrames?: number; timeoutMs?: number; t0?: number; requireSvg?: boolean; trigger?: () => void } = {},
 ): Promise<SettleStats> {
   const quietFrames = opts.quietFrames ?? 3
   const timeoutMs = opts.timeoutMs ?? 10_000
@@ -51,6 +51,12 @@ export async function waitForSettle(
     attributes: true,
     characterData: true,
   })
+
+  // Kick off the measured work only after the observer is watching, so
+  // synchronous commits (e.g. React re-render + innerHTML swap) are captured.
+  // Without this, observe-after-trigger misses all mutations and the caller
+  // silently degrades to frame-quantized `settled` timings.
+  opts.trigger?.()
 
   try {
     let quiet = 0
@@ -88,7 +94,7 @@ export async function waitForSvg(target: HTMLElement, timeoutMs = 10_000): Promi
 /** Work-complete time: timestamp of the last DOM mutation (frame-quantization free). */
 export async function timeWork(
   target: Node,
-  opts: { quietFrames?: number; timeoutMs?: number; t0?: number; requireSvg?: boolean } = {},
+  opts: { quietFrames?: number; timeoutMs?: number; t0?: number; requireSvg?: boolean; trigger?: () => void } = {},
 ): Promise<number> {
   const stats = await waitForSettle(target, opts)
   return Number.isFinite(stats.lastMutation) ? stats.lastMutation : stats.settled

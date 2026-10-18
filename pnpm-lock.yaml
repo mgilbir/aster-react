@@ -32,12 +32,18 @@ importers:
       '@aster/react':
         specifier: workspace:*
         version: link:../../packages/react
+      '@aster/vl':
+        specifier: workspace:*
+        version: link:../../packages/vl
       react:
         specifier: ^19.0.0
         version: 19.2.8
       react-dom:
         specifier: ^19.0.0
         version: 19.2.8(react@19.2.8)
+      vega-embed:
+        specifier: ^7.1.0
+        version: 7.1.0(vega-lite@6.4.3(vega@6.3.1))(vega@6.3.1)
     devDependencies:
       '@types/react':
         specifier: ^19.0.0
@@ -158,6 +164,9 @@ importers:
       d3-time-format:
         specifier: 4.1.0
         version: 4.1.0
+      playwright:
+        specifier: ^1.62.1
+        version: 1.62.1
       topojson-client:
         specifier: 3.1.0
         version: 3.1.0
@@ -167,6 +176,9 @@ importers:
       typescript:
         specifier: ^5.8.0
         version: 5.9.3
+      vega-embed:
+        specifier: ^7.1.0
+        version: 7.1.0(vega-lite@6.4.3(vega@6.3.1))(vega@6.3.1)
       vega-expression:
         specifier: 6.2.1
         version: 6.2.1

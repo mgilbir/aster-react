@@ -11,6 +11,7 @@ import {
   resolveSizeParam, sortRows,
 } from './transform.js'
 import { transformRegistry } from './registry.js'
+import { nominalTextWidth } from './text-metrics.js'
 
 // -- kde (vega-statistics randomKDE + sampleCurve) ---------------------------
 
@@ -1352,8 +1353,9 @@ function wordcloudRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCo
         datum: r,
         text,
         size: s,
-        // vega-scenegraph `estimateWidth`: 0.8 * chars * fontSize; height ≈ fontSize.
-        w: text.length ? 0.8 * text.length * s : 0,
+        // vega's wordcloud sizes words via textMetrics: canvas measureText
+        // when available, the 0.8*chars*fontSize estimate otherwise.
+        w: text.length ? nominalTextWidth(text, s) : 0,
         h: s,
         x: 0,
         y: 0,

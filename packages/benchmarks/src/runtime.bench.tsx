@@ -58,13 +58,26 @@ async function main(): Promise<void> {
       const root = createRoot(host)
 
       let spec = initialSpec
-      const setSpec = (s: Record<string, unknown>): Promise<void> => {
-        spec = s
-        return new Promise((resolve) => {
-          root.render(h(BenchEmbed, { name: embedName, spec, width: Number((spec.width as number) ?? 600), height: Number((spec.height as number) ?? 400) }))
-          setTimeout(resolve, 0)
+      // Trigger-based settle: the MutationObserver inside timeWork attaches
+      // BEFORE root.render, so synchronous React commits (aster re-renders the
+      // whole SVG in one commit) are captured. Observe-after-trigger misses
+      // them and degrades to frame-quantized 'settled' timings.
+      const settle = (s: Record<string, unknown>): Promise<number> =>
+        timeWork(host, {
+          quietFrames: 2,
+          timeoutMs: 30_000,
+          trigger: () => {
+            spec = s
+            root.render(
+              h(BenchEmbed, {
+                name: embedName,
+                spec,
+                width: Number((spec.width as number) ?? 600),
+                height: Number((spec.height as number) ?? 400),
+              }),
+            )
+          },
         })
-      }
 
       const mount: number[] = []
       const update: number[] = []
@@ -73,9 +86,8 @@ async function main(): Promise<void> {
 
       // Warmup: compile all module state, JIT the paths, drop caches.
       for (let i = 0; i < warmup; i++) {
-        await setSpec(i === 0 ? initialSpec : updatedSpec)
+        await settle(i === 0 ? initialSpec : updatedSpec)
         await waitForSvg(host, 30_000)
-        await timeWork(host, { quietFrames: 2, timeoutMs: 30_000 })
       }
 
       // Mount: fresh host each rep (the component is created from scratch).
@@ -84,9 +96,16 @@ async function main(): Promise<void> {
         document.body.appendChild(fresh)
         const freshRoot = createRoot(fresh)
         const t0 = performance.now()
-        freshRoot.render(h(BenchEmbed, { name: embedName, spec: initialSpec, width: 600, height: 400 }))
         // Observe from t0; the quiet window only starts once the svg is rendered.
-        mount.push(await timeWork(fresh, { quietFrames: 2, timeoutMs: 30_000, t0, requireSvg: true }))
+        mount.push(
+          await timeWork(fresh, {
+            quietFrames: 2,
+            timeoutMs: 30_000,
+            t0,
+            requireSvg: true,
+            trigger: () => freshRoot.render(h(BenchEmbed, { name: embedName, spec: initialSpec, width: 600, height: 400 })),
+          }),
+        )
         if (i === reps - 1) {
           nodes = fresh.querySelectorAll('*').length
         }
@@ -97,17 +116,13 @@ async function main(): Promise<void> {
       // Updates on the persistent root: spec.data values change, same shape.
       for (let i = 0; i < reps; i++) {
         const s = i % 2 === 0 ? updatedSpec : initialSpec
-        const t0 = performance.now()
-        await setSpec(s)
-        update.push(await timeWork(host, { quietFrames: 2, timeoutMs: 30_000, t0 }))
+        update.push(await settle(s))
       }
 
       // Resize: width/height change with identical data.
       for (let i = 0; i < reps; i++) {
         const s = i % 2 === 0 ? resizedSpec : updatedSpec
-        const t0 = performance.now()
-        await setSpec(s)
-        resize.push(await timeWork(host, { quietFrames: 2, timeoutMs: 30_000, t0 }))
+        resize.push(await settle(s))
       }
 
       root.unmount()

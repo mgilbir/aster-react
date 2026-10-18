@@ -60,18 +60,102 @@ conformance harness keeps upstream as the oracle throughout.
 
 ---
 
-## 1. Verified current state (2026-10-12)
+## 1. Verified current state (re-verified 2026-10-15, second pass)
 
-Every gate was run from the working tree; all pass.
+All gates re-run from the working tree after the parity iteration.
 
 | Gate | Result |
 |---|---|
 | `pnpm build` / `pnpm typecheck` | pass (all 5 packages) |
-| `pnpm test` | 139 tests / 21 files, all pass |
-| `pnpm conformance` | 413 / 413 SVG geometry vs real Vega |
+| `pnpm test` | 241 tests / 25 files, all pass |
+| `pnpm conformance` | **413 / 413** SVG geometry vs real Vega |
+| `pnpm conformance-vl` | **125 / 125** (incl. repeat, scatter-matrix, vl-facet-2d) |
+| `pnpm sweep-vl` (27,513 VL schema cases) | **96.7%** — 26,609 ok, 774 differ, 69 engine-error, 37 node-error, 24 both-refused |
+| `pnpm conformance:browser` (Chromium, live canvas text metrics) | **413 / 413** |
 | `pnpm probe` | 2 / 2 |
-| bundle budget (`@aster/core` `renderSpec`) | 84.3 kB gzip / 85 kB — pass |
-| `<Chart>` bundle | 90.4 kB gzip vs react-vega 288.7 kB |
+| bundle budget (`@aster/core` `renderSpec`) | 93.9 kB gzip / 96 kB — pass |
+| `pnpm bench:browser` | aster 16.7 ms median frames / 2.2% long frames vs react-vega 26.8 ms / 98.1%; heap-churn retained ~0 MB |
+
+Engine fixes from the parity iteration (closing the corpus and browser gates):
+
+- **Facet/repeat compositions**: the ported `trellisLayout` now runs for 1d
+  facets too (not just 2d trellises); the top-level facet form sizes children
+  from the view defaults (step/bandspace signals, continuous 300) like
+  vega-lite, not the facet's width/height; facet fields are appended to the
+  inner pipeline's stack/aggregate/window groupbys so stacking restarts per
+  cell; `repeat` compiles (plain and grid forms) with per-field filtered
+  datasets, prefixed scales and `child__…` groups.
+- **Legend layout**: gradient-legend labels are measured post-format (vega's
+  U+2212 minus is wider than ASCII '-'), the legend box is `ceil`ed, guide
+  titles default to bold (vega's `guide-title` style) for both measurement and
+  rendering, band/symbol legends use measured per-label/per-column widths with
+  vega's grid accumulation instead of char-count heuristics.
+- **Marks**: rules span to scale zero via vega-lite's `zeroOrMin`/orientation
+  law (with the `inrange` probe signal for non-zero domains), `size` maps to
+  `strokeWidth`, `filled`/`fillOpacity`/`strokeDash`/offsets pass through;
+  rule/rect/image nominal x use band scales (padding 0); ranged bars (x2/y2
+  fields) extend the scale domain to the endpoint union and join axis titles
+  with ', '; the variance aggregate family yields undefined (→ zero-size rect)
+  for fewer than two valid values.
+- **Rendering precision**: vega emits raw doubles for rect/frame paths and
+  d3-path `digits=3` for symbol/arc/line/area paths — matched; angled text
+  renders via `translate+rotate` (with the baseline offset as `dy`) in the
+  string renderer, DOM patcher and canvas alike; the relative-command path
+  canonicalizer is exact.
+
+Second-pass engine fixes (closing the arc/theta/radius and legend families):
+
+- **Arcs**: theta stacking follows vega-lite's polar stack law — aggregated
+  thetas aggregate first (grouped by the raw series fields) then stack;
+  a `radius` channel adds a radius scale driving `outerRadius`/`innerRadius`
+  (stacking into `radius_start/end` when `radius.stack` is set, reversing on
+  `sort: 'descending'`); channel `bandPosition` aligns the start angle within
+  the stacked band; timeUnit thetas reference the offsetted-rect fields.
+- **Legends**: gradient legends honor the legend's `format` (labels and width
+  measurement) and round the background box per `cornerRadius`.
+- **Aggregates**: the variance family (variance/stdev/stderr and population
+  variants) yields undefined below two valid values (→ zero-size rects).
+
+Third-pass engine fixes (the schema-sweep iteration, 94.8% → 96.7%):
+
+- **Stack law**: ported vega-lite's `potentialStackedChannel` rules — explicit
+  `stack:false/null`, ranged marks, and an aggregate anywhere in the encoding
+  with no unaggregated stack-by series disable stacking; stack transforms and
+  mark/scale references now agree. This also restored the area/line corpus
+  after the zero-default rule was corrected to vega-lite's dimension-axis law.
+- **Mark properties**: definition/config paint and geometry props pass through
+  (`strokeWidth`, `strokeDash`, `fillOpacity`, `opacity`, `angle`,
+  corner radii, `padAngle`, `strokeJoin`, …); `xOffset`/`yOffset` shift
+  positional and secondary/centered channels; arc `thetaOffset`/`radiusOffset`
+  shift polar channels; `filled:false` moves paint to stroke consistently;
+  point/circle/square `size`, tick size/thickness/baseline/orientation, and
+  bar `align`/zero-size semantics match the oracle.
+- **Non-positional fields**: aggregate/timeUnit legends carry their format
+  (`timeUnitSpecifier` for time), text marks format aggregate/timeUnit/`format`
+  fields, date-valued linear size domains coerce correctly, and opacity
+  legends tick/opacity geometry was added.
+- **Facets/guides/config**: row-facet title bounds follow vega's title
+  baseline; column-header labels honor label font/angle/baseline/offset;
+  timeUnit facet fields get child-dataflow transforms; axis grid width/dash
+  and singular time intervals (`hour`/`minute`/…) resolve; config
+  `width`/`height`/`size`/`filled`/alignment and bar/rect/tick geometry
+  resolve through the mark compiler while inert style geometry is ignored.
+- **Facets**: timeUnit facet fields get their cast + timeunit transforms in the
+  child dataflow, and header titles/labels format timeUnit values.
+- **Scales/legends**: discrete positional channels coerce unsupported scale
+  types to band/point, continuous color honors supported types and
+  `zero`/scheme ranges, band padding follows `padding`/`paddingInner` and
+  config padding blocks, and gradient legends use the true scale domain for
+  tick placement (with explicit `gradientLength`/`gradientThickness`/
+  `labelOffset`/label-size honored).
+
+Remaining sweep residue (774 differ + 106 error cases) is a long tail across
+~40 property families — per-property legend-layout tails (columns,
+titleOrient, clipHeight, orient), config `axis`/`header` blocks, row-facet
+header widths, guide-scale ranges/domains, and per-family one-offs — see the
+sweep family scoreboard for the ranked list. Four residue cases (`ci0`/`ci1`/
+`exponential` aggregates) are pinned against a nondeterministic oracle
+(Math.random bootstrap) and cannot match deterministically.
 
 Size: **~17.7k main / ~2.7k test LOC**. For scale, the siblings' engines:
 
@@ -437,8 +521,8 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   The **vega-lite sweep** now runs (the lite cases compile both VL
   compilers to Vega before rendering): baseline 10937 ok / 15581 differ /
   935 engine / 43 node — that surface is @aster/vl's drift, tracked
-  separately from this floor. Thirteen rounds closed the bulk of it:
-  25284 ok / 2097 differ / 71 engine / 36 node of 27513 (92%).
+  separately from this floor. Parity rounds closed the bulk of it:
+  26609 ok / 774 differ / 69 engine / 37 node of 27513 (96.7%).
   Closed clusters: the config layer (config forwarding into the Vega
   spec — guide blocks, mark -> config.mark, per-type blocks ->
   style[type], view -> cell with stroke/fill on the frame, title ->

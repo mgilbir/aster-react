@@ -5,8 +5,11 @@
  */
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { readData, type DataFormatSpec } from './data-format.js'
-import { applyTransforms, sortRows, getField, type Row, geoJSONPath, computeBinStep, computeBinEps } from './transform.js'
+import { applyTransforms, sortRows, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row } from './transform.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
+
+/** Scale types whose domain is an ordered set of discrete values. */
+const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
 import { geoRegistry, requireGeo } from './registry.js'
 import { locale } from './locale.js'
 import type {
@@ -31,6 +34,7 @@ import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { trellisLayout, measureBounds } from './trellis.js'
 import { baselineOffset, boundAxisGroup, boundGroupItem, boundLeaf, boundText, Bounds } from './bounds.js'
+import { itemTextWidth, nominalTextWidth, type FontProps } from './text-metrics.js'
 import { symbolPath } from './render.js'
 
 const DEFAULT_SIZE = 500
@@ -59,6 +63,8 @@ interface AggState {
   keyToIdx: Map<string, number[]>
   /** Output row order (group keys, first-occurrence order). */
   outOrder: string[]
+  /** Group key -> output row index (parallel to outOrder; O(1) dirty-index lookup). */
+  outIdx: Map<string, number>
   /** Group key -> aggregate output row (aggregate only). */
   outByKey: Map<string, Row>
   /** Group key -> start index in the grouped output array (window/stack). */
@@ -83,6 +89,8 @@ function buildAggState(input: Row[], groupby: string[], out: Row[]): AggState {
     arr.push(i)
   }
   const outOrder = [...keyToIdx.keys()]
+  const outIdx = new Map<string, number>()
+  outOrder.forEach((k, idx) => outIdx.set(k, idx))
   const outByKey = new Map<string, Row>()
   outOrder.forEach((k, idx) => outByKey.set(k, out[idx]!))
   // Grouped outputs (window/stack) place a group's rows contiguously; track
@@ -96,7 +104,7 @@ function buildAggState(input: Row[], groupby: string[], out: Row[]): AggState {
     groupSize.set(k, size)
     pos += size
   }
-  return { groupby, rowKey, keyToIdx, outOrder, outByKey, groupStart, groupSize, out }
+  return { groupby, rowKey, keyToIdx, outOrder, outIdx, outByKey, groupStart, groupSize, out }
 }
 
 /** Fingerprint the expression params a row-wise transform can reference. */
@@ -129,6 +137,10 @@ interface EvalContext {
   rawGuides?: boolean
   scales: Map<string, Scale>
   scaleTypes: Map<string, string>
+  /** Per-mark, per-eval encode bindings (scale fn + type) so the per-row encode
+   * loop skips two Map lookups per scale channel. EvalContext is fresh per eval,
+   * so bindings can never outlive the scales they reference. */
+  encodeBinding?: EncodeBinding
   projections: Map<string, unknown>
   runtime: ExpressionRuntime
   _defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }>
@@ -208,7 +220,7 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
   // (no axis layout, no title layout, default view size).
   ctx.rawGuides = chart.legends.some((l) => {
     if (typeof l.tickCount === 'string') {
-      const scaleName = l.shape ?? l.stroke ?? l.fill ?? l.size
+      const scaleName = l.shape ?? l.stroke ?? l.fill ?? l.size ?? l.opacity
       const t = scaleName ? chart.scales.find((sc) => sc.name === scaleName)?.type : undefined
       if (t !== 'time' && t !== 'utc') return true
     }
@@ -461,7 +473,7 @@ function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { gro
       // Raw-guide mode skips the legend grid: the groups stay at (0,0) (the
       // built legends are pushed unpositioned below).
       if (ctx.rawGuides) continue
-      if (process.env.ASTER_DEBUG_LEG) console.error('[leg]', orient, 'xb', JSON.stringify(xb), 'yb', JSON.stringify(yb), 'W', ctx.width, 'H', ctx.height)
+      if (typeof process !== 'undefined' && process.env.ASTER_DEBUG_LEG) console.error('[leg]', orient, 'xb', JSON.stringify(xb), 'yb', JSON.stringify(yb), 'W', ctx.width, 'H', ctx.height)
       const n = list.length
       // columns: vertical direction (left/right) stacks in one column; the
       // horizontal default lays all legends out in one row.
@@ -624,6 +636,7 @@ function measureGuideGroup(g: SceneGroup): Bounds {
   if (g.role === 'row-header' || g.role === 'column-footer') {
     return boundLeaf(new Bounds(), g as unknown as SceneItem).translate(-0.5, -0.5)
   }
+  if (g.role === 'row-title') return measureBounds(g)
   if (g.role === 'legend') {
     // legendLayout sets item.bounds = [x, y, x+width, y+height] (the outer
     // box incl. padding), anchored at the laid-out group position. A legend
@@ -671,7 +684,7 @@ function computeGuidePadding(
   // Epsilon guard: vega's rotated-text bounds land on exact integers where
   // our fp path can be off by 1 ulp; ceil would otherwise grow the padding.
   const EPS = 1e-9
-  if (process.env.ASTER_DEBUG_PAD) {
+  if (typeof process !== 'undefined' && process.env.ASTER_DEBUG_PAD) {
     for (const group of items) {
       const b = measureGuideGroup(group)
       console.error(`[pad] ${group.role ?? '?'} bounds=[${b.x1},${b.y1},${b.x2},${b.y2}] w=${width} h=${height}`)
@@ -831,7 +844,10 @@ function buildContent(
   let facetWidth = width
   let facetHeight = height
   if (isFacetSpec) {
-    if (isTrellis(ctx)) applyTrellisLayout(items, ctx)
+    // vega runs trellisLayout over every facet composition (1d and 2d alike):
+    // the root marks all carry the facet `layout` and the ported grid +
+    // header + title laws position cells, headers, footers and titles.
+    applyTrellisLayout(items, ctx)
     const childW = ctx.signalParams['child_width'] as number
     const childH = ctx.signalParams['child_height'] as number
     facetWidth = 0
@@ -1060,7 +1076,9 @@ function contentBoundsOf(chart: CompiledChart, items: SceneNode[], width: number
     const it = node as SceneItem
     if (it.text != null) {
       const fs = (it as Record<string, unknown>).fontSize as number | undefined ?? 11
-      const w = estimateTextWidth(String(it.text), fs)
+      // vega bounds text items with textMetrics (canvas when available) —
+      // measuring with the item's font keeps browser layout on vega's numbers.
+      const w = itemTextWidth(it as FontProps, String(it.text))
       const angle = (it as Record<string, unknown>).angle as number | undefined
       const anchor = it.align
       if (angle) {
@@ -1471,11 +1489,19 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
               projections: ctx.projections,
             }, d.name)
             if (isAgg) {
+              // The dirty groups' rows all share one group key (keyToIdx is the
+              // membership index), so aggregateGroup can be called directly —
+              // the generic pipeline would run groupRows and rebuild a Map per
+              // group for a group that is already known.
+              const aggFields = (t.fields as (string | null)[] | undefined) ?? []
+              const aggOps = (t.ops as string[] | undefined) ?? []
+              const aggAs = (t.as as string[] | undefined) ?? []
+              const aggParams = (t as { aggregate_params?: (number | null)[] }).aggregate_params
               for (const g of dirty) {
                 const idxs = state!.keyToIdx.get(g)
                 if (!idxs) { safe = false; break }
-                const derived = apply(idxs.map((idx) => rows[idx]!))
-                if (derived[0] != null) state!.outByKey.set(g, derived[0])
+                const derived = aggregateGroup(idxs.map((idx) => rows[idx]!), state!.groupby, aggFields, aggOps, aggAs, aggParams)
+                state!.outByKey.set(g, derived)
               }
               if (safe) {
                 const out = state!.outOrder.map((k) => state!.outByKey.get(k)!)
@@ -1483,7 +1509,8 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
                 rows = out
                 chartMetaData.__aggState!.set(name, state!)
                 aggUpdated = true
-                outputChanges = new Set([...dirty].map((g) => state!.outOrder.indexOf(g)))
+                const outIdx = state!.outIdx
+                outputChanges = new Set([...dirty].map((g) => outIdx.get(g)!).filter((i) => i != null))
               }
             } else {
               const out = state!.out
@@ -1640,9 +1667,10 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
 
 function buildScales(ctx: EvalContext): void {
   const scaleSignals = ctx.signalParams
-  const chartMeta = ctx.chart as unknown as { __cachedScales?: Map<string, { scale: Scale; multi: boolean }>; __scaleDomain?: Map<string, { data: string; field: string; lo: number; hi: number; oldVals: number[]; loCount: number; hiCount: number; finite: boolean }>; __paramFp?: string }
+  const chartMeta = ctx.chart as unknown as { __cachedScales?: Map<string, { scale: Scale; multi: boolean }>; __scaleDomain?: Map<string, { data: string; field: string; lo: number; hi: number; oldVals: number[]; loCount: number; hiCount: number; finite: boolean }>; __scaleDomainDisc?: Map<string, { oldVals: unknown[]; counts: Map<unknown, number>; firstIdx: Map<unknown, number> }>; __paramFp?: string }
   const cached = chartMeta.__cachedScales ?? (chartMeta.__cachedScales = new Map())
   const domainCache = chartMeta.__scaleDomain ?? (chartMeta.__scaleDomain = new Map())
+  const discreteCache = chartMeta.__scaleDomainDisc ?? (chartMeta.__scaleDomainDisc = new Map())
   // A scale whose domain references none of the affected datasets (closed over
   // source chains) and whose size/signal params are unchanged is identical to
   // the previous eval's scale — reuse it and skip the O(n) domain re-scan.
@@ -1666,7 +1694,8 @@ function buildScales(ctx: EvalContext): void {
       // is provably unchanged: no changed row extends [lo,hi] and no changed row's
       // old value sat at a boundary (which could move the min/max). This skips the
       // O(n) domain re-scan for the common case (few points change, domain holds).
-      const CONTINUOUS = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc'])
+      const CONTINUOUS = CONTINUOUS_TYPES
+      const DISCRETE = DISCRETE_TYPES
       const dom = (typeof s.domain === 'object' && !Array.isArray(s.domain) && typeof (s.domain as { data?: unknown }).data === 'string')
         ? (s.domain as { data: string; field: string })
         : null
@@ -1693,6 +1722,37 @@ function buildScales(ctx: EvalContext): void {
             if (oldV === prevDom.hi && --hiCount <= 0) { stable = false; break }
           }
           reuse = stable
+        }
+      }
+      // Discrete (band/point/ordinal) domains: the domain is the *ordered set*
+      // of distinct values, so stability needs a value census, not min/max.
+      // Track each value's multiplicity and first-occurrence index: the ordered
+      // domain is unchanged iff every changed row swaps its old value for one
+      // that already exists with an earlier first occurrence, while the old
+      // value keeps a positive count and its own first occurrence. Any ambiguity
+      // (a value appearing/vanishing, or a first occurrence moving) rebuilds.
+      if (!reuse && dom && DISCRETE_TYPES.has(s.type)) {
+        const disc = discreteCache.get(s.name)
+        const changes = ctx.dataChanges?.get(dom.data)
+        const rows = ctx.datasets.get(dom.data) ?? []
+        if (disc && disc.oldVals.length === rows.length && changes && changes.size) {
+          let stable = true
+          for (const i of changes) {
+            if (i < 0 || i >= rows.length) { stable = false; break }
+            const nv = (rows[i] as Row)[dom.field]
+            const ov = disc.oldVals[i]!
+            if (ov === nv) continue
+            const nCount = disc.counts.get(nv)
+            const nFirst = disc.firstIdx.get(nv)
+            if (nCount == null || nCount <= 0 || nFirst == null || nFirst > i) { stable = false; break }
+            const oCount = disc.counts.get(ov)
+            if (oCount == null || oCount <= 1) { stable = false; break }
+            if (disc.firstIdx.get(ov) === i) { stable = false; break }
+            disc.counts.set(ov, oCount - 1)
+            disc.counts.set(nv, nCount + 1)
+            disc.oldVals[i] = nv
+          }
+          if (stable) reuse = true
         }
       }
       if (reuse) {
@@ -1723,22 +1783,44 @@ function buildScales(ctx: EvalContext): void {
     if (typeof s.domain === 'object' && !Array.isArray(s.domain) && typeof (s.domain as { data?: unknown }).data === 'string') {
       const dom = s.domain as { data: string; field: string }
       const rows = ctx.datasets.get(dom.data) ?? []
-      const vals = rows.map((r) => Number((r as Row)[dom.field]))
-      const finite = vals.filter((v) => Number.isFinite(v))
-      const lo = finite.length ? Math.min(...finite) : 0
-      const hi = finite.length ? Math.max(...finite) : 1
-      domainCache.set(s.name, {
-        data: dom.data,
-        field: dom.field,
-        lo,
-        hi,
-        oldVals: vals,
-        loCount: finite.length ? vals.filter((v) => v === lo).length : 0,
-        hiCount: finite.length ? vals.filter((v) => v === hi).length : 0,
-        finite: finite.length > 0,
-      })
+      if (DISCRETE_TYPES.has(s.type)) {
+        // Census for discrete-domain stability: value multiplicity + first-occurrence
+        // index (see the reuse check above).
+        const counts = new Map<unknown, number>()
+        const firstIdx = new Map<unknown, number>()
+        const vals: unknown[] = []
+        for (let i = 0; i < rows.length; i++) {
+          const v = getField(rows[i]!, dom.field)
+          vals.push(v)
+          counts.set(v, (counts.get(v) ?? 0) + 1)
+          if (!firstIdx.has(v)) firstIdx.set(v, i)
+        }
+        discreteCache.set(s.name, { oldVals: vals, counts, firstIdx })
+      } else {
+        const vals = rows.map((r) => Number((r as Row)[dom.field]))
+        const finite = vals.filter((v) => Number.isFinite(v))
+        const lo = finite.length ? Math.min(...finite) : 0
+        const hi = finite.length ? Math.max(...finite) : 1
+        domainCache.set(s.name, {
+          data: dom.data,
+          field: dom.field,
+          lo,
+          hi,
+          oldVals: vals,
+          loCount: finite.length ? vals.filter((v) => v === lo).length : 0,
+          hiCount: finite.length ? vals.filter((v) => v === hi).length : 0,
+          finite: finite.length > 0,
+        })
+      }
     }
   }
+  // Snapshot the final scale objects for this eval. The differential item-reuse
+  // check (canReuseItems) compares the next eval's scales against the PREVIOUS
+  // eval's: when a scale object is provably the same, unchanged rows re-encode
+  // identically even if the scale's domain references an affected dataset.
+  const meta = chartMeta as unknown as { __lastScales?: Map<string, Scale>; __prevScales?: Map<string, Scale> }
+  meta.__prevScales = meta.__lastScales
+  meta.__lastScales = new Map(ctx.scales)
 }
 
 /** True when a scale domain references an affected dataset (data or multi-field). */
@@ -1789,7 +1871,9 @@ function concreteDomain(scale: CompiledScale, values: unknown[]): unknown[] {
     return ms.length ? [Math.min(...ms), Math.max(...ms)] : []
   }
   if (CONTINUOUS_TYPES.has(type)) {
-    const finite = values.filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
+    const finite = values
+      .map((v) => v instanceof Date ? v.getTime() : v)
+      .filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
     return finite.length ? [Math.min(...finite), Math.max(...finite)] : []
   }
   // Discrete scales: distinct values (sorted when the domain requests it).
@@ -1840,11 +1924,17 @@ function canReuseItems(
   // formula, so the previously-encoded items would be stale. Only reuse when the
   // expression params are identical to the previous eval.
   if (paramFpOf(ctx.signalParams) !== (ctx.chart as unknown as { __prevParamFp?: string }).__prevParamFp) return false
-  // Bail if the mark references a scale with an affected data-domain (its
-  // positions would shift when the domain recomputes).
+  // Bail if the mark uses a scale whose encoding behavior may have changed:
+  // either the scale object differs from the PREVIOUS eval's (its domain was
+  // re-derived), or — for multi-dataset domains, which are always re-resolved —
+  // the domain references an affected dataset.
+  const prevScales = (ctx.chart as unknown as { __prevScales?: Map<string, Scale> }).__prevScales
   for (const name of collectMarkScales(mark)) {
-    const scale = ctx.chart.scales.find((s) => s.name === name)
-    if (scale && domainReferencesAffected(scale.domain, ctx.affected)) return false
+    const compiled = ctx.chart.scales.find((s) => s.name === name)
+    if (!compiled) continue
+    const cur = ctx.scales.get(name)
+    if (cur != null && cur === prevScales?.get(name)) continue
+    if (domainReferencesAffected(compiled.domain, ctx.affected)) return false
   }
   return true
 }
@@ -1883,7 +1973,16 @@ function evaluateMark(
 
     // Sort rect marks by their scale y field so rendering order matches vega:
     // bars with smaller y-value render first (appear at the front).
+    // The sort order is cached per mark: when every row's sort key is unchanged
+    // (the common steady-state update), the previous permutation is replayed —
+    // an O(n) key compare instead of an O(n log n) re-sort — and, because the
+    // paint order is provably identical, per-datum differential item reuse stays
+    // available for rect marks (it is unsafe when the order actually shifts).
+    // `rows` stays in DATASET order (the reuse path indexes it with changeset
+    // indices); `encodeRows` is the paint-ordered view used for encoding.
     let rectSorts = false
+    let rectPermInv: number[] | null = null
+    let encodeRows: Row[] = rows
     if (mark.type === 'rect') {
       const enc = mark.encode?.update
       if (enc) {
@@ -1891,12 +1990,30 @@ function evaluateMark(
           const val = enc[key]
           if (val && typeof val === 'object' && 'field' in val) {
             const f = (val as { field: string }).field
-            rows = [...rows].sort((a: Row, b: Row) => {
-              const av = a[f]
-              const bv = b[f]
-              return (typeof bv === 'number' ? bv : 0) - (typeof av === 'number' ? av : 0)
-            })
-            rectSorts = true
+            const keys = rows.map((r: Row) => (typeof r[f] === 'number' ? (r[f] as number) : 0))
+            const prev = rectSortCache.get(mark)
+            if (prev && prev.keys.length === keys.length && prev.keys.every((k, i) => k === keys[i])) {
+              // Same key values at the same source positions -> the previous
+              // stable sort result is exactly what a fresh sort would produce.
+              encodeRows = prev.perm.map((srcIdx) => rows[srcIdx]!)
+              rectPermInv = prev.inv
+            } else {
+              // Index-based sort: equivalent to a stable sort of the rows, but
+              // it also yields the permutation (and its inverse) so we can tell
+              // whether the paint order actually moved.
+              const n = rows.length
+              const perm = new Array<number>(n)
+              for (let i = 0; i < n; i++) perm[i] = i
+              perm.sort((a, b) => (keys[b]! - keys[a]!) || (a - b))
+              encodeRows = perm.map((srcIdx) => rows[srcIdx]!)
+              const inv = new Array<number>(n)
+              for (let p = 0; p < n; p++) inv[perm[p]!] = p
+              rectSortCache.set(mark, { keys, perm, inv })
+              rectPermInv = inv
+              // Values changed but the resulting paint order did not (vs the
+              // previous eval) -> per-datum item reuse stays safe.
+              rectSorts = !(prev && prev.inv.length === n && prev.inv.every((p, i) => p === inv[i]))
+            }
             break
           }
         }
@@ -1904,12 +2021,15 @@ function evaluateMark(
     }
 
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
+    ctx.encodeBinding = encodeBindingFor(update, ctx)
     // Per-datum differential update: when the source dataset published a
     // changeset and reuse is provably safe (no reordering, unchanged length, no
-    // scale whose data-domain spans a changed dataset), keep the previous item
-    // objects for unchanged indices so the DOM patcher skips them and the
-    // re-encode of those items is skipped entirely (including the row clone).
-    if (canReuseItems(mark, ctx, source, rows.length, prevGroup, rectSorts)) {
+    // scale whose encoding may have changed), keep the previous item objects for
+    // unchanged indices so the DOM patcher skips them and the re-encode of those
+    // items is skipped entirely (including the row clone). `rows` is in dataset
+    // order (changeset indices refer to it); rect marks map the dataset index to
+    // its paint position via the sort permutation.
+    if (canReuseItems(mark, ctx, source, encodeRows.length, prevGroup, rectSorts)) {
       const changes = ctx.datasetChanges!.get(source)!
       const prevItems = prevGroup!.items as SceneItem[]
       // Reuse the previous group's item ARRAY in place and replace only the
@@ -1919,16 +2039,18 @@ function evaluateMark(
       const gen = (ctx.chart as unknown as { __gen?: number }).__gen ?? 0
       for (const i of changes) {
         if (i < 0 || i >= prevItems.length) continue
+        const pos = rectPermInv ? rectPermInv[i]! : i
+        if (pos < 0 || pos >= prevItems.length) continue
         const row = { ...(rows[i] as Row) }
         const res = resolveEncodeSet(update, row, ctx, mark.type)
         res.datum = row
         res.__gen = gen
-        prevItems[i] = res
+        prevItems[pos] = res
       }
       items = prevItems
     } else {
       const gen = (ctx.chart as unknown as { __gen?: number }).__gen ?? 0
-      items = rows.map((row) => {
+      items = encodeRows.map((row) => {
         const copy = rowsCloned ? row : { ...row }
         const res = resolveEncodeSet(update, copy, ctx, mark.type)
         res.datum = copy
@@ -3097,7 +3219,9 @@ function buildColumnHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
   }
 
   const result: SceneGroup[] = []
-  const hdrTitle = (mark as unknown as { title?: Record<string, unknown> }).title ?? {}
+  const hdrTitleRaw = (mark as unknown as { title?: Record<string, unknown> }).title
+  const hdrTitle = hdrTitleRaw ?? {}
+  const hdrPad = (hdrTitle.offset as number | undefined) ?? 10
   sortedRows.forEach((row, i) => {
     // the header label evaluates the group's title signal with the facet row
     // as `parent` (vega evaluates the title against the facet datum); a
@@ -3107,7 +3231,7 @@ function buildColumnHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
     result.push({
       marktype: 'group', name: mark.name, role: 'column-header',
       items: [
-        { text: labelVal, x: cellWidth / 2, y: -12, align: (hdrTitle.align as 'center') ?? 'center', fill: (hdrTitle.color as string) ?? '#000', fontSize: (hdrTitle.fontSize as number) ?? 10, ...(hdrTitle.font != null ? { font: hdrTitle.font as string } : {}), ...(hdrTitle.fontWeight != null ? { fontWeight: hdrTitle.fontWeight as SceneItem['fontWeight'] } : {}), ...(hdrTitle.limit != null ? { limit: hdrTitle.limit as number } : {}) },
+        ...(hdrTitleRaw == null ? [] : [{ text: labelVal, x: cellWidth / 2, y: -(hdrPad + 2), align: (hdrTitle.align as 'center') ?? 'center', ...(hdrTitle.baseline != null ? { baseline: hdrTitle.baseline as SceneItem['baseline'] } : {}), ...(hdrTitle.angle != null ? { angle: hdrTitle.angle as number } : {}), fill: (hdrTitle.color as string) ?? '#000', fontSize: (hdrTitle.fontSize as number) ?? 10, ...(hdrTitle.font != null ? { font: hdrTitle.font as string } : {}), ...(hdrTitle.fontWeight != null ? { fontWeight: hdrTitle.fontWeight as SceneItem['fontWeight'] } : {}), ...(hdrTitle.limit != null ? { limit: hdrTitle.limit as number } : {}) }]),
         // column-header background: zero-height, full-width path (M0,0hWv0h-WZ).
         { path: `M0,0h${cellWidth}v0h-${cellWidth}Z`, x: 0, y: 0 } as SceneItem,
       ],
@@ -3363,7 +3487,7 @@ function positionColumnHeaderLabel(header: SceneGroup): void {
     if ((it as SceneItem).text != null) label = it as SceneItem
   }
   if (!label) return
-  ;(label as Record<string, unknown>).fontSize = GUIDE_LABEL_FONT_SIZE
+  if ((label as Record<string, unknown>).fontSize == null) (label as Record<string, unknown>).fontSize = GUIDE_LABEL_FONT_SIZE
 }
 
 /** Group-node stroke expansion (vega's boundStroke on the group item). */
@@ -3713,10 +3837,37 @@ interface EncodePlan {
   definedSpec: EncodeValue | EncodeValue[] | undefined
 }
 
+/** Per-mark, per-eval scale bindings for encode channels. The encode value
+ * objects are shared across all rows of a mark, so resolving their scale
+ * function once per mark (instead of per row per channel) removes two Map
+ * lookups per scale channel per row. */
+type EncodeBinding = Map<object, { scale: Scale; type?: string }>
+
+function encodeBindingFor(encode: Record<string, EncodeValue | EncodeValue[]>, ctx: EvalContext): EncodeBinding {
+  const binding: EncodeBinding = new Map()
+  const walk = (v: unknown): void => {
+    if (v == null || typeof v !== 'object') return
+    if (Array.isArray(v)) { for (const x of v) walk(x); return }
+    const rec = v as Record<string, unknown>
+    if (typeof rec.scale === 'string' && !binding.has(v as object)) {
+      const scale = ctx.scales.get(rec.scale)
+      if (scale) binding.set(v as object, { scale, type: ctx.scaleTypes.get(rec.scale) })
+    }
+    for (const k of Object.keys(rec)) walk(rec[k])
+  }
+  for (const key of Object.keys(encode)) walk(encode[key])
+  return binding
+}
+
 // Per-encode-object plan. The key scan + signal/plain partition is invariant
 // across the rows of a mark; hoisting it removes an Object.keys allocation and
 // an array partition per row (10k rows -> 1 scan).
 const encodePlanCache = new WeakMap<object, EncodePlan>()
+
+/** Cached rect paint order (see evaluateMark): sort keys, the stable-sort
+ * permutation, and its inverse, so an eval with unchanged keys can replay the
+ * order in O(n) and prove differential item reuse safe. */
+const rectSortCache = new WeakMap<object, { keys: number[]; perm: number[]; inv: number[] }>()
 
 function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): EncodePlan {
   let plan = encodePlanCache.get(encode)
@@ -3743,15 +3894,7 @@ function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): Encode
 
 function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
   const plan = encodePlan(encode)
-
-  // Pass 1: resolve all non-signal values and accumulate them.
-  const ctxItem: Record<string, unknown> = {}
-  for (const key of plan.plainKeys) {
-    const resolved = resolveEncodeProperty(encode[key], datum, ctx)
-    if (resolved !== undefined) {
-      ctxItem[key] = resolved
-    }
-  }
+  const binding = ctx.encodeBinding
 
   // Resolve the `defined` signal BEFORE datum mutation. Vega evaluates
   // `defined` against the original data tuple (before scale resolution),
@@ -3759,30 +3902,40 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
   // value (null), not the scaled pixel position.
   let definedValue: unknown
   if (plan.definedSpec !== undefined) {
-    definedValue = resolveEncodeProperty(plan.definedSpec, datum, ctx)
+    definedValue = resolveEncodeProperty(plan.definedSpec, datum, ctx, binding)
   }
 
-  // Pass 2: resolve signal-value pairs. datum gets the resolved values appended.
+  // Pass 1: resolve all non-signal values straight into the item (no
+  // intermediate per-row object — this is the hottest loop in the engine).
   const item: SceneItem = {}
-  for (const k in ctxItem) {
-    datum[k as keyof Row] = ctxItem[k] as unknown
-    ;(item as unknown as Record<string, unknown>)[k] = ctxItem[k]
+  const rec = item as unknown as Record<string, unknown>
+  for (const key of plan.plainKeys) {
+    const resolved = resolveEncodeProperty(encode[key], datum, ctx, binding)
+    if (resolved !== undefined) {
+      rec[key] = resolved
+    }
+  }
+
+  // Pass 2: mirror the resolved plain values onto the datum tuple, then resolve
+  // signal-value pairs, which may read those values back off `datum`.
+  for (const key of plan.plainKeys) {
+    const v = rec[key]
+    if (v !== undefined) datum[key as keyof Row] = v
   }
   // Apply the pre-resolved `defined` value (from before datum mutation).
   if (definedValue !== undefined) {
-    ;(item as unknown as Record<string, unknown>)['defined'] = definedValue
+    rec['defined'] = definedValue
   }
   for (const key of plan.signalKeys) {
-    const resolved = resolveEncodeProperty(encode[key], datum, ctx)
+    const resolved = resolveEncodeProperty(encode[key], datum, ctx, binding)
     if (resolved !== undefined) {
-      ;(item as unknown as Record<string, unknown>)[key] = resolved
+      rec[key] = resolved
     }
   }
   // Post-process: vega parse/mark `adjustSpatial` — resolve x2/xc/y2/yc into
   // x/y/width/height. Rule marks skip it entirely (their x2/y2 are line
   // endpoints, not edges); rect/group/image swap so x/y is the min edge.
   // x2/y2 overwrite an encoded width/height; xc/yc only set x/y.
-  const rec = item as unknown as Record<string, unknown>
   if (marktype !== 'rule') {
     const canSwap = marktype === 'rect' || marktype === 'group' || marktype === 'image'
     const num = (v: unknown): number | null =>
@@ -3820,6 +3973,7 @@ function resolveEncodeProperty(
   spec: EncodeValue | EncodeValue[] | undefined,
   datum: Row,
   ctx: EvalContext,
+  binding?: EncodeBinding,
 ): unknown {
   if (spec == null) return undefined
   if (Array.isArray(spec)) {
@@ -3832,7 +3986,7 @@ function resolveEncodeProperty(
           const test = ctx.runtime.expr(cond.test)
           if (test(datum, ctx.signalParams)) {
             try {
-              return resolveEncodeValueInternal(cond, datum, ctx)
+              return resolveEncodeValueInternal(cond, datum, ctx, binding)
             } catch {
               return undefined
             }
@@ -3841,15 +3995,15 @@ function resolveEncodeProperty(
           // Expression evaluation failed (e.g., datum has no field); skip condition
         }
       } else if (cond && typeof cond === 'object') {
-        return resolveEncodeValueInternal(cond, datum, ctx)
+        return resolveEncodeValueInternal(cond, datum, ctx, binding)
       }
     }
     return undefined
   }
-  return resolveEncodeValueInternal(spec, datum, ctx)
+  return resolveEncodeValueInternal(spec, datum, ctx, binding)
 }
 
-function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, ctx: EvalContext): unknown {
+function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, ctx: EvalContext, binding?: EncodeBinding): unknown {
   if (value == null || typeof value !== 'object') return value
   // 1. Signal always takes priority - evaluate the expression
   if ('signal' in value && value.signal !== undefined) {
@@ -3870,7 +4024,10 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   if ('scale' in value) {
     const multVal = (value as { mult?: number }).mult
     const offsetVal = (value as { offset?: number }).offset
-    const scale = ctx.scales.get(value.scale as string)
+    // Per-mark binding (populated once per mark per eval) avoids two Map lookups
+    // per row per channel; fall back to the live maps for anything it missed.
+    const bound = binding?.get(value as object)
+    const scale = bound ? bound.scale : (ctx.scales.get(value.scale as string) as Scale | undefined)
     const field = (value as { field?: unknown }).field
     const bandSpec = (value as { band?: boolean | number | { signal: string } }).band
     const offsetSpec = (value as { offset?: number | { signal: string } }).offset
@@ -3905,7 +4062,7 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
     }
     if (raw === undefined) return undefined
     
-    const scaleType = ctx.scaleTypes.get(value.scale as string)
+    const scaleType = bound ? bound.type : ctx.scaleTypes.get(value.scale as string)
     if ((scaleType === 'time' || scaleType === 'utc') && typeof raw === 'string') {
       const dateObj = new Date(raw)
       if (dateObj instanceof Date && Number.isFinite(dateObj.getTime())) {
@@ -3956,9 +4113,11 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
       position += offset
     }
     
-    // Apply mult/offset after scale resolution (only if they are actual numbers, not signal objects)
+    // Apply mult after scale resolution (only if it is an actual number, not a signal object).
+    // The offset was already applied in step 5 (offsetSpec) — applying the
+    // tail's offsetVal here would double it.
     if (typeof multVal === 'number') position = position * multVal
-    if (typeof offsetVal === 'number') position = position + offsetVal
+    if (offsetSpec == null && typeof offsetVal === 'number') position = position + offsetVal
     return position
   }
   if ('field' in value) {
@@ -4031,8 +4190,33 @@ function legendContentWidth(ctx: EvalContext): number {
 
 function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
   // Resolve the scale name (fill/stroke color legends, size legends, or shape legends).
-  const scaleName = legend.shape ?? legend.stroke ?? legend.fill ?? legend.size
+  const scaleName = legend.shape ?? legend.stroke ?? legend.fill ?? legend.size ?? legend.opacity
   if (!scaleName) return null
+  // Legend labels honor formatType/format; a Vega-Lite timeUnit legend emits
+  // the format as a timeUnitSpecifier(...) signal, which must be resolved to
+  // its strftime specifier before formatting.
+  const legendLabel = (v: unknown): string => {
+    if (v == null) return ''
+    const L = locale(undefined)
+    let fmt = (legend as { format?: unknown }).format
+    const fmtType = (legend as { formatType?: unknown }).formatType
+    if (fmt != null && typeof fmt === 'object' && 'signal' in (fmt as Record<string, unknown>)) {
+      const sig = String((fmt as { signal: string }).signal)
+      try {
+        const resolved = ctx.runtime.expr(sig)({}, ctx.signalParams)
+        if (typeof resolved === 'string') fmt = resolved
+        else fmt = undefined
+      } catch {
+        fmt = evalTimeUnitSpecifier(sig)
+      }
+    }
+    if (fmtType === 'time' || v instanceof Date) {
+      const d = v instanceof Date ? v : new Date(Number(v))
+      return L.timeFormat(typeof fmt === 'string' ? fmt : '%b %d, %Y')(d)
+    }
+    if (fmt !== undefined) return L.format(String(fmt))(typeof v === 'number' ? v : Number(v))
+    return String(v)
+  }
   const scale = ctx.scales.get(scaleName)
   if (!scale) return null
   const scaleType = ctx.scaleTypes.get(scaleName) ?? ''
@@ -4049,10 +4233,17 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     if (titleStr) items.push({ text: titleStr, x: 0, y: 0, align: 'left', baseline: 'top', fill: '#000', fontSize: 11 })
     return { marktype: 'group', role: 'legend', x: 0, y: 0, width: 0, height: 0, items }
   }
-  // Domain values
-  const domain = scale.domain() as unknown[]
-  const d0 = domain[0]
-  const d1 = domain[domain.length - 1]
+  // Domain values. A continuous symbol legend (opacity, or a color scale
+  // without a gradient) lists generated ticks, not just the domain endpoints.
+  const rawDomain = scale.domain() as unknown[]
+  const domain = (CONTINUOUS_TYPES.has(scaleType) && (legend as { values?: unknown }).values == null
+    && typeof (scale as { ticks?: (n?: number) => unknown[] }).ticks === 'function'
+    ? ((scale as { ticks: (n?: number) => unknown[] }).ticks(5) as unknown[])
+    : rawDomain)
+  // gradient legends position ticks across the true scale domain (not the
+  // generated tick list); symbol legends list the ticks themselves.
+  const d0 = rawDomain[0]
+  const d1 = rawDomain[rawDomain.length - 1]
   const orient = legend.orient ?? 'right'
 
   // --- Gradient legend (continuous scale + gradientLength) ---
@@ -4072,7 +4263,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       }
     }
     const gradientLength = GL
-    const L = Math.max(64, Math.min(gradientLength, 200))
+    const L = Math.max(0, gradientLength)
 
     // Vega numbers gradient defs from a global counter; replicate that so the
     // `url(#gradient_n)` references match the oracle (which runs in-process).
@@ -4106,13 +4297,14 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const d0n = typeof d0 === 'number' ? d0 : 0
       const d1n = typeof d1 === 'number' ? d1 : 1
       const LL = locale(undefined)
-      const legendFmt = LL.format('.1~f')
+      const legendFmt = LL.format((legend as { format?: string }).format ?? '.1~f')
       const items: SceneItem[] = []
       const bgW = gradientLength
       const bgH = titleH0 + thickness + 12
       const bgX0 = borderColor0 != null ? 0.5 : 0
       const bgY0 = borderColor0 != null ? 0.5 : 0
-      items.push({ path: `M${bgX0},${bgY0}h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
+      const gradCRH = (legend as { cornerRadius?: number }).cornerRadius
+      items.push({ path: gradCRH ? roundedRectPath(bgX0, bgY0, bgW, bgH, Math.min(gradCRH, bgW / 2, bgH / 2)) : `M${bgX0},${bgY0}h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
       if (titleStr0) items.push({ text: titleStr0, x: 0, y: (titleFs0 * 9) / 11, align: 'left', fill: titleColor0, fontSize: titleFs0, ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
       items.push({ path: `M0,0h${gradientLength}v${thickness}h-${gradientLength}Z`, x: 0, y: titleH0, fill: `url(#${gradientId})`, stroke: gradStrokeColor, strokeWidth: gradStrokeWidth, opacity: gradOpacityProp ?? 1 })
       for (const t of tickNums) {
@@ -4142,14 +4334,19 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       if (typeof ov === 'number') gradientOpacity = ov
     }
 
-    // Outer background width = the wider of the label run (labels sit at x=18,
-    // ~8px per character at 10px) and the title (11px bold, vega's estimate is
-    // `~~(0.8 * len * fontSize)`).
-    const labelStrs = tickNums.map((t: unknown) => String(typeof t === 'number' ? t : 0))
-    const maxLabelLen = labelStrs.reduce((m: number, s: string) => Math.max(m, s.length), 0)
+    // Outer background width = the wider of the label run and the title
+    // (vega measures both with textMetrics: labels 10px, title bold 11px).
+    // Measure the FORMATTED labels — vega-format emits U+2212 for negatives
+    // (16.96px for '−10' vs 14.45px for the ASCII '-10' of String(t)).
+    const fmtForMeasure = locale(undefined).format((legend as { format?: string }).format ?? '.1~f')
+    const labelStrs = tickNums.map((t: unknown) => fmtForMeasure(typeof t === 'number' ? t : 0))
+    const maxLabelW = labelStrs.reduce((m: number, s: string) => Math.max(m, nominalTextWidth(s, labelFs0)), 0)
     const titleStr = String(legend.title ?? '')
-    const titleWidth = titleStr.length > 0 ? ~~(0.8 * titleStr.length * 11) : 0
-    const outerWidth = Math.max(18 + 8 * maxLabelLen, titleWidth)
+    const titleWidth = titleStr.length > 0 ? nominalTextWidth(titleStr, titleFs0, 'bold') : 0
+    const vThickness = (legend as { gradientThickness?: number }).gradientThickness ?? 16
+    const vLabelOffset = (legend as { labelOffset?: number }).labelOffset ?? 2
+    // vega's legendLayout sizes the legend box as ceil(bounds.width() + 2*pad).
+    const outerWidth = Math.ceil(Math.max(vThickness + vLabelOffset + maxLabelW, titleWidth))
 
     const items: SceneItem[] = []
     // Title height: 16px when a title is present, 0 otherwise.
@@ -4159,10 +4356,11 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // paints it.
     const bgXV = borderColor0 != null ? 0.5 : 0
     const bgYV = borderColor0 != null ? 0.5 : 0
-    items.push({ path: `M${bgXV},${bgYV}h${outerWidth}v${titleH + L}h-${outerWidth}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
-    // Gradient rect at legend-relative (0, titleH), 16xL
+    const gradCRV = (legend as { cornerRadius?: number }).cornerRadius
+    items.push({ path: gradCRV ? roundedRectPath(bgXV, bgYV, outerWidth, titleH + L, Math.min(gradCRV, outerWidth / 2, (titleH + L) / 2)) : `M${bgXV},${bgYV}h${outerWidth}v${titleH + L}h-${outerWidth}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
+    // Gradient rect at legend-relative (0, titleH), thickness x L
     items.push({
-      path: `M0,0h16v${L}h-16Z`,
+      path: `M0,0h${vThickness}v${L}h-${vThickness}Z`,
       x: 0, y: titleH,
       fill: `url(#${gradientId})`,
       stroke: gradStrokeColor,
@@ -4183,7 +4381,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // the Unicode minus sign (U+2212) for negative values. Match that by using
     // the locale number formatter rather than String().
     const LL = locale(undefined)
-    const legendFmt = LL.format('.1~f')
+    const legendFmt = LL.format((legend as { format?: string }).format ?? '.1~f')
     for (const t of tickNums) {
       const tNum = typeof t === 'number' ? t : 0
       const perc = d1n !== d0n ? (tNum - d0n) / (d1n - d0n) : 0
@@ -4192,7 +4390,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         : perc >= 1 ? Math.round(0.79 * LABEL_FONT_SIZE)
         : 0.3 * LABEL_FONT_SIZE
       const yPos = titleH + (1 - perc) * L + baselineOffset
-      items.push({ text: legendFmt(tNum), x: 18, y: yPos, align: 'left', fill: labelColor0, fontSize: labelFs0, ...(labelOpacity0 != null ? { fillOpacity: labelOpacity0 } : {}) })
+      items.push({ text: legendFmt(tNum), x: vThickness + vLabelOffset, y: yPos, align: 'left', fill: labelColor0, fontSize: labelFs0, ...(labelOpacity0 != null ? { fillOpacity: labelOpacity0 } : {}) })
     }
     // Gradient def from scale's interpolator
     const colorScale = scale as ColorScale
@@ -4281,7 +4479,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // the label's bound half-height (fontSize/2) floors each entry row
     const halfLabel = fontSize / 2
     const b = entries.map((e) => {
-      const ext = symbolType === 'square' ? (hasStroke ? e.sizeD / 2 : e.r) : e.r + 3
+      const ext = symbolType === 'square' ? (hasStroke ? e.sizeD / 2 : e.r) : e.r + strokeWidth * 2
       const y = e.sizeD / 2
       return { y1: Math.min(y - ext, y - halfLabel), y2: Math.max(y + ext, y + halfLabel) }
     })
@@ -4299,11 +4497,12 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     }
     const scopesHeight = acc + b[b.length - 1]!.y2
 
-    // Widths: labels render at 10px (~8px/char), title at 11px bold.
-    const maxLabelLen = entries.reduce((m, e) => Math.max(m, String(e.value).length), 0)
-    const entryWidth = labelX + 0.8 * fontSize * maxLabelLen
+    // Widths: labels render at 10px, title at 11px bold (vega measures both
+    // via textMetrics).
+    const maxLabelW = entries.reduce((m, e) => Math.max(m, nominalTextWidth(legendLabel(e.value), fontSize)), 0)
+    const entryWidth = labelX + maxLabelW
     const titleStr = String(legend.title ?? '')
-    const titleWidth = titleStr.length > 0 ? ~~(0.8 * titleStr.length * titleFsS) : 0
+    const titleWidth = titleStr.length > 0 ? nominalTextWidth(titleStr, titleFsS, 'bold') : 0
     const outerWidth = Math.ceil(Math.max(entryWidth, titleWidth))
     // the title row: the title text's bound height + legend titlePadding
     // (vega's legendGroupLayout: entries sit below title bound + titlePad)
@@ -4356,7 +4555,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
           opacity: symOpacity,
         })
       }
-      items.push({ text: String(e.value), x: labelX + legendPad, y: sy + 0.3 * fontSize, align: 'left', fill: labelColorS, fontSize, ...(labelOpacityS != null ? { fillOpacity: labelOpacityS } : {}) })
+      items.push({ text: legendLabel(e.value), x: labelX + legendPad, y: sy + 0.3 * fontSize, align: 'left', fill: labelColorS, fontSize, ...(labelOpacityS != null ? { fillOpacity: labelOpacityS } : {}) })
     }
     const out: SceneGroup = { marktype: 'group', role: 'legend', x: 0, y: 0, width: boxW, height: boxH, items }
     ;(out as unknown as Record<string, unknown>)._borderStroke = borderColor != null
@@ -4372,29 +4571,29 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     if (bandCount > 0 && orient === 'right' || orient === undefined) {
       const SWATCH_W = 16
       const SWATCH_H = Math.max(25, Math.floor(200 / bandCount))
-      const sortedDomain = [...domain].filter((v): v is number => typeof v === 'number').sort((a, b) => a - b)
+      const sortedDomain = [...rawDomain].filter((v): v is number => typeof v === 'number').sort((a, b) => a - b)
       const isThreshold = scaleType === 'threshold'
-      let outerWidth: number
-      if (isThreshold) {
-        // Threshold: labels are integer domain values, compute width from content
-        const maxLabelLen = sortedDomain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
-        outerWidth = SWATCH_W + 2 + 8 * Math.max(maxLabelLen, 1)
-      } else if (scaleType === 'quantize') {
-        // Quantize: compute width from content (label at breakpoint)
-        let maxLabelLen = 1
-        if (sortedDomain.length >= 2) {
+      // Breakpoint label strings — the legend width is derived from the widest
+      // label (vega measures each label via textMetrics; no char heuristics).
+      const bandLabels: string[] = []
+      for (let i = 1; i < bandCount; i++) {
+        let rawVal: number | undefined
+        if (scaleType === 'quantize' && sortedDomain.length >= 2) {
+          // Quantize: breakpoints are evenly spaced across the domain extent
           const d0 = sortedDomain[0]!
           const d1 = sortedDomain[sortedDomain.length - 1]!
-          for (let i = 1; i < bandCount; i++) {
-            const rawVal = d0 + (d1 - d0) * i / bandCount
-            maxLabelLen = Math.max(maxLabelLen, String(Math.round(rawVal * 1e10) / 1e10).length)
-          }
+          rawVal = d0 + (d1 - d0) * i / bandCount
+        } else {
+          const nVals = sortedDomain.length
+          const idx = Math.ceil(i * nVals / bandCount) - 1
+          rawVal = idx >= 0 && idx < nVals ? sortedDomain[idx] : undefined
         }
-        outerWidth = SWATCH_W + 2 + 8 * Math.max(maxLabelLen, 1)
-      } else {
-        // Quantile: vega uses a fixed width of 50
-        outerWidth = 50
+        bandLabels.push(rawVal !== undefined
+          ? (isThreshold ? String(rawVal) : (scaleType === 'quantize' ? String(Math.round(rawVal * 1e10) / 1e10) : (Number.isInteger(rawVal) ? rawVal + '.0' : String(rawVal))))
+          : '')
       }
+      const maxLabelW = bandLabels.reduce((m: number, s: string) => Math.max(m, nominalTextWidth(s, 10)), 0)
+      const outerWidth = Math.ceil(18 + maxLabelW)
       const bgH = bandCount * SWATCH_H
       const items: SceneItem[] = []
       // Background box
@@ -4407,22 +4606,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       // Labels at breakpoints (skip the first which is empty)
       for (let i = 1; i < bandCount; i++) {
         const y = (bandCount - i) * SWATCH_H + 3
-        let rawVal: number | undefined
-        if (scaleType === 'quantize' && sortedDomain.length >= 2) {
-          // Quantize: breakpoints are evenly spaced across the domain extent
-          const d0 = sortedDomain[0]!
-          const d1 = sortedDomain[sortedDomain.length - 1]!
-          rawVal = d0 + (d1 - d0) * i / bandCount
-        } else {
-          const nVals = sortedDomain.length
-          const idx = Math.ceil(i * nVals / bandCount) - 1
-          rawVal = idx >= 0 && idx < nVals ? sortedDomain[idx] : undefined
-        }
-        // Quantile/quantize: format with ".0" for integers; threshold: plain integers
-        const label = rawVal !== undefined
-          ? (isThreshold ? String(rawVal) : (scaleType === 'quantize' ? String(Math.round(rawVal * 1e10) / 1e10) : (Number.isInteger(rawVal) ? rawVal + '.0' : String(rawVal))))
-          : ''
-        items.push({ text: label, x: 18, y, align: 'left', fill: '#000', fontSize: 10 })
+        items.push({ text: bandLabels[i - 1]!, x: 18, y, align: 'left', fill: '#000', fontSize: 10 })
       }
       // Empty label at the bottom
       items.push({ text: '', x: 18, y: bgH - 2, align: 'left', fill: '#000' })
@@ -4441,17 +4625,30 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
   // below, whose 13px step and title row match the oracle for every orient
   // (the grid anchor does the positioning) — including bottom verticals.
   if (orient === 'bottom' && legend.direction === 'horizontal') {
-    const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
-    const entryWidth = 16 + 8 * maxLabelLen
-    const step = entryWidth + 12
-    const bgW = step * n - 12
+    // vega grid layout (vega-view-transforms layout/grid.js): each entry's
+    // scope width = symbol slot (16) + its own measured label width; the
+    // column step = columnPadding(10) + symbol overhang(ceil of the symbol
+    // bound poking left of the entry) + ceil(entryWidth). The legend box is
+    // ceil(last entry x + last entry bound).
+    const entryWidths = domain.map((v) => 16 + nominalTextWidth(String(v), 10))
+    const symX = 6
+    const symR = 5
+    const overhang = Math.ceil(Math.max(0, symR + 3 - symX))
+    const stepBase = 10 + overhang
+    const xs: number[] = []
+    let x = 0
+    for (let i = 0; i < n; i++) {
+      xs.push(x)
+      x += stepBase + Math.ceil(entryWidths[i]!)
+    }
+    const bgW = Math.ceil(xs[n - 1]! + entryWidths[n - 1]!)
     const items: SceneItem[] = []
     items.push({ path: `M0,0h${bgW}v30h-${bgW}Z`, x: 0, y: 0 })
-    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
+    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11, fontWeight: 'bold' })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
-      const sx = i * step
-      items.push({ path: `M0,0h${entryWidth}v14h-${entryWidth}Z`, x: sx, y: 16 })
+      const sx = xs[i]!
+      items.push({ path: `M0,0h${entryWidths[i]}v14h-${entryWidths[i]}Z`, x: sx, y: 16 })
       items.push({ shape: 'circle', radius: 5, x: sx + 6, y: 22, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
       items.push({ text: String(value), x: sx + 16, y: 25, align: 'left', fill: '#000', fontSize: 10 })
     }
@@ -4490,24 +4687,35 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const boxHeight = isStrokeLegend ? 14 : 11
     const rowStep = isStrokeLegend ? 18 : 13
     const columnPadding = 10, rowPadding = 2
-    const maxLabelLen = domain.reduce((m: number, v) => Math.max(m, String(v).length), 0)
-    const entryWidth = 16 + 8 * maxLabelLen
+    // Per-entry measured widths; vega's grid layout (layout/grid.js) takes a
+    // per-COLUMN max (ceil'd) and accumulates columnPadding + the symbol-bound
+    // overhang (stroke-inflated symbols poke left of the entry by 2px).
+    const entryWs = domain.map((v) => 16 + nominalTextWidth(String(v), 10))
     const cols = legend.direction === 'vertical' ? 1 : Math.min(legend.columns ?? n, n)
     const rows = Math.ceil(n / cols)
+    const colW: number[] = new Array(cols).fill(0)
+    for (let i = 0; i < n; i++) colW[i % cols] = Math.max(colW[i % cols]!, entryWs[i]!)
+    const symOverhang = isStrokeLegend ? Math.ceil(5 + 3 - 6) : 0
+    const colX: number[] = []
+    let acc = 0
+    for (let c = 0; c < cols; c++) {
+      colX.push(acc)
+      acc += columnPadding + symOverhang + Math.ceil(colW[c]!)
+    }
     const titleStr = String(legend.title ?? '')
     const titleRow = titleStr ? 16 : 0
-    const titleWidth = titleStr ? ~~(0.8 * titleStr.length * 11) : 0
-    const gridW = cols * entryWidth + (cols - 1) * columnPadding
+    const titleWidth = titleStr ? nominalTextWidth(titleStr, 11, 'bold') : 0
+    const gridW = Math.max(Math.ceil(colX[cols - 1]! + colW[cols - 1]!), titleWidth)
     const gridH = titleRow + rows * boxHeight + (rows - 1) * rowPadding
-    const outerWidth = Math.max(gridW, titleWidth)
+    const outerWidth = gridW
     const items: SceneItem[] = []
     items.push({ path: `M0,0h${outerWidth}v${gridH}h-${outerWidth}Z`, x: 0, y: 0 })
-    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11 })
+    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11, fontWeight: 'bold' })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
-      const ex = (i % cols) * (entryWidth + columnPadding)
+      const ex = colX[i % cols]!
       const ey = titleRow + Math.floor(i / cols) * rowStep
-      items.push({ path: `M0,0h${entryWidth}v${boxHeight}h-${entryWidth}Z`, x: ex, y: ey })
+      items.push({ path: `M0,0h${colW[i % cols]}v${boxHeight}h-${colW[i % cols]}Z`, x: ex, y: ey })
       if (symType === 'square') {
         items.push(colorProp === 'fill'
           ? { path: 'M-5,-5h10v10h-10Z', x: ex + 6, y: ey + 6, fill: String(scale(value)), strokeWidth: 1.5 }
@@ -4591,7 +4799,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // legend.js sizeExpression: max(ceil(sqrt(size)+strokeWidth), fontSize)
     const sizeExpr = Math.max(Math.ceil(Math.sqrt(symbolSizeRaw) + symSwP), labelFs)
     const offsetDatum = entryValues.length ? Math.max(0, sizeExpr) : 0
-    const entries = entryValues.map((v: unknown) => ({ value: v, label: String(v) }))
+    const entries = entryValues.map((v: unknown) => ({ value: v, label: legendLabel(v) }))
     if (limitHits) {
       entries.push({ value: domain[entryValues.length], label: `…${domain.length - entryValues.length} entries` })
     }
@@ -4778,6 +4986,9 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       : titleAnchor === 'end' ? 'right' : titleAnchor === 'middle' ? 'center' : 'left')) as 'left' | 'center' | 'right'
     const titleLimit = (legend as { titleLimit?: number }).titleLimit
     const titleBaseline = (legend as { titleBaseline?: string }).titleBaseline
+    // vega's 'guide-title' style defaults fontWeight to bold — the title bound
+    // must measure with the same font the renderer emits.
+    const titleWeight = (legend as { titleFontWeight?: string | number }).titleFontWeight ?? 'bold'
     // title bound (legendGroupLayout reads title.bounds: the Bound-pass text
     // bound at the title's pre-shift position — height drives the entry row,
     // width the left-title shift, x1 the overhang)
@@ -4785,7 +4996,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       ? boundText(new Bounds(), {
           x: titleX, y: titleY, text: titleStr, align: tAlign,
           baseline: (titleBaseline ?? tBaseline) as SceneItem['baseline'],
-          fontSize: titleFs, ...(titleLimit != null ? { limit: titleLimit } : {}),
+          fontSize: titleFs, fontWeight: titleWeight, ...(titleLimit != null ? { limit: titleLimit } : {}),
         } as unknown as SceneItem)
       : new Bounds().set(0, 0, 0, 0)
     // container shifts (legendGroupLayout): top titles push the entries down
@@ -4856,7 +5067,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const borderStroke = legendBorderColor != null
     // vega's legend title item sits at (padding, padding) with baseline top;
     // the renderer bakes the baseline offset. titleBaseline overrides it.
-    if (titleStr) items.push({ text: titleStr, x: titleX + shift, y: titleY, baseline: (titleBaseline ?? tBaseline) as 'top', align: tAlign, fill: titleColor, fontSize: titleFs, ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
+    if (titleStr) items.push({ text: titleStr, x: titleX + shift, y: titleY, baseline: (titleBaseline ?? tBaseline) as 'top', align: tAlign, fill: titleColor, fontSize: titleFs, fontWeight: titleWeight, ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
     for (let i = 0; i < n; i++) {
       const e = entries[i]!
       const eb = ebs[i]!
@@ -4899,7 +5110,11 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         if (colorProp === 'fill') {
           items.push({ path: symDs[i]!, x: symX, y: symY, fill: String(scale(value)), strokeWidth: symSwP, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...(legendStrokeColor != null ? { stroke: String(legendStrokeColor) } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
         } else {
-          items.push({ path: symDs[i]!, x: symX, y: symY, stroke: String(scale(value)), strokeWidth: symSwP, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...(symbolOpacity != null ? { opacity: symbolOpacity as number } : {}) })
+          const strokeVal = legend.opacity != null
+            ? String(legendStrokeColor ?? '#888')
+            : String(scale(value))
+          const opVal = legend.opacity != null ? Number(scale(value)) : symbolOpacity
+          items.push({ path: symDs[i]!, x: symX, y: symY, stroke: strokeVal, strokeWidth: symSwP, ...(symbolDash ? { strokeDash: symbolDash } : {}), ...(opVal != null && Number.isFinite(opVal as number) ? { opacity: opVal as number } : {}) })
         }
       }
       // clipHeight clips the entry's symbols with a clipPath over the
@@ -5004,8 +5219,9 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
         item.x = v + 0.5; item.x2 = v + 0.5; item.y = 0.5; item.y2 = ctx.height + 0.5
       }
       item.stroke = gridStyle.stroke ?? (axis as { gridColor?: string }).gridColor ?? '#ddd'
-      item.strokeWidth = gridStyle.strokeWidth ?? 1
-      if (gridStyle.strokeDash != null) item.strokeDash = gridStyle.strokeDash
+      item.strokeWidth = gridStyle.strokeWidth ?? (axis as { gridWidth?: number }).gridWidth ?? 1
+      const gridDash = gridStyle.strokeDash ?? (axis as { gridDash?: number[] }).gridDash
+      if (gridDash != null) item.strokeDash = gridDash
       if (gridStyle.opacity != null) item.opacity = gridStyle.opacity
       // Vega's axisLayout bounds union only the ticks and labels marks; the
       // grid mark never extends the axis bound (nor the view bounds).
@@ -5150,7 +5366,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   if (axis.labelOverlap && labels.length >= 3) {
     const sep = 0
     const boundsOf = (it: SceneItem) => {
-      const w = estimateTextWidth(String(it.text ?? ''), (it as { fontSize?: number }).fontSize ?? 10)
+      const w = itemTextWidth(it as FontProps, String(it.text ?? ''))
       const x = it.x ?? 0
       const x1 = it.align === 'right' ? x - w : it.align === 'center' ? x - w / 2 : x
       const y = it.y ?? 0
@@ -5254,7 +5470,9 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     const baseUp = Math.round(0.79 * titleFs)
     const titleOpacity = (axis as { titleOpacity?: number }).titleOpacity
     const titleColor = (axis as { titleColor?: string }).titleColor
-    const titleWeight = (axis as { titleFontWeight?: string | number }).titleFontWeight
+    // vega's 'guide-title' style defaults fontWeight to bold (guide titles
+    // include axis titles); vega-lite never emits an explicit weight.
+    const titleWeight = (axis as { titleFontWeight?: string | number }).titleFontWeight ?? 'bold'
     const titleAlign = (axis as { titleAlign?: string }).titleAlign
     const titleBaseline = (axis as { titleBaseline?: string }).titleBaseline
     const titleX = (axis as { titleX?: number }).titleX
@@ -5351,7 +5569,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     if ((axis as { titleLimit?: number }).titleLimit != null) {
       t.limit = (axis as { titleLimit?: number }).titleLimit
     }
-    if (titleWeight != null) (t as Record<string, unknown>).fontWeight = titleWeight
+    ;(t as Record<string, unknown>).fontWeight = titleWeight
     if (titleOpacity != null) t.fillOpacity = titleOpacity
     t.fill = titleColor ?? '#000'
     items.push(t)
@@ -5372,7 +5590,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   // buildAxisAndLegend wrapper's -0.5 already cancels the baked delta.
   const dxs = ctx.rawGuides ? (orient === 'right' ? -ctx.width : 0) : tr + (orient === 'left' ? -off : orient === 'right' ? off : posOff)
   const dys = ctx.rawGuides ? (orient === 'bottom' ? -ctx.height : 0) : tr + (orient === 'bottom' ? off : orient === 'top' ? -off : posOff)
-  if (process.env.ASTER_DBG_RAW) console.error('[raw]', orient, 'raw', ctx.rawGuides, 'dxs', dxs, 'dys', dys, 'n', items.length)
+  if (typeof process !== 'undefined' && process.env.ASTER_DBG_RAW) console.error('[raw]', orient, 'raw', ctx.rawGuides, 'dxs', dxs, 'dys', dys, 'n', items.length)
   if (dxs || dys) {
     for (const it of items) {
       const rec = it as Record<string, unknown>

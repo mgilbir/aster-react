@@ -43,16 +43,10 @@ await build({
   define: { 'process.env.NODE_ENV': '"production"' },
   jsx: 'automatic',
   logLevel: 'warning',
-  alias: {
-    // exact paths so the addon subpaths (@aster/core/dom etc.) resolve
-    '@aster/react': join(PKG_DIR, '..', 'react', 'dist', 'index.js'),
-    '@aster/core': join(PKG_DIR, '..', 'core', 'dist', 'index.js'),
-    '@aster/core/dom': join(PKG_DIR, '..', 'core', 'dist', 'addon-dom.js'),
-    '@aster/core/geo': join(PKG_DIR, '..', 'core', 'dist', 'addon-geo.js'),
-    '@aster/core/signals': join(PKG_DIR, '..', 'core', 'dist', 'signals.js'),
-    '@aster/core/load': join(PKG_DIR, '..', 'core', 'dist', 'addon-load.js'),
-    '@aster/core/transforms': join(PKG_DIR, '..', 'core', 'dist', 'addon-transforms.js'),
-  },
+  // No manual aliases: workspace deps resolve through node_modules symlinks
+  // and each package's package.json "exports" map, which stays correct as
+  // @aster/core grows subpath exports (dom, geo, signals, load, transforms,
+  // canvas, hit, ...).
 })
 
 writeFileSync(

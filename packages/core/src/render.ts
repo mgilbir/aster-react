@@ -5,6 +5,8 @@
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { baselineOffset } from './bounds.js'
+export { baselineOffset }
+import { itemTextWidth } from './text-metrics.js'
 import {
   line as d3Line,
   area as d3Area,
@@ -186,11 +188,11 @@ function dataDatumAttr(it: SceneItem): string {
   return v ? ` data-datum="${esc(v)}"` : ''
 }
 
-/** Vega text `limit` truncation for bare guide leaves (estimate-width path). */
-function truncateLeaf(text: string, it: SceneItem, fontSize: number): string {
+/** Vega text `limit` truncation for bare guide leaves (width-getter path). */
+export function truncateLeaf(text: string, it: SceneItem, fontSize: number): string {
   const limit = (it as Record<string, unknown>).limit as number | undefined
   if (limit == null || !(limit > 0) || !text.length) return text
-  const estimateW = (str: string) => ~~(0.8 * str.length * fontSize)
+  const estimateW = (str: string) => itemTextWidth(it, str)
   if (estimateW(text) < limit) return text
   const ellipsis = ((it as Record<string, unknown>).ellipsis as string | undefined) ?? '\u2026'
   const lim = limit - estimateW(ellipsis)
@@ -251,7 +253,14 @@ function renderLeaf(it: SceneItem, clipN?: { current: number; paths: (string | n
     const y = num((it.y || 0) + bOff)
     const raw = String(it.text)
     const text = truncateLeaf(raw, it, fontSize ?? 11)
-    return `<text x="${num(it.x || 0)}" y="${y}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('font-family', fam)}${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}>${esc(text)}</text>`
+    const fontWeight = (it as Record<string, unknown>).fontWeight as string | number | undefined
+    // Angled text: vega emits transform="translate(x,y) rotate(a)" with the
+    // baseline offset as a dy in the rotated frame (no x/y attrs).
+    if (angle != null && angle !== 0) {
+      const dy = baseline && baseline !== 'alphabetic' ? baselineOffset(it) : 0
+      return `<text transform="translate(${num(it.x || 0)},${num(it.y || 0)}) rotate(${num(angle)})"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('font-weight', fontWeight)}${dy ? ` dy="${num(dy)}"` : ''}${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}>${esc(text)}</text>`
+    }
+    return `<text x="${num(it.x || 0)}" y="${y}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('font-weight', fontWeight)}${attr('font-family', fam)}${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}>${esc(text)}</text>`
   }
   const x2 = it.x2 ?? it.x ?? 0
   const y2 = it.y2 ?? it.y ?? 0
@@ -360,10 +369,10 @@ export function computeLinePath(group: SceneGroup): {
         continue
       }
       if (!penDown) {
-        path += `M${num(r.x)},${num(r.y)}`
+        path += `M${num3(r.x)},${num3(r.y)}`
         penDown = true
       } else {
-        path += `L${num(r.x)},${num(r.y)}`
+        path += `L${num3(r.x)},${num3(r.y)}`
         hasLine = true
       }
     }
@@ -527,9 +536,9 @@ export function computeAreaPath(group: SceneGroup): {
             const q = pts[j]!
             if (!q.defined) break
             if (isHorizontal) {
-              path += `L${num(q.val2)},${num(q.pos)}`
+              path += `L${num3(q.val2)},${num3(q.pos)}`
             } else {
-              path += `L${num(q.pos)},${num(q.val2)}`
+              path += `L${num3(q.pos)},${num3(q.val2)}`
             }
           }
           path += 'Z'
@@ -539,16 +548,16 @@ export function computeAreaPath(group: SceneGroup): {
       }
       if (!penDown) {
         if (isHorizontal) {
-          path += `M${num(p.val)},${num(p.pos)}`
+          path += `M${num3(p.val)},${num3(p.pos)}`
         } else {
-          path += `M${num(p.pos)},${num(p.val)}`
+          path += `M${num3(p.pos)},${num3(p.val)}`
         }
         penDown = true
       } else {
         if (isHorizontal) {
-          path += `L${num(p.val)},${num(p.pos)}`
+          path += `L${num3(p.val)},${num3(p.pos)}`
         } else {
-          path += `L${num(p.pos)},${num(p.val)}`
+          path += `L${num3(p.pos)},${num3(p.val)}`
         }
       }
     }
@@ -592,6 +601,8 @@ function renderArea(group: SceneGroup): string {
 
 /** Generate an SVG path d attribute for a given symbol shape and radius. */
 export function symbolPath(shape: string | undefined, r: number): string {
+  // vega symbols serialize through d3-path Path(3) — coordinates round to 3.
+  const num = num3
   switch (shape) {
     case 'square':
       return `M${num(-r)},${num(-r)}h${num(2 * r)}v${num(2 * r)}h${num(-2 * r)}Z`
@@ -877,13 +888,13 @@ export function textItemDesc(it: SceneItem): {
 
 /**
  * Vega text `limit`: maximum pixel width, truncated with an ellipsis.
- * Mirrors vega-scenegraph/src/util/text.js `truncate()` using the estimate
- * width fn: ~~(0.8 * str.length * fontSize).
+ * Mirrors vega-scenegraph/src/util/text.js `truncate()` — canvas-measured
+ * when a canvas exists, the headless estimate otherwise (see text-metrics).
  */
 function truncateToLimit(it: SceneItem, text: string, fontSize: number): string {
   const limit = (it as Record<string, unknown>).limit as number | undefined
   if (limit == null || !(limit > 0) || !text.length) return text
-  const estimateW = (s: string) => ~~(0.8 * s.length * fontSize)
+  const estimateW = (s: string) => itemTextWidth(it, s)
   if (estimateW(text) < limit) return text
   const ellipsis = ((it as Record<string, unknown>).ellipsis as string | undefined) ?? '\u2026'
   const lim = limit - estimateW(ellipsis)
@@ -1077,8 +1088,9 @@ class PathEmitter {
   private x1 = 0
   private y1 = 0
   private hasPoint = false
-  moveTo(x: number, y: number): void { this.s += `M${num(x)},${num(y)}`; this.x1 = x; this.y1 = y; this.hasPoint = true }
-  lineTo(x: number, y: number): void { this.s += `L${num(x)},${num(y)}`; this.x1 = x; this.y1 = y; this.hasPoint = true }
+  // d3-path Path(3): coordinates round to 3 decimals on emit.
+  moveTo(x: number, y: number): void { this.s += `M${num3(x)},${num3(y)}`; this.x1 = x; this.y1 = y; this.hasPoint = true }
+  lineTo(x: number, y: number): void { this.s += `L${num3(x)},${num3(y)}`; this.x1 = x; this.y1 = y; this.hasPoint = true }
   arc(x: number, y: number, r: number, a0: number, a1: number, ccw = false): void {
     const x0 = x + r * Math.cos(a0)
     const y0 = y + r * Math.sin(a0)
@@ -1094,11 +1106,11 @@ class PathEmitter {
     const y2 = y + r * Math.sin(a1)
     if (da > 2 * Math.PI - ARC_EPSILON) {
       // complete circle: two half arcs through the antipode
-      this.s += `A${num(r)},${num(r)},0,1,${sweep},${num(x - (x0 - x))},${num(y - (y0 - y))}`
-      this.s += `A${num(r)},${num(r)},0,1,${sweep},${num(x0)},${num(y0)}`
+      this.s += `A${num3(r)},${num3(r)},0,1,${sweep},${num3(x - (x0 - x))},${num3(y - (y0 - y))}`
+      this.s += `A${num3(r)},${num3(r)},0,1,${sweep},${num3(x0)},${num3(y0)}`
       this.x1 = x0; this.y1 = y0
     } else if (da > ARC_EPSILON) {
-      this.s += `A${num(r)},${num(r)},0,${da >= Math.PI ? 1 : 0},${sweep},${num(x2)},${num(y2)}`
+      this.s += `A${num3(r)},${num3(r)},0,${da >= Math.PI ? 1 : 0},${sweep},${num3(x2)},${num3(y2)}`
       this.x1 = x2; this.y1 = y2
     }
   }
@@ -1285,6 +1297,21 @@ function esc(s: string): string {
 
 export function num(x: number): string {
   if (!Number.isFinite(x)) return String(x)
-  if (Number.isInteger(x)) return String(x)
+  // Full precision, matching vega-scenegraph: its SVG renderers serialize raw
+  // doubles (String(number)). Rounding here (e.g. to 3 decimals) shifts
+  // relative-delta endpoint sums by ~1e-3 after recombination — enough to trip
+  // the conformance canonicalizer. Canonical comparison rounds anyway.
+  return String(x)
+}
+
+/**
+ * d3-path rounding with `digits = 3` (d3-shape's `withPath` default).
+ * Vega routes d3-shape-based mark shapes (symbol, arc, line, area) through a
+ * d3-path buffer constructed with digits=3, so every path coordinate in those
+ * marks is serialized rounded to 3 decimals. Vega's own rect/frame builders
+ * (path/rectangle.js, trail.js via a digits-less d3-path) emit raw doubles.
+ */
+function num3(x: number): string {
+  if (!Number.isFinite(x)) return String(x)
   return String(Math.round(x * 1000) / 1000)
 }

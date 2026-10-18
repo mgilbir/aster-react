@@ -56,8 +56,9 @@ async function main(): Promise<void> {
       }
 
       // Mount/unmount leak probe: heap retained per cycle after settle.
-      const before = heapUsed()
+      const mountDeltas: number[] = []
       for (let c = 0; c < cycles; c++) {
+        const before = heapUsed()
         const host = document.createElement('div')
         document.body.appendChild(host)
         const root = createRoot(host)
@@ -66,31 +67,44 @@ async function main(): Promise<void> {
         await waitForSettle(host, { quietFrames: 2, timeoutMs: 30_000 })
         root.unmount()
         host.remove()
+        mountDeltas.push((heapUsed() - before) / 1024)
       }
-      const perCycleMount = (heapUsed() - before) / cycles / 1024
+      const perCycleMount = mean(mountDeltas)
+      const mountSteady = mean(mountDeltas.slice(-5))
 
-      // Update churn: steady heap growth across repeated data updates.
+      // Update churn: steady heap growth across repeated data updates. Both a
+      // whole-run mean and a steady-state mean (last 5 cycles) are reported:
+      // the first updates pay one-time lazy-init costs (caches, module state),
+      // which a whole-run mean amortizes into a phantom "per-update" growth.
+      // The steady-state number is the leak signal.
       const host = document.createElement('div')
       document.body.appendChild(host)
       const root = createRoot(host)
       root.render(h(BenchEmbed, { name: embedName, spec: specs[0]!, width: 600, height: 400 }))
       await waitForSvg(host, 30_000)
       await waitForSettle(host, { quietFrames: 2, timeoutMs: 30_000 })
-      const base = heapUsed()
+      const updateDeltas: number[] = []
       for (let c = 0; c < cycles; c++) {
+        const before = heapUsed()
         const spec = specs[(c + 1) % 3]!
         root.render(h(BenchEmbed, { name: embedName, spec, width: 600, height: 400 }))
         await waitForSettle(host, { quietFrames: 2, timeoutMs: 30_000 })
+        updateDeltas.push((heapUsed() - before) / 1024)
       }
-      const perCycleUpdate = (heapUsed() - base) / cycles / 1024
+      const perCycleUpdate = mean(updateDeltas)
+      const updateSteady = mean(updateDeltas.slice(-5))
       root.unmount()
       host.remove()
 
-      rows.push([`${kind} @ ${points}`, embedName, fmt(perCycleMount, 1), fmt(perCycleUpdate, 1)])
+      rows.push([`${kind} @ ${points}`, embedName, fmt(perCycleMount, 1), fmt(mountSteady, 1), fmt(perCycleUpdate, 1), fmt(updateSteady, 1)])
     }
   }
 
-  console.log(table('jsdom heap growth per mount/unmount + per update cycle (kB, mean; ~0 = no leak)', ['case', 'embed', 'mount', 'update'], rows))
+  console.log(table('jsdom heap growth per mount/unmount + per update cycle (kB; mean + steady-state = last 5 cycles)', ['case', 'embed', 'mount mean', 'mount steady', 'update mean', 'update steady'], rows))
+}
+
+function mean(xs: number[]): number {
+  return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN
 }
 
 main().catch((err) => {

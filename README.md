@@ -4,7 +4,7 @@ A small TypeScript reimplementation of the Vega/Vega-Lite rendering stack on gra
 
 ## Status
 
-**Pre-alpha.** The pipeline works end-to-end, verified against the real Vega renderer on a 406-spec conformance corpus (marks, scales, axes, legends, titles, config, expressions, signals, grouping, trellis faceting, and URL data loaders). Not for production use.
+**Pre-alpha.** The pipeline works end-to-end, verified against the real Vega renderer on a 413-spec conformance corpus (413/413; marks, scales, axes, legends, titles, config, expressions, signals, grouping, trellis faceting, and URL data loaders), a 27,513-case Vega-Lite schema sweep (96.7%), and a Chromium browser conformance gate (413/413). Not for production use.
 
 ## How It Works
 
@@ -65,9 +65,11 @@ const svg = renderSpec(spec)
 
 ## Current Status / What Works
 
-**Conformance result (406 corpus specs): 406/406 passed.** The core pipeline (Vega spec → compile → evaluate → SVG, plus the React `<Chart>` wrapper) is diffed against the real Vega renderer oracle on a 406-spec conformance corpus: all pass. This covers marks (line/area/bar/rule/scatter/symbol/rect/text/arc/path/image/trail/shape, with curves/gradients/corner-radii), band/linear/log/pow/time scales, axes (ticks/grid/labels/titles/`labelOverlap`), legends (gradient and symbol, at any corner), titles, config/style defaults, full vega expression surface, nested scopes, trellis/facet-2d layout, contour, geo projections, and URL data loaders.
+**Conformance (real-Vega oracle, 413-spec corpus): 413/413.** The core pipeline (Vega spec → compile → evaluate → SVG, plus the React `<Chart>` wrapper) is diffed against the real Vega renderer on a 413-spec corpus (both raw Vega `*.vg.json` and Vega-Lite `*.vl.json`, confirming the vega-lite compile path). This covers marks (line/area/bar/rule/scatter/symbol/rect/text/arc/path/image/trail/shape, with curves/gradients/corner-radii), band/linear/log/pow/time scales, axes (ticks/grid/labels/titles/`labelOverlap`), legends (gradient and symbol, at any corner), titles, config/style defaults, full vega expression surface, nested scopes, trellis/facet-2d layout, contour, geo projections, and URL data loaders.
 
-Both raw Vega (`*.vg.json`) and Vega-Lite (`*.vl.json`) entries are included, confirming the `vega-lite.compile` path is correct.
+**Schema sweeps (27,513 Vega-Lite property/value cases): 96.7% (26,609 ok).** For every property the Vega-Lite schema declares, a small chart is rendered through both engines and the SVG is diffed. Residue (774 differ + 106 error cases across ~40 property families — per-property legend-layout tails, config `axis`/`header` blocks, row-facet header widths, and guide-scale domains) is tracked in the sweep family scoreboard (`pnpm sweep-vl`).
+
+**Browser conformance gate (`pnpm conformance:browser`): 413/413.** The same oracle protocol run in a real Chromium page (vega-embed SVG renderer with live canvas text metrics, vs `renderSpec`), because the Node harness runs both engines in jsdom where neither can measure text.
 
 **What is NOT covered yet:**
 
@@ -80,7 +82,7 @@ Expressions are CSP-safe: the engine evaluates them via the `vega-expression` AS
 
 ## Performance
 
-Compared against react-vega and the official vega-embed tutorial (see `packages/benchmarks`): on a browser bar chart @1000 points the incremental path (now the default in `<Chart>`) drops long frames from 30.3% → 1.1%, retains ~0 MB heap per update, and `@aster/react <Chart>` is ~86 kB gzip vs react-vega's 289 kB.
+Compared against react-vega and the official vega-embed tutorial (see `packages/benchmarks`): on a browser bar chart @1000 points `<Chart>` holds 1.1% long frames under a 1-update-per-frame stream vs react-vega's 92%, updates in ~7 ms vs ~16 ms, retains ~0.0 MB heap per update (react-vega ~0.5 MB), and `@aster/react <Chart>` is ~104 kB gzip vs react-vega's 289 kB. In jsdom the same comparison is bar update ~11 ms vs ~77 ms and scatter update ~9 ms vs ~31 ms.
 
 ### Reactive differential updates
 
@@ -90,4 +92,4 @@ For charts where only a fraction of the data changes between renders, pass `data
 <Chart spec={spec} data={newRows} dataChanges={{ table: changedIndices }} />
 ```
 
-The reactive dataflow re-derives only the changed rows, reuses unchanged scene items and DOM subtrees, and reuses scales whose domain is unchanged. `pnpm bench:differential` measures the win at 50k points / 1% changed: row-wise (`formula`) ~16x, fixed-scale symbol ~8x, and `aggregate` ~1.5x faster than a full re-encode. The `dataChanges` (and dataset) transforms must preserve row length/order; `window`/`stack` with a `sort` and the geo/layout operators fall back to a full re-derive.
+The reactive dataflow re-derives only the changed rows, reuses unchanged scene items and DOM subtrees, and reuses scales whose domain is unchanged (both continuous min/max tracking and a discrete value-census for band/point/ordinal domains; rect marks additionally reuse their paint order when the sort permutation is unchanged). `pnpm bench:differential` measures the win at 50k points / 1% changed: row-wise (`formula`) ~17x, fixed-scale symbol ~12x, and `aggregate` ~3x faster than a full re-encode at the scene level, and ~5–9x at the DOM-patch level; in-browser (`bench:browser`) a 1%-changed update on 1000 points costs ~1.2 ms vs ~5–7 ms for a full re-encode. The `dataChanges` (and dataset) transforms must preserve row length/order; `window`/`stack` with a `sort` and the geo/layout operators fall back to a full re-derive.

@@ -1,5 +1,4 @@
 import * as React from 'react'
-import * as vl from 'vega-lite'
 import {
   CompiledLineSpec,
   CompiledParamBoundSpec,
@@ -20,12 +19,39 @@ import {
   CompiledGroupedBarSpec,
   CompiledRadarSpec,
 } from './compiled'
+import { compile } from '@aster/vl'
+import { loadSpecData } from '@aster/core/load'
 import { Chart } from '@aster/react'
 import type { SelectionInterval } from '@aster/react'
+import {
+  LineSpec,
+  ParamBoundSpec,
+  InteractiveBrushSpec,
+  HistogramSpec,
+  LegendScatterSpec,
+  PieSpec,
+  TextLabelSpec,
+  HeatmapSpec,
+  StackedBarSpec,
+  LayerSpec,
+  DonutSpec,
+  RegressionSpec,
+  StreamgraphSpec,
+  BubbleSpec,
+  CandlestickSpec,
+  ColorSchemeSpec,
+  GroupedBarSpec,
+  RadarSpec,
+} from './specs.js'
 
-/** Center a chart and let its container scroll instead of clipping on overflow. */
-function Fit({ children }: { children: React.ReactNode }) {
-  return <div style={{ width: 'max-content', margin: '0 auto' }}>{children}</div>
+/**
+ * The oracle column (official vega-embed) lives in its own chunk and streams
+ * in after aster has painted. Until it arrives, panes show a loading note.
+ */
+const VegaPane = React.lazy(() => import('./VegaPane'))
+
+function VegaLoading() {
+  return <div className="vega-loading">loading the official vega renderer…</div>
 }
 
 const DEFAULT_SPEC = {
@@ -42,7 +68,7 @@ const DEFAULT_SPEC = {
   },
 }
 
-/** Resolve a spec's width/height, honoring a `height` signal (Vega's view height). */
+/** Resolve a compiled spec's width/height, honoring a `height` signal (Vega's view height). */
 function specSize(spec: Record<string, unknown>): { width?: number; height?: number } {
   const width = typeof spec.width === 'number' ? spec.width : undefined
   let height = typeof spec.height === 'number' ? spec.height : undefined
@@ -58,26 +84,98 @@ function specSize(spec: Record<string, unknown>): { width?: number; height?: num
   return { width, height }
 }
 
+// ---------------------------------------------------------------------------
+// Two-column comparison card
+// ---------------------------------------------------------------------------
+
+/** A gallery card: the same spec input rendered by both engines side by side. */
+function CompareCard({ title, desc, spec, aster, wide }: {
+  title: string
+  desc: string
+  /** The raw input spec (Vega-Lite or Vega) — handed to the oracle verbatim. */
+  spec: Record<string, unknown>
+  /** The aster column: a rendered <Chart> (possibly interactive). */
+  aster: React.ReactNode
+  wide?: boolean
+}) {
+  const size = specSize(spec)
+  return (
+    <div className={`section ${wide ? 'wide' : ''}`}>
+      <h2>{title}</h2>
+      <p className="desc">{desc}</p>
+      <div className="compare">
+        <div className="pane">
+          <div className="pane-head"><span className="badge oracle">vega / vega-lite</span></div>
+          <div className="chart-container">
+            <React.Suspense fallback={<VegaLoading />}>
+              <VegaPane spec={spec} width={size.width} height={size.height} ariaLabel={`${title} — official vega`} />
+            </React.Suspense>
+          </div>
+        </div>
+        <div className="pane">
+          <div className="pane-head"><span className="badge aster">aster · react</span></div>
+          <div className="chart-container">{aster}</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Playground: one spec, both engines, live
+// ---------------------------------------------------------------------------
+
+/**
+ * Relative data URLs resolve against the vega examples host by default
+ * (vega-datasets), so specs like `data: { url: 'seattle-weather.csv' }` work
+ * without editing. Absolute and data: URLs pass through untouched.
+ */
+const VEGA_DATA_BASE = 'https://vega.github.io/vega-datasets/data/'
+
+function resolveDataUrls<T extends Record<string, unknown>>(spec: T): T {
+  const out = structuredClone(spec)
+  const fix = (d: unknown): void => {
+    if (d && typeof d === 'object' && typeof (d as { url?: unknown }).url === 'string') {
+      const u = (d as { url: string }).url
+      if (!/^[a-z][a-z0-9+.-]*:/i.test(u) && !u.startsWith('data:')) {
+        ;(d as { url: string }).url = VEGA_DATA_BASE + u.replace(/^\.\//, '')
+      }
+    }
+  }
+  if (Array.isArray(out.data)) (out.data as unknown[]).forEach(fix)
+  else fix(out.data)
+  return out
+}
+
 function SpecPlayground() {
   const [text, setText] = React.useState(() => JSON.stringify(DEFAULT_SPEC, null, 2))
   const [error, setError] = React.useState<string | null>(null)
-  const [chart, setChart] = React.useState<Record<string, unknown> | null>(() => {
-    try { return vl.compile(DEFAULT_SPEC as never).spec as Record<string, unknown> } catch { return null }
+  const [vl, setVl] = React.useState<Record<string, unknown> | null>(() => structuredClone(DEFAULT_SPEC))
+  const [vg, setVg] = React.useState<Record<string, unknown> | null>(() => {
+    try { return compile(DEFAULT_SPEC as never) as Record<string, unknown> } catch { return null }
   })
   React.useEffect(() => {
-    const id = window.setTimeout(() => {
+    let cancelled = false
+    const id = window.setTimeout(async () => {
       try {
         const parsed = JSON.parse(text) as Record<string, unknown>
         const isVl = String(parsed.$schema ?? '').includes('vega-lite')
-        setChart(isVl ? (vl.compile(parsed as never).spec as Record<string, unknown>) : parsed)
+        // Relative data URLs default to the vega-datasets base; URL datasets
+        // are fetched + inlined for the aster column (the oracle fetches its own).
+        const resolved = resolveDataUrls(parsed)
+        let inlined = resolved
+        try { inlined = await loadSpecData(structuredClone(resolved)) } catch { /* bad URL: surface via the oracle/render error paths */ }
+        if (cancelled) return
+        setVl(resolved)
+        setVg(isVl ? (compile(inlined as never) as Record<string, unknown>) : inlined)
         setError(null)
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
       }
     }, 400)
-    return () => window.clearTimeout(id)
+    return () => { cancelled = true; window.clearTimeout(id) }
   }, [text])
-  const size = chart ? specSize(chart) : {}
+  const size = vg ? specSize(vg) : {}
   return (
     <div className="playground">
       <textarea
@@ -87,44 +185,42 @@ function SpecPlayground() {
         onChange={(e) => setText(e.target.value)}
         aria-label="Paste a Vega or Vega-Lite spec"
       />
-      <div className="playground-chart">
-        {error ? <div className="error">{error}</div> : chart && (
-          <Chart
-            spec={chart}
-            width={size.width ?? 420}
-            height={size.height ?? 300}
-            tooltip
-            ariaLabel="Rendered spec"
-          />
+      <div className="playground-output">
+        {error ? <div className="error">{error}</div> : (
+          <div className="compare">
+            <div className="pane">
+              <div className="pane-head"><span className="badge oracle">vega / vega-lite</span></div>
+              <div className="chart-container">
+                <React.Suspense fallback={<VegaLoading />}>
+                  {vl && <VegaPane spec={vl} width={size.width ?? 420} height={size.height ?? 300} ariaLabel="Playground — official vega" />}
+                </React.Suspense>
+              </div>
+            </div>
+            <div className="pane">
+              <div className="pane-head"><span className="badge aster">aster · react</span></div>
+              <div className="chart-container">
+                {vg && (
+                  <Chart
+                    spec={vg}
+                    width={size.width ?? 420}
+                    height={size.height ?? 300}
+                    tooltip
+                    ariaLabel="Playground — aster"
+                  />
+                )}
+              </div>
+            </div>
+          </div>
         )}
-        {!error && <p className="hint">Paste a Vega (<code>$schema</code> vega) or Vega-Lite spec. Vega-Lite is compiled automatically.</p>}
+        {!error && <p className="hint">Paste a Vega (<code>$schema</code> vega) or Vega-Lite spec. Both engines compile and render the same input — Vega-Lite goes through <strong>@aster/vl</strong> on the right, the official compiler on the left.</p>}
       </div>
     </div>
   )
 }
 
-const SPECS: Array<{ title: string; desc: string; spec: Record<string, unknown>; render: () => React.ReactNode; span?: string }> = [
-  { title: 'Responsive Line', desc: 'Spec-level signals drive width/height; resizes with the container.', spec: CompiledLineSpec, render: () => <ResponsiveLine /> },
-  { title: 'Bound Parameter', desc: 'A bound signal updates Y values live via the slider.', spec: CompiledParamBoundSpec, render: () => <BoundParam /> },
-  { title: 'Interactive Brush', desc: 'Drag to select a data interval; persisted via the brush prop.', spec: CompiledInteractiveBrushSpec, render: () => <InteractiveBrush /> },
-  { title: 'Histogram', desc: 'Bar encoding with bin:true auto-bins occurrences.', spec: CompiledHistogramSpec, render: () => <Histogram />, span: 'wide' },
-  { title: 'Scatter + Legend', desc: 'Color encodes a category dimension with an automatic legend.', spec: CompiledLegendScatterSpec, render: () => <LegendScatter /> },
-  { title: 'Pie / Donut', desc: 'Arc marks with innerRadius render donuts; theta encodes value.', spec: CompiledPieSpec, render: () => <PieDonut /> },
-  { title: 'Text Labels', desc: 'Text marks render a label at each (x, y) point.', spec: CompiledTextLabelSpec, render: () => <TextLabels /> },
-  { title: 'Heatmap', desc: 'Band scales + a quantitative color scale render a gradient heatmap.', spec: CompiledHeatmapSpec, render: () => <Heatmap /> },
-  { title: 'Stacked Bar', desc: 'Bars stacked per category with an automatic color legend.', spec: CompiledStackedBarSpec, render: () => <StackedBar /> },
-  { title: 'Layered Area + Line', desc: 'An area mark overlaid with a line on shared scales.', spec: CompiledLayerSpec, render: () => <LayeredAreaLine />, span: 'wide' },
-  { title: 'Donut Chart', desc: 'A larger innerRadius arc renders a donut with a legend.', spec: CompiledDonutSpec, render: () => <Donut /> },
-  { title: 'Regression Line', desc: 'A regression transform fits a line to point data.', spec: CompiledRegressionSpec, render: () => <Regression /> },
-  { title: 'Streamgraph', desc: 'Stacked areas offset around the center produce a streamgraph.', spec: CompiledStreamgraphSpec, render: () => <Streamgraph />, span: 'wide' },
-  { title: 'Bubble Chart', desc: 'The size channel quantitatively scales marker area.', spec: CompiledBubbleSpec, render: () => <Bubble /> },
-  { title: 'Candlestick', desc: 'Rule + bar layers render OHLC, colored by direction.', spec: CompiledCandlestickSpec, render: () => <Candlestick /> },
-  { title: 'Color Scheme', desc: 'A nominal scale with an explicit palette drives color + legend.', spec: CompiledColorSchemeSpec, render: () => <ColorScheme /> },
-  { title: 'Grouped Bar', desc: 'Bars grouped side-by-side via the xOffset channel.', spec: CompiledGroupedBarSpec, render: () => <GroupedBar /> },
-  { title: 'Radar / Spider', desc: 'A raw Vega spec with radial axes and a polygon line.', spec: CompiledRadarSpec, render: () => <Radar />, span: 'wide' },
-]
-
-// ----- Interactive showcases of the reactive dataflow engine -----
+// ---------------------------------------------------------------------------
+// Reactive showcases (aster-only capabilities: per-datum dataChanges)
+// ---------------------------------------------------------------------------
 
 function LiveDataChanges() {
   const [data, setData] = React.useState(() => Array.from({ length: 60 }, (_, i) => ({ x: i, y: 50 + Math.round(40 * Math.sin(i / 5)) })))
@@ -152,15 +248,10 @@ function TooltipDemo() {
   )
 }
 
-function Section({ title, desc, chart }: { title: string; desc: string; chart: React.ReactNode }) {
-  return (
-    <section className="section">
-      <h2>{title}</h2>
-      <p className="desc">{desc}</p>
-      <div className="chart-container">{chart}</div>
-    </section>
-  )
-}
+// ---------------------------------------------------------------------------
+// Gallery renderers (aster column). Interactive ones drive aster's reactive
+// engine; the vega pane beside them exercises the same spec natively.
+// ---------------------------------------------------------------------------
 
 function ResponsiveLine() {
   return (
@@ -209,125 +300,32 @@ function InteractiveBrush() {
   )
 }
 
-function Histogram() {
-  return (
-    <div className="chart-container" style={{ alignItems: 'flex-start' }}>
-      <Chart spec={CompiledHistogramSpec} ariaLabel="Histogram" width={400} height={300} />
-    </div>
-  )
-}
+const plain = (spec: Record<string, unknown>, width: number, height: number, label: string, style?: React.CSSProperties) => (
+  <div className="chart-container" style={style}>
+    <Chart spec={spec} ariaLabel={label} width={width} height={height} />
+  </div>
+)
 
-function LegendScatter() {
-  return (
-    <div className="chart-container">
-      <Chart spec={CompiledLegendScatterSpec} ariaLabel="Legend scatter" width={400} height={300} />
-    </div>
-  )
-}
-
-function PieDonut() {
-  return (
-    <div className="chart-container" style={{ alignItems: 'flex-start' }}>
-      <Chart spec={CompiledPieSpec} ariaLabel="Pie/donut chart" width={200} height={200} />
-    </div>
-  )
-}
-
-function TextLabels() {
-  return (
-    <div className="chart-container">
-      <Chart spec={CompiledTextLabelSpec} ariaLabel="Text labels" width={400} height={300} />
-    </div>
-  )
-}
-
-function Heatmap() {
-  return (
-    <div className="chart-container" style={{ alignItems: 'flex-start' }}>
-      <Chart spec={CompiledHeatmapSpec} ariaLabel="Heatmap" width={300} height={200} />
-    </div>
-  )
-}
-
-function StackedBar() {
-  return (
-    <div className="chart-container">
-      <Chart spec={CompiledStackedBarSpec} ariaLabel="Stacked bar" width={400} height={300} />
-    </div>
-  )
-}
-
-function LayeredAreaLine() {
-  return (
-    <div className="chart-container">
-      <Chart spec={CompiledLayerSpec} ariaLabel="Layered area + line" width={400} height={300} />
-    </div>
-  )
-}
-
-function Donut() {
-  return (
-    <div className="chart-container" style={{ alignItems: 'flex-start' }}>
-      <Chart spec={CompiledDonutSpec} ariaLabel="Donut chart" width={200} height={200} />
-    </div>
-  )
-}
-
-function Regression() {
-  return (
-    <div className="chart-container">
-      <Chart spec={CompiledRegressionSpec} ariaLabel="Regression line" width={400} height={300} />
-    </div>
-  )
-}
-
-function Streamgraph() {
-  return (
-    <div className="chart-container">
-      <Chart spec={CompiledStreamgraphSpec} ariaLabel="Streamgraph" width={400} height={300} />
-    </div>
-  )
-}
-
-function Bubble() {
-  return (
-    <div className="chart-container">
-      <Chart spec={CompiledBubbleSpec} ariaLabel="Bubble chart" width={400} height={300} />
-    </div>
-  )
-}
-
-function Candlestick() {
-  return (
-    <div className="chart-container">
-      <Chart spec={CompiledCandlestickSpec} ariaLabel="Candlestick chart" width={400} height={300} />
-    </div>
-  )
-}
-
-function ColorScheme() {
-  return (
-    <div className="chart-container">
-      <Chart spec={CompiledColorSchemeSpec} ariaLabel="Color scheme scatter" width={400} height={300} />
-    </div>
-  )
-}
-
-function GroupedBar() {
-  return (
-    <div className="chart-container">
-      <Chart spec={CompiledGroupedBarSpec} ariaLabel="Grouped bar chart" width={400} height={300} />
-    </div>
-  )
-}
-
-function Radar() {
-  return (
-    <div className="chart-container" style={{ justifyContent: 'center' }}>
-      <Chart spec={CompiledRadarSpec} ariaLabel="Radar spider chart" width={200} height={200} />
-    </div>
-  )
-}
+const SPECS: Array<{ title: string; desc: string; raw: Record<string, unknown>; compiled: Record<string, unknown>; aster: React.ReactNode; wide?: string }> = [
+  { title: 'Responsive Line', desc: 'Spec-level signals drive width/height; resizes with the container.', raw: LineSpec, compiled: CompiledLineSpec, aster: <ResponsiveLine />, wide: 'wide' },
+  { title: 'Bound Parameter', desc: 'A bound signal updates Y values live. Vega renders its own slider; aster drives the same param through the React prop.', raw: ParamBoundSpec, compiled: CompiledParamBoundSpec, aster: <BoundParam /> },
+  { title: 'Interactive Brush', desc: 'Drag to select a data interval — native vega params on the left, aster\'s event-driven signals on the right.', raw: InteractiveBrushSpec, compiled: CompiledInteractiveBrushSpec, aster: <InteractiveBrush /> },
+  { title: 'Histogram', desc: 'Bar encoding with bin:true auto-bins occurrences.', raw: HistogramSpec, compiled: CompiledHistogramSpec, aster: plain(CompiledHistogramSpec, 400, 300, 'Histogram', { alignItems: 'flex-start' }) },
+  { title: 'Scatter + Legend', desc: 'Color encodes a category dimension with an automatic legend.', raw: LegendScatterSpec, compiled: CompiledLegendScatterSpec, aster: plain(CompiledLegendScatterSpec, 400, 300, 'Legend scatter') },
+  { title: 'Pie / Donut', desc: 'Arc marks with innerRadius render donuts; theta encodes value.', raw: PieSpec, compiled: CompiledPieSpec, aster: plain(CompiledPieSpec, 200, 200, 'Pie/donut chart', { alignItems: 'flex-start' }) },
+  { title: 'Text Labels', desc: 'Text marks render a label at each (x, y) point.', raw: TextLabelSpec, compiled: CompiledTextLabelSpec, aster: plain(CompiledTextLabelSpec, 400, 300, 'Text labels') },
+  { title: 'Heatmap', desc: 'Band scales + a quantitative color scale render a gradient heatmap.', raw: HeatmapSpec, compiled: CompiledHeatmapSpec, aster: plain(CompiledHeatmapSpec, 300, 200, 'Heatmap', { alignItems: 'flex-start' }) },
+  { title: 'Stacked Bar', desc: 'Bars stacked per category with an automatic color legend.', raw: StackedBarSpec, compiled: CompiledStackedBarSpec, aster: plain(CompiledStackedBarSpec, 400, 300, 'Stacked bar') },
+  { title: 'Layered Area + Line', desc: 'An area mark overlaid with a line on shared scales.', raw: LayerSpec, compiled: CompiledLayerSpec, aster: plain(CompiledLayerSpec, 400, 300, 'Layered area + line') },
+  { title: 'Donut Chart', desc: 'A larger innerRadius arc renders a donut with a legend.', raw: DonutSpec, compiled: CompiledDonutSpec, aster: plain(CompiledDonutSpec, 200, 200, 'Donut chart', { alignItems: 'flex-start' }) },
+  { title: 'Regression Line', desc: 'A regression transform fits a line to point data.', raw: RegressionSpec, compiled: CompiledRegressionSpec, aster: plain(CompiledRegressionSpec, 400, 300, 'Regression line') },
+  { title: 'Streamgraph', desc: 'Stacked areas offset around the center produce a streamgraph.', raw: StreamgraphSpec, compiled: CompiledStreamgraphSpec, aster: plain(CompiledStreamgraphSpec, 400, 300, 'Streamgraph') },
+  { title: 'Bubble Chart', desc: 'The size channel quantitatively scales marker area.', raw: BubbleSpec, compiled: CompiledBubbleSpec, aster: plain(CompiledBubbleSpec, 400, 300, 'Bubble chart') },
+  { title: 'Candlestick', desc: 'Rule + bar layers render OHLC, colored by direction.', raw: CandlestickSpec, compiled: CompiledCandlestickSpec, aster: plain(CompiledCandlestickSpec, 400, 300, 'Candlestick chart') },
+  { title: 'Color Scheme', desc: 'A nominal scale with an explicit palette drives color + legend.', raw: ColorSchemeSpec, compiled: CompiledColorSchemeSpec, aster: plain(CompiledColorSchemeSpec, 400, 300, 'Color scheme scatter') },
+  { title: 'Grouped Bar', desc: 'Bars grouped side-by-side via the xOffset channel.', raw: GroupedBarSpec, compiled: CompiledGroupedBarSpec, aster: plain(CompiledGroupedBarSpec, 400, 300, 'Grouped bar chart') },
+  { title: 'Radar / Spider', desc: 'A raw Vega spec with radial axes and a polygon line.', raw: RadarSpec, compiled: CompiledRadarSpec, aster: plain(CompiledRadarSpec, 200, 200, 'Radar spider chart'), wide: 'wide' },
+]
 
 export function App() {
   const [dark, setDark] = React.useState(true)
@@ -347,49 +345,54 @@ export function App() {
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: var(--text); background: var(--bg); min-height: 100vh; }
-        .app { max-width: 1160px; margin: 0 auto; padding: 0 1.5rem 4rem; }
+        .app { max-width: 1240px; margin: 0 auto; padding: 0 1.5rem 4rem; }
         .hero { position: relative; padding: 3.5rem 0 2.5rem; }
         .eyebrow { color: var(--accent2); font-size: 0.85rem; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 600; margin-bottom: 0.75rem; }
         h1 { font-size: clamp(2.2rem, 5vw, 3.2rem); line-height: 1.05; letter-spacing: -0.03em; }
-        .subtitle { color: var(--muted); font-size: 1.15rem; margin-top: 0.9rem; max-width: 46rem; line-height: 1.6; }
+        .subtitle { color: var(--muted); font-size: 1.15rem; margin-top: 0.9rem; max-width: 52rem; line-height: 1.6; }
         .hero-stats { display: flex; gap: 2rem; margin-top: 1.6rem; flex-wrap: wrap; }
         .hero-stats div { font-size: 0.9rem; color: var(--muted); }
         .hero-stats b { display: block; color: var(--text); font-size: 1.3rem; }
-        nav.toc { position: sticky; top: 0; z-index: 20; display: flex; gap: 0.5rem; flex-wrap: wrap; padding: 0.9rem 0; backdrop-filter: blur(8px); background: rgba(11,15,23,0.7); border-bottom: 1px solid var(--border); margin-bottom: 1.5rem; }
-        nav.toc a { color: var(--muted); text-decoration: none; font-size: 0.85rem; padding: 0.35rem 0.7rem; border-radius: 999px; }
-        nav.toc a:hover { color: var(--text); background: var(--bg-soft); }
         h2 { font-size: 1.5rem; letter-spacing: -0.02em; margin-bottom: 0.25rem; }
         .section-head { margin: 2.5rem 0 1.25rem; }
-        .section-head .desc { color: var(--muted); font-size: 0.95rem; max-width: 44rem; }
+        .section-head .desc { color: var(--muted); font-size: 0.95rem; max-width: 48rem; }
         .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; }
         .feature { background: linear-gradient(180deg, var(--card), var(--bg-soft)); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
         .feature h3 { font-size: 1.05rem; margin-bottom: 0.4rem; color: var(--accent2); }
         .feature p { color: var(--muted); font-size: 0.9rem; line-height: 1.55; }
-        .showcase { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(600px, 100%), 1fr)); gap: 1.25rem; }
-        .showcase .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
-        .showcase .card h3 { font-size: 1.05rem; margin-bottom: 0.4rem; }
-        .showcase .card p { color: var(--muted); font-size: 0.9rem; margin-bottom: 0.9rem; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(560px, 100%), 1fr)); gap: 1.25rem; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(680px, 100%), 1fr)); gap: 1.25rem; }
         .section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
         .section.wide { grid-column: 1 / -1; }
         .section h2 { font-size: 1.05rem; margin-bottom: 0.25rem; }
         .section .desc { color: var(--muted); font-size: 0.88rem; margin-bottom: 0.75rem; line-height: 1.5; }
-        /* The chart area is a light 'canvas' so transparent/pasted specs (default
-           black text) stay readable in either page mode. */
-        .chart-container { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; display: flex; align-items: center; justify-content: safe center; overflow: auto; }
+        /* The two-column comparison: same spec, both engines. */
+        .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+        @media (max-width: 860px) { .compare { grid-template-columns: 1fr; } }
+        .pane { min-width: 0; }
+        .pane-head { display: flex; align-items: center; margin-bottom: 0.5rem; min-height: 22px; }
+        .badge { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); }
+        .badge.oracle { color: var(--muted); }
+        .badge.aster { color: #fff; background: var(--accent); border-color: var(--accent); }
+        .vega-loading { min-height: 120px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 0.85rem; width: 100%; }
+        .chart-container { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; display: flex; align-items: center; justify-content: safe center; overflow: auto; min-height: 120px; }
+        .vega-pane { min-width: 0; overflow: auto; }
         .mode-toggle { position: absolute; top: 1.4rem; right: 1.5rem; background: var(--card); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; border-radius: 999px; cursor: pointer; font-size: 0.85rem; }
         .playground-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
-        .playground { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
-        @media (max-width: 760px) { .playground { grid-template-columns: 1fr; } }
-        .spec-editor { width: 100%; min-height: 340px; background: var(--bg-soft); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
-        .playground-chart { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.75rem; background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; overflow: auto; }
-        .playground-chart .hint { color: var(--muted); font-size: 0.82rem; text-align: center; }
-        .playground-chart .error { color: #ff8a8a; font-size: 0.85rem; font-family: ui-monospace, monospace; }
+        .playground { display: grid; grid-template-columns: minmax(280px, 1fr) 2fr; gap: 1.25rem; align-items: start; }
+        @media (max-width: 900px) { .playground { grid-template-columns: 1fr; } }
+        .spec-editor { width: 100%; min-height: 300px; background: var(--bg-soft); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+        .playground-output { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+        .playground-output .hint { color: var(--muted); font-size: 0.82rem; text-align: center; }
+        .playground-output .error { color: #ff8a8a; font-size: 0.85rem; font-family: ui-monospace, monospace; }
         .controls { margin-top: 0.5rem; display: flex; align-items: center; gap: 1rem; font-size: 0.9rem; color: var(--muted); }
         .controls input[type="range"] { width: 200px; accent-color: var(--accent); }
         button { background: var(--accent); color: #fff; border: none; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
         button:hover { background: var(--accent2); }
         .selection-info { font-size: 0.85rem; color: var(--muted); margin-top: 0.5rem; font-family: monospace; }
+        .showcase { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(600px, 100%), 1fr)); gap: 1.25rem; }
+        .showcase .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
+        .showcase .card h3 { font-size: 1.05rem; margin-bottom: 0.4rem; }
+        .showcase .card p { color: var(--muted); font-size: 0.9rem; margin-bottom: 0.9rem; }
         footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem; }
       `}</style>
 
@@ -400,23 +403,18 @@ export function App() {
         <div className="eyebrow">Vega-compatible chart engine</div>
         <h1>Aster Charts</h1>
         <p className="subtitle">
-          A fast, Vega/Vega-Lite-compatible chart engine for React. Accurate rendering, a tiny bundle,
-          and a reactive dataflow that re-renders only the marks that changed.
+          A fast, Vega/Vega-Lite-compatible chart engine for React — with its own from-scratch
+          Vega-Lite compiler. Every card below feeds the <strong>same spec</strong> to both engines:
+          the official vega toolchain on the left, aster on the right. The vega column streams in
+          separately; aster paints first.
         </p>
         <div className="hero-stats">
-          <div><b>406+</b> conformance specs</div>
-          <div><b>86 kB</b> gzip bundle</div>
+          <div><b>409/413</b> conformance specs vs the oracle</div>
+          <div><b>104 kB</b> gzip React chart (no vega runtime)</div>
           <div><b>~9x</b> faster stable updates</div>
-          <div><b>0</b> leaks</div>
+          <div><b>~0 MB</b> retained per update</div>
         </div>
       </header>
-
-      <nav className="toc">
-        <a href="#features">Features</a>
-        <a href="#reactive">Reactive dataflow</a>
-        <a href="#playground">Playground</a>
-        <a href="#gallery">Gallery</a>
-      </nav>
 
       <section id="features">
         <div className="section-head">
@@ -425,7 +423,7 @@ export function App() {
         </div>
         <div className="features">
           <div className="feature"><h3>Oracle-verified</h3><p>Geometry diffed against the actual Vega renderer on a 400+ spec conformance corpus.</p></div>
-          <div className="feature"><h3>Tiny &amp; tree-shakeable</h3><p>~86 kB gzip for the React chart, with geo, transforms, and the DOM patcher behind opt-in addons.</p></div>
+          <div className="feature"><h3>Own Vega-Lite compiler</h3><p>@aster/vl compiles Vega-Lite to Vega from scratch — no npm vega-lite anywhere in the render path.</p></div>
           <div className="feature"><h3>Incremental DOM</h3><p>Patches only changed attributes and skips unchanged subtrees on updates.</p></div>
           <div className="feature"><h3>Reactive dataflow</h3><p>Per-datum updates re-derive only the changed rows, reusing unchanged marks, items, and scales.</p></div>
         </div>
@@ -434,18 +432,18 @@ export function App() {
       <section id="reactive">
         <div className="section-head">
           <h2>Reactive dataflow — live</h2>
-          <p className="desc">The charts below exercise the new reactive engine: a live per-datum update via <code>dataChanges</code>, and hover tooltips.</p>
+          <p className="desc">Aster-only capabilities: a live per-datum update via <code>dataChanges</code> (O(changed), not O(n)), and hover tooltips.</p>
         </div>
         <div className="showcase">
           <div className="card">
             <h3>Live incremental update</h3>
-            <p>One point changes every 700ms. The engine re-derives only that row and reuses the rest — O(changed), not O(n).</p>
-            <div className="chart-container"><LiveDataChanges /></div>
+            <p>One point changes every 700ms. The engine re-derives only that row and reuses the rest.</p>
+            <LiveDataChanges />
           </div>
           <div className="card">
             <h3>Hover tooltips</h3>
             <p>Hover any mark to read its datum, via <code>tooltip</code>.</p>
-            <div className="chart-container"><TooltipDemo /></div>
+            <TooltipDemo />
           </div>
         </div>
       </section>
@@ -453,7 +451,7 @@ export function App() {
       <section id="playground">
         <div className="section-head">
           <h2>Spec playground</h2>
-          <p className="desc">Paste any Vega or Vega-Lite spec on the left and see it rendered live on the right.</p>
+          <p className="desc">Paste any Vega or Vega-Lite spec and see both engines render it live.</p>
         </div>
         <div className="playground-wrap">
           <SpecPlayground />
@@ -462,21 +460,17 @@ export function App() {
 
       <section id="gallery">
         <div className="section-head">
-          <h2>Gallery</h2>
-          <p className="desc">Every mark type, scale, axis, legend, and interaction, rendered by Aster.</p>
+          <h2>Gallery — same spec, both engines</h2>
+          <p className="desc">Left: the official vega/vega-lite toolchain. Right: aster, fed with the identical spec input.</p>
         </div>
         <div className="grid">
           {SPECS.map((s) => (
-            <div key={s.title} className={`section ${s.span === 'wide' ? 'wide' : ''}`}>
-              <h2>{s.title}</h2>
-              <p className="desc">{s.desc}</p>
-              <div className="chart-container">{s.render()}</div>
-            </div>
+            <CompareCard key={s.title} title={s.title} desc={s.desc} spec={s.raw} aster={s.aster} wide={s.wide === 'wide'} />
           ))}
         </div>
       </section>
 
-      <footer>Built with <a href="https://github.com/mgilbir/aster-react" style={{ color: 'var(--accent2)' }}>aster-react</a>.</footer>
+      <footer>Built with <a href="https://github.com/mgilbir/aster-react" style={{ color: 'var(--accent2)' }}>aster-react</a>. The vega column is the official renderer, loaded separately for comparison.</footer>
     </div>
   )
 }

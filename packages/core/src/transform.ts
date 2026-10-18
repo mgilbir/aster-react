@@ -6,6 +6,7 @@
 import type { CompiledTransform, SortSpec } from './types.js'
 import type { ExpressionRuntime } from './expression.js'
 import { geoRegistry, requireGeo, requireTransform } from './registry.js'
+import { nominalTextWidth } from './text-metrics.js'
 
 export interface TransformContext {
   runtime: ExpressionRuntime
@@ -457,7 +458,7 @@ function imputeStat(group: Row[], t: { field: string; method?: string; value?: u
 // aggregate / window / stack
 // ---------------------------------------------------------------------------
 
-const AGGR: Record<string, (values: number[], rows: Row[]) => number> = {
+const AGGR: Record<string, (values: number[], rows: Row[]) => number | undefined> = {
   count: (_v, rows) => rows.length,
   sum: (v) => v.reduce((a, b) => a + b, 0),
   product: (v) => v.reduce((a, b) => a * b, 1),
@@ -477,41 +478,50 @@ const AGGR: Record<string, (values: number[], rows: Row[]) => number> = {
   distinct: (v, rows) => new Set(v).size,
   valid: (v) => v.filter((x) => Number.isFinite(x)).length,
   missing: (v, rows) => rows.length - v.filter((x) => Number.isFinite(x)).length,
-  // vega-statistics: sample variance (n-1), population variance (n); the
-  // stdev family are their square roots, stderr = stdev/sqrt(n)
+  // vega's aggregate ops (vega-transforms AggregateOps): the variance family
+  // requires valid > 1 — otherwise undefined (the consuming mark renders a
+  // zero-width/height rect, matching upstream)
   variance: (v) => {
-    const n = v.length
-    if (n < 2) return NaN
-    const m = v.reduce((a, b) => a + b, 0) / n
-    return v.reduce((a, b) => a + (b - m) * (b - m), 0) / (n - 1)
+    const vals = v.filter((x) => Number.isFinite(x))
+    const n = vals.length
+    if (n < 2) return undefined
+    const m = vals.reduce((a, b) => a + b, 0) / n
+    return vals.reduce((a, b) => a + (b - m) * (b - m), 0) / (n - 1)
   },
   variancep: (v) => {
-    const n = v.length
-    if (!n) return NaN
-    const m = v.reduce((a, b) => a + b, 0) / n
-    return v.reduce((a, b) => a + (b - m) * (b - m), 0) / n
+    const vals = v.filter((x) => Number.isFinite(x))
+    const n = vals.length
+    if (!n) return undefined
+    const m = vals.reduce((a, b) => a + b, 0) / n
+    return vals.reduce((a, b) => a + (b - m) * (b - m), 0) / n
   },
   stdev: (v) => {
-    const n = v.length
-    if (n < 2) return NaN
-    const m = v.reduce((a, b) => a + b, 0) / n
-    return Math.sqrt(v.reduce((a, b) => a + (b - m) * (b - m), 0) / (n - 1))
+    const vals = v.filter((x) => Number.isFinite(x))
+    const n = vals.length
+    if (n < 2) return undefined
+    const m = vals.reduce((a, b) => a + b, 0) / n
+    return Math.sqrt(vals.reduce((a, b) => a + (b - m) * (b - m), 0) / (n - 1))
   },
   stdevp: (v) => {
-    const n = v.length
-    if (!n) return NaN
-    const m = v.reduce((a, b) => a + b, 0) / n
-    return Math.sqrt(v.reduce((a, b) => a + (b - m) * (b - m), 0) / n)
+    const vals = v.filter((x) => Number.isFinite(x))
+    const n = vals.length
+    if (!n) return undefined
+    const m = vals.reduce((a, b) => a + b, 0) / n
+    return Math.sqrt(vals.reduce((a, b) => a + (b - m) * (b - m), 0) / n)
   },
   stderr: (v) => {
-    const n = v.length
-    if (n < 2) return NaN
-    const m = v.reduce((a, b) => a + b, 0) / n
-    return Math.sqrt(v.reduce((a, b) => a + (b - m) * (b - m), 0) / (n - 1)) / Math.sqrt(n)
+    const vals = v.filter((x) => Number.isFinite(x))
+    const n = vals.length
+    if (n < 2) return undefined
+    const m = vals.reduce((a, b) => a + b, 0) / n
+    return Math.sqrt(vals.reduce((a, b) => a + (b - m) * (b - m), 0) / (n - 1)) / Math.sqrt(n)
   },
 }
 
-function aggregateGroup(rows: Row[], groupby: string[], fields: (string | null)[], ops: string[], as: string[], aggregateParams?: (number | null)[]): Row {
+/** Aggregate a single (already-grouped) set of rows. Exported for the incremental
+ * aggregate path, which re-derives only dirty groups and already knows their
+ * membership — going through groupRows would rebuild a Map per group for nothing. */
+export function aggregateGroup(rows: Row[], groupby: string[], fields: (string | null)[], ops: string[], as: string[], aggregateParams?: (number | null)[]): Row {
   const row: Row = {}
   for (const g of groupby) row[g] = rows[0]?.[g]
   ops.forEach((op, i) => {
@@ -1617,8 +1627,9 @@ function labelRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContex
         if (bm.outOfBounds(_x1, _x1, _y1, _y2) || bm.getRange(_x1, _y1, _x1, _y2)) {
           continue
         }
-        // vega-scenegraph estimateWidth: 0.8 * chars * fontSize (no canvas).
-        textWidth = ~~(0.8 * String(rawText ?? '').length * (textHeight ?? 11))
+        // vega textMetrics: canvas measureText when available, the headless
+        // estimate (`0.8 * chars * fontSize`) otherwise.
+        textWidth = nominalTextWidth(String(rawText ?? ''), (textHeight as number | undefined) ?? 11)
       }
 
       const xc = x1 + (insideFactor * textWidth * dx) / 2

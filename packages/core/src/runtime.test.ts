@@ -31,6 +31,11 @@ function fuzzSpecs(): Array<{ name: string; spec: Record<string, unknown> }> {
     { name: 'filter', spec: { ...BASE, data: [{ name: 't', values: rows, transform: [{ type: 'filter', expr: 'datum.x > 1' }] }], scales: [sc('x', [0, 10]), ysc('y', [0, 10])], marks: [sym('x')] } as never },
     { name: 'bin', spec: { ...BASE, data: [{ name: 't', values: rows, transform: [{ type: 'bin', field: 'x', extent: [0, 4], as: ['b0', 'b1'] }] }], scales: [sc('x', [0, 4]), ysc('y', [0, 10])], marks: [sym('b0')] } as never },
     { name: 'band-scale', spec: { ...BASE, data: [{ name: 't', values: rows }], scales: [{ name: 'x', type: 'band', domain: { data: 't', field: 'g' }, range: 'width', paddingOuter: 0.1, paddingInner: 0.2 }, ysc('y', [0, 10])], marks: [sym('x')] } as never },
+    // Rect marks sort by their y-scale field (paint order); this fuzzes the
+    // sort-permutation cache, the discrete-domain census reuse, and the
+    // scale-identity item-reuse check against the full re-derive.
+    { name: 'rect-band-sort', spec: { ...BASE, data: [{ name: 't', values: rows }], scales: [{ name: 'x', type: 'band', domain: { data: 't', field: 'g' }, range: 'width', paddingOuter: 0.1, paddingInner: 0.2 }, ysc('y', { data: 't', field: 'v' })], marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'g' }, width: { scale: 'x', band: 1 }, y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 } } } }] } as never },
+    { name: 'rect-aggregate-sort', spec: { ...BASE, data: [{ name: 't', values: rows, transform: [{ type: 'aggregate', groupby: ['g'], fields: ['v'], ops: ['sum'], as: ['s'] }] }], scales: [{ name: 'x', type: 'band', domain: { data: 't', field: 'g' }, range: 'width', paddingOuter: 0.1, paddingInner: 0.2 }, ysc('y', { data: 't', field: 's' })], marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'g' }, width: { scale: 'x', band: 1 }, y: { scale: 'y', field: 's' }, y2: { scale: 'y', value: 0 } } } }] } as never },
   ]
   return specs
 }
@@ -117,6 +122,54 @@ describe('differential fuzz (incremental === full re-derive)', () => {
         expect(renderSceneToSvg(inc), `${name} trial ${trial}`).toBe(renderSceneToSvg(full))
       }
     }
+  })
+
+  it('rect differential: order-stable update reuses items and matches full re-derive', () => {
+    // Bars whose y values stay in the same rank order: the sort permutation is
+    // unchanged, so per-datum item reuse is safe and must engage.
+    const rows = Array.from({ length: 8 }, (_, i) => ({ g: 'g' + i, v: i === 7 ? 100 : (i + 1) * 10 }))
+    const spec = {
+      ...BASE,
+      data: [{ name: 't', values: rows }],
+      scales: [
+        { name: 'x', type: 'band', domain: { data: 't', field: 'g' }, range: 'width', paddingOuter: 0.1, paddingInner: 0.2 },
+        ysc('y', { data: 't', field: 'v' }),
+      ],
+      marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'g' }, width: { scale: 'x', band: 1 }, y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 } } } }],
+    } as never
+    const chart = compileChart(spec)
+    const a = evaluateChart(chart, { data: { t: rows } })
+    const itemsA = a.items[0]!.items as unknown[]
+    // Bump one bar's value but keep every bar's rank AND the domain extent
+    // (row 7's v=100 stays the max, so the y scale is provably unchanged).
+    const next = rows.map((r, i) => (i === 3 ? { g: r.g, v: r.v + 5 } : r))
+    const b = evaluateChart(chart, { data: { t: next }, dataChanges: { t: [3] } })
+    const itemsB = b.items[0]!.items as unknown[]
+    expect(renderSceneToSvg(b)).toBe(renderSceneToSvg(evaluateChart(chart, { data: { t: next } })))
+    expect(itemsB).toBe(itemsA)
+    // Dataset row 3 paints at position 4 under the descending v sort; only that
+    // position is re-encoded (a new generation), the rest are reused.
+    expect((itemsB[4] as { __gen?: number } | undefined)?.__gen).not.toBe((itemsB[0] as { __gen?: number } | undefined)?.__gen)
+  })
+
+  it('discrete domain: new category rebuilds the scale; value swap within the set reuses it', () => {
+    const rows = Array.from({ length: 6 }, (_, i) => ({ g: 'g' + (i % 3), v: i }))
+    const spec = {
+      ...BASE,
+      data: [{ name: 't', values: rows }],
+      scales: [{ name: 'x', type: 'band', domain: { data: 't', field: 'g' }, range: 'width', paddingOuter: 0.1, paddingInner: 0.2 }, ysc('y', [0, 10])],
+      marks: [sym('x')],
+    } as never
+    const chart = compileChart(spec)
+    evaluateChart(chart, { data: { t: rows } })
+    // Swap g values within the existing set: ordered distinct set unchanged.
+    const swapped = rows.map((r, i) => (i === 0 ? { g: 'g1', v: r.v } : r))
+    const incSwap = evaluateChart(chart, { data: { t: swapped }, dataChanges: { t: [0] } })
+    expect(renderSceneToSvg(incSwap)).toBe(renderSceneToSvg(evaluateChart(chart, { data: { t: swapped } })))
+    // Introduce a brand-new category: the domain must rebuild.
+    const withNew = rows.map((r, i) => (i === 0 ? { g: 'gNew', v: r.v } : r))
+    const incNew = evaluateChart(chart, { data: { t: withNew }, dataChanges: { t: [0] } })
+    expect(renderSceneToSvg(incNew)).toBe(renderSceneToSvg(evaluateChart(chart, { data: { t: withNew } })))
   })
 })
 

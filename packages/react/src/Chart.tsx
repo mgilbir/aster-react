@@ -15,6 +15,17 @@ import { buildHitIndex, type HitIndex } from '@aster/core/hit'
 import { bindSceneSignals, stampDatumAttrs, type SignalBinding } from '@aster/core/signals'
 import { dragToDataInterval, selectionToPixels, type SelectionInterval } from './interaction.js'
 
+const num = (x: number): string => (Number.isInteger(x) ? String(x) : String(Math.round(x * 1000) / 1000))
+
+/** Scene/encode channel fields that are engine-internal, not datum data. */
+const TOOLTIP_INTERNAL_FIELDS = new Set([
+  'x', 'y', 'x2', 'y2', 'xc', 'yc', 'width', 'height', 'opacity', 'fill', 'fill-opacity',
+  'stroke', 'stroke-width', 'stroke-dasharray', 'strokeOpacity', 'size', 'shape', 'angle',
+  'theta', 'radius', 'text', 'align', 'baseline', 'defined', 'startAngle', 'endAngle',
+  'innerRadius', 'outerRadius', 'ariaRoleDescription', 'description', 'path', 'url',
+  'limit', 'dir', 'dx', 'dy', 'cursor', 'href', 'tooltip', 'band',
+])
+
 export interface ChartProps {
   spec: Record<string, unknown>
   data?: Record<string, unknown[]>
@@ -322,6 +333,23 @@ export function Chart({
     [isDragging, dragPixelStart, hasInteraction, onSelect],
   )
 
+  /**
+   * Tooltip fields: the datum row is the ORIGINAL data plus the encoded
+   * channel values resolveEncodeSet appends (x/y/width/fill/...). The tooltip
+   * is for reading the datum — hide the internal/positional channels and
+   * engine fields, keep the source data.
+   */
+  const tooltipFields = React.useMemo(() => {
+    if (!tooltipInfo) return [] as Array<[string, string]>
+    const fmt = ([k, v]: [string, unknown]): [string, string] => [k, typeof v === 'number' ? num(v) : String(v)]
+    const visible = Object.entries(tooltipInfo.datum).filter(
+      ([k, v]) => !k.startsWith('__') && !TOOLTIP_INTERNAL_FIELDS.has(k) && v != null && typeof v !== 'object',
+    )
+    // Specs whose source fields are themselves named like channels (x/y/...)
+    // would filter to nothing — vega-style fallback: show every field.
+    return (visible.length ? visible : Object.entries(tooltipInfo.datum).filter(([k, v]) => !k.startsWith('__') && v != null && typeof v !== 'object')).map(fmt)
+  }, [tooltipInfo])
+
   const handleTooltipMove = React.useCallback(
     (e: React.MouseEvent) => {
     if (!tooltip) return
@@ -463,8 +491,8 @@ export function Chart({
             whiteSpace: 'nowrap',
           }}
         >
-          {Object.entries(tooltipInfo.datum).map(([k, v]) => (
-            <div key={k}><strong>{k}:</strong> {String(v)}</div>
+          {tooltipFields.map(([k, v]) => (
+            <div key={k}><strong>{k}:</strong> {v}</div>
           ))}
         </div>
       )}

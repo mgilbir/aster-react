@@ -432,10 +432,25 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
   // rule marks have no xc/yc semantics in vega: config/style channels for
   // them are silently ignored (only an explicit mark encode reaches them)
   const isRule = String(m.type) === 'rule'
+  // A symbol mark has no rect/arc/text geometry channels: config blocks that
+  // carry them (e.g. config.point.width / x2 / startAngle) are inert in vega.
+  const isSymbol = String(m.type) === 'symbol'
+  const isRectLike = String(m.type) === 'rect' || String(m.type) === 'bar' || String(m.type) === 'tick'
+  const rectInert = new Set(['width', 'height', 'x2', 'y2'])
+  const symbolInert = new Set([
+    'width', 'height', 'x2', 'y2', 'startAngle', 'endAngle', 'innerRadius',
+    'outerRadius', 'radius', 'radius2', 'theta', 'theta2', 'padAngle',
+    'cornerRadius', 'cornerRadiusTopLeft', 'cornerRadiusTopRight',
+    'cornerRadiusBottomLeft', 'cornerRadiusBottomRight', 'text', 'url',
+    'align', 'baseline', 'dx', 'dy', 'limit', 'lineHeight', 'font',
+    'fontSize', 'fontStyle', 'fontWeight',
+  ])
   for (const { props, pairGuard } of sources) {
     for (const [k, v] of Object.entries(props)) {
       if (k === 'name' || k === 'interactive' || k === 'zindex' || k === 'style') continue
       if (isRule && (k === 'xc' || k === 'yc')) continue
+      if (isSymbol && symbolInert.has(k)) continue
+      if (isRectLike && rectInert.has(k)) continue
       let skip = k in update
       if (!skip && pairGuard && (k === 'fill' || k === 'stroke')) {
         skip = 'fill' in update || 'stroke' in update

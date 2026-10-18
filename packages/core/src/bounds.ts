@@ -9,6 +9,7 @@
  */
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
 import { computeLinePath, trailPath } from './render.js'
+import { itemTextWidth } from './text-metrics.js'
 
 // ---------------------------------------------------------------------------
 // Bounds — exact port of vega-scenegraph Bounds.js
@@ -161,7 +162,10 @@ export function boundStroke(bounds: Bounds, item: SceneItem, miter?: boolean): B
 }
 
 // ---------------------------------------------------------------------------
-// Text metrics — exact port of util/text.js (headless estimate path)
+// Text metrics — port of util/text.js. The estimate below is vega's headless
+// fallback; when a canvas is available (real browsers) we measure with the
+// same cached measureText vega uses, so browser layout matches browser vega.
+// See text-metrics.ts.
 // ---------------------------------------------------------------------------
 
 export function fontSize(item: SceneItem): number {
@@ -196,7 +200,7 @@ export function textValue(item: SceneItem, line: unknown): string {
 
 function truncate(item: SceneItem, text: string): string {
   const limit = +item.limit!
-  const width = (t: string) => estimateWidth(t, fontSize(item))
+  const width = (t: string) => itemTextWidth(item, t)
   if (width(text) < limit) return text
   const ellipsis = item.ellipsis || '…'
   let lo = 0
@@ -210,17 +214,16 @@ function truncate(item: SceneItem, text: string): string {
   return text.slice(0, lo) + ellipsis
 }
 
-function estimateWidth(text: string, currentFontHeight: number): number {
-  return ~~(0.8 * text.length * currentFontHeight)
-}
 
 export function textWidth(item: SceneItem, line: unknown): number {
-  // vega's estimateWidth (the no-canvas path textMetrics uses) has no
-  // fontSize guard: `~~(0.8 * len * fontSize)` — negative font sizes measure
-  // negative (the text bound then flips through Bounds.set). The `<= 0`
-  // guard lives only in the canvas measureWidth path.
+  // vega's two paths, dispatched exactly like textMetrics.width:
+  //  - canvas (real browsers): 0 for fontSize <= 0 / empty text, else the
+  //    cached measureText of the item's font string;
+  //  - headless estimate (no canvas): `~~(0.8 * len * fontSize)` with NO
+  //    fontSize guard — negative font sizes measure negative (the text bound
+  //    then flips through Bounds.set), matching vega bit for bit.
   const text = textValue(item, line)
-  return estimateWidth(String(text ?? ''), fontSize(item))
+  return itemTextWidth(item, String(text ?? ''))
 }
 
 /** util/text.js `offset(item)` — baseline correction, exact. */

@@ -13,7 +13,7 @@ export interface CanonicalResult {
   root: string | null
 }
 
-export function canonicalizeSvg(svg: string): CanonicalResult {
+export function canonicalizeSvg(svg: string, opts: { ignoreBackground?: boolean } = {}): CanonicalResult {
   const root = parseSvg(svg)
   const records: string[] = []
   let rootRecord: string | null = null
@@ -24,9 +24,19 @@ export function canonicalizeSvg(svg: string): CanonicalResult {
     if (el.tag === 'svg') {
       rootRecord = `svg|${num(el.attrs['width']!)}|${num(el.attrs['height']!)}`
     } else if (el.tag === 'rect') {
-      records.push(
-        `rect|${x + numAttr(el.attrs['x'])}|${y + numAttr(el.attrs['y'])}|${numAttr(el.attrs['width'])}|${numAttr(el.attrs['height'])}|${styleOf(el)}`,
-      )
+      const rw = numAttr(el.attrs['width'])
+      const rh = numAttr(el.attrs['height'])
+      // Full-canvas background rect: vega-embed moves the view background to a
+      // CSS style on the container (no rect in the svg) while aster/toSVG emit
+      // it explicitly — render-identical, structurally different. The browser
+      // gate ignores it on both sides.
+      if (opts.ignoreBackground && rootRecord != null && rw === numAttr(el.attrs['width']) && rh === numAttr(el.attrs['height']) && x === 0 && y === 0) {
+        // skip — but still walk children (none expected on a rect)
+      } else {
+        records.push(
+          `rect|${x + numAttr(el.attrs['x'])}|${y + numAttr(el.attrs['y'])}|${rw}|${rh}|${styleOf(el)}`,
+        )
+      }
     } else if (el.tag === 'line') {
       let x1 = x + numAttr(el.attrs['x1']), y1 = y + numAttr(el.attrs['y1'])
       let x2 = x + numAttr(el.attrs['x2']), y2 = y + numAttr(el.attrs['y2'])
@@ -84,15 +94,18 @@ function styleOf(el: XmlEl): string {
   const keys = ['fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-dasharray', 'opacity']
   const parts: string[] = []
   for (const k of keys) {
-    const v = el.attrs[k]
+    let v = el.attrs[k]
     if (v === undefined) continue
+    // fill="transparent" renders identically to no fill attribute — vega-embed's
+    // build emits it explicitly where toSVG omits it. Canonicalize to absent.
+    if (k === 'fill' && v.trim() === 'transparent') continue
     // Skip the default opacity; also skip explicit 0 (vega renders
     // label-overlap-hidden labels as invisible DOM nodes that we do not
     // reproduce — hidden labels have no visual geometry).
     if (k === 'opacity' && (roundIn(v) === '1' || roundIn(v) === '0')) continue
     // Gradient ids are internal (aster/vega both emit `gradient_N` but the exact
     // index can differ across re-evaluations); canonicalize the reference.
-    parts.push(`${k}=${roundIn(v).replace(/url\(#gradient_\d+\)/g, 'url(#gradient)')}`)
+    parts.push(`${k}=${roundIn(v).replace(/url\((?:[a-z][a-z0-9+.-]*:\/\/[^#)]*|#)[^)]*gradient_\d+\)/g, 'url(#gradient)')}`)
   }
   return parts.join(';')
 }
@@ -113,14 +126,20 @@ function num(v: number | string): string {
   return s.endsWith('.000') ? s.slice(0, -4) : (s.includes('.') ? s.replace(/\.?0+$/, '') : s)
 }
 
-/** Apply a translate offset and rounding to an SVG path `d` (absolute commands). */
+/** Apply a translate offset to an SVG path `d`, converting to absolute coordinates. */
 function translatePath(d: string, tx: number, ty: number): string {
   if (!d) return ''
   let out = ''
   let i = 0
   let cmd = ''
   let paramIdx = 0
+  // Current point + subpath start, in the path's local (pre-translation) frame.
+  let cx = 0
+  let cy = 0
+  let sx = 0
+  let sy = 0
   const n = d.length
+  const numRe = /[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/
   while (i < n) {
     const ch = d[i]!
     if (/^[A-Za-z]$/.test(ch)) {
@@ -128,37 +147,63 @@ function translatePath(d: string, tx: number, ty: number): string {
       paramIdx = 0
       out += ch
       i++
+      if (cmd === 'Z' || cmd === 'z') {
+        cx = sx
+        cy = sy
+      }
       continue
     }
     if (/\s|,/.test(ch)) {
       i++
       continue
     }
-    const m = /[-+]?(?:\d+\.?\d*|\.d+)(?:[eE][-+]?\d+)?/.exec(d.slice(i))
+    const m = numRe.exec(d.slice(i))
     if (!m) {
       i++
       continue
     }
     const val = parseFloat(m[0])
     i += m[0].length
-    let offset = 0
-    if (cmd === 'A' || cmd === 'a') {
-      // A/a has 7 params: [rx, ry, x-rotation, large-arc-flag, sweep-flag, x, y]
-      // Only params 5 (x) and 6 (y) should be translated
-      if (paramIdx === 5) offset = tx
-      else if (paramIdx === 6) offset = ty
-      // params 0-4: no offset (defaults to 0)
-    } else if (cmd === 'H' || cmd === 'h') {
-      offset = tx
-    } else if (cmd === 'V' || cmd === 'v') {
-      offset = ty
-    } else if (paramIdx % 2 === 0) {
-      offset = tx
+    // Implicit repetition: after M/m, later coordinate pairs are L/l.
+    const U = cmd >= 'A' && cmd <= 'Z' ? cmd : cmd.toUpperCase()
+    const eff = (cmd === 'M' || cmd === 'm') && paramIdx >= 2 ? (U === 'M' ? 'L' : 'L') : U
+    const abs = cmd >= 'A' && cmd <= 'Z'
+    // Classify this parameter: which axis, and is it a segment endpoint?
+    // (Control points are emitted in absolute form too but don't move the pen.)
+    let isX: boolean
+    let endpoint: boolean
+    if (eff === 'H') {
+      isX = true
+      endpoint = true
+    } else if (eff === 'V') {
+      isX = false
+      endpoint = true
+    } else if (eff === 'A') {
+      const r = paramIdx % 7
+      isX = r === 5
+      endpoint = r >= 5
+    } else if (eff === 'C') {
+      const r = paramIdx % 6
+      isX = r % 2 === 0
+      endpoint = r >= 4
+    } else if (eff === 'S' || eff === 'Q') {
+      const r = paramIdx % 4
+      isX = r % 2 === 0
+      endpoint = r >= 2
     } else {
-      offset = ty
+      // M / L / T (+ implicit repetitions)
+      isX = paramIdx % 2 === 0
+      endpoint = true
+    }
+    const coord = abs ? val : isX ? cx + val : cy + val
+    out += num(coord + (isX ? tx : ty))
+    if (endpoint) {
+      if (isX) cx = coord
+      else cy = coord
+      if (U === 'M' && isX) sx = coord
+      if (U === 'M' && !isX) sy = coord
     }
     paramIdx++
-    out += num(val + offset)
   }
   return out
 }

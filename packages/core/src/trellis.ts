@@ -136,6 +136,11 @@ export function measureBounds(item: SceneGroup): Bounds {
       continue
     } else if ((leaf as SceneGroup).role === 'axis') {
       b.union(boundAxisGroup(leaf as SceneGroup))
+    } else if (item.role === 'row-title' && leaf.text != null) {
+      // Vega's title layout measures the rotated row-title text at its
+      // title-baseline origin; the rendered baseline (middle) is applied by
+      // the text mark afterwards and must not inflate the rotated x-bound.
+      b.union(boundLeaf(new Bounds(), { ...leaf, baseline: 'top' } as SceneItem))
     } else {
       b.union(boundLeaf(new Bounds(), leaf))
     }

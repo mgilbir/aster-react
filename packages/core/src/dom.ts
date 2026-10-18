@@ -12,9 +12,11 @@
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import {
   arcPath,
+  baselineOffset,
   computeAreaPath,
   computeLinePath,
   num,
+  truncateLeaf,
   rectItemPath,
   symbolPath,
   textItemDesc,
@@ -47,7 +49,14 @@ function isClean(it: SceneItem): boolean {
 /** Build (or reuse, for a clean item) the DOM descriptor for a scene item. */
 function cachedDesc(it: SceneItem, build: () => DomDesc): DomDesc {
   const cached = it.__domDesc as DomDesc | undefined
-  if (isClean(it) && cached) return { ...cached, clean: true }
+  if (isClean(it) && cached) {
+    // Reuse the cached descriptor in place: the patcher compares it against
+    // itself (all attributes equal, nothing written) and the clean flag lets
+    // it skip the subtree. Mutating the flag is safe — a dirty item always
+    // rebuilds and overwrites __domDesc below.
+    cached.clean = true
+    return cached
+  }
   const desc = build()
   // Tooltips/events read the datum off the DOM element; carry it on the desc so
   // the incremental patch emits the same data-datum the string renderer does.
@@ -111,18 +120,34 @@ function leafDesc(it: SceneItem): DomDesc {
     }
   }
   if (it.text != null) {
+    // Mirror renderLeaf's text case exactly: baseline offset baked into y
+    // (vega applies it at render), font-size in px, truncation. Leaf texts
+    // (axis labels, legend titles) route through here, and a desc that
+    // disagrees with the string renderer would get written over it.
+    const fontSize = (it as Record<string, unknown>).fontSize as number | undefined
+    const baseline = it.baseline as string | undefined
+    const angle = (it as Record<string, unknown>).angle as number | undefined
+    // Rotated text: vega applies the baseline offset inside the rotate frame
+    // (translate(0,off) after rotate) — see renderLeaf's angled-text branch.
+    const bOff = baseline && baseline !== 'alphabetic' ? baselineOffset(it) : 0
+    const raw = String(it.text)
     return {
       tag: 'text',
       attrs: [
-        ['x', num(it.x ?? 0)],
-        ['y', num(it.y ?? 0)],
+        ...((angle != null && angle !== 0)
+          ? ([['transform', `translate(${num(it.x || 0)},${num(it.y || 0)}) rotate(${num(angle)})${bOff ? ` translate(0,${num(bOff)})` : ''}`]] as [string, string][])
+          : ([['x', num(it.x || 0)], ['y', num((it.y || 0) + bOff)]] as [string, string][])),
+        ['text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle'],
+        ...(fontSize != null ? [['font-size', `${num(fontSize)}px`] as [string, string]] : []),
+        ...((it as Record<string, unknown>).fontWeight != null ? [['font-weight', String((it as Record<string, unknown>).fontWeight)] as [string, string]] : []),
         ...props([
-          ['text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle'],
+          ['font-family', (it as Record<string, unknown>).font],
           ['fill', it.fill],
+          ['fill-opacity', it.fillOpacity],
           ['opacity', it.opacity],
         ]),
       ],
-      text: String(it.text),
+      text: truncateLeaf(raw, it, fontSize ?? 11),
       clean: isClean(it),
     }
   }
@@ -156,7 +181,11 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
         tag: 'path',
         attrs: [
           ['d', info.path],
+          // fill/fill-opacity: line marks CAN carry a fill (closed polygons,
+          // radar charts) — vega renders it, so the patcher must too.
           ...props([
+            ['fill', info.fill],
+            ['fill-opacity', info.fillOpacity],
             ['stroke', info.stroke],
             ['stroke-width', info.sw],
             ['stroke-dasharray', info.strokeDash],
@@ -216,14 +245,15 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
           }
         }))
     case 'rect':
-      return items
-        .slice()
-        .reverse()
-        .map((it) => {
-          // vega paints a rect only when it has a fill or stroke
-          if (it.fill == null && it.stroke == null) return null
+      // vega paints a rect only when it has a fill or stroke; iterate the items
+      // back-to-front in place (vega paint order) — no slice/reverse copy.
+      return ((): DomDesc[] => {
+        const out: DomDesc[] = []
+        for (let i = items.length - 1; i >= 0; i--) {
+          const it = items[i]!
+          if (it.fill == null && it.stroke == null) continue
           const d = rectItemPath(it)
-          if (d == null) return null
+          if (d == null) continue
           const attrs: Array<[string, string]> = [
             ['d', d],
             ...props([
@@ -234,9 +264,10 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
               ['opacity', it.opacity],
             ]),
           ]
-          return cachedDesc(it, () => ({ tag: 'path', attrs, clean: isClean(it) }))
-        })
-        .filter((x): x is NonNullable<typeof x> => x != null)
+          out.push(cachedDesc(it, () => ({ tag: 'path', attrs, clean: isClean(it) })))
+        }
+        return out
+      })()
     case 'circle':
       return items
         .filter((it) => it.x != null && it.y != null)
@@ -329,11 +360,17 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
         const r0 = (it.innerRadius as number) ?? 0
         const a0 = (it.startAngle as number) ?? 0
         const a1 = (it.endAngle as number) ?? 0
+        // Mirror renderArcs exactly: the arc path is generated around (0,0)
+        // with a per-item translate — baking the center into `d` (or omitting
+        // the translate) places the arcs at the svg origin.
+        const cr = (it as Record<string, unknown>).cornerRadius as number | undefined ?? 0
+        const pa = (it as Record<string, unknown>).padAngle as number | undefined ?? 0
         return cachedDesc(it, () => ({
           tag: 'path',
           attrs: [
-            ['d', arcPath(x, y, r, r0, a0, a1)],
-            ...props([['fill', it.fill], ['fill-opacity', it.fillOpacity], ['stroke', it.stroke], ['stroke-width', it.stroke != null ? it.strokeWidth : undefined]]),
+            ['transform', `translate(${num(x)},${num(y)})`],
+            ['d', arcPath(0, 0, r, r0, a0, a1, cr, pa)],
+            ...props([['fill', it.fill], ['fill-opacity', it.fillOpacity], ['opacity', it.opacity], ['stroke', it.stroke], ['stroke-width', it.strokeWidth], ['stroke-dasharray', it.strokeDash]]),
           ],
           clean: isClean(it),
         }))
@@ -537,15 +574,29 @@ function patchEl(el: Element, desc: DomDesc): void {
     for (const c of want) el.appendChild(createEl(c, el.ownerDocument))
     return
   }
+  // Traverse children via sibling links, not index access: HTMLCollection
+  // .item(i) is a linear scan in several DOM implementations (jsdom: ~19us per
+  // access), which makes an index walk O(n^2) over a mark's children — enough
+  // to dominate every large-chart update. Linked traversal is O(1) per step.
   const have = el.childElementCount
   const n = Math.min(have, want.length)
-  for (let i = 0; i < n; i++) {
-    const cur = el.children.item(i)!
+  let cur = el.firstElementChild
+  for (let i = 0; i < n && cur != null; i++, cur = cur.nextElementSibling) {
     const w = want[i]!
     if (cur.tagName === w.tag) patchEl(cur, w)
     else el.replaceChild(createEl(w, el.ownerDocument), cur)
   }
-  for (let i = have - 1; i >= want.length; i--) el.removeChild(el.children.item(i)!)
+  // Removals (have > want) and appends (want > have) — walk the tail via links.
+  if (have > want.length) {
+    // Position cur at child index `want.length` (start of the tail to remove).
+    let tail = el.firstElementChild
+    for (let i = 0; i < want.length && tail != null; i++) tail = tail.nextElementSibling
+    while (tail != null) {
+      const next = tail.nextElementSibling
+      el.removeChild(tail)
+      tail = next
+    }
+  }
   for (let i = have; i < want.length; i++) el.appendChild(createEl(want[i]!, el.ownerDocument))
 }
 
