@@ -5767,9 +5767,15 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
     if (scale.type !== 'time' && scale.type !== 'utc') {
       throw new Error('Only time and utc scales accept interval strings.')
     }
-    const ival = scale.type === 'time' ? timeIntervalFor(raw) : utcIntervalFor(raw)
-    if (!ival) throw new Error(`[aster] unknown time interval: ${raw}`)
-    count = (step != null ? (ival as { every?: (n: number) => unknown }).every?.(step as number) : ival) as unknown as number
+    // vega-time has no singular sub-day intervals; vega falls back to the
+    // default tick count for these names rather than refusing the axis.
+    if (raw === 'hour' || raw === 'minute' || raw === 'second' || raw === 'millisecond') {
+      count = undefined
+    } else {
+      const ival = scale.type === 'time' ? timeIntervalFor(raw) : utcIntervalFor(raw)
+      if (!ival) throw new Error(`[aster] unknown time interval: ${raw}`)
+      count = (step != null ? (ival as { every?: (n: number) => unknown }).every?.(step as number) : ival) as unknown as number
+    }
   }
   else if (axis.tickCount && typeof axis.tickCount === 'object') {
     const expr = (axis.tickCount as { signal?: string }).signal
