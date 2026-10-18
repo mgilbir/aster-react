@@ -540,6 +540,8 @@ function compileFaceted(spec: VLSpec): VLSpec {
     if (hdr?.labelLimit != null) t.limit = hdr.labelLimit
     if (hdr?.labelAlign != null) t.align = hdr.labelAlign
     if (hdr?.labelBaseline != null) t.baseline = hdr.labelBaseline
+    if (hdr?.labelAnchor != null) t.labelAnchor = hdr.labelAnchor
+    if (hdr?.titleAnchor != null) t.anchor = hdr.titleAnchor
     if (hdr?.labelAngle != null) {
       t.angle = hdr.labelAngle
       // vega derives baseline/align from the angle (guide-label default
@@ -566,6 +568,10 @@ function compileFaceted(spec: VLSpec): VLSpec {
     if (hdrC.titleAngle != null) { ct.angle = hdrC.titleAngle; ct.baseline = 'bottom'; ct.align = 'right' }
     if (hdrC.titleOrient != null) ct.orient = hdrC.titleOrient
     if (hdrC.titleBaseline != null) ct.baseline = hdrC.titleBaseline
+    if (hdrC.titleAnchor != null) {
+      ct.anchor = hdrC.titleAnchor
+      if (hdrC.titleAlign == null) ct.align = hdrC.titleAnchor === 'start' ? 'left' : hdrC.titleAnchor === 'end' ? 'right' : 'center'
+    }
     if (hdrC.titleAlign != null) ct.align = hdrC.titleAlign
     marks.push({ name: 'column-title', type: 'group', role: 'column-title', title: ct })
   }

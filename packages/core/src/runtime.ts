@@ -3228,10 +3228,14 @@ function buildColumnHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
     // format() on a non-number yields NaN there, mirroring upstream
     const labelVal = facetHeaderLabel(mark, row, fkey, ctx)
     const cellX = i * step
+    const labelAnchorC = hdrTitle.labelAnchor as string | undefined
+    const labelX = labelAnchorC === 'start' ? 0 : labelAnchorC === 'end' ? cellWidth : cellWidth / 2
+    const labelAlignC = (hdrTitle.align as string | undefined)
+      ?? (labelAnchorC === 'start' ? 'left' : labelAnchorC === 'end' ? 'right' : 'center')
     result.push({
       marktype: 'group', name: mark.name, role: 'column-header',
       items: [
-        ...(hdrTitleRaw == null ? [] : [{ text: labelVal, x: cellWidth / 2, y: -(hdrPad + 2), align: (hdrTitle.align as 'center') ?? 'center', ...(hdrTitle.baseline != null ? { baseline: hdrTitle.baseline as SceneItem['baseline'] } : {}), ...(hdrTitle.angle != null ? { angle: hdrTitle.angle as number } : {}), fill: (hdrTitle.color as string) ?? '#000', fontSize: (hdrTitle.fontSize as number) ?? 10, ...(hdrTitle.font != null ? { font: hdrTitle.font as string } : {}), ...(hdrTitle.fontWeight != null ? { fontWeight: hdrTitle.fontWeight as SceneItem['fontWeight'] } : {}), ...(hdrTitle.limit != null ? { limit: hdrTitle.limit as number } : {}) }]),
+        ...(hdrTitleRaw == null ? [] : [{ text: labelVal, x: labelX, y: -(hdrPad + 2), align: labelAlignC as SceneItem['align'], ...(hdrTitle.baseline != null ? { baseline: hdrTitle.baseline as SceneItem['baseline'] } : {}), ...(hdrTitle.angle != null ? { angle: hdrTitle.angle as number } : {}), fill: (hdrTitle.color as string) ?? '#000', fontSize: (hdrTitle.fontSize as number) ?? 10, ...(hdrTitle.font != null ? { font: hdrTitle.font as string } : {}), ...(hdrTitle.fontWeight != null ? { fontWeight: hdrTitle.fontWeight as SceneItem['fontWeight'] } : {}), ...(hdrTitle.limit != null ? { limit: hdrTitle.limit as number } : {}) }]),
         // column-header background: zero-height, full-width path (M0,0hWv0h-WZ).
         { path: `M0,0h${cellWidth}v0h-${cellWidth}Z`, x: 0, y: 0 } as SceneItem,
       ],
@@ -3357,13 +3361,19 @@ function buildColumnTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup
   }
   const tDef = (tm.title ?? {}) as Record<string, unknown>
 
+  const titleAnchorC = (tDef.anchor as string | undefined) ?? 'middle'
+  const titleX = titleAnchorC === 'start'
+    ? (layout ? layout.gridX1 : 0)
+    : titleAnchorC === 'end'
+      ? (layout ? layout.gridX2 : centerX * 2)
+      : centerX
   return {
     marktype: 'group', name: mark.name, role: 'column-title',
     items: [
       // the guide-title style: 11px bold (vega config style['guide-title'])
       { text: titleText, x: 0, y: -(((tDef.offset as number | undefined) ?? 10) + 2), align: (tDef.align as 'center') ?? 'center', ...(tDef.baseline != null ? { baseline: tDef.baseline as SceneItem['baseline'] } : {}), ...(tDef.angle != null ? { angle: tDef.angle as number } : {}), fill: (tDef.color as string) ?? '#000', fontSize: (tDef.fontSize as number) ?? 11, fontWeight: (tDef.fontWeight as 'bold') ?? 'bold', ...(tDef.font != null ? { font: tDef.font as string } : {}), ...(tDef.limit != null ? { limit: tDef.limit as number } : {}) },
     ],
-    x: centerX, y: -31,
+    x: titleX, y: -31,
   }
 }
 
