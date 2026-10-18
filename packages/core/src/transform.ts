@@ -1229,7 +1229,11 @@ function timeunitRows(rows: Row[], t: Record<string, unknown>): Row[] {
     const v = r[field]
     const d = v instanceof Date ? v : new Date(v as string | number)
     if (!Number.isFinite(d.getTime())) {
-      return { ...r, [as[0]]: null, [as[1]]: null }
+      // vega's timeunit transform emits an invalid Date for unparseable input
+      // (its legend/axis formatters then render the unit-specific NaN string,
+      // e.g. "0NaN"/"WNaN").
+      const bad = new Date(NaN)
+      return { ...r, [as[0]]: bad, [as[1]]: bad }
     }
     const start = timeFloor(d, units)
     const end = timeOffset(start, units)

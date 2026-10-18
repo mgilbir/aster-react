@@ -438,7 +438,7 @@ export function sceneToDomDesc(scene: SceneRoot): DomDesc {
   const plotH = scene.height - pad.top - pad.bottom
   const clips: ClipCollector = { current: 0, paths: [] }
 
-  const frameD = scene.frameStroke ? `M0.5,0.5h${plotW}v${plotH}h-${plotW}Z` : `M0,0h${plotW}v${plotH}h-${plotW}Z`
+  const frameD = scene.frameStroke && scene.frameStrokeWidth == null ? `M0.5,0.5h${plotW}v${plotH}h-${plotW}Z` : `M0,0h${plotW}v${plotH}h-${plotW}Z`
   const children: DomDesc[] = []
   if (scene.background) {
     children.push({ tag: 'rect', attrs: [['width', str(W)], ['height', str(H)], ['fill', String(scene.background)]] })
@@ -450,7 +450,7 @@ export function sceneToDomDesc(scene: SceneRoot): DomDesc {
       ['aria-roledescription', 'group mark container'],
     ], [
       g('g', [['transform', 'translate(0,0)']], [
-        { tag: 'path', attrs: [['class', 'background'], ['aria-hidden', 'true'], ['d', frameD], ...(scene.frameFill ? [['fill', String(scene.frameFill)]] as Array<[string, string]> : []), ...(scene.frameStroke ? [['stroke', String(scene.frameStroke)]] as Array<[string, string]> : [])] },
+        { tag: 'path', attrs: [['class', 'background'], ['aria-hidden', 'true'], ['d', frameD], ...(scene.frameFill ? [['fill', String(scene.frameFill)]] as Array<[string, string]> : []), ...(scene.frameFillOpacity != null ? [['fill-opacity', String(scene.frameFillOpacity)]] as Array<[string, string]> : []), ...(scene.frameStroke ? [['stroke', String(scene.frameStroke)]] as Array<[string, string]> : []), ...(scene.frameStrokeWidth != null ? [['stroke-width', String(scene.frameStrokeWidth)]] as Array<[string, string]> : []), ...(scene.frameStrokeDash ? [['stroke-dasharray', scene.frameStrokeDash.join(',')]] as Array<[string, string]> : []), ...(scene.frameOpacity != null ? [['opacity', String(scene.frameOpacity)]] as Array<[string, string]> : [])] },
         g('g', [], (scene.items ?? []).map((n) => groupDesc(n, plotW, plotH, clips)).filter((x): x is DomDesc => x != null)),
         { tag: 'path', attrs: [['class', 'foreground'], ['aria-hidden', 'true'], ['d', ''], ['display', 'none']] },
       ]),

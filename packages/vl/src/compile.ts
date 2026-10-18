@@ -2241,6 +2241,15 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
         labelAxis.labelBaseline = 'middle'
       }
     }
+    // a timeUnit on a discrete positional axis still formats with timeFormat
+    if (def.timeUnit && !isContinuousScaleType(sc.type)) {
+      const units = JSON.stringify(timeUnitUnits(def.timeUnit))
+      labelAxis.format = {
+        signal: `timeUnitSpecifier(${JSON.stringify(timeUnitSpecifierUnits(def.timeUnit))}, {"year-month":"%b %Y ","year-month-date":"%b %d, %Y "})`,
+      }
+      labelAxis.formatType = 'time'
+      void units
+    }
     if (userAxis) {
       const discretePos = sc.type === 'band' || sc.type === 'point' || sc.type === 'ordinal' || sc.type === 'bin-ordinal'
       for (const [k, v] of Object.entries(userAxis)) {

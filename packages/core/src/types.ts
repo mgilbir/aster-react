@@ -80,6 +80,10 @@ export interface CompiledChart {
   /** Stroke of the plot frame border (e.g. '#ddd' from style 'cell'). */
   frameStroke?: string
   frameFill?: string
+  frameStrokeWidth?: number
+  frameFillOpacity?: number
+  frameOpacity?: number
+  frameStrokeDash?: number[]
   data: CompiledData[]
   scales: CompiledScale[]
   axes: CompiledAxis[]
@@ -413,6 +417,10 @@ export interface SceneRoot {
   background?: string | null
   frameStroke?: string
   frameFill?: string
+  frameStrokeWidth?: number
+  frameFillOpacity?: number
+  frameOpacity?: number
+  frameStrokeDash?: number[]
   padding?: { top: number; right: number; bottom: number; left: number }
   items: SceneGroup[]
   /** Gradient definitions for use by fill="url(#...)" references. */

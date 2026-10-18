@@ -47,6 +47,10 @@ export function compileChart(spec: VgSpec): CompiledChart {
   const height = typeof spec.height === 'number' ? spec.height : (typeof spec.height === 'object' ? spec.height as SizeSpec : DEFAULT_SIZE)
   const frameStroke = resolveFrameStroke(spec)
   const frameFill = resolveFrameFill(spec)
+  const frameStrokeWidth = resolveFrameNumber(spec, 'strokeWidth')
+  const frameFillOpacity = resolveFrameNumber(spec, 'fillOpacity')
+  const frameOpacity = resolveFrameNumber(spec, 'opacity')
+  const frameStrokeDash = resolveFrameDash(spec)
   const autosize = resolveAutosize(spec.autosize)
   const configRange = (cfg as { range?: Record<string, unknown> }).range
   const autosizeContains = spec.autosize && typeof spec.autosize === 'object'
@@ -103,6 +107,10 @@ export function compileChart(spec: VgSpec): CompiledChart {
     background,
     frameStroke,
     frameFill,
+    frameStrokeWidth,
+    frameFillOpacity,
+    frameOpacity,
+    frameStrokeDash,
     data,
     scales,
     axes,
@@ -194,6 +202,18 @@ function resolveFrameStroke(spec: VgSpec): string | undefined {
   const stroke = typeof viewStroke === 'string' ? viewStroke : cellStroke
   // Vega serializes a 'transparent' frame stroke as no stroke at all.
   return stroke === 'transparent' ? undefined : stroke
+}
+
+function resolveFrameNumber(spec: VgSpec, prop: string): number | undefined {
+  const config = spec.config as { view?: Record<string, unknown>; style?: { cell?: Record<string, unknown> } } | undefined
+  const v = config?.style?.cell?.[prop] ?? config?.view?.[prop]
+  return typeof v === 'number' ? v : undefined
+}
+
+function resolveFrameDash(spec: VgSpec): number[] | undefined {
+  const config = spec.config as { view?: Record<string, unknown>; style?: { cell?: Record<string, unknown> } } | undefined
+  const v = config?.style?.cell?.strokeDash ?? config?.view?.strokeDash
+  return Array.isArray(v) ? v.map(Number) : undefined
 }
 
 function resolveSizeSpec(value: unknown, signalNames: string[]): SizeSpec {
