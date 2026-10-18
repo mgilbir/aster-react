@@ -1723,9 +1723,17 @@ function timeUnitField(f: FieldDef): string {
   return `${f.timeUnit}_${f.field}`
 }
 
+const TU_PRIMITIVE = new Set(['year', 'quarter', 'month', 'week', 'date', 'day', 'dayofyear', 'hours', 'minutes', 'seconds', 'milliseconds'])
+/** The units list vega's timeUnitSpecifier consumes: primitive units only
+ * (the transform list adds context units like year+week, but the specifier
+ * formats just the requested unit — probed against vl.compile). */
+function timeUnitSpecifierUnits(u: string): string[] {
+  return TU_PRIMITIVE.has(u) ? [u] : timeUnitUnits(u)
+}
+
 /** vega's timeUnitSpecifier signal for a vega-lite timeUnit. */
 function timeUnitFormatSignal(u: string): string {
-  return `timeUnitSpecifier(${JSON.stringify(timeUnitUnits(u))}, {"year-month":"%b %Y ","year-month-date":"%b %d, %Y "})`
+  return `timeUnitSpecifier(${JSON.stringify(timeUnitSpecifierUnits(u))}, {"year-month":"%b %Y ","year-month-date":"%b %d, %Y "})`
 }
 
 /** Non-positional legends format timeUnit fields with timeFormat. */
@@ -2017,9 +2025,12 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       })
     } else {
       const cs = colorDef.scale ?? {}
+      const colorScaleType = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'quantile', 'quantize', 'threshold'].includes(cs.type as string)
+        ? cs.type as string
+        : 'linear'
       scales.push({
         name: 'color',
-        type: (['linear', 'log', 'pow', 'sqrt', 'symlog'].includes(cs.type as string) ? cs.type as string : 'linear'),
+        type: colorScaleType,
         domain: { data: dataName, field: aggFieldName(colorDef) },
         // vega-lite's quantitative color range: 'heatmap' scheme for
         // rect/geoshape marks, a ramp otherwise; a domainMid makes it
@@ -2037,7 +2048,9 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         ...(cs.domainMax !== undefined ? { domainMax: cs.domainMax } : {}),
         ...(cs.domainMid !== undefined ? { domainMid: cs.domainMid } : {}),
         ...(cs.bins !== undefined ? { bins: cs.bins } : {}),
-        zero: (cs.zero as boolean | undefined) ?? false,
+        ...(colorScaleType === 'quantile' || colorScaleType === 'threshold'
+          ? {}
+          : { zero: (cs.zero as boolean | undefined) ?? false }),
       })
     }
   }
@@ -2208,6 +2221,7 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
         labelAxis.format = {
           signal: `timeUnitSpecifier(${units}, {"year-month":"%b %Y ","year-month-date":"%b %d, %Y "})`,
         }
+        labelAxis.formatType = 'time'
         // the minimum tick step is one unit: expressed as a datetime difference
         const stepExpr = timeUnitMinStepSignal(def.timeUnit)
         if (stepExpr) labelAxis.tickMinStep = { signal: stepExpr }
@@ -2260,7 +2274,7 @@ function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null, fie
 
 // --- legends -----------------------------------------------------------------
 
-function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number): Record<string, unknown>[] {
+function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number): Record<string, unknown>[] {
   const legends: Record<string, unknown>[] = []
   // vega-lite's reduced symbol opacity (init.ts opacity()) does not apply
   // when the encoding is aggregate — the mark legend follows the mark.
@@ -2285,24 +2299,31 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     const filled = mark === 'circle' || mark === 'square'
       || (mark === 'point' && markFilled === true)
       || (mark === 'arc' && markFilled !== false)
-    const colorContinuous = !isDiscreteType(colorDef.type)
-      || (colorDef.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(colorDef.aggregate))
+    const colorTimeUnitSymbol = colorDef.timeUnit != null && colorDef.timeUnit !== 'year'
+    const colorDiscreteScale = ['quantile', 'quantize', 'threshold'].includes(colorDef.scale?.type as string)
+    const colorContinuous = (!isDiscreteType(colorDef.type)
+      || (colorDef.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(colorDef.aggregate)))
+      && !colorTimeUnitSymbol && !colorDiscreteScale
+    if (colorTimeUnitSymbol) lg.type = 'symbol'
+    if (colorDef.scale?.type === 'quantile' || colorDef.scale?.type === 'threshold') lg.labelOverlap = 'greedy'
     const m = mark as string
     if (filled) {
       lg.fill = 'color'
       lg.symbolType = m === 'bar' || m === 'rect' ? 'square' : 'circle'
       if (m === 'arc') {
-        // arc legends carry the mark's stroke/opacity but no reduced-opacity
+        // arc legends carry the mark's stroke/opacity/width but no reduced-opacity
         // default (unlike point/circle/square)
         const symUpdate: Record<string, unknown> = {}
         if (markStroke) symUpdate.stroke = { value: markStroke }
+        if (markStrokeWidth != null) symUpdate.strokeWidth = { value: markStrokeWidth }
+        if (markFillOpacity != null) symUpdate.fillOpacity = { value: markFillOpacity }
         if (markOpacity != null) symUpdate.opacity = { value: markOpacity }
         if (Object.keys(symUpdate).length) lg.encode = { symbols: { update: symUpdate } }
       } else if (m !== 'bar' && m !== 'rect') {
         const symUpdate: Record<string, unknown> = { opacity: { value: markOpacity ?? reducedOpacity ?? 1 } }
-        // the mark's stroke propagates onto the legend symbols (widening
-        // vega's entry bounds)
+        // the mark's stroke/fill-opacity propagates onto the legend symbols
         if (markStroke) symUpdate.stroke = { value: markStroke }
+        if (markFillOpacity != null) symUpdate.fillOpacity = { value: markFillOpacity }
         lg.encode = { symbols: { update: symUpdate } }
       }
     } else if (m === 'arc') {
@@ -2532,10 +2553,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           const barAlign = (markDef?.align ?? cfgType?.align ?? cfgMark?.align) as string | undefined
           const barSizeRaw = ((markDef?.size
             ?? markDef?.width
-            ?? (cfgType?.size as number | undefined)
+            ?? (mark === 'bar' ? (cfgType?.size as number | undefined) : undefined)
             ?? (cfgType?.discreteBandSize as number | undefined)
             ?? (cfgType?.width as number | undefined)
-            ?? (cfgMark?.size as number | undefined)
             ?? (cfgMark?.width as number | undefined)) as number | undefined)
           // a zero band size falls back to vega-lite's default discrete step
           // (getViewConfigDiscreteStep 20 − 2) rather than a zero-width bar
@@ -2576,7 +2596,6 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           const yAlign = (markDef?.baseline ?? cfgType?.baseline ?? cfgMark?.baseline) as string | undefined
           const ySizeRaw = ((markDef?.height
             ?? (cfgType?.height as number | undefined)
-            ?? (cfgType?.size as number | undefined)
             ?? (cfgType?.discreteBandSize as number | undefined)
             ?? (cfgMark?.height as number | undefined)) as number | undefined)
           const ySize = ySizeRaw === 0 ? C.defaultStep : ySizeRaw
@@ -2622,7 +2641,6 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             ?? (cfgType?.size as number | undefined)
             ?? (cfgType?.discreteBandSize as number | undefined)
             ?? (cfgType?.height as number | undefined)
-            ?? (cfgMark?.size as number | undefined)
             ?? (cfgMark?.height as number | undefined)) as number | undefined)
           const hSize = hSizeRaw === 0 ? C.defaultStep : hSizeRaw
           if (hSize != null && !yOffsetPresent) {
@@ -2775,7 +2793,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const tickDef = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : undefined
     const tickStroke = tickDef?.stroke as string | undefined
     if (tickStroke != null || cfgStroke != null) update.stroke = { value: tickStroke ?? cfgStroke }
-    if (tickDef?.filled === false) {
+    const tickFilled = tickDef?.filled !== undefined ? tickDef.filled : (cfgType?.filled ?? cfgMark?.filled)
+    if (tickFilled === false) {
       const tf = update.fill
       delete update.fill
       update.stroke = tf
@@ -2786,7 +2805,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // VERTICAL tick (its size axis is y and its thickness axis is x).
     const xIsMeasure = xDef != null && xDef.type === 'quantitative' && !xDef.bin
     const yIsMeasure = yDef != null && yDef.type === 'quantitative' && !yDef.bin
-    const tickOrient = (tickDef?.orient as string | undefined)
+    const tickOrient = ((tickDef?.orient as string | undefined) ?? (cfgType?.orient as string | undefined) ?? (cfgMark?.orient as string | undefined))
       ?? (xIsMeasure && !yIsMeasure ? 'vertical'
         : !xIsMeasure && yIsMeasure ? 'horizontal'
         : xIsMeasure && yIsMeasure ? 'vertical'
@@ -2960,17 +2979,25 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const arcStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
     const aStroke = arcStroke ?? cfgStroke
     if (aStroke != null) update.stroke = { value: aStroke }
-    if (isObject(spec.mark) && spec.mark.filled === false) {
+    const arcFilled = isObject(spec.mark) && spec.mark.filled !== undefined
+      ? spec.mark.filled
+      : (cfgType?.filled ?? cfgMark?.filled)
+    if (arcFilled === false) {
       const ac = update.fill
       delete update.fill
       update.stroke = ac
     }
     if (markOpacity != null) update.opacity = { value: markOpacity }
-    update.x = { signal: 'width', mult: 0.5 }
-    update.y = { signal: 'height', mult: 0.5 }
+    const cfgArcX = (cfgType?.x as number | undefined) ?? (cfgMark?.x as number | undefined)
+    const cfgArcY = (cfgType?.y as number | undefined) ?? (cfgMark?.y as number | undefined)
+    update.x = cfgArcX != null ? { value: cfgArcX } : { signal: 'width', mult: 0.5 }
+    update.y = cfgArcY != null ? { value: cfgArcY } : { signal: 'height', mult: 0.5 }
     const arcMark = spec.mark
     const mOuter = isObject(arcMark) ? ((arcMark.outerRadius as number | undefined) ?? (arcMark.radius as number | undefined)) : undefined
-    const mInner = isObject(arcMark) ? (arcMark.innerRadius as number | undefined) : undefined
+    const mInner = (isObject(arcMark) ? (arcMark.innerRadius as number | undefined) : undefined)
+      ?? (cfgType?.innerRadius as number | undefined)
+      ?? (cfgType?.radius2 as number | undefined)
+      ?? (cfgMark?.innerRadius as number | undefined)
     // outerRadius resolves markDef.outerRadius ?? markDef.radius ??
     // config.arc.outerRadius ?? config.arc.radius ?? the half-extent signal
     update.outerRadius = mOuter != null
@@ -3416,13 +3443,28 @@ export function compileUnit(spec: VLSpec): VLSpec {
   const lgStroke = (isObject(markRaw) ? (markRaw.stroke as string | undefined) : undefined)
     ?? (isObject(userConfig?.[mark]) ? ((userConfig![mark] as Record<string, unknown>).stroke as string | undefined) : undefined)
     ?? (isObject(userConfig?.mark) ? ((userConfig!.mark as Record<string, unknown>).stroke as string | undefined) : undefined)
+  const cfgMarkBlock = isObject(userConfig?.[mark]) ? (userConfig![mark] as Record<string, unknown>) : undefined
+  const cfgGenericMark = isObject(userConfig?.mark) ? (userConfig!.mark as Record<string, unknown>) : undefined
+  const legendFilled = isObject(markRaw) && markRaw.filled !== undefined
+    ? markRaw.filled === true
+    : cfgMarkBlock?.filled !== undefined
+      ? cfgMarkBlock.filled === true
+      : cfgGenericMark?.filled !== undefined
+        ? cfgGenericMark.filled === true
+        : undefined
+  const legendStrokeWidth = (cfgMarkBlock?.strokeWidth as number | undefined)
+    ?? (cfgGenericMark?.strokeWidth as number | undefined)
+  const legendFillOpacity = (isObject(markRaw) ? markRaw.fillOpacity as number | undefined : undefined)
+    ?? (cfgMarkBlock?.fillOpacity as number | undefined)
+    ?? (cfgGenericMark?.fillOpacity as number | undefined)
   const legends = buildLegends(
     fields,
     mark,
     markOpacity,
-    isObject(markRaw) && markRaw.filled !== undefined ? markRaw.filled === true : undefined,
+    legendFilled,
     lgStroke,
-    isObject(markRaw) ? (markRaw.strokeWidth as number | undefined) : undefined,
+    legendStrokeWidth,
+    legendFillOpacity,
   )
   if (legends.length) out.legends = legends
   if (spec.title) out.title = spec.title

@@ -211,6 +211,8 @@ export interface CompiledScale {
   padding?: number
   paddingInner?: number
   paddingOuter?: number
+  rangeMin?: number
+  rangeMax?: number
   base?: number
   exponent?: number
   constant?: number

@@ -299,7 +299,7 @@ function compileScale(s: Record<string, unknown>): CompiledScale {
     domain: s.domain as ScaleDomain,
     range: s.range as ScaleRange,
   }
-  for (const key of ['zero', 'reverse', 'clamp', 'round', 'nice', 'padding', 'paddingInner', 'paddingOuter', 'base', 'exponent', 'constant', 'domainMin', 'domainMax', 'domainMid', 'bins', 'interpolate', 'scheme', 'align', 'domainRaw', 'unknown'] as const) {
+  for (const key of ['zero', 'reverse', 'clamp', 'round', 'nice', 'padding', 'paddingInner', 'paddingOuter', 'rangeMin', 'rangeMax', 'base', 'exponent', 'constant', 'domainMin', 'domainMax', 'domainMid', 'bins', 'interpolate', 'scheme', 'align', 'domainRaw', 'unknown'] as const) {
     if (s[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = s[key]
   }
   return out
@@ -319,7 +319,7 @@ function compileAxis(a: Record<string, unknown>): CompiledAxis {
 
 function compileLegend(l: Record<string, unknown>): CompiledLegend {
   const out: CompiledLegend = {}
-  for (const key of ['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeDash', 'orient', 'direction', 'columns', 'title', 'offset', 'padding', 'gradientLength', 'gradientThickness', 'gradientStrokeColor', 'gradientStrokeWidth', 'gradientOpacity', 'symbolSize', 'symbolType', 'zindex', 'type', 'tickCount', 'symbolStrokeWidth', 'symbolOffset', 'symbolOpacity', 'symbolDash', 'symbolStrokeColor', 'labelAlign', 'labelBaseline', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelFontWeight', 'labelFontStyle', 'labelFont', 'labelOffset', 'labelLimit', 'labelSeparation', 'rowPadding', 'columnPadding', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleBaseline', 'titleAlign', 'titleAnchor', 'titleAngle', 'titleOrient', 'titleLimit', 'titleFont', 'titleLineHeight', 'gridAlign', 'clipHeight', 'cornerRadius', 'fillColor', 'strokeColor', 'labelOverlap', 'symbolLimit', 'legendX', 'legendY', 'format', 'formatType', 'values', 'aria', 'layout'] as const) {
+  for (const key of ['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeDash', 'disable', 'strokeWidth', 'orient', 'direction', 'columns', 'title', 'offset', 'padding', 'gradientLength', 'gradientThickness', 'gradientStrokeColor', 'gradientStrokeWidth', 'gradientOpacity', 'symbolSize', 'symbolType', 'zindex', 'type', 'tickCount', 'symbolStrokeWidth', 'symbolOffset', 'symbolOpacity', 'symbolDash', 'symbolStrokeColor', 'labelAlign', 'labelBaseline', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelFontWeight', 'labelFontStyle', 'labelFont', 'labelOffset', 'labelLimit', 'labelSeparation', 'rowPadding', 'columnPadding', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleBaseline', 'titleAlign', 'titleAnchor', 'titleAngle', 'titleOrient', 'titleLimit', 'titleFont', 'titleLineHeight', 'gridAlign', 'clipHeight', 'cornerRadius', 'fillColor', 'strokeColor', 'labelOverlap', 'symbolLimit', 'legendX', 'legendY', 'format', 'formatType', 'values', 'aria', 'layout'] as const) {
     if (l[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = l[key]
   }
   if (l.encode !== undefined) out.encode = l.encode as CompiledLegend['encode']
@@ -436,7 +436,13 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
   // carry them (e.g. config.point.width / x2 / startAngle) are inert in vega.
   const isSymbol = String(m.type) === 'symbol'
   const isRectLike = String(m.type) === 'rect' || String(m.type) === 'bar' || String(m.type) === 'tick'
-  const rectInert = new Set(['width', 'height', 'x2', 'y2'])
+  const rectInert = new Set([
+    'width', 'height', 'x2', 'y2', 'startAngle', 'endAngle', 'innerRadius',
+    'outerRadius', 'radius', 'radius2', 'theta', 'theta2', 'padAngle',
+    'cornerRadiusTopLeft', 'cornerRadiusTopRight', 'cornerRadiusBottomLeft',
+    'cornerRadiusBottomRight', 'text', 'url', 'align', 'baseline', 'dx', 'dy',
+    'limit', 'lineHeight', 'font', 'fontSize', 'fontStyle', 'fontWeight',
+  ])
   const symbolInert = new Set([
     'width', 'height', 'x2', 'y2', 'startAngle', 'endAngle', 'innerRadius',
     'outerRadius', 'radius', 'radius2', 'theta', 'theta2', 'padAngle',

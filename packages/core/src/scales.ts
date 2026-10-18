@@ -163,6 +163,14 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   } else {
     s.range(range0 as never)
   }
+  if (c.rangeMin != null || c.rangeMax != null) {
+    const r = (s.range() as unknown[]).slice()
+    if (r.length) {
+      if (c.rangeMin != null) r[0] = c.rangeMin
+      if (c.rangeMax != null) r[r.length - 1] = c.rangeMax
+      s.range(r as never)
+    }
+  }
 
   // Don't reverse for scheme-based color: range [0,1] is the normalized domain
   // Also skip zero/padding/round/clamp for color scales
@@ -658,6 +666,9 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string, 
           if (scaleType === 'band' || scaleType === 'ordinal' || scaleType === 'point') {
             return quantizeInterpolator(scheme as (t: number) => unknown, Math.max(domainCount, 1)) as unknown[]
           }
+          if (scaleType === 'quantile' || scaleType === 'quantize' || scaleType === 'threshold') {
+            return quantizeInterpolator(scheme as (t: number) => unknown, 5) as unknown[]
+          }
           return entry?.extent ? { __asterScheme: name, __asterExtent: entry.extent } : name
         }
         if (scheme) return scheme as unknown[]
@@ -676,7 +687,13 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string, 
   if (range && typeof range === 'object' && 'scheme' in range) {
     const schemeName = (range as { scheme: string }).scheme
     const extent = (range as { extent?: number[] }).extent
-    if (typeof schemeName === 'string') return extent ? { __asterScheme: schemeName, __asterExtent: extent } : schemeName
+    if (typeof schemeName === 'string') {
+      if (scaleType === 'quantile' || scaleType === 'quantize' || scaleType === 'threshold') {
+        const scheme = vs.scheme(schemeName)
+        if (typeof scheme === 'function') return quantizeInterpolator(scheme as (t: number) => unknown, 5) as unknown[]
+      }
+      return extent ? { __asterScheme: schemeName, __asterExtent: extent } : schemeName
+    }
   }
   throw new Error(`[aster] unsupported scale range value`)
 }
