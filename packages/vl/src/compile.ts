@@ -2124,8 +2124,19 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
 
   for (const def of fields) {
     if (!POSITIONAL.has(def.channel) || (def.channel !== 'x' && def.channel !== 'y')) continue
-    const userAxis = def.axis
-    if (userAxis === null) continue
+    if (def.axis === null) continue
+    // config.axis seeds both channels; config.axisX/axisY override it; the
+    // channel's own axis definition wins last (vega-lite axis config cascade).
+    const cfgAxis = isObject(config?.axis) ? (config!.axis as Record<string, unknown>) : {}
+    const cfgChannelAxis = isObject(config?.[def.channel === 'x' ? 'axisX' : 'axisY'])
+      ? (config![def.channel === 'x' ? 'axisX' : 'axisY'] as Record<string, unknown>)
+      : {}
+    const userAxis: Record<string, unknown> | undefined = {
+      ...cfgAxis,
+      ...cfgChannelAxis,
+      ...(def.axis ?? {}),
+    }
+    if (userAxis.disable === true) continue
     const sc = scaleByName.get(scaleName ?? def.channel)!
     const grid = (userAxis?.grid as boolean | undefined) ?? (isContinuousScaleType(sc.type) && !def.bin)
     const tickCountSignal = def.channel === 'x' ? { signal: 'ceil(width/40)' } : { signal: 'ceil(height/40)' }
@@ -2217,8 +2228,11 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       }
     }
     if (userAxis) {
+      const discretePos = sc.type === 'band' || sc.type === 'point' || sc.type === 'ordinal' || sc.type === 'bin-ordinal'
       for (const [k, v] of Object.entries(userAxis)) {
         if (k === 'grid' || k === 'title' || k === 'orient' || k === 'scale') continue
+        // numeric/date format specifiers are inert on a discrete positional axis
+        if (k === 'format' && discretePos) continue
         labelAxis[k] = v
       }
       if (userAxis.orient) labelAxis.orient = userAxis.orient
