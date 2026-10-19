@@ -4503,7 +4503,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const vX = vAnchor === 'end' ? outerWidth : vAnchor === 'middle' ? outerWidth / 2 : 0
     const titleBoundsLeft = vX - (vAlign === 'center' ? titleWidth / 2 : vAlign === 'right' ? titleWidth : 0)
     const titleBoundsRight = vX + (vAlign === 'center' ? titleWidth / 2 : vAlign === 'left' ? titleWidth : 0)
-    const titleExtraLeft = Math.max(0, -titleBoundsLeft)
+    const negativeTitleExtra = titleFs0 < 0 ? Math.ceil(Math.abs(titleFs0) * 0.75) : 0
+    const titleExtraLeft = Math.max(0, -titleBoundsLeft) + negativeTitleExtra
     const titleExtraRight = Math.max(0, titleBoundsRight - outerWidth)
 
     const items: SceneItem[] = []
@@ -4696,7 +4697,16 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const entryWidth = labelX + maxLabelW * (labelAlignS === 'center' ? 0.5 : labelAlignS === 'right' ? 0 : 1)
     const titleStr = String(legend.title ?? '')
     const titleWidth = titleStr.length > 0 ? nominalTextWidth(titleStr, Math.abs(titleFsS), 'bold') : 0
-    const outerWidth = Math.ceil(Math.max(entryWidth, titleWidth))
+    const titleAnchorS = (legend as { titleAnchor?: string }).titleAnchor ?? 'start'
+    const titleAlignS = (legend as { titleAlign?: string }).titleAlign
+      ?? (titleAnchorS === 'end' ? 'right' : titleAnchorS === 'middle' ? 'center' : 'left')
+    const titleXBase = titleAnchorS === 'end' ? entryWidth : titleAnchorS === 'middle' ? entryWidth / 2 : 0
+    const negativeTitleExtraS = titleFsS < 0 ? Math.ceil(Math.abs(titleFsS) * 0.75) : 0
+    const titleLeftS = titleXBase - (titleAlignS === 'center' ? titleWidth / 2 : titleAlignS === 'right' ? titleWidth : 0)
+    const titleRightS = titleXBase + (titleAlignS === 'center' ? titleWidth / 2 : titleAlignS === 'left' ? titleWidth : 0)
+    const contentShiftS = Math.max(0, -titleLeftS) + negativeTitleExtraS
+    const titleOverflowRightS = Math.max(0, titleRightS - entryWidth)
+    const outerWidth = Math.ceil(Math.max(entryWidth, titleWidth, titleRightS) + contentShiftS)
     // the title row: the title text's bound height + legend titlePadding
     // (vega's legendGroupLayout: entries sit below title bound + titlePad)
     const titleRowH = Math.abs(titleFsS) + ((legend as { titlePadding?: number }).titlePadding ?? 5)
@@ -4705,10 +4715,6 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // (padding, padding) and legendLayout sizes the box w + 2*padding (ceil'd
     // above with the pad included here, not in outerWidth/bgHeight).
     const legendPad = (legend as { padding?: number }).padding ?? 0
-    const titleAnchorS = (legend as { titleAnchor?: string }).titleAnchor ?? 'start'
-    const titleAlignS = (legend as { titleAlign?: string }).titleAlign
-      ?? (titleAnchorS === 'end' ? 'right' : titleAnchorS === 'middle' ? 'center' : 'left')
-    const titleXBase = titleAnchorS === 'end' ? entryWidth : titleAnchorS === 'middle' ? entryWidth / 2 : 0
     const boxW = Math.ceil(outerWidth + 2 * legendPad)
     const boxH = Math.ceil(bgHeight + 2 * legendPad)
     // The legend border (legend.strokeColor) insets the background half a
@@ -4726,15 +4732,15 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     items.push({ path: bgPath, x: 0, y: 0, ...(legendFillColor != null ? { fill: legendFillColor } : {}), ...(borderColor != null ? { stroke: String(borderColor) } : {}) })
     const titleBaselineS = (legend as { titleBaseline?: string }).titleBaseline ?? 'top'
     const titleLimitS = (legend as { titleLimit?: number }).titleLimit
-    const titleYOff = titleBaselineS === 'middle' ? Math.round(0.3 * Math.abs(titleFsS))
-      : titleBaselineS === 'bottom' ? Math.round(-0.21 * Math.abs(titleFsS))
-      : Math.round(0.79 * Math.abs(titleFsS))
-    items.push({ text: titleStr, x: titleXBase + legendPad, y: titleYOff + legendPad, align: titleAlignS as SceneItem['align'], fill: titleColorS, fontSize: titleFsS, ...(titleLimitS != null ? { limit: titleLimitS } : {}), ...(titleOpacityS != null ? { fillOpacity: titleOpacityS } : {}) })
+    const titleYOff = titleBaselineS === 'middle' ? Math.round(0.3 * titleFsS)
+      : titleBaselineS === 'bottom' ? Math.round(-0.21 * titleFsS)
+      : Math.round(0.79 * titleFsS)
+    items.push({ text: titleStr, x: titleXBase + legendPad + contentShiftS, y: titleYOff + legendPad, align: titleAlignS as SceneItem['align'], fill: titleColorS, fontSize: titleFsS, ...(titleLimitS != null ? { limit: titleLimitS } : {}), ...(titleOpacityS != null ? { fillOpacity: titleOpacityS } : {}) })
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]!
       const ey = titleRowH + legendPad + yPos[i]!
       const sy = ey + e.sizeD / 2
-      items.push({ path: `M0,0h${entryWidth}v${b[i]!.y2}h-${entryWidth}Z`, x: 0 + legendPad, y: ey })
+      items.push({ path: `M0,0h${entryWidth}v${b[i]!.y2}h-${entryWidth}Z`, x: 0 + legendPad + contentShiftS, y: ey })
       // Vega always renders size legend symbols with a default stroke (#888)
       // and opacity (0.7), even when the legend encode doesn't specify them.
       const symStroke = symStrokeColor ?? (strokeColor != null ? String(strokeColor) : '#888')
@@ -4743,7 +4749,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         const w = Math.sqrt(e.size)
         items.push({
           path: `M${-w / 2},${-w / 2}h${w}v${w}h${-w}Z`,
-          x: symbolX + legendPad,
+          x: symbolX + legendPad + contentShiftS,
           y: sy,
           stroke: symStroke,
           strokeWidth,
@@ -4753,7 +4759,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       } else if (symbolType !== 'circle') {
         items.push({
           path: symbolPath(symbolType, e.r),
-          x: symbolX + legendPad,
+          x: symbolX + legendPad + contentShiftS,
           y: sy,
           stroke: symStroke,
           strokeWidth,
@@ -4764,7 +4770,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         items.push({
           shape: 'circle',
           radius: e.r,
-          x: symbolX + legendPad,
+          x: symbolX + legendPad + contentShiftS,
           y: sy,
           stroke: symStroke,
           strokeWidth,
@@ -4772,7 +4778,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
           opacity: symOpacity,
         } as SceneItem)
       }
-      items.push({ text: sizeLabel(e.value), x: labelX + legendPad, y: sy + Math.round(0.3 * fontSize), align: labelAlignS as SceneItem['align'], fill: labelColorS, fontSize, ...((legend as { labelLimit?: number }).labelLimit != null ? { limit: (legend as { labelLimit?: number }).labelLimit } : {}), ...(labelOpacityS != null ? { fillOpacity: labelOpacityS } : {}) })
+      items.push({ text: sizeLabel(e.value), x: labelX + legendPad + contentShiftS, y: sy + Math.round(0.3 * fontSize), align: labelAlignS as SceneItem['align'], fill: labelColorS, fontSize, ...((legend as { labelLimit?: number }).labelLimit != null ? { limit: (legend as { labelLimit?: number }).labelLimit } : {}), ...(labelOpacityS != null ? { fillOpacity: labelOpacityS } : {}) })
     }
     const out: SceneGroup = { marktype: 'group', role: 'legend', x: 0, y: 0, width: boxW, height: boxH, items }
     ;(out as unknown as Record<string, unknown>)._borderStroke = borderColor != null
