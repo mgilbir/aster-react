@@ -652,8 +652,12 @@ function compileFaceted(spec: VLSpec): VLSpec {
     sizeSignalDef('child_width', childWidth),
     sizeSignalDef('child_height', childHeight),
   ]
+  const rowSpacing = typeof rowDef?.spacing === 'number' ? rowDef.spacing : undefined
+  const colSpacing = typeof colDef?.spacing === 'number' ? colDef.spacing : undefined
   out.layout = {
-    padding: 20,
+    padding: rowSpacing != null || colSpacing != null
+      ? { row: rowSpacing ?? 20, column: colSpacing ?? 20 }
+      : 20,
     offset: {
       ...(rowField ? { rowTitle: 10 } : {}),
       ...(colField ? { columnTitle: 10 } : {}),
