@@ -29,7 +29,7 @@ import type {
   SizeSpec,
   VgSpec,
 } from './types.js'
-import { tickFormat, scaleFraction, tickValues } from './scale.js'
+import { tickFormat, scaleFraction, tickValues, tickCount } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { trellisLayout, measureBounds } from './trellis.js'
@@ -224,9 +224,11 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
       const t = scaleName ? chart.scales.find((sc) => sc.name === scaleName)?.type : undefined
       if (t !== 'time' && t !== 'utc') return true
     }
-    // A non-integer/negative `columns` makes vega's gridLayout throw
-    // (Array(columns) with a length that is not a valid uint32-ish int).
-    if (typeof l.columns === 'number' && (l.columns > 0 ? !Number.isInteger(l.columns) : l.columns !== 0)) return true
+    // A non-integer/negative `columns` makes vega's symbol-legend gridLayout
+    // throw (Array(columns) with a length that is not a valid uint32-ish int).
+    // Gradient legends do not lay entries out in a grid and ignore columns.
+    if (l.gradientLength == null && typeof l.columns === 'number'
+      && (l.columns > 0 ? !Number.isInteger(l.columns) : l.columns !== 0)) return true
     return false
   })
   if (input.dataChanges) {
@@ -4309,8 +4311,13 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const v = ctx.runtime.expr(String((rawGradCount as { signal: string }).signal))({}, ctx.signalParams)
       if (typeof v === 'number') gradCount = v
     }
+    const tickMinStep = (legend as { tickMinStep?: unknown }).tickMinStep
+    const counted = tickCount(scale, gradCount, typeof tickMinStep === 'number' ? tickMinStep : undefined)
+    if (typeof counted === 'number') gradCount = counted
     let tickNums = tickValues(scale, gradCount)
-    if (tickNums.length < 3 && (legend as { values?: unknown }).values == null && d0 !== d1) {
+    const legendValues = (legend as { values?: unknown }).values
+    if (Array.isArray(legendValues)) tickNums = legendValues
+    else if (tickNums.length < 3 && legendValues == null && d0 !== d1) {
       tickNums = [d0, d1]
     }
     const titleStr0 = String(legend.title ?? '')
@@ -4335,17 +4342,22 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const legendTimeFormat = legendFormatType === 'time' || scaleType === 'time' || scaleType === 'utc'
     const makeGradientFmt = (defaultFmt: string): ((v: unknown) => string) => {
       const L = locale(undefined)
+      let base: (v: unknown) => string
       if (legendTimeFormat) {
         const fmt = resolvedLegendFormat ?? defaultFmt
-        return (v: unknown) => L.timeFormat(fmt)(v instanceof Date ? v : new Date(Number(v)))
+        base = (v: unknown) => L.timeFormat(fmt)(v instanceof Date ? v : new Date(Number(v)))
+      } else if (resolvedLegendFormat) {
+        base = (v: unknown) => L.format(resolvedLegendFormat)(typeof v === 'number' ? v : Number(v))
+      } else {
+        // vega labelFormat() with no explicit specifier delegates to the
+        // scale's locale tick formatter, which chooses decimal precision from
+        // the tick step (e.g. 8.0/8.5/9.0 for a [8,9] domain).
+        base = (v: unknown) => tickFormat(L, scale, gradCount)(v)
       }
-      if (resolvedLegendFormat) {
-        return (v: unknown) => L.format(resolvedLegendFormat)(typeof v === 'number' ? v : Number(v))
-      }
-      // vega labelFormat() with no explicit specifier delegates to the
-      // scale's locale tick formatter, which chooses decimal precision from
-      // the tick step (e.g. 8.0/8.5/9.0 for a [8,9] domain).
-      return (v: unknown) => tickFormat(L, scale, gradCount)(v)
+      const labelExpr = (legend as { labelExpr?: unknown }).labelExpr
+      if (typeof labelExpr !== 'string') return base
+      const expr = compileExpr(labelExpr, ctx.runtime)
+      return (v: unknown) => String(expr({ label: base(v), value: v }, ctx.signalParams))
     }
 
     // vega's scaleFraction() builds a positional copy of the scale over the
@@ -4374,7 +4386,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const bgX0 = borderColor0 != null ? 0.5 : 0
       const bgY0 = borderColor0 != null ? 0.5 : 0
       const gradCRH = (legend as { cornerRadius?: number }).cornerRadius
-      items.push({ path: gradCRH ? roundedRectPath(bgX0, bgY0, bgW, bgH, Math.min(gradCRH, bgW / 2, bgH / 2)) : `M${bgX0},${bgY0}h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
+      items.push({ path: gradCRH && gradCRH > 0 ? roundedRectPath(bgX0, bgY0, bgW, bgH, Math.min(gradCRH, bgW / 2, bgH / 2)) : `M${bgX0},${bgY0}h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
       if (titleStr0) {
         const hAnchor = (legend as { titleAnchor?: string }).titleAnchor ?? 'start'
         const hAlign = (legend as { titleAlign?: string }).titleAlign
@@ -4421,30 +4433,50 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const labelStrs = tickNums.map((t: unknown) => measureFmt(t))
     const maxLabelW = labelStrs.reduce((m: number, s: string) => Math.max(m, nominalTextWidth(s, labelFs0)), 0)
     const titleStr = String(legend.title ?? '')
-    const titleWidth = titleStr.length > 0 ? nominalTextWidth(titleStr, titleFs0, 'bold') : 0
+    const titleWidth = titleStr.length > 0 ? nominalTextWidth(titleStr, Math.abs(titleFs0), 'bold') : 0
     const vThickness = (legend as { gradientThickness?: number }).gradientThickness ?? 16
     const vLabelOffset = (legend as { labelOffset?: number }).labelOffset ?? 2
     const gradPad = (legend as { padding?: number }).padding ?? 0
     // vega's legendLayout sizes the legend box as ceil(bounds.width() + 2*pad).
     const outerWidth = Math.ceil(Math.max(vThickness + vLabelOffset + maxLabelW, titleWidth))
+    const vAnchor = (legend as { titleAnchor?: string }).titleAnchor ?? 'start'
+    const vAlign = (legend as { titleAlign?: string }).titleAlign
+      ?? (vAnchor === 'end' ? 'right' : vAnchor === 'middle' ? 'center' : 'left')
+    const vX = vAnchor === 'end' ? outerWidth : vAnchor === 'middle' ? outerWidth / 2 : 0
+    const titleBoundsLeft = vX - (vAlign === 'center' ? titleWidth / 2 : vAlign === 'right' ? titleWidth : 0)
+    const titleBoundsRight = vX + (vAlign === 'center' ? titleWidth / 2 : vAlign === 'left' ? titleWidth : 0)
+    const titleExtraLeft = Math.max(0, -titleBoundsLeft)
+    const titleExtraRight = Math.max(0, titleBoundsRight - outerWidth)
 
     const items: SceneItem[] = []
     // Title height: 16px when a title is present, 0 otherwise.
-    const titleH = titleStr.length > 0 ? titleFs0 + titlePad0 : 0
-    const gradStrokeExtra = gradStrokeWidth > 0 ? gradStrokeWidth / 2 : 0
-    const boxW = Math.ceil(outerWidth + 2 * gradPad)
-    const boxH = Math.ceil(titleH + L + 2 * gradPad + gradStrokeExtra)
+    const titleH = titleStr.length > 0 ? Math.abs(titleFs0) + titlePad0 : 0
+    const gradStrokeExtra = gradStrokeWidth / 2
+    const boxW = Math.ceil(outerWidth + 2 * gradPad + titleExtraLeft + titleExtraRight)
+    const contentX = gradPad + titleExtraLeft
+    // Legend layout includes label bounds, which can extend below a short
+    // gradient (or below the domain when explicit values fall outside it).
+    const labelBottom = tickNums.reduce<number>((m, t) => {
+      const tNum = typeof t === 'number' ? t : 0
+      const perc = gradientFraction(tNum)
+      const baselineOffset =
+        perc <= 0 ? Math.round(-0.21 * labelFs0)
+        : perc >= 1 ? Math.round(0.79 * labelFs0)
+        : Math.round(0.3 * labelFs0)
+      return Math.max(m, gradPad + titleH + (1 - perc) * L + baselineOffset + 2)
+    }, 0)
+    const boxH = Math.ceil(Math.max(titleH + L + 2 * gradPad + gradStrokeExtra, labelBottom))
     // Background box (0,0 to outerWidth, titleH+L) — the legend's own border
     // stroke (legend.strokeColor) insets the rect half a pixel; fillColor
     // paints it.
     const bgXV = borderColor0 != null ? 0.5 : 0
     const bgYV = borderColor0 != null ? 0.5 : 0
     const gradCRV = (legend as { cornerRadius?: number }).cornerRadius
-    items.push({ path: gradCRV ? roundedRectPath(bgXV, bgYV, boxW, boxH, Math.min(gradCRV, boxW / 2, boxH / 2)) : `M${bgXV},${bgYV}h${boxW}v${boxH}h-${boxW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
+    items.push({ path: gradCRV && gradCRV > 0 ? roundedRectPath(bgXV, bgYV, boxW, boxH, Math.min(gradCRV, boxW / 2, boxH / 2)) : `M${bgXV},${bgYV}h${boxW}v${boxH}h-${boxW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
     // Gradient rect at legend-relative (0, titleH), thickness x L
     items.push({
       path: `M0,0h${vThickness}v${L}h-${vThickness}Z`,
-      x: gradPad, y: gradPad + titleH,
+      x: contentX, y: gradPad + titleH,
       fill: `url(#${gradientId})`,
       stroke: gradStrokeColor,
       strokeWidth: gradStrokeWidth,
@@ -4452,14 +4484,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     })
     // Title
     if (titleStr.length > 0) {
-      const vAnchor = (legend as { titleAnchor?: string }).titleAnchor ?? 'start'
-      const vAlign = (legend as { titleAlign?: string }).titleAlign
-        ?? (vAnchor === 'end' ? 'right' : vAnchor === 'middle' ? 'center' : 'left')
       const vBase = (legend as { titleBaseline?: string }).titleBaseline ?? 'top'
       const vY = vBase === 'middle' ? Math.round(0.3 * titleFs0) : vBase === 'bottom' ? Math.round(-0.21 * titleFs0) : Math.round(0.79 * titleFs0)
-      const vX = vAnchor === 'end' ? outerWidth : vAnchor === 'middle' ? outerWidth / 2 : 0
       const vLimit = (legend as { titleLimit?: number }).titleLimit
-      items.push({ text: titleStr, x: vX + gradPad, y: vY + gradPad, align: vAlign as SceneItem['align'], fill: titleColor0, fontSize: titleFs0, ...(vLimit != null ? { limit: vLimit } : {}), ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
+      items.push({ text: titleStr, x: vX + contentX, y: vY + gradPad, align: vAlign as SceneItem['align'], fill: titleColor0, fontSize: titleFs0, ...(vLimit != null ? { limit: vLimit } : {}), ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
     }
     // Labels. Vega positions each label at (1 - perc) * L and then shifts it by
     // the text baseline offset (labels flush against the gradient edges get
@@ -4479,7 +4507,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         : perc >= 1 ? Math.round(0.79 * labelFs0)
         : Math.round(0.3 * labelFs0)
       const yPos = titleH + (1 - perc) * L + baselineOffset
-      items.push({ text: legendFmt(tNum), x: gradPad + vThickness + vLabelOffset, y: gradPad + yPos, align: 'left', fill: labelColor0, fontSize: labelFs0, ...((legend as { labelLimit?: number }).labelLimit != null ? { limit: (legend as { labelLimit?: number }).labelLimit } : {}), ...(labelOpacity0 != null ? { fillOpacity: labelOpacity0 } : {}) })
+      items.push({ text: legendFmt(tNum), x: contentX + vThickness + vLabelOffset, y: gradPad + yPos, align: 'left', fill: labelColor0, fontSize: labelFs0, ...((legend as { labelLimit?: number }).labelLimit != null ? { limit: (legend as { labelLimit?: number }).labelLimit } : {}), ...(labelOpacity0 != null ? { fillOpacity: labelOpacity0 } : {}) })
     }
     // Gradient def from scale's interpolator
     const colorScale = scale as ColorScale
