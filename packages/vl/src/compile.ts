@@ -2159,6 +2159,10 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
     if (sc.type === 'band' && (def.axis == null || (def.axis as Record<string, unknown>).tickOffset === undefined)) {
       delete (userAxis as Record<string, unknown>).tickOffset
     }
+    // vega-lite does not inherit config.axis.values into compiled axes.
+    if (def.axis == null || (def.axis as Record<string, unknown>).values === undefined) {
+      delete (userAxis as Record<string, unknown>).values
+    }
     const grid = (userAxis?.grid as boolean | undefined) ?? (isContinuousScaleType(sc.type) && !def.bin)
     const tickCountSignal = def.channel === 'x' ? { signal: 'ceil(width/40)' } : { signal: 'ceil(height/40)' }
     const orientSide = def.channel === 'x' ? 'bottom' : 'left'
