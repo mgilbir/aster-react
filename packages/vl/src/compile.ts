@@ -2152,6 +2152,9 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       ...(def.axis ?? {}),
     }
     if (userAxis.disable === true) continue
+    const configTitleSupplied = (cfgAxis.title !== undefined || cfgChannelAxis.title !== undefined)
+      && (!isObject(def.axis) || (def.axis as Record<string, unknown>).title === undefined)
+    if (configTitleSupplied) delete (userAxis as Record<string, unknown>).title
     const sc = scaleByName.get(scaleName ?? def.channel)!
     // Vega's axisBand block is consulted before config.axis for band scales,
     // so a config tickOffset (axis/axisX/axisY) does not override it. An
@@ -2203,7 +2206,7 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       axes.push(gridAxis)
     }
 
-    const title = axisTitle(def, userAxis, fields)
+    const title = configTitleSupplied ? null : axisTitle(def, userAxis, fields)
     const labelAxis: Record<string, unknown> = {
       scale: scaleName ?? def.channel,
       orient: orientSide,

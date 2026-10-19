@@ -405,7 +405,7 @@ function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string
   // block's copy is dead upstream.  Drop it too, or a config theme would both
   // retick every axis and refuse interval strings the oracle never sees.
   if (!isLegend) {
-    for (const k of ['tickCount', 'values', 'tickMinStep', 'format', 'formatType']) {
+    for (const k of ['tickCount', 'values', 'tickMinStep', 'format', 'formatType', 'title']) {
       if (k in defaults && !(k in o)) delete out[k]
     }
   }
