@@ -531,10 +531,12 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
       // `all` is freshly collected per call via ctx.dataField; cache the
       // distinct pass by the underlying rows identity when available.
       // Single-field domains only: multi-field collection stays uncached.
-      const vals = (domainDataRows && fields == null && field != null
-        ? distinctValuesCached(domainDataRows, field, (rws, fld) =>
-            (ctx.dataField ?? ((_d: string, _f: string) => []))(data, fld))
-        : distinctValues(all)).slice()
+      const vals = (all.length && all.every((v) => v == null)
+        ? [undefined]
+        : domainDataRows && fields == null && field != null
+          ? distinctValuesCached(domainDataRows, field, (rws, fld) =>
+              (ctx.dataField ?? ((_d: string, _f: string) => []))(data, fld))
+          : distinctValues(all)).slice() as unknown[]
       const sortSpec = (domain as { sort?: unknown }).sort
       if (sortSpec === true || sortSpec === 'ascending') {
         vals.sort((a, b) => (a as string) < (b as string) ? -1 : (a as string) > (b as string) ? 1 : 0)

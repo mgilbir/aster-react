@@ -1302,10 +1302,10 @@ export function channelTitle(def: FieldDef): unknown {
 
 const TIME_UNIT_LABELS: Record<string, string> = {
   year: 'year', quarter: 'quarter', month: 'month', week: 'week', date: 'date',
-  day: 'day', dayofyear: 'day of year', hours: 'hours', minutes: 'minutes',
+  day: 'day', dayofyear: 'dayofyear', hours: 'hours', minutes: 'minutes',
   seconds: 'seconds', milliseconds: 'milliseconds',
   yearquarter: 'year-quarter', yearmonth: 'year-month', yearmonthdate: 'year-month-date',
-  yearweek: 'year-week', yeardayofyear: 'year-day of year', quartermonth: 'quarter-month',
+  yearweek: 'year-week', yeardayofyear: 'year-dayofyear', quartermonth: 'quarter-month',
   monthdate: 'month-date', monthday: 'month-day', hoursminutes: 'hours-minutes',
   minutesseconds: 'minutes-seconds', secondsmilliseconds: 'seconds-milliseconds',
   datehours: 'date-hours', dayhours: 'day-hours', dayminutes: 'day-minutes',

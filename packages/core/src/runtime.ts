@@ -2793,7 +2793,7 @@ function buildFacetCells(
         const av = exprs[i]!(a[0] ?? {}, ctx.signalParams) as unknown
         const bv = exprs[i]!(b[0] ?? {}, ctx.signalParams) as unknown
         let cmp = 0
-        if (av !== bv) cmp = av == null ? 1 : bv == null ? -1 : (av < bv ? -1 : 1)
+        if (av !== bv) cmp = av == null ? 1 : bv == null ? -1 : (av < bv ? -1 : av > bv ? 1 : 0)
         if (cmp !== 0) return orders[i] === 'descending' ? -cmp : cmp
       }
       return 0
@@ -3002,7 +3002,7 @@ function buildRowHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup[]
         const av = expr(a, ctx.signalParams) as unknown
         const bv = expr(b, ctx.signalParams) as unknown
         let cmp = 0
-        if (av !== bv) cmp = av == null ? 1 : bv == null ? -1 : (av < bv ? -1 : 1)
+        if (av !== bv) cmp = av == null ? 1 : bv == null ? -1 : (av < bv ? -1 : av > bv ? 1 : 0)
         return desc ? -cmp : cmp
       })
     } catch {}
@@ -4136,7 +4136,13 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
     } else {
       raw = (value as { value?: unknown }).value
     }
-    if (raw === undefined) return undefined
+    if (raw === undefined) {
+      // A discrete domain can legitimately contain undefined (e.g. an
+      // aggregate over a nominal field); vega still maps that domain entry
+      // through the scale rather than dropping the channel.
+      const dom = s.domain?.() as unknown[] | undefined
+      if (!Array.isArray(dom) || !dom.includes(undefined)) return undefined
+    }
     
     const scaleType = bound ? bound.type : ctx.scaleTypes.get(value.scale as string)
     if ((scaleType === 'time' || scaleType === 'utc') && typeof raw === 'string') {

@@ -247,7 +247,7 @@ function comparator(a: Row, b: Row, field: string): number {
   if (av === bv) return 0
   if (av == null) return 1
   if (bv == null) return -1
-  return av < bv ? -1 : 1
+  return av < bv ? -1 : av > bv ? 1 : 0
 }
 
 export function sortRows(rows: Row[], sort?: SortSpec): Row[] {
@@ -491,7 +491,7 @@ const AGGR: Record<string, (values: number[], rows: Row[]) => number | undefined
   variancep: (v) => {
     const vals = v.filter((x) => Number.isFinite(x))
     const n = vals.length
-    if (!n) return undefined
+    if (!n) return NaN
     const m = vals.reduce((a, b) => a + b, 0) / n
     return vals.reduce((a, b) => a + (b - m) * (b - m), 0) / n
   },
@@ -505,7 +505,7 @@ const AGGR: Record<string, (values: number[], rows: Row[]) => number | undefined
   stdevp: (v) => {
     const vals = v.filter((x) => Number.isFinite(x))
     const n = vals.length
-    if (!n) return undefined
+    if (!n) return NaN
     const m = vals.reduce((a, b) => a + b, 0) / n
     return Math.sqrt(vals.reduce((a, b) => a + (b - m) * (b - m), 0) / n)
   },
