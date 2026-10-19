@@ -406,6 +406,12 @@ function compileFaceted(spec: VLSpec): VLSpec {
   const rowFd = rowDef ? parseChannel('row', rowDef) : null
   const colFd = colDef ? parseChannel('column', colDef) : null
   const rowField = rowFd ? aggFieldName(rowFd) : undefined
+  const facetOrder = (d: Record<string, unknown> | undefined): 'ascending' | 'descending' =>
+    d?.sort === 'descending' || (isObject(d?.sort) && (d!.sort as Record<string, unknown>).order === 'descending')
+      ? 'descending'
+      : 'ascending'
+  const rowOrder = facetOrder(rowDef)
+  const colOrder = facetOrder(colDef)
   const colField = colFd ? aggFieldName(colFd) : undefined
   // vega-lite appends the facet fields to the inner pipeline's grouping
   // transforms (stack groupby, aggregate/joinaggregate groupby, window
@@ -600,7 +606,11 @@ function compileFaceted(spec: VLSpec): VLSpec {
       if (hdrC.titleAlign == null) ct.align = hdrC.titleAnchor === 'start' ? 'left' : hdrC.titleAnchor === 'end' ? 'right' : 'center'
     }
     if (hdrC.titleAlign != null) ct.align = hdrC.titleAlign
-    marks.push({ name: 'column-title', type: 'group', role: 'column-title', title: ct })
+    // vega-lite moves a side-oriented column header title onto the facet's
+    // row-title role (left/right side of the grid); top/bottom stay column
+    // titles.
+    const sideTitle = ct.orient === 'left' || ct.orient === 'right'
+    marks.push({ name: 'column-title', type: 'group', role: sideTitle ? 'row-title' : 'column-title', title: ct })
   }
   // row header: carries the y label axis (+ per-row titles when row-faceted)
   marks.push({
@@ -609,7 +619,7 @@ function compileFaceted(spec: VLSpec): VLSpec {
     role: 'row-header',
     ...(rowField ? {
       from: { data: 'row_domain' },
-      sort: { field: datumRef(rowField), order: 'ascending' },
+      sort: { field: datumRef(rowField), order: rowOrder },
       title: parentTitle(rowField, rowFd ?? normalizeHeaderDef(rowDef)),
     } : {}),
     encode: { update: { height: { signal: 'child_height' } } },
@@ -627,7 +637,7 @@ function compileFaceted(spec: VLSpec): VLSpec {
         type: 'group',
         role: 'column-header',
         from: { data: 'column_domain' },
-        sort: { field: datumRef(colField), order: 'ascending' },
+        sort: { field: datumRef(colField), order: colOrder },
         title: (() => { const t = parentTitle(colField, colFd ?? normalizeHeaderDef(colDef)) as Record<string, unknown>; delete t.orient; return t })(),
         encode: { update: { width: { signal: 'child_width' } } },
       })
@@ -639,7 +649,7 @@ function compileFaceted(spec: VLSpec): VLSpec {
     role: 'column-footer',
     ...(colField ? {
       from: { data: 'column_domain' },
-      sort: { field: datumRef(colField), order: 'ascending' },
+      sort: { field: datumRef(colField), order: colOrder },
     } : {}),
     encode: { update: { width: { signal: 'child_width' } } },
     ...(xLabelAxes.length ? { axes: xLabelAxes } : {}),
@@ -649,7 +659,7 @@ function compileFaceted(spec: VLSpec): VLSpec {
     type: 'group',
     style: 'cell',
     from: { facet: { name: 'facet', data: innerDataName, groupby: facetGroupby } },
-    sort: { field: facetGroupby.map(datumRef), order: facetGroupby.map(() => 'ascending') },
+    sort: { field: facetGroupby.map(datumRef), order: facetGroupby.map((_, i) => (i === 0 && rowField ? rowOrder : colOrder)) },
     encode: { update: { width: { signal: 'child_width' }, height: { signal: 'child_height' } } },
     ...(gridAxes.length ? { axes: gridAxes } : {}),
     marks: childMarks,
@@ -681,10 +691,15 @@ function compileFaceted(spec: VLSpec): VLSpec {
   ]
   const rowSpacing = typeof rowDef?.spacing === 'number' ? rowDef.spacing : undefined
   const colSpacing = typeof colDef?.spacing === 'number' ? colDef.spacing : undefined
+  const cTitle = (marks.find((m) => m.name === 'column-title')?.title ?? {}) as Record<string, unknown>
+  const cTitleOrient = cTitle.orient as string | undefined
   out.layout = {
     padding: rowSpacing != null || colSpacing != null
       ? { row: rowSpacing ?? 20, column: colSpacing ?? 20 }
       : 20,
+    ...(cTitleOrient === 'right' || cTitleOrient === 'bottom'
+      ? { titleAnchor: { ...(cTitleOrient === 'right' ? { row: 'end' } : {}), ...(cTitleOrient === 'bottom' ? { column: 'end' } : {}) } }
+      : {}),
     offset: {
       ...(rowField ? { rowTitle: 10 } : {}),
       ...(colField ? { columnTitle: 10 } : {}),
@@ -1906,6 +1921,12 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
   const userScaleCfg = isObject(spec.config) && isObject((spec.config as Record<string, unknown>).scale)
     ? (spec.config as Record<string, unknown>).scale as Record<string, unknown>
     : undefined
+  const cfgMarkType = isObject(spec.config) && isObject((spec.config as Record<string, unknown>)[mark])
+    ? (spec.config as Record<string, Record<string, unknown>>)[mark]!
+    : undefined
+  const cfgMarkBlock = isObject(spec.config) && isObject((spec.config as Record<string, unknown>).mark)
+    ? (spec.config as Record<string, Record<string, unknown>>).mark!
+    : undefined
   const xDef = fields.find((f) => f.channel === 'x')
   const yDef = fields.find((f) => f.channel === 'y')
   const size = 1
@@ -1949,7 +1970,8 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
     // offset-encoded band layout instead and stay unpadded
     if (
       (mark === 'bar' || (mark === 'rect' && !bothDiscrete)) && channel !== measureChannel &&
-      !def.timeUnit
+      !def.timeUnit && def.stack == null
+      && (cfgMarkType?.discreteBandSize ?? cfgMarkBlock?.discreteBandSize) !== 0
     ) sc.padding = 5
     if (type === 'linear' || type === 'log') {
       const zeroDefault = type === 'log' ? false : zeroDefaultFor(mark, channel, orient)
@@ -2057,6 +2079,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       domain: { data: dataName, field: aggFieldName(opacityDefS) },
       range: [0.3, 0.8],
       zero: false,
+      ...(opacityDefS.sort === 'descending' ? { reverse: true } : {}),
     })
   }
   // xOffset/yOffset scales: discrete offsets use a band, continuous ones a
@@ -2199,7 +2222,7 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
     return { data: dataName, fields: [timeUnitField(def), `${timeUnitField(def)}_end`] }
   }
   // a stack property on a discrete channel is inert (vega-lite ignores it)
-  if (def.stack === 'normalize' && !isDiscreteType(def.type)) return [0, 1]
+  if (def.stack === 'normalize' && def.type === 'quantitative' && !def.bin) return [0, 1]
   if (isDiscreteType(def.type)) return sortedDomain(def, dataName)
   const measureChannel = (mark === 'bar' || mark === 'area')
     ? (potentialStackChannel(mark, orient, fields ?? []) ?? (orient === 'vertical' ? 'y' : 'x'))
@@ -2839,15 +2862,16 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           // centers a fixed-width bar in the band; otherwise the bar spans
           // the band
           const barAlign = (markDef?.align ?? cfgType?.align ?? cfgMark?.align) as string | undefined
-          const barSizeRaw = (((mark === 'bar' ? markDef?.size : undefined)
+          const barExplicitSize = (((mark === 'bar' ? markDef?.size : undefined)
             ?? markDef?.width
             ?? (mark === 'bar' ? (cfgType?.size as number | undefined) : undefined)
-            ?? (cfgType?.discreteBandSize as number | undefined)
             ?? (cfgType?.width as number | undefined)
             ?? (cfgMark?.width as number | undefined)) as number | undefined)
-          // a zero band size falls back to vega-lite's default discrete step
-          // (getViewConfigDiscreteStep 20 − 2) rather than a zero-width bar
-          const barSize = barSizeRaw === 0 ? C.defaultStep : barSizeRaw
+          // An explicit zero size uses vega-lite's default discrete step; a
+          // zero discreteBandSize is inert upstream (the bar spans the band).
+          const barSize = barExplicitSize != null
+            ? (barExplicitSize === 0 ? C.defaultStep : barExplicitSize)
+            : ((cfgType?.discreteBandSize as number | undefined) === 0 ? undefined : cfgType?.discreteBandSize as number | undefined)
           if (barAlign === 'right' && !xOffsetPresent) {
             update.x2 = { scale: 'x', field: aggFieldName(xDef) }
             update.width = { signal: `max(0.25, bandwidth('x'))` }
@@ -2884,11 +2908,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           // baseline aligns the cell within the band (top/undefined left,
           // bottom pins y2, middle centers via yc band 0.5).
           const yAlign = (markDef?.baseline ?? cfgType?.baseline ?? cfgMark?.baseline) as string | undefined
-          const ySizeRaw = ((markDef?.height
+          const yExplicitSize = ((markDef?.height
             ?? (cfgType?.height as number | undefined)
-            ?? (cfgType?.discreteBandSize as number | undefined)
             ?? (cfgMark?.height as number | undefined)) as number | undefined)
-          const ySize = ySizeRaw === 0 ? C.defaultStep : ySizeRaw
+          const ySize = yExplicitSize != null
+            ? (yExplicitSize === 0 ? C.defaultStep : yExplicitSize)
+            : ((cfgType?.discreteBandSize as number | undefined) === 0 ? undefined : cfgType?.discreteBandSize as number | undefined)
           if (ySize != null) {
             update.yc = { scale: 'y', field: aggFieldName(yDef), band: 0.5 }
             update.height = { value: ySize }
@@ -2926,13 +2951,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.y2 = { scale: 'y', field: JSON.parse(startF), offset: { signal: off('-') } }
         } else if (sc === 'band') {
           const yAlignH = (markDef?.baseline ?? cfgType?.baseline ?? cfgMark?.baseline) as string | undefined
-          const hSizeRaw = (((mark === 'bar' ? markDef?.size : undefined)
+          const hExplicitSize = (((mark === 'bar' ? markDef?.size : undefined)
             ?? markDef?.height
             ?? (cfgType?.size as number | undefined)
-            ?? (cfgType?.discreteBandSize as number | undefined)
             ?? (cfgType?.height as number | undefined)
             ?? (cfgMark?.height as number | undefined)) as number | undefined)
-          const hSize = hSizeRaw === 0 ? C.defaultStep : hSizeRaw
+          const hSize = hExplicitSize != null
+            ? (hExplicitSize === 0 ? C.defaultStep : hExplicitSize)
+            : ((cfgType?.discreteBandSize as number | undefined) === 0 ? undefined : cfgType?.discreteBandSize as number | undefined)
           if (hSize != null && !yOffsetPresent) {
             update.yc = { scale: 'y', field: aggFieldName(yDef), band: 0.5 }
             update.height = { value: hSize }
@@ -3027,8 +3053,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // a line's markDef.fill fills the line's area (vega paints line marks);
     // the stroke default stays. markDef.filled:true paints the area instead
     // of the stroke, like a filled rule.
-    const lineFill = isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined
-    if (isObject(spec.mark) && spec.mark.filled === true) {
+    const lineFill = (isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined)
+      ?? (cfgType?.fill as string | undefined)
+      ?? (cfgMark?.fill as string | undefined)
+    const lineFilled = isObject(spec.mark) && spec.mark.filled !== undefined
+      ? spec.mark.filled
+      : (cfgType?.filled ?? cfgMark?.filled)
+    if (lineFilled === true) {
       update.fill = colorDef
         ? { scale: 'color', field: aggFieldName(colorDef) }
         : { value: lineFill ?? markColor ?? cfgFill ?? cfgColor ?? C.blue }
@@ -3111,10 +3142,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const thickField = thickAxis === 'x' ? xDef : yDef
     const thickVg = thickAxis === 'x' ? 'width' : 'height'
     const thickVal = (tickDef?.thickness ?? (cfgType?.thickness as number | undefined) ?? 1) as number
-    const sizeRaw = (tickDef?.size
+    const tickExplicitSize = (tickDef?.size
       ?? (cfgType?.size as number | undefined)
-      ?? (cfgType?.discreteBandSize as number | undefined)
       ?? (cfgType?.height as number | undefined)) as number | undefined
+    const tickSize = tickExplicitSize != null
+      ? (tickExplicitSize === 0 ? C.defaultStep : tickExplicitSize)
+      : ((cfgType?.discreteBandSize as number | undefined) === 0 ? undefined : cfgType?.discreteBandSize as number | undefined)
+    const sizeRaw = tickSize
     // thickness axis: centered on the point/band (pointPosition default mid);
     // a band thickness axis honors baseline (bottom pins y2, middle centers)
     if (thickField) {
@@ -3130,10 +3164,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (sizeField) {
       const isBand = positionalScaleType(mark, sizeField) === 'band'
       if (sizeRaw !== undefined) {
-        // a zero size opts into vega-lite's default discrete step
-        const sizeVal = sizeRaw === 0 ? C.defaultStep : sizeRaw
         update[`${sizeAxis}c`] = { scale: sizeAxis, field: aggFieldName(sizeField), ...(isBand ? { band: 0.5 } : {}) }
-        update[sizeVg] = { value: sizeVal }
+        update[sizeVg] = { value: sizeRaw }
       } else if (isBand) {
         // baseline.bottom pins a band size axis to its y2 edge; every other
         // baseline anchors at the band start (vega-lite tick.ts).
@@ -3511,7 +3543,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   }
 
   // line marks split by a series channel (color or detail): one line per group
-  const pointOverlay = isObject(spec.mark) ? spec.mark.point : undefined
+  const pointOverlay = (isObject(spec.mark) ? spec.mark.point : undefined)
+    ?? cfgType?.point
+    ?? cfgMark?.point
   const lineSeries = [colorDefSeries, detailDefSeries, sizeDef].filter((f): f is FieldDef => f != null && !f.aggregate)
   if (mark === 'line' && lineSeries.length) {
     markSpec.name = 'layer_0_marks'

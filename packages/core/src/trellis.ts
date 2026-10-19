@@ -476,8 +476,10 @@ export function trellisLayout(group: SceneGroup, opt: Opt): void {
   // perform row title layout
   if (views.rowtitle) {
     anchor = get(opt.titleAnchor ?? null, 'row')
+    // With no row footer, an end-anchored title sits at the grid's right edge.
+    if ((anchor === End || anchor === 'end') && !views.rowfooters.length) x2 = bounds.x2 + 0.5
     offset = get(off, 'rowTitle')
-    offset = anchor === End ? x2 + offset : x - offset
+    offset = (anchor === End || anchor === 'end') ? x2 + offset : x - offset
     band = get(opt.titleBand ?? null, 'row', 0.5)
     layoutTitle(views.rowtitle, offset, 0, bounds, band ?? 0.5)
   }
@@ -485,8 +487,9 @@ export function trellisLayout(group: SceneGroup, opt: Opt): void {
   // perform column title layout
   if (views.coltitle) {
     anchor = get(opt.titleAnchor ?? null, 'column')
+    if ((anchor === End || anchor === 'end') && !views.colfooters.length) y2 = bounds.y2
     offset = get(off, 'columnTitle')
-    offset = anchor === End ? y2 + offset : y - offset
+    offset = (anchor === End || anchor === 'end') ? y2 + offset : y - offset
     band = get(opt.titleBand ?? null, 'column', 0.5)
     layoutTitle(views.coltitle, offset, 1, bounds, band ?? 0.5)
   }

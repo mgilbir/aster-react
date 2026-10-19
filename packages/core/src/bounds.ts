@@ -863,7 +863,9 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
     const y = it.y ?? 0
     const shape = (it as Record<string, unknown>).shape as string | undefined
     const angle = (it as Record<string, unknown>).angle as number | undefined
-    if (!shape || shape === 'circle' || !angle) {
+    // 'point' is not a symbol name: vega's d3-symbol fallback is a circle,
+    // whose bounds are rotation-invariant.
+    if (!shape || shape === 'circle' || shape === 'point' || !angle) {
       bounds.add(-r, -r)
       bounds.add(r, r)
     } else {

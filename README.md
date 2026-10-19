@@ -4,7 +4,7 @@ A small TypeScript reimplementation of the Vega/Vega-Lite rendering stack on gra
 
 ## Status
 
-**Pre-alpha.** The pipeline works end-to-end, verified against the real Vega renderer on a 413-spec conformance corpus (413/413; marks, scales, axes, legends, titles, config, expressions, signals, grouping, trellis faceting, and URL data loaders), a 27,513-case Vega-Lite schema sweep (99.3%), and a Chromium browser conformance gate (413/413). Not for production use.
+**Pre-alpha.** The pipeline works end-to-end, verified against the real Vega renderer on a 413-spec conformance corpus (413/413; marks, scales, axes, legends, titles, config, expressions, signals, grouping, trellis faceting, and URL data loaders), a 27,513-case Vega-Lite schema sweep (99.4%), and a Chromium browser conformance gate (413/413). Not for production use.
 
 ## How It Works
 
@@ -67,7 +67,7 @@ const svg = renderSpec(spec)
 
 **Conformance (real-Vega oracle, 413-spec corpus): 413/413.** The core pipeline (Vega spec → compile → evaluate → SVG, plus the React `<Chart>` wrapper) is diffed against the real Vega renderer on a 413-spec corpus (both raw Vega `*.vg.json` and Vega-Lite `*.vl.json`, confirming the vega-lite compile path). This covers marks (line/area/bar/rule/scatter/symbol/rect/text/arc/path/image/trail/shape, with curves/gradients/corner-radii), band/linear/log/pow/time scales, axes (ticks/grid/labels/titles/`labelOverlap`), legends (gradient and symbol, at any corner), titles, config/style defaults, full vega expression surface, nested scopes, trellis/facet-2d layout, contour, geo projections, and URL data loaders.
 
-**Schema sweeps (27,513 Vega-Lite property/value cases): 99.3% (27,318 ok).** For every property the Vega-Lite schema declares, a small chart is rendered through both engines and the SVG is diffed. Residue (100 differ + 55 error cases across ~30 property families — guide-scale domains, per-property header/legend-layout tails, config `axis` blocks, and encoding one-offs) is tracked in the sweep family scoreboard (`pnpm sweep-vl`).
+**Schema sweeps (27,513 Vega-Lite property/value cases): 99.4% (27,356 ok).** For every property the Vega-Lite schema declares, a small chart is rendered through both engines and the SVG is diffed. Residue (62 differ + 55 error cases across ~30 property families — guide-scale domains, per-property header/legend-layout tails, config `axis` blocks, and encoding one-offs) is tracked in the sweep family scoreboard (`pnpm sweep-vl`).
 
 **Browser conformance gate (`pnpm conformance:browser`): 413/413.** The same oracle protocol run in a real Chromium page (vega-embed SVG renderer with live canvas text metrics, vs `renderSpec`), because the Node harness runs both engines in jsdom where neither can measure text.
 

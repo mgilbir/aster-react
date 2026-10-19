@@ -2423,6 +2423,7 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | Scen
   const tm = mark as CompiledMark & { title?: unknown; marks?: unknown[] }
   // Title groups (no from, no nested marks)
   if (tm.title && !mark.from && !(tm.marks?.length)) {
+    if (mark.role === 'row-title') return buildRowTitleGroup(mark, ctx)
     if (mark.name === 'column-title' || mark.role === 'column-title') {
       return buildColumnTitleGroup(mark, ctx)
     }
@@ -3178,7 +3179,7 @@ function buildRowTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | 
     titleX = -61
   } else {
     const headerMark = ctx.chart.marks.find((m) => m.name === 'row_header')
-    if (headerMark) {
+    if (headerMark?.from?.data) {
       const headers = buildRowHeaderGroup(headerMark, ctx)
       const hb = new Bounds()
       for (const h of headers) hb.union(measureGuideGroup(h))
@@ -3187,10 +3188,24 @@ function buildRowTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | 
       titleX = -77
     }
   }
+  const tDefR = (tm.title ?? {}) as Record<string, unknown>
+  const titleOrient = tDefR.orient as string | undefined
+  const rightSide = titleOrient === 'right'
+  const titleOffset = (tDefR.offset as number | undefined) ?? FACET_TITLE_OFFSET
+  // Vega's title group origin is -(rotated title width + offset); the rotated
+  // width carries the same ulp the root margin's ceil reads, and it varies
+  // with the text length, so derive it instead of hardcoding 21.
+  const probe = { text: titleText, x: 0, y: 0, angle: rightSide ? 90 : -90, align: 'center' as const, baseline: 'top' as const, fontSize: 11 }
+  const titleHalfRaw = boundText(new Bounds(), probe as SceneItem).width() + titleOffset
+  // vega's title-group size carries one representable ulp beyond the rotated
+  // bound; only the longer titles pick it up, and it is exactly what tips the
+  // root margin's ceil. Push just those past the margin's epsilon guard.
+  const needsMarginBump = Math.abs(titleHalfRaw - Math.round(titleHalfRaw)) > 5e-15
+  const titleHalf = needsMarginBump ? titleHalfRaw + 1e-8 : titleHalfRaw
   return {
     marktype: 'group', name: mark.name, role: 'row-title',
     items: [
-        { text: titleText, x: -21, y: 0, angle: -90, align: 'center' as const, baseline: 'middle' as const, fill: '#000', fontSize: 11, fontWeight: 'bold' },
+        { text: titleText, x: rightSide ? titleHalf : -titleHalf, y: 0, angle: rightSide ? 90 : -90, align: 'center' as const, baseline: 'middle' as const, fill: '#000', fontSize: 11, fontWeight: 'bold' },
       ],
     x: titleX, y: centerY,
   }
@@ -3274,9 +3289,14 @@ function buildColumnHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
   if (mark.sort?.field) {
     try {
       const expr = ctx.runtime.expr(mark.sort.field as string)
+      const desc = Array.isArray(mark.sort.order)
+        ? mark.sort.order[0] === 'descending'
+        : mark.sort.order === 'descending'
       sortedRows = rows.slice().sort((a, b) => {
-        const cmp = expr({ _aster_a: (a as Record<string, unknown>)[fkey], _aster_b: (b as Record<string, unknown>)[fkey] }, ctx.signalParams) as number
-        return Number(cmp ?? 0)
+        const av = expr(a as unknown as Row, ctx.signalParams) as unknown
+        const bv = expr(b as unknown as Row, ctx.signalParams) as unknown
+        const cmp = av === bv ? 0 : av == null ? 1 : bv == null ? -1 : (av < bv ? -1 : av > bv ? 1 : 0)
+        return desc ? -cmp : cmp
       })
     } catch {}
   }
@@ -3357,9 +3377,14 @@ function buildColumnFooterGroupColumn(mark: CompiledMark, ctx: EvalContext): Sce
   if (mark.sort?.field) {
     try {
       const expr = ctx.runtime.expr(mark.sort.field as string)
+      const desc = Array.isArray(mark.sort.order)
+        ? mark.sort.order[0] === 'descending'
+        : mark.sort.order === 'descending'
       sortedRows = rows.slice().sort((a, b) => {
-        const cmp = expr({ _aster_a: (a as Record<string, unknown>)[fkey], _aster_b: (b as Record<string, unknown>)[fkey] }, ctx.signalParams) as number
-        return Number(cmp ?? 0)
+        const av = expr(a as unknown as Row, ctx.signalParams) as unknown
+        const bv = expr(b as unknown as Row, ctx.signalParams) as unknown
+        const cmp = av === bv ? 0 : av == null ? 1 : bv == null ? -1 : (av < bv ? -1 : av > bv ? 1 : 0)
+        return desc ? -cmp : cmp
       })
     } catch {}
   }
@@ -3471,11 +3496,18 @@ function buildColumnTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup
     ...(tDef.limit != null ? { limit: tDef.limit as number } : {}),
   }
   const titleH = useTitleBlock ? boundText(new Bounds(), titleItem).height() : 0
-  titleItem.y = !useTitleBlock
-    ? -(titleOffset + 2)
-    : tDef.angle != null || tDef.baseline != null
-      ? -(titleOffset + titleH)
-      : -(titleOffset + titleH) + Math.round(0.79 * ((tDef.fontSize as number | undefined) ?? 11))
+  if (tDef.orient === 'bottom') {
+    // The column title sits below the grid: title origin at +offset, the
+    // renderer bakes the top-baseline offset (0.79 * fontSize).
+    titleItem.baseline = (tDef.baseline as SceneItem['baseline']) ?? 'top'
+    titleItem.y = titleOffset
+  } else {
+    titleItem.y = !useTitleBlock
+      ? -(titleOffset + 2)
+      : tDef.angle != null || tDef.baseline != null
+        ? -(titleOffset + titleH)
+        : -(titleOffset + titleH) + Math.round(0.79 * ((tDef.fontSize as number | undefined) ?? 11))
+  }
   return {
     marktype: 'group', name: mark.name, role: 'column-title',
     items: [titleItem],
