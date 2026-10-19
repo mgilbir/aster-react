@@ -2256,8 +2256,9 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       const discretePos = sc.type === 'band' || sc.type === 'point' || sc.type === 'ordinal' || sc.type === 'bin-ordinal'
       for (const [k, v] of Object.entries(userAxis)) {
         if (k === 'grid' || k === 'title' || k === 'orient' || k === 'scale') continue
-        // numeric/date format specifiers are inert on a discrete positional axis
-        if (k === 'format' && discretePos) continue
+        // An explicit axis format on a discrete positional axis is inert, but
+        // config.axis/axisX/axisY formats are inherited by the compiled axis.
+        if (k === 'format' && discretePos && isObject(def.axis) && (def.axis as Record<string, unknown>).format !== undefined) continue
         labelAxis[k] = v
       }
       if (userAxis.orient) labelAxis.orient = userAxis.orient

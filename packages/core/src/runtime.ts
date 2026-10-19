@@ -6023,8 +6023,14 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
 
 function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: EvalContext): (v: unknown) => string {
   const specFmt = (axis.encode?.labels?.text as EncodeValue | undefined)
+  const wrapLabelExpr = (f: (v: unknown) => string): ((v: unknown) => string) => {
+    const le = (axis as unknown as { labelExpr?: unknown }).labelExpr
+    if (typeof le !== 'string' || !ctx) return f
+    const expr = compileExpr(le, ctx.runtime)
+    return (v: unknown) => String(expr({ label: f(v), value: v }, ctx.signalParams))
+  }
   if (specFmt && typeof specFmt === 'object' && 'signal' in specFmt && specFmt.signal) {
-    return () => String(specFmt.signal)
+    return wrapLabelExpr(() => String(specFmt.signal))
   }
   const fmtType = (specFmt && typeof specFmt === 'object' && 'formatType' in specFmt && specFmt.formatType)
     ? String(specFmt.formatType)
@@ -6058,13 +6064,19 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: 
     // specifier per tick interval (e.g. '%B' for month ticks, '%b %d' for
     // day/week ticks). The `undefined` argument is passed explicitly to satisfy
     // the strict local type shim for vega-format.
-    return fmt ? L.timeFormat(fmt) : L.timeFormat(undefined as unknown as string)
+    return wrapLabelExpr(fmt ? L.timeFormat(fmt) : L.timeFormat(undefined as unknown as string))
   }
   if (scale.type !== 'linear' && scale.type !== 'log' && scale.type !== 'pow' && scale.type !== 'sqrt' && scale.type !== 'symlog') {
-    return (v) => String(v)
+    // vega applies an inherited numeric format specifier even to band/point
+    // labels; non-numeric band values format as NaN.
+    if (fmt != null) {
+      const L = locale(undefined)
+      return wrapLabelExpr((v) => L.format(fmt)(typeof v === 'number' ? v : Number(v)))
+    }
+    return wrapLabelExpr((v) => String(v))
   }
   const L = locale(undefined)
-  return tickFormat(L, scale, count, fmt)
+  return wrapLabelExpr(tickFormat(L, scale, count, fmt))
 
 }
 
