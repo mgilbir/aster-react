@@ -1005,6 +1005,8 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
     frameFillOpacity: (ctx.chart as unknown as { frameFillOpacity?: number }).frameFillOpacity,
     frameOpacity: (ctx.chart as unknown as { frameOpacity?: number }).frameOpacity,
     frameStrokeDash: (ctx.chart as unknown as { frameStrokeDash?: number[] }).frameStrokeDash,
+    frameCornerRadius: (ctx.chart as unknown as { frameCornerRadius?: number }).frameCornerRadius,
+    frameClip: (ctx.chart as unknown as { frameClip?: boolean }).frameClip,
     padding: ctx.chart.autosize === 'none' ? ctx.chart.padding : padding,
     items,
   }
@@ -1968,7 +1970,30 @@ function evaluateMark(
     if (mark.sort || mark.transform?.length) {
       rows = rawRows.map((r) => ({ ...r }))
       rowsCloned = true
-      if (mark.sort) rows = sortRows(rows, mark.sort)
+      if (mark.sort) {
+        // Vega mark sorts address scene-item properties: line/area sorting by
+        // the dimension channel name ("x"/"y") orders rows by their encoded
+        // position, not by a datum field of that name.
+        const sf = (mark.sort as { field?: unknown }).field
+        const posChannel = (mark.type === 'line' || mark.type === 'area')
+          && typeof sf === 'string' && (sf === 'x' || sf === 'y') ? sf : null
+        const enc = posChannel ? mark.encode?.update?.[posChannel] : undefined
+        if (posChannel && enc) {
+          const vals = rows.map((r) => resolveEncodeProperty(enc, r, ctx))
+          const desc = (mark.sort as { order?: unknown }).order === 'descending'
+          const idx = rows.map((_, i) => i)
+          idx.sort((a, b) => {
+            const av = vals[a], bv = vals[b]
+            const c = typeof av === 'number' && typeof bv === 'number'
+              ? (av < bv ? -1 : av > bv ? 1 : 0)
+              : 0
+            return desc ? -c : c
+          })
+          rows = idx.map((i) => rows[i]!)
+        } else {
+          rows = sortRows(rows, mark.sort)
+        }
+      }
       if (mark.transform?.length) {
         rows = applyTransforms(rows, mark.transform, {
           runtime: ctx.runtime,
@@ -3455,7 +3480,8 @@ function buildColumnTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup
     marktype: 'group', name: mark.name, role: 'column-title',
     items: [titleItem],
     x: titleX, y: -31,
-  }
+    ...(titleAnchorC !== 'middle' ? { _titleAnchor: titleAnchorC } : {}),
+  } as SceneGroup
 }
 
 // ===========================================================================
@@ -3490,6 +3516,17 @@ function applyTrellisLayout(items: SceneGroup[], ctx: EvalContext): void {
     else if (g.role === 'column-header') positionColumnHeaderLabel(g)
   }
   trellisLayout({ marktype: 'group', items } as unknown as SceneGroup, resolveTrellisOpt(ctx))
+  // trellisLayout centers a column title; an explicit header titleAnchor
+  // pulls it to the grid start/end instead.
+  const layout = getFacetLayout(ctx)
+  if (layout) {
+    for (const g of items) {
+      if (g.role !== 'column-title') continue
+      const anchor = (g as unknown as { _titleAnchor?: string })._titleAnchor
+      if (anchor === 'start') g.x = Math.round(layout.gridX1)
+      else if (anchor === 'end') g.x = Math.round(layout.gridX2)
+    }
+  }
 }
 
 /** Resolve the root layout options (vega-lite facet defaults + spec layout). */
@@ -4046,6 +4083,13 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
       }
     }
     if (yc != null) rec['y'] = yc - (num(rec['height']) ?? 0) / 2
+    // A rect with a resolved position but no size channel (e.g. an x2 scale
+    // over an invalid aggregate) is zero-size, not absent: vega's
+    // adjustSpatial leaves width/height undefined and the rect path degenerates.
+    if (canSwap) {
+      if (rec['x'] != null && rec['width'] == null && rec['x2'] == null) rec['width'] = 0
+      if (rec['y'] != null && rec['height'] == null && rec['y2'] == null) rec['height'] = 0
+    }
   }
 
   return item
@@ -5225,7 +5269,12 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const symSwEncVal = symSwEnc && typeof symSwEnc === 'object' && 'value' in symSwEnc ? (symSwEnc as { value?: unknown }).value : undefined
     const symSwP = (typeof symSwEncVal === 'number' ? symSwEncVal : undefined)
       ?? (legend as { symbolStrokeWidth?: number }).symbolStrokeWidth ?? 1.5
+    // A mark-level dash (config.arc.strokeDash / markDef.strokeDash) arrives as
+    // a symbols.update.strokeDash encode; an explicit legend symbolDash wins.
+    const symDashEnc = (legend as unknown as { encode?: { symbols?: { update?: { strokeDash?: EncodeValue } } } }).encode?.symbols?.update?.strokeDash
+    const symDashEncVal = symDashEnc && typeof symDashEnc === 'object' && 'value' in symDashEnc ? (symDashEnc as { value?: unknown }).value : undefined
     const symbolDash = (legend as { symbolDash?: number[] }).symbolDash
+      ?? (Array.isArray(symDashEncVal) ? symDashEncVal as number[] : undefined)
     const labelFs = (legend as { labelFontSize?: number }).labelFontSize ?? 10
     // symbol path radius: sqrt of the symbol size encode (NaN for negative
     // sizes — the circle path degenerates to its moveTo and bounds to nothing)

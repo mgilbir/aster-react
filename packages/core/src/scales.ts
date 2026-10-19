@@ -79,11 +79,18 @@ function piecewiseColors(palette: string[], type?: string): (t: number) => strin
 
 export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   const type = c.type
-  const factory = vs.scale(type)
+  const domain = resolveDomain(type, c.domain, ctx)
+  // vega-encode's scaleKey: a continuous colour scale with a domainMid (a
+  // 3-element domain) is built as a DIVERGING scale, not a linear one; the
+  // midpoint then maps to the interpolator's centre instead of falling off a
+  // mismatched domain/range.
+  const isColorRange = typeof c.range === 'string' || c.scheme != null
+  const diverging = c.domainMid != null && isColorRange
+    && (type === 'linear' || type === 'log' || type === 'pow' || type === 'sqrt' || type === 'symlog')
+  const factory = vs.scale(diverging ? `diverging-${type}` : type)
   if (!factory) throw new Error(`[aster] unsupported scale type "${type}"`)
 
   let s = factory()
-  const domain = resolveDomain(type, c.domain, ctx)
   s.domain(domain)
 
   // When the scale has a `scheme` property but no `range`, resolve the scheme

@@ -66,17 +66,19 @@ function dayFormatValue(day: unknown): string {
 // --- numeric/time formatting (vega semantics: null -> "null") ---------------
 
 function fmtNumber(value: unknown, spec?: string): string {
-  return value == null ? 'null' : L.format(spec ?? '')(value as number)
+  // vega-functions wraps d3-format but only maps *null* to "null"; undefined
+  // reaches the formatter and formats as NaN.
+  return value === null ? 'null' : L.format(spec ?? '')(value as number)
 }
 function fmtTime(value: unknown, spec?: string): string {
-  if (value == null) return 'null'
+  if (value === null) return 'null'
   const t = toDate(value)
-  return L.timeFormat(spec ?? '')(t == null ? (value as Date) : new Date(t))
+  return L.timeFormat(spec ?? '')(t == null ? (value as unknown as Date) : new Date(t))
 }
 function fmtUtc(value: unknown, spec?: string): string {
-  if (value == null) return 'null'
+  if (value === null) return 'null'
   const t = toDate(value)
-  return L.utcFormat(spec ?? '')(t == null ? (value as Date) : new Date(t))
+  return L.utcFormat(spec ?? '')(t == null ? (value as unknown as Date) : new Date(t))
 }
 
 // --- date-time accessors -----------------------------------------------------

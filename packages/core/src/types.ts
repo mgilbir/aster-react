@@ -84,6 +84,8 @@ export interface CompiledChart {
   frameFillOpacity?: number
   frameOpacity?: number
   frameStrokeDash?: number[]
+  frameCornerRadius?: number
+  frameClip?: boolean
   data: CompiledData[]
   scales: CompiledScale[]
   axes: CompiledAxis[]
@@ -423,6 +425,10 @@ export interface SceneRoot {
   frameFillOpacity?: number
   frameOpacity?: number
   frameStrokeDash?: number[]
+  /** Corner radius of the plot frame (config.view.cornerRadius). */
+  frameCornerRadius?: number
+  /** Clip the plot contents to the frame (config.view.clip). */
+  frameClip?: boolean
   padding?: { top: number; right: number; bottom: number; left: number }
   items: SceneGroup[]
   /** Gradient definitions for use by fill="url(#...)" references. */

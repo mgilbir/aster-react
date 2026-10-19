@@ -122,10 +122,15 @@ function compileLayered(spec: VLSpec): VLSpec {
       if (f) fields.push(f)
     }
     let orient = 'vertical'
-    if (mark === 'bar' || mark === 'area' || mark === 'rule' || mark === 'tick') {
+    if (mark === 'bar' || mark === 'area' || mark === 'rule' || mark === 'tick' || mark === 'line') {
       const xDef = fields.find((f) => f.channel === 'x')
       const yDef = fields.find((f) => f.channel === 'y')
-      const markOrient = isObject(markRaw) ? (markRaw.orient as string | undefined) : undefined
+      const cfg = isObject(l.config ?? spec.config) ? ((l.config ?? spec.config) as Record<string, unknown>) : undefined
+      const cfgType = isObject(cfg?.[mark]) ? (cfg![mark] as Record<string, unknown>) : undefined
+      const cfgMark = isObject(cfg?.mark) ? (cfg!.mark as Record<string, unknown>) : undefined
+      const markOrient = (isObject(markRaw) ? (markRaw.orient as string | undefined) : undefined)
+        ?? (cfgType?.orient as string | undefined)
+        ?? (cfgMark?.orient as string | undefined)
       if (markOrient) orient = markOrient
       else if (yDef && isDiscreteType(yDef.type) && !yDef.aggregate && (!xDef || !isDiscreteType(xDef.type))) orient = 'horizontal'
     }
@@ -134,7 +139,7 @@ function compileLayered(spec: VLSpec): VLSpec {
 
   const out: Record<string, unknown> = {}
   if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
-  out.autosize = spec.autosize ?? 'pad'
+  out.autosize = autosizeOf(spec) ?? 'pad'
   out.background = spec.background ?? 'white'
   out.padding = spec.padding ?? 5
   out.width = width
@@ -357,6 +362,13 @@ function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
   return out
 }
 
+/** config.autosize is a config-level default for the emitted Vega autosize. */
+function autosizeOf(spec: VLSpec): unknown {
+  if (spec.autosize != null) return spec.autosize
+  const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
+  return cfg?.autosize
+}
+
 // --- facet composition -------------------------------------------------------
 
 /** Compile a faceted chart (encoding.facet / top-level facet + spec). */
@@ -527,6 +539,8 @@ function compileFaceted(spec: VLSpec): VLSpec {
       text = { signal: `timeFormat(parent[${JSON.stringify(f)}], ${timeUnitFormatSignal(def.timeUnit)})` }
     } else if (def?.type === 'temporal') {
       text = { signal: `timeFormat(parent[${JSON.stringify(f)}], "%b %d, %Y")` }
+    } else if (def?.type === 'quantitative' || (def?.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(def.aggregate))) {
+      text = { signal: `format(parent[${JSON.stringify(f)}], "")` }
     } else {
       text = { signal: `isValid(parent[${JSON.stringify(f)}]) ? parent[${JSON.stringify(f)}] : ""+parent[${JSON.stringify(f)}]` }
     }
@@ -607,17 +621,17 @@ function compileFaceted(spec: VLSpec): VLSpec {
       const hdr = { ...(cfgHeader ?? {}), ...(colDef?.header as Record<string, unknown> | undefined ?? {}) }
       return hdr.labels === false
     })()
-    marks.push({
-      name: 'column_header',
-      type: 'group',
-      role: 'column-header',
-      from: { data: 'column_domain' },
-      sort: { field: datumRef(colField), order: 'ascending' },
-      ...(hdrCLabelsDisabled
-        ? {}
-        : { title: (() => { const t = parentTitle(colField, colFd ?? normalizeHeaderDef(colDef)) as Record<string, unknown>; delete t.orient; return t })() }),
-      encode: { update: { width: { signal: 'child_width' } } },
-    })
+    if (!hdrCLabelsDisabled) {
+      marks.push({
+        name: 'column_header',
+        type: 'group',
+        role: 'column-header',
+        from: { data: 'column_domain' },
+        sort: { field: datumRef(colField), order: 'ascending' },
+        title: (() => { const t = parentTitle(colField, colFd ?? normalizeHeaderDef(colDef)) as Record<string, unknown>; delete t.orient; return t })(),
+        encode: { update: { width: { signal: 'child_width' } } },
+      })
+    }
   }
   marks.push({
     name: 'column_footer',
@@ -652,7 +666,7 @@ function compileFaceted(spec: VLSpec): VLSpec {
 
   const out: Record<string, unknown> = {}
   if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
-  out.autosize = spec.autosize
+  out.autosize = autosizeOf(spec)
   out.background = spec.background ?? 'white'
   out.padding = spec.padding ?? 5
   out.data = data
@@ -858,7 +872,7 @@ function compileRepeat(spec: VLSpec): VLSpec {
 
   const out: Record<string, unknown> = {}
   if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
-  out.autosize = spec.autosize
+  out.autosize = autosizeOf(spec)
   out.background = spec.background ?? 'white'
   out.padding = spec.padding ?? 5
   out.data = data
@@ -977,7 +991,7 @@ function compileConcat(spec: VLSpec): VLSpec {
 
   const out: Record<string, unknown> = {}
   if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
-  out.autosize = spec.autosize
+  out.autosize = autosizeOf(spec)
   out.background = spec.background ?? 'white'
   out.padding = spec.padding ?? 5
   out.data = data
@@ -1155,7 +1169,7 @@ function compileBoxplot(spec: VLSpec): VLSpec {
 
   const out: Record<string, unknown> = {}
   if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
-  out.autosize = spec.autosize
+  out.autosize = autosizeOf(spec)
   out.background = spec.background ?? 'white'
   out.padding = spec.padding ?? 5
   out.width = spec.width ?? 200
@@ -1455,10 +1469,20 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
   const stackable = mark !== 'arc'
   // an explicit stack on x/y decides the measure axis even for marks with no
   // natural orientation (point/circle/square)
+  // vega-lite only reads an explicit stack from an unbinned quantitative
+  // channel; a stack property on a discrete channel is inert.
   const explicitStackDef = fields.find((f) => (f.channel === 'x' || f.channel === 'y')
+    && f.type === 'quantitative' && !f.bin
     && f.stack != null && f.stack !== false && f.stack !== 'wiggle')
-  const measureChannel = explicitStackDef ? explicitStackDef.channel : orient === 'vertical' ? 'y' : 'x'
-  const dimensionChannel = orient === 'vertical' && !explicitStackDef ? 'x' : measureChannel === 'y' ? 'x' : 'y'
+  const autoStackDef = !explicitStackDef && (mark === 'bar' || mark === 'area')
+    ? fields.find((f) => f.channel === potentialStackChannel(mark, orient, fields))
+    : undefined
+  const measureChannel = explicitStackDef
+    ? explicitStackDef.channel
+    : autoStackDef
+      ? autoStackDef.channel
+      : orient === 'vertical' ? 'y' : 'x'
+  const dimensionChannel = measureChannel === 'y' ? 'x' : 'y'
   const measure = measureChannel === 'y' ? yDef : xDef
   const dimension = dimensionChannel === 'x' ? xDef : yDef
   const continuousDimension = dimension != null && !isDiscreteType(dimension.type)
@@ -1486,7 +1510,7 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     ((mark === 'bar' || mark === 'area') &&
     !fields.some((f) => f.aggregate) &&
     !fields.some((f) => f.timeUnit) &&
-    fields.some((f) => f.channel === (orient === 'vertical' ? 'y' : 'x') && f.type === 'quantitative') &&
+    fields.some((f) => f.channel === measureChannel && f.type === 'quantitative') &&
     !continuousDimension)
   if (!skipCasts) {
     // a field carrying a timeUnit anywhere in the encoding casts as a date,
@@ -2174,9 +2198,12 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
   if (def.timeUnit && (mark === 'bar' || mark === 'rect') && !isDiscreteType(def.type)) {
     return { data: dataName, fields: [timeUnitField(def), `${timeUnitField(def)}_end`] }
   }
-  if (def.stack === 'normalize') return [0, 1]
+  // a stack property on a discrete channel is inert (vega-lite ignores it)
+  if (def.stack === 'normalize' && !isDiscreteType(def.type)) return [0, 1]
   if (isDiscreteType(def.type)) return sortedDomain(def, dataName)
-  const measureChannel = orient === 'vertical' ? 'y' : 'x'
+  const measureChannel = (mark === 'bar' || mark === 'area')
+    ? (potentialStackChannel(mark, orient, fields ?? []) ?? (orient === 'vertical' ? 'y' : 'x'))
+    : orient === 'vertical' ? 'y' : 'x'
   const stacked = isStacked(def, mark, orient, fields)
   if (def.channel === measureChannel && stacked) {
     return { data: dataName, fields: [`${def.field}_start`, `${def.field}_end`] }
@@ -2184,12 +2211,45 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
   return { data: dataName, field: aggFieldName(def) }
 }
 
+/**
+ * vega-lite stack.ts `potentialStackedChannel` (cartesian x/y): the encoding,
+ * not only the mark's orient, decides which channel is the stack measure.
+ * Notably a bar with orient:horizontal over a nominal x and quantitative y
+ * still stacks y upstream.
+ */
+function potentialStackChannel(mark: string, orient: string, fields: FieldDef[]): 'x' | 'y' | undefined {
+  const xDef = fields.find((f) => f.channel === 'x')
+  const yDef = fields.find((f) => f.channel === 'y')
+  const isUQ = (f: FieldDef | undefined): f is FieldDef =>
+    f != null && f.field != null && f.type === 'quantitative' && !f.bin
+  const cartesian = mark === 'bar' || mark === 'area'
+  if (xDef?.field != null && yDef?.field != null) {
+    if (isUQ(xDef) && isUQ(yDef)) {
+      if (xDef.stack) return 'x'
+      if (yDef.stack) return 'y'
+      if (!!xDef.aggregate !== !!yDef.aggregate) return xDef.aggregate ? 'x' : 'y'
+      if (cartesian) return orient === 'horizontal' ? 'x' : 'y'
+    } else if (isUQ(xDef)) {
+      return 'x'
+    } else if (isUQ(yDef)) {
+      return 'y'
+    }
+  } else if (isUQ(xDef)) {
+    if (cartesian && orient === 'vertical') return undefined
+    return 'x'
+  } else if (isUQ(yDef)) {
+    if (cartesian && orient === 'horizontal') return undefined
+    return 'y'
+  }
+  return undefined
+}
+
 function isStacked(def: FieldDef, mark: string, orient: string, allFields?: FieldDef[]): boolean {
   // an explicit stack applies to any mark (the sweep's point stack cases);
   // bar/area additionally stack by default.
   const explicit = def.stack != null && def.stack !== false && def.stack !== 'wiggle'
   if (mark !== 'bar' && mark !== 'area' && !explicit) return false
-  const measureChannel = explicit ? def.channel : orient === 'vertical' ? 'y' : 'x'
+  const measureChannel = explicit ? def.channel : potentialStackChannel(mark, orient, allFields ?? [])
   if (def.channel !== measureChannel) return false
   if (def.type !== 'quantitative' || def.aggregate || def.bin) return false
   // explicit stack false/null opts out; 'wiggle' compiles to a plain
@@ -2410,7 +2470,7 @@ function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null, fie
 
 // --- legends -----------------------------------------------------------------
 
-function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number, cfgLegendIn?: Record<string, unknown>): Record<string, unknown>[] {
+function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number, cfgLegendIn?: Record<string, unknown>, markStrokeDash?: number[]): Record<string, unknown>[] {
   const legends: Record<string, unknown>[] = []
   // config.legend is a defaults layer: orient/direction keys are translated
   // into the compiled `direction`, everything else merges under the channel's
@@ -2470,6 +2530,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
         const symUpdate: Record<string, unknown> = {}
         if (markStroke) symUpdate.stroke = { value: markStroke }
         if (markStrokeWidth != null) symUpdate.strokeWidth = { value: markStrokeWidth }
+        if (markStrokeDash != null) symUpdate.strokeDash = { value: markStrokeDash }
         if (markFillOpacity != null) symUpdate.fillOpacity = { value: markFillOpacity }
         if (markOpacity != null) symUpdate.opacity = { value: markOpacity }
         if (Object.keys(symUpdate).length) lg.encode = { symbols: { update: symUpdate } }
@@ -3074,7 +3135,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         update[`${sizeAxis}c`] = { scale: sizeAxis, field: aggFieldName(sizeField), ...(isBand ? { band: 0.5 } : {}) }
         update[sizeVg] = { value: sizeVal }
       } else if (isBand) {
-        update[sizeAxis] = { scale: sizeAxis, field: aggFieldName(sizeField) }
+        // baseline.bottom pins a band size axis to its y2 edge; every other
+        // baseline anchors at the band start (vega-lite tick.ts).
+        const sizeBase = (tickDef?.baseline ?? cfgType?.baseline) as string | undefined
+        if (sizeAxis === 'y' && sizeBase === 'bottom') {
+          update.y2 = { scale: 'y', field: aggFieldName(sizeField) }
+        } else {
+          update[sizeAxis] = { scale: sizeAxis, field: aggFieldName(sizeField) }
+        }
         update[sizeVg] = { signal: `max(0.25, bandwidth('${sizeAxis}'))` }
       } else {
         update[`${sizeAxis}c`] = { scale: sizeAxis, field: aggFieldName(sizeField) }
@@ -3387,16 +3455,18 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     from: { data: dataName },
     encode: { update },
   }
-  // order: an explicit order channel wins; otherwise line/area sort by the
-  // dimension field. Trail sorts by x (probed).
+  // order: an explicit order channel wins; otherwise vega-lite sorts a
+  // line/area by its dimension channel NAME (Vega then sorts scene items by
+  // that item position), not by the datum field. Trail sorts by x (probed).
   const orderDef = fields.find((f) => f.channel === 'order' && f.field)
-  const dimSortDef = orient === 'vertical' ? xDef : yDef
-  const lineSortFields = orderDef
-    ? [aggFieldName(orderDef)]
-    : dimSortDef && !dimSortDef.timeUnit ? [aggFieldName(dimSortDef)] : []
+  const lineSortFields = orderDef ? [aggFieldName(orderDef)] : []
   const lineSortOrders = [orderDef?.sort === 'descending' ? 'descending' : 'ascending']
-  if ((mark === 'line' || mark === 'area') && lineSortFields.length) {
-    markSpec.sort = { field: lineSortFields, order: lineSortOrders }
+  if (mark === 'line' || mark === 'area') {
+    if (orderDef) {
+      markSpec.sort = { field: [aggFieldName(orderDef)], order: [orderDef.sort === 'descending' ? 'descending' : 'ascending'] }
+    } else {
+      markSpec.sort = { field: orient === 'vertical' ? 'x' : 'y' }
+    }
   }
   if (mark === 'trail') {
     markSpec.sort = { field: orient === 'horizontal' ? 'y' : 'x' }
@@ -3561,10 +3631,15 @@ export function compileUnit(spec: VLSpec): VLSpec {
   // orientation (bar/area/rule/tick): vertical unless the y channel is discrete
   // and x is not, or the mark def says otherwise
   let orient = 'vertical'
-  if (mark === 'bar' || mark === 'area' || mark === 'rule' || mark === 'tick') {
+  if (mark === 'bar' || mark === 'area' || mark === 'rule' || mark === 'tick' || mark === 'line') {
     const xDef = fields.find((f) => f.channel === 'x')
     const yDef = fields.find((f) => f.channel === 'y')
-    const markOrient = isObject(markRaw) ? (markRaw.orient as string | undefined) : undefined
+    const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
+    const cfgType = isObject(cfg?.[mark]) ? (cfg![mark] as Record<string, unknown>) : undefined
+    const cfgMark = isObject(cfg?.mark) ? (cfg!.mark as Record<string, unknown>) : undefined
+    const markOrient = (isObject(markRaw) ? (markRaw.orient as string | undefined) : undefined)
+      ?? (cfgType?.orient as string | undefined)
+      ?? (cfgMark?.orient as string | undefined)
     if (markOrient) orient = markOrient
     else if (yDef && isDiscreteType(yDef.type) && !yDef.aggregate && (!xDef || !isDiscreteType(xDef.type))) orient = 'horizontal'
   }
@@ -3582,7 +3657,13 @@ export function compileUnit(spec: VLSpec): VLSpec {
   const out: Record<string, unknown> = {}
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
   if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
-  out.autosize = spec.autosize ?? 'pad'
+  // A clipped view cannot grow to contain overflowing guides: vega's
+  // autosize-pad then measures only the (clipped) group, i.e. the plain view
+  // size. Emit autosize none so the engine reproduces that viewport.
+  const viewClip = (isObject(userConfig?.view) && (userConfig!.view as Record<string, unknown>).clip === true)
+    || (isObject(userConfig?.style) && isObject((userConfig!.style as Record<string, unknown>).cell)
+      && ((userConfig!.style as Record<string, Record<string, unknown>>).cell!.clip === true))
+  out.autosize = viewClip ? 'none' : (autosizeOf(spec) ?? 'pad')
   out.background = spec.background ?? (userConfig?.background as string | undefined) ?? 'white'
   out.padding = spec.padding ?? (userConfig?.padding as unknown) ?? 5
   const assembledConfig = assembleConfig(spec)
@@ -3703,9 +3784,13 @@ export function compileUnit(spec: VLSpec): VLSpec {
         : undefined
   const legendStrokeWidth = (cfgMarkBlock?.strokeWidth as number | undefined)
     ?? (cfgGenericMark?.strokeWidth as number | undefined)
-  const legendFillOpacity = (isObject(markRaw) ? markRaw.fillOpacity as number | undefined : undefined)
-    ?? (cfgMarkBlock?.fillOpacity as number | undefined)
+  // Only config-level paint propagates onto legend symbols (vega's mark style
+  // applies to the generated legend marks); a markDef fillOpacity/strokeDash
+  // stays on the mark itself.
+  const legendFillOpacity = (cfgMarkBlock?.fillOpacity as number | undefined)
     ?? (cfgGenericMark?.fillOpacity as number | undefined)
+  const legendStrokeDash = (cfgMarkBlock?.strokeDash as number[] | undefined)
+    ?? (cfgGenericMark?.strokeDash as number[] | undefined)
   const legends = buildLegends(
     fields,
     mark,
@@ -3715,6 +3800,7 @@ export function compileUnit(spec: VLSpec): VLSpec {
     legendStrokeWidth,
     legendFillOpacity,
     isObject(userConfig?.legend) ? (userConfig!.legend as Record<string, unknown>) : undefined,
+    legendStrokeDash,
   )
   if (legends.length) out.legends = legends
   if (spec.title) out.title = spec.title

@@ -51,6 +51,9 @@ export function compileChart(spec: VgSpec): CompiledChart {
   const frameFillOpacity = resolveFrameNumber(spec, 'fillOpacity')
   const frameOpacity = resolveFrameNumber(spec, 'opacity')
   const frameStrokeDash = resolveFrameDash(spec)
+  const frameCornerRadius = resolveFrameNumber(spec, 'cornerRadius')
+  const cfgCell = (cfg.style as { cell?: Record<string, unknown> } | undefined)?.cell
+  const frameClip = cfgCell?.clip === true
   const autosize = resolveAutosize(spec.autosize)
   const configRange = (cfg as { range?: Record<string, unknown> }).range
   const autosizeContains = spec.autosize && typeof spec.autosize === 'object'
@@ -111,6 +114,8 @@ export function compileChart(spec: VgSpec): CompiledChart {
     frameFillOpacity,
     frameOpacity,
     frameStrokeDash,
+    frameCornerRadius,
+    frameClip,
     data,
     scales,
     axes,

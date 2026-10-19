@@ -66,6 +66,26 @@ function resolveCurve(interpolate: string, orient?: string): unknown {
   return CURVE_MAP[interpolate] ?? null
 }
 
+/** Vega-scenegraph's rounded-rect path (C = 0.448084975506 bezier circle). */
+function roundedFramePath(x: number, y: number, w: number, h: number, r: number): string {
+  const c = 0.448084975506
+  const kr1 = r * (1 - c)
+  const kr2 = r * c
+  const f = (v: number) => String(Math.round(v * 1000) / 1000)
+  const x1 = x + r, y1 = y
+  const x2 = x + w - r, y2 = y
+  const x3 = x + w, y3 = y + r
+  const x4 = x + w, y4 = y + h - r
+  const x5 = x + w - r, y5 = y + h
+  const x6 = x + r, y6 = y + h
+  const x7 = x, y7 = y + h - r
+  const x8 = x, y8 = y + r
+  return `M${f(x1)},${f(y1)}L${f(x2)},${f(y2)}C${f(x2 + kr1)},${f(y2)},${f(x3)},${f(y3 - kr1)},${f(x3)},${f(y3)}`
+    + `L${f(x4)},${f(y4)}C${f(x4)},${f(y4 + kr1)},${f(x5 + kr1)},${f(y5)},${f(x5)},${f(y5)}`
+    + `L${f(x6)},${f(y6)}C${f(x6 - kr1)},${f(y6)},${f(x7)},${f(y7 + kr1)},${f(x7)},${f(y7)}`
+    + `L${f(x8)},${f(y8)}C${f(x8)},${f(y8 - kr1)},${f(x1 - kr1)},${f(y1)},${f(x1)},${f(y1)}Z`
+}
+
 export function renderSceneToSvg(scene: SceneRoot): string {
   // vega's SVG renderer truncates a fractional document size to pixels.
   const W = Math.floor(scene.width)
@@ -79,11 +99,20 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   out += `<g class="mark-group role-frame root" role="graphics-object" aria-roledescription="group mark container"><g transform="translate(0,0)">`
   const plotW = scene.plotWidth ?? scene.width - pad.left - pad.right
   const plotH = scene.plotHeight ?? scene.height - pad.top - pad.bottom
-  const frameD = scene.frameStroke && scene.frameStrokeWidth == null ? `M0.5,0.5h${plotW}v${plotH}h-${plotW}Z` : `M0,0h${plotW}v${plotH}h-${plotW}Z`
+  const frameInset = scene.frameStroke && scene.frameStrokeWidth == null ? 0.5 : 0
+  const frameD = scene.frameCornerRadius != null && scene.frameCornerRadius > 0
+    ? roundedFramePath(frameInset, frameInset, plotW, plotH, Math.min(scene.frameCornerRadius, plotW / 2, plotH / 2))
+    : (frameInset ? `M0.5,0.5h${plotW}v${plotH}h-${plotW}Z` : `M0,0h${plotW}v${plotH}h-${plotW}Z`)
   out += `<path class="background" aria-hidden="true" d="${frameD}"${scene.frameFill ? ` fill="${scene.frameFill}"` : ''}${scene.frameFillOpacity != null ? ` fill-opacity="${num(scene.frameFillOpacity)}"` : ''}${scene.frameStroke ? ` stroke="${scene.frameStroke}"` : ''}${scene.frameStrokeWidth != null ? ` stroke-width="${num(scene.frameStrokeWidth)}"` : ''}${scene.frameStrokeDash ? ` stroke-dasharray="${scene.frameStrokeDash.map(num).join(',')}"` : ''}${scene.frameOpacity != null ? ` opacity="${num(scene.frameOpacity)}"` : ''}/>`
-  out += '<g>'
-  // Collect clip refs during rendering
+  // Collect clip refs during rendering. A clipped frame reserves clip1 for
+  // the plot area.
   const clipN = { current: 0, paths: [] as (string | null)[], rects: [] as ({ w: number; h: number } | null)[] }
+  if (scene.frameClip) {
+    clipN.current = 1
+    clipN.paths.push(null)
+    clipN.rects.push({ w: plotW, h: plotH })
+  }
+  out += scene.frameClip ? '<g clip-path="url(#clip1)">' : '<g>'
   for (const node of scene.items) {
     out += renderGroup(node, plotW, plotH, clipN, W, H)
   }
@@ -235,14 +264,17 @@ function renderLeaf(it: SceneItem, clipN?: { current: number; paths: (string | n
     // nested-scope transforms. Items with x=y=0 emit no transform.
     const tx = num(it.x ?? 0)
     const ty = num(it.y ?? 0)
-    const transform = (tx !== '0' || ty !== '0') ? ` transform="translate(${tx},${ty})"` : ''
-    return `<path${transform}${dd}${clipAttr} d="${it.path}"${attr('fill', it.fill)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
+    const angleP = (it as Record<string, unknown>).angle as number | undefined
+    const rot = angleP ? ` rotate(${num(angleP)})` : ''
+    const transform = (tx !== '0' || ty !== '0' || rot) ? ` transform="translate(${tx},${ty})${rot}"` : ''
+    return `<path${transform}${dd}${clipAttr} d="${it.path}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-linejoin', (it as Record<string, unknown>).strokeJoin as string | undefined)}${attr('opacity', it.opacity)}/>`
   }
   // Symbol items (shape path; 'circle' renders the arc form)
   if (it.shape != null && it.radius != null) {
     const d = symbolPath(it.shape as string, it.radius as number)
-    const t = `transform="translate(${num(it.x ?? 0)},${num(it.y ?? 0)})"`
-    return `<path ${t}${dd} d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
+    const angleS = (it as Record<string, unknown>).angle as number | undefined
+    const t = `transform="translate(${num(it.x ?? 0)},${num(it.y ?? 0)})${angleS ? ` rotate(${num(angleS)})` : ''}"`
+    return `<path ${t}${dd} d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-linejoin', (it as Record<string, unknown>).strokeJoin as string | undefined)}${attr('opacity', it.opacity)}/>`
   }
   if (it.text != null) {
     const fontSize = (it as Record<string, unknown>).fontSize as number | undefined
@@ -441,14 +473,6 @@ export function computeAreaPath(group: SceneGroup): {
       : (it.y ?? 0) + ((it.height as number | undefined) ?? (((it.y2 as number) ?? 0) - (it.y ?? 0))),
     defined: it.defined !== false && it.x != null && it.y != null,
   }))
-
-  // Sort items by position. Vega sorts by the dependent axis value, which
-  // produces ascending position for vertical areas (x ascending) and
-  // descending position for horizontal areas (y descending in SVG coords,
-  // i.e. data y ascending mapped through an inverted y scale).
-  if (isHorizontal) {
-    pts.sort((a, b) => b.pos - a.pos)
-  }
 
   let path = ''
   if (interpolate && interpolate !== 'linear') {
@@ -704,8 +728,10 @@ function renderSymbols(group: SceneGroup): string {
     // no style carries no default width.
     // Only output fill if it's explicitly set to a non-default value (transparent is SVG default for paths)
     const fillAttr = it.fill != null && it.fill !== 'transparent' ? ` fill="${it.fill}"` : ''
-    // vega's symbol attr emits translateItem(item) — full-precision numbers
-    out += `<path transform="translate(${String(it.x ?? 0)},${String(it.y ?? 0)})" d="${d}"${fillAttr}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
+    // vega's symbol attr emits rotateItem(item) — full-precision numbers plus
+    // the mark's rotation.
+    const angleS = (it as Record<string, unknown>).angle as number | undefined
+    out += `<path transform="translate(${String(it.x ?? 0)},${String(it.y ?? 0)})${angleS ? ` rotate(${num(angleS)})` : ''}" d="${d}"${fillAttr}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-linejoin', (it as Record<string, unknown>).strokeJoin as string | undefined)}${attr('opacity', it.opacity)}/>`
   }
   out += '</g>'
   return out
@@ -1127,7 +1153,7 @@ function renderArcs(group: SceneGroup): string {
     // without a stroke, opacity, dash arrays).
     const cr = (it as Record<string, unknown>).cornerRadius as number | undefined ?? 0
     const pa = (it as Record<string, unknown>).padAngle as number | undefined ?? 0
-    out += `<path transform="translate(${num(x)},${num(y)})" d="${arcPath(0, 0, r, r0, a0, a1, cr, pa)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-linecap', it.strokeLineCap)}${attr('stroke-linejoin', it.strokeLineJoin)}/>`
+    out += `<path transform="translate(${num(x)},${num(y)})" d="${arcPath(0, 0, r, r0, a0, a1, cr, pa)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-linecap', (it as Record<string, unknown>).strokeCap as string | undefined)}${attr('stroke-linejoin', (it as Record<string, unknown>).strokeJoin as string | undefined)}/>`
   }
   out += '</g>'
   return out

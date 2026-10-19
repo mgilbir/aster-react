@@ -70,7 +70,7 @@ All gates re-run from the working tree after the parity iteration.
 | `pnpm test` | 241 tests / 25 files, all pass |
 | `pnpm conformance` | **413 / 413** SVG geometry vs real Vega |
 | `pnpm conformance-vl` | **125 / 125** (incl. repeat, scatter-matrix, vl-facet-2d) |
-| `pnpm sweep-vl` (27,513 VL schema cases) | **99.1%** — 27,273 ok, 145 differ, 34 engine-error, 21 node-error, 40 both-refused |
+| `pnpm sweep-vl` (27,513 VL schema cases) | **99.3%** — 27,318 ok, 100 differ, 34 engine-error, 21 node-error, 40 both-refused |
 | `pnpm conformance:browser` (Chromium, live canvas text metrics) | **413 / 413** |
 | `pnpm probe` | 2 / 2 |
 | bundle budget (`@aster/core` `renderSpec`) | 97.0 kB gzip / 100 kB — pass |
@@ -171,7 +171,7 @@ Third-pass engine fixes (the schema-sweep iteration, 94.8% → 98.3%):
   tick placement (with explicit `gradientLength`/`gradientThickness`/
   `labelOffset`/label-size honored).
 
-Remaining sweep residue (145 differ + 55 error cases) is a long tail across
+Remaining sweep residue (100 differ + 55 error cases) is a long tail across
 ~40 property families — guide-scale ranges/domains, per-property header and
 legend-layout tails (columns, titleOrient, clipHeight, orient), config
 `axis`/`header` blocks, row-facet header widths, and per-family one-offs — see
@@ -544,7 +544,7 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   compilers to Vega before rendering): baseline 10937 ok / 15581 differ /
   935 engine / 43 node — that surface is @aster/vl's drift, tracked
   separately from this floor. Parity rounds closed the bulk of it:
-  27273 ok / 145 differ / 34 engine / 21 node of 27513 (99.1%).
+  27318 ok / 100 differ / 34 engine / 21 node of 27513 (99.3%).
 
   A later sweep pass closed another 148 cases. It added the `strokeWidth`
   channel end to end (linear [1,4] scale, per-entry stroke legend with vega's

@@ -8,7 +8,7 @@
  * matching the oracle when no canvas is available.
  */
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
-import { computeLinePath, trailPath } from './render.js'
+import { computeLinePath, symbolPath, trailPath } from './render.js'
 import { itemTextWidth } from './text-metrics.js'
 
 // ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ export function boundStroke(bounds: Bounds, item: SceneItem, miter?: boolean): B
     const sw = item.strokeWidth != null ? +item.strokeWidth : 1
     const cap = rec.strokeCap === 'square' ? Math.SQRT2 : 1
     let e = cap * sw / 2
-    if (miter && (!rec.strokeLineJoin || rec.strokeLineJoin === 'miter')) {
+    if (miter && (!(rec.strokeJoin ?? rec.strokeLineJoin) || (rec.strokeJoin ?? rec.strokeLineJoin) === 'miter')) {
       e = Math.max(e, (rec.strokeMiterLimit != null ? +rec.strokeMiterLimit : 4) * sw / 2)
     }
     bounds.expand(e)
@@ -806,6 +806,8 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
       const fy = syP ?? 1
       bounds.scale(fx, fy)
     }
+    const angleP = (it as Record<string, unknown>).angle as number | undefined
+    if (angleP) bounds.rotate(angleP * Math.PI / 180, 0, 0)
     boundStroke(bounds, it, miterPaths || it.strokeWidth != null)
     return bounds.translate(it.x || 0, it.y || 0)
   }
@@ -825,13 +827,21 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
     return boundText(bounds, it)
   }
   if (it.shape != null && it.radius != null) {
-    // circle symbol: full circle bounds
+    // Symbol: vega bounds the shape path rotated about the item origin, then
+    // inflates by the stroke and translates to the item position.
     const r = it.radius
     const x = it.x || 0
     const y = it.y || 0
-    bounds.add(x - r, y - r)
-    bounds.add(x + r, y + r)
-    return boundStroke(bounds, it, true)
+    const angle = (it as Record<string, unknown>).angle as number | undefined
+    if (it.shape === 'circle' || !angle) {
+      bounds.add(-r, -r)
+      bounds.add(r, r)
+    } else {
+      boundsFromPath(bounds, symbolPath(String(it.shape), r))
+      bounds.rotate(angle * Math.PI / 180, 0, 0)
+    }
+    boundStroke(bounds, it, true)
+    return bounds.translate(x, y)
   }
   if (it.url != null) {
     return boundImage(bounds, it)
@@ -844,16 +854,24 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
     return boundRule(bounds, it)
   }
   if (it.x != null || it.y != null || it.size != null) {
-    // point symbol without an explicit shape/radius: default circle, size 30
-    // (our symbol renderer defaults `size ?? 30`). A symbol with a null
-    // position (a geopoint the projection refused) still bounds as a circle
-    // at (0,0): vega's `x - r` coerces null to 0 (albersusa sweep case).
+    // point symbol: size 30 / shape circle by default (our symbol renderer
+    // defaults `size ?? 30`). A symbol with a null position (a geopoint the
+    // projection refused) still bounds as a circle at (0,0): vega's `x - r`
+    // coerces null to 0 (albersusa sweep case).
     const r = Math.sqrt(((it.size as number) ?? 30)) / 2
     const x = it.x ?? 0
     const y = it.y ?? 0
-    bounds.add(x - r, y - r)
-    bounds.add(x + r, y + r)
-    return boundStroke(bounds, it, true)
+    const shape = (it as Record<string, unknown>).shape as string | undefined
+    const angle = (it as Record<string, unknown>).angle as number | undefined
+    if (!shape || shape === 'circle' || !angle) {
+      bounds.add(-r, -r)
+      bounds.add(r, r)
+    } else {
+      boundsFromPath(bounds, symbolPath(shape, r))
+      bounds.rotate(angle * Math.PI / 180, 0, 0)
+    }
+    boundStroke(bounds, it, true)
+    return bounds.translate(x, y)
   }
   return boundRect(bounds, it)
 }
