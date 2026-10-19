@@ -2153,6 +2153,12 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
     }
     if (userAxis.disable === true) continue
     const sc = scaleByName.get(scaleName ?? def.channel)!
+    // Vega's axisBand block is consulted before config.axis for band scales,
+    // so a config tickOffset (axis/axisX/axisY) does not override it. An
+    // explicit axis definition still wins.
+    if (sc.type === 'band' && (def.axis == null || (def.axis as Record<string, unknown>).tickOffset === undefined)) {
+      delete (userAxis as Record<string, unknown>).tickOffset
+    }
     const grid = (userAxis?.grid as boolean | undefined) ?? (isContinuousScaleType(sc.type) && !def.bin)
     const tickCountSignal = def.channel === 'x' ? { signal: 'ceil(width/40)' } : { signal: 'ceil(height/40)' }
     const orientSide = def.channel === 'x' ? 'bottom' : 'left'
