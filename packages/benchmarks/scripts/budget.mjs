@@ -43,7 +43,9 @@ import { fileURLToPath } from 'node:url'
 // d3-time-format — specifier grammar, locale tables, the strftime engine, the
 // tick formatters (formatFloat/formatSpan) and the memoized locale facade;
 // 1749 oracle-vector cases — ~4.7 kB gzip.)
-const BUDGET_BYTES = 96 * 1024
+// (96 -> 100: parity work for facet headers, size legends and the remaining
+// guide-layout tails; headroom restored at the maintainer's request.)
+const BUDGET_BYTES = 100 * 1024
 
 // Walk up from this file to find the monorepo root:
 // packages/benchmarks/scripts -> packages/benchmarks -> packages -> aster-react (root)

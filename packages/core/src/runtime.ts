@@ -3240,14 +3240,30 @@ function buildColumnHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
     const labelX = labelAnchorC === 'start' ? 0 : labelAnchorC === 'end' ? cellWidth : cellWidth / 2
     const labelAlignC = (hdrTitle.align as string | undefined)
       ?? (labelAnchorC === 'start' ? 'left' : labelAnchorC === 'end' ? 'right' : 'center')
+    const labelItem: SceneItem | null = hdrTitleRaw == null ? null : {
+      text: labelVal, x: labelX, y: 0, align: labelAlignC as SceneItem['align'],
+      ...(hdrTitle.baseline != null ? { baseline: hdrTitle.baseline as SceneItem['baseline'] } : {}),
+      ...(hdrTitle.angle != null ? { angle: hdrTitle.angle as number } : {}),
+      fill: (hdrTitle.color as string) ?? '#000', fontSize: (hdrTitle.fontSize as number) ?? 10,
+      ...(hdrTitle.font != null ? { font: hdrTitle.font as string } : {}),
+      ...(hdrTitle.fontWeight != null ? { fontWeight: hdrTitle.fontWeight as SceneItem['fontWeight'] } : {}),
+      ...(hdrTitle.limit != null ? { limit: hdrTitle.limit as number } : {}),
+    }
+    // An explicit label angle/baseline/font size switches the header to
+    // vega's title-group sizing: the group reserves the rotated title bounds
+    // above and below the title origin. The default guide-label path keeps the
+    // compact header scope.
+    const useTitleBlock = hdrTitle.angle != null || hdrTitle.baseline != null || hdrTitle.fontSize != null
+    const titleBlockH = useTitleBlock && labelItem ? boundText(new Bounds(), labelItem).height() : 0
+    if (labelItem) labelItem.y = useTitleBlock ? -(hdrPad + titleBlockH) : -(hdrPad + 2)
     result.push({
       marktype: 'group', name: mark.name, role: 'column-header',
       items: [
-        ...(hdrTitleRaw == null ? [] : [{ text: labelVal, x: labelX, y: -(hdrPad + 2), align: labelAlignC as SceneItem['align'], ...(hdrTitle.baseline != null ? { baseline: hdrTitle.baseline as SceneItem['baseline'] } : {}), ...(hdrTitle.angle != null ? { angle: hdrTitle.angle as number } : {}), fill: (hdrTitle.color as string) ?? '#000', fontSize: (hdrTitle.fontSize as number) ?? 10, ...(hdrTitle.font != null ? { font: hdrTitle.font as string } : {}), ...(hdrTitle.fontWeight != null ? { fontWeight: hdrTitle.fontWeight as SceneItem['fontWeight'] } : {}), ...(hdrTitle.limit != null ? { limit: hdrTitle.limit as number } : {}) }]),
+        ...(labelItem ? [labelItem] : []),
         // column-header background: zero-height, full-width path (M0,0hWv0h-WZ).
         { path: `M0,0h${cellWidth}v0h-${cellWidth}Z`, x: 0, y: 0 } as SceneItem,
       ],
-      x: cellX, y: -1, width: cellWidth, height: 0,
+      x: cellX, y: -1, width: cellWidth, height: titleBlockH > 0 ? hdrPad + 2 * titleBlockH : 0,
     })
   })
   return result
@@ -3375,12 +3391,24 @@ function buildColumnTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup
     : titleAnchorC === 'end'
       ? (layout ? layout.gridX2 : centerX * 2)
       : centerX
+  // Explicit title angle/baseline/font size switches to vega's title-group
+  // law: the title origin sits titleHeight + offset above the facet grid.
+  const useTitleBlock = tDef.angle != null || tDef.baseline != null || tDef.fontSize != null
+  const titleOffset = (tDef.offset as number | undefined) ?? 10
+  const titleItem: SceneItem = {
+    text: titleText, x: 0, y: 0, align: (tDef.align as 'center') ?? 'center',
+    ...(tDef.baseline != null ? { baseline: tDef.baseline as SceneItem['baseline'] } : {}),
+    ...(tDef.angle != null ? { angle: tDef.angle as number } : {}),
+    fill: (tDef.color as string) ?? '#000', fontSize: (tDef.fontSize as number) ?? 11,
+    fontWeight: (tDef.fontWeight as 'bold') ?? 'bold',
+    ...(tDef.font != null ? { font: tDef.font as string } : {}),
+    ...(tDef.limit != null ? { limit: tDef.limit as number } : {}),
+  }
+  const titleH = useTitleBlock ? boundText(new Bounds(), titleItem).height() : 0
+  titleItem.y = useTitleBlock ? -(titleOffset + titleH) : -(titleOffset + 2)
   return {
     marktype: 'group', name: mark.name, role: 'column-title',
-    items: [
-      // the guide-title style: 11px bold (vega config style['guide-title'])
-      { text: titleText, x: 0, y: -(((tDef.offset as number | undefined) ?? 10) + 2), align: (tDef.align as 'center') ?? 'center', ...(tDef.baseline != null ? { baseline: tDef.baseline as SceneItem['baseline'] } : {}), ...(tDef.angle != null ? { angle: tDef.angle as number } : {}), fill: (tDef.color as string) ?? '#000', fontSize: (tDef.fontSize as number) ?? 11, fontWeight: (tDef.fontWeight as 'bold') ?? 'bold', ...(tDef.font != null ? { font: tDef.font as string } : {}), ...(tDef.limit != null ? { limit: tDef.limit as number } : {}) },
-    ],
+    items: [titleItem],
     x: titleX, y: -31,
   }
 }
