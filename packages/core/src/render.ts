@@ -149,6 +149,14 @@ function renderGroup(group: SceneGroup, plotW?: number, plotH?: number, clipN?: 
     return out2
   }
 
+  // Vega-Lite rounds bars by wrapping each bar in a clipped scope. Vega's
+  // SVG renderer keeps that group structure, so reproduce it here for rect
+  // marks carrying per-item corner radii.
+  if (type === 'rect' && clipN
+    && (group.items ?? []).some((it) => hasRectCorner(it as SceneItem) && (it as unknown as { clip?: boolean }).clip === true)) {
+    return renderClippedRoundedRects(group, clipN)
+  }
+
   // For mark groups, wrap in a clip'd outer <g> if needed
   const inner = switchMarkup(type, group)
 
@@ -714,6 +722,55 @@ function renderCircles(group: SceneGroup): string {
     out += `<circle cx="${num(it.x)}" cy="${num(it.y)}" r="${num(r)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
   }
   out += '</g>'
+  return out
+}
+
+function hasRectCorner(it: SceneItem): boolean {
+  const rec = it as Record<string, unknown>
+  return rec.cornerRadius !== undefined
+    || rec.cornerRadiusTopLeft !== undefined || rec.cornerRadiusTopRight !== undefined
+    || rec.cornerRadiusBottomLeft !== undefined || rec.cornerRadiusBottomRight !== undefined
+}
+
+/** Split a rect item into its normalized origin and positive width/height. */
+function rectGeometry(it: SceneItem): { x: number; y: number; w: number; h: number } | null {
+  let w = it.width
+  let h = it.height
+  let x = (it.x as number | undefined) ?? 0
+  let y = (it.y as number | undefined) ?? 0
+  if (w == null && it.x2 != null) { w = Math.abs((it.x2 as number) - x); x = Math.min(x, it.x2 as number) }
+  if (h == null && it.y2 != null) { h = Math.abs((it.y2 as number) - y); y = Math.min(y, it.y2 as number) }
+  return w == null || h == null ? null : { x, y, w, h }
+}
+
+/** vega-scenegraph's clipped rounded-rect scopes for bar corner radii. */
+function renderClippedRoundedRects(
+  group: SceneGroup,
+  clipN: { current: number; paths: (string | null)[]; rects: ({ w: number; h: number } | null)[] },
+): string {
+  let out = ''
+  for (const it of itemsOf(group).slice().reverse()) {
+    if (it.fill == null && it.stroke == null) continue
+    const g = rectGeometry(it)
+    if (!g) continue
+    if (!hasRectCorner(it) || (it as unknown as { clip?: boolean }).clip !== true) {
+      const d = rectItemPath(it)
+      if (d != null) out += `<path d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
+      continue
+    }
+    const round = rectItemPath({ ...it, x: 0, y: 0, width: g.w, height: g.h } as SceneItem)
+    if (round == null) continue
+    const clipId = ++clipN.current
+    clipN.paths.push(round)
+    const plain = `M0,${num(g.y)}h${num(g.w)}v${num(g.h)}h${num(-g.w)}Z`
+    out += `<g transform="translate(${num(g.x)},${num(g.y)})">`
+    out += `<path class="background" aria-hidden="true" d="${round}"/>`
+    out += `<g clip-path="url(#clip${clipId})"><g class="mark-group role-scope" role="graphics-object" aria-roledescription="group mark container"><g transform="translate(0,${num(-g.y)})">`
+    out += `<path class="background" aria-hidden="true" d="M0,0h${num(g.w)}v0h-${num(g.w)}Z"/>`
+    out += `<g><g class="mark-rect role-mark marks" role="graphics-object" aria-roledescription="rect mark container"><path${dataDatumAttr(it)} d="${plain}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/></g></g>`
+    out += `<path class="foreground" aria-hidden="true" d="" display="none"/></g></g></g>`
+    out += `<path class="foreground" aria-hidden="true" d="" display="none"/></g>`
+  }
   return out
 }
 

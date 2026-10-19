@@ -2523,12 +2523,15 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // bar rounds its ends with a clip (rect's cornerRadius needs no clip);
     // cornerRadiusEnd rounds the leading edge per orientation
     const cornerRadius = markDef?.cornerRadius ?? cfgType?.cornerRadius ?? cfgMark?.cornerRadius
-    if (mark === 'bar' && (cornerRadius != null || markDef?.cornerRadiusEnd != null)) update.clip = { value: true }
+    const cornerRadiusEnd = markDef?.cornerRadiusEnd ?? cfgType?.cornerRadiusEnd ?? cfgMark?.cornerRadiusEnd
+    if (mark === 'bar' && ((cornerRadius != null && cornerRadius !== 0) || (cornerRadiusEnd != null && cornerRadiusEnd !== 0))) {
+      update.clip = { value: true }
+    }
     if (cornerRadius != null && update.cornerRadius === undefined) update.cornerRadius = { value: cornerRadius }
-    if (markDef?.cornerRadiusEnd != null && mark === 'bar') {
+    if (cornerRadiusEnd != null && mark === 'bar') {
       const [a, b] = orient === 'horizontal' ? ['TopRight', 'BottomRight'] : ['TopLeft', 'TopRight']
-      update[`cornerRadius${a}`] = { value: markDef.cornerRadiusEnd }
-      update[`cornerRadius${b}`] = { value: markDef.cornerRadiusEnd }
+      update[`cornerRadius${a}`] = { value: cornerRadiusEnd }
+      update[`cornerRadius${b}`] = { value: cornerRadiusEnd }
     }
     if (mark === 'bar') update.ariaRoleDescription = { value: 'bar' }
     const stacked = yDef && isStacked(yDef, mark, orient, fields)
@@ -3120,6 +3123,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   ]) {
     const v = passProp(p)
     if (v !== undefined && update[p] === undefined) update[p] = { value: v }
+  }
+  if (mark === 'bar' && update.clip === undefined) {
+    const corners = ['cornerRadius', 'cornerRadiusTopLeft', 'cornerRadiusTopRight', 'cornerRadiusBottomLeft', 'cornerRadiusBottomRight']
+    if (corners.some((k) => {
+      const v = update[k]
+      return v != null && typeof v === 'object' && 'value' in v && typeof (v as { value: unknown }).value === 'number' && (v as { value: number }).value !== 0
+    })) update.clip = { value: true }
   }
   // markDef.xOffset/yOffset shift the corresponding positional channels
   // (including their secondary endpoint and centered forms) — probed.
