@@ -43,10 +43,17 @@ const TIME_SCALE_TYPES = new Set(['time', 'utc'])
 function interpolateHclStrings(a: string, b: string): (t: number) => string {
   const A = hcl(a)
   const B = hcl(b)
-  const dh = B.h - A.h
-  const hStep = dh > 180 || dh < -180 ? dh - 360 * Math.round(dh / 360) : dh
+  // d3-interpolate's hue(): an achromatic endpoint (NaN hue) holds the other
+  // endpoint's hue constant instead of poisoning the whole interpolation.
+  let h0 = A.h
+  let hStep = 0
+  if (isNaN(A.h)) h0 = B.h
+  else if (!isNaN(B.h)) {
+    const dh = B.h - A.h
+    hStep = dh > 180 || dh < -180 ? dh - 360 * Math.round(dh / 360) : dh
+  }
   return (t) => {
-    const c = hcl(A.h + t * hStep, A.c + t * (B.c - A.c), A.l + t * (B.l - A.l), A.opacity + t * (B.opacity - A.opacity))
+    const c = hcl(h0 + t * hStep, A.c + t * (B.c - A.c), A.l + t * (B.l - A.l), A.opacity + t * (B.opacity - A.opacity))
     return c.formatRgb()
   }
 }
@@ -136,8 +143,22 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
       // for interpolating scales.
       const e0 = schemeExtent ? schemeExtent[0]! : 0
       const e1 = schemeExtent ? schemeExtent[1]! : 1
-      const a = c.reverse ? e1 : e0
-      const b = c.reverse ? e0 : e1
+      const baseA = c.reverse ? e1 : e0
+      const baseB = c.reverse ? e0 : e1
+      // d3's continuous bimap reverses the range for a descending domain;
+      // sequential scales do not. An interpolating color scale stores its
+      // palette as a [0,1] range, so fold that same reversal into the
+      // sampled extent instead of losing it in the interpolator.
+      const domNow = (s.domain() as unknown[])
+      // domainMin/domainMax are applied after the range is configured; fold
+      // their eventual endpoints into the descending-domain test.
+      const expectedFirst = c.domainMin != null && !Array.isArray(c.domainMin) ? c.domainMin : domNow[0]
+      const expectedLast = c.domainMax != null && !Array.isArray(c.domainMax) ? c.domainMax : domNow[domNow.length - 1]
+      const descending = domNow.length > 1
+        && Number(expectedLast) < Number(expectedFirst)
+      const flip = descending && type !== 'sequential'
+      const a = flip ? baseB : baseA
+      const b = flip ? baseA : baseB
       const effectiveSchemeFn: SchemeFn = ((t: number) => (schemeFn as (t: number) => unknown)(a + t * (b - a)) as unknown) as SchemeFn
       // d3 sequential/diverging scales use .interpolator() (not .interpolate)
       if (typeof cs.interpolator === 'function') {
@@ -160,6 +181,20 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
     } else {
       s.range(range0 as never)
     }
+  } else if (
+    CONTINUOUS_TYPES.has(type) && type !== 'quantize' && Array.isArray(range0) && range0.length > 2 && c.interpolate != null
+    && range0.every((v) => typeof v === 'string')
+  ) {
+    // vega-scale resolves an explicit multi-color range array on an
+    // interpolating scale to a piecewise color interpolator. d3's polymap
+    // would pair it against the two-value domain and only use the first two
+    // colors; vega spreads the whole palette across the domain instead.
+    const fn = piecewiseColors(range0 as string[], c.interpolate)
+    s.range([0, 1])
+    const cs = s as ColorScale
+    if (typeof cs.interpolator === 'function') cs.interpolator(fn as unknown as SchemeFn)
+    else if (typeof (cs as any).interpolate === 'function') (cs as any).interpolate(() => fn)
+    cs.interpolator = () => fn as unknown as SchemeFn
   } else {
     s.range(range0 as never)
   }
@@ -446,7 +481,7 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
         }
       }
       const merged = mergeUnionDomain(type, all)
-      if (merged) return merged
+      if (merged && (CONTINUOUS_TYPES.has(type) || type === 'threshold')) return merged
       // discrete union (band/point): the distinct values, sorted per the
       // domain's sort flag
       const present = all.filter((v) => v != null)
@@ -464,7 +499,7 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
       for (const f of fieldsToCollect) {
         for (const val of ctx.dataField(data, f)) all.push(val)
       }
-      if (CONTINUOUS_TYPES.has(type)) {
+      if (CONTINUOUS_TYPES.has(type) || type === 'threshold') {
         if (type === 'time' || type === 'utc') {
           const dates = all.filter(
             (v) => v instanceof Date && Number.isFinite(v.getTime()),
@@ -667,7 +702,8 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string, 
             return quantizeInterpolator(scheme as (t: number) => unknown, Math.max(domainCount, 1)) as unknown[]
           }
           if (scaleType === 'quantile' || scaleType === 'quantize' || scaleType === 'threshold') {
-            return quantizeInterpolator(scheme as (t: number) => unknown, 5) as unknown[]
+            const n = scaleType === 'threshold' ? Math.max(domainCount + 1, 2) : 5
+            return quantizeInterpolator(scheme as (t: number) => unknown, n) as unknown[]
           }
           return entry?.extent ? { __asterScheme: name, __asterExtent: entry.extent } : name
         }

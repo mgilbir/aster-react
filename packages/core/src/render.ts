@@ -1279,7 +1279,11 @@ function attr(name: string, value: unknown): string {
   // Vega's SVG renderer omits a 'transparent' paint value (fill/stroke).
   if (value === 'transparent') return ''
   if (Array.isArray(value)) return ` ${name}="${value.join(',')}"`
-  if (typeof value === 'number') return ` ${name}="${num(value)}"`
+  if (typeof value === 'number') {
+    // vega's SVG renderer coerces an invalid numeric paint to black.
+    if (name === 'fill' || name === 'stroke') return ` ${name}="rgb(0, 0, 0)"`
+    return ` ${name}="${num(value)}"`
+  }
   return ` ${name}="${esc(String(value))}"`
 }
 

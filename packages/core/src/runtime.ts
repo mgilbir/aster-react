@@ -29,7 +29,7 @@ import type {
   SizeSpec,
   VgSpec,
 } from './types.js'
-import { tickFormat } from './scale.js'
+import { tickFormat, scaleFraction, tickValues } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { trellisLayout, measureBounds } from './trellis.js'
@@ -4298,8 +4298,21 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const borderColor0 = (legend as { strokeColor?: string }).strokeColor
     const fillColor0 = (legend as { fillColor?: string }).fillColor
 
-    // Compute tick values using scale.ticks with L/50 as hint
-    const tickNums = scale.ticks ? scale.ticks(L / 50) : []
+    // vega-encode's gradient legend uses
+    //   max(2, 2*floor(gradientLength/100))
+    // as the default tick count, and falls back to the domain endpoints when
+    // automatic label generation yields two or fewer entries.
+    const rawGradCount = (legend as { tickCount?: unknown }).tickCount
+    let gradCount = Math.max(2, 2 * Math.floor(L / 100))
+    if (typeof rawGradCount === 'number') gradCount = rawGradCount
+    else if (rawGradCount && typeof rawGradCount === 'object' && 'signal' in (rawGradCount as Record<string, unknown>)) {
+      const v = ctx.runtime.expr(String((rawGradCount as { signal: string }).signal))({}, ctx.signalParams)
+      if (typeof v === 'number') gradCount = v
+    }
+    let tickNums = tickValues(scale, gradCount)
+    if (tickNums.length < 3 && (legend as { values?: unknown }).values == null && d0 !== d1) {
+      tickNums = [d0, d1]
+    }
     const titleStr0 = String(legend.title ?? '')
     const titlePad0 = (legend as { titlePadding?: number }).titlePadding ?? 5
     const titleH0 = titleStr0.length > 0 ? titleFs0 + titlePad0 : 0
@@ -4322,11 +4335,28 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const legendTimeFormat = legendFormatType === 'time' || scaleType === 'time' || scaleType === 'utc'
     const makeGradientFmt = (defaultFmt: string): ((v: unknown) => string) => {
       const L = locale(undefined)
-      const fmt = resolvedLegendFormat ?? defaultFmt
       if (legendTimeFormat) {
+        const fmt = resolvedLegendFormat ?? defaultFmt
         return (v: unknown) => L.timeFormat(fmt)(v instanceof Date ? v : new Date(Number(v)))
       }
-      return (v: unknown) => L.format(fmt)(typeof v === 'number' ? v : Number(v))
+      if (resolvedLegendFormat) {
+        return (v: unknown) => L.format(resolvedLegendFormat)(typeof v === 'number' ? v : Number(v))
+      }
+      // vega labelFormat() with no explicit specifier delegates to the
+      // scale's locale tick formatter, which chooses decimal precision from
+      // the tick step (e.g. 8.0/8.5/9.0 for a [8,9] domain).
+      return (v: unknown) => tickFormat(L, scale, gradCount)(v)
+    }
+
+    // vega's scaleFraction() builds a positional copy of the scale over the
+    // legend domain, so non-linear scales (log/sqrt/symlog) place labels at
+    // their transformed positions rather than linearly.
+    const gradD0n = typeof d0 === 'number' ? d0 : 0
+    const gradD1n = typeof d1 === 'number' ? d1 : 1
+    const gradientFractionScale = scaleFraction(scale, gradD0n, gradD1n)
+    const gradientFraction = (v: number): number => {
+      const out = gradientFractionScale(v)
+      return typeof out === 'number' && Number.isFinite(out) ? out : 0.5
     }
 
     // --- horizontal gradient strip (top/bottom orient, or direction:horizontal) ---
@@ -4358,7 +4388,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       items.push({ path: `M0,0h${gradientLength}v${thickness}h-${gradientLength}Z`, x: 0, y: titleH0, fill: `url(#${gradientId})`, stroke: gradStrokeColor, strokeWidth: gradStrokeWidth, opacity: gradOpacityProp ?? 1 })
       for (const t of tickNums) {
         const tNum = typeof t === 'number' ? t : 0
-        const perc = d1n !== d0n ? (tNum - d0n) / (d1n - d0n) : 0.5
+        const perc = gradientFraction(tNum)
         items.push({ text: legendFmt(tNum), x: perc * gradientLength, y: titleH0 + thickness + 10, align: 'center', fill: labelColor0, fontSize: labelFs0, ...((legend as { labelLimit?: number }).labelLimit != null ? { limit: (legend as { labelLimit?: number }).labelLimit } : {}), ...(labelOpacity0 != null ? { fillOpacity: labelOpacity0 } : {}) })
       }
       const colorScale = scale as ColorScale
@@ -4443,7 +4473,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const legendFmt = makeGradientFmt(d0n === d1n ? '.6f' : '.1~f')
     for (const t of tickNums) {
       const tNum = typeof t === 'number' ? t : 0
-      const perc = d1n !== d0n ? (tNum - d0n) / (d1n - d0n) : 0.5
+      const perc = gradientFraction(tNum)
       const baselineOffset =
         perc <= 0 ? Math.round(-0.21 * labelFs0)
         : perc >= 1 ? Math.round(0.79 * labelFs0)

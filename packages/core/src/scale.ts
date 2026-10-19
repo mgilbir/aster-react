@@ -713,16 +713,16 @@ export function scaleCopy(scale: SR): SR {
   return s
 }
 
-export function scaleFraction(scale: SR, min: number, max: number): (t: number) => unknown {
+export function scaleFraction(source: SR, min: number, max: number): (t: number) => unknown {
   const delta = max - min
   if (!delta || !Number.isFinite(delta)) {
     return () => 0.5
   } else {
-    let t: string = scale.type
+    let t: string = source.type
     const i = t.indexOf('-')
     t = i < 0 ? t : t.slice(i + 1)
     const s = (scale(t) as unknown as () => SR)().domain([min, max]).range([0, 1])
-    scaleProps.forEach((m) => (scale[m] ? s[m](scale[m]()) : 0))
+    scaleProps.forEach((m) => (source[m] ? s[m](source[m]()) : 0))
     return s
   }
 }
