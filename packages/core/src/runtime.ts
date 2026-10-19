@@ -4361,7 +4361,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       }
     }
     const gradientLength = GL
-    const L = Math.max(0, gradientLength)
+    const L = gradientLength
 
     // Vega numbers gradient defs from a global counter; replicate that so the
     // `url(#gradient_n)` references match the oracle (which runs in-process).
@@ -4480,7 +4480,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         const hLimit = (legend as { titleLimit?: number }).titleLimit
         items.push({ text: titleStr0, x: hX, y: hY, align: hAlign as SceneItem['align'], fill: titleColor0, fontSize: titleFs0, ...(hLimit != null ? { limit: hLimit } : {}), ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
       }
-      items.push({ path: `M0,0h${gradientLength}v${thickness}h-${gradientLength}Z`, x: 0, y: titleH0, fill: `url(#${gradientId})`, stroke: gradStrokeColor, strokeWidth: gradStrokeWidth, opacity: gradOpacityProp ?? 1 })
+      items.push({ path: `M0,0h${gradientLength}v${thickness}h${-gradientLength}Z`, x: 0, y: titleH0, fill: `url(#${gradientId})`, stroke: gradStrokeColor, strokeWidth: gradStrokeWidth, opacity: gradOpacityProp ?? 1 })
       for (const t of tickNums) {
         const tNum = typeof t === 'number' ? t : 0
         const perc = gradientFraction(tNum)
@@ -4533,11 +4533,16 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const titleExtraRight = Math.max(0, titleBoundsRight - outerWidth)
 
     const items: SceneItem[] = []
-    // Title height: 16px when a title is present, 0 otherwise.
-    const titleH = titleStr.length > 0 ? Math.abs(titleFs0) + titlePad0 : 0
+    const titleOrientG = (legend as { titleOrient?: string }).titleOrient ?? 'top'
+    const sideTitleG = titleOrientG === 'left' || titleOrientG === 'right'
+    const bottomTitleG = titleOrientG === 'bottom'
+    const sideTitleW = sideTitleG && titleStr.length > 0 ? Math.abs(titleFs0) + titlePad0 : 0
+    // Title height: the row above the gradient only exists for a top title.
+    const titleH = titleStr.length > 0 && !sideTitleG && !bottomTitleG ? Math.abs(titleFs0) + titlePad0 : 0
+    const titleBottomH = titleStr.length > 0 && bottomTitleG ? Math.abs(titleFs0) + titlePad0 : 0
     const gradStrokeExtra = gradStrokeWidth / 2
-    const boxW = Math.ceil(outerWidth + 2 * gradPad + titleExtraLeft + titleExtraRight)
-    const contentX = gradPad + titleExtraLeft
+    const boxW = Math.ceil(outerWidth + 2 * gradPad + titleExtraLeft + titleExtraRight + sideTitleW)
+    const contentX = gradPad + titleExtraLeft + (titleOrientG === 'left' ? sideTitleW : 0)
     // Legend layout includes label bounds, which can extend below a short
     // gradient (or below the domain when explicit values fall outside it).
     const labelBottom = tickNums.reduce<number>((m, t) => {
@@ -4549,7 +4554,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         : Math.round(0.3 * labelFs0)
       return Math.max(m, gradPad + titleH + (1 - perc) * L + baselineOffset + 2)
     }, 0)
-    const boxH = Math.ceil(Math.max(titleH + L + 2 * gradPad + gradStrokeExtra, labelBottom))
+    const boxH = Math.ceil(Math.max(titleH + titleBottomH + L + 2 * gradPad + gradStrokeExtra, labelBottom))
     // Background box (0,0 to outerWidth, titleH+L) — the legend's own border
     // stroke (legend.strokeColor) insets the rect half a pixel; fillColor
     // paints it.
@@ -4559,7 +4564,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     items.push({ path: gradCRV && gradCRV > 0 ? roundedRectPath(bgXV, bgYV, boxW, boxH, Math.min(gradCRV, boxW / 2, boxH / 2)) : `M${bgXV},${bgYV}h${boxW}v${boxH}h-${boxW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
     // Gradient rect at legend-relative (0, titleH), thickness x L
     items.push({
-      path: `M0,0h${vThickness}v${L}h-${vThickness}Z`,
+      path: `M0,0h${vThickness}v${L}h${-vThickness}Z`,
       x: contentX, y: gradPad + titleH,
       fill: `url(#${gradientId})`,
       stroke: gradStrokeColor,
@@ -4571,7 +4576,30 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const vBase = (legend as { titleBaseline?: string }).titleBaseline ?? 'top'
       const vY = vBase === 'middle' ? Math.round(0.3 * titleFs0) : vBase === 'bottom' ? Math.round(-0.21 * titleFs0) : Math.round(0.79 * titleFs0)
       const vLimit = (legend as { titleLimit?: number }).titleLimit
-      items.push({ text: titleStr, x: vX + contentX, y: vY + gradPad, align: vAlign as SceneItem['align'], fill: titleColor0, fontSize: titleFs0, ...(vLimit != null ? { limit: vLimit } : {}), ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
+      if (sideTitleG) {
+        items.push({
+          text: titleStr,
+          x: titleOrientG === 'left' ? gradPad : gradPad + outerWidth + titlePad0,
+          y: gradPad + L / 2,
+          angle: titleOrientG === 'left' ? -90 : 90,
+          align: 'center',
+          fill: titleColor0, fontSize: titleFs0,
+          ...(vLimit != null ? { limit: vLimit } : {}),
+          ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}),
+        })
+      } else if (bottomTitleG) {
+        items.push({
+          text: titleStr,
+          x: vX + contentX,
+          y: gradPad + L + Math.round(0.79 * titleFs0) + titlePad0,
+          align: vAlign as SceneItem['align'],
+          fill: titleColor0, fontSize: titleFs0,
+          ...(vLimit != null ? { limit: vLimit } : {}),
+          ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}),
+        })
+      } else {
+        items.push({ text: titleStr, x: vX + contentX, y: vY + gradPad, align: vAlign as SceneItem['align'], fill: titleColor0, fontSize: titleFs0, ...(vLimit != null ? { limit: vLimit } : {}), ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
+      }
     }
     // Labels. Vega positions each label at (1 - perc) * L and then shifts it by
     // the text baseline offset (labels flush against the gradient edges get

@@ -2384,6 +2384,9 @@ function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null, fie
     const ch2 = def.channel === 'x' ? 'x2' : def.channel === 'y' ? 'y2' : null
     const def2 = ch2 ? fields.find((f) => f.channel === ch2 && f.field) : undefined
     if (def2) {
+      // an explicit title on either endpoint wins over the joined default
+      if (def2.title !== undefined) return def2.title
+      if (def.title !== undefined) return def.title
       const t1 = channelTitle(def)
       const t2 = channelTitle(def2)
       if (typeof t1 === 'string' && typeof t2 === 'string') return `${t1}, ${t2}`
