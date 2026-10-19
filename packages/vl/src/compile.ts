@@ -1903,6 +1903,12 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         : positionalDomain(def, dataName, mark, orient, fields),
       range: effRange,
     }
+    // config.scale.xReverse flips every x scale (band included);
+    // config.scale.continuousPadding sets vega's pixel domain padding.
+    if (channel === 'x' && userScaleCfg?.xReverse === true && def.scale?.reverse == null) sc.reverse = true
+    if (isContinuousScaleType(type) && userScaleCfg?.continuousPadding != null && def.scale?.padding == null) {
+      sc.padding = userScaleCfg.continuousPadding as number
+    }
     // a continuous positional scale reverses for sort:descending (a discrete
     // scale carries the order in its domain sort instead)
     if (def.sort === 'descending' && type !== 'band' && type !== 'point' && type !== 'ordinal' && type !== 'bin-ordinal') sc.reverse = true
@@ -2779,7 +2785,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           }
         } else {
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
-          update.width = { value: C.bandSize }
+          // a discrete point scale centers a default-step bar (18px); a
+          // continuous measure uses the continuous band size
+          update.width = { value: sc === 'point' ? C.defaultStep : C.bandSize }
         }
       }
       const y2DefB = fields.find((f) => f.channel === 'y2' && f.field)
@@ -2859,7 +2867,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           }
         } else {
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
-          update.height = { value: C.bandSize }
+          update.height = { value: sc === 'point' ? C.defaultStep : C.bandSize }
         }
       }
       if (xDef) {
