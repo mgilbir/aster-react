@@ -1452,10 +1452,14 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
   // channel roles shared by the pipeline stages below
   const yDef = fields.find((f) => f.channel === 'y')
   const xDef = fields.find((f) => f.channel === 'x')
-  const stackable = mark === 'bar' || mark === 'area'
-  const measureChannel = orient === 'vertical' ? 'y' : 'x'
-  const dimensionChannel = orient === 'vertical' ? 'x' : 'y'
-  const measure = orient === 'vertical' ? yDef : xDef
+  const stackable = mark !== 'arc'
+  // an explicit stack on x/y decides the measure axis even for marks with no
+  // natural orientation (point/circle/square)
+  const explicitStackDef = fields.find((f) => (f.channel === 'x' || f.channel === 'y')
+    && f.stack != null && f.stack !== false && f.stack !== 'wiggle')
+  const measureChannel = explicitStackDef ? explicitStackDef.channel : orient === 'vertical' ? 'y' : 'x'
+  const dimensionChannel = orient === 'vertical' && !explicitStackDef ? 'x' : measureChannel === 'y' ? 'x' : 'y'
+  const measure = measureChannel === 'y' ? yDef : xDef
   const dimension = dimensionChannel === 'x' ? xDef : yDef
   const continuousDimension = dimension != null && !isDiscreteType(dimension.type)
 
@@ -2181,8 +2185,11 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
 }
 
 function isStacked(def: FieldDef, mark: string, orient: string, allFields?: FieldDef[]): boolean {
-  if (mark !== 'bar' && mark !== 'area') return false
-  const measureChannel = orient === 'vertical' ? 'y' : 'x'
+  // an explicit stack applies to any mark (the sweep's point stack cases);
+  // bar/area additionally stack by default.
+  const explicit = def.stack != null && def.stack !== false && def.stack !== 'wiggle'
+  if (mark !== 'bar' && mark !== 'area' && !explicit) return false
+  const measureChannel = explicit ? def.channel : orient === 'vertical' ? 'y' : 'x'
   if (def.channel !== measureChannel) return false
   if (def.type !== 'quantitative' || def.aggregate || def.bin) return false
   // explicit stack false/null opts out; 'wiggle' compiles to a plain
@@ -2924,8 +2931,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     update.ariaRoleDescription = { value: mark }
     update.shape = { value: mark }
     if (markSize != null) update.size = { value: markSize }
-    if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
-    if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef) }
+    // a stacked point sits at the stacked end of its measure
+    if (xDef) update.x = { scale: 'x', field: isStacked(xDef, mark, orient, fields) ? `${xDef.field}_end` : aggFieldName(xDef) }
+    if (yDef) update.y = { scale: 'y', field: isStacked(yDef, mark, orient, fields) ? `${yDef.field}_end` : aggFieldName(yDef) }
     if (sizeDef) update.size = { scale: 'size', field: aggFieldName(sizeDef) }
     if (strokeWidthDef) update.strokeWidth = { scale: 'strokeWidth', field: aggFieldName(strokeWidthDef) }
     if (shapeDef && !filled) update.shape = { scale: 'shape', field: aggFieldName(shapeDef) }
