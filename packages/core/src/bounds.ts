@@ -737,13 +737,17 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
     const leaf = it as SceneItem
     if ((leaf as Record<string, unknown>)._domain) continue
     if ((leaf as Record<string, unknown>)._grid) continue
+    // vega's bound pass skips overlap-hidden (opacity 0) labels: the
+    // invisible huge tick labels of a temporal/numeric x axis must not widen
+    // the view, while the visible end label's overhang does.
+    if (leaf.opacity === 0) continue
     const bb = new Bounds()
     // Guide leaves carry vega's raw item positions (the baseline shift is the
     // renderer's bake), so boundText's baseline-aware boxing applies directly.
     boundLeaf(bb, leaf)
     bb.translate(-(meta?.translate ?? 0.5), -(meta?.translate ?? 0.5))
     b.union(bb)
-    tickLabelBounds.union(bb)
+    if (!(leaf as Record<string, unknown>)._title) tickLabelBounds.union(bb)
   }
   // spine rect per orient; s = tick/label extent beyond the axis line,
   // clamped by the axis minExtent/maxExtent (vega axisLayout:

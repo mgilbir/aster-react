@@ -456,12 +456,13 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
   // carry them (e.g. config.point.width / x2 / startAngle) are inert in vega.
   const isSymbol = String(m.type) === 'symbol'
   const isRectLike = String(m.type) === 'rect' || String(m.type) === 'bar' || String(m.type) === 'tick'
+  // A rect understands x2/y2 (they override width/height) and the corner
+  // radii; only the non-rect geometry and text channels are inert.
   const rectInert = new Set([
-    'width', 'height', 'x2', 'y2', 'startAngle', 'endAngle', 'innerRadius',
-    'outerRadius', 'radius', 'radius2', 'theta', 'theta2', 'padAngle',
-    'cornerRadiusTopLeft', 'cornerRadiusTopRight', 'cornerRadiusBottomLeft',
-    'cornerRadiusBottomRight', 'text', 'url', 'align', 'baseline', 'dx', 'dy',
-    'limit', 'lineHeight', 'font', 'fontSize', 'fontStyle', 'fontWeight',
+    'startAngle', 'endAngle', 'innerRadius', 'outerRadius', 'radius',
+    'radius2', 'theta', 'theta2', 'padAngle', 'text', 'url', 'align',
+    'baseline', 'dx', 'dy', 'limit', 'lineHeight', 'font', 'fontSize',
+    'fontStyle', 'fontWeight',
   ])
   const symbolInert = new Set([
     'width', 'height', 'x2', 'y2', 'startAngle', 'endAngle', 'innerRadius',
@@ -471,9 +472,18 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
     'align', 'baseline', 'dx', 'dy', 'limit', 'lineHeight', 'font',
     'fontSize', 'fontStyle', 'fontWeight',
   ])
+  // vega runs adjustSpatial on each encode block separately: a default that
+  // lands in `enter` (style/config defaults are plain values) is resolved
+  // against the enter positions only. An update-only mark therefore does not
+  // see a style x2/y2/width/height (it has no enter x to pair with), while an
+  // enter-encoded mark does — probed: config.style.rect.x2 affects a Vega
+  // enter mark but not a Vega-Lite update mark.
+  const updateOnly = enc.enter == null
+  const spatialKeys = new Set(['x', 'y', 'x2', 'y2', 'xc', 'yc', 'width', 'height'])
   for (const { props, pairGuard } of sources) {
     for (const [k, v] of Object.entries(props)) {
       if (k === 'name' || k === 'interactive' || k === 'zindex' || k === 'style') continue
+      if (updateOnly && spatialKeys.has(k)) continue
       if (isRule && (k === 'xc' || k === 'yc')) continue
       if (isSymbol && symbolInert.has(k)) continue
       if (isRectLike && rectInert.has(k)) continue

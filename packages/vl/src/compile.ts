@@ -288,8 +288,8 @@ function compileLayered(spec: VLSpec): VLSpec {
       isObject(p.markRaw) ? (p.markRaw.strokeWidth as number | undefined) : undefined,
     )) {
       // one legend per scale channel (vega resolves shared legends across layers)
-      const ch = lg.fill ?? lg.stroke ?? lg.shape ?? lg.size ?? lg.opacity
-      if (typeof ch === 'string' && legends.some((x) => (x.fill ?? x.stroke ?? x.shape ?? x.size ?? x.opacity) === ch)) continue
+      const ch = lg.fill ?? lg.stroke ?? lg.shape ?? lg.size ?? lg.opacity ?? lg.strokeWidth
+      if (typeof ch === 'string' && legends.some((x) => (x.fill ?? x.stroke ?? x.shape ?? x.size ?? x.opacity ?? x.strokeWidth) === ch)) continue
       if (!legends.some((x) => JSON.stringify(x) === JSON.stringify(lg))) legends.push(lg)
     }
   }
@@ -692,7 +692,7 @@ function renameDataRefs(node: unknown, map: Map<string, string>): void {
   }
 }
 
-const SCALE_CHANNELS = ['x', 'y', 'color', 'size', 'opacity', 'shape', 'theta', 'xOffset', 'yOffset']
+const SCALE_CHANNELS = ['x', 'y', 'color', 'size', 'opacity', 'shape', 'strokeWidth', 'theta', 'xOffset', 'yOffset']
 
 /** Prefix a unit's scale names and rewrite all references. */
 function prefixScaleRefs(node: unknown, prefix: string): void {
@@ -1182,7 +1182,13 @@ function parseChannel(channel: string, def: unknown): FieldDef | null {
     }
     return null
   }
-  const type = normalizeType(raw.type, raw)
+  const type0 = normalizeType(raw.type, raw)
+  // count/distinct/valid/missing always emit a number regardless of the
+  // source field type (vega-lite warns and uses quantitative) — this drives
+  // the scale type and the toNumber cast.
+  const type = raw.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(String(raw.aggregate))
+    ? 'quantitative'
+    : type0
   return {
     channel,
     field: raw.field as string,
@@ -1594,6 +1600,34 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     if (hasCount) fieldsOut.push({ op: 'count', as: '__count', field: null })
     if (fieldsOut.length || groupby.length) {
       pipeline.push({ type: 'aggregate', groupby, ops: fieldsOut.map((o) => o.op), fields: fieldsOut.map((o) => o.field ?? null), as: fieldsOut.map((o) => o.as) })
+      // vega-lite filters invalid values AFTER the aggregate: a variance-family
+      // aggregate over a singleton group yields undefined, and the filter then
+      // drops the row (which is why the oracle's scales go NaN). Filtering
+      // before the aggregate would let the raw rows through.
+      const checks: string[] = []
+      const seenCheck = new Set<string>()
+      const addCheck = (name: string): void => {
+        if (seenCheck.has(name)) return
+        seenCheck.add(name)
+        const q = JSON.stringify(name)
+        checks.push(`isValid(datum[${q}]) && isFinite(+datum[${q}])`)
+      }
+      for (const f of fields) {
+        if (!f.field || f.bin) continue
+        if (f.aggregate) {
+          // only a QUANTITATIVE channel's aggregate output takes part in the
+          // invalid filter (a nominal field aggregated with average emits
+          // `average_c`, and a temporal field aggregated with stdev emits
+          // `stdev_t` — upstream filters neither — probed)
+          // scale/legend-bearing channels feed the filter; order/text only
+          // sort or label, and vega-lite does not filter their aggregate
+          // output (probed: order stderr keeps its undefined rows).
+          if (f.aggregate !== 'count' && f.type === 'quantitative' && SCALE_CHANNELS.includes(f.channel)) addCheck(aggregateAs(f))
+        } else if (f.type === 'quantitative' || f.type === 'temporal') {
+          addCheck(aggFieldName(f))
+        }
+      }
+      if (checks.length) pipeline.push({ type: 'filter', expr: checks.join(' && ') })
     }
     // binned pipelines filter invalid bins
     if (binFields.length) {
@@ -1849,6 +1883,9 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         : positionalDomain(def, dataName, mark, orient, fields),
       range: effRange,
     }
+    // a continuous positional scale reverses for sort:descending (a discrete
+    // scale carries the order in its domain sort instead)
+    if (def.sort === 'descending' && type !== 'band' && type !== 'point' && type !== 'ordinal' && type !== 'bin-ordinal') sc.reverse = true
     const measureChannel = orient === 'vertical' ? 'y' : 'x'
     // rect marks with two discrete channels (heatmaps) use unpadded bands
     const otherChannel = channel === 'x' ? 'y' : 'x'
@@ -1924,6 +1961,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         type: 'point',
         domain: sortedDomain(sizeDef, dataName),
         range: [4, 361],
+        ...(sizeDef.sort === 'descending' ? { reverse: true } : {}),
       })
     } else {
       const sc: ScaleSpec = {
@@ -1932,6 +1970,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         domain: sizeDef.scale?.domain ?? { data: dataName, field: aggFieldName(sizeDef) },
         // line marks map size onto stroke width [1,4]; symbol marks onto area
         range: sizeDef.scale?.range ?? (mark === 'line' ? [1, 4] : [4, 361]),
+        reverse: sizeDef.sort === 'descending' ? true : undefined,
         zero: true,
       }
       if (sizeDef.scale) {
@@ -1942,6 +1981,18 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       }
       scales.push(sc)
     }
+  }
+  // strokeWidth scale
+  const strokeWidthDef = fields.find((f) => f.channel === 'strokeWidth' && f.field)
+  if (strokeWidthDef) {
+    scales.push({
+      name: 'strokeWidth',
+      type: 'linear',
+      domain: strokeWidthDef.scale?.domain ?? { data: dataName, field: aggFieldName(strokeWidthDef) },
+      range: strokeWidthDef.scale?.range ?? [1, 4],
+      reverse: strokeWidthDef.sort === 'descending' ? true : undefined,
+      zero: false,
+    })
   }
   // opacity scale
   const opacityDefS = fields.find((f) => f.channel === 'opacity' && f.field)
@@ -2045,7 +2096,9 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         // vega-lite sets the colorspace for continuous color scales (probed:
         // interpolate hcl on ramp/scheme/diverging alike)
         interpolate: 'hcl',
-        ...(cs.reverse !== undefined ? { reverse: Boolean(cs.reverse) } : {}),
+        ...(cs.reverse !== undefined
+          ? { reverse: Boolean(cs.reverse) }
+          : colorDef.sort === 'descending' ? { reverse: true } : {}),
         ...(cs.domainMin !== undefined ? { domainMin: cs.domainMin } : {}),
         ...(cs.domainMax !== undefined ? { domainMax: cs.domainMax } : {}),
         ...(cs.domainMid !== undefined ? { domainMid: cs.domainMid } : {}),
@@ -2146,29 +2199,36 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
     const cfgChannelAxis = isObject(config?.[def.channel === 'x' ? 'axisX' : 'axisY'])
       ? (config![def.channel === 'x' ? 'axisX' : 'axisY'] as Record<string, unknown>)
       : {}
+    const sc = scaleByName.get(scaleName ?? def.channel)!
+    const axisBand = sc.type === 'band' && isObject(config?.axisBand)
+      ? (config!.axisBand as Record<string, unknown>)
+      : undefined
+    // config.axis seeds both channels; config.axisX/axisY override it;
+    // config.axisBand overrides both for band scales; the channel's own axis
+    // definition wins last (vega-lite axis config cascade).
     const userAxis: Record<string, unknown> | undefined = {
       ...cfgAxis,
       ...cfgChannelAxis,
+      ...(axisBand ?? {}),
       ...(def.axis ?? {}),
     }
     if (userAxis.disable === true) continue
     const configTitleSupplied = (cfgAxis.title !== undefined || cfgChannelAxis.title !== undefined)
       && (!isObject(def.axis) || (def.axis as Record<string, unknown>).title === undefined)
     if (configTitleSupplied) delete (userAxis as Record<string, unknown>).title
-    const sc = scaleByName.get(scaleName ?? def.channel)!
-    // Vega's axisBand block is consulted before config.axis for band scales,
-    // so a config tickOffset (axis/axisX/axisY) does not override it. An
-    // explicit axis definition still wins.
+    // Vega's axisBand block supplies the band tickOffset even though
+    // config.axis/axisX/axisY are ignored for it. An explicit axis wins.
     if (sc.type === 'band' && (def.axis == null || (def.axis as Record<string, unknown>).tickOffset === undefined)) {
-      delete (userAxis as Record<string, unknown>).tickOffset
+      if (axisBand?.tickOffset !== undefined) userAxis.tickOffset = axisBand.tickOffset
+      else delete (userAxis as Record<string, unknown>).tickOffset
     }
-    // vega-lite does not inherit config.axis.values into compiled axes.
+    // vega-lite does not inherit config.axis/axisBand values into compiled axes.
     if (def.axis == null || (def.axis as Record<string, unknown>).values === undefined) {
       delete (userAxis as Record<string, unknown>).values
     }
     const grid = (userAxis?.grid as boolean | undefined) ?? (isContinuousScaleType(sc.type) && !def.bin)
     const tickCountSignal = def.channel === 'x' ? { signal: 'ceil(width/40)' } : { signal: 'ceil(height/40)' }
-    const orientSide = def.channel === 'x' ? 'bottom' : 'left'
+    const orientSide = typeof userAxis?.orient === 'string' ? userAxis.orient : def.channel === 'x' ? 'bottom' : 'left'
     const gridScale = def.channel === 'x'
       ? (gridScaleOverride ?? (scaleByName.get('y') ? 'y' : undefined))
       : scaleByName.get('x')
@@ -2214,15 +2274,6 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       zindex: 0,
     }
     if (title !== null) labelAxis.title = title
-    // vega-lite merges config.axisBand into band-scale axis definitions
-    // (probed: the def carries the block's properties, user def winning)
-    const axisBand = isObject(config?.axisBand) ? (config!.axisBand as Record<string, unknown>) : undefined
-    if (sc.type === 'band' && axisBand) {
-      for (const [k, v] of Object.entries(axisBand)) {
-        if (k === 'grid' || k === 'title' || k === 'orient' || k === 'scale') continue
-        if (labelAxis[k] === undefined) labelAxis[k] = v
-      }
-    }
     if (isContinuousScaleType(sc.type)) {
       if (def.channel === 'x') labelAxis.labelFlush = true
       labelAxis.labelOverlap = sc.type === 'log' ? 'greedy' : true
@@ -2247,11 +2298,25 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       // an explicit labelAngle replaces the default nominal-x rotation
       const userLabelAngle = (userAxis as Record<string, unknown> | null | undefined)?.labelAngle
       if (userLabelAngle !== undefined) {
-        labelAxis.labelAngle = userLabelAngle
-        if (userLabelAngle === 0) labelAxis.labelBaseline = 'top'
+        // vega-lite normalizes negative angles into [0,360) and derives the
+        // label anchor from the angle (probed: 8 → left/top, 90 →
+        // left/middle, 270/-90 → right/middle, 356 → right/top).
+        const norm = typeof userLabelAngle === 'number' && userLabelAngle < 0 ? userLabelAngle + 360 : userLabelAngle
+        ;(userAxis as Record<string, unknown>).labelAngle = norm
+        labelAxis.labelAngle = norm
+        if (norm === 0) {
+          labelAxis.labelBaseline = 'top'
+        } else if (norm === 90 || norm === 270) {
+          labelAxis.labelBaseline = 'middle'
+          labelAxis.labelAlign = norm === 90 ? 'left' : 'right'
+        } else {
+          labelAxis.labelBaseline = 'top'
+          labelAxis.labelAlign = typeof norm === 'number' && norm < 90 ? 'left' : 'right'
+        }
       } else {
         // vega-lite 6 rotates nominal x labels
-        labelAxis.labelAlign = 'right'
+        // an orient:top axis anchors its rotated labels on the other side
+        labelAxis.labelAlign = orientSide === 'bottom' || orientSide === 'right' ? 'right' : 'left'
         labelAxis.labelAngle = 270
         labelAxis.labelBaseline = 'middle'
       }
@@ -2324,11 +2389,18 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     const filled = mark === 'circle' || mark === 'square'
       || (mark === 'point' && markFilled === true)
       || (mark === 'arc' && markFilled !== false)
-    const colorTimeUnitSymbol = colorDef.timeUnit != null && colorDef.timeUnit !== 'year'
+    // only a cyclic (discrete) time unit switches the color legend from a
+    // gradient to symbols; year/week/hours/... stay continuous (probed:
+    // quantitative color with month/day/quarter → symbol, every other unit →
+    // gradient).
+    const colorTimeUnitSymbol = colorDef.timeUnit != null
+      && ['month', 'day', 'quarter'].includes(String(colorDef.timeUnit))
     const colorDiscreteScale = ['quantile', 'quantize', 'threshold'].includes(colorDef.scale?.type as string)
     const colorContinuous = (!isDiscreteType(colorDef.type)
       || (colorDef.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(colorDef.aggregate)))
       && !colorTimeUnitSymbol && !colorDiscreteScale
+    // legend.type:'symbol' forces a symbol legend even on a continuous scale
+    const colorGradient = colorContinuous && userLegend.type !== 'symbol'
     if (colorTimeUnitSymbol) lg.type = 'symbol'
     if (colorDef.scale?.type === 'quantile' || colorDef.scale?.type === 'threshold') lg.labelOverlap = 'greedy'
     const m = mark as string
@@ -2354,11 +2426,11 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     } else if (m === 'arc') {
       // an unfilled arc paints by stroke: the legend is a stroke legend
       lg.stroke = 'color'
-      if (!colorContinuous) lg.symbolType = 'circle'
+      if (!colorGradient) lg.symbolType = 'circle'
       else lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
     } else if (m === 'point' || m === 'line' || m === 'text') {
       lg.stroke = 'color'
-      if (!colorContinuous) {
+      if (!colorGradient) {
         lg.symbolType = mark === 'line' ? 'stroke' : 'circle'
         lg.encode = { symbols: { update: { fill: { value: 'transparent' }, opacity: { value: reducedOpacity ?? 1 } } } }
       } else {
@@ -2368,7 +2440,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     } else {
       lg.fill = 'color'
       if (mark === 'bar' || mark === 'rect') lg.symbolType = 'square'
-      if (colorContinuous) {
+      if (colorGradient) {
         lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
         if (markOpacity != null) lg.encode = { gradient: { update: { opacity: { value: markOpacity } } } }
       } else {
@@ -2383,6 +2455,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     applyTimeUnitLegend(lg, colorDef, userLegend)
     for (const [k, v] of Object.entries(userLegend)) {
       if (k === 'title') continue
+      if (k === 'type' && v === 'gradient') continue
       lg[k] = v
     }
     // top/bottom gradients measure along the chart width
@@ -2397,8 +2470,19 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       if (k === 'title' || k === 'encode' || k === 'fill' || k === 'stroke' || k === 'shape' || k === 'size' || k === 'opacity') continue
       if (isGradient ? (k.startsWith('symbol') || k === 'gradientStroke') : k.startsWith('gradient')) delete lg[k]
     }
-    // top/bottom legends lay their entries out horizontally
+    // top/bottom legends lay their entries out horizontally; a corner-oriented
+    // gradient is horizontal with vega-lite's fixed 100px length, and an
+    // explicit direction:horizontal on any other orient also uses 100px.
+    if (userLegend.direction === 'horizontal' && lg.orient !== 'top' && lg.orient !== 'bottom'
+      && !(typeof lg.orient === 'string' && /^(top|bottom)-(left|right)$/.test(lg.orient))
+      && userLegend.gradientLength == null && 'gradientLength' in lg) {
+      lg.gradientLength = 100
+    }
     if (lg.orient === 'bottom' || lg.orient === 'top') lg.direction = lg.direction ?? 'horizontal'
+    if (typeof lg.orient === 'string' && /^(top|bottom)-(left|right)$/.test(lg.orient) && 'gradientLength' in lg) {
+      lg.direction = lg.direction ?? 'horizontal'
+      if (userLegend.gradientLength == null) lg.gradientLength = 100
+    }
     push('color', lg)
   }
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
@@ -2430,6 +2514,28 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     applyTimeUnitLegend(shapeLg, shapeDefL, shapeDefL.legend ?? {})
     forwardLegendProps(shapeDefL.legend ?? {}, shapeLg, false)
     push('shape', shapeLg)
+  }
+  const strokeWidthLegendDef = fields.find((f) => f.channel === 'strokeWidth' && f.field)
+  if (strokeWidthLegendDef && strokeWidthLegendDef.legend !== null && !legendSuppressed(strokeWidthLegendDef)) {
+    // the symbol follows the mark: a line's is a stroke sample, a filled
+    // point keeps the default fill, an unfilled point a transparent one.
+    const swUpdate: Record<string, unknown> =
+      mark === 'line'
+        ? { stroke: { value: markStroke ?? C.blue } }
+        : mark === 'bar'
+          ? { fill: { value: C.blue } }
+          : mark === 'point'
+            ? { fill: { value: 'transparent' }, stroke: { value: markStroke ?? C.blue }, opacity: { value: markOpacity ?? reducedOpacity ?? 1 } }
+            : { fill: { value: C.blue }, stroke: { value: markStroke ?? C.blue }, opacity: { value: markOpacity ?? reducedOpacity ?? 1 } }
+    const swLg: Record<string, unknown> = {
+      strokeWidth: 'strokeWidth',
+      symbolType: mark === 'line' ? 'stroke' : mark === 'bar' || mark === 'square' ? 'square' : 'circle',
+      title: legendTitle(strokeWidthLegendDef, strokeWidthLegendDef.legend ?? {}),
+      encode: { symbols: { update: swUpdate } },
+    }
+    applyTimeUnitLegend(swLg, strokeWidthLegendDef, strokeWidthLegendDef.legend ?? {})
+    forwardLegendProps(strokeWidthLegendDef.legend ?? {}, swLg, false)
+    push('strokeWidth', swLg)
   }
   const opacityLegendDef = fields.find((f) => f.channel === 'opacity' && f.field)
   if (opacityLegendDef && opacityLegendDef.legend !== null && !legendSuppressed(opacityLegendDef)) {
@@ -2488,6 +2594,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
   const shapeDef = fields.find((f) => f.channel === 'shape' && f.field)
   const opacityDef = fields.find((f) => f.channel === 'opacity' && f.field)
+  const strokeWidthDef = fields.find((f) => f.channel === 'strokeWidth' && f.field)
   const update: Record<string, unknown> = {}
   const xOffsetPresent = fields.some((f) => f.channel === 'xOffset' && f.field)
   const yOffsetPresent = fields.some((f) => f.channel === 'yOffset' && f.field)
@@ -2746,6 +2853,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
     if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef) }
     if (sizeDef) update.size = { scale: 'size', field: aggFieldName(sizeDef) }
+    if (strokeWidthDef) update.strokeWidth = { scale: 'strokeWidth', field: aggFieldName(strokeWidthDef) }
     if (shapeDef && !filled) update.shape = { scale: 'shape', field: aggFieldName(shapeDef) }
     void 0
   } else if (mark === 'line') {

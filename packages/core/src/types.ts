@@ -298,6 +298,8 @@ export interface CompiledLegend {
   shape?: string
   opacity?: string
   strokeDash?: string
+  /** Stroke-width channel scale (a string) — distinct from the numeric border width. */
+  strokeWidth?: string | number
   orient?: string
   direction?: string
   columns?: number

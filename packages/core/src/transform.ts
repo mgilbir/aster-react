@@ -532,30 +532,36 @@ export function aggregateGroup(rows: Row[], groupby: string[], fields: (string |
       return
     }
     // the exponential measures fold over the rows in order with the ratio
-    // from `aggregate_params` (vega Transform init(m, r); VL emits none, so
-    // the ratio is null → 0 and the fold collapses to the last valid value)
+    // from `aggregate_params` (vega Transform init(m, r)). VL emits no
+    // aggregate_params, and vega's arithmetic then yields NaN (undefined is
+    // not null: `undefined ** n` is NaN, `null ** n` is 0), so the aggregate
+    // value is invalid and the post-aggregate filter drops every row.
     if (op === 'exponential' || op === 'exponentialb') {
-      const r = Number(aggregateParams?.[i] ?? 0) || 0
+      const r = aggregateParams?.[i]
+      const rr = r as unknown as number
       let exp = 0
       let valid = 0
       for (const r2 of rows) {
         const v = field == null ? undefined : r2[field]
         if (v == null || !Number.isFinite(Number(v))) continue
         valid++
-        exp = r * exp + Number(v)
+        exp = rr * exp + Number(v)
       }
+      const oneMinusR = 1 - rr
       row[as[i] ?? `${op}_${field}`] = op === 'exponential'
-        ? exp * (1 - r) / (1 - Math.pow(r, valid))
-        : exp * (1 - r)
+        ? exp * oneMinusR / (1 - Math.pow(rr, valid))
+        : exp * oneMinusR
       return
     }
     const values = field == null ? [] : fieldValues(rows, field)
     const rawValues = field == null ? [] : rows.map((r) => r[field])
-    const present = rawValues.filter((v) => v != null && !(typeof v === 'number' && !Number.isFinite(v)))
+    const present = rawValues.filter((v) => v != null && v !== '' && !(typeof v === 'number' && !Number.isFinite(v)))
     // String/date-bearing ops use the raw values (vega's AggregateOps measure
     // distinguishes numeric-only ops from valid/min/max/distinct).
     if (op === 'distinct') {
-      row[as[i] ?? `distinct_${field}`] = new Set(present).size
+      // vega's distinct reads the group's stored TUPLES and stringifies every
+      // value (`get(v) + ''`), so NaN/null count as their own distinct values.
+      row[as[i] ?? `distinct_${field}`] = new Set(rawValues.map((v) => String(v))).size
       return
     }
     if (op === 'valid') {
@@ -563,7 +569,9 @@ export function aggregateGroup(rows: Row[], groupby: string[], fields: (string |
       return
     }
     if (op === 'missing') {
-      row[as[i] ?? `missing_${field}`] = rows.length - present.length
+      // vega counts only null/empty-string as missing; NaN is neither valid
+      // nor missing.
+      row[as[i] ?? `missing_${field}`] = rawValues.filter((v) => v == null || v === '').length
       return
     }
     if (op === 'min' || op === 'max') {

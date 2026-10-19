@@ -29,7 +29,7 @@ import type {
   SizeSpec,
   VgSpec,
 } from './types.js'
-import { tickFormat, scaleFraction, tickValues, tickCount } from './scale.js'
+import { tickFormat, scaleFraction, tickValues, tickCount, isContinuous } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { trellisLayout, measureBounds } from './trellis.js'
@@ -4264,6 +4264,7 @@ function legendContentWidth(ctx: EvalContext): number {
 function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
   // Resolve the scale name (fill/stroke color legends, size legends, or shape legends).
   const scaleName = legend.shape ?? legend.stroke ?? legend.fill ?? legend.size ?? legend.opacity
+    ?? (typeof legend.strokeWidth === 'string' ? legend.strokeWidth : undefined)
   if (!scaleName) return null
   // Legend labels honor formatType/format; a Vega-Lite timeUnit legend emits
   // the format as a timeUnitSpecifier(...) signal, which must be resolved to
@@ -4288,6 +4289,15 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       return L.timeFormat(typeof fmt === 'string' ? fmt : '%b %d, %Y')(d)
     }
     if (fmt !== undefined) return L.format(String(fmt))(typeof v === 'number' ? v : Number(v))
+    // A continuous legend without an explicit format delegates to the scale's
+    // locale span formatter (vega labelFormat → tickFormat), whose precision
+    // derives from the tick step — e.g. a degenerate [1,1] domain formats as
+    // '1.000000' rather than '1'.
+    if (isContinuous(ctx.scaleTypes.get(scaleName) ?? '') && scale) {
+      const rawCount = (legend as { tickCount?: unknown }).tickCount
+      const count = typeof rawCount === 'number' ? rawCount : 5
+      return tickFormat(L, scale, count)(v)
+    }
     return String(v)
   }
   const scale = ctx.scales.get(scaleName)
@@ -4375,6 +4385,9 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     else if (tickNums.length < 3 && legendValues == null && d0 !== d1) {
       tickNums = [d0, d1]
     }
+    // An all-invalid (NaN) domain has no generated ticks; vega still emits a
+    // single 'NaN' label at the gradient midpoint.
+    if (tickNums.length === 0 && legendValues == null && Number.isNaN(Number(d0))) tickNums = [NaN]
     const titleStr0 = String(legend.title ?? '')
     const titlePad0 = (legend as { titlePadding?: number }).titlePadding ?? 5
     const titleH0 = titleStr0.length > 0 ? titleFs0 + titlePad0 : 0
@@ -4608,15 +4621,35 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // Legend tick values (vega: labelValues(scale, 5)); drop the first value
     // when it maps to size zero (vega#717).
     const sizeLegendValues = (legend as { values?: unknown }).values
+    let sizeTickCount = 5
+    const sizeTickMin = (legend as { tickMinStep?: number }).tickMinStep
+    const sizeCounted = tickCount(sizeScale, sizeTickCount, typeof sizeTickMin === 'number' ? sizeTickMin : undefined)
+    if (typeof sizeCounted === 'number') sizeTickCount = sizeCounted
     let ticks = (Array.isArray(sizeLegendValues)
       ? sizeLegendValues
-      : ((sizeScale as { ticks?: (n?: number) => unknown[] }).ticks?.(5) ?? [])) as unknown[]
+      : ((sizeScale as { ticks?: (n?: number) => unknown[] }).ticks?.(sizeTickCount) ?? [])) as unknown[]
     if (ticks.length > 1 && Number(sizeScale(ticks[0])) === 0) ticks = ticks.slice(1)
-    if (ticks.length === 0) return null
+    if (ticks.length === 0) {
+      // An empty (all-invalid) size legend still renders its title box: vega
+      // keeps the legend group with zero entries and a title-width background.
+      const titleStr = String(legend.title ?? '')
+      const titleFs = (legend as { titleFontSize?: number }).titleFontSize ?? 11
+      const titleColor = (legend as { titleColor?: string }).titleColor ?? '#000'
+      const titleOpacity = (legend as { titleOpacity?: number }).titleOpacity
+      const w = titleStr ? nominalTextWidth(titleStr, Math.abs(titleFs), 'bold') : 0
+      const h = titleStr ? Math.abs(titleFs) : 0
+      const items: SceneItem[] = [{ path: `M0,0h${w}v${h}h-${w}Z`, x: 0, y: 0 }]
+      if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: titleColor, fontSize: titleFs, fontWeight: 'bold', ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
+      return { marktype: 'group', role: 'legend', x: 0, y: 0, width: w, height: h, items }
+    }
     const sizeDomain = sizeScale.domain() as number[]
     const sizeIsTime = (legend as { formatType?: unknown }).formatType === 'time'
-    const sizeDegenerate = !sizeIsTime && sizeDomain.length >= 2 && (sizeDomain[0] === sizeDomain[sizeDomain.length - 1] || (sizeDomain[0] === 0 && sizeDomain[sizeDomain.length - 1] === 1))
-    const baseSizeLabel = (v: unknown): string => sizeDegenerate && typeof v === 'number' ? v.toFixed(1) : legendLabel(v)
+    const sizeCollapsed = !sizeIsTime && sizeDomain.length >= 2 && sizeDomain[0] === sizeDomain[sizeDomain.length - 1]
+    const sizeUnitDomain = !sizeIsTime && sizeDomain.length >= 2 && sizeDomain[0] === 0 && sizeDomain[sizeDomain.length - 1] === 1
+    // A collapsed [x,x] domain formats through the locale span formatter
+    // ('0.000000'); only a [0,1] size domain uses one fixed decimal ('0.0').
+    const baseSizeLabel = (v: unknown): string =>
+      !sizeCollapsed && sizeUnitDomain && typeof v === 'number' ? v.toFixed(1) : legendLabel(v)
     const sizeLabelExpr = (legend as { labelExpr?: unknown }).labelExpr
     const sizeExpr = typeof sizeLabelExpr === 'string' ? compileExpr(sizeLabelExpr, ctx.runtime) : null
     const sizeLabel = (v: unknown): string => sizeExpr
@@ -4665,7 +4698,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // the label's bound half-height (fontSize/2) floors each entry row
     const halfLabel = fontSize / 2
     const b = entries.map((e) => {
-      const ext = symbolType === 'square' ? (hasStroke ? e.sizeD / 2 : e.r) : e.r + strokeWidth * 2
+      const symVisible = opacity !== 0
+      const ext = !symVisible ? 0 : symbolType === 'square' ? (hasStroke ? e.sizeD / 2 : e.r) : e.r + strokeWidth * 2
       const y = e.sizeD / 2
       return { y1: Math.min(y - ext, y - halfLabel), y2: Math.max(y + ext, y + halfLabel) }
     })
@@ -4971,6 +5005,9 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const colorProp = legend.fill ? 'fill' : 'stroke'
     const isStrokeLegend = !legend.fill
     const symType = legend.symbolType ?? 'circle'
+    // A strokeWidth legend paints a fixed-color symbol whose width comes from
+    // the scale; the fill/stroke channels are both absent.
+    const isStrokeWidthLegend = legend.strokeWidth != null && legend.fill == null && legend.stroke == null && legend.shape == null
     // Vega legend dimensions depend on the symbolType:
     // - symbolType "stroke" (line symbols): step=13, box=11, offset=22
     // - symbolType "circle" with stroke channel (scatter-like): step=18, box=14, offset=18
@@ -5032,12 +5069,19 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const limit = limitRaw == null ? NaN : +limitRaw
     const limitHits = !!(limit && domain.length > limit)
     const entryValues = limitHits ? domain.slice(0, limit - 1) : domain
-    // legend.js sizeExpression: max(ceil(sqrt(size)+strokeWidth), fontSize)
-    const sizeExpr = Math.max(Math.ceil(Math.sqrt(symbolSizeRaw) + symSwP), labelFs)
-    const offsetDatum = entryValues.length ? Math.max(0, sizeExpr) : 0
-    const entries = entryValues.map((v: unknown) => ({ value: v, label: legendLabel(v) }))
+    // legend.js sizeExpression: max(ceil(sqrt(size)+strokeWidth), fontSize).
+    // A strokeWidth channel resolves its scale per entry, so the expression
+    // (and thus the row height) varies: 10+scale(v), 10+lots of values.
+    const entrySizeD = (v: unknown): number =>
+      Math.max(Math.ceil(Math.sqrt(symbolSizeRaw) + (isStrokeWidthLegend ? Number(scale(v)) : symSwP)), labelFs)
+    const offsetDatum = entryValues.length ? Math.max(0, ...entryValues.map(entrySizeD)) : 0
+    const entries = entryValues.map((v: unknown) => ({ value: v, label: legendLabel(v), sizeD: entrySizeD(v) }))
     if (limitHits) {
-      entries.push({ value: domain[entryValues.length], label: `…${domain.length - entryValues.length} entries` })
+      // vega's LegendEntries gives the ellipsis entry its OWN size expression
+      // (values[items.length]); the shared offset stays the max over the
+      // sliced (possibly empty) items.
+      const ev = domain[entryValues.length]
+      entries.push({ value: ev, label: `…${domain.length - entryValues.length} entries`, sizeD: entrySizeD(ev) })
     }
     const n = entries.length
 
@@ -5109,9 +5153,9 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const xSymIs: number[] = []
     const xLblIs: number[] = []
     for (const e of entries) {
-      const yI = hasClip ? (clipHeightRaw as number) / 2 : sizeExpr / 2
-      const xSymI = (colsTruthy ? offsetDatum : sizeExpr) / 2 + symbolOffset
-      const xLblI = (colsTruthy ? offsetDatum : sizeExpr) + symbolOffset + labelOffset
+      const yI = hasClip ? (clipHeightRaw as number) / 2 : e.sizeD / 2
+      const xSymI = (colsTruthy ? offsetDatum : e.sizeD) / 2 + symbolOffset
+      const xLblI = (colsTruthy ? offsetDatum : e.sizeD) + symbolOffset + labelOffset
       yIs.push(yI); xSymIs.push(xSymI); xLblIs.push(xLblI)
       const symD = legend.shape
         ? symbolPath(String(scale(e.value)), 5)
@@ -5123,13 +5167,16 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       // the item position with vega's `|| 0` NaN coercion — NaN positions
       // leave the sentinel bounds untouched and the union no-ops. The stroke
       // follows the channel: a fill legend strokes only via symbolStrokeColor.
+      const entrySw = isStrokeWidthLegend ? Number(scale(e.value)) : symSwP
       const symItem = {
-        path: symD, x: xSymI, y: yI, strokeWidth: symSwP, opacity: symbolOpacity,
-        stroke: legend.shape
-          ? String(legendStrokeColor ?? '#888')
-          : symType === 'stroke'
-            ? (colorProp === 'stroke' ? String(scale(e.value)) : undefined)
-            : (colorProp === 'fill' ? (legendStrokeColor != null ? String(legendStrokeColor) : undefined) : String(scale(e.value))),
+        path: symD, x: xSymI, y: yI, strokeWidth: entrySw, opacity: symbolOpacity,
+        stroke: isStrokeWidthLegend
+          ? String(legendStrokeColor ?? '#4c78a8')
+          : legend.shape
+            ? String(legendStrokeColor ?? '#888')
+            : symType === 'stroke'
+              ? (colorProp === 'stroke' ? String(scale(e.value)) : undefined)
+              : (colorProp === 'fill' ? (legendStrokeColor != null ? String(legendStrokeColor) : undefined) : String(scale(e.value))),
       } as unknown as SceneItem
       const symB = boundLeaf(new Bounds(), symItem)
       // label bound: boundText (truncation via limit, align-aware x1, negative
@@ -5156,8 +5203,12 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const colAdv = Array<number>(ncols).fill(0)
     const nrows = Math.max(1, Math.ceil(n / ncols))
     const rowExtent = Array<number>(nrows).fill(0)
-    let offValueX = 0
-    let offValueY = 0
+    // gridLayout derives each cell's offset from ITS OWN bound (pad + the
+    // ceil of a negative x1/y1), not from a global maximum: a strokeWidth
+    // legend's entry bounds grow row by row, so a single offset over-shifts
+    // every row after the first.
+    const colOffset = Array<number>(ncols).fill(colPad)
+    const rowOffset = Array<number>(nrows).fill(rowPadding)
     entries.forEach((_e, i) => {
       const eb = ebs[i]!
       if (eb.empty()) return
@@ -5166,15 +5217,13 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       colW[c] = Math.max(colW[c]!, eb.x2)
       colAdv[c] = Math.max(colAdv[c]!, Math.ceil(eb.x2))
       rowExtent[r] = Math.max(rowExtent[r]!, Math.ceil(eb.y2))
-      offValueX = Math.max(offValueX, eb.x1 < 0 ? Math.ceil(-eb.x1) : 0)
-      offValueY = Math.max(offValueY, eb.y1 < 0 ? Math.ceil(-eb.y1) : 0)
+      colOffset[c] = Math.max(colOffset[c]!, colPad + (eb.x1 < 0 ? Math.ceil(-eb.x1) : 0))
+      rowOffset[r] = Math.max(rowOffset[r]!, rowPadding + (eb.y1 < 0 ? Math.ceil(-eb.y1) : 0))
     })
-    const colX: number[] = []
-    let acc = 0
-    for (let c = 0; c < ncols; c++) { colX.push(acc); acc += colAdv[c]! + colPad + (c > 0 ? offValueX : 0) }
-    const rowY: number[] = []
-    acc = 0
-    for (let r = 0; r < nrows; r++) { rowY.push(acc); acc += rowExtent[r]! + rowPadding + offValueY }
+    const colX: number[] = [0]
+    for (let c = 1; c < ncols; c++) colX.push(colX[c - 1]! + colAdv[c - 1]! + colOffset[c]!)
+    const rowY: number[] = [0]
+    for (let r = 1; r < nrows; r++) rowY.push(rowY[r - 1]! + rowExtent[r - 1]! + rowOffset[r]!)
     // vega legendTitleOffset reads the (shifted) entry container bounds:
     // s = e.bounds.x2/y2 − item.padding — the max grid-positioned extent.
     let sX = 0
@@ -5283,7 +5332,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // (the renderer default 1 applies); vega's legendLayout boundStrokes the
     // outer rect, expanding the legend bounds by 1 on width and height.
     const legendBorderColor = (legend as { strokeColor?: string }).strokeColor
-    const legendBorderWidth = (legend as { strokeWidth?: number }).strokeWidth
+    // `strokeWidth` is a channel mapping when it names a scale; only a number
+    // is the legend border width.
+    const legendBorderWidthRaw = legend.strokeWidth
+    const legendBorderWidth = typeof legendBorderWidthRaw === 'number' ? legendBorderWidthRaw : undefined
     const legendBorderDash = (legend as { strokeDash?: number[] }).strokeDash
     // cornerRadius > 0 renders the border as a rounded rect at full size
     // (vega's rectangle path with the corner radii); a border stroke insets
@@ -5339,6 +5391,9 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
           ? ((symOpacityEnc as { value?: unknown }).value as number ?? 0.7)
           : 1
         items.push({ path: symDs[i]!, x: symX, y: symY, stroke: String(shapeStroke), strokeWidth: 1.5, opacity: shapeOpacity })
+      } else if (isStrokeWidthLegend) {
+        // symbol width (not color) varies per entry; fill stays transparent
+        items.push({ path: symDs[i]!, x: symX, y: symY, stroke: String(legendStrokeColor ?? '#4c78a8'), strokeWidth: Number(scale(value)), ...(symbolDash ? { strokeDash: symbolDash } : {}), ...(symbolOpacity != null && Number.isFinite(symbolOpacity as number) ? { opacity: symbolOpacity as number } : {}) })
       } else if (symType === 'stroke') {
         // the shape is a line but the channel paints it: a fill legend fills
         // the symbol, a stroke legend strokes it
@@ -5815,6 +5870,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     ;(t as Record<string, unknown>).fontWeight = titleWeight
     if (titleOpacity != null) t.fillOpacity = titleOpacity
     t.fill = titleColor ?? '#000'
+    ;(t as Record<string, unknown>)._title = true
     items.push(t)
   }
 

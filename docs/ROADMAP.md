@@ -70,7 +70,7 @@ All gates re-run from the working tree after the parity iteration.
 | `pnpm test` | 241 tests / 25 files, all pass |
 | `pnpm conformance` | **413 / 413** SVG geometry vs real Vega |
 | `pnpm conformance-vl` | **125 / 125** (incl. repeat, scatter-matrix, vl-facet-2d) |
-| `pnpm sweep-vl` (27,513 VL schema cases) | **98.3%** — 27,048 ok, 370 differ, 34 engine-error, 21 node-error, 40 both-refused |
+| `pnpm sweep-vl` (27,513 VL schema cases) | **98.8%** — 27,196 ok, 222 differ, 34 engine-error, 21 node-error, 40 both-refused |
 | `pnpm conformance:browser` (Chromium, live canvas text metrics) | **413 / 413** |
 | `pnpm probe` | 2 / 2 |
 | bundle budget (`@aster/core` `renderSpec`) | 97.0 kB gzip / 100 kB — pass |
@@ -171,7 +171,7 @@ Third-pass engine fixes (the schema-sweep iteration, 94.8% → 98.3%):
   tick placement (with explicit `gradientLength`/`gradientThickness`/
   `labelOffset`/label-size honored).
 
-Remaining sweep residue (370 differ + 55 error cases) is a long tail across
+Remaining sweep residue (222 differ + 55 error cases) is a long tail across
 ~40 property families — guide-scale ranges/domains, per-property header and
 legend-layout tails (columns, titleOrient, clipHeight, orient), config
 `axis`/`header` blocks, row-facet header widths, and per-family one-offs — see
@@ -524,7 +524,7 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   rule (a config fill/stroke default is skipped when either paint is
   encoded).
 
-  **R8.4 floor — 21 cases (sweep 7528/7549, 99.7%):** the remaining
+  **R8.4 floor — 21 cases (sweep 7520 ok + 8 both-refused / 7549, 99.7%):** the remaining
   disagreements, promoted as the sweep's own failing probes (R8.5):
   title-angle--4 + config-title-angle--4 (a 0.001px rotated-text-bound
   epsilon), title-orient-left + config-title-orient-left (1px rotated
@@ -544,7 +544,26 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   compilers to Vega before rendering): baseline 10937 ok / 15581 differ /
   935 engine / 43 node — that surface is @aster/vl's drift, tracked
   separately from this floor. Parity rounds closed the bulk of it:
-  27048 ok / 370 differ / 34 engine / 21 node of 27513 (98.3%).
+  27196 ok / 222 differ / 34 engine / 21 node of 27513 (98.8%).
+
+  A later sweep pass closed another 148 cases. It added the `strokeWidth`
+  channel end to end (linear [1,4] scale, per-entry stroke legend with vega's
+  per-row size expression and bounds), made size/strokeWidth legends honor
+  reverse, symbol limits, tickMinStep and empty-domain titles, and reproduced
+  vega's continuous legend label formatting (`labelFormat` → span formatter, so
+  a collapsed domain reads `1.000000` and an all-invalid gradient keeps its
+  `NaN` label). Aggregate semantics now match vega more closely: count/
+  distinct/valid/missing normalize the channel to quantitative, the invalid
+  filter runs after the aggregate (only for scale-bearing quantitative
+  channels), temporal aggregate outputs are not filtered, `distinct` reads the
+  stored tuples (NaN/null count as values), `missing` excludes NaN, and the
+  exponential family keeps vega's null/undefined ratio arithmetic (undefined
+  ratio → NaN → filtered rows). Axis work landed the full `config.axisBand`
+  cascade (title/orient/disable/tickOffset precedence), vega's explicit
+  `labelAngle` normalization and derived label anchors, `orient` propagation to
+  the grid axis, hidden-label exclusion from axis bounds, and the
+  axis-group/rect spatial rules (x2/y2 style defaults apply to enter marks but
+  not update-only marks, matching vega's per-block `adjustSpatial`).
   Closed clusters: the config layer (config forwarding into the Vega
   spec — guide blocks, mark -> config.mark, per-type blocks ->
   style[type], view -> cell with stroke/fill on the frame, title ->
