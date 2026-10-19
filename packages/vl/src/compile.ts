@@ -2557,6 +2557,18 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     // vega-lite gives a standalone size legend the default symbol stroke
     // (#4c78a8) but drops it when a color legend coexists.
     const sizeUser = { ...cfgDefaults, ...(sizeDef.legend ?? {}) }
+    if (sizeUser.type === 'gradient') {
+      const glg: Record<string, unknown> = {
+        size: 'size',
+        type: 'gradient',
+        gradientLength: sizeUser.gradientLength ?? { signal: 'clamp(height, 64, 200)' },
+        title: legendTitle(sizeDef, sizeUser),
+        encode: { gradient: { update: { opacity: { value: markOpacity ?? reducedOpacity ?? 1 } } } },
+      }
+      applyTimeUnitLegend(glg, sizeDef, sizeUser)
+      forwardLegendProps(sizeUser, glg, true)
+      push('size', glg)
+    } else {
     const sizeSymbolOpacity = sizeUser.symbolOpacity as number | undefined
     const sizeSymUpdate: Record<string, unknown> = { fill: { value: 'transparent' } }
     if (sizeSymbolOpacity == null) sizeSymUpdate.opacity = { value: markOpacity ?? reducedOpacity ?? 1 }
@@ -2571,6 +2583,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     forwardLegendProps(sizeUser, sizeLg, false)
     if (sizeLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) sizeLg.direction = 'horizontal'
     push('size', sizeLg)
+    }
   }
   const shapeDefL = fields.find((f) => f.channel === 'shape' && f.field)
   if (shapeDefL && shapeDefL.legend !== null && !legendSuppressed(shapeDefL)) {
