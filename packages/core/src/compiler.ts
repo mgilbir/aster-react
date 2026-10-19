@@ -460,9 +460,9 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
   // radii; only the non-rect geometry and text channels are inert.
   const rectInert = new Set([
     'startAngle', 'endAngle', 'innerRadius', 'outerRadius', 'radius',
-    'radius2', 'theta', 'theta2', 'padAngle', 'text', 'url', 'align',
-    'baseline', 'dx', 'dy', 'limit', 'lineHeight', 'font', 'fontSize',
-    'fontStyle', 'fontWeight',
+    'radius2', 'theta', 'theta2', 'padAngle', 'size', 'text', 'url',
+    'align', 'baseline', 'dx', 'dy', 'limit', 'lineHeight', 'font',
+    'fontSize', 'fontStyle', 'fontWeight',
   ])
   const symbolInert = new Set([
     'width', 'height', 'x2', 'y2', 'startAngle', 'endAngle', 'innerRadius',

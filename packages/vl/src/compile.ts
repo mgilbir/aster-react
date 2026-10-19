@@ -286,6 +286,10 @@ function compileLayered(spec: VLSpec): VLSpec {
       isObject(p.markRaw) && p.markRaw.filled !== undefined ? p.markRaw.filled === true : undefined,
       isObject(p.markRaw) ? (p.markRaw.stroke as string | undefined) : undefined,
       isObject(p.markRaw) ? (p.markRaw.strokeWidth as number | undefined) : undefined,
+      undefined,
+      isObject(spec.config) && isObject((spec.config as Record<string, unknown>).legend)
+        ? ((spec.config as Record<string, unknown>).legend as Record<string, unknown>)
+        : undefined,
     )) {
       // one legend per scale channel (vega resolves shared legends across layers)
       const ch = lg.fill ?? lg.stroke ?? lg.shape ?? lg.size ?? lg.opacity ?? lg.strokeWidth
@@ -2390,8 +2394,19 @@ function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null, fie
 
 // --- legends -----------------------------------------------------------------
 
-function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number): Record<string, unknown>[] {
+function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number, cfgLegendIn?: Record<string, unknown>): Record<string, unknown>[] {
   const legends: Record<string, unknown>[] = []
+  // config.legend is a defaults layer: orient/direction keys are translated
+  // into the compiled `direction`, everything else merges under the channel's
+  // own legend definition.
+  const cfgLegend = cfgLegendIn ?? {}
+  // Only the properties vega-lite actually forwards from config.legend merge
+  // as legend defaults; orient/symbolDirection/gradientDirection are handled
+  // separately, and keys like direction/gradientLength are NOT config defaults
+  // (upstream leaves them to the channel's own legend definition).
+  const cfgDefaults: Record<string, unknown> = {}
+  if (cfgLegend.symbolType != null) cfgDefaults.symbolType = cfgLegend.symbolType
+  const cfgHorizontal = cfgLegend.orient === 'top' || cfgLegend.orient === 'bottom'
   // vega-lite's reduced symbol opacity (init.ts opacity()) does not apply
   // when the encoding is aggregate — the mark legend follows the mark.
   const reducedOpacity = fields.some((f) => f.aggregate) ? undefined : C.pointOpacity
@@ -2410,7 +2425,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
   }
   const colorDef = fields.find((f) => f.channel === 'color' && f.field)
   if (colorDef && colorDef.legend !== null && !legendSuppressed(colorDef)) {
-    const userLegend = colorDef.legend ?? {}
+    const userLegend = { ...cfgDefaults, ...(colorDef.legend ?? {}) }
     const lg: Record<string, unknown> = { title: legendTitle(colorDef, userLegend) }
     const filled = mark === 'circle' || mark === 'square'
       || (mark === 'point' && markFilled === true)
@@ -2509,40 +2524,55 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       lg.direction = lg.direction ?? 'horizontal'
       if (userLegend.gradientLength == null) lg.gradientLength = 100
     }
+    if (lg.direction == null) {
+      if (cfgLegend.gradientDirection === 'horizontal') {
+        lg.direction = 'horizontal'
+        if (isGradient && userLegend.gradientLength == null && 'gradientLength' in lg) lg.gradientLength = 100
+      } else if (cfgLegend.symbolDirection === 'horizontal') {
+        lg.direction = 'horizontal'
+      } else if (cfgHorizontal) {
+        lg.direction = 'horizontal'
+      }
+    }
     push('color', lg)
   }
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
   if (sizeDef && sizeDef.legend !== null && !legendSuppressed(sizeDef)) {
     // vega-lite gives a standalone size legend the default symbol stroke
     // (#4c78a8) but drops it when a color legend coexists.
-    const sizeSymbolOpacity = (sizeDef.legend as Record<string, unknown> | undefined)?.symbolOpacity
+    const sizeUser = { ...cfgDefaults, ...(sizeDef.legend ?? {}) }
+    const sizeSymbolOpacity = sizeUser.symbolOpacity as number | undefined
     const sizeSymUpdate: Record<string, unknown> = { fill: { value: 'transparent' } }
     if (sizeSymbolOpacity == null) sizeSymUpdate.opacity = { value: markOpacity ?? reducedOpacity ?? 1 }
     if (!colorDef || colorDef.legend === null || legendSuppressed(colorDef)) sizeSymUpdate.stroke = { value: C.blue }
     const sizeLg: Record<string, unknown> = {
       size: 'size',
       symbolType: 'circle',
-      title: legendTitle(sizeDef, sizeDef.legend ?? {}),
+      title: legendTitle(sizeDef, sizeUser),
       encode: { symbols: { update: sizeSymUpdate } },
     }
-    applyTimeUnitLegend(sizeLg, sizeDef, sizeDef.legend ?? {})
-    forwardLegendProps(sizeDef.legend ?? {}, sizeLg, false)
+    applyTimeUnitLegend(sizeLg, sizeDef, sizeUser)
+    forwardLegendProps(sizeUser, sizeLg, false)
+    if (sizeLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) sizeLg.direction = 'horizontal'
     push('size', sizeLg)
   }
   const shapeDefL = fields.find((f) => f.channel === 'shape' && f.field)
   if (shapeDefL && shapeDefL.legend !== null && !legendSuppressed(shapeDefL)) {
+    const shapeUser = { ...cfgDefaults, ...(shapeDefL.legend ?? {}) }
     const shapeLg: Record<string, unknown> = {
       shape: 'shape',
       symbolType: 'circle',
-      title: legendTitle(shapeDefL, shapeDefL.legend ?? {}),
+      title: legendTitle(shapeDefL, shapeUser),
       encode: { symbols: { update: { fill: { value: 'transparent' }, stroke: { value: C.blue }, opacity: { value: markOpacity ?? reducedOpacity ?? 1 } } } },
     }
-    applyTimeUnitLegend(shapeLg, shapeDefL, shapeDefL.legend ?? {})
-    forwardLegendProps(shapeDefL.legend ?? {}, shapeLg, false)
+    applyTimeUnitLegend(shapeLg, shapeDefL, shapeUser)
+    forwardLegendProps(shapeUser, shapeLg, false)
+    if (shapeLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) shapeLg.direction = 'horizontal'
     push('shape', shapeLg)
   }
   const strokeWidthLegendDef = fields.find((f) => f.channel === 'strokeWidth' && f.field)
   if (strokeWidthLegendDef && strokeWidthLegendDef.legend !== null && !legendSuppressed(strokeWidthLegendDef)) {
+    const swUser = { ...cfgDefaults, ...(strokeWidthLegendDef.legend ?? {}) }
     // the symbol follows the mark: a line's is a stroke sample, a filled
     // point keeps the default fill, an unfilled point a transparent one.
     const swUpdate: Record<string, unknown> =
@@ -2556,23 +2586,26 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     const swLg: Record<string, unknown> = {
       strokeWidth: 'strokeWidth',
       symbolType: mark === 'line' ? 'stroke' : mark === 'bar' || mark === 'square' ? 'square' : 'circle',
-      title: legendTitle(strokeWidthLegendDef, strokeWidthLegendDef.legend ?? {}),
+      title: legendTitle(strokeWidthLegendDef, swUser),
       encode: { symbols: { update: swUpdate } },
     }
-    applyTimeUnitLegend(swLg, strokeWidthLegendDef, strokeWidthLegendDef.legend ?? {})
-    forwardLegendProps(strokeWidthLegendDef.legend ?? {}, swLg, false)
+    applyTimeUnitLegend(swLg, strokeWidthLegendDef, swUser)
+    forwardLegendProps(swUser, swLg, false)
+    if (swLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) swLg.direction = 'horizontal'
     push('strokeWidth', swLg)
   }
   const opacityLegendDef = fields.find((f) => f.channel === 'opacity' && f.field)
   if (opacityLegendDef && opacityLegendDef.legend !== null && !legendSuppressed(opacityLegendDef)) {
+    const opUser = { ...cfgDefaults, ...(opacityLegendDef.legend ?? {}) }
     const opLg: Record<string, unknown> = {
       opacity: 'opacity',
       symbolType: 'circle',
-      title: legendTitle(opacityLegendDef, opacityLegendDef.legend ?? {}),
+      title: legendTitle(opacityLegendDef, opUser),
       encode: { symbols: { update: { fill: { value: 'transparent' }, stroke: { value: C.blue } } } },
     }
-    applyTimeUnitLegend(opLg, opacityLegendDef, opacityLegendDef.legend ?? {})
-    forwardLegendProps(opacityLegendDef.legend ?? {}, opLg, false)
+    applyTimeUnitLegend(opLg, opacityLegendDef, opUser)
+    forwardLegendProps(opUser, opLg, false)
+    if (opLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) opLg.direction = 'horizontal'
     push('opacity', opLg)
   }
   for (const key of order) legends.push(legendsByKey[key]!)
@@ -2716,7 +2749,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           // centers a fixed-width bar in the band; otherwise the bar spans
           // the band
           const barAlign = (markDef?.align ?? cfgType?.align ?? cfgMark?.align) as string | undefined
-          const barSizeRaw = ((markDef?.size
+          const barSizeRaw = (((mark === 'bar' ? markDef?.size : undefined)
             ?? markDef?.width
             ?? (mark === 'bar' ? (cfgType?.size as number | undefined) : undefined)
             ?? (cfgType?.discreteBandSize as number | undefined)
@@ -2801,7 +2834,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.y2 = { scale: 'y', field: JSON.parse(startF), offset: { signal: off('-') } }
         } else if (sc === 'band') {
           const yAlignH = (markDef?.baseline ?? cfgType?.baseline ?? cfgMark?.baseline) as string | undefined
-          const hSizeRaw = ((markDef?.size
+          const hSizeRaw = (((mark === 'bar' ? markDef?.size : undefined)
             ?? markDef?.height
             ?? (cfgType?.size as number | undefined)
             ?? (cfgType?.discreteBandSize as number | undefined)
@@ -3119,17 +3152,22 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // pass-through text mark props (probed: size maps to fontSize, radius to
     // the polar radius; the paint/offset props go straight through)
     const markPaint = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : undefined
+    const textProp = (p: string): unknown => markPaint?.[p] ?? cfgType?.[p] ?? cfgMark?.[p]
+    const textOuterRadius = textProp('outerRadius')
+    if (textOuterRadius != null) update.radius = { value: textOuterRadius }
     const textCfgSize = (cfgType?.size as number | undefined) ?? (cfgMark?.size as number | undefined)
     if (markPaint?.size != null) update.fontSize = { value: markPaint.size }
     else if (textCfgSize != null) update.fontSize = { value: textCfgSize }
     for (const p of ['strokeWidth', 'dx', 'dy', 'fillOpacity', 'opacity', 'angle', 'baseline', 'align', 'limit', 'fontStyle', 'lineHeight'] as const) {
-      if (markPaint?.[p] !== undefined) update[p] = { value: markPaint[p] }
+      const v = textProp(p)
+      if (v !== undefined) update[p] = { value: v }
     }
-    if (markPaint?.filled === false) {
+    const textFilled = markPaint?.filled ?? cfgType?.filled ?? cfgMark?.filled
+    if (textFilled === false) {
       const tf = update.fill
       update.fill = { value: 'transparent' }
       update.stroke = tf
-    } else if (markPaint?.filled === true) {
+    } else if (textFilled === true) {
       const ts = update.stroke
       if (ts != null) { delete update.stroke; update.fill = ts }
     }
@@ -3644,6 +3682,7 @@ export function compileUnit(spec: VLSpec): VLSpec {
     lgStroke,
     legendStrokeWidth,
     legendFillOpacity,
+    isObject(userConfig?.legend) ? (userConfig!.legend as Record<string, unknown>) : undefined,
   )
   if (legends.length) out.legends = legends
   if (spec.title) out.title = spec.title
