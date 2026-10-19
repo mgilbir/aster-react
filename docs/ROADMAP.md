@@ -70,10 +70,10 @@ All gates re-run from the working tree after the parity iteration.
 | `pnpm test` | 241 tests / 25 files, all pass |
 | `pnpm conformance` | **413 / 413** SVG geometry vs real Vega |
 | `pnpm conformance-vl` | **125 / 125** (incl. repeat, scatter-matrix, vl-facet-2d) |
-| `pnpm sweep-vl` (27,513 VL schema cases) | **98.2%** — 27,012 ok, 406 differ, 34 engine-error, 21 node-error, 40 both-refused |
+| `pnpm sweep-vl` (27,513 VL schema cases) | **98.2%** — 27,027 ok, 391 differ, 34 engine-error, 21 node-error, 40 both-refused |
 | `pnpm conformance:browser` (Chromium, live canvas text metrics) | **413 / 413** |
 | `pnpm probe` | 2 / 2 |
-| bundle budget (`@aster/core` `renderSpec`) | 97.0 kB gzip / 100 kB — pass |
+| bundle budget (`@aster/core` `renderSpec`) | 96.9 kB gzip / 100 kB — pass |
 | `pnpm bench:browser` | aster 16.7 ms median frames / 2.2% long frames vs react-vega 26.8 ms / 98.1%; heap-churn retained ~0 MB |
 
 Engine fixes from the parity iteration (closing the corpus and browser gates):
@@ -171,7 +171,7 @@ Third-pass engine fixes (the schema-sweep iteration, 94.8% → 98.2%):
   tick placement (with explicit `gradientLength`/`gradientThickness`/
   `labelOffset`/label-size honored).
 
-Remaining sweep residue (406 differ + 55 error cases) is a long tail across
+Remaining sweep residue (391 differ + 55 error cases) is a long tail across
 ~40 property families — guide-scale ranges/domains, per-property header and
 legend-layout tails (columns, titleOrient, clipHeight, orient), config
 `axis`/`header` blocks, row-facet header widths, and per-family one-offs — see
@@ -544,7 +544,7 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   compilers to Vega before rendering): baseline 10937 ok / 15581 differ /
   935 engine / 43 node — that surface is @aster/vl's drift, tracked
   separately from this floor. Parity rounds closed the bulk of it:
-  27012 ok / 406 differ / 34 engine / 21 node of 27513 (98.2%).
+  27027 ok / 391 differ / 34 engine / 21 node of 27513 (98.2%).
   Closed clusters: the config layer (config forwarding into the Vega
   spec — guide blocks, mark -> config.mark, per-type blocks ->
   style[type], view -> cell with stroke/fill on the frame, title ->

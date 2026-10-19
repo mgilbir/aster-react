@@ -3165,10 +3165,16 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     from: { data: dataName },
     encode: { update },
   }
-  // order: line/area sort by the dimension field; trail sorts by x (probed)
-  if (mark === 'line' || mark === 'area') {
-    const dim = orient === 'vertical' ? xDef : yDef
-    if (dim && !dim.timeUnit) markSpec.sort = { field: aggFieldName(dim) }
+  // order: an explicit order channel wins; otherwise line/area sort by the
+  // dimension field. Trail sorts by x (probed).
+  const orderDef = fields.find((f) => f.channel === 'order' && f.field)
+  const dimSortDef = orient === 'vertical' ? xDef : yDef
+  const lineSortFields = orderDef
+    ? [aggFieldName(orderDef)]
+    : dimSortDef && !dimSortDef.timeUnit ? [aggFieldName(dimSortDef)] : []
+  const lineSortOrders = [orderDef?.sort === 'descending' ? 'descending' : 'ascending']
+  if ((mark === 'line' || mark === 'area') && lineSortFields.length) {
+    markSpec.sort = { field: lineSortFields, order: lineSortOrders }
   }
   if (mark === 'trail') {
     markSpec.sort = { field: orient === 'horizontal' ? 'y' : 'x' }
@@ -3204,7 +3210,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         name: 'marks',
         type: 'area',
         style: ['area'],
-        sort: { field: aggFieldName(xDef ?? yDef!) },
+        sort: { field: lineSortFields.length ? lineSortFields : [aggFieldName(xDef ?? yDef!)], order: lineSortOrders },
         from: { data: 'faceted_path_main' },
         encode: { update },
       }],
@@ -3239,7 +3245,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         name: 'marks',
         type: 'line',
         style: ['line'],
-        sort: { field: aggFieldName(xDef ?? yDef!) },
+        sort: { field: lineSortFields.length ? lineSortFields : [aggFieldName(xDef ?? yDef!)], order: lineSortOrders },
         from: { data: 'faceted_path_main' },
         encode: { update: innerUpdate },
       }],

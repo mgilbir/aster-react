@@ -3832,17 +3832,8 @@ function facetItemMark(
   // cell data is built more than once (e.g. buildColumnTitleGroup rebuilds the
   // cells to compute the title center); without copies the second pass would
   // re-scale already-scaled values.
-  const rows = (ctx.datasets.get(source) ?? []).map((r) => ({ ...r }))
-  if (mark.sort) {
-    mark.sort && (rows.sort((a, b) => {
-      if (mark.sort?.field) {
-        const fs = mark.sort.field as string
-        const af = mark.sort.order === 'descending' ? -1 : 1
-        return String(a[fs] as string).localeCompare(String(b[fs] as string)) * af
-      }
-      return 0
-    }))
-  }
+  let rows = (ctx.datasets.get(source) ?? []).map((r) => ({ ...r }))
+  if (mark.sort) rows = sortRows(rows, mark.sort)
 
   const update = mark.encode?.update ?? mark.encode?.enter ?? {}
   items = rows.map((row) => {
