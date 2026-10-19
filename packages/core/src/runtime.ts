@@ -2781,9 +2781,26 @@ function buildFacetCells(
   const rows = ctx.datasets.get(facet.data) ?? []
   let grouped = inlineGroupRows(rows, facet.groupby)
   if (!grouped.length) return []
-  // A 2D facet lays cells out row-major; order groups by their facet keys so
-  // the grid mapping is stable regardless of the data's insertion order.
-  if (facet.groupby.length > 1) {
+  // The facet cell mark's sort order drives the grid order (vega sorts the
+  // facet groups before the layout transform).
+  const facetSort = (mark as { sort?: { field?: unknown; order?: unknown } }).sort
+  if (facetSort?.field) {
+    const fields = (Array.isArray(facetSort.field) ? facetSort.field : [facetSort.field]) as string[]
+    const orders = (Array.isArray(facetSort.order) ? facetSort.order : [facetSort.order ?? 'ascending']) as string[]
+    const exprs = fields.map((f) => ctx.runtime.expr(String(f)))
+    grouped = grouped.slice().sort((a, b) => {
+      for (let i = 0; i < exprs.length; i++) {
+        const av = exprs[i]!(a[0] ?? {}, ctx.signalParams) as unknown
+        const bv = exprs[i]!(b[0] ?? {}, ctx.signalParams) as unknown
+        let cmp = 0
+        if (av !== bv) cmp = av == null ? 1 : bv == null ? -1 : (av < bv ? -1 : 1)
+        if (cmp !== 0) return orders[i] === 'descending' ? -cmp : cmp
+      }
+      return 0
+    })
+  } else if (facet.groupby.length > 1) {
+    // A 2D facet lays cells out row-major; order groups by their facet keys so
+    // the grid mapping is stable regardless of the data's insertion order.
     grouped = grouped.slice().sort((a, b) => {
       for (const f of facet.groupby) {
         const av = String(a[0]?.[f] ?? '')
@@ -2944,7 +2961,16 @@ function facetHeaderLabel(mark: CompiledMark, row: Row, fkey: string, ctx: EvalC
   if (t && typeof t === 'object' && 'signal' in (t as Record<string, unknown>)) {
     try {
       const sig = String((t as Record<string, unknown>).signal).replace(/\bparent\b/g, 'datum')
-      return String(ctx.runtime.expr(sig)(row, ctx.signalParams))
+      // An aggregated facet field that produced no value is a NaN tuple in
+      // vega, not an absent property: `'' + NaN` labels it "NaN".
+      const rowForTitle = new Proxy(row, {
+        get(target, prop) {
+          if (typeof prop === 'string' && (!(prop in target) || (target as Record<string, unknown>)[prop] === undefined)
+            && /^(count|distinct|valid|missing)_/.test(prop)) return NaN
+          return (target as Record<PropertyKey, unknown>)[prop]
+        },
+      })
+      return String(ctx.runtime.expr(sig)(rowForTitle, ctx.signalParams))
     } catch { /* fall through to the raw value */ }
   }
   return String((row as Record<string, unknown>)[fkey])
@@ -2971,9 +2997,13 @@ function buildRowHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup[]
   if (mark.sort?.field) {
     try {
       const expr = ctx.runtime.expr(mark.sort.field as string)
+      const desc = mark.sort.order === 'descending'
       sortedRows = rows.slice().sort((a, b) => {
-        const cmp = expr({ _aster_a: firstGroupby ? (a as Record<string, unknown>)[firstGroupby] : undefined, _aster_b: firstGroupby ? (b as Record<string, unknown>)[firstGroupby] : undefined }, ctx.signalParams) as number
-        return Number(cmp ?? 0)
+        const av = expr(a, ctx.signalParams) as unknown
+        const bv = expr(b, ctx.signalParams) as unknown
+        let cmp = 0
+        if (av !== bv) cmp = av == null ? 1 : bv == null ? -1 : (av < bv ? -1 : 1)
+        return desc ? -cmp : cmp
       })
     } catch {}
   }

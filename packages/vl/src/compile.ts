@@ -1749,11 +1749,9 @@ function applyTimeUnitLegend(lg: Record<string, unknown>, def: FieldDef, userLeg
 }
 
 const TIME_UNIT_UNITS: Record<string, string[]> = {
-  year: ['year'], quarter: ['quarter'], month: ['month'], week: ['year', 'week'],
-  date: ['year', 'month', 'date'], day: ['year', 'month', 'date'], dayofyear: ['month', 'date'],
-  hours: ['year', 'month', 'date', 'hours'], minutes: ['year', 'month', 'date', 'hours', 'minutes'],
-  seconds: ['year', 'month', 'date', 'hours', 'minutes', 'seconds'],
-  milliseconds: ['year', 'month', 'date', 'hours', 'minutes', 'seconds', 'milliseconds'],
+  year: ['year'], quarter: ['quarter'], month: ['month'], week: ['week'],
+  date: ['date'], day: ['day'], dayofyear: ['dayofyear'],
+  hours: ['hours'], minutes: ['minutes'], seconds: ['seconds'], milliseconds: ['milliseconds'],
   yearquarter: ['year', 'quarter'], yearmonth: ['year', 'month'],
   yearmonthdate: ['year', 'month', 'date'], yearweek: ['year', 'week'],
   yeardayofyear: ['year', 'dayofyear'], quartermonth: ['quarter', 'month'],

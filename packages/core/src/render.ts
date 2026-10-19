@@ -67,8 +67,9 @@ function resolveCurve(interpolate: string, orient?: string): unknown {
 }
 
 export function renderSceneToSvg(scene: SceneRoot): string {
-  const W = scene.width
-  const H = scene.height
+  // vega's SVG renderer truncates a fractional document size to pixels.
+  const W = Math.floor(scene.width)
+  const H = Math.floor(scene.height)
   const pad = scene.padding ?? { top: 0, right: 0, bottom: 0, left: 0 }
 
   let out = ''

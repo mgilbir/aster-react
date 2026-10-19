@@ -1246,34 +1246,38 @@ function timeunitRows(rows: Row[], t: Record<string, unknown>): Row[] {
  * E.g. timeFloor(date, ['month']) → 1st of the month 00:00:00.000 UTC.
  */
 function timeFloor(d: Date, units: string[]): Date {
-  const u = new Date(d.getTime())
-  const ms = u.getUTCMilliseconds()
-  const s = u.getUTCSeconds()
-  const m = u.getUTCHours()
-  const min = u.getUTCMinutes()
-  const h = u.getUTCHours()
-  const date = u.getUTCDate()
-  const month = u.getUTCMonth()
-  const year = u.getUTCFullYear()
-
-  if (!units.includes('milliseconds')) u.setUTCMilliseconds(0)
-  if (!units.includes('seconds')) u.setUTCSeconds(0)
-  if (!units.includes('minutes')) u.setUTCMinutes(0)
-  if (!units.includes('hours')) u.setUTCHours(0)
-  if (!units.includes('date') && !units.includes('week')) u.setUTCDate(1)
-  if (units.includes('week')) {
-    // Floor to the start of the week (Sunday). Vega uses Sunday as week start.
-    const dayOfWeek = u.getUTCDay()
-    u.setUTCDate(u.getUTCDate() - dayOfWeek)
+  // vega-time's floor.js: units missing a coarser context fall back to a
+  // canonical year (2012), month zero, and date 1. DAY/WEEK/DAYOFYEAR are
+  // projected onto that canonical year rather than reset to Jan 1.
+  const u = new Set(units)
+  const year = u.has('year') ? d.getUTCFullYear() : 2012
+  const month = u.has('month')
+    ? d.getUTCMonth()
+    : u.has('quarter') ? 3 * Math.floor(d.getUTCMonth() / 3) : 0
+  const firstDay = (y: number): number => new Date(Date.UTC(y, 0, 1)).getUTCDay()
+  const dayOfYear = (x: Date): number => {
+    const y = Date.UTC(x.getUTCFullYear(), 0, 1)
+    return Math.floor((x.getTime() - (y - 1)) / 86400000) + 1
   }
-  if (!units.includes('month') && !units.includes('quarter')) u.setUTCMonth(0)
-  if (units.includes('quarter')) {
-    // Floor to the start of the quarter
-    u.setUTCMonth(Math.floor(month / 3) * 3)
+  const weekNum = (x: Date): number => {
+    const y = Date.UTC(x.getUTCFullYear(), 0, 1)
+    const sunday = new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth(), x.getUTCDate() - x.getUTCDay()))
+    return Math.floor((sunday.getTime() - (y - 1)) / 604800000) + 1
   }
-  // Year is always floored
-
-  return u
+  const weekday = (week: number, day: number, first: number): number =>
+    day + week * 7 - (first + 6) % 7
+  let date: number
+  if (u.has('week') && u.has('day')) date = weekday(weekNum(d), d.getUTCDay(), firstDay(year))
+  else if (u.has('week')) date = weekday(weekNum(d), 0, firstDay(year))
+  else if (u.has('day')) date = weekday(1, d.getUTCDay(), firstDay(year))
+  else if (u.has('date')) date = d.getUTCDate()
+  else if (u.has('dayofyear')) date = dayOfYear(d)
+  else date = 1
+  const hours = u.has('hours') ? d.getUTCHours() : 0
+  const minutes = u.has('minutes') ? d.getUTCMinutes() : 0
+  const seconds = u.has('seconds') ? d.getUTCSeconds() : 0
+  const ms = u.has('milliseconds') ? d.getUTCMilliseconds() : 0
+  return new Date(Date.UTC(year, month, date, hours, minutes, seconds, ms))
 }
 
 /**
