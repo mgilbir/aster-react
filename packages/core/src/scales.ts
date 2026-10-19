@@ -653,6 +653,10 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string, 
         }
         return [ctx.height, 0]
       default: {
+        // A named palette range on a positional band/point scale is not a
+        // numeric range: vega's parser yields [NaN, NaN] (probed: band
+        // ranges like "symbol"/"ramp" degenerate the scale, not colour it).
+        if (scaleType === 'band' || scaleType === 'point') return [NaN, NaN]
         // A `config.range.<name>` entry resolves first (vega-parser's range
         // lookup: the config block shadows the built-in range definitions).
         // An array is the palette itself; a `{scheme}` object resolves to the

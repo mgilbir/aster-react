@@ -70,7 +70,7 @@ All gates re-run from the working tree after the parity iteration.
 | `pnpm test` | 241 tests / 25 files, all pass |
 | `pnpm conformance` | **413 / 413** SVG geometry vs real Vega |
 | `pnpm conformance-vl` | **125 / 125** (incl. repeat, scatter-matrix, vl-facet-2d) |
-| `pnpm sweep-vl` (27,513 VL schema cases) | **98.8%** — 27,196 ok, 222 differ, 34 engine-error, 21 node-error, 40 both-refused |
+| `pnpm sweep-vl` (27,513 VL schema cases) | **99.0%** — 27,230 ok, 188 differ, 34 engine-error, 21 node-error, 40 both-refused |
 | `pnpm conformance:browser` (Chromium, live canvas text metrics) | **413 / 413** |
 | `pnpm probe` | 2 / 2 |
 | bundle budget (`@aster/core` `renderSpec`) | 97.0 kB gzip / 100 kB — pass |
@@ -171,7 +171,7 @@ Third-pass engine fixes (the schema-sweep iteration, 94.8% → 98.3%):
   tick placement (with explicit `gradientLength`/`gradientThickness`/
   `labelOffset`/label-size honored).
 
-Remaining sweep residue (222 differ + 55 error cases) is a long tail across
+Remaining sweep residue (188 differ + 55 error cases) is a long tail across
 ~40 property families — guide-scale ranges/domains, per-property header and
 legend-layout tails (columns, titleOrient, clipHeight, orient), config
 `axis`/`header` blocks, row-facet header widths, and per-family one-offs — see
@@ -544,7 +544,7 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   compilers to Vega before rendering): baseline 10937 ok / 15581 differ /
   935 engine / 43 node — that surface is @aster/vl's drift, tracked
   separately from this floor. Parity rounds closed the bulk of it:
-  27196 ok / 222 differ / 34 engine / 21 node of 27513 (98.8%).
+  27230 ok / 188 differ / 34 engine / 21 node of 27513 (99.0%).
 
   A later sweep pass closed another 148 cases. It added the `strokeWidth`
   channel end to end (linear [1,4] scale, per-entry stroke legend with vega's
@@ -564,6 +564,20 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   the grid axis, hidden-label exclusion from axis bounds, and the
   axis-group/rect spatial rules (x2/y2 style defaults apply to enter marks but
   not update-only marks, matching vega's per-block `adjustSpatial`).
+
+  A further pass closed 34 cases. It fixed the axis tick model (a missing
+  tickCount now means vega's tally of 10, tickMinStep goes through `tickCount`
+  for every scale type, the cyclic month/day/quarter/hours units suppress the
+  default tickCount, explicit axis `values` run through `validTicks` and are
+  inherited by the grid axis, and `labelSeparation` reaches the overlap
+  transform). Facet headers now lay out their label/title title-groups exactly:
+  explicit fontSize/baseline/angle anchor at the vega title origin, angle signs
+  pick left/right/center, baseline offsets are baked once (renderer vs flat
+  item), and `header.title` overrides the column/row title text. Aggregate
+  source casts now follow the DECLARED type (count-like ops over nominal
+  sources no longer coerce the column or filter the aggregate output), and a
+  continuous `xOffset`/`yOffset` channel gets a linear scale over the band
+  width with vega's 18px bar size instead of a band scale.
   Closed clusters: the config layer (config forwarding into the Vega
   spec — guide blocks, mark -> config.mark, per-type blocks ->
   style[type], view -> cell with stroke/fill on the frame, title ->

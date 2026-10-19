@@ -29,7 +29,7 @@ import type {
   SizeSpec,
   VgSpec,
 } from './types.js'
-import { tickFormat, scaleFraction, tickValues, tickCount, isContinuous } from './scale.js'
+import { tickFormat, scaleFraction, tickValues, tickCount, isContinuous, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { trellisLayout, measureBounds } from './trellis.js'
@@ -3285,7 +3285,18 @@ function buildColumnHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
     // compact header scope.
     const useTitleBlock = hdrTitle.angle != null || hdrTitle.baseline != null || hdrTitle.fontSize != null
     const titleBlockH = useTitleBlock && labelItem ? boundText(new Bounds(), labelItem).height() : 0
-    if (labelItem) labelItem.y = useTitleBlock ? -(hdrPad + titleBlockH) : -(hdrPad + 2)
+    if (labelItem) {
+      const labelFs = (hdrTitle.fontSize as number | undefined) ?? 10
+      // vega nests an explicit-size header label in a title group at
+      // -(pad + blockHeight). The renderer bakes the baseline offset for an
+      // explicit baseline or angle; only an unrotated, baseline-less
+      // explicit-size label needs it folded into the flattened item position.
+      labelItem.y = !useTitleBlock
+        ? -(hdrPad + 2)
+        : hdrTitle.angle != null || hdrTitle.baseline != null
+          ? -(hdrPad + titleBlockH)
+          : -(hdrPad + titleBlockH) + Math.round(0.79 * labelFs)
+    }
     result.push({
       marktype: 'group', name: mark.name, role: 'column-header',
       items: [
@@ -3435,7 +3446,11 @@ function buildColumnTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup
     ...(tDef.limit != null ? { limit: tDef.limit as number } : {}),
   }
   const titleH = useTitleBlock ? boundText(new Bounds(), titleItem).height() : 0
-  titleItem.y = useTitleBlock ? -(titleOffset + titleH) : -(titleOffset + 2)
+  titleItem.y = !useTitleBlock
+    ? -(titleOffset + 2)
+    : tDef.angle != null || tDef.baseline != null
+      ? -(titleOffset + titleH)
+      : -(titleOffset + titleH) + Math.round(0.79 * ((tDef.fontSize as number | undefined) ?? 11))
   return {
     marktype: 'group', name: mark.name, role: 'column-title',
     items: [titleItem],
@@ -5662,7 +5677,9 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   // labels until none overlap); 'greedy' hides items colliding with the
   // last kept item. Bounds use the same headless text estimate vega uses.
   if (axis.labelOverlap && labels.length >= 3) {
-    const sep = 0
+    // vega Overlap: sep = _.separation || 0; a negative separation disables
+    // collisions, a positive one pads them.
+    const sep = (axis as { labelSeparation?: number }).labelSeparation ?? 0
     const boundsOf = (it: SceneItem) => {
       const w = itemTextWidth(it as FontProps, String(it.text ?? ''))
       const x = it.x ?? 0
@@ -5934,8 +5951,10 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
       }
     }
     if (Array.isArray(vs)) {
-      const toNum = (v: unknown): number => v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Number(v)
-      return vs.filter((v) => v != null).sort((a, b) => toNum(a) - toNum(b))
+      // vega AxisTicks: validTicks(scale, values, count) — values outside the
+      // scale's range are dropped and the rest are sorted in range order
+      // (a band axis with numeric picks therefore renders no ticks).
+      return validTicks(scale, vs.filter((v) => v != null), vs.length)
     }
     return []
   }
@@ -5984,20 +6003,17 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
     }
   }
 
+  // vega's AxisTicks tally: no tickCount means 10 (not "let the scale pick").
+  // Without this a linear axis with tickMinStep and no tickCount would step
+  // every minStep across the whole domain (hundreds of month labels).
+  if (count === undefined) count = 10
   // vega-encode passes tickMinStep into tickCount, which clamps the tick
-  // count to one tick per minimum step: count = min(count, span/minstep + 1).
-  // The calendar stepping below handles the count==null time-scale case.
-  if (tickMinStep != null && tickMinStep > 0 && count != null && typeof count === 'number'
-      && (scale.type === 'time' || scale.type === 'utc')) {
-    const rawDomain = scale.domain()
-    if (rawDomain.length >= 2) {
-      const toNum = (v: unknown): number => v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Number(v)
-      const d0 = toNum(rawDomain[0])
-      const d1 = toNum(rawDomain[rawDomain.length - 1])
-      if (Number.isFinite(d0) && Number.isFinite(d1) && d1 > d0) {
-        count = Math.min(count as number, Math.floor((d1 - d0) / tickMinStep || 1) + 1)
-      }
-    }
+  // count to one tick per minimum step: count = min(count, span/minstep + 1)
+  // and, for non-temporal non-log scales, shrinks count until tickStep >=
+  // minStep. tickCount() implements that rule for every scale type.
+  if (tickMinStep != null && tickMinStep > 0 && typeof count === 'number') {
+    const counted = tickCount(scale, count, tickMinStep)
+    if (typeof counted === 'number') count = counted
   }
 
   // For continuous non-time scales with tickMinStep but no tickCount, generate

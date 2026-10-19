@@ -543,29 +543,38 @@ function compileFaceted(spec: VLSpec): VLSpec {
     if (hdr?.labelAnchor != null) t.labelAnchor = hdr.labelAnchor
     if (hdr?.titleAnchor != null) t.anchor = hdr.titleAnchor
     if (hdr?.labelAngle != null) {
-      t.angle = hdr.labelAngle
-      // vega derives baseline/align from the angle (guide-label default
-      // middle/right for rotated labels — probed: angle 30 → bottom/right)
+      const ang = Number(hdr.labelAngle)
+      t.angle = ang
+      // vega derives baseline/align from the angle: positive rotates toward
+      // the start (right anchor), negative toward the end (left anchor), and
+      // 0 stays centered.
       if (hdr?.labelBaseline == null) t.baseline = 'bottom'
-      if (hdr?.labelAlign == null) t.align = 'right'
+      if (hdr?.labelAlign == null) t.align = ang === 0 ? 'center' : ang < 0 ? 'left' : 'right'
     }
     return t
   }
 
   const marks: Record<string, unknown>[] = []
   if (rowField) {
-    marks.push({ name: 'row-title', type: 'group', role: 'row-title', title: { text: rowFd ? channelTitle(rowFd) : rowField, orient: 'left', style: 'guide-title', offset: 10 } })
+    const cfgHeaderR = (isObject(spec.config) ? (spec.config as Record<string, unknown>).header : undefined) as Record<string, unknown> | undefined
+    const hdrR = { ...(cfgHeaderR ?? {}), ...(rowDef?.header as Record<string, unknown> | undefined ?? {}) }
+    marks.push({ name: 'row-title', type: 'group', role: 'row-title', title: { text: hdrR.title ?? (rowFd ? channelTitle(rowFd) : rowField), ...(hdrR.title != null ? {} : { orient: 'left' }), style: 'guide-title', offset: (hdrR.titlePadding as number | undefined) ?? 10 } })
   }
   if (colField) {
     const cfgHeader = (isObject(spec.config) ? (spec.config as Record<string, unknown>).header : undefined) as Record<string, unknown> | undefined
     const hdrC = { ...(cfgHeader ?? {}), ...(colDef?.header as Record<string, unknown> | undefined ?? {}) }
-    const ct: Record<string, unknown> = { text: colFd ? channelTitle(colFd) : colField, style: 'guide-title', offset: (hdrC.titlePadding as number | undefined) ?? 10 }
+    const ct: Record<string, unknown> = { text: hdrC.title ?? (colFd ? channelTitle(colFd) : colField), style: 'guide-title', offset: (hdrC.titlePadding as number | undefined) ?? 10 }
     if (hdrC.titleColor != null) ct.color = hdrC.titleColor
     if (hdrC.titleFontSize != null) ct.fontSize = hdrC.titleFontSize
     if (hdrC.titleFont != null) ct.font = hdrC.titleFont
     if (hdrC.titleFontWeight != null) ct.fontWeight = hdrC.titleFontWeight
     if (hdrC.titleLimit != null) ct.limit = hdrC.titleLimit
-    if (hdrC.titleAngle != null) { ct.angle = hdrC.titleAngle; ct.baseline = 'bottom'; ct.align = 'right' }
+    if (hdrC.titleAngle != null) {
+      const ang = Number(hdrC.titleAngle)
+      ct.angle = ang
+      ct.baseline = 'bottom'
+      ct.align = ang === 0 ? 'center' : ang < 0 ? 'left' : 'right'
+    }
     if (hdrC.titleOrient != null) ct.orient = hdrC.titleOrient
     if (hdrC.titleBaseline != null) ct.baseline = hdrC.titleBaseline
     if (hdrC.titleAnchor != null) {
@@ -1478,6 +1487,12 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     for (const f of fields) {
       if (castDone.has(f.field)) continue
       castDone.add(f.field)
+      const declared = (f.raw as Record<string, unknown> | undefined)?.type
+      // count/distinct/valid/missing over a nominal/ordinal field counts raw
+      // values — vega-lite does not coerce the source column (only temporal
+      // sources go through toNumber).
+      if (f.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(String(f.aggregate))
+        && (declared === 'nominal' || declared === 'ordinal')) continue
       if (timeUnitFields.has(f.field) || f.timeUnit || f.type === 'temporal') {
         // a timeUnit implies a temporal cast even when the declared type is
         // quantitative (probed: size/timeUnit-year casts the source toDate)
@@ -1622,7 +1637,8 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
           // scale/legend-bearing channels feed the filter; order/text only
           // sort or label, and vega-lite does not filter their aggregate
           // output (probed: order stderr keeps its undefined rows).
-          if (f.aggregate !== 'count' && f.type === 'quantitative' && SCALE_CHANNELS.includes(f.channel)) addCheck(aggregateAs(f))
+          const declared = (f.raw as Record<string, unknown> | undefined)?.type ?? f.type
+          if (f.aggregate !== 'count' && declared === 'quantitative' && SCALE_CHANNELS.includes(f.channel)) addCheck(aggregateAs(f))
         } else if (f.type === 'quantitative' || f.type === 'temporal') {
           addCheck(aggFieldName(f))
         }
@@ -2005,18 +2021,29 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       zero: false,
     })
   }
-  // xOffset/yOffset band scales
+  // xOffset/yOffset scales: discrete offsets use a band, continuous ones a
+  // linear scale over the same band-width range (vega-lite probes).
   for (const ch of ['xOffset', 'yOffset'] as const) {
     const offDef = fields.find((f) => f.channel === ch && f.field)
     if (offDef) {
-      // the offset scale spans the dimension band's inner width
       const dimChannel = ch === 'xOffset' ? 'x' : 'y'
-      scales.push({
-        name: ch,
-        type: 'band',
-        domain: sortedDomain(offDef, dataName),
-        range: [0, { signal: `bandwidth('${dimChannel}')` }],
-      })
+      if (isDiscreteType(offDef.type)) {
+        scales.push({
+          name: ch,
+          type: 'band',
+          domain: sortedDomain(offDef, dataName),
+          range: [0, { signal: `bandwidth('${dimChannel}')` }],
+        })
+      } else {
+        scales.push({
+          name: ch,
+          type: 'linear',
+          domain: offDef.scale?.domain ?? { data: dataName, field: aggFieldName(offDef) },
+          range: [0, { signal: `bandwidth('${dimChannel}')` }],
+          zero: false,
+          ...(offDef.scale?.type != null ? { type: String(offDef.scale.type) } : {}),
+        })
+      }
     }
   }
 
@@ -2228,6 +2255,9 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
     }
     const grid = (userAxis?.grid as boolean | undefined) ?? (isContinuousScaleType(sc.type) && !def.bin)
     const tickCountSignal = def.channel === 'x' ? { signal: 'ceil(width/40)' } : { signal: 'ceil(height/40)' }
+    // vega-lite suppresses the default tickCount for these cyclic/sub-day
+    // time units (the axis falls back to tickMinStep/vega's default count).
+    const suppressTickCount = def.timeUnit != null && ['month', 'hours', 'day', 'quarter'].includes(String(def.timeUnit))
     const orientSide = typeof userAxis?.orient === 'string' ? userAxis.orient : def.channel === 'x' ? 'bottom' : 'left'
     const gridScale = def.channel === 'x'
       ? (gridScaleOverride ?? (scaleByName.get('y') ? 'y' : undefined))
@@ -2243,7 +2273,7 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
         orient: orientSide,
         gridScale,
         grid: true,
-        tickCount: tickCountSignal,
+        ...(suppressTickCount ? {} : { tickCount: tickCountSignal }),
         domain: false,
         labels: false,
         aria: false,
@@ -2259,7 +2289,7 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       // the user's grid-affecting props land on the grid axis too (upstream
       // merges grid+labels into one axis; ours splits them)
       if (userAxis) {
-        for (const gk of ['gridColor', 'gridWidth', 'gridDash', 'gridOpacity', 'gridCap', 'tickOffset', 'translate', 'tickBand', 'tickExtra'] as const) {
+        for (const gk of ['gridColor', 'gridWidth', 'gridDash', 'gridOpacity', 'gridCap', 'tickOffset', 'translate', 'tickBand', 'tickExtra', 'tickCount', 'values'] as const) {
           if ((userAxis as Record<string, unknown>)[gk] !== undefined) gridAxis[gk] = (userAxis as Record<string, unknown>)[gk]
         }
       }
@@ -2279,7 +2309,7 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       labelAxis.labelOverlap = sc.type === 'log' ? 'greedy' : true
       // log axes carry no explicit tickCount — vega's axis defaults to 10,
       // which drives the log label filter (3/30/300 stay visible)
-      if (sc.type !== 'log') labelAxis.tickCount = def.bin
+      if (sc.type !== 'log' && !suppressTickCount) labelAxis.tickCount = def.bin
         ? { signal: def.channel === 'x' ? 'ceil(width/10)' : 'ceil(height/10)' }
         : tickCountSignal
       if (def.timeUnit) {
@@ -2331,12 +2361,8 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       void units
     }
     if (userAxis) {
-      const discretePos = sc.type === 'band' || sc.type === 'point' || sc.type === 'ordinal' || sc.type === 'bin-ordinal'
       for (const [k, v] of Object.entries(userAxis)) {
         if (k === 'grid' || k === 'title' || k === 'orient' || k === 'scale') continue
-        // An explicit axis format on a discrete positional axis is inert, but
-        // config.axis/axisX/axisY formats are inherited by the compiled axis.
-        if (k === 'format' && discretePos && isObject(def.axis) && (def.axis as Record<string, unknown>).format !== undefined) continue
         labelAxis[k] = v
       }
       if (userAxis.orient) labelAxis.orient = userAxis.orient
@@ -2596,8 +2622,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const opacityDef = fields.find((f) => f.channel === 'opacity' && f.field)
   const strokeWidthDef = fields.find((f) => f.channel === 'strokeWidth' && f.field)
   const update: Record<string, unknown> = {}
-  const xOffsetPresent = fields.some((f) => f.channel === 'xOffset' && f.field)
-  const yOffsetPresent = fields.some((f) => f.channel === 'yOffset' && f.field)
+  const xOffsetDefM = fields.find((f) => f.channel === 'xOffset' && f.field)
+  const yOffsetDefM = fields.find((f) => f.channel === 'yOffset' && f.field)
+  const xOffsetPresent = xOffsetDefM != null
+  const yOffsetPresent = yOffsetDefM != null
+  const xOffsetContinuous = xOffsetDefM != null && !isDiscreteType(xOffsetDefM.type)
+  const yOffsetContinuous = yOffsetDefM != null && !isDiscreteType(yOffsetDefM.type)
   // config resolution (getMarkPropOrConfig): the mark def first, then the
   // mark-type config block, then the generic config.mark block
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
@@ -2709,7 +2739,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             if (xOffsetPresent) {
               update.x = { scale: 'x', field: aggFieldName(xDef), offset: { scale: 'xOffset', field: aggFieldName(fields.find((f) => f.channel === 'xOffset')!) } }
             }
-            update.width = { signal: `max(0.25, bandwidth('${xOffsetPresent ? 'xOffset' : 'x'}'))` }
+            update.width = xOffsetContinuous ? { value: C.defaultStep } : { signal: `max(0.25, bandwidth('${xOffsetPresent ? 'xOffset' : 'x'}'))` }
           }
         } else {
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
@@ -2789,7 +2819,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
               const ych = yAlignH === 'bottom' ? 'y2' : yAlignH === 'middle' ? 'yc' : 'y'
               update[ych] = { scale: 'y', field: aggFieldName(yDef), offset: { scale: 'yOffset', field: aggFieldName(fields.find((f) => f.channel === 'yOffset')!) } }
             }
-            update.height = { signal: `max(0.25, bandwidth('${yOffsetPresent ? 'yOffset' : 'y'}'))` }
+            update.height = yOffsetContinuous ? { value: C.defaultStep } : { signal: `max(0.25, bandwidth('${yOffsetPresent ? 'yOffset' : 'y'}'))` }
           }
         } else {
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
