@@ -276,7 +276,9 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   // When scale.bins is set, the tickValues/tickCount helpers
   // use validTicks(scale, scale.bins, count) instead of scale.ticks(count),
   // which generates ticks from the actual bin boundaries.
-  if (c.bins) {
+  if (Array.isArray(c.bins) && c.interpolate != null) {
+    ;(s as unknown as { bins: unknown[] }).bins = c.bins
+  } else if (c.bins && !Array.isArray(c.bins)) {
     const binsVal = resolveBins(c.bins as { signal?: string }, ctx)
     if (binsVal && typeof binsVal === 'object' && 'start' in binsVal && 'stop' in binsVal && 'step' in binsVal) {
       const b = binsVal as { start: number; stop: number; step: number }

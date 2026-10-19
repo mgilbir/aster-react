@@ -4757,7 +4757,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const bandCount = rangeVals.length
     if (bandCount > 0 && orient === 'right' || orient === undefined) {
       const SWATCH_W = 16
-      const SWATCH_H = Math.max(25, Math.floor(200 / bandCount))
+      const SWATCH_H = Math.max(25, 200 / bandCount)
       const sortedDomain = [...rawDomain].filter((v): v is number => typeof v === 'number').sort((a, b) => a - b)
       const isThreshold = scaleType === 'threshold'
       // Breakpoint label strings — the legend width is derived from the widest
