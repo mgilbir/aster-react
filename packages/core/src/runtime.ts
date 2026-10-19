@@ -4754,12 +4754,19 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // explicit baseline replaces the centered guess with the real text box.
     const halfLabel = fontSize / 2
     const labelBaselineS = (legend as { labelBaseline?: string }).labelBaseline
+    const clipHeightS = (legend as { clipHeight?: number }).clipHeight
+    const hasClipS = clipHeightS != null && !!clipHeightS
     const b = entries.map((e) => {
       const symVisible = opacity !== 0
       const ext = !symVisible ? e.r : symbolType === 'square' ? (hasStroke ? e.sizeD / 2 : e.r) : e.r + strokeWidth * 2
-      const y = e.sizeD / 2
+      const y = hasClipS ? (clipHeightS as number) / 2 : e.sizeD / 2
       const lbY1 = labelBaselineS === 'top' ? y : labelBaselineS === 'bottom' ? y - fontSize : y - halfLabel
       const lbY2 = labelBaselineS === 'top' ? y + fontSize : labelBaselineS === 'bottom' ? y : y + halfLabel
+      if (hasClipS) {
+        // the clipPath cuts the symbol to the entry rect; only the (possibly
+        // overflowing) label and the clip corners remain in the bound.
+        return { y1: Math.min(lbY1, 0), y2: Math.max(lbY2, clipHeightS as number) }
+      }
       return { y1: Math.min(y - ext, lbY1), y2: Math.max(y + ext, lbY2) }
     })
     // Single-column vertical grid layout (align 'each', rowPadding 2).
@@ -4824,6 +4831,76 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // pixel and boundStrokes the legend bounds; symbol strokes never do.
     const borderColor = (legend as { strokeColor?: string }).strokeColor
 
+    // --- horizontal size legend (direction:horizontal / orient top|bottom) ---
+    // Entries pack left→right; each entry uses its OWN size datum for the
+    // symbol/label offset (vega's columns=0 x-signal), centered vertically in
+    // the tallest entry row.
+    const horizontalS = legend.direction === 'horizontal' || legend.orient === 'top' || legend.orient === 'bottom'
+      || (typeof legend.columns === 'number' && Number.isInteger(legend.columns) && legend.columns >= 0)
+    if (horizontalS) {
+      const labelWidth = (label: string): number => {
+        const w = nominalTextWidth(label, fontSize)
+        return sizeLabelLimit != null && sizeLabelLimit > 0 ? Math.min(w, Math.max(sizeLabelLimit, ellipsisW)) : w
+      }
+      const hx = entries.map((e) => {
+        const symVisible = opacity !== 0
+        const ext = !symVisible ? e.r : symbolType === 'square' ? (hasStroke ? e.sizeD / 2 : e.r) : e.r + strokeWidth * 2
+        const sx = e.sizeD / 2 + symbolOffset0
+        const lx = e.sizeD + symbolOffset0 + labelOffset
+        const lw = labelWidth(e.label)
+        const lx1 = labelAlignS === 'center' ? lx - lw / 2 : labelAlignS === 'right' ? lx - lw : lx
+        const x1 = Math.min(sx - ext, lx1)
+        const x2 = Math.max(sx + ext, lx1 + lw)
+        return { sx, lx, x1, x2, width: Math.ceil(x2) }
+      })
+      const rowExtentH = Math.ceil(Math.max(...b.map((x) => x.y2)))
+      const hxPos: number[] = [0]
+      for (let i = 1; i < hx.length; i++) {
+        hxPos.push(hxPos[i - 1]! + hx[i - 1]!.width + 10 + Math.max(0, Math.ceil(-hx[i]!.x1)))
+      }
+      const contentWidthH = hxPos[hx.length - 1]! + hx[hx.length - 1]!.width
+      const titlePadH = (legend as { titlePadding?: number }).titlePadding ?? 5
+      const titleRowH = titleStr.length > 0 ? Math.abs(titleFsS) + titlePadH : 0
+      const boxW = Math.ceil(Math.max(contentWidthH, titleWidth) + 2 * legendPad)
+      const boxH = Math.ceil(titleRowH + rowExtentH + 2 * legendPad)
+      const bgX = borderColor != null ? 0.5 : 0
+      const bgY = borderColor != null ? 0.5 : 0
+      const cr = (legend as { cornerRadius?: number }).cornerRadius
+      const fillColor = (legend as { fillColor?: string }).fillColor
+      const items: SceneItem[] = []
+      items.push({ path: cr != null && cr > 0 ? roundedRectPath(bgX, bgY, boxW, boxH, Math.min(cr, boxW / 2, boxH / 2)) : `M${bgX},${bgY}h${boxW}v${boxH}h-${boxW}Z`, x: 0, y: 0, ...(fillColor != null ? { fill: fillColor } : {}), ...(borderColor != null ? { stroke: String(borderColor) } : {}) })
+      const titleBaselineH = (legend as { titleBaseline?: string }).titleBaseline ?? 'top'
+      const titleYOffH = titleBaselineH === 'middle' ? Math.round(0.3 * titleFsS)
+        : titleBaselineH === 'bottom' ? Math.round(-0.21 * titleFsS) : Math.round(0.79 * titleFsS)
+      if (titleStr.length > 0) {
+        const limit = (legend as { titleLimit?: number }).titleLimit
+        items.push({ text: titleStr, x: titleXBase + legendPad, y: titleYOffH + legendPad, align: titleAlignS as SceneItem['align'], fill: titleColorS, fontSize: titleFsS, ...(limit != null ? { limit } : {}), ...(titleOpacityS != null ? { fillOpacity: titleOpacityS } : {}) })
+      }
+      const symStrokeH = symStrokeColor ?? (strokeColor != null ? String(strokeColor) : '#888')
+      const symOpacityH = opacity ?? 0.7
+      for (let i = 0; i < entries.length; i++) {
+        const e = entries[i]!
+        const entryX = legendPad + hxPos[i]!
+        const entryY = legendPad + titleRowH + (rowExtentH - b[i]!.y2) / 2
+        items.push({ path: `M0,0h${hx[i]!.width}v${b[i]!.y2}h-${hx[i]!.width}Z`, x: entryX, y: entryY })
+        const sx = entryX + hx[i]!.sx
+        const sy = entryY + e.sizeD / 2
+        if (symbolType === 'square') {
+          const w = Math.sqrt(e.size)
+          items.push({ path: `M${-w / 2},${-w / 2}h${w}v${w}h${-w}Z`, x: sx, y: sy, stroke: symStrokeH, strokeWidth, ...(sizeSymbolDash ? { strokeDash: sizeSymbolDash } : {}), opacity: symOpacityH })
+        } else if (symbolType !== 'circle') {
+          items.push({ path: symbolPath(symbolType, e.r), x: sx, y: sy, stroke: symStrokeH, strokeWidth, ...(sizeSymbolDash ? { strokeDash: sizeSymbolDash } : {}), opacity: symOpacityH })
+        } else {
+          items.push({ shape: 'circle', radius: e.r, x: sx, y: sy, stroke: symStrokeH, strokeWidth, ...(sizeSymbolDash ? { strokeDash: sizeSymbolDash } : {}), opacity: symOpacityH })
+        }
+        const limit = (legend as { labelLimit?: number }).labelLimit
+        items.push({ text: e.label, x: entryX + hx[i]!.lx, y: labelBaselineS != null ? sy : sy + Math.round(0.3 * fontSize), align: labelAlignS as SceneItem['align'], ...(labelBaselineS != null ? { baseline: labelBaselineS as SceneItem['baseline'] } : {}), fill: labelColorS, fontSize, ...(limit != null ? { limit } : {}), ...(labelOpacityS != null ? { fillOpacity: labelOpacityS } : {}) })
+      }
+      const outH: SceneGroup = { marktype: 'group', role: 'legend', x: 0, y: 0, width: boxW, height: boxH, items }
+      ;(outH as unknown as Record<string, unknown>)._borderStroke = borderColor != null
+      return outH
+    }
+
     const items: SceneItem[] = []
     const legendCornerRadius = (legend as { cornerRadius?: number }).cornerRadius
     const legendFillColor = (legend as { fillColor?: string }).fillColor
@@ -4852,7 +4929,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]!
       const ey = entryYBaseS + legendPad + yPos[i]!
-      const sy = ey + e.sizeD / 2
+      const sy = ey + (hasClipS ? (clipHeightS as number) / 2 : e.sizeD / 2)
       const entryX = entryXShiftS + legendPad + contentShiftS
       items.push({ path: `M0,0h${entryWidth}v${b[i]!.y2}h-${entryWidth}Z`, x: entryX, y: ey })
       // Vega always renders size legend symbols with a default stroke (#888)
@@ -4880,6 +4957,18 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
           ...(sizeSymbolDash ? { strokeDash: sizeSymbolDash } : {}),
           opacity: symOpacity,
         } as SceneItem)
+      } else if (hasClipS) {
+        // a clipped circle must be a path item so the renderer can hang the
+        // clip-path on it (vega defs a rect over the entry)
+        items.push({
+          path: symbolPath('circle', e.r),
+          x: symbolX + entryXShiftS + legendPad + contentShiftS,
+          y: sy,
+          stroke: symStroke,
+          strokeWidth,
+          ...(sizeSymbolDash ? { strokeDash: sizeSymbolDash } : {}),
+          opacity: symOpacity,
+        } as SceneItem)
       } else {
         items.push({
           shape: 'circle',
@@ -4891,6 +4980,9 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
           ...(sizeSymbolDash ? { strokeDash: sizeSymbolDash } : {}),
           opacity: symOpacity,
         } as SceneItem)
+      }
+      if (hasClipS && !ctx.rawGuides) {
+        ;(items[items.length - 1] as Record<string, unknown>)._clip = { w: entryWidth, h: b[i]!.y2 }
       }
       items.push({ text: e.label, x: labelX + entryXShiftS + legendPad + contentShiftS, y: labelBaselineS != null ? sy : sy + Math.round(0.3 * fontSize), align: labelAlignS as SceneItem['align'], ...(labelBaselineS != null ? { baseline: labelBaselineS as SceneItem['baseline'] } : {}), fill: labelColorS, fontSize, ...((legend as { labelLimit?: number }).labelLimit != null ? { limit: (legend as { labelLimit?: number }).labelLimit } : {}), ...(labelOpacityS != null ? { fillOpacity: labelOpacityS } : {}) })
     }
