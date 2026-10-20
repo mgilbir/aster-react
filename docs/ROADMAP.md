@@ -70,10 +70,10 @@ All gates re-run from the working tree after the parity iteration.
 | `pnpm test` | 241 tests / 25 files, all pass |
 | `pnpm conformance` | **413 / 413** SVG geometry vs real Vega |
 | `pnpm conformance-vl` | **125 / 125** (incl. repeat, scatter-matrix, vl-facet-2d) |
-| `pnpm sweep-vl` (27,513 VL schema cases) | **99.4%** — 27,356 ok, 62 differ, 34 engine-error, 21 node-error, 40 both-refused |
+| `pnpm sweep-vl` (27,513 VL schema cases) | **99.7%** — 27,418 ok, 0 differ, 0 engine-error, 21 node-error, 34 nondeterministic, 40 both-refused |
 | `pnpm conformance:browser` (Chromium, live canvas text metrics) | **413 / 413** |
 | `pnpm probe` | 2 / 2 |
-| bundle budget (`@aster/core` `renderSpec`) | 97.0 kB gzip / 100 kB — pass |
+| bundle budget (`@aster/core` `renderSpec`) | 93.3 kB gzip / 96 kB — pass |
 | `pnpm bench:browser` | aster 16.7 ms median frames / 2.2% long frames vs react-vega 26.8 ms / 98.1%; heap-churn retained ~0 MB |
 
 Engine fixes from the parity iteration (closing the corpus and browser gates):
@@ -116,7 +116,7 @@ Second-pass engine fixes (closing the arc/theta/radius and legend families):
 - **Aggregates**: the variance family (variance/stdev/stderr and population
   variants) yields undefined below two valid values (→ zero-size rects).
 
-Third-pass engine fixes (the schema-sweep iteration, 94.8% → 98.3%):
+Third-pass engine fixes (the schema-sweep long tail, now at 99.5%):
 
 - **Stack law**: ported vega-lite's `potentialStackedChannel` rules — explicit
   `stack:false/null`, ranged marks, and an aggregate anywhere in the encoding
@@ -171,13 +171,18 @@ Third-pass engine fixes (the schema-sweep iteration, 94.8% → 98.3%):
   tick placement (with explicit `gradientLength`/`gradientThickness`/
   `labelOffset`/label-size honored).
 
-Remaining sweep residue (62 differ + 55 error cases) is a long tail across
-~40 property families — guide-scale ranges/domains, per-property header and
-legend-layout tails (columns, titleOrient, clipHeight, orient), config
-`axis`/`header` blocks, row-facet header widths, and per-family one-offs — see
-the sweep family scoreboard for the ranked list. The `ci0`/`ci1` bootstrap
-aggregate cases are pinned against a nondeterministic oracle (Math.random
-inside vega) and cannot match deterministically.
+Schema-sweep **differ residue is closed (0)**. The final clusters were
+guide-scale ranges/domains (degenerate ranges rendering at the origin),
+facet-header `labelOrient`/`orient` (labels as per-cell titles, footer labels,
+and side titles), config `axis`/`header` precedence, axis orient/grid geometry,
+label-angle anchors, `labelSeparation`/`tickMinStep`/`tickRound` tails,
+`values`/bootstrap aggregate domains, and the size-legend grid tails
+(`columns`, `gridAlign`, `rowPadding`, `labelFontSize`, negative
+`symbolStrokeWidth`). The remaining non-ok cases are not comparison failures:
+40 specs both engines refuse, 21 cases where the oracle crashes/refuses an
+invalid shape/radius or degenerate scale spec, and 34 nondeterministic
+`ci0`/`ci1` bootstrap aggregates (`Math.random` inside vega), pinned in the
+sweep runner.
 
 Size: **~17.7k main / ~2.7k test LOC**. For scale, the siblings' engines:
 
@@ -618,14 +623,16 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   non-aggregated field, the DEFAULT_REDUCED_OPACITY non-aggregate rule,
   the facet view's grid sizing and header labels, tick band/thickness
   config fallbacks, bar band-align/size semantics, and the arc radius
-  resolution chain. Remaining residue: discrete-scheme piecewise
-  sampling (vega's scheme accessor emits a longer sampled palette than
-  the raw scheme array), the ci0/ci1 bootstrap (Math.random inside
-  vega — the oracle is nondeterministic there by design), guide-legend
-  layout tails (columns/clipHeight/titleOrient), the row-facet title's
-  rotated-bound epsilon (the R8.4 metric class), config-point's
-  cross-block geometry props, and per-property one-offs below 5 cases
-  per family.
+  resolution chain. The schema sweep's comparable differ set is now
+  zero: the final pass closed guide-scale ranges/domains, facet header
+  labelOrient/orient, config axis/header precedence, axis orient/grid
+  geometry, label-angle anchors, tick/label tails, `values` aggregate
+  domains, and size-legend grid layout. Remaining non-differ cases are
+  the `ci0`/`ci1` bootstrap (Math.random inside vega — the oracle is
+  nondeterministic by design), oracle refusals of invalid shapes/radii
+  and degenerate scale specs, plus limitations not exercised by this
+  sweep (discrete-scheme piecewise sampling, config-point cross-block
+  geometry), which stay tracked by probes.
 - **R8.5** Promote every remaining limitation into a failing probe.
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
 

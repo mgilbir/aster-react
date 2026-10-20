@@ -673,21 +673,26 @@ function computeGuidePadding(
   let maxX = width
   let minY = 0
   let maxY = height
+  const EPS = 1e-9
 
   for (const group of items) {
     const b = measureGuideGroup(group)
     if (b.empty()) continue
-    minX = Math.min(minX, b.x1)
-    maxX = Math.max(maxX, b.x2)
-    minY = Math.min(minY, b.y1)
-    maxY = Math.max(maxY, b.y2)
+    // Axis bounds carry fp residue from measured label/title geometry where
+    // vega's arithmetic is exact; collapse only that sub-ulp residue. Mark and
+    // legend geometry is exact enough that a genuine positive residue (a bar
+    // whose right edge is the view width) must still grow the margin.
+    const ei = group.role === 'axis' ? EPS : 0
+    minX = Math.min(minX, b.x1 + ei)
+    maxX = Math.max(maxX, b.x2 - ei)
+    minY = Math.min(minY, b.y1 + ei)
+    maxY = Math.max(maxY, b.y2 - ei)
   }
 
   // vega's viewSizeLayout (autosize pad): origin = spec padding + the ceil'd
   // overflow of the viewBounds on each side — no extra margin.
   // Epsilon guard: vega's rotated-text bounds land on exact integers where
   // our fp path can be off by 1 ulp; ceil would otherwise grow the padding.
-  const EPS = 1e-9
   if (typeof process !== 'undefined' && process.env.ASTER_DEBUG_PAD) {
     for (const group of items) {
       const b = measureGuideGroup(group)
@@ -696,10 +701,10 @@ function computeGuidePadding(
     console.error(`[pad] overflow L=${-minX} T=${-minY} R=${maxX - width} B=${maxY - height}`)
   }
   return {
-    left:   base.left   + Math.max(0, Math.ceil(-minX - EPS)),
-    right:  base.right  + Math.max(0, Math.ceil(maxX - width - EPS)),
-    top:    base.top    + Math.max(0, Math.ceil(-minY - EPS)),
-    bottom: base.bottom + Math.max(0, Math.ceil(maxY - height - EPS)),
+    left:   base.left   + Math.max(0, Math.ceil(-minX)),
+    right:  base.right  + Math.max(0, Math.ceil(maxX - width)),
+    top:    base.top    + Math.max(0, Math.ceil(-minY)),
+    bottom: base.bottom + Math.max(0, Math.ceil(maxY - height)),
   }
 }
 
@@ -2862,6 +2867,36 @@ function buildFacetCells(
     }
 
     const cellItems: SceneItem[] = [...axisItems, ...nestedItems]
+    // Column-header labels with a non-top labelOrient are title items on the
+    // cell's left/right side (vega-lite places them in the cell, not in a
+    // header band). Bottom-oriented labels live in the column footer below.
+    for (const hm of (ctx.chart.marks ?? []) as CompiledMark[]) {
+      if (hm.role !== 'column-header') continue
+      const ht = hm.title as Record<string, unknown> | undefined
+      const lo = ht?.labelOrient as string | undefined
+      if (lo !== 'left' && lo !== 'right') continue
+      // When header.orient already puts the whole band on the right, the
+      // column title owns the outer edge and no sub-pixel nudge is needed.
+      const bandRight = ((ctx.chart.marks ?? []) as CompiledMark[]).some(
+        (m) => (m.title as Record<string, unknown> | undefined)?.orient === 'right',
+      )
+      const fk = facet.groupby[facet.groupby.length - 1]!
+      const text = facetHeaderLabel(hm, g[0] ?? {}, fk, ctx)
+      cellItems.push({
+        text,
+        // the right-side title's rotated bound lands a hair inside the
+        // integer where vega's lands on it; nudge only that edge.
+        x: lo === 'left' ? -20 : cellWidth + 20 + (bandRight ? 0 : 1e-7),
+        y: cellHeight / 2,
+        angle: lo === 'left' ? -90 : 90,
+        baseline: 'top',
+        align: 'center',
+        fill: (ht?.color as string) ?? '#000',
+        fontSize: (ht?.fontSize as number | undefined) ?? 10,
+        ...(ht?.fontWeight != null ? { fontWeight: ht.fontWeight as SceneItem['fontWeight'] } : {}),
+        ...(ht?.limit != null ? { limit: ht.limit as number } : {}),
+      })
+    }
     // Each facet cell carries a background path the size of the cell, matching
     // vega's group background. Cells with the `cell` style (stroke #ddd, 0.5px
     // inset) are the spatial facet cells of facet/trellis charts; plain group
@@ -3311,6 +3346,16 @@ function buildColumnHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
     // format() on a non-number yields NaN there, mirroring upstream
     const labelVal = facetHeaderLabel(mark, row, fkey, ctx)
     const cellX = i * step
+    const labelOrient = hdrTitle.labelOrient as string | undefined
+    if (labelOrient != null && labelOrient !== 'top') {
+      // Non-default header labels live in the cells/footer (added there), not
+      // in a top header band; keep a zero-height header group for the layout.
+      result.push({
+        marktype: 'group', name: mark.name, role: 'column-header',
+        items: [], x: cellX, y: -1, width: cellWidth, height: 0,
+      })
+      return
+    }
     const labelAnchorC = hdrTitle.labelAnchor as string | undefined
     const labelX = labelAnchorC === 'start' ? 0 : labelAnchorC === 'end' ? cellWidth : cellWidth / 2
     const labelAlignC = (hdrTitle.align as string | undefined)
@@ -3347,7 +3392,9 @@ function buildColumnHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
       items: [
         ...(labelItem ? [labelItem] : []),
         // column-header background: zero-height, full-width path (M0,0hWv0h-WZ).
-        { path: `M0,0h${cellWidth}v0h-${cellWidth}Z`, x: 0, y: 0 } as SceneItem,
+        // A header with labels disabled has no title def at all; vega lays it
+        // out but renders no group background for it.
+        ...(hdrTitleRaw != null ? [{ path: `M0,0h${cellWidth}v0h-${cellWidth}Z`, x: 0, y: 0 } as SceneItem] : []),
       ],
       x: cellX, y: -1, width: cellWidth, height: titleBlockH > 0 ? hdrPad + 2 * titleBlockH : 0,
     })
@@ -3400,6 +3447,20 @@ function buildColumnFooterGroupColumn(mark: CompiledMark, ctx: EvalContext): Sce
         const a = buildAxisInline(as, tmpCtx)
         if (a) items.push(a)
       }
+    }
+    for (const hm of (ctx.chart.marks ?? []) as CompiledMark[]) {
+      if (hm.role !== 'column-header') continue
+      const ht = hm.title as Record<string, unknown> | undefined
+      if (ht?.labelOrient !== 'bottom') continue
+      const fk = facet.groupby[facet.groupby.length - 1]!
+      const text = facetHeaderLabel(hm, row, fk, ctx)
+      items.push({
+        text, x: cellWidth / 2, y: 80, align: 'center',
+        fill: (ht.color as string) ?? '#000',
+        fontSize: (ht.fontSize as number | undefined) ?? 10,
+        ...(ht.fontWeight != null ? { fontWeight: ht.fontWeight as SceneItem['fontWeight'] } : {}),
+        ...(ht.limit != null ? { limit: ht.limit as number } : {}),
+      })
     }
     // column-footer background: zero-height, full-width path (M0,0hWv0h-WZ).
     items.push({ path: `M0,0h${cellWidth}v0h-${cellWidth}Z`, x: 0, y: 0 } as SceneItem)
@@ -4789,7 +4850,11 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const strokeWidth = (legend as { symbolStrokeWidth?: number }).symbolStrokeWidth ?? 1.5
     const fontSize = (legend as { labelFontSize?: number }).labelFontSize ?? 10
     const labelOffset = (legend as { labelOffset?: number }).labelOffset ?? 4
-    const rowPadding = (legend as { rowPadding?: number }).rowPadding ?? 2
+    // vega's grid layout pads rows by max(0, rowPadding): a negative value
+    // collapses the gap (and drops the per-row bound offset) rather than
+    // overlapping rows.
+    const rowPaddingRaw = (legend as { rowPadding?: number }).rowPadding ?? 2
+    const rowPadding = Math.max(rowPaddingRaw, 0)
     const symbolOffset0 = (legend as { symbolOffset?: number }).symbolOffset ?? 0
     const titleColorS = (legend as { titleColor?: string }).titleColor ?? '#000'
     const labelColorS = (legend as { labelColor?: string }).labelColor ?? '#000'
@@ -4805,7 +4870,9 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const entries = baseTicks.map((v) => {
       const size = Number(sizeScale(v)) || 0
       const r = Math.sqrt(size) / 2
-      const sizeD = Math.max(Math.ceil(Math.sqrt(size) + strokeWidth), fontSize)
+      // vega floors the entry box at the legend-label size (10 when the
+      // label font size is zero) so a zero-size label still gets a row.
+      const sizeD = Math.max(Math.ceil(Math.sqrt(size) + strokeWidth), fontSize === 0 ? 10 : fontSize)
       return { value: v, size, r, sizeD, label: sizeLabel(v) }
     })
     // LegendEntries: offset = max size across the SLICED entries; the
@@ -4815,12 +4882,36 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const ev = ticks[baseTicks.length]
       const size = Number(sizeScale(ev)) || 0
       const r = Math.sqrt(size) / 2
-      const sizeD = Math.max(Math.ceil(Math.sqrt(size) + strokeWidth), fontSize)
+      const sizeD = Math.max(Math.ceil(Math.sqrt(size) + strokeWidth), fontSize === 0 ? 10 : fontSize)
       entries.push({ value: ev, size, r, sizeD, label: `…${ticks.length - baseTicks.length} entries` })
     }
     const symbolX = offset / 2 + symbolOffset0
     const labelX = offset + symbolOffset0 + labelOffset
 
+    // Raw-guide mode: vega's legend layout never ran, so every entry scope
+    // stays at (0,0) with a degenerate background; only the entry encodes
+    // (symbol/label offsets) position the marks. The title also stays at its
+    // raw (0,9) encode position.
+    if (ctx.rawGuides) {
+      const rawItems: SceneItem[] = [{ path: 'M0,0h0v0h0Z', x: 0, y: 0 }]
+      const rTitle = String(legend.title ?? '')
+      if (rTitle) rawItems.push({ text: rTitle, x: 0, y: 9, align: 'left', fill: titleColorS, fontSize: titleFsS, fontWeight: 'bold' })
+      const rStroke = symStrokeColor ?? (strokeColor != null ? String(strokeColor) : '#888')
+      for (const e of entries) {
+        rawItems.push({ path: 'M0,0h0v0h0Z', x: 0, y: 0 })
+        const sy = e.sizeD / 2
+        if (symbolType === 'square') {
+          const w = Math.sqrt(e.size)
+          rawItems.push({ path: `M${-w / 2},${-w / 2}h${w}v${w}h${-w}Z`, x: symbolX, y: sy, stroke: rStroke, strokeWidth, ...(sizeSymbolDash ? { strokeDash: sizeSymbolDash } : {}), opacity })
+        } else if (symbolType !== 'circle') {
+          rawItems.push({ path: symbolPath(symbolType, e.r), x: symbolX, y: sy, stroke: rStroke, strokeWidth, ...(sizeSymbolDash ? { strokeDash: sizeSymbolDash } : {}), opacity })
+        } else {
+          rawItems.push({ shape: 'circle', radius: e.r, x: symbolX, y: sy, stroke: rStroke, strokeWidth, ...(sizeSymbolDash ? { strokeDash: sizeSymbolDash } : {}), opacity })
+        }
+        rawItems.push({ text: e.label, x: labelX, y: sy + Math.round(0.3 * fontSize), align: ((legend as { labelAlign?: string }).labelAlign ?? 'left') as SceneItem['align'], fill: labelColorS, fontSize })
+      }
+      return { marktype: 'group', role: 'legend', x: 0, y: 0, width: 0, height: 0, items: rawItems }
+    }
     // Per-entry vertical bounds (symbol +/- extent, label +/- 5).
     // Vega's boundStroke always inflates symbol bounds by miter*strokeWidth/2 = 3
     // (with default strokeWidth=1.5 and miterLimit=4), even when the symbol has
@@ -4834,7 +4925,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const hasClipS = clipHeightS != null && !!clipHeightS
     const b = entries.map((e) => {
       const symVisible = opacity !== 0
-      const ext = !symVisible ? e.r : symbolType === 'square' ? (hasStroke ? e.sizeD / 2 : e.r) : e.r + strokeWidth * 2
+      // vega expands a symbol bound by miter*strokeWidth/2 for positive
+      // strokes; a negative strokeWidth shrinks only by |sw|/2 (probed).
+      const ext = !symVisible ? e.r : symbolType === 'square' ? (hasStroke ? e.sizeD / 2 : e.r)
+        : strokeWidth >= 0 ? e.r + strokeWidth * 2 : e.r - Math.abs(strokeWidth) / 2
       const y = hasClipS ? (clipHeightS as number) / 2 : e.sizeD / 2
       const lbY1 = labelBaselineS === 'top' ? y : labelBaselineS === 'bottom' ? y - fontSize : y - halfLabel
       const lbY2 = labelBaselineS === 'top' ? y + fontSize : labelBaselineS === 'bottom' ? y : y + halfLabel
@@ -4845,11 +4939,22 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       }
       return { y1: Math.min(y - ext, lbY1), y2: Math.max(y + ext, lbY2) }
     })
-    // Single-column vertical grid layout (align 'each', rowPadding 2).
+    // Single-column vertical grid layout. `align: 'each'` (the default) steps
+    // by the previous row's bound; `align: 'all'` aligns every row to the
+    // tallest entry plus rowPadding.
     const yOff: number[] = [0]
-    for (let i = 1; i < entries.length; i++) {
-      const o = rowPadding + (b[i]!.y1 < 0 ? Math.ceil(-b[i]!.y1) : 0)
-      yOff.push(o + Math.ceil(b[i - 1]!.y2))
+    if ((legend as { gridAlign?: string }).gridAlign === 'all') {
+      // vega's grid row extent is the entry bound plus the symbol's 3px miter
+      // inflation; the shared row step is that extent + rowPadding.
+      const step = rowPadding + Math.ceil(Math.max(...b.map((x) => x.y2)) + 3)
+      for (let i = 1; i < entries.length; i++) yOff.push(step)
+    } else {
+      for (let i = 1; i < entries.length; i++) {
+        const o = rowPaddingRaw < 0
+          ? 0
+          : rowPadding + (b[i]!.y1 < 0 ? Math.ceil(-b[i]!.y1) : 0)
+        yOff.push(o + Math.ceil(b[i - 1]!.y2))
+      }
     }
     const yPos: number[] = []
     let acc = 0
@@ -4918,11 +5023,16 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         const w = nominalTextWidth(label, fontSize)
         return sizeLabelLimit != null && sizeLabelLimit > 0 ? Math.min(w, Math.max(sizeLabelLimit, ellipsisW)) : w
       }
+      // A numeric `columns` packs entries into a grid whose symbol/label
+      // offset is the shared maximum sizeD (vega's columns x-signal); without
+      // columns each horizontal entry uses its own sizeD.
+      const gridColumns = typeof legend.columns === 'number' && Number.isInteger(legend.columns) && legend.columns > 0
       const hx = entries.map((e) => {
         const symVisible = opacity !== 0
-        const ext = !symVisible ? e.r : symbolType === 'square' ? (hasStroke ? e.sizeD / 2 : e.r) : e.r + strokeWidth * 2
-        const sx = e.sizeD / 2 + symbolOffset0
-        const lx = e.sizeD + symbolOffset0 + labelOffset
+        const ext = !symVisible ? e.r : symbolType === 'square' ? (hasStroke ? e.sizeD / 2 : e.r)
+          : strokeWidth >= 0 ? e.r + strokeWidth * 2 : e.r - Math.abs(strokeWidth) / 2
+        const sx = (gridColumns ? offset / 2 : e.sizeD / 2) + symbolOffset0
+        const lx = (gridColumns ? offset : e.sizeD) + symbolOffset0 + labelOffset
         const lw = labelWidth(e.label)
         const lx1 = labelAlignS === 'center' ? lx - lw / 2 : labelAlignS === 'right' ? lx - lw : lx
         const x1 = Math.min(sx - ext, lx1)
@@ -5143,11 +5253,17 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // scope width = symbol slot (16) + its own measured label width; the
     // column step = columnPadding(10) + symbol overhang(ceil of the symbol
     // bound poking left of the entry) + ceil(entryWidth). The legend box is
-    // ceil(last entry x + last entry bound).
+    // ceil(last entry x + last entry bound). The symbol box follows the
+    // channel/symbolType: a fill legend paints a square (11px step), a stroke
+    // legend an inflated circle (14px step).
+    const isFill = !!legend.fill
+    const colorProp = isFill ? 'fill' : 'stroke'
+    const symType = legend.symbolType ?? 'circle'
+    const boxHeight = isFill ? 11 : 14
     const entryWidths = domain.map((v) => 16 + nominalTextWidth(String(v), 10))
     const symX = 6
     const symR = 5
-    const overhang = Math.ceil(Math.max(0, symR + 3 - symX))
+    const overhang = isFill ? 0 : Math.ceil(Math.max(0, symR + 3 - symX))
     const stepBase = 10 + overhang
     const xs: number[] = []
     let x = 0
@@ -5156,17 +5272,31 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       x += stepBase + Math.ceil(entryWidths[i]!)
     }
     const bgW = Math.ceil(xs[n - 1]! + entryWidths[n - 1]!)
+    const symOpacityEnc = (legend as unknown as { encode?: { symbols?: { update?: { opacity?: EncodeValue } } } }).encode?.symbols?.update?.opacity
+    const symOpacity = symOpacityEnc && typeof symOpacityEnc === 'object' && 'value' in symOpacityEnc
+      ? Number((symOpacityEnc as { value?: unknown }).value)
+      : isFill ? 1 : 0.7
+    const symStrokeColor = (legend as unknown as { encode?: { symbols?: { update?: { stroke?: EncodeValue } } } }).encode?.symbols?.update?.stroke
+    const symStroke = symStrokeColor && typeof symStrokeColor === 'object' && 'value' in symStrokeColor
+      ? String((symStrokeColor as { value?: unknown }).value)
+      : (legend as { symbolStrokeColor?: string }).symbolStrokeColor
+    const symSwi = (legend as { symbolStrokeWidth?: number }).symbolStrokeWidth ?? 1.5
+    const bgH = 16 + boxHeight
     const items: SceneItem[] = []
-    items.push({ path: `M0,0h${bgW}v30h-${bgW}Z`, x: 0, y: 0 })
+    items.push({ path: `M0,0h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0 })
     items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11, fontWeight: 'bold' })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
       const sx = xs[i]!
-      items.push({ path: `M0,0h${entryWidths[i]}v14h-${entryWidths[i]}Z`, x: sx, y: 16 })
-      items.push({ shape: 'circle', radius: 5, x: sx + 6, y: 22, stroke: String(scale(value)), strokeWidth: 1.5, opacity: 0.7 })
+      items.push({ path: `M0,0h${entryWidths[i]}v${boxHeight}h-${entryWidths[i]}Z`, x: sx, y: 16 })
+      const paint = colorProp === 'fill'
+        ? { fill: String(scale(value)), ...(symStroke != null ? { stroke: symStroke } : {}) }
+        : { stroke: String(scale(value)) }
+      const symPath = symType === 'square' ? 'M-5,-5h10v10h-10Z' : symbolPath(String(symType), symR)
+      items.push({ path: symPath, x: sx + symX, y: 16 + symX, strokeWidth: symSwi, ...(Number.isFinite(symOpacity) ? { opacity: symOpacity } : {}), ...paint })
       items.push({ text: String(value), x: sx + 16, y: 25, align: 'left', fill: '#000', fontSize: 10 })
     }
-    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: 30, items }
+    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: bgH, items }
   }
 
   // --- bottom vertical stroke legends (calibrated: line-grid-dash) ---
@@ -5745,7 +5875,12 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   const tickEntries = ticks.map((v) => ({ value: v, extra: false }))
   if (tickExtraOn && ticks.length) tickEntries.push({ value: ticks[0]!, extra: true })
   const pos = (t: unknown, isExtra = false): number => {
-    const raw = (scale(isExtra ? ticks[0]! : t) as number)
+    const scaled = scale(isExtra ? ticks[0]! : t) as number
+    // A NaN scale lookup (degenerate range/domain) renders at the axis origin:
+    // vega's encoders read `value || 0` on the whole tick position, so the band
+    // and tickOffset terms must not turn the NaN into a real -0.5.
+    if (!Number.isFinite(scaled)) return 0
+    const raw = scaled
       + (isExtra ? 0 : isBand ? bandPos * bw : 0)
       + tickOffsetEff
     return tickRoundOn ? Math.round(raw) : raw
@@ -5762,15 +5897,35 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     const gridScaleName = (axis as { gridScale?: string }).gridScale
     const gridScale = gridScaleName ? ctx.scales.get(gridScaleName) : undefined
     const gridRange = gridScale?.range?.() as number[] | undefined
-    const gridLo = gridRange && gridRange.length >= 2 ? Math.min(gridRange[0]!, gridRange[gridRange.length - 1]!) : undefined
-    const gridHi = gridRange && gridRange.length >= 2 ? Math.max(gridRange[0]!, gridRange[gridRange.length - 1]!) : undefined
+    // vega-parser's axis-grid encode (axis-util getSign/ifX): the grid tick
+    // rides the axis direction, while the cross-axis runs from the gridScale's
+    // range start to end, signed by the orient (+1 left/top, -1 right/bottom)
+    // and anchored at the axis spine. This matters whenever a channel's axis
+    // takes a perpendicular orient (x with orient right, y with orient bottom).
+    const isXAxis = orient === 'bottom' || orient === 'top'
+    const gridSign = orient === 'left' || orient === 'top' ? 1 : -1
+    const gridSpan = (frac: number): number => {
+      const v = gridRange && gridRange.length >= 2
+        ? (() => {
+            const a = Number(gridRange[0])
+            const b = Number(gridRange[gridRange.length - 1])
+            return (a + frac * (b - a)) * gridSign
+          })()
+        : frac * (isXAxis ? ctx.height : ctx.width) * gridSign
+      return Number.isFinite(v) ? v : 0
+    }
+    const gridStart = gridSpan(0)
+    const gridEnd = gridSpan(1)
+    const gridOrigin = orient === 'right' ? ctx.width : orient === 'bottom' ? ctx.height : 0
     for (const te of tickEntries) {
       const v = pos(te.value, te.extra)
       const item: SceneItem = { x: 0, y: 0, x2: 0, y2: 0 }
-      if (orient === 'left' || orient === 'right') {
-        item.x = (gridLo ?? 0) + 0.5; item.x2 = (gridHi ?? ctx.width) + 0.5; item.y = v + 0.5; item.y2 = v + 0.5
+      if (isXAxis) {
+        item.x = v + 0.5; item.x2 = v + 0.5
+        item.y = gridOrigin + gridStart + 0.5; item.y2 = gridOrigin + gridEnd + 0.5
       } else {
-        item.x = v + 0.5; item.x2 = v + 0.5; item.y = (gridLo ?? 0) + 0.5; item.y2 = (gridHi ?? ctx.height) + 0.5
+        item.y = v + 0.5; item.y2 = v + 0.5
+        item.x = gridOrigin + gridStart + 0.5; item.x2 = gridOrigin + gridEnd + 0.5
       }
       item.stroke = gridStyle.stroke ?? (axis as { gridColor?: string }).gridColor ?? '#ddd'
       item.strokeWidth = gridStyle.strokeWidth ?? (axis as { gridWidth?: number }).gridWidth ?? 1
@@ -5838,14 +5993,16 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       // (the axisBand -0.5 default folds against our baked +0.5 group delta)
       // + labelOffset — bandPosition and tickRound do not reach them (vega's
       // axisLabels tickPos keeps band 0.5 and no round of its own).
-      const rawOf = (scale(t) as number) + (isBand ? 0.5 * bw : 0)
+      const scaledLabel = scale(t) as number
+      const labelScaled = Number.isFinite(scaledLabel)
+      const rawOf = (labelScaled ? scaledLabel + (isBand ? 0.5 * bw : 0) : 0)
       const labelOffset = axis.labelOffset ?? 0
       // The along-axis label coordinate: vega's axisLabels position labels at
       // the UNROUNDED tick position (band 0.5 + tickOffset — tickRound never
       // reaches them) + labelOffset, for every orient. Keying on
       // `scale.bandwidth` alone silently rounded point-scale labels, which
       // skewed the view bounds (top margin ceil(-y1)) by a pixel.
-      const alongLabel = rawOf + tickOffsetEff + 0.5 + labelOffset
+      const alongLabel = rawOf + (labelScaled ? tickOffsetEff : 0) + 0.5 + labelOffset
       // vega's labelFlush (axis-labels.js): within labelFlush px of a range
       // endpoint the label align (x orients) or baseline (y orients) flips to
       // the endpoint side (vega-util flush: left needs l < r && l <= t, right
@@ -5917,7 +6074,12 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   // the scene). `true` falls back to the parity method (hide alternating
   // labels until none overlap); 'greedy' hides items colliding with the
   // last kept item. Bounds use the same headless text estimate vega uses.
-  if (axis.labelOverlap && labels.length >= 3) {
+  // vega's Overlap transform drops labels with no content before running
+  // (`hasBounds`: empty text measures zero). The axis `extra` entry is exactly
+  // such a label — it must not shift the parity phases or become the "last
+  // source label" that the final preserve rule resurrects.
+  const overlapSource = labels.filter((it) => String(it.text ?? '').length > 0)
+  if (axis.labelOverlap && overlapSource.length >= 3) {
     // vega Overlap: sep = _.separation || 0; a negative separation disables
     // collisions, a positive one pads them.
     const sep = (axis as { labelSeparation?: number }).labelSeparation ?? 0
@@ -5936,8 +6098,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       }
       return false
     }
-    for (const it of labels) it.opacity = 1
-    let kept = labels
+    for (const it of overlapSource) it.opacity = 1
+    let kept = overlapSource
     if (hasOverlap(kept)) {
       if (axis.labelOverlap === 'greedy') {
         do {
@@ -5963,7 +6125,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       }
       // Vega: if fewer than 3 labels survive and the last source label was
       // hidden, un-hide it and hide the last survivor instead.
-      const last = labels[labels.length - 1]!
+      const last = overlapSource[overlapSource.length - 1]!
       if (kept.length < 3 && !last.opacity) {
         if (kept.length > 1) kept[kept.length - 1]!.opacity = 0
         last.opacity = 1
@@ -6050,6 +6212,9 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     // subtracts the baked line position per orient.
     const guideB = new Bounds()
     for (const it of [...tickItems, ...labels]) {
+      // vega's axisLayout bounds only the visible labels: an overlap-hidden
+      // (opacity 0) label must not push the title outward.
+      if (it.opacity === 0) continue
       const bb = new Bounds()
       boundLeaf(bb, it)
       guideB.union(bb)
@@ -6073,7 +6238,10 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     const rng = (scale.range?.() as number[] | undefined) ?? []
     const r0 = Array.isArray(rng) ? (rng[0] as number) ?? 0 : 0
     const r1 = Array.isArray(rng) ? (rng[rng.length - 1] as number) ?? 0 : 0
-    const anchorLerp = titleAnchor === 'start' ? r0 : titleAnchor === 'end' ? r1 : (r0 + r1) / 2
+    const lerpRaw = titleAnchor === 'start' ? r0 : titleAnchor === 'end' ? r1 : (r0 + r1) / 2
+    // A degenerate range (NaN endpoints) places the title at the axis origin,
+    // matching vega's `|| 0` on the rendered coordinate.
+    const anchorLerp = Number.isFinite(lerpRaw) ? lerpRaw : 0
 
     if (orient === 'bottom') {
       t.x = anchorLerp + 0.5
@@ -6243,6 +6411,11 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
       } catch { /* ignore */ }
     }
   }
+
+  // A negative tickMinStep makes vega's tickCount reduce the count below 1
+  // (floor(span / negative) + 1), and tickValues then yields no ticks at all.
+  // Band/point scales are exempt: tickValues returns their domain untouched.
+  if (tickMinStep != null && tickMinStep < 0 && scale.type !== 'band' && scale.type !== 'point') return []
 
   // vega's AxisTicks tally: no tickCount means 10 (not "let the scale pick").
   // Without this a linear axis with tickMinStep and no tickCount would step

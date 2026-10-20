@@ -91,7 +91,24 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   if (!factory) throw new Error(`[aster] unsupported scale type "${type}"`)
 
   let s = factory()
-  s.domain(domain)
+  // A diverging scale's domain is always the 3-tuple [min, mid, max]. Splice
+  // domainMid in BEFORE handing it to d3 — reading back a 2-value domain from
+  // a diverging scale yields its default x2, so the later generic splice would
+  // insert at the wrong position (and d3 would drop the extra element).
+  let divergingDomain: number[] | undefined
+  if (diverging && c.domainMid != null && domain.length >= 2) {
+    const d0 = Number(domain[0])
+    const d1 = Number(domain[domain.length - 1])
+    const mid = Number(c.domainMid)
+    divergingDomain = mid > d1 ? [d0, d1, mid] : mid < d0 ? [mid, d0, d1] : [d0, mid, d1]
+  }
+  s.domain(divergingDomain ?? domain)
+  // vega-encode's Scale transform disables d3's implicit ordinal domain once an
+  // explicit domain is set (`scale.unknown(undefined)`): an out-of-domain value
+  // maps to undefined instead of growing the domain (and its colour range).
+  if (type === 'ordinal' && c.domain != null) {
+    ;(s as unknown as { unknown?: (v: undefined) => unknown }).unknown?.(undefined)
+  }
 
   // When the scale has a `scheme` property but no `range`, resolve the scheme
   // to a concrete range.  Vega resolves `scheme` during the Scale encode
@@ -265,7 +282,7 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   // maintains the same slope established by the surrounding domain/range pairs.
   // The splice happens after zero/domainMin/domainMax (which establish the
   // baseline domain) and before nice (which rounds the domain boundaries).
-  if (c.domainMid != null && CONTINUOUS_TYPES.has(type)) {
+  if (c.domainMid != null && CONTINUOUS_TYPES.has(type) && divergingDomain == null) {
     applyDomainMid(s, c.domainMid)
   }
   // Vega's Scale transform adjusts continuous domains for minimum pixel
@@ -615,8 +632,14 @@ function distinctValues(values: unknown[]): unknown[] {
   const out: unknown[] = []
   const seen = new Set<unknown>()
   for (const v of values) {
-    if (seen.has(v)) continue
-    seen.add(v)
+    // vega's discrete domain is an Aggregate groupby, and its object keys
+    // stringify the value: two distinct arrays/objects with the same string
+    // form collapse into one domain entry (the first). The `values` aggregate
+    // op emits an array per group, so this is what turns its domain into a
+    // single entry.
+    const key = v !== null && typeof v === 'object' && !(v instanceof Date) ? `obj:${String(v)}` : v
+    if (seen.has(key)) continue
+    seen.add(key)
     out.push(v)
   }
   return out

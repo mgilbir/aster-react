@@ -803,9 +803,9 @@ function renderClippedRoundedRects(
 function renderRects(group: SceneGroup): string {
   let out = `<g class="mark-rect role-mark" role="graphics-symbol" aria-roledescription="rect mark container">`
   for (const it of itemsOf(group).slice().reverse()) {
-    // vega paints a rect only when it has a fill or stroke; unpainted items
-    // (e.g. the selection brush frame with a null stroke) are skipped
-    if (it.fill == null && it.stroke == null) continue
+    // vega still emits an unpainted rect path (no fill/stroke attributes); only
+    // explicitly-null paint marks (the selection brush frame) are skipped.
+    if (it.fill === null && it.stroke === null) continue
     const d = rectItemPath(it)
     if (d == null) continue
     out += `<path${dataDatumAttr(it)} d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
@@ -825,14 +825,19 @@ export function rectItemPath(it: SceneItem): string | null {
   // Vega-scenegraph renders rects with undefined positions at (0,0)
   // (`item.x || 0`, `item.y || 0`), so default missing x/y to 0 rather than
   // dropping the rect.
-  let x0 = it.x as number | undefined ?? 0
-  let y0 = it.y as number | undefined ?? 0
+  let x0 = (it.x as number | undefined) || 0
+  let y0 = (it.y as number | undefined) || 0
   // When x2/y2 are present, vega normalizes the rect so that x is the min
   // edge and width is positive (same for y). This keeps the path winding
   // consistent (positive h first) regardless of which edge is "x" vs "x2".
   if (w == null && it.x2 != null) { w = Math.abs((it.x2 as number) - x0); x0 = Math.min(x0, it.x2 as number) }
   if (h == null && it.y2 != null) { h = Math.abs((it.y2 as number) - y0); y0 = Math.min(y0, it.y2 as number) }
   if (w == null || h == null) return null
+  // Vega's rectangle path builders read `item.width || 0` and `item.height || 0`:
+  // a NaN scale result (a degenerate range, e.g. `range: "symbol"` on a band
+  // scale) renders a zero-size rect at the origin, not a `NaN` path.
+  if (!Number.isFinite(w)) w = 0
+  if (!Number.isFinite(h)) h = 0
   // Vega's rounded-rect path builder (vega-scenegraph/path/rectangle.js):
   // per-corner radii clamped to min(w,h)/2, quarter arcs approximated by
   // cubics with C = 0.448084975506.
@@ -866,10 +871,15 @@ function renderRules(group: SceneGroup): string {
     // Vega defaults undefined x/y to 0 (scenegraph item defaults), so even
     // degenerate rules with unresolved fields render as zero-length lines at
     // the origin rather than being skipped.
-    const x = it.x ?? 0
-    const y = it.y ?? 0
-    const x2 = it.x2 ?? x
-    const y2 = it.y2 ?? y
+    // vega-scenegraph's rule/line shapes read `item.x || 0`, so NaN scale
+    // outputs collapse to the origin — but x2/y2 legitimately resolve to 0
+    // (a rule spanning back to the axis origin), so only NaN falls back.
+    const clean = (v: number | undefined, fallback = 0): number =>
+      v == null || Number.isNaN(v) ? fallback : v
+    const x = clean(it.x)
+    const y = clean(it.y)
+    const x2 = clean(it.x2, x)
+    const y2 = clean(it.y2, y)
     out += `<line x1="${num(x)}" y1="${num(y)}" x2="${num(x2)}" y2="${num(y2)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-opacity', it.strokeOpacity)}${attr('opacity', it.opacity)}/>`
   }
   out += '</g>'

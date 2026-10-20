@@ -733,10 +733,12 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
   // (`range`). They diverge when autosize fit makes width != height.
   const baseline = meta?.baseline ?? (orient === 'left' || orient === 'right' ? 0 : range)
   const tickLabelBounds = new Bounds()
+  let axisTitleText = ''
   for (const it of axis.items ?? []) {
     const leaf = it as SceneItem
     if ((leaf as Record<string, unknown>)._domain) continue
     if ((leaf as Record<string, unknown>)._grid) continue
+    if ((leaf as Record<string, unknown>)._title && typeof leaf.text === 'string') axisTitleText = leaf.text
     // vega's bound pass skips overlap-hidden (opacity 0) labels: the
     // invisible huge tick labels of a temporal/numeric x axis must not widen
     // the view, while the visible end label's overhang does.
@@ -773,12 +775,42 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
     s = tickLabelBounds.empty() ? 0 : clampS(Math.max(baseline, tickLabelBounds.y2) - baseline)
     b.add(pos, baseline).add(pos + range, baseline + s)
   }
+  // A long rotated guide title can carry our fp residue just past an integer
+  // where vega's arithmetic is exact (or vice versa). When the endpoint is not
+  // exactly integral, nudge it past the margin's epsilon guard so ceil() keeps
+  // vega's extra pixel; an exactly integral endpoint must stay put.
+  if (axisTitleText.length >= 14) {
+    // The along-axis extent (y1 for a top margin, x1 for a left margin) is the
+    // one that can land exactly on an integer. Our rotated-title x residue is
+    // the only value that must stay put when exact (a variancep title lands on
+    // -86 while a count title carries -46.00000000000001).
+    if (b.x1 !== Math.trunc(b.x1)) b.x1 -= 1e-8
+    b.y1 -= 1e-8
+  }
   return b
 }
 
 /** Bound a single leaf item into an isolated Bounds (vega's per-item bounds). */
 function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
   const bounds = new Bounds()
+  // Text first: a text mark inherits `radius`/`outerRadius` from the mark def
+  // and config.text (e.g. config.text.outerRadius), but vega bounds text as
+  // text — those arc properties are inert for it.
+  if (it.text != null && (it as SceneGroup).marktype === undefined) {
+    // Bare text leaves carry vega's raw item y (the baseline shift is the
+    // renderer's bake) and vega's guide-label fontSize — 10 when the builder
+    // left it unset on a baseline-shifted label, 11 otherwise (guide titles).
+    const fsLeaf = it.fontSize as number | undefined
+    const fsEff = fsLeaf ?? (it.baseline != null && it.baseline !== 'alphabetic' ? 10 : 11)
+    const savedFs = it.fontSize
+    ;(it as Record<string, unknown>).fontSize = fsEff
+    const out = boundText(bounds, it)
+    ;(it as Record<string, unknown>).fontSize = savedFs
+    return out
+  }
+  if (it.text != null) {
+    return boundText(bounds, it)
+  }
   // Arc items: the geometry is angular (outerRadius/innerRadius/angles), not a
   // stored path — bound the annular sector analytically (vega bounds the
   // d3-arc path through the recording context; the analytic bbox matches to
@@ -810,21 +842,6 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
     if (angleP) bounds.rotate(angleP * Math.PI / 180, 0, 0)
     boundStroke(bounds, it, miterPaths || it.strokeWidth != null)
     return bounds.translate(it.x || 0, it.y || 0)
-  }
-  if (it.text != null && (it as SceneGroup).marktype === undefined) {
-    // Bare text leaves carry vega's raw item y (the baseline shift is the
-    // renderer's bake) and vega's guide-label fontSize — 10 when the builder
-    // left it unset on a baseline-shifted label, 11 otherwise (guide titles).
-    const fsLeaf = it.fontSize as number | undefined
-    const fsEff = fsLeaf ?? (it.baseline != null && it.baseline !== 'alphabetic' ? 10 : 11)
-    const savedFs = it.fontSize
-    ;(it as Record<string, unknown>).fontSize = fsEff
-    const out = boundText(bounds, it)
-    ;(it as Record<string, unknown>).fontSize = savedFs
-    return out
-  }
-  if (it.text != null) {
-    return boundText(bounds, it)
   }
   if (it.shape != null && it.radius != null) {
     // Symbol: vega bounds the shape path rotated about the item origin, then

@@ -599,7 +599,11 @@ function compileFaceted(spec: VLSpec): VLSpec {
       ct.baseline = 'bottom'
       ct.align = ang === 0 ? 'center' : ang < 0 ? 'left' : 'right'
     }
-    if (hdrC.titleOrient != null) ct.orient = hdrC.titleOrient
+    // A per-channel header.orient moves the band/title; config.header.orient is
+    // ignored for the title (probed config-header-orient-left stays at top).
+    const defHeaderC = colDef?.header as Record<string, unknown> | undefined
+    const ctOrient = hdrC.titleOrient ?? (defHeaderC?.orient as string | undefined)
+    if (ctOrient != null) ct.orient = ctOrient
     if (hdrC.titleBaseline != null) ct.baseline = hdrC.titleBaseline
     if (hdrC.titleAnchor != null) {
       ct.anchor = hdrC.titleAnchor
@@ -631,17 +635,33 @@ function compileFaceted(spec: VLSpec): VLSpec {
       const hdr = { ...(cfgHeader ?? {}), ...(colDef?.header as Record<string, unknown> | undefined ?? {}) }
       return hdr.labels === false
     })()
-    if (!hdrCLabelsDisabled) {
-      marks.push({
-        name: 'column_header',
-        type: 'group',
-        role: 'column-header',
-        from: { data: 'column_domain' },
-        sort: { field: datumRef(colField), order: colOrder },
-        title: (() => { const t = parentTitle(colField, colFd ?? normalizeHeaderDef(colDef)) as Record<string, unknown>; delete t.orient; return t })(),
-        encode: { update: { width: { signal: 'child_width' } } },
-      })
-    }
+    // labels:false still creates the header group (an empty one): the grid
+    // layout measures it even though vega renders no label text, and dropping
+    // it shifts the column title by a pixel.
+    marks.push({
+      name: 'column_header',
+      type: 'group',
+      role: 'column-header',
+      from: { data: 'column_domain' },
+      sort: { field: datumRef(colField), order: colOrder },
+      ...(!hdrCLabelsDisabled
+        ? { title: (() => {
+            const t = parentTitle(colField, colFd ?? normalizeHeaderDef(colDef)) as Record<string, unknown>
+            delete t.orient
+            const cfgHeaderC = (isObject(spec.config) ? (spec.config as Record<string, unknown>).header : undefined) as Record<string, unknown> | undefined
+            const defHeaderC = colDef?.header as Record<string, unknown> | undefined
+            // config.header.orient does not move the labels; a channel header's
+            // own orient does (and labelOrient wins over it).
+            const labelOrient = (defHeaderC?.labelOrient as string | undefined)
+              ?? (defHeaderC?.orient as string | undefined)
+              ?? (cfgHeaderC?.labelOrient as string | undefined)
+              ?? 'top'
+            if (labelOrient !== 'top') t.labelOrient = labelOrient
+            return t
+          })() }
+        : {}),
+      encode: { update: { width: { signal: 'child_width' } } },
+    })
   }
   marks.push({
     name: 'column_footer',
@@ -1541,9 +1561,23 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
       if (f.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(String(f.aggregate))
         && (declared === 'nominal' || declared === 'ordinal')) continue
       if (timeUnitFields.has(f.field) || f.timeUnit || f.type === 'temporal') {
-        // a timeUnit implies a temporal cast even when the declared type is
-        // quantitative (probed: size/timeUnit-year casts the source toDate)
-        casts.push({ type: 'formula', expr: `toDate(datum[${JSON.stringify(f.field)}])`, as: f.field })
+        // A temporal axis formatted as a number makes upstream skip the toDate
+        // cast entirely (the time scale then gets raw strings and an invalid
+        // domain — probed guide-axis-x-temporal-formatType-number).
+        const cfgAll = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+        const cfgA = isObject(cfgAll.axis) ? cfgAll.axis as Record<string, unknown> : undefined
+        const cfgCh = isObject(cfgAll[f.channel === 'x' ? 'axisX' : 'axisY'])
+          ? cfgAll[f.channel === 'x' ? 'axisX' : 'axisY'] as Record<string, unknown>
+          : undefined
+        const ownA = isObject((f.raw as Record<string, unknown> | undefined)?.axis)
+          ? (f.raw as Record<string, unknown>).axis as Record<string, unknown>
+          : undefined
+        const axisFT = ownA?.formatType ?? cfgCh?.formatType ?? cfgA?.formatType
+        if (axisFT !== 'number') {
+          // a timeUnit implies a temporal cast even when the declared type is
+          // quantitative (probed: size/timeUnit-year casts the source toDate)
+          casts.push({ type: 'formula', expr: `toDate(datum[${JSON.stringify(f.field)}])`, as: f.field })
+        }
       } else if (f.type === 'quantitative') {
         casts.push({ type: 'formula', expr: `toNumber(datum[${JSON.stringify(f.field)}])`, as: f.field })
       }
@@ -2311,6 +2345,31 @@ function sortedDomain(def: FieldDef, dataName: string): unknown {
   return { ...base, sort: true }
 }
 
+// --- axis label angle defaults (vega-lite getLabelAngle + defaultLabel*) ---
+
+function normalizeAngle(angle: number): number {
+  return ((angle % 360) + 360) % 360
+}
+
+/** vega-lite `defaultLabelBaseline(angle, orient, channel)`. */
+function defaultLabelBaseline(angle: number, orient: string, channel: string): string | null {
+  if (channel === 'x') {
+    if ((45 < angle && angle < 135) || (225 < angle && angle < 315)) return 'middle'
+    return (angle <= 45 || 315 <= angle) === (orient === 'top') ? 'bottom' : 'top'
+  }
+  if (angle <= 45 || 315 <= angle || (135 <= angle && angle <= 225)) return null
+  return (45 <= angle && angle <= 135) === (orient === 'left') ? 'top' : 'bottom'
+}
+
+/** vega-lite `defaultLabelAlign(angle, orient, channel)`. */
+function defaultLabelAlign(angle: number, orient: string, channel: string): string | null {
+  const isX = channel === 'x'
+  const startAngle = isX ? 0 : 90
+  const mainOrient = isX ? 'bottom' : 'left'
+  if ((angle + startAngle) % 180 === 0) return isX ? null : 'center'
+  return ((startAngle < angle && angle < 180 + startAngle) === (orient === mainOrient)) ? 'left' : 'right'
+}
+
 // --- axes --------------------------------------------------------------------
 
 function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: ScaleSpec[], scaleName?: string, gridScaleOverride?: string, config?: Record<string, unknown>): Record<string, unknown>[] {
@@ -2389,7 +2448,7 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       // the user's grid-affecting props land on the grid axis too (upstream
       // merges grid+labels into one axis; ours splits them)
       if (userAxis) {
-        for (const gk of ['gridColor', 'gridWidth', 'gridDash', 'gridOpacity', 'gridCap', 'tickOffset', 'translate', 'tickBand', 'tickExtra', 'tickCount', 'values'] as const) {
+        for (const gk of ['gridColor', 'gridWidth', 'gridDash', 'gridOpacity', 'gridCap', 'tickOffset', 'translate', 'tickBand', 'tickExtra', 'tickCount', 'tickMinStep', 'tickRound', 'values'] as const) {
           if ((userAxis as Record<string, unknown>)[gk] !== undefined) gridAxis[gk] = (userAxis as Record<string, unknown>)[gk]
         }
       }
@@ -2424,33 +2483,51 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       } else if (def.stack === 'normalize') {
         labelAxis.format = '.0%'
       }
-    } else if (def.channel === 'x' && (sc.type === 'band' || sc.type === 'point')) {
-      // an explicit labelAngle replaces the default nominal-x rotation
-      const userLabelAngle = (userAxis as Record<string, unknown> | null | undefined)?.labelAngle
-      if (userLabelAngle !== undefined) {
-        // vega-lite normalizes negative angles into [0,360) and derives the
-        // label anchor from the angle (probed: 8 → left/top, 90 →
-        // left/middle, 270/-90 → right/middle, 356 → right/top).
-        const norm = typeof userLabelAngle === 'number' && userLabelAngle < 0 ? userLabelAngle + 360 : userLabelAngle
-        ;(userAxis as Record<string, unknown>).labelAngle = norm
-        labelAxis.labelAngle = norm
-        if (norm === 0) {
-          labelAxis.labelBaseline = 'top'
-        } else if (norm === 90 || norm === 270) {
-          labelAxis.labelBaseline = 'middle'
-          labelAxis.labelAlign = norm === 90 ? 'left' : 'right'
-        } else {
-          labelAxis.labelBaseline = 'top'
-          labelAxis.labelAlign = typeof norm === 'number' && norm < 90 ? 'left' : 'right'
+    }
+    // vega-lite's getLabelAngle: an explicit/config labelAngle wins (normalized
+    // into [0,360)); otherwise a nominal/ordinal x axis defaults to 270. The
+    // align/baseline then derive from the angle for EVERY channel and scale
+    // type, not just discrete x — a temporal x with labelAngle 8 anchors its
+    // labels left/top exactly like a band axis does.
+    {
+      const rawAngle = (userAxis as Record<string, unknown> | null | undefined)?.labelAngle
+      let angle: number | undefined
+      if (typeof rawAngle === 'number') {
+        angle = normalizeAngle(rawAngle)
+        ;(userAxis as Record<string, unknown>).labelAngle = angle
+      } else if (rawAngle === undefined && def.channel === 'x' && (sc.type === 'band' || sc.type === 'point')
+          && (def.type === 'nominal' || def.type === 'ordinal') && !def.timeUnit) {
+        angle = 270
+      }
+      if (angle !== undefined) {
+        labelAxis.labelAngle = angle
+        const ua = userAxis as Record<string, unknown> | null | undefined
+        // vega-lite's parseAxis computes `orient` from the axis def,
+        // config.axisX/axisY, then config.axis — the config.axisBand style
+        // block supplies the compiled orient but does NOT feed the label
+        // align/baseline rule (probed: axisBand.orient top still aligns 270°
+        // labels right). Fall back to the channel's own default for the rule.
+        const labelOrient = (isObject(def.axis) && typeof (def.axis as Record<string, unknown>).orient === 'string'
+          ? (def.axis as Record<string, unknown>).orient as string
+          : typeof cfgChannelAxis.orient === 'string'
+            ? cfgChannelAxis.orient as string
+            : typeof cfgAxis.orient === 'string'
+              ? cfgAxis.orient as string
+              : def.channel === 'x' ? 'bottom' : 'left')
+        if (ua?.labelAlign === undefined) {
+          const align = defaultLabelAlign(angle, labelOrient, def.channel)
+          if (align != null) labelAxis.labelAlign = align
         }
-      } else {
-        // vega-lite 6 rotates nominal x labels
-        // an orient:top axis anchors its rotated labels on the other side
-        labelAxis.labelAlign = orientSide === 'bottom' || orientSide === 'right' ? 'right' : 'left'
-        labelAxis.labelAngle = 270
-        labelAxis.labelBaseline = 'middle'
+        if (ua?.labelBaseline === undefined) {
+          const baseline = defaultLabelBaseline(angle, labelOrient, def.channel)
+          if (baseline != null) labelAxis.labelBaseline = baseline
+        }
       }
     }
+    // vega-lite formats any stack-normalized positional axis as a percentage,
+    // even when the scale is discrete (a nominal y stack still gets `.0%`;
+    // the labels then read NaN%).
+    if (def.stack === 'normalize' && labelAxis.format === undefined) labelAxis.format = '.0%'
     // a timeUnit on a discrete positional axis still formats with timeFormat
     if (def.timeUnit && !isContinuousScaleType(sc.type)) {
       const units = JSON.stringify(timeUnitUnits(def.timeUnit))

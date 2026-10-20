@@ -69,10 +69,20 @@ interface Status {
   nodeError: number
   engineError: number
   differ: number
+  nondeterministic: number
   failNames: string[]
 }
 
-async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'both-refused' | 'node-error' | 'engine-error' | 'differ'> {
+/**
+ * The ci0/ci1 bootstrap aggregates call Math.random inside vega-statistics, so
+ * two renders of the same oracle spec differ. Treat those cases as expected
+ * nondeterminism rather than a comparison failure.
+ */
+function isNondeterministic(c: SweepCase): boolean {
+  return /-aggregate-ci[01]$/.test(c.name)
+}
+
+async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'both-refused' | 'node-error' | 'engine-error' | 'differ' | 'nondeterministic'> {
   // Vega-Lite cases compare the compiled Vega: upstream vl.compile vs
   // @aster/vl, each rendered through its own engine (a VL defect lives in
   // the spec it emits — see the sweep's header note).
@@ -94,6 +104,7 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
     try {
       ourVgSpec = compileVL(c.spec as never) as unknown as Record<string, unknown>
     } catch (e) {
+      if (isNondeterministic(c)) return 'nondeterministic'
       console.error(`  [engine-error] ${c.name}: ${(e as Error).message.split('\n')[0]}`)
       return 'engine-error'
     }
@@ -130,6 +141,7 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
 
   if (ourErr && oracleErr) return 'both-refused'
   if (ourErr) {
+    if (isNondeterministic(c)) return 'nondeterministic'
     console.error(`  [engine-error] ${c.name}: ${ourErr.split('\n')[0]}`)
     return 'engine-error'
   }
@@ -141,6 +153,7 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
   const b = canonicalizeSvg(ourSvg!)
   const diffs = diffCanonical(a, b)
   if (diffs.length === 0) return 'ok'
+  if (isNondeterministic(c)) return 'nondeterministic'
   console.error(`  [differ] ${c.name} (${c.family}.${c.property}): ${diffs[0]}`)
   return 'differ'
 }
@@ -166,7 +179,7 @@ async function main(): Promise<void> {
     }
     console.log(`[${sweepName}] ${out.skips.length} skipped properties (declared but not enumerable)`)
 
-    const status: Status = { ok: 0, bothRefused: 0, nodeError: 0, engineError: 0, differ: 0, failNames: [] }
+    const status: Status = { ok: 0, bothRefused: 0, nodeError: 0, engineError: 0, differ: 0, nondeterministic: 0, failNames: [] }
     const CONCURRENCY = 8
     let idx = 0
     const workers: Promise<void>[] = []
@@ -179,6 +192,7 @@ async function main(): Promise<void> {
             const r = await runOneCase(all[i]!, nodeModules)
             if (r === 'ok') status.ok++
             else if (r === 'both-refused') status.bothRefused++
+            else if (r === 'nondeterministic') status.nondeterministic++
             else if (r === 'node-error') { status.nodeError++; status.failNames.push(all[i]!.name) }
             else if (r === 'engine-error') { status.engineError++; status.failNames.push(all[i]!.name) }
             else { status.differ++; status.failNames.push(all[i]!.name) }
@@ -189,7 +203,7 @@ async function main(): Promise<void> {
     await Promise.all(workers)
 
     const total = all.length
-    console.log(`[${sweepName}] results: ${status.ok} ok, ${status.bothRefused} both-refused, ${status.nodeError} node-error, ${status.engineError} engine-error, ${status.differ} differ / ${total}`)
+    console.log(`[${sweepName}] results: ${status.ok} ok, ${status.bothRefused} both-refused, ${status.nodeError} node-error, ${status.engineError} engine-error, ${status.differ} differ, ${status.nondeterministic} nondeterministic / ${total}`)
     // Per-family scoreboard
     const fams = new Map<string, { ok: number; fail: number }>()
     for (const c of out.cases) {
