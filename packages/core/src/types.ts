@@ -18,6 +18,8 @@ export type SizeSpec = number | { signal: string } | { step: number }
 
 /** Runtime inputs resolved at evaluate time. */
 export interface RuntimeInput {
+  /** Budgets for untrusted specs (see limits.ts). */
+  limits?: import('./limits.js').SpecLimits
   /** Named datasets. Overrides or fulfills spec data references by name. */
   data?: Record<string, unknown[]>
   /** Static width/height overrides for `{signal: 'width'|'height'}` and spec size. */
@@ -165,17 +167,17 @@ export interface CompiledData {
 export type CompiledTransform =
   | { type: 'formula'; expr: string; as: string }
   | { type: 'filter'; expr: string }
-  | { type: 'bin'; field: string; as: [string, string]; extent?: number[] | { signal: string }; step?: number; maxbins?: number; nice?: boolean; anchor?: number; signal?: string }
+  | { type: 'bin'; field: string; as: [string, string]; extent?: number[] | { signal: string }; step?: number; maxbins?: number; base?: number; divide?: number[] | { signal: string }; minstep?: number; steps?: number[] | { signal: string }; span?: number; nice?: boolean; anchor?: number; interval?: boolean; signal?: string }
   | { type: 'aggregate'; groupby?: string[]; fields?: (string | null)[]; ops?: string[]; as?: string[]; aggregate_params?: (number | null)[] }
-  | { type: 'window'; sort?: SortSpec; groupby?: string[]; fields?: (string | null)[]; ops?: string[]; as?: string[]; frame?: [number | null, number | null]; ignorePeers?: boolean }
+  | { type: 'window'; sort?: SortSpec; groupby?: string[]; fields?: (string | null)[]; ops?: string[]; params?: (number | null)[]; aggregate_params?: (number | null)[]; as?: string[]; frame?: [number | null, number | null]; ignorePeers?: boolean }
   | { type: 'stack'; groupby?: string[]; field: string; sort?: SortSpec; as: [string, string]; offset?: 'zero' | 'normalize' | 'center'; }
   | { type: 'fold'; fields: string[]; as: [string, string] }
   | { type: 'flatten'; fields: string[]; as?: string[] }
   | { type: 'sample'; size: number }
   | { type: 'extent'; field: string; signal: string }
   | { type: 'collect'; sort?: SortSpec }
-  | { type: 'joinaggregate'; groupby?: string[]; fields?: (string | null)[]; ops?: string[]; as?: string[] }
-  | { type: 'impute'; field: string; key: string; groupby?: string[]; method?: string; value?: unknown }
+  | { type: 'joinaggregate'; groupby?: string[]; fields?: (string | null)[]; ops?: string[]; as?: string[]; key?: string }
+  | { type: 'impute'; field: string; key: string; groupby?: string[]; keyvals?: unknown[] | { signal: string }; method?: string; value?: unknown }
   | { type: 'identifier' }
   | { [name: string]: unknown }
 

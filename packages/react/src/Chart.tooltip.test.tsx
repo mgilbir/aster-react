@@ -42,5 +42,32 @@ describe('<Chart tooltip>', () => {
     expect(tip!.textContent).toContain('y:')
   })
 
+  it('renders a custom tooltip through the renderTooltip slot', () => {
+    const labeledSpec = {
+      ...spec,
+      data: [{ name: 'table', values: [{ x: 1, y: 2, label: 'a' }, { x: 2, y: 3, label: 'b' }] }],
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    act(() => {
+      root.render(
+        <Chart
+          spec={labeledSpec}
+          width={400}
+          height={300}
+          renderTooltip={(d) => <span data-testid="custom-tip">{`point ${d.label}`}</span>}
+        />,
+      )
+    })
+    const sym = container.querySelector('svg path[data-datum]') as Element
+    act(() => {
+      sym.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 40, clientY: 60 }))
+    })
+    const tip = container.querySelector('[data-testid="chart-tooltip"]')!
+    expect(tip.querySelector('[data-testid="custom-tip"]')?.textContent).toBe('point a')
+    act(() => { root.unmount() })
+  })
+
   afterEach(() => { document.body.innerHTML = '' })
 })

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "width": 200,
+  "height": 120,
+  "data": {
+    "values": [
+      { "c": "alpha", "v": 28, "t": "2024-01-07" },
+      { "c": "beta", "v": 55, "t": "2024-03-19" },
+      { "c": "gamma", "v": 43, "t": "2024-06-02" },
+      { "c": "delta", "v": 91, "t": "2024-09-11" }
+    ]
+  },
+  "mark": { "type": "line", "point": true },
+  "encoding": {
+    "x": { "field": "t", "type": "temporal" },
+    "y": { "field": "v", "type": "quantitative" }
+  },
+  "config": {
+    "point": { "size": 80, "shape": "triangle", "stroke": "firebrick", "fill": "gold", "strokeWidth": 2 }
+  }
+}

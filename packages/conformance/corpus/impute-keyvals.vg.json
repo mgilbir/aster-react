@@ -1,0 +1,38 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 200,
+  "height": 120,
+  "padding": 5,
+  "autosize": "pad",
+  "background": "white",
+  "signals": [{ "name": "keys", "value": [1, 2, 3] }],
+  "data": [
+    {
+      "name": "table",
+      "values": [{ "g": "a", "t": 1, "v": 10 }, { "g": "b", "t": 3, "v": 30 }],
+      "transform": [
+        { "type": "impute", "field": "v", "key": "t", "groupby": ["g"], "keyvals": { "signal": "keys" }, "method": "value", "value": 0 }
+      ]
+    }
+  ],
+  "scales": [
+    { "name": "x", "type": "band", "domain": { "data": "table", "field": "t" }, "range": "width" },
+    { "name": "y", "type": "linear", "domain": [0, 35], "range": "height" },
+    { "name": "c", "type": "ordinal", "domain": { "data": "table", "field": "g" }, "range": "category" }
+  ],
+  "marks": [
+    {
+      "type": "rect",
+      "from": { "data": "table" },
+      "encode": {
+        "update": {
+          "x": { "scale": "x", "field": "t" },
+          "width": { "scale": "x", "band": 0.45 },
+          "y": { "scale": "y", "field": "v" },
+          "y2": { "scale": "y", "value": 0 },
+          "fill": { "scale": "c", "field": "g" }
+        }
+      }
+    }
+  ]
+}

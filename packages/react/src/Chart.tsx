@@ -4,6 +4,7 @@ import {
   renderSceneToSvg,
   type ChartInfo,
   type SceneRoot,
+  type SpecLimits,
 } from '@aster/core'
 // The incremental DOM patcher ships as the `@aster/core/dom` addon: a
 // string-mode host never bundles it, while <Chart> (which supports the
@@ -63,6 +64,12 @@ export interface ChartProps {
   style?: React.CSSProperties
   signals?: Record<string, unknown>
   onSelect?: (interval: SelectionInterval | null) => void
+  /**
+   * Point/click selection: called with the clicked mark's datum (or null for a
+   * click on empty space). Resolved through the scene hit index, so it works
+   * identically on the SVG and canvas backends.
+   */
+  onPointSelect?: (datum: Record<string, unknown> | null) => void
   brush?: SelectionInterval | null
   /**
    * Event-driven signals (vega-react's `signalListeners` convention): handlers
@@ -81,6 +88,13 @@ export interface ChartProps {
    * stampDatumAttrs stamps onto scene items. Off by default.
    */
   tooltip?: boolean
+  /**
+   * Custom tooltip content rendered inside the chart's React tree (not a
+   * detached overlay). Providing this enables tooltips without `tooltip`.
+   */
+  renderTooltip?: (datum: Record<string, unknown>) => React.ReactNode
+  /** Budgets for untrusted specs (rows, marks, strings, paths, SVG size). */
+  limits?: SpecLimits
 }
 
 export function Chart({
@@ -94,6 +108,7 @@ export function Chart({
   style,
   signals,
   onSelect,
+  onPointSelect,
   brush,
   incremental = true,
   renderer = 'svg',
@@ -101,7 +116,10 @@ export function Chart({
   onSignal,
   interactive = true,
   tooltip = false,
+  renderTooltip,
+  limits,
 }: ChartProps) {
+  const tooltipEnabled = tooltip || renderTooltip != null
   const containerRef = React.useRef<HTMLDivElement>(null)
   const [measured, setMeasured] = React.useState<{ width: number; height: number }>({
     width: 600,
@@ -147,15 +165,15 @@ export function Chart({
   const sceneGenRef = React.useRef(0)
   const scene = React.useMemo<SceneRoot | null>(() => {
     try {
-      const sc = sessionRef.current!.evaluate(spec, { data, dataChanges, width: renderWidth, height: renderHeight, signals })
+      const sc = sessionRef.current!.evaluate(spec, { data, dataChanges, width: renderWidth, height: renderHeight, signals, limits })
       // Tooltips read data-datum off the DOM; stamp the datum onto scene items
       // before the markup/patch so the attribute is rendered.
-      if (tooltip) stampDatumAttrs(sc.items)
+      if (tooltipEnabled) stampDatumAttrs(sc.items)
       return sc
     } catch (err) {
       return null
     }
-  }, [spec, data, dataChanges, renderWidth, renderHeight, signals, tooltip])
+  }, [spec, data, dataChanges, renderWidth, renderHeight, signals, tooltipEnabled, limits])
   if (scene != null) sceneGenRef.current++
   const sceneGen = sceneGenRef.current
 
@@ -236,10 +254,18 @@ export function Chart({
     }
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    renderSceneToCanvas(scene, ctx, { dpr })
+    // Paint on the next frame so a large scene never blocks React's commit
+    // (or the first paint). A newer scene cancels the pending frame; hosts
+    // without rAF (SSR/jsdom without a shim) paint synchronously.
+    const draw = () => renderSceneToCanvas(scene, ctx, { dpr })
+    if (typeof requestAnimationFrame === 'function') {
+      const id = requestAnimationFrame(draw)
+      return () => cancelAnimationFrame(id)
+    }
+    draw()
   }, [renderer, scene])
 
-  const hasInteraction = onSelect != null || brush != null
+  const hasInteraction = onSelect != null || brush != null || onPointSelect != null
   const chartInfoRef = React.useRef<ChartInfo | null>(null)
   const chartInfoCacheIdx = React.useRef(0)
 
@@ -313,9 +339,18 @@ export function Chart({
       const dx = x - dragPixelStart.x
       const dy = y - dragPixelStart.y
       if (Math.abs(dx) < 3 && Math.abs(dy) < 3) {
-        // Tiny drag -> clear selection
+        // Tiny drag -> a click: resolve the mark under the pointer and clear
+        // any interval selection.
         setDragStartData(null)
         setDragEndData(null)
+        if (onPointSelect) {
+          if (hitIndexRef.current.index == null || hitIndexRef.current.idx !== sceneGen) {
+            hitIndexRef.current = scene ? { idx: sceneGen, index: buildHitIndex(scene) } : { idx: 0, index: null }
+          }
+          const target = hitIndexRef.current.index?.query(x, y)
+          const datum = target?.item.datum
+          onPointSelect(datum != null && typeof datum === 'object' ? datum as Record<string, unknown> : null)
+        }
         if (onSelect) onSelect(null)
       } else {
         const ci = chartInfoRef.current
@@ -330,7 +365,7 @@ export function Chart({
       setDragPixelStart(null)
       setDragPixelEnd(null)
     },
-    [isDragging, dragPixelStart, hasInteraction, onSelect],
+    [isDragging, dragPixelStart, hasInteraction, onSelect, onPointSelect, scene, sceneGen],
   )
 
   /**
@@ -352,7 +387,7 @@ export function Chart({
 
   const handleTooltipMove = React.useCallback(
     (e: React.MouseEvent) => {
-    if (!tooltip) return
+    if (!tooltipEnabled) return
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return
     if (renderer === 'canvas') {
@@ -375,12 +410,12 @@ export function Chart({
       setTooltipInfo({ datum, x: e.clientX - rect.left, y: e.clientY - rect.top })
     } catch { setTooltipInfo(null) }
     },
-    [tooltip, renderer],
+    [tooltipEnabled, renderer],
   )
 
   const handleTooltipLeave = React.useCallback(() => {
-    if (tooltip) setTooltipInfo(null)
-  }, [tooltip])
+    if (tooltipEnabled) setTooltipInfo(null)
+  }, [tooltipEnabled])
 
   // Brush pixel rect from persisted brush prop
   const brushPixelRect = React.useMemo(() => {
@@ -491,9 +526,11 @@ export function Chart({
             whiteSpace: 'nowrap',
           }}
         >
-          {tooltipFields.map(([k, v]) => (
-            <div key={k}><strong>{k}:</strong> {v}</div>
-          ))}
+          {renderTooltip != null
+            ? renderTooltip(tooltipInfo.datum)
+            : tooltipFields.map(([k, v]) => (
+                <div key={k}><strong>{k}:</strong> {v}</div>
+              ))}
         </div>
       )}
     </div>

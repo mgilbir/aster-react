@@ -17,6 +17,7 @@
  */
 import { compileChart } from './compiler.js'
 import { evaluateChart } from './runtime.js'
+import { checkSpecLimits, checkSceneLimits } from './limits.js'
 import type { CompiledChart, RuntimeInput, SceneRoot, VgSpec } from './types.js'
 
 const REF_IDS = new WeakMap<object, number>()
@@ -122,6 +123,7 @@ export function createChartSession(): ChartSession {
 
   return {
     evaluate(spec, input = {}) {
+      if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits)
       const skeleton = skeletonOf(spec)
       const key = fingerprint(spec, input)
       // A per-datum changeset implies the data values changed (often in place, so
@@ -139,6 +141,7 @@ export function createChartSession(): ChartSession {
       }
       lastSpec = spec
       lastScene = evaluateChart(lastChart, input)
+      if (input.limits) checkSceneLimits(lastScene, input.limits)
       lastKey = key
       return lastScene
     },

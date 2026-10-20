@@ -34,6 +34,7 @@ export { type DomDesc } from './dom.js'
 export { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 export { buildScale, type Scale } from './scales.js'
 export { applyTransforms, sortRows, type Row } from './transform.js'
+export { AsterLimitError, checkSpecLimits, checkSceneLimits, checkSvgLength, type SpecLimits } from './limits.js'
 export { geoRegistry, transformRegistry, requireTransform, type GeoRegistry, type ContourFeature, type TransformFn } from './registry.js'
 // The event-driven signal loop (`@aster/core/signals`: bindSceneSignals etc.)
 // ships as an opt-in addon like the DOM patcher; hosts using signal.on streams
@@ -48,11 +49,16 @@ export { geoRegistry, transformRegistry, requireTransform, type GeoRegistry, typ
 import { compileChart } from './compiler.js'
 import { evaluateChart, getChartInfo } from './runtime.js'
 import { renderSceneToSvg } from './render.js'
+import { checkSpecLimits, checkSceneLimits, checkSvgLength } from './limits.js'
 import type { RuntimeInput, VgSpec } from './types.js'
 
 /** Compile + evaluate + render a Vega spec to an SVG string (static mode). */
 export function renderSpec(spec: VgSpec, input: RuntimeInput = {}): string {
+  if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits)
   const chart = compileChart(spec)
   const scene = evaluateChart(chart, input)
-  return renderSceneToSvg(scene)
+  if (input.limits) checkSceneLimits(scene, input.limits)
+  const svg = renderSceneToSvg(scene)
+  if (input.limits) checkSvgLength(svg, input.limits)
+  return svg
 }

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 300,
+  "height": 120,
+  "padding": 5,
+  "autosize": "pad",
+  "background": "white",
+  "data": [
+    {
+      "name": "table",
+      "values": [
+        { "g": "a", "t": 1, "v": 10 }, { "g": "a", "t": 2, "v": 20 },
+        { "g": "b", "t": 1, "v": 5 }, { "g": "b", "t": 3, "v": 15 },
+        { "g": "a", "t": 3, "v": 30 }, { "g": "b", "t": 2, "v": 25 }
+      ],
+      "transform": [
+        {
+          "type": "window",
+          "sort": { "field": "t" },
+          "groupby": ["g"],
+          "frame": [-1, 1],
+          "fields": ["v", null, "v", "v"],
+          "ops": ["sum", "row_number", "rank", "lead"],
+          "params": [null, null, null, 1],
+          "as": ["sum", "rn", "rank", "next"]
+        }
+      ]
+    }
+  ],
+  "scales": [
+    { "name": "x", "type": "band", "domain": { "data": "table", "field": "g" }, "range": "width", "paddingInner": 0.2 },
+    { "name": "y", "type": "linear", "domain": [0, 70], "range": "height" },
+    { "name": "c", "type": "ordinal", "domain": { "data": "table", "field": "g" }, "range": "category" }
+  ],
+  "marks": [
+    {
+      "type": "rect",
+      "from": { "data": "table" },
+      "encode": {
+        "update": {
+          "x": { "scale": "x", "field": "g" },
+          "width": { "scale": "x", "band": 1 },
+          "y": { "scale": "y", "field": "sum" },
+          "y2": { "scale": "y", "value": 0 },
+          "fill": { "scale": "c", "field": "g" },
+          "fillOpacity": { "value": 0.7 }
+        }
+      }
+    }
+  ]
+}

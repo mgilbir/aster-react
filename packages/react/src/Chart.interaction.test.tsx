@@ -139,3 +139,52 @@ describe('Chart brush interaction', () => {
     root!.unmount()
   })
 })
+
+describe('Chart point selection', () => {
+  beforeEach(() => {
+    ;(Element.prototype as unknown as Record<string, unknown>).setPointerCapture = vi.fn()
+    ;(Element.prototype as unknown as Record<string, unknown>).releasePointerCapture = vi.fn()
+  })
+  afterEach(() => { document.body.innerHTML = '' })
+
+  it('reports the clicked datum and clears interval selection on a click', async () => {
+    const onPointSelect = vi.fn()
+    const onSelect = vi.fn()
+    const spec = {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 100, height: 100, padding: 0, autosize: 'none',
+      data: [{ name: 't', values: [{ cat: 'a', v: 5 }, { cat: 'b', v: 7 }] }],
+      scales: [
+        { name: 'x', type: 'band', domain: { data: 't', field: 'cat' } as never, range: [0, 100] as never },
+        { name: 'y', type: 'linear', domain: [0, 10] as never, range: [100, 0] as never },
+      ],
+      marks: [{
+        type: 'rect', from: { data: 't' },
+        encode: { enter: {
+          x: { scale: 'x', field: 'cat' }, width: { scale: 'x', band: 1 },
+          y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 }, fill: { value: '#4c78a8' },
+        } },
+      }],
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => {
+      root.render(<Chart spec={spec} width={100} height={100} onPointSelect={onPointSelect} onSelect={onSelect} />)
+    })
+    const overlay = container.querySelector('[data-testid="chart-brush-overlay"]')!
+    const rect = { left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+    overlay.getBoundingClientRect = () => rect
+    ;(container as HTMLElement).getBoundingClientRect = () => rect
+    await act(async () => {
+      overlay.dispatchEvent(new PointerEvent('pointerdown', { clientX: 20, clientY: 80, pointerId: 1, bubbles: true }))
+    })
+    await act(async () => {
+      overlay.dispatchEvent(new PointerEvent('pointerup', { clientX: 20, clientY: 80, pointerId: 1, bubbles: true }))
+    })
+    expect(onPointSelect).toHaveBeenCalledTimes(1)
+    expect(onPointSelect.mock.calls[0]![0]).toMatchObject({ cat: 'a', v: 5 })
+    expect(onSelect).toHaveBeenCalledWith(null)
+    await act(async () => { root.unmount() })
+  })
+})

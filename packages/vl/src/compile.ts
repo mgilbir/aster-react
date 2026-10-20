@@ -3658,23 +3658,34 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
 
   // line/area with a point overlay: expand to a symbol mark over a filtered clone
   if ((mark === 'line' || mark === 'area') && pointOverlay) {
-    const ptType = isObject(pointOverlay) ? ((pointOverlay.type as string) ?? 'circle') : 'circle'
-    const ptFilled = isObject(pointOverlay) ? (pointOverlay.filled as boolean | undefined) : undefined
+    const ptDef = isObject(pointOverlay) ? pointOverlay : {}
+    // The generated overlay uses the 'point' style, so config.point geometry
+    // (size, shape, strokeWidth, ...) reaches it like a hand-written point.
+    const cfgPoint = isObject(userConfig?.point) ? (userConfig!.point as Record<string, unknown>) : {}
+    const ptType = (ptDef.type as string | undefined) ?? (ptDef.shape as string | undefined)
+    const ptFilled = ptDef.filled as boolean | undefined
+    // VL resolves the overlay's paint from the point def and config.point only:
+    // the parent line's color does not leak into its points.
+    const ptFill = (ptDef.fill as string | undefined) ?? (ptDef.color as string | undefined)
+      ?? (cfgPoint.fill as string | undefined) ?? (cfgPoint.color as string | undefined) ?? C.blue
+    const ptStroke = (ptDef.stroke as string | undefined) ?? (cfgPoint.stroke as string | undefined)
     const overlayUpdate: Record<string, unknown> = {
       opacity: { value: 1 },
-      fill: { value: markColor ?? cfgFill ?? cfgColor ?? C.blue },
+      fill: { value: ptFill },
+      ...(ptStroke != null ? { stroke: { value: ptStroke } } : {}),
       x: xDef ? { scale: 'x', field: aggFieldName(xDef) } : undefined,
       y: yDef ? { scale: 'y', field: aggFieldName(yDef) } : undefined,
-      shape: { value: ptType },
+      ...(ptType != null ? { shape: { value: ptType } } : {}),
     }
     if (sizeDef) overlayUpdate.size = { scale: 'size', field: aggFieldName(sizeDef) }
+    else if (ptDef.size != null) overlayUpdate.size = { value: ptDef.size }
     delete overlayUpdate.x2
     const overlayName = 'layer_1_marks'
     markSpec.name = 'layer_0_marks'
     out.push({
       name: overlayName,
       type: 'symbol',
-      style: [ptType],
+      style: ['point'],
       from: { data: 'data_1' },
       encode: { update: overlayUpdate },
     })

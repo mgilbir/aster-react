@@ -91,7 +91,7 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
     case 'bin':
       return binRows(rows, t, ctx)
     case 'impute':
-      return imputeRows(rows, t)
+      return imputeRows(rows, t, ctx)
     case 'aggregate':
       return aggregateRows(rows, t)
     case 'joinaggregate':
@@ -287,44 +287,87 @@ function binRows(rows: Row[], t: Extract<CompiledTransform, { type: 'bin' }>, ct
     hi = 1
   }
 
-  const span = hi - lo
-  // When an explicit step is provided (e.g. VL {"bin":{"step":2}}), use it
-  // directly instead of computing one from maxbins — this matches vega-
-  // transforms Bin which treats `step` as authoritative.
-  const explicitStep = (t as Record<string, unknown>).step
-  const step = typeof explicitStep === 'number' && explicitStep > 0
-    ? explicitStep
-    : computeBinStep(span, t.maxbins)
-  // Nice the extent: start = floor(lo/step)*step, stop = ceil(hi/step)*step
-  // with a small epsilon to handle floating point precision
-  const eps = computeBinEps(step)
-  const start = lo < Math.floor(lo / step + eps) * step
-    ? Math.floor(lo / step + eps) * step - step
-    : Math.floor(lo / step + eps) * step
-  const stop = Math.ceil(hi / step) * step
-
-  // Set the bins signal if the transform specifies one
-  if (t.signal) {
-    ctx.signals[t.signal] = { start, stop, step }
+  // vega-statistics bin(): resolve the step from an explicit step, a candidate
+  // `steps` list, or the base/divide/minstep tuning knobs.
+  const pnum = (v: unknown): number | undefined => {
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+    if (v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)) {
+      const sv = ctx.signals[(v as { signal: string }).signal]
+      if (typeof sv === 'number' && Number.isFinite(sv)) return sv
+    }
+    return undefined
+  }
+  const parr = (v: unknown): number[] | undefined => {
+    const a = v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)
+      ? ctx.signals[(v as { signal: string }).signal]
+      : v
+    return Array.isArray(a) ? a.map(Number) : undefined
+  }
+  const maxb = pnum(t.maxbins) ?? 20
+  const base = pnum(t.base) || 10
+  const div = parr(t.divide) ?? [5, 2]
+  const span = pnum(t.span) ?? ((hi - lo) || Math.abs(lo) || 1)
+  const explicitStep = pnum(t.step)
+  const steps = parr(t.steps)
+  let step: number
+  if (explicitStep != null && explicitStep > 0) {
+    step = explicitStep
+  } else if (steps && steps.length) {
+    const target = span / maxb
+    let i = 0
+    while (i < steps.length && steps[i]! < target) i++
+    step = steps[Math.max(0, i - 1)]!
+  } else {
+    const logb = Math.log(base)
+    const level = Math.ceil(Math.log(maxb) / logb)
+    const minstep = pnum(t.minstep) ?? 0
+    step = Math.max(minstep, Math.pow(base, Math.round(Math.log(span) / logb) - level))
+    if (!(step > 0) || !Number.isFinite(step)) step = 1
+    while (Math.ceil(span / step) > maxb) step *= base
+    for (const d of div) {
+      const v = step / d
+      if (v >= minstep && span / v <= maxb) step = v
+    }
   }
 
+  // nice extent: start = floor(lo/step)*step, stop = ceil(hi/step)*step
+  const vlog = Math.log(step)
+  const logb = Math.log(base)
+  const precision = vlog >= 0 ? 0 : ~~(-vlog / logb) + 1
+  const eps = Math.pow(base, -precision - 1)
+  let start = lo
+  let stop = hi
+  if (t.nice !== false) {
+    const v = Math.floor(lo / step + eps) * step
+    start = lo < v ? v - step : v
+    stop = Math.ceil(hi / step) * step
+  }
+  stop = start + Math.ceil((stop - start) / step) * step
+  // anchor shifts the bins so one boundary lands on the requested value
+  const anchor = pnum(t.anchor)
+  if (anchor != null) {
+    const d = anchor - (start + step * Math.floor((anchor - start) / step))
+    start += d
+    stop += d
+  }
+  if (t.signal) ctx.signals[t.signal] = { start, stop, step }
+
+  const band = t.interval !== false
   const [startField, endField] = t.as
   return rows.map((r) => {
-    const v = r[t.field]
-    if (typeof v !== 'number' || !Number.isFinite(v)) {
-      return { ...r, [startField]: undefined, [endField]: undefined }
+    const raw = r[t.field]
+    const n = raw == null || raw === '' ? null : Number(raw)
+    let v: number | null = n == null || Number.isNaN(n) ? null : n
+    if (v == null) return band ? { ...r, [startField]: null, [endField]: null } : { ...r, [startField]: null }
+    if (v < start) v = -Infinity
+    else if (v > stop) v = Infinity
+    else {
+      const clamped = Math.max(start, Math.min(v, stop - step))
+      v = start + step * Math.floor(1e-9 + (clamped - start) / step)
     }
-    if (v < start || v > stop) {
-      return { ...r, [startField]: undefined, [endField]: undefined }
-    }
-    // Clamp v to stop - step, matching vega-transforms Bin: values at or
-    // beyond the last bin boundary are assigned to the final bin rather than
-    // being dropped. This mirrors vega's `Math.min(v, stop - step)`.
-    const clamped = Math.min(v, stop - step)
-    const bIdx = Math.floor((clamped - start) / step)
-    const b0 = start + bIdx * step
-    const b1 = start + Math.min(bIdx + 1, (stop - start) / step) * step
-    return { ...r, [startField]: b0, [endField]: b1 }
+    if (!band) return { ...r, [startField]: v }
+    const end = v == null ? null : start + step * (1 + (v - start) / step)
+    return { ...r, [startField]: v, [endField]: end }
   })
 }
 
@@ -400,38 +443,31 @@ export function computeBinEps(step: number): number {
 
 function imputeRows(
   rows: Row[],
-  t: { field: string; groupby?: string[]; key: string; method?: string; value?: unknown; step?: number },
+  t: { field: string; groupby?: string[]; key: string; method?: string; value?: unknown; step?: number; keyvals?: unknown[] | { signal: string } },
+  ctx?: TransformContext,
 ): Row[] {
   const groups = t.groupby?.length ? groupRows(rows, t.groupby) : [rows]
-  const keyvals = (t as { keyvals?: unknown[] }).keyvals ?? []
+  const rawKeyvals = t.keyvals && typeof t.keyvals === 'object' && !Array.isArray(t.keyvals) && 'signal' in t.keyvals
+    ? ctx?.signals[(t.keyvals as { signal: string }).signal]
+    : t.keyvals
+  const keyvals = Array.isArray(rawKeyvals) ? rawKeyvals : []
   const domain = Array.from(new Set([...rows.map((r) => r[t.key]), ...keyvals]))
     .filter((k) => k != null)
     .sort((a, b) => (a! < b! ? -1 : a! > b! ? 1 : 0))
-  const out: Row[] = []
-  for (const g of groups) {
-    out.push(...imputeGroup(g, t, domain))
-  }
-  return out
-}
-
-function imputeGroup(
-  group: Row[],
-  t: { field: string; key: string; method?: string; value?: unknown },
-  domain: unknown[],
-): Row[] {
-  const sorted = group.slice().sort((a, b) => (a[t.key]! < b[t.key]! ? -1 : a[t.key]! > b[t.key]! ? 1 : 0))
-  const present = new Map<unknown, Row>()
-  for (const r of sorted) present.set(r[t.key], r)
-  // Vega's Impute only adds tuples for keys present in the cross-group domain
-  // (plus explicit `keyvals`); it never interpolates new keys.
+  // vega emits the source tuples first, then appends the imputed tuples grouped
+  // by partition (each group in key order).
   const imputed: Row[] = []
-  let value = NaN
-  for (const kVal of domain) {
-    if (present.has(kVal)) continue
-    const v = Number.isNaN(value) ? (value = imputeStat(sorted, t)) : value
-    imputed.push({ ...sorted[0]!, _impute: true, [t.key]: kVal, [t.field]: v })
+  for (const g of groups) {
+    const sorted = g.slice().sort((a, b) => (a[t.key]! < b[t.key]! ? -1 : a[t.key]! > b[t.key]! ? 1 : 0))
+    const present = new Set(sorted.map((r) => r[t.key]))
+    let value = NaN
+    for (const kVal of domain) {
+      if (present.has(kVal)) continue
+      const v = Number.isNaN(value) ? (value = imputeStat(sorted, t)) : value
+      imputed.push({ ...sorted[0]!, _impute: true, [t.key]: kVal, [t.field]: v })
+    }
   }
-  return sorted.concat(imputed.sort((a, b) => (a[t.key]! < b[t.key]! ? -1 : a[t.key]! > b[t.key]! ? 1 : 0)))
+  return [...rows, ...imputed]
 }
 
 function imputeStat(group: Row[], t: { field: string; method?: string; value?: unknown }): number {
@@ -659,10 +695,12 @@ function pivotRows(rows: Row[], t: Record<string, unknown>): Row[] {
 }
 
 function joinAggregateRows(rows: Row[], t: Extract<CompiledTransform, { type: 'joinaggregate' }>): Row[] {
-  const groupby = t.groupby ?? []
   const fields = t.fields ?? []
   const ops = t.ops ?? []
   const as = t.as ?? []
+  // vega's Aggregate `key` accessor replaces the groupby tuple key entirely.
+  const keyField = t.key
+  const groupby = keyField != null ? [keyField] : (t.groupby ?? [])
   const grouped = groupRows(rows, groupby)
   const aggregates = new Map<string, Row>()
   for (const g of grouped) {
@@ -699,26 +737,55 @@ function windowRows(rows: Row[], t: Extract<CompiledTransform, { type: 'window' 
   const groupby = t.groupby ?? []
   const fields = t.fields ?? []
   const ops = t.ops ?? []
+  const params = (t as { params?: (number | null)[] }).params ?? []
+  const aggParams = (t as { aggregate_params?: (number | null)[] }).aggregate_params ?? []
   const as = t.as ?? []
   const groups = groupby.length ? groupRows(sorted, groupby) : [sorted]
   const sortFields = sortFieldsOf(t.sort)
-  const out: Row[] = []
+  const frame = (t.frame ?? [null, 0]) as [number | null, number | null]
+  const ignorePeers = t.ignorePeers === true
+  const results = new Map<Row, Row>()
+
+  // window op state is per partition per op
   for (const g of groups) {
     const n = g.length
-    // rank / dense_rank state, advanced per row using the sort-comparator peer
-    // test (matches vega WindowOps.rank / .dense_rank).
     let rank = 1
     let drank = 1
+    const prevValues: unknown[] = ops.map(() => null)
+    const nextValues: unknown[] = ops.map(() => null)
+    const nextIndex: number[] = ops.map(() => -1)
     for (let i = 0; i < n; i++) {
       if (i > 0 && !isPeer(g[i - 1]!, g[i]!, sortFields)) {
         rank = i + 1
         drank++
       }
+      // frame boundaries in vega's [startOffset, endOffset] convention
+      let i0 = frame[0] == null ? 0 : i + frame[0]
+      let i1 = frame[1] == null ? n : i + frame[1] + 1
+      i0 = Math.max(0, Math.min(n, i0))
+      i1 = Math.max(0, Math.min(n, i1))
+      if (t.sort && !ignorePeers) {
+        // range frames expand to include peer rows
+        if (i0 > 0 && isPeer(g[i0]!, g[i0 - 1]!, sortFields)) {
+          while (i0 > 0 && isPeer(g[i0]!, g[i0 - 1]!, sortFields)) i0--
+        }
+        if (i1 > 0 && i1 < n && isPeer(g[i1 - 1]!, g[i1]!, sortFields)) {
+          while (i1 < n && isPeer(g[i1 - 1]!, g[i1]!, sortFields)) i1++
+        }
+      }
       const r = { ...g[i]! }
+      const frameRows = g.slice(i0, i1)
+      const cumeDist = (): number => {
+        let last = i
+        while (last + 1 < n && isPeer(g[last]!, g[last + 1]!, sortFields)) last++
+        return (1 + last) / n
+      }
+      const fieldValue = (field: string | null | undefined, row: Row | undefined): unknown =>
+        field == null || row == null ? null : row[field]
       ops.forEach((op, j) => {
         const name = as[j] ?? `${op}_${fields[j]}`
         const field = fields[j]
-        const values = field == null ? [] : fieldValues(g.slice(0, i + 1), field)
+        const param = params[j]
         switch (op) {
           case 'row_number':
             r[name] = i + 1
@@ -729,37 +796,75 @@ function windowRows(rows: Row[], t: Extract<CompiledTransform, { type: 'window' 
           case 'dense_rank':
             r[name] = drank
             break
-          case 'first_value':
-            r[name] = field == null ? undefined : g[0]?.[field]
+          case 'percent_rank':
+            r[name] = (rank - 1) / (n - 1)
             break
-          case 'last_value':
-            r[name] = field == null ? undefined : g[n - 1]?.[field]
+          case 'cume_dist':
+            r[name] = cumeDist()
             break
-          case 'lag':
-            r[name] = field == null ? undefined : i > 0 ? g[i - 1]?.[field] : undefined
-            break
-          case 'lead':
-            r[name] = field == null ? undefined : i < n - 1 ? g[i + 1]?.[field] : undefined
-            break
-          case 'sum':
-          case 'mean':
-          case 'min':
-          case 'max': {
-            const fn = AGGR[op]
-            r[name] = fn ? fn(values, []) : undefined
+          case 'ntile': {
+            const num = Number(param)
+            r[name] = Math.ceil(num * cumeDist())
             break
           }
-          case 'count':
-            r[name] = i + 1
+          case 'lag': {
+            const off = Number(param) || 1
+            r[name] = i - off >= 0 ? fieldValue(field, g[i - off]) : null
             break
-          default:
-            throw new Error(`[aster] unsupported window op "${op}"`)
+          }
+          case 'lead': {
+            const off = Number(param) || 1
+            r[name] = i + off < n ? fieldValue(field, g[i + off]) : null
+            break
+          }
+          case 'first_value':
+            r[name] = fieldValue(field, g[i0])
+            break
+          case 'last_value':
+            r[name] = fieldValue(field, g[i1 - 1])
+            break
+          case 'nth_value': {
+            const nth = Number(param)
+            const idx = i0 + (nth - 1)
+            r[name] = idx < i1 ? fieldValue(field, g[idx]) : null
+            break
+          }
+          case 'prev_value': {
+            const v = fieldValue(field, g[i])
+            if (v != null) prevValues[j] = v
+            r[name] = prevValues[j]
+            break
+          }
+          case 'next_value': {
+            if (i <= nextIndex[j]!) r[name] = nextValues[j]
+            else {
+              let k = i
+              while (k < n && fieldValue(field, g[k]) == null) k++
+              if (k >= n) { nextIndex[j] = n; nextValues[j] = null }
+              else { nextIndex[j] = k; nextValues[j] = fieldValue(field, g[k]) }
+              r[name] = nextValues[j]
+            }
+            break
+          }
+          case 'values':
+            r[name] = frameRows
+            break
+          case 'count':
+            r[name] = frameRows.length
+            break
+          default: {
+            // every aggregate op resolves through the same measure port
+            const agg = aggregateGroup(frameRows, [], [field ?? null], [op], [name], [aggParams[j] ?? null])
+            r[name] = agg[name]
+          }
         }
       })
-      out.push(r)
+      results.set(g[i]!, r)
     }
   }
-  return out
+  // vega's Window writes back to the input pulse in source order; the group and
+  // sort order only drive the calculations.
+  return rows.map((r) => results.get(r) ?? r)
 }
 
 function stackRows(rows: Row[], t: Extract<CompiledTransform, { type: 'stack' }>): Row[] {

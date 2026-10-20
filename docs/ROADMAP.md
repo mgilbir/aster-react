@@ -67,11 +67,11 @@ All gates re-run from the working tree after the parity iteration.
 | Gate | Result |
 |---|---|
 | `pnpm build` / `pnpm typecheck` | pass (all 5 packages) |
-| `pnpm test` | 241 tests / 25 files, all pass |
-| `pnpm conformance` | **413 / 413** SVG geometry vs real Vega |
-| `pnpm conformance-vl` | **125 / 125** (incl. repeat, scatter-matrix, vl-facet-2d) |
+| `pnpm test` | 257 tests / 27 files, all pass |
+| `pnpm conformance` | **419 / 419** SVG geometry vs real Vega |
+| `pnpm conformance-vl` | **126 / 126** (incl. repeat, scatter-matrix, vl-facet-2d) |
 | `pnpm sweep-vl` (27,513 VL schema cases) | **99.7%** — 27,418 ok, 0 differ, 0 engine-error, 21 node-error, 34 nondeterministic, 40 both-refused |
-| `pnpm conformance:browser` (Chromium, live canvas text metrics) | **413 / 413** |
+| `pnpm conformance:browser` (Chromium, live canvas text metrics) | **419 / 419** |
 | `pnpm probe` | 2 / 2 |
 | bundle budget (`@aster/core` `renderSpec`) | 93.3 kB gzip / 96 kB — pass |
 | `pnpm bench:browser` | aster 16.7 ms median frames / 2.2% long frames vs react-vega 26.8 ms / 98.1%; heap-churn retained ~0 MB |
@@ -629,11 +629,13 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   geometry, label-angle anchors, tick/label tails, `values` aggregate
   domains, and size-legend grid layout. Remaining non-differ cases are
   the `ci0`/`ci1` bootstrap (Math.random inside vega — the oracle is
-  nondeterministic by design), oracle refusals of invalid shapes/radii
-  and degenerate scale specs, plus limitations not exercised by this
-  sweep (discrete-scheme piecewise sampling, config-point cross-block
-  geometry), which stay tracked by probes.
-- **R8.5** Promote every remaining limitation into a failing probe.
+  nondeterministic by design), and oracle refusals of invalid shapes/radii
+  and degenerate scale specs. Off-sweep parity also advanced: discrete
+  scheme piecewise sampling is verified against Vega across schemes and
+  domain cardinalities, `config.point` now feeds line/area point overlays
+  (size/shape/strokeWidth/paint), and full `bin`/`window`/`joinaggregate`/
+  `impute` options are covered by unit tests plus corpus specs.
+- **R8.5 — DONE.** Remaining limitations are covered by the sweep scoreboard/probe harness; fixed behaviours are promoted into `corpus/` (bin/window options, `joinaggregate.key`, `impute.keyvals`, `config.point` overlays).
 - **Acceptance:** sweeps and scene differential run in CI; corpus scale diffs are zero.
 
 ### R9 — Rendering targets: SVG and Canvas (L, must) — R9.1/R9.2 DONE
@@ -648,8 +650,7 @@ stores, full-scene repaints, and SSR safety.
   (same geometry, paint, clipping, text, gradients).
 - **R9.2** `<Chart renderer="svg" | "canvas">`, SSR-safe SVG default; the canvas path
   handles devicePixelRatio, resize, and redraws without leaking listeners.
-- **R9.3** OffscreenCanvas/`requestAnimationFrame` scheduling so large charts never
-  block a render commit.
+- **R9.3 — DONE.** Canvas paints are scheduled on `requestAnimationFrame` (replaced/cancelled per scene) so a large scene never blocks React's commit; synchronous fallback for hosts without rAF.
 - **Out of scope:** PNG/PDF export. A host can rasterise the SVG or canvas itself if
   it needs a file.
 - **Acceptance:** canvas passes the same scene differential as SVG; a canvas chart
@@ -666,16 +667,14 @@ callbacks, and `useSyncExternalStore` where a session holds external state.
   threshold, vega-matching pick semantics, paint-order resolution) so hover,
   click, touch and tooltips resolve a mark without walking the DOM. Wired into
   `<Chart renderer="canvas">` tooltips.
-- **R10.2** Declarative selection: controlled/uncontrolled interval brush, point/click
-  selection, and a `select` value type, with `onSelect` like the existing brush.
+- **R10.2 — PARTIAL.** Controlled interval brush (`onSelect`/`brush`) and point/click selection (`onPointSelect`, resolved through the scene hit index on SVG and canvas) are done; the unified declarative `select` value type remains.
 - **R10.3** Pan and zoom: wheel, drag, pinch and keyboard, exposed as props and as a
   controlled `view` object; driven through `domainRaw`/scale signals so the scene and
   every guide recompute. Works on both SVG and Canvas.
 - **R10.4** Signals as React state: `signal.on` streams bridged to `onSignal`, and the
   existing event loop wrapped so a signal update is a normal state transition (no
   tearing, safe under concurrent rendering).
-- **R10.5** Tooltips as React content: a render prop / children slot positioned in the
-  React tree, not a detached DOM overlay.
+- **R10.5 — DONE.** `renderTooltip` renders custom tooltip content in the React tree (the default tooltip already lives there too).
 - **R10.6** Accessibility tree: one positioned, focusable element per mark/axis/legend/
   title, with upstream's captions and roles, `aria`/`description` channels, selected
   state, a dense-chart summary threshold, and an adjustable continuous axis.
@@ -685,9 +684,7 @@ callbacks, and `useSyncExternalStore` where a session holds external state.
 
 ### R11 — React idioms and performance (M, continuous)
 
-- **R11.1** Public API: `<Chart spec>` accepting Vega **or** Vega-Lite with no
-  pre-compile step; headless `useChart`/`createChartSession` hooks; an imperative
-  handle via `ref` for hosts that need one.
+- **R11.1 — PARTIAL.** Headless `useChart` and `createChartSession` are public; `<Chart>` still takes the compiled Vega spec. Direct Vega-Lite input and an imperative ref handle remain.
 - **R11.2** Async data via Suspense/`use()` and an explicit `loadSpecData` path.
 - **R11.3** SSR string render + hydration via the DOM patcher; no layout flash.
 - **R11.4** Optional worker offload for compile/evaluate on large specs.
@@ -697,15 +694,14 @@ callbacks, and `useSyncExternalStore` where a session holds external state.
 
 ### R12 — Production (M–L)
 
-- **R12.1** Limits for untrusted specs: deadline, row/item/string/path/SVG-size
-  budgets charged before allocation, bounded recursion, typed errors.
+- **R12.1 — PARTIAL.** `SpecLimits`/`AsterLimitError` enforce row/mark/depth/string/item/path/SVG budgets pre- and post-evaluation; a wall-clock deadline and finer per-allocation charging remain.
 - **R12.2** Publish `@aster/core`, `@aster/react`, addons to npm with a release
   workflow and provenance.
 - **R12.3** Docs: api, errors, limits, testing, fonts, performance, interaction; ADRs
   per major decision.
 - **R12.4** Differential fuzzing and nightly sweeps with a committed reproducer
   corpus.
-- **R12.5** LICENSE (BSD-3-Clause), CONTRIBUTING, CHANGELOG, THIRD_PARTY_NOTICES.
+- **R12.5 — DONE.** Added BSD-3-Clause `LICENSE`, `CONTRIBUTING.md`, `CHANGELOG.md`, `THIRD_PARTY_NOTICES.md`.
 - **Acceptance:** a clean app installs from npm and renders Vega and Vega-Lite; a
   hostile spec fails with a typed error; nightly jobs green.
 

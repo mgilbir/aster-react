@@ -1,3 +1,6 @@
 export { Chart } from './Chart'
 export type { ChartProps } from './Chart'
 export type { SelectionInterval } from './interaction'
+export { useChart, type UseChartOptions, type UseChartResult } from './useChart'
+export { createChartSession } from '@aster/core/dom'
+export type { ChartSession } from '@aster/core/dom'

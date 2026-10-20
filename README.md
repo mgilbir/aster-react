@@ -4,7 +4,7 @@ A small TypeScript reimplementation of the Vega/Vega-Lite rendering stack on gra
 
 ## Status
 
-**Pre-alpha.** The pipeline works end-to-end, verified against the real Vega renderer on a 413-spec conformance corpus (413/413; marks, scales, axes, legends, titles, config, expressions, signals, grouping, trellis faceting, and URL data loaders), a 27,513-case Vega-Lite schema sweep (99.7%, 0 differ), and a Chromium browser conformance gate (413/413). Not for production use.
+**Pre-alpha.** The pipeline works end-to-end, verified against the real Vega renderer on a 419-spec conformance corpus (419/419; marks, scales, axes, legends, titles, config, expressions, signals, grouping, trellis faceting, and URL data loaders), a 27,513-case Vega-Lite schema sweep (99.7%, 0 differ), and a Chromium browser conformance gate (419/419). Not for production use.
 
 ## How It Works
 
@@ -21,7 +21,7 @@ Expressions (used in formulas, filters, and mark encodings) are parsed by `vega-
 | Package | Description |
 |---------|-------------|
 | `packages/core` — `@aster/core` | Compiler (spec -> IR), runtime (IR -> scene), SVG renderer, expression engine. Public API: `renderSpec`, `compileChart`, `evaluateChart`, `renderSceneToSvg`, `compileExpr`, `buildScale`, `applyTransforms`. |
-| `packages/react` — `@aster/react` | Thin `<Chart>` React component rendering the SVG from `renderSpec`. |
+| `packages/react` — `@aster/react` | React `<Chart>` (SVG/canvas, incremental DOM patching, selection, tooltips) and the headless `useChart` hook. |
 | `packages/conformance` — `@aster/conformance` | Oracle harness: renders each corpus spec through both real Vega (dev-only) and `@aster/core`, canonicalizes SVGs, diffs geometry. |
 | `packages/benchmarks` — `@aster/benchmarks` | Runtime/memory/bundle/browser performance harness comparing `<Chart>` vs react-vega and vega-embed; includes the core `renderSpec` gzip budget gate. |
 | `.github/workflows/ci.yml` | CI pipeline: typecheck, build, test, conformance, bundle budget. |
@@ -63,17 +63,39 @@ const svg = renderSpec(spec)
 // svg is a plain SVG string
 ```
 
+### React API
+
+```tsx
+import { Chart, useChart } from '@aster/react'
+
+<Chart
+  spec={spec}
+  renderer="svg"              // or "canvas"
+  tooltip
+  onSelect={(interval) => {}} // interval brush
+  onPointSelect={(datum) => {}} // click/point selection (SVG + canvas)
+  renderTooltip={(datum) => <b>{String(datum.c)}</b>}
+  limits={{ maxRows: 100_000, maxItems: 50_000, maxSvgLength: 8_000_000 }}
+/>
+
+const { scene, svg, error, session } = useChart(spec, { width, height, data })
+```
+
+`limits` (and `renderSpec(spec, { limits })`) provides typed
+`AsterLimitError` budgets for untrusted specs; see `packages/core/src/limits.ts`.
+A headless session is also exported as `createChartSession` from
+`@aster/core/dom`.
+
 ## Current Status / What Works
 
-**Conformance (real-Vega oracle, 413-spec corpus): 413/413.** The core pipeline (Vega spec → compile → evaluate → SVG, plus the React `<Chart>` wrapper) is diffed against the real Vega renderer on a 413-spec corpus (both raw Vega `*.vg.json` and Vega-Lite `*.vl.json`, confirming the vega-lite compile path). This covers marks (line/area/bar/rule/scatter/symbol/rect/text/arc/path/image/trail/shape, with curves/gradients/corner-radii), band/linear/log/pow/time scales, axes (ticks/grid/labels/titles/`labelOverlap`), legends (gradient and symbol, at any corner), titles, config/style defaults, full vega expression surface, nested scopes, trellis/facet-2d layout, contour, geo projections, and URL data loaders.
+**Conformance (real-Vega oracle, 419-spec corpus): 419/419.** The core pipeline (Vega spec → compile → evaluate → SVG, plus the React `<Chart>` wrapper) is diffed against the real Vega renderer on a 419-spec corpus (both raw Vega `*.vg.json` and Vega-Lite `*.vl.json`, confirming the vega-lite compile path). This covers marks (line/area/bar/rule/scatter/symbol/rect/text/arc/path/image/trail/shape, with curves/gradients/corner-radii), band/linear/log/pow/time scales, axes (ticks/grid/labels/titles/`labelOverlap`), legends (gradient and symbol, at any corner), titles, config/style defaults, full vega expression surface, nested scopes, trellis/facet-2d layout, contour, geo projections, and URL data loaders.
 
 **Schema sweeps (27,513 Vega-Lite property/value cases): 99.7% (27,418 ok, 0 differ).** For every property the Vega-Lite schema declares, a small chart is rendered through both engines and the SVG is diffed. Every comparable case now matches; the 95 non-ok cases are 40 specs both engines refuse, 21 oracle crashes/refusals (invalid SVG shapes/radii and degenerate `nice`/padding scale specs), and 34 nondeterministic `ci0`/`ci1` bootstrap aggregates (`Math.random` inside vega), tracked in the sweep family scoreboard (`pnpm sweep-vl`).
 
-**Browser conformance gate (`pnpm conformance:browser`): 413/413.** The same oracle protocol run in a real Chromium page (vega-embed SVG renderer with live canvas text metrics, vs `renderSpec`), because the Node harness runs both engines in jsdom where neither can measure text.
+**Browser conformance gate (`pnpm conformance:browser`): 419/419.** The same oracle protocol run in a real Chromium page (vega-embed SVG renderer with live canvas text metrics, vs `renderSpec`), because the Node harness runs both engines in jsdom where neither can measure text.
 
 **What is NOT covered yet:**
 
-- **Canvas rendering** — only SVG output is implemented.
 - **Full reactive dataflow** — the session fingerprints identical renders (returns the cached scene) and partially re-evaluates only the marks whose dataset changed, but the datum set is still eagerly re-encoded per update; there is no per-datum source/target pulse graph.
 - **Full Vega transform parity** — `bin` covers common cases but not every Vega option; `window`/`joinaggregate`/`impute` hold for common shapes.
 - **[io] tracing/other rare layout transforms** — the opt-in addon covers `kde`/`quantile`/`regression`/`loess`/`pack`/`partition`/`treemap`/`wordcloud`/`voronoi`.
