@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Pulse/dataflow**: sessions automatically diff replaced immutable source arrays
+  (`autoChanges`, default on), expose source/transform pulses via `session.pulse()`,
+  and reuse unchanged items without an explicit `dataChanges` props. Sorted
+  window/stack groups now consume dirty-group pulses instead of falling back.
+- **Accessibility**: axe WCAG A/AA audit for the chart tree, guide-caption parity
+  (419/419) against Vega's `aria-label`, and keyboard-operable legend entries
+  (`aria-pressed`) that filter shape/paint series.
+- **Transforms**: transform option matrix (bin/window/stack/joinaggregate/impute/
+  fold/flatten/pivot/lookup/sequence/identifier/timeunit/extent), fixing impute
+  tuple fields, sequence append semantics and identifier assignment.
+- **Text metrics**: pluggable `TextMetricsProvider` on core/`<Chart>` for custom
+  fonts and non-browser renderers, with provider-scoped caching and safe fallback.
+
 - **Conformance rigour**: added the scene-level differential (`pnpm scene-diff`,
   419/419) comparing resolved scale maps per scope, mark/item geometry/paint and
   overlap paint order against Vega's scenegraph (R8.1–R8.3). Both schema sweeps now

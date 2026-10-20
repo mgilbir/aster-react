@@ -36,7 +36,16 @@ export { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expres
 export { buildScale, type Scale } from './scales.js'
 export { applyTransforms, sortRows, type Row } from './transform.js'
 export { AsterLimitError, checkSpecLimits, checkSceneLimits, checkSvgLength, createLimitClock, type LimitClock, type SpecLimits } from './limits.js'
+export {
+  setTextMetricsProvider, getTextMetricsProvider, withTextMetricsProvider,
+  usingCanvasTextMetrics, measureText, estimateTextWidth, fontString,
+  type TextMetricsProvider,
+} from './text-metrics.js'
 export { buildA11yTree, type A11yKind, type A11yNode, type A11yOptions, type A11yTree } from './a11y.js'
+export {
+  buildPulseGraph, diffRows, propagatePulse, rowsEqual, transformNeedsFullRederive, isGroupedTransform,
+  type DataPulse, type DatasetPulse, type PulseGraph, type PulseNode, type PulsePropagation, type RowDiff,
+} from './pulse.js'
 export { geoRegistry, transformRegistry, requireTransform, type GeoRegistry, type ContourFeature, type TransformFn } from './registry.js'
 // The event-driven signal loop (`@aster/core/signals`: bindSceneSignals etc.)
 // ships as an opt-in addon like the DOM patcher; hosts using signal.on streams

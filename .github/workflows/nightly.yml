@@ -26,6 +26,12 @@ jobs:
       - name: Scene differential
         run: pnpm scene-diff
 
+      - name: Guide-caption parity
+        run: pnpm a11y-parity
+
+      - name: Transform option matrix
+        run: pnpm transform-matrix
+
       - name: Vega-Lite schema sweep
         run: pnpm sweep-vl
 

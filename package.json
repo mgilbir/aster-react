@@ -25,7 +25,9 @@
     "sweep-vl": "pnpm --filter @aster/conformance run sweep-vl",
     "sweep-vega": "pnpm --filter @aster/conformance run sweep-vega",
     "sweep-signals": "pnpm --filter @aster/conformance run sweep-signals",
-    "scene-diff": "pnpm --filter @aster/conformance run scene-diff"
+    "scene-diff": "pnpm --filter @aster/conformance run scene-diff",
+    "transform-matrix": "pnpm --filter @aster/conformance run transform-matrix",
+    "a11y-parity": "pnpm --filter @aster/conformance run a11y-parity"
   },
   "devDependencies": {
     "esbuild": "~0.25.12",

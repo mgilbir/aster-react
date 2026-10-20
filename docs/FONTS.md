@@ -16,6 +16,10 @@ Implications:
   are normalized to the same semantic records.
 - Prefer system font stacks or bundle the font in the host CSS; the SVG carries the
   `font-family` value but never embeds font files.
+- For custom/non-browser font engines, pass `textMetrics` to `<Chart>`/`renderSpec` or
+  call `setTextMetricsProvider({ measure(text, font, size) {…} })`. Providers are
+  scoped to one evaluation, cache-keyed, and fall back to the headless estimate when
+  they throw or return an invalid width.
 
 Accessible captions use the same plain text as the rendered labels, with abbreviations
 expanded for temporal scales (`%a`→`%A`, `%b`→`%B`), matching Vega's screen-reader

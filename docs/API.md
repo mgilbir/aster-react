@@ -24,17 +24,21 @@ const svg = renderSpec(vegaSpec, {
   signals: { shift: 10 },
   domainRaw: { x: [0, 25] },   // pan/zoom/brush domain override
   limits: { maxRows: 100_000, maxTimeMs: 2_000 },
+  textMetrics: { measure: (text, font, size) => myFontEngine.measure(text, font, size) },
 })
 ```
 
 `compileChart(spec)` produces the `CompiledChart` IR; `evaluateChart(chart, input)`
 resolves data/scales/encodes into a `SceneRoot`; `renderSceneToSvg(scene)` serializes
 it. `createChartSession()` (from `@aster/core/dom`) caches the IR and scene across
-updates and supports per-datum `dataChanges`.
+updates, diffs replaced immutable source arrays automatically (`autoChanges`, default
+on), supports explicit per-datum `dataChanges`, and exposes the source/transform pulse
+via `session.pulse()`. `buildPulseGraph(chart)` / `propagatePulse(graph, sources)` expose
+the same dataflow structure directly.
 
 `buildA11yTree(scene, scales, options)` returns positioned, captioned nodes for marks,
-axes, legends and titles. `<Chart>` projects them into focusable elements; non-React
-hosts can do the same.
+axes, legends, legend entries and titles. `<Chart>` projects them into focusable
+elements; non-React hosts can do the same. Legend entries are keyboard toggles.
 
 ### Interaction addons
 

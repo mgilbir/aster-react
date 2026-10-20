@@ -20,6 +20,8 @@ export type SizeSpec = number | { signal: string } | { step: number }
 export interface RuntimeInput {
   /** Budgets for untrusted specs (see limits.ts). */
   limits?: import('./limits.js').SpecLimits
+  /** Host text measurement (custom fonts, non-browser hosts). */
+  textMetrics?: import('./text-metrics.js').TextMetricsProvider
   /** Named datasets. Overrides or fulfills spec data references by name. */
   data?: Record<string, unknown[]>
   /** Static width/height overrides for `{signal: 'width'|'height'}` and spec size. */
@@ -47,6 +49,12 @@ export interface RuntimeInput {
    * fully re-encode (safe default).
    */
   dataChanges?: Record<string, number[]>
+  /**
+   * Infer a per-datum changeset by diffing replaced source arrays against the
+   * previous session evaluation. Defaults to true when `dataChanges` is absent;
+   * set false to force a full re-encode.
+   */
+  autoChanges?: boolean
   /**
    * Direct scale-domain overrides (vega's `domainRaw`): scale name -> values.
    * The view/guides/encodes all rebuild from the overridden scale, which is the
@@ -185,7 +193,7 @@ export type CompiledTransform =
   | { type: 'collect'; sort?: SortSpec }
   | { type: 'joinaggregate'; groupby?: string[]; fields?: (string | null)[]; ops?: string[]; as?: string[]; key?: string }
   | { type: 'impute'; field: string; key: string; groupby?: string[]; keyvals?: unknown[] | { signal: string }; method?: string; value?: unknown }
-  | { type: 'identifier' }
+  | { type: 'identifier'; as?: string }
   | { [name: string]: unknown }
 
 export interface SortSpec {
@@ -299,6 +307,8 @@ export interface CompiledAxis {
   format?: string
   formatType?: string
   zindex?: number
+  aria?: boolean
+  description?: string
   encode?: Record<string, Record<string, EncodeValue>>
 }
 
@@ -424,6 +434,8 @@ export interface ScaleSnapshot {
   bandwidth?: number
   /** Endpoint samples for interpolating (colour) scales, where d3 reports [0,1]. */
   samples?: [unknown, unknown]
+  /** vega-scale labelValues (thresholds/quantiles/bins) for discretizing scales. */
+  labelValues?: unknown[]
 }
 
 export interface SceneRoot {
@@ -479,6 +491,9 @@ export interface SceneGroup extends SceneItem {
   title?: string
   /** Legend kind (`gradient`/`symbol`) for caption construction. */
   legendType?: string
+  /** Legend scale/channels (accessibility caption metadata). */
+  legendScale?: string
+  legendChannels?: string[]
   /** @internal Resolved scales in this nested scope (scene-differential metadata). */
   __scales?: ScaleSnapshot[]
 }

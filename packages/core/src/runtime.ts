@@ -7,6 +7,7 @@ import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expres
 import { readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, sortRows, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row } from './transform.js'
 import { AsterLimitError } from './limits.js'
+import { withTextMetricsProvider } from './text-metrics.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
 
 /** Scale types whose domain is an ordered set of discrete values. */
@@ -413,6 +414,18 @@ interface AxisLegendResult {
   padding: { top: number; right: number; bottom: number; left: number }
 }
 
+/** Resolve a guide string/signal value for accessibility metadata. */
+function guideString(ctx: EvalContext, value: unknown): string | undefined {
+  if (typeof value === 'string') return value
+  if (value && typeof value === 'object' && typeof (value as { signal?: unknown }).signal === 'string') {
+    try {
+      const v = ctx.runtime.expr(String((value as { signal: string }).signal))({}, ctx.signalParams)
+      return v == null ? undefined : String(v)
+    } catch { return undefined }
+  }
+  return undefined
+}
+
 /** Resolve a guide title (string or `{signal}`) for accessibility metadata. */
 function guideTitle(ctx: EvalContext, title: unknown): string | undefined {
   if (typeof title === 'string') return title
@@ -444,6 +457,10 @@ function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { gro
       // the serialized SVG: the fields are scene metadata only.
       ;(wrapped as unknown as { orient?: string; scale?: string; title?: string }).orient = axis.orient
       ;(wrapped as unknown as { orient?: string; scale?: string; title?: string }).scale = axis.scale
+      ;(wrapped as unknown as { aria?: boolean; grid?: boolean; format?: string; formatType?: string }).aria = axis.aria
+      ;(wrapped as unknown as { aria?: boolean; grid?: boolean; format?: string; formatType?: string }).grid = axis.grid === true
+      ;(wrapped as unknown as { aria?: boolean; grid?: boolean; format?: string; formatType?: string }).format = guideString(ctx, axis.format)
+      ;(wrapped as unknown as { aria?: boolean; grid?: boolean; format?: string; formatType?: string }).formatType = guideString(ctx, axis.formatType)
       const at = guideTitle(ctx, axis.title)
       if (at) (wrapped as unknown as { title?: string }).title = at
       groups.push(wrapped)
@@ -463,7 +480,25 @@ function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { gro
       if (group) {
         const lt = guideTitle(ctx, legend.title)
         if (lt) (group as unknown as { title?: string }).title = lt
-        ;(group as unknown as { legendType?: string }).legendType = legend.gradientLength != null ? 'gradient' : 'symbol'
+        const g = group as unknown as {
+          legendScale?: string; legendChannels?: string[]; legendType?: string
+          legendFormat?: string; legendFormatType?: string
+        }
+        g.legendChannels = ['fill', 'stroke', 'size', 'shape', 'opacity'].filter((k) => typeof (legend as Record<string, unknown>)[k] === 'string')
+        g.legendScale = g.legendChannels.map((k) => String((legend as Record<string, unknown>)[k]))[0]
+        g.legendFormat = guideString(ctx, (legend as Record<string, unknown>).format)
+        g.legendFormatType = guideString(ctx, (legend as Record<string, unknown>).formatType)
+        const st = g.legendScale ? (ctx.scaleTypes.get(g.legendScale) ?? ctx.chart.scales.find((sc) => sc.name === g.legendScale)?.type) : undefined
+        const discrete = st === 'band' || st === 'point' || st === 'ordinal' || st === 'bin-ordinal'
+        const discretizing = st === 'threshold' || st === 'quantize' || st === 'quantile'
+        const color = g.legendChannels.some((k) => k === 'fill' || k === 'stroke')
+        const explicitGradient = legend.type === 'gradient' || legend.gradientLength != null
+        g.legendType = legend.type === 'symbol'
+          ? 'symbol'
+          : explicitGradient ? 'gradient'
+            : color && discretizing ? 'discrete'
+              : color && st != null && !discrete ? 'gradient'
+                : 'symbol'
       }
       return { legend, group }
     })
@@ -938,6 +973,10 @@ function buildContent(
 }
 
 export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
+  return withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input))
+}
+
+function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
   const auto = chart.autosize
   const base = chart.padding
   // Differential-update generation: incremented each eval so an unchanged (reused)
@@ -1445,9 +1484,11 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       const isJoinAgg = single?.type === 'joinaggregate'
       const isFilter = single?.type === 'filter'
       const isBinData = single?.type === 'bin' && !Array.isArray((single as { extent?: unknown }).extent)
+      // A sort only reorders rows within each group; the group's contiguous
+      // output block keeps its length, so dirty-group re-derivation is still
+      // safe (all indices in the block are marked changed).
       const isGrouped = (single?.type === 'window' || single?.type === 'stack')
         && ((single as { groupby?: unknown }).groupby as string[] | undefined)?.length
-        && (single as { sort?: unknown }).sort == null
       const t = single!
       let aggUpdated = false
       // Incremental filter: re-evaluate the predicate only for changed rows and
@@ -1791,6 +1832,17 @@ function snapshotScales(scales: Map<string, Scale>): Array<{ name: string; type:
     const range = s.range()
     const bandwidth = typeof s.bandwidth === 'function' ? s.bandwidth() : undefined
     let samples: [unknown, unknown] | undefined
+    const type = s.type ?? 'unknown'
+    let labelValues: unknown[] | undefined
+    if (type === 'quantile') {
+      const q = (scale as unknown as { quantiles?: () => unknown[] }).quantiles
+      if (typeof q === 'function') labelValues = q.call(scale)
+    } else if (type === 'quantize' || type === 'threshold') {
+      const t = (scale as unknown as { thresholds?: () => unknown[] }).thresholds
+      if (typeof t === 'function') labelValues = t.call(scale)
+    } else if (Array.isArray((scale as unknown as { bins?: unknown[] }).bins)) {
+      labelValues = (scale as unknown as { bins: unknown[] }).bins
+    }
     // Interpolating colour scales report a normalized [0,1] range; sample the
     // endpoints so the snapshot remains comparable with vega's [colour, colour].
     if (domain.length >= 2 && typeof scale === 'function') {
@@ -1801,8 +1853,9 @@ function snapshotScales(scales: Map<string, Scale>): Array<{ name: string; type:
       } catch { /* non-interpolating */ }
     }
     out.push({
-      name, type: s.type ?? 'unknown', domain: Array.from(domain), range: Array.from(range),
+      name, type, domain: Array.from(domain), range: Array.from(range),
       ...(bandwidth != null ? { bandwidth } : {}), ...(samples ? { samples } : {}),
+      ...(labelValues ? { labelValues } : {}),
     })
   }
   return out
@@ -4043,7 +4096,18 @@ function buildAxisInline(spec: Record<string, unknown>, ctx: EvalContext): Scene
   // forward the whole axis spec (labelAngle, fonts, colors, ...): a whitelist
   // here silently dropped the facet axes' label rotation and paint props
   const def: Record<string, unknown> = { ...spec }
-  return buildAxis(def as unknown as CompiledAxis, ctx)
+  const group = buildAxis(def as unknown as CompiledAxis, ctx)
+  if (group) {
+    const g = group as unknown as { orient?: string; scale?: string; title?: string; aria?: boolean; format?: string; formatType?: string }
+    g.orient = String(spec.orient ?? '')
+    g.scale = typeof spec.scale === 'string' ? spec.scale : undefined
+    g.aria = spec.aria as boolean | undefined
+    g.format = guideString(ctx, spec.format)
+    g.formatType = guideString(ctx, spec.formatType)
+    const title = guideTitle(ctx, spec.title)
+    if (title) g.title = title
+  }
+  return group
 }
 
 function facetItemMark(

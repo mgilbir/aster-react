@@ -279,3 +279,49 @@ export function continuousAxes(info: ChartInfo): Array<'x' | 'y'> {
 }
 
 export { curve as domainCurve }
+
+export interface HiddenLegendEntry {
+  key: string
+  color?: string
+  shape?: string
+}
+
+/**
+ * Remove mark items matched by an off legend entry. Only shape/paint legends
+ * are filtered (line/area/trail series need a compiled group-level filter);
+ * the scene is cloned lazily so the session's cached scene stays untouched.
+ */
+export function filterLegendScene(
+  scene: import('@aster/core').SceneRoot,
+  hidden: Iterable<HiddenLegendEntry>,
+): import('@aster/core').SceneRoot {
+  const entries = [...hidden]
+  if (!entries.length) return scene
+  const hideable = new Set(['rect', 'symbol', 'circle', 'arc', 'text', 'path', 'shape', 'geoshape', 'image'])
+  const matches = (item: Record<string, unknown>): boolean => entries.some((e) =>
+    (e.color != null && (item.fill === e.color || item.stroke === e.color))
+    || (e.shape != null && item.shape === e.shape),
+  )
+  const cloneNode = (node: import('@aster/core').SceneNode): import('@aster/core').SceneNode => {
+    const group = node as import('@aster/core').SceneGroup
+    if (!Array.isArray(group.items)) return node
+    if (group.role === 'mark' && group.marktype && hideable.has(group.marktype)) {
+      const kept = group.items.filter((it) => !matches(it as Record<string, unknown>))
+      return kept.length === group.items.length ? node : { ...group, items: kept }
+    }
+    let changed = false
+    const items = group.items.map((it) => {
+      const next = cloneNode(it)
+      if (next !== it) changed = true
+      return next
+    })
+    return changed ? { ...group, items } : node
+  }
+  let changed = false
+  const items = scene.items.map((it) => {
+    const next = cloneNode(it)
+    if (next !== it) changed = true
+    return next
+  })
+  return changed ? { ...scene, items } : scene
+}

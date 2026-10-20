@@ -13,6 +13,44 @@
 const widthCache = new Map<string, number>()
 const WIDTH_CACHE_MAX = 8000
 
+/**
+ * Host-provided text measurement. A provider replaces the offscreen-canvas
+ * measurement for every layout/bounds call (and therefore also applies in
+ * Node/headless or when a custom font must be measured by the host's own
+ * engine). Return a non-negative advance width in CSS pixels.
+ */
+export interface TextMetricsProvider {
+  measure(text: string, font: string, fontSize: number, item?: FontProps): number
+}
+
+let activeProvider: TextMetricsProvider | null = null
+let activeProviderId = 0
+let providerSeq = 0
+
+export function setTextMetricsProvider(provider: TextMetricsProvider | null): void {
+  activeProvider = provider
+  activeProviderId = provider ? ++providerSeq : 0
+  widthCache.clear()
+}
+
+export function getTextMetricsProvider(): TextMetricsProvider | null {
+  return activeProvider
+}
+
+/** Run `fn` with a scoped provider (used by <Chart>/renderSpec). */
+export function withTextMetricsProvider<T>(provider: TextMetricsProvider | null | undefined, fn: () => T): T {
+  if (!provider || provider === activeProvider) return fn()
+  const prev = activeProvider
+  const prevId = activeProviderId
+  setTextMetricsProvider(provider)
+  try {
+    return fn()
+  } finally {
+    activeProvider = prev
+    activeProviderId = prevId
+  }
+}
+
 let ctx2d: CanvasRenderingContext2D | null | undefined
 
 function canvasContext(): CanvasRenderingContext2D | null {
@@ -32,7 +70,7 @@ function canvasContext(): CanvasRenderingContext2D | null {
 
 /** True when vega-style canvas measurement is possible in this environment. */
 export function usingCanvasTextMetrics(): boolean {
-  return canvasContext() != null
+  return activeProvider != null || canvasContext() != null
 }
 
 export interface FontProps {
@@ -59,15 +97,24 @@ export function fontString(item: FontProps): string {
   )
 }
 
-/** vega-scenegraph `_measureWidth`: canvas measurement, LRU-ish cached by font+text. */
-export function measureText(text: string, font: string): number {
-  const key = `(${font}) ${text}`
+/** vega-scenegraph `_measureWidth`: provider/canvas measurement, cached by font+text. */
+export function measureText(text: string, font: string, item?: FontProps): number {
+  const key = `${activeProviderId}|(${font}) ${text}`
   let w = widthCache.get(key)
   if (w === undefined) {
-    const ctx = canvasContext()
-    if (!ctx) return 0
-    ctx.font = font
-    w = ctx.measureText(text).width
+    if (activeProvider) {
+      try {
+        const measured = activeProvider.measure(text, font, fontFontSize(item ?? {}), item)
+        w = Number.isFinite(measured) && measured >= 0 ? measured : estimateTextWidth(text, fontFontSize(item ?? {}))
+      } catch {
+        w = estimateTextWidth(text, fontFontSize(item ?? {}))
+      }
+    } else {
+      const ctx = canvasContext()
+      if (!ctx) return 0
+      ctx.font = font
+      w = ctx.measureText(text).width
+    }
     if (widthCache.size >= WIDTH_CACHE_MAX) widthCache.clear()
     widthCache.set(key, w)
   }
@@ -87,7 +134,7 @@ export function estimateTextWidth(text: string, fontSize: number): number {
 export function itemTextWidth(item: FontProps, text: string): number {
   const fs = fontFontSize(item)
   if (usingCanvasTextMetrics()) {
-    return fs <= 0 || !text ? 0 : measureText(text, fontString(item))
+    return fs <= 0 || !text ? 0 : measureText(text, fontString(item), item)
   }
   return estimateTextWidth(String(text ?? ''), fs)
 }
@@ -100,7 +147,7 @@ export function itemTextWidth(item: FontProps, text: string): number {
 export function nominalTextWidth(text: string, fontSize: number, fontWeight?: unknown): number {
   if (usingCanvasTextMetrics()) {
     if (fontSize <= 0 || !text) return 0
-    return measureText(text, fontString({ fontSize, fontWeight }))
+    return measureText(text, fontString({ fontSize, fontWeight }), { fontSize, fontWeight })
   }
   return estimateTextWidth(text, fontSize)
 }

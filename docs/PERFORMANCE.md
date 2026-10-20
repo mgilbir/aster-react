@@ -7,8 +7,10 @@ a chart pays only for the features it imports.
 
 - **Session caching**: `createChartSession` fingerprints the spec skeleton, dataset
   identities, size, signals and `domainRaw`; identical inputs return the same scene.
-- **Per-datum updates**: `<Chart dataChanges>` re-encodes only changed rows and reuses
-  unchanged scene items; the DOM patcher skips clean subtrees.
+- **Per-datum updates**: sessions diff replaced immutable source arrays automatically
+  (`autoChanges`), then re-encode only changed rows and reuse unchanged scene items;
+  explicit `dataChanges` remains available for custom batching. The source/transform
+  pulse is exposed through `session.pulse()`.
 - **Incremental scales**: continuous/discrete domains are reused when a changeset
   provably cannot move them.
 - **DOM patching**: the first render emits the full SVG for SSR; later updates patch

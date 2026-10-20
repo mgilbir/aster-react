@@ -9,6 +9,7 @@ import {
   type ChartInfo,
   type SceneRoot,
   type SpecLimits,
+  type TextMetricsProvider,
   type VgSpec,
 } from '@aster/core'
 import { isPromiseLike, normalizeChartSpec } from './spec.js'
@@ -23,6 +24,7 @@ import { bindSceneSignals, stampDatumAttrs, type SignalBinding } from '@aster/co
 import {
   cursorZoom,
   domainOf,
+  filterLegendScene,
   dragToDataInterval,
   keyboardView,
   normalizeView,
@@ -30,6 +32,7 @@ import {
   selectionToPixels,
   viewToDomainRaw,
   zoomDomain,
+  type HiddenLegendEntry,
   type SelectValue,
   type SelectionInterval,
   type ViewDomain,
@@ -139,6 +142,8 @@ export interface ChartProps {
   renderTooltip?: (datum: Record<string, unknown>) => React.ReactNode
   /** Budgets for untrusted specs (rows, marks, strings, paths, SVG size, time). */
   limits?: SpecLimits
+  /** Host text measurement for custom fonts / non-browser engines. */
+  textMetrics?: TextMetricsProvider
   /** Accessible scene tree (R10.6). Enabled by default; pass `false` to opt out. */
   a11y?: boolean | A11yOptions
   /** Called when compile/evaluate fails (typed `AsterLimitError` for budgets). */
@@ -280,6 +285,7 @@ function ChartView({
   tooltip = false,
   renderTooltip,
   limits,
+  textMetrics,
   a11y = true,
   onError,
   chartRef,
@@ -302,6 +308,7 @@ function ChartView({
   const [tooltipInfo, setTooltipInfo] = React.useState<{ datum: Record<string, unknown>; x: number; y: number } | null>(null)
   const [internalView, setInternalView] = React.useState<ViewDomain | null>(null)
   const [internalSelection, setInternalSelection] = React.useState<SelectValue | null>(null)
+  const [hiddenLegend, setHiddenLegend] = React.useState<Map<string, HiddenLegendEntry>>(() => new Map())
   const renderErrorRef = React.useRef<Error | null>(null)
 
   const useOverrides = width != null && height != null
@@ -341,7 +348,7 @@ function ChartView({
   const baseDomains = React.useMemo<ViewDomain>(() => {
     if (!panZoomEnabled) return {}
     try {
-      const info = getChartInfo(spec, { width: renderWidth, height: renderHeight, limits })
+      const info = getChartInfo(spec, { width: renderWidth, height: renderHeight, limits, textMetrics })
       return {
         x: domainOf(info.scales.get('x')) ?? undefined,
         y: domainOf(info.scales.get('y')) ?? undefined,
@@ -349,7 +356,7 @@ function ChartView({
     } catch {
       return {}
     }
-  }, [panZoomEnabled, spec, renderWidth, renderHeight, limits])
+  }, [panZoomEnabled, spec, renderWidth, renderHeight, limits, textMetrics])
   const baseDomainsRef = React.useRef(baseDomains)
   baseDomainsRef.current = baseDomains
 
@@ -378,7 +385,7 @@ function ChartView({
   const sceneGenRef = React.useRef(0)
   React.useMemo<SceneRoot | null>(() => {
     try {
-      const sc = sessionRef.current!.evaluate(spec, { data, dataChanges, width: renderWidth, height: renderHeight, signals: mergedSignals, limits, domainRaw })
+      const sc = sessionRef.current!.evaluate(spec, { data, dataChanges, width: renderWidth, height: renderHeight, signals: mergedSignals, limits, domainRaw, textMetrics })
       // Tooltips read data-datum off the DOM; stamp the datum onto scene items
       // before the markup/patch so the attribute is rendered.
       if (tooltipEnabled) stampDatumAttrs(sc.items)
@@ -390,10 +397,14 @@ function ChartView({
       renderErrorRef.current = err instanceof Error ? err : new Error(String(err))
       return null
     }
-  }, [spec, data, dataChanges, renderWidth, renderHeight, mergedSignals, tooltipEnabled, limits, domainRaw])
+  }, [spec, data, dataChanges, renderWidth, renderHeight, mergedSignals, tooltipEnabled, limits, domainRaw, textMetrics])
   const scene = sceneRef.current
   if (scene != null) sceneGenRef.current++
   const sceneGen = sceneGenRef.current
+  const displayScene = React.useMemo(
+    () => scene ? filterLegendScene(scene, hiddenLegend.values()) : null,
+    [scene, hiddenLegend],
+  )
   const renderError = renderErrorRef.current
 
   React.useEffect(() => {
@@ -405,11 +416,11 @@ function ChartView({
   // patcher owns the <svg> and we stop re-serializing on later updates.
   const hasPatchedRef = React.useRef(false)
   const markup = React.useMemo<string | null>(() => {
-    if (scene == null) return null
+    if (displayScene == null) return null
     if (renderer === 'canvas') return null
     if (incremental && hasPatchedRef.current) return null
-    return renderSceneToSvg(scene)
-  }, [incremental, renderer, scene])
+    return renderSceneToSvg(displayScene)
+  }, [incremental, renderer, displayScene])
 
   const svgHostRef = React.useRef<HTMLDivElement>(null)
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
@@ -451,28 +462,28 @@ function ChartView({
   // Incremental updates: create the <svg> once, then patch changed attributes
   // in place instead of re-serializing and re-parsing the whole markup every render.
   React.useLayoutEffect(() => {
-    if (!incremental || !scene || renderer === 'canvas') return
+    if (!incremental || !displayScene || renderer === 'canvas') return
     const host = svgHostRef.current
     if (!host) return
     const existing = host.firstElementChild
     if (existing && existing.tagName.toLowerCase() === 'svg') {
-      patchSceneDom(existing, scene)
+      patchSceneDom(existing, displayScene)
     } else {
-      host.replaceChildren(renderSceneToDomElement(scene))
+      host.replaceChildren(renderSceneToDomElement(displayScene))
     }
     hasPatchedRef.current = true
-  }, [incremental, scene])
+  }, [incremental, displayScene])
 
   // Canvas backend: size the backing store for devicePixelRatio and redraw the
   // whole scene whenever it changes (cheap relative to SVG serialization for
   // dense marks; no listeners to leak — every redraw is a full repaint).
   React.useLayoutEffect(() => {
-    if (renderer !== 'canvas' || !scene) return
+    if (renderer !== 'canvas' || !displayScene) return
     const canvas = canvasRef.current
     if (!canvas) return
     const dpr = typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1
-    const w = Math.max(1, Math.round(scene.width))
-    const h = Math.max(1, Math.round(scene.height))
+    const w = Math.max(1, Math.round(displayScene.width))
+    const h = Math.max(1, Math.round(displayScene.height))
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
       canvas.width = Math.round(w * dpr)
       canvas.height = Math.round(h * dpr)
@@ -485,13 +496,13 @@ function ChartView({
     // Paint on the next frame so a large scene never blocks React's commit
     // (or the first paint). A newer scene cancels the pending frame; hosts
     // without rAF (SSR/jsdom without a shim) paint synchronously.
-    const draw = () => renderSceneToCanvas(scene, ctx, { dpr })
+    const draw = () => renderSceneToCanvas(displayScene, ctx, { dpr })
     if (typeof requestAnimationFrame === 'function') {
       const id = requestAnimationFrame(draw)
       return () => cancelAnimationFrame(id)
     }
     draw()
-  }, [renderer, scene])
+  }, [renderer, displayScene])
 
   const hasSelection = onSelect != null || brush != null || onPointSelect != null
     || selection !== undefined || onSelectionChange != null
@@ -508,12 +519,12 @@ function ChartView({
     if (!hasInteraction && a11y === false) return
     let info: ChartInfo | null = null
     try {
-      info = getChartInfo(spec, { width: renderWidth, height: renderHeight, domainRaw, limits })
+      info = getChartInfo(spec, { width: renderWidth, height: renderHeight, domainRaw, limits, textMetrics })
     } catch { /* ignore */ }
     chartInfoRef.current = info
     chartInfoCacheIdx.current++
     setChartInfoKey(chartInfoCacheIdx.current)
-  }, [hasInteraction, a11y, spec, renderWidth, renderHeight, domainRaw, limits])
+  }, [hasInteraction, a11y, spec, renderWidth, renderHeight, domainRaw, limits, textMetrics])
 
   // Memoize to avoid recalculating
   const chartInfo = chartInfoRef.current ?? null
@@ -699,7 +710,7 @@ function ChartView({
           let datum: Record<string, unknown> | null = null
           if (onPointSelect || onSelectionChange != null) {
             if (hitIndexRef.current.index == null || hitIndexRef.current.idx !== sceneGen) {
-              hitIndexRef.current = scene ? { idx: sceneGen, index: buildHitIndex(scene) } : { idx: 0, index: null }
+              hitIndexRef.current = displayScene ? { idx: sceneGen, index: buildHitIndex(displayScene) } : { idx: 0, index: null }
             }
             const target = hitIndexRef.current.index?.queryMark(x, y)
             const raw = target?.item.datum
@@ -723,7 +734,7 @@ function ChartView({
       setDragPixelStart(null)
       setDragPixelEnd(null)
     },
-    [isDragging, hasInteraction, dragPixelStart, onSelect, onPointSelect, onSelectionChange, scene, sceneGen],
+    [isDragging, hasInteraction, dragPixelStart, onSelect, onPointSelect, onSelectionChange, displayScene, sceneGen],
   )
 
   const cancelPointer = React.useCallback((e: React.PointerEvent) => {
@@ -738,14 +749,18 @@ function ChartView({
 
   // --- accessibility -------------------------------------------------------
   const a11yOpts = React.useMemo(
-    () => a11yTreeOptions(a11y, ariaLabel, selectionValue),
-    [a11y, ariaLabel, selectionValue],
+    () => {
+      const base = a11yTreeOptions(a11y, ariaLabel, selectionValue)
+      if (base == null) return null
+      return { ...base, isLegendEntryHidden: (key: string) => hiddenLegend.has(key) }
+    },
+    [a11y, ariaLabel, selectionValue, hiddenLegend],
   )
   const a11yTree = React.useMemo(() => {
-    if (!scene || a11yOpts == null) return null
+    if (!displayScene || a11yOpts == null) return null
     const scales = (chartInfoRef.current?.scales ?? new Map()) as Map<string, unknown>
-    return buildA11yTree(scene, scales, a11yOpts)
-  }, [scene, a11yOpts, chartInfoKey])
+    return buildA11yTree(displayScene, scales, a11yOpts)
+  }, [displayScene, a11yOpts, chartInfoKey])
   const a11yNodesRef = React.useRef<A11yNode[]>([])
   a11yNodesRef.current = a11yTree?.nodes ?? []
 
@@ -766,6 +781,22 @@ function ChartView({
   const handleA11yKeyDown = React.useCallback((node: A11yNode, e: React.KeyboardEvent) => {
     if (!isA11yNodeKey(e.key)) return
     const base = baseDomainsRef.current
+    if (node.kind === 'legend-entry' && node.legendKey) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault(); e.stopPropagation()
+        const key = node.legendKey
+        setHiddenLegend((prev) => {
+          const next = new Map(prev)
+          if (next.has(key)) next.delete(key)
+          else next.set(key, { key, ...(node.legendColor ? { color: node.legendColor } : {}), ...(node.legendShape ? { shape: node.legendShape } : {}) })
+          return next
+        })
+        return
+      }
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); moveA11yFocus(node, -1); return }
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); moveA11yFocus(node, 1); return }
+      return
+    }
     if (node.kind === 'mark') {
       if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); moveA11yFocus(node, -1); return }
       if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); moveA11yFocus(node, 1); return }
@@ -836,7 +867,7 @@ function ChartView({
     if (renderer === 'canvas') {
       // Canvas backend: resolve through the scene hit index.
       if (hitIndexRef.current.index == null || hitIndexRef.current.idx !== sceneGen) {
-        hitIndexRef.current = scene ? { idx: sceneGen, index: buildHitIndex(scene) } : { idx: 0, index: null }
+        hitIndexRef.current = displayScene ? { idx: sceneGen, index: buildHitIndex(displayScene) } : { idx: 0, index: null }
       }
       const target = hitIndexRef.current.index?.queryMark(e.clientX - rect.left, e.clientY - rect.top)
       const datum = target?.item.datum as Record<string, unknown> | undefined
@@ -963,11 +994,13 @@ function ChartView({
         <canvas
           ref={canvasRef}
           data-testid="chart-canvas"
+          aria-hidden={a11yTree != null ? true : undefined}
           style={{ position: 'relative', zIndex: 1, width: scene.width, height: scene.height, display: 'block' }}
         />
       ) : (
         <div
           ref={svgHostRef}
+          aria-hidden={a11yTree != null ? true : undefined}
           style={{ position: 'relative', zIndex: 1 }}
           {...(markup != null ? { dangerouslySetInnerHTML: { __html: markup } } : {})}
         />
@@ -981,38 +1014,46 @@ function ChartView({
           style={{ position: 'absolute', inset: 0, zIndex: 30, pointerEvents: 'none' }}
         >
           {a11yTree.summary != null && <span className="sr-only" style={srOnly}>{a11yTree.summary}</span>}
-          {a11yTree.nodes.map((node) => (
-            <div
-              key={node.id}
-              data-a11y-id={node.id}
-              data-a11y-kind={node.kind}
-              role={node.kind === 'title' ? 'heading' : node.role}
-              aria-level={node.kind === 'title' ? 2 : undefined}
-              aria-roledescription={node.roleDescription}
-              aria-label={node.label}
-              aria-selected={node.selected == null ? undefined : node.selected}
-              aria-valuemin={node.role === 'slider' ? node.domain?.[0] : undefined}
-              aria-valuemax={node.role === 'slider' ? node.domain?.[1] : undefined}
-              aria-valuenow={node.role === 'slider' && node.domain ? (node.domain[0] + node.domain[1]) / 2 : undefined}
-              tabIndex={0}
-              onKeyDown={(e) => handleA11yKeyDown(node, e)}
-              style={{
-                position: 'absolute',
-                left: Math.max(0, node.x),
-                top: Math.max(0, node.y),
-                width: Math.max(1, node.width),
-                height: Math.max(1, node.height),
-                opacity: 0,
-                // Focusable by Tab/keyboard, but never steals pointer input from
-                // the marks underneath (selection, pan, tooltips).
-                pointerEvents: 'none',
-                borderRadius: 2,
-                outline: 'none',
-              }}
-              onFocus={(e) => { e.currentTarget.style.opacity = '0.001' }}
-              onBlur={(e) => { e.currentTarget.style.opacity = '0' }}
-            />
-          ))}
+          {a11yTree.nodes.map((node) => {
+            const slider = node.role === 'slider'
+            const domRole = node.kind === 'title' ? 'heading'
+              : slider ? 'slider'
+                : node.kind === 'mark' || node.kind === 'legend-entry' ? 'button'
+                  : 'img'
+            return (
+              <div
+                key={node.id}
+                data-a11y-id={node.id}
+                data-a11y-kind={node.kind}
+                role={domRole}
+                aria-level={node.kind === 'title' ? 2 : undefined}
+                aria-roledescription={node.roleDescription}
+                aria-label={node.label}
+                aria-pressed={node.kind === 'legend-entry' ? !!node.pressed
+                  : node.kind === 'mark' && node.selected != null ? node.selected : undefined}
+                aria-valuemin={slider ? node.domain?.[0] : undefined}
+                aria-valuemax={slider ? node.domain?.[1] : undefined}
+                aria-valuenow={slider && node.domain ? (node.domain[0] + node.domain[1]) / 2 : undefined}
+                tabIndex={0}
+                onKeyDown={(e) => handleA11yKeyDown(node, e)}
+                style={{
+                  position: 'absolute',
+                  left: Math.max(0, node.x),
+                  top: Math.max(0, node.y),
+                  width: Math.max(1, node.width),
+                  height: Math.max(1, node.height),
+                  opacity: 0,
+                  // Focusable by Tab/keyboard, but never steals pointer input from
+                  // the marks underneath (selection, pan, tooltips).
+                  pointerEvents: 'none',
+                  borderRadius: 2,
+                  outline: 'none',
+                }}
+                onFocus={(e) => { e.currentTarget.style.opacity = '0.001' }}
+                onBlur={(e) => { e.currentTarget.style.opacity = '0' }}
+              />
+            )
+          })}
         </div>
       )}
       {tooltipInfo != null && (

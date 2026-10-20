@@ -18,6 +18,7 @@
 import { compileChart } from './compiler.js'
 import { evaluateChart } from './runtime.js'
 import { checkSpecLimits, checkSceneLimits, createLimitClock } from './limits.js'
+import { diffRows, type DataPulse } from './pulse.js'
 import type { CompiledChart, RuntimeInput, SceneRoot, VgSpec } from './types.js'
 
 const REF_IDS = new WeakMap<object, number>()
@@ -67,6 +68,65 @@ function dataKeyOf(spec: VgSpec, input: RuntimeInput, out: string[]): void {
   }
 }
 
+/** Source datasets (inline/spec values or input overrides), keyed by name. */
+function rawDatasets(spec: VgSpec, input: RuntimeInput): Map<string, unknown> {
+  const out = new Map<string, unknown>()
+  const data = (spec as { data?: unknown }).data
+  const lists: Array<Record<string, unknown>> = Array.isArray(data)
+    ? (data as Array<Record<string, unknown>>)
+    : data && typeof data === 'object'
+      ? [data as Record<string, unknown>]
+      : []
+  for (const d of lists) {
+    if (typeof d.name !== 'string') continue
+    // Derived datasets (source:) are rebuilt from their parent; input overrides
+    // for them are ignored by the runtime too.
+    if (typeof d.source === 'string') continue
+    const override = input.data?.[d.name]
+    const values = override !== undefined ? override : d.values
+    if (values != null) out.set(d.name, values)
+  }
+  for (const [name, rows] of Object.entries(input.data ?? {})) {
+    if (!out.has(name) && !lists.some((d) => d.name === name && typeof d.source === 'string')) out.set(name, rows)
+  }
+  return out
+}
+
+/** Diff current source rows against the previous evaluation. */
+function inferPulse(previous: Map<string, unknown> | null, current: Map<string, unknown>): DataPulse {
+  const datasets = new Map<string, NonNullable<DataPulse['datasets'] extends Map<string, infer T> ? T : never>>()
+  const structural = new Set<string>()
+  if (previous) {
+    for (const [name, next] of current) {
+      const prev = previous.get(name)
+      if (prev === undefined) {
+        structural.add(name)
+        continue
+      }
+      if (prev === next) continue
+      const diff = diffRows(prev, next)
+      if (!diff) {
+        // Non-row data (raw CSV/JSON strings, etc.) cannot be diffed by index;
+        // treat a replaced value as structural rather than silently no-op.
+        structural.add(name)
+        continue
+      }
+      if (!diff.sameLength) structural.add(name)
+      if (diff.changed.length || !diff.sameLength) datasets.set(name, { name, ...diff })
+    }
+    for (const name of previous.keys()) if (!current.has(name)) structural.add(name)
+  }
+  return { datasets, structural }
+}
+
+function pulseOfExplicit(changes: Record<string, number[]> | undefined): DataPulse {
+  const datasets = new Map()
+  for (const [name, changed] of Object.entries(changes ?? {})) {
+    datasets.set(name, { name, changed: [...changed], sameLength: true, added: null, removed: null })
+  }
+  return { datasets, structural: new Set() }
+}
+
 /** Copy inline dataset values from a fresh spec into a structurally-identical compiled chart. */
 function syncValues(chart: CompiledChart, spec: VgSpec): void {
   const data = (spec as { data?: unknown }).data
@@ -97,14 +157,15 @@ export interface ChartSession {
    * the event loop) and the scene. Null before the first evaluate.
    */
   last: () => { chart: CompiledChart; scene: SceneRoot } | null
+  /** Source/transform pulse inferred or supplied by the last evaluation. */
+  pulse: () => DataPulse | null
 }
 
-/** Fingerprint a spec + input for the no-op cache (skeleton + data refs + size/signals). */
-function fingerprint(spec: VgSpec, input: RuntimeInput): string {
+/** Non-data input fingerprint (skeleton + size/signals/domain overrides). */
+function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   const parts: string[] = []
-  const skeleton = skeletonOf(spec)
-  dataKeyOf(spec, input, parts)
   parts.push(`w=${input.width ?? ''}`, `h=${input.height ?? ''}`)
+  if (input.textMetrics) parts.push(`tm=#${refId(input.textMetrics)}`)
   for (const name of Object.keys(input.domainRaw ?? {}).sort()) {
     parts.push(`d ${name}=${JSON.stringify(input.domainRaw![name])}`)
   }
@@ -117,12 +178,43 @@ function fingerprint(spec: VgSpec, input: RuntimeInput): string {
   return `${skeleton}\u0000${parts.join('\u0001')}`
 }
 
+/** Fingerprint a spec + input for the no-op cache (skeleton + data refs + size/signals). */
+function fingerprint(spec: VgSpec, input: RuntimeInput): string {
+  const parts: string[] = []
+  const skeleton = skeletonOf(spec)
+  dataKeyOf(spec, input, parts)
+  return `${metaKeyOf(skeleton, input)}\u0000${parts.join('\u0001')}`
+}
+
 export function createChartSession(): ChartSession {
   let lastKey = ''
+  let lastMetaKey = ''
   let lastSkeleton = ''
   let lastChart: CompiledChart | null = null
   let lastScene: SceneRoot | null = null
   let lastSpec: VgSpec | null = null
+  let lastRaw: Map<string, unknown> | null = null
+  let lastPulse: DataPulse | null = null
+
+  const withAutoPulse = (spec: VgSpec, input: RuntimeInput, currentRaw: Map<string, unknown>): { input: RuntimeInput; pulse: DataPulse } => {
+    if (input.dataChanges) {
+      return { input, pulse: pulseOfExplicit(input.dataChanges) }
+    }
+    if (input.autoChanges === false) return { input, pulse: { datasets: new Map(), structural: new Set() } }
+    const pulse = inferPulse(lastRaw, currentRaw)
+    if (!pulse.datasets.size && !pulse.structural.size) return { input, pulse }
+    const changes: Record<string, number[]> = {}
+    for (const [name, p] of pulse.datasets) if (p.sameLength) changes[name] = p.changed
+    const changedDatasets = [...pulse.structural]
+    return {
+      input: {
+        ...input,
+        ...(Object.keys(changes).length ? { dataChanges: changes } : {}),
+        ...(changedDatasets.length ? { changedDatasets } : {}),
+      },
+      pulse,
+    }
+  }
 
   return {
     evaluate(spec, input = {}) {
@@ -130,11 +222,26 @@ export function createChartSession(): ChartSession {
       if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits)
       clock.check('compile')
       const skeleton = skeletonOf(spec)
+      const metaKey = metaKeyOf(skeleton, input)
       const key = fingerprint(spec, input)
+      const currentRaw = rawDatasets(spec, input)
+      const { input: effectiveInput, pulse } = withAutoPulse(spec, input, currentRaw)
       // A per-datum changeset implies the data values changed (often in place, so
       // the array identity — and thus the fingerprint — is unchanged), so the
       // no-op cache must not short-circuit the differential re-evaluation.
-      if (!input.dataChanges && key === lastKey && lastScene) return lastScene
+      if (!input.dataChanges && key === lastKey && lastScene) {
+        lastRaw = currentRaw
+        lastPulse = pulse
+        return lastScene
+      }
+      // New row arrays with identical values are a no-op for the scene: the
+      // inferred pulse is empty and everything else matches the previous run.
+      if (input.autoChanges !== false && !input.dataChanges && !pulse.datasets.size && !pulse.structural.size && metaKey === lastMetaKey && lastScene) {
+        lastRaw = currentRaw
+        lastPulse = pulse
+        lastKey = key
+        return lastScene
+      }
 
       if (skeleton !== lastSkeleton || !lastChart) {
         lastChart = compileChart(spec)
@@ -146,10 +253,13 @@ export function createChartSession(): ChartSession {
       }
       lastSpec = spec
       clock.check('compile')
-      lastScene = evaluateChart(lastChart, input)
+      lastScene = evaluateChart(lastChart, effectiveInput)
       clock.check('evaluate')
       if (input.limits) checkSceneLimits(lastScene, input.limits)
       lastKey = key
+      lastMetaKey = metaKey
+      lastRaw = currentRaw
+      lastPulse = pulse
       return lastScene
     },
     change(input = {}) {
@@ -158,11 +268,16 @@ export function createChartSession(): ChartSession {
       // evaluate (we need a compiled chart + spec to fingerprint against).
       if (!lastChart || !lastSpec) return null
       const clock = createLimitClock(input.limits)
-      lastScene = evaluateChart(lastChart, input)
+      const currentRaw = rawDatasets(lastSpec, input)
+      const { input: effectiveInput, pulse } = withAutoPulse(lastSpec, input, currentRaw)
+      lastScene = evaluateChart(lastChart, effectiveInput)
       clock.check('change')
-      lastKey = fingerprint(lastSpec, input)
+      lastKey = fingerprint(lastSpec, effectiveInput)
+      lastRaw = currentRaw
+      lastPulse = pulse
       return lastScene
     },
     last: () => (lastChart && lastScene ? { chart: lastChart, scene: lastScene } : null),
+    pulse: () => lastPulse,
   }
 }

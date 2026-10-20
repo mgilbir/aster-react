@@ -170,7 +170,9 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
     case 'treemap':
       return requireTransform('treemap')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'sequence':
-      return sequenceRows(t as Record<string, unknown>)
+      // Vega appends generated tuples to the current pulse (a sequence on a
+      // non-empty source keeps the source rows first).
+      return [...rows, ...sequenceRows(t as Record<string, unknown>)]
     case 'graticule':
       return graticuleRows(t as Record<string, unknown>)
     case 'contour':
@@ -183,8 +185,10 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
       return labelRows(rows, t as Record<string, unknown>, ctx)
     case 'timeunit':
       return timeunitRows(rows, t as Record<string, unknown>)
-    case 'identifier':
-      return rows
+    case 'identifier': {
+      const as = (t.as as string | undefined) ?? 'id'
+      return rows.map((r, i) => ({ ...r, [as]: (r[as] as number | undefined) ?? i + 1 }))
+    }
     case 'pivot':
       return pivotRows(rows, t as Record<string, unknown>)
     default:
@@ -464,7 +468,14 @@ function imputeRows(
     for (const kVal of domain) {
       if (present.has(kVal)) continue
       const v = Number.isNaN(value) ? (value = imputeStat(sorted, t)) : value
-      imputed.push({ ...sorted[0]!, _impute: true, [t.key]: kVal, [t.field]: v })
+      // vega emits only the partition fields, the key and the imputed measure;
+      // spreading the first source row would leak its other columns into the
+      // new tuple (and change downstream scales/marks).
+      const row: Row = { _impute: true }
+      for (const gk of t.groupby ?? []) row[gk] = sorted[0]?.[gk]
+      row[t.key] = kVal
+      row[t.field] = v
+      imputed.push(row)
     }
   }
   return [...rows, ...imputed]

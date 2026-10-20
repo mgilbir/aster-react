@@ -692,6 +692,14 @@ callbacks, and `useSyncExternalStore` where a session holds external state.
 - **Acceptance:** a clean app installs from npm and renders Vega and Vega-Lite; a
   hostile spec fails with a typed error; nightly jobs green.
 
+### R13 — Production hardening (continuous)
+
+- **DONE — Pulse/dataflow.** Sessions infer per-datum changes from replaced immutable source arrays (`autoChanges`), expose source/transform pulses (`buildPulseGraph`, `session.pulse()`), reuse unchanged items without a `dataChanges` prop, and consume dirty groups for sorted `window`/`stack`.
+- **DONE — Accessibility audit.** Axe WCAG A/AA test for the chart tree, guide-caption parity (419/419) against Vega's `aria-label`, and keyboard-operable legend entries (`aria-pressed`) that filter shape/paint series.
+- **DONE — Transform matrix.** 68 oracle-diffed option-combination cases covering bin/window/stack/joinaggregate/impute/fold/flatten/pivot/lookup/sequence/identifier/timeunit/extent; fixed impute tuple fields, sequence append semantics and identifier assignment.
+- **DONE — Text metrics.** Pluggable `TextMetricsProvider` for `<Chart>`/`renderSpec`/headless hosts, provider-scoped caching and estimator fallback.
+- **Remaining:** a real incremental pulse graph for geo/layout operators and arbitrary length-changing appends/streams (the current structural pulse propagates correctly but those datasets still fully re-derive).
+
 ---
 
 ## 5. Sequencing

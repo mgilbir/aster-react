@@ -51,6 +51,10 @@ canvas (hit index) resolve the hovered mark.
 ## Accessibility
 
 See [API.md](API.md#accessibility-keyboard-contract). The tree is scene-derived: one
-positioned focusable element per mark item (or a dense summary), axis, legend and
-title, with upstream-style captions, `aria/description` channels, selected state, and
-continuous axes exposed as sliders.
+positioned focusable element per mark item (or a dense summary), axis, legend, legend
+entry and title, with upstream-style captions, `aria/description` channels, selected
+state, and continuous axes exposed as sliders.
+
+Legend entries are keyboard toggles: focus an entry and press `Enter`/`Space` to hide
+or restore that series (`aria-pressed` reflects the state). Shape/paint legends filter
+the matching SVG/canvas items without mutating the session's cached scene.

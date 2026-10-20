@@ -43,6 +43,12 @@ jobs:
       - name: Scene differential (scales, groups, items)
         run: pnpm scene-diff
 
+      - name: Guide-caption parity
+        run: pnpm a11y-parity
+
+      - name: Transform option matrix
+        run: pnpm transform-matrix
+
       - name: Fuzz reproducer replay
         run: pnpm fuzz:replay
 

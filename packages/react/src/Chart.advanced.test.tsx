@@ -154,7 +154,7 @@ describe('accessibility + keyboard navigation', () => {
     expect(tree).not.toBeNull()
     const marks = [...tree.querySelectorAll('[data-a11y-kind="mark"]')]
     expect(marks.length).toBe(3)
-    expect(marks.some((m) => m.getAttribute('aria-selected') === 'true')).toBe(true)
+    expect(marks.some((m) => m.getAttribute('aria-pressed') === 'true')).toBe(true)
     const axes = [...tree.querySelectorAll('[data-a11y-kind="axis"]')]
     expect(axes.length).toBe(2)
     expect(axes.some((a) => (a.getAttribute('aria-label') ?? '').includes("X-axis titled 'X'"))).toBe(true)
@@ -184,5 +184,44 @@ describe('accessibility + keyboard navigation', () => {
     const key = slider.getAttribute('aria-label')?.startsWith('Y-axis') ? 'ArrowDown' : 'ArrowRight'
     act(() => { slider.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })) })
     expect(onViewChange).toHaveBeenCalled()
+  })
+})
+
+
+describe('interactive legend entries', () => {
+  const legendSpec = {
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    width: 220, height: 120, padding: 5, autosize: 'none',
+    data: [{ name: 't', values: [
+      { c: 'a', v: 1, g: 'x' }, { c: 'b', v: 2, g: 'x' },
+      { c: 'c', v: 3, g: 'y' }, { c: 'd', v: 4, g: 'y' },
+    ] }],
+    scales: [
+      { name: 'x', type: 'band', domain: { data: 't', field: 'c' }, range: 'width' },
+      { name: 'y', type: 'linear', domain: [0, 5], range: 'height' },
+      { name: 'colour', type: 'ordinal', domain: { data: 't', field: 'g' }, range: ['#4c78a8', '#e45756'] },
+    ],
+    axes: [{ scale: 'x', orient: 'bottom' }, { scale: 'y', orient: 'left' }],
+    legends: [{ fill: 'colour', title: 'group' }],
+    marks: [{ type: 'rect', from: { data: 't' }, encode: { update: {
+      x: { scale: 'x', field: 'c' }, width: { scale: 'x', band: 1 },
+      y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 },
+      fill: { scale: 'colour', field: 'g' }, description: { field: 'c' },
+    } } }],
+  } as never
+
+  it('toggles a legend series with Enter and restores it with Space', () => {
+    const { container } = mount(<Chart spec={legendSpec} width={220} height={120} />)
+    const tree = container.querySelector('[data-testid="chart-a11y"]')!
+    const entries = [...tree.querySelectorAll('[data-a11y-kind="legend-entry"]')] as HTMLElement[]
+    expect(entries.length).toBe(2)
+    expect(container.querySelectorAll('svg .mark-rect path').length).toBe(4)
+    act(() => { entries[0]!.focus() })
+    act(() => { entries[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+    expect(container.querySelectorAll('svg .mark-rect path').length).toBe(2)
+    expect(entries[0]!.getAttribute('aria-pressed')).toBe('true')
+    act(() => { entries[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true })) })
+    expect(container.querySelectorAll('svg .mark-rect path').length).toBe(4)
+    expect(entries[0]!.getAttribute('aria-pressed')).toBe('false')
   })
 })

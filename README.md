@@ -108,6 +108,10 @@ available.
 
 **Schema sweeps (27,513 Vega-Lite property/value cases): 99.7% (27,418 ok, 0 differ).** For every property the Vega-Lite schema declares, a small chart is rendered through both engines and the SVG is diffed. Every comparable case now matches; the 95 non-ok cases are 40 specs both engines refuse, 21 oracle crashes/refusals (invalid SVG shapes/radii and degenerate `nice`/padding scale specs), and 34 nondeterministic `ci0`/`ci1` bootstrap aggregates (`Math.random` inside vega), tracked in the sweep family scoreboard (`pnpm sweep-vl`).
 
+**Guide-caption parity (`pnpm a11y-parity`): 419/419** against Vega's own
+`aria-label` values. **Transform matrix (`pnpm transform-matrix`): 68/68**
+option-combination cases.
+
 **Scene differential (`pnpm scene-diff`): 419/419.** Beyond the serialized SVG, the
 resolved scales per scope (domain/range/bandwidth/colour endpoints), mark/item
 multisets and overlap paint order are compared directly against Vega's scenegraph.
