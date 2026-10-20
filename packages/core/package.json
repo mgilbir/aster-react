@@ -1,7 +1,6 @@
 {
   "name": "@aster/core",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -37,7 +36,8 @@
     "./hit": {
       "types": "./dist/hit.d.ts",
       "default": "./dist/hit.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -49,5 +49,28 @@
     "vega": "^6.3.1",
     "vega-lite": "^6.4.3",
     "@types/node": "^22.20.1"
-  }
+  },
+  "description": "A small TypeScript Vega/Vega-Lite rendering engine on owned D3 primitives.",
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mgilbir/aster-react.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/mgilbir/aster-react#readme",
+  "bugs": {
+    "url": "https://github.com/mgilbir/aster-react/issues"
+  },
+  "keywords": "vega, vega-lite, charts, dataviz, svg, d3",
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ]
 }

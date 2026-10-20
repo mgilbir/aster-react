@@ -41,6 +41,11 @@ interface Entry {
 
 export interface HitIndex {
   query(x: number, y: number): HitTarget | null
+  /**
+   * Like `query`, but only data-bearing mark items. Guides (axis/legend text)
+   * paint above marks and must not swallow clicks/tooltips.
+   */
+  queryMark(x: number, y: number): HitTarget | null
   /** Number of indexed mark items. */
   size(): number
 }
@@ -69,8 +74,13 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     }
     for (const item of group.items ?? []) addMarkItem(item, type, gx, gy)
   }
+  // Scene items live in plot coordinates; pointer queries arrive in viewport
+  // coordinates, so include the root padding translation (as the renderer does
+  // with its top-level translate group).
+  const padX = scene.padding?.left ?? 0
+  const padY = scene.padding?.top ?? 0
   for (const node of scene.items) {
-    walk(node, 0, 0)
+    walk(node, padX, padY)
     // Flush rect entries in paint order (reversed) so the global list is
     // strictly paint-ordered and a single reverse scan yields the topmost.
     for (const e of rectOrder.reverse()) entries.push(e)
@@ -207,18 +217,19 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     }
   }
 
-  const hitLinear = (x: number, y: number): HitTarget | null => {
+  const hitLinear = (x: number, y: number, dataOnly = false): HitTarget | null => {
     // Reverse scan: later entries paint on top (except rect marks, which our
     // SVG renderer paints in reverse item order — handled at insertion time
     // by keeping entries in paint order).
     for (let i = entries.length - 1; i >= 0; i--) {
       const e = entries[i]!
+      if (dataOnly && e.item.datum == null) continue
       if (hits(e, x, y)) return { item: e.item, marktype: e.marktype }
     }
     return null
   }
 
-  const hitGrid = (x: number, y: number): HitTarget | null => {
+  const hitGrid = (x: number, y: number, dataOnly = false): HitTarget | null => {
     // Draw order matters for overlapping marks: the topmost painted item is
     // the mark's LAST item, so scan candidates in reverse index order.
     const key = Math.max(0, Math.floor(y / cell)) * gw + Math.max(0, Math.floor(x / cell))
@@ -226,6 +237,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     if (list == null) return null
     for (let j = list.length - 1; j >= 0; j--) {
       const e = entries[list[j]!]!
+      if (dataOnly && e.item.datum == null) continue
       if (hits(e, x, y)) return { item: e.item, marktype: e.marktype }
     }
     return null
@@ -254,6 +266,12 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       if (entries.length <= GRID_THRESHOLD) return hitLinear(x, y)
       if (grid == null) buildGrid()
       return hitGrid(x, y)
+    },
+    queryMark(x: number, y: number): HitTarget | null {
+      if (entries.length === 0) return null
+      if (entries.length <= GRID_THRESHOLD) return hitLinear(x, y, true)
+      if (grid == null) buildGrid()
+      return hitGrid(x, y, true)
     },
     size(): number {
       return entries.length

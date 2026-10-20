@@ -1,0 +1,126 @@
+# API
+
+Aster ships three public packages:
+
+| Package | Entry | Purpose |
+|---|---|---|
+| `@aster/core` | `@aster/core` | compile/evaluate/render a Vega spec to SVG |
+| `@aster/core/…` | `/dom`, `/canvas`, `/hit`, `/signals`, `/load`, `/geo`, `/transforms` | opt-in addons (tree-shaking boundaries) |
+| `@aster/react` | `@aster/react` | `<Chart>`, `useChart`, SSR/hydration, worker hook |
+| `@aster/vl` | `@aster/vl` | from-scratch Vega-Lite → Vega compiler |
+
+## `@aster/core`
+
+```ts
+import {
+  renderSpec, compileChart, evaluateChart, renderSceneToSvg,
+  getChartInfo, buildA11yTree,
+} from '@aster/core'
+
+const svg = renderSpec(vegaSpec, {
+  width: 400,
+  height: 300,
+  data: { table: rows },
+  signals: { shift: 10 },
+  domainRaw: { x: [0, 25] },   // pan/zoom/brush domain override
+  limits: { maxRows: 100_000, maxTimeMs: 2_000 },
+})
+```
+
+`compileChart(spec)` produces the `CompiledChart` IR; `evaluateChart(chart, input)`
+resolves data/scales/encodes into a `SceneRoot`; `renderSceneToSvg(scene)` serializes
+it. `createChartSession()` (from `@aster/core/dom`) caches the IR and scene across
+updates and supports per-datum `dataChanges`.
+
+`buildA11yTree(scene, scales, options)` returns positioned, captioned nodes for marks,
+axes, legends and titles. `<Chart>` projects them into focusable elements; non-React
+hosts can do the same.
+
+### Interaction addons
+
+- `@aster/core/hit` — `buildHitIndex(scene)`, `query` and `queryMark` (guides excluded).
+- `@aster/core/signals` — `bindSceneSignals(svg, scene, values, hooks)`, `stampDatumAttrs`.
+- `@aster/core/dom` — `patchSceneDom`, `renderSceneToDomElement`, `createChartSession`.
+- `@aster/core/canvas` — `renderSceneToCanvas(scene, ctx, { dpr })`.
+- `@aster/core/load` — `loadSpecData(spec, { fetch })` for URL datasets.
+- `@aster/core/geo`, `@aster/core/transforms` — register projections/rare transforms.
+
+## `@aster/react`
+
+### `<Chart>`
+
+```tsx
+import { Chart, type ChartHandle, type SelectValue, type ViewDomain } from '@aster/react'
+
+const ref = useRef<ChartHandle>(null)
+const [view, setView] = useState<ViewDomain | null>(null)
+const [selection, setSelection] = useState<SelectValue | null>(null)
+
+<Chart
+  ref={ref}
+  spec={vegaOrVegaLiteSpec}
+  renderer="svg"                 // or "canvas"
+  panZoom
+  view={view}                    // omit for uncontrolled
+  onViewChange={setView}
+  selection={selection}          // { type: 'interval' | 'point', … }
+  onSelectionChange={setSelection}
+  onSelect={(interval) => {}}    // interval convenience callback
+  onPointSelect={(datum) => {}}  // click convenience callback
+  tooltip
+  renderTooltip={(datum) => <b>{String(datum.v)}</b>}
+  a11y={{ summaryThreshold: 150 }}
+  limits={{ maxRows: 100_000, maxItems: 50_000, maxTimeMs: 2_000 }}
+/>
+```
+
+`spec` may be a Vega spec, a Vega-Lite spec (compiled internally with `@aster/vl`), or
+a promise (wrap the chart in `<Suspense>`).
+
+The ref exposes `getScene()`, `getSvg()`, `getChartInfo()`, `getView()`, `setView()`,
+`resetView()`, `setSignal(name, value)` and `getSignals()`.
+
+Pan/zoom is driven through scale `domainRaw`: wheel, drag (shift-drag when selection
+is enabled), two-pointer pinch and the keyboard (`←/→/↑/↓`, `+`/`-`, `0`/`Home`,
+`Escape`). The same scale rebuild moves marks and all guides, on SVG and canvas.
+
+### Hooks
+
+```tsx
+const { scene, svg, error, session } = useChart(spec, { width, height })
+
+// URL data, Suspense/use() path
+const loaded = useSpecData(specWithUrls, { fetch })
+const chart = useChartData(specWithUrls)
+
+// optional worker offload (falls back to sync on SSR/jsdom)
+const { svg, scene, error, pending } = useChartWorker(spec, { width, height })
+```
+
+### SSR + hydration
+
+```tsx
+// Server: full SVG in the streamed HTML
+const html = renderToString(<Chart spec={spec} />)
+
+// Non-React host: string + DOM-patcher hydration (keeps the server <svg> node)
+const svg = renderChartToStaticMarkup(spec, { width, height })
+hydrateChart(container, spec, { width, height })
+```
+
+### Accessibility keyboard contract
+
+`Tab` enters the chart's accessible tree. Mark/guide nodes move with arrow keys,
+`Home`/`End` jump to the ends, and `Enter`/`Space` selects a mark. Continuous axes are
+exposed as sliders; their arrow keys pan that axis and `+`/`-` zoom. The chart
+container itself handles pan/zoom when focused.
+
+## `@aster/vl`
+
+```ts
+import { compile } from '@aster/vl'
+const vegaSpec = compile(vegaLiteSpec)
+```
+
+`<Chart>` and `useChart` call this automatically for Vega-Lite input, so a fresh app
+does not need a `vega-lite` dependency.

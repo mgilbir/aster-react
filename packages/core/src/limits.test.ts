@@ -31,6 +31,13 @@ describe('spec limits', () => {
     expect(svg).toContain('<svg')
   })
 
+  it('enforces a wall-clock deadline across compile/evaluate/render', () => {
+    expect(() => renderSpec(base as never, { limits: { maxTimeMs: 0 } })).toThrow(AsterLimitError)
+    expect(() => renderSpec(base as never, { limits: { maxTimeMs: 0 } })).toThrow(/maxTimeMs exceeded/)
+    // A generous budget leaves the render untouched.
+    expect(renderSpec(base as never, { limits: { maxTimeMs: 30_000 } })).toContain('<svg')
+  })
+
   it('checkSceneLimits/checkSvgLength report the exact budget', () => {
     expect(() => checkSceneLimits({ items: [{ path: 'M0,0L10,10' }] }, { maxPathLength: 3 })).toThrow(/maxPathLength 10 > 3/)
     expect(() => checkSvgLength('<svg/>', { maxSvgLength: 2 })).toThrow(/maxSvgLength 6 > 2/)

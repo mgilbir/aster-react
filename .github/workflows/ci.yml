@@ -40,6 +40,12 @@ jobs:
       - name: Conformance
         run: pnpm conformance
 
+      - name: Scene differential (scales, groups, items)
+        run: pnpm scene-diff
+
+      - name: Fuzz reproducer replay
+        run: pnpm fuzz:replay
+
       - name: Gap probes (diagnostic, non-blocking)
         run: pnpm probe
         continue-on-error: true

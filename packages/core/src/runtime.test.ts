@@ -147,9 +147,9 @@ describe('differential fuzz (incremental === full re-derive)', () => {
     const itemsB = b.items[0]!.items as unknown[]
     expect(renderSceneToSvg(b)).toBe(renderSceneToSvg(evaluateChart(chart, { data: { t: next } })))
     expect(itemsB).toBe(itemsA)
-    // Dataset row 3 paints at position 4 under the descending v sort; only that
-    // position is re-encoded (a new generation), the rest are reused.
-    expect((itemsB[4] as { __gen?: number } | undefined)?.__gen).not.toBe((itemsB[0] as { __gen?: number } | undefined)?.__gen)
+    // Scene items keep dataset order; only row 3 is re-encoded (a new
+    // generation), the rest are reused.
+    expect((itemsB[3] as { __gen?: number } | undefined)?.__gen).not.toBe((itemsB[0] as { __gen?: number } | undefined)?.__gen)
   })
 
   it('discrete domain: new category rebuilds the scale; value swap within the set reuses it', () => {

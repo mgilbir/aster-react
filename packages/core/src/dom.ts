@@ -92,8 +92,8 @@ interface ClipCollector {
 
 function leafDesc(it: SceneItem): DomDesc {
   if (it.path != null) {
-    const tx = num(it.x ?? 0)
-    const ty = num(it.y ?? 0)
+    const tx = num(it.x || 0)
+    const ty = num(it.y || 0)
     const attrs: Array<[string, string]> = []
     if (tx !== '0' || ty !== '0') attrs.push(['transform', `translate(${tx},${ty})`])
     attrs.push(['d', String(it.path)])
@@ -106,7 +106,7 @@ function leafDesc(it: SceneItem): DomDesc {
     return {
       tag: 'path',
       attrs: [
-        ['transform', `translate(${num(it.x ?? 0)},${num(it.y ?? 0)})`],
+        ['transform', `translate(${num(it.x || 0)},${num(it.y || 0)})`],
         ['d', d],
         ...props([
           ['fill', it.fill],
@@ -156,8 +156,8 @@ function leafDesc(it: SceneItem): DomDesc {
   return {
     tag: 'line',
     attrs: [
-      ['x1', num(it.x ?? 0)],
-      ['y1', num(it.y ?? 0)],
+      ['x1', num(it.x || 0)],
+      ['y1', num(it.y || 0)],
       ['x2', num(x2)],
       ['y2', num(y2)],
       ...props([
@@ -230,7 +230,7 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
           return {
             tag: 'path',
             attrs: [
-              ['transform', `translate(${num(it.x!)},${num(it.y!)})`],
+              ['transform', `translate(${num(it.x || 0)},${num(it.y || 0)})`],
               ['d', symbolPath((it as Record<string, unknown>).shape as string | undefined, r)],
               ...props([
                 ['fill', it.fill != null && it.fill !== 'transparent' ? it.fill : undefined],
@@ -276,8 +276,8 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
           return cachedDesc(it, () => ({
             tag: 'circle',
             attrs: [
-              ['cx', num(it.x!)],
-              ['cy', num(it.y!)],
+              ['cx', num(it.x || 0)],
+              ['cy', num(it.y || 0)],
               ['r', num(r)],
               ...props([['fill', it.fill], ['fill-opacity', it.fillOpacity], ['stroke', it.stroke], ['stroke-width', it.strokeWidth], ['opacity', it.opacity]]),
             ],
@@ -330,8 +330,8 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
       return items
         .filter((it) => it.path != null)
         .map((it) => {
-          const tx = num(it.x ?? 0)
-          const ty = num(it.y ?? 0)
+          const tx = num(it.x || 0)
+          const ty = num(it.y || 0)
           const attrs: Array<[string, string]> = []
           if (tx !== '0' || ty !== '0') attrs.push(['transform', `translate(${tx},${ty})`])
           attrs.push(['d', String(it.path)])
@@ -345,7 +345,7 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
           tag: 'image',
           attrs: [
             ['xlink:href', String(it.url)],
-            ['transform', `translate(${num(it.x!)},${num(it.y!)})`],
+            ['transform', `translate(${num(it.x || 0)},${num(it.y || 0)})`],
             ['width', num(it.width ?? 0)],
             ['height', num(it.height ?? 0)],
             ['preserveAspectRatio', it.aspect === false ? 'none' : 'xMidYMid'],

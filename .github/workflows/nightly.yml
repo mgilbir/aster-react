@@ -1,0 +1,47 @@
+name: Nightly sweeps
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  sweeps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: Conformance corpus
+        run: pnpm conformance
+
+      - name: Scene differential
+        run: pnpm scene-diff
+
+      - name: Vega-Lite schema sweep
+        run: pnpm sweep-vl
+
+      - name: Vega schema sweep
+        run: pnpm sweep-vega
+
+      - name: Differential fuzzing (deterministic seeds)
+        run: pnpm --filter @aster/conformance run fuzz -- --seeds 3000
+
+      - name: Replay committed reproducers
+        run: pnpm fuzz:replay
+
+      - name: Upload reproducers on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-repro-${{ github.run_id }}
+          path: packages/conformance/fuzz-repro/*.vg.json
+          if-no-files-found: ignore

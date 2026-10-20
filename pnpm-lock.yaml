@@ -221,9 +221,9 @@ importers:
       '@aster/core':
         specifier: workspace:*
         version: link:../core
-      react:
-        specifier: ^19.0.0
-        version: 19.2.8
+      '@aster/vl':
+        specifier: workspace:*
+        version: link:../vl
     devDependencies:
       '@types/react':
         specifier: ^19.0.0
@@ -231,6 +231,9 @@ importers:
       '@types/react-dom':
         specifier: ^19.2.4
         version: 19.2.4(@types/react@19.2.18)
+      react:
+        specifier: ^19.0.0
+        version: 19.2.8
       react-dom:
         specifier: ^19.2.8
         version: 19.2.8(react@19.2.8)

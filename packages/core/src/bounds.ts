@@ -361,12 +361,19 @@ function boundImage(bounds: Bounds, item: SceneItem): Bounds {
  * (curve extrema via quadExtrema/cubicExtrema; arcs sampled at endpoints and
  * quarter-turn aligned interior points; full circles as center ± r).
  */
-export function boundsFromPath(bounds: Bounds, d: string): Bounds {
+export function boundsFromPath(
+  bounds: Bounds,
+  d: string,
+  transform?: (x: number, y: number) => [number, number],
+): Bounds {
   let lx = 0
   let ly = 0
   let cx0 = 0 // subpath start (for Z)
   let cy0 = 0
-  const add = (x: number, y: number) => bounds.add(x, y)
+  const add = (x: number, y: number) => {
+    const p = transform ? transform(x, y) : [x, y]
+    bounds.add(p[0]!, p[1]!)
+  }
 
   const quadExtrema = (x0: number, x1: number, x2: number) => {
     const t = (x0 - x1) / (x0 + x2 - 2 * x1)
@@ -535,7 +542,7 @@ export function boundsFromPath(bounds: Bounds, d: string): Bounds {
         while (i < nums.length) {
           const x = nextNum() + (rel ? lx : 0)
           const y = nextNum() + (rel ? ly : 0)
-          bounds.add(x, y)
+          add(x, y)
           lx = cx0 = x
           ly = cy0 = y
         }
@@ -545,21 +552,21 @@ export function boundsFromPath(bounds: Bounds, d: string): Bounds {
         while (i < nums.length) {
           lx = nextNum() + (rel ? lx : 0)
           ly = nextNum() + (rel ? ly : 0)
-          bounds.add(lx, ly)
+          add(lx, ly)
         }
         break
       }
       case 'H': {
         while (i < nums.length) {
           lx = nextNum() + (rel ? lx : 0)
-          bounds.add(lx, ly)
+          add(lx, ly)
         }
         break
       }
       case 'V': {
         while (i < nums.length) {
           ly = nextNum() + (rel ? ly : 0)
-          bounds.add(lx, ly)
+          add(lx, ly)
         }
         break
       }
@@ -573,7 +580,7 @@ export function boundsFromPath(bounds: Bounds, d: string): Bounds {
           const y = nextNum() + (rel ? ly : 0)
           cubicExtrema(lx, x1, x2, x)
           cubicExtrema(ly, y1, y2, y)
-          bounds.add(x, y)
+          add(x, y)
           lx = x
           ly = y
         }
@@ -588,7 +595,7 @@ export function boundsFromPath(bounds: Bounds, d: string): Bounds {
           // reflected control point: unknown previous control → use current point
           cubicExtrema(lx, lx, x2, x)
           cubicExtrema(ly, ly, y2, y)
-          bounds.add(x, y)
+          add(x, y)
           lx = x
           ly = y
         }
@@ -602,7 +609,7 @@ export function boundsFromPath(bounds: Bounds, d: string): Bounds {
           const y = nextNum() + (rel ? ly : 0)
           quadExtrema(lx, x1, x)
           quadExtrema(ly, y1, y)
-          bounds.add(x, y)
+          add(x, y)
           lx = x
           ly = y
         }
@@ -614,7 +621,7 @@ export function boundsFromPath(bounds: Bounds, d: string): Bounds {
           const y = nextNum() + (rel ? ly : 0)
           quadExtrema(lx, lx, x)
           quadExtrema(ly, ly, y)
-          bounds.add(x, y)
+          add(x, y)
           lx = x
           ly = y
         }
@@ -827,21 +834,38 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
     // An empty path (a geo shape entirely clipped away) bounds to nothing:
     // vega's boundPath leaves the bounds untouched, so no stroke expansion.
     if (it.path === '') return bounds
-    boundsFromPath(bounds, it.path)
-    // path marks carry scaleX/scaleY: vega's path bound renders the parsed
-    // path through pathRender(ctx, x, y, sx, sy) — the path scales about its
-    // local origin before the item translate.
     const sxP = (it as Record<string, unknown>).scaleX as number | undefined
     const syP = (it as Record<string, unknown>).scaleY as number | undefined
-    if ((sxP != null && sxP !== 1) || (syP != null && syP !== 1)) {
-      const fx = sxP ?? 1
-      const fy = syP ?? 1
-      bounds.scale(fx, fy)
-    }
     const angleP = (it as Record<string, unknown>).angle as number | undefined
-    if (angleP) bounds.rotate(angleP * Math.PI / 180, 0, 0)
+    if (angleP) {
+      // vega's path bound runs pathRender through boundContext: every path
+      // coordinate is scaled, translated by item x/y, then rotated as a point
+      // (unlike the SVG transform, which rotates in the item-local frame).
+      // Trace with that exact point transform so rotated extrema match.
+      const a = angleP * Math.PI / 180
+      const cos = Math.cos(a)
+      const sin = Math.sin(a)
+      const tx = it.x || 0
+      const ty = it.y || 0
+      const sx = sxP ?? 1
+      const sy = syP ?? 1
+      boundsFromPath(bounds, it.path, (x, y) => {
+        const px = x * sx + tx
+        const py = y * sy + ty
+        return [cos * px - sin * py, sin * px + cos * py]
+      })
+    } else {
+      boundsFromPath(bounds, it.path)
+      // path marks carry scaleX/scaleY: vega's path bound renders the parsed
+      // path through pathRender(ctx, x, y, sx, sy) — the path scales about its
+      // local origin before the item translate.
+      if ((sxP != null && sxP !== 1) || (syP != null && syP !== 1)) {
+        bounds.scale(sxP ?? 1, syP ?? 1)
+      }
+      bounds.translate(it.x || 0, it.y || 0)
+    }
     boundStroke(bounds, it, miterPaths || it.strokeWidth != null)
-    return bounds.translate(it.x || 0, it.y || 0)
+    return bounds
   }
   if (it.shape != null && it.radius != null) {
     // Symbol: vega bounds the shape path rotated about the item origin, then
@@ -876,8 +900,11 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
     // projection refused) still bounds as a circle at (0,0): vega's `x - r`
     // coerces null to 0 (albersusa sweep case).
     const r = Math.sqrt(((it.size as number) ?? 30)) / 2
-    const x = it.x ?? 0
-    const y = it.y ?? 0
+    // vega's symbol field accessors coerce a NaN/null position to 0 (`x || 0`);
+    // a degenerate scale (log/symlog at zero) still paints the mark at the
+    // origin, and its bounds drive the view padding just like any other symbol.
+    const x = it.x || 0
+    const y = it.y || 0
     const shape = (it as Record<string, unknown>).shape as string | undefined
     const angle = (it as Record<string, unknown>).angle as number | undefined
     // 'point' is not a symbol name: vega's d3-symbol fallback is a circle,

@@ -17,7 +17,7 @@
  */
 import { compileChart } from './compiler.js'
 import { evaluateChart } from './runtime.js'
-import { checkSpecLimits, checkSceneLimits } from './limits.js'
+import { checkSpecLimits, checkSceneLimits, createLimitClock } from './limits.js'
 import type { CompiledChart, RuntimeInput, SceneRoot, VgSpec } from './types.js'
 
 const REF_IDS = new WeakMap<object, number>()
@@ -105,6 +105,9 @@ function fingerprint(spec: VgSpec, input: RuntimeInput): string {
   const skeleton = skeletonOf(spec)
   dataKeyOf(spec, input, parts)
   parts.push(`w=${input.width ?? ''}`, `h=${input.height ?? ''}`)
+  for (const name of Object.keys(input.domainRaw ?? {}).sort()) {
+    parts.push(`d ${name}=${JSON.stringify(input.domainRaw![name])}`)
+  }
   for (const name of Object.keys(input.signals ?? {}).sort()) {
     const v = input.signals![name]
     parts.push(
@@ -123,7 +126,9 @@ export function createChartSession(): ChartSession {
 
   return {
     evaluate(spec, input = {}) {
+      const clock = createLimitClock(input.limits)
       if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits)
+      clock.check('compile')
       const skeleton = skeletonOf(spec)
       const key = fingerprint(spec, input)
       // A per-datum changeset implies the data values changed (often in place, so
@@ -140,7 +145,9 @@ export function createChartSession(): ChartSession {
         syncValues(lastChart, spec)
       }
       lastSpec = spec
+      clock.check('compile')
       lastScene = evaluateChart(lastChart, input)
+      clock.check('evaluate')
       if (input.limits) checkSceneLimits(lastScene, input.limits)
       lastKey = key
       return lastScene
@@ -150,7 +157,9 @@ export function createChartSession(): ChartSession {
       // the host drives changes via data/dataChanges/signals. Requires a prior
       // evaluate (we need a compiled chart + spec to fingerprint against).
       if (!lastChart || !lastSpec) return null
+      const clock = createLimitClock(input.limits)
       lastScene = evaluateChart(lastChart, input)
+      clock.check('change')
       lastKey = fingerprint(lastSpec, input)
       return lastScene
     },

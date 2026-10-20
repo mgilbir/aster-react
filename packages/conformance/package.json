@@ -15,7 +15,10 @@
     "sweep-vl": "tsx src/run-sweep.ts vega-lite-schema",
     "sweep-values": "tsx src/run-sweep.ts values",
     "sweep-signals": "tsx src/run-sweep.ts signals",
-    "conformance:browser": "tsx scripts/browser-conformance.mts"
+    "conformance:browser": "tsx scripts/browser-conformance.mts",
+    "fuzz": "tsx scripts/fuzz.mts",
+    "fuzz:replay": "tsx scripts/fuzz.mts --replay",
+    "scene-diff": "tsx scripts/scene-diff.mts"
   },
   "dependencies": {
     "@aster/core": "workspace:*",

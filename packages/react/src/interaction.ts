@@ -5,6 +5,21 @@ export interface SelectionInterval {
   y?: [number, number]
 }
 
+/** A 2-D data-space view: the visible domain of each continuous positional scale. */
+export interface ViewDomain {
+  x?: [number, number]
+  y?: [number, number]
+}
+
+/**
+ * Unified declarative selection value (R10.2). One shape covers interval
+ * brushes (SVG + canvas) and point/click selections, so hosts can keep a single
+ * `selection` state and round-trip it through controlled props.
+ */
+export type SelectValue =
+  | { type: 'interval'; interval: SelectionInterval }
+  | { type: 'point'; datum: Record<string, unknown> | null }
+
 export interface PixelPoint {
   x: number
   y: number
@@ -76,3 +91,191 @@ export function selectionToPixels(
 
   return { x, y, width, height }
 }
+
+export function selectValueToInterval(value: SelectValue | null | undefined): SelectionInterval | null {
+  return value?.type === 'interval' ? value.interval : null
+}
+
+export function selectValueToDatum(value: SelectValue | null | undefined): Record<string, unknown> | null {
+  return value?.type === 'point' ? value.datum : null
+}
+
+/** Read a continuous scale's domain, or null when it has no invertible domain. */
+export function domainOf(scale: unknown): [number, number] | null {
+  const s = scale as { domain?: () => unknown[]; invert?: (v: number) => unknown } | undefined
+  if (!s?.domain || typeof s.invert !== 'function') return null
+  const d = s.domain()
+  if (!Array.isArray(d) || d.length < 2) return null
+  const a = Number(d[0])
+  const b = Number(d[d.length - 1])
+  return Number.isFinite(a) && Number.isFinite(b) ? [a, b] : null
+}
+
+function curve(domain: [number, number]): 'linear' | 'log' {
+  return domain[0]! > 0 && domain[1]! > 0 ? 'log' : 'linear'
+}
+
+/** Scale a domain around an anchor value; factor > 1 zooms in. */
+export function zoomDomain(
+  domain: [number, number],
+  anchor: number,
+  factor: number,
+  minSpan?: number,
+): [number, number] {
+  const [d0, d1] = domain
+  if (!Number.isFinite(anchor) || !Number.isFinite(factor) || factor <= 0) return domain
+  let span = Math.abs(d1 - d0)
+  if (span === 0) return domain
+  let nextSpan = span / factor
+  if (minSpan != null && nextSpan < minSpan) nextSpan = minSpan
+  const ratio = nextSpan / span
+  let a = anchor - (anchor - d0) * ratio
+  let b = anchor + (d1 - anchor) * ratio
+  // Keep the domain orientation (y scales commonly run top→bottom).
+  if ((d1 - d0) < 0 && b < a) [a, b] = [b, a]
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a === b) return domain
+  return [a, b]
+}
+
+/** Translate a domain by a fraction of its span (positive = data moves right/down). */
+export function panDomain(domain: [number, number], fraction: number): [number, number] {
+  const span = domain[1] - domain[0]
+  const shift = span * fraction
+  return [domain[0] + shift, domain[1] + shift]
+}
+
+/** Normalize a controlled view against the chart's base domains. */
+export function normalizeView(view: ViewDomain | null | undefined, base: ViewDomain): ViewDomain | null {
+  if (view == null) return null
+  const out: ViewDomain = {}
+  if (view.x && isFiniteNumber(view.x[0]) && isFiniteNumber(view.x[1]) && view.x[0] !== view.x[1]) out.x = view.x
+  if (view.y && isFiniteNumber(view.y[0]) && isFiniteNumber(view.y[1]) && view.y[0] !== view.y[1]) out.y = view.y
+  if (out.x == null && out.y == null) return null
+  // A view equal to the base domain is the "not zoomed" state.
+  if (out.x && base.x && out.x[0] === base.x[0] && out.x[1] === base.x[1]) delete out.x
+  if (out.y && base.y && out.y[0] === base.y[0] && out.y[1] === base.y[1]) delete out.y
+  return out.x || out.y ? out : null
+}
+
+/** Convert a view to the scale-domain overrides consumed by `RuntimeInput.domainRaw`. */
+export function viewToDomainRaw(view: ViewDomain | null | undefined): Record<string, unknown[]> | undefined {
+  if (view == null) return undefined
+  const out: Record<string, unknown[]> = {}
+  if (view.x) out.x = [view.x[0], view.x[1]]
+  if (view.y) out.y = [view.y[0], view.y[1]]
+  return Object.keys(out).length ? out : undefined
+}
+
+const KEY_PAN = 0.08
+const KEY_PAN_FAST = 0.25
+
+/**
+ * Pure keyboard contract shared by the chart container and the accessible
+ * axis sliders: arrows pan, +/- zoom, 0/Home resets, Escape clears selection.
+ * Returns a new view (or `null` for reset) plus whether the key was handled.
+ */
+export function keyboardView(
+  key: string,
+  current: ViewDomain | null,
+  base: ViewDomain,
+  opts: { fast?: boolean; axis?: 'x' | 'y'; anchor?: number } = {},
+): { handled: boolean; view?: ViewDomain | null } {
+  const axis = opts.axis
+  const step = opts.fast ? KEY_PAN_FAST : KEY_PAN
+  const get = (a: 'x' | 'y'): [number, number] | undefined =>
+    (current?.[a] ?? base[a]) as [number, number] | undefined
+  const set = (a: 'x' | 'y', d: [number, number] | undefined): ViewDomain => {
+    const out: ViewDomain = { ...(current ?? {}) }
+    if (d && base[a]) out[a] = d
+    else delete out[a]
+    return out
+  }
+  switch (key) {
+    case 'ArrowLeft': {
+      if (axis === 'y') return { handled: false }
+      const d = get('x')
+      return d ? { handled: true, view: set('x', panDomain(d, -step)) } : { handled: false }
+    }
+    case 'ArrowRight': {
+      if (axis === 'y') return { handled: false }
+      const d = get('x')
+      return d ? { handled: true, view: set('x', panDomain(d, step)) } : { handled: false }
+    }
+    case 'ArrowUp': {
+      if (axis === 'x') return { handled: false }
+      const d = get('y')
+      return d ? { handled: true, view: set('y', panDomain(d, -step)) } : { handled: false }
+    }
+    case 'ArrowDown': {
+      if (axis === 'x') return { handled: false }
+      const d = get('y')
+      return d ? { handled: true, view: set('y', panDomain(d, step)) } : { handled: false }
+    }
+    case '+':
+    case '=': {
+      const axes: Array<'x' | 'y'> = axis ? [axis] : ['x', 'y']
+      let next: ViewDomain = { ...(current ?? {}) }
+      for (const a of axes) {
+        const d = get(a)
+        if (!d) continue
+        const anchor = opts.anchor != null && Number.isFinite(opts.anchor) ? opts.anchor : (d[0] + d[1]) / 2
+        next = setFor(next, base, a, zoomDomain(d, anchor, 1.5))
+      }
+      return { handled: true, view: next }
+    }
+    case '-':
+    case '_': {
+      const axes: Array<'x' | 'y'> = axis ? [axis] : ['x', 'y']
+      let next: ViewDomain = { ...(current ?? {}) }
+      for (const a of axes) {
+        const d = get(a)
+        if (!d) continue
+        const anchor = opts.anchor != null && Number.isFinite(opts.anchor) ? opts.anchor : (d[0] + d[1]) / 2
+        next = setFor(next, base, a, zoomDomain(d, anchor, 1 / 1.5))
+      }
+      return { handled: true, view: next }
+    }
+    case '0':
+    case 'Home':
+      return { handled: true, view: null }
+    default:
+      return { handled: false }
+  }
+}
+
+function setFor(view: ViewDomain, base: ViewDomain, axis: 'x' | 'y', d: [number, number]): ViewDomain {
+  const out: ViewDomain = { ...view }
+  if (base[axis]) out[axis] = d
+  return out
+}
+
+/** Interpolate a zoom around a cursor, clamped to the base domain's span. */
+export function cursorZoom(
+  current: ViewDomain | null,
+  base: ViewDomain,
+  axis: 'x' | 'y',
+  anchorValue: number,
+  factor: number,
+): ViewDomain {
+  const d = (current?.[axis] ?? base[axis]) as [number, number] | undefined
+  const out: ViewDomain = { ...(current ?? {}) }
+  if (!d) return out
+  // Never zoom out past the original extent.
+  const baseSpan = Math.abs(base[axis]![1] - base[axis]![0])
+  const currentSpan = Math.abs(d[1] - d[0])
+  const capped = factor > 1 && currentSpan <= baseSpan / 1e-9 ? factor : factor
+  const next = zoomDomain(d, anchorValue, capped, baseSpan / 1000)
+  const span = Math.abs(next[1] - next[0])
+  out[axis] = span > baseSpan ? base[axis] : next
+  return out
+}
+
+/** The axis whose scale supports pan/zoom, in priority order. */
+export function continuousAxes(info: ChartInfo): Array<'x' | 'y'> {
+  const out: Array<'x' | 'y'> = []
+  if (domainOf(info.scales.get('x'))) out.push('x')
+  if (domainOf(info.scales.get('y'))) out.push('y')
+  return out
+}
+
+export { curve as domainCurve }

@@ -6,6 +6,7 @@
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, sortRows, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row } from './transform.js'
+import { AsterLimitError } from './limits.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
 
 /** Scale types whose domain is an ordered set of discrete values. */
@@ -163,6 +164,12 @@ interface EvalContext {
    * re-derived (not incrementally safe for downstream item reuse).
    */
   datasetChanges?: Map<string, Set<number> | null>
+  /** Wall-clock deadline (performance.now epoch) from `limits.maxTimeMs`. */
+  deadline?: number
+  /** Direct scale-domain overrides keyed by scale name. */
+  domainRaw?: Map<string, unknown[]>
+  /** Throw a typed error when the current evaluation ran past its deadline. */
+  checkDeadline?: (phase?: string) => void
 }
 
 /**
@@ -181,6 +188,15 @@ export interface ChartInfo {
  * This is a single source-of-truth for signal/size/dataset/scale setup.
  */
 function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx: EvalContext; width: number; height: number } {
+  const started = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
+  const maxTime = input.limits?.maxTimeMs
+  const deadline = maxTime != null && Number.isFinite(maxTime) ? started + Math.max(0, maxTime) : undefined
+  const checkDeadline = (phase = 'evaluation'): void => {
+    if (deadline == null) return
+    const now = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
+    if (now > deadline) throw new AsterLimitError(`maxTimeMs exceeded during ${phase}`)
+  }
+  checkDeadline('startup')
   const signals = { ...chart.signals, ...input.signals }
   let width = resolveSize(chart.width, input.width, signals)
   // A Vega spec can define the chart height as a `height` signal (a special
@@ -213,7 +229,11 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
   }
 
   const defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }> = []
-  const ctx: EvalContext = { chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new Map(), runtime, _defs: defs, hierarchies: new Map(), affected: new Set(), incremental: false }
+  const ctx: EvalContext = {
+    chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new Map(), runtime, _defs: defs,
+    hierarchies: new Map(), affected: new Set(), incremental: false, deadline, checkDeadline,
+    domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
+  }
   // A legend whose tickCount is an interval string on a non-time scale makes
   // vega's LegendEntries throw: the dataflow logs the error and the ViewLayout
   // transform never runs — the whole scene renders at raw encode positions
@@ -393,6 +413,18 @@ interface AxisLegendResult {
   padding: { top: number; right: number; bottom: number; left: number }
 }
 
+/** Resolve a guide title (string or `{signal}`) for accessibility metadata. */
+function guideTitle(ctx: EvalContext, title: unknown): string | undefined {
+  if (typeof title === 'string') return title
+  if (title && typeof title === 'object' && typeof (title as { signal?: unknown }).signal === 'string') {
+    try {
+      const value = ctx.runtime.expr(String((title as { signal: string }).signal))({}, ctx.signalParams)
+      return value == null ? undefined : String(value)
+    } catch { return undefined }
+  }
+  return undefined
+}
+
 function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { groups: SceneGroup[] } {
   const groups: SceneGroup[] = []
   // vega's layoutGroup walks the content children together with the guides:
@@ -408,6 +440,12 @@ function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { gro
       const wrapped = ctx.rawGuides
         ? ({ marktype: 'group', role: 'axis', x: -0.5, y: -0.5, items: [group] } as SceneGroup)
         : group
+      // Carry guide identity for the accessible tree (R10.6) without changing
+      // the serialized SVG: the fields are scene metadata only.
+      ;(wrapped as unknown as { orient?: string; scale?: string; title?: string }).orient = axis.orient
+      ;(wrapped as unknown as { orient?: string; scale?: string; title?: string }).scale = axis.scale
+      const at = guideTitle(ctx, axis.title)
+      if (at) (wrapped as unknown as { title?: string }).title = at
       groups.push(wrapped)
       anchorItems.push(wrapped)
     }
@@ -420,7 +458,15 @@ function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { gro
   // bounds with the 18px offset and an 8px margin between legends.
   const built = ctx.chart.legends
     .filter((legend) => (legend as { disable?: boolean }).disable !== true)
-    .map((legend) => ({ legend, group: buildLegend(legend, ctx) }))
+    .map((legend) => {
+      const group = buildLegend(legend, ctx)
+      if (group) {
+        const lt = guideTitle(ctx, legend.title)
+        if (lt) (group as unknown as { title?: string }).title = lt
+        ;(group as unknown as { legendType?: string }).legendType = legend.gradientLength != null ? 'gradient' : 'symbol'
+      }
+      return { legend, group }
+    })
     .filter((x): x is { legend: CompiledLegend; group: SceneGroup } => x.group !== null)
     // A legend whose entries failed to build (an invalid tickCount interval
     // string) degenerates to a zero-size group with no items: vega still
@@ -663,6 +709,7 @@ function computeGuidePadding(
   width: number,
   height: number,
   base: { top: number; right: number; bottom: number; left: number },
+  zeroClipProjection = false,
 ): { top: number; right: number; bottom: number; left: number } {
   // Vega's autosize unions the *recursive* bounds of every top-level guide
   // (axis/legend) and mark into the viewBounds and grows the padding by the
@@ -683,10 +730,16 @@ function computeGuidePadding(
     // legend geometry is exact enough that a genuine positive residue (a bar
     // whose right edge is the view width) must still grow the margin.
     const ei = group.role === 'axis' ? EPS : 0
+    // Geo shape bounds are traced through clipped projections; d3's clip
+    // intersection leaves a sub-pixel fp tail that can sit exactly on an
+    // integer in our port where vega's is just below/above it. Nudge only that
+    // integer case on the vertical axis (the clip bound affected by it).
+    const geo = zeroClipProjection && (group.marktype === 'shape' || group.marktype === 'geoshape')
+    const nudgeY = (v: number): number => geo && Math.abs(v - Math.round(v)) < EPS ? (v < 0 ? -EPS : EPS) : 0
     minX = Math.min(minX, b.x1 + ei)
     maxX = Math.max(maxX, b.x2 - ei)
-    minY = Math.min(minY, b.y1 + ei)
-    maxY = Math.max(maxY, b.y2 - ei)
+    minY = Math.min(minY, b.y1 + ei + Math.min(0, nudgeY(b.y1)))
+    maxY = Math.max(maxY, b.y2 - ei + Math.max(0, nudgeY(b.y2)))
   }
 
   // vega's viewSizeLayout (autosize pad): origin = spec padding + the ceil'd
@@ -877,7 +930,10 @@ function buildContent(
   // and no overflow growth (the dataflow logs the error and continues).
   const padding = (ctx as unknown as { __layoutError?: boolean }).__layoutError || ctx.rawGuides
     ? ctx.chart.padding
-    : computeGuidePadding(items, facetWidth, facetHeight, ctx.chart.padding)
+    : computeGuidePadding(
+        items, facetWidth, facetHeight, ctx.chart.padding,
+        (ctx.chart.projections ?? []).some((p) => p.type === 'azimuthalequalarea' && Number(p.clipAngle) === 0),
+      )
   return { items, padding, ctx, width: facetWidth, height: facetHeight, isFacetSpec }
 }
 
@@ -890,6 +946,19 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   const signals = { ...chart.signals, ...input.signals }
   const initialW = resolveSize(chart.width, input.width, signals)
   const initialH = resolveSize(chart.height, input.height, signals)
+  // Vega's layout keeps the sign of a negative declared height: the rendered
+  // document grows by ceil(|height| / 2) beyond the clamped content height
+  // (width does not; negative widths collapse symmetrically).
+  const declaredHeight = input.height != null
+    ? input.height
+    : typeof chart.height === 'number'
+      ? chart.height
+      : chart.height && typeof chart.height === 'object' && 'signal' in chart.height
+        ? Number(signals[(chart.height as { signal: string }).signal])
+        : undefined
+  const negativeHeightExtra = typeof declaredHeight === 'number' && declaredHeight < 0
+    ? Math.ceil(-declaredHeight / 2)
+    : 0
 
   // `fit`/`fit-x`/`fit-y` shrink the *content* to fit a fixed viewport, then
   // vega re-runs layout (resizeView) so scales are rebuilt at the fitted size.
@@ -922,7 +991,11 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   }
   const { ctx, width, height } = built
   const items = built.items
-  const padding = built.padding
+  // The negative-height half-pixel growth belongs at the top origin, which is
+  // where vega's title layout puts it (content shifts down with the root).
+  const padding = negativeHeightExtra
+    ? { ...built.padding, top: built.padding.top + negativeHeightExtra }
+    : built.padding
   const isFacetSpec = built.isFacetSpec
 
   // 3) Build the scene
@@ -990,6 +1063,14 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
     }
   }
 
+  // Composite layouts (facet/trellis/concat) truncate their fractional grid
+  // extents to whole pixels in the rendered document, while individual cell
+  // positions keep their exact layout advance.
+  if (isFacetSpec || isConcat) {
+    sceneWidth = Math.floor(sceneWidth)
+    sceneHeight = Math.floor(sceneHeight)
+  }
+
   // The frame background plot rect: the content size. Only set when the
   // viewport is derived from the content (autosize pad / explicit sizes) —
   // the signal-based minimum-viewport cases (10x10) keep deriving the rect
@@ -1020,6 +1101,7 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   ;(scene as unknown as { signalParams?: Record<string, unknown> }).signalParams = ctx.signalParams
   ;(scene as unknown as { compiled?: unknown }).compiled = ctx.chart
   ;(scene as unknown as { __itemGen?: number }).__itemGen = (chart as unknown as { __gen?: number }).__gen
+  ;(scene as unknown as { __scales?: unknown }).__scales = snapshotScales(ctx.scales)
   // Partial re-evaluation memo
   ;(chart as unknown as { __prevItems?: SceneGroup[] }).__prevItems = items
   if (ctx._defs.length) scene.defs = ctx._defs
@@ -1223,6 +1305,16 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
     default: x = pos; y = vb.y1 - temp.height() - offset; break
   }
   if (raw) { x = 0; y = 0 }
+  // A floating-point epsilon on an integer title position (e.g. an axis-bound
+  // x1 of -46.00000000000001) makes viewSizeLayout ceil the padding one pixel
+  // early. Snap only near-integers; fractional anchored titles are untouched.
+  const snap = (v: number): number => Math.abs(v - Math.round(v)) < 1e-9 ? Math.round(v) : v
+  // Top/bottom anchors use integer view-bound origins; left/right titles subtract
+  // a measured text width whose fp tail is part of vega's own bound arithmetic.
+  if (orient !== 'left' && orient !== 'right') {
+    x = snap(x)
+    y = snap(y)
+  }
 
   const textChildren: SceneNode[] = [
     {
@@ -1276,12 +1368,15 @@ function buildTitleGroup(chart: CompiledChart, items: SceneNode[], width: number
 }
 
 function resolveSize(size: SizeSpec, override: number | undefined, signals: Record<string, unknown>): number {
-  if (override != null) return override
-  if (typeof size === 'number' && Number.isFinite(size)) return size
+  // Vega clamps a negative view dimension to zero (`view.width()` returns 0);
+  // the degenerate axes it then draws are what the oracle compares against.
+  const clamp = (v: number): number => (Number.isFinite(v) ? Math.max(0, v) : DEFAULT_SIZE)
+  if (override != null) return clamp(override)
+  if (typeof size === 'number') return clamp(size)
   if (size && typeof size === 'object') {
     if ('signal' in size) {
       const v = signals[size.signal]
-      return typeof v === 'number' ? v : DEFAULT_SIZE
+      return typeof v === 'number' ? clamp(v) : DEFAULT_SIZE
     }
     if ('step' in size) {
       throw new Error('[aster] width/height {step} sizing is not supported yet')
@@ -1295,6 +1390,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
   for (const d of ctx.chart.data) sources.set(d.name, d)
 
   const build = (name: string, seen: Set<string>): Row[] => {
+    ctx.checkDeadline?.('dataset build')
     if (ctx.datasets.has(name)) return ctx.datasets.get(name)!
     const d = sources.get(name)
     if (!d) {
@@ -1680,6 +1776,38 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
   }
 }
 
+/** Snapshot resolved scales into plain data for the scene differential (R8.1/R8.2). */
+function snapshotScales(scales: Map<string, Scale>): Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; samples?: [unknown, unknown] }> {
+  const out: Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; samples?: [unknown, unknown] }> = []
+  for (const [name, scale] of scales) {
+    const s = scale as unknown as {
+      type?: string
+      domain?: () => unknown[]
+      range?: () => unknown[]
+      bandwidth?: () => number
+    }
+    if (typeof s.domain !== 'function' || typeof s.range !== 'function') continue
+    const domain = s.domain()
+    const range = s.range()
+    const bandwidth = typeof s.bandwidth === 'function' ? s.bandwidth() : undefined
+    let samples: [unknown, unknown] | undefined
+    // Interpolating colour scales report a normalized [0,1] range; sample the
+    // endpoints so the snapshot remains comparable with vega's [colour, colour].
+    if (domain.length >= 2 && typeof scale === 'function') {
+      try {
+        const a = (scale as unknown as (v: unknown) => unknown)(domain[0])
+        const b = (scale as unknown as (v: unknown) => unknown)(domain[domain.length - 1])
+        if (typeof a === 'string' && /^rgb/i.test(a) && typeof b === 'string' && /^rgb/i.test(b)) samples = [a, b]
+      } catch { /* non-interpolating */ }
+    }
+    out.push({
+      name, type: s.type ?? 'unknown', domain: Array.from(domain), range: Array.from(range),
+      ...(bandwidth != null ? { bandwidth } : {}), ...(samples ? { samples } : {}),
+    })
+  }
+  return out
+}
+
 function buildScales(ctx: EvalContext): void {
   const scaleSignals = ctx.signalParams
   const chartMeta = ctx.chart as unknown as { __cachedScales?: Map<string, { scale: Scale; multi: boolean }>; __scaleDomain?: Map<string, { data: string; field: string; lo: number; hi: number; oldVals: number[]; loCount: number; hiCount: number; finite: boolean }>; __scaleDomainDisc?: Map<string, { oldVals: unknown[]; counts: Map<unknown, number>; firstIdx: Map<unknown, number> }>; __paramFp?: string }
@@ -1781,6 +1909,7 @@ function buildScales(ctx: EvalContext): void {
       height: ctx.height,
       signals: scaleSignals,
       configRange: ctx.chart.configRange,
+      domainRaw: ctx.domainRaw?.get(s.name),
       evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
       dataField: (dataName, field) => {
         const rows = ctx.datasets.get(dataName) ?? []
@@ -2009,54 +2138,13 @@ function evaluateMark(
       }
     }
 
-    // Sort rect marks by their scale y field so rendering order matches vega:
-    // bars with smaller y-value render first (appear at the front).
-    // The sort order is cached per mark: when every row's sort key is unchanged
-    // (the common steady-state update), the previous permutation is replayed —
-    // an O(n) key compare instead of an O(n log n) re-sort — and, because the
-    // paint order is provably identical, per-datum differential item reuse stays
-    // available for rect marks (it is unsafe when the order actually shifts).
-    // `rows` stays in DATASET order (the reuse path indexes it with changeset
-    // indices); `encodeRows` is the paint-ordered view used for encoding.
-    let rectSorts = false
-    let rectPermInv: number[] | null = null
-    let encodeRows: Row[] = rows
-    if (mark.type === 'rect') {
-      const enc = mark.encode?.update
-      if (enc) {
-        for (const key of ['y', 'yc'] as const) {
-          const val = enc[key]
-          if (val && typeof val === 'object' && 'field' in val) {
-            const f = (val as { field: string }).field
-            const keys = rows.map((r: Row) => (typeof r[f] === 'number' ? (r[f] as number) : 0))
-            const prev = rectSortCache.get(mark)
-            if (prev && prev.keys.length === keys.length && prev.keys.every((k, i) => k === keys[i])) {
-              // Same key values at the same source positions -> the previous
-              // stable sort result is exactly what a fresh sort would produce.
-              encodeRows = prev.perm.map((srcIdx) => rows[srcIdx]!)
-              rectPermInv = prev.inv
-            } else {
-              // Index-based sort: equivalent to a stable sort of the rows, but
-              // it also yields the permutation (and its inverse) so we can tell
-              // whether the paint order actually moved.
-              const n = rows.length
-              const perm = new Array<number>(n)
-              for (let i = 0; i < n; i++) perm[i] = i
-              perm.sort((a, b) => (keys[b]! - keys[a]!) || (a - b))
-              encodeRows = perm.map((srcIdx) => rows[srcIdx]!)
-              const inv = new Array<number>(n)
-              for (let p = 0; p < n; p++) inv[perm[p]!] = p
-              rectSortCache.set(mark, { keys, perm, inv })
-              rectPermInv = inv
-              // Values changed but the resulting paint order did not (vs the
-              // previous eval) -> per-datum item reuse stays safe.
-              rectSorts = !(prev && prev.inv.length === n && prev.inv.every((p, i) => p === inv[i]))
-            }
-            break
-          }
-        }
-      }
-    }
+    // Keep dataset order for rect items: vega's scene keeps data order and its
+    // SVG renderer paints the array in reverse, which already puts the first
+    // datum on top. Reordering the scene here would make the scene-level
+    // differential (R8.3) report a paint order the renderer then reverses twice.
+    const rectSorts = false
+    const rectPermInv: number[] | null = null
+    const encodeRows = rows
 
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
     ctx.encodeBinding = encodeBindingFor(update, ctx)
@@ -2307,6 +2395,7 @@ function buildTrellisCell(
       height: ctx.height,
       signals: ctx.signalParams,
       configRange: ctx.chart.configRange,
+      domainRaw: ctx.domainRaw?.get(s.name),
       evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
       dataField: (dn, field) => {
         const rws = ctx.datasets.get(dn) ?? []
@@ -2406,7 +2495,8 @@ function buildTrellisCell(
     height: gh,
     x: 0,
     y: 0,
-  }
+    __scales: snapshotScales(childCtx.scales),
+  } as SceneGroup
 }
 
 /** Group mark dispatch */
@@ -2516,6 +2606,7 @@ function buildScopedGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | nu
       height: ctx.height,
       signals: ctx.signalParams,
       configRange: ctx.chart.configRange,
+      domainRaw: ctx.domainRaw?.get(s.name),
       evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
       dataField: (dn, field) => {
         const rows = ctx.datasets.get(dn) ?? []
@@ -2577,7 +2668,8 @@ function buildScopedGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | nu
     height: gh,
     items,
     clip: grpClip,
-  }
+    __scales: snapshotScales(child.scales),
+  } as SceneGroup
 }
 
 function inlineGroupRows(rows: Row[], keys: string[]): Row[][] {
@@ -2734,6 +2826,7 @@ function getFacetLayout(ctx: EvalContext, prebuilt?: SceneGroup[]): FacetGridLay
   const ncols = colDom && colDom.length ? colDom.length : 1
   const nrows = rowDom && rowDom.length ? rowDom.length : 1
   const layout = computeFacetGridLayout(cells, cellWidth, cellHeight, ncols, nrows)
+  if (process.env.ASTER_DEBUG_FACET) console.error('[facet]', { cellWidth, cellHeight, ncols, nrows, layout })
   ctx._facetLayout = layout
   return layout
 }
@@ -3981,7 +4074,8 @@ function facetItemMark(
   if (mark.sort) rows = sortRows(rows, mark.sort)
 
   const update = mark.encode?.update ?? mark.encode?.enter ?? {}
-  items = rows.map((row) => {
+  items = rows.map((row, i) => {
+    if ((i & 2047) === 0) ctx.checkDeadline?.('mark encoding')
     const res = resolveEncodeSet(update, row, ctx, mark.type)
     res.datum = row
     return res
@@ -4079,7 +4173,6 @@ const encodePlanCache = new WeakMap<object, EncodePlan>()
 /** Cached rect paint order (see evaluateMark): sort keys, the stable-sort
  * permutation, and its inverse, so an eval with unchanged keys can replay the
  * order in O(n) and prove differential item reuse safe. */
-const rectSortCache = new WeakMap<object, { keys: number[]; perm: number[]; inv: number[] }>()
 
 function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): EncodePlan {
   let plan = encodePlanCache.get(encode)

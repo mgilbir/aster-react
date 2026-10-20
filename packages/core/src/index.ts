@@ -16,6 +16,7 @@ export type {
   SceneNode,
   SceneRoot,
   ScaleDomain,
+  ScaleSnapshot,
   ScaleRange,
   SizeSpec,
   SortSpec,
@@ -34,7 +35,8 @@ export { type DomDesc } from './dom.js'
 export { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 export { buildScale, type Scale } from './scales.js'
 export { applyTransforms, sortRows, type Row } from './transform.js'
-export { AsterLimitError, checkSpecLimits, checkSceneLimits, checkSvgLength, type SpecLimits } from './limits.js'
+export { AsterLimitError, checkSpecLimits, checkSceneLimits, checkSvgLength, createLimitClock, type LimitClock, type SpecLimits } from './limits.js'
+export { buildA11yTree, type A11yKind, type A11yNode, type A11yOptions, type A11yTree } from './a11y.js'
 export { geoRegistry, transformRegistry, requireTransform, type GeoRegistry, type ContourFeature, type TransformFn } from './registry.js'
 // The event-driven signal loop (`@aster/core/signals`: bindSceneSignals etc.)
 // ships as an opt-in addon like the DOM patcher; hosts using signal.on streams
@@ -49,16 +51,21 @@ export { geoRegistry, transformRegistry, requireTransform, type GeoRegistry, typ
 import { compileChart } from './compiler.js'
 import { evaluateChart, getChartInfo } from './runtime.js'
 import { renderSceneToSvg } from './render.js'
-import { checkSpecLimits, checkSceneLimits, checkSvgLength } from './limits.js'
+import { checkSpecLimits, checkSceneLimits, checkSvgLength, createLimitClock } from './limits.js'
 import type { RuntimeInput, VgSpec } from './types.js'
 
 /** Compile + evaluate + render a Vega spec to an SVG string (static mode). */
 export function renderSpec(spec: VgSpec, input: RuntimeInput = {}): string {
+  const clock = createLimitClock(input.limits)
   if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits)
+  clock.check('compile')
   const chart = compileChart(spec)
+  clock.check('evaluate')
   const scene = evaluateChart(chart, input)
+  clock.check('evaluate')
   if (input.limits) checkSceneLimits(scene, input.limits)
   const svg = renderSceneToSvg(scene)
+  clock.check('render')
   if (input.limits) checkSvgLength(svg, input.limits)
   return svg
 }

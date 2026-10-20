@@ -437,17 +437,20 @@ way Go and Kotlin do), then by rendering both compiled specs.
 
 ### R8 — Conformance rigour (M–L, parallel from R0)
 
-- **R8.1** Scene-level differential: compare resolved **scales** (domain, range,
-  bandwidth, ticks) and marks, not just canonical SVG. Reuse `evaluateChart`.
-- **R8.2** Nested (group-scoped) scale comparison, keyed by scope path + facet key.
-- **R8.3** Paint order, dash arrays, symbol/path drawn extents, and line/area series
-  collapse to an outline point list.
-- **R8.4 — IN PROGRESS.** Schema sweeps ported from the Go aster project:
+- **R8.1 — DONE.** `pnpm scene-diff` compares resolved scales (domain, range, bandwidth, interpolating-colour endpoints) and mark items directly against Vega's scenegraph for all 419 corpus specs.
+- **R8.2 — DONE.** Nested/group scoped scale maps are compared by scope path (role/marktype + sibling order), including facet/concat cell scopes.
+- **R8.3 — DONE.** Item comparison covers geometry, paint/dash/stroke extents, text/rect/symbol/area normalizations, item multisets, and paint-order checks for overlapping painted extents.
+- **R8.4 — DONE.** Schema sweeps ported from the Go aster project:
   `pnpm sweep-vega` generates one chart per (property, value) pair vega's own
   schema declares (7,549 cases — matching the Go floor) and diffs each against
-  upstream vega. **6,019/7,549 pass (80%)**: all encode/config mark families,
-  arcs (a full d3-arc port: padAngle, cornerRadius, radius swaps, degenerate
-  radii), trails, scales, titles. Projections: DONE —
+  upstream vega. **7,538 pass with zero comparable differences**; the remaining
+  cases are 8 both-refused and 3 where the Vega oracle itself crashes. The
+  Vega-Lite sweep is likewise **27,418 ok, 0 differ** (40 both-refused, 21 oracle
+  refusals, 34 pinned nondeterministic bootstrap aggregates). Closed since the 80% checkpoint: all
+  encode/config mark families, arcs (a full d3-arc port: padAngle,
+  cornerRadius, radius swaps, degenerate radii), trails, scales, titles, the
+  identity scale's range-less base, horizontal area baselines, and the
+  scene-level scale/item work above. Projections: DONE —
   1104/1105 (was ~340). The whole cluster traced to vega lowercasing
   projection type names (multi-word types silently fell back to mercator)
   plus the missing Mollweide/geoIdentity ports, vega-projection's persistent
@@ -529,21 +532,14 @@ Legend orients: the legendParams + gridLayout port is in — vertical-entry
   rule (a config fill/stroke default is skipped when either paint is
   encoded).
 
-  **R8.4 floor — 21 cases (sweep 7520 ok + 8 both-refused / 7549, 99.7%):** the remaining
-  disagreements, promoted as the sweep's own failing probes (R8.5):
-  title-angle--4 + config-title-angle--4 (a 0.001px rotated-text-bound
-  epsilon), title-orient-left + config-title-orient-left (1px rotated
-  title-bound epsilon), scale-log-zero-true / scale-pow-exponent--4 /
-  scale-symlog-constant-0 (degenerate-domain padding archaeology),
-  scale-identity-nice/round ×4 (our engine refuses a range value vega
-  renders — the identity range lookup is unported), view-width--4 /
-  view-height--4 (negative view dims: degenerate tick/label geometry),
-  encode/config-area-orient-horizontal (horizontal area path point
-  order), encode/config-path-angle--4 (negative-angle path bounds),
-  projection-azimuthalequalarea-clipAngle-0 (a 1.7e-6px fp epsilon in
-  d3's clip intersection), and 3 refused-render mismatches
-  (encode/config-area-interpolate-bundle: vega's own bound pass crashes
-  in d3-shape; encode-trail-size--4: vega refuses a negative radius).
+  **R8.4 floor — zero comparable differs (7538 ok + 8 both-refused + 3 oracle-refused / 7549):**
+  every case both engines can draw now matches. The 3 remaining non-ok cases are
+  oracle refusals (encode/config-area-interpolate-bundle: vega's own bound pass
+  crashes in d3-shape; encode-trail-size--4: vega refuses a negative radius).
+  Closed across this phase: identity scales, horizontal-area baselines,
+  half-pixel/fractional and negative view dimensions, log/symlog degenerate
+  symbols, title anchor/orient epsilons, rotated path bounds, clip-bound
+  epsilon handling, and scene item/paint order.
 
   The **vega-lite sweep** now runs (the lite cases compile both VL
   compilers to Vega before rendering): baseline 10937 ok / 15581 differ /
@@ -667,40 +663,31 @@ callbacks, and `useSyncExternalStore` where a session holds external state.
   threshold, vega-matching pick semantics, paint-order resolution) so hover,
   click, touch and tooltips resolve a mark without walking the DOM. Wired into
   `<Chart renderer="canvas">` tooltips.
-- **R10.2 — PARTIAL.** Controlled interval brush (`onSelect`/`brush`) and point/click selection (`onPointSelect`, resolved through the scene hit index on SVG and canvas) are done; the unified declarative `select` value type remains.
-- **R10.3** Pan and zoom: wheel, drag, pinch and keyboard, exposed as props and as a
-  controlled `view` object; driven through `domainRaw`/scale signals so the scene and
-  every guide recompute. Works on both SVG and Canvas.
-- **R10.4** Signals as React state: `signal.on` streams bridged to `onSignal`, and the
-  existing event loop wrapped so a signal update is a normal state transition (no
-  tearing, safe under concurrent rendering).
+- **R10.2 — DONE.** Controlled interval brush (`onSelect`/`brush`), point/click selection (`onPointSelect`) and the unified `SelectValue` (`selection`/`onSelectionChange`, interval or point) all resolve through the scene hit index on SVG and canvas.
+- **R10.3 — DONE.** Pan/zoom via wheel, drag, two-pointer pinch and keyboard, exposed as props and as a controlled `view: ViewDomain`; driven through scale `domainRaw` so marks and every guide recompute. Works on both SVG and Canvas.
+- **R10.4 — DONE.** `signal.on` streams bridge to `onSignal`/`signalListeners`; values live in an external store read with `useSyncExternalStore`, so an event is one synchronous React state transition (no tearing under concurrent rendering). `ChartHandle.setSignal` drives the same path.
 - **R10.5 — DONE.** `renderTooltip` renders custom tooltip content in the React tree (the default tooltip already lives there too).
-- **R10.6** Accessibility tree: one positioned, focusable element per mark/axis/legend/
-  title, with upstream's captions and roles, `aria`/`description` channels, selected
-  state, a dense-chart summary threshold, and an adjustable continuous axis.
-- **R10.7** Keyboard navigation and focus management across marks and guides.
+- **R10.6 — DONE.** `buildA11yTree` emits one positioned, focusable node per mark item (or a dense summary), axis, legend and title, with upstream-style captions/roles, `aria`/`description` channels, selected state, a configurable density threshold and continuous axes exposed as sliders.
+- **R10.7 — DONE.** Keyboard navigation across marks/guides (`Tab`, arrows, Home/End, Enter/Space) plus axis-slider pan/zoom (`+`/`-`, reset), with focus management in `<Chart>`.
 - **Acceptance:** pan/zoom/select/tooltip are covered by React interaction tests on
   both backends; an axe (or equivalent) check passes; captions match upstream wording.
 
 ### R11 — React idioms and performance (M, continuous)
 
-- **R11.1 — PARTIAL.** Headless `useChart` and `createChartSession` are public; `<Chart>` still takes the compiled Vega spec. Direct Vega-Lite input and an imperative ref handle remain.
-- **R11.2** Async data via Suspense/`use()` and an explicit `loadSpecData` path.
-- **R11.3** SSR string render + hydration via the DOM patcher; no layout flash.
-- **R11.4** Optional worker offload for compile/evaluate on large specs.
-- **R11.5** Keep the differential engine; add per-entry bundle gates.
+- **R11.1 — DONE.** `<Chart>`/`useChart` accept Vega or Vega-Lite directly (the VL compiler is `@aster/vl`, not `vega-lite`), and `ChartHandle` exposes scene/SVG/chart-info/view/signal methods imperatively.
+- **R11.2 — DONE.** `useSpecData` / `useChartData` use `use()` + Suspense over a cached `loadSpecData` promise (loader addon imported lazily); `<Chart spec={promise}>` suspends to the host boundary.
+- **R11.3 — DONE.** `renderChartToStaticMarkup` emits the full SVG; `hydrateChart` adopts and patches the server `<svg>` through the DOM patcher (React `renderToString` + `hydrateRoot` also round-trips the same DOM).
+- **R11.4 — DONE.** `useChartWorker` + a pure request handler offload compile/evaluate/render to a Worker and fall back to the same synchronous handler when Workers are unavailable; responses carry a structured-clone-safe scene.
+- **R11.5 — DONE.** Differential engine retained; `scripts/budget.mjs` gates core, dom, canvas, hit, signals and React entries independently.
 - **Acceptance:** a chart renders from a VL spec in a fresh React app with no
   `vega-lite` import; SSR + hydration tests pass; budgets green.
 
 ### R12 — Production (M–L)
 
-- **R12.1 — PARTIAL.** `SpecLimits`/`AsterLimitError` enforce row/mark/depth/string/item/path/SVG budgets pre- and post-evaluation; a wall-clock deadline and finer per-allocation charging remain.
-- **R12.2** Publish `@aster/core`, `@aster/react`, addons to npm with a release
-  workflow and provenance.
-- **R12.3** Docs: api, errors, limits, testing, fonts, performance, interaction; ADRs
-  per major decision.
-- **R12.4** Differential fuzzing and nightly sweeps with a committed reproducer
-  corpus.
+- **R12.1 — DONE.** `SpecLimits`/`AsterLimitError` enforce row/mark/depth/string/item/path/SVG budgets pre- and post-evaluation, plus an opt-in `maxTimeMs` wall-clock deadline checked at phase boundaries and inside dataset/encode loops.
+- **R12.2 — DONE.** `@aster/core`, `@aster/react` and `@aster/vl` are publishable (metadata, files, exports, lockstep versions), with a tag-triggered release workflow using npm provenance and the dependency-boundary gate.
+- **R12.3 — DONE.** Added API, errors, limits, testing, fonts, performance, interaction and release docs, plus ADRs 0002–0004 covering interaction, SSR/async/worker and publishing.
+- **R12.4 — DONE.** Deterministic differential fuzzer, committed reproducer corpus/replay, and a nightly workflow running conformance, both schema sweeps, 3000 fuzz seeds and reproducer replay.
 - **R12.5 — DONE.** Added BSD-3-Clause `LICENSE`, `CONTRIBUTING.md`, `CHANGELOG.md`, `THIRD_PARTY_NOTICES.md`.
 - **Acceptance:** a clean app installs from npm and renders Vega and Vega-Lite; a
   hostile spec fails with a typed error; nightly jobs green.

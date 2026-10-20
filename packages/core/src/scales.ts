@@ -31,6 +31,8 @@ export interface ScaleContext {
   dataField: (dataName: string, field: string) => unknown[]
   /** Return all rows of a named dataset (for aggregate sort). */
   dataRows?: (dataName: string) => Record<string, unknown>[]
+  /** Host/runtime domain override (vega `domainRaw`, pan/zoom, brush domains). */
+  domainRaw?: unknown[]
 }
 
 export const CONTINUOUS_TYPES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential', 'quantize'])
@@ -77,9 +79,35 @@ function piecewiseColors(palette: string[], type?: string): (t: number) => strin
   }
 }
 
+function resolveRawDomain(raw: unknown, ctx: ScaleContext): unknown[] | null {
+  if (raw == null) return null
+  if (Array.isArray(raw)) return raw
+  if (typeof raw === 'object') {
+    const signal = (raw as { signal?: unknown }).signal
+    if (typeof signal === 'string') {
+      try {
+        const value = ctx.evaluate?.(signal)
+        if (Array.isArray(value)) return value
+      } catch { /* unresolved signal this round */ }
+    }
+  }
+  if (typeof raw === 'string') {
+    try {
+      const value = ctx.evaluate?.(raw)
+      if (Array.isArray(value)) return value
+    } catch { /* unresolved signal this round */ }
+  }
+  return null
+}
+
 export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   const type = c.type
-  const domain = resolveDomain(type, c.domain, ctx)
+  const raw = ctx.domainRaw ?? c.domainRaw
+  // Vega's domainRaw is a *replacement* for the data-derived domain. It may be
+  // a literal array or a signal reference; resolve both once here so the rest
+  // of the scale pipeline (nice/zero/domainMin/domainMax) is unchanged.
+  const rawDomain = resolveRawDomain(raw, ctx)
+  const domain = rawDomain ?? resolveDomain(type, c.domain, ctx)
   // vega-encode's scaleKey: a continuous colour scale with a domainMid (a
   // 3-element domain) is built as a DIVERGING scale, not a linear one; the
   // midpoint then maps to the interpolator's centre instead of falling off a
@@ -96,7 +124,7 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   // a diverging scale yields its default x2, so the later generic splice would
   // insert at the wrong position (and d3 would drop the extra element).
   let divergingDomain: number[] | undefined
-  if (diverging && c.domainMid != null && domain.length >= 2) {
+  if (diverging && c.domainMid != null && domain.length >= 2 && rawDomain == null) {
     const d0 = Number(domain[0])
     const d1 = Number(domain[domain.length - 1])
     const mid = Number(c.domainMid)
@@ -108,6 +136,13 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   // maps to undefined instead of growing the domain (and its colour range).
   if (type === 'ordinal' && c.domain != null) {
     ;(s as unknown as { unknown?: (v: undefined) => unknown }).unknown?.(undefined)
+  }
+  // The identity scale maps its input straight through; it has no range (the
+  // schema's identity base declares none) and ignores nice/zero/round. Upstream
+  // configureRange is a no-op for it, so an absent range is not an error.
+  if (type === 'identity') {
+    if (c.clamp) s.clamp?.(true)
+    return s
   }
 
   // When the scale has a `scheme` property but no `range`, resolve the scheme
@@ -247,7 +282,7 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   // range flip — reverse is folded into the extent-sampled interpolator
   if (CONTINUOUS_TYPES.has(type) && typeof range0 !== 'string' && !isSchemeRef) {
     if (c.reverse) s.range(s.range().slice().reverse() as unknown[])
-  } else if (c.domainMin != null || c.domainMax != null) {
+  } else if (rawDomain == null && (c.domainMin != null || c.domainMax != null)) {
     applyDomainMinMax(s, c.domainMin, c.domainMax)
   }
   if (c.exponent != null) s.exponent?.(c.exponent)
@@ -272,17 +307,17 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   // color scale; vega never applies `zero` extension to it (the domain maps
   // directly onto [0,1] of the interpolator).
   const isColorScheme = CONTINUOUS_TYPES.has(type) && (typeof range0 === 'string' || isSchemeRef)
-  const zero = !TIME_SCALE_TYPES.has(type)
+  const zero = rawDomain == null && !TIME_SCALE_TYPES.has(type)
     && (c.zero != null ? c.zero : (!isColorScheme && INCLUDE_ZERO_TYPES.has(type)))
   if (zero) applyZero(s)
-  if (c.domainMin != null || c.domainMax != null) applyDomainMinMax(s, c.domainMin, c.domainMax)
+  if (rawDomain == null && (c.domainMin != null || c.domainMax != null)) applyDomainMinMax(s, c.domainMin, c.domainMax)
   // Vega's Scale transform splices domainMid into the domain array so that the
   // midpoint value is explicitly represented as a domain breakpoint.  The
   // resulting piecewise-linear scale maps domainMid to a range value that
   // maintains the same slope established by the surrounding domain/range pairs.
   // The splice happens after zero/domainMin/domainMax (which establish the
   // baseline domain) and before nice (which rounds the domain boundaries).
-  if (c.domainMid != null && CONTINUOUS_TYPES.has(type) && divergingDomain == null) {
+  if (rawDomain == null && c.domainMid != null && CONTINUOUS_TYPES.has(type) && divergingDomain == null) {
     applyDomainMid(s, c.domainMid)
   }
   // Vega's Scale transform adjusts continuous domains for minimum pixel
@@ -290,8 +325,8 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   // extreme data values land `padding` px inside the range. Applies to all
   // continuous scales (linear/log/pow/sqrt/symlog/time/utc), matching vega's
   // `includePad(type)` guard.
-  if (CONTINUOUS_TYPES.has(type) && c.padding != null) applyPixelPadding(s, c, c.padding)
-  if (c.nice) applyNice(s, c.nice)
+  if (rawDomain == null && CONTINUOUS_TYPES.has(type) && c.padding != null) applyPixelPadding(s, c, c.padding)
+  if (rawDomain == null && c.nice) applyNice(s, c.nice)
   if (c.exponent != null) s.exponent?.(c.exponent)
   if (c.constant != null) s.constant?.(c.constant)
   if (c.base != null) s.base?.(c.base)

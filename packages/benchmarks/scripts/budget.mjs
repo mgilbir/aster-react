@@ -4,130 +4,144 @@ import { join, dirname } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 
-// 80 kB gzip for a minimal line-chart renderSpec bundle (regression gate).
+// Per-entry bundle gates (R11.5).
 //
-// Re-baselined from the original 60 kB (set when the engine was a fraction of
-// this scope) after measuring every principled cut. Composition of the 79.0 kB
-// bundle, per family (gzip, measured by stubbing each dependency):
+// The original gate only measured `renderSpec` from the core barrel. This one
+// measures every published entry point independently, so an accidental import
+// from the canvas/dom/hit/signals addons (or from the React wrapper) into the
+// base bundle fails a named row instead of being hidden by one aggregate.
 //
-//   ~40 kB  @aster/core itself — compile/evaluate pipeline, axes/legends/
-//           facet layout, renderer, exact vega bounds+trellis port
-//    ~9 kB  vega-expression + vega-interpreter (the expression language)
-//    ~5 kB  d3-shape (19 curve families + arc/symbol/path)
-//   ~20 kB  vega's d3 support stack (d3-array/scale/time/time-format/format/
-//           color/interpolate + vega-scale/util/time/format)
+// Measured 2026-10 (gzip, minified; react/react-dom external):
+//   @aster/core          102.4 kB
+//   @aster/core/dom      102.4 kB
+//   @aster/core/canvas    12.1 kB
+//   @aster/core/hit        1.5 kB
+//   @aster/core/signals   28.1 kB
+//   @aster/react         142.3 kB (includes the from-scratch VL compiler)
 //
-// Cuts already taken: geo projections + contour live behind @aster/core/geo;
-// rare-layout transforms (kde/quantile/regression/loess, pack/partition/
-// treemap, wordcloud, voronoi) behind @aster/core/transforms; the incremental
-// DOM patcher behind @aster/core/dom. Measured-and-rejected: lazy color
-// schemes save 0.3 kB gzip (hex data compresses for free); dom/session out of
-// the core barrel saves 0.5 kB. Removing the expression engine (-9 kB) would
-// drop the product below vega compatibility; the remaining floor is ~76 kB.
-// The budget's job is regression detection, which 81 kB with the breakdown
-// above does; the pre-expansion 60 kB no longer describes the library.
-// (80 -> 81: the event-loop wiring gained ~0.2 kB gzip of genuinely required
-// code — scene runtime/compiled metadata + vega mark defaults.)
-// (81 -> 85: the reactive differential engine — per-datum dataChanges re-derive,
-// persistent scene/items, incremental scales/transforms, DOM-subtree skip, the
-// imperative session.change() — is a deliberate feature addition, ~3 kB gzip.)
-// (85 -> 90: ADR 0001 — the engine owns its stack instead of importing it. The
-// colour module (CSS parser, 148 named colours, RGB/HSL/Lab/HCL conversions,
-// oracle-vector-tested) is the first owned library; it replaces d3-color and
-// costs ~3.5 kB gzip. Later owned libraries re-baseline this gate the same way,
-// each with its measured cost recorded here.)
-// (90 -> 92: the calendar module replaces vega-time + the d3-time interval
-// engine (intervals, floors, offsets, sequences, unit specifiers; DST covered
-// by vectors recorded under America/New_York) — ~1.8 kB gzip.)
-// (92 -> 96: the format layer replaces vega-format + d3-format +
-// d3-time-format — specifier grammar, locale tables, the strftime engine, the
-// tick formatters (formatFloat/formatSpan) and the memoized locale facade;
-// 1749 oracle-vector cases — ~4.7 kB gzip.)
-// (96 -> 100: parity work for facet headers, size legends and the remaining
-// guide-layout tails; headroom restored at the maintainer's request.)
-const BUDGET_BYTES = 100 * 1024
+// History of the core floor: the 80 kB budget was re-baselined repeatedly as
+// the engine took ownership of its stack (ADR 0001): colour (+3.5), calendar
+// (+1.8), format (+4.7), parity tails (+4). The a11y tree (+2.3) and the
+// wall-clock limiter (+0.3) are the R10/R12 additions. The budget's job is
+// regression detection, so each entry gets measured headroom rather than a
+// number that no longer describes the library.
+const BUDGETS = {
+  '@aster/core': 110 * 1024,
+  '@aster/core/dom': 110 * 1024,
+  '@aster/core/canvas': 20 * 1024,
+  '@aster/core/hit': 6 * 1024,
+  '@aster/core/signals': 36 * 1024,
+  '@aster/react': 155 * 1024,
+}
 
-// Walk up from this file to find the monorepo root:
-// packages/benchmarks/scripts -> packages/benchmarks -> packages -> aster-react (root)
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const MONOREPO_ROOT = dirname(dirname(dirname(THIS_DIR)))
 const TMP = join(MONOREPO_ROOT, 'packages', 'benchmarks', '.tmp')
-const ENTRY_NAME = 'budget-entry.mjs'
-const ENTRY = join(TMP, ENTRY_NAME)
-const OUT = join(TMP, 'bundle.mjs')
 
-const ENTRY_SRC = String.raw`import { renderSpec } from '@aster/core'
+const ENTRIES = [
+  {
+    name: '@aster/core',
+    file: 'core.mjs',
+    platform: 'node',
+    src: String.raw`import { renderSpec } from '@aster/core'
 const spec = { width: 400, height: 300, data: [{ name: 't', values: [{ x: 0, y: 10 }] }], scales: [{ name: 'x', type: 'linear', domain: { data: 't', field: 'x' }, range: 'width' }], marks: [] }
 export default () => renderSpec(spec)
-`
+`,
+  },
+  {
+    name: '@aster/core/dom',
+    file: 'dom.mjs',
+    platform: 'node',
+    src: String.raw`import { createChartSession, patchSceneDom } from '@aster/core/dom'
+export default { createChartSession, patchSceneDom }
+`,
+  },
+  {
+    name: '@aster/core/canvas',
+    file: 'canvas.mjs',
+    platform: 'node',
+    src: String.raw`import { renderSceneToCanvas } from '@aster/core/canvas'
+export default renderSceneToCanvas
+`,
+  },
+  {
+    name: '@aster/core/hit',
+    file: 'hit.mjs',
+    platform: 'node',
+    src: String.raw`import { buildHitIndex } from '@aster/core/hit'
+export default buildHitIndex
+`,
+  },
+  {
+    name: '@aster/core/signals',
+    file: 'signals.mjs',
+    platform: 'node',
+    src: String.raw`import { bindSceneSignals } from '@aster/core/signals'
+export default bindSceneSignals
+`,
+  },
+  {
+    name: '@aster/react',
+    file: 'react.tsx',
+    platform: 'browser',
+    external: ['react', 'react-dom', 'react/jsx-runtime'],
+    src: String.raw`import { Chart } from '@aster/react'
+export default Chart
+`,
+  },
+]
 
 function setupTmp() {
   rmSync(TMP, { recursive: true, force: true })
   mkdirSync(TMP, { recursive: true })
-  writeFileSync(ENTRY, ENTRY_SRC)
 }
 
 function coreAlreadyBuilt() {
   try {
     statSync(join(MONOREPO_ROOT, 'packages', 'core', 'dist', 'index.js'))
+    statSync(join(MONOREPO_ROOT, 'packages', 'react', 'dist', 'index.js'))
     return true
   } catch {
     return false
   }
 }
 
-async function bundle() {
-  return build({
-    entryPoints: [ENTRY],
-    bundle: true,
-    minify: true,
-    format: 'esm',
-    platform: 'node',
-    write: true,
-    outfile: OUT,
-    logLevel: 'silent',
-    alias: {
-      '@aster/core': join(MONOREPO_ROOT, 'packages', 'core', 'dist', 'index.js'),
-    },
-  })
-}
-
-const BUDGET_KB = (BUDGET_BYTES / 1024).toFixed(0)
+const KB = (n) => (n / 1024).toFixed(1)
 
 try {
   setupTmp()
-
   if (!coreAlreadyBuilt()) {
     console.error('Run `pnpm build` first')
     process.exit(1)
   }
 
-  const result = await bundle()
-
-  if (result && result.errors && result.errors.length > 0) {
-    console.error('esbuild failed with errors')
-    process.exit(1)
+  let failed = false
+  for (const entry of ENTRIES) {
+    const entryPath = join(TMP, entry.file)
+    const outPath = join(TMP, 'out.mjs')
+    writeFileSync(entryPath, entry.src)
+    await build({
+      entryPoints: [entryPath],
+      bundle: true,
+      minify: true,
+      format: 'esm',
+      platform: entry.platform,
+      write: true,
+      outfile: outPath,
+      logLevel: 'silent',
+      external: entry.external,
+      define: { 'process.env.NODE_ENV': '"production"' },
+    })
+    const buf = readFileSync(outPath)
+    const gz = gzipSync(buf).length
+    const budget = BUDGETS[entry.name]
+    const pass = gz <= budget
+    if (!pass) failed = true
+    console.log(
+      `${entry.name.padEnd(20)} min=${KB(buf.length).padStart(7)} kB  gzip=${KB(gz).padStart(6)} kB  budget=${KB(budget).padStart(5)} kB  ${pass ? 'PASS' : 'FAIL'}`,
+    )
   }
-
-  // Read the bundled output
-  const bundleContent = readFileSync(OUT)
-  const minKB = (bundleContent.length / 1024).toFixed(1)
-
-  // Compute gzip size
-  const gzipped = gzipSync(bundleContent)
-  const gzKB = (gzipped.length / 1024).toFixed(1)
-
-  const pass = gzipped.length <= BUDGET_BYTES
-  const status = pass ? 'PASS' : 'FAIL'
-
-  console.log(
-    `@aster/core renderSpec (line chart)\tmin=${minKB} kB\tgzip=${gzKB} kB\tbudget=${BUDGET_KB} kB\t${status}`
-  )
-
-  if (!pass) {
-    process.exit(1)
-  }
-
+  if (failed) process.exit(1)
 } catch (err) {
   console.error(`error: ${err.message}`)
   process.exit(1)

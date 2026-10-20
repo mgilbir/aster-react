@@ -71,7 +71,7 @@ Because heavy feature areas are only used by a small fraction of specs, they are
 | `@aster/core/dom` | the incremental DOM patcher (`patchSceneDom`, `sceneToDomDesc`, `createChartSession`); `<Chart>` now defaults to this path |
 | `@aster/core/signals` | the signal→view event loop (`bindSceneSignals`, `stampDatumAttrs`) that binds a spec's `signal.on` streams to the rendered svg |
 
-A spec that uses a gated feature without its addon loaded gets an actionable "load `@aster/core/...` first" error; every other chart renders with a lean base bundle — `@aster/react <Chart>` is ~86 kB gzip vs react-vega's 289 kB (see `packages/benchmarks/scripts/bundle-size.mjs`; `budget.mjs` gates the core `renderSpec` payload and explains why the original 60 kB target was re-baselined).
+A spec that uses a gated feature without its addon loaded gets an actionable "load `@aster/core/...` first" error; every other chart renders with a lean base bundle — `@aster/react <Chart>` is ~142 kB gzip (it includes the from-scratch Vega-Lite compiler) vs react-vega's 289 kB; `budget.mjs` gates core, dom, canvas, hit, signals and React entries independently and records the measured sizes next to the budgets.
 
 ## Scales
 
@@ -116,7 +116,12 @@ The SVG serializer in `packages/core/src/render.ts` walks the `SceneRoot` tree a
 
 ## Conformance
 
-The conformance harness (`packages/conformance/src/run.ts`) is the correctness gate:
+The conformance harness (`packages/conformance/src/run.ts`) is the SVG correctness gate.
+`packages/conformance/src/scene-diff.ts` is the scene-level gate (R8.1–R8.3): it compares
+resolved scales per scope, mark-group/item multisets, and paint order for overlapping
+items directly against Vega's scenegraph, before either renderer serializes anything.
+
+The SVG gate:
 
 1. **Load corpus** — `corpus/*.vl.json` (Vega-Lite specs) and `corpus/*.vg.json` (raw Vega specs).
 2. **Compile Vega-Lite** — for `.vl.json` entries, run `vega-lite.compile()` to produce Vega spec form.
@@ -173,6 +178,6 @@ pnpm conformance
 # Gap probes — diagnostic only, documents known-incomplete features
 pnpm probe
 
-# Bundle budget (esbuild, 80 kB gzip target — see budget.mjs for the breakdown)
+# Per-entry bundle gates (core/dom/canvas/hit/signals/React — see budget.mjs)
 pnpm --filter @aster/benchmarks run budget
 ```

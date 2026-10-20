@@ -3166,24 +3166,23 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
     if (yDef) {
       const stacked = isStacked(yDef, mark, orient, fields)
-      if (stacked) {
-        update.y = { scale: 'y', field: `${yDef.field}_end` }
-        update.y2 = { scale: 'y', field: `${yDef.field}_start` }
-      } else {
-        update.y = { scale: 'y', field: aggFieldName(yDef) }
-        // anchored through the scale so the baseline tracks scale(0), not the
-        // group-local pixel origin (matters inside faceted pathgroups)
-        update.y2 = { scale: 'y', value: 0 }
+      update.y = { scale: 'y', field: stacked ? `${yDef.field}_end` : aggFieldName(yDef) }
+      if (orient !== 'horizontal') {
+        // vertical area: y is the value axis, y2 the baseline
+        update.y2 = stacked
+          ? { scale: 'y', field: `${yDef.field}_start` }
+          : { scale: 'y', value: 0 }
       }
     }
     if (xDef && orient === 'horizontal') {
+      // horizontal area: x is the value axis; the baseline runs to the start of
+      // the x domain (vega-lite's zeroOrMin rule), and y2 is not emitted.
       const stackedX = isStacked(xDef, mark, orient, fields)
       if (stackedX) {
         update.x = { scale: 'x', field: `${xDef.field}_end` }
         update.x2 = { scale: 'x', field: `${xDef.field}_start` }
-      } else if (yDef == null || !isStacked(yDef, mark, orient, fields)) {
-        // vertical baselines anchor through the scale as well
-        update.x2 = { scale: 'x', value: 0 }
+      } else {
+        update.x2 = { signal: "scale('x', domain('x')[0])" }
       }
     }
     update.defined = definedSignal(xDef, yDef)

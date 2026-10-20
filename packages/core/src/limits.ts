@@ -14,6 +14,12 @@ export interface SpecLimits {
   maxSvgLength?: number
   /** Maximum object nesting depth in the spec. */
   maxDepth?: number
+  /**
+   * Wall-clock budget for one compile/evaluate/render pass, in milliseconds.
+   * Checked at phase boundaries and periodically inside row/encode loops, so a
+   * hostile spec cannot pin a thread indefinitely (R12.1).
+   */
+  maxTimeMs?: number
 }
 
 /** Typed limit violation (R12.1); hosts can distinguish it from a render bug. */
@@ -27,6 +33,42 @@ export class AsterLimitError extends Error {
 
 function over(name: keyof SpecLimits, value: number, limit: number): never {
   throw new AsterLimitError(`${name} ${value} > ${limit}`)
+}
+
+/** A monotonic clock for one bounded operation. */
+export interface LimitClock {
+  readonly started: number
+  readonly deadline: number | null
+  /** Throw a typed error when the wall-clock budget is exhausted. */
+  check: (phase?: string) => void
+  /** Milliseconds left, or Infinity when unbounded. */
+  remaining: () => number
+}
+
+/**
+ * Start a wall-clock budget. `maxTimeMs` is opt-in; without it `check` is a
+ * no-op so the hot paths keep their previous cost.
+ */
+export function createLimitClock(limits?: SpecLimits, now: () => number = defaultNow): LimitClock {
+  const started = now()
+  const max = limits?.maxTimeMs
+  const deadline = max != null && Number.isFinite(max) ? started + Math.max(0, max) : null
+  return {
+    started,
+    deadline,
+    check(phase = 'evaluation') {
+      if (deadline != null && ((max ?? 1) <= 0 || now() > deadline)) {
+        throw new AsterLimitError(`maxTimeMs exceeded during ${phase}`)
+      }
+    },
+    remaining() {
+      return deadline == null ? Infinity : Math.max(0, deadline - now())
+    },
+  }
+}
+
+function defaultNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
 }
 
 /** Pre-flight checks, run before compilation/evaluation allocates the scene. */

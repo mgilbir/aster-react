@@ -1,0 +1,21 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 240,
+  "height": 140,
+  "padding": 5,
+  "autosize": "none",
+  "data": [{ "name": "t", "values": [{ "c": "a", "v": 3 }, { "c": "b", "v": 7 }, { "c": "c", "v": 5 }] }],
+  "scales": [
+    { "name": "x", "type": "band", "domain": { "data": "t", "field": "c" }, "range": "width", "padding": 0.2 },
+    { "name": "y", "type": "linear", "domain": { "data": "t", "field": "v" }, "range": "height", "zero": true, "nice": true }
+  ],
+  "axes": [{ "scale": "x", "orient": "bottom" }, { "scale": "y", "orient": "left" }],
+  "marks": [{
+    "type": "rect", "from": { "data": "t" },
+    "encode": { "update": {
+      "x": { "scale": "x", "field": "c" }, "width": { "scale": "x", "band": 1 },
+      "y": { "scale": "y", "field": "v" }, "y2": { "scale": "y", "value": 0 },
+      "fill": { "value": "#4c78a8" }
+    } }
+  }]
+}

@@ -87,9 +87,10 @@ function roundedFramePath(x: number, y: number, w: number, h: number, r: number)
 }
 
 export function renderSceneToSvg(scene: SceneRoot): string {
-  // vega's SVG renderer truncates a fractional document size to pixels.
-  const W = Math.floor(scene.width)
-  const H = Math.floor(scene.height)
+  // Keep fractional document sizes: vega's toSVG emits the resolved view size
+  // verbatim (the browser may rasterize onto an integer backing store).
+  const W = scene.width
+  const H = scene.height
   const pad = scene.padding ?? { top: 0, right: 0, bottom: 0, left: 0 }
 
   let out = ''
@@ -262,8 +263,8 @@ function renderLeaf(it: SceneItem, clipN?: { current: number; paths: (string | n
     // Apply the item's x/y as a translate so legend/entry paths (whose `d`
     // starts at M0,0) land at their intended position, matching vega's
     // nested-scope transforms. Items with x=y=0 emit no transform.
-    const tx = num(it.x ?? 0)
-    const ty = num(it.y ?? 0)
+    const tx = num(it.x || 0)
+    const ty = num(it.y || 0)
     const angleP = (it as Record<string, unknown>).angle as number | undefined
     const rot = angleP ? ` rotate(${num(angleP)})` : ''
     const transform = (tx !== '0' || ty !== '0' || rot) ? ` transform="translate(${tx},${ty})${rot}"` : ''
@@ -273,7 +274,7 @@ function renderLeaf(it: SceneItem, clipN?: { current: number; paths: (string | n
   if (it.shape != null && it.radius != null) {
     const d = symbolPath(it.shape as string, it.radius as number)
     const angleS = (it as Record<string, unknown>).angle as number | undefined
-    const t = `transform="translate(${num(it.x ?? 0)},${num(it.y ?? 0)})${angleS ? ` rotate(${num(angleS)})` : ''}"`
+    const t = `transform="translate(${num(it.x || 0)},${num(it.y || 0)})${angleS ? ` rotate(${num(angleS)})` : ''}"`
     return `<path ${t}${dd} d="${d}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-linejoin', (it as Record<string, unknown>).strokeJoin as string | undefined)}${attr('opacity', it.opacity)}/>`
   }
   if (it.text != null) {
@@ -305,7 +306,7 @@ function renderLeaf(it: SceneItem, clipN?: { current: number; paths: (string | n
   }
   const x2 = it.x2 ?? it.x ?? 0
   const y2 = it.y2 ?? it.y ?? 0
-  return `<line x1="${num(it.x ?? 0)}" y1="${num(it.y ?? 0)}" x2="${num(x2)}" y2="${num(y2)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-opacity', it.strokeOpacity)}${attr('opacity', it.opacity)}/>`
+  return `<line x1="${num(it.x || 0)}" y1="${num(it.y || 0)}" x2="${num(x2)}" y2="${num(y2)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-opacity', it.strokeOpacity)}${attr('opacity', it.opacity)}/>`
 }
 
 function itemsOf(group: SceneGroup): SceneItem[] {
@@ -469,8 +470,10 @@ export function computeAreaPath(group: SceneGroup): {
     pos: isHorizontal ? (it.y as number) : (it.x as number),
     val: isHorizontal ? (it.x as number) : (it.y as number),
     val2: isHorizontal
-      ? (it.x ?? 0) + ((it.width as number | undefined) ?? (((it.x2 as number) ?? 0) - (it.x ?? 0)))
-      : (it.y ?? 0) + ((it.height as number | undefined) ?? (((it.y2 as number) ?? 0) - (it.y ?? 0))),
+      // Horizontal areas use x/x2 (not y2); when neither x2 nor width exists the
+      // area degenerates to its value edge, exactly like vega's x0 accessor.
+      ? (it.x ?? 0) + ((it.width as number | undefined) ?? (((it.x2 as number) ?? (it.x ?? 0)) - (it.x ?? 0)))
+      : (it.y ?? 0) + ((it.height as number | undefined) ?? (((it.y2 as number) ?? (it.y ?? 0)) - (it.y ?? 0))),
     defined: it.defined !== false && it.x != null && it.y != null,
   }))
 
@@ -731,7 +734,7 @@ function renderSymbols(group: SceneGroup): string {
     // vega's symbol attr emits rotateItem(item) — full-precision numbers plus
     // the mark's rotation.
     const angleS = (it as Record<string, unknown>).angle as number | undefined
-    out += `<path transform="translate(${String(it.x ?? 0)},${String(it.y ?? 0)})${angleS ? ` rotate(${num(angleS)})` : ''}" d="${d}"${fillAttr}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-linejoin', (it as Record<string, unknown>).strokeJoin as string | undefined)}${attr('opacity', it.opacity)}/>`
+    out += `<path${dataDatumAttr(it)} transform="translate(${String(it.x || 0)},${String(it.y || 0)})${angleS ? ` rotate(${num(angleS)})` : ''}" d="${d}"${fillAttr}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-linejoin', (it as Record<string, unknown>).strokeJoin as string | undefined)}${attr('opacity', it.opacity)}/>`
   }
   out += '</g>'
   return out
@@ -745,7 +748,7 @@ function renderCircles(group: SceneGroup): string {
     const r = it.radius != null
       ? it.radius
       : Math.sqrt((it.size as number) ?? 30) / 2
-    out += `<circle cx="${num(it.x)}" cy="${num(it.y)}" r="${num(r)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+    out += `<circle${dataDatumAttr(it)} cx="${num(it.x)}" cy="${num(it.y)}" r="${num(r)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
   }
   out += '</g>'
   return out
@@ -1010,8 +1013,8 @@ function renderPaths(group: SceneGroup): string {
     // translate transform; items whose path already encodes absolute
     // coordinates (e.g. geoshape output) have x=y=0 and emit no transform).
     // vega's transformItem appends scale(sx,sy) when the item carries it.
-    const tx = num(it.x ?? 0)
-    const ty = num(it.y ?? 0)
+    const tx = num(it.x || 0)
+    const ty = num(it.y || 0)
     const sxp = (it as Record<string, unknown>).scaleX as number | undefined
     const syp = (it as Record<string, unknown>).scaleY as number | undefined
     const scaleT = (sxp != null && sxp !== 1) || (syp != null && syp !== 1) ? ` scale(${sxp ?? 1},${syp ?? 1})` : ''

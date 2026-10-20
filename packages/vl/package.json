@@ -1,16 +1,44 @@
 {
   "name": "@aster/vl",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
   "description": "From-scratch Vega-Lite compiler: Vega-Lite -> Vega, verified against the vega-lite oracle by rendering parity.",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
     "typescript": "^5.8.0"
+  },
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mgilbir/aster-react.git",
+    "directory": "packages/vl"
+  },
+  "homepage": "https://github.com/mgilbir/aster-react#readme",
+  "bugs": {
+    "url": "https://github.com/mgilbir/aster-react/issues"
+  },
+  "keywords": "vega-lite, vega, compiler, charts",
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   }
 }

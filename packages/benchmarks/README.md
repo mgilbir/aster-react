@@ -61,7 +61,7 @@ The browser runner needs a Chromium for Playwright (`npx playwright install chro
 - `src/browser-entry.ts` — `window.__bench` API bundled into the browser page
 - `scripts/browser.bench.mjs` — esbuild + Playwright + CDP driver
 - `scripts/bundle-size.mjs` — per-approach payload table
-- `scripts/budget.mjs` — (existing) `@aster/core` gzip budget gate used by CI
+- `scripts/budget.mjs` — per-entry gzip gates for core, dom, canvas, hit, signals and React; used by CI
 
 ## Why the vega-embed hook wins updates (and what aster did about it)
 

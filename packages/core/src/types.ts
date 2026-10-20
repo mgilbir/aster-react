@@ -47,6 +47,12 @@ export interface RuntimeInput {
    * fully re-encode (safe default).
    */
   dataChanges?: Record<string, number[]>
+  /**
+   * Direct scale-domain overrides (vega's `domainRaw`): scale name -> values.
+   * The view/guides/encodes all rebuild from the overridden scale, which is the
+   * primitive pan/zoom and brush domain binding are built on.
+   */
+  domainRaw?: Record<string, unknown[]>
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +107,7 @@ export interface CompiledChart {
   title?: CompiledTitle
   /** Cartographic projections referenced by geo marks / the geoshape transform. */
   projections?: CompiledProjection[]
+  /** Signal values supplied by the host (not serialized). */
   /** @internal Partial re-evaluation memo: the last scene's top-level groups. */
   __prevItems?: unknown
   /** Root-level trellis layout options (vega spec `layout`), when present. */
@@ -408,6 +415,17 @@ export interface EncodeConditional {
 // whose `items` are per-datum scene items; other groups (axis/legend/frame) nest.
 // ---------------------------------------------------------------------------
 
+/** Plain scale snapshot attached to scenes for the scene-level differential. */
+export interface ScaleSnapshot {
+  name: string
+  type: string
+  domain: unknown[]
+  range: unknown[]
+  bandwidth?: number
+  /** Endpoint samples for interpolating (colour) scales, where d3 reports [0,1]. */
+  samples?: [unknown, unknown]
+}
+
 export interface SceneRoot {
   width: number
   height: number
@@ -438,6 +456,8 @@ export interface SceneRoot {
   name?: string
   ariaRole?: string
   ariaLabel?: string
+  /** @internal Resolved scales in this scope (scene-differential metadata). */
+  __scales?: ScaleSnapshot[]
 }
 
 export interface SceneGroup extends SceneItem {
@@ -451,6 +471,16 @@ export interface SceneGroup extends SceneItem {
   clipPathD?: string
   /** @internal The mark's source dataset, used to match a mark to its previous group. */
   __source?: string
+  /** Guide orientation (`left`/`right`/`top`/`bottom`) for axes. */
+  orient?: string
+  /** Guide scale name for axes/legends (accessibility metadata). */
+  scale?: string
+  /** Resolved guide title (accessibility metadata). */
+  title?: string
+  /** Legend kind (`gradient`/`symbol`) for caption construction. */
+  legendType?: string
+  /** @internal Resolved scales in this nested scope (scene-differential metadata). */
+  __scales?: ScaleSnapshot[]
 }
 
 export type SceneNode = SceneGroup
@@ -520,6 +550,8 @@ export interface SceneItem {
   // accessibility
   ariaRole?: string
   ariaLabel?: string
+  ariaRoleDescription?: string
+  aria?: boolean
   description?: string
   // line/area path continuity
   defined?: boolean

@@ -19,7 +19,13 @@
     "vectors": "pnpm --filter @aster/conformance run vectors",
     "check": "pnpm check:deps && pnpm typecheck && pnpm build && pnpm test && pnpm conformance && pnpm --filter @aster/benchmarks run budget",
     "conformance-vl": "pnpm --filter @aster/conformance run conformance-vl",
-    "conformance:browser": "pnpm --filter @aster/conformance run conformance:browser"
+    "conformance:browser": "pnpm --filter @aster/conformance run conformance:browser",
+    "fuzz": "pnpm --filter @aster/conformance run fuzz",
+    "fuzz:replay": "pnpm --filter @aster/conformance run fuzz:replay",
+    "sweep-vl": "pnpm --filter @aster/conformance run sweep-vl",
+    "sweep-vega": "pnpm --filter @aster/conformance run sweep-vega",
+    "sweep-signals": "pnpm --filter @aster/conformance run sweep-signals",
+    "scene-diff": "pnpm --filter @aster/conformance run scene-diff"
   },
   "devDependencies": {
     "esbuild": "~0.25.12",

@@ -82,15 +82,43 @@ const { scene, svg, error, session } = useChart(spec, { width, height, data })
 ```
 
 `limits` (and `renderSpec(spec, { limits })`) provides typed
-`AsterLimitError` budgets for untrusted specs; see `packages/core/src/limits.ts`.
-A headless session is also exported as `createChartSession` from
-`@aster/core/dom`.
+`AsterLimitError` budgets for untrusted specs, including a wall-clock deadline
+(`maxTimeMs`); see [docs/LIMITS.md](docs/LIMITS.md). A headless session is also
+exported as `createChartSession` from `@aster/core/dom`.
+
+`<Chart>` also accepts Vega-Lite directly, a promise spec under `<Suspense>`, a
+controlled `view`/`selection`, and an imperative ref (`ChartHandle`). Pan/zoom,
+keyboard navigation and the accessible scene tree work on both SVG and canvas.
+SSR uses `renderChartToStaticMarkup` + `hydrateChart` when the server `<svg>` node must
+be preserved, and `useChartWorker` offloads compile/evaluate/render when a Worker is
+available.
+
+## Documentation
+
+- [API](docs/API.md) — core, React and Vega-Lite entry points
+- [Interaction](docs/INTERACTION.md) — selection, pan/zoom, signals, accessibility
+- [Limits](docs/LIMITS.md) / [Errors](docs/ERRORS.md) — untrusted specs and typed failures
+- [Testing](docs/TESTING.md) — gates, fuzzing, reproducers
+- [Performance](docs/PERFORMANCE.md) / [Fonts](docs/FONTS.md)
+- [Release](docs/RELEASE.md) / [ADRs](docs/adr/README.md)
 
 ## Current Status / What Works
 
 **Conformance (real-Vega oracle, 419-spec corpus): 419/419.** The core pipeline (Vega spec → compile → evaluate → SVG, plus the React `<Chart>` wrapper) is diffed against the real Vega renderer on a 419-spec corpus (both raw Vega `*.vg.json` and Vega-Lite `*.vl.json`, confirming the vega-lite compile path). This covers marks (line/area/bar/rule/scatter/symbol/rect/text/arc/path/image/trail/shape, with curves/gradients/corner-radii), band/linear/log/pow/time scales, axes (ticks/grid/labels/titles/`labelOverlap`), legends (gradient and symbol, at any corner), titles, config/style defaults, full vega expression surface, nested scopes, trellis/facet-2d layout, contour, geo projections, and URL data loaders.
 
 **Schema sweeps (27,513 Vega-Lite property/value cases): 99.7% (27,418 ok, 0 differ).** For every property the Vega-Lite schema declares, a small chart is rendered through both engines and the SVG is diffed. Every comparable case now matches; the 95 non-ok cases are 40 specs both engines refuse, 21 oracle crashes/refusals (invalid SVG shapes/radii and degenerate `nice`/padding scale specs), and 34 nondeterministic `ci0`/`ci1` bootstrap aggregates (`Math.random` inside vega), tracked in the sweep family scoreboard (`pnpm sweep-vl`).
+
+**Scene differential (`pnpm scene-diff`): 419/419.** Beyond the serialized SVG, the
+resolved scales per scope (domain/range/bandwidth/colour endpoints), mark/item
+multisets and overlap paint order are compared directly against Vega's scenegraph.
+
+**Vega schema sweep: 7,538/7,549 with zero comparable differences.** The remaining
+11 cases are 8 specs both engines refuse and 3 cases the Vega oracle itself crashes
+on; see `pnpm sweep-vega`.
+
+**Vega-Lite schema sweep: 27,418/27,513 with zero comparable differences.** The
+remaining cases are 40 both-refused, 21 oracle crashes/refusals and 34 pinned
+nondeterministic bootstrap aggregates; see `pnpm sweep-vl`.
 
 **Browser conformance gate (`pnpm conformance:browser`): 419/419.** The same oracle protocol run in a real Chromium page (vega-embed SVG renderer with live canvas text metrics, vs `renderSpec`), because the Node harness runs both engines in jsdom where neither can measure text.
 
