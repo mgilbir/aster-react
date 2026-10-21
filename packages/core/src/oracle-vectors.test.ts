@@ -217,23 +217,61 @@ const intervals: Record<string, TimeInterval> = {
 
 /**
  * Colour math goes through cbrt/pow/HSL round-trips whose last bits differ
- * between CPUs and Node/ICU builds (CI runs a different V8 than some dev
- * machines). Compare at 12 significant digits — orders of magnitude below
- * anything a renderer can express — instead of bit-exact, including the
- * numbers embedded in `formatHsl`/`formatRgb` strings.
+ * between CPUs and Node/ICU builds (CI runs Node 22, some dev machines run a
+ * newer V8). Near-zero channels amplify that into the ~1e-8 range (a hue is a
+ * ratio of two tiny numbers), so colour vectors compare with a small
+ * absolute+relative tolerance instead of bit-exact — still ~1e-6, orders of
+ * magnitude below 8-bit colour resolution.
  */
-function quantize(v: unknown): unknown {
-  if (typeof v === 'number') return Number.isFinite(v) ? Number(v.toPrecision(12)) : v
-  if (typeof v === 'string') {
-    return v.replace(/-?\d+\.\d+(?:e[+-]?\d+)?/gi, (m) => String(Number(Number(m).toPrecision(12))))
+const NUM_TOKEN = /[-+]?\d+\.\d+(?:e[+-]?\d+)?/gi
+
+function splitNums(s: string): Array<{ text?: string; num?: number }> {
+  const parts: Array<{ text?: string; num?: number }> = []
+  let last = 0
+  for (const m of s.matchAll(NUM_TOKEN)) {
+    const at = m.index ?? 0
+    if (at > last) parts.push({ text: s.slice(last, at) })
+    parts.push({ num: Number(m[0]) })
+    last = at + m[0].length
   }
-  if (Array.isArray(v)) return v.map(quantize)
-  if (v !== null && typeof v === 'object') {
-    const o: Record<string, unknown> = {}
-    for (const k of Object.keys(v)) o[k] = quantize((v as Record<string, unknown>)[k])
-    return o
+  if (last < s.length) parts.push({ text: s.slice(last) })
+  return parts
+}
+
+function expectClose(actual: unknown, expected: unknown, path = '$'): void {
+  if (typeof expected === 'number' && typeof actual === 'number') {
+    if (Number.isNaN(expected)) { expect(Number.isNaN(actual), path).toBe(true); return }
+    if (!Number.isFinite(expected)) { expect(actual, path).toBe(expected); return }
+    expect(
+      Math.abs(actual - expected),
+      `${path}: ${actual} vs ${expected}`,
+    ).toBeLessThanOrEqual(1e-6 + 1e-9 * Math.abs(expected))
+    return
   }
-  return v
+  if (typeof expected === 'string' && typeof actual === 'string') {
+    const got = splitNums(actual)
+    const want = splitNums(expected)
+    expect(got.length, path).toBe(want.length)
+    for (let i = 0; i < want.length; i++) {
+      const w = want[i]!
+      if (w.text !== undefined) expect(got[i]!.text, `${path}[${i}]`).toBe(w.text)
+      else expectClose(got[i]!.num, w.num, `${path}[${i}]`)
+    }
+    return
+  }
+  if (Array.isArray(expected) && Array.isArray(actual)) {
+    expect(actual.length, path).toBe(expected.length)
+    expected.forEach((v, i) => expectClose(actual[i], v, `${path}[${i}]`))
+    return
+  }
+  if (expected !== null && typeof expected === 'object' && actual !== null && typeof actual === 'object') {
+    expect(Object.keys(actual as object).sort(), path).toEqual(Object.keys(expected as object).sort())
+    for (const k of Object.keys(expected as object)) {
+      expectClose((actual as Record<string, unknown>)[k], (expected as Record<string, unknown>)[k], `${path}.${k}`)
+    }
+    return
+  }
+  expect(actual, path).toEqual(expected)
 }
 
 function colorFields(c: unknown): Record<string, unknown> {
@@ -342,7 +380,7 @@ for (const file of files) {
         const factory = colorFactories[name]
         if (!factory) throw new Error(`no port for color suite "${name}"`)
         expectSuite(name, suite, (args, want) => {
-          expect(quantize(enc(proj(call(factory, args))))).toEqual(quantize(want))
+          expectClose(enc(proj(call(factory, args))), want)
         })
         continue
       }
