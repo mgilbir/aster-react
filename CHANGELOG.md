@@ -30,8 +30,18 @@
   and canvas; 100k canvas frames dropped from ~52ms to ~16.7ms via incremental append painting (only new mark items are drawn; full repaints still fall back safely).
   The runner now includes a direct Vega `view.change` baseline on the identical spec
   and row stream (SVG/canvas, `run`/`runAsync`): at 100k points Vega needs ~170ms per
-  SVG frame vs aster's ~88ms and reports ~2.3% long frames / ~240 DOM mutations per
+  SVG frame vs aster's ~77ms and reports ~2.3% long frames / ~240 DOM mutations per
   append at 10k (aster: 0% long, ~1 mutation); both are frame-bound on canvas.
+- **No-op re-renders**: identical-content re-renders (fresh spec object, stable data)
+  went from 2.0–2.4ms with 2 DOM mutations to ~0.3ms with none (Vega wrappers
+  0.1–0.2ms). `<Chart>` no longer calls `getChartInfo()` (a second compile+evaluate)
+  from an effect: interaction/a11y metadata derives from the evaluated scene via
+  `chartInfoFromScene`. The markup string also leaves the props after the first
+  commit — React re-applies a present `dangerouslySetInnerHTML`, so the cached
+  string was making every "incremental" render re-parse the whole SVG. Mount skips
+  the now-redundant patch, canvas skips identical scenes, and `patchSceneDom` gained
+  an identity-prefix append path (O(appended) instead of re-walking siblings), which
+  also cut 100k-point SVG stream frames to ~77ms.
 - **Nested scopes / axes**: nested group marks now inherit outer scales (local names
   still shadow), so raw Vega specs that reference a parent `y` or colour scale render
   inside groups (population pyramid). Vega-Lite compilation now emits all grid axes

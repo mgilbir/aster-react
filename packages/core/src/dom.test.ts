@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
 import { compileChart, evaluateChart, renderSceneToSvg } from './index.js'
-import { patchSceneDom, sceneToDomDesc } from './addon-dom.js'
+import { patchSceneDom, renderSceneToDomElement, sceneToDomDesc } from './addon-dom.js'
 import type { SceneRoot } from './types.js'
 
 const barSpec = (seedOffset: number) => ({
@@ -129,5 +129,67 @@ describe('patchSceneDom', () => {
     reference.innerHTML = renderSceneToSvg(evalScene(2))
     const refDs = [...reference.querySelectorAll('g.mark-rect path')].map((p) => p.getAttribute('d'))
     expect(ds).toEqual(refDs)
+  })
+})
+
+describe('patchSceneDom append fast path', () => {
+  const rows = (n: number, from = 0): Array<{ x: number; y: number }> =>
+    Array.from({ length: n }, (_, i) => ({ x: ((from + i) % 97) / 97, y: ((from + i) % 23) / 2 }))
+
+  const spec = {
+    width: 200, height: 100, padding: 0, autosize: 'none',
+    data: [{ name: 't', values: [] as Array<{ x: number; y: number }> }],
+    scales: [
+      { name: 'x', type: 'linear', domain: [0, 1], range: [0, 200] },
+      { name: 'y', type: 'linear', domain: [0, 12], range: [100, 0] },
+    ],
+    marks: [{
+      type: 'symbol', from: { data: 't' },
+      encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 20 } } },
+    }],
+  }
+
+  it('creates only the new item and leaves existing elements untouched', async () => {
+    const { createChartStream } = await import('./stream.js')
+    const stream = createChartStream(spec as never, { capacity: 4 })
+    stream.push({ data: { t: rows(200) } })
+    const first = stream.flush()!
+    const svg = renderSceneToDomElement(first.scene)
+    const group = svg.querySelector('g.mark-symbol')!
+    expect(group.childElementCount).toBe(200)
+    const firstChild = group.firstElementChild
+    const tailChild = group.lastElementChild
+
+    stream.push({ append: { t: rows(1, 200) } })
+    const next = stream.flush()!
+
+    // Count patcher bookkeeping writes (LAST.set per visited element) as a proxy
+    // for how much of the tree was walked: 200+ means the append re-walked the
+    // whole mark group, a handful means it went straight to the tail.
+    const original = WeakMap.prototype.set
+    let sets = 0
+    WeakMap.prototype.set = function (this: WeakMap<object, unknown>, ...args: [object, unknown]) {
+      sets++
+      return original.apply(this, args as never)
+    }
+    try {
+      patchSceneDom(svg, next.scene)
+    } finally {
+      WeakMap.prototype.set = original
+    }
+
+    expect(group.childElementCount).toBe(201)
+    expect(group.firstElementChild).toBe(firstChild)
+    expect(group.children[199]).toBe(tailChild)
+    expect(sets).toBeLessThan(30)
+
+    // The appended element matches a full render of the same scene.
+    const reference = document.createElement('div')
+    reference.innerHTML = renderSceneToSvg(next.scene)
+    const refLast = reference.querySelector('g.mark-symbol')!.lastElementChild!
+    const gotLast = group.lastElementChild!
+    expect(gotLast.tagName).toBe(refLast.tagName)
+    expect([...gotLast.attributes].map((a) => [a.name, a.value]).sort())
+      .toEqual([...refLast.attributes].map((a) => [a.name, a.value]).sort())
   })
 })

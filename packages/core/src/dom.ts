@@ -579,6 +579,20 @@ function patchEl(el: Element, desc: DomDesc): void {
   // access), which makes an index walk O(n^2) over a mark's children — enough
   // to dominate every large-chart update. Linked traversal is O(1) per step.
   const have = el.childElementCount
+  // Append-only fast path: reused mark items keep their cached descriptors, so
+  // when the previous patch's children are an exact identity prefix of the new
+  // ones (and the DOM still has exactly those children) only the tail is new.
+  // Without this, an append re-walks every sibling — O(n) per append, which is
+  // what kept 100k-point SVG streams off the frame budget.
+  const lastChildren = last?.children
+  if (lastChildren != null && have === lastChildren.length && want.length > lastChildren.length) {
+    let i = 0
+    while (i < lastChildren.length && want[i] === lastChildren[i]) i++
+    if (i === lastChildren.length) {
+      for (let j = i; j < want.length; j++) el.appendChild(createEl(want[j]!, el.ownerDocument))
+      return
+    }
+  }
   const n = Math.min(have, want.length)
   let cur = el.firstElementChild
   for (let i = 0; i < n && cur != null; i++, cur = cur.nextElementSibling) {

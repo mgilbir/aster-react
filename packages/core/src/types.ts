@@ -500,6 +500,12 @@ export interface SceneRoot {
   ariaLabel?: string
   /** @internal Resolved scales in this scope (scene-differential metadata). */
   __scales?: ScaleSnapshot[]
+  /**
+   * @internal Live scales for this evaluation, so hosts can derive `ChartInfo`
+   * (interaction, hit tests) from an already-evaluated scene without compiling
+   * and evaluating a second time. Not serializable — stripped by worker clones.
+   */
+  __scaleMap?: Map<string, unknown>
 }
 
 export interface SceneGroup extends SceneItem {

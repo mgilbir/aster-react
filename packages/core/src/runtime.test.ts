@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { compileChart } from './compiler.js'
-import { evaluateChart, getChartInfo } from './runtime.js'
+import { chartInfoFromScene, evaluateChart, getChartInfo } from './runtime.js'
 import { renderSceneToSvg } from './index.js'
 
 /** Deterministic PRNG for the differential fuzz test. */
@@ -734,5 +734,30 @@ describe('per-datum differential update', () => {
     expect((after[0] as { datum?: { y2?: number } }).datum?.y2).toBe(beforeDatums[0]) // output row reused
     expect(after[1]).not.toBe(before[1]) // changed item re-encoded
     expect((after[1] as { datum?: { y2?: number } }).datum?.y2).toBe(8) // v=4 -> y2=8
+  })
+})
+
+describe('chartInfoFromScene', () => {
+  it('matches getChartInfo without a second compile/evaluate', () => {
+    const spec = {
+      width: 300, height: 200, padding: { top: 4, right: 6, bottom: 8, left: 10 },
+      data: [{ name: 't', values: [{ x: 0, y: 1 }, { x: 1, y: 3 }] }],
+      scales: [
+        { name: 'x', type: 'linear', domain: [0, 1], range: [0, 300] },
+        { name: 'y', type: 'linear', domain: [0, 3], range: [200, 0] },
+      ],
+      marks: [{ type: 'line', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' } } } }],
+    }
+    const chart = compileChart(spec as never)
+    const scene = evaluateChart(chart)
+    const info = chartInfoFromScene(scene)
+    const reference = getChartInfo(spec as never)
+    expect(info.width).toBe(reference.width)
+    expect(info.height).toBe(reference.height)
+    expect(info.padding).toEqual(reference.padding)
+    // Live scales, not just snapshots: hosts use them for invert/bandwidth.
+    const inv = (info.scales.get('x') as unknown as { invert(v: number): number }).invert(150)
+    expect(inv).toBeCloseTo(0.5, 6)
+    expect((info.scales.get('y') as unknown as { bandwidth?: () => number }).bandwidth).toBeUndefined()
   })
 })

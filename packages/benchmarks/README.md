@@ -126,7 +126,7 @@ Headless Chromium, 1 append/frame for 3 s, 800×500 symbol chart, medians:
 | 10k | canvas | 16.7 ms, 0% long | 16.7 ms, 0% long | frame-bound on both |
 | 20k | SVG | 16.6 ms, 2% long | 31.6 ms, 100% long | crossover: vega leaves the frame budget |
 | 50k | SVG | 44 ms, 95% long | 81 ms, 100% long | ~1.8x |
-| 100k | SVG | 88 ms, 97% long | 170 ms, 100% long | ~2x; a single append on a 100k chart writes ~400k DOM attributes (≈4 per node) vs 1 for aster |
+| 100k | SVG | 77 ms, 94% long | 170 ms, 100% long | ~2.2x; a single append on a 100k chart writes ~400k DOM attributes (≈4 per node) vs 1 for aster |
 | 100k | canvas | 16.7 ms, 0% long | 16.7 ms (`run`) / 16.8 ms, 9.7% long (`runAsync`) | incremental append painting keeps both frame-bound |
 
 The mutation column is the interesting part of the SVG result: Vega's
@@ -144,3 +144,54 @@ domain census in O(appended).
 
 Numbers are machine-dependent; the ratios and the shape (frame-bound below
 ~10k, paint-bound above ~50k for SVG) are what to compare.
+
+
+## No-op re-renders (identical content)
+
+`bench:browser`'s `stableRerenders` probe mounts a chart, then re-renders it with a
+fresh spec object and the *same* data array. The gap was aster's largest
+aster-specific regression (2.2–6.9 ms vs 0.1–0.2 ms for the Vega wrappers); two
+causes were found and fixed:
+
+1. `<Chart>` called `getChartInfo()` in an effect — a second `compileChart` +
+   `evaluateChart` of the whole spec — and then `setState`, forcing an extra React
+   pass. Interaction/a11y metadata now comes from the scene the session already
+   returned (`chartInfoFromScene`), and the extra state/effect is gone.
+2. `dangerouslySetInnerHTML` stayed in the props after the first commit (the memo
+   held its cached string), and React re-applies a present `dangerouslySetInnerHTML`
+   on every update — so every "incremental" no-op render was in fact re-parsing the
+   whole SVG. The markup now leaves the props after the first commit; later updates
+   patch the existing tree, and a scene whose DOM is already current is skipped
+   entirely (SVG and canvas).
+
+Result (line @ 1000 pts, headless Chromium, medians): stable re-render
+2.0–2.4 ms → **0.3 ms**, DOM mutations 2 → **0**, first render 4.6–6.7 ms → 2.3–3.3 ms
+(reactVega 3.2, embedHook 2.3). At 10k scatter points aster now mounts in 41–47 ms
+vs 56–57 ms for both Vega paths.
+
+## Why 100k-point SVG streams are still slow (and what would fix it)
+
+The engine side is already O(appended): `flush()` costs 0.2–0.3 ms and the SVG
+patcher was made to append-only too (the previous patch's descriptor array is
+reused as an identity prefix, so only the new items are created instead of walking
+100k siblings). The remaining ~77 ms/frame is the browser:
+
+| raw DOM experiment (100k-node SVG, append 1 node/frame) | median frame |
+|---|---|
+| `<path d="…absolute…">` | ~45 ms |
+| `<circle cx cy r>` | ~46 ms |
+| `<path transform="translate(x,y)">` (what Vega emits for symbols) | ~145 ms |
+| `<use x y href="#sym">` | ~207 ms |
+| any of the above + `contain: layout paint` / `content-visibility: auto` | unchanged |
+
+So per-item `transform` (and `<use>`) is what makes large SVG scenes expensive to
+mutate, and no patcher-level change can go below the ~45 ms floor. Getting SVG
+streams back on the frame budget needs fewer nodes:
+
+- batch dense same-paint mark runs into one `<path>` (canvas already batches its
+  draw calls) and hit-test through the scene index instead of DOM attributes;
+- or emit absolute-coordinate `<circle>`/path items instead of per-item transforms.
+
+Both intentionally diverge from Vega's SVG DOM (aster currently matches it
+pixel- and string-for-string via the conformance corpus), so they should be
+opt-in render modes with pixel-parity (not string-parity) gates.

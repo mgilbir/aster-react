@@ -1,6 +1,7 @@
 import * as React from 'react'
 import {
   buildA11yTree,
+  chartInfoFromScene,
   getChartInfo,
   renderSceneToSvg,
   AsterLimitError,
@@ -561,11 +562,21 @@ function ChartView({
     if (incremental && hasPatchedRef.current) return null
     return renderSceneToSvg(displayScene)
   }, [incremental, renderer, displayScene, sceneOverride])
+  // After the first commit the markup must leave the props entirely. The memo
+  // above is keyed on the scene, so on an identical-content re-render it would
+  // return its cached string and React (which re-applies a present
+  // `dangerouslySetInnerHTML`) would re-parse the whole SVG every render —
+  // the exact cost incremental mode exists to avoid.
+  const domMarkup = incremental && hasPatchedRef.current ? null : markup
 
+  // Scene whose DOM we know is current (rendered as markup or patched here).
+  const domSceneRef = React.useRef<SceneRoot | null>(null)
   const svgHostRef = React.useRef<HTMLDivElement>(null)
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
   // Last canvas frame: append-only scenes paint only the new mark items.
   const canvasSnapshotRef = React.useRef<CanvasSceneSnapshot | null>(null)
+  // Scene whose pixels are on the canvas (skip repaints for identical scenes).
+  const canvasSceneRef = React.useRef<SceneRoot | null>(null)
   // Canvas-mode hit testing: the tooltip resolves marks through the scene hit
   // index instead of DOM attributes (canvas has none). Rebuilt per scene.
   const hitIndexRef = React.useRef<{ idx: number; index: HitIndex | null }>({ idx: 0, index: null })
@@ -610,14 +621,26 @@ function ChartView({
     if (!incremental && sceneOverride === undefined) return
     const host = svgHostRef.current
     if (!host) return
+    // This commit rendered the full SVG from this exact scene and the browser
+    // just parsed it, so the tree already matches. Re-walking it with the
+    // patcher would be pure cost — and it is O(all items), the worst place to
+    // pay it (mount is where a large scene hurts most).
+    if (domMarkup != null) {
+      hasPatchedRef.current = true
+      domSceneRef.current = displayScene
+      return
+    }
     const existing = host.firstElementChild
     if (incremental && existing && existing.tagName.toLowerCase() === 'svg') {
-      patchSceneDom(existing, displayScene)
+      // The DOM already reflects this exact scene (the commit that dropped the
+      // markup prop): patching would re-walk everything to write nothing.
+      if (domSceneRef.current !== displayScene) patchSceneDom(existing, displayScene)
     } else {
       host.replaceChildren(renderSceneToDomElement(displayScene))
     }
+    domSceneRef.current = displayScene
     hasPatchedRef.current = true
-  }, [incremental, displayScene, sceneOverride])
+  }, [incremental, displayScene, sceneOverride, domMarkup])
 
   // Canvas backend: size the backing store for devicePixelRatio and redraw the
   // whole scene whenever it changes (cheap relative to SVG serialization for
@@ -635,6 +658,9 @@ function ChartView({
       canvas.height = Math.round(h * dpr)
       resized = true
     }
+    // Identical scene: the canvas already shows it. Re-encoding/painting would
+    // be a full repaint for zero visual change (the common no-op re-render).
+    if (!resized && canvasSceneRef.current === displayScene) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     // Append-only frames draw immediately: a handful of new items is cheaper
@@ -644,12 +670,14 @@ function ChartView({
     const prev = resized ? null : canvasSnapshotRef.current
     if (prev != null && renderSceneToCanvasAppend(prev, displayScene, ctx, { dpr })) {
       canvasSnapshotRef.current = snapshotCanvasScene(displayScene)
+      canvasSceneRef.current = displayScene
       return
     }
     const draw = (): void => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
       renderSceneToCanvas(displayScene, ctx, { dpr })
       canvasSnapshotRef.current = snapshotCanvasScene(displayScene)
+      canvasSceneRef.current = displayScene
     }
     if (typeof requestAnimationFrame === 'function') {
       const id = requestAnimationFrame(draw)
@@ -662,27 +690,35 @@ function ChartView({
     || selection !== undefined || onSelectionChange != null
   const hasInteraction = hasSelection || panZoomEnabled
   const chartInfoRef = React.useRef<ChartInfo | null>(null)
-  const chartInfoCacheIdx = React.useRef(0)
 
-  // Recompute chart info when deps change
-  const [chartInfoKey, setChartInfoKey] = React.useState<number>(0)
+  // Chart metadata comes straight from the evaluated scene. `getChartInfo`
+  // compiles + evaluates a second time; doing that on every render was the
+  // whole cost of an identical-content re-render (a fresh spec object, stable
+  // data arrays). Scene-derived info is free when the session returns its
+  // cached scene, so a no-op re-render does no compile/evaluate/scale work.
+  const sceneInfo = React.useMemo<ChartInfo | null>(
+    () => (scene != null ? chartInfoFromScene(scene) : null),
+    [scene],
+  )
+  // Scenes that crossed a structured clone (worker streams) have no live scale
+  // handles. Guide labels still work (`buildA11yTree` rebuilds from the
+  // serialized snapshots); interaction needs invertible scales, so rebuild the
+  // metadata from the spec — once per spec/size, never per no-op render.
+  const missingSceneScales = scene != null && (scene as { __scaleMap?: unknown }).__scaleMap === undefined
+  const [fallbackInfo, setFallbackInfo] = React.useState<ChartInfo | null>(null)
   React.useEffect(() => {
-    // Interaction-only: without a selection handler the chart info is unused,
-    // and forcing a state update here would re-render (and re-commit the svg)
-    // a second time on every spec change.
-    if (!hasInteraction && a11y === false) return
+    if (!missingSceneScales || (!hasInteraction && a11y === false)) {
+      setFallbackInfo((prev) => (prev == null ? prev : null))
+      return
+    }
     let info: ChartInfo | null = null
     try {
       info = getChartInfo(spec, { width: renderWidth, height: renderHeight, domainRaw, limits, textMetrics })
     } catch { /* ignore */ }
-    chartInfoRef.current = info
-    chartInfoCacheIdx.current++
-    setChartInfoKey(chartInfoCacheIdx.current)
-  }, [hasInteraction, a11y, spec, renderWidth, renderHeight, domainRaw, limits, textMetrics])
-
-  // Memoize to avoid recalculating
-  const chartInfo = chartInfoRef.current ?? null
-  const _chartInfoDepKey = chartInfoKey // force re-read
+    setFallbackInfo((prev) => (prev === info ? prev : info))
+  }, [missingSceneScales, hasInteraction, a11y, spec, renderWidth, renderHeight, domainRaw, limits, textMetrics])
+  const chartInfo = (missingSceneScales ? fallbackInfo : null) ?? sceneInfo
+  chartInfoRef.current = chartInfo
 
   const selectionValue: SelectValue | null = select !== undefined
     ? select
@@ -912,9 +948,9 @@ function ChartView({
   )
   const a11yTree = React.useMemo(() => {
     if (!displayScene || a11yOpts == null) return null
-    const scales = (chartInfoRef.current?.scales ?? new Map()) as Map<string, unknown>
+    const scales = (chartInfo?.scales ?? new Map()) as Map<string, unknown>
     return buildA11yTree(displayScene, scales, a11yOpts)
-  }, [displayScene, a11yOpts, chartInfoKey])
+  }, [displayScene, a11yOpts, chartInfo])
   const a11yNodesRef = React.useRef<A11yNode[]>([])
   a11yNodesRef.current = a11yTree?.nodes ?? []
 
@@ -1160,7 +1196,7 @@ function ChartView({
           ref={svgHostRef}
           aria-hidden={a11yTree != null ? true : undefined}
           style={{ position: 'relative', zIndex: 1 }}
-          {...(markup != null ? { dangerouslySetInnerHTML: { __html: markup } } : {})}
+          {...(domMarkup != null ? { dangerouslySetInnerHTML: { __html: domMarkup } } : {})}
         />
       )}
       {bindDefs.length > 0 && (

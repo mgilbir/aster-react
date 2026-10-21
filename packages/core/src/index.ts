@@ -23,7 +23,7 @@ export type {
   VgSpec,
 } from './types.js'
 export { compileChart } from './compiler.js'
-export { evaluateChart, getChartInfo } from './runtime.js'
+export { chartInfoFromScene, evaluateChart, getChartInfo } from './runtime.js'
 export {
   createChartStream,
   AsterStreamBackpressureError,

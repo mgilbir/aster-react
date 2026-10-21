@@ -7,6 +7,13 @@ a chart pays only for the features it imports.
 
 - **Session caching**: `createChartSession` fingerprints the spec skeleton, dataset
   identities, size, signals and `domainRaw`; identical inputs return the same scene.
+  `<Chart>` derives its interaction/a11y metadata from that scene
+  (`chartInfoFromScene`) instead of calling `getChartInfo`, which used to compile and
+  evaluate a second time on every render. Combined with dropping the
+  `dangerouslySetInnerHTML` prop after the first commit (React re-applies a present
+  one, so a cached markup string made every no-op render re-parse the whole SVG), an
+  identical-content re-render now costs ~0.3ms with zero DOM mutations (1k–10k
+  points, measured in `pnpm bench:browser`; Vega's wrappers: 0.1–0.2ms).
 - **Per-datum updates**: sessions diff replaced immutable source arrays automatically
   (`autoChanges`), then re-encode only changed rows and reuse unchanged scene items;
   explicit `dataChanges` remains available for custom batching. The source/transform
@@ -31,10 +38,15 @@ a chart pays only for the features it imports.
   append-only streamed scenes paint just the new mark items synchronously. In headless Chromium, a 10k-point stream at one append/frame holds
   ~16.7ms median frames with 0% long frames on both SVG and canvas; 100k points
   holds ~16.7ms on canvas (only the appended items are painted) while SVG is
-  ~86ms per frame, the remaining scaling boundary. The same benchmark now runs a
+  ~77ms per frame, the remaining scaling boundary. That SVG cost is browser-side:
+  appending one node to a 100k-node SVG costs ~45ms/frame in headless Chromium even
+  with no framework involved, and ~145ms when every item carries a
+  `transform="translate(…)"` (which is how Vega — and therefore aster — emits
+  symbols). `contain`/`content-visibility` do not help; fewer nodes or
+  absolute-coordinate items would, at the cost of SVG-DOM parity with Vega. The same benchmark now runs a
   direct Vega baseline on the identical spec/rows
   (`view.change('t', changeset().insert(rows)).run()`): at 100k points it needs
-  ~170ms per frame on SVG (aster ~88ms, ~2x faster) and is frame-bound on canvas
+  ~170ms per frame on SVG (aster ~77ms, ~2.2x faster) and is frame-bound on canvas
   like aster; at 10k both are frame-bound, but Vega reports ~2.3% long frames and
   ~240 DOM mutations per append versus ~1 for aster. Compute only
   (`pnpm bench:incremental`, `renderer: 'none'`) aster's append is ~13x cheaper than
@@ -45,7 +57,13 @@ a chart pays only for the features it imports.
   provably cannot move them; append-only continuous updates patch the min/max census
   in O(appended) instead of rescanning the dataset.
 - **DOM patching**: the first render emits the full SVG for SSR; later updates patch
-  attributes in place instead of re-parsing the tree.
+  attributes in place instead of re-parsing the tree. The mount commit skips the
+  patcher (the browser just parsed that markup) and an append reuses the previous
+  patch's descriptors as an identity prefix, so only the new items are created —
+  an O(appended) SVG patch, not a re-walk of every sibling.
+- **No-op renders**: identical content is free all the way through — the session
+  returns the cached scene, chart info/a11y derive from it, and the SVG/canvas
+  effects skip the DOM/canvas when the scene object is unchanged.
 - **Canvas**: full repaint is scheduled on `requestAnimationFrame` with DPR backing.
 - **Workers**: `useChartWorker` moves compile/evaluate/render off the main thread and
   falls back to synchronous execution when workers are unavailable.

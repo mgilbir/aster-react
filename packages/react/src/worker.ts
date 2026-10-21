@@ -48,6 +48,7 @@ export function cloneableScene(scene: SceneRoot): SceneRoot {
   delete (clone as { compiled?: unknown }).compiled
   delete (clone as { signalParams?: unknown }).signalParams
   delete (clone as { __scales?: unknown }).__scales
+  delete (clone as { __scaleMap?: unknown }).__scaleMap
   for (const item of clone.items) strip(item)
   return clone
 }

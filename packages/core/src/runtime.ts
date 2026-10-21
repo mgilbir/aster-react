@@ -1211,10 +1211,34 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput = {}): Scen
   ;(scene as unknown as { compiled?: unknown }).compiled = ctx.chart
   ;(scene as unknown as { __itemGen?: number }).__itemGen = (chart as unknown as { __gen?: number }).__gen
   ;(scene as unknown as { __scales?: unknown }).__scales = snapshotScales(ctx.scales)
+  ;(scene as unknown as { __scaleMap?: unknown }).__scaleMap = ctx.scales
   // Partial re-evaluation memo
   ;(chart as unknown as { __prevItems?: SceneGroup[] }).__prevItems = items
   if (ctx._defs.length) scene.defs = ctx._defs
   return scene
+}
+
+/**
+ * Chart metadata (size, padding, live scales) derived from an already-evaluated
+ * scene. `getChartInfo` compiles + evaluates a second time; hosts that already
+ * hold a scene (every `<Chart>` render does) should use this instead — on an
+ * unchanged scene it is free, so identical-content re-renders stay sub-ms.
+ */
+export function chartInfoFromScene(scene: SceneRoot): ChartInfo {
+  const chart = (scene as { compiled?: CompiledChart }).compiled
+  const scales = (scene as { __scaleMap?: Map<string, Scale> }).__scaleMap
+  const padding = scene.padding ?? chart?.padding ?? { top: 0, right: 0, bottom: 0, left: 0 }
+  return {
+    // `ChartInfo` carries the plot (content) size — pan/zoom and brushing map
+    // pixels against it — not the padded document size.
+    width: (scene as { plotWidth?: number }).plotWidth
+      || Math.max(0, scene.width - padding.left - padding.right),
+    height: (scene as { plotHeight?: number }).plotHeight
+      || Math.max(0, scene.height - padding.top - padding.bottom),
+    padding,
+    // Reconstruct from the live map when a scene came from a worker/SSR clone.
+    scales: scales ?? new Map(),
+  }
 }
 
 /**
