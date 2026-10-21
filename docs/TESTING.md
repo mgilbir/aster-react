@@ -51,3 +51,9 @@ both schema sweeps, 3000 fuzz seeds and the reproducer replay.
 Keep failures small and deterministic: no `Math.random` in specs, no clock-dependent
 expressions, and no unseeded bootstrap aggregates. Pin dates through data values or
 `datetime(...)` expressions.
+
+`pnpm conformance:canvas` renders the corpus plus custom-font/multi-line fixtures
+through both canvas backends in headless Chromium (also `--browser=firefox|webkit`)
+and pixel-diffs them (1px-neighbourhood, 4% ratio / 2.5 mean tolerance). It gates canvas paint order,
+path replay and live text metrics; the recorded/jsdom canvas differential stays in
+`packages/core/src/canvas.test.ts`.

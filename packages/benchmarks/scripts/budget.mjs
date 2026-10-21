@@ -12,26 +12,28 @@ import { fileURLToPath } from 'node:url'
 // base bundle fails a named row instead of being hidden by one aggregate.
 //
 // Measured 2026-10 (gzip, minified; react/react-dom external):
-//   @aster/core          102.4 kB
-//   @aster/core/dom      102.4 kB
-//   @aster/core/canvas    12.1 kB
+//   @aster/core          109.0 kB
+//   @aster/core/dom      110.3 kB
+//   @aster/core/canvas    12.3 kB
 //   @aster/core/hit        1.5 kB
 //   @aster/core/signals   28.1 kB
-//   @aster/react         142.3 kB (includes the from-scratch VL compiler)
+//   @aster/react         156.0 kB (includes the from-scratch VL compiler)
 //
 // History of the core floor: the 80 kB budget was re-baselined repeatedly as
 // the engine took ownership of its stack (ADR 0001): colour (+3.5), calendar
 // (+1.8), format (+4.7), parity tails (+4). The a11y tree (+2.3) and the
-// wall-clock limiter (+0.3) are the R10/R12 additions. The budget's job is
+// wall-clock limiter (+0.3) are the R10/R12 additions; the stream API and
+// length-changing pulse propagation (+~2) plus the streaming React components
+// (+~4) are the R13 additions. The budget's job is
 // regression detection, so each entry gets measured headroom rather than a
 // number that no longer describes the library.
 const BUDGETS = {
-  '@aster/core': 110 * 1024,
-  '@aster/core/dom': 110 * 1024,
+  '@aster/core': 112 * 1024,
+  '@aster/core/dom': 112 * 1024,
   '@aster/core/canvas': 20 * 1024,
   '@aster/core/hit': 6 * 1024,
   '@aster/core/signals': 36 * 1024,
-  '@aster/react': 155 * 1024,
+  '@aster/react': 159 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

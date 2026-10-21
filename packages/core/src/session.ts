@@ -197,6 +197,35 @@ export function createChartSession(): ChartSession {
   let lastPulse: DataPulse | null = null
 
   const withAutoPulse = (spec: VgSpec, input: RuntimeInput, currentRaw: Map<string, unknown>): { input: RuntimeInput; pulse: DataPulse } => {
+    if (input.dataPulse) {
+      const datasets = new Map<string, never>()
+      const structural = new Set<string>()
+      const sameLength: Record<string, number[]> = {}
+      for (const [name, p] of Object.entries(input.dataPulse)) {
+        if (!p.from) sameLength[name] = p.changed ?? []
+        else structural.add(name)
+        datasets.set(name, {
+          name,
+          changed: p.changed ?? [],
+          sameLength: !p.from,
+          added: p.added?.[0] ?? null,
+          removed: p.removed?.[0] ?? null,
+          ...(p.from ? { from: p.from } : {}),
+          ...(p.to ? { to: p.to } : {}),
+          ...(p.added ? { addedRanges: p.added } : {}),
+          ...(p.removed ? { removedRanges: p.removed } : {}),
+          ...(p.appendOnly ? { appendOnly: true, baseLength: p.baseLength } : {}),
+        } as never)
+      }
+      return {
+        input: {
+          ...input,
+          ...(Object.keys(sameLength).length ? { dataChanges: sameLength } : {}),
+          ...(structural.size ? { changedDatasets: [...structural] } : {}),
+        },
+        pulse: { datasets: datasets as never, structural },
+      }
+    }
     if (input.dataChanges) {
       return { input, pulse: pulseOfExplicit(input.dataChanges) }
     }
@@ -204,12 +233,27 @@ export function createChartSession(): ChartSession {
     const pulse = inferPulse(lastRaw, currentRaw)
     if (!pulse.datasets.size && !pulse.structural.size) return { input, pulse }
     const changes: Record<string, number[]> = {}
-    for (const [name, p] of pulse.datasets) if (p.sameLength) changes[name] = p.changed
+    const mapped: NonNullable<RuntimeInput['dataPulse']> = {}
+    for (const [name, p] of pulse.datasets) {
+      if (p.sameLength) {
+        changes[name] = p.changed
+      } else {
+        mapped[name] = {
+          changed: p.changed,
+          ...(p.from ? { from: p.from } : {}),
+          ...(p.to ? { to: p.to } : {}),
+          ...(p.addedRanges ? { added: p.addedRanges } : {}),
+          ...(p.removedRanges ? { removed: p.removedRanges } : {}),
+          ...(p.appendOnly ? { appendOnly: true, baseLength: p.baseLength } : {}),
+        }
+      }
+    }
     const changedDatasets = [...pulse.structural]
     return {
       input: {
         ...input,
         ...(Object.keys(changes).length ? { dataChanges: changes } : {}),
+        ...(Object.keys(mapped).length ? { dataPulse: mapped } : {}),
         ...(changedDatasets.length ? { changedDatasets } : {}),
       },
       pulse,
@@ -229,14 +273,14 @@ export function createChartSession(): ChartSession {
       // A per-datum changeset implies the data values changed (often in place, so
       // the array identity — and thus the fingerprint — is unchanged), so the
       // no-op cache must not short-circuit the differential re-evaluation.
-      if (!input.dataChanges && key === lastKey && lastScene) {
+      if (!input.dataChanges && !input.dataPulse && key === lastKey && lastScene) {
         lastRaw = currentRaw
         lastPulse = pulse
         return lastScene
       }
       // New row arrays with identical values are a no-op for the scene: the
       // inferred pulse is empty and everything else matches the previous run.
-      if (input.autoChanges !== false && !input.dataChanges && !pulse.datasets.size && !pulse.structural.size && metaKey === lastMetaKey && lastScene) {
+      if (input.autoChanges !== false && !input.dataChanges && !input.dataPulse && !pulse.datasets.size && !pulse.structural.size && metaKey === lastMetaKey && lastScene) {
         lastRaw = currentRaw
         lastPulse = pulse
         lastKey = key

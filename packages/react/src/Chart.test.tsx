@@ -55,6 +55,27 @@ describe('Chart', () => {
     expect(markup).toContain('<svg')
   })
 
+  it('renders bind controls for signal.bind', () => {
+    const spec = {
+      width: 100, height: 100,
+      signals: [{ name: 'year', value: 2000, bind: { input: 'range', min: 1850, max: 2000, step: 10 } }],
+      data: [{ name: 't', values: [{ x: 1, y: 1 }] }],
+      marks: [],
+    }
+    const markup = renderToString(<Chart spec={spec as never} />)
+    expect(markup).toContain('data-testid="chart-binds"')
+    expect(markup).toContain('type="range"')
+    expect(markup).toContain('year')
+  })
+
+  it('positions tooltip/a11y absolute children against the chart container', () => {
+    const spec = { width: 100, height: 100, data: [{ name: 't', values: [{ x: 1, y: 1 }] }], marks: [] }
+    const markup = renderToString(<Chart spec={spec as never} tooltip />)
+    // React serializes the inline style; the container must establish a
+    // containing block even without selection/pan interaction.
+    expect(markup).toContain('position:relative')
+  })
+
   it('container div has width 100% and height 100% inline style', () => {
     const spec = {
       $schema: 'https://vega.github.io/schema/vega/v6.json',

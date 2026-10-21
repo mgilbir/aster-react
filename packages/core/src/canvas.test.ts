@@ -5,7 +5,10 @@
  */
 import { describe, expect, it } from 'vitest'
 import { renderSceneToSvg } from './render.js'
-import { parsePathData, canonicalPath, renderSceneToCanvas, type CanvasLike, type GradientLike } from './canvas.js'
+import {
+  parsePathData, canonicalPath, renderSceneToCanvas, renderSceneToCanvasAppend, snapshotCanvasScene,
+  type CanvasLike, type GradientLike,
+} from './canvas.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { evaluateChart } from './runtime.js'
 import { compileChart } from './compiler.js'
@@ -339,7 +342,7 @@ function sceneOf(vg: unknown): SceneRoot {
 
 function canvasRecords(scene: SceneRoot): { records: DrawRecord[] } {
   const { ctx, records } = makeRecordingCtx()
-  renderSceneToCanvas(scene, ctx)
+  renderSceneToCanvas(scene, ctx, { batchSymbols: false })
   return { records }
 }
 
@@ -351,6 +354,14 @@ describe('parsePathData / canonicalPath', () => {
   it('parses absolute and relative commands', () => {
     const segs = parsePathData('M0,0h47v163h-49Z')
     expect(canonicalPath(segs)).toBe('M0,0H47V163H-2Z')
+  })
+
+  it('carries the current point across relative H/V commands', () => {
+    // Rect paths are M…h…v…h…Z; a V relative to an H must add to the previous
+    // y, not reset it to 0 (this made every rect paint from y-height).
+    const segs = parsePathData('M5,10h10v20h-10Z')
+    expect(canonicalPath(segs)).toBe('M5,10H15V30H5Z')
+    expect(canonicalPath(parsePathData('M0,0v10h10v-5Z'))).toBe('M0,0V10H10V5Z')
   })
 
   it('parses arc commands', () => {
@@ -488,6 +499,31 @@ function corpusVegaNames(): string[] {
   }
 }
 
+describe('incremental canvas append', () => {
+  it('paints only appended items and falls back when old items changed', () => {
+    const mark: SceneGroup = {
+      marktype: 'symbol', role: 'mark',
+      items: [{ x: 10, y: 10, size: 100, fill: '#4c78a8', __gen: 1 } as SceneItem],
+    }
+    const scene: SceneRoot = { width: 100, height: 100, items: [mark] } as SceneRoot
+    ;(scene as unknown as { __itemGen: number }).__itemGen = 1
+    const snap = snapshotCanvasScene(scene)
+    ;(mark.items as SceneItem[]).push({ x: 20, y: 20, size: 100, fill: '#4c78a8', __gen: 2 } as SceneItem)
+    ;(scene as unknown as { __itemGen: number }).__itemGen = 2
+    const first = makeRecordingCtx()
+    expect(renderSceneToCanvasAppend(snap, scene, first.ctx)).toBe(true)
+    expect(first.records.filter((r) => r.kind === 'fill')).toHaveLength(1)
+
+    // A changed old item invalidates the append fast path.
+    const prev2 = snapshotCanvasScene(scene)
+    ;(mark.items as SceneItem[])[0] = { x: 11, y: 11, size: 100, fill: '#f58518', __gen: 3 } as SceneItem
+    ;(mark.items as SceneItem[]).push({ x: 30, y: 30, size: 100, fill: '#4c78a8', __gen: 3 } as SceneItem)
+    ;(scene as unknown as { __itemGen: number }).__itemGen = 3
+    const second = makeRecordingCtx()
+    expect(renderSceneToCanvasAppend(prev2, scene, second.ctx)).toBe(false)
+  })
+})
+
 describe('canvas/svg corpus parity', () => {
   it('matches across the vega corpus', () => {
     const names = corpusVegaNames()
@@ -495,6 +531,14 @@ describe('canvas/svg corpus parity', () => {
     let pass = 0
     const failures: Array<[string, string[]]> = []
     for (const name of names) {
+      // Multi-line text is excluded from the draw-record parity: vega's own
+      // backends disagree (SVG tspans restart at x=0; canvas continues at the
+      // anchor x). The browser canvas gate covers the single-line case.
+      if (name === 'text-linebreak.vg.json') continue
+      // vega's SVG backend serializes a non-colour paint as fill="false" (which
+      // rasterizes black); its canvas backend skips it. The SVG conformance gate
+      // follows the SVG oracle; the browser canvas gate follows the canvas one.
+      if (name === 'expr-fns.vg.json') continue
       const doc = JSON.parse(readFileSync(join(CORPUS_DIR, name), 'utf8'))
       const spec = doc.spec ?? doc
       let scene: SceneRoot

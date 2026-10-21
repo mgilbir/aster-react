@@ -1,7 +1,19 @@
 /// <reference lib="webworker" />
-import { handleChartWorkerRequest, type ChartWorkerRequest } from './worker.js'
+import type { ChartStream } from '@aster/core'
+import {
+  handleChartWorkerRequest,
+  handleChartWorkerStreamRequest,
+  type ChartWorkerRequest,
+  type ChartWorkerStreamRequest,
+} from './worker.js'
 
 const scope = globalThis as unknown as DedicatedWorkerGlobalScope
-scope.onmessage = (event: MessageEvent<ChartWorkerRequest>): void => {
-  scope.postMessage(handleChartWorkerRequest(event.data))
+const streams = new Map<number, ChartStream>()
+scope.onmessage = (event: MessageEvent<ChartWorkerRequest | ChartWorkerStreamRequest>): void => {
+  const data = event.data
+  if ((data as ChartWorkerStreamRequest).kind === 'stream') {
+    scope.postMessage(handleChartWorkerStreamRequest(data as ChartWorkerStreamRequest, streams))
+  } else {
+    scope.postMessage(handleChartWorkerRequest(data as ChartWorkerRequest))
+  }
 }

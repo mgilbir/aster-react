@@ -49,8 +49,8 @@ function tx(transform: Spec[]): Spec[] {
 function xv(field: string): unknown { return { scale: 'x', field } }
 function yv(field: string): unknown { return { scale: 'y', field } }
 
-const cases: Array<{ name: string; spec: Spec }> = []
-const add = (name: string, spec: Spec): void => { cases.push({ name, spec }) }
+const cases: Array<{ name: string; spec: Spec; browserOnly?: boolean }> = []
+const add = (name: string, spec: Spec, browserOnly = false): void => { cases.push({ name, spec, ...(browserOnly ? { browserOnly } : {}) }) }
 
 // bin option matrix
 for (const [name, opt] of Object.entries({
@@ -110,6 +110,66 @@ add('extent', symbol(base(tx([{ type: 'extent', field: 'v', signal: 'vext' }])),
 add('timeunit', symbol(base(tx([{ type: 'timeunit', field: 't', units: ['year', 'month'], as: ['t0', 't1'] }])), xv('v'), yv('w')))
 add('filter-formula', symbol(base(tx([{ type: 'formula', expr: 'datum.v * 2', as: 'd' }, { type: 'filter', expr: 'datum.d > 2' }])), xv('v'), yv('d')))
 
+// rare addon transforms (kde/regression/loess and the hierarchy/text/voronoi layouts)
+add('kde', symbol(base(tx([{ type: 'kde', field: 'v', extent: [0, 6], as: ['v', 'k'] }])), xv('v'), yv('k')))
+add('regression', symbol(base(tx([{ type: 'regression', x: 'v', y: 'w', as: ['x', 'y'] }])), xv('x'), yv('y')))
+add('loess', symbol(base(tx([{ type: 'loess', x: 'v', y: 'w', as: ['x', 'y'] }])), xv('x'), yv('y')))
+const tree = [
+  { id: 1, parent: null, v: 4 },
+  { id: 2, parent: 1, v: 2 },
+  { id: 3, parent: 1, v: 2 },
+  { id: 4, parent: 2, v: 1 },
+  { id: 5, parent: 2, v: 1 },
+]
+function hierarchy(type: string): Spec {
+  const as = type === 'partition' || type === 'treemap' ? ['x0', 'y0', 'x1', 'y1'] : ['x', 'y', 'r']
+  const marks = type === 'partition' || type === 'treemap'
+    ? [{ type: 'rect', from: { data: 'data_0' }, encode: { update: {
+        x: { field: 'x0' }, x2: { field: 'x1' }, y: { field: 'y0' }, y2: { field: 'y1' },
+        fill: { value: 'steelblue' }, stroke: { value: 'white' },
+      } } }]
+    : [{ type: 'symbol', from: { data: 'data_0' }, encode: { update: {
+        x: { field: 'x' }, y: { field: 'y' }, size: { field: 'r' }, fill: { value: 'steelblue' },
+      } } }]
+  return {
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    width: 240, height: 160, padding: 5, autosize: 'none', background: 'white',
+    data: [
+      { name: 'tree', values: tree },
+      { name: 'data_0', source: 'tree', transform: [
+        { type: 'stratify', key: 'id', parentKey: 'parent' },
+        { type, field: 'v', size: [200, 120], as },
+      ] },
+    ],
+    marks,
+  }
+}
+add('pack', hierarchy('pack'))
+add('partition', hierarchy('partition'))
+add('treemap', hierarchy('treemap'))
+add('wordcloud', {
+  $schema: 'https://vega.github.io/schema/vega/v6.json',
+  width: 240, height: 160, padding: 5, autosize: 'none', background: 'white',
+  data: tx([{ type: 'wordcloud', text: 'c', fontSize: 'v', size: [220, 140], as: ['x', 'y', 'font', 'fontSize', 'fontStyle', 'fontWeight', 'angle'] }]),
+  marks: [{ type: 'text', from: { data: 'data_0' }, encode: { update: {
+    x: { field: 'x' }, y: { field: 'y' }, text: { field: 'c' }, fontSize: { field: 'fontSize' },
+    font: { field: 'font' }, angle: { field: 'angle' }, fill: { value: 'steelblue' },
+  } } }],
+}, true) // wordcloud needs a real canvas for the oracle's text metrics (browser gate)
+add('voronoi', {
+  $schema: 'https://vega.github.io/schema/vega/v6.json',
+  width: 240, height: 160, padding: 5, autosize: 'none', background: 'white',
+  data: tx([{ type: 'voronoi', x: 'v', y: 'w', size: [240, 160], as: 'cell' }]),
+  marks: [
+    { type: 'path', from: { data: 'data_0' }, encode: { update: {
+      path: { field: 'cell' }, fill: { value: 'steelblue' }, stroke: { value: 'white' },
+    } } },
+    { type: 'symbol', from: { data: 'data_0' }, encode: { update: {
+      x: { field: 'v' }, y: { field: 'w' }, size: { value: 20 }, fill: { value: 'black' },
+    } } },
+  ],
+})
+
 async function run(spec: Spec): Promise<{ pass: boolean; diffs: string[]; error?: string }> {
   try {
     const [oracleSvg, ours] = await Promise.all([renderWithVega(spec), Promise.resolve(renderSpec(spec as never))])
@@ -124,9 +184,11 @@ const argv = process.argv.slice(2)
 const filterIdx = argv.indexOf('--filter')
 const filter = filterIdx >= 0 ? argv[filterIdx + 1]! : ''
 let pass = 0
+let skipped = 0
 const fail: string[] = []
 for (const c of cases) {
   if (filter && !c.name.includes(filter)) continue
+  if (c.browserOnly) { skipped++; continue }
   const r = await run(c.spec)
   if (r.pass) pass++
   else {
@@ -136,6 +198,6 @@ for (const c of cases) {
   }
 }
 const total = cases.filter((c) => !filter || c.name.includes(filter)).length
-console.log(`\n[transforms] ${pass}/${total} transform cases match`)
+console.log(`\n[transforms] ${pass}/${total} transform cases match${skipped ? ` (${skipped} browser-only skipped)` : ''}`)
 if (fail.length) console.log(`[transforms] failing: ${fail.join(', ')}`)
 process.exit(fail.length ? 1 : 0)

@@ -18,7 +18,10 @@ import { isPromiseLike, normalizeChartSpec } from './spec.js'
 // `incremental` path) pulls it in explicitly. The canvas renderer is likewise
 // opt-in (`@aster/core/canvas`) so SVG-only hosts never bundle it.
 import { createChartSession, patchSceneDom, renderSceneToDomElement } from '@aster/core/dom'
-import { renderSceneToCanvas } from '@aster/core/canvas'
+import {
+  renderSceneToCanvas, renderSceneToCanvasAppend, snapshotCanvasScene,
+  type CanvasSceneSnapshot,
+} from '@aster/core/canvas'
 import { buildHitIndex, type HitIndex } from '@aster/core/hit'
 import { bindSceneSignals, stampDatumAttrs, type SignalBinding } from '@aster/core/signals'
 import {
@@ -52,6 +55,14 @@ const TOOLTIP_INTERNAL_FIELDS = new Set([
 export interface ChartProps {
   /** A Vega spec, or a Vega-Lite spec compiled internally, or a promise of either. */
   spec: VgSpec | Promise<VgSpec>
+  /**
+   * Pre-evaluated scene override (streaming): when provided, the chart renders
+   * this scene instead of evaluating the spec. `undefined` keeps the normal
+   * session path; `null` renders the loading/error state. Used by
+   * `<ChartStream>` / `<ChartWorkerStream>` so streamed scenes go through the
+   * same DOM patcher, canvas renderer, interaction and a11y tree.
+   */
+  sceneOverride?: SceneRoot | null
   data?: Record<string, unknown[]>
   /**
    * Per-datum differential update: for each named dataset, the indices (into the
@@ -230,6 +241,119 @@ const isA11yNodeKey = (key: string): boolean =>
   || key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown'
   || key === '+' || key === '=' || key === '-'
 
+interface SignalBindDef {
+  name?: unknown
+  value?: unknown
+  bind?: unknown
+}
+
+function SignalBinds({ signals, values, onChange }: {
+  signals: SignalBindDef[]
+  values: Record<string, unknown>
+  onChange: (name: string, value: unknown) => void
+}): React.ReactElement | null {
+  const defs = signals.filter((s) => typeof s.name === 'string' && s.bind != null)
+  if (!defs.length) return null
+  const control = (def: SignalBindDef): React.ReactNode => {
+    const name = String(def.name)
+    const bind = typeof def.bind === 'object' && def.bind != null
+      ? def.bind as Record<string, unknown>
+      : { input: String(def.bind) }
+    const input = typeof bind.input === 'string' ? bind.input : 'range'
+    const value = values[name] ?? def.value ?? bind.value
+    const label = typeof bind.name === 'string' ? bind.name : name
+    const options = Array.isArray(bind.options)
+      ? (bind.options as unknown[]).map((o) => {
+          if (o != null && typeof o === 'object') {
+            const rec = o as Record<string, unknown>
+            return { value: rec.value, label: String(rec.label ?? rec.value) }
+          }
+          return { value: o, label: String(o) }
+        })
+      : []
+    const set = (v: unknown): void => onChange(name, v)
+    if (input === 'range') {
+      const min = typeof bind.min === 'number' ? bind.min : undefined
+      const max = typeof bind.max === 'number' ? bind.max : undefined
+      const step = typeof bind.step === 'number' ? bind.step : undefined
+      return (
+        <label key={name} data-signal={name} style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+          <span>{label}</span>
+          <input
+            type="range"
+            aria-label={label}
+            min={min} max={max} step={step}
+            value={Number(value ?? min ?? 0)}
+            onChange={(e) => set(Number(e.currentTarget.value))}
+          />
+          <span>{String(value ?? '')}</span>
+        </label>
+      )
+    }
+    if (input === 'select') {
+      return (
+        <label key={name} data-signal={name} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+          <span>{label}</span>
+          <select aria-label={label} value={String(value ?? '')} onChange={(e) => set(e.currentTarget.value)}>
+            {options.map((o) => <option key={String(o.value)} value={String(o.value)}>{o.label}</option>)}
+          </select>
+        </label>
+      )
+    }
+    if (input === 'checkbox') {
+      return (
+        <label key={name} data-signal={name} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+          <input type="checkbox" aria-label={label} checked={Boolean(value)} onChange={(e) => set(e.currentTarget.checked)} />
+          <span>{label}</span>
+        </label>
+      )
+    }
+    if (input === 'radio') {
+      return (
+        <span key={name} data-signal={name} style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+          <span>{label}</span>
+          {options.map((o) => (
+            <label key={String(o.value)} style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
+              <input type="radio" name={name} aria-label={`${label} ${o.label}`} checked={value === o.value} onChange={() => set(o.value)} />
+              <span>{o.label}</span>
+            </label>
+          ))}
+        </span>
+      )
+    }
+    if (input === 'color') {
+      return (
+        <label key={name} data-signal={name} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+          <span>{label}</span>
+          <input type="color" aria-label={label} value={String(value ?? '#000000')} onChange={(e) => set(e.currentTarget.value)} />
+        </label>
+      )
+    }
+    return (
+      <label key={name} data-signal={name} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+        <span>{label}</span>
+        <input
+          type={input === 'number' ? 'number' : 'text'}
+          aria-label={label}
+          value={String(value ?? '')}
+          onChange={(e) => set(input === 'number' ? Number(e.currentTarget.value) : e.currentTarget.value)}
+        />
+      </label>
+    )
+  }
+  return (
+    <div
+      data-testid="chart-binds"
+      style={{
+        position: 'relative', zIndex: 2, display: 'flex', flexWrap: 'wrap', gap: 12,
+        alignItems: 'center', padding: '6px 8px', fontSize: 12,
+      }}
+    >
+      {defs.map(control)}
+    </div>
+  )
+}
+
 function a11yTreeOptions(a11y: ChartProps['a11y'], label: string | undefined, selection: SelectValue | null | undefined): A11yOptions | null {
   if (a11y === false) return null
   const opts = a11y === true || a11y == null ? {} : a11y
@@ -257,6 +381,7 @@ function AsyncChart({ spec, chartRef, ...props }: Omit<ChartProps, 'spec'> & { s
 
 function ChartView({
   spec: rawSpec,
+  sceneOverride,
   data,
   dataChanges,
   width,
@@ -381,9 +506,19 @@ function ChartView({
     () => ({ ...(signals ?? {}), ...eventSignals }),
     [signals, eventSignals],
   )
+  const bindDefs = React.useMemo(
+    () => ((spec.signals as SignalBindDef[] | undefined) ?? []).filter((s) => s && s.bind != null),
+    [spec],
+  )
 
   const sceneGenRef = React.useRef(0)
   React.useMemo<SceneRoot | null>(() => {
+    if (sceneOverride !== undefined) {
+      if (sceneOverride != null && tooltipEnabled) stampDatumAttrs(sceneOverride.items)
+      sceneRef.current = sceneOverride
+      renderErrorRef.current = null
+      return sceneOverride
+    }
     try {
       const sc = sessionRef.current!.evaluate(spec, { data, dataChanges, width: renderWidth, height: renderHeight, signals: mergedSignals, limits, domainRaw, textMetrics })
       // Tooltips read data-datum off the DOM; stamp the datum onto scene items
@@ -397,7 +532,7 @@ function ChartView({
       renderErrorRef.current = err instanceof Error ? err : new Error(String(err))
       return null
     }
-  }, [spec, data, dataChanges, renderWidth, renderHeight, mergedSignals, tooltipEnabled, limits, domainRaw, textMetrics])
+  }, [sceneOverride, spec, data, dataChanges, renderWidth, renderHeight, mergedSignals, tooltipEnabled, limits, domainRaw, textMetrics])
   const scene = sceneRef.current
   if (scene != null) sceneGenRef.current++
   const sceneGen = sceneGenRef.current
@@ -418,12 +553,19 @@ function ChartView({
   const markup = React.useMemo<string | null>(() => {
     if (displayScene == null) return null
     if (renderer === 'canvas') return null
+    // Streaming scenes are client-owned: create the DOM once in the layout
+    // effect and patch it afterwards. React clearing a stale
+    // dangerouslySetInnerHTML prop would otherwise replace the patched <svg>
+    // on the first streamed frame.
+    if (sceneOverride !== undefined) return null
     if (incremental && hasPatchedRef.current) return null
     return renderSceneToSvg(displayScene)
-  }, [incremental, renderer, displayScene])
+  }, [incremental, renderer, displayScene, sceneOverride])
 
   const svgHostRef = React.useRef<HTMLDivElement>(null)
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
+  // Last canvas frame: append-only scenes paint only the new mark items.
+  const canvasSnapshotRef = React.useRef<CanvasSceneSnapshot | null>(null)
   // Canvas-mode hit testing: the tooltip resolves marks through the scene hit
   // index instead of DOM attributes (canvas has none). Rebuilt per scene.
   const hitIndexRef = React.useRef<{ idx: number; index: HitIndex | null }>({ idx: 0, index: null })
@@ -462,17 +604,20 @@ function ChartView({
   // Incremental updates: create the <svg> once, then patch changed attributes
   // in place instead of re-serializing and re-parsing the whole markup every render.
   React.useLayoutEffect(() => {
-    if (!incremental || !displayScene || renderer === 'canvas') return
+    if (!displayScene || renderer === 'canvas') return
+    // A sceneOverride still needs its DOM created: stream markup is client-owned
+    // (no dangerouslySetInnerHTML), so the first frame builds the element here.
+    if (!incremental && sceneOverride === undefined) return
     const host = svgHostRef.current
     if (!host) return
     const existing = host.firstElementChild
-    if (existing && existing.tagName.toLowerCase() === 'svg') {
+    if (incremental && existing && existing.tagName.toLowerCase() === 'svg') {
       patchSceneDom(existing, displayScene)
     } else {
       host.replaceChildren(renderSceneToDomElement(displayScene))
     }
     hasPatchedRef.current = true
-  }, [incremental, displayScene])
+  }, [incremental, displayScene, sceneOverride])
 
   // Canvas backend: size the backing store for devicePixelRatio and redraw the
   // whole scene whenever it changes (cheap relative to SVG serialization for
@@ -484,19 +629,28 @@ function ChartView({
     const dpr = typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1
     const w = Math.max(1, Math.round(displayScene.width))
     const h = Math.max(1, Math.round(displayScene.height))
+    let resized = false
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
       canvas.width = Math.round(w * dpr)
       canvas.height = Math.round(h * dpr)
-    } else {
-      const ctx0 = canvas.getContext('2d')
-      ctx0?.clearRect(0, 0, canvas.width, canvas.height)
+      resized = true
     }
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    // Paint on the next frame so a large scene never blocks React's commit
-    // (or the first paint). A newer scene cancels the pending frame; hosts
-    // without rAF (SSR/jsdom without a shim) paint synchronously.
-    const draw = () => renderSceneToCanvas(displayScene, ctx, { dpr })
+    // Append-only frames draw immediately: a handful of new items is cheaper
+    // than a frame of latency, and drawing synchronously prevents a later
+    // stream mutation from racing a coalesced rAF repaint. Full repaints still
+    // go through rAF so they never block React's commit.
+    const prev = resized ? null : canvasSnapshotRef.current
+    if (prev != null && renderSceneToCanvasAppend(prev, displayScene, ctx, { dpr })) {
+      canvasSnapshotRef.current = snapshotCanvasScene(displayScene)
+      return
+    }
+    const draw = (): void => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      renderSceneToCanvas(displayScene, ctx, { dpr })
+      canvasSnapshotRef.current = snapshotCanvasScene(displayScene)
+    }
     if (typeof requestAnimationFrame === 'function') {
       const id = requestAnimationFrame(draw)
       return () => cancelAnimationFrame(id)
@@ -927,7 +1081,11 @@ function ChartView({
     return <div role="alert" style={style} title={renderError?.message}>{message}</div>
   }
 
-  const outerStyle: React.CSSProperties = hasInteraction
+  // Absolute-positioned children (tooltip, brush overlays, a11y nodes) need a
+  // positioned ancestor even on a non-interactive chart. Without this the
+  // tooltip positions against <body> and lands off-screen after scrolling.
+  const needsPositioning = hasInteraction || tooltipEnabled || a11yTree != null
+  const outerStyle: React.CSSProperties = needsPositioning
     ? { ...style, position: 'relative', width: '100%', height: '100%' }
     : { width: '100%', height: '100%', ...style }
 
@@ -1003,6 +1161,13 @@ function ChartView({
           aria-hidden={a11yTree != null ? true : undefined}
           style={{ position: 'relative', zIndex: 1 }}
           {...(markup != null ? { dangerouslySetInnerHTML: { __html: markup } } : {})}
+        />
+      )}
+      {bindDefs.length > 0 && (
+        <SignalBinds
+          signals={bindDefs}
+          values={mergedSignals}
+          onChange={(name, value) => signalStore.merge({ [name]: value })}
         />
       )}
       {a11yTree != null && (

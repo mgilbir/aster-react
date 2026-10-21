@@ -1,6 +1,23 @@
 export { Chart } from './Chart'
 export type { ChartHandle, ChartProps } from './Chart'
 export {
+  ChartStream,
+  ChartWorkerStream,
+  type ChartStreamHandle,
+  type ChartStreamProps,
+  type ChartWorkerStreamProps,
+} from './ChartStream'
+export {
+  useChartStream,
+  type UseChartStreamOptions,
+  type UseChartStreamResult,
+} from './useChartStream'
+export {
+  useChartWorkerStream,
+  type ChartWorkerStreamOptions,
+  type WorkerChartStreamResult,
+} from './useChartWorkerStream'
+export {
   isVegaLiteSpec,
   normalizeChartSpec,
   isPromiseLike,
@@ -23,6 +40,9 @@ export {
   type ChartWorkerRequest,
   type ChartWorkerResponse,
   type WorkerChartResult,
+  handleChartWorkerStreamRequest,
+  type ChartWorkerStreamRequest,
+  type ChartWorkerStreamResponse,
 } from './worker'
 export {
   dragToDataInterval,

@@ -29,6 +29,10 @@ pnpm bench:browser    # Playwright headless Chromium: time-to-first-render, upda
                       # latency, frame pacing, prop + container resize, CDP heap
 pnpm bench:pipeline   # per-stage compute breakdown: aster compile/evaluate/serialize
                       # vs vega parse/dataflow/toSVG (no DOM in the way)
+pnpm bench:incremental # streaming append + explicit pulse vs full evaluateChart
+                      # (fails if the incremental path is not cheaper)
+pnpm bench:browser-stream # <ChartStream> append per frame: SVG/canvas, microtask/raf
+                      # flush policies, long frames + DOM mutations
 ```
 
 Knobs (all runners): `--points=1000` (dataset size), `--reps=…`, `--kind=line,scatter,bar`
@@ -58,6 +62,8 @@ The browser runner needs a Chromium for Playwright (`npx playwright install chro
 - `src/embeds.tsx` — the three embedding approaches behind one component interface
 - `src/settle.ts` — shared DOM-quiescence protocol / measurement primitives
 - `src/runtime.bench.tsx`, `src/memory.bench.tsx` — jsdom runners
+- `src/incremental.bench.tsx` — `createChartStream` append vs full re-evaluate
+- `src/browser-stream-entry.tsx` — in-page `<ChartStream>` frame-pacing driver
 - `src/browser-entry.ts` — `window.__bench` API bundled into the browser page
 - `scripts/browser.bench.mjs` — esbuild + Playwright + CDP driver
 - `scripts/bundle-size.mjs` — per-approach payload table

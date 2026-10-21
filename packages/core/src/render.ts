@@ -969,9 +969,11 @@ export function textItemDesc(it: SceneItem): {
   const textAnchor = it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle'
   const attrs: Array<[string, unknown]> = []
   if (textAnchor != null) attrs.push(['text-anchor', textAnchor])
-  attrs.push(['font-size', fontSize !== 11 ? fontSize : undefined])
+  // Always emit the size/family: Vega's text style default is 11px sans-serif,
+  // but an omitted `font-size` in HTML/SVG means the browser default (16px).
+  attrs.push(['font-size', `${fontSize}px`])
   attrs.push(['font-weight', fontWeight])
-  attrs.push(['font-family', (it as Record<string, unknown>).font as string | undefined])
+  attrs.push(['font-family', ((it as Record<string, unknown>).font as string | undefined) ?? 'sans-serif'])
   attrs.push(['fill', it.fill])
   attrs.push(['fill-opacity', (it as Record<string, unknown>).fillOpacity])
   attrs.push(['stroke', it.stroke])

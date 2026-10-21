@@ -76,6 +76,8 @@ export function usingCanvasTextMetrics(): boolean {
 export interface FontProps {
   fontSize?: unknown
   fontFamily?: unknown
+  /** Scene items use `font`; host providers should see the same family. */
+  font?: unknown
   fontWeight?: unknown
   fontStyle?: unknown
   fontVariant?: unknown
@@ -93,7 +95,7 @@ export function fontString(item: FontProps): string {
     (item.fontVariant ? item.fontVariant + ' ' : '') +
     (item.fontWeight ? item.fontWeight + ' ' : '') +
     fontFontSize(item) + 'px ' +
-    ((item.fontFamily as string | undefined) || 'sans-serif')
+    ((item.fontFamily as string | undefined) || (item.font as string | undefined) || 'sans-serif')
   )
 }
 

@@ -77,7 +77,63 @@ describe('sequential color scales do not zero-extend', () => {
   })
 })
 
+describe('band-size encode offsets', () => {
+  it('applies offset to a band-sized height', () => {
+    const chart = compileChart({
+      ...base,
+      data: [{ name: 't', values: [{ g: 'a', v: 1 }, { g: 'b', v: 2 }] }],
+      scales: [{ name: 'y', type: 'band', range: [200, 0], domain: { data: 't', field: 'g' } }],
+      marks: [{ type: 'rect', from: { data: 't' }, encode: { update: {
+        x: { value: 0 }, width: { value: 10 },
+        y: { scale: 'y', field: 'g' },
+        height: { scale: 'y', band: 1, offset: -1 },
+        fill: { value: 'steelblue' },
+      } } }],
+    } as never)
+    const scene = evaluateChart(chart)
+    const mark = scene.items.find((g): g is SceneGroup => g.marktype === 'rect')!
+    const rects = itemsOf(mark)
+    const bandwidth = 200 / 2
+    expect(rects[0]!.height).toBe(bandwidth - 1)
+    expect(rects[1]!.height).toBe(bandwidth - 1)
+  })
+})
+
 describe('nested group scope', () => {
+  it('nested marks resolve outer scales and datasets', () => {
+    const chart = compileChart({
+      ...base,
+      data: [{ name: 't', values: [
+        { age: 0, sex: 1, people: 10 }, { age: 0, sex: 2, people: 12 },
+        { age: 5, sex: 1, people: 8 }, { age: 5, sex: 2, people: 9 },
+      ] }],
+      scales: [
+        { name: 'y', type: 'band', range: [200, 0], domain: { data: 't', field: 'age' } },
+        { name: 'c', type: 'ordinal', domain: [1, 2], range: ['#d5855a', '#6c4e97'] },
+      ],
+      marks: [{
+        type: 'group',
+        encode: { update: { x: { value: 0 }, height: { value: 200 } } },
+        scales: [{ name: 'x', type: 'linear', range: [100, 0], domain: { data: 't', field: 'people' } }],
+        marks: [{ type: 'rect', from: { data: 't' }, encode: { update: {
+          x: { scale: 'x', field: 'people' }, x2: { scale: 'x', value: 0 },
+          y: { scale: 'y', field: 'age' }, height: { scale: 'y', band: 1 },
+          fill: { scale: 'c', field: 'sex' },
+        } } }],
+      }],
+    } as never)
+    const scene = evaluateChart(chart)
+    const group = scene.items.find((g): g is SceneGroup => g.marktype === 'group' && g.role === 'scope')!
+    const rectMark = (group.items as SceneGroup[]).find((g) => g.marktype === 'rect')!
+    const rects = itemsOf(rectMark)
+    expect(rects).toHaveLength(4)
+    for (const r of rects) {
+      expect(typeof r.y).toBe('number')
+      expect(typeof r.height).toBe('number')
+      expect(String(r.fill)).toMatch(/^#(d5855a|6c4e97)$/i)
+    }
+  })
+
   it('a group with its own scales+axes renders marks in the child scope', () => {
     const chart = compileChart({
       ...base,

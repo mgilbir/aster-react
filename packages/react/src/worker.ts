@@ -8,7 +8,11 @@
  * an older browser — transparently fall back to the synchronous pipeline.
  */
 import * as React from 'react'
-import { compileChart, evaluateChart, renderSceneToSvg, type SceneRoot, type VgSpec } from '@aster/core'
+import {
+  compileChart, createChartStream, evaluateChart, renderSceneToSvg,
+  type ChartStream, type DataPulse, type SceneRoot, type StreamBatch,
+  type StreamOptions, type StreamPolicy, type StreamStats, type VgSpec,
+} from '@aster/core'
 import { normalizeChartSpec } from './spec.js'
 
 export interface ChartWorkerRequest {
@@ -141,4 +145,98 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
   }, [spec, width, height, data, signals, domainRaw])
 
   return state
+}
+
+// ---------------------------------------------------------------------------
+// Stream protocol (R13)
+// ---------------------------------------------------------------------------
+
+export interface ChartWorkerStreamRequest {
+  kind: 'stream'
+  id: number
+  streamId: number
+  op: 'init' | 'flush' | 'close'
+  spec?: VgSpec
+  options?: {
+    capacity?: number
+    policy?: StreamPolicy
+    initial?: StreamOptions['initial']
+  }
+  batches?: StreamBatch[]
+}
+
+export interface ChartWorkerStreamResponse {
+  kind: 'stream'
+  id: number
+  streamId: number
+  svg?: string
+  scene?: SceneRoot
+  pulse?: DataPulse
+  stats?: StreamStats
+  /** Batches accepted/rejected by the stream's backpressure policy. */
+  accepted?: number
+  rejected?: number
+  /** Queued batches after the operation. */
+  depth?: number
+  closed?: boolean
+  error?: { name: string; message: string; code?: string }
+}
+
+const streamResponse = (
+  request: ChartWorkerStreamRequest,
+  stream: ChartStream | null,
+  extra: Partial<ChartWorkerStreamResponse> = {},
+): ChartWorkerStreamResponse => {
+  const scene = stream?.scene() ?? null
+  return {
+    kind: 'stream',
+    id: request.id,
+    streamId: request.streamId,
+    ...(scene ? { scene: cloneableScene(scene), svg: renderSceneToSvg(scene) } : {}),
+    ...(stream ? { pulse: stream.pulse() ?? { datasets: new Map(), structural: new Set() }, stats: stream.stats() } : {}),
+    ...extra,
+  }
+}
+
+/**
+ * Pure handler for the streaming worker protocol. The caller owns the stream
+ * map (the worker entry uses one per worker; tests can pass a fresh map).
+ */
+export function handleChartWorkerStreamRequest(
+  request: ChartWorkerStreamRequest,
+  streams: Map<number, ChartStream>,
+): ChartWorkerStreamResponse {
+  try {
+    if (request.op === 'close') {
+      const stream = streams.get(request.streamId)
+      stream?.close()
+      streams.delete(request.streamId)
+      return { kind: 'stream', id: request.id, streamId: request.streamId, closed: true }
+    }
+    if (request.op === 'init') {
+      streams.get(request.streamId)?.close()
+      const stream = createChartStream(normalizeChartSpec(request.spec ?? {}), request.options)
+      streams.set(request.streamId, stream)
+      stream.flush()
+      return streamResponse(request, stream)
+    }
+    const stream = streams.get(request.streamId)
+    if (!stream) throw new Error(`[aster] unknown stream ${request.streamId}`)
+    let accepted = 0
+    let rejected = 0
+    for (const batch of request.batches ?? []) {
+      if (stream.push(batch)) accepted++
+      else rejected++
+    }
+    stream.flush()
+    return streamResponse(request, stream, { accepted, rejected, depth: stream.stats().depth })
+  } catch (error) {
+    const e = error instanceof Error ? error : new Error(String(error))
+    return {
+      kind: 'stream',
+      id: request.id,
+      streamId: request.streamId,
+      error: { name: e.name, message: e.message, code: (e as { code?: string }).code },
+    }
+  }
 }

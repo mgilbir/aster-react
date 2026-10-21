@@ -10,29 +10,79 @@
  * - naming the downstream datasets/marks and whether a transform can consume a
  *   row-wise pulse or needs a full re-derive.
  *
+ * A pulse carries more than the changed indices: length-changing updates
+ * (append/insert/delete) also carry an index mapping (`from`/`to`) and the
+ * added/removed ranges. Downstream transforms and marks use that mapping to
+ * splice their cached rows/items instead of rebuilding the world.
+ *
  * The graph is structural and cached on the compiled chart; pulses are plain
  * data so hosts can inspect them in tests/devtools.
  */
 import type { CompiledChart, CompiledData, CompiledMark, CompiledTransform } from './types.js'
 
+/** A contiguous range `[start, end)` in an array. */
+export type PulseRange = [number, number]
+
 export interface RowDiff {
-  /** Indices (into the new rows) whose values changed; only for same-length updates. */
+  /** Indices (into the new rows) whose values changed. */
   changed: number[]
   /** True when the new array has the same length and row order. */
   sameLength: boolean
-  /** Appended range [start, end) into the new rows, if any. */
-  added: [number, number] | null
-  /** Removed range [start, end) from the previous rows, if any. */
-  removed: [number, number] | null
+  /** First appended range `[start, end)` into the new rows, if any. */
+  added: PulseRange | null
+  /** First removed range `[start, end)` from the previous rows, if any. */
+  removed: PulseRange | null
+  /**
+   * Length-changing diff only: for every new index, the previous index it was
+   * retained from (`-1` for inserted rows). `undefined` means identity.
+   */
+  from?: number[]
+  /**
+   * Length-changing diff only: for every previous index, the new index it was
+   * retained as (`-1` for removed rows).
+   */
+  to?: number[]
+  /** All appended ranges (new coordinates). */
+  addedRanges?: PulseRange[]
+  /** All removed ranges (previous coordinates). */
+  removedRanges?: PulseRange[]
+  /**
+   * True when the update only appends after `baseLength`: every retained row
+   * keeps its index, so consumers can splice instead of synthesising `from`.
+   */
+  appendOnly?: boolean
+  /** Previous row count for an append-only pulse. */
+  baseLength?: number
 }
 
-const ROWWISE = new Set<string>(['formula', 'identifier', 'timeunit'])
+const ROWWISE = new Set<string>([
+  'formula', 'identifier', 'timeunit',
+  // 1:1 geo transforms: each output row depends only on its own input row.
+  'geoshape', 'geopoint', 'linkpath', 'project', 'geojson',
+])
 const GROUPED = new Set<string>(['aggregate', 'joinaggregate', 'window', 'stack'])
+/** Transforms whose output row count/order is independent of the input order. */
 const EXPANDING = new Set<string>([
   'fold', 'flatten', 'pivot', 'geojson', 'geopoint', 'geoshape', 'contour', 'linkpath',
   'kde', 'quantile', 'regression', 'loess', 'pack', 'partition', 'treemap', 'wordcloud',
   'voronoi', 'cross', 'countpattern', 'dotbin', 'project', 'label', 'stratify', 'sequence',
   'graticule',
+])
+
+/**
+ * Transforms that emit exactly one output row per input row, in input order,
+ * even when the output values depend on the whole dataset (pie angles, dotbin
+ * bins, hierarchical layout). Their output can be spliced by index.
+ */
+const INDEX_PRESERVING = new Set<string>([
+  'formula', 'identifier', 'timeunit', 'geoshape', 'geopoint', 'linkpath', 'project',
+  'geojson', 'label', 'pie', 'dotbin', 'pack', 'partition', 'treemap', 'voronoi',
+])
+
+/** Transforms that re-derive every output but never change the input mapping. */
+const STABLE_ROW_COUNT = new Set<string>([
+  ...INDEX_PRESERVING,
+  'extent', 'stratify',
 ])
 
 function asRows(v: unknown): Record<string, unknown>[] | null {
@@ -58,9 +108,24 @@ export function rowsEqual(a: Record<string, unknown>, b: Record<string, unknown>
   return true
 }
 
+function pushRange(ranges: PulseRange[], start: number, end: number): void {
+  if (end <= start) return
+  const last = ranges[ranges.length - 1]
+  if (last && last[1] === start) last[1] = end
+  else ranges.push([start, end])
+}
+
 /**
- * Diff two source row arrays. Same-length arrays yield the changed indices;
- * prefix/suffix matching keeps an append or a single insertion cheap.
+ * Diff two source row arrays. Same-length arrays yield the changed indices.
+ * Length-changing arrays use prefix/suffix matching (so an append or a single
+ * insertion/deletion is cheap) and additionally return an index mapping:
+ *
+ * - `from[newIndex]` is the old index of a retained row (`-1` for an insert),
+ * - `to[oldIndex]` is the new index of a retained row (`-1` for a delete).
+ *
+ * The middle block between the common prefix and suffix is treated as a
+ * replace/insert/delete: paired rows are modifications, and any surplus on
+ * either side becomes an added/removed range.
  */
 export function diffRows(previous: unknown, next: unknown): RowDiff | null {
   const p = asRows(previous)
@@ -71,31 +136,94 @@ export function diffRows(previous: unknown, next: unknown): RowDiff | null {
     for (let i = 0; i < n.length; i++) if (!rowsEqual(p[i]!, n[i]!)) changed.push(i)
     return { changed, sameLength: true, added: null, removed: null }
   }
-  // Find the unchanged prefix and suffix; everything in the middle is the
-  // inserted/removed/changed block.
-  let prefix = 0
+
   const min = Math.min(p.length, n.length)
+  let prefix = 0
   while (prefix < min && rowsEqual(p[prefix]!, n[prefix]!)) prefix++
   let suffix = 0
   while (suffix < min - prefix && rowsEqual(p[p.length - 1 - suffix]!, n[n.length - 1 - suffix]!)) suffix++
+
+  const from = new Array<number>(n.length).fill(-1)
+  const to = new Array<number>(p.length).fill(-1)
+  const addedRanges: PulseRange[] = []
+  const removedRanges: PulseRange[] = []
   const changed: number[] = []
-  const overlapEnd = n.length - suffix
-  for (let i = prefix; i < overlapEnd; i++) {
-    const old = p[i]
-    if (old == null || !rowsEqual(old, n[i]!)) changed.push(i)
+
+  // Common prefix.
+  for (let i = 0; i < prefix; i++) { from[i] = i; to[i] = i }
+  // Common suffix.
+  for (let j = 0; j < suffix; j++) {
+    const ni = n.length - 1 - j
+    const pi = p.length - 1 - j
+    from[ni] = pi
+    to[pi] = ni
   }
-  const added: [number, number] | null = n.length > p.length ? [prefix, n.length - suffix] : null
-  const removed: [number, number] | null = p.length > n.length ? [prefix, p.length - suffix] : null
-  return { changed, sameLength: false, added, removed }
+
+  // Mutable middle. Pair the overlap as replacements, then mark the surplus.
+  const oldMiddle = p.length - suffix - prefix
+  const newMiddle = n.length - suffix - prefix
+  const paired = Math.min(oldMiddle, newMiddle)
+  for (let k = 0; k < paired; k++) {
+    const ni = prefix + k
+    const pi = prefix + k
+    from[ni] = pi
+    to[pi] = ni
+    if (!rowsEqual(p[pi]!, n[ni]!)) changed.push(ni)
+  }
+  for (let k = paired; k < newMiddle; k++) {
+    const ni = prefix + k
+    from[ni] = -1
+    pushRange(addedRanges, ni, ni + 1)
+  }
+  for (let k = paired; k < oldMiddle; k++) {
+    const pi = prefix + k
+    to[pi] = -1
+    pushRange(removedRanges, pi, pi + 1)
+  }
+
+  // Derive the singular added/removed convenience ranges (first run).
+  const added = addedRanges.length ? addedRanges[0]! : null
+  const removed = removedRanges.length ? removedRanges[0]! : null
+  // A pure append (or append + in-place modifications) keeps every retained
+  // index; publish the compact form as well so streaming callers can avoid
+  // carrying/allocating the full mapping.
+  let appendOnly = removedRanges.length === 0
+  let baseLength = p.length
+  if (appendOnly) {
+    for (let i = 0; i < from.length; i++) {
+      const old = from[i]!
+      if (old < 0) {
+        baseLength = i
+        // Only a suffix of inserted rows is append-only; anything retained
+        // after an insertion means indices shifted.
+        for (let j = i; j < from.length; j++) if (from[j]! !== -1) { appendOnly = false; break }
+        break
+      }
+      if (old !== i) { appendOnly = false; break }
+    }
+    if (appendOnly && from.length === p.length && p.length !== n.length) appendOnly = false
+  }
+  return { changed, sameLength: false, added, removed, from, to, addedRanges, removedRanges, ...(appendOnly ? { appendOnly, baseLength } : {}) }
 }
 
 export interface DatasetPulse extends RowDiff {
   name: string
 }
 
+/** A length/order-change summary for a dataset (before names are attached). */
+export interface PulseChange {
+  changed: number[]
+  from?: number[]
+  to?: number[]
+  added?: PulseRange[]
+  removed?: PulseRange[]
+  appendOnly?: boolean
+  baseLength?: number
+}
+
 export interface DataPulse {
   datasets: Map<string, DatasetPulse>
-  /** Source datasets whose length/order changed (a full mark re-encode). */
+  /** Source datasets whose length/order changed (a full mark re-encode if no mapping can be used). */
   structural: Set<string>
 }
 
@@ -107,6 +235,8 @@ export interface PulseNode {
   marks: string[]
   /** False when a transform changes row count/order and needs a full re-derive. */
   rowWise: boolean
+  /** True when every transform preserves the input row index (mapping-spliceable). */
+  indexPreserving: boolean
 }
 
 export interface PulseGraph {
@@ -123,6 +253,12 @@ function isRowWise(d: CompiledData): boolean {
   return transformsOf(d).every((t) => ROWWISE.has(String(t.type)))
 }
 
+function isIndexPreserving(d: CompiledData): boolean {
+  return transformsOf(d).every((t) => STABLE_ROW_COUNT.has(String(t.type)) || t.type === 'filter'
+    || t.type === 'fold' || t.type === 'flatten' || t.type === 'aggregate'
+    || t.type === 'joinaggregate' || t.type === 'window' || t.type === 'stack')
+}
+
 /** Build the structural dataflow graph for a compiled chart. */
 export function buildPulseGraph(chart: CompiledChart): PulseGraph {
   const nodes = new Map<string, PulseNode>()
@@ -134,6 +270,7 @@ export function buildPulseGraph(chart: CompiledChart): PulseGraph {
       downstream: [],
       marks: [],
       rowWise: isRowWise(d),
+      indexPreserving: isIndexPreserving(d),
     })
   }
   for (const node of nodes.values()) {
@@ -188,10 +325,38 @@ export function propagatePulse(graph: PulseGraph, changed: Iterable<string>): Pu
 
 /** True when a transform chain contains a row-expanding/reordering operator. */
 export function transformNeedsFullRederive(types: string[]): boolean {
-  return types.some((t) => EXPANDING.has(t) || (t === 'bin' && false))
+  return types.some((t) => EXPANDING.has(t) && !STABLE_ROW_COUNT.has(t))
+}
+
+/** True when every transform preserves the input row index (mapping-spliceable). */
+export function transformKeepsRowIndex(types: string[]): boolean {
+  return types.every((t) => STABLE_ROW_COUNT.has(t) || t === 'filter'
+    || t === 'fold' || t === 'flatten' || t === 'aggregate'
+    || t === 'joinaggregate' || t === 'window' || t === 'stack')
 }
 
 /** Grouped transforms (aggregate/window/stack) consume dirty groups in place. */
 export function isGroupedTransform(type: string): boolean {
   return GROUPED.has(type)
+}
+
+/** Convert a RowDiff into the compact change shape the runtime consumes. */
+export function changeOf(diff: RowDiff): PulseChange {
+  return {
+    changed: diff.changed,
+    ...(diff.from ? { from: diff.from } : {}),
+    ...(diff.to ? { to: diff.to } : {}),
+    ...(diff.addedRanges ? { added: diff.addedRanges } : {}),
+    ...(diff.removedRanges ? { removed: diff.removedRanges } : {}),
+    ...(diff.appendOnly ? { appendOnly: true, baseLength: diff.baseLength } : {}),
+  }
+}
+
+// Internal classification shared with the runtime.
+export const pulseInternals = {
+  ROWWISE,
+  GROUPED,
+  EXPANDING,
+  INDEX_PRESERVING,
+  STABLE_ROW_COUNT,
 }

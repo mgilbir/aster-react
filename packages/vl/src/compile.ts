@@ -2373,7 +2373,11 @@ function defaultLabelAlign(angle: number, orient: string, channel: string): stri
 // --- axes --------------------------------------------------------------------
 
 function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: ScaleSpec[], scaleName?: string, gridScaleOverride?: string, config?: Record<string, unknown>): Record<string, unknown>[] {
-  const axes: Record<string, unknown>[] = []
+  // Vega-lite emits every grid axis before every label axis (paint order:
+  // grids under the domain/labels). Emitting per-channel [grid, label] leaves a
+  // later channel's grid line above an earlier channel's domain line.
+  const gridAxes: Record<string, unknown>[] = []
+  const labelAxes: Record<string, unknown>[] = []
   const scaleByName = new Map(scales.map((s) => [s.name, s]))
 
   for (const def of fields) {
@@ -2452,7 +2456,7 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
           if ((userAxis as Record<string, unknown>)[gk] !== undefined) gridAxis[gk] = (userAxis as Record<string, unknown>)[gk]
         }
       }
-      axes.push(gridAxis)
+      gridAxes.push(gridAxis)
     }
 
     const title = configTitleSupplied ? null : axisTitle(def, userAxis, fields)
@@ -2544,9 +2548,9 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       }
       if (userAxis.orient) labelAxis.orient = userAxis.orient
     }
-    axes.push(labelAxis)
+    labelAxes.push(labelAxis)
   }
-  return axes
+  return [...gridAxes, ...labelAxes]
 }
 
 function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null, fields?: FieldDef[]): unknown {
@@ -3812,7 +3816,11 @@ export function compileUnit(spec: VLSpec): VLSpec {
   if (Array.isArray(spec.params) && spec.params.length) {
     const signals = (spec.params as Record<string, unknown>[])
       .filter((p) => p.name && p.value !== undefined)
-      .map((p) => ({ name: p.name, value: p.value }))
+      .map((p) => ({
+        name: p.name,
+        value: p.value,
+        ...(isObject(p.bind) || typeof p.bind === 'string' ? { bind: p.bind } : {}),
+      }))
     if (signals.length) out.signals = signals
   }
   out.marks = builtMarks

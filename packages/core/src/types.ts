@@ -50,6 +50,30 @@ export interface RuntimeInput {
    */
   dataChanges?: Record<string, number[]>
   /**
+   * Length-changing pulse: per source dataset, the changed output indices plus
+   * the old<->new index mapping and added/removed ranges from `diffRows`.
+   * This is what lets an append/insert/delete splice cached rows/items instead
+   * of falling back to a full re-derive. `dataChanges` remains the compact
+   * same-length form; when both are present `dataPulse` wins for that dataset.
+   */
+  dataPulse?: Record<string, {
+    changed?: number[]
+    /** new index -> previous index (-1 for inserted rows). */
+    from?: number[]
+    /** previous index -> new index (-1 for removed rows). */
+    to?: number[]
+    /** Appended ranges in new coordinates. */
+    added?: Array<[number, number]>
+    /** Removed ranges in previous coordinates. */
+    removed?: Array<[number, number]>
+    /**
+     * Compact append-only pulse: the retained prefix is unchanged in index, so
+     * `from` can be synthesised on demand. `baseLength` is the previous length.
+     */
+    appendOnly?: boolean
+    baseLength?: number
+  }>
+  /**
    * Infer a per-datum changeset by diffing replaced source arrays against the
    * previous session evaluation. Defaults to true when `dataChanges` is absent;
    * set false to force a full re-encode.
@@ -152,6 +176,8 @@ export interface CompiledSignalDef {
   value?: unknown
   /** Static (`update`) expression, resolved to a fixed point. */
   update?: string
+  /** Input binding (`signal.bind`), rendered by interactive hosts. */
+  bind?: Record<string, unknown> | string
   /** Event-driven handlers (`signal.on` streams), bound by the host. */
   on?: SignalOnDef[]
 }
@@ -266,6 +292,7 @@ export interface CompiledAxis {
   titlePadding?: number
   titleFontSize?: number
   titleFontWeight?: string | number
+  titleFont?: string
   titleOpacity?: number
   titleColor?: string
   titleAngle?: number
@@ -283,6 +310,7 @@ export interface CompiledAxis {
   labelColor?: string
   labelOpacity?: number
   labelFontSize?: number
+  labelFont?: string
   labelLimit?: number
   bandPosition?: number
   tickColor?: string
@@ -344,6 +372,7 @@ export interface CompiledLegend {
   labelFontSize?: number
   labelFontWeight?: string | number
   labelFontStyle?: string
+  labelFont?: string
   labelOffset?: number
   labelLimit?: number
   rowPadding?: number
@@ -351,6 +380,7 @@ export interface CompiledLegend {
   titlePadding?: number
   titleFontSize?: number
   titleFontWeight?: string | number
+  titleFont?: string
   titleOpacity?: number
   titleColor?: string
   titleBaseline?: string

@@ -126,13 +126,15 @@ nondeterministic bootstrap aggregates; see `pnpm sweep-vl`.
 
 **Browser conformance gate (`pnpm conformance:browser`): 419/419.** The same oracle protocol run in a real Chromium page (vega-embed SVG renderer with live canvas text metrics, vs `renderSpec`), because the Node harness runs both engines in jsdom where neither can measure text.
 
+**Canvas parity gate (`pnpm conformance:canvas`): 414/414 in Chromium, Firefox and WebKit.** The oracle (vega-embed canvas) and `renderSceneToCanvas` render the same corpus plus custom-font and multi-line-text fixtures to real `<canvas>` elements and compare pixels with a 1px-neighbourhood, 4% ratio / 2.5 mean-difference tolerance. This caught (and fixed) paint-order and relative-path bugs the recorded/jsdom canvas differential could not see. Four documented exclusions remain: a remote image asset, degenerate concat/repeat cells, and a spec where Vega's own SVG and canvas backends disagree on a boolean fill.
+
 **What is NOT covered yet:**
 
-- **Full reactive dataflow** — the session fingerprints identical renders (returns the cached scene) and partially re-evaluates only the marks whose dataset changed, but the datum set is still eagerly re-encoded per update; there is no per-datum source/target pulse graph.
+- **Streaming transport** — `createChartStream`, `useChartStream` and `useChartWorkerStream` provide the bounded queue/policies and explicit pulses; a host still owns the network/transport and decides when to flush (the hooks flush once per microtask by default).
 - **Full Vega transform parity** — `bin` covers common cases but not every Vega option; `window`/`joinaggregate`/`impute` hold for common shapes.
-- **[io] tracing/other rare layout transforms** — the opt-in addon covers `kde`/`quantile`/`regression`/`loess`/`pack`/`partition`/`treemap`/`wordcloud`/`voronoi`.
+- **Global fitters** — `kde`/`regression`/`loess`/`quantile`/`contour`/`wordcloud` re-derive on an append (the downstream scene still receives a correct change result); the 1:1 geo/hierarchy operators (`geojson`, `geopoint`, `geoshape`, `linkpath`, `project`, `pack`, `partition`, `treemap`, `voronoi`, `pie`, `dotbin`, `label`) propagate the row mapping.
 
-Expressions are CSP-safe: the engine evaluates them via the `vega-expression` AST interpreter (`vega-interpreter`), so no `new Function` is ever used.
+Expressions are CSP-safe: the engine parses the Vega expression DSL with its own lexer/Pratt parser (`expr-parser.ts`) and evaluates the AST with an owned interpreter (`expr-interpreter.ts`), so no `new Function` is ever used.
 
 ## Performance
 
@@ -146,4 +148,23 @@ For charts where only a fraction of the data changes between renders, pass `data
 <Chart spec={spec} data={newRows} dataChanges={{ table: changedIndices }} />
 ```
 
-The reactive dataflow re-derives only the changed rows, reuses unchanged scene items and DOM subtrees, and reuses scales whose domain is unchanged (both continuous min/max tracking and a discrete value-census for band/point/ordinal domains; rect marks additionally reuse their paint order when the sort permutation is unchanged). `pnpm bench:differential` measures the win at 50k points / 1% changed: row-wise (`formula`) ~17x, fixed-scale symbol ~12x, and `aggregate` ~3x faster than a full re-encode at the scene level, and ~5–9x at the DOM-patch level; in-browser (`bench:browser`) a 1%-changed update on 1000 points costs ~1.2 ms vs ~5–7 ms for a full re-encode. The `dataChanges` (and dataset) transforms must preserve row length/order; `window`/`stack` with a `sort` and the geo/layout operators fall back to a full re-derive.
+The reactive dataflow re-derives only the changed rows, reuses unchanged scene items and DOM subtrees, and reuses scales whose domain is unchanged (both continuous min/max tracking and a discrete value-census for band/point/ordinal domains; rect marks additionally reuse their paint order when the sort permutation is unchanged). `pnpm bench:differential` measures the win at 50k points / 1% changed: row-wise (`formula`) ~17x, fixed-scale symbol ~12x, and `aggregate` ~3x faster than a full re-encode at the scene level, and ~5–9x at the DOM-patch level; in-browser (`bench:browser`) a 1%-changed update on 1000 points costs ~1.2 ms vs ~5–7 ms for a full re-encode.
+
+Length-changing updates are first-class: `diffRows` publishes an old↔new row mapping plus added/removed ranges, transforms propagate it (`filter`, `fold`, `flatten`, `collect`, `sample`, fixed-extent `bin`, `lookup`, `aggregate`, `joinaggregate`, `window`, `stack`, and the 1:1 geo/hierarchy operators), and marks splice their item arrays. `impute`/`pivot` and the global fitters still re-derive but publish a correct change result. `pnpm bench:incremental` measures a streamed append versus a full evaluate; a 10k-point symbol chart appending one row is ~29x cheaper at the median, and 100k points is ~216x (the CI gate runs 10k/30 updates; nightly runs 100k/40). For a push-based feed, `createChartStream(spec, { capacity, policy })` adds a bounded queue with `coalesce`/`drop-oldest`/`drop-newest`/`error` backpressure and an explicit `flush()` pulse:
+
+```ts
+const stream = createChartStream(spec, { capacity: 32, policy: 'coalesce' })
+stream.push({ append: { table: newRows } })   // or { data: snapshot }, signals, width/height
+const { scene, pulse, noop } = stream.flush()!
+```
+
+In React, use `<ChartStream spec={spec}>` (or `<ChartWorkerStream worker={...}>`); the scene
+goes through the same DOM patcher/canvas renderer, interaction and a11y tree as
+`<Chart>`, so a streamed append patches only the new/changed DOM nodes instead of
+re-serializing the SVG. `pnpm bench:browser-stream` measures the real-browser cadence:
+10k points at one append/frame holds ~16.7 ms median frames with <1% long frames on
+both SVG and canvas; 100k points holds ~16.7 ms on canvas (incremental append painting) and ~86 ms on SVG per frame,
+the remaining scaling boundary. The hooks (`useChartStream`, `useChartWorkerStream`) expose
+`push`, `flush`, `pause`/`resume`, `close`, `stats`, `pulse`, and worker
+accepted/rejected/depth counters for backpressure.
+

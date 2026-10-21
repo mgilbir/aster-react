@@ -256,20 +256,33 @@ function comparator(a: Row, b: Row, field: string): number {
 
 export function sortRows(rows: Row[], sort?: SortSpec): Row[] {
   if (!sort?.field) return rows
+  const copy = rows.slice()
+  copy.sort((a, b) => compareRows(a, b, sort))
+  return copy
+}
+
+/** Comparator for a `SortSpec` (used by collect and the incremental order). */
+export function compareRows(a: Row, b: Row, sort?: SortSpec): number {
+  if (!sort?.field) return 0
   const fields = Array.isArray(sort.field) ? sort.field : [sort.field]
   const orders = Array.isArray(sort.order)
     ? sort.order
     : [sort.order ?? 'ascending']
-  const copy = rows.slice()
-  copy.sort((a, b) => {
-    for (let i = 0; i < fields.length; i++) {
-      const f = fields[i] as string
-      const c = comparator(a, b, f)
-      if (c !== 0) return (orders[i] ?? 'ascending') === 'descending' ? -c : c
-    }
-    return 0
-  })
-  return copy
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i] as string
+    const c = comparator(a, b, f)
+    if (c !== 0) return (orders[i] ?? 'ascending') === 'descending' ? -c : c
+  }
+  return 0
+}
+
+/** Stable input-index order produced by a collect/sample sort. */
+export function sortOrder(rows: Row[], sort?: SortSpec, limit = Infinity): number[] {
+  const order = rows.map((_, i) => i)
+  if (sort?.field) {
+    order.sort((a, b) => compareRows(rows[a]!, rows[b]!, sort) || a - b)
+  }
+  return Number.isFinite(limit) ? order.slice(0, Math.max(0, limit)) : order
 }
 
 // ---------------------------------------------------------------------------

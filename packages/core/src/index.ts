@@ -24,6 +24,18 @@ export type {
 } from './types.js'
 export { compileChart } from './compiler.js'
 export { evaluateChart, getChartInfo } from './runtime.js'
+export {
+  createChartStream,
+  AsterStreamBackpressureError,
+  type ChartStream,
+  type StreamBatch,
+  type StreamFlush,
+  type StreamOptions,
+  type StreamPolicy,
+  type StreamPulse,
+  type StreamPulseInput,
+  type StreamStats,
+} from './stream.js'
 export type { ChartInfo } from './runtime.js'
 export { renderSceneToSvg } from './render.js'
 // The canvas renderer ships as an opt-in addon (`@aster/core/canvas`): hosts
@@ -32,6 +44,18 @@ export { renderSceneToSvg } from './render.js'
 // string-mode hosts never need it. To keep the DOM path working without
 // touching the addon entry, the re-exports live there.
 export { type DomDesc } from './dom.js'
+export {
+  locale,
+  defaultLocale,
+  resetDefaultLocale,
+  numberFormatLocale,
+  numberFormatDefaultLocale,
+  timeFormatLocale,
+  timeFormatDefaultLocale,
+  type Locale,
+} from './locale.js'
+export type { FormatLocaleDefinition } from './format.js'
+export type { TimeLocaleDefinition } from './time-format.js'
 export { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 export { buildScale, type Scale } from './scales.js'
 export { applyTransforms, sortRows, type Row } from './transform.js'

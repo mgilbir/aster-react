@@ -36,6 +36,56 @@ on), supports explicit per-datum `dataChanges`, and exposes the source/transform
 via `session.pulse()`. `buildPulseGraph(chart)` / `propagatePulse(graph, sources)` expose
 the same dataflow structure directly.
 
+### Streaming and pulses
+
+`diffRows(previous, next)` classifies a replacement snapshot: same-length changes return
+the changed indices; length-changing updates also return `from` (new → old row index,
+`-1` for an insert), `to` (old → new, `-1` for a delete) and the added/removed ranges.
+Pass the long form as `dataPulse` (per source dataset) to `evaluateChart`/`session` when
+you already know the delta; `dataChanges` remains the compact same-length form.
+
+`createChartStream(spec, options)` wraps a session with a push-based, bounded queue:
+
+```ts
+import { createChartStream } from '@aster/core'
+
+const stream = createChartStream(spec, {
+  capacity: 32,              // queued batches (default 32; coalesce keeps 1)
+  policy: 'coalesce',        // 'coalesce' | 'drop-oldest' | 'drop-newest' | 'error'
+  initial: { signals: { theme: 'dark' } },
+})
+
+stream.push({ append: { table: rows } })       // append rows to the current snapshot
+stream.push({ data: { table: snapshot } })     // replace a snapshot
+stream.push({ signals: { brush: [1, 4] }, width: 800 })
+stream.push({ append: { table: rows }, pulse: { table: explicitPulse } })
+
+stream.pending()   // the DataPulse that flush() would deliver
+const result = stream.flush()   // { scene, pulse, batches, noop } | null
+stream.stats()     // { depth, capacity, policy, coalesced, dropped, flushes }
+stream.canAccept() // producer-side backpressure hint
+stream.scene()     // last flushed SceneRoot (null before the first flush)
+stream.close()
+```
+
+An empty first `flush()` primes the scene from the spec/initial snapshot; later empty
+flushes are no-ops. The React bindings are:
+
+- `useChartStream(spec, options)` — local stream, `push`/`flush`/`pause`/`resume`/`close`,
+  stats and pulse.
+- `useChartWorkerStream(spec, options)` — worker-owned stream, local fallback, plus
+  `accepted()`/`rejected()`/`depth()` backpressure counters.
+- `<ChartStream spec={...}>` / `<ChartWorkerStream spec={...}>` — render the streamed
+  scene through the same DOM patcher, canvas renderer, interaction and a11y tree as
+  `<Chart>` (no per-flush SVG serialization).
+- `handleChartWorkerStreamRequest(request, streams)` — the pure worker protocol.
+
+`policy: 'coalesce'` merges queued appends/snapshots so a slow consumer sees one pulse
+for the latest state; `drop-oldest`/`drop-newest` bound the queue by discarding whole
+batches; `error` throws `AsterStreamBackpressureError`. Explicit `pulse` values are
+composed across coalesced batches when possible and otherwise fall back to a snapshot
+diff (still correct, just O(n)).
+
 `buildA11yTree(scene, scales, options)` returns positioned, captioned nodes for marks,
 axes, legends, legend entries and titles. `<Chart>` projects them into focusable
 elements; non-React hosts can do the same. Legend entries are keyboard toggles.

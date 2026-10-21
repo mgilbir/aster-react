@@ -43,9 +43,9 @@ export interface CanvasLike {
   stroke(): void
   fillRect(x: number, y: number, w: number, h: number): void
   setLineDash(dashes: number[]): void
-  // `maxWidthOrMulti` doubles as the multi-line marker (renderers pass a
-  // boolean when the item has wrapped lines); the DOM `maxWidth` overload is
-  // never used by this renderer.
+  // The renderer never passes a maxWidth (the DOM overload is unused). The
+  // optional fourth argument remains for recording mocks that flag multi-line
+  // text; a real CanvasRenderingContext2D would coerce a boolean to 0.
   fillText(text: string, x: number, y: number, maxWidthOrMulti?: number | boolean): void
   drawImage?(image: unknown, dx: number, dy: number, dw?: number, dh?: number): void
   createLinearGradient(x0: number, y0: number, x1: number, y1: number): GradientLike
@@ -88,8 +88,22 @@ const ARG_COUNT: Record<string, number> = {
   M: 2, L: 2, H: 1, V: 1, C: 6, S: 4, Q: 4, T: 2, A: 7, Z: 0,
 }
 
+/** Bounded cache: many marks reuse one path string (symbols, axes, legends). */
+const PATH_CACHE = new Map<string, PathSeg[]>()
+const PATH_CACHE_MAX = 4096
+const SYMBOL_CACHE = new Map<string, string>()
+
 /** Parse an SVG path `d` string into absolute-command segments. */
 export function parsePathData(d: string): PathSeg[] {
+  const cached = PATH_CACHE.get(d)
+  if (cached) return cached
+  const segs = parsePathDataUncached(d)
+  if (PATH_CACHE.size >= PATH_CACHE_MAX) PATH_CACHE.clear()
+  PATH_CACHE.set(d, segs)
+  return segs
+}
+
+function parsePathDataUncached(d: string): PathSeg[] {
   const segs: PathSeg[] = []
   const re = /([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d*\.\d+|\d+)(?:[eE][+-]?\d+)?)/g
   let m: RegExpExecArray | null
@@ -194,13 +208,39 @@ export function parsePathData(d: string): PathSeg[] {
   return segs
 }
 
+/**
+ * Current point after a sequence of parsed segments. H/V carry only one
+ * coordinate, so the other must be carried forward from the previous segment —
+ * returning `{x, y: 0}` for an H (or `{x: 0, y}` for a V) makes the next
+ * relative command jump to the origin (rect paths are `M…h…v…h…Z`).
+ */
 function lastPoint(segs: PathSeg[]): { x: number; y: number } {
-  for (let j = segs.length - 1; j >= 0; j--) {
-    const s = segs[j]!
-    if ('x' in s && 'y' in s) return { x: s.x, y: s.y }
-    if ('x' in s) return { x: s.x, y: 0 }
+  let x = 0
+  let y = 0
+  let startX = 0
+  let startY = 0
+  for (const s of segs) {
+    switch (s.cmd) {
+      case 'M': x = s.x; y = s.y; startX = x; startY = y; break
+      case 'L': case 'T': x = s.x; y = s.y; break
+      case 'H': x = s.x; break
+      case 'V': y = s.y; break
+      case 'C': case 'S': case 'Q': case 'A': x = s.x; y = s.y; break
+      case 'Z': x = startX; y = startY; break
+    }
   }
-  return { x: 0, y: 0 }
+  return { x, y }
+}
+
+function cachedSymbolPath(shape: string | undefined, r: number): string {
+  const key = `${shape ?? 'circle'}|${r}`
+  let d = SYMBOL_CACHE.get(key)
+  if (d == null) {
+    d = symbolPath(shape, r)
+    if (SYMBOL_CACHE.size > 1024) SYMBOL_CACHE.clear()
+    SYMBOL_CACHE.set(key, d)
+  }
+  return d
 }
 
 /** Canonical form of parsed segments (shared by both parity sides). */
@@ -343,6 +383,11 @@ function traceEllipse(ctx: CanvasLike, cx: number, cy: number, rx: number, ry: n
 export interface RenderCanvasOptions {
   /** Device pixel ratio: scales the context transform (R9.2 uses this). */
   dpr?: number
+  /**
+   * Batch large runs of identically-painted symbols into one fill/stroke (default
+   * true). Set false in draw-record tests that compare per-item commands.
+   */
+  batchSymbols?: boolean
 }
 
 export function renderSceneToCanvas(scene: SceneRoot, ctx: CanvasLike, opts: RenderCanvasOptions = {}): void {
@@ -377,7 +422,7 @@ export function renderSceneToCanvas(scene: SceneRoot, ctx: CanvasLike, opts: Ren
   }
 
   for (const node of scene.items) {
-    renderGroup(node, ctx, scene, plotW, plotH)
+    renderGroup(node, ctx, scene, plotW, plotH, opts)
   }
   ctx.restore()
 }
@@ -386,7 +431,136 @@ function isGroup(item: SceneItem): item is SceneGroup {
   return (item as SceneGroup).marktype !== undefined || Array.isArray((item as SceneGroup).items)
 }
 
-function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW: number, plotH: number): void {
+// ---------------------------------------------------------------------------
+// Incremental append painting
+// ---------------------------------------------------------------------------
+
+export interface CanvasSceneSnapshot {
+  scene: SceneRoot
+  /** Top-level mark group -> item count at draw time (arrays may be mutated). */
+  markLengths: Map<SceneGroup, number>
+  /** Scene generation (item `__gen` values older than this are unchanged). */
+  gen: number
+}
+
+const GUIDE_SIGNATURE = new WeakMap<SceneGroup, string>()
+
+export function snapshotCanvasScene(scene: SceneRoot): CanvasSceneSnapshot {
+  const markLengths = new Map<SceneGroup, number>()
+  for (const g of scene.items) {
+    if (g.role === 'mark') markLengths.set(g, (g.items as SceneItem[] | undefined)?.length ?? 0)
+  }
+  return { scene, markLengths, gen: (scene as unknown as { __itemGen?: number }).__itemGen ?? 0 }
+}
+
+function groupSignature(g: SceneGroup): string {
+  const cached = GUIDE_SIGNATURE.get(g)
+  if (cached) return cached
+  let sig: string
+  try {
+    sig = JSON.stringify({
+      marktype: g.marktype, role: g.role, x: g.x, y: g.y, width: g.width, height: g.height,
+      clip: g.clip, clipPathD: g.clipPathD, items: g.items,
+    })
+  } catch {
+    sig = `#${Math.random()}`
+  }
+  GUIDE_SIGNATURE.set(g, sig)
+  return sig
+}
+
+const APPEND_SAFE = new Set(['symbol', 'text', 'rule', 'tick'])
+
+/**
+ * Paint only the appended items of a streamed scene on top of the existing
+ * canvas, then repaint any changed groups that come after it. Returns false
+ * when the scene changed in a way that needs a full repaint.
+ */
+export function renderSceneToCanvasAppend(
+  prev: CanvasSceneSnapshot,
+  next: SceneRoot,
+  ctx: CanvasLike,
+  opts: RenderCanvasOptions = {},
+): boolean {
+  const a = prev.scene
+  if (a.width !== next.width || a.height !== next.height) return false
+  if (a.background !== next.background) return false
+  if (a.frameStroke !== next.frameStroke || a.frameFill !== next.frameFill
+    || a.frameStrokeWidth !== next.frameStrokeWidth || a.frameClip !== next.frameClip) return false
+  if ((a.defs?.length ?? 0) || (next.defs?.length ?? 0)) return false
+  if (a.items.length !== next.items.length) return false
+  const pa = a.padding ?? { top: 0, right: 0, bottom: 0, left: 0 }
+  const pb = next.padding ?? { top: 0, right: 0, bottom: 0, left: 0 }
+  if (pa.top !== pb.top || pa.right !== pb.right || pa.bottom !== pb.bottom || pa.left !== pb.left) return false
+
+  let appendIndex = -1
+  let appendFrom = 0
+  const repaint: number[] = []
+  for (let i = 0; i < next.items.length; i++) {
+    const ng = next.items[i]!
+    const pg = a.items[i]!
+    if (ng === pg) {
+      if (pg.role !== 'mark') continue
+      const oldLen = prev.markLengths.get(pg) ?? 0
+      const items = (pg.items as SceneItem[] | undefined) ?? []
+      if (items.length < oldLen) return false
+      if (items.length === oldLen) continue
+      if (appendIndex >= 0) return false
+      if (!APPEND_SAFE.has(String(pg.marktype)) || pg.clip === true) return false
+      for (let j = 0; j < oldLen; j++) {
+        const it = items[j] as SceneItem & { __gen?: number }
+        if (it.__gen != null && it.__gen > prev.gen) return false
+      }
+      appendIndex = i
+      appendFrom = oldLen
+      continue
+    }
+    if (ng.role === 'mark') {
+      const oldLen = prev.markLengths.get(pg) ?? ((pg.items as SceneItem[] | undefined)?.length ?? 0)
+      const nItems = (ng.items as SceneItem[] | undefined) ?? []
+      const pItems = (pg.items as SceneItem[] | undefined) ?? []
+      if (nItems.length < oldLen) return false
+      if (nItems.length > oldLen) {
+        if (appendIndex >= 0 || !APPEND_SAFE.has(String(ng.marktype)) || ng.clip === true) return false
+        for (let j = 0; j < oldLen; j++) {
+          const ni = nItems[j] as SceneItem & { __gen?: number }
+          if (ni !== pItems[j]) return false
+          if (ni.__gen != null && ni.__gen > prev.gen) return false
+        }
+        appendIndex = i
+        appendFrom = oldLen
+        continue
+      }
+      // same-length mark group: compare content; repaint if changed after the
+      // append group, otherwise fall back.
+      if (groupSignature(pg) === groupSignature(ng)) continue
+      if (appendIndex < 0) return false
+      repaint.push(i)
+      continue
+    }
+    if (groupSignature(pg) === groupSignature(ng)) continue
+    // A changed guide before the append group cannot be painted in place
+    // without overpainting the existing marks.
+    if (appendIndex < 0) return false
+    repaint.push(i)
+  }
+  if (appendIndex < 0) return false
+
+  const plotW = next.plotWidth ?? next.width - pb.left - pb.right
+  const plotH = next.plotHeight ?? next.height - pb.top - pb.bottom
+  ctx.save()
+  if (opts.dpr != null && opts.dpr !== 1) ctx.scale(opts.dpr, opts.dpr)
+  ctx.translate(pb.left, pb.top)
+  const g = next.items[appendIndex]!
+  const nItems = (g.items as SceneItem[] | undefined) ?? []
+  const slice: SceneGroup = { ...g, items: nItems.slice(appendFrom) }
+  renderGroup(slice, ctx, next, plotW, plotH, opts)
+  for (const i of repaint) renderGroup(next.items[i]!, ctx, next, plotW, plotH, opts)
+  ctx.restore()
+  return true
+}
+
+function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW: number, plotH: number, opts: RenderCanvasOptions = {}): void {
   const type = group.marktype
   if (!type || type === 'group') {
     ctx.save()
@@ -398,7 +572,7 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
       ctx.clip()
     }
     for (const item of group.items ?? []) {
-      if (isGroup(item)) renderGroup(item, ctx, scene, plotW, plotH)
+      if (isGroup(item)) renderGroup(item, ctx, scene, plotW, plotH, opts)
       else renderLeafItem(item, ctx, scene)
     }
     ctx.restore()
@@ -410,11 +584,11 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
     if (group.clipPathD) tracePath(ctx, parsePathData(group.clipPathD), group.x ?? 0, group.y ?? 0)
     else ctx.rect(0, 0, plotW, plotH)
     ctx.clip()
-    renderMark(type, group, ctx, scene)
+    renderMark(type, group, ctx, scene, opts)
     ctx.restore()
     return
   }
-  renderMark(type, group, ctx, scene)
+  renderMark(type, group, ctx, scene, opts)
 }
 
 /** Resolve a paint value; `{gradient: id}` resolves through scene defs. */
@@ -489,18 +663,22 @@ function paintPath(
   op: 'auto' | 'fill' | 'stroke',
   honorStrokeOpacity = false,
 ): void {
-  const bb = segsBbox(segs)
   const opacity = (it.opacity ?? 1) as number
   const fill = op === 'stroke' ? undefined : it.fill
   const stroke = op === 'fill' ? undefined : it.stroke
-  if (fill != null && fill !== 'transparent') {
+  const isGradient = (p: unknown): boolean =>
+    (typeof p === 'string' && p.startsWith('url(#')) || (p != null && typeof p === 'object' && 'gradient' in (p as object))
+  // Gradient resolution is the only consumer of the bbox; skip the segment walk
+  // for the common solid-paint case (thousands of symbols per frame).
+  const bb = isGradient(fill) || isGradient(stroke) ? segsBbox(segs) : null
+  if (fill != null && (fill as unknown) !== false && fill !== 'transparent') {
     ctx.globalAlpha = opacity * ((it.fillOpacity ?? 1) as number)
     const paint = resolvePaint(fill, ctx, defs, bb)
     // Dangling references and non-string paints serialize as their string form.
     ctx.fillStyle = (paint !== undefined ? paint : String(fill)) as string
     ctx.fill()
   }
-  if (stroke != null && stroke !== 'transparent') {
+  if (stroke != null && (stroke as unknown) !== false && stroke !== 'transparent') {
     // Only the area renderer surfaces stroke-opacity (mirroring the SVG
     // renderer, and vega's own per-mark attribute emission).
     ctx.globalAlpha = opacity * (honorStrokeOpacity ? ((it.strokeOpacity ?? 1) as number) : 1)
@@ -596,13 +774,13 @@ function paintPathArc(ctx: CanvasLike, it: SceneItem, defs: SceneDefs[] | undefi
   const r = it.radius ?? 0
   const bb = { x1: cx - r, y1: cy - r, x2: cx + r, y2: cy + r }
   const opacity = (it.opacity ?? 1) as number
-  if (it.fill != null && it.fill !== 'transparent') {
+  if (it.fill != null && (it.fill as unknown) !== false && it.fill !== 'transparent') {
     ctx.globalAlpha = opacity * ((it.fillOpacity ?? 1) as number)
     const paint = resolvePaint(it.fill, ctx, defs, bb)
     if (paint !== undefined) ctx.fillStyle = paint
     ctx.fill()
   }
-  if (it.stroke != null && it.stroke !== 'transparent') {
+  if (it.stroke != null && (it.stroke as unknown) !== false && it.stroke !== 'transparent') {
     ctx.globalAlpha = opacity * ((it.strokeOpacity ?? 1) as number)
     const paint = resolvePaint(it.stroke, ctx, defs, bb)
     if (paint !== undefined) ctx.strokeStyle = paint
@@ -665,14 +843,77 @@ function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | unde
     ctx.fillText(lines[0]!, 0, dyR)
     for (let i = 1; i < lines.length; i++) ctx.fillText(lines[i]!, 0, i * lineHeight)
   } else {
-    const multi = lines.length > 1
-    ctx.fillText(lines[0]!, x, y, multi)
-    for (let i = 1; i < lines.length; i++) ctx.fillText(lines[i]!, x, y + i * lineHeight, multi)
+    // Do not pass a fourth (maxWidth) argument: a real CanvasRenderingContext2D
+    // coerces `false` to 0 and can suppress the glyphs. Multi-line text draws
+    // one baseline per line, exactly like the SVG tspans.
+    ctx.fillText(lines[0]!, x, y)
+    for (let i = 1; i < lines.length; i++) ctx.fillText(lines[i]!, x, y + i * lineHeight)
   }
   ctx.restore()
 }
 
-function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: SceneRoot): void {
+function isGradientPaint(p: unknown): boolean {
+  return (typeof p === 'string' && p.startsWith('url(#'))
+    || (p != null && typeof p === 'object' && 'gradient' in (p as object))
+}
+
+function symbolPaintKey(it: SceneItem): string {
+  const rec = it as Record<string, unknown>
+  return [
+    rec.shape ?? 'circle', it.size, it.fill, it.stroke, it.strokeWidth,
+    rec.opacity, rec.fillOpacity, rec.strokeOpacity, rec.strokeDash, it.strokeLineCap, it.strokeLineJoin,
+  ].map((v) => (v == null ? '' : Array.isArray(v) ? v.join(',') : String(v))).join('|')
+}
+
+/**
+ * Large symbol groups are almost always a dense scatter with a handful of
+ * paints. Batch consecutive same-paint items into one path so a 100k-point
+ * repaint is one fill/stroke per run instead of one per item.
+ */
+function renderSymbolRuns(items: SceneItem[], ctx: CanvasLike, defs: SceneDefs[] | undefined): void {
+  let run: SceneItem[] = []
+  let key = ''
+  const flush = (): void => {
+    if (!run.length) return
+    if (run.some((it) => isGradientPaint(it.fill) || isGradientPaint(it.stroke))) {
+      for (const it of run) {
+        if (it.x == null || it.y == null) continue
+        const r = Math.sqrt((it.size as number) ?? 30) / 2
+        const d = cachedSymbolPath((it as Record<string, unknown>).shape as string | undefined, r)
+        ctx.beginPath()
+        const segs = parsePathData(d)
+        tracePath(ctx, segs, it.x, it.y)
+        paintPath(ctx, segs, it, defs, 'auto')
+      }
+      run = []
+      return
+    }
+    ctx.beginPath()
+    for (const it of run) {
+      if (it.x == null || it.y == null) continue
+      const r = Math.sqrt((it.size as number) ?? 30) / 2
+      const shape = (it as Record<string, unknown>).shape as string | undefined
+      if (shape == null || shape === 'circle') {
+        ctx.moveTo(it.x + r, it.y)
+        ctx.arc(it.x, it.y, r, 0, 2 * Math.PI, false)
+      } else {
+        tracePath(ctx, parsePathData(cachedSymbolPath(shape, r)), it.x, it.y)
+      }
+    }
+    paintPath(ctx, [], run[0]!, defs, 'auto')
+    run = []
+  }
+  for (const it of items) {
+    if (it.x == null || it.y == null) continue
+    const k = symbolPaintKey(it)
+    if (run.length && k !== key) flush()
+    key = k
+    run.push(it)
+  }
+  flush()
+}
+
+function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, opts: RenderCanvasOptions = {}): void {
   const defs = scene.defs
   switch (type) {
     case 'line': {
@@ -708,16 +949,21 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       return
     }
     case 'symbol': {
-      for (const it of group.items ?? []) {
-        if (it.x == null || it.y == null) continue
-        const size = (it.size as number) ?? 30
-        const r = Math.sqrt(size) / 2
-        const shape = (it as Record<string, unknown>).shape as string | undefined
-        const d = symbolPath(shape, r)
-        ctx.beginPath()
-        const segs = parsePathData(d)
-        tracePath(ctx, segs, it.x, it.y)
-        paintPath(ctx, segs, it, defs, 'auto')
+      const items = group.items ?? []
+      if (opts.batchSymbols !== false && items.length >= 256) {
+        renderSymbolRuns(items, ctx, defs)
+      } else {
+        for (const it of items) {
+          if (it.x == null || it.y == null) continue
+          const size = (it.size as number) ?? 30
+          const r = Math.sqrt(size) / 2
+          const shape = (it as Record<string, unknown>).shape as string | undefined
+          const d = cachedSymbolPath(shape, r)
+          ctx.beginPath()
+          const segs = parsePathData(d)
+          tracePath(ctx, segs, it.x, it.y)
+          paintPath(ctx, segs, it, defs, 'auto')
+        }
       }
       return
     }

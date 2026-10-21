@@ -21,7 +21,7 @@ import {
 } from './compiled'
 import { compile } from '@aster/vl'
 import { loadSpecData } from '@aster/core/load'
-import { Chart } from '@aster/react'
+import { Chart, ChartStream, type ChartStreamHandle } from '@aster/react'
 import type { SelectionInterval } from '@aster/react'
 import {
   LineSpec,
@@ -122,6 +122,127 @@ function CompareCard({ title, desc, spec, aster, wide }: {
 }
 
 // ---------------------------------------------------------------------------
+// Streaming: identical append stream into the SVG DOM patcher and the canvas
+// backend, side by side.
+// ---------------------------------------------------------------------------
+
+const STREAM_SPEC = {
+  $schema: 'https://vega.github.io/schema/vega/v6.json',
+  width: 560, height: 340, padding: 8, autosize: 'none', background: 'white',
+  data: [{ name: 'table', values: [] as Array<{ x: number; y: number }> }],
+  scales: [
+    { name: 'x', type: 'linear', domain: [0, 1], range: 'width' },
+    { name: 'y', type: 'linear', domain: [0, 10], range: 'height' },
+  ],
+  axes: [
+    { scale: 'x', orient: 'bottom', grid: true },
+    { scale: 'y', orient: 'left', grid: true },
+  ],
+  marks: [{
+    type: 'symbol', from: { data: 'table' },
+    encode: { update: {
+      x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' },
+      size: { value: 26 }, fill: { value: '#4f8cff' }, opacity: { value: 0.75 },
+    } },
+  }],
+} as Record<string, unknown>
+
+const streamRows = (n: number, from = 0): Array<{ x: number; y: number }> =>
+  Array.from({ length: n }, (_, i) => {
+    const k = from + i
+    return { x: (k % 997) / 997, y: ((k * 17) % 100) / 10 }
+  })
+
+function StreamingCompare() {
+  const [running, setRunning] = React.useState(true)
+  const [runId, setRunId] = React.useState(0)
+  const [points, setPoints] = React.useState(3000)
+  const [frames, setFrames] = React.useState<{ median: number; long: number; count: number }>({ median: 0, long: 0, count: 0 })
+  const svgRef = React.useRef<ChartStreamHandle>(null)
+  const canvasRef = React.useRef<ChartStreamHandle>(null)
+  const nextRef = React.useRef(3000)
+  const initial = React.useMemo(() => streamRows(3000), [runId])
+
+  React.useEffect(() => {
+    if (!running) return
+    let raf = 0
+    let last = performance.now()
+    const times: number[] = []
+    let sinceStats = 0
+    const loop = (): void => {
+      const now = performance.now()
+      const dt = now - last
+      last = now
+      if (dt > 0) times.push(dt)
+      const batch = 1
+      const rows = streamRows(batch, nextRef.current)
+      nextRef.current += batch
+      svgRef.current?.push({ append: { table: rows } })
+      canvasRef.current?.push({ append: { table: rows } })
+      sinceStats += batch
+      if (sinceStats >= 60) {
+        sinceStats = 0
+        const sorted = times.slice(-240).sort((a, b) => a - b)
+        const median = sorted.length ? sorted[Math.floor(sorted.length / 2)]! : 0
+        const long = times.slice(-240).filter((t) => t > 21).length
+        setPoints(nextRef.current)
+        setFrames({ median, long, count: Math.min(240, times.length) })
+      }
+      raf = requestAnimationFrame(loop)
+    }
+    raf = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(raf)
+  }, [running, runId])
+
+  const reset = (): void => {
+    nextRef.current = 5000
+    setPoints(5000)
+    setFrames({ median: 0, long: 0, count: 0 })
+    setRunId((n) => n + 1)
+  }
+
+  const pane = (renderer: 'svg' | 'canvas', ref: React.RefObject<ChartStreamHandle | null>, title: string) => (
+    <div className="pane">
+      <div className="pane-head"><span className={`badge ${renderer === 'canvas' ? 'aster' : 'oracle'}`}>{title}</span></div>
+      <div className="chart-container">
+        <ChartStream
+          key={runId}
+          ref={ref}
+          spec={STREAM_SPEC}
+          width={560}
+          height={340}
+          renderer={renderer}
+          a11y={false}
+          streamOptions={{ initial: { data: { table: initial } }, flushPolicy: 'raf', autoFlush: true }}
+        />
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="section wide">
+      <h2>Streaming — same append stream, two renderers</h2>
+      <p className="desc">
+        Both panes receive one row per animation frame through <code>ChartStream</code>.
+        Left patches the SVG DOM; right paints only the appended mark items on canvas. Scales are fixed
+        so this measures the render path, not scale-domain churn.
+      </p>
+      <div className="controls">
+        <button onClick={() => setRunning((r) => !r)}>{running ? 'Pause' : 'Resume'}</button>
+        <button onClick={reset}>Reset</button>
+        <span>rows: {points.toLocaleString()}</span>
+        <span>frame median: {frames.median ? frames.median.toFixed(1) : '—'} ms</span>
+        <span>long frames: {frames.long} / {frames.count || '—'}</span>
+      </div>
+      <div className="compare">
+        {pane('svg', svgRef, 'aster · svg dom patch')}
+        {pane('canvas', canvasRef, 'aster · canvas')}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Playground: one spec, both engines, live
 // ---------------------------------------------------------------------------
 
@@ -130,21 +251,50 @@ function CompareCard({ title, desc, spec, aster, wide }: {
  * (vega-datasets), so specs like `data: { url: 'seattle-weather.csv' }` work
  * without editing. Absolute and data: URLs pass through untouched.
  */
-const VEGA_DATA_BASE = 'https://vega.github.io/vega-datasets/data/'
+const VEGA_DATA_BASES = [
+  'https://vega.github.io/vega-datasets/data/',
+  'https://vega.github.io/vega/data/',
+]
+
+/**
+ * Official Vega examples write `"url": "data/stocks.csv"` (and occasionally
+ * `"./data/..."`). The datasets host serves the file at `/data/stocks.csv`, so
+ * strip the leading `data/` before joining the base; otherwise the request
+ * becomes `.../data/data/stocks.csv` (404) and copy/pasting examples fails.
+ */
+function resolveDataUrl(u: string): string {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(u) || u.startsWith('data:')) return u
+  const clean = u.replace(/^\.\//, '').replace(/^data\//, '')
+  return VEGA_DATA_BASES[0]! + clean
+}
 
 function resolveDataUrls<T extends Record<string, unknown>>(spec: T): T {
   const out = structuredClone(spec)
-  const fix = (d: unknown): void => {
-    if (d && typeof d === 'object' && typeof (d as { url?: unknown }).url === 'string') {
-      const u = (d as { url: string }).url
-      if (!/^[a-z][a-z0-9+.-]*:/i.test(u) && !u.startsWith('data:')) {
-        ;(d as { url: string }).url = VEGA_DATA_BASE + u.replace(/^\.\//, '')
-      }
-    }
+  const seen = new WeakSet<object>()
+  const walk = (v: unknown): void => {
+    if (v == null || typeof v !== 'object' || seen.has(v as object)) return
+    seen.add(v as object)
+    if (Array.isArray(v)) { for (const x of v) walk(x); return }
+    const rec = v as Record<string, unknown>
+    if (typeof rec.url === 'string') rec.url = resolveDataUrl(rec.url)
+    for (const k of Object.keys(rec)) walk(rec[k])
   }
-  if (Array.isArray(out.data)) (out.data as unknown[]).forEach(fix)
-  else fix(out.data)
+  walk(out)
   return out
+}
+
+/** Try the second official data host when the first returns a 404. */
+const dataFetch: typeof fetch = async (input, init) => {
+  const first = await fetch(input, init)
+  if (first.ok) return first
+  const url = String(input)
+  if (!url.startsWith(VEGA_DATA_BASES[0]!)) return first
+  const alt = VEGA_DATA_BASES[1]! + url.slice(VEGA_DATA_BASES[0]!.length)
+  try {
+    const second = await fetch(alt, init)
+    if (second.ok) return second
+  } catch { /* keep the original response */ }
+  return first
 }
 
 function SpecPlayground() {
@@ -164,7 +314,7 @@ function SpecPlayground() {
         // are fetched + inlined for the aster column (the oracle fetches its own).
         const resolved = resolveDataUrls(parsed)
         let inlined = resolved
-        try { inlined = await loadSpecData(structuredClone(resolved)) } catch { /* bad URL: surface via the oracle/render error paths */ }
+        try { inlined = await loadSpecData(structuredClone(resolved), { fetch: dataFetch }) } catch { /* bad URL: surface via the oracle/render error paths */ }
         if (cancelled) return
         setVl(resolved)
         setVg(isVl ? (compile(inlined as never) as Record<string, unknown>) : inlined)
@@ -212,7 +362,7 @@ function SpecPlayground() {
             </div>
           </div>
         )}
-        {!error && <p className="hint">Paste a Vega (<code>$schema</code> vega) or Vega-Lite spec. Both engines compile and render the same input — Vega-Lite goes through <strong>@aster/vl</strong> on the right, the official compiler on the left.</p>}
+        {!error && <p className="hint">Paste a Vega (<code>$schema</code> vega) or Vega-Lite spec. Relative data URLs like <code>data/stocks.csv</code> resolve to the official Vega dataset host automatically. Both engines compile and render the same input — Vega-Lite goes through <strong>@aster/vl</strong> on the right, the official compiler on the left.</p>}
       </div>
     </div>
   )
@@ -262,21 +412,9 @@ function ResponsiveLine() {
 }
 
 function BoundParam() {
-  const [shift, setShift] = React.useState(10)
-  return (
-    <>
-      <div className="controls">
-        <label>
-          Shift:&nbsp;
-          <input type="range" min={0} max={30} value={shift} onChange={(e) => setShift(+e.target.value)} />
-          {shift}
-        </label>
-      </div>
-      <div className="chart-container">
-        <Chart spec={CompiledParamBoundSpec} ariaLabel="Shifted line chart" width={400} height={300} signals={{ shift }} />
-      </div>
-    </>
-  )
+  // The compiled spec carries `shift.bind`; <Chart> renders the range control
+  // itself (same as Vega's bind UI), so no manual slider is needed here.
+  return <Chart spec={CompiledParamBoundSpec} ariaLabel="Shifted line chart" width={400} height={300} />
 }
 
 function InteractiveBrush() {
@@ -293,22 +431,20 @@ function InteractiveBrush() {
           x: {brush.x?.map((v: number) => v.toFixed(1)).join(', ')} / y: {brush.y?.map((v: number) => v.toFixed(1)).join(', ')}
         </div>
       )}
-      <div className="chart-container">
-        <Chart spec={CompiledInteractiveBrushSpec} ariaLabel="Brush scatter" width={400} height={300} onSelect={onSelect} brush={brush} />
-      </div>
+      <Chart spec={CompiledInteractiveBrushSpec} ariaLabel="Brush scatter" width={400} height={300} onSelect={onSelect} brush={brush} />
     </>
   )
 }
 
 const plain = (spec: Record<string, unknown>, width: number, height: number, label: string, style?: React.CSSProperties) => (
-  <div className="chart-container" style={style}>
+  <div style={style}>
     <Chart spec={spec} ariaLabel={label} width={width} height={height} />
   </div>
 )
 
 const SPECS: Array<{ title: string; desc: string; raw: Record<string, unknown>; compiled: Record<string, unknown>; aster: React.ReactNode; wide?: string }> = [
   { title: 'Responsive Line', desc: 'Spec-level signals drive width/height; resizes with the container.', raw: LineSpec, compiled: CompiledLineSpec, aster: <ResponsiveLine />, wide: 'wide' },
-  { title: 'Bound Parameter', desc: 'A bound signal updates Y values live. Vega renders its own slider; aster drives the same param through the React prop.', raw: ParamBoundSpec, compiled: CompiledParamBoundSpec, aster: <BoundParam /> },
+  { title: 'Bound Parameter', desc: 'A bound signal updates Y values live. Both engines render the bound range control and re-evaluate the same param.', raw: ParamBoundSpec, compiled: CompiledParamBoundSpec, aster: <BoundParam /> },
   { title: 'Interactive Brush', desc: 'Drag to select a data interval — native vega params on the left, aster\'s event-driven signals on the right.', raw: InteractiveBrushSpec, compiled: CompiledInteractiveBrushSpec, aster: <InteractiveBrush /> },
   { title: 'Histogram', desc: 'Bar encoding with bin:true auto-bins occurrences.', raw: HistogramSpec, compiled: CompiledHistogramSpec, aster: plain(CompiledHistogramSpec, 400, 300, 'Histogram', { alignItems: 'flex-start' }) },
   { title: 'Scatter + Legend', desc: 'Color encodes a category dimension with an automatic legend.', raw: LegendScatterSpec, compiled: CompiledLegendScatterSpec, aster: plain(CompiledLegendScatterSpec, 400, 300, 'Legend scatter') },
@@ -375,6 +511,7 @@ export function App() {
         .badge.aster { color: #fff; background: var(--accent); border-color: var(--accent); }
         .vega-loading { min-height: 120px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 0.85rem; width: 100%; }
         .chart-container { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; display: flex; align-items: center; justify-content: safe center; overflow: auto; min-height: 120px; }
+        .chart-container svg { max-width: 100%; height: auto; }
         .vega-pane { min-width: 0; overflow: auto; }
         .mode-toggle { position: absolute; top: 1.4rem; right: 1.5rem; background: var(--card); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; border-radius: 999px; cursor: pointer; font-size: 0.85rem; }
         .playground-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
@@ -389,6 +526,8 @@ export function App() {
         button { background: var(--accent); color: #fff; border: none; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
         button:hover { background: var(--accent2); }
         .selection-info { font-size: 0.85rem; color: var(--muted); margin-top: 0.5rem; font-family: monospace; }
+        [data-testid="chart-binds"] { color: var(--muted); }
+        [data-testid="chart-binds"] input[type="range"] { accent-color: var(--accent); width: 200px; }
         .showcase { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(600px, 100%), 1fr)); gap: 1.25rem; }
         .showcase .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
         .showcase .card h3 { font-size: 1.05rem; margin-bottom: 0.4rem; }
@@ -409,9 +548,9 @@ export function App() {
           separately; aster paints first.
         </p>
         <div className="hero-stats">
-          <div><b>409/413</b> conformance specs vs the oracle</div>
-          <div><b>104 kB</b> gzip React chart (no vega runtime)</div>
-          <div><b>~9x</b> faster stable updates</div>
+          <div><b>419/419</b> conformance specs vs the oracle</div>
+          <div><b>157 kB</b> gzip React chart (no vega runtime)</div>
+          <div><b>16.7 ms</b> streaming frames @ 100k canvas</div>
           <div><b>~0 MB</b> retained per update</div>
         </div>
       </header>
@@ -446,6 +585,10 @@ export function App() {
             <TooltipDemo />
           </div>
         </div>
+      </section>
+
+      <section id="streaming">
+        <StreamingCompare />
       </section>
 
       <section id="playground">

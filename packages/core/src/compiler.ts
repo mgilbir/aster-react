@@ -246,6 +246,9 @@ function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSi
     const value = s.value ?? s.init
     if (value !== undefined) def.value = value
     if (typeof s.update === 'string') def.update = s.update
+    if (s.bind != null && (typeof s.bind === 'string' || typeof s.bind === 'object')) {
+      def.bind = s.bind as Record<string, unknown> | string
+    }
     if (Array.isArray(s.on)) {
       // A signal may set its value from events; the first event `update` acts as
       // the static initial value when there is no declared value.

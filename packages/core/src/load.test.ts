@@ -101,3 +101,74 @@ describe('data formats', () => {
     expect(inferType(['a'])).toBe('string')
   })
 })
+
+describe('malformed url and data', () => {
+  const response = (body: string, status = 200): Response => ({
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => body,
+  }) as unknown as Response
+  const fakeFetch = (body: string, status = 200): typeof fetch =>
+    (async () => response(body, status)) as unknown as typeof fetch
+  const specWith = (data: Record<string, unknown>): VgSpec => ({ data: [data] } as unknown as VgSpec)
+
+  it('surfaces HTTP failures with the dataset url and status', async () => {
+    const spec = specWith({ name: 't', url: 'https://example.test/missing.json' })
+    await expect(loadSpecData(spec, { fetch: fakeFetch('{}', 500) })).rejects.toThrow(/HTTP 500/)
+  })
+
+  it('rejects invalid JSON payloads', async () => {
+    const spec = specWith({ name: 't', url: 'https://example.test/data.json', format: { type: 'json' } })
+    await expect(loadSpecData(spec, { fetch: fakeFetch('{not json') })).rejects.toThrow(/invalid JSON data/)
+  })
+
+  it('infers json/csv/tsv from the url extension and honors explicit types', async () => {
+    const json = specWith({ name: 't', url: 'https://example.test/data.json', format: { type: 'json', property: 'rows' } })
+    const loadedJson = await loadSpecData(json, { fetch: fakeFetch('{"rows":[{"a":1},{"a":2}]}', 200) })
+    expect((loadedJson.data as any)[0].values).toEqual([{ a: 1 }, { a: 2 }])
+
+    const csv = await loadSpecData(specWith({ name: 't', url: 'https://example.test/data.csv' }), { fetch: fakeFetch('a,b\n1,x\n2,y\n') })
+    expect((csv.data as any)[0].values).toEqual([{ a: '1', b: 'x' }, { a: '2', b: 'y' }])
+
+    const tsv = await loadSpecData(specWith({ name: 't', url: 'https://example.test/data.tsv' }), { fetch: fakeFetch('a\tb\n1\tx\n') })
+    expect((tsv.data as any)[0].values).toEqual([{ a: '1', b: 'x' }])
+
+    const explicit = await loadSpecData(
+      specWith({ name: 't', url: 'https://example.test/data.txt', format: { type: 'csv', parse: { a: 'number' } } }),
+      { fetch: fakeFetch('a\n1\n2\n') },
+    )
+    expect((explicit.data as any)[0].values).toEqual([{ a: 1 }, { a: 2 }])
+  })
+
+  it('rejects unavailable readers and malformed topojson', async () => {
+    const parquet = specWith({ name: 't', url: 'https://example.test/data.json', format: { type: 'parquet' } })
+    await expect(loadSpecData(parquet, { fetch: fakeFetch('{}') })).rejects.toThrow(/load the addon first/)
+
+    const wrongTopo = specWith({ name: 't', url: 'https://example.test/topo.json', format: { type: 'topojson', feature: 'x' } })
+    await expect(loadSpecData(wrongTopo, { fetch: fakeFetch('{"type":"FeatureCollection","features":[]}') }))
+      .rejects.toThrow(/must be a Topology/)
+
+    const missingTarget = specWith({ name: 't', url: 'https://example.test/topo.json', format: { type: 'topojson' } })
+    await expect(loadSpecData(missingTarget, { fetch: fakeFetch('{"type":"Topology","arcs":[],"objects":{}}') }))
+      .rejects.toThrow(/requires "feature" or "mesh"/)
+  })
+
+  it('treats a missing json property as an empty dataset', async () => {
+    const spec = specWith({ name: 't', url: 'https://example.test/data.json', format: { type: 'json', property: 'nope.missing' } })
+    const loaded = await loadSpecData(spec, { fetch: fakeFetch('{"rows":[{"a":1}]}') })
+    expect((loaded.data as any)[0].values).toEqual([])
+    const scene = evaluateChart(compileChart(loaded))
+    expect(scene).toBeTruthy()
+  })
+
+  it('does not mutate the input spec and tolerates ragged csv rows', async () => {
+    const spec = specWith({ name: 't', url: 'https://example.test/data.csv', format: { type: 'csv' } })
+    const before = JSON.stringify(spec)
+    const loaded = await loadSpecData(spec, { fetch: fakeFetch('a,b,c\n1,2\n3,4,5,6\n') })
+    expect(JSON.stringify(spec)).toBe(before)
+    expect((loaded.data as any)[0].values).toEqual([
+      { a: '1', b: '2', c: '' },
+      { a: '3', b: '4', c: '5' },
+    ])
+  })
+})

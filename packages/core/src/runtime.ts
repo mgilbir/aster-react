@@ -5,7 +5,7 @@
  */
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { readData, type DataFormatSpec } from './data-format.js'
-import { applyTransforms, sortRows, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row } from './transform.js'
+import { applyTransforms, sortRows, sortOrder, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
@@ -21,6 +21,7 @@ import type {
   CompiledLegend,
   CompiledMark,
   CompiledScale,
+  CompiledTransform,
   EncodeValue,
   RuntimeInput,
   ScaleDomain,
@@ -29,11 +30,13 @@ import type {
   SceneNode,
   SceneRoot,
   SizeSpec,
+  SortSpec,
   VgSpec,
 } from './types.js'
 import { tickFormat, scaleFraction, tickValues, tickCount, isContinuous, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
+import { rowsEqual, type PulseChange } from './pulse.js'
 import { trellisLayout, measureBounds } from './trellis.js'
 import { baselineOffset, boundAxisGroup, boundGroupItem, boundLeaf, boundText, Bounds } from './bounds.js'
 import { itemTextWidth, nominalTextWidth, type FontProps } from './text-metrics.js'
@@ -74,6 +77,16 @@ interface AggState {
   /** Group key -> number of output rows it contributes. */
   groupSize: Map<string, number>
   out: Row[]
+}
+
+/**
+ * A dataset-level pulse: the new output indices whose rows changed, plus the
+ * index mapping for length-changing updates. `from` is absent for same-length
+ * updates (identity mapping).
+ */
+interface StepPulse extends PulseChange {
+  /** True when the transform chain could not publish a trustworthy mapping. */
+  full?: boolean
 }
 
 function groupKeyOf(row: Row, groupby: string[]): string {
@@ -129,6 +142,15 @@ function paramFpOf(params: Record<string, unknown>): string {
  */
 let gradientIdCounter = 0
 
+/** Cached recursive bounds for unchanged top-level mark groups. */
+const GROUP_BOUNDS = new WeakMap<SceneGroup, Bounds>()
+
+/** Mark types whose group bounds are exactly the union of their item bounds. */
+const UNION_BOUND_MARKS = new Set(['symbol', 'rect', 'text', 'rule', 'tick'])
+function cacheableGroupBounds(g: SceneGroup): boolean {
+  return g.role === 'mark' && UNION_BOUND_MARKS.has(String(g.marktype))
+}
+
 interface EvalContext {
   chart: CompiledChart
   signalParams: Record<string, unknown>
@@ -165,6 +187,14 @@ interface EvalContext {
    * re-derived (not incrementally safe for downstream item reuse).
    */
   datasetChanges?: Map<string, Set<number> | null>
+  /**
+   * Pulse propagation with index mapping: the output pulse per dataset. A
+   * length-changing update carries `from`/`to` so marks can splice their item
+   * array instead of re-encoding unchanged rows.
+   */
+  datasetPulses: Map<string, StepPulse | null>
+  /** Input pulses for source datasets (from the host/session). */
+  inputPulses?: Map<string, StepPulse>
   /** Wall-clock deadline (performance.now epoch) from `limits.maxTimeMs`. */
   deadline?: number
   /** Direct scale-domain overrides keyed by scale name. */
@@ -233,6 +263,7 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
   const ctx: EvalContext = {
     chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new Map(), runtime, _defs: defs,
     hierarchies: new Map(), affected: new Set(), incremental: false, deadline, checkDeadline,
+    datasetPulses: new Map(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
   }
   // A legend whose tickCount is an interval string on a non-time scale makes
@@ -255,7 +286,29 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
   if (input.dataChanges) {
     ctx.dataChanges = new Map(Object.entries(input.dataChanges).map(([name, idxs]) => [name, new Set(idxs)]))
   }
-  const changedNames = new Set([...(input.changedDatasets ?? []), ...(ctx.dataChanges ? ctx.dataChanges.keys() : [])])
+  if (input.dataPulse) {
+    ctx.inputPulses = new Map(Object.entries(input.dataPulse).map(([name, p]) => [name, {
+      changed: p.changed ?? [],
+      ...(p.from ? { from: p.from } : {}),
+      ...(p.to ? { to: p.to } : {}),
+      ...(p.added ? { added: p.added } : {}),
+      ...(p.removed ? { removed: p.removed } : {}),
+      ...(p.appendOnly ? { appendOnly: true, baseLength: p.baseLength } : {}),
+    }]))
+    // The length-preserving form of an explicit pulse is also a plain
+    // changeset: expose it to the row-wise/grouped/differential paths that
+    // consume `dataChanges` (and to the scale-domain census).
+    for (const [name, p] of ctx.inputPulses) {
+      if (p.from || !p.changed.length) continue
+      if (!ctx.dataChanges) ctx.dataChanges = new Map()
+      ctx.dataChanges.set(name, new Set(p.changed))
+    }
+  }
+  const changedNames = new Set([
+    ...(input.changedDatasets ?? []),
+    ...(ctx.dataChanges ? ctx.dataChanges.keys() : []),
+    ...(ctx.inputPulses ? ctx.inputPulses.keys() : []),
+  ])
   ctx.affected = affectedDatasets(chart, changedNames)
   ctx.incremental = changedNames.size > 0
   ctx.datasetChanges = new Map()
@@ -712,6 +765,11 @@ function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { gro
  */
 function measureGuideGroup(g: SceneGroup): Bounds {
   if (g.role === 'axis') return boundAxisGroup(g)
+  const cacheable = cacheableGroupBounds(g)
+  if (cacheable) {
+    const cached = GROUP_BOUNDS.get(g)
+    if (cached) return cached
+  }
   const lb = (g as unknown as Record<string, unknown>)._layoutBounds as Bounds | undefined
   if (lb) return lb
   // Facet row-headers/footers carry axes whose items bake the crisp +0.5
@@ -736,7 +794,9 @@ function measureGuideGroup(g: SceneGroup): Bounds {
     const se = stroked ? ((strokeW != null ? strokeW : 1) / 2) : 0
     return new Bounds().set((g.x ?? 0) - se, (g.y ?? 0) - se, (g.x ?? 0) + (g.width ?? 0) + se, (g.y ?? 0) + (g.height ?? 0) + se)
   }
-  return boundLeaf(new Bounds(), g as unknown as SceneItem)
+  const bounds = boundLeaf(new Bounds(), g as unknown as SceneItem)
+  if (cacheable) GROUP_BOUNDS.set(g, bounds)
+  return bounds
 }
 
 function computeGuidePadding(
@@ -969,7 +1029,17 @@ function buildContent(
         items, facetWidth, facetHeight, ctx.chart.padding,
         (ctx.chart.projections ?? []).some((p) => p.type === 'azimuthalequalarea' && Number(p.clipAngle) === 0),
       )
-  return { items, padding, ctx, width: facetWidth, height: facetHeight, isFacetSpec }
+  // Vega's renderers visit top-level items in dataflow order: axes (including
+  // grid axes) first, then marks/scopes, then legends, then the title. Our
+  // builders create marks first (guides need their bounds to anchor), so sort
+  // the siblings into vega's paint order here. This is what keeps SVG and
+  // canvas z-order identical for overlapping marks (e.g. an area over a grid).
+  const orderRank = (g: SceneGroup): number =>
+    g.role === 'axis' ? 0 : g.role === 'legend' ? 2 : g.role === 'title' ? 3 : 1
+  const ordered = items.length > 1
+    ? items.map((g, i) => ({ g, i })).sort((a, b) => orderRank(a.g) - orderRank(b.g) || a.i - b.i).map((x) => x.g)
+    : items
+  return { items: ordered, padding, ctx, width: facetWidth, height: facetHeight, isFacetSpec }
 }
 
 export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
@@ -1424,6 +1494,875 @@ function resolveSize(size: SizeSpec, override: number | undefined, signals: Reco
   return DEFAULT_SIZE
 }
 
+
+// ---------------------------------------------------------------------------
+// Incremental pulse propagation (R13)
+// ---------------------------------------------------------------------------
+
+type StepTransformContext = TransformContext & {
+  datasets: (name: string) => Row[] | undefined
+  /** Datasets affected by this update (for lookup safety). */
+  affectedDatasets?: Set<string>
+  /** Per-step incremental state cache (filters/flatten/groups). */
+  stepCache?: Map<string, unknown>
+}
+
+/** New-value indices that were inserted (mapping `-1`). */
+function addedRangesOf(from: number[]): Array<[number, number]> {
+  const out: Array<[number, number]> = []
+  for (let i = 0; i < from.length; i++) {
+    if (from[i]! >= 0) continue
+    const start = i
+    while (i + 1 < from.length && from[i + 1]! < 0) i++
+    out.push([start, i + 1])
+  }
+  return out
+}
+
+function removedRangesOf(to: number[] | undefined): Array<[number, number]> {
+  if (!to) return []
+  const out: Array<[number, number]> = []
+  for (let i = 0; i < to.length; i++) {
+    if (to[i]! >= 0) continue
+    const start = i
+    while (i + 1 < to.length && to[i + 1]! < 0) i++
+    out.push([start, i + 1])
+  }
+  return out
+}
+
+/** Derive a pulse from a new->old mapping and the changed output indices. */
+function pulseOfMapping(from: number[], to: number[] | undefined, changed: number[]): StepPulse {
+  return { changed, from, ...(to ? { to } : {}), added: addedRangesOf(from), removed: removedRangesOf(to) }
+}
+
+/** Identity mapping of length `n`. */
+function identityMapping(n: number): number[] {
+  const from = new Array<number>(n)
+  for (let i = 0; i < n; i++) from[i] = i
+  return from
+}
+
+/** Old-index -> new-index inverse (with -1 for removed rows). */
+function inverseMapping(from: number[], oldLen: number): number[] {
+  const to = new Array<number>(oldLen).fill(-1)
+  for (let i = 0; i < from.length; i++) if (from[i]! >= 0) to[from[i]!] = i
+  return to
+}
+
+function isModified(pulse: StepPulse): Set<number> {
+  return new Set(pulse.changed)
+}
+
+/** A length-changing pulse, compact append form included. */
+function isLengthPulse(pulse: StepPulse | null | undefined): pulse is StepPulse {
+  return !!pulse && (pulse.from != null || pulse.appendOnly === true || (pulse.added?.length ?? 0) > 0 || (pulse.removed?.length ?? 0) > 0)
+}
+
+/** Previous length of a pulse (for synthesising a mapping). */
+function pulseBaseLength(pulse: StepPulse): number {
+  return pulse.baseLength ?? pulse.to?.length ?? (pulse.from ? pulse.from.length : 0)
+}
+
+/** Expand a compact append pulse to the full new->old mapping (on demand). */
+function mappingFromPulse(pulse: StepPulse, newLen: number): number[] {
+  if (pulse.from) return pulse.from
+  const base = Math.min(pulseBaseLength(pulse), newLen)
+  const from = new Array<number>(newLen)
+  for (let i = 0; i < base; i++) from[i] = i
+  for (let i = base; i < newLen; i++) from[i] = -1
+  return from
+}
+
+/** Stable append pulse from a base length and new length. */
+function appendPulse(baseLength: number, newLen: number, changed: number[]): StepPulse {
+  return {
+    changed,
+    appendOnly: true,
+    baseLength,
+    ...(newLen > baseLength ? { added: [[baseLength, newLen]] } : {}),
+  }
+}
+
+/** Run one transform over the whole input (the fallback path). */
+function applyOne(rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string): Row[] {
+  return applyTransforms(rows, [t], tctx, sourceName)
+}
+
+/**
+ * Row-local transforms (`formula`, `timeunit`, fixed-extent `bin`, an
+ * unaffected `lookup`, and the 1:1 geo transforms) derive only the added /
+ * modified rows and splice the cached output for the retained ones.
+ */
+function rowLocalPulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prev: Row[] | undefined,
+): { rows: Row[]; pulse: StepPulse } | null {
+  const from = input.from!
+  const modified = isModified(input)
+  const out = new Array<Row>(rows.length)
+  const changed: number[] = []
+  for (let i = 0; i < rows.length; i++) {
+    const old = from[i]!
+    if (old >= 0 && !modified.has(i) && prev && prev[old] !== undefined) {
+      out[i] = prev[old]!
+      continue
+    }
+    const derived = applyOne([rows[i]!], t, tctx, sourceName)
+    if (derived.length !== 1) return null
+    out[i] = derived[0]!
+    changed.push(i)
+  }
+  return { rows: out, pulse: pulseOfMapping(from, input.to, changed) }
+}
+
+/**
+ * Append-only fast paths. These mutate the cached step output (persistent-scene
+ * semantics): unchanged rows keep their already-transformed row objects, and
+ * new rows are appended, so the cost is O(appended + changed).
+ */
+function rowLocalAppendPulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prev: Row[] | undefined,
+): { rows: Row[]; pulse: StepPulse } | null {
+  const base = pulseBaseLength(input)
+  if (!prev || prev.length !== base) return null
+  const changed: number[] = []
+  for (const i of input.changed) {
+    if (i < 0 || i >= base) continue
+    const derived = applyOne([rows[i]!], t, tctx, sourceName)
+    if (derived.length !== 1) return null
+    prev[i] = derived[0]!
+    changed.push(i)
+  }
+  for (let i = base; i < rows.length; i++) {
+    const derived = applyOne([rows[i]!], t, tctx, sourceName)
+    if (derived.length !== 1) return null
+    prev.push(derived[0]!)
+  }
+  return { rows: prev, pulse: appendPulse(base, rows.length, changed) }
+}
+
+function filterAppendPulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prev: Row[] | undefined, prevPass: boolean[] | undefined,
+): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
+  const base = pulseBaseLength(input)
+  if (input.changed.length || !prev || !prevPass || prevPass.length !== base) return null
+  const expr = (t as { expr?: string }).expr ?? ''
+  const fn = (row: Row): boolean => { try { return Boolean(tctx.runtime.expr(expr)(row, tctx.signals)) } catch { return false } }
+  const outBase = prev.length
+  for (let i = base; i < rows.length; i++) {
+    const passed = fn(rows[i]!)
+    prevPass.push(passed)
+    if (passed) prev.push(rows[i]!)
+  }
+  return { rows: prev, pulse: appendPulse(outBase, prev.length, []), state: prevPass }
+}
+
+function foldAppendPulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prev: Row[] | undefined,
+): { rows: Row[]; pulse: StepPulse } | null {
+  const n = ((t as { fields?: unknown[] }).fields ?? []).length
+  if (!n || !prev) return null
+  const base = pulseBaseLength(input)
+  if (prev.length !== base * n) return null
+  const changed: number[] = []
+  for (const i of input.changed) {
+    if (i < 0 || i >= base) continue
+    const derived = applyOne([rows[i]!], t, tctx, sourceName)
+    if (derived.length !== n) return null
+    for (let j = 0; j < n; j++) {
+      prev[i * n + j] = derived[j]!
+      changed.push(i * n + j)
+    }
+  }
+  const outBase = base * n
+  for (let i = base; i < rows.length; i++) {
+    const derived = applyOne([rows[i]!], t, tctx, sourceName)
+    if (derived.length !== n) return null
+    for (let j = 0; j < n; j++) prev.push(derived[j]!)
+  }
+  return { rows: prev, pulse: appendPulse(outBase, prev.length, changed) }
+}
+
+/**
+ * Re-derive a transform whose output stays 1:1 with its input (layout/pie/
+ * dotbin/label), then reuse the previous output row object wherever the value
+ * is unchanged. This is how a global layout participates in the pulse graph:
+ * the mapping survives, so downstream items still splice.
+ */
+function rederiveAligned(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prev: Row[] | undefined,
+): { rows: Row[]; pulse: StepPulse } | null {
+  const out = applyOne(rows, t, tctx, sourceName)
+  const from = input.from!
+  if (out.length !== from.length) return null
+  const modified = isModified(input)
+  const changed: number[] = []
+  const reused = new Array<Row>(out.length)
+  for (let i = 0; i < out.length; i++) {
+    const old = from[i]!
+    const canReuse = old >= 0 && !modified.has(i) && prev && prev[old] !== undefined
+    if (canReuse && rowsEqual(out[i]!, prev![old]!)) {
+      reused[i] = prev![old]!
+    } else {
+      reused[i] = out[i]!
+      changed.push(i)
+    }
+  }
+  return { rows: reused, pulse: pulseOfMapping(from, input.to, changed) }
+}
+
+function filterPulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prev: Row[] | undefined, prevPass: boolean[] | undefined,
+): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
+  const from = input.from!
+  const oldLen = input.to?.length ?? -1
+  if (!prevPass || prevPass.length !== oldLen) return null
+  // Old output index for each old input index (the filter preserves input order).
+  const oldOut = new Array<number>(oldLen).fill(-1)
+  let acc = 0
+  for (let i = 0; i < oldLen; i++) if (prevPass[i]) oldOut[i] = acc++
+  const expr = (t as { expr?: string }).expr ?? ''
+  const fn = (row: Row): boolean => { try { return Boolean(tctx.runtime.expr(expr)(row, tctx.signals)) } catch { return false } }
+  const modified = isModified(input)
+  const pass = new Array<boolean>(rows.length)
+  const out: Row[] = []
+  const outFrom: number[] = []
+  const changed: number[] = []
+  for (let i = 0; i < rows.length; i++) {
+    const old = from[i]!
+    const retained = old >= 0 && !modified.has(i) && prevPass[old] !== undefined
+    pass[i] = retained ? prevPass![old]! : fn(rows[i]!)
+    if (!pass[i]) continue
+    const oldIdx = retained && old >= 0 ? oldOut[old]! : -1
+    const outIdx = out.length
+    if (oldIdx >= 0 && prev && prev[oldIdx] !== undefined) out.push(prev[oldIdx]!)
+    else out.push(rows[i]!)
+    if (!retained || modified.has(i)) changed.push(outIdx)
+    outFrom.push(oldIdx)
+  }
+  const to = new Array<number>(prev ? prev.length : 0).fill(-1)
+  for (let i = 0; i < outFrom.length; i++) if (outFrom[i]! >= 0) to[outFrom[i]!] = i
+  return { rows: out, pulse: pulseOfMapping(outFrom, to, changed), state: pass }
+}
+
+function foldPulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prev: Row[] | undefined,
+): { rows: Row[]; pulse: StepPulse } | null {
+  const n = ((t as { fields?: unknown[] }).fields ?? []).length
+  if (!n) return null
+  const from = input.from!
+  const modified = isModified(input)
+  const out: Row[] = []
+  const outFrom: number[] = []
+  const changed: number[] = []
+  for (let i = 0; i < rows.length; i++) {
+    const old = from[i]!
+    const start = out.length
+    const canReuse = old >= 0 && !modified.has(i) && prev && prev.length === from.length * n
+    if (canReuse) {
+      for (let j = 0; j < n; j++) {
+        out.push(prev![old * n + j]!)
+        outFrom.push(old * n + j)
+      }
+      continue
+    }
+    const derived = applyOne([rows[i]!], t, tctx, sourceName)
+    if (derived.length !== n) return null
+    for (let j = 0; j < n; j++) {
+      out.push(derived[j]!)
+      outFrom.push(-1)
+      changed.push(start + j)
+    }
+  }
+  const to = new Array<number>(prev ? prev.length : 0).fill(-1)
+  for (let i = 0; i < outFrom.length; i++) if (outFrom[i]! >= 0) to[outFrom[i]!] = i
+  return { rows: out, pulse: pulseOfMapping(outFrom, to, changed) }
+}
+
+interface FlattenState { sizes: number[]; offsets: number[] }
+
+function flattenSize(row: Row, fields: string[]): number {
+  let maxlen = 0
+  for (const f of fields) {
+    const a = (row as Record<string, unknown>)[f]
+    const len = Array.isArray(a) ? a.length : (a as { length?: number })?.length
+    maxlen = len == null ? NaN : Math.max(maxlen, len)
+  }
+  return Number.isFinite(maxlen) && maxlen > 0 ? maxlen : 0
+}
+
+function flattenPulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prev: Row[] | undefined, prevState: FlattenState | undefined,
+): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
+  const fields = (t as { fields?: string[] }).fields ?? []
+  const from = input.from!
+  const modified = isModified(input)
+  if (!prevState || prevState.sizes.length !== (input.to?.length ?? -1)) return null
+  const sizes = new Array<number>(rows.length)
+  for (let i = 0; i < rows.length; i++) {
+    const old = from[i]!
+    if (old >= 0 && !modified.has(i)) {
+      sizes[i] = prevState.sizes[old]!
+    } else {
+      sizes[i] = flattenSize(rows[i]!, fields)
+      if (old >= 0 && sizes[i] !== prevState.sizes[old]) return null
+    }
+  }
+  const offsets = new Array<number>(rows.length)
+  let pos = 0
+  for (let i = 0; i < rows.length; i++) { offsets[i] = pos; pos += sizes[i]! }
+  if (prev && prev.length !== prevState.offsets.reduce((a, o, i) => Math.max(a, o + prevState.sizes[i]!), 0)) {
+    // The cached output length does not line up with the cached state; fall back.
+    if (prev.length !== prevState.offsets.length && prev.length < pos) return null
+  }
+  const out: Row[] = []
+  const outFrom: number[] = []
+  const changed: number[] = []
+  for (let i = 0; i < rows.length; i++) {
+    const old = from[i]!
+    const size = sizes[i]!
+    const start = out.length
+    const canReuse = old >= 0 && !modified.has(i) && prev && prevState.sizes[old] === size
+    if (canReuse) {
+      for (let j = 0; j < size; j++) {
+        const oldIdx = prevState.offsets[old]! + j
+        out.push(prev![oldIdx]!)
+        outFrom.push(oldIdx)
+      }
+      continue
+    }
+    const derived = applyOne([rows[i]!], t, tctx, sourceName)
+    for (let j = 0; j < size; j++) {
+      out.push(derived[j] ?? rows[i]!)
+      outFrom.push(-1)
+      changed.push(start + j)
+    }
+  }
+  const to = new Array<number>(prev ? prev.length : 0).fill(-1)
+  for (let i = 0; i < outFrom.length; i++) if (outFrom[i]! >= 0) to[outFrom[i]!] = i
+  return { rows: out, pulse: pulseOfMapping(outFrom, to, changed), state: { sizes, offsets } }
+}
+
+/**
+ * Incremental aggregate: rebuild the group membership index, recompute only the
+ * dirty groups, and key the output by group so unchanged groups keep their row
+ * objects and output positions.
+ */
+function aggregatePulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prev: Row[] | undefined, prevState: AggState | undefined,
+): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
+  if (!prevState) return null
+  const groupby = (t as { groupby?: string[] }).groupby ?? []
+  const from = input.from!
+  const oldLen = input.to?.length ?? -1
+  if (prevState.rowKey.length !== oldLen) return null
+  const dirty = new Set<string>()
+  for (let i = 0; i < from.length; i++) if (from[i]! < 0) dirty.add(groupKeyOf(rows[i]!, groupby))
+  if (input.to) for (let i = 0; i < input.to.length; i++) if (input.to[i]! < 0) dirty.add(prevState.rowKey[i]!)
+  const modified = isModified(input)
+  for (const i of modified) {
+    if (i < 0 || i >= rows.length) return null
+    dirty.add(groupKeyOf(rows[i]!, groupby))
+    const old = from[i]!
+    if (old >= 0 && old < prevState.rowKey.length) dirty.add(prevState.rowKey[old]!)
+  }
+
+  const rowKey = new Array<string>(rows.length)
+  const keyToIdx = new Map<string, number[]>()
+  for (let i = 0; i < rows.length; i++) {
+    const k = groupKeyOf(rows[i]!, groupby)
+    rowKey[i] = k
+    let arr = keyToIdx.get(k)
+    if (!arr) keyToIdx.set(k, (arr = []))
+    arr.push(i)
+  }
+  const outOrder: string[] = []
+  for (const k of prevState.outOrder) if (keyToIdx.has(k)) outOrder.push(k)
+  for (const k of keyToIdx.keys()) if (!prevState.outIdx.has(k)) outOrder.push(k)
+
+  const agg = t as Record<string, unknown>
+  const aggFields = (agg.fields as (string | null)[] | undefined) ?? []
+  const aggOps = (agg.ops as string[] | undefined) ?? []
+  const aggAs = (agg.as as string[] | undefined) ?? []
+  const aggParams = agg.aggregate_params as (number | null)[] | undefined
+  const outByKey = new Map<string, Row>()
+  const out: Row[] = []
+  const outFrom: number[] = []
+  const changed: number[] = []
+  const outIdx = new Map<string, number>()
+  for (const k of outOrder) {
+    const idxs = keyToIdx.get(k)!
+    const oldIdx = prevState.outIdx.get(k)
+    const oldRow = oldIdx != null ? prevState.outByKey.get(k) : undefined
+    let next: Row
+    if (!dirty.has(k) && oldRow) next = oldRow
+    else {
+      next = aggregateGroup(idxs.map((i) => rows[i]!), groupby, aggFields, aggOps, aggAs, aggParams)
+      if (oldRow && rowsEqual(next, oldRow)) next = oldRow
+    }
+    const at = out.length
+    outIdx.set(k, at)
+    outByKey.set(k, next)
+    out.push(next)
+    if (oldIdx != null) {
+      outFrom.push(oldIdx)
+      if (next !== oldRow) changed.push(at)
+    } else {
+      outFrom.push(-1)
+    }
+  }
+  const to = new Array<number>(prev ? prev.length : 0).fill(-1)
+  for (let i = 0; i < outFrom.length; i++) if (outFrom[i]! >= 0) to[outFrom[i]!] = i
+  // Refresh the persistent state for the next pulse.
+  const state = buildAggState(rows, groupby, out)
+  state.outByKey = outByKey
+  return { rows: out, pulse: pulseOfMapping(outFrom, to, changed), state }
+}
+
+/** Incremental joinaggregate: 1:1 with the input; only dirty groups re-derive. */
+function joinAggregatePulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prev: Row[] | undefined, prevState: AggState | undefined,
+): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
+  if (!prevState) return null
+  const groupby = (t as { groupby?: string[] }).groupby ?? []
+  const from = input.from!
+  const oldLen = input.to?.length ?? -1
+  if (prevState.rowKey.length !== oldLen) return null
+  const dirty = new Set<string>()
+  for (let i = 0; i < from.length; i++) if (from[i]! < 0) dirty.add(groupKeyOf(rows[i]!, groupby))
+  if (input.to) for (let i = 0; i < input.to.length; i++) if (input.to[i]! < 0) dirty.add(prevState.rowKey[i]!)
+  const modified = isModified(input)
+  for (const i of modified) {
+    if (i < 0 || i >= rows.length) return null
+    dirty.add(groupKeyOf(rows[i]!, groupby))
+    const old = from[i]!
+    if (old >= 0 && old < prevState.rowKey.length) dirty.add(prevState.rowKey[old]!)
+  }
+  const keyToIdx = new Map<string, number[]>()
+  for (let i = 0; i < rows.length; i++) {
+    const k = groupKeyOf(rows[i]!, groupby)
+    let arr = keyToIdx.get(k)
+    if (!arr) keyToIdx.set(k, (arr = []))
+    arr.push(i)
+  }
+  const out = new Array<Row>(rows.length)
+  const changed: number[] = []
+  for (const k of dirty) {
+    const idxs = keyToIdx.get(k)
+    if (!idxs) continue
+    const derived = applyOne(idxs.map((i) => rows[i]!), t, tctx, sourceName)
+    if (derived.length !== idxs.length) return null
+    for (let j = 0; j < idxs.length; j++) {
+      out[idxs[j]!] = derived[j]!
+      changed.push(idxs[j]!)
+    }
+  }
+  for (let i = 0; i < rows.length; i++) {
+    if (out[i] !== undefined) continue
+    const old = from[i]!
+    if (old >= 0 && !modified.has(i) && prev && prev[old] !== undefined) out[i] = prev[old]!
+    else out[i] = rows[i]!
+  }
+  const state = buildAggState(rows, groupby, out)
+  return { rows: out, pulse: pulseOfMapping(from, input.to, changed), state }
+}
+
+/** Incremental aggregate for an append-only pulse (no group removals). */
+function aggregateAppendPulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prev: Row[] | undefined, prevState: AggState | undefined,
+): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
+  const base = pulseBaseLength(input)
+  if (!prevState || !prev || prevState.rowKey.length !== base || prev.length !== prevState.outOrder.length) return null
+  const groupby = (t as { groupby?: string[] }).groupby ?? []
+  const keyToIdx = prevState.keyToIdx
+  const rowKey = prevState.rowKey
+  const dirty = new Set<string>()
+  for (const i of input.changed) {
+    if (i < 0 || i >= base) continue
+    const k = groupKeyOf(rows[i]!, groupby)
+    if (prevState.rowKey[i] !== k) return null
+    dirty.add(k)
+  }
+  const newKeys: string[] = []
+  for (let i = base; i < rows.length; i++) {
+    const k = groupKeyOf(rows[i]!, groupby)
+    rowKey.push(k)
+    let idxs = keyToIdx.get(k)
+    if (!idxs) { keyToIdx.set(k, (idxs = [])); newKeys.push(k) }
+    idxs.push(i)
+    dirty.add(k)
+  }
+  const outOrder = [...prevState.outOrder, ...newKeys]
+  const outByKey = new Map(prevState.outByKey)
+  const outIdx = new Map<string, number>()
+  const out: Row[] = []
+  const outFrom: number[] = []
+  const changed: number[] = []
+  const agg = t as Record<string, unknown>
+  const aggFields = (agg.fields as (string | null)[] | undefined) ?? []
+  const aggOps = (agg.ops as string[] | undefined) ?? []
+  const aggAs = (agg.as as string[] | undefined) ?? []
+  const aggParams = agg.aggregate_params as (number | null)[] | undefined
+  for (const k of outOrder) {
+    const oldIdx = prevState.outIdx.get(k)
+    const oldRow = prevState.outByKey.get(k)
+    let next: Row
+    if (!dirty.has(k) && oldRow) next = oldRow
+    else {
+      const idxs = keyToIdx.get(k)!
+      next = aggregateGroup(idxs.map((i) => rows[i]!), groupby, aggFields, aggOps, aggAs, aggParams)
+      if (oldRow && rowsEqual(next, oldRow)) next = oldRow
+    }
+    const at = out.length
+    outIdx.set(k, at)
+    outByKey.set(k, next)
+    out.push(next)
+    if (oldIdx != null) {
+      outFrom.push(oldIdx)
+      if (next !== oldRow) changed.push(at)
+    } else outFrom.push(-1)
+  }
+  const state: AggState = {
+    groupby, rowKey, keyToIdx, outOrder, outIdx, outByKey,
+    groupStart: prevState.groupStart, groupSize: prevState.groupSize, out,
+  }
+  void sourceName; void tctx; void outFrom
+  return { rows: out, pulse: appendPulse(prev.length, out.length, changed), state }
+}
+
+/** Incremental joinaggregate for an append-only pulse. */
+function joinAggregateAppendPulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prev: Row[] | undefined, prevState: AggState | undefined,
+): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
+  const base = pulseBaseLength(input)
+  if (!prevState || !prev || prev.length !== base || prevState.rowKey.length !== base) return null
+  const groupby = (t as { groupby?: string[] }).groupby ?? []
+  const keyToIdx = prevState.keyToIdx
+  const rowKey = prevState.rowKey
+  const dirty = new Set<string>()
+  for (const i of input.changed) {
+    if (i < 0 || i >= base) continue
+    const k = groupKeyOf(rows[i]!, groupby)
+    if (prevState.rowKey[i] !== k) return null
+    dirty.add(k)
+  }
+  const newKeys: string[] = []
+  for (let i = base; i < rows.length; i++) {
+    const k = groupKeyOf(rows[i]!, groupby)
+    rowKey.push(k)
+    let idxs = keyToIdx.get(k)
+    if (!idxs) { keyToIdx.set(k, (idxs = [])); newKeys.push(k) }
+    idxs.push(i)
+    dirty.add(k)
+  }
+  const changed: number[] = []
+  for (const k of dirty) {
+    const idxs = keyToIdx.get(k)
+    if (!idxs) continue
+    const derived = applyOne(idxs.map((i) => rows[i]!), t, tctx, sourceName)
+    if (derived.length !== idxs.length) return null
+    for (let j = 0; j < idxs.length; j++) {
+      const i = idxs[j]!
+      const old = prev[i]
+      if (i < base) {
+        if (old !== undefined && rowsEqual(derived[j]!, old)) continue
+        changed.push(i)
+      }
+      prev[i] = derived[j]!
+    }
+  }
+  const outOrder = [...prevState.outOrder, ...newKeys]
+  const outIdx = new Map(prevState.outIdx)
+  for (const k of newKeys) outIdx.set(k, outIdx.size)
+  const state: AggState = {
+    groupby, rowKey, keyToIdx, outOrder, outIdx, outByKey: prevState.outByKey,
+    groupStart: prevState.groupStart, groupSize: prevState.groupSize, out: prev,
+  }
+  return { rows: prev, pulse: appendPulse(base, rows.length, changed), state }
+}
+
+/** Incremental collect/sample: only the order permutation changes. */
+function orderedAppendPulse(
+  rows: Row[], t: CompiledTransform, input: StepPulse, prev: Row[] | undefined,
+  prevState: { order: number[] } | undefined,
+): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
+  const base = pulseBaseLength(input)
+  if (!prev || !prevState || prevState.order.length !== base || prev.length !== base) return null
+  const type = String(t.type)
+  const sort = (t as { sort?: SortSpec }).sort
+  const size = type === 'sample' ? ((t as { size?: number }).size ?? 0) : Infinity
+  const order = sortOrder(rows, sort, size)
+  const oldPos = new Map<number, number>()
+  for (let i = 0; i < prevState.order.length; i++) oldPos.set(prevState.order[i]!, i)
+  const modified = isModified(input)
+  const out: Row[] = new Array(order.length)
+  const from = new Array<number>(order.length).fill(-1)
+  const changed: number[] = []
+  for (let j = 0; j < order.length; j++) {
+    const idx = order[j]!
+    const old = idx < base && !modified.has(idx) ? oldPos.get(idx) : undefined
+    if (old != null && prev[old] !== undefined) {
+      out[j] = prev[old]!
+      from[j] = old
+    } else {
+      out[j] = rows[idx]!
+      changed.push(j)
+    }
+  }
+  const to = new Array<number>(prev.length).fill(-1)
+  for (let i = 0; i < from.length; i++) if (from[i]! >= 0) to[from[i]!] = i
+  return { rows: out, pulse: pulseOfMapping(from, to, changed), state: { order } }
+}
+
+/**
+ * Window/stack: the full transform re-derives (group order/sort are global),
+ * but the grouped output layout is compared group-by-group so unchanged rows
+ * keep their item identity and the mapping still splices downstream.
+ */
+function windowStackPulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prev: Row[] | undefined, prevState: AggState | undefined,
+): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
+  const out = applyOne(rows, t, tctx, sourceName)
+  if (!prevState || !prev) return null
+  const groupby = (t as { groupby?: string[] }).groupby ?? []
+  const from = input.from!
+  const modified = isModified(input)
+  const keyToIdx = new Map<string, number[]>()
+  for (let i = 0; i < rows.length; i++) {
+    const k = groupKeyOf(rows[i]!, groupby)
+    let arr = keyToIdx.get(k)
+    if (!arr) keyToIdx.set(k, (arr = []))
+    arr.push(i)
+  }
+  const outOrder = [...keyToIdx.keys()]
+  // Old input index -> rank within its group, built once (indexOf per member
+  // made a large grouped window quadratic).
+  const oldRank = new Map<string, Map<number, number>>()
+  for (const [k, idxs] of prevState.keyToIdx) {
+    const ranks = new Map<number, number>()
+    for (let j = 0; j < idxs.length; j++) ranks.set(idxs[j]!, j)
+    oldRank.set(k, ranks)
+  }
+  let pos = 0
+  const outFrom = new Array<number>(out.length).fill(-1)
+  const changed: number[] = []
+  for (const k of outOrder) {
+    const idxs = keyToIdx.get(k)!
+    const oldStart = prevState.groupStart.get(k)
+    const ranks = oldRank.get(k)
+    for (let j = 0; j < idxs.length; j++) {
+      const ni = pos + j
+      const oldInput = from[idxs[j]!]!
+      if (oldInput < 0 || modified.has(idxs[j]!)) { changed.push(ni); continue }
+      const rank = ranks?.get(oldInput) ?? -1
+      if (rank < 0 || oldStart == null) { changed.push(ni); continue }
+      const oldOut = oldStart + rank
+      outFrom[ni] = oldOut
+      if (prev[oldOut] !== undefined && rowsEqual(out[ni]!, prev[oldOut]!)) out[ni] = prev[oldOut]!
+      else changed.push(ni)
+    }
+    pos += idxs.length
+  }
+  const to = new Array<number>(prev.length).fill(-1)
+  for (let i = 0; i < outFrom.length; i++) if (outFrom[i]! >= 0) to[outFrom[i]!] = i
+  const state = buildAggState(rows, groupby, out)
+  return { rows: out, pulse: pulseOfMapping(outFrom, to, changed), state }
+}
+
+/** sequence appends generated rows after the source rows; the tail is stable. */
+function sequencePulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prev: Row[] | undefined,
+): { rows: Row[]; pulse: StepPulse } | null {
+  const from = input.from!
+  // A removal/replacement in the source shifts the generated tail; fall back.
+  if (input.to && input.to.some((v) => v < 0)) return null
+  if (input.changed.length) return null
+  const generated = (applyTransforms([], [t], tctx, sourceName) as Row[])
+  const oldLen = input.to?.length ?? -1
+  const out: Row[] = []
+  const outFrom: number[] = []
+  const changed: number[] = []
+  for (let i = 0; i < rows.length; i++) {
+    const old = from[i]!
+    if (old >= 0 && prev && prev[old] !== undefined) { out.push(prev[old]!); outFrom.push(old) }
+    else { out.push(rows[i]!); outFrom.push(-1); changed.push(out.length - 1) }
+  }
+  for (let j = 0; j < generated.length; j++) {
+    const oldIdx = oldLen + j
+    if (prev && prev[oldIdx] !== undefined) { out.push(prev[oldIdx]!); outFrom.push(oldIdx) }
+    else { out.push(generated[j]!); outFrom.push(-1); changed.push(out.length - 1) }
+  }
+  const to = new Array<number>(prev ? prev.length : oldLen + generated.length).fill(-1)
+  for (let i = 0; i < outFrom.length; i++) if (outFrom[i]! >= 0) to[outFrom[i]!] = i
+  return { rows: out, pulse: pulseOfMapping(outFrom, to, changed) }
+}
+
+/** A generating transform whose output is independent of the input rows. */
+function generatingPulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  prev: Row[] | undefined,
+): { rows: Row[]; pulse: StepPulse } {
+  const out = applyOne(rows, t, tctx, sourceName)
+  if (prev && out.length === prev.length && out.every((r, i) => rowsEqual(r, prev[i]!))) {
+    return { rows: prev, pulse: pulseOfMapping(identityMapping(prev.length), identityMapping(prev.length), []) }
+  }
+  return { rows: out, pulse: { changed: [], full: true } }
+}
+
+/**
+ * Apply one transform to a length-changing pulse. Returns `null` when the
+ * transform cannot publish a mapping (the caller then re-derives the rest).
+ */
+function applyStepWithPulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prev: Row[] | undefined, prevStepState: unknown,
+): { rows: Row[]; pulse: StepPulse | null; state?: unknown } {
+  const type = String(t.type)
+  if (input.appendOnly) {
+    // Fast paths that never need the full mapping.
+    const appendLocal = type === 'formula' || type === 'timeunit' || type === 'geoshape'
+      || type === 'geopoint' || type === 'linkpath' || type === 'project' || type === 'identifier'
+      || (type === 'bin' && Array.isArray((t as { extent?: unknown }).extent))
+      || (type === 'lookup' && !tctx.affectedDatasets?.has((t as { from?: string }).from ?? ''))
+    if (appendLocal) {
+      const fast = rowLocalAppendPulse(rows, t, tctx, sourceName, input, prev)
+      if (fast) return fast
+    } else if (type === 'filter') {
+      const fast = filterAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined)
+      if (fast) return fast
+    } else if (type === 'fold') {
+      const fast = foldAppendPulse(rows, t, tctx, sourceName, input, prev)
+      if (fast) return fast
+    } else if (type === 'aggregate') {
+      const fast = aggregateAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
+      if (fast) return fast
+    } else if (type === 'joinaggregate') {
+      const fast = joinAggregateAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
+      if (fast) return fast
+    } else if (type === 'collect' || type === 'sample') {
+      const fast = orderedAppendPulse(rows, t, input, prev, prevStepState as { order: number[] } | undefined)
+      if (fast) return fast
+    } else if (type === 'geojson' || type === 'extent' || type === 'stratify') {
+      return { rows: applyOne(rows, t, tctx, sourceName), pulse: input }
+    }
+    // Everything else needs old<->new indices; synthesise them only here.
+    const from = mappingFromPulse(input, rows.length)
+    input = { ...input, from, to: inverseMapping(from, pulseBaseLength(input)), appendOnly: undefined, baseLength: undefined }
+  }
+  switch (type) {
+    case 'formula':
+    case 'timeunit':
+    case 'geoshape':
+    case 'geopoint':
+    case 'linkpath':
+    case 'project':
+      return rowLocalPulse(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+    case 'bin': {
+      const fixed = Array.isArray((t as { extent?: unknown }).extent)
+      if (fixed) return rowLocalPulse(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+      return rederiveAligned(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+    }
+    case 'lookup': {
+      const from = (t as { from?: string }).from ?? ''
+      if (tctx.affectedDatasets?.has(from)) return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+      return rowLocalPulse(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+    }
+    case 'identifier': {
+      // Inserts/deletes shift index-derived ids; only an append-only pulse can
+      // reuse the retained ids.
+      const from = input.from!
+      const stable = from.every((old, i) => old < 0 || old === i)
+      if (stable) return rowLocalPulse(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+      return rederiveAligned(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+    }
+    case 'geojson':
+    case 'extent':
+    case 'stratify': {
+      const out = applyOne(rows, t, tctx, sourceName)
+      return { rows: out, pulse: input }
+    }
+    case 'filter':
+      return filterPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined)
+        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+    case 'fold':
+      return foldPulse(rows, t, tctx, sourceName, input, prev)
+        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+    case 'flatten':
+      return flattenPulse(rows, t, tctx, sourceName, input, prev, prevStepState as FlattenState | undefined)
+        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+    case 'aggregate':
+      return aggregatePulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
+        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+    case 'joinaggregate':
+      return joinAggregatePulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
+        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+    case 'window':
+    case 'stack':
+      return windowStackPulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
+        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+    case 'pie':
+    case 'dotbin':
+    case 'label':
+    case 'pack':
+    case 'partition':
+    case 'treemap':
+    case 'voronoi':
+      return rederiveAligned(rows, t, tctx, sourceName, input, prev)
+        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+    case 'sequence':
+      return sequencePulse(rows, t, tctx, sourceName, input, prev)
+        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+    case 'graticule':
+      return generatingPulse(rows, t, tctx, sourceName, prev)
+    default:
+      // Global generators/fitters (kde/regression/loess/wordcloud/contour/...)
+      // cannot expose a row mapping.
+      return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+  }
+}
+
+/** Apply a transform chain with a length-changing pulse, step by step. */
+function applyPipelineWithPulse(
+  rows: Row[], transforms: CompiledTransform[], tctx: StepTransformContext, sourceName: string,
+  input: StepPulse, prevSteps: Row[][] | undefined,
+): { rows: Row[]; pulse: StepPulse | null; steps: Row[][] } {
+  let cur = rows
+  let pulse: StepPulse | null = input
+  const steps: Row[][] = []
+  const stepCache = (tctx as unknown as { stepCache?: Map<string, unknown> }).stepCache
+  for (let k = 0; k < transforms.length; k++) {
+    const t = transforms[k]!
+    const prev = prevSteps?.[k]
+    if (!pulse) {
+      cur = applyOne(cur, t, tctx, sourceName)
+      steps.push(cur)
+      continue
+    }
+    const key = `${sourceName}#${k}`
+    const prevState = stepCache?.get(key)
+    const res = applyStepWithPulse(cur, t, tctx, sourceName, pulse, prev, prevState)
+    cur = res.rows
+    pulse = res.pulse
+    steps.push(cur)
+    if (stepCache && res.state !== undefined) stepCache.set(key, res.state)
+  }
+  return { rows: cur, pulse, steps }
+}
+
 function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): void {
   const sources = new Map<string, CompiledChart['data'][number]>()
   for (const d of ctx.chart.data) sources.set(d.name, d)
@@ -1436,12 +2375,17 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       const rows = (inputData[name] as Row[]) ?? []
       ctx.datasets.set(name, rows)
       ctx.datasetChanges?.set(name, ctx.dataChanges?.get(name) ?? null)
+      const pulse = ctx.inputPulses?.get(name) ?? (ctx.dataChanges?.get(name)
+        ? { changed: [...ctx.dataChanges.get(name)!] }
+        : null)
+      ctx.datasetPulses.set(name, pulse)
       return rows
     }
     if (seen.has(name)) throw new Error(`[aster] circular data reference: ${name}`)
     seen.add(name)
 
     let rows: Row[]
+    let inPulse: StepPulse | null = null
     if ('source' in d && (d as CompiledChart['data'][number] & { source: string }).source) {
       const src = (d as CompiledChart['data'][number] & { source: string }).source
       const srcDef = ctx.chart.data.find((sd) => sd.name === src)
@@ -1450,8 +2394,10 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
         // source's raw values (e.g. source = inline Topology, format =
         // topojson feature extraction).
         rows = readData(srcDef.values, (d as { format?: DataFormatSpec }).format)
+        inPulse = ctx.inputPulses?.get(src) ?? null
       } else {
         rows = build(src, seen).map((r) => ({ ...r }))
+        inPulse = ctx.datasetPulses.get(src) ?? null
       }
     } else if (d.values != null) {
       if (inputData[name]) {
@@ -1464,8 +2410,14 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
     } else {
       rows = ((inputData[name] as Row[]) ?? []).map((r) => ({ ...r }))
     }
+    if (!inPulse && !('source' in d && (d as CompiledChart['data'][number] & { source: string }).source)) {
+      inPulse = ctx.inputPulses?.get(name) ?? (ctx.dataChanges?.get(name)
+        ? { changed: [...ctx.dataChanges.get(name)!] }
+        : null)
+    }
     const inputRows = rows
     let outputChanges: Set<number> | null = null
+    let outPulse: StepPulse | null = null
     if (d.transform.length) {
       const chartMetaData = ctx.chart as unknown as {
         __prevDatasetOutputs?: Map<string, Row[]>
@@ -1474,10 +2426,14 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
         __binState?: Map<string, { lo: number; hi: number; start: number; stop: number; step: number; out: Row[]; oldVals: number[] }>
         __foldState?: Map<string, { n: number; out: Row[] }>
         __flattenState?: Map<string, { offsets: number[]; sizes: number[]; out: Row[] }>
+        __prevStepOutputs?: Map<string, Row[][]>
+        __stepCache?: Map<string, unknown>
         __paramFp?: string
       }
       const prevOutputs = chartMetaData.__prevDatasetOutputs
+      const prevSteps = chartMetaData.__prevStepOutputs?.get(name)
       const changes = ctx.dataChanges?.get(name)
+      const lengthPulse = isLengthPulse(inPulse) ? inPulse : null
       const paramsUnchanged = paramFpOf(ctx.signalParams) === chartMetaData.__paramFp
       const single = d.transform.length === 1 ? (d.transform[0] as Record<string, unknown> | undefined) : null
       const isAgg = single?.type === 'aggregate'
@@ -1735,8 +2691,26 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
         } else {
           rows = apply(rows)
         }
+      } else if (lengthPulse && paramsUnchanged) {
+        const tctx: StepTransformContext = {
+          runtime: ctx.runtime,
+          signals: ctx.signalParams,
+          datasets: (n) => {
+            if (!ctx.datasets.has(n) && sources.has(n)) build(n, new Set())
+            return ctx.datasets.get(n)
+          },
+          hierarchies: ctx.hierarchies,
+          projections: ctx.projections,
+          affectedDatasets: ctx.affected,
+          stepCache: chartMetaData.__stepCache ?? (chartMetaData.__stepCache = new Map()),
+        }
+        const res = applyPipelineWithPulse(rows, d.transform, tctx, d.name, lengthPulse, prevSteps)
+        rows = res.rows
+        outPulse = res.pulse
+        if (!chartMetaData.__prevStepOutputs) chartMetaData.__prevStepOutputs = new Map()
+        chartMetaData.__prevStepOutputs.set(d.name, res.steps)
       } else {
-        rows = applyTransforms(rows, d.transform, {
+        const tctx: StepTransformContext = {
           runtime: ctx.runtime,
           signals: ctx.signalParams,
           // Cross-dataset access for the `lookup` transform. Build the referenced
@@ -1747,7 +2721,43 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
           },
           hierarchies: ctx.hierarchies,
           projections: ctx.projections,
-        }, d.name)
+          affectedDatasets: ctx.affected,
+          stepCache: chartMetaData.__stepCache ?? (chartMetaData.__stepCache = new Map()),
+        }
+        const steps: Row[][] = []
+        let cur = rows
+        for (let k = 0; k < d.transform.length; k++) {
+          cur = applyOne(cur, d.transform[k]!, tctx, d.name)
+          steps.push(cur)
+        }
+        rows = cur
+        if (!chartMetaData.__prevStepOutputs) chartMetaData.__prevStepOutputs = new Map()
+        chartMetaData.__prevStepOutputs.set(d.name, steps)
+        // Populate per-step state for the next incremental pulse (filter/flatten/
+        // groups). This is cheap: the full transform already visited the rows.
+        const cache = chartMetaData.__stepCache ?? (chartMetaData.__stepCache = new Map())
+        for (let k = 0; k < d.transform.length; k++) {
+          const tm = d.transform[k]!
+          const key = `${d.name}#${k}`
+          const inputAtStep = k === 0 ? inputRows : steps[k - 1]!
+          if (tm.type === 'filter') {
+            const expr = (tm as { expr?: string }).expr ?? ''
+            const fn = (row: Row): boolean => { try { return Boolean(ctx.runtime.expr(expr)(row, ctx.signalParams)) } catch { return false } }
+            cache.set(key, inputAtStep.map((r) => fn(r)))
+          } else if (tm.type === 'flatten') {
+            const fields = (tm as { fields?: string[] }).fields ?? []
+            const sizes = inputAtStep.map((r) => flattenSize(r, fields))
+            const offsets: number[] = []
+            let p = 0
+            for (const sz of sizes) { offsets.push(p); p += sz }
+            cache.set(key, { sizes, offsets })
+          } else if (tm.type === 'aggregate' || tm.type === 'joinaggregate' || tm.type === 'window' || tm.type === 'stack') {
+            cache.set(key, buildAggState(inputAtStep, (tm as { groupby?: string[] }).groupby ?? [], steps[k]!))
+          } else if (tm.type === 'collect' || tm.type === 'sample') {
+            const limit = tm.type === 'sample' ? ((tm as { size?: number }).size ?? 0) : Infinity
+            cache.set(key, { order: sortOrder(inputAtStep, (tm as { sort?: SortSpec }).sort, limit) })
+          }
+        }
       }
       // Refresh the persistent group index whenever the group transform was
       // fully re-derived (first eval, an unsafe changeset, or a non-incremental
@@ -1803,8 +2813,12 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       }
     }
     ctx.datasets.set(name, rows)
-    if (!d.transform.length) outputChanges = ctx.dataChanges?.get(name) ?? null
+    if (!d.transform.length) {
+      outputChanges = ctx.dataChanges?.get(name) ?? null
+      outPulse = inPulse
+    }
     ctx.datasetChanges?.set(name, outputChanges)
+    ctx.datasetPulses.set(name, outPulse)
     // Cache the derived output for the next per-datum update.
     const chartMeta = ctx.chart as unknown as { __prevDatasetOutputs?: Map<string, Row[]> }
     if (!chartMeta.__prevDatasetOutputs) chartMeta.__prevDatasetOutputs = new Map()
@@ -1918,6 +2932,76 @@ function buildScales(ctx: EvalContext): void {
             if (oldV === prevDom.hi && --hiCount <= 0) { stable = false; break }
           }
           reuse = stable
+        }
+        // Length-changing pulse: update the min/max census by the added/removed/
+        // modified rows only. An append inside the current domain (the common
+        // streaming case) therefore keeps the scale object — and every encoded
+        // item — without an O(n) domain re-scan.
+        const pulse = ctx.inputPulses?.get(dom.data) ?? ctx.datasetPulses.get(dom.data)
+        if (!reuse && prevDom && prevDom.finite && pulse && isLengthPulse(pulse)) {
+          const oldVals = prevDom.oldVals
+          let lo = prevDom.lo, hi = prevDom.hi
+          let loCount = prevDom.loCount, hiCount = prevDom.hiCount
+          let stable = true
+          const adjust = (oldV: number | undefined, newV: number): void => {
+            if (oldV != null) {
+              if (oldV === lo) loCount--
+              if (oldV === hi) hiCount--
+            }
+            if (!Number.isFinite(newV)) return
+            if (newV < lo || newV > hi) { stable = false; return }
+            if (newV === lo) loCount++
+            if (newV === hi) hiCount++
+          }
+          const changedVals: Array<[number, number]> = []
+          const addedVals: number[] = []
+          if (pulse.appendOnly) {
+            const base = pulse.baseLength ?? oldVals.length
+            if (base === oldVals.length && rows.length >= base) {
+              for (const i of pulse.changed) {
+                if (i < 0 || i >= base) continue
+                const v = Number((rows[i] as Row)[dom.field])
+                adjust(oldVals[i]!, v)
+                changedVals.push([i, v])
+              }
+              for (let i = base; i < rows.length; i++) {
+                const v = Number((rows[i] as Row)[dom.field])
+                adjust(undefined, v)
+                addedVals.push(v)
+              }
+            } else stable = false
+          } else if (pulse.from && pulse.from.length === rows.length) {
+            const from = pulse.from
+            const modified = new Set(pulse.changed)
+            const newVals = new Array<number>(rows.length)
+            const retained = new Set<number>()
+            for (let i = 0; i < from.length; i++) if (from[i]! >= 0) retained.add(from[i]!)
+            for (let old = 0; old < oldVals.length; old++) {
+              if (retained.has(old)) continue
+              adjust(oldVals[old]!, NaN)
+            }
+            for (let i = 0; i < rows.length; i++) {
+              const old = from[i]!
+              const dirty = old < 0 || modified.has(i)
+              const v = dirty ? Number((rows[i] as Row)[dom.field]) : oldVals[old]!
+              newVals[i] = v
+              if (dirty) adjust(old >= 0 ? oldVals[old]! : undefined, v)
+            }
+            if (stable) {
+              domainCache.set(s.name, {
+                ...prevDom, lo, hi, loCount, hiCount, oldVals: newVals,
+              })
+              reuse = true
+            }
+          } else stable = false
+          if (stable && pulse.appendOnly) {
+            for (const [i, v] of changedVals) oldVals[i] = v
+            for (const v of addedVals) oldVals.push(v)
+            domainCache.set(s.name, {
+              ...prevDom, lo, hi, loCount, hiCount, oldVals,
+            })
+            reuse = true
+          }
         }
       }
       // Discrete (band/point/ordinal) domains: the domain is the *ordered set*
@@ -2100,27 +3184,36 @@ function concreteDomain(scale: CompiledScale, values: unknown[]): unknown[] {
  *  - the mark uses no scale whose data-domain spans a changed dataset (otherwise
  *    an unchanged row's position shifts when the domain recomputes).
  */
-function canReuseItems(
+function reusablePulse(
   mark: CompiledMark,
   ctx: EvalContext,
   source: string,
   rowCount: number,
   prevGroup: SceneGroup | null | undefined,
   rectSorts: boolean,
-): boolean {
-  if (!ctx.datasetChanges) return false
-  // Pulse propagation: the *output* row indices that changed for this source
-  // (row-wise -> same indices; aggregate -> dirty groups' positions). null/absent
-  // means the dataset was fully re-derived, so per-item reuse would be wrong.
-  const changes = ctx.datasetChanges.get(source)
-  if (!changes || !prevGroup) return false
+): StepPulse | null {
+  if (!prevGroup) return null
+  // Pulse propagation: the *output* rows that changed for this source. A
+  // length-changing pulse additionally carries the old->new mapping. `null` means
+  // the dataset was fully re-derived without a trustworthy mapping.
+  const pulse = ctx.datasetPulses.get(source)
+    ?? (ctx.datasetChanges?.get(source) ? { changed: [...ctx.datasetChanges.get(source)!] } : null)
+  if (!pulse || pulse.full) return null
   const prevItems = prevGroup.items as SceneItem[]
-  if (rowCount !== prevItems.length) return false
-  if (mark.sort || mark.transform?.length || rectSorts) return false
+  if (pulse.appendOnly) {
+    const base = pulse.baseLength ?? prevItems.length
+    if (base !== prevItems.length || rowCount < base) return null
+  } else if (pulse.from) {
+    // Length-changing: retained rows can still be reused at their new index.
+    if (pulse.from.length !== rowCount) return null
+  } else if (rowCount !== prevItems.length) {
+    return null
+  }
+  if (mark.sort || mark.transform?.length || rectSorts) return null
   // A change to width/height or any signal shifts scale ranges and every
   // formula, so the previously-encoded items would be stale. Only reuse when the
   // expression params are identical to the previous eval.
-  if (paramFpOf(ctx.signalParams) !== (ctx.chart as unknown as { __prevParamFp?: string }).__prevParamFp) return false
+  if (paramFpOf(ctx.signalParams) !== (ctx.chart as unknown as { __prevParamFp?: string }).__prevParamFp) return null
   // Bail if the mark uses a scale whose encoding behavior may have changed:
   // either the scale object differs from the PREVIOUS eval's (its domain was
   // re-derived), or — for multi-dataset domains, which are always re-resolved —
@@ -2131,9 +3224,9 @@ function canReuseItems(
     if (!compiled) continue
     const cur = ctx.scales.get(name)
     if (cur != null && cur === prevScales?.get(name)) continue
-    if (domainReferencesAffected(compiled.domain, ctx.affected)) return false
+    if (domainReferencesAffected(compiled.domain, ctx.affected)) return null
   }
-  return true
+  return pulse
 }
 
 function evaluateMark(
@@ -2208,25 +3301,58 @@ function evaluateMark(
     // items is skipped entirely (including the row clone). `rows` is in dataset
     // order (changeset indices refer to it); rect marks map the dataset index to
     // its paint position via the sort permutation.
-    if (canReuseItems(mark, ctx, source, encodeRows.length, prevGroup, rectSorts)) {
-      const changes = ctx.datasetChanges!.get(source)!
+    const pulse = reusablePulse(mark, ctx, source, encodeRows.length, prevGroup, rectSorts)
+    if (pulse) {
       const prevItems = prevGroup!.items as SceneItem[]
-      // Reuse the previous group's item ARRAY in place and replace only the
-      // changed indices — an O(changed) splice instead of an O(n) rebuild, the
-      // persistent-scene behavior that vega's pulse graph gives us. Reused items
-      // keep their previous generation; changed items get the current one.
       const gen = (ctx.chart as unknown as { __gen?: number }).__gen ?? 0
-      for (const i of changes) {
-        if (i < 0 || i >= prevItems.length) continue
-        const pos = rectPermInv ? rectPermInv[i]! : i
-        if (pos < 0 || pos >= prevItems.length) continue
+      const encodeAt = (i: number): SceneItem => {
         const row = { ...(rows[i] as Row) }
         const res = resolveEncodeSet(update, row, ctx, mark.type)
         res.datum = row
         res.__gen = gen
-        prevItems[pos] = res
+        return res
       }
-      items = prevItems
+      if (pulse.appendOnly) {
+        const base = pulse.baseLength ?? prevItems.length
+        const cachedBounds = GROUP_BOUNDS.get(prevGroup!)
+        if (pulse.changed.length) GROUP_BOUNDS.delete(prevGroup!)
+        for (const i of pulse.changed) {
+          if (i < 0 || i >= base) continue
+          prevItems[i] = encodeAt(i)
+        }
+        for (let i = base; i < encodeRows.length; i++) {
+          const item = encodeAt(i)
+          prevItems.push(item)
+          if (cachedBounds && !pulse.changed.length) cachedBounds.union(boundLeaf(new Bounds(), item))
+        }
+        items = prevItems
+      } else if (pulse.from) {
+        const modified = new Set(pulse.changed)
+        const next = new Array<SceneItem>(encodeRows.length)
+        for (let i = 0; i < encodeRows.length; i++) {
+          const old = pulse.from[i]!
+          if (old >= 0 && !modified.has(i) && prevItems[old] !== undefined) next[i] = prevItems[old]!
+          else next[i] = encodeAt(i)
+        }
+        items = next
+      } else {
+        // Reuse the previous group's item ARRAY in place and replace only the
+        // changed indices — an O(changed) splice instead of an O(n) rebuild, the
+        // persistent-scene behavior that vega's pulse graph gives us. Reused items
+        // keep their previous generation; changed items get the current one.
+        for (const i of pulse.changed) {
+          if (i < 0 || i >= prevItems.length) continue
+          const pos = rectPermInv ? rectPermInv[i]! : i
+          if (pos < 0 || pos >= prevItems.length) continue
+          const row = { ...(rows[i] as Row) }
+          const res = resolveEncodeSet(update, row, ctx, mark.type)
+          res.datum = row
+          res.__gen = gen
+          prevItems[pos] = res
+        }
+        GROUP_BOUNDS.delete(prevGroup!)
+        items = prevItems
+      }
     } else {
       const gen = (ctx.chart as unknown as { __gen?: number }).__gen ?? 0
       items = encodeRows.map((row) => {
@@ -2677,8 +3803,11 @@ function buildScopedGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | nu
     ...ctx,
     width: gw,
     height: gh,
-    scales: childScaleMap,
-    scaleTypes: childTypeMap,
+    // Local scales shadow same-named parent scales; other names resolve through
+    // the parent scope (Vega scopes are chained). Nested marks in raw Vega
+    // specs routinely reference outer scales (`y`, a shared colour scale).
+    scales: new Map([...ctx.scales, ...childScaleMap]),
+    scaleTypes: new Map([...ctx.scaleTypes, ...childTypeMap]),
   }
 
   const items: SceneItem[] = []
@@ -4417,9 +5546,19 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
       if (litValue !== undefined) {
         raw = litValue
       } else {
-        // { scale: "x", band: 1 } - return bandwidth * band fraction
-        let fraction = bandSpec === true ? 0.5 : (typeof bandSpec === 'number' ? bandSpec : 1)
-        return s.bandwidth() * fraction
+        // { scale: "x", band: 1 } - return bandwidth * band fraction, then
+        // apply the encode's offset/mult. Vega's `height: {scale:'y', band:1,
+        // offset:-1}` is the common bar-gap idiom.
+        const fraction = bandSpec === true ? 0.5 : (typeof bandSpec === 'number' ? bandSpec : 1)
+        let result = s.bandwidth() * fraction
+        if (offsetSpec != null) {
+          if (typeof offsetSpec === 'number') result += offsetSpec
+          else if (typeof offsetSpec === 'object' && 'signal' in offsetSpec) {
+            result += ctx.runtime.expr(offsetSpec.signal as string)(datum, ctx.signalParams) as number
+          }
+        }
+        if (typeof multVal === 'number') result *= multVal
+        return result
       }
     } else if (field != null) {
       // 3a. Use datum field as the value to scale
@@ -5643,6 +6782,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const labelOpacity = (legend as { labelOpacity?: number }).labelOpacity
     const labelFontWeight = (legend as { labelFontWeight?: string | number }).labelFontWeight
     const labelFontStyle = (legend as { labelFontStyle?: string }).labelFontStyle
+    const labelFont = (legend as { labelFont?: string }).labelFont
+    const titleFont = (legend as { titleFont?: string }).titleFont
     const titleColor = (legend as { titleColor?: string }).titleColor ?? '#000'
     const titleOpacity = (legend as { titleOpacity?: number }).titleOpacity
     const titleFs = (legend as { titleFontSize?: number }).titleFontSize ?? 11
@@ -5727,6 +6868,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const lblB = boundText(new Bounds(), {
         text: e.label, x: xLblI, y: yI, align: labelAlign, baseline: lblBaseline,
         fontSize: labelFs, limit: labelLimit,
+        ...(labelFont != null ? { font: labelFont } : {}),
         ...(labelFontWeight != null ? { fontWeight: labelFontWeight } : {}),
         ...(labelFontStyle != null ? { fontStyle: labelFontStyle } : {}),
       } as unknown as SceneItem)
@@ -5824,7 +6966,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       ? boundText(new Bounds(), {
           x: titleX, y: titleY, text: titleStr, align: tAlign,
           baseline: (titleBaseline ?? tBaseline) as SceneItem['baseline'],
-          fontSize: titleFs, fontWeight: titleWeight, ...(titleLimit != null ? { limit: titleLimit } : {}),
+          fontSize: titleFs, fontWeight: titleWeight, ...(titleFont != null ? { font: titleFont } : {}), ...(titleLimit != null ? { limit: titleLimit } : {}),
         } as unknown as SceneItem)
       : new Bounds().set(0, 0, 0, 0)
     // container shifts (legendGroupLayout): top titles push the entries down
@@ -5900,7 +7042,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const borderStroke = legendBorderColor != null
     // vega's legend title item sits at (padding, padding) with baseline top;
     // the renderer bakes the baseline offset. titleBaseline overrides it.
-    if (titleStr) items.push({ text: titleStr, x: titleX + shift, y: titleY, baseline: (titleBaseline ?? tBaseline) as 'top', align: tAlign, fill: titleColor, fontSize: titleFs, fontWeight: titleWeight, ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
+    if (titleStr) items.push({ text: titleStr, x: titleX + shift, y: titleY, baseline: (titleBaseline ?? tBaseline) as 'top', align: tAlign, fill: titleColor, fontSize: titleFs, fontWeight: titleWeight, ...(titleFont != null ? { font: titleFont } : {}), ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
     for (let i = 0; i < n; i++) {
       const e = entries[i]!
       const eb = ebs[i]!
@@ -5969,6 +7111,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         fontSize: labelFs,
         limit: labelLimit,
         ...(labelOpacity != null ? { fillOpacity: labelOpacity } : {}),
+        ...(labelFont != null ? { font: labelFont } : {}),
         ...(labelFontWeight != null ? { fontWeight: labelFontWeight } : {}),
         ...(labelFontStyle != null ? { fontStyle: labelFontStyle } : {}),
       })
@@ -6145,6 +7288,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       // unrotated text but applies it inside the rotate frame for rotated
       // text — so rotated labels carry no baseline (no bake anywhere).
       label.fontSize = labelFs
+      if (axis.labelFont != null) label.font = axis.labelFont
       label.limit = axis.labelLimit ?? 180
       // Labels anchor at the unrounded scale + 0.5*bandWidth + tickOffset
       // (the axisBand -0.5 default folds against our baked +0.5 group delta)
@@ -6447,6 +7591,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     }
     // Vega emits font-size 11 on axis titles explicitly (bounds + canvas font).
     ;(t as Record<string, unknown>).fontSize = titleFs
+    if (axis.titleFont != null) (t as Record<string, unknown>).font = axis.titleFont
     if ((axis as { titleLimit?: number }).titleLimit != null) {
       t.limit = (axis as { titleLimit?: number }).titleLimit
     }
