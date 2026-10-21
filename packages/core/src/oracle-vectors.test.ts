@@ -215,6 +215,27 @@ const intervals: Record<string, TimeInterval> = {
   utcMinute, utcHour, utcDay, utcWeek, utcMonth, utcYear,
 }
 
+/**
+ * Colour math goes through cbrt/pow/HSL round-trips whose last bits differ
+ * between CPUs and Node/ICU builds (CI runs a different V8 than some dev
+ * machines). Compare at 12 significant digits — orders of magnitude below
+ * anything a renderer can express — instead of bit-exact, including the
+ * numbers embedded in `formatHsl`/`formatRgb` strings.
+ */
+function quantize(v: unknown): unknown {
+  if (typeof v === 'number') return Number.isFinite(v) ? Number(v.toPrecision(12)) : v
+  if (typeof v === 'string') {
+    return v.replace(/-?\d+\.\d+(?:e[+-]?\d+)?/gi, (m) => String(Number(Number(m).toPrecision(12))))
+  }
+  if (Array.isArray(v)) return v.map(quantize)
+  if (v !== null && typeof v === 'object') {
+    const o: Record<string, unknown> = {}
+    for (const k of Object.keys(v)) o[k] = quantize((v as Record<string, unknown>)[k])
+    return o
+  }
+  return v
+}
+
 function colorFields(c: unknown): Record<string, unknown> {
   const o: Record<string, unknown> = {}
   for (const k of Object.keys(c as object)) o[k] = enc((c as Record<string, unknown>)[k])
@@ -321,7 +342,7 @@ for (const file of files) {
         const factory = colorFactories[name]
         if (!factory) throw new Error(`no port for color suite "${name}"`)
         expectSuite(name, suite, (args, want) => {
-          expect(enc(proj(call(factory, args)))).toEqual(want)
+          expect(quantize(enc(proj(call(factory, args))))).toEqual(quantize(want))
         })
         continue
       }
