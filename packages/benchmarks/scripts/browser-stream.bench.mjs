@@ -1,11 +1,20 @@
 /**
  * Real-browser streaming benchmark (R13 / P0).
  *
- * Drives <ChartStream> with one append per animation frame and measures frame
- * pacing, DOM mutations and node count for SVG and canvas, with microtask and
- * requestAnimationFrame flush policies.
+ * Drives one append per animation frame through two engines on the identical
+ * spec/rows and measures frame pacing, DOM mutations and node count:
+ *
+ * - `aster` — `<ChartStream>` with SVG and canvas, microtask and raf flush,
+ * - `vega`  — a plain `vega.View` using the documented streaming API,
+ *             `view.change('t', changeset().insert(rows)).run()` (synchronous)
+ *             and `.runAsync()` (deferred), SVG and canvas renderers.
+ *
+ * The vega rows are the apples-to-apples baseline for the aster streaming
+ * numbers in docs/PERFORMANCE.md.
  *
  * Run: pnpm bench:browser-stream [--points=10000,100000] [--seconds=3] [--batch=1]
+ *                                [--engines=aster,vega] [--renderers=svg,canvas]
+ *                                [--policies=microtask,raf] [--vega-modes=run,runAsync]
  */
 import { build } from 'esbuild'
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs'
@@ -24,8 +33,12 @@ const arg = (name, dflt) => argv.find((a) => a.startsWith(`--${name}=`))?.split(
 const POINTS = arg('points', '10000,100000').split(',').map(Number).filter((n) => n > 0)
 const SECONDS = Number(arg('seconds', '3'))
 const BATCH = Math.max(1, Number(arg('batch', '1')))
+const ENGINES = arg('engines', 'aster,vega').split(',').filter(Boolean)
 const RENDERERS = arg('renderers', 'svg,canvas').split(',')
-const POLICIES = arg('policies', 'microtask,raf').split(',')
+const POLICIES = {
+  aster: arg('policies', 'microtask,raf').split(','),
+  vega: arg('vega-modes', 'run,runAsync').split(','),
+}
 
 ensureBuilt()
 rmSync(OUT_DIR, { recursive: true, force: true })
@@ -58,24 +71,32 @@ await page.waitForFunction(() => '__streamBench' in window, null, { timeout: 30_
 
 const out = []
 for (const points of POINTS) {
-  for (const renderer of RENDERERS) {
-    for (const policy of POLICIES) {
-      await page.evaluate(() => window.__streamBench.reset())
-      const r = await page.evaluate(
-        ([p, s, b, rr, pp]) => window.__streamBench.frames(p, s, b, rr, pp),
-        [points, SECONDS, BATCH, renderer, policy],
-      )
-      const ft = r.frameTimes
-      const long = ft.filter((t) => t > 21).length
-      const summary = summarize(ft)
-      out.push({
-        points, renderer, policy,
-        median: summary.median, p95: summary.p95,
-        longShare: ft.length ? long / ft.length : 0,
-        frames: ft.length, updates: r.updates, mutations: r.mutations, nodes: r.nodes,
-      })
-      await page.evaluate(() => window.__streamBench.reset())
-      console.log(`  ${renderer}/${policy} @ ${points}: ${fmt(summary.median)} ms median, ${((long / Math.max(1, ft.length)) * 100).toFixed(1)}% long`)
+  for (const engine of ENGINES) {
+    for (const renderer of RENDERERS) {
+      for (const policy of POLICIES[engine]) {
+        await page.evaluate(() => window.__streamBench.reset())
+        const r = await page.evaluate(
+          ([p, s, b, rr, pp, ee]) => window.__streamBench.frames(p, s, b, rr, pp, ee),
+          [points, SECONDS, BATCH, renderer, policy, engine],
+        )
+        const ft = r.frameTimes
+        const long = ft.filter((t) => t > 21).length
+        const summary = summarize(ft)
+        const expectedRows = points + r.updates * BATCH
+        // Vega reports its final dataset length: a dropped change would look
+        // fast for doing less work, so surface it instead of silently ranking it.
+        if (r.rows != null && r.rows !== expectedRows) {
+          console.error(`  [warn] vega dataset has ${r.rows} rows, expected ${expectedRows}`)
+        }
+        out.push({
+          points, engine, renderer, policy,
+          median: summary.median, p95: summary.p95,
+          longShare: ft.length ? long / ft.length : 0,
+          frames: ft.length, updates: r.updates, mutations: r.mutations, nodes: r.nodes,
+        })
+        await page.evaluate(() => window.__streamBench.reset())
+        console.log(`  ${engine}/${renderer}/${policy} @ ${points}: ${fmt(summary.median)} ms median, ${((long / Math.max(1, ft.length)) * 100).toFixed(1)}% long (${r.updates} appends)`)
+      }
     }
   }
 }
@@ -85,13 +106,15 @@ rmSync(OUT_DIR, { recursive: true, force: true })
 
 console.log(
   table(
-    `streaming <ChartStream> — append ${BATCH}/frame for ${SECONDS}s`,
-    ['points', 'backend', 'flush', 'median frame', 'p95 frame', 'long >21ms', 'updates', 'mutations', 'DOM nodes'],
+    `streaming append ${BATCH}/frame for ${SECONDS}s — aster vs vega view.change`,
+    ['points', 'engine', 'backend', 'flush', 'median frame', 'p95 frame', 'long >21ms', 'appends', 'mut/append', 'DOM nodes'],
     out.map((r) => [
-      String(r.points), r.renderer, r.policy,
+      String(r.points), r.engine, r.renderer, r.policy,
       `${fmt(r.median)} ms`, `${fmt(r.p95)} ms`,
       `${(r.longShare * 100).toFixed(1)}%`,
-      String(r.updates), String(r.mutations), String(r.nodes),
+      String(r.updates),
+      fmt(r.mutations / Math.max(1, r.updates), 1),
+      String(r.nodes),
     ]),
   ),
 )

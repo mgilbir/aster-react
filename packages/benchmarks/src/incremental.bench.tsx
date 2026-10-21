@@ -12,7 +12,13 @@
  * a scale-domain change. A second case appends values that extend the y domain,
  * where the scale rebuild is expected and the win is smaller.
  *
- * Run: pnpm bench:incremental [--points=5000] [--batch=1] [--reps=100]
+ * A Vega baseline runs the *same* append workload through the documented
+ * `view.change('t', changeset().insert(rows)).run()` path with `renderer: 'none'`,
+ * so the table separates dataflow cost from paint (the browser runner covers
+ * paint/frame pacing). It is informational: the pass/fail gate stays on aster's
+ * own incremental vs full comparison.
+ *
+ * Run: pnpm bench:incremental [--points=5000] [--batch=1] [--reps=100] [--vega=1]
  */
 import { performance } from 'node:perf_hooks'
 import { ensureBuilt } from './ensure-built.js'
@@ -69,6 +75,28 @@ async function main(): Promise<void> {
   stream.push({ data: { t: rows(points) } })
   stream.flush()
 
+  // Direct Vega baseline: identical spec, identical append per update, through
+  // the documented streaming API. renderer 'none' keeps this compute-only (no
+  // SVG/canvas paint) so it lines up with `evaluateChart`. --vega=0 disables it.
+  const useVega = arg('vega', '1') !== '0'
+  type VegaView = { change: (name: string, cs: unknown) => VegaView; run: () => VegaView; data: (name: string) => unknown[]; finalize: () => void }
+  let vegaView: VegaView | null = null
+  let vegaInsert: (rows: unknown[]) => unknown = () => undefined
+  if (useVega) {
+    try {
+      const vega = await import('vega')
+      const vegaSpec = { ...spec, data: [{ name: 't', values: rows(points) }] }
+      vegaView = new vega.View(vega.parse(vegaSpec as never), { renderer: 'none', logLevel: 0 }).run() as unknown as VegaView
+      vegaInsert = (batchRows: unknown[]) => vega.changeset().insert(batchRows as never)
+      // Warm the dataflow (parse/lazy operators) before timing.
+      vegaView.change('t', vegaInsert(rows(batch, points))).run()
+    } catch (err) {
+      console.error('[incremental] vega baseline unavailable:', (err as Error).message)
+      vegaView = null
+    }
+  }
+  const vegaTimes: number[] = []
+
   for (let i = 0; i < reps; i++) {
     const appended = rows(batch, points + i * batch)
     const next = [...rows(points + i * batch), ...appended]
@@ -83,19 +111,36 @@ async function main(): Promise<void> {
     const flush = stream.flush()
     incTimes.push(performance.now() - t1)
     if (!flush) throw new Error('stream flush produced no scene')
+
+    if (vegaView) {
+      const t2 = performance.now()
+      vegaView.change('t', vegaInsert(appended)).run()
+      vegaTimes.push(performance.now() - t2)
+    }
   }
 
   const full = summarize(fullTimes)
   const inc = summarize(incTimes)
   const ratio = full.median / Math.max(inc.median, 1e-9)
+  const vega = vegaTimes.length ? summarize(vegaTimes) : null
+  const expectedVegaRows = points + batch * (reps + 1) // includes the warmup append
+  const vegaRows = vegaView ? vegaView.data('t').length : 0
+  if (vegaView && vegaRows !== expectedVegaRows) {
+    console.error(`[incremental] vega dataset has ${vegaRows} rows, expected ${expectedVegaRows}`)
+  }
+  vegaView?.finalize()
   console.log(
     table(
       `incremental append vs full re-evaluation — ${points} pts, +${batch}/update, ${reps} updates (ms)`,
       ['path', 'median', 'p95', 'max'],
       [
         ['full evaluateChart (no pulse)', fmt(full.median), fmt(full.p95), fmt(full.max)],
-        ['stream append + explicit pulse', fmt(inc.median), fmt(inc.p95), fmt(inc.max)],
-        ['speedup (median)', `${ratio.toFixed(2)}x`, '—', '—'],
+        ['aster stream append + pulse', fmt(inc.median), fmt(inc.p95), fmt(inc.max)],
+        ...(vega
+          ? ([['vega view.change + run', fmt(vega.median), fmt(vega.p95), fmt(vega.max)],
+              ['aster vs vega (median)', `${(vega.median / Math.max(inc.median, 1e-9)).toFixed(2)}x`, '—', '—']] as string[][])
+          : []),
+        ['speedup vs full (median)', `${ratio.toFixed(2)}x`, '—', '—'],
       ],
     ),
   )

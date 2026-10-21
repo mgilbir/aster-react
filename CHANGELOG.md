@@ -14,7 +14,9 @@
   `useChartWorkerStream` + `handleChartWorkerStreamRequest` for worker offload.
   `collect`/`sample`/`aggregate`/`joinaggregate` now have append fast paths.
 - **Performance gate**: `pnpm bench:incremental` runs in CI (10k/30) and nightly
-  (100k/40); measured ~29x and ~216x cheaper than a full evaluate at the median.
+  (100k/40); measured ~29x and ~216x cheaper than a full evaluate at the median. The
+  benchmark also runs a direct Vega baseline (`view.change(...).run()`, renderer
+  `none`): aster's append is ~13x cheaper at 10k and ~62x at 100k on the same workload.
 - **Streaming rendering**: `<ChartStream>`/`<ChartWorkerStream>` render streamed
   scenes through the existing DOM patcher/canvas backend/interaction/a11y tree instead
   of re-serializing SVG per flush. `useChartStream`/`useChartWorkerStream` gained
@@ -26,6 +28,10 @@
   solid-paint bbox skipping and batched same-paint symbol runs bring a 10k-point
   one-append-per-frame stream to ~16.7ms median frames with no long frames on SVG
   and canvas; 100k canvas frames dropped from ~52ms to ~16.7ms via incremental append painting (only new mark items are drawn; full repaints still fall back safely).
+  The runner now includes a direct Vega `view.change` baseline on the identical spec
+  and row stream (SVG/canvas, `run`/`runAsync`): at 100k points Vega needs ~170ms per
+  SVG frame vs aster's ~88ms and reports ~2.3% long frames / ~240 DOM mutations per
+  append at 10k (aster: 0% long, ~1 mutation); both are frame-bound on canvas.
 - **Nested scopes / axes**: nested group marks now inherit outer scales (local names
   still shadow), so raw Vega specs that reference a parent `y` or colour scale render
   inside groups (population pyramid). Vega-Lite compilation now emits all grid axes

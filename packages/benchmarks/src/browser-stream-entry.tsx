@@ -1,19 +1,32 @@
 /**
  * Browser streaming benchmark API for `<ChartStream>` (R13 / P0).
  * Bundled by scripts/browser-stream.bench.mjs and driven through window.__streamBench.
+ *
+ * Two engines run the *same* streaming workload (same spec, same rows, one
+ * append per animation frame):
+ *
+ * - `aster` — `<ChartStream push({ append })>` with the microtask/raf flush
+ *   policies,
+ * - `vega`  — a plain `vega.View` driven through the documented streaming
+ *   API, `view.change('t', changeset().insert(rows))`, either `.run()`
+ *   (synchronous, flush-in-frame) or `.runAsync()` (microtask-ish, the path
+ *   vega-embed/React wrappers use).
+ *
+ * Both are measured with the identical frame-pacing protocol, so the table
+ * answers "what does Vega's own incremental append cost on this stream?".
  */
 import * as React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { changeset, parse as parseVega, View } from 'vega'
 import { ChartStream, type ChartStreamHandle } from '@aster/react'
 
+export type Engine = 'aster' | 'vega'
 type Renderer = 'svg' | 'canvas'
-type FlushPolicy = 'microtask' | 'raf'
+type FlushPolicy = 'microtask' | 'raf' | 'run' | 'runAsync'
 
-interface Session {
-  host: HTMLDivElement
-  root: Root
-  ref: React.RefObject<ChartStreamHandle | null>
-}
+type Session =
+  | { engine: 'aster'; host: HTMLDivElement; root: Root; ref: React.RefObject<ChartStreamHandle | null> }
+  | { engine: 'vega'; host: HTMLDivElement; view: View }
 
 let session: Session | null = null
 
@@ -23,6 +36,7 @@ const rows = (n: number, from = 0): Array<{ x: number; y: number }> =>
     return { x: (k % 1000) / 1000, y: ((k * 7) % 100) / 10 }
   })
 
+/** Valid Vega spec, accepted by both the aster compiler and `vega.parse`. */
 const SPEC = {
   $schema: 'https://vega.github.io/schema/vega/v6.json',
   width: 800, height: 500, padding: 0, autosize: 'none', background: 'white',
@@ -35,11 +49,15 @@ const SPEC = {
     type: 'symbol', from: { data: 't' },
     encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 8 } } },
   }],
-} as never
+}
 
 function teardown(): void {
   if (!session) return
-  session.root.unmount()
+  if (session.engine === 'vega') {
+    session.view.finalize()
+  } else {
+    session.root.unmount()
+  }
   session.host.remove()
   session = null
 }
@@ -48,42 +66,77 @@ function waitFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()))
 }
 
-async function mount(points: number, renderer: Renderer, flushPolicy: FlushPolicy): Promise<void> {
+async function mount(
+  points: number,
+  renderer: Renderer,
+  flushPolicy: FlushPolicy,
+  engine: Engine,
+): Promise<void> {
   teardown()
   const host = document.createElement('div')
   host.style.width = '800px'
   host.style.height = '500px'
   document.body.appendChild(host)
-  const root = createRoot(host)
-  const ref = React.createRef<ChartStreamHandle>()
-  session = { host, root, ref }
-  root.render(
-    <ChartStream
-      ref={ref}
-      spec={SPEC}
-      width={800}
-      height={500}
-      renderer={renderer}
-      a11y={false}
-      streamOptions={{
-        initial: { data: { t: rows(points) } },
-        flushPolicy,
-        autoFlush: true,
-      }}
-    />,
-  )
+
+  if (engine === 'vega') {
+    // Same initial dataset the aster stream gets through `streamOptions.initial`.
+    const spec = { ...SPEC, data: [{ name: 't', values: rows(points) }] }
+    const view = new View(parseVega(spec as never), { renderer, logLevel: 0 })
+      .initialize(host)
+      .run()
+    session = { engine: 'vega', host, view }
+  } else {
+    const root = createRoot(host)
+    const ref = React.createRef<ChartStreamHandle>()
+    session = { engine: 'aster', host, root, ref }
+    root.render(
+      <ChartStream
+        ref={ref}
+        spec={SPEC as never}
+        width={800}
+        height={500}
+        renderer={renderer}
+        a11y={false}
+        streamOptions={{
+          initial: { data: { t: rows(points) } },
+          flushPolicy: flushPolicy as 'microtask' | 'raf',
+          autoFlush: true,
+        }}
+      />,
+    )
+  }
+
   // Wait for the initial scene to hit the DOM/canvas.
   for (let i = 0; i < 240; i++) {
     if (host.querySelector('svg, canvas')) return
     await waitFrame()
   }
-  throw new Error('stream chart did not render')
+  throw new Error(`${engine} chart did not render`)
 }
 
-async function frames(points: number, seconds: number, batch: number, renderer: Renderer, flushPolicy: FlushPolicy) {
-  await mount(points, renderer, flushPolicy)
-  const host = session!.host
-  const ref = session!.ref
+/** The documented Vega append path, both synchronous and async variants. */
+function appendVega(view: View, batch: Array<{ x: number; y: number }>, policy: FlushPolicy): void {
+  const update = view.change('t', changeset().insert(batch))
+  if (policy === 'runAsync') {
+    void update.runAsync().catch((err: unknown) => console.error('[stream-bench] vega runAsync', err))
+  } else {
+    update.run()
+  }
+}
+
+async function frames(
+  points: number,
+  seconds: number,
+  batch: number,
+  renderer: Renderer,
+  flushPolicy: FlushPolicy,
+  engine: Engine,
+) {
+  await mount(points, renderer, flushPolicy, engine)
+  const active = session!
+  const host = active.host
+  const ref = active.engine === 'aster' ? active.ref : null
+  const view = active.engine === 'vega' ? active.view : null
   const frameTimes: number[] = []
   let updates = 0
   let mutations = 0
@@ -98,7 +151,10 @@ async function frames(points: number, seconds: number, batch: number, renderer: 
       if (t >= end) { resolve(); return }
       frameTimes.push(t - prev)
       prev = t
-      ref.current?.push({ append: { t: rows(batch, next) } })
+      const batchRows = rows(batch, next)
+      // Both engines do the same amount of work per frame: one append.
+      if (view) appendVega(view, batchRows, flushPolicy)
+      else ref?.current?.push({ append: { t: batchRows } })
       next += batch
       updates++
       requestAnimationFrame(loop)
@@ -109,7 +165,16 @@ async function frames(points: number, seconds: number, batch: number, renderer: 
   await waitFrame()
   await waitFrame()
   observer.disconnect()
-  return { frameTimes: frameTimes.slice(1), updates, mutations, nodes: host.querySelectorAll('*').length }
+  // Sanity: the Vega dataflow must actually contain every appended row. A
+  // silently dropped change would make Vega look faster for doing less work.
+  const rowsAppended = view ? view.data('t').length : null
+  return {
+    frameTimes: frameTimes.slice(1),
+    updates,
+    mutations,
+    nodes: host.querySelectorAll('*').length,
+    rows: rowsAppended,
+  }
 }
 
 function reset(): void {

@@ -31,7 +31,16 @@ a chart pays only for the features it imports.
   append-only streamed scenes paint just the new mark items synchronously. In headless Chromium, a 10k-point stream at one append/frame holds
   ~16.7ms median frames with 0% long frames on both SVG and canvas; 100k points
   holds ~16.7ms on canvas (only the appended items are painted) while SVG is
-  ~86ms per frame, the remaining scaling boundary.
+  ~86ms per frame, the remaining scaling boundary. The same benchmark now runs a
+  direct Vega baseline on the identical spec/rows
+  (`view.change('t', changeset().insert(rows)).run()`): at 100k points it needs
+  ~170ms per frame on SVG (aster ~88ms, ~2x faster) and is frame-bound on canvas
+  like aster; at 10k both are frame-bound, but Vega reports ~2.3% long frames and
+  ~240 DOM mutations per append versus ~1 for aster. Compute only
+  (`pnpm bench:incremental`, `renderer: 'none'`) aster's append is ~13x cheaper than
+  `view.change` at 10k and ~62x at 100k, because Vega still walks the affected
+  operators for a one-tuple insert while aster splices items and patches the
+  domain census in O(appended).
 - **Incremental scales**: continuous/discrete domains are reused when a changeset
   provably cannot move them; append-only continuous updates patch the min/max census
   in O(appended) instead of rescanning the dataset.

@@ -31,7 +31,8 @@ pnpm bench:pipeline   # per-stage compute breakdown: aster compile/evaluate/seri
                       # vs vega parse/dataflow/toSVG (no DOM in the way)
 pnpm bench:incremental # streaming append + explicit pulse vs full evaluateChart
                       # (fails if the incremental path is not cheaper)
-pnpm bench:browser-stream # <ChartStream> append per frame: SVG/canvas, microtask/raf
+pnpm bench:browser-stream # per-frame append: aster <ChartStream> vs vega view.change
+                      # SVG/canvas, microtask/raf and run/runAsync
                       # flush policies, long frames + DOM mutations
 ```
 
@@ -45,7 +46,13 @@ The browser runner needs a Chromium for Playwright (`npx playwright install chro
   HTML strings and patches DOM much slower than a browser; trust the browser runner
   for absolute and near-tie numbers. jsdom is still useful in CI (no browser needed).
 - **Frame pacing** streams one data update per animation frame; the interesting column
-  is `% long frames (>21ms)` — dropped frames a user would feel.
+  is `% long frames (>21ms)` — dropped frames a user would feel. The streaming runner
+  puts aster and Vega on the *same* spec and rows, so the `engine`/`flush` columns are
+  directly comparable: `aster` flushes on a microtask or in `requestAnimationFrame`,
+  `vega` calls the documented `view.change('t', changeset().insert(rows))` and then
+  `.run()` (synchronous) or `.runAsync()` (deferred). `mut/append` counts DOM mutations
+  per appended row — it separates "cheap for the engine" from "cheap because it stopped
+  touching the DOM" (canvas has no DOM mutations at all on either side).
 - **Container resize** changes the host's CSS width and times how long the chart svg
   takes to follow: `aster` has a built-in `ResizeObserver`; the Vega paths only react
   because the harness wires the documented `ResizeObserver` + view-API glue, which
@@ -62,8 +69,11 @@ The browser runner needs a Chromium for Playwright (`npx playwright install chro
 - `src/embeds.tsx` — the three embedding approaches behind one component interface
 - `src/settle.ts` — shared DOM-quiescence protocol / measurement primitives
 - `src/runtime.bench.tsx`, `src/memory.bench.tsx` — jsdom runners
-- `src/incremental.bench.tsx` — `createChartStream` append vs full re-evaluate
-- `src/browser-stream-entry.tsx` — in-page `<ChartStream>` frame-pacing driver
+- `src/incremental.bench.tsx` — `createChartStream` append vs full re-evaluate, plus a
+  compute-only (`renderer: 'none'`) Vega `view.change` baseline for the same workload
+  (`--vega=0` disables it)
+- `src/browser-stream-entry.tsx` — in-page frame-pacing driver for `<ChartStream>` and a
+  plain `vega.View`
 - `src/browser-entry.ts` — `window.__bench` API bundled into the browser page
 - `scripts/browser.bench.mjs` — esbuild + Playwright + CDP driver
 - `scripts/bundle-size.mjs` — per-approach payload table
@@ -98,3 +108,39 @@ String mode is still the better default when *every* mark changes each update
 (scatter-style churn): there, patching writes nearly all attributes anyway and
 the browser's HTML parser is very good. `incremental` wins when the tree is
 large and mostly stable (axes/legends/static styles — the common dashboard case).
+
+## Streaming appends: aster vs a direct `vega.View`
+
+`bench:browser-stream` now runs Vega's own streaming path on the identical spec
+and row stream: `view.change('t', changeset().insert(rows)).run()` (and
+`.runAsync()`), one append per animation frame, measured with the same
+frame-pacing protocol as `<ChartStream>`. `bench:incremental` adds the
+compute-only version (`renderer: 'none'`, so no paint is in the way) next to
+aster's `stream.append`.
+
+Headless Chromium, 1 append/frame for 3 s, 800×500 symbol chart, medians:
+
+| points | backend | aster | vega `view.change` | note |
+|---|---|---|---|---|
+| 10k | SVG | 16.7 ms/frame, 0% long | 16.7 ms/frame, 2.3% long | both frame-bound; vega does ~240 DOM mutations per append vs ~1 for aster |
+| 10k | canvas | 16.7 ms, 0% long | 16.7 ms, 0% long | frame-bound on both |
+| 20k | SVG | 16.6 ms, 2% long | 31.6 ms, 100% long | crossover: vega leaves the frame budget |
+| 50k | SVG | 44 ms, 95% long | 81 ms, 100% long | ~1.8x |
+| 100k | SVG | 88 ms, 97% long | 170 ms, 100% long | ~2x; a single append on a 100k chart writes ~400k DOM attributes (≈4 per node) vs 1 for aster |
+| 100k | canvas | 16.7 ms, 0% long | 16.7 ms (`run`) / 16.8 ms, 9.7% long (`runAsync`) | incremental append painting keeps both frame-bound |
+
+The mutation column is the interesting part of the SVG result: Vega's
+`view.change` sets the dataset's `modified` flag, so the SVG renderer re-walks
+and re-writes the scene — the per-append mutation count grows with the dataset
+(≈240 at 10k, ≈1.4k at 20k, ≈10k at 50k). Aster's append path writes only the
+appended item, which is why its per-frame cost stays flat until SVG node cost
+itself (not patching) becomes the limit.
+
+Compute only (node, `renderer: 'none'`, 1 row/update): aster's stream append is
+~13x cheaper than `view.change + run` at 10k (0.1 vs 1.0 ms) and ~62x at 100k
+(0.2 vs 11.2 ms). The gap is the pulse: Vega inserts one tuple but still walks
+the affected operators, while aster splices the mark items and patches the
+domain census in O(appended).
+
+Numbers are machine-dependent; the ratios and the shape (frame-bound below
+~10k, paint-bound above ~50k for SVG) are what to compare.

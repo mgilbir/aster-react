@@ -150,7 +150,7 @@ For charts where only a fraction of the data changes between renders, pass `data
 
 The reactive dataflow re-derives only the changed rows, reuses unchanged scene items and DOM subtrees, and reuses scales whose domain is unchanged (both continuous min/max tracking and a discrete value-census for band/point/ordinal domains; rect marks additionally reuse their paint order when the sort permutation is unchanged). `pnpm bench:differential` measures the win at 50k points / 1% changed: row-wise (`formula`) ~17x, fixed-scale symbol ~12x, and `aggregate` ~3x faster than a full re-encode at the scene level, and ~5–9x at the DOM-patch level; in-browser (`bench:browser`) a 1%-changed update on 1000 points costs ~1.2 ms vs ~5–7 ms for a full re-encode.
 
-Length-changing updates are first-class: `diffRows` publishes an old↔new row mapping plus added/removed ranges, transforms propagate it (`filter`, `fold`, `flatten`, `collect`, `sample`, fixed-extent `bin`, `lookup`, `aggregate`, `joinaggregate`, `window`, `stack`, and the 1:1 geo/hierarchy operators), and marks splice their item arrays. `impute`/`pivot` and the global fitters still re-derive but publish a correct change result. `pnpm bench:incremental` measures a streamed append versus a full evaluate; a 10k-point symbol chart appending one row is ~29x cheaper at the median, and 100k points is ~216x (the CI gate runs 10k/30 updates; nightly runs 100k/40). For a push-based feed, `createChartStream(spec, { capacity, policy })` adds a bounded queue with `coalesce`/`drop-oldest`/`drop-newest`/`error` backpressure and an explicit `flush()` pulse:
+Length-changing updates are first-class: `diffRows` publishes an old↔new row mapping plus added/removed ranges, transforms propagate it (`filter`, `fold`, `flatten`, `collect`, `sample`, fixed-extent `bin`, `lookup`, `aggregate`, `joinaggregate`, `window`, `stack`, and the 1:1 geo/hierarchy operators), and marks splice their item arrays. `impute`/`pivot` and the global fitters still re-derive but publish a correct change result. `pnpm bench:incremental` measures a streamed append versus a full evaluate; a 10k-point symbol chart appending one row is ~29x cheaper at the median, and 100k points is ~216x (the CI gate runs 10k/30 updates; nightly runs 100k/40). The same runner takes a Vega baseline on the identical workload (`view.change(...).run()` with `renderer: 'none'`): aster's append is ~13x cheaper at 10k and ~62x at 100k. For a push-based feed, `createChartStream(spec, { capacity, policy })` adds a bounded queue with `coalesce`/`drop-oldest`/`drop-newest`/`error` backpressure and an explicit `flush()` pulse:
 
 ```ts
 const stream = createChartStream(spec, { capacity: 32, policy: 'coalesce' })
@@ -161,10 +161,15 @@ const { scene, pulse, noop } = stream.flush()!
 In React, use `<ChartStream spec={spec}>` (or `<ChartWorkerStream worker={...}>`); the scene
 goes through the same DOM patcher/canvas renderer, interaction and a11y tree as
 `<Chart>`, so a streamed append patches only the new/changed DOM nodes instead of
-re-serializing the SVG. `pnpm bench:browser-stream` measures the real-browser cadence:
+re-serializing the SVG. `pnpm bench:browser-stream` measures the real-browser cadence
+against Vega's own streaming API on the identical spec and rows
+(`view.change('t', changeset().insert(rows)).run()` / `.runAsync()`):
 10k points at one append/frame holds ~16.7 ms median frames with <1% long frames on
-both SVG and canvas; 100k points holds ~16.7 ms on canvas (incremental append painting) and ~86 ms on SVG per frame,
-the remaining scaling boundary. The hooks (`useChartStream`, `useChartWorkerStream`) expose
+both SVG and canvas (Vega: ~16.7 ms but 2.3–2.9% long frames on SVG and ~240 DOM
+mutations per append vs ~1); 100k points holds ~16.7 ms on canvas (incremental append painting) and ~88 ms on SVG per frame,
+where Vega's `view.change` needs ~170 ms, the remaining scaling boundary. The same
+workload with no paint (`pnpm bench:incremental`, `renderer: 'none'`) puts aster's
+append ~13x ahead of `view.change` at 10k and ~62x at 100k. The hooks (`useChartStream`, `useChartWorkerStream`) expose
 `push`, `flush`, `pause`/`resume`, `close`, `stats`, `pulse`, and worker
 accepted/rejected/depth counters for backpressure.
 
