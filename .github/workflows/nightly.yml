@@ -33,7 +33,7 @@ jobs:
         run: pnpm transform-matrix
 
       - name: Install Playwright browsers
-        run: pnpm exec playwright install --with-deps chromium firefox webkit
+        run: pnpm --filter @aster/conformance exec playwright install --with-deps chromium firefox webkit
 
       - name: Chromium canvas parity
         run: pnpm conformance:canvas

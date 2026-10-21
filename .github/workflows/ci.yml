@@ -53,7 +53,7 @@ jobs:
         run: pnpm transform-matrix
 
       - name: Install Playwright Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm --filter @aster/conformance exec playwright install --with-deps chromium
 
       - name: Chromium canvas parity
         run: pnpm conformance:canvas
