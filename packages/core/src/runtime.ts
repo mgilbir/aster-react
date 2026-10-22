@@ -6281,7 +6281,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       return v && typeof v === 'object' && 'value' in v ? (v as { value: unknown }).value : undefined
     }
     const strokeColor = encVal('stroke')
-    const opacity = (encVal('opacity') as number) ?? (legend as { symbolOpacity?: number }).symbolOpacity ?? 0.7
+    const opacity = (encVal('opacity') as number) ?? (legend as { symbolOpacity?: number }).symbolOpacity ?? 1
     // vega's symbolStrokeColor property overrides the symbols encode
     const symStrokeColor = (legend as { symbolStrokeColor?: string }).symbolStrokeColor
     const strokeWidth = (legend as { symbolStrokeWidth?: number }).symbolStrokeWidth ?? 1.5
