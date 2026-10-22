@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Loader URL policy (breaking default)**: `loadSpecData(spec, options)` now vets every URL
+  (protocols `http:`/`https:` only, no credentials, loopback/private/link-local hosts denied,
+  relative urls need `baseURL`, an `allow(url)` hook re-run on every redirect hop) and bounds
+  each request (`timeoutMs`, `maxBytes` enforced while streaming, `maxConcurrent`,
+  `maxRedirects`, `signal`). `data:` urls need `protocols: ['data:']`. Group-level `url`
+  datasets are now resolved; an unloaded `url` dataset is an error instead of an empty chart.
+  `TRUSTED_LOAD_OPTIONS` opts out for specs you wrote. Image-mark urls share the policy
+  (`RuntimeInput.urlPolicy`, defaults applied under `limits`).
+- **Limits are meters, not checkpoints**: one wall clock and generated-row/byte meters are
+  threaded through transforms, row emitters, the encode loop, guides, expression builtins and the
+  parser; single-call allocators (`sequence`, `pad`, format width, ticks, facet columns, contour
+  grids, topojson arcs) are bounded before they allocate; `maxRows` covers nested group data,
+  host `input.data` and transform output; paths and text arrays count toward `maxPathLength` /
+  `maxStringLength`; deep and cyclic specs and expressions throw `AsterLimitError`. New
+  `maxGeneratedRows` / `maxGeneratedBytes`. See `docs/LIMITS.md` (including why untrusted
+  specs still need a killable worker for regular expressions).
+- **Fixes**: `bin` with `maxbins <= 0` and `stratify` cycles no longer hang (vega's results and
+  errors); `Math.min/max(...rows)` no longer overflows the stack at ~120k rows; `format.parse`
+  accepts `date:`/`utc:` patterns; expression `format`/`timeFormat` follow the current default
+  locale; formatter caches are bounded.
 - **DOM, canvas and hit-testing fixes** (audit C3, C22, C23, C41, C43, C47, C96): the
   DOM patcher no longer leaves removed items drawn and drops others after a removal or
   reorder; the string renderer and the DOM descriptor take every attribute from one
