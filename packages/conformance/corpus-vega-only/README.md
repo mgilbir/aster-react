@@ -15,7 +15,10 @@ would fail on the reference, not on `@aster/vl`):
 - grid / nested concat and repeat layouts: group-level `layout` positioning of
   child groups with axes and titles (offsets differ by a pixel or two, or the
   root is mis-sized);
-- shared legends and child titles inside those layouts.
+- shared legends and child titles inside those layouts;
+- dotted/nested field names that vega-lite compiles to bracketed accessors, UTC
+  time units whose `%b` labels Aster's format layer rejects, and a few
+  channel/concat cases whose canvas output differs by a pixel from the SVG.
 
 Each file name is the case; none of them is excluded from the real-vega gate.
 When the runtime renders the reference correctly, move the file to `corpus/`.
