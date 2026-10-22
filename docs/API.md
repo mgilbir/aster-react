@@ -68,6 +68,7 @@ const result = stream.flush()   // { scene, pulse, batches, noop } | null
 stream.stats()     // { depth, capacity, queuedRows, maxQueuedRows, policy, coalesced, dropped, flushes }
 stream.canAccept() // producer-side backpressure hint
 stream.scene()     // last flushed SceneRoot (null before the first flush)
+stream.discard()   // drop all queued batches (recovery after a failed flush)
 stream.close()     // releases queue, rows, scene and session; later push -> false, flush -> null
 ```
 
@@ -120,6 +121,17 @@ the stream's base snapshot and are the host's data, not queue memory.
 signals, size, `domainRaw`, limits, `textMetrics` and the stats are exactly as before the
 call; the failed batches stay queued. Push a corrected batch (a snapshot replaces
 earlier queued rows; `limits: {}` replaces the budget) and flush again.
+
+**Recovering from a failed flush.** Because a failed flush keeps its batches queued,
+every later flush fails the same way until they are removed. The error you get is the
+original one (`AsterLimitError`, an expression error, ...), unchanged. Call
+`getStreamFlushFailure(err)` to get `{ batches, queuedRows }` (what is still queued; the
+queue is folded, so the failing batch cannot be isolated and all of it took part), then
+`stream.discard()` to drop every queued batch. It returns how many were dropped and
+counts them in `stats().dropped`; committed rows and the last scene are untouched.
+Push fresh batches and flush again. Hosts that flush on a timer or microtask should call
+`discard()` in their flush `catch` (and report the error) so one bad batch cannot wedge
+the stream. Re-pushing a corrective snapshot also works, but only if you know to.
 
 **Limits.** `options.limits` / `initial.limits` / a batch's `limits` are enforced on
 every flush exactly as `createChartSession` enforces them (spec pre-flight, the

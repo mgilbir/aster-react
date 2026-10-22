@@ -154,6 +154,14 @@ export interface ChartStream {
    * are null and `session()` throws `AsterStreamClosedError`. Idempotent.
    */
   close(): void
+  /**
+   * Recovery after a failed flush: drop every queued batch, return how many were
+   * dropped, and count them in `stats().dropped`. A failed flush is atomic (the
+   * failing batches stay queued), so without this a bad batch would fail every
+   * later flush. The failing batch cannot be isolated (the queue is folded), so
+   * all queued batches go. Never touches committed rows or the last scene.
+   */
+  discard(): number
   /** The underlying session (for `last()`, imperative `change()`, ...). Throws after `close()`. */
   session(): ChartSession
 }
@@ -175,6 +183,25 @@ export class AsterStreamBackpressureError extends Error {
     this.bound = bound
     this.limit = limit
   }
+}
+
+/** What a failed `flush()` left queued; see `getStreamFlushFailure`. */
+export interface StreamFlushFailure {
+  /** Batches still queued (all of them took part in the failed flush; coalesce counts 1). */
+  batches: number
+  /** Rows still queued. */
+  queuedRows: number
+}
+
+const FLUSH_FAILURES = new WeakMap<object, StreamFlushFailure>()
+
+/**
+ * Info about a failed `flush()`, or undefined for any other error. The original
+ * error (e.g. `AsterLimitError`) is rethrown unchanged, so `instanceof`/`code`
+ * checks keep working; the queue is intact, so call `stream.discard()` to recover.
+ */
+export function getStreamFlushFailure(err: unknown): StreamFlushFailure | undefined {
+  return err != null && typeof err === 'object' ? FLUSH_FAILURES.get(err) : undefined
 }
 
 /** Thrown by `stream.session()` after `close()`. `push`/`flush` after close are documented no-ops. */
@@ -649,6 +676,9 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
         scene = session!.evaluate(spec, input)
       } catch (err) {
         rollback()
+        const failure: StreamFlushFailure = { batches: consumed, queuedRows: rowsQueued() }
+        // Non-object throws cannot carry info (a WeakMap key must be an object).
+        if (err != null && typeof err === 'object') FLUSH_FAILURES.set(err, failure)
         throw err
       }
       // Commit.
@@ -681,6 +711,15 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
       // coalesce folds into its one batch, so only the row bound can be full.
       const batchRoom = policy === 'coalesce' || depth() < capacity
       return batchRoom && rowsQueued() < maxQueuedRows
+    },
+    discard() {
+      if (closed) return 0
+      const n = depth()
+      stats.dropped += n
+      queue = []
+      queuedRows = 0
+      fold = null
+      return n
     },
     close() {
       closed = true

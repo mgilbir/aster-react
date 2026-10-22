@@ -28,6 +28,8 @@ export {
   createChartStream,
   AsterStreamBackpressureError,
   AsterStreamClosedError,
+  getStreamFlushFailure,
+  type StreamFlushFailure,
   type ChartStream,
   type StreamBatch,
   type StreamFlush,

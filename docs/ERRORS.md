@@ -41,7 +41,11 @@ not `instanceof`, across a worker boundary or duplicated bundles):
 | `AsterStreamClosedError` | `ASTER_STREAM_CLOSED` | `stream.session()` after `close()` (`push`/`flush` after close are no-ops, not errors) |
 
 A `flush()` that throws (any error, including `AsterLimitError`) leaves the stream
-exactly as it was before the call; see "Atomic flush" in `docs/API.md`.
+exactly as it was before the call, with its batches still queued, and rethrows the
+original error. `getStreamFlushFailure(err)` returns `{ batches, queuedRows }` for such an
+error, and `stream.discard()` drops the queued batches so the next flush can succeed
+(otherwise every later flush fails the same way). See "Atomic flush" and "Recovering from
+a failed flush" in `docs/API.md`.
 
 ## Other runtime errors
 

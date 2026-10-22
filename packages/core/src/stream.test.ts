@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { AsterStreamBackpressureError, AsterStreamClosedError, createChartStream, type StreamPolicy } from './stream.js'
+import { AsterStreamBackpressureError, AsterStreamClosedError, createChartStream, getStreamFlushFailure, type StreamPolicy } from './stream.js'
 import { AsterLimitError } from './limits.js'
 import { compileChart } from './compiler.js'
 import { evaluateChart } from './runtime.js'
@@ -456,5 +456,56 @@ describe('stream limits (C49)', () => {
     stream.push({ data: { t: rowsOf(1, 4) } })
     stream.flush()
     expect(renderSceneToSvg(stream.scene()!)).toBe(fresh(titled, { data: { t: rowsOf(1, 4) } }))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Recovery from a failed flush: discard()
+// ---------------------------------------------------------------------------
+
+describe('stream discard() recovery', () => {
+  const exprSpec = {
+    ...(titled as object),
+    data: [{ name: 't', transform: [{ type: 'formula', expr: 'datum.o.k', as: 'ok' }] }],
+  } as unknown as VgSpec
+  const withO = (r: Row): Row & { o: { k: number } } => ({ ...r, o: { k: r.id } })
+
+  for (const policy of ['coalesce', 'drop-oldest', 'error'] as StreamPolicy[]) {
+    it(`${policy}: a bad batch followed by good ones keeps failing until discard(); then only later data applies`, () => {
+      const stream = createChartStream(exprSpec, { policy, capacity: 8 })
+      const good = rowsOf(1, 3).map(withO)
+      stream.push({ data: { t: good } })
+      stream.flush()
+      const sceneBefore = stream.scene()
+      stream.push({ append: { t: [row(9)] } }) // no `o`: throws
+      stream.push({ append: { t: [withO(row(10))] } })
+      const queuedBefore = stream.stats()
+      let err: unknown
+      try { stream.flush() } catch (e) { err = e }
+      expect(err).toBeInstanceOf(Error)
+      // typed info about what is still queued; the original error is unchanged
+      expect(getStreamFlushFailure(err)).toEqual({ batches: queuedBefore.depth, queuedRows: queuedBefore.queuedRows })
+      expect(() => stream.flush()).toThrow() // stuck without recovery
+      expect(stream.scene()).toBe(sceneBefore)
+
+      const droppedBefore = stream.stats().dropped
+      expect(stream.discard()).toBe(queuedBefore.depth)
+      expect(stream.stats()).toMatchObject({ depth: 0, queuedRows: 0, dropped: droppedBefore + queuedBefore.depth })
+      expect(stream.discard()).toBe(0)
+      // Healthy again: exactly the good data pushed after the discard point.
+      const after = withO(row(11))
+      stream.push({ append: { t: [after] } })
+      stream.flush()
+      expect(renderSceneToSvg(stream.scene()!)).toBe(fresh(exprSpec, { data: { t: [...good, after] } }))
+    })
+  }
+
+  it('discard() on a stream with nothing queued, or after close, is a no-op returning 0', () => {
+    const stream = createChartStream(titled)
+    expect(stream.discard()).toBe(0)
+    stream.push({ signals: { sig: 1 } })
+    stream.close()
+    expect(stream.discard()).toBe(0)
+    expect(stream.stats().dropped).toBe(0)
   })
 })
