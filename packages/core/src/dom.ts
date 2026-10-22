@@ -697,7 +697,10 @@ export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {})
     for (const def of scene.defs ?? []) {
       defsChildren.push({
         tag: 'linearGradient',
-        attrs: [['id', def.id], ['x1', '0'], ['x2', '0'], ['y1', '1'], ['y2', '0']],
+        // same coordinates as the string renderer: horizontal runs left to right, vertical bottom to top
+        attrs: def.direction === 'horizontal'
+          ? [['id', def.id], ['x1', '0'], ['x2', '1'], ['y1', '0'], ['y2', '0']]
+          : [['id', def.id], ['x1', '0'], ['x2', '0'], ['y1', '1'], ['y2', '0']],
         children: def.colorStops.map((s) => ({ tag: 'stop', attrs: [['offset', str(s.offset)], ['stop-color', s.color]] })),
       })
     }
