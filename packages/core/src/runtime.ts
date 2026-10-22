@@ -237,7 +237,7 @@ const GROUP_BOUNDS = new WeakMap<SceneGroup, Bounds>()
  * Undo record for a mark whose items array was updated IN PLACE: the length it
  * had, and the items it overwrote.
  */
-interface ItemsUndo { oldLen: number; changed: Array<[number, SceneItem]> }
+interface ItemsUndo { oldLen: number; idx: number[]; items: SceneItem[] }
 
 /**
  * Persistent-scene sharing without mutating a returned scene (C52).
@@ -271,7 +271,8 @@ function supersedeItems(old: SceneGroup, next: SceneGroup, undo: ItemsUndo): voi
       // Reading the newer group's items materialises it first if it is lazy too.
       const base = (newer.items ?? []) as SceneItem[]
       const arr = base.slice(0, u.oldLen)
-      for (let k = u.changed.length - 1; k >= 0; k--) arr[u.changed[k]![0]] = u.changed[k]![1]
+      // Reverse order: if an index was overwritten twice the earliest item wins.
+      for (let k = u.idx.length - 1; k >= 0; k--) arr[u.idx[k]!] = u.items[k]!
       settle(arr as SceneNode[])
       return arr as SceneNode[]
     },
@@ -3351,16 +3352,15 @@ function evaluateMark(
         const base = pulse.baseLength ?? prevItems.length
         // O(changes): advance the engine-owned array in place; the previous
         // group is turned into a lazy snapshot below (supersedeItems).
-        const undo: ItemsUndo = { oldLen: prevItems.length, changed: [] }
+        const undo: ItemsUndo = { oldLen: prevItems.length, idx: [], items: [] }
         // The cached union bounds carry over to the new group only for a pure
         // append (re-encoded items could shrink them).
         if (!pulse.changed.length) carriedBounds = GROUP_BOUNDS.get(prevGroup!)?.clone()
         try {
-          const seen = new Set<number>()
           for (const i of pulse.changed) {
-            if (i < 0 || i >= base || seen.has(i)) continue
-            seen.add(i)
-            undo.changed.push([i, prevItems[i]!])
+            if (i < 0 || i >= base) continue
+            undo.idx.push(i)
+            undo.items.push(prevItems[i]!)
             prevItems[i] = encodeAt(i)
           }
           for (let i = base; i < encodeRows.length; i++) {
@@ -3371,7 +3371,7 @@ function evaluateMark(
         } catch (e) {
           // Never leave the (still current) previous scene half-updated.
           prevItems.length = undo.oldLen
-          for (const [i, it] of undo.changed) prevItems[i] = it
+          for (let k = undo.idx.length - 1; k >= 0; k--) prevItems[undo.idx[k]!] = undo.items[k]!
           throw e
         }
         items = prevItems
