@@ -140,8 +140,6 @@ export interface CompiledChart {
   /** Cartographic projections referenced by geo marks / the geoshape transform. */
   projections?: CompiledProjection[]
   /** Signal values supplied by the host (not serialized). */
-  /** @internal Partial re-evaluation memo: the last scene's top-level groups. */
-  __prevItems?: unknown
   /** Root-level trellis layout options (vega spec `layout`), when present. */
   layout?: Record<string, unknown>
 }
@@ -237,6 +235,8 @@ export type ScaleRange =
   | 'width'
   | 'height'
   | 'category'
+  /** What the compiler resolves Vega-Lite's `category` range to (see compileChart). */
+  | 'tableau10'
   | 'ordinal'
   | 'ramp'
   | 'diverging'
