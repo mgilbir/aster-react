@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { compileChart, evaluateChart, renderSceneToSvg, renderSpec } from './index.js'
 import { patchSceneDom, renderSceneToDomElement } from './addon-dom.js'
+import { parseSvgPath } from './svg-path.js'
 import type { SceneRoot } from './types.js'
 
 // Regression + property suite for SVG string escaping (audit C2).
@@ -38,6 +39,9 @@ const BENIGN_KIND = {
   dash: [4, 2],
   path: 'M0,0L10,10',
   url: 'a.png',
+  // a symbol `shape` is a name or a custom SVG path (vega symbols()); anything else
+  // is an invalid path and refused, so it has its own kind and its own test
+  shape: 'circle',
 } as const
 
 type Kind = keyof typeof BENIGN_KIND
@@ -52,7 +56,7 @@ const CHANNELS: Record<string, Kind> = {
   tension: 'num',
   fill: 'color', stroke: 'color',
   strokeDash: 'dash',
-  shape: 'str', baseline: 'str', align: 'str', interpolate: 'str', orient: 'str', strokeJoin: 'str',
+  shape: 'shape', baseline: 'str', align: 'str', interpolate: 'str', orient: 'str', strokeJoin: 'str',
   strokeCap: 'str', font: 'str', fontWeight: 'str', text: 'str', role: 'str', dataDatum: 'str', ellipsis: 'str',
   lineBreak: 'str', aspect: 'str',
   path: 'path', clipPathD: 'path',
@@ -116,6 +120,11 @@ function withChannel(channel: string, value: unknown): SceneRoot {
 }
 
 function hostileFor(kind: Kind, h: string): unknown {
+  if (kind === 'shape') {
+    // an invalid custom path is REFUSED (vega throws "Invalid SVG path"; see the
+    // dedicated test below); only paths that parse can be rendered at all
+    try { parseSvgPath(h); return h } catch { return BENIGN_KIND.shape }
+  }
   return kind === 'dash' ? [h, h] : h
 }
 
@@ -207,6 +216,26 @@ describe('C2: SVG string renderer escapes every attribute and text value', () =>
       }
     })
   }
+
+  it('a symbol shape is a name or a custom SVG path: hostile text is refused or reduced to numbers', () => {
+    const benign = skeletonOfSvg(renderSceneToSvg(withChannel('shape', BENIGN_KIND.shape)))
+    for (const h of HOSTILE) {
+      let svg: string
+      try {
+        svg = renderSceneToSvg(withChannel('shape', h))
+      } catch (e) {
+        // vega refuses an invalid custom path; nothing is written to the document
+        expect((e as Error).message, JSON.stringify(h)).toMatch(/^Invalid SVG path/)
+        continue
+      }
+      // it parsed: the path data is re-serialized from numbers, never copied
+      expect(describeDiff(skeletonOfSvg(svg), benign), JSON.stringify(h)).toBeNull()
+      expect(svg, JSON.stringify(h)).not.toMatch(/onerror|onload|onclick|onmouseover|<script|<img/)
+    }
+    // a custom path that parses is drawn, scaled by the symbol radius
+    const ok = renderSceneToSvg(withChannel('shape', 'M-1,-1L1,1z'))
+    expect(ok).toMatch(/d="M-\d/)
+  })
 
   const allChannels = (valueFor: (kind: Kind) => unknown): SceneRoot => {
     const scene = baseScene()

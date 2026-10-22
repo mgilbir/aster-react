@@ -21,8 +21,9 @@ import {
   textItemDesc,
   trailPath,
   arcPath,
+  frameBackgroundPath,
+  frameItem,
 } from './render.js'
-import { baselineOffset } from './bounds.js'
 
 /** Minimal 2D context surface used by the renderer. */
 export interface CanvasLike {
@@ -57,6 +58,9 @@ export interface CanvasLike {
   lineCap: string
   lineJoin: string
   miterLimit: number
+  lineDashOffset?: number
+  globalCompositeOperation?: string
+  strokeText?(text: string, x: number, y: number): void
   font: string
   textAlign: string
   textBaseline: string
@@ -411,16 +415,12 @@ export function renderSceneToCanvas(scene: SceneRoot, ctx: CanvasLike, opts: Ren
   }
   ctx.translate(pad.left, pad.top)
 
-  // Root frame background path (stroked only when frameStroke is set)
+  // Root frame background path: fill, stroke, dash, opacity and rounded
+  // corners, from the same path the SVG renderer emits.
   ctx.beginPath()
-  const frameD = scene.frameStroke
-    ? `M0.5,0.5h${plotW}v${plotH}h-${plotW}Z`
-    : `M0,0h${plotW}v${plotH}h-${plotW}Z`
-  tracePath(ctx, parsePathData(frameD))
-  if (scene.frameStroke) {
-    ctx.strokeStyle = scene.frameStroke
-    ctx.stroke()
-  }
+  const frameSegs = parsePathData(frameBackgroundPath(scene, plotW, plotH))
+  tracePath(ctx, frameSegs)
+  paintPath(ctx, frameSegs, frameItem(scene), scene.defs, 'auto')
 
   for (const node of scene.items) {
     renderGroup(node, ctx, scene, plotW, plotH, opts)
@@ -673,44 +673,64 @@ function segsBbox(segs: PathSeg[]): Bbox {
   return bb
 }
 
-/** Paint a traced path: fill and/or stroke per the item's paints. */
+/**
+ * Paint a traced path exactly like vega-scenegraph's canvas `drawPath`
+ * (util/canvas/draw.js + fill.js + stroke.js):
+ *   - opacity 0 paints nothing;
+ *   - fill: globalAlpha = opacity * fillOpacity (skipped when 0);
+ *   - stroke: skipped for strokeWidth <= 0 (default 1); globalAlpha =
+ *     opacity * strokeOpacity; lineCap/lineJoin/miterLimit/dash/dashOffset are
+ *     ALWAYS (re)set from the item, so one item's cap never leaks into the next;
+ *   - blend sets globalCompositeOperation.
+ * `bbox` overrides the path bounds used to place objectBoundingBox gradients.
+ */
 function paintPath(
   ctx: CanvasLike,
   segs: PathSeg[],
   it: SceneItem,
   defs: SceneDefs[] | undefined,
   op: 'auto' | 'fill' | 'stroke',
-  honorStrokeOpacity = false,
+  bbox?: Bbox,
 ): void {
-  const opacity = (it.opacity ?? 1) as number
+  const opacity = it.opacity == null ? 1 : (it.opacity as number)
+  if (opacity === 0) return
   const fill = op === 'stroke' ? undefined : it.fill
   const stroke = op === 'fill' ? undefined : it.stroke
   const isGradient = (p: unknown): boolean =>
     (typeof p === 'string' && p.startsWith('url(#')) || (p != null && typeof p === 'object' && 'gradient' in (p as object))
   // Gradient resolution is the only consumer of the bbox; skip the segment walk
   // for the common solid-paint case (thousands of symbols per frame).
-  const bb = isGradient(fill) || isGradient(stroke) ? segsBbox(segs) : null
+  const bb = bbox ?? (isGradient(fill) || isGradient(stroke) ? segsBbox(segs) : null)
+  const rec = it as unknown as Record<string, unknown>
+  if (rec.blend != null) ctx.globalCompositeOperation = String(rec.blend)
   if (fill != null && (fill as unknown) !== false && fill !== 'transparent') {
-    ctx.globalAlpha = opacity * ((it.fillOpacity ?? 1) as number)
-    const paint = resolvePaint(fill, ctx, defs, bb)
-    // Dangling references and non-string paints serialize as their string form.
-    ctx.fillStyle = (paint !== undefined ? paint : String(fill)) as string
-    ctx.fill()
+    const a = opacity * (it.fillOpacity == null ? 1 : (it.fillOpacity as number))
+    if (a > 0) {
+      ctx.globalAlpha = a
+      const paint = resolvePaint(fill, ctx, defs, bb)
+      // Dangling references and non-string paints serialize as their string form.
+      ctx.fillStyle = (paint !== undefined ? paint : String(fill)) as string
+      ctx.fill()
+    }
   }
   if (stroke != null && (stroke as unknown) !== false && stroke !== 'transparent') {
-    // Only the area renderer surfaces stroke-opacity (mirroring the SVG
-    // renderer, and vega's own per-mark attribute emission).
-    ctx.globalAlpha = opacity * (honorStrokeOpacity ? ((it.strokeOpacity ?? 1) as number) : 1)
-    const paint = resolvePaint(stroke, ctx, defs, bb)
-    if (paint !== undefined) ctx.strokeStyle = paint
-    ctx.lineWidth = (it.strokeWidth ?? 1) as number
-    if (it.strokeDash != null) ctx.setLineDash(it.strokeDash as number[])
-    else ctx.setLineDash([])
-    if (it.strokeLineCap) ctx.lineCap = it.strokeLineCap
-    if (it.strokeLineJoin) ctx.lineJoin = it.strokeLineJoin
-    ctx.stroke()
-    ctx.setLineDash([])
+    const lw = it.strokeWidth != null ? (it.strokeWidth as number) : 1
+    const a = opacity * (it.strokeOpacity == null ? 1 : (it.strokeOpacity as number))
+    if (lw > 0 && a > 0) {
+      ctx.globalAlpha = a
+      const paint = resolvePaint(stroke, ctx, defs, bb)
+      if (paint !== undefined) ctx.strokeStyle = paint
+      ctx.lineWidth = lw
+      ctx.lineCap = it.strokeCap || 'butt'
+      ctx.lineJoin = it.strokeJoin || 'miter'
+      ctx.miterLimit = it.strokeMiterLimit != null ? it.strokeMiterLimit : 4
+      ctx.setLineDash((it.strokeDash as number[] | undefined) ?? [])
+      if (ctx.lineDashOffset !== undefined || it.strokeDashOffset != null) ctx.lineDashOffset = it.strokeDashOffset || 0
+      ctx.stroke()
+      ctx.setLineDash([])
+    }
   }
+  if (rec.blend != null) ctx.globalCompositeOperation = 'source-over'
   ctx.globalAlpha = 1
 }
 
@@ -718,10 +738,13 @@ function fontString(it: SceneItem): string {
   const fontSize = (it as Record<string, unknown>).fontSize as number | undefined ?? 11
   const fontWeight = (it as Record<string, unknown>).fontWeight as string | number | undefined
   const fontStyle = (it as Record<string, unknown>).fontStyle as string | undefined
+  const fontVariant = (it as Record<string, unknown>).fontVariant as string | undefined
   const family = (it as Record<string, unknown>).font as string | undefined ?? 'sans-serif'
+  // vega-scenegraph util/text.js `font()`: style variant weight size family
   const parts: string[] = []
   if (fontStyle) parts.push(String(fontStyle))
-  if (fontWeight != null) parts.push(String(fontWeight))
+  if (fontVariant) parts.push(String(fontVariant))
+  if (fontWeight) parts.push(String(fontWeight))
   parts.push(`${fontSize}px`)
   parts.push(family)
   return parts.join(' ')
@@ -738,11 +761,11 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot): void 
     // A clipped legend symbol (clipHeight): clip to the entry's laid-out
     // rect (0,0,w,h) in the item's local frame, matching the SVG renderer's
     // clipPath defs.
-    const clip = (it as unknown as Record<string, unknown>)._clip as { w: number; h: number } | undefined
+    const clip = (it as unknown as Record<string, unknown>)._clip as { x?: number; y?: number; w: number; h: number } | undefined
     if (clip) {
       ctx.save()
       ctx.beginPath()
-      ctx.rect(tx, ty, clip.w, clip.h)
+      ctx.rect(clip.x ?? 0, clip.y ?? 0, clip.w, clip.h)
       ctx.clip()
     }
     ctx.beginPath()
@@ -771,7 +794,7 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot): void 
     return
   }
   if (it.text != null) {
-    renderTextItem(it, ctx, defs, true)
+    renderTextItem(it, ctx, defs)
     return
   }
   // Line items (rules)
@@ -791,82 +814,67 @@ function paintPathArc(ctx: CanvasLike, it: SceneItem, defs: SceneDefs[] | undefi
   const cx = it.x ?? 0
   const cy = it.y ?? 0
   const r = it.radius ?? 0
-  const bb = { x1: cx - r, y1: cy - r, x2: cx + r, y2: cy + r }
-  const opacity = (it.opacity ?? 1) as number
-  if (it.fill != null && (it.fill as unknown) !== false && it.fill !== 'transparent') {
-    ctx.globalAlpha = opacity * ((it.fillOpacity ?? 1) as number)
-    const paint = resolvePaint(it.fill, ctx, defs, bb)
-    if (paint !== undefined) ctx.fillStyle = paint
-    ctx.fill()
-  }
-  if (it.stroke != null && (it.stroke as unknown) !== false && it.stroke !== 'transparent') {
-    ctx.globalAlpha = opacity * ((it.strokeOpacity ?? 1) as number)
-    const paint = resolvePaint(it.stroke, ctx, defs, bb)
-    if (paint !== undefined) ctx.strokeStyle = paint
-    ctx.lineWidth = (it.strokeWidth ?? 1) as number
-    ctx.stroke()
-  }
-  ctx.globalAlpha = 1
+  paintPath(ctx, [], it, defs, 'auto', { x1: cx - r, y1: cy - r, x2: cx + r, y2: cy + r })
 }
 
 /**
- * Draw one text item. Group leaves (axis/legend labels) carry pre-baked
- * positions and render at their raw x/y — mirroring the SVG leaf renderer.
- * Text-mark items go through textItemDesc, which computes the baseline
- * offset (and dx/dy/angle/limit handling) the same way the SVG mark
- * renderer does.
+ * Draw one text item like vega-scenegraph's canvas text `draw` (marks/text.js):
+ * opacity 0 / non-positive font size / empty text paint nothing; the anchor,
+ * rotation, dx/dy and baseline offset come from `textItemDesc` (the same
+ * geometry the SVG `transform` is built from); `textAlign` is the item's align
+ * or `left`; fill AND stroke are painted (text can be outlined).
  */
-function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | undefined, raw: boolean): void {
-  let lines: string[]
-  let x: number
-  let y: number
-  let angle: number | undefined
-  let lineHeight: number
-  if (raw) {
-    if (it.text == null) return
-    lines = [String(it.text)]
-    // The SVG leaf renderer bakes the baseline shift into y for unrotated
-    // text; rotated text keeps the offset in the rotate frame (translate(x,y)
-    // rotate(a), dy applied inside) — mirror that split.
-    const ang = (it as Record<string, unknown>).angle as number | undefined
-    const bl = it.baseline as string | undefined
-    const rotated = ang != null && ang !== 0
-    x = it.x ?? 0
-    y = (it.y ?? 0) + (bl && bl !== 'alphabetic' && !rotated ? baselineOffset(it) : 0)
-    angle = rotated ? ang : undefined
-    lineHeight = 0
-  } else {
-    const d = textItemDesc(it)
-    if (d == null) return
-    lines = d.lines
-    x = Number(d.x)
-    y = Number(d.y)
-    angle = it.angle
-    const fontSize = (it as Record<string, unknown>).fontSize as number | undefined ?? 11
-    lineHeight = (it as Record<string, unknown>).lineHeight as number | undefined ?? fontSize + 2
-  }
+function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | undefined): void {
+  const opacity = it.opacity == null ? 1 : (it.opacity as number)
+  if (opacity === 0 || (it as Record<string, unknown>).fontSize as number <= 0) return
+  const d = textItemDesc(it)
+  if (d == null || (typeof it.text === 'string' && it.text.length === 0)) return
+  const rec = it as Record<string, unknown>
   ctx.save()
   ctx.font = fontString(it)
-  ctx.textAlign = it.align === 'right' ? 'right' : it.align === 'left' ? 'left' : 'center'
+  ctx.textAlign = it.align || 'left'
   ctx.textBaseline = 'alphabetic'
-  const fill = it.fill ?? '#000'
-  ctx.globalAlpha = ((it.opacity ?? 1) as number) * ((it.fillOpacity ?? 1) as number)
-  const paint = resolvePaint(fill as string | { gradient: string }, ctx, defs, null)
-  ctx.fillStyle = (paint ?? '#000') as string
-  if (angle != null && angle !== 0) {
-    // vega applies the baseline offset inside the rotate frame (translate(0,off)
-    // after rotate) — mirror it on canvas via the fillText y.
-    const dyR = raw && it.baseline && it.baseline !== 'alphabetic' ? baselineOffset(it) : 0
-    ctx.translate(x, y)
-    ctx.rotate((angle * Math.PI) / 180)
-    ctx.fillText(lines[0]!, 0, dyR)
-    for (let i = 1; i < lines.length; i++) ctx.fillText(lines[i]!, 0, i * lineHeight)
-  } else {
-    // Do not pass a fourth (maxWidth) argument: a real CanvasRenderingContext2D
-    // coerces `false` to 0 and can suppress the glyphs. Multi-line text draws
-    // one baseline per line, exactly like the SVG tspans.
-    ctx.fillText(lines[0]!, x, y)
-    for (let i = 1; i < lines.length; i++) ctx.fillText(lines[i]!, x, y + i * lineHeight)
+  if (rec.blend != null) ctx.globalCompositeOperation = String(rec.blend)
+  let x = d.px
+  let y = d.py
+  if (d.angle) {
+    ctx.translate(d.px, d.py)
+    ctx.rotate((d.angle * Math.PI) / 180)
+    x = d.ox
+    y = d.oy
+  }
+  const fillOk = it.fill != null && (it.fill as unknown) !== false && it.fill !== 'transparent'
+  const strokeOk = it.stroke != null && (it.stroke as unknown) !== false && it.stroke !== 'transparent'
+  for (let i = 0; i < d.lines.length; i++) {
+    const str = d.lines[i]!
+    const ly = i === 0 ? y : y + i * d.lineHeight
+    if (fillOk) {
+      const a = opacity * (it.fillOpacity == null ? 1 : (it.fillOpacity as number))
+      if (a > 0) {
+        ctx.globalAlpha = a
+        const paint = resolvePaint(it.fill, ctx, defs, null)
+        ctx.fillStyle = (paint !== undefined ? paint : String(it.fill)) as string
+        // No fourth (maxWidth) argument: a real CanvasRenderingContext2D coerces
+        // `false` to 0 and can suppress the glyphs.
+        ctx.fillText(str, x, ly)
+      }
+    }
+    if (strokeOk && ctx.strokeText) {
+      const lw = it.strokeWidth != null ? (it.strokeWidth as number) : 1
+      const a = opacity * (it.strokeOpacity == null ? 1 : (it.strokeOpacity as number))
+      if (lw > 0 && a > 0) {
+        ctx.globalAlpha = a
+        const paint = resolvePaint(it.stroke, ctx, defs, null)
+        if (paint !== undefined) ctx.strokeStyle = paint
+        ctx.lineWidth = lw
+        ctx.lineCap = it.strokeCap || 'butt'
+        ctx.lineJoin = it.strokeJoin || 'miter'
+        ctx.miterLimit = it.strokeMiterLimit != null ? it.strokeMiterLimit : 4
+        ctx.setLineDash((it.strokeDash as number[] | undefined) ?? [])
+        if (ctx.lineDashOffset !== undefined || it.strokeDashOffset != null) ctx.lineDashOffset = it.strokeDashOffset || 0
+        ctx.strokeText(str, x, ly)
+      }
+    }
   }
   ctx.restore()
 }
@@ -880,7 +888,7 @@ function symbolPaintKey(it: SceneItem): string {
   const rec = it as Record<string, unknown>
   return [
     rec.shape ?? 'circle', it.size, it.fill, it.stroke, it.strokeWidth,
-    rec.opacity, rec.fillOpacity, rec.strokeOpacity, rec.strokeDash, it.strokeLineCap, it.strokeLineJoin,
+    rec.opacity, rec.fillOpacity, rec.strokeOpacity, rec.strokeDash, it.strokeCap, it.strokeJoin, it.strokeDashOffset, it.strokeMiterLimit, rec.blend,
   ].map((v) => (v == null ? '' : Array.isArray(v) ? v.join(',') : String(v))).join('|')
 }
 
@@ -938,17 +946,12 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
     case 'line': {
       const info = computeLinePath(group)
       if (!info) return
-      if (info.stroke == null) return
       ctx.beginPath()
       const segs = parsePathData(info.path)
       tracePath(ctx, segs)
-      ctx.globalAlpha = info.opacity ?? 1
-      ctx.strokeStyle = info.stroke as string
-      ctx.lineWidth = info.sw ?? 2
-      ctx.setLineDash(info.strokeDash ?? [])
-      ctx.stroke()
-      ctx.setLineDash([])
-      ctx.globalAlpha = 1
+      // vega draws a line mark from its first item with the full fill + stroke
+      // paint (closed lines can be filled); stroke width defaults to 2 with a stroke.
+      paintPath(ctx, segs, { ...group.items![0]!, strokeWidth: info.sw ?? group.items![0]!.strokeWidth } as SceneItem, defs, 'auto')
       return
     }
     case 'area': {
@@ -957,14 +960,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       ctx.beginPath()
       const segs = parsePathData(info.path)
       tracePath(ctx, segs)
-      paintPath(ctx, segs, {
-        fill: info.fill,
-        fillOpacity: info.fillOpacity,
-        stroke: info.stroke,
-        strokeWidth: info.strokeWidth,
-        strokeOpacity: info.strokeOpacity,
-        opacity: (group.items?.[0] as SceneItem | undefined)?.opacity ?? 1,
-      } as SceneItem, defs, 'auto', true)
+      paintPath(ctx, segs, group.items![0]!, defs, 'auto')
       return
     }
     case 'symbol': {
@@ -997,8 +993,8 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       return
     }
     case 'rect': {
-      // vega paints rects in reverse item order and skips unpainted items
-      for (const it of (group.items ?? []).slice().reverse()) {
+      // vega paints rects in item (data) order and skips unpainted items
+      for (const it of group.items ?? []) {
         if (it.fill == null && it.stroke == null) continue
         const d = rectItemPath(it)
         if (d == null) continue
@@ -1025,7 +1021,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
     }
     case 'text': {
       for (const it of group.items ?? []) {
-        renderTextItem(it, ctx, defs, false)
+        renderTextItem(it, ctx, defs)
       }
       return
     }
@@ -1038,8 +1034,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       ctx.beginPath()
       const segs = parsePathData(d)
       tracePath(ctx, segs)
-      // trail: stroked only (fill none)
-      paintPath(ctx, segs, { ...first, fill: undefined } as SceneItem, defs, 'stroke')
+      paintPath(ctx, segs, first, defs, 'auto')
       return
     }
     case 'path':

@@ -10,14 +10,21 @@
  * the exact same code to produce each `d`, each formatted number.
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
+import { ClipCollector } from './svg-defs.js'
 import {
   arcPath,
-  baselineOffset,
   computeAreaPath,
   computeLinePath,
+  frameBackgroundPath,
+  frameItem,
   num,
-  truncateLeaf,
+  imageDesc,
+  paintAttrs,
+  pathVectorEffect,
   rectItemPath,
+  rotateItemTransform,
+  transformItemTransform,
+  samePaint,
   symbolPath,
   textItemDesc,
   trailPath,
@@ -165,47 +172,22 @@ function batchableSymbol(it: SceneItem): boolean {
   const y = it.y
   // Translucent marks cannot batch: one path composites once where per-item
   // elements composite each overlap, so alpha would visibly change.
+  const rec = it as Record<string, unknown>
   const opaque = (it.opacity == null || it.opacity === 1)
     && (it.fillOpacity == null || it.fillOpacity === 1)
+    && (it.strokeOpacity == null || it.strokeOpacity === 1)
+    && rec.blend == null
   return opaque
     && x != null && y != null && Number.isFinite(x) && Number.isFinite(y)
     && Number.isFinite(Math.sqrt((it.size as number) ?? 30) / 2)
 }
 
-function symbolFill(it: SceneItem): unknown {
-  return it.fill != null && it.fill !== 'transparent' ? it.fill : undefined
-}
-
-function sameDash(a: unknown, b: unknown): boolean {
-  if (a === b) return true
-  if (Array.isArray(a) && Array.isArray(b)) {
-    return a.length === b.length && a.every((v, i) => v === b[i])
-  }
-  return false
-}
-
 function sameSymbolPaint(a: SceneItem, b: SceneItem): boolean {
-  return symbolFill(a) === symbolFill(b)
-    && a.fillOpacity === b.fillOpacity
-    && a.stroke === b.stroke
-    && a.strokeWidth === b.strokeWidth
-    && sameDash(itDash(a), itDash(b))
-    && a.opacity === b.opacity
-}
-
-function itDash(it: SceneItem): unknown {
-  return (it as Record<string, unknown>).strokeDash
+  return samePaint(a, b)
 }
 
 function symbolAttrs(it: SceneItem): Array<[string, string]> {
-  return props([
-    ['fill', symbolFill(it)],
-    ['fill-opacity', it.fillOpacity],
-    ['stroke', it.stroke],
-    ['stroke-width', it.strokeWidth],
-    ['stroke-dasharray', itDash(it)],
-    ['opacity', it.opacity],
-  ])
+  return props(paintAttrs(it))
 }
 
 /**
@@ -386,8 +368,12 @@ function props(pairs: Array<[string, unknown]>): Array<[string, string]> {
   const out: Array<[string, string]> = []
   for (const [k, v] of pairs) {
     if (v == null) continue
+    // Same conventions as the string renderer's `attr`: a 'transparent' paint is
+    // omitted; an invalid numeric paint renders black.
+    if (v === 'transparent') continue
     if (Array.isArray(v)) out.push([k, v.join(',')])
-    else out.push([k, typeof v === 'number' ? num(v) : String(v)])
+    else if (typeof v === 'number') out.push([k, k === 'fill' || k === 'stroke' ? 'rgb(0, 0, 0)' : num(v)])
+    else out.push([k, String(v)])
   }
   return out
 }
@@ -400,71 +386,35 @@ function g(tag: string, attrs: Array<[string, string]>, children: DomDesc[]): Do
 // Scene -> descriptor tree (mirrors renderSceneToSvg structure exactly)
 // ---------------------------------------------------------------------------
 
-interface ClipCollector {
-  current: number
-  paths: (string | null)[]
-}
-
 function leafDesc(it: SceneItem): DomDesc {
   if (it.path != null) {
     const tx = num(it.x || 0)
     const ty = num(it.y || 0)
+    const angle = (it as Record<string, unknown>).angle as number | undefined
     const attrs: Array<[string, string]> = []
-    if (tx !== '0' || ty !== '0') attrs.push(['transform', `translate(${tx},${ty})`])
+    if (tx !== '0' || ty !== '0' || angle) attrs.push(['transform', `translate(${tx},${ty})${angle ? ` rotate(${num(angle)})` : ''}`])
     attrs.push(['d', String(it.path)])
-    attrs.push(...props([['fill', it.fill], ['stroke', it.stroke], ['stroke-width', it.strokeWidth], ['opacity', it.opacity]]))
+    attrs.push(...props(paintAttrs(it)))
     return { tag: 'path', attrs, clean: isClean(it) }
   }
   if (it.shape != null && it.radius != null) {
     const rNum = num(it.radius)
     const d = `M${rNum},0A${rNum},${rNum},0,1,1,${-rNum},0A${rNum},${rNum},0,1,1,${rNum},0`
+    const angle = (it as Record<string, unknown>).angle as number | undefined
     return {
       tag: 'path',
       attrs: [
-        ['transform', `translate(${num(it.x || 0)},${num(it.y || 0)})`],
+        ['transform', `translate(${num(it.x || 0)},${num(it.y || 0)})${angle ? ` rotate(${num(angle)})` : ''}`],
         ['d', d],
-        ...props([
-          ['fill', it.fill],
-          ['fill-opacity', it.fillOpacity],
-          ['stroke', it.stroke],
-          ['stroke-width', it.strokeWidth],
-          ['opacity', it.opacity],
-        ]),
+        ...props(paintAttrs(it)),
       ],
       clean: isClean(it),
     }
   }
   if (it.text != null) {
-    // Mirror renderLeaf's text case exactly: baseline offset baked into y
-    // (vega applies it at render), font-size in px, truncation. Leaf texts
-    // (axis labels, legend titles) route through here, and a desc that
-    // disagrees with the string renderer would get written over it.
-    const fontSize = (it as Record<string, unknown>).fontSize as number | undefined
-    const baseline = it.baseline as string | undefined
-    const angle = (it as Record<string, unknown>).angle as number | undefined
-    // Rotated text: vega applies the baseline offset inside the rotate frame
-    // (translate(0,off) after rotate) — see renderLeaf's angled-text branch.
-    const bOff = baseline && baseline !== 'alphabetic' ? baselineOffset(it) : 0
-    const raw = String(it.text)
-    return {
-      tag: 'text',
-      attrs: [
-        ...((angle != null && angle !== 0)
-          ? ([['transform', `translate(${num(it.x || 0)},${num(it.y || 0)}) rotate(${num(angle)})${bOff ? ` translate(0,${num(bOff)})` : ''}`]] as [string, string][])
-          : ([['x', num(it.x || 0)], ['y', num((it.y || 0) + bOff)]] as [string, string][])),
-        ['text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle'],
-        ...(fontSize != null ? [['font-size', `${num(fontSize)}px`] as [string, string]] : []),
-        ...((it as Record<string, unknown>).fontWeight != null ? [['font-weight', String((it as Record<string, unknown>).fontWeight)] as [string, string]] : []),
-        ...props([
-          ['font-family', (it as Record<string, unknown>).font],
-          ['fill', it.fill],
-          ['fill-opacity', it.fillOpacity],
-          ['opacity', it.opacity],
-        ]),
-      ],
-      text: truncateLeaf(raw, it, fontSize ?? 11),
-      clean: isClean(it),
-    }
+    // Guide labels share the text mark's descriptor (renderer's `textElement`).
+    const d = textDesc(it)
+    if (d) return d
   }
   const x2 = it.x2 ?? it.x ?? 0
   const y2 = it.y2 ?? it.y ?? 0
@@ -475,15 +425,30 @@ function leafDesc(it: SceneItem): DomDesc {
       ['y1', num(it.y || 0)],
       ['x2', num(x2)],
       ['y2', num(y2)],
-      ...props([
-        ['stroke', it.stroke],
-        ['stroke-width', it.strokeWidth],
-        ['stroke-dasharray', it.strokeDash],
-        ['opacity', it.opacity],
-      ]),
+      ...props(paintAttrs(it)),
     ],
     clean: isClean(it),
   }
+}
+
+/** Text descriptor mirroring the renderer's `textElement` (transform, anchor, fonts, paint, tspans). */
+function textDesc(it: SceneItem, cache = false): DomDesc | null {
+  const d = textItemDesc(it)
+  if (d == null) return null
+  const attrs: Array<[string, string]> = [['transform', d.transform], ...props(d.attrs)]
+  const build = (): DomDesc => d.lines.length === 1
+    ? { tag: 'text', attrs, text: d.text, clean: isClean(it) }
+    : {
+        tag: 'text',
+        attrs,
+        clean: isClean(it),
+        children: d.lines.map((line, i) => ({
+          tag: 'tspan',
+          attrs: i === 0 ? [] : ([['x', '0'], ['dy', num(d.lineHeight)]] as Array<[string, string]>),
+          text: line,
+        })),
+      }
+  return cache ? cachedDesc(it, build) : build()
 }
 
 function markItems(group: SceneGroup, type: string, options?: DomRenderOptions): DomDesc[] {
@@ -496,16 +461,9 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
         tag: 'path',
         attrs: [
           ['d', info.path],
-          // fill/fill-opacity: line marks CAN carry a fill (closed polygons,
-          // radar charts) — vega renders it, so the patcher must too.
-          ...props([
-            ['fill', info.fill],
-            ['fill-opacity', info.fillOpacity],
-            ['stroke', info.stroke],
-            ['stroke-width', info.sw],
-            ['stroke-dasharray', info.strokeDash],
-            ['opacity', info.opacity],
-          ]),
+          // Every paint attribute (line marks CAN carry a fill: closed
+          // polygons, radar charts) — vega renders it, so the patcher must too.
+          ...props(info.paint),
         ],
       }]
     }
@@ -516,13 +474,7 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
         tag: 'path',
         attrs: [
           ['d', info.path],
-          ...props([
-            ['fill', info.fill],
-            ['fill-opacity', info.fillOpacity],
-            ['stroke', info.stroke],
-            ['stroke-width', info.strokeWidth],
-            ['stroke-opacity', info.strokeOpacity],
-          ]),
+          ...props(info.paint),
         ],
       }]
     }
@@ -533,7 +485,7 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       const first = items[0]!
       return [{
         tag: 'path',
-        attrs: [['d', d], ...props([['stroke', first.stroke], ['stroke-width', first.strokeWidth], ['opacity', first.opacity]])],
+        attrs: [['d', d], ...props(paintAttrs(first))],
       }]
     }
     case 'symbol': {
@@ -542,24 +494,17 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       return symbolItems(group, items)
     }
     case 'rect':
-      // vega paints a rect only when it has a fill or stroke; iterate the items
-      // back-to-front in place (vega paint order) — no slice/reverse copy.
+      // vega paints a rect only when it has a fill or stroke, in item order.
       return ((): DomDesc[] => {
         const out: DomDesc[] = []
-        for (let i = items.length - 1; i >= 0; i--) {
+        for (let i = 0; i < items.length; i++) {
           const it = items[i]!
           if (it.fill == null && it.stroke == null) continue
           const d = rectItemPath(it)
           if (d == null) continue
           const attrs: Array<[string, string]> = [
             ['d', d],
-            ...props([
-              ['fill', it.fill],
-              ['fill-opacity', it.fillOpacity],
-              ['stroke', it.stroke],
-              ['stroke-width', it.strokeWidth],
-              ['opacity', it.opacity],
-            ]),
+            ...props(paintAttrs(it)),
           ]
           out.push(cachedDesc(it, () => ({ tag: 'path', attrs, clean: isClean(it) })))
         }
@@ -576,7 +521,7 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
               ['cx', num(it.x || 0)],
               ['cy', num(it.y || 0)],
               ['r', num(r)],
-              ...props([['fill', it.fill], ['fill-opacity', it.fillOpacity], ['stroke', it.stroke], ['stroke-width', it.strokeWidth], ['opacity', it.opacity]]),
+              ...props(paintAttrs(it)),
             ],
             clean: isClean(it),
           }))
@@ -592,34 +537,14 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
             ['y1', num(y)],
             ['x2', num(it.x2 ?? x)],
             ['y2', num(it.y2 ?? y)],
-            ...props([['stroke', it.stroke], ['stroke-width', it.strokeWidth], ['stroke-dasharray', it.strokeDash], ['opacity', it.opacity]]),
+            ...props(paintAttrs(it)),
           ],
           clean: isClean(it),
         }))
       })
     case 'text':
       return items
-        .map((it) => {
-          const d = textItemDesc(it)
-          if (d == null) return null
-          const attrs: Array<[string, string]> = [['x', d.x], ['y', d.y]]
-          if (d.dyAttr) {
-            const m = d.dyAttr.match(/dy="([^"]*)"/)
-            if (m?.[1]) attrs.push(['dy', m[1]])
-          }
-          attrs.push(...props(d.attrs))
-          if (d.lines.length === 1) return cachedDesc(it, () => ({ tag: 'text', attrs, text: d.text, clean: isClean(it) }))
-          return cachedDesc(it, () => ({
-            tag: 'text',
-            attrs,
-            clean: isClean(it),
-            children: d.lines.map((line, i) => ({
-              tag: 'tspan',
-              attrs: i === 0 ? [] : ([['x', '0'], ['dy', num(d.lineHeight)]] as Array<[string, string]>),
-              text: line,
-            })),
-          } as const))
-        })
+        .map((it) => textDesc(it, true))
         .filter((d): d is NonNullable<typeof d> => d != null)
     case 'path':
     case 'shape':
@@ -627,32 +552,34 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       return items
         .filter((it) => it.path != null)
         .map((it) => {
-          const tx = num(it.x || 0)
-          const ty = num(it.y || 0)
           const attrs: Array<[string, string]> = []
-          if (tx !== '0' || ty !== '0') attrs.push(['transform', `translate(${tx},${ty})`])
+          // same attribute list as the string renderer's renderPaths
+          if (pathVectorEffect(it)) attrs.push(['vector-effect', 'non-scaling-stroke'])
+          attrs.push(['transform', transformItemTransform(it)])
           attrs.push(['d', String(it.path)])
-          attrs.push(...props([['fill', it.fill], ['fill-opacity', it.fillOpacity], ['stroke', it.stroke], ['stroke-width', it.strokeWidth], ['opacity', it.opacity]]))
+          attrs.push(...props(paintAttrs(it)))
           return cachedDesc(it, () => ({ tag: 'path', attrs, clean: isClean(it) }))
         })
     case 'image':
       return items
         .filter((it) => it.url != null && it.x != null && it.y != null)
-        .map((it) => cachedDesc(it, () => ({
-          tag: 'image',
-          attrs: [
-            ['xlink:href', String(it.url)],
-            ['transform', `translate(${num(it.x || 0)},${num(it.y || 0)})`],
-            ['width', num(it.width ?? 0)],
-            ['height', num(it.height ?? 0)],
-            ['preserveAspectRatio', it.aspect === false ? 'none' : 'xMidYMid'],
-          ],
-          clean: isClean(it),
-        })))
+        .map((it) => cachedDesc(it, () => {
+          const d = imageDesc(it)
+          return {
+            tag: 'image',
+            attrs: [
+              ['xlink:href', String(it.url)],
+              ['transform', `translate(${num(d.x)},${num(d.y)})`],
+              ['width', num(d.w)],
+              ['height', num(d.h)],
+              ['preserveAspectRatio', it.aspect === false ? 'none' : 'xMidYMid'],
+              ...props(paintAttrs(it, undefined, d.smooth ? undefined : ['image-rendering: optimizeSpeed;', 'image-rendering: pixelated;'])),
+            ],
+            clean: isClean(it),
+          }
+        }))
     case 'arc':
       return items.map((it) => {
-        const x = it.x as number
-        const y = it.y as number
         const r = (it.outerRadius as number) ?? (it.radius as number) ?? 0
         const r0 = (it.innerRadius as number) ?? 0
         const a0 = (it.startAngle as number) ?? 0
@@ -665,9 +592,9 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
         return cachedDesc(it, () => ({
           tag: 'path',
           attrs: [
-            ['transform', `translate(${num(x)},${num(y)})`],
+            ['transform', rotateItemTransform(it)],
             ['d', arcPath(0, 0, r, r0, a0, a1, cr, pa)],
-            ...props([['fill', it.fill], ['fill-opacity', it.fillOpacity], ['opacity', it.opacity], ['stroke', it.stroke], ['stroke-width', it.strokeWidth], ['stroke-dasharray', it.strokeDash]]),
+            ...props(paintAttrs(it)),
           ],
           clean: isClean(it),
         }))
@@ -702,16 +629,26 @@ function groupDesc(group: SceneGroup, plotW: number, plotH: number, clips: ClipC
   if (!type || type === 'group') {
     const attrs: Array<[string, string]> = [['class', 'mark-group']]
     if (group.role) attrs.push(['role', group.role])
+    const gw = group.width ?? plotW
+    const gh = group.height ?? plotH
     if (needsClip) {
-      const clipId = ++clips.current
-      clips.paths.push(group.clipPathD ?? null)
-      attrs.push(['clip-path', `url(#clip${clipId})`])
+      attrs.push(['clip-path', `url(#${clips.id(group.clipPathD ? { d: group.clipPathD } : { x: 0, y: 0, w: gw, h: gh })})`])
     }
     if (group.x != null || group.y != null) attrs.push(['transform', `translate(${num(group.x ?? 0)},${num(group.y ?? 0)})`])
     const children: DomDesc[] = []
     for (const item of group.items ?? []) {
       const isGroup = (item as SceneGroup).marktype !== undefined || Array.isArray((item as SceneGroup).items)
-      const d = isGroup ? groupDesc(item as SceneGroup, plotW, plotH, clips, options) : cachedDesc(item, () => leafDesc(item))
+      let d = isGroup ? groupDesc(item as SceneGroup, gw, gh, clips, options) : cachedDesc(item, () => leafDesc(item))
+      // a clipped legend symbol hangs its clip-path on a `<g>` around the symbol
+      // (the renderer's renderLeaf), never on the translated path itself. The
+      // clip is registered here, outside the item's cached descriptor, so a
+      // reused descriptor still lands its clipPath in this render's defs.
+      const clip = !isGroup && (item as SceneItem).path != null
+        ? (item as unknown as Record<string, unknown>)._clip as { x?: number; y?: number; w: number; h: number } | undefined
+        : undefined
+      if (d && clip) {
+        d = g('g', [['clip-path', `url(#${clips.id({ x: clip.x ?? 0, y: clip.y ?? 0, w: clip.w, h: clip.h })})`]], [d])
+      }
       if (d) children.push(d)
     }
     return g('g', attrs, children)
@@ -720,9 +657,7 @@ function groupDesc(group: SceneGroup, plotW: number, plotH: number, clips: ClipC
   const inner = g('g', markContainer(type), markItems(group, type, options))
   if (type === 'symbol' && denseSymbolsEnabled(options, group.items ?? []) > 0) inner.dense = true
   if (needsClip) {
-    const clipId = ++clips.current
-    clips.paths.push(group.clipPathD ?? null)
-    return g('g', [['clip-path', `url(#clip${clipId})`]], [inner])
+    return g('g', [['clip-path', `url(#${clips.id(group.clipPathD ? { d: group.clipPathD } : { x: 0, y: 0, w: plotW, h: plotH })})`]], [inner])
   }
   return inner
 }
@@ -732,11 +667,12 @@ export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {})
   const W = scene.width
   const H = scene.height
   const pad = scene.padding ?? { top: 0, right: 0, bottom: 0, left: 0 }
-  const plotW = scene.width - pad.left - pad.right
-  const plotH = scene.height - pad.top - pad.bottom
-  const clips: ClipCollector = { current: 0, paths: [] }
+  const plotW = scene.plotWidth ?? scene.width - pad.left - pad.right
+  const plotH = scene.plotHeight ?? scene.height - pad.top - pad.bottom
+  const clips = new ClipCollector()
+  const frameClipId = scene.frameClip ? clips.id({ x: 0, y: 0, w: plotW, h: plotH }) : null
 
-  const frameD = scene.frameStroke && scene.frameStrokeWidth == null ? `M0.5,0.5h${plotW}v${plotH}h-${plotW}Z` : `M0,0h${plotW}v${plotH}h-${plotW}Z`
+  const frameD = frameBackgroundPath(scene, plotW, plotH)
   const children: DomDesc[] = []
   if (scene.background) {
     children.push({ tag: 'rect', attrs: [['width', str(W)], ['height', str(H)], ['fill', String(scene.background)]] })
@@ -748,14 +684,14 @@ export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {})
       ['aria-roledescription', 'group mark container'],
     ], [
       g('g', [['transform', 'translate(0,0)']], [
-        { tag: 'path', attrs: [['class', 'background'], ['aria-hidden', 'true'], ['d', frameD], ...(scene.frameFill ? [['fill', String(scene.frameFill)]] as Array<[string, string]> : []), ...(scene.frameFillOpacity != null ? [['fill-opacity', String(scene.frameFillOpacity)]] as Array<[string, string]> : []), ...(scene.frameStroke ? [['stroke', String(scene.frameStroke)]] as Array<[string, string]> : []), ...(scene.frameStrokeWidth != null ? [['stroke-width', String(scene.frameStrokeWidth)]] as Array<[string, string]> : []), ...(scene.frameStrokeDash ? [['stroke-dasharray', scene.frameStrokeDash.join(',')]] as Array<[string, string]> : []), ...(scene.frameOpacity != null ? [['opacity', String(scene.frameOpacity)]] as Array<[string, string]> : [])] },
-        g('g', [], (scene.items ?? []).map((n) => groupDesc(n, plotW, plotH, clips, options)).filter((x): x is DomDesc => x != null)),
+        { tag: 'path', attrs: [['class', 'background'], ['aria-hidden', 'true'], ['d', frameD], ...props(paintAttrs(frameItem(scene)))] },
+        g('g', frameClipId ? [['clip-path', `url(#${frameClipId})`]] : [], (scene.items ?? []).map((n) => groupDesc(n, plotW, plotH, clips, options)).filter((x): x is DomDesc => x != null)),
         { tag: 'path', attrs: [['class', 'foreground'], ['aria-hidden', 'true'], ['d', ''], ['display', 'none']] },
       ]),
     ]),
   ]))
 
-  if (scene.defs?.length || clips.current > 0) {
+  if (scene.defs?.length || clips.size > 0) {
     const defsChildren: DomDesc[] = []
     for (const def of scene.defs ?? []) {
       defsChildren.push({
@@ -764,11 +700,16 @@ export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {})
         children: def.colorStops.map((s) => ({ tag: 'stop', attrs: [['offset', str(s.offset)], ['stop-color', s.color]] })),
       })
     }
-    for (let i = 1; i <= clips.current; i++) {
-      const d = clips.paths[i - 1]
-      defsChildren.push(d
-        ? { tag: 'clipPath', attrs: [['id', `clip${i}`]], children: [{ tag: 'path', attrs: [['d', d]] }] }
-        : { tag: 'clipPath', attrs: [['id', `clip${i}`]], children: [{ tag: 'rect', attrs: [['x', '0'], ['y', '0'], ['width', str(plotW)], ['height', str(plotH)]] }] })
+    for (const [id, def] of clips.defs) {
+      defsChildren.push({
+        tag: 'clipPath',
+        attrs: [['id', id]],
+        children: [
+          'd' in def
+            ? { tag: 'path', attrs: [['d', def.d]] }
+            : { tag: 'rect', attrs: [['x', str(def.x)], ['y', str(def.y)], ['width', str(def.w)], ['height', str(def.h)]] },
+        ],
+      })
     }
     children.push(g('defs', [], defsChildren))
   }

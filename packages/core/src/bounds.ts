@@ -8,7 +8,7 @@
  * matching the oracle when no canvas is available.
  */
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
-import { computeLinePath, symbolPath, trailPath } from './render.js'
+import { computeAreaPath, computeLinePath, symbolPath, trailPath } from './render.js'
 import { itemTextWidth } from './text-metrics.js'
 
 // ---------------------------------------------------------------------------
@@ -674,7 +674,10 @@ export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = fa
   switch (mark.marktype) {
     case 'line':
     case 'area': {
-      const pathInfo = computeLinePath(mark)
+      // an area is bounded by its filled polygon (top edge AND baseline), a line
+      // by its polyline: computeLinePath on an area dropped the baseline, so
+      // autosize:pad clipped areas that extend below/above their top edge
+      const pathInfo = mark.marktype === 'area' ? computeAreaPath(mark) : computeLinePath(mark)
       if (pathInfo) {
         boundsFromPath(bounds, pathInfo.path)
         // the renderer resolves vega's default line/area strokeWidth=2 at
