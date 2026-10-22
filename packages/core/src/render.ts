@@ -1390,12 +1390,30 @@ const ATTR_CACHE = new Map<string, string>()
 // containing one would make the whole document ill-formed, so they are
 // replaced with U+FFFD. Lone surrogates are repaired the same way.
 const XML_ILLEGAL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g
-const TEXT_SPECIAL = /[&<>"\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF\uD800-\uDFFF]/
-const ATTR_SPECIAL = /[&<>"\t\n\r\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF\uD800-\uDFFF]/
 
 function wellFormed(s: string): string {
   const wf = (s as unknown as { toWellFormed?: () => string }).toWellFormed
   return wf ? wf.call(s) : s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD')
+}
+
+/**
+ * True when `s` contains anything `escText`/`escAttr` must rewrite. A plain
+ * charCode scan: for the short strings a chart writes (colours, path data,
+ * numbers) this is several times cheaper than a character-class regex, and it
+ * runs once per attribute on the serialization hot path. Surrogates are
+ * reported so lone ones get repaired; valid pairs pass through unchanged.
+ */
+function needsEscape(s: string, attribute: boolean): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (c > 62) {
+      if (c >= 0xD800 && (c <= 0xDFFF || c >= 0xFFFE)) return true
+    } else if (c < 32) {
+      if (c !== 9 && c !== 10 && c !== 13) return true
+      if (attribute) return true
+    } else if (c === 34 || c === 38 || c === 60 || c === 62) return true
+  }
+  return false
 }
 
 const TEXT_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }
@@ -1407,7 +1425,7 @@ const ATTR_ESCAPES: Record<string, string> = {
 
 /** Text-node escaping (`&`, `<`, `>`, `"`, plus XML-illegal characters). */
 function escText(s: string): string {
-  if (!TEXT_SPECIAL.test(s)) return s
+  if (!needsEscape(s, false)) return s
   const cached = ESC_CACHE.get(s)
   if (cached !== undefined) return cached
   const out = wellFormed(s.replace(XML_ILLEGAL, '\uFFFD')).replace(/[&<>"]/g, (c) => TEXT_ESCAPES[c] as string)
@@ -1418,7 +1436,7 @@ function escText(s: string): string {
 /** Attribute-value escaping; accepts any value and stringifies it first. */
 function escAttr(value: unknown): string {
   const s = typeof value === 'string' ? value : String(value)
-  if (!ATTR_SPECIAL.test(s)) return s
+  if (!needsEscape(s, true)) return s
   const cached = ATTR_CACHE.get(s)
   if (cached !== undefined) return cached
   const out = wellFormed(s.replace(XML_ILLEGAL, '\uFFFD')).replace(/[&<>"\t\n\r]/g, (c) => ATTR_ESCAPES[c] as string)
