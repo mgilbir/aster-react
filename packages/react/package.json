@@ -7,24 +7,24 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "default": "./dist/index.js"
     },
     "./ssr": {
       "types": "./dist/ssr.d.ts",
-      "import": "./dist/ssr.js"
+      "default": "./dist/ssr.js"
     },
     "./worker": {
       "types": "./dist/worker.d.ts",
-      "import": "./dist/worker.js"
+      "default": "./dist/worker.js"
     },
     "./worker-entry": {
       "types": "./dist/worker-entry.d.ts",
-      "import": "./dist/worker-entry.js"
+      "default": "./dist/worker-entry.js"
     },
     "./package.json": "./package.json",
     "./vl": {
       "types": "./dist/vl.d.ts",
-      "import": "./dist/vl.js"
+      "default": "./dist/vl.js"
     }
   },
   "scripts": {
@@ -56,7 +56,14 @@
   "bugs": {
     "url": "https://github.com/mgilbir/aster-react/issues"
   },
-  "keywords": "react, vega, vega-lite, charts, dataviz, accessibility",
+  "keywords": [
+    "react",
+    "vega",
+    "vega-lite",
+    "charts",
+    "dataviz",
+    "accessibility"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -66,6 +73,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md"
