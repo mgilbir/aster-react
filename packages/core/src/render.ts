@@ -1423,11 +1423,31 @@ function escapeXml(s: string, attribute: boolean): string {
   return s.replace(attribute ? ATTR_RE : TEXT_RE, (c) => ESCAPES[c] ?? (c.length > 1 ? c : '\uFFFD'))
 }
 
+/**
+ * True when `s` has anything `escapeXml` would rewrite. A plain charCode scan:
+ * for the short strings a chart writes (colours, numbers) it is several times
+ * cheaper than running the replace regex on every attribute of every item.
+ */
+function needsEscape(s: string, attribute: boolean): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (c > 62) {
+      if (c >= 0xD800 && (c <= 0xDFFF || c >= 0xFFFE)) return true
+    } else if (c < 32) {
+      if (attribute || (c !== 9 && c !== 10 && c !== 13)) return true
+    } else if (c === 34 || c === 38 || c === 60 || c === 62) return true
+  }
+  return false
+}
+
 /** Text-node escaping. */
-const escText = (s: string): string => escapeXml(s, false)
+const escText = (s: string): string => (needsEscape(s, false) ? escapeXml(s, false) : s)
 
 /** Attribute-value escaping; accepts any value and stringifies it first. */
-const escAttr = (value: unknown): string => escapeXml(String(value), true)
+function escAttr(value: unknown): string {
+  const s = String(value)
+  return needsEscape(s, true) ? escapeXml(s, true) : s
+}
 
 /** ` name="value"` for any non-nullish value, escaped. */
 function attrS(name: string, value: unknown): string {
