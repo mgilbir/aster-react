@@ -31,7 +31,7 @@ function numericSequence(start: number, stop?: number, step?: number): number[] 
 import { rgb, hsl, lab, hcl } from './color.js'
 import {
   accessor, ascending, extent, isArray, isBoolean, isDate, isNumber, isObject,
-  isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck,
+  isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, safeGet,
 } from './util.js'
 
 export interface ExpressionRuntime {
@@ -176,7 +176,16 @@ function inrange(value: unknown, range: unknown): boolean {
   return lo < hi ? v >= lo && v <= hi : v >= hi && v <= lo
 }
 function mergeObj(...objs: unknown[]): unknown {
-  return Object.assign({}, ...objs)
+  // Like vega's merge (extend into {}), but a `__proto__` own key (JSON data)
+  // is skipped instead of swapping the result's prototype.
+  const out: Record<string, unknown> = {}
+  for (const o of objs) {
+    if (o == null) continue
+    for (const k of Object.keys(o as object)) {
+      if (k !== '__proto__') out[k] = (o as Record<string, unknown>)[k]
+    }
+  }
+  return out
 }
 function testRe(reg: unknown, value: unknown): boolean {
   if (value == null) return false
@@ -220,7 +229,9 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
     // coercion (vega semantics: null/empty-string -> null)
     toBoolean: (value: unknown) => toBoolean(value),
     toNumber: (value: unknown) => toNumber(value),
-    toDate: (value: unknown, parser?: unknown) => toDate(value, parser as ((v: unknown) => number | Date) | undefined),
+    // unary, like vega-functions ("suppress extra arguments"): a second argument
+    // would be a caller-supplied callable (audit C1)
+    toDate: (value: unknown) => toDate(value),
     toString: (value: unknown) => toString(value),
     // control flow
     if: (t: unknown, a: unknown, b: unknown) => (t ? a : b),
@@ -234,7 +245,7 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
     max: (...args: number[]) => Math.max(...args),
     clamp: (value: number, lo: number, hi: number) => Math.min(Math.max(value, lo), hi),
     // arrays
-    extent: (arr: unknown) => extent(arr as ArrayLike<unknown>),
+    extent: (arr: unknown) => extent(arr as ArrayLike<unknown>), // unary: no accessor callable
     clampRange: (r: unknown, lo: unknown, hi: unknown) => {
       const [start, stop] = r as [number, number]
       if (stop - start >= (hi as number) - (lo as number)) return [lo, hi]
@@ -268,7 +279,8 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
     pad,
     parseFloat: (value: unknown) => parseFloat(String(value)),
     parseInt: (value: unknown, radix?: unknown) => parseInt(String(value), radix == null ? undefined : Number(radix)),
-    replace: (value: unknown, pattern: unknown, repl: unknown) => String(value).replace(pattern as string | RegExp, String(repl)),
+    replace: (value: unknown, pattern: unknown, repl: unknown) =>
+      String(value).replace(isRegExp(pattern) ? (pattern as RegExp) : String(pattern), String(repl)),
     split: (value: unknown, sep: unknown, limit?: unknown) => String(value).split(sep as string, limit == null ? undefined : Number(limit)),
     substring: (value: unknown, start?: number, end?: number) => String(value).substring(start ?? 0, end),
     trim: (value: unknown) => String(value).trim(),
@@ -320,7 +332,7 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
     indata: (name: string, field: string, value: unknown) => {
       const rows = runtime.data(name) ?? []
       let count = 0
-      for (const r of rows) if ((r as Record<string, unknown>)[field] === value) count++
+      for (const r of rows) if (safeGet(r, field) === value) count++
       return count ? count : undefined
     },
     scale: function (this: unknown, name: string, value?: unknown) {

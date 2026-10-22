@@ -16,6 +16,7 @@
  * an array in place without replacing it is invisible to the cache.
  */
 import { compileChart } from './compiler.js'
+import { dict, ownGet } from './util.js'
 import { evaluateChart } from './runtime.js'
 import { checkSpecLimits, checkSceneLimits, createLimitClock } from './limits.js'
 import { diffRows, type DataPulse } from './pulse.js'
@@ -61,7 +62,7 @@ function dataKeyOf(spec: VgSpec, input: RuntimeInput, out: string[]): void {
       : []
   for (const d of lists) {
     if (typeof d.name !== 'string') continue
-    const override = input.data?.[d.name]
+    const override = ownGet(input.data, d.name)
     const vals = override ?? d.values
     if (vals == null) continue
     out.push(`${d.name}:${refId(vals)}`)
@@ -82,7 +83,7 @@ function rawDatasets(spec: VgSpec, input: RuntimeInput): Map<string, unknown> {
     // Derived datasets (source:) are rebuilt from their parent; input overrides
     // for them are ignored by the runtime too.
     if (typeof d.source === 'string') continue
-    const override = input.data?.[d.name]
+    const override = ownGet(input.data, d.name)
     const values = override !== undefined ? override : d.values
     if (values != null) out.set(d.name, values)
   }
@@ -200,7 +201,7 @@ export function createChartSession(): ChartSession {
     if (input.dataPulse) {
       const datasets = new Map<string, never>()
       const structural = new Set<string>()
-      const sameLength: Record<string, number[]> = {}
+      const sameLength = dict<number[]>()
       for (const [name, p] of Object.entries(input.dataPulse)) {
         if (!p.from) sameLength[name] = p.changed ?? []
         else structural.add(name)
@@ -232,7 +233,7 @@ export function createChartSession(): ChartSession {
     if (input.autoChanges === false) return { input, pulse: { datasets: new Map(), structural: new Set() } }
     const pulse = inferPulse(lastRaw, currentRaw)
     if (!pulse.datasets.size && !pulse.structural.size) return { input, pulse }
-    const changes: Record<string, number[]> = {}
+    const changes = dict<number[]>()
     const mapped: NonNullable<RuntimeInput['dataPulse']> = {}
     for (const [name, p] of pulse.datasets) {
       if (p.sameLength) {

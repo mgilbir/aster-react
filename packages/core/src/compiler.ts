@@ -3,6 +3,7 @@
  * Consumes the Vega spec directly (the canonical IR); vega-lite compatibility is
  * achieved by running vega-lite.compile in the app build / dev (oracle).
  */
+import { dict, ownGet, setOwn } from './util.js'
 import type {
   CompiledAxis,
   CompiledChart,
@@ -272,7 +273,7 @@ function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSi
 }
 
 function resolveSignals(defs: CompiledSignalDef[]): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
+  const out = dict<unknown>()
   for (const s of defs) {
     if (s.value !== undefined) out[s.name] = s.value
   }
@@ -315,7 +316,7 @@ function compileTransform(t: Record<string, unknown>): CompiledTransform {
   const out: Record<string, unknown> = { type }
   for (const key of Object.keys(t)) {
     if (key === 'type') continue
-    out[key] = t[key]
+    setOwn(out, key, t[key])
   }
   return out as CompiledTransform
 }
@@ -449,12 +450,12 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
     if (gm && typeof gm === 'object') Object.assign(markProps, gm)
   }
   if (m.type && cfgMarktype) {
-    const st = cfgMarktype[String(m.type)]
+    const st = ownGet(cfgMarktype, String(m.type))
     if (st && typeof st === 'object') Object.assign(markProps, st)
   }
   sources.push({ props: markProps, pairGuard: true })
   for (const name of names) {
-    const st = cfgStyle[name]
+    const st = ownGet(cfgStyle, name)
     if (st && typeof st === 'object') sources.push({ props: st, pairGuard: false })
   }
   // rule marks have no xc/yc semantics in vega: config/style channels for

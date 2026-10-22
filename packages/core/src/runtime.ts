@@ -36,6 +36,7 @@ import type {
 import { tickFormat, scaleFraction, tickValues, tickCount, isContinuous, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
+import { dict, ownGet, setOwn } from './util.js'
 import { rowsEqual, type PulseChange } from './pulse.js'
 import { trellisLayout, measureBounds } from './trellis.js'
 import { baselineOffset, boundAxisGroup, boundGroupItem, boundLeaf, boundText, Bounds } from './bounds.js'
@@ -228,14 +229,14 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
     if (now > deadline) throw new AsterLimitError(`maxTimeMs exceeded during ${phase}`)
   }
   checkDeadline('startup')
-  const signals = { ...chart.signals, ...input.signals }
+  const signals = dict(chart.signals, input.signals)
   let width = resolveSize(chart.width, input.width, signals)
   // A Vega spec can define the chart height as a `height` signal (a special
   // signal that doubles as the view size), e.g. `signals:[{name:'height',
   // update: ...}]`, without a top-level numeric height. It's resolved later by
   // resolveSignalUpdates, so apply the fallback after that (see below).
   let height = resolveSize(chart.height, input.height, signals)
-  const signalParams = { width, height, ...signals }
+  const signalParams = dict<unknown>({ width, height }, signals)
 
   const datasets = new Map<string, Row[]>()
   const scales = new Map<string, Scale>()
@@ -445,9 +446,9 @@ function resolveSignalUpdates(ctx: EvalContext): boolean {
     if (!def.update) continue
     try {
       const value = ctx.runtime.expr(def.update)(undefined, ctx.signalParams)
-      if (value !== undefined && value !== ctx.signalParams[def.name]) {
-        ctx.signalParams[def.name] = value
-        ctx.chart.signals[def.name] = value
+      if (value !== undefined && value !== ownGet(ctx.signalParams, def.name)) {
+        setOwn(ctx.signalParams, def.name, value)
+        setOwn(ctx.chart.signals, def.name, value)
         changed = true
       }
     } catch {
@@ -1058,7 +1059,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput = {}): Scen
   // Differential-update generation: incremented each eval so an unchanged (reused)
   // item keeps its previous generation and the DOM patcher can skip it.
   ;(chart as unknown as { __gen?: number }).__gen = ((chart as unknown as { __gen?: number }).__gen ?? 0) + 1
-  const signals = { ...chart.signals, ...input.signals }
+  const signals = dict(chart.signals, input.signals)
   const initialW = resolveSize(chart.width, input.width, signals)
   const initialH = resolveSize(chart.height, input.height, signals)
   // Vega's layout keeps the sign of a negative declared height: the rendered
@@ -1069,7 +1070,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput = {}): Scen
     : typeof chart.height === 'number'
       ? chart.height
       : chart.height && typeof chart.height === 'object' && 'signal' in chart.height
-        ? Number(signals[(chart.height as { signal: string }).signal])
+        ? Number(ownGet(signals, (chart.height as { signal: string }).signal))
         : undefined
   const negativeHeightExtra = typeof declaredHeight === 'number' && declaredHeight < 0
     ? Math.ceil(-declaredHeight / 2)
@@ -1514,7 +1515,7 @@ function resolveSize(size: SizeSpec, override: number | undefined, signals: Reco
   if (typeof size === 'number') return clamp(size)
   if (size && typeof size === 'object') {
     if ('signal' in size) {
-      const v = signals[size.signal]
+      const v = ownGet(signals, size.signal)
       return typeof v === 'number' ? clamp(v) : DEFAULT_SIZE
     }
     if ('step' in size) {
@@ -2402,7 +2403,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
     if (ctx.datasets.has(name)) return ctx.datasets.get(name)!
     const d = sources.get(name)
     if (!d) {
-      const rows = (inputData[name] as Row[]) ?? []
+      const rows = (ownGet(inputData, name) as Row[] | undefined) ?? []
       ctx.datasets.set(name, rows)
       ctx.datasetChanges?.set(name, ctx.dataChanges?.get(name) ?? null)
       const pulse = ctx.inputPulses?.get(name) ?? (ctx.dataChanges?.get(name)
@@ -2430,15 +2431,16 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
         inPulse = ctx.datasetPulses.get(src) ?? null
       }
     } else if (d.values != null) {
-      if (inputData[name]) {
-        rows = readData(inputData[name], d.format)
+      const given = ownGet(inputData, name)
+      if (given) {
+        rows = readData(given, d.format)
       } else {
         // vega-loader read semantics: object arrays pass through format.parse
         // coercion; string values are parsed by the registered reader.
         rows = readData(d.values, d.format)
       }
     } else {
-      rows = ((inputData[name] as Row[]) ?? []).map((r) => ({ ...r }))
+      rows = ((ownGet(inputData, name) as Row[] | undefined) ?? []).map((r) => ({ ...r }))
     }
     if (!inPulse && !('source' in d && (d as CompiledChart['data'][number] & { source: string }).source)) {
       inPulse = ctx.inputPulses?.get(name) ?? (ctx.dataChanges?.get(name)
@@ -7929,7 +7931,7 @@ function evalTimeUnitSpecifier(sig: string): string | undefined {
     try { overrides = JSON.parse(m[2]!) } catch { /* ignore */ }
   }
   const u = units.slice()
-    .filter((unit) => unit in TU_ORDER)
+    .filter((unit) => Object.hasOwn(TU_ORDER, unit))
     .sort((a, b) => (TU_ORDER[a] ?? 99) - (TU_ORDER[b] ?? 99))
   const s = { ...TU_DEFAULTS, ...overrides }
   let fmt = ''

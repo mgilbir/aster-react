@@ -63,7 +63,7 @@ function resolveCurve(interpolate: string, orient?: string): unknown {
   if (interpolate === 'monotone') {
     return orient === 'horizontal' ? curveMonotoneY : curveMonotoneX
   }
-  return CURVE_MAP[interpolate] ?? null
+  return Object.hasOwn(CURVE_MAP, interpolate) ? CURVE_MAP[interpolate] ?? null : null
 }
 
 /** Vega-scenegraph's rounded-rect path (C = 0.448084975506 bezier circle). */

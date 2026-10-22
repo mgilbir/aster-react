@@ -504,11 +504,11 @@ const utcIntervals: Record<string, TimeInterval> = {
 }
 
 export function timeIntervalFor(unit: string): TimeInterval | undefined {
-  return timeIntervals[unit]
+  return Object.hasOwn(timeIntervals, unit) ? timeIntervals[unit] : undefined
 }
 
 export function utcIntervalFor(unit: string): TimeInterval | undefined {
-  return utcIntervals[unit]
+  return Object.hasOwn(utcIntervals, unit) ? utcIntervals[unit] : undefined
 }
 
 function offset(ival: TimeInterval | undefined, date: unknown, step: number): Date | undefined {

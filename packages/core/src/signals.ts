@@ -12,6 +12,7 @@
  */
 import type { CompiledChart, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot } from './types.js'
 import { type ExpressionRuntime } from './expression.js'
+import { dict, ownGet, setOwn } from './util.js'
 
 export interface BoundEvent {
   event: string
@@ -156,7 +157,7 @@ function bindSignalEventsDefs(
       const facade = { ...eventCtx, vega: eventCtx, item: { datum: eventCtx.datum } }
       const value = (expr as (datum: unknown, params: unknown, event?: unknown) => unknown)(
         eventCtx.datum ?? {},
-        { ...signalParams, ...signals },
+        dict(signalParams, signals),
         facade,
       )
       setSignal(info.signal.name, value)
@@ -176,7 +177,7 @@ function bindSignalEventsDefs(
 
   const setSignal = (name: string, value: unknown): void => {
     if (name == null) return
-    signals[name] = value
+    setOwn(signals, name, value)
     // Resolve dependent signal updates to a fixed point (the same rule as
     // resolveSignalUpdates in the static pulse).
     const maxRounds = 3
@@ -185,16 +186,16 @@ function bindSignalEventsDefs(
       for (const def of defs) {
         if (!def.update || def.name === name) continue
         try {
-          const next = runtime.expr(def.update)({}, { ...signalParams, ...signals })
-          if (JSON.stringify(next) !== JSON.stringify(signals[def.name])) {
-            signals[def.name] = next
+          const next = runtime.expr(def.update)({}, dict(signalParams, signals))
+          if (JSON.stringify(next) !== JSON.stringify(ownGet(signals, def.name))) {
+            setOwn(signals, def.name, next)
             changed = true
           }
         } catch { /* skip unresolvable this round */ }
       }
       if (!changed) break
     }
-    hooks.onSignal?.(name, signals[name], signals)
+    hooks.onSignal?.(name, ownGet(signals, name), signals)
   }
 
   return {

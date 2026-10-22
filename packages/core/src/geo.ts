@@ -83,7 +83,7 @@ export interface ResolvedProjection {
  * unknown we fall back to mercator (vega's default projection type).
  */
 export function buildProjection(spec: ResolvedProjection, _width: number, _height: number): GeoProjection {
-  const factory = FACTORIES[spec.type] ?? geoMercator
+  const factory = (Object.hasOwn(FACTORIES, spec.type) ? FACTORIES[spec.type] : undefined) ?? geoMercator
   const p = factory()
   if (spec.scale != null && typeof p.scale === 'function') p.scale(spec.scale)
   if (spec.translate != null && typeof p.translate === 'function') p.translate(spec.translate)

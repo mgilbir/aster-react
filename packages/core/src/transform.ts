@@ -7,6 +7,7 @@ import type { CompiledTransform, SortSpec } from './types.js'
 import type { ExpressionRuntime } from './expression.js'
 import { geoRegistry, requireGeo, requireTransform } from './registry.js'
 import { nominalTextWidth } from './text-metrics.js'
+import { ownGet, safeGet, setOwn } from './util.js'
 
 export interface TransformContext {
   runtime: ExpressionRuntime
@@ -102,8 +103,7 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
       return stackRows(rows, t)
     case 'extent': {
       const values = collectField(rows, t.field).filter(isFiniteNumber)
-      ctx.signals[t.signal] =
-        values.length === 0 ? [Infinity, -Infinity] : [Math.min(...values), Math.max(...values)]
+      setOwn(ctx.signals, t.signal, values.length === 0 ? [Infinity, -Infinity] : [Math.min(...values), Math.max(...values)])
       return rows
     }
     case 'geoshape': {
@@ -231,7 +231,7 @@ export function resolveSizeParam(size: unknown, ctx: TransformContext): [number,
   const resolve = (v: unknown): number | undefined => {
     if (typeof v === 'number' && Number.isFinite(v)) return v
     if (v != null && typeof v === 'object' && 'signal' in v) {
-      const sv = ctx.signals[(v as { signal: string }).signal]
+      const sv = ownGet(ctx.signals, (v as { signal: string }).signal)
       if (typeof sv === 'number' && Number.isFinite(sv)) return sv
     }
     return undefined
@@ -309,14 +309,14 @@ function binRows(rows: Row[], t: Extract<CompiledTransform, { type: 'bin' }>, ct
   const pnum = (v: unknown): number | undefined => {
     if (typeof v === 'number' && Number.isFinite(v)) return v
     if (v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)) {
-      const sv = ctx.signals[(v as { signal: string }).signal]
+      const sv = ownGet(ctx.signals, (v as { signal: string }).signal)
       if (typeof sv === 'number' && Number.isFinite(sv)) return sv
     }
     return undefined
   }
   const parr = (v: unknown): number[] | undefined => {
     const a = v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)
-      ? ctx.signals[(v as { signal: string }).signal]
+      ? ownGet(ctx.signals, (v as { signal: string }).signal)
       : v
     return Array.isArray(a) ? a.map(Number) : undefined
   }
@@ -367,7 +367,7 @@ function binRows(rows: Row[], t: Extract<CompiledTransform, { type: 'bin' }>, ct
     start += d
     stop += d
   }
-  if (t.signal) ctx.signals[t.signal] = { start, stop, step }
+  if (t.signal) setOwn(ctx.signals, t.signal, { start, stop, step })
 
   const band = t.interval !== false
   const [startField, endField] = t.as
@@ -398,7 +398,7 @@ function resolveExtent(
     if (typeof a === 'number' && typeof b === 'number') return [a, b]
   }
   if (extent && typeof extent === 'object' && 'signal' in extent) {
-    const v = ctx.signals[(extent as { signal: string }).signal]
+    const v = ownGet(ctx.signals, (extent as { signal: string }).signal)
     if (Array.isArray(v) && v.length === 2 && typeof v[0] === 'number' && typeof v[1] === 'number') {
       return [v[0], v[1]]
     }
@@ -465,7 +465,7 @@ function imputeRows(
 ): Row[] {
   const groups = t.groupby?.length ? groupRows(rows, t.groupby) : [rows]
   const rawKeyvals = t.keyvals && typeof t.keyvals === 'object' && !Array.isArray(t.keyvals) && 'signal' in t.keyvals
-    ? ctx?.signals[(t.keyvals as { signal: string }).signal]
+    ? ownGet(ctx?.signals, (t.keyvals as { signal: string }).signal)
     : t.keyvals
   const keyvals = Array.isArray(rawKeyvals) ? rawKeyvals : []
   const domain = Array.from(new Set([...rows.map((r) => r[t.key]), ...keyvals]))
@@ -1743,7 +1743,7 @@ function labelRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContex
   for (let i = 0; i < positions; i++) {
     offs[i] = offsets[Math.min(i, offsets.length - 1)]!
     const name = anchors[Math.min(i, anchors.length - 1)]!
-    anc[i] = LABEL_ANCHOR_CODE[name] ?? 0
+    anc[i] = (Object.hasOwn(LABEL_ANCHOR_CODE, name) ? LABEL_ANCHOR_CODE[name] : undefined) ?? 0
   }
 
   // scaler (vega-label `util/scaler.js`) with padding 0.
@@ -1861,7 +1861,7 @@ export function getField(row: Row, path: string): unknown {
   let v: unknown = row
   for (const part of path.split('.')) {
     if (v == null || typeof v !== 'object') return undefined
-    v = (v as Record<string, unknown>)[part]
+    v = safeGet(v, part)
   }
   return v
 }
