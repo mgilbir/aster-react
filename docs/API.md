@@ -7,6 +7,7 @@ Aster ships three public packages:
 | `@aster/core` | `@aster/core` | compile/evaluate/render a Vega spec to SVG |
 | `@aster/core/…` | `/dom`, `/canvas`, `/hit`, `/signals`, `/load`, `/geo`, `/transforms` | opt-in addons (tree-shaking boundaries) |
 | `@aster/react` | `@aster/react` | `<Chart>`, `useChart`, SSR/hydration, worker hook |
+| `@aster/react/vl` | `@aster/react/vl` | opt-in addon: registers the Vega-Lite grammar compiler |
 | `@aster/vl` | `@aster/vl` | from-scratch Vega-Lite → Vega compiler |
 
 ## `@aster/core`
@@ -128,8 +129,18 @@ const [selection, setSelection] = useState<SelectValue | null>(null)
 />
 ```
 
-`spec` may be a Vega spec, a Vega-Lite spec (compiled internally with `@aster/vl`), or
-a promise (wrap the chart in `<Suspense>`).
+`spec` may be a Vega spec, a Vega-Lite spec, or a promise (wrap the chart in
+`<Suspense>`). Vega-Lite is an opt-in addon — import it once before rendering VL
+specs:
+
+```ts
+import '@aster/react/vl'   // side effect: registers the from-scratch VL compiler
+```
+
+The base `@aster/react` entry does not include the ~23 kB gzip Vega-Lite compiler;
+passing a VL spec without the addon throws an error naming the missing import.
+Vega specs need no extra import. Worker hosts must import `@aster/react/vl` in the
+worker entry as well, since compilation happens there.
 
 The ref exposes `getScene()`, `getSvg()`, `getChartInfo()`, `getView()`, `setView()`,
 `resetView()`, `setSignal(name, value)` and `getSignals()`.
@@ -176,5 +187,8 @@ import { compile } from '@aster/vl'
 const vegaSpec = compile(vegaLiteSpec)
 ```
 
-`<Chart>` and `useChart` call this automatically for Vega-Lite input, so a fresh app
-does not need a `vega-lite` dependency.
+`<Chart>` and `useChart` use this compiler for Vega-Lite input once
+`@aster/react/vl` is imported, so a fresh app does not need a `vega-lite`
+dependency. Hosts that already bundle `@aster/vl` themselves can instead call
+`registerVegaLiteCompiler(compile)` from `@aster/react`; `hasVegaLiteCompiler()`
+reports whether one is registered.

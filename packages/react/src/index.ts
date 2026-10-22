@@ -22,6 +22,13 @@ export {
   normalizeChartSpec,
   isPromiseLike,
 } from './spec'
+// Vega-Lite compiler registry: `@aster/react/vl` registers it as a side effect;
+// hosts that compile VL themselves can call `registerVegaLiteCompiler` instead.
+export {
+  hasVegaLiteCompiler,
+  registerVegaLiteCompiler,
+  type VegaLiteCompiler,
+} from './vl-registry'
 export {
   useChart,
   useSpecData,

@@ -71,7 +71,7 @@ Because heavy feature areas are only used by a small fraction of specs, they are
 | `@aster/core/dom` | the incremental DOM patcher (`patchSceneDom`, `sceneToDomDesc`, `createChartSession`); `<Chart>` now defaults to this path |
 | `@aster/core/signals` | the signal→view event loop (`bindSceneSignals`, `stampDatumAttrs`) that binds a spec's `signal.on` streams to the rendered svg |
 
-A spec that uses a gated feature without its addon loaded gets an actionable "load `@aster/core/...` first" error; every other chart renders with a lean base bundle — `@aster/react <Chart>` is ~142 kB gzip (it includes the from-scratch Vega-Lite compiler) vs react-vega's 289 kB; `budget.mjs` gates core, dom, canvas, hit, signals and React entries independently and records the measured sizes next to the budgets.
+`@aster/react/vl` is the same pattern at the grammar level: the from-scratch Vega-Lite compiler (~22.6 kB gzip) sits behind `import '@aster/react/vl'`, so Vega-only hosts get a ~136 kB base entry; with the addon the entry is ~158 kB (react-vega: 289 kB). A spec that uses a gated feature without its addon loaded gets an actionable "load `@aster/...` first" error. `budget.mjs` gates core, dom, canvas, hit, signals, React and React+VL entries independently and records the measured sizes next to the budgets.
 
 ## Scales
 

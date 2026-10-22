@@ -42,6 +42,14 @@
   the now-redundant patch, canvas skips identical scenes, and `patchSceneDom` gained
   an identity-prefix append path (O(appended) instead of re-walking siblings), which
   also cut 100k-point SVG stream frames to ~77ms.
+- **Vega-Lite is opt-in**: the from-scratch VL compiler now lives behind
+  `import '@aster/react/vl'` instead of being imported by the base `<Chart>` entry
+  (~23 kB gzip saved). Vega specs need no addon (as before); a VL spec without it
+  throws an error naming the exact import, and `registerVegaLiteCompiler` /
+  `hasVegaLiteCompiler` are exported for hosts that compile VL themselves. Worker
+  hosts import the addon in the worker entry. `@aster/react` measures 136.0 kB gzip
+  (Vega only) / 158.4 kB with the addon; the budget gate now covers both entries
+  (160 kB each), replacing the single 159 kB budget that had 0.6 kB of headroom.
 - **Nested scopes / axes**: nested group marks now inherit outer scales (local names
   still shadow), so raw Vega specs that reference a parent `y` or colour scale render
   inside groups (population pyramid). Vega-Lite compilation now emits all grid axes

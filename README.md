@@ -86,9 +86,10 @@ const { scene, svg, error, session } = useChart(spec, { width, height, data })
 (`maxTimeMs`); see [docs/LIMITS.md](docs/LIMITS.md). A headless session is also
 exported as `createChartSession` from `@aster/core/dom`.
 
-`<Chart>` also accepts Vega-Lite directly, a promise spec under `<Suspense>`, a
-controlled `view`/`selection`, and an imperative ref (`ChartHandle`). Pan/zoom,
-keyboard navigation and the accessible scene tree work on both SVG and canvas.
+`<Chart>` also accepts Vega-Lite (opt-in: `import '@aster/react/vl'`), a promise
+spec under `<Suspense>`, a controlled `view`/`selection`, and an imperative ref
+(`ChartHandle`). Pan/zoom, keyboard navigation and the accessible scene tree work
+on both SVG and canvas.
 SSR uses `renderChartToStaticMarkup` + `hydrateChart` when the server `<svg>` node must
 be preserved, and `useChartWorker` offloads compile/evaluate/render when a Worker is
 available.
@@ -138,7 +139,7 @@ Expressions are CSP-safe: the engine parses the Vega expression DSL with its own
 
 ## Performance
 
-Compared against react-vega and the official vega-embed tutorial (see `packages/benchmarks`): on a browser bar chart @1000 points `<Chart>` holds 1.1% long frames under a 1-update-per-frame stream vs react-vega's 92%, updates in ~7 ms vs ~16 ms, retains ~0.0 MB heap per update (react-vega ~0.5 MB), and `@aster/react <Chart>` is ~104 kB gzip vs react-vega's 289 kB. In jsdom the same comparison is bar update ~11 ms vs ~77 ms and scatter update ~9 ms vs ~31 ms.
+Compared against react-vega and the official vega-embed tutorial (see `packages/benchmarks`): on a browser bar chart @1000 points `<Chart>` holds 1.1% long frames under a 1-update-per-frame stream vs react-vega's 92%, updates in ~7 ms vs ~16 ms, retains ~0.0 MB heap per update (react-vega ~0.5 MB), and `@aster/react <Chart>` is ~136 kB gzip (~158 kB with the opt-in Vega-Lite addon) vs react-vega's 289 kB. In jsdom the same comparison is bar update ~11 ms vs ~77 ms and scatter update ~9 ms vs ~31 ms.
 
 ### Reactive differential updates
 

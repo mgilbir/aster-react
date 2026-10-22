@@ -17,7 +17,8 @@ import { fileURLToPath } from 'node:url'
 //   @aster/core/canvas    12.3 kB
 //   @aster/core/hit        1.5 kB
 //   @aster/core/signals   28.1 kB
-//   @aster/react         156.0 kB (includes the from-scratch VL compiler)
+//   @aster/react         135.9 kB (Vega only)
+//   @aster/react/vl      158.4 kB (base + the from-scratch VL compiler, ~22.6 kB)
 //
 // History of the core floor: the 80 kB budget was re-baselined repeatedly as
 // the engine took ownership of its stack (ADR 0001): colour (+3.5), calendar
@@ -33,7 +34,10 @@ const BUDGETS = {
   '@aster/core/canvas': 20 * 1024,
   '@aster/core/hit': 6 * 1024,
   '@aster/core/signals': 36 * 1024,
-  '@aster/react': 159 * 1024,
+  '@aster/react': 160 * 1024,
+  // Base + VL compiler. The compiler is opt-in (`import '@aster/react/vl'`),
+  // so the base row above is the one to watch for React-side regressions.
+  '@aster/react/vl': 160 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
@@ -88,6 +92,16 @@ export default bindSceneSignals
     platform: 'browser',
     external: ['react', 'react-dom', 'react/jsx-runtime'],
     src: String.raw`import { Chart } from '@aster/react'
+export default Chart
+`,
+  },
+  {
+    name: '@aster/react/vl',
+    file: 'react-vl.tsx',
+    platform: 'browser',
+    external: ['react', 'react-dom', 'react/jsx-runtime'],
+    src: String.raw`import '@aster/react/vl'
+import { Chart } from '@aster/react'
 export default Chart
 `,
   },

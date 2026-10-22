@@ -3,6 +3,9 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
+// Vega-Lite is opt-in (mirrors the core addons): importing the addon registers
+// the compiler for this module graph.
+import './vl'
 import { Chart } from './Chart'
 import { useChart } from './useChart'
 import { isVegaLiteSpec, normalizeChartSpec } from './spec'

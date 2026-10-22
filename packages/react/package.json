@@ -21,7 +21,11 @@
       "types": "./dist/worker-entry.d.ts",
       "import": "./dist/worker-entry.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./vl": {
+      "types": "./dist/vl.d.ts",
+      "import": "./dist/vl.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

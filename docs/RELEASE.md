@@ -37,6 +37,8 @@ npm view @aster/vl version
 ```bash
 npm create vite@latest aster-smoke -- --template react-ts
 cd aster-smoke && npm i @aster/react @aster/core
+# Vega-Lite is opt-in:
+#   import '@aster/react/vl'
 # render a Vega-Lite spec directly (no vega-lite dependency)
 ```
 
