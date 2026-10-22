@@ -81,4 +81,11 @@ describe('vega-exact bounds', () => {
     b.add(0, 0)
     expect(b.empty()).toBe(false)
   })
+
+  it('a bezier extremum on y does not widen x (vega boundContext)', () => {
+    // the rounded corner of a tall rounded rect: its y extremum lies strictly inside the curve
+    const b = new Bounds()
+    boundLeaf(b, { path: 'M8,0L37,0C41.4,0,45,3.58,45,8L45,43.6C45,48,41.4,51.6,37,51.6L8,51.6C3.58,51.6,0,48,0,43.6L0,8C0,3.58,3.58,0,8,0Z', x: 0, y: 0 } as never)
+    expect([b.x1, b.y1, b.x2, b.y2]).toEqual([0, 0, 45, 51.6])
+  })
 })
