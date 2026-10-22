@@ -548,7 +548,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
         const yDef = p.fields.find((f) => f.channel === 'y' && f.axis !== null)
         if (!yDef || !perLayerScales[i]?.some((s) => s.name === `layer_${i}_y`)) return
         const isFirst = i === firstYLayer
-        const axisDefs = buildAxes([yDef], p.mark, p.orient, perLayerScales[i]!, `layer_${i}_y`, undefined, userConfig)
+        const axisDefs = buildAxes([yDef], axisMark(p.markRaw, p.mark), p.orient, perLayerScales[i]!, `layer_${i}_y`, undefined, userConfig)
         for (const a of axisDefs) {
           ;(a as Record<string, unknown>).scale = `layer_${i}_y`
           const gridAxis = (a as Record<string, unknown>).gridScale != null
@@ -584,9 +584,10 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const axisFields = base.fields.filter((f) => f.channel === ch).map((f) =>
       uniq.length > 1 ? ({ ...f, title: uniq.join(', ') } as FieldDef) : f,
     )
-    for (const a of buildAxes(axisFields, base.mark, base.orient, scales as ScaleSpec[], undefined, ch === 'x' && indepY ? `layer_${firstYLayer}_y` : undefined, userConfig)) axes.push(a)
+    for (const a of buildAxes(axisFields, axisMark(base.markRaw, base.mark), base.orient, scales as ScaleSpec[], undefined, ch === 'x' && indepY ? `layer_${firstYLayer}_y` : undefined, userConfig)) axes.push(a)
   }
-  if (axes.length) out.axes = axes
+  // every grid axis is emitted before any main axis (grids paint under the domains and labels)
+  if (axes.length) out.axes = [...axes.filter((a) => a.grid === true), ...axes.filter((a) => a.grid !== true)]
 
   // discrete-dimension sizing (after the scales are merged): the scale spans
   // steps and the view size is a signal over the domain cardinality
@@ -1039,7 +1040,13 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     if (Array.isArray(c.marks)) c.marks = (c.marks as Record<string, unknown>[]).map(remapFrom)
     return c
   }
-  const childMarks = (inner.marks as Record<string, unknown>[]).map(remapFrom)
+  // the facet child's marks carry the "child_" name prefix (vega-lite names a facet's child model that way)
+  const prefixNames = (m: Record<string, unknown>): Record<string, unknown> => ({
+    ...m,
+    ...(typeof m.name === 'string' && /^(marks|pathgroup|layer_\d+_.+)$/.test(m.name) ? { name: `child_${m.name}` } : {}),
+    ...(Array.isArray(m.marks) ? { marks: (m.marks as Record<string, unknown>[]).map(prefixNames) } : {}),
+  })
+  const childMarks = (inner.marks as Record<string, unknown>[]).map(remapFrom).map(prefixNames)
 
   const facetGroupby = [rowField, colField, wrapField].filter(Boolean) as string[]
   const datumRef = (f: string): string => `datum[${JSON.stringify(f)}]`
@@ -3488,6 +3495,9 @@ function defaultLabelAlign(angle: number, orient: string, channel: string): stri
 
 // --- axes --------------------------------------------------------------------
 
+/** The mark whose axis rules apply: an image mark is laid out as a rect but is not one. */
+const axisMark = (markRaw: unknown, mark: string): string => (isObject(markRaw) && markRaw.$image ? 'image' : mark)
+
 function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: ScaleSpec[], scaleName?: string, gridScaleOverride?: string, config?: Record<string, unknown>): Record<string, unknown>[] {
   // Vega-lite emits every grid axis before every label axis (paint order:
   // grids under the domain/labels). Emitting per-channel [grid, label] leaves a
@@ -3496,9 +3506,12 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
   const labelAxes: Record<string, unknown>[] = []
   const scaleByName = new Map(scales.map((s) => [s.name, s]))
 
-  for (const def of fields) {
+  // x axes come before y axes whatever the encoding order (vega-lite assembles x then y)
+  for (const def of [...fields].sort((a, b) => Number(a.channel !== 'x') - Number(b.channel !== 'x'))) {
     if (!POSITIONAL.has(def.channel) || (def.channel !== 'x' && def.channel !== 'y')) continue
     if (def.axis === null) continue
+    // a rect over a discrete field draws its axis above the cells (axis/properties.ts defaultZindex)
+    const axisZindex = mark === 'rect' && (isDiscreteType(def.type) || (def.type === 'quantitative' && def.bin)) ? 1 : 0
     // config.axis seeds both channels; config.axisX/axisY override it; the
     // channel's own axis definition wins last (vega-lite axis config cascade).
     const cfgAxis = isObject(config?.axis) ? (config!.axis as Record<string, unknown>) : {}
@@ -3519,6 +3532,9 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       ...(def.axis ?? {}),
     }
     if (userAxis.disable === true) continue
+    // the computed zindex is explicit in vega-lite's axis, so a config zindex (Vega config only) never replaces it
+    // (only the axis' own zindex and config.axisBand's, which vega-lite merges for band scales, count)
+    if ((!isObject(def.axis) || (def.axis as Record<string, unknown>).zindex === undefined) && axisBand?.zindex === undefined) delete userAxis.zindex
     const configTitleSupplied = (cfgAxis.title !== undefined || cfgChannelAxis.title !== undefined)
       && (!isObject(def.axis) || (def.axis as Record<string, unknown>).title === undefined)
     if (configTitleSupplied) delete (userAxis as Record<string, unknown>).title
@@ -3561,8 +3577,7 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
         maxExtent: 0,
         minExtent: 0,
         ticks: false,
-        // vega-lite: getFirstDefined(axis.zindex, 0) — grid behind marks
-        zindex: typeof userAxis.zindex === 'number' ? userAxis.zindex : 0,
+        zindex: axisZindex,
       }
       if (def.tu) {
         const stepExpr = timeUnitMinStepSignal(def.tu)
@@ -3571,7 +3586,7 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       // the user's grid-affecting props land on the grid axis too (upstream
       // merges grid+labels into one axis; ours splits them)
       if (userAxis) {
-        for (const gk of ['gridColor', 'gridWidth', 'gridDash', 'gridOpacity', 'gridCap', 'tickOffset', 'translate', 'tickBand', 'tickExtra', 'tickCount', 'tickMinStep', 'tickRound', 'values'] as const) {
+        for (const gk of ['gridColor', 'gridWidth', 'gridDash', 'gridOpacity', 'gridCap', 'tickOffset', 'translate', 'tickBand', 'tickExtra', 'tickCount', 'tickMinStep', 'tickRound', 'values', 'zindex'] as const) {
           if ((userAxis as Record<string, unknown>)[gk] !== undefined) gridAxis[gk] = (userAxis as Record<string, unknown>)[gk]
         }
       }
@@ -3583,16 +3598,11 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       scale: scaleName ?? def.channel,
       orient: orientSide,
       grid: false,
-      // vega-lite defaultZindex(): a rect mark over a discrete field puts its
-      // axis above the marks (zindex 1); otherwise 0. An explicit zindex wins.
-      zindex: typeof userAxis.zindex === 'number'
-        ? userAxis.zindex
-        : mark === 'rect' && (def.type === 'nominal' || def.type === 'ordinal' || (def.type === 'quantitative' && !!def.bin)) ? 1 : 0,
+      zindex: axisZindex,
     }
     if (title !== null) labelAxis.title = title
     if (isContinuousScaleType(sc.type)) {
       if (def.channel === 'x') labelAxis.labelFlush = true
-      labelAxis.labelOverlap = sc.type === 'log' ? 'greedy' : true
       // log axes carry no explicit tickCount — vega's axis defaults to 10,
       // which drives the log label filter (3/30/300 stay visible)
       if (sc.type !== 'log' && !suppressTickCount) labelAxis.tickCount = def.bin
@@ -3607,6 +3617,15 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       } else if (def.stack === 'normalize') {
         labelAxis.format = (config?.normalizedNumberFormat as string | undefined) ?? '.0%'
       }
+    }
+    // overlapping labels are thinned unless the field is categorical (axis/properties.ts defaultLabelOverlap)
+    if ((def.timeUnit && !isObject(def.sort)) || (def.type !== 'nominal' && def.type !== 'ordinal')) {
+      labelAxis.labelOverlap = sc.type === 'log' || sc.type === 'symlog' ? 'greedy' : true
+    }
+    // a time unit's duration is the smallest meaningful tick step, whatever the scale type
+    if (def.tu && labelAxis.tickMinStep === undefined) {
+      const stepExpr = timeUnitMinStepSignal(def.tu)
+      if (stepExpr) labelAxis.tickMinStep = { signal: stepExpr }
     }
     // vega-lite's getLabelAngle: an explicit/config labelAngle wins (normalized
     // into [0,360)); otherwise a nominal/ordinal x axis defaults to 270. The
@@ -3756,7 +3775,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     const opacity = markOpacity ?? (['point', 'circle', 'square', 'tick'].includes(mark) ? reducedOpacity : undefined)
     if (colorGradient) {
       lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
-      if (opacity != null) lg.encode = { gradient: { update: { opacity: { value: opacity } } } }
+      if (opacity) lg.encode = { gradient: { update: { opacity: { value: opacity } } } }
     } else {
       lg.symbolType = ['bar', 'rect', 'square'].includes(mark) ? 'square' : ['line', 'trail', 'rule'].includes(mark) ? 'stroke' : 'circle'
       // the mark's own paint and opacity ride along on the symbols (legend/encode.ts symbols())
@@ -3766,7 +3785,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       if (markStrokeWidth != null) symUpdate.strokeWidth = { value: markStrokeWidth }
       if (markStrokeDash != null) symUpdate.strokeDash = { value: markStrokeDash }
       if (markFillOpacity != null) symUpdate.fillOpacity = { value: markFillOpacity }
-      if (opacity != null) symUpdate.opacity = { value: opacity }
+      if (opacity) symUpdate.opacity = { value: opacity }
       if (Object.keys(symUpdate).length) lg.encode = { symbols: { update: symUpdate } }
     }
     applyTimeUnitLegend(lg, colorDef, userLegend, formats)
@@ -3827,7 +3846,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       if (mark === 'point') u.fill = { value: 'transparent' }
       if (!byColor) u.stroke = { value: markStroke ?? base }
     }
-    if (channel !== 'opacity' && opacity != null) u.opacity = { value: opacity }
+    if (channel !== 'opacity' && opacity) u.opacity = { value: opacity }
     return { symbolType: ['bar', 'rect', 'square'].includes(mark) ? 'square' : ['line', 'trail', 'rule'].includes(mark) ? 'stroke' : 'circle', update: u }
   }
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
@@ -4709,8 +4728,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const x2Off = markDefP?.x2Offset as number | undefined
   const y2Off = markDefP?.y2Offset as number | undefined
   // a secondary offset moves only its own endpoint and takes precedence over xOffset/yOffset there
-  if (x2Off !== undefined) withOffset('x2', x2Off)
-  if (y2Off !== undefined) withOffset('y2', y2Off)
+  // (the implicit baseline / stack-start endpoint of a bar or area is not an x2 / y2 channel and stays put)
+  if (x2Off !== undefined && fields.some((f) => f.channel === 'x2')) withOffset('x2', x2Off)
+  if (y2Off !== undefined && fields.some((f) => f.channel === 'y2')) withOffset('y2', y2Off)
   if (xOff !== undefined) for (const ch of ['x', 'x2', 'xc']) withOffset(ch, xOff)
   // a rule's baseline endpoint stays at zero; only its value endpoint shifts
   if (yOff !== undefined) for (const ch of mark === 'rule' ? ['y', 'yc'] : ['y', 'y2', 'yc']) withOffset(ch, yOff)
@@ -5358,7 +5378,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
       }
     }
   }
-  const axes = buildAxes(fields, mark, orient, out.scales as ScaleSpec[], undefined, undefined, userConfig)
+  const axes = buildAxes(fields, axisMark(markRaw, mark), orient, out.scales as ScaleSpec[], undefined, undefined, userConfig)
   if (axes.length) out.axes = axes
   const legends = buildUnitLegends(spec, fields, mark, markRaw)
   if (legends.length) out.legends = legends

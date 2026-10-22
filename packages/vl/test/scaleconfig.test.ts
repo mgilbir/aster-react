@@ -160,3 +160,45 @@ describe('width / height: "container"', () => {
     expect(() => compileFrozen({ data: DATA, hconcat: [{ width: 'container', mark: 'point', encoding: { x: xq, y: yq } }] })).toThrow(/container/)
   })
 })
+
+describe('axes and legends follow vega-lite (strict-oracle findings)', () => {
+  const axes = (vg: any): any[] => vg.axes
+  it('emits every grid axis before the main axes, x before y', () => {
+    const vg = compileFrozen({ data: DATA, mark: 'point', encoding: { y: yq, x: xq } })
+    expect(axes(vg).map((a) => `${a.scale}:${a.grid}`)).toEqual(['x:true', 'y:true', 'x:false', 'y:false'])
+  })
+  it('lifts the axis of a rect over discrete fields above the cells', () => {
+    const vg = compileFrozen({ data: DATA, mark: 'rect', encoding: { x: cn, y: { field: 'g', type: 'nominal' } } })
+    expect(axes(vg).map((a) => a.zindex)).toEqual([1, 1])
+  })
+  it('keeps the computed zindex against config.axis, but honours the axis own and config.axisBand', () => {
+    const enc = { x: cn, y: yq }
+    const cfg = (c: unknown, x: unknown = cn) => compileFrozen({ data: DATA, mark: 'bar', encoding: { x, y: yq }, config: c })
+    expect(axes(cfg({ axis: { zindex: 8 } })).map((a) => a.zindex)).toEqual([0, 0, 0])
+    expect(axes(cfg({ axisBand: { zindex: 8 } })).find((a) => a.scale === 'x').zindex).toBe(8)
+    const own = compileFrozen({ data: DATA, mark: 'bar', encoding: { ...enc, y: { ...yq, axis: { zindex: 3 } } } })
+    expect(axes(own).find((a) => a.scale === 'y' && !a.grid).zindex).toBe(3)
+  })
+  it('a time-unit axis thins overlapping labels even on a band scale', () => {
+    const vg = compileFrozen({ data: DATA, mark: 'bar', encoding: { x: { field: 't', type: 'ordinal', timeUnit: 'month' }, y: yq } })
+    const x = axes(vg).find((a) => a.scale === 'x' && !a.grid)
+    expect(x.labelOverlap).toBe(true)
+    expect(x.tickMinStep).toBeDefined()
+  })
+  it('a falsy mark opacity adds nothing to the legend symbols', () => {
+    const lg = compileFrozen({ data: DATA, mark: { type: 'arc', opacity: 0 }, encoding: { theta: yq, color: cn } }).legends[0]
+    expect(lg.encode).toBeUndefined()
+  })
+  it('y2Offset moves an explicit y2 only', () => {
+    const none = marksUpdate(compileFrozen({ data: DATA, mark: { type: 'bar', y2Offset: 5 }, encoding: { x: cn, y: yq } }))
+    expect(none.y2.offset).toBeUndefined()
+    const some = marksUpdate(compileFrozen({ data: DATA, mark: { type: 'rule', y2Offset: 5 }, encoding: { x: xq, y: yq, y2: { field: 'v' } } }))
+    expect(some.y2.offset).toBe(5)
+  })
+  it('names a facet child mark with the child_ prefix', () => {
+    const vg = compileFrozen({ data: DATA, facet: { column: { field: 'g', type: 'nominal', header: { labelFontStyle: 'italic' } } }, spec: { mark: 'point', encoding: { x: xq, y: yq } } })
+    const cell = vg.marks.find((m: any) => m.name === 'cell')
+    expect(cell.marks[0].name).toBe('child_marks')
+    expect(vg.marks.find((m: any) => m.name === 'column_header').title.fontStyle).toBe('italic')
+  })
+})
