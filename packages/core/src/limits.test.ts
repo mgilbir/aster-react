@@ -117,6 +117,29 @@ describe('the meter is ambient, nests, and a swallowed violation still fails the
   })
 })
 
+describe('the session no-op cache honours scene-affecting inputs', () => {
+  const img = { width: 50, height: 50, data: [{ name: 't', values: [{ u: 'https://evil.test/p.gif' }] }],
+    marks: [{ type: 'image', from: { data: 't' }, encode: { update: { url: { field: 'u' }, x: { value: 1 }, y: { value: 1 }, width: { value: 5 }, height: { value: 5 } } } }] } as unknown as VgSpec
+
+  it('a tightened urlPolicy on the same spec and data does not return the cached scene', () => {
+    const session = createChartSession()
+    const loose = { allow: () => true }
+    const first = session.evaluate(img, { urlPolicy: loose })
+    expect(session.evaluate(img, { urlPolicy: loose })).toBe(first) // the cache still works
+    const tight = { allow: () => false }
+    expect(() => session.evaluate(img, { urlPolicy: tight })).toThrow(/refused by the allow hook/)
+    // and relaxing it again re-evaluates against the policy rather than serving a stale rejection
+    expect(session.evaluate(img, { urlPolicy: { allow: () => true } })).toBeTruthy()
+  })
+
+  it('a tightened maxGeneratedRows on the same spec and data does not return the cached scene', () => {
+    const session = createChartSession()
+    const spec = { width: 10, height: 10, data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop: 500, as: 'x' }] }] } as unknown as VgSpec
+    expect(session.evaluate(spec, { limits: { maxGeneratedRows: 1000 } })).toBeTruthy()
+    expect(lim(() => session.evaluate(spec, { limits: { maxGeneratedRows: 100 } })).message).toMatch(/maxGeneratedRows/)
+  })
+})
+
 describe('generated rows are budgeted cumulatively (maxGeneratedRows)', () => {
   it('two sequences that each fit maxRows but not together', () => {
     const spec = { data: [

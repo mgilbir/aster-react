@@ -167,7 +167,12 @@ renderSpec(spec, { urlPolicy: {
   defaults apply (the spec is untrusted): `http:`, `https:`, `data:` and relative
   URLs only, no credentials; anything else throws `AsterUrlError` (or is dropped
   when `onDeny` is set).
-- With neither, nothing changes: the host trusts its own specs.
+- With neither, images are not vetted. That is parity with Vega, which draws any
+  `url`, and an SVG `<image>` cannot execute script, so `javascript:` is not an
+  injection vector there. **Residual risk:** a spec can still make the viewer's
+  browser request an arbitrary URL (a tracking pixel, an IP leak, a request to an
+  internal address the viewer can reach). If you render specs you did not write,
+  pass `limits` (which turns the defaults on) or a `urlPolicy` with `allow`.
 - `allow` for images is synchronous. A relative URL needs `baseURL` once `allow`
   is set (fail closed).
 - `<Chart>` does not forward `urlPolicy` yet; set it where you call

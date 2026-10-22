@@ -155,6 +155,8 @@ function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   parts.push(`w=${valueKey(input.width)}`, `h=${valueKey(input.height)}`)
   if (input.textMetrics) parts.push(`tm=#${refId(input.textMetrics)}`)
   if (input.limits) parts.push(`lim=${valueKey(input.limits)}`)
+  // image urls are vetted while the scene is built: a different policy can reject a scene a looser one accepted
+  if (input.urlPolicy) parts.push(`up=${valueKey(input.urlPolicy)}`)
   for (const name of Object.keys(input.domainRaw ?? {}).sort()) {
     parts.push(`d ${name}=${valueKey(input.domainRaw![name])}`)
   }

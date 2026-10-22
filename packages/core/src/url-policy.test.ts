@@ -37,7 +37,7 @@ describe('image url policy (C93)', () => {
     }
   })
 
-  it('without limits and without a policy the host trusts its spec (unchanged behaviour)', () => {
+  it('with neither limits nor a policy images are drawn as given (Vega parity; documented residual risk)', () => {
     expect(renderSpec(imageSpec('javascript:alert(1)'))).toContain('javascript:alert(1)')
   })
 

@@ -12,7 +12,7 @@
  * checks it over the whole conformance corpus. The one deliberate exception is
  * `denseMarks`, which batches symbols into chunked paths.
  */
-import { SYMBOL_DEFAULT_SIZE } from './util.js'
+import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { ClipCollector } from './svg-defs.js'
 import {
@@ -572,7 +572,7 @@ function groupDescs(group: SceneGroup, frameW: number, frameH: number, clips: Cl
     for (const item of group.items ?? []) {
       const isGroup = (item as SceneGroup).marktype !== undefined || Array.isArray((item as SceneGroup).items)
       if (isGroup) {
-        children.push(...groupDescs(item as SceneGroup, gw, gh, clips, options))
+        pushAll(children, groupDescs(item as SceneGroup, gw, gh, clips, options))
         continue
       }
       let d = cachedDesc(item, () => leafDesc(item))
@@ -609,7 +609,7 @@ export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {})
   const children: DomDesc[] = []
   if (scene.background) children.push({ tag: 'rect', attrs: pairs((w) => backgroundRectAttrs(scene, w)) })
   const marks: DomDesc[] = []
-  for (const n of scene.items ?? []) marks.push(...groupDescs(n, plotW, plotH, clips, options))
+  for (const n of scene.items ?? []) pushAll(marks, groupDescs(n, plotW, plotH, clips, options))
   children.push(g('g', pairs((w) => viewGroupAttrs(scene, w)), [
     g('g', [
       ['class', 'mark-group role-frame root'],

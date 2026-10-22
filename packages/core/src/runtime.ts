@@ -438,8 +438,11 @@ function prepareChartCtx(
     datasetPulses: new Map(),
     prev: txn.prev, draft: newState(txn.gen), gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
-    // No policy given: a spec rendered under `limits` is untrusted, so the
-    // default image policy applies; without limits the host owns its specs.
+    // Image urls are vetted when the host passes a policy, and with the default
+    // policy whenever it passes `limits` (limits mean "this spec is untrusted").
+    // With neither they are drawn as given, as Vega does: an SVG <image> cannot
+    // run script, but a hostile spec can still make the viewer fetch an arbitrary
+    // url (tracking pixel, IP leak). Hosts rendering foreign specs must opt in.
     urlPolicy: input.urlPolicy ?? (input.limits ? {} : undefined),
   }
   // A legend whose tickCount is an interval string on a non-time scale makes

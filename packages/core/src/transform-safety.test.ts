@@ -186,19 +186,19 @@ describe('C42: data-sized arrays never go through argument spread', () => {
     expect(sink.length).toBe(N)
   })
 
-  it('the source has no Math.min/max(...x) or push(...x) left in packages/*/src (dom/canvas/hit excluded: other lanes)', () => {
+  it('the source has no Math.min/max(...x) or push(...x) left in packages/*/src ', () => {
     const root = join(here, '..', '..')
     const offenders: string[] = []
     const walk = (dir: string): void => {
       for (const e of readdirSync(dir, { withFileTypes: true })) {
         const p = join(dir, e.name)
         if (e.isDirectory()) { if (e.name !== 'node_modules' && e.name !== 'dist') walk(p) }
-        else if (/\.(ts|tsx)$/.test(e.name) && !/\.test\.|\.testkit\./.test(e.name) && !/^(dom|canvas|hit)\.ts$/.test(e.name)) {
+        else if (/\.(ts|tsx)$/.test(e.name) && !/\.test\.|\.testkit\./.test(e.name)) {
           readFileSync(p, 'utf8').split('\n').forEach((line, i) => {
             if (/^\s*(\*|\/\/|\/\*)/.test(line) || /\.\.\.args\b/.test(line)) return // comments; builtin argument lists
             if (/Math\.(min|max)\(\s*(0,\s*)?\.\.\./.test(line)) offenders.push(`${p}:${i + 1}`)
-            // small, spec-bounded spreads: path tokens, a CSS selector split, vl cast lists
-            else if (/\.(push|unshift)\(\s*\.\.\.[A-Za-z_]/.test(line) && !/\.\.\.(tok\.n|d\.casts|pre)\b|\.\.\.(\w+\.)?split\(/.test(line)) offenders.push(`${p}:${i + 1}`)
+            // the only allowlisted spreads: @aster/vl cast lists (small, spec-bounded; that package is another lane)
+            else if (/\.(push|unshift)\(\s*\.\.\.[A-Za-z_]/.test(line) && !/\.\.\.(d\.casts|pre)\b/.test(line)) offenders.push(`${p}:${i + 1}`)
           })
         }
       }

@@ -84,7 +84,7 @@ export function checkBasicUrl(raw: string, policy: UrlPolicyBase, defaults: read
  * (only when `onDeny` is set); otherwise a denial throws {@link AsterUrlError}.
  */
 export function applyImageUrlPolicy(raw: unknown, policy: ImageUrlPolicy | undefined): unknown {
-  // No policy at all: the host trusts its specs (the default outside `limits`).
+  // No policy at all (and no `limits`): drawn as given, like Vega. Residual risk: tracking pixels / IP leaks (docs/LIMITS.md).
   if (raw == null || policy === undefined) return raw
   const text = String(raw)
   try {
