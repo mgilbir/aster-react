@@ -467,14 +467,6 @@ function prepareChartCtx(
     // url (tracking pixel, IP leak). Hosts rendering foreign specs must opt in.
     urlPolicy: input.urlPolicy ?? (input.limits ? {} : undefined),
   }
-  // The registry outlives the evaluation (scenes keep the transform contexts that
-  // hold it), so it must not keep the evaluation context - and with it every
-  // dataset of the evaluation - alive.
-  const selfRef = new WeakRef(ctx)
-  ;(ctx.projections as ProjectionRegistry).refresh = (name) => {
-    const live = selfRef.deref()
-    if (live) refreshProjection(live, name)
-  }
   // A legend whose tickCount is an interval string on a non-time scale makes
   // vega's LegendEntries throw: the dataflow logs the error and the ViewLayout
   // transform never runs — the whole scene renders at raw encode positions
@@ -2783,6 +2775,20 @@ function normalizePulse(p: StepPulse, rowCount: number): StepPulse {
 }
 
 function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): void {
+  // While datasets build, a transform asking for a projection that fits data gets it
+  // refreshed against the datasets built so far. The registry outlives the evaluation
+  // (scenes keep the transform contexts holding it), so the hook is bound only for this
+  // call and never leaves the evaluation context reachable from it.
+  const registry = ctx.projections as ProjectionRegistry
+  if (ctx.chart.projections?.some((p) => p.fit)) registry.refresh = (name) => refreshProjection(ctx, name)
+  try {
+    buildDatasetsOf(ctx, inputData)
+  } finally {
+    registry.refresh = undefined
+  }
+}
+
+function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>): void {
   ctx.dsEpoch++
   const sources = new Map<string, CompiledChart['data'][number]>()
   for (const d of ctx.chart.data) sources.set(d.name, d)
@@ -3110,7 +3116,18 @@ function claim(ctx: EvalContext, key: string): boolean {
  * into a field literally named `properties.v` and refers to it as `properties\\.v`.)
  */
 function getField(row: Row, path: string): unknown {
-  if (path.indexOf('.') < 0 && path.indexOf('[') < 0 && path.indexOf('\\') < 0) return row[path]
+  if (plainFields.has(path)) return row[path]
+  return getFieldSlow(row, path)
+}
+
+/** Field names known to need no path parsing (a hot-path shortcut; bounded, spec-supplied names). */
+const plainFields = new Set<string>()
+
+function getFieldSlow(row: Row, path: string): unknown {
+  if (path.indexOf('.') < 0 && path.indexOf('[') < 0 && path.indexOf('\\') < 0) {
+    if (plainFields.size < 512) plainFields.add(path)
+    return row[path]
+  }
   return scaleFieldOf(path)(row)
 }
 
