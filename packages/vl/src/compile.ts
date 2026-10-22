@@ -1967,10 +1967,77 @@ function checkConstChannels(mark: string, encoding: Record<string, unknown>): vo
 function parseEncodingFields(encoding: Record<string, unknown>): FieldDef[] {
   const fields: FieldDef[] = []
   for (const [channel, def] of Object.entries(encoding)) {
-    const f = parseChannel(channel, def)
-    if (f) fields.push(f)
+    // detail / order / tooltip accept a list of definitions
+    for (const d of Array.isArray(def) ? def : [def]) {
+      const f = parseChannel(channel, d)
+      if (f) fields.push(f)
+    }
   }
   return fields
+}
+
+/**
+ * vega-lite `getSort`: the mark's item order. The `order` channel sorts by its
+ * fields (when the view is not stacked: there it orders the stack instead);
+ * line/area/trail sort by their dimension channel's position.
+ */
+function markSort(spec: VLSpec, fields: FieldDef[], mark: string, orient: string): Record<string, unknown> | undefined {
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+  const orderRaw = enc.order
+  if (isObject(orderRaw) && orderRaw.value !== undefined && (orderRaw.value === null || orderRaw.value === false)) return undefined
+  if (orderRaw === undefined && (md.order === false || md.order === null)) return undefined
+  const orderDefs = fields.filter((f) => f.channel === 'order' && f.field && !f.datumOnly)
+  const stacked = fields.some((f) => isStacked(f, mark, orient, fields))
+  if (orderDefs.length && !stacked) {
+    return { field: orderDefs.map((f) => dref(aggFieldName(f))), order: orderDefs.map((f) => (f.sort === 'descending' ? 'descending' : 'ascending')) }
+  }
+  if (mark === 'line' || mark === 'area' || mark === 'trail') {
+    const dim = orient === 'horizontal' ? 'y' : 'x'
+    if (fields.some((f) => f.channel === dim && !f.datumOnly)) return { field: dim }
+  }
+  return undefined
+}
+
+/**
+ * vega-lite `pathGroupingFields`: the fields that split a line/area/trail into one path each,
+ * in encoding order (position, text/shape/angle/tooltip/href never group).
+ */
+function pathGroupingKeys(spec: VLSpec, fields: FieldDef[], mark: string): string[] {
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  const out: string[] = []
+  const add = (n: string): void => {
+    if (!out.includes(n)) out.push(n)
+  }
+  for (const ch of Object.keys(enc)) {
+    const defs = fields.filter((f) => f.channel === ch && !f.datumOnly && f.field)
+    switch (ch) {
+      case 'xOffset': case 'yOffset': {
+        const offsetDef = defs[0]
+        const mainDef = fields.find((f) => f.channel === (ch === 'xOffset' ? 'x' : 'y') && !f.datumOnly)
+        if (offsetDef && mainDef && !mainDef.aggregate && !offsetDef.aggregate && aggFieldName(mainDef) !== aggFieldName(offsetDef)) add(aggFieldName(mainDef))
+        break
+      }
+      case 'order':
+        if (mark === 'line' || mark === 'trail') break
+        for (const d of defs) if (!d.aggregate) add(aggFieldName(d))
+        break
+      case 'detail': case 'key':
+        for (const d of defs) if (!d.aggregate) add(aggFieldName(d))
+        break
+      case 'size':
+        if (mark === 'trail') break
+      // falls through
+      case 'color': case 'fill': case 'stroke': case 'opacity': case 'fillOpacity': case 'strokeOpacity': case 'strokeDash': case 'strokeWidth': {
+        const d = defs[0]
+        if (d && !d.aggregate) add(aggFieldName(d))
+        break
+      }
+      default:
+        break
+    }
+  }
+  return out
 }
 
 /** vega-lite `defaultType` + `getFullName`: the field's type, inferred when absent. */
@@ -2247,13 +2314,15 @@ function makeCtx(top: VLSpec): CompileCtx {
     },
     addLookupSource(def: Record<string, unknown>): string {
       const entry = dataSource(def, datasets)
-      // a bare named dataset is the host-supplied (or main) dataset of that name
-      if (typeof entry.name === 'string' && entry.values === undefined && entry.url === undefined) {
-        if (!lookups.has(entry.name)) lookups.set(entry.name, { ...entry })
-        return entry.name
+      // a NAMED source keeps its name (hosts key data on it; a bare name is the
+      // host-supplied or main dataset of that name); an anonymous one is named by content
+      const name = typeof entry.name === 'string' ? entry.name : `lookup_${hashString(JSON.stringify(entry))}`
+      const have = lookups.get(name)
+      const next: Record<string, unknown> = { ...entry, name }
+      if (have && JSON.stringify(have) !== JSON.stringify(next) && (have.values !== undefined || have.url !== undefined) && (next.values !== undefined || next.url !== undefined)) {
+        throw new VLCompileError(`two lookups declare different data under the name "${name}"`)
       }
-      const name = `lookup_${hashString(JSON.stringify(entry))}`
-      if (!lookups.has(name)) lookups.set(name, { ...entry, name })
+      if (!have || (have.values === undefined && have.url === undefined)) lookups.set(name, next)
       return name
     },
   }
@@ -3048,11 +3117,15 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
   const numericAggregate = colorDef?.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(colorDef.aggregate)
   if (colorDef) {
     if (isDiscreteType(colorDef.type) && !numericAggregate) {
+      // nominal colours are categorical; an ORDINAL field gets vega-lite's sequential
+      // 'ordinal' ramp, interpolated in hcl
+      const ordinalColor = colorDef.type === 'ordinal'
       scales.push({
         name: 'color',
         type: 'ordinal',
         domain: sortedDomain(colorDef, dataName, dc),
-        range: (colorDef.scale?.range as unknown) ?? (colorDef.scale?.scheme != null ? schemeRange(colorDef.scale.scheme) : 'category'),
+        range: (colorDef.scale?.range as unknown) ?? (colorDef.scale?.scheme != null ? schemeRange(colorDef.scale.scheme) : ordinalColor ? 'ordinal' : 'category'),
+        ...(ordinalColor ? { interpolate: 'hcl' } : {}),
       })
     } else {
       const cs = colorDef.scale ?? {}
@@ -3575,11 +3648,14 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
   // vl.compile with permuted encodings.
   const legendsByKey: Record<string, Record<string, unknown>> = {}
   const order: string[] = []
-  const push = (key: string, lg: Record<string, unknown>): void => {
+  const legendDefs: Record<string, FieldDef> = {}
+  const push = (key: string, lg: Record<string, unknown>, def: FieldDef): void => {
     legendsByKey[key] = lg
+    legendDefs[key] = def
     order.push(key)
   }
   const colorDef = fields.find((f) => f.channel === 'color' && f.field)
+  const colorLegendShown = !!colorDef && colorDef.legend !== null && !legendSuppressed(colorDef)
   if (colorDef && colorDef.legend !== null && !legendSuppressed(colorDef)) {
     const userLegend = { ...cfgDefaults, ...(colorDef.legend ?? {}) }
     const lg: Record<string, unknown> = { title: legendTitle(colorDef, userLegend) }
@@ -3696,7 +3772,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
         lg.direction = 'horizontal'
       }
     }
-    push('color', lg)
+    push('color', lg, colorDef)
   }
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
   if (sizeDef && sizeDef.legend !== null && !legendSuppressed(sizeDef)) {
@@ -3713,7 +3789,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       }
       applyTimeUnitLegend(glg, sizeDef, sizeUser)
       forwardLegendProps(sizeUser, glg, true)
-      push('size', glg)
+      push('size', glg, sizeDef)
     } else {
     const sizeSymbolOpacity = sizeUser.symbolOpacity as number | undefined
     const sizeSymUpdate: Record<string, unknown> = { fill: { value: 'transparent' } }
@@ -3728,7 +3804,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     applyTimeUnitLegend(sizeLg, sizeDef, sizeUser)
     forwardLegendProps(sizeUser, sizeLg, false)
     if (sizeLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) sizeLg.direction = 'horizontal'
-    push('size', sizeLg)
+    push('size', sizeLg, sizeDef)
     }
   }
   const shapeDefL = fields.find((f) => f.channel === 'shape' && f.field)
@@ -3738,12 +3814,12 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       shape: 'shape',
       symbolType: 'circle',
       title: legendTitle(shapeDefL, shapeUser),
-      encode: { symbols: { update: { fill: { value: 'transparent' }, stroke: { value: C.blue }, opacity: { value: markOpacity ?? reducedOpacity ?? 1 } } } },
+      encode: { symbols: { update: { fill: { value: 'transparent' }, ...(colorLegendShown ? {} : { stroke: { value: C.blue } }), opacity: { value: markOpacity ?? reducedOpacity ?? 1 } } } },
     }
     applyTimeUnitLegend(shapeLg, shapeDefL, shapeUser)
     forwardLegendProps(shapeUser, shapeLg, false)
     if (shapeLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) shapeLg.direction = 'horizontal'
-    push('shape', shapeLg)
+    push('shape', shapeLg, shapeDefL)
   }
   const strokeWidthLegendDef = fields.find((f) => f.channel === 'strokeWidth' && f.field)
   if (strokeWidthLegendDef && strokeWidthLegendDef.legend !== null && !legendSuppressed(strokeWidthLegendDef)) {
@@ -3758,6 +3834,8 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
           : mark === 'point'
             ? { fill: { value: 'transparent' }, stroke: { value: markStroke ?? C.blue }, opacity: { value: markOpacity ?? reducedOpacity ?? 1 } }
             : { fill: { value: C.blue }, stroke: { value: markStroke ?? C.blue }, opacity: { value: markOpacity ?? reducedOpacity ?? 1 } }
+    // a colour legend beside it already shows the stroke: the default stroke is dropped
+    if (colorLegendShown && mark === 'point') delete swUpdate.stroke
     const swLg: Record<string, unknown> = {
       strokeWidth: 'strokeWidth',
       symbolType: mark === 'line' ? 'stroke' : mark === 'bar' || mark === 'square' ? 'square' : 'circle',
@@ -3767,7 +3845,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     applyTimeUnitLegend(swLg, strokeWidthLegendDef, swUser)
     forwardLegendProps(swUser, swLg, false)
     if (swLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) swLg.direction = 'horizontal'
-    push('strokeWidth', swLg)
+    push('strokeWidth', swLg, strokeWidthLegendDef)
   }
   const opacityLegendDef = fields.find((f) => f.channel === 'opacity' && f.field)
   if (opacityLegendDef && opacityLegendDef.legend !== null && !legendSuppressed(opacityLegendDef)) {
@@ -3776,15 +3854,27 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       opacity: 'opacity',
       symbolType: 'circle',
       title: legendTitle(opacityLegendDef, opUser),
-      encode: { symbols: { update: { fill: { value: 'transparent' }, stroke: { value: C.blue } } } },
+      encode: { symbols: { update: { fill: { value: 'transparent' }, ...(colorLegendShown ? {} : { stroke: { value: C.blue } }) } } },
     }
     applyTimeUnitLegend(opLg, opacityLegendDef, opUser)
     forwardLegendProps(opUser, opLg, false)
     if (opLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) opLg.direction = 'horizontal'
-    push('opacity', opLg)
+    push('opacity', opLg, opacityLegendDef)
+  }
+  // legends over the SAME field (a colour and a shape both on `c`) are one legend
+  const sigOf = (d: FieldDef): string => JSON.stringify([d.source, d.aggregate ?? null, d.bin ? 1 : 0, d.timeUnit ?? null, channelTitle(d)])
+  const merged = new Map<string, string>()
+  for (const key of order) {
+    const sig = sigOf(legendDefs[key]!)
+    const into = merged.get(sig)
+    if (into !== undefined && legendsByKey[into]!.orient === legendsByKey[key]!.orient) {
+      mergeLegend(legendsByKey[into]!, legendsByKey[key]!)
+      delete legendsByKey[key]
+    } else if (into === undefined) merged.set(sig, key)
   }
   for (const key of order) {
-    const lg = legendsByKey[key]!
+    const lg = legendsByKey[key]
+    if (!lg) continue
     // top/bottom legends of every channel lay their entries out horizontally
     if ((lg.orient === 'top' || lg.orient === 'bottom') && lg.direction == null) lg.direction = 'horizontal'
     // vega-lite's legend labelExpr is a label text encode (vega has no such legend property)
@@ -3912,6 +4002,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       update[`cornerRadius${b}`] = { value: cornerRadiusEnd }
     }
     if (mark === 'bar') update.ariaRoleDescription = { value: 'bar' }
+    const binSp = binGeometry(spec, mark)
     const stacked = yDef && isStacked(yDef, mark, orient, fields)
     if (orient === 'vertical') {
       if (xDef) {
@@ -3926,21 +4017,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
           update.width = { value: (cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize }
         } else if (xDef.timeUnit && sc !== 'band') {
-          const endF = JSON.stringify(timeUnitField(xDef) + '_end')
-          const startF = JSON.stringify(timeUnitField(xDef))
-          const scName = 'x'
-          const off = (sign: string) =>
-            `0.5 + (abs(scale("${scName}", datum[${endF}]) - scale("${scName}", datum[${startF}])) < 0.25 ? ${sign}0.5 * (0.25 - (abs(scale("${scName}", datum[${endF}]) - scale("${scName}", datum[${startF}])))) : ${sign === '+' ? '-0.5' : '0.5'})`
-          update.x = { scale: 'x', field: JSON.parse(endF), offset: { signal: off('+') } }
-          update.x2 = { scale: 'x', field: JSON.parse(startF), offset: { signal: off('-') } }
+          setBinnedRect(update, 'x', timeUnitField(xDef), `${timeUnitField(xDef)}_end`, binSp.spacing, binSp.minBandSize)
         } else if (xDef.bin) {
           const bn = binNames(xDef.binParams!, xDef.field)
-          const endF = JSON.stringify(bn.end)
-          const startF = JSON.stringify(bn.start)
-          const off = (sign: string) =>
-            `0.5 + (abs(scale("x", datum[${endF}]) - scale("x", datum[${startF}])) < 0.25 ? ${sign}0.5 * (0.25 - (abs(scale("x", datum[${endF}]) - scale("x", datum[${startF}])))) : ${sign === '+' ? '-0.5' : '0.5'})`
-          update.x = { scale: 'x', field: JSON.parse(endF), offset: { signal: off('+') } }
-          update.x2 = { scale: 'x', field: JSON.parse(startF), offset: { signal: off('-') } }
+          setBinnedRect(update, 'x', bn.start, bn.end, binSp.spacing, binSp.minBandSize)
         } else if (sc === 'band') {
           // BarConfig band alignment/size (probed): align 'right' anchors
           // the bar with x2 at the band position; a size/discreteBandSize
@@ -3990,6 +4070,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         if (y2DefB) {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
           update.y2 = { scale: 'y', field: y2DefB.field }
+        } else if (mark === 'rect' && (yDef.bin || (yDef.timeUnit && positionalScaleType(mark, yDef) !== 'band'))) {
+          // a rect's second dimension may be binned too (2d heatmaps)
+          if (yDef.bin) {
+            const bn = binNames(yDef.binParams!, yDef.field)
+            setBinnedRect(update, 'y', bn.start, bn.end, binSp.spacing, binSp.minBandSize)
+          } else setBinnedRect(update, 'y', timeUnitField(yDef), `${timeUnitField(yDef)}_end`, binSp.spacing, binSp.minBandSize)
         } else if (stacked) {
           update.y = { scale: 'y', field: `${aggFieldName(yDef)}_end` }
           update.y2 = { scale: 'y', field: `${aggFieldName(yDef)}_start` }
@@ -4029,20 +4115,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
           update.height = { value: (cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize }
         } else if (yDef.timeUnit && sc !== 'band') {
-          const endF = JSON.stringify(timeUnitField(yDef) + '_end')
-          const startF = JSON.stringify(timeUnitField(yDef))
-          const off = (sign: string) =>
-            `0.5 + (abs(scale("y", datum[${endF}]) - scale("y", datum[${startF}])) < 0.25 ? ${sign}0.5 * (0.25 - (abs(scale("y", datum[${endF}]) - scale("y", datum[${startF}])))) : ${sign === '+' ? '-0.5' : '0.5'})`
-          update.y = { scale: 'y', field: JSON.parse(endF), offset: { signal: off('+') } }
-          update.y2 = { scale: 'y', field: JSON.parse(startF), offset: { signal: off('-') } }
+          setBinnedRect(update, 'y', timeUnitField(yDef), `${timeUnitField(yDef)}_end`, binSp.spacing, binSp.minBandSize)
         } else if (yDef.bin) {
           const bn = binNames(yDef.binParams!, yDef.field)
-          const endF = JSON.stringify(bn.end)
-          const startF = JSON.stringify(bn.start)
-          const off = (sign: string) =>
-            `0.5 + (abs(scale("y", datum[${endF}]) - scale("y", datum[${startF}])) < 0.25 ? ${sign}0.5 * (0.25 - (abs(scale("y", datum[${endF}]) - scale("y", datum[${startF}])))) : ${sign === '+' ? '-0.5' : '0.5'})`
-          update.y = { scale: 'y', field: JSON.parse(endF), offset: { signal: off('+') } }
-          update.y2 = { scale: 'y', field: JSON.parse(startF), offset: { signal: off('-') } }
+          setBinnedRect(update, 'y', bn.start, bn.end, binSp.spacing, binSp.minBandSize)
         } else if (sc === 'band') {
           const yAlignH = (markDef?.baseline ?? cfgType?.baseline ?? cfgMark?.baseline) as string | undefined
           const hExplicitSize = (((mark === 'bar' ? markDef?.size : undefined)
@@ -4083,6 +4159,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           // an explicit x2 field: the bar spans x → x2 (ranged bar)
           update.x = { scale: 'x', field: aggFieldName(xDef) }
           update.x2 = { scale: 'x', field: aggFieldName(x2Field) }
+        } else if (mark === 'rect' && (xDef.bin || (xDef.timeUnit && positionalScaleType(mark, xDef) !== 'band'))) {
+          if (xDef.bin) {
+            const bn = binNames(xDef.binParams!, xDef.field)
+            setBinnedRect(update, 'x', bn.start, bn.end, binSp.spacing, binSp.minBandSize)
+          } else setBinnedRect(update, 'x', timeUnitField(xDef), `${timeUnitField(xDef)}_end`, binSp.spacing, binSp.minBandSize)
         } else if (stackedX) {
           update.x = { scale: 'x', field: `${aggFieldName(xDef)}_end` }
           update.x2 = { scale: 'x', field: `${aggFieldName(xDef)}_start` }
@@ -4581,19 +4662,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   // order: an explicit order channel wins; otherwise vega-lite sorts a
   // line/area by its dimension channel NAME (Vega then sorts scene items by
   // that item position), not by the datum field. Trail sorts by x (probed).
-  const orderDef = fields.find((f) => f.channel === 'order' && f.field)
-  const lineSortFields = orderDef ? [aggFieldName(orderDef)] : []
-  const lineSortOrders = [orderDef?.sort === 'descending' ? 'descending' : 'ascending']
-  if (mark === 'line' || mark === 'area') {
-    if (orderDef) {
-      markSpec.sort = { field: [aggFieldName(orderDef)], order: [orderDef.sort === 'descending' ? 'descending' : 'ascending'] }
-    } else {
-      markSpec.sort = { field: orient === 'vertical' ? 'x' : 'y' }
-    }
-  }
-  if (mark === 'trail') {
-    markSpec.sort = { field: orient === 'horizontal' ? 'y' : 'x' }
-  }
+  const markSortSpec = markSort(spec, fields, mark, orient)
+  if (markSortSpec) markSpec.sort = markSortSpec
 
   const out: BuiltMarks = [markSpec]
 
@@ -4649,51 +4719,15 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
   }
 
-  // area with a series channel: one faceted area per series (pathgroup) —
-  // vega-lite emits this for stacked and unstacked areas alike
-  const colorDefSeries = fields.find((f) => f.channel === 'color' && f.field && !f.datumOnly)
-  const detailDefSeries = fields.find((f) => f.channel === 'detail' && f.field && !f.datumOnly)
-  const seriesForFacet = [colorDefSeries, detailDefSeries].find((f) => f != null && !f.aggregate)
-  const stackedNow = (yDef != null && isStacked(yDef, mark, orient, fields)) || (xDef != null && isStacked(xDef, mark, orient, fields))
-  if (mark === 'area' && seriesForFacet) {
-    markSpec.name = 'layer_0_marks'
-    const group: Record<string, unknown> = {
-      name: 'pathgroup',
-      type: 'group',
-      from: {
-        facet: {
-          name: 'faceted_path_main',
-          data: dataName,
-          groupby: [aggFieldName(seriesForFacet)],
-        },
-      },
-      encode: {
-        update: {
-          width: { field: { group: 'width' } },
-          height: { field: { group: 'height' } },
-        },
-      },
-      marks: [{
-        name: 'marks',
-        type: 'area',
-        style: ['area'],
-        sort: { field: lineSortFields.length ? lineSortFields : [aggFieldName(xDef ?? yDef!)], order: lineSortOrders },
-        from: { data: 'faceted_path_main' },
-        encode: { update },
-      }],
-    }
-    out[0] = group
-  }
-
-  // line marks split by a series channel (color or detail): one line per group
+  // line / area / trail split by their grouping channels (colour, detail, size for lines, ...):
+  // one path per group, drawn by a group faceted on those fields (vega-lite pathGroupingFields)
   const pointOverlay = (isObject(spec.mark) ? spec.mark.point : undefined)
     ?? cfgType?.point
     ?? cfgMark?.point
-  const lineSeries = [colorDefSeries, detailDefSeries, sizeDef].filter((f): f is FieldDef => f != null && !f.aggregate)
-  if (mark === 'line' && lineSeries.length) {
+  const stackedNow = (yDef != null && isStacked(yDef, mark, orient, fields)) || (xDef != null && isStacked(xDef, mark, orient, fields))
+  const pathDetails = mark === 'line' || mark === 'area' || mark === 'trail' ? pathGroupingKeys(spec, fields, mark) : []
+  if (pathDetails.length) {
     markSpec.name = 'layer_0_marks'
-    const innerUpdate = { ...update }
-    if (colorDefSeries && !colorDefSeries.aggregate) innerUpdate.stroke = { scale: 'color', field: aggFieldName(colorDefSeries) }
     const group: Record<string, unknown> = {
       name: 'pathgroup',
       type: 'group',
@@ -4701,7 +4735,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         facet: {
           name: 'faceted_path_main',
           data: dataName,
-          groupby: lineSeries.map((f) => aggFieldName(f)),
+          groupby: pathDetails,
         },
       },
       encode: {
@@ -4712,11 +4746,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       },
       marks: [{
         name: 'marks',
-        type: 'line',
-        style: ['line'],
-        sort: { field: lineSortFields.length ? lineSortFields : [aggFieldName(xDef ?? yDef!)], order: lineSortOrders },
+        type: markSpec.type,
+        style: [mark],
+        ...(markSortSpec ? { sort: markSortSpec } : {}),
         from: { data: 'faceted_path_main' },
-        encode: { update: innerUpdate },
+        encode: { update },
       }],
     }
     out[0] = group
@@ -4770,6 +4804,38 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   // user overrides: encoding.update-style custom encodings are out of scope here
   void spec
   return out
+}
+
+/**
+ * A binned / time-unit-binned rect position: the end value on the main channel and
+ * the start on the secondary, each nudged by the axis translate (0.5) plus half the
+ * bin spacing (or, when the bin is thinner than minBandSize, half the shortfall) -
+ * vega-lite `getBinSpacing`. `x` and `y2` are the "end" channels.
+ */
+function setBinnedRect(update: Record<string, unknown>, ch: 'x' | 'y', startField: string, endField: string, spacing: number, minBandSize: number): void {
+  const e = JSON.stringify(endField)
+  const st = JSON.stringify(startField)
+  const band = `abs(scale("${ch}", datum[${e}]) - scale("${ch}", datum[${st}]))`
+  const offsetFor = (isEnd: boolean): { signal: string } => {
+    const sign = isEnd ? '' : '-'
+    const spacingOffset = (isEnd ? -spacing / 2 : spacing / 2) + 0 // + 0: never "-0"
+    return { signal: `0.5 + (${band} < ${minBandSize} ? ${sign}0.5 * (${minBandSize} - (${band})) : ${spacingOffset})` }
+  }
+  update[ch] = { scale: ch, field: endField, offset: offsetFor(ch === 'x') }
+  update[`${ch}2`] = { scale: ch, field: startField, offset: offsetFor(ch === 'y') }
+}
+
+/** bin spacing / minimum bar width of a rect-based mark (bar: 1 / 0.25; other marks: 0 / 0.25). */
+function binGeometry(spec: VLSpec, mark: string): { spacing: number; minBandSize: number } {
+  const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+  const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+  const cfgType = isObject(cfg[mark]) ? (cfg[mark] as Record<string, unknown>) : {}
+  const cfgMark = isObject(cfg.mark) ? (cfg.mark as Record<string, unknown>) : {}
+  const pick = (k: string): number | undefined => {
+    const v = md[k] ?? cfgType[k] ?? cfgMark[k]
+    return typeof v === 'number' ? v : undefined
+  }
+  return { spacing: pick('binSpacing') ?? (mark === 'bar' ? 1 : 0), minBandSize: pick('minBandSize') ?? 0.25 }
 }
 
 /**

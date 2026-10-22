@@ -426,7 +426,6 @@ const UNSUPPORTED_MARK_KEYS: Record<string, string> = {
   bandSize: 'bandSize is not supported',
   minBandSize: 'minBandSize is not supported',
   invalid: 'invalid-value handling other than the default is not supported',
-  order: 'mark `order` (stacking order) is not supported',
   style: 'custom mark styles are not supported',
   time: 'animation is not supported',
   timeUnitBandPosition: 'timeUnitBandPosition is not supported',
@@ -459,6 +458,7 @@ function validateMark(mark: unknown, at: string): string {
       if (!MARK_DEF_KEYS.has(k)) fail(`${at}.${k}`, `unknown mark property "${k}"`)
       const why = UNSUPPORTED_MARK_KEYS[k]
       if (why) fail(`${at}.${k}`, why)
+      if (k === 'order' && def.order !== false && def.order !== null && def.order !== true) fail(`${at}.order`, 'only order: false/null/true is supported')
     }
     if (def.orient !== undefined && def.orient !== 'horizontal' && def.orient !== 'vertical') fail(`${at}.orient`, 'must be "horizontal" or "vertical"')
   }
@@ -516,12 +516,19 @@ function validateChannelDef(ch: string, def: unknown, at: string, mark?: string)
   }
   if (def.type === 'geojson') fail(`${at}.type`, 'geojson fields are not supported')
   if (def.aggregate !== undefined) {
-    if (typeof def.aggregate !== 'string') {
-      if (isObj(def.aggregate)) fail(`${at}.aggregate`, 'argmax/argmin aggregates ({argmax: field}) are not supported in encoding channels')
-      fail(`${at}.aggregate`, 'must be an aggregate operation name')
+    if (isObj(def.aggregate)) {
+      // {argmax: field} / {argmin: field}: the value of `field` on the row where the argument is extreme
+      const ks = Object.keys(def.aggregate)
+      if (ks.length !== 1 || (ks[0] !== 'argmax' && ks[0] !== 'argmin') || typeof def.aggregate[ks[0]!] !== 'string') {
+        fail(`${at}.aggregate`, 'an object aggregate must be {"argmax": field} or {"argmin": field}')
+      }
+      splitAccessPath(def.aggregate[ks[0]!] as string)
+      if (def.field === undefined) fail(`${at}.aggregate`, 'argmax/argmin need the channel `field` to read from the winning row')
+    } else {
+      if (typeof def.aggregate !== 'string') fail(`${at}.aggregate`, 'must be an aggregate operation name')
+      if (!AGG_OPS.has(def.aggregate)) fail(`${at}.aggregate`, `unknown aggregate ${JSON.stringify(def.aggregate)}`)
+      if (def.aggregate !== 'count' && def.field === undefined) fail(`${at}.aggregate`, `aggregate "${def.aggregate}" needs a field`)
     }
-    if (!AGG_OPS.has(def.aggregate)) fail(`${at}.aggregate`, `unknown aggregate ${JSON.stringify(def.aggregate)}`)
-    if (def.aggregate !== 'count' && def.field === undefined) fail(`${at}.aggregate`, `aggregate "${def.aggregate}" needs a field`)
   }
   if (def.bin !== undefined) validateBin(def.bin, `${at}.bin`)
   if (def.timeUnit !== undefined) normalizeTimeUnit(def.timeUnit, `${at}.timeUnit`)
@@ -574,9 +581,10 @@ function validateScaleDef(scale: Obj, at: string, ch: string): void {
 }
 
 function validateBin(bin: unknown, at: string): void {
-  if (bin === true || bin === 'binned') return
-  if (bin === false) return
-  if (!isObj(bin)) fail(at, `bin must be true, "binned" or a bin-params object, got ${JSON.stringify(bin)}`)
+  if (bin === 'binned') fail(at, 'pre-binned data (bin: "binned") is not supported; let @aster/vl bin the field (bin: true) or use a bin transform')
+  if (bin === true || bin === false) return
+  if (!isObj(bin)) fail(at, `bin must be true or a bin-params object, got ${JSON.stringify(bin)}`)
+  if (bin.binned === true) fail(`${at}.binned`, 'pre-binned data (binned: true) is not supported; let @aster/vl bin the field or use a bin transform')
   keysOf(bin, set('anchor base binned divide extent maxbins minstep nice step steps'), at, 'bin')
   const num = (k: string, pos = true): void => {
     const v = bin[k]
@@ -742,8 +750,9 @@ function validateTransforms(tr: unknown, at: string): void {
     // `bin` / `timeUnit` / `sort` / `on`... appear as secondary keys of other transforms.
     const primary = present.filter((k) => {
       // a key that is the sole discriminator of its transform
+      // `extent` is also a secondary key of density/regression; it is the extent TRANSFORM only with `param`
       return k === 'filter' || k === 'calculate' || k === 'aggregate' || k === 'joinaggregate' || k === 'window' || k === 'stack' || k === 'fold' || k === 'flatten' || k === 'pivot' ||
-        k === 'impute' || k === 'lookup' || k === 'sample' || k === 'density' || k === 'loess' || k === 'regression' || k === 'quantile' || k === 'extent' ||
+        k === 'impute' || k === 'lookup' || k === 'sample' || k === 'density' || k === 'loess' || k === 'regression' || k === 'quantile' || (k === 'extent' && t.param !== undefined) ||
         (k === 'bin' && t.field !== undefined) || (k === 'timeUnit' && t.field !== undefined)
     })
     if (primary.length === 0) fail(a, `unknown transform; expected one of ${TRANSFORM_NAMES.join(', ')} (keys: ${JSON.stringify(Object.keys(t))})`)
@@ -890,7 +899,8 @@ function validateTransform(kind: string, t: Obj, a: string): void {
     case 'extent':
       needStr('extent')
       needStr('param')
-      fail(a, 'the `extent` transform (which creates a parameter) is not supported')
+      if (!/^[A-Za-z_$][\w$]*$/.test(t.param as string)) fail(`${a}.param`, `must be an identifier, got ${JSON.stringify(t.param)}`)
+      break
   }
 }
 

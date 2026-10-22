@@ -1,0 +1,62 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "width": 300,
+  "height": 200,
+  "data": {
+    "name": "sparse",
+    "values": [
+      {
+        "t": 1,
+        "g": "a",
+        "v": 3
+      },
+      {
+        "t": 2,
+        "g": "a",
+        "v": 4
+      },
+      {
+        "t": 3,
+        "g": "a",
+        "v": 2
+      },
+      {
+        "t": 1,
+        "g": "b",
+        "v": 5
+      },
+      {
+        "t": 3,
+        "g": "b",
+        "v": 1
+      }
+    ]
+  },
+  "transform": [
+    {
+      "impute": "v",
+      "key": "t",
+      "groupby": [
+        "g"
+      ],
+      "method": "mean"
+    }
+  ],
+  "mark": "line",
+  "encoding": {
+    "x": {
+      "field": "t",
+      "type": "quantitative"
+    },
+    "y": {
+      "field": "v",
+      "type": "quantitative"
+    },
+    "color": {
+      "field": "g",
+      "type": "nominal"
+    }
+  }
+}
