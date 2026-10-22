@@ -5,7 +5,7 @@
  * chart through upstream vega (oracle) and through @aster/core, and compare the
  * SVG. A value upstream refuses is still a case: "both refuse" is agreement.
  *
- * Usage: npx tsx src/run-sweep.ts <sweep-name> --floor N --min-ok N --max-node-error N [--filter substr]
+ * Usage: npx tsx src/run-sweep.ts <sweep-name> --floor N --min-ok N --max-node-error N [--filter substr] [--vega-check]
  *   sweeps: vega-schema | vega-lite-schema | values | signals
  *
  * The run only passes when ALL of these hold (a vacuous run must never pass):
@@ -18,6 +18,11 @@
  *     count is a ceiling that can only be lowered, never a name allow-list;
  *   - zero differ and zero engine-error (Aster crashes are never reclassified).
  * --floor/--min-ok/--max-node-error are required unless --filter is given.
+ *
+ * --vega-check (Vega-Lite cases only): additionally render the Vega that @aster/vl EMITS through REAL
+ * vega; a case where real vega errors, warns (beyond what vega-lite's own output raises) or renders
+ * something different from vega-lite's output counts as 'vega-differ' and fails the run. Aster's runtime
+ * is lenient, so without this flag an invalid emitted spec can still look "ok".
  */
 import { mkdtempSync, readdirSync, symlinkSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -30,7 +35,7 @@ import '@aster/core/transforms'
 import { renderSpec } from '@aster/core'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { compile as compileVL } from '@aster/vl'
-import { renderWithVega } from './render-vega.js'
+import { renderWithVega, renderWithVegaChecked } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
 const require = createRequire(import.meta.url)
@@ -87,6 +92,7 @@ interface Status {
   engineError: number
   differ: number
   nondeterministic: number
+  vegaDiffer: number
   failNames: string[]
 }
 
@@ -130,7 +136,10 @@ async function oracleIsNondeterministic(vgSpec: Record<string, unknown>, writes:
   }
 }
 
-async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'both-refused' | 'node-error' | 'engine-error' | 'differ' | 'nondeterministic'> {
+/** --vega-check: also render the Vega @aster/vl EMITS through real vega (see the header). */
+let vegaCheck = false
+
+async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'both-refused' | 'node-error' | 'engine-error' | 'differ' | 'nondeterministic' | 'vega-differ'> {
   // Vega-Lite cases compare the compiled Vega: upstream vl.compile vs
   // @aster/vl, each rendered through its own engine (a VL defect lives in
   // the spec it emits — see the sweep's header note).
@@ -192,6 +201,26 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
     console.error(`  [differ] ${c.name} (${c.family}.${c.property}): canonicalizer cannot judge: ${(e as Error).message}`)
     return 'differ'
   }
+  if (diffs.length === 0 && vegaCheck && c.lite && !isBootstrapCase(c)) {
+    // Aster's runtime is lenient: an emitted spec real vega rejects, warns about (beyond what
+    // vega-lite's own output raises) or renders differently must not count as ok.
+    const [checked, oracleChecked] = await Promise.all([
+      renderWithVegaChecked(JSON.parse(JSON.stringify(ourVgSpec))),
+      renderWithVegaChecked(vgSpec),
+    ])
+    const inherited = new Set([...oracleChecked.errors, ...oracleChecked.warnings])
+    const bad = [...checked.errors, ...checked.warnings].filter((m) => !inherited.has(m))
+    if (bad.length) {
+      console.error(`  [vega-differ] ${c.name}: real vega: ${bad[0]!.split('\n')[0]}`)
+      return 'vega-differ'
+    }
+    let vd: string[]
+    try { vd = diffCanonical(canonicalizeSvg(oracleSvg!), canonicalizeSvg(checked.svg)) } catch (e) { vd = [(e as Error).message] }
+    if (vd.length) {
+      console.error(`  [vega-differ] ${c.name}: ${String(vd[0]).slice(0, 160)}`)
+      return 'vega-differ'
+    }
+  }
   if (diffs.length === 0) return 'ok'
   if (isBootstrapCase(c) && (await oracleIsNondeterministic(vgSpec, c.writes, oracleSvg!))) return 'nondeterministic'
   console.error(`  [differ] ${c.name} (${c.family}.${c.property}): ${diffs[0]}`)
@@ -200,7 +229,7 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
 
 function usage(msg: string): never {
   console.error(`run-sweep: ${msg}`)
-  console.error('usage: run-sweep.ts <sweep> --floor N --min-ok N --max-node-error N [--filter substr]')
+  console.error('usage: run-sweep.ts <sweep> --floor N --min-ok N --max-node-error N [--filter substr] [--vega-check]')
   process.exit(2)
 }
 
@@ -223,6 +252,7 @@ async function main(): Promise<void> {
   const floor = intFlag(args, '--floor')
   const minOk = intFlag(args, '--min-ok')
   const maxNodeError = intFlag(args, '--max-node-error')
+  vegaCheck = args.includes('--vega-check')
   if (!filter) {
     for (const [name, v] of [['--floor', floor], ['--min-ok', minOk], ['--max-node-error', maxNodeError]] as const) {
       if (v === undefined) usage(`${name} is required (a sweep with no floor can pass while checking nothing)`)
@@ -245,7 +275,7 @@ async function main(): Promise<void> {
     }
     console.log(`[${sweepName}] ${out.skips.length} skipped properties (declared but not enumerable)`)
 
-    const status: Status = { ok: 0, bothRefused: 0, nodeError: 0, engineError: 0, differ: 0, nondeterministic: 0, failNames: [] }
+    const status: Status = { ok: 0, bothRefused: 0, nodeError: 0, engineError: 0, differ: 0, nondeterministic: 0, vegaDiffer: 0, failNames: [] }
     const CONCURRENCY = 8
     let idx = 0
     const workers: Promise<void>[] = []
@@ -259,6 +289,7 @@ async function main(): Promise<void> {
             if (r === 'ok') status.ok++
             else if (r === 'both-refused') status.bothRefused++
             else if (r === 'nondeterministic') status.nondeterministic++
+            else if (r === 'vega-differ') { status.vegaDiffer++; status.failNames.push(all[i]!.name) }
             else if (r === 'node-error') { status.nodeError++; status.failNames.push(all[i]!.name) }
             else if (r === 'engine-error') { status.engineError++; status.failNames.push(all[i]!.name) }
             else { status.differ++; status.failNames.push(all[i]!.name) }
@@ -269,7 +300,7 @@ async function main(): Promise<void> {
     await Promise.all(workers)
 
     const total = all.length
-    console.log(`[${sweepName}] results: ${status.ok} ok, ${status.bothRefused} both-refused, ${status.nodeError} node-error, ${status.engineError} engine-error, ${status.differ} differ, ${status.nondeterministic} nondeterministic / ${total}`)
+    console.log(`[${sweepName}] results: ${status.ok} ok, ${status.bothRefused} both-refused, ${status.nodeError} node-error, ${status.engineError} engine-error, ${status.differ} differ, ${status.nondeterministic} nondeterministic${vegaCheck ? `, ${status.vegaDiffer} vega-differ` : ''} / ${total}`)
     // Per-family scoreboard
     const fams = new Map<string, { ok: number; fail: number }>()
     for (const c of out.cases) {
@@ -286,8 +317,8 @@ async function main(): Promise<void> {
     for (const [f, s] of [...fams.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
       console.log(`  ${f.padEnd(28)} ${s.ok}\t${s.fail}`)
     }
-    if (status.differ + status.engineError > 0) {
-      problems.push(`${status.differ + status.engineError} differ/engine-error case(s)`)
+    if (status.differ + status.engineError + status.vegaDiffer > 0) {
+      problems.push(`${status.differ + status.engineError + status.vegaDiffer} differ/engine-error/vega-differ case(s)`)
     }
     if (!filter && minOk !== undefined && status.ok < minOk) {
       problems.push(`OK FLOOR FAILED: ${status.ok} ok < --min-ok ${minOk}`)
