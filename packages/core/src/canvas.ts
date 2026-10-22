@@ -9,6 +9,7 @@
  * (`parsePathData` + `tracePath`), which keeps canvas output bit-identical to
  * the SVG path by construction.
  */
+import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 
 interface SceneDefs { id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }
@@ -23,6 +24,7 @@ import {
   arcPath,
   frameBackgroundPath,
   frameItem,
+  arcInto,
 } from './render.js'
 
 /** Minimal 2D context surface used by the renderer. */
@@ -59,6 +61,7 @@ export interface CanvasLike {
   lineJoin: string
   miterLimit: number
   lineDashOffset?: number
+  imageSmoothingEnabled?: boolean
   globalCompositeOperation?: string
   strokeText?(text: string, x: number, y: number): void
   font: string
@@ -673,6 +676,12 @@ function segsBbox(segs: PathSeg[]): Bbox {
   return bb
 }
 
+/** Bounds of parsed segments after the item translate (gradient boxes live in device space). */
+function segsBboxAt(segs: PathSeg[], x: number, y: number): Bbox {
+  const bb = segsBbox(segs)
+  return { x1: bb.x1 + x, y1: bb.y1 + y, x2: bb.x2 + x, y2: bb.y2 + y }
+}
+
 /**
  * Paint a traced path exactly like vega-scenegraph's canvas `drawPath`
  * (util/canvas/draw.js + fill.js + stroke.js):
@@ -884,11 +893,27 @@ function isGradientPaint(p: unknown): boolean {
     || (p != null && typeof p === 'object' && 'gradient' in (p as object))
 }
 
+/**
+ * Build a path in an item's own frame the way vega's mark `draw` does: translate to
+ * (x, y), rotate by `angle`, scale (path marks), build, and let the transform go
+ * BEFORE the caller fills/strokes (a canvas path is stored in device space, so the
+ * stroke width is not rotated or scaled).
+ */
+function buildInItemFrame(ctx: CanvasLike, x: number, y: number, angle: number, sx: number, sy: number, build: () => void): void {
+  ctx.save()
+  ctx.translate(x, y)
+  if (angle) ctx.rotate((angle * Math.PI) / 180)
+  if (sx !== 1 || sy !== 1) ctx.scale(sx, sy)
+  ctx.beginPath()
+  build()
+  ctx.restore()
+}
+
 function symbolPaintKey(it: SceneItem): string {
   const rec = it as Record<string, unknown>
   return [
     rec.shape ?? 'circle', it.size, it.fill, it.stroke, it.strokeWidth,
-    rec.opacity, rec.fillOpacity, rec.strokeOpacity, rec.strokeDash, it.strokeCap, it.strokeJoin, it.strokeDashOffset, it.strokeMiterLimit, rec.blend,
+    rec.angle, rec.opacity, rec.fillOpacity, rec.strokeOpacity, rec.strokeDash, it.strokeCap, it.strokeJoin, it.strokeDashOffset, it.strokeMiterLimit, rec.blend,
   ].map((v) => (v == null ? '' : Array.isArray(v) ? v.join(',') : String(v))).join('|')
 }
 
@@ -902,15 +927,14 @@ function renderSymbolRuns(items: SceneItem[], ctx: CanvasLike, defs: SceneDefs[]
   let key = ''
   const flush = (): void => {
     if (!run.length) return
-    if (run.some((it) => isGradientPaint(it.fill) || isGradientPaint(it.stroke))) {
+    if (run[0]!.angle || run.some((it) => isGradientPaint(it.fill) || isGradientPaint(it.stroke))) {
       for (const it of run) {
         if (it.x == null || it.y == null) continue
-        const r = Math.sqrt((it.size as number) ?? 30) / 2
+        const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
         const d = cachedSymbolPath((it as Record<string, unknown>).shape as string | undefined, r)
-        ctx.beginPath()
         const segs = parsePathData(d)
-        tracePath(ctx, segs, it.x, it.y)
-        paintPath(ctx, segs, it, defs, 'auto')
+        buildInItemFrame(ctx, it.x, it.y, ((it as Record<string, unknown>).angle as number) || 0, 1, 1, () => tracePath(ctx, segs))
+        paintPath(ctx, segs, it, defs, 'auto', segsBboxAt(segs, it.x, it.y))
       }
       run = []
       return
@@ -918,7 +942,7 @@ function renderSymbolRuns(items: SceneItem[], ctx: CanvasLike, defs: SceneDefs[]
     ctx.beginPath()
     for (const it of run) {
       if (it.x == null || it.y == null) continue
-      const r = Math.sqrt((it.size as number) ?? 30) / 2
+      const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
       const shape = (it as Record<string, unknown>).shape as string | undefined
       if (shape == null || shape === 'circle') {
         ctx.moveTo(it.x + r, it.y)
@@ -970,14 +994,15 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       } else {
         for (const it of items) {
           if (it.x == null || it.y == null) continue
-          const size = (it.size as number) ?? 30
+          const size = (it.size as number) ?? SYMBOL_DEFAULT_SIZE
           const r = Math.sqrt(size) / 2
           const shape = (it as Record<string, unknown>).shape as string | undefined
           const d = cachedSymbolPath(shape, r)
-          ctx.beginPath()
           const segs = parsePathData(d)
-          tracePath(ctx, segs, it.x, it.y)
-          paintPath(ctx, segs, it, defs, 'auto')
+          const angle = ((it as Record<string, unknown>).angle as number) || 0
+          if (angle) buildInItemFrame(ctx, it.x, it.y, angle, 1, 1, () => tracePath(ctx, segs))
+          else { ctx.beginPath(); tracePath(ctx, segs, it.x, it.y) }
+          paintPath(ctx, segs, it, defs, 'auto', isGradientPaint(it.fill) || isGradientPaint(it.stroke) ? segsBboxAt(segs, it.x, it.y) : undefined)
         }
       }
       return
@@ -985,7 +1010,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
     case 'circle': {
       for (const it of group.items ?? []) {
         if (it.x == null || it.y == null) continue
-        const r = it.radius != null ? it.radius : Math.sqrt((it.size as number) ?? 30) / 2
+        const r = it.radius != null ? it.radius : Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
         ctx.beginPath()
         ctx.arc(it.x, it.y, r, 0, 2 * Math.PI, false)
         paintPathArc(ctx, { ...it, radius: r }, defs)
@@ -1042,12 +1067,14 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
     case 'geoshape': {
       for (const it of group.items ?? []) {
         if (!it.path) continue
-        const tx = it.x ?? 0
-        const ty = it.y ?? 0
-        ctx.beginPath()
+        // vega path mark: translate, rotate, then the path scaled by (scaleX||1, scaleY||1)
+        const rec = it as Record<string, unknown>
+        const angle = (rec.angle as number) || 0
+        const sx = (rec.scaleX as number) || 1
+        const sy = (rec.scaleY as number) || 1
         const segs = parsePathData(it.path)
-        tracePath(ctx, segs, tx, ty)
-        paintPath(ctx, segs, it, defs, 'auto')
+        buildInItemFrame(ctx, it.x || 0, it.y || 0, angle, sx, sy, () => tracePath(ctx, segs))
+        paintPath(ctx, segs, it, defs, 'auto', isGradientPaint(it.fill) || isGradientPaint(it.stroke) ? segsBboxAt(segs, it.x || 0, it.y || 0) : undefined)
       }
       return
     }
@@ -1061,20 +1088,73 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
         // item position; trace the same local path with the item offset.
         const cr = (it as Record<string, unknown>).cornerRadius as number | undefined ?? 0
         const pa = (it as Record<string, unknown>).padAngle as number | undefined ?? 0
+        // vega's markItemPath draw: translate/rotate to the item, build the path
+        // with the REAL context (d3-arc calls moveTo/arc/lineTo on it), restore
+        // the transform, then fill/stroke. Re-deriving the circles from the SVG
+        // path string (rounded to 3 decimals) moved near-semicircular arcs.
+        const ax = it.x || 0
+        const ay = it.y || 0
+        const angle = ((it as Record<string, unknown>).angle as number | undefined) || 0
+        ctx.translate(ax, ay)
+        if (angle) ctx.rotate((angle * Math.PI) / 180)
         ctx.beginPath()
-        const segs = parsePathData(arcPath(0, 0, r, r0, a0, a1, cr, pa))
-        tracePath(ctx, segs, it.x ?? 0, it.y ?? 0)
-        paintPath(ctx, segs, it, defs, 'auto')
+        arcInto(ctx, 0, 0, r, r0, a0, a1, cr, pa)
+        if (angle) ctx.rotate((-angle * Math.PI) / 180)
+        ctx.translate(-ax, -ay)
+        let abb: Bbox | undefined
+        if (isGradientPaint(it.fill) || isGradientPaint(it.stroke)) {
+          const bb = segsBbox(parsePathData(arcPath(0, 0, r, r0, a0, a1, cr, pa)))
+          abb = { x1: bb.x1 + ax, y1: bb.y1 + ay, x2: bb.x2 + ax, y2: bb.y2 + ay }
+        }
+        paintPath(ctx, [], it, defs, 'auto', abb)
       }
       return
     }
     case 'image':
-      // Canvas image drawing requires loaded bitmaps; hosts that need image
-      // marks pass loaded elements via the item (`it.image`). Skip otherwise.
+      // vega's canvas image draw (marks/image.js): the host supplies the loaded
+      // bitmap as `item.image` (this renderer never fetches); an item whose
+      // bitmap is absent or incomplete paints nothing, like vega before the
+      // image loads. The box is offset by align/baseline; with `aspect` on (the
+      // default) the bitmap is letterboxed to its own aspect ratio.
       for (const it of group.items ?? []) {
-        const img = (it as Record<string, unknown>).image as CanvasImageSource | undefined
-        if (img == null || it.x == null || it.y == null) continue
-        ctx.drawImage?.(img, it.x, it.y, (it.width as number) ?? 0, (it.height as number) ?? 0)
+        const img = (it as Record<string, unknown>).image as { width: number; height: number; complete?: boolean } | undefined
+        if (img == null || img.complete === false) continue
+        const opacity = it.opacity == null ? 1 : (it.opacity as number)
+        // vega imageWidth/imageHeight: an explicit size, else the bitmap's own (scaled
+        // to the other explicit dimension when aspect is on)
+        let w = it.width != null ? it.width
+          : !img.width ? 0
+            : it.aspect !== false && it.height ? (it.height * img.width) / img.height
+              : img.width
+        let h = it.height != null ? it.height
+          : !img.height ? 0
+            : it.aspect !== false && it.width ? (it.width * img.height) / img.width
+              : img.height
+        if (w === 0 || h === 0) continue
+        let x = (it.x || 0) - (it.align === 'center' ? w / 2 : it.align === 'right' ? w : 0)
+        let y = (it.y || 0) - (it.baseline === 'middle' ? h / 2 : it.baseline === 'bottom' ? h : 0)
+        if (it.aspect !== false) {
+          const ar0 = img.width / img.height
+          const ar1 = (it.width as number) / (it.height as number)
+          if (ar0 === ar0 && ar1 === ar1 && ar0 !== ar1) {
+            if (ar1 < ar0) {
+              const t = w / ar0
+              y += (h - t) / 2
+              h = t
+            } else {
+              const t = h * ar0
+              x += (w - t) / 2
+              w = t
+            }
+          }
+        }
+        const rec = it as unknown as Record<string, unknown>
+        if (rec.blend != null) ctx.globalCompositeOperation = String(rec.blend)
+        ctx.globalAlpha = opacity
+        ctx.imageSmoothingEnabled = rec.smooth !== false
+        ctx.drawImage?.(img, x, y, w, h)
+        ctx.globalAlpha = 1
+        if (rec.blend != null) ctx.globalCompositeOperation = 'source-over'
       }
       return
     default:

@@ -3,6 +3,7 @@
  * enough that geometry (paths, rects, lines, tick positions) matches the
  * reference renderer; the conformance diff compares normalized geometry.
  */
+import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { baselineOffset, fontSize as vegaFontSize } from './bounds.js'
 export { baselineOffset }
@@ -754,7 +755,7 @@ function renderSymbols(group: SceneGroup): string {
   for (const it of itemsOf(group)) {
     // A null position (a geopoint the projection refused) renders at the
     // origin: vega emits `translate(null,null)`, which SVG treats as (0,0).
-    const size = (it.size as number) ?? 30
+    const size = (it.size as number) ?? SYMBOL_DEFAULT_SIZE
     const r = Math.sqrt(size) / 2
     const shape = (it as Record<string, unknown>).shape as string | undefined
     const d = symbolPath(shape, r)
@@ -778,7 +779,7 @@ function renderCircles(group: SceneGroup): string {
     if (it.x == null || it.y == null) continue
     const r = it.radius != null
       ? it.radius
-      : Math.sqrt((it.size as number) ?? 30) / 2
+      : Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
     out += `<circle${dataDatumAttr(it)} cx="${num(it.x)}" cy="${num(it.y)}" r="${num(r)}"${paintStr(it)}/>`
   }
   out += '</g>'
@@ -1314,6 +1315,25 @@ export const arcPath = arcPathImpl as (cx: number, cy: number, rIn: number, r0In
 
 function arcPathImpl(cx: number, cy: number, rIn: number, r0In: number, a0in: number, a1in: number, cornerRadius = 0, padAngle = 0): string {
   const ctx = new PathEmitter()
+  arcInto(ctx, cx, cy, rIn, r0In, a0in, a1in, cornerRadius, padAngle)
+  return ctx.toString()
+}
+
+/** The drawing surface the d3-arc port targets: a d3-path or a canvas 2D context. */
+export interface ArcSink {
+  moveTo(x: number, y: number): void
+  lineTo(x: number, y: number): void
+  arc(x: number, y: number, r: number, a0: number, a1: number, ccw?: boolean): void
+  closePath(): void
+}
+
+/**
+ * d3-arc into any sink. The SVG path and the canvas painter share this one
+ * port: the canvas draws the exact arcs (like vega's canvas, which hands d3-arc
+ * the real context) instead of re-deriving circle centres from a path string
+ * rounded to 3 decimals, which is ill-conditioned for near-semicircular arcs.
+ */
+export function arcInto(ctx: ArcSink, cx: number, cy: number, rIn: number, r0In: number, a0in: number, a1in: number, cornerRadius = 0, padAngle = 0): void {
   let r0 = r0In
   let r1 = rIn
   let a0 = a0in - Math.PI / 2
@@ -1325,7 +1345,7 @@ function arcPathImpl(cx: number, cy: number, rIn: number, r0In: number, a0in: nu
     // point
     ctx.moveTo(0, 0)
     ctx.closePath()
-    return (ctx as unknown as { toString(): string }).toString()
+    return
   }
   if (da0abs > 2 * Math.PI - ARC_EPSILON) {
     // circle or annulus
@@ -1336,7 +1356,7 @@ function arcPathImpl(cx: number, cy: number, rIn: number, r0In: number, a0in: nu
       ctx.arc(0, 0, r0, a1, a0, cw)
     }
     ctx.closePath()
-    return (ctx as unknown as { toString(): string }).toString()
+    return
   }
   let a01 = a0
   let a11 = a1
@@ -1418,7 +1438,6 @@ function arcPathImpl(cx: number, cy: number, rIn: number, r0In: number, a0in: nu
   }
   ctx.closePath()
   void cx; void cy
-  return (ctx as unknown as { toString(): string }).toString()
 }
 
 function intersectArc(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number): [number, number] | undefined {

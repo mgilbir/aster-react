@@ -32,6 +32,7 @@ function makeRecordingCtx(): { ctx: CanvasLike; records: DrawRecord[] } {
   const stack: Array<[number, number]> = []
   let ops: string[] = []
   let cur: string | null = null // pending paint info at fill/stroke time
+  let cp: [number, number] | null = null // current point (device space)
   let fillStyle: unknown = '#000'
   let strokeStyle: unknown = '#000'
   let globalAlpha = 1
@@ -50,13 +51,18 @@ function makeRecordingCtx(): { ctx: CanvasLike; records: DrawRecord[] } {
     restore() { const t = stack.pop(); if (t) { tx = t[0]; ty = t[1] } },
     translate(x, y) { tx += x; ty += y },
     scale(x) { tx *= x; ty *= x },
-    beginPath() { ops = [] },
-    moveTo(x, y) { ops.push(`M${fmt(x + tx)},${fmt(y + ty)}`) },
-    lineTo(x, y) { ops.push(`L${fmt(x + tx)},${fmt(y + ty)}`) },
-    bezierCurveTo(a, b, c, d, x, y) { ops.push(`C${fmt(a + tx)},${fmt(b + ty)},${fmt(c + tx)},${fmt(d + ty)},${fmt(x + tx)},${fmt(y + ty)}`) },
-    quadraticCurveTo(a, b, x, y) { ops.push(`Q${fmt(a + tx)},${fmt(b + ty)},${fmt(x + tx)},${fmt(y + ty)}`) },
+    beginPath() { ops = []; cp = null },
+    moveTo(x, y) { ops.push(`M${fmt(x + tx)},${fmt(y + ty)}`); cp = [x + tx, y + ty] },
+    lineTo(x, y) { ops.push(`L${fmt(x + tx)},${fmt(y + ty)}`); cp = [x + tx, y + ty] },
+    bezierCurveTo(a, b, c, d, x, y) { ops.push(`C${fmt(a + tx)},${fmt(b + ty)},${fmt(c + tx)},${fmt(d + ty)},${fmt(x + tx)},${fmt(y + ty)}`); cp = [x + tx, y + ty] },
+    quadraticCurveTo(a, b, x, y) { ops.push(`Q${fmt(a + tx)},${fmt(b + ty)},${fmt(x + tx)},${fmt(y + ty)}`); cp = [x + tx, y + ty] },
     arc(x, y, r, a0, a1, ccw = false) {
       const ax = x + tx, ay = y + ty
+      // a real canvas arc() first connects the current point to the arc's start with a
+      // straight line (or starts a subpath there when there is no current point)
+      const sx0 = ax + r * Math.cos(a0), sy0 = ay + r * Math.sin(a0)
+      if (cp === null) ops.push(`M${fmt(sx0)},${fmt(sy0)}`)
+      else if (Math.hypot(cp[0] - sx0, cp[1] - sy0) > 1e-6) ops.push(`L${fmt(sx0)},${fmt(sy0)}`)
       let delta = a1 - a0
       if (!ccw && delta < 0) delta += 2 * Math.PI
       if (ccw && delta > 0) delta -= 2 * Math.PI
@@ -68,12 +74,14 @@ function makeRecordingCtx(): { ctx: CanvasLike; records: DrawRecord[] } {
       const sweep = ccw ? 0 : 1
       if (Math.abs(Math.abs(delta) - 2 * Math.PI) < 1e-9) {
         ops.push(`CIRC(${fmt(ax)},${fmt(ay)},${fmt(r)})`)
+        cp = [sx0, sy0]
       } else {
         ops.push(`A${fmt(r)},${fmt(r)},0,${large},${sweep},${fmt(x2)},${fmt(y2)}`)
+        cp = [x2, y2]
       }
     },
     closePath() { ops.push('Z') },
-    rect(x, y, w, h) { ops.push(`M${fmt(x + tx)},${fmt(y + ty)}h${fmt(w)}v${fmt(h)}h${fmt(-w)}Z`) },
+    rect(x, y, w, h) { ops.push(`M${fmt(x + tx)},${fmt(y + ty)}h${fmt(w)}v${fmt(h)}h${fmt(-w)}Z`); cp = [x + tx, y + ty] },
     clip() { /* record clip as a marker for debugging */ },
     fill() {
       records.push({ kind: 'fill', path: ops.join(''), paint: paintStr(fillStyle, globalAlpha) })

@@ -26,17 +26,21 @@ const argv = process.argv.slice(2)
 const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
 const LIMIT = Number(arg('limit', '0'))
 const FILTER = arg('filter', '')
-const RATIO = Number(arg('ratio', '0.04'))
-const MEAN = Number(arg('mean', '2.5'))
+// Pixel tolerance, measured (see the block comment above the diff in the page code):
+//   PIXEL  a pixel differs when |dR|+|dG|+|dB|+|dA| > PIXEL (48 = 12/255 per channel on average)
+//   RATIO  an entry may have at most this fraction of differing pixels
+//   MEAN   and at most this mean per-channel difference over ALL pixels
+// Against vega's own canvas, 327 of 420 corpus entries are BIT-EXACT; the rest of the
+// agreeing entries differ only by the 3-decimal rounding of path coordinates (Aster
+// paints from the same path string the SVG renderer emits, vega's canvas from the
+// unrounded numbers). Worst such noise measured: 50 pixels over PIXEL out of 127,100
+// (RATIO 3.9e-4) and mean 0.029; the limits below sit just above that.
+const PIXEL = Number(arg('pixel', '48'))
+const RATIO = Number(arg('ratio', '0.0005'))
+const MEAN = Number(arg('mean', '0.05'))
 const BROWSER = arg('browser', 'chromium') as 'chromium' | 'firefox' | 'webkit'
 
 interface Entry { name: string; spec: Record<string, unknown> }
-
-function hasUrlData(spec: Record<string, unknown>): boolean {
-  const data = spec.data
-  const defs = Array.isArray(data) ? data : data && typeof data === 'object' ? [data] : []
-  return defs.some((d) => d && typeof d === 'object' && typeof (d as { url?: unknown }).url === 'string')
-}
 
 function loadCorpus(): Entry[] {
   const corpus = join(CONF_DIR, 'corpus')
@@ -44,24 +48,16 @@ function loadCorpus(): Entry[] {
   const entries: Entry[] = []
   for (const f of files) {
     const spec = JSON.parse(readFileSync(join(corpus, f), 'utf8')) as Record<string, unknown>
-    if (hasUrlData(spec)) continue // network data is not part of the canvas surface
     entries.push({ name: f.replace(/\.vl\.json$|\.json$/, ''), spec })
   }
   return entries
 }
 
-// Known gaps that the SVG gate covers but the pixel gate intentionally skips:
-// - image.vg loads a remote bitmap (no network in this gate),
-// - concat-h/repeat hit degenerate 0-width concat cells whose SVG-only axis
-//   domain paint is already covered by the SVG browser gate,
-// - t-pie is a degenerate text mark (no x/y, all labels anchored at the origin).
+// Entries the pixel gate cannot judge because the ORACLE's own output is undefined, with the
+// evidence. There is no other exclusion: every corpus entry (including URL data and images)
+// is compared.
 const SKIP = new Map<string, string>([
-  ['image.vg', 'remote image asset'],
-  ['concat-h', 'degenerate concat cell (SVG gate covers axis paint)'],
-  ['repeat', 'degenerate repeat cells (SVG gate covers axis paint)'],
-  ['scatter-matrix', 'repeat grid (same degenerate cell axis paint as repeat)'],
-  ['t-pie.vg', 'degenerate text mark (no x/y, all labels anchored at the origin)'],
-  ['expr-fns.vg', 'vega SVG paints a boolean fill black; its canvas backend skips it'],
+  ['area-gradient', "the spec's fill is the string 'gradient' (not a colour, not a gradient object): vega's canvas assigns fillStyle='gradient', which a canvas ignores (invalid colour strings leave the previous value), so the pixels vega paints depend on whatever fillStyle earlier items left behind, not on the spec. Evidence: view.scenegraph() item.fill === 'gradient'; vega's canvas shows no area at all while aster shows a white one. The SVG gate compares this entry's markup strictly."],
 ])
 const synthetic: Entry[] = [
   {
@@ -106,7 +102,8 @@ const synthetic: Entry[] = [
 ]
 const all = [...loadCorpus(), ...synthetic].filter((e) => !FILTER || e.name.includes(FILTER))
 const entries = all.filter((e) => !SKIP.has(e.name)).slice(0, LIMIT || undefined)
-console.log(`[browser-canvas] ${BROWSER}: ${entries.length} corpus entries${all.length !== entries.length ? ` (${all.length - entries.length} skipped)` : ''}`)
+const skippedNames = all.filter((e) => SKIP.has(e.name)).map((e) => e.name)
+console.log(`[browser-canvas] ${BROWSER}: ${entries.length} entries compared${skippedNames.length ? `; ${skippedNames.length} skipped with a recorded reason: ${skippedNames.map((n) => `${n} (${SKIP.get(n)})`).join('; ')}` : ''}`)
 
 const entrySrc = `
 import embed from 'vega-embed'
@@ -123,44 +120,38 @@ function pixels(canvas) {
   return { data, w: canvas.width, h: canvas.height }
 }
 
-// Tolerant pixel diff: each paint pixel is matched against the oracle within a
-// 1px neighbourhood. Thin strokes and text antialiasing can shift by a pixel
-// between vega's canvas walk and ours; a real geometry/paint regression (a
-// missing mark, a different colour, a moved bar) still has no nearby match.
+// Exact per-pixel diff: a pixel differs when the sum of its four channel differences
+// exceeds PIXEL. No neighbourhood matching: a mark one pixel off is a difference.
 function diff(a, b) {
   if (a.w !== b.w || a.h !== b.h) return { error: 'size ' + a.w + 'x' + a.h + ' != ' + b.w + 'x' + b.h }
-  const R = 1
+  const count = a.w * a.h
   let bad = 0, sum = 0
-  const W = a.w, H = a.h
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const i = (y * W + x) * 4
-      let best = 1e9
-      for (let dy = -R; dy <= R && best > 48; dy++) {
-        const yy = y + dy
-        if (yy < 0 || yy >= H) continue
-        for (let dx = -R; dx <= R; dx++) {
-          const xx = x + dx
-          if (xx < 0 || xx >= W) continue
-          const j = (yy * W + xx) * 4
-          const d = Math.abs(a.data[i] - b.data[j])
-            + Math.abs(a.data[i+1] - b.data[j+1])
-            + Math.abs(a.data[i+2] - b.data[j+2])
-            + Math.abs(a.data[i+3] - b.data[j+3])
-          if (d < best) best = d
-          if (best <= 48) break
-        }
-      }
-      if (best > 48) bad++
-      sum += best
-    }
+  for (let i = 0; i < count * 4; i += 4) {
+    const d = Math.abs(a.data[i] - b.data[i]) + Math.abs(a.data[i+1] - b.data[i+1]) + Math.abs(a.data[i+2] - b.data[i+2]) + Math.abs(a.data[i+3] - b.data[i+3])
+    sum += d
+    if (d > PIXEL) bad++
   }
-  const count = W * H
   return { ratio: bad / count, mean: sum / (count * 4) }
 }
 
+const PIXEL = ${PIXEL}
 const RATIO = ${RATIO}
 const MEAN = ${MEAN}
+function loadImage(url) {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => resolve(img)
+    img.onerror = () => resolve(null) // an unloadable image paints nothing, in vega too
+    img.src = url
+  })
+}
+async function attachImages(nodes) {
+  for (const n of nodes) {
+    if (n.marktype === 'image') for (const it of n.items || []) { if (it.url != null) it.image = await loadImage(String(it.url)) }
+    if (n.items) await attachImages(n.items.filter((c) => c && typeof c === 'object' && c.items))
+  }
+}
 
 window.__runCanvas = async (entry) => {
   try {
@@ -179,6 +170,9 @@ window.__runCanvas = async (entry) => {
     host.remove()
     // aster: same scene, canvas backend.
     const scene = evaluateChart(compileChart(loaded as never))
+    // A host supplies decoded bitmaps for image marks (the renderer never fetches):
+    // do what a host does, so image marks are compared like every other mark.
+    await attachImages(scene.items)
     const ours = document.createElement('canvas')
     ours.width = scene.width
     ours.height = scene.height

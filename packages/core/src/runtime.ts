@@ -37,7 +37,7 @@ import { hash53 } from './svg-defs.js'
 import { tickFormat, scaleFraction, scaleGradientStops, tickValues, tickCount, isContinuous, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet } from './util.js'
+import { dict, ownGet, SYMBOL_DEFAULT_SIZE } from './util.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, type PulseChange } from './pulse.js'
 import { trellisLayout, measureBounds } from './trellis.js'
@@ -3992,7 +3992,7 @@ function cellContentBounds(cell: SceneGroup, cellW: number, cellH: number): { x1
         const x = it.x ?? 0, y = it.y ?? 0
         if (g.marktype === 'symbol') {
           // vega symbol bounds: center ± (radius + 2 * strokeWidth)
-          const size = it.size ?? 30
+          const size = it.size ?? SYMBOL_DEFAULT_SIZE
           const sw = it.strokeWidth ?? 2
           const half = Math.sqrt(size) / 2 + 2 * sw
           add(x - half, y - half, x + half, y + half)
@@ -4089,7 +4089,7 @@ function getFacetLayout(ctx: EvalContext, prebuilt?: SceneGroup[]): FacetGridLay
   const ncols = colDom && colDom.length ? colDom.length : 1
   const nrows = rowDom && rowDom.length ? rowDom.length : 1
   const layout = computeFacetGridLayout(cells, cellWidth, cellHeight, ncols, nrows)
-  if (process.env.ASTER_DEBUG_FACET) console.error('[facet]', { cellWidth, cellHeight, ncols, nrows, layout })
+  if (typeof process !== 'undefined' && process.env.ASTER_DEBUG_FACET) console.error('[facet]', { cellWidth, cellHeight, ncols, nrows, layout })
   ctx._facetLayout = layout
   return layout
 }
@@ -4857,7 +4857,7 @@ function cellGroupXBounds(cells: SceneGroup[]): { minX: number; maxX: number } {
           const pi = p as SceneItem & { size?: number; strokeWidth?: number; width?: number }
           const px = cx + (pi.x ?? 0)
           if (g.marktype === 'symbol') {
-            const size = pi.size ?? 30
+            const size = pi.size ?? SYMBOL_DEFAULT_SIZE
             const sw = pi.strokeWidth ?? 2
             const r = Math.sqrt(size) / 2
             const ext = r + 2 * sw
@@ -5291,7 +5291,7 @@ function concatCellLocalBounds(cell: SceneGroup, cellW: number, cellH: number): 
           y2 = Math.max(y2, y + boff + (fontSize - Math.round(0.8 * fontSize)))
         }
       } else if (marktype === 'symbol' || it.size != null) {
-        const size = it.size ?? 30
+        const size = it.size ?? SYMBOL_DEFAULT_SIZE
         const sw = it.strokeWidth ?? 2
         // Vega's symbol bound adds the (miter) stroke extent and the cell
         // group's stroke expansion carries a further half pixel on each side.

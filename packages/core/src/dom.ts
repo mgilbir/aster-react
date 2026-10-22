@@ -9,6 +9,7 @@
  * string renderer and this DOM renderer can never drift visually: both call
  * the exact same code to produce each `d`, each formatted number.
  */
+import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { ClipCollector } from './svg-defs.js'
 import {
@@ -179,7 +180,7 @@ function batchableSymbol(it: SceneItem): boolean {
     && rec.blend == null
   return opaque
     && x != null && y != null && Number.isFinite(x) && Number.isFinite(y)
-    && Number.isFinite(Math.sqrt((it.size as number) ?? 30) / 2)
+    && Number.isFinite(Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2)
 }
 
 function sameSymbolPaint(a: SceneItem, b: SceneItem): boolean {
@@ -245,7 +246,7 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
     for (let j = from; j < to; j++) {
       const it = items[j]!
       if (!batchableSymbol(it)) continue
-      const r = Math.sqrt((it.size as number) ?? 30) / 2
+      const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
       d += translatePathData(
         symbolPath((it as Record<string, unknown>).shape as string | undefined, r),
         it.x as number,
@@ -266,7 +267,7 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
 
 function symbolItemDesc(it: SceneItem): DomDesc {
   return cachedDesc(it, () => {
-    const size = (it.size as number) ?? 30
+    const size = (it.size as number) ?? SYMBOL_DEFAULT_SIZE
     const r = Math.sqrt(size) / 2
     const angle = (it as Record<string, unknown>).angle as number | undefined
     return {
@@ -514,7 +515,7 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       return items
         .filter((it) => it.x != null && it.y != null)
         .map((it) => {
-          const r = it.radius != null ? it.radius : Math.sqrt((it.size as number) ?? 30) / 2
+          const r = it.radius != null ? it.radius : Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
           return cachedDesc(it, () => ({
             tag: 'circle',
             attrs: [

@@ -279,7 +279,10 @@ function indexIds(el: XmlEl, byId: Map<string, XmlEl>): void {
 
 /** Resolve every `url(#id)` / `#id` reference inside a value to canonical content (N-id). */
 function resolveRefs(value: string, m: Mat, ctx: Ctx, seen: string[] = []): string {
-  return value.replace(/url\(\s*['"]?#([^'")\s]+)['"]?\s*\)/g, (_all, id: string) => {
+  // `url(#id)`, or `url(<page url>#id)`: a browser-built DOM writes the document
+  // URL in front of a same-document reference (vega-embed's `base`); the fragment
+  // is what names the element.
+  return value.replace(/url\(\s*['"]?[^)#'"\s]*#([^'")\s]+)['"]?\s*\)/g, (_all, id: string) => {
     const target = ctx.byId.get(id)
     // A reference to an id that does not exist has no paint server / clip
     // (browsers paint none, or leave the element unclipped); which id it names

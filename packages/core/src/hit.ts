@@ -13,6 +13,7 @@
  *   text      — within the estimated text bbox
  *   path/trail/area — within the path bbox (coarse but datum-correct)
  */
+import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 
 export interface HitTarget {
@@ -135,7 +136,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       case 'symbol':
       case 'circle': {
         if (item.x == null || item.y == null) return
-        const size = (item.size as number) ?? 30
+        const size = (item.size as number) ?? SYMBOL_DEFAULT_SIZE
         const r = item.radius != null ? item.radius : Math.sqrt(size) / 2
         const sw = ((item.strokeWidth as number) ?? 1) / 2 + 2
         entries.push({
