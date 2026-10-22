@@ -325,11 +325,30 @@ function collectLeaves(root: VLSpec): VLSpec[] {
   return leaves
 }
 
-/** A width/height spec: a fixed size, a {step} request, or unspecified. */
-function sizeSpec(v: unknown): { fixed?: number; step?: number } {
+/** A width/height spec: a fixed size, a {step} request, "container" or unspecified. */
+function sizeSpec(v: unknown): { fixed?: number; step?: number; container?: boolean } {
+  if (v === 'container') return { container: true }
   if (typeof v === 'number') return { fixed: v }
   if (isObject(v) && typeof v.step === 'number') return { step: v.step }
   return {}
+}
+
+/**
+ * width / height: "container": the view takes the size of its host element (vega-lite's
+ * containerSize signals, autosize fit / fit-x / fit-y over the padding).
+ */
+function containerSizing(spec: VLSpec, w: { container?: boolean }, h: { container?: boolean }): { autosize: unknown; signals: Record<string, unknown>[] } | undefined {
+  if (!w.container && !h.container) return undefined
+  const user = autosizeOf(spec)
+  const fit = { type: w.container && h.container ? 'fit' : w.container ? 'fit-x' : 'fit-y', contains: 'padding' }
+  const signal = (name: string, i: number): Record<string, unknown> => {
+    const expr = `isFinite(containerSize()[${i}]) ? containerSize()[${i}] : 300`
+    return { name, init: expr, on: [{ update: expr, events: 'window:resize' }] }
+  }
+  return {
+    autosize: { ...fit, ...(typeof user === 'string' ? { type: user } : isObject(user) ? user : {}) },
+    signals: [...(w.container ? [signal('width', 0)] : []), ...(h.container ? [signal('height', 1)] : [])],
+  }
 }
 
 /** Compile a multi-layer spec: per-source casts, per-layer pipelines,
@@ -572,16 +591,21 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // discrete-dimension sizing (after the scales are merged): the scale spans
   // steps and the view size is a signal over the domain cardinality
   const sizeSignals: Record<string, unknown>[] = []
-  for (const [channel, fixed, stepReq] of [['x', wSpec.fixed, wSpec.step], ['y', hSpec.fixed, hSpec.step]] as const) {
-    if (fixed !== undefined) continue
+  for (const [channel, fixed, stepReq, isContainer] of [['x', wSpec.fixed, wSpec.step, wSpec.container], ['y', hSpec.fixed, hSpec.step, hSpec.container]] as const) {
+    if (fixed !== undefined || isContainer) continue
     const sc = scales.find((s) => s.name === channel)
     if (!sc || (sc.type !== 'band' && sc.type !== 'point')) continue
     sizeSignals.push(...stepSignals(channel, sc, stepReq))
   }
   const xStepped = sizeSignals.some((s) => s.name === 'width')
   const yStepped = sizeSignals.some((s) => s.name === 'height')
-  if (!xStepped) out.width = width
-  if (!yStepped) out.height = height
+  const container = containerSizing(spec, wSpec, hSpec)
+  if (container) {
+    out.autosize = container.autosize
+    sizeSignals.unshift(...container.signals)
+  }
+  if (!xStepped && !wSpec.container) out.width = width
+  if (!yStepped && !hSpec.container) out.height = height
   if (sizeSignals.length) out.signals = sizeSignals
 
   const legends: Record<string, unknown>[] = []
@@ -5239,8 +5263,8 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const yDefS = fields.find((f) => f.channel === 'y')
   const wSpec = sizeSpec(spec.width)
   const hSpec = sizeSpec(spec.height)
-  const xStepForm = xDefS != null && ['band', 'point'].includes(positionalScaleType(mark, xDefS)) && wSpec.fixed === undefined
-  const yStepForm = yDefS != null && ['band', 'point'].includes(positionalScaleType(mark, yDefS)) && hSpec.fixed === undefined
+  const xStepForm = xDefS != null && ['band', 'point'].includes(positionalScaleType(mark, xDefS)) && wSpec.fixed === undefined && !wSpec.container
+  const yStepForm = yDefS != null && ['band', 'point'].includes(positionalScaleType(mark, yDefS)) && hSpec.fixed === undefined && !hSpec.container
   const width: unknown = wSpec.fixed ?? (xStepForm ? 0 : 300)
   const height: unknown = hSpec.fixed ?? (yStepForm ? 0 : 300)
 
@@ -5254,8 +5278,10 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
     || (isObject(userConfig?.style) && isObject((userConfig!.style as Record<string, unknown>).cell)
       && ((userConfig!.style as Record<string, Record<string, unknown>>).cell!.clip === true))
   out.autosize = viewClip ? 'none' : (autosizeOf(spec) ?? 'pad')
-  if (!xStepForm) out.width = width
-  if (!yStepForm) out.height = height
+  const unitContainer = containerSizing(spec, wSpec, hSpec)
+  if (unitContainer) out.autosize = unitContainer.autosize
+  if (!xStepForm && !wSpec.container) out.width = width
+  if (!yStepForm && !hSpec.container) out.height = height
   // theta-only views (pie/donut) get vega-lite's unstyled 'view' frame — no
   // cell stroke, no half-pixel inset
   out.style = mark === 'arc' ? 'view' : 'cell'
@@ -5315,6 +5341,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
     if (!sc) continue
     sizeSignals.push(...stepSignals(channel, sc, stepReq))
   }
+  if (unitContainer) sizeSignals.unshift(...unitContainer.signals)
   if (sizeSignals.length) out.signals = sizeSignals
   // the point overlay's dataset joins the size domain union
   if (builtMarks.overlayData) {

@@ -216,7 +216,7 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
 
   validateData(spec, at)
   if (spec.transform !== undefined) validateTransforms(spec.transform, at('transform'))
-  validateSize(spec, at)
+  validateSize(spec, at, top && (kind === 'unit' || kind === 'layer'))
   if (spec.params !== undefined) validateParams(spec.params, at('params'), top && kind === 'unit')
   if (spec.resolve !== undefined) validateResolve(spec.resolve, at('resolve'), kind)
   if (spec.projection !== undefined) fail(at('projection'), 'map projections are not supported (geoshape marks are unavailable)')
@@ -277,13 +277,16 @@ function validateAutosize(a: unknown, path: string): void {
   keysOf(a, set('type resize contains'), path, 'autosize')
 }
 
-function validateSize(spec: Obj, at: (k: string) => string): void {
+function validateSize(spec: Obj, at: (k: string) => string, containerOk: boolean): void {
   for (const k of ['width', 'height'] as const) {
     const v = spec[k]
     if (v === undefined) continue
     if (typeof v === 'number' && Number.isFinite(v) && v >= 0) continue
     if (isObj(v) && Object.keys(v).length === 1 && typeof v.step === 'number' && v.step > 0) continue
-    if (v === 'container') fail(at(k), `${k}: "container" (responsive sizing) is not supported; give a number or {"step": n}`)
+    if (v === 'container') {
+      if (containerOk) continue
+      fail(at(k), `${k}: "container" is only supported on a top-level unit or layer view; give a number or {"step": n}`)
+    }
     fail(at(k), `${k} must be a non-negative number or {"step": n}, got ${JSON.stringify(v)}`)
   }
 }

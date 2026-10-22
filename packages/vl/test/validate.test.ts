@@ -19,7 +19,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['an unsupported mark property', unit({ mark: { type: 'bar', time: 2 } }), /animation/],
   ['config nested in a child spec', { data: DATA, hconcat: [unit({ config: {} })] }, /config is only allowed at the top level/],
   ['an unsupported config key', unit({ config: { customFormatTypes: true } }), /config\.customFormatTypes/],
-  ['responsive container sizing', unit({ width: 'container' }), /container/],
+  ['container sizing of a composition', { data: DATA, width: 'container', hconcat: [unit(), unit()] }, /container/],
   ['projections', unit({ projection: { type: 'mercator' } }), /projection/],
   ['data generators', { data: { sequence: { start: 0, stop: 3 } }, mark: 'point' }, /generators/],
   ['an unknown invalid mode', unit({ mark: { type: 'point', invalid: 'drop' } }), /unknown invalid-value mode/],

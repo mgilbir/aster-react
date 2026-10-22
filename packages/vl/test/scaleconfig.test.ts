@@ -137,3 +137,26 @@ describe('mark keys and the image mark', () => {
     expect(() => compileFrozen({ data: DATA, mark: 'point', encoding: { x: xq, y: yq, url: cn } })).toThrow(/image mark/)
   })
 })
+
+describe('width / height: "container"', () => {
+  it('sizes the view from the host element with containerSize signals and an autosize fit', () => {
+    const vg = compileFrozen({ data: DATA, width: 'container', height: 120, mark: 'point', encoding: { x: xq, y: yq } })
+    expect(vg.autosize).toEqual({ type: 'fit-x', contains: 'padding' })
+    expect(vg.width).toBeUndefined()
+    expect(vg.height).toBe(120)
+    expect(vg.signals[0]).toMatchObject({ name: 'width', on: [{ events: 'window:resize' }] })
+    expect(vg.signals[0].init).toContain('containerSize()[0]')
+  })
+  it('both dimensions fit, and a user autosize keeps its own type', () => {
+    const both = compileFrozen({ data: DATA, width: 'container', height: 'container', mark: 'bar', encoding: { x: cn, y: yq } })
+    expect(both.autosize.type).toBe('fit')
+    expect(both.signals.map((s: any) => s.name)).toEqual(['width', 'height'])
+    const user = compileFrozen({ data: DATA, width: 'container', height: 'container', autosize: { type: 'fit', contains: 'content' }, mark: 'bar', encoding: { x: cn, y: yq } })
+    expect(user.autosize.contains).toBe('content')
+  })
+  it('works on a layer and is refused inside a composition', () => {
+    const layer = compileFrozen({ data: DATA, width: 'container', layer: [{ mark: 'line', encoding: { x: xq, y: yq } }] })
+    expect(layer.autosize.type).toBe('fit-x')
+    expect(() => compileFrozen({ data: DATA, hconcat: [{ width: 'container', mark: 'point', encoding: { x: xq, y: yq } }] })).toThrow(/container/)
+  })
+})
