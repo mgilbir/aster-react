@@ -297,7 +297,14 @@ async function fetchText(raw: string, o: ResolvedOptions): Promise<{ text: strin
   return o.sem.run(async () => {
     const own = new AbortController()
     const timer = setTimeout(() => own.abort(timeoutError(raw, o.timeoutMs)), o.timeoutMs)
-    const signal = AbortSignal.any ? AbortSignal.any([own.signal, o.signal]) : own.signal
+    // AbortSignal.any needs Node >= 20.3; older runtimes get the same effect by forwarding.
+    let signal: AbortSignal
+    if (typeof AbortSignal.any === 'function') signal = AbortSignal.any([own.signal, o.signal])
+    else {
+      signal = own.signal
+      if (o.signal.aborted) own.abort(o.signal.reason)
+      else o.signal.addEventListener('abort', () => own.abort(o.signal.reason), { once: true })
+    }
     const scoped: ResolvedOptions = { ...o, signal }
     try {
       let url = await vet(raw, o)
