@@ -172,6 +172,11 @@ function fingerprint(spec: VgSpec, input: RuntimeInput): string {
   return `${metaKeyOf(skeleton, input)}\u0000${parts.join('\u0001')}`
 }
 
+/** Union of the pulse's structural datasets and the host's own `changedDatasets` hint. */
+function mergeNames(a: Iterable<string>, b: readonly string[] | undefined): string[] {
+  return [...new Set<string>([...a, ...(b ?? [])])]
+}
+
 export function createChartSession(): ChartSession {
   let lastKey = ''
   let lastMetaKey = ''
@@ -186,10 +191,16 @@ export function createChartSession(): ChartSession {
     if (input.dataPulse) {
       const datasets = new Map<string, never>()
       const structural = new Set<string>()
-      const sameLength = dict<number[]>()
+      // `dataChanges` (same-length form) and `dataPulse` may be given together,
+      // for different datasets; `dataPulse` wins per dataset. Keep both, or the
+      // per-datum changes of the datasets only named in `dataChanges` are lost.
+      const sameLength = dict<number[]>(input.dataChanges)
+      for (const [name, idxs] of Object.entries(input.dataChanges ?? {})) {
+        datasets.set(name, { name, changed: [...idxs], sameLength: true, added: null, removed: null } as never)
+      }
       for (const [name, p] of Object.entries(input.dataPulse)) {
         if (!p.from) sameLength[name] = p.changed ?? []
-        else structural.add(name)
+        else { structural.add(name); delete sameLength[name] }
         datasets.set(name, {
           name,
           changed: p.changed ?? [],
@@ -207,7 +218,7 @@ export function createChartSession(): ChartSession {
         input: {
           ...input,
           ...(Object.keys(sameLength).length ? { dataChanges: sameLength } : {}),
-          ...(structural.size ? { changedDatasets: [...structural] } : {}),
+          ...(structural.size || input.changedDatasets?.length ? { changedDatasets: mergeNames(structural, input.changedDatasets) } : {}),
         },
         pulse: { datasets: datasets as never, structural },
       }
@@ -240,7 +251,7 @@ export function createChartSession(): ChartSession {
         ...input,
         ...(Object.keys(changes).length ? { dataChanges: changes } : {}),
         ...(Object.keys(mapped).length ? { dataPulse: mapped } : {}),
-        ...(changedDatasets.length ? { changedDatasets } : {}),
+        ...(changedDatasets.length || input.changedDatasets?.length ? { changedDatasets: mergeNames(changedDatasets, input.changedDatasets) } : {}),
       },
       pulse,
     }
