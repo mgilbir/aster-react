@@ -1023,7 +1023,13 @@ function buildContent(
   // `columns`) aborts vega's whole ViewLayout transform: the scene renders
   // unlayouted — cells at their encoded anchors — with the default padding
   // and no overflow growth (the dataflow logs the error and continues).
-  const padding = (ctx as unknown as { __layoutError?: boolean }).__layoutError || ctx.rawGuides
+  // `autosize: none` keeps the declared viewport: vega's viewSizeLayout does not
+  // grow the padding from guide/mark overflow, so measuring every top-level
+  // group's recursive bounds here would be pure cost (O(items) per evaluation,
+  // and the dominant cost of a one-row update on a 100k-point chart).
+  const padding = (ctx as unknown as { __layoutError?: boolean }).__layoutError
+    || ctx.rawGuides
+    || ctx.chart.autosize === 'none'
     ? ctx.chart.padding
     : computeGuidePadding(
         items, facetWidth, facetHeight, ctx.chart.padding,

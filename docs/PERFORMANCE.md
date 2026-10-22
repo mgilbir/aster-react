@@ -14,6 +14,17 @@ a chart pays only for the features it imports.
   one, so a cached markup string made every no-op render re-parse the whole SVG), an
   identical-content re-render now costs ~0.3ms with zero DOM mutations (1k–10k
   points, measured in `pnpm bench:browser`; Vega's wrappers: 0.1–0.2ms).
+- **Fixed-size charts**: when `autosize` is `none` (explicit width/height, the usual
+  dashboard case) evaluation skips Vega's overflow-padding pass, which measures the
+  recursive bounds of every top-level group. That walk was the dominant cost of a
+  one-row update on a large chart: line @1k browser update 4.1 → 3.1ms, 5k full
+  evaluate 1.5 → 1.2ms, 50k differential full re-encode 59 → 54ms, and a 100k
+  same-length array replacement ~16 → ~10ms. Charts with `autosize: pad/fit` keep
+  the full pass, and the 419-spec conformance corpus (which includes both) is
+  byte-identical.
+- **Auto-pulse inference**: `rowsEqual` compares plain rows with `for...in` instead
+  of two `Object.keys` allocations per row (~1.5x faster on 100k rows), so replacing
+  the whole data array stays cheap even without explicit `dataChanges`.
 - **Per-datum updates**: sessions diff replaced immutable source arrays automatically
   (`autoChanges`), then re-encode only changed rows and reuse unchanged scene items;
   explicit `dataChanges` remains available for custom batching. The source/transform

@@ -50,6 +50,15 @@
   hosts import the addon in the worker entry. `@aster/react` measures 136.0 kB gzip
   (Vega only) / 158.4 kB with the addon; the budget gate now covers both entries
   (160 kB each), replacing the single 159 kB budget that had 0.6 kB of headroom.
+- **Evaluation skips overflow padding for fixed-size charts**: with
+  `autosize: 'none'` the evaluator no longer measures every top-level group's
+  recursive bounds (Vega's viewSizeLayout does not grow such a viewport). Line
+  @1k browser update 4.1 → 3.1ms, 5k full evaluate 1.5 → 1.2ms, 50k differential
+  full re-encode 59 → 54ms, 100k same-array replacement ~16 → ~10ms; differential
+  speedups rise accordingly (fixed-scale symbol 12x → 54x, row-wise 18x → 42x).
+  `autosize: pad/fit` charts keep the full pass; conformance output is unchanged.
+- **Faster row diff**: `rowsEqual` uses `for...in` (no `Object.keys` allocations)
+  for plain rows, ~1.5x faster auto-pulse inference on wholesale array replacement.
 - **Dense SVG marks (`denseMarks`)**: opt-in batched symbol rendering for large SVG
   scenes. Dense symbol marks emit chunked `<path>` elements (positions baked into
   `d`, ~256 items per chunk) instead of one transformed element per datum: 100k
