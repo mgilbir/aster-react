@@ -76,6 +76,6 @@ describe('aggregate-positioned facet groups (vega-lite stack_group_main)', () =>
 
   it('rounds a single corner of the group', () => {
     const top = renderSpec(stackSpec({ cornerRadiusTopLeft: { value: 6 } }) as never)
-    expect(top).toContain('<clipPath id="clip1"><path d="M6,0L47')
+    expect(top).toMatch(/<clipPath id="clip[^"]*"><path d="M6,0L47/)
   })
 })
