@@ -4300,13 +4300,16 @@ function buildFacetCells(
       }
     }
 
+    // a rounded stack group paints its background, then clips only its CONTENT to the rounded path
+    const content = [...bgItems, ...axisItems, ...nestedItems, ...labelItems]
     result.push({
       marktype: 'group', name: mark.name, role: 'scope',
-      items: [...bgItems, ...axisItems, ...nestedItems, ...labelItems],
-      clip: mark.clip === true || groupRounded,
+      items: groupRounded
+        ? [content[0]!, { marktype: 'group', role: 'scope', items: content.slice(1), clip: true, clipPathD: cellD, width: size.x, height: size.y, x: 0, y: 0 } as SceneGroup]
+        : content,
+      clip: mark.clip === true,
       width: size.x, height: size.y,
       x: pos.x, y: pos.y,
-      ...(groupRounded ? { clipPathD: cellD } : {}),
     })
   }
 
