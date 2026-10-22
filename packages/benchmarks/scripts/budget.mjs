@@ -12,10 +12,10 @@ import { fileURLToPath } from 'node:url'
 // base bundle fails a named row instead of being hidden by one aggregate.
 //
 // Measured 2026-10 (gzip, minified; react/react-dom external):
-//   @aster/core          109.0 kB
-//   @aster/core/dom      110.3 kB
-//   @aster/core/canvas    12.3 kB
-//   @aster/core/hit        1.5 kB
+//   @aster/core          109.5 kB
+//   @aster/core/dom      112.7 kB
+//   @aster/core/canvas    12.9 kB
+//   @aster/core/hit       14.0 kB
 //   @aster/core/signals   28.1 kB
 //   @aster/react         135.9 kB (Vega only)
 //   @aster/react/vl      158.4 kB (base + the from-scratch VL compiler, ~22.6 kB)
@@ -38,11 +38,19 @@ import { fileURLToPath } from 'node:url'
 // (+~4) are the R13 additions. The budget's job is
 // regression detection, so each entry gets measured headroom rather than a
 // number that no longer describes the library.
+//
+// Audit C43/C47 re-baseline: the DOM descriptor now takes every attribute from
+// render.ts's per-element lists (dom +2.4 kB: clipped rounded bars, leaf clips,
+// frame parity were missing from the DOM path), and the hit index picks against
+// the PAINTED geometry instead of bounding boxes (hit 1.5 -> 14.0 kB standalone:
+// path flattening, arc/line/area/trail outlines and the layout's text bounds).
+// Alongside @aster/core the hit entry shares most of that code, so its marginal
+// cost in an app is far smaller than the standalone row suggests.
 const BUDGETS = {
   '@aster/core': 115 * 1024,
   '@aster/core/dom': 118 * 1024,
   '@aster/core/canvas': 20 * 1024,
-  '@aster/core/hit': 6 * 1024,
+  '@aster/core/hit': 16 * 1024,
   '@aster/core/signals': 36 * 1024,
   // 180 kB leaves headroom for feature work; measured values are recorded at
   // the top of this file and in `pnpm bench:bundle`.
