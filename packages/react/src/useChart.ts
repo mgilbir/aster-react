@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { renderSceneToSvg, type RuntimeInput, type SceneRoot, type VgSpec } from '@aster/core'
 import { createChartSession } from '@aster/core/dom'
-import { normalizeChartSpec } from './spec.js'
+import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
 
 export interface UseChartOptions extends RuntimeInput {
   /** Skip SVG serialization when the host renders the scene itself. */
@@ -23,18 +23,31 @@ export interface UseChartResult {
  */
 export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartResult {
   const { serialize = true, ...input } = options
-  const normalized = React.useMemo(() => normalizeChartSpec(spec), [spec])
+  // Content-stable spec and limits: an inline literal rebuilt every render must
+  // not look like a change (nor re-run the Vega-Lite compiler).
+  const stableSpec = useStableSpec(spec)
+  const limits = useStableContent(input.limits)
+  const normalized = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
   const sessionRef = React.useRef<ReturnType<typeof createChartSession> | null>(null)
   if (sessionRef.current == null) sessionRef.current = createChartSession()
   const session = sessionRef.current
+  // Every `RuntimeInput` field is a dependency. The record below must name each
+  // key of `RuntimeInput` (the type makes a missing one a compile error), so a new
+  // engine input cannot silently leave a stale result the way textMetrics,
+  // dataPulse, changedDatasets and autoChanges once did.
+  const deps: Required<{ [K in keyof RuntimeInput]: unknown }> = {
+    limits, textMetrics: input.textMetrics, data: input.data, width: input.width, height: input.height, signals: input.signals,
+    changedDatasets: input.changedDatasets, dataChanges: input.dataChanges, dataPulse: input.dataPulse,
+    autoChanges: input.autoChanges, domainRaw: input.domainRaw,
+  }
   return React.useMemo(() => {
     try {
-      const scene = session.evaluate(normalized, input)
+      const scene = session.evaluate(normalized, { ...input, limits })
       return { scene, svg: serialize ? renderSceneToSvg(scene) : null, error: null, session }
     } catch (e) {
       return { scene: null, svg: null, error: e instanceof Error ? e : new Error(String(e)), session }
     }
-  }, [normalized, input.data, input.dataChanges, input.width, input.height, input.signals, input.domainRaw, input.limits, serialize, session])
+  }, [normalized, ...Object.values(deps), serialize, session])
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +89,12 @@ export function loadSpecDataResource(
     mod.loadSpecData(spec, options.fetch ? { fetch: options.fetch } : undefined),
   )
   RESOURCES.set(spec, { key, promise })
+  // A failed load must not be cached forever: drop the entry so the next render
+  // (e.g. after the error boundary resets) retries instead of re-throwing the
+  // same rejection. The rejected promise is still what this render sees.
+  promise.catch(() => {
+    if (RESOURCES.get(spec)?.promise === promise) RESOURCES.delete(spec)
+  })
   return promise
 }
 
