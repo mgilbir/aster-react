@@ -155,7 +155,10 @@ interface DenseChunk { from: number; to: number; first: SceneItem; desc: DomDesc
 interface DenseCache { items: SceneItem[]; chunkSize: number; chunks: Map<number, DenseChunk> }
 // Keyed by scene group: the runtime reuses the group (and its items array) for
 // incremental updates, so unchanged chunks keep their descriptor and their DOM.
-const DENSE = new WeakMap<SceneGroup, DenseCache>()
+// Keyed by the items ARRAY, not the group: an incremental update hands the same
+// (in-place advanced) array to a NEW group object, so a group key would miss
+// every frame and rebuild every descriptor.
+const DENSE = new WeakMap<SceneItem[], DenseCache>()
 
 function batchableSymbol(it: SceneItem): boolean {
   const x = it.x
@@ -212,7 +215,7 @@ function symbolAttrs(it: SceneItem): Array<[string, string]> {
  * of every descriptor in the mark.
  */
 function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: number): DomDesc[] {
-  const prev = DENSE.get(group)
+  const prev = DENSE.get(items)
   const cachedChunks = prev && prev.items === items && prev.chunkSize === chunkSize ? prev.chunks : null
   const chunks = new Map<number, DenseChunk>()
   const out: DomDesc[] = []
@@ -275,7 +278,7 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
     out.push(desc)
     i = to
   }
-  DENSE.set(group, { items, chunkSize, chunks })
+  DENSE.set(items, { items, chunkSize, chunks })
   return out
 }
 
@@ -300,10 +303,10 @@ interface SymbolItemsCache { items: SceneItem[]; keys: SceneItem[]; descs: DomDe
 // Per-group; the runtime mutates the items array in place for incremental
 // updates, so an unchanged item keeps its descriptor without rebuilding the
 // 100k-entry array on every append.
-const SYMBOL_ITEMS = new WeakMap<SceneGroup, SymbolItemsCache>()
+const SYMBOL_ITEMS = new WeakMap<SceneItem[], SymbolItemsCache>()
 
 function symbolItems(group: SceneGroup, items: SceneItem[]): DomDesc[] {
-  const prev = SYMBOL_ITEMS.get(group)
+  const prev = SYMBOL_ITEMS.get(items)
   const reuse = prev && prev.items === items ? prev : null
   const keys = reuse ? reuse.keys : []
   const descs = reuse ? reuse.descs : []
@@ -321,7 +324,7 @@ function symbolItems(group: SceneGroup, items: SceneItem[]): DomDesc[] {
   }
   keys.length = n
   descs.length = n
-  SYMBOL_ITEMS.set(group, { items, keys, descs })
+  SYMBOL_ITEMS.set(items, { items, keys, descs })
   // The patcher compares against the previous descriptor *array*, so return a
   // snapshot: exposing the cached array would mean a later in-place append
   // mutates the patcher's "previous" state and every child gets re-walked.

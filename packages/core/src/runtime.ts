@@ -256,6 +256,14 @@ interface ItemsUndo { oldLen: number; idx: number[]; items: SceneItem[] }
  * small undo record per later update alive (plus the items those updates
  * overwrote).
  */
+/**
+ * @internal Number of superseded groups materialised so far. Hot paths (DOM
+ * patch, canvas append, stream flush) must never advance it in steady state;
+ * tests assert exactly that.
+ */
+export function supersededMaterializations(): number { return materializedCount }
+let materializedCount = 0
+
 function supersedeItems(old: SceneGroup, next: SceneGroup, undo: ItemsUndo): void {
   let link: { next: SceneGroup; undo: ItemsUndo } | null = { next, undo }
   const settle = (value: SceneNode[] | undefined): void => {
@@ -268,6 +276,7 @@ function supersedeItems(old: SceneGroup, next: SceneGroup, undo: ItemsUndo): voi
     get(): SceneNode[] | undefined {
       if (!link) return undefined
       const { next: newer, undo: u } = link
+      materializedCount++
       // Reading the newer group's items materialises it first if it is lazy too.
       const base = (newer.items ?? []) as SceneItem[]
       const arr = base.slice(0, u.oldLen)
@@ -334,6 +343,8 @@ interface EvalContext {
   claimed: Set<string>
   /** Non-signal inputs that invalidate reuse (domainRaw, text metrics). */
   extraFp: string
+  /** Memo for ctxFpOf; cleared whenever signalParams may have changed. */
+  fpMemo?: string
   /** Bumped by every dataset (re)build pass; part of the scale-reuse stamp. */
   dsEpoch: number
   /** Census-reuse decisions already taken this evaluation (a census is advanced once). */
@@ -514,6 +525,7 @@ function prepareChartCtx(
           width = v
           ctx.width = v
           ctx.signalParams.width = v
+          ctx.fpMemo = undefined
           buildScales(ctx)
         }
       } catch { /* leave the default */ }
@@ -530,7 +542,10 @@ function prepareChartCtx(
 
 /** Fingerprint of the evaluation context that reused scales/items were built under. */
 function ctxFpOf(ctx: EvalContext): string {
-  return `${paramFpOf(ctx.signalParams)}\u0002${ctx.extraFp}`
+  // Memoised: the params only change at the few known write sites, each of
+  // which clears the memo (resolveSignalUpdates, the width re-resolution, and
+  // the end of every dataset pass, since transforms may write signals).
+  return ctx.fpMemo ??= `${paramFpOf(ctx.signalParams)}\u0002${ctx.extraFp}`
 }
 
 /** Build d3-geo projections from the compiled spec, resolving signal params. */
@@ -614,6 +629,7 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
       const value = ctx.runtime.expr(def.update)(undefined, ctx.signalParams)
       if (value !== undefined && !valuesEqual(value, ctx.signalParams[def.name])) {
         ctx.signalParams[def.name] = value
+        ctx.fpMemo = undefined
         changed = true
       }
     } catch {
@@ -1134,7 +1150,7 @@ function markScaleNames(mark: CompiledMark, chart: CompiledChart): string[] {
 function canReuseMarkGroup(mark: CompiledMark, ctx: EvalContext): boolean {
   const prev = ctx.prev
   if (!prev || !ctx.incremental || mark.type === 'group') return false
-  if (prev.fp !== ctxFpOf(ctx)) return false
+  if (prev.fp !== ctx.draft.fp) return false
   const deps = markDepsOf(mark, ctx.chart)
   if (deps.allData ? ctx.affected.size > 0 : [...deps.names].some((n) => ctx.affected.has(n))) return false
   for (const name of markScaleNames(mark, ctx.chart)) {
@@ -2850,6 +2866,8 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
   for (const d of ctx.chart.data) {
     build(d.name, new Set())
   }
+  // Transforms (extent, bin with a signal output) may have written signals.
+  ctx.fpMemo = undefined
 }
 
 /** Snapshot resolved scales into plain data for the scene differential (R8.1/R8.2). */
@@ -3253,7 +3271,7 @@ function reusablePulse(
   // Reading other datasets from an expression: an unchanged row can still
   // encode differently, and no pulse describes that.
   if (deps.allData) return null
-  if (prev.fp !== ctxFpOf(ctx)) return null
+  if (prev.fp !== ctx.draft.fp) return null
   for (const name of markScaleNames(mark, ctx.chart)) {
     if (ctx.scales.get(name) !== prev.scales.get(name)) return null
   }
@@ -3374,6 +3392,10 @@ function evaluateMark(
           for (let k = undo.idx.length - 1; k >= 0; k--) prevItems[undo.idx[k]!] = undo.items[k]!
           throw e
         }
+        // Stamp the array when an EXISTING item was re-encoded in place, so a
+        // consumer holding a snapshot (canvas append) can tell "pure append"
+        // from "edited" in O(1) without scanning, or reading, the old scene.
+        if (undo.idx.length) (prevItems as SceneItem[] & { __editGen?: number }).__editGen = ctx.gen
         items = prevItems
         pendingUndo = undo
       } else if (pulse.from) {
