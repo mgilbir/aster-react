@@ -19,7 +19,7 @@ import {
   type StreamStats,
   type VgSpec,
 } from '@aster/core'
-import { normalizeChartSpec } from './spec.js'
+import { normalizeChartSpec, useStableSpec } from './spec.js'
 
 export interface UseChartStreamOptions extends StreamOptions {
   /** Serialize the scene to SVG on every flush (default true). */
@@ -60,22 +60,49 @@ interface StreamState {
   error: Error | null
 }
 
+/** A state tagged with the stream it belongs to (a rebuilt stream discards the old one). */
+interface TaggedState extends StreamState {
+  stream: ChartStream
+}
+
+/**
+ * The stream is keyed on the spec CONTENT, `capacity` and `policy`: a parent
+ * re-render that hands in an equal (but new) inline `spec` keeps the stream and
+ * the rows streamed into it. `initial` is read when the stream is created.
+ *
+ * The first scene is primed synchronously while the stream is created, so a
+ * server render (where no effect runs) already contains the chart.
+ */
 export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}): UseChartStreamResult {
   const { serialize = true, autoFlush = true, flushPolicy = 'microtask', capacity, policy, initial } = options
-  const normalized = React.useMemo(() => normalizeChartSpec(spec), [spec])
+  const stableSpec = useStableSpec(spec)
+  const normalized = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
   const streamRef = React.useRef<ChartStream | null>(null)
   const streamKey = React.useRef<{ spec: VgSpec; capacity?: number; policy?: StreamOptions['policy'] } | null>(null)
+  const primedRef = React.useRef<TaggedState | null>(null)
   if (
     streamRef.current == null
     || streamKey.current?.spec !== normalized
     || streamKey.current?.capacity !== capacity
     || streamKey.current?.policy !== policy
   ) {
-    streamRef.current = createChartStream(normalized, { capacity, policy, initial })
+    const created = createChartStream(normalized, { capacity, policy, initial })
+    streamRef.current = created
     streamKey.current = { spec: normalized, capacity, policy }
+    let primed: StreamState
+    try {
+      const first = created.flush()
+      primed = first
+        ? { scene: first.scene, svg: serialize ? renderSceneToSvg(first.scene) : null, error: null }
+        : { scene: null, svg: null, error: null }
+    } catch (e) {
+      primed = { scene: null, svg: null, error: e instanceof Error ? e : new Error(String(e)) }
+    }
+    primedRef.current = { ...primed, stream: created }
   }
   const stream = streamRef.current
-  const [state, setState] = React.useState<StreamState>({ scene: null, svg: null, error: null })
+  const [tagged, setState] = React.useState<TaggedState | null>(null)
+  const state: StreamState = tagged != null && tagged.stream === stream ? tagged : primedRef.current!
   const mounted = React.useRef(true)
   const scheduled = React.useRef(false)
   const lastFlush = React.useRef<StreamFlush | null>(null)
@@ -96,13 +123,14 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
     lastFlush.current = result
     if (result) {
       setState({
+        stream,
         scene: result.scene,
         svg: serialize ? renderSceneToSvg(result.scene) : null,
         error: null,
       })
     }
     return result
-  }, [serialize])
+  }, [serialize, stream])
 
   const flush = React.useCallback((): StreamFlush | null => {
     try {
@@ -123,7 +151,7 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
       return null
     } catch (e) {
       const error = e instanceof Error ? e : new Error(String(e))
-      if (mounted.current) setState((s) => ({ ...s, error }))
+      if (mounted.current) setState((s) => ({ ...(s != null && s.stream === stream ? s : primedRef.current!), error }))
       return null
     }
   }, [commit, stream])
@@ -131,12 +159,9 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
   const flushRef = React.useRef(flush)
   flushRef.current = flush
 
-  // Prime the initial scene (and reset when the stream is rebuilt). Layout
-  // effect so the first paint already has the scene.
+  // A rebuilt stream starts from its own primed scene (see above).
   React.useLayoutEffect(() => {
     lastFlush.current = null
-    setState({ scene: null, svg: null, error: null })
-    flushRef.current()
   }, [stream])
 
   const schedule = React.useCallback((): void => {
