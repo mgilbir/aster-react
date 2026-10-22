@@ -314,7 +314,7 @@ const CONFIG_KEYS = set(
     'aria countTitle fieldTitle lineBreak normalizedNumberFormat numberFormat timeFormat errorbar errorband',
 )
 const CONFIG_SCALE_KEYS = set(
-  'bandPaddingInner bandPaddingOuter barBandPaddingInner tickBandPaddingInner rectBandPaddingInner bandWithNestedOffsetPaddingInner bandWithNestedOffsetPaddingOuter offsetBandPaddingInner offsetBandPaddingOuter pointPadding continuousPadding round nice zero xReverse clamp useUnaggregatedDomain invalid minBandSize maxBandSize minFontSize maxFontSize minOpacity maxOpacity minSize maxSize minStrokeWidth maxStrokeWidth quantileCount quantizeCount',
+  'bandPaddingInner bandPaddingOuter barBandPaddingInner tickBandPaddingInner rectBandPaddingInner bandWithNestedOffsetPaddingInner bandWithNestedOffsetPaddingOuter offsetBandPaddingInner offsetBandPaddingOuter pointPadding continuousPadding round nice zero xReverse clamp useUnaggregatedDomain invalid minBandSize maxBandSize minFontSize maxFontSize minOpacity maxOpacity minSize maxSize minStrokeWidth maxStrokeWidth quantileCount quantizeCount framesPerSecond animationDuration',
 )
 
 function validateConfig(cfg: Obj, path: string): void {
@@ -336,7 +336,6 @@ function validateConfig(cfg: Obj, path: string): void {
         if (v !== 'zero-or-min' && !(isObj(v) && 'value' in v)) fail(`${path}.scale.invalid.${ch}`, 'must be "zero-or-min" or {"value": ...}')
       }
     }
-    for (const k of ['framesPerSecond', 'animationDuration']) if (cfg.scale[k] !== undefined) fail(`${path}.scale.${k}`, 'animation is not supported')
   }
   if (cfg.autosize !== undefined) validateAutosize(cfg.autosize, `${path}.autosize`)
 }
@@ -420,7 +419,6 @@ const MARK_DEF_KEYS = set(
 )
 /** mark-def properties that Vega-Lite honours but compile.ts does not implement. */
 const UNSUPPORTED_MARK_KEYS: Record<string, string> = {
-  time: 'animation is not supported',
   timeUnitBandPosition: 'timeUnitBandPosition is not supported',
   timeUnitBandSize: 'timeUnitBandSize is not supported',
   x: 'positional mark-def constants (x/x2/y/y2) are not supported; use encoding',

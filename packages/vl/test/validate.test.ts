@@ -16,7 +16,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['an errorbar with no continuous axis', unit({ mark: 'errorbar', encoding: { x: cn, y: cn } }), /continuous x or y axis/],
   ['an errorbar with both errors', unit({ mark: 'errorbar', encoding: { x: xq, y: yq, xError: { field: 'x' }, yError: { field: 'y' } } }), /both xError and yError/],
   ['an unknown mark property', unit({ mark: { type: 'point', sparkle: true } }), /unknown mark property "sparkle"/],
-  ['an unsupported mark property', unit({ mark: { type: 'bar', time: 2 } }), /animation/],
+  ['an unsupported mark property', unit({ mark: { type: 'bar', timeUnitBandSize: 2 } }), /timeUnitBandSize/],
   ['config nested in a child spec', { data: DATA, hconcat: [unit({ config: {} })] }, /config is only allowed at the top level/],
   ['an unsupported config key', unit({ config: { customFormatTypes: true } }), /config\.customFormatTypes/],
   ['container sizing of a composition', { data: DATA, width: 'container', hconcat: [unit(), unit()] }, /container/],
@@ -24,7 +24,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['data generators', { data: { sequence: { start: 0, stop: 3 } }, mark: 'point' }, /generators/],
   ['an unknown invalid mode', unit({ mark: { type: 'point', invalid: 'drop' } }), /unknown invalid-value mode/],
   ['a bad scale invalid value', unit({ config: { scale: { invalid: { x: 'nope' } } } }), /zero-or-min/],
-  ['scale animation config', unit({ config: { scale: { framesPerSecond: 3 } } }), /framesPerSecond/],
+  ['the time channel', unit({ encoding: { x: xq, y: yq, time: { field: 'x', type: 'quantitative' } } }), /time/],
   // --- composition nesting (C34)
   ['a facet inside a layer', { data: DATA, layer: [{ facet: { field: 'c', type: 'nominal' }, spec: unit() }] }, /not allowed inside `layer`/],
   ['a concat inside a facet', { data: DATA, facet: { field: 'c', type: 'nominal' }, spec: { hconcat: [unit()] } }, /not allowed inside `facet`/],
