@@ -8,7 +8,7 @@
  */
 
 import { renameDataRefs, renameFragment } from './embed.js'
-import { VLCompileError, signalSafe, flatField, datumRef as dref, genName, safeKey, splitAccessPath, validExpr } from './names.js'
+import { VLCompileError, pushAll, signalSafe, flatField, datumRef as dref, genName, safeKey, splitAccessPath, validExpr } from './names.js'
 import { validateSpec } from './validate.js'
 import { predicateExpr } from './predicate.js'
 import { normalizeComposites } from './composite.js'
@@ -302,7 +302,7 @@ function collectLeaves(root: VLSpec): VLSpec[] {
       data = node.data
       transform = []
     }
-    if (Array.isArray(node.transform)) transform.push(...node.transform)
+    if (Array.isArray(node.transform)) pushAll(transform, node.transform as Record<string, unknown>[])
     const encoding = { ...inh.encoding, ...(isObject(node.encoding) ? (node.encoding as Record<string, unknown>) : {}) }
     if (Array.isArray(node.layer)) {
       for (const c of node.layer as VLSpec[]) visit(c, { encoding, data, transform })
@@ -592,14 +592,14 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     if (fixed !== undefined || isContainer) continue
     const sc = scales.find((s) => s.name === channel)
     if (!sc || (sc.type !== 'band' && sc.type !== 'point')) continue
-    sizeSignals.push(...stepSignals(channel, sc, stepReq))
+    pushAll(sizeSignals, stepSignals(channel, sc, stepReq))
   }
   const xStepped = sizeSignals.some((s) => s.name === 'width')
   const yStepped = sizeSignals.some((s) => s.name === 'height')
   const container = containerSizing(spec, wSpec, hSpec)
   if (container) {
     out.autosize = container.autosize
-    sizeSignals.unshift(...container.signals)
+    sizeSignals.splice(0, 0, ...container.signals)
   }
   if (!xStepped && !wSpec.container) out.width = width
   if (!yStepped && !hSpec.container) out.height = height
@@ -743,7 +743,7 @@ function domainEntries(domain: unknown): DomainEntry[] | null {
     for (const f of d.fields) {
       const e = domainEntries(f)
       if (!e) return null
-      out.push(...e)
+      pushAll(out, e)
     }
     return out
   }
@@ -1758,7 +1758,7 @@ function compileBoxplot(spec: VLSpec, ctx: CompileCtx): VLSpec {
       }
     }
     const userT = Array.isArray(spec.transform) ? (spec.transform as Record<string, unknown>[]) : []
-    out.push(...translateTransforms(userT, ctx, { parsed: new Map() }))
+    pushAll(out, translateTransforms(userT, ctx, { parsed: new Map() }))
     return out
   }
 
@@ -2530,7 +2530,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   const binSignals = new Map<string, { startField: string; endField: string; binsSignal: string }>()
   for (const f of binFields) {
     const names = binNames(f.binParams!, f.field)
-    pipeline.push(...binTransforms(f.binParams!, f.field, names))
+    pushAll(pipeline, binTransforms(f.binParams!, f.field, names))
     binSignals.set(f.field, { startField: names.start, endField: names.end, binsSignal: names.signal })
   }
 
@@ -2640,7 +2640,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   for (const [k, ty] of castTypes) st.parsed.set(k, ty)
   const userOut = translateTransforms(userTransforms, ctx, st)
   for (const t of userOut) USER_TRANSFORMS.add(t)
-  pipeline.push(...userOut)
+  pushAll(pipeline, userOut)
 
   // timeUnit: the timeunit transform floors each date to the unit
   const tuSeen = new Set<string>()
@@ -2800,7 +2800,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     const groupbyUniq = [...new Set(groupby)]
     if (measures.length || groupbyUniq.length) {
       pipeline.push({ type: 'aggregate', groupby: groupbyUniq, ops: measures.map((o) => o.op), fields: measures.map((o) => o.field ?? null), as: measures.map((o) => o.as) })
-      if (stackAfterAggregate) pipeline.push(...stackTransforms(measure!))
+      if (stackAfterAggregate) pushAll(pipeline, stackTransforms(measure!))
       // argmax/argmin leave the winning ROW in the aggregate column; flatten
       // the channel's value out of it (vega-lite reads `argmax_b["a"]`)
       const argDone = new Set<string>()
@@ -2813,7 +2813,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     }
   } else if (stackable && measure && measure.type === 'quantitative' && !measure.bin && isStacked(measure, mark, orient, fields)) {
     // stacked bar/area: continuous dimensions impute gaps; discrete ones filter
-    pipeline.push(...stackTransforms(measure))
+    pushAll(pipeline, stackTransforms(measure))
   }
 
   // the invalid values the marks must not see (vega-lite FilterInvalidNode): skipped when a generating
@@ -5361,9 +5361,9 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
     if (!stepForm || !defS) continue
     const sc = (out.scales as ScaleSpec[]).find((s) => s.name === channel)
     if (!sc) continue
-    sizeSignals.push(...stepSignals(channel, sc, stepReq))
+    pushAll(sizeSignals, stepSignals(channel, sc, stepReq))
   }
-  if (unitContainer) sizeSignals.unshift(...unitContainer.signals)
+  if (unitContainer) sizeSignals.splice(0, 0, ...unitContainer.signals)
   if (sizeSignals.length) out.signals = sizeSignals
   // the point overlay's dataset joins the size domain union
   if (builtMarks.overlayData) {

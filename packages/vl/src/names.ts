@@ -159,3 +159,8 @@ export function validExpr(key: string): string {
   const r = datumRef(key)
   return `isValid(${r}) && isFinite(+${r})`
 }
+
+/** Append every item (a spread push would overflow the stack for a huge list; these are spec-sized, but the rule is uniform). */
+export function pushAll<T>(target: T[], items: readonly T[]): void {
+  for (const x of items) target.push(x)
+}

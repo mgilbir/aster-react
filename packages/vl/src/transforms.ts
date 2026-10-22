@@ -7,7 +7,7 @@
  * later in-place edit of the emitted transforms (e.g. facet group-by
  * injection) cannot reach back into the caller's spec or into a sibling.
  */
-import { genSignal, safeKey, splitAccessPath, VLCompileError, datumPathRef } from './names.js'
+import { pushAll, genSignal, safeKey, splitAccessPath, VLCompileError, datumPathRef } from './names.js'
 import { predicateExpr } from './predicate.js'
 import { getTimeUnitParts, normalizeTimeUnit, timeUnitTransform } from './timeunit.js'
 
@@ -372,7 +372,7 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
 /** Translate a whole VL transform list (each element validated beforehand). */
 export function translateTransforms(list: Obj[], ctx: TransformContext, st: TranslateState): Obj[] {
   const out: Obj[] = []
-  for (const t of list) out.push(...translateTransform(t, ctx, st))
+  for (const t of list) pushAll(out, translateTransform(t, ctx, st))
   return out
 }
 
