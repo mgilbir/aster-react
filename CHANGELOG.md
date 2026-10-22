@@ -16,6 +16,36 @@
   and fails on vega errors or warnings. The opt-in `@aster/react/vl` bundle row
   grew to ~189 kB gzip (proposed budget 190 kB, pending approval). Core: domain `sort: {op}` uses Vega's
   aggregate ops and ordinal `{scheme}` ranges resolve to colours.
+- **Loader URL policy (breaking default)**: `loadSpecData(spec, options)` now vets every URL
+  (protocols `http:`/`https:` only, no credentials, loopback/private/link-local hosts denied,
+  relative urls need `baseURL`, an `allow(url)` hook re-run on every redirect hop) and bounds
+  each request (`timeoutMs`, `maxBytes` enforced while streaming, `maxConcurrent`,
+  `maxRedirects`, `signal`). `data:` urls need `protocols: ['data:']`. Group-level `url`
+  datasets are now resolved; an unloaded `url` dataset is an error instead of an empty chart.
+  `TRUSTED_LOAD_OPTIONS` opts out for specs you wrote. Image-mark urls share the policy
+  (`RuntimeInput.urlPolicy`, defaults applied under `limits`).
+- **Limits are meters, not checkpoints**: one wall clock and generated-row/byte meters are
+  threaded through transforms, row emitters, the encode loop, guides, expression builtins and the
+  parser; single-call allocators (`sequence`, `pad`, format width, ticks, facet columns, contour
+  grids, topojson arcs) are bounded before they allocate; `maxRows` covers nested group data,
+  host `input.data` and transform output; paths and text arrays count toward `maxPathLength` /
+  `maxStringLength`; deep and cyclic specs and expressions throw `AsterLimitError`. New
+  `maxGeneratedRows` / `maxGeneratedBytes`. See `docs/LIMITS.md` (including why untrusted
+  specs still need a killable worker for regular expressions).
+- **Fixes**: `bin` with `maxbins <= 0` and `stratify` cycles no longer hang (vega's results and
+  errors); `Math.min/max(...rows)` no longer overflows the stack at ~120k rows; `format.parse`
+  accepts `date:`/`utc:` patterns; expression `format`/`timeFormat` follow the current default
+  locale; formatter caches are bounded.
+- **DOM, canvas and hit-testing fixes** (audit C3, C22, C23, C41, C43, C47, C96): the
+  DOM patcher no longer leaves removed items drawn and drops others after a removal or
+  reorder; the string renderer and the DOM descriptor take every attribute from one
+  per-element list in `render.ts` (a first patch no longer rewrites gradient direction,
+  dashes, caps, the rounded frame, trail fill, ...); canvas append painting is exact
+  (in-place edits in other groups, changed guides, z-order against later groups and the
+  miter limit are handled by declining to a full repaint) and no longer serialises item
+  arrays per frame; trails paint their fill on canvas; the canvas honours symbol `angle`
+  and path `scaleX/scaleY`; the hit index picks against painted geometry (pies, maps,
+  lines, rotated text) and cannot be made to run out of memory by one oversized item.
 
 - **Incremental appends/inserts/deletes**: `diffRows`/`dataPulse` now carry an old↔new
   index mapping plus added/removed ranges. The runtime propagates length-changing
