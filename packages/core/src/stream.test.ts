@@ -268,7 +268,11 @@ describe('stream flush atomicity (C19)', () => {
         stream.push({ append: { t: appended }, signals: { sig: 3 }, width: 150, domainRaw: { sx: [0, 50] }, ...stage.poison })
         const queued = stream.stats()
         const pendingBefore = stream.pending()
-        expect(() => stream.flush()).toThrow()
+        let thrown: unknown
+        try { stream.flush() } catch (e) { thrown = e }
+        expect(thrown).toBeDefined()
+        // Every stage's error carries what is still queued.
+        expect(getStreamFlushFailure(thrown)).toEqual({ batches: queued.depth, queuedRows: queued.queuedRows })
         // Exactly as before the flush.
         expect(stream.scene()).toBe(sceneBefore)
         expect(stream.stats()).toEqual(queued)
@@ -305,7 +309,10 @@ describe('stream flush atomicity (C19)', () => {
     const before = stream.stats()
     stream.push({ append: { t: [row(6)] }, signals: { sig: 2 } }) // no `o`: datum.o.k throws
     const queued = stream.stats()
-    expect(() => stream.flush()).toThrow()
+    let thrown: unknown
+    try { stream.flush() } catch (e) { thrown = e }
+    expect(thrown).toBeDefined()
+    expect(getStreamFlushFailure(thrown)).toEqual({ batches: queued.depth, queuedRows: queued.queuedRows })
     expect(stream.scene()).toBe(sceneBefore)
     expect(stream.stats()).toEqual(queued)
     expect(stream.stats().flushes).toBe(before.flushes)
@@ -319,7 +326,10 @@ describe('stream flush atomicity (C19)', () => {
 
   it('a failed FIRST flush does not poison the stream', () => {
     const stream = createChartStream(titled, { initial: { limits: { maxItems: 1 } } })
-    expect(() => stream.flush()).toThrow(AsterLimitError)
+    let thrown: unknown
+    try { stream.flush() } catch (e) { thrown = e }
+    expect(thrown).toBeInstanceOf(AsterLimitError)
+    expect(getStreamFlushFailure(thrown)).toEqual({ batches: 0, queuedRows: 0 })
     expect(stream.scene()).toBeNull()
     stream.push({ limits: {}, append: { t: rowsOf(1, 3) } })
     stream.flush()
@@ -450,7 +460,10 @@ describe('stream limits (C49)', () => {
     stream.push({ append: { t: rowsOf(1, 5) } })
     stream.flush()
     stream.push({ append: { t: rowsOf(6, 1) } })
-    expect(() => stream.flush()).toThrow(AsterLimitError)
+    let thrown: unknown
+    try { stream.flush() } catch (e) { thrown = e }
+    expect(thrown).toBeInstanceOf(AsterLimitError)
+    expect(getStreamFlushFailure(thrown)).toEqual({ batches: 1, queuedRows: 1 })
     expect(stream.stats().depth).toBe(1)
     // A snapshot that fits replaces the over-budget append.
     stream.push({ data: { t: rowsOf(1, 4) } })

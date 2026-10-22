@@ -582,120 +582,131 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     return Object.keys(next).length ? next : undefined
   }
 
+  const flushOnce = (): StreamFlush | null => {
+    // An empty first flush primes the stream's scene from the spec/initial
+    // snapshot; after that an empty flush is a no-op.
+    if (closed || (!hasQueue() && lastScene)) return null
+    const f = currentFold()
+    const consumed = depth()
+    const { pulse, lengths } = planPulse(f)
+    const changedDatasets = [...pulse.structural]
+    const dataPulse: NonNullable<RuntimeInput['dataPulse']> = {}
+    const dataChanges = dict<number[]>()
+    for (const [name, p] of pulse.datasets) {
+      if (p.sameLength) dataChanges[name] = p.changed
+      else {
+        dataPulse[name] = {
+          changed: p.changed,
+          ...(p.from ? { from: p.from } : {}),
+          ...(p.to ? { to: p.to } : {}),
+          ...(p.addedRanges ? { added: p.addedRanges } : {}),
+          ...(p.removedRanges ? { removed: p.removedRanges } : {}),
+          ...(p.appendOnly ? { appendOnly: true, baseLength: p.baseLength } : {}),
+        }
+      }
+    }
+    // Stage every scalar: nothing is committed until the evaluation succeeds.
+    const nextSignals = f.signals ? dict(signals, f.signals) : signals
+    const nextWidth = f.width ?? width
+    const nextHeight = f.height ?? height
+    const nextDomainRaw = applyDomainRaw(domainRaw, f.domainRaw)
+    const nextLimits = f.limits ?? limits
+    const nextTextMetrics = f.textMetrics ?? textMetrics
+    if (nextLimits?.maxRows != null) {
+      // The stream holds the rows (the session only sees spec literals), so
+      // enforce the row budget over what it is about to evaluate.
+      let total = 0
+      for (const [name, rows] of base) total += lengths.get(name) ?? rows.length
+      for (const [name, len] of lengths) if (!base.has(name)) total += len
+      if (total > nextLimits.maxRows) throw new AsterLimitError(`maxRows ${total} > ${nextLimits.maxRows}`)
+    }
+    // Materialise queued rows now, at flush time (never per push), with an
+    // undo log so a throwing evaluation leaves the committed rows untouched.
+    // A base array that came from the spec/host is copied once, then mutated
+    // in place so repeated appends are O(appended).
+    const undo: Array<() => void> = []
+    const rollback = (): void => { for (let i = undo.length - 1; i >= 0; i--) undo[i]!() }
+    let scene: SceneRoot
+    try {
+      for (const [name, t] of f.targets) {
+        if (t.replace !== undefined) {
+          const arr = finalRows(t)!
+          const prev = base.get(name)
+          const wasOwned = owned.has(name)
+          undo.push(() => { if (prev) base.set(name, prev); else base.delete(name); if (wasOwned) owned.add(name); else owned.delete(name) })
+          if (t.finalOwned) owned.add(name); else owned.delete(name)
+          base.set(name, arr)
+        } else if (t.chunks.length) {
+          const prev = base.get(name)
+          const wasOwned = owned.has(name)
+          let arr = prev ?? []
+          if (!wasOwned) {
+            arr = arr.slice()
+            undo.push(() => { if (prev) base.set(name, prev); else base.delete(name); owned.delete(name) })
+            owned.add(name)
+          } else {
+            const keep = arr.length
+            undo.push(() => { arr.length = keep })
+          }
+          for (const c of t.chunks) for (let i = 0; i < c.length; i++) arr.push(c[i])
+          base.set(name, arr)
+        }
+      }
+      // The stream states exactly what changed (including in-place edits and
+      // datasets that need a re-derive), so the session must not second-guess
+      // it by diffing row identity: a row object edited in place compares
+      // equal to itself and its change would be lost.
+      const input: RuntimeInput = {
+        data: Object.fromEntries(base),
+        autoChanges: false,
+        ...(Object.keys(nextSignals).length ? { signals: nextSignals } : {}),
+        ...(nextWidth != null ? { width: nextWidth } : {}),
+        ...(nextHeight != null ? { height: nextHeight } : {}),
+        ...(nextDomainRaw ? { domainRaw: nextDomainRaw } : {}),
+        ...(nextLimits ? { limits: nextLimits } : {}),
+        ...(nextTextMetrics ? { textMetrics: nextTextMetrics } : {}),
+        ...(Object.keys(dataPulse).length ? { dataPulse } : {}),
+        ...(Object.keys(dataChanges).length ? { dataChanges } : {}),
+        ...(changedDatasets.length ? { changedDatasets } : {}),
+      }
+      scene = session!.evaluate(spec, input)
+    } catch (err) {
+      rollback()
+      throw err
+    }
+    // Commit.
+    signals = nextSignals
+    width = nextWidth
+    height = nextHeight
+    domainRaw = nextDomainRaw
+    limits = nextLimits
+    textMetrics = nextTextMetrics
+    if (policy === 'coalesce') { if (fold === f) fold = null }
+    else { const gone = queue.splice(0, consumed); for (const e of gone) queuedRows -= e.rows }
+    const delivered = pulse
+    const noop = !delivered.datasets.size && !delivered.structural.size && scene === lastScene
+    lastScene = scene
+    lastPulse = delivered
+    stats.flushes++
+    return { scene, pulse: delivered, batches: consumed, noop }
+  }
+
   const stream: ChartStream = {
     push(batch) {
       return enqueue(batch)
     },
     flush() {
-      // An empty first flush primes the stream's scene from the spec/initial
-      // snapshot; after that an empty flush is a no-op.
-      if (closed || (!hasQueue() && lastScene)) return null
-      const f = currentFold()
-      const consumed = depth()
-      const { pulse, lengths } = planPulse(f)
-      const changedDatasets = [...pulse.structural]
-      const dataPulse: NonNullable<RuntimeInput['dataPulse']> = {}
-      const dataChanges = dict<number[]>()
-      for (const [name, p] of pulse.datasets) {
-        if (p.sameLength) dataChanges[name] = p.changed
-        else {
-          dataPulse[name] = {
-            changed: p.changed,
-            ...(p.from ? { from: p.from } : {}),
-            ...(p.to ? { to: p.to } : {}),
-            ...(p.addedRanges ? { added: p.addedRanges } : {}),
-            ...(p.removedRanges ? { removed: p.removedRanges } : {}),
-            ...(p.appendOnly ? { appendOnly: true, baseLength: p.baseLength } : {}),
-          }
-        }
-      }
-      // Stage every scalar: nothing is committed until the evaluation succeeds.
-      const nextSignals = f.signals ? dict(signals, f.signals) : signals
-      const nextWidth = f.width ?? width
-      const nextHeight = f.height ?? height
-      const nextDomainRaw = applyDomainRaw(domainRaw, f.domainRaw)
-      const nextLimits = f.limits ?? limits
-      const nextTextMetrics = f.textMetrics ?? textMetrics
-      if (nextLimits?.maxRows != null) {
-        // The stream holds the rows (the session only sees spec literals), so
-        // enforce the row budget over what it is about to evaluate.
-        let total = 0
-        for (const [name, rows] of base) total += lengths.get(name) ?? rows.length
-        for (const [name, len] of lengths) if (!base.has(name)) total += len
-        if (total > nextLimits.maxRows) throw new AsterLimitError(`maxRows ${total} > ${nextLimits.maxRows}`)
-      }
-      // Materialise queued rows now, at flush time (never per push), with an
-      // undo log so a throwing evaluation leaves the committed rows untouched.
-      // A base array that came from the spec/host is copied once, then mutated
-      // in place so repeated appends are O(appended).
-      const undo: Array<() => void> = []
-      const rollback = (): void => { for (let i = undo.length - 1; i >= 0; i--) undo[i]!() }
-      let scene: SceneRoot
+      // One registration point for EVERY throw out of a flush, whichever stage
+      // raised it (stream-side checks, session pre-flight, evaluate, scene
+      // limits, deadline). The queue is untouched on failure, so its current
+      // size is exactly what is still queued.
       try {
-        for (const [name, t] of f.targets) {
-          if (t.replace !== undefined) {
-            const arr = finalRows(t)!
-            const prev = base.get(name)
-            const wasOwned = owned.has(name)
-            undo.push(() => { if (prev) base.set(name, prev); else base.delete(name); if (wasOwned) owned.add(name); else owned.delete(name) })
-            if (t.finalOwned) owned.add(name); else owned.delete(name)
-            base.set(name, arr)
-          } else if (t.chunks.length) {
-            const prev = base.get(name)
-            const wasOwned = owned.has(name)
-            let arr = prev ?? []
-            if (!wasOwned) {
-              arr = arr.slice()
-              undo.push(() => { if (prev) base.set(name, prev); else base.delete(name); owned.delete(name) })
-              owned.add(name)
-            } else {
-              const keep = arr.length
-              undo.push(() => { arr.length = keep })
-            }
-            for (const c of t.chunks) for (let i = 0; i < c.length; i++) arr.push(c[i])
-            base.set(name, arr)
-          }
-        }
-        // The stream states exactly what changed (including in-place edits and
-        // datasets that need a re-derive), so the session must not second-guess
-        // it by diffing row identity: a row object edited in place compares
-        // equal to itself and its change would be lost.
-        const input: RuntimeInput = {
-          data: Object.fromEntries(base),
-          autoChanges: false,
-          ...(Object.keys(nextSignals).length ? { signals: nextSignals } : {}),
-          ...(nextWidth != null ? { width: nextWidth } : {}),
-          ...(nextHeight != null ? { height: nextHeight } : {}),
-          ...(nextDomainRaw ? { domainRaw: nextDomainRaw } : {}),
-          ...(nextLimits ? { limits: nextLimits } : {}),
-          ...(nextTextMetrics ? { textMetrics: nextTextMetrics } : {}),
-          ...(Object.keys(dataPulse).length ? { dataPulse } : {}),
-          ...(Object.keys(dataChanges).length ? { dataChanges } : {}),
-          ...(changedDatasets.length ? { changedDatasets } : {}),
-        }
-        scene = session!.evaluate(spec, input)
+        return flushOnce()
       } catch (err) {
-        rollback()
-        const failure: StreamFlushFailure = { batches: consumed, queuedRows: rowsQueued() }
         // Non-object throws cannot carry info (a WeakMap key must be an object).
-        if (err != null && typeof err === 'object') FLUSH_FAILURES.set(err, failure)
+        if (err != null && typeof err === 'object') FLUSH_FAILURES.set(err, { batches: depth(), queuedRows: rowsQueued() })
         throw err
       }
-      // Commit.
-      signals = nextSignals
-      width = nextWidth
-      height = nextHeight
-      domainRaw = nextDomainRaw
-      limits = nextLimits
-      textMetrics = nextTextMetrics
-      if (policy === 'coalesce') { if (fold === f) fold = null }
-      else { const gone = queue.splice(0, consumed); for (const e of gone) queuedRows -= e.rows }
-      const delivered = pulse
-      const noop = !delivered.datasets.size && !delivered.structural.size && scene === lastScene
-      lastScene = scene
-      lastPulse = delivered
-      stats.flushes++
-      return { scene, pulse: delivered, batches: consumed, noop }
     },
     pending() {
       return closed ? { datasets: new Map(), structural: new Set() } : planPulse(currentFold()).pulse
