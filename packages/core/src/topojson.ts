@@ -6,6 +6,7 @@
  */
 
 import identity from './topojson-identity.js'
+import { meterCoords } from './limits.js'
 
 // --- transform ---------------------------------------------------------------
 
@@ -61,6 +62,17 @@ function transform(transform: TopologyTransform | undefined): (input: number[], 
   }
 }
 
+/**
+ * Resolve a named object with an OWN-property lookup: the name is spec-supplied
+ * (`format.feature`), and `objects['constructor']` or `objects['__proto__']`
+ * must be "no such object", not a prototype member (C60).
+ */
+function topoObject(topology: Topology, o: TopoObject | string | undefined): TopoObject {
+  if (typeof o !== 'string') return o as TopoObject
+  if (!Object.hasOwn(topology.objects ?? {}, o)) throw new Error(`[aster] topojson object "${o}" not found`)
+  return topology.objects[o] as TopoObject
+}
+
 // --- feature -----------------------------------------------------------------
 
 function featureFn(topology: Topology, o: TopoObject): GeoLike {
@@ -75,7 +87,7 @@ function featureFn(topology: Topology, o: TopoObject): GeoLike {
 
 /** `feature(topology, object)` — a string selects a named object. */
 export function feature(topology: Topology, o: TopoObject | string): GeoLike {
-  const obj = (typeof o === 'string' ? topology.objects[o] : o) as TopoObject
+  const obj = topoObject(topology, o)
   return obj.type === 'GeometryCollection'
     ? { type: 'FeatureCollection', features: obj.geometries!.map((g) => featureFn(topology, g)) }
     : featureFn(topology, obj)
@@ -106,6 +118,10 @@ export function object(topology: Topology, o: TopoObject): GeoGeometry | null {
   function arc(i: number, points: unknown[]): void {
     if (points.length) points.pop()
     const a = arcs[i < 0 ? ~i : i] as number[][]
+    // An arc index may be referenced by any number of geometries, so the decoded
+    // output is not bounded by the input size (22 KB can expand to ~10M points):
+    // account every referenced arc BEFORE copying it (C60).
+    meterCoords(a.length, 'topojson arcs')
     for (let k = 0, n = a.length; k < n; ++k) {
       points.push(transformPoint(a[k] as number[], k))
     }
@@ -157,7 +173,7 @@ export function object(topology: Topology, o: TopoObject): GeoGeometry | null {
 export function meshArcs(topology: Topology, o?: TopoObject | string, filter?: (a: TopoObject, b: TopoObject) => boolean): { type: 'MultiLineString'; arcs: number[][] } {
   let arcs: number[]
   if (arguments.length > 1) {
-    const obj = (typeof o === 'string' ? topology.objects[o] : o) as TopoObject
+    const obj = topoObject(topology, o)
     arcs = extractArcs(topology, obj, filter)
   } else {
     arcs = new Array(topology.arcs.length)

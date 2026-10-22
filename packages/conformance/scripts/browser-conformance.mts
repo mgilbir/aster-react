@@ -47,7 +47,7 @@ console.log(`[browser-conformance] ${entries.length} corpus entries`)
 const entrySrc = `
 import embed from 'vega-embed'
 import { renderSpec, compileChart, evaluateChart } from '@aster/core'
-import { loadSpecData } from '@aster/core/load'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { compile } from '@aster/vl'
 import '@aster/core/geo'
 import '@aster/core/transforms'
@@ -66,7 +66,7 @@ window.__runEntry = async (entry) => {
     host.remove()
     // aster: own VL compiler for VL entries, then load URL data + renderSpec
     const compiled = isVl ? compile(spec) : spec
-    const loaded = await loadSpecData(compiled as never)
+    const loaded = await loadSpecData(compiled as never, TRUSTED_LOAD_OPTIONS)
     const ourSvg = renderSpec(loaded as never)
     const diffs = diffCanonical(canonicalizeSvg(oracleSvg), canonicalizeSvg(ourSvg))
     return { pass: diffs.length === 0, diffs: diffs.slice(0, 8), error: null }

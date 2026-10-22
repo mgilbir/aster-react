@@ -12,7 +12,7 @@ import * as vl from 'vega-lite'
 import '@aster/core/geo'
 import '@aster/core/transforms'
 import { renderSpec } from '@aster/core'
-import { loadSpecData } from '@aster/core/load'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { compile as compileOurs } from '@aster/vl'
 import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
@@ -40,7 +40,7 @@ async function main(): Promise<boolean> {
       const ourVg = compileOurs(spec)
       const [oracleSvg, ourSvg] = await Promise.all([
         renderWithVega(oracleVg),
-        loadSpecData(ourVg as never).then((loaded) => renderSpec(loaded as never)),
+        loadSpecData(ourVg as never, TRUSTED_LOAD_OPTIONS).then((loaded) => renderSpec(loaded as never)),
       ])
       const o = canonicalizeSvg(oracleSvg)
       const u = canonicalizeSvg(ourSvg as string)

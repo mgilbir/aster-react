@@ -163,7 +163,7 @@ const entrySrc = `
 import embed from 'vega-embed'
 import { compileChart, evaluateChart } from '@aster/core'
 import { renderSceneToDomElement } from '@aster/core/dom'
-import { loadSpecData } from '@aster/core/load'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { compile } from '@aster/vl'
 import '@aster/core/geo'
 import '@aster/core/transforms'
@@ -223,7 +223,7 @@ window.__runBatch = async (entry) => {
     const spec = entry.spec
     const isVl = String(spec.$schema ?? '').includes('vega-lite')
     const compiled = isVl ? compile(spec) : spec
-    const loaded = await loadSpecData(compiled as never)
+    const loaded = await loadSpecData(compiled as never, TRUSTED_LOAD_OPTIONS)
     const scene = evaluateChart(compileChart(loaded as never))
     const normal = renderSceneToDomElement(scene)
     const batched = renderSceneToDomElement(scene, document, { denseMarks: true })

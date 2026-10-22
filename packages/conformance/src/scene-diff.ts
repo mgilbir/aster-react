@@ -8,7 +8,7 @@
  * renderers (guide wrapper groups) and strict on the parts that must not.
  */
 import * as vega from 'vega'
-import { loadSpecData } from '@aster/core/load'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import {
   compileChart,
   evaluateChart,
@@ -333,7 +333,7 @@ function compareItems(real: SceneItem[], ours: SceneItem[], path: string, diffs:
 export async function sceneDiff(spec: Record<string, unknown>): Promise<SceneDiffResult> {
   // URL datasets are part of the resolved scene; resolve them exactly as the
   // renderer would before comparing.
-  spec = await loadSpecData(spec as never) as unknown as Record<string, unknown>
+  spec = await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS) as unknown as Record<string, unknown>
   const runtime = vega.parse(spec as never)
   const view = new (vega as any).View(runtime, { renderer: 'none' })
   const diffs: string[] = []

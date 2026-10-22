@@ -8,6 +8,7 @@
  * which registers them into `dataFormatRegistry`.
  */
 import { dataFormatRegistry } from './registry.js'
+import { currentLocale } from './locale.js'
 import { safeGet, toBoolean, toDate, toNumber, toString } from './util.js'
 
 /** vega-loader's typeParsers, backed by the ported converters (oracle-vector-tested). */
@@ -33,17 +34,30 @@ export interface DataFormatSpec {
 
 /**
  * Apply `format.parse` type coercion to parsed rows (vega-loader read.js).
- * Handles `parse: 'auto'` (type inference) and `date:`/`utc:` patterns are
- * delegated to the registered reader when the core cannot resolve them.
+ * Handles `parse: 'auto'` (type inference), the plain types, and the
+ * `date:'%d/%m/%Y'` / `utc:'%Y-%m-%d'` pattern forms: the pattern (optionally
+ * wrapped in single or double quotes) goes through the default locale's
+ * `timeParse`/`utcParse`, so the cell becomes a Date (or null when it does not
+ * match), exactly like vega-loader.
  */
 export function coerceRows(rows: Record<string, unknown>[], parse: Record<string, string> | string): Record<string, unknown>[] {
   if (!rows.length) return rows
-  let types: Record<string, string> = parse === 'auto'
+  const types: Record<string, string> = parse === 'auto'
     ? inferTypes(rows, Object.keys(rows[0]!))
     : (parse as Record<string, string>)
   const fields = Object.keys(types)
-  const parsers = fields.map((field) => {
+  const parsers = fields.map((field): ((v: unknown) => unknown) => {
     const type = types[field] as string
+    if (type && (type.startsWith('date:') || type.startsWith('utc:'))) {
+      const colon = type.indexOf(':')
+      let pattern = type.slice(colon + 1)
+      if ((pattern[0] === "'" && pattern[pattern.length - 1] === "'") || (pattern[0] === '"' && pattern[pattern.length - 1] === '"')) {
+        pattern = pattern.slice(1, -1)
+      }
+      const loc = currentLocale()
+      const parser = type.startsWith('utc:') ? loc.utcParse(pattern) : loc.timeParse(pattern)
+      return (v) => parser(v as string)
+    }
     if (!Object.hasOwn(typeParsers, type)) throw new Error(`[aster] illegal format pattern: ${field}:${type}`)
     return typeParsers[type]!
   })

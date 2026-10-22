@@ -116,7 +116,7 @@ const entrySrc = `
 import embed from 'vega-embed'
 import { compileChart, evaluateChart, renderSpec } from '@aster/core'
 import { renderSceneToCanvas } from '@aster/core/canvas'
-import { loadSpecData } from '@aster/core/load'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { compile } from '@aster/vl'
 import '@aster/core/geo'
 import '@aster/core/transforms'
@@ -165,7 +165,7 @@ window.__runCanvas = async (entry) => {
     const spec = entry.spec
     const isVl = String(spec.$schema ?? '').includes('vega-lite')
     const compiled = isVl ? compile(spec) : spec
-    const loaded = await loadSpecData(compiled as never)
+    const loaded = await loadSpecData(compiled as never, TRUSTED_LOAD_OPTIONS)
     // Oracle: official Vega on an in-DOM canvas.
     const host = document.createElement('div')
     document.body.appendChild(host)
