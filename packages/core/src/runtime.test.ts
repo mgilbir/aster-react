@@ -103,7 +103,12 @@ describe('differential multi-dataset / source-chain / signal interaction', () =>
 })
 
 describe('differential fuzz (incremental === full re-derive)', () => {
-  it('matches full re-derive across random changesets and specs', () => {
+  it('matches a FRESH full evaluation across random changesets and specs', () => {
+    // The reference is `evaluateChart(compileChart(spec))` built from scratch for
+    // every trial. (It used to be the same mutated compiled chart, which cannot
+    // see a stale cache: audit C84.) Values move both up AND down, so domains
+    // grow and shrink; the full property/fuzz oracle lives in
+    // incremental-oracle.test.ts.
     const rand = mulberry32(0xC0FFEE)
     for (const { name, spec } of fuzzSpecs()) {
       const chart = compileChart(spec)
@@ -113,13 +118,18 @@ describe('differential fuzz (incremental === full re-derive)', () => {
         // random changeset (subset of indices, random new values, same length/order)
         const changed: number[] = []
         const next = base.map((r, i) => {
-          if (rand() < 0.25) { changed.push(i); return { ...r, x: (r.x + 1) % 4, y: (r.y + 1) % 5, v: r.v + 1 } }
+          if (rand() < 0.25) {
+            changed.push(i)
+            return { ...r, x: Math.floor(rand() * 4), y: Math.floor(rand() * 5), v: Math.floor(rand() * 20) }
+          }
           return r
         })
         evaluateChart(chart, { data: { t: base } })
         const inc = evaluateChart(chart, { data: { t: next }, dataChanges: { t: changed } })
+        const freshFull = evaluateChart(compileChart(spec), { data: { t: next } })
+        expect(renderSceneToSvg(inc), `${name} trial ${trial}`).toBe(renderSceneToSvg(freshFull))
         const full = evaluateChart(chart, { data: { t: next } })
-        expect(renderSceneToSvg(inc), `${name} trial ${trial}`).toBe(renderSceneToSvg(full))
+        expect(renderSceneToSvg(full), `${name} trial ${trial} (same chart, no hints)`).toBe(renderSceneToSvg(freshFull))
       }
     }
   })
@@ -146,7 +156,11 @@ describe('differential fuzz (incremental === full re-derive)', () => {
     const b = evaluateChart(chart, { data: { t: next }, dataChanges: { t: [3] } })
     const itemsB = b.items[0]!.items as unknown[]
     expect(renderSceneToSvg(b)).toBe(renderSceneToSvg(evaluateChart(chart, { data: { t: next } })))
-    expect(itemsB).toBe(itemsA)
+    // The previous scene is never written (C52): a new item array, with every
+    // unchanged item shared by identity and the old array left as it was.
+    expect(itemsB).not.toBe(itemsA)
+    expect(itemsA[3]).not.toBe(itemsB[3])
+    for (let i = 0; i < itemsA.length; i++) if (i !== 3) expect(itemsB[i]).toBe(itemsA[i])
     // Scene items keep dataset order; only row 3 is re-encoded (a new
     // generation), the rest are reused.
     expect((itemsB[3] as { __gen?: number } | undefined)?.__gen).not.toBe((itemsB[0] as { __gen?: number } | undefined)?.__gen)
@@ -337,8 +351,8 @@ describe('per-datum differential update', () => {
   it('reuses unchanged items and re-encodes only changed indices', () => {
     const chart = compileChart(spec)
     const s1 = evaluateChart(chart, { data: { t: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] } })
-    // Snapshot the item references: the differential path reuses the same item
-    // array in place (persistent scene), so `before` must not alias it.
+    // Snapshot the item references: the earlier scene must keep exactly these
+    // after the update (checked below).
     const before = [...symbolItems(s1)]
     // Row index 1 changes (x 2 -> 5); indices 0 and 2 are unchanged.
     const s2 = evaluateChart(chart, {
@@ -350,10 +364,12 @@ describe('per-datum differential update', () => {
     expect(after[2]).toBe(before[2])
     expect(after[1]).not.toBe(before[1]) // changed -> re-encoded
     expect((after[1] as { x?: number }).x).not.toBe((before[1] as { x?: number }).x)
-    // The mark GROUP (not just its items) is persistent across the differential
-    // update — a genuinely live, in-place-spliced mark like vega's.
+    // The mark GROUP is a new object per update and the earlier scene is left
+    // untouched (C52): structural sharing of the unchanged items only.
     const group = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!
-    expect(group(s2)).toBe(group(s1))
+    expect(group(s2)).not.toBe(group(s1))
+    expect(symbolItems(s1)).toEqual(before)
+    symbolItems(s1).forEach((it, i) => expect(it).toBe(before[i]))
   })
 
   it('falls back to full re-encode when an index is out of range', () => {
