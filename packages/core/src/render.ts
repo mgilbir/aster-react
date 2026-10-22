@@ -1409,6 +1409,8 @@ function intersectArc(x0: number, y0: number, x1: number, y1: number, x2: number
 
 const ESC_CACHE = new Map<string, string>()
 const ATTR_CACHE = new Map<string, string>()
+/** Short attribute values already verified to need no escaping. */
+const ATTR_CLEAN = new Set<string>()
 
 // Characters XML 1.0 cannot represent at all (not even as a character
 // reference): C0 controls other than tab/LF/CR, and U+FFFE/U+FFFF. A data value
@@ -1461,7 +1463,13 @@ function escText(s: string): string {
 /** Attribute-value escaping; accepts any value and stringifies it first. */
 function escAttr(value: unknown): string {
   const s = typeof value === 'string' ? value : String(value)
-  if (!needsEscape(s, true)) return s
+  // Short values repeat heavily (a scale's colours, 'round', 'butt'): a Set
+  // hit on an already-verified string beats re-scanning it per item.
+  if (ATTR_CLEAN.has(s)) return s
+  if (!needsEscape(s, true)) {
+    if (s.length <= 40 && ATTR_CLEAN.size < 2048) ATTR_CLEAN.add(s)
+    return s
+  }
   const cached = ATTR_CACHE.get(s)
   if (cached !== undefined) return cached
   const out = wellFormed(s.replace(XML_ILLEGAL, '\uFFFD')).replace(/[&<>"\t\n\r]/g, (c) => ATTR_ESCAPES[c] as string)
