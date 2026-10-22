@@ -21,6 +21,8 @@ export function containsTimeUnit(full: string, part: string): boolean {
   if (index > 0 && part === 'seconds' && full.charAt(index - 1) === 'i') return false
   // exclude dayofyear
   if (full.length > index + 3 && part === 'day' && full.charAt(index + 3) === 'o') return false
+  // exclude the `year` inside dayofyear
+  if (index > 0 && part === 'year' && full.charAt(index - 1) === 'f') return false
   return true
 }
 

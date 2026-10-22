@@ -625,7 +625,7 @@ function validateSort(sort: unknown, at: string, ch: string): void {
     } else {
       keysOf(sort, set('field op order'), at, 'sort')
       if (sort.field !== undefined) checkFieldName(sort.field, `${at}.field`)
-      if (sort.field === undefined && sort.op !== undefined) fail(at, '`op` needs a `field`')
+      if (sort.field === undefined && sort.op !== undefined && sort.op !== 'count') fail(at, `op "${String(sort.op)}" needs a \`field\` (only "count" works without one)`)
       if (sort.field === undefined && sort.order === undefined) fail(at, 'an empty sort object has no meaning')
     }
     if (sort.order !== undefined && sort.order !== 'ascending' && sort.order !== 'descending' && sort.order !== null) {
