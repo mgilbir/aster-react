@@ -13,9 +13,14 @@ const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !
 /** Vega expression functions whose FIRST argument is a scale name. */
 const SCALE_FUNCTIONS = new Set(['scale', 'invert', 'domain', 'range', 'bandwidth', 'bandspace', 'copy', 'gradient', 'scaleGradient'])
 
+/** Vega expression functions whose FIRST argument is a dataset name. */
+const DATA_FUNCTIONS = new Set(['data', 'indata'])
+
 export interface Renames {
   signals: ReadonlyMap<string, string>
   scales: ReadonlyMap<string, string>
+  /** dataset renames applied to `data('name')` arguments (optional) */
+  datasets?: ReadonlyMap<string, string>
 }
 
 /** Rewrite signal identifiers and scale-name arguments in one expression string. */
@@ -33,6 +38,7 @@ export function renameExpr(expr: string, r: Renames): string {
       const body = expr.slice(i + 1, j)
       let text = body
       if (pendingFn && SCALE_FUNCTIONS.has(pendingFn) && r.scales.has(body)) text = r.scales.get(body)!
+      else if (pendingFn && DATA_FUNCTIONS.has(pendingFn) && r.datasets?.has(body)) text = r.datasets.get(body)!
       out += c + text + c
       i = j + 1
       pendingFn = null

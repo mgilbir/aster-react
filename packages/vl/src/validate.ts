@@ -170,11 +170,11 @@ const SCHEMA_CHILDREN: Record<Exclude<Kind, 'unit'>, ReadonlySet<Kind>> = {
 /** Implemented (parent -> child) nestings; edited as compile.ts gains support. */
 export const SUPPORTED_NESTING: Record<Exclude<Kind, 'unit'>, ReadonlySet<Kind>> = {
   layer: new Set<Kind>(['unit', 'layer']),
-  hconcat: new Set<Kind>(['unit', 'layer']),
-  vconcat: new Set<Kind>(['unit', 'layer']),
-  concat: new Set<Kind>(['unit', 'layer']),
+  hconcat: new Set<Kind>(['unit', 'layer', 'repeat', 'facet', 'concat', 'hconcat', 'vconcat']),
+  vconcat: new Set<Kind>(['unit', 'layer', 'repeat', 'facet', 'concat', 'hconcat', 'vconcat']),
+  concat: new Set<Kind>(['unit', 'layer', 'repeat', 'facet', 'concat', 'hconcat', 'vconcat']),
   facet: new Set<Kind>(['unit', 'layer']),
-  repeat: new Set<Kind>(['unit', 'layer']),
+  repeat: new Set<Kind>(['unit', 'layer', 'repeat', 'facet', 'concat', 'hconcat', 'vconcat']),
 }
 
 /** Repeat variables in scope while validating a repeat's child spec. */
@@ -474,6 +474,8 @@ function validateUnit(spec: Obj, path: string, at: (k: string) => string): void 
 // --- encoding ----------------------------------------------------------------
 
 const FIELD_DEF_KEYS = set('field type aggregate bin timeUnit sort stack bandPosition axis scale legend title format formatType condition value datum header impute band')
+/** facet channel definitions (row/column/facet) add the layout controls */
+const FACET_CHANNEL_DEF_KEYS = set('field type aggregate bin timeUnit sort bandPosition title header columns spacing align center bounds')
 const SORT_CHANNELS = set('x y color fill stroke strokeWidth size shape fillOpacity strokeOpacity opacity text')
 
 /** Channels whose value/datum can be given as a constant. */
@@ -500,7 +502,7 @@ function validateEncoding(enc: unknown, path: string, where: 'unit' | 'layer', m
 
 function validateChannelDef(ch: string, def: unknown, at: string, mark?: string): void {
   if (!isObj(def)) fail(at, 'a channel definition must be an object')
-  keysOf(def, FIELD_DEF_KEYS, at, 'channel definition')
+  keysOf(def, ch === 'row' || ch === 'column' || ch === 'facet' ? FACET_CHANNEL_DEF_KEYS : FIELD_DEF_KEYS, at, 'channel definition')
   const forms = ['field', 'value', 'datum', 'aggregate'].filter((k) => def[k] !== undefined && !(k === 'aggregate' && def.field === undefined && def.aggregate !== 'count'))
   if (def.value !== undefined && (def.field !== undefined || def.datum !== undefined)) fail(at, '`value` cannot be combined with `field`/`datum`')
   if (def.field !== undefined && def.datum !== undefined) fail(at, '`field` and `datum` cannot be combined')
