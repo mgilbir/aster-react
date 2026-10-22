@@ -91,6 +91,15 @@ describe('single-call allocators are bounded before they allocate (C9)', () => {
     expectLimit(q, /maxRows/, 200)
   }, T)
 
+  it('quantile: groups x explicit probs', async () => {
+    const r = await attack(`
+      const rows = Array.from({ length: 3000 }, (_, i) => ({ g: 'g' + i, v: i }))
+      const probs = Array.from({ length: 3000 }, (_, i) => i / 3000) // 9M output rows
+      core.renderSpec({ data: [{ name: 't', transform: [{ type: 'quantile', field: 'v', groupby: ['g'], probs }] }] },
+        { data: { t: rows }, limits: { maxRows: 100000, maxTimeMs: 300 } })`)
+    expectLimit(r, /maxRows/, 300)
+  }, T)
+
   it('contour grid size 1e5 x 1e5', async () => {
     const r = await attack(`
       core.renderSpec({ data: [{ name: 't', values: [{ x: 1, y: 1 }, { x: 5, y: 5 }], transform: [{ type: 'contour', x: 'x', y: 'y', size: [100000, 100000] }] }] },
@@ -102,10 +111,13 @@ describe('single-call allocators are bounded before they allocate (C9)', () => {
 describe('generated rows count against maxRows (C7, C49)', () => {
   it('fold: rows x fields is refused before it is built', async () => {
     const r = await attack(`
-      const rows = Array.from({ length: 20000 }, (_, i) => ({ a: i, b: i, c: i, d: i, e: i }))
-      core.renderSpec({ data: [{ name: 't', transform: [{ type: 'fold', fields: ['a', 'b', 'c', 'd', 'e'], as: ['k', 'v'] }] }] },
-        { data: { t: rows }, limits: { maxRows: 50000, maxTimeMs: 500 } })`)
-    expectLimit(r, /maxRows/, 500)
+      // 400k rows x 8 fields = 3.2M output rows: building them would take seconds and
+      // hundreds of MB; the product is known up front, so it must be refused first.
+      const f = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+      const rows = Array.from({ length: 400000 }, (_, i) => ({ a: i, b: i, c: i, d: i, e: i, f: i, g: i, h: i }))
+      core.renderSpec({ data: [{ name: 't', transform: [{ type: 'fold', fields: f, as: ['k', 'v'] }] }] },
+        { data: { t: rows }, limits: { maxRows: 500000, maxTimeMs: 300 } })`)
+    expectLimit(r, /maxRows/, 300)
   }, T)
 
   it('flatten: one row holding a 1e7 element array', async () => {
@@ -145,6 +157,13 @@ describe('generated rows count against maxRows (C7, C49)', () => {
     expectLimit(r, /maxRows/)
   }, T)
 
+  it('the dataset check holds without the pre-flight (hosts that call evaluateChart directly)', async () => {
+    const r = await attack(`
+      const chart = core.compileChart({ data: [{ name: 't' }] })
+      core.evaluateChart(chart, { data: { t: new Array(200000).fill({ a: 1 }) }, limits: { maxRows: 1000 } })`)
+    expectLimit(r, /maxRows/)
+  }, T)
+
   it('nested group data counts toward maxRows', async () => {
     const r = await attack(`
       core.renderSpec({ marks: [{ type: 'group', data: [{ name: 'inner', values: new Array(5000).fill({ a: 1 }) }],
@@ -162,6 +181,14 @@ describe('generated rows count against maxRows (C7, C49)', () => {
 })
 
 describe('wall clock is sampled inside synchronous work (C7)', () => {
+  it('the encode loop samples the clock: 2.5M rows under 500 ms', async () => {
+    const r = await attack(`
+      core.renderSpec({ width: 100, height: 100, data: [{ name: 't' }],
+        marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'a' }, y: { field: 'a' }, size: { value: 4 } } } }] },
+        { data: { t: new Array(2500000).fill({ a: 1 }) }, limits: { maxTimeMs: 500 } })`)
+    expectLimit(r, /maxTimeMs exceeded during (mark (symbol )?encoding|dataset build|startup)/, 500)
+  }, T)
+
   it('O(n^2) window sum over 20k rows under 250 ms', async () => {
     const r = await attack(`
       const rows = Array.from({ length: 20000 }, (_, i) => ({ x: i }))
@@ -287,6 +314,13 @@ describe('maxPathLength and maxStringLength cover generated paths and text array
     scales: [{ name: 'x', type: 'linear', domain: [0, ${n}], range: [0, 200] }, { name: 'y', type: 'linear', domain: [0, 1], range: [100, 0] }],
     marks: [{ type: 'MARK', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'i' }, y: { scale: 'y', field: 'v' }, y2: { value: 100 }, stroke: { value: '#000' } } } }] }`
   const rows = (n: number) => `Array.from({ length: ${n} }, (_, i) => ({ i, v: (i % 10) / 10 }))`
+
+  it.each(['line', 'area'])('%s mark: the EXACT generated string is checked (the point-count bound alone would pass)', async (mark) => {
+    // 1000 points imply >= 4000 characters (under maxPathLength 8000), but the real path is ~14000
+    const spec = lineSpec(1000).replace('MARK', mark)
+    const r = await attack(`core.renderSpec(${spec}, { data: { t: ${rows(1000)} }, limits: { maxPathLength: 8000, maxTimeMs: 2000 } })`)
+    expectLimit(r, /maxPathLength \d+ > 8000/)
+  }, T)
 
   it.each(['line', 'area'])('%s mark: the generated d string counts toward maxPathLength', async (mark) => {
     const spec = lineSpec(20000).replace('MARK', mark)

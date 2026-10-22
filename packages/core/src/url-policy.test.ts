@@ -64,6 +64,12 @@ describe('image url policy (C93)', () => {
     expect(denied).toEqual(['javascript:alert(1)', 'javascript:alert(1)'])
   })
 
+  it('a protocol-relative url is a network url: it is classified and vetted, never treated as relative', () => {
+    const seen: string[] = []
+    expect(() => renderSpec(imageSpec('//evil.test/p.gif'), { urlPolicy: { allow: (u) => { seen.push(u.hostname); return false } } })).toThrow(/refused by the allow hook/)
+    expect(seen).toEqual(['evil.test'])
+  })
+
   it('protocols can be widened by the host', () => {
     expect(renderSpec(imageSpec('blob:https://example.test/uuid'), { urlPolicy: { protocols: ['blob:', 'https:'] } })).toContain('blob:')
   })

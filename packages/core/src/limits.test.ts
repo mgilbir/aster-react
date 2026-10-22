@@ -83,6 +83,26 @@ describe('the meter is ambient, nests, and a swallowed violation still fails the
     expect(err.message).toMatch(/maxRows/)
   })
 
+  it('a violation swallowed with no later meter call is still re-thrown at scope exit', () => {
+    const err = lim(() => withLimits({ maxRows: 1 }, (m) => {
+      try { m!.rows(100, 'x') } catch { /* a defensive catch eats it */ }
+      return 'finished normally'
+    }))
+    expect(err.message).toMatch(/maxRows 100 > 1/)
+  })
+
+  it('after a violation every later meter call re-throws the same error (sticky)', () => {
+    // (the scope still throws on exit: the violation is never forgotten)
+    expect(() => withLimits({ maxRows: 1, maxTimeMs: 1e9 }, (m) => {
+      let first: unknown
+      try { m!.rows(100, 'x') } catch (e) { first = e }
+      expect(first).toBeInstanceOf(AsterLimitError)
+      for (const call of [() => m!.tick('a', 5000), () => m!.checkRows(0, 'b'), () => m!.bytes(0, 'c'), () => m!.items(0, 'd'), () => m!.clock.check('e')]) {
+        expect(call).toThrow(first as Error)
+      }
+    })).toThrow(/maxRows 100 > 1/)
+  })
+
   it('the scope is restored after a throw', () => {
     expect(() => withLimits({ maxRows: 1 }, () => { throw new Error('boom') })).toThrow('boom')
     expect(activeMeter()).toBeNull()
