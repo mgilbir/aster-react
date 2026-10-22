@@ -14,7 +14,9 @@ pnpm transform-matrix  # transform option combinations vs the Vega oracle
 pnpm conformance:batch # batched-SVG pixel parity (denseMarks vs per-item)
 pnpm verify:publish    # npm pack: licences + exports + consumer smoke test
 pnpm sweep-vl          # 27,513-case Vega-Lite property sweep
-pnpm sweep-vega        # Vega schema sweep
+pnpm sweep-vega        # Vega schema sweep (7,538 ok / 0 differ; 8 both-refused,
+                       # 3 oracle-side node-errors: vega-interpreter's area
+                       # `bundle` interpolator and a negative trail radius)
 pnpm --filter @aster/benchmarks run budget  # per-entry bundle gates
 ```
 
