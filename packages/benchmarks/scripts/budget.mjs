@@ -51,8 +51,9 @@ const BUDGETS = {
   // Untrusted-input work (limit meters, parser depth guard, image url policy, vega-exact
   // stratify/bin): core 113.4 -> 116.3, dom 116.6 -> 119.6 gzip (+2.9/+3.0). Ceilings are
   // measured + 0.5 kB; the owner decides whether to keep them (flagged in the PR).
-  '@aster/core': 116.8 * 1024,
-  '@aster/core/dom': 120.1 * 1024,
+  // Static ReDoS screen (regex-screen.ts, ~2.0 kB gzip): core 116.3 -> 118.3, dom 119.6 -> 121.7.
+  '@aster/core': 118.8 * 1024,
+  '@aster/core/dom': 122.2 * 1024,
   '@aster/core/canvas': 20 * 1024,
   '@aster/core/hit': 16 * 1024,
   '@aster/core/signals': 36 * 1024,
