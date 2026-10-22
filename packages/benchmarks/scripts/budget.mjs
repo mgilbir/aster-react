@@ -56,8 +56,11 @@ const BUDGETS = {
   // bin, timeunit with vega-time bin/detectTimeUnits, impute, lookup, stack, sample, access paths):
   // core 118.3 -> 122.9, dom 121.7 -> 126.3 gzip (+4.6). Ceilings are measured + 0.5 kB; OWNER DECISION
   // (flagged in the report): the old hand-written transforms were smaller because they were wrong.
-  '@aster/core': 123.4 * 1024,
-  '@aster/core/dom': 126.8 * 1024,
+  // Faithful scale/projection/interpolator ports (vega-parser parseScale + vega-encode Scale transform,
+  // vega-geo Projection, the d3-interpolate colour spaces): core 123.0 -> 124.0, dom 126.3 -> 127.3 gzip
+  // (+1.0). Ceilings are measured + 0.5 kB (owner approved).
+  '@aster/core': 124.5 * 1024,
+  '@aster/core/dom': 127.8 * 1024,
   '@aster/core/canvas': 20 * 1024,
   '@aster/core/hit': 16 * 1024,
   '@aster/core/signals': 36 * 1024,
