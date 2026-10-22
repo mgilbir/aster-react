@@ -3679,6 +3679,11 @@ function buildTrellisCell(
   const gw = typeof geo.width === 'number' ? geo.width : ctx.width
   const gh = typeof geo.height === 'number' ? geo.height : ctx.height
 
+  // The cell's rows are the facet dataset for everything in the cell's scope -
+  // including the cell's own scales (a child scale's domain names the facet dataset).
+  const saved = ctx.datasets.get(facet.name)
+  ctx.datasets.set(facet.name, rows)
+
   const childScaleMap = new Map<string, Scale>()
   const childTypeMap = new Map<string, string>()
   for (const s of (mark as { scales?: CompiledScale[] }).scales ?? []) {
@@ -3699,8 +3704,6 @@ function buildTrellisCell(
     // datum (compileExpr exposes params to expressions $-prefixed).
     signalParams: { ...ctx.signalParams, parent: datum },
   }
-  const saved = ctx.datasets.get(facet.name)
-  ctx.datasets.set(facet.name, rows)
 
   const items: SceneItem[] = []
   // Cell background: the encoded size, no fill, no inset (vega group
