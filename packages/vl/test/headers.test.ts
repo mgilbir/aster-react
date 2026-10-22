@@ -92,4 +92,16 @@ describe('sibling fixes found by the schema sweep', () => {
     expect(vg.scales.find((s: any) => s.name === 'color').type).toBe('time')
     expect(vg.legends[0].format).toBe('%b %d, %Y')
   })
+
+  it('an aggregated pie filters the column it stacked, not a recomputed name', () => {
+    const vg = compileFrozen({ data: DATA, mark: 'arc', encoding: { theta: { field: 'v', type: 'quantitative', aggregate: 'count' }, color: cn } })
+    const tr = vg.data.find((d: any) => d.name === 'data_0').transform as any[]
+    const stackField = tr.find((t) => t.type === 'stack').field as string
+    expect(tr.find((t) => t.type === 'filter').expr).toContain(`datum["${stackField}"]`)
+  })
+
+  it('a time scale on a non-temporal colour falls back to linear, as vega-lite does', () => {
+    const vg = compileFrozen({ data: DATA, mark: 'bar', encoding: { x: cn, y: { field: 'v', type: 'quantitative' }, color: { field: 'v', type: 'quantitative', scale: { type: 'time' } } } })
+    expect(vg.scales.find((s: any) => s.name === 'color').type).toBe('linear')
+  })
 })

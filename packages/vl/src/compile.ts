@@ -2586,7 +2586,8 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
       if (!f.field || f.bin || !['theta', 'radius', 'color', 'size', 'opacity', 'strokeWidth'].includes(f.channel)) continue
       const type = ((f.raw as Record<string, unknown> | undefined)?.type ?? f.type) as string
       if (type !== 'quantitative' && type !== 'temporal') continue
-      const name = aggFieldName(f)
+      // the stacked theta measure is whatever the pipeline above named it
+      const name = f.channel === 'theta' && arcTheta ? arcTheta.field : aggFieldName(f)
       if (seen.has(name)) continue
       seen.add(name)
       const d = `datum[${JSON.stringify(name)}]`
@@ -3216,7 +3217,8 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
     } else {
       const cs = colorDef.scale ?? {}
       // a temporal colour field is a time scale (utc for a utc time unit), like vega-lite's default type
-      const colorScaleType = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'quantile', 'quantize', 'threshold'].includes(cs.type as string)
+      // (vega-lite falls back to linear when a time scale is asked of a non-temporal field)
+      const colorScaleType = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'quantile', 'quantize', 'threshold', ...(colorDef.type === 'temporal' ? ['time', 'utc'] : [])].includes(cs.type as string)
         ? cs.type as string
         : colorDef.type === 'temporal' ? (colorDef.tu?.utc ? 'utc' : 'time') : 'linear'
       scales.push({

@@ -69,7 +69,15 @@ of a concat) are valid Vega-Lite but throw.
 ## Known runtime gaps (Aster, not the compiler)
 
 Real vega renders our output identically to vega-lite's for the whole corpus.
-Aster's own runtime cannot yet render vega-lite's output for some shapes
-(wrapped facets, grid/nested layouts, dotted-field formulas, UTC time-unit
-labels, stacked bars with `cornerRadius`); those specs live in
-`packages/conformance/corpus-vega-only` and are held to the real-vega check only.
+Aster's own runtime cannot yet render vega-lite's output for some shapes, so
+those specs live in `packages/conformance/corpus-vega-only` and are held to the
+real-vega check only:
+
+- wrapped facets, grid/nested concat and repeat layouts, shared legends and
+  child titles inside them;
+- facet header placement beyond the defaults (`labelAnchor`, `labelOrient`,
+  `orient`, `labels: false`);
+- dotted/nested field names, UTC time-unit labels (`%b` format), and a temporal
+  colour (time scale) legend;
+- rounded stacked bars on the canvas renderer (the SVG renderer matches), and
+  `config.mark.cornerRadius` applied to the stack group.
