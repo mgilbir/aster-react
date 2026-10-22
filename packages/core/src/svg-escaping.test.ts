@@ -331,7 +331,17 @@ describe('C2: SVG string renderer escapes every attribute and text value', () =>
   it('render.ts writes attribute values only through the shared writer (source guard)', () => {
     const src = readFileSync(join(import.meta.dirname, 'render.ts'), 'utf8')
     const interpolations = [...src.matchAll(/="\$\{((?:[^{}]|\{[^{}]*\})*)\}/g)].map((m) => m[1]!.trim())
-    expect(interpolations.length).toBeGreaterThan(20)
+    // The per-element attribute lists write through the AttrSink writers (audit C43),
+    // so what is left to interpolate is the writers themselves plus a few constant-shaped
+    // sites; the check below still covers every one of them. (The floor only guards
+    // against the regex silently matching nothing.)
+    expect(interpolations.length).toBeGreaterThan(5)
+    // ... and no other code path may build an attribute from a variable name + value
+    // outside those writers: every ` ${name}="..."` template lives in attr/attrS/attrList
+    // or the StringAttrSink.
+    const named = src.split('\n').filter((l) => l.includes(' ${name}="'))
+    expect(named.length).toBeGreaterThan(0)
+    expect(named.filter((l) => !/escAttr\(|num\(|genD\(|rgb\(0, 0, 0\)/.test(l)), 'a named attribute template that does not escape/format its value').toEqual([])
     const bad = interpolations.filter((e) => !/^(num3?|escAttr|genD|fp)\(/.test(e))
     expect(bad, JSON.stringify(bad)).toEqual([])
   })
