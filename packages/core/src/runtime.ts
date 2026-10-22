@@ -5,7 +5,8 @@
  */
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { readData, type DataFormatSpec } from './data-format.js'
-import { applyTransforms, compileExprTransform, sortRows, sortOrder, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row, type TransformContext } from './transform.js'
+import { applyTransforms, compileExprTransform, sortRows, sortOrder, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row, type TransformContext } from './transform.js'
+import { fieldOf } from './transform-agg.js'
 import { activeMeter, withLimits, meterItems, boundedCount, checkRowCount } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale, type ScaleContext } from './scales.js'
@@ -38,7 +39,7 @@ import { hash53 } from './svg-defs.js'
 import { tickFormat, scaleFraction, scaleGradientStops, tickValues, tickCount, isContinuous, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, field as utilField, ownGet, minOf, maxOf, pushAll, SYMBOL_DEFAULT_SIZE } from './util.js'
+import { dict, ownGet, minOf, maxOf, pushAll, SYMBOL_DEFAULT_SIZE } from './util.js'
 import { applyImageUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, type PulseChange } from './pulse.js'
@@ -3109,42 +3110,8 @@ function claim(ctx: EvalContext, key: string): boolean {
   return true
 }
 
-/**
- * A datum field read by an encode entry: a plain name is the property, and any
- * other path (dotted, `a\\.b` escapes, `a["b"]` brackets) goes through vega-util's
- * `field()` accessor, as vega-parser's field refs do. (VL flattens `properties.v`
- * into a field literally named `properties.v` and refers to it as `properties\\.v`.)
- */
-function getField(row: Row, path: string): unknown {
-  if (plainFields.has(path)) return row[path]
-  return getFieldSlow(row, path)
-}
-
-/** Field names known to need no path parsing (a hot-path shortcut; bounded, spec-supplied names). */
-const plainFields = new Set<string>()
-
-function getFieldSlow(row: Row, path: string): unknown {
-  if (path.indexOf('.') < 0 && path.indexOf('[') < 0 && path.indexOf('\\') < 0) {
-    if (plainFields.size < 512) plainFields.add(path)
-    return row[path]
-  }
-  return scaleFieldOf(path)(row)
-}
-
-/**
- * A scale domain reads its field through vega-util's `field()` accessor (dotted
- * paths, `a\\.b` escapes, `a["b"]` brackets), the same accessor vega's Extent /
- * Aggregate use. Memoised per path (paths are spec-supplied: the cache is bounded).
- */
-const scaleFieldAccessors = new Map<string, (d: unknown) => unknown>()
-function scaleFieldOf(path: string): (d: unknown) => unknown {
-  let acc = scaleFieldAccessors.get(path)
-  if (!acc) {
-    if (scaleFieldAccessors.size >= 512) scaleFieldAccessors.clear()
-    scaleFieldAccessors.set(path, (acc = utilField(path)))
-  }
-  return acc
-}
+/** A scale domain / census reads its field through the one shared accessor cache (vega-util `field()` semantics). */
+const scaleFieldOf = fieldOf
 
 /** The context a scale is built in: signals, config.range, datasets and the host domain override. */
 function scaleContext(ctx: EvalContext, name: string): ScaleContext {
@@ -4225,7 +4192,7 @@ function buildFacetCells(
     const ag = (facet as { aggregate?: { fields: string[]; ops: string[] } }).aggregate
     const gu = (mark.encode?.update ?? {}) as Record<string, EncodeValue>
     if (ag?.ops) {
-      const fd = aggregateGroup(g, facet.groupby, ag.fields, ag.ops, ag.ops.map((op, i) => `${op}_${ag.fields[i]}`))
+      const fd = aggregateGroup(g, { type: 'aggregate', groupby: facet.groupby, fields: ag.fields, ops: ag.ops, as: ag.ops.map((op, i) => `${op}_${ag.fields[i]}`) })
       for (const a of ['x', 'y'] as const) {
         if (!gu[a] || !gu[`${a}2`]) continue
         const lo = Number(resolveEncodeProperty(gu[a], fd, ctx))

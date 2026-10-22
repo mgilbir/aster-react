@@ -15,7 +15,7 @@ import { implicit as scaleImplicit } from './scale-d3.js'
 import { interpolateRound, interpolateValue } from './interp.js'
 import { range as sequence } from './arr.js'
 import { aggregateGroup } from './transform.js'
-import { ascending, error as raise, hasOwnProperty, isArray, isFunction, isObject, isString, ownGet, peek, toNumber } from './util.js'
+import { pushAll, ascending, error as raise, hasOwnProperty, isArray, isFunction, isObject, isString, ownGet, peek, toNumber } from './util.js'
 import type { CompiledScale } from './types.js'
 
 export type Scale = vs.Scale
@@ -135,7 +135,7 @@ interface Tuple { key: unknown; count: number; [agg: string]: unknown }
 
 /** The aggregate of one group of cell values under vega's ops (an unknown op refuses, as upstream). */
 function aggregateOf(op: string, cells: unknown[]): unknown {
-  return aggregateGroup(cells.map((v) => ({ v })), [], ['v'], [op], ['r']).r
+  return aggregateGroup(cells.map((v) => ({ v })), { type: 'aggregate', groupby: [], fields: ['v'], ops: [op], as: ['r'] }).r
 }
 
 /**
@@ -291,10 +291,10 @@ function ordinalMultipleDomain(domain: { sort?: unknown }, ctx: ScaleContext, fi
         if (!tuple) cells.set(ck, (tuple = { key: k, count: 0 }))
         tuple.count++
       }
-      tuples.push(...cells.values())
+      pushAll(tuples, Array.from(cells.values()))
     } else {
       if (ctx.hasData && !ctx.hasData(f.data as string)) raise('Can not find data set: ' + JSON.stringify(f.data))
-      tuples.push(...countsTuples(ctx, f.data as string, fieldName(f.field, ctx), sort))
+      pushAll(tuples, countsTuples(ctx, f.data as string, fieldName(f.field, ctx), sort))
     }
   }
   // aggregate the results from each member: groupby key, summing/min/max-ing the sort column
