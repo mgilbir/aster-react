@@ -1509,17 +1509,15 @@ function attr(name: string, value: unknown): string {
  * `undefined` and booleans print as their literal keyword, as vega does.
  */
 export function num(x: number): string {
-  if (typeof x !== 'number') {
-    const v = x as unknown
-    if (v == null || typeof v === 'boolean') return String(v)
-    x = Number(v)
-  }
-  if (!Number.isFinite(x)) return String(x)
   // Full precision, matching vega-scenegraph: its SVG renderers serialize raw
   // doubles (String(number)). Rounding here (e.g. to 3 decimals) shifts
   // relative-delta endpoint sums by ~1e-3 after recombination — enough to trip
   // the conformance canonicalizer. Canonical comparison rounds anyway.
-  return String(x)
+  // (String(NaN) / String(Infinity) are the same keywords the old guard emitted.)
+  if (typeof x === 'number') return String(x)
+  const v = x as unknown
+  if (v == null || typeof v === 'boolean') return String(v)
+  return String(Number(v))
 }
 
 /**
@@ -1535,6 +1533,6 @@ function num3(x: number): string {
     if (v == null || typeof v === 'boolean') return String(v)
     x = Number(v)
   }
-  if (!Number.isFinite(x)) return String(x)
+  // NaN/Infinity: Math.round keeps them, String prints the keyword.
   return String(Math.round(x * 1000) / 1000)
 }
