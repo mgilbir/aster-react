@@ -141,108 +141,80 @@ export interface PathSink {
   closePath(): void
 }
 
-function drawArc(sink: PathSink, x: number, y: number, coords: number[]): void {
-  const seg = arcSegments(coords[5]!, coords[6]!, coords[0]!, coords[1]!, coords[3]!, coords[4]!, coords[2]!, x, y)
-  for (const s of seg) {
-    const b = arcBezier(s)
-    sink.bezierCurveTo(b[0]!, b[1]!, b[2]!, b[3]!, b[4]!, b[5]!)
-  }
-}
-
-/** vega `path/render.js`: replay parsed commands into `sink`, scaled by (sX, sY) and offset by (l, t). */
+/**
+ * vega `path/render.js`: replay parsed commands into `sink`, scaled by (sX, sY) and
+ * offset by (l, t). Upper- and lower-case commands share one branch: a relative
+ * command is the absolute one offset by the current point (`ox`, `oy`), which is
+ * exactly how vega's twin cases differ — except `t`/`T`, which vega treats
+ * differently on purpose (only `t` checks the previous command), so they stay apart.
+ */
 export function renderSvgPath(sink: PathSink, path: PathCommand[], l = 0, t = 0, sX = 1, sY = sX): void {
   let previous: PathCommand | null = null
   let x = 0, y = 0
-  let controlX = 0, controlY = 0
-  let tempX: number, tempY: number
-  let tempControlX = 0, tempControlY = 0
-  let anchorX = 0, anchorY = 0
+  let cx = 0, cy = 0 // control point
+  let tx: number, ty: number
+  let tcx = 0, tcy = 0 // control point of the previous `t`
+  let ax = 0, ay = 0 // subpath anchor
 
   for (let i = 0; i < path.length; ++i) {
-    let current: number[] | PathCommand = path[i]!
-    if (sX !== 1 || sY !== 1) current = scaleCommand(current as PathCommand, sX, sY)
-    const c = current as unknown as [string, ...number[]] & number[]
-    switch (c[0]) {
-      case 'l': x += c[1]!; y += c[2]!; sink.lineTo(x + l, y + t); break
-      case 'L': x = c[1]!; y = c[2]!; sink.lineTo(x + l, y + t); break
-      case 'h': x += c[1]!; sink.lineTo(x + l, y + t); break
-      case 'H': x = c[1]!; sink.lineTo(x + l, y + t); break
-      case 'v': y += c[1]!; sink.lineTo(x + l, y + t); break
-      case 'V': y = c[1]!; sink.lineTo(x + l, y + t); break
-      case 'm': x += c[1]!; y += c[2]!; anchorX = x; anchorY = y; sink.moveTo(x + l, y + t); break
-      case 'M': x = c[1]!; y = c[2]!; anchorX = x; anchorY = y; sink.moveTo(x + l, y + t); break
+    const cmd = path[i]!
+    const c = (sX !== 1 || sY !== 1 ? scaleCommand(cmd, sX, sY) : cmd) as unknown as [string, ...number[]] & number[]
+    const rel = c[0] >= 'a'
+    const ox = rel ? x : 0
+    const oy = rel ? y : 0
+    switch (c[0].toLowerCase()) {
+      case 'l': x = ox + c[1]!; y = oy + c[2]!; sink.lineTo(x + l, y + t); break
+      case 'h': x = ox + c[1]!; sink.lineTo(x + l, y + t); break
+      case 'v': y = oy + c[1]!; sink.lineTo(x + l, y + t); break
+      case 'm': x = ox + c[1]!; y = oy + c[2]!; ax = x; ay = y; sink.moveTo(x + l, y + t); break
       case 'c':
-        tempX = x + c[5]!; tempY = y + c[6]!
-        controlX = x + c[3]!; controlY = y + c[4]!
-        sink.bezierCurveTo(x + c[1]! + l, y + c[2]! + t, controlX + l, controlY + t, tempX + l, tempY + t)
-        x = tempX; y = tempY
-        break
-      case 'C':
-        x = c[5]!; y = c[6]!
-        controlX = c[3]!; controlY = c[4]!
-        sink.bezierCurveTo(c[1]! + l, c[2]! + t, controlX + l, controlY + t, x + l, y + t)
+        tx = ox + c[5]!; ty = oy + c[6]!
+        cx = ox + c[3]!; cy = oy + c[4]!
+        sink.bezierCurveTo(ox + c[1]! + l, oy + c[2]! + t, cx + l, cy + t, tx + l, ty + t)
+        x = tx; y = ty
         break
       case 's':
-        tempX = x + c[3]!; tempY = y + c[4]!
-        controlX = 2 * x - controlX; controlY = 2 * y - controlY
-        sink.bezierCurveTo(controlX + l, controlY + t, x + c[1]! + l, y + c[2]! + t, tempX + l, tempY + t)
-        controlX = x + c[1]!; controlY = y + c[2]!
-        x = tempX; y = tempY
-        break
-      case 'S':
-        tempX = c[3]!; tempY = c[4]!
-        controlX = 2 * x - controlX; controlY = 2 * y - controlY
-        sink.bezierCurveTo(controlX + l, controlY + t, c[1]! + l, c[2]! + t, tempX + l, tempY + t)
-        x = tempX; y = tempY
-        controlX = c[1]!; controlY = c[2]!
+        tx = ox + c[3]!; ty = oy + c[4]!
+        cx = 2 * x - cx; cy = 2 * y - cy // reflection of the previous control point
+        sink.bezierCurveTo(cx + l, cy + t, ox + c[1]! + l, oy + c[2]! + t, tx + l, ty + t)
+        cx = ox + c[1]!; cy = oy + c[2]!
+        x = tx; y = ty
         break
       case 'q':
-        tempX = x + c[3]!; tempY = y + c[4]!
-        controlX = x + c[1]!; controlY = y + c[2]!
-        sink.quadraticCurveTo(controlX + l, controlY + t, tempX + l, tempY + t)
-        x = tempX; y = tempY
-        break
-      case 'Q':
-        tempX = c[3]!; tempY = c[4]!
-        sink.quadraticCurveTo(c[1]! + l, c[2]! + t, tempX + l, tempY + t)
-        x = tempX; y = tempY
-        controlX = c[1]!; controlY = c[2]!
+        tx = ox + c[3]!; ty = oy + c[4]!
+        cx = ox + c[1]!; cy = oy + c[2]!
+        sink.quadraticCurveTo(cx + l, cy + t, tx + l, ty + t)
+        x = tx; y = ty
         break
       case 't':
-        tempX = x + c[1]!; tempY = y + c[2]!
-        if (previous === null || !/[QqTt]/.test(previous[0])) {
-          controlX = x; controlY = y
-        } else if (previous[0] === 't') {
-          controlX = 2 * x - tempControlX; controlY = 2 * y - tempControlY
-        } else if (previous[0] === 'q') {
-          controlX = 2 * x - controlX; controlY = 2 * y - controlY
+        if (rel) {
+          tx = x + c[1]!; ty = y + c[2]!
+          if (previous === null || !/[QqTt]/.test(previous[0])) { cx = x; cy = y }
+          else if (previous[0] === 't') { cx = 2 * x - tcx; cy = 2 * y - tcy }
+          else if (previous[0] === 'q') { cx = 2 * x - cx; cy = 2 * y - cy }
+          tcx = cx; tcy = cy
+          sink.quadraticCurveTo(cx + l, cy + t, tx + l, ty + t)
+          x = tx; y = ty
+          cx = x + c[1]!; cy = y + c[2]!
+        } else {
+          tx = c[1]!; ty = c[2]!
+          cx = 2 * x - cx; cy = 2 * y - cy
+          sink.quadraticCurveTo(cx + l, cy + t, tx + l, ty + t)
+          x = tx; y = ty
         }
-        tempControlX = controlX; tempControlY = controlY
-        sink.quadraticCurveTo(controlX + l, controlY + t, tempX + l, tempY + t)
-        x = tempX; y = tempY
-        controlX = x + c[1]!; controlY = y + c[2]!
         break
-      case 'T':
-        tempX = c[1]!; tempY = c[2]!
-        controlX = 2 * x - controlX; controlY = 2 * y - controlY
-        sink.quadraticCurveTo(controlX + l, controlY + t, tempX + l, tempY + t)
-        x = tempX; y = tempY
+      case 'a': {
+        const seg = arcSegments(c[6]! + ox + l, c[7]! + oy + t, c[1]!, c[2]!, c[4]!, c[5]!, c[3]!, x + l, y + t)
+        for (const s of seg) {
+          const b = arcBezier(s)
+          sink.bezierCurveTo(b[0]!, b[1]!, b[2]!, b[3]!, b[4]!, b[5]!)
+        }
+        x = ox + c[6]!; y = oy + c[7]!
         break
-      case 'a':
-        drawArc(sink, x + l, y + t, [c[1]!, c[2]!, c[3]!, c[4]!, c[5]!, c[6]! + x + l, c[7]! + y + t])
-        x += c[6]!; y += c[7]!
-        break
-      case 'A':
-        drawArc(sink, x + l, y + t, [c[1]!, c[2]!, c[3]!, c[4]!, c[5]!, c[6]! + l, c[7]! + t])
-        x = c[6]!; y = c[7]!
-        break
-      case 'z':
-      case 'Z':
-        x = anchorX; y = anchorY
-        sink.closePath()
-        break
+      }
+      case 'z': x = ax; y = ay; sink.closePath(); break
     }
-    previous = path[i]!
+    previous = cmd
   }
 }
 

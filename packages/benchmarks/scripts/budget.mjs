@@ -20,6 +20,16 @@ import { fileURLToPath } from 'node:url'
 //   @aster/react         135.9 kB (Vega only)
 //   @aster/react/vl      158.4 kB (base + the from-scratch VL compiler, ~22.6 kB)
 //
+// Re-baselined for the strict-oracle PR (+4.4 kB gzip on core and core/dom, measured
+// 113.6 / 116.4 kB; the previous budget was met to the byte). What the oracle forced in,
+// each of it a vega behaviour the engine lacked: vega's default config and its merge rule
+// (config-defaults, ~0.9 kB), the SVG path parser/renderer for custom symbol shapes
+// (svg-path, ~1.4 kB), content-addressed clip/gradient ids (svg-defs), the shared paint
+// table + vega text/transform/clip/image markup in render and dom (net ~+0.5 kB: dom shrank
+// 0.8 kB), exact guide order, gradient stops from the scale, the Overlap transform for
+// gradient labels, axis/legend/header properties and the sequential-scale path (runtime,
+// compiler, scale(s), ~1.5 kB). Headroom over the measured values is ~1.5 kB, as before.
+//
 // History of the core floor: the 80 kB budget was re-baselined repeatedly as
 // the engine took ownership of its stack (ADR 0001): colour (+3.5), calendar
 // (+1.8), format (+4.7), parity tails (+4). The a11y tree (+2.3) and the
@@ -29,8 +39,8 @@ import { fileURLToPath } from 'node:url'
 // regression detection, so each entry gets measured headroom rather than a
 // number that no longer describes the library.
 const BUDGETS = {
-  '@aster/core': 112 * 1024,
-  '@aster/core/dom': 112 * 1024,
+  '@aster/core': 115 * 1024,
+  '@aster/core/dom': 118 * 1024,
   '@aster/core/canvas': 20 * 1024,
   '@aster/core/hit': 6 * 1024,
   '@aster/core/signals': 36 * 1024,

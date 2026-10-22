@@ -266,24 +266,6 @@ function dataDatumAttr(it: SceneItem): string {
   return v ? attrS('data-datum', v) : ''
 }
 
-/** Vega text `limit` truncation for bare guide leaves (width-getter path). */
-export function truncateLeaf(text: string, it: SceneItem, fontSize: number): string {
-  const limit = (it as Record<string, unknown>).limit as number | undefined
-  if (limit == null || !(limit > 0) || !text.length) return text
-  const estimateW = (str: string) => itemTextWidth(it, str)
-  if (estimateW(text) < limit) return text
-  const ellipsis = ((it as Record<string, unknown>).ellipsis as string | undefined) ?? '\u2026'
-  const lim = limit - estimateW(ellipsis)
-  let lo = 0
-  let hi = text.length
-  while (lo < hi) {
-    const mid = 1 + ((lo + hi) >>> 1)
-    if (estimateW(text.slice(0, mid)) < lim) lo = mid
-    else hi = mid - 1
-  }
-  return text.slice(0, lo) + ellipsis
-}
-
 function renderLeaf(it: SceneItem, clips?: ClipCollector): string {
   const dd = dataDatumAttr(it)
   // Path items
