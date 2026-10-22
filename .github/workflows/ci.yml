@@ -23,53 +23,12 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install
-
-      - name: Dependency boundary
-        run: pnpm check:deps
-
-      - name: Build
-        run: pnpm build
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Test
-        run: pnpm test
-
-      - name: Publish artifacts (pack + consume)
-        run: pnpm verify:publish
-
-      - name: Incremental append gate
-        run: pnpm bench:incremental -- --points=10000 --reps=30
-
-      - name: Conformance
-        run: pnpm conformance
-
-      - name: Scene differential (scales, groups, items)
-        run: pnpm scene-diff
-
-      - name: Guide-caption parity
-        run: pnpm a11y-parity
-
-      - name: Transform option matrix
-        run: pnpm transform-matrix
+        run: pnpm install --frozen-lockfile
 
       - name: Install Playwright Chromium
         run: pnpm --filter @aster/conformance exec playwright install --with-deps chromium
 
-      - name: Chromium canvas parity
-        run: pnpm conformance:canvas
-
-      - name: Chromium batched-SVG parity
-        run: pnpm conformance:batch
-
-      - name: Fuzz reproducer replay
-        run: pnpm fuzz:replay
-
-      - name: Gap probes (diagnostic, non-blocking)
-        run: pnpm probe
-        continue-on-error: true
-
-      - name: Bundle budget
-        run: pnpm --filter @aster/benchmarks run budget
+      # The gate list lives in scripts/gates.mjs (single source of truth, also
+      # what `pnpm check` runs locally). Do not add gates here; edit that file.
+      - name: Gates (pnpm check)
+        run: pnpm check
