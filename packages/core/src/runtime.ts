@@ -5555,10 +5555,11 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
   const plan = encodePlan(encode)
   const binding = ctx.encodeBinding
 
-  // Resolve the `defined` signal BEFORE datum mutation. Vega evaluates
-  // `defined` against the original data tuple (before scale resolution),
-  // so expressions like `isValid(datum["y"])` must see the raw data
-  // value (null), not the scaled pixel position.
+  // The encoded channel values (pixels, colours, ...) live on the scene ITEM and
+  // are never written back onto the datum: `datum` is the caller's data row, and
+  // tooltips, signals and interactions read data values from it (C21). A data
+  // field named like a channel (`x`, `size`, `fill`) therefore keeps its value.
+  // `defined` is evaluated against the data tuple, as Vega does.
   let definedValue: unknown
   if (plan.definedSpec !== undefined) {
     definedValue = resolveEncodeProperty(plan.definedSpec, datum, ctx, binding)
@@ -5575,13 +5576,6 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
     }
   }
 
-  // Pass 2: mirror the resolved plain values onto the datum tuple, then resolve
-  // signal-value pairs, which may read those values back off `datum`.
-  for (const key of plan.plainKeys) {
-    const v = rec[key]
-    if (v !== undefined) datum[key as keyof Row] = v
-  }
-  // Apply the pre-resolved `defined` value (from before datum mutation).
   if (definedValue !== undefined) {
     rec['defined'] = definedValue
   }
