@@ -46,7 +46,7 @@ import { flattenLength } from './transform-basic.js'
 import { trellisLayout, measureBounds } from './trellis.js'
 import { baselineOffset, boundAxisGroup, boundGroupItem, boundLeaf, boundText, Bounds } from './bounds.js'
 import { itemTextWidth, nominalTextWidth, type FontProps } from './text-metrics.js'
-import { symbolPath } from './render.js'
+import { symbolPath, rectItemPath } from './render.js'
 
 const DEFAULT_SIZE = 500
 
@@ -320,6 +320,9 @@ interface EvalContext {
   signalParams: Record<string, unknown>
   width: number
   height: number
+  /** Position of the enclosing facet group, for `{field: {group: 'x' | 'y'}}` references. */
+  groupX?: number
+  groupY?: number
   datasets: Map<string, Row[]>
   /** A legend tickCount threw: the whole layout aborts (raw-guide mode). */
   rawGuides?: boolean
@@ -3335,7 +3338,9 @@ function evaluateMark(
           })
           rows = idx.map((i) => rows[i]!)
         } else {
-          rows = sortRows(rows, mark.sort)
+          // vega-lite orders marks by `datum["f"]` accessors: they read the row's field `f`
+          const f = ([] as unknown[]).concat((mark.sort as { field?: unknown }).field).map((n) => String(n).replace(/^datum(\.|\["?)|(?<=^datum.*)"?\]$/g, ''))
+          rows = sortRows(rows, { ...mark.sort, field: f })
         }
       }
       if (mark.transform?.length) {
@@ -3854,7 +3859,9 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | Scen
     const grpClipD = grpCR > 0
       ? roundedRectPath(0, 0, ctx.width, ctx.height, Math.min(grpCR, ctx.width / 2, ctx.height / 2))
       : undefined
-    return { marktype: 'group', name, role: (mark.role as string) ?? 'scope', items, clip: grpClip, ...(grpClipD ? { clipPathD: grpClipD } : {}) }
+    // the group's own offset (vega-lite's stack_group_main child shifts back by `{group: 'y'}`)
+    const geoO = grEnc?.x != null || grEnc?.y != null ? resolveEncodeSet(grEnc, {}, ctx, 'group') : {}
+    return { marktype: 'group', name, role: (mark.role as string) ?? 'scope', items, clip: grpClip, ...(geoO.x ? { x: geoO.x as number } : {}), ...(geoO.y ? { y: geoO.y as number } : {}), ...(grpClipD ? { clipPathD: grpClipD } : {}) }
   }
   throw new Error('[aster] unsupported group mark: ' + (name ?? '<unnamed>'))
 }
@@ -4128,26 +4135,6 @@ function isTrellis(ctx: EvalContext): boolean {
 }
 
 /**
- * Walk a scene subtree and find the first item with y and y2 set (a rect mark
- * item). Returns the absolute height |y2 - y|, or null if not found.
- */
-function findBarHeight(items: SceneItem[]): number | null {
-  for (const item of items) {
-    const group = item as SceneGroup
-    if ((group.marktype !== undefined || Array.isArray(group.items)) && group.items) {
-      const h = findBarHeight(group.items)
-      if (h != null) return h
-    } else {
-      const it = item as Record<string, unknown>
-      if (it.y != null && it.y2 != null && typeof it.y === 'number' && typeof it.y2 === 'number') {
-        return Math.abs(it.y2 - it.y)
-      }
-    }
-  }
-  return null
-}
-
-/**
  * Generate an SVG path for a rounded rectangle with corner radius r,
  * using cubic bezier approximation matching vega-scenegraph (k ≈ 0.5523).
  */
@@ -4227,7 +4214,24 @@ function buildFacetCells(
     if (!g.length) continue
     ctx.datasets.set(facet.name, g)
 
-    const tmpCtx: EvalContext = { ...ctx, width: cellWidth, height: cellHeight }
+    // A facet group positioned by the aggregate of its own rows (vega-lite's
+    // stack_group_main: x/x2 or y/y2 from the min/max of the stack) takes its
+    // offset and extent from that datum; its children shift back by `{group: ...}`.
+    const pos = { x: 0, y: 0 }
+    const size = { x: cellWidth, y: cellHeight }
+    let stacked: 'x' | 'y' | undefined
+    const ag = (facet as { aggregate?: { fields: string[]; ops: string[] } }).aggregate
+    const gu = (mark.encode?.update ?? {}) as Record<string, EncodeValue>
+    if (ag?.ops) {
+      const fd = aggregateGroup(g, facet.groupby, ag.fields, ag.ops, ag.ops.map((op, i) => `${op}_${ag.fields[i]}`))
+      for (const a of ['x', 'y'] as const) {
+        if (!gu[a] || !gu[`${a}2`]) continue
+        const lo = Number(resolveEncodeProperty(gu[a], fd, ctx))
+        const hi = Number(resolveEncodeProperty(gu[`${a}2`], fd, ctx))
+        if (isFinite(lo) && isFinite(hi)) { pos[a] = lo; size[a] = hi - lo; stacked = a }
+      }
+    }
+    const tmpCtx: EvalContext = { ...ctx, width: size.x, height: size.y, groupX: pos.x, groupY: pos.y }
     const nestedItems: SceneItem[] = []
     for (const cm of (mark as any).marks ?? []) {
       const ng = facetItemMark(cm, tmpCtx, facet.name)
@@ -4284,27 +4288,21 @@ function buildFacetCells(
     // When the facet group has cornerRadius, vega renders the group background
     // as a rounded rect matching the bar's actual dimensions (y2-y height from
     // the encode), and the inner scope background as a zero-height path.
+    let cellD: string | undefined
     const cellStyle = Array.isArray(mark.style) ? mark.style.includes('cell') : mark.style === 'cell'
-    // Extract cornerRadius from the group's encode
     const grEnc = (mark as any).encode?.update
-    const grCR = grEnc?.cornerRadius
-    const cellCornerRadius = grCR && typeof grCR === 'object' && 'value' in grCR
-      ? (grCR as { value: number }).value
-      : (typeof grCR === 'number' ? grCR : 0)
-    // Compute the actual bar height from the nested rect items
-    const barH = findBarHeight(nestedItems)
-    const bgH = barH ?? cellHeight
-    if (cellCornerRadius > 0 && barH != null) {
-      // Vega renders the group background as a rounded rect with cornerRadius
-      const cr = Math.min(cellCornerRadius, cellWidth / 2, bgH / 2)
-      const bgPath = roundedRectPath(0, 0, cellWidth, bgH, cr)
-      bgItems.push({ path: bgPath, x: 0, y: 0 } as SceneItem)
-      // Inner scope background: zero-height path (vega default for groups
-      // without explicit height)
-      bgItems.push({
-        path: `M0,0h${cellWidth}v0h-${cellWidth}Z`,
-        x: 0, y: 0,
-      } as SceneItem)
+    // an aggregate-positioned group carries any of the five corner radii (also per corner, or negative)
+    const corners: Record<string, number> = {}
+    for (const k in grEnc) {
+      const v = stacked && k.startsWith('cornerRadius') ? (grEnc[k] as { value?: number }).value : 0
+      if (v) corners[k] = v
+    }
+    const groupRounded = Object.keys(corners).length > 0
+    if (groupRounded) {
+      // vega paints the rounded background, then the clipped scope (its zero-height
+      // background shifted back by the group's offset, then the marks)
+      cellD = rectItemPath({ x: 0, y: 0, width: size.x, height: size.y, ...corners } as SceneItem)!
+      bgItems.push({ path: cellD, x: 0, y: 0 } as SceneItem, { path: stacked === 'y' ? `M0,0h${size.x}v0h-${size.x}Z` : `M0,0h0v${size.y}h0Z`, x: 0 - pos.x, y: 0 - pos.y } as SceneItem)
     } else if (cellStyle) {
       bgItems.push({
         path: `M0.5,0.5h${cellWidth}v${cellHeight}h-${cellWidth}Z`,
@@ -4316,7 +4314,6 @@ function buildFacetCells(
       // {field:{group:...}}); raw Vega facet cells (from.from.facet without
       // encode signals) don't, in which case Vega renders a zero-height
       // scope background that is degenerate after canonicalization.
-      const grEnc = (mark as any).encode?.update
       const hasExplicitSize = grEnc && (
         (grEnc.width && typeof grEnc.width === 'object' && ('signal' in grEnc.width || ('field' in grEnc.width && typeof grEnc.width.field === 'object'))) ||
         (grEnc.height && typeof grEnc.height === 'object' && ('signal' in grEnc.height || ('field' in grEnc.height && typeof grEnc.height.field === 'object')))
@@ -4337,10 +4334,10 @@ function buildFacetCells(
     result.push({
       marktype: 'group', name: mark.name, role: 'scope',
       items: [...bgItems, ...axisItems, ...nestedItems, ...labelItems],
-      clip: mark.clip === true || cellCornerRadius > 0,
-      width: cellWidth, height: cellHeight,
-      x: 0, y: 0,
-      ...(cellCornerRadius > 0 && barH != null ? { clipPathD: roundedRectPath(0, 0, cellWidth, bgH, Math.min(cellCornerRadius, cellWidth / 2, bgH / 2)) } : {}),
+      clip: mark.clip === true || groupRounded,
+      width: size.x, height: size.y,
+      x: pos.x, y: pos.y,
+      ...(groupRounded ? { clipPathD: cellD } : {}),
     })
   }
 
@@ -4356,30 +4353,23 @@ function buildFacetCellGroup(
 ): SceneGroup[] {
   const cells = buildFacetCells(mark, facet, ctx)
   if (!cells.length) return cells
-  // When the facet group has a scale-based x encode (e.g. VL bar charts with
+  // When the facet group has a scale-based x or y encode (e.g. VL bar charts with
   // cornerRadius compile to a faceted group where each cell is positioned at
-  // the band scale position), resolve each cell's x from the scale rather
-  // than using the grid layout.
-  const xEnc = (mark as any).encode?.update?.x
-  if (xEnc && typeof xEnc === 'object' && 'scale' in xEnc && 'field' in xEnc) {
-    const xScale = ctx.scales.get(xEnc.scale as string)
-    const fieldName = xEnc.field as string
-    if (xScale) {
-      const rows = ctx.datasets.get(facet.data) ?? []
-      const grouped = inlineGroupRows(rows, facet.groupby)
-      for (let i = 0; i < cells.length; i++) {
-        const g = grouped[i]
-        if (g && g.length > 0) {
-          const catVal = g[0]?.[fieldName]
-          const pos = xScale(catVal as string | number)
-          if (typeof pos === 'number' && Number.isFinite(pos) && cells[i]) {
-            cells[i]!.x = pos
-          }
-        }
-      }
-      return cells
+  // the band scale position), resolve each cell's position from the scale
+  // rather than using the grid layout.
+  let placed = false
+  for (const a of ['x', 'y'] as const) {
+    const enc = (mark as any).encode?.update?.[a]
+    const scale = enc && typeof enc === 'object' && 'scale' in enc && 'field' in enc ? ctx.scales.get(enc.scale as string) : undefined
+    if (!scale) continue
+    placed = true
+    const grouped = inlineGroupRows(ctx.datasets.get(facet.data) ?? [], facet.groupby)
+    for (let i = 0; i < cells.length; i++) {
+      const p = grouped[i]?.length ? scale(grouped[i]![0]![enc.field as string] as string | number) : undefined
+      if (typeof p === 'number' && Number.isFinite(p) && cells[i]) cells[i]![a] = p
     }
   }
+  if (placed) return cells
   const layout = getFacetLayout(ctx, cells)
   if (!layout) return cells
   for (let i = 0; i < cells.length; i++) {
@@ -5766,8 +5756,8 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
       let v: unknown
       if (groupKey === 'width') v = ctx.width
       else if (groupKey === 'height') v = ctx.height
-      else if (groupKey === 'x') v = 0
-      else if (groupKey === 'y') v = 0
+      else if (groupKey === 'x') v = ctx.groupX ?? 0
+      else if (groupKey === 'y') v = ctx.groupY ?? 0
       else v = 0
       if (v != null && typeof v === 'number') {
         const multValField = (value as { mult?: number }).mult

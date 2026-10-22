@@ -9,7 +9,7 @@ import { ownGet, minOf, maxOf } from './util.js'
 import { boundedCount } from './limits.js'
 import { quantizeInterpolator } from './scale.js'
 import { hcl, rgb } from './color.js'
-import { aggregateGroup } from './transform.js'
+import { aggregateGroup, groupRows } from './transform.js'
 import type { CompiledScale, ScaleDomain, ScaleRange } from './types.js'
 
 export type Scale = vs.Scale
@@ -642,22 +642,15 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
         if (ss.op && (ss.field || ss.op === 'count') && ctx.dataRows) {
           // Aggregate sort: group rows by domain field, compute op per group, sort
           const domainField = (domain as { field: string }).field
-          const dataName = (domain as { data: string }).data
-          const rows = ctx.dataRows(dataName)
           // the aggregate Vega runs per domain value (aggregateGroup = Vega's ops, incl. count without a field)
-          const groups = new Map<unknown, Record<string, unknown>[]>()
-          for (const r of rows) {
-            const g = groups.get(r[domainField])
-            if (g) g.push(r)
-            else groups.set(r[domainField], [r])
-          }
           const agg = new Map<unknown, number | string>()
-          for (const [key, g] of groups) agg.set(key, aggregateGroup(g, [], [ss.field ?? null], [ss.op], ['v']).v as number)
-          const desc = ss.order === 'descending'
-          const cmp = (x: number | string, y: number | string): number => (x < y ? -1 : x > y ? 1 : 0)
+          for (const g of groupRows(ctx.dataRows((domain as { data: string }).data), [domainField])) {
+            agg.set(g[0]![domainField], aggregateGroup(g, [], [ss.field ?? null], [ss.op], ['v']).v as number)
+          }
+          const d = ss.order === 'descending' ? -1 : 1
           vals.sort((a, b) => {
             const av = agg.get(a) ?? 0, bv = agg.get(b) ?? 0
-            return desc ? cmp(bv, av) : cmp(av, bv)
+            return av < bv ? -d : av > bv ? d : 0
           })
         } else if (!ss.field || ss.field === 'key') {
           // Alphabetical sort: {order: "descending"} or {order: "descending", field: "key"}
@@ -852,8 +845,7 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string, 
       if (scaleType === 'band' || scaleType === 'ordinal' || scaleType === 'point') {
         const colors = vs.scheme(schemeName)
         if (Array.isArray(colors)) return colors
-        if (typeof colors === 'function') return quantizeInterpolator(colors as (t: number) => unknown, Math.max(domainCount, 1)) as unknown[]
-        throw new Error(`Unrecognized scale scheme: ${schemeName}`)
+        return quantizeInterpolator(colors as (t: number) => unknown, Math.max(domainCount, 1)) as unknown[]
       }
       return extent ? { __asterScheme: schemeName, __asterExtent: extent } : schemeName
     }
