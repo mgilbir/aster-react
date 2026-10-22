@@ -5,8 +5,19 @@
  * chart through upstream vega (oracle) and through @aster/core, and compare the
  * SVG. A value upstream refuses is still a case: "both refuse" is agreement.
  *
- * Usage: npx tsx src/run-sweep.ts <sweep-name> [--filter substr] [--floor N]
+ * Usage: npx tsx src/run-sweep.ts <sweep-name> --floor N --min-ok N --max-node-error N [--filter substr]
  *   sweeps: vega-schema | vega-lite-schema | values | signals
+ *
+ * The run only passes when ALL of these hold (a vacuous run must never pass):
+ *   - at least one case ran (a typo'd --filter runs zero and fails);
+ *   - generated cases >= --floor (the schema walk did not silently shrink);
+ *   - ok comparisons >= --min-ok (the comparisons did not all quietly degrade
+ *     into "both refused"); not enforced with --filter, which runs a subset;
+ *   - node-errors <= --max-node-error. A node-error is a case the ORACLE
+ *     crashes on while Aster renders it; each is an upstream defect, so the
+ *     count is a ceiling that can only be lowered, never a name allow-list;
+ *   - zero differ and zero engine-error (Aster crashes are never reclassified).
+ * --floor/--min-ok/--max-node-error are required unless --filter is given.
  */
 import { mkdtempSync, readdirSync, symlinkSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -75,11 +86,42 @@ interface Status {
 
 /**
  * The ci0/ci1 bootstrap aggregates call Math.random inside vega-statistics, so
- * two renders of the same oracle spec differ. Treat those cases as expected
- * nondeterminism rather than a comparison failure.
+ * two renders of the same oracle spec differ. Only a *comparison difference* on
+ * such a case may be reclassified, and only after the oracle is shown to
+ * disagree with itself (see `oracleIsNondeterministic`). An Aster error is
+ * never reclassified: a crash is a crash.
  */
-function isNondeterministic(c: SweepCase): boolean {
+function isBootstrapCase(c: SweepCase): boolean {
   return /-aggregate-ci[01]$/.test(c.name)
+}
+
+/** Render the oracle once. Throws on an oracle error. */
+async function renderOracle(vgSpec: Record<string, unknown>, writes: SweepCase['writes']): Promise<string> {
+  const runtime = vega.parse(vgSpec as never)
+  const view = new (vega as any).View(runtime, { renderer: 'none' })
+  try {
+    await view.runAsync()
+    let svg: string = await view.toSVG()
+    // signals sweep: write the requested signals and re-render
+    for (const w of writes ?? []) {
+      view.signal(w.name, w.value)
+      await view.runAsync()
+    }
+    if (writes?.length) svg = await view.toSVG()
+    return svg
+  } finally {
+    view.finalize()
+  }
+}
+
+/** True when two oracle renders of the same spec canonicalize differently. */
+async function oracleIsNondeterministic(vgSpec: Record<string, unknown>, writes: SweepCase['writes'], first: string): Promise<boolean> {
+  try {
+    const again = await renderOracle(vgSpec, writes)
+    return diffCanonical(canonicalizeSvg(first), canonicalizeSvg(again)).length > 0
+  } catch {
+    return false // cannot show nondeterminism => treat as a real difference
+  }
 }
 
 async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'both-refused' | 'node-error' | 'engine-error' | 'differ' | 'nondeterministic'> {
@@ -104,7 +146,6 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
     try {
       ourVgSpec = compileVL(c.spec as never) as unknown as Record<string, unknown>
     } catch (e) {
-      if (isNondeterministic(c)) return 'nondeterministic'
       console.error(`  [engine-error] ${c.name}: ${(e as Error).message.split('\n')[0]}`)
       return 'engine-error'
     }
@@ -112,20 +153,7 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
   let oracleSvg: string | null = null
   let oracleErr = ''
   try {
-    const runtime = vega.parse(vgSpec as never)
-    const view = new (vega as any).View(runtime, { renderer: 'none' })
-    try {
-      await view.runAsync()
-      oracleSvg = await view.toSVG()
-      // signals sweep: write the requested signals and re-render
-      for (const w of c.writes ?? []) {
-        view.signal(w.name, w.value)
-        await view.runAsync()
-      }
-      if (c.writes?.length) oracleSvg = await view.toSVG()
-    } finally {
-      view.finalize()
-    }
+    oracleSvg = await renderOracle(vgSpec, c.writes)
   } catch (e) {
     oracleErr = (e as Error).message
   }
@@ -141,7 +169,6 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
 
   if (ourErr && oracleErr) return 'both-refused'
   if (ourErr) {
-    if (isNondeterministic(c)) return 'nondeterministic'
     console.error(`  [engine-error] ${c.name}: ${ourErr.split('\n')[0]}`)
     return 'engine-error'
   }
@@ -153,18 +180,41 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
   const b = canonicalizeSvg(ourSvg!)
   const diffs = diffCanonical(a, b)
   if (diffs.length === 0) return 'ok'
-  if (isNondeterministic(c)) return 'nondeterministic'
+  if (isBootstrapCase(c) && (await oracleIsNondeterministic(vgSpec, c.writes, oracleSvg!))) return 'nondeterministic'
   console.error(`  [differ] ${c.name} (${c.family}.${c.property}): ${diffs[0]}`)
   return 'differ'
+}
+
+function usage(msg: string): never {
+  console.error(`run-sweep: ${msg}`)
+  console.error('usage: run-sweep.ts <sweep> --floor N --min-ok N --max-node-error N [--filter substr]')
+  process.exit(2)
+}
+
+/** A non-negative integer flag, or undefined when absent. Rejects NaN (NaN compares false against everything). */
+function intFlag(args: string[], name: string): number | undefined {
+  const i = args.indexOf(name)
+  if (i < 0) return undefined
+  const raw = args[i + 1]
+  const n = Number(raw)
+  if (raw === undefined || raw.trim() === '' || !Number.isInteger(n) || n < 0) usage(`${name} needs a non-negative integer, got ${JSON.stringify(raw)}`)
+  return n
 }
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const sweepName = args[0] ?? 'vega-schema'
   const filterIdx = args.indexOf('--filter')
-  const filter = filterIdx >= 0 ? args[filterIdx + 1]! : ''
-  const floorIdx = args.indexOf('--floor')
-  const floor = floorIdx >= 0 ? Number(args[floorIdx + 1]) : 0
+  const filter = filterIdx >= 0 ? (args[filterIdx + 1] ?? '') : ''
+  if (filterIdx >= 0 && !filter) usage('--filter needs a non-empty substring')
+  const floor = intFlag(args, '--floor')
+  const minOk = intFlag(args, '--min-ok')
+  const maxNodeError = intFlag(args, '--max-node-error')
+  if (!filter) {
+    for (const [name, v] of [['--floor', floor], ['--min-ok', minOk], ['--max-node-error', maxNodeError]] as const) {
+      if (v === undefined) usage(`${name} is required (a sweep with no floor can pass while checking nothing)`)
+    }
+  }
 
   const nodeModules = makeNodeModules()
   try {
@@ -173,9 +223,12 @@ async function main(): Promise<void> {
     const out = (generate as (ctx: unknown) => { cases: SweepCase[]; skips: Array<{ family: string; property: string; reason: string }> })(ctx)
     const all = out.cases.filter((c) => !filter || c.name.includes(filter))
     console.log(`[${sweepName}] ${out.cases.length} cases generated, ${out.skips.length} properties skipped; running ${all.length}`)
-    if (floor && out.cases.length < floor) {
-      console.error(`FLOOR FAILED: generated ${out.cases.length} < floor ${floor}`)
-      process.exitCode = 1
+    const problems: string[] = []
+    if (floor !== undefined && out.cases.length < floor) {
+      problems.push(`FLOOR FAILED: generated ${out.cases.length} < floor ${floor}`)
+    }
+    if (all.length === 0) {
+      problems.push(`NO CASES RAN (filter ${JSON.stringify(filter)} matched none of ${out.cases.length} generated)`)
     }
     console.log(`[${sweepName}] ${out.skips.length} skipped properties (declared but not enumerable)`)
 
@@ -221,9 +274,22 @@ async function main(): Promise<void> {
       console.log(`  ${f.padEnd(28)} ${s.ok}\t${s.fail}`)
     }
     if (status.differ + status.engineError > 0) {
-      console.error(`[${sweepName}] FAILING (${status.differ + status.engineError}):`)
+      problems.push(`${status.differ + status.engineError} differ/engine-error case(s)`)
+    }
+    if (!filter && minOk !== undefined && status.ok < minOk) {
+      problems.push(`OK FLOOR FAILED: ${status.ok} ok < --min-ok ${minOk}`)
+    }
+    if (maxNodeError !== undefined && status.nodeError > maxNodeError) {
+      problems.push(`NODE-ERROR CEILING EXCEEDED: ${status.nodeError} > --max-node-error ${maxNodeError} (oracle-side crashes grew)`)
+    }
+    if (status.failNames.length > 0) {
+      console.error(`[${sweepName}] non-ok cases (differ/engine-error/node-error), ${status.failNames.length}:`)
       for (const n of status.failNames.slice(0, 40)) console.error(' ', n)
       if (status.failNames.length > 40) console.error(`  ... and ${status.failNames.length - 40} more`)
+    }
+    if (problems.length > 0) {
+      for (const pr of problems) console.error(`[${sweepName}] ${pr}`)
+      console.error(`[${sweepName}] FAIL`)
       process.exitCode = 1
     } else {
       console.log(`[${sweepName}] PASS`)
