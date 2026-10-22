@@ -194,4 +194,16 @@ describe('C50: prototype-named datasets, signals and tables', () => {
       }
     }
   })
+
+  it.each(HOSTILE_NAMES)('absent signal named %s behaves exactly like any other absent signal', (name) => {
+    const outcome = (sig: string): string => {
+      const spec = JSON.parse(`{"width":{"signal":${JSON.stringify(sig)}},"height":80,"autosize":"none",
+        "data":[{"name":"t","values":[{"v":1},{"v":2}]}],
+        "scales":[{"name":"x","type":"linear","domain":{"signal":${JSON.stringify(sig)}},"range":[0,50],"bins":{"signal":${JSON.stringify(sig)}}},
+                  {"name":"y","type":"linear","domain":{"data":"t","field":"v"},"range":"height","padding":{"signal":${JSON.stringify(sig)}}}],
+        "marks":[{"type":"symbol","from":{"data":"t"},"encode":{"update":{"x":{"scale":"x","field":"v"},"y":{"scale":"y","field":"v"}}}}]}`)
+      try { return renderSpec(spec).replaceAll(sig, 'SIG') } catch (e) { return 'ERR ' + String((e as Error).message).replaceAll(sig, 'SIG') }
+    }
+    expect(outcome(name)).toBe(outcome('zz_absent'))
+  })
 })
