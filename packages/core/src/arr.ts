@@ -1,3 +1,4 @@
+import { boundedCount } from './limits.js'
 /**
  * d3-array subset (3.2.4): bisector/bisect, range, ticks, quantile, plus the
  * internmap InternMap used by ordinal scales. Faithful transcription verified
@@ -27,6 +28,7 @@ export function range(start: number, stop?: number, step?: number): number[] {
   const st = n < 3 ? 1 : +step!
   let i = -1
   const m = Math.max(0, Math.ceil((stop! - start) / st)) | 0
+  boundedCount(Math.max(0, Math.ceil((stop! - start) / st)), 'range', 'rows')
   const out = new Array<number>(m)
   while (++i < m) {
     out[i] = start + i * st
@@ -135,6 +137,8 @@ export function ticks(start: number, stop: number, count: number): number[] {
   const [i1, i2, inc] = reverse ? tickSpec(stop, start, count) : tickSpec(start, stop, count)
   if (!(i2 >= i1)) return []
   const n = i2 - i1 + 1
+  // tickCount/interval come from the spec: bound the tick array before allocating it (C9).
+  boundedCount(n, 'ticks')
   const out = new Array<number>(n)
   if (reverse) {
     if (inc < 0) for (let i = 0; i < n; ++i) out[i] = (i2 - i) / -inc

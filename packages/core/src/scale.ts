@@ -12,6 +12,7 @@ import {
   tickStep,
 } from './arr.js'
 import { ownGet } from './util.js'
+import { boundedCount } from './limits.js'
 import { piecewise } from './interp.js'
 import { interpolateRgb } from './interp.js'
 import {
@@ -701,6 +702,7 @@ export function interpolateColors(colors: string[], type?: string, gamma?: numbe
 }
 
 export function quantizeInterpolator(interpolator: (t: number) => unknown, count: number): unknown[] {
+  boundedCount(count, 'quantized colour samples')
   const samples = new Array(count)
   const n = count + 1
   for (let i = 0; i < count;) samples[i] = interpolator(++i / n)

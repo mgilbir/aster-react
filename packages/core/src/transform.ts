@@ -7,7 +7,8 @@ import type { CompiledTransform, SortSpec } from './types.js'
 import type { ExpressionRuntime } from './expression.js'
 import { geoRegistry, requireGeo, requireTransform } from './registry.js'
 import { nominalTextWidth } from './text-metrics.js'
-import { ownGet, safeGet } from './util.js'
+import { ownGet, safeGet, minOf, maxOf } from './util.js'
+import { AsterLimitError, activeMeter, boundedCount, checkRowCount, meterTick, meterRows } from './limits.js'
 
 export interface TransformContext {
   runtime: ExpressionRuntime
@@ -30,8 +31,16 @@ export function applyTransforms(
   sourceName?: string,
 ): Row[] {
   let out = rows
+  const meter = activeMeter()
   for (const t of transforms) {
+    if (meter) meter.clock.check(`transform ${t.type}`)
     out = applyTransform(out, t, ctx, sourceName)
+    if (meter) {
+      // Whatever a transform produced is a dataset like any other: it may not
+      // exceed maxRows, and rows beyond the input count as generated (C7/C9).
+      meter.checkRows(out.length, `transform ${t.type}`)
+      meter.generated(out.length - rows.length, `transform ${t.type}`)
+    }
   }
   return out
 }
@@ -52,11 +61,14 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
       return rows.slice(0, t.size)
     case 'fold': {
       const [asKey, asValue] = t.as
+      // The output size is known up front: refuse before allocating it.
+      checkRowCount(rows.length * t.fields.length, 'fold')
       const out: Row[] = []
       for (const r of rows) {
         for (const f of t.fields) {
           out.push({ ...r, [asKey]: f, [asValue]: r[f] })
         }
+        meterTick('fold', t.fields.length)
       }
       return out
     }
@@ -77,6 +89,8 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
           maxlen = len == null ? NaN : Math.max(maxlen, len)
         }
         if (!(maxlen > 0)) continue
+        // maxlen comes from the data (an array length): bound it before the loop.
+        checkRowCount(out.length + maxlen, 'flatten')
         for (let i = 0; i < maxlen; i++) {
           const row: Row = { ...r }
           fields.forEach((f, j) => {
@@ -105,7 +119,7 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
     case 'extent': {
       const values = collectField(rows, t.field).filter(isFiniteNumber)
       ctx.signals[t.signal] =
-        values.length === 0 ? [Infinity, -Infinity] : [Math.min(...values), Math.max(...values)]
+        values.length === 0 ? [Infinity, -Infinity] : [minOf(values), maxOf(values)]
       return rows
     }
     case 'geoshape': {
@@ -299,8 +313,8 @@ function binRows(rows: Row[], t: Extract<CompiledTransform, { type: 'bin' }>, ct
     lo = extentLo[0]
     hi = extentLo[1]
   } else if (values.length) {
-    lo = Math.min(...values)
-    hi = Math.max(...values)
+    lo = minOf(values)
+    hi = maxOf(values)
   } else {
     lo = 0
     hi = 1
@@ -322,7 +336,11 @@ function binRows(rows: Row[], t: Extract<CompiledTransform, { type: 'bin' }>, ct
       : v
     return Array.isArray(a) ? a.map(Number) : undefined
   }
-  const maxb = pnum(t.maxbins) ?? 20
+  // vega-statistics bin(): `maxbins || 20` and `base || 10`, so a zero (or
+  // NaN) falls back to the default while a negative maxbins gives a NaN step
+  // (every row bins to NaN). No coercion of a bad step to 1 -- that is what
+  // let `maxbins: -1` spin forever (C8).
+  const maxb = pnum(t.maxbins) || 20
   const base = pnum(t.base) || 10
   const div = parr(t.divide) ?? [5, 2]
   const span = pnum(t.span) ?? ((hi - lo) || Math.abs(lo) || 1)
@@ -341,8 +359,15 @@ function binRows(rows: Row[], t: Extract<CompiledTransform, { type: 'bin' }>, ct
     const level = Math.ceil(Math.log(maxb) / logb)
     const minstep = pnum(t.minstep) ?? 0
     step = Math.max(minstep, Math.pow(base, Math.round(Math.log(span) / logb) - level))
-    if (!(step > 0) || !Number.isFinite(step)) step = 1
-    while (Math.ceil(span / step) > maxb) step *= base
+    // Deliberate deviation from vega: vega loops forever when the step cannot
+    // grow (base 1, base < 1, or a step that underflowed to 0). We throw.
+    for (let guard = 0; Math.ceil(span / step) > maxb; guard++) {
+      const next = step * base
+      if (!(next > step) || guard > 1_000_000) {
+        throw new Error('[aster] bin: cannot derive a step size from base, maxbins and the data span')
+      }
+      step = next
+    }
     for (const d of div) {
       const v = step / d
       if (v >= minstep && span / v <= maxb) step = v
@@ -476,6 +501,8 @@ function imputeRows(
   // vega emits the source tuples first, then appends the imputed tuples grouped
   // by partition (each group in key order).
   const imputed: Row[] = []
+  // groups x domain is the worst-case output: refuse it before building it.
+  checkRowCount(rows.length + groups.length * domain.length, 'impute')
   for (const g of groups) {
     const sorted = g.slice().sort((a, b) => (a[t.key]! < b[t.key]! ? -1 : a[t.key]! > b[t.key]! ? 1 : 0))
     const present = new Set(sorted.map((r) => r[t.key]))
@@ -508,9 +535,9 @@ function imputeStat(group: Row[], t: { field: string; method?: string; value?: u
       return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2
     }
     case 'min':
-      return values.length ? Math.min(...values) : 0
+      return values.length ? minOf(values) : 0
     case 'max':
-      return values.length ? Math.max(...values) : 0
+      return values.length ? maxOf(values) : 0
     default:
       return typeof t.value === 'number' ? t.value : 0
   }
@@ -527,8 +554,8 @@ const AGGR: Record<string, (values: number[], rows: Row[]) => number | undefined
   mean: (v) => (v.length ? v.reduce((a, b) => a + b, 0) / v.length : NaN),
   // vega's `average` is a pure alias of mean (AggregateOps: req ['mean'])
   average: (v) => (v.length ? v.reduce((a, b) => a + b, 0) / v.length : NaN),
-  min: (v) => Math.min(...v),
-  max: (v) => Math.max(...v),
+  min: (v) => minOf(v),
+  max: (v) => maxOf(v),
   median: (v) => {
     if (!v.length) return undefined
     const s = v.slice().sort((a, b) => a - b)
@@ -701,7 +728,9 @@ function pivotRows(rows: Row[], t: Record<string, unknown>): Row[] {
 
   const groups = groupby.length ? groupRows(rows, groupby) : rows.length ? [rows] : []
   const out: Row[] = []
+  checkRowCount(groups.length, 'pivot')
   for (const g of groups) {
+    meterTick('pivot', capped.length * g.length)
     const row: Row = {}
     for (const k of groupby) row[k] = g[0]?.[k]
     capped.forEach((k, i) => {
@@ -801,6 +830,9 @@ function windowRows(rows: Row[], t: Extract<CompiledTransform, { type: 'window' 
       }
       const r = { ...g[i]! }
       const frameRows = g.slice(i0, i1)
+      // Frames are O(n) per row (O(n^2) per partition): charge the real cost so
+      // the wall clock is sampled inside the loop (C7).
+      meterTick('window', frameRows.length + 1)
       const cumeDist = (): number => {
         let last = i
         while (last + 1 < n && isPeer(g[last]!, g[last + 1]!, sortFields)) last++
@@ -873,6 +905,8 @@ function windowRows(rows: Row[], t: Extract<CompiledTransform, { type: 'window' 
             break
           }
           case 'values':
+            // every row retains its own frame: n frames of up to n rows
+            meterRows(frameRows.length, 'window values')
             r[name] = frameRows
             break
           case 'count':
@@ -1049,9 +1083,18 @@ export function d3Range(start: number, stop: number, step: number): number[] {
   start = +start
   stop = +stop
   step = +step
-  const n = Math.max(0, Math.ceil((stop - start) / step)) | 0
+  const len = Math.max(0, Math.ceil((stop - start) / step))
+  // Deviation from d3 (safety): the length is bounded by the active limits
+  // BEFORE the allocation (sequence 5e7, graticule steps ~0, ...).
+  if (len > 0x7fffffff) throw new AsterLimitError(`range length ${len} > 2147483647`)
+  const n = len | 0
+  const meter = activeMeter()
+  if (meter) meter.rows(Number.isFinite(len) ? len : Infinity, 'range')
   const out: number[] = new Array(n)
-  for (let i = 0; i < n; i++) out[i] = start + i * step
+  for (let i = 0; i < n; i++) {
+    out[i] = start + i * step
+    if (meter && (i & 0xffff) === 0xffff) meter.clock.check('range')
+  }
   return out
 }
 
@@ -1069,7 +1112,14 @@ function sequenceRows(t: Record<string, unknown>): Row[] {
   const stop = Number(t.stop)
   const step = t.step == null ? 1 : Number(t.step)
   const as = (t.as as string | undefined) ?? 'data'
-  return d3Range(start, stop, step).map((v) => ({ [as]: v }))
+  const values = d3Range(start, stop, step)
+  const out: Row[] = new Array(values.length)
+  for (let i = 0; i < values.length; i++) {
+    out[i] = { [as]: values[i] }
+    // limits ON: sample the wall clock while the tuples are built (C7)
+    if ((i & 0x3fff) === 0x3fff) meterTick('sequence', 1024)
+  }
+  return out
 }
 
 const GEO_EPSILON = 1e-6
@@ -1258,6 +1308,9 @@ function density2D(
   const oy = ry ? ry + 2 : 0
   const n = 2 * ox + (dx >> k)
   const m = 2 * oy + (dy >> k)
+  // The grid is sized by spec parameters (size, bandwidth radius): bound the
+  // cell count under limits before allocating two Float32Arrays of it (C9).
+  meterRows(n * m, 'contour density grid')
   const values0 = new Float32Array(n * m)
   const values1 = new Float32Array(n * m)
   let values = values0
@@ -1334,6 +1387,7 @@ function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   const thresholds = Array.isArray(t.thresholds) ? (t.thresholds as number[])
     : contourQuantize(Number(t.count ?? 10), !!t.nice, false)(gridValues)
 
+  boundedCount(thresholds.length, 'contour thresholds')
   const contourRun = geoRegistry.contourRun
   if (!contourRun) requireGeo() // throws: geo addon not loaded
   const features = contourRun!(gridValues, thresholds, gridSize, t.smooth !== false)
@@ -1615,35 +1669,62 @@ export function eachAfter(root: HierNode, fn: (node: HierNode) => void): void {
   while ((node = next.pop()) != null) fn(node)
 }
 
-/** Build a hierarchy tree from flat id/parent-id tuples (d3 `stratify`). */
+/**
+ * Build a hierarchy tree from flat id/parent-id tuples. Mirrors d3-hierarchy
+ * `stratify` as vega-hierarchy drives it (C8): ids and parent ids are
+ * stringified, null/empty ids are ignored, and the same errors are thrown --
+ * `missing: <id>`, `ambiguous: <id>`, `multiple roots`, `no root`, `cycle`.
+ * A parent/child cycle therefore throws instead of looping, and no walk here
+ * is recursive (deep chains cannot overflow the stack).
+ * An empty source yields vega's placeholder single-node tree.
+ */
 export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string): HierNode {
   if (!key) throw new Error('[aster] stratify requires a key field')
-  const byKey = new Map<unknown, HierNode>()
+  const mk = (data: Row): HierNode => ({ data, children: [], parent: null, depth: 0, height: 0, x: 0, y: 0, r: 0, value: 0 })
+  if (!rows.length) return mk({})
+  const ambiguous = {} as HierNode
+  const byKey = new Map<string, HierNode>()
+  const nodes: HierNode[] = []
+  const parentIds: Array<string | null> = []
   for (const r of rows) {
-    byKey.set(r[key], { data: r, children: [], parent: null, depth: 0, height: 0, x: 0, y: 0, r: 0, value: 0 })
+    const node = mk(r)
+    nodes.push(node)
+    const id = r[key]
+    if (id != null && String(id) !== '') {
+      const k = String(id)
+      byKey.set(k, byKey.has(k) ? ambiguous : node)
+    }
+    const pid = parentKey ? r[parentKey] : undefined
+    parentIds.push(pid != null && String(pid) !== '' ? String(pid) : null)
   }
   let root: HierNode | null = null
-  for (const r of rows) {
-    const node = byKey.get(r[key])
-    if (!node) continue
-    const pid = parentKey ? r[parentKey] : undefined
-    if (pid == null || pid === '') {
-      root = node
-    } else {
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i]!
+    const pid = parentIds[i]
+    if (pid != null) {
       const parent = byKey.get(pid)
-      if (parent) {
-        parent.children.push(node)
-        node.parent = parent
-      }
+      if (!parent) throw new Error(`[aster] stratify: missing: ${pid}`)
+      if (parent === ambiguous) throw new Error(`[aster] stratify: ambiguous: ${pid}`)
+      parent.children.push(node)
+      node.parent = parent
+    } else {
+      if (root) throw new Error('[aster] stratify: multiple roots')
+      root = node
     }
   }
-  if (!root) root = byKey.get(rows[0]?.[key]) ?? null
-  if (!root) throw new Error('[aster] stratify: no root node found')
+  if (!root) throw new Error('[aster] stratify: no root')
+  // Nodes on a cycle are unreachable from the root; counting the reachable
+  // ones is how d3 detects it.
+  let reached = 0
   eachBefore(root, (node) => {
+    reached++
     node.depth = node.parent ? node.parent.depth + 1 : 0
   })
+  if (reached < nodes.length) throw new Error('[aster] stratify: cycle')
   eachAfter(root, (node) => {
-    node.height = node.children.length ? Math.max(...node.children.map(c => c.height)) + 1 : 0
+    let h = 0
+    for (const c of node.children) if (c.height + 1 > h) h = c.height + 1
+    node.height = h
   })
   return root
 }
@@ -1686,6 +1767,8 @@ function labelBitmap(w: number, h: number) {
     RIGHT1[i] = (RIGHT1[i - 1]! << 1) | 1
     RIGHT0[i] = ~RIGHT1[i]!
   }
+  // w x h come from the spec's size/padding: bound the bit array first (C9)
+  meterRows((w * h) / SIZE, 'label bitmap')
   const array = new Uint32Array(~~((w * h + SIZE) / SIZE))
   return {
     array,

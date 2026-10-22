@@ -5,7 +5,8 @@
  */
 import * as vs from './scale.js'
 import { interpolateRound } from './interp.js'
-import { ownGet } from './util.js'
+import { ownGet, minOf, maxOf } from './util.js'
+import { boundedCount } from './limits.js'
 import { quantizeInterpolator } from './scale.js'
 import { hcl, rgb } from './color.js'
 import type { CompiledScale, ScaleDomain, ScaleRange } from './types.js'
@@ -367,7 +368,12 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
       const b = binsVal as { start: number; stop: number; step: number }
       // Generate bin boundary array: [start, start+step, ..., stop]
       const binArray: number[] = []
-      for (let v = b.start; v <= b.stop + b.step * 0.5; v += b.step) {
+      // A non-positive/NaN step never advances `v`: d3's range() yields no bins
+      // for it, where this loop used to spin forever (C8).
+      const binCount = (b.stop - b.start) / b.step + 1
+      const sane = b.step > 0 && Number.isFinite(binCount)
+      if (sane) boundedCount(binCount, 'scale bins')
+      for (let v = b.start; sane && v <= b.stop + b.step * 0.5; v += b.step) {
         binArray.push(Math.round(v * 1e10) / 1e10)
       }
       ;(s as any).bins = binArray
@@ -507,10 +513,10 @@ function mergeUnionDomain(type: string, all: unknown[]): [number, number] | [Dat
     const dates = all.filter((v) => v instanceof Date && Number.isFinite((v as Date).getTime())) as Date[]
     if (dates.length) {
       const ms = dates.map((d) => d.getTime())
-      return [new Date(Math.min(...ms)), new Date(Math.max(...ms))]
+      return [new Date(minOf(ms)), new Date(maxOf(ms))]
     }
     const nums = all.filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
-    if (nums.length) return [Math.min(...nums), Math.max(...nums)]
+    if (nums.length) return [minOf(nums), maxOf(nums)]
     return null
   }
   const coercible = all
@@ -519,7 +525,7 @@ function mergeUnionDomain(type: string, all: unknown[]): [number, number] | [Dat
       (v) => (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(+v)),
     ) as number[]
   if (!coercible.length) return null
-  return [Math.min(...coercible), Math.max(...coercible)]
+  return [minOf(coercible), maxOf(coercible)]
 }
 
 function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): unknown[] {
@@ -591,10 +597,10 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
           ) as Date[]
           if (dates.length) {
             const ms = dates.map((d) => d.getTime())
-            return [Math.min(...ms), Math.max(...ms)]
+            return [minOf(ms), maxOf(ms)]
           }
           const nums = all.filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
-          if (nums.length) return [Math.min(...nums), Math.max(...nums)]
+          if (nums.length) return [minOf(nums), maxOf(nums)]
         }
         // d3-scale coerces the domain through +d (strings like "28" become
         // numbers); vega feeds it whatever the data holds. Keep strings that
@@ -609,7 +615,7 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
           // empty dataset; a single-field domain stays empty (no ticks)
           return fieldsToCollect.length > 1 ? [0, 0] : []
         }
-        return [Math.min(...coercible), Math.max(...coercible)]
+        return [minOf(coercible), maxOf(coercible)]
       }
       // `all` is freshly collected per call via ctx.dataField; cache the
       // distinct pass by the underlying rows identity when available.

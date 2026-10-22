@@ -8,6 +8,8 @@
  * `1 / value < 0`, and values ≥ 1e21 go through `toLocaleString("en")`.
  */
 
+import { meterBytes } from './limits.js'
+
 // --- decimal expansion -------------------------------------------------------
 
 /**
@@ -340,6 +342,9 @@ export function formatLocale(locale: FormatLocaleDefinition): FormatLocale {
       if (comma && !zero) out = group(out, Infinity)
       // Compute the padding.
       let length = valuePrefix.length + out.length + valueSuffix.length
+      // The width comes from the specifier string (`%` + digits): under limits an
+      // oversized pad is refused before the string is built (C9).
+      if (length < (width as number)) meterBytes((width as number) - length, 'number format width')
       let padding = length < (width as number) ? new Array(width as number - length + 1).join(fill) : ''
       // If the fill character is "0", grouping is applied after padding.
       if (comma && zero) {

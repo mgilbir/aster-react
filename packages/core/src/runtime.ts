@@ -6,7 +6,7 @@
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, compileExprTransform, sortRows, sortOrder, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row, type TransformContext } from './transform.js'
-import { AsterLimitError } from './limits.js'
+import { activeMeter, withLimits, meterRows, meterItems, boundedCount, checkRowCount, meterTick } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
 
@@ -37,7 +37,8 @@ import { hash53 } from './svg-defs.js'
 import { tickFormat, scaleFraction, scaleGradientStops, tickValues, tickCount, isContinuous, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, SYMBOL_DEFAULT_SIZE } from './util.js'
+import { dict, ownGet, minOf, maxOf, pushAll, SYMBOL_DEFAULT_SIZE } from './util.js'
+import { applyImageUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, type PulseChange } from './pulse.js'
 import { trellisLayout, measureBounds } from './trellis.js'
@@ -360,6 +361,8 @@ interface EvalContext {
   domainRaw?: Map<string, unknown[]>
   /** Throw a typed error when the current evaluation ran past its deadline. */
   checkDeadline?: (phase?: string) => void
+  /** URL policy for image marks (RuntimeInput.urlPolicy). */
+  urlPolicy?: ImageUrlPolicy
 }
 
 /**
@@ -385,13 +388,14 @@ function prepareChartCtx(
   input: RuntimeInput = {},
   txn: EvalTxn = { prev: undefined, gen: 1, claimed: new Set() },
 ): { ctx: EvalContext; width: number; height: number } {
-  const started = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
-  const maxTime = input.limits?.maxTimeMs
-  const deadline = maxTime != null && Number.isFinite(maxTime) ? started + Math.max(0, maxTime) : undefined
+  // The deadline belongs to the enclosing limits scope (evaluateChart /
+  // getChartInfo / renderSpec / session), so one wall clock covers the whole
+  // call -- the `fit` loop re-enters this function per iteration and must not
+  // restart the budget (C7).
+  const meter = activeMeter()
+  const deadline = meter?.clock.deadline ?? undefined
   const checkDeadline = (phase = 'evaluation'): void => {
-    if (deadline == null) return
-    const now = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
-    if (now > deadline) throw new AsterLimitError(`maxTimeMs exceeded during ${phase}`)
+    if (meter) meter.clock.check(phase)
   }
   checkDeadline('startup')
   const signals = dict(chart.signals, input.signals)
@@ -434,6 +438,9 @@ function prepareChartCtx(
     datasetPulses: new Map(),
     prev: txn.prev, draft: newState(txn.gen), gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
+    // No policy given: a spec rendered under `limits` is untrusted, so the
+    // default image policy applies; without limits the host owns its specs.
+    urlPolicy: input.urlPolicy ?? (input.limits ? {} : undefined),
   }
   // A legend whose tickCount is an interval string on a non-time scale makes
   // vega's LegendEntries throw: the dataflow logs the error and the ViewLayout
@@ -1301,7 +1308,7 @@ export interface PendingEvaluation {
 export function evaluateChartPending(chart: CompiledChart, input: RuntimeInput = {}): PendingEvaluation {
   const txn = beginTxn(chart)
   const done: { draft?: IncrementalState } = {}
-  const scene = withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, done))
+  const scene = withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, done)))
   return {
     scene,
     commit() {
@@ -1521,6 +1528,10 @@ export function chartInfoFromScene(scene: SceneRoot): ChartInfo {
  * Useful for interaction, brushing, crosshair, etc.
  */
 export function getChartInfo(spec: VgSpec, input: RuntimeInput = {}): ChartInfo {
+  return withLimits(input.limits, () => getChartInfoImpl(spec, input))
+}
+
+function getChartInfoImpl(spec: VgSpec, input: RuntimeInput): ChartInfo {
   const chart = compileChart(spec)
   const { ctx, width, height } = prepareChartCtx(chart, input)
 
@@ -2756,6 +2767,7 @@ function applyPipelineWithPulse(
     if (!pulse) {
       const res = applyOneWithState(cur, t, tctx, sourceName)
       cur = res.rows
+      checkRowCount(cur.length, `transform ${String(t.type)}`)
       state.steps.push(cur)
       if (res.state !== undefined) state.stepState.set(key, res.state)
       continue
@@ -2763,6 +2775,7 @@ function applyPipelineWithPulse(
     const stepInput = cur
     const res = applyStepWithPulse(cur, t, tctx, sourceName, pulse, prevDS.steps[k], prevDS.stepState.get(key))
     cur = res.rows
+    checkRowCount(cur.length, `transform ${String(t.type)}`)
     pulse = res.pulse
     state.steps.push(cur)
     const next = res.state !== undefined ? res.state
@@ -2832,9 +2845,22 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       }
       inPulse = ctx.inputPulses?.get(name) ?? null
     } else {
-      rows = ((ownGet(inputData, name) as Row[] | undefined) ?? []).map((r) => ({ ...r }))
+      const given = ownGet(inputData, name) as Row[] | undefined
+      if (given == null && (d as { url?: unknown }).url != null) {
+        // A url dataset nobody resolved would render as an empty chart with no
+        // hint why (C60): fail loudly and say how to fix it.
+        throw new Error(
+          `[aster] dataset "${name}" has a url but no data was loaded for it; resolve url datasets first: ` +
+          `import { loadSpecData } from "@aster/core/load" and render await loadSpecData(spec, { baseURL, ... }), ` +
+          `or pass the rows as input.data["${name}"]`,
+        )
+      }
+      rows = (given ?? []).map((r) => ({ ...r }))
       inPulse = ctx.inputPulses?.get(name) ?? null
     }
+    // Inline values, host `input.data`, a `source` copy and a loaded dataset all
+    // count against maxRows here, nested group data included (C49).
+    checkRowCount(rows.length, `dataset "${name}"`)
     if (inPulse) inPulse = normalizePulse(inPulse, rows.length)
     let outPulse: StepPulse | null = inPulse
     if (d.transform.length) {
@@ -3224,13 +3250,13 @@ function concreteDomain(scale: CompiledScale, values: unknown[]): unknown[] {
       const d = v instanceof Date ? v : typeof v === 'string' || typeof v === 'number' ? new Date(v) : null
       if (d && Number.isFinite(d.getTime())) ms.push(d.getTime())
     }
-    return ms.length ? [Math.min(...ms), Math.max(...ms)] : []
+    return ms.length ? [minOf(ms), maxOf(ms)] : []
   }
   if (CONTINUOUS_TYPES.has(type)) {
     const finite = values
       .map((v) => v instanceof Date ? v.getTime() : v)
       .filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
-    return finite.length ? [Math.min(...finite), Math.max(...finite)] : []
+    return finite.length ? [minOf(finite), maxOf(finite)] : []
   }
   // Discrete scales: distinct values (sorted when the domain requests it).
   const distinct: unknown[] = []
@@ -3373,11 +3399,16 @@ function evaluateMark(
     // A returned scene is never observably written (C52): structural updates
     // build a new array; appends/edits advance the engine-owned array in place
     // and turn the superseded group into a lazy snapshot (supersedeItems).
+    // One item per row: refuse an over-sized mark before encoding any of it, and
+    // sample the wall clock inside the encode loops (C7).
+    const meter = activeMeter()
+    if (meter) meter.items(encodeRows.length, `mark ${mark.type} encoding`)
     const pulse = reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
     if (pulse) {
       const prevItems = prevGroup!.items as SceneItem[]
       const gen = ctx.gen
       const encodeAt = (i: number): SceneItem => {
+        if (meter) meter.tick('mark encoding')
         const row = { ...(rows[i] as Row) }
         const res = resolveEncodeSet(update, row, ctx, mark.type)
         res.datum = row
@@ -3435,13 +3466,26 @@ function evaluateMark(
       }
     } else {
       const gen = ctx.gen
-      items = encodeRows.map((row) => {
-        const copy = rowsCloned ? row : { ...row }
-        const res = resolveEncodeSet(update, copy, ctx, mark.type)
-        res.datum = copy
-        res.__gen = gen
-        return res
-      })
+      if (meter) {
+        // Same loop with the clock sampled every 1024 items (limits ON only).
+        items = new Array<SceneItem>(encodeRows.length)
+        for (let i = 0; i < encodeRows.length; i++) {
+          const copy = rowsCloned ? encodeRows[i]! : { ...encodeRows[i]! }
+          const res = resolveEncodeSet(update, copy, ctx, mark.type)
+          res.datum = copy
+          res.__gen = gen
+          items[i] = res
+          meter.tick('mark encoding')
+        }
+      } else {
+        items = encodeRows.map((row) => {
+          const copy = rowsCloned ? row : { ...row }
+          const res = resolveEncodeSet(update, copy, ctx, mark.type)
+          res.datum = copy
+          res.__gen = gen
+          return res
+        })
+      }
     }
   } else {
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
@@ -3506,6 +3550,18 @@ function evaluateMark(
     for (const it of items) {
       const p = it.path as unknown
       if (p && typeof p === 'object') it.path = geoJSONPath(p) ?? undefined
+    }
+  }
+
+  // Image URLs are spec-controlled: vet each through the URL policy (C93) so a
+  // hostile spec cannot make the viewer's browser request arbitrary URLs.
+  // Applied here, on the scene, so the string renderer, the DOM path and canvas
+  // all see the same vetted items.
+  if (mark.type === 'image') {
+    for (const it of items) {
+      if (it.url == null) continue
+      const vetted = applyImageUrlPolicy(it.url, ctx.urlPolicy)
+      if (vetted == null) it.url = undefined
     }
   }
 
@@ -3586,7 +3642,7 @@ function buildTrellisGroup(
     } else {
       const r = evaluateMark(child, ctx)
       if (r) {
-        if (Array.isArray(r)) cells.push(...r)
+        if (Array.isArray(r)) pushAll(cells, r)
         else cells.push(r)
       }
     }
@@ -5343,7 +5399,7 @@ function facetItemMark(
     if (!r) return null
     if (Array.isArray(r)) {
       const sub: SceneItem[] = []
-      for (const sg of r) { if (sg.items) sub.push(...sg.items) }
+      for (const sg of r) { if (sg.items) pushAll(sub, sg.items) }
       return { marktype: 'group', name: mark.name, role: mark.role as string, items: sub }
     }
     return r
@@ -5357,6 +5413,7 @@ function facetItemMark(
   // cell data is built more than once (e.g. buildColumnTitleGroup rebuilds the
   // cells to compute the title center); without copies the second pass would
   // re-scale already-scaled values.
+  meterItems((ctx.datasets.get(source) ?? []).length, 'mark encoding')
   let rows = (ctx.datasets.get(source) ?? []).map((r) => ({ ...r }))
   if (mark.sort) rows = sortRows(rows, mark.sort)
 
@@ -5382,6 +5439,13 @@ function facetItemMark(
   }
 
   applySymbolStyleDefaults(mark, items)
+
+  if (mark.type === 'image') {
+    for (const it of items) {
+      if (it.url == null) continue
+      if (applyImageUrlPolicy(it.url, ctx.urlPolicy) == null) it.url = undefined
+    }
+  }
 
   return { marktype: mark.type, name: mark.name, role: 'mark', clip: mark.clip === true, items }
 }
@@ -6386,7 +6450,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     if ((legend as { gridAlign?: string }).gridAlign === 'all') {
       // vega's grid row extent is the entry bound plus the symbol's 3px miter
       // inflation; the shared row step is that extent + rowPadding.
-      const step = rowPadding + Math.ceil(Math.max(...b.map((x) => x.y2)) + 3)
+      const step = rowPadding + Math.ceil(maxOf(b.map((x) => x.y2)) + 3)
       for (let i = 1; i < entries.length; i++) yOff.push(step)
     } else {
       for (let i = 1; i < entries.length; i++) {
@@ -6479,7 +6543,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         const x2 = Math.max(sx + ext, lx1 + lw)
         return { sx, lx, x1, x2, width: Math.ceil(x2) }
       })
-      const rowExtentH = Math.ceil(Math.max(...b.map((x) => x.y2)))
+      const rowExtentH = Math.ceil(maxOf(b.map((x) => x.y2)))
       const hxPos: number[] = [0]
       for (let i = 1; i < hx.length; i++) {
         hxPos.push(hxPos[i - 1]! + hx[i - 1]!.width + 10 + Math.max(0, Math.ceil(-hx[i]!.x1)))
@@ -6777,6 +6841,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const entryWs = domain.map((v) => 16 + nominalTextWidth(String(v), 10))
     const cols = legend.direction === 'vertical' ? 1 : Math.min(legend.columns ?? n, n)
     const rows = Math.ceil(n / cols)
+    boundedCount(cols, 'legend columns')
     const colW: number[] = new Array(cols).fill(0)
     for (let i = 0; i < n; i++) colW[i % cols] = Math.max(colW[i % cols]!, entryWs[i]!)
     const symOverhang = isStrokeLegend ? Math.ceil(5 + 3 - 6) : 0
@@ -6900,7 +6965,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // (and thus the row height) varies: 10+scale(v), 10+lots of values.
     const entrySizeD = (v: unknown): number =>
       Math.max(Math.ceil(Math.sqrt(symbolSizeRaw) + (isStrokeWidthLegend ? Number(scale(v)) : symSwP)), labelFs)
-    const offsetDatum = entryValues.length ? Math.max(0, ...entryValues.map(entrySizeD)) : 0
+    const offsetDatum = entryValues.length ? Math.max(0, maxOf(entryValues.map(entrySizeD))) : 0
     const entries = entryValues.map((v: unknown) => ({ value: v, label: legendLabel(v), sizeD: entrySizeD(v) }))
     if (limitHits) {
       // vega's LegendEntries gives the ellipsis entry its OWN size expression
@@ -7936,6 +8001,8 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
       if (Number.isFinite(d0.getTime()) && Number.isFinite(d1.getTime())) {
         const ticks: unknown[] = []
         const cur = new Date(d0.getTime())
+        // one tick per calendar month: bound the span before stepping through it (C9)
+        boundedCount((d1.getTime() - d0.getTime()) / (28 * 86_400_000) + 1, 'calendar month ticks')
         while (cur.getTime() <= d1.getTime() + 1000) {
           ticks.push(new Date(cur.getTime()))
           cur.setUTCMonth(cur.getUTCMonth() + 1)

@@ -25,12 +25,36 @@ import {
 import { DATE, DAY, HOURS, MILLISECONDS, MINUTES, MONTH, QUARTER, SECONDS, WEEK, YEAR, timeIntervalFor, utcIntervalFor } from './time.js'
 import { error, isObject, isString } from './util.js'
 
-/** Cache compiled formatters per specifier (vega-format's memoize). */
+/**
+ * Entries kept per memoised formatter table. The key is a spec- or data-supplied
+ * specifier, so an unbounded table is a slow-growth / cross-tenant retention
+ * vector in a long-lived process (C70); this one evicts least-recently-used.
+ */
+export const FORMATTER_CACHE_MAX = 512
+
+/** Cache compiled formatters per specifier (vega-format's memoize), bounded LRU. */
 function memoize<T, A>(method: (arg: A) => T): (arg: A) => T {
   // a Map: the specifier is spec/data-supplied (`constructor`, `__proto__`, ...)
-  // prototype-less: the specifier is spec/data-supplied (`constructor`, `__proto__`, ...)
-  const cache = Object.create(null) as Record<string, T>
-  return (spec: A) => cache[String(spec)] || (cache[String(spec)] = method(spec))
+  const cache = new Map<string, T>()
+  let newest: string | undefined
+  return (spec: A) => {
+    const key = String(spec)
+    const hit = cache.get(key)
+    if (hit !== undefined) {
+      if (key !== newest) {
+        // refresh recency: Map iteration order is insertion order
+        cache.delete(key)
+        cache.set(key, hit)
+        newest = key
+      }
+      return hit
+    }
+    const made = method(spec)
+    cache.set(key, made)
+    newest = key
+    if (cache.size > FORMATTER_CACHE_MAX) cache.delete(cache.keys().next().value as string)
+    return made
+  }
 }
 
 function rightmostDigit(str: string, dec: number): number {
@@ -243,6 +267,25 @@ export function locale(numberSpec?: FormatLocaleDefinition, timeSpec?: TimeLocal
     ? timeFormatLocale(timeSpec)
     : defaultTimeLocale
   return createLocale(number, time)
+}
+
+let viewNumber: ReturnType<typeof numberLocale> | undefined
+let viewTime: ReturnType<typeof timeLocale> | undefined
+let viewLocale: Locale | undefined
+
+/**
+ * The CURRENT default locale as one object, rebuilt only when either default
+ * changed. Callers that format repeatedly (expression `format`/`timeFormat`)
+ * read it per call instead of snapshotting at import, so a later
+ * `defaultLocale(...)` / `timeFormatDefaultLocale(...)` is honoured (C70).
+ */
+export function currentLocale(): Locale {
+  if (!viewLocale || viewNumber !== defaultNumberLocale || viewTime !== defaultTimeLocale) {
+    viewNumber = defaultNumberLocale
+    viewTime = defaultTimeLocale
+    viewLocale = createLocale(defaultNumberLocale, defaultTimeLocale)
+  }
+  return viewLocale
 }
 
 /** Read or set the default locale for both engines (vega-format's `defaultLocale`). */

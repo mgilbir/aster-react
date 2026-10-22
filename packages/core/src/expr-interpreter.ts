@@ -9,6 +9,7 @@
  */
 import { ascending, DisallowedObjectProperties, safeGet } from './util.js'
 import { type AstNode } from './expr-parser.js'
+import { guardedRegExp, checkRegexInput } from './limits.js'
 
 // --- the interpreter's own default function table ----------------------------
 
@@ -101,8 +102,12 @@ export const DefaultFunctions: Record<string, (...args: never[]) => unknown> = {
   encodeURIComponent,
 
   // regexp functions
-  regexp: RegExp as unknown as (...args: never[]) => unknown,
-  test: (r, t) => RegExp(r as string).test(t as string),
+  regexp: ((p: string, f?: string) => guardedRegExp(String(p), f)) as unknown as (...args: never[]) => unknown,
+  test: (r, t) => {
+    const re = (r as unknown) instanceof RegExp ? (r as RegExp) : guardedRegExp(String(r))
+    checkRegexInput(String(t))
+    return re.test(t as string)
+  },
 } as Record<string, (...args: never[]) => unknown>
 
 // --- constants ---------------------------------------------------------------

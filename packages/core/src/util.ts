@@ -408,6 +408,29 @@ export function extent<T>(
   return [min, max]
 }
 
+/**
+ * `Math.min(...a)` without the argument spread: spreading a data-sized array
+ * overflows the call stack at roughly 120k-200k elements (C42). Same result as
+ * Math.min(...a): NaN propagates, an empty array gives Infinity.
+ */
+export function minOf(a: ArrayLike<number>): number {
+  let m = Infinity
+  for (let i = 0; i < a.length; i++) m = Math.min(m, a[i]!)
+  return m
+}
+
+/** `Math.max(...a)` without the argument spread (see {@link minOf}); empty gives -Infinity. */
+export function maxOf(a: ArrayLike<number>): number {
+  let m = -Infinity
+  for (let i = 0; i < a.length; i++) m = Math.max(m, a[i]!)
+  return m
+}
+
+/** `target.push(...src)` without the argument spread (see {@link minOf}). */
+export function pushAll<T>(target: T[], src: ArrayLike<T>): void {
+  for (let i = 0; i < src.length; i++) target.push(src[i]!)
+}
+
 // --- accessors (constant accessor factories) ---------------------------------
 
 /** The `id` field accessor. */

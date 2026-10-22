@@ -1,0 +1,70 @@
+// @vitest-environment jsdom
+/**
+ * C93: image `url`s pass the same policy as loaded data, in the string renderer
+ * AND the DOM path. The policy runs while the scene is built, so both renderers
+ * (and canvas) see already-vetted items.
+ */
+import { describe, it, expect } from 'vitest'
+import { renderSpec, compileChart, evaluateChart, AsterUrlError } from './index.js'
+import { renderSceneToDomElement } from './addon-dom.js'
+import type { RuntimeInput, VgSpec } from './types.js'
+
+const imageSpec = (url: string): VgSpec => ({
+  width: 100, height: 100, data: [{ name: 't', values: [{ u: url }] }],
+  marks: [{ type: 'image', from: { data: 't' }, encode: { update: { url: { field: 'u' }, x: { value: 1 }, y: { value: 1 }, width: { value: 10 }, height: { value: 10 } } } }],
+} as unknown as VgSpec)
+
+const hrefs = (el: Element): string[] => [...el.querySelectorAll('image')].map((i) => i.getAttribute('xlink:href') ?? i.getAttribute('href') ?? '')
+const domOf = (spec: VgSpec, input: RuntimeInput): Element => renderSceneToDomElement(evaluateChart(compileChart(spec), input), document) as unknown as Element
+
+describe('image url policy (C93)', () => {
+  const HOSTILE = ['javascript:alert(1)', '  javascript:alert(1)', 'java\tscript:alert(1)', 'JaVaScRiPt:alert(1)', 'file:///etc/passwd', 'vbscript:x', 'ftp://example.test/a.png',
+    'https://user:pw@example.test/a.png', 'blob:https://example.test/uuid']
+
+  it.each(HOSTILE)('denied by default under limits, string renderer: %j', (url) => {
+    expect(() => renderSpec(imageSpec(url), { limits: { maxRows: 100 } })).toThrowError(AsterUrlError)
+  })
+
+  it.each(HOSTILE)('denied by default under limits, DOM path: %j', (url) => {
+    expect(() => domOf(imageSpec(url), { limits: { maxRows: 100 } })).toThrowError(AsterUrlError)
+  })
+
+  it('ordinary urls pass: https, http, data:image, relative', () => {
+    for (const url of ['https://example.test/a.png', 'http://example.test/a.png', 'data:image/png;base64,AAAA', 'img/a.png', '/img/a.png']) {
+      const svg = renderSpec(imageSpec(url), { limits: { maxRows: 100 } })
+      expect(svg).toContain('<image')
+      expect(hrefs(domOf(imageSpec(url), { limits: { maxRows: 100 } }))).toEqual([url])
+    }
+  })
+
+  it('without limits and without a policy the host trusts its spec (unchanged behaviour)', () => {
+    expect(renderSpec(imageSpec('javascript:alert(1)'))).toContain('javascript:alert(1)')
+  })
+
+  it('an explicit policy applies without limits; allow() restricts hosts; the hook sees a parsed URL', () => {
+    const seen: string[] = []
+    const policy = { allow: (u: URL) => { seen.push(u.hostname); return u.hostname === 'cdn.example.test' } }
+    expect(() => renderSpec(imageSpec('https://evil.test/p.gif'), { urlPolicy: policy })).toThrow(/refused by the allow hook/)
+    expect(renderSpec(imageSpec('https://cdn.example.test/p.gif'), { urlPolicy: policy })).toContain('cdn.example.test')
+    expect(seen).toEqual(['evil.test', 'cdn.example.test'])
+  })
+
+  it('a relative url needs a baseURL once an allow hook is set (fail closed)', () => {
+    expect(() => renderSpec(imageSpec('a.png'), { urlPolicy: { allow: () => true } })).toThrow(/needs a baseURL/)
+    expect(renderSpec(imageSpec('a.png'), { urlPolicy: { allow: () => true, baseURL: 'https://example.test/' } })).toContain('a.png')
+  })
+
+  it('onDeny drops the image in BOTH renderers instead of throwing: nothing is requested, nothing is drawn', () => {
+    const denied: string[] = []
+    const input: RuntimeInput = { urlPolicy: { onDeny: (u) => denied.push(u) } }
+    const svg = renderSpec(imageSpec('javascript:alert(1)'), input)
+    expect(svg).not.toContain('<image')
+    expect(svg).not.toContain('javascript')
+    expect(hrefs(domOf(imageSpec('javascript:alert(1)'), input))).toEqual([])
+    expect(denied).toEqual(['javascript:alert(1)', 'javascript:alert(1)'])
+  })
+
+  it('protocols can be widened by the host', () => {
+    expect(renderSpec(imageSpec('blob:https://example.test/uuid'), { urlPolicy: { protocols: ['blob:', 'https:'] } })).toContain('blob:')
+  })
+})

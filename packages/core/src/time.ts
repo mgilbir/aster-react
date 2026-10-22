@@ -17,6 +17,7 @@
  */
 
 import { array, constant, error, extend, hasOwnProperty, ownGet, peek, toSet } from './util.js'
+import { activeMeter } from './limits.js'
 
 // --- durations ---------------------------------------------------------------
 
@@ -80,7 +81,13 @@ export function timeInterval(
     step = step == null ? 1 : Math.floor(step)
     if (!(+(start as Date) < +(stop as Date)) || !(step > 0)) return range // also handles Invalid Date
     let previous: Date
-    do range.push(previous = new Date(+(start as Date))), offseti(start as Date, step), floori(start as Date)
+    // Deviation (safety): under limits the tick count is bounded while the range
+    // is generated; a 1 ms interval over decades would otherwise allocate forever.
+    const meter = activeMeter()
+    do {
+      range.push(previous = new Date(+(start as Date))), offseti(start as Date, step), floori(start as Date)
+      if (meter && (range.length & 1023) === 0) meter.items(range.length, 'time ticks')
+    }
     while (previous < (start as Date) && (start as Date) < (stop as Date))
     return range
   }

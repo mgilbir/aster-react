@@ -62,7 +62,11 @@ export type { TimeLocaleDefinition } from './time-format.js'
 export { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 export { buildScale, type Scale } from './scales.js'
 export { applyTransforms, sortRows, type Row } from './transform.js'
-export { AsterLimitError, checkSpecLimits, checkSceneLimits, checkSvgLength, createLimitClock, type LimitClock, type SpecLimits } from './limits.js'
+export {
+  AsterLimitError, checkSpecLimits, checkSceneLimits, checkSvgLength, createLimitClock, withLimits, HARD_MAX_SPEC_DEPTH,
+  type LimitClock, type LimitMeter, type SpecLimits,
+} from './limits.js'
+export { AsterUrlError, type ImageUrlPolicy } from './url-policy.js'
 export {
   setTextMetricsProvider, getTextMetricsProvider, withTextMetricsProvider,
   usingCanvasTextMetrics, measureText, estimateTextWidth, fontString,
@@ -87,21 +91,25 @@ export { geoRegistry, transformRegistry, requireTransform, type GeoRegistry, typ
 import { compileChart } from './compiler.js'
 import { evaluateChart, getChartInfo } from './runtime.js'
 import { renderSceneToSvg } from './render.js'
-import { checkSpecLimits, checkSceneLimits, checkSvgLength, createLimitClock } from './limits.js'
+import { checkSpecLimits, checkSceneLimits, checkSvgLength, createLimitClock, withLimits } from './limits.js'
 import type { RuntimeInput, VgSpec } from './types.js'
 
 /** Compile + evaluate + render a Vega spec to an SVG string (static mode). */
 export function renderSpec(spec: VgSpec, input: RuntimeInput = {}): string {
-  const clock = createLimitClock(input.limits)
-  if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits)
-  clock.check('compile')
-  const chart = compileChart(spec)
-  clock.check('evaluate')
-  const scene = evaluateChart(chart, input)
-  clock.check('evaluate')
-  if (input.limits) checkSceneLimits(scene, input.limits)
-  const svg = renderSceneToSvg(scene)
-  clock.check('render')
-  if (input.limits) checkSvgLength(svg, input.limits)
-  return svg
+  // One scope (one wall clock, one meter) around pre-flight, compile, evaluate
+  // and serialisation, so every layer below reports to the same budget.
+  return withLimits(input.limits, (meter) => {
+    const clock = meter?.clock ?? createLimitClock(input.limits)
+    if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits, input)
+    clock.check('compile')
+    const chart = compileChart(spec)
+    clock.check('evaluate')
+    const scene = evaluateChart(chart, input)
+    clock.check('evaluate')
+    if (input.limits) checkSceneLimits(scene, input.limits)
+    const svg = renderSceneToSvg(scene)
+    clock.check('render')
+    if (input.limits) checkSvgLength(svg, input.limits)
+    return svg
+  })
 }

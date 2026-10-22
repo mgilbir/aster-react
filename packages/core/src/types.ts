@@ -20,6 +20,15 @@ export type SizeSpec = number | { signal: string } | { step: number }
 export interface RuntimeInput {
   /** Budgets for untrusted specs (see limits.ts). */
   limits?: import('./limits.js').SpecLimits
+  /**
+   * Policy for image-mark `url`s (C93). Applied when given, and with its
+   * defaults whenever `limits` is set (a spec rendered under limits is
+   * untrusted). Default: only http:, https: and data: (and relative) URLs pass;
+   * `javascript:`, `file:`, `blob:` ... and URLs with credentials throw
+   * `AsterUrlError`. Add `allow(url)` to restrict hosts and `onDeny` to drop
+   * denied images instead of throwing. See docs/LIMITS.md.
+   */
+  urlPolicy?: import('./url-policy.js').ImageUrlPolicy
   /** Host text measurement (custom fonts, non-browser hosts). */
   textMetrics?: import('./text-metrics.js').TextMetricsProvider
   /** Named datasets. Overrides or fulfills spec data references by name. */
