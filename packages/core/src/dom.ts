@@ -789,8 +789,11 @@ function patchEl(el: Element, desc: DomDesc): void {
 
   // DOM-subtree skip: a desc node whose scene item was reused (unchanged this
   // eval) is identical to the previous patch, so the element already matches and
-  // we can avoid descending into it entirely.
-  if (desc.clean && last) return
+  // we can avoid descending into it entirely. That holds only when THIS element
+  // was last patched with THIS descriptor: children are matched by position, so
+  // after a removal or reorder a reused item's cached descriptor lands on an
+  // element that currently shows a different item (audit C3).
+  if (desc.clean && last === desc) return
 
   // Switching a mark container between per-item elements and batched paths is a
   // structural change: rebuilding the (few hundred) chunk elements is much
