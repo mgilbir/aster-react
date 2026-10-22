@@ -7,8 +7,20 @@ import type { CompiledTransform, SortSpec } from './types.js'
 import type { ExpressionRuntime } from './expression.js'
 import { geoRegistry, requireGeo, requireTransform } from './registry.js'
 import { nominalTextWidth } from './text-metrics.js'
-import { ownGet, safeGet, minOf, maxOf } from './util.js'
-import { AsterLimitError, activeMeter, boundedCount, checkRowCount, meterTick, meterRows } from './limits.js'
+import { isArray } from './util.js'
+import { activeMeter, boundedCount, meterRows } from './limits.js'
+import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec, windowRows } from './transform-agg.js'
+import {
+  binRows, collectRows, d3Range, extentOfField, flattenRows, foldRows, identifierRows, imputeRows,
+  lookupRows, projectRows, required, sampleRows, sequenceRows, stackRows, timeunitRows,
+} from './transform-basic.js'
+
+export { d3Range }
+
+/** One group's aggregate tuple (the incremental aggregate re-derives only dirty groups). */
+export function aggregateGroup(group: Row[], t: CompiledTransform): Row {
+  return aggregateRows(group, t as AggregateParams)[0]!
+}
 
 export interface TransformContext {
   runtime: ExpressionRuntime
@@ -45,69 +57,70 @@ export function applyTransforms(
   return out
 }
 
-function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext, sourceName?: string): Row[] {
+/** Whether a (nested) param value holds a `{signal: ...}` reference. */
+function containsSignal(v: unknown, depth = 0): boolean {
+  if (v === null || typeof v !== 'object' || depth > 6) return false
+  if (isArray(v)) return (v as unknown[]).some((x) => containsSignal(x, depth + 1))
+  const o = v as Record<string, unknown>
+  if (typeof o.signal === 'string' && Object.keys(o).length === 1) return true
+  return Object.keys(o).some((k) => containsSignal(o[k], depth + 1))
+}
+
+const signalParams = new WeakMap<object, boolean>()
+
+/**
+ * Vega lets any transform parameter be a `{signal: <expression>}`; evaluate
+ * those against the current signals before the transform runs. Transforms with
+ * no signal param (the common case, and every row-local re-application) are
+ * returned untouched.
+ */
+function resolveSignalParams(t: CompiledTransform, ctx: TransformContext): CompiledTransform {
+  let has = signalParams.get(t)
+  if (has === undefined) {
+    has = containsSignal(t)
+    signalParams.set(t, has)
+  }
+  if (!has) return t
+  const resolve = (v: unknown, depth: number): unknown => {
+    if (v === null || typeof v !== 'object' || depth > 6) return v
+    if (isArray(v)) return (v as unknown[]).map((x) => resolve(x, depth + 1))
+    const o = v as Record<string, unknown>
+    if (typeof o.signal === 'string' && Object.keys(o).length === 1) return ctx.runtime.expr(o.signal)({}, ctx.signals)
+    const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>
+    for (const k of Object.keys(o)) out[k] = resolve(o[k], depth + 1)
+    return out
+  }
+  return resolve(t, 0) as CompiledTransform
+}
+
+function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContext, sourceName?: string): Row[] {
+  const t = resolveSignalParams(t0, ctx)
   switch (t.type) {
     case 'formula': {
-      const expr = compileExprTransform(t.expr, ctx)
-      return rows.map((r) => ({ ...r, [t.as]: expr(r) }))
+      required('formula', t, 'expr', 'as')
+      const expr = compileExprTransform(t.expr as string, ctx)
+      const as = t.as as string
+      return rows.map((r) => ({ ...r, [as]: expr(r) }))
     }
     case 'filter': {
-      const expr = compileExprTransform(t.expr, ctx)
+      required('filter', t, 'expr')
+      const expr = compileExprTransform(t.expr as string, ctx)
       return rows.filter((r) => expr(r))
     }
     case 'collect':
-      return sortRows(rows, t.sort)
+      return collectRows(rows, t)
     case 'sample':
-      return rows.slice(0, t.size)
-    case 'fold': {
-      const [asKey, asValue] = t.as
-      // The output size is known up front: refuse before allocating it.
-      checkRowCount(rows.length * t.fields.length, 'fold')
-      const out: Row[] = []
-      for (const r of rows) {
-        for (const f of t.fields) {
-          out.push({ ...r, [asKey]: f, [asValue]: r[f] })
-        }
-        meterTick('fold', t.fields.length)
-      }
-      return out
-    }
-    case 'flatten': {
-      // Vega's Flatten derives the output length as
-      //   arrays.reduce((l, a) => Math.max(l, a.length), 0)
-      // which collapses to NaN (→ no output rows at all) the moment any field
-      // is not array-typed, and writes `null` for missing array slots.
-      const fields = t.fields
-      const as = t.as ?? []
-      const index = (t as { index?: string }).index
-      const out: Row[] = []
-      for (const r of rows) {
-        const arrays = fields.map((f) => r[f])
-        let maxlen = 0
-        for (const a of arrays) {
-          const len = (a as { length?: number } | null | undefined)?.length
-          maxlen = len == null ? NaN : Math.max(maxlen, len)
-        }
-        if (!(maxlen > 0)) continue
-        // maxlen comes from the data (an array length): bound it before the loop.
-        checkRowCount(out.length + maxlen, 'flatten')
-        for (let i = 0; i < maxlen; i++) {
-          const row: Row = { ...r }
-          fields.forEach((f, j) => {
-            const a = arrays[j]
-            const v = (a as unknown[] | null | undefined)?.[i]
-            row[as[j] ?? f] = v == null ? null : v
-          })
-          if (index !== undefined) row[index] = i
-          out.push(row)
-        }
-      }
-      return out
-    }
+      return sampleRows(rows, t)
+    case 'fold':
+      return foldRows(rows, t)
+    case 'flatten':
+      return flattenRows(rows, t)
     case 'bin':
-      return binRows(rows, t, ctx)
+      return binRows(rows, t, (b) => {
+        if (t.signal) ctx.signals[t.signal as string] = b
+      })
     case 'impute':
-      return imputeRows(rows, t, ctx)
+      return imputeRows(rows, t)
     case 'aggregate':
       return aggregateRows(rows, t)
     case 'joinaggregate':
@@ -117,9 +130,8 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
     case 'stack':
       return stackRows(rows, t)
     case 'extent': {
-      const values = collectField(rows, t.field).filter(isFiniteNumber)
-      ctx.signals[t.signal] =
-        values.length === 0 ? [Infinity, -Infinity] : [minOf(values), maxOf(values)]
+      const ext = extentOfField(rows, t)
+      if (t.signal) ctx.signals[t.signal as string] = ext
       return rows
     }
     case 'geoshape': {
@@ -132,7 +144,7 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
       const projection = projName != null ? ctx.projections?.get(String(projName)) : undefined
       if (projection != null && !geoRegistry.projectedPath) requireGeo() // throws: addon not loaded
       return rows.map((r) => {
-        const geo = field == null || field === 'datum' ? r : r[field as string]
+        const geo = field == null || field === 'datum' ? r : getField(r, field as string)
         const p = projection != null
           ? geoRegistry.projectedPath!(projection, geo)
           : geoJSONPath(geo)
@@ -156,15 +168,17 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
     case 'linkpath':
       return requireTransform('linkpath')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'project':
-      return requireTransform('project')(rows, t as Record<string, unknown>, ctx, sourceName)
+      return projectRows(rows, t)
     case 'quantile':
       return requireTransform('quantile')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'regression':
       return requireTransform('regression')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'loess':
       return requireTransform('loess')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'density':
+      return requireTransform('density')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'lookup':
-      return lookupRows(rows, t as Record<string, unknown>, ctx)
+      return lookupRows(rows, t, (ctx.datasets?.(t.from as string) ?? []) as Row[])
     case 'stratify': {
       // Vega's Stratify transform builds a hierarchy from flat parent/child
       // data but emits the ORIGINAL tuples unchanged: depth/height/y layout
@@ -188,7 +202,7 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
     case 'sequence':
       // Vega appends generated tuples to the current pulse (a sequence on a
       // non-empty source keeps the source rows first).
-      return [...rows, ...sequenceRows(t as Record<string, unknown>)]
+      return rows.length ? [...rows, ...sequenceRows(t)] : sequenceRows(t)
     case 'graticule':
       return graticuleRows(t as Record<string, unknown>)
     case 'contour':
@@ -200,13 +214,11 @@ function applyTransform(rows: Row[], t: CompiledTransform, ctx: TransformContext
     case 'label':
       return labelRows(rows, t as Record<string, unknown>, ctx)
     case 'timeunit':
-      return timeunitRows(rows, t as Record<string, unknown>)
-    case 'identifier': {
-      const as = (t.as as string | undefined) ?? 'id'
-      return rows.map((r, i) => ({ ...r, [as]: (r[as] as number | undefined) ?? i + 1 }))
-    }
+      return timeunitRows(rows, t)
+    case 'identifier':
+      return identifierRows(rows, t)
     case 'pivot':
-      return pivotRows(rows, t as Record<string, unknown>)
+      return pivotRows(rows, t as { field?: unknown; value?: unknown })
     default:
       throw new Error(`[aster] unsupported transform type "${(t as { type: string }).type}"`)
   }
@@ -225,15 +237,6 @@ export function collectField(rows: Row[], field: string | null | undefined): unk
   if (!field) return []
   const out: unknown[] = []
   for (const r of rows) out.push(r[field])
-  return out
-}
-
-function fieldValues(rows: Row[], field: string): number[] {
-  const out: number[] = []
-  for (const r of rows) {
-    const v = r[field]
-    if (typeof v === 'number' && Number.isFinite(v)) out.push(v)
-  }
   return out
 }
 
@@ -261,177 +264,42 @@ export function resolveSizeParam(size: unknown, ctx: TransformContext): [number,
 // sorting
 // ---------------------------------------------------------------------------
 
-function comparator(a: Row, b: Row, field: string): number {
-  const av = a[field]
-  const bv = b[field]
-  if (av === bv) return 0
-  if (av == null) return 1
-  if (bv == null) return -1
-  return av < bv ? -1 : av > bv ? 1 : 0
+type RowCompare = (a: Row, b: Row) => number
+
+const sortComparators = new WeakMap<object, RowCompare | null>()
+
+/** The vega `compare` comparator of a sort spec (nulls first, NaN ties), or `null` when it names no field. */
+function comparatorOf(sort?: SortSpec): RowCompare | null {
+  if (!sort || typeof sort !== 'object') return null
+  let c = sortComparators.get(sort)
+  if (c === undefined) {
+    c = compareOf(sort) as unknown as RowCompare | null
+    sortComparators.set(sort, c)
+  }
+  return c
 }
 
 export function sortRows(rows: Row[], sort?: SortSpec): Row[] {
-  if (!sort?.field) return rows
-  const copy = rows.slice()
-  copy.sort((a, b) => compareRows(a, b, sort))
-  return copy
+  return sortBySpec(rows, sort) ?? rows
 }
 
 /** Comparator for a `SortSpec` (used by collect and the incremental order). */
 export function compareRows(a: Row, b: Row, sort?: SortSpec): number {
-  if (!sort?.field) return 0
-  const fields = Array.isArray(sort.field) ? sort.field : [sort.field]
-  const orders = Array.isArray(sort.order)
-    ? sort.order
-    : [sort.order ?? 'ascending']
-  for (let i = 0; i < fields.length; i++) {
-    const f = fields[i] as string
-    const c = comparator(a, b, f)
-    if (c !== 0) return (orders[i] ?? 'ascending') === 'descending' ? -c : c
-  }
-  return 0
+  const c = comparatorOf(sort)
+  return c ? c(a, b) : 0
 }
 
 /** Stable input-index order produced by a collect/sample sort. */
 export function sortOrder(rows: Row[], sort?: SortSpec, limit = Infinity): number[] {
   const order = rows.map((_, i) => i)
-  if (sort?.field) {
-    order.sort((a, b) => compareRows(rows[a]!, rows[b]!, sort) || a - b)
-  }
+  const c = comparatorOf(sort)
+  if (c) order.sort((a, b) => c(rows[a]!, rows[b]!) || a - b)
   return Number.isFinite(limit) ? order.slice(0, Math.max(0, limit)) : order
 }
 
 // ---------------------------------------------------------------------------
 // bin
 // ---------------------------------------------------------------------------
-
-function binRows(rows: Row[], t: Extract<CompiledTransform, { type: 'bin' }>, ctx: TransformContext): Row[] {
-  const values = fieldValues(rows, t.field)
-  const extentLo = resolveExtent(t.extent, ctx)
-  let lo: number, hi: number
-  if (extentLo) {
-    lo = extentLo[0]
-    hi = extentLo[1]
-  } else if (values.length) {
-    lo = minOf(values)
-    hi = maxOf(values)
-  } else {
-    lo = 0
-    hi = 1
-  }
-
-  // vega-statistics bin(): resolve the step from an explicit step, a candidate
-  // `steps` list, or the base/divide/minstep tuning knobs.
-  const pnum = (v: unknown): number | undefined => {
-    if (typeof v === 'number' && Number.isFinite(v)) return v
-    if (v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)) {
-      const sv = ctx.signals[(v as { signal: string }).signal]
-      if (typeof sv === 'number' && Number.isFinite(sv)) return sv
-    }
-    return undefined
-  }
-  const parr = (v: unknown): number[] | undefined => {
-    const a = v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)
-      ? ctx.signals[(v as { signal: string }).signal]
-      : v
-    return Array.isArray(a) ? a.map(Number) : undefined
-  }
-  // vega-statistics bin(): `maxbins || 20` and `base || 10`, so a zero (or
-  // NaN) falls back to the default while a negative maxbins gives a NaN step
-  // (every row bins to NaN). No coercion of a bad step to 1 -- that is what
-  // let `maxbins: -1` spin forever (C8).
-  const maxb = pnum(t.maxbins) || 20
-  const base = pnum(t.base) || 10
-  const div = parr(t.divide) ?? [5, 2]
-  const span = pnum(t.span) ?? ((hi - lo) || Math.abs(lo) || 1)
-  const explicitStep = pnum(t.step)
-  const steps = parr(t.steps)
-  let step: number
-  if (explicitStep != null && explicitStep > 0) {
-    step = explicitStep
-  } else if (steps && steps.length) {
-    const target = span / maxb
-    let i = 0
-    while (i < steps.length && steps[i]! < target) i++
-    step = steps[Math.max(0, i - 1)]!
-  } else {
-    const logb = Math.log(base)
-    const level = Math.ceil(Math.log(maxb) / logb)
-    const minstep = pnum(t.minstep) ?? 0
-    step = Math.max(minstep, Math.pow(base, Math.round(Math.log(span) / logb) - level))
-    // Deliberate deviation from vega: vega loops forever when the step cannot
-    // grow (base 1, base < 1, or a step that underflowed to 0). We throw.
-    for (let guard = 0; Math.ceil(span / step) > maxb; guard++) {
-      const next = step * base
-      if (!(next > step) || guard > 1_000_000) {
-        throw new Error('[aster] bin: cannot derive a step size from base, maxbins and the data span')
-      }
-      step = next
-    }
-    for (const d of div) {
-      const v = step / d
-      if (v >= minstep && span / v <= maxb) step = v
-    }
-  }
-
-  // nice extent: start = floor(lo/step)*step, stop = ceil(hi/step)*step
-  const vlog = Math.log(step)
-  const logb = Math.log(base)
-  const precision = vlog >= 0 ? 0 : ~~(-vlog / logb) + 1
-  const eps = Math.pow(base, -precision - 1)
-  let start = lo
-  let stop = hi
-  if (t.nice !== false) {
-    const v = Math.floor(lo / step + eps) * step
-    start = lo < v ? v - step : v
-    stop = Math.ceil(hi / step) * step
-  }
-  stop = start + Math.ceil((stop - start) / step) * step
-  // anchor shifts the bins so one boundary lands on the requested value
-  const anchor = pnum(t.anchor)
-  if (anchor != null) {
-    const d = anchor - (start + step * Math.floor((anchor - start) / step))
-    start += d
-    stop += d
-  }
-  if (t.signal) ctx.signals[t.signal] = { start, stop, step }
-
-  const band = t.interval !== false
-  const [startField, endField] = t.as
-  return rows.map((r) => {
-    const raw = r[t.field]
-    const n = raw == null || raw === '' ? null : Number(raw)
-    let v: number | null = n == null || Number.isNaN(n) ? null : n
-    if (v == null) return band ? { ...r, [startField]: null, [endField]: null } : { ...r, [startField]: null }
-    if (v < start) v = -Infinity
-    else if (v > stop) v = Infinity
-    else {
-      const clamped = Math.max(start, Math.min(v, stop - step))
-      v = start + step * Math.floor(1e-9 + (clamped - start) / step)
-    }
-    if (!band) return { ...r, [startField]: v }
-    const end = v == null ? null : start + step * (1 + (v - start) / step)
-    return { ...r, [startField]: v, [endField]: end }
-  })
-}
-
-function resolveExtent(
-  extent: unknown,
-  ctx: TransformContext,
-): [number, number] | undefined {
-  if (!extent) return undefined
-  if (Array.isArray(extent) && extent.length === 2) {
-    const [a, b] = extent
-    if (typeof a === 'number' && typeof b === 'number') return [a, b]
-  }
-  if (extent && typeof extent === 'object' && 'signal' in extent) {
-    const v = ctx.signals[(extent as { signal: string }).signal]
-    if (Array.isArray(v) && v.length === 2 && typeof v[0] === 'number' && typeof v[1] === 'number') {
-      return [v[0], v[1]]
-    }
-  }
-  return undefined
-}
 
 /**
  * Compute a "nice" step size using the vega-statistics/bin.js algorithm.
@@ -485,204 +353,9 @@ export function computeBinEps(step: number): number {
 // impute
 // ---------------------------------------------------------------------------
 
-function imputeRows(
-  rows: Row[],
-  t: { field: string; groupby?: string[]; key: string; method?: string; value?: unknown; step?: number; keyvals?: unknown[] | { signal: string } },
-  ctx?: TransformContext,
-): Row[] {
-  const groups = t.groupby?.length ? groupRows(rows, t.groupby) : [rows]
-  const rawKeyvals = t.keyvals && typeof t.keyvals === 'object' && !Array.isArray(t.keyvals) && 'signal' in t.keyvals
-    ? ctx?.signals[(t.keyvals as { signal: string }).signal]
-    : t.keyvals
-  const keyvals = Array.isArray(rawKeyvals) ? rawKeyvals : []
-  const domain = Array.from(new Set([...rows.map((r) => r[t.key]), ...keyvals]))
-    .filter((k) => k != null)
-    .sort((a, b) => (a! < b! ? -1 : a! > b! ? 1 : 0))
-  // vega emits the source tuples first, then appends the imputed tuples grouped
-  // by partition (each group in key order).
-  const imputed: Row[] = []
-  // groups x domain is the worst-case output: refuse it before building it.
-  checkRowCount(rows.length + groups.length * domain.length, 'impute')
-  for (const g of groups) {
-    const sorted = g.slice().sort((a, b) => (a[t.key]! < b[t.key]! ? -1 : a[t.key]! > b[t.key]! ? 1 : 0))
-    const present = new Set(sorted.map((r) => r[t.key]))
-    let value = NaN
-    for (const kVal of domain) {
-      if (present.has(kVal)) continue
-      const v = Number.isNaN(value) ? (value = imputeStat(sorted, t)) : value
-      // vega emits only the partition fields, the key and the imputed measure;
-      // spreading the first source row would leak its other columns into the
-      // new tuple (and change downstream scales/marks).
-      const row: Row = { _impute: true }
-      for (const gk of t.groupby ?? []) row[gk] = sorted[0]?.[gk]
-      row[t.key] = kVal
-      row[t.field] = v
-      imputed.push(row)
-    }
-  }
-  return [...rows, ...imputed]
-}
-
-function imputeStat(group: Row[], t: { field: string; method?: string; value?: unknown }): number {
-  const values = fieldValues(group, t.field)
-  switch (t.method) {
-    case 'mean':
-      return values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0
-    case 'median': {
-      if (!values.length) return 0
-      const s = values.slice().sort((a, b) => a - b)
-      const m = Math.floor(s.length / 2)
-      return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2
-    }
-    case 'min':
-      return values.length ? minOf(values) : 0
-    case 'max':
-      return values.length ? maxOf(values) : 0
-    default:
-      return typeof t.value === 'number' ? t.value : 0
-  }
-}
-
 // ---------------------------------------------------------------------------
 // aggregate / window / stack
 // ---------------------------------------------------------------------------
-
-const AGGR: Record<string, (values: number[], rows: Row[]) => number | undefined> = {
-  count: (_v, rows) => rows.length,
-  sum: (v) => (v.length ? v.reduce((a, b) => a + b, 0) : NaN),
-  product: (v) => (v.length ? v.reduce((a, b) => a * b, 1) : NaN),
-  mean: (v) => (v.length ? v.reduce((a, b) => a + b, 0) / v.length : NaN),
-  // vega's `average` is a pure alias of mean (AggregateOps: req ['mean'])
-  average: (v) => (v.length ? v.reduce((a, b) => a + b, 0) / v.length : NaN),
-  min: (v) => minOf(v),
-  max: (v) => maxOf(v),
-  median: (v) => {
-    if (!v.length) return undefined
-    const s = v.slice().sort((a, b) => a - b)
-    const m = Math.floor(s.length / 2)
-    return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2
-  },
-  q1: (v) => (v.length ? quantileSorted(v.slice().filter(isFiniteNumber).sort((a, b) => a - b), 0.25) as number : undefined),
-  q3: (v) => (v.length ? quantileSorted(v.slice().filter(isFiniteNumber).sort((a, b) => a - b), 0.75) as number : undefined),
-  distinct: (v, rows) => new Set(v).size,
-  valid: (v) => v.filter((x) => Number.isFinite(x)).length,
-  missing: (v, rows) => rows.length - v.filter((x) => Number.isFinite(x)).length,
-  // vega's aggregate ops (vega-transforms AggregateOps): the variance family
-  // requires valid > 1 — otherwise undefined (the consuming mark renders a
-  // zero-width/height rect, matching upstream)
-  variance: (v) => {
-    const vals = v.filter((x) => Number.isFinite(x))
-    const n = vals.length
-    if (n < 2) return undefined
-    const m = vals.reduce((a, b) => a + b, 0) / n
-    return vals.reduce((a, b) => a + (b - m) * (b - m), 0) / (n - 1)
-  },
-  variancep: (v) => {
-    const vals = v.filter((x) => Number.isFinite(x))
-    const n = vals.length
-    if (!n) return NaN
-    const m = vals.reduce((a, b) => a + b, 0) / n
-    return vals.reduce((a, b) => a + (b - m) * (b - m), 0) / n
-  },
-  stdev: (v) => {
-    const vals = v.filter((x) => Number.isFinite(x))
-    const n = vals.length
-    if (n < 2) return undefined
-    const m = vals.reduce((a, b) => a + b, 0) / n
-    return Math.sqrt(vals.reduce((a, b) => a + (b - m) * (b - m), 0) / (n - 1))
-  },
-  stdevp: (v) => {
-    const vals = v.filter((x) => Number.isFinite(x))
-    const n = vals.length
-    if (!n) return NaN
-    const m = vals.reduce((a, b) => a + b, 0) / n
-    return Math.sqrt(vals.reduce((a, b) => a + (b - m) * (b - m), 0) / n)
-  },
-  stderr: (v) => {
-    const vals = v.filter((x) => Number.isFinite(x))
-    const n = vals.length
-    if (n < 2) return undefined
-    const m = vals.reduce((a, b) => a + b, 0) / n
-    return Math.sqrt(vals.reduce((a, b) => a + (b - m) * (b - m), 0) / (n - 1)) / Math.sqrt(n)
-  },
-}
-
-/** Aggregate a single (already-grouped) set of rows. Exported for the incremental
- * aggregate path, which re-derives only dirty groups and already knows their
- * membership — going through groupRows would rebuild a Map per group for nothing. */
-export function aggregateGroup(rows: Row[], groupby: string[], fields: (string | null)[], ops: string[], as: string[], aggregateParams?: (number | null)[]): Row {
-  const row: Row = {}
-  for (const g of groupby) row[g] = rows[0]?.[g]
-  ops.forEach((op, i) => {
-    const field = fields[i]
-    // vega's `values` op ignores the field and emits the group's tuples
-    if (op === 'values') {
-      row[as[i] ?? 'values'] = rows
-      return
-    }
-    // the exponential measures fold over the rows in order with the ratio
-    // from `aggregate_params` (vega Transform init(m, r)). VL emits no
-    // aggregate_params, and vega's arithmetic then yields NaN (undefined is
-    // not null: `undefined ** n` is NaN, `null ** n` is 0), so the aggregate
-    // value is invalid and the post-aggregate filter drops every row.
-    if (op === 'exponential' || op === 'exponentialb') {
-      const r = aggregateParams?.[i]
-      const rr = r as unknown as number
-      let exp = 0
-      let valid = 0
-      for (const r2 of rows) {
-        const v = field == null ? undefined : r2[field]
-        if (v == null || !Number.isFinite(Number(v))) continue
-        valid++
-        exp = rr * exp + Number(v)
-      }
-      const oneMinusR = 1 - rr
-      row[as[i] ?? `${op}_${field}`] = op === 'exponential'
-        ? exp * oneMinusR / (1 - Math.pow(rr, valid))
-        : exp * oneMinusR
-      return
-    }
-    const values = field == null ? [] : fieldValues(rows, field)
-    const rawValues = field == null ? [] : rows.map((r) => r[field])
-    const present = rawValues.filter((v) => v != null && v !== '' && !(typeof v === 'number' && !Number.isFinite(v)))
-    // String/date-bearing ops use the raw values (vega's AggregateOps measure
-    // distinguishes numeric-only ops from valid/min/max/distinct).
-    if (op === 'distinct') {
-      // vega's distinct reads the group's stored TUPLES and stringifies every
-      // value (`get(v) + ''`), so NaN/null count as their own distinct values.
-      row[as[i] ?? `distinct_${field}`] = new Set(rawValues.map((v) => String(v))).size
-      return
-    }
-    if (op === 'valid') {
-      row[as[i] ?? `valid_${field}`] = present.length
-      return
-    }
-    if (op === 'missing') {
-      // vega counts only null/empty-string as missing; NaN is neither valid
-      // nor missing.
-      row[as[i] ?? `missing_${field}`] = rawValues.filter((v) => v == null || v === '').length
-      return
-    }
-    if (op === 'min' || op === 'max') {
-      if (!present.length) {
-        row[as[i] ?? `${op}_${field}`] = undefined
-        return
-      }
-      const cmp = (a: unknown, b: unknown): number => {
-        const av = a instanceof Date ? a.getTime() : a as number | string
-        const bv = b instanceof Date ? b.getTime() : b as number | string
-        return av < bv ? -1 : av > bv ? 1 : 0
-      }
-      const best = present.reduce((a, b) => (op === 'min' ? (cmp(b, a) < 0 ? b : a) : (cmp(b, a) > 0 ? b : a)))
-      row[as[i] ?? `${op}_${field}`] = best
-      return
-    }
-    const fn = ownGet(AGGR, op)
-    if (!fn) throw new Error(`[aster] unsupported aggregate op "${op}"`)
-    row[as[i] ?? `${op}_${field}`] = fn(values, rows)
-  })
-  return row
-}
 
 export function groupRows(rows: Row[], keys: string[]): Row[][] {
   if (!keys.length) return rows.length ? [rows] : []
@@ -694,301 +367,6 @@ export function groupRows(rows: Row[], keys: string[]): Row[][] {
     g.push(r)
   }
   return [...map.values()]
-}
-
-function aggregateRows(rows: Row[], t: Extract<CompiledTransform, { type: 'aggregate' }>): Row[] {
-  const groupby = t.groupby ?? []
-  const fields = t.fields ?? []
-  const ops = t.ops ?? []
-  const as = t.as ?? []
-  return groupRows(rows, groupby).map((g) => aggregateGroup(g, groupby, fields, ops, as, t.aggregate_params))
-}
-
-/**
- * Pivot: aggregate selected value fields to become new fields, one per unique
- * pivot-field value (vga's Pivot transform is an aggregate over an accessor that
- * yields `value(d)` when `key(d)===k` and NaN otherwise, so non-matching rows are
- * skipped). Pivot keys are the sorted unique values of `field` (optionally capped
- * by `limit`); the output has the `groupby` fields plus one field per key.
- */
-function pivotRows(rows: Row[], t: Record<string, unknown>): Row[] {
-  const keyField = t.field as string
-  const valueField = t.value as string | undefined
-  const op = (t.op as string | undefined) || 'sum'
-  const groupby = (t.groupby as string[] | undefined) ?? []
-  const limit = (t.limit as number | undefined) || 0
-
-  const keySet = new Set<unknown>()
-  for (const r of rows) keySet.add(r[keyField])
-  const keys = [...keySet].filter((k) => k != null)
-  keys.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
-  const capped = limit ? keys.slice(0, limit) : keys
-  if (!capped.length) return []
-  const as = capped.map((k) => String(k))
-
-  const groups = groupby.length ? groupRows(rows, groupby) : rows.length ? [rows] : []
-  const out: Row[] = []
-  checkRowCount(groups.length, 'pivot')
-  for (const g of groups) {
-    meterTick('pivot', capped.length * g.length)
-    const row: Row = {}
-    for (const k of groupby) row[k] = g[0]?.[k]
-    capped.forEach((k, i) => {
-      if (op === 'count') {
-        // Vega's `count` op pivots on the number of matching rows per cell.
-        row[as[i]!] = valueField == null ? g.length : g.filter((r) => r[keyField] === k).length
-      } else {
-        const fn = ownGet(AGGR, op)
-        if (!fn) throw new Error(`[aster] unsupported aggregate op "${op}"`)
-        const subset = valueField == null ? [] : g.filter((r) => r[keyField] === k)
-        row[as[i]!] = fn(valueField == null ? [] : fieldValues(subset, valueField), subset)
-      }
-    })
-    out.push(row)
-  }
-  return out
-}
-
-function joinAggregateRows(rows: Row[], t: Extract<CompiledTransform, { type: 'joinaggregate' }>): Row[] {
-  const fields = t.fields ?? []
-  const ops = t.ops ?? []
-  const as = t.as ?? []
-  // vega's Aggregate `key` accessor replaces the groupby tuple key entirely.
-  const keyField = t.key
-  const groupby = keyField != null ? [keyField] : (t.groupby ?? [])
-  const grouped = groupRows(rows, groupby)
-  const aggregates = new Map<string, Row>()
-  for (const g of grouped) {
-    const key = groupby.map((k) => String(g[0]?.[k])).join('\u0000')
-    aggregates.set(key, aggregateGroup(g, groupby, fields, ops, as))
-  }
-  return rows.map((r) => {
-    const key = groupby.map((k) => String(r[k])).join('\u0000')
-    return { ...r, ...(aggregates.get(key) ?? {}) }
-  })
-}
-
-function sortFieldsOf(sort: SortSpec | undefined): string[] | null {
-  if (!sort?.field) return null
-  return Array.isArray(sort.field) ? sort.field : [sort.field]
-}
-
-/**
- * Peer test for the window `rank` / `dense_rank` ops, matching vega's window
- * comparator: two sorted rows are peers iff their sort keys are equal on every
- * sort field. With no sort, vega uses `constant(-1)` (every row is its own peer
- * group), so we return `false` to force a fresh rank each row.
- */
-function isPeer(a: Row, b: Row, fields: string[] | null): boolean {
-  if (!fields) return false
-  for (const f of fields) {
-    if (a[f] !== b[f]) return false
-  }
-  return true
-}
-
-function windowRows(rows: Row[], t: Extract<CompiledTransform, { type: 'window' }>): Row[] {
-  const sorted = sortRows(rows, t.sort)
-  const groupby = t.groupby ?? []
-  const fields = t.fields ?? []
-  const ops = t.ops ?? []
-  const params = (t as { params?: (number | null)[] }).params ?? []
-  const aggParams = (t as { aggregate_params?: (number | null)[] }).aggregate_params ?? []
-  const as = t.as ?? []
-  const groups = groupby.length ? groupRows(sorted, groupby) : [sorted]
-  const sortFields = sortFieldsOf(t.sort)
-  const frame = (t.frame ?? [null, 0]) as [number | null, number | null]
-  const ignorePeers = t.ignorePeers === true
-  const results = new Map<Row, Row>()
-
-  // window op state is per partition per op
-  for (const g of groups) {
-    const n = g.length
-    let rank = 1
-    let drank = 1
-    const prevValues: unknown[] = ops.map(() => null)
-    const nextValues: unknown[] = ops.map(() => null)
-    const nextIndex: number[] = ops.map(() => -1)
-    for (let i = 0; i < n; i++) {
-      if (i > 0 && !isPeer(g[i - 1]!, g[i]!, sortFields)) {
-        rank = i + 1
-        drank++
-      }
-      // frame boundaries in vega's [startOffset, endOffset] convention
-      let i0 = frame[0] == null ? 0 : i + frame[0]
-      let i1 = frame[1] == null ? n : i + frame[1] + 1
-      i0 = Math.max(0, Math.min(n, i0))
-      i1 = Math.max(0, Math.min(n, i1))
-      if (t.sort && !ignorePeers) {
-        // range frames expand to include peer rows
-        if (i0 > 0 && isPeer(g[i0]!, g[i0 - 1]!, sortFields)) {
-          while (i0 > 0 && isPeer(g[i0]!, g[i0 - 1]!, sortFields)) i0--
-        }
-        if (i1 > 0 && i1 < n && isPeer(g[i1 - 1]!, g[i1]!, sortFields)) {
-          while (i1 < n && isPeer(g[i1 - 1]!, g[i1]!, sortFields)) i1++
-        }
-      }
-      const r = { ...g[i]! }
-      const frameRows = g.slice(i0, i1)
-      // Frames are O(n) per row (O(n^2) per partition): charge the real cost so
-      // the wall clock is sampled inside the loop (C7).
-      meterTick('window', frameRows.length + 1)
-      const cumeDist = (): number => {
-        let last = i
-        while (last + 1 < n && isPeer(g[last]!, g[last + 1]!, sortFields)) last++
-        return (1 + last) / n
-      }
-      const fieldValue = (field: string | null | undefined, row: Row | undefined): unknown =>
-        field == null || row == null ? null : row[field]
-      ops.forEach((op, j) => {
-        const name = as[j] ?? `${op}_${fields[j]}`
-        const field = fields[j]
-        const param = params[j]
-        switch (op) {
-          case 'row_number':
-            r[name] = i + 1
-            break
-          case 'rank':
-            r[name] = rank
-            break
-          case 'dense_rank':
-            r[name] = drank
-            break
-          case 'percent_rank':
-            r[name] = (rank - 1) / (n - 1)
-            break
-          case 'cume_dist':
-            r[name] = cumeDist()
-            break
-          case 'ntile': {
-            const num = Number(param)
-            r[name] = Math.ceil(num * cumeDist())
-            break
-          }
-          case 'lag': {
-            const off = Number(param) || 1
-            r[name] = i - off >= 0 ? fieldValue(field, g[i - off]) : null
-            break
-          }
-          case 'lead': {
-            const off = Number(param) || 1
-            r[name] = i + off < n ? fieldValue(field, g[i + off]) : null
-            break
-          }
-          case 'first_value':
-            r[name] = fieldValue(field, g[i0])
-            break
-          case 'last_value':
-            r[name] = fieldValue(field, g[i1 - 1])
-            break
-          case 'nth_value': {
-            const nth = Number(param)
-            const idx = i0 + (nth - 1)
-            r[name] = idx < i1 ? fieldValue(field, g[idx]) : null
-            break
-          }
-          case 'prev_value': {
-            const v = fieldValue(field, g[i])
-            if (v != null) prevValues[j] = v
-            r[name] = prevValues[j]
-            break
-          }
-          case 'next_value': {
-            if (i <= nextIndex[j]!) r[name] = nextValues[j]
-            else {
-              let k = i
-              while (k < n && fieldValue(field, g[k]) == null) k++
-              if (k >= n) { nextIndex[j] = n; nextValues[j] = null }
-              else { nextIndex[j] = k; nextValues[j] = fieldValue(field, g[k]) }
-              r[name] = nextValues[j]
-            }
-            break
-          }
-          case 'values':
-            // every row retains its own frame: n frames of up to n rows
-            meterRows(frameRows.length, 'window values')
-            r[name] = frameRows
-            break
-          case 'count':
-            r[name] = frameRows.length
-            break
-          default: {
-            // every aggregate op resolves through the same measure port
-            const agg = aggregateGroup(frameRows, [], [field ?? null], [op], [name], [aggParams[j] ?? null])
-            r[name] = agg[name]
-          }
-        }
-      })
-      results.set(g[i]!, r)
-    }
-  }
-  // vega's Window writes back to the input pulse in source order; the group and
-  // sort order only drive the calculations.
-  return rows.map((r) => results.get(r) ?? r)
-}
-
-function stackRows(rows: Row[], t: Extract<CompiledTransform, { type: 'stack' }>): Row[] {
-  const groupby = t.groupby ?? []
-  const groups = groupby.length ? groupRows(rows, groupby) : [rows]
-  const [startField, endField] = t.as
-
-  // vega's stack (vega-encode Stack.partition) computes the max group sum
-  // across ALL groups; the `center` offset anchors each group's baseline at
-  // (max - groupSum) / 2 so the largest group sits on zero and smaller groups
-  // float above it (the streamgraph layout). `normalize` rescales each group
-  // to [0, 1]. `zero` (default) stacks positives upward, negatives downward.
-  let max = 0
-  const sums: number[] = []
-  for (const g of groups) {
-    const s = g.reduce((a, r) => a + Math.abs(Number(r[t.field]) || 0), 0)
-    sums.push(s)
-    if (s > max) max = s
-  }
-
-  // vega's Stack writes the start/end fields onto each tuple IN PLACE: the
-  // groups and `sort` only drive the offsets, the output keeps the input
-  // (pulse) order. Emitting group by group would repaint overlapping stacked
-  // marks in another order than the oracle.
-  const placed = new Map<Row, [number, number]>()
-  for (let gi = 0; gi < groups.length; gi++) {
-    const ordered = sortRows(groups[gi]!, t.sort)
-    const total = sums[gi]!
-    if (t.offset === 'normalize') {
-      const scale = total === 0 ? 0 : 1 / total
-      let last = 0
-      for (const r of ordered) {
-        const start = last
-        const end = (last += scale * Math.abs(Number(r[t.field]) || 0))
-        placed.set(r, [start, end])
-      }
-    } else if (t.offset === 'center') {
-      let last = (max - total) / 2
-      for (const r of ordered) {
-        const start = last
-        const end = (last += Math.abs(Number(r[t.field]) || 0))
-        placed.set(r, [start, end])
-      }
-    } else {
-      let lastPos = 0
-      let lastNeg = 0
-      for (const r of ordered) {
-        const v = Number(r[t.field]) || 0
-        if (v < 0) {
-          const start = lastNeg
-          const end = (lastNeg += v)
-          placed.set(r, [start, end])
-        } else {
-          const start = lastPos
-          const end = (lastPos += v)
-          placed.set(r, [start, end])
-        }
-      }
-    }
-  }
-  return rows.map((r) => {
-    const se = placed.get(r)
-    return se ? { ...r, [startField]: se[0], [endField]: se[1] } : r
-  })
 }
 
 // ---------------------------------------------------------------------------
@@ -1078,49 +456,9 @@ export function ascendingNum(a: number, b: number): number {
   return a == null || b == null ? NaN : a < b ? -1 : a > b ? 1 : a >= b ? 0 : NaN
 }
 
-/** d3-array `range(start, stop, step)` (numeric output only). */
-export function d3Range(start: number, stop: number, step: number): number[] {
-  start = +start
-  stop = +stop
-  step = +step
-  const len = Math.max(0, Math.ceil((stop - start) / step))
-  // Deviation from d3 (safety): the length is bounded by the active limits
-  // BEFORE the allocation (sequence 5e7, graticule steps ~0, ...).
-  if (len > 0x7fffffff) throw new AsterLimitError(`range length ${len} > 2147483647`)
-  const n = len | 0
-  const meter = activeMeter()
-  if (meter) meter.rows(Number.isFinite(len) ? len : Infinity, 'range')
-  const out: number[] = new Array(n)
-  for (let i = 0; i < n; i++) {
-    out[i] = start + i * step
-    if (meter && (i & 0xffff) === 0xffff) meter.clock.check('range')
-  }
-  return out
-}
-
 // ---------------------------------------------------------------------------
 // sequence / graticule (generating transforms)
 // ---------------------------------------------------------------------------
-
-/**
- * The vega `sequence` transform: generate tuples for a numeric range
- * `[start, stop)` in `step` increments (d3-array range semantics), writing each
- * value to the `as` field (default `data`).
- */
-function sequenceRows(t: Record<string, unknown>): Row[] {
-  const start = t.start == null ? 0 : Number(t.start)
-  const stop = Number(t.stop)
-  const step = t.step == null ? 1 : Number(t.step)
-  const as = (t.as as string | undefined) ?? 'data'
-  const values = d3Range(start, stop, step)
-  const out: Row[] = new Array(values.length)
-  for (let i = 0; i < values.length; i++) {
-    out[i] = { [as]: values[i] }
-    // limits ON: sample the wall clock while the tuples are built (C7)
-    if ((i & 0x3fff) === 0x3fff) meterTick('sequence', 1024)
-  }
-  return out
-}
 
 const GEO_EPSILON = 1e-6
 
@@ -1414,105 +752,6 @@ function accessorField(name: string): (row: Row) => unknown {
   return (row) => getField(row, name)
 }
 
-/**
- * Canonical order of time units from coarsest to finest (matches vega-time).
- * The "finest" unit in a set determines what gets incremented for the end date.
- */
-const TIME_UNIT_ORDER = ['year', 'quarter', 'month', 'week', 'date', 'hours', 'minutes', 'seconds', 'milliseconds']
-
-function timeunitRows(rows: Row[], t: Record<string, unknown>): Row[] {
-  const field = t.field as string
-  const units = (t.units as string[]) ?? []
-  const as = (t.as as [string, string]) ?? [field + '_start', field + '_end']
-
-  return rows.map((r) => {
-    const v = r[field]
-    const d = v instanceof Date ? v : new Date(v as string | number)
-    if (!Number.isFinite(d.getTime())) {
-      // vega's timeunit transform emits an invalid Date for unparseable input
-      // (its legend/axis formatters then render the unit-specific NaN string,
-      // e.g. "0NaN"/"WNaN").
-      const bad = new Date(NaN)
-      return { ...r, [as[0]]: bad, [as[1]]: bad }
-    }
-    const start = timeFloor(d, units)
-    const end = timeOffset(start, units)
-    return { ...r, [as[0]]: start, [as[1]]: end }
-  })
-}
-
-/**
- * Floor a Date to the start of the specified time unit(s).
- * E.g. timeFloor(date, ['month']) → 1st of the month 00:00:00.000 UTC.
- */
-function timeFloor(d: Date, units: string[]): Date {
-  // vega-time's floor.js: units missing a coarser context fall back to a
-  // canonical year (2012), month zero, and date 1. DAY/WEEK/DAYOFYEAR are
-  // projected onto that canonical year rather than reset to Jan 1.
-  const u = new Set(units)
-  const year = u.has('year') ? d.getUTCFullYear() : 2012
-  const month = u.has('month')
-    ? d.getUTCMonth()
-    : u.has('quarter') ? 3 * Math.floor(d.getUTCMonth() / 3) : 0
-  const firstDay = (y: number): number => new Date(Date.UTC(y, 0, 1)).getUTCDay()
-  const dayOfYear = (x: Date): number => {
-    const y = Date.UTC(x.getUTCFullYear(), 0, 1)
-    return Math.floor((x.getTime() - (y - 1)) / 86400000) + 1
-  }
-  const weekNum = (x: Date): number => {
-    const y = Date.UTC(x.getUTCFullYear(), 0, 1)
-    const sunday = new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth(), x.getUTCDate() - x.getUTCDay()))
-    return Math.floor((sunday.getTime() - (y - 1)) / 604800000) + 1
-  }
-  const weekday = (week: number, day: number, first: number): number =>
-    day + week * 7 - (first + 6) % 7
-  let date: number
-  if (u.has('week') && u.has('day')) date = weekday(weekNum(d), d.getUTCDay(), firstDay(year))
-  else if (u.has('week')) date = weekday(weekNum(d), 0, firstDay(year))
-  else if (u.has('day')) date = weekday(1, d.getUTCDay(), firstDay(year))
-  else if (u.has('date')) date = d.getUTCDate()
-  else if (u.has('dayofyear')) date = dayOfYear(d)
-  else date = 1
-  const hours = u.has('hours') ? d.getUTCHours() : 0
-  const minutes = u.has('minutes') ? d.getUTCMinutes() : 0
-  const seconds = u.has('seconds') ? d.getUTCSeconds() : 0
-  const ms = u.has('milliseconds') ? d.getUTCMilliseconds() : 0
-  return new Date(Date.UTC(year, month, date, hours, minutes, seconds, ms))
-}
-
-/**
- * Offset a Date by one step of the finest time unit in the set.
- * E.g. timeOffset(date, ['month']) → 1st of the next month.
- */
-function timeOffset(d: Date, units: string[]): Date {
-  const u = new Date(d.getTime())
-  // Find the finest unit
-  let finestIdx = TIME_UNIT_ORDER.length
-  for (const unit of units) {
-    const idx = TIME_UNIT_ORDER.indexOf(unit)
-    if (idx >= 0 && idx < finestIdx) finestIdx = idx
-  }
-  if (finestIdx >= TIME_UNIT_ORDER.length) {
-    // No recognized units — just add 1ms
-    u.setTime(u.getTime() + 1)
-    return u
-  }
-  const finest = TIME_UNIT_ORDER[finestIdx]!
-
-  switch (finest) {
-    case 'year': u.setUTCFullYear(u.getUTCFullYear() + 1); break
-    case 'quarter': u.setUTCMonth(u.getUTCMonth() + 3); break
-    case 'month': u.setUTCMonth(u.getUTCMonth() + 1); break
-    case 'week': u.setUTCDate(u.getUTCDate() + 7); break
-    case 'date': u.setUTCDate(u.getUTCDate() + 1); break
-    case 'hours': u.setUTCHours(u.getUTCHours() + 1); break
-    case 'minutes': u.setUTCMinutes(u.getUTCMinutes() + 1); break
-    case 'seconds': u.setUTCSeconds(u.getUTCSeconds() + 1); break
-    case 'milliseconds': u.setUTCMilliseconds(u.getUTCMilliseconds() + 1); break
-  }
-  return u
-}
-
 /** d3-array `quantileSorted(values, p)` — values must be sorted ascending. */
 export function quantileSorted(values: number[], p: number): number | undefined {
   const n = values.length
@@ -1571,47 +810,6 @@ export function extentOf(values: unknown[]): [number, number] | undefined {
 // lookup (vega-transforms Lookup)
 // ---------------------------------------------------------------------------
 
-/**
- * Extend tuples by joining them with values from a lookup table (by key).
- * Without an explicit `values` list each `as` field receives the entire matched
- * row object; with `values` it receives the named sub-field of the match.
- * A failed lookup yields the `default` (null unless specified).
- */
-function lookupRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
-  const from = t.from as string
-  const key = t.key as string
-  const fields = (t.fields as string[]) ?? []
-  const as = (t.as as string[] | undefined) ?? fields
-  const values = t.values as string[] | undefined
-  const defaultValue = t.default == null ? null : t.default
-
-  const source = (ctx.datasets?.(from) ?? []) as Row[]
-  const index = new Map<unknown, Row>()
-  for (const r of source) {
-    const k = r[key]
-    if (k !== undefined && !index.has(k)) index.set(k, r)
-  }
-
-  const n = fields.length
-  const m = values?.length ?? 0
-  return rows.map((r) => {
-    const out: Row = { ...r }
-    if (values) {
-      for (let i = 0; i < n; i++) {
-        const v = index.get(r[fields[i]!])
-        for (let j = 0; j < m; j++) {
-          out[as[i * m + j]!] = v == null ? defaultValue : (v as Row)[values[j]!]
-        }
-      }
-    } else {
-      for (let i = 0; i < n; i++) {
-        out[as[i]!] = index.get(r[fields[i]!]) ?? defaultValue
-      }
-    }
-    return out
-  })
-}
-
 // ---------------------------------------------------------------------------
 // stratify / pack (d3-hierarchy circle packing)
 //
@@ -1625,6 +823,8 @@ function lookupRows(rows: Row[], t: Record<string, unknown>, ctx: TransformConte
 
 export interface HierNode {
   data: Row
+  /** Index of `data` in the rows the tree was built from (-1 for the empty-source placeholder). */
+  idx?: number
   children: HierNode[]
   parent: HierNode | null
   depth: number
@@ -1680,14 +880,15 @@ export function eachAfter(root: HierNode, fn: (node: HierNode) => void): void {
  */
 export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string): HierNode {
   if (!key) throw new Error('[aster] stratify requires a key field')
-  const mk = (data: Row): HierNode => ({ data, children: [], parent: null, depth: 0, height: 0, x: 0, y: 0, r: 0, value: 0 })
+  const mk = (data: Row, idx = -1): HierNode => ({ data, idx, children: [], parent: null, depth: 0, height: 0, x: 0, y: 0, r: 0, value: 0 })
   if (!rows.length) return mk({})
   const ambiguous = {} as HierNode
   const byKey = new Map<string, HierNode>()
   const nodes: HierNode[] = []
   const parentIds: Array<string | null> = []
-  for (const r of rows) {
-    const node = mk(r)
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]!
+    const node = mk(r, i)
     nodes.push(node)
     const id = r[key]
     if (id != null && String(id) !== '') {
@@ -1949,11 +1150,7 @@ function labelRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContex
  * `datum["lookup_result"]["label"]`).
  */
 export function getField(row: Row, path: string): unknown {
-  if (!path.includes('.')) return row[path]
-  let v: unknown = row
-  for (const part of path.split('.')) {
-    if (v == null || typeof v !== 'object') return undefined
-    v = safeGet(v, part)
-  }
-  return v
+  // plain names (the overwhelmingly common case) skip the access-path parser
+  if (typeof path !== 'string' || !/[.[\]\\]/.test(path)) return row[path]
+  return fieldOf(path)(row)
 }

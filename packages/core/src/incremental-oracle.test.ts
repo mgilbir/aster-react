@@ -64,6 +64,8 @@ interface Pipe {
   xf: string
   yf: string
   cf?: string
+  /** The pipe reads dataset `t`, so it cannot run on `t` itself. */
+  skipSource?: boolean
 }
 
 const PIPES: Pipe[] = [
@@ -93,6 +95,41 @@ const PIPES: Pipe[] = [
   { name: 'aggregate>filter', tr: [{ type: 'aggregate', groupby: ['g'], fields: ['v'], ops: ['sum'], as: ['s'] }, { type: 'filter', expr: 'datum.s > 5' }], xf: 's', yf: 's', cf: 'g' },
   { name: 'lookup>formula', tr: [{ type: 'lookup', from: 'u', key: 'g', fields: ['g'], values: ['w'], as: ['w'] }, { type: 'formula', expr: 'datum.w + datum.v', as: 'wv' }], xf: 'wv', yf: 'v', cf: 'g' },
   { name: 'bin>aggregate', tr: [{ type: 'bin', field: 'x', maxbins: 4, as: ['b0', 'b1'] }, { type: 'aggregate', groupby: ['b0'], fields: ['v'], ops: ['sum'], as: ['s'] }], xf: 'b0', yf: 's' },
+  // -- Vega-faithful transform semantics (audit C59/C94/C24): odd values (`s` numeric strings, `n` nullable),
+  //    nested paths (`o.a`, `o.b[0]`), argmin/argmax/ci0/ci1, window ranks and frames, stack offsets, impute,
+  //    sample, identifier, project, pivot, lookup (last wins), timeunit (fixed units and data-derived).
+  { name: 'aggregate-stats', tr: [{ type: 'aggregate', groupby: ['g'], fields: ['v', 'v', 'v', 'n', 's', 'x'], ops: ['stdev', 'median', 'distinct', 'valid', 'sum', 'argmin'], as: ['sd', 'md', 'ds', 'vl', 'ss', 'am'] }], xf: 'md', yf: 'ss', cf: 'g' },
+  { name: 'aggregate-argmax-values', tr: [{ type: 'aggregate', groupby: ['g'], fields: ['n', 'v', 'x'], ops: ['argmax', 'values', 'missing'], as: ['ax', 'vs', 'ms'] }, { type: 'formula', expr: 'datum.ms + 1', as: 'ms1' }], xf: 'ms1', yf: 'ms1', cf: 'g' },
+  { name: 'aggregate-ci', tr: [{ type: 'aggregate', groupby: ['g'], fields: ['v', 'v'], ops: ['ci0', 'ci1'], as: ['c0', 'c1'] }], xf: 'c0', yf: 'c1', cf: 'g' },
+  { name: 'aggregate-ci-global', tr: [{ type: 'aggregate', fields: ['v', 'v', null], ops: ['ci0', 'ci1', 'count'], as: ['c0', 'c1', 'n'] }], xf: 'c0', yf: 'c1' },
+  { name: 'aggregate-cross', tr: [{ type: 'aggregate', groupby: ['g', 'x'], cross: true, fields: ['v'], ops: ['sum'], as: ['s'] }], xf: 'x', yf: 's', cf: 'g' },
+  { name: 'aggregate-nested', tr: [{ type: 'aggregate', groupby: ['o.a'], fields: ['o.b[0]'], ops: ['sum'], as: ['sb'] }, { type: 'formula', expr: 'datum["o.a"]', as: 'k' }], xf: 'k', yf: 'sb' },
+  { name: 'aggregate-strings', tr: [{ type: 'aggregate', groupby: ['g'], fields: ['s', 's', 's'], ops: ['sum', 'min', 'max'], as: ['ss', 'lo', 'hi'] }, { type: 'formula', expr: 'toNumber(datum.lo)', as: 'lon' }], xf: 'lon', yf: 'ss', cf: 'g' },
+  { name: 'joinaggregate-ci', tr: [{ type: 'joinaggregate', groupby: ['g'], fields: ['v'], ops: ['ci1'], as: ['hi'] }], xf: 'x', yf: 'hi', cf: 'g' },
+  { name: 'joinaggregate-key', tr: [{ type: 'joinaggregate', groupby: ['g'], key: 'x', fields: ['v'], ops: ['sum'], as: ['sv'] }], xf: 'x', yf: 'sv', cf: 'g' },
+  { name: 'joinaggregate-odd', tr: [{ type: 'joinaggregate', groupby: ['g'], fields: ['n', 's', 'n'], ops: ['mean', 'max', 'valid'], as: ['mn', 'mx', 'vd'] }, { type: 'formula', expr: 'toNumber(datum.mx)', as: 'mxn' }], xf: 'mxn', yf: 'mn', cf: 'g' },
+  { name: 'window-ranks', tr: [{ type: 'window', sort: { field: 'v' }, groupby: ['g'], ops: ['rank', 'dense_rank', 'percent_rank', 'cume_dist', 'ntile', 'lag', 'lead', 'first_value'], fields: [null, null, null, null, null, 'v', 'v', 'v'], params: [null, null, null, null, 2, 1, 1, null], as: ['rk', 'dr', 'pr', 'cd', 'nt', 'lg', 'ld', 'fv'] }], xf: 'rk', yf: 'cd', cf: 'g' },
+  { name: 'window-frame', tr: [{ type: 'window', sort: { field: 'x' }, ops: ['mean', 'min', 'max', 'median'], fields: ['v', 'v', 'v', 'v'], frame: [-1, 1], as: ['m', 'lo', 'hi', 'md'] }], xf: 'lo', yf: 'hi' },
+  { name: 'window-null-sort', tr: [{ type: 'window', sort: { field: 'n', order: 'descending' }, ops: ['row_number', 'sum'], fields: [null, 'n'], as: ['rn', 'cs'] }], xf: 'rn', yf: 'cs' },
+  { name: 'window-ci', tr: [{ type: 'window', groupby: ['g'], sort: { field: 'x' }, ops: ['ci0'], fields: ['v'], as: ['c0'] }], xf: 'x', yf: 'c0', cf: 'g' },
+  { name: 'stack-center', tr: [{ type: 'stack', groupby: ['g'], field: 'v', offset: 'center', sort: { field: 'x' }, as: ['y0', 'y1'] }], xf: 'x', yf: 'y1', cf: 'g' },
+  { name: 'stack-normalize', tr: [{ type: 'stack', groupby: ['x'], field: 'n', offset: 'normalize', as: ['y0', 'y1'] }], xf: 'x', yf: 'y1', cf: 'g' },
+  { name: 'stack-zero-sort-desc', tr: [{ type: 'stack', groupby: ['x'], field: 'v', sort: { field: 'g', order: 'descending' }, as: ['y0', 'y1'] }], xf: 'x', yf: 'y1', cf: 'g' },
+  { name: 'impute-mean', tr: [{ type: 'impute', field: 'v', key: 'x', groupby: ['g'], keyvals: [0, 1, 2, 3, 4, 5], method: 'mean' }], xf: 'x', yf: 'v', cf: 'g' },
+  { name: 'impute-value', tr: [{ type: 'impute', field: 'n', key: 'x', keyvals: [0, 5, 10], value: 7 }], xf: 'x', yf: 'n' },
+  { name: 'sample', tr: [{ type: 'sample', size: 4 }], xf: 'x', yf: 'v', cf: 'g' },
+  { name: 'identifier-falsy', tr: [{ type: 'identifier', as: 'x' }], xf: 'x', yf: 'v', cf: 'g' },
+  { name: 'project', tr: [{ type: 'project', fields: ['x', 'v', 'g'], as: ['px', 'pv', 'pg'] }], xf: 'px', yf: 'pv', cf: 'pg' },
+  { name: 'project-all', tr: [{ type: 'project' }], xf: 'x', yf: 'v', cf: 'g' },
+  { name: 'pivot', tr: [{ type: 'pivot', field: 'g', value: 'v', groupby: ['x'], op: 'sum' }], xf: 'x', yf: 'x' },
+  { name: 'lookup-self-last-wins', tr: [{ type: 'lookup', from: 't', key: 'x', fields: ['x'], values: ['v', 'g'], as: ['lv', 'lg'], default: -1 }], xf: 'x', yf: 'lv', cf: 'lg', skipSource: true },
+  { name: 'lookup-row', tr: [{ type: 'lookup', from: 'u', key: 'g', fields: ['g'], as: ['urow'], default: null }, { type: 'formula', expr: 'datum.urow ? datum.urow.w : -1', as: 'w' }], xf: 'w', yf: 'v', cf: 'g' },
+  { name: 'timeunit-units', tr: [{ type: 'formula', expr: 'datetime(2020, datum.x, 1 + datum.y, datum.v)', as: 'dt' }, { type: 'timeunit', field: 'dt', units: ['month', 'date'], as: ['u0', 'u1'] }, { type: 'formula', expr: 'datum.u1 - datum.u0', as: 'ux' }], xf: 'ux', yf: 'v', cf: 'g' },
+  { name: 'timeunit-utc-year-month', tr: [{ type: 'formula', expr: 'datetime(2000 + datum.x * 3, datum.y, 15)', as: 'dt' }, { type: 'timeunit', field: 'dt', units: ['year', 'month'], timezone: 'utc', as: ['u0', 'u1'] }, { type: 'formula', expr: 'datum.u1 - datum.u0', as: 'ux' }], xf: 'ux', yf: 'v' },
+  { name: 'timeunit-data-derived', tr: [{ type: 'formula', expr: 'datetime(2020, datum.x, 1 + datum.y)', as: 'dt' }, { type: 'timeunit', field: 'dt', maxbins: 6, as: ['u0', 'u1'] }, { type: 'formula', expr: 'datum.u1 - datum.u0', as: 'ux' }], xf: 'ux', yf: 'v', cf: 'g' },
+  { name: 'bin-strings', tr: [{ type: 'bin', field: 's', extent: [0, 20], maxbins: 5, as: ['b0', 'b1'] }], xf: 'b0', yf: 'v', cf: 'g' },
+  { name: 'collect-null-sort', tr: [{ type: 'collect', sort: { field: ['n', 'v'], order: ['descending', 'ascending'] } }], xf: 'x', yf: 'v', cf: 'g' },
+  { name: 'fold-flatten-nested', tr: [{ type: 'flatten', fields: ['o.b'], as: ['bv'] }], xf: 'x', yf: 'bv', cf: 'g' },
 ]
 
 export interface GenSpec {
@@ -105,7 +142,7 @@ export interface GenSpec {
 
 function genSpec(r: Rnd): GenSpec {
   const pipe = pick(r, PIPES)
-  const onSource = pipe.tr.length > 0 && r() < 0.35
+  const onSource = pipe.tr.length > 0 && !pipe.skipSource && r() < 0.35
   const ds = onSource ? 't' : pipe.tr.length ? 'd' : 't'
   const inlineValues = r() < 0.5
   const features: string[] = [`pipe=${pipe.name}${onSource ? '@source' : ''}`]
@@ -248,9 +285,15 @@ const GROUPS = ['A', 'B', 'C', 'D'] as const
 function genRow(r: Rnd): Row {
   const n = pick(r, [2, 2, 2, 1, 3])
   return {
-    x: int(r, 0, 10), y: int(r, 0, 10), v: int(r, 0, 20), g: pick(r, GROUPS),
+    ...oddFields(int(r, 0, 10), int(r, 0, 20)),
+    y: int(r, 0, 10), g: pick(r, GROUPS),
     arr: Array.from({ length: n }, () => int(r, 0, 10)),
   }
+}
+
+/** x, v plus the fields the new pipes read: a nested copy `o`, a numeric string `s` and a nullable number `n`. */
+function oddFields(x: number, v: number): Row {
+  return { x, v, o: { a: x, b: [v] }, s: String(v), n: v % 5 === 0 ? null : v }
 }
 
 function genWorld(r: Rnd): World {
@@ -291,7 +334,7 @@ export function applyStep(w: World, s: Step): World {
   const maxV = t.reduce((m, row) => Math.max(m, Number(row.v)), 0)
   const maxX = t.reduce((m, row) => Math.max(m, Number(row.x)), 0)
   const rowAt = (k: number): Row => ({
-    x: Math.floor(s.r[(k + 2) % 8]! * 11), y: Math.floor(s.r[(k + 3) % 8]! * 11), v: Math.floor(s.r[(k + 4) % 8]! * 21),
+    ...oddFields(Math.floor(s.r[(k + 2) % 8]! * 11), Math.floor(s.r[(k + 4) % 8]! * 21)), y: Math.floor(s.r[(k + 3) % 8]! * 11),
     g: GROUPS[Math.floor(s.r[(k + 5) % 8]! * 4)]!, arr: Array.from({ length: 1 + Math.floor(s.r[(k + 6) % 8]! * 3) }, (_, i) => (i * 3 + k) % 11),
   })
   switch (s.op) {

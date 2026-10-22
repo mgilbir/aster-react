@@ -3,604 +3,111 @@
  * Loaded by the `@aster/core/transforms` addon; the core bundle keeps only
  * the transforms a plain chart uses. Shared internals come from transform.ts.
  */
-import { ownGet, minOf, maxOf } from './util.js'
-import { activeMeter, checkRowCount, meterTick, guardedRegExp, checkRegexInput } from './limits.js'
-import type { CompiledTransform, SortSpec } from './types.js'
+import { error, hasOwnProperty, minOf, maxOf, ownGet } from './util.js'
+import { compareOf, fieldOf } from './transform-agg.js'
+import { checkRowCount, meterTick } from './limits.js'
 import type { HierNode, Row, TransformContext } from './transform.js'
-import {
-  ascendingNum, collectField, compileExprTransform, d3Range, deviationOf, eachAfter, eachBefore,
-  estimateBandwidth, extentOf, getField, groupRows, isFiniteNumber, quantileSorted, resolveNum,
-  resolveSizeParam, sortRows,
-} from './transform.js'
+import { eachAfter, eachBefore, getField, resolveSizeParam } from './transform.js'
 import { transformRegistry } from './registry.js'
+import { countpatternRows as countpatternStatsRows, densityRows, kdeRows, loessRows, quantileRows, regressionRows } from './transform-stats.js'
 import { nominalTextWidth } from './text-metrics.js'
-
-// -- kde (vega-statistics randomKDE + sampleCurve) ---------------------------
-
-// -- kde (vega-statistics randomKDE + sampleCurve) -----------------------------
-
-const SQRT2PI = Math.sqrt(2 * Math.PI)
-
-/** Gaussian (standard normal) density function — matches vega-statistics. */
-function gaussianPdf(z: number): number {
-  return Math.exp(-0.5 * z * z) / SQRT2PI
-}
-
-/** West (2009) approximation of the standard normal CDF — matches vega-statistics. */
-function gaussianCdf(value: number): number {
-  const z = Math.abs(value)
-  let cd: number
-  if (z > 37) {
-    cd = 0
-  } else {
-    const exp = Math.exp((-z * z) / 2)
-    let sum: number
-    if (z < 7.07106781186547) {
-      sum = 3.52624965998911e-02 * z + 0.700383064443688
-      sum = sum * z + 6.37396220353165
-      sum = sum * z + 33.912866078383
-      sum = sum * z + 112.079291497871
-      sum = sum * z + 221.213596169931
-      sum = sum * z + 220.206867912376
-      cd = exp * sum
-      sum = 8.83883476483184e-02 * z + 1.75566716318264
-      sum = sum * z + 16.064177579207
-      sum = sum * z + 86.7807322029461
-      sum = sum * z + 296.564248779674
-      sum = sum * z + 637.333633378831
-      sum = sum * z + 793.826512519948
-      sum = sum * z + 440.413735824752
-      cd = cd / sum
-    } else {
-      sum = z + 0.65
-      sum = z + 4 / sum
-      sum = z + 3 / sum
-      sum = z + 2 / sum
-      sum = z + 1 / sum
-      cd = exp / sum / 2.506628274631
-    }
-  }
-  return value > 0 ? 1 - cd : cd
-}
-
-
-
-/**
- * Kernel density estimator over a support array with automatic bandwidth
- * (mirrors vega-statistics `randomKDE`).
- */
-function kdeDist(support: unknown[], bandwidth: number | undefined) {
-  const kernel = { pdf: gaussianPdf, cdf: gaussianCdf }
-  let n = 0
-
-  const dist = {
-    data(_: unknown[]) {
-      support = _
-      n = _ ? _.length : 0
-      return dist.bandwidth(bandwidth)
-    },
-    bandwidth(_: number | undefined) {
-      bandwidth = _
-      if (!bandwidth && support) bandwidth = estimateBandwidth(support as number[])
-      return dist
-    },
-    pdf(x: number) {
-      let y = 0
-      for (let i = 0; i < n; ++i) {
-        y += kernel.pdf((x - Number(support[i])) / bandwidth!)
-      }
-      return y / bandwidth! / n
-    },
-    cdf(x: number) {
-      let y = 0
-      for (let i = 0; i < n; ++i) {
-        y += kernel.cdf((x - Number(support[i])) / bandwidth!)
-      }
-      return y / n
-    },
-  }
-
-  return dist.data(support)
-}
-
-const MIN_RADIANS = 0.5 * Math.PI / 180
-
-/**
- * Adaptively sample an interpolated function over a domain extent
- * (mirrors vega-statistics `sampleCurve`).
- */
-function sampleCurve(f: (x: number) => number, extent: [number, number], minSteps: number, maxSteps: number): number[][] {
-  minSteps = minSteps || 25
-  maxSteps = Math.max(minSteps, maxSteps || 200)
-  // `steps`/`maxsteps` are spec parameters: bound the sample count before
-  // evaluating the density that many times (C9).
-  checkRowCount(maxSteps, 'density steps')
-
-  const point = (x: number) => [x, f(x)]
-  const minX = extent[0]
-  const maxX = extent[1]
-  const span = maxX - minX
-  const stop = span / maxSteps
-  const prev = [point(minX)]
-  const next: number[][] = []
-
-  if (minSteps === maxSteps) {
-    // no adaptation, sample uniform grid directly and return
-    for (let i = 1; i < maxSteps; ++i) {
-      prev.push(point(minX + (i / minSteps) * span))
-    }
-    prev.push(point(maxX))
-    return prev
-  } else {
-    // sample minimum points on uniform grid
-    // then move on to perform adaptive refinement
-    next.push(point(maxX))
-    for (let i = minSteps; --i > 0;) {
-      next.push(point(minX + (i / minSteps) * span))
-    }
-  }
-
-  let p0 = prev[0]!
-  let p1 = next[next.length - 1]!
-
-  const sx = 1 / span
-  const sy = scaleY(p0[1]!, next)
-
-  while (p1) {
-    // midpoint for potential curve subdivision
-    const pm = point((p0[0]! + p1[0]!) / 2)
-    const dx = pm[0]! - p0[0]! >= stop
-
-    if (dx && angleDelta(p0, pm, p1, sx, sy) > MIN_RADIANS) {
-      next.push(pm)
-    } else {
-      p0 = p1
-      prev.push(p1)
-      next.pop()
-    }
-    p1 = next[next.length - 1]!
-  }
-
-  return prev
-}
-
-function scaleY(init: number, points: number[][]): number {
-  let ymin = init
-  let ymax = init
-  for (const p of points) {
-    const y = p[1]!
-    if (y < ymin) ymin = y
-    if (y > ymax) ymax = y
-  }
-  return 1 / (ymax - ymin)
-}
-
-function angleDelta(p: number[], q: number[], r: number[], sx: number, sy: number): number {
-  const a0 = Math.atan2(sy * (r[1]! - p[1]!), sx * (r[0]! - p[0]!))
-  const a1 = Math.atan2(sy * (q[1]! - p[1]!), sx * (q[0]! - p[0]!))
-  return Math.abs(a0 - a1)
-}
-
-function kdeRows(rows: Row[], t: Record<string, unknown>): Row[] {
-  const field = t.field as string
-  const as = (t.as as [string, string]) ?? ['value', 'density']
-  const groupby = (t.groupby as string[]) ?? []
-  const cumulative = t.cumulative === true
-  const counts = t.counts === true
-  const bandwidth = t.bandwidth as number | undefined
-  const resolve = (t.resolve as string) ?? 'independent'
-  const steps = t.steps as number | undefined
-  const minsteps0 = steps ?? ((t.minsteps as number | undefined) ?? 25)
-  const maxsteps0 = steps ?? ((t.maxsteps as number | undefined) ?? 200)
-
-  let domain = t.extent as [number, number] | undefined
-  let minsteps = minsteps0
-  let maxsteps = maxsteps0
-
-  if (resolve === 'shared') {
-    // shared densities sample a single uniform grid over the union domain
-    // (vega-transforms KDE: minsteps = maxsteps = steps || maxsteps)
-    if (!domain) {
-      const vals = collectField(rows, field).filter(isFiniteNumber)
-      domain = vals.length ? [minOf(vals), maxOf(vals)] : [0, 1]
-    }
-    minsteps = maxsteps = steps ?? maxsteps0
-  }
-
-  const groups = groupby.length ? groupRows(rows, groupby) : [rows]
-  const out: Row[] = []
-  for (const g of groups) {
-    const support = g.map((r) => r[field])
-    const dist = kdeDist(support, bandwidth)
-    const scale = counts ? g.length : 1
-    const local = domain ?? extentOf(support)
-    if (!local) continue
-    const curve = sampleCurve((x) => (cumulative ? dist.cdf(x) : dist.pdf(x)), local, minsteps, maxsteps)
-    checkRowCount(out.length + curve.length, 'kde')
-    for (const v of curve) {
-      const row: Row = {}
-      for (const k of groupby) row[k] = g[0]?.[k]
-      row[as[0]] = v[0]!
-      row[as[1]] = v[1]! * scale
-      out.push(row)
-    }
-  }
-  return out
-}
-
-// -- quantile (vega-transforms Quantile) ----------------------------------------
-
-function quantileRows(rows: Row[], t: Record<string, unknown>): Row[] {
-  const field = t.field as string
-  const as = (t.as as [string, string]) ?? ['prob', 'value']
-  const groupby = (t.groupby as string[]) ?? []
-  const step = (t.step as number | undefined) ?? 0.01
-  const EPSILON = 1e-14
-  const probs = (t.probs as number[] | undefined) ?? d3Range(step / 2, 1 - EPSILON, step)
-
-  const groups = groupby.length ? groupRows(rows, groupby) : [rows]
-  const out: Row[] = []
-  checkRowCount(groups.length * probs.length, 'quantile')
-  for (const g of groups) {
-    const values = quantilesOf(g, field, probs)
-    for (let i = 0; i < probs.length; i++) {
-      const row: Row = {}
-      for (const k of groupby) row[k] = g[0]?.[k]
-      row[as[0]] = probs[i]
-      row[as[1]] = values[i]
-      out.push(row)
-    }
-  }
-  return out
-}
-
-function quantilesOf(rows: Row[], field: string, probs: number[]): number[] {
-  const values: number[] = []
-  for (const r of rows) {
-    const raw = r[field]
-    if (raw != null && raw !== '') {
-      const v = +raw
-      if (v >= v) values.push(v)
-    }
-  }
-  values.sort(ascendingNum)
-  return probs.map((p) => quantileSorted(values, p) as number)
-}
-
-// -- regression (vega-regression, linear/constant) -------------------------------
-
-/**
- * Ordinary least squares linear regression over rows, using the same online
- * mean update order as vega-statistics `regressionLinear`.
- */
-function linearFit(rows: Row[], xField: string, yField: string): { predict: (x: number) => number } {
-  let X = 0
-  let Y = 0
-  let XY = 0
-  let X2 = 0
-  let n = 0
-  for (const d of rows) {
-    const rawU = d[xField]
-    const rawV = d[yField]
-    if (rawU == null || rawV == null) continue
-    const u = +rawU
-    const v = +rawV
-    if (u >= u && v >= v) {
-      ++n
-      X += (u - X) / n
-      Y += (v - Y) / n
-      XY += (u * v - XY) / n
-      X2 += (u * u - X2) / n
-    }
-  }
-  const delta = X2 - X * X
-  const slope = Math.abs(delta) < 1e-24 ? 0 : (XY - X * Y) / delta
-  const intercept = Y - slope * X
-  return { predict: (x) => intercept + slope * x }
-}
-
-/** Mean of valid y values (vega-regression `regressionConstant`). */
-function constantMean(rows: Row[], yField: string): number {
-  let sum = 0
-  let n = 0
-  for (const d of rows) {
-    const raw = d[yField]
-    if (raw != null && raw !== '') {
-      const v = +raw
-      if (v >= v) {
-        sum += v
-        n++
-      }
-    }
-  }
-  return n ? sum / n : NaN
-}
-
-function regressionRows(rows: Row[], t: Record<string, unknown>): Row[] {
-  const xField = t.x as string
-  const yField = t.y as string
-  const method = (t.method as string) ?? 'linear'
-  const as = (t.as as [string, string]) ?? [xField, yField]
-  const groupby = (t.groupby as string[]) ?? []
-  const order = (t.order as number | undefined) ?? 3
-  // degrees of freedom (vega-regression): linear/constant/exp/log/pow -> 1
-  const dof = method === 'poly' ? order : 1
-
-  if (method !== 'linear' && method !== 'constant') {
-    throw new Error(`[aster] unsupported regression method "${method}"`)
-  }
-
-  const groups = groupby.length ? groupRows(rows, groupby) : [rows]
-  const out: Row[] = []
-  for (const g of groups) {
-    if (g.length <= dof) continue // not enough points to fit
-    const model = linearFit(g, xField, yField)
-    if (t.params === true) {
-      // parameter vector form (coef, rSquared) — not needed by the corpus
-      continue
-    }
-    const domain = (t.extent as [number, number] | undefined) ?? extentOf(g.map((r) => r[xField]))
-    if (!domain) continue
-    if (method === 'linear' || method === 'constant') {
-      // only the two end points are needed for a straight line
-      const constantY = method === 'constant' ? constantMean(g, yField) : undefined
-      for (const x of domain) {
-        const row: Row = {}
-        for (const k of groupby) row[k] = g[0]?.[k]
-        row[as[0]] = x
-        row[as[1]] = constantY ?? model.predict(x)
-        out.push(row)
-      }
-    }
-  }
-  return out
-}
-
-// ---------------------------------------------------------------------------
-// loess (vega-statistics regression/loess.js — science.js adaptation)
-// ---------------------------------------------------------------------------
-
-const LOESS_MAX_ITERS = 2
-const LOESS_EPSILON = 1e-12
-
-/** Tricube weighting kernel. */
-function loessTricube(x: number): number {
-  return (x = 1 - x * x * x) * x * x
-}
-
-/** Ordinary least squares from normalized sums (vega-statistics `ols`). */
-function loessOls(uX: number, uY: number, uXY: number, uX2: number): [number, number] {
-  const delta = uX2 - uX * uX
-  const slope = Math.abs(delta) < 1e-24 ? 0 : (uXY - uX * uY) / delta
-  const intercept = uY - slope * uX
-  return [intercept, slope]
-}
-
-/** Advance the sliding window of nearest neighbors over sorted x values. */
-function loessUpdateInterval(xv: Float64Array, i: number, interval: [number, number]): void {
-  const val = xv[i]!
-  let left = interval[0]
-  let right = interval[1] + 1
-  if (right >= xv.length) return
-  // step right if distance to new right edge is <= distance to old left edge
-  // (step when equal to ensure movement over duplicate x values)
-  while (i > left && (xv[right]! - val) <= (val - xv[left]!)) {
-    interval[0] = ++left
-    interval[1] = right
-    ++right
-  }
-}
-
-/** Median (d3-array `median`, i.e. R-7 quantile at p=0.5). */
-function loessMedian(values: Float64Array): number {
-  const arr = Array.from(values).sort(ascendingNum)
-  return quantileSorted(arr, 0.5) as number
-}
-
-/**
- * Locally weighted scatterplot smoothing for one group, mirroring
- * vega-statistics' `loess` operation for operation (mean-centering, the robust
- * bisquare re-weighting loop, and the output pass that averages duplicate x
- * values via online update and adds the means back).
- */
-function loessFit(rows: Row[], xField: string, yField: string, bandwidth: number): number[][] {
-  // filter valid points and sort by x (vega-statistics `points` with sort)
-  const data: Array<[number, number]> = []
-  for (const d of rows) {
-    const rawU = d[xField]
-    const rawV = d[yField]
-    if (rawU == null || rawV == null) continue
-    const u = +rawU
-    const v = +rawV
-    if (u >= u && v >= v) data.push([u, v])
-  }
-  data.sort((a, b) => a[0] - b[0])
-
-  const n = data.length
-  const X = new Float64Array(n)
-  const Y = new Float64Array(n)
-  let i = 0
-  let ux = 0
-  let uy = 0
-  for (const [xv, yv] of data) {
-    X[i] = xv
-    Y[i] = yv
-    ++i
-    ux += (xv - ux) / i
-    uy += (yv - uy) / i
-  }
-  // mean center the data
-  for (i = 0; i < n; ++i) {
-    X[i] = X[i]! - ux
-    Y[i] = Y[i]! - uy
-  }
-
-  // # nearest neighbors
-  const bw = Math.max(2, ~~(bandwidth * n))
-  const yhat = new Float64Array(n)
-  const residuals = new Float64Array(n)
-  const robustWeights = new Float64Array(n).fill(1)
-
-  for (let iter = -1; ++iter <= LOESS_MAX_ITERS;) {
-    const interval: [number, number] = [0, bw - 1]
-
-    for (i = 0; i < n; ++i) {
-      const dx = X[i]!
-      const i0 = interval[0]
-      const i1 = interval[1]
-      const edge = (dx - X[i0]!) > (X[i1]! - dx) ? i0 : i1
-
-      let W = 0
-      let Xw = 0
-      let Yw = 0
-      let XY = 0
-      let X2 = 0
-      const denom = 1 / Math.abs(X[edge]! - dx || 1) // avoid singularity!
-      // O(window) per point, O(n^2) overall at a wide bandwidth: sample the clock.
-      meterTick('loess', i1 - i0 + 1)
-
-      for (let k = i0; k <= i1; ++k) {
-        const xk = X[k]!
-        const yk = Y[k]!
-        const w = loessTricube(Math.abs(dx - xk) * denom) * robustWeights[k]!
-        const xkw = xk * w
-        W += w
-        Xw += xkw
-        Yw += yk * w
-        XY += yk * xkw
-        X2 += xk * xkw
-      }
-
-      // linear regression fit
-      const [a, b] = loessOls(Xw / W, Yw / W, XY / W, X2 / W)
-      yhat[i] = a + b * dx
-      residuals[i] = Math.abs(Y[i]! - yhat[i]!)
-
-      loessUpdateInterval(X, i + 1, interval)
-    }
-
-    if (iter === LOESS_MAX_ITERS) break
-
-    const medianResidual = loessMedian(residuals)
-    if (Math.abs(medianResidual) < LOESS_EPSILON) break
-
-    for (i = 0; i < n; ++i) {
-      const arg = residuals[i]! / (6 * medianResidual)
-      // default to epsilon (rather than zero) for large deviations, keeping
-      // weights tiny but non-zero to prevent singularities
-      let w: number
-      robustWeights[i] = arg >= 1 ? LOESS_EPSILON : ((w = 1 - arg * arg) * w)
-    }
-  }
-
-  // generate smoothed output points, averaging repeated x values
-  const out: number[][] = []
-  let cnt = 0
-  let prev: number[] = []
-  for (i = 0; i < n; ++i) {
-    const v = X[i]! + ux
-    if (prev[0] === v) {
-      prev[1] = prev[1]! + (yhat[i]! - prev[1]!) / ++cnt
-    } else {
-      cnt = 0
-      prev[1] = prev[1]! + uy
-      prev = [v, yhat[i]!]
-      out.push(prev)
-    }
-  }
-  prev[1] = prev[1]! + uy
-  return out
-}
-
-function loessRows(rows: Row[], t: Record<string, unknown>): Row[] {
-  const xField = t.x as string
-  const yField = t.y as string
-  const groupby = (t.groupby as string[]) ?? []
-  const bandwidth = (t.bandwidth as number | undefined) ?? 0.3
-  const as = (t.as as [string, string] | undefined) ?? [xField, yField]
-
-  const groups = groupby.length ? groupRows(rows, groupby) : [rows]
-  const out: Row[] = []
-  for (const g of groups) {
-    const pts = loessFit(g, xField, yField, bandwidth)
-    for (const p of pts) {
-      const row: Row = {}
-      for (const k of groupby) row[k] = g[0]?.[k]
-      row[as[0]] = p[0]
-      row[as[1]] = p[1]
-      out.push(row)
-    }
-  }
-  return out
-}
-
 
 // -- pack / partition / treemap (d3-hierarchy layouts) -----------------------
 
 
 
-/** Sort the children of every node (vega HierarchyLayout: `root.sort(compare)`). */
-function sortTreeChildren(root: HierNode, sort: SortSpec): void {
-  const fields = Array.isArray(sort.field) ? sort.field : [sort.field]
-  const orders = Array.isArray(sort.order) ? sort.order : [sort.order ?? 'ascending']
-  const field = fields[0] as string
-  const dir = (orders[0] ?? 'ascending') === 'descending' ? -1 : 1
-  const ascending = (u: unknown, v: unknown): number => {
-    const ua = u as number | string
-    const va = v as number | string
-    if ((ua < va || u == null) && v != null) return -1
-    if ((ua > va || v == null) && u != null) return 1
-    return 0
-  }
-  eachBefore(root, (node) => {
-    const children = node.children
-    if (children.length > 1) {
-      const idx = new Map<HierNode, number>()
-      children.forEach((c, i) => idx.set(c, i))
-      children.sort((a, b) => {
-        const c = ascending(a.data[field], b.data[field]) * dir
-        return c !== 0 ? c : idx.get(a)! - idx.get(b)!
-      })
-    }
-  })
+// -- vega-hierarchy HierarchyLayout (shared by pack / partition / treemap) --------
+
+/** The tree a preceding `stratify` built on this data source (vega: `pulse.source.root`). */
+function backingTree(name: string, ctx: TransformContext, sourceName?: string): HierNode {
+  const root = sourceName ? (ctx.hierarchies?.get(sourceName) as HierNode | undefined) : undefined
+  if (!root) error(`[aster] ${name} transform requires a backing tree data source.`)
+  return root
 }
 
-/** The vega `pack` transform: layout the stratify-built tree and write x/y/r/depth/children. */
-function packRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext, sourceName?: string): Row[] {
-  const root = sourceName ? (ctx.hierarchies?.get(sourceName) as HierNode | undefined) : undefined
-  if (!root) {
-    throw new Error('[aster] pack transform requires a preceding stratify transform on the same data source')
+/**
+ * vega HierarchyLayout prelude: `root.sum(field)` or `root.count()`, then
+ * `root.sort(stableCompare(sort, d => d.data))` (ties keep input order).
+ */
+function prepareTree(root: HierNode, rows: Row[], p: Record<string, unknown>): void {
+  if (p.field) {
+    const f = fieldOf(p.field)
+    // d3 `node.sum`: a node's own value (coerced, NaN -> 0) plus its descendants'
+    eachAfter(root, (node) => {
+      let sum = +(f(node.data) as number) || 0
+      for (let i = node.children.length; --i >= 0;) sum += node.children[i]!.value
+      node.value = sum
+    })
+  } else {
+    // d3 `node.count`: the number of leaves below a node
+    eachAfter(root, (node) => {
+      let sum = 0
+      const children = node.children
+      if (!children.length) sum = 1
+      else for (let i = children.length; --i >= 0;) sum += children[i]!.value
+      node.value = sum
+    })
   }
-  const as = (t.as as string[] | undefined) ?? ['x', 'y', 'r', 'depth', 'children']
-  const field = t.field as string | undefined
-  const radius = t.radius as string | undefined
-  const size = t.size as number[] | undefined
-  const padding = (t.padding as number | undefined) ?? 0
-  const sort = t.sort as SortSpec | undefined
+  const cmp = compareOf(p.sort) as unknown as ((a: unknown, b: unknown) => number) | null
+  if (cmp) {
+    const order = new Map<Row, number>()
+    rows.forEach((r, i) => order.set(r, i))
+    // as upstream, the comparator reads the hierarchy NODES (`value`, `depth`, `data.size`, ...), not the
+    // tuples: a plain tuple field such as `size` ties everywhere and leaves the stratify order (ties -> input order)
+    const stable = (a: HierNode, b: HierNode): number => cmp(a, b) || (order.get(a.data) ?? 0) - (order.get(b.data) ?? 0)
+    eachBefore(root, (node) => { if (node.children.length) node.children.sort(stable) })
+  }
+}
 
-  // root.sum(field): each node's value is its own plus its descendants'.
-  eachAfter(root, (node) => {
-    let sum = field != null ? Number(node.data[field]) || 0 : 1
-    for (const c of node.children) sum += c.value
-    node.value = sum
-  })
-
-  if (sort?.field) sortTreeChildren(root, sort)
-
-  const dx = size?.[0] ?? 1
-  const dy = size?.[1] ?? 1
-  packLayout(root, dx, dy, padding, radius)
-
+/**
+ * vega HierarchyLayout epilogue: write the layout fields onto COPIES of the
+ * tuples (`as` defaults to `fields`; the last field is the child count). Only the
+ * transform's own output fields are written, and the input rows stay untouched.
+ */
+function writeTree(rows: Row[], root: HierNode, fields: string[], as: string[]): Row[] {
+  const out = new Array<Row | undefined>(rows.length)
+  let byData: Map<Row, Row> | undefined
+  const n = fields.length - 1
   eachBefore(root, (node) => {
-    const d = node.data
-    d[as[0]!] = node.x
-    d[as[1]!] = node.y
-    d[as[2]!] = node.r
-    d[as[3]!] = node.depth
-    d[as[4]!] = node.children.length
+    // the tree remembers the position of each tuple in the rows it was built from
+    const i = node.idx
+    let t: Row | undefined
+    if (i !== undefined && i >= 0 && rows[i] === node.data) {
+      t = out[i]
+      if (!t) out[i] = t = { ...node.data }
+    } else {
+      byData ??= new Map()
+      t = byData.get(node.data)
+      if (!t) byData.set(node.data, (t = { ...node.data }))
+    }
+    for (let k = 0; k < n; ++k) t[as[k]!] = (node as unknown as Record<string, unknown>)[fields[k]!]
+    t[as[n]!] = node.children.length
   })
+  if (!byData && out.every((t) => t !== undefined)) return out as Row[]
+  return rows.map((r, i) => out[i] ?? byData?.get(r) ?? r)
+}
 
-  return rows
+const hasParam = (p: Record<string, unknown>, name: string): boolean => name in p
+
+/** The vega `pack` transform: d3-hierarchy circle packing of the stratify-built tree. */
+function packRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext, sourceName?: string): Row[] {
+  const root = backingTree('Pack', ctx, sourceName)
+  const fields = ['x', 'y', 'r', 'depth', 'children']
+  const as = (t.as as string[] | undefined) ?? fields
+  prepareTree(root, rows, t)
+
+  let radius: ((node: HierNode) => unknown) | null = null
+  let dx = 1
+  let dy = 1
+  let padding = 0
+  if (hasParam(t, 'radius') && t.radius != null) {
+    const f = fieldOf(t.radius)
+    radius = (node) => f(node)
+  }
+  if (hasParam(t, 'size')) { const s = t.size as number[]; dx = +s[0]!; dy = +s[1]! }
+  if (hasParam(t, 'padding')) padding = +(t.padding as number)
+  packLayout(root, dx, dy, padding, radius)
+  return writeTree(rows, root, fields, as)
 }
 
 // -- d3-hierarchy pack layout -------------------------------------------------
@@ -611,34 +118,33 @@ function packLcg(): () => number {
   return () => (s = (1664525 * s + 1013904223) % 4294967296) / 4294967296
 }
 
-function packLayout(root: HierNode, dx: number, dy: number, padding: number, radius?: string): void {
+/** d3-hierarchy `pack()(root)`. */
+function packLayout(root: HierNode, dx: number, dy: number, padding: number, radius: ((node: HierNode) => unknown) | null): void {
   const random = packLcg()
   root.x = dx / 2
   root.y = dy / 2
 
-  // radiusLeaf: leaves get r from the radius accessor (default sqrt(value)).
-  eachBefore(root, (node) => {
-    if (!node.children.length) {
-      node.r = radius != null
-        ? Math.max(0, Number(node.data[radius]) || 0)
-        : Math.max(0, Math.sqrt(node.value) || 0)
-    }
-  })
-
-  // packChildrenRandom(padding, k, random) twice, as d3 does.
-  eachAfter(root, packChildrenOnce(0, 1, random))
-  eachAfter(root, packChildrenOnce(padding, root.r / Math.min(dx, dy), random))
-
-  // translateChild: scale everything into the target box around the root.
-  const k = Math.min(dx, dy) / (2 * root.r)
-  eachBefore(root, (node) => {
-    node.r *= k
+  const radiusLeaf = (rf: (node: HierNode) => unknown) => (node: HierNode): void => {
+    if (!node.children.length) node.r = Math.max(0, +(rf(node) as number) || 0)
+  }
+  const translateChild = (k: number) => (node: HierNode): void => {
     const parent = node.parent
+    node.r *= k
     if (parent) {
       node.x = parent.x + k * node.x
       node.y = parent.y + k * node.y
     }
-  })
+  }
+  if (radius) {
+    eachBefore(root, radiusLeaf(radius))
+    eachAfter(root, packChildrenOnce(padding, 0.5, random))
+    eachBefore(root, translateChild(1))
+  } else {
+    eachBefore(root, radiusLeaf((node) => Math.sqrt(node.value)))
+    eachAfter(root, packChildrenOnce(0, 1, random))
+    eachAfter(root, packChildrenOnce(padding, root.r / Math.min(dx, dy), random))
+    eachBefore(root, translateChild(Math.min(dx, dy) / (2 * root.r)))
+  }
 }
 
 function packChildrenOnce(padValue: number, k: number, random: () => number) {
@@ -953,266 +459,113 @@ function packEncloseBasis(B: HierNode[]): HierNode {
 }
 
 // ---------------------------------------------------------------------------
-// partition (d3-hierarchy partition layout)
-//
-// The vega `partition` transform wraps d3-hierarchy's `partition` layout,
-// which assigns x0/y0/x1/y1 to every node. The layout is used for sunburst
-// and icicle charts: the x-axis represents proportional value (angular span
-// for sunburst) and the y-axis represents depth bands (radial bands).
-//
-// The implementation follows d3-hierarchy@3.1.2 source:
-//   src/partition.js       — partition layout (dx/dy/padding/round)
-//   src/treemap/dice.js    — horizontal splitting
-//   src/treemap/round.js   — integer rounding
+// treemap tiling + partition (d3-hierarchy@3.1.2 treemap/*.js, partition.js)
 // ---------------------------------------------------------------------------
 
-/**
- * d3-hierarchy partition dice: split children along the x-axis using the
- * parent's accumulated value as denominator (matching d3-hierarchy's
- * treemap/dice.js which uses `parent.value`).
- */
-function partitionDice(parent: HierNode, x0: number, y0: number, x1: number, y1: number): void {
-  const nodes = parent.children
-  const n = nodes.length
-  if (!n) return
-  const k = parent.value && (x1 - x0) / parent.value
-  let x = x0
-  for (let i = 0; i < n; i++) {
+type Tile = ((parent: HierNode, x0: number, y0: number, x1: number, y1: number) => void) & { ratio?: (x: number) => Tile }
+
+/** d3 `treemap/dice.js` over `nodes[i0..i1)` whose values sum to `value`: split along the x axis. */
+function diceRange(nodes: HierNode[], i0: number, i1: number, value: number, x0: number, y0: number, x1: number, y1: number): void {
+  const k = value && (x1 - x0) / value
+  for (let i = i0; i < i1; ++i) {
     const node = nodes[i]!
     node.y0 = y0
     node.y1 = y1
-    node.x0 = x
-    x += node.value * k
-    node.x1 = x
-  }
-}
-
-/** The vega `partition` transform: layout the stratify-built tree via d3 partition. */
-function partitionRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext, sourceName?: string): Row[] {
-  const root = sourceName ? (ctx.hierarchies?.get(sourceName) as HierNode | undefined) : undefined
-  if (!root) {
-    throw new Error('[aster] partition transform requires a preceding stratify transform on the same data source')
-  }
-  const field = t.field as string | undefined
-  const sort = t.sort as SortSpec | undefined
-  const round = t.round === true
-  const padding = (t.padding as number) ?? 0
-  const as = (t.as as string[]) ?? ['x0', 'y0', 'x1', 'y1', 'depth', 'children']
-  const size = t.size as number[] | undefined
-  // d3-hierarchy default partition size is [1, 1]
-  const dx = size?.[0] ?? 1
-  const dy = size?.[1] ?? 1
-
-  // root.sum(field): each node's value is its own plus its descendants'.
-  eachAfter(root, (node) => {
-    let sum = field != null ? Number(node.data[field]) || 0 : 1
-    for (const c of node.children) sum += c.value
-    node.value = sum
-  })
-
-  if (sort?.field) sortTreeChildren(root, sort)
-
-  // d3-hierarchy partition layout
-  const n = root.height + 1
-  root.x0 = padding
-  root.y0 = padding
-  root.x1 = dx
-  root.y1 = dy / n
-
-  eachBefore(root, (node) => {
-    if (node.children.length) {
-      // d3-hierarchy partition: treemapDice splits children along x-axis
-      // within the next depth band (y range). Unlike the treemap version,
-      // the partition dice uses parent.value (not sum of children) as the
-      // denominator because the parent's x range [x0,x1] represents its
-      // full accumulated value.
-      const y0 = dy * (node.depth + 1) / n
-      const y1 = dy * (node.depth + 2) / n
-      partitionDice(node, node.x0!, y0, node.x1!, y1)
-    }
-    // Apply padding and clamping (d3-hierarchy partition positionNode)
-    let x0 = node.x0!
-    let y0 = node.y0!
-    let x1 = node.x1! - padding
-    let y1 = node.y1! - padding
-    if (x1 < x0) x0 = x1 = (x0 + x1) / 2
-    if (y1 < y0) y0 = y1 = (y0 + y1) / 2
     node.x0 = x0
-    node.y0 = y0
+    node.x1 = x0 += node.value * k
+  }
+}
+
+/** d3 `treemap/slice.js` over `nodes[i0..i1)` whose values sum to `value`: split along the y axis. */
+function sliceRange(nodes: HierNode[], i0: number, i1: number, value: number, x0: number, y0: number, x1: number, y1: number): void {
+  const k = value && (y1 - y0) / value
+  for (let i = i0; i < i1; ++i) {
+    const node = nodes[i]!
+    node.x0 = x0
     node.x1 = x1
-    node.y1 = y1
-  })
-
-  // Round if requested
-  if (round) {
-    eachBefore(root, (node) => {
-      node.x0 = Math.round(node.x0!)
-      node.y0 = Math.round(node.y0!)
-      node.x1 = Math.round(node.x1!)
-      node.y1 = Math.round(node.y1!)
-    })
+    node.y0 = y0
+    node.y1 = y0 += node.value * k
   }
-
-  // Write results back to rows (mirrors vega HierarchyLayout setFields)
-  eachBefore(root, (node) => {
-    const d = node.data
-    d[as[0]!] = node.x0
-    d[as[1]!] = node.y0
-    d[as[2]!] = node.x1
-    d[as[3]!] = node.y1
-    d[as[4]!] = node.depth
-    d[as[5]!] = node.children.length
-  })
-
-  return rows
 }
 
-// ---------------------------------------------------------------------------
-// treemap (d3-hierarchy treemap layout — squarify tiling)
-//
-// The vega `treemap` transform wraps d3-hierarchy's `treemap` layout, which
-// assigns x0/y0/x1/y1 to every node. The layout needs the tree that a
-// preceding `stratify` transform built; we thread it through
-// `TransformContext.hierarchies` just like `pack` does.
-//
-// The implementation follows d3-hierarchy@3.1.2 source:
-//   src/treemap/index.js   — positionNode + paddingStack
-//   src/treemap/squarify.js — squarifyRatio + worst + row grouping
-//   src/treemap/dice.js    — horizontal splitting
-//   src/treemap/slice.js   — vertical splitting
-//   src/treemap/round.js   — integer rounding
-// ---------------------------------------------------------------------------
-
-const PHI = (1 + Math.sqrt(5)) / 2
-
-/** The vega `treemap` transform: layout the stratify-built tree via squarify. */
-function treemapRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext, sourceName?: string): Row[] {
-  const root = sourceName ? (ctx.hierarchies?.get(sourceName) as HierNode | undefined) : undefined
-  if (!root) {
-    throw new Error('[aster] treemap transform requires a preceding stratify transform on the same data source')
-  }
-  const field = t.field as string | undefined
-  const sort = t.sort as SortSpec | undefined
-  const round = t.round === true
-  const padding = (t.padding as number) ?? 0
-  const paddingInner = (t.paddingInner as number) ?? padding
-  const paddingOuter = (t.paddingOuter as number) ?? padding
-  const paddingTop = (t.paddingTop as number) ?? paddingOuter
-  const paddingRight = (t.paddingRight as number) ?? paddingOuter
-  const paddingBottom = (t.paddingBottom as number) ?? paddingOuter
-  const paddingLeft = (t.paddingLeft as number) ?? paddingOuter
-  const as = (t.as as string[]) ?? ['x0', 'y0', 'x1', 'y1']
-  const ratio = (t.ratio as number) ?? PHI
-  const size = t.size as number[] | undefined
-  // d3-hierarchy default treemap size is [1, 1]
-  const dx = size?.[0] ?? 1
-  const dy = size?.[1] ?? 1
-
-  // root.sum(field): each node's value is its own plus its descendants'.
-  eachAfter(root, (node) => {
-    let sum = field != null ? Number(node.data[field]) || 0 : 1
-    for (const c of node.children) sum += c.value
-    node.value = sum
-  })
-
-  if (sort?.field) sortTreeChildren(root, sort)
-
-  // --- d3-hierarchy treemap: eachBefore(positionNode) -----------------------
-  // Root initial bounds
-  root.x0 = 0; root.y0 = 0; root.x1 = dx; root.y1 = dy
-
-  // paddingStack[i] stores the half-inner-padding to shrink nodes at depth i.
-  // depth 0 is always 0 (root is not shrunk).
-  const paddingStack = [0]
-
-  eachBefore(root, (node) => {
-    // 1. Shrink node bounds by the padding stored for this depth.
-    const p = paddingStack[node.depth] ?? 0
-    let nx0 = node.x0! + p
-    let ny0 = node.y0! + p
-    let nx1 = node.x1! - p
-    let ny1 = node.y1! - p
-    if (nx1 < nx0) nx0 = nx1 = (nx0 + nx1) / 2
-    if (ny1 < ny0) ny0 = ny1 = (ny0 + ny1) / 2
-    node.x0 = nx0; node.y0 = ny0; node.x1 = nx1; node.y1 = ny1
-
-    // 2. If this node has children, compute the tiling area and tile them.
-    if (node.children.length) {
-      // Store inner padding for children's depth
-      const ip = paddingInner / 2
-      paddingStack[node.depth + 1] = ip
-
-      // Outer padding minus inner-half for the tiling area
-      let tx0 = nx0 + paddingLeft - ip
-      let ty0 = ny0 + paddingTop - ip
-      let tx1 = nx1 - paddingRight - ip
-      let ty1 = ny1 - paddingBottom - ip
-      if (tx1 < tx0) tx0 = tx1 = (tx0 + tx1) / 2
-      if (ty1 < ty0) ty0 = ty1 = (ty0 + ty1) / 2
-
-      treemapSquarify(node, tx0, ty0, tx1, ty1, ratio)
-    }
-  })
-
-  // Round if requested
-  if (round) {
-    eachBefore(root, (node) => {
-      node.x0 = Math.round(node.x0!)
-      node.y0 = Math.round(node.y0!)
-      node.x1 = Math.round(node.x1!)
-      node.y1 = Math.round(node.y1!)
-    })
-  }
-
-  // Write results back to rows
-  eachBefore(root, (node) => {
-    const d = node.data
-    d[as[0]!] = node.x0
-    d[as[1]!] = node.y0
-    d[as[2]!] = node.x1
-    d[as[3]!] = node.y1
-    d.x = (node.x0! + node.x1!) / 2
-    d.y = (node.y0! + node.y1!) / 2
-    d.width = node.x1! - node.x0!
-    d.height = node.y1! - node.y0!
-  })
-
-  return rows
+/** d3 `treemap/dice.js`: split the children along the x axis. */
+function treemapDice(parent: { children: HierNode[]; value: number }, x0: number, y0: number, x1: number, y1: number): void {
+  diceRange(parent.children, 0, parent.children.length, parent.value, x0, y0, x1, y1)
 }
 
-/**
- * Squarify tiling — port of d3-hierarchy's `squarifyRatio`.
- *
- * Groups children into rows that minimise the worst aspect ratio, then
- * places each row as a slice or dice within the available rectangle.
- */
-function treemapSquarify(
-  parent: HierNode,
-  x0: number, y0: number, x1: number, y1: number,
-  ratio: number,
-): void {
+/** d3 `treemap/slice.js`: split the children along the y axis. */
+function treemapSlice(parent: { children: HierNode[]; value: number }, x0: number, y0: number, x1: number, y1: number): void {
+  sliceRange(parent.children, 0, parent.children.length, parent.value, x0, y0, x1, y1)
+}
+
+/** d3 `treemap/sliceDice.js`. */
+function treemapSliceDice(parent: HierNode, x0: number, y0: number, x1: number, y1: number): void {
+  (parent.depth & 1 ? treemapSlice : treemapDice)(parent, x0, y0, x1, y1)
+}
+
+/** d3 `treemap/binary.js`: balanced binary partition of the children by value. */
+function treemapBinary(parent: HierNode, x0: number, y0: number, x1: number, y1: number): void {
   const nodes = parent.children
   const n = nodes.length
-  if (!n) return
+  const sums = new Array<number>(n + 1)
+  let sum = 0
+  sums[0] = 0
+  for (let i = 0; i < n; ++i) sums[i + 1] = sum += nodes[i]!.value
 
+  const partition = (i: number, j: number, value: number, ax0: number, ay0: number, ax1: number, ay1: number): void => {
+    if (i >= j - 1) {
+      const node = nodes[i]!
+      node.x0 = ax0; node.y0 = ay0
+      node.x1 = ax1; node.y1 = ay1
+      return
+    }
+    const valueOffset = sums[i]!
+    const valueTarget = (value / 2) + valueOffset
+    let k = i + 1
+    let hi = j - 1
+    while (k < hi) {
+      const mid = k + hi >>> 1
+      if (sums[mid]! < valueTarget) k = mid + 1
+      else hi = mid
+    }
+    if ((valueTarget - sums[k - 1]!) < (sums[k]! - valueTarget) && i + 1 < k) --k
+    const valueLeft = sums[k]! - valueOffset
+    const valueRight = value - valueLeft
+    if ((ax1 - ax0) > (ay1 - ay0)) {
+      const xk = value ? (ax0 * valueRight + ax1 * valueLeft) / value : ax1
+      partition(i, k, valueLeft, ax0, ay0, xk, ay1)
+      partition(k, j, valueRight, xk, ay0, ax1, ay1)
+    } else {
+      const yk = value ? (ay0 * valueRight + ay1 * valueLeft) / value : ay1
+      partition(i, k, valueLeft, ax0, ay0, ax1, yk)
+      partition(k, j, valueRight, ax0, yk, ax1, ay1)
+    }
+  }
+  partition(0, n, parent.value, x0, y0, x1, y1)
+}
+
+interface SquarifyRow { value: number; dice: boolean; children: HierNode[] }
+const PHI = (1 + Math.sqrt(5)) / 2
+
+/** d3 `treemap/squarify.js` `squarifyRatio`. */
+function squarifyRatio(ratio: number, parent: HierNode, x0: number, y0: number, x1: number, y1: number, record: boolean): SquarifyRow[] & { ratio?: number } {
+  const rows: SquarifyRow[] = []
+  const nodes = parent.children
   let i0 = 0
   let i1 = 0
+  const n = nodes.length
   let value = parent.value
-
   while (i0 < n) {
-    let dx = x1 - x0
-    let dy = y1 - y0
-
+    const dx = x1 - x0
+    const dy = y1 - y0
     // Find the next non-empty node.
     let sumValue: number
-    do { sumValue = nodes[i1]!.value; i1++ } while (!sumValue && i1 < n)
+    do sumValue = nodes[i1++]!.value; while (!sumValue && i1 < n)
     let minValue = sumValue
     let maxValue = sumValue
-
     const alpha = Math.max(dy / dx, dx / dy) / (value * ratio)
     let beta = sumValue * sumValue * alpha
     let minRatio = Math.max(maxValue / beta, beta / minValue)
-
     // Keep adding nodes while the aspect ratio maintains or improves.
     for (; i1 < n; ++i1) {
       const nodeValue = nodes[i1]!.value
@@ -1224,70 +577,162 @@ function treemapSquarify(
       if (newRatio > minRatio) { sumValue -= nodeValue; break }
       minRatio = newRatio
     }
-
-    // Position the row (slice or dice) and advance the remaining rectangle.
-    dx = x1 - x0; dy = y1 - y0
-    const dice = dx < dy
-    if (dice) {
-      // dice: children split the x-axis, row spans a y-band
-      const yEnd = value ? y0 + dy * sumValue / value : y1
-      treemapDice(nodes, i0, i1, x0, y0, x1, yEnd)
-      y0 = yEnd
-    } else {
-      // slice: children split the y-axis, row spans an x-band
-      const xEnd = value ? x0 + dx * sumValue / value : x1
-      treemapSlice(nodes, i0, i1, x0, y0, xEnd, y1)
-      x0 = xEnd
-    }
-
+    // Position and record the row orientation.
+    // (only resquarify replays the rows later; plain squarify skips the per-row allocation)
+    if (record) rows.push({ value: sumValue, dice: dx < dy, children: nodes.slice(i0, i1) })
+    if (dx < dy) diceRange(nodes, i0, i1, sumValue, x0, y0, x1, value ? y0 += dy * sumValue / value : y1)
+    else sliceRange(nodes, i0, i1, sumValue, x0, y0, value ? x0 += dx * sumValue / value : x1, y1)
     value -= sumValue
     i0 = i1
   }
+  return rows
 }
 
-/**
- * Horizontal splitting — port of d3-hierarchy's `treemap/dice.js`.
- * Children split the x-axis within [x0, y0]–[x1, y1].
- */
-function treemapDice(
-  nodes: HierNode[], i0: number, i1: number,
-  x0: number, y0: number, x1: number, y1: number,
-): void {
-  const n = i1 - i0
-  if (n <= 0) return
-  // Compute total value of the slice
-  let total = 0
-  for (let i = i0; i < i1; i++) total += nodes[i]!.value
-  const k = total && (x1 - x0) / total
-  let x = x0
-  for (let i = i0; i < i1; i++) {
-    const node = nodes[i]!
-    node.x0 = x; node.y0 = y0; node.y1 = y1
-    x += node.value * k
-    node.x1 = x
-  }
+function squarifyTile(ratio: number): Tile {
+  const squarify = ((parent, x0, y0, x1, y1) => { squarifyRatio(ratio, parent, x0, y0, x1, y1, false) }) as Tile
+  squarify.ratio = (x) => squarifyTile((x = +x) > 1 ? x : 1)
+  return squarify
 }
 
-/**
- * Vertical splitting — port of d3-hierarchy's `treemap/slice.js`.
- * Children split the y-axis within [x0, y0]–[x1, y1].
- */
-function treemapSlice(
-  nodes: HierNode[], i0: number, i1: number,
-  x0: number, y0: number, x1: number, y1: number,
-): void {
-  const n = i1 - i0
-  if (n <= 0) return
-  let total = 0
-  for (let i = i0; i < i1; i++) total += nodes[i]!.value
-  const k = total && (y1 - y0) / total
-  let y = y0
-  for (let i = i0; i < i1; i++) {
-    const node = nodes[i]!
-    node.x0 = x0; node.x1 = x1; node.y0 = y
-    y += node.value * k
-    node.y1 = y
+function resquarifyTile(ratio: number): Tile {
+  const resquarify = ((parent, x0, y0, x1, y1) => {
+    const node = parent as HierNode & { _squarify?: ReturnType<typeof squarifyRatio> }
+    const rows = node._squarify
+    if (rows && rows.ratio === ratio) {
+      let value = parent.value
+      for (const row of rows) {
+        const nodes = row.children
+        row.value = 0
+        for (let i = 0, n = nodes.length; i < n; ++i) row.value += nodes[i]!.value
+        if (row.dice) treemapDice(row, x0, y0, x1, value ? y0 += (y1 - y0) * row.value / value : y1)
+        else treemapSlice(row, x0, y0, value ? x0 += (x1 - x0) * row.value / value : x1, y1)
+        value -= row.value
+      }
+    } else {
+      const fresh = squarifyRatio(ratio, parent, x0, y0, x1, y1, true)
+      fresh.ratio = ratio
+      node._squarify = fresh
+    }
+  }) as Tile
+  resquarify.ratio = (x) => resquarifyTile((x = +x) > 1 ? x : 1)
+  return resquarify
+}
+
+const TILES: Record<string, Tile> = {
+  binary: treemapBinary,
+  dice: treemapDice as unknown as Tile,
+  slice: treemapSlice as unknown as Tile,
+  slicedice: treemapSliceDice,
+  squarify: squarifyTile(PHI),
+  resquarify: resquarifyTile(PHI),
+}
+
+const roundNode = (node: HierNode): void => {
+  node.x0 = Math.round(node.x0!)
+  node.y0 = Math.round(node.y0!)
+  node.x1 = Math.round(node.x1!)
+  node.y1 = Math.round(node.y1!)
+}
+
+/** The vega `partition` transform: d3-hierarchy partition of the stratify-built tree. */
+function partitionRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext, sourceName?: string): Row[] {
+  const root = backingTree('Partition', ctx, sourceName)
+  const fields = ['x0', 'y0', 'x1', 'y1', 'depth', 'children']
+  const as = (t.as as string[] | undefined) ?? fields
+  prepareTree(root, rows, t)
+
+  let dx = 1
+  let dy = 1
+  let padding = 0
+  let round = false
+  if (hasParam(t, 'size')) { const s = t.size as number[]; dx = +s[0]!; dy = +s[1]! }
+  if (hasParam(t, 'round')) round = !!t.round
+  if (hasParam(t, 'padding')) padding = +(t.padding as number)
+
+  const n = root.height + 1
+  root.x0 = root.y0 = padding
+  root.x1 = dx
+  root.y1 = dy / n
+  eachBefore(root, (node) => {
+    if (node.children.length) treemapDice(node, node.x0!, dy * (node.depth + 1) / n, node.x1!, dy * (node.depth + 2) / n)
+    let x0 = node.x0!
+    let y0 = node.y0!
+    let x1 = node.x1! - padding
+    let y1 = node.y1! - padding
+    if (x1 < x0) x0 = x1 = (x0 + x1) / 2
+    if (y1 < y0) y0 = y1 = (y0 + y1) / 2
+    node.x0 = x0
+    node.y0 = y0
+    node.x1 = x1
+    node.y1 = y1
+  })
+  if (round) eachBefore(root, roundNode)
+  return writeTree(rows, root, fields, as)
+}
+
+/** The vega `treemap` transform: d3-hierarchy treemap of the stratify-built tree. */
+function treemapRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext, sourceName?: string): Row[] {
+  const root = backingTree('Treemap', ctx, sourceName)
+  const fields = ['x0', 'y0', 'x1', 'y1', 'depth', 'children']
+  const as = (t.as as string[] | undefined) ?? fields
+  prepareTree(root, rows, t)
+
+  // d3 treemap() state, set from the params in vega's order (later ones win)
+  let tile: Tile = TILES.squarify!
+  let round = false
+  let dx = 1
+  let dy = 1
+  let paddingInner = 0
+  let paddingTop = 0
+  let paddingRight = 0
+  let paddingBottom = 0
+  let paddingLeft = 0
+  if (hasParam(t, 'method')) {
+    const m = t.method as string
+    if (hasOwnProperty(TILES, m)) tile = TILES[m]!
+    else error('Unrecognized Treemap layout method: ' + m)
   }
+  if (hasParam(t, 'ratio') && tile.ratio) tile = tile.ratio(t.ratio as number)
+  if (hasParam(t, 'size')) { const s = t.size as number[]; dx = +s[0]!; dy = +s[1]! }
+  if (hasParam(t, 'round')) round = !!t.round
+  const outer = (x: unknown): void => { paddingTop = paddingRight = paddingBottom = paddingLeft = +(x as number) }
+  if (hasParam(t, 'padding')) { paddingInner = +(t.padding as number); outer(t.padding) }
+  if (hasParam(t, 'paddingInner')) paddingInner = +(t.paddingInner as number)
+  if (hasParam(t, 'paddingOuter')) outer(t.paddingOuter)
+  if (hasParam(t, 'paddingTop')) paddingTop = +(t.paddingTop as number)
+  if (hasParam(t, 'paddingRight')) paddingRight = +(t.paddingRight as number)
+  if (hasParam(t, 'paddingBottom')) paddingBottom = +(t.paddingBottom as number)
+  if (hasParam(t, 'paddingLeft')) paddingLeft = +(t.paddingLeft as number)
+
+  root.x0 = root.y0 = 0
+  root.x1 = dx
+  root.y1 = dy
+  const paddingStack: number[] = [0]
+  eachBefore(root, (node) => {
+    let p = paddingStack[node.depth]!
+    let x0 = node.x0! + p
+    let y0 = node.y0! + p
+    let x1 = node.x1! - p
+    let y1 = node.y1! - p
+    if (x1 < x0) x0 = x1 = (x0 + x1) / 2
+    if (y1 < y0) y0 = y1 = (y0 + y1) / 2
+    node.x0 = x0
+    node.y0 = y0
+    node.x1 = x1
+    node.y1 = y1
+    if (node.children.length) {
+      p = paddingStack[node.depth + 1] = paddingInner / 2
+      x0 += paddingLeft - p
+      y0 += paddingTop - p
+      x1 -= paddingRight - p
+      y1 -= paddingBottom - p
+      if (x1 < x0) x0 = x1 = (x0 + x1) / 2
+      if (y1 < y0) y0 = y1 = (y0 + y1) / 2
+      tile(node, x0, y0, x1, y1)
+    }
+  })
+  if (round) eachBefore(root, roundNode)
+  return writeTree(rows, root, fields, as)
 }
 
 // -- wordcloud (d3-cloud layout, simplified) ---------------------------------
@@ -2435,6 +1880,7 @@ function voronoiRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
 
 // -- addon registration ------------------------------------------------------
 transformRegistry.set('kde', kdeRows)
+transformRegistry.set('density', (rows, t, ctx) => densityRows(rows, t, ctx?.datasets))
 transformRegistry.set('quantile', quantileRows)
 transformRegistry.set('regression', regressionRows)
 transformRegistry.set('loess', loessRows)
@@ -2499,40 +1945,6 @@ function crossRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContex
         out.push(cand)
       }
     }
-  }
-  return out
-}
-
-// ---------------------------------------------------------------------------
-// countpattern (vega CountPattern)
-// ---------------------------------------------------------------------------
-
-function countpatternRows(rows: Row[], t: Record<string, unknown>): Row[] {
-  const field = t.field as string
-  const as = (t.as as [string, string]) ?? ['text', 'count']
-  const cs = t.case as string | undefined
-  // Regex guard (safety deviation): pattern and per-row input lengths are capped
-  // under limits; catastrophic backtracking itself cannot be interrupted.
-  const match = guardedRegExp((t.pattern as string | undefined) ?? '[\\w\']+', 'g')
-  const stop = guardedRegExp('^' + (t.stopwords as string | undefined ?? '') + '$', 'i')
-  const tokenize = (text: string): string[] => {
-    let s = text
-    if (cs === 'upper') s = text.toUpperCase()
-    else if (cs === 'lower') s = text.toLowerCase()
-    return (s.match(match) ?? []).map(String)
-  }
-  const counts = new Map<string, number>()
-  for (const r of rows) {
-    const raw = getField(r, field)
-    if (raw == null) continue
-    checkRegexInput(String(raw))
-    for (const tok of tokenize(raw as string)) {
-      if (!stop.test(tok)) counts.set(tok, (counts.get(tok) ?? 0) + 1)
-    }
-  }
-  const out: Row[] = []
-  for (const [text, count] of counts) {
-    if (count > 0) out.push({ [as[0]!]: text, [as[1]!]: count })
   }
   return out
 }
@@ -2761,28 +2173,11 @@ function linkpathRows(rows: Row[], t: Record<string, unknown>): Row[] {
   }))
 }
 
-// ---------------------------------------------------------------------------
-// project (vega Project) — derive rows from named fields
-// ---------------------------------------------------------------------------
-
-function projectRows(rows: Row[], t: Record<string, unknown>): Row[] {
-  const fields = (t.fields as string[] | undefined) ?? []
-  const as = (t.as as (string | undefined)[] | undefined) ?? []
-  return rows.map((r) => {
-    const out: Row = {}
-    for (let i = 0; i < fields.length; ++i) {
-      out[as[i] ?? fields[i]!] = getField(r, fields[i]!)
-    }
-    return out
-  })
-}
-
 // -- addon registration ------------------------------------------------------
 transformRegistry.set('pie', pieRows)
 transformRegistry.set('cross', crossRows)
-transformRegistry.set('countpattern', countpatternRows)
+transformRegistry.set('countpattern', countpatternStatsRows)
 transformRegistry.set('dotbin', dotbinRows)
 transformRegistry.set('geopoint', geopointRows)
 transformRegistry.set('geojson', geojsonRows)
 transformRegistry.set('linkpath', linkpathRows)
-transformRegistry.set('project', projectRows)
