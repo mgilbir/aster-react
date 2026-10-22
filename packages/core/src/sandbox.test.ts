@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { compileExpr } from './expression.js'
-import { renderSpec } from './index.js'
+import { applyTransforms, renderSpec } from './index.js'
 import { field, pluck, splitAccessPath } from './util.js'
 import { timeOffset, timeSequence, utcOffset, utcSequence } from './time.js'
 
@@ -205,5 +205,16 @@ describe('C50: prototype-named datasets, signals and tables', () => {
       try { return renderSpec(spec).replaceAll(sig, 'SIG') } catch (e) { return 'ERR ' + String((e as Error).message).replaceAll(sig, 'SIG') }
     }
     expect(outcome(name)).toBe(outcome('zz_absent'))
+  })
+
+  it.each(HOSTILE_NAMES)('aggregate op named %s is an unsupported op, not an inherited function', (name) => {
+    const rows = [{ g: 'a', v: 1 }, { g: 'a', v: 2 }]
+    const ctx = { runtime: { scale: () => undefined, data: () => undefined, expr: () => () => undefined }, signals: Object.create(null) }
+    for (const t of [
+      { type: 'aggregate', groupby: ['g'], fields: ['v'], ops: [name], as: ['o'] },
+      { type: 'pivot', field: 'g', value: 'v', op: name },
+    ]) {
+      expect(() => applyTransforms(rows as never, [t] as never, ctx as never), `${t.type}:${name}`).toThrow(/unsupported aggregate op/)
+    }
   })
 })

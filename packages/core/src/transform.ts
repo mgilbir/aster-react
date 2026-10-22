@@ -7,7 +7,7 @@ import type { CompiledTransform, SortSpec } from './types.js'
 import type { ExpressionRuntime } from './expression.js'
 import { geoRegistry, requireGeo, requireTransform } from './registry.js'
 import { nominalTextWidth } from './text-metrics.js'
-import { safeGet } from './util.js'
+import { ownGet, safeGet } from './util.js'
 
 export interface TransformContext {
   runtime: ExpressionRuntime
@@ -650,7 +650,7 @@ export function aggregateGroup(rows: Row[], groupby: string[], fields: (string |
       row[as[i] ?? `${op}_${field}`] = best
       return
     }
-    const fn = AGGR[op]
+    const fn = ownGet(AGGR, op)
     if (!fn) throw new Error(`[aster] unsupported aggregate op "${op}"`)
     row[as[i] ?? `${op}_${field}`] = fn(values, rows)
   })
@@ -709,7 +709,7 @@ function pivotRows(rows: Row[], t: Record<string, unknown>): Row[] {
         // Vega's `count` op pivots on the number of matching rows per cell.
         row[as[i]!] = valueField == null ? g.length : g.filter((r) => r[keyField] === k).length
       } else {
-        const fn = AGGR[op]
+        const fn = ownGet(AGGR, op)
         if (!fn) throw new Error(`[aster] unsupported aggregate op "${op}"`)
         const subset = valueField == null ? [] : g.filter((r) => r[keyField] === k)
         row[as[i]!] = fn(valueField == null ? [] : fieldValues(subset, valueField), subset)
