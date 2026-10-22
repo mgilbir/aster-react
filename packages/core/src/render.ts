@@ -1547,6 +1547,12 @@ export interface AttrSink {
   a(name: string, value: unknown): void
   /** Any non-nullish value, stringified verbatim (the string sink escapes it). */
   v(name: string, value: unknown): void
+  /**
+   * A string the caller assembled from `num()` output and constant text only
+   * (transforms, ids, class lists): it cannot contain markup-significant
+   * characters, so the string sink writes it without the escaping scan.
+   */
+  t(name: string, value: string): void
   /** A number, formatted with `num`; nullish is skipped. */
   n(name: string, value: number | null | undefined): void
   /** Generated path data (see `GeneratedPath`): written without the escaping scan. */
@@ -1558,6 +1564,7 @@ export class StringAttrSink implements AttrSink {
   s = ''
   a(name: string, value: unknown): void { if (value != null) this.s += attr(name, value) }
   v(name: string, value: unknown): void { if (value != null) this.s += ` ${name}="${escAttr(value)}"` }
+  t(name: string, value: string): void { this.s += ` ${name}="${value}"` }
   n(name: string, value: number | null | undefined): void { if (value != null) this.s += ` ${name}="${num(value)}"` }
   g(name: string, value: GeneratedPath): void { this.s += ` ${name}="${genD(value)}"` }
 }
@@ -1575,6 +1582,7 @@ export class PairAttrSink implements AttrSink {
   out: Array<[string, string]> = []
   a(name: string, value: unknown): void { const x = attrValue(name, value); if (x !== null) this.out.push([name, x]) }
   v(name: string, value: unknown): void { if (value != null) this.out.push([name, String(value)]) }
+  t(name: string, value: string): void { this.out.push([name, value]) }
   n(name: string, value: number | null | undefined): void { if (value != null) this.out.push([name, num(value)]) }
   g(name: string, value: GeneratedPath): void { this.out.push([name, value]) }
 }
@@ -1661,12 +1669,12 @@ const clipUrl = (id: string): string => `url(#${id})`
 
 /** `clip-path="url(#id)"`. */
 export function clipRefAttrs(id: string, w: AttrSink): void {
-  w.v('clip-path', clipUrl(id))
+  w.t('clip-path', clipUrl(id))
 }
 
 /** `id="..."` of a `<clipPath>`. */
 export function clipIdAttrs(id: string, w: AttrSink): void {
-  w.v('id', id)
+  w.t('id', id)
 }
 
 /**
@@ -1715,7 +1723,7 @@ export function leafPathAttrs(it: SceneItem, w: AttrSink): void {
   const ty = num(it.y || 0)
   const angle = recOf(it).angle as number | undefined
   const rot = angle ? ` rotate(${num(angle)})` : ''
-  if (tx !== '0' || ty !== '0' || rot) w.v('transform', `translate(${tx},${ty})${rot}`)
+  if (tx !== '0' || ty !== '0' || rot) w.t('transform', `translate(${tx},${ty})${rot}`)
   itemDatumAttr(it, w)
   w.v('d', it.path)
   paintAttrs(it, w)
@@ -1728,7 +1736,7 @@ export function leafSymbolPath(it: SceneItem): GeneratedPath {
 
 /** A path with a symbol's position/rotation: guide leaf symbols and symbol marks. */
 export function symbolElementAttrs(it: SceneItem, d: GeneratedPath, w: AttrSink): void {
-  w.v('transform', rotateItemTransform(it))
+  w.t('transform', rotateItemTransform(it))
   itemDatumAttr(it, w)
   w.g('d', d)
   paintAttrs(it, w)
@@ -1744,10 +1752,10 @@ export function textAttrs(it: SceneItem, w: AttrSink): ReturnType<typeof textIte
   if (d == null) return null
   const rec = recOf(it)
   itemDatumAttr(it, w)
-  w.v('transform', d.transform)
+  w.t('transform', d.transform)
   w.a('text-anchor', svgTextAnchor(it.align))
   w.a('font-family', rec.font || 'sans-serif')
-  w.v('font-size', `${num(d.fontSize)}px`)
+  w.t('font-size', `${num(d.fontSize)}px`)
   w.a('font-style', rec.fontStyle)
   w.a('font-variant', rec.fontVariant)
   w.a('font-weight', rec.fontWeight)
@@ -1817,7 +1825,7 @@ export const rectIsPainted = (it: SceneItem): boolean => !(it.fill === null && i
 /** A `path`/`shape`/`geoshape` item: vega path mark attr `[vector-effect] transform d`. */
 export function pathItemAttrs(it: SceneItem, w: AttrSink): void {
   if (pathVectorEffect(it)) w.v('vector-effect', 'non-scaling-stroke')
-  w.v('transform', transformItemTransform(it))
+  w.t('transform', transformItemTransform(it))
   itemDatumAttr(it, w)
   w.v('d', it.path)
   paintAttrs(it, w)
@@ -1833,7 +1841,7 @@ export function imageAttrs(it: SceneItem, w: AttrSink): void {
   const d = imageDesc(it)
   itemDatumAttr(it, w)
   w.v('xlink:href', it.url)
-  w.v('transform', `translate(${num(d.x)},${num(d.y)})`)
+  w.t('transform', `translate(${num(d.x)},${num(d.y)})`)
   w.n('width', d.w)
   w.n('height', d.h)
   w.v('preserveAspectRatio', it.aspect === false ? 'none' : 'xMidYMid')
@@ -1851,7 +1859,7 @@ export function arcItemAttrs(it: SceneItem, w: AttrSink): void {
   // defined paint property (stroke-width even without a stroke, opacity, dashes).
   const cr = recOf(it).cornerRadius as number | undefined ?? 0
   const pa = recOf(it).padAngle as number | undefined ?? 0
-  w.v('transform', rotateItemTransform(it))
+  w.t('transform', rotateItemTransform(it))
   itemDatumAttr(it, w)
   w.g('d', arcPath(0, 0, r, r0, a0, a1, cr, pa))
   paintAttrs(it, w)
@@ -1875,7 +1883,7 @@ export function svgRootAttrs(scene: SceneRoot, w: AttrSink): void {
   w.v('class', 'marks')
   w.n('width', scene.width)
   w.n('height', scene.height)
-  w.v('viewBox', `0 0 ${num(scene.width)} ${num(scene.height)}`)
+  w.t('viewBox', `0 0 ${num(scene.width)} ${num(scene.height)}`)
 }
 
 export function backgroundRectAttrs(scene: SceneRoot, w: AttrSink): void {
@@ -1888,7 +1896,7 @@ export function viewGroupAttrs(scene: SceneRoot, w: AttrSink): void {
   const pad = scene.padding ?? { top: 0, right: 0, bottom: 0, left: 0 }
   w.v('fill', 'none')
   w.v('stroke-miterlimit', '4')
-  w.v('transform', `translate(${num(pad.left)},${num(pad.top)})`)
+  w.t('transform', `translate(${num(pad.left)},${num(pad.top)})`)
 }
 
 /** The root frame's background path: geometry from `frameBackgroundPath`, paint from `frameItem`. */
@@ -1908,7 +1916,7 @@ export function markGroupAttrs(group: SceneGroup, w: AttrSink, clips?: ClipColle
   w.v('class', 'mark-group')
   if (group.role) w.v('role', group.role)
   if (clips) clipRefAttrs(groupClipId(group, clips, gw, gh), w)
-  if (group.x != null || group.y != null) w.v('transform', `translate(${num(group.x ?? 0)},${num(group.y ?? 0)})`)
+  if (group.x != null || group.y != null) w.t('transform', `translate(${num(group.x ?? 0)},${num(group.y ?? 0)})`)
 }
 
 export function stopAttrs(stop: { offset: number; color: string }, w: AttrSink): void {
