@@ -68,7 +68,7 @@ window.__runEntry = async (entry) => {
     const compiled = isVl ? compile(spec) : spec
     const loaded = await loadSpecData(compiled as never)
     const ourSvg = renderSpec(loaded as never)
-    const diffs = diffCanonical(canonicalizeSvg(oracleSvg, { ignoreBackground: true }), canonicalizeSvg(ourSvg, { ignoreBackground: true }))
+    const diffs = diffCanonical(canonicalizeSvg(oracleSvg), canonicalizeSvg(ourSvg))
     return { pass: diffs.length === 0, diffs: diffs.slice(0, 8), error: null }
   } catch (err) {
     return { pass: false, diffs: [], error: err instanceof Error ? err.message : String(err) }
