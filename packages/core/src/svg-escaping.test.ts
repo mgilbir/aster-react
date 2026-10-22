@@ -303,7 +303,7 @@ describe('C2: SVG string renderer escapes every attribute and text value', () =>
   })
 
   it('render.ts writes attribute values only through the shared writer (source guard)', () => {
-    const src = readFileSync(join(process.cwd(), 'src', 'render.ts'), 'utf8')
+    const src = readFileSync(join(import.meta.dirname, 'render.ts'), 'utf8')
     const interpolations = [...src.matchAll(/="\$\{((?:[^{}]|\{[^{}]*\})*)\}/g)].map((m) => m[1]!.trim())
     expect(interpolations.length).toBeGreaterThan(20)
     const bad = interpolations.filter((e) => !/^(num3?|escAttr|genD|fp)\(/.test(e))
