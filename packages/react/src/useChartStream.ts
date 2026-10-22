@@ -50,7 +50,7 @@ export interface UseChartStreamResult {
   resume: () => void
   /** Stop accepting batches and drop the queue. */
   close: () => void
-  /** The underlying stream (stable until the spec/capacity/policy changes). */
+  /** The underlying stream (stable until the spec CONTENT, capacity or policy changes). */
   stream: ChartStream
 }
 
@@ -204,13 +204,18 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
     stream.close()
   }, [stream])
 
+  // Stable identities (per stream), so a consumer can list them as dependencies.
+  const pending = React.useCallback(() => stream.pending(), [stream])
+  const pulse = React.useCallback(() => lastFlush.current?.pulse ?? stream.pulse(), [stream])
+  const stats = React.useCallback(() => stream.stats(), [stream])
+
   return {
     ...state,
     push,
     flush,
-    pending: () => stream.pending(),
-    pulse: () => lastFlush.current?.pulse ?? stream.pulse(),
-    stats: () => stream.stats(),
+    pending,
+    pulse,
+    stats,
     paused,
     pause,
     resume,

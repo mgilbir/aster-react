@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { renderSceneToSvg, type RuntimeInput, type SceneRoot, type VgSpec } from '@aster/core'
+import { checkSvgLength, renderSceneToSvg, type RuntimeInput, type SceneRoot, type VgSpec } from '@aster/core'
 import { createChartSession } from '@aster/core/dom'
 import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
 
@@ -43,7 +43,10 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
   return React.useMemo(() => {
     try {
       const scene = session.evaluate(normalized, { ...input, limits })
-      return { scene, svg: serialize ? renderSceneToSvg(scene) : null, error: null, session }
+      const svg = serialize ? renderSceneToSvg(scene) : null
+      // Same budget as `renderSpec`: the serialized output length.
+      if (svg != null && limits) checkSvgLength(svg, limits)
+      return { scene, svg, error: null, session }
     } catch (e) {
       return { scene: null, svg: null, error: e instanceof Error ? e : new Error(String(e)), session }
     }

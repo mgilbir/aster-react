@@ -129,7 +129,11 @@ export function positionalScales(spec: VgSpec): PositionalScales {
   return out
 }
 
-/** Convert an SVG-local pixel drag rect into a data-space interval using the chart scales + padding. */
+/**
+ * Convert a container-local pixel drag (start/end) into a data-space interval
+ * using the positional scales and the scene padding. An axis whose scale has no
+ * numeric inverse (band/point) is omitted from the result.
+ */
 export function dragToDataInterval(
   start: PixelPoint,
   end: PixelPoint,
@@ -243,7 +247,11 @@ export function zoomDomain(
   return [a, b]
 }
 
-/** Translate a domain by a fraction of its span (positive = data moves right/down). */
+/**
+ * Translate a domain by a fraction of its span. A positive fraction moves the
+ * visible window toward HIGHER values, so the data appears to move the other
+ * way (left on an ascending x scale).
+ */
 export function panDomain(domain: [number, number], fraction: number): [number, number] {
   const span = domain[1] - domain[0]
   const shift = span * fraction
@@ -369,7 +377,10 @@ function setFor(view: ViewDomain, base: ViewDomain, axis: 'x' | 'y', d: [number,
   return out
 }
 
-/** Interpolate a zoom around a cursor, clamped to the base domain's span. */
+/**
+ * Zoom around a cursor value. Zooming in stops at 1/1000 of the base span, and
+ * zooming out never exceeds the base domain (the base domain itself is returned).
+ */
 export function cursorZoom(
   current: ViewDomain | null,
   base: ViewDomain,
@@ -382,9 +393,7 @@ export function cursorZoom(
   if (!d) return out
   // Never zoom out past the original extent.
   const baseSpan = Math.abs(base[axis]![1] - base[axis]![0])
-  const currentSpan = Math.abs(d[1] - d[0])
-  const capped = factor > 1 && currentSpan <= baseSpan / 1e-9 ? factor : factor
-  const next = zoomDomain(d, anchorValue, capped, baseSpan / 1000)
+  const next = zoomDomain(d, anchorValue, factor, baseSpan / 1000)
   const span = Math.abs(next[1] - next[0])
   out[axis] = span > baseSpan ? base[axis] : next
   return out

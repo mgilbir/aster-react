@@ -4,7 +4,11 @@
  * These are thin shells over the existing `<Chart>`: the stream evaluates the
  * scene, and `<Chart sceneOverride={scene}>` runs the same SVG DOM patcher,
  * canvas renderer, interaction, tooltip and accessibility tree. No full SVG is
- * serialized per append.
+ * serialized per append. The stream is keyed on the spec content, so a parent
+ * that rebuilds an equal inline spec does not discard streamed rows. The first
+ * frame of `<ChartStream>` is part of the server-rendered HTML; a
+ * `<ChartWorkerStream>` has no worker on the server and renders a placeholder
+ * until it mounts.
  */
 import * as React from 'react'
 import type { SceneRoot, SpecLimits, StreamBatch, VgSpec } from '@aster/core'
@@ -165,6 +169,15 @@ function useStreamConfig<T>(
   }, [push, stream, limits, textMetrics])
 }
 
+/** Report an error to `onError` once per error object, even if the callback is an inline arrow. */
+function useReportOnce(error: Error | null, onError: ((error: Error) => void) | undefined): void {
+  const onErrorRef = React.useRef(onError)
+  onErrorRef.current = onError
+  React.useEffect(() => {
+    if (error) onErrorRef.current?.(error)
+  }, [error])
+}
+
 export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>(
   function ChartStream({
     spec, streamOptions, onStreamError, width, height, className, style,
@@ -187,19 +200,18 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
     useSyncSize(stream.push, size)
     useStreamConfig(stream.push, stableLimits, textMetrics, stream.stream)
     const onStreamInput = useStreamInput(stream.stream, stream.push)
+    const { push, flush, pending, pulse, stats, stream: coreStream } = stream
     React.useImperativeHandle(ref, () => ({
-      push: stream.push,
-      flush: stream.flush,
-      pending: stream.pending,
-      pulse: stream.pulse,
-      stats: stream.stats,
-      scene: () => stream.stream.scene(),
-      close: () => stream.stream.close(),
-    }), [stream])
+      push,
+      flush,
+      pending,
+      pulse,
+      stats,
+      scene: () => coreStream.scene(),
+      close: () => coreStream.close(),
+    }), [push, flush, pending, pulse, stats, coreStream])
 
-    React.useEffect(() => {
-      if (stream.error) onStreamError?.(stream.error)
-    }, [stream.error, onStreamError])
+    useReportOnce(stream.error, onStreamError)
 
     if (stream.error) {
       return <div role="alert" className={className} style={style} title={stream.error.message}>{stream.error.message}</div>
@@ -240,19 +252,21 @@ export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorker
     useSyncSize(stream.push, size)
     useStreamConfig<WorkerTextMetrics>(stream.push, stableLimits, textMetrics, stream.generation)
     const onStreamInput = useStreamInput(stream.generation, stream.push)
+    // The handle's `scene()` must read the latest scene without being rebuilt per frame.
+    const sceneRef = React.useRef(stream.scene)
+    sceneRef.current = stream.scene
+    const { push, flush, pulse, stats, close } = stream
     React.useImperativeHandle(ref, () => ({
-      push: stream.push,
-      flush: stream.flush,
+      push,
+      flush,
       pending: () => null,
-      pulse: stream.pulse,
-      stats: stream.stats,
-      scene: () => stream.scene,
-      close: stream.close,
-    }), [stream])
+      pulse,
+      stats,
+      scene: () => sceneRef.current,
+      close,
+    }), [push, flush, pulse, stats, close])
 
-    React.useEffect(() => {
-      if (stream.error) onStreamError?.(stream.error)
-    }, [stream.error, onStreamError])
+    useReportOnce(stream.error, onStreamError)
 
     if (stream.error) {
       return <div role="alert" className={className} style={style} title={stream.error.message}>{stream.error.message}</div>

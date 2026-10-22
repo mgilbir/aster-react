@@ -4,6 +4,7 @@ import {
   chartInfoFromScene,
   renderSceneToSvg,
   AsterLimitError,
+  checkSvgLength,
   type A11yNode,
   type A11yOptions,
   type ChartInfo,
@@ -65,7 +66,11 @@ const TOOLTIP_INTERNAL_FIELDS = new Set([
 ])
 
 export interface ChartProps {
-  /** A Vega spec, or a Vega-Lite spec compiled internally, or a promise of either. */
+  /**
+   * A Vega spec, a Vega-Lite spec (needs `import '@aster/react/vl'`), or a
+   * promise of either (suspends to the host's `<Suspense>`). Compared by
+   * content: re-rendering with an equal inline literal does no work.
+   */
   spec: VgSpec | Promise<VgSpec>
   /**
    * Pre-evaluated scene override (streaming): when provided, the chart renders
@@ -133,7 +138,12 @@ export interface ChartProps {
   denseMarks?: boolean | 'auto'
   className?: string
   style?: React.CSSProperties
+  /**
+   * Signal values for the spec's signals. Event- and input-driven values take
+   * precedence; they are overwritten whenever this prop changes.
+   */
   signals?: Record<string, unknown>
+  /** Interval brush: called with the dragged interval on release (`x`/`y` = the horizontal/vertical positional scale), and with `null` for a click. */
   onSelect?: (interval: SelectionInterval | null) => void
   /**
    * Point/click selection: called with the clicked mark's datum (or null for a
@@ -141,10 +151,13 @@ export interface ChartProps {
    * identically on the SVG and canvas backends.
    */
   onPointSelect?: (datum: Record<string, unknown> | null) => void
+  /** Persisted interval rectangle to draw (the legacy controlled form of `selection`). */
   brush?: SelectionInterval | null
   /**
    * Unified declarative selection (R10.2): either an interval or a point value.
-   * Controlled when supplied; `onSelectionChange` receives every change.
+   * Controlled when supplied (`select` wins when both are given);
+   * `onSelectionChange` receives every change. A controlled or internal interval
+   * is drawn as the persisted selection rectangle.
    */
   selection?: SelectValue | null
   /** Alias for `selection` (the declarative select value). */
@@ -176,8 +189,9 @@ export interface ChartProps {
   /**
    * Event-driven signals (vega-react's `signalListeners` convention): handlers
    * called when a signal changes, whether driven by the spec's `signal.on`
-   * DOM event streams or by the imperative path. The chart re-renders with
-   * the updated signal values after each event.
+   * DOM event streams, a bound input (`signal.bind`) or the imperative
+   * `ChartHandle.setSignal`. The chart re-renders with the updated signal
+   * values after each event.
    */
   signalListeners?: Record<string, (name: string, value: unknown) => void>
   /** Internal: shared listeners (the event loop and bound inputs drive these). */
@@ -203,13 +217,24 @@ export interface ChartProps {
    * detached overlay). Providing this enables tooltips without `tooltip`.
    */
   renderTooltip?: (datum: Record<string, unknown>) => React.ReactNode
-  /** Budgets for untrusted specs (rows, marks, strings, paths, SVG size, time). */
+  /**
+   * Budgets for untrusted specs (rows, marks, strings, paths, SVG size, time),
+   * applied at every evaluation; a violation renders the error state and calls
+   * `onError` with an `AsterLimitError`. `maxSvgLength` is checked by serializing
+   * the scene (SVG renderer only), which costs one serialization per evaluation
+   * and so only happens when it is set. Compared by content: an inline literal
+   * is fine.
+   */
   limits?: SpecLimits
   /** Host text measurement for custom fonts / non-browser engines. */
   textMetrics?: TextMetricsProvider
   /** Accessible scene tree (R10.6). Enabled by default; pass `false` to opt out. */
   a11y?: boolean | A11yOptions
-  /** Called when compile/evaluate fails (typed `AsterLimitError` for budgets). */
+  /**
+   * Called once per failed evaluation (typed `AsterLimitError` for budgets), and
+   * once per rejected `dataChanges` changeset. A new callback identity does not
+   * re-report the same error.
+   */
   onError?: (error: Error) => void
 }
 
@@ -595,6 +620,10 @@ function ChartView({
         signals: mergedSignals, limits: stableLimits, domainRaw, textMetrics,
       })
       if (wantsDatumAttrs(sc)) stampDatumAttrs(sc.items)
+      // `maxSvgLength` bounds the serialized output. The DOM patcher never
+      // builds that string, so the budget is enforced by measuring one — only
+      // when the host asked for it (it costs a serialization per evaluation).
+      if (stableLimits?.maxSvgLength != null && renderer !== 'canvas') checkSvgLength(renderSceneToSvg(sc), stableLimits)
       return { scene: sc, error: null, problems }
     } catch (err) {
       return { scene: null, error: err instanceof Error ? err : new Error(String(err)), problems: [] }

@@ -3,6 +3,7 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { AsterLimitError } from '@aster/core'
 import { Chart, type ChartHandle } from './Chart'
 import { useChart, type UseChartResult } from './useChart'
 
@@ -173,5 +174,37 @@ describe('useChart memo covers every input (C66)', () => {
     expect(evaluate).toHaveBeenCalledTimes(0) // nothing changed: the memo holds
     rerender(<Probe inputs={extra} />)
     expect(evaluate).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('maxSvgLength is enforced, as the limits docs promise (C92 / JSDoc)', () => {
+  const spec = {
+    width: 100, height: 100, padding: 0, autosize: 'none',
+    data: [{ name: 't', values: Array.from({ length: 20 }, (_, i) => ({ a: i, b: i })) }],
+    scales: [
+      { name: 'x', type: 'linear', domain: [0, 20], range: 'width' },
+      { name: 'y', type: 'linear', domain: [0, 20], range: 'height' },
+    ],
+    marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'a' }, y: { scale: 'y', field: 'b' } } } }],
+  } as never
+
+  it('<Chart> shows the error state and reports an AsterLimitError', () => {
+    const onError = vi.fn<(e: Error) => void>()
+    const { container } = mount(<Chart spec={spec} width={100} height={100} limits={{ maxSvgLength: 200 }} onError={onError} />)
+    expect(container.querySelector('[role="alert"]')).not.toBeNull()
+    expect(onError.mock.calls[0]![0]).toBeInstanceOf(AsterLimitError)
+  })
+
+  it('<Chart> renders when the output fits', () => {
+    const { container } = mount(<Chart spec={spec} width={100} height={100} limits={{ maxSvgLength: 1_000_000 }} />)
+    expect(container.querySelector('svg')).not.toBeNull()
+  })
+
+  it('useChart reports it like renderSpec does', () => {
+    let result: UseChartResult | null = null
+    function Probe(): React.ReactElement { result = useChart(spec, { limits: { maxSvgLength: 200 } }); return <div /> }
+    mount(<Probe />)
+    expect(result!.error).toBeInstanceOf(AsterLimitError)
+    expect(result!.svg).toBeNull()
   })
 })

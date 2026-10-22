@@ -248,6 +248,26 @@ describe('pan/zoom/brush use the streamed or supplied data, not just the spec (C
   })
 })
 
+describe('stream component hygiene (C92)', () => {
+  it('onStreamError is reported once per error, not once per render of an inline callback', async () => {
+    const calls: Error[] = []
+    const node = (i: number) => <ChartStream spec={dataSpec(base)} width={200} height={100} limits={{ maxItems: 1 }} className={`r${i}`} onStreamError={(e) => { calls.push(e) }} />
+    const m = mount(node(0))
+    await m.render(node(0))
+    for (let i = 1; i < 4; i++) await m.render(node(i))
+    expect(calls).toHaveLength(1)
+  })
+
+  it('the imperative handle keeps its identity across parent re-renders', async () => {
+    const seen = new Set<unknown>()
+    const ref = (h: ChartStreamHandle | null): void => { if (h) seen.add(h) }
+    const node = (i: number) => <ChartStream ref={ref} spec={dataSpec(base)} width={200} height={100} className={`r${i}`} />
+    const m = mount(node(0))
+    for (let i = 1; i < 4; i++) await m.render(node(i))
+    expect(seen.size).toBe(1)
+  })
+})
+
 describe('streams survive a new-but-equal spec (C32)', () => {
   it('useChartStream keeps pushed rows across re-renders with an equal inline spec', async () => {
     let result: UseChartStreamResult | null = null

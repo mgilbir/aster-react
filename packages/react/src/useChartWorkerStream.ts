@@ -333,15 +333,22 @@ export function useChartWorkerStream(spec: VgSpec, options: ChartWorkerStreamOpt
     }
   }, [workerRef])
 
+  // Stable identities: they only read refs.
+  const pulse = React.useCallback(() => pulseRef.current, [])
+  const stats = React.useCallback(() => statsRef.current, [])
+  const accepted = React.useCallback(() => acceptedRef.current, [])
+  const rejected = React.useCallback(() => rejectedRef.current, [])
+  const depth = React.useCallback(() => localRef.current?.stats().depth ?? batchesRef.current.length, [])
+
   return {
     ...state,
     push,
     flush,
-    pulse: () => pulseRef.current,
-    stats: () => statsRef.current,
-    accepted: () => acceptedRef.current,
-    rejected: () => rejectedRef.current,
-    depth: () => localRef.current?.stats().depth ?? batchesRef.current.length,
+    pulse,
+    stats,
+    accepted,
+    rejected,
+    depth,
     paused,
     pause,
     resume,
