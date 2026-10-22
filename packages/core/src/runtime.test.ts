@@ -88,7 +88,7 @@ describe('differential multi-dataset / source-chain / signal interaction', () =>
   it('applies dataChanges while a (unchanged) signal drives the scale', () => {
     const spec = { $schema: 'https://vega.github.io/schema/vega/v6.json', width: 200, height: 200, autosize: 'none',
       data: [{ name: 't', values: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] }],
-      scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: { signal: 'hi' }, range: 'height', zero: true }],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: { signal: '[0, hi]' }, range: 'height', zero: true }],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 40 } } } }],
     } as never
     const chart = compileChart(spec)

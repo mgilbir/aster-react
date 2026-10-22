@@ -497,3 +497,73 @@ function hcl2lab(o: Hcl): Lab {
   const h = o.h * radians
   return new Lab(o.l, Math.cos(h) * o.c, Math.sin(h) * o.c, o.opacity)
 }
+
+// --- Cubehelix ---------------------------------------------------------------
+
+const CH_A = -0.14861
+const CH_B = +1.78277
+const CH_C = -0.29227
+const CH_D = -0.90649
+const CH_E = +1.97294
+const CH_ED = CH_E * CH_D
+const CH_EB = CH_E * CH_B
+const CH_BC_DA = CH_B * CH_C - CH_D * CH_A
+
+function cubehelixConvert(o: unknown): Cubehelix {
+  if (o instanceof Cubehelix) return new Cubehelix(o.h, o.s, o.l, o.opacity)
+  const c = o instanceof Rgb ? o : rgbConvert(o)
+  const r = c.r / 255
+  const g = c.g / 255
+  const b = c.b / 255
+  const l = (CH_BC_DA * b + CH_ED * r - CH_EB * g) / (CH_BC_DA + CH_ED - CH_EB)
+  const bl = b - l
+  const k = (CH_E * (g - l) - CH_C * bl) / CH_D
+  const s = Math.sqrt(k * k + bl * bl) / (CH_E * l * (1 - l)) // NaN if l=0 or l=1
+  const h = s ? Math.atan2(k, bl) * degrees - 120 : NaN
+  return new Cubehelix(h < 0 ? h + 360 : h, s, l, c.opacity)
+}
+
+/** d3-color's `cubehelix`: one argument parses/converts, four construct. */
+export function cubehelix(h?: unknown, s?: unknown, l?: unknown, opacity?: unknown): Cubehelix {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return arguments.length === 1 ? cubehelixConvert(h) : new Cubehelix(h as any, s as any, l as any, opacity == null ? 1 : (opacity as number))
+}
+
+export class Cubehelix extends Color {
+  declare readonly h: number
+  declare readonly s: number
+  declare readonly l: number
+  declare opacity: number
+
+  constructor(h?: unknown, s?: unknown, l?: unknown, opacity?: unknown) {
+    super()
+    this.h = +(h as number)
+    this.s = +(s as number)
+    this.l = +(l as number)
+    this.opacity = +(opacity as number)
+  }
+
+  brighter(k?: number): Cubehelix {
+    const m = k == null ? brighter : Math.pow(brighter, k)
+    return new Cubehelix(this.h, this.s, this.l * m, this.opacity)
+  }
+
+  darker(k?: number): Cubehelix {
+    const m = k == null ? darker : Math.pow(darker, k)
+    return new Cubehelix(this.h, this.s, this.l * m, this.opacity)
+  }
+
+  override rgb(): Rgb {
+    const h = isNaN(this.h) ? 0 : (this.h + 120) * radians
+    const l = +this.l
+    const a = isNaN(this.s) ? 0 : this.s * l * (1 - l)
+    const cosh = Math.cos(h)
+    const sinh = Math.sin(h)
+    return new Rgb(
+      255 * (l + a * (CH_A * cosh + CH_B * sinh)),
+      255 * (l + a * (CH_C * cosh + CH_D * sinh)),
+      255 * (l + a * (CH_E * cosh)),
+      this.opacity,
+    )
+  }
+}

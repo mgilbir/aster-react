@@ -8,7 +8,7 @@ import { readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, compileExprTransform, sortRows, sortOrder, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { activeMeter, withLimits, meterItems, boundedCount, checkRowCount } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
-import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
+import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale, type ScaleContext } from './scales.js'
 
 /** Scale types whose domain is an ordered set of discrete values. */
 const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
@@ -37,7 +37,7 @@ import { hash53 } from './svg-defs.js'
 import { tickFormat, scaleFraction, scaleGradientStops, tickValues, tickCount, isContinuous, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, minOf, maxOf, pushAll, SYMBOL_DEFAULT_SIZE } from './util.js'
+import { dict, field as utilField, ownGet, minOf, maxOf, pushAll, SYMBOL_DEFAULT_SIZE } from './util.js'
 import { applyImageUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, type PulseChange } from './pulse.js'
@@ -504,11 +504,6 @@ function prepareChartCtx(
   // fresh state is still recorded for the next call).
   ctx.incremental = changedNames.size > 0 && txn.prev !== undefined
 
-  // Remap Vega-Lite "category" range (unhandled by vega-scale) to tableau10 —
-  // unless a config.range.category shadows it (vega's range lookup consults
-  // the config block first). This is a per-evaluation override on the scale
-  // handed to buildScale, not a write to the compiled IR (see scaleDefOf).
-  //
   // Resolve signal `update` expressions, datasets, and scales to a fixed
   // point. Signals can reference data/scales and vice versa (e.g. brush-bounded
   // domains), which vega handles reactively; we emulate the initial pulse.
@@ -2942,15 +2937,23 @@ function discreteCensusApplies(dom: { sort?: unknown }): boolean {
   return !(sort && typeof sort === 'object' && !Array.isArray(sort) && 'op' in (sort as object))
 }
 
+/** vega-util toNumber as a number: null / '' / undefined are NaN (skipped by the extent). */
+function censusNumber(v: unknown): number {
+  return v == null || v === '' ? NaN : +(v as number)
+}
+
 function freshContCensus(dom: { data: string; field: string }, rows: Row[]): ContCensus {
   const vals = new Array<number>(rows.length)
   let lo = Infinity, hi = -Infinity
+  // an infinite value makes vega's extent [undefined, undefined]: nothing to prove stable
+  let infinite = false
   for (let i = 0; i < rows.length; i++) {
-    const v = Number(getField(rows[i]!, dom.field))
+    // vega's Extent reads toNumber(value): null / '' are not 0, they are absent
+    const v = censusNumber(scaleFieldOf(dom.field)(rows[i]))
     vals[i] = v
-    if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v }
+    if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v } else if (v === Infinity || v === -Infinity) infinite = true
   }
-  const finite = lo <= hi
+  const finite = lo <= hi && !infinite
   let loCount = 0, hiCount = 0
   if (finite) for (const v of vals) { if (v === lo) loCount++; if (v === hi) hiCount++ }
   return { data: dom.data, field: dom.field, lo: finite ? lo : 0, hi: finite ? hi : 1, loCount, hiCount, finite, vals }
@@ -2961,7 +2964,7 @@ function freshDiscCensus(dom: { data: string; field: string }, rows: Row[]): Dis
   const firstIdx = new Map<unknown, number>()
   const vals: unknown[] = new Array(rows.length)
   for (let i = 0; i < rows.length; i++) {
-    const v = getField(rows[i]!, dom.field)
+    const v = scaleFieldOf(dom.field)(rows[i])
     vals[i] = v
     counts.set(v, (counts.get(v) ?? 0) + 1)
     if (!firstIdx.has(v)) firstIdx.set(v, i)
@@ -2987,12 +2990,15 @@ function advanceContCensus(cen: ContCensus, rows: Row[], pulse: StepPulse): Cont
       if (oldV === lo) loCount--
       if (oldV === hi) hiCount--
     }
-    if (newV === undefined || !Number.isFinite(newV)) return
+    if (newV === undefined) return
+    if (newV === Infinity || newV === -Infinity) { stable = false; return } // vega's extent breaks
+    if (!Number.isFinite(newV)) return
     if (newV < lo || newV > hi) { stable = false; return }
     if (newV === lo) loCount++
     if (newV === hi) hiCount++
   }
-  const valueAt = (i: number): number => Number(getField(rows[i]!, field))
+  const read = scaleFieldOf(field)
+  const valueAt = (i: number): number => censusNumber(read(rows[i]))
   const vals = cen.vals
   let nextVals: number[]
   if (pulse.appendOnly || (!pulse.from && !(pulse.added?.length) && !(pulse.removed?.length))) {
@@ -3046,7 +3052,7 @@ function advanceDiscCensus(cen: DiscCensus, rows: Row[], pulse: StepPulse): Disc
   if (!sameLength) return null
   for (const i of pulse.changed) {
     if (i < 0 || i >= rows.length) return null
-    const nv = getField(rows[i]!, cen.field)
+    const nv = scaleFieldOf(cen.field)(rows[i])
     const ov = cen.vals[i]
     if (Object.is(ov, nv) || ov === nv) continue
     const nCount = cen.counts.get(nv)
@@ -3070,8 +3076,44 @@ function claim(ctx: EvalContext, key: string): boolean {
   return true
 }
 
+/**
+ * A scale domain reads its field through vega-util's `field()` accessor (dotted
+ * paths, `a\\.b` escapes, `a["b"]` brackets), the same accessor vega's Extent /
+ * Aggregate use. Memoised per path (paths are spec-supplied: the cache is bounded).
+ */
+const scaleFieldAccessors = new Map<string, (d: unknown) => unknown>()
+function scaleFieldOf(path: string): (d: unknown) => unknown {
+  let acc = scaleFieldAccessors.get(path)
+  if (!acc) {
+    if (scaleFieldAccessors.size >= 512) scaleFieldAccessors.clear()
+    scaleFieldAccessors.set(path, (acc = utilField(path)))
+  }
+  return acc
+}
+
+/** The context a scale is built in: signals, config.range, datasets and the host domain override. */
+function scaleContext(ctx: EvalContext, name: string): ScaleContext {
+  return {
+    width: ctx.width,
+    height: ctx.height,
+    signals: ctx.signalParams,
+    configRange: ctx.chart.configRange,
+    domainRaw: ctx.domainRaw?.get(name),
+    evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
+    dataField: (dataName, field) => {
+      const rows = ctx.datasets.get(dataName) ?? []
+      const get = scaleFieldOf(field)
+      const out: unknown[] = new Array(rows.length)
+      for (let i = 0; i < rows.length; i++) out[i] = get(rows[i])
+      return out
+    },
+    dataRows: (dataName) => (ctx.datasets.get(dataName) ?? []) as Record<string, unknown>[],
+    hasData: (dataName) => ctx.datasets.has(dataName),
+    distinctCache: ctx.distinctCache,
+  }
+}
+
 function buildScales(ctx: EvalContext): void {
-  const scaleSignals = ctx.signalParams
   const prev = ctx.prev
   const entries = new Map<string, ScaleEntry>()
   // A scale whose domain references none of the affected datasets (closed over
@@ -3093,16 +3135,15 @@ function buildScales(ctx: EvalContext): void {
       entries.set(s.name, memo.entry)
       continue
     }
-    // Vega-lite emits `{ fields: [{data, field}, ...] }` domains for layered
-    // charts (several datasets contribute to one shared scale). scales.ts only
-    // understands single-dataset domains, so resolve the multi-dataset form
-    // here into a concrete domain for THIS evaluation (the IR keeps the declared
-    // domain, so a later evaluation re-resolves it — C12).
-    const multiDomain = resolveMultiDatasetDomain(s.domain, ctx)
+    // A `{ fields: [...] }` domain (vega-lite's layered charts: several datasets
+    // contribute to one shared scale) is resolved by buildScale itself, from the
+    // CURRENT datasets, every evaluation (C12): the IR keeps the declared domain.
+    // Such a scale has no single-dataset census, so it is never census-reused.
+    const multi = isMultiFieldDomain(s.domain)
     const prevEntry = prev?.scaleEntries.get(s.name)
-    const def: CompiledScale = multiDomain ? { ...s, domain: concreteDomain(s, multiDomain) } : s
-    const dom = multiDomain ? null : singleDataDomain(s.domain)
-    if (reusable && prevEntry && prevEntry.multi === (multiDomain != null)) {
+    const def: CompiledScale = s
+    const dom = multi ? null : singleDataDomain(s.domain)
+    if (reusable && prevEntry && prevEntry.multi === multi) {
       let reuse = !domainReferencesAffected(s.domain, ctx.affected)
       let entry = prevEntry
       // An affected single-data-domain scale can still be reused when its domain
@@ -3137,25 +3178,10 @@ function buildScales(ctx: EvalContext): void {
         continue
       }
     }
-    const scale = buildScale(def, {
-      width: ctx.width,
-      height: ctx.height,
-      signals: scaleSignals,
-      configRange: ctx.chart.configRange,
-      domainRaw: ctx.domainRaw?.get(s.name),
-      evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
-      dataField: (dataName, field) => {
-        const rows = ctx.datasets.get(dataName) ?? []
-        const out: unknown[] = []
-        for (const r of rows) out.push(getField(r, field))
-        return out
-      },
-      dataRows: (dataName) => (ctx.datasets.get(dataName) ?? []) as Record<string, unknown>[],
-      distinctCache: ctx.distinctCache,
-    })
+    const scale = buildScale(def, scaleContext(ctx, def.name))
     ctx.scales.set(s.name, scale)
     ctx.scaleTypes.set(s.name, s.type)
-    const entry: ScaleEntry = { scale, multi: multiDomain != null }
+    const entry: ScaleEntry = { scale, multi }
     // Track the domain census for a single-data-domain scale so a later update
     // can prove the domain unchanged instead of rescanning.
     if (dom) {
@@ -3185,63 +3211,11 @@ function domainReferencesAffected(domain: ScaleDomain, affected: Set<string>): b
   return false
 }
 
-/**
- * Resolve a vega-lite "multi-dataset" scale domain — `{ fields: [{data, field},
- * ...] }` (layered charts) — into a concrete domain array. Returns null when the
- * domain is not in that form, so scales.ts handles everything else unchanged.
- */
-function resolveMultiDatasetDomain(domain: ScaleDomain, ctx: EvalContext): unknown[] | null {
-  if (!domain || typeof domain !== 'object' || Array.isArray(domain)) return null
-  if ('signal' in domain) return null
-  const fields = (domain as { fields?: unknown }).fields
-  if (!Array.isArray(fields) || !fields.length) return null
-  const refs = fields as unknown[]
-  if (!refs.every((f) => f != null && typeof f === 'object' && typeof (f as { data?: unknown }).data === 'string' && typeof (f as { field?: unknown }).field === 'string')) {
-    return null
-  }
-  const all: unknown[] = []
-  for (const f of refs) {
-    const ref = f as { data: string; field: string }
-    const rows = ctx.datasets.get(ref.data) ?? []
-    for (const r of rows) all.push((r as Row)[ref.field])
-  }
-  return all
-}
-
-/** Collapse collected multi-dataset values into the concrete domain for a scale type. */
-function concreteDomain(scale: CompiledScale, values: unknown[]): unknown[] {
-  const type = scale.type
-  if (type === 'time' || type === 'utc') {
-    const ms: number[] = []
-    for (const v of values) {
-      const d = v instanceof Date ? v : typeof v === 'string' || typeof v === 'number' ? new Date(v) : null
-      if (d && Number.isFinite(d.getTime())) ms.push(d.getTime())
-    }
-    return ms.length ? [minOf(ms), maxOf(ms)] : []
-  }
-  if (CONTINUOUS_TYPES.has(type)) {
-    const finite = values
-      .map((v) => v instanceof Date ? v.getTime() : v)
-      .filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
-    return finite.length ? [minOf(finite), maxOf(finite)] : []
-  }
-  // Discrete scales: distinct values (sorted when the domain requests it).
-  const distinct: unknown[] = []
-  for (const v of values) if (!distinct.some((x) => x === v)) distinct.push(v)
-  const sort = (scale.domain as { sort?: unknown }).sort
-  if (sort === true || sort === 'ascending') {
-    distinct.sort((a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0)
-  } else if (sort === 'descending') {
-    distinct.sort((a, b) => String(a) > String(b) ? -1 : String(a) < String(b) ? 1 : 0)
-  } else if (sort && typeof sort === 'object' && !Array.isArray(sort)) {
-    const order = (sort as { order?: string }).order
-    if (order === 'descending') {
-      distinct.sort((a, b) => String(a) > String(b) ? -1 : String(a) < String(b) ? 1 : 0)
-    } else if (order === 'ascending' || !order) {
-      distinct.sort((a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0)
-    }
-  }
-  return distinct
+/** True for a `{ fields: [...] }` scale domain (several data fields feed one scale). */
+function isMultiFieldDomain(domain: ScaleDomain): boolean {
+  return !!domain && typeof domain === 'object' && !Array.isArray(domain)
+    && !('signal' in domain) && Array.isArray((domain as { fields?: unknown }).fields)
+    && (domain as { fields: unknown[] }).fields.length > 0
 }
 
 /**
@@ -3673,22 +3647,7 @@ function buildTrellisCell(
   const childScaleMap = new Map<string, Scale>()
   const childTypeMap = new Map<string, string>()
   for (const s of (mark as { scales?: CompiledScale[] }).scales ?? []) {
-    const scale = buildScale(s, {
-      width: ctx.width,
-      height: ctx.height,
-      signals: ctx.signalParams,
-      configRange: ctx.chart.configRange,
-      domainRaw: ctx.domainRaw?.get(s.name),
-      evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
-      dataField: (dn, field) => {
-        const rws = ctx.datasets.get(dn) ?? []
-        const out: unknown[] = []
-        for (const r of rws) out.push(getField(r, field))
-        return out
-      },
-      dataRows: (dn) => (ctx.datasets.get(dn) ?? []) as Record<string, unknown>[],
-      distinctCache: ctx.distinctCache,
-    })
+    const scale = buildScale(s, scaleContext(ctx, s.name))
     childScaleMap.set(s.name, scale)
     childTypeMap.set(s.name, s.type)
   }
@@ -3887,22 +3846,7 @@ function buildScopedGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | nu
     // Vega's scale signal refs (`width`/`height`) resolve against the TOP-LEVEL
     // chart scope (parent), not the group's own encode dimensions. That's why a
     // nested group's y-axis domain spans 300 even though the group is 130 tall.
-    const scale = buildScale(cs, {
-      width: ctx.width,
-      height: ctx.height,
-      signals: ctx.signalParams,
-      configRange: ctx.chart.configRange,
-      domainRaw: ctx.domainRaw?.get(s.name),
-      evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
-      dataField: (dn, field) => {
-        const rows = ctx.datasets.get(dn) ?? []
-        const out: unknown[] = []
-        for (const r of rows) out.push(getField(r, field))
-        return out
-      },
-      dataRows: (dn) => (ctx.datasets.get(dn) ?? []) as Record<string, unknown>[],
-      distinctCache: ctx.distinctCache,
-    })
+    const scale = buildScale(cs, scaleContext(ctx, cs.name))
     childScaleMap.set(cs.name, scale)
     childTypeMap.set(cs.name, cs.type)
   }

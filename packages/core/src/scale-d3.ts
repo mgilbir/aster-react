@@ -739,8 +739,10 @@ export function quantize(): SR {
           : [domain[i - 1], domain[i]]
   }
 
+  // d3-scale 4.0.2's quantize getter returns the SCALE, not the unknown value
+  // (an upstream slip, kept: the owned port is verified against the pinned oracle).
   scale.unknown = function (_?: unknown): unknown {
-    return arguments.length ? ((unknown = _), scale) : unknown
+    return arguments.length ? ((unknown = _), scale) : scale
   }
 
   scale.thresholds = function (): number[] {
@@ -829,8 +831,10 @@ export function quantileScale(): SR {
   scale.domain = function (_?: Iterable<unknown>): unknown {
     if (!arguments.length) return domain.slice()
     domain = []
+    // d3-scale: `for (let d of _) if (d != null && !isNaN(d = +d)) domain.push(d)` - the values are coerced
     for (const raw of _ as Iterable<unknown>) {
-      if (raw != null && !isNaN(+(raw as number))) domain.push(raw as number)
+      const d = +(raw as number)
+      if (raw != null && !isNaN(d)) domain.push(d)
     }
     domain.sort(ascending)
     return rescale()
@@ -873,8 +877,10 @@ export function sequentialQuantile(interpolator?: Interpolator): SR {
   scale.domain = function (_?: Iterable<unknown>): unknown {
     if (!arguments.length) return domain.slice()
     domain = []
+    // d3-scale: `for (let d of _) if (d != null && !isNaN(d = +d)) domain.push(d)` - the values are coerced
     for (const raw of _ as Iterable<unknown>) {
-      if (raw != null && !isNaN(+(raw as number))) domain.push(raw as number)
+      const d = +(raw as number)
+      if (raw != null && !isNaN(d)) domain.push(d)
     }
     domain.sort(ascending)
     return scale

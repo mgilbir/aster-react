@@ -6,11 +6,11 @@ import { boundedCount } from './limits.js'
  */
 
 export function ascending(u: unknown, v: unknown): number {
-  return (u as number) < (v as number) ? -1 : (u as number) > (v as number) ? 1 : (u as number) >= (v as number) ? 0 : NaN
+  return u == null || v == null ? NaN : (u as number) < (v as number) ? -1 : (u as number) > (v as number) ? 1 : (u as number) >= (v as number) ? 0 : NaN
 }
 
 export function descending(u: unknown, v: unknown): number {
-  return (v as number) < (u as number) ? -1 : (v as number) > (u as number) ? 1 : (v as number) >= (u as number) ? 0 : NaN
+  return u == null || v == null ? NaN : (v as number) < (u as number) ? -1 : (v as number) > (u as number) ? 1 : (v as number) >= (u as number) ? 0 : NaN
 }
 
 /** Last element of an array (vega-util's `peek`). */

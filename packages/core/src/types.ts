@@ -249,8 +249,6 @@ export type ScaleRange =
   | 'width'
   | 'height'
   | 'category'
-  /** What the compiler resolves Vega-Lite's `category` range to (see compileChart). */
-  | 'tableau10'
   | 'ordinal'
   | 'ramp'
   | 'diverging'
@@ -289,6 +287,11 @@ export interface CompiledScale {
   bands?: number | boolean
   domainRaw?: unknown[]
   unknown?: unknown
+  schemeExtent?: unknown
+  schemeCount?: unknown
+  interpolateGamma?: unknown
+  domainImplicit?: unknown
+  rangeStep?: unknown
 }
 
 export interface CompiledAxis {
