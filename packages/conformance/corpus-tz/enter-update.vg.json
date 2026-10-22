@@ -1,0 +1,31 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 400,
+  "height": 300,
+  "padding": 5,
+  "autosize": "none",
+  "data": [
+    { "name": "table", "values": [ { "a": "A", "b": 28 }, { "a": "B", "b": 55 }, { "a": "C", "b": 43 } ] }
+  ],
+  "scales": [
+    { "name": "xscale", "type": "band", "domain": { "data": "table", "field": "a" }, "range": "width", "padding": 0.05 },
+    { "name": "yscale", "type": "linear", "domain": { "data": "table", "field": "b" }, "nice": true, "range": "height" }
+  ],
+  "axes": [ { "orient": "bottom", "scale": "xscale", "labels": false } ],
+  "marks": [
+    {
+      "type": "rect", "from": { "data": "table" }, "encode": {
+        "enter": {
+          "x": { "scale": "xscale", "field": "a" },
+          "width": { "scale": "xscale", "band": 1 },
+          "fill": { "value": "firebrick" }
+        },
+        "update": {
+          "y": { "scale": "yscale", "field": "b" },
+          "y2": { "scale": "yscale", "value": 0 },
+          "fillOpacity": [ { "test": "datum.b > 50", "value": 1 }, { "value": 0.4 } ]
+        }
+      }
+    }
+  ]
+}
