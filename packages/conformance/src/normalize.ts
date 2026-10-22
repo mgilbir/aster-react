@@ -202,6 +202,9 @@ function num(v: number | string, p = PRECISION): string {
 
 function numAttr(v: string | undefined, what = 'number'): number {
   if (v === undefined) return 0
+  // JS-serialized `NaN`/`Infinity` appear in documents rendered from degenerate
+  // scales; both engines print them, so they compare as themselves.
+  if (/^\s*(NaN|[-+]?Infinity)\s*$/.test(v)) return Number(v.trim())
   const m = /^\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)(px)?\s*$/.exec(v)
   if (!m) throw new Error(`canonicalizeSvg: non-numeric ${what} "${v}"`)
   return parseFloat(m[1]!)
@@ -507,14 +510,15 @@ function canonPath(d: string, m: Mat): string {
 /** Tokens are command letters or numbers; arc flags may be unseparated. */
 function tokenizePath(d: string): Array<string | number> {
   const out: Array<string | number> = []
-  const numRe = /[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/y
+  const numRe = /[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?|[-+]?NaN|[-+]?Infinity/y
   let i = 0
   let cmd = ''
   let argIdx = 0
   while (i < d.length) {
     const ch = d[i]!
     if (/[\s,]/.test(ch)) { i++; continue }
-    if (/[A-Za-z]/.test(ch)) { cmd = ch; argIdx = 0; out.push(ch); i++; continue }
+    // `NaN` / `Infinity` are number tokens (JS-serialized path data), not commands
+    if (/[A-Za-z]/.test(ch) && !/^(?:NaN|Infinity)/.test(d.slice(i))) { cmd = ch; argIdx = 0; out.push(ch); i++; continue }
     if (cmd.toUpperCase() === 'A' && (argIdx % 7 === 3 || argIdx % 7 === 4)) {
       if (ch !== '0' && ch !== '1') throw new Error(`canonicalizeSvg: bad arc flag in "${d}"`)
       out.push(Number(ch)); i++; argIdx++; continue
@@ -522,7 +526,7 @@ function tokenizePath(d: string): Array<string | number> {
     numRe.lastIndex = i
     const hit = numRe.exec(d)
     if (!hit) throw new Error(`canonicalizeSvg: bad path data "${d}" at ${i}`)
-    out.push(parseFloat(hit[0]))
+    out.push(hit[0].endsWith('NaN') ? NaN : hit[0].endsWith('Infinity') ? (hit[0].startsWith('-') ? -Infinity : Infinity) : parseFloat(hit[0]))
     i += hit[0].length
     argIdx++
   }
@@ -618,13 +622,15 @@ function ownEffects(a: Record<string, string>, legal: ReadonlySet<string>, m: Ma
   const extras = Object.keys(a)
     .filter((k) => !isNonVisualAttr(k) && !INHERITED_SET.has(k) && !OWN_SET.has(k) && k !== 'transform' && k !== 'style' && !legal.has(k))
     .sort()
-  for (const k of extras) out.push(`@${k}=${roundIn(a[k]!)}`)
+  // xlink:href and href are the same attribute
+  for (const k of extras) out.push(`@${k === 'xlink:href' ? 'href' : k}=${k === 'xlink:href' || k === 'href' ? a[k]! : roundIn(a[k]!)}`)
   return out
 }
 
 const ROOT_ATTRS: ReadonlySet<string> = new Set(['width', 'height', 'viewBox', 'preserveAspectRatio', 'background', 'background-color'])
 const NO_ATTRS: ReadonlySet<string> = new Set()
-const CONTAINERS = new Set(['g', 'svg'])
+const LINK_ATTRS: ReadonlySet<string> = new Set()
+const CONTAINERS = new Set(['g', 'svg', 'a'])
 const NONRENDERING = new Set(['defs', 'title', 'desc', 'metadata', 'clipPath', 'linearGradient', 'radialGradient'])
 const SHAPES = new Set(['rect', 'line', 'circle', 'ellipse', 'path', 'polygon', 'polyline', 'image', 'text'])
 
@@ -667,7 +673,10 @@ export function canonicalizeSvg(svg: string): CanonicalResult {
     for (const k of INHERITED) if (a[k] !== undefined) eff[k] = a[k]!
     if (CONTAINERS.has(el.tag)) {
       if (el.tag === 'svg' && el !== rootEl) throw new Error('canonicalizeSvg: nested <svg> is not supported')
-      const legal = el === rootEl ? ROOT_ATTRS : NO_ATTRS
+      // An <a> is a hyperlink wrapper around its content: it paints nothing, but
+      // which URL it points at is observable, so its href stays an ancestor effect
+      // (xlink:href and href are the same attribute: N-attr).
+      const legal = el === rootEl ? ROOT_ATTRS : el.tag === 'a' ? LINK_ATTRS : NO_ATTRS
       const effects = ownEffects(a, legal, m, ctx)
       const nextAnc = effects.length ? [...anc, `{${effects.join(';')}}`] : anc
       for (const c of el.children) if (typeof c !== 'string') walk(c, m, eff, nextAnc)

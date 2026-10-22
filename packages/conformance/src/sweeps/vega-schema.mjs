@@ -106,8 +106,10 @@ function baseSpec() {
       { name: 'colour', type: 'ordinal', domain: { data: 't', field: 'g' }, range: 'category' },
     ],
     axes: [
-      { orient: 'bottom', scale: 'x', title: 'category' },
-      { orient: 'left', scale: 'y', title: 'amount', tickCount: 4 },
+      // grid: true on both so every grid property (gridColor, gridDash, gridCap, gridOpacity...)
+      // reaches something visible; with the default (no grid) they swept nothing.
+      { orient: 'bottom', scale: 'x', title: 'category', grid: true },
+      { orient: 'left', scale: 'y', title: 'amount', tickCount: 4, grid: true },
     ],
     legends: [{ fill: 'colour', title: 'region' }],
     marks: [
