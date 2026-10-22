@@ -89,3 +89,14 @@ The SVG oracle's canonicalizer (`packages/conformance/src/normalize.ts`) is stri
 paint, geometry and text attribute, the full transform and the paint order, and only normalizes
 representation differences it can justify (each is documented in the file).
 `normalize.test.ts` plants one difference at a time and requires each to be reported.
+
+## Transform vectors
+
+`packages/conformance/scripts/gen-transform-vectors.mjs` (`pnpm --filter @aster/conformance run vectors:transforms`)
+records transform-level oracle vectors from the pinned real Vega: transform params + input rows -> output rows,
+one dataflow per case, into `packages/core/testdata/transform-vectors/`. `transform-vectors.test.ts` replays them
+strictly (NaN, -0, `undefined` keys, Dates, row order, cycles, thrown errors), re-runs every case over deep-frozen
+inputs (no transform may mutate its input), and `timeunit` cases carry the non-UTC zone they were recorded under.
+Bootstrap (ci0/ci1) and `sample` are recorded with vega-statistics' seeded LCG (seed 42), which the engine also uses.
+Deliberate deviations (documented in the code): seeded randomness instead of `Math.random`, `bin` without `extent`
+derives it from the data, lookup tables are prototype-less, and vega crashes that are TypeErrors are not replicated.
