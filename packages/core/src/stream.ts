@@ -20,6 +20,8 @@
 import { createChartSession, type ChartSession } from './session.js'
 import { dict } from './util.js'
 import { diffRows, type DataPulse, type DatasetPulse, type PulseRange } from './pulse.js'
+import type { SpecLimits } from './limits.js'
+import type { TextMetricsProvider } from './text-metrics.js'
 import type { RuntimeInput, SceneRoot, VgSpec } from './types.js'
 
 export type StreamPolicy = 'coalesce' | 'drop-oldest' | 'drop-newest' | 'error'
@@ -61,7 +63,16 @@ export interface StreamBatch {
   signals?: Record<string, unknown>
   width?: number
   height?: number
-  domainRaw?: Record<string, unknown[]>
+  /**
+   * Scale-domain overrides, merged into the stream's current overrides. A
+   * `null` value clears that scale's override (back to the data-derived
+   * domain), which is how a host resets a pan/zoom view.
+   */
+  domainRaw?: Record<string, unknown[] | null>
+  /** Replace the budgets applied to every later flush. */
+  limits?: SpecLimits
+  /** Replace the host text measurement used by every later flush. */
+  textMetrics?: TextMetricsProvider
 }
 
 export interface StreamStats {
@@ -219,7 +230,9 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
   let signals: Record<string, unknown> = dict(options.initial?.signals)
   let width = options.initial?.width
   let height = options.initial?.height
-  let domainRaw = options.initial?.domainRaw
+  let domainRaw: Record<string, unknown[]> | undefined = options.initial?.domainRaw
+  let limits = options.initial?.limits
+  let textMetrics = options.initial?.textMetrics
   let queue: StreamBatch[] = []
   let lastPulse: DataPulse | null = null
   let lastScene: SceneRoot | null = null
@@ -260,6 +273,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
           width: batch.width ?? prev.width,
           height: batch.height ?? prev.height,
           domainRaw: dict(prev.domainRaw, batch.domainRaw),
+          limits: batch.limits ?? prev.limits,
+          textMetrics: batch.textMetrics ?? prev.textMetrics,
         }
         stats.coalesced++
         stats.depth = 1
@@ -470,7 +485,17 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
         if (b.signals) signals = dict(signals, b.signals)
         if (b.width != null) width = b.width
         if (b.height != null) height = b.height
-        if (b.domainRaw) domainRaw = dict(domainRaw, b.domainRaw)
+        if (b.domainRaw) {
+          // A null value clears that scale's override (pan/zoom reset).
+          const next = dict(domainRaw) as Record<string, unknown[]>
+          for (const [name, values] of Object.entries(b.domainRaw)) {
+            if (values == null) delete next[name]
+            else next[name] = values
+          }
+          domainRaw = Object.keys(next).length ? next : undefined
+        }
+        if (b.limits) limits = b.limits
+        if (b.textMetrics) textMetrics = b.textMetrics
       }
       const input: RuntimeInput = {
         data: Object.fromEntries(base),
@@ -478,6 +503,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
         ...(width != null ? { width } : {}),
         ...(height != null ? { height } : {}),
         ...(domainRaw ? { domainRaw } : {}),
+        ...(limits ? { limits } : {}),
+        ...(textMetrics ? { textMetrics } : {}),
         ...(Object.keys(dataPulse).length ? { dataPulse } : {}),
         ...(Object.keys(dataChanges).length ? { dataChanges } : {}),
         ...(changedDatasets.length ? { changedDatasets } : {}),
