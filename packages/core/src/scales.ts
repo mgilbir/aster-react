@@ -566,6 +566,11 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
       const all: unknown[] = []
       for (const f of (domain as { fields: unknown[] }).fields) {
         if (f == null || typeof f !== 'object') continue
+        // a literal value list is a member of the union too (vega-lite emits `[5]` for a datum)
+        if (Array.isArray(f)) {
+          all.push(...f)
+          continue
+        }
         const e = f as { data?: string; field?: string }
         if (typeof e.data === 'string' && typeof e.field === 'string') {
           for (const val of ctx.dataField(e.data, e.field)) all.push(val)
@@ -633,21 +638,26 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
         vals.sort((a, b) => (a as string) > (b as string) ? -1 : (a as string) < (b as string) ? 1 : 0)
       } else if (sortSpec && typeof sortSpec === 'object' && !Array.isArray(sortSpec)) {
         const ss = sortSpec as { op?: string; field?: string; order?: string }
-        if (ss.op && ss.field && ctx.dataRows) {
+        if (ss.op && (ss.field || ss.op === 'count') && ctx.dataRows) {
           // Aggregate sort: group rows by domain field, compute op per group, sort
           const domainField = (domain as { field: string }).field
           const dataName = (domain as { data: string }).data
           const rows = ctx.dataRows(dataName)
-          const agg = new Map<unknown, number>()
+          const groups = new Map<unknown, unknown[]>()
           for (const r of rows) {
             const key = r[domainField]
-            const val = typeof r[ss.field] === 'number' ? r[ss.field] as number : Number(r[ss.field]) || 0
-            agg.set(key, (agg.get(key) ?? 0) + val)
+            const list = groups.get(key)
+            const cell = ss.field ? r[ss.field] : 1
+            if (list) list.push(cell)
+            else groups.set(key, [cell])
           }
+          const agg = new Map<unknown, number | string>()
+          for (const [key, list] of groups) agg.set(key, sortAggregate(ss.op, list))
           const desc = ss.order === 'descending'
+          const cmp = (x: number | string, y: number | string): number => (x < y ? -1 : x > y ? 1 : 0)
           vals.sort((a, b) => {
             const av = agg.get(a) ?? 0, bv = agg.get(b) ?? 0
-            return desc ? bv - av : av - bv
+            return desc ? cmp(bv, av) : cmp(av, bv)
           })
         } else if (!ss.field || ss.field === 'key') {
           // Alphabetical sort: {order: "descending"} or {order: "descending", field: "key"}
@@ -671,6 +681,53 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
     return Array.isArray(v) ? (v as unknown[]) : [v]
   }
   return []
+}
+
+/**
+ * The aggregate a domain `sort: {op, field}` applies per group of rows (Vega's
+ * aggregate ops). Unknown ops throw rather than silently sorting by a sum.
+ */
+function sortAggregate(op: string, cells: unknown[]): number | string {
+  const nums = cells.map((c) => (typeof c === 'number' ? c : Number(c))).filter((n) => !Number.isNaN(n))
+  const n = nums.length
+  const sum = nums.reduce((a, b) => a + b, 0)
+  const mean = n ? sum / n : 0
+  const sorted = [...nums].sort((a, b) => a - b)
+  const quantile = (p: number): number => {
+    if (!n) return 0
+    const i = (n - 1) * p
+    const lo = Math.floor(i)
+    const hi = Math.ceil(i)
+    return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (i - lo)
+  }
+  const variance = (denom: number): number => (denom > 0 ? nums.reduce((a, b) => a + (b - mean) * (b - mean), 0) / denom : 0)
+  switch (op) {
+    case 'sum': return sum
+    case 'count': return cells.length
+    case 'min': case 'max': {
+      // min/max also order non-numeric (string/date-like) values, as Vega does
+      if (n < cells.length || n === 0) {
+        const vals = cells.filter((c) => c != null) as Array<string | number>
+        if (!vals.length) return 0
+        return vals.reduce((a, b) => ((op === 'min' ? b < a : b > a) ? b : a))
+      }
+      return op === 'min' ? sorted[0]! : sorted[n - 1]!
+    }
+    case 'mean': case 'average': return mean
+    case 'median': return quantile(0.5)
+    case 'q1': return quantile(0.25)
+    case 'q3': return quantile(0.75)
+    case 'distinct': return new Set(cells).size
+    case 'valid': return cells.filter((c) => c != null && !(typeof c === 'number' && Number.isNaN(c))).length
+    case 'missing': return cells.filter((c) => c == null || (typeof c === 'number' && Number.isNaN(c))).length
+    case 'product': return nums.reduce((a, b) => a * b, 1)
+    case 'variance': return variance(n - 1)
+    case 'variancep': return variance(n)
+    case 'stdev': return Math.sqrt(variance(n - 1))
+    case 'stdevp': return Math.sqrt(variance(n))
+    case 'stderr': return n > 1 ? Math.sqrt(variance(n - 1) / n) : 0
+    default: throw new Error(`[aster] unsupported domain sort op: ${op}`)
+  }
 }
 
 // Per-evaluation, per-dataset-identity memo for ordinal domain collection. The
@@ -835,6 +892,15 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string, 
       if (scaleType === 'quantile' || scaleType === 'quantize' || scaleType === 'threshold') {
         const scheme = vs.scheme(schemeName)
         if (typeof scheme === 'function') return quantizeInterpolator(scheme as (t: number) => unknown, 5) as unknown[]
+      }
+      // A discrete scale takes the scheme's colours themselves (a continuous
+      // scheme is quantized to the domain cardinality, as in vega's
+      // configureScheme); only a continuous scale needs the interpolator name.
+      if (scaleType === 'band' || scaleType === 'ordinal' || scaleType === 'point') {
+        const colors = vs.scheme(schemeName)
+        if (Array.isArray(colors)) return colors
+        if (typeof colors === 'function') return quantizeInterpolator(colors as (t: number) => unknown, Math.max(domainCount, 1)) as unknown[]
+        throw new Error(`Unrecognized scale scheme: ${schemeName}`)
       }
       return extent ? { __asterScheme: schemeName, __asterExtent: extent } : schemeName
     }
