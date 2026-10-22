@@ -1469,21 +1469,15 @@ function attr(name: string, value: unknown): string {
 
 /**
  * Format a coordinate/length. The argument is typed `number` but comes from
- * spec and data, so anything else is coerced: a string, object or array can
- * never reach the output as itself (`Number('abc')` is `NaN`). `null`,
- * `undefined` and booleans print as their literal keyword, as vega does.
+ * spec and data, so it is coerced with `Number`: a string, object or array can
+ * never reach the output as itself (`Number('abc')` is `NaN`).
+ *
+ * Full precision, matching vega-scenegraph: its SVG renderers serialize raw
+ * doubles (String(number)). Rounding here (e.g. to 3 decimals) shifts
+ * relative-delta endpoint sums by ~1e-3 after recombination — enough to trip
+ * the conformance canonicalizer. Canonical comparison rounds anyway.
  */
-export function num(x: number): string {
-  // Full precision, matching vega-scenegraph: its SVG renderers serialize raw
-  // doubles (String(number)). Rounding here (e.g. to 3 decimals) shifts
-  // relative-delta endpoint sums by ~1e-3 after recombination — enough to trip
-  // the conformance canonicalizer. Canonical comparison rounds anyway.
-  // (String(NaN) / String(Infinity) are the same keywords the old guard emitted.)
-  if (typeof x === 'number') return String(x)
-  const v = x as unknown
-  if (v == null || typeof v === 'boolean') return String(v)
-  return String(Number(v))
-}
+export const num = (x: number): string => String(Number(x))
 
 /**
  * d3-path rounding with `digits = 3` (d3-shape's `withPath` default).
@@ -1493,11 +1487,6 @@ export function num(x: number): string {
  * (path/rectangle.js, trail.js via a digits-less d3-path) emit raw doubles.
  */
 function num3(x: number): string {
-  if (typeof x !== 'number') {
-    const v = x as unknown
-    if (v == null || typeof v === 'boolean') return String(v)
-    x = Number(v)
-  }
-  // NaN/Infinity: Math.round keeps them, String prints the keyword.
+  // `x * 1000` coerces like Number(x), so a non-number cannot survive as itself
   return String(Math.round(x * 1000) / 1000)
 }

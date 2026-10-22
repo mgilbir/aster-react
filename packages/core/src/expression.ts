@@ -272,8 +272,7 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
     pad,
     parseFloat: (value: unknown) => parseFloat(String(value)),
     parseInt: (value: unknown, radix?: unknown) => parseInt(String(value), radix == null ? undefined : Number(radix)),
-    replace: (value: unknown, pattern: unknown, repl: unknown) =>
-      String(value).replace(isRegExp(pattern) ? (pattern as RegExp) : String(pattern), String(repl)),
+    replace: (value: unknown, pattern: unknown, repl: unknown) => String(value).replace(pattern as string | RegExp, String(repl)),
     split: (value: unknown, sep: unknown, limit?: unknown) => String(value).split(sep as string, limit == null ? undefined : Number(limit)),
     substring: (value: unknown, start?: number, end?: number) => String(value).substring(start ?? 0, end),
     trim: (value: unknown) => String(value).trim(),

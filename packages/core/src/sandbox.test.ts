@@ -44,7 +44,7 @@ describe('C1: Function constructor is unreachable from expressions', () => {
   it('toDate is unary like vega-functions (extra arguments suppressed)', () => {
     expect(run("toDate('2020-01-01', 5)")).toBe(Date.parse('2020-01-01'))
     // a callable in any argument position is refused outright (stricter than vega)
-    expect(() => run("toDate('2020-01-01', datum.x)", { x: () => 1 })).toThrow(/function arguments/)
+    expect(() => run("toDate('2020-01-01', datum.x)", { x: () => 1 })).toThrow(/Function argument refused/)
   })
 
   it('pluck never yields a function through inherited/prototype keys', () => {

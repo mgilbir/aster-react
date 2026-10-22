@@ -248,7 +248,7 @@ const Visitors: Record<string, ($: EvalContext, n: AstNode) => unknown> = {
     // value (e.g. a scale) be invoked by a built-in. The `is*` type inspectors
     // only look at the value and are exempt.
     if (!name.startsWith('is') && vals.some((v) => typeof v === 'function')) {
-      throw new Error(`Expression function "${name}" does not accept function arguments`)
+      throw new Error(`Function argument refused: ${name}`)
     }
     return (f as (...a: unknown[]) => unknown).apply($.fn, vals)
   },
