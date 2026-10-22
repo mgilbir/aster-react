@@ -9,6 +9,7 @@ import { ownGet, minOf, maxOf } from './util.js'
 import { boundedCount } from './limits.js'
 import { quantizeInterpolator } from './scale.js'
 import { hcl, rgb } from './color.js'
+import { aggregateGroup } from './transform.js'
 import type { CompiledScale, ScaleDomain, ScaleRange } from './types.js'
 
 export type Scale = vs.Scale
@@ -643,16 +644,15 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
           const domainField = (domain as { field: string }).field
           const dataName = (domain as { data: string }).data
           const rows = ctx.dataRows(dataName)
-          const groups = new Map<unknown, unknown[]>()
+          // the aggregate Vega runs per domain value (aggregateGroup = Vega's ops, incl. count without a field)
+          const groups = new Map<unknown, Record<string, unknown>[]>()
           for (const r of rows) {
-            const key = r[domainField]
-            const list = groups.get(key)
-            const cell = ss.field ? r[ss.field] : 1
-            if (list) list.push(cell)
-            else groups.set(key, [cell])
+            const g = groups.get(r[domainField])
+            if (g) g.push(r)
+            else groups.set(r[domainField], [r])
           }
           const agg = new Map<unknown, number | string>()
-          for (const [key, list] of groups) agg.set(key, sortAggregate(ss.op, list))
+          for (const [key, g] of groups) agg.set(key, aggregateGroup(g, [], [ss.field ?? null], [ss.op], ['v']).v as number)
           const desc = ss.order === 'descending'
           const cmp = (x: number | string, y: number | string): number => (x < y ? -1 : x > y ? 1 : 0)
           vals.sort((a, b) => {
@@ -681,53 +681,6 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
     return Array.isArray(v) ? (v as unknown[]) : [v]
   }
   return []
-}
-
-/**
- * The aggregate a domain `sort: {op, field}` applies per group of rows (Vega's
- * aggregate ops). Unknown ops throw rather than silently sorting by a sum.
- */
-function sortAggregate(op: string, cells: unknown[]): number | string {
-  const nums = cells.map((c) => (typeof c === 'number' ? c : Number(c))).filter((n) => !Number.isNaN(n))
-  const n = nums.length
-  const sum = nums.reduce((a, b) => a + b, 0)
-  const mean = n ? sum / n : 0
-  const sorted = [...nums].sort((a, b) => a - b)
-  const quantile = (p: number): number => {
-    if (!n) return 0
-    const i = (n - 1) * p
-    const lo = Math.floor(i)
-    const hi = Math.ceil(i)
-    return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (i - lo)
-  }
-  const variance = (denom: number): number => (denom > 0 ? nums.reduce((a, b) => a + (b - mean) * (b - mean), 0) / denom : 0)
-  switch (op) {
-    case 'sum': return sum
-    case 'count': return cells.length
-    case 'min': case 'max': {
-      // min/max also order non-numeric (string/date-like) values, as Vega does
-      if (n < cells.length || n === 0) {
-        const vals = cells.filter((c) => c != null) as Array<string | number>
-        if (!vals.length) return 0
-        return vals.reduce((a, b) => ((op === 'min' ? b < a : b > a) ? b : a))
-      }
-      return op === 'min' ? sorted[0]! : sorted[n - 1]!
-    }
-    case 'mean': case 'average': return mean
-    case 'median': return quantile(0.5)
-    case 'q1': return quantile(0.25)
-    case 'q3': return quantile(0.75)
-    case 'distinct': return new Set(cells).size
-    case 'valid': return cells.filter((c) => c != null && !(typeof c === 'number' && Number.isNaN(c))).length
-    case 'missing': return cells.filter((c) => c == null || (typeof c === 'number' && Number.isNaN(c))).length
-    case 'product': return nums.reduce((a, b) => a * b, 1)
-    case 'variance': return variance(n - 1)
-    case 'variancep': return variance(n)
-    case 'stdev': return Math.sqrt(variance(n - 1))
-    case 'stdevp': return Math.sqrt(variance(n))
-    case 'stderr': return n > 1 ? Math.sqrt(variance(n - 1) / n) : 0
-    default: throw new Error(`[aster] unsupported domain sort op: ${op}`)
-  }
 }
 
 // Per-evaluation, per-dataset-identity memo for ordinal domain collection. The
