@@ -143,9 +143,11 @@ function genSpec(r: Rnd): GenSpec {
   const xy = (dataset: string, xf: string, yf: string, extra: Record<string, unknown> = {}): Record<string, unknown> =>
     ({ x: { scale: 'x', field: xf }, y: { scale: 'y', field: yf }, ...extra })
   const fillFor = pipe.cf ? { fill: { scale: 'color', field: pipe.cf } } : { fill: { value: '#4c78a8' } }
+  // Marks whose encode reads a signal directly (not only through a scale).
+  const sigSize = r() < 0.4
   const sym = (dataset: string): Record<string, unknown> => ({
     type: 'symbol', from: { data: dataset },
-    encode: { update: { ...xy(dataset, pipe.xf, pipe.yf), size: { value: 30 }, ...fillFor } },
+    encode: { update: { ...xy(dataset, pipe.xf, pipe.yf), size: sigSize ? { signal: '10 + sig * 5' } : { value: 30 }, ...fillFor } },
   })
   const txt = (dataset: string): Record<string, unknown> => ({
     type: 'text', from: { data: dataset },
@@ -175,7 +177,7 @@ function genSpec(r: Rnd): GenSpec {
     features.push('layered(text)')
     if (r() < 0.4) { marks.push(sym(ds)); features.push('layered(sym2)') }
   }
-  const nested = pick(r, ['none', 'none', 'group', 'facet', 'scoped', 'other'] as const)
+  const nested = pick(r, ['none', 'none', 'group', 'facet', 'scoped', 'other', 'umark'] as const)
   features.push(`nested=${nested}`)
   if (nested === 'group') {
     marks.push({ type: 'group', marks: [sym(ds), txt(ds)] })
@@ -192,6 +194,13 @@ function genSpec(r: Rnd): GenSpec {
       scales: [{ name: 'sx', type: 'linear', domain: [0, 10], range: 'width' }],
       axes: [{ scale: 'sx', orient: 'bottom' }],
       marks: [sym(ds)],
+    })
+  } else if (nested === 'umark') {
+    // A mark over an UNRELATED dataset positioned by a scale whose domain spans
+    // the changed data: the whole group must not be reused with stale positions.
+    marks.push({
+      type: 'symbol', from: { data: 'u' },
+      encode: { update: { x: { scale: 'x', field: 'w' }, y: { scale: 'y', field: 'w' }, size: { value: 12 }, fill: { value: '#54a24b' } } },
     })
   } else if (nested === 'other') {
     // A mark over a DIFFERENT dataset sharing the same scales.
@@ -374,10 +383,16 @@ export function applyStep(w: World, s: Step): World {
       }
       break
     }
-    case 'signal': next.sig = Math.floor(s.r[0]! * 9); break
+    case 'signal': {
+      next.sig = Math.floor(s.r[0]! * 9)
+      // Often together with a data edit: reuse must notice the signal anyway.
+      if (s.r[7]! < 0.6 && t.length) { const i = ix(s.r[6]!, t.length); t[i] = { ...t[i]!, ...rowAt(1), g: t[i]!.g } }
+      break
+    }
     case 'size': {
       next.width = s.r[0]! < 0.2 ? undefined : 150 + Math.floor(s.r[0]! * 200)
       next.height = s.r[1]! < 0.2 ? undefined : 120 + Math.floor(s.r[1]! * 160)
+      if (s.r[7]! < 0.6 && t.length) { const i = ix(s.r[6]!, t.length); t[i] = { ...t[i]!, ...rowAt(2), g: t[i]!.g } }
       break
     }
     case 'noop': break
@@ -708,7 +723,7 @@ describe('incremental === fresh evaluateChart(compileChart(spec)) (audit C84 / T
     const all = text.join('\n')
     for (const p of PIPES) seen.add(p.name)
     for (const need of ['filter', 'aggregate', 'window-sort', 'window-nosort', 'identifier', 'bin-data', 'stack', 'fold', 'flatten', 'lookup',
-      'layered(text)', 'nested=group', 'nested=facet', 'nested=scoped', 'nested=other', 'xdom=multi', 'xdom=signal', 'autosize=fit', 'legend']) {
+      'layered(text)', 'nested=group', 'nested=facet', 'nested=scoped', 'nested=other', 'nested=umark', 'xdom=multi', 'xdom=signal', 'autosize=fit', 'legend']) {
       expect(all, `generator never produces ${need}`).toContain(need)
     }
   })

@@ -93,6 +93,19 @@ describe('C11: the domain census shrinks', () => {
   })
 })
 
+describe('discrete domain census', () => {
+  it('a value whose first occurrence is later moves the domain order', () => {
+    const spec = { ...BASE, data: [{ name: 't', values: [] }], scales: [{ name: 'x', type: 'band', domain: { data: 't', field: 'g' }, range: 'width' }], marks: [sym('t', 'x', 'g')] }
+    const chart = compileChart(spec as never)
+    const rows = ['A', 'A', 'B', 'C'].map((g) => ({ g }))
+    evaluateChart(chart, { data: { t: rows } })
+    const next = ['A', 'C', 'B', 'C'].map((g) => ({ g }))
+    const inc = evaluateChart(chart, { data: { t: next }, dataChanges: { t: [1] } })
+    expect(scaleDomain(inc, 'x')).toEqual(['A', 'C', 'B'])
+    expect(renderSceneToSvg(inc)).toBe(renderSceneToSvg(fresh(spec, { data: { t: next } })))
+  })
+})
+
 describe('C12: multi-dataset domains are re-resolved every evaluation', () => {
   const spec = {
     ...BASE,
@@ -205,6 +218,19 @@ describe('C14: a group is reused only when everything it reads is unchanged', ()
     const inc = evaluateChart(chart, { width: 400, changedDatasets: ['o'] })
     expect(xs(groups(inc)[0]!)).toEqual([400])
   })
+  it('a mark over an unchanged dataset follows a scale whose domain changed', () => {
+    const spec = {
+      ...BASE,
+      data: [{ name: 't', values: [] }, { name: 'u', values: [{ w: 5 }] }],
+      scales: [lin('x', { data: 't', field: 'v' }, { zero: false })],
+      marks: [sym('t'), sym('u', 'x', 'w')],
+    }
+    const chart = compileChart(spec as never)
+    evaluateChart(chart, { data: { t: [{ v: 0 }, { v: 10 }], u: [{ w: 5 }] } })
+    const next = [{ v: 0 }, { v: 20 }]
+    const inc = evaluateChart(chart, { data: { t: next, u: [{ w: 5 }] }, dataChanges: { t: [1] } })
+    expect(xs(groups(inc)[1]!)).toEqual([25])
+  })
   it('a mark depending on a lookup source sees that source change', () => {
     const spec = {
       ...BASE,
@@ -216,6 +242,22 @@ describe('C14: a group is reused only when everything it reads is unchanged', ()
     evaluateChart(chart, { data: { u: [{ k: 'a', w: 10 }], d: [{ k: 'a' }] } })
     const inc = evaluateChart(chart, { data: { u: [{ k: 'a', w: 60 }], d: [{ k: 'a' }] }, changedDatasets: ['u'] })
     expect(xs(groups(inc)[0]!)).toEqual([60])
+  })
+})
+
+describe('signal and data change together', () => {
+  it('an encode reading a signal is re-encoded for unchanged rows when the signal changes alongside a data edit', () => {
+    const spec = {
+      ...BASE, signals: [{ name: 's', value: 1 }],
+      data: [{ name: 't', values: [] }], scales: [lin('x', [0, 100])],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { signal: 's * 10' }, y: { value: 5 } } } }],
+    }
+    const chart = compileChart(spec as never)
+    const rows = [{ v: 1 }, { v: 2 }]
+    evaluateChart(chart, { data: { t: rows }, signals: { s: 1 } })
+    const next = [{ v: 1 }, { v: 3 }]
+    const inc = evaluateChart(chart, { data: { t: next }, signals: { s: 4 }, dataChanges: { t: [1] } })
+    expect(xs(groups(inc)[0]!)).toEqual([40, 40])
   })
 })
 
@@ -288,8 +330,9 @@ describe('C16: a rejected evaluation commits nothing', () => {
     const spec = {
       ...BASE,
       data: [{ name: 't', values: [], transform: [{ type: 'formula', expr: 'datum.obj.deep', as: 'f' }] }],
-      scales: [lin('x', [0, 100])],
-      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'f' }, y: { value: 5 } } } }],
+      // The domain reads the derived field, so a stale cached row 0 (99) shows.
+      scales: [lin('x', { data: 't', field: 'f' }, { zero: false })],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'f' }, y: { value: 5 } } } }],
     }
     const row = (deep: number) => ({ obj: { deep } })
     const chart = compileChart(spec as never)
@@ -303,7 +346,7 @@ describe('C16: a rejected evaluation commits nothing', () => {
     const next = [row(10), row(20), row(30)]
     const inc = evaluateChart(chart, { data: { t: next }, dataPulse: { t: { changed: [], appendOnly: true, baseLength: 2, added: [[2, 3]] } } })
     expect(renderSceneToSvg(inc)).toBe(renderSceneToSvg(fresh(spec, { data: { t: next } })))
-    expect(xs(groups(inc)[0]!)).toEqual([10, 20, 30])
+    expect(xs(groups(inc)[0]!)).toEqual([0, 50, 100])
   })
 })
 
