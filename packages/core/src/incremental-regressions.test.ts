@@ -464,19 +464,19 @@ describe('C52: lazily materialised superseded scenes', () => {
     setFlagsFromString('--expose-gc')
     const gc = vm.runInNewContext('gc') as () => void
     const chart = compileChart(spec as never)
-    const refs: WeakRef<SceneRoot>[] = []
+    const refs: Array<WeakRef<object>> = []
     let newest!: SceneRoot
     ;(() => {
       let s = evaluateChart(chart, { data: { t: rowsN(50) } })
-      refs.push(new WeakRef(s))
+      refs.push(new WeakRef(s), new WeakRef(groups(s)[0]!))
       for (let n = 50; n < 60; n++) {
         s = evaluateChart(chart, { data: { t: rowsN(n + 1) }, dataPulse: ap(n) })
-        refs.push(new WeakRef(s))
+        refs.push(new WeakRef(s), new WeakRef(groups(s)[0]!))
       }
       newest = s
     })()
     for (let i = 0; i < 20; i++) { gc(); await new Promise((r) => setTimeout(r, 5)) }
-    const alive = refs.slice(0, -1).filter((r) => r.deref() !== undefined).length
+    const alive = refs.slice(0, -2).filter((r) => r.deref() !== undefined).length
     expect(alive).toBe(0)
     expect(groups(newest)[0]!.items).toHaveLength(60)
   })
