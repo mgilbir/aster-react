@@ -7,6 +7,14 @@
  * oracle's; the rendered output must not.
  */
 
+import { VLCompileError, flatField, datumRef as dref, datumPathRef, genName, genSignal, safeKey, splitAccessPath, validExpr } from './names.js'
+import { validateSpec } from './validate.js'
+import { predicateExpr } from './predicate.js'
+import { getTimeUnitParts, normalizeTimeUnit, timeUnitFieldName, timeUnitTransform, type NormalTimeUnit } from './timeunit.js'
+import { binNames, binTransforms, normalizeBin, translateTransforms, type BinParams, type TransformContext, type TranslateState } from './transforms.js'
+
+export { VLCompileError }
+
 // --- spec types (structural, loose) ------------------------------------------
 
 export type VLSpec = Record<string, unknown>
@@ -33,11 +41,23 @@ export interface ChannelDef {
 
 export interface FieldDef {
   channel: string
+  /** The flat, access-path-safe key every internal reference uses (see names.ts flatField). */
   field: string
+  /** The user's field text, for titles. */
+  source: string
+  /** Expression materializing `field` from a nested/escaped source path (pipeline start). */
+  flatExpr?: string
   type: string
   aggregate?: string
+  /** argmax/argmin aggregates: the arg field's flat key and the value path read from the winning row. */
+  argAgg?: { op: 'argmax' | 'argmin'; arg: string; argSource: string; valuePath: string }
   bin?: boolean | Record<string, unknown>
+  /** normalized bin params (maxbins default applied) when `bin` is set */
+  binParams?: BinParams
+  /** the time unit string WITHOUT the utc prefix (e.g. "yearmonth") */
   timeUnit?: string
+  /** normalized time unit (utc flag, step) */
+  tu?: NormalTimeUnit
   sort?: unknown
   stack?: unknown
   bandPosition?: number
@@ -70,19 +90,52 @@ function array(v: unknown): unknown[] {
 
 // --- entry -------------------------------------------------------------------
 
+/**
+ * Compile a Vega-Lite spec to Vega.
+ *
+ * The input is never mutated: it is cloned once up front (so every downstream
+ * in-place edit lands on the private copy) and validated against the explicit
+ * support tables in validate.ts. Unsupported or invalid input throws a
+ * VLCompileError naming the feature; it is never silently degraded.
+ */
 export function compile(input: VLSpec): VLSpec {
-  const spec = input
-  if (isObject(spec.layer) || Array.isArray(spec.layer)) return compileLayered(spec)
+  const spec = cloneSpec(input)
+  validateSpec(spec)
+  const ctx = makeCtx(spec)
+  return finalizeData(compileView(spec, ctx), ctx)
+}
+
+/** Prepend lookup source datasets (Vega resolves `lookup.from` by name at parse time). */
+function finalizeData(out: VLSpec, ctx: CompileCtx): VLSpec {
+  const data = (out.data as Record<string, unknown>[] | undefined) ?? []
+  const have = new Set(data.map((d) => d.name as string))
+  const extra: Record<string, unknown>[] = []
+  for (const d of ctx.lookups.values()) if (!have.has(d.name as string)) extra.push(d)
+  if (extra.length) out.data = [...extra, ...data]
+  return out
+}
+
+function cloneSpec(input: VLSpec): VLSpec {
+  if (!isObject(input)) throw new VLCompileError('a Vega-Lite spec must be a JSON object')
+  try {
+    return structuredClone(input)
+  } catch (e) {
+    throw new VLCompileError(`the spec must be plain JSON-compatible data (${(e as Error).message})`)
+  }
+}
+
+function compileView(spec: VLSpec, ctx: CompileCtx): VLSpec {
+  if (isObject(spec.layer) || Array.isArray(spec.layer)) return compileLayered(spec, ctx)
   // facet forms: top-level {facet, spec}, encoding.facet {row?, column?}, or
   // the encoding shorthand row/column channels
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   const hasEncFacet = isObject(enc.facet) || enc.row != null || enc.column != null
-  if (isObject(spec.facet) || (isObject(spec.spec) && hasTopFacet(spec))) return compileFaceted(spec)
-  if (hasEncFacet && spec.spec == null) return compileFaceted(spec)
-  if (isObject(spec.mark) && (spec.mark as Record<string, unknown>).type === 'boxplot') return compileBoxplot(spec)
-  if (spec.repeat != null) return compileRepeat(spec)
-  if (spec.concat || spec.hconcat || spec.vconcat) return compileConcat(spec)
-  return compileUnit(spec)
+  if (isObject(spec.facet) || (isObject(spec.spec) && hasTopFacet(spec))) return compileFaceted(spec, ctx)
+  if (hasEncFacet && spec.spec == null) return compileFaceted(spec, ctx)
+  if (spec.mark === 'boxplot' || (isObject(spec.mark) && (spec.mark as Record<string, unknown>).type === 'boxplot')) return compileBoxplot(spec, ctx)
+  if (spec.repeat != null) return compileRepeat(spec, ctx)
+  if (spec.concat || spec.hconcat || spec.vconcat) return compileConcat(spec, ctx)
+  return compileUnitView(spec, ctx)
 }
 
 function hasTopFacet(spec: VLSpec): boolean {
@@ -93,7 +146,7 @@ function hasTopFacet(spec: VLSpec): boolean {
 
 /** Compile a multi-layer spec: shared source + casts, per-layer pipelines,
  * unioned positional scales, one mark group per layer. */
-function compileLayered(spec: VLSpec): VLSpec {
+function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const layers = (Array.isArray(spec.layer) ? spec.layer : [spec.layer]) as VLSpec[]
   const width = spec.width ?? 200
   const height = spec.height ?? 200
@@ -153,7 +206,7 @@ function compileLayered(spec: VLSpec): VLSpec {
   const castDone = new Set<string>()
   const castTransforms: Record<string, unknown>[] = []
   for (const p of parsed) {
-    const d = buildData(p.l, p.fields, p.mark, p.orient, castDone)
+    const d = buildData(p.l, p.fields, p.mark, p.orient, castDone, ctx)
     castTransforms.push(...d.casts)
     p.pipeline = d.pipeline
     p.seriesFields = d.seriesFields
@@ -234,7 +287,7 @@ function compileLayered(spec: VLSpec): VLSpec {
   // with independent y, the y scales stay per-layer (renamed); the remaining
   // scales still merge across layers
   const scales = indepY
-    ? [...mergeLayerScales(perLayerScales.map((ls) => ls.filter((s) => s.name !== 'y'))), ...perLayerScales.flat().filter((s) => s.name.endsWith('_y') && s.name.startsWith('layer_'))]
+    ? [...mergeLayerScales(perLayerScales.map((ls) => ls.filter((s) => s.name !== 'y' && !(s.name.startsWith('layer_') && s.name.endsWith('_y'))))), ...perLayerScales.flat().filter((s) => s.name.endsWith('_y') && s.name.startsWith('layer_'))]
     : mergeLayerScales(perLayerScales)
   out.scales = scales
 
@@ -375,7 +428,7 @@ function autosizeOf(spec: VLSpec): unknown {
 // --- facet composition -------------------------------------------------------
 
 /** Compile a faceted chart (encoding.facet / top-level facet + spec). */
-function compileFaceted(spec: VLSpec): VLSpec {
+function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const facetDef = isObject(spec.facet) ? (spec.facet as Record<string, unknown>) : undefined
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   const encFacet = isObject(enc.facet) ? (enc.facet as Record<string, unknown>) : undefined
@@ -397,7 +450,7 @@ function compileFaceted(spec: VLSpec): VLSpec {
     delete enc.column
     innerSpec = { ...spec, encoding: enc }
   }
-  const inner = compileUnit(innerSpec)
+  const inner = compileUnitView(innerSpec, ctx)
   // The inner unit may carry a DECLARED source name (vega-lite preserves it);
   // facet references must target whatever the inner marks actually read.
   const innerDataName = (((inner.marks as Record<string, unknown>[])?.[0]?.from as { data?: string } | undefined)?.data) ?? 'data_0'
@@ -432,7 +485,7 @@ function compileFaceted(spec: VLSpec): VLSpec {
       const pre: Record<string, unknown>[] = []
       for (const fd of facetTimeUnits) {
         pre.push({ type: 'formula', expr: `toDate(datum[${JSON.stringify(fd.field)}])`, as: fd.field })
-        pre.push({ field: fd.field, type: 'timeunit', units: timeUnitUnits(fd.timeUnit!), as: [timeUnitField(fd), `${timeUnitField(fd)}_end`] })
+        pre.push(timeUnitTransform(fd.tu!, fd.field, timeUnitField(fd)))
       }
       trs.unshift(...pre)
     }
@@ -503,9 +556,13 @@ function compileFaceted(spec: VLSpec): VLSpec {
       }
     }
   }
+  const isStepRange = (r: unknown): boolean => r != null && typeof r === 'object' && !Array.isArray(r) && 'step' in (r as object)
   for (const sc of inner.scales as ScaleSpec[]) {
-    if (sc.name === 'x') sc.range = [0, { signal: 'child_width' }]
-    if (sc.name === 'y') sc.range = [{ signal: 'child_height' }, 0]
+    // a discrete scale already sized by a step keeps its {step} range (the
+    // child size signal is derived FROM it, so pointing the range back at the
+    // size signal would be a dataflow cycle)
+    if (sc.name === 'x' && !isStepRange(sc.range)) sc.range = [0, { signal: 'child_width' }]
+    if (sc.name === 'y' && !isStepRange(sc.range)) sc.range = [{ signal: 'child_height' }, 0]
   }
   walkRename(inner.axes ?? [])
   walkRename(inner.marks)
@@ -777,7 +834,7 @@ function prefixScaleRefs(node: unknown, prefix: string): void {
  * height), never to the repeat spec's width/height — calibrated against the
  * oracle. A plain `repeat` array lays out horizontally; `{row, column}`
  * arrays form a grid (columns = column cardinality). */
-function compileRepeat(spec: VLSpec): VLSpec {
+function compileRepeat(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const rep = spec.repeat as unknown
   const child = (spec.spec ?? {}) as VLSpec
   const isGrid = rep != null && !Array.isArray(rep)
@@ -832,7 +889,7 @@ function compileRepeat(spec: VLSpec): VLSpec {
     const unitSpec: VLSpec = JSON.parse(JSON.stringify(child))
     subst(unitSpec)
     if (!isObject(unitSpec.data) && isObject(spec.data)) unitSpec.data = spec.data
-    const unit = compileUnit(unitSpec)
+    const unit = compileUnitView(unitSpec, ctx)
     const unitData = unit.data as Record<string, unknown>[]
     const map = new Map<string, string>()
     const srcEntry = unitData[0]!
@@ -936,7 +993,7 @@ function compileRepeat(spec: VLSpec): VLSpec {
 
 /** Compile an hconcat/vconcat/concat spec: one group per child with its own
  * prefixed scales and axes, a shared source, and per-child pipelines. */
-function compileConcat(spec: VLSpec): VLSpec {
+function compileConcat(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const horizontal = spec.hconcat != null
   const children = ((spec.hconcat ?? spec.vconcat ?? spec.concat) as VLSpec[]) ?? []
   const sharedSource = isObject(spec.data) && (spec.data as Record<string, unknown>).name != null
@@ -955,7 +1012,7 @@ function compileConcat(spec: VLSpec): VLSpec {
   children.forEach((child, i) => {
     const unitSpec: VLSpec = { ...child }
     if (!isObject(unitSpec.data) && isObject(spec.data)) unitSpec.data = spec.data
-    const unit = compileUnit(unitSpec)
+    const unit = compileUnitView(unitSpec, ctx)
     const unitData = unit.data as Record<string, unknown>[]
     const map = new Map<string, string>()
     // shared source
@@ -1052,134 +1109,179 @@ function compileConcat(spec: VLSpec): VLSpec {
 
 /** Expand a boxplot composite mark into the layered aggregate structure
  * vega-lite compiles it to: outliers, whisker rules, the box and the median
- * bar (five marks over nine datasets). Vertical orientation only. */
-function compileBoxplot(spec: VLSpec): VLSpec {
-  const markDef = spec.mark as Record<string, unknown>
-  const extent = (markDef.extent as number) ?? 1.5
-  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, Record<string, unknown>>) : {}
-  const xDef = enc.x
-  const yDef = enc.y
-  if (!xDef?.field || !yDef?.field) throw new Error('[aster/vl] boxplot requires x and y fields')
-  const isDiscreteX = (xDef.type as string) === 'nominal' || (xDef.type as string) === 'ordinal'
-  if (!isDiscreteX) throw new Error('[aster/vl] horizontal boxplot not supported yet')
-  const dim = xDef.field as string
-  const F = yDef.field as string
-  const lowerBox = `lower_box_${F}`
-  const upperBox = `upper_box_${F}`
-  const midBox = `mid_box_${F}`
-  const minF = `min_${F}`
-  const maxF = `max_${F}`
-  const lowerW = `lower_whisker_${F}`
-  const upperW = `upper_whisker_${F}`
-  const q = JSON.stringify(F)
+ * bar. Vertical orientation only; `extent` is a number (outlier fence in IQRs)
+ * or "min-max" (whiskers span the data, no outlier layer). */
+function compileBoxplot(spec: VLSpec, ctx: CompileCtx): VLSpec {
+  const markDef = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : { type: 'boxplot' }
+  const extent = (markDef.extent as number | 'min-max' | undefined) ?? 1.5
+  const minMax = extent === 'min-max'
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  for (const k of Object.keys(enc)) {
+    if (k !== 'x' && k !== 'y') throw new VLCompileError(`encoding.${k}: boxplot only supports the x and y channels`)
+  }
+  const xFd = parseChannel('x', enc.x)
+  const yFd = parseChannel('y', enc.y)
+  if (!xFd || !yFd || xFd.aggregate || yFd.aggregate || xFd.bin || yFd.bin || xFd.timeUnit || yFd.timeUnit) {
+    throw new VLCompileError('boxplot requires plain x and y fields (no aggregate, bin or timeUnit)')
+  }
+  for (const [ch, fd] of [['x', xFd], ['y', yFd]] as const) {
+    for (const k of Object.keys(fd.raw)) {
+      if (k !== 'field' && k !== 'type' && k !== 'title') throw new VLCompileError(`encoding.${ch}.${k}: boxplot supports only field, type and title on x/y`)
+    }
+  }
+  const isDiscreteX = xFd.type === 'nominal' || xFd.type === 'ordinal'
+  if (!isDiscreteX || yFd.type !== 'quantitative') {
+    throw new VLCompileError('boxplot supports only a discrete x with a quantitative y (horizontal boxplots are not supported yet)')
+  }
+  const dim = xFd.field
+  const F = yFd.field
+  const lowerBox = genName('lower_box', F)
+  const upperBox = genName('upper_box', F)
+  const midBox = genName('mid_box', F)
+  const minF = genName('min', F)
+  const maxF = genName('max', F)
+  const lowerW = genName('lower_whisker', F)
+  const upperW = genName('upper_whisker', F)
+  const ref = dref
   const outlierExpr =
-    `(datum[${q}] < datum['${lowerBox}'] - ${extent} * (datum['${upperBox}'] - datum['${lowerBox}'])) || ` +
-    `(datum[${q}] > datum['${upperBox}'] + ${extent} * (datum['${upperBox}'] - datum['${lowerBox}']))`
+    `(${ref(F)} < ${ref(lowerBox)} - ${extent} * (${ref(upperBox)} - ${ref(lowerBox)})) || ` +
+    `(${ref(F)} > ${ref(upperBox)} + ${extent} * (${ref(upperBox)} - ${ref(lowerBox)}))`
   const inlierExpr =
-    `(datum['${lowerBox}'] - ${extent} * (datum['${upperBox}'] - datum['${lowerBox}']) <= datum[${q}]) && ` +
-    `(datum[${q}] <= datum['${upperBox}'] + ${extent} * (datum['${upperBox}'] - datum['${lowerBox}']))`
-  const validExpr = (f: string): string => `isValid(datum[${JSON.stringify(f)}]) && isFinite(+datum[${JSON.stringify(f)}])`
+    `(${ref(lowerBox)} - ${extent} * (${ref(upperBox)} - ${ref(lowerBox)}) <= ${ref(F)}) && ` +
+    `(${ref(F)} <= ${ref(upperBox)} + ${extent} * (${ref(upperBox)} - ${ref(lowerBox)}))`
 
-  const sourceName = isObject(spec.data) && (spec.data as Record<string, unknown>).name != null
-    ? (spec.data as Record<string, unknown>).name as string
-    : 'source_0'
-  const source: Record<string, unknown> = { ...(isObject(spec.data) ? spec.data : {}), name: sourceName }
+  const source: Record<string, unknown> = isObject(spec.data) ? dataSource(spec.data, ctx.datasets) : {}
+  const sourceName = typeof source.name === 'string' ? source.name : 'source_0'
+  source.name = sourceName
+
+  // flat copies of nested/escaped fields, then the user's transforms
+  const pre = (): Record<string, unknown>[] => {
+    const out: Record<string, unknown>[] = []
+    const seen = new Set<string>()
+    for (const fd of [xFd, yFd]) {
+      if (fd.flatExpr !== undefined && !seen.has(fd.field)) {
+        seen.add(fd.field)
+        out.push({ type: 'formula', expr: fd.flatExpr, as: fd.field })
+      }
+    }
+    const userT = Array.isArray(spec.transform) ? (spec.transform as Record<string, unknown>[]) : []
+    out.push(...translateTransforms(userT, ctx, { parsed: new Map() }))
+    return out
+  }
 
   const bandX = { scale: 'x', field: dim, band: 0.5 }
-  const marks: Record<string, unknown>[] = [
-    {
-      name: 'layer_0_layer_0_marks',
-      type: 'symbol',
-      style: ['point'],
-      from: { data: 'data_2' },
-      encode: { update: {
-        opacity: { value: 0.7 },
-        fill: { value: 'transparent' },
-        stroke: { value: '#4c78a8' },
-        ariaRoleDescription: { value: 'point' },
-        x: bandX,
-        y: { scale: 'y', field: F },
-      } },
-    },
-    {
-      name: 'layer_0_layer_1_layer_0_marks',
-      type: 'rule',
-      style: ['rule'],
-      from: { data: 'data_4' },
-      encode: { update: {
-        stroke: { value: 'black' },
-        x: bandX,
-        y: { scale: 'y', field: lowerW },
-        y2: { scale: 'y', field: lowerBox },
-      } },
-    },
-    {
-      name: 'layer_0_layer_1_layer_1_marks',
-      type: 'rule',
-      style: ['rule'],
-      from: { data: 'data_5' },
-      encode: { update: {
-        stroke: { value: 'black' },
-        x: bandX,
-        y: { scale: 'y', field: upperBox },
-        y2: { scale: 'y', field: upperW },
-      } },
-    },
-    {
-      name: 'layer_1_layer_0_marks',
-      type: 'rect',
-      style: ['box'],
-      from: { data: 'data_7' },
-      encode: { update: {
-        ariaRoleDescription: { value: 'box' },
-        fill: { value: '#4c78a8' },
-        xc: bandX,
-        width: { value: 14 },
-        y: { scale: 'y', field: lowerBox },
-        y2: { scale: 'y', field: upperBox },
-      } },
-    },
-    {
-      name: 'layer_1_layer_1_marks',
-      type: 'rect',
-      style: ['box'],
-      from: { data: 'data_8' },
-      encode: { update: {
-        opacity: { value: 0.7 },
-        fill: [{ test: `datum['${lowerBox}'] >= datum['${upperBox}']`, value: '#4c78a8' }, { value: 'white' }],
-        xc: bandX,
-        width: { value: 14 },
-        yc: { scale: 'y', field: midBox },
-        height: { value: 1 },
-      } },
-    },
-  ]
+  const ruleStroke = { value: 'black' }
+  const boxFill = { value: '#4c78a8' }
+  const medianMark = (name: string, dataset: string): Record<string, unknown> => ({
+    name,
+    type: 'rect',
+    style: ['box'],
+    from: { data: dataset },
+    encode: { update: {
+      opacity: { value: 0.7 },
+      fill: [{ test: `${ref(lowerBox)} >= ${ref(upperBox)}`, value: '#4c78a8' }, { value: 'white' }],
+      xc: bandX,
+      width: { value: 14 },
+      yc: { scale: 'y', field: midBox },
+      height: { value: 1 },
+    } },
+  })
+  const boxMark = (name: string, dataset: string): Record<string, unknown> => ({
+    name,
+    type: 'rect',
+    style: ['box'],
+    from: { data: dataset },
+    encode: { update: {
+      ariaRoleDescription: { value: 'box' },
+      fill: boxFill,
+      xc: bandX,
+      width: { value: 14 },
+      y: { scale: 'y', field: lowerBox },
+      y2: { scale: 'y', field: upperBox },
+    } },
+  })
 
-  const data: Record<string, unknown>[] = [
-    source,
-    { name: 'data_1', source: sourceName, transform: [{ type: 'joinaggregate', as: [lowerBox, upperBox], ops: ['q1', 'q3'], fields: [F, F], groupby: [dim] }] },
-    { name: 'data_2', source: 'data_1', transform: [{ type: 'filter', expr: outlierExpr }, { type: 'filter', expr: validExpr(F) }] },
-    {
-      name: 'data_3',
-      source: 'data_1',
-      transform: [
-        { type: 'filter', expr: inlierExpr },
-        { type: 'aggregate', groupby: [dim], ops: ['min', 'max', 'min', 'max'], fields: [F, F, lowerBox, upperBox], as: [lowerW, upperW, lowerBox, upperBox] },
-      ],
-    },
-    { name: 'data_4', source: 'data_3', transform: [{ type: 'filter', expr: validExpr(lowerW) }] },
-    { name: 'data_5', source: 'data_3', transform: [{ type: 'filter', expr: validExpr(upperBox) }] },
-    { name: 'data_6', source: sourceName, transform: [{ type: 'aggregate', groupby: [dim], ops: ['q1', 'q3', 'median', 'min', 'max'], fields: [F, F, F, F, F], as: [lowerBox, upperBox, midBox, minF, maxF] }] },
-    { name: 'data_7', source: 'data_6', transform: [{ type: 'filter', expr: validExpr(lowerBox) }] },
-    { name: 'data_8', source: 'data_6', transform: [{ type: 'filter', expr: validExpr(midBox) }] },
-  ]
+  let marks: Record<string, unknown>[]
+  let data: Record<string, unknown>[]
+  let xDomainData: string[]
+  let yDomain: Array<{ data: string; field: string }>
+  if (minMax) {
+    marks = [
+      { name: 'layer_0_marks', type: 'rule', style: ['rule'], from: { data: 'data_1' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: lowerW }, y2: { scale: 'y', field: lowerBox } } } },
+      { name: 'layer_1_marks', type: 'rule', style: ['rule'], from: { data: 'data_2' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: upperBox }, y2: { scale: 'y', field: upperW } } } },
+      boxMark('layer_2_marks', 'data_3'),
+      medianMark('layer_3_marks', 'data_4'),
+    ]
+    data = [
+      source,
+      { name: 'data_0', source: sourceName, transform: [...pre(), { type: 'aggregate', groupby: [dim], ops: ['q1', 'q3', 'median', 'min', 'max'], fields: [F, F, F, F, F], as: [lowerBox, upperBox, midBox, lowerW, upperW] }] },
+      { name: 'data_1', source: 'data_0', transform: [{ type: 'filter', expr: validExpr(lowerW) }] },
+      { name: 'data_2', source: 'data_0', transform: [{ type: 'filter', expr: validExpr(upperBox) }] },
+      { name: 'data_3', source: 'data_0', transform: [{ type: 'filter', expr: validExpr(lowerBox) }] },
+      { name: 'data_4', source: 'data_0', transform: [{ type: 'filter', expr: validExpr(midBox) }] },
+    ]
+    xDomainData = ['data_1', 'data_2', 'data_3', 'data_4']
+    yDomain = [
+      { data: 'data_1', field: lowerW }, { data: 'data_1', field: lowerBox },
+      { data: 'data_2', field: upperBox }, { data: 'data_2', field: upperW },
+      { data: 'data_3', field: lowerBox }, { data: 'data_3', field: upperBox },
+      { data: 'data_4', field: midBox },
+    ]
+  } else {
+    if (typeof extent !== 'number' || !Number.isFinite(extent) || extent < 0) throw new VLCompileError(`mark.extent must be a non-negative number or "min-max", got ${JSON.stringify(extent)}`)
+    marks = [
+      {
+        name: 'layer_0_layer_0_marks',
+        type: 'symbol',
+        style: ['point'],
+        from: { data: 'data_2' },
+        encode: { update: {
+          opacity: { value: 0.7 },
+          fill: { value: 'transparent' },
+          stroke: { value: '#4c78a8' },
+          ariaRoleDescription: { value: 'point' },
+          x: bandX,
+          y: { scale: 'y', field: F },
+        } },
+      },
+      { name: 'layer_0_layer_1_layer_0_marks', type: 'rule', style: ['rule'], from: { data: 'data_4' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: lowerW }, y2: { scale: 'y', field: lowerBox } } } },
+      { name: 'layer_0_layer_1_layer_1_marks', type: 'rule', style: ['rule'], from: { data: 'data_5' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: upperBox }, y2: { scale: 'y', field: upperW } } } },
+      boxMark('layer_1_layer_0_marks', 'data_7'),
+      medianMark('layer_1_layer_1_marks', 'data_8'),
+    ]
+    data = [
+      source,
+      { name: 'data_1', source: sourceName, transform: [...pre(), { type: 'joinaggregate', as: [lowerBox, upperBox], ops: ['q1', 'q3'], fields: [F, F], groupby: [dim] }] },
+      { name: 'data_2', source: 'data_1', transform: [{ type: 'filter', expr: outlierExpr }, { type: 'filter', expr: validExpr(F) }] },
+      {
+        name: 'data_3',
+        source: 'data_1',
+        transform: [
+          { type: 'filter', expr: inlierExpr },
+          { type: 'aggregate', groupby: [dim], ops: ['min', 'max', 'min', 'max'], fields: [F, F, lowerBox, upperBox], as: [lowerW, upperW, lowerBox, upperBox] },
+        ],
+      },
+      { name: 'data_4', source: 'data_3', transform: [{ type: 'filter', expr: validExpr(lowerW) }] },
+      { name: 'data_5', source: 'data_3', transform: [{ type: 'filter', expr: validExpr(upperBox) }] },
+      { name: 'data_6', source: sourceName, transform: [...pre(), { type: 'aggregate', groupby: [dim], ops: ['q1', 'q3', 'median', 'min', 'max'], fields: [F, F, F, F, F], as: [lowerBox, upperBox, midBox, minF, maxF] }] },
+      { name: 'data_7', source: 'data_6', transform: [{ type: 'filter', expr: validExpr(lowerBox) }] },
+      { name: 'data_8', source: 'data_6', transform: [{ type: 'filter', expr: validExpr(midBox) }] },
+    ]
+    xDomainData = ['data_2', 'data_4', 'data_5', 'data_7', 'data_8']
+    yDomain = [
+      { data: 'data_2', field: F },
+      { data: 'data_4', field: lowerW }, { data: 'data_4', field: lowerBox },
+      { data: 'data_5', field: upperBox }, { data: 'data_5', field: upperW },
+      { data: 'data_7', field: lowerBox }, { data: 'data_7', field: upperBox },
+      { data: 'data_8', field: midBox },
+    ]
+  }
 
-  const domainEntry = (data: string, field: string): unknown => ({ data, field })
   const scales: ScaleSpec[] = [
     {
       name: 'x',
       type: 'band',
-      domain: { fields: ['data_2', 'data_4', 'data_5', 'data_7', 'data_8'].map((d) => domainEntry(d, dim)), sort: true },
+      domain: { fields: xDomainData.map((d) => ({ data: d, field: dim })), sort: true },
       range: [0, { signal: 'width' }],
       paddingInner: 0,
       paddingOuter: 0,
@@ -1187,18 +1289,7 @@ function compileBoxplot(spec: VLSpec): VLSpec {
     {
       name: 'y',
       type: 'linear',
-      domain: {
-        fields: [
-          domainEntry('data_2', F),
-          domainEntry('data_4', lowerW),
-          domainEntry('data_4', lowerBox),
-          domainEntry('data_5', upperBox),
-          domainEntry('data_5', upperW),
-          domainEntry('data_7', lowerBox),
-          domainEntry('data_7', upperBox),
-          domainEntry('data_8', midBox),
-        ],
-      },
+      domain: { fields: yDomain },
       range: [{ signal: 'height' }, 0],
       zero: true,
       nice: true,
@@ -1213,71 +1304,111 @@ function compileBoxplot(spec: VLSpec): VLSpec {
   out.width = spec.width ?? 200
   out.height = spec.height ?? 200
   out.style = 'cell'
+  const assembledConfig = assembleConfig(spec)
+  if (assembledConfig) out.config = assembledConfig
   out.data = data
   out.marks = marks
   out.scales = scales
   out.axes = [
     { scale: 'y', orient: 'left', gridScale: 'x', grid: true, tickCount: { signal: 'ceil(height/40)' }, domain: false, labels: false, aria: false, maxExtent: 0, minExtent: 0, ticks: false, zindex: 0 },
-    { scale: 'x', orient: 'bottom', grid: false, title: channelTitle(xDef as never), labelAlign: 'right', labelAngle: 270, labelBaseline: 'middle', zindex: 0 },
-    { scale: 'y', orient: 'left', grid: false, title: channelTitle(yDef as never), labelOverlap: true, tickCount: { signal: 'ceil(height/40)' }, zindex: 0 },
+    { scale: 'x', orient: 'bottom', grid: false, title: channelTitle(xFd), labelAlign: 'right', labelAngle: 270, labelBaseline: 'middle', zindex: 0 },
+    { scale: 'y', orient: 'left', grid: false, title: channelTitle(yFd), labelOverlap: true, tickCount: { signal: 'ceil(height/40)' }, zindex: 0 },
   ]
+  if (spec.title) out.title = spec.title
+  if (spec.description) out.description = spec.description
   return out
 }
 
 // --- channel parsing ---------------------------------------------------------
 
+const TYPE_ALIASES: Record<string, string> = {
+  quantitative: 'quantitative', ordinal: 'ordinal', nominal: 'nominal', temporal: 'temporal', geojson: 'geojson',
+  q: 'quantitative', o: 'ordinal', n: 'nominal', t: 'temporal',
+}
+
 function parseChannel(channel: string, def: unknown): FieldDef | null {
   if (def == null) return null
-  if (Array.isArray(def)) throw new Error(`[aster/vl] channel arrays not supported: ${channel}`)
+  if (Array.isArray(def)) throw new VLCompileError(`channel arrays not supported: ${channel}`)
   const raw = def as ChannelDef
-  if (raw.field === undefined) {
-    if (raw.aggregate === 'count') {
-      // count has no field: synthesise one for the pipeline
-      return {
-        channel,
-        field: '__count',
-        type: normalizeType(raw.type, raw),
-        aggregate: 'count',
-        axis: raw.axis === null ? null : isObject(raw.axis) ? (raw.axis as Record<string, unknown>) : undefined,
-        scale: isObject(raw.scale) ? (raw.scale as Record<string, unknown>) : undefined,
-        legend: raw.legend === null ? null : isObject(raw.legend) ? (raw.legend as Record<string, unknown>) : undefined,
-        title: raw.title,
-        raw,
-      }
-    }
-    return null
-  }
-  const type0 = normalizeType(raw.type, raw)
-  // count/distinct/valid/missing always emit a number regardless of the
-  // source field type (vega-lite warns and uses quantitative) — this drives
-  // the scale type and the toNumber cast.
-  const type = raw.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(String(raw.aggregate))
-    ? 'quantitative'
-    : type0
-  return {
-    channel,
-    field: raw.field as string,
-    type,
-    aggregate: raw.aggregate as string | undefined,
-    bin: raw.bin,
-    timeUnit: raw.timeUnit as string | undefined,
-    sort: raw.sort,
-    stack: raw.stack,
-    bandPosition: raw.bandPosition as number | undefined,
+  const common = {
     axis: raw.axis === null ? null : isObject(raw.axis) ? (raw.axis as Record<string, unknown>) : undefined,
     scale: isObject(raw.scale) ? (raw.scale as Record<string, unknown>) : undefined,
     legend: raw.legend === null ? null : isObject(raw.legend) ? (raw.legend as Record<string, unknown>) : undefined,
     title: raw.title,
     raw,
   }
+  if (raw.field === undefined) {
+    if (raw.aggregate === 'count') {
+      // count has no field: synthesise one for the pipeline
+      return {
+        channel,
+        field: '__count',
+        source: '__count',
+        type: normalizeType(raw.type, raw, channel),
+        aggregate: 'count',
+        ...common,
+      }
+    }
+    return null
+  }
+  if (typeof raw.field !== 'string') throw new VLCompileError(`encoding.${channel}.field must be a string, got ${JSON.stringify(raw.field)}`)
+  const ff = flatField(raw.field)
+  const type0 = normalizeType(raw.type, raw, channel)
+  const tu = raw.timeUnit !== undefined ? normalizeTimeUnit(raw.timeUnit, `encoding.${channel}.timeUnit`) : undefined
+  // argmax/argmin: {aggregate: {argmax: 'b'}} aggregates the whole row; the channel field is
+  // read from the winning row (vega-lite: field `argmax_b["a"]`)
+  let aggregate: string | undefined
+  let argAgg: FieldDef['argAgg']
+  if (isObject(raw.aggregate)) {
+    const op = 'argmax' in raw.aggregate ? 'argmax' : 'argmin'
+    const argSource = String((raw.aggregate as Record<string, unknown>)[op])
+    aggregate = op
+    argAgg = { op, arg: flatField(argSource).key, argSource, valuePath: raw.field }
+  } else aggregate = raw.aggregate as string | undefined
+  // count/distinct/valid/missing always emit a number regardless of the
+  // source field type (vega-lite warns and uses quantitative) — this drives
+  // the scale type and the toNumber cast.
+  const type = aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(String(aggregate)) ? 'quantitative' : type0
+  const bin = raw.bin === false ? undefined : raw.bin
+  return {
+    channel,
+    field: ff.key,
+    source: raw.field,
+    ...(ff.expr !== undefined ? { flatExpr: ff.expr } : {}),
+    type,
+    aggregate,
+    ...(argAgg ? { argAgg } : {}),
+    bin,
+    ...(bin ? { binParams: normalizeBin(bin) } : {}),
+    ...(tu ? { timeUnit: tu.unit, tu } : {}),
+    sort: raw.sort,
+    stack: raw.stack,
+    bandPosition: raw.bandPosition as number | undefined,
+    ...common,
+  }
 }
 
-function normalizeType(t: unknown, def: ChannelDef): string {
-  if (typeof t === 'string') return t === 'quantitative' || t === 'nominal' || t === 'ordinal' || t === 'temporal' || t === 'geojson' ? t : t
-  // infer: aggregate/bin/timeUnit imply quantitative unless temporal
+/** vega-lite `defaultType` + `getFullName`: the field's type, inferred when absent. */
+function normalizeType(t: unknown, def: ChannelDef, channel: string): string {
+  if (typeof t === 'string') {
+    const full = TYPE_ALIASES[t.toLowerCase()]
+    if (!full) throw new VLCompileError(`encoding.${channel}.type: unknown type ${JSON.stringify(t)}`)
+    return full
+  }
+  switch (channel) {
+    case 'row': case 'column': case 'facet': case 'shape': case 'strokeDash':
+      return 'nominal'
+    case 'order':
+      return 'ordinal'
+  }
+  if (Array.isArray(def.sort)) return 'ordinal'
   if (def.timeUnit) return 'temporal'
-  if (def.bin) return 'quantitative'
-  if (def.aggregate) return 'quantitative'
+  if (def.bin || (def.aggregate && !isObject(def.aggregate))) return 'quantitative'
+  const st = isObject(def.scale) ? (def.scale.type as string | undefined) : undefined
+  if (st) {
+    if (['linear', 'log', 'pow', 'sqrt', 'symlog', 'identity', 'sequential', 'quantile', 'quantize', 'threshold', 'bin-ordinal'].includes(st)) return 'quantitative'
+    if (st === 'time' || st === 'utc') return 'temporal'
+  }
   return 'nominal'
 }
 
@@ -1360,30 +1491,16 @@ const isTimeScaleType = (t: string) => t === 'time' || t === 'utc'
 
 export function channelTitle(def: FieldDef): unknown {
   if (def.title !== undefined) return def.title
-  if (def.bin) return `${def.field} (binned)`
-  if (def.timeUnit) return `${def.field} (${timeUnitShort(def.timeUnit)})`
+  if (def.aggregate === 'count') return 'Count of Records'
+  if (def.argAgg) return `${def.source} for ${def.argAgg.op === 'argmax' ? 'max' : 'min'} ${def.argAgg.argSource}`
+  if (def.bin) return `${def.source} (binned)`
+  if (def.tu) return `${def.source} (${getTimeUnitParts(def.tu.unit).join('-')})`
   if (def.aggregate) {
-    if (def.aggregate === 'count') return 'Count of Records'
     const op = def.aggregate
     const label = op.charAt(0).toUpperCase() + op.slice(1)
-    return `${label} of ${def.field}`
+    return `${label} of ${def.source}`
   }
-  return def.field
-}
-
-const TIME_UNIT_LABELS: Record<string, string> = {
-  year: 'year', quarter: 'quarter', month: 'month', week: 'week', date: 'date',
-  day: 'day', dayofyear: 'dayofyear', hours: 'hours', minutes: 'minutes',
-  seconds: 'seconds', milliseconds: 'milliseconds',
-  yearquarter: 'year-quarter', yearmonth: 'year-month', yearmonthdate: 'year-month-date',
-  yearweek: 'year-week', yeardayofyear: 'year-dayofyear', quartermonth: 'quarter-month',
-  monthdate: 'month-date', monthday: 'month-day', hoursminutes: 'hours-minutes',
-  minutesseconds: 'minutes-seconds', secondsmilliseconds: 'seconds-milliseconds',
-  datehours: 'date-hours', dayhours: 'day-hours', dayminutes: 'day-minutes',
-  dateminutes: 'date-minutes', daysseconds: 'days-seconds', dateseconds: 'date-seconds',
-}
-function timeUnitShort(u: string): string {
-  return TIME_UNIT_LABELS[u] ?? u
+  return def.source
 }
 
 // --- data pipeline -----------------------------------------------------------
@@ -1400,14 +1517,95 @@ interface DataPipeline {
   seriesFields: FieldDef[]
 }
 
-function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: string, castDoneIn?: Set<string>): DataPipeline {
+/**
+ * Per-compile state shared by every view of one spec: lookup source datasets
+ * (named by content, so identical sources dedupe) and the spec's named
+ * `datasets`.
+ */
+interface CompileCtx extends TransformContext {
+  /** Extra top-level datasets generated while translating (lookup sources). */
+  lookups: Map<string, Record<string, unknown>>
+  /** `datasets` of the top-level spec (name -> rows). */
+  datasets: Record<string, unknown>
+}
+
+function hashString(s: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16).padStart(8, '0')
+}
+
+function makeCtx(top: VLSpec): CompileCtx {
+  const lookups = new Map<string, Record<string, unknown>>()
+  const datasets = isObject(top.datasets) ? (top.datasets as Record<string, unknown>) : {}
+  const ctx: CompileCtx = {
+    lookups,
+    datasets,
+    addLookupSource(def: Record<string, unknown>): string {
+      const entry = dataSource(def, datasets)
+      // a bare named dataset is the host-supplied (or main) dataset of that name
+      if (typeof entry.name === 'string' && entry.values === undefined && entry.url === undefined) {
+        if (!lookups.has(entry.name)) lookups.set(entry.name, { ...entry })
+        return entry.name
+      }
+      const name = `lookup_${hashString(JSON.stringify(entry))}`
+      if (!lookups.has(name)) lookups.set(name, { ...entry, name })
+      return name
+    },
+  }
+  return ctx
+}
+
+/** A Vega data entry for a VL `data` object (values/url/name + format), resolving named `datasets`. */
+function dataSource(data: Record<string, unknown>, datasets: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(data)) out[k] = v
+  if (typeof data.name === 'string' && data.values === undefined && data.url === undefined && Array.isArray(datasets[data.name])) {
+    out.values = datasets[data.name]
+  }
+  return out
+}
+
+/** The user field paths a unit's encoding references (field, sort.field, condition fields, argmax args). */
+function referencedPaths(encoding: unknown): string[] {
+  const out = new Set<string>()
+  const visit = (def: unknown): void => {
+    if (Array.isArray(def)) { def.forEach(visit); return }
+    if (!isObject(def)) return
+    if (typeof def.field === 'string') out.add(def.field)
+    if (isObject(def.aggregate)) for (const v of Object.values(def.aggregate)) if (typeof v === 'string') out.add(v)
+    if (isObject(def.sort) && typeof def.sort.field === 'string') out.add(def.sort.field)
+    if (def.condition !== undefined) visit(def.condition)
+  }
+  if (isObject(encoding)) for (const def of Object.values(encoding)) visit(def)
+  return [...out]
+}
+
+/** Transform objects that came from the user's `transform` array (not the encoding). */
+const USER_TRANSFORMS = new WeakSet<object>()
+
+function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: string, castDoneIn: Set<string> | undefined, ctx: CompileCtx): DataPipeline {
   let seriesFields: FieldDef[] = []
-  const source: Record<string, unknown> = isObject(spec.data) ? { ...spec.data } : {}
+  const source: Record<string, unknown> = isObject(spec.data) ? dataSource(spec.data, ctx.datasets) : {}
   const sourceName = (source.name as string) ?? 'source_0'
   source.name = sourceName
   const casts: Record<string, unknown>[] = []
   const pipeline: Record<string, unknown>[] = []
   const castDone = castDoneIn ?? new Set<string>()
+
+  // flatten nested/escaped source paths into the flat keys the rest of the
+  // compiler reads (names.ts flatField); once per distinct key per source
+  const addFlat = (userPath: string): void => {
+    const ff = flatField(userPath)
+    if (ff.expr === undefined || castDone.has(`flat:${ff.key}`)) return
+    castDone.add(`flat:${ff.key}`)
+    casts.push({ type: 'formula', expr: ff.expr, as: ff.key })
+  }
+  for (const f of fields) if (f.flatExpr !== undefined) addFlat(f.source)
+  for (const p of referencedPaths(spec.encoding)) addFlat(p)
 
   // type casts (formula) — the oracle emits them around impute/stack pipelines
   // (quantitative -> toNumber, temporal -> toDate)
@@ -1416,22 +1614,9 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
   const binFields = fields.filter((f) => f.bin)
   const binSignals = new Map<string, { startField: string; endField: string; binsSignal: string }>()
   for (const f of binFields) {
-    const maxbins = isObject(f.bin) && (f.bin.maxbins as number | undefined) ? (f.bin.maxbins as number) : 10
-    const base = `bin_maxbins_${maxbins}_${f.field}`
-    const extentSignal = `${base}_extent`
-    const startField = `${base}`
-    const endField = `${base}_end`
-    const binsSignal = `${base}_bins`
-    pipeline.push({ type: 'extent', field: f.field, signal: extentSignal })
-    pipeline.push({
-      type: 'bin',
-      field: f.field,
-      as: [startField, endField],
-      signal: binsSignal,
-      extent: { signal: extentSignal },
-      maxbins,
-    })
-    binSignals.set(f.field, { startField, endField, binsSignal })
+    const names = binNames(f.binParams!, f.field)
+    pipeline.push(...binTransforms(f.binParams!, f.field, names))
+    binSignals.set(f.field, { startField: names.start, endField: names.end, binsSignal: names.signal })
   }
 
   // arc marks: theta stacking (pie layout). vega-lite stacks the theta
@@ -1550,6 +1735,14 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     !fields.some((f) => f.timeUnit) &&
     fields.some((f) => f.channel === measureChannel && f.type === 'quantitative') &&
     !continuousDimension)
+  // fields a user transform produces are derived: vega-lite never re-parses them
+  const derivedKeys = new Set<string>()
+  {
+    const probe: TranslateState = { parsed: new Map() }
+    translateTransforms(userTransforms, ctx, probe)
+    for (const [k, v] of probe.parsed) if (v === 'derived') derivedKeys.add(k)
+  }
+  const castTypes = new Map<string, 'number' | 'date'>()
   if (!skipCasts) {
     // a field carrying a timeUnit anywhere in the encoding casts as a date,
     // even if another channel declares it quantitative
@@ -1557,6 +1750,7 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     for (const f of fields) {
       if (castDone.has(f.field)) continue
       castDone.add(f.field)
+      if (f.argAgg || derivedKeys.has(f.field)) continue
       const declared = (f.raw as Record<string, unknown> | undefined)?.type
       // count/distinct/valid/missing over a nominal/ordinal field counts raw
       // values — vega-lite does not coerce the source column (only temporal
@@ -1579,90 +1773,31 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
         if (axisFT !== 'number') {
           // a timeUnit implies a temporal cast even when the declared type is
           // quantitative (probed: size/timeUnit-year casts the source toDate)
-          casts.push({ type: 'formula', expr: `toDate(datum[${JSON.stringify(f.field)}])`, as: f.field })
+          casts.push({ type: 'formula', expr: `toDate(${dref(f.field)})`, as: f.field })
+          castTypes.set(f.field, 'date')
         }
       } else if (f.type === 'quantitative') {
-        casts.push({ type: 'formula', expr: `toNumber(datum[${JSON.stringify(f.field)}])`, as: f.field })
+        casts.push({ type: 'formula', expr: `toNumber(${dref(f.field)})`, as: f.field })
+        castTypes.set(f.field, 'number')
       }
     }
   }
-  // user transforms (calculate/filter/flatten/fold/window/...): they pass
-  // through as vega transforms ahead of any encoding pipeline
-  for (const t0 of userTransforms) {
-    let t = t0
-    const type0 = t.type as string
-    if (type0 === undefined && Array.isArray(t.window)) {
-      // vega-lite window form: {window: [{op, as, params?}], sort, groupby}
-      const winOps: unknown[] = []
-      const winFields: unknown[] = []
-      const winAs: unknown[] = []
-      const winParams: unknown[] = []
-      for (const w of t.window as Record<string, unknown>[]) {
-        winOps.push(w.op)
-        winFields.push(w.field ?? null)
-        winAs.push(w.as ?? w.op)
-        winParams.push(w.param ?? w.params ?? null)
-      }
-      t = {
-        type: 'window',
-        ops: winOps,
-        fields: winFields,
-        as: winAs,
-        params: winParams,
-        sort: (t.sort as { field?: string | string[]; order?: string | string[] }) ?? {},
-        groupby: t.groupby ?? [],
-      }
-    }
-    const type = t.type as string
-    if (type === undefined) {
-      // a bare VL transform object like {filter: expr} / {calculate: expr, as}
-      if (t.filter != null) { pipeline.push({ type: 'filter', expr: t.filter }); continue }
-      if (t.calculate != null) { pipeline.push({ type: 'formula', expr: t.calculate, as: t.as }); continue }
-      if (t.fold != null) { pipeline.push({ type: 'fold', fields: t.fold, as: t.as ?? ['key', 'value'] }); continue }
-      if (t.flatten != null) { pipeline.push({ type: 'flatten', fields: t.flatten, as: t.as }); continue }
-      if (t.density != null) {
-        pipeline.push({ type: 'kde', field: t.density, as: t.as ?? ['value', 'density'], resolve: 'shared' })
-        continue
-      }
-      for (const k of ['flatten', 'collect', 'countpattern', 'cross', 'joinaggregate', 'kde', 'loess', 'lookup', 'pivot', 'quantile', 'regression', 'stack', 'window', 'impute', 'bin', 'timeunit', 'aggregate', 'sample', 'density']) {
-        if ((t as Record<string, unknown>)[k] != null) {
-          // bare-keyed VL transforms: {quantile: field} / {kde: field} etc.
-          // compile to vega {type, field, ...} forms
-          const fielded = new Set(['quantile', 'kde', 'bin', 'timeunit', 'countpattern', 'pivot'])
-          const next: Record<string, unknown> = { ...t, type: k }
-          if (fielded.has(k) && next.field == null) next.field = (t as Record<string, unknown>)[k]
-          delete next[k]
-          // vega-lite compiles {regression: y, on: x} and {loess: y, on: x} to
-          // vega's x/y-parameter form
-          if (k === 'regression' || k === 'loess') {
-            next.y = (t as Record<string, unknown>)[k]
-            next.x = next.on ?? next.x
-            next.as = next.as ?? [next.x, next.y]
-            delete next.field
-            delete next.on
-          }
-          pipeline.push(next)
-          break
-        }
-      }
-      continue
-    }
-    if (type === 'calculate') {
-      pipeline.push({ type: 'formula', expr: t.expr, as: t.as })
-    } else {
-      pipeline.push(t)
-    }
-  }
+  // user transforms (calculate/filter/flatten/fold/window/...), translated
+  // from their Vega-Lite forms (transforms.ts); implicit parses already
+  // emitted above (the casts) are not repeated
+  const st: TranslateState = { parsed: new Map() }
+  for (const [k, ty] of castTypes) st.parsed.set(k, ty)
+  const userOut = translateTransforms(userTransforms, ctx, st)
+  for (const t of userOut) USER_TRANSFORMS.add(t)
+  pipeline.push(...userOut)
 
   // timeUnit: the timeunit transform floors each date to the unit
-  const tuFields = fields.filter((f) => f.timeUnit && f.field)
-  for (const f of tuFields) {
-    pipeline.push({
-      field: f.field,
-      type: 'timeunit',
-      units: timeUnitUnits(f.timeUnit!),
-      as: [timeUnitField(f), `${timeUnitField(f)}_end`],
-    })
+  const tuSeen = new Set<string>()
+  for (const f of fields.filter((q) => q.tu && q.field)) {
+    const as = timeUnitField(f)
+    if (tuSeen.has(as)) continue
+    tuSeen.add(as)
+    pipeline.push(timeUnitTransform(f.tu!, f.field, as))
   }
 
   const hasAggregate = fields.some((f) => f.aggregate)
@@ -1672,6 +1807,7 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
   if ((hasAggregate && mark !== 'arc') || binFields.length) {
     const groupby: string[] = []
     const fieldsOut: Record<string, unknown>[] = []
+    const argFlats: FieldDef[] = []
     let hasCount = false
     for (const f of fields) {
       if (f.bin) {
@@ -1682,6 +1818,9 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
       if (f.aggregate) {
         if (f.aggregate === 'count') {
           hasCount = true
+        } else if (f.argAgg) {
+          fieldsOut.push({ op: f.argAgg.op, field: f.argAgg.arg, as: argObjName(f) })
+          argFlats.push(f)
         } else {
           fieldsOut.push({ op: f.aggregate, field: f.field, as: aggregateAs(f) })
         }
@@ -1697,8 +1836,21 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
     const measureBinned = measure?.bin
     if (fieldsOut.length === 0 && (hasCount || (measureBinned && !hasAggregate))) hasCount = true
     if (hasCount) fieldsOut.push({ op: 'count', as: '__count', field: null })
-    if (fieldsOut.length || groupby.length) {
-      pipeline.push({ type: 'aggregate', groupby, ops: fieldsOut.map((o) => o.op), fields: fieldsOut.map((o) => o.field ?? null), as: fieldsOut.map((o) => o.as) })
+    // the same output produced twice (two channels sharing a measure) is computed once
+    const seenAs = new Set<unknown>()
+    const measures = fieldsOut.filter((o) => (seenAs.has(o.as) ? false : (seenAs.add(o.as), true)))
+    const groupbyUniq = [...new Set(groupby)]
+    if (measures.length || groupbyUniq.length) {
+      pipeline.push({ type: 'aggregate', groupby: groupbyUniq, ops: measures.map((o) => o.op), fields: measures.map((o) => o.field ?? null), as: measures.map((o) => o.as) })
+      // argmax/argmin leave the winning ROW in the aggregate column; flatten
+      // the channel's value out of it (vega-lite reads `argmax_b["a"]`)
+      const argDone = new Set<string>()
+      for (const f of argFlats) {
+        const n = aggFieldName(f)
+        if (argDone.has(n)) continue
+        argDone.add(n)
+        pipeline.push({ type: 'formula', expr: argValueExpr(f), as: n })
+      }
       // vega-lite filters invalid values AFTER the aggregate: a variance-family
       // aggregate over a singleton group yields undefined, and the filter then
       // drops the row (which is why the oracle's scales go NaN). Filtering
@@ -1722,7 +1874,7 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
           // sort or label, and vega-lite does not filter their aggregate
           // output (probed: order stderr keeps its undefined rows).
           const declared = (f.raw as Record<string, unknown> | undefined)?.type ?? f.type
-          if (f.aggregate !== 'count' && declared === 'quantitative' && SCALE_CHANNELS.includes(f.channel)) addCheck(aggregateAs(f))
+          if (f.aggregate !== 'count' && declared === 'quantitative' && SCALE_CHANNELS.includes(f.channel)) addCheck(aggFieldName(f))
         } else if (f.type === 'quantitative' || f.type === 'temporal') {
           addCheck(aggFieldName(f))
         }
@@ -1792,7 +1944,18 @@ function buildData(spec: VLSpec, fields: FieldDef[], mark: string, orient: strin
 }
 
 function aggregateAs(f: FieldDef): string {
-  return `${f.aggregate}_${f.field}`
+  if (f.argAgg) return safeKey(`${argObjName(f)}_${f.field}`)
+  return genName(String(f.aggregate), f.field)
+}
+
+/** The aggregate column holding the winning row of an argmax/argmin. */
+function argObjName(f: FieldDef): string {
+  return genName(f.argAgg!.op, f.argAgg!.arg)
+}
+
+/** Expression reading the channel's value out of the argmax/argmin winning row. */
+function argValueExpr(f: FieldDef): string {
+  return dref(argObjName(f)) + splitAccessPath(f.argAgg!.valuePath).map((p) => `[${JSON.stringify(p)}]`).join('')
 }
 
 /** Arc theta layout (vega-lite stack.ts + mark/arc.ts + position-rect.ts):
@@ -1821,57 +1984,21 @@ function thetaStackInfo(mark: string, fields: FieldDef[]): { stacked: boolean; f
 }
 
 function aggFieldName(f: FieldDef): string {
-  if (f.bin) {
-    const maxbins = isObject(f.bin) && (f.bin.maxbins as number | undefined) ? (f.bin.maxbins as number) : 10
-    return `bin_maxbins_${maxbins}_${f.field}`
-  }
-  if (f.timeUnit) return timeUnitField(f)
-  if (f.aggregate === 'count') return f.field === '__count' ? '__count' : '__count'
+  if (f.bin) return binNames(f.binParams!, f.field).start
+  if (f.tu) return timeUnitField(f)
+  if (f.aggregate === 'count') return '__count'
   if (f.aggregate) return aggregateAs(f)
   return f.field
 }
 
-const TU_UNITS: Record<string, [string, string]> = {
-  year: ['year', '0'], quarter: ['quarter', '0'], month: ['month', '1'], week: ['week', '0'],
-  date: ['date', '1'], day: ['day', '0'], dayofyear: ['dayofyear', '0'],
-  hours: ['hours', '0'], minutes: ['minutes', '0'], seconds: ['seconds', '0'],
-  milliseconds: ['milliseconds', '0'],
-}
-
-/** d3/vl timeunit -> datetime(...) formula parts. Returns [expr, as] or null. */
-function timeUnitFormula(u: string, field: string): [string, string] | null {
-  const f = JSON.stringify(field)
-  const unit = (name: string) => `${name}(datum[${f}])`
-  const args: string[] = []
-  let has = false
-  for (const [unitName, argIdx] of [['year', 0], ['quarter', 1], ['month', 2], ['date', 3], ['day', 4], ['hours', 5], ['minutes', 6], ['seconds', 7], ['milliseconds', 8]] as const) {
-    if (u.includes(unitName as string)) {
-      args.push(unit(unitName as string))
-      has = true
-    } else {
-      args.push(argIdx === 0 ? '0' : '0')
-    }
-  }
-  if (!has) return null
-  void TU_UNITS
-  return [`datetime(${args.join(', ')})`, `${u}_${field}`]
-}
-
+/** The timeunit transform's output field for a time-unit channel (flat-safe). */
 function timeUnitField(f: FieldDef): string {
-  return `${f.timeUnit}_${f.field}`
+  return timeUnitFieldName(f.tu!, f.field)
 }
 
-const TU_PRIMITIVE = new Set(['year', 'quarter', 'month', 'week', 'date', 'day', 'dayofyear', 'hours', 'minutes', 'seconds', 'milliseconds'])
-/** The units list vega's timeUnitSpecifier consumes: primitive units only
- * (the transform list adds context units like year+week, but the specifier
- * formats just the requested unit — probed against vl.compile). */
-function timeUnitSpecifierUnits(u: string): string[] {
-  return TU_PRIMITIVE.has(u) ? [u] : timeUnitUnits(u)
-}
-
-/** vega's timeUnitSpecifier signal for a vega-lite timeUnit. */
+/** vega's timeUnitSpecifier signal for a vega-lite time unit string. */
 function timeUnitFormatSignal(u: string): string {
-  return `timeUnitSpecifier(${JSON.stringify(timeUnitSpecifierUnits(u))}, {"year-month":"%b %Y ","year-month-date":"%b %d, %Y "})`
+  return `timeUnitSpecifier(${JSON.stringify(getTimeUnitParts(u))}, {"year-month":"%b %Y ","year-month-date":"%b %d, %Y "})`
 }
 
 /** Non-positional legends format timeUnit fields with timeFormat. */
@@ -1882,40 +2009,28 @@ function applyTimeUnitLegend(lg: Record<string, unknown>, def: FieldDef, userLeg
   lg.formatType = 'time'
 }
 
-const TIME_UNIT_UNITS: Record<string, string[]> = {
-  year: ['year'], quarter: ['quarter'], month: ['month'], week: ['week'],
-  date: ['date'], day: ['day'], dayofyear: ['dayofyear'],
-  hours: ['hours'], minutes: ['minutes'], seconds: ['seconds'], milliseconds: ['milliseconds'],
-  yearquarter: ['year', 'quarter'], yearmonth: ['year', 'month'],
-  yearmonthdate: ['year', 'month', 'date'], yearweek: ['year', 'week'],
-  yeardayofyear: ['year', 'dayofyear'], quartermonth: ['quarter', 'month'],
-  monthdate: ['year', 'month', 'date'], monthday: ['month', 'date'],
-  hoursminutes: ['hours', 'minutes'], minutesseconds: ['minutes', 'seconds'],
-  secondsmilliseconds: ['seconds', 'milliseconds'], datehours: ['date', 'hours'],
-  dayhours: ['day', 'hours'], dayminutes: ['day', 'minutes'],
-  dateminutes: ['date', 'minutes'], daysseconds: ['day', 'seconds'],
-  dateseconds: ['date', 'seconds'],
-}
-function timeUnitUnits(u: string): string[] {
-  return TIME_UNIT_UNITS[u] ?? [u]
-}
-
-/** vega-lite's tickMinStep signal for a time unit: the duration of one unit. */
-function timeUnitMinStepSignal(u: string): string | null {
-  const dt = (y: number, mo: number) => `datetime(${y}, ${mo}, 1, 0, 0, 0, 0)`
-  switch (u) {
-    case 'year': case 'yearquarter': case 'yearmonth': case 'yearmonthdate':
-    case 'yearweek': case 'yeardayofyear':
-      return `${dt(2002, 0)} - ${dt(2001, 0)}`
-    case 'quarter': case 'quartermonth':
-      return `${dt(2001, 3)} - ${dt(2001, 0)}`
-    case 'month': case 'monthdate': case 'monthday':
-      return `${dt(2001, 1)} - ${dt(2001, 0)}`
-    case 'week': case 'date': case 'day': case 'dayofyear':
-      return null
-    default:
-      return null
+/** vega-lite's `durationExpr`: the duration of one unit as a datetime difference (tickMinStep). */
+function timeUnitMinStepSignal(tu: NormalTimeUnit): string | null {
+  const parts = getTimeUnitParts(tu.unit)
+  const smallest = parts[parts.length - 1]
+  if (!smallest || smallest === 'day') return null
+  const step = tu.step ?? 1
+  // month index is 0-based in datetime(); the base date is 2001-01-01 (non-leap)
+  const d = { year: 2001, month: 0, date: 1, hours: 0, minutes: 0, seconds: 0, milliseconds: 0 }
+  const end = { ...d }
+  switch (smallest) {
+    case 'year': end.year += step; break
+    case 'quarter': end.month += 3 * step; break
+    case 'month': end.month += step; break
+    case 'week': end.date += 7 * step; break
+    case 'dayofyear': case 'date': end.date += step; break
+    case 'hours': end.hours += step; break
+    case 'minutes': end.minutes += step; break
+    case 'seconds': end.seconds += step; break
+    case 'milliseconds': end.milliseconds += step; break
   }
+  const fmt = (x: typeof d): string => `${tu.utc ? 'utc' : 'datetime'}(${x.year}, ${x.month}, ${x.date}, ${x.hours}, ${x.minutes}, ${x.seconds}, ${x.milliseconds})`
+  return `${fmt(end)} - ${fmt(d)}`
 }
 
 function measureStackOffset(measure: FieldDef): unknown {
@@ -2016,10 +2131,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         sc.zero = (def.scale?.zero as boolean | undefined) ?? zeroDefault
       }
       sc.nice = (def.scale?.nice as unknown) ?? true
-      if (def.bin) {
-        const maxbins = isObject(def.bin) && (def.bin.maxbins as number | undefined) ? (def.bin.maxbins as number) : 10
-        sc.bins = { signal: `bin_maxbins_${maxbins}_${def.field}_bins` }
-      }
+      if (def.bin) sc.bins = { signal: binNames(def.binParams!, def.field).signal }
       // binned scales: no zero/nice; domain comes from bin start/end
       // (zero must be explicitly false — a missing key means the engine's
       // linear default kicks in and extends the domain to 0)
@@ -2274,8 +2386,8 @@ function zeroDefaultFor(mark: string, channel: string, orient: string): boolean 
 
 function positionalDomain(def: FieldDef, dataName: string, mark: string, orient: string, fields?: FieldDef[]): unknown {
   if (def.bin) {
-    const maxbins = isObject(def.bin) && (def.bin.maxbins as number | undefined) ? (def.bin.maxbins as number) : 10
-    return { signal: `[bin_maxbins_${maxbins}_${def.field}_bins.start, bin_maxbins_${maxbins}_${def.field}_bins.stop]` }
+    const sig = binNames(def.binParams!, def.field).signal
+    return { signal: `[${sig}.start, ${sig}.stop]` }
   }
   if (def.timeUnit && (mark === 'bar' || mark === 'rect') && !isDiscreteType(def.type)) {
     return { data: dataName, fields: [timeUnitField(def), `${timeUnitField(def)}_end`] }
@@ -2471,8 +2583,8 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
         // vega-lite: getFirstDefined(axis.zindex, 0) — grid behind marks
         zindex: typeof userAxis.zindex === 'number' ? userAxis.zindex : 0,
       }
-      if (def.timeUnit) {
-        const stepExpr = timeUnitMinStepSignal(def.timeUnit)
+      if (def.tu) {
+        const stepExpr = timeUnitMinStepSignal(def.tu)
         if (stepExpr) gridAxis.tickMinStep = { signal: stepExpr }
       }
       // the user's grid-affecting props land on the grid axis too (upstream
@@ -2506,13 +2618,10 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
         ? { signal: def.channel === 'x' ? 'ceil(width/10)' : 'ceil(height/10)' }
         : tickCountSignal
       if (def.timeUnit) {
-        const units = JSON.stringify(timeUnitUnits(def.timeUnit))
-        labelAxis.format = {
-          signal: `timeUnitSpecifier(${units}, {"year-month":"%b %Y ","year-month-date":"%b %d, %Y "})`,
-        }
+        labelAxis.format = { signal: timeUnitFormatSignal(def.timeUnit) }
         labelAxis.formatType = 'time'
         // the minimum tick step is one unit: expressed as a datetime difference
-        const stepExpr = timeUnitMinStepSignal(def.timeUnit)
+        const stepExpr = def.tu ? timeUnitMinStepSignal(def.tu) : null
         if (stepExpr) labelAxis.tickMinStep = { signal: stepExpr }
       } else if (def.stack === 'normalize') {
         labelAxis.format = '.0%'
@@ -2564,12 +2673,8 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
     if (def.stack === 'normalize' && labelAxis.format === undefined) labelAxis.format = '.0%'
     // a timeUnit on a discrete positional axis still formats with timeFormat
     if (def.timeUnit && !isContinuousScaleType(sc.type)) {
-      const units = JSON.stringify(timeUnitUnits(def.timeUnit))
-      labelAxis.format = {
-        signal: `timeUnitSpecifier(${JSON.stringify(timeUnitSpecifierUnits(def.timeUnit))}, {"year-month":"%b %Y ","year-month-date":"%b %d, %Y "})`,
-      }
+      labelAxis.format = { signal: timeUnitFormatSignal(def.timeUnit) }
       labelAxis.formatType = 'time'
-      void units
     }
     if (userAxis) {
       for (const [k, v] of Object.entries(userAxis)) {
@@ -2684,7 +2789,11 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       lg.stroke = 'color'
       if (!colorGradient) {
         lg.symbolType = mark === 'line' ? 'stroke' : 'circle'
-        lg.encode = { symbols: { update: { fill: { value: 'transparent' }, opacity: { value: reducedOpacity ?? 1 } } } }
+        // vega-lite adds no symbol overrides for a line's stroke legend
+        // (verified against the real-vega render: extra fill/opacity here
+        // changes the legend glyph); point/text legends get the unfilled,
+        // reduced-opacity symbol.
+        if (mark !== 'line') lg.encode = { symbols: { update: { fill: { value: 'transparent' }, opacity: { value: reducedOpacity ?? 1 } } } }
       } else {
         lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
         lg.encode = { gradient: { update: { opacity: { value: reducedOpacity ?? 1 } } } }
@@ -2960,9 +3069,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.x = { scale: 'x', field: JSON.parse(endF), offset: { signal: off('+') } }
           update.x2 = { scale: 'x', field: JSON.parse(startF), offset: { signal: off('-') } }
         } else if (xDef.bin) {
-          const bm = isObject(xDef.bin) && (xDef.bin.maxbins as number | undefined) ? (xDef.bin.maxbins as number) : 10
-          const endF = JSON.stringify(`bin_maxbins_${bm}_${xDef.field}_end`)
-          const startF = JSON.stringify(`bin_maxbins_${bm}_${xDef.field}`)
+          const bn = binNames(xDef.binParams!, xDef.field)
+          const endF = JSON.stringify(bn.end)
+          const startF = JSON.stringify(bn.start)
           const off = (sign: string) =>
             `0.5 + (abs(scale("x", datum[${endF}]) - scale("x", datum[${startF}])) < 0.25 ? ${sign}0.5 * (0.25 - (abs(scale("x", datum[${endF}]) - scale("x", datum[${startF}])))) : ${sign === '+' ? '-0.5' : '0.5'})`
           update.x = { scale: 'x', field: JSON.parse(endF), offset: { signal: off('+') } }
@@ -3053,9 +3162,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.y = { scale: 'y', field: JSON.parse(endF), offset: { signal: off('+') } }
           update.y2 = { scale: 'y', field: JSON.parse(startF), offset: { signal: off('-') } }
         } else if (yDef.bin) {
-          const bm = isObject(yDef.bin) && (yDef.bin.maxbins as number | undefined) ? (yDef.bin.maxbins as number) : 10
-          const endF = JSON.stringify(`bin_maxbins_${bm}_${yDef.field}_end`)
-          const startF = JSON.stringify(`bin_maxbins_${bm}_${yDef.field}`)
+          const bn = binNames(yDef.binParams!, yDef.field)
+          const endF = JSON.stringify(bn.end)
+          const startF = JSON.stringify(bn.start)
           const off = (sign: string) =>
             `0.5 + (abs(scale("y", datum[${endF}]) - scale("y", datum[${startF}])) < 0.25 ? ${sign}0.5 * (0.25 - (abs(scale("y", datum[${endF}]) - scale("y", datum[${startF}])))) : ${sign === '+' ? '-0.5' : '0.5'})`
           update.y = { scale: 'y', field: JSON.parse(endF), offset: { signal: off('+') } }
@@ -3122,7 +3231,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       if (st != null) update.stroke = { value: st }
       if (markStrokeWidth) update.strokeWidth = { value: markStrokeWidth }
       if (markOpacity != null || pointOpacityDefault != null) update.opacity = { value: markOpacity ?? pointOpacityDefault }
-      update.shape = { value: mark }
+      if (mark !== 'point') update.shape = { value: mark }
       if (markSize != null) update.size = { value: markSize }
     } else {
       update.opacity = opacityDef
@@ -3140,14 +3249,16 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         : { value: ptStroke }
     }
     update.ariaRoleDescription = { value: mark }
-    update.shape = { value: mark }
+    // Vega's symbol shape vocabulary has no "point": the point mark keeps
+    // Vega's default (circle) shape; circle/square name their own.
+    if (mark !== 'point') update.shape = { value: mark }
     if (markSize != null) update.size = { value: markSize }
     // a stacked point sits at the stacked end of its measure
     if (xDef) update.x = { scale: 'x', field: isStacked(xDef, mark, orient, fields) ? `${xDef.field}_end` : aggFieldName(xDef) }
     if (yDef) update.y = { scale: 'y', field: isStacked(yDef, mark, orient, fields) ? `${yDef.field}_end` : aggFieldName(yDef) }
     if (sizeDef) update.size = { scale: 'size', field: aggFieldName(sizeDef) }
     if (strokeWidthDef) update.strokeWidth = { scale: 'strokeWidth', field: aggFieldName(strokeWidthDef) }
-    if (shapeDef && !filled) update.shape = { scale: 'shape', field: aggFieldName(shapeDef) }
+    if (shapeDef) update.shape = { scale: 'shape', field: aggFieldName(shapeDef) }
     void 0
   } else if (mark === 'line') {
     const markStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
@@ -3771,7 +3882,14 @@ function definedSignal(xDef?: FieldDef | null, yDef?: FieldDef | null): unknown 
 
 // --- assembly ----------------------------------------------------------------
 
-export function compileUnit(spec: VLSpec): VLSpec {
+/** Compile a single unit spec (validated; the input is not mutated). */
+export function compileUnit(input: VLSpec): VLSpec {
+  const spec = cloneSpec(input)
+  validateSpec(spec)
+  return compileUnitView(spec, makeCtx(spec))
+}
+
+function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const markRaw = spec.mark
   const mark = typeof markRaw === 'string' ? markRaw : isObject(markRaw) ? (markRaw.type as string) : 'point'
   const markSize = isObject(markRaw) ? (markRaw.size as number | undefined) : undefined
@@ -3799,7 +3917,7 @@ export function compileUnit(spec: VLSpec): VLSpec {
     else if (yDef && isDiscreteType(yDef.type) && !yDef.aggregate && (!xDef || !isDiscreteType(xDef.type))) orient = 'horizontal'
   }
 
-  const data = buildData(spec, fields, mark, orient)
+  const data = buildData(spec, fields, mark, orient, undefined, ctx)
   // vega-lite's default sizing: continuous dimensions get 300, discrete
   // dimensions size from the band step (bandspace(domain length) * step)
   const xDefS = fields.find((f) => f.channel === 'x')

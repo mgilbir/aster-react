@@ -57,18 +57,36 @@ async function main(): Promise<boolean> {
       const oracleVg = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, unknown> } }).compile(spec).spec
       const before = JSON.stringify(spec)
       const ourVg = compileOurs(deepFreeze(JSON.parse(before)))
-      const [oracleSvg, ourSvg, checked] = await Promise.all([
+      const [oracleSvg, ourSvg, checked, oracleChecked] = await Promise.all([
         renderWithVega(oracleVg),
         loadSpecData(JSON.parse(JSON.stringify(ourVg)) as never, TRUSTED_LOAD_OPTIONS).then((loaded) => renderSpec(loaded as never)),
         renderWithVegaChecked(JSON.parse(JSON.stringify(ourVg))),
+        renderWithVegaChecked(oracleVg),
       ])
-      if (checked.errors.length || checked.warnings.length) {
+      // A vega message that vega-lite's OWN output also triggers (e.g. an empty
+      // outlier dataset's "Infinite extent") is data-dependent noise, not a
+      // defect in what we emit; anything else is invalid Vega.
+      const inherited = new Set([...oracleChecked.errors, ...oracleChecked.warnings])
+      const bad = [
+        ...checked.errors.filter((e) => !inherited.has(e)).map((e) => `error: ${e}`),
+        ...checked.warnings.filter((w) => !inherited.has(w)).map((w) => `warn: ${w}`),
+      ]
+      if (bad.length) {
         errored++
         failures.push(name)
         console.log(`INVALID-VEGA ${name}`)
-        for (const m of [...checked.errors.map((e) => `error: ${e}`), ...checked.warnings.map((w) => `warn: ${w}`)].slice(0, 4)) {
-          console.log(`      ${m}`.slice(0, 220))
-        }
+        for (const m of bad.slice(0, 4)) console.log(`      ${m}`.slice(0, 220))
+        continue
+      }
+      // Real vega rendering OUR Vega must also equal vega-lite's output: this
+      // catches output that is valid but means something different in real
+      // vega than in Aster's (more lenient) runtime.
+      const vegaDiffs = checked.svg ? diffCanonical(canonicalizeSvg(oracleSvg), canonicalizeSvg(checked.svg)) : ['no svg']
+      if (vegaDiffs.length) {
+        failed++
+        failures.push(name)
+        console.log(`VEGA-DIFF ${name}`)
+        console.log(`      real vega on our Vega differs from vega-lite's: ${String(vegaDiffs[0]).slice(0, 200)}`)
         continue
       }
       const o = canonicalizeSvg(oracleSvg)
