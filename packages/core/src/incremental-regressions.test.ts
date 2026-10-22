@@ -431,3 +431,53 @@ describe('C57: object-valued derived signals do not defeat the caches', () => {
     expect(renderSceneToSvg(b)).toBe(renderSceneToSvg(fresh(spec, { data: { t: next } })))
   })
 })
+
+describe('C52: lazily materialised superseded scenes', () => {
+  const spec = { ...BASE, data: [{ name: 't', values: [] }], scales: [lin('x', [0, 100])], marks: [sym('t')] }
+  const ap = (base: number) => ({ t: { changed: [] as number[], appendOnly: true, baseLength: base, added: [[base, base + 1]] as Array<[number, number]> } })
+  const rowsN = (n: number, bump = -1) => Array.from({ length: n }, (_, i) => ({ v: i === bump ? 77 : i }))
+
+  it('a chain of superseded scenes reads correctly in any order, including never-read-until-later', () => {
+    const chart = compileChart(spec as never)
+    const scenes: SceneRoot[] = [evaluateChart(chart, { data: { t: rowsN(3) } })]
+    const snaps = [xs(groups(scenes[0]!)[0]!)]
+    for (let n = 3; n < 9; n++) {
+      // alternate appends and same-length edits
+      const next = n % 2 ? rowsN(n + 1) : rowsN(n, 1)
+      const input = n % 2
+        ? { data: { t: next }, dataPulse: ap(n) }
+        : { data: { t: next }, dataChanges: { t: [1] } }
+      // an edit step keeps the length: the previous length is n
+      const sc = evaluateChart(chart, input.dataChanges ? { data: { t: rowsN(n + 0, 1) }, dataChanges: { t: [1] } } : input)
+      scenes.push(sc)
+      snaps.push(xs(groups(sc)[0]!))
+    }
+    // read newest first, then a middle one, then oldest, then everything again
+    const order = [scenes.length - 1, 3, 0, 5, 1, 2, 4, 6].filter((i) => i < scenes.length)
+    for (const i of order) expect(xs(groups(scenes[i]!)[0]!), `scene ${i}`).toEqual(snaps[i])
+    for (let i = 0; i < scenes.length; i++) expect(xs(groups(scenes[i]!)[0]!), `scene ${i} again`).toEqual(snaps[i])
+  })
+
+  it('an unreferenced old scene is collectable and a newer scene never keeps it alive', async () => {
+    const { setFlagsFromString } = await import('node:v8')
+    const vm = await import('node:vm')
+    setFlagsFromString('--expose-gc')
+    const gc = vm.runInNewContext('gc') as () => void
+    const chart = compileChart(spec as never)
+    const refs: WeakRef<SceneRoot>[] = []
+    let newest!: SceneRoot
+    ;(() => {
+      let s = evaluateChart(chart, { data: { t: rowsN(50) } })
+      refs.push(new WeakRef(s))
+      for (let n = 50; n < 60; n++) {
+        s = evaluateChart(chart, { data: { t: rowsN(n + 1) }, dataPulse: ap(n) })
+        refs.push(new WeakRef(s))
+      }
+      newest = s
+    })()
+    for (let i = 0; i < 20; i++) { gc(); await new Promise((r) => setTimeout(r, 5)) }
+    const alive = refs.slice(0, -1).filter((r) => r.deref() !== undefined).length
+    expect(alive).toBe(0)
+    expect(groups(newest)[0]!.items).toHaveLength(60)
+  })
+})

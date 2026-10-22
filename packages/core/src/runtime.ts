@@ -233,6 +233,52 @@ let gradientIdCounter = 0
 /** Cached recursive bounds for unchanged top-level mark groups. */
 const GROUP_BOUNDS = new WeakMap<SceneGroup, Bounds>()
 
+/**
+ * Undo record for a mark whose items array was updated IN PLACE: the length it
+ * had, and the items it overwrote.
+ */
+interface ItemsUndo { oldLen: number; changed: Array<[number, SceneItem]> }
+
+/**
+ * Persistent-scene sharing without mutating a returned scene (C52).
+ *
+ * An append / same-length update advances the engine-owned items array in place
+ * (O(changes)) and hands it to the NEW group. The SUPERSEDED group — the one in
+ * the previously returned scene — gets its `items` replaced by a lazy snapshot:
+ * on first read it materialises (old length, overwritten items restored) from
+ * the newer group, then becomes an ordinary data property. A chain of superseded
+ * groups composes (materialising one reads its newer neighbour, itself possibly
+ * lazy), so scenes can be read in any order, or never.
+ *
+ * Retention: an older group references the newer one until it is read; a newer
+ * group never references an older one, so an unreferenced old scene is
+ * collectable. A scene retained for a long time without being read keeps one
+ * small undo record per later update alive (plus the items those updates
+ * overwrote).
+ */
+function supersedeItems(old: SceneGroup, next: SceneGroup, undo: ItemsUndo): void {
+  let link: { next: SceneGroup; undo: ItemsUndo } | null = { next, undo }
+  const settle = (value: SceneNode[] | undefined): void => {
+    link = null
+    Object.defineProperty(old, 'items', { value, writable: true, configurable: true, enumerable: true })
+  }
+  Object.defineProperty(old, 'items', {
+    configurable: true,
+    enumerable: true,
+    get(): SceneNode[] | undefined {
+      if (!link) return undefined
+      const { next: newer, undo: u } = link
+      // Reading the newer group's items materialises it first if it is lazy too.
+      const base = (newer.items ?? []) as SceneItem[]
+      const arr = base.slice(0, u.oldLen)
+      for (let k = u.changed.length - 1; k >= 0; k--) arr[u.changed[k]![0]] = u.changed[k]![1]
+      settle(arr as SceneNode[])
+      return arr as SceneNode[]
+    },
+    set(v: SceneNode[] | undefined) { settle(v) },
+  })
+}
+
 /** Mark types whose group bounds are exactly the union of their item bounds. */
 const UNION_BOUND_MARKS = new Set(['symbol', 'rect', 'text', 'rule', 'tick'])
 function cacheableGroupBounds(g: SceneGroup): boolean {
@@ -3228,6 +3274,7 @@ function evaluateMark(
   // the items appended to it, so the cache survives without a recomputation.
   let carriedBounds: Bounds | undefined
   const addedItems: SceneItem[] = []
+  let pendingUndo: ItemsUndo | undefined
   if (source) {
     const rawRows = ctx.datasets.get(source) ?? []
     // Only clone rows when the pipeline will re-encode them all (a mark-level
@@ -3286,9 +3333,9 @@ function evaluateMark(
     // re-encode of those items is skipped entirely (including the row clone).
     // `rows` is in dataset order (pulse indices refer to it).
     //
-    // The previous scene is NEVER written (C52): the item array is copied
-    // (pointer copy; the items themselves are shared, immutable once encoded)
-    // and a new group object wraps it.
+    // A returned scene is never observably written (C52): structural updates
+    // build a new array; appends/edits advance the engine-owned array in place
+    // and turn the superseded group into a lazy snapshot (supersedeItems).
     const pulse = reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
     if (pulse) {
       const prevItems = prevGroup!.items as SceneItem[]
@@ -3302,20 +3349,33 @@ function evaluateMark(
       }
       if (pulse.appendOnly) {
         const base = pulse.baseLength ?? prevItems.length
-        const next = prevItems.slice()
+        // O(changes): advance the engine-owned array in place; the previous
+        // group is turned into a lazy snapshot below (supersedeItems).
+        const undo: ItemsUndo = { oldLen: prevItems.length, changed: [] }
         // The cached union bounds carry over to the new group only for a pure
         // append (re-encoded items could shrink them).
         if (!pulse.changed.length) carriedBounds = GROUP_BOUNDS.get(prevGroup!)?.clone()
-        for (const i of pulse.changed) {
-          if (i < 0 || i >= base) continue
-          next[i] = encodeAt(i)
+        try {
+          const seen = new Set<number>()
+          for (const i of pulse.changed) {
+            if (i < 0 || i >= base || seen.has(i)) continue
+            seen.add(i)
+            undo.changed.push([i, prevItems[i]!])
+            prevItems[i] = encodeAt(i)
+          }
+          for (let i = base; i < encodeRows.length; i++) {
+            const item = encodeAt(i)
+            prevItems.push(item)
+            addedItems.push(item)
+          }
+        } catch (e) {
+          // Never leave the (still current) previous scene half-updated.
+          prevItems.length = undo.oldLen
+          for (const [i, it] of undo.changed) prevItems[i] = it
+          throw e
         }
-        for (let i = base; i < encodeRows.length; i++) {
-          const item = encodeAt(i)
-          next.push(item)
-          addedItems.push(item)
-        }
-        items = next
+        items = prevItems
+        pendingUndo = undo
       } else if (pulse.from) {
         const modified = new Set(pulse.changed)
         const next = new Array<SceneItem>(encodeRows.length)
@@ -3423,6 +3483,7 @@ function evaluateMark(
     for (const it of addedItems) carriedBounds.union(boundLeaf(new Bounds(), it))
     GROUP_BOUNDS.set(group, carriedBounds)
   }
+  if (pendingUndo && prevGroup) supersedeItems(prevGroup, group, pendingUndo)
   return group
 }
 

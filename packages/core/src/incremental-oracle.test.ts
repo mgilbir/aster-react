@@ -543,13 +543,29 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
     const d = firstDiff(want.norm, got.norm)
     if (d) return fail(stepNo, op, 'scene', d)
     if (want.svg !== got.svg) return fail(stepNo, op, 'svg', 'serialised SVG differs although the normalised scenes are equal')
-    for (const old of retained) {
-      const again = sceneKey(old.scene)
-      const dd = firstDiff(old.key.norm, again.norm)
-      if (dd) return fail(stepNo, op, `retained scene from step ${old.step} mutated`, dd)
+    // Earlier returned scenes must read exactly as they did when returned, in
+    // ANY read order (the engine hands superseded groups lazy snapshots):
+    // oldest first, newest first, or not at all until much later.
+    const mode = stepNo % 3
+    if (mode !== 2) {
+      const order = mode === 0 ? retained.slice() : retained.slice().reverse()
+      for (const old of order) {
+        const dd = firstDiff(old.key.norm, sceneKey(old.scene).norm)
+        if (dd) return fail(stepNo, op, `retained scene from step ${old.step} mutated`, dd)
+      }
     }
     retained.push({ scene: actual, key: got, step: stepNo })
-    if (retained.length > 4) retained.shift()
+    return null
+  }
+
+  /** Final audit: scenes that were never re-read, in pseudo-random order. */
+  const finalAudit = (): RunResult | null => {
+    const order = retained.map((_, i) => i).sort((a, b) => ((a * 7919) % 13) - ((b * 7919) % 13) || a - b)
+    for (const i of order) {
+      const old = retained[i]!
+      const dd = firstDiff(old.key.norm, sceneKey(old.scene).norm)
+      if (dd) return fail(old.step, 'final audit', `retained scene from step ${old.step} mutated`, dd)
+    }
     return null
   }
 
@@ -598,7 +614,7 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
       const r = compare(i, `${s.op}/${s.delivery}`, scene, world) ?? irCheck(i, s.op)
       if (r) return r
     }
-    return { failure: null, steps: steps.length }
+    return finalAudit() ?? { failure: null, steps: steps.length }
   }
 
   // session target
@@ -658,7 +674,7 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
       if (r) return r
     }
   }
-  return { failure: null, steps: steps.length }
+  return finalAudit() ?? { failure: null, steps: steps.length }
 }
 
 export function scenario(seed: number, nSteps: number): { g: GenSpec; world: World; steps: Step[] } {

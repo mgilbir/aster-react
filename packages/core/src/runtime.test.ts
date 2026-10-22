@@ -149,7 +149,9 @@ describe('differential fuzz (incremental === full re-derive)', () => {
     } as never
     const chart = compileChart(spec)
     const a = evaluateChart(chart, { data: { t: rows } })
-    const itemsA = a.items[0]!.items as unknown[]
+    const groupA = a.items[0]!
+    // Snapshot at return time: the earlier scene must read exactly this later.
+    const itemsA = [...(groupA.items as unknown[])]
     // Bump one bar's value but keep every bar's rank AND the domain extent
     // (row 7's v=100 stays the max, so the y scale is provably unchanged).
     const next = rows.map((r, i) => (i === 3 ? { g: r.g, v: r.v + 5 } : r))
@@ -158,7 +160,10 @@ describe('differential fuzz (incremental === full re-derive)', () => {
     expect(renderSceneToSvg(b)).toBe(renderSceneToSvg(evaluateChart(chart, { data: { t: next } })))
     // The previous scene is never written (C52): a new item array, with every
     // unchanged item shared by identity and the old array left as it was.
-    expect(itemsB).not.toBe(itemsA)
+    expect(b.items[0]).not.toBe(groupA)
+    const readA = groupA.items as unknown[] // re-read through the property
+    expect(readA).toHaveLength(itemsA.length)
+    readA.forEach((it, i) => expect(it).toBe(itemsA[i]))
     expect(itemsA[3]).not.toBe(itemsB[3])
     for (let i = 0; i < itemsA.length; i++) if (i !== 3) expect(itemsB[i]).toBe(itemsA[i])
     // Scene items keep dataset order; only row 3 is re-encoded (a new
