@@ -15,7 +15,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a valid but unimplemented mark', unit({ mark: 'geoshape' }), /not supported by @aster\/vl yet/],
   ['errorbar composite marks', unit({ mark: 'errorbar' }), /not supported/],
   ['an unknown mark property', unit({ mark: { type: 'point', sparkle: true } }), /unknown mark property "sparkle"/],
-  ['an unsupported mark property', unit({ mark: { type: 'bar', binSpacing: 2 } }), /binSpacing/],
+  ['an unsupported mark property', unit({ mark: { type: 'bar', time: 2 } }), /animation/],
   ['config nested in a child spec', { data: DATA, hconcat: [unit({ config: {} })] }, /config is only allowed at the top level/],
   ['an unsupported config key', unit({ config: { customFormatTypes: true } }), /config\.customFormatTypes/],
   ['responsive container sizing', unit({ width: 'container' }), /container/],

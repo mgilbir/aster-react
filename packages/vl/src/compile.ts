@@ -112,6 +112,7 @@ function array(v: unknown): unknown[] {
 export function compile(input: VLSpec): VLSpec {
   const spec = cloneSpec(input)
   validateSpec(spec)
+  imageAsRect(spec)
   const ctx = makeCtx(spec)
   const out = finalizeData(compileView(spec, ctx), ctx)
   const signals = paramSignals(spec)
@@ -189,6 +190,18 @@ function cloneSpec(input: VLSpec): VLSpec {
   } catch (e) {
     throw new VLCompileError(`the spec must be plain JSON-compatible data (${(e as Error).message})`)
   }
+}
+
+/**
+ * vega-lite lays an image mark out exactly like a rect (it is rect-based); only the emitted mark
+ * differs. Every `image` mark def becomes a `rect` carrying `$image`, which buildMarks turns back.
+ */
+function imageAsRect(node: unknown): void {
+  if (Array.isArray(node)) { node.forEach(imageAsRect); return }
+  if (!isObject(node)) return
+  const m = node.mark
+  if (m === 'image' || (isObject(m) && m.type === 'image')) node.mark = { ...(isObject(m) ? m : {}), type: 'rect', $image: true }
+  for (const k of ['layer', 'hconcat', 'vconcat', 'concat', 'spec']) imageAsRect(node[k])
 }
 
 function compileView(spec: VLSpec, ctx: CompileCtx): VLSpec {
@@ -344,7 +357,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const mark = typeof markRaw === 'string' ? markRaw : (markRaw as Record<string, unknown>).type as string
     const encoding = isObject(l.encoding) ? (l.encoding as Record<string, unknown>) : {}
     checkConstChannels(mark, encoding, markIsFilled(l, mark))
-    const fields = parseEncodingFields(encoding, l.config)
+    const fields = parseEncodingFields(encoding, l.config, markRaw)
     const orient = inferOrient(l, mark, markRaw, fields)
     return { l, mark, markRaw, markSize: isObject(markRaw) ? (markRaw.size as number | undefined) : undefined, fields, orient, pipeline: [], seriesFields: [], dataName: '', rawName: '', rawLen: 0, usesRawDomain: false, group: 0 }
   })
@@ -2045,12 +2058,14 @@ function titleFromConfig(f: FieldDef, config: unknown): { autoTitle?: string } {
   return f.aggregate === 'count' && typeof c.countTitle === 'string' ? { autoTitle: c.countTitle } : {}
 }
 
-function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown): FieldDef[] {
+function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown, markDef?: unknown): FieldDef[] {
   const fields: FieldDef[] = []
   // vega-lite parseLegend: `disable = legend !== undefined ? !legend : config.legend.disable`
   const legendCfg = isObject(config) && isObject(config.legend) ? (config.legend as Record<string, unknown>) : undefined
   const disableLegends = legendCfg?.disable === true
   for (const [channel, def] of Object.entries(encoding)) {
+    // vega-lite drops the size of an image mark (it is incompatible)
+    if (channel === 'size' && isObject(markDef) && markDef.$image) continue
     // detail / order / tooltip accept a list of definitions
     for (const d of Array.isArray(def) ? def : [def]) {
       const f = parseChannel(channel === 'fill' || channel === 'stroke' ? 'color' : channel, d)
@@ -2205,6 +2220,8 @@ export function assembleConfig(spec: VLSpec): Record<string, unknown> | undefine
       style[name] = { ...style[name], font: user.font }
     }
   }
+  // the user's own named styles (markDef.style) travel in config.style as written
+  if (isObject(user.style)) for (const [name, block] of Object.entries(user.style)) if (!MARK_TYPE_BLOCKS.includes(name) && isObject(block)) style[name] = block
   if (Object.keys(style).length) out.style = style
   return Object.keys(out).length ? out : undefined
 }
@@ -4003,7 +4020,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (orient === 'vertical') {
       if (xDef) {
         const sc = positionalScaleType(mark, xDef)
-        if (mark === 'rect' && xDef.timeUnit == null && !xDef.bin && sc !== 'band') {
+        if (mark === 'rect' && xDef.timeUnit == null && !xDef.bin && sc !== 'band' && markDef?.width !== undefined) {
+          // a rect with a width of its own is centered on its value
+          update.xc = { scale: 'x', field: aggFieldName(xDef) }
+          update.width = { value: markDef.width }
+        } else if (mark === 'rect' && xDef.timeUnit == null && !xDef.bin && sc !== 'band') {
           // a continuous rect spans to the scale's zero/min (vega-lite rangePosition)
           update.x = { scale: 'x', field: aggFieldName(xDef) }
           update.x2 = zeroOrMinRef('x', xDef, mark)
@@ -4099,6 +4120,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             else update.y = { scale: 'y', field: aggFieldName(yDef) }
             update.height = { signal: `max(0.25, bandwidth('y'))` }
           }
+        } else if (mark === 'rect' && markDef?.height !== undefined) {
+          update.yc = { scale: 'y', field: aggFieldName(yDef) }
+          update.height = { value: markDef.height }
         } else {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
           if (mark === 'bar') update.y2 = { scale: 'y', value: 0 }
@@ -4108,7 +4132,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     } else {
       if (yDef) {
         const sc = positionalScaleType(mark, yDef)
-        if (mark === 'rect' && yDef.timeUnit == null && !yDef.bin && sc !== 'band') {
+        if (mark === 'rect' && yDef.timeUnit == null && !yDef.bin && sc !== 'band' && markDef?.height !== undefined) {
+          update.yc = { scale: 'y', field: aggFieldName(yDef) }
+          update.height = { value: markDef.height }
+        } else if (mark === 'rect' && yDef.timeUnit == null && !yDef.bin && sc !== 'band') {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
           update.y2 = zeroOrMinRef('y', yDef, mark)
         } else if (yDef.timeUnit == null && !yDef.bin && yDef.type === 'temporal') {
@@ -4173,6 +4200,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         } else if (!stackedX && positionalScaleType(mark, xDef) === 'band' && !xOffsetPresent) {
           update.x = { scale: 'x', field: aggFieldName(xDef) }
           update.width = { signal: `max(0.25, bandwidth('x'))` }
+        } else if (mark === 'rect' && markDef?.width !== undefined) {
+          update.xc = { scale: 'x', field: aggFieldName(xDef) }
+          update.width = { value: markDef.width }
         } else {
           update.x = { scale: 'x', field: aggFieldName(xDef) }
           if (mark === 'bar') update.x2 = { scale: 'x', value: 0 }
@@ -4632,7 +4662,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     'strokeWidth', 'strokeDash', 'strokeCap', 'strokeJoin', 'strokeMiterLimit',
     'strokeOpacity', 'fillOpacity', 'opacity', 'angle', 'blend', 'cursor',
     'cornerRadius', 'cornerRadiusTopLeft', 'cornerRadiusTopRight',
-    'cornerRadiusBottomLeft', 'cornerRadiusBottomRight', 'padAngle',
+    'cornerRadiusBottomLeft', 'cornerRadiusBottomRight', 'padAngle', 'smooth', 'aspect',
   ]) {
     const v = passProp(p)
     if (v !== undefined && update[p] === undefined) update[p] = { value: v }
@@ -4645,6 +4675,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const enc = update[ch] as Record<string, unknown> | undefined
     if (enc && typeof enc === 'object' && enc.offset === undefined) enc.offset = off
   }
+  const x2Off = markDefP?.x2Offset as number | undefined
+  const y2Off = markDefP?.y2Offset as number | undefined
+  // a secondary offset moves only its own endpoint and takes precedence over xOffset/yOffset there
+  if (x2Off !== undefined) withOffset('x2', x2Off)
+  if (y2Off !== undefined) withOffset('y2', y2Off)
   if (xOff !== undefined) for (const ch of ['x', 'x2', 'xc']) withOffset(ch, xOff)
   // a rule's baseline endpoint stays at zero; only its value endpoint shifts
   if (yOff !== undefined) for (const ch of mark === 'rule' ? ['y', 'yc'] : ['y', 'y2', 'yc']) withOffset(ch, yOff)
@@ -4667,9 +4702,19 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const markSpec: Record<string, unknown> = {
     name: 'marks',
     type: mark === 'bar' || mark === 'tick' ? 'rect' : mark === 'point' || mark === 'circle' || mark === 'square' ? 'symbol' : mark,
-    style: [mark],
+    style: [mark, ...(isObject(spec.mark) ? ([] as string[]).concat((spec.mark.style as string | string[] | undefined) ?? []) : [])],
     from: { data: dataName },
     encode: { update },
+  }
+  if (isObject(spec.mark) && spec.mark.$image) {
+    // an image mark carries no paint; its bands are not floored at the rect minimum
+    markSpec.type = 'image'
+    markSpec.style = ['image']
+    for (const k of ['fill', 'stroke', 'ariaRoleDescription']) delete update[k]
+    for (const k of ['width', 'height']) {
+      const w = update[k] as { signal?: string } | undefined
+      if (w?.signal) w.signal = w.signal.replace(/^max\(0\.25, (.*)\)$/, '$1')
+    }
   }
   // order: an explicit order channel wins; otherwise vega-lite sorts a
   // line/area by its dimension channel NAME (Vega then sorts scene items by
@@ -4977,13 +5022,13 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
     else throw new VLCompileError(`mark.tooltip: unsupported form ${JSON.stringify(t)}`)
   }
   // href / description
-  for (const ch of ['href', 'description'] as const) {
+  for (const ch of ['href', 'description', 'url'] as const) {
     const d = fields.find((f) => f.channel === ch && !f.datumOnly)
     if (d && isObject(enc[ch]) && (enc[ch] as Record<string, unknown>).field !== undefined) update[ch] = { signal: fieldTextExpr(d, { lineBreaks: false, spec }) }
   }
 }
 
-const NON_POSITION_CHANNELS = new Set(['color', 'fill', 'stroke', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'size', 'angle', 'shape', 'text', 'tooltip', 'href', 'description'])
+const NON_POSITION_CHANNELS = new Set(['color', 'fill', 'stroke', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'size', 'angle', 'shape', 'text', 'tooltip', 'href', 'description', 'url'])
 
 /** vega-lite defaultFilled: every mark but point, line and rule is filled unless configured. */
 function markIsFilled(spec: VLSpec, mark: string): boolean {
@@ -5169,7 +5214,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const markSize = isObject(markRaw) ? (markRaw.size as number | undefined) : undefined
   const encoding = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   checkConstChannels(mark, encoding, markIsFilled(spec, mark))
-  const fields = parseEncodingFields(encoding, spec.config)
+  const fields = parseEncodingFields(encoding, spec.config, markRaw)
 
   // orientation (bar/area/rule/tick): vertical unless the y channel is discrete
   // and x is not, or the mark def says otherwise

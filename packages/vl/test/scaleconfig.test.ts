@@ -112,3 +112,28 @@ describe('invalid values (mark.invalid)', () => {
     expect(filter(vg)).not.toContain('"y"')
   })
 })
+
+describe('mark keys and the image mark', () => {
+  it('x2Offset moves only the second endpoint of a ranged bar', () => {
+    const vg = compileFrozen({ data: DATA, mark: { type: 'bar', x2Offset: 6 }, encoding: { x: xq, x2: { field: 'y', type: 'quantitative' }, y: cn } })
+    const u = marksUpdate(vg)
+    expect(u.x2.offset).toBe(6)
+    expect(u.x.offset).toBeUndefined()
+  })
+  it('markDef.style names extend the mark style list', () => {
+    const vg = compileFrozen({ data: DATA, mark: { type: 'bar', style: ['hi'] }, encoding: { x: cn, y: yq }, config: { style: { hi: { fill: 'red' } } } })
+    expect(vg.marks[0].style).toEqual(['bar', 'hi'])
+    expect(vg.config.style.hi).toEqual({ fill: 'red' })
+  })
+  it('an image mark lays out like a rect, with a url and no paint', () => {
+    const vg = compileFrozen({ data: { values: [{ x: 1, y: 2, u: 'a.png' }] }, mark: { type: 'image', width: 20, height: 30, aspect: false }, encoding: { x: xq, y: yq, url: { field: 'u', type: 'nominal' } } })
+    const m = vg.marks[0]
+    expect(m.type).toBe('image')
+    expect(m.encode.update).toMatchObject({ aspect: { value: false }, xc: { scale: 'x' }, width: { value: 20 }, yc: { scale: 'y' }, height: { value: 30 } })
+    expect(m.encode.update.url.signal).toContain('datum["u"]')
+    expect(m.encode.update.fill).toBeUndefined()
+  })
+  it('the url channel belongs to image marks only', () => {
+    expect(() => compileFrozen({ data: DATA, mark: 'point', encoding: { x: xq, y: yq, url: cn } })).toThrow(/image mark/)
+  })
+})
