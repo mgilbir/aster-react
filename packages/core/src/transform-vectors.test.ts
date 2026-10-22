@@ -145,7 +145,8 @@ for (const file of files) {
         for (const c of s.cases) {
           it(c.tz ? `[${c.tz}] ${c.name}` : c.name, () => {
             const prevTz = process.env.TZ
-            if (c.tz) process.env.TZ = c.tz
+            // cases recorded without a zone were recorded under UTC (e.g. Date keys stringify with the zone)
+            process.env.TZ = c.tz ?? 'UTC'
             try {
               const want = c.want as { $?: string; message?: string }
               if (want && want.$ === 'throw') {
@@ -172,10 +173,8 @@ for (const file of files) {
                 expect(ds, ds ?? '').toBeNull()
               }
             } finally {
-              if (c.tz) {
-                if (prevTz === undefined) delete process.env.TZ
-                else process.env.TZ = prevTz
-              }
+              if (prevTz === undefined) delete process.env.TZ
+              else process.env.TZ = prevTz
             }
           })
         }
