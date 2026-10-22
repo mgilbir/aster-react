@@ -103,16 +103,12 @@ export interface RuntimeInput {
 export interface CompiledProjection {
   name: string
   type: string
-  scale?: number | { signal: string }
-  translate?: [number, number] | { signal: string }
-  center?: [number, number] | { signal: string }
-  rotate?: [number, number] | [number, number, number] | { signal: string }
-  precision?: number | { signal: string }
-  clipAngle?: number | { signal: string }
-  reflectX?: boolean
-  reflectY?: boolean
-  /** Projection-specific parameters (parallels, pointRadius, clipExtent, ...) */
-  params?: Record<string, unknown>
+  /**
+   * Every other projection parameter as the spec wrote it (scale, translate,
+   * center, rotate, parallels, clipAngle, clipExtent, pointRadius, fit, size,
+   * extent, ...); a value may be a `{signal}` or contain signals.
+   */
+  [param: string]: unknown
 }
 
 export interface CompiledChart {

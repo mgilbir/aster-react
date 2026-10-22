@@ -22,112 +22,105 @@ type GeoProjection = any
 const geoMercator: () => any = geoMercatorDefault
 
 type Factory = () => GeoProjection
-const FACTORIES: Record<string, Factory> = {
+
+/**
+ * vega-projection's registry, by lower-cased type. `projection(type)` lower-cases
+ * the name it is asked for, so `naturalEarth1`, `NaturalEarth1` and
+ * `naturalearth1` are one projection; a name outside this set (`robinson`,
+ * `albers-usa`, ...) is unrecognised, and building one throws.
+ */
+const FACTORIES: Record<string, Factory> = Object.assign(Object.create(null), {
   albers: geoAlbers,
-  'albers-usa': geoAlbersUsa as unknown as Factory,
-  albersUsa: geoAlbersUsa as unknown as Factory,
-  albersusa: geoAlbersUsa as unknown as Factory,
-  azimuthalEqualArea: geoAzimuthalEqualArea,
-  'azimuthal-equal-area': geoAzimuthalEqualArea,
+  albersusa: geoAlbersUsa,
   azimuthalequalarea: geoAzimuthalEqualArea,
-  azimuthalEquidistant: geoAzimuthalEquidistant,
-  'azimuthal-equidistant': geoAzimuthalEquidistant,
   azimuthalequidistant: geoAzimuthalEquidistant,
-  conicConformal: geoConicConformal,
-  'conic-conformal': geoConicConformal,
   conicconformal: geoConicConformal,
-  conicEqualArea: geoConicEqualArea,
-  'conic-equal-area': geoConicEqualArea,
   conicequalarea: geoConicEqualArea,
-  conicEquidistant: geoConicEquidistant,
-  'conic-equidistant': geoConicEquidistant,
   conicequidistant: geoConicEquidistant,
-  equalEarth: geoEqualEarth,
-  'equal-earth': geoEqualEarth,
   equalearth: geoEqualEarth,
   equirectangular: geoEquirectangular,
   gnomonic: geoGnomonic,
-  identity: geoIdentity as unknown as Factory,
+  identity: geoIdentity,
   mercator: geoMercator,
   mollweide: geoMollweide,
-  naturalEarth1: geoNaturalEarth1,
-  'natural-earth': geoNaturalEarth1,
   naturalearth1: geoNaturalEarth1,
   orthographic: geoOrthographic,
   stereographic: geoStereographic,
-  transverseMercator: geoTransverseMercator,
-  'transverse-mercator': geoTransverseMercator,
   transversemercator: geoTransverseMercator,
-}
+})
 
-/** A projection spec with all signal values resolved to numbers/tuples. */
+/** vega-projection `projectionProperties`, in the order the Projection transform applies them. */
+const PROJECTION_PROPERTIES = [
+  // standard properties in d3-geo
+  'clipAngle', 'clipExtent', 'scale', 'translate', 'center', 'rotate', 'parallels', 'precision', 'reflectX', 'reflectY',
+  // extended properties in d3-geo-projections
+  'coefficient', 'distance', 'fraction', 'lobes', 'parallel', 'radius', 'ratio', 'spacing', 'tilt',
+]
+
+/** A projection spec with all signal values resolved (vega-parser's projection parameters). */
 export interface ResolvedProjection {
   name: string
   type: string
-  scale?: number
-  translate?: [number, number]
-  center?: [number, number]
-  rotate?: [number, number] | [number, number, number]
-  precision?: number
-  clipAngle?: number
-  reflectX?: boolean
-  reflectY?: boolean
-  params?: Record<string, unknown>
+  /** Every other parameter: the d3 projection properties, `pointRadius`, `fit`, `size`, `extent`. */
+  [param: string]: unknown
+}
+
+/** vega-projection `projection(type)`: the factory for a type name, case-insensitively; null if unknown. */
+function projectionFactory(type: string): Factory | null {
+  if (!type || typeof type !== 'string') throw new Error('Projection type must be a name string.')
+  return FACTORIES[type.toLowerCase()] ?? null
+}
+
+function array(_: unknown): unknown[] {
+  return _ != null ? (Array.isArray(_) ? _ : [_]) : []
+}
+
+function featurize(f: unknown): unknown[] {
+  // `f.type` on a null member throws, as upstream's does
+  return (f as { type?: unknown }).type === 'FeatureCollection'
+    ? (f as { features: unknown[] }).features
+    : array(f)
+        .filter((d) => d != null)
+        .map((d) => ((d as { type?: unknown }).type === 'Feature' ? d : { type: 'Feature', geometry: d }))
+}
+
+/** vega-geo `collectGeoJSON`: one GeoJSON object out of a GeoJSON value or a list of them. */
+export function collectGeoJSON(data: unknown): unknown {
+  const list = array(data)
+  return list.length === 1
+    ? list[0]
+    : { type: 'FeatureCollection', features: list.reduce<unknown[]>((a, f) => a.concat(featurize(f)), []) }
+}
+
+/** vega-geo Projection transform `fit`: scale/translate the projection to the data's bounds. */
+function fit(proj: GeoProjection, _: Record<string, unknown>): void {
+  const data = collectGeoJSON(_.fit)
+  if (_.extent) proj.fitExtent(_.extent, data)
+  else if (_.size) proj.fitSize(_.size, data)
 }
 
 /**
- * Build a d3-geo projection from a compiled spec. Vega applies only the
- * parameters the spec provides — scale/translate/etc otherwise keep d3's own
- * per-type defaults (e.g. mercator translate [480, 250] regardless of chart
- * size; verified against the oracle on a 200x100 chart). When the type is
- * unknown we fall back to mercator (vega's default projection type).
+ * The vega-geo Projection transform: create the projection for `type`, apply the
+ * parameters the spec provides (each only when the projection has that property -
+ * geoIdentity has no center/rotate, for instance - and otherwise d3's own per-type
+ * defaults stay), set the bound path's `pointRadius`, then `fit` to the data when
+ * asked. An unrecognised type throws, as upstream.
  */
-export function buildProjection(spec: ResolvedProjection, _width: number, _height: number): GeoProjection {
-  const factory = (Object.hasOwn(FACTORIES, spec.type) ? FACTORIES[spec.type] : undefined) ?? geoMercator
+export function buildProjection(spec: ResolvedProjection, _width?: number, _height?: number): GeoProjection {
+  void _width
+  void _height
+  const type = (spec.type || 'mercator') as string
+  const factory = projectionFactory(type)
+  if (!factory) throw new Error('Unrecognized projection type: ' + type)
   const p = factory()
-  if (spec.scale != null && typeof p.scale === 'function') p.scale(spec.scale)
-  if (spec.translate != null && typeof p.translate === 'function') p.translate(spec.translate)
-  // vega-projection applies only properties the projection object carries
-  // (`if (p[prop])`): geoIdentity has no center/rotate, for instance.
-  if (spec.center && typeof p.center === 'function') p.center(spec.center)
-  if (spec.rotate && typeof p.rotate === 'function') p.rotate(spec.rotate as [number, number, number])
-  // geoIdentity has no precision/clipAngle: vega-projection only applies
-  // properties the projection object actually carries, so skip when absent.
-  if (spec.precision != null && typeof p.precision === 'function') p.precision(spec.precision)
-  if (spec.clipAngle != null && typeof p.clipAngle === 'function') p.clipAngle(spec.clipAngle)
-  if (spec.reflectX != null && 'reflectX' in p) (p as unknown as { reflectX(b: boolean): unknown }).reflectX(spec.reflectX)
-  if (spec.reflectY != null && 'reflectY' in p) (p as unknown as { reflectY(b: boolean): unknown }).reflectY(spec.reflectY)
-  // Vega-projection binds a persistent geoPath to each projection (`p.path`).
-  // The `pointRadius` parameter is applied to that path (vega's Projection
-  // transform: `if (_.pointRadius != null) proj.path.pointRadius(_.pointRadius)`),
-  // so the geoshape/geopath transforms render Point geometries with it.
-  const boundPath = geoPath(p)
-  ;(p as unknown as { path: unknown }).path = boundPath
-  ;(p as unknown as Record<string, unknown>).pointRadius = (_?: number) => {
-    if (arguments.length) {
-      boundPath.pointRadius(_)
-      return p
-    }
-    return boundPath.pointRadius()
+  p.type = type.toLowerCase() // the registry key, as vega-projection's `create` sets it
+  // vega-projection binds a persistent geoPath to each projection (`p.path`)
+  p.path = geoPath(p)
+  for (const prop of PROJECTION_PROPERTIES) {
+    if (spec[prop] != null && typeof p[prop] === 'function') p[prop](spec[prop])
   }
-  // Projection-specific parameters (parallels, pointRadius, clipExtent, ...):
-  // applied when the projection factory supports them, mirroring vega's
-  // projection param application.
-  const extras = spec.params
-  if (extras) {
-    for (const [k, v] of Object.entries(extras)) {
-      if (k === 'type' || k === 'name' || v == null) continue
-      const fn = (p as unknown as Record<string, unknown>)[k]
-      if (typeof fn === 'function') {
-        try {
-          ;(p as unknown as Record<string, (x?: unknown) => unknown>)[k]!(v)
-        } catch {
-          /* projection rejects the parameter */
-        }
-      }
-      void fn
-    }
-  }
+  if (spec.pointRadius != null) p.path.pointRadius(spec.pointRadius)
+  if (spec.fit) fit(p, spec)
   return p
 }
 

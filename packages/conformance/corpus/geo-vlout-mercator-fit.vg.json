@@ -1,0 +1,212 @@
+{
+ "$schema": "https://vega.github.io/schema/vega/v6.json",
+ "autosize": "none",
+ "background": "white",
+ "padding": 5,
+ "width": 400,
+ "height": 300,
+ "style": "view",
+ "data": [
+  {
+   "name": "source_0",
+   "values": [
+    {
+     "type": "Feature",
+     "properties": {
+      "name": "a",
+      "v": 3
+     },
+     "geometry": {
+      "type": "Polygon",
+      "coordinates": [
+       [
+        [
+         -125,
+         32
+        ],
+        [
+         -118,
+         48
+        ],
+        [
+         -100,
+         49
+        ],
+        [
+         -95,
+         30
+        ],
+        [
+         -110,
+         28
+        ],
+        [
+         -125,
+         32
+        ]
+       ]
+      ]
+     }
+    },
+    {
+     "type": "Feature",
+     "properties": {
+      "name": "b",
+      "v": 9
+     },
+     "geometry": {
+      "type": "Polygon",
+      "coordinates": [
+       [
+        [
+         -95,
+         30
+        ],
+        [
+         -80,
+         25
+        ],
+        [
+         -70,
+         44
+        ],
+        [
+         -90,
+         48
+        ],
+        [
+         -95,
+         30
+        ]
+       ]
+      ]
+     }
+    },
+    {
+     "type": "Feature",
+     "properties": {
+      "name": "c",
+      "v": 5
+     },
+     "geometry": {
+      "type": "Polygon",
+      "coordinates": [
+       [
+        [
+         -82,
+         35
+        ],
+        [
+         -75,
+         35
+        ],
+        [
+         -75,
+         40
+        ],
+        [
+         -82,
+         40
+        ],
+        [
+         -82,
+         35
+        ]
+       ]
+      ]
+     }
+    }
+   ],
+   "format": {
+    "type": "json"
+   }
+  },
+  {
+   "name": "data_0",
+   "source": "source_0",
+   "transform": [
+    {
+     "type": "formula",
+     "expr": "datum[\"properties\"] && datum[\"properties\"][\"v\"]",
+     "as": "properties.v"
+    },
+    {
+     "type": "filter",
+     "expr": "isValid(datum[\"properties.v\"]) && isFinite(+datum[\"properties.v\"])"
+    }
+   ]
+  }
+ ],
+ "projections": [
+  {
+   "name": "projection",
+   "size": {
+    "signal": "[width, height]"
+   },
+   "fit": {
+    "signal": "data('data_0')"
+   },
+   "type": "mercator"
+  }
+ ],
+ "marks": [
+  {
+   "name": "marks",
+   "type": "shape",
+   "style": [
+    "geoshape"
+   ],
+   "from": {
+    "data": "data_0"
+   },
+   "encode": {
+    "update": {
+     "stroke": {
+      "value": "black"
+     },
+     "strokeWidth": {
+      "value": 0.5
+     },
+     "fill": {
+      "scale": "color",
+      "field": "properties\\.v"
+     },
+     "ariaRoleDescription": {
+      "value": "geoshape"
+     },
+     "description": {
+      "signal": "\"properties.v: \" + (format(datum[\"properties.v\"], \"\"))"
+     }
+    }
+   },
+   "transform": [
+    {
+     "type": "geoshape",
+     "projection": "projection"
+    }
+   ]
+  }
+ ],
+ "scales": [
+  {
+   "name": "color",
+   "type": "linear",
+   "domain": {
+    "data": "data_0",
+    "field": "properties\\.v"
+   },
+   "range": "heatmap",
+   "interpolate": "hcl",
+   "zero": false
+  }
+ ],
+ "legends": [
+  {
+   "fill": "color",
+   "gradientLength": {
+    "signal": "clamp(height, 64, 200)"
+   },
+   "title": "properties.v"
+  }
+ ]
+}

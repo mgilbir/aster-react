@@ -5,7 +5,7 @@
  */
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { readData, type DataFormatSpec } from './data-format.js'
-import { applyTransforms, compileExprTransform, sortRows, sortOrder, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row, type TransformContext } from './transform.js'
+import { applyTransforms, compileExprTransform, sortRows, sortOrder, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { activeMeter, withLimits, meterItems, boundedCount, checkRowCount } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale, type ScaleContext } from './scales.js'
@@ -20,6 +20,7 @@ import type {
   CompiledData,
   CompiledLegend,
   CompiledMark,
+  CompiledProjection,
   CompiledScale,
   CompiledTransform,
   EncodeValue,
@@ -333,6 +334,8 @@ interface EvalContext {
    * so bindings can never outlive the scales they reference. */
   encodeBinding?: EncodeBinding
   projections: Map<string, unknown>
+  /** `datasets.size` when each fit projection was last built (see refreshProjection). */
+  projectionStamp: Map<string, number>
   runtime: ExpressionRuntime
   _defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }>
   /** Cached facet grid layout (computed once per chart). */
@@ -452,7 +455,7 @@ function prepareChartCtx(
   // Inputs besides the signals that change what a reused scale/item would be.
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}`
   const ctx: EvalContext = {
-    chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new Map(), runtime, _defs: defs,
+    chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new ProjectionRegistry(), projectionStamp: new Map(), runtime, _defs: defs,
     hierarchies: new Map(), affected: new Set(), incremental: false, deadline, checkDeadline,
     datasetPulses: new Map(),
     prev: txn.prev, draft: newState(txn.gen), gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
@@ -463,6 +466,14 @@ function prepareChartCtx(
     // run script, but a hostile spec can still make the viewer fetch an arbitrary
     // url (tracking pixel, IP leak). Hosts rendering foreign specs must opt in.
     urlPolicy: input.urlPolicy ?? (input.limits ? {} : undefined),
+  }
+  // The registry outlives the evaluation (scenes keep the transform contexts that
+  // hold it), so it must not keep the evaluation context - and with it every
+  // dataset of the evaluation - alive.
+  const selfRef = new WeakRef(ctx)
+  ;(ctx.projections as ProjectionRegistry).refresh = (name) => {
+    const live = selfRef.deref()
+    if (live) refreshProjection(live, name)
   }
   // A legend whose tickCount is an interval string on a non-time scale makes
   // vega's LegendEntries throw: the dataflow logs the error and the ViewLayout
@@ -575,55 +586,68 @@ function ctxFpOf(ctx: EvalContext): string {
   return ctx.fpMemo ??= `${paramFpOf(ctx.signalParams)}\u0002${ctx.extraFp}`
 }
 
-/** Build d3-geo projections from the compiled spec, resolving signal params. */
+/**
+ * vega-parser `parseParameter`: a projection parameter with every `{signal}`
+ * (also inside arrays, e.g. a `clipExtent`) replaced by its value. `fit` may be a
+ * GeoJSON object itself (left as is) or a signal such as `data("source_0")`.
+ */
+function resolveProjectionParam(ctx: EvalContext, v: unknown): unknown {
+  if (Array.isArray(v)) return v.map((x) => resolveProjectionParam(ctx, x))
+  if (v && typeof v === 'object' && typeof (v as { signal?: unknown }).signal === 'string') {
+    try {
+      return ctx.runtime.expr((v as { signal: string }).signal)({}, ctx.signalParams)
+    } catch {
+      // The signal reads a dataset or scale that does not exist yet; the next pass resolves it.
+      return undefined
+    }
+  }
+  return v
+}
+
+/** Build the d3-geo projection one compiled definition describes, in the current context. */
+function buildProjectionOf(ctx: EvalContext, p: CompiledProjection): unknown {
+  const build = requireGeo() // throws an actionable error if the geo addon is absent
+  const resolved: Record<string, unknown> = dict<unknown>({ name: p.name, type: p.type })
+  for (const k of Object.keys(p)) {
+    if (k === 'name' || k === 'type') continue
+    resolved[k] = resolveProjectionParam(ctx, p[k])
+  }
+  return build(resolved as never, ctx.width, ctx.height)
+}
+
+/**
+ * Build the projections (vega-geo's Projection transform). A projection that
+ * `fit`s a dataset depends on that dataset, which may not exist yet in the early
+ * passes: such a projection is rebuilt whenever the set of built datasets has
+ * changed since (see `refreshProjection`), and once more at the end of preparation.
+ */
 function buildProjections(ctx: EvalContext): void {
   if (!ctx.chart.projections?.length) return
-  const build = requireGeo() // throws an actionable error if the geo addon is absent
-  const evalNum = (v: unknown): number | undefined => {
-    if (typeof v === 'number') return v
-    if (v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)) {
-      try { const r = ctx.runtime.expr(String((v as { signal: string }).signal))({}, ctx.signalParams); return typeof r === 'number' ? r : undefined } catch { return undefined }
-    }
-    return undefined
-  }
-  const evalTup = (v: unknown): [number, number] | [number, number, number] | undefined => {
-    // keep a third element: rotate's gamma component
-    if (Array.isArray(v) && v.length > 2) return [Number(v[0]), Number(v[1]), Number(v[2])]
-    if (Array.isArray(v)) return [Number(v[0]), Number(v[1])]
-    if (v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)) {
-      try {
-        const r = ctx.runtime.expr(String((v as { signal: string }).signal))({}, ctx.signalParams)
-        if (Array.isArray(r) && r.length > 2) return [Number(r[0]), Number(r[1]), Number(r[2])]
-        if (Array.isArray(r)) return [Number(r[0]), Number(r[1])]
-      } catch { /* ignore */ }
-    }
-    return undefined
-  }
-  const evalAny = (v: unknown): unknown => {
-    if (Array.isArray(v)) return v.map((x) => (x != null && typeof x === 'object' && 'signal' in (x as Record<string, unknown>) ? evalAny(x) : x))
-    if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string') return v
-    if (v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)) {
-      try { return ctx.runtime.expr(String((v as { signal: string }).signal))({}, ctx.signalParams) } catch { return undefined }
-    }
-    return v
-  }
   for (const p of ctx.chart.projections) {
-    const params: Record<string, unknown> | undefined = p.params
-      ? Object.fromEntries(Object.entries(p.params).map(([k, v]) => [k, evalAny(v)]))
-      : undefined
-    ctx.projections.set(p.name, build({
-      name: p.name,
-      type: p.type,
-      scale: evalNum(p.scale),
-      translate: evalTup(p.translate),
-      center: evalTup(p.center),
-      rotate: evalTup(p.rotate),
-      precision: evalNum(p.precision),
-      clipAngle: evalNum(p.clipAngle),
-      reflectX: p.reflectX,
-      reflectY: p.reflectY,
-      params,
-    }, ctx.width, ctx.height))
+    ctx.projections.set(p.name, buildProjectionOf(ctx, p))
+    ctx.projectionStamp.set(p.name, ctx.datasets.size)
+  }
+}
+
+/**
+ * Refresh the projection a dataset transform asks for. One that fits data is rebuilt when
+ * more datasets exist than when it was last built, so a `geopath`/`geoshape`
+ * transform in a later dataset sees the fit to the data built before it.
+ */
+function refreshProjection(ctx: EvalContext, name: string): void {
+  const def = ctx.chart.projections?.find((p) => p.name === name)
+  if (def?.fit && ctx.projectionStamp.get(name) !== ctx.datasets.size) {
+    ctx.projections.set(name, buildProjectionOf(ctx, def))
+    ctx.projectionStamp.set(name, ctx.datasets.size)
+  }
+}
+
+/** The projections map a dataset transform sees: reads go through `refreshProjection`. */
+class ProjectionRegistry extends Map<string, unknown> {
+  refresh: ((name: string) => void) | undefined
+  override get(name: string): unknown {
+    this.refresh?.(name)
+    return super.get(name)
   }
 }
 
@@ -1281,7 +1305,7 @@ function buildContent(
     ? ctx.chart.padding
     : computeGuidePadding(
         items, facetWidth, facetHeight, ctx.chart.padding,
-        (ctx.chart.projections ?? []).some((p) => p.type === 'azimuthalequalarea' && Number(p.clipAngle) === 0),
+        (ctx.chart.projections ?? []).some((p) => String(p.type).toLowerCase() === 'azimuthalequalarea' && Number(p.clipAngle) === 0),
       )
   // Vega's renderers visit top-level items in dataflow order: axes (including
   // grid axes) first, then marks/scopes, then legends, then the title. Our
@@ -3074,6 +3098,17 @@ function claim(ctx: EvalContext, key: string): boolean {
   ctx.claimed.add(key)
   ctx.prev.stale = true
   return true
+}
+
+/**
+ * A datum field read by an encode entry: a plain name is the property, and any
+ * other path (dotted, `a\\.b` escapes, `a["b"]` brackets) goes through vega-util's
+ * `field()` accessor, as vega-parser's field refs do. (VL flattens `properties.v`
+ * into a field literally named `properties.v` and refers to it as `properties\\.v`.)
+ */
+function getField(row: Row, path: string): unknown {
+  if (path.indexOf('.') < 0 && path.indexOf('[') < 0 && path.indexOf('\\') < 0) return row[path]
+  return scaleFieldOf(path)(row)
 }
 
 /**
