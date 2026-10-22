@@ -236,13 +236,13 @@ function timeWeekday(i: number): TimeInterval {
     return (+end - +start - (end.getTimezoneOffset() - start.getTimezoneOffset()) * durationMinute) / durationWeek
   })
 }
-export const timeSunday = timeWeekday(0)
-export const timeMonday = timeWeekday(1)
-export const timeTuesday = timeWeekday(2)
-export const timeWednesday = timeWeekday(3)
-export const timeThursday = timeWeekday(4)
-export const timeFriday = timeWeekday(5)
-export const timeSaturday = timeWeekday(6)
+export const timeSunday = /* @__PURE__ */ timeWeekday(0)
+export const timeMonday = /* @__PURE__ */ timeWeekday(1)
+export const timeTuesday = /* @__PURE__ */ timeWeekday(2)
+export const timeWednesday = /* @__PURE__ */ timeWeekday(3)
+export const timeThursday = /* @__PURE__ */ timeWeekday(4)
+export const timeFriday = /* @__PURE__ */ timeWeekday(5)
+export const timeSaturday = /* @__PURE__ */ timeWeekday(6)
 export const timeWeek = timeSunday
 export const timeWeeks = timeWeek.range
 
@@ -256,13 +256,13 @@ function utcWeekday(i: number): TimeInterval {
     return (+end - +start) / durationWeek
   })
 }
-export const utcSunday = utcWeekday(0)
-export const utcMonday = utcWeekday(1)
-export const utcTuesday = utcWeekday(2)
-export const utcWednesday = utcWeekday(3)
-export const utcThursday = utcWeekday(4)
-export const utcFriday = utcWeekday(5)
-export const utcSaturday = utcWeekday(6)
+export const utcSunday = /* @__PURE__ */ utcWeekday(0)
+export const utcMonday = /* @__PURE__ */ utcWeekday(1)
+export const utcTuesday = /* @__PURE__ */ utcWeekday(2)
+export const utcWednesday = /* @__PURE__ */ utcWeekday(3)
+export const utcThursday = /* @__PURE__ */ utcWeekday(4)
+export const utcFriday = /* @__PURE__ */ utcWeekday(5)
+export const utcSaturday = /* @__PURE__ */ utcWeekday(6)
 export const utcWeek = utcSunday
 export const utcWeeks = utcWeek.range
 

@@ -28,13 +28,9 @@ import { error, isObject, isString } from './util.js'
 /** Cache compiled formatters per specifier (vega-format's memoize). */
 function memoize<T, A>(method: (arg: A) => T): (arg: A) => T {
   // a Map: the specifier is spec/data-supplied (`constructor`, `__proto__`, ...)
-  const cache = new Map<string, T>()
-  return (spec: A) => {
-    const key = String(spec)
-    let hit = cache.get(key)
-    if (!hit) { hit = method(spec); cache.set(key, hit) }
-    return hit
-  }
+  // prototype-less: the specifier is spec/data-supplied (`constructor`, `__proto__`, ...)
+  const cache = Object.create(null) as Record<string, T>
+  return (spec: A) => cache[String(spec)] || (cache[String(spec)] = method(spec))
 }
 
 function rightmostDigit(str: string, dec: number): number {

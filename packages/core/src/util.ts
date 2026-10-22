@@ -411,13 +411,13 @@ export function extent<T>(
 // --- accessors (constant accessor factories) ---------------------------------
 
 /** The `id` field accessor. */
-export const id = field('id')
+export const id = /* @__PURE__ */ field('id')
 /** The identity accessor. */
-export const identity = accessor((_) => _, [], 'identity')
-export const zero = accessor(() => 0, [], 'zero')
-export const one = accessor(() => 1, [], 'one')
-export const truthy = accessor(() => true, [], 'true')
-export const falsy = accessor(() => false, [], 'false')
+export const identity = /* @__PURE__ */ accessor((_) => _, [], 'identity')
+export const zero = /* @__PURE__ */ accessor(() => 0, [], 'zero')
+export const one = /* @__PURE__ */ accessor(() => 1, [], 'one')
+export const truthy = /* @__PURE__ */ accessor(() => true, [], 'true')
+export const falsy = /* @__PURE__ */ accessor(() => false, [], 'false')
 
 // --- expression helpers ------------------------------------------------------
 

@@ -648,9 +648,7 @@ function renderArea(group: SceneGroup): string {
 }
 
 /** Generate an SVG path d attribute for a given symbol shape and radius. */
-export function symbolPath(shape: string | undefined, r: number): GeneratedPath {
-  return gen(symbolPathImpl(shape, r))
-}
+export const symbolPath = symbolPathImpl as (shape: string | undefined, r: number) => GeneratedPath
 
 function symbolPathImpl(shape: string | undefined, r: number): string {
   // vega symbols serialize through d3-path Path(3) — coordinates round to 3.
@@ -838,10 +836,7 @@ function renderRects(group: SceneGroup): string {
  * Vega renders rect marks as path elements (with optional cornerRadius).
  * Returns null when the item has no resolvable width/height.
  */
-export function rectItemPath(it: SceneItem): GeneratedPath | null {
-  const d = rectItemPathImpl(it)
-  return d == null ? null : gen(d)
-}
+export const rectItemPath = rectItemPathImpl as (it: SceneItem) => GeneratedPath | null
 
 function rectItemPathImpl(it: SceneItem): string | null {
   let w = it.width
@@ -1274,9 +1269,7 @@ const arcAtan2 = Math.atan2
 // d3-shape math.js asin clamps to +/-halfPi (needed for padAngle > span).
 const arcAsin = (x: number): number => (x > 1 ? Math.PI / 2 : x < -1 ? -Math.PI / 2 : Math.asin(x))
 
-export function arcPath(cx: number, cy: number, rIn: number, r0In: number, a0in: number, a1in: number, cornerRadius = 0, padAngle = 0): GeneratedPath {
-  return gen(arcPathImpl(cx, cy, rIn, r0In, a0in, a1in, cornerRadius, padAngle))
-}
+export const arcPath = arcPathImpl as (cx: number, cy: number, rIn: number, r0In: number, a0in: number, a1in: number, cornerRadius?: number, padAngle?: number) => GeneratedPath
 
 function arcPathImpl(cx: number, cy: number, rIn: number, r0In: number, a0in: number, a1in: number, cornerRadius = 0, padAngle = 0): string {
   const ctx = new PathEmitter()
