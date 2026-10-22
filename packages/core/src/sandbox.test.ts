@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { compileExpr } from './expression.js'
 import { applyTransforms, renderSpec } from './index.js'
+import { geoStream } from './geo-lib.js'
 import { field, pluck, splitAccessPath } from './util.js'
 import { timeOffset, timeSequence, utcOffset, utcSequence } from './time.js'
 
@@ -216,5 +217,12 @@ describe('C50: prototype-named datasets, signals and tables', () => {
     ]) {
       expect(() => applyTransforms(rows as never, [t] as never, ctx as never), `${t.type}:${name}`).toThrow(/unsupported aggregate op/)
     }
+  })
+
+  it.each(HOSTILE_NAMES)('GeoJSON type %s from data is not dispatched through the stream tables', (name) => {
+    let calls = 0
+    const stream = new Proxy({}, { get: () => () => { calls++ } }) as never
+    expect(() => geoStream({ type: name } as never, stream)).not.toThrow()
+    expect(calls).toBe(0)
   })
 })
