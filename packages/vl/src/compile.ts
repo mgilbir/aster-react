@@ -4720,6 +4720,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const v = passProp(p)
     if (v !== undefined && update[p] === undefined) update[p] = { value: v }
   }
+  // a link: markDef.href is the mark's href, and any href (mark, config or channel) makes the cursor a pointer
+  if (markDefP?.href !== undefined && update.href === undefined) update.href = { value: markDefP.href }
+  if ((update.href !== undefined || passProp('href') !== undefined) && update.cursor === undefined) update.cursor = { value: 'pointer' }
   // markDef.xOffset/yOffset shift the corresponding positional channels
   // (including their secondary endpoint and centered forms) — probed.
   const xOff = markDefP?.xOffset as number | undefined
