@@ -322,7 +322,8 @@ function validateData(spec: Obj, at: (k: string) => string): void {
 
 const CONFIG_KEYS = set(
   'autosize background padding axis axisBand axisX axisY axisLeft axisRight axisTop axisBottom legend header headerRow headerColumn headerFacet range ' +
-    'mark arc area bar circle geoshape image line point rect rule square text tick trail view title font scale style',
+    'mark arc area bar circle geoshape image line point rect rule square text tick trail view title font scale style ' +
+    'aria countTitle fieldTitle lineBreak normalizedNumberFormat numberFormat timeFormat',
 )
 const CONFIG_SCALE_KEYS = set(
   'bandPaddingInner bandPaddingOuter barBandPaddingInner tickBandPaddingInner rectBandPaddingInner bandWithNestedOffsetPaddingInner bandWithNestedOffsetPaddingOuter offsetBandPaddingInner offsetBandPaddingOuter pointPadding continuousPadding round nice zero xReverse clamp useUnaggregatedDomain invalid minBandSize maxBandSize minFontSize maxFontSize minOpacity maxOpacity minSize maxSize minStrokeWidth maxStrokeWidth quantileCount quantizeCount',

@@ -42,6 +42,8 @@ export interface ChannelDef {
 }
 
 export interface FieldDef {
+  /** the title config.fieldTitle / config.countTitle give a field with no title of its own */
+  autoTitle?: string
   channel: string
   /** The flat, access-path-safe key every internal reference uses (see names.ts flatField). */
   field: string
@@ -656,6 +658,17 @@ function rootChrome(out: Record<string, unknown>, spec: VLSpec): void {
   out.padding = spec.padding ?? (userConfig?.padding as unknown) ?? 5
   const assembledConfig = assembleConfig(spec)
   if (assembledConfig) out.config = assembledConfig
+  // config.aria: false takes every axis and legend out of the accessibility tree
+  if (userConfig?.aria === false) {
+    const hide = (o: unknown): void => {
+      if (Array.isArray(o)) o.forEach(hide)
+      else if (isObject(o)) {
+        for (const k of ['axes', 'legends']) if (Array.isArray(o[k])) for (const g of o[k] as Record<string, unknown>[]) g.aria ??= false
+        Object.values(o).forEach(hide)
+      }
+    }
+    hide(out)
+  }
   if (spec.title) out.title = spec.title
   if (spec.description) out.description = spec.description
 }
@@ -995,19 +1008,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     // config.header seeds the defaults; the channel's own header def wins
     const cfgHeader = (isObject(spec.config) ? (spec.config as Record<string, unknown>).header : undefined) as Record<string, unknown> | undefined
     const hdr = { ...(cfgHeader ?? {}), ...(def?.raw?.header as Record<string, unknown> | undefined ?? {}) }
-    const fmt = hdr?.format as string | undefined
-    let text: unknown
-    if (fmt) {
-      text = { signal: def?.type === 'temporal' ? `timeFormat(parent[${JSON.stringify(f)}], ${JSON.stringify(fmt)})` : `format(parent[${JSON.stringify(f)}], ${JSON.stringify(fmt)})` }
-    } else if (def?.timeUnit) {
-      text = { signal: `timeFormat(parent[${JSON.stringify(f)}], ${timeUnitFormatSignal(def.timeUnit)})` }
-    } else if (def?.type === 'temporal') {
-      text = { signal: `timeFormat(parent[${JSON.stringify(f)}], "%b %d, %Y")` }
-    } else if (def?.type === 'quantitative' || (def?.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(def.aggregate))) {
-      text = { signal: `format(parent[${JSON.stringify(f)}], "")` }
-    } else {
-      text = { signal: `isValid(parent[${JSON.stringify(f)}]) ? parent[${JSON.stringify(f)}] : ""+parent[${JSON.stringify(f)}]` }
-    }
+    const text = { signal: fieldTextExpr(def ?? ({ field: f, type: 'nominal', raw: {} } as unknown as FieldDef), { lineBreaks: false, spec, expr: 'parent', format: hdr?.format as string | undefined }) }
     const t: Record<string, unknown> = {
       text,
       orient: 'left',
@@ -2031,6 +2032,19 @@ function checkConstChannels(mark: string, encoding: Record<string, unknown>, fil
 /** Channels whose scale can have a legend (position channels have axes instead). */
 const LEGEND_CHANNELS = new Set(['color', 'size', 'shape', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'angle'])
 
+/** vega-lite defaultTitleFormatter: config.fieldTitle ('verbal' | 'plain' | 'functional') and config.countTitle. */
+function titleFromConfig(f: FieldDef, config: unknown): { autoTitle?: string } {
+  const c = isObject(config) ? config : {}
+  if (f.datumOnly || f.title !== undefined) return {}
+  if (c.fieldTitle === 'plain') return { autoTitle: f.source }
+  if (c.fieldTitle === 'functional') {
+    if (f.argAgg) return { autoTitle: `${f.source} for ${f.argAgg.op}(${f.argAgg.argSource})` }
+    const fn = f.aggregate ?? f.tu?.unit ?? (f.bin ? 'bin' : undefined)
+    return { autoTitle: fn ? `${fn.toUpperCase()}(${f.source})` : f.source }
+  }
+  return f.aggregate === 'count' && typeof c.countTitle === 'string' ? { autoTitle: c.countTitle } : {}
+}
+
 function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown): FieldDef[] {
   const fields: FieldDef[] = []
   // vega-lite parseLegend: `disable = legend !== undefined ? !legend : config.legend.disable`
@@ -2041,7 +2055,7 @@ function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown
     for (const d of Array.isArray(def) ? def : [def]) {
       const f = parseChannel(channel === 'fill' || channel === 'stroke' ? 'color' : channel, d)
       if (!f) continue
-      const g = disableLegends && f.legend === undefined && !f.datumOnly && LEGEND_CHANNELS.has(f.channel) ? { ...f, legend: null } : f
+      const g = { ...(disableLegends && f.legend === undefined && !f.datumOnly && LEGEND_CHANNELS.has(f.channel) ? { ...f, legend: null } : f), ...titleFromConfig(f, config) }
       fields.push(channel === 'fill' || channel === 'stroke' ? { ...g, paint: channel } : g)
     }
   }
@@ -2166,6 +2180,7 @@ export function assembleConfig(spec: VLSpec): Record<string, unknown> | undefine
   for (const k of ['axis', 'axisX', 'axisY', 'axisBand', 'axisLeft', 'axisRight', 'axisTop', 'axisBottom', 'legend', 'header', 'headerRow', 'headerColumn', 'headerFacet', 'range']) {
     if (isObject(user[k])) out[k] = user[k]
   }
+  for (const k of ['aria', 'fieldTitle', 'lineBreak']) if (user[k] !== undefined) out[k] = user[k]
   if (isObject(user.mark)) out.mark = strip(user.mark)
   for (const t of MARK_TYPE_BLOCKS) {
     if (isObject(user[t])) style[t] = strip(user[t])
@@ -2219,6 +2234,7 @@ const isTimeScaleType = (t: string) => t === 'time' || t === 'utc'
 export function channelTitle(def: FieldDef): unknown {
   if (def.datumOnly) return undefined
   if (def.title !== undefined) return def.title
+  if (def.autoTitle !== undefined) return def.autoTitle
   if (def.aggregate === 'count') return 'Count of Records'
   if (def.argAgg) return `${def.source} for ${def.argAgg.op === 'argmax' ? 'max' : 'min'} ${def.argAgg.argSource}`
   if (def.bin) return `${def.source} (binned)`
@@ -2719,6 +2735,8 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
         // one channel groups by the other channels — probed: x-aggregate
         // over a quantitative y groups by y)
         groupby.push(aggFieldName(f))
+        // a time-unit band on a rect-based mark also spans to its end (vega-lite hasBandEnd)
+        if (f.tu && f.type === 'temporal' && (mark === 'bar' || mark === 'rect') && !fields.some((g) => g.channel === `${f.channel}2`)) groupby.push(`${aggFieldName(f)}_end`)
       }
     }
     // a binned measure without an explicit aggregate counts records
@@ -2818,11 +2836,12 @@ function timeUnitFormatSignal(u: string): string {
 }
 
 /** Non-positional legends format timeUnit fields with timeFormat. */
-function applyTimeUnitLegend(lg: Record<string, unknown>, def: FieldDef, userLegend?: Record<string, unknown>): void {
+function applyTimeUnitLegend(lg: Record<string, unknown>, def: FieldDef, userLegend: Record<string, unknown> | undefined, formats: { numberFormat?: string; timeFormat?: string }): void {
   if (userLegend && userLegend.format !== undefined) return
-  // a raw temporal field formats through the default time format (config.timeFormat)
+  // a raw temporal field formats through config.timeFormat, a quantitative one through config.numberFormat
   if (!def.timeUnit) {
-    if (def.type === 'temporal') lg.format = '%b %d, %Y'
+    if (def.type === 'temporal') lg.format = formats.timeFormat ?? DEFAULT_TIME_FORMAT
+    else if (def.type === 'quantitative' && formats.numberFormat !== undefined) lg.format = formats.numberFormat
     return
   }
   lg.format = { signal: timeUnitFormatSignal(def.timeUnit) }
@@ -3538,7 +3557,7 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
         const stepExpr = def.tu ? timeUnitMinStepSignal(def.tu) : null
         if (stepExpr) labelAxis.tickMinStep = { signal: stepExpr }
       } else if (def.stack === 'normalize') {
-        labelAxis.format = '.0%'
+        labelAxis.format = (config?.normalizedNumberFormat as string | undefined) ?? '.0%'
       }
     }
     // vega-lite's getLabelAngle: an explicit/config labelAngle wins (normalized
@@ -3584,7 +3603,9 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
     // vega-lite formats any stack-normalized positional axis as a percentage,
     // even when the scale is discrete (a nominal y stack still gets `.0%`;
     // the labels then read NaN%).
-    if (def.stack === 'normalize' && labelAxis.format === undefined) labelAxis.format = '.0%'
+    if (def.stack === 'normalize' && labelAxis.format === undefined) labelAxis.format = (config?.normalizedNumberFormat as string | undefined) ?? '.0%'
+    // config.numberFormat is the default format of a quantitative field's axis labels
+    if (def.type === 'quantitative' && !def.timeUnit && labelAxis.format === undefined && typeof config?.numberFormat === 'string') labelAxis.format = config.numberFormat
     // a timeUnit on a discrete positional axis still formats with timeFormat
     if (def.timeUnit && !isContinuousScaleType(sc.type)) {
       labelAxis.format = { signal: timeUnitFormatSignal(def.timeUnit) }
@@ -3631,7 +3652,7 @@ function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null, fie
 
 // --- legends -----------------------------------------------------------------
 
-function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number, cfgLegendIn?: Record<string, unknown>, markStrokeDash?: number[]): Record<string, unknown>[] {
+function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number, cfgLegendIn?: Record<string, unknown>, markStrokeDash?: number[], formats: { numberFormat?: string; timeFormat?: string } = {}): Record<string, unknown>[] {
   const legends: Record<string, unknown>[] = []
   // config.legend is a defaults layer: orient/direction keys are translated
   // into the compiled `direction`, everything else merges under the channel's
@@ -3662,15 +3683,13 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     legendDefs[key] = def
     order.push(key)
   }
+  // the paint a legend symbol shows: vega-lite fills every mark but point, line and rule unless configured (trail never)
+  const legendFilled = mark !== 'trail' && (markFilled ?? !['point', 'line', 'rule'].includes(mark))
   const colorDef = fields.find((f) => f.channel === 'color' && f.field)
   const colorLegendShown = !!colorDef && colorDef.legend !== null && !legendSuppressed(colorDef)
   if (colorDef && colorDef.legend !== null && !legendSuppressed(colorDef)) {
     const userLegend = { ...cfgDefaults, ...(colorDef.legend ?? {}) }
     const lg: Record<string, unknown> = { title: legendTitle(colorDef, userLegend) }
-    const filled = mark === 'circle' || mark === 'square'
-      || (mark === 'point' && markFilled === true)
-      || (mark === 'arc' && markFilled !== false)
-      || (mark === 'text' && markFilled !== false)
     // only a cyclic (discrete) time unit switches the color legend from a
     // gradient to symbols; year/week/hours/... stay continuous (probed:
     // quantitative color with month/day/quarter → symbol, every other unit →
@@ -3685,61 +3704,24 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     const colorGradient = colorContinuous && userLegend.type !== 'symbol'
     if (colorTimeUnitSymbol) lg.type = 'symbol'
     if (colorDef.scale?.type === 'quantile' || colorDef.scale?.type === 'threshold') lg.labelOverlap = 'greedy'
-    const m = mark as string
-    if (filled) {
-      lg.fill = 'color'
-      lg.symbolType = m === 'bar' || m === 'rect' ? 'square' : 'circle'
-      if (m === 'arc' || m === 'text') {
-        // arc/text legends carry the mark's stroke/opacity/width but no reduced-opacity
-        // default (unlike point/circle/square)
-        const symUpdate: Record<string, unknown> = {}
-        if (markStroke) symUpdate.stroke = { value: markStroke }
-        if (markStrokeWidth != null) symUpdate.strokeWidth = { value: markStrokeWidth }
-        if (markStrokeDash != null) symUpdate.strokeDash = { value: markStrokeDash }
-        if (markFillOpacity != null) symUpdate.fillOpacity = { value: markFillOpacity }
-        if (markOpacity != null) symUpdate.opacity = { value: markOpacity }
-        if (Object.keys(symUpdate).length) lg.encode = { symbols: { update: symUpdate } }
-      } else if (m !== 'bar' && m !== 'rect') {
-        const symUpdate: Record<string, unknown> = { opacity: { value: markOpacity ?? reducedOpacity ?? 1 } }
-        // the mark's stroke/fill-opacity propagates onto the legend symbols
-        if (markStroke) symUpdate.stroke = { value: markStroke }
-        if (markFillOpacity != null) symUpdate.fillOpacity = { value: markFillOpacity }
-        lg.encode = { symbols: { update: symUpdate } }
-      }
-    } else if (m === 'arc') {
-      // an unfilled arc paints by stroke: the legend is a stroke legend
-      lg.stroke = 'color'
-      if (!colorGradient) lg.symbolType = 'circle'
-      else lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
-    } else if (m === 'point' || m === 'line' || m === 'text') { // (an unfilled text)
-      lg.stroke = 'color'
-      if (!colorGradient) {
-        lg.symbolType = mark === 'line' ? 'stroke' : 'circle'
-        // vega-lite adds no symbol overrides for a line's stroke legend
-        // (verified against the real-vega render: extra fill/opacity here
-        // changes the legend glyph); point/text legends get the unfilled,
-        // reduced-opacity symbol.
-        if (mark !== 'line') lg.encode = { symbols: { update: { fill: { value: 'transparent' }, opacity: { value: reducedOpacity ?? 1 } } } }
-      } else {
-        lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
-        lg.encode = { gradient: { update: { opacity: { value: reducedOpacity ?? 1 } } } }
-      }
+    lg[legendFilled ? 'fill' : 'stroke'] = 'color'
+    const opacity = markOpacity ?? (['point', 'circle', 'square', 'tick'].includes(mark) ? reducedOpacity : undefined)
+    if (colorGradient) {
+      lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
+      if (opacity != null) lg.encode = { gradient: { update: { opacity: { value: opacity } } } }
     } else {
-      lg.fill = 'color'
-      if (mark === 'bar' || mark === 'rect') lg.symbolType = 'square'
-      if (colorGradient) {
-        lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
-        if (markOpacity != null) lg.encode = { gradient: { update: { opacity: { value: markOpacity } } } }
-      } else {
-        // the mark's stroke/opacity propagate onto a symbol legend's entries
-        // (probed: bar/rect/arc with markDef.stroke emit symbols.stroke)
-        const symUpdate: Record<string, unknown> = {}
-        if (markStroke) symUpdate.stroke = { value: markStroke }
-        if (markOpacity != null) symUpdate.opacity = { value: markOpacity }
-        if (Object.keys(symUpdate).length) lg.encode = { symbols: { update: symUpdate } }
-      }
+      lg.symbolType = ['bar', 'rect', 'square'].includes(mark) ? 'square' : ['line', 'trail', 'rule'].includes(mark) ? 'stroke' : 'circle'
+      // the mark's own paint and opacity ride along on the symbols (legend/encode.ts symbols())
+      const symUpdate: Record<string, unknown> = {}
+      if (!legendFilled && !['line', 'rule', 'trail'].includes(mark)) symUpdate.fill = { value: 'transparent' }
+      if (markStroke) symUpdate.stroke = { value: markStroke }
+      if (markStrokeWidth != null) symUpdate.strokeWidth = { value: markStrokeWidth }
+      if (markStrokeDash != null) symUpdate.strokeDash = { value: markStrokeDash }
+      if (markFillOpacity != null) symUpdate.fillOpacity = { value: markFillOpacity }
+      if (opacity != null) symUpdate.opacity = { value: opacity }
+      if (Object.keys(symUpdate).length) lg.encode = { symbols: { update: symUpdate } }
     }
-    applyTimeUnitLegend(lg, colorDef, userLegend)
+    applyTimeUnitLegend(lg, colorDef, userLegend, formats)
     for (const [k, v] of Object.entries(userLegend)) {
       if (k === 'title') continue
       if (k === 'type' && v === 'gradient') continue
@@ -3784,7 +3766,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
   }
   // the symbol of a size / strokeWidth / opacity legend follows the mark (legend/encode.ts symbols())
   const symbolFor = (channel: string): { symbolType: string; update: Record<string, unknown> } => {
-    const filled = mark !== 'trail' && (markFilled ?? !['point', 'line', 'rule'].includes(mark))
+    const filled = legendFilled
     const base = mark === 'text' || mark === 'rule' ? 'black' : C.blue
     const opacity = markOpacity ?? (['point', 'circle', 'square', 'tick'].includes(mark) ? reducedOpacity : undefined)
     const byColor = colorLegendShown
@@ -3813,7 +3795,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
         title: legendTitle(sizeDef, sizeUser),
         encode: { gradient: { update: { opacity: { value: markOpacity ?? reducedOpacity ?? 1 } } } },
       }
-      applyTimeUnitLegend(glg, sizeDef, sizeUser)
+      applyTimeUnitLegend(glg, sizeDef, sizeUser, formats)
       forwardLegendProps(sizeUser, glg, true)
       push('size', glg, sizeDef)
     } else {
@@ -3825,7 +3807,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       title: legendTitle(sizeDef, sizeUser),
       encode: { symbols: { update: sizeSym.update } },
     }
-    applyTimeUnitLegend(sizeLg, sizeDef, sizeUser)
+    applyTimeUnitLegend(sizeLg, sizeDef, sizeUser, formats)
     forwardLegendProps(sizeUser, sizeLg, false)
     if (sizeLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) sizeLg.direction = 'horizontal'
     push('size', sizeLg, sizeDef)
@@ -3840,7 +3822,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       title: legendTitle(shapeDefL, shapeUser),
       encode: { symbols: { update: { fill: { value: 'transparent' }, ...(colorLegendShown ? {} : { stroke: { value: C.blue } }), opacity: { value: markOpacity ?? reducedOpacity ?? 1 } } } },
     }
-    applyTimeUnitLegend(shapeLg, shapeDefL, shapeUser)
+    applyTimeUnitLegend(shapeLg, shapeDefL, shapeUser, formats)
     forwardLegendProps(shapeUser, shapeLg, false)
     if (shapeLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) shapeLg.direction = 'horizontal'
     push('shape', shapeLg, shapeDefL)
@@ -3855,7 +3837,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       title: legendTitle(strokeWidthLegendDef, swUser),
       encode: { symbols: { update: swSym.update } },
     }
-    applyTimeUnitLegend(swLg, strokeWidthLegendDef, swUser)
+    applyTimeUnitLegend(swLg, strokeWidthLegendDef, swUser, formats)
     forwardLegendProps(swUser, swLg, false)
     if (swLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) swLg.direction = 'horizontal'
     push('strokeWidth', swLg, strokeWidthLegendDef)
@@ -3870,7 +3852,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       title: legendTitle(opacityLegendDef, opUser),
       encode: { symbols: { update: opSym.update } },
     }
-    applyTimeUnitLegend(opLg, opacityLegendDef, opUser)
+    applyTimeUnitLegend(opLg, opacityLegendDef, opUser, formats)
     forwardLegendProps(opUser, opLg, false)
     if (opLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) opLg.direction = 'horizontal'
     push('opacity', opLg, opacityLegendDef)
@@ -4468,16 +4450,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
     const textDef = fields.find((f) => f.channel === 'text')
     if (textDef?.field) {
-      const fieldName = textDef.timeUnit ? timeUnitField(textDef) : (textDef.aggregate ? aggFieldName(textDef) : textDef.field)
-      const f = JSON.stringify(fieldName)
-      const rawFmt = (textDef.raw as { format?: unknown }).format
-      if (textDef.timeUnit) {
-        update.text = { signal: `timeFormat(datum[${f}], ${timeUnitFormatSignal(textDef.timeUnit)})` }
-      } else if (textDef.aggregate || rawFmt !== undefined || textDef.type === 'quantitative') {
-        update.text = { signal: `format(datum[${f}], ${JSON.stringify(rawFmt ?? '')})` }
-      } else {
-        update.text = { signal: `isValid(datum[${f}]) ? datum[${f}] : ""+datum[${f}]` }
-      }
+      update.text = { signal: fieldTextExpr(textDef, { lineBreaks: false, spec }) }
     } else if (textDef && (textDef.raw as { value?: unknown }).value !== undefined) {
       update.text = { value: String((textDef.raw as { value?: unknown }).value) }
     }
@@ -4945,15 +4918,22 @@ function fillMissingPositions(update: Record<string, unknown>, mark: string, fie
  * The text a field def shows (vega-lite formatSignalRef / addLineBreaksToTooltip): dates through
  * timeFormat, numbers through format, strings as themselves (arrays joined by `sep`).
  */
-function fieldTextExpr(def: FieldDef, opts: { lineBreaks: boolean }): string {
-  const f = dref(aggFieldName(def))
-  const fmt = def.raw.format as string | undefined
+/** vega-lite's default `config.timeFormat` for raw temporal values. */
+const DEFAULT_TIME_FORMAT = '%b %d, %Y'
+
+function fieldTextExpr(def: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec; expr?: 'datum' | 'parent'; format?: string }): string {
+  const name = aggFieldName(def)
+  const f = opts.expr === 'parent' ? `parent[${JSON.stringify(name)}]` : dref(name)
+  const fmt = opts.format ?? (def.raw.format as string | undefined)
   const formatType = def.raw.formatType as string | undefined
   if (formatType !== undefined) throw new VLCompileError(`encoding.${def.channel}.formatType (custom format types) is not supported`)
   if (def.bin) throw new VLCompileError(`encoding.${def.channel}: a binned field cannot be used as text, tooltip, href or description`)
   if (def.tu) return `timeFormat(${f}, ${fmt !== undefined ? JSON.stringify(fmt) : timeUnitFormatSignal(def.tu.unit)})`
-  if (def.type === 'temporal') return `timeFormat(${f}, ${JSON.stringify(fmt ?? '%b %d, %Y')})`
-  if (def.type === 'quantitative' || def.aggregate === 'count') return `format(${f}, ${JSON.stringify(fmt ?? '')})`
+  const cfg = opts.spec.config as { timeFormat?: string; numberFormat?: string } | undefined
+  if (def.type === 'temporal') return `timeFormat(${f}, ${JSON.stringify(fmt ?? cfg?.timeFormat ?? DEFAULT_TIME_FORMAT)})`
+  if (def.type === 'quantitative' || (def.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(def.aggregate))) {
+    return `format(${f}, ${JSON.stringify(fmt ?? cfg?.numberFormat ?? '')})`
+  }
   if (fmt !== undefined) return `format(${f}, ${JSON.stringify(fmt)})`
   return opts.lineBreaks
     ? `isValid(${f}) ? isArray(${f}) ? join(${f}, '\\n') : ${f} : ""+${f}`
@@ -4975,7 +4955,7 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
       const key = tooltipTitle(d)
       if (seen.has(key)) continue
       seen.add(key)
-      kv.push(`"${key}": ${fieldTextExpr(d, { lineBreaks: true })}`)
+      kv.push(`"${key}": ${fieldTextExpr(d, { lineBreaks: true, spec })}`)
     }
     return kv.length ? `{${kv.join(', ')}}` : undefined
   }
@@ -4985,7 +4965,7 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
     const o = objectOf(tipDefs)
     if (o) update.tooltip = { signal: o }
   } else if (tipDefs.length === 1 && isObject(enc.tooltip) && (enc.tooltip as Record<string, unknown>).field !== undefined) {
-    update.tooltip = { signal: fieldTextExpr(tipDefs[0]!, { lineBreaks: true }) }
+    update.tooltip = { signal: fieldTextExpr(tipDefs[0]!, { lineBreaks: true, spec }) }
   } else if (enc.tooltip === undefined && md.tooltip !== undefined && md.tooltip !== false && md.tooltip !== null) {
     const t = md.tooltip
     if (t === true || (isObject(t) && t.content === 'encoding')) {
@@ -4999,7 +4979,7 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
   // href / description
   for (const ch of ['href', 'description'] as const) {
     const d = fields.find((f) => f.channel === ch && !f.datumOnly)
-    if (d && isObject(enc[ch]) && (enc[ch] as Record<string, unknown>).field !== undefined) update[ch] = { signal: fieldTextExpr(d, { lineBreaks: false }) }
+    if (d && isObject(enc[ch]) && (enc[ch] as Record<string, unknown>).field !== undefined) update[ch] = { signal: fieldTextExpr(d, { lineBreaks: false, spec }) }
   }
 }
 
@@ -5340,5 +5320,6 @@ function buildUnitLegends(spec: VLSpec, fields: FieldDef[], mark: string, markRa
     legendFillOpacity,
     isObject(userConfig?.legend) ? (userConfig!.legend as Record<string, unknown>) : undefined,
     legendStrokeDash,
+    { numberFormat: userConfig?.numberFormat as string | undefined, timeFormat: userConfig?.timeFormat as string | undefined },
   )
 }
