@@ -32,6 +32,10 @@
    "orient": "left",
    "grid": true,
    "gridScale": "x"
+  },
+  {
+   "scale": "x",
+   "orient": "bottom"
   }
  ]
 }

@@ -7604,7 +7604,9 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     // For non-band scales, the range values determine the axis extent.
     const scaleRange = scale.range() as number[]
     const rangeStart: number = scaleRange.length > 0 ? Number(scaleRange[0]) || 0 : 0
-    const rangeEnd: number = scaleRange.length > 0 ? Number(scaleRange[scaleRange.length - 1]) || 0 : 0
+    // the far end stays NaN when the range is not numeric (a band scale given a named colour
+    // range): vega draws that domain rule to x2=NaN, only the start folds to 0
+    const rangeEnd: number = scaleRange.length > 0 ? Number(scaleRange[scaleRange.length - 1]) : 0
     // vega axis-domain: the rule runs from range(0) to range(1) of the scale —
     // NOT min to max — so a reversed range (every y axis) starts at the far end
     // (it decides where a dash pattern begins).
