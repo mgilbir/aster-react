@@ -50,6 +50,8 @@ export interface FieldDef {
   flatExpr?: string
   type: string
   aggregate?: string
+  /** `fill` / `stroke` channels are the colour machinery restricted to one paint */
+  paint?: 'fill' | 'stroke'
   /** the field comes from a condition (the channel itself has none) */
   fromCondition?: boolean
   /** a `datum` def (no field): the constant is mapped through the channel's scale */
@@ -338,7 +340,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const markRaw = l.mark
     const mark = typeof markRaw === 'string' ? markRaw : (markRaw as Record<string, unknown>).type as string
     const encoding = isObject(l.encoding) ? (l.encoding as Record<string, unknown>) : {}
-    checkConstChannels(mark, encoding)
+    checkConstChannels(mark, encoding, markIsFilled(l, mark))
     const fields = parseEncodingFields(encoding)
     const orient = inferOrient(l, mark, markRaw, fields)
     return { l, mark, markRaw, markSize: isObject(markRaw) ? (markRaw.size as number | undefined) : undefined, fields, orient, pipeline: [], seriesFields: [], dataName: '', rawName: '', rawLen: 0, usesRawDomain: false, group: 0 }
@@ -1948,7 +1950,23 @@ function patchDatumRefs(node: unknown, datums: Map<string, unknown>): void {
  * whose position is a plain point (or a rule's end); a datum on a non-position
  * channel is supported for colour only. Everything else throws, never degrades.
  */
-function checkConstChannels(mark: string, encoding: Record<string, unknown>): void {
+function checkConstChannels(mark: string, encoding: Record<string, unknown>, filled?: boolean): void {
+  // channels that need their own scale + legend are implemented for colour (fill/stroke alias it);
+  // the rest are limited to constants and conditions
+  for (const ch of ['strokeDash', 'angle', 'fillOpacity', 'strokeOpacity']) {
+    const d = encoding[ch]
+    if (isObject(d) && (d.field !== undefined || d.datum !== undefined)) {
+      throw new VLCompileError(`encoding.${ch}: a data-driven ${ch} (scale + legend) is not supported; use a constant {"value": ...} or a condition`)
+    }
+  }
+  for (const ch of ['fill', 'stroke']) {
+    const d = encoding[ch]
+    if (!isObject(d) || (d.field === undefined && d.datum === undefined)) continue
+    if (encoding.color !== undefined) throw new VLCompileError(`encoding.${ch} together with encoding.color is not supported`)
+    if (filled !== undefined && (ch === 'fill') !== filled) {
+      throw new VLCompileError(`encoding.${ch} on a ${filled ? 'filled' : 'stroked'} "${mark}" mark is not supported; use encoding.color or set mark.filled`)
+    }
+  }
   const pointLike = ['point', 'circle', 'square', 'text', 'rule', 'line', 'trail'].includes(mark)
   for (const [ch, def] of Object.entries(encoding)) {
     if (!isObject(def) || def.field !== undefined) continue
@@ -1969,8 +1987,8 @@ function parseEncodingFields(encoding: Record<string, unknown>): FieldDef[] {
   for (const [channel, def] of Object.entries(encoding)) {
     // detail / order / tooltip accept a list of definitions
     for (const d of Array.isArray(def) ? def : [def]) {
-      const f = parseChannel(channel, d)
-      if (f) fields.push(f)
+      const f = parseChannel(channel === 'fill' || channel === 'stroke' ? 'color' : channel, d)
+      if (f) fields.push(channel === 'fill' || channel === 'stroke' ? { ...f, paint: channel } : f)
     }
   }
   return fields
@@ -2829,10 +2847,10 @@ function timeUnitMinStepSignal(tu: NormalTimeUnit): string | null {
   return `${fmt(end)} - ${fmt(d)}`
 }
 
-function measureStackOffset(measure: FieldDef): unknown {
-  if (measure.stack === 'wiggle') return 'zero'
-  if (measure.stack != null) return isObject(measure.stack) ? (measure.stack.offset ?? 'zero') : measure.stack
-  return 'zero'
+/** The Vega stack offset: `stack: true` is "zero" ("wiggle" compiles unstacked/zero as vega-lite 6.4.3 does). */
+function measureStackOffset(measure: FieldDef): 'zero' | 'center' | 'normalize' {
+  const st = measure.stack
+  return st === 'center' || st === 'normalize' ? st : 'zero'
 }
 
 // --- scales ------------------------------------------------------------------
@@ -4605,6 +4623,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     : []
   void intervalParams
 
+  applyTextualChannels(update, spec, fields)
+
   // constant and conditional encodings of the non-position channels: a
   // `value` is the constant, `condition` entries ({test, value|field}) come
   // first, then the main reference (vega-lite wrapCondition)
@@ -4894,6 +4914,68 @@ function fillMissingPositions(update: Record<string, unknown>, mark: string, fie
   }
 }
 
+/**
+ * The text a field def shows (vega-lite formatSignalRef / addLineBreaksToTooltip): dates through
+ * timeFormat, numbers through format, strings as themselves (arrays joined by `sep`).
+ */
+function fieldTextExpr(def: FieldDef, opts: { lineBreaks: boolean }): string {
+  const f = dref(aggFieldName(def))
+  const fmt = def.raw.format as string | undefined
+  const formatType = def.raw.formatType as string | undefined
+  if (formatType !== undefined) throw new VLCompileError(`encoding.${def.channel}.formatType (custom format types) is not supported`)
+  if (def.bin) throw new VLCompileError(`encoding.${def.channel}: a binned field cannot be used as text, tooltip, href or description`)
+  if (def.tu) return `timeFormat(${f}, ${fmt !== undefined ? JSON.stringify(fmt) : timeUnitFormatSignal(def.tu.unit)})`
+  if (def.type === 'temporal') return `timeFormat(${f}, ${JSON.stringify(fmt ?? '%b %d, %Y')})`
+  if (def.type === 'quantitative' || def.aggregate === 'count') return `format(${f}, ${JSON.stringify(fmt ?? '')})`
+  if (fmt !== undefined) return `format(${f}, ${JSON.stringify(fmt)})`
+  return opts.lineBreaks
+    ? `isValid(${f}) ? isArray(${f}) ? join(${f}, '\\n') : ${f} : ""+${f}`
+    : `isValid(${f}) ? ${f} : ""+${f}`
+}
+
+/** tooltip / href / description fields (vega-lite mark/encode/tooltip.ts, text.ts). */
+function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fields: FieldDef[]): void {
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+  const tooltipTitle = (d: FieldDef): string => {
+    const t = channelTitle(d)
+    return (Array.isArray(t) ? t.join(', ') : String(t)).replace(/"/g, '\\"')
+  }
+  const objectOf = (defs: FieldDef[]): string | undefined => {
+    const seen = new Set<string>()
+    const kv: string[] = []
+    for (const d of defs) {
+      const key = tooltipTitle(d)
+      if (seen.has(key)) continue
+      seen.add(key)
+      kv.push(`"${key}": ${fieldTextExpr(d, { lineBreaks: true })}`)
+    }
+    return kv.length ? `{${kv.join(', ')}}` : undefined
+  }
+  // tooltip
+  const tipDefs = fields.filter((f) => f.channel === 'tooltip' && !f.datumOnly)
+  if (Array.isArray(enc.tooltip)) {
+    const o = objectOf(tipDefs)
+    if (o) update.tooltip = { signal: o }
+  } else if (tipDefs.length === 1 && isObject(enc.tooltip) && (enc.tooltip as Record<string, unknown>).field !== undefined) {
+    update.tooltip = { signal: fieldTextExpr(tipDefs[0]!, { lineBreaks: true }) }
+  } else if (enc.tooltip === undefined && md.tooltip !== undefined && md.tooltip !== false && md.tooltip !== null) {
+    const t = md.tooltip
+    if (t === true || (isObject(t) && t.content === 'encoding')) {
+      const o = objectOf(fields.filter((f) => !f.datumOnly && f.field && f.channel !== 'tooltip' && f.channel !== 'row' && f.channel !== 'column' && f.channel !== 'facet'))
+      if (o) update.tooltip = { signal: o }
+    } else if (typeof t === 'string') update.tooltip = { value: t }
+    else if (isObject(t) && t.content === 'data') update.tooltip = { signal: 'datum' }
+    else if (isObject(t) && typeof t.expr === 'string') update.tooltip = { signal: t.expr }
+    else throw new VLCompileError(`mark.tooltip: unsupported form ${JSON.stringify(t)}`)
+  }
+  // href / description
+  for (const ch of ['href', 'description'] as const) {
+    const d = fields.find((f) => f.channel === ch && !f.datumOnly)
+    if (d && isObject(enc[ch]) && (enc[ch] as Record<string, unknown>).field !== undefined) update[ch] = { signal: fieldTextExpr(d, { lineBreaks: false }) }
+  }
+}
+
 const NON_POSITION_CHANNELS = new Set(['color', 'fill', 'stroke', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'size', 'angle', 'shape', 'text', 'tooltip', 'href', 'description'])
 
 /** vega-lite defaultFilled: every mark but point, line and rule is filled unless configured. */
@@ -4935,7 +5017,7 @@ function applyNonPositionConstants(update: Record<string, unknown>, spec: VLSpec
         const entry: Record<string, unknown> = { test: predicateExpr(c.test) }
         if (c.value !== undefined) entry.value = c.value
         else if (c.field !== undefined) {
-          const target = fields.find((f) => f.channel === channel)
+          const target = fields.find((f) => f.channel === channel || ((channel === 'fill' || channel === 'stroke') && f.channel === 'color' && f.paint === channel))
           if (!target) throw new VLCompileError(`encoding.${channel}.condition: the conditional field has no scale`)
           const cf = flatField(String(c.field)).key
           if (cf !== target.field && !target.fromCondition) {
@@ -4989,7 +5071,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const mark = typeof markRaw === 'string' ? markRaw : (markRaw as Record<string, unknown>).type as string
   const markSize = isObject(markRaw) ? (markRaw.size as number | undefined) : undefined
   const encoding = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
-  checkConstChannels(mark, encoding)
+  checkConstChannels(mark, encoding, markIsFilled(spec, mark))
   const fields = parseEncodingFields(encoding)
 
   // orientation (bar/area/rule/tick): vertical unless the y channel is discrete

@@ -203,6 +203,7 @@ export function validateSpec(spec: unknown): void {
 function validateView(spec: Obj, path: string, top: boolean, parent: Kind | undefined): void {
   const kind = viewKind(spec, path)
   const at = (k: string): string => (path ? `${path}.${k}` : k)
+  if (!top && spec.config !== undefined) fail(at('config'), 'config is only allowed at the top level of a spec')
   keysOf(spec, top ? KEYS[kind].top : KEYS[kind].nested, path, top ? 'top-level' : `nested ${kind}-spec`)
   if (!top && parent) {
     const allowed = SCHEMA_CHILDREN[parent as Exclude<Kind, 'unit'>]
@@ -216,7 +217,7 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
   validateData(spec, at)
   if (spec.transform !== undefined) validateTransforms(spec.transform, at('transform'))
   validateSize(spec, at)
-  if (spec.params !== undefined) validateParams(spec.params, at('params'), top)
+  if (spec.params !== undefined) validateParams(spec.params, at('params'), top && kind === 'unit')
   if (spec.resolve !== undefined) validateResolve(spec.resolve, at('resolve'), kind)
   if (spec.projection !== undefined) fail(at('projection'), 'map projections are not supported (geoshape marks are unavailable)')
   if (spec.view !== undefined) fail(at('view'), 'the view background property is not supported; set it through config.view')
@@ -346,7 +347,7 @@ function validateConfig(cfg: Obj, path: string): void {
 
 const BIND_INPUTS = set('range checkbox radio select text number date datetime-local time month week color')
 
-function validateParams(params: unknown, path: string, top: boolean): void {
+function validateParams(params: unknown, path: string, topUnit: boolean): void {
   if (!Array.isArray(params)) fail(path, 'must be an array of parameter definitions')
   const names = new Set<string>()
   params.forEach((p, i) => {
@@ -356,6 +357,7 @@ function validateParams(params: unknown, path: string, top: boolean): void {
     if (names.has(p.name)) fail(`${at}.name`, `duplicate parameter name "${p.name}"`)
     names.add(p.name)
     if (p.select !== undefined) {
+      if (!topUnit) fail(`${at}.select`, 'selection parameters are only supported on a single top-level unit spec (not inside layer/concat/facet/repeat views)')
       validateSelection(p, at)
       return
     }
@@ -373,7 +375,6 @@ function validateParams(params: unknown, path: string, top: boolean): void {
     }
     if (p.value === undefined && p.expr === undefined) fail(at, 'a variable parameter needs `value` or `expr`')
   })
-  void top
 }
 
 function validateSelection(p: Obj, at: string): void {
@@ -636,7 +637,7 @@ function validateSort(sort: unknown, at: string, ch: string): void {
       keysOf(sort, set('field op order'), at, 'sort')
       if (sort.field !== undefined) checkFieldName(sort.field, `${at}.field`)
       if (sort.field === undefined && sort.op !== undefined && sort.op !== 'count') fail(at, `op "${String(sort.op)}" needs a \`field\` (only "count" works without one)`)
-      if (sort.field === undefined && sort.order === undefined) fail(at, 'an empty sort object has no meaning')
+      if (sort.field === undefined && sort.order === undefined && sort.op === undefined) fail(at, 'an empty sort object has no meaning')
     }
     if (sort.order !== undefined && sort.order !== 'ascending' && sort.order !== 'descending' && sort.order !== null) {
       fail(`${at}.order`, `unknown order ${JSON.stringify(sort.order)}`)
