@@ -35,36 +35,64 @@ an expression or a generated dataset/signal/scale name.
 
 ## Supported
 
-- Marks: arc, area, bar, boxplot, circle, line, point, rect, rule, square, text,
-  tick, trail.
-- Composition: layer, hconcat, vconcat, concat, facet (row/column/wrap), repeat,
-  with the nestings listed in `SUPPORTED_NESTING`; `resolve` for scales, axes
-  and legends; shared scales and merged legends.
-- Transforms: filter, calculate, bin, timeUnit, aggregate, joinaggregate,
-  window, stack, fold, flatten, pivot, impute, lookup, sample, density, loess,
-  regression, quantile, extent.
-- Channels: x, y, x2, y2, xOffset, yOffset, theta, radius, color, fill, stroke,
-  opacity, fillOpacity, strokeOpacity, strokeWidth, strokeDash, size, angle,
-  shape, text, tooltip, href, description, detail, order, row, column, facet.
-- Sort forms (arrays, `ascending`/`descending`, channel, `{field, op, order}`,
-  `{encoding}`), conditions with `test` predicates (and/or/not, field
-  predicates, DateTime values), time units (single, multi, `utc`, `step`),
-  bin options (`maxbins`, `step`, `steps`, `extent`, `nice`, `base`, `divide`,
-  `minstep`), dotted/escaped/bracketed field names.
+- Marks: arc, area, bar, boxplot, circle, errorband, errorbar, image, line, point, rect, rule,
+  square, text, tick, trail. `errorbar` / `errorband` unfold into a layer of simple marks over one
+  aggregate transform (extents `stderr`, `stdev`, `ci`, `iqr`, pre-aggregated bounds, `xError` /
+  `yError`); `ci0` / `ci1` are emitted as Vega aggregate ops. `image` is laid out like a rect and
+  takes the `url` channel (field or value).
+- Composition: layer, hconcat, vconcat, concat, facet (row/column/wrap), repeat, with the nestings
+  listed in `SUPPORTED_NESTING`; `resolve` for scales, axes and legends; shared scales and legends.
+- Sizing: numbers, `{"step": n}`, and `"container"` on a top-level unit or layer (vega-lite's
+  containerSize signals and an autosize fit / fit-x / fit-y over the padding).
+- Transforms: filter, calculate, bin, timeUnit, aggregate, joinaggregate, window, stack, fold,
+  flatten, pivot, impute, lookup, sample, density, loess, regression, quantile, extent.
+- Channels: x, y, x2, y2, xOffset, yOffset, xError(2), yError(2), theta, radius, color, fill,
+  stroke, opacity, size, strokeWidth, shape, text, tooltip, href, url, description, detail, order,
+  row, column, facet. `size` drives points, text (font size), lines, ticks, bars and trails.
+- `config.scale`: every key that reaches the output: band / bar / rect / tick padding, nested- and
+  offset-band padding, `pointPadding`, `continuousPadding`, `round`, `clamp`, `zero`, `xReverse`,
+  `useUnaggregatedDomain`, `minSize`/`maxSize`, `minBandSize`/`maxBandSize`, `minFontSize`/
+  `maxFontSize`, `minStrokeWidth`/`maxStrokeWidth`, `minOpacity`/`maxOpacity`, `quantileCount`,
+  `quantizeCount` and `invalid`. `scale.domain: "unaggregated"`, `scale.rangeMin` / `rangeMax`.
+- `mark.invalid` (`filter`, `show`, `break-paths-filter-domains`, `break-paths-show-domains`,
+  `break-paths-show-path-domains`, `null`) and `config.scale.invalid`.
+- Other config: `numberFormat`, `timeFormat`, `normalizedNumberFormat`, `countTitle`, `fieldTitle`,
+  `aria`, `lineBreak`, `style`, `errorbar`, `errorband`, header / headerRow / headerColumn, legend,
+  axis and mark blocks.
+- Mark keys: `binSpacing`, `minBandSize`, `bandSize` (vega-lite ignores it too), `x2Offset`,
+  `y2Offset`, `theta2Offset`, `radius2Offset`, `style`, `smooth`, `aspect`, `clip`, `aria`.
+- Sort forms (arrays, `ascending`/`descending`, channel, `{field, op, order}`, `{encoding}`),
+  conditions with `test` predicates (and/or/not, field predicates, DateTime values), time units
+  (single, multi, `utc`, `step`), bin options, dotted/escaped/bracketed field names.
 
 ## Throws (not supported)
 
-Image, geoshape, errorbar and errorband marks; projections and geo fields;
-selection/param predicates and conditions, selection bindings and any selection
-other than a plain static `interval`; `bin: "binned"`; `timeUnit.maxbins`;
-`scale: null`, identity scales, `domainRaw`, `rangeMin/Max`, `domain` objects;
-channel `impute`, `band`, `formatType`, and `{type: "geojson"}`; the channels
-xError(2), yError(2), latitude/longitude, radius2/theta2 on non-arcs, url, key,
-time; `width/height: "container"`; data generators and `data: null`; custom mark
-`style`, `invalid`, `bandSize`, `smooth`; layer scale-type conflicts that
-vega-lite would make independent; facets of layers over different data;
-horizontal boxplots. Nestings outside `SUPPORTED_NESTING` (for example a facet
-of a concat) are valid Vega-Lite but throw.
+Everything below throws a `VLCompileError` naming the feature and its path; nothing is silently
+ignored.
+
+- Params and selections: any `param` predicate or condition, `empty`, `push`, selection `value` and
+  `bind`, non-interval selections, interval selection options (a plain interval renders as its
+  static brush marks); `scale.domain` objects (`{param}`, `{unionWith}`) and `domainRaw`; parameter
+  references in `bin.extent`; lookups from a selection.
+- Maps: `geoshape` marks, `projection`, `latitude` / `longitude` channels, `{type: "geojson"}`.
+- Animation: the `time` channel and mark key, `config.scale.framesPerSecond` / `animationDuration`.
+- Data-driven channels without a scale / legend implementation yet: `strokeDash`, `angle`,
+  `fillOpacity`, `strokeOpacity` (constants and conditions work); `key`.
+- Formats: `formatType` / custom format types (`numberFormatType`, `timeFormatType`,
+  `normalizedNumberFormatType`, `customFormatTypes`).
+- Bins and time units: `bin: "binned"` / `binned: true` (pre-binned data), `timeUnit.maxbins`,
+  `timeUnit.binned`, a bin or time-unit on a text / tooltip / href channel, errorbar / errorband over
+  a binned channel or with argmin / argmax; `timeUnitBandPosition` / `timeUnitBandSize` mark keys.
+- Scales and encodings: `scale: null`, channel-level `impute` and `band`,
+  `size` constants or conditions on bars and ticks (a size *field* works), `x`/`y`/`x2`/`y2`/
+  `theta`/`theta2`/`radius2` mark-def constants, string scale domains other than `"unaggregated"`.
+- Layout: `width` / `height: "container"` on a composition (only a top-level unit or layer),
+  the view `background` property, data generators
+  (`sequence`, `sphere`, `graticule`) and `data: null`, config keys outside the supported list,
+  nestings outside `SUPPORTED_NESTING` (for example a facet in a concat), layer repeats combined
+  with row / column, layers whose scales are incompatible or conflict, a facet of layers over
+  different data, horizontal boxplots, `argmax` / `argmin` in sorts and window transforms,
+  `regression` `params: true`, key-value `keyvals` ranges, sort arrays of DateTime objects.
 
 ## Known runtime gaps (Aster, not the compiler)
 
@@ -77,7 +105,9 @@ real-vega check only:
   child titles inside them;
 - facet header placement beyond the defaults (`labelAnchor`, `labelOrient`,
   `orient`, `labels: false`);
-- dotted/nested field names, UTC time-unit labels (`%b` format), and a temporal
-  colour (time scale) legend;
+- dotted/nested field names, UTC time-unit labels (`%b` format), temporal colours
+  and text, the stdev extent, `ci0` / `ci1`, `containerSize()` sizing, and size /
+  opacity / strokeWidth legends over bars, lines and text;
+- a legend symbol with no `opacity` entry (Aster draws it at 0.7);
 - rounded stacked bars on the canvas renderer (the SVG renderer matches), and
   `config.mark.cornerRadius` applied to the stack group.

@@ -104,21 +104,6 @@ export function normalizeTimeUnit(tu: unknown, path = 'timeUnit'): NormalTimeUni
   return { unit: u, utc, ...(step !== undefined ? { step } : {}) }
 }
 
-/** Primitive units of a (valid) unit string, in calendar order. */
-export function timeUnitParts(unit: string): string[] {
-  const out: string[] = []
-  // greedy longest-first tokenizer over the single-unit vocabulary
-  const order = ['milliseconds', 'dayofyear', 'seconds', 'minutes', 'quarter', 'hours', 'month', 'year', 'week', 'date', 'day']
-  let rest = unit
-  while (rest.length) {
-    const t = order.find((o) => rest.startsWith(o))
-    if (!t) fail('timeUnit', `cannot parse time unit ${JSON.stringify(unit)}`)
-    out.push(t)
-    rest = rest.slice(t.length)
-  }
-  return out
-}
-
 // --- entry -------------------------------------------------------------------
 
 type Kind = 'unit' | 'layer' | 'hconcat' | 'vconcat' | 'concat' | 'facet' | 'repeat'
@@ -235,7 +220,7 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
 
   switch (kind) {
     case 'unit':
-      validateUnit(spec, path, at)
+      validateUnit(spec, at)
       break
     case 'layer': {
       if (!Array.isArray(spec.layer) || spec.layer.length === 0) fail(at('layer'), 'must be a non-empty array of specs')
@@ -473,7 +458,7 @@ function validateMark(mark: unknown, at: string): string {
   return type
 }
 
-function validateUnit(spec: Obj, path: string, at: (k: string) => string): void {
+function validateUnit(spec: Obj, at: (k: string) => string): void {
   const mark = validateMark(spec.mark, at('mark'))
   const enc = spec.encoding === undefined ? {} : spec.encoding
   validateEncoding(enc, at('encoding'), 'unit', mark)
@@ -562,12 +547,10 @@ function validateChannelDef(ch: string, def: unknown, at: string, mark?: string)
 }
 
 const SCALE_KEYS_OK = set(
-  'type domain domainMin domainMax domainMid range reverse nice zero padding paddingInner paddingOuter align base clamp constant exponent round bins interpolate scheme',
+  'type domain domainMin domainMax domainMid range reverse nice zero padding paddingInner paddingOuter align base clamp constant exponent round bins interpolate scheme rangeMin rangeMax',
 )
 const SCALE_UNSUPPORTED: Record<string, string> = {
   domainRaw: 'domainRaw is not supported',
-  rangeMin: 'rangeMin is not supported',
-  rangeMax: 'rangeMax is not supported',
 }
 const SCALE_TYPES = set('linear log pow sqrt symlog identity sequential time utc quantile quantize threshold bin-ordinal ordinal point band')
 
@@ -578,7 +561,6 @@ function validateScaleDef(scale: Obj, at: string, ch: string): void {
   }
   if (scale.type !== undefined) {
     if (typeof scale.type !== 'string' || !SCALE_TYPES.has(scale.type)) fail(`${at}.type`, `unknown scale type ${JSON.stringify(scale.type)}`)
-    if (scale.type === 'identity') fail(`${at}.type`, 'identity scales are not supported')
   }
   if (scale.domain !== undefined) {
     const d = scale.domain

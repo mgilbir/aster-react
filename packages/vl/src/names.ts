@@ -81,11 +81,6 @@ function hash(s: string): string {
   return (h >>> 0).toString(16).padStart(8, '0').slice(0, 6)
 }
 
-/** Escape a literal key so Vega's access-path parser reads it back as ONE key. */
-export function escapeKey(key: string): string {
-  return key.replace(/[\\.[\]'"]/g, (c) => `\\${c}`)
-}
-
 /** True when `key` survives the access-path round trip unchanged. */
 function roundTrips(key: string): boolean {
   if (key === '') return false

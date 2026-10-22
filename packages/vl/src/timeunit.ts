@@ -77,8 +77,3 @@ export function timeUnitFieldExpr(tu: NormalTimeUnit, userPath: string): string 
   return `${tu.utc ? 'utc' : 'datetime'}(${parts.join(', ')})`
 }
 
-/** Months/quarters etc. the smallest part drives tickMinStep / offset. */
-export function smallestTimeUnitPart(unit: string): string {
-  const parts = getTimeUnitParts(unit)
-  return parts[parts.length - 1]!
-}

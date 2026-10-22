@@ -8,7 +8,7 @@
  */
 
 import { renameDataRefs, renameFragment } from './embed.js'
-import { VLCompileError, signalSafe, flatField, datumRef as dref, datumPathRef, genName, genSignal, safeKey, splitAccessPath, validExpr } from './names.js'
+import { VLCompileError, signalSafe, flatField, datumRef as dref, genName, safeKey, splitAccessPath, validExpr } from './names.js'
 import { validateSpec } from './validate.js'
 import { predicateExpr } from './predicate.js'
 import { normalizeComposites } from './composite.js'
@@ -94,10 +94,6 @@ const C = {
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v)
-}
-
-function array(v: unknown): unknown[] {
-  return Array.isArray(v) ? v : v == null ? [] : [v]
 }
 
 // --- entry -------------------------------------------------------------------
@@ -548,7 +544,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
         const yDef = p.fields.find((f) => f.channel === 'y' && f.axis !== null)
         if (!yDef || !perLayerScales[i]?.some((s) => s.name === `layer_${i}_y`)) return
         const isFirst = i === firstYLayer
-        const axisDefs = buildAxes([yDef], axisMark(p.markRaw, p.mark), p.orient, perLayerScales[i]!, `layer_${i}_y`, undefined, userConfig)
+        const axisDefs = buildAxes([yDef], axisMark(p.markRaw, p.mark), perLayerScales[i]!, `layer_${i}_y`, undefined, userConfig)
         for (const a of axisDefs) {
           ;(a as Record<string, unknown>).scale = `layer_${i}_y`
           const gridAxis = (a as Record<string, unknown>).gridScale != null
@@ -584,7 +580,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const axisFields = base.fields.filter((f) => f.channel === ch).map((f) =>
       uniq.length > 1 ? ({ ...f, title: uniq.join(', ') } as FieldDef) : f,
     )
-    for (const a of buildAxes(axisFields, axisMark(base.markRaw, base.mark), base.orient, scales as ScaleSpec[], undefined, ch === 'x' && indepY ? `layer_${firstYLayer}_y` : undefined, userConfig)) axes.push(a)
+    for (const a of buildAxes(axisFields, axisMark(base.markRaw, base.mark), scales as ScaleSpec[], undefined, ch === 'x' && indepY ? `layer_${firstYLayer}_y` : undefined, userConfig)) axes.push(a)
   }
   // every grid axis is emitted before any main axis (grids paint under the domains and labels)
   if (axes.length) out.axes = [...axes.filter((a) => a.grid === true), ...axes.filter((a) => a.grid !== true)]
@@ -2948,6 +2944,15 @@ interface ScaleSpec {
   [k: string]: unknown
 }
 
+/** scale.rangeMin / rangeMax replace the first / last end of the default range (scale/range.ts). */
+function withRangeLimits(sc: ScaleSpec, user: Record<string, unknown> | undefined): void {
+  if (!user || user.range !== undefined || !Array.isArray(sc.range) || sc.range.length !== 2) return
+  const r = [...sc.range] as unknown[]
+  if (user.rangeMin !== undefined) r[0] = user.rangeMin
+  if (user.rangeMax !== undefined) r[1] = user.rangeMax
+  sc.range = r
+}
+
 function positionalScaleType(mark: string, def: FieldDef): string {
   if (isDiscreteType(def.type)) {
     // a discrete positional channel only honors the two discrete positional
@@ -2957,7 +2962,8 @@ function positionalScaleType(mark: string, def: FieldDef): string {
     const user = def.scale?.type as string | undefined
     return user === 'point' || user === 'band' ? user : natural
   }
-  if (def.scale?.type) return def.scale.type as string
+  // (an identity scale is not available to a field: vega-lite falls back to the default type)
+  if (def.scale?.type && def.scale.type !== 'identity') return def.scale.type as string
   if (def.type === 'temporal') return 'time'
   return 'linear'
 }
@@ -3010,9 +3016,6 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
     if (def.sort === 'descending' && type !== 'band' && type !== 'point' && type !== 'ordinal' && type !== 'bin-ordinal') sc.reverse = true
     const measureChannel = orient === 'vertical' ? 'y' : 'x'
     // rect marks with two discrete channels (heatmaps) use unpadded bands
-    const otherChannel = channel === 'x' ? 'y' : 'x'
-    const otherDef = fields.find((f) => f.channel === otherChannel)
-    const bothDiscrete = mark === 'rect' && otherDef != null && isDiscreteType(otherDef.type)
     // bar/rect marks pad the dimension channel; timeUnit dimensions use the
     // offset-encoded band layout instead and stay unpadded
     if (
@@ -3062,7 +3065,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
     }
     if (def.scale) {
       for (const [k, v] of Object.entries(def.scale)) {
-        if (k === 'type' || k === 'zero' || k === 'nice' || k === 'padding' || k === 'paddingInner') continue
+        if (k === 'type' || k === 'zero' || k === 'nice' || k === 'padding' || k === 'paddingInner' || k === 'rangeMin' || k === 'rangeMax') continue
         // a property the scale TYPE (or channel) cannot honour is dropped, as vega-lite does
         if (!scalePropApplies(channel, sc.type, k)) continue
         // a discrete scale's explicit domain is resolved by sortedDomain (a list of values)
@@ -3078,6 +3081,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         sc.range = r
       }
     }
+    withRangeLimits(sc, def.scale)
     recordExplicit(sc, def.scale)
     scales.push(sc)
   }
@@ -3099,9 +3103,10 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
     if (def.sort === 'descending') sc.reverse = true
     if (!discrete && scalePropApplies(name, type, 'zero')) sc.zero = (def.scale?.zero as boolean | undefined) ?? (type === 'log' ? false : zero)
     for (const [k, v] of Object.entries(def.scale ?? {})) {
-      if (k === 'type' || k === 'domain' || k === 'range' || k === 'zero' || !scalePropApplies(name, type, k)) continue
+      if (k === 'type' || k === 'domain' || k === 'range' || k === 'zero' || k === 'rangeMin' || k === 'rangeMax' || !scalePropApplies(name, type, k)) continue
       sc[k] = v
     }
+    withRangeLimits(sc, def.scale)
     recordExplicit(sc, def.scale)
     return sc
   }
@@ -3498,7 +3503,7 @@ function defaultLabelAlign(angle: number, orient: string, channel: string): stri
 /** The mark whose axis rules apply: an image mark is laid out as a rect but is not one. */
 const axisMark = (markRaw: unknown, mark: string): string => (isObject(markRaw) && markRaw.$image ? 'image' : mark)
 
-function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: ScaleSpec[], scaleName?: string, gridScaleOverride?: string, config?: Record<string, unknown>): Record<string, unknown>[] {
+function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleName?: string, gridScaleOverride?: string, config?: Record<string, unknown>): Record<string, unknown>[] {
   // Vega-lite emits every grid axis before every label axis (paint order:
   // grids under the domain/labels). Emitting per-channel [grid, label] leaves a
   // later channel's grid line above an earlier channel's domain line.
@@ -4033,7 +4038,6 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const markDef = isObject(spec.mark) ? spec.mark : undefined
     const filledSetting = markDef?.filled ?? cfgType?.filled ?? cfgMark?.filled
     const filled = filledSetting !== false
-    const cfgPaint = (p: string): unknown => markDef?.[p] ?? cfgType?.[p] ?? cfgMark?.[p]
     if (!filled) {
       if (mark === 'bar') update.fill = { value: 'transparent' }
       update.stroke = colorDef
@@ -4566,7 +4570,6 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (markPaint?.outerRadius != null) update.radius = { value: markPaint.outerRadius }
   } else if (mark === 'arc') {
     const thetaDefA = fields.find((f) => f.channel === 'theta' && f.field)
-    const thetaF = thetaDefA!.field
     update.fill = markFill != null
       ? { value: markFill }
       : colorDef
@@ -4845,7 +4848,6 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const pointOverlay = (isObject(spec.mark) ? spec.mark.point : undefined)
     ?? cfgType?.point
     ?? cfgMark?.point
-  const stackedNow = (yDef != null && isStacked(yDef, mark, orient, fields)) || (xDef != null && isStacked(xDef, mark, orient, fields))
   const pathDetails = mark === 'line' || mark === 'area' || mark === 'trail' ? pathGroupingKeys(spec, fields, mark) : []
   if (pathDetails.length) {
     markSpec.name = 'layer_0_marks'
@@ -5378,7 +5380,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
       }
     }
   }
-  const axes = buildAxes(fields, axisMark(markRaw, mark), orient, out.scales as ScaleSpec[], undefined, undefined, userConfig)
+  const axes = buildAxes(fields, axisMark(markRaw, mark), out.scales as ScaleSpec[], undefined, undefined, userConfig)
   if (axes.length) out.axes = axes
   const legends = buildUnitLegends(spec, fields, mark, markRaw)
   if (legends.length) out.legends = legends
