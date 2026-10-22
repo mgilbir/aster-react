@@ -11,7 +11,8 @@ import { createChartStream } from './stream.js'
 import { renderSceneToCanvasAppend, snapshotCanvasScene } from './canvas.js'
 import { patchSceneDom } from './addon-dom.js'
 import { buildHitIndex } from './hit.js'
-import { supersededMaterializations } from './runtime.js'
+import { supersededMaterializations, evaluateChart } from './runtime.js'
+import { compileChart } from './compiler.js'
 
 const spec = {
   width: 400, height: 300, padding: 0, autosize: 'none', data: [{ name: 't', values: [] }],
@@ -70,5 +71,20 @@ describe('steady-state consumers never materialise a superseded scene', () => {
     const g = first.items.find((x) => x.role === 'mark')!
     expect(g.items).toHaveLength(50)
     expect(supersededMaterializations()).toBe(before + 1)
+  })
+
+  it('an in-place edit of an existing item is not painted as a pure append', () => {
+    const chart = compileChart(spec as never)
+    const a = evaluateChart(chart, { data: { t: rows(10) } })
+    const snap = snapshotCanvasScene(a)
+    const next = [...rows(10)]
+    next[2] = { x: 0.9, y: 9 }
+    next.push(...rows(1, 10))
+    const b = evaluateChart(chart, { data: { t: next }, dataPulse: { t: { changed: [2], appendOnly: true, baseLength: 10, added: [[10, 11]] } } })
+    expect(renderSceneToCanvasAppend(snap, b, ctx, { dpr: 1 })).toBe(false)
+    // and a pure append right after is painted incrementally again
+    const snap2 = snapshotCanvasScene(b)
+    const c = evaluateChart(chart, { data: { t: [...next, ...rows(1, 11)] }, dataPulse: { t: { changed: [], appendOnly: true, baseLength: 11, added: [[11, 12]] } } })
+    expect(renderSceneToCanvasAppend(snap2, c, ctx, { dpr: 1 })).toBe(true)
   })
 })
