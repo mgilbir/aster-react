@@ -236,6 +236,20 @@ describe('pan/zoom/brush use the streamed or supplied data, not just the spec (C
     expect(view!.x![1] - view!.x![0]).toBeCloseTo(500 / 1.5, 0)
   })
 
+  it('a chart that MOUNTS zoomed, with rows only in the data prop, still pans (base from a second evaluation)', async () => {
+    const onViewChange = vi.fn()
+    const noRows = dataSpec([]) as Record<string, unknown>
+    const m = mount(<Chart spec={noRows as never} data={{ t: [{ a: 0, b: 0 }, { a: 500, b: 5 }] }} width={200} height={100} panZoom view={{ x: [100, 200] }} onViewChange={onViewChange} />)
+    await act(async () => { await wait() })
+    await key(m.host(), 'ArrowRight')
+    const view = onViewChange.mock.calls.at(-1)![0] as ViewDomain
+    expect(view.x![0]).toBeGreaterThan(100)
+    // zooming out is capped by the data extent (0..500), proving the base came from the data prop
+    for (let i = 0; i < 20; i++) await key(m.host(), '-')
+    const out = onViewChange.mock.calls.at(-1)![0] as ViewDomain | null
+    expect(out?.x == null || out.x[1] - out.x[0] <= 500 + 1e-6).toBe(true)
+  })
+
   it('the base domain stays the data extent while zoomed (reset returns to it)', async () => {
     const ref = React.createRef<import('./Chart').ChartHandle>()
     const m = mount(<Chart ref={ref} spec={dataSpec(base)} width={200} height={100} panZoom />)

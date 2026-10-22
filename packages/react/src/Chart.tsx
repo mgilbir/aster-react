@@ -680,10 +680,12 @@ function ChartView({
   // stream), so it keeps the domains of the last unzoomed scene.
   const baseSessionRef = React.useRef<ReturnType<typeof createChartSession> | null>(null)
   const lastBaseRef = React.useRef<ViewDomain>({})
-  const baseDomains = React.useMemo<ViewDomain>(() => {
-    if (!panZoomEnabled || chartInfo == null) return {}
-    if (domainRaw == null) return baseDomainsOf(chartInfo, positional)
-    if (sceneOverride !== undefined) return { ...baseDomainsOf(chartInfo, positional), ...lastBaseRef.current }
+  const zoomed = domainRaw != null
+  const fromStream = sceneOverride !== undefined
+  // Only data/size/signal changes re-run the second evaluation, not every
+  // pan/zoom frame (the view itself is not an input here).
+  const unzoomedDomains = React.useMemo<ViewDomain | null>(() => {
+    if (!panZoomEnabled || !zoomed || fromStream) return null
     try {
       if (baseSessionRef.current == null) baseSessionRef.current = createChartSession()
       const baseScene = baseSessionRef.current.evaluate(spec, {
@@ -691,12 +693,18 @@ function ChartView({
       })
       return baseDomainsOf(chartInfoFromScene(baseScene), positional)
     } catch {
-      return lastBaseRef.current
+      return null
     }
-  }, [panZoomEnabled, chartInfo, domainRaw, sceneOverride, positional, spec, data, renderWidth, renderHeight, mergedSignals, stableLimits, textMetrics])
+  }, [panZoomEnabled, zoomed, fromStream, positional, spec, data, renderWidth, renderHeight, mergedSignals, stableLimits, textMetrics])
+  const baseDomains = React.useMemo<ViewDomain>(() => {
+    if (!panZoomEnabled || chartInfo == null) return {}
+    if (!zoomed) return baseDomainsOf(chartInfo, positional)
+    if (fromStream) return { ...baseDomainsOf(chartInfo, positional), ...lastBaseRef.current }
+    return unzoomedDomains ?? lastBaseRef.current
+  }, [panZoomEnabled, chartInfo, zoomed, fromStream, positional, unzoomedDomains])
   const baseDomainsRef = React.useRef(baseDomains)
   baseDomainsRef.current = baseDomains
-  if (domainRaw == null) lastBaseRef.current = baseDomains
+  if (!zoomed) lastBaseRef.current = baseDomains
 
   const applyView = React.useCallback((next: ViewDomain | null) => {
     const normalized = next == null ? null : normalizeView(next, baseDomainsRef.current)
@@ -896,8 +904,6 @@ function ChartView({
     : selection !== undefined
       ? selection
       : internalSelection
-  const selectionRef = React.useRef(selectionValue)
-  selectionRef.current = selectionValue
   const emitSelection = React.useCallback((value: SelectValue | null) => {
     if (selection === undefined && select === undefined) setInternalSelection(value)
     onSelectionChange?.(value)
