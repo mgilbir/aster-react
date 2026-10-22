@@ -37,7 +37,7 @@ const set = (s: string): ReadonlySet<string> => new Set(s.split(/\s+/).filter(Bo
 
 export const MARKS = set('arc area bar image line point rect rule text tick trail circle square geoshape boxplot errorbar errorband')
 /** Marks compile.ts implements end to end. */
-export const SUPPORTED_MARKS = set('arc area bar line point rect rule text tick trail circle square boxplot image')
+export const SUPPORTED_MARKS = set('arc area bar line point rect rule text tick trail circle square boxplot image errorbar errorband')
 
 const ALL_CHANNELS = set(
   'x y x2 y2 xOffset yOffset xError xError2 yError yError2 theta theta2 radius radius2 latitude longitude latitude2 longitude2 ' +
@@ -46,7 +46,7 @@ const ALL_CHANNELS = set(
 )
 /** Channels compile.ts consumes. A schema-valid channel outside this set throws. */
 const SUPPORTED_CHANNELS = set(
-  'x y x2 y2 xOffset yOffset theta radius color fill stroke opacity fillOpacity strokeOpacity strokeWidth strokeDash size angle shape text tooltip href description detail order row column facet url',
+  'x y x2 y2 xOffset yOffset theta radius color fill stroke opacity fillOpacity strokeOpacity strokeWidth strokeDash size angle shape text tooltip href description detail order row column facet url xError xError2 yError yError2',
 )
 
 const AGG_OPS = set(
@@ -323,7 +323,7 @@ function validateData(spec: Obj, at: (k: string) => string): void {
 const CONFIG_KEYS = set(
   'autosize background padding axis axisBand axisX axisY axisLeft axisRight axisTop axisBottom legend header headerRow headerColumn headerFacet range ' +
     'mark arc area bar circle geoshape image line point rect rule square text tick trail view title font scale style ' +
-    'aria countTitle fieldTitle lineBreak normalizedNumberFormat numberFormat timeFormat',
+    'aria countTitle fieldTitle lineBreak normalizedNumberFormat numberFormat timeFormat errorbar errorband',
 )
 const CONFIG_SCALE_KEYS = set(
   'bandPaddingInner bandPaddingOuter barBandPaddingInner tickBandPaddingInner rectBandPaddingInner bandWithNestedOffsetPaddingInner bandWithNestedOffsetPaddingOuter offsetBandPaddingInner offsetBandPaddingOuter pointPadding continuousPadding round nice zero xReverse clamp useUnaggregatedDomain invalid minBandSize maxBandSize minFontSize maxFontSize minOpacity maxOpacity minSize maxSize minStrokeWidth maxStrokeWidth quantileCount quantizeCount',
@@ -428,7 +428,7 @@ const MARK_DEF_KEYS = set(
     'cornerRadiusTopLeft cornerRadiusTopRight cursor description dir discreteBandSize dx dy ellipsis fill fillOpacity filled font fontSize fontStyle fontWeight height href innerRadius interpolate invalid ' +
     'limit line lineBreak lineHeight minBandSize opacity order orient outerRadius padAngle point radius radius2 radius2Offset radiusOffset shape size smooth stroke strokeCap strokeDash strokeDashOffset ' +
     'strokeJoin strokeMiterLimit strokeOffset strokeOpacity strokeWidth style tension text theta theta2 theta2Offset thetaOffset thickness time timeUnitBandPosition timeUnitBandSize tooltip url width x x2 ' +
-    'x2Offset xOffset y y2 y2Offset yOffset extent median box outliers rule ticks gradient',
+    'x2Offset xOffset y y2 y2Offset yOffset extent median box outliers rule ticks gradient center band borders',
 )
 /** mark-def properties that Vega-Lite honours but compile.ts does not implement. */
 const UNSUPPORTED_MARK_KEYS: Record<string, string> = {

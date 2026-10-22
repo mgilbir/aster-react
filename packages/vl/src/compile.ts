@@ -11,6 +11,7 @@ import { renameDataRefs, renameFragment } from './embed.js'
 import { VLCompileError, signalSafe, flatField, datumRef as dref, datumPathRef, genName, genSignal, safeKey, splitAccessPath, validExpr } from './names.js'
 import { validateSpec } from './validate.js'
 import { predicateExpr } from './predicate.js'
+import { normalizeComposites } from './composite.js'
 import { scaleConfigOf, discreteStep, sizeRange, countRange, discreteCount, usesUnaggregatedDomain, type ScaleCfg } from './scaleconfig.js'
 import { getTimeUnitParts, normalizeTimeUnit, timeUnitFieldName, timeUnitTransform, type NormalTimeUnit } from './timeunit.js'
 import { binNames, binTransforms, normalizeBin, translateTransforms, type BinParams, type TransformContext, type TranslateState } from './transforms.js'
@@ -112,10 +113,11 @@ function array(v: unknown): unknown[] {
 export function compile(input: VLSpec): VLSpec {
   const spec = cloneSpec(input)
   validateSpec(spec)
-  imageAsRect(spec)
-  const ctx = makeCtx(spec)
-  const out = finalizeData(compileView(spec, ctx), ctx)
-  const signals = paramSignals(spec)
+  const normalized = normalizeComposites(spec, isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined) as VLSpec
+  imageAsRect(normalized)
+  const ctx = makeCtx(normalized)
+  const out = finalizeData(compileView(normalized, ctx), ctx)
+  const signals = paramSignals(normalized)
   if (signals.length) out.signals = [...signals, ...((out.signals as Record<string, unknown>[] | undefined) ?? [])]
   return exprRefsToSignals(out) as VLSpec
 }
@@ -547,14 +549,19 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const second = ch === 'y' ? 'y2' : 'x2'
     // per layer: the channel's title followed by its endpoint field
     const titles: string[] = []
+    const given: string[] = []
     for (const p of layersWith) {
       const f = p.fields.find((q) => q.channel === ch)!
+      const d2 = p.fields.find((q) => q.channel === second && q.field)
+      // an explicit title on either endpoint replaces the generated "primary, secondary" pair
+      const explicit = [f.title, d2?.title].filter((x): x is string => typeof x === 'string' && x !== '')
+      if (explicit.length) { given.push(explicit.join(', ')); continue }
       const t = ((f.axis as Record<string, unknown> | null | undefined)?.title as string) ?? (channelTitle(f) as string)
       if (t) titles.push(t)
-      const d2 = p.fields.find((q) => q.channel === second && q.field)
       if (d2 && !d2.datumOnly) titles.push(d2.source)
     }
-    const uniq = Array.from(new Set(titles))
+    // titles the user wrote win over the ones derived from fields (mergeTitleComponent)
+    const uniq = Array.from(new Set(given.length ? given : titles))
     const axisFields = base.fields.filter((f) => f.channel === ch).map((f) =>
       uniq.length > 1 ? ({ ...f, title: uniq.join(', ') } as FieldDef) : f,
     )
@@ -4705,6 +4712,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     style: [mark, ...(isObject(spec.mark) ? ([] as string[]).concat((spec.mark.style as string | string[] | undefined) ?? []) : [])],
     from: { data: dataName },
     encode: { update },
+  }
+  // markDef.clip / markDef.aria are properties of the Vega mark itself
+  if (isObject(spec.mark)) {
+    if (typeof spec.mark.clip === 'boolean') markSpec.clip = spec.mark.clip
+    if (typeof spec.mark.aria === 'boolean') markSpec.aria = spec.mark.aria
   }
   if (isObject(spec.mark) && spec.mark.$image) {
     // an image mark carries no paint; its bands are not floored at the rect minimum
