@@ -11,6 +11,9 @@
  * metrics are live and the comparison catches canvas-only paint/geometry drift
  * (clip paths, gradients, dash, baseline offsets, path tracing).
  *
+ * A second phase (browser-canvas-append.mts) checks that incremental append painting
+ * equals a full repaint, pixel for pixel.
+ *
  * Run: npx tsx scripts/browser-canvas-parity.mts [--limit=N] [--filter=substr]
  */
 import { readdirSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
@@ -235,4 +238,10 @@ if (failures.length) {
     console.log(`  ${f.name}: ${f.error ?? `ratio=${f.ratio?.toFixed(4)} mean=${f.mean?.toFixed(2)}`}`)
   }
 }
-process.exit(failures.length ? 1 : 0)
+
+// Phase 2: incremental canvas painting (append path) must equal a full repaint, pixel for pixel.
+const { runAppendPixelOracle } = await import('./browser-canvas-append.mts')
+const append = await runAppendPixelOracle(BROWSER, 60, 14)
+console.log(`[browser-canvas] append-vs-full-repaint ${BROWSER}: ${append.runs} scenarios, ${append.appended} append-path frames, ${append.failures.length} failing`)
+for (const f of append.failures.slice(0, 20)) console.log(`  ${f}`)
+process.exit(failures.length || append.failures.length ? 1 : 0)
