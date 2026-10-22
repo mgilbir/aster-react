@@ -2971,9 +2971,10 @@ function freshContCensus(dom: { data: string; field: string }, rows: Row[]): Con
   let lo = Infinity, hi = -Infinity
   // an infinite value makes vega's extent [undefined, undefined]: nothing to prove stable
   let infinite = false
+  const read = scaleFieldOf(dom.field)
   for (let i = 0; i < rows.length; i++) {
     // vega's Extent reads toNumber(value): null / '' are not 0, they are absent
-    const v = censusNumber(scaleFieldOf(dom.field)(rows[i]))
+    const v = censusNumber(read(rows[i]))
     vals[i] = v
     if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v } else if (v === Infinity || v === -Infinity) infinite = true
   }
@@ -2987,8 +2988,9 @@ function freshDiscCensus(dom: { data: string; field: string }, rows: Row[]): Dis
   const counts = new Map<unknown, number>()
   const firstIdx = new Map<unknown, number>()
   const vals: unknown[] = new Array(rows.length)
+  const read = scaleFieldOf(dom.field)
   for (let i = 0; i < rows.length; i++) {
-    const v = scaleFieldOf(dom.field)(rows[i])
+    const v = read(rows[i])
     vals[i] = v
     counts.set(v, (counts.get(v) ?? 0) + 1)
     if (!firstIdx.has(v)) firstIdx.set(v, i)
@@ -3074,9 +3076,10 @@ function advanceDiscCensus(cen: DiscCensus, rows: Row[], pulse: StepPulse): Disc
   const sameLength = pulse.appendOnly ? (pulse.baseLength === cen.vals.length && rows.length === cen.vals.length)
     : (!pulse.from && !(pulse.added?.length) && !(pulse.removed?.length) && rows.length === cen.vals.length)
   if (!sameLength) return null
+  const read = scaleFieldOf(cen.field)
   for (const i of pulse.changed) {
     if (i < 0 || i >= rows.length) return null
-    const nv = scaleFieldOf(cen.field)(rows[i])
+    const nv = read(rows[i])
     const ov = cen.vals[i]
     if (Object.is(ov, nv) || ov === nv) continue
     const nCount = cen.counts.get(nv)
