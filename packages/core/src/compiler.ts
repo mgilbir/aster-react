@@ -3,7 +3,7 @@
  * Consumes the Vega spec directly (the canonical IR); vega-lite compatibility is
  * achieved by running vega-lite.compile in the app build / dev (oracle).
  */
-import { dict, ownGet, setOwn } from './util.js'
+import { dict, ownGet } from './util.js'
 import type {
   CompiledAxis,
   CompiledChart,
@@ -313,10 +313,10 @@ function compileData(d: Record<string, unknown>): CompiledData {
 
 function compileTransform(t: Record<string, unknown>): CompiledTransform {
   const type = t.type as string
-  const out: Record<string, unknown> = { type }
+  const out = dict<unknown>({ type }) // prototype-less: spec keys such as `__proto__` stay plain data
   for (const key of Object.keys(t)) {
     if (key === 'type') continue
-    setOwn(out, key, t[key])
+    out[key] = t[key]
   }
   return out as CompiledTransform
 }

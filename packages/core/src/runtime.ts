@@ -36,7 +36,7 @@ import type {
 import { tickFormat, scaleFraction, tickValues, tickCount, isContinuous, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, setOwn } from './util.js'
+import { dict, ownGet } from './util.js'
 import { rowsEqual, type PulseChange } from './pulse.js'
 import { trellisLayout, measureBounds } from './trellis.js'
 import { baselineOffset, boundAxisGroup, boundGroupItem, boundLeaf, boundText, Bounds } from './bounds.js'
@@ -446,9 +446,9 @@ function resolveSignalUpdates(ctx: EvalContext): boolean {
     if (!def.update) continue
     try {
       const value = ctx.runtime.expr(def.update)(undefined, ctx.signalParams)
-      if (value !== undefined && value !== ownGet(ctx.signalParams, def.name)) {
-        setOwn(ctx.signalParams, def.name, value)
-        setOwn(ctx.chart.signals, def.name, value)
+      if (value !== undefined && value !== ctx.signalParams[def.name]) {
+        ctx.signalParams[def.name] = value
+        ctx.chart.signals[def.name] = value
         changed = true
       }
     } catch {
@@ -1070,7 +1070,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput = {}): Scen
     : typeof chart.height === 'number'
       ? chart.height
       : chart.height && typeof chart.height === 'object' && 'signal' in chart.height
-        ? Number(ownGet(signals, (chart.height as { signal: string }).signal))
+        ? Number(signals[(chart.height as { signal: string }).signal])
         : undefined
   const negativeHeightExtra = typeof declaredHeight === 'number' && declaredHeight < 0
     ? Math.ceil(-declaredHeight / 2)
@@ -1515,7 +1515,7 @@ function resolveSize(size: SizeSpec, override: number | undefined, signals: Reco
   if (typeof size === 'number') return clamp(size)
   if (size && typeof size === 'object') {
     if ('signal' in size) {
-      const v = ownGet(signals, size.signal)
+      const v = signals[size.signal]
       return typeof v === 'number' ? clamp(v) : DEFAULT_SIZE
     }
     if ('step' in size) {

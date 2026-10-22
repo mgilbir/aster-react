@@ -11,7 +11,7 @@ import {
   range as sequence,
   tickStep,
 } from './arr.js'
-import { ownGet, setOwn } from './util.js'
+import { ownGet } from './util.js'
 import { piecewise } from './interp.js'
 import { interpolateRgb } from './interp.js'
 import {
@@ -768,7 +768,8 @@ function applyPalettes(obj: Record<string, unknown>, f: (v: unknown) => unknown)
   for (const k in obj) scheme(k, f(obj[k]))
 }
 
-const schemes: Record<string, unknown> = {}
+// prototype-less: scheme names come from specs (audit C50)
+const schemes: Record<string, unknown> = Object.create(null)
 const schemeApi = {}
 applyPalettes(discretePalettes, paletteColors)
 applyPalettes(continuousPalettes, (_) => interpolateColors(paletteColors(_)))
@@ -776,10 +777,10 @@ applyPalettes(continuousPalettes, (_) => interpolateColors(paletteColors(_)))
 export function scheme(name: string, schemeDef?: unknown): unknown {
   name = name && name.toLowerCase()
   if (arguments.length > 1) {
-    setOwn(schemes, name, schemeDef)
+    schemes[name] = schemeDef
     return schemeApi
   } else {
-    return ownGet(schemes, name)
+    return schemes[name]
   }
 }
 

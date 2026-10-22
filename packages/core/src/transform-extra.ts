@@ -1315,7 +1315,7 @@ function wordcloudRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCo
     if (rawFontSize != null && typeof rawFontSize === 'object' && 'field' in rawFontSize) {
       v = getField(d, (rawFontSize as { field: string }).field)
     } else if (rawFontSize != null && typeof rawFontSize === 'object' && 'signal' in rawFontSize) {
-      v = ownGet(ctx.signals, (rawFontSize as { signal: string }).signal)
+      v = ctx.signals[(rawFontSize as { signal: string }).signal]
     } else if (typeof rawFontSize === 'number') {
       v = rawFontSize
     } else if (typeof rawFontSize === 'string') {

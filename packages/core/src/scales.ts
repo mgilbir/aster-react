@@ -22,6 +22,7 @@ export interface ColorScale extends Scale {
 export interface ScaleContext {
   width: number
   height: number
+  /** Signal values by name. Must be prototype-less (the runtime supplies `dict(...)`): names are spec-supplied. */
   signals: Record<string, unknown>
   /** `config.range` — a named range ('category', 'ramp', ...) resolves through
    * it before the built-in aliases (vega-parser's range lookup). */
@@ -360,14 +361,14 @@ function resolveBins(
 ): Record<string, number> | undefined {
   if (!bins) return undefined
   if (typeof bins === 'string') {
-    const v = ownGet(ctx.signals, bins)
+    const v = ctx.signals[bins]
     if (v && typeof v === 'object' && 'start' in v && 'stop' in v && 'step' in v) {
       return v as Record<string, number>
     }
     return undefined
   }
   if (bins.signal) {
-    const v = ownGet(ctx.signals, bins.signal)
+    const v = ctx.signals[bins.signal]
     if (v && typeof v === 'object' && 'start' in v && 'stop' in v && 'step' in v) {
       return v as Record<string, number>
     }
@@ -504,7 +505,7 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
   if (domain && typeof domain === 'object' && !Array.isArray(domain)) {
     if ('signal' in domain && domain.signal) {
       // Try a plain signal name lookup first
-      const v = ownGet(ctx.signals, domain.signal)
+      const v = ctx.signals[domain.signal]
       if (v != null) {
         return Array.isArray(v) ? (v as unknown[]) : [v]
       }
@@ -518,7 +519,7 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
         const dotIdx = propExpr.lastIndexOf('.')
         if (dotIdx > 0) {
           const sigKey = propExpr.substring(0, dotIdx)  // e.g. "bin_maxbins_10_v_bins"
-          const sigVal = ownGet(ctx.signals, sigKey)
+          const sigVal = ctx.signals[sigKey]
           if (sigVal && typeof sigVal === 'object') {
             const startVal = (sigVal as Record<string, unknown>).start
             const stopVal = (sigVal as Record<string, unknown>).stop
@@ -637,7 +638,7 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
     }
   }
   if (typeof domain === 'string') {
-    const v = ownGet(ctx.signals, domain)
+    const v = ctx.signals[domain]
     if (v == null) throw new Error(`[aster] unresolved signal domain: ${domain}`)
     return Array.isArray(v) ? (v as unknown[]) : [v]
   }
@@ -683,7 +684,7 @@ function distinctValues(values: unknown[]): unknown[] {
 
 function resolveRangeSignal(signal: string, ctx: ScaleContext): unknown {
   // Try direct signal name lookup first
-  const v = ownGet(ctx.signals, signal)
+  const v = ctx.signals[signal]
   if (v != null) return v
   // Not a plain signal name — try evaluating as a Vega expression (e.g. "bandwidth('x')")
   if (ctx.evaluate) {

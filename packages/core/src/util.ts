@@ -222,30 +222,20 @@ export function splitAccessPath(p: unknown): string[] {
   return path
 }
 
-/**
- * Keys that reach the prototype chain / constructors. Reading one of these is
- * only allowed when it is an *own* property of the object being read (a data
- * column literally named `constructor` is data, not the inherited function).
- * This is the shared guard for every dynamic property walk (audit C1).
- */
-const RiskyKeys: ReadonlySet<string> = new Set([...DisallowedObjectProperties, 'prototype'])
-
-/** True for a property name that must only ever be read as an own property. */
-export function isRiskyKey(key: unknown): boolean {
-  return RiskyKeys.has(typeof key === 'string' ? key : String(key))
-}
-
 const hasOwn = Object.prototype.hasOwnProperty
 
 /**
- * `obj[key]`, except that risky keys (see `isRiskyKey`) resolve only when
- * they are own properties of `obj`; inherited ones read as `undefined`.
+ * `obj[key]`, except that the prototype-chain/constructor keys of
+ * `DisallowedObjectProperties` resolve only when they are *own* properties of
+ * `obj` (a data column literally named `constructor` is data; the inherited
+ * `Object` constructor is not). This is the shared guard for every dynamic
+ * property walk (audit C1); a nullish `obj` falls through to the plain read,
+ * which throws as before.
  */
 export function safeGet(obj: unknown, key: unknown): unknown {
-  const k = typeof key === 'symbol' ? key : String(key)
-  // a nullish `obj` falls through to the plain read, which throws as before
-  if (obj != null && typeof k === 'string' && RiskyKeys.has(k) && !hasOwn.call(Object(obj), k)) return undefined
-  return (obj as Record<string, unknown>)[k as string]
+  const k = String(key)
+  if (obj != null && DisallowedObjectProperties.has(k) && !hasOwn.call(Object(obj), k)) return undefined
+  return (obj as Record<string, unknown>)[k]
 }
 
 /**
@@ -264,21 +254,16 @@ export function ownGet<T>(table: Readonly<Record<string, T>> | null | undefined,
  * ordinary own data property instead of replacing the table's prototype.
  */
 export function setOwn<T>(table: Record<string, T>, key: string, value: T): void {
-  if (key === '__proto__') Object.defineProperty(table, key, { value, writable: true, enumerable: true, configurable: true })
-  else table[key] = value
+  Object.defineProperty(table, key, { value, writable: true, enumerable: true, configurable: true })
 }
 
 /**
  * A fresh name-keyed table with no prototype (`__proto__` is an ordinary key
- * and nothing is inherited), optionally filled from `sources` (own keys only).
+ * and nothing is inherited), optionally filled from `sources` (own keys only;
+ * on a prototype-less target even an own `__proto__` key is plain data).
  */
 export function dict<T = unknown>(...sources: Array<Readonly<Record<string, T>> | null | undefined>): Record<string, T> {
-  const out = Object.create(null) as Record<string, T>
-  for (const src of sources) {
-    if (src == null) continue
-    for (const k of Object.keys(src)) setOwn(out, k, src[k] as T)
-  }
-  return out
+  return Object.assign(Object.create(null) as Record<string, T>, ...sources)
 }
 
 /** Get a single path component (`obj[field]`). */
@@ -298,23 +283,13 @@ function getN(path: readonly string[]): (obj: unknown) => unknown {
   }
 }
 
-/** Guarded walk, used only for paths that mention a risky key. */
-function getGuarded(path: readonly string[]): (obj: unknown) => unknown {
-  const len = path.length
-  return (obj) => {
-    let cur = obj
-    for (let i = 0; i < len; ++i) cur = safeGet(cur, path[i] as string)
-    return cur
-  }
-}
-
 /**
  * Composed getter: single-component fast path, walking otherwise. Paths with
  * no risky segment (all of them in practice) use the unguarded closures, so
  * the hot path pays nothing for the guard.
  */
 export function getter(path: readonly string[]): (obj: unknown) => unknown {
-  if (path.some((p) => RiskyKeys.has(p))) return getGuarded(path)
+  if (path.some((p) => DisallowedObjectProperties.has(p))) return (obj) => path.reduce(safeGet, obj)
   return path.length === 1 ? get1(path[0] as string) : getN(path)
 }
 

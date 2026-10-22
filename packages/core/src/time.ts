@@ -16,7 +16,7 @@
  *   two-argument form is what callers hit, not that branch.
  */
 
-import { array, constant, error, extend, hasOwnProperty, peek, toSet } from './util.js'
+import { array, constant, error, extend, hasOwnProperty, ownGet, peek, toSet } from './util.js'
 
 // --- durations ---------------------------------------------------------------
 
@@ -504,11 +504,11 @@ const utcIntervals: Record<string, TimeInterval> = {
 }
 
 export function timeIntervalFor(unit: string): TimeInterval | undefined {
-  return Object.hasOwn(timeIntervals, unit) ? timeIntervals[unit] : undefined
+  return ownGet(timeIntervals, unit)
 }
 
 export function utcIntervalFor(unit: string): TimeInterval | undefined {
-  return Object.hasOwn(utcIntervals, unit) ? utcIntervals[unit] : undefined
+  return ownGet(utcIntervals, unit)
 }
 
 function offset(ival: TimeInterval | undefined, date: unknown, step: number): Date | undefined {

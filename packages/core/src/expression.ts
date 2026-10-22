@@ -176,16 +176,9 @@ function inrange(value: unknown, range: unknown): boolean {
   return lo < hi ? v >= lo && v <= hi : v >= hi && v <= lo
 }
 function mergeObj(...objs: unknown[]): unknown {
-  // Like vega's merge (extend into {}), but a `__proto__` own key (JSON data)
-  // is skipped instead of swapping the result's prototype.
-  const out: Record<string, unknown> = {}
-  for (const o of objs) {
-    if (o == null) continue
-    for (const k of Object.keys(o as object)) {
-      if (k !== '__proto__') out[k] = (o as Record<string, unknown>)[k]
-    }
-  }
-  return out
+  // Like vega's merge (extend into {}), but an own `__proto__` key (JSON data)
+  // must not leave the result with a foreign prototype: restore it.
+  return Object.setPrototypeOf(Object.assign({}, ...objs), Object.prototype)
 }
 function testRe(reg: unknown, value: unknown): boolean {
   if (value == null) return false

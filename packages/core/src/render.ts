@@ -1407,75 +1407,27 @@ function intersectArc(x0: number, y0: number, x1: number, y1: number, x2: number
 // `escText` for text content. Nothing else may interpolate a non-constant into
 // markup; `svg-escaping.test.ts` enforces that over every mark and channel.
 
-const ESC_CACHE = new Map<string, string>()
-const ATTR_CACHE = new Map<string, string>()
-/** Short attribute values already verified to need no escaping. */
-const ATTR_CLEAN = new Set<string>()
-
-// Characters XML 1.0 cannot represent at all (not even as a character
-// reference): C0 controls other than tab/LF/CR, and U+FFFE/U+FFFF. A data value
-// containing one would make the whole document ill-formed, so they are
-// replaced with U+FFFD. Lone surrogates are repaired the same way.
-const XML_ILLEGAL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g
-
-function wellFormed(s: string): string {
-  const wf = (s as unknown as { toWellFormed?: () => string }).toWellFormed
-  return wf ? wf.call(s) : s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD')
-}
+const ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\t': '&#x9;', '\n': '&#xA;', '\r': '&#xD;' }
+// Alternatives, in order: markup characters (attributes add the whitespace
+// controls: vega-scenegraph's `attrText` set); characters XML 1.0 cannot carry
+// at all; a valid surrogate pair (matched so it is left alone); a lone surrogate.
+const TEXT_RE = /[&<>"]|[\0-\b\v\f\x0E-\x1F\uFFFE\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g
+const ATTR_RE = /[&<>"\t\n\r]|[\0-\b\v\f\x0E-\x1F\uFFFE\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g
 
 /**
- * True when `s` contains anything `escText`/`escAttr` must rewrite. A plain
- * charCode scan: for the short strings a chart writes (colours, path data,
- * numbers) this is several times cheaper than a character-class regex, and it
- * runs once per attribute on the serialization hot path. Surrogates are
- * reported so lone ones get repaired; valid pairs pass through unchanged.
+ * Escape for a text node or, with `attribute`, an attribute value. Characters
+ * XML 1.0 cannot represent, and lone surrogates, become U+FFFD. One regex pass,
+ * no lookbehind (older Safari).
  */
-function needsEscape(s: string, attribute: boolean): boolean {
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i)
-    if (c > 62) {
-      if (c >= 0xD800 && (c <= 0xDFFF || c >= 0xFFFE)) return true
-    } else if (c < 32) {
-      if (c !== 9 && c !== 10 && c !== 13) return true
-      if (attribute) return true
-    } else if (c === 34 || c === 38 || c === 60 || c === 62) return true
-  }
-  return false
+function escapeXml(s: string, attribute: boolean): string {
+  return s.replace(attribute ? ATTR_RE : TEXT_RE, (c) => ESCAPES[c] ?? (c.length > 1 ? c : '\uFFFD'))
 }
 
-const TEXT_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }
-// Same set as vega-scenegraph's `attrText` (&, <, >, ", plus the whitespace
-// controls an attribute-value normaliser would otherwise fold away).
-const ATTR_ESCAPES: Record<string, string> = {
-  ...TEXT_ESCAPES, '\t': '&#x9;', '\n': '&#xA;', '\r': '&#xD;',
-}
-
-/** Text-node escaping (`&`, `<`, `>`, `"`, plus XML-illegal characters). */
-function escText(s: string): string {
-  if (!needsEscape(s, false)) return s
-  const cached = ESC_CACHE.get(s)
-  if (cached !== undefined) return cached
-  const out = wellFormed(s.replace(XML_ILLEGAL, '\uFFFD')).replace(/[&<>"]/g, (c) => TEXT_ESCAPES[c] as string)
-  if (ESC_CACHE.size < 2048) ESC_CACHE.set(s, out)
-  return out
-}
+/** Text-node escaping. */
+const escText = (s: string): string => escapeXml(s, false)
 
 /** Attribute-value escaping; accepts any value and stringifies it first. */
-function escAttr(value: unknown): string {
-  const s = typeof value === 'string' ? value : String(value)
-  // Short values repeat heavily (a scale's colours, 'round', 'butt'): a Set
-  // hit on an already-verified string beats re-scanning it per item.
-  if (ATTR_CLEAN.has(s)) return s
-  if (!needsEscape(s, true)) {
-    if (s.length <= 40 && ATTR_CLEAN.size < 2048) ATTR_CLEAN.add(s)
-    return s
-  }
-  const cached = ATTR_CACHE.get(s)
-  if (cached !== undefined) return cached
-  const out = wellFormed(s.replace(XML_ILLEGAL, '\uFFFD')).replace(/[&<>"\t\n\r]/g, (c) => ATTR_ESCAPES[c] as string)
-  if (ATTR_CACHE.size < 2048) ATTR_CACHE.set(s, out)
-  return out
-}
+const escAttr = (value: unknown): string => escapeXml(String(value), true)
 
 /** ` name="value"` for any non-nullish value, escaped. */
 function attrS(name: string, value: unknown): string {
