@@ -102,7 +102,7 @@ for (const t of CONT) {
   add('continuous', `${t}/identical-values`, spec({ ...base, zero: false }, d(same)))
   add('continuous', `${t}/unknown-wrong-type-domain`, spec({ ...base, domain: ['a', 'b'] }, d(rows)))
   add('continuous', `${t}/null-domain-entry`, spec({ ...base, domain: [null, 10] }, d(rows)))
-  add('continuous', `${t}/nan-domain-entry`, spec({ ...base, domain: [{ signal: 'NaN' }, 10] }, d(rows)))
+  add('continuous', `${t}/nan-domain-entry`, spec({ ...base, domain: [{ signal: '0/0' }, 10] }, d(rows)))
   add('continuous', `${t}/string-literal-domain`, spec({ ...base, domain: ['4', '40'] }, d(rows)))
   add('continuous', `${t}/no-domain`, spec({ type: t, range: [0, 100] }, d(rows)))
   add('continuous', `${t}/domainMin-no-domain`, spec({ type: t, range: [0, 100], domainMin: 2 }, d(rows)))

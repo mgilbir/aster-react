@@ -1,7 +1,7 @@
 /**
  * Replay of the "scale spec -> built scale" oracle vectors
  * (`packages/conformance/scripts/gen-scale-spec-vectors.mjs` ->
- * `testdata/vectors/vega-scale-spec.json`).
+ * `testdata/vectors/spec-level/vega-scale-spec.json`).
  *
  * Each case is a Vega spec holding one scale `s`. The vector records what real
  * vega (vega-parser + vega-encode's Scale transform) built from it: the type,
@@ -32,7 +32,7 @@ interface File {
 }
 
 const file = JSON.parse(
-  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'testdata', 'vectors', 'vega-scale-spec.json'), 'utf8'),
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'testdata', 'vectors', 'spec-level', 'vega-scale-spec.json'), 'utf8'),
 ) as File
 
 function dec(v: unknown): unknown {
@@ -46,6 +46,7 @@ function dec(v: unknown): unknown {
     case '-inf': return -Infinity
     case '-0': return -0
     case 'date': return new Date((v as { ms: number }).ms)
+    case 'baddate': return new Date(NaN)
     default: {
       const o: Record<string, unknown> = {}
       for (const [k, val] of Object.entries(v as Record<string, unknown>)) o[k] = dec(val)
@@ -63,8 +64,9 @@ function enc(v: unknown): unknown {
     if (v === 0 && 1 / v < 0) return { $: '-0' }
     return v
   }
-  if (v instanceof Date) return { $: 'date', ms: v.getTime() }
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? { $: 'baddate' } : { $: 'date', ms: v.getTime() }
   if (typeof v === 'function') return { $: 'fn' }
+  if (typeof v === 'symbol') return { $: 'symbol', desc: v.description ?? null }
   if (Array.isArray(v)) return v.map(enc)
   if (v !== null && typeof v === 'object') {
     const o: Record<string, unknown> = {}

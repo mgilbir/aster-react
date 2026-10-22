@@ -1,7 +1,7 @@
 /**
  * Records "scale spec -> built scale" oracle vectors from real vega (the pinned
  * `vega` devDependency: vega-parser + vega-encode's Scale transform), written to
- * `packages/core/testdata/vectors/vega-scale-spec.json`. Cases live in
+ * `packages/core/testdata/vectors/spec-level/vega-scale-spec.json`. Cases live in
  * `scale-spec-cases.mjs`. Run with:
  *
  *   pnpm --filter @aster/conformance run vectors:scale-spec
@@ -36,8 +36,9 @@ function enc(v) {
     if (v === 0 && 1 / v < 0) return { $: '-0' }
     return v
   }
-  if (v instanceof Date) return { $: 'date', ms: v.getTime() }
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? { $: 'baddate' } : { $: 'date', ms: v.getTime() }
   if (typeof v === 'function') return { $: 'fn' }
+  if (typeof v === 'symbol') return { $: 'symbol', desc: v.description ?? null }
   if (Array.isArray(v)) return v.map(enc)
   if (v !== null && typeof v === 'object') {
     const o = {}
@@ -155,7 +156,7 @@ for (const [suite, cases] of Object.entries(suites)) {
   }
   out.suites[suite] = { oracle: 'vega@' + vega.version, cases: list }
 }
-const dest = join(here, '..', '..', 'core', 'testdata', 'vectors', 'vega-scale-spec.json')
+const dest = join(here, '..', '..', 'core', 'testdata', 'vectors', 'spec-level', 'vega-scale-spec.json')
 mkdirSync(dirname(dest), { recursive: true })
 // one case per line: diffs stay reviewable and the file stays small
 const body = Object.entries(out.suites)
