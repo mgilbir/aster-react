@@ -310,21 +310,7 @@ function collectTexts(g: SceneGroup): SceneItem[] {
 // ---------------------------------------------------------------------------
 
 describe('hit grid memory (audit C41)', () => {
-  it('an enormous item, many small ones, and far-away items stay cheap and correct (in-process)', () => {
-    const small = Array.from({ length: 401 }, (_, i) => ({ x: (i % 20) * 10, y: Math.floor(i / 20) * 10, width: 8, height: 8, fill: '#000', datum: { i } }))
-    const scene = {
-      width: 800, height: 600,
-      // vega paints rect items in data order (the later datum on top), so the backdrop comes first
-      items: [{ marktype: 'rect', items: [{ x: -1e6, y: -1e6, width: 2e6, height: 2e6, fill: '#ccc', datum: { i: 'huge' } }, ...small, { x: 1e12, y: 1e12, width: 5, height: 5, fill: '#f00', datum: { i: 'far' } }] }],
-    } as unknown as SceneRoot
-    const index = buildHitIndex(scene)
-    expect(index.queryMark(4, 4)?.item.datum).toEqual({ i: 0 }) // a small rect paints above the backdrop
-    expect(index.queryMark(5000, 5000)?.item.datum).toEqual({ i: 'huge' })
-    expect(index.queryMark(1e12 + 2, 1e12 + 2)).not.toBeNull()
-    expect(index.queryMark(Number.NaN, 3)).toBeNull()
-  })
-
-  it('does not exhaust the heap: a 2e6 x 2e6 rect plus 401 small rects (child process with a 256 MB cap)', () => {
+  it('an enormous item, many small ones and far-away items neither exhaust the heap nor change who is on top (child process with a 256 MB cap)', () => {
     // The old index allocated one list entry per covered cell: ~10^9 cells for
     // this rect, i.e. "FATAL ERROR: Reached heap limit". Run it in a child with a
     // memory cap so a regression cannot take the test runner down with it.
@@ -336,11 +322,18 @@ describe('hit grid memory (audit C41)', () => {
       const script = `
         import { buildHitIndex } from ${JSON.stringify(bundle)};
         const small = Array.from({ length: 401 }, (_, i) => ({ x: (i % 20) * 10, y: Math.floor(i / 20) * 10, width: 8, height: 8, fill: '#000', datum: { i } }));
-        const scene = { width: 800, height: 600, items: [{ marktype: 'rect', items: [{ x: -1e6, y: -1e6, width: 2e6, height: 2e6, fill: '#ccc', datum: { i: 'huge' } }, ...small] }] };
+        const scene = { width: 800, height: 600, items: [{ marktype: 'rect', items: [
+          // vega paints rect items in data order (the later datum on top): the backdrop comes first
+          { x: -1e6, y: -1e6, width: 2e6, height: 2e6, fill: '#ccc', datum: { i: 'huge' } }, ...small,
+          { x: 1e12, y: 1e12, width: 5, height: 5, fill: '#f00', datum: { i: 'far' } }] }] };
         const index = buildHitIndex(scene);
-        const a = index.queryMark(4, 4)?.item.datum.i;
-        const b = index.queryMark(700, 500)?.item.datum.i;
-        console.log(JSON.stringify([a, b]));
+        console.log(JSON.stringify([
+          index.queryMark(4, 4)?.item.datum.i,            // a small rect paints above the backdrop
+          index.queryMark(700, 500)?.item.datum.i,         // only the backdrop is there
+          index.queryMark(5000, 5000)?.item.datum.i,       // outside the view, still inside the backdrop
+          index.queryMark(1e12 + 2, 1e12 + 2)?.item.datum.i ?? null,
+          index.queryMark(NaN, 3) ?? null,
+        ]));
       `
       res = spawnSync(process.execPath, ['--max-old-space-size=256', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 60_000 })
     } finally {
@@ -348,6 +341,6 @@ describe('hit grid memory (audit C41)', () => {
     }
     expect(String(res.stderr), 'child stderr').not.toMatch(/heap limit|out of memory/i)
     expect(res.status, `child exit (${res.signal ?? ''}) ${String(res.stderr).slice(0, 300)}`).toBe(0)
-    expect(JSON.parse(String(res.stdout).trim().split('\n').pop()!)).toEqual([0, 'huge'])
+    expect(JSON.parse(String(res.stdout).trim().split('\n').pop()!)).toEqual([0, 'huge', 'huge', 'far', null])
   }, 90_000)
 })
