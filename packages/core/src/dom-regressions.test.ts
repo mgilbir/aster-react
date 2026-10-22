@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest'
 import { compileChart, evaluateChart, renderSceneToSvg } from './index.js'
 import { patchSceneDom, renderSceneToDomElement, sceneToDomDesc } from './addon-dom.js'
 import { canon, firstDomDiff, parityDiff, parseSvg } from './dom-canon.testlib.js'
+import { PairAttrSink, StringAttrSink } from './render.js'
 import type { SceneGroup, SceneRoot } from './types.js'
 
 const NS = 'http://www.w3.org/2000/svg'
@@ -190,3 +191,25 @@ describe('C43: the DOM descriptor and the string renderer take one attribute lis
   })
 })
 
+
+describe('C43: the two sinks apply the same value rules', () => {
+  const values: unknown[] = [
+    undefined, null, 'transparent', 'red', '', 0, 3, -2.5, 1e21, Number.NaN, Infinity, true, false, [], [1, 2], [3, 'a&b', '"'],
+    'a&b<c>"d\'e\tf\ng', '\u0000\uD800x', { gradient: 'g1' },
+  ]
+  for (const name of ['fill', 'stroke', 'opacity', 'stroke-dasharray', 'font-family']) {
+    it(`attribute ${name}`, () => {
+      for (const value of values) {
+        const str = new StringAttrSink()
+        const pair = new PairAttrSink()
+        str.a(name, value)
+        pair.a(name, value)
+        // parse the string sink's output back with a real XML parser: same name, same decoded value
+        const doc = parseSvg(`<svg xmlns="http://www.w3.org/2000/svg"><g${str.s}/></svg>`)
+        const el = doc.firstElementChild!
+        const got = [...el.attributes].map((a) => [a.name, a.value])
+        expect(got, `${name}=${String(value)}`).toEqual(pair.out.map(([k, v]) => [k, v.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '\uFFFD').replace(/[\uD800-\uDFFF]/g, '\uFFFD')]))
+      }
+    })
+  }
+})
