@@ -57,7 +57,7 @@ export interface ScaleContext {
 /** Continuous types (the runtime's domain census and gradient legends key on these). */
 export const CONTINUOUS_TYPES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential', 'quantize'])
 
-/** vega-encode's parameter object (`_`): prototype-less, spec keys are data. */
+/** vega-encode's parameter object (`_`); spec keys are data (see parseScale for how they are admitted). */
 type Params = Record<string, unknown>
 
 const DEFAULT_COUNT = 5
@@ -323,14 +323,17 @@ function ordinalMultipleDomain(domain: { sort?: unknown }, ctx: ScaleContext, fi
 
 // ---- range (vega-parser parseScaleRange) --------------------------------------------
 
-function parseScaleRange(spec: CompiledScale, ctx: ScaleContext, params: Params, config: Record<string, unknown>, depth = 0): unknown {
+function parseScaleRange(spec: CompiledScale, ctx: ScaleContext, params: Params, userConfig: Record<string, unknown> | undefined, depth = 0): unknown {
   let range: unknown = spec.range
   const r = range as { signal?: unknown; scheme?: unknown; extent?: unknown; count?: unknown; step?: unknown }
   if (r && r.signal) return signalValue(String(r.signal), ctx)
   if (isString(range)) {
-    if (hasOwnProperty(config, range)) {
+    // config.range (the user's block over vega's defaults) names the range; a user key replaces the default entry
+    const inUser = userConfig != null && hasOwnProperty(userConfig, range)
+    if (inUser || hasOwnProperty(DEFAULT_CONFIG_RANGE, range)) {
       if (depth > 32) raise('Scale range lookup cycles through config.range: ' + range)
-      return parseScaleRange({ ...spec, range: config[range] as CompiledScale['range'] }, ctx, params, config, depth + 1)
+      const entry = inUser ? userConfig![range] : DEFAULT_CONFIG_RANGE[range]
+      return parseScaleRange({ ...spec, range: entry as CompiledScale['range'] }, ctx, params, userConfig, depth + 1)
     } else if (range === 'width') {
       range = [0, ctx.width]
     } else if (range === 'height') {
@@ -368,13 +371,16 @@ const SKIP = new Set([
 function parseScale(spec: CompiledScale, ctx: ScaleContext): Params {
   const type = spec.type || 'linear'
   if (!vs.isValidScaleType(type)) raise('Unrecognized scale type: ' + JSON.stringify(type))
-  const s = { ...spec, type } as CompiledScale & Record<string, unknown>
-  const params: Params = Object.create(null)
+  // the spec itself, read as `type`-defaulted: copying it per build costs more than the build of a literal scale
+  const s = (spec.type ? spec : { ...spec, type }) as CompiledScale & Record<string, unknown>
+  // a plain object (cheaper than a dictionary-mode one on every build): the keys the spec
+  // contributes are copied through below with `__proto__` refused, and nothing reads a name
+  // the prototype also has
+  const params: Params = {}
   params.type = type
   params.domain = parseScaleDomain(s.domain, s, ctx)
-  const config: Record<string, unknown> = Object.assign(Object.create(null), DEFAULT_CONFIG_RANGE, ctx.configRange)
 
-  if (s.range != null) params.range = parseScaleRange(s, ctx, params, config)
+  if (s.range != null) params.range = parseScaleRange(s, ctx, params, ctx.configRange)
 
   if (s.interpolate != null) {
     const ip = s.interpolate as { type?: unknown; gamma?: unknown }
@@ -400,7 +406,7 @@ function parseScale(spec: CompiledScale, ctx: ScaleContext): Params {
 
   // everything else is copied through (parseLiteral), in spec order
   for (const key of Object.keys(s)) {
-    if (hasOwnProperty(params, key) || key === 'name') continue
+    if (hasOwnProperty(params, key) || key === 'name' || key === '__proto__') continue
     if (s[key] === undefined) continue
     params[key] = parseLiteral(s[key], ctx)
   }
