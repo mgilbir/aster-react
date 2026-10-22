@@ -65,12 +65,17 @@ async function runOne(entry: CorpusEntry): Promise<{ pass: boolean; diffs: strin
 }
 
 export async function runCorpus(): Promise<boolean> {
-  const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus')
+  // ASTER_CORPUS_DIR picks another corpus directory (relative to the package),
+  // e.g. `corpus-tz` for the time-zone matrix; the default is the main corpus.
+  const dir = join(dirname(fileURLToPath(import.meta.url)), '..', process.env.ASTER_CORPUS_DIR ?? 'corpus')
   if (!existsSync(dir)) {
     console.error(`[conformance] corpus directory not found: ${dir}`)
     return false
   }
   const entries = loadCorpus(dir)
+  // ASTER_CORPUS_FILTER narrows to names matching a regular expression (local debugging)
+  const filter = process.env.ASTER_CORPUS_FILTER ? new RegExp(process.env.ASTER_CORPUS_FILTER) : null
+  if (filter) entries.splice(0, entries.length, ...entries.filter((e) => filter.test(e.name)))
   if (!entries.length) {
     console.error('[conformance] corpus is empty')
     return false

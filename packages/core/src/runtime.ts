@@ -5738,13 +5738,26 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   return undefined
 }
 
+/**
+ * Which calendar a label is formatted in, vega-scale `tickFormat`'s precedence: a
+ * `time` scale / formatType is local time, then a `utc` scale / formatType is UTC.
+ * (A UTC scale formatted in local time shifts every label by the viewer's offset.)
+ */
+function calendarOf(scaleType: string | undefined, formatType: unknown): 'time' | 'utc' | undefined {
+  if (scaleType === 'time' || formatType === 'time') return 'time'
+  if (scaleType === 'utc' || formatType === 'utc') return 'utc'
+  return undefined
+}
+
 function formatValue(v: unknown, spec: EncodeValue): unknown {
   const format = (spec as { format?: unknown }).format
   const formatType = (spec as { formatType?: unknown }).formatType
   if (format === undefined) return v
   const fmt = format as string
   const L = locale(undefined)
-  if (formatType === 'time' || v instanceof Date) return L.timeFormat(fmt)(v as Date)
+  const cal = calendarOf(undefined, formatType)
+  if (cal === 'utc') return L.utcFormat(fmt)(v as Date)
+  if (cal === 'time' || v instanceof Date) return L.timeFormat(fmt)(v as Date)
   return L.format(fmt)(v as number)
 }
 
@@ -5809,7 +5822,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const L = locale(undefined)
     let fmt = (legend as { format?: unknown }).format
     const fmtType = (legend as { formatType?: unknown }).formatType
-    if (v == null) return fmtType === 'time' ? '' : String(v)
+    if (v == null) return fmtType === 'time' || fmtType === 'utc' ? '' : String(v)
     if (fmt != null && typeof fmt === 'object' && 'signal' in (fmt as Record<string, unknown>)) {
       const sig = String((fmt as { signal: string }).signal)
       try {
@@ -5820,9 +5833,11 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         fmt = evalTimeUnitSpecifier(sig)
       }
     }
-    if (fmtType === 'time' || v instanceof Date) {
+    const cal = calendarOf(ctx.scaleTypes.get(scaleName), fmtType) ?? (v instanceof Date ? 'time' : undefined)
+    if (cal) {
       const d = v instanceof Date ? v : new Date(Number(v))
-      return L.timeFormat(typeof fmt === 'string' ? fmt : '%b %d, %Y')(d)
+      const spec = typeof fmt === 'string' ? fmt : '%b %d, %Y'
+      return (cal === 'utc' ? L.utcFormat(spec) : L.timeFormat(spec))(d)
     }
     if (fmt !== undefined) return L.format(String(fmt))(typeof v === 'number' ? v : Number(v))
     // A continuous legend without an explicit format delegates to the scale's
@@ -5954,13 +5969,14 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       }
     }
     const legendFormatType = (legend as { formatType?: unknown }).formatType
-    const legendTimeFormat = legendFormatType === 'time' || scaleType === 'time' || scaleType === 'utc'
+    const legendCalendar = calendarOf(scaleType, legendFormatType)
     const makeGradientFmt = (defaultFmt: string): ((v: unknown) => string) => {
       const L = locale(undefined)
       let base: (v: unknown) => string
-      if (legendTimeFormat) {
+      if (legendCalendar) {
         const fmt = resolvedLegendFormat ?? defaultFmt
-        base = (v: unknown) => L.timeFormat(fmt)(v instanceof Date ? v : new Date(Number(v)))
+        const format = legendCalendar === 'utc' ? L.utcFormat(fmt) : L.timeFormat(fmt)
+        base = (v: unknown) => format(v instanceof Date ? v : new Date(Number(v)))
       } else if (resolvedLegendFormat) {
         base = (v: unknown) => L.format(resolvedLegendFormat)(typeof v === 'number' ? v : Number(v))
       } else {
@@ -7970,13 +7986,15 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: 
       }
     }
   }
-  if (fmtType === 'time' || scale.type === 'time' || scale.type === 'utc') {
+  const calendar = calendarOf(scale.type, fmtType)
+  if (calendar) {
     const L = locale(undefined)
     // With no explicit format vega uses the time multi-format, which picks a
     // specifier per tick interval (e.g. '%B' for month ticks, '%b %d' for
     // day/week ticks). The `undefined` argument is passed explicitly to satisfy
     // the strict local type shim for vega-format.
-    return wrapLabelExpr(fmt ? L.timeFormat(fmt) : L.timeFormat(undefined as unknown as string))
+    const timeFormatter = calendar === 'utc' ? L.utcFormat : L.timeFormat
+    return wrapLabelExpr(fmt ? timeFormatter(fmt) : timeFormatter(undefined as unknown as string))
   }
   if (scale.type !== 'linear' && scale.type !== 'log' && scale.type !== 'pow' && scale.type !== 'sqrt' && scale.type !== 'symlog') {
     // vega applies an inherited numeric format specifier even to band/point

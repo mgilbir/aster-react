@@ -1,0 +1,37 @@
+{
+ "$schema": "https://vega.github.io/schema/vega/v6.json",
+ "width": 400,
+ "height": 200,
+ "padding": 5,
+ "autosize": "none",
+ "background": "white",
+ "scales": [
+  {
+   "name": "x",
+   "type": "linear",
+   "domain": [
+    1704067200000,
+    1704326400000
+   ],
+   "range": "width"
+  },
+  {
+   "name": "y",
+   "type": "linear",
+   "domain": [
+    0,
+    10
+   ],
+   "range": "height"
+  }
+ ],
+ "axes": [
+  {
+   "scale": "x",
+   "orient": "bottom",
+   "format": "%Y-%m-%d %H:%M",
+   "formatType": "time",
+   "tickCount": 4
+  }
+ ]
+}

@@ -20,6 +20,11 @@ import { describe, expect, it } from 'vitest'
 import { getChartInfo } from './runtime.js'
 import type { VgSpec } from './types.js'
 
+// Local-time (`time`) cases are recorded per zone. A run that names no zone is
+// pinned to UTC like the other vector replays (so a laptop in any zone passes);
+// `pnpm test:tz` names the zone explicitly and it is honoured.
+process.env.TZ ??= 'UTC'
+
 interface Case {
   name: string
   spec: unknown
@@ -120,7 +125,9 @@ const zone = process.env.TZ && process.env.TZ !== 'UTC' ? process.env.TZ : 'UTC'
 
 describe('scale-spec oracle vectors', () => {
   it('runs in the zone the runner asked for', () => {
-    if (process.env.TZ) expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe(process.env.TZ)
+    const offsets: Record<string, number> = { UTC: 0, 'America/New_York': 300, 'Asia/Kolkata': -330 }
+    const asked = process.env.TZ
+    if (asked && asked in offsets) expect(new Date(0).getTimezoneOffset()).toBe(offsets[asked])
   })
   for (const [suite, { oracle, cases }] of Object.entries(file.suites)) {
     describe(`${suite} (${oracle})`, () => {

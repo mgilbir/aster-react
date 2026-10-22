@@ -28,6 +28,7 @@ export const GATES = [
   { name: 'deps', args: ['check:deps'], why: 'runtime and built dist import none of vega/d3/topojson' },
   { name: 'typecheck', args: ['typecheck'], why: 'all workspaces typecheck' },
   { name: 'test', args: ['test'], why: 'unit, React interaction/SSR/a11y, script tests' },
+  { name: 'tz-matrix', args: ['test:tz'], why: 'zone-sensitive tests and the time-zone corpus under non-UTC zones (UTC labels, local time scales)' },
   { name: 'verify-publish', args: ['verify:publish'], why: 'packed tarballs: licences, exports, consumer smoke test' },
   {
     name: 'incremental-append', args: ['bench:incremental', '--', '--points=10000', '--reps=30'],
