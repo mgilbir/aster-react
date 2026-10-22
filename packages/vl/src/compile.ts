@@ -281,7 +281,10 @@ function compileLayered(spec: VLSpec): VLSpec {
     )
     for (const a of buildAxes(axisFields, base.mark, base.orient, scales as ScaleSpec[], undefined, ch === 'x' && indepY ? `layer_${firstYLayer}_y` : undefined)) axes.push(a)
   }
-  if (axes.length) out.axes = axes
+  // vega-lite assembles every grid axis before every main axis (grids paint
+  // under the marks and under the other channel's domain). The per-channel
+  // loop above emits [grid, main] pairs, so stable-partition them.
+  if (axes.length) out.axes = [...axes.filter((a) => a.grid === true), ...axes.filter((a) => a.grid !== true)]
   const legends: Record<string, unknown>[] = []
   for (const p of parsed) {
     for (const lg of buildLegends(
@@ -2443,7 +2446,8 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
         maxExtent: 0,
         minExtent: 0,
         ticks: false,
-        zindex: 0,
+        // vega-lite: getFirstDefined(axis.zindex, 0) — grid behind marks
+        zindex: typeof userAxis.zindex === 'number' ? userAxis.zindex : 0,
       }
       if (def.timeUnit) {
         const stepExpr = timeUnitMinStepSignal(def.timeUnit)
@@ -2464,7 +2468,11 @@ function buildAxes(fields: FieldDef[], mark: string, orient: string, scales: Sca
       scale: scaleName ?? def.channel,
       orient: orientSide,
       grid: false,
-      zindex: 0,
+      // vega-lite defaultZindex(): a rect mark over a discrete field puts its
+      // axis above the marks (zindex 1); otherwise 0. An explicit zindex wins.
+      zindex: typeof userAxis.zindex === 'number'
+        ? userAxis.zindex
+        : mark === 'rect' && (def.type === 'nominal' || def.type === 'ordinal' || (def.type === 'quantitative' && !!def.bin)) ? 1 : 0,
     }
     if (title !== null) labelAxis.title = title
     if (isContinuousScaleType(sc.type)) {
