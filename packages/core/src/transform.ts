@@ -911,7 +911,11 @@ function stackRows(rows: Row[], t: Extract<CompiledTransform, { type: 'stack' }>
     if (s > max) max = s
   }
 
-  const out: Row[] = []
+  // vega's Stack writes the start/end fields onto each tuple IN PLACE: the
+  // groups and `sort` only drive the offsets, the output keeps the input
+  // (pulse) order. Emitting group by group would repaint overlapping stacked
+  // marks in another order than the oracle.
+  const placed = new Map<Row, [number, number]>()
   for (let gi = 0; gi < groups.length; gi++) {
     const ordered = sortRows(groups[gi]!, t.sort)
     const total = sums[gi]!
@@ -921,14 +925,14 @@ function stackRows(rows: Row[], t: Extract<CompiledTransform, { type: 'stack' }>
       for (const r of ordered) {
         const start = last
         const end = (last += scale * Math.abs(Number(r[t.field]) || 0))
-        out.push({ ...r, [startField]: start, [endField]: end })
+        placed.set(r, [start, end])
       }
     } else if (t.offset === 'center') {
       let last = (max - total) / 2
       for (const r of ordered) {
         const start = last
         const end = (last += Math.abs(Number(r[t.field]) || 0))
-        out.push({ ...r, [startField]: start, [endField]: end })
+        placed.set(r, [start, end])
       }
     } else {
       let lastPos = 0
@@ -938,16 +942,19 @@ function stackRows(rows: Row[], t: Extract<CompiledTransform, { type: 'stack' }>
         if (v < 0) {
           const start = lastNeg
           const end = (lastNeg += v)
-          out.push({ ...r, [startField]: start, [endField]: end })
+          placed.set(r, [start, end])
         } else {
           const start = lastPos
           const end = (lastPos += v)
-          out.push({ ...r, [startField]: start, [endField]: end })
+          placed.set(r, [start, end])
         }
       }
     }
   }
-  return out
+  return rows.map((r) => {
+    const se = placed.get(r)
+    return se ? { ...r, [startField]: se[0], [endField]: se[1] } : r
+  })
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@
  * achieved by running vega-lite.compile in the app build / dev (oracle).
  */
 import { dict, ownGet } from './util.js'
+import { mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
 import type {
   CompiledAxis,
   CompiledChart,
@@ -25,10 +26,14 @@ import type {
 
 export type { SizeSpec }
 
-export function compileChart(spec: VgSpec): CompiledChart {
-  if (!spec || typeof spec !== 'object') {
+export function compileChart(rawSpec: VgSpec): CompiledChart {
+  if (!rawSpec || typeof rawSpec !== 'object') {
     throw new Error('[aster] compileChart expects a Vega spec object')
   }
+  // Vega parses a view with mergeConfig(defaultConfig(), spec.config): every
+  // default below (mark, axis, legend, title, style, range...) is read from this
+  // merged config, exactly as upstream does (see config-defaults.ts).
+  const spec: VgSpec = { ...rawSpec, config: mergeVegaConfig(vegaDefaultConfig(), rawSpec.config as Record<string, unknown> | undefined) as VgSpec['config'] }
 
   const signalDefs = compileSignalDefs(spec.signals as Array<Record<string, unknown>> | undefined)
   const signals = resolveSignals(signalDefs)
@@ -53,8 +58,12 @@ export function compileChart(spec: VgSpec): CompiledChart {
   const frameOpacity = resolveFrameNumber(spec, 'opacity')
   const frameStrokeDash = resolveFrameDash(spec)
   const frameCornerRadius = resolveFrameNumber(spec, 'cornerRadius')
-  const cfgCell = (cfg.style as { cell?: Record<string, unknown> } | undefined)?.cell
-  const frameClip = cfgCell?.clip === true
+  const frameClip = frameStyleValue(spec, 'clip') === true
+  const frameStrokeOpacity = resolveFrameNumber(spec, 'strokeOpacity')
+  const frameStrokeMiterLimit = resolveFrameNumber(spec, 'strokeMiterLimit')
+  const frameStrokeDashOffset = resolveFrameNumber(spec, 'strokeDashOffset')
+  const frameStrokeCap = resolveFrameString(spec, 'strokeCap')
+  const frameStrokeJoin = resolveFrameString(spec, 'strokeJoin')
   const autosize = resolveAutosize(spec.autosize)
   const configRange = (cfg as { range?: Record<string, unknown> }).range
   const autosizeContains = spec.autosize && typeof spec.autosize === 'object'
@@ -123,6 +132,11 @@ export function compileChart(spec: VgSpec): CompiledChart {
     frameStrokeDash,
     frameCornerRadius,
     frameClip,
+    frameStrokeOpacity,
+    frameStrokeMiterLimit,
+    frameStrokeDashOffset,
+    frameStrokeCap,
+    frameStrokeJoin,
     data,
     scales,
     axes,
@@ -194,37 +208,49 @@ function resolveAutosize(value: unknown): string | undefined {
   return undefined
 }
 
-/** The cell background fill (config.view.fill → config.style.cell.fill). */
+/**
+ * The root frame's style value for `prop`, resolved the way vega-parser's
+ * `applyDefaults` does for the frame role: `config.group` first, then each
+ * entry of the view's `style` list in order (later styles win). `config.view`
+ * is NOT a Vega config key (Vega-Lite folds its view config into `style.cell`),
+ * and a `cell` style only applies when the spec asks for it.
+ */
+function frameStyleValue(spec: VgSpec, prop: string): unknown {
+  const config = spec.config as { group?: Record<string, unknown> | null; style?: Record<string, Record<string, unknown>> } | undefined
+  const style = spec.style
+  const names = Array.isArray(style) ? style : style ? [style] : []
+  let v: unknown = config?.group?.[prop]
+  for (const name of names) {
+    const block = config?.style?.[String(name)]
+    if (block && prop in block) v = block[prop]
+  }
+  return v
+}
+
+/** The cell background fill. */
 function resolveFrameFill(spec: VgSpec): string | undefined {
-  const config = spec.config as { view?: { fill?: unknown }; style?: { cell?: { fill?: unknown } } } | undefined
-  const fill = typeof config?.style?.cell?.fill === 'string' ? config.style.cell.fill
-    : typeof config?.view?.fill === 'string' ? config.view.fill : undefined
-  return fill === 'transparent' ? undefined : fill
+  const fill = frameStyleValue(spec, 'fill')
+  return typeof fill === 'string' && fill !== 'transparent' ? fill : undefined
 }
 
 function resolveFrameStroke(spec: VgSpec): string | undefined {
-  const style = spec.style
-  const hasCell = Array.isArray(style) ? style.includes('cell') : style === 'cell'
-  const config = spec.config as { view?: { stroke?: unknown }; style?: { cell?: { stroke?: unknown } } } | undefined
-  // the cell style's stroke (config.view.stroke → config.style.cell.stroke)
-  // overrides vega's default #ddd frame
-  const cellStroke = typeof config?.style?.cell?.stroke === 'string' ? config.style.cell.stroke : undefined
-  if (hasCell) return cellStroke === 'transparent' ? undefined : cellStroke ?? '#ddd'
-  const viewStroke = config?.view?.stroke
-  const stroke = typeof viewStroke === 'string' ? viewStroke : cellStroke
+  const stroke = frameStyleValue(spec, 'stroke')
   // Vega serializes a 'transparent' frame stroke as no stroke at all.
-  return stroke === 'transparent' ? undefined : stroke
+  return typeof stroke === 'string' && stroke !== 'transparent' ? stroke : undefined
 }
 
 function resolveFrameNumber(spec: VgSpec, prop: string): number | undefined {
-  const config = spec.config as { view?: Record<string, unknown>; style?: { cell?: Record<string, unknown> } } | undefined
-  const v = config?.style?.cell?.[prop] ?? config?.view?.[prop]
+  const v = frameStyleValue(spec, prop)
   return typeof v === 'number' ? v : undefined
 }
 
+function resolveFrameString(spec: VgSpec, prop: string): string | undefined {
+  const v = frameStyleValue(spec, prop)
+  return typeof v === 'string' ? v : undefined
+}
+
 function resolveFrameDash(spec: VgSpec): number[] | undefined {
-  const config = spec.config as { view?: Record<string, unknown>; style?: { cell?: Record<string, unknown> } } | undefined
-  const v = config?.style?.cell?.strokeDash ?? config?.view?.strokeDash
+  const v = frameStyleValue(spec, 'strokeDash')
   return Array.isArray(v) ? v.map(Number) : undefined
 }
 
@@ -348,6 +374,13 @@ function compileAxis(a: Record<string, unknown>): CompiledAxis {
   for (const key of ['grid', 'gridColor', 'gridWidth', 'gridDash', 'gridOpacity', 'gridCap', 'gridScale', 'domain', 'labels', 'ticks', 'tickCount', 'tickMinStep', 'tickSize', 'title', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleAngle', 'titleAlign', 'titleBaseline', 'titleX', 'titleY', 'labelAlign', 'labelBaseline', 'labelFlush', 'labelFlushOffset', 'labelOverlap', 'labelSeparation', 'labelPadding', 'labelAngle', 'labelOffset', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelFont', 'labelFontStyle', 'labelFontWeight', 'labelLimit', 'labelExpr', 'bandPosition', 'tickColor', 'tickWidth', 'tickDash', 'tickOffset', 'tickRound', 'tickExtra', 'domainColor', 'domainWidth', 'domainDash', 'domainOpacity', 'domainCap', 'maxExtent', 'minExtent', 'titleAnchor', 'titleLimit', 'titleFont', 'titleLineHeight', 'translate', 'position', 'offset', 'tickBand', 'format', 'formatType', 'zindex', 'values', 'aria', 'description'] as const) {
     if (a[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = a[key]
   }
+  // Every other axis property vega defines (tickCap, tickOpacity, *DashOffset,
+  // titleFontStyle, ...) is carried too: a whitelist silently dropped whatever
+  // it forgot, and nothing reported it.
+  for (const key of Object.keys(a)) {
+    if (key === 'encode' || key === 'scale' || key === 'orient') continue
+    if (a[key] !== undefined && !Object.hasOwn(out, key)) (out as unknown as Record<string, unknown>)[key] = a[key]
+  }
   if (a.encode !== undefined) out.encode = a.encode as CompiledAxis['encode']
   return out
 }
@@ -356,6 +389,12 @@ function compileLegend(l: Record<string, unknown>): CompiledLegend {
   const out: CompiledLegend = {}
   for (const key of ['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeDash', 'disable', 'strokeWidth', 'orient', 'direction', 'columns', 'title', 'offset', 'padding', 'gradientLength', 'gradientThickness', 'gradientStrokeColor', 'gradientStrokeWidth', 'gradientOpacity', 'symbolSize', 'symbolType', 'zindex', 'type', 'tickCount', 'tickMinStep', 'symbolStrokeWidth', 'symbolOffset', 'symbolOpacity', 'symbolDash', 'symbolStrokeColor', 'labelAlign', 'labelBaseline', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelFontWeight', 'labelFontStyle', 'labelFont', 'labelOffset', 'labelLimit', 'labelSeparation', 'rowPadding', 'columnPadding', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleBaseline', 'titleAlign', 'titleAnchor', 'titleAngle', 'titleOrient', 'titleLimit', 'titleFont', 'titleLineHeight', 'gridAlign', 'clipHeight', 'cornerRadius', 'fillColor', 'strokeColor', 'labelOverlap', 'symbolLimit', 'legendX', 'legendY', 'format', 'formatType', 'labelExpr', 'values', 'aria', 'layout'] as const) {
     if (l[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = l[key]
+  }
+  // every other legend property vega defines is carried too (titleFontStyle, ...):
+  // a whitelist silently dropped whatever it forgot
+  for (const key of Object.keys(l)) {
+    if (key === 'encode') continue
+    if (l[key] !== undefined && !Object.hasOwn(out, key)) (out as unknown as Record<string, unknown>)[key] = l[key]
   }
   if (l.encode !== undefined) out.encode = l.encode as CompiledLegend['encode']
   return out
@@ -424,6 +463,12 @@ function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string
       if (k in defaults && !(k in o)) delete out[k]
     }
   }
+  // Some vega guide properties are read from the guide's OWN spec rather than
+  // through the config lookup (axis-grid reads `spec.offset` while the axis layout
+  // reads the config-merged one; gradient legend labels read `spec.labelOffset`
+  // with `config.gradientLabelOffset` as their fallback, not `config.labelOffset`).
+  // Keep the guide's own properties apart from the config-merged ones.
+  out.own = o
   return out
 }
 
@@ -495,6 +540,13 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
   // enter mark but not a Vega-Lite update mark.
   const updateOnly = enc.enter == null
   const spatialKeys = new Set(['x', 'y', 'x2', 'y2', 'xc', 'yc', 'width', 'height'])
+  // Sources accumulate into `defaults` with increasing precedence (a later
+  // style overrides an earlier source's value); only the mark's OWN encode
+  // suppresses a default. Writing straight into `update` made the first source
+  // that set a channel (e.g. config.symbol.size) shadow every later style
+  // (style point's size), which vega's applyDefaults does not do.
+  const own = new Set(Object.keys(update))
+  const defaults: Record<string, EncodeValue | EncodeValue[]> = {}
   for (const { props, pairGuard } of sources) {
     for (const [k, v] of Object.entries(props)) {
       if (k === 'name' || k === 'interactive' || k === 'zindex' || k === 'style') continue
@@ -502,17 +554,18 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
       if (isRule && (k === 'xc' || k === 'yc')) continue
       if (isSymbol && symbolInert.has(k)) continue
       if (isRectLike && rectInert.has(k)) continue
-      let skip = k in update
+      let skip = own.has(k)
       if (!skip && pairGuard && (k === 'fill' || k === 'stroke')) {
-        skip = 'fill' in update || 'stroke' in update
+        skip = own.has('fill') || own.has('stroke')
       }
       if (!skip) {
-        update[k] = (v && typeof v === 'object' && ('value' in v || 'signal' in v || 'field' in v))
+        defaults[k] = (v && typeof v === 'object' && ('value' in v || 'signal' in v || 'field' in v))
           ? (v as EncodeValue)
           : { value: v }
       }
     }
   }
+  Object.assign(update, defaults)
 }
 
 function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>): CompiledMark {
