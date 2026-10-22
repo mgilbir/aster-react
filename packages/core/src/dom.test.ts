@@ -193,3 +193,81 @@ describe('patchSceneDom append fast path', () => {
       .toEqual([...refLast.attributes].map((a) => [a.name, a.value]).sort())
   })
 })
+
+describe('denseMarks batching', () => {
+  const denseSpec = (n: number, extra: Record<string, unknown> = {}, translucent = false) => ({
+    width: 400, height: 300, padding: 0, autosize: 'none',
+    data: [{ name: 't', values: Array.from({ length: n }, (_, i) => ({ x: (i * 37) % 400, y: (i * 23) % 300, ...(translucent && i < n / 5 ? { op: 0.5 } : {}) })) }],
+    scales: [
+      { name: 'x', type: 'linear', domain: [0, 400], range: [0, 400] },
+      { name: 'y', type: 'linear', domain: [0, 300], range: [300, 0] },
+    ],
+    marks: [{
+      type: 'symbol', from: { data: 't' },
+      encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 30 }, opacity: { field: 'op' }, ...extra } },
+    }],
+  })
+  const subpaths = (el: Element): number => {
+    let n = 0
+    for (const p of el.querySelectorAll('g.mark-symbol > path')) {
+      for (const ch of p.getAttribute('d') ?? '') if (ch === 'M' || ch === 'm') n++
+    }
+    return n
+  }
+
+  it('renders dense symbols as chunked absolute-coordinate paths', () => {
+    const scene = evaluateChart(compileChart(denseSpec(1000) as never))
+    const normal = renderSceneToDomElement(scene)
+    const batched = renderSceneToDomElement(scene, document, { denseMarks: true })
+    expect(normal.querySelectorAll('g.mark-symbol > path').length).toBe(1000)
+    const paths = batched.querySelectorAll('g.mark-symbol > path').length
+    expect(paths).toBeGreaterThan(0)
+    expect(paths).toBeLessThanOrEqual(8)
+    // Same geometry: one subpath per datum in both.
+    expect(subpaths(batched)).toBe(subpaths(normal))
+    // Positions are baked into `d`, so no per-item transform is emitted.
+    expect(batched.querySelector('g.mark-symbol > path')!.getAttribute('transform')).toBeNull()
+  })
+
+  it('keeps translucent items as individual elements', () => {
+    const scene = evaluateChart(compileChart(denseSpec(1000, {}, true) as never))
+    const batched = renderSceneToDomElement(scene, document, { denseMarks: true })
+    // 200 items have opacity 0.5 and must not be composited into a chunk.
+    const paths = [...batched.querySelectorAll('g.mark-symbol > path')]
+    expect(paths.length).toBeGreaterThanOrEqual(200)
+    expect(subpaths(batched)).toBe(1000)
+  })
+
+  it('appends into the last chunk without touching earlier ones', async () => {
+    const { createChartStream } = await import('./stream.js')
+    const spec = denseSpec(600)
+    const stream = createChartStream(spec as never, { capacity: 4 })
+    stream.push({ data: { t: (spec.data[0]!.values as Array<{ x: number; y: number }>) } })
+    const first = stream.flush()!
+    const svg = renderSceneToDomElement(first.scene, document, { denseMarks: true })
+    const group = svg.querySelector('g.mark-symbol')!
+    const before = [...group.children]
+    expect(before.length).toBeGreaterThan(0)
+
+    stream.push({ append: { t: [{ x: 5, y: 5 }] } })
+    const next = stream.flush()!
+    patchSceneDom(svg, next.scene, { denseMarks: true })
+
+    // 601 items still fill the same chunk count; earlier chunks keep their
+    // elements, only the tail chunk's `d` grows.
+    expect(group.children.length).toBe(before.length)
+    expect(group.children[0]).toBe(before[0])
+    if (before.length > 1) expect(group.children[1]).toBe(before[1])
+    const lastD = group.lastElementChild!.getAttribute('d')!
+    expect(lastD.split('M').length - 1).toBe(601 - (before.length - 1) * 256)
+  })
+})
+
+describe('translatePathData', () => {
+  it('translates absolute coordinates and leaves relative commands alone', async () => {
+    const { translatePathData } = await import('./addon-dom.js')
+    expect(translatePathData('M0,-3A3,3,0,1,1,0,3h2v-1z', 10, 20)).toBe('M10,17A3,3,0,1,1,10,23h2v-1z')
+    expect(translatePathData('M1,2L3,4C5,6,7,8,9,10Z', -1, 1)).toBe('M0,3L2,5C4,7,6,9,8,11Z')
+    expect(translatePathData('M1,2', 0, 0)).toBe('M1,2')
+  })
+})

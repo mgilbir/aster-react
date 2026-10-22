@@ -168,7 +168,11 @@ against Vega's own streaming API on the identical spec and rows
 10k points at one append/frame holds ~16.7 ms median frames with <1% long frames on
 both SVG and canvas (Vega: ~16.7 ms but 2.3–2.9% long frames on SVG and ~240 DOM
 mutations per append vs ~1); 100k points holds ~16.7 ms on canvas (incremental append painting) and ~77 ms on SVG per frame,
-where Vega's `view.change` needs ~170 ms, the remaining scaling boundary. The same
+where Vega's `view.change` needs ~170 ms. SVG is normally bound by per-node cost, so
+there is an opt-in way out: `<Chart denseMarks>` (or `<ChartStream denseMarks>`)
+renders dense symbols as ~400 chunked `<path>` elements instead of 100k transformed
+nodes — the same 100k stream then holds **~16.7 ms per frame with 0% long frames**
+(pixels gated by `pnpm conformance:batch`). The same
 workload with no paint (`pnpm bench:incremental`, `renderer: 'none'`) puts aster's
 append ~13x ahead of `view.change` at 10k and ~62x at 100k. The hooks (`useChartStream`, `useChartWorkerStream`) expose
 `push`, `flush`, `pause`/`resume`, `close`, `stats`, `pulse`, and worker

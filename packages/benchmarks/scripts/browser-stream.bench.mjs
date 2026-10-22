@@ -15,6 +15,7 @@
  * Run: pnpm bench:browser-stream [--points=10000,100000] [--seconds=3] [--batch=1]
  *                                [--engines=aster,vega] [--renderers=svg,canvas]
  *                                [--policies=microtask,raf] [--vega-modes=run,runAsync]
+ *                                [--dense=0,1]   (aster SVG, `denseMarks` batching)
  */
 import { build } from 'esbuild'
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs'
@@ -39,6 +40,8 @@ const POLICIES = {
   aster: arg('policies', 'microtask,raf').split(','),
   vega: arg('vega-modes', 'run,runAsync').split(','),
 }
+// Dense SVG marks: batch symbol marks into chunked <path> elements (opt-in).
+const DENSE = new Set(arg('dense', '0').split(',').filter((v) => v === '0' || v === '1'))
 
 ensureBuilt()
 rmSync(OUT_DIR, { recursive: true, force: true })
@@ -73,11 +76,11 @@ const out = []
 for (const points of POINTS) {
   for (const engine of ENGINES) {
     for (const renderer of RENDERERS) {
-      for (const policy of POLICIES[engine]) {
+      for (const policy of POLICIES[engine]) for (const dense of engine === 'aster' && renderer === 'svg' ? DENSE : ['0']) {
         await page.evaluate(() => window.__streamBench.reset())
         const r = await page.evaluate(
-          ([p, s, b, rr, pp, ee]) => window.__streamBench.frames(p, s, b, rr, pp, ee),
-          [points, SECONDS, BATCH, renderer, policy, engine],
+          ([p, s, b, rr, pp, ee, dd]) => window.__streamBench.frames(p, s, b, rr, pp, ee, dd === '1'),
+          [points, SECONDS, BATCH, renderer, policy, engine, dense],
         )
         const ft = r.frameTimes
         const long = ft.filter((t) => t > 21).length
@@ -89,13 +92,13 @@ for (const points of POINTS) {
           console.error(`  [warn] vega dataset has ${r.rows} rows, expected ${expectedRows}`)
         }
         out.push({
-          points, engine, renderer, policy,
+          points, engine, renderer, policy, dense,
           median: summary.median, p95: summary.p95,
           longShare: ft.length ? long / ft.length : 0,
           frames: ft.length, updates: r.updates, mutations: r.mutations, nodes: r.nodes,
         })
         await page.evaluate(() => window.__streamBench.reset())
-        console.log(`  ${engine}/${renderer}/${policy} @ ${points}: ${fmt(summary.median)} ms median, ${((long / Math.max(1, ft.length)) * 100).toFixed(1)}% long (${r.updates} appends)`)
+        console.log(`  ${engine}/${renderer}/${policy}${dense === '1' ? '/dense' : ''} @ ${points}: ${fmt(summary.median)} ms median, ${((long / Math.max(1, ft.length)) * 100).toFixed(1)}% long (${r.updates} appends, ${r.svgNodes} paths)`)
       }
     }
   }
@@ -107,9 +110,9 @@ rmSync(OUT_DIR, { recursive: true, force: true })
 console.log(
   table(
     `streaming append ${BATCH}/frame for ${SECONDS}s — aster vs vega view.change`,
-    ['points', 'engine', 'backend', 'flush', 'median frame', 'p95 frame', 'long >21ms', 'appends', 'mut/append', 'DOM nodes'],
+    ['points', 'engine', 'backend', 'flush', 'dense', 'median frame', 'p95 frame', 'long >21ms', 'appends', 'mut/append', 'DOM nodes'],
     out.map((r) => [
-      String(r.points), r.engine, r.renderer, r.policy,
+      String(r.points), r.engine, r.renderer, r.policy, r.dense === '1' ? 'yes' : 'no',
       `${fmt(r.median)} ms`, `${fmt(r.p95)} ms`,
       `${(r.longShare * 100).toFixed(1)}%`,
       String(r.updates),

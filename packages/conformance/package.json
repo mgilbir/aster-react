@@ -21,7 +21,8 @@
     "scene-diff": "tsx scripts/scene-diff.mts",
     "transform-matrix": "tsx scripts/transform-matrix.mts",
     "a11y-parity": "tsx scripts/a11y-parity.mts",
-    "conformance:canvas": "tsx scripts/browser-canvas-parity.mts"
+    "conformance:canvas": "tsx scripts/browser-canvas-parity.mts",
+    "conformance:batch": "tsx scripts/browser-svg-batch-parity.mts"
   },
   "dependencies": {
     "@aster/core": "workspace:*",

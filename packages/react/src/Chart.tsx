@@ -95,6 +95,16 @@ export interface ChartProps {
    * DOM). Selection brushing works in both.
    */
   renderer?: 'svg' | 'canvas'
+  /**
+   * Batch dense symbol marks into chunked `<path>` elements (SVG only). Opt-in:
+   * the DOM stops mirroring Vega's per-item structure (one element per datum),
+   * but the pixels are identical — 100k symbols become a few hundred paths,
+   * which is what keeps large SVG streams inside the frame budget. Tooltips,
+   * point selection and a11y resolve through the scene, so they keep working;
+   * per-mark `data-datum` attributes and spec `signal.on` mark events do not.
+   * Ignored for canvas (already batched) and for the server-rendered markup.
+   */
+  denseMarks?: boolean
   className?: string
   style?: React.CSSProperties
   signals?: Record<string, unknown>
@@ -405,6 +415,7 @@ function ChartView({
   maxZoom = 1000,
   incremental = true,
   renderer = 'svg',
+  denseMarks = false,
   signalListeners,
   onSignal,
   interactive = true,
@@ -457,6 +468,9 @@ function ChartView({
 
   const renderWidth = useOverrides ? width : measured.width
   const renderHeight = useOverrides ? height : measured.height
+
+  // Dense SVG marks: batched `<path>` chunks instead of one element per datum.
+  const denseSvg = denseMarks === true && renderer === 'svg'
 
   // `pan`/`zoom` are focused aliases for `panZoomEnabled`.
   const panZoomEnabled = panZoom || pan === true || zoom === true
@@ -634,13 +648,13 @@ function ChartView({
     if (incremental && existing && existing.tagName.toLowerCase() === 'svg') {
       // The DOM already reflects this exact scene (the commit that dropped the
       // markup prop): patching would re-walk everything to write nothing.
-      if (domSceneRef.current !== displayScene) patchSceneDom(existing, displayScene)
+      if (domSceneRef.current !== displayScene) patchSceneDom(existing, displayScene, { denseMarks: denseSvg })
     } else {
-      host.replaceChildren(renderSceneToDomElement(displayScene))
+      host.replaceChildren(renderSceneToDomElement(displayScene, document, { denseMarks: denseSvg }))
     }
     domSceneRef.current = displayScene
     hasPatchedRef.current = true
-  }, [incremental, displayScene, sceneOverride, domMarkup])
+  }, [incremental, displayScene, sceneOverride, domMarkup, denseSvg])
 
   // Canvas backend: size the backing store for devicePixelRatio and redraw the
   // whole scene whenever it changes (cheap relative to SVG serialization for
@@ -1054,8 +1068,8 @@ function ChartView({
     if (!tooltipEnabled) return
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return
-    if (renderer === 'canvas') {
-      // Canvas backend: resolve through the scene hit index.
+    if (renderer === 'canvas' || denseSvg) {
+      // Canvas backend (and batched SVG marks): resolve through the scene hit index.
       if (hitIndexRef.current.index == null || hitIndexRef.current.idx !== sceneGen) {
         hitIndexRef.current = displayScene ? { idx: sceneGen, index: buildHitIndex(displayScene) } : { idx: 0, index: null }
       }

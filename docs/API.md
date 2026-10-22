@@ -145,6 +145,14 @@ worker entry as well, since compilation happens there.
 The ref exposes `getScene()`, `getSvg()`, `getChartInfo()`, `getView()`, `setView()`,
 `resetView()`, `setSignal(name, value)` and `getSignals()`.
 
+`denseMarks` (SVG only, off by default) batches dense symbol marks into chunked
+`<path>` elements instead of one element per datum: 100k points become ~400 paths and
+a 100k-point stream drops from ~79 ms to ~17 ms per appended frame. Positions are
+baked into `d`, so the pixels match; tooltips, point selection and the a11y tree
+resolve through the scene. Per-mark `data-datum` attributes and spec `signal.on` mark
+events are not emitted in this mode, and the first client render uses the normal
+(hydration-safe) markup — streams and later updates are batched.
+
 Pan/zoom is driven through scale `domainRaw`: wheel, drag (shift-drag when selection
 is enabled), two-pointer pinch and the keyboard (`←/→/↑/↓`, `+`/`-`, `0`/`Home`,
 `Escape`). The same scale rebuild moves marks and all guides, on SVG and canvas.

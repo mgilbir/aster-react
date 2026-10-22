@@ -9,5 +9,12 @@
  *
  * A string-mode host (renderSpec → SVG string) never needs it.
  */
-export { patchSceneDom, renderSceneToDomElement, sceneToDomDesc, type DomDesc } from './dom.js'
+export {
+  patchSceneDom,
+  renderSceneToDomElement,
+  sceneToDomDesc,
+  translatePathData,
+  type DomDesc,
+  type DomRenderOptions,
+} from './dom.js'
 export { createChartSession, type ChartSession } from './session.js'

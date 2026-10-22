@@ -50,6 +50,16 @@
   hosts import the addon in the worker entry. `@aster/react` measures 136.0 kB gzip
   (Vega only) / 158.4 kB with the addon; the budget gate now covers both entries
   (160 kB each), replacing the single 159 kB budget that had 0.6 kB of headroom.
+- **Dense SVG marks (`denseMarks`)**: opt-in batched symbol rendering for large SVG
+  scenes. Dense symbol marks emit chunked `<path>` elements (positions baked into
+  `d`, ~256 items per chunk) instead of one transformed element per datum: 100k
+  points go from 100k DOM nodes to ~400, and a 100k-point append-per-frame SVG
+  stream from ~79ms to ~16.7ms (0% long frames). Chunks are cached per mark group
+  and only the tail chunk is re-serialized per append; translucent marks stay
+  per-item (compositing), rotated marks keep their element, and tooltips/point
+  selection/a11y resolve through the scene. New `pnpm conformance:batch` rasterizes
+  batched vs per-item DOMs and gates pixel parity. Symbol descriptor build is also
+  cached per group for the normal path (~5.3 → ~3.8ms `patchSceneDom` at 100k).
 - **Nested scopes / axes**: nested group marks now inherit outer scales (local names
   still shadow), so raw Vega specs that reference a parent `y` or colour scale render
   inside groups (population pyramid). Vega-Lite compilation now emits all grid axes

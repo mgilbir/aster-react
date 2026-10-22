@@ -30,7 +30,8 @@
     "sweep-signals": "pnpm --filter @aster/conformance run sweep-signals",
     "scene-diff": "pnpm --filter @aster/conformance run scene-diff",
     "transform-matrix": "pnpm --filter @aster/conformance run transform-matrix",
-    "a11y-parity": "pnpm --filter @aster/conformance run a11y-parity"
+    "a11y-parity": "pnpm --filter @aster/conformance run a11y-parity",
+    "conformance:batch": "pnpm --filter @aster/conformance run conformance:batch"
   },
   "devDependencies": {
     "esbuild": "~0.25.12",

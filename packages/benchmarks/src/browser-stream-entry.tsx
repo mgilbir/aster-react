@@ -71,6 +71,7 @@ async function mount(
   renderer: Renderer,
   flushPolicy: FlushPolicy,
   engine: Engine,
+  denseMarks = false,
 ): Promise<void> {
   teardown()
   const host = document.createElement('div')
@@ -96,6 +97,7 @@ async function mount(
         width={800}
         height={500}
         renderer={renderer}
+        denseMarks={denseMarks}
         a11y={false}
         streamOptions={{
           initial: { data: { t: rows(points) } },
@@ -131,8 +133,9 @@ async function frames(
   renderer: Renderer,
   flushPolicy: FlushPolicy,
   engine: Engine,
+  denseMarks = false,
 ) {
-  await mount(points, renderer, flushPolicy, engine)
+  await mount(points, renderer, flushPolicy, engine, denseMarks)
   const active = session!
   const host = active.host
   const ref = active.engine === 'aster' ? active.ref : null
@@ -174,6 +177,7 @@ async function frames(
     mutations,
     nodes: host.querySelectorAll('*').length,
     rows: rowsAppended,
+    svgNodes: host.querySelectorAll('svg path').length,
   }
 }
 

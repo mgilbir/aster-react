@@ -42,11 +42,12 @@ a chart pays only for the features it imports.
   appending one node to a 100k-node SVG costs ~45ms/frame in headless Chromium even
   with no framework involved, and ~145ms when every item carries a
   `transform="translate(…)"` (which is how Vega — and therefore aster — emits
-  symbols). `contain`/`content-visibility` do not help; fewer nodes or
-  absolute-coordinate items would, at the cost of SVG-DOM parity with Vega. The same benchmark now runs a
+  symbols). `contain`/`content-visibility` do not help; the opt-in `denseMarks` mode
+  does (fewer nodes, absolute coordinates — at the cost of SVG-DOM parity with Vega),
+  bringing the same stream to ~16.7ms. The same benchmark now runs a
   direct Vega baseline on the identical spec/rows
   (`view.change('t', changeset().insert(rows)).run()`): at 100k points it needs
-  ~170ms per frame on SVG (aster ~77ms, ~2.2x faster) and is frame-bound on canvas
+  ~170ms per frame on SVG (aster ~77ms, ~2.2x faster, ~17ms with `denseMarks`) and is frame-bound on canvas
   like aster; at 10k both are frame-bound, but Vega reports ~2.3% long frames and
   ~240 DOM mutations per append versus ~1 for aster. Compute only
   (`pnpm bench:incremental`, `renderer: 'none'`) aster's append is ~13x cheaper than
@@ -60,7 +61,18 @@ a chart pays only for the features it imports.
   attributes in place instead of re-parsing the tree. The mount commit skips the
   patcher (the browser just parsed that markup) and an append reuses the previous
   patch's descriptors as an identity prefix, so only the new items are created —
-  an O(appended) SVG patch, not a re-walk of every sibling.
+  an O(appended) SVG patch, not a re-walk of every sibling. Symbol descriptors are
+  cached per mark group, so an append rebuilds only new/dirty entries
+  (`patchSceneDom` at 100k: ~5.3 → ~3.8ms).
+- **Dense marks (`denseMarks`, opt-in)**: dense symbol marks render as chunked
+  `<path>` elements with the position baked into `d` instead of one transformed
+  element per datum. At 100k points this turns 100k DOM nodes into ~400 and a
+  one-append-per-frame SVG stream from ~79ms to **~16.7ms** (0% long frames),
+  matching canvas. Chunks are bounded (~256 items) and cached per group, so an
+  append re-serializes one chunk. Only opaque marks batch (translucency must
+  composite per item); rotated marks keep their own element. Tooltips/hit-testing
+  use the scene index; `pnpm conformance:batch` gates pixel parity against the
+  per-item rendering.
 - **No-op renders**: identical content is free all the way through — the session
   returns the cached scene, chart info/a11y derive from it, and the SVG/canvas
   effects skip the DOM/canvas when the scene object is unchanged.

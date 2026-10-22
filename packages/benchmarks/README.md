@@ -37,7 +37,8 @@ pnpm bench:browser-stream # per-frame append: aster <ChartStream> vs vega view.c
 ```
 
 Knobs (all runners): `--points=1000` (dataset size), `--reps=…`, `--kind=line,scatter,bar`
-(runtime/browser), `--cycles=…` (memory), `--seconds=3` (browser frame pacing).
+(runtime/browser), `--cycles=…` (memory), `--seconds=3` (browser frame pacing),
+`--dense=0,1` (streaming: aster SVG with `denseMarks` batching on/off).
 The browser runner needs a Chromium for Playwright (`npx playwright install chromium`).
 
 ## Interpreting
@@ -127,6 +128,8 @@ Headless Chromium, 1 append/frame for 3 s, 800×500 symbol chart, medians:
 | 20k | SVG | 16.6 ms, 2% long | 31.6 ms, 100% long | crossover: vega leaves the frame budget |
 | 50k | SVG | 44 ms, 95% long | 81 ms, 100% long | ~1.8x |
 | 100k | SVG | 77 ms, 94% long | 170 ms, 100% long | ~2.2x; a single append on a 100k chart writes ~400k DOM attributes (≈4 per node) vs 1 for aster |
+| 10k | SVG + `denseMarks` | **16.7 ms, 0% long** | 16.7 ms | 51 DOM nodes instead of 10,191 |
+| 100k | SVG + `denseMarks` | **16.7 ms, 0% long** | 170 ms | ~400 DOM paths instead of 100k; `--dense=1` |
 | 100k | canvas | 16.7 ms, 0% long | 16.7 ms (`run`) / 16.8 ms, 9.7% long (`runAsync`) | incremental append painting keeps both frame-bound |
 
 The mutation column is the interesting part of the SVG result: Vega's

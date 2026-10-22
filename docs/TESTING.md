@@ -11,13 +11,16 @@ pnpm conformance       # 419-spec real-Vega oracle SVG diff
 pnpm scene-diff        # R8.1–R8.3: resolved scales/groups/items per scope
 pnpm a11y-parity       # guide captions vs vega-scenegraph aria-label
 pnpm transform-matrix  # transform option combinations vs the Vega oracle
+pnpm conformance:batch # batched-SVG pixel parity (denseMarks vs per-item)
 pnpm sweep-vl          # 27,513-case Vega-Lite property sweep
 pnpm sweep-vega        # Vega schema sweep
 pnpm --filter @aster/benchmarks run budget  # per-entry bundle gates
 ```
 
 The browser gate (`pnpm conformance:browser`) runs the same oracle protocol in
-Chromium with live text metrics. `pnpm a11y-parity` checks every corpus guide caption
+Chromium with live text metrics. `pnpm conformance:batch` rasterizes the normal and
+`denseMarks` SVG DOMs of the same scene and diffs the pixels, so the batched path
+(which intentionally stops mirroring Vega's per-item DOM) cannot drift. `pnpm a11y-parity` checks every corpus guide caption
 against Vega's own `aria-label`; `pnpm transform-matrix` covers bin/window/stack/
 joinaggregate/impute/sequence/identifier/fold/flatten/pivot/lookup combinations. The scene differential compares the resolved scenes
 before serialization: scale domains/ranges/bandwidth per scope (including nested scopes),

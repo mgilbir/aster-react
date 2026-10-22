@@ -34,9 +34,270 @@ export interface DomDesc {
   /** @internal True when the underlying scene item was not touched this eval, so
    * the patcher can skip this subtree (its DOM already reflects it). */
   clean?: boolean
+  /** @internal True for a mark container whose children are batched paths; the
+   * patcher rebuilds the container when switching between per-item and batched. */
+  dense?: boolean
 }
 
 const str = (v: string | number | undefined): string => (typeof v === 'number' ? num(v) : String(v))
+
+/**
+ * Translate every absolute coordinate in an SVG path by (dx, dy). Relative
+ * commands are deltas and need no change. Used by the dense-mark batcher to
+ * bake a symbol's position into its `d` instead of emitting a per-item
+ * `transform` (Chrome makes transformed SVG nodes ~3x more expensive to
+ * mutate: 145ms vs 45ms per append in a 100k-node scene).
+ */
+const PATH_TOKEN = /([a-zA-Z])|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/g
+
+function round3(v: number): string {
+  const r = Math.round(v * 1000) / 1000
+  return Object.is(r, -0) ? '0' : String(r)
+}
+
+export function translatePathData(d: string, dx: number, dy: number): string {
+  if (!d || (dx === 0 && dy === 0)) return d
+  let out = ''
+  let cmd = ''
+  let argi = 0
+  let afterCommand = true
+  PATH_TOKEN.lastIndex = 0
+  for (let m = PATH_TOKEN.exec(d); m != null; m = PATH_TOKEN.exec(d)) {
+    const letter = m[1]
+    if (letter) {
+      cmd = letter
+      argi = 0
+      afterCommand = true
+      out += letter
+      continue
+    }
+    const v = Number(m[2])
+    let value = v
+    const relative = cmd !== '' && cmd === cmd.toLowerCase()
+    if (!relative) {
+      switch (cmd) {
+        case 'A':
+          // rx ry rotation large-arc sweep x y — only the endpoint moves.
+          if (argi === 5) value = v + dx
+          else if (argi === 6) value = v + dy
+          break
+        case 'H':
+          if (argi === 0) value = v + dx
+          break
+        case 'V':
+          if (argi === 0) value = v + dy
+          break
+        default:
+          value = argi % 2 === 0 ? v + dx : v + dy
+      }
+    }
+    out += (afterCommand ? '' : ',') + round3(value)
+    afterCommand = false
+    argi++
+  }
+  return out
+}
+
+/** Opt-in DOM rendering options. */
+export interface DomRenderOptions {
+  /**
+   * Batch dense symbol marks into chunked `<path>` elements instead of one
+   * element per datum. Pixels are unchanged (positions are baked into `d`), but
+   * the DOM intentionally stops mirroring Vega's per-item structure: 100k
+   * symbols become a few hundred paths, which is what keeps large SVG streams
+   * inside the frame budget. Tooltips and hit-testing resolve through the scene
+   * hit index (`@aster/core/hit`), and per-mark `data-datum`/signal bindings are
+   * not emitted.
+   */
+  denseMarks?: boolean
+  /** Maximum items per batched path (default 256). */
+  denseChunkSize?: number
+}
+
+const DENSE_SYMBOL_MIN = 512
+const DENSE_SYMBOL_CHUNK = 256
+
+interface DenseChunk { from: number; to: number; first: SceneItem; desc: DomDesc }
+interface DenseCache { items: SceneItem[]; chunkSize: number; chunks: Map<number, DenseChunk> }
+// Keyed by scene group: the runtime reuses the group (and its items array) for
+// incremental updates, so unchanged chunks keep their descriptor and their DOM.
+const DENSE = new WeakMap<SceneGroup, DenseCache>()
+
+function batchableSymbol(it: SceneItem): boolean {
+  const x = it.x
+  const y = it.y
+  // Translucent marks cannot batch: one path composites once where per-item
+  // elements composite each overlap, so alpha would visibly change.
+  const opaque = (it.opacity == null || it.opacity === 1)
+    && (it.fillOpacity == null || it.fillOpacity === 1)
+  return opaque
+    && x != null && y != null && Number.isFinite(x) && Number.isFinite(y)
+    && Number.isFinite(Math.sqrt((it.size as number) ?? 30) / 2)
+}
+
+function symbolFill(it: SceneItem): unknown {
+  return it.fill != null && it.fill !== 'transparent' ? it.fill : undefined
+}
+
+function sameDash(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((v, i) => v === b[i])
+  }
+  return false
+}
+
+function sameSymbolPaint(a: SceneItem, b: SceneItem): boolean {
+  return symbolFill(a) === symbolFill(b)
+    && a.fillOpacity === b.fillOpacity
+    && a.stroke === b.stroke
+    && a.strokeWidth === b.strokeWidth
+    && sameDash(itDash(a), itDash(b))
+    && a.opacity === b.opacity
+}
+
+function itDash(it: SceneItem): unknown {
+  return (it as Record<string, unknown>).strokeDash
+}
+
+function symbolAttrs(it: SceneItem): Array<[string, string]> {
+  return props([
+    ['fill', symbolFill(it)],
+    ['fill-opacity', it.fillOpacity],
+    ['stroke', it.stroke],
+    ['stroke-width', it.strokeWidth],
+    ['stroke-dasharray', itDash(it)],
+    ['opacity', it.opacity],
+  ])
+}
+
+/**
+ * Chunk consecutive same-paint symbols into one `<path>` each. Chunks are
+ * bounded (so an append only re-serializes the last one) and cached per scene
+ * group, so a streamed append rebuilds a single ~256-item path string instead
+ * of every descriptor in the mark.
+ */
+function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: number): DomDesc[] {
+  const prev = DENSE.get(group)
+  const cachedChunks = prev && prev.items === items && prev.chunkSize === chunkSize ? prev.chunks : null
+  const chunks = new Map<number, DenseChunk>()
+  const out: DomDesc[] = []
+  let i = 0
+  while (i < items.length) {
+    const first = items[i]!
+    if (!batchableSymbol(first)) {
+      // Translucent or degenerate items keep their own element (batching would
+      // change overlap compositing); never drop them.
+      if (first.x != null && first.y != null) out.push(symbolItemDesc(first))
+      i++
+      continue
+    }
+    const angle = (first as Record<string, unknown>).angle as number | undefined
+    if (angle != null && angle !== 0) {
+      out.push(symbolItemDesc(first))
+      i++
+      continue
+    }
+    const from = i
+    let to = i + 1
+    while (to < items.length && to - from < chunkSize) {
+      const cand = items[to]!
+      if (!batchableSymbol(cand) || !sameSymbolPaint(first, cand)) break
+      // Rotated symbols keep their own element (a baked `d` cannot rotate).
+      const candAngle = (cand as Record<string, unknown>).angle as number | undefined
+      if (candAngle != null && candAngle !== 0) break
+      to++
+    }
+    const cached = cachedChunks?.get(from)
+    if (cached && cached.to === to && cached.first === first) {
+      let clean = true
+      for (let j = from; j < to; j++) {
+        if (!isClean(items[j]!)) { clean = false; break }
+      }
+      if (clean) {
+        cached.desc.clean = true
+        chunks.set(from, cached)
+        out.push(cached.desc)
+        i = to
+        continue
+      }
+    }
+    let d = ''
+    for (let j = from; j < to; j++) {
+      const it = items[j]!
+      if (!batchableSymbol(it)) continue
+      const r = Math.sqrt((it.size as number) ?? 30) / 2
+      d += translatePathData(
+        symbolPath((it as Record<string, unknown>).shape as string | undefined, r),
+        it.x as number,
+        it.y as number,
+      )
+    }
+    // A fresh desc object (never mutate a cached one): the patcher compares
+    // against the previous descriptor, so reusing the object would hide the write.
+    const desc: DomDesc = { tag: 'path', attrs: [['d', d], ...symbolAttrs(first)] }
+    const chunk: DenseChunk = { from, to, first, desc }
+    chunks.set(from, chunk)
+    out.push(desc)
+    i = to
+  }
+  DENSE.set(group, { items, chunkSize, chunks })
+  return out
+}
+
+function symbolItemDesc(it: SceneItem): DomDesc {
+  return cachedDesc(it, () => {
+    const size = (it.size as number) ?? 30
+    const r = Math.sqrt(size) / 2
+    const angle = (it as Record<string, unknown>).angle as number | undefined
+    return {
+      tag: 'path',
+      attrs: [
+        ['transform', `translate(${num(it.x || 0)},${num(it.y || 0)})${angle ? ` rotate(${num(angle)})` : ''}`],
+        ['d', symbolPath((it as Record<string, unknown>).shape as string | undefined, r)],
+        ...symbolAttrs(it),
+      ],
+      clean: isClean(it),
+    }
+  })
+}
+
+interface SymbolItemsCache { items: SceneItem[]; keys: SceneItem[]; descs: DomDesc[] }
+// Per-group; the runtime mutates the items array in place for incremental
+// updates, so an unchanged item keeps its descriptor without rebuilding the
+// 100k-entry array on every append.
+const SYMBOL_ITEMS = new WeakMap<SceneGroup, SymbolItemsCache>()
+
+function symbolItems(group: SceneGroup, items: SceneItem[]): DomDesc[] {
+  const prev = SYMBOL_ITEMS.get(group)
+  const reuse = prev && prev.items === items ? prev : null
+  const keys = reuse ? reuse.keys : []
+  const descs = reuse ? reuse.descs : []
+  let n = 0
+  for (const it of items) {
+    if (it.x == null || it.y == null) continue
+    if (keys[n] === it && descs[n] != null) {
+      if (isClean(it)) descs[n]!.clean = true
+      else { keys[n] = it; descs[n] = symbolItemDesc(it) }
+    } else {
+      keys[n] = it
+      descs[n] = symbolItemDesc(it)
+    }
+    n++
+  }
+  keys.length = n
+  descs.length = n
+  SYMBOL_ITEMS.set(group, { items, keys, descs })
+  // The patcher compares against the previous descriptor *array*, so return a
+  // snapshot: exposing the cached array would mean a later in-place append
+  // mutates the patcher's "previous" state and every child gets re-walked.
+  return descs.slice()
+}
+
+function denseSymbolsEnabled(options: DomRenderOptions | undefined, items: SceneItem[]): number {
+  if (!options?.denseMarks || items.length < DENSE_SYMBOL_MIN) return 0
+  return Math.max(32, options.denseChunkSize ?? DENSE_SYMBOL_CHUNK)
+}
 
 // Differential-update generation stamped on scene items by evaluateChart. An
 // item whose __gen differs from the current generation was reused (unchanged), so
@@ -171,7 +432,7 @@ function leafDesc(it: SceneItem): DomDesc {
   }
 }
 
-function markItems(group: SceneGroup, type: string): DomDesc[] {
+function markItems(group: SceneGroup, type: string, options?: DomRenderOptions): DomDesc[] {
   const items = group.items ?? []
   switch (type) {
     case 'line': {
@@ -221,29 +482,11 @@ function markItems(group: SceneGroup, type: string): DomDesc[] {
         attrs: [['d', d], ...props([['stroke', first.stroke], ['stroke-width', first.strokeWidth], ['opacity', first.opacity]])],
       }]
     }
-    case 'symbol':
-      return items
-        .filter((it) => it.x != null && it.y != null)
-        .map((it) => cachedDesc(it, () => {
-          const size = (it.size as number) ?? 30
-          const r = Math.sqrt(size) / 2
-          return {
-            tag: 'path',
-            attrs: [
-              ['transform', `translate(${num(it.x || 0)},${num(it.y || 0)})`],
-              ['d', symbolPath((it as Record<string, unknown>).shape as string | undefined, r)],
-              ...props([
-                ['fill', it.fill != null && it.fill !== 'transparent' ? it.fill : undefined],
-                ['fill-opacity', it.fillOpacity],
-                ['stroke', it.stroke],
-                ['stroke-width', it.strokeWidth],
-                ['stroke-dasharray', it.strokeDash],
-                ['opacity', it.opacity],
-              ]),
-            ],
-            clean: isClean(it),
-          }
-        }))
+    case 'symbol': {
+      const chunkSize = denseSymbolsEnabled(options, items)
+      if (chunkSize > 0) return denseSymbolItems(group, items, chunkSize)
+      return symbolItems(group, items)
+    }
     case 'rect':
       // vega paints a rect only when it has a fill or stroke; iterate the items
       // back-to-front in place (vega paint order) — no slice/reverse copy.
@@ -399,7 +642,7 @@ function markContainer(tag: string): Array<[string, string]> {
   }
 }
 
-function groupDesc(group: SceneGroup, plotW: number, plotH: number, clips: ClipCollector): DomDesc | null {
+function groupDesc(group: SceneGroup, plotW: number, plotH: number, clips: ClipCollector, options?: DomRenderOptions): DomDesc | null {
   const type = group.marktype
   const needsClip = group.clip === true
   if (!type || type === 'group') {
@@ -414,13 +657,14 @@ function groupDesc(group: SceneGroup, plotW: number, plotH: number, clips: ClipC
     const children: DomDesc[] = []
     for (const item of group.items ?? []) {
       const isGroup = (item as SceneGroup).marktype !== undefined || Array.isArray((item as SceneGroup).items)
-      const d = isGroup ? groupDesc(item as SceneGroup, plotW, plotH, clips) : cachedDesc(item, () => leafDesc(item))
+      const d = isGroup ? groupDesc(item as SceneGroup, plotW, plotH, clips, options) : cachedDesc(item, () => leafDesc(item))
       if (d) children.push(d)
     }
     return g('g', attrs, children)
   }
 
-  const inner = g('g', markContainer(type), markItems(group, type))
+  const inner = g('g', markContainer(type), markItems(group, type, options))
+  if (type === 'symbol' && denseSymbolsEnabled(options, group.items ?? []) > 0) inner.dense = true
   if (needsClip) {
     const clipId = ++clips.current
     clips.paths.push(group.clipPathD ?? null)
@@ -429,7 +673,7 @@ function groupDesc(group: SceneGroup, plotW: number, plotH: number, clips: ClipC
   return inner
 }
 
-export function sceneToDomDesc(scene: SceneRoot): DomDesc {
+export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {}): DomDesc {
   CURRENT_GEN = (scene as unknown as { __itemGen?: number }).__itemGen
   const W = scene.width
   const H = scene.height
@@ -451,7 +695,7 @@ export function sceneToDomDesc(scene: SceneRoot): DomDesc {
     ], [
       g('g', [['transform', 'translate(0,0)']], [
         { tag: 'path', attrs: [['class', 'background'], ['aria-hidden', 'true'], ['d', frameD], ...(scene.frameFill ? [['fill', String(scene.frameFill)]] as Array<[string, string]> : []), ...(scene.frameFillOpacity != null ? [['fill-opacity', String(scene.frameFillOpacity)]] as Array<[string, string]> : []), ...(scene.frameStroke ? [['stroke', String(scene.frameStroke)]] as Array<[string, string]> : []), ...(scene.frameStrokeWidth != null ? [['stroke-width', String(scene.frameStrokeWidth)]] as Array<[string, string]> : []), ...(scene.frameStrokeDash ? [['stroke-dasharray', scene.frameStrokeDash.join(',')]] as Array<[string, string]> : []), ...(scene.frameOpacity != null ? [['opacity', String(scene.frameOpacity)]] as Array<[string, string]> : [])] },
-        g('g', [], (scene.items ?? []).map((n) => groupDesc(n, plotW, plotH, clips)).filter((x): x is DomDesc => x != null)),
+        g('g', [], (scene.items ?? []).map((n) => groupDesc(n, plotW, plotH, clips, options)).filter((x): x is DomDesc => x != null)),
         { tag: 'path', attrs: [['class', 'foreground'], ['aria-hidden', 'true'], ['d', ''], ['display', 'none']] },
       ]),
     ]),
@@ -549,6 +793,14 @@ function patchEl(el: Element, desc: DomDesc): void {
   // we can avoid descending into it entirely.
   if (desc.clean && last) return
 
+  // Switching a mark container between per-item elements and batched paths is a
+  // structural change: rebuilding the (few hundred) chunk elements is much
+  // cheaper than diffing it against tens of thousands of per-item nodes.
+  if (desc.dense === true && (last == null || last.dense !== true) && desc.children) {
+    el.replaceChildren(...desc.children.map((c) => createEl(c, el.ownerDocument)))
+    return
+  }
+
   // Attributes: fast path compares against the cached descriptor.
   if (last && sameAttrNames(last.attrs, desc.attrs)) {
     for (let i = 0; i < desc.attrs.length; i++) {
@@ -619,8 +871,8 @@ function patchEl(el: Element, desc: DomDesc): void {
  * touching only changed attributes. First call vs. string-rendered DOM is
  * fine: the comparison is against live attribute values.
  */
-export function patchSceneDom(svg: Element, scene: SceneRoot): void {
-  const root = sceneToDomDesc(scene)
+export function patchSceneDom(svg: Element, scene: SceneRoot, options: DomRenderOptions = {}): void {
+  const root = sceneToDomDesc(scene, options)
   // The root <svg> may legitimately be a different element (e.g. re-created);
   // patch assumes matching tag. Guard for callers wiring the wrong node.
   if (svg.tagName !== 'svg') throw new Error('[aster] patchSceneDom expects an <svg> element')
@@ -628,6 +880,10 @@ export function patchSceneDom(svg: Element, scene: SceneRoot): void {
 }
 
 /** Build the full SVG element from a scene (mount path if you don't want the string). */
-export function renderSceneToDomElement(scene: SceneRoot, doc: Document = globalThis.document): Element {
-  return createEl(sceneToDomDesc(scene), doc)
+export function renderSceneToDomElement(
+  scene: SceneRoot,
+  doc: Document = globalThis.document,
+  options: DomRenderOptions = {},
+): Element {
+  return createEl(sceneToDomDesc(scene, options), doc)
 }

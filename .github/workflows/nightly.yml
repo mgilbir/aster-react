@@ -44,6 +44,9 @@ jobs:
       - name: WebKit canvas parity
         run: pnpm conformance:canvas -- --browser=webkit
 
+      - name: Chromium batched-SVG parity
+        run: pnpm conformance:batch
+
       - name: Chromium SVG conformance
         run: pnpm conformance:browser
 
@@ -52,6 +55,12 @@ jobs:
 
       - name: Streaming browser benchmark
         run: pnpm bench:browser-stream -- --points=10000 --seconds=3
+
+      - name: Browser mount/update/no-op benchmark
+        run: pnpm bench:browser -- --points=1000 --memory=false
+
+      - name: Dense-SVG streaming benchmark
+        run: pnpm bench:browser-stream -- --points=100000 --seconds=3 --engines=aster --renderers=svg --dense=0,1
 
       - name: Vega-Lite schema sweep
         run: pnpm sweep-vl
