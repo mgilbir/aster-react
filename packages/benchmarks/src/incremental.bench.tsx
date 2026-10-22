@@ -144,6 +144,49 @@ async function main(): Promise<void> {
       ],
     ),
   )
+  // Whole-array replacement (the `<Chart data={next}>` path): the host passes a
+  // brand-new array with no explicit changes, and the session infers the pulse
+  // by diffing rows. This is the common React data-prop shape, so gate it too.
+  const { createChartSession } = await import('@aster/core/dom')
+  const session = createChartSession()
+  let current = rows(points)
+  session.evaluate(spec as never, { data: { t: current } })
+  const replaceTimes: number[] = []
+  const replaceAppendTimes: number[] = []
+  for (let i = 0; i < reps; i++) {
+    // Same length, one row replaced; every row object is new (as a fetch yields).
+    const next = current.slice()
+    next[i % next.length] = { x: 0.5, y: 5 }
+    const t0 = performance.now()
+    session.evaluate(spec as never, { data: { t: next } })
+    replaceTimes.push(performance.now() - t0)
+    current = next
+    // Append a row: the diff yields a length-changing pulse (from/to + added).
+    const appended = [...current, ...rows(batch, points + i * batch)]
+    const t1 = performance.now()
+    session.evaluate(spec as never, { data: { t: appended } })
+    replaceAppendTimes.push(performance.now() - t1)
+    current = appended
+  }
+  const replace = summarize(replaceTimes)
+  const replaceAppend = summarize(replaceAppendTimes)
+  console.log(
+    table(
+      `whole-array replacement through a session (no explicit changes) — ${points} pts, ${reps} updates (ms)`,
+      ['path', 'median', 'p95', 'max'],
+      [
+        ['full evaluateChart (new chart)', fmt(full.median), fmt(full.p95), fmt(full.max)],
+        ['session, same-length replace', fmt(replace.median), fmt(replace.p95), fmt(replace.max)],
+        ['session, append row', fmt(replaceAppend.median), fmt(replaceAppend.p95), fmt(replaceAppend.max)],
+        ['speedup (median)', `${(full.median / Math.max(replace.median, 1e-9)).toFixed(2)}x`, '—', '—'],
+      ],
+    ),
+  )
+  if (!(replace.median < full.median)) {
+    console.error('\n[incremental] FAIL: whole-array replacement is not cheaper than a full evaluation')
+    process.exitCode = 1
+  }
+
   if (!(inc.median < full.median)) {
     console.error('\n[incremental] FAIL: incremental append is not cheaper than full re-evaluation')
     process.exitCode = 1

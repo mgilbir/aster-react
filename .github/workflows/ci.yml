@@ -37,6 +37,9 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Publish artifacts (pack + consume)
+        run: pnpm verify:publish
+
       - name: Incremental append gate
         run: pnpm bench:incremental -- --points=10000 --reps=30
 

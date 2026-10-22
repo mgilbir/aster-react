@@ -8,3 +8,6 @@ coverage/
 *.log
 .env
 .env.*
+# copied into packages by scripts/copy-legal.mjs at pack time
+packages/*/LICENSE
+packages/*/THIRD_PARTY_NOTICES.md

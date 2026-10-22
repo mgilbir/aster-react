@@ -12,6 +12,7 @@ pnpm scene-diff        # R8.1–R8.3: resolved scales/groups/items per scope
 pnpm a11y-parity       # guide captions vs vega-scenegraph aria-label
 pnpm transform-matrix  # transform option combinations vs the Vega oracle
 pnpm conformance:batch # batched-SVG pixel parity (denseMarks vs per-item)
+pnpm verify:publish    # npm pack: licences + exports + consumer smoke test
 pnpm sweep-vl          # 27,513-case Vega-Lite property sweep
 pnpm sweep-vega        # Vega schema sweep
 pnpm --filter @aster/benchmarks run budget  # per-entry bundle gates

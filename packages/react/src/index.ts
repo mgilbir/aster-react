@@ -1,34 +1,34 @@
-export { Chart } from './Chart'
-export type { ChartHandle, ChartProps } from './Chart'
+export { Chart } from './Chart.js'
+export type { ChartHandle, ChartProps } from './Chart.js'
 export {
   ChartStream,
   ChartWorkerStream,
   type ChartStreamHandle,
   type ChartStreamProps,
   type ChartWorkerStreamProps,
-} from './ChartStream'
+} from './ChartStream.js'
 export {
   useChartStream,
   type UseChartStreamOptions,
   type UseChartStreamResult,
-} from './useChartStream'
+} from './useChartStream.js'
 export {
   useChartWorkerStream,
   type ChartWorkerStreamOptions,
   type WorkerChartStreamResult,
-} from './useChartWorkerStream'
+} from './useChartWorkerStream.js'
 export {
   isVegaLiteSpec,
   normalizeChartSpec,
   isPromiseLike,
-} from './spec'
+} from './spec.js'
 // Vega-Lite compiler registry: `@aster/react/vl` registers it as a side effect;
 // hosts that compile VL themselves can call `registerVegaLiteCompiler` instead.
 export {
   hasVegaLiteCompiler,
   registerVegaLiteCompiler,
   type VegaLiteCompiler,
-} from './vl-registry'
+} from './vl-registry.js'
 export {
   useChart,
   useSpecData,
@@ -38,7 +38,7 @@ export {
   type UseChartOptions,
   type UseChartResult,
   type UseSpecDataOptions,
-} from './useChart'
+} from './useChart.js'
 export {
   useChartWorker,
   handleChartWorkerRequest,
@@ -50,7 +50,7 @@ export {
   handleChartWorkerStreamRequest,
   type ChartWorkerStreamRequest,
   type ChartWorkerStreamResponse,
-} from './worker'
+} from './worker.js'
 export {
   dragToDataInterval,
   selectionToPixels,
@@ -68,12 +68,12 @@ export {
   type SelectValue,
   type ViewDomain,
   type PixelPoint,
-} from './interaction'
+} from './interaction.js'
 export {
   renderChartToStaticMarkup,
   hydrateChart,
   type HydrateChartOptions,
   type HydratedChart,
-} from './ssr'
+} from './ssr.js'
 export { createChartSession } from '@aster/core/dom'
 export type { ChartSession } from '@aster/core/dom'

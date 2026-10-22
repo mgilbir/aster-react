@@ -59,6 +59,22 @@
   `autosize: pad/fit` charts keep the full pass; conformance output is unchanged.
 - **Faster row diff**: `rowsEqual` uses `for...in` (no `Object.keys` allocations)
   for plain rows, ~1.5x faster auto-pulse inference on wholesale array replacement.
+- **Publish artifacts are tested**: new `pnpm verify:publish` packs every public
+  package, asserts the tarball carries `LICENSE` + `THIRD_PARTY_NOTICES.md`
+  (copied by a `prepack` step) plus `dist`/types, then extracts the tarballs into
+  a clean `node_modules` and imports every declared entry (`@aster/core` addons,
+  `@aster/react`, `/vl`, `/ssr`, `/worker`) to render Vega and Vega-Lite specs.
+  It runs in CI, nightly and the release workflow. This caught a real packaging
+  bug: `@aster/react`'s barrel used extensionless relative imports, which
+  bundlers accept but Node ESM rejects (SSR/worker consumers would fail to
+  import the published package) — fixed.
+- **Wholesale-array replacement benchmark**: `bench:incremental` now measures the
+  `<Chart data={next}>` path (no explicit changes) end to end. The session
+  infers the pulse from the row diff: at 100k points a same-length replacement is
+  ~0.5 ms and an appended row ~1.3 ms vs ~32 ms for a full evaluation (63x).
+- **Benchmark warm-up**: the jsdom and browser runners mount every embed once
+  before measuring and discard a first full pass, removing the first-embed JIT
+  penalty that made the identical `aster`/`asterDom` paths differ by ~1–2 ms.
 - **Dense SVG marks by default**: `denseMarks` now defaults to `'auto'` — symbol
   marks with ≥512 items batch into chunked `<path>` elements unless the spec uses
   `signal.on` event streams (`true` forces, `false` disables). Client-only mounts

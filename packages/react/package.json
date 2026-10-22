@@ -29,7 +29,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "node ../../scripts/copy-legal.mjs"
   },
   "dependencies": {
     "@aster/core": "workspace:*",
@@ -65,7 +66,9 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "peerDependencies": {
     "react": "^19.0.0"

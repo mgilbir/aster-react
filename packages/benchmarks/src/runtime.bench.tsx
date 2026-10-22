@@ -44,6 +44,27 @@ async function main(): Promise<void> {
 
   const results: Record<ChartKind, RowResult[]> = {} as Record<ChartKind, RowResult[]>
 
+  // Global warm-up: the first measured embed otherwise pays one-time module /
+  // React / V8 initialisation (it looked ~2ms slower than the identical
+  // `asterDom` path). Mount every embed once before any measurement.
+  {
+    const warmKind = kinds[0]!
+    const warmSpec = buildSpec(warmKind, genValues(warmKind, points, 7), 600, 400)
+    for (const embedName of EMBEDS) {
+      const host = document.createElement('div')
+      document.body.appendChild(host)
+      const root = createRoot(host)
+      await timeWork(host, {
+        quietFrames: 1,
+        timeoutMs: 30_000,
+        requireSvg: true,
+        trigger: () => root.render(h(BenchEmbed, { name: embedName, spec: warmSpec, width: 600, height: 400 })),
+      })
+      root.unmount()
+      host.remove()
+    }
+  }
+
   for (const kind of kinds) {
     results[kind] = []
     for (const embedName of EMBEDS) {
@@ -88,6 +109,22 @@ async function main(): Promise<void> {
       for (let i = 0; i < warmup; i++) {
         await settle(i === 0 ? initialSpec : updatedSpec)
         await waitForSvg(host, 30_000)
+      }
+
+      // Discard one full mount so the measured reps don't pay first-mount JIT
+      // (the first embed in the run was otherwise penalised by ~2x).
+      {
+        const fresh = document.createElement('div')
+        document.body.appendChild(fresh)
+        const freshRoot = createRoot(fresh)
+        await timeWork(fresh, {
+          quietFrames: 1,
+          timeoutMs: 30_000,
+          requireSvg: true,
+          trigger: () => freshRoot.render(h(BenchEmbed, { name: embedName, spec: initialSpec, width: 600, height: 400 })),
+        })
+        freshRoot.unmount()
+        fresh.remove()
       }
 
       // Mount: fresh host each rep (the component is created from scratch).

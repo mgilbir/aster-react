@@ -86,9 +86,26 @@ function put(key, embed, value) {
   results[key][embed] = value
 }
 
+// Global warm-up: mount every embed once before any measurement, so the first
+// embed in the run does not pay one-time module/V8/page init (which made the
+// identical `aster`/`asterDom` paths differ by ~1ms in earlier runs).
+if (KINDS.length > 0) {
+  for (const embed of EMBEDS) {
+    await page.evaluate(([e, k, p]) => window.__benchWarmup?.(e, k, p), [embed, KINDS[0], POINTS])
+    await page.evaluate(() => window.__bench.reset())
+  }
+}
+
 for (const kind of KINDS) for (const embed of EMBEDS) {
   console.log(`running ${embed} ${kind} ...`)
   await page.evaluate(([e, k, p]) => (window.__benchWarmup?.(e, k, p)), [embed, kind, POINTS])
+
+  // Discard a full measurement pass first: the first embed in the run otherwise
+  // pays JIT/module warm-up inside its measured reps (aster looked slower than
+  // asterDom although they are the same component).
+  await page.evaluate(([e, k, p]) => window.__bench.mounts(e, k, p), [embed, kind, POINTS])
+  await page.evaluate(([e, k, p]) => window.__bench.updates(e, k, p, 2), [embed, kind, POINTS])
+  await page.evaluate(() => window.__bench.reset())
 
   // 1) Time to first render (fresh mount each rep)
   const mounts = []

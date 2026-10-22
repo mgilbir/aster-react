@@ -19,7 +19,7 @@
     "bench:browser-stream": "pnpm --filter @aster/benchmarks run bench:browser-stream",
     "check:deps": "node scripts/check-deps.mjs",
     "vectors": "pnpm --filter @aster/conformance run vectors",
-    "check": "pnpm check:deps && pnpm typecheck && pnpm build && pnpm test && pnpm conformance && pnpm --filter @aster/benchmarks run budget",
+    "check": "pnpm check:deps && pnpm typecheck && pnpm build && pnpm test && pnpm conformance && pnpm verify:publish && pnpm --filter @aster/benchmarks run budget",
     "conformance-vl": "pnpm --filter @aster/conformance run conformance-vl",
     "conformance:browser": "pnpm --filter @aster/conformance run conformance:browser",
     "conformance:canvas": "pnpm --filter @aster/conformance run conformance:canvas",
@@ -31,7 +31,8 @@
     "scene-diff": "pnpm --filter @aster/conformance run scene-diff",
     "transform-matrix": "pnpm --filter @aster/conformance run transform-matrix",
     "a11y-parity": "pnpm --filter @aster/conformance run a11y-parity",
-    "conformance:batch": "pnpm --filter @aster/conformance run conformance:batch"
+    "conformance:batch": "pnpm --filter @aster/conformance run conformance:batch",
+    "verify:publish": "node scripts/verify-publish.mjs"
   },
   "devDependencies": {
     "esbuild": "~0.25.12",
