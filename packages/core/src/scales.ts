@@ -15,6 +15,7 @@ import { implicit as scaleImplicit } from './scale-d3.js'
 import { interpolateRound, interpolateValue } from './interp.js'
 import { range as sequence } from './arr.js'
 import { aggregateGroup } from './transform.js'
+import { aggregateRows } from './transform-agg.js'
 import { pushAll, ascending, error as raise, hasOwnProperty, isArray, isFunction, isObject, isString, ownGet, peek, toNumber } from './util.js'
 import type { CompiledScale } from './types.js'
 
@@ -147,23 +148,24 @@ function aggregateOf(op: string, cells: unknown[]): unknown {
 function countsTuples(ctx: ScaleContext, data: string, field: string, sort: Sort | undefined): Tuple[] {
   const useOp = sort?.op && sort.field
   const keys = fieldValues(ctx, data, field)
-  const sortVals = useOp ? fieldValues(ctx, data, sort!.field!) : undefined
-  const cells = new Map<string, { tuple: Tuple; vals: unknown[] }>()
+  if (useOp) {
+    // the aggregate engine groups (same key rule) and measures in one pass
+    const vals = fieldValues(ctx, data, sort!.field!)
+    const rows: Array<{ g: unknown; v: unknown }> = new Array(keys.length)
+    for (let i = 0; i < keys.length; ++i) rows[i] = { g: keys[i], v: vals[i] }
+    const name = aggrField(sort!.op, sort!.field)
+    return aggregateRows(rows, { groupby: ['g'], fields: [null, 'v'], ops: ['count', sort!.op!], as: ['count', 'r'] })
+      .map((r) => ({ key: r.g, count: r.count as number, [name]: r.r }))
+  }
+  const cells = new Map<string, Tuple>()
   for (let i = 0; i < keys.length; ++i) {
     const k = keys[i]
     const ck = String(k)
-    let cell = cells.get(ck)
-    if (!cell) cells.set(ck, (cell = { tuple: { key: k, count: 0 }, vals: [] }))
-    cell.tuple.count++
-    if (sortVals) cell.vals.push(sortVals[i])
+    let tuple = cells.get(ck)
+    if (!tuple) cells.set(ck, (tuple = { key: k, count: 0 }))
+    tuple.count++
   }
-  const out: Tuple[] = []
-  const name = useOp ? aggrField(sort!.op, sort!.field) : ''
-  for (const cell of cells.values()) {
-    if (useOp) cell.tuple[name] = aggregateOf(sort!.op!, cell.vals)
-    out.push(cell.tuple)
-  }
-  return out
+  return Array.from(cells.values())
 }
 
 function fieldValues(ctx: ScaleContext, data: string, field: unknown): unknown[] {
