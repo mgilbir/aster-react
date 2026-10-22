@@ -74,6 +74,7 @@ import {
   isString,
   array as arr,
   error,
+  toNumber,
 } from './util.js'
 import {
   millisecond,
@@ -120,7 +121,8 @@ export function bandSpace(count: number, paddingInner: number, paddingOuter: num
 // ---- numbers.js / slice.js --------------------------------------------------
 
 export function numbers(_: Iterable<unknown>): number[] {
-  return Array.from(_, (v) => +(v as number))
+  // vega-scale numbers.js: map(toNumber), so null / '' stay null (a bin boundary is not 0)
+  return Array.prototype.map.call(_, toNumber) as number[]
 }
 
 export const slice = Array.prototype.slice
@@ -317,7 +319,7 @@ export function scaleBinOrdinal(): SR {
 
   scale.domain = function (_?: Iterable<unknown>): unknown {
     if (arguments.length) {
-      domain = Array.from(_ as Iterable<unknown>, (v) => +(v as number))
+      domain = numbers(_ as Iterable<unknown>)
       return scale
     } else {
       return domain.slice()

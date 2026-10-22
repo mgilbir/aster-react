@@ -52,6 +52,7 @@ import {
   timeSunday,
   timeWeek,
   timeYear,
+  unixDay,
   utcDay,
   utcHour,
   utcMinute,
@@ -1277,8 +1278,10 @@ const utcTickIntervals: [TimeInterval, number, number][] = [
   [utcHour, 3, 3 * durationHour],
   [utcHour, 6, 6 * durationHour],
   [utcHour, 12, 12 * durationHour],
-  [utcDay, 1, durationDay],
-  [utcDay, 2, 2 * durationDay],
+  // d3-time's utc ticker counts DAYS since the epoch (unixDay), not days of the month: its
+  // 2-day ticks are the even epoch days, which is not the odd dates utcDay.every(2) gives
+  [unixDay, 1, durationDay],
+  [unixDay, 2, 2 * durationDay],
   [utcWeek, 1, durationWeek],
   [utcMonth, 1, durationMonth],
   [utcMonth, 3, 3 * durationMonth],

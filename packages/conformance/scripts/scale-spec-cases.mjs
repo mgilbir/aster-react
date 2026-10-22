@@ -538,3 +538,72 @@ add('edge', 'ordinal/domain-objects-collapse', spec({ type: 'ordinal', domain: {
 add('edge', 'linear/props-unknown-order', spec({ type: 'linear', range: [0, 100], nice: true, zero: false, domain: [1.3, 8.9], clamp: true }))
 add('edge', 'linear/nice-with-domainMid', spec({ type: 'linear', range: { scheme: 'blues' }, nice: true, domain: [1.3, 8.9], domainMid: 4.4 }))
 add('edge', 'linear/domainMid-no-domain', spec({ type: 'linear', range: [0, 100], domainMid: 4.4 }, d(nums)))
+
+// ---- seeded random scale specs: option combinations nobody enumerated ------------------------
+// (the generic shape of the bugs: any type x domain form x range form x option set)
+{
+  let seed = 0x5ca1e
+  const rnd = () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const pick = (a) => a[Math.floor(rnd() * a.length)]
+  const chance = (p) => rnd() < p
+  const types = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential', 'quantile', 'quantize', 'threshold', 'bin-ordinal', 'ordinal', 'band', 'point']
+  const schemes = ['blues', 'viridis', 'category10', 'tableau20', 'redblue', 'magma', 'set2', 'greens', 'rainbow', 'Spectral']
+  const colours = ['#fee', '#a00', '#0a5', '#00f', 'steelblue', 'rgb(10,200,30)', '#123456']
+  const interps = ['rgb', 'hcl', 'hsl', 'lab', 'cubehelix', 'hcl-long', 'cubehelix-long', 'hsl-long', 'rgb-basis', { type: 'rgb', gamma: 2.2 }, { type: 'cubehelix', gamma: 0.7 }, 'bogus']
+  const num = () => Math.round((rnd() * 200 - 40) * 10) / 10
+  for (let i = 0; i < 700; i++) {
+    const type = pick(types)
+    const discrete = ['ordinal', 'band', 'point', 'bin-ordinal'].includes(type)
+    const cont = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential'].includes(type)
+    const rows = discrete
+      ? Array.from({ length: 1 + Math.floor(rnd() * 8) }, () => ({ c: pick(['a', 'b', 'c', 'd', 'e', 'f', 1, 2, 3, null]), n: num() }))
+      : Array.from({ length: Math.floor(rnd() * 9) }, () => ({ v: type === 'log' ? Math.round(rnd() * 900 + 1) / 4 : type === 'time' || type === 'utc' ? Date.UTC(2020, 0, 1) + Math.floor(rnd() * 400) * 86400000 : chance(0.1) ? null : num() }))
+    const s = { type }
+    const f = discrete ? 'c' : 'v'
+    // domain form
+    const dform = pick(['data', 'data', 'data', 'literal', 'fields', 'literal-piecewise'])
+    if (dform === 'data') s.domain = { data: 'd', field: f, ...(discrete && chance(0.4) ? { sort: pick([true, { order: 'descending' }, { op: pick(['count', 'sum', 'max', 'mean']), field: 'n', order: pick(['ascending', 'descending']) }]) } : {}) }
+    else if (dform === 'fields') s.domain = { data: 'd', fields: [f, f] }
+    else if (dform === 'literal-piecewise' && cont) s.domain = [num(), num(), num()].sort(() => 0)
+    else s.domain = discrete ? ['x', 'y', 'z', 'x'].slice(0, 1 + Math.floor(rnd() * 3)) : type === 'threshold' ? [num(), num() + 100] : [num(), num() + 150]
+    if (type === 'bin-ordinal' && chance(0.5)) s.bins = pick([[0, 10, 20, 30], { start: 0, stop: 40, step: 10 }])
+    // range form
+    const rform = pick(['scheme', 'scheme', 'array', 'numbers', 'name', 'none', 'scheme-obj'])
+    if (rform === 'scheme') s.range = { scheme: pick(schemes), ...(chance(0.3) ? { extent: [rnd() * 0.4, 0.6 + rnd() * 0.4] } : {}), ...(chance(0.3) ? { count: 2 + Math.floor(rnd() * 6) } : {}) }
+    else if (rform === 'scheme-obj') s.range = { scheme: [pick(colours), pick(colours), ...(chance(0.5) ? [pick(colours)] : [])] }
+    else if (rform === 'array') s.range = Array.from({ length: 2 + Math.floor(rnd() * 4) }, () => pick(colours))
+    else if (rform === 'numbers') s.range = type === 'band' || type === 'point' ? [0, 100 + Math.floor(rnd() * 100)] : Array.from({ length: 2 + Math.floor(rnd() * (cont ? 2 : 4)) }, () => Math.round(rnd() * 100))
+    else if (rform === 'name') s.range = pick(['width', 'height', 'ramp', 'heatmap', 'category', 'diverging', 'ordinal'])
+    if ((type === 'band' || type === 'point') && chance(0.4)) s.range = { step: 10 + Math.floor(rnd() * 20) }
+    // options
+    if (chance(0.25)) s.zero = chance(0.5)
+    if (chance(0.25)) s.nice = pick([true, 3, 8, ...(type === 'time' || type === 'utc' ? ['day', 'month', { interval: 'year', step: 2 }] : [])])
+    if (chance(0.15)) s.clamp = true
+    if (chance(0.15)) s.round = true
+    if (chance(0.2)) s.padding = pick([0, 0.1, 0.5, 10, 25])
+    if (chance(0.1)) s.paddingInner = rnd()
+    if (chance(0.1)) s.paddingOuter = rnd()
+    if (chance(0.1)) s.align = rnd()
+    if (chance(0.2)) s.reverse = true
+    if (cont && chance(0.2)) s.domainMin = num()
+    if (cont && chance(0.2)) s.domainMax = num() + 120
+    if (cont && chance(0.2)) s.domainMid = num() + 40
+    if (chance(0.25)) s.interpolate = pick(interps)
+    if (chance(0.1)) s.interpolateGamma = 1 + rnd() * 2
+    if (chance(0.08)) s.scheme = pick(schemes)
+    if (chance(0.06)) s.schemeCount = 2 + Math.floor(rnd() * 5)
+    if (chance(0.06)) s.schemeExtent = [0.1, 0.9]
+    if (chance(0.1) && type === 'pow') s.exponent = 0.5 + rnd() * 2
+    if (chance(0.1) && type === 'log') s.base = pick([2, 10, Math.E])
+    if (chance(0.1) && type === 'symlog') s.constant = 1 + rnd() * 3
+    if (chance(0.1)) s.unknown = pick(['?', '#999', 0])
+    if (chance(0.05)) s.domainImplicit = true
+    if (chance(0.1) && !discrete && type !== 'bin-ordinal') s.bins = pick([[0, 25, 50, 75, 100], { step: 20 }, { start: 10, stop: 90, step: 10 }])
+    add('random', `random/${String(i).padStart(3, '0')}-${type}`, spec(s, d(rows)))
+  }
+}

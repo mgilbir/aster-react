@@ -13,6 +13,7 @@
     "vectors:transforms": "node scripts/gen-transform-vectors.mjs",
     "vectors:scale-spec": "node scripts/gen-scale-spec-vectors.mjs",
     "vectors:projection": "node scripts/gen-projection-vectors.mjs",
+    "vectors:interpolate": "node scripts/gen-interpolate-vectors.mjs",
     "conformance-vl": "tsx src/run-vl.ts",
     "sweep-vega": "tsx src/run-sweep.ts vega-schema",
     "sweep-vl": "tsx src/run-sweep.ts vega-lite-schema",
