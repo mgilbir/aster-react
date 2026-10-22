@@ -30,6 +30,19 @@ calling an interaction handler, and reports the error through `onError`.
 | `maxSvgLength` | serialized output budget |
 | `maxTimeMs exceeded during …` | wall-clock deadline (`compile`, `evaluate`, `render`, `mark encoding`, …) |
 
+## Stream errors
+
+`createChartStream` throws two typed errors, each with a stable `code` (use the code,
+not `instanceof`, across a worker boundary or duplicated bundles):
+
+| Class | `code` | When |
+|---|---|---|
+| `AsterStreamBackpressureError` | `ASTER_STREAM_BACKPRESSURE` | `policy: 'error'` and a `push` would exceed `capacity` (batches, `bound: 'batches'`) or `maxQueuedRows` (rows, `bound: 'rows'`); `limit` is the configured bound |
+| `AsterStreamClosedError` | `ASTER_STREAM_CLOSED` | `stream.session()` after `close()` (`push`/`flush` after close are no-ops, not errors) |
+
+A `flush()` that throws (any error, including `AsterLimitError`) leaves the stream
+exactly as it was before the call; see "Atomic flush" in `docs/API.md`.
+
 ## Other runtime errors
 
 - **Unsupported scale/mark/transform** — the compiler throws with the spec location or
