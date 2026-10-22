@@ -16,6 +16,8 @@ would fail on the reference, not on `@aster/vl`):
   child groups with axes and titles (offsets differ by a pixel or two, or the
   root is mis-sized);
 - shared legends and child titles inside those layouts;
+- image marks on the canvas renderer, `containerSize()` sizing, the `stdev` extent and `ci` aggregates, text over
+  `invalid` data, and legends for size / opacity / strokeWidth over bars, lines and text;
 - dotted/nested field names that vega-lite compiles to bracketed accessors, UTC
   time units whose `%b` labels Aster's format layer rejects, and a few
   channel/concat cases whose canvas output differs by a pixel from the SVG.
