@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import { renderSpec, compileChart, evaluateChart, AsterUrlError } from './index.js'
 import { renderSceneToDomElement } from './addon-dom.js'
+import { renderSceneToCanvas, type CanvasLike } from './canvas.js'
 import type { RuntimeInput, VgSpec } from './types.js'
 
 const imageSpec = (url: string): VgSpec => ({
@@ -72,5 +73,60 @@ describe('image url policy (C93)', () => {
 
   it('protocols can be widened by the host', () => {
     expect(renderSpec(imageSpec('blob:https://example.test/uuid'), { urlPolicy: { protocols: ['blob:', 'https:'] } })).toContain('blob:')
+  })
+
+  describe('canvas path', () => {
+    // The canvas renderer never fetches: the host's image loader reads `item.url`
+    // from the evaluated scene and attaches `item.image`. So the policy must stop a
+    // hostile url BEFORE the scene exists / strip it from the item.
+    const spy = (): { ctx: CanvasLike; draws: number } => {
+      const state = { draws: 0 }
+      const store: Record<string, unknown> = { globalAlpha: 1, lineWidth: 1 }
+      const ctx = new Proxy(store, {
+        get: (t, k: string) => (k === 'drawImage' ? () => { state.draws++ } : k in t ? t[k] : () => undefined),
+        set: (t, k: string, v) => ((t[k] = v), true),
+      }) as unknown as CanvasLike
+      return { ctx, get draws() { return state.draws } }
+    }
+    const urlsIn = (scene: ReturnType<typeof evaluateChart>): unknown[] => {
+      const out: unknown[] = []
+      const walk = (n: { items?: unknown[]; url?: unknown }): void => { if (n.url != null) out.push(n.url); for (const c of (n.items ?? []) as Array<{ items?: unknown[]; url?: unknown }>) walk(c) }
+      walk(scene as never)
+      return out
+    }
+
+    it('under limits a hostile url throws before any scene (and so any host image loader) exists', () => {
+      const loaded: unknown[] = []
+      expect(() => {
+        const scene = evaluateChart(compileChart(imageSpec('javascript:alert(1)')), { limits: { maxRows: 10 } })
+        loaded.push(...urlsIn(scene)) // the host loader would start here
+      }).toThrowError(AsterUrlError)
+      expect(loaded).toEqual([])
+    })
+
+    /** What a host's image loader does: fetch each item's url and attach the bitmap. Records what it was asked to load. */
+    const loaderAttach = (scene: ReturnType<typeof evaluateChart>): string[] => {
+      const asked: string[] = []
+      const walk = (n: { items?: unknown[]; url?: unknown }): void => {
+        if (typeof n.url === 'string') { asked.push(n.url); (n as Record<string, unknown>).image = { width: 10, height: 10, complete: true } }
+        for (const c of (n.items ?? []) as Array<{ items?: unknown[]; url?: unknown }>) walk(c)
+      }
+      walk(scene as never)
+      return asked
+    }
+
+    it('with onDeny the loader is never asked for the hostile url and drawImage is never reached; a permitted url is (control)', () => {
+      const scene = evaluateChart(compileChart(imageSpec('javascript:alert(1)')), { urlPolicy: { onDeny: () => undefined } })
+      expect(loaderAttach(scene)).toEqual([])
+      const denied = spy()
+      renderSceneToCanvas(scene, denied.ctx)
+      expect(denied.draws).toBe(0)
+      // control: the same loader + canvas harness does draw a permitted url, so the zero above means something
+      const ok = evaluateChart(compileChart(imageSpec('https://example.test/a.png')), { limits: { maxRows: 10 } })
+      expect(loaderAttach(ok)).toEqual(['https://example.test/a.png'])
+      const allowed = spy()
+      renderSceneToCanvas(ok, allowed.ctx)
+      expect(allowed.draws).toBeGreaterThan(0)
+    })
   })
 })

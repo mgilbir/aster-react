@@ -66,7 +66,7 @@ Each is deliberate and only applies where noted:
 | Expression nesting deeper than 1000 (parser and AST) throws `AsterLimitError` (always on, not only under limits) | vega throws a raw `RangeError` at a stack-dependent depth |
 | `bin`: a step that can never grow (underflowed to 0, `base` <= 1 that never reaches `maxbins`) throws instead of spinning forever | vega loops forever; every other `maxbins`/`base` input follows vega exactly (`maxbins: 0` -> 20, `maxbins: -1` -> NaN bins) |
 | `stratify` throws vega's errors (`cycle`, `multiple roots`, `missing: id`, `ambiguous: id`, `no root`) with an `[aster] stratify:` prefix; its walks are iterative | the old code looped forever on a cycle |
-| Regex pattern > 1024 characters, or a regex input longer than `maxStringLength` (default 10 000), is refused **under limits** | see the regex section |
+| Regex patterns with catastrophic-backtracking shapes, patterns > 1024 characters, and regex inputs longer than `maxStringLength` (default 10 000) are refused **under limits** | see the regex section |
 | Decoded topojson coordinates are budgeted against `maxGeneratedRows` (else `maxRows`) | arcs are shared, so 22 KB of input can decode to millions of points |
 | `scale.bins` with a step that is not positive and finite yields no bins | the loop never advanced |
 | `topojson` object names are looked up as own properties (`constructor`, `__proto__` are "not found") | the name is spec-controlled |
@@ -75,17 +75,35 @@ Each is deliberate and only applies where noted:
 
 A JavaScript regular expression runs to completion once started. A pattern such
 as `(a+)+$` against `aaaa...!` takes time exponential in the input length and
-**no check inside Aster can interrupt it**. Under limits Aster does what it can:
-it refuses an over-long pattern (> 1024 characters) and an over-long input
-(`maxStringLength`, default 10 000) per call, in `test`, `regexp`, `replace`,
-`split` with a RegExp, and `countpattern`. That bounds linear patterns. It does
-**not** make backtracking patterns safe: a 30-character input can still cost
-2^30 steps.
+**no check inside Aster can interrupt it**, and the attack input is tiny (26
+characters cost seconds, 40 never return). Under limits Aster does two things
+before a pattern is compiled or run, for every pattern a spec or its data can
+supply (`test`, `regexp`, `replace`/`split` with a RegExp or a `/literal/`,
+`countpattern`):
+
+1. **Static screen** (`regex-screen.ts`): the pattern is parsed into a small AST
+   (not matched with another regex) and refused, with an `AsterLimitError`
+   (`regexSafety: ...`), when it has one of the known exponential shapes:
+   - a group under an unbounded quantifier whose body contains another unbounded
+     quantifier (`(a+)+`, `(\w+\s?)*`, `(.*a){2,}`);
+   - an unbounded-quantified alternation whose branches can start with the same
+     character (`(a|a)*`, `(a|aa)+`, `(\w|\d)+`);
+   - a backreference inside a group that repeats more than once.
+2. **Length caps**: a pattern over 1024 characters, or an input longer than
+   `maxStringLength` (default 10 000), is refused. This bounds linear patterns.
+
+**This is a heuristic, not a guarantee.** It blocks the known catastrophic
+shapes. It does not prove a pattern safe: polynomial blow-ups such as `a*a*a*b`
+pass, and safe patterns with a repeated group around an unbounded quantifier,
+such as `(\d+\.)*\d+`, are refused (rewrite them without the nesting). Syntax
+the screen cannot parse is passed to the RegExp constructor unscreened. Without
+limits nothing is screened (vega parity).
 
 **If specs are untrusted, run the render in a killable worker** (a
 `worker_threads` Worker you can `terminate()`, or a child process with a
 timeout) and treat the worker's deadline as the hard guarantee. `maxTimeMs` then
-produces friendly errors in the common case, and the kill covers the rest.
+produces friendly errors in the common case, the screen stops the known
+shapes, and the kill covers the rest.
 
 ## Loading URL data: `loadSpecData(spec, options)`
 

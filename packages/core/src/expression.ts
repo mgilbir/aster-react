@@ -11,7 +11,7 @@
  * and the format layer (`./locale.js`).
  */
 import { currentLocale } from './locale.js'
-import { boundedCount, meterBytes, meterTick, guardedRegExp, checkRegexInput } from './limits.js'
+import { boundedCount, meterBytes, meterTick, guardedRegExp, checkRegexInput, checkRegexObject } from './limits.js'
 import { bandSpace } from './scale.js'
 import { parseExpression } from './expr-parser.js'
 import { expressionInterpreter } from './expr-interpreter.js'
@@ -200,6 +200,7 @@ function testRe(reg: unknown, value: unknown): boolean {
   // Regex guard (safety deviation): pattern and input lengths are capped under
   // limits. This does NOT stop catastrophic backtracking (docs/LIMITS.md).
   const re = isRegExp(reg) ? (reg as RegExp) : guardedRegExp(String(reg))
+  if (isRegExp(reg)) checkRegexObject(reg as RegExp)
   const input = String(value)
   checkRegexInput(input)
   return re.test(input)
@@ -293,12 +294,12 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
     parseInt: (value: unknown, radix?: unknown) => parseInt(String(value), radix == null ? undefined : Number(radix)),
     replace: (value: unknown, pattern: unknown, repl: unknown) => {
       const str = String(value)
-      if (isRegExp(pattern)) checkRegexInput(str)
+      if (isRegExp(pattern)) { checkRegexObject(pattern as RegExp); checkRegexInput(str) }
       return str.replace(pattern as string | RegExp, String(repl))
     },
     split: (value: unknown, sep: unknown, limit?: unknown) => {
       const str = String(value)
-      if (isRegExp(sep)) checkRegexInput(str)
+      if (isRegExp(sep)) { checkRegexObject(sep as RegExp); checkRegexInput(str) }
       return str.split(sep as string, limit == null ? undefined : Number(limit))
     },
     substring: (value: unknown, start?: number, end?: number) => String(value).substring(start ?? 0, end),

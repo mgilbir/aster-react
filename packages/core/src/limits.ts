@@ -316,11 +316,23 @@ export function boundedCount(n: number, what: string, kind: 'rows' | 'items' | '
  * the work of linear patterns; it does NOT stop catastrophic backtracking,
  * which no cooperative check can interrupt.
  */
-export function checkRegexPattern(pattern: string): void {
+export function checkRegexPattern(pattern: string, flags = ''): void {
   if (!active) return
   const cap = Math.min(REGEX_MAX_PATTERN, active.limits.maxStringLength ?? REGEX_MAX_PATTERN)
   if (pattern.length > cap) over('maxStringLength', pattern.length, cap, 'regular expression pattern')
+  // Static screen for catastrophic-backtracking shapes (heuristic; docs/LIMITS.md).
+  // Applied to every pattern, including RegExp objects a spec built or wrote as literals.
+  const hazard = regexHazard(pattern, flags)
+  if (hazard) {
+    const shown = pattern.length > 80 ? pattern.slice(0, 80) + '...' : pattern
+    throw limitViolation(`regexSafety: ${hazard}: /${shown}/`)
+  }
   active.clock.check('regular expression')
+}
+
+/** Screen a RegExp object (a literal in an expression, or one built by `regexp()`); no-op without limits. */
+export function checkRegexObject(re: RegExp): void {
+  if (active) checkRegexPattern(re.source, re.flags)
 }
 export function checkRegexInput(input: string): void {
   if (!active) return
@@ -331,9 +343,11 @@ export function checkRegexInput(input: string): void {
 
 /** `new RegExp(pattern, flags)` under the regex guard. */
 export function guardedRegExp(pattern: string, flags?: string): RegExp {
-  checkRegexPattern(pattern)
+  checkRegexPattern(pattern, flags)
   return new RegExp(pattern, flags)
 }
+
+import { regexHazard } from './regex-screen.js'
 
 /** Pre-flight checks, run before compilation/evaluation allocates the scene. */
 export function checkSpecLimits(
