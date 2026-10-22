@@ -4,6 +4,15 @@
  * against real vega rendering of vega-lite.compile's output (the oracle).
  *
  * Usage: npx tsx src/run-vl.ts [filter]
+ *
+ * Three checks per entry (audit C39):
+ *  1. @aster/vl compiles a DEEP-FROZEN copy of the spec (compile must never
+ *     mutate its input — C73) and the emitted Vega must survive JSON round-trip.
+ *  2. The emitted Vega is rendered through REAL vega; any vega error or
+ *     warning fails the entry (Aster's own runtime is lenient, so rendering it
+ *     only through Aster hid invalid Vega — C71).
+ *  3. Aster's rendering of the emitted Vega must match real vega's rendering
+ *     of vega-lite's own output (canonicalized SVG).
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -14,8 +23,17 @@ import '@aster/core/transforms'
 import { renderSpec } from '@aster/core'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { compile as compileOurs } from '@aster/vl'
-import { renderWithVega } from './render-vega.js'
+import { renderWithVega, renderWithVegaChecked } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+
+/** Recursively freeze so any in-place write by the compiler throws (ESM is strict). */
+function deepFreeze<T>(v: T): T {
+  if (v !== null && typeof v === 'object' && !Object.isFrozen(v)) {
+    Object.freeze(v)
+    for (const k of Object.keys(v as object)) deepFreeze((v as Record<string, unknown>)[k])
+  }
+  return v
+}
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CORPUS_DIR = join(THIS_DIR, '..', 'corpus')
@@ -37,11 +55,22 @@ async function main(): Promise<boolean> {
     const spec = doc.$schema ? doc : (doc.spec ?? doc)
     try {
       const oracleVg = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, unknown> } }).compile(spec).spec
-      const ourVg = compileOurs(spec)
-      const [oracleSvg, ourSvg] = await Promise.all([
+      const before = JSON.stringify(spec)
+      const ourVg = compileOurs(deepFreeze(JSON.parse(before)))
+      const [oracleSvg, ourSvg, checked] = await Promise.all([
         renderWithVega(oracleVg),
-        loadSpecData(ourVg as never, TRUSTED_LOAD_OPTIONS).then((loaded) => renderSpec(loaded as never)),
+        loadSpecData(JSON.parse(JSON.stringify(ourVg)) as never, TRUSTED_LOAD_OPTIONS).then((loaded) => renderSpec(loaded as never)),
+        renderWithVegaChecked(JSON.parse(JSON.stringify(ourVg))),
       ])
+      if (checked.errors.length || checked.warnings.length) {
+        errored++
+        failures.push(name)
+        console.log(`INVALID-VEGA ${name}`)
+        for (const m of [...checked.errors.map((e) => `error: ${e}`), ...checked.warnings.map((w) => `warn: ${w}`)].slice(0, 4)) {
+          console.log(`      ${m}`.slice(0, 220))
+        }
+        continue
+      }
       const o = canonicalizeSvg(oracleSvg)
       const u = canonicalizeSvg(ourSvg as string)
       const diffs = diffCanonical(o, u)
