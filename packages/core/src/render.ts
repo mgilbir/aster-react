@@ -310,7 +310,7 @@ function renderLeaf(it: SceneItem, clips?: ClipCollector): string {
   // Symbol items (shape path; 'circle' renders the arc form)
   if (it.shape != null && it.radius != null) {
     const d = symbolPath(it.shape as string, it.radius as number)
-    return `<path transform="${escAttr(rotateItemTransform(it))}"${dd} d="${genD(d)}"${paintStr(it)}/>`
+    return `<path transform="${genD(rotateItemTransform(it))}"${dd} d="${genD(d)}"${paintStr(it)}/>`
   }
   if (it.text != null) return textElement(it)
   const x2 = it.x2 ?? it.x ?? 0
@@ -766,7 +766,7 @@ function renderSymbols(group: SceneGroup): string {
     // Only output fill if it's explicitly set to a non-default value (transparent is SVG default for paths)
     // vega's symbol attr emits rotateItem(item) — full-precision numbers plus
     // the mark's rotation.
-    out += `<path${dataDatumAttr(it)} transform="${escAttr(rotateItemTransform(it))}" d="${genD(d)}"${paintStr(it)}/>`
+    out += `<path${dataDatumAttr(it)} transform="${genD(rotateItemTransform(it))}" d="${genD(d)}"${paintStr(it)}/>`
   }
   out += '</g>'
   return out
@@ -1061,7 +1061,7 @@ function renderPaths(group: SceneGroup): string {
   for (const it of itemsOf(group)) {
     if (!it.path) continue
     // vega path mark attr: [vector-effect] transform(translate rotate scale) d
-    out += `<path${pathVectorEffect(it) ? ' vector-effect="non-scaling-stroke"' : ''} transform="${escAttr(transformItemTransform(it))}" d="${escAttr(it.path)}"${paintStr(it)}/>`
+    out += `<path${pathVectorEffect(it) ? ' vector-effect="non-scaling-stroke"' : ''} transform="${genD(transformItemTransform(it))}" d="${escAttr(it.path)}"${paintStr(it)}/>`
   }
   out += '</g>'
   return out
@@ -1185,7 +1185,7 @@ function renderImages(group: SceneGroup): string {
   for (const it of itemsOf(group)) {
     if (it.url == null || it.x == null || it.y == null) continue
     const d = imageDesc(it)
-    out += `<image${attrS('xlink:href', it.url)} transform="translate(${num(d.x)},${num(d.y)})" width="${num(d.w)}" height="${num(d.h)}" preserveAspectRatio="${escAttr(it.aspect === false ? 'none' : 'xMidYMid')}"${paintStr(it, undefined, d.smooth ? undefined : IMAGE_PIXELATED)}/>`
+    out += `<image${attrS('xlink:href', it.url)} transform="translate(${num(d.x)},${num(d.y)})" width="${num(d.w)}" height="${num(d.h)}" preserveAspectRatio="${escAttr(it.aspect === false ? 'none' : 'xMidYMid')}"${paintStr(it, d.smooth ? undefined : IMAGE_PIXELATED)}/>`
   }
   out += '</g>'
   return out
@@ -1226,7 +1226,7 @@ function renderArcs(group: SceneGroup): string {
     // without a stroke, opacity, dash arrays).
     const cr = (it as Record<string, unknown>).cornerRadius as number | undefined ?? 0
     const pa = (it as Record<string, unknown>).padAngle as number | undefined ?? 0
-    out += `<path transform="${escAttr(rotateItemTransform(it))}" d="${genD(arcPath(0, 0, r, r0, a0, a1, cr, pa))}"${paintStr(it)}/>`
+    out += `<path transform="${genD(rotateItemTransform(it))}" d="${genD(arcPath(0, 0, r, r0, a0, a1, cr, pa))}"${paintStr(it)}/>`
   }
   out += '</g>'
   return out
@@ -1504,37 +1504,29 @@ function escAttr(value: unknown): string {
 
 /**
  * vega-scenegraph's `stylesAttr` (util/svg/styles.js): the item property ->
- * presentation attribute table that EVERY mark's SVG output goes through
- * (SVGStringRenderer `style()`), in vega's order. One table, used by every
- * mark of the string renderer, the DOM descriptors and the line/area helpers,
- * so a paint property can no longer be dropped by one mark kind only (C38/C48).
+ * presentation attribute list that EVERY mark's SVG output goes through
+ * (SVGStringRenderer `style()`), in vega's order: fill, fillOpacity,
+ * stroke, strokeOpacity, strokeWidth, strokeCap (stroke-linecap), strokeJoin
+ * (stroke-linejoin), strokeDash (stroke-dasharray), strokeDashOffset,
+ * strokeMiterLimit, opacity, then the blend style. `paintAttrs` (pairs, for the
+ * DOM descriptors and the line/area helpers) and `paintStr` (markup) read the
+ * same properties in the same order, so a paint property can no longer be
+ * dropped by one mark kind only (C38/C48).
  */
-const PAINT_PROPS: ReadonlyArray<readonly [string, string]> = [
-  ['fill', 'fill'],
-  ['fillOpacity', 'fill-opacity'],
-  ['stroke', 'stroke'],
-  ['strokeOpacity', 'stroke-opacity'],
-  ['strokeWidth', 'stroke-width'],
-  ['strokeCap', 'stroke-linecap'],
-  ['strokeJoin', 'stroke-linejoin'],
-  ['strokeDash', 'stroke-dasharray'],
-  ['strokeDashOffset', 'stroke-dashoffset'],
-  ['strokeMiterLimit', 'stroke-miterlimit'],
-  ['opacity', 'opacity'],
-]
 
 /**
  * vega-scenegraph util/svg/transform.js: `rotateItem` = translate(x||0, y||0)
  * [rotate(angle)]; `transformItem` adds scale(scaleX||1, scaleY||1) when either
  * scale is truthy. Every mark kind uses the one of these its vega mark uses.
  */
-export function rotateItemTransform(it: SceneItem): string {
-  const a = (it as Record<string, unknown>).angle
-  return `translate(${num(it.x || 0)},${num(it.y || 0)})${a ? ` rotate(${num(a as number)})` : ''}`
+export function rotateItemTransform(it: SceneItem): GeneratedPath {
+  const a = it.angle
+  // numbers (through `num`) and constant words only: safe to write without the escaping scan
+  return gen(`translate(${num(it.x || 0)},${num(it.y || 0)})${a ? ` rotate(${num(a)})` : ''}`)
 }
-export function transformItemTransform(it: SceneItem): string {
+export function transformItemTransform(it: SceneItem): GeneratedPath {
   const rec = it as Record<string, unknown>
-  return rotateItemTransform(it) + (rec.scaleX || rec.scaleY ? ` scale(${num((rec.scaleX as number) || 1)},${num((rec.scaleY as number) || 1)})` : '')
+  return gen(rotateItemTransform(it) + (rec.scaleX || rec.scaleY ? ` scale(${num((rec.scaleX as number) || 1)},${num((rec.scaleY as number) || 1)})` : ''))
 }
 /** vega path mark: a non-unit scale keeps the stroke width (`vector-effect`). */
 export function pathVectorEffect(it: SceneItem): boolean {
@@ -1542,43 +1534,77 @@ export function pathVectorEffect(it: SceneItem): boolean {
   return ((rec.scaleX as number) || 1) !== 1 || ((rec.scaleY as number) || 1) !== 1
 }
 
-/** Ordered `[attribute, value]` paint pairs of an item (nullish values omitted by the writers). */
+/**
+ * Ordered `[attribute, value]` paint pairs of an item (nullish values omitted by
+ * the writers). The reads are written out one by one on purpose: a loop over the
+ * table reads `item[prop]` with a computed key, a megamorphic load that cost the
+ * string renderer ~2x at 10k symbols; named reads stay monomorphic.
+ */
 export function paintAttrs(it: SceneItem, overrides?: Record<string, unknown>, styles?: readonly string[]): Array<[string, unknown]> {
-  const rec = it as unknown as Record<string, unknown>
   const out: Array<[string, unknown]> = []
-  for (const [prop, name] of PAINT_PROPS) {
-    const v = overrides && prop in overrides ? overrides[prop] : rec[prop]
-    if (v != null) out.push([name, v])
-  }
+  let v: unknown
+  v = overrides && 'fill' in overrides ? overrides.fill : it.fill
+  if (v != null) out.push(['fill', v])
+  v = overrides && 'fillOpacity' in overrides ? overrides.fillOpacity : it.fillOpacity
+  if (v != null) out.push(['fill-opacity', v])
+  v = overrides && 'stroke' in overrides ? overrides.stroke : it.stroke
+  if (v != null) out.push(['stroke', v])
+  v = overrides && 'strokeOpacity' in overrides ? overrides.strokeOpacity : it.strokeOpacity
+  if (v != null) out.push(['stroke-opacity', v])
+  v = overrides && 'strokeWidth' in overrides ? overrides.strokeWidth : it.strokeWidth
+  if (v != null) out.push(['stroke-width', v])
+  v = overrides && 'strokeCap' in overrides ? overrides.strokeCap : it.strokeCap
+  if (v != null) out.push(['stroke-linecap', v])
+  v = overrides && 'strokeJoin' in overrides ? overrides.strokeJoin : it.strokeJoin
+  if (v != null) out.push(['stroke-linejoin', v])
+  v = overrides && 'strokeDash' in overrides ? overrides.strokeDash : it.strokeDash
+  if (v != null) out.push(['stroke-dasharray', v])
+  v = overrides && 'strokeDashOffset' in overrides ? overrides.strokeDashOffset : it.strokeDashOffset
+  if (v != null) out.push(['stroke-dashoffset', v])
+  v = overrides && 'strokeMiterLimit' in overrides ? overrides.strokeMiterLimit : it.strokeMiterLimit
+  if (v != null) out.push(['stroke-miterlimit', v])
+  v = overrides && 'opacity' in overrides ? overrides.opacity : it.opacity
+  if (v != null) out.push(['opacity', v])
   // vega: stylesCss.blend -> style="mix-blend-mode: <blend>;" (after any mark styles)
-  const style = (styles ? styles.join(' ') : '') + (rec.blend != null ? `${styles?.length ? ' ' : ''}mix-blend-mode: ${String(rec.blend)};` : '')
+  const style = markStyle(it.blend, styles)
   if (style) out.push(['style', style])
   return out
 }
 
-/** True when two items paint identically (every table property, and blend). */
-export function samePaint(a: SceneItem, b: SceneItem): boolean {
-  const ra = a as unknown as Record<string, unknown>
-  const rb = b as unknown as Record<string, unknown>
-  for (const [prop] of PAINT_PROPS) {
-    const x = ra[prop]
-    const y = rb[prop]
-    if (x === y) continue
-    if (Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((v, i) => v === y[i])) continue
-    return false
-  }
-  return ra.blend === rb.blend
+function markStyle(blend: unknown, styles?: readonly string[]): string {
+  if (styles === undefined) return blend != null ? `mix-blend-mode: ${String(blend)};` : ''
+  return styles.join(' ') + (blend != null ? ` mix-blend-mode: ${String(blend)};` : '')
 }
 
-/** String-renderer form of {@link paintAttrs}. */
-function paintStr(it: SceneItem, overrides?: Record<string, unknown>, styles?: readonly string[]): string {
-  const rec = it as unknown as Record<string, unknown>
+/** True when two items paint identically (every table property, and blend). */
+export function samePaint(a: SceneItem, b: SceneItem): boolean {
+  return same(a.fill, b.fill) && same(a.fillOpacity, b.fillOpacity) && same(a.stroke, b.stroke)
+    && same(a.strokeOpacity, b.strokeOpacity) && same(a.strokeWidth, b.strokeWidth) && same(a.strokeCap, b.strokeCap)
+    && same(a.strokeJoin, b.strokeJoin) && same(a.strokeDash, b.strokeDash) && same(a.strokeDashOffset, b.strokeDashOffset)
+    && same(a.strokeMiterLimit, b.strokeMiterLimit) && same(a.opacity, b.opacity) && a.blend === b.blend
+}
+
+function same(x: unknown, y: unknown): boolean {
+  if (x === y) return true
+  return Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((v, i) => v === y[i])
+}
+
+/** String-renderer form of {@link paintAttrs} (same reads, straight to markup). */
+function paintStr(it: SceneItem, styles?: readonly string[]): string {
   let out = ''
-  for (const [prop, name] of PAINT_PROPS) {
-    const v = overrides && prop in overrides ? overrides[prop] : rec[prop]
-    if (v != null) out += attr(name, v)
-  }
-  const style = (styles ? styles.join(' ') : '') + (rec.blend != null ? `${styles?.length ? ' ' : ''}mix-blend-mode: ${String(rec.blend)};` : '')
+  let v: unknown
+  if ((v = it.fill) != null) out += attr('fill', v)
+  if ((v = it.fillOpacity) != null) out += attr('fill-opacity', v)
+  if ((v = it.stroke) != null) out += attr('stroke', v)
+  if ((v = it.strokeOpacity) != null) out += attr('stroke-opacity', v)
+  if ((v = it.strokeWidth) != null) out += attr('stroke-width', v)
+  if ((v = it.strokeCap) != null) out += attr('stroke-linecap', v)
+  if ((v = it.strokeJoin) != null) out += attr('stroke-linejoin', v)
+  if ((v = it.strokeDash) != null) out += attr('stroke-dasharray', v)
+  if ((v = it.strokeDashOffset) != null) out += attr('stroke-dashoffset', v)
+  if ((v = it.strokeMiterLimit) != null) out += attr('stroke-miterlimit', v)
+  if ((v = it.opacity) != null) out += attr('opacity', v)
+  const style = markStyle(it.blend, styles)
   if (style) out += attrS('style', style)
   return out
 }
