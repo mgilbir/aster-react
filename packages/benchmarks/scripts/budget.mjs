@@ -69,7 +69,10 @@ const BUDGETS = {
   '@aster/react': 180 * 1024,
   // Base + VL compiler. The compiler is opt-in (`import '@aster/react/vl'`),
   // so the base row above is the one to watch for React-side regressions.
-  '@aster/react/vl': 180 * 1024,
+  // 209 = measured 208.5 + 0.5. The compiler is ~51.5 kB gzip of that (react base 157.0): it grew
+  // from ~22.6 kB when @aster/vl became production-usable (validation layer, VL transform table,
+  // composition nesting, errorbar/errorband, config.scale, invalid-value modes, safe escaping).
+  '@aster/react/vl': 209 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
