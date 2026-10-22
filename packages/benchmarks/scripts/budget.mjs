@@ -11,14 +11,15 @@ import { fileURLToPath } from 'node:url'
 // from the canvas/dom/hit/signals addons (or from the React wrapper) into the
 // base bundle fails a named row instead of being hidden by one aggregate.
 //
-// Measured 2026-10 (gzip, minified; react/react-dom external):
-//   @aster/core          109.5 kB
-//   @aster/core/dom      112.7 kB
-//   @aster/core/canvas    12.9 kB
-//   @aster/core/hit       14.0 kB
-//   @aster/core/signals   28.1 kB
-//   @aster/react         135.9 kB (Vega only)
-//   @aster/react/vl      158.4 kB (base + the from-scratch VL compiler, ~22.6 kB)
+// Measured 2026-10 on the integrated audit stack (gzip, minified; react/react-dom external;
+// main: core 109.2, dom 111.7, canvas 12.7, hit 1.5, signals 28.1, react 137.4, react/vl 159.8):
+//   @aster/core          113.4 kB
+//   @aster/core/dom      116.6 kB
+//   @aster/core/canvas    15.3 kB
+//   @aster/core/hit       15.6 kB
+//   @aster/core/signals   27.8 kB
+//   @aster/react         145.7 kB (Vega only)
+//   @aster/react/vl      168.1 kB (base + the from-scratch VL compiler)
 //
 // Re-baselined for the strict-oracle PR (+4.4 kB gzip on core and core/dom, measured
 // 113.6 / 116.4 kB; the previous budget was met to the byte). What the oracle forced in,
