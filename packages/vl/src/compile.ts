@@ -341,7 +341,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const mark = typeof markRaw === 'string' ? markRaw : (markRaw as Record<string, unknown>).type as string
     const encoding = isObject(l.encoding) ? (l.encoding as Record<string, unknown>) : {}
     checkConstChannels(mark, encoding, markIsFilled(l, mark))
-    const fields = parseEncodingFields(encoding)
+    const fields = parseEncodingFields(encoding, l.config)
     const orient = inferOrient(l, mark, markRaw, fields)
     return { l, mark, markRaw, markSize: isObject(markRaw) ? (markRaw.size as number | undefined) : undefined, fields, orient, pipeline: [], seriesFields: [], dataName: '', rawName: '', rawLen: 0, usesRawDomain: false, group: 0 }
   })
@@ -1086,105 +1086,139 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     return wrapOut
   }
 
-  const marks: Record<string, unknown>[] = []
-  if (rowField) {
-    const cfgHeaderR = (isObject(spec.config) ? (spec.config as Record<string, unknown>).header : undefined) as Record<string, unknown> | undefined
-    const hdrR = { ...(cfgHeaderR ?? {}), ...(rowDef?.header as Record<string, unknown> | undefined ?? {}) }
-    marks.push({ name: 'row-title', type: 'group', role: 'row-title', title: { text: hdrR.title ?? (rowFd ? channelTitle(rowFd) : rowField), ...(hdrR.title != null ? {} : { orient: 'left' }), style: 'guide-title', offset: (hdrR.titlePadding as number | undefined) ?? 10 } })
+  // --- row / column headers (vega-lite compile/header/*) ---------------------
+  const cfgAll = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+  const cfgHeaderBase: Record<string, unknown> = { titlePadding: 10, labelPadding: 10, ...(isObject(cfgAll.header) ? (cfgAll.header as Record<string, unknown>) : {}) }
+  // getHeaderProperty: the channel's own header, then config.headerRow/headerColumn, then config.header
+  const hdrProp = (prop: string, def: Record<string, unknown> | undefined, ch: 'row' | 'column'): unknown => {
+    const hd = isObject(def?.header) ? (def!.header as Record<string, unknown>) : undefined
+    let own = hd?.[prop]
+    // header.orient is a shortcut for labelOrient + titleOrient (channeldef normalize)
+    if (!own && (prop === 'labelOrient' || prop === 'titleOrient') && hd?.orient) own = hd.orient
+    if (own !== undefined) return own
+    const specific = cfgAll[ch === 'row' ? 'headerRow' : 'headerColumn']
+    if (isObject(specific) && specific[prop] !== undefined) return specific[prop]
+    return cfgHeaderBase[prop]
   }
-  if (colField) {
-    const cfgHeader = (isObject(spec.config) ? (spec.config as Record<string, unknown>).header : undefined) as Record<string, unknown> | undefined
-    const hdrC = { ...(cfgHeader ?? {}), ...(colDef?.header as Record<string, unknown> | undefined ?? {}) }
-    const ct: Record<string, unknown> = { text: hdrC.title ?? (colFd ? channelTitle(colFd) : colField), style: 'guide-title', offset: (hdrC.titlePadding as number | undefined) ?? 10 }
-    if (hdrC.titleColor != null) ct.color = hdrC.titleColor
-    if (hdrC.titleFontSize != null) ct.fontSize = hdrC.titleFontSize
-    if (hdrC.titleFont != null) ct.font = hdrC.titleFont
-    if (hdrC.titleFontWeight != null) ct.fontWeight = hdrC.titleFontWeight
-    if (hdrC.titleLimit != null) ct.limit = hdrC.titleLimit
-    if (hdrC.titleAngle != null) {
-      const ang = Number(hdrC.titleAngle)
-      ct.angle = ang
-      ct.baseline = 'bottom'
-      ct.align = ang === 0 ? 'center' : ang < 0 ? 'left' : 'right'
-    }
-    // A per-channel header.orient moves the band/title; config.header.orient is
-    // ignored for the title (probed config-header-orient-left stays at top).
-    const defHeaderC = colDef?.header as Record<string, unknown> | undefined
-    const ctOrient = hdrC.titleOrient ?? (defHeaderC?.orient as string | undefined)
-    if (ctOrient != null) ct.orient = ctOrient
-    if (hdrC.titleBaseline != null) ct.baseline = hdrC.titleBaseline
-    if (hdrC.titleAnchor != null) {
-      ct.anchor = hdrC.titleAnchor
-      if (hdrC.titleAlign == null) ct.align = hdrC.titleAnchor === 'start' ? 'left' : hdrC.titleAnchor === 'end' ? 'right' : 'center'
-    }
-    if (hdrC.titleAlign != null) ct.align = hdrC.titleAlign
-    // vega-lite moves a side-oriented column header title onto the facet's
-    // row-title role (left/right side of the grid); top/bottom stay column
-    // titles.
-    const sideTitle = ct.orient === 'left' || ct.orient === 'right'
-    marks.push({ name: 'column-title', type: 'group', role: sideTitle ? 'row-title' : 'column-title', title: ct })
+  const headerChannelOf = (ch: 'row' | 'column', orient: unknown): 'row' | 'column' =>
+    orient === 'top' || orient === 'bottom' ? 'column' : orient === 'left' || orient === 'right' ? 'row' : ch
+  const TITLE_MAP: Record<string, string> = {
+    titleAlign: 'align', titleAnchor: 'anchor', titleAngle: 'angle', titleBaseline: 'baseline', titleColor: 'color', titleFont: 'font',
+    titleFontSize: 'fontSize', titleFontStyle: 'fontStyle', titleFontWeight: 'fontWeight', titleLimit: 'limit', titleLineHeight: 'lineHeight',
+    titleOrient: 'orient', titlePadding: 'offset',
   }
-  // row header: carries the y label axis (+ per-row titles when row-faceted)
-  marks.push({
-    name: 'row_header',
-    type: 'group',
-    role: 'row-header',
-    ...(rowField ? {
-      from: { data: rowDomainName },
-      sort: { field: datumRef(rowField), order: rowOrder },
-      title: parentTitle(rowField, rowFd ?? normalizeHeaderDef(rowDef)),
-    } : {}),
-    encode: { update: { height: { signal: 'child_height' } } },
-    ...(yLabelAxes.length ? { axes: yLabelAxes } : {}),
-  })
-  if (colField) {
-    const hdrCLabelsDisabled = (() => {
-      const cfgHeader = (isObject(spec.config) ? (spec.config as Record<string, unknown>).header : undefined) as Record<string, unknown> | undefined
-      const hdr = { ...(cfgHeader ?? {}), ...(colDef?.header as Record<string, unknown> | undefined ?? {}) }
-      return hdr.labels === false
-    })()
-    // labels:false still creates the header group (an empty one): the grid
-    // layout measures it even though vega renders no label text, and dropping
-    // it shifts the column title by a pixel.
-    marks.push({
-      name: 'column_header',
+  const LABEL_MAP: Record<string, string> = {
+    labelAlign: 'align', labelAnchor: 'anchor', labelAngle: 'angle', labelBaseline: 'baseline', labelColor: 'color', labelFont: 'font',
+    labelFontSize: 'fontSize', labelFontStyle: 'fontStyle', labelFontWeight: 'fontWeight', labelLimit: 'limit', labelLineHeight: 'lineHeight',
+    labelOrient: 'orient', labelPadding: 'offset',
+  }
+  const mapProps = (def: Record<string, unknown> | undefined, ch: 'row' | 'column', map: Record<string, string>): Record<string, unknown> => {
+    const out: Record<string, unknown> = {}
+    for (const [prop, target] of Object.entries(map)) {
+      const v = hdrProp(prop, def, ch)
+      if (v !== undefined) out[target] = v
+    }
+    return out
+  }
+  const headerAngle = (v: unknown): number | undefined => (typeof v === 'number' ? normalizeAngle(v) : undefined)
+  // defaultHeaderGuideBaseline / defaultHeaderGuideAlign
+  const guideBaseline = (angle: number | undefined, hc: 'row' | 'column'): Record<string, unknown> => {
+    if (angle === undefined) return {}
+    const b = defaultLabelBaseline(angle, hc === 'row' ? 'left' : 'top', hc === 'row' ? 'y' : 'x', true)
+    return b ? { baseline: b } : {}
+  }
+  const guideAlign = (hc: 'row' | 'column', angle: number | undefined, anchor: unknown): Record<string, unknown> => {
+    if (anchor === 'start') return { align: 'left' }
+    if (anchor === 'end') return { align: 'right' }
+    if (angle === undefined) return {}
+    const a = defaultLabelAlign(angle, hc === 'row' ? 'left' : 'top', hc === 'row' ? 'y' : 'x')
+    return a ? { align: a } : {}
+  }
+  const titleGroup = (ch: 'row' | 'column', def: Record<string, unknown>, fd: FieldDef | null | undefined, field: string): Record<string, unknown> => {
+    const hc = headerChannelOf(ch, hdrProp('titleOrient', def, ch))
+    const angle = headerAngle(hdrProp('titleAngle', def, ch))
+    const header = isObject(def.header) ? (def.header as Record<string, unknown>) : {}
+    return {
+      name: `${ch}-title`,
       type: 'group',
-      role: 'column-header',
-      from: { data: columnDomainName },
-      sort: { field: datumRef(colField), order: colOrder },
-      ...(!hdrCLabelsDisabled
-        ? { title: (() => {
-            const t = parentTitle(colField, colFd ?? normalizeHeaderDef(colDef)) as Record<string, unknown>
-            delete t.orient
-            const cfgHeaderC = (isObject(spec.config) ? (spec.config as Record<string, unknown>).header : undefined) as Record<string, unknown> | undefined
-            const defHeaderC = colDef?.header as Record<string, unknown> | undefined
-            // config.header.orient does not move the labels; a channel header's
-            // own orient does (and labelOrient wins over it).
-            const labelOrient = (defHeaderC?.labelOrient as string | undefined)
-              ?? (defHeaderC?.orient as string | undefined)
-              ?? (cfgHeaderC?.labelOrient as string | undefined)
-              ?? 'top'
-            if (labelOrient !== 'top') t.labelOrient = labelOrient
-            return t
-          })() }
-        : {}),
-      encode: { update: { width: { signal: 'child_width' } } },
-    })
+      role: `${hc}-title`,
+      title: {
+        text: header.title ?? (fd ? channelTitle(fd) : field),
+        ...(ch === 'row' ? { orient: 'left' } : {}),
+        style: 'guide-title',
+        ...guideBaseline(angle, hc),
+        ...guideAlign(hc, angle, hdrProp('titleAnchor', def, ch)),
+        ...mapProps(def, ch, TITLE_MAP),
+      },
+    }
   }
-  marks.push({
-    name: 'column_footer',
-    type: 'group',
-    role: 'column-footer',
-    ...(colField ? {
-      from: { data: columnDomainName },
-      sort: { field: datumRef(colField), order: colOrder },
-    } : {}),
-    encode: { update: { width: { signal: 'child_width' } } },
-    ...(xLabelAxes.length ? { axes: xLabelAxes } : {}),
-  })
+  // assembleLabelTitle: the facet value text, with its label* properties
+  const labelTitle = (ch: 'row' | 'column', def: Record<string, unknown>, fd: FieldDef | null | undefined, field: string): Record<string, unknown> => {
+    const base = parentTitle(field, fd ?? normalizeHeaderDef(def)) as Record<string, unknown>
+    let text = base.text as { signal: string }
+    const labelExpr = hdrProp('labelExpr', def, ch)
+    if (typeof labelExpr === 'string') {
+      text = { signal: labelExpr.split('datum.label').join(text.signal).split('datum.value').join(`parent[${JSON.stringify(field)}]`) }
+    }
+    const hc = headerChannelOf(ch, hdrProp('labelOrient', def, ch))
+    const angle = headerAngle(hdrProp('labelAngle', def, ch))
+    return {
+      text,
+      ...(ch === 'row' ? { orient: 'left' } : {}),
+      style: 'guide-label',
+      frame: 'group',
+      ...guideBaseline(angle, hc),
+      ...guideAlign(hc, angle, hdrProp('labelAnchor', def, ch)),
+      ...mapProps(def, ch, LABEL_MAP),
+    }
+  }
+  const labelsOn = (def: Record<string, unknown> | undefined): boolean => {
+    const own = isObject(def?.header) ? (def!.header as Record<string, unknown>).labels : undefined
+    return (own ?? cfgHeaderBase.labels ?? true) as boolean
+  }
+
+  const channels: Array<{ ch: 'row' | 'column'; def?: Record<string, unknown>; fd?: FieldDef | null; field?: string; domain: string; order: string; axes: Record<string, unknown>[]; size: string }> = [
+    { ch: 'row', def: rowDef, fd: rowFd, field: rowField, domain: rowDomainName, order: rowOrder, axes: yLabelAxes, size: 'child_height' },
+    { ch: 'column', def: colDef, fd: colFd, field: colField, domain: columnDomainName, order: colOrder, axes: xLabelAxes, size: 'child_width' },
+  ]
+  const marks: Record<string, unknown>[] = []
+  // title groups first (row, then column), then the header/footer groups per channel
+  for (const c of channels) if (c.field && c.def) marks.push(titleGroup(c.ch, c.def, c.fd, c.field))
+  let cellTitle: Record<string, unknown> | undefined
+  for (const c of channels) {
+    const faceted = c.field !== undefined && c.def !== undefined
+    const labelOrient = faceted ? hdrProp('labelOrient', c.def, c.ch) : undefined
+    const labelType = labelOrient === 'bottom' || labelOrient === 'right' ? 'footer' : 'header'
+    const types: Record<'header' | 'footer', { labels: boolean; axes: Record<string, unknown>[] } | undefined> = { header: undefined, footer: undefined }
+    if (faceted) types[labelType] = { labels: labelsOn(c.def), axes: [] }
+    for (const a of c.axes) {
+      const t = a.orient === 'top' || a.orient === 'left' ? 'header' : 'footer'
+      ;(types[t] ??= { labels: false, axes: [] }).axes.push(a)
+    }
+    for (const t of ['header', 'footer'] as const) {
+      const comp = types[t]
+      if (!comp) continue
+      // the label text joins the header when the label orient runs along the channel
+      const aligned = faceted && comp.labels && (c.ch === 'row' ? labelOrient !== 'top' && labelOrient !== 'bottom' : labelOrient !== 'left' && labelOrient !== 'right')
+      const title = aligned ? labelTitle(c.ch, c.def!, c.fd, c.field!) : undefined
+      if (!title && comp.axes.length === 0) continue
+      marks.push({
+        name: `${c.ch}_${t}`,
+        type: 'group',
+        role: `${c.ch}-${t}`,
+        ...(faceted ? { from: { data: c.domain }, sort: { field: datumRef(c.field!), order: c.order } } : {}),
+        ...(title ? { title } : {}),
+        encode: { update: { [c.ch === 'row' ? 'height' : 'width']: { signal: c.size } } },
+        ...(comp.axes.length ? { axes: comp.axes } : {}),
+      })
+    }
+    // an orthogonal label orient shows the labels as the cell's own title
+    if (faceted && !cellTitle && (c.ch === 'row' ? labelOrient === 'top' || labelOrient === 'bottom' : labelOrient === 'left' || labelOrient === 'right')) cellTitle = labelTitle(c.ch, c.def!, c.fd, c.field!)
+  }
   marks.push({
     name: 'cell',
     type: 'group',
+    ...(cellTitle ? { title: cellTitle } : {}),
     style: 'cell',
     from: { facet: { name: 'facet', data: baseName, groupby: facetGroupby } },
     sort: { field: facetGroupby.map(datumRef), order: facetGroupby.map((_, i) => (i === 0 && rowField ? rowOrder : colOrder)) },
@@ -1210,8 +1244,18 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   out.signals = sizeSignalsOut
   const rowSpacing = typeof rowDef?.spacing === 'number' ? rowDef.spacing : undefined
   const colSpacing = typeof colDef?.spacing === 'number' ? colDef.spacing : undefined
-  const cTitle = (marks.find((m) => m.name === 'column-title')?.title ?? {}) as Record<string, unknown>
-  const cTitleOrient = cTitle.orient as string | undefined
+  // titleOrient right/bottom anchor the title group at the end; the anchor also picks the title band
+  const layoutTitleAnchor: Record<string, string> = {}
+  const layoutTitleBand: Record<string, number> = {}
+  for (const c of channels) {
+    if (!c.field || !c.def) continue
+    const to = hdrProp('titleOrient', c.def, c.ch)
+    const hc = headerChannelOf(c.ch, to)
+    if (to === 'right' || to === 'bottom') layoutTitleAnchor[hc] = 'end'
+    const anchor = hdrProp('titleAnchor', c.def, c.ch)
+    const band = hc === 'column' ? { start: 0, end: 1 }[anchor as 'start' | 'end'] : { start: 1, end: 0 }[anchor as 'start' | 'end']
+    if (band !== undefined) layoutTitleBand[hc] = band
+  }
   // spacing/align/center may be given per facet channel (row/column) or for the whole facet
   const perChannel = (key: string): { row?: unknown; column?: unknown } | undefined => {
     const r = rowDef?.[key]
@@ -1223,9 +1267,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const layoutCenter = spec.center ?? (perChannel('center') ? { row: rowDef?.center ?? false, column: colDef?.center ?? false } : undefined)
   out.layout = {
     padding: layoutSpacing,
-    ...(cTitleOrient === 'right' || cTitleOrient === 'bottom'
-      ? { titleAnchor: { ...(cTitleOrient === 'right' ? { row: 'end' } : {}), ...(cTitleOrient === 'bottom' ? { column: 'end' } : {}) } }
-      : {}),
+    ...(Object.keys(layoutTitleAnchor).length ? { titleAnchor: layoutTitleAnchor } : {}),
     offset: {
       ...(rowField ? { rowTitle: 10 } : {}),
       ...(colField ? { columnTitle: 10 } : {}),
@@ -1234,6 +1276,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     bounds: spec.bounds ?? 'full',
     align: layoutAlign,
     ...(layoutCenter !== undefined ? { center: layoutCenter } : {}),
+    ...(Object.keys(layoutTitleBand).length ? { titleBand: layoutTitleBand } : {}),
   }
   out.marks = marks
   out.scales = inner.scales
@@ -1982,13 +2025,21 @@ function checkConstChannels(mark: string, encoding: Record<string, unknown>, fil
 }
 
 /** Parse every channel of an encoding into field defs (datum-only defs included, flagged). */
-function parseEncodingFields(encoding: Record<string, unknown>): FieldDef[] {
+/** Channels whose scale can have a legend (position channels have axes instead). */
+const LEGEND_CHANNELS = new Set(['color', 'size', 'shape', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'angle'])
+
+function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown): FieldDef[] {
   const fields: FieldDef[] = []
+  // vega-lite parseLegend: `disable = legend !== undefined ? !legend : config.legend.disable`
+  const legendCfg = isObject(config) && isObject(config.legend) ? (config.legend as Record<string, unknown>) : undefined
+  const disableLegends = legendCfg?.disable === true
   for (const [channel, def] of Object.entries(encoding)) {
     // detail / order / tooltip accept a list of definitions
     for (const d of Array.isArray(def) ? def : [def]) {
       const f = parseChannel(channel === 'fill' || channel === 'stroke' ? 'color' : channel, d)
-      if (f) fields.push(channel === 'fill' || channel === 'stroke' ? { ...f, paint: channel } : f)
+      if (!f) continue
+      const g = disableLegends && f.legend === undefined && !f.datumOnly && LEGEND_CHANNELS.has(f.channel) ? { ...f, legend: null } : f
+      fields.push(channel === 'fill' || channel === 'stroke' ? { ...g, paint: channel } : g)
     }
   }
   return fields
@@ -2409,73 +2460,9 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     binSignals.set(f.field, { startField: names.start, endField: names.end, binsSignal: names.signal })
   }
 
-  // arc marks: theta stacking (pie layout). vega-lite stacks the theta
-  // measure over the whole data (no groupby), sorted by the series field,
-  // then filters invalid theta values.
   const thetaDef = fields.find((f) => f.channel === 'theta' && f.field)
   const arcTheta = thetaStackInfo(mark, fields)
   const radiusDefP = fields.find((f) => f.channel === 'radius' && f.field)
-  if (mark === 'arc' && thetaDef && arcTheta) {
-    if (radiusDefP?.aggregate) {
-      // an aggregated radius measure: aggregate it (grouped by the raw theta
-      // field — the polar dimension), filtering both endpoints
-      const groupby = fields.filter((f) => f.field && !f.aggregate && f.channel !== 'radius').map((f) => f.field)
-      pipeline.push({ type: 'aggregate', groupby, ops: [radiusDefP.aggregate!], fields: [radiusDefP.field], as: [aggFieldName(radiusDefP)] })
-      const filt = ['theta', 'radius'].map((ch) => {
-        const f = fields.find((ff) => ff.channel === ch && ff.field)
-        return f ? `isValid(datum[${JSON.stringify(aggFieldName(f))}]) && isFinite(+datum[${JSON.stringify(aggFieldName(f))}])` : null
-      }).filter(Boolean).join(' && ')
-      if (filt) pipeline.push({ type: 'filter', expr: filt })
-    } else if (radiusDefP) {
-      // radius stacking (radius.stack): the polar dimension (theta) groups,
-      // the radius measure stacks into radius_start/end
-      if (radiusDefP.stack != null && radiusDefP.stack !== false) {
-        pipeline.push({
-          type: 'stack',
-          groupby: [thetaDef.field],
-          field: radiusDefP.field,
-          sort: { field: [], order: [] },
-          as: [`${radiusDefP.field}_start`, `${radiusDefP.field}_end`],
-          offset: radiusDefP.stack === true ? 'zero' : radiusDefP.stack,
-        })
-      }
-      const filt = ['theta', 'radius'].map((ch) => {
-        const f = fields.find((ff) => ff.channel === ch && ff.field)
-        return f ? `isValid(datum[${JSON.stringify(aggFieldName(f))}]) && isFinite(+datum[${JSON.stringify(aggFieldName(f))}])` : null
-      }).filter(Boolean).join(' && ')
-      if (filt) pipeline.push({ type: 'filter', expr: filt })
-    } else if (thetaDef.aggregate) {
-      // aggregate the theta measure, grouped by the raw (non-aggregated)
-      // field channels, then stack the aggregated field when there is a
-      // series to stack by (probed against the oracle)
-      const rawFields = fields.filter((f) => f.field && !f.aggregate && f.channel !== 'theta' && f.channel !== 'radius')
-      const groupby = rawFields.map((f) => f.field)
-      pipeline.push({ type: 'aggregate', groupby, ops: [thetaDef.aggregate!], fields: [thetaDef.field], as: [arcTheta.field] })
-      if (groupby.length) {
-        pipeline.push({
-          type: 'stack',
-          groupby: [],
-          field: arcTheta.field,
-          sort: { field: [groupby[0]!], order: ['ascending'] },
-          as: [`${arcTheta.field}_start`, `${arcTheta.field}_end`],
-          offset: 'zero',
-        })
-      }
-      pipeline.push({ type: 'filter', expr: `isValid(datum[${JSON.stringify(arcTheta.field)}]) && isFinite(+datum[${JSON.stringify(arcTheta.field)}])` })
-    } else if (arcTheta.stacked) {
-      const colorF = fields.find((f) => f.channel === 'color' && f.field)
-      pipeline.push({
-        type: 'stack',
-        groupby: [],
-        field: thetaDef.field,
-        sort: colorF ? { field: [colorF.field], order: ['ascending'] } : { field: [], order: [] },
-        as: [`${thetaDef.field}_start`, `${thetaDef.field}_end`],
-        offset: 'zero',
-      })
-      pipeline.push({ type: 'filter', expr: `isValid(datum[${JSON.stringify(thetaDef.field)}]) && isFinite(+datum[${JSON.stringify(thetaDef.field)}])` })
-    }
-  }
-
   // channel roles shared by the pipeline stages below
   const yDef = fields.find((f) => f.channel === 'y')
   const xDef = fields.find((f) => f.channel === 'x')
@@ -2588,6 +2575,83 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     if (tuSeen.has(as)) continue
     tuSeen.add(as)
     pipeline.push(timeUnitTransform(f.tu!, f.field, as))
+  }
+
+  // the invalid-value filter an arc pipeline ends with: every scale-bearing continuous
+  // channel's value (vega-lite filterinvalid: quantitative isFinite, temporal isDate or finite)
+  const arcInvalidFilter = (): Record<string, unknown> | undefined => {
+    const seen = new Set<string>()
+    const checks: string[] = []
+    for (const f of fields) {
+      if (!f.field || f.bin || !['theta', 'radius', 'color', 'size', 'opacity', 'strokeWidth'].includes(f.channel)) continue
+      const type = ((f.raw as Record<string, unknown> | undefined)?.type ?? f.type) as string
+      if (type !== 'quantitative' && type !== 'temporal') continue
+      const name = aggFieldName(f)
+      if (seen.has(name)) continue
+      seen.add(name)
+      const d = `datum[${JSON.stringify(name)}]`
+      checks.push(type === 'temporal' ? `(isDate(${d}) || (isValid(${d}) && isFinite(+${d})))` : `isValid(${d}) && isFinite(+${d})`)
+    }
+    return checks.length ? { type: 'filter', expr: checks.join(' && ') } : undefined
+  }
+  // arc marks: theta stacking (pie layout). vega-lite stacks the theta
+  // measure over the whole data (no groupby), sorted by the series field,
+  // then filters invalid theta values.
+  if (mark === 'arc' && thetaDef && arcTheta) {
+    if (radiusDefP?.aggregate) {
+      // an aggregated radius measure: aggregate it (grouped by the raw theta
+      // field — the polar dimension), filtering both endpoints
+      const groupby = fields.filter((f) => f.field && !f.aggregate && f.channel !== 'radius').map((f) => f.field)
+      pipeline.push({ type: 'aggregate', groupby, ops: [radiusDefP.aggregate!], fields: [radiusDefP.field], as: [aggFieldName(radiusDefP)] })
+      const filt = arcInvalidFilter()
+      if (filt) pipeline.push(filt)
+    } else if (radiusDefP) {
+      // radius stacking (radius.stack): the polar dimension (theta) groups,
+      // the radius measure stacks into radius_start/end
+      if (radiusDefP.stack != null && radiusDefP.stack !== false) {
+        pipeline.push({
+          type: 'stack',
+          groupby: [thetaDef.field],
+          field: radiusDefP.field,
+          sort: { field: [], order: [] },
+          as: [`${radiusDefP.field}_start`, `${radiusDefP.field}_end`],
+          offset: radiusDefP.stack === true ? 'zero' : radiusDefP.stack,
+        })
+      }
+      const filt = arcInvalidFilter()
+      if (filt) pipeline.push(filt)
+    } else if (thetaDef.aggregate) {
+      // aggregate the theta measure, grouped by the raw (non-aggregated)
+      // field channels, then stack the aggregated field when there is a
+      // series to stack by (probed against the oracle)
+      const rawFields = fields.filter((f) => f.field && !f.aggregate && f.channel !== 'theta' && f.channel !== 'radius')
+      const groupby = rawFields.map((f) => f.field)
+      pipeline.push({ type: 'aggregate', groupby, ops: [thetaDef.aggregate!], fields: [thetaDef.field], as: [arcTheta.field] })
+      if (groupby.length) {
+        pipeline.push({
+          type: 'stack',
+          groupby: [],
+          field: arcTheta.field,
+          sort: { field: [groupby[0]!], order: ['ascending'] },
+          as: [`${arcTheta.field}_start`, `${arcTheta.field}_end`],
+          offset: 'zero',
+        })
+      }
+      const filtT = arcInvalidFilter()
+      if (filtT) pipeline.push(filtT)
+    } else if (arcTheta.stacked) {
+      const colorF = fields.find((f) => f.channel === 'color' && f.field)
+      pipeline.push({
+        type: 'stack',
+        groupby: [],
+        field: thetaDef.field,
+        sort: colorF ? { field: [aggFieldName(colorF)], order: ['ascending'] } : { field: [], order: [] },
+        as: [`${thetaDef.field}_start`, `${thetaDef.field}_end`],
+        offset: 'zero',
+      })
+      const filtS = arcInvalidFilter()
+      if (filtS) pipeline.push(filtS)
+    }
   }
 
   // sort arrays: an index column (position in the user's list) that the scale
@@ -2817,8 +2881,12 @@ function timeUnitFormatSignal(u: string): string {
 
 /** Non-positional legends format timeUnit fields with timeFormat. */
 function applyTimeUnitLegend(lg: Record<string, unknown>, def: FieldDef, userLegend?: Record<string, unknown>): void {
-  if (!def.timeUnit) return
   if (userLegend && userLegend.format !== undefined) return
+  // a raw temporal field formats through the default time format (config.timeFormat)
+  if (!def.timeUnit) {
+    if (def.type === 'temporal') lg.format = '%b %d, %Y'
+    return
+  }
   lg.format = { signal: timeUnitFormatSignal(def.timeUnit) }
   lg.formatType = 'time'
 }
@@ -3147,9 +3215,10 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       })
     } else {
       const cs = colorDef.scale ?? {}
-      const colorScaleType = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'quantile', 'quantize', 'threshold'].includes(cs.type as string)
+      // a temporal colour field is a time scale (utc for a utc time unit), like vega-lite's default type
+      const colorScaleType = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'quantile', 'quantize', 'threshold'].includes(cs.type as string)
         ? cs.type as string
-        : 'linear'
+        : colorDef.type === 'temporal' ? (colorDef.tu?.utc ? 'utc' : 'time') : 'linear'
       scales.push({
         name: 'color',
         type: colorScaleType,
@@ -3411,12 +3480,12 @@ function normalizeAngle(angle: number): number {
 }
 
 /** vega-lite `defaultLabelBaseline(angle, orient, channel)`. */
-function defaultLabelBaseline(angle: number, orient: string, channel: string): string | null {
+function defaultLabelBaseline(angle: number, orient: string, channel: string, alwaysIncludeMiddle = false): string | null {
   if (channel === 'x') {
     if ((45 < angle && angle < 135) || (225 < angle && angle < 315)) return 'middle'
     return (angle <= 45 || 315 <= angle) === (orient === 'top') ? 'bottom' : 'top'
   }
-  if (angle <= 45 || 315 <= angle || (135 <= angle && angle <= 225)) return null
+  if (angle <= 45 || 315 <= angle || (135 <= angle && angle <= 225)) return alwaysIncludeMiddle ? 'middle' : null
   return (45 <= angle && angle <= 135) === (orient === 'left') ? 'top' : 'bottom'
 }
 
@@ -4467,7 +4536,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       const rawFmt = (textDef.raw as { format?: unknown }).format
       if (textDef.timeUnit) {
         update.text = { signal: `timeFormat(datum[${f}], ${timeUnitFormatSignal(textDef.timeUnit)})` }
-      } else if (textDef.aggregate || rawFmt !== undefined) {
+      } else if (textDef.aggregate || rawFmt !== undefined || textDef.type === 'quantitative') {
         update.text = { signal: `format(datum[${f}], ${JSON.stringify(rawFmt ?? '')})` }
       } else {
         update.text = { signal: `isValid(datum[${f}]) ? datum[${f}] : ""+datum[${f}]` }
@@ -4571,6 +4640,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       if (radiusDefE.stack != null && radiusDefE.stack !== false) {
         update.innerRadius = { scale: 'radius', field: `${aggFieldName(radiusDefE)}_start` }
         update.outerRadius = { scale: 'radius', field: `${aggFieldName(radiusDefE)}_end` }
+      } else if (radiusDefE.tu) {
+        // vega-lite 6.4.3 positions a time-unit radius as an offsetted rect, and its
+        // own output never materializes those fields (the arcs collapse): reproduced
+        // verbatim so the two renderings agree
+        update.innerRadius = { scale: 'radius', field: `${aggFieldName(radiusDefE)}_offsetted_rect_start` }
+        update.outerRadius = { scale: 'radius', field: `${aggFieldName(radiusDefE)}_offsetted_rect_end` }
       } else {
         update.outerRadius = { scale: 'radius', field: aggFieldName(radiusDefE) }
         update.innerRadius = { scale: 'radius', value: 0 }
@@ -4693,7 +4768,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const measureDef = orient === 'vertical' ? yDef : xDef
     const dimDef = orient === 'vertical' ? xDef : yDef
     const cornerKeys = Object.keys(update).filter((k) => k.startsWith('cornerRadius'))
-    if (cornerKeys.length && measureDef && dimDef && isStacked(measureDef, mark, orient, fields) && positionalScaleType(mark, dimDef) === 'band') {
+    // vega-lite getMarkPropOrConfig is truthy only for a non-zero radius, and a size channel disables the group
+    const hasRadius = cornerKeys.some((k) => {
+      const e = update[k] as Record<string, unknown> | undefined
+      return isObject(e) && ('signal' in e || Boolean(e.value))
+    })
+    if (hasRadius && !fields.some((f) => f.channel === 'size') && measureDef && dimDef && isStacked(measureDef, mark, orient, fields) && positionalScaleType(mark, dimDef) === 'band') {
       const v = orient === 'vertical'
       const mc = v ? 'y' : 'x'
       const dc = v ? 'x' : 'y'
@@ -4711,9 +4791,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       groupUpdate[mc] = { signal: `min(${extents})` }
       groupUpdate[`${mc}2`] = { signal: `max(${extents})` }
       groupUpdate.clip = { value: true }
+      const ownMarkDef = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
       for (const k of cornerKeys) {
         groupUpdate[k] = update[k]
         delete update[k]
+        // a radius that came from config would still reach the rect through vega's own mark config: zero it
+        if (ownMarkDef[k] === undefined && ownMarkDef.cornerRadiusEnd === undefined) update[k] = { value: 0 }
       }
       delete update.clip
       update[v ? 'width' : 'height'] = { field: { group: v ? 'width' : 'height' } }
@@ -5072,7 +5155,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const markSize = isObject(markRaw) ? (markRaw.size as number | undefined) : undefined
   const encoding = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   checkConstChannels(mark, encoding, markIsFilled(spec, mark))
-  const fields = parseEncodingFields(encoding)
+  const fields = parseEncodingFields(encoding, spec.config)
 
   // orientation (bar/area/rule/tick): vertical unless the y channel is discrete
   // and x is not, or the mark def says otherwise
