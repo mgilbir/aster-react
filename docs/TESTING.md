@@ -75,8 +75,16 @@ Keep failures small and deterministic: no `Math.random` in specs, no clock-depen
 expressions, and no unseeded bootstrap aggregates. Pin dates through data values or
 `datetime(...)` expressions.
 
-`pnpm conformance:canvas` renders the corpus plus custom-font/multi-line fixtures
+`pnpm conformance:canvas` renders the whole corpus plus custom-font/multi-line fixtures
 through both canvas backends in headless Chromium (also `--browser=firefox|webkit`)
-and pixel-diffs them (1px-neighbourhood, 4% ratio / 2.5 mean tolerance). It gates canvas paint order,
-path replay and live text metrics; the recorded/jsdom canvas differential stays in
-`packages/core/src/canvas.test.ts`.
+and pixel-diffs them exactly (a pixel differs above 48 summed channel difference; at most
+0.05% differing pixels and a 0.05 mean per entry, WebKit 0.1% / 0.07: the measured
+3-decimal path-rounding noise plus a small headroom). The only exclusion carries its evidence
+in `scripts/browser-canvas-parity.mts`. It gates canvas paint order, path replay and live text
+metrics; the call-by-call draw rules are asserted in `packages/core/src/canvas-draw.test.ts` and
+the recorded/jsdom canvas-vs-SVG differential stays in `packages/core/src/canvas.test.ts`.
+
+The SVG oracle's canonicalizer (`packages/conformance/src/normalize.ts`) is strict: it records every
+paint, geometry and text attribute, the full transform and the paint order, and only normalizes
+representation differences it can justify (each is documented in the file).
+`normalize.test.ts` plants one difference at a time and requires each to be reported.

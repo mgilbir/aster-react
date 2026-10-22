@@ -26,6 +26,7 @@ const argv = process.argv.slice(2)
 const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
 const LIMIT = Number(arg('limit', '0'))
 const FILTER = arg('filter', '')
+const BROWSER = arg('browser', 'chromium') as 'chromium' | 'firefox' | 'webkit'
 // Pixel tolerance, measured (see the block comment above the diff in the page code):
 //   PIXEL  a pixel differs when |dR|+|dG|+|dB|+|dA| > PIXEL (48 = 12/255 per channel on average)
 //   RATIO  an entry may have at most this fraction of differing pixels
@@ -35,10 +36,13 @@ const FILTER = arg('filter', '')
 // paints from the same path string the SVG renderer emits, vega's canvas from the
 // unrounded numbers). Worst such noise measured: 50 pixels over PIXEL out of 127,100
 // (RATIO 3.9e-4) and mean 0.029; the limits below sit just above that.
+// WebKit's rasteriser rounds path coverage differently from Skia: its worst measured noise
+// on the same corpus is 0.08% / mean 0.06 (line-curve-cardinal-tension-0-3.vg), so its
+// limits are one step looser; Chromium and Firefox measured the same as above.
+const LIMITS = { chromium: { ratio: 0.0005, mean: 0.05 }, firefox: { ratio: 0.0005, mean: 0.05 }, webkit: { ratio: 0.001, mean: 0.07 } } as const
 const PIXEL = Number(arg('pixel', '48'))
-const RATIO = Number(arg('ratio', '0.0005'))
-const MEAN = Number(arg('mean', '0.05'))
-const BROWSER = arg('browser', 'chromium') as 'chromium' | 'firefox' | 'webkit'
+const RATIO = Number(arg('ratio', String(LIMITS[BROWSER].ratio)))
+const MEAN = Number(arg('mean', String(LIMITS[BROWSER].mean)))
 
 interface Entry { name: string; spec: Record<string, unknown> }
 
