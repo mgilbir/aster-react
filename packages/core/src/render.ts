@@ -1502,11 +1502,6 @@ function escAttr(value: unknown): string {
   return needsEscape(s, true) ? escapeXml(s, true) : s
 }
 
-/** ` name="value"` for any non-nullish value, escaped. */
-function attrS(name: string, value: unknown): string {
-  return value == null ? '' : ` ${name}="${escAttr(value)}"`
-}
-
 /** ` name="a,b,c"`: numbers formatted, anything else escaped. */
 function attrList(name: string, values: readonly unknown[]): string {
   const list = values.map((v) => (typeof v === 'number' ? num(v) : String(v))).join(',')

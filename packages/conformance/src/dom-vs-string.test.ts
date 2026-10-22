@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 /**
  * The DOM descriptors (what `patchSceneDom` and `renderSceneToDomElement` build) must
- * describe the same document as the string renderer. They keep separate attribute
- * lists (audit C43/T2); this compares the two over the whole corpus under the strict
- * canonicalizer so the lists cannot drift on anything that paints.
+ * describe the same document as the string renderer. Both take their attributes from
+ * the per-element lists in render.ts (audit C43/T2); this compares the two over the
+ * whole corpus under the strict canonicalizer, so a structural difference (clips,
+ * nesting, ordering) or a list that stopped being shared shows up as a paint difference.
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
