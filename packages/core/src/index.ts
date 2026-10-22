@@ -27,6 +27,7 @@ export { chartInfoFromScene, evaluateChart, getChartInfo } from './runtime.js'
 export {
   createChartStream,
   AsterStreamBackpressureError,
+  AsterStreamClosedError,
   type ChartStream,
   type StreamBatch,
   type StreamFlush,
