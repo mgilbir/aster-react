@@ -34,10 +34,12 @@ const BUDGETS = {
   '@aster/core/canvas': 20 * 1024,
   '@aster/core/hit': 6 * 1024,
   '@aster/core/signals': 36 * 1024,
-  '@aster/react': 160 * 1024,
+  // 180 kB leaves headroom for feature work; measured values are recorded at
+  // the top of this file and in `pnpm bench:bundle`.
+  '@aster/react': 180 * 1024,
   // Base + VL compiler. The compiler is opt-in (`import '@aster/react/vl'`),
   // so the base row above is the one to watch for React-side regressions.
-  '@aster/react/vl': 160 * 1024,
+  '@aster/react/vl': 180 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

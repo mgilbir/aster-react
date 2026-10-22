@@ -145,13 +145,18 @@ worker entry as well, since compilation happens there.
 The ref exposes `getScene()`, `getSvg()`, `getChartInfo()`, `getView()`, `setView()`,
 `resetView()`, `setSignal(name, value)` and `getSignals()`.
 
-`denseMarks` (SVG only, off by default) batches dense symbol marks into chunked
-`<path>` elements instead of one element per datum: 100k points become ~400 paths and
-a 100k-point stream drops from ~79 ms to ~17 ms per appended frame. Positions are
-baked into `d`, so the pixels match; tooltips, point selection and the a11y tree
-resolve through the scene. Per-mark `data-datum` attributes and spec `signal.on` mark
-events are not emitted in this mode, and the first client render uses the normal
-(hydration-safe) markup — streams and later updates are batched.
+`denseMarks` (SVG only) batches dense symbol marks into chunked `<path>` elements
+instead of one element per datum: 100k points become ~400 paths, a 100k-point client
+mount drops from ~620 ms to ~280 ms, and a 100k-point stream from ~79 ms to ~17 ms per
+appended frame. Positions are baked into `d`, so the pixels match; tooltips, point
+selection and the a11y tree resolve through the scene.
+
+- `'auto'` (default) batches symbol marks with ≥512 items unless the spec has
+  `signal.on` event streams (those read the datum from per-item DOM nodes).
+- `true` always batches, `false` disables.
+- Client-only mounts batch directly. SSR/hydrated pages emit the per-item markup on
+  the server (so hydration matches) and switch to batched in place after hydration.
+- Per-mark `data-datum` attributes are not emitted for batched chunks.
 
 Pan/zoom is driven through scale `domainRaw`: wheel, drag (shift-drag when selection
 is enabled), two-pointer pinch and the keyboard (`←/→/↑/↓`, `+`/`-`, `0`/`Home`,

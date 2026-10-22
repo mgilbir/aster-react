@@ -59,6 +59,12 @@
   `autosize: pad/fit` charts keep the full pass; conformance output is unchanged.
 - **Faster row diff**: `rowsEqual` uses `for...in` (no `Object.keys` allocations)
   for plain rows, ~1.5x faster auto-pulse inference on wholesale array replacement.
+- **Dense SVG marks by default**: `denseMarks` now defaults to `'auto'` — symbol
+  marks with ≥512 items batch into chunked `<path>` elements unless the spec uses
+  `signal.on` event streams (`true` forces, `false` disables). Client-only mounts
+  batch directly (100k-point mount ~620 → ~280ms, 100k → 402 nodes); SSR emits the
+  per-item markup so hydration matches, then switches to batched in place.
+  `denseMarks={false}` keeps the per-item DOM.
 - **Dense SVG marks (`denseMarks`)**: opt-in batched symbol rendering for large SVG
   scenes. Dense symbol marks emit chunked `<path>` elements (positions baked into
   `d`, ~256 items per chunk) instead of one transformed element per datum: 100k

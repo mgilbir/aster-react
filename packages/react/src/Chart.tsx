@@ -18,7 +18,7 @@ import { isPromiseLike, normalizeChartSpec } from './spec.js'
 // string-mode host never bundles it, while <Chart> (which supports the
 // `incremental` path) pulls it in explicitly. The canvas renderer is likewise
 // opt-in (`@aster/core/canvas`) so SVG-only hosts never bundle it.
-import { createChartSession, patchSceneDom, renderSceneToDomElement } from '@aster/core/dom'
+import { createChartSession, hasDenseSymbolMarks, patchSceneDom, renderSceneToDomElement } from '@aster/core/dom'
 import {
   renderSceneToCanvas, renderSceneToCanvasAppend, snapshotCanvasScene,
   type CanvasSceneSnapshot,
@@ -43,6 +43,14 @@ import {
 } from './interaction.js'
 
 const num = (x: number): string => (Number.isInteger(x) ? String(x) : String(Math.round(x * 1000) / 1000))
+
+// `getServerSnapshot` runs for SSR *and* for the hydration render on the client,
+// so this is `true` exactly while the tree must match server markup. It flips to
+// `false` after hydration, which lets dense marks batch a client-only mount
+// immediately while keeping SSR/hydration byte-compatible.
+const subscribeNothing = (): (() => void) => () => {}
+const clientOnly = (): boolean => false
+const serverOrHydrating = (): boolean => true
 
 /** Scene/encode channel fields that are engine-internal, not datum data. */
 const TOOLTIP_INTERNAL_FIELDS = new Set([
@@ -96,15 +104,19 @@ export interface ChartProps {
    */
   renderer?: 'svg' | 'canvas'
   /**
-   * Batch dense symbol marks into chunked `<path>` elements (SVG only). Opt-in:
-   * the DOM stops mirroring Vega's per-item structure (one element per datum),
+   * Batch dense symbol marks into chunked `<path>` elements (SVG only):
+   * `'auto'` (default) batches large symbol marks when the spec has no
+   * `signal.on` event streams, `true` always batches, `false` disables.
+   *
+   * The DOM stops mirroring Vega's per-item structure (one element per datum),
    * but the pixels are identical — 100k symbols become a few hundred paths,
-   * which is what keeps large SVG streams inside the frame budget. Tooltips,
-   * point selection and a11y resolve through the scene, so they keep working;
+   * which keeps large SVG scenes inside the frame budget. Tooltips, point
+   * selection and a11y resolve through the scene, so they keep working;
    * per-mark `data-datum` attributes and spec `signal.on` mark events do not.
-   * Ignored for canvas (already batched) and for the server-rendered markup.
+   * Ignored for canvas (already batched). Server rendering always emits the
+   * per-item markup so hydration matches; a client-only mount batches directly.
    */
-  denseMarks?: boolean
+  denseMarks?: boolean | 'auto'
   className?: string
   style?: React.CSSProperties
   signals?: Record<string, unknown>
@@ -415,7 +427,7 @@ function ChartView({
   maxZoom = 1000,
   incremental = true,
   renderer = 'svg',
-  denseMarks = false,
+  denseMarks = 'auto',
   signalListeners,
   onSignal,
   interactive = true,
@@ -468,9 +480,6 @@ function ChartView({
 
   const renderWidth = useOverrides ? width : measured.width
   const renderHeight = useOverrides ? height : measured.height
-
-  // Dense SVG marks: batched `<path>` chunks instead of one element per datum.
-  const denseSvg = denseMarks === true && renderer === 'svg'
 
   // `pan`/`zoom` are focused aliases for `panZoomEnabled`.
   const panZoomEnabled = panZoom || pan === true || zoom === true
@@ -555,6 +564,19 @@ function ChartView({
     () => scene ? filterLegendScene(scene, hiddenLegend.values()) : null,
     [scene, hiddenLegend],
   )
+  // Dense SVG marks: batched `<path>` chunks instead of one element per datum.
+  // `'auto'` stays out of the way when the spec binds mark events (`signal.on`),
+  // because those resolve their datum from per-item DOM nodes.
+  const denseRequested = denseMarks === true || denseMarks === 'auto'
+  const denseAllowed = React.useMemo(() => {
+    if (!denseRequested) return false
+    if (denseMarks === true) return true
+    const signalDefs = (scene as { compiled?: { signalDefs?: Array<{ on?: unknown[] }> } } | null)?.compiled?.signalDefs
+    return !signalDefs?.some((d) => (d.on?.length ?? 0) > 0)
+  }, [denseRequested, denseMarks, scene])
+  const denseSvg = denseAllowed && renderer === 'svg' && (scene != null ? hasDenseSymbolMarks(scene) : false)
+  const hydrating = React.useSyncExternalStore(subscribeNothing, clientOnly, serverOrHydrating)
+
   const renderError = renderErrorRef.current
 
   React.useEffect(() => {
@@ -573,9 +595,10 @@ function ChartView({
     // dangerouslySetInnerHTML prop would otherwise replace the patched <svg>
     // on the first streamed frame.
     if (sceneOverride !== undefined) return null
+    if (denseSvg && !hydrating) return null
     if (incremental && hasPatchedRef.current) return null
     return renderSceneToSvg(displayScene)
-  }, [incremental, renderer, displayScene, sceneOverride])
+  }, [incremental, renderer, displayScene, sceneOverride, denseSvg, hydrating])
   // After the first commit the markup must leave the props entirely. The memo
   // above is keyed on the scene, so on an identical-content re-render it would
   // return its cached string and React (which re-applies a present
@@ -585,6 +608,9 @@ function ChartView({
 
   // Scene whose DOM we know is current (rendered as markup or patched here).
   const domSceneRef = React.useRef<SceneRoot | null>(null)
+  // Whether that DOM is batched (dense) — a mode switch needs a patch even when
+  // the scene object itself did not change.
+  const domDenseRef = React.useRef(false)
   const svgHostRef = React.useRef<HTMLDivElement>(null)
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
   // Last canvas frame: append-only scenes paint only the new mark items.
@@ -600,6 +626,41 @@ function ChartView({
   React.useEffect(() => {
     if (signals) signalStore.merge(signals)
   }, [signals, signalStore])
+  // Incremental updates: create the <svg> once, then patch changed attributes
+  // in place instead of re-serializing and re-parsing the whole markup every render.
+  React.useLayoutEffect(() => {
+    if (!displayScene || renderer === 'canvas') return
+    // A sceneOverride still needs its DOM created: stream markup is client-owned
+    // (no dangerouslySetInnerHTML), so the first frame builds the element here.
+    if (!incremental && sceneOverride === undefined) return
+    const host = svgHostRef.current
+    if (!host) return
+    // This commit rendered the full SVG from this exact scene and the browser
+    // just parsed it, so the tree already matches. Re-walking it with the
+    // patcher would be pure cost — and it is O(all items), the worst place to
+    // pay it (mount is where a large scene hurts most).
+    if (domMarkup != null) {
+      hasPatchedRef.current = true
+      domSceneRef.current = displayScene
+      domDenseRef.current = false // string markup is always per-item
+      return
+    }
+    const existing = host.firstElementChild
+    if (incremental && existing && existing.tagName.toLowerCase() === 'svg') {
+      // Patch when the scene changed, or when the render mode flipped (e.g. a
+      // client-only dense mount, or hydration handing over to batched marks).
+      if (domSceneRef.current !== displayScene || domDenseRef.current !== denseSvg) {
+        patchSceneDom(existing, displayScene, { denseMarks: denseSvg })
+        domDenseRef.current = denseSvg
+      }
+    } else {
+      host.replaceChildren(renderSceneToDomElement(displayScene, document, { denseMarks: denseSvg }))
+      domDenseRef.current = denseSvg
+    }
+    domSceneRef.current = displayScene
+    hasPatchedRef.current = true
+  }, [incremental, displayScene, sceneOverride, domMarkup, denseSvg])
+
   const signalBindingRef = React.useRef<SignalBinding | null>(null)
   React.useLayoutEffect(() => {
     if (!interactive || !scene || renderer === 'canvas') return
@@ -626,35 +687,6 @@ function ChartView({
     }
   })
 
-  // Incremental updates: create the <svg> once, then patch changed attributes
-  // in place instead of re-serializing and re-parsing the whole markup every render.
-  React.useLayoutEffect(() => {
-    if (!displayScene || renderer === 'canvas') return
-    // A sceneOverride still needs its DOM created: stream markup is client-owned
-    // (no dangerouslySetInnerHTML), so the first frame builds the element here.
-    if (!incremental && sceneOverride === undefined) return
-    const host = svgHostRef.current
-    if (!host) return
-    // This commit rendered the full SVG from this exact scene and the browser
-    // just parsed it, so the tree already matches. Re-walking it with the
-    // patcher would be pure cost — and it is O(all items), the worst place to
-    // pay it (mount is where a large scene hurts most).
-    if (domMarkup != null) {
-      hasPatchedRef.current = true
-      domSceneRef.current = displayScene
-      return
-    }
-    const existing = host.firstElementChild
-    if (incremental && existing && existing.tagName.toLowerCase() === 'svg') {
-      // The DOM already reflects this exact scene (the commit that dropped the
-      // markup prop): patching would re-walk everything to write nothing.
-      if (domSceneRef.current !== displayScene) patchSceneDom(existing, displayScene, { denseMarks: denseSvg })
-    } else {
-      host.replaceChildren(renderSceneToDomElement(displayScene, document, { denseMarks: denseSvg }))
-    }
-    domSceneRef.current = displayScene
-    hasPatchedRef.current = true
-  }, [incremental, displayScene, sceneOverride, domMarkup, denseSvg])
 
   // Canvas backend: size the backing store for devicePixelRatio and redraw the
   // whole scene whenever it changes (cheap relative to SVG serialization for

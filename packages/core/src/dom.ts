@@ -48,50 +48,84 @@ const str = (v: string | number | undefined): string => (typeof v === 'number' ?
  * `transform` (Chrome makes transformed SVG nodes ~3x more expensive to
  * mutate: 145ms vs 45ms per append in a 100k-node scene).
  */
-const PATH_TOKEN = /([a-zA-Z])|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/g
-
 function round3(v: number): string {
   const r = Math.round(v * 1000) / 1000
   return Object.is(r, -0) ? '0' : String(r)
 }
 
+/** True for a letter (SVG path command); numbers never start with one. */
+function isLetter(c: number): boolean {
+  return (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+}
+
+function isDigit(c: number): boolean {
+  return c >= 48 && c <= 57
+}
+
+/**
+ * Translate every absolute coordinate in an SVG path by (dx, dy). Relative
+ * commands are deltas and need no change, and arguments that do not move
+ * (arc radii/flags, relative deltas) are copied verbatim instead of being
+ * parsed and reformatted — a 100k-symbol dense mount spends ~170ms here, so
+ * this is a hand-written scanner rather than a regex tokenizer.
+ */
 export function translatePathData(d: string, dx: number, dy: number): string {
   if (!d || (dx === 0 && dy === 0)) return d
   let out = ''
-  let cmd = ''
+  let cmd = '' // current command letter ('' before the first one)
   let argi = 0
   let afterCommand = true
-  PATH_TOKEN.lastIndex = 0
-  for (let m = PATH_TOKEN.exec(d); m != null; m = PATH_TOKEN.exec(d)) {
-    const letter = m[1]
-    if (letter) {
-      cmd = letter
+  const n = d.length
+  let i = 0
+  while (i < n) {
+    const c = d.charCodeAt(i)
+    if (isLetter(c)) {
+      cmd = d[i]!
       argi = 0
       afterCommand = true
-      out += letter
+      out += cmd
+      i++
       continue
     }
-    const v = Number(m[2])
-    let value = v
+    if (c === 44 || c === 32 || c === 9 || c === 10 || c === 13) { i++; continue } // , space 	 
+ 
+    // A number token: [+-]? digits ('.' digits)? ([eE][+-]?digits)?
+    const start = i
+    if (c === 45 || c === 43) i++
+    while (i < n && (isDigit(d.charCodeAt(i)) || d.charCodeAt(i) === 46)) i++
+    if (i < n && (d.charCodeAt(i) === 101 || d.charCodeAt(i) === 69)) {
+      i++
+      if (i < n && (d.charCodeAt(i) === 43 || d.charCodeAt(i) === 45)) i++
+      while (i < n && isDigit(d.charCodeAt(i))) i++
+    }
     const relative = cmd !== '' && cmd === cmd.toLowerCase()
+    // Which argument of which command moves?
+    let moves = false
+    let axisX = true
     if (!relative) {
       switch (cmd) {
         case 'A':
           // rx ry rotation large-arc sweep x y — only the endpoint moves.
-          if (argi === 5) value = v + dx
-          else if (argi === 6) value = v + dy
+          if (argi === 5) moves = true
+          else if (argi === 6) { moves = true; axisX = false }
           break
         case 'H':
-          if (argi === 0) value = v + dx
+          if (argi === 0) moves = true
           break
         case 'V':
-          if (argi === 0) value = v + dy
+          if (argi === 0) { moves = true; axisX = false }
           break
         default:
-          value = argi % 2 === 0 ? v + dx : v + dy
+          moves = true
+          if (argi % 2 === 1) axisX = false
       }
     }
-    out += (afterCommand ? '' : ',') + round3(value)
+    if (moves) {
+      const v = Number(d.slice(start, i))
+      out += (afterCommand ? '' : ',') + round3(axisX ? v + dx : v + dy)
+    } else {
+      out += (afterCommand ? '' : ',') + d.slice(start, i)
+    }
     afterCommand = false
     argi++
   }
@@ -292,6 +326,23 @@ function symbolItems(group: SceneGroup, items: SceneItem[]): DomDesc[] {
   // snapshot: exposing the cached array would mean a later in-place append
   // mutates the patcher's "previous" state and every child gets re-walked.
   return descs.slice()
+}
+
+/**
+ * True when a scene has a symbol mark large enough for `denseMarks` batching.
+ * `<Chart>` uses this to decide whether hit-testing must go through the scene
+ * index (batched marks carry no per-item `data-datum`).
+ */
+export function hasDenseSymbolMarks(scene: SceneRoot, minItems = DENSE_SYMBOL_MIN): boolean {
+  const walk = (group: SceneGroup): boolean => {
+    if (group.marktype === 'symbol' && (group.items?.length ?? 0) >= minItems) return true
+    for (const item of group.items ?? []) {
+      const kids = (item as SceneGroup).items
+      if (Array.isArray(kids) && walk(item as SceneGroup)) return true
+    }
+    return false
+  }
+  return (scene.items ?? []).some((group) => walk(group))
 }
 
 function denseSymbolsEnabled(options: DomRenderOptions | undefined, items: SceneItem[]): number {

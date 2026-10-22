@@ -10,6 +10,7 @@
  * A string-mode host (renderSpec → SVG string) never needs it.
  */
 export {
+  hasDenseSymbolMarks,
   patchSceneDom,
   renderSceneToDomElement,
   sceneToDomDesc,

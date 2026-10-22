@@ -75,15 +75,18 @@ a chart pays only for the features it imports.
   an O(appended) SVG patch, not a re-walk of every sibling. Symbol descriptors are
   cached per mark group, so an append rebuilds only new/dirty entries
   (`patchSceneDom` at 100k: ~5.3 → ~3.8ms).
-- **Dense marks (`denseMarks`, opt-in)**: dense symbol marks render as chunked
-  `<path>` elements with the position baked into `d` instead of one transformed
-  element per datum. At 100k points this turns 100k DOM nodes into ~400 and a
-  one-append-per-frame SVG stream from ~79ms to **~16.7ms** (0% long frames),
-  matching canvas. Chunks are bounded (~256 items) and cached per group, so an
-  append re-serializes one chunk. Only opaque marks batch (translucency must
-  composite per item); rotated marks keep their own element. Tooltips/hit-testing
-  use the scene index; `pnpm conformance:batch` gates pixel parity against the
-  per-item rendering.
+- **Dense marks (`denseMarks`, default `'auto'`)**: dense symbol marks render as
+  chunked `<path>` elements with the position baked into `d` instead of one
+  transformed element per datum. At 100k points this turns 100k DOM nodes into ~400,
+  a client mount from ~620ms to **~280ms**, and a one-append-per-frame SVG stream
+  from ~79ms to **~16.7ms** (0% long frames), matching canvas. Chunks are bounded
+  (~256 items) and cached per group, so an append re-serializes one chunk
+  only. Only opaque marks batch (translucency must composite per item); rotated
+  marks keep their own element; `'auto'` stays per-item when the spec has
+  `signal.on` streams. SSR emits per-item markup for hydration and the client
+  switches to batched in place afterwards. Tooltips/hit-testing use the scene
+  index; `pnpm conformance:batch` gates pixel parity against the per-item
+  rendering.
 - **No-op renders**: identical content is free all the way through — the session
   returns the cached scene, chart info/a11y derive from it, and the SVG/canvas
   effects skip the DOM/canvas when the scene object is unchanged.
