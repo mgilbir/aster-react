@@ -274,16 +274,16 @@ describe('regular expressions: the caps that can be enforced (C7, T3)', () => {
   // the input and pattern length per call; docs/LIMITS.md says plainly that a
   // hard guarantee needs a killable worker. This attack would run for years if
   // the input cap were missing, so the hard kill is what would catch a regression.
-  it('test() on a 1 MB host string whose pattern backtracks catastrophically', async () => {
+  it('test() on a 1 MB host string with a quadratic pattern (passes the screen; the input cap stops it)', async () => {
     const r = await attack(`
-      core.renderSpec({ data: [{ name: 't', transform: [{ type: 'filter', expr: 'test(/(a+)+$/, datum.s)' }] }] },
+      core.renderSpec({ data: [{ name: 't', transform: [{ type: 'filter', expr: 'test(/a+$/, datum.s)' }] }] },
         { data: { t: [{ s: 'a'.repeat(1000000) + '!' }] }, limits: { maxStringLength: 1000, maxTimeMs: 200 } })`)
     expectLimit(r, /maxStringLength/, 200)
   }, T)
 
   it('countpattern on a long host string', async () => {
     const r = await attack(`
-      core.renderSpec({ data: [{ name: 't', transform: [{ type: 'countpattern', field: 's', pattern: '(a+)+$' }] }] },
+      core.renderSpec({ data: [{ name: 't', transform: [{ type: 'countpattern', field: 's', pattern: 'a+$' }] }] },
         { data: { t: [{ s: 'a'.repeat(1000000) + '!' }] }, limits: { maxStringLength: 1000, maxTimeMs: 200 } })`)
     expectLimit(r, /maxStringLength/, 200)
   }, T)

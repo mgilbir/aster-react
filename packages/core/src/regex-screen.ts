@@ -233,7 +233,7 @@ class Parser {
         if (b.length === 1 && b[0]![0] === b[0]![1]) { out.push([a[0]![0], Math.max(a[0]![0], b[0]![0])]); continue }
         this.i = save // `a-\d`: treat '-' literally
       }
-      out.push(...a)
+      for (const x of a) out.push(x)
     }
     if (!closed) throw new Error('unterminated class')
     const r = normalize(out)
