@@ -45,9 +45,10 @@ import {
  */
 export type GeneratedPath = string & { readonly __generatedPath: true }
 const gen = (s: string): GeneratedPath => s as GeneratedPath
-// Every generated `d` (line/area/trail/arc/symbol/...) passes through here, so
-// maxPathLength is enforced on the exact string at the one place it is written
-// (C49); with no limits scope active the check is a single null test.
+// Every generated `d` (line/area/trail/arc/symbol/...) is written through an
+// AttrSink's `g()` (string AND DOM output share the `*Attrs` functions), which
+// calls this, so maxPathLength is enforced on the exact string at the one place
+// it is produced (C49). With no limits scope active it is one boolean load.
 const genD = (d: GeneratedPath): string => { if (metering) checkPathLength(d); return d }
 
 /**

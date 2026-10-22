@@ -239,6 +239,11 @@ class Meter implements LimitMeter {
 }
 
 let active: LimitMeter | null = null
+/**
+ * True while a limits scope is active. A live `export let` binding so per-item
+ * hot paths (the SVG path writer) test one boolean instead of calling a function.
+ */
+export let metering = false
 
 /** The meter of the enclosing {@link withLimits} scope, or null when limits are off. */
 export function activeMeter(): LimitMeter | null {
@@ -257,11 +262,13 @@ export function withLimits<T>(limits: SpecLimits | undefined, fn: (meter: LimitM
   const prev = active
   const meter = new Meter(limits, createLimitClock(limits))
   active = meter
+  metering = true
   let result: T
   try {
     result = fn(meter)
   } finally {
     active = prev
+    metering = prev !== null
   }
   // A violation that a defensive catch swallowed still fails the call.
   if (meter.violation) throw meter.violation

@@ -6,7 +6,7 @@
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, compileExprTransform, sortRows, sortOrder, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row, type TransformContext } from './transform.js'
-import { activeMeter, withLimits, meterRows, meterItems, boundedCount, checkRowCount, meterTick } from './limits.js'
+import { activeMeter, withLimits, meterItems, boundedCount, checkRowCount } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
 
