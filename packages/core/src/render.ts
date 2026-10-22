@@ -1626,17 +1626,20 @@ export function pathVectorEffect(it: SceneItem): boolean {
  * `image-rendering`); `strokeWidth` replaces the item's own (a line's default 2).
  */
 export function paintAttrs(it: SceneItem, w: AttrSink, styles?: readonly string[], strokeWidth?: number): void {
-  w.a('fill', it.fill)
-  w.a('fill-opacity', it.fillOpacity)
-  w.a('stroke', it.stroke)
-  w.a('stroke-opacity', it.strokeOpacity)
-  w.a('stroke-width', strokeWidth ?? it.strokeWidth)
-  w.a('stroke-linecap', it.strokeCap)
-  w.a('stroke-linejoin', it.strokeJoin)
-  w.a('stroke-dasharray', it.strokeDash)
-  w.a('stroke-dashoffset', it.strokeDashOffset)
-  w.a('stroke-miterlimit', it.strokeMiterLimit)
-  w.a('opacity', it.opacity)
+  // `!= null` before each call: most properties of most items are absent, and the
+  // string renderer is dominated by exactly these checks at 10k+ marks.
+  let v: unknown
+  if ((v = it.fill) != null) w.a('fill', v)
+  if ((v = it.fillOpacity) != null) w.a('fill-opacity', v)
+  if ((v = it.stroke) != null) w.a('stroke', v)
+  if ((v = it.strokeOpacity) != null) w.a('stroke-opacity', v)
+  if ((v = strokeWidth ?? it.strokeWidth) != null) w.a('stroke-width', v)
+  if ((v = it.strokeCap) != null) w.a('stroke-linecap', v)
+  if ((v = it.strokeJoin) != null) w.a('stroke-linejoin', v)
+  if ((v = it.strokeDash) != null) w.a('stroke-dasharray', v)
+  if ((v = it.strokeDashOffset) != null) w.a('stroke-dashoffset', v)
+  if ((v = it.strokeMiterLimit) != null) w.a('stroke-miterlimit', v)
+  if ((v = it.opacity) != null) w.a('opacity', v)
   // vega: stylesCss.blend -> style="mix-blend-mode: <blend>;" (after any mark styles)
   const blend = it.blend
   if (styles !== undefined) w.v('style', styles.join(' ') + (blend != null ? ` mix-blend-mode: ${String(blend)};` : ''))
