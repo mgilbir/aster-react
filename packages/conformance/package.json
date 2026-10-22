@@ -11,6 +11,7 @@
     "probe": "tsx src/probe.ts",
     "vectors": "node scripts/gen-vectors.mjs && node scripts/gen-transform-vectors.mjs",
     "vectors:transforms": "node scripts/gen-transform-vectors.mjs",
+    "vectors:scale-spec": "node scripts/gen-scale-spec-vectors.mjs",
     "conformance-vl": "tsx src/run-vl.ts",
     "sweep-vega": "tsx src/run-sweep.ts vega-schema",
     "sweep-vl": "tsx src/run-sweep.ts vega-lite-schema",
