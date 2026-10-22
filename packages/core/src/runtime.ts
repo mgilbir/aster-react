@@ -7646,7 +7646,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
 
   // vega's axis mark order: grid, ticks, labels, domain, title (every tick
   // before any label, not interleaved per tick).
-  items.push(...tickItems, ...labels)
+  pushAll(items, tickItems)
+  pushAll(items, labels)
 
   if (axis.domain !== false) {
     const domainLine: SceneItem = { x: 0, y: 0, x2: 0, y2: 0 }

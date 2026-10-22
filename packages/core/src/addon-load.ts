@@ -249,6 +249,27 @@ async function vet(raw: string, o: ResolvedOptions): Promise<URL> {
 
 const REDIRECT = new Set([301, 302, 303, 307, 308])
 
+/**
+ * fetch with the abort signal. A fetch from another realm (jsdom's
+ * AbortController against Node's fetch) rejects a foreign signal with a
+ * TypeError; then the request goes without it and the abort is enforced by
+ * racing the promise instead (the socket may outlive the abort in that case).
+ */
+async function callFetch(href: string, redirect: 'manual' | 'follow', o: ResolvedOptions): Promise<Response> {
+  try {
+    return await o.fetchImpl(href, { signal: o.signal, redirect })
+  } catch (e) {
+    if (!(e instanceof TypeError) || !/signal/i.test(e.message)) throw e
+    const aborted = new Promise<never>((_, reject) => {
+      const fail = () => reject(o.signal.reason ?? new DOMException('aborted', 'AbortError'))
+      if (o.signal.aborted) fail()
+      else o.signal.addEventListener('abort', fail, { once: true })
+    })
+    aborted.catch(() => { /* observed through the race */ })
+    return Promise.race([o.fetchImpl(href, { redirect }), aborted])
+  }
+}
+
 function timeoutError(url: string, ms: number): AsterLimitError {
   return new AsterLimitError(`timeoutMs ${ms} exceeded loading ${url.length > 120 ? url.slice(0, 120) + '...' : url}`)
 }
@@ -310,11 +331,11 @@ async function fetchText(raw: string, o: ResolvedOptions): Promise<{ text: strin
       let url = await vet(raw, o)
       for (let hop = 0; ; hop++) {
         // redirect:'manual' so every hop is vetted BEFORE it is requested
-        let res = await o.fetchImpl(url.href, { signal, redirect: 'manual' })
+        let res = await callFetch(url.href, 'manual', scoped)
         if (res.type === 'opaqueredirect') {
           // Browsers hide the Location of a manual redirect. Follow it, then vet the
           // final URL (the request was already sent: the browser's own origin rules apply).
-          res = await o.fetchImpl(url.href, { signal, redirect: 'follow' })
+          res = await callFetch(url.href, 'follow', scoped)
           if (res.url) await vet(res.url, o)
         } else if (REDIRECT.has(res.status)) {
           const location = res.headers?.get?.('location')
@@ -412,7 +433,8 @@ export async function loadSpecData<T extends VgSpec>(spec: T, opts: LoadOptions 
   const tasks: LoadTask[] = []
   const planned = planLoads(spec as unknown as Json, tasks) as unknown as T
   if (!tasks.length) return spec
-  const fetchImpl = opts.fetch ?? globalThis.fetch
+  // bound: a browser's fetch throws "Illegal invocation" when called as a method of another object
+  const fetchImpl = opts.fetch ?? (typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : undefined)
   if (!fetchImpl) throw new Error('[aster] no fetch implementation available; pass one via loadSpecData(spec, { fetch })')
 
   let baseOrigin: string | null = null

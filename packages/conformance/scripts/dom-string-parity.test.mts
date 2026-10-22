@@ -23,7 +23,7 @@ import { dirname, join } from 'node:path'
 import * as vl from 'vega-lite'
 import { compileChart, evaluateChart, renderSceneToSvg } from '@aster/core'
 import { patchSceneDom, renderSceneToDomElement } from '@aster/core/dom'
-import { loadSpecData } from '@aster/core/load'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import '@aster/core/geo'
 import '@aster/core/transforms'
 
@@ -71,7 +71,7 @@ describe('DOM descriptor === string renderer over the conformance corpus (audit 
       if (f.endsWith('.vl.json')) spec = vl.compile(spec).spec
       let scene
       try {
-        scene = evaluateChart(compileChart(await loadSpecData(spec)), {})
+        scene = evaluateChart(compileChart(await loadSpecData(spec, TRUSTED_LOAD_OPTIONS)), {})
       } catch (e) {
         failures.push(`${f}: could not build the scene: ${(e as Error).message}`)
         continue

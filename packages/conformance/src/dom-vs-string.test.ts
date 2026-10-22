@@ -15,7 +15,7 @@ import '@aster/core/geo'
 import '@aster/core/transforms'
 import { compileChart, evaluateChart, renderSceneToSvg } from '@aster/core'
 import { renderSceneToDomElement } from '@aster/core/dom'
-import { loadSpecData } from '@aster/core/load'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
 const CORPUS = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus')
@@ -26,7 +26,7 @@ describe('DOM descriptors vs string renderer (strict canonical form)', () => {
     it(f, async () => {
       const raw = JSON.parse(readFileSync(join(CORPUS, f), 'utf8'))
       const spec = f.endsWith('.vl.json') ? (vl.compile(raw as never).spec as Record<string, unknown>) : raw
-      const loaded = await loadSpecData(spec as never)
+      const loaded = await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS)
       const scene = evaluateChart(compileChart(loaded as never))
       // jsdom's serializer invents a prefix (ns1:) for the xlink namespace; it is the same attribute
       const dom = new XMLSerializer().serializeToString(renderSceneToDomElement(scene, document) as unknown as Node)

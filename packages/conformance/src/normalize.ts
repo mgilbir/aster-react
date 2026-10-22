@@ -915,7 +915,7 @@ function paintOrderNormalForm(all: Array<{ text: string; box: Box | null; ctx: s
     if (r.box === null) { out.push(r.text); i++; continue }
     let j = i + 1
     while (j < recs.length && recs[j]!.box !== null && recs[j]!.ctx === r.ctx) j++
-    out.push(...normalizeSegment(recs.slice(i, j) as Array<{ text: string; box: Box }>))
+    for (const seg of normalizeSegment(recs.slice(i, j) as Array<{ text: string; box: Box }>)) out.push(seg)
     i = j
   }
   return [...out, ...free]
