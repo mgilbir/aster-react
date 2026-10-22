@@ -21,6 +21,9 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['responsive container sizing', unit({ width: 'container' }), /container/],
   ['projections', unit({ projection: { type: 'mercator' } }), /projection/],
   ['data generators', { data: { sequence: { start: 0, stop: 3 } }, mark: 'point' }, /generators/],
+  ['an unknown invalid mode', unit({ mark: { type: 'point', invalid: 'drop' } }), /unknown invalid-value mode/],
+  ['a bad scale invalid value', unit({ config: { scale: { invalid: { x: 'nope' } } } }), /zero-or-min/],
+  ['scale animation config', unit({ config: { scale: { framesPerSecond: 3 } } }), /animation/],
   // --- composition nesting (C34)
   ['a facet inside a layer', { data: DATA, layer: [{ facet: { field: 'c', type: 'nominal' }, spec: unit() }] }, /not allowed inside `layer`/],
   ['a concat inside a facet', { data: DATA, facet: { field: 'c', type: 'nominal' }, spec: { hconcat: [unit()] } }, /not allowed inside `facet`/],

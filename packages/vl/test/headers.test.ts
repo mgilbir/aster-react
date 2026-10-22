@@ -93,11 +93,12 @@ describe('sibling fixes found by the schema sweep', () => {
     expect(vg.legends[0].format).toBe('%b %d, %Y')
   })
 
-  it('an aggregated pie filters the column it stacked, not a recomputed name', () => {
-    const vg = compileFrozen({ data: DATA, mark: 'arc', encoding: { theta: { field: 'v', type: 'quantitative', aggregate: 'count' }, color: cn } })
-    const tr = vg.data.find((d: any) => d.name === 'data_0').transform as any[]
-    const stackField = tr.find((t) => t.type === 'stack').field as string
-    expect(tr.find((t) => t.type === 'filter').expr).toContain(`datum["${stackField}"]`)
+  it('an aggregated pie filters the column it stacked; a counting one needs no filter', () => {
+    const pie = (aggregate: string) => compileFrozen({ data: DATA, mark: 'arc', encoding: { theta: { field: 'v', type: 'quantitative', aggregate }, color: cn } })
+    const tr = (vg: any) => vg.data.find((d: any) => d.name === 'data_0').transform as any[]
+    const sum = tr(pie('sum'))
+    expect(sum.find((t) => t.type === 'filter').expr).toContain(`datum["${sum.find((t) => t.type === 'stack').field}"]`)
+    expect(tr(pie('count')).some((t) => t.type === 'filter')).toBe(false)
   })
 
   it('a time scale on a non-temporal colour falls back to linear, as vega-lite does', () => {

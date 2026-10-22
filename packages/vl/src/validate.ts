@@ -325,7 +325,7 @@ const CONFIG_KEYS = set(
     'mark arc area bar circle geoshape image line point rect rule square text tick trail view title font scale style',
 )
 const CONFIG_SCALE_KEYS = set(
-  'bandPaddingInner bandPaddingOuter barBandPaddingInner tickBandPaddingInner rectBandPaddingInner pointPadding continuousPadding round nice zero xReverse',
+  'bandPaddingInner bandPaddingOuter barBandPaddingInner tickBandPaddingInner rectBandPaddingInner bandWithNestedOffsetPaddingInner bandWithNestedOffsetPaddingOuter offsetBandPaddingInner offsetBandPaddingOuter pointPadding continuousPadding round nice zero xReverse clamp useUnaggregatedDomain invalid minBandSize maxBandSize minFontSize maxFontSize minOpacity maxOpacity minSize maxSize minStrokeWidth maxStrokeWidth quantileCount quantizeCount',
 )
 
 function validateConfig(cfg: Obj, path: string): void {
@@ -339,6 +339,15 @@ function validateConfig(cfg: Obj, path: string): void {
     for (const k of Object.keys(cfg.scale)) {
       if (!CONFIG_SCALE_KEYS.has(k)) fail(`${path}.scale.${k}`, 'this scale config property is not supported by @aster/vl')
     }
+    const inv = cfg.scale.invalid
+    if (inv !== undefined) {
+      if (!isObj(inv)) fail(`${path}.scale.invalid`, 'must map scale channels to "zero-or-min" or {"value": ...}')
+      for (const [ch, v] of Object.entries(inv)) {
+        if (!ALL_CHANNELS.has(ch)) fail(`${path}.scale.invalid.${ch}`, 'unknown scale channel')
+        if (v !== 'zero-or-min' && !(isObj(v) && 'value' in v)) fail(`${path}.scale.invalid.${ch}`, 'must be "zero-or-min" or {"value": ...}')
+      }
+    }
+    for (const k of ['framesPerSecond', 'animationDuration']) if (cfg.scale[k] !== undefined) fail(`${path}.scale.${k}`, 'animation is not supported')
   }
   if (cfg.autosize !== undefined) validateAutosize(cfg.autosize, `${path}.autosize`)
 }
@@ -426,7 +435,6 @@ const UNSUPPORTED_MARK_KEYS: Record<string, string> = {
   binSpacing: 'binSpacing is not configurable',
   bandSize: 'bandSize is not supported',
   minBandSize: 'minBandSize is not supported',
-  invalid: 'invalid-value handling other than the default is not supported',
   style: 'custom mark styles are not supported',
   time: 'animation is not supported',
   timeUnitBandPosition: 'timeUnitBandPosition is not supported',
@@ -446,6 +454,11 @@ const UNSUPPORTED_MARK_KEYS: Record<string, string> = {
   smooth: 'smooth is not supported',
 }
 
+const INVALID_MODES = set('filter show break-paths-filter-domains break-paths-show-domains break-paths-show-path-domains')
+function validateInvalidMode(v: unknown, at: string): void {
+  if (v !== undefined && v !== null && !(typeof v === 'string' && INVALID_MODES.has(v))) fail(at, `unknown invalid-value mode ${JSON.stringify(v)}: expected ${[...INVALID_MODES].join(', ')} or null`)
+}
+
 function validateMark(mark: unknown, at: string): string {
   let def: Obj
   if (typeof mark === 'string') def = { type: mark }
@@ -462,6 +475,7 @@ function validateMark(mark: unknown, at: string): string {
       if (k === 'order' && def.order !== false && def.order !== null && def.order !== true) fail(`${at}.order`, 'only order: false/null/true is supported')
     }
     if (def.orient !== undefined && def.orient !== 'horizontal' && def.orient !== 'vertical') fail(`${at}.orient`, 'must be "horizontal" or "vertical"')
+    validateInvalidMode(def.invalid, `${at}.invalid`)
   }
   return type
 }
@@ -574,9 +588,9 @@ function validateScaleDef(scale: Obj, at: string, ch: string): void {
   }
   if (scale.domain !== undefined) {
     const d = scale.domain
-    if (isObj(d)) fail(`${at}.domain`, 'domain objects ({param}, {unionWith}) are not supported; give an array, "unaggregated" is also unsupported')
-    if (typeof d === 'string') fail(`${at}.domain`, `domain ${JSON.stringify(d)} is not supported`)
-    if (!Array.isArray(d)) fail(`${at}.domain`, 'must be an array')
+    if (isObj(d)) fail(`${at}.domain`, 'domain objects ({param}, {unionWith}) are not supported; give an array or "unaggregated"')
+    if (typeof d === 'string' && d !== 'unaggregated') fail(`${at}.domain`, `domain ${JSON.stringify(d)} is not valid: give an array or "unaggregated"`)
+    if (!Array.isArray(d) && d !== 'unaggregated') fail(`${at}.domain`, 'must be an array')
   }
   void ch
 }
