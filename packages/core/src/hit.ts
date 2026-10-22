@@ -59,8 +59,8 @@ function isGroup(item: SceneItem): item is SceneGroup {
 
 export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   const entries: Entry[] = []
-  // Deferred rect-mark entries: the SVG renderer paints rect marks in reverse
-  // item order, so they flush into the list in paint order after each mark.
+  // Rect-mark entries are collected per mark and flushed after it; every renderer
+  // paints rect marks in item (data) order, like vega, so the list stays in paint order.
   const rectOrder: Entry[] = []
   const walk = (group: SceneGroup, tx: number, ty: number): void => {
     const gx = tx + (group.x ?? 0)
@@ -82,9 +82,9 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   const padY = scene.padding?.top ?? 0
   for (const node of scene.items) {
     walk(node, padX, padY)
-    // Flush rect entries in paint order (reversed) so the global list is
-    // strictly paint-ordered and a single reverse scan yields the topmost.
-    for (const e of rectOrder.reverse()) entries.push(e)
+    // Flush rect entries in paint order so the global list is strictly
+    // paint-ordered and a single reverse scan yields the topmost.
+    for (const e of rectOrder) entries.push(e)
     rectOrder.length = 0
   }
 
@@ -127,8 +127,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
         if (w == null && item.x2 != null) { w = Math.abs((item.x2 as number) - x0); x0 = Math.min(x0, item.x2 as number) }
         if (h == null && item.y2 != null) { h = Math.abs((item.y2 as number) - y0); y0 = Math.min(y0, item.y2 as number) }
         if (w == null || h == null) return
-        // The SVG renderer paints rect marks in reverse item order; emit the
-        // entry so the entries list stays in paint order (see the mark walk).
+        // Rect marks paint in item order; the entry keeps that order (see the mark walk).
         rectOrder.push({ item, marktype, kind: 'band' as const,
           x1: tx + x0, y1: ty + y0, x2: tx + x0 + w, y2: ty + y0 + h })
         return
@@ -165,7 +164,8 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
         if (item.text == null || item.text === '') return
         const fs = (item as Record<string, unknown>).fontSize as number | undefined ?? 11
         const str = String(item.text)
-        const align = item.align ?? 'center'
+        // vega's text align is `left` unless set (marks/text.js: item.align || 'left')
+        const align = item.align ?? 'left'
         const w = str.length * fs * 0.55
         const cx = tx + (item.x ?? 0)
         const left = align === 'left' ? cx : align === 'right' ? cx - w : cx - w / 2
