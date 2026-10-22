@@ -1,0 +1,54 @@
+{
+ "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+ "width": 200,
+ "height": 120,
+ "padding": 5,
+ "autosize": "none",
+ "data": {
+  "values": [
+   {
+    "c": "alpha",
+    "v": 28,
+    "w": 3
+   },
+   {
+    "c": "beta",
+    "v": 55,
+    "w": 7
+   },
+   {
+    "c": "gamma",
+    "v": 43,
+    "w": 5
+   },
+   {
+    "c": "delta",
+    "v": 91,
+    "w": 9
+   }
+  ]
+ },
+ "mark": "point",
+ "encoding": {
+  "x": {
+   "field": "c",
+   "type": "nominal"
+  },
+  "y": {
+   "field": "v",
+   "type": "quantitative"
+  },
+  "color": {
+   "field": "w",
+   "type": "quantitative",
+   "scale": {
+    "range": [
+     "#ffffe0",
+     "#6a9",
+     "#8b0000"
+    ],
+    "interpolate": "hcl"
+   }
+  }
+ }
+}

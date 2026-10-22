@@ -20,6 +20,27 @@ and also scans the built `dist` (see `scripts/check-deps.mjs`); `conformance` is
 the 419-spec real-Vega SVG diff; `conformance-vl` compiles the Vega-Lite corpus
 with `@aster/vl` and diffs it against the Vega-Lite oracle.
 
+## Oracle vectors
+
+`packages/core/testdata/vectors/*.json` hold input/output pairs recorded from the pinned
+upstream libraries (`pnpm vectors`); each library the engine reimplements is replayed against
+them. The `spec-level/` vectors work one level up: a Vega **scale spec** (or projection spec) is
+built by real vega (vega-parser + vega-encode's Scale transform, vega-geo's Projection) and by
+Aster, and the built scale's type, domain, range, bins, sampled outputs and ticks must agree.
+They come from `pnpm --filter @aster/conformance run vectors:scale-spec | vectors:projection |
+vectors:interpolate`; the cases are in `packages/conformance/scripts/scale-spec-cases.mjs`
+(hand-written edge cases plus 700 seeded random option combinations). A spec vega rejects
+must be rejected here too.
+
+## Time zones
+
+The repo's default run pins `TZ=UTC`, which hides zone bugs (a UTC scale formatted in local
+time passes there). The `tz-matrix` gate (`pnpm test:tz`) re-runs the zone-aware unit tests
+(`*.tz.test.ts`), the scale-spec vectors (local-time scales were recorded per zone) and
+`packages/conformance/corpus-tz` (raw Vega specs rendered by vega and Aster in the same zone)
+under `America/New_York` and `Asia/Kolkata`. Add a case to `corpus-tz` when a fix depends on
+the zone.
+
 ## Nightly sweeps
 
 ```bash

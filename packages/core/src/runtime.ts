@@ -5979,11 +5979,11 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     let tickNums = tickValues(scale, gradCount)
     const legendValues = (legend as { values?: unknown }).values
     if (Array.isArray(legendValues)) tickNums = legendValues
-    else if (tickNums.length < 3 && legendValues == null && d0 !== d1) {
+    else if (tickNums.length < 3 && legendValues == null && d0 !== d1 && !(Number.isNaN(Number(d0)) && Number.isNaN(Number(d1)))) {
       tickNums = [d0, d1]
     }
-    // An all-invalid (NaN) domain has no generated ticks; vega still emits a
-    // single 'NaN' label at the gradient midpoint.
+    // An all-invalid (NaN) domain has no generated ticks and no usable end
+    // points; vega (observed) emits a single 'NaN' label at the gradient midpoint.
     if (tickNums.length === 0 && legendValues == null && Number.isNaN(Number(d0))) tickNums = [NaN]
     const titleStr0 = String(legend.title ?? '')
     const titlePad0 = (legend as { titlePadding?: number }).titlePadding ?? 5
@@ -7410,9 +7410,12 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
             return (a + frac * (b - a)) * gridSign
           })()
         : frac * (isXAxis ? ctx.height : ctx.width) * gridSign
-      return Number.isFinite(v) ? v : 0
+      return v
     }
-    const gridStart = gridSpan(0)
+    // a non-numeric gridScale range (a band scale given a named colour range) has no
+    // start (vega draws the grid from the axis, +0.5) but its end stays NaN
+    const gridStartRaw = gridSpan(0)
+    const gridStart = Number.isFinite(gridStartRaw) ? gridStartRaw : 0
     const gridEnd = gridSpan(1)
     const gridOrigin = orient === 'right' ? ctx.width : orient === 'bottom' ? ctx.height : 0
     for (const te of tickEntries) {
