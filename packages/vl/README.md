@@ -75,7 +75,7 @@ ignored.
   static brush marks); `scale.domain` objects (`{param}`, `{unionWith}`) and `domainRaw`; parameter
   references in `bin.extent`; lookups from a selection.
 - Maps: `geoshape` marks, `projection`, `latitude` / `longitude` channels, `{type: "geojson"}`.
-- Animation: the `time` channel and mark key, `config.scale.framesPerSecond` / `animationDuration`.
+- Animation: the `time` channel (`mark.time` and `config.scale.framesPerSecond` / `animationDuration` are accepted: without a `time` channel they change nothing in vega-lite either).
 - Data-driven channels without a scale / legend implementation yet: `strokeDash`, `angle`,
   `fillOpacity`, `strokeOpacity` (constants and conditions work); `key`.
 - Formats: `formatType` / custom format types (`numberFormatType`, `timeFormatType`,
