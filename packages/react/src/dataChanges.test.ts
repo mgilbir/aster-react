@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { validateDataChanges } from './dataChanges.js'
 import { mergeBatches } from './batches.js'
-import { contentKey } from './spec.js'
+import { contentEqual } from './spec.js'
 
 const rows = (n: number): unknown[] => Array.from({ length: n }, (_, i) => ({ i }))
 
@@ -48,17 +48,40 @@ describe('mergeBatches (C69)', () => {
   })
 })
 
-describe('contentKey (C32)', () => {
+describe('contentEqual (C32)', () => {
   it('is equal for equal content and different otherwise', () => {
-    expect(contentKey({ a: [1, { b: 2 }] })).toBe(contentKey({ a: [1, { b: 2 }] }))
-    expect(contentKey({ a: 1 })).not.toBe(contentKey({ a: 2 }))
+    expect(contentEqual({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] })).toBe(true)
+    expect(contentEqual({ a: 1 }, { a: 2 })).toBe(false)
+    expect(contentEqual({ a: 1 }, { a: 1, b: undefined })).toBe(false)
+    expect(contentEqual({ a: 1, b: 2 }, { a: 1, c: 2 })).toBe(false)
+    expect(contentEqual([1, 2], [1, 2, 3])).toBe(false)
+    expect(contentEqual([], {})).toBe(false)
+    expect(contentEqual(NaN, NaN)).toBe(true)
+    expect(contentEqual(null, undefined)).toBe(false)
   })
-  it('refuses to compare what JSON cannot represent (identity fallback)', () => {
-    expect(contentKey({ f: () => 1 })).toBeNull()
-    expect(contentKey({ m: new Map([[1, 2]]) })).toBeNull()
-    expect(contentKey({ n: NaN })).toBeNull()
-    const cyc: Record<string, unknown> = {}
-    cyc.self = cyc
-    expect(contentKey(cyc)).toBeNull()
+  it('compares what JSON cannot represent by identity', () => {
+    const f = () => 1
+    expect(contentEqual({ f }, { f })).toBe(true)
+    expect(contentEqual({ f }, { f: () => 1 })).toBe(false)
+    const m = new Map([[1, 2]])
+    expect(contentEqual({ m }, { m })).toBe(true)
+    expect(contentEqual({ m }, { m: new Map([[1, 2]]) })).toBe(false)
+    expect(contentEqual(new Date(1), new Date(1))).toBe(false)
+  })
+  it('a cycle or absurd depth compares unequal instead of overflowing', () => {
+    const a: Record<string, unknown> = {}
+    a.self = a
+    const b: Record<string, unknown> = {}
+    b.self = b
+    expect(contentEqual(a, b)).toBe(false)
+    expect(contentEqual(a, a)).toBe(true)
+  })
+  it('is fast on a big equal spec (one allocation-free pass)', () => {
+    const rows = () => Array.from({ length: 100_000 }, (_, i) => ({ x: i, y: i * 2, c: 'a' }))
+    const a = { data: [{ name: 't', values: rows() }] }
+    const b = { data: [{ name: 't', values: rows() }] }
+    const t0 = performance.now()
+    expect(contentEqual(a, b)).toBe(true)
+    expect(performance.now() - t0).toBeLessThan(500)
   })
 })

@@ -26,34 +26,42 @@ export function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
   return value != null && typeof (value as { then?: unknown }).then === 'function'
 }
 
-const CONTENT_KEYS = new WeakMap<object, string | null>()
+const MAX_COMPARE_DEPTH = 64
 
 /**
- * Canonical content key of a JSON-shaped value (specs, limits), or `null` when
- * the value cannot be compared by content (functions, cycles, Map/Set, class
- * instances, non-finite numbers): such values fall back to identity. Memoised
- * per object, so a stable spec object is serialized once.
+ * Structural equality of JSON-shaped values (specs, limits): primitives by
+ * `Object.is`, arrays and plain objects member by member, and anything else
+ * (functions, Map/Set, class instances, typed arrays) by identity. A structure
+ * deeper than 64 levels (or cyclic) compares unequal. Allocation-free and stops at
+ * the first difference, so re-checking an equal 100k-row inline spec costs one pass
+ * and a changed one usually a few steps.
  */
-export function contentKey(value: unknown): string | null {
-  if (value == null || typeof value !== 'object') return null
-  const cached = CONTENT_KEYS.get(value)
-  if (cached !== undefined) return cached
-  let key: string | null
-  try {
-    key = JSON.stringify(value, (_k, v: unknown) => {
-      if (typeof v === 'function' || typeof v === 'symbol' || typeof v === 'bigint') throw new TypeError('not comparable by content')
-      if (typeof v === 'number' && !Number.isFinite(v)) throw new TypeError('not comparable by content')
-      if (v != null && typeof v === 'object' && !Array.isArray(v)) {
-        const proto = Object.getPrototypeOf(v) as unknown
-        if (proto !== Object.prototype && proto !== null) throw new TypeError('not comparable by content')
-      }
-      return v
-    }) ?? null
-  } catch {
-    key = null
+export function contentEqual(a: unknown, b: unknown, depth = 0): boolean {
+  if (Object.is(a, b)) return true
+  if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object') return false
+  if (depth > MAX_COMPARE_DEPTH) return false
+  const arrA = Array.isArray(a)
+  if (arrA !== Array.isArray(b)) return false
+  if (arrA) {
+    const x = a as unknown[]
+    const y = b as unknown[]
+    if (x.length !== y.length) return false
+    for (let i = 0; i < x.length; i++) if (!contentEqual(x[i], y[i], depth + 1)) return false
+    return true
   }
-  CONTENT_KEYS.set(value, key)
-  return key
+  const protoA = Object.getPrototypeOf(a) as unknown
+  if ((protoA !== Object.prototype && protoA !== null) || Object.getPrototypeOf(b) !== protoA) return false
+  const x = a as Record<string, unknown>
+  const y = b as Record<string, unknown>
+  let count = 0
+  for (const k in x) {
+    if (!Object.prototype.hasOwnProperty.call(x, k)) continue
+    count++
+    if (!Object.prototype.hasOwnProperty.call(y, k) || !contentEqual(x[k], y[k], depth + 1)) return false
+  }
+  let other = 0
+  for (const k in y) if (Object.prototype.hasOwnProperty.call(y, k)) other++
+  return count === other
 }
 
 /**
@@ -65,16 +73,9 @@ export function contentKey(value: unknown): string | null {
  * content keep identity semantics.
  */
 export function useStableContent<T extends object | undefined>(value: T): T {
-  const ref = React.useRef<{ value: T; key: string | null } | null>(null)
-  const key = value === undefined ? null : contentKey(value)
-  const prev = ref.current
-  if (prev == null) {
-    ref.current = { value, key }
-  } else if (prev.value !== value) {
-    const same = key != null && prev.key != null && prev.key === key
-    if (!same) ref.current = { value, key }
-  }
-  return ref.current!.value
+  const ref = React.useRef<T>(value)
+  if (ref.current !== value && !contentEqual(ref.current, value)) ref.current = value
+  return ref.current
 }
 
 /** `useStableContent` for specs. */
