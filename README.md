@@ -35,9 +35,8 @@ The Vega spec is the canonical intermediate representation. A Vega-Lite spec is 
    transforms, builds the scales and builds the scene graph, with Vega's layout, bounds and guide algorithms. Updates are
    incremental: a changed row, an appended batch or a changed signal re-derives only what it affects, and the result always
    equals a fresh evaluation ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#incremental-evaluation)).
-3. **Render**: `renderSceneToSvg(scene)` produces an SVG string that paints what Vega's SVG renderer paints, in the same
-   paint order (marks keep Vega's `mark-*` groups; axis, legend and title leaves are written flat, without Vega's per-mark
-   wrapper groups or ARIA labels, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#deviations-from-vega)); the
+3. **Render**: `renderSceneToSvg(scene)` produces an SVG string that has the structure of `vega-scenegraph`'s SVG renderer
+   (classes, roles and ARIA labels included, compared by the conformance gate); the
    `@aster/core/dom` addon patches a live `<svg>` instead, and `@aster/core/canvas` paints the same scene to a canvas.
 
 Everything below the spec language is owned: the expression parser and CSP-safe interpreter (no `new Function`), scales, ticks
@@ -94,8 +93,10 @@ const svg = renderSpec(spec)
 // svg is a plain SVG string
 ```
 
-`data` is an array of named datasets, as in Vega. A top-level `data: { values: [...] }` object is not a Vega
-spec and is not accepted.
+`data` is a list of named datasets. As in `vega-parser`, a lone object stands for a one-element list (the lists
+are read through vega-util `array()`), and a mark that reads a dataset the spec does not declare fails with
+`SpecParseError: Undefined data set name: "<name>"`. This example is rendered by real Vega and by Aster in the
+tests and the outputs agree.
 
 ### React API
 

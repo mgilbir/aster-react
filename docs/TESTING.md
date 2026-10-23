@@ -31,7 +31,7 @@ result is the summary line it prints. They change with the code: re-run before q
 | What | Command | Result |
 |---|---|---|
 | Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 785 specs: 310 raw Vega, 475 Vega-Lite |
-| Unit, React, script and vector tests | `pnpm test` | 128 files, 11807 tests passed |
+| Unit, React, script and vector tests | `pnpm test` | 131 files, 11889 tests passed |
 | Time-zone matrix | `pnpm test:tz` | `[tz] all zones passed` (zone-sensitive vitest suites under America/New_York and Asia/Kolkata; `corpus-tz` under UTC and both) |
 | SVG corpus vs real Vega | `pnpm conformance` | 785/785 passed |
 | Vega-Lite corpus through `@aster/vl` | `pnpm conformance-vl` | 475 passed, 0 failed, 0 errored / 475 |
@@ -48,6 +48,7 @@ result is the summary line it prints. They change with the code: re-run before q
 | Batched (dense) SVG vs per-item SVG pixels | `pnpm conformance:batch` | 57/57 passed |
 | Signal event streams vs real Vega | `pnpm conformance:signals` | 38/38 cases agree |
 | `<Chart>` interaction in Chromium | `pnpm --filter @aster/react run test:browser` | all checks passed |
+| Incremental gate | `pnpm bench:incremental -- --points=10000 --reps=30` | append 22.2x–26.7x (floor 8x), whole-array replace 22.0x–24.9x (floor 8x), DOM patch 4.9x–6.9x (floor 1.6x), dense 100k-symbol append patch vs mount 306x–332x (floor 200x) over three runs |
 | Bundle budgets | `pnpm --filter @aster/benchmarks run budget` | all 8 entries pass (sizes in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)) |
 
 `retained` in the signals sweep means: the engine equals vega's fresh render of the same signals, and vega's own
@@ -142,7 +143,8 @@ the recorded/jsdom canvas-vs-SVG differential stays in `packages/core/src/canvas
 A second phase renders random append sequences to two real canvases (incremental append painting vs a full repaint of a freshly built scene) and requires every pixel to match after every step (`packages/conformance/scripts/browser-canvas-append.mts`, also runnable alone).
 
 The SVG oracle's canonicalizer (`packages/conformance/src/normalize.ts`) is strict: it records every
-paint, geometry and text attribute, the full transform and the paint order, and only normalizes
+paint, geometry and text attribute, the full transform and the paint order, and (as the
+structure, `N-structure`) every group's class, role, `aria-roledescription`, `aria-label`, `aria-hidden` and nesting, and only normalizes
 representation differences it can justify (each is documented in the file).
 `normalize.test.ts` plants one difference at a time and requires each to be reported.
 

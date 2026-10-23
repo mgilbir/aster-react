@@ -383,13 +383,13 @@ specs:
 import '@aster/react/vl'   // side effect: registers the from-scratch VL compiler
 ```
 
-The base `@aster/react` entry does not include the Vega-Lite compiler; importing `@aster/react/vl` adds about 52.7 kB
-gzip to the bundle (`@aster/react` 160.2 kB, `@aster/react/vl` 212.9 kB, measured by
+The base `@aster/react` entry does not include the Vega-Lite compiler; importing `@aster/react/vl` adds about 54.4 kB
+gzip to the bundle (`@aster/react` 163.9 kB, `@aster/react/vl` 218.3 kB, measured by
 `pnpm --filter @aster/benchmarks run budget`; see [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the addon throws an error naming the missing
 import. Vega specs need no extra import. Worker hosts must import `@aster/react/vl` in the worker entry as well,
 since compilation happens there.
 
-**Props.** `spec` (compared by content: an equal inline literal does no work), `data`, `dataChanges`, `width`,
+**Props.** `spec` (compared by content: an equal inline literal does no work; the one exception is a dataset's inline `values` array, which is compared by identity, so a re-created but equal rows array is a new input, which the session's row diff finds unchanged and applies as a no-op; the streaming components keep the full content comparison, so a spec rebuilt every render does not restart a stream), `data`, `dataChanges`, `width`,
 `height` (each independent; without them the chart measures its container), `ariaLabel`, `className`, `style`,
 `signals`, `signalListeners`, `onSignal`, `interactive`, `preventDefault`, `renderer`, `incremental`, `denseMarks`,
 `tooltip`, `renderTooltip`, `selection`/`select`, `onSelectionChange`, `onSelect`, `onPointSelect`, `brush`, `panZoom`,

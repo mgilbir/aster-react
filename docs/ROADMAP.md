@@ -90,12 +90,7 @@ Each item is something the code or the gates show today; none is a plan that has
 - **Known interaction limits.** A zoomed stream-fed chart keeps the last unzoomed base extent until the view is
   reset; pan/zoom picks the first continuous scale per orientation in the root scope only
   ([INTERACTION.md](INTERACTION.md)).
-- **Spec shape errors.** A top-level `data` that is an object (`{ values: [...] }`) instead of an array of named
-  datasets is accepted by the limits pre-check and then fails in the runtime with a raw `TypeError`
-  (`object is not iterable`), not a typed error.
 - **Probes.** `packages/conformance/probes` holds two probes; both pass today and can be promoted into `corpus/`.
-- **SVG guide structure.** Guides are written as flat leaf elements without Vega's per-mark wrapper groups or
-  guide `aria-label` ([ARCHITECTURE.md](ARCHITECTURE.md#deviations-from-vega)); the pixel gate cannot see this.
 - **Streaming transport.** The host owns the network and decides when to flush.
 - **Release.** Registry scope, `npm-release` environment with reviewers and `NPM_TOKEN` (or trusted publishing),
   version bump and tag ([RELEASE.md](RELEASE.md)).

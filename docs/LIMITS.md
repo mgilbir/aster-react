@@ -60,6 +60,8 @@ functions (they are exported from `@aster/core`).
 
 ## What `maxRows` counts
 
+The pre-flight reads the spec's lists the way the compiler does (vega-util `array()`: a lone `data` object counts as a one-element list), so `checkSpecLimits` and the runtime agree on what is a dataset.
+
 - **Pre-flight**: the sum of all inline `values` arrays (top level and nested group
   `data`) plus every array in the host's `input.data`. Two datasets of 6 rows fail a
   `maxRows` of 10.

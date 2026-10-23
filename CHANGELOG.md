@@ -130,7 +130,7 @@
   `useChartWorkerStream` + `handleChartWorkerStreamRequest` for worker offload.
   `collect`/`sample`/`aggregate`/`joinaggregate` now have append fast paths.
 - **Performance gate**: `pnpm bench:incremental` runs in CI (10k points, 30 updates) and nightly
-  (100k/40) and fails below measured floors (append 8x, whole-array replace 8x, DOM patch 1.6x; about half of the
+  (100k/40) and fails below measured floors (append 8x, whole-array replace 8x, DOM patch 1.6x, dense append patch vs mount 200x; the first three are about half of the
   slowest run measured when they were set). It also runs a direct Vega baseline (`view.change(...).run()`, renderer
   `none`) on the same workload. Measured results: docs/PERFORMANCE.md.
 - **Streaming rendering**: `<ChartStream>`/`<ChartWorkerStream>` render streamed

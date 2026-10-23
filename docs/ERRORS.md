@@ -172,10 +172,13 @@ Load the matching addon (`@aster/core/geo`, `@aster/core/transforms`, `@aster/co
 
 ### Deliberate differences from Vega
 
-- **Unknown dataset and signal names are not fatal.** `vega.parse` throws on an unknown dataset name in `from.data`
-  (`Undefined data set name`) and an unknown signal name (`Unrecognized signal name`). Aster renders such a spec (the
-  mark is empty, the signal is `undefined`, ...) without a report. An unknown scale `type` is not fatal either: vega
-  throws at parse time, Aster logs it and stops building scales (see the table above).
+- **Unknown dataset names are fatal; unknown signal names are not.** An undeclared dataset used as a source (`from.data`,
+  a scale domain) is `SpecParseError: Undefined data set name: "<name>"`, as `vega.parse`, from `compileChart` and so
+  from every host. `vega.parse` also throws on an unknown signal name (`Unrecognized signal name`); Aster renders such a
+  spec (the signal is `undefined`) without a report. An unknown scale `type` is not fatal either: vega throws at parse
+  time, Aster logs it and stops building scales (see the table above).
+- **Spec lists follow vega-util `array()`.** `data`, `scales`, `marks`, ... may be a lone object (a one-element list)
+  or `null` (empty), as in `vega-parser`: `data: { values: [...] }` is accepted.
 - **Unknown expression functions are fatal, except in a signal `update`.** A call to an unknown function in a formula,
   a filter or an encode `signal` throws `ExpressionParseError("Unrecognized function: <name>")` out of the
   render, as vega's parser does. In a signal `update` expression it does not: the update is skipped, the signal keeps

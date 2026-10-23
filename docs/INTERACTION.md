@@ -191,6 +191,8 @@ mark. Tooltips are off by default.
 
 ## Accessibility
 
+The rendered SVG itself carries Vega's accessibility structure: axes, legends and titles are `role-axis` / `role-legend` / `role-title` containers with `role="graphics-symbol"`, `aria-roledescription` and a caption `aria-label`, data marks have their container and item labels (`aria: false` hides them), and the conformance gate compares this structure with real Vega's. The focusable overlay below is separate and shares the same captions.
+
 The tree is scene-derived (`buildA11yTree`): one positioned focusable element per mark item (or one summary node per
 mark that has more than `a11y.summaryThreshold` items, default 150), axis, legend, legend entry and title, with upstream-style captions,
 `aria/description` channels, selected state, and continuous axes exposed as sliders. It is on by default; `a11y={false}`
