@@ -184,7 +184,7 @@ const Ops: Record<string, (a: unknown, b: unknown) => unknown> = {
 
 // --- security ----------------------------------------------------------------
 
-const EventFunctions = ['view', 'item', 'group', 'xy', 'x', 'y']
+export const EventFunctions = ['view', 'item', 'group', 'xy', 'x', 'y']
 
 const DisallowedMethods = new Set<unknown>([
   Function,

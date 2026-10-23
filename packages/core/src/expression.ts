@@ -14,7 +14,7 @@ import { currentLocale } from './locale.js'
 import { boundedCount, meterBytes, meterTick, guardedRegExp, checkRegexInput, checkRegexObject } from './limits.js'
 import { bandSpace } from './scale.js'
 import { parseExpression } from './expr-parser.js'
-import { expressionInterpreter, DefaultFunctions, ExpressionConstants } from './expr-interpreter.js'
+import { expressionInterpreter, DefaultFunctions, ExpressionConstants, EventFunctions } from './expr-interpreter.js'
 import {
   timeOffset, utcOffset, timeSequence, utcSequence,
   dayofyear, utcdayofyear, week, utcweek, timeUnitSpecifier,
@@ -486,7 +486,7 @@ export class ExpressionParseError extends Error {
   }
 }
 
-/** Every called name must be a function of the current context (or an engine intrinsic): else an ExpressionParseError, as vega's codegen. */
+/** Every called name must be a function of the current context (or an engine intrinsic: `if`, the event functions the signal loop supplies): else an ExpressionParseError, as vega's codegen. */
 function assertKnownFunctions(ast: AstNode, functions: Record<string, unknown>, expr: string): void {
   const visit = (n: unknown): void => {
     if (n === null || typeof n !== 'object') return
@@ -495,7 +495,7 @@ function assertKnownFunctions(ast: AstNode, functions: Record<string, unknown>, 
     if (node.type === 'CallExpression' && node.callee?.type === 'Identifier' && typeof node.callee.name === 'string') {
       let name = node.callee.name
       if (name.startsWith('_')) name = name.slice(1)
-      if (name !== 'if' && !Object.hasOwn(functions, name) && !Object.hasOwn(DefaultFunctions, name)) {
+      if (name !== 'if' && !EventFunctions.includes(name) && !Object.hasOwn(functions, name) && !Object.hasOwn(DefaultFunctions, name)) {
         throw new ExpressionParseError(`Unrecognized function: ${name}`, expr)
       }
     }
