@@ -89,3 +89,49 @@ describe('vega-exact bounds', () => {
     expect([b.x1, b.y1, b.x2, b.y2]).toEqual([0, 0, 45, 51.6])
   })
 })
+
+describe('a typed mark inside a group bounds on its own (vega mark.bounds), not onto the group\'s accumulated box', () => {
+  // vega: the group's bound is the union of each child mark's OWN bounds (the
+  // line's stroke expands the line's box) and of the group box [0,0,w,h].
+  const group = (lineStroke: number): SceneGroup => ({
+    marktype: 'group', role: 'scope', width: 100, height: 50, x: 0, y: 0,
+    items: [
+      // a mark that already fills the box, before the line (a background / earlier mark)
+      { marktype: 'rect', items: [{ x: 0, y: 0, width: 100, height: 50, fill: '#eee' }] } as unknown as SceneGroup,
+      {
+        marktype: 'line',
+        items: [{ x: 40, y: 20, stroke: '#000', strokeWidth: lineStroke }, { x: 60, y: 20, stroke: '#000', strokeWidth: lineStroke }],
+      } as unknown as SceneGroup,
+    ],
+  })
+
+  it('the stroke of a line in the middle of a group does not grow the group box', () => {
+    const b = new Bounds()
+    boundLeaf(b, group(10) as never)
+    // line: x 40..60 expanded by 2 * strokeWidth (miter) = 20 -> [20, 80]; inside the group box [0, 100]
+    expect([b.x1, b.x2]).toEqual([0, 100])
+    expect([b.y1, b.y2]).toEqual([0, 50])
+  })
+
+  it('a thick line that does reach beyond the box still extends it, by exactly its own expansion', () => {
+    const b = new Bounds()
+    boundLeaf(b, {
+      marktype: 'group', width: 100, height: 50, x: 0, y: 0,
+      items: [{ marktype: 'line', items: [{ x: 90, y: 20, stroke: '#000', strokeWidth: 3 }, { x: 98, y: 20, stroke: '#000', strokeWidth: 3 }] } as unknown as SceneGroup],
+    } as never)
+    // line box [90, 98] x [20, 20] expanded by 6 -> [84, 104] x [14, 26]; union with [0,100] x [0,50]
+    expect([b.x1, b.y1, b.x2, b.y2]).toEqual([0, 0, 104, 50])
+  })
+
+  it('earlier siblings are not expanded by a later mark\'s stroke', () => {
+    const b = new Bounds()
+    boundLeaf(b, {
+      marktype: 'group', width: 0, height: 0, x: 0, y: 0,
+      items: [
+        { marktype: 'rect', items: [{ x: 0, y: 0, width: 10, height: 10, fill: '#000' }] } as unknown as SceneGroup,
+        { marktype: 'line', items: [{ x: 50, y: 50, stroke: '#000', strokeWidth: 4 }, { x: 60, y: 50, stroke: '#000', strokeWidth: 4 }] } as unknown as SceneGroup,
+      ],
+    } as never)
+    expect([b.x1, b.y1, b.x2, b.y2]).toEqual([0, 0, 68, 58])
+  })
+})

@@ -722,8 +722,13 @@ export function boundLeaf(bounds: Bounds, it: SceneItem, miterPaths = false): Bo
     return bounds.union(b)
   }
   if (mt !== undefined && hasItems) {
-    // typed mark nested inside a group: union its per-item bounds
-    return boundTypedMark(bounds, it as unknown as SceneGroup, miterPaths)
+    // typed mark nested inside a group: its own bounds (vega's mark.bounds),
+    // stroke expansion included, then unioned. Expanding the shared target
+    // directly would grow whatever the group had already accumulated (its
+    // box, earlier marks) by this mark's stroke.
+    const b = new Bounds()
+    boundTypedMark(b, it as unknown as SceneGroup, miterPaths)
+    return bounds.union(b)
   }
   return bounds.union(boundIsolated(it, miterPaths))
 }
