@@ -31,6 +31,12 @@
 //   incrementally, so the second render has to show the same retention; such a
 //   case is not excluded, and a difference in it is a difference in the
 //   dataflow rather than in the spec.
+// - Upstream's second render can differ from upstream's own FRESH render of the same signals: autosize
+//   runs once and again only when width/height/padding/autosize change, so a chart whose content
+//   outgrows the view keeps its first size. The engine is a pure function of (spec, data, signals)
+//   -- incremental === fresh, a stack invariant -- so it renders the fresh one. A case where the
+//   engine equals upstream's fresh render and upstream's second render differs from it is counted
+//   as `retained` (run-sweep.ts), against a ceiling (--max-retained) that can only be lowered.
 // - A value upstream refuses (an error while running) makes the oracle's answer
 //   an error; "upstream will not draw this either" is an agreement.
 
