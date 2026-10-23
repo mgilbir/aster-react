@@ -113,6 +113,10 @@ export function compile(input: VLSpec): VLSpec {
   imageAsRect(normalized)
   const ctx = makeCtx(normalized)
   const out = finalizeData(compileView(normalized, ctx), ctx)
+  // a named view names its marks after itself (vega-lite `model.getName`): `chart_marks`
+  if (typeof normalized.name === 'string' && normalized.name !== '' && Array.isArray(out.marks)) {
+    out.marks = (out.marks as Record<string, unknown>[]).map((m) => prefixMarkNames(m, `${signalSafe(normalized.name as string)}_`))
+  }
   const signals = paramSignals(normalized)
   if (signals.length) out.signals = [...signals, ...((out.signals as Record<string, unknown>[] | undefined) ?? [])]
   return exprRefsToSignals(out) as VLSpec
@@ -285,6 +289,8 @@ function inferOrient(spec: VLSpec, mark: string, markRaw: unknown, fields: Field
   return 'vertical'
 }
 
+const LEAF_PATHS = new WeakMap<VLSpec, number[]>()
+
 /**
  * Flatten a layer tree into its leaf unit specs. Each leaf inherits, from every
  * ancestor layer: the shared `encoding` (the child overrides per channel), the
@@ -295,7 +301,8 @@ function inferOrient(spec: VLSpec, mark: string, markRaw: unknown, fields: Field
 function collectLeaves(root: VLSpec): VLSpec[] {
   const leaves: VLSpec[] = []
   interface Inherited { encoding: Record<string, unknown>; data: unknown; transform: unknown[] }
-  const visit = (node: VLSpec, inh: Inherited): void => {
+  // (the layer indices above each leaf: vega-lite names a nested layer's marks `layer_0_layer_1_marks`)
+  const visit = (node: VLSpec, inh: Inherited, path: number[] = []): void => {
     let data = inh.data
     let transform = [...inh.transform]
     if (node.data !== undefined) {
@@ -305,10 +312,11 @@ function collectLeaves(root: VLSpec): VLSpec[] {
     if (Array.isArray(node.transform)) pushAll(transform, node.transform as Record<string, unknown>[])
     const encoding = { ...inh.encoding, ...(isObject(node.encoding) ? (node.encoding as Record<string, unknown>) : {}) }
     if (Array.isArray(node.layer)) {
-      for (const c of node.layer as VLSpec[]) visit(c, { encoding, data, transform })
+      ;(node.layer as VLSpec[]).forEach((c, i) => visit(c, { encoding, data, transform }, [...path, i]))
       return
     }
     const leaf: VLSpec = { ...node, encoding }
+    LEAF_PATHS.set(leaf, path)
     if (data !== undefined) leaf.data = data
     else delete leaf.data
     if (transform.length) leaf.transform = transform
@@ -464,7 +472,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     p.rawName = rawName
     const overlayName = ctx.dn(nextData)
     const builtMarks = buildMarks(p.l, p.fields, p.mark, p.orient, p.dataName, p.markSize, overlayName) as Record<string, unknown>[] & { overlayData?: Record<string, unknown> }
-    uniquifyLayerMarks(builtMarks, i)
+    uniquifyLayerMarks(builtMarks, LEAF_PATHS.get(p.l)?.length ? LEAF_PATHS.get(p.l)!.map((n) => `layer_${n}`).join('_') : i)
     perLayerMarks.push(builtMarks)
     if (builtMarks.overlayData) {
       nextData++
@@ -649,33 +657,35 @@ function centerPointMarksOnBands(marks: Record<string, unknown>[], scales: Scale
  * Mark names double as Vega dataset names, so two layers must not reuse them:
  * rename this layer's marks (and its series group + facet) with a layer prefix.
  */
-function uniquifyLayerMarks(marks: Record<string, unknown>[], layer: number): void {
+function uniquifyLayerMarks(marks: Record<string, unknown>[], layerIndex: number | string): void {
+  // a nested layer's marks are named after every layer above it (`layer_0_layer_1_marks`)
+  const lp = typeof layerIndex === 'number' ? `layer_${layerIndex}` : layerIndex
   marks.forEach((m, k) => {
     if (m.name === 'pathgroup') {
-      m.name = `layer_${layer}_pathgroup`
+      m.name = `${lp}_pathgroup`
       const facet = (m.from as { facet?: { name?: string } } | undefined)?.facet
       const oldFacet = facet?.name
-      if (facet && oldFacet) facet.name = `faceted_path_layer_${layer}_main`
+      if (facet && oldFacet) facet.name = `faceted_path_${lp}_main`
       for (const sub of (m.marks as Record<string, unknown>[] | undefined) ?? []) {
-        sub.name = k === 0 ? `layer_${layer}_marks` : `layer_${layer}_marks_${k}`
+        sub.name = k === 0 ? `${lp}_marks` : `${lp}_marks_${k}`
         const from = sub.from as { data?: string } | undefined
-        if (from && from.data === oldFacet) from.data = `faceted_path_layer_${layer}_main`
+        if (from && from.data === oldFacet) from.data = `faceted_path_${lp}_main`
       }
     } else if (m.type === 'group') {
       // a stack group (rounded stacked bars): its facet and inner mark names are dataset names too
       const facet = (m.from as { facet?: { name?: string } } | undefined)?.facet
       const oldFacet = facet?.name
-      const newFacet = `${oldFacet ?? 'group'}_layer_${layer}`
+      const newFacet = `${oldFacet ?? 'group'}_${lp}`
       if (facet && oldFacet) facet.name = newFacet
       const rename = (node: Record<string, unknown>): void => {
         const from = node.from as { data?: string } | undefined
         if (from && from.data === oldFacet) from.data = newFacet
-        if (node.name === 'marks') node.name = k === 0 ? `layer_${layer}_marks` : `layer_${layer}_marks_${k}`
+        if (node.name === 'marks') node.name = k === 0 ? `${lp}_marks` : `${lp}_marks_${k}`
         for (const sub of (node.marks as Record<string, unknown>[] | undefined) ?? []) rename(sub)
       }
       for (const sub of (m.marks as Record<string, unknown>[] | undefined) ?? []) rename(sub)
     } else {
-      m.name = k === 0 ? `layer_${layer}_marks` : `layer_${layer}_marks_${k}`
+      m.name = k === 0 ? `${lp}_marks` : `${lp}_marks_${k}`
     }
   })
 }
@@ -1524,7 +1534,9 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
         }
     if (composite) group.layout = vg.layout
     if (vg.title) group.title = groupTitle(vg.title)
-    group.marks = vg.marks as Record<string, unknown>[]
+    // vega-lite names every mark after its model, and a child's model carries its parent's prefix (`concat_0_marks`)
+    // (a repeat names its marks `child__x_marks` whatever view holds it)
+    group.marks = cell.spec.repeat !== undefined ? (vg.marks as Record<string, unknown>[]) : (vg.marks as Record<string, unknown>[]).map((m) => prefixMarkNames(m, prefix))
     if (Array.isArray(vg.axes) && vg.axes.length) group.axes = vg.axes
     marks.push(group)
   })
@@ -1539,6 +1551,15 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     ...(planW === 'root' ? { rootWidth: sameW } : {}),
     ...(planH === 'root' ? { rootHeight: sameH } : {}),
   }
+}
+
+/** `m` and every mark below it, named with the child's model prefix (vega-lite `model.getName`). */
+function prefixMarkNames(m: Record<string, unknown>, prefix: string): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...m }
+  // (the facet header titles are named `row-title` / `column-title` whatever the model)
+  if (typeof m.name === 'string' && m.name !== 'row-title' && m.name !== 'column-title') out.name = `${prefix}${m.name}`
+  if (Array.isArray(m.marks)) out.marks = (m.marks as Record<string, unknown>[]).map((c) => prefixMarkNames(c, prefix))
+  return out
 }
 
 /** A child view's title becomes a group title framed on the child's group, as vega-lite does. */
@@ -1657,7 +1678,34 @@ function compileRepeat(spec: VLSpec, ctx: CompileCtx): VLSpec {
     delete layered.spec
     if (child.width !== undefined) layered.width = child.width
     if (child.height !== undefined) layered.height = child.height
-    return compileLayered(layered, ctx)
+    const res = compileLayered(layered, ctx)
+    // vega-lite names each repeated layer after its repeat value: `child__layer_y_marks`
+    const renames = (rep.layer as unknown[]).map((v, i) => [`layer_${i}_`, `child__layer_${signalSafe(String(v))}_`] as const)
+    const rename = (n: unknown): unknown => {
+      if (typeof n === 'string') {
+        for (const [from, to] of renames) {
+          if (n.startsWith(from)) return to + n.slice(from.length)
+          if (n.startsWith('faceted_path_' + from)) return 'faceted_path_' + to + n.slice(('faceted_path_' + from).length)
+        }
+        return n
+      }
+      if (Array.isArray(n)) return n.map(rename)
+      return n
+    }
+    const walk = (m: Record<string, unknown>): Record<string, unknown> => {
+      const o: Record<string, unknown> = { ...m }
+      if (typeof m.name === 'string') o.name = rename(m.name)
+      if (isObject(m.from)) {
+        const f: Record<string, unknown> = { ...m.from }
+        if (typeof f.data === 'string') f.data = rename(f.data)
+        if (isObject(f.facet)) f.facet = { ...f.facet, ...(typeof f.facet.name === 'string' ? { name: rename(f.facet.name) } : {}) }
+        o.from = f
+      }
+      if (Array.isArray(m.marks)) o.marks = (m.marks as Record<string, unknown>[]).map(walk)
+      return o
+    }
+    if (Array.isArray(res.marks)) res.marks = (res.marks as Record<string, unknown>[]).map(walk)
+    return res
   }
 
   const isGrid = isObject(rep)
@@ -1763,11 +1811,22 @@ function compileBoxplot(spec: VLSpec, ctx: CompileCtx): VLSpec {
   }
 
   const bandX = { scale: 'x', field: dim, band: 0.5 }
+  // the screen-reader text (vega-lite mark/encode/aria.ts over the part's encoding): the category, then the numbers
+  const titleOf = (fd: FieldDef): string => { const t = channelTitle(fd); return (Array.isArray(t) ? t.join(', ') : String(t)).replace(/"/g, '\\"') }
+  const dimText = `isValid(${ref(dim)}) ? isArray(${ref(dim)}) ? join(${ref(dim)}, ' ') : ${ref(dim)} : ""+${ref(dim)}`
+  const num = (f: string): string => `format(${ref(f)}, "")`
+  const dimPart = `"${titleOf(xFd)}: " + (${dimText})`
+  const pointDescription = { signal: `${dimPart} + "; ${titleOf(yFd)}: " + (${num(F)})` }
+  const boxDescription = {
+    signal: `${dimPart} + "; ${titleOf(yFd)}: " + (${num(lowerBox)}) + "; ${upperBox}: " + (${num(upperBox)}) + "; Max of ${F}: " + (${num(minMax ? upperW : maxF)})`
+      + ` + "; Q3 of ${F}: " + (${num(upperBox)}) + "; Median of ${F}: " + (${num(midBox)}) + "; Q1 of ${F}: " + (${num(lowerBox)}) + "; Min of ${F}: " + (${num(minMax ? lowerW : minF)})`,
+  }
   const ruleStroke = { value: 'black' }
   const boxFill = { value: '#4c78a8' }
   const medianMark = (name: string, dataset: string): Record<string, unknown> => ({
     name,
     type: 'rect',
+    aria: false,
     style: ['box'],
     from: { data: dataset },
     encode: { update: {
@@ -1786,6 +1845,7 @@ function compileBoxplot(spec: VLSpec, ctx: CompileCtx): VLSpec {
     from: { data: dataset },
     encode: { update: {
       ariaRoleDescription: { value: 'box' },
+      description: boxDescription,
       fill: boxFill,
       xc: bandX,
       width: { value: 14 },
@@ -1800,8 +1860,8 @@ function compileBoxplot(spec: VLSpec, ctx: CompileCtx): VLSpec {
   let yDomain: Array<{ data: string; field: string }>
   if (minMax) {
     marks = [
-      { name: 'layer_0_marks', type: 'rule', style: ['rule'], from: { data: 'data_1' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: lowerW }, y2: { scale: 'y', field: lowerBox } } } },
-      { name: 'layer_1_marks', type: 'rule', style: ['rule'], from: { data: 'data_2' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: upperBox }, y2: { scale: 'y', field: upperW } } } },
+      { name: 'layer_0_marks', type: 'rule', aria: false, style: ['rule'], from: { data: 'data_1' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: lowerW }, y2: { scale: 'y', field: lowerBox } } } },
+      { name: 'layer_1_marks', type: 'rule', aria: false, style: ['rule'], from: { data: 'data_2' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: upperBox }, y2: { scale: 'y', field: upperW } } } },
       boxMark('layer_2_marks', 'data_3'),
       medianMark('layer_3_marks', 'data_4'),
     ]
@@ -1833,12 +1893,13 @@ function compileBoxplot(spec: VLSpec, ctx: CompileCtx): VLSpec {
           fill: { value: 'transparent' },
           stroke: { value: '#4c78a8' },
           ariaRoleDescription: { value: 'point' },
+          description: pointDescription,
           x: bandX,
           y: { scale: 'y', field: F },
         } },
       },
-      { name: 'layer_0_layer_1_layer_0_marks', type: 'rule', style: ['rule'], from: { data: 'data_4' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: lowerW }, y2: { scale: 'y', field: lowerBox } } } },
-      { name: 'layer_0_layer_1_layer_1_marks', type: 'rule', style: ['rule'], from: { data: 'data_5' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: upperBox }, y2: { scale: 'y', field: upperW } } } },
+      { name: 'layer_0_layer_1_layer_0_marks', type: 'rule', aria: false, style: ['rule'], from: { data: 'data_4' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: lowerW }, y2: { scale: 'y', field: lowerBox } } } },
+      { name: 'layer_0_layer_1_layer_1_marks', type: 'rule', aria: false, style: ['rule'], from: { data: 'data_5' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: upperBox }, y2: { scale: 'y', field: upperW } } } },
       boxMark('layer_1_layer_0_marks', 'data_7'),
       medianMark('layer_1_layer_1_marks', 'data_8'),
     ]
@@ -2712,7 +2773,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
       // series to stack by (probed against the oracle)
       const rawFields = fields.filter((f) => f.field && !f.aggregate && f.channel !== 'theta' && f.channel !== 'radius')
       const groupby = rawFields.map((f) => f.field)
-      pipeline.push({ type: 'aggregate', groupby, ops: [thetaDef.aggregate!], fields: [thetaDef.field], as: [arcTheta.field] })
+      pipeline.push({ type: 'aggregate', groupby, ops: [thetaDef.aggregate!], fields: [thetaDef.aggregate === 'count' ? null : thetaDef.field], as: [arcTheta.field] })
       if (groupby.length) {
         pipeline.push({
           type: 'stack',
@@ -2731,7 +2792,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
         field: thetaDef.field,
         sort: colorF ? { field: [aggFieldName(colorF)], order: ['ascending'] } : { field: [], order: [] },
         as: [`${thetaDef.field}_start`, `${thetaDef.field}_end`],
-        offset: 'zero',
+        offset: thetaDef.stack === 'normalize' ? 'normalize' : 'zero',
       })
     }
   }
@@ -2891,7 +2952,7 @@ function thetaStackInfo(mark: string, fields: FieldDef[]): { stacked: boolean; f
   const radiusDef = fields.find((f) => f.channel === 'radius' && f.field)
   if (thetaDef.aggregate) {
     const stackBy = fields.some((f) => f.field && !f.aggregate && f.channel !== 'theta' && f.channel !== 'radius')
-    return { stacked: stackBy, field: aggregateAs(thetaDef) }
+    return { stacked: stackBy, field: aggFieldName(thetaDef) }
   }
   if (thetaDef.timeUnit) {
     // timeUnit thetas are not stacked; the angles reference the (never
@@ -4820,7 +4881,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     : []
   void intervalParams
 
-  applyTextualChannels(update, spec, fields)
+  {
+    // markDef.ariaRoleDescription (vega-lite getMarkPropOrConfig): what a composite mark's parts call themselves
+    const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+    const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+    const ard = md.ariaRoleDescription ?? (isObject(cfg[mark]) ? (cfg[mark] as Record<string, unknown>).ariaRoleDescription : undefined) ?? (isObject(cfg.mark) ? (cfg.mark as Record<string, unknown>).ariaRoleDescription : undefined)
+    if (typeof ard === 'string' && cfg.aria !== false && md.aria !== false) update.ariaRoleDescription = { value: ard }
+  }
+  applyTextualChannels(update, spec, fields, (d) => d.stack === 'normalize' && ((d.channel === 'theta' && mark === 'arc' && !d.aggregate) || isStacked(d, mark, orient, fields)))
 
   // data-driven opacity and stroke width reach every mark
   for (const prop of ['opacity', 'strokeWidth']) {
@@ -4895,6 +4963,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   if (isObject(spec.mark)) {
     if (typeof spec.mark.clip === 'boolean') markSpec.clip = spec.mark.clip
     if (typeof spec.mark.aria === 'boolean') markSpec.aria = spec.mark.aria
+  }
+  {
+    // config.mark.aria / config.<mark>.aria: false hides the mark from the accessibility tree (vega-lite getMarkGroups)
+    const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+    const own = isObject(spec.mark) ? (spec.mark as Record<string, unknown>).aria : undefined
+    const fromCfg = (isObject(cfg[mark]) ? (cfg[mark] as Record<string, unknown>).aria : undefined) ?? (isObject(cfg.mark) ? (cfg.mark as Record<string, unknown>).aria : undefined)
+    if (own === undefined && fromCfg === false) markSpec.aria = false
   }
   if (isObject(spec.mark) && spec.mark.$image) {
     // an image mark carries no paint; its bands are not floored at the rect minimum
@@ -5002,6 +5077,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         name: 'marks',
         type: markSpec.type,
         style: [mark],
+        ...(markSpec.aria !== undefined ? { aria: markSpec.aria } : {}),
         ...(markSortSpec ? { sort: markSortSpec } : {}),
         from: { data: 'faceted_path_main' },
         encode: { update },
@@ -5034,7 +5110,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (sizeDef) overlayUpdate.size = { scale: 'size', field: aggFieldName(sizeDef) }
     else if (ptDef.size != null) overlayUpdate.size = { value: ptDef.size }
     delete overlayUpdate.x2
-    markSpec.name = 'layer_0_marks'
+    // the overlay is a point layer over the same encoding: it reads out as a point, and describes the same fields
+    if ((userConfig as { aria?: unknown } | undefined)?.aria !== false) overlayUpdate.ariaRoleDescription = { value: (ptDef.type as string | undefined) ?? 'point' }
+    if (update.description !== undefined) overlayUpdate.description = update.description
+    if (out[0]!.type === 'group') uniquifyLayerMarks([out[0]!], 0)
+    else markSpec.name = 'layer_0_marks'
     out.push({
       name: 'layer_1_marks',
       type: 'symbol',
@@ -5165,17 +5245,50 @@ function customFormatExpr(formatType: string, field: string, format: unknown): s
   return `${formatType}(${field}${format ? `, ${JSON.stringify(format)}` : ''})`
 }
 
-function fieldTextExpr(def: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec; expr?: 'datum' | 'parent'; format?: string; formatType?: string }): string {
+/** vega-lite `BIN_RANGE_DELIMITER` */
+const BIN_RANGE_DELIMITER = ' \u2013 '
+
+/** vega-lite format.ts `binFormatExpression`: `start – end` of a bin, `"null"` when the bin has no valid start. */
+function binFormatExpr(startField: string, endField: string, format: unknown, formatType: string | undefined, cfg: { numberFormat?: string; numberFormatType?: string; customFormatTypes?: boolean } | undefined): string {
+  if (format === undefined && formatType === undefined && cfg?.customFormatTypes === true && cfg.numberFormatType) {
+    return binFormatExpr(startField, endField, cfg.numberFormat, cfg.numberFormatType, cfg)
+  }
+  const one = (field: string): string => (isCustomFormatType(formatType)
+    ? customFormatExpr(formatType, field, format)
+    : `format(${field}, ${JSON.stringify((typeof format === 'string' ? format : undefined) ?? cfg?.numberFormat ?? '')})`)
+  return `!isValid(${startField}) || !isFinite(+${startField}) ? "null" : ${one(startField)} + ${JSON.stringify(BIN_RANGE_DELIMITER)} + ${one(endField)}`
+}
+
+/**
+ * vega-lite `getFormatMixins`: the format of a def that has `format` / `formatType` itself (text, tooltip, ...), else the
+ * one of its guide (a position channel's axis, a mark property's legend).
+ */
+function defFormat(def: FieldDef): { format: string | undefined; formatType: string | undefined } {
+  const raw = def.raw as Record<string, unknown>
+  if ('format' in raw || 'formatType' in raw) return { format: raw.format as string | undefined, formatType: raw.formatType as string | undefined }
+  const guide = isObject(def.axis) ? def.axis : isObject(def.legend) ? def.legend : undefined
+  return { format: guide?.format as string | undefined, formatType: guide?.formatType as string | undefined }
+}
+
+function fieldTextExpr(def: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec; expr?: 'datum' | 'parent'; format?: string; formatType?: string; normalizeStack?: boolean }): string {
   const name = aggFieldName(def)
-  const f = opts.expr === 'parent' ? `parent[${JSON.stringify(name)}]` : dref(name)
-  const fmt = opts.format ?? (def.raw.format as string | undefined)
-  const formatType = opts.formatType ?? (def.raw.formatType as string | undefined)
-  if (def.bin) throw new VLCompileError(`encoding.${def.channel}: a binned field cannot be used as text, tooltip, href or description`)
+  const refOf = (n: string): string => (opts.expr === 'parent' ? `parent[${JSON.stringify(n)}]` : dref(n))
+  // a normalized stack shows its share: end - start (vega-lite fieldToFormat)
+  const f = opts.normalizeStack ? `${refOf(`${name}_end`)}-${refOf(`${name}_start`)}` : refOf(name)
+  const { format: guideFmt, formatType: guideFmtType } = defFormat(def)
+  const fmt = opts.format ?? guideFmt
+  const formatType = opts.formatType ?? guideFmtType
+  const binEnd = def.bin ? refOf(binNames(def.binParams!, def.field).end) : ''
+  const binCfg = (opts.spec.config as { numberFormat?: string; numberFormatType?: string; customFormatTypes?: boolean } | undefined)
   // vega-lite formatSignalRef
-  if (isCustomFormatType(formatType)) return customFormatExpr(formatType, f, fmt)
+  if (isCustomFormatType(formatType)) return def.bin ? binFormatExpr(f, binEnd, fmt, formatType, binCfg) : customFormatExpr(formatType, f, fmt)
   const cfg = opts.spec.config as { timeFormat?: string; numberFormat?: string; customFormatTypes?: boolean; numberFormatType?: string; timeFormatType?: string } | undefined
   if (fmt === undefined && formatType === undefined && cfg?.customFormatTypes === true) {
-    if (def.type === 'quantitative' && typeof cfg.numberFormatType === 'string') return customFormatExpr(cfg.numberFormatType, f, cfg.numberFormat)
+    const normalizedType = (cfg as { normalizedNumberFormatType?: string }).normalizedNumberFormatType
+    // (vega-lite's custom types read the field itself, not the share `end - start` the built-in format shows)
+    const own = refOf(name)
+    if (def.type === 'quantitative' && opts.normalizeStack && typeof normalizedType === 'string') return customFormatExpr(normalizedType, own, (cfg as { normalizedNumberFormat?: string }).normalizedNumberFormat)
+    if (def.type === 'quantitative' && typeof cfg.numberFormatType === 'string') return customFormatExpr(cfg.numberFormatType, own, cfg.numberFormat)
     if (def.type === 'temporal' && typeof cfg.timeFormatType === 'string' && def.tu === undefined) return customFormatExpr(cfg.timeFormatType, f, cfg.timeFormat)
   }
   // a time format: formatType "time", or no formatType and a temporal field / a time unit
@@ -5186,32 +5299,49 @@ function fieldTextExpr(def: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec;
     if (def.tu === undefined && typeof cfg?.timeFormatType === 'string') return customFormatExpr(cfg.timeFormatType, f, fmt)
     return `timeFormat(${f}, ${JSON.stringify(fmt ?? cfg?.timeFormat ?? DEFAULT_TIME_FORMAT)})`
   }
+  if (def.bin) return binFormatExpr(f, binEnd, fmt, formatType, binCfg)
+  if (opts.normalizeStack && (def.type === 'quantitative' || typeof fmt === 'string')) {
+    return `format(${f}, ${JSON.stringify((typeof fmt === 'string' ? fmt : undefined) ?? (binCfg as { normalizedNumberFormat?: string } | undefined)?.normalizedNumberFormat ?? '.0%')})`
+  }
   if (def.type === 'quantitative' || (def.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(def.aggregate))) {
     return `format(${f}, ${JSON.stringify(fmt ?? cfg?.numberFormat ?? '')})`
   }
   if (fmt !== undefined) return `format(${f}, ${JSON.stringify(fmt)})`
+  // (vega-lite addLineBreaksToTooltip reads a discrete field by its own name, not the aggregate's: `datum["c"]` for the `max` of c)
+  if (opts.lineBreaks && (def.type === 'nominal' || def.type === 'ordinal') && def.tu === undefined && opts.format === undefined && guideFmt === undefined && guideFmtType === undefined) {
+    const raw = refOf(def.field)
+    return `isValid(${raw}) ? isArray(${raw}) ? join(${raw}, '\\n') : ${raw} : ""+${raw}`
+  }
   return opts.lineBreaks
     ? `isValid(${f}) ? isArray(${f}) ? join(${f}, '\\n') : ${f} : ""+${f}`
     : `isValid(${f}) ? ${f} : ""+${f}`
 }
 
 /** tooltip / href / description fields (vega-lite mark/encode/tooltip.ts, text.ts). */
-function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fields: FieldDef[]): void {
+function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fields: FieldDef[], normalizedStack: (d: FieldDef) => boolean = () => false): void {
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
   const tooltipTitle = (d: FieldDef): string => {
     const t = channelTitle(d)
     return (Array.isArray(t) ? t.join(', ') : String(t)).replace(/"/g, '\\"')
   }
-  const objectOf = (defs: FieldDef[]): string | undefined => {
+  /** vega-lite tooltipData: one `title -> text expression` per field, the first of a title wins. */
+  const objectEntries = (defs: FieldDef[]): Array<[string, string]> => {
     const seen = new Set<string>()
-    const kv: string[] = []
+    const out: Array<[string, string]> = []
     for (const d of defs) {
       const key = tooltipTitle(d)
       if (seen.has(key)) continue
       seen.add(key)
-      kv.push(`"${key}": ${fieldTextExpr(d, { lineBreaks: true, spec })}`)
+      // a secondary channel's def has no type of its own: it takes its main channel's (vega-lite tooltipData)
+      const main = SECONDARY_MAIN[d.channel] !== undefined ? defs.find((m) => m.channel === SECONDARY_MAIN[d.channel]) ?? fields.find((m) => m.channel === SECONDARY_MAIN[d.channel]) : undefined
+      const typed = main !== undefined && main.type !== d.type ? { ...d, type: main.type } : d
+      out.push([key, fieldTextExpr(typed, { lineBreaks: true, spec, normalizeStack: normalizedStack(d) })])
     }
+    return out
+  }
+  const objectOf = (defs: FieldDef[]): string | undefined => {
+    const kv = objectEntries(defs).map(([key, value]) => `"${key}": ${value}`)
     return kv.length ? `{${kv.join(', ')}}` : undefined
   }
   // tooltip
@@ -5236,7 +5366,39 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
     const d = fields.find((f) => f.channel === ch && !f.datumOnly)
     if (d && isObject(enc[ch]) && (enc[ch] as Record<string, unknown>).field !== undefined) update[ch] = { signal: fieldTextExpr(d, { lineBreaks: false, spec }) }
   }
+  // description (vega-lite mark/encode/aria.ts): the channel (above), else the mark's / config's own, else a summary of
+  // the encoded fields, `title: text; title: text` -- the screen-reader text of every item
+  if (update.description === undefined && !isObject(enc.description)) {
+    const mt = isObject(spec.mark) ? String((spec.mark as Record<string, unknown>).type) : String(spec.mark)
+    const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+    const pick = (prop: string): unknown => md[prop] ?? (isObject(cfg[mt]) ? (cfg[mt] as Record<string, unknown>)[prop] : undefined) ?? (isObject(cfg.mark) ? (cfg.mark as Record<string, unknown>)[prop] : undefined)
+    if (pick('aria') !== false) {
+      const own = pick('description')
+      if (own != null) update.description = isObject(own) && typeof own.signal === 'string' ? { signal: own.signal } : { value: own }
+      else if (cfg.aria !== false) {
+        // (in vega-lite's channel order, initEncoding's walk over UNIT_CHANNELS, not the order the spec wrote them in)
+        const rank = (f: FieldDef): number => { const i = UNIT_CHANNEL_ORDER.indexOf(f.channel); return i < 0 ? UNIT_CHANNEL_ORDER.length : i }
+        const defs = fields.filter((f) => !f.datumOnly && f.field && f.channel !== 'description' && f.channel !== 'row' && f.channel !== 'column' && f.channel !== 'facet')
+          .map((f, i) => ({ f, i })).sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i).map((x) => x.f)
+        const sig = objectEntries(defs).filter(([key]) => !key.startsWith('_'))
+          .map(([key, value]) => `"${key}: " + (${value.replaceAll('\\n', ' ')})`)
+          .map((part, i) => (i > 0 ? part.replace(/^"/, '"; ') : part))
+          .join(' + ')
+        if (sig) update.description = { signal: sig }
+      }
+    }
+  }
 }
+
+/** The main channel of each secondary one. */
+const SECONDARY_MAIN: Record<string, string> = { x2: 'x', y2: 'y', theta2: 'theta', radius2: 'radius', longitude2: 'longitude', latitude2: 'latitude' }
+
+/** vega-lite `UNIT_CHANNELS`: the order `initEncoding` normalizes the channels in (and so the order their fields are listed). */
+const UNIT_CHANNEL_ORDER = [
+  'x', 'y', 'x2', 'y2', 'theta', 'theta2', 'radius', 'radius2', 'longitude', 'longitude2', 'latitude', 'latitude2', 'xOffset', 'yOffset',
+  'color', 'fill', 'stroke', 'time', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'size', 'angle', 'shape',
+  'order', 'text', 'detail', 'key', 'tooltip', 'href', 'url', 'description',
+]
 
 const NON_POSITION_CHANNELS = new Set(['color', 'fill', 'stroke', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'size', 'angle', 'shape', 'text', 'tooltip', 'href', 'description', 'url'])
 
