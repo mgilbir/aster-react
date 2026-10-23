@@ -15,7 +15,7 @@ import {
   type TextMetricsProvider,
   type VgSpec,
 } from '@aster/core'
-import { isPromiseLike, normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
+import { isPromiseLike, normalizeChartSpec, useStableContent, useStableSpecRows } from './spec.js'
 import { validateDataChanges } from './dataChanges.js'
 import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './serialScales.js'
 // The incremental DOM patcher ships as the `@aster/core/dom` addon: a
@@ -539,7 +539,7 @@ function ChartView({
 }: Omit<ChartProps, 'spec'> & { spec: VgSpec; chartRef: React.ForwardedRef<ChartHandle> }) {
   // Content-stable: a parent that rebuilds an inline spec literal every render
   // neither recompiles (Vega-Lite) nor re-evaluates.
-  const stableSpec = useStableSpec(rawSpec)
+  const stableSpec = useStableSpecRows(rawSpec)
   const spec = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
   const stableLimits = useStableContent(limits)
   // Which scales `view`/`brush`/`selection`'s `x`/`y` refer to.
