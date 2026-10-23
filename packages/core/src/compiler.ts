@@ -532,6 +532,18 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
   Object.assign(update, defaults)
 }
 
+/**
+ * vega reads `from.facet.groupby` through `array(...)`: a bare field name is a one-field
+ * groupby (`groupby: 'g'`), as in every transform's groupby. The runtime iterates arrays, so
+ * normalise once here (the spec itself is never written).
+ */
+function normalizeFrom(from: CompiledMark['from']): CompiledMark['from'] {
+  const facet = (from as { facet?: { groupby?: unknown } } | undefined)?.facet
+  if (facet === undefined || facet === null || typeof facet !== 'object' || Array.isArray(facet.groupby)) return from
+  const groupby = facet.groupby == null ? [] : [facet.groupby]
+  return { ...from, facet: { ...facet, groupby } } as CompiledMark['from']
+}
+
 function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>): CompiledMark {
   const m = { ...m0 }
   if (cfgStyle || cfgMarktype) applyStyleDefaults(m, cfgStyle ?? {}, cfgMarktype)
@@ -549,7 +561,7 @@ function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Reco
   }
   if (m.role !== undefined) out.role = m.role as string
   if (m.style !== undefined) out.style = m.style as string | string[]
-  if (m.from !== undefined) out.from = m.from as CompiledMark['from']
+  if (m.from !== undefined) out.from = normalizeFrom(m.from as CompiledMark['from'])
   if (m.clip !== undefined) out.clip = m.clip as boolean
   if (m.interactive !== undefined) out.interactive = m.interactive as boolean
   if (m.zindex !== undefined) out.zindex = m.zindex as number

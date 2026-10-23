@@ -3793,26 +3793,23 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | Scen
     return buildRowTitleGroup(mark, ctx)
   }
   const name = mark.name
-  // Header groups
-  if (name && name.includes('header')) {
-    if (name === 'row_header') {
-      if (orient === 'column') return buildColumnFacetRowHeader(mark, ctx)
-      return buildRowHeaderGroup(mark, ctx)
-    }
-    if (name === 'column_header') {
-      if (orient === 'column' || isTrellis(ctx)) return buildColumnHeaderGroup(mark, ctx)
-      return buildRowHeaderGroup(mark, ctx)
-    }
+  // Header / footer groups are recognised by their ROLE (vega's ViewLayout roles
+  // `row-header`, `column-header`, `row-footer`, `column-footer`), never by what the
+  // author called the group: a user group named `page_header` is an ordinary group (C56).
+  const role = mark.role
+  if (role === 'row-header') {
+    if (orient === 'column') return buildColumnFacetRowHeader(mark, ctx)
     return buildRowHeaderGroup(mark, ctx)
   }
-  // Footer groups
-  if (name && name.includes('footer')) {
-    if (name === 'column_footer') {
-      if (orient === 'column' || isTrellis(ctx)) return buildColumnFooterGroupColumn(mark, ctx)
-      return buildColumnFooterGroup(mark, ctx)
-    }
+  if (role === 'column-header') {
+    if (orient === 'column' || isTrellis(ctx)) return buildColumnHeaderGroup(mark, ctx)
+    return buildRowHeaderGroup(mark, ctx)
+  }
+  if (role === 'column-footer') {
+    if (orient === 'column' || isTrellis(ctx)) return buildColumnFooterGroupColumn(mark, ctx)
     return buildColumnFooterGroup(mark, ctx)
   }
+  if (role === 'row-footer') return buildColumnFooterGroup(mark, ctx)
   // Unnamed container groups (e.g. nested scope within facet cells for
   // VL-compiled bar/area charts): build a simple group whose items are
   // the rendered inner marks.
@@ -4564,7 +4561,7 @@ function buildRowTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | 
   if (isTrellis(ctx)) {
     titleX = -61
   } else {
-    const headerMark = ctx.chart.marks.find((m) => m.name === 'row_header')
+    const headerMark = ctx.chart.marks.find((m) => m.role === 'row-header')
     if (headerMark?.from?.data) {
       const headers = buildRowHeaderGroup(headerMark, ctx)
       const hb = new Bounds()
