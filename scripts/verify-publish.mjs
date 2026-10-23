@@ -166,7 +166,11 @@ import { renderSpec, evaluateChart, compileChart, getChartInfo, chartInfoFromSce
 import { compile } from '@aster/vl'
 import { Chart } from '@aster/react'
 import type { ChartProps } from '@aster/react'
-import { createElement } from 'react'
+import { SvgChart } from '@aster/react/lite'
+import type { SvgChartProps, SvgChartHandle } from '@aster/react/lite'
+import { interaction } from '@aster/react/interaction'
+import type { InteractionCapability } from '@aster/react/interaction'
+import { createElement, createRef } from 'react'
 
 const spec: VgSpec = { width: 100, height: 50, marks: [] }
 const limits: SpecLimits = { maxMarks: 100 }
@@ -180,6 +184,22 @@ const el = createElement(Chart, props)
 const err: boolean = new AsterLimitError('x').code === 'ASTER_LIMIT'
 const vega = compile({ mark: 'bar', data: { values: [] }, encoding: {} })
 void [svg, info, fromScene, el, err, vega]
+
+// <SvgChart>: the light chart. Interaction props are a compile-time error without \`interaction\`.
+const cap: InteractionCapability = interaction
+const handle = createRef<SvgChartHandle>()
+const lite: SvgChartProps = { spec, width: 100, height: 50, onSelect: () => {}, panZoom: true }
+const rich: SvgChartProps = { spec, interaction: cap, tooltip: true, onPointSelect: () => {}, selection: null }
+const liteEl = createElement(SvgChart, { ...lite, ref: handle })
+const richEl = createElement(SvgChart, { ...rich, ref: handle })
+// @ts-expect-error tooltip needs the interaction capability
+createElement(SvgChart, { spec, tooltip: true })
+// @ts-expect-error onPointSelect needs the interaction capability
+createElement(SvgChart, { spec, onPointSelect: () => {} })
+// @ts-expect-error <SvgChart> has no canvas renderer
+createElement(SvgChart, { spec, renderer: 'canvas' })
+const fullEl = createElement(Chart, { spec, tooltip: true, renderer: 'canvas' })
+void [liteEl, richEl, fullEl]
 `)
   writeFileSync(join(project, 'tsconfig.json'), JSON.stringify({
     compilerOptions: {
@@ -207,6 +227,8 @@ import { buildHitIndex } from '@aster/core/hit'
 import { bindSceneSignals } from '@aster/core/signals'
 import { compile } from '@aster/vl'
 import { Chart, hasVegaLiteCompiler } from '@aster/react'
+import { SvgChart } from '@aster/react/lite'
+import { interaction } from '@aster/react/interaction'
 import '@aster/react/vl'
 import { renderChartToStaticMarkup } from '@aster/react/ssr'
 import { handleChartWorkerRequest } from '@aster/react/worker'
@@ -255,6 +277,14 @@ assert.ok(chartHtml.includes('<svg'), '<Chart> renders Vega through the publishe
 const vlHtml = renderToString(createElement(Chart, { spec: vl, width: 200, height: 120, a11y: false }))
 assert.ok(vlHtml.includes('<svg'), '<Chart> renders Vega-Lite through the opt-in addon')
 assert.ok(renderChartToStaticMarkup(vega).includes('<svg'), 'ssr entry')
+
+const liteHtml = renderToString(createElement(SvgChart, { spec: vega, width: 200, height: 120, a11y: false }))
+assert.ok(liteHtml.includes('<svg'), '<SvgChart> renders Vega through the published package')
+const richHtml = renderToString(createElement(SvgChart, { spec: vega, width: 200, height: 120, a11y: false, interaction }))
+assert.ok(richHtml === chartHtml, '<SvgChart interaction> renders exactly the markup <Chart> renders')
+assert.ok(liteHtml === richHtml, '<SvgChart> renders the same markup with or without interaction when the spec has no event streams')
+assert.ok(renderToString(createElement(SvgChart, { spec: vega, width: 200, height: 120, a11y: false, interaction, tooltip: true })).includes('data-datum='), '<SvgChart interaction tooltip> stamps the datum')
+assert.ok(Object.isFrozen(interaction) && typeof interaction.buildHitIndex === 'function' && typeof interaction.bindSceneSignals === 'function' && typeof interaction.stampDatumAttrs === 'function', 'the interaction capability')
 
 const worker = handleChartWorkerRequest({ id: 1, spec: vega })
 assert.ok(worker.svg && worker.svg.includes('<svg'), 'worker request handler')
@@ -305,6 +335,43 @@ console.log('shaken ok')
     fail('the tree-shaken bundle built from the installed tarballs does not behave (a side-effect registration was shaken out; see above)')
   }
   console.log('[verify-publish] tree-shaken bundle of the installed tarballs executes: vl, geo, transforms and captions registered')
+
+  // 8b) The light chart from the INSTALLED tarballs: bundled, executed, and made of the right modules. Without
+  //     \`interaction\` the bundle must not read the canvas renderer, the hit index or the signal loop; with it, the
+  //     hit index and the signal loop but still no canvas.
+  const liteApp = (withInteraction) => `
+import assert from 'node:assert'
+import { createElement } from 'react'
+import { renderToString } from 'react-dom/server'
+import { SvgChart } from '@aster/react/lite'
+${withInteraction ? "import { interaction } from '@aster/react/interaction'" : ''}
+const spec = { width: 100, height: 60, data: [{ name: 't', values: [{ v: 1 }] }],
+  marks: [{ type: 'rect', from: { data: 't' }, encode: { enter: { x: { value: 0 }, y: { value: 0 }, width: { value: 20 }, height: { value: 20 }, fill: { value: 'tomato' } } } }] }
+const html = renderToString(createElement(SvgChart, { spec, ${withInteraction ? 'interaction, tooltip: true' : ''} }))
+assert.ok(html.includes('tomato'), 'SvgChart renders from the bundled, tree-shaken tarballs')
+console.log('lite ok')
+`
+  for (const withInteraction of [false, true]) {
+    const name = withInteraction ? 'lite-interaction' : 'lite'
+    writeFileSync(join(project, `${name}.mjs`), liteApp(withInteraction))
+    const result = await build({
+      entryPoints: [join(project, `${name}.mjs`)], outfile: join(project, `${name}.bundle.mjs`), bundle: true, minify: true, treeShaking: true, metafile: true,
+      format: 'esm', platform: 'node', external: ['react', 'react-dom', 'react-dom/*'], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent',
+    }).catch((e) => fail(`bundling ${name} from the installed tarballs failed: ${e.message.split('\n')[0]}`))
+    const inputs = Object.keys(result.metafile.inputs).map((f) => f.replace(/\\/g, '/'))
+    const has = (re) => inputs.some((f) => re.test(f))
+    if (has(/@aster\/core\/dist\/canvas\.js$/) || has(/@aster\/react\/dist\/canvas-capability\.js$/)) fail(`the ${name} bundle contains the canvas renderer`)
+    const wantsLoop = withInteraction
+    if (has(/@aster\/core\/dist\/hit\.js$/) !== wantsLoop || has(/@aster\/core\/dist\/signals\.js$/) !== wantsLoop) {
+      fail(`the ${name} bundle ${wantsLoop ? 'lacks' : 'contains'} the hit index / signal loop`)
+    }
+    try {
+      run(process.execPath, [`${name}.bundle.mjs`], { cwd: project, stdio: ['ignore', 'inherit', 'inherit'] })
+    } catch {
+      fail(`the ${name} bundle built from the installed tarballs does not run (see above)`)
+    }
+  }
+  console.log('[verify-publish] <SvgChart> from the installed tarballs: bundled and executed without the canvas renderer; hit and signals only with interaction')
   console.log('[verify-publish] PASS — packed with pnpm, installed with npm, every export imports and typechecks, Vega and Vega-Lite render, a tree-shaken bundle keeps its side effects')
 } finally {
   rmSync(tmp, { recursive: true, force: true })

@@ -29,7 +29,7 @@
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { Bounds, boundText } from './bounds.js'
-import { parsePathData, tracePath, type PathSink } from './canvas.js'
+import { parsePathData, tracePath, type PathSink } from './path-data.js'
 import { SYMBOL_DEFAULT_SIZE, minOf, maxOf } from './util.js'
 import { arcPath, computeAreaPath, computeLinePath, rectItemPath, symbolPath, trailPath } from './render.js'
 

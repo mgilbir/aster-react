@@ -70,7 +70,8 @@ const SIGNAL_VG = {
 const lit = (v) => JSON.stringify(v)
 
 /**
- * Each pattern: an app (its source), whether it needs jsdom, and the assertions on the JSON it returns.
+ * Each pattern: an app (its source), whether it needs jsdom, the assertions on the JSON it returns, and optionally
+ * `modules(m)`: assertions on which dist modules the bundle read / contributed code from (esbuild metafile).
  * `app` is the body of `export default async function run(env) {...}`; `imports` are its import lines.
  */
 const PATTERNS = [
@@ -262,6 +263,62 @@ const PATTERNS = [
       [/<svg/.test(r.client) && /class="mark-rect/.test(r.client), 'client mount'],
       [/aria-label="[XY]-axis/.test(r.html), 'axis caption'],
     ],
+    modules: (m) => [[hasModule(m.contributing, 'core', 'canvas') && hasModule(m.contributing, 'core', 'hit') && hasModule(m.contributing, 'core', 'signals'), '<Chart> carries the canvas renderer, the hit index and the signal loop (the module check can see them)']],
+  },
+  {
+    name: 'react-svgchart',
+    why: "import { SvgChart } from '@aster/react/lite': renders and reports a missing event loop, and the bundle holds NO canvas, hit or signals code",
+    dom: true,
+    imports: `import * as React from 'react'\nimport { renderToString } from 'react-dom/server'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { SvgChart } from '@aster/react/lite'`,
+    body: `
+      const el = React.createElement(SvgChart, { spec: ${lit(BAR_VG)}, width: 300, height: 200 })
+      const html = renderToString(el)
+      const host = document.createElement('div'); document.body.appendChild(host)
+      flushSync(() => createRoot(host).render(el))
+      const errors = []
+      const host2 = document.createElement('div'); document.body.appendChild(host2)
+      flushSync(() => createRoot(host2).render(React.createElement(SvgChart, { spec: ${lit(SIGNAL_VG)}, width: 100, height: 100, onError: (e) => errors.push(e.message) })))
+      return { html, client: host.innerHTML, errors, streamSvg: host2.innerHTML }`,
+    check: (r) => [
+      [/<svg/.test(r.html) && /class="mark-rect/.test(r.html), 'server render'],
+      [/<svg/.test(r.client) && /class="mark-rect/.test(r.client), 'client mount'],
+      [/aria-label="[XY]-axis/.test(r.html), 'axis caption'],
+      [r.errors.length === 1 && /event streams/.test(r.errors[0]) && /@aster\/react\/interaction/.test(r.errors[0]), 'an event-stream spec without `interaction` reports how to fix it'],
+      [/<svg/.test(r.streamSvg), 'and still renders'],
+    ],
+    modules: (m) => [
+      [!hasModule(m.parsed, 'core', 'canvas'), 'the canvas renderer (core/canvas.js) is not even read'],
+      [!hasModule(m.parsed, 'core', 'hit'), 'the hit index (core/hit.js) is not even read'],
+      [!hasModule(m.parsed, 'core', 'signals'), 'the signal event loop (core/signals.js) is not even read'],
+      [!hasModule(m.parsed, 'react', 'canvas-capability') && !hasModule(m.parsed, 'react', 'interaction-capability'), 'neither capability module of @aster/react is read'],
+      [hasModule(m.contributing, 'react', 'ChartCore') && hasModule(m.contributing, 'core', 'dom'), 'ChartCore and the DOM patcher are what it is made of'],
+    ],
+  },
+  {
+    name: 'react-svgchart-interaction',
+    why: "import { SvgChart } from '@aster/react/lite' + { interaction } from '@aster/react/interaction': a click drives a signal; hit and signals are in the bundle, canvas is not",
+    dom: true,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { SvgChart } from '@aster/react/lite'\nimport { interaction } from '@aster/react/interaction'`,
+    body: `
+      const ref = React.createRef()
+      const errors = []
+      const host = document.createElement('div'); document.body.appendChild(host)
+      flushSync(() => createRoot(host).render(React.createElement(SvgChart, { ref, interaction, spec: ${lit(SIGNAL_VG)}, width: 100, height: 100, tooltip: true, onError: (e) => errors.push(e.message) })))
+      const before = ref.current.getSignals().clicks
+      flushSync(() => { host.querySelector('svg').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+      const rect = host.querySelector('[data-datum]')
+      rect.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: 15, clientY: 15 }))
+      await new Promise((r) => setTimeout(r, 30)) // a continuous event: React renders it on the next tick
+      return { before: before ?? null, after: ref.current.getSignals().clicks, errors, stamped: !!rect, tooltip: !!host.querySelector('[data-testid="chart-tooltip"]') }`,
+    check: (r) => [
+      [r.after === 1, 'the click ran the spec\'s signal.on handler (the event loop is bound)'],
+      [r.errors.length === 0, 'no capability is reported missing'],
+      [r.stamped && r.tooltip, 'data-datum is stamped and the tooltip resolves the hovered datum'],
+    ],
+    modules: (m) => [
+      [hasModule(m.contributing, 'core', 'hit') && hasModule(m.contributing, 'core', 'signals'), 'hit.js and signals.js contribute code'],
+      [!hasModule(m.parsed, 'core', 'canvas') && !hasModule(m.parsed, 'react', 'canvas-capability'), 'the canvas renderer is not even read'],
+    ],
   },
   {
     name: 'react-usechart',
@@ -358,7 +415,7 @@ const blanketFalse = {
 }
 
 async function esbuildBuild(p, entry, out) {
-  await build({
+  const result = await build({
     entryPoints: [entry],
     outdir: out,
     bundle: true,
@@ -371,11 +428,32 @@ async function esbuildBuild(p, entry, out) {
     external: ['react', 'react-dom', 'react-dom/*', 'react/jsx-runtime'],
     define: { 'process.env.NODE_ENV': '"production"' },
     logLevel: 'silent',
+    metafile: true,
     plugins: BLANKET_FALSE ? [blanketFalse] : [],
   })
+  return modulesOf(result.metafile)
 }
 
-async function viteBuild(p, entry, out) {
+/**
+ * What the bundle is made of, from esbuild's metafile: `parsed` = every input the bundler read, `contributing` = the
+ * inputs that put code in the output (bytesInOutput > 0). A pattern asserts on these, so "does not contain the canvas
+ * renderer" is a statement about modules, not about a byte count that a refactor could move.
+ */
+function modulesOf(metafile) {
+  const rel = (f) => f.replace(/\\/g, '/')
+  const parsed = new Set(Object.keys(metafile.inputs).map(rel))
+  const contributing = new Set()
+  for (const out of Object.values(metafile.outputs)) {
+    for (const [f, info] of Object.entries(out.inputs)) if (info.bytesInOutput > 0) contributing.add(rel(f))
+  }
+  return { parsed: [...parsed], contributing: [...contributing] }
+}
+
+/** Dist modules of the three packages, by name: `dist('core', 'canvas')` matches packages/core/dist/canvas.js. */
+const distRe = (pkg, name) => new RegExp(`packages/${pkg}/dist/${name}\\.js$`)
+const hasModule = (list, pkg, name) => list.some((f) => distRe(pkg, name).test(f))
+
+async function viteBuild(p, entry, out) {  // (no module report: the metafile is esbuild's)
   if (BLANKET_FALSE) throw new Error('--blanket-false is an esbuild plugin; for vite edit the manifests instead')
   const store = join(ROOT, 'node_modules', '.pnpm')
   const dir = readdirSync(store).filter((d) => /^vite@/.test(d)).sort().pop()
@@ -402,8 +480,9 @@ async function bundle(p, dir) {
   const entry = join(dir, 'app.mjs')
   writeFileSync(entry, `${p.imports}\nexport default async function run(env) {${p.body}\n}\n`)
   const out = join(dir, 'out')
+  let modules = null
   if (BUNDLER === 'vite') await viteBuild(p, entry, out)
-  else await esbuildBuild(p, entry, out)
+  else modules = await esbuildBuild(p, entry, out)
   // Runner: optional jsdom globals, then the bundle, then one JSON line.
   const runner = join(dir, 'runner.mjs')
   writeFileSync(runner, `
@@ -420,14 +499,14 @@ const result = await mod.default(JSON.parse(process.env.ASTER_SHAKE_ENV ?? '{}')
 process.stdout.write('\\n@@RESULT@@' + JSON.stringify(result) + '\\n')
 process.exit(0)
 `)
-  return runner
+  return { runner, modules }
 }
 
 function runPattern(p, env) {
   const dir = join(TMP, p.name)
   rmSync(dir, { recursive: true, force: true })
   mkdirSync(dir, { recursive: true })
-  return bundle(p, dir).then((runner) => new Promise((resolve) => {
+  return bundle(p, dir).then(({ runner, modules }) => new Promise((resolve) => {
     // async spawn: the parent's http server (core-load) must keep serving while the child runs
     const child = spawn(process.execPath, [runner], { env: { ...process.env, ASTER_SHAKE_ENV: JSON.stringify(env) } })
     let stdout = ''
@@ -439,7 +518,7 @@ function runPattern(p, env) {
       clearTimeout(timer)
       const m = /@@RESULT@@(.*)/.exec(stdout)
       if (!m) return resolve({ error: (stderr || stdout || `exit ${code}`).trim().split('\n').slice(-6).join('\n') })
-      resolve({ result: JSON.parse(m[1]) })
+      resolve({ result: JSON.parse(m[1]), modules })
     })
   }))
 }
@@ -469,7 +548,9 @@ try {
       continue
     }
     if (argv.includes('--verbose')) console.log(JSON.stringify(outcome.result).slice(0, 600))
-    const bad = p.check(outcome.result).filter(([ok]) => !ok).map(([, what]) => what)
+    // `p.modules(m)`: assertions on what the bundle is made of (esbuild only; skipped under --bundler vite)
+    const checks = [...p.check(outcome.result), ...(p.modules && outcome.modules ? p.modules(outcome.modules) : [])]
+    const bad = checks.filter(([ok]) => !ok).map(([, what]) => what)
     if (bad.length) {
       failures++
       console.log(`FAIL ${p.name.padEnd(20)} ${p.why}`)

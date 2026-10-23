@@ -490,29 +490,21 @@ function ChartView({
   // Types make the props a compile error; this is the net for JS callers and for specs whose event streams
   // are only known after evaluation. Reported through `onError`, else the logger, else the console.
   const eventStreamsUnbound = interaction == null && interactive && renderer !== 'canvas' && scene != null && hasEventStreams(scene)
-  const interactionPropsUsed = interaction == null ? [
-    tooltip === true && 'tooltip',
-    renderTooltip != null && 'renderTooltip',
-    onPointSelect != null && 'onPointSelect',
-    selection !== undefined && 'selection',
-    select !== undefined && 'select',
-    onSelectionChange != null && 'onSelectionChange',
-    preventDefault === true && 'preventDefault',
-  ].filter((x): x is string => x !== false).join(', ') : ''
+  const interactionPropsUsed = interaction == null
+    ? Object.entries({ tooltip: tooltip === true, renderTooltip, onPointSelect, selection, select, onSelectionChange, preventDefault: preventDefault === true })
+      .filter(([, v]) => v !== undefined && v !== false).map(([k]) => k).join(', ')
+    : ''
   const canvasUnavailable = requestedRenderer === 'canvas' && canvasCap == null
   const capabilityKey = `${canvasUnavailable ? 'c' : ''}|${interactionPropsUsed}|${eventStreamsUnbound ? 'e' : ''}`
   React.useEffect(() => {
-    const problems: string[] = []
-    if (canvasUnavailable) {
-      problems.push('renderer="canvas" needs the canvas renderer, which <SvgChart> does not include; rendering SVG instead. Use <Chart renderer="canvas"> for canvas.')
-    }
-    if (interactionPropsUsed) {
-      problems.push(`${interactionPropsUsed} (props that need hit testing and the signal event loop) are ignored: <SvgChart> only has them when it is given \`interaction\`. Pass interaction={interaction} from '@aster/react/interaction'.`)
-    }
-    if (eventStreamsUnbound) {
-      problems.push('this spec has event streams (signal.on) but no event loop is bound, so its interactions will not respond; pass `interaction` from \'@aster/react/interaction\' (<SvgChart spec={spec} interaction={interaction} />).')
-    }
+    const fix = "pass interaction={interaction} from '@aster/react/interaction'"
+    const problems = [
+      canvasUnavailable && 'renderer="canvas" needs <Chart>: <SvgChart> has no canvas renderer, so it renders SVG',
+      interactionPropsUsed && `${interactionPropsUsed} need hit testing and the signal event loop and are ignored: ${fix}`,
+      eventStreamsUnbound && `this spec has event streams (signal.on) but no event loop is bound: ${fix}`,
+    ]
     for (const problem of problems) {
+      if (!problem) continue
       const message = `[aster] ${problem}`
       if (onErrorRef.current) onErrorRef.current(new Error(message))
       else (loggerRef.current ?? console).warn(message)

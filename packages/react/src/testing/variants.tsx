@@ -158,7 +158,7 @@ export const FAILURE_MODES: Record<Capability, FailureMode> = {
     try {
       expect(m.container.querySelector('canvas')).toBeNull()
       expect(m.container.querySelector('svg')).not.toBeNull()
-      expect(m.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^\[aster\] renderer="canvas" needs the canvas renderer.*<Chart renderer="canvas">/)])
+      expect(m.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^\[aster\] renderer="canvas" needs <Chart>: <SvgChart> has no canvas renderer, so it renders SVG$/)])
     } finally { m.unmount() }
   },
   interaction: (variant) => {
@@ -166,7 +166,7 @@ export const FAILURE_MODES: Record<Capability, FailureMode> = {
     const m = mount(variant, { spec: tinySpec, width: 40, height: 30, tooltip: true, onPointSelect: () => {} })
     try {
       expect(m.errors.map((e) => e.message)).toEqual([
-        expect.stringMatching(/^\[aster\] tooltip, onPointSelect \(props that need hit testing and the signal event loop\) are ignored.*interaction=\{interaction\} from '@aster\/react\/interaction'/),
+        expect.stringMatching(/^\[aster\] tooltip, onPointSelect need hit testing and the signal event loop and are ignored: pass interaction=\{interaction\} from '@aster\/react\/interaction'$/),
       ])
       const rect = m.container.querySelector('svg path')!
       rect.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 5, clientY: 5 }))
@@ -176,7 +176,7 @@ export const FAILURE_MODES: Record<Capability, FailureMode> = {
     // Without `onError` the same report goes to the logger.
     const warned: string[] = []
     const m2 = mount(variant, { spec: tinySpec, width: 40, height: 30, tooltip: true, onError: undefined, logger: { error: () => {}, warn: (...a: unknown[]) => { warned.push(String(a[0])) } } })
-    try { expect(warned).toEqual([expect.stringMatching(/^\[aster\] tooltip \(props that need hit testing/)]) } finally { m2.unmount() }
+    try { expect(warned).toEqual([expect.stringMatching(/^\[aster\] tooltip need hit testing/)]) } finally { m2.unmount() }
   },
   signals: (variant) => {
     // A spec with `signal.on` streams still renders, but is reported: never a silently dead chart.
@@ -184,7 +184,7 @@ export const FAILURE_MODES: Record<Capability, FailureMode> = {
     try {
       expect(m.container.querySelector('svg')).not.toBeNull()
       expect(m.errors.map((e) => e.message)).toEqual([
-        expect.stringMatching(/^\[aster\] this spec has event streams \(signal\.on\) but no event loop is bound.*pass `interaction` from '@aster\/react\/interaction'/),
+        expect.stringMatching(/^\[aster\] this spec has event streams \(signal\.on\) but no event loop is bound: pass interaction=\{interaction\} from '@aster\/react\/interaction'$/),
       ])
     } finally { m.unmount() }
   },

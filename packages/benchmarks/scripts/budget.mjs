@@ -26,7 +26,10 @@ import { fileURLToPath } from 'node:url'
 // git log of this file.
 //
 // Measured 2026-10-23 (kB gzip): core 123.1; marginal dom 5.7, canvas 4.8, hit 5.0, signals 4.4, load 5.1,
-// geo 12.3, transforms 15.1; useChart 126.4; Chart 156.5; Chart + VL 210.7.
+// geo 12.3, transforms 15.1; useChart 126.4; Chart 157.2; Chart + VL 211.3; SvgChart 142.0; SvgChart + interaction 151.5.
+// `<Chart>` was 156.5 (+ VL 210.7) before it became a shell over ChartCore with injected capabilities: the +0.7 is the
+// capability indirection (property reads the minifier cannot rename) and the report of a missing capability, which
+// `<Chart>` never needs but shares with `<SvgChart>` (one implementation is the point; see docs/ARCHITECTURE.md).
 const BUDGETS = {
   '@aster/core': 123.6 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
@@ -37,9 +40,12 @@ const BUDGETS = {
   '+ @aster/core/geo': 12.8 * 1024,
   '+ @aster/core/transforms': 15.6 * 1024,
   '@aster/react useChart': 126.9 * 1024,
-  '@aster/react Chart': 157.0 * 1024,
+  '@aster/react Chart': 157.7 * 1024,
+  // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
+  '@aster/react SvgChart': 142.5 * 1024,
+  '@aster/react SvgChart + interaction': 152.0 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 211.2 * 1024,
+  '@aster/react Chart + VL': 211.8 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
@@ -138,6 +144,25 @@ export default Chart
 `,
   },
   {
+    name: '@aster/react SvgChart',
+    file: 'react-svgchart.tsx',
+    platform: 'browser',
+    external: ['react', 'react-dom', 'react/jsx-runtime'],
+    src: String.raw`import { SvgChart } from '@aster/react/lite'
+export default SvgChart
+`,
+  },
+  {
+    name: '@aster/react SvgChart + interaction',
+    file: 'react-svgchart-interaction.tsx',
+    platform: 'browser',
+    external: ['react', 'react-dom', 'react/jsx-runtime'],
+    src: String.raw`import { SvgChart } from '@aster/react/lite'
+import { interaction } from '@aster/react/interaction'
+export { SvgChart, interaction }
+`,
+  },
+  {
     name: '@aster/react Chart + VL',
     file: 'react-vl.tsx',
     platform: 'browser',
@@ -155,12 +180,13 @@ function setupTmp() {
 }
 
 const PUBLIC_PACKAGES = ['core', 'react', 'vl']
-const isBuildInput = (name) => /\.tsx?$/.test(name) && !/\.d\.ts$/.test(name) && !/\.(test|testlib|testkit)\.tsx?$/.test(name)
+// (mirrors tsconfig.build.json: test files, `src/testing/` helpers and type-only `*.assert.ts` modules emit nothing)
+const isBuildInput = (name) => /\.tsx?$/.test(name) && !/\.d\.ts$/.test(name) && !/\.(test|testlib|testkit|assert)\.tsx?$/.test(name)
 
 function listSources(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
     const p = join(dir, e.name)
-    return e.isDirectory() ? listSources(p) : isBuildInput(e.name) ? [p] : []
+    return e.isDirectory() ? (e.name === 'testing' ? [] : listSources(p)) : isBuildInput(e.name) ? [p] : []
   })
 }
 
