@@ -49,7 +49,8 @@ result is the summary line it prints. They change with the code: re-run before q
 | Signal event streams vs real Vega | `pnpm conformance:signals` | 38/38 cases agree |
 | `<Chart>` interaction in Chromium | `pnpm --filter @aster/react run test:browser` | all checks passed |
 | Incremental gate | `pnpm bench:incremental -- --points=10000 --reps=30` | append 22.2x–26.7x (floor 8x), whole-array replace 22.0x–24.9x (floor 8x), DOM patch 4.9x–6.9x (floor 1.6x), dense 100k-symbol append patch vs mount 306x–332x (floor 200x) over three runs |
-| Bundle budgets | `pnpm --filter @aster/benchmarks run budget` | all 8 entries pass (sizes in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)) |
+| Bundle shaking | `pnpm check:bundle` | every documented import pattern still works after tree-shaking (`--blanket-false` must fail) |
+| Bundle budgets | `pnpm --filter @aster/benchmarks run budget` | all 11 import-pattern rows pass (sizes in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)) |
 
 `retained` in the signals sweep means: the engine equals vega's fresh render of the same signals, and vega's own
 second render (after the signals were written into the running view) does not. See

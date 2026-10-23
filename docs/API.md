@@ -383,8 +383,8 @@ specs:
 import '@aster/react/vl'   // side effect: registers the from-scratch VL compiler
 ```
 
-The base `@aster/react` entry does not include the Vega-Lite compiler; importing `@aster/react/vl` adds about 54.4 kB
-gzip to the bundle (`@aster/react` 163.9 kB, `@aster/react/vl` 218.3 kB, measured by
+The base `@aster/react` entry does not include the Vega-Lite compiler; importing `@aster/react/vl` adds about 54.2 kB
+gzip to the bundle (`<Chart>` 156.5 kB, `<Chart>` + `@aster/react/vl` 210.7 kB, measured by
 `pnpm --filter @aster/benchmarks run budget`; see [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the addon throws an error naming the missing
 import. Vega specs need no extra import. Worker hosts must import `@aster/react/vl` in the worker entry as well,
 since compilation happens there.

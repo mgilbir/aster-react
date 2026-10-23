@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Tree-shaking works (`sideEffects`)**: `@aster/core` and `@aster/react` declare the files whose import has an effect
+  (the geo/transforms/load addons, the guide captions, `@aster/react/vl`, the worker entry), `@aster/vl` declares none.
+  `import { useChart } from '@aster/react'` goes from 164.1 to 126.4 kB gzip, `<Chart>` from 163.9 to 156.5, `<Chart>`
+  + VL from 218.3 to 210.7. `pnpm check:bundle` bundles and executes each documented import pattern (a blanket
+  `false` fails it), the budget gates one bundle per pattern with the addons as marginal cost, and `pnpm
+  verify:publish` executes a tree-shaken bundle of the installed tarballs. The Vega-Lite validator is 4.1 kB
+  smaller minified with every check and message unchanged (one exception: a scale-config typo named after an
+  `Object.prototype` member, e.g. `scale: {toString: 1}`, now says `unknown scale property` instead of printing
+  the native function source).
 - **Accessibility structure of the SVG (N3)**: axes, legends and titles are drawn as vega-scenegraph draws them
   (`<g class="mark-group role-axis" role="graphics-symbol" aria-roledescription="axis" aria-label="...">` around
   the item group, its background and foreground paths and one container per guide mark), every group mark has

@@ -107,7 +107,23 @@ Because heavy feature areas are only used by a small fraction of specs, they are
 | `@aster/core/dom` | the incremental DOM patcher (`patchSceneDom`, `sceneToDomDesc`, `createChartSession`); `<Chart>` now defaults to this path |
 | `@aster/core/signals` | the signal→view event loop (`bindSceneSignals`, `stampDatumAttrs`) that binds a spec's `signal.on` streams to the rendered svg |
 
-`@aster/react/vl` is the same pattern at the grammar level: the Vega-Lite compiler (`@aster/vl`) is registered by `import '@aster/react/vl'`, so Vega-only hosts do not pay for it. A spec that needs a gated feature without its addon loaded gets an actionable error naming what to import first. `packages/benchmarks/scripts/budget.mjs` gates the `@aster/core`, `/dom`, `/canvas`, `/hit`, `/load`, `/signals`, `@aster/react` and `@aster/react/vl` entries independently; the measured sizes are in [PERFORMANCE.md](PERFORMANCE.md).
+`@aster/react/vl` is the same pattern at the grammar level: the Vega-Lite compiler (`@aster/vl`) is registered by `import '@aster/react/vl'`, so Vega-only hosts do not pay for it. A spec that needs a gated feature without its addon loaded gets an actionable error naming what to import first. `packages/benchmarks/scripts/budget.mjs` gates one bundle per import pattern (core `renderSpec`, `useChart`, `<Chart>`, `<Chart>` + VL, and each core addon as its marginal cost on top of core); the measured sizes are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes).
+
+## Side effects and tree-shaking
+
+The package manifests declare `sideEffects` so a bundler can drop every module an app does not use: `@aster/vl` is `false`, `@aster/core` and `@aster/react` list the files below. A blanket `false` would be wrong because several documented imports work only through a module's top-level effect. The audit covered every module in `packages/{core,react,vl}/src` for top-level effects (registrations, `globalThis` writes, polyfills, prototype patches, mutable singletons whose initialisation matters, imports done only for their effect). Everything else that runs at import time only fills the module's own tables (`scale.ts` registers the scale types into its own map, `locale.ts`/`format.ts`/`time-format.ts` build their default locale, the `geo-*` ports and `time.ts` build their own constants and caches, `data-format.ts` registers the `json` reader in the registry it reads from), so it stays whenever the module is used and needs no listing.
+
+| File (dist) | Effect | Why it must be listed |
+|---|---|---|
+| core `addon-geo.js` | assigns `geoRegistry.buildProjection/projectedPath/contourRun` | `import '@aster/core/geo'` exports nothing used |
+| core `addon-transforms.js` | bare `import './transform-extra.js'` | the entry only exists for its effect |
+| core `transform-extra.js` | `transformRegistry.set(...)` for kde, density, quantile, regression, loess, pack, partition, treemap, wordcloud, voronoi, pie, cross, countpattern, dotbin, geopoint, geojson, linkpath | reached only through the bare import above |
+| core `addon-load.js` | `dataFormatRegistry.set('csv' \| 'tsv' \| 'dsv' \| 'topojson')` | `import '@aster/core/load'` for the readers alone must register them |
+| core `guide-caption.js` | `installGuideCaptions(...)` into `render.ts` | imported bare by `index.ts` and `dom.ts`; without it axis/legend `aria-label` captions vanish. Canvas and hit never import it, so they do not pay for it |
+| react `vl.js` | `registerVegaLiteCompiler(...)` (a `globalThis` registry under `Symbol.for('@aster/react/vega-lite-compiler')`) | `import '@aster/react/vl'` |
+| react `worker-entry.js` | `globalThis.onmessage = ...` | `import '@aster/react/worker-entry'` is the worker's whole body |
+
+`scripts/check-bundle-shaking.mjs` (`pnpm check:bundle`, a `pnpm check` gate) bundles a tiny app per documented import pattern with esbuild (production, tree-shaking), executes the bundle in a fresh node process (jsdom where it needs a DOM) and asserts the behaviour: Vega-Lite registered and rendered, geo projections, rare transforms, URL and inline csv data, `<Chart>` on the server and the client, `useChart` with and without serialising, `/ssr` hydration, the worker handler and the worker entry, the dom/canvas/hit/signals addons, the lazy `await import('@aster/core/geo')` form, and negative controls (without the addon the spec asks for it). `node scripts/check-bundle-shaking.mjs --blanket-false` simulates `"sideEffects": false` and must fail (10 of 21 patterns do; `scripts/bundle-shaking.test.mjs` asserts it); `--bundler vite` runs the same patterns through Vite/Rollup (a vitest dependency in the pnpm store; not a gate). `pnpm verify:publish` repeats the exercise on the installed tarballs.
 
 ## Scales
 
