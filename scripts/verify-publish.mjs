@@ -17,12 +17,17 @@
  *  6. `tsc` typechecks a consumer file that uses the public types, with
  *     `module: nodenext` so the `exports` map and its `types` conditions are
  *     resolved exactly as a consumer's compiler resolves them,
- *  7. a Vega and a Vega-Lite render run through the installed packages.
+ *  7. a Vega and a Vega-Lite render run through the installed packages,
+ *  8. a consumer app that depends on import side effects (`@aster/react/vl`, `@aster/core/geo`,
+ *     `@aster/core/transforms`, the guide captions) is BUNDLED from the installed tarballs with esbuild
+ *     (production, tree-shaking) and the bundle is executed: the `sideEffects` field that survived `pnpm pack`
+ *     must keep those registrations.
  *
  * Run: node scripts/verify-publish.mjs   (after `pnpm build`)
  * Test hook: ASTER_VERIFY_PUBLISH_ROOT=<dir> verifies a scratch copy of the
  * repository instead of this one (scripts/verify-publish.test.mjs plants faults there).
  */
+import { build } from 'esbuild'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -105,6 +110,7 @@ try {
       if (!/\.(c|m)?js$/.test(n)) continue
       if (/^\/\/# sourceMappingURL=/m.test(tarRead(tarballs.get(pkg), n))) fail(`@aster/${pkg}/${n} references a source map that is not in the tarball`)
     }
+    if (m.sideEffects === undefined) fail(`@aster/${pkg} packed manifest declares no "sideEffects" (bundlers could not tree-shake it)`)
     if (m.private) fail(`@aster/${pkg} is private but was packed`)
     if (m.license !== 'BSD-3-Clause') fail(`@aster/${pkg} has license ${m.license}`)
     const notices = tarRead(tarballs.get(pkg), 'THIRD_PARTY_NOTICES.md')
@@ -257,7 +263,49 @@ assert.ok(worker.scene && !('runtime' in worker.scene), 'worker scene is clone-s
 `)
 
   run(process.execPath, ['smoke.mjs'], { cwd: project, stdio: ['ignore','inherit','inherit'] })
-  console.log('[verify-publish] PASS — packed with pnpm, installed with npm, every export imports and typechecks, Vega and Vega-Lite render')
+
+  // 8) Bundle (tree-shaken, production) an app that only works through import side effects, from the INSTALLED
+  //    tarballs, and execute it. Node's own loader runs every module, so step 7 cannot see a registration that a
+  //    bundler would drop; this can.
+  writeFileSync(join(project, 'shaken.mjs'), `
+import assert from 'node:assert'
+import { createElement } from 'react'
+import { renderToString } from 'react-dom/server'
+import '@aster/react/vl'
+import '@aster/core/geo'
+import '@aster/core/transforms'
+import { renderSpec } from '@aster/core'
+import { Chart, hasVegaLiteCompiler } from '@aster/react'
+
+const vl = { width: 200, height: 120, data: { values: [{ c: 'a', v: 3 }, { c: 'b', v: 7 }] }, mark: 'bar',
+  encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'v', type: 'quantitative' } } }
+assert.equal(hasVegaLiteCompiler(), true, 'the packed @aster/react/vl registers the compiler after bundling')
+const html = renderToString(createElement(Chart, { spec: vl, width: 200, height: 120 }))
+assert.ok(html.includes('mark-rect'), 'a Vega-Lite spec renders through the bundled, tree-shaken packages')
+assert.ok(/aria-label="[XY]-axis/.test(html), 'the guide captions survived tree-shaking')
+
+const geo = { width: 200, height: 120, projections: [{ name: 'p', type: 'mercator', fit: true, size: { signal: '[width, height]' }, extent: null }],
+  data: [{ name: 'g', values: [{ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[[-10, -10], [10, -10], [10, 10], [-10, 10], [-10, -10]]] } }] }],
+  marks: [{ type: 'shape', from: { data: 'g' }, encode: { update: { fill: { value: 'steelblue' } } }, transform: [{ type: 'geoshape', projection: 'p' }] }] }
+assert.ok(/<path [^>]*d="M/.test(renderSpec(geo)), 'the packed @aster/core/geo registers projections after bundling')
+
+const treemap = { width: 100, height: 100, data: [{ name: 't', values: [{ id: 1, parent: null, value: 10 }, { id: 2, parent: 1, value: 5 }, { id: 3, parent: 1, value: 5 }],
+  transform: [{ type: 'stratify', key: 'id', parentKey: 'parent' }, { type: 'treemap', field: 'value' }] }],
+  marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { field: 'x0' }, y: { field: 'y0' }, x2: { field: 'x1' }, y2: { field: 'y1' }, fill: { value: 'tomato' } } } }] }
+assert.ok(renderSpec(treemap).includes('tomato'), 'the packed @aster/core/transforms registers the treemap after bundling')
+console.log('shaken ok')
+`)
+  await build({
+    entryPoints: [join(project, 'shaken.mjs')], outfile: join(project, 'shaken.bundle.mjs'), bundle: true, minify: true, treeShaking: true,
+    format: 'esm', platform: 'node', external: ['react', 'react-dom', 'react-dom/*'], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent',
+  }).catch((e) => fail(`bundling the consumer app from the installed tarballs failed: ${e.message.split('\n')[0]}`))
+  try {
+    run(process.execPath, ['shaken.bundle.mjs'], { cwd: project, stdio: ['ignore', 'inherit', 'inherit'] })
+  } catch {
+    fail('the tree-shaken bundle built from the installed tarballs does not behave (a side-effect registration was shaken out; see above)')
+  }
+  console.log('[verify-publish] tree-shaken bundle of the installed tarballs executes: vl, geo, transforms and captions registered')
+  console.log('[verify-publish] PASS — packed with pnpm, installed with npm, every export imports and typechecks, Vega and Vega-Lite render, a tree-shaken bundle keeps its side effects')
 } finally {
   rmSync(tmp, { recursive: true, force: true })
 }
