@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Accessibility structure of the SVG (N3)**: axes, legends and titles are drawn as vega-scenegraph draws them
+  (`<g class="mark-group role-axis" role="graphics-symbol" aria-roledescription="axis" aria-label="...">` around
+  the item group, its background and foreground paths and one container per guide mark), every group mark has
+  its container, data marks carry vega's class (`mark-rect role-mark <name>`), `aria-roledescription` and
+  `aria-label`, and items carry `aria-label` / `role` / `aria-roledescription` from `description`, `ariaRole`,
+  `ariaRoleDescription` (`aria: false` hides). The old `role="axis"` was no ARIA role. The captions are one
+  implementation shared with the accessible tree. The strict canonicalizer compares this structure, so it
+  can not drift again; `@aster/vl` now emits vega-lite's `description`, `ariaRoleDescription` and mark names.
+  The corpus SVG changes (759 of 785 files); the pictures do not.
+- **Spec lists are vega's (C80)**: `data: {values: [...]}`, a lone mark or scale object and `null` are read
+  through vega-util `array()` as in vega-parser, and a data set used without being declared is
+  `SpecParseError: Undefined data set name: "<name>"` (as `vega.parse`), in `compileChart` and so in every host.
+  `checkSpecLimits` counts the same lists.
+- **Dense SVG streams**: an append no longer re-scans every full chunk of a 100k-symbol mark (patch 1.8 ms to
+  0.8 ms); `bench:incremental` gates it against a full mount. The browser stream bench states its symbol fill
+  (vega draws a bare symbol filled; the old numbers measured an empty layer).
 - **Guides driven by signals, like vega (sweep-signals: 30 differences to 0, now a blocking gate)**: every
   axis and legend property may be a signal and a signal may hold anything; an axis `orient` signal is
   resolved when its value is known (any orient but the four is a vertical axis at the origin whose layout
