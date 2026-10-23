@@ -1595,19 +1595,11 @@ export function getChartInfo(spec: VgSpec, input: RuntimeInput = {}): ChartInfo 
 }
 
 function getChartInfoImpl(spec: VgSpec, input: RuntimeInput): ChartInfo {
-  const chart = compileChart(spec)
-  const { ctx, width, height } = prepareChartCtx(chart, input)
-
-  // Build the full scene (cheap relative to the caller's own render pass) so
-  // the padding matches evaluateChart's viewSizeLayout computation exactly.
-  const scene = evaluateChart(chart, input)
-
-  return {
-    width,
-    height,
-    padding: chart.autosize === 'none' ? chart.padding : (scene.padding ?? chart.padding),
-    scales: ctx.scales,
-  }
+  // ONE evaluation: the info is read off the evaluated scene, so it is the scene's own plot size,
+  // padding and scales -- under autosize `fit`/`pad` too, where the size the scales were built for
+  // is the fitted one, not the spec's (C53). (This used to prepare a second, unfitted context and
+  // then evaluate the whole chart again.)
+  return chartInfoFromScene(evaluateChart(compileChart(spec), input))
 }
 
 /**
