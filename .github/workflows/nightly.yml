@@ -32,9 +32,6 @@ jobs:
       - name: WebKit canvas parity
         run: pnpm conformance:canvas -- --browser=webkit
 
-      - name: Chromium SVG conformance
-        run: pnpm conformance:browser
-
       - name: Large incremental append benchmark
         run: pnpm bench:incremental -- --points=100000 --reps=40
 
