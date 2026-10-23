@@ -12,7 +12,7 @@ import { itemTextWidth } from './text-metrics.js'
 import { ClipCollector, type ClipDef } from './svg-defs.js'
 import { customSymbolPathData } from './svg-path.js'
 import { sanitizeHref } from './url-policy.js'
-import { axisLabel, guideTitleText, legendLabel, scalesFromSnapshots, type ScaleSnapshots } from './guide-caption.js'
+import type { ScaleSnapshots } from './guide-caption.js'
 export { ClipCollector, type ClipDef }
 import {
   line as d3Line,
@@ -2021,7 +2021,21 @@ export interface GuideScope {
   snaps: ScaleSnapshots | undefined
   map?: Map<string, unknown>
 }
-const scopeScales = (scope: GuideScope): Map<string, unknown> => (scope.map ??= scalesFromSnapshots(scope.snaps ?? []))
+/**
+ * The caption implementation. guide-caption.ts installs it when it is loaded (the SVG and DOM renderers and the accessible
+ * tree load it; the canvas and hit-test entries never do, and must not pay for its number and time formatting). Without it a
+ * guide gets no caption, and so no ARIA role, like a guide whose caption vega could not build.
+ */
+export interface GuideCaptions {
+  axis(group: SceneGroup, scales: Map<string, unknown>): string
+  legend(group: SceneGroup, scales: Map<string, unknown>): string
+  titleText(group: SceneGroup): string | undefined
+  scales(snaps: ScaleSnapshots): Map<string, unknown>
+}
+let captions: GuideCaptions | null = null
+export function installGuideCaptions(c: GuideCaptions): void { captions = c }
+
+const scopeScales = (scope: GuideScope): Map<string, unknown> => (scope.map ??= captions ? captions.scales(scope.snaps ?? []) : new Map())
 
 /** vega-scenegraph titleCaption: the text of the title item, lines joined by a space. */
 function titleText(group: SceneGroup): string {
@@ -2035,8 +2049,8 @@ function guideCaption(group: SceneGroup, scope: GuideScope): string | undefined 
   if (group.description != null) return group.description
   switch (group.role) {
     // (a guide whose scale is unknown has no caption: vega's ariaGuide catches the failure and writes no ARIA at all)
-    case 'axis': return scopeScales(scope).has(group.scale ?? '') ? axisLabel({ ...group, title: guideTitleText(group) }, scopeScales(scope)) : undefined
-    case 'legend': return scopeScales(scope).has(group.legendScale ?? '') ? legendLabel({ ...group, title: guideTitleText(group) }, scopeScales(scope)) : undefined
+    case 'axis': return captions && scopeScales(scope).has(group.scale ?? '') ? captions.axis({ ...group, title: captions.titleText(group) }, scopeScales(scope)) : undefined
+    case 'legend': return captions && scopeScales(scope).has(group.legendScale ?? '') ? captions.legend({ ...group, title: captions.titleText(group) }, scopeScales(scope)) : undefined
     case 'title-text': return `Title text '${titleText(group)}'`
     case 'title-subtitle': return `Subtitle text '${titleText(group)}'`
     default: return undefined
@@ -2342,10 +2356,9 @@ function legendItem(g: SceneGroup, clips: ClipCollector): SvgEl {
     entryMarks = entries.length === 0 && bg === null ? [] : [el('g', (w) => { w.v('class', 'mark-group role-scope'); w.v('role', 'graphics-object'); w.v('aria-roledescription', 'group mark container') }, items)]
   } else {
     const banded = g.legendType === 'discrete' || bands.length > 0
-    entryMarks = [
-      el('g', (w) => guidePartAttrs('legend', banded ? 'band' : 'gradient', null, w), (banded ? bands : gradients).map((l) => leaf(l))),
-      el('g', (w) => guidePartAttrs('legend', 'label', null, w), labels.map((l) => leaf(l))),
-    ]
+    entryMarks = [el('g', (w) => guidePartAttrs('legend', banded ? 'band' : 'gradient', null, w), (banded ? bands : gradients).map((l) => leaf(l)))]
+    // (the labels come from the legend's entries: a legend whose entries failed to build has none, not even the container)
+    if (labels.length || gradients.length || bands.length) entryMarks.push(el('g', (w) => guidePartAttrs('legend', 'label', null, w), labels.map((l) => leaf(l))))
   }
   const marks: SvgEl[] = [col(entryMarks)]
   if (titles.length) marks.push(el('g', (w) => guidePartAttrs('legend', 'title', null, w), titles.map((t) => leaf(t))))

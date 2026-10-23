@@ -4525,7 +4525,13 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
     const titleStr = String(legend.title ?? '')
     const items: SceneItem[] = []
     if (titleStr) items.push({ _legendTitle: true, text: titleStr, x: 0, y: 0, align: 'left', baseline: 'top', fill: '#000', fontSize: 11 })
-    return { marktype: 'group', role: 'legend', legendType: 'symbol', x: 0, y: 0, width: 0, height: 0, items }
+    // (the kind of legend it would have been: vega-parser's legendType, decided before any entry is built)
+    const channels = ['size', 'shape', 'fill', 'stroke', 'strokeWidth', 'strokeDash', 'opacity'].filter((k) => (legend as unknown as Record<string, unknown>)[k] != null)
+    const discretizing = scaleType === 'quantile' || scaleType === 'quantize' || scaleType === 'threshold' || scaleType === 'bin-ordinal'
+    const asType = legend.type != null ? legend.type : channels.length === 1 && (legend.fill != null || legend.stroke != null)
+      ? (VEGA_CONTINUOUS_SCALES.has(scaleType) ? 'gradient' : discretizing ? 'discrete' : 'symbol') : 'symbol'
+    const legendType = asType === 'gradient' && discretizing ? 'discrete' : asType
+    return { marktype: 'group', role: 'legend', legendType, x: 0, y: 0, width: 0, height: 0, items }
   }
   // Domain values. A continuous symbol legend (opacity, or a color scale
   // without a gradient) lists generated ticks, not just the domain endpoints.

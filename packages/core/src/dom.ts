@@ -67,6 +67,8 @@ import {
   num,
 } from './render.js'
 
+import './guide-caption.js' // (installs the guide captions the structure tree quotes in aria-label)
+
 const SVG_NS = 'http://www.w3.org/2000/svg'
 const XLINK_NS = 'http://www.w3.org/1999/xlink'
 

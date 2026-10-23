@@ -5,6 +5,7 @@
  */
 import { currentLocale } from './locale.js'
 import { tickFormat } from './scale.js'
+import { installGuideCaptions } from './render.js'
 
 export type ScaleSnapshots = Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; labelValues?: unknown[] }>
 
@@ -141,3 +142,10 @@ export function guideTitleText(group: { title?: string; items?: unknown[] }): st
   }
   return walk(group.items) ?? group.title
 }
+
+installGuideCaptions({
+  axis: (g, scales) => axisLabel(g, scales),
+  legend: (g, scales) => legendLabel(g, scales),
+  titleText: (g) => guideTitleText(g),
+  scales: (snaps) => scalesFromSnapshots(snaps),
+})
