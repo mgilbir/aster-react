@@ -49,5 +49,6 @@
       "default": "./dist/index.js"
     },
     "./package.json": "./package.json"
-  }
+  },
+  "sideEffects": false
 }

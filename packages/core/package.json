@@ -39,6 +39,13 @@
     },
     "./package.json": "./package.json"
   },
+  "sideEffects": [
+    "./dist/guide-caption.js",
+    "./dist/addon-geo.js",
+    "./dist/addon-load.js",
+    "./dist/addon-transforms.js",
+    "./dist/transform-extra.js"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
