@@ -10,6 +10,7 @@ import { fieldOf } from './transform-agg.js'
 import { activeMeter, withLimits, boundedCount, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
+import { SpecParseError } from './parse-error.js'
 import { consoleLogger, type Logger } from './logger.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale, type ScaleContext } from './scales.js'
 
@@ -409,7 +410,7 @@ interface EvalContext {
  * they are rethrown to the caller.
  */
 function reportEvalError(ctx: EvalContext, e: unknown): void {
-  if (e instanceof AsterLimitError || e instanceof AsterUrlError || e instanceof ExpressionParseError || (e instanceof Error && e.message.startsWith('[aster]'))) throw e
+  if (e instanceof AsterLimitError || e instanceof AsterUrlError || e instanceof ExpressionParseError || e instanceof SpecParseError || (e instanceof Error && e.message.startsWith('[aster]'))) throw e
   ctx.failed = true
   ctx.logger.error(e)
 }
@@ -3744,10 +3745,11 @@ function groupItems(geo: SceneItem, w: number, h: number, content: SceneItem[]):
   const bg = groupBackground(geo, w, h)
   const out: SceneItem[] = [bg.background]
   if (rec.clip) {
+    // vega's clip: the group's rounded rectangle when any corner radius is truthy (even one that clamps to a
+    // square corner, e.g. -4: the clip is then that path, not a rect), else the plain box
     let clipPathD: string | undefined
-    if (bg.corners) {
-      const d = String(rectItemPath({ x: 0, y: 0, width: w, height: h, ...Object.fromEntries(GROUP_CORNER_KEYS.filter((k) => rec[k] !== undefined).map((k) => [k, rec[k]])) } as SceneItem))
-      if (/[CcAa]/.test(d)) clipPathD = d
+    if (GROUP_CORNER_KEYS.some((k) => rec[k])) {
+      clipPathD = String(rectItemPath({ x: 0, y: 0, width: w, height: h, ...Object.fromEntries(GROUP_CORNER_KEYS.filter((k) => rec[k] !== undefined).map((k) => [k, rec[k]])) } as SceneItem))
     }
     out.push({ marktype: 'group', role: 'scope', clip: true, ...(clipPathD ? { clipPathD } : {}), width: w, height: h, x: 0, y: 0, items: content as SceneNode[] } as unknown as SceneItem)
   } else {

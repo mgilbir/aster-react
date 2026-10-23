@@ -43,6 +43,30 @@ on), supports explicit per-datum `dataChanges`, and exposes the source/transform
 via `session.pulse()`. `buildPulseGraph(chart)` / `propagatePulse(graph, sources)` expose
 the same dataflow structure directly.
 
+### Custom expression functions
+
+`registerExpressionFunction(name, fn)` is the counterpart of vega's `expressionFunction(name, fn)`: expressions
+(`{signal: ...}`, filters, formulas, encodes) may then call `name(...)`. It is how Vega-Lite's custom `formatType`
+works: with `config.customFormatTypes: true`, `{"formatType": "price", "format": "$.2f"}` compiles (`@aster/vl`, as
+vega-lite) to `price(datum["v"], "$.2f")` for text, tooltip, href and description channels and to a
+`price(datum.value, "$.2f")` label encode for axes and legends. Register `price` before rendering, in vega too if
+you compare the two:
+
+```ts
+import { registerExpressionFunction } from '@aster/core'
+const off = registerExpressionFunction('price', (value, format) => myFormatter(format)(value))
+// ... render ...
+off() // removes it
+```
+
+The registry is global, as vega's is. A registered function is host code: the engine does not sandbox or meter it,
+and a spec decides its arguments, so register only functions that are safe for any arguments a spec you render can
+produce. A name that is not a plain identifier, or that an expression already means something by (a built-in
+function, a constant, `datum`, `event`, ...), or that starts with `_`, is refused. A custom `formatType` that is
+not registered fails like any unknown expression function. Without `customFormatTypes: true` vega-lite drops a
+custom `formatType` and its `format` from field definitions, axes and legends (a facet header keeps its own), and
+so does `@aster/vl`.
+
 ### Streaming and pulses
 
 `diffRows(previous, next)` classifies a replacement snapshot: same-length changes return

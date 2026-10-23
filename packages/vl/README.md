@@ -56,6 +56,15 @@ an expression or a generated dataset/signal/scale name.
   `quantizeCount` and `invalid`. `scale.domain: "unaggregated"`, `scale.rangeMin` / `rangeMax`.
 - `mark.invalid` (`filter`, `show`, `break-paths-filter-domains`, `break-paths-show-domains`,
   `break-paths-show-path-domains`, `null`) and `config.scale.invalid`.
+- Custom format types (`formatType`, `config.customFormatTypes`, `numberFormatType`,
+  `normalizedNumberFormatType`, `timeFormatType`): as vega-lite, a call of the expression function of that
+  name (`price(datum["v"], "$.2f")`; axes and legends carry it in a labels encode). Register the function
+  with `registerExpressionFunction` from `@aster/core` (and with vega's `expressionFunction` for vega). A
+  custom type is dropped, with its `format`, unless `customFormatTypes` is true (a facet header's is not).
+- Explicit scale domains: arrays (numbers, strings, DateTime objects, `{expr}` / `{signal}` entries; a
+  temporal field's become `{data: datetime(...)}` signals) with vega-lite's `zero` / `nice` rules, on
+  position, size, opacity and colour scales. A domain that is neither an array nor `"unaggregated"` (`"Aa"`,
+  a number, `true`) is emitted as written, as vega-lite does, and vega (and Aster's runtime) refuses it.
 - Other config: `numberFormat`, `timeFormat`, `normalizedNumberFormat`, `countTitle`, `fieldTitle`,
   `aria`, `lineBreak`, `style`, `errorbar`, `errorband`, header / headerRow / headerColumn, legend,
   axis and mark blocks.
@@ -78,14 +87,12 @@ ignored.
 - Animation: the `time` channel (`mark.time` and `config.scale.framesPerSecond` / `animationDuration` are accepted: without a `time` channel they change nothing in vega-lite either).
 - Data-driven channels without a scale / legend implementation yet: `strokeDash`, `angle`,
   `fillOpacity`, `strokeOpacity` (constants and conditions work); `key`.
-- Formats: `formatType` / custom format types (`numberFormatType`, `timeFormatType`,
-  `normalizedNumberFormatType`, `customFormatTypes`).
 - Bins and time units: `bin: "binned"` / `binned: true` (pre-binned data), `timeUnit.maxbins`,
   `timeUnit.binned`, a bin or time-unit on a text / tooltip / href channel, errorbar / errorband over
   a binned channel or with argmin / argmax; `timeUnitBandPosition` / `timeUnitBandSize` mark keys.
 - Scales and encodings: `scale: null`, channel-level `impute` and `band`,
   `size` constants or conditions on bars and ticks (a size *field* works), `x`/`y`/`x2`/`y2`/
-  `theta`/`theta2`/`radius2` mark-def constants, string scale domains other than `"unaggregated"`.
+  `theta`/`theta2`/`radius2` mark-def constants.
 - Layout: `width` / `height: "container"` on a composition (only a top-level unit or layer),
   the view `background` property, data generators
   (`sequence`, `sphere`, `graticule`) and `data: null`, config keys outside the supported list,

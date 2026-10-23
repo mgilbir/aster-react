@@ -311,7 +311,8 @@ function validateData(spec: Obj, at: (k: string) => string): void {
 const CONFIG_KEYS = set(
   'autosize background padding axis axisBand axisX axisY axisLeft axisRight axisTop axisBottom legend header headerRow headerColumn headerFacet range ' +
     'mark arc area bar circle geoshape image line point rect rule square text tick trail view title font scale style ' +
-    'aria countTitle fieldTitle lineBreak normalizedNumberFormat numberFormat timeFormat errorbar errorband',
+    'aria countTitle fieldTitle lineBreak normalizedNumberFormat numberFormat timeFormat errorbar errorband ' +
+    'customFormatTypes numberFormatType normalizedNumberFormatType timeFormatType',
 )
 const CONFIG_SCALE_KEYS = set(
   'bandPaddingInner bandPaddingOuter barBandPaddingInner tickBandPaddingInner rectBandPaddingInner bandWithNestedOffsetPaddingInner bandWithNestedOffsetPaddingOuter offsetBandPaddingInner offsetBandPaddingOuter pointPadding continuousPadding round nice zero xReverse clamp useUnaggregatedDomain invalid minBandSize maxBandSize minFontSize maxFontSize minOpacity maxOpacity minSize maxSize minStrokeWidth maxStrokeWidth quantileCount quantizeCount framesPerSecond animationDuration',
@@ -336,6 +337,10 @@ function validateConfig(cfg: Obj, path: string): void {
         if (v !== 'zero-or-min' && !(isObj(v) && 'value' in v)) fail(`${path}.scale.invalid.${ch}`, 'must be "zero-or-min" or {"value": ...}')
       }
     }
+  }
+  if (cfg.customFormatTypes !== undefined && typeof cfg.customFormatTypes !== 'boolean') fail(`${path}.customFormatTypes`, 'must be a boolean')
+  for (const k of ['numberFormatType', 'normalizedNumberFormatType', 'timeFormatType'] as const) {
+    if (cfg[k] !== undefined && typeof cfg[k] !== 'string') fail(`${path}.${k}`, 'must be the name of a format function registered as an expression function')
   }
   if (cfg.autosize !== undefined) validateAutosize(cfg.autosize, `${path}.autosize`)
 }
@@ -562,9 +567,10 @@ function validateScaleDef(scale: Obj, at: string, ch: string): void {
   }
   if (scale.domain !== undefined) {
     const d = scale.domain
-    if (isObj(d)) fail(`${at}.domain`, 'domain objects ({param}, {unionWith}) are not supported; give an array or "unaggregated"')
-    if (typeof d === 'string' && d !== 'unaggregated') fail(`${at}.domain`, `domain ${JSON.stringify(d)} is not valid: give an array or "unaggregated"`)
-    if (!Array.isArray(d) && d !== 'unaggregated') fail(`${at}.domain`, 'must be an array')
+    // vega-lite passes a domain that is neither an array nor 'unaggregated' nor a {param}/{unionWith}/signal object on to
+    // vega as it is (a string, a number, `true`: scale/domain.ts parseSingleChannelDomain), where it fails the
+    // scale (vega.parse: "Undefined data set name"). So does this: it compiles, and the runtime refuses it.
+    if (isObj(d) && typeof (d as Obj).signal !== 'string') fail(`${at}.domain`, 'domain objects ({param}, {unionWith}) are not supported; give an array or "unaggregated"')
   }
   void ch
 }

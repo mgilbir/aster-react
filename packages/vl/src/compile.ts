@@ -10,7 +10,7 @@
 import { renameDataRefs, renameFragment } from './embed.js'
 import { VLCompileError, pushAll, signalSafe, flatField, datumRef as dref, genName, safeKey, splitAccessPath, validExpr } from './names.js'
 import { validateSpec } from './validate.js'
-import { predicateExpr } from './predicate.js'
+import { predicateExpr, domainValueExpr } from './predicate.js'
 import { normalizeComposites } from './composite.js'
 import { scaleConfigOf, discreteStep, sizeRange, countRange, discreteCount, usesUnaggregatedDomain, type ScaleCfg } from './scaleconfig.js'
 import { getTimeUnitParts, normalizeTimeUnit, timeUnitFieldName, timeUnitTransform, type NormalTimeUnit } from './timeunit.js'
@@ -1055,7 +1055,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     // config.header seeds the defaults; the channel's own header def wins
     const cfgHeader = (isObject(spec.config) ? (spec.config as Record<string, unknown>).header : undefined) as Record<string, unknown> | undefined
     const hdr = { ...(cfgHeader ?? {}), ...(def?.raw?.header as Record<string, unknown> | undefined ?? {}) }
-    const text = { signal: fieldTextExpr(def ?? ({ field: f, type: 'nominal', raw: {} } as unknown as FieldDef), { lineBreaks: false, spec, expr: 'parent', format: hdr?.format as string | undefined }) }
+    const text = { signal: fieldTextExpr(def ?? ({ field: f, type: 'nominal', raw: {} } as unknown as FieldDef), { lineBreaks: false, spec, expr: 'parent', format: hdr?.format as string | undefined, formatType: hdr?.formatType as string | undefined }) }
     const t: Record<string, unknown> = {
       text,
       orient: 'left',
@@ -2092,6 +2092,38 @@ function titleFromConfig(f: FieldDef, config: unknown): { autoTitle?: string } {
   return f.aggregate === 'count' && typeof c.countTitle === 'string' ? { autoTitle: c.countTitle } : {}
 }
 
+/**
+ * vega-lite initFieldOrDatumDef: a custom `formatType` (any but "number" / "time") is honoured only when
+ * `config.customFormatTypes` is true. Otherwise it is dropped WITH its `format` (warning "custom format type and
+ * format for channel ... are dropped"): from the field def itself when it carries a format / formatType (text,
+ * tooltip, href, description...), else from its axis or legend. A header's is kept.
+ */
+function dropUnallowedCustomFormat(def0: unknown, config: unknown): unknown {
+  if (!isObject(def0)) return def0
+  const cfg = isObject(config) ? (config as Record<string, unknown>) : undefined
+  if (cfg?.customFormatTypes === true) return def0
+  let def: Record<string, unknown> = def0
+  if (Array.isArray(def.condition)) def = { ...def, condition: def.condition.map((c) => dropUnallowedCustomFormat(c, config)) }
+  else if (isObject(def.condition)) def = { ...def, condition: dropUnallowedCustomFormat(def.condition, config) }
+  if ('format' in def || 'formatType' in def) {
+    if (!isCustomFormatType(def.formatType)) return def
+    const rest: Record<string, unknown> = { ...def }
+    delete rest.format
+    delete rest.formatType
+    return dropUnallowedCustomFormat(rest, config)
+  }
+  for (const guide of ['axis', 'legend'] as const) {
+    const g = def[guide]
+    if (!(guide in def) || !isObject(g)) continue
+    if (!isCustomFormatType(g.formatType)) return def
+    const rest: Record<string, unknown> = { ...g }
+    delete rest.format
+    delete rest.formatType
+    return dropUnallowedCustomFormat({ ...def, [guide]: rest }, config)
+  }
+  return def
+}
+
 function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown, markDef?: unknown): FieldDef[] {
   const fields: FieldDef[] = []
   // vega-lite parseLegend: `disable = legend !== undefined ? !legend : config.legend.disable`
@@ -2101,7 +2133,8 @@ function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown
     // vega-lite drops the size of an image mark (it is incompatible)
     if (channel === 'size' && isObject(markDef) && markDef.$image) continue
     // detail / order / tooltip accept a list of definitions
-    for (const d of Array.isArray(def) ? def : [def]) {
+    for (const d0 of Array.isArray(def) ? def : [def]) {
+      const d = dropUnallowedCustomFormat(d0, config)
       const f = parseChannel(channel === 'fill' || channel === 'stroke' ? 'color' : channel, d)
       if (!f) continue
       const g = { ...(disableLegends && f.legend === undefined && !f.datumOnly && LEGEND_CHANNELS.has(f.channel) ? { ...f, legend: null } : f), ...titleFromConfig(f, config) }
@@ -2886,6 +2919,39 @@ function timeUnitFormatSignal(u: string): string {
   return `timeUnitSpecifier(${JSON.stringify(getTimeUnitParts(u))}, {"year-month":"%b %Y ","year-month-date":"%b %d, %Y "})`
 }
 
+/**
+ * vega-lite axis/assemble.ts, legend/assemble.ts: a `labelExpr` is the label text encode; when the labels already
+ * have a text signal (a custom format type) its `datum.label` stands for that text.
+ */
+function labelExprSignal(labelExpr: string, existing: unknown): string {
+  const prior = isObject(existing) && typeof existing.signal === 'string' ? existing.signal : undefined
+  return prior === undefined ? labelExpr : labelExpr.split('datum.label').join(prior)
+}
+
+/**
+ * vega-lite axis/encode.ts labels() and legend/encode.ts labels(): the label text of a guide whose format type is
+ * custom -- the guide's own, else (`config.customFormatTypes`, no format or format type of its own) the config's
+ * number / time (and, on a normalized stack axis, normalized number) format type -- as a signal over `datum.value`.
+ * The caller leaves vega's `format` / `formatType` unset for such a guide.
+ */
+function customLabelText(def: FieldDef, guide: Record<string, unknown> | null | undefined, config: Record<string, unknown> | undefined, normalizedStack: boolean): string | undefined {
+  const format = guide?.format
+  const formatType = guide?.formatType
+  if (isCustomFormatType(formatType)) return customFormatExpr(formatType, 'datum.value', format)
+  if (format === undefined && formatType === undefined && config?.customFormatTypes === true) {
+    if (def.type === 'quantitative') {
+      if (normalizedStack && typeof config.normalizedNumberFormatType === 'string') {
+        return customFormatExpr(config.normalizedNumberFormatType, 'datum.value', config.normalizedNumberFormat)
+      }
+      if (typeof config.numberFormatType === 'string') return customFormatExpr(config.numberFormatType, 'datum.value', config.numberFormat)
+    }
+    if (def.type === 'temporal' && typeof config.timeFormatType === 'string' && def.tu === undefined) {
+      return customFormatExpr(config.timeFormatType, 'datum.value', config.timeFormat)
+    }
+  }
+  return undefined
+}
+
 /** Non-positional legends format timeUnit fields with timeFormat. */
 function applyTimeUnitLegend(lg: Record<string, unknown>, def: FieldDef, userLegend: Record<string, unknown> | undefined, formats: { numberFormat?: string; timeFormat?: string }): void {
   if (userLegend && userLegend.format !== undefined) return
@@ -3005,6 +3071,9 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         : positionalDomain(def, dataName, mark, orient, fields, dc),
       range: effRange,
     }
+    // an explicit domain is the scale's domain (the secondary channel's does not widen it)
+    const explicitDom = explicitDomainOf(def)
+    if (explicitDom !== undefined) sc.domain = explicitDomainValue(explicitDom, def)
     // config.scale.xReverse flips every x scale (band included);
     // config.scale.continuousPadding sets vega's pixel domain padding.
     if (channel === 'x' && userScaleCfg?.xReverse === true && def.scale?.reverse == null) sc.reverse = true
@@ -3025,12 +3094,15 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       // a continuous bar dimension pads by half a bar; band/point scales pad through paddingInner/Outer
       && isContinuousScaleType(type)
     ) sc.padding = 5
-    if (type === 'linear' || type === 'log') {
-      const zeroDefault = type === 'log' ? false : zeroDefaultFor(mark, channel, orient)
-      if (type === 'linear' || def.scale?.zero != null) {
+    if (type === 'linear' || type === 'log' || type === 'pow' || type === 'sqrt' || type === 'symlog') {
+      const zeroDefault = explicitDom !== undefined ? zeroForCustomDomain(explicitDom) : type === 'log' ? false : zeroDefaultFor(mark, channel, orient)
+      if (type !== 'log' || def.scale?.zero != null) {
         sc.zero = (def.scale?.zero as boolean | undefined) ?? zeroDefault
       }
-      sc.nice = (def.scale?.nice as unknown) ?? true
+      // vega-lite nice(): none for a binned field, an array domain, or a domainMin / domainMax
+      const niceDefault = def.bin || Array.isArray(explicitDom) || def.scale?.domainMin != null || def.scale?.domainMax != null ? undefined : true
+      const niceValue = (def.scale?.nice as unknown) ?? niceDefault
+      if (niceValue !== undefined) sc.nice = niceValue
       if (def.bin) sc.bins = { signal: binNames(def.binParams!, def.field).signal }
       // binned scales: no zero/nice; domain comes from bin start/end
       // (zero must be explicitly false — a missing key means the engine's
@@ -3093,15 +3165,16 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
     const discrete = isDiscreteType(def.type)
     const userType = def.scale?.type as string | undefined
     const type = discrete ? 'point' : ['linear', 'log', 'pow', 'sqrt', 'symlog', 'quantile', 'quantize', 'threshold'].includes(userType ?? '') ? userType! : 'linear'
-    const userDomain = Array.isArray(def.scale?.domain) ? def.scale!.domain : undefined
+    const explicitDom = explicitDomainOf(def)
+    const userDomain = explicitDom !== undefined ? explicitDomainValue(explicitDom, def) : undefined
     const sc: ScaleSpec = {
       name,
       type,
       domain: userDomain ?? (discrete ? sortedDomain(def, dataName, dc) : unaggregatedDomain(def, dataName, cfgS) ?? { data: dataName, field: aggFieldName(def) }),
-      range: def.scale?.range ?? (['quantile', 'quantize', 'threshold'].includes(type) ? countRange(range[0], range[1], discreteCount(type, cfgS, userDomain)) : range),
+      range: def.scale?.range ?? (['quantile', 'quantize', 'threshold'].includes(type) ? countRange(range[0], range[1], discreteCount(type, cfgS, explicitDom)) : range),
     }
     if (def.sort === 'descending') sc.reverse = true
-    if (!discrete && scalePropApplies(name, type, 'zero')) sc.zero = (def.scale?.zero as boolean | undefined) ?? (type === 'log' ? false : zero)
+    if (!discrete && scalePropApplies(name, type, 'zero')) sc.zero = (def.scale?.zero as boolean | undefined) ?? (explicitDom !== undefined && isContinuousScaleType(type) ? zeroForCustomDomain(explicitDom) : type === 'log' ? false : zero)
     for (const [k, v] of Object.entries(def.scale ?? {})) {
       if (k === 'type' || k === 'domain' || k === 'range' || k === 'zero' || k === 'rangeMin' || k === 'rangeMax' || !scalePropApplies(name, type, k)) continue
       sc[k] = v
@@ -3214,7 +3287,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       scales.push({
         name: 'color',
         type: colorScaleType,
-        domain: Array.isArray(cs.domain) ? cs.domain : { data: dataName, field: aggFieldName(colorDef) },
+        domain: explicitDomainOf(colorDef) !== undefined ? explicitDomainValue(explicitDomainOf(colorDef), colorDef) : { data: dataName, field: aggFieldName(colorDef) },
         // vega-lite's quantitative color range: 'heatmap' scheme for
         // rect/geoshape marks, a ramp otherwise; a domainMid makes it
         // diverging; an explicit scheme replaces the range (probed)
@@ -3235,7 +3308,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         ...(cs.bins !== undefined && scalePropApplies('color', colorScaleType, 'bins') ? { bins: cs.bins } : {}),
         ...(!scalePropApplies('color', colorScaleType, 'zero')
           ? {}
-          : { zero: (cs.zero as boolean | undefined) ?? false }),
+          : { zero: (cs.zero as boolean | undefined) ?? (explicitDomainOf(colorDef) !== undefined && isContinuousScaleType(colorScaleType) ? zeroForCustomDomain(explicitDomainOf(colorDef)) : false) }),
       })
     }
   }
@@ -3423,6 +3496,40 @@ function unaggregatedDomain(def: FieldDef, dataName: string, cfg: ScaleCfg): unk
 }
 
 /**
+ * vega-lite scale/domain.ts parseSingleChannelDomain: a `domain` that is not 'unaggregated' (nor a {param} /
+ * {unionWith} object, which validation refuses) is the scale's domain as written -- an array, or a bare string /
+ * number / `true` that vega itself then refuses (`Undefined data set name`).
+ */
+function explicitDomainOf(def: FieldDef): unknown | undefined {
+  const d = def.scale?.domain
+  if (Array.isArray(d)) return d
+  if (d && d !== 'unaggregated' && !isObject(d)) return d
+  return undefined
+}
+
+/**
+ * The emitted form of an explicit domain: an array of a temporal field (or one with a time unit) is a list of
+ * `{data: datetime(...)}` signals under `fields`; any other array keeps its values, an `{expr}` becoming a signal;
+ * a scalar is passed through.
+ */
+function explicitDomainValue(explicit: unknown, def: FieldDef): unknown {
+  if (!Array.isArray(explicit)) return explicit
+  const unit = def.tu?.unit
+  if (def.type === 'temporal' || unit !== undefined) {
+    return { fields: explicit.map((v) => ({ signal: `{data: ${domainValueExpr(v, def.type, unit)}}` })) }
+  }
+  return explicit.map((v) => (isObject(v) && typeof v.expr === 'string' ? { signal: v.expr } : v))
+}
+
+/** vega-lite scale/properties.ts zero(): with a custom domain only one that spans 0 keeps zero. */
+function zeroForCustomDomain(explicit: unknown): boolean {
+  if (!Array.isArray(explicit) || explicit.length === 0) return false
+  const first = explicit[0]
+  const last = explicit[explicit.length - 1]
+  return typeof first === 'number' && first <= 0 && typeof last === 'number' && last >= 0
+}
+
+/**
  * vega-lite `domainSort` for a discrete scale: the field's domain read from the
  * main table (ascending/descending) or from the RAW table sorted by an
  * aggregate of another field (sort by field/encoding) or by the sort-array
@@ -3430,8 +3537,8 @@ function unaggregatedDomain(def: FieldDef, dataName: string, cfg: ScaleCfg): unk
  */
 function sortedDomain(def: FieldDef, dataName: string, dc: DomainCtx): unknown {
   if (def.datumOnly) return [def.datum]
-  const explicit = def.scale?.domain
-  if (Array.isArray(explicit)) return explicit
+  const explicit = explicitDomainOf(def)
+  if (explicit !== undefined) return explicitDomainValue(explicit, def)
   const field = aggFieldName(def)
   const main = { data: dataName, field }
   const sort = def.sort
@@ -3690,12 +3797,24 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
       }
       if (userAxis.orient) labelAxis.orient = userAxis.orient
     }
+    // a custom format type moves the label text into the labels encode and leaves vega's own `format` unset
+    // (vega-lite axis/encode.ts labels(), format.ts guideFormat)
+    {
+      const customText = customLabelText(def, userAxis, config as Record<string, unknown> | undefined, def.stack === 'normalize')
+      if (customText !== undefined) {
+        delete labelAxis.format
+        delete labelAxis.formatType
+        const enc = (labelAxis.encode ?? (labelAxis.encode = {})) as { labels?: { update?: Record<string, unknown> } }
+        const labels = (enc.labels ??= {})
+        labels.update = { text: { signal: customText }, ...(labels.update ?? {}) }
+      }
+    }
     // vega-lite's axis labelExpr is a label text encode (vega has no such axis property)
     if (typeof labelAxis.labelExpr === 'string') {
       const enc = (labelAxis.encode ?? (labelAxis.encode = {})) as { labels?: { update?: Record<string, unknown> } }
       const labels = (enc.labels ??= {})
       const update = (labels.update ??= {})
-      update.text = { signal: labelAxis.labelExpr }
+      update.text = { signal: labelExprSignal(labelAxis.labelExpr, update.text) }
       // `labelExpr` itself stays as an unknown key that real Vega and Aster both ignore; the encode above labels the ticks
     }
     labelAxes.push(labelAxis)
@@ -3724,7 +3843,7 @@ function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null, fie
 
 // --- legends -----------------------------------------------------------------
 
-function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number, cfgLegendIn?: Record<string, unknown>, markStrokeDash?: number[], formats: { numberFormat?: string; timeFormat?: string } = {}): Record<string, unknown>[] {
+function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number, cfgLegendIn?: Record<string, unknown>, markStrokeDash?: number[], formats: { numberFormat?: string; timeFormat?: string; customFormatTypes?: boolean; numberFormatType?: string; timeFormatType?: string } = {}): Record<string, unknown>[] {
   const legends: Record<string, unknown>[] = []
   // config.legend is a defaults layer: orient/direction keys are translated
   // into the compiled `direction`, everything else merges under the channel's
@@ -3751,6 +3870,15 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
   const order: string[] = []
   const legendDefs: Record<string, FieldDef> = {}
   const push = (key: string, lg: Record<string, unknown>, def: FieldDef): void => {
+    // a custom format type moves the label text into the labels encode and leaves vega's `format` unset
+    const customText = customLabelText(def, { ...cfgDefaults, ...(def.legend ?? {}) }, formats as Record<string, unknown>, false)
+    if (customText !== undefined) {
+      delete lg.format
+      delete lg.formatType
+      const enc = (lg.encode ?? (lg.encode = {})) as { labels?: { update?: Record<string, unknown> } }
+      const labels = (enc.labels ??= {})
+      labels.update = { text: { signal: customText }, ...(labels.update ?? {}) }
+    }
     legendsByKey[key] = lg
     legendDefs[key] = def
     order.push(key)
@@ -3950,7 +4078,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       const enc = (lg.encode ?? (lg.encode = {})) as { labels?: { update?: Record<string, unknown> } }
       const labels = (enc.labels ??= {})
       const update = (labels.update ??= {})
-      update.text = { signal: lg.labelExpr }
+      update.text = { signal: labelExprSignal(lg.labelExpr, update.text) }
       // `labelExpr` itself stays as an unknown key that real Vega and Aster both ignore; the encode above labels the ticks
     }
     // the mark-derived symbol stroke default must not shadow a user symbolStrokeColor
@@ -5027,16 +5155,37 @@ function fillMissingPositions(update: Record<string, unknown>, mark: string, fie
 /** vega-lite's default `config.timeFormat` for raw temporal values. */
 const DEFAULT_TIME_FORMAT = '%b %d, %Y'
 
-function fieldTextExpr(def: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec; expr?: 'datum' | 'parent'; format?: string }): string {
+/** vega-lite `isCustomFormatType`: any format type but the two built in ones. */
+function isCustomFormatType(formatType: unknown): formatType is string {
+  return typeof formatType === 'string' && formatType !== '' && formatType !== 'number' && formatType !== 'time'
+}
+
+/** vega-lite `customFormatExpr`: `price(<field>, "<format>")`, calling the function registered under that name. */
+function customFormatExpr(formatType: string, field: string, format: unknown): string {
+  return `${formatType}(${field}${format ? `, ${JSON.stringify(format)}` : ''})`
+}
+
+function fieldTextExpr(def: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec; expr?: 'datum' | 'parent'; format?: string; formatType?: string }): string {
   const name = aggFieldName(def)
   const f = opts.expr === 'parent' ? `parent[${JSON.stringify(name)}]` : dref(name)
   const fmt = opts.format ?? (def.raw.format as string | undefined)
-  const formatType = def.raw.formatType as string | undefined
-  if (formatType !== undefined) throw new VLCompileError(`encoding.${def.channel}.formatType (custom format types) is not supported`)
+  const formatType = opts.formatType ?? (def.raw.formatType as string | undefined)
   if (def.bin) throw new VLCompileError(`encoding.${def.channel}: a binned field cannot be used as text, tooltip, href or description`)
-  if (def.tu) return `timeFormat(${f}, ${fmt !== undefined ? JSON.stringify(fmt) : timeUnitFormatSignal(def.tu.unit)})`
-  const cfg = opts.spec.config as { timeFormat?: string; numberFormat?: string } | undefined
-  if (def.type === 'temporal') return `timeFormat(${f}, ${JSON.stringify(fmt ?? cfg?.timeFormat ?? DEFAULT_TIME_FORMAT)})`
+  // vega-lite formatSignalRef
+  if (isCustomFormatType(formatType)) return customFormatExpr(formatType, f, fmt)
+  const cfg = opts.spec.config as { timeFormat?: string; numberFormat?: string; customFormatTypes?: boolean; numberFormatType?: string; timeFormatType?: string } | undefined
+  if (fmt === undefined && formatType === undefined && cfg?.customFormatTypes === true) {
+    if (def.type === 'quantitative' && typeof cfg.numberFormatType === 'string') return customFormatExpr(cfg.numberFormatType, f, cfg.numberFormat)
+    if (def.type === 'temporal' && typeof cfg.timeFormatType === 'string' && def.tu === undefined) return customFormatExpr(cfg.timeFormatType, f, cfg.timeFormat)
+  }
+  // a time format: formatType "time", or no formatType and a temporal field / a time unit
+  const timeFormatted = formatType === 'time' || (formatType === undefined && (def.type === 'temporal' || def.tu !== undefined))
+  if (timeFormatted) {
+    if (def.tu && fmt === undefined) return `timeFormat(${f}, ${timeUnitFormatSignal(def.tu.unit)})`
+    // (vega-lite's timeFormatExpression: config.timeFormatType applies to a raw time with no format)
+    if (def.tu === undefined && typeof cfg?.timeFormatType === 'string') return customFormatExpr(cfg.timeFormatType, f, fmt)
+    return `timeFormat(${f}, ${JSON.stringify(fmt ?? cfg?.timeFormat ?? DEFAULT_TIME_FORMAT)})`
+  }
   if (def.type === 'quantitative' || (def.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(def.aggregate))) {
     return `format(${f}, ${JSON.stringify(fmt ?? cfg?.numberFormat ?? '')})`
   }
@@ -5429,6 +5578,12 @@ function buildUnitLegends(spec: VLSpec, fields: FieldDef[], mark: string, markRa
     legendFillOpacity,
     isObject(userConfig?.legend) ? (userConfig!.legend as Record<string, unknown>) : undefined,
     legendStrokeDash,
-    { numberFormat: userConfig?.numberFormat as string | undefined, timeFormat: userConfig?.timeFormat as string | undefined },
+    {
+      numberFormat: userConfig?.numberFormat as string | undefined,
+      timeFormat: userConfig?.timeFormat as string | undefined,
+      customFormatTypes: userConfig?.customFormatTypes as boolean | undefined,
+      numberFormatType: userConfig?.numberFormatType as string | undefined,
+      timeFormatType: userConfig?.timeFormatType as string | undefined,
+    },
   )
 }

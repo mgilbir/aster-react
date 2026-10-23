@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **Guides driven by signals, like vega (sweep-signals: 30 differences to 0, now a blocking gate)**: every
+  axis and legend property may be a signal and a signal may hold anything; an axis `orient` signal is
+  resolved when its value is known (any orient but the four is a vertical axis at the origin whose layout
+  never runs); a tick count that is an interval string on a non-time scale, or a format that is no
+  specifier, fails the axis ticks as in vega (logged, axis not drawn); titles exist whatever their text
+  (empty text draws an empty `<text>`, a list is lines; an empty-string title is none); legend titles may be
+  signals; a mark's `clip` (boolean or signal) bounds the mark to the enclosing frame (vega boundClip); the
+  view width signal can be null or a word, and a negative width or height is laid out in vega's two passes;
+  a text angle that is a word is written `rotate(word)`.
+- **`registerExpressionFunction`** (`@aster/core`): vega's `expressionFunction`, the hook for Vega-Lite's
+  custom `formatType`. `@aster/vl` now emits vega-lite's custom format types (text, tooltip, href,
+  description, axis and legend labels, headers; `config.customFormatTypes`, `numberFormatType`,
+  `normalizedNumberFormatType`, `timeFormatType`), explicit scale domains with vega-lite's `zero` / `nice`
+  rules (continuous x / y, size, opacity and colour scales ignored them before), `zero` / `nice` on
+  `pow` / `sqrt` / `symlog` position scales, and non-array, non-`"unaggregated"` scale domains (emitted as
+  written; vega refuses them, so does the runtime with `SpecParseError`). The nightly Vega-Lite sweep has no
+  engine errors left.
+- **Browser gates in `pnpm check`**: `react-browser` (`pnpm --filter @aster/react run test:browser`) and
+  `browser-conformance` (`conformance:browser`, 785/785, now comparing vega's string renderer with an
+  explicitly sized container) join the gate list.
+
 - **Group marks are vega scopes (audit C51, C55, C58, corpus-vega-only drained)**: every group mark
   is built and laid out like vega (one group item per facet partition / datum, own scales and data,
   `layout` grid, then axes, legends and the title), replacing the per-shape concat / facet / header

@@ -638,3 +638,23 @@ describe('legend encode blocks (labels, title, symbols, legend) apply like vega'
     expect(await compare({ ...frame, legends: [{ fill: 'col', labelExpr: "datum.label + '!'" }, { fill: 'seq', type: 'gradient', orient: 'left', labelExpr: "datum.label + '!'" }] })).toEqual([])
   })
 })
+
+describe('a group item\'s clip follows its corner radii like vega', () => {
+  const group = (radii: Spec): Spec => ({
+    width: 120, height: 90, padding: 5, autosize: 'none',
+    marks: [{
+      type: 'group',
+      encode: { update: { x: { value: 10 }, y: { value: 10 }, width: { value: 60 }, height: { value: 40 }, fill: { value: '#eef' }, clip: { value: true }, ...radii } },
+      marks: [{ type: 'rect', encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { value: 90 }, height: { value: 60 }, fill: { value: 'tomato' } } } }],
+    }],
+  })
+  for (const [label, radii] of [
+    ['no radius: a plain clip box', {}],
+    ['a radius', { cornerRadius: { value: 8 } }],
+    ['a negative radius clamps to a square corner but the clip is still the path', { cornerRadius: { value: -4 } }],
+    ['one corner', { cornerRadiusTopLeft: { value: 12 } }],
+    ['a zero radius is no radius', { cornerRadius: { value: 0 } }],
+  ] as const) {
+    it(label, async () => { expect(await compare(group(radii))).toEqual([]) })
+  }
+})

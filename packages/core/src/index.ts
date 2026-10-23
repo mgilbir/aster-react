@@ -42,7 +42,8 @@ export {
 export type { ChartInfo } from './runtime.js'
 export { renderSceneToSvg } from './render.js'
 export { consoleLogger, type Logger } from './logger.js'
-export { ExpressionParseError } from './expression.js'
+export { ExpressionParseError, registerExpressionFunction } from './expression.js'
+export { SpecParseError } from './parse-error.js'
 // The canvas renderer ships as an opt-in addon (`@aster/core/canvas`): hosts
 // that only need SVG never bundle it.
 // The incremental DOM patcher ships as an opt-in addon (`@aster/core/dom`);

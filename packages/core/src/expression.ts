@@ -14,7 +14,7 @@ import { currentLocale } from './locale.js'
 import { boundedCount, meterBytes, meterTick, guardedRegExp, checkRegexInput, checkRegexObject } from './limits.js'
 import { bandSpace } from './scale.js'
 import { parseExpression } from './expr-parser.js'
-import { expressionInterpreter } from './expr-interpreter.js'
+import { expressionInterpreter, DefaultFunctions, ExpressionConstants } from './expr-interpreter.js'
 import {
   timeOffset, utcOffset, timeSequence, utcSequence,
   dayofyear, utcdayofyear, week, utcweek, timeUnitSpecifier,
@@ -40,7 +40,7 @@ import { rgb, hsl, lab, hcl } from './color.js'
 import type { AstNode } from './expr-parser.js'
 import {
   accessor, ascending, extent, isArray, isBoolean, isDate, isNumber, isObject,
-  isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, safeGet,
+  isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, safeGet, DisallowedObjectProperties,
 } from './util.js'
 
 export interface ExpressionRuntime {
@@ -230,7 +230,61 @@ function contrastRatio(c1: unknown, c2: unknown): number {
 
 // -----------------------------------------------------------------------------
 
+/** The functions the host registered (see {@link registerExpressionFunction}). */
+const REGISTERED = new Map<string, (...args: never[]) => unknown>()
+
 function createFunctionContext(runtime: ExpressionRuntime): Record<string, unknown> {
+  const fns = createBuiltinFunctions(runtime)
+  for (const [name, fn] of REGISTERED) fns[name] = fn
+  return fns
+}
+
+let builtinNames: Set<string> | undefined
+/** Every name an expression already means something by: the functions, the constants, the keywords. */
+function reservedExpressionNames(): ReadonlySet<string> {
+  if (builtinNames === undefined) {
+    const stub: ExpressionRuntime = { scale: () => undefined, data: () => undefined, expr: () => () => undefined }
+    builtinNames = new Set([
+      ...Object.keys(createBuiltinFunctions(stub)), ...Object.keys(DefaultFunctions), ...Object.keys(ExpressionConstants),
+      'datum', 'event', 'item', 'this', 'true', 'false', 'null', 'undefined', 'if',
+    ])
+  }
+  return builtinNames
+}
+
+/**
+ * Register a function that expressions may call by name: the counterpart of vega's `expressionFunction(name, fn)`.
+ * It is how Vega-Lite's custom `formatType` works: `{"formatType": "price", "format": "$,.2f"}` compiles to the
+ * expression `price(datum["v"], "$,.2f")`, which calls whatever is registered as `price` -- here, and in vega
+ * for the same spec, before the chart is built.
+ *
+ * The registry is global (as vega's is) and holds host code: unlike the rest of the expression language it is not
+ * sandboxed or metered by the engine, and a spec chooses its arguments. Register only functions that are safe
+ * for any arguments a spec you render can produce.
+ *
+ * The name must be a plain identifier that is not already an expression function, constant or keyword (a host
+ * cannot silently replace `format`), and must not start with `_` (an underscore prefix is internal routing).
+ * Returns a function that removes the registration (restoring the one it replaced). Throws on a bad name or a
+ * non-function.
+ */
+export function registerExpressionFunction(name: string, fn: (...args: never[]) => unknown): () => void {
+  if (typeof name !== 'string' || !/^[A-Za-z$][A-Za-z0-9_$]*$/.test(name)) {
+    throw new Error(`[aster] registerExpressionFunction: "${String(name)}" is not a plain identifier`)
+  }
+  if (DisallowedObjectProperties.has(name) || reservedExpressionNames().has(name)) {
+    throw new Error(`[aster] registerExpressionFunction: "${name}" is already an expression function, constant or keyword`)
+  }
+  if (typeof fn !== 'function') throw new Error(`[aster] registerExpressionFunction: "${name}" needs a function`)
+  const previous = REGISTERED.get(name)
+  REGISTERED.set(name, fn)
+  return () => {
+    if (REGISTERED.get(name) !== fn) return
+    if (previous === undefined) REGISTERED.delete(name)
+    else REGISTERED.set(name, previous)
+  }
+}
+
+function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unknown> {
   const scaleObject = (name: unknown): Record<string, unknown> | undefined =>
     runtime.scale(String(name)) as unknown as Record<string, unknown> | undefined
   return {
