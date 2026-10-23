@@ -22,9 +22,10 @@
 import * as React from 'react'
 import {
   AsterLimitError,
+  getStreamFlushFailure,
   checkSceneLimits, checkSpecLimits, checkSvgLength, compileChart, createChartStream,
   createLimitClock, evaluateChart, renderSceneToSvg,
-  type ChartStream, type DataPulse, type SceneRoot, type SpecLimits, type StreamBatch,
+  type ChartStream, type DataPulse, type ImageUrlPolicy, type SceneRoot, type SpecLimits, type StreamBatch,
   type StreamOptions, type StreamPolicy, type StreamStats, type TextMetricsProvider, type VgSpec,
 } from '@aster/core'
 import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
@@ -32,6 +33,16 @@ import { SCALE_INFO_KEY, serializeScales } from './serialScales.js'
 
 /** Text metrics as named on the wire, or as an object for in-realm handling. */
 export type WorkerTextMetrics = string | TextMetricsProvider
+
+/**
+ * Image URL policy as it travels: the data fields (`baseURL`, `protocols`) are sent
+ * as they are; the functions (`allow`, `onDeny`) cannot cross `postMessage`, so they
+ * are referred to by the name of a hook set registered in the worker with
+ * `registerWorkerUrlPolicy`. In the same realm (sync fallback) a full
+ * `ImageUrlPolicy` object works too.
+ */
+export type WorkerUrlPolicy = Pick<ImageUrlPolicy, 'baseURL' | 'protocols'> & { hooks?: string }
+export type WorkerUrlPolicyInput = ImageUrlPolicy | WorkerUrlPolicy
 
 export interface ChartWorkerRequest {
   id: number
@@ -46,6 +57,8 @@ export interface ChartWorkerRequest {
     limits?: SpecLimits
     /** Name of a provider registered with `registerWorkerTextMetrics`. */
     textMetrics?: WorkerTextMetrics
+    /** Image URL policy; its functions travel as a `registerWorkerUrlPolicy` name. */
+    urlPolicy?: WorkerUrlPolicyInput
   }
 }
 
@@ -89,6 +102,35 @@ function resolveTextMetrics(tm: WorkerTextMetrics | undefined): TextMetricsProvi
   return provider
 }
 
+const urlPolicyRegistry = new Map<string, Pick<ImageUrlPolicy, 'allow' | 'onDeny'>>()
+
+/**
+ * Register the `allow`/`onDeny` functions of an image URL policy under a name (call
+ * this in the worker entry). Hooks then send `urlPolicy: { hooks: 'name', ... }`.
+ */
+export function registerWorkerUrlPolicy(name: string, hooks: Pick<ImageUrlPolicy, 'allow' | 'onDeny'>): void {
+  urlPolicyRegistry.set(name, hooks)
+}
+
+/** Turn a wire policy back into an `ImageUrlPolicy` (throws on an unknown hook name). @internal */
+export function resolveWorkerUrlPolicy(policy: WorkerUrlPolicyInput | undefined): ImageUrlPolicy | undefined {
+  if (policy == null) return undefined
+  const { hooks, ...rest } = policy as WorkerUrlPolicy & ImageUrlPolicy
+  if (hooks == null) return rest
+  const named = urlPolicyRegistry.get(hooks)
+  if (!named) throw new Error(`[aster] unknown url-policy hooks "${hooks}" (register them with registerWorkerUrlPolicy in the worker)`)
+  return { ...rest, ...named }
+}
+
+/** Throw when a policy with functions would have to cross `postMessage`. @internal */
+export function wireUrlPolicy(policy: WorkerUrlPolicyInput | undefined, viaWorker: boolean): WorkerUrlPolicyInput | undefined {
+  const fns = policy as ImageUrlPolicy | undefined
+  if (viaWorker && fns != null && (typeof fns.allow === 'function' || typeof fns.onDeny === 'function')) {
+    throw new Error('[aster] a urlPolicy with allow/onDeny functions cannot be sent to a worker; register them in the worker with registerWorkerUrlPolicy and send { hooks: name, baseURL, protocols }')
+  }
+  return policy
+}
+
 type WireError = { name: string; message: string; code?: string }
 
 const wireError = (error: unknown): WireError => {
@@ -102,6 +144,8 @@ export function errorFromWire(wire: WireError): Error {
     ? new AsterLimitError(wire.message.replace(/^\[aster\] limit exceeded: /, ''))
     : new Error(wire.message)
   if (wire.name && e.name !== wire.name && !(e instanceof AsterLimitError)) e.name = wire.name
+  // Stable machine-readable codes (ASTER_STREAM_BACKPRESSURE, ASTER_URL_DENIED, ...) survive the wire.
+  if (wire.code && (e as { code?: string }).code !== wire.code) Object.assign(e, { code: wire.code })
   return e
 }
 
@@ -160,8 +204,12 @@ export function cloneableScene(scene: SceneRoot): SceneRoot {
 export function handleChartWorkerRequest(request: ChartWorkerRequest): ChartWorkerResponse {
   try {
     const spec = normalizeChartSpec(request.spec)
-    const { textMetrics, ...rest } = request.input ?? {}
-    const input = { ...rest, ...(textMetrics != null ? { textMetrics: resolveTextMetrics(textMetrics) } : {}) }
+    const { textMetrics, urlPolicy, ...rest } = request.input ?? {}
+    const input = {
+      ...rest,
+      ...(textMetrics != null ? { textMetrics: resolveTextMetrics(textMetrics) } : {}),
+      ...(urlPolicy != null ? { urlPolicy: resolveWorkerUrlPolicy(urlPolicy) } : {}),
+    }
     const limits = input.limits
     // Same budget sequence as `renderSpec`.
     const clock = createLimitClock(limits)
@@ -278,8 +326,10 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
    * `{ measure }` literal would otherwise re-request on every render).
    */
   textMetrics?: WorkerTextMetrics
+  /** Image URL policy; functions need a Worker-registered name (see `WorkerUrlPolicy`). Read at request time like `textMetrics`. */
+  urlPolicy?: WorkerUrlPolicyInput
 } = {}): WorkerChartResult {
-  const { worker, workerFactory, width, height, data, signals, domainRaw, limits, textMetrics } = options
+  const { worker, workerFactory, width, height, data, signals, domainRaw, limits, textMetrics, urlPolicy } = options
   const stableSpec = useStableSpec(spec)
   // Budgets are compared by content: an inline `limits={{...}}` must not
   // re-post the request on every render.
@@ -289,11 +339,15 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
   const idRef = React.useRef(0)
   const textMetricsRef = React.useRef(textMetrics)
   textMetricsRef.current = textMetrics
+  const urlPolicyRef = React.useRef(urlPolicy)
+  urlPolicyRef.current = urlPolicy
+  const urlPolicyKey = urlPolicy == null ? null : (urlPolicy as WorkerUrlPolicy).hooks ?? JSON.stringify([(urlPolicy as ImageUrlPolicy).baseURL, (urlPolicy as ImageUrlPolicy).protocols, typeof (urlPolicy as ImageUrlPolicy).allow, typeof (urlPolicy as ImageUrlPolicy).onDeny])
   const textMetricsKey = typeof textMetrics === 'string' ? textMetrics : textMetrics == null ? null : 'provider-object'
 
   React.useEffect(() => {
     const id = nextWorkerRequestId()
     const textMetrics = textMetricsRef.current
+    const urlPolicy = urlPolicyRef.current
     idRef.current = id
     const w = workerRef.current
     const apply = (response: ChartWorkerResponse): void => {
@@ -315,6 +369,7 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
           width, height, data, signals, domainRaw,
           ...(stableLimits ? { limits: stableLimits } : {}),
           ...(textMetrics != null ? { textMetrics: wireTextMetrics(textMetrics, w != null) } : {}),
+          ...(urlPolicy != null ? { urlPolicy: wireUrlPolicy(urlPolicy, w != null) } : {}),
         },
       }
     } catch (e) {
@@ -338,7 +393,7 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
       fail(e instanceof Error ? e : new Error(String(e)))
     }
     return stop
-  }, [stableSpec, width, height, data, signals, domainRaw, stableLimits, textMetricsKey, worker, workerRef])
+  }, [stableSpec, width, height, data, signals, domainRaw, stableLimits, textMetricsKey, urlPolicyKey, worker, workerRef])
 
   return state
 }
@@ -358,8 +413,14 @@ export interface ChartWorkerStreamRequest {
   spec?: VgSpec
   options?: {
     capacity?: number
+    /** Queued-row bound (`StreamOptions.maxQueuedRows`). */
+    maxQueuedRows?: number
     policy?: StreamPolicy
-    initial?: Omit<NonNullable<StreamOptions['initial']>, 'textMetrics'> & { textMetrics?: WorkerTextMetrics }
+    /** Budgets for every flush (`StreamOptions.limits`). */
+    limits?: SpecLimits
+    /** Registered provider name (`StreamOptions.textMetrics`). */
+    textMetrics?: WorkerTextMetrics
+    initial?: Omit<NonNullable<StreamOptions['initial']>, 'textMetrics' | 'urlPolicy'> & { textMetrics?: WorkerTextMetrics; urlPolicy?: WorkerUrlPolicyInput }
   }
   batches?: ChartWorkerBatch[]
   /**
@@ -384,6 +445,12 @@ export interface ChartWorkerStreamResponse {
   depth?: number
   closed?: boolean
   error?: { name: string; message: string; code?: string }
+  /**
+   * Present when `error` is a failed flush: what was queued at the failure and how
+   * many batches the worker discarded to recover (a failed flush is atomic, so
+   * without the discard every later flush would fail with the same batch).
+   */
+  failure?: { batches: number; queuedRows: number; discarded: number }
 }
 
 const streamResponse = (
@@ -428,34 +495,59 @@ export function handleChartWorkerStreamRequest(
       const initial = request.options?.initial
       const options: StreamOptions = {
         ...(request.options?.capacity != null ? { capacity: request.options.capacity } : {}),
+        ...(request.options?.maxQueuedRows != null ? { maxQueuedRows: request.options.maxQueuedRows } : {}),
         ...(request.options?.policy != null ? { policy: request.options.policy } : {}),
+        ...(request.options?.limits ? { limits: request.options.limits } : {}),
+        ...(request.options?.textMetrics != null ? { textMetrics: resolveTextMetrics(request.options.textMetrics) } : {}),
         ...(initial ? { initial: resolveBatchInitial(initial) } : {}),
       }
       const stream = createChartStream(normalizeChartSpec(request.spec ?? {}), options)
       streams.set(request.streamId, stream)
-      stream.flush()
+      try {
+        stream.flush()
+      } catch (error) {
+        return streamFailure(request, stream, error)
+      }
       return streamResponse(request, stream)
     }
     const stream = streams.get(request.streamId)
     if (!stream) throw new Error(`[aster] unknown stream ${request.streamId}`)
     let accepted = 0
     let rejected = 0
-    for (const batch of request.batches ?? []) {
-      if (stream.push(resolveBatch(batch))) accepted++
-      else rejected++
+    try {
+      for (const batch of request.batches ?? []) {
+        if (stream.push(resolveBatch(batch))) accepted++
+        else rejected++
+      }
+      stream.flush()
+    } catch (error) {
+      return streamFailure(request, stream, error)
     }
-    stream.flush()
     return streamResponse(request, stream, { accepted, rejected, depth: stream.stats().depth })
   } catch (error) {
     return { kind: 'stream', id: request.id, streamId: request.streamId, error: wireError(error) }
   }
 }
 
+/**
+ * A failed push/flush leaves its batches queued (flush is atomic). Report what was
+ * queued, then drop it so the next flush does not fail with the same batch forever.
+ */
+function streamFailure(request: ChartWorkerStreamRequest, stream: ChartStream, error: unknown): ChartWorkerStreamResponse {
+  const info = getStreamFlushFailure(error) ?? { batches: stream.stats().depth, queuedRows: stream.stats().queuedRows }
+  const discarded = stream.discard()
+  return { kind: 'stream', id: request.id, streamId: request.streamId, error: wireError(error), failure: { ...info, discarded } }
+}
+
 function resolveBatchInitial(
   initial: NonNullable<ChartWorkerStreamRequest['options']>['initial'] & object,
 ): NonNullable<StreamOptions['initial']> {
-  const { textMetrics, ...rest } = initial
-  return textMetrics != null ? { ...rest, textMetrics: resolveTextMetrics(textMetrics) } : rest
+  const { textMetrics, urlPolicy, ...rest } = initial
+  return {
+    ...rest,
+    ...(textMetrics != null ? { textMetrics: resolveTextMetrics(textMetrics) } : {}),
+    ...(urlPolicy != null ? { urlPolicy: resolveWorkerUrlPolicy(urlPolicy) } : {}),
+  }
 }
 
 // ---------------------------------------------------------------------------

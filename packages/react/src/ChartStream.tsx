@@ -11,19 +11,20 @@
  * until it mounts.
  */
 import * as React from 'react'
-import type { SceneRoot, SpecLimits, StreamBatch, VgSpec } from '@aster/core'
+import type { ImageUrlPolicy, SceneRoot, SpecLimits, StreamBatch, VgSpec } from '@aster/core'
 import { Chart, type ChartProps, type ChartStreamInput } from './Chart.js'
 import { positionalScales, viewToDomainRaw } from './interaction.js'
 import { useStableContent } from './spec.js'
 import {
   useChartStream,
+  type StreamFlushFailureInfo,
   type UseChartStreamOptions,
 } from './useChartStream.js'
 import {
   useChartWorkerStream,
   type ChartWorkerStreamOptions,
 } from './useChartWorkerStream.js'
-import type { WorkerTextMetrics } from './worker.js'
+import type { WorkerTextMetrics, WorkerUrlPolicyInput } from './worker.js'
 
 /**
  * Props `<ChartStream>`/`<ChartWorkerStream>` take from `<Chart>`. Everything
@@ -46,18 +47,30 @@ export interface ChartStreamHandle {
   close: () => void
 }
 
+/**
+ * Called once per stream error. For a failed flush `failure` says what was queued
+ * and how many batches were discarded to recover (see `getStreamFlushFailure`).
+ */
+export type StreamErrorHandler = (error: Error, failure?: StreamFlushFailureInfo) => void
+
 export interface ChartStreamProps extends CommonStreamProps {
   spec: VgSpec
+  /**
+   * Stream options: `capacity`, `maxQueuedRows`, `policy`, `autoFlush`, ... The image
+   * `urlPolicy` prop applies to every flush and is read when the stream is created.
+   */
   streamOptions?: UseChartStreamOptions
-  onStreamError?: (error: Error) => void
+  onStreamError?: StreamErrorHandler
 }
 
 export interface ChartWorkerStreamProps extends Omit<CommonStreamProps, 'textMetrics'> {
   spec: VgSpec
   /** Provider name registered in the worker (`registerWorkerTextMetrics`), or an object when no Worker is used. */
   textMetrics?: WorkerTextMetrics
+  /** `urlPolicy` functions need a `registerWorkerUrlPolicy` name (`{ hooks, baseURL, protocols }`) with a Worker. */
+  urlPolicy?: WorkerUrlPolicyInput
   streamOptions?: ChartWorkerStreamOptions
-  onStreamError?: (error: Error) => void
+  onStreamError?: StreamErrorHandler
 }
 
 function useSizeBatch(width: number | undefined, height: number | undefined): { width?: number; height?: number } {
@@ -170,18 +183,24 @@ function useStreamConfig<T>(
 }
 
 /** Report an error to `onError` once per error object, even if the callback is an inline arrow. */
-function useReportOnce(error: Error | null, onError: ((error: Error) => void) | undefined): void {
+function useReportOnce(
+  error: Error | null,
+  failure: StreamFlushFailureInfo | null,
+  onError: StreamErrorHandler | undefined,
+): void {
   const onErrorRef = React.useRef(onError)
   onErrorRef.current = onError
+  const failureRef = React.useRef(failure)
+  failureRef.current = failure
   React.useEffect(() => {
-    if (error) onErrorRef.current?.(error)
+    if (error) onErrorRef.current?.(error, failureRef.current ?? undefined)
   }, [error])
 }
 
 export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>(
   function ChartStream({
     spec, streamOptions, onStreamError, width, height, className, style,
-    limits, textMetrics, signals, view, ...chartProps
+    limits, textMetrics, urlPolicy, signals, view, ...chartProps
   }, ref) {
     const size = useSizeBatch(width, height)
     const stableLimits = useStableContent(limits)
@@ -194,6 +213,7 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
         ...size,
         ...(stableLimits ? { limits: stableLimits } : {}),
         ...(textMetrics ? { textMetrics } : {}),
+        ...(urlPolicy ? { urlPolicy } : {}),
         ...initialInput,
       },
     })
@@ -211,7 +231,7 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
       close: () => coreStream.close(),
     }), [push, flush, pending, pulse, stats, coreStream])
 
-    useReportOnce(stream.error, onStreamError)
+    useReportOnce(stream.error, stream.flushFailure, onStreamError)
 
     if (stream.error) {
       return <div role="alert" className={className} style={style} title={stream.error.message}>{stream.error.message}</div>
@@ -233,7 +253,7 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
 export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorkerStreamProps>(
   function ChartWorkerStream({
     spec, streamOptions, onStreamError, width, height, className, style,
-    limits, textMetrics, signals, view, ...chartProps
+    limits, textMetrics, urlPolicy, signals, view, ...chartProps
   }, ref) {
     const size = useSizeBatch(width, height)
     const stableLimits = useStableContent(limits)
@@ -246,6 +266,7 @@ export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorker
         ...size,
         ...(stableLimits ? { limits: stableLimits } : {}),
         ...(textMetrics ? { textMetrics } : {}),
+        ...(urlPolicy ? { urlPolicy } : {}),
         ...initialInput,
       },
     })
@@ -266,7 +287,7 @@ export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorker
       close,
     }), [push, flush, pulse, stats, close])
 
-    useReportOnce(stream.error, onStreamError)
+    useReportOnce(stream.error, stream.flushFailure, onStreamError)
 
     if (stream.error) {
       return <div role="alert" className={className} style={style} title={stream.error.message}>{stream.error.message}</div>

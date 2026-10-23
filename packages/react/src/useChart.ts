@@ -36,7 +36,7 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
   // engine input cannot silently leave a stale result the way textMetrics,
   // dataPulse, changedDatasets and autoChanges once did.
   const deps: Required<{ [K in keyof RuntimeInput]: unknown }> = {
-    limits, textMetrics: input.textMetrics, data: input.data, width: input.width, height: input.height, signals: input.signals,
+    limits, textMetrics: input.textMetrics, urlPolicy: input.urlPolicy, data: input.data, width: input.width, height: input.height, signals: input.signals,
     changedDatasets: input.changedDatasets, dataChanges: input.dataChanges, dataPulse: input.dataPulse,
     autoChanges: input.autoChanges, domainRaw: input.domainRaw,
   }

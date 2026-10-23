@@ -8,6 +8,7 @@ import {
   type A11yNode,
   type A11yOptions,
   type ChartInfo,
+  type ImageUrlPolicy,
   type SceneRoot,
   type SpecLimits,
   type TextMetricsProvider,
@@ -55,15 +56,6 @@ const num = (x: number): string => (Number.isInteger(x) ? String(x) : String(Mat
 const subscribeNothing = (): (() => void) => () => {}
 const clientOnly = (): boolean => false
 const serverOrHydrating = (): boolean => true
-
-/** Scene/encode channel fields that are engine-internal, not datum data. */
-const TOOLTIP_INTERNAL_FIELDS = new Set([
-  'x', 'y', 'x2', 'y2', 'xc', 'yc', 'width', 'height', 'opacity', 'fill', 'fill-opacity',
-  'stroke', 'stroke-width', 'stroke-dasharray', 'strokeOpacity', 'size', 'shape', 'angle',
-  'theta', 'radius', 'text', 'align', 'baseline', 'defined', 'startAngle', 'endAngle',
-  'innerRadius', 'outerRadius', 'ariaRoleDescription', 'ariaRole', 'ariaLabel', 'aria', 'description', 'path', 'url',
-  'limit', 'dir', 'dx', 'dy', 'cursor', 'href', 'tooltip', 'band',
-])
 
 export interface ChartProps {
   /**
@@ -226,6 +218,14 @@ export interface ChartProps {
    * is fine.
    */
   limits?: SpecLimits
+  /**
+   * Policy for image-mark `url`s, forwarded to evaluation (`RuntimeInput.urlPolicy`):
+   * `baseURL`, `protocols`, a synchronous `allow(url)` veto and `onDeny` (drop the
+   * image instead of failing the chart). Applied with its defaults whenever `limits`
+   * is set. A denial without `onDeny` is a render error reported through `onError`.
+   * Functions are compared by identity, so memoize the object to avoid re-evaluating.
+   */
+  urlPolicy?: ImageUrlPolicy
   /** Host text measurement for custom fonts / non-browser engines. */
   textMetrics?: TextMetricsProvider
   /** Accessible scene tree (R10.6). Enabled by default; pass `false` to opt out. */
@@ -516,6 +516,7 @@ function ChartView({
   tooltip = false,
   renderTooltip,
   limits,
+  urlPolicy,
   textMetrics,
   a11y = true,
   onError,
@@ -617,7 +618,7 @@ function ChartView({
       prevLengthsRef.current = new Map(Object.entries(data ?? {}).map(([name, rows]) => [name, rows.length]))
       const sc = sessionRef.current!.evaluate(spec, {
         data, dataChanges: changes, width: renderWidth, height: renderHeight,
-        signals: mergedSignals, limits: stableLimits, domainRaw, textMetrics,
+        signals: mergedSignals, limits: stableLimits, urlPolicy, domainRaw, textMetrics,
       })
       if (wantsDatumAttrs(sc)) stampDatumAttrs(sc.items)
       // `maxSvgLength` bounds the serialized output. The DOM patcher never
@@ -628,7 +629,7 @@ function ChartView({
     } catch (err) {
       return { scene: null, error: err instanceof Error ? err : new Error(String(err)), problems: [] }
     }
-  }, [sceneOverride, spec, data, dataChanges, renderWidth, renderHeight, mergedSignals, tooltipEnabled, interactive, renderer, stableLimits, domainRaw, textMetrics])
+  }, [sceneOverride, spec, data, dataChanges, renderWidth, renderHeight, mergedSignals, tooltipEnabled, interactive, renderer, stableLimits, urlPolicy, domainRaw, textMetrics])
   const scene = evaluation.scene
   sceneRef.current = scene
   const renderError = evaluation.error
@@ -689,13 +690,13 @@ function ChartView({
     try {
       if (baseSessionRef.current == null) baseSessionRef.current = createChartSession()
       const baseScene = baseSessionRef.current.evaluate(spec, {
-        data, width: renderWidth, height: renderHeight, signals: mergedSignals, limits: stableLimits, textMetrics,
+        data, width: renderWidth, height: renderHeight, signals: mergedSignals, limits: stableLimits, urlPolicy, textMetrics,
       })
       return baseDomainsOf(chartInfoFromScene(baseScene), positional)
     } catch {
       return null
     }
-  }, [panZoomEnabled, zoomed, fromStream, positional, spec, data, renderWidth, renderHeight, mergedSignals, stableLimits, textMetrics])
+  }, [panZoomEnabled, zoomed, fromStream, positional, spec, data, renderWidth, renderHeight, mergedSignals, stableLimits, urlPolicy, textMetrics])
   const baseDomains = React.useMemo<ViewDomain>(() => {
     if (!panZoomEnabled || chartInfo == null) return {}
     if (!zoomed) return baseDomainsOf(chartInfo, positional)
@@ -1237,20 +1238,15 @@ function ChartView({
   }, [])
 
   /**
-   * Tooltip fields: the datum row is the ORIGINAL data plus the encoded
-   * channel values resolveEncodeSet appends (x/y/width/fill/...). The tooltip
-   * is for reading the datum — hide the internal/positional channels and
-   * engine fields, keep the source data.
+   * Tooltip fields: the datum is the pure source row (encoded channel values are
+   * never written back into it), so every primitive field is shown as-is.
+   * Fields starting with `__` are engine bookkeeping and stay hidden.
    */
   const tooltipFields = React.useMemo(() => {
     if (!tooltipInfo) return [] as Array<[string, string]>
-    const fmt = ([k, v]: [string, unknown]): [string, string] => [k, typeof v === 'number' ? num(v) : String(v)]
-    const visible = Object.entries(tooltipInfo.datum).filter(
-      ([k, v]) => !k.startsWith('__') && !TOOLTIP_INTERNAL_FIELDS.has(k) && v != null && typeof v !== 'object',
-    )
-    // Specs whose source fields are themselves named like channels (x/y/...)
-    // would filter to nothing — vega-style fallback: show every field.
-    return (visible.length ? visible : Object.entries(tooltipInfo.datum).filter(([k, v]) => !k.startsWith('__') && v != null && typeof v !== 'object')).map(fmt)
+    return Object.entries(tooltipInfo.datum)
+      .filter(([k, v]) => !k.startsWith('__') && v != null && typeof v !== 'object')
+      .map(([k, v]): [string, string] => [k, typeof v === 'number' ? num(v) : String(v)])
   }, [tooltipInfo])
 
   const handleTooltipMove = React.useCallback(
