@@ -1522,11 +1522,8 @@ function attr(name: string, value: unknown): string {
   // Vega's SVG renderer omits a 'transparent' paint value (fill/stroke).
   if (value === 'transparent') return ''
   if (Array.isArray(value)) return attrList(name, value)
-  if (typeof value === 'number') {
-    // vega's SVG renderer coerces an invalid numeric paint to black.
-    if (name === 'fill' || name === 'stroke') return ` ${name}="rgb(0, 0, 0)"`
-    return ` ${name}="${num(value)}"`
-  }
+  // a number is written as is, a paint's too (`fill="0.43"`): vega's SVG renderer does not reinterpret it
+  if (typeof value === 'number') return ` ${name}="${num(value)}"`
   return ` ${name}="${escAttr(value)}"`
 }
 
@@ -1576,7 +1573,7 @@ export class StringAttrSink implements AttrSink {
 function attrValue(name: string, value: unknown): string | null {
   if (value == null || value === 'transparent') return null
   if (Array.isArray(value)) return value.map((x) => (typeof x === 'number' ? num(x) : String(x))).join(',')
-  if (typeof value === 'number') return name === 'fill' || name === 'stroke' ? 'rgb(0, 0, 0)' : num(value)
+  if (typeof value === 'number') return num(value)
   return String(value)
 }
 

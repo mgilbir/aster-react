@@ -3507,6 +3507,12 @@ function evaluateMark(
     items = [res]
   }
 
+  // Items an aborted run never encoded: vega's mark container holds them but they carry no geometry or paint,
+  // so (but for the zero-size rect path the renderers already read as `|| 0`) nothing of them is drawn.
+  if (ctx.encodeAborted && items.some((it) => (it as { __unencoded?: boolean }).__unencoded === true)) {
+    items = items.filter((it) => (it as { __unencoded?: boolean }).__unencoded !== true)
+  }
+
   // Text marks encoded in polar coordinates (`radius` + `theta`, e.g. pie
   // labels): vega's text renderer offsets the anchor by
   // `radius * (cos(theta - π/2), sin(theta - π/2))` from the item's x/y.
@@ -3514,7 +3520,10 @@ function evaluateMark(
   // area {fill: '#4c78a8'}, text {fill: '#000'} — applied when the encode
   // leaves the property unspecified.
   if (mark.type === 'line' || mark.type === 'area' || mark.type === 'text') {
-    const fill = mark.type === 'text' ? '#000' : mark.type === 'area' ? '#4c78a8' : undefined
+    // vega-parser's applyDefaults skips the fill/stroke defaults when the ENCODE defines either channel
+    const enc = (mark.encode?.update ?? mark.encode?.enter ?? {}) as Record<string, unknown>
+    const paintDefined = enc.fill != null || enc.stroke != null
+    const fill = paintDefined ? undefined : mark.type === 'text' ? '#000' : mark.type === 'area' ? '#4c78a8' : undefined
     for (const it of items) {
       const rec = it as unknown as Record<string, unknown>
       if (fill !== undefined && rec.fill === undefined) rec.fill = fill
@@ -3926,7 +3935,8 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | Scen
   // Unnamed container groups (e.g. nested scope within facet cells for
   // VL-compiled bar/area charts): build a simple group whose items are
   // the rendered inner marks.
-  if (tm.marks?.length) {
+  {
+    // (a group with no child marks is still a group: it draws its background)
     // A group that declares its own scales/axes/data needs an isolated child
     // scope: scales resolve against the group's width/height, and nested axes/
     // marks resolve scale references within the child. Groups without local
@@ -3936,7 +3946,7 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | Scen
     const grEnc = ((mark as any).encode?.update ?? {}) as Record<string, EncodeValue | EncodeValue[]>
     const geoO = resolveEncodeSet(grEnc, {}, ctx, 'group')
     const content: SceneItem[] = []
-    for (const cm of tm.marks) {
+    for (const cm of tm.marks ?? []) {
       const r = evaluateMark(cm as CompiledMark, ctx)
       if (r) {
         if (Array.isArray(r)) { for (const g of r) content.push(g) }
@@ -3950,7 +3960,6 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | Scen
       ...(geoO.x ? { x: geoO.x as number } : {}), ...(geoO.y ? { y: geoO.y as number } : {}),
     }
   }
-  throw new Error('[aster] unsupported group mark: ' + (name ?? '<unnamed>'))
 }
 
 /**
@@ -5607,7 +5616,7 @@ function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): Encode
 }
 
 function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
-  if (ctx.encodeAborted) return {}
+  if (ctx.encodeAborted) return { __unencoded: true } as SceneItem
   const plan = encodePlan(encode)
   const binding = ctx.encodeBinding
 

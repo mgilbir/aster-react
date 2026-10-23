@@ -64,6 +64,28 @@ const CASES: Array<[string, Spec]> = [
   ['an error also leaves the marks after it unencoded', frame([rect({ x: { signal: 'datum.o.x' }, fill: { value: 'red' } }), rect({ x: { field: 'a', mult: 10 }, y: { value: 20 }, fill: { value: 'green' } })])],
 ]
 
+const unencoded = (type: string, update: Record<string, unknown> = {}): Spec => frame([
+  rect({ x: { signal: 'datum.o.x' }, fill: { value: 'red' } }), // fails on the second item: the run stops
+  { type, from: { data: 't' }, encode: { update } },
+])
+const MARK_TYPES: Array<[string, Record<string, unknown>]> = [
+  ['rect', { fill: { value: 'green' } }], ['symbol', { fill: { value: 'green' } }], ['text', { text: { field: 'a' }, fill: { value: 'green' } }],
+  ['line', { stroke: { value: 'green' } }], ['area', { fill: { value: 'green' } }], ['rule', { stroke: { value: 'green' } }],
+  ['arc', { fill: { value: 'green' } }], ['trail', { fill: { value: 'green' } }], ['path', { stroke: { value: 'green' } }],
+  ['shape', { stroke: { value: 'green' } }], ['image', {}],
+]
+
+describe('items left unencoded by an aborted run draw what vega draws', () => {
+  it.each(MARK_TYPES)('%s', async (type, paint) => {
+    const spec = unencoded(type, paint)
+    const want = await oracle(spec)
+    expect(want.errors.length).toBeGreaterThan(0)
+    const got = engine(spec)
+    expect(got.errors.length).toBeGreaterThan(0)
+    expect(diffCanonical(canonicalizeSvg(want.svg), canonicalizeSvg(got.svg))).toEqual([])
+  })
+})
+
 describe('recovered errors are logged and the render carries on, like vega (C90)', () => {
   it.each(CASES)('%s', async (_name, spec) => {
     const want = await oracle(spec)
