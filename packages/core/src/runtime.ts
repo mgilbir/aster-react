@@ -5472,6 +5472,31 @@ interface EncodePlan {
   signalKeys: string[]
   /** The `defined` signal spec, resolved before datum mutation. */
   definedSpec: EncodeValue | EncodeValue[] | undefined
+  /** Each plain key's spec and its shape (EK_*), so the per-row loop does no shape tests. */
+  plainSpecs: Array<EncodeValue | EncodeValue[]>
+  plainKinds: Uint8Array
+}
+
+// Encode entry shapes with a dedicated per-row path; everything else takes the general evaluator.
+const EK_GENERIC = 0
+/** `{value: <primitive>}` and nothing else. */
+const EK_CONST = 1
+/** `{field: <path>}` and nothing else. */
+const EK_FIELD = 2
+/** `{scale: <name>, field: <path>}` and nothing else. */
+const EK_SCALE_FIELD = 3
+
+function encodeKind(spec: EncodeValue | EncodeValue[] | undefined): number {
+  if (spec == null || typeof spec !== 'object' || Array.isArray(spec)) return EK_GENERIC
+  const keys = Object.keys(spec)
+  const rec = spec as unknown as Record<string, unknown>
+  if (keys.length === 1) {
+    if (keys[0] === 'value' && (rec.value === null || typeof rec.value !== 'object')) return EK_CONST
+    if (keys[0] === 'field' && typeof rec.field === 'string') return EK_FIELD
+  } else if (keys.length === 2 && typeof rec.scale === 'string' && typeof rec.field === 'string') {
+    return EK_SCALE_FIELD
+  }
+  return EK_GENERIC
 }
 
 /** Per-mark, per-eval scale bindings for encode channels. The encode value
@@ -5523,7 +5548,9 @@ function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): Encode
     }
     plainKeys.push(key)
   }
-  plan = { plainKeys, signalKeys, definedSpec }
+  const plainSpecs = plainKeys.map((k) => encode[k]!)
+  const plainKinds = Uint8Array.from(plainSpecs, encodeKind)
+  plan = { plainKeys, signalKeys, definedSpec, plainSpecs, plainKinds }
   encodePlanCache.set(encode, plan)
   return plan
 }
@@ -5556,10 +5583,26 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
   // vega's Encode throws at the first failing channel; the dataflow logs it and stops the run:
   // this item keeps the channels evaluated before the failure and no later item is encoded.
   try {
-    for (const key of plan.plainKeys) {
-      const resolved = resolveEncodeProperty(encode[key], datum, ctx, binding)
+    const { plainKeys, plainSpecs, plainKinds } = plan
+    for (let i = 0; i < plainKeys.length; i++) {
+      let resolved: unknown
+      switch (plainKinds[i]) {
+        case EK_CONST: resolved = (plainSpecs[i] as { value: unknown }).value; break
+        case EK_FIELD: resolved = getField(datum, (plainSpecs[i] as { field: string }).field); break
+        case EK_SCALE_FIELD: {
+          const spec = plainSpecs[i] as unknown as { scale: string; field: string }
+          const bound = binding?.get(spec)
+          if (bound) resolved = scaleValue(bound.scale, bound.type, getField(datum, spec.field))
+          else {
+            const s = ctx.scales.get(spec.scale)
+            resolved = s ? scaleValue(s, ctx.scaleTypes.get(spec.scale), getField(datum, spec.field)) : undefined
+          }
+          break
+        }
+        default: resolved = resolveEncodeProperty(plainSpecs[i], datum, ctx, binding)
+      }
       if (resolved !== undefined) {
-        rec[key] = resolved
+        rec[plainKeys[i]!] = resolved
       }
     }
 
