@@ -20,12 +20,13 @@
  *
  * Gate floors (C86). At the calibrated shape (>= 10000 points and >= 30 updates, which is what
  * `pnpm check` runs) each path must beat its baseline by a MEASURED floor, not just by >1x, so a large
- * regression cannot pass. Floors are half of the median speedup measured on the development machine
- * (`pnpm bench:incremental -- --points=10000 --reps=30`, three sequential runs, 2026-10-23):
+ * regression cannot pass. Seven sequential runs of `pnpm bench:incremental -- --points=10000 --reps=30`
+ * on the development machine (2026-10-23), speedup of the median:
  *
- *   incremental append vs full evaluate   15.8x - 16.7x   floor 8x
- *   session whole-array replace vs full   23.7x - 25.0x   floor 12x
- *   DOM patch vs full SVG serialization    3.3x -  3.7x   floor 1.6x
+ *   incremental append vs full evaluate   15.8x - 25.6x   floor 8x   (about half of the slowest run)
+ *   session whole-array replace vs full   13.8x - 25.4x   floor 8x   (one run in seven was 13.8x: half the
+ *                                                                      median, 12x, would have been too close)
+ *   DOM patch vs full SVG serialization    3.3x -  5.8x   floor 1.6x  (about half of the slowest run)
  *
  * Below the calibrated shape (speedup scales with the dataset) only the >1x check applies. Override with
  * --min-append=, --min-replace=, --min-dom= (used to prove the gate bites).
@@ -50,7 +51,7 @@ async function main(): Promise<void> {
   const calibrated = points >= 10000 && reps >= 30
   const floorOf = (name: string, calibratedFloor: number): number => Number(arg(name, String(calibrated ? calibratedFloor : 1)))
   const minAppend = floorOf('min-append', 8)
-  const minReplace = floorOf('min-replace', 12)
+  const minReplace = floorOf('min-replace', 8)
   const minDom = floorOf('min-dom', 1.6)
 
   const { compileChart, evaluateChart, createChartStream, renderSceneToSvg } = await import('@aster/core')

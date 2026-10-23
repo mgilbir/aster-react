@@ -62,19 +62,19 @@ const BUDGETS = {
   // Vega-faithful signal event loop (event-selector parser, stream graph, event extension, logger: signals
   // 32.4 -> 41.0 gzip, the entry also carries the expression engine), the entry evaluator, error recovery and group
   // paint/clip (core 124.1 -> 125.3, dom 127.4 -> 128.6). Ceilings are measured + 0.5 kB (owner approved raises).
-  '@aster/core': 119.2 * 1024,
-  '@aster/core/dom': 122.7 * 1024,
+  '@aster/core': 119.3 * 1024,
+  '@aster/core/dom': 122.8 * 1024,
   '@aster/core/canvas': 16.2 * 1024,
   '@aster/core/hit': 16 * 1024,
   '@aster/core/signals': 41.5 * 1024,
   // loadSpecData + the URL policy, SSRF guard and data-format readers (the addon is standalone, so this row
   // is the whole loader, not its marginal cost on top of core). Budget is measured + 0.5 kB; see `pnpm bench:bundle`.
   '@aster/core/load': 15.2 * 1024,
-  // C86: the old 180 kB budget sat ~20 kB above the measured 160.1 kB, so a 12% regression passed.
+  // C86: the old 180 kB budget sat ~20 kB above the measured 160.2 kB, so a 12% regression passed.
   // Every row below is now measured + 0.5 kB (measured 2026-10-23, `pnpm --filter @aster/benchmarks run budget`:
-  // core 118.7, dom 122.2, canvas 15.7, hit 15.7, load 14.7, signals 41.0, react 160.1, react/vl 212.8).
+  // core 118.8, dom 122.3, canvas 15.7, hit 15.7, load 14.7, signals 41.0, react 160.2, react/vl 212.9).
   // A change that needs more room edits the number here, in the PR, where the owner sees it.
-  '@aster/react': 160.6 * 1024,
+  '@aster/react': 160.7 * 1024,
   // Base + VL compiler. The compiler is opt-in (`import '@aster/react/vl'`),
   // so the base row above is the one to watch for React-side regressions.
   // 209 = measured 208.5 + 0.5. The compiler is ~51.5 kB gzip of that (react base 157.0): it grew
@@ -85,7 +85,7 @@ const BUDGETS = {
   // any scale name and for worker scenes), the worker protocol (limits, text metrics and url policy by name,
   // validation, bounded producer queue), content-keyed lifecycles, stream recovery, the roving-tabindex a11y
   // tree and the LoadOptions pass-through.
-  '@aster/react/vl': 213.3 * 1024,
+  '@aster/react/vl': 213.4 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
