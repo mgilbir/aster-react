@@ -59,6 +59,9 @@ export async function attack(body: string): Promise<AttackResult> {
   const out = await build({
     stdin: { contents: entry, resolveDir: here, loader: 'ts' },
     bundle: true, platform: 'node', format: 'esm', write: false, logLevel: 'silent', target: 'node20',
+    // The addons are imported bare, for their registration. package.json's `sideEffects` lists DIST files, so it would mark
+    // these src files side-effect free and drop them; this harness tests behaviour, not tree-shaking (check:bundle does).
+    ignoreAnnotations: true,
   })
   const file = join(scratch, `attack-${++counter}.mjs`)
   writeFileSync(file, out.outputFiles[0]!.text)
