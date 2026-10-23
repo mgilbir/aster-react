@@ -957,6 +957,18 @@ export function boundLegendGroup(g: SceneGroup): Bounds {
 }
 
 /**
+ * The bounds of a typed mark, cached per mark object: a scene that has been
+ * returned is never written (C52), and a layout reads the same marks several
+ * times (grid cells, guide anchors, titles), each time over every item.
+ */
+const TYPED_MARK_BOUNDS = new WeakMap<SceneGroup, Bounds>()
+function typedMarkBounds(mark: SceneGroup): Bounds {
+  let b = TYPED_MARK_BOUNDS.get(mark)
+  if (!b) TYPED_MARK_BOUNDS.set(mark, (b = boundTypedMark(new Bounds(), mark)))
+  return b
+}
+
+/**
  * The bounds vega's Bound pass leaves on a LAID-OUT mark (`mark.bounds`),
  * recursively: a group is its box and the union of its children's, stroke
  * included, translated to its position (marks/group.js `bound`); a child axis /
@@ -968,7 +980,7 @@ export function boundLegendGroup(g: SceneGroup): Bounds {
 export function layoutBounds(node: SceneNode, out = new Bounds()): Bounds {
   const g = node as SceneGroup
   const isGroup = g.marktype === 'group' || (g.marktype === undefined && Array.isArray(g.items))
-  if (!isGroup) return g.marktype !== undefined && Array.isArray(g.items) ? out.union(boundTypedMark(new Bounds(), g)) : boundLeaf(out, node as SceneItem)
+  if (!isGroup) return g.marktype !== undefined && Array.isArray(g.items) ? out.union(typedMarkBounds(g)) : boundLeaf(out, node as SceneItem)
   if (g.role === 'axis' && (g as Record<string, unknown>).axis !== undefined) return out.union(boundAxisGroup(g))
   if (g.role === 'legend') return out.union(boundLegendGroup(g))
   const b = new Bounds()
@@ -976,7 +988,7 @@ export function layoutBounds(node: SceneNode, out = new Bounds()): Bounds {
     for (const child of g.items) {
       if ((child as Record<string, unknown>)._bg === true) continue
       const c = child as SceneGroup
-      if (c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items)) b.union(boundTypedMark(new Bounds(), c))
+      if (c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items)) b.union(typedMarkBounds(c))
       else layoutBounds(child, b)
     }
   }

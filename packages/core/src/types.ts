@@ -588,6 +588,8 @@ export interface SceneGroup extends SceneItem {
   /** Nested scene items (children of a group). */
   items?: SceneNode[]
   clip?: boolean
+  /** The runtime sets it when some item of this mark carries an `href`: only then do the renderers look for links. */
+  hasLinks?: boolean
   /** The MARK's `clip` (not the item's): this group item sits in a container clipped to the enclosing group's frame. */
   markClip?: boolean
   /** Pre-computed rounded-rect path `d` for clip-path defs (when cornerRadius > 0). */

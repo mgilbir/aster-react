@@ -3514,6 +3514,7 @@ function evaluateMark(
     clip: mark.clip === true,
     items,
     __source: mark.from?.data,
+    ...(encodesHref(mark) ? { hasLinks: true } : {}),
   }
   if (carriedBounds) {
     for (const it of addedItems) carriedBounds.union(boundLeaf(new Bounds(), it))
@@ -3529,10 +3530,13 @@ function evaluateMark(
  * renderers additionally sanitize whatever they are handed (`sanitizeHref`,
  * vega-loader's rule), so with no policy a script URL is still never linked.
  */
-function vetLinks(mark: CompiledMark, items: SceneItem[], ctx: EvalContext): void {
-  if (ctx.urlPolicy === undefined) return
+function encodesHref(mark: CompiledMark): boolean {
   const enc = mark.encode as Record<string, Record<string, unknown> | undefined> | undefined
-  if (!enc || !Object.values(enc).some((set) => set && 'href' in set)) return
+  return !!enc && Object.values(enc).some((set) => set && 'href' in set)
+}
+
+function vetLinks(mark: CompiledMark, items: SceneItem[], ctx: EvalContext): void {
+  if (ctx.urlPolicy === undefined || !encodesHref(mark)) return
   for (const it of items) {
     if (it.href == null) continue
     if (applyLinkUrlPolicy(it.href, ctx.urlPolicy) == null) it.href = undefined

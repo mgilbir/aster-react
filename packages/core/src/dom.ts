@@ -209,8 +209,6 @@ function batchableSymbol(it: SceneItem): boolean {
     && (it.fillOpacity == null || it.fillOpacity === 1)
     && (it.strokeOpacity == null || it.strokeOpacity === 1)
     && rec.blend == null
-    // a hyperlinked symbol keeps its own element (and its <a>)
-    && !rec.href
   return opaque
     && x != null && y != null && Number.isFinite(x) && Number.isFinite(y)
     && Number.isFinite(Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2)
@@ -505,7 +503,8 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       return [linked(items[0]!, { tag: 'path', attrs: pairs((w) => trailAttrs(d, items[0]!, w)) })]
     }
     case 'symbol': {
-      const chunkSize = denseSymbolsEnabled(options, items)
+      // a hyperlinked mark keeps one element (and <a>) per symbol
+      const chunkSize = group.hasLinks === true ? 0 : denseSymbolsEnabled(options, items)
       if (chunkSize > 0) return denseSymbolItems(group, items, chunkSize)
       return symbolItems(group, items)
     }
@@ -617,7 +616,7 @@ function groupDescs(group: SceneGroup, frameW: number, frameH: number, clips: Cl
   const containerAttrs = new PairAttrSink()
   if (!markContainerAttrs(type, containerAttrs)) return []
   const inner = g('g', containerAttrs.out, markItems(group, type, options))
-  if (type === 'symbol' && denseSymbolsEnabled(options, group.items ?? []) > 0) inner.dense = true
+  if (type === 'symbol' && group.hasLinks !== true && denseSymbolsEnabled(options, group.items ?? []) > 0) inner.dense = true
   // A mark's clip is the size of the group that contains it (vega: `clip(renderer, scene, scene.group)`).
   if (needsClip) return [g('g', pairs((w) => clipRefAttrs(groupClipId(group, clips, frameW, frameH), w)), [inner])]
   return [inner]

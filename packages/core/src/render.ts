@@ -750,6 +750,7 @@ function symbolPathImpl(shape: string | undefined, r: number, num: (x: number) =
 }
 
 function renderSymbols(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('symbol')
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
@@ -763,8 +764,7 @@ function renderSymbols(group: SceneGroup): string {
     // rotateItem(item) — full-precision numbers plus the mark's rotation.
     w.s = ''
     symbolElementAttrs(it, symbolMarkPath(it), w)
-    const a = linkOpen(it)
-    out += `${a}<path${w.s}/>${linkClose(a)}`
+    out += links ? withLink(it, `<path${w.s}/>`) : `<path${w.s}/>`
   }
   out += '</g>'
   return out
@@ -778,14 +778,14 @@ export function symbolMarkPath(it: SceneItem): GeneratedPath {
 
 /** Circle mark: renders `<circle cx cy r>` elements (radius from `radius` or size). */
 function renderCircles(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('circle')
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
     if (it.x == null || it.y == null) continue
     w.s = ''
     circleAttrs(it, w)
-    const a = linkOpen(it)
-    out += `${a}<circle${w.s}/>${linkClose(a)}`
+    out += links ? withLink(it, `<circle${w.s}/>`) : `<circle${w.s}/>`
   }
   out += '</g>'
   return out
@@ -843,14 +843,14 @@ export function clippedRoundedRectEntries(group: SceneGroup): RoundedRectEntry[]
 }
 
 function renderClippedRoundedRects(group: SceneGroup, clips: ClipCollector): string {
+  const links = group.hasLinks === true
   let out = ''
   const w = new StringAttrSink()
   for (const e of clippedRoundedRectEntries(group)) {
     w.s = ''
     if (e.kind === 'plain') {
       rectPathAttrs(e.item, e.d, w, false)
-      const a = linkOpen(e.item)
-      out += `${a}<path${w.s}/>${linkClose(a)}`
+      out += links ? withLink(e.item, `<path${w.s}/>`) : `<path${w.s}/>`
       continue
     }
     const clipId = clips.id({ d: e.round })
@@ -862,7 +862,7 @@ function renderClippedRoundedRects(group: SceneGroup, clips: ClipCollector): str
     out += `<path class="background" aria-hidden="true" d="M0,0h${num(e.g.w)}v0h-${num(e.g.w)}Z"/>`
     w.s = ''
     rectPathAttrs(e.item, e.plain, w)
-    const a = linkOpen(e.item)
+    const a = group.hasLinks === true ? linkOpen(e.item) : ''
     out += `<g><g class="mark-rect role-mark marks" role="graphics-object" aria-roledescription="rect mark container">${a}<path${w.s}/>${linkClose(a)}</g></g>`
     out += `<path class="foreground" aria-hidden="true" d="" display="none"/></g></g></g>`
     out += `<path class="foreground" aria-hidden="true" d="" display="none"/></g>`
@@ -871,6 +871,7 @@ function renderClippedRoundedRects(group: SceneGroup, clips: ClipCollector): str
 }
 
 function renderRects(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('rect')
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
@@ -879,8 +880,7 @@ function renderRects(group: SceneGroup): string {
     if (d == null) continue
     w.s = ''
     rectPathAttrs(it, d, w)
-    const a = linkOpen(it)
-    out += `${a}<path${w.s}/>${linkClose(a)}`
+    out += links ? withLink(it, `<path${w.s}/>`) : `<path${w.s}/>`
   }
   out += '</g>'
   return out
@@ -940,6 +940,7 @@ function rectItemPathImpl(it: SceneItem): string | null {
 }
 
 function renderRules(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('rule')
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
@@ -950,20 +951,19 @@ function renderRules(group: SceneGroup): string {
     w.s = ''
     itemDatumAttr(it, w)
     lineElementAttrs(x, y, x2, y2, it, w)
-    const a = linkOpen(it)
-    out += `${a}<line${w.s}/>${linkClose(a)}`
+    out += links ? withLink(it, `<line${w.s}/>`) : `<line${w.s}/>`
   }
   out += '</g>'
   return out
 }
 
 function renderTexts(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('text')
   for (const it of itemsOf(group)) {
     const el = textElement(it)
     if (el === '') continue
-    const a = linkOpen(it)
-    out += a + el + linkClose(a)
+    out += links ? withLink(it, el) : el
   }
   out += '</g>'
   return out
@@ -1088,6 +1088,7 @@ function truncateToLimit(it: SceneItem, text: string, fontSize: number): string 
 }
 
 function renderPaths(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('path')
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
@@ -1097,8 +1098,7 @@ function renderPaths(group: SceneGroup): string {
     // coordinates (e.g. geoshape output) have x=y=0 and emit no transform).
     w.s = ''
     pathItemAttrs(it, w)
-    const a = linkOpen(it)
-    out += `${a}<path${w.s}/>${linkClose(a)}`
+    out += links ? withLink(it, `<path${w.s}/>`) : `<path${w.s}/>`
   }
   out += '</g>'
   return out
@@ -1112,6 +1112,7 @@ function renderPaths(group: SceneGroup): string {
  * stroke/strokeWidth. This mirrors vega's trail shape algorithm (d3-trail).
  */
 function renderTrail(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('trail')
   const items = itemsOf(group)
   if (items.length > 1) {
@@ -1120,8 +1121,7 @@ function renderTrail(group: SceneGroup): string {
       const first = items[0]!
       const w = new StringAttrSink()
       trailAttrs(d, first, w)
-      const a = linkOpen(first)
-      out += `${a}<path${w.s}/>${linkClose(a)}`
+      out += links ? withLink(first, `<path${w.s}/>`) : `<path${w.s}/>`
     }
   }
   out += '</g>'
@@ -1220,14 +1220,14 @@ export function trailPath(items: SceneItem[]): GeneratedPath {
 }
 
 function renderImages(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('image')
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
     if (it.url == null || it.x == null || it.y == null) continue
     w.s = ''
     imageAttrs(it, w)
-    const a = linkOpen(it)
-    out += `${a}<image${w.s}/>${linkClose(a)}`
+    out += links ? withLink(it, `<image${w.s}/>`) : `<image${w.s}/>`
   }
   out += '</g>'
   return out
@@ -1255,13 +1255,13 @@ export function imageDesc(it: SceneItem): { x: number; y: number; w: number; h: 
 }
 
 function renderArcs(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('arc')
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
     w.s = ''
     arcItemAttrs(it, w)
-    const a = linkOpen(it)
-    out += `${a}<path${w.s}/>${linkClose(a)}`
+    out += links ? withLink(it, `<path${w.s}/>`) : `<path${w.s}/>`
   }
   out += '</g>'
   return out
@@ -1643,6 +1643,12 @@ function linkOpen(it: SceneItem): string {
   return `<a${w.s}>`
 }
 const linkClose = (open: string): string => (open ? '</a>' : '')
+/** `el` inside the item's link when it has one (the common, linkless case adds nothing but a property read). */
+function withLink(it: SceneItem, el: string): string {
+  if (!recOf(it).href) return el
+  const open = linkOpen(it)
+  return open ? open + el + '</a>' : el
+}
 
 /** `data-datum`, stamped by `stampDatumAttrs` so events can recover the datum. */
 export function itemDatumAttr(it: SceneItem, w: AttrSink): void {
