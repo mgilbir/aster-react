@@ -5560,22 +5560,15 @@ function resolveEncodeProperty(
 ): unknown {
   if (spec == null) return undefined
   if (Array.isArray(spec)) {
-    // Vega conditional encode: entries are tested in order; the first matching
-    // `test` wins, and an entry with no `test` is the unconditional fallback
-    // (the "otherwise" value).
+    // Vega conditional encode (vega-parser encode/rule.js): the entries become one
+    // expression `(test1)?v1:(test2)?v2:...:vN`, so tests run in order and only the
+    // matching branch is evaluated; an entry with no `test` is the "otherwise" value.
+    // A test or branch that throws is NOT caught here: in vega the whole encode
+    // throws and the dataflow logs it (see resolveEncodeSet, which reports it).
     for (const cond of spec) {
       if (cond && typeof cond === 'object' && 'test' in cond && typeof cond.test === 'string') {
-        try {
-          const test = ctx.runtime.expr(cond.test)
-          if (test(datum, ctx.signalParams)) {
-            try {
-              return resolveEncodeValueInternal(cond, datum, ctx, binding)
-            } catch {
-              return undefined
-            }
-          }
-        } catch {
-          // Expression evaluation failed (e.g., datum has no field); skip condition
+        if (ctx.runtime.expr(cond.test)(datum, ctx.signalParams)) {
+          return resolveEncodeValueInternal(cond, datum, ctx, binding)
         }
       } else if (cond && typeof cond === 'object') {
         return resolveEncodeValueInternal(cond, datum, ctx, binding)
@@ -5586,184 +5579,171 @@ function resolveEncodeProperty(
   return resolveEncodeValueInternal(spec, datum, ctx, binding)
 }
 
+/** The keys of an encode entry (vega-parser encode/entry.js). */
+interface EncodeEntry {
+  signal?: string
+  field?: unknown
+  value?: unknown
+  scale?: unknown
+  range?: unknown
+  band?: unknown
+  extra?: unknown
+  exponent?: unknown
+  mult?: unknown
+  offset?: unknown
+  round?: unknown
+  format?: unknown
+  formatType?: unknown
+}
+
+/**
+ * A property that may itself be an encode entry (vega entry.js `property()`):
+ * `mult`, `offset`, `exponent` and `band` take a number or a nested entry such as
+ * `{signal}`, `{field}` or `{scale, field}`.
+ */
+function entryProperty(p: unknown, datum: Row, ctx: EvalContext, binding?: EncodeBinding): unknown {
+  return p !== null && typeof p === 'object' ? resolveEncodeValueInternal(p as EncodeValue, datum, ctx, binding) : p
+}
+
+/** The group a `{group|parent}` field reference points at, `level` groups up (this engine has the enclosing facet group only). */
+function groupFieldValue(ref: { group?: unknown; parent?: unknown }, datum: Row, ctx: EvalContext): unknown {
+  if (ref.parent !== undefined) {
+    // `item.mark.group.datum[field]`: the facet cell's datum is the `parent` signal there
+    const parent = ctx.signalParams['parent']
+    return parent != null && typeof ref.parent === 'string' ? getField(parent as Row, ref.parent) : undefined
+  }
+  const key = ref.group
+  if (key === 'width') return ctx.width
+  if (key === 'height') return ctx.height
+  if (key === 'x') return ctx.groupX ?? 0
+  if (key === 'y') return ctx.groupY ?? 0
+  return 0
+}
+
+/** A field reference in any of vega's forms: a path, `{datum}`, `{signal}`, `{group}`, `{parent}`. */
+function encodeFieldValue(ref: unknown, datum: Row, ctx: EvalContext): unknown {
+  if (ref !== null && typeof ref === 'object' && !Array.isArray(ref)) {
+    const r = ref as { signal?: unknown; group?: unknown; parent?: unknown; datum?: unknown }
+    if (r.signal) return (datum as Record<string, unknown>)[ctx.runtime.expr(String(r.signal))(datum, ctx.signalParams) as string]
+    if (r.group !== undefined || r.parent !== undefined) return groupFieldValue(r, datum, ctx)
+    if (r.datum !== undefined) return encodeFieldValue(r.datum, datum, ctx)
+    throw new Error('Invalid field reference: ' + JSON.stringify(ref))
+  }
+  return getField(datum, ref as string)
+}
+
+/** The scale an entry names: a string, `{signal}` (an expression giving the name) or a field reference giving it. */
+function encodeScaleOf(enc: EncodeEntry, datum: Row, ctx: EvalContext, binding?: EncodeBinding): { scale: Scale | undefined; type: string | undefined } {
+  const ref = enc.scale
+  if (typeof ref === 'string') {
+    const bound = binding?.get(enc as object)
+    if (bound) return { scale: bound.scale, type: bound.type }
+    return { scale: ctx.scales.get(ref), type: ctx.scaleTypes.get(ref) }
+  }
+  const name = ref !== null && typeof ref === 'object' && (ref as { signal?: unknown }).signal
+    ? ctx.runtime.expr(String((ref as { signal: string }).signal))(datum, ctx.signalParams)
+    : encodeFieldValue(ref, datum, ctx)
+  return { scale: ctx.scales.get(name as string), type: ctx.scaleTypes.get(name as string) }
+}
+
+/** `_scale(scale, value)`: the engine's tolerant coercions around the scale call. */
+function scaleValue(s: Scale, type: string | undefined, raw: unknown): unknown {
+  if (raw === undefined) {
+    // A discrete domain can legitimately contain undefined (e.g. an aggregate
+    // over a nominal field); vega still maps that domain entry through the scale
+    // rather than dropping the channel.
+    const dom = s.domain?.() as unknown[] | undefined
+    if (!Array.isArray(dom) || !dom.includes(undefined)) return undefined
+  }
+  if ((type === 'time' || type === 'utc') && typeof raw === 'string') {
+    const dateObj = new Date(raw)
+    if (Number.isFinite(dateObj.getTime())) raw = dateObj
+  }
+  return s(raw)
+}
+
 function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, ctx: EvalContext, binding?: EncodeBinding): unknown {
   if (value == null || typeof value !== 'object') return value
-  // 1. Signal always takes priority - evaluate the expression
-  if ('signal' in value && value.signal !== undefined) {
-    try {
-      let result = ctx.runtime.expr(value.signal as string)(datum, ctx.signalParams)
-      if (result != null && typeof result === 'number') {
-        const multVal = (value as { mult?: number }).mult
-        if (typeof multVal === 'number') result *= multVal
-        const offsetVal = (value as { offset?: number }).offset
-        if (typeof offsetVal === 'number') result += offsetVal
-      }
-      return result
-    } catch {
-      return undefined
-    }
-  }
-  // 2. Scale resolution - maps a value (or datum field) through a scale
-  if ('scale' in value) {
-    const multVal = (value as { mult?: number }).mult
-    const offsetVal = (value as { offset?: number }).offset
-    // Per-mark binding (populated once per mark per eval) avoids two Map lookups
-    // per row per channel; fall back to the live maps for anything it missed.
-    const bound = binding?.get(value as object)
-    const scale = bound ? bound.scale : (ctx.scales.get(value.scale as string) as Scale | undefined)
-    const field = (value as { field?: unknown }).field
-    const bandSpec = (value as { band?: boolean | number | { signal: string } }).band
-    const offsetSpec = (value as { offset?: number | { signal: string } }).offset
-    let s = scale as Scale | undefined
+  // vega-parser encode/entry.js, evaluated instead of compiled to an expression:
+  //   value = (signal) | color | field | value;  value = scale(value);
+  //   pow(value, exponent);  value *= mult;  value += offset;  round(value)
+  // The code is concatenated TEXT there, so operator precedence matters: with a
+  // `band` the scale part is `_scale(..) + _bandwidth(..)*band`, and a trailing
+  // `*mult` binds to the bandwidth term only (see `tail` below).
+  const enc = value as EncodeEntry
+  let head: unknown
+  let hasHead = true
+  if (enc.signal) head = ctx.runtime.expr(enc.signal)(datum, ctx.signalParams)
+  else if (enc.field != null) head = encodeFieldValue(enc.field, datum, ctx)
+  else if (enc.value !== undefined) {
+    const v = enc.value
+    head = v !== null && typeof v === 'object' && 'signal' in v ? resolveEncodeValueInternal(v as EncodeValue, datum, ctx, binding) : v
+  } else hasHead = false
+
+  // `tail` is a product term added to `head` (the band step `_bandwidth(scale)*band`)
+  let tail: number | undefined
+  if (enc.scale != null) {
+    const { scale: s, type } = encodeScaleOf(enc, datum, ctx, binding)
     if (!s) return undefined
-    
-    // If scale is band and no field/value, return bandwidth (for {scale, band} encoding)
-    if (s.bandwidth && field == null) {
-      const litValue = (value as { value?: unknown }).value
-      let raw: unknown
-      if (litValue !== undefined) {
-        raw = litValue
-      } else {
-        // { scale: "x", band: 1 } - return bandwidth * band fraction, then
-        // apply the encode's offset/mult. Vega's `height: {scale:'y', band:1,
-        // offset:-1}` is the common bar-gap idiom.
-        const fraction = bandSpec === true ? 0.5 : (typeof bandSpec === 'number' ? bandSpec : 1)
-        let result = s.bandwidth() * fraction
-        if (offsetSpec != null) {
-          if (typeof offsetSpec === 'number') result += offsetSpec
-          else if (typeof offsetSpec === 'object' && 'signal' in offsetSpec) {
-            result += ctx.runtime.expr(offsetSpec.signal as string)(datum, ctx.signalParams) as number
-          }
-        }
-        if (typeof multVal === 'number') result *= multVal
-        return result
-      }
-    } else if (field != null) {
-      // 3a. Use datum field as the value to scale
+    if (enc.range != null) {
+      // lerp(_range(scale), +range)
+      const r = s.range() as number[]
+      const t = +(enc.range as number)
+      const lo = r.length <= 1 ? r[0] ?? 0 : r[0]!
+      const hi = r.length <= 1 ? r[0] ?? 0 : r[r.length - 1]!
+      head = (1 - t) * lo + t * hi
+      hasHead = true
     } else {
-      // 3b. Use literal value as input to scale
-      const litValue = (value as { value?: unknown }).value
-      if (litValue === undefined) return undefined
-    }
-    
-    // Get the value to scale
-    let raw: unknown
-    if (field != null) {
-      raw = getField(datum, field as string)
-    } else {
-      raw = (value as { value?: unknown }).value
-    }
-    if (raw === undefined) {
-      // A discrete domain can legitimately contain undefined (e.g. an
-      // aggregate over a nominal field); vega still maps that domain entry
-      // through the scale rather than dropping the channel.
-      const dom = s.domain?.() as unknown[] | undefined
-      if (!Array.isArray(dom) || !dom.includes(undefined)) return undefined
-    }
-    
-    const scaleType = bound ? bound.type : ctx.scaleTypes.get(value.scale as string)
-    if ((scaleType === 'time' || scaleType === 'utc') && typeof raw === 'string') {
-      const dateObj = new Date(raw)
-      if (dateObj instanceof Date && Number.isFinite(dateObj.getTime())) {
-        raw = dateObj
-      }
-    }
-    
-    const scaled = s(raw) as number
-    let position = scaled
-    
-    // 4. Band placement: position = scale(raw) + bandFraction * bandwidth
-    if (bandSpec != null && s.bandwidth) {
-      const bandwidth = s.bandwidth()
-      let bandFraction: number
-      if (bandSpec === true) {
-        bandFraction = 0.5
-      } else if (typeof bandSpec === 'number') {
-        bandFraction = bandSpec
-      } else if (bandSpec && typeof bandSpec === 'object' && 'signal' in bandSpec) {
-        bandFraction = ctx.runtime.expr(bandSpec.signal as string)(datum, ctx.signalParams) as number
-      } else {
-        bandFraction = 0.5
-      }
-      position = scaled + bandFraction * bandwidth
-    }
-    
-    // 5. Offset: add offset after band placement
-    if (offsetSpec != null) {
-      let offset: number
-      if (typeof offsetSpec === 'number') {
-        offset = offsetSpec
-      } else if (offsetSpec && typeof offsetSpec === 'object' && 'scale' in offsetSpec) {
-        // Scale-based offset (e.g. from Vega-Lite's xOffset encoding):
-        // { scale: "xOffset", field: "group" }
-        const offScale = ctx.scales.get((offsetSpec as { scale: string }).scale)
-        if (offScale) {
-          const offField = (offsetSpec as { field?: string }).field
-          const offRaw = offField ? getField(datum, offField) : undefined
-          offset = offRaw !== undefined ? offScale(offRaw) as number : 0
+      if (hasHead) head = scaleValue(s, type, head)
+      if (enc.band) {
+        // + _bandwidth(scale) [* band]   (a band of exactly 1, or `true`, has no factor)
+        const bw = typeof s.bandwidth === 'function' ? s.bandwidth() : 0
+        const factor = enc.band === true ? 1 : +(entryProperty(enc.band, datum, ctx, binding) as number)
+        const term = factor === 1 ? bw : bw * factor
+        if (enc.extra) {
+          // (datum.extra ? _scale(scale, datum.extra.value) : value)
+          const extra = (datum as { extra?: { value?: unknown } }).extra
+          head = extra ? scaleValue(s, type, extra.value) : hasHead ? (head as number) + term : term
+          hasHead = true
         } else {
-          offset = 0
+          tail = term
         }
-      } else if (offsetSpec && typeof offsetSpec === 'object' && 'signal' in offsetSpec) {
-        offset = ctx.runtime.expr(offsetSpec.signal as string)(datum, ctx.signalParams) as number
-      } else {
-        offset = 0
+      } else if (!hasHead) {
+        head = 0
+        hasHead = true
       }
-      position += offset
     }
-    
-    // Apply mult after scale resolution (only if it is an actual number, not a signal object).
-    // The offset was already applied in step 5 (offsetSpec) — applying the
-    // tail's offsetVal here would double it.
-    if (typeof multVal === 'number') position = position * multVal
-    if (offsetSpec == null && typeof offsetVal === 'number') position = position + offsetVal
-    return position
   }
-  if ('field' in value) {
-    // Handle Vega group field references: {field: {group: "width"}} etc.
-    // These reference the enclosing group's scenegraph properties.
-    const fieldSpec = value.field as unknown
-    if (fieldSpec != null && typeof fieldSpec === 'object' && !Array.isArray(fieldSpec) && 'group' in (fieldSpec as Record<string, unknown>)) {
-      const groupKey = (fieldSpec as { group: string }).group
-      let v: unknown
-      if (groupKey === 'width') v = ctx.width
-      else if (groupKey === 'height') v = ctx.height
-      else if (groupKey === 'x') v = ctx.groupX ?? 0
-      else if (groupKey === 'y') v = ctx.groupY ?? 0
-      else v = 0
-      if (v != null && typeof v === 'number') {
-        const multValField = (value as { mult?: number }).mult
-        if (multValField != null) v *= multValField
-        const offsetValField = (value as { offset?: number }).offset
-        if (offsetValField != null) v += offsetValField
-      }
-      return v
-    }
-    let v = getField(datum, value.field as string)
-    if (v != null && typeof v === 'number') {
-      const multValField = (value as { mult?: number }).mult
-      if (multValField != null) v *= multValField
-      const offsetValField = (value as { offset?: number }).offset
-      if (offsetValField != null) v += offsetValField
-      v = formatValue(v, value)
-    }
-    return v
+
+  const exponent = enc.exponent
+  const mult = enc.mult
+  const offset = enc.offset
+  if (exponent == null && mult == null && offset == null && !enc.round) {
+    if (tail !== undefined) return hasHead ? (head as number) + tail : tail
+    if (!hasHead) return undefined
+    return enc.field != null && enc.scale == null && enc.format !== undefined && typeof head === 'number' ? formatValue(head, value) : head
   }
-  if ('value' in value) {
-    const v = value.value
-    let result = typeof v === 'object' && v != null && 'signal' in v
-      ? (resolveEncodeValueInternal(v as EncodeValue, datum, ctx) as number)
-      : (v as number)
-    // Apply mult/offset
-    if (typeof result === 'number' && Number.isFinite(result)) {
-      const multVal = (value as { mult?: number }).mult
-      if (multVal != null) result *= multVal
-      const offsetVal = (value as { offset?: number }).offset
-      if (offsetVal != null) result += offsetVal
-    }
-    return result
+
+  // from here the text is `value [pow] [*mult] [+offset]`, rounded as a whole
+  let result: unknown
+  if (exponent != null) {
+    result = Math.pow(tail !== undefined ? (hasHead ? (head as number) + tail : tail) : (hasHead ? head : null) as number, +(entryProperty(exponent, datum, ctx, binding) as number))
+    tail = undefined
+  } else if (tail !== undefined) {
+    result = hasHead ? head : undefined
+  } else {
+    result = hasHead ? head : null
   }
-  return undefined
+  if (mult != null) {
+    const m = entryProperty(mult, datum, ctx, binding) as number
+    if (tail !== undefined) tail = tail * m
+    else result = (result as number) * m
+  }
+  if (tail !== undefined) result = !hasHead ? tail : (result as number) + tail
+  if (offset != null) result = (result as number) + (entryProperty(offset, datum, ctx, binding) as number)
+  if (enc.round) result = Math.round(result as number)
+  if (enc.field != null && enc.scale == null && enc.format !== undefined && typeof result === 'number') result = formatValue(result, value)
+  return result
 }
 
 /**
