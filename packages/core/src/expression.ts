@@ -39,7 +39,7 @@ function numericSequence(start: number, stop?: number, step?: number): number[] 
 import { rgb, hsl, lab, hcl } from './color.js'
 import type { AstNode } from './expr-parser.js'
 import {
-  accessor, ascending, extent, isArray, isBoolean, isDate, isNumber, isObject,
+  ascending, extent, isArray, isBoolean, isDate, isNumber, isObject,
   isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, safeGet, DisallowedObjectProperties,
 } from './util.js'
 

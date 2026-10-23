@@ -209,21 +209,6 @@ function resolveFrameDash(spec: VgSpec): number[] | undefined {
   return Array.isArray(v) ? v.map(Number) : undefined
 }
 
-function resolveSizeSpec(value: unknown, signalNames: string[]): SizeSpec {
-  if (typeof value === 'number') return value
-  if (value && typeof value === 'object') return value as SizeSpec
-  if (value === undefined && signalNames.length > 0) {
-    // Try width/height signal names that Vega-Lite commonly uses
-    for (const name of signalNames) {
-      if (name.includes('width') || name.includes('height')) {
-        // This is likely the chart dimension signal — return it so it can be resolved at runtime
-        return { signal: name }
-      }
-    }
-  }
-  return DEFAULT_SIZE
-}
-
 const DEFAULT_SIZE = 500
 
 function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSignalDef[] {

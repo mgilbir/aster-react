@@ -4180,7 +4180,6 @@ function forwardLegendProps(userLegend: Record<string, unknown>, lg: Record<stri
 
 interface BuiltMarks extends Array<Record<string, unknown>> {
   overlayData?: Record<string, unknown>
-  overlayFilled?: boolean
 }
 function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: string, dataName: string, markSize: number | undefined, overlayName: string): BuiltMarks {  // vega-lite's DEFAULT_REDUCED_OPACITY (0.7) applies to point/tick/circle/
   // square only when the encoding is NOT aggregate (init.ts opacity())
@@ -4873,14 +4872,6 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   }
   fillMissingPositions(update, mark, fields)
 
-  // interval selections: the static brush marks (empty initial extent).
-  // The interactive signal apparatus is interactive-only; the static render
-  // shows the zero-size brush background clipped to the plot.
-  const intervalParams = Array.isArray(spec.params)
-    ? (spec.params as Record<string, unknown>[]).filter((p) => isObject(p.select) && (p.select as Record<string, unknown>).type === 'interval')
-    : []
-  void intervalParams
-
   {
     // markDef.ariaRoleDescription (vega-lite getMarkPropOrConfig): what a composite mark's parts call themselves
     const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
@@ -5093,7 +5084,6 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // (size, shape, strokeWidth, ...) reaches it like a hand-written point.
     const cfgPoint = isObject(userConfig?.point) ? (userConfig!.point as Record<string, unknown>) : {}
     const ptType = (ptDef.type as string | undefined) ?? (ptDef.shape as string | undefined)
-    const ptFilled = ptDef.filled as boolean | undefined
     // VL resolves the overlay's paint from the point def and config.point only:
     // the parent line's color does not leak into its points.
     const ptFill = (ptDef.fill as string | undefined) ?? (ptDef.color as string | undefined)
@@ -5127,7 +5117,6 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       source: dataName,
       transform: [invalidFilter(spec, fields, 'point') ?? { type: 'filter', expr: 'true' }],
     }
-    out.overlayFilled = ptFilled ?? ptType === 'circle'
   }
   // datum references that landed in copies of `update` (series groups, overlays)
   {

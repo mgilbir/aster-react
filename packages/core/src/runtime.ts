@@ -5,18 +5,18 @@
  */
 import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { readData, type DataFormatSpec } from './data-format.js'
-import { applyTransforms, compileExprTransform, sortOrder, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row, type TransformContext } from './transform.js'
+import { applyTransforms, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { activeMeter, withLimits, boundedCount, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
 import { consoleLogger, type Logger } from './logger.js'
-import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale, type ScaleContext } from './scales.js'
+import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ScaleContext } from './scales.js'
 
 /** Scale types whose domain is an ordered set of discrete values. */
 const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
-import { geoRegistry, requireGeo } from './registry.js'
+import { requireGeo } from './registry.js'
 import { locale } from './locale.js'
 import type {
   GuideEncodeBlock,
@@ -44,7 +44,7 @@ import { hash53 } from './svg-defs.js'
 import { tickFormat, scaleFraction, scaleGradientStops, tickValues, tickCount, isContinuous, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, minOf, maxOf, pushAll } from './util.js'
+import { dict, ownGet, maxOf, pushAll } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, type PulseChange } from './pulse.js'
@@ -52,7 +52,7 @@ import { fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import { trellisLayout, gridLayout } from './trellis.js'
 import { boundAxisGroup, boundGroupItem, boundLeaf, boundText, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
-import { itemTextWidth, nominalTextWidth, type FontProps } from './text-metrics.js'
+import { nominalTextWidth } from './text-metrics.js'
 import { symbolPath, symbolPathExact, rectItemPath } from './render.js'
 
 const DEFAULT_SIZE = 500
@@ -733,11 +733,6 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
 // ===========================================================================
 // Shared axis/legend + padding computation — used by both evaluateChart and getChartInfo
 // ===========================================================================
-
-interface AxisLegendResult {
-  groups: SceneGroup[]
-  padding: { top: number; right: number; bottom: number; left: number }
-}
 
 /** Resolve a guide string/signal value for accessibility metadata. */
 function guideString(ctx: EvalContext, value: unknown): string | undefined {
@@ -1585,102 +1580,6 @@ function getChartInfoImpl(spec: VgSpec, input: RuntimeInput): ChartInfo {
 }
 
 /**
- * Estimate a text string's rendered width using vega-scenegraph's headless
- * estimate: `~~(0.8 * text.length * fontSize)`.
- */
-function estimateTextWidth(text: string, fontSize: number): number {
-  return ~~(0.8 * text.length * fontSize)
-}
-
-/**
- * View content bounds used by vega's `titleLayout` (the root group's bounds:
- * plot rect unioned with axis/legend/mark overflow). Axis line overflow is
- * calibrated to vega's measured bounds (tick end ± half-stroke; labels via the
- * same text estimator vega uses when no canvas is available).
- */
-interface ContentBounds { x1: number; y1: number; x2: number; y2: number }
-
-function contentBoundsOf(chart: CompiledChart, items: SceneNode[], width: number, height: number): ContentBounds {
-  const b: ContentBounds = { x1: 0, y1: 0, x2: width, y2: height }
-  // Axis tick marks (labels handled by the item scan below).
-  for (const axis of chart.axes) {
-    const tickSize = typeof axis.tickSize === 'number' ? axis.tickSize : 5
-    const ticksOn = axis.ticks !== false
-    if (!ticksOn) continue
-    switch (axis.orient) {
-      case 'left': b.x1 = Math.min(b.x1, -(tickSize + 0.5)); break
-      case 'right': b.x2 = Math.max(b.x2, width + tickSize + 0.5); break
-      case 'top': b.y1 = Math.min(b.y1, -(tickSize + 0.5)); break
-      default: b.y2 = Math.max(b.y2, height + tickSize + 0.5); break
-    }
-  }
-  const grow = (x1: number, y1: number, x2: number, y2: number) => {
-    b.x1 = Math.min(b.x1, x1); b.y1 = Math.min(b.y1, y1)
-    b.x2 = Math.max(b.x2, x2); b.y2 = Math.max(b.y2, y2)
-  }
-  const walk = (node: SceneNode, tx: number, ty: number) => {
-    const ox = tx + (node.x ?? 0)
-    const oy = ty + (node.y ?? 0)
-    const children = (node as SceneGroup).items
-    if (Array.isArray(children)) {
-      for (const c of children) walk(c, ox, oy)
-      return
-    }
-    const it = node as SceneItem
-    if (it.text != null) {
-      const fs = (it as Record<string, unknown>).fontSize as number | undefined ?? 11
-      // vega bounds text items with textMetrics (canvas when available) —
-      // measuring with the item's font keeps browser layout on vega's numbers.
-      const w = itemTextWidth(it as FontProps, String(it.text))
-      const angle = (it as Record<string, unknown>).angle as number | undefined
-      const anchor = it.align
-      if (angle) {
-        // Vega's text bounds (svg.js `bound`): the unrotated box is
-        //   x: [x + (align offset), + w]
-        //   y: [y + offset(item) - round(0.8h), + h]   (h = fontSize)
-        // then rotated about the anchor (x, y) and the axis-aligned hull taken
-        // (Bounds.rotate). `offset(item)` is the baseline correction.
-        const h = fs
-        const boff = it.baseline === 'top' ? Math.round(0.79 * h)
-          : it.baseline === 'middle' ? Math.round(0.30 * h)
-          : it.baseline === 'bottom' ? Math.round(-0.21 * h) : 0
-        const bx1 = anchor === 'center' ? ox - w / 2 : anchor === 'right' ? ox - w : ox
-        const by1 = oy + boff - Math.round(0.8 * h)
-        const bx2 = bx1 + w
-        const by2 = by1 + h
-        const rad = (angle * Math.PI) / 180
-        const cos = Math.cos(rad), sin = Math.sin(rad)
-        let mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity
-        for (const [px, py] of [[bx1, by1], [bx2, by1], [bx1, by2], [bx2, by2]] as [number, number][]) {
-          const rx = ox + (px - ox) * cos - (py - oy) * sin
-          const ry = oy + (px - ox) * sin + (py - oy) * cos
-          mnx = Math.min(mnx, rx); mny = Math.min(mny, ry)
-          mxx = Math.max(mxx, rx); mxy = Math.max(mxy, ry)
-        }
-        grow(mnx, mny, mxx, mxy)
-      } else {
-        let lx1: number
-        if (anchor === 'center') lx1 = ox - w / 2
-        else if (anchor === 'right') lx1 = ox - w
-        else lx1 = ox
-        // Vega text bounds: ascent 0.78*fs above the drawn baseline. Our raw y is
-        // pre-baseline-offset, so `top` draws at y+0.79fs (bounds ≈ y..y+fs).
-        if (it.baseline === 'top') grow(lx1, oy, lx1 + w, oy + fs)
-        else if (it.baseline === 'middle') grow(lx1, oy - fs / 2, lx1 + w, oy + fs / 2)
-        else grow(lx1, oy - fs, lx1 + w, oy)
-      }
-    } else if (it.width != null && it.height != null) {
-      grow(ox, oy, ox + (it.width ?? 0), oy + (it.height ?? 0))
-    } else if (it.radius != null) {
-      const sw = (it.strokeWidth ?? (it.stroke ? 1 : 0)) / 2
-      grow(ox - it.radius - sw, oy - it.radius - sw, ox + it.radius + sw, oy + it.radius + sw)
-    }
-  }
-  for (const node of items) walk(node, 0, 0)
-  return b
-}
-
-/**
  * Vega's titleLayout (vega-view titleLayout) port: the title group holds the
  * title text at (0,0) and the subtitle at (sx,sy); the group is positioned
  * outside the viewBounds by the union of the two text bounds.
@@ -1929,11 +1828,6 @@ function inverseMapping(from: number[], oldLen: number): number[] {
 
 function isModified(pulse: StepPulse): Set<number> {
   return new Set(pulse.changed)
-}
-
-/** A length-changing pulse, compact append form included. */
-function isLengthPulse(pulse: StepPulse | null | undefined): pulse is StepPulse {
-  return !!pulse && (pulse.from != null || pulse.appendOnly === true || (pulse.added?.length ?? 0) > 0 || (pulse.removed?.length ?? 0) > 0)
 }
 
 /** Previous length of a pulse (for synthesising a mapping). */
@@ -3923,7 +3817,6 @@ function roundedRectPath(x: number, y: number, w: number, h: number, r: number):
   // CP2 offset = r * C (the smaller offset, closer to the end point)
   const c = 0.448084975506
   const kr1 = r * (1 - c) // CP1 offset (from start, toward end)
-  const kr2 = r * c       // CP2 offset (from end, toward start)
   const fmt = (v: number) => {
     const n = Math.round(v * 1000) / 1000
     return String(n)
@@ -4981,7 +4874,6 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
   }
 
   // --- Symbol legend (discrete) ---
-  const n = domain.length
 
 
   // --- Symbol legend geometry (orient-independent: vertical entries; the
@@ -5423,20 +5315,6 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
 }
 
 
-
-function scaleTickPosition(scale: Scale, t: unknown): number {
-  return (scale(t) as number) + (scale.bandwidth ? scale.bandwidth() / 2 : 0)
-}
-
-function roundedPos(scale: Scale, t: unknown): number {
-  const pos = scaleTickPosition(scale, t)
-  const bw = scale.bandwidth ? scale.bandwidth() : 0
-  // Band scales: vega applies the `axisBand` tickOffset (-0.5) correction and
-  // rounds — equivalent to flooring the band center. Point scales have a
-  // zero-width band and round the plain scale value.
-  if (bw > 0) return Math.floor(pos)
-  return Math.round(pos)
-}
 
 /**
  * vega-view-transforms' Overlap, for guide labels. `method`: true/'parity' hides
@@ -5941,8 +5819,6 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     // When the domain is empty no ticks/labels are produced, the extent is 0,
     // and the title sits closer to the axis (titlePadding + baseline shift).
     const hasTickMarks = ticks.length > 0
-    const ticksOn = axis.ticks !== false && hasTickMarks
-    const labelsOn = axis.labels !== false && hasTickMarks
     const titlePadding = (axis as { titlePadding?: number }).titlePadding ?? 4
     // Vega lays out the axis title beyond the axis content bounds:
     //   extent = (ticks ? tickSize + 0.5 : 0) + (labels ? labelPadding + 9.5 : 0)
@@ -5961,7 +5837,6 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     // Title style properties (vega applies them through the title layout;
     // the baseline offsets scale with the resolved fontSize).
     const titleFs = (axis as { titleFontSize?: number }).titleFontSize ?? 11
-    const baseUp = Math.round(0.79 * titleFs)
     const titleOpacity = (axis as { titleOpacity?: number }).titleOpacity
     const titleColor = (axis as { titleColor?: string }).titleColor
     // vega's 'guide-title' style defaults fontWeight to bold (guide titles
