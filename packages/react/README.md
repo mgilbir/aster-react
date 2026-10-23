@@ -1,19 +1,20 @@
 # @aster/react
 
-Idiomatic React bindings for Aster Charts: `<Chart>` (SVG/canvas, Vega or Vega-Lite
-input), `useChart`, `useSpecData`, `useChartWorker`, SSR/hydration helpers, declarative
-selection/pan/zoom and an accessible scene tree.
+React bindings for Aster Charts: `<Chart>` (SVG or canvas; Vega, or Vega-Lite through an opt-in addon), `useChart`,
+`useSpecData`, `useChartWorker`, streaming components and hooks, SSR/hydration helpers, declarative selection and
+pan/zoom, and an accessible scene tree.
 
 ```tsx
 import { Chart } from '@aster/react'
-// Vega-Lite is opt-in (~23 kB gzip saved when you don't need it):
+// Vega-Lite is opt-in: importing this registers the compiler (and adds its size to your bundle).
 import '@aster/react/vl'
 
-<Chart spec={spec} panZoom tooltip a11y limits={{ maxTimeMs: 2000 }} />
+declare const spec: Record<string, unknown> // a Vega or Vega-Lite spec
+
+export const Demo = () => <Chart spec={spec} panZoom tooltip a11y limits={{ maxTimeMs: 2000 }} />
 ```
 
-Vega specs need only the first import. Without `@aster/react/vl`, a Vega-Lite spec
-throws an error naming the missing import; the addon also has to be imported in a
-worker entry if you compile VL specs there.
+Vega specs need only the first import. Without `@aster/react/vl`, a Vega-Lite spec throws an error naming the missing
+import; if you compile Vega-Lite specs in a worker, import the addon in the worker entry too.
 
-See `docs/API.md`, `docs/INTERACTION.md` and `docs/RELEASE.md` in the repository.
+`react` (^19) is a peer dependency. See `docs/API.md`, `docs/INTERACTION.md` and `docs/RELEASE.md` in the repository.

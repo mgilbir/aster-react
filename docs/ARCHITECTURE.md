@@ -121,7 +121,7 @@ Eager data transforms are dispatched by `applyTransform` in `packages/core/src/t
 
 ## Rendering
 
-The SVG serializer in `packages/core/src/render.ts` walks the `SceneRoot` tree and emits SVG in the structure `vega-scenegraph`'s SVG renderer produces (`mark-*` groups, `role`/`aria-*` attributes, clip paths and gradients as `<defs>`). Key design concerns:
+The SVG serializer in `packages/core/src/render.ts` walks the `SceneRoot` tree and emits SVG that paints what `vega-scenegraph`'s SVG renderer paints, in the same paint order. Marks keep Vega's structure (`mark-*` groups with `role-mark`, clip paths and gradients as `<defs>`); axis, legend and title content is written as flat leaf elements (`line`, `text`, `path`) inside one `<g class="mark-group" role="axis">`-style group, without Vega's per-mark wrapper groups (`mark-rule role-axis-tick`, ...) or the axis/legend `aria-label`. The conformance gate compares painted records (geometry, paint, text, order), not the DOM tree; `class`, `role` and `aria-*` are not compared there (`N-nonvisual` in `packages/conformance/src/normalize.ts`), and accessibility is provided by the accessibility tree (`buildA11yTree`, gated by `pnpm a11y-parity`). Key design concerns:
 
 - **Frame (plot bounds)** — rendered as a path with 0.5-pixel alignment when the view has a stroke, matching Vega's cell boundary; the view content sits in a `<g>` translated by the padding.
 - **Mark dispatch** — `renderGroup` routes on `marktype` (`group`, `line`, `area`, `symbol`, `rect`, `rule`, `text`, `trail`, `path`, `shape`, `geoshape`, `image`, `arc`); each mark kind has one `*Attrs(item, sink)` function (see "Renderers, the DOM patcher and hit testing" above).
@@ -155,6 +155,7 @@ Aster matches Vega's output wherever the oracle can be run; where it deliberatel
 | `bin` without `extent` | derives the extent from the data | "Missing required bin parameter" | Aster extension |
 | `{signal}` in scale `interpolate`/`gamma` | resolved | TypeError in `parseScaleInterpolate` | do not reproduce an upstream crash |
 | Signals written into a running chart: `retained` | renders the fresh result for the new signals (a pure function of its inputs) | the running view retains its first autosize (and some other dataflow state), so its second render can differ from its own fresh render | an incremental session must equal a fresh evaluation; the sweep counts these cases as `retained` and the gate has a ceiling that can only be lowered |
+| SVG DOM structure of guides | flat leaf elements per axis/legend/title; no `role-axis-*` wrapper groups, no `aria-label` on guide groups | nested mark groups with ARIA attributes | the gate compares painted pixels and order; accessibility comes from the a11y tree. A consumer that scrapes Vega's guide class names or ARIA attributes from the SVG will not find them |
 | Unsupported or unknown features | throw a typed error naming the feature | some are silently ignored | no silent wrong charts; see [ERRORS.md](ERRORS.md) |
 | SVG output of dense marks (`denseMarks`) | batched `<path>` chunks; pixel parity gated by `pnpm conformance:batch` | one element per item | node cost of large SVG; opt-out with `denseMarks={false}` |
 | Oracle crashes | not reproduced (TypeErrors upstream) | crash | the sweeps count these as `node-error` |

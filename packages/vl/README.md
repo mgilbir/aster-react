@@ -7,7 +7,13 @@ Use it directly:
 
 ```ts
 import { compile } from '@aster/vl'
-const vegaSpec = compile(vegaLiteSpec)
+
+const vegaLiteSpec = {
+  data: { values: [{ a: 'A', b: 28 }, { a: 'B', b: 55 }] },
+  mark: 'bar',
+  encoding: { x: { field: 'a', type: 'nominal' }, y: { field: 'b', type: 'quantitative' } },
+}
+const vegaSpec = compile(vegaLiteSpec) // a Vega spec; renderSpec(vegaSpec) from @aster/core draws it
 ```
 
 or let `<Chart>`/`useChart` do it by registering the addon once:
@@ -16,8 +22,8 @@ or let `<Chart>`/`useChart` do it by registering the addon once:
 import '@aster/react/vl'
 ```
 
-`@aster/react` is Vega-only by default (the compiler is ~45 kB gzip); the addon is
-the opt-in boundary, mirroring `@aster/core/dom` and `@aster/core/transforms`.
+`@aster/react` is Vega-only by default; the addon is the opt-in boundary, mirroring `@aster/core/dom` and
+`@aster/core/transforms` (its size is in `docs/PERFORMANCE.md`).
 
 ## Contract
 
@@ -94,12 +100,13 @@ ignored.
   `size` constants or conditions on bars and ticks (a size *field* works), `x`/`y`/`x2`/`y2`/
   `theta`/`theta2`/`radius2` mark-def constants.
 - Layout: `width` / `height: "container"` on a composition (only a top-level unit or layer),
-  the view `background` property, data generators
-  (`sequence`, `sphere`, `graticule`) and `data: null`, config keys outside the supported list,
-  nestings outside `SUPPORTED_NESTING` (for example a facet in a concat), layer repeats combined
-  with row / column, layers whose scales are incompatible or conflict, a facet of layers over
-  different data, horizontal boxplots, `argmax` / `argmin` in sorts and window transforms,
-  `regression` `params: true`, key-value `keyvals` ranges, sort arrays of DateTime objects.
+  data generators (`sequence`, `sphere`, `graticule`) and `data: null`, config keys outside the
+  supported list, nestings outside `SUPPORTED_NESTING` (a facet inside a facet, a concat inside a
+  layer: the Vega-Lite schema forbids both), layer repeats combined with row / column, layers
+  whose scales are incompatible or conflict, a facet of layers over different data, horizontal
+  boxplots, `argmax` / `argmin` as an op of an `aggregate` or `window` transform (and as a channel
+  aggregate of a composite mark), `regression` `params: true`, key-value `keyvals` ranges, sort
+  arrays of DateTime objects.
 
 ## Known runtime gaps (Aster, not the compiler)
 

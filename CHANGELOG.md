@@ -18,6 +18,26 @@
 - **Dense SVG streams**: an append no longer re-scans every full chunk of a 100k-symbol mark (patch 1.8 ms to
   0.8 ms); `bench:incremental` gates it against a full mount. The browser stream bench states its symbol fill
   (vega draws a bare symbol filled; the old numbers measured an empty layer).
+- **Release tooling and docs (audit C75, C77, C79, C80-C82, C86, C87, C89)**:
+  - `pnpm verify:publish` packs with `pnpm pack` (what the release uses), fails on any `workspace:` range in a packed
+    manifest, installs the tarballs with `npm install` into a scratch project (offline), imports every declared export
+    entry and typechecks a consumer file (`module: nodenext`).
+  - `.github/workflows/release.yml`: version tags only, a read-only `verify` job (tag equals every package version,
+    commit on main, `pnpm check`, `pnpm pack`) and a separate `publish` job in the protected `npm-release`
+    environment that alone holds `id-token: write` and installs nothing; actions pinned by commit SHA.
+    `scripts/release-workflow.test.mjs` asserts this on the workflow file.
+  - `THIRD_PARTY_NOTICES.md` carries the verbatim `LICENSE` texts of every ported project (`vega-*`, Vega-Lite, `d3-*`,
+    `delaunator`, `robust-predicates`, `internmap`, `topojson-client`, the d3-cloud notice); `scripts/notices.test.mjs`
+    checks them against `node_modules` and that every upstream name the sources port is listed.
+  - `pnpm bench:incremental` fails below measured floors; `budget.mjs` refuses a stale `dist`, has an
+    `@aster/core/load` row, and its ceilings are measured + 0.5 kB.
+  - README, ARCHITECTURE, ROADMAP, API, INTERACTION, LIMITS, ERRORS, FONTS, PERFORMANCE, TESTING, RELEASE, the ADRs and
+    the package READMEs describe the current code; measured numbers appear only with the command that produced them
+    (docs/TESTING.md, docs/PERFORMANCE.md). The README minimal example uses `data: [{ name, values }]` and runs.
+  - Removed dead code: the five unimported `.d.ts` module shims, `scale-d3` `band`/`point`, VL `overlayFilled` and
+    `intervalParams`, the compiler's `resolveSizeSpec`, and unreferenced runtime helpers. Added root scripts
+    `bench:differential` and `bench:pipeline`.
+
 - **Guides driven by signals, like vega (sweep-signals: 30 differences to 0, now a blocking gate)**: every
   axis and legend property may be a signal and a signal may hold anything; an axis `orient` signal is
   resolved when its value is known (any orient but the four is a vertical axis at the origin whose layout
@@ -65,7 +85,7 @@
   scales and legends, collision-free generated names, and `compile` never
   mutates its input. `conformance-vl` now renders our output through real vega
   and fails on vega errors or warnings. The opt-in `@aster/react/vl` bundle row
-  grew to ~189 kB gzip (proposed budget 190 kB, pending approval). Core: domain `sort: {op}` uses Vega's
+  grew with it (budgets and sizes: docs/PERFORMANCE.md). Core: domain `sort: {op}` uses Vega's
   aggregate ops and ordinal `{scheme}` ranges resolve to colours.
 - **Loader URL policy (breaking default)**: `loadSpecData(spec, options)` now vets every URL
   (protocols `http:`/`https:` only, no credentials, loopback/private/link-local hosts denied,
@@ -102,17 +122,17 @@
   index mapping plus added/removed ranges. The runtime propagates length-changing
   pulses through row-wise, filter, fold/flatten, grouped and 1:1 geo/hierarchy
   transforms, and scene items splice instead of rebuilding. `pnpm bench:incremental`
-  gates that an append is cheaper than a full re-evaluate.
+  gates that an append, a whole-array replacement and a DOM patch each beat their baseline by a measured floor.
 - **Streaming API**: `createChartStream` (bounded queue, `coalesce`/`drop-oldest`/
   `drop-newest`/`error` policies, explicit `pending()`/`flush()`/`pulse()` and stats).
   Added compact append-only pulses, O(appended) stream snapshots/mark splicing/bounds
   and continuous-domain updates, `useChartStream` for React, and
   `useChartWorkerStream` + `handleChartWorkerStreamRequest` for worker offload.
   `collect`/`sample`/`aggregate`/`joinaggregate` now have append fast paths.
-- **Performance gate**: `pnpm bench:incremental` runs in CI (10k/30) and nightly
-  (100k/40); measured ~29x and ~216x cheaper than a full evaluate at the median. The
-  benchmark also runs a direct Vega baseline (`view.change(...).run()`, renderer
-  `none`): aster's append is ~13x cheaper at 10k and ~62x at 100k on the same workload.
+- **Performance gate**: `pnpm bench:incremental` runs in CI (10k points, 30 updates) and nightly
+  (100k/40) and fails below measured floors (append 8x, whole-array replace 8x, DOM patch 1.6x; about half of the
+  slowest run measured when they were set). It also runs a direct Vega baseline (`view.change(...).run()`, renderer
+  `none`) on the same workload. Measured results: docs/PERFORMANCE.md.
 - **Streaming rendering**: `<ChartStream>`/`<ChartWorkerStream>` render streamed
   scenes through the existing DOM patcher/canvas backend/interaction/a11y tree instead
   of re-serializing SVG per flush. `useChartStream`/`useChartWorkerStream` gained
@@ -120,73 +140,60 @@
   worker protocol now reports queued depth and per-batch acceptance.
 - **Streaming frame pacing**: `flushPolicy: 'microtask' | 'raf'` on the stream hooks;
   a real-browser `<ChartStream>` benchmark (`pnpm bench:browser-stream`) covering
-  SVG/canvas, long frames, DOM mutations and node counts. Canvas path/symbol caches,
-  solid-paint bbox skipping and batched same-paint symbol runs bring a 10k-point
-  one-append-per-frame stream to ~16.7ms median frames with no long frames on SVG
-  and canvas; 100k canvas frames dropped from ~52ms to ~16.7ms via incremental append painting (only new mark items are drawn; full repaints still fall back safely).
-  The runner now includes a direct Vega `view.change` baseline on the identical spec
-  and row stream (SVG/canvas, `run`/`runAsync`): at 100k points Vega needs ~170ms per
-  SVG frame vs aster's ~77ms and reports ~2.3% long frames / ~240 DOM mutations per
-  append at 10k (aster: 0% long, ~1 mutation); both are frame-bound on canvas.
+  SVG/canvas, long frames, DOM mutations and node counts, with a direct Vega `view.change`
+  baseline on the identical spec and row stream (SVG/canvas, `run`/`runAsync`). Canvas path/symbol
+  caches, solid-paint bbox skipping, batched same-paint symbol runs and incremental append painting
+  (only new mark items are drawn; full repaints still fall back safely) keep canvas streams frame-bound.
+  Measured results: docs/PERFORMANCE.md.
 - **No-op re-renders**: identical-content re-renders (fresh spec object, stable data)
-  went from 2.0–2.4ms with 2 DOM mutations to ~0.3ms with none (Vega wrappers
-  0.1–0.2ms). `<Chart>` no longer calls `getChartInfo()` (a second compile+evaluate)
+  no longer mutate the DOM. `<Chart>` no longer calls `getChartInfo()` (a second compile+evaluate)
   from an effect: interaction/a11y metadata derives from the evaluated scene via
   `chartInfoFromScene`. The markup string also leaves the props after the first
   commit — React re-applies a present `dangerouslySetInnerHTML`, so the cached
   string was making every "incremental" render re-parse the whole SVG. Mount skips
   the now-redundant patch, canvas skips identical scenes, and `patchSceneDom` gained
-  an identity-prefix append path (O(appended) instead of re-walking siblings), which
-  also cut 100k-point SVG stream frames to ~77ms.
+  an identity-prefix append path (O(appended) instead of re-walking siblings).
 - **Vega-Lite is opt-in**: the from-scratch VL compiler now lives behind
-  `import '@aster/react/vl'` instead of being imported by the base `<Chart>` entry
-  (~23 kB gzip saved). Vega specs need no addon (as before); a VL spec without it
+  `import '@aster/react/vl'` instead of being imported by the base `<Chart>` entry.
+  Vega specs need no addon (as before); a VL spec without it
   throws an error naming the exact import, and `registerVegaLiteCompiler` /
   `hasVegaLiteCompiler` are exported for hosts that compile VL themselves. Worker
-  hosts import the addon in the worker entry. `@aster/react` measures 136.0 kB gzip
-  (Vega only) / 158.4 kB with the addon; the budget gate now covers both entries
-  (160 kB each), replacing the single 159 kB budget that had 0.6 kB of headroom.
+  hosts import the addon in the worker entry. The budget gate covers both entries
+  (`@aster/react` and `@aster/react/vl`) separately; sizes are in docs/PERFORMANCE.md.
 - **Evaluation skips overflow padding for fixed-size charts**: with
   `autosize: 'none'` the evaluator no longer measures every top-level group's
-  recursive bounds (Vega's viewSizeLayout does not grow such a viewport). Line
-  @1k browser update 4.1 → 3.1ms, 5k full evaluate 1.5 → 1.2ms, 50k differential
-  full re-encode 59 → 54ms, 100k same-array replacement ~16 → ~10ms; differential
-  speedups rise accordingly (fixed-scale symbol 12x → 54x, row-wise 18x → 42x).
+  recursive bounds (Vega's viewSizeLayout does not grow such a viewport), which was the
+  dominant cost of a one-row update on a large chart; the differential speedups rise
+  accordingly (docs/PERFORMANCE.md).
   `autosize: pad/fit` charts keep the full pass; conformance output is unchanged.
 - **Faster row diff**: `rowsEqual` uses `for...in` (no `Object.keys` allocations)
-  for plain rows, ~1.5x faster auto-pulse inference on wholesale array replacement.
+  for plain rows: faster auto-pulse inference on wholesale array replacement.
 - **Publish artifacts are tested**: new `pnpm verify:publish` packs every public
   package, asserts the tarball carries `LICENSE` + `THIRD_PARTY_NOTICES.md`
   (copied by a `prepack` step) plus `dist`/types, then extracts the tarballs into
   a clean `node_modules` and imports every declared entry (`@aster/core` addons,
   `@aster/react`, `/vl`, `/ssr`, `/worker`) to render Vega and Vega-Lite specs.
-  It runs in CI, nightly and the release workflow. This caught a real packaging
+  It runs in `pnpm check` (CI, nightly and the release workflow), and now packs with `pnpm pack`, fails on a
+  `workspace:` range, installs the tarballs with `npm install`, imports every declared export and typechecks a
+  consumer file. This caught a real packaging
   bug: `@aster/react`'s barrel used extensionless relative imports, which
   bundlers accept but Node ESM rejects (SSR/worker consumers would fail to
   import the published package) — fixed.
 - **Wholesale-array replacement benchmark**: `bench:incremental` now measures the
   `<Chart data={next}>` path (no explicit changes) end to end. The session
-  infers the pulse from the row diff: at 100k points a same-length replacement is
-  ~0.5 ms and an appended row ~1.3 ms vs ~32 ms for a full evaluation (63x).
+  infers the pulse from the row diff; the gate compares it with a full evaluation (docs/PERFORMANCE.md).
 - **Benchmark warm-up**: the jsdom and browser runners mount every embed once
   before measuring and discard a first full pass, removing the first-embed JIT
-  penalty that made the identical `aster`/`asterDom` paths differ by ~1–2 ms.
-- **Dense SVG marks by default**: `denseMarks` now defaults to `'auto'` — symbol
-  marks with ≥512 items batch into chunked `<path>` elements unless the spec uses
-  `signal.on` event streams (`true` forces, `false` disables). Client-only mounts
-  batch directly (100k-point mount ~620 → ~280ms, 100k → 402 nodes); SSR emits the
-  per-item markup so hydration matches, then switches to batched in place.
-  `denseMarks={false}` keeps the per-item DOM.
-- **Dense SVG marks (`denseMarks`)**: opt-in batched symbol rendering for large SVG
-  scenes. Dense symbol marks emit chunked `<path>` elements (positions baked into
-  `d`, ~256 items per chunk) instead of one transformed element per datum: 100k
-  points go from 100k DOM nodes to ~400, and a 100k-point append-per-frame SVG
-  stream from ~79ms to ~16.7ms (0% long frames). Chunks are cached per mark group
-  and only the tail chunk is re-serialized per append; translucent marks stay
-  per-item (compositing), rotated marks keep their element, and tooltips/point
-  selection/a11y resolve through the scene. New `pnpm conformance:batch` rasterizes
-  batched vs per-item DOMs and gates pixel parity. Symbol descriptor build is also
-  cached per group for the normal path (~5.3 → ~3.8ms `patchSceneDom` at 100k).
+  penalty that made identical paths differ.
+- **Dense SVG marks by default**: `denseMarks` defaults to `'auto'`: symbol marks with at least 512 items
+  batch into chunked `<path>` elements (positions baked into `d`, 256 items per chunk) instead of one transformed
+  element per datum, unless the spec uses `signal.on` event streams (`true` forces, `false` disables, and
+  `denseMarks={false}` keeps the per-item DOM). Client-only mounts batch directly; SSR emits the per-item markup so
+  hydration matches, then switches to batched in place. Chunks are cached per mark group and only the tail chunk is
+  re-serialized per append; translucent marks stay per-item (compositing), rotated marks keep their element, and
+  tooltips/point selection/a11y resolve through the scene. `pnpm conformance:batch` rasterizes batched vs per-item
+  DOMs and gates pixel parity. Symbol descriptor build is also cached per group for the normal path. Measured
+  results: docs/PERFORMANCE.md.
 - **Nested scopes / axes**: nested group marks now inherit outer scales (local names
   still shadow), so raw Vega specs that reference a parent `y` or colour scale render
   inside groups (population pyramid). Vega-Lite compilation now emits all grid axes
@@ -226,7 +233,7 @@
   and reuse unchanged items without an explicit `dataChanges` props. Sorted
   window/stack groups now consume dirty-group pulses instead of falling back.
 - **Accessibility**: axe WCAG A/AA audit for the chart tree, guide-caption parity
-  (419/419) against Vega's `aria-label`, and keyboard-operable legend entries
+  against Vega's `aria-label` (`pnpm a11y-parity`), and keyboard-operable legend entries
   (`aria-pressed`) that filter shape/paint series.
 - **Transforms**: transform option matrix (bin/window/stack/joinaggregate/impute/
   fold/flatten/pivot/lookup/sequence/identifier/timeunit/extent), fixing impute
@@ -234,14 +241,12 @@
 - **Text metrics**: pluggable `TextMetricsProvider` on core/`<Chart>` for custom
   fonts and non-browser renderers, with provider-scoped caching and safe fallback.
 
-- **Conformance rigour**: added the scene-level differential (`pnpm scene-diff`,
-  419/419) comparing resolved scale maps per scope, mark/item geometry/paint and
-  overlap paint order against Vega's scenegraph (R8.1–R8.3). Both schema sweeps now
-  have zero comparable differences: Vega 7,538/7,549 (8 both-refused, 3 oracle
-  crashes) and Vega-Lite 27,418/27,513 (40 both-refused, 21 oracle refusals, 34
-  pinned nondeterministic bootstrap aggregates). Closed identity scales, horizontal
-  area baselines, fractional/negative view sizes, log/symlog NaN symbols, title
-  anchors, rotated path bounds, clip-bound epsilons and scene paint order.
+- **Conformance rigour**: added the scene-level differential (`pnpm scene-diff`) comparing resolved
+  scale maps per scope, mark/item geometry/paint and overlap paint order against Vega's scenegraph, and the schema
+  sweeps (`pnpm sweep-vega`, `pnpm sweep-vl`, `pnpm sweep-signals`) with required floors. Results and the
+  commands that produce them: docs/TESTING.md. Closed identity scales, horizontal area baselines,
+  fractional/negative view sizes, log/symlog NaN symbols, title anchors, rotated path bounds, clip-bound
+  epsilons and scene paint order.
 
 - **React interaction**: controlled/uncontrolled pan/zoom (`panZoom`, `view`,
   `onViewChange`, `maxZoom`) with wheel/drag/pinch/keyboard over scale `domainRaw`;
@@ -265,15 +270,12 @@
 - **Docs**: API, errors, limits, testing, fonts, performance, interaction and release
   guides; ADRs 0002–0004.
 
-- Schema sweep: 27,418/27,513 cases match, **0 differ**; the remaining
-  non-ok cases are 40 both-refused specs, 21 oracle refusals and 34 pinned
-  nondeterministic `ci0`/`ci1` bootstrap cases.
 - Closed sweep tails: guide-scale ranges/domains, facet header
   `labelOrient`/`orient`, config axis/header precedence, axis orient/grid
   geometry, label angle anchors, tick/label tails, `values` aggregate
   domains, size-legend grid layout, and `config.point` cross-block geometry.
-- Vega transform parity: full `bin` step/anchor/base/divide/minstep/span/steps
-  options and interval mode, full `window` ops/frames/ignorePeers/params,
+- Vega transform parity: `bin` step/anchor/base/divide/minstep/span/steps
+  options and interval mode (oracle-vector tested), full `window` ops/frames/ignorePeers/params,
   `joinaggregate.key`, and signal-valued `impute.keyvals`.
 - React: `onPointSelect` click selection, `renderTooltip` React slot,
   `useChart` headless hook, canvas redraw scheduling on `requestAnimationFrame`.

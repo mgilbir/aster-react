@@ -37,3 +37,16 @@ provide Workers but not uniformly (SSR, older hosts, jsdom).
 - Worker mode returns a scene without event-loop handles, so interaction that depends
   on signals stays on the main thread unless the host forwards events.
 - The loader addon and worker entry remain separately gateable in the bundle budget.
+
+## Amendments
+
+*2026-10-23, to match the code.*
+
+- `<ChartStream>` renders the full SVG on the server, like `<Chart>`. `<ChartWorkerStream>` and `useChartWorker`
+  have no scene during SSR: the stream component renders an empty loading element and the hook stays pending until
+  an effect runs the worker or its synchronous fallback on the client.
+- Worker requests carry `limits`, and text metrics and URL policies by registered name
+  (`registerWorkerTextMetrics`, `registerWorkerUrlPolicy` from `@aster/react/worker`), because functions do not
+  cross the boundary. A malformed worker message is answered or dropped, never run. Errors come back as
+  `{ name, message, code? }`; a limit error is rehydrated as `AsterLimitError`, every other class as a plain `Error`
+  with its `name` and `code` ([ERRORS.md](../ERRORS.md)).

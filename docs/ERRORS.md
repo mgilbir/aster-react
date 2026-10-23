@@ -172,11 +172,14 @@ Load the matching addon (`@aster/core/geo`, `@aster/core/transforms`, `@aster/co
 
 ### Deliberate differences from Vega
 
-- **Unknown references are not fatal.** `vega.parse` throws on an unknown dataset name in `from.data` (`Undefined data
-  set name`), an unknown signal name (`Unrecognized signal name`) and an unknown expression function
-  (`Unrecognized function`). Aster renders such a spec (the mark is empty, the signal is `undefined`, ...) without a
-  report. An unknown scale `type` is not fatal either: vega throws at parse time, Aster logs it and stops building
-  scales (see the table above).
+- **Unknown dataset and signal names are not fatal.** `vega.parse` throws on an unknown dataset name in `from.data`
+  (`Undefined data set name`) and an unknown signal name (`Unrecognized signal name`). Aster renders such a spec (the
+  mark is empty, the signal is `undefined`, ...) without a report. An unknown scale `type` is not fatal either: vega
+  throws at parse time, Aster logs it and stops building scales (see the table above).
+- **Unknown expression functions are fatal, except in a signal `update`.** A call to an unknown function in a formula,
+  a filter or an encode `signal` throws `ExpressionParseError("Unrecognized function: <name>")` out of the
+  render, as vega's parser does. In a signal `update` expression it does not: the update is skipped, the signal keeps
+  its previous value, and nothing is reported (checked with a `logger`; vega throws from `parse`).
 - **Unknown projection type.** Without the geo addon Aster throws the "load the addon" error above. With it, an
   unrecognised projection type throws `Unrecognized projection type: <type>` (a plain `Error` without the `[aster]`
   prefix) out of the render, where vega logs the same message and renders without the projection.
@@ -200,6 +203,10 @@ Load the matching addon (`@aster/core/geo`, `@aster/core/transforms`, `@aster/co
   with the prefix), and `[aster] stratify requires a key field`.
 - **Circular data reference** — named datasets cannot form a cycle: `[aster] circular data reference: <name>`.
 - **Scale domain with a non-string `data`** — `SpecParseError` (`Undefined data set name: ...`), as vega's parser.
+- **Unknown expression function** — a call to a name that is not a built-in, a registered function (see
+  `registerExpressionFunction`), `if` or an event function throws `ExpressionParseError("Unrecognized function:
+  <name>")` when the expression is compiled (vega: from its code generator). A function whose registration was
+  disposed is treated the same way, including by expressions compiled before the disposal.
 - **Expression functions** — `registerExpressionFunction` throws `[aster] registerExpressionFunction: "<name>" is not
   a plain identifier | is already an expression function, constant or keyword | needs a function`.
 - **`bin`** — `[aster] bin: cannot derive a step size from base, maxbins and the data span` where vega would loop

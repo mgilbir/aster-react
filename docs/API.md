@@ -131,6 +131,12 @@ off() // removes it
 ```
 
 `registerExpressionFunction` returns the function that removes the registration (restoring the one it replaced).
+As in vega's code generator, a call to a name that is not a function of the current context is refused when the
+expression is compiled, with `ExpressionParseError("Unrecognized function: <name>")`, not when the call is first
+evaluated (the built-ins, the registered functions, `if` and the event functions `x`, `y`, `xy`, `item`, `group`,
+`view` are known). The check follows the registry: removing a registration (or replacing it) makes expressions
+compiled earlier re-validate the next time they run, so a call to a function you removed throws the same error
+instead of calling a stale closure, and a replaced function is called in its new form.
 The registry is global, as vega's is. A registered function is host code: the engine does not sandbox or meter it,
 and a spec decides its arguments, so register only functions that are safe for any arguments a spec you render can
 produce. A name that is not a plain identifier, or that an expression already means something by (a built-in
@@ -377,9 +383,9 @@ specs:
 import '@aster/react/vl'   // side effect: registers the from-scratch VL compiler
 ```
 
-The base `@aster/react` entry does not include the Vega-Lite compiler; importing `@aster/react/vl` adds about 52.6 kB
-gzip to the bundle (`@aster/react` 160.1 kB, `@aster/react/vl` 212.7 kB, measured by
-`pnpm --filter @aster/benchmarks run budget`). Passing a VL spec without the addon throws an error naming the missing
+The base `@aster/react` entry does not include the Vega-Lite compiler; importing `@aster/react/vl` adds about 52.7 kB
+gzip to the bundle (`@aster/react` 160.2 kB, `@aster/react/vl` 212.9 kB, measured by
+`pnpm --filter @aster/benchmarks run budget`; see [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the addon throws an error naming the missing
 import. Vega specs need no extra import. Worker hosts must import `@aster/react/vl` in the worker entry as well,
 since compilation happens there.
 
