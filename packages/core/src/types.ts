@@ -39,6 +39,13 @@ export interface RuntimeInput {
   /** Static signal values for signals that are referenced but not event-driven. */
   signals?: Record<string, unknown>
   /**
+   * The size of the element the chart fills, in pixels: what `containerSize()`
+   * returns in expressions (vega-lite's `width: "container"` reads it). Without
+   * it `containerSize()` is `[undefined, undefined]`, as in headless vega, and
+   * the spec falls back to its own default size.
+   */
+  containerSize?: { width: number; height: number }
+  /**
    * Partial re-evaluation: the names of datasets whose VALUES changed since
    * the previous evaluate (the datasets' transform pipeline re-runs, and only
    * the marks drawing from them — directly or via a derived source chain —
@@ -454,8 +461,10 @@ export interface CompiledMark {
   title?: unknown
   /** Nested marks within a group. */
   marks?: CompiledMark[]
-  /** Axis specifications within a group (nested scope). */
+  /** Axis specifications within a group (nested scope), with the view's config defaults applied. */
   axes?: CompiledAxis[]
+  /** Legend specifications within a group (nested scope), with the view's config defaults applied. */
+  legends?: CompiledLegend[]
   /** Scale specifications within a group (resolved against the group's size). */
   scales?: CompiledScale[]
   /** Data sets declared within a group's scope. */

@@ -39,11 +39,6 @@ export function compileChart(rawSpec: VgSpec): CompiledChart {
   const signals = resolveSignals(signalDefs)
   const cfg = (spec.config ?? {}) as Record<string, unknown>
   const cfgStyle = (cfg.style ?? {}) as Record<string, Record<string, unknown>>
-  const cfgAxis = (cfg.axis ?? {}) as Record<string, unknown>
-  const cfgAxisX = (cfg.axisX ?? {}) as Record<string, unknown>
-  const cfgAxisY = (cfg.axisY ?? {}) as Record<string, unknown>
-  const cfgAxisBand = (cfg.axisBand ?? {}) as Record<string, unknown>
-  const cfgLegend = (cfg.legend ?? {}) as Record<string, unknown>
   const background = (spec.background as string | null | undefined) ?? (cfg.background as string | null | undefined) ?? null
   const padding = normalizePadding(spec.padding as unknown)
   // Collect signal names before resolving them
@@ -82,29 +77,12 @@ export function compileChart(rawSpec: VgSpec): CompiledChart {
     scales.push(compileScale(s))
   }
 
-  const axes: CompiledAxis[] = []
-  for (const a of (spec.axes as Array<Record<string, unknown>>) ?? []) {
-    // vega axisConfig precedence (vega-parser axisConfig): axis < axisX/axisY
-    // (by orient) < axis<Orient> < axisBand (band scales) — later wins; the
-    // axis def itself then wins over every block.
-    const orient = String(a.orient ?? '')
-    const defaults: Record<string, unknown> = { ...cfgAxis }
-    Object.assign(defaults, orient === 'top' || orient === 'bottom' ? cfgAxisX : cfgAxisY)
-    const orientBlock = (cfg as Record<string, Record<string, unknown>>)[`axis${orient.charAt(0).toUpperCase()}${orient.slice(1)}`]
-    if (orient && typeof orientBlock === 'object') Object.assign(defaults, orientBlock)
-    const sc = scales.find((s) => s.name === a.scale)
-    if (sc?.type === 'band') Object.assign(defaults, cfgAxisBand)
-    axes.push(compileAxis(applyConfigDefaults(a, defaults, scales)))
-  }
-
-  const legends: CompiledLegend[] = []
-  for (const l of (spec.legends as Array<Record<string, unknown>>) ?? []) {
-    legends.push(compileLegend(applyConfigDefaults(l, cfgLegend, undefined, true)))
-  }
+  const axes = compileGuideAxes(spec.axes as Array<Record<string, unknown>> | undefined, cfg, scales)
+  const legends = compileGuideLegends(spec.legends as Array<Record<string, unknown>> | undefined, cfg)
 
   const marks: CompiledMark[] = []
   for (const m of (spec.marks as Array<Record<string, unknown>>) ?? []) {
-    marks.push(compileMark(m, cfgStyle, cfg as Record<string, Record<string, unknown>> | undefined))
+    marks.push(compileMark(m, cfgStyle, cfg as Record<string, Record<string, unknown>> | undefined, scales))
   }
 
   const title = compileTitle(spec.title, spec.config as Record<string, unknown> | undefined)
@@ -336,6 +314,41 @@ function compileScale(s: Record<string, unknown>): CompiledScale {
   return out as unknown as CompiledScale
 }
 
+/**
+ * The axes of one scope (the view or a group mark) with their config defaults.
+ * vega applies the same lookup at every level - the config is the view's, the
+ * scales are those the scope can see - so a nested group's axes follow
+ * `config.axis` exactly as the top-level ones do (C51).
+ */
+function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: Record<string, unknown>, scales: CompiledScale[]): CompiledAxis[] {
+  const cfgAxis = (cfg.axis ?? {}) as Record<string, unknown>
+  const cfgAxisX = (cfg.axisX ?? {}) as Record<string, unknown>
+  const cfgAxisY = (cfg.axisY ?? {}) as Record<string, unknown>
+  const cfgAxisBand = (cfg.axisBand ?? {}) as Record<string, unknown>
+  const axes: CompiledAxis[] = []
+  for (const a of raw ?? []) {
+    // vega axisConfig precedence (vega-parser axisConfig): axis < axisX/axisY
+    // (by orient) < axis<Orient> < axisBand (band scales) - later wins; the
+    // axis def itself then wins over every block.
+    const orient = String(a.orient ?? '')
+    const defaults: Record<string, unknown> = { ...cfgAxis }
+    Object.assign(defaults, orient === 'top' || orient === 'bottom' ? cfgAxisX : cfgAxisY)
+    const orientBlock = (cfg as Record<string, Record<string, unknown>>)[`axis${orient.charAt(0).toUpperCase()}${orient.slice(1)}`]
+    if (orient && typeof orientBlock === 'object') Object.assign(defaults, orientBlock)
+    // the innermost scale of that name wins (a group's own scale shadows the view's)
+    const sc = [...scales].reverse().find((s) => s.name === a.scale)
+    if (sc?.type === 'band') Object.assign(defaults, cfgAxisBand)
+    axes.push(compileAxis(applyConfigDefaults(a, defaults, scales)))
+  }
+  return axes
+}
+
+/** The legends of one scope with `config.legend` defaults (see {@link compileGuideAxes}). */
+function compileGuideLegends(raw: Array<Record<string, unknown>> | undefined, cfg: Record<string, unknown>): CompiledLegend[] {
+  const cfgLegend = (cfg.legend ?? {}) as Record<string, unknown>
+  return (raw ?? []).map((l) => compileLegend(applyConfigDefaults(l, cfgLegend, undefined, true)))
+}
+
 function compileAxis(a: Record<string, unknown>): CompiledAxis {
   const out: CompiledAxis = {
     scale: a.scale as string,
@@ -409,16 +422,6 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
 function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string, unknown>, scales?: CompiledScale[], isLegend = false): Record<string, unknown> {
   if (!defaults || typeof defaults !== 'object') return o
   const out: Record<string, unknown> = { ...defaults, ...o }
-  // vega's `axisBand` style (tickOffset -0.5) is consulted through the guide
-  // fallback BEFORE config.axis on band-scale axes (axis-config.js: `band =
-  // scaleType === 'band' && config.axisBand`), so a config.tickOffset cannot
-  // override it there — but on every other scale the config value applies.
-  // Drop the config value only for band-scale axes and let the runtime
-  // default (the -0.5) apply.
-  if ('tickOffset' in defaults && !('tickOffset' in o) && scales) {
-    const sc = scales.find((s) => s.name === o.scale)
-    if (sc && (sc.type === 'band')) delete out.tickOffset
-  }
   // `position` is read as `spec.position` in vega's buildAxisEncode — never
   // through the `lookup(spec, config)` — so a config block's copy is dead
   // upstream.  Drop it too, or a config theme would reshift every axis.
@@ -538,7 +541,7 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
   Object.assign(update, defaults)
 }
 
-function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>): CompiledMark {
+function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>, scopeScales: CompiledScale[] = []): CompiledMark {
   const m = { ...m0 }
   if (cfgStyle || cfgMarktype) applyStyleDefaults(m, cfgStyle ?? {}, cfgMarktype)
   const out: CompiledMark = {
@@ -563,9 +566,14 @@ function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Reco
   if (m.sort !== undefined) out.sort = m.sort as CompiledMark['sort']
   if (m.title !== undefined) out.title = m.title as CompiledMark['title']
   if (m.layout !== undefined) out.layout = m.layout as Record<string, unknown>
-  if (m.marks !== undefined) out.marks = (m.marks as Array<Record<string, unknown>>).map((nm) => compileMark(nm, cfgStyle, cfgMarktype))
-  if ((m as any).axes !== undefined) out.axes = ((m as any).axes as Array<Record<string, unknown>>).map(compileAxis)
+  // a group's own scales are visible to its axes and its children, after the enclosing scope's
   if ((m as any).scales !== undefined) out.scales = ((m as any).scales as Array<Record<string, unknown>>).map(compileScale)
+  const inScope = out.scales ? [...scopeScales, ...out.scales] : scopeScales
+  if (m.marks !== undefined) out.marks = (m.marks as Array<Record<string, unknown>>).map((nm) => compileMark(nm, cfgStyle, cfgMarktype, inScope))
+  // a nested group's axes and legends are compiled like the view's: same config lookups (C51)
+  const cfgAll = (cfgMarktype ?? {}) as unknown as Record<string, unknown>
+  if ((m as any).axes !== undefined) out.axes = compileGuideAxes((m as any).axes as Array<Record<string, unknown>>, cfgAll, inScope)
+  if ((m as any).legends !== undefined) out.legends = compileGuideLegends((m as any).legends as Array<Record<string, unknown>>, cfgAll)
   if ((m as any).data !== undefined) out.data = ((m as any).data as Array<Record<string, unknown>>).map(compileData)
   if (Array.isArray(m.transform)) {
     out.transform = (m.transform as Array<Record<string, unknown>>).map(compileTransform)
