@@ -383,9 +383,9 @@ function bindSignalEventsDefs(
       const hit = opts.pick(p[0] + originX, p[1] + originY)
       picked = hit ? { marktype: hit.marktype, ...hit } as PickedItem : null
       if (picked && sceneInfo) picked = sceneInfo.describe(picked)
-    } else {
-      picked = domPick(svg, e.target)
     }
+    // no picker, or it found nothing under the pointer (e.g. no layout): what the DOM under the event says
+    if (!picked) picked = domPick(svg, e.target)
     return picked ? itemFacade(picked) : undefined
   }
 
