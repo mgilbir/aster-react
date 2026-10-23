@@ -14,13 +14,13 @@ import { describe, it, expect } from 'vitest'
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-function compile(rootFiles: string[]): ts.Diagnostic[] {
+function compile(rootFiles: string[], paths?: Record<string, string[]>): ts.Diagnostic[] {
   const cfgPath = join(PKG, 'tsconfig.json')
   const cfg = ts.readConfigFile(cfgPath, ts.sys.readFile)
   const parsed = ts.parseJsonConfigFileContent(cfg.config, ts.sys, PKG)
   const program = ts.createProgram({
     rootNames: rootFiles.map((f) => join(PKG, 'type-fixtures', f)),
-    options: { ...parsed.options, noEmit: true },
+    options: { ...parsed.options, noEmit: true, ...(paths ? { baseUrl: PKG, paths } : {}) },
   })
   return ts.getPreEmitDiagnostics(program).filter((d) => d.category === ts.DiagnosticCategory.Error)
 }
@@ -66,5 +66,28 @@ describe('<Chart> / <SvgChart> parity is enforced by the compiler', () => {
       .filter((d) => d.file?.fileName.endsWith('parity.assert.ts'))
       .map((d) => src[d.file!.getLineAndCharacterOfPosition(d.start!).line]!)
     expect(failing.some((l) => l.includes(`type ${assertion} `)), diags.map(where).join('\n')).toBe(true)
+  }, 120_000)
+})
+
+// The documentation's own examples: each fixture under type-fixtures/docs is a code block of the docs, verbatim.
+// It must still be in the document, and it must compile against the source (the package specifiers are mapped to it).
+describe('the documented <SvgChart> examples compile', () => {
+  const REPO = join(PKG, '..', '..')
+  const examples: Array<[string, string]> = [
+    ['docs/api-svgchart-1.tsx', join(REPO, 'docs', 'API.md')],
+    ['docs/api-svgchart-2.tsx', join(REPO, 'docs', 'API.md')],
+    ['docs/readme-lite.tsx', join(PKG, 'README.md')],
+  ]
+  const paths = {
+    '@aster/react/lite': ['src/lite.ts'],
+    '@aster/react/interaction': ['src/interaction-capability.ts'],
+    '@aster/react': ['src/index.ts'],
+  }
+  it.each(examples)('%s is in %s verbatim', (fixture, doc) => {
+    const code = readFileSync(join(PKG, 'type-fixtures', fixture), 'utf8')
+    expect(readFileSync(doc, 'utf8').includes(code)).toBe(true)
+  })
+  it('compile (the `@ts-expect-error` line in the second must really be an error)', () => {
+    expect(compile(examples.map(([f]) => f), paths).map(where)).toEqual([])
   }, 120_000)
 })

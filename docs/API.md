@@ -384,7 +384,7 @@ import '@aster/react/vl'   // side effect: registers the from-scratch VL compile
 ```
 
 The base `@aster/react` entry does not include the Vega-Lite compiler; importing `@aster/react/vl` adds about 54.2 kB
-gzip to the bundle (`<Chart>` 156.5 kB, `<Chart>` + `@aster/react/vl` 210.7 kB, measured by
+gzip to the bundle (`<Chart>` 157.2 kB, `<Chart>` + `@aster/react/vl` 211.3 kB, measured by
 `pnpm --filter @aster/benchmarks run budget`; see [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the addon throws an error naming the missing
 import. Vega specs need no extra import. Worker hosts must import `@aster/react/vl` in the worker entry as well,
 since compilation happens there.
@@ -421,6 +421,88 @@ point selection and the a11y tree resolve through the scene.
 
 Pan, zoom and brushing are driven through scale `domainRaw`; the gestures, the keyboard contract and the rule that
 picks the scales are in `docs/INTERACTION.md`.
+
+### `<SvgChart>` and the `interaction` capability
+
+`<SvgChart>` is the light chart for size-sensitive apps: the same engine and the same DOM as `<Chart renderer="svg">`
+(it is a second shell over the one implementation, see [ARCHITECTURE.md](ARCHITECTURE.md#chartcore-and-the-two-shells)),
+minus what an SVG-only app does not use. It lives in its own entry and never imports the canvas renderer.
+
+```tsx
+import * as React from 'react'
+import { SvgChart } from '@aster/react/lite'
+import { interaction } from '@aster/react/interaction'
+import type { VgSpec } from '@aster/core'
+
+const spec: VgSpec = {
+  width: 300,
+  height: 200,
+  data: [{ name: 'table', values: [{ v: 1 }, { v: 2 }, { v: 3 }] }],
+  scales: [
+    { name: 'x', type: 'linear', domain: { data: 'table', field: 'v' }, range: 'width' },
+    { name: 'y', type: 'linear', domain: { data: 'table', field: 'v' }, range: 'height' },
+  ],
+  marks: [{ type: 'symbol', from: { data: 'table' }, encode: { enter: { x: { scale: 'x', field: 'v' }, y: { scale: 'y', field: 'v' } } } }],
+}
+
+export function Static(): React.ReactElement {
+  // Renders, pans/zooms, brushes an interval (`onSelect`, `brush`), binds inputs, builds the accessible tree.
+  return <SvgChart spec={spec} panZoom onSelect={(interval) => { console.log(interval) }} />
+}
+
+export function Interactive(): React.ReactElement {
+  // Tooltips, point selection and the spec's `signal.on` event streams need the capability, passed as a prop.
+  return <SvgChart spec={spec} interaction={interaction} tooltip onPointSelect={(datum) => { console.log(datum) }} />
+}
+```
+
+**The capability.** `interaction` (from `@aster/react/interaction`) is a plain frozen value bundling hit testing
+(`@aster/core/hit`) and the signal event loop (`@aster/core/signals`: `bindSceneSignals`, `stampDatumAttrs`). It is passed as
+a prop: there is no registry, no global and no side-effect import (`sideEffects` needs no entry), so a bundler drops it
+when it is not imported and `<SvgChart>` without it contains none of that code. `<Chart>` has it built in.
+
+**Typing.** `SvgChartProps` is a union on `interaction`. These props exist only with it, and passing one without it is a
+compile error: `tooltip`, `renderTooltip`, `onPointSelect`, `selection`, `select`, `onSelectionChange` (a click resolves
+the mark under the pointer through the hit index) and `preventDefault` (it acts on the `signal.on` event loop).
+`renderer` does not exist on `<SvgChart>` (it is always SVG). Every other `ChartProps` key is shared with the SAME type, and
+the ref (`SvgChartHandle`) has every `ChartHandle` member; `src/parity.assert.ts` makes the compiler enforce both, so a prop
+added to `<Chart>` without a decision about `<SvgChart>` fails `pnpm typecheck`.
+
+```tsx
+import * as React from 'react'
+import { SvgChart } from '@aster/react/lite'
+import { interaction } from '@aster/react/interaction'
+import type { VgSpec } from '@aster/core'
+
+declare const spec: VgSpec
+
+export const ok = <SvgChart spec={spec} interaction={interaction} tooltip />
+// @ts-expect-error `tooltip` needs the interaction capability: pass interaction={interaction}
+export const missing = <SvgChart spec={spec} tooltip />
+```
+
+A conditional `interaction={maybe}` typed `InteractionCapability | undefined` does not satisfy either arm of the union;
+branch on it, or render `<SvgChart>` with and without the prop.
+
+**At runtime, never a silently dead chart.** Types cannot see a spec's `signal.on` streams, and JS callers have no types, so
+the component itself reports every feature it cannot provide. It still renders what it can (an error state would throw
+away a correct picture; this is the same stance as a rejected `dataChanges` changeset, not the render-error stance of a
+missing Vega-Lite compiler, where nothing meaningful can be drawn). The report goes to `onError` as an `Error` (else to
+`logger.warn`, else `console.warn`), once per distinct problem, from an effect (so not during SSR):
+
+| Situation | Message |
+|---|---|
+| a spec with `signal.on` streams, no `interaction` | `[aster] this spec has event streams (signal.on) but no event loop is bound: pass interaction={interaction} from '@aster/react/interaction'` |
+| `tooltip`, `renderTooltip`, `onPointSelect`, `selection`, `select`, `onSelectionChange` or `preventDefault` without `interaction` (ignored) | `[aster] tooltip, … need hit testing and the signal event loop and are ignored: pass interaction={interaction} from '@aster/react/interaction'` |
+| `renderer="canvas"` (renders SVG) | `[aster] renderer="canvas" needs <Chart>: <SvgChart> has no canvas renderer, so it renders SVG` |
+
+Without `interaction`, `setSignal` and bound inputs (`signal.bind`) still work as signal overrides, exactly as on
+`<Chart renderer="canvas">`; the spec's `signal.on` updates do not run. Server markup is identical with or without
+`interaction`, except that a spec with event streams gets no `data-datum` attributes without it (nothing reads them).
+
+Sizes (gzip, `pnpm --filter @aster/benchmarks run budget`): `<Chart>` 157.2 kB, `<SvgChart>` 142.0 kB,
+`<SvgChart>` + `interaction` 151.5 kB ([PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Use `<Chart>` unless that 15 kB
+matters; it is the zero-setup default and its behaviour does not depend on this component.
 
 ### Hooks
 

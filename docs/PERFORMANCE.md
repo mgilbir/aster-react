@@ -135,8 +135,10 @@ machine. I measured them on the current stack; the reviewer reports that the pre
 
 ## Bundle sizes
 
-`pnpm bench:bundle` (esbuild, minified, react external): `@aster/react` `<Chart>` 156.5 kB gzip
-(449.2 kB minified, 132.5 kB brotli) vs react-vega 288.7 kB gzip and the official vega-embed tutorial 288.0 kB.
+`pnpm bench:bundle` (esbuild, minified, react external): `@aster/react` `<Chart>` 157.2 kB gzip
+(450.5 kB minified, 133.0 kB brotli), `<SvgChart>` from `@aster/react/lite` 142.0 kB gzip (411.2 kB minified, 120.8 kB brotli),
+`<SvgChart>` + `interaction` 151.5 kB gzip (435.2 kB minified, 128.5 kB brotli), vs react-vega 288.7 kB gzip and the official
+vega-embed tutorial 288.0 kB.
 
 `pnpm --filter @aster/benchmarks run budget` bundles one tiny app per documented import pattern (esbuild, minify,
 `NODE_ENV=production`, tree-shaking on, react external) and gates its gzip size (default level). The addon rows are
@@ -149,8 +151,10 @@ the number in the same PR. Measured 2026-10-23 on the audit stack:
 |---|---|---|---|
 | `import { renderSpec } from '@aster/core'` | 123.0 | 123.1 | 123.6 |
 | `import { useChart } from '@aster/react'` | 164.1 | 126.4 | 126.9 |
-| `import { Chart } from '@aster/react'` | 163.9 | 156.5 | 157.0 |
-| `import '@aster/react/vl'` + `<Chart>` | 218.3 | 210.7 | 211.2 |
+| `import { Chart } from '@aster/react'` | 163.9 | 157.2 | 157.7 |
+| `import { SvgChart } from '@aster/react/lite'` | n/a | 142.0 | 142.5 |
+| `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | n/a | 151.5 | 152.0 |
+| `import '@aster/react/vl'` + `<Chart>` | 218.3 | 211.3 | 211.8 |
 | core + `@aster/core/dom` (marginal) | 5.8 | 5.7 | 6.2 |
 | core + `@aster/core/canvas` (marginal) | 4.8 | 4.8 | 5.3 |
 | core + `@aster/core/hit` (marginal) | 5.1 | 5.0 | 5.5 |
@@ -164,11 +168,19 @@ packages/benchmarks/scripts/budget.mjs`, run from `packages/benchmarks`; the Veg
 the field a bundler must assume every module has effects, so `import { useChart }` pulled in `Chart`, `ChartStream`,
 `useChartStream`, `useChartWorkerStream`, the worker host and `batches` (37.7 kB gzip it never calls). The manifests now
 list the files that really have an import effect (see [ARCHITECTURE.md](ARCHITECTURE.md#side-effects-and-tree-shaking)).
+`<Chart>` was 156.5 kB (+ VL 210.7) before it became a shell over `ChartCore` with injected capabilities; the +0.7 kB is the
+property reads through the capability objects (a minifier cannot rename them) and the report of a missing capability, which
+only `<SvgChart>` can trigger but both share. `<SvgChart>` is 15.2 kB smaller than `<Chart>`: the canvas renderer, the hit index
+and the signal loop (4.8 + 5.0 + 4.4 kB as marginal rows, plus what they share with nothing else). The rows that contain no such
+code are checked on the module list, not only the byte count: `pnpm check:bundle` asserts on the esbuild metafile that the
+`<SvgChart>` bundle reads no `core/canvas`, `core/hit` or `core/signals` module, and that with `interaction` it reads hit and
+signals but still no canvas (`hit.ts` and `canvas.ts` share the path parser through `path-data.ts` for exactly this reason).
+
 The `useChart` and `<Chart>` rows fail if the field is removed or widened; `scripts/bundle-shaking.test.mjs` plants
 that fault and requires the budget to fail. The other direction (a list that is too narrow drops a registration) is
 caught by `pnpm check:bundle`, which bundles and executes each import pattern.
 
-The Vega-Lite compiler is 54.2 kB gzip on top of the base `<Chart>` (210.7 minus 156.5). Trimming the validation layer
+The Vega-Lite compiler is 54.1 kB gzip on top of the base `<Chart>` (211.3 minus 157.2). Trimming the validation layer
 (`packages/vl/src/validate.ts`: allow-lists derived from one table each, shared message templates, dead branches removed;
 no check dropped, every message unchanged) took `@aster/vl` from 180,940 to 176,836 bytes minified (-4.1 kB) and from
 55,828 to 55,606 bytes gzip level 9 (-0.2 kB): the validator is mostly unique error text, which gzip already compresses well.

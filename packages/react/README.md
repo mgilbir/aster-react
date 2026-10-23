@@ -17,4 +17,17 @@ export const Demo = () => <Chart spec={spec} panZoom tooltip a11y limits={{ maxT
 Vega specs need only the first import. Without `@aster/react/vl`, a Vega-Lite spec throws an error naming the missing
 import; if you compile Vega-Lite specs in a worker, import the addon in the worker entry too.
 
+For a smaller bundle there is an SVG-only chart: `<SvgChart>` from `@aster/react/lite` (142 kB gzip against 157 kB for
+`<Chart>`; it never imports the canvas renderer). Tooltips, point selection and `signal.on` event streams come with the
+`interaction` capability, passed as a prop (151.5 kB gzip with it):
+
+```tsx
+import { SvgChart } from '@aster/react/lite'
+import { interaction } from '@aster/react/interaction'
+
+declare const spec: Record<string, unknown> // a Vega spec
+
+export const Small = () => <SvgChart spec={spec as never} interaction={interaction} tooltip />
+```
+
 `react` (^19) is a peer dependency. See `docs/API.md`, `docs/INTERACTION.md` and `docs/RELEASE.md` in the repository.

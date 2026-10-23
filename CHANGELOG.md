@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **`<SvgChart>` (`@aster/react/lite`) and the `interaction` capability (`@aster/react/interaction`)**: an SVG-only chart
+  for size-sensitive apps. It never imports the canvas renderer (142.0 kB gzip against 157.2 for `<Chart>`); hit testing
+  and the `signal.on` event loop arrive only as `<SvgChart interaction={interaction}>` (151.5 kB), a plain value, with no
+  registry and no side-effect import. Tooltips, point selection and `preventDefault` are a compile error without it, and
+  at runtime a spec with event streams (or a JS caller using those props, or `renderer="canvas"`) is reported through
+  `onError` (else the logger, else the console) while the chart still renders; never a silently dead chart. `<Chart>`
+  keeps its behaviour and its DOM byte for byte (the 785 corpus specs hash the same before and after); its bundle is 0.7 kB
+  larger (156.5 to 157.2) because it is now a shell over the same `ChartCore` that `<SvgChart>` shares. Anti-drift: the
+  shells are guarded to stay thin; every `ChartProps`/`ChartHandle` key must be shared with the same type, interaction-only,
+  or excluded with a reason (`pnpm typecheck`); the React component tests run on `<Chart>`, `<SvgChart>` and `<SvgChart
+  interaction>` through one matrix; and the DOM of all three is compared over the whole corpus (server markup, client mount,
+  hydration). The browser gate drives every interaction check through both components, the bundle-shaking gate asserts the
+  modules of each bundle, and `verify:publish` bundles and typechecks the new entries from the installed tarballs. In
+  `@aster/core` the SVG path parser moved to `path-data.ts` (`@aster/core/canvas` re-exports it) so hit testing no longer
+  reads the canvas renderer module.
+
 - **Tree-shaking works (`sideEffects`)**: `@aster/core` and `@aster/react` declare the files whose import has an effect
   (the geo/transforms/load addons, the guide captions, `@aster/react/vl`, the worker entry), `@aster/vl` declares none.
   `import { useChart } from '@aster/react'` goes from 164.1 to 126.4 kB gzip, `<Chart>` from 163.9 to 156.5, `<Chart>`
