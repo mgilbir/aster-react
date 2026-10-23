@@ -498,7 +498,8 @@ function configureDomain(scale: Scale, _: Params): number {
 
   // adjust domain based on zero, min, max settings
   if (zero || _.domainMin != null || _.domainMax != null || _.domainMid != null) {
-    if (!isArray(domain)) throw new TypeError('domain.slice is not a function')
+    // vega calls `domain.slice()` on whatever the domain is: a string slices fine (and d3 then reads it as
+    // an array of its characters), a number or object throws the TypeError the dataflow logs
     domain = domain.slice()
     const n = (domain.length - 1) || 1
     if (zero) {

@@ -3228,7 +3228,16 @@ function buildScales(ctx: EvalContext): void {
         continue
       }
     }
-    const scale = buildScale(def, scaleContext(ctx, def.name))
+    let scale: Scale
+    try {
+      scale = buildScale(def, scaleContext(ctx, def.name))
+    } catch (e) {
+      // vega: the Scale operator throws, the dataflow logs it and the run stops there -- this scale
+      // and every operator after it (later scales, every encode) are never evaluated.
+      reportEvalError(ctx, e)
+      ctx.encodeAborted = true
+      break
+    }
     ctx.scales.set(s.name, scale)
     ctx.scaleTypes.set(s.name, s.type)
     const entry: ScaleEntry = { scale, multi }
@@ -5580,45 +5589,33 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
     }
     return partial
   }
-  // Post-process: vega parse/mark `adjustSpatial` — resolve x2/xc/y2/yc into
-  // x/y/width/height. Rule marks skip it entirely (their x2/y2 are line
-  // endpoints, not edges); rect/group/image swap so x/y is the min edge.
-  // x2/y2 overwrite an encoded width/height; xc/yc only set x/y.
+  // Post-process: vega-runtime's `adjustSpatial`, which acts on the CHANNELS the encode defines
+  // (not on whether their values came out finite): x2/xc/y2/yc become x/y/width/height. Rule
+  // marks skip it entirely (their x2/y2 are line endpoints, not edges); rect/group/image swap so
+  // x/y is the min edge. The arithmetic is JS's, so a NaN or missing operand gives NaN, which the
+  // renderers read as 0 (`item.width || 0`) exactly as vega's do.
   if (marktype !== 'rule') {
     const canSwap = marktype === 'rect' || marktype === 'group' || marktype === 'image'
-    const num = (v: unknown): number | null =>
-      v != null && typeof v === 'number' && Number.isFinite(v) ? v : null
-    const x2 = num(rec['x2'])
-    const xc = num(rec['xc'])
-    const y2 = num(rec['y2'])
-    const yc = num(rec['yc'])
-    if (x2 != null) {
-      const x = num(rec['x'])
-      if (x != null) {
-        if (canSwap && x > x2) { rec['x'] = x2; rec['x2'] = x }
-        rec['width'] = (rec['x2'] as number) - (rec['x'] as number)
+    const has = (k: string): boolean => encode[k] != null
+    const n = (k: string): number => rec[k] as number
+    if (has('x2')) {
+      if (has('x')) {
+        if (canSwap && n('x') > n('x2')) { const t = rec['x']; rec['x'] = rec['x2']; rec['x2'] = t }
+        rec['width'] = n('x2') - n('x')
       } else {
-        rec['x'] = x2 - (num(rec['width']) ?? 0)
+        rec['x'] = n('x2') - (n('width') || 0)
       }
     }
-    if (xc != null) rec['x'] = xc - (num(rec['width']) ?? 0) / 2
-    if (y2 != null) {
-      const y = num(rec['y'])
-      if (y != null) {
-        if (canSwap && y > y2) { rec['y'] = y2; rec['y2'] = y }
-        rec['height'] = (rec['y2'] as number) - (rec['y'] as number)
+    if (has('xc')) rec['x'] = n('xc') - (n('width') || 0) / 2
+    if (has('y2')) {
+      if (has('y')) {
+        if (canSwap && n('y') > n('y2')) { const t = rec['y']; rec['y'] = rec['y2']; rec['y2'] = t }
+        rec['height'] = n('y2') - n('y')
       } else {
-        rec['y'] = y2 - (num(rec['height']) ?? 0)
+        rec['y'] = n('y2') - (n('height') || 0)
       }
     }
-    if (yc != null) rec['y'] = yc - (num(rec['height']) ?? 0) / 2
-    // A rect with a resolved position but no size channel (e.g. an x2 scale
-    // over an invalid aggregate) is zero-size, not absent: vega's
-    // adjustSpatial leaves width/height undefined and the rect path degenerates.
-    if (canSwap) {
-      if (rec['x'] != null && rec['width'] == null && rec['x2'] == null) rec['width'] = 0
-      if (rec['y'] != null && rec['height'] == null && rec['y2'] == null) rec['height'] = 0
-    }
+    if (has('yc')) rec['y'] = n('yc') - (n('height') || 0) / 2
   }
 
   return item

@@ -859,7 +859,7 @@ function renderRects(group: SceneGroup): string {
 /**
  * Shared rect geometry for the string renderer and the DOM patcher.
  * Vega renders rect marks as path elements (with optional cornerRadius).
- * Returns null when the item has no resolvable width/height.
+ * Never null for a rect item: an unsized one is a zero-size path (vega).
  */
 export const rectItemPath = rectItemPathImpl as (it: SceneItem) => GeneratedPath | null
 
@@ -874,9 +874,14 @@ function rectItemPathImpl(it: SceneItem): string | null {
   // When x2/y2 are present, vega normalizes the rect so that x is the min
   // edge and width is positive (same for y). This keeps the path winding
   // consistent (positive h first) regardless of which edge is "x" vs "x2".
-  if (w == null && it.x2 != null) { w = Math.abs((it.x2 as number) - x0); x0 = Math.min(x0, it.x2 as number) }
-  if (h == null && it.y2 != null) { h = Math.abs((it.y2 as number) - y0); y0 = Math.min(y0, it.y2 as number) }
-  if (w == null || h == null) return null
+  // A non-finite x2/y2 (a NaN scale result) gives a NaN extent and leaves the origin where it is:
+  // `Math.min(x0, NaN)` would turn the origin itself into NaN.
+  if (w == null && it.x2 != null) { w = Math.abs((it.x2 as number) - x0); if (Number.isFinite(it.x2)) x0 = Math.min(x0, it.x2 as number) }
+  if (h == null && it.y2 != null) { h = Math.abs((it.y2 as number) - y0); if (Number.isFinite(it.y2)) y0 = Math.min(y0, it.y2 as number) }
+  // vega draws every rect item, an unsized one as a zero-size path at its origin
+  // (`item.width || 0`, `item.height || 0`), e.g. a scale that returned nothing for y2
+  if (w == null) w = 0
+  if (h == null) h = 0
   // Vega's rectangle path builders read `item.width || 0` and `item.height || 0`:
   // a NaN scale result (a degenerate range, e.g. `range: "symbol"` on a band
   // scale) renders a zero-size rect at the origin, not a `NaN` path.
@@ -886,14 +891,17 @@ function rectItemPathImpl(it: SceneItem): string | null {
   // per-corner radii clamped to min(w,h)/2, quarter arcs approximated by
   // cubics with C = 0.448084975506.
   const rec = it as Record<string, unknown>
-  const cr = (rec.cornerRadius as number | undefined) ?? 0
+  const cr = rec.cornerRadius
   const s = Math.min(w, h) / 2
-  const clampR = (v: unknown) => Math.max(0, Math.min(typeof v === 'number' ? v : cr, s))
+  // vega (marks' `tl`..`bl` accessors, then `clamp(+radius, 0, s)`): a corner falls back to
+  // `cornerRadius`, a falsy radius is 0, anything else is read with unary plus -- so a non-numeric
+  // radius ("round") is NaN, which is NOT "no corner": the path is the rounded one, in NaNs.
+  const clampR = (v: unknown) => Math.max(0, Math.min(+(((v ?? cr) as number) || 0), s))
   const tl = clampR(rec.cornerRadiusTopLeft)
   const tr = clampR(rec.cornerRadiusTopRight)
   const br = clampR(rec.cornerRadiusBottomRight)
   const bl = clampR(rec.cornerRadiusBottomLeft)
-  if (tl > 0 || tr > 0 || bl > 0 || br > 0) {
+  if (!(tl <= 0 && tr <= 0 && bl <= 0 && br <= 0)) {
     const C = 0.448084975506
     const x2 = x0 + w
     const y2 = y0 + h
