@@ -16,6 +16,7 @@ const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
 import { geoRegistry, requireGeo } from './registry.js'
 import { locale } from './locale.js'
 import type {
+  GuideEncodeBlock,
   CompiledAxis,
   CompiledChart,
   CompiledData,
@@ -6853,16 +6854,71 @@ function applyOverlap(labels: SceneItem[], method: unknown, separation: number):
   }
 }
 
+type GuideEncodeSet = Record<string, EncodeValue | EncodeValue[]>
+
+/** A guide element's encode as vega applies it to a static render: `enter`, then `update` over it. */
+function guideEncodeSet(block: GuideEncodeBlock | undefined): GuideEncodeSet | undefined {
+  if (!block) return undefined
+  const merged = { ...(block.enter ?? {}), ...(block.update ?? {}) }
+  return Object.keys(merged).length ? merged : undefined
+}
+
+/**
+ * Apply a guide element's user `encode` (vega axis / legend `encode.<element>`)
+ * to one generated item, evaluated against that element's datum (a tick
+ * `{index, tickIndex, value, label}`, or the guide's own datum). It runs where
+ * vega's does, after the generated encode and before the layout measures the
+ * mark, so a changed `fontSize`, `angle`, `text` or `x` moves the axis extent
+ * and the title. Positions are in the axis group's frame: `origin` is where our
+ * leaves put that frame (they carry the axis position and the crisp 0.5 delta).
+ */
+function applyGuideEncode(item: SceneItem, set: GuideEncodeSet | undefined, datum: Row, ctx: EvalContext, origin: { x: number; y: number }): void {
+  if (!set) return
+  const rec = item as Record<string, unknown>
+  for (const [key, spec] of Object.entries(set)) {
+    const v = resolveEncodeProperty(spec, datum, ctx)
+    if (v === undefined) continue
+    if (key === 'x' || key === 'x2') rec[key] = Number(v) + origin.x + 0.5
+    else if (key === 'y' || key === 'y2') rec[key] = Number(v) + origin.y + 0.5
+    else rec[key] = v
+  }
+}
+
 /** The view's width / height SIGNAL (what a nested group's axes grid to); the context size at the view level. */
 function viewSignal(ctx: EvalContext, name: 'width' | 'height'): number {
   const v = ctx.signalParams[name]
   return typeof v === 'number' && Number.isFinite(v) ? v : ctx[name]
 }
 
-function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
-  const scale = ctx.scales.get(axis.scale)
+/** The axis-level layout parameters vega's axis encode feeds the layout (`encode.axis`: offset, position, translate, titlePadding, minExtent, maxExtent, range). */
+const AXIS_GROUP_ENCODE_KEYS = ['offset', 'position', 'translate', 'titlePadding', 'minExtent', 'maxExtent', 'range'] as const
+
+function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
+  const scale = ctx.scales.get(axis0.scale)
   if (!scale) return null
+  // vega-parser axis.js: the layout reads these off the axis group item, so a user `encode.axis`
+  // that sets them wins over the spec / config value.
+  const axisGroupEncode = guideEncodeSet(axis0.encode?.axis)
+  let axis = axis0
+  if (axisGroupEncode) {
+    const axisDatum: Row = { scale: axis0.scale, ticks: axis0.ticks !== false, labels: axis0.labels !== false, grid: !!axis0.grid, domain: axis0.domain !== false, title: axis0.title != null }
+    const over: Record<string, unknown> = {}
+    for (const key of AXIS_GROUP_ENCODE_KEYS) {
+      if (!(key in axisGroupEncode)) continue
+      const v = resolveEncodeProperty(axisGroupEncode[key], axisDatum, ctx)
+      if (v !== undefined) over[key] = v
+    }
+    if (Object.keys(over).length) axis = { ...axis0, ...over } as CompiledAxis
+  }
+  const encGrid = guideEncodeSet(axis.encode?.grid)
+  const encTicks = guideEncodeSet(axis.encode?.ticks)
+  const encLabels = guideEncodeSet(axis.encode?.labels)
+  const encDomain = guideEncodeSet(axis.encode?.domain)
+  const encTitle = guideEncodeSet(axis.encode?.title)
+  const guideDatum: Row = { scale: axis.scale, ticks: axis.ticks !== false, labels: axis.labels !== false, grid: !!axis.grid, domain: axis.domain !== false, title: axis.title != null }
   const orient = axis.orient
+  // where the axis group's origin lies in our leaves' frame (the view edge it sits on)
+  const guideOrigin = { x: orient === 'right' ? ctx.width : 0, y: orient === 'bottom' ? ctx.height : 0 }
   const ticks = axisTicks(axis, scale, ctx)
   const items: SceneItem[] = []
   // vega's tick position (axisTicks tickPos): the ticks/grid sit at
@@ -6903,14 +6959,28 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     return tickRoundOn ? Math.round(raw) : raw
   }
 
+  // The approximate tick count used for label formatting. When the axis omits
+  // tickCount, vega's axis ticks operator defaults to 10 (see vega-encode
+  // AxisTicks: `_.count == null ? 10 : _.count`); matching that matters for
+  // log-scale labels, whose formatter only labels a subset of ticks depending
+  // on the count.
+  const count = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 10 : 10
+  const labelFormat = axisLabelFormat(axis, scale, count, ctx)
+  // vega-encode AxisTicks tuples, the datum a tick / label / grid encode reads:
+  // `{index (fraction 0..1), tickIndex, value, label}`; the `extra` entry is
+  // `{index: -1, tickIndex: -1, extra: {value}, label: ''}`.
+  const labelCache: string[] = []
+  const tickDatum = (te: { value: unknown; extra: boolean }, i: number): Row => {
+    if (te.extra) return { index: -1, tickIndex: -1, extra: { value: te.value }, label: '' }
+    return {
+      index: i / ((ticks.length - 1) || 1),
+      tickIndex: i,
+      value: te.value,
+      label: (labelCache[i] ??= String(labelFormat(te.value))),
+    }
+  }
+
   if (axis.grid) {
-    // Apply the axis `encode.grid` (vega's grid-line encoding) so specs can set
-    // strokeDash/stroke/opacity etc. on the grid marks.
-    const gridEnc = axis.encode?.grid
-    const gridUpdate = gridEnc?.update ?? gridEnc?.enter ?? {}
-    const gridStyle = Object.keys(gridUpdate).length
-      ? resolveEncodeSet(gridUpdate as Record<string, EncodeValue | EncodeValue[]>, {}, ctx, 'line')
-      : {}
     const gridScaleName = (axis as { gridScale?: string }).gridScale
     const gridScale = gridScaleName ? ctx.scales.get(gridScaleName) : undefined
     const gridRange = gridScale?.range?.() as number[] | undefined
@@ -6940,7 +7010,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     const gridStart = Number.isFinite(gridStartRaw) ? gridStartRaw : 0
     const gridEnd = gridSpan(1)
     const gridOrigin = orient === 'right' ? ctx.width : orient === 'bottom' ? ctx.height : 0
-    for (const te of tickEntries) {
+    for (const [ti, te] of tickEntries.entries()) {
       const v = pos(te.value, te.extra)
       const item: SceneItem = { x: 0, y: 0, x2: 0, y2: 0 }
       if (isXAxis) {
@@ -6950,15 +7020,15 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
         item.y = v + 0.5; item.y2 = v + 0.5
         item.x = gridOrigin + gridStart + 0.5; item.x2 = gridOrigin + gridEnd + 0.5
       }
-      item.stroke = gridStyle.stroke ?? (axis as { gridColor?: string }).gridColor ?? '#ddd'
-      item.strokeWidth = gridStyle.strokeWidth ?? (axis as { gridWidth?: number }).gridWidth ?? 1
-      const gridDash = gridStyle.strokeDash ?? (axis as { gridDash?: number[] }).gridDash
+      item.stroke = (axis as { gridColor?: string }).gridColor ?? '#ddd'
+      item.strokeWidth = (axis as { gridWidth?: number }).gridWidth ?? 1
+      const gridDash = (axis as { gridDash?: number[] }).gridDash
       if (gridDash != null) item.strokeDash = gridDash
       // vega axis-grid: strokeCap/strokeDashOffset/strokeOpacity come from gridCap/gridDashOffset/gridOpacity
       if (axis.gridCap != null) item.strokeCap = axis.gridCap
       if (axis.gridDashOffset != null) item.strokeDashOffset = axis.gridDashOffset
       if (axis.gridOpacity != null) item.strokeOpacity = axis.gridOpacity
-      if (gridStyle.opacity != null) item.opacity = gridStyle.opacity
+      applyGuideEncode(item, encGrid, tickDatum(te, ti), ctx, guideOrigin)
       // Vega's axisLayout bounds union only the ticks and labels marks; the
       // grid mark never extends the axis bound (nor the view bounds).
       ;(item as Record<string, unknown>)._grid = true
@@ -6966,13 +7036,6 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     }
   }
 
-  // The approximate tick count used for label formatting. When the axis omits
-  // tickCount, vega's axis ticks operator defaults to 10 (see vega-encode
-  // AxisTicks: `_.count == null ? 10 : _.count`); matching that matters for
-  // log-scale labels, whose formatter only labels a subset of ticks depending
-  // on the count.
-  const count = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 10 : 10
-  const labelFormat = axisLabelFormat(axis, scale, count, ctx)
   // ticks:false hides the marks AND zeroes the effective tick size: vega's
   // axisLabels/titles position off the tickSize signal, which the axis
   // encode sets to 0 when ticks are off.
@@ -6981,7 +7044,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   const tickItems: SceneItem[] = []
   const labels: SceneItem[] = []
 
-  for (const te of tickEntries) {
+  for (const [ti, te] of tickEntries.entries()) {
     const t = te.value
     const v = pos(t, te.extra)
     if (axis.ticks !== false) {
@@ -6997,6 +7060,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       if (axis.tickCap != null) tick.strokeCap = axis.tickCap
       if (axis.tickDashOffset != null) tick.strokeDashOffset = axis.tickDashOffset
       if (axis.tickOpacity != null) tick.strokeOpacity = axis.tickOpacity
+      applyGuideEncode(tick, encTicks, tickDatum(te, ti), ctx, guideOrigin)
       tickItems.push(tick)
     }
     if (axis.labels !== false) {
@@ -7097,6 +7161,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       if (labelAngle) (label as Record<string, unknown>).angle = labelAngle
       label.fill = axis.labelColor ?? '#000'
       if (axis.labelOpacity != null) label.fillOpacity = axis.labelOpacity
+      applyGuideEncode(label, encLabels, tickDatum(te, ti), ctx, guideOrigin)
       labels.push(label)
     }
   }
@@ -7138,6 +7203,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     if (axis.domainOpacity != null) domainLine.strokeOpacity = axis.domainOpacity
     if (axis.domainCap != null) domainLine.strokeCap = axis.domainCap
     if (axis.domainDashOffset != null) domainLine.strokeDashOffset = axis.domainDashOffset
+    applyGuideEncode(domainLine, encDomain, guideDatum, ctx, guideOrigin)
     ;(domainLine as Record<string, unknown>)._domain = true
     items.push(domainLine)
   }
@@ -7286,6 +7352,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     ;(t as Record<string, unknown>).fontWeight = titleWeight
     if (titleOpacity != null) t.fillOpacity = titleOpacity
     t.fill = titleColor ?? '#000'
+    applyGuideEncode(t, encTitle, guideDatum, ctx, guideOrigin)
     ;(t as Record<string, unknown>)._title = true
     items.push(t)
   }
@@ -7330,7 +7397,9 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
 
   // vega axis encode: `range: abs(span(range(scale)))` — the spine extent
   const sr = scale.range() as number[]
-  const axisRangeSpan = sr.length > 1 ? Math.abs(Number(sr[sr.length - 1]) - Number(sr[0])) : 0
+  const axisRangeSpan = typeof (axis as { range?: unknown }).range === 'number'
+    ? (axis as unknown as { range: number }).range
+    : sr.length > 1 ? Math.abs(Number(sr[sr.length - 1]) - Number(sr[0])) : 0
 
   return {
     marktype: 'group',
@@ -7512,24 +7581,13 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
 }
 
 function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: EvalContext): (v: unknown) => string {
-  const specFmt = (axis.encode?.labels?.text as EncodeValue | undefined)
-  const wrapLabelExpr = (f: (v: unknown) => string): ((v: unknown) => string) => {
-    const le = (axis as unknown as { labelExpr?: unknown }).labelExpr
-    if (typeof le !== 'string' || !ctx) return f
-    const expr = compileExpr(le, ctx.runtime)
-    return (v: unknown) => String(expr({ label: f(v), value: v }, ctx.signalParams))
-  }
-  if (specFmt && typeof specFmt === 'object' && 'signal' in specFmt && specFmt.signal) {
-    return wrapLabelExpr(() => String(specFmt.signal))
-  }
-  const fmtType = (specFmt && typeof specFmt === 'object' && 'formatType' in specFmt && specFmt.formatType)
-    ? String(specFmt.formatType)
-    : (axis.formatType ? axis.formatType : undefined)
+  // (vega has no axis `labelExpr`: vega-lite compiles it to `encode.labels.update.text`,
+  // which is applied to the label items themselves - see applyGuideEncode - so a raw
+  // `labelExpr` is ignored here exactly as vega ignores it)
+  const fmtType = axis.formatType ? axis.formatType : undefined
   // Resolve format: may be a string or a signal expression.
   let fmt: string | undefined
-  const rawFmt = (specFmt && typeof specFmt === 'object' && 'format' in specFmt && specFmt.format)
-    ? specFmt.format
-    : (axis.format ?? undefined)
+  const rawFmt = axis.format ?? undefined
   if (typeof rawFmt === 'string') {
     fmt = rawFmt
   } else if (rawFmt && typeof rawFmt === 'object' && 'signal' in (rawFmt as Record<string, unknown>) && ctx) {
@@ -7556,19 +7614,19 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: 
     // day/week ticks). The `undefined` argument is passed explicitly to satisfy
     // the strict local type shim for vega-format.
     const timeFormatter = calendar === 'utc' ? L.utcFormat : L.timeFormat
-    return wrapLabelExpr(fmt ? timeFormatter(fmt) : timeFormatter(undefined as unknown as string))
+    return fmt ? timeFormatter(fmt) : timeFormatter(undefined as unknown as string)
   }
   if (scale.type !== 'linear' && scale.type !== 'log' && scale.type !== 'pow' && scale.type !== 'sqrt' && scale.type !== 'symlog') {
     // vega applies an inherited numeric format specifier even to band/point
     // labels; non-numeric band values format as NaN.
     if (fmt != null) {
       const L = locale(undefined)
-      return wrapLabelExpr((v) => L.format(fmt)(typeof v === 'number' ? v : Number(v)))
+      return (v) => L.format(fmt)(typeof v === 'number' ? v : Number(v))
     }
-    return wrapLabelExpr((v) => String(v))
+    return (v) => String(v)
   }
   const L = locale(undefined)
-  return wrapLabelExpr(tickFormat(L, scale, count, fmt))
+  return tickFormat(L, scale, count, fmt)
 
 }
 

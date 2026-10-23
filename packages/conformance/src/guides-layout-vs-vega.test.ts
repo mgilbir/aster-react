@@ -354,3 +354,56 @@ describe('C51: a nested group\'s axes follow config.axis like the view\'s', () =
     it(name, async () => expect(await compare(nested(config, axes))).toEqual([]))
   }
 })
+
+describe('C58: an axis `encode` block styles and moves the generated marks like vega', () => {
+  const spec = (axis: Spec, scaleType = 'linear', extra: Spec = {}): Spec => {
+    const horizontal = axis.orient === 'bottom' || axis.orient === 'top'
+    const scales = scaleType === 'band'
+      ? [{ name: 's', type: 'band', domain: ['alpha', 'beta', 'gamma'], range: horizontal ? 'width' : 'height', padding: 0.2 }]
+      : scaleType === 'time'
+        ? [{ name: 's', type: 'time', domain: [{ signal: 'datetime(2024, 0, 1)' }, { signal: 'datetime(2024, 11, 1)' }], range: horizontal ? 'width' : 'height' }]
+        : [{ name: 's', type: 'linear', domain: [0, 100], range: horizontal ? 'width' : 'height', nice: true }]
+    return { width: 220, height: 140, padding: 25, autosize: 'none', scales, axes: [{ scale: 's', ...axis }], ...extra }
+  }
+  const ORIENTS = ['bottom', 'left', 'top', 'right']
+  const elements: Array<[string, Record<string, Spec>]> = [
+    ['labels: constant text', { labels: { update: { text: { value: 'T' } } } }],
+    ['labels: text from the signal', { labels: { update: { text: { signal: "datum.label + ' units'" } } } }],
+    ['labels: text from the value field', { labels: { update: { text: { field: 'value' } } } }],
+    ['labels: paint and font', { labels: { update: { fill: { value: 'crimson' }, fontSize: { value: 14 }, fontWeight: { value: 'bold' }, opacity: { value: 0.6 } } } }],
+    ['labels: angle, align, baseline', { labels: { update: { angle: { value: 40 }, align: { value: 'left' }, baseline: { value: 'middle' } } } }],
+    ['labels: dx / dy', { labels: { update: { dx: { value: 3 }, dy: { value: -2 } } } }],
+    ['labels: conditional fill by tick index', { labels: { update: { fill: [{ test: 'datum.tickIndex === 0', value: 'red' }, { value: 'blue' }] } } }],
+    ['labels: enter then update (update wins)', { labels: { enter: { fill: { value: 'red' }, fontSize: { value: 13 } }, update: { fill: { value: 'green' } } } }],
+    ['ticks: stroke and width', { ticks: { update: { stroke: { value: 'orange' }, strokeWidth: { value: 3 }, opacity: { value: 0.5 } } } }],
+    ['ticks: dash', { ticks: { update: { strokeDash: { value: [2, 2] } } } }],
+    ['grid: stroke and dash', { grid: { update: { stroke: { value: 'teal' }, strokeDash: { value: [4, 2] }, strokeOpacity: { value: 0.5 } } } }],
+    ['grid: per tick opacity', { grid: { update: { opacity: { signal: 'datum.index' } } } }],
+    ['domain: stroke', { domain: { update: { stroke: { value: 'purple' }, strokeWidth: { value: 4 }, strokeDash: { value: [6, 3] } } } }],
+    ['title: text and paint', { title: { update: { text: { value: 'Replaced' }, fill: { value: 'navy' }, fontSize: { value: 15 }, opacity: { value: 0.8 } } } }],
+    ['title: angle and dx', { title: { update: { angle: { value: 25 }, dx: { value: 6 } } } }],
+    ['axis: layout parameters', { axis: { update: { offset: { value: 8 }, position: { value: 12 }, titlePadding: { value: 15 }, minExtent: { value: 40 }, maxExtent: { value: 60 } } } }],
+    ['axis: translate', { axis: { update: { translate: { value: 0 } } } }],
+    ['all elements', {
+      labels: { update: { fill: { value: 'crimson' } } }, ticks: { update: { stroke: { value: 'blue' } } },
+      grid: { update: { stroke: { value: 'green' } } }, domain: { update: { stroke: { value: 'black' } } }, title: { update: { fill: { value: 'gold' } } },
+    }],
+  ]
+  for (const orient of ORIENTS) for (const [name, encode] of elements) {
+    it(`${orient} / ${name}`, async () => {
+      expect(await compare(spec({ orient, title: 'Axis title', grid: true, encode }))).toEqual([])
+    })
+  }
+  for (const scaleType of ['band', 'time']) for (const [name, encode] of elements.slice(0, 9)) {
+    it(`${scaleType} scale / ${name}`, async () => {
+      expect(await compare(spec({ orient: 'bottom', title: 'Axis title', encode }, scaleType))).toEqual([])
+    })
+  }
+  it('an encode on an element the axis does not draw is ignored', async () => {
+    expect(await compare(spec({ orient: 'left', labels: false, ticks: false, domain: false, encode: { labels: { update: { fill: { value: 'red' } } }, ticks: { update: { stroke: { value: 'red' } } }, domain: { update: { stroke: { value: 'red' } } } } }))).toEqual([])
+  })
+  it('labelExpr and format still apply, an encode text wins over them', async () => {
+    expect(await compare(spec({ orient: 'left', format: '.0f', labelExpr: "datum.label + '!'", encode: { labels: { update: { fill: { value: 'red' } } } } }))).toEqual([])
+    expect(await compare(spec({ orient: 'left', labelExpr: "datum.label + '!'", encode: { labels: { update: { text: { signal: "'x' + datum.index" } } } } }))).toEqual([])
+  })
+})

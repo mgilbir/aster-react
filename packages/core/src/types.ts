@@ -302,6 +302,24 @@ export interface CompiledScale {
   rangeStep?: unknown
 }
 
+/**
+ * A guide element's `encode` block (vega axis / legend `encode`): per element
+ * ('axis', 'ticks', 'labels', 'title', 'grid', 'domain'; legends: 'legend',
+ * 'title', 'labels', 'symbols', 'gradient', 'entries'), the property sets
+ * `enter` / `update` (the static render applies both, `update` last).
+ */
+export interface GuideEncodeBlock {
+  name?: string
+  interactive?: boolean
+  style?: string | string[]
+  enter?: Record<string, EncodeValue | EncodeValue[]>
+  update?: Record<string, EncodeValue | EncodeValue[]>
+  exit?: Record<string, EncodeValue | EncodeValue[]>
+  hover?: Record<string, EncodeValue | EncodeValue[]>
+}
+
+export type GuideEncode = Record<string, GuideEncodeBlock>
+
 export interface CompiledAxis {
   scale: string
   orient: 'top' | 'bottom' | 'left' | 'right'
@@ -378,7 +396,7 @@ export interface CompiledAxis {
   zindex?: number
   aria?: boolean
   description?: string
-  encode?: Record<string, Record<string, EncodeValue>>
+  encode?: GuideEncode
 }
 
 export interface CompiledLegend {
@@ -439,7 +457,7 @@ export interface CompiledLegend {
   strokeColor?: string
   labelOverlap?: boolean | string
   symbolLimit?: number
-  encode?: Record<string, Record<string, EncodeValue>>
+  encode?: GuideEncode
   zindex?: number
   type?: 'gradient' | 'symbol'
 }

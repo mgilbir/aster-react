@@ -3696,7 +3696,7 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
       const labels = (enc.labels ??= {})
       const update = (labels.update ??= {})
       update.text = { signal: labelAxis.labelExpr }
-      // `labelExpr` itself stays: Aster's runtime reads it natively, real Vega ignores the unknown key
+      // `labelExpr` itself stays as an unknown key that real Vega and Aster both ignore; the encode above labels the ticks
     }
     labelAxes.push(labelAxis)
   }
@@ -3951,7 +3951,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       const labels = (enc.labels ??= {})
       const update = (labels.update ??= {})
       update.text = { signal: lg.labelExpr }
-      // `labelExpr` itself stays: Aster's runtime reads it natively, real Vega ignores the unknown key
+      // `labelExpr` itself stays as an unknown key that real Vega and Aster both ignore; the encode above labels the ticks
     }
     // the mark-derived symbol stroke default must not shadow a user symbolStrokeColor
     const upd = (lg.encode as { symbols?: { update?: Record<string, unknown> } } | undefined)?.symbols?.update
