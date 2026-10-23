@@ -59,11 +59,14 @@ const BUDGETS = {
   // Faithful scale/projection/interpolator ports (vega-parser parseScale + vega-encode Scale transform,
   // vega-geo Projection, the d3-interpolate colour spaces): core 123.0 -> 124.0, dom 126.3 -> 127.3 gzip
   // (+1.0). Ceilings are measured + 0.5 kB (owner approved).
-  '@aster/core': 124.5 * 1024,
-  '@aster/core/dom': 127.8 * 1024,
+  // Vega-faithful signal event loop (event-selector parser, stream graph, event extension, logger: signals
+  // 32.4 -> 41.0 gzip, the entry also carries the expression engine), the entry evaluator, error recovery and group
+  // paint/clip (core 124.1 -> 125.3, dom 127.4 -> 128.6). Ceilings are measured + 0.5 kB (owner approved raises).
+  '@aster/core': 125.8 * 1024,
+  '@aster/core/dom': 129.1 * 1024,
   '@aster/core/canvas': 20 * 1024,
   '@aster/core/hit': 16 * 1024,
-  '@aster/core/signals': 36 * 1024,
+  '@aster/core/signals': 41.5 * 1024,
   // 180 kB leaves headroom for feature work; measured values are recorded at
   // the top of this file and in `pnpm bench:bundle`.
   '@aster/react': 180 * 1024,
@@ -77,7 +80,7 @@ const BUDGETS = {
   // any scale name and for worker scenes), the worker protocol (limits, text metrics and url policy by name,
   // validation, bounded producer queue), content-keyed lifecycles, stream recovery, the roving-tabindex a11y
   // tree and the LoadOptions pass-through.
-  '@aster/react/vl': 213.8 * 1024,
+  '@aster/react/vl': 218.8 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
