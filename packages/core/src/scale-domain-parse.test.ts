@@ -17,10 +17,13 @@ describe('a scale domain vega.parse refuses', () => {
     })
   }
 
-  it('a domain over a data set that is not there stays a logged error of the running dataflow', () => {
+  // vega.parse itself throws `Undefined data set name` (Scope.getData), so nothing is drawn and nothing is logged
+  // (verified against the pinned oracle in spec-data-refs.test.ts, which runs vega.parse on the same specs).
+  it('a domain over a data set that is not declared is refused like vega.parse refuses it', () => {
     const errors: unknown[] = []
-    expect(() => renderSpec(spec({ data: 'nosuch', field: 'k' }), { logger: { error: (...a) => errors.push(a[0]), warn: () => {} } })).not.toThrow()
-    expect(errors.length).toBeGreaterThan(0)
+    expect(() => renderSpec(spec({ data: 'nosuch', field: 'k' }), { logger: { error: (...a) => errors.push(a[0]), warn: () => {} } }))
+      .toThrow(/^Undefined data set name: "nosuch"$/)
+    expect(errors).toEqual([])
   })
 
   it('valid domains still build', () => {

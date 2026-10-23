@@ -348,6 +348,7 @@ export function guardedRegExp(pattern: string, flags?: string): RegExp {
 }
 
 import { regexHazard } from './regex-screen.js'
+import { specList } from './spec-structure.js'
 
 /** Pre-flight checks, run before compilation/evaluation allocates the scene. */
 export function checkSpecLimits(
@@ -398,9 +399,10 @@ export function checkSpecLimits(
     rows += n
     if (maxRows != null && rows > maxRows) over('maxRows', rows, maxRows)
   }
+  // The compiler reads every scope list through vega-util `array()` (spec-structure.ts), so this
+  // counts what it will run: `data: {values}` and `marks: {...}` are one-element lists, not skipped.
   const countData = (data: unknown): void => {
-    const lists = Array.isArray(data) ? data : data && typeof data === 'object' ? [data] : []
-    for (const d of lists) {
+    for (const d of specList(data)) {
       const values = d && typeof d === 'object' ? (d as { values?: unknown }).values : undefined
       if (Array.isArray(values)) addRows(values.length)
     }
@@ -408,8 +410,7 @@ export function checkSpecLimits(
   let marks = 0
   const maxMarks = limits.maxMarks
   const walkMarks = (list: unknown): void => {
-    if (!Array.isArray(list)) return
-    for (const mark of list) {
+    for (const mark of specList(list)) {
       marks++
       if (maxMarks != null && marks > maxMarks) over('maxMarks', marks, maxMarks)
       if (mark && typeof mark === 'object') {

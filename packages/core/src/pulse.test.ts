@@ -25,6 +25,8 @@ describe('pulse graph', () => {
   it('builds source/target edges and propagates to marks', () => {
     const chart = compileChart({
       ...spec,
+      // the scale must not name the data set this spec no longer declares (vega.parse refuses that)
+      scales: [{ name: 'x', type: 'band', domain: ['a', 'b', 'c'], range: [0, 200] }, { name: 'y', type: 'linear', domain: [0, 4], range: [100, 0] }],
       data: [
         { name: 'src', values: [{ g: 'a', v: 1 }] },
         { name: 'filtered', source: 'src', transform: [{ type: 'filter', expr: 'datum.v > 0' }] },

@@ -4,6 +4,7 @@
  * achieved by running vega-lite.compile in the app build / dev (oracle).
  */
 import { dict, ownGet } from './util.js'
+import { checkDataReferences, normalizeSpecLists } from './spec-structure.js'
 import { mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
 import type {
   CompiledAxis,
@@ -26,10 +27,14 @@ import type {
 
 export type { SizeSpec }
 
-export function compileChart(rawSpec: VgSpec): CompiledChart {
-  if (!rawSpec || typeof rawSpec !== 'object') {
+export function compileChart(givenSpec: VgSpec): CompiledChart {
+  if (!givenSpec || typeof givenSpec !== 'object') {
     throw new Error('[aster] compileChart expects a Vega spec object')
   }
+  // vega-parser reads every scope list through vega-util `array()` and refuses a spec that uses a data
+  // set it never declared (`Undefined data set name`) before any view exists: same here, before anything runs.
+  const rawSpec = normalizeSpecLists(givenSpec)
+  checkDataReferences(rawSpec)
   // Vega parses a view with mergeConfig(defaultConfig(), spec.config): every
   // default below (mark, axis, legend, title, style, range...) is read from this
   // merged config, exactly as upstream does (see config-defaults.ts).
@@ -75,7 +80,6 @@ export function compileChart(rawSpec: VgSpec): CompiledChart {
   }
 
   const scales: CompiledScale[] = []
-  if (spec.scales != null && !Array.isArray(spec.scales)) throw new Error('[aster] spec.scales must be an array of scale definitions')
   for (const s of (spec.scales as Array<Record<string, unknown>>) ?? []) {
     if (s === null || typeof s !== 'object' || Array.isArray(s)) throw new Error('[aster] a scale definition must be an object')
     scales.push(compileScale(s))

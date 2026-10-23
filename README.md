@@ -44,9 +44,9 @@ import { renderSpec } from '@aster/core'
 const spec = {
   $schema: 'https://vega.github.io/schema/vega/v5.json',
   width: 400, height: 300,
-  data: { values: [
+  data: [{ name: 'data0', values: [
     { a: 'A', b: 28 }, { a: 'B', b: 55 }, { a: 'C', b: 43 }
-  ]},
+  ]}],
   scales: [
     { name: 'x', type: 'band', domain: { data: 'data0', field: 'a' }, range: 'width' },
     { name: 'y', type: 'linear', domain: { data: 'data0', field: 'b' }, range: 'height', zero: true }

@@ -43,7 +43,8 @@ describe('useChart', () => {
   it('surfaces render errors instead of throwing', () => {
     const results: Array<ReturnType<typeof useChart>> = []
     function Bad() {
-      const r = useChart({ marks: { bad: true } } as never)
+      // a mark over a data set the spec never declares: vega.parse refuses it (Undefined data set name)
+      const r = useChart({ marks: [{ type: 'rect', from: { data: 'nope' } }] } as never)
       results.push(r)
       return null
     }
