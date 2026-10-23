@@ -7,7 +7,7 @@ import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expres
 import { readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, compileExprTransform, sortOrder, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
-import { activeMeter, withLimits, boundedCount, checkRowCount } from './limits.js'
+import { activeMeter, withLimits, boundedCount, checkRowCount, meterItems, meterTick } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale, type ScaleContext } from './scales.js'
 
@@ -341,6 +341,8 @@ interface EvalContext {
   projectionStamp: Map<string, number>
   runtime: ExpressionRuntime
   _defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }>
+  /** Shared by every scope of one evaluation: a layout threw (vega logs it and renders the scene unlaid-out). */
+  layoutState: { failed: boolean }
   /** Signals whose `init` expression has run (it runs once). */
   initDone: Set<string>
   /** Signals the host supplied for this evaluation (an `init` never overrides them). */
@@ -462,7 +464,7 @@ function prepareChartCtx(
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}`
   const ctx: EvalContext = {
     chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new ProjectionRegistry(), projectionStamp: new Map(), runtime, _defs: defs,
-    initDone: new Set(), hostSignals: new Set([
+    layoutState: { failed: false }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
       ...(explicitSize.width ? ['width'] : []), ...(explicitSize.height ? ['height'] : []),
@@ -1329,7 +1331,7 @@ function buildContent(
     } catch {
       // vega's dataflow logs the layout error and renders the scene unlayouted:
       // cells keep their encoded (0,0) anchors and the view skips overflow growth.
-      ;(ctx as unknown as { __layoutError?: boolean }).__layoutError = true
+      ctx.layoutState.failed = true
     }
   }
   const { groups: guideGroups } = buildAxisAndLegend(ctx, items)
@@ -1350,7 +1352,7 @@ function buildContent(
   // grow the padding from guide/mark overflow, so measuring every top-level
   // group's recursive bounds here would be pure cost (O(items) per evaluation,
   // and the dominant cost of a one-row update on a 100k-point chart).
-  const padding = (ctx as unknown as { __layoutError?: boolean }).__layoutError
+  const padding = ctx.layoutState.failed
     || ctx.rawGuides
     || ctx.chart.autosize === 'none'
     ? ctx.chart.padding
@@ -3615,7 +3617,10 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
  * any other (their `role` is what the enclosing grid layout keys on).
  */
 function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] {
-  const groups = groupSources(mark, ctx).map((src) => buildGroupItem(mark, ctx, src))
+  const sources = groupSources(mark, ctx)
+  // one group item (and one scope) per datum / facet partition: bounded like any generated item (maxItems, the clock)
+  meterItems(sources.length, 'group items')
+  const groups = sources.map((src) => { meterTick('group item'); return buildGroupItem(mark, ctx, src) })
   // SortItems: the group items are ordered by their own properties (`datum["g"]`, `x`, ...)
   return mark.sort && groups.length > 1 ? (sortMarkItems(groups as SceneItem[], mark.sort) as SceneGroup[]) : groups
 }
@@ -3679,7 +3684,15 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       if (r) pushAll(content, Array.isArray(r) ? r : [r])
     }
     // ViewLayout: a `layout` grid positions the child groups (headers, footers, titles, cells) first
-    if (mark.layout) trellisLayout({ marktype: 'group', items: content } as unknown as SceneGroup, resolveLayoutOptions(mark.layout, childCtx))
+    if (mark.layout) {
+      try {
+        trellisLayout({ marktype: 'group', items: content } as unknown as SceneGroup, resolveLayoutOptions(mark.layout, childCtx))
+      } catch {
+        // a grid the layout cannot take (vega's gridLayout throws on e.g. fractional `columns`): the dataflow
+        // logs it and the cells stay where their encode put them; the view also skips overflow growth
+        ctx.layoutState.failed = true
+      }
+    }
 
     const { groups: guides } = buildAxisAndLegend(childCtx, content, mark.axes ?? [], mark.legends ?? [])
     const siblings: SceneGroup[] = [...content, ...guides]
