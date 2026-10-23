@@ -232,6 +232,8 @@ function contrastRatio(c1: unknown, c2: unknown): number {
 
 /** The functions the host registered (see {@link registerExpressionFunction}). */
 const REGISTERED = new Map<string, (...args: never[]) => unknown>()
+/** Bumped on every registration change: a compiled expression compiled under an older registry re-validates before it runs. */
+let registryEpoch = 0
 
 function createFunctionContext(runtime: ExpressionRuntime): Record<string, unknown> {
   const fns = createBuiltinFunctions(runtime)
@@ -277,10 +279,12 @@ export function registerExpressionFunction(name: string, fn: (...args: never[]) 
   if (typeof fn !== 'function') throw new Error(`[aster] registerExpressionFunction: "${name}" needs a function`)
   const previous = REGISTERED.get(name)
   REGISTERED.set(name, fn)
+  registryEpoch++
   return () => {
     if (REGISTERED.get(name) !== fn) return
     if (previous === undefined) REGISTERED.delete(name)
     else REGISTERED.set(name, previous)
+    registryEpoch++
   }
 }
 
@@ -482,6 +486,24 @@ export class ExpressionParseError extends Error {
   }
 }
 
+/** Every called name must be a function of the current context (or an engine intrinsic): else an ExpressionParseError, as vega's codegen. */
+function assertKnownFunctions(ast: AstNode, functions: Record<string, unknown>, expr: string): void {
+  const visit = (n: unknown): void => {
+    if (n === null || typeof n !== 'object') return
+    if (Array.isArray(n)) { for (const x of n) visit(x); return }
+    const node = n as { type?: string; callee?: { type?: string; name?: string } } & Record<string, unknown>
+    if (node.type === 'CallExpression' && node.callee?.type === 'Identifier' && typeof node.callee.name === 'string') {
+      let name = node.callee.name
+      if (name.startsWith('_')) name = name.slice(1)
+      if (name !== 'if' && !Object.hasOwn(functions, name) && !Object.hasOwn(DefaultFunctions, name)) {
+        throw new ExpressionParseError(`Unrecognized function: ${name}`, expr)
+      }
+    }
+    for (const k of Object.keys(node)) if (k !== 'type') visit(node[k])
+  }
+  visit(ast)
+}
+
 /** Compile an expression string to an evaluable function bound to a runtime. */
 export function compileExpr(expr: string, runtime: ExpressionRuntime): CompiledExpr {
   let ast: AstNode
@@ -492,10 +514,18 @@ export function compileExpr(expr: string, runtime: ExpressionRuntime): CompiledE
     if (e instanceof Error && e.name === 'AsterLimitError') throw e
     throw new ExpressionParseError(e instanceof Error ? e.message : String(e), expr, { cause: e })
   }
+  // vega refuses an unknown function when it parses and generates code ("Unrecognized function: x"), not when it is called
   const functions = createFunctionContext(runtime)
+  assertKnownFunctions(ast, functions, expr)
+  const compiledEpoch = registryEpoch
   const evalParam = expressionInterpreter.parameter({ functions }, { ast })
   const evalHandler = expressionInterpreter.handler({ functions }, { ast })
-  const compiled = (datum: unknown, params: unknown, event?: unknown) => {
+  const compiled = (datum: unknown, params: unknown, event?: unknown): unknown => {
+    // the registry changed since this closure was made (a function disposed, replaced): compile again under the
+    // current one -- an unknown name is then refused as at first compile, a replaced one calls the new function
+    if (registryEpoch !== compiledEpoch) {
+      return compileExpr(expr, runtime)(datum, params as never, event)
+    }
     // Signal values are exposed to expressions as $-prefixed params (vega convention).
     const p: Record<string, unknown> = {}
     if (params) {

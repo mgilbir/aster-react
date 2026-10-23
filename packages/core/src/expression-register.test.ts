@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { compileExpr, registerExpressionFunction, renderSpec, type ExpressionRuntime } from './index.js'
+import { compileExpr, registerExpressionFunction, renderSpec, ExpressionParseError, type ExpressionRuntime } from './index.js'
 
 const runtime: ExpressionRuntime = { scale: () => undefined, data: () => undefined, expr: (e) => compileExpr(e, runtime) }
 const cleanups: Array<() => void> = []
@@ -12,10 +12,6 @@ describe('registerExpressionFunction (vega expressionFunction)', () => {
     expect(compileExpr('price(datum.v, "$.2f")', runtime)({ v: 21 })).toBe('$.2f:42')
   })
 
-  it('an unregistered name fails as an unknown function does', () => {
-    expect(() => compileExpr('nosuchfn(1)', runtime)({})).toThrow()
-  })
-
   it('the disposer removes it, restoring what it replaced', () => {
     const off1 = registerExpressionFunction('twice', ((x: number) => x * 2) as never)
     const off2 = registerExpressionFunction('twice', ((x: number) => x * 3) as never)
@@ -23,7 +19,7 @@ describe('registerExpressionFunction (vega expressionFunction)', () => {
     off2()
     expect(compileExpr('twice(2)', runtime)({})).toBe(4)
     off1()
-    expect(() => compileExpr('twice(2)', runtime)({})).toThrow()
+    expect(() => compileExpr('twice(2)', runtime)).toThrow()
     off1() // twice is harmless
   })
 
@@ -48,5 +44,52 @@ describe('registerExpressionFunction (vega expressionFunction)', () => {
     reg('call', ((f: unknown) => typeof f) as never)
     const rt: ExpressionRuntime = { scale: () => (() => 1) as never, data: () => undefined, expr: (e) => compileExpr(e, rt) }
     expect(() => compileExpr('call(scale("x"))', rt)({})).toThrow(/Function argument refused/)
+  })
+
+  it('an unregistered name is refused when the expression is compiled, like vega\'s codegen', () => {
+    expect(() => compileExpr('nosuchfn(1)', runtime)).toThrow(ExpressionParseError)
+    expect(() => compileExpr('nosuchfn(1)', runtime)).toThrow(/Unrecognized function: nosuchfn/)
+  })
+
+  it('dispose, then compile a fresh expression: refused at compile time', () => {
+    const off = registerExpressionFunction('probe3', (() => 1) as never)
+    expect(compileExpr('probe3(1) + 0', runtime)({})).toBe(1)
+    off()
+    expect(() => compileExpr('probe3(1) + 0', runtime)).toThrow(/Unrecognized function: probe3/)
+  })
+
+  it('dispose, then run an expression compiled (and cached) before: refused, not a TypeError', () => {
+    const off = registerExpressionFunction('probe4', (() => 1) as never)
+    const cached = compileExpr('probe4(2)', runtime)
+    expect(cached({})).toBe(1)
+    off()
+    expect(() => cached({})).toThrow(ExpressionParseError)
+    expect(() => cached({})).toThrow(/Unrecognized function: probe4/)
+  })
+
+  it('re-register after disposal: a cached closure and a fresh compile both call the new function', () => {
+    const off1 = registerExpressionFunction('probe5', (() => 'old') as never)
+    const cached = compileExpr('probe5()', runtime)
+    off1()
+    const off2 = registerExpressionFunction('probe5', (() => 'new') as never)
+    cleanups.push(off2)
+    expect(cached({})).toBe('new')
+    expect(compileExpr('probe5()', runtime)({})).toBe('new')
+  })
+
+  it('two charts sharing the registry: disposal reaches the second, evaluation by evaluation', () => {
+    const spec = (): never => ({
+      width: 10, height: 10, padding: 0, autosize: 'none',
+      data: [{ name: 't', values: [{ a: 1 }], transform: [{ type: 'formula', as: 'x', expr: 'probe6(datum.a)' }] }],
+      marks: [{ type: 'text', from: { data: 't' }, encode: { update: { x: { value: 1 }, y: { value: 5 }, text: { field: 'x' } } } }],
+    }) as never
+    const off = registerExpressionFunction('probe6', ((v: number) => `v${v}`) as never)
+    expect(renderSpec(spec())).toContain('v1')
+    expect(renderSpec(spec())).toContain('v1')
+    off()
+    expect(() => renderSpec(spec())).toThrow(/Unrecognized function: probe6/)
+    const off2 = registerExpressionFunction('probe6', ((v: number) => `w${v}`) as never)
+    cleanups.push(off2)
+    expect(renderSpec(spec())).toContain('w1')
   })
 })
