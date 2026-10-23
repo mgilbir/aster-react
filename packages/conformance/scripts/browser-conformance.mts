@@ -43,6 +43,9 @@ function loadCorpus(): Entry[] {
 const entries = loadCorpus().filter((e) => !FILTER || e.name.includes(FILTER)).slice(0, LIMIT || undefined)
 console.log(`[browser-conformance] ${entries.length} corpus entries`)
 
+const CONTAINER_W = 400
+const CONTAINER_H = 300
+
 // Page entry: vega-embed (oracle) + aster, and the canonicalizer, all in-page.
 const entrySrc = `
 import embed from 'vega-embed'
@@ -58,16 +61,23 @@ window.__runEntry = async (entry) => {
   const isVl = String(spec.$schema ?? '').includes('vega-lite')
   try {
     // oracle: official vega (embed compiles Vega-Lite itself)
+    // The host has a size of its own: vega's containerSize() reads the view's container, so a Vega-Lite
+    // "container" width/height depends on it (an unsized inline host is 0 x 0 until it has content).
+    // Aster is handed the same size.
     const host = document.createElement('div')
+    host.style.width = '${CONTAINER_W}px'
+    host.style.height = '${CONTAINER_H}px'
     document.body.appendChild(host)
     const result = await embed(host, spec, { actions: false, renderer: 'svg' })
-    const oracleSvg = host.querySelector('svg')?.outerHTML ?? ''
+    // vega's string renderer (view.toSVG): the document Aster's renderSpec is the counterpart of. The DOM SVGRenderer
+    // (what embed shows) has no hyperlinks at all: it leaves a link to the view's click handler, so its markup has no <a>.
+    const oracleSvg = await result.view.toSVG()
     result.finalize()
     host.remove()
     // aster: own VL compiler for VL entries, then load URL data + renderSpec
     const compiled = isVl ? compile(spec) : spec
     const loaded = await loadSpecData(compiled as never, TRUSTED_LOAD_OPTIONS)
-    const ourSvg = renderSpec(loaded as never)
+    const ourSvg = renderSpec(loaded as never, { containerSize: { width: ${CONTAINER_W}, height: ${CONTAINER_H} } })
     const diffs = diffCanonical(canonicalizeSvg(oracleSvg), canonicalizeSvg(ourSvg))
     return { pass: diffs.length === 0, diffs: diffs.slice(0, 8), error: null }
   } catch (err) {
