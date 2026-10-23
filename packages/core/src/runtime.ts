@@ -5887,6 +5887,20 @@ function placeLegendTitleLast(group: SceneGroup, legend: CompiledLegend): void {
 /** vega-scale `isContinuous`: the scale types a gradient legend can draw. */
 const VEGA_CONTINUOUS_SCALES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential', 'diverging'])
 
+/** A legend's explicit `values` (a literal array, a signal, or an array holding signals), or undefined. */
+function resolveLegendValues(legend: CompiledLegend, ctx: EvalContext): unknown[] | undefined {
+  const raw = (legend as { values?: unknown }).values
+  if (raw == null) return undefined
+  const evalSignal = (v: unknown): unknown => {
+    if (v && typeof v === 'object' && typeof (v as { signal?: unknown }).signal === 'string') {
+      try { return ctx.runtime.expr((v as { signal: string }).signal)({}, ctx.signalParams) } catch { return undefined }
+    }
+    return v
+  }
+  const resolved = Array.isArray(raw) ? raw.map(evalSignal) : evalSignal(raw)
+  return Array.isArray(resolved) ? resolved : undefined
+}
+
 function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
   // Resolve the scale name (fill/stroke color legends, size legends, or shape legends).
   const scaleName = legend.shape ?? legend.stroke ?? legend.fill ?? legend.size ?? legend.opacity
@@ -5947,7 +5961,11 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
   // Domain values. A continuous symbol legend (opacity, or a color scale
   // without a gradient) lists generated ticks, not just the domain endpoints.
   const rawDomain = scale.domain() as unknown[]
-  const domain = (CONTINUOUS_TYPES.has(scaleType) && (legend as { values?: unknown }).values == null
+  // vega LegendEntries: `values = _.values || labelValues(scale, count)`; the spec's
+  // values may be a signal, or an array holding signals.
+  const explicitValues = resolveLegendValues(legend, ctx)
+  const domain = explicitValues
+    ?? (CONTINUOUS_TYPES.has(scaleType)
     && typeof (scale as { ticks?: (n?: number) => unknown[] }).ticks === 'function'
     ? ((scale as { ticks: (n?: number) => unknown[] }).ticks(5) as unknown[])
     : rawDomain)
@@ -6019,7 +6037,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const counted = tickCount(scale, gradCount, typeof tickMinStep === 'number' ? tickMinStep : undefined)
     if (typeof counted === 'number') gradCount = counted
     let tickNums = tickValues(scale, gradCount)
-    const legendValues = (legend as { values?: unknown }).values
+    const legendValues = explicitValues
     if (Array.isArray(legendValues)) tickNums = legendValues
     else if (tickNums.length < 3 && legendValues == null && d0 !== d1 && !(Number.isNaN(Number(d0)) && Number.isNaN(Number(d1)))) {
       tickNums = [d0, d1]
@@ -6047,12 +6065,12 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     }
     const legendFormatType = (legend as { formatType?: unknown }).formatType
     const legendCalendar = calendarOf(scaleType, legendFormatType)
-    const makeGradientFmt = (defaultFmt: string): ((v: unknown) => string) => {
+    const makeGradientFmt = (): ((v: unknown) => string) => {
       const L = locale(undefined)
       let base: (v: unknown) => string
       if (legendCalendar) {
-        const fmt = resolvedLegendFormat ?? defaultFmt
-        const format = legendCalendar === 'utc' ? L.utcFormat(fmt) : L.timeFormat(fmt)
+        // vega-scale tickFormat: no specifier means the locale's multi-scale time format
+        const format = legendCalendar === 'utc' ? L.utcFormat(resolvedLegendFormat) : L.timeFormat(resolvedLegendFormat)
         base = (v: unknown) => format(v instanceof Date ? v : new Date(Number(v)))
       } else if (resolvedLegendFormat) {
         base = (v: unknown) => L.format(resolvedLegendFormat)(typeof v === 'number' ? v : Number(v))
@@ -6071,8 +6089,11 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // vega's scaleFraction() builds a positional copy of the scale over the
     // legend domain, so non-linear scales (log/sqrt/symlog) place labels at
     // their transformed positions rather than linearly.
-    const gradD0n = typeof d0 === 'number' ? d0 : 0
-    const gradD1n = typeof d1 === 'number' ? d1 : 1
+    // a time scale's domain and ticks are Dates: vega's scaleFraction subtracts them
+    // (milliseconds), so a Date is its time value, never a stand-in 0
+    const legendNum = (v: unknown, dflt: number): number => typeof v === 'number' ? v : v instanceof Date ? +v : dflt
+    const gradD0n = legendNum(d0, 0)
+    const gradD1n = legendNum(d1, 1)
     const gradientFractionScale = scaleFraction(scale, gradD0n, gradD1n)
     const gradientFraction = (v: number): number => {
       const out = gradientFractionScale(v)
@@ -6085,16 +6106,17 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // position along the strip. Calibrated to the oracle.
     if (legend.direction === 'horizontal' || orient === 'bottom' || orient === 'top') {
       const thickness = legend.gradientThickness ?? 16
-      const d0n = typeof d0 === 'number' ? d0 : 0
-      const d1n = typeof d1 === 'number' ? d1 : 1
-      const legendFmt = makeGradientFmt(d0n === d1n ? '.6f' : '.1~f')
+      const legendFmt = makeGradientFmt()
       const items: SceneItem[] = []
-      const bgW = gradientLength
+      // legendLayout: the box spans the content from the legend origin to the right
+      // edge of everything in it (labels centred on their ticks overhang the strip);
+      // the left overhang is not part of it (legendBounds pins x1 to the padding).
+      let bgW = gradientLength
       const bgH = titleH0 + thickness + 12
       const bgX0 = borderColor0 != null ? 0.5 : 0
       const bgY0 = borderColor0 != null ? 0.5 : 0
       const gradCRH = (legend as { cornerRadius?: number }).cornerRadius
-      items.push({ path: gradCRH && gradCRH > 0 ? roundedRectPath(bgX0, bgY0, bgW, bgH, Math.min(gradCRH, bgW / 2, bgH / 2)) : `M${bgX0},${bgY0}h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
+      const bgSlot = items.length
       if (titleStr0) {
         const hAnchor = (legend as { titleAnchor?: string }).titleAnchor ?? 'start'
         const hAlign = (legend as { titleAlign?: string }).titleAlign
@@ -6102,19 +6124,32 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         const hBase = (legend as { titleBaseline?: string }).titleBaseline ?? 'top'
         const hY = hBase === 'middle' ? Math.round(0.3 * titleFs0) : hBase === 'bottom' ? Math.round(-0.21 * titleFs0) : Math.round(0.79 * titleFs0)
         const hX = hAnchor === 'end' ? gradientLength : hAnchor === 'middle' ? gradientLength / 2 : 0
+        const hTitleW = nominalTextWidth(titleStr0, Math.abs(titleFs0), 'bold')
+        bgW = Math.max(bgW, hX + (hAlign === 'center' ? hTitleW / 2 : hAlign === 'right' ? 0 : hTitleW))
         const hLimit = (legend as { titleLimit?: number }).titleLimit
         items.push({ _legendTitle: true, text: titleStr0, x: hX, y: hY, align: hAlign as SceneItem['align'], fill: titleColor0, fontSize: titleFs0, ...(hLimit != null ? { limit: hLimit } : {}), ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
       }
       items.push({ path: `M0,0h${gradientLength}v${thickness}h${-gradientLength}Z`, x: 0, y: titleH0, fill: `url(#${gradientIdH})`, stroke: gradStrokeColor, strokeWidth: gradStrokeWidth, opacity: gradOpacityProp ?? 1 })
       const labelStartH = items.length
       for (const t of tickNums) {
-        const tNum = typeof t === 'number' ? t : 0
+        const tNum = legendNum(t, 0)
         const perc = gradientFraction(tNum)
-        items.push({ text: legendFmt(tNum), x: perc * gradientLength, y: titleH0 + thickness + 10, align: 'center', fill: labelColor0, fontSize: labelFs0, ...((legend as { labelLimit?: number }).labelLimit != null ? { limit: (legend as { labelLimit?: number }).labelLimit } : {}), ...(labelOpacity0 != null ? { fillOpacity: labelOpacity0 } : {}) })
+        const labelText = legendFmt(tNum)
+        // vega-parser legend-gradient-labels: flush at the strip's ends, centred between them
+        const labelAlign = perc <= 0 ? 'left' : perc >= 1 ? 'right' : 'center'
+        items.push({ text: labelText, x: perc * gradientLength, y: titleH0 + thickness + 10, align: labelAlign, fill: labelColor0, fontSize: labelFs0, ...((legend as { labelLimit?: number }).labelLimit != null ? { limit: (legend as { labelLimit?: number }).labelLimit } : {}), ...(labelOpacity0 != null ? { fillOpacity: labelOpacity0 } : {}) })
       }
       // vega-parser legend-gradient-labels: the labels go through the Overlap
       // transform (config.legend.labelOverlap defaults to true)
       applyOverlap(items.slice(labelStartH), (legend as { labelOverlap?: unknown }).labelOverlap, (legend as { labelSeparation?: number }).labelSeparation ?? 0)
+      // vega's Overlap transform re-bounds the label mark from the VISIBLE labels only
+      for (const lab of items.slice(labelStartH)) {
+        if (lab.opacity === 0) continue
+        const lw = nominalTextWidth(String(lab.text), labelFs0)
+        bgW = Math.max(bgW, (lab.x ?? 0) + (lab.align === 'center' ? lw / 2 : lab.align === 'left' ? lw : 0))
+      }
+      bgW = Math.ceil(bgW)
+      items.splice(bgSlot, 0, { path: gradCRH && gradCRH > 0 ? roundedRectPath(bgX0, bgY0, bgW, bgH, Math.min(gradCRH, bgW / 2, bgH / 2)) : `M${bgX0},${bgY0}h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
       if (gradStops.length && !ctx._defs.some((d) => d.id === gradientIdH)) ctx._defs.push({ id: gradientIdH, colorStops: gradStops, direction: 'horizontal' })
       const gradientGroup = { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: bgH, items } as SceneGroup
       // vega legendLayout boundStrokes the outer rect with the legend's OWN
@@ -6137,9 +6172,18 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // (vega measures both with textMetrics: labels 10px, title bold 11px).
     // Measure the FORMATTED labels — vega-format emits U+2212 for negatives
     // (16.96px for '−10' vs 14.45px for the ASCII '-10' of String(t)).
-    const measureFmt = makeGradientFmt('.1~f')
+    const measureFmt = makeGradientFmt()
     const labelStrs = tickNums.map((t: unknown) => measureFmt(t))
-    const maxLabelW = labelStrs.reduce((m: number, s: string) => Math.max(m, nominalTextWidth(s, labelFs0)), 0)
+    // Overlap re-bounds the label mark from the labels it left visible, so the
+    // box is as wide as the widest of THOSE: decide visibility with the same
+    // positions the labels get below (the overlap test is x-independent here).
+    const probe: SceneItem[] = tickNums.map((t: unknown, i: number) => {
+      const perc = gradientFraction(legendNum(t, 0))
+      const off = perc <= 0 ? Math.round(-0.21 * labelFs0) : perc >= 1 ? Math.round(0.79 * labelFs0) : Math.round(0.3 * labelFs0)
+      return { text: labelStrs[i]!, x: 0, y: (1 - perc) * L + off, align: 'left', fontSize: labelFs0 } as SceneItem
+    })
+    applyOverlap(probe, (legend as { labelOverlap?: unknown }).labelOverlap, (legend as { labelSeparation?: number }).labelSeparation ?? 0)
+    const maxLabelW = probe.reduce((m: number, it, i: number) => it.opacity === 0 ? m : Math.max(m, nominalTextWidth(labelStrs[i]!, labelFs0)), 0)
     const titleStr = String(legend.title ?? '')
     const titleWidth = titleStr.length > 0 ? nominalTextWidth(titleStr, Math.abs(titleFs0), 'bold') : 0
     const vThickness = (legend as { gradientThickness?: number }).gradientThickness ?? 16
@@ -6171,8 +6215,9 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const contentX = gradPad + titleExtraLeft + (titleOrientG === 'left' ? sideTitleW : 0)
     // Legend layout includes label bounds, which can extend below a short
     // gradient (or below the domain when explicit values fall outside it).
-    const labelBottom = tickNums.reduce<number>((m, t) => {
-      const tNum = typeof t === 'number' ? t : 0
+    const labelBottom = tickNums.reduce<number>((m, t, i) => {
+      if (probe[i]!.opacity === 0) return m // hidden by Overlap: not in the label mark's bounds
+      const tNum = legendNum(t, 0)
       const perc = gradientFraction(tNum)
       const baselineOffset =
         perc <= 0 ? Math.round(-0.21 * labelFs0)
@@ -6235,16 +6280,13 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // Labels. Vega positions each label at (1 - perc) * L and then shifts it by
     // the text baseline offset (labels flush against the gradient edges get
     // top/bottom baselines), rounding to whole pixels. Replicate that here.
-    const d0n = typeof d0 === 'number' ? d0 : 0
-    const d1n = typeof d1 === 'number' ? d1 : 1
-    const LABEL_FONT_SIZE = 10
     // Vega formats gradient legend labels with the locale formatter, which uses
     // the Unicode minus sign (U+2212) for negative values. Match that by using
     // the locale number formatter rather than String().
-    const legendFmt = makeGradientFmt(d0n === d1n ? '.6f' : '.1~f')
+    const legendFmt = makeGradientFmt()
     const labelStartV = items.length
     for (const t of tickNums) {
-      const tNum = typeof t === 'number' ? t : 0
+      const tNum = legendNum(t, 0)
       const perc = gradientFraction(tNum)
       const baselineOffset =
         perc <= 0 ? Math.round(-0.21 * labelFs0)
@@ -6289,7 +6331,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     if (!sizeScale) return null
     // Legend tick values (vega: labelValues(scale, 5)); drop the first value
     // when it maps to size zero (vega#717).
-    const sizeLegendValues = (legend as { values?: unknown }).values
+    const sizeLegendValues = explicitValues
     let sizeTickCount = 5
     const sizeTickMin = (legend as { tickMinStep?: number }).tickMinStep
     const sizeCounted = tickCount(sizeScale, sizeTickCount, typeof sizeTickMin === 'number' ? sizeTickMin : undefined)

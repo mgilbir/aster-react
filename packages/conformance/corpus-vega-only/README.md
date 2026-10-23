@@ -18,7 +18,6 @@ vega-lite's own Vega; `0` means the SVG matches and a gate other than the SVG di
 | `facet-wrap`, `facet-wrap-sized-spec`, `facet-encoding-wrap-transform`, `facet-layer`, `facet-nested-field`, `facet-row-col-color`, `facet-in-concat` | wrapped / layered facets: header and cell placement, axis ticks per cell; `facet-in-concat` throws (`reading 'data'`) |
 | `hdr-*` (label anchor / orient, `labels: false`, title anchor) | facet header placement beyond the defaults |
 | `cfgs-bar-size`, `cfgs-line-size`, `cfgs-opacity`, `cfgs-text-fontsize`, `cfgs-tick-size`, `concat-shared-color*`, `resolve-concat-color-shared`, `config-legend-disable-overridden`, `ebx-ebd-2d-interp` | legends: symbol shape and fill for size / opacity / strokeWidth legends over bars, lines, text and ticks, and shared legends in compositions |
-| `cfgf-time-format`, `color-temporal-point` | text and legend labels of a raw temporal field (`2024/10`, `Oct 01, 2024`) are missing |
 | `stacked-area-aggregate`, `tr-impute-mean`, `tr-impute-value` | series paint order of stacked areas / imputed lines differs |
 | `cfgf-aria-false`, `cfgs-strokewidth` (SVG matches) | the a11y legend caption for these legends differs from vega's aria-label |
 | `repeat-layer` (SVG matches) | the DOM patcher cannot build the scene (DOM-vs-string parity) |

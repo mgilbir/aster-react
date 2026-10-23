@@ -125,3 +125,41 @@ describe('signal init and containerSize(): a container-sized spec falls back lik
     expect(renderSceneToSvg(evaluateChart(compileChart(spec as never)))).toContain('M21,0')
   })
 })
+
+describe('C55: time gradient legends label and place their Date ticks like vega', () => {
+  const timeSpec = (scaleType: string, legend: Spec, extra: Spec = {}): Spec => ({
+    width: 200, height: 120, padding: 5, autosize: 'none',
+    data: [{ name: 'd', values: [{ t: '2024-01-15' }, { t: '2024-03-10' }, { t: '2024-06-30' }, { t: '2024-11-03' }], format: { parse: { t: 'date' } } }],
+    scales: [{ name: 'c', type: scaleType, domain: { data: 'd', field: 't' }, range: { scheme: 'blues' } }],
+    legends: [{ fill: 'c', type: 'gradient', ...legend }], ...extra,
+  })
+  const cases: Array<[string, Spec]> = [
+    ['time scale, no format (the locale multi-format, not ".1~f")', timeSpec('time', {})],
+    ['utc scale, no format', timeSpec('utc', {})],
+    ['explicit time format', timeSpec('time', { format: '%b %d, %Y' })],
+    ['formatType utc on a time scale', timeSpec('time', { format: '%Y-%m-%d', formatType: 'utc' })],
+    ['horizontal strip: the box grows to the overhanging last label', timeSpec('time', { orient: 'bottom', direction: 'horizontal', gradientLength: 220 })],
+    ['horizontal strip with a title wider than the strip', timeSpec('time', { orient: 'bottom', direction: 'horizontal', gradientLength: 60, title: 'A long legend title' })],
+    ['horizontal numeric strip keeps its box', { width: 200, height: 100, padding: 5, autosize: 'none', data: [{ name: 'd', values: [{ v: 1 }, { v: 9 }] }], scales: [{ name: 'c', type: 'linear', domain: { data: 'd', field: 'v' }, range: { scheme: 'viridis' } }], legends: [{ fill: 'c', type: 'gradient', orient: 'top', direction: 'horizontal', gradientLength: 100 }] }],
+    ['explicit tick values', timeSpec('time', { values: [{ signal: "datetime(2024, 2, 1)" }, { signal: "datetime(2024, 8, 1)" }], format: '%b' })],
+    ['labelOverlap with a tickCount', timeSpec('time', { tickCount: 12, gradientLength: 100 })],
+  ]
+  for (const [name, spec] of cases) it(name, async () => expect(await compare(spec)).toEqual([]))
+})
+
+describe('gradient legends are sized by the labels Overlap leaves visible', () => {
+  const numeric = (legend: Spec, domain = [0, 1000]): Spec => ({
+    width: 200, height: 120, padding: 5, autosize: 'none',
+    data: [{ name: 'd', values: domain.map((v) => ({ v })) }],
+    scales: [{ name: 'c', type: 'linear', domain: { data: 'd', field: 'v' }, range: { scheme: 'viridis' } }],
+    legends: [{ fill: 'c', type: 'gradient', ...legend }],
+  })
+  for (const gl of [40, 64, 100, 200]) for (const tc of [3, 6, 12]) for (const method of [true, 'parity', 'greedy', false]) {
+    it(`vertical gradientLength ${gl}, tickCount ${tc}, labelOverlap ${method}`, async () => {
+      expect(await compare(numeric({ gradientLength: gl, tickCount: tc, labelOverlap: method }))).toEqual([])
+    })
+    it(`horizontal gradientLength ${gl * 2}, tickCount ${tc}, labelOverlap ${method}`, async () => {
+      expect(await compare(numeric({ orient: 'bottom', direction: 'horizontal', gradientLength: gl * 2, tickCount: tc, labelOverlap: method }))).toEqual([])
+    })
+  }
+})
