@@ -30,7 +30,7 @@ describe('group items', () => {
   it('any group name or role is a plain group (no routing on name substrings, C56)', () => {
     for (const name of ['page_header', 'page_footer', 'my-title', 'row_header_x']) {
       const s = spec()
-      ;(s.marks![0] as Record<string, unknown>).name = name
+      ;(s as unknown as { marks: Array<Record<string, unknown>> }).marks[0]!.name = name
       expect(() => renderSpec(s)).not.toThrow()
       expect(evaluateChart(compileChart(s)).items.filter((g) => g.name === name)).toHaveLength(5)
     }
