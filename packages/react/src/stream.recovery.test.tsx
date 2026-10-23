@@ -4,7 +4,6 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { AsterLimitError, AsterStreamBackpressureError, type ChartStream as CoreStream } from '@aster/core'
-import { Chart } from './Chart'
 import { ChartStream, ChartWorkerStream, type ChartStreamHandle } from './ChartStream'
 import { useChartStream, type UseChartStreamResult } from './useChartStream'
 import { useChartWorkerStream, type WorkerChartStreamResult } from './useChartWorkerStream'
@@ -12,6 +11,7 @@ import {
   handleChartWorkerRequest, handleWorkerMessage, registerWorkerUrlPolicy, useChartWorker,
   type ChartWorkerStreamRequest,
 } from './worker'
+import { forEachVariant } from './testing/variants'
 
 const wait = (ms = 30): Promise<void> => new Promise((r) => setTimeout(r, ms))
 const rows = (n: number, from = 0) => Array.from({ length: n }, (_, i) => ({ x: from + i, y: from + i }))
@@ -232,15 +232,17 @@ describe('urlPolicy over the worker protocol (C93)', () => {
 
 describe('limits meters flow through the React surface', () => {
   const gen = { width: 50, height: 50, padding: 0, autosize: 'none', data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop: 1000, as: 'x' }] }], marks: [] } as never
-  it('maxGeneratedRows is enforced by <Chart>, reported once', () => {
-    const onError = vi.fn<(e: Error) => void>()
-    const host = document.createElement('div')
-    document.body.appendChild(host)
-    const root = createRoot(host)
-    act(() => { root.render(<Chart spec={gen} width={50} height={50} limits={{ maxGeneratedRows: 100 }} onError={onError} />) })
-    expect(host.querySelector('[role="alert"]')).not.toBeNull()
-    expect(onError.mock.calls[0]![0]).toBeInstanceOf(AsterLimitError)
-    expect(onError).toHaveBeenCalledTimes(1)
+  forEachVariant(['svg'], (Chart) => {
+    it('maxGeneratedRows is enforced by <Chart>, reported once', () => {
+      const onError = vi.fn<(e: Error) => void>()
+      const host = document.createElement('div')
+      document.body.appendChild(host)
+      const root = createRoot(host)
+      act(() => { root.render(<Chart spec={gen} width={50} height={50} limits={{ maxGeneratedRows: 100 }} onError={onError} />) })
+      expect(host.querySelector('[role="alert"]')).not.toBeNull()
+      expect(onError.mock.calls[0]![0]).toBeInstanceOf(AsterLimitError)
+      expect(onError).toHaveBeenCalledTimes(1)
+    })
   })
   it('the worker request enforces it too', () => {
     const r = handleChartWorkerRequest({ id: 1, spec: gen, input: { limits: { maxGeneratedRows: 100 } } })

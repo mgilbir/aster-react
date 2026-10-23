@@ -4,187 +4,191 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { Chart } from './Chart'
+import { forEachVariant } from './testing/variants'
 
-function makeBrushVegaSpec() {
-  return {
-    $schema: 'https://vega.github.io/schema/vega/v6.json',
-    width: 400,
-    height: 300,
-    padding: 5,
-    background: 'white',
-    autosize: 'none',
-    signals: [
-      { name: 'brush', value: null, type: 'object' },
-    ],
-    data: [
-      {
-        name: 'table',
-        values: [
-          { x: 1, y: 2 }, { x: 2, y: 4 }, { x: 3, y: 3 },
-          { x: 4, y: 5 }, { x: 5, y: 2 },
-        ],
-      },
-    ],
-    scales: [
-      {
-        name: 'x',
-        type: 'linear',
-        domain: { data: 'table', field: 'x' } as never,
-        range: 'width',
-        nice: true,
-      },
-      {
-        name: 'y',
-        type: 'linear',
-        domain: { data: 'table', field: 'y' } as never,
-        range: [{ signal: 'height' }, 0],
-        nice: true,
-      },
-    ],
-    marks: [
-      {
-        type: 'point',
-        from: { data: 'table' },
-        encode: {
-          update: {
-            x: { scale: 'x', field: 'x' },
-            y: { scale: 'y', field: 'y' },
-            fill: { value: 'steelblue' },
-            fillOpacity: { value: 0.7 },
-            size: { value: 50 },
+// The matrix runs every test below on <Chart>, <SvgChart> and <SvgChart interaction={interaction}>;
+// `Chart` is the variant's component (see testing/variants.tsx).
+forEachVariant(['svg'], (Chart, variant) => {
+  function makeBrushVegaSpec() {
+    return {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 400,
+      height: 300,
+      padding: 5,
+      background: 'white',
+      autosize: 'none',
+      signals: [
+        { name: 'brush', value: null, type: 'object' },
+      ],
+      data: [
+        {
+          name: 'table',
+          values: [
+            { x: 1, y: 2 }, { x: 2, y: 4 }, { x: 3, y: 3 },
+            { x: 4, y: 5 }, { x: 5, y: 2 },
+          ],
+        },
+      ],
+      scales: [
+        {
+          name: 'x',
+          type: 'linear',
+          domain: { data: 'table', field: 'x' } as never,
+          range: 'width',
+          nice: true,
+        },
+        {
+          name: 'y',
+          type: 'linear',
+          domain: { data: 'table', field: 'y' } as never,
+          range: [{ signal: 'height' }, 0],
+          nice: true,
+        },
+      ],
+      marks: [
+        {
+          type: 'point',
+          from: { data: 'table' },
+          encode: {
+            update: {
+              x: { scale: 'x', field: 'x' },
+              y: { scale: 'y', field: 'y' },
+              fill: { value: 'steelblue' },
+              fillOpacity: { value: 0.7 },
+              size: { value: 50 },
+            },
           },
         },
-      },
-    ],
-  }
-}
-
-describe('Chart brush interaction', () => {
-  const setPointerCaptures = vi.fn()
-  const releasePointerCaptures = vi.fn()
-
-  beforeEach(() => {
-    ;(Element.prototype as unknown as Record<string, unknown>).setPointerCapture = setPointerCaptures
-    ;(Element.prototype as unknown as Record<string, unknown>).releasePointerCapture = releasePointerCaptures
-    ;(Element.prototype as unknown as Record<string, unknown>).hasPointerCapture = vi.fn(() => false)
-    ;(Element.prototype as unknown as Record<string, unknown>).getPointerCapture = vi.fn(() => null)
-  })
-
-  afterEach(() => {
-    setPointerCaptures.mockReset()
-    releasePointerCaptures.mockReset()
-    document.body.innerHTML = ''
-  })
-
-  it('dispatching pointer events on the overlay calls onSelect with a valid interval', () => {
-    const onSelect = vi.fn()
-    const spec = makeBrushVegaSpec()
-
-    const container = document.createElement('div')
-    container.style.width = '445px'
-    container.style.height = '340px'
-    document.body.appendChild(container)
-
-    let root: ReturnType<typeof createRoot> | null = null
-
-    act(() => {
-      root = createRoot(container)
-      root.render(<Chart spec={spec} width={400} height={300} onSelect={onSelect} ariaLabel="brush test" />)
-    })
-
-    // Verify the interactive overlay exists
-    const overlay = container.querySelector('[data-testid="chart-brush-overlay"]')
-    expect(overlay).not.toBeNull()
-
-    // Mock getBoundingClientRect so coordinates map correctly
-    const rect: DOMRect = {
-      left: 0, top: 0, width: 445, height: 340,
-      right: 445, bottom: 340, x: 0, y: 0,
-      toJSON: () => ({}),
-    }
-    overlay!.getBoundingClientRect = () => rect as DOMRect
-    ;(container as HTMLElement).getBoundingClientRect = () => rect as DOMRect
-
-    // Simulate drag: pointerdown → pointermove → pointerup
-    act(() => {
-      overlay!.dispatchEvent(new PointerEvent('pointerdown', {
-        clientX: 100, clientY: 80, pointerId: 1, bubbles: true,
-      }))
-    })
-    act(() => {
-      overlay!.dispatchEvent(new PointerEvent('pointermove', {
-        clientX: 200, clientY: 150, pointerId: 1, bubbles: true,
-      }))
-    })
-    act(() => {
-      overlay!.dispatchEvent(new PointerEvent('pointerup', {
-        clientX: 200, clientY: 150, pointerId: 1, bubbles: true,
-      }))
-    })
-
-    // onSelect should have been called once with a non-null interval
-    expect(onSelect).toHaveBeenCalledTimes(1)
-    const interval = onSelect.mock.calls[0]![0] as any
-    expect(interval).not.toBeNull()
-    expect(Array.isArray(interval!.x)).toBe(true)
-    expect(Array.isArray(interval!.y)).toBe(true)
-    expect(interval!.x!.length).toBe(2)
-    expect(interval!.y!.length).toBe(2)
-    expect(Number.isFinite(interval!.x![0])).toBe(true)
-    expect(Number.isFinite(interval!.x![1])).toBe(true)
-    expect(Number.isFinite(interval!.y![0])).toBe(true)
-    expect(Number.isFinite(interval!.y![1])).toBe(true)
-
-    root!.unmount()
-  })
-})
-
-describe('Chart point selection', () => {
-  beforeEach(() => {
-    ;(Element.prototype as unknown as Record<string, unknown>).setPointerCapture = vi.fn()
-    ;(Element.prototype as unknown as Record<string, unknown>).releasePointerCapture = vi.fn()
-  })
-  afterEach(() => { document.body.innerHTML = '' })
-
-  it('reports the clicked datum and clears interval selection on a click', async () => {
-    const onPointSelect = vi.fn()
-    const onSelect = vi.fn()
-    const spec = {
-      $schema: 'https://vega.github.io/schema/vega/v6.json',
-      width: 100, height: 100, padding: 0, autosize: 'none',
-      data: [{ name: 't', values: [{ cat: 'a', v: 5 }, { cat: 'b', v: 7 }] }],
-      scales: [
-        { name: 'x', type: 'band', domain: { data: 't', field: 'cat' } as never, range: [0, 100] as never },
-        { name: 'y', type: 'linear', domain: [0, 10] as never, range: [100, 0] as never },
       ],
-      marks: [{
-        type: 'rect', from: { data: 't' },
-        encode: { enter: {
-          x: { scale: 'x', field: 'cat' }, width: { scale: 'x', band: 1 },
-          y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 }, fill: { value: '#4c78a8' },
-        } },
-      }],
     }
-    const container = document.createElement('div')
-    document.body.appendChild(container)
-    const root = createRoot(container)
-    await act(async () => {
-      root.render(<Chart spec={spec} width={100} height={100} onPointSelect={onPointSelect} onSelect={onSelect} />)
+  }
+
+  describe('Chart brush interaction', () => {
+    const setPointerCaptures = vi.fn()
+    const releasePointerCaptures = vi.fn()
+
+    beforeEach(() => {
+      ;(Element.prototype as unknown as Record<string, unknown>).setPointerCapture = setPointerCaptures
+      ;(Element.prototype as unknown as Record<string, unknown>).releasePointerCapture = releasePointerCaptures
+      ;(Element.prototype as unknown as Record<string, unknown>).hasPointerCapture = vi.fn(() => false)
+      ;(Element.prototype as unknown as Record<string, unknown>).getPointerCapture = vi.fn(() => null)
     })
-    const overlay = container.querySelector('[data-testid="chart-brush-overlay"]')!
-    const rect = { left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
-    overlay.getBoundingClientRect = () => rect
-    ;(container as HTMLElement).getBoundingClientRect = () => rect
-    await act(async () => {
-      overlay.dispatchEvent(new PointerEvent('pointerdown', { clientX: 20, clientY: 80, pointerId: 1, bubbles: true }))
+
+    afterEach(() => {
+      setPointerCaptures.mockReset()
+      releasePointerCaptures.mockReset()
+      document.body.innerHTML = ''
     })
-    await act(async () => {
-      overlay.dispatchEvent(new PointerEvent('pointerup', { clientX: 20, clientY: 80, pointerId: 1, bubbles: true }))
+
+    it('dispatching pointer events on the overlay calls onSelect with a valid interval', () => {
+      const onSelect = vi.fn()
+      const spec = makeBrushVegaSpec()
+
+      const container = document.createElement('div')
+      container.style.width = '445px'
+      container.style.height = '340px'
+      document.body.appendChild(container)
+
+      let root: ReturnType<typeof createRoot> | null = null
+
+      act(() => {
+        root = createRoot(container)
+        root.render(<Chart spec={spec} width={400} height={300} onSelect={onSelect} ariaLabel="brush test" />)
+      })
+
+      // Verify the interactive overlay exists
+      const overlay = container.querySelector('[data-testid="chart-brush-overlay"]')
+      expect(overlay).not.toBeNull()
+
+      // Mock getBoundingClientRect so coordinates map correctly
+      const rect: DOMRect = {
+        left: 0, top: 0, width: 445, height: 340,
+        right: 445, bottom: 340, x: 0, y: 0,
+        toJSON: () => ({}),
+      }
+      overlay!.getBoundingClientRect = () => rect as DOMRect
+      ;(container as HTMLElement).getBoundingClientRect = () => rect as DOMRect
+
+      // Simulate drag: pointerdown → pointermove → pointerup
+      act(() => {
+        overlay!.dispatchEvent(new PointerEvent('pointerdown', {
+          clientX: 100, clientY: 80, pointerId: 1, bubbles: true,
+        }))
+      })
+      act(() => {
+        overlay!.dispatchEvent(new PointerEvent('pointermove', {
+          clientX: 200, clientY: 150, pointerId: 1, bubbles: true,
+        }))
+      })
+      act(() => {
+        overlay!.dispatchEvent(new PointerEvent('pointerup', {
+          clientX: 200, clientY: 150, pointerId: 1, bubbles: true,
+        }))
+      })
+
+      // onSelect should have been called once with a non-null interval
+      expect(onSelect).toHaveBeenCalledTimes(1)
+      const interval = onSelect.mock.calls[0]![0] as any
+      expect(interval).not.toBeNull()
+      expect(Array.isArray(interval!.x)).toBe(true)
+      expect(Array.isArray(interval!.y)).toBe(true)
+      expect(interval!.x!.length).toBe(2)
+      expect(interval!.y!.length).toBe(2)
+      expect(Number.isFinite(interval!.x![0])).toBe(true)
+      expect(Number.isFinite(interval!.x![1])).toBe(true)
+      expect(Number.isFinite(interval!.y![0])).toBe(true)
+      expect(Number.isFinite(interval!.y![1])).toBe(true)
+
+      root!.unmount()
     })
-    expect(onPointSelect).toHaveBeenCalledTimes(1)
-    expect(onPointSelect.mock.calls[0]![0]).toMatchObject({ cat: 'a', v: 5 })
-    expect(onSelect).toHaveBeenCalledWith(null)
-    await act(async () => { root.unmount() })
+  })
+
+  describe('Chart point selection', () => {
+    beforeEach(() => {
+      ;(Element.prototype as unknown as Record<string, unknown>).setPointerCapture = vi.fn()
+      ;(Element.prototype as unknown as Record<string, unknown>).releasePointerCapture = vi.fn()
+    })
+    afterEach(() => { document.body.innerHTML = '' })
+
+    variant.it(['interaction'], 'reports the clicked datum and clears interval selection on a click', async () => {
+      const onPointSelect = vi.fn()
+      const onSelect = vi.fn()
+      const spec = {
+        $schema: 'https://vega.github.io/schema/vega/v6.json',
+        width: 100, height: 100, padding: 0, autosize: 'none',
+        data: [{ name: 't', values: [{ cat: 'a', v: 5 }, { cat: 'b', v: 7 }] }],
+        scales: [
+          { name: 'x', type: 'band', domain: { data: 't', field: 'cat' } as never, range: [0, 100] as never },
+          { name: 'y', type: 'linear', domain: [0, 10] as never, range: [100, 0] as never },
+        ],
+        marks: [{
+          type: 'rect', from: { data: 't' },
+          encode: { enter: {
+            x: { scale: 'x', field: 'cat' }, width: { scale: 'x', band: 1 },
+            y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 }, fill: { value: '#4c78a8' },
+          } },
+        }],
+      }
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      await act(async () => {
+        root.render(<Chart spec={spec} width={100} height={100} onPointSelect={onPointSelect} onSelect={onSelect} />)
+      })
+      const overlay = container.querySelector('[data-testid="chart-brush-overlay"]')!
+      const rect = { left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+      overlay.getBoundingClientRect = () => rect
+      ;(container as HTMLElement).getBoundingClientRect = () => rect
+      await act(async () => {
+        overlay.dispatchEvent(new PointerEvent('pointerdown', { clientX: 20, clientY: 80, pointerId: 1, bubbles: true }))
+      })
+      await act(async () => {
+        overlay.dispatchEvent(new PointerEvent('pointerup', { clientX: 20, clientY: 80, pointerId: 1, bubbles: true }))
+      })
+      expect(onPointSelect).toHaveBeenCalledTimes(1)
+      expect(onPointSelect.mock.calls[0]![0]).toMatchObject({ cat: 'a', v: 5 })
+      expect(onSelect).toHaveBeenCalledWith(null)
+      await act(async () => { root.unmount() })
+    })
   })
 })

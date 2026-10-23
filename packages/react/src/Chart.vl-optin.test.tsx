@@ -3,9 +3,9 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect } from 'vitest'
-import { Chart } from './Chart'
 import { hasVegaLiteCompiler } from './vl-registry'
 import { isVegaLiteSpec, normalizeChartSpec } from './spec'
+import { forEachVariant } from './testing/variants'
 
 const vlSpec = {
   $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
@@ -36,15 +36,17 @@ describe('Vega-Lite is opt-in', () => {
     expect(normalizeChartSpec(vega as never)).toBe(vega)
   })
 
-  it('fails fast (with the fix) when <Chart> receives a VL spec', () => {
-    const container = document.createElement('div')
-    document.body.appendChild(container)
-    const root = createRoot(container)
-    // A missing addon is a configuration error, not a data error: throw with
-    // the exact import to add rather than rendering a generic failure alert.
-    expect(() => {
-      act(() => { root.render(<Chart spec={vlSpec} width={200} height={100} a11y={false} />) })
-    }).toThrow(/@aster\/react\/vl/)
-    container.remove()
+  forEachVariant(['svg'], (Chart) => {
+    it('fails fast (with the fix) when <Chart> receives a VL spec', () => {
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      // A missing addon is a configuration error, not a data error: throw with
+      // the exact import to add rather than rendering a generic failure alert.
+      expect(() => {
+        act(() => { root.render(<Chart spec={vlSpec} width={200} height={100} a11y={false} />) })
+      }).toThrow(/@aster\/react\/vl/)
+      container.remove()
+    })
   })
 })

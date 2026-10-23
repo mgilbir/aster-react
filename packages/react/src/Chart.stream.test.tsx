@@ -4,11 +4,11 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { ChartStream as CoreChartStream } from '@aster/core'
-import { Chart } from './Chart'
 import { ChartStream, ChartWorkerStream, type ChartStreamHandle } from './ChartStream'
 import { handleWorkerMessage, type ChartWorkerStreamRequest } from './worker'
 import { useChartStream, type UseChartStreamResult } from './useChartStream'
 import type { ViewDomain } from './interaction'
+import { forEachVariant } from './testing/variants'
 
 const RECT = { left: 0, top: 0, width: 210, height: 110, right: 210, bottom: 110, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
 
@@ -224,41 +224,47 @@ describe('pan/zoom/brush use the streamed or supplied data, not just the spec (C
     expect(scaleInfo(ref.current!.scene(), 'xscale')!.domain[1]! - scaleInfo(ref.current!.scene(), 'xscale')!.domain[0]!).toBeLessThan(1000)
   })
 
-  it('<Chart data=...>: the keyboard zoom works when the rows come from the data prop', async () => {
-    const onViewChange = vi.fn()
-    const noRows = dataSpec([]) as Record<string, unknown>
-    const m = mount(<Chart spec={noRows as never} data={{ t: [{ a: 0, b: 0 }, { a: 500, b: 5 }] }} width={200} height={100} panZoom onViewChange={onViewChange} />)
-    await act(async () => { await wait() })
-    await key(m.host(), '+')
-    expect(onViewChange).toHaveBeenCalled()
-    const view = onViewChange.mock.calls.at(-1)![0] as ViewDomain | null
-    expect(view).not.toBeNull()
-    expect(view!.x![1] - view!.x![0]).toBeCloseTo(500 / 1.5, 0)
+  forEachVariant(['svg'], (Chart) => {
+    it('<Chart data=...>: the keyboard zoom works when the rows come from the data prop', async () => {
+      const onViewChange = vi.fn()
+      const noRows = dataSpec([]) as Record<string, unknown>
+      const m = mount(<Chart spec={noRows as never} data={{ t: [{ a: 0, b: 0 }, { a: 500, b: 5 }] }} width={200} height={100} panZoom onViewChange={onViewChange} />)
+      await act(async () => { await wait() })
+      await key(m.host(), '+')
+      expect(onViewChange).toHaveBeenCalled()
+      const view = onViewChange.mock.calls.at(-1)![0] as ViewDomain | null
+      expect(view).not.toBeNull()
+      expect(view!.x![1] - view!.x![0]).toBeCloseTo(500 / 1.5, 0)
+    })
   })
 
-  it('a chart that MOUNTS zoomed, with rows only in the data prop, still pans (base from a second evaluation)', async () => {
-    const onViewChange = vi.fn()
-    const noRows = dataSpec([]) as Record<string, unknown>
-    const m = mount(<Chart spec={noRows as never} data={{ t: [{ a: 0, b: 0 }, { a: 500, b: 5 }] }} width={200} height={100} panZoom view={{ x: [100, 200] }} onViewChange={onViewChange} />)
-    await act(async () => { await wait() })
-    await key(m.host(), 'ArrowRight')
-    const view = onViewChange.mock.calls.at(-1)![0] as ViewDomain
-    expect(view.x![0]).toBeGreaterThan(100)
-    // zooming out is capped by the data extent (0..500), proving the base came from the data prop
-    for (let i = 0; i < 20; i++) await key(m.host(), '-')
-    const out = onViewChange.mock.calls.at(-1)![0] as ViewDomain | null
-    expect(out?.x == null || out.x[1] - out.x[0] <= 500 + 1e-6).toBe(true)
+  forEachVariant(['svg'], (Chart) => {
+    it('a chart that MOUNTS zoomed, with rows only in the data prop, still pans (base from a second evaluation)', async () => {
+      const onViewChange = vi.fn()
+      const noRows = dataSpec([]) as Record<string, unknown>
+      const m = mount(<Chart spec={noRows as never} data={{ t: [{ a: 0, b: 0 }, { a: 500, b: 5 }] }} width={200} height={100} panZoom view={{ x: [100, 200] }} onViewChange={onViewChange} />)
+      await act(async () => { await wait() })
+      await key(m.host(), 'ArrowRight')
+      const view = onViewChange.mock.calls.at(-1)![0] as ViewDomain
+      expect(view.x![0]).toBeGreaterThan(100)
+      // zooming out is capped by the data extent (0..500), proving the base came from the data prop
+      for (let i = 0; i < 20; i++) await key(m.host(), '-')
+      const out = onViewChange.mock.calls.at(-1)![0] as ViewDomain | null
+      expect(out?.x == null || out.x[1] - out.x[0] <= 500 + 1e-6).toBe(true)
+    })
   })
 
-  it('the base domain stays the data extent while zoomed (reset returns to it)', async () => {
-    const ref = React.createRef<import('./Chart').ChartHandle>()
-    const m = mount(<Chart ref={ref} spec={dataSpec(base)} width={200} height={100} panZoom />)
-    await act(async () => { await wait() })
-    act(() => { ref.current!.setView({ x: [2, 4], y: [2, 4] }) })
-    await key(m.host(), 'ArrowRight')
-    expect(ref.current!.getView()!.x![0]).toBeGreaterThan(2)
-    await key(m.host(), '0')
-    expect(ref.current!.getView()).toBeNull()
+  forEachVariant(['svg'], (Chart) => {
+    it('the base domain stays the data extent while zoomed (reset returns to it)', async () => {
+      const ref = React.createRef<import('./Chart').ChartHandle>()
+      const m = mount(<Chart ref={ref} spec={dataSpec(base)} width={200} height={100} panZoom />)
+      await act(async () => { await wait() })
+      act(() => { ref.current!.setView({ x: [2, 4], y: [2, 4] }) })
+      await key(m.host(), 'ArrowRight')
+      expect(ref.current!.getView()!.x![0]).toBeGreaterThan(2)
+      await key(m.host(), '0')
+      expect(ref.current!.getView()).toBeNull()
+    })
   })
 })
 
@@ -329,13 +335,15 @@ describe('streams survive a new-but-equal spec (C32)', () => {
     expect(m.container.querySelectorAll('svg .mark-symbol path')).toHaveLength(4)
   })
 
-  it('<Chart> does not recompile or re-evaluate for an equal spec literal', async () => {
-    const ref = React.createRef<import('./Chart').ChartHandle>()
-    const m = mount(<Chart ref={ref} spec={dataSpec(base, { signals: [{ name: 'dotSize', value: 20 }] })} width={200} height={100} />)
-    const first = ref.current!.getScene()
-    expect(first).not.toBeNull()
-    // Each literal carries NEW nested objects (the base rows array is shared, as in a typical app).
-    for (let i = 0; i < 3; i++) await m.render(<Chart ref={ref} spec={dataSpec(base, { signals: [{ name: 'dotSize', value: 20 }] })} width={200} height={100} />)
-    expect(ref.current!.getScene()).toBe(first)
+  forEachVariant(['svg'], (Chart) => {
+    it('<Chart> does not recompile or re-evaluate for an equal spec literal', async () => {
+      const ref = React.createRef<import('./Chart').ChartHandle>()
+      const m = mount(<Chart ref={ref} spec={dataSpec(base, { signals: [{ name: 'dotSize', value: 20 }] })} width={200} height={100} />)
+      const first = ref.current!.getScene()
+      expect(first).not.toBeNull()
+      // Each literal carries NEW nested objects (the base rows array is shared, as in a typical app).
+      for (let i = 0; i < 3; i++) await m.render(<Chart ref={ref} spec={dataSpec(base, { signals: [{ name: 'dotSize', value: 20 }] })} width={200} height={100} />)
+      expect(ref.current!.getScene()).toBe(first)
+    })
   })
 })

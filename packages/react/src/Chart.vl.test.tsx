@@ -6,9 +6,9 @@ import { describe, it, expect, afterEach } from 'vitest'
 // Vega-Lite is opt-in (mirrors the core addons): importing the addon registers
 // the compiler for this module graph.
 import './vl'
-import { Chart } from './Chart'
 import { useChart } from './useChart'
 import { isVegaLiteSpec, normalizeChartSpec } from './spec'
+import { forEachVariant } from './testing/variants'
 
 const vlSpec = {
   $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
@@ -31,14 +31,16 @@ describe('direct Vega-Lite input (R11.1)', () => {
     expect(vg.$schema).toContain('vega/v6')
   })
 
-  it('renders a VL spec through <Chart>', () => {
-    const container = document.createElement('div')
-    document.body.appendChild(container)
-    const root = createRoot(container)
-    act(() => { root.render(<Chart spec={vlSpec} width={200} height={100} a11y={false} tooltip />) })
-    expect(container.querySelector('svg .mark-rect')).not.toBeNull()
-    expect(container.querySelector('svg path[data-datum]')).not.toBeNull()
-    act(() => { root.unmount() })
+  forEachVariant(['svg', 'interaction'], (Chart) => {
+    it('renders a VL spec through <Chart>', () => {
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      act(() => { root.render(<Chart spec={vlSpec} width={200} height={100} a11y={false} tooltip />) })
+      expect(container.querySelector('svg .mark-rect')).not.toBeNull()
+      expect(container.querySelector('svg path[data-datum]')).not.toBeNull()
+      act(() => { root.unmount() })
+    })
   })
 
   it('renders a VL spec through the headless hook', () => {
