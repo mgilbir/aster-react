@@ -21,7 +21,8 @@ export function mergeBatches<B extends Omit<StreamBatch, 'textMetrics'> & { text
   }
   for (const [name, rows] of Object.entries(b.append ?? {})) {
     const cur = append[name]
-    if (cur) cur.push(...rows)
+    // Loop, not push(...rows): a data-sized spread overflows the call stack.
+    if (cur) { for (let i = 0; i < rows.length; i++) cur.push(rows[i]) }
     else append[name] = rows.slice()
   }
   const out: B = { ...a }
