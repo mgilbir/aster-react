@@ -58,6 +58,8 @@ import {
   trailPath,
   viewGroupAttrs,
   itemDatumAttr,
+  itemHref,
+  linkAttrs,
   type AttrSink,
   num,
 } from './render.js'
@@ -207,6 +209,8 @@ function batchableSymbol(it: SceneItem): boolean {
     && (it.fillOpacity == null || it.fillOpacity === 1)
     && (it.strokeOpacity == null || it.strokeOpacity === 1)
     && rec.blend == null
+    // a hyperlinked symbol keeps its own element (and its <a>)
+    && !rec.href
   return opaque
     && x != null && y != null && Number.isFinite(x) && Number.isFinite(y)
     && Number.isFinite(Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2)
@@ -296,7 +300,7 @@ function symbolItemDesc(it: SceneItem): DomDesc {
   return cachedDesc(it, () => {
     const w = new PairAttrSink()
     symbolElementAttrs(it, symbolMarkPath(it), w)
-    return { tag: 'path', attrs: w.out, clean: isClean(it) }
+    return linked(it, { tag: 'path', attrs: w.out, clean: isClean(it) })
   })
 }
 
@@ -382,6 +386,15 @@ function g(tag: string, attrs: Array<[string, string]>, children: DomDesc[]): Do
   return { tag, attrs, children }
 }
 
+/** A hyperlinked item's element sits in `<a xlink:href>` (the string renderer's `linkOpen`). */
+function linked(it: SceneItem, desc: DomDesc): DomDesc {
+  const href = itemHref(it)
+  if (href == null) return desc
+  const w = new PairAttrSink()
+  linkAttrs(href, w)
+  return { tag: 'a', attrs: w.out, children: [desc], clean: desc.clean }
+}
+
 // ---------------------------------------------------------------------------
 // Scene -> descriptor tree (mirrors renderSceneToSvg structure exactly)
 // ---------------------------------------------------------------------------
@@ -440,7 +453,7 @@ function clippedRoundedRectDescs(group: SceneGroup, clips: ClipCollector): DomDe
   const out: DomDesc[] = []
   for (const e of clippedRoundedRectEntries(group)) {
     if (e.kind === 'plain') {
-      out.push({ tag: 'path', attrs: pairs((w) => rectPathAttrs(e.item, e.d, w, false)) })
+      out.push(linked(e.item, { tag: 'path', attrs: pairs((w) => rectPathAttrs(e.item, e.d, w, false)) }))
       continue
     }
     const clipId = clips.id({ d: e.round })
@@ -454,7 +467,7 @@ function clippedRoundedRectDescs(group: SceneGroup, clips: ClipCollector): DomDe
             background(`M0,0h${num(e.g.w)}v0h-${num(e.g.w)}Z`),
             g('g', [], [
               g('g', [['class', 'mark-rect role-mark marks'], ['role', 'graphics-object'], ['aria-roledescription', 'rect mark container']], [
-                { tag: 'path', attrs: pairs((w) => rectPathAttrs(e.item, e.plain, w)) },
+                linked(e.item, { tag: 'path', attrs: pairs((w) => rectPathAttrs(e.item, e.plain, w)) }),
               ]),
             ]),
             foreground(),
@@ -467,24 +480,29 @@ function clippedRoundedRectDescs(group: SceneGroup, clips: ClipCollector): DomDe
   return out
 }
 
+/** A single-element mark (line/area) links through its first item. */
+function linkedFirst(items: SceneItem[], desc: DomDesc): DomDesc {
+  return items.length ? linked(items[0]!, desc) : desc
+}
+
 function markItems(group: SceneGroup, type: string, options?: DomRenderOptions): DomDesc[] {
   const items = group.items ?? []
   switch (type) {
     case 'line': {
       const info = computeLinePath(group)
       if (!info) return []
-      return [{ tag: 'path', attrs: pairs((w) => lineMarkAttrs(info, w)) }]
+      return [linkedFirst(items, { tag: 'path', attrs: pairs((w) => lineMarkAttrs(info, w)) })]
     }
     case 'area': {
       const info = computeAreaPath(group)
       if (!info) return []
-      return [{ tag: 'path', attrs: pairs((w) => areaMarkAttrs(info, w)) }]
+      return [linkedFirst(items, { tag: 'path', attrs: pairs((w) => areaMarkAttrs(info, w)) })]
     }
     case 'trail': {
       if (items.length <= 1) return []
       const d = trailPath(items)
       if (!d) return []
-      return [{ tag: 'path', attrs: pairs((w) => trailAttrs(d, items[0]!, w)) }]
+      return [linked(items[0]!, { tag: 'path', attrs: pairs((w) => trailAttrs(d, items[0]!, w)) })]
     }
     case 'symbol': {
       const chunkSize = denseSymbolsEnabled(options, items)
@@ -499,7 +517,7 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
         if (!rectIsPainted(it)) continue
         const d = rectItemPath(it)
         if (d == null) continue
-        out.push(cachedDesc(it, () => ({ tag: 'path', attrs: pairs((w) => rectPathAttrs(it, d, w)), clean: isClean(it) })))
+        out.push(cachedDesc(it, () => linked(it, { tag: 'path', attrs: pairs((w) => rectPathAttrs(it, d, w)), clean: isClean(it) })))
       }
       return out
     }
@@ -507,24 +525,27 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       const out: DomDesc[] = []
       for (const it of items) {
         if (it.x == null || it.y == null) continue
-        out.push(cachedDesc(it, () => ({ tag: 'circle', attrs: pairs((w) => circleAttrs(it, w)), clean: isClean(it) })))
+        out.push(cachedDesc(it, () => linked(it, { tag: 'circle', attrs: pairs((w) => circleAttrs(it, w)), clean: isClean(it) })))
       }
       return out
     }
     case 'rule':
       return items.map((it) => cachedDesc(it, () => {
         const [x, y, x2, y2] = ruleEnds(it)
-        return {
+        return linked(it, {
           tag: 'line',
           attrs: pairs((w) => { itemDatumAttr(it, w); lineElementAttrs(x, y, x2, y2, it, w) }),
           clean: isClean(it),
-        }
+        })
       }))
     case 'text': {
       const out: DomDesc[] = []
       for (const it of items) {
         if (it.text == null) continue
-        const d = cachedDesc(it, () => textDesc(it)!)
+        const d = cachedDesc(it, () => {
+          const t = textDesc(it)!
+          return linked(it, t)
+        })
         out.push(d)
       }
       return out
@@ -535,7 +556,7 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       const out: DomDesc[] = []
       for (const it of items) {
         if (!it.path) continue
-        out.push(cachedDesc(it, () => ({ tag: 'path', attrs: pairs((w) => pathItemAttrs(it, w)), clean: isClean(it) })))
+        out.push(cachedDesc(it, () => linked(it, { tag: 'path', attrs: pairs((w) => pathItemAttrs(it, w)), clean: isClean(it) })))
       }
       return out
     }
@@ -543,12 +564,12 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       const out: DomDesc[] = []
       for (const it of items) {
         if (it.url == null || it.x == null || it.y == null) continue
-        out.push(cachedDesc(it, () => ({ tag: 'image', attrs: pairs((w) => imageAttrs(it, w)), clean: isClean(it) })))
+        out.push(cachedDesc(it, () => linked(it, { tag: 'image', attrs: pairs((w) => imageAttrs(it, w)), clean: isClean(it) })))
       }
       return out
     }
     case 'arc':
-      return items.map((it) => cachedDesc(it, () => ({ tag: 'path', attrs: pairs((w) => arcItemAttrs(it, w)), clean: isClean(it) })))
+      return items.map((it) => cachedDesc(it, () => linked(it, { tag: 'path', attrs: pairs((w) => arcItemAttrs(it, w)), clean: isClean(it) })))
     default:
       return []
   }

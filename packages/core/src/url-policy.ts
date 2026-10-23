@@ -46,6 +46,8 @@ export interface ImageUrlPolicy extends UrlPolicyBase {
 
 export const DEFAULT_LOAD_PROTOCOLS: readonly string[] = ['http:', 'https:']
 export const DEFAULT_IMAGE_PROTOCOLS: readonly string[] = ['http:', 'https:', 'data:']
+/** Hyperlinks (the `href` channel) may also be `mailto:` / `tel:`; never `javascript:`, `file:` or `data:`. */
+export const DEFAULT_LINK_PROTOCOLS: readonly string[] = ['http:', 'https:', 'mailto:', 'tel:']
 
 /** Placeholder base used to classify a URL when the host gave none. */
 const NO_BASE = 'https://relative.invalid/'
@@ -85,10 +87,25 @@ export function checkBasicUrl(raw: string, policy: UrlPolicyBase, defaults: read
  */
 export function applyImageUrlPolicy(raw: unknown, policy: ImageUrlPolicy | undefined): unknown {
   // No policy at all (and no `limits`): drawn as given, like Vega. Residual risk: tracking pixels / IP leaks (docs/LIMITS.md).
+  return applyUrlPolicy(raw, policy, DEFAULT_IMAGE_PROTOCOLS)
+}
+
+/**
+ * Apply the policy to a hyperlink (`href` channel). Same rules as images with
+ * the link protocol defaults ({@link DEFAULT_LINK_PROTOCOLS}); a denied link
+ * throws, or is dropped (the item is drawn without a link) when `onDeny` is set.
+ * Without a policy (no `urlPolicy`, no `limits`) only {@link sanitizeHref}
+ * applies, which is what Vega does.
+ */
+export function applyLinkUrlPolicy(raw: unknown, policy: ImageUrlPolicy | undefined): unknown {
+  return applyUrlPolicy(raw, policy, DEFAULT_LINK_PROTOCOLS)
+}
+
+function applyUrlPolicy(raw: unknown, policy: ImageUrlPolicy | undefined, defaults: readonly string[]): unknown {
   if (raw == null || policy === undefined) return raw
   const text = String(raw)
   try {
-    const url = checkBasicUrl(text, policy, DEFAULT_IMAGE_PROTOCOLS)
+    const url = checkBasicUrl(text, policy, defaults)
     if (url == null) {
       // relative URL with no base: fine unless the host asked to vet URLs
       if (policy.allow) throw new AsterUrlError(text, 'a relative URL needs a baseURL when an allow hook is set')
@@ -103,4 +120,28 @@ export function applyImageUrlPolicy(raw: unknown, policy: ImageUrlPolicy | undef
     }
     throw e
   }
+}
+
+// vega-loader sanitize(): the URIs a hyperlink may carry. From DOMPurify's
+// ALLOWED_URI_REGEXP with vega's `file:` / `data:` additions.
+const ALLOWED_HREF = /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|cid|xmpp|file|data):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
+// eslint-disable-next-line no-control-regex
+const HREF_WHITESPACE = /[\u0000-\u0020\u00A0\u1680\u180E\u2000-\u2029\u205f\u3000]/g
+
+/**
+ * The `href` the SVG renderer writes for a hyperlinked item, or null when the
+ * item gets no link. A port of vega-loader's `sanitize` as vega-scenegraph's
+ * SVGStringRenderer uses it (no loader options): a non-string or a URI outside
+ * the allowed schemes (`javascript:`, `vbscript:` ...) is rejected, so the item
+ * is drawn unlinked; `//host/p` gets vega's default protocol `http:`; `file://`
+ * is stripped to the path. This runs in every renderer regardless of any
+ * {@link ImageUrlPolicy}, so a scene that never met the policy still cannot
+ * carry a script URL into the markup.
+ */
+export function sanitizeHref(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw === '') return null
+  if (!ALLOWED_HREF.test(raw.replace(HREF_WHITESPACE, ''))) return null
+  if (raw.startsWith('file://')) return raw.slice('file://'.length)
+  if (raw.startsWith('//')) return 'http:' + raw
+  return raw
 }

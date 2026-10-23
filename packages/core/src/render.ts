@@ -11,6 +11,7 @@ export { baselineOffset }
 import { itemTextWidth } from './text-metrics.js'
 import { ClipCollector, type ClipDef } from './svg-defs.js'
 import { customSymbolPathData } from './svg-path.js'
+import { sanitizeHref } from './url-policy.js'
 export { ClipCollector, type ClipDef }
 import {
   line as d3Line,
@@ -309,7 +310,9 @@ function renderLine(group: SceneGroup): string {
   if (pathInfo) {
     const w = new StringAttrSink()
     lineMarkAttrs(pathInfo, w)
-    out += `<path${w.s}/>`
+    // a line is one element for the whole mark: its link is the first item's
+    const a = items.length ? linkOpen(items[0]!) : ''
+    out += `${a}<path${w.s}/>${linkClose(a)}`
   }
   out += '</g>'
   return out
@@ -626,7 +629,9 @@ function renderArea(group: SceneGroup): string {
   if (info) {
     const w = new StringAttrSink()
     areaMarkAttrs(info, w)
-    out += `<path${w.s}/>`
+    const first = itemsOf(group)[0]
+    const a = first ? linkOpen(first) : ''
+    out += `${a}<path${w.s}/>${linkClose(a)}`
   }
   out += '</g>'
   return out
@@ -738,7 +743,8 @@ function renderSymbols(group: SceneGroup): string {
     // rotateItem(item) — full-precision numbers plus the mark's rotation.
     w.s = ''
     symbolElementAttrs(it, symbolMarkPath(it), w)
-    out += `<path${w.s}/>`
+    const a = linkOpen(it)
+    out += `${a}<path${w.s}/>${linkClose(a)}`
   }
   out += '</g>'
   return out
@@ -758,7 +764,8 @@ function renderCircles(group: SceneGroup): string {
     if (it.x == null || it.y == null) continue
     w.s = ''
     circleAttrs(it, w)
-    out += `<circle${w.s}/>`
+    const a = linkOpen(it)
+    out += `${a}<circle${w.s}/>${linkClose(a)}`
   }
   out += '</g>'
   return out
@@ -822,7 +829,8 @@ function renderClippedRoundedRects(group: SceneGroup, clips: ClipCollector): str
     w.s = ''
     if (e.kind === 'plain') {
       rectPathAttrs(e.item, e.d, w, false)
-      out += `<path${w.s}/>`
+      const a = linkOpen(e.item)
+      out += `${a}<path${w.s}/>${linkClose(a)}`
       continue
     }
     const clipId = clips.id({ d: e.round })
@@ -834,7 +842,8 @@ function renderClippedRoundedRects(group: SceneGroup, clips: ClipCollector): str
     out += `<path class="background" aria-hidden="true" d="M0,0h${num(e.g.w)}v0h-${num(e.g.w)}Z"/>`
     w.s = ''
     rectPathAttrs(e.item, e.plain, w)
-    out += `<g><g class="mark-rect role-mark marks" role="graphics-object" aria-roledescription="rect mark container"><path${w.s}/></g></g>`
+    const a = linkOpen(e.item)
+    out += `<g><g class="mark-rect role-mark marks" role="graphics-object" aria-roledescription="rect mark container">${a}<path${w.s}/>${linkClose(a)}</g></g>`
     out += `<path class="foreground" aria-hidden="true" d="" display="none"/></g></g></g>`
     out += `<path class="foreground" aria-hidden="true" d="" display="none"/></g>`
   }
@@ -850,7 +859,8 @@ function renderRects(group: SceneGroup): string {
     if (d == null) continue
     w.s = ''
     rectPathAttrs(it, d, w)
-    out += `<path${w.s}/>`
+    const a = linkOpen(it)
+    out += `${a}<path${w.s}/>${linkClose(a)}`
   }
   out += '</g>'
   return out
@@ -920,7 +930,8 @@ function renderRules(group: SceneGroup): string {
     w.s = ''
     itemDatumAttr(it, w)
     lineElementAttrs(x, y, x2, y2, it, w)
-    out += `<line${w.s}/>`
+    const a = linkOpen(it)
+    out += `${a}<line${w.s}/>${linkClose(a)}`
   }
   out += '</g>'
   return out
@@ -928,7 +939,12 @@ function renderRules(group: SceneGroup): string {
 
 function renderTexts(group: SceneGroup): string {
   let out = markContainerOpen('text')
-  for (const it of itemsOf(group)) out += textElement(it)
+  for (const it of itemsOf(group)) {
+    const el = textElement(it)
+    if (el === '') continue
+    const a = linkOpen(it)
+    out += a + el + linkClose(a)
+  }
   out += '</g>'
   return out
 }
@@ -1061,7 +1077,8 @@ function renderPaths(group: SceneGroup): string {
     // coordinates (e.g. geoshape output) have x=y=0 and emit no transform).
     w.s = ''
     pathItemAttrs(it, w)
-    out += `<path${w.s}/>`
+    const a = linkOpen(it)
+    out += `${a}<path${w.s}/>${linkClose(a)}`
   }
   out += '</g>'
   return out
@@ -1083,7 +1100,8 @@ function renderTrail(group: SceneGroup): string {
       const first = items[0]!
       const w = new StringAttrSink()
       trailAttrs(d, first, w)
-      out += `<path${w.s}/>`
+      const a = linkOpen(first)
+      out += `${a}<path${w.s}/>${linkClose(a)}`
     }
   }
   out += '</g>'
@@ -1188,7 +1206,8 @@ function renderImages(group: SceneGroup): string {
     if (it.url == null || it.x == null || it.y == null) continue
     w.s = ''
     imageAttrs(it, w)
-    out += `<image${w.s}/>`
+    const a = linkOpen(it)
+    out += `${a}<image${w.s}/>${linkClose(a)}`
   }
   out += '</g>'
   return out
@@ -1221,7 +1240,8 @@ function renderArcs(group: SceneGroup): string {
   for (const it of itemsOf(group)) {
     w.s = ''
     arcItemAttrs(it, w)
-    out += `<path${w.s}/>`
+    const a = linkOpen(it)
+    out += `${a}<path${w.s}/>${linkClose(a)}`
   }
   out += '</g>'
   return out
@@ -1578,6 +1598,31 @@ export class PairAttrSink implements AttrSink {
 }
 
 const recOf = (it: SceneItem): Record<string, unknown> => it as Record<string, unknown>
+
+/**
+ * The link a mark item sits in (vega-scenegraph SVGStringRenderer `href` /
+ * `process`: an item with a truthy `href` is wrapped in `<a xlink:href>`), or
+ * null. The value is sanitized here, in the one place both renderers read it.
+ */
+export function itemHref(it: SceneItem): string | null {
+  const h = recOf(it).href
+  return h ? sanitizeHref(h) : null
+}
+
+/** The `<a>` element's attributes. */
+export function linkAttrs(href: string, w: AttrSink): void {
+  w.v('xlink:href', href)
+}
+
+/** `<a xlink:href="...">` for a hyperlinked item, else ''. Pair with {@link linkClose}. */
+function linkOpen(it: SceneItem): string {
+  const href = itemHref(it)
+  if (href == null) return ''
+  const w = new StringAttrSink()
+  linkAttrs(href, w)
+  return `<a${w.s}>`
+}
+const linkClose = (open: string): string => (open ? '</a>' : '')
 
 /** `data-datum`, stamped by `stampDatumAttrs` so events can recover the datum. */
 export function itemDatumAttr(it: SceneItem, w: AttrSink): void {

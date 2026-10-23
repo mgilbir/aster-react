@@ -252,6 +252,11 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
     // math
     abs: Math.abs, acos: Math.acos, asin: Math.asin, atan: Math.atan, atan2: Math.atan2,
     ceil: Math.ceil, cos: Math.cos, exp: Math.exp, floor: Math.floor, hypot: Math.hypot,
+    // vega-functions: the view's container / the window. Headless vega has
+    // neither (`[undefined, undefined]`), and so does the core: a spec falls
+    // back to its own default size (vega-lite: `isFinite(containerSize()[0]) ? ... : 300`).
+    containerSize: () => [undefined, undefined],
+    windowSize: () => [undefined, undefined],
     isFinite: Number.isFinite, isNaN: Number.isNaN, log: Math.log, pow: Math.pow,
     round: Math.round, sin: Math.sin, sqrt: Math.sqrt, tan: Math.tan,
     min: (...args: number[]) => Math.min(...args),

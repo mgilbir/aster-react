@@ -245,8 +245,9 @@ function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSi
     if (!s || typeof s !== 'object') continue
     const def: CompiledSignalDef = { name: s.name as string }
     // a null value is a value (`??` would fall through to `init` for it)
-    const value = s.value !== undefined ? s.value : s.init
-    if (value !== undefined) def.value = value
+    if (s.value !== undefined) def.value = s.value
+    // `init` is an expression (vega signal-updates: `op.initonly`), not a value.
+    if (typeof s.init === 'string' && s.update === undefined) def.init = s.init
     if (typeof s.update === 'string') def.update = s.update
     if (s.bind != null && (typeof s.bind === 'string' || typeof s.bind === 'object')) {
       def.bind = s.bind as Record<string, unknown> | string

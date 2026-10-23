@@ -184,6 +184,11 @@ export interface CompiledSignalDef {
   value?: unknown
   /** Static (`update`) expression, resolved to a fixed point. */
   update?: string
+  /**
+   * vega's `init`: an expression evaluated once, at startup (`op.initonly`).
+   * It is not a literal value: a string here is source code.
+   */
+  init?: string
   /** Input binding (`signal.bind`), rendered by interactive hosts. */
   bind?: Record<string, unknown> | string
   /** Event-driven handlers (`signal.on` streams), bound by the host. */
@@ -639,6 +644,8 @@ export interface SceneItem {
   cornerRadiusBottomRight?: number
   zindex?: number
   cursor?: string
+  /** Hyperlink: the item's element is drawn inside `<a xlink:href>` (after `sanitizeHref`). */
+  href?: string
   /** Internal: marks a legend title item so the builder can paint it last. */
   _legendTitle?: boolean
   // accessibility

@@ -40,7 +40,7 @@ import { tickFormat, scaleFraction, scaleGradientStops, tickValues, tickCount, i
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { dict, ownGet, minOf, maxOf, pushAll, SYMBOL_DEFAULT_SIZE } from './util.js'
-import { applyImageUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
+import { applyImageUrlPolicy, applyLinkUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, type PulseChange } from './pulse.js'
 import { fieldsOf, groupKeyFn } from './transform-agg.js'
@@ -339,6 +339,10 @@ interface EvalContext {
   projectionStamp: Map<string, number>
   runtime: ExpressionRuntime
   _defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }>
+  /** Signals whose `init` expression has run (it runs once). */
+  initDone: Set<string>
+  /** Signals the host supplied for this evaluation (an `init` never overrides them). */
+  hostSignals: Set<string>
   /** Cached facet grid layout (computed once per chart). */
   _facetLayout?: FacetGridLayout | null
   /** Cached 2D repeat (scatter matrix) concat grid layout (computed once per chart). */
@@ -410,6 +414,8 @@ function prepareChartCtx(
   chart: CompiledChart,
   input: RuntimeInput = {},
   txn: EvalTxn = { prev: undefined, gen: 1, claimed: new Set() },
+  /** Whether `input.width`/`input.height` is a size someone chose (the host or a fit resize), not just the resolved default. */
+  explicitSize: { width: boolean; height: boolean } = { width: input.width != null, height: input.height != null },
 ): { ctx: EvalContext; width: number; height: number } {
   // The deadline belongs to the enclosing limits scope (evaluateChart /
   // getChartInfo / renderSpec / session), so one wall clock covers the whole
@@ -457,6 +463,11 @@ function prepareChartCtx(
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}`
   const ctx: EvalContext = {
     chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new ProjectionRegistry(), projectionStamp: new Map(), runtime, _defs: defs,
+    initDone: new Set(), hostSignals: new Set([
+      ...Object.keys(input.signals ?? {}),
+      // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
+      ...(explicitSize.width ? ['width'] : []), ...(explicitSize.height ? ['height'] : []),
+    ]),
     hierarchies: new Map(), affected: new Set(), incremental: false, deadline, checkDeadline,
     datasetPulses: new Map(),
     prev: txn.prev, draft: newState(txn.gen), gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
@@ -548,10 +559,12 @@ function prepareChartCtx(
   // must be re-evaluated now that the scales — and their domains — exist.
   if (width === DEFAULT_SIZE && (chart.signalDefs ?? []).some((s) => s.name === 'width')) {
     const def = (chart.signalDefs ?? []).find((s) => s.name === 'width')
-    const update = def?.update as string | undefined
-    if (typeof update === 'string') {
+    const update = (def?.update ?? def?.init) as string | undefined
+    // a width the host set (setSignal / input.signals) is the signal's value; its init never runs over it
+    const hosted = ctx.hostSignals.has('width') ? ctx.signalParams.width : undefined
+    if (typeof update === 'string' || typeof hosted === 'number') {
       try {
-        const v = ctx.runtime.expr(update)({}, ctx.signalParams) as unknown
+        const v = typeof hosted === 'number' ? hosted : ctx.runtime.expr(update as string)({}, ctx.signalParams) as unknown
         if (typeof v === 'number' && Number.isFinite(v)) {
           width = v
           ctx.width = v
@@ -667,10 +680,16 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
   if (!defs?.length) return false
   let changed = false
   for (const def of defs) {
-    if (!def.update) continue
-    if (staticOnly && DATA_DEPENDENT_EXPR.test(def.update)) continue
+    // `init` runs once (vega's initonly), never over a value the host or an
+    // event handler already set.
+    const initPending = def.update === undefined && def.init !== undefined
+      && !ctx.initDone.has(def.name) && !ctx.hostSignals.has(def.name)
+    const expr = def.update ?? (initPending ? def.init : undefined)
+    if (!expr) continue
+    if (staticOnly && DATA_DEPENDENT_EXPR.test(expr)) continue
     try {
-      const value = ctx.runtime.expr(def.update)(undefined, ctx.signalParams)
+      const value = ctx.runtime.expr(expr)(undefined, ctx.signalParams)
+      if (initPending && value !== undefined) ctx.initDone.add(def.name)
       if (value !== undefined && !valuesEqual(value, ctx.signalParams[def.name])) {
         ctx.signalParams[def.name] = value
         ctx.fpMemo = undefined
@@ -1217,8 +1236,12 @@ function buildContent(
   cw: number,
   ch: number,
   txn: EvalTxn,
+  fitted = false,
 ): { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; isFacetSpec: boolean } {
-  const { ctx, width, height } = prepareChartCtx(chart, { ...input, width: cw, height: ch }, txn)
+  const { ctx, width, height } = prepareChartCtx(
+    chart, { ...input, width: cw, height: ch }, txn,
+    fitted ? { width: true, height: true } : { width: input.width != null, height: input.height != null },
+  )
 
   // Partial re-evaluation: marks whose every input is provably unchanged reuse
   // the previous scene's group object as-is, and marks over a changed dataset
@@ -1363,8 +1386,8 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
   // Differential-update generation (`txn.gen`): an unchanged (reused) item keeps
   // the generation it was encoded in, so the DOM patcher can skip it.
   const signals = dict(chart.signals, input.signals)
-  const initialW = resolveSize(chart.width, input.width, signals)
-  const initialH = resolveSize(chart.height, input.height, signals)
+  let initialW = resolveSize(chart.width, input.width, signals)
+  let initialH = resolveSize(chart.height, input.height, signals)
   // Vega's layout keeps the sign of a negative declared height: the rendered
   // document grows by ceil(|height| / 2) beyond the clamped content height
   // (width does not; negative widths collapse symmetrically).
@@ -1386,6 +1409,13 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
   let ch = initialH
   let built = buildContent(chart, input, cw, ch, txn)
   if (auto === 'fit' || auto === 'fit-x' || auto === 'fit-y') {
+    // A `width`/`height` signal (update or init, e.g. vega-lite's
+    // `isFinite(containerSize()[0]) ? ... : 300`) resolves while the first
+    // build runs; the fit viewport is that resolved size, not the default.
+    if (!built.isFacetSpec && (built.ctx.width !== cw || built.ctx.height !== ch)) {
+      initialW = cw = built.ctx.width
+      initialH = ch = built.ctx.height
+    }
     for (let i = 0; i < 5; i++) {
       const oL = built.padding.left - base.left
       const oR = built.padding.right - base.right
@@ -1405,7 +1435,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
       if (nw === cw && nh === ch) break
       cw = nw
       ch = nh
-      built = buildContent(chart, { ...input, changedDatasets: undefined }, cw, ch, txn)
+      built = buildContent(chart, { ...input, changedDatasets: undefined }, cw, ch, txn, true)
     }
   }
   const { ctx, width, height } = built
@@ -3530,6 +3560,8 @@ function evaluateMark(
     }
   }
 
+  vetLinks(mark, items, ctx)
+
   // Appended items extend the carried union bounds only now, after the mark
   // defaults above ran (they can change an item's stroke and so its bounds).
   const group: SceneGroup = {
@@ -3546,6 +3578,22 @@ function evaluateMark(
   }
   if (pendingUndo && prevGroup) supersedeItems(prevGroup, group, pendingUndo)
   return group
+}
+
+/**
+ * Hyperlinks (the `href` channel) pass the same URL policy as images and loaded
+ * data (C93), here on the scene so every renderer sees vetted items. The
+ * renderers additionally sanitize whatever they are handed (`sanitizeHref`,
+ * vega-loader's rule), so with no policy a script URL is still never linked.
+ */
+function vetLinks(mark: CompiledMark, items: SceneItem[], ctx: EvalContext): void {
+  if (ctx.urlPolicy === undefined) return
+  const enc = mark.encode as Record<string, Record<string, unknown> | undefined> | undefined
+  if (!enc || !Object.values(enc).some((set) => set && 'href' in set)) return
+  for (const it of items) {
+    if (it.href == null) continue
+    if (applyLinkUrlPolicy(it.href, ctx.urlPolicy) == null) it.href = undefined
+  }
 }
 
 /** Detect facet orientation from the compiled chart's domain datasets. */
@@ -5372,6 +5420,7 @@ function facetItemMark(
       if (applyImageUrlPolicy(it.url, ctx.urlPolicy) == null) it.url = undefined
     }
   }
+  vetLinks(mark, items, ctx)
 
   return { marktype: mark.type, name: mark.name, role: 'mark', clip: mark.clip === true, items }
 }
