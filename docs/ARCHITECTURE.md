@@ -1,11 +1,12 @@
 # Aster Charts Architecture
 
-> **Superseded sections.** The decision to reuse pure Vega packages
-> (`vega-expression`, `vega-scale`, …) in the runtime has been reversed:
-> [ADR 0001](adr/0001-own-the-engine.md) commits the engine to reimplementing that
-> stack, verified against pinned oracle vectors. The sections below describe the
-> inherited design where it still stands, and are updated as each phase of
-> [ROADMAP.md](ROADMAP.md) replaces the package it borrows.
+> **Status.** This document describes the code as it is. The runtime owns its whole stack
+> ([ADR 0001](adr/0001-own-the-engine.md)): `@aster/core`, `@aster/react` and `@aster/vl` import
+> nothing from `vega-*`, `d3-*` or `topojson-*` (`pnpm check:deps` checks the sources and the built
+> `dist`); the real Vega and Vega-Lite packages are the test oracle only. Measured results (corpus
+> counts, sweeps, bundle sizes, benchmark ratios) are not repeated here: they live in
+> [TESTING.md](TESTING.md) and [PERFORMANCE.md](PERFORMANCE.md), each next to the command that produced it.
+> [ROADMAP.md](ROADMAP.md) lists what is still open.
 
 ## Pipeline Overview
 
@@ -20,9 +21,11 @@ VgSpec (JSON)
 
 1. **compileChart** (`packages/core/src/compiler.ts`) consumes a Vega spec (`VgSpec`, an open record) and produces a `CompiledChart` IR containing typed arrays of data definitions, scale definitions, data transforms, mark definitions, axes, and legends.
 2. **evaluateChart** (`packages/core/src/runtime.ts`) resolves the IR against `RuntimeInput` (data rows, width/height, signals). It resolves data, applies `CompiledTransform` operators eagerly, builds scale functions, and constructs a `SceneRoot` with `SceneGroup` / `SceneItem` nodes.
-3. **renderSceneToSvg** (`packages/core/src/render.ts`) walks the `SceneRoot` tree recursively, dispatching on `marktype` (line, area, symbol, rect, rule, text, path, arc) to emit SVG elements.
+3. **renderSceneToSvg** (`packages/core/src/render.ts`) walks the `SceneRoot` tree recursively, dispatching on `marktype` (group, line, area, symbol, rect, rule, text, path, arc, shape, trail, image) to emit SVG elements.
 
 The scene shapes (`SceneRoot`, `SceneGroup`, `SceneItem`, `SceneNode`) are defined in `packages/core/src/types.ts` and intentionally mirror `vega-scenegraph`'s JSON structure so the conformance oracle (real Vega, rendered headless) can be compared structurally.
+
+Vega-Lite input is a separate step in front of this pipeline: `@aster/vl`'s `compile(vlSpec)` emits a Vega spec, which then follows the three stages above. `<Chart>` does this through the opt-in `@aster/react/vl` addon; `renderSpec` takes Vega only.
 
 Public API:
 
@@ -59,12 +62,13 @@ import { renderSpec, compileChart, evaluateChart, renderSceneToSvg,
 
 ## Expression Engine
 
-Expression evaluation uses two pure Vega packages:
-
-- **vega-expression** (`parseExpression`) — parses the Vega expression DSL into an AST.
-- **vega-interpreter** (`expressionInterpreter`) — evaluates that AST via a CSP-safe interpreter (no `new Function`).
-
-A custom function context is bound to the runtime's scale and data lookups, plus the type/array/string/math utilities (`vega-util`), date-time units (`vega-time`), color parsing (`d3-color`), and formatting (`vega-format`). The context lives in `packages/core/src/expression.ts` and mirrors the documented `vega-functions` surface, including:
+Expressions (formulas, filters, signal updates, mark encodings) are parsed by `packages/core/src/expr-parser.ts`
+(a port of `vega-expression`'s lexer and Pratt parser, producing the same AST) and evaluated by
+`packages/core/src/expr-interpreter.ts` (a port of `vega-interpreter`'s CSP-safe AST walker). Nothing is
+compiled with `new Function` or `eval`. The function table the interpreter calls lives in
+`packages/core/src/expression.ts`; it mirrors the documented `vega-functions` surface and is bound to the
+runtime's scales and data, to the owned type/array/string/math utilities (`util.ts`), colour spaces
+(`color.ts`), calendar (`time.ts`) and format layer (`format.ts`, `time-format.ts`, `locale.ts`):
 
 | Group | Functions |
 |-------|-----------|
@@ -75,9 +79,15 @@ A custom function context is bound to the runtime's scale and data lookups, plus
 | Color | `rgb`, `hsl`, `lab`, `hcl`, `luminance`, `contrast` |
 | Formatting | `format`, `timeFormat`/`utcFormat`, `timeParse`/`utcParse`, `timeUnitSpecifier`, `month*`/`day*` |
 
-Signal values are exposed as `$`-prefixed parameters to `compileExpr`, matching Vega convention (`$width`, `$height`, etc.). Signal `update` expressions are resolved to a fixed point in the runtime (see `resolveSignalUpdates`), so a scale range/domain or an encoding can reference a derived signal such as `{"signal": "cx"}` where `cx` is `update: "width / 2"`. Event-driven `signal.on` handlers are intentionally ignored (static mode).
+Hosts add functions with `registerExpressionFunction` (vega's `expressionFunction`); see [API.md](API.md).
 
-The reason only pure packages are reused — and **not** `vega-functions`, `vega-dataflow`, or `vega-scenegraph` — is to avoid runtime leakage. `vega-dataflow` carries reactive graphs, operators, and signals that are explicitly not part of the eager model. `vega-scenegraph` carries a mutable node tree that the SVG serializer replaces with a pure function. The result is a smaller, simpler runtime with no hidden dataflow layer.
+Signals are values in the evaluation context. Signal `update` expressions are resolved to a fixed point in the runtime
+(`resolveSignalUpdates`), so a scale range/domain or an encoding can reference a derived signal. Event-driven
+`signal.on` handlers are real: `@aster/core/signals` ports the parts of `vega-event-selector`, `vega-view` and
+`vega-runtime` that turn DOM events into signal updates (selectors, `between`, filters, `throttle`, `consume`,
+`markname:event`), and `<Chart>` re-evaluates the scene when a signal changes ([INTERACTION.md](INTERACTION.md)).
+A signal written into a running chart renders like Vega except in the `retained` cases described under
+"Deviations from Vega" below.
 
 ## Config & style resolution
 
@@ -85,125 +95,79 @@ The reason only pure packages are reused — and **not** `vega-functions`, `vega
 
 ## Geo projections & the addon boundary
 
-`packages/core/src/geo.ts` builds d3-geo projections (`mercator`, `albers`, `albersUsa`, `equirectangular`, `orthographic`, …) from the compiled `projections` spec, resolving `scale`/`translate`/`center`/`rotate` signal params against the runtime; the `geoshape` transform and shape marks route geometry through `geoPath(projection)` (identity pixel-space path when no projection is named).
+`packages/core/src/geo.ts` builds projections (`mercator`, `albers`, `albersUsa`, `equirectangular`, `orthographic`, …) from the compiled `projections` spec on top of the owned ports of d3-geo and d3-geo-projection (`geo-lib.ts`, `geo-projections.ts`), resolving `scale`/`translate`/`center`/`rotate` signal params against the runtime; the `geoshape` transform and shape marks route geometry through `geoPath(projection)` (identity pixel-space path when no projection is named).
 
 Because heavy feature areas are only used by a small fraction of specs, they are **not** reachable from the `@aster/core` barrel. The core code paths consult injection registries (`packages/core/src/registry.ts`: `geoRegistry`, `transformRegistry`, `dataFormatRegistry`); five opt-in addon entries register their implementations:
 
 | Addon | Registers |
 |---|---|
-| `@aster/core/geo` | d3-geo projections (`buildProjection`, `projectedPath`) and d3-contour (`contourRun`) |
-| `@aster/core/transforms` | the rare-layout transforms — `kde`, `quantile`, `regression`, `loess`, `pack`, `partition`, `treemap`, `wordcloud`, `voronoi` (implementations in `transform-extra.ts`) |
-| `@aster/core/load` | the text-format readers (`csv`/`tsv`/`dsv` via d3-dsv, `topojson` via topojson-client) and `loadSpecData`, which fetches every `url` dataset and inlines its values so the synchronous pipeline runs unchanged |
+| `@aster/core/geo` | the projections (`buildProjection`, `projectedPath`) and the contour generator (`contourRun`) |
+| `@aster/core/transforms` | the rare-layout transforms — `kde`, `density`, `quantile`, `regression`, `loess`, `pack`, `partition`, `treemap`, `wordcloud`, `voronoi` (implementations in `transform-extra.ts`) |
+| `@aster/core/load` | the text-format readers (`csv`/`tsv`/`dsv`, `topojson`; `dsv.ts`, `topojson.ts`) and `loadSpecData`, which vets every URL against a policy (protocols, credentials, private hosts, redirects, size and time bounds), fetches each `url` dataset and inlines its values so the synchronous pipeline runs unchanged ([LIMITS.md](LIMITS.md)) |
 | `@aster/core/dom` | the incremental DOM patcher (`patchSceneDom`, `sceneToDomDesc`, `createChartSession`); `<Chart>` now defaults to this path |
 | `@aster/core/signals` | the signal→view event loop (`bindSceneSignals`, `stampDatumAttrs`) that binds a spec's `signal.on` streams to the rendered svg |
 
-`@aster/react/vl` is the same pattern at the grammar level: the from-scratch Vega-Lite compiler (~22.6 kB gzip) sits behind `import '@aster/react/vl'`, so Vega-only hosts get a ~136 kB base entry; with the addon the entry is ~158 kB (react-vega: 289 kB). A spec that uses a gated feature without its addon loaded gets an actionable "load `@aster/...` first" error. `budget.mjs` gates core, dom, canvas, hit, signals, React and React+VL entries independently and records the measured sizes next to the budgets.
+`@aster/react/vl` is the same pattern at the grammar level: the Vega-Lite compiler (`@aster/vl`) is registered by `import '@aster/react/vl'`, so Vega-only hosts do not pay for it. A spec that needs a gated feature without its addon loaded gets an actionable error naming what to import first. `packages/benchmarks/scripts/budget.mjs` gates the `@aster/core`, `/dom`, `/canvas`, `/hit`, `/load`, `/signals`, `@aster/react` and `@aster/react/vl` entries independently; the measured sizes are in [PERFORMANCE.md](PERFORMANCE.md).
 
 ## Scales
 
-Scale construction is delegated entirely to `vega-scale` (a pure package built on d3-scale utilities). The wrapper in `packages/core/src/scales.ts` resolves domains and ranges from the `CompiledScale` IR, handles Vega-specific options (`reverse`, `round`, `clamp`, `padding`, `paddingInner`, `paddingOuter`, `zero`, `nice`), and returns d3/daily-compatible `vs.Scale` objects. Tick generation uses `vega-scale`'s tick factory, which guarantees tick positions match the real Vega renderer exactly.
+Scales are built by `packages/core/src/scales.ts`, a transcription of `vega-parser`'s scale parsing and `vega-encode`'s `Scale` transform (domain, range, interpolate, nice, bins, scheme and range-step configuration), on top of the owned ports of `vega-scale` and d3-scale (`scale.ts`, `scale-d3.ts`), d3-array/internmap (`arr.ts`), d3-interpolate (`interp.ts`) and the colour schemes (`scale-schemes.ts`). The structure follows upstream function for function; behaviour is pinned by oracle vectors recorded from the real packages, including whole "scale spec to built scale" vectors (`testdata/vectors/spec-level/`). Tick generation is the same code path as Vega's, so tick positions and labels match.
 
 ## Transforms
 
-Eager data transforms live in `packages/core/src/transform.ts`. Each transform is a pure function `(rows, params, ctx) -> rows` that processes an array of `Row` objects in place. The following transform types are implemented:
+Eager data transforms are dispatched by `applyTransform` in `packages/core/src/transform.ts`; the implementations are in `transform-basic.ts`, `transform-agg.ts`, `transform-stats.ts` and `transform-extra.ts`. Each is a function from input rows to output rows that never mutates its input. The dispatch handles: `formula`, `filter`, `collect`, `sample`, `fold`, `flatten`, `bin`, `impute`, `aggregate`, `joinaggregate`, `window`, `stack`, `extent`, `lookup`, `pivot`, `sequence`, `identifier`, `timeunit`, `cross`, `countpattern`, `dotbin`, `pie`, `label`, `stratify`, `contour`, `graticule`, `geojson`, `geopoint`, `geoshape`, `linkpath`, `project`, and (through the `@aster/core/transforms` addon) `kde`, `density`, `quantile`, `regression`, `loess`, `pack`, `partition`, `treemap`, `wordcloud` and `voronoi`. Any other type throws `[aster] unsupported transform type "<type>"`. Option coverage follows Vega's, case by case, through the transform vectors and the transform matrix ([TESTING.md](TESTING.md)); the deliberate differences are listed under "Deviations from Vega".
 
-```
-formula    — evaluate an expression per row
-filter     — keep rows matching an expression
-collect    — sort and deduplicate
-bin        — create bin boundaries (limited support)
-fold       — unpivot fields into key/value columns
-flatten    — unnest array fields
-impute     — fill missing values (limited support)
-stack      — running accumulation with offset
-aggregate  — group + reduce
-window     — running computation (limited support)
-joinaggregate — window without sliding (limited support)
-```
-
-Transforms are applied sequentially within `evaluateChart` via `applyTransforms(rows, transforms, ctx)`. The `TransformContext` provides an `ExpressionRuntime` (for formula/filter), signal values, and a cross-dataset lookup function (for `lookup`, deferred).
+`TransformContext` provides an `ExpressionRuntime` (for formula/filter), the signal values, a cross-dataset lookup for `lookup`, and the hierarchy and projection tables for the geo/hierarchy operators. Transforms run sequentially per dataset inside `evaluateChart`.
 
 ## Rendering
 
-The SVG serializer in `packages/core/src/render.ts` walks the `SceneRoot` tree and emits SVG. Key design concerns:
+The SVG serializer in `packages/core/src/render.ts` walks the `SceneRoot` tree and emits SVG in the structure `vega-scenegraph`'s SVG renderer produces (`mark-*` groups, `role`/`aria-*` attributes, clip paths and gradients as `<defs>`). Key design concerns:
 
-- **Frame (plot bounds)** — rendered as a `<path>` with 0.5-pixel alignment (`M0.5,0.5h...v...h...Z`) when a `frameStroke` style is present, matching Vega's anti-aliased cell boundary.
-- **Half-pixel offset** — plot items are placed inside a `<g>` with `transform="translate(pad.left, pad.top)"`, matching Vega's plot frame translation.
-- **Mark dispatch** — `renderGroup()` routes on `marktype` to specialized renderers:
-  - **line** — builds a `d="M...L...L..."` path from contiguous defined points.
-  - **area** — builds an area path with the upper hull (`y`) and lower hull (`y2`).
-  - **symbol** — circle paths sized by `(sqrt(size) / 2)` radius, transformed to x/y.
-  - **rect** — `<path>` using `h`/`v` commands to match Vega's rect-as-path convention.
-  - **rule** — `<line>` elements.
-  - **text** — `<text>` elements with x/y/align/baseline/fill/angle.
-  - **path** — raw `d` attribute passthrough.
-  - **arc** — arc segment path using `A` commands.
-- **Number rounding** — all coordinates are rounded to 3 decimal places (`Math.round(x * 1000) / 1000`) for stable canonicalization in conformance diffs.
+- **Frame (plot bounds)** — rendered as a path with 0.5-pixel alignment when the view has a stroke, matching Vega's cell boundary; the view content sits in a `<g>` translated by the padding.
+- **Mark dispatch** — `renderGroup` routes on `marktype` (`group`, `line`, `area`, `symbol`, `rect`, `rule`, `text`, `trail`, `path`, `shape`, `geoshape`, `image`, `arc`); each mark kind has one `*Attrs(item, sink)` function (see "Renderers, the DOM patcher and hit testing" above).
+- **Path numbers** — paths produced by the d3-shape/d3-path ports (lines, areas, symbols, arcs) are written with d3-path's `digits = 3` rounding; rect and frame paths are written with raw doubles, as Vega does. The conformance canonicalizer does not paper over either.
 
 ## Conformance
 
-The conformance harness (`packages/conformance/src/run.ts`) is the SVG correctness gate.
-`packages/conformance/src/scene-diff.ts` is the scene-level gate (R8.1–R8.3): it compares
-resolved scales per scope, mark-group/item multisets, and paint order for overlapping
-items directly against Vega's scenegraph, before either renderer serializes anything.
+The conformance harness (`packages/conformance`) uses the real Vega and Vega-Lite packages, pinned in its devDependencies, as the oracle. Its gates (the list that runs is `scripts/gates.mjs`; counts and commands are in [TESTING.md](TESTING.md)):
 
-The SVG gate:
+- **SVG corpus** (`src/run.ts`): every `corpus/*.vg.json` (raw Vega) and `corpus/*.vl.json` (Vega-Lite, compiled by upstream `vega-lite`) is rendered by real Vega (headless) and by `@aster/core`'s `renderSpec`, both canonicalized by `src/normalize.ts` and diffed. The canonicalizer records every paint, geometry and text attribute, the full transform and the paint order, and normalizes only representation (each normalization has its reason in the file); `normalize.test.ts` plants one difference at a time and requires it to be reported.
+- **Vega-Lite corpus** (`src/run-vl.ts`): the same `.vl.json` entries compiled by `@aster/vl` (not upstream), diffed against the upstream-compiled render, and the Vega `@aster/vl` emits is also rendered through real Vega, which must not error or warn.
+- **Scene differential** (`scripts/scene-diff.mts`): resolved scales per scope, mark and item multisets, and paint order compared with Vega's scenegraph before anything is serialized.
+- **Guide captions** (`a11y-parity`), **transform option combinations** (`transform-matrix`), **schema sweeps** (`src/run-sweep.ts`: one generated chart per property/value of the Vega, Vega-Lite and signals schemas), **differential fuzzing** (`fuzz`), and the **real-browser** gates (Chromium text metrics, canvas pixels, batched-SVG pixels, signal event streams, React interaction).
+- **Oracle vectors**: per-library input/output pairs recorded from the pinned packages and replayed by `pnpm test`.
 
-1. **Load corpus** — `corpus/*.vl.json` (Vega-Lite specs) and `corpus/*.vg.json` (raw Vega specs).
-2. **Compile Vega-Lite** — for `.vl.json` entries, run `vega-lite.compile()` to produce Vega spec form.
-3. **Dual render** — run both real Vega (headless, dev-only dependency) and `@aster/core`'s `renderSpec`.
-4. **Canonicalize** — strip irrelevant attributes (`class`, `aria-*`, timestamps) and normalize element ordering.
-5. **Diff** — compare geometry records (element type, position, size, color attributes).
-
-M0 corpus conventions:
-
-- Specs MUST set explicit numeric `width` and `height`.
-- `autosize` must be `'none'` so layout is deterministic and comparable.
-
-The canonicalizer (`packages/conformance/src/normalize.ts`) is the correctness gate: a spec passes only if the two SVGs have identical canonical geometry. Text labels, axis titles, and the chart title are all verified — headless text metrics are matched by reimplementing Vega's estimate width (`~~(0.8 · len · fontSize)`) and its `labelOverlap` parity/greedy removal.
+Corpus entries set explicit numeric `width`/`height` and `autosize: 'none'` so layout is deterministic. Headless text metrics are matched by reimplementing Vega's estimate (`~~(0.8 * len * fontSize)`, see [FONTS.md](FONTS.md)).
 
 ### Gap probes (`packages/conformance/probes/`)
 
-Areas that are **known-incomplete** are captured as feature probes under `probes/` and run via `pnpm probe`. A probe renders the same oracle diff as the corpus but is a *diagnostic, not a CI gate*: its failure documents a real gap, and when the gap is implemented the probe is promoted into `corpus/`. The former `contour`, `vl-facet-2d`, `vl-title-legend` and `data-url-csv` probes were implemented and promoted into `corpus/` — URL datasets now resolve via `loadSpecData` (the `@aster/core/load` addon) inside the conformance harness, matching how a real host fetches them. Facet/trellis positioning runs the exact vega algorithms (`src/bounds.ts` + `src/trellis.ts`), so new facet gaps should show up as corpus diffs, not layout guesses.
+Known-incomplete areas are captured as feature probes under `probes/` and run via `pnpm probe`. A probe renders the same oracle diff as the corpus but is a diagnostic, never a blocking gate: its failure documents a real gap, and when the gap is implemented the probe is promoted into `corpus/`.
+
+## Deviations from Vega
+
+Aster matches Vega's output wherever the oracle can be run; where it deliberately does not, the difference is in the code with a comment and is listed here. Safety deviations (bounds on time, memory and input) are in [LIMITS.md](LIMITS.md).
+
+| Area | Aster | Vega | Why |
+|---|---|---|---|
+| Randomness (`sample`, `ci0`/`ci1` bootstrap) | seeded LCG (`SEED`), a pure function of the rows | `Math.random` | an incremental evaluation must equal a fresh one; with the same stream the draw equals Vega's (pinned by vectors) |
+| Input mutation (`joinaggregate`, `window`) | write onto copies | write onto the input tuples | engine-owned snapshots and scenes are never mutated |
+| Lookup tables | prototype-less | plain objects | a data value such as `constructor` is a key, not an inherited member |
+| `bin` without `extent` | derives the extent from the data | "Missing required bin parameter" | Aster extension |
+| `{signal}` in scale `interpolate`/`gamma` | resolved | TypeError in `parseScaleInterpolate` | do not reproduce an upstream crash |
+| Signals written into a running chart: `retained` | renders the fresh result for the new signals (a pure function of its inputs) | the running view retains its first autosize (and some other dataflow state), so its second render can differ from its own fresh render | an incremental session must equal a fresh evaluation; the sweep counts these cases as `retained` and the gate has a ceiling that can only be lowered |
+| Unsupported or unknown features | throw a typed error naming the feature | some are silently ignored | no silent wrong charts; see [ERRORS.md](ERRORS.md) |
+| SVG output of dense marks (`denseMarks`) | batched `<path>` chunks; pixel parity gated by `pnpm conformance:batch` | one element per item | node cost of large SVG; opt-out with `denseMarks={false}` |
+| Oracle crashes | not reproduced (TypeErrors upstream) | crash | the sweeps count these as `node-error` |
 
 ## Known Limitations / Roadmap
 
-| Area | Status | Notes |
-|------|--------|-------|
-| Marks | Done | rect/line/area/symbol/rule/text/arc/path/image/trail/shape, incl. curves, gradients, corner radii, `lineBreak` tspans |
-| Scales | Done | incl. scheme ranges (no zero-extension), `values`/`step`, projections via d3-geo |
-| Axes | Done | ticks, grid, domain, labels, titles (4 orients), `labelOverlap` |
-| Autosize | Done | `none`/`pad`/`fit`/`fit-x`/`fit-y` (viewSizeLayout parity: pad grows the viewport, fit shrinks content to a fixed viewport, iterating to a fixed point) |
-| Legends | Done | gradient (vertical + horizontal), symbol (single + multi-column grids at any corner), size, band, bottom flow |
-| Title | Done | top-level title + subtitle, anchored to content bounds (incl. rotated axis-title bounds) |
-| Config | Done | background/view/style/axis/legend/title defaults |
-| Expressions | Done | full vega-functions surface (date, color, array, string, scale) — CSP-safe |
-| Nested scopes | Done | group marks with their own `scales`/`axes`/`data` render in an isolated child scope |
-| Signals | Done | `update` resolved to a fixed point, plus event-driven `signal.on` streams via the signal→view event loop (`@aster/core/signals`) |
-| Interactions | Done | brush/selection (`onSelect`/`brush`), drag overlays, and the spec-driven signal event loop in `<Chart>` |
-| Data loaders | Done | `url` datasets with `csv`/`tsv`/`dsv`/`topojson` formats via `loadSpecData` (`@aster/core/load`); inline JSON + `format.parse` work in core |
-| Reactive dataflow | Done | per-datum / length-changing pulses via `input.dataChanges` / `input.dataPulse` / session auto-diff (see "Incremental evaluation" above). One pulse engine serves same-length and length-changing updates; marks splice unchanged items, scales are reused when their domain is provably stable. The guarantee is exact equality with a fresh evaluation, enforced by `incremental-oracle.test.ts`. `bench:differential` documents the wins. |
-| Incremental DOM | Done | `<Chart>` defaults to `patchSceneDom` (keeps the `<svg>`, patches changed attributes); the full string is serialized once for the first render so SSR + hydration match. Reused items are marked clean and their DOM descriptors are cached, so a differential update patches only the changed subtrees (O(changed) render) rather than re-descending the whole scene. |
-| Canvas rendering | Open | SVG only |
-| Contour | Done | implemented and promoted into `corpus/` |
-| 2-D facet (VL) | Done | row×column facet grid verified against the oracle |
-| Binning parity | Partial | `bin` covers common cases; not every Vega option |
+The open items are in [ROADMAP.md](ROADMAP.md); the feature areas that are not covered are in [LIMITS.md](LIMITS.md) and the `@aster/vl` README ("Throws").
 
 ## Verification Commands
 
 ```bash
-# Typecheck (all packages pass)
-pnpm typecheck
-
-# Build
-pnpm build
-
-# Conformance — 406-spec geometry diff against the real Vega oracle (the gate)
-pnpm conformance
-
-# Gap probes — diagnostic only, documents known-incomplete features
-pnpm probe
-
-# Per-entry bundle gates (core/dom/canvas/hit/signals/React — see budget.mjs)
+pnpm build && pnpm typecheck && pnpm test
+pnpm check                      # the whole gate list (scripts/gates.mjs)
+pnpm probe                      # diagnostic only: documents known-incomplete features
 pnpm --filter @aster/benchmarks run budget
 ```
