@@ -63,6 +63,7 @@ describe('group items', () => {
 
   it('group items count against maxItems, and the clock runs inside the group loop', () => {
     const big = { width: 100, height: 100, data: [{ name: 't', values: rows(3000) }], marks: [{ type: 'group', from: { data: 't' }, encode: { update: { width: { value: 5 }, height: { value: 5 } } } }] } as unknown as VgSpec
+    expect(() => renderSpec(big, { limits: { maxItems: 1000 } })).toThrow(/group items/)
     expect(() => renderSpec(big, { limits: { maxItems: 1000 } })).toThrow(AsterLimitError)
     expect(() => renderSpec(big, { limits: { maxItems: 100000 } })).not.toThrow()
   })

@@ -584,6 +584,17 @@ describe('group marks are scopes: guides, titles, data, facets and grid layouts 
     for (const [name, layout] of headerLayouts) {
       it(name, async () => expect(await compare({ ...frame, data: [...data, hd], scales: barScales, layout, marks: headers(3) })).toEqual([]))
     }
+    it('titles with no header or footer groups still sit beyond the grid\'s margin (vega computes it with an empty list)', async () => {
+      const titles: Spec[] = [
+        { type: 'group', role: 'column-title', title: { text: 'Columns', style: 'guide-title', offset: 6 } },
+        { type: 'group', role: 'row-title', title: { text: 'Rows', style: 'guide-title', offset: 6, orient: 'left' } },
+        ...cellsOf(4),
+      ]
+      for (const anchor of [undefined, { column: 'end', row: 'end' }]) {
+        const layout = { columns: 2, padding: 12, bounds: 'full', align: 'all', offset: { columnTitle: 7, rowTitle: 9 }, ...(anchor ? { titleAnchor: anchor } : {}) }
+        expect(await compare({ ...frame, scales: barScales, layout, marks: titles })).toEqual([])
+      }
+    })
     it('a layout the grid cannot take (fractional columns) is dropped like vega\'s failed ViewLayout', async () => {
       expect(await compare(wrap({ columns: 2.5, padding: 10, bounds: 'full' }, cellsOf(4)))).toEqual([])
     })
