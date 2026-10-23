@@ -713,15 +713,24 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
   const type = group.marktype
   if (!type || type === 'group') {
     ctx.save()
+    // vega's mark-level `clip`: the mark container is clipped to the ENCLOSING group's frame
+    if (group.markClip === true) {
+      ctx.beginPath()
+      ctx.rect(0, 0, plotW, plotH)
+      ctx.clip()
+    }
     if (group.x != null || group.y != null) ctx.translate(group.x ?? 0, group.y ?? 0)
+    // a group's content frame is its own width x height (the root plot size for the guide groups that have none)
+    const gw = group.width ?? plotW
+    const gh = group.height ?? plotH
     if (group.clip === true) {
       ctx.beginPath()
       if (group.clipPathD) tracePath(ctx, parsePathData(group.clipPathD), group.x ?? 0, group.y ?? 0)
-      else ctx.rect(0, 0, plotW, plotH)
+      else ctx.rect(0, 0, gw, gh)
       ctx.clip()
     }
     for (const item of group.items ?? []) {
-      if (isGroup(item)) renderGroup(item, ctx, scene, plotW, plotH, opts)
+      if (isGroup(item)) renderGroup(item, ctx, scene, gw, gh, opts)
       else renderLeafItem(item, ctx, scene)
     }
     ctx.restore()

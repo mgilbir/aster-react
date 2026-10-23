@@ -227,6 +227,14 @@ function renderGroup(group: SceneGroup, frameW?: number, frameH?: number, clips?
       else out2 += renderLeaf(item, clips)
     }
     out2 += '</g>'
+    // vega's mark-level `clip`: the mark container is clipped to the ENCLOSING group's
+    // frame (SVGStringRenderer `clip(renderer, scene, scene.group)`), outside the item's
+    // own transform
+    if (group.markClip === true && clips && frameW != null && frameH != null) {
+      const cw = new StringAttrSink()
+      clipRefAttrs(clips.id({ x: 0, y: 0, w: frameW, h: frameH }), cw)
+      return `<g${cw.s}>${out2}</g>`
+    }
     return out2
   }
 

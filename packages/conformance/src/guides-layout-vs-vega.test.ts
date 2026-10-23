@@ -206,6 +206,17 @@ describe('mark sort (vega SortItems) orders the encoded items by their own prope
       const spec: Spec = { ...FRAME, data: DATA2, marks: [{ type, sort, from: { data: 't' }, encode: { update: enc[type] } }] }
       expect(await compare(spec)).toEqual([])
     })
+    it(`${type} sorted by ${name}, inside a facet`, async () => {
+      const spec: Spec = {
+        ...FRAME, data: DATA2,
+        marks: [{
+          type: 'group', from: { facet: { name: 'f', data: 't', groupby: ['g'] } },
+          encode: { update: { width: { value: 100 }, height: { value: 80 } } },
+          marks: [{ type, sort, from: { data: 'f' }, encode: { update: enc[type] } }],
+        }],
+      }
+      expect(await compare(spec)).toEqual([])
+    })
   }
 })
 
@@ -353,6 +364,15 @@ describe('C51: a nested group\'s axes follow config.axis like the view\'s', () =
   for (const [name, config] of configs) {
     it(name, async () => expect(await compare(nested(config, axes))).toEqual([]))
   }
+  it('a group axis over the VIEW\'s band scale also gets config.axisBand', async () => {
+    const spec: Spec = {
+      width: 200, height: 120, padding: 5, autosize: 'none', config: { axisBand: { labelColor: 'brown', tickOffset: 2 }, axis: { tickColor: 'red' } },
+      data: [{ name: 't', values: [{ c: 'a', v: 3 }, { c: 'b', v: 8 }] }],
+      scales: [{ name: 'x', type: 'band', domain: { data: 't', field: 'c' }, range: 'width' }, { name: 'y', type: 'linear', domain: { data: 't', field: 'v' }, range: 'height' }],
+      marks: [{ type: 'group', encode: { update: { width: { signal: 'width' }, height: { signal: 'height' } } }, axes: [{ scale: 'x', orient: 'bottom' }, { scale: 'y', orient: 'left' }], marks: [] }],
+    }
+    expect(await compare(spec)).toEqual([])
+  })
 })
 
 describe('C58: an axis `encode` block styles and moves the generated marks like vega', () => {
@@ -402,8 +422,196 @@ describe('C58: an axis `encode` block styles and moves the generated marks like 
   it('an encode on an element the axis does not draw is ignored', async () => {
     expect(await compare(spec({ orient: 'left', labels: false, ticks: false, domain: false, encode: { labels: { update: { fill: { value: 'red' } } }, ticks: { update: { stroke: { value: 'red' } } }, domain: { update: { stroke: { value: 'red' } } } } }))).toEqual([])
   })
-  it('labelExpr and format still apply, an encode text wins over them', async () => {
+  it('labelExpr is not a vega axis property (ignored); format applies; an encode text wins', async () => {
     expect(await compare(spec({ orient: 'left', format: '.0f', labelExpr: "datum.label + '!'", encode: { labels: { update: { fill: { value: 'red' } } } } }))).toEqual([])
     expect(await compare(spec({ orient: 'left', labelExpr: "datum.label + '!'", encode: { labels: { update: { text: { signal: "'x' + datum.index" } } } } }))).toEqual([])
+  })
+})
+
+describe('group marks are scopes: guides, titles, data, facets and grid layouts like vega (ViewLayout)', () => {
+  const data = [{ name: 't', values: [
+    { g: 'a', k: 'x', v: 3 }, { g: 'a', k: 'y', v: 8 }, { g: 'b', k: 'x', v: 5 }, { g: 'b', k: 'y', v: 2 },
+    { g: 'c', k: 'x', v: 9 }, { g: 'c', k: 'y', v: 6 }, { g: 'd', k: 'x', v: 1 }, { g: 'd', k: 'y', v: 4 },
+  ] }]
+  const frame = { width: 400, height: 300, padding: 5, autosize: 'none', data }
+  const barScales = [
+    { name: 'bx', type: 'band', domain: { data: 't', field: 'k' }, range: [0, 80], padding: 0.2 },
+    { name: 'by', type: 'linear', domain: { data: 't', field: 'v' }, range: [60, 0], nice: true },
+    { name: 'bc', type: 'ordinal', domain: { data: 't', field: 'k' }, range: ['#4c78a8', '#f58518'] },
+  ]
+  const barMarks = [{ type: 'rect', from: { data: 't' }, encode: { update: {
+    x: { scale: 'bx', field: 'k' }, width: { scale: 'bx', band: 1 }, y: { scale: 'by', field: 'v' }, y2: { scale: 'by', value: 0 }, fill: { scale: 'bc', field: 'k' },
+  } } }]
+  const cell = (extra: Spec = {}): Spec => ({
+    type: 'group', style: 'cell', encode: { update: { width: { value: 80 }, height: { value: 60 } } },
+    scales: barScales, marks: barMarks, axes: [{ scale: 'bx', orient: 'bottom', title: 'k' }, { scale: 'by', orient: 'left', title: 'v' }], ...extra,
+  })
+
+  describe('a nested group lays out its own axes, legends and title', () => {
+    const variants: Array<[string, Spec]> = [
+      ['axes only', {}],
+      ['a nested legend (C51)', { legends: [{ fill: 'bc', title: 'kind' }] }],
+      ['nested legends on every orient', { legends: [{ fill: 'bc', orient: 'left' }, { stroke: 'bc', orient: 'bottom', direction: 'horizontal' }, { size: 'bsz', orient: 'top' }] }],
+      ['two legends on one orient (grid layout)', { legends: [{ fill: 'bc', title: 'one' }, { stroke: 'bc', title: 'two' }] }],
+      ['title top', { title: { text: 'T' } }],
+      ['title bottom, anchor start', { title: { text: 'T', orient: 'bottom', anchor: 'start' } }],
+      ['title left frame group', { title: { text: 'T', orient: 'left', frame: 'group', offset: 12 } }],
+      ['title right, end anchor, style guide-label', { title: { text: 'T', orient: 'right', anchor: 'end', style: 'guide-label' } }],
+      ['title with subtitle', { title: { text: 'T', subtitle: 'sub', subtitleFontSize: 9 } }],
+      ['title from a signal reading the facet datum is covered below; here a plain title, long, with a limit', { title: { text: 'A rather long group title', limit: 40 } }],
+      ['clip', { clip: true }],
+      ['clip with a rounded background', { clip: true, encode: { update: { width: { value: 80 }, height: { value: 60 }, cornerRadius: { value: 8 }, fill: { value: '#eef' }, stroke: { value: '#99c' } } } }],
+      ['background paint and offset', { encode: { update: { x: { value: 12 }, y: { value: 7 }, width: { value: 80 }, height: { value: 60 }, fill: { value: '#fee' }, stroke: { value: '#c99' }, strokeWidth: { value: 2 } } } }],
+    ]
+    for (const [name, extra] of variants) {
+      it(name, async () => {
+        const scales = [...barScales, { name: 'bsz', type: 'linear', domain: { data: 't', field: 'v' }, range: [20, 120] }]
+        const g = cell({ ...extra, scales })
+        expect(await compare({ ...frame, marks: [g] })).toEqual([])
+      })
+    }
+    it('a group two levels deep', async () => {
+      const inner = cell({ title: { text: 'inner' }, legends: [{ fill: 'bc' }] })
+      const outer: Spec = { type: 'group', encode: { update: { x: { value: 20 }, y: { value: 10 }, width: { value: 220 }, height: { value: 180 }, stroke: { value: '#999' } } }, title: { text: 'outer' }, marks: [inner], axes: [] }
+      expect(await compare({ ...frame, marks: [outer] })).toEqual([])
+    })
+    it('a group with no marks, only axes', async () => {
+      expect(await compare({ ...frame, marks: [{ type: 'group', encode: { update: { width: { value: 80 }, height: { value: 60 } } }, scales: barScales, axes: [{ scale: 'bx', orient: 'bottom' }] }] })).toEqual([])
+    })
+  })
+
+  describe('facets, data-driven groups and group data', () => {
+    const facetCell = (groupby: unknown, extra: Spec = {}): Spec => ({
+      type: 'group', from: { facet: { name: 'f', data: 't', groupby } }, encode: { update: { width: { value: 80 }, height: { value: 60 } } },
+      title: { text: { signal: 'parent.g' }, style: 'guide-label', frame: 'group', offset: 8 },
+      scales: [{ name: 'fx', type: 'band', domain: { data: 'f', field: 'k' }, range: [0, 80] }, { name: 'fy', type: 'linear', domain: { data: 'f', field: 'v' }, range: [60, 0], zero: true }],
+      axes: [{ scale: 'fx', orient: 'bottom' }, { scale: 'fy', orient: 'left' }],
+      marks: [{ type: 'rect', from: { data: 'f' }, encode: { update: { x: { scale: 'fx', field: 'k' }, width: { scale: 'fx', band: 1 }, y: { scale: 'fy', field: 'v' }, y2: { scale: 'fy', value: 0 }, fill: { value: 'teal' } } } }],
+      ...extra,
+    })
+    for (const [name, groupby] of [['an array', ['g']], ['a string', 'g'], ['two fields', ['g', 'k']]] as Array<[string, unknown]>) {
+      it(`facet by ${name}, wrapped in two columns`, async () => {
+        expect(await compare({ ...frame, layout: { columns: 2, padding: 20, bounds: 'full', align: 'all' }, marks: [facetCell(groupby)] })).toEqual([])
+      })
+    }
+    it('facet sorted descending by the key', async () => {
+      expect(await compare({ ...frame, layout: { columns: 2, padding: 15, bounds: 'full', align: 'each' }, marks: [facetCell(['g'], { sort: { field: 'datum.g', order: 'descending' } })] })).toEqual([])
+    })
+    it('a facet key with a dot is a literal field name when escaped', async () => {
+      const dotted = [{ name: 't', values: [{ 'o.g': 'p', k: 'x', v: 2 }, { 'o.g': 'q', k: 'x', v: 5 }, { 'o.g': 'p', k: 'y', v: 7 }] }]
+      const c = facetCell(['o\\.g'], { title: { text: { signal: 'parent["o.g"]' }, style: 'guide-label', frame: 'group' } })
+      expect(await compare({ ...frame, data: dotted, layout: { columns: 2, padding: 20, bounds: 'full', align: 'all' }, marks: [c] })).toEqual([])
+    })
+    it('one group per datum of a dataset, with the datum in its encode', async () => {
+      const spec: Spec = {
+        ...frame, layout: { columns: 4, padding: 10, bounds: 'full', align: 'each' },
+        marks: [{ type: 'group', from: { data: 't' }, encode: { update: { width: { signal: 'datum.v * 8' }, height: { value: 30 }, stroke: { value: '#c00' } } },
+          marks: [{ type: 'text', encode: { update: { text: { signal: 'parent.k' }, x: { value: 2 }, y: { value: 12 } } } }] }],
+      }
+      expect(await compare(spec)).toEqual([])
+    })
+    it('group-level data derived from the facet partition', async () => {
+      const c = facetCell(['g'], {
+        data: [{ name: 'big', source: 'f', transform: [{ type: 'filter', expr: 'datum.v > 3' }] }],
+        marks: [{ type: 'rect', from: { data: 'big' }, encode: { update: { x: { scale: 'fx', field: 'k' }, width: { scale: 'fx', band: 1 }, y: { scale: 'fy', field: 'v' }, y2: { scale: 'fy', value: 0 }, fill: { value: 'orange' } } } }],
+      })
+      expect(await compare({ ...frame, layout: { columns: 2, padding: 20, bounds: 'full', align: 'all' }, marks: [c] })).toEqual([])
+    })
+    it('a facet aggregate positions the group (stack_group_main) and its children shift back', async () => {
+      const spec: Spec = {
+        ...frame,
+        scales: [{ name: 'sx', type: 'band', domain: { data: 't', field: 'g' }, range: [0, 300], padding: 0.1 }, { name: 'sy', type: 'linear', domain: { data: 't', field: 'v' }, range: [200, 0], zero: true, nice: true }],
+        marks: [{
+          type: 'group', from: { facet: { name: 'stack', data: 't', groupby: ['g'], aggregate: { fields: ['v', 'v'], ops: ['min', 'max'] } } },
+          encode: { update: { x: { scale: 'sx', field: 'g' }, width: { signal: "bandwidth('sx')" }, y: { signal: "scale('sy', datum.max_v)" }, y2: { signal: "scale('sy', 0)" }, clip: { value: true }, cornerRadius: { value: 6 } } },
+          marks: [{ type: 'group', encode: { update: { y: { field: { group: 'y' }, mult: -1 }, width: { field: { group: 'width' } } } }, marks: [{
+            type: 'rect', from: { data: 'stack' }, encode: { update: { width: { field: { group: 'width' } }, y: { scale: 'sy', field: 'v' }, y2: { scale: 'sy', value: 0 }, fill: { value: '#4c78a8' }, stroke: { value: '#fff' } } },
+          }] }],
+        }],
+        axes: [{ scale: 'sx', orient: 'bottom' }, { scale: 'sy', orient: 'left' }],
+      }
+      expect(await compare(spec)).toEqual([])
+    })
+  })
+
+  describe('the grid layout of child groups and the header / footer / title groups around it', () => {
+    const cellsOf = (n: number, w = 70, h = 50): Spec[] => Array.from({ length: n }, (_, i) => ({
+      type: 'group', style: 'cell', encode: { update: { width: { value: w + (i % 3) * 10 }, height: { value: h + (i % 2) * 8 } } },
+      axes: i % 2 ? [{ scale: 'bx', orient: 'bottom' }] : [{ scale: 'by', orient: 'left' }],
+      marks: [{ type: 'rect', encode: { update: { x: { value: 2 }, y: { value: 2 }, width: { value: 20 + i * 4 }, height: { value: 18 }, fill: { value: '#4c78a8' } } } }],
+    }))
+    const wrap = (layout: Spec, groups: Spec[], extra: Spec = {}): Spec => ({ ...frame, scales: barScales, layout, marks: groups, ...extra })
+    const layouts: Array<[string, Spec]> = [
+      ['columns 3, align each, full bounds', { columns: 3, align: 'each', bounds: 'full', padding: 12 }],
+      ['columns 2, align all, flush bounds', { columns: 2, align: 'all', bounds: 'flush', padding: 9 }],
+      ['no align', { columns: 3, bounds: 'full', padding: 7 }],
+      ['row / column align and padding objects', { columns: 3, align: { row: 'each', column: 'all' }, padding: { row: 5, column: 15 }, bounds: 'full' }],
+      ['centered rows', { columns: 3, align: 'each', padding: 10, center: { row: true, column: true }, bounds: 'full' }],
+      ['one column', { columns: 1, align: 'all', padding: 10, bounds: 'full' }],
+      ['anchored', { columns: 3, padding: 10, bounds: 'full', anchor: { x: 30, y: 20, column: 'middle', row: 'end' } }],
+      ['columns from a signal', { columns: { signal: '2 + 1' }, padding: 10, align: 'each', bounds: 'full' }],
+    ]
+    for (const [name, layout] of layouts) {
+      it(name, async () => expect(await compare(wrap(layout, cellsOf(6)))).toEqual([]))
+    }
+    const headers = (n: number): Spec[] => [
+      { type: 'group', role: 'column-title', title: { text: 'Columns', style: 'guide-title', offset: 6 } },
+      { type: 'group', role: 'row-title', title: { text: 'Rows', style: 'guide-title', offset: 6, orient: 'left' } },
+      { type: 'group', role: 'column-header', from: { data: 'hd' }, encode: { update: { width: { value: 70 } } }, title: { text: { signal: 'parent.name' }, style: 'guide-label', frame: 'group', offset: 4 } },
+      { type: 'group', role: 'column-footer', from: { data: 'hd' }, encode: { update: { width: { value: 70 } } }, title: { text: { signal: 'parent.name' }, style: 'guide-label', frame: 'group', orient: 'bottom', offset: 4 } },
+      { type: 'group', role: 'row-header', encode: { update: { height: { value: 50 } } }, axes: [{ scale: 'by', orient: 'left', title: 'v' }] },
+      ...cellsOf(n),
+    ]
+    const hd = { name: 'hd', values: [{ name: 'one' }, { name: 'two' }, { name: 'three' }] }
+    const headerLayouts: Array<[string, Spec]> = [
+      ['headers and titles, column align all', { columns: 3, padding: 20, bounds: 'full', align: 'all', offset: { columnTitle: 10, rowTitle: 8, rowHeader: 3, columnHeader: 3, columnFooter: 5 } }],
+      ['headers, flush bounds', { columns: 3, padding: 20, bounds: 'flush', align: 'each', offset: { columnTitle: 10 } }],
+      ['title anchors at the end', { columns: 3, padding: 20, bounds: 'full', align: 'all', titleAnchor: { column: 'end', row: 'end' }, offset: { columnTitle: 10, rowTitle: 10 } }],
+      ['header band', { columns: 3, padding: 20, bounds: 'full', align: 'all', headerBand: { row: 0.5, column: 0.25 }, footerBand: { column: 0.75 }, offset: { columnTitle: 10 } }],
+    ]
+    for (const [name, layout] of headerLayouts) {
+      it(name, async () => expect(await compare({ ...frame, data: [...data, hd], scales: barScales, layout, marks: headers(3) })).toEqual([]))
+    }
+    it('a layout the grid cannot take (fractional columns) is dropped like vega\'s failed ViewLayout', async () => {
+      expect(await compare(wrap({ columns: 2.5, padding: 10, bounds: 'full' }, cellsOf(4)))).toEqual([])
+    })
+  })
+})
+
+describe('legend encode blocks (labels, title, symbols, legend) apply like vega', () => {
+  const data = [{ name: 't', values: [{ a: 0, c: 'u' }, { a: 5, c: 'v' }, { a: 10, c: 'w' }, { a: 20, c: 'x' }] }]
+  const scales = [
+    { name: 'col', type: 'ordinal', domain: { data: 't', field: 'c' }, range: { scheme: 'category10' } },
+    { name: 'seq', type: 'linear', domain: { data: 't', field: 'a' }, range: { scheme: 'blues' } },
+    { name: 'sz', type: 'linear', domain: { data: 't', field: 'a' }, range: [20, 200] },
+  ]
+  const frame = { width: 160, height: 100, padding: 5, autosize: 'none', data, scales }
+  const encodes: Array<[string, Spec]> = [
+    ['labels: text from a signal', { labels: { update: { text: { signal: "datum.label + '!'" } } } }],
+    ['labels: text from the index', { labels: { update: { text: { signal: "'#' + datum.index" } } } }],
+    ['labels: paint and font', { labels: { update: { fill: { value: 'crimson' }, fontSize: { value: 13 }, fontWeight: { value: 'bold' } } } }],
+    ['labels: align and baseline', { labels: { update: { align: { value: 'right' }, baseline: { value: 'top' } } } }],
+    ['title: text and paint', { title: { update: { text: { value: 'Replaced' }, fill: { value: 'navy' }, fontSize: { value: 15 } } } }],
+    ['title: font', { title: { update: { font: { value: 'monospace' }, fontWeight: { value: 'normal' } } } }],
+    ['legend: orient, offset and padding', { legend: { update: { orient: { value: 'left' }, offset: { value: 4 }, padding: { value: 6 } } } }],
+    ['legend: border and fill', { legend: { update: { fill: { value: '#f4f4ff' }, stroke: { value: '#99c' }, cornerRadius: { value: 6 }, padding: { value: 5 } } } }],
+  ]
+  for (const [name, encode] of encodes) {
+    it(`symbol legend / ${name}`, async () => {
+      expect(await compare({ ...frame, legends: [{ fill: 'col', title: 'T', encode }] })).toEqual([])
+    })
+    it(`gradient legend / ${name}`, async () => {
+      expect(await compare({ ...frame, legends: [{ fill: 'seq', title: 'T', type: 'gradient', gradientLength: 90, encode }] })).toEqual([])
+    })
+  }
+  it('symbols: a symbol placed by its own x / y encode', async () => {
+    expect(await compare({ ...frame, legends: [{ fill: 'col', encode: { symbols: { update: { x: { value: 20 }, y: { signal: 'datum.index * 2' } } } } }] })).toEqual([])
+  })
+  it('orient none is placed by legendX / legendY (also signals)', async () => {
+    expect(await compare({ ...frame, legends: [{ fill: 'col', orient: 'none', legendX: 30, legendY: { signal: '10 + 5' } }] })).toEqual([])
+    expect(await compare({ ...frame, legends: [{ fill: 'col', orient: 'none', encode: { legend: { update: { x: { value: 12 }, y: { value: 40 } } } } }] })).toEqual([])
+  })
+  it('labelExpr is not a vega legend property (ignored)', async () => {
+    expect(await compare({ ...frame, legends: [{ fill: 'col', labelExpr: "datum.label + '!'" }, { fill: 'seq', type: 'gradient', orient: 'left', labelExpr: "datum.label + '!'" }] })).toEqual([])
   })
 })

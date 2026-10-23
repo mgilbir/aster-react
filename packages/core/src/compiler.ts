@@ -44,8 +44,12 @@ export function compileChart(rawSpec: VgSpec): CompiledChart {
   // Collect signal names before resolving them
   const sigNames = (spec.signals as Array<Record<string, unknown>> | undefined)?.map(s => (s as any)?.name || '').filter(Boolean) ?? []
   // We don't have the resolved signal values yet, so just use raw width/height
-  const width = typeof spec.width === 'number' ? spec.width : (typeof spec.width === 'object' ? spec.width as SizeSpec : DEFAULT_SIZE)
-  const height = typeof spec.height === 'number' ? spec.height : (typeof spec.height === 'object' ? spec.height as SizeSpec : DEFAULT_SIZE)
+  // A view with a `layout` and no size of its own (a composition: vega-lite sizes only the
+  // child groups) has vega's `width` / `height` signal value, 0 - unless a signal supplies it.
+  const defaultSize = (name: 'width' | 'height'): SizeSpec =>
+    spec.layout != null && !sigNames.includes(name) ? 0 : DEFAULT_SIZE
+  const width = typeof spec.width === 'number' ? spec.width : (typeof spec.width === 'object' ? spec.width as SizeSpec : defaultSize('width'))
+  const height = typeof spec.height === 'number' ? spec.height : (typeof spec.height === 'object' ? spec.height as SizeSpec : defaultSize('height'))
   const frameStroke = resolveFrameStroke(spec)
   const frameFill = resolveFrameFill(spec)
   const frameStrokeWidth = resolveFrameNumber(spec, 'strokeWidth')
@@ -387,11 +391,20 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
   if (value == null) return undefined
   const spec = typeof value === 'string' ? { text: value } : (value as Record<string, unknown>)
   const cfg = (config?.title ?? {}) as Record<string, unknown>
+  // vega-parser title.js: the text mark's style is the spec's `style` (default
+  // 'group-title'); a property the title spec and config.title leave unset
+  // comes from that style's block of config.style.
+  const cfgStyle = (config?.style ?? {}) as Record<string, Record<string, unknown>>
+  const styleNames = ([] as unknown[]).concat(spec.style ?? 'group-title').map(String)
+  const sty: Record<string, unknown> = {}
+  for (const n of styleNames) Object.assign(sty, ownGet(cfgStyle, n))
   // Defaults mirror vega's config.title block (orient top, anchor middle,
-  // offset 4, subtitlePadding 3) and the vega-theme title style
-  // (fontSize 13, fontWeight bold).
-  const text = typeof spec.text === 'string' ? spec.text : String(spec.text ?? '')
-  const fontSize = (spec.fontSize as number | undefined) ?? (cfg.fontSize as number | undefined) ?? 13
+  // offset 4, subtitlePadding 3).
+  const rawText = spec.text
+  const text: CompiledTitle['text'] = rawText && typeof rawText === 'object' && 'signal' in (rawText as Record<string, unknown>)
+    ? { signal: String((rawText as { signal: unknown }).signal) }
+    : typeof rawText === 'string' ? rawText : Array.isArray(rawText) ? rawText.map(String).join(' ') : String(rawText ?? '')
+  const fontSize = (spec.fontSize as number | undefined) ?? (cfg.fontSize as number | undefined) ?? (sty.fontSize as number | undefined) ?? 11
   return {
     text,
     subtitle: typeof spec.subtitle === 'string' ? spec.subtitle : spec.subtitle != null ? String(spec.subtitle) : undefined,
@@ -400,9 +413,10 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
     offset: (spec.offset as number | undefined) ?? (cfg.offset as number | undefined) ?? 4,
     subtitlePadding: (spec.subtitlePadding as number | undefined) ?? (cfg.subtitlePadding as number | undefined) ?? 3,
     fontSize,
-    fontWeight: (spec.fontWeight as CompiledTitle['fontWeight']) ?? (cfg.fontWeight as CompiledTitle['fontWeight']) ?? 'bold',
-    font: (spec.font as string | undefined) ?? (cfg.font as string | undefined),
-    color: (spec.color as string | undefined) ?? (cfg.color as string | undefined) ?? '#000',
+    fontWeight: (spec.fontWeight as CompiledTitle['fontWeight']) ?? (cfg.fontWeight as CompiledTitle['fontWeight']) ?? (sty.fontWeight as CompiledTitle['fontWeight']),
+    font: (spec.font as string | undefined) ?? (cfg.font as string | undefined) ?? (sty.font as string | undefined),
+    fontStyle: (spec.fontStyle as string | undefined) ?? (cfg.fontStyle as string | undefined) ?? (sty.fontStyle as string | undefined),
+    color: (spec.color as string | undefined) ?? (cfg.color as string | undefined) ?? (sty.fill as string | undefined) ?? '#000',
     baseline: (spec.baseline as string | undefined) ?? (cfg.baseline as string | undefined),
     align: (spec.align as string | undefined) ?? (cfg.align as string | undefined),
     angle: (spec.angle as number | undefined) ?? (cfg.angle as number | undefined),
@@ -565,6 +579,8 @@ function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Reco
   if (m.key !== undefined) out.key = m.key as string
   if (m.sort !== undefined) out.sort = m.sort as CompiledMark['sort']
   if (m.title !== undefined) out.title = m.title as CompiledMark['title']
+  // a group's title is a title like the view's, resolved against the same config (its text may read `parent`)
+  if (m.type === 'group' && m.title !== undefined && m.title !== null) out.groupTitle = compileTitle(m.title, cfgMarktype as unknown as Record<string, unknown> | undefined)
   if (m.layout !== undefined) out.layout = m.layout as Record<string, unknown>
   // a group's own scales are visible to its axes and its children, after the enclosing scope's
   if ((m as any).scales !== undefined) out.scales = ((m as any).scales as Array<Record<string, unknown>>).map(compileScale)

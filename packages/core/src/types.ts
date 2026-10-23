@@ -162,7 +162,8 @@ export interface CompiledChart {
 }
 
 export interface CompiledTitle {
-  text: string
+  /** The text, or a signal expression (a group title reads its facet datum as `parent`). */
+  text: string | { signal: string }
   subtitle?: string
   orient: 'top' | 'bottom' | 'left' | 'right' | 'none'
   anchor: 'start' | 'middle' | 'end'
@@ -171,6 +172,7 @@ export interface CompiledTitle {
   fontSize: number
   fontWeight?: string | number
   font?: string
+  fontStyle?: string
   color: string
   baseline?: string
   align?: string
@@ -477,6 +479,8 @@ export interface CompiledMark {
   transform?: CompiledTransform[]
   /** Group mark title (for axis/row titles). */
   title?: unknown
+  /** A group's title, resolved like the view's (config.title, then its style). */
+  groupTitle?: CompiledTitle
   /** Nested marks within a group. */
   marks?: CompiledMark[]
   /** Axis specifications within a group (nested scope), with the view's config defaults applied. */
@@ -584,6 +588,8 @@ export interface SceneGroup extends SceneItem {
   /** Nested scene items (children of a group). */
   items?: SceneNode[]
   clip?: boolean
+  /** The MARK's `clip` (not the item's): this group item sits in a container clipped to the enclosing group's frame. */
+  markClip?: boolean
   /** Pre-computed rounded-rect path `d` for clip-path defs (when cornerRadius > 0). */
   clipPathD?: string
   /** @internal The mark's source dataset, used to match a mark to its previous group. */

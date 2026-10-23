@@ -5,13 +5,11 @@
  * vega-scenegraph bounds port (bounds.ts) at the time the layout pass reads
  * them, mirroring vega's dataflow order.
  */
-import type { SceneGroup, SceneItem, SceneNode } from './types.js'
-import { boundAxisGroup, Bounds, boundLeaf, boundsOf, boundsFromPath } from './bounds.js'
+import type { SceneGroup } from './types.js'
+import { Bounds, layoutBounds } from './bounds.js'
 import { boundedCount } from './limits.js'
 
 const Group = 'group'
-const Start = 0
-const Middle = 0.5
 const End = 1
 
 /** layoutHeaders margin aggregations — exact (floor/ceil matter). */
@@ -89,74 +87,13 @@ function offsetValue(v: number): number {
   return v < 0 ? Math.ceil(-v) : 0
 }
 
-type Box = { x1: number; y1: number; x2: number; y2: number }
-
 function bboxFlush(item: SceneGroup): Bounds {
   return new Bounds().set(0, 0, item.width || 0, item.height || 0)
 }
 
 function bboxFull(item: SceneGroup): Bounds {
-  const b = measureBounds(item)
+  const b = layoutBounds(item)
   return b.empty() ? b.set(0, 0, 0, 0) : b.translate(-(item.x || 0), -(item.y || 0))
-}
-
-/** A grid-only axis (no tick labels/title) — vega measures these as their spine. */
-function isGridOnlyAxis(g: SceneGroup): boolean {
-  if (g.role !== 'axis') return false
-  const items = g.items ?? []
-  if (!items.length) return false
-  let hasText = false
-  const walk = (node: unknown): void => {
-    const leaf = node as SceneItem
-    if (leaf.text != null) hasText = true
-    const kids = (leaf as SceneGroup).items
-    if (Array.isArray(kids)) for (const k of kids) walk(k)
-  }
-  for (const it of items) walk(it)
-  return !hasText
-}
-
-export function measureBounds(item: SceneGroup): Bounds {
-  const b = new Bounds()
-  for (const it of item.items ?? []) {
-    const leaf = it as SceneItem
-    const isBgLeaf = (leaf as SceneGroup).marktype === undefined
-      && !Array.isArray((leaf as SceneGroup).items)
-      && leaf.path != null
-      && leaf.stroke != null
-      && leaf.strokeWidth == null
-    if (isBgLeaf) {
-      const bb = new Bounds()
-      boundsFromPath(bb, leaf.path!)
-      bb.translate(-0.5, -0.5) // undo the baked group stroke offset
-      b.union(bb)
-    } else if (isGridOnlyAxis(leaf as SceneGroup)) {
-      // vega's axisLayout recomputes the axis mark's bounds as the axis spine
-      // (ticks/labels excluded for grid-only axes), so grid rules inside facet
-      // cells contribute nothing beyond the cell rect.
-      continue
-    } else if ((leaf as SceneGroup).role === 'axis') {
-      b.union(boundAxisGroup(leaf as SceneGroup))
-    } else if (item.role === 'row-title' && leaf.text != null) {
-      // Vega's title layout measures the rotated row-title text at its
-      // title-baseline origin; the rendered baseline (middle) is applied by
-      // the text mark afterwards and must not inflate the rotated x-bound.
-      b.union(boundLeaf(new Bounds(), { ...leaf, baseline: 'top' } as SceneItem))
-    } else {
-      b.union(boundLeaf(new Bounds(), leaf))
-    }
-  }
-  if ((item.width || item.height) && !(item as Record<string, unknown>).noBound) {
-    b.add(0, 0).add(item.width || 0, item.height || 0)
-  }
-  // group stroke expansion (the cell's #ddd stroke, default width 1 → 0.5px)
-  for (const leaf of item.items ?? []) {
-    if ((leaf as SceneItem).stroke != null && (leaf as SceneItem).strokeWidth == null && (leaf as SceneItem).path != null) {
-      b.expand(0.5)
-      break
-    }
-  }
-  return b.translate(item.x || 0, item.y || 0)
 }
 
 function boundFlush(item: SceneGroup, field: string): number | undefined {
@@ -168,7 +105,7 @@ function boundFlush(item: SceneGroup, field: string): number | undefined {
 }
 
 function boundFull(item: SceneGroup, field: string): number | undefined {
-  return (measureBounds(item) as unknown as Record<string, number>)[field]
+  return (layoutBounds(item) as unknown as Record<string, number>)[field]
 }
 
 /**
@@ -332,11 +269,15 @@ export function gridLayout(groups: SceneGroup[], opt: Opt, measure?: (g: SceneGr
   ax = Math.round(ax)
   ay = Math.round(ay)
 
-  // update mark positions
+  // update mark positions; the grid's bounds are then those of the groups
+  // THEMSELVES at their new positions (vega: `bounds.union(g.bounds.translate(dx, dy))`),
+  // whichever `bounds` option measured the cells
+  bounds.clear()
   for (let i = 0; i < n; ++i) {
     const g = groups[i]!
     g.x += dx[i]! += ax
     g.y += dy[i]! += ay
+    bounds.union(layoutBounds(g))
   }
   return bounds
 }
@@ -394,13 +335,13 @@ export function layoutHeaders(
     let hx: number
     let hy: number
     if (isX) {
-      hx = band == null ? (g ? g.x || 0 : 0) : Math.round((g ? measureBounds(g).x1 : 0) + band * (g ? measureBounds(g).width() : 0))
+      hx = band == null ? (g ? g.x || 0 : 0) : Math.round((g ? layoutBounds(g).x1 : 0) + band * (g ? layoutBounds(g).width() : 0))
       hy = init
     } else {
       hx = init
-      hy = band == null ? (g ? g.y || 0 : 0) : Math.round((g ? measureBounds(g).y1 : 0) + band * (g ? measureBounds(g).height() : 0))
+      hy = band == null ? (g ? g.y || 0 : 0) : Math.round((g ? layoutBounds(g).y1 : 0) + band * (g ? layoutBounds(g).height() : 0))
     }
-    const hb = measureBounds(h)
+    const hb = layoutBounds(h)
     hb.translate(hx - (h.x || 0), hy - (h.y || 0))
     h.x = hx
     h.y = hy
@@ -459,32 +400,24 @@ export function trellisLayout(group: SceneGroup, opt: Opt): void {
   if (bounds.empty()) bounds.set(0, 0, 0, 0) // empty grid
 
   // -- layout grid headers and footers --
+  // (vega: `if (views.rowheaders)` is always true - the lists are arrays - so the
+  // margin of the grid is computed even with no header at all)
 
-  if (views.rowheaders.length) {
-    band = get(opt.headerBand ?? null, 'row', null)
-    x = layoutHeaders(views.rowheaders, groups, ncols, nrows, -get(off, 'rowHeader'), min, 0, bound, 'x1', 0, ncols, 1, band)
-  }
+  band = get(opt.headerBand ?? null, 'row', null)
+  x = layoutHeaders(views.rowheaders, groups, ncols, nrows, -get(off, 'rowHeader'), min, 0, bound, 'x1', 0, ncols, 1, band)
 
-  if (views.colheaders.length) {
-    band = get(opt.headerBand ?? null, 'column', null)
-    y = layoutHeaders(views.colheaders, groups, ncols, ncols, -get(off, 'columnHeader'), min, 1, bound, 'y1', 0, 1, ncols, band)
-  }
+  band = get(opt.headerBand ?? null, 'column', null)
+  y = layoutHeaders(views.colheaders, groups, ncols, ncols, -get(off, 'columnHeader'), min, 1, bound, 'y1', 0, 1, ncols, band)
 
-  if (views.rowfooters.length) {
-    band = get(opt.footerBand ?? null, 'row', null)
-    x2 = layoutHeaders(views.rowfooters, groups, ncols, nrows, get(off, 'rowFooter'), max, 0, bound, 'x2', ncols - 1, ncols, 1, band)
-  }
+  band = get(opt.footerBand ?? null, 'row', null)
+  x2 = layoutHeaders(views.rowfooters, groups, ncols, nrows, get(off, 'rowFooter'), max, 0, bound, 'x2', ncols - 1, ncols, 1, band)
 
-  if (views.colfooters.length) {
-    band = get(opt.footerBand ?? null, 'column', null)
-    y2 = layoutHeaders(views.colfooters, groups, ncols, ncols, get(off, 'columnFooter'), max, 1, bound, 'y2', cells - ncols, 1, ncols, band)
-  }
+  band = get(opt.footerBand ?? null, 'column', null)
+  y2 = layoutHeaders(views.colfooters, groups, ncols, ncols, get(off, 'columnFooter'), max, 1, bound, 'y2', cells - ncols, 1, ncols, band)
 
   // perform row title layout
   if (views.rowtitle) {
     anchor = get(opt.titleAnchor ?? null, 'row')
-    // With no row footer, an end-anchored title sits at the grid's right edge.
-    if ((anchor === End || anchor === 'end') && !views.rowfooters.length) x2 = bounds.x2 + 0.5
     offset = get(off, 'rowTitle')
     offset = (anchor === End || anchor === 'end') ? x2 + offset : x - offset
     band = get(opt.titleBand ?? null, 'row', 0.5)
@@ -494,7 +427,6 @@ export function trellisLayout(group: SceneGroup, opt: Opt): void {
   // perform column title layout
   if (views.coltitle) {
     anchor = get(opt.titleAnchor ?? null, 'column')
-    if ((anchor === End || anchor === 'end') && !views.colfooters.length) y2 = bounds.y2
     offset = get(off, 'columnTitle')
     offset = (anchor === End || anchor === 'end') ? y2 + offset : y - offset
     band = get(opt.titleBand ?? null, 'column', 0.5)
