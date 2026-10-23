@@ -27,7 +27,7 @@ export const GATES = [
   { name: 'build', args: ['build'], why: 'every package compiles to dist' },
   { name: 'deps', args: ['check:deps'], why: 'runtime and built dist import none of vega/d3/topojson' },
   { name: 'typecheck', args: ['typecheck'], why: 'all workspaces typecheck' },
-  { name: 'test', args: ['test'], why: 'unit, React interaction/SSR/a11y, script tests' },
+  { name: 'test', args: ['test'], why: 'unit, React interaction/SSR/a11y, script tests; the React component tests run on <Chart>, <SvgChart> and <SvgChart interaction> (variant matrix), with the thin-shell, matrix-coverage, type-parity and 785-spec output-parity guards' },
   { name: 'tz-matrix', args: ['test:tz'], why: 'zone-sensitive tests and the time-zone corpus under non-UTC zones (UTC labels, local time scales)' },
   { name: 'verify-publish', args: ['verify:publish'], why: 'packed tarballs: licences, exports, consumer smoke test' },
   {
@@ -47,7 +47,7 @@ export const GATES = [
   },
   {
     name: 'react-browser', args: ['--filter', '@aster/react', 'run', 'test:browser'], tags: ['browser'],
-    why: '<Chart> pointer/keyboard interaction, selection, pan/zoom and the a11y overlay in a real Chromium',
+    why: '<Chart> and <SvgChart interaction> pointer/keyboard interaction, selection, pan/zoom, signal.on, bound inputs and the a11y overlay in a real Chromium; <SvgChart> without interaction renders and reports the missing event loop',
   },
   {
     name: 'browser-conformance', args: ['conformance:browser'], tags: ['browser'],
@@ -64,9 +64,9 @@ export const GATES = [
   { name: 'fuzz-replay', args: ['fuzz:replay'], why: 'every committed fuzz reproducer still passes' },
   {
     name: 'bundle-shaking', args: ['check:bundle'],
-    why: 'each documented import pattern is bundled (esbuild, production, tree-shaking) and EXECUTED: sideEffects must not shake out a registration (VL, geo, transforms, load, guide captions, worker entry)',
+    why: 'each documented import pattern is bundled (esbuild, production, tree-shaking) and EXECUTED: sideEffects must not shake out a registration (VL, geo, transforms, load, guide captions, worker entry); <SvgChart> bundles contain no canvas/hit/signals module unless asked (esbuild metafile)',
   },
-  { name: 'budget', args: ['--filter', '@aster/benchmarks', 'run', 'budget'], why: 'per-import-pattern bundle size budgets (useChart, <Chart>, <Chart>+VL, core, addons as marginal cost); fails if tree-shaking breaks' },
+  { name: 'budget', args: ['--filter', '@aster/benchmarks', 'run', 'budget'], why: 'per-import-pattern bundle size budgets (useChart, <Chart>, <SvgChart>, <SvgChart>+interaction, <Chart>+VL, core, addons as marginal cost); fails if tree-shaking breaks' },
   { name: 'probe', args: ['probe'], blocking: false, why: 'known-gap probes (diagnostic only; never fails the run)' },
 ]
 

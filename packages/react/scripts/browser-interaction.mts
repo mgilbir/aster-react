@@ -1,5 +1,5 @@
 /**
- * Real-browser interaction gate for <Chart> (audit C28 and friends).
+ * Real-browser interaction gate for <Chart> and <SvgChart interaction={interaction}> (audit C28 and friends).
  *
  * jsdom has no layout and no hit testing, so it cannot tell whether the marks
  * are actually reachable by a real pointer: an overlay swallowing events passes
@@ -14,6 +14,13 @@
  *   - brushing, drag-pan, wheel-zoom and their pointer capture still work,
  *   - a11y nodes are positioned over the marks they describe (padding included).
  *
+ * Every check runs against both components, each bundled on its own (so the light one is the real light bundle):
+ * `<Chart>` from the package entry, and `<SvgChart interaction={interaction}>` from `@aster/react/lite` +
+ * `@aster/react/interaction`. A third pass covers `<SvgChart>` WITHOUT interaction: it renders, it works for what
+ * needs no hit testing (pan/zoom, brush), and an event-stream spec reports the documented error instead of going
+ * silently dead. The light bundles are asserted (esbuild metafile) not to contain the canvas renderer, and the one
+ * without `interaction` not to contain the hit index or the signal loop either.
+ *
  * Run: pnpm --filter @aster/react test:browser   (after `pnpm build`)
  */
 import { fileURLToPath } from 'node:url'
@@ -24,14 +31,24 @@ import { chromium, type Page } from 'playwright'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PKG = dirname(HERE)
 
-const entry = `
+type VariantName = 'Chart' | 'SvgChart+interaction' | 'SvgChart'
+
+/** The bundle for one variant: what its imports pull in is exactly what that variant ships. */
+const entryFor = (variant: VariantName): string => {
+  const imports = variant === 'Chart'
+    ? `import { Chart } from ${JSON.stringify(join(PKG, 'src/index.ts'))}`
+    : `import { SvgChart } from ${JSON.stringify(join(PKG, 'src/lite.ts'))}\n${variant === 'SvgChart+interaction' ? `import { interaction } from ${JSON.stringify(join(PKG, 'src/interaction-capability.ts'))}` : 'const interaction = undefined'}`
+  const element = variant === 'Chart'
+    ? 'React.createElement(Chart, { ref: window.__ref, spec, ...p })'
+    : 'React.createElement(SvgChart, { ref: window.__ref, spec, interaction, ...p })'
+  return `
 import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
-import { Chart } from ${JSON.stringify(join(PKG, 'src/index.ts'))}
+${imports}
 
 window.__log = []
-const rec = (name) => (...args) => { window.__log.push({ name, args: JSON.parse(JSON.stringify(args)) }) }
+const rec = (name) => (...args) => { window.__log.push({ name, args: JSON.parse(JSON.stringify(args.map((a) => (a instanceof Error ? a.message : a)))) }) }
 window.__mount = (spec, props, record, listen) => {
   const host = document.getElementById('root')
   const container = document.createElement('div')
@@ -45,9 +62,10 @@ window.__mount = (spec, props, record, listen) => {
   window.__ref = React.createRef()
   if (window.__root) window.__root.unmount()
   window.__root = createRoot(container)
-  flushSync(() => window.__root.render(React.createElement(Chart, { ref: window.__ref, spec, ...p })))
+  flushSync(() => window.__root.render(${element}))
 }
 `
+}
 
 const spec = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   $schema: 'https://vega.github.io/schema/vega/v6.json',
@@ -88,19 +106,19 @@ const mount = async (page: Page, s: Record<string, unknown>, props: Record<strin
   await page.waitForSelector('svg .mark-symbol path')
 }
 
-const browser = await chromium.launch()
-try {
+
+/** Bundle one variant; returns the code and the dist-independent list of source modules it was made of. */
+async function bundleVariant(variant: VariantName): Promise<{ code: string; inputs: string[] }> {
   const bundle = await build({
-    stdin: { contents: entry, resolveDir: HERE, loader: 'tsx', sourcefile: 'entry.tsx' },
-    bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic',
+    stdin: { contents: entryFor(variant), resolveDir: HERE, loader: 'tsx', sourcefile: `entry-${variant}.tsx` },
+    bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic', metafile: true,
     define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'error',
   })
-  const code = bundle.outputFiles[0]!.text
-  const page = await browser.newPage({ viewport: { width: 700, height: 500 } })
-  page.on('pageerror', (e) => { failures++; console.log(`  FAIL page error: ${e.message}`) })
-  await page.setContent('<!doctype html><html><body style="margin:0;font:12px sans-serif"><div id="root"></div></body></html>')
-  await page.addScriptTag({ content: code })
+  return { code: bundle.outputFiles[0]!.text, inputs: Object.keys(bundle.metafile.inputs).map((f) => f.replace(/\\/g, '/')) }
+}
 
+/** Every interaction check, against whichever component the page was bundled with. */
+async function suite(page: Page): Promise<void> {
   // ---- 1. marks stay reachable with every interaction prop --------------------------------
   const variants: Array<[string, Record<string, unknown>, string[]]> = [
     ['onSelect', {}, ['onSelect']],
@@ -254,6 +272,108 @@ try {
   check(offsets.length === 3 && offsets.every((d) => d < 4), `a11y mark nodes are centred on their symbols (offsets ${offsets.map((d) => d.toFixed(1)).join(', ')} px)`)
   const stops = await page.evaluate(() => [...document.querySelectorAll('[data-a11y-id]')].filter((n) => (n as HTMLElement).tabIndex >= 0).length)
   check(stops === 1, `exactly one a11y tab stop (${stops})`)
+
+  // ---- 7. a11y roving focus and keyboard selection ---------------------------------------------
+  console.log('[a11y] roving tabindex, PageDown/ArrowRight move focus, Enter selects, Escape clears')
+  await mount(page, spec({ signals: [] }), { width: 400, height: 240 }, ['onPointSelect', 'onSelectionChange'])
+  const firstNode = await page.evaluate(() => {
+    const n = [...document.querySelectorAll('[data-a11y-id]')].find((e) => (e as HTMLElement).tabIndex >= 0) as HTMLElement
+    n.focus()
+    return n.getAttribute('data-a11y-id')
+  })
+  await page.keyboard.press('PageDown')
+  const afterPage = await page.evaluate(() => (document.activeElement as HTMLElement | null)?.getAttribute('data-a11y-id') ?? null)
+  check(firstNode != null && afterPage != null && afterPage !== firstNode, `PageDown moves focus to the next a11y node (${firstNode} -> ${afterPage})`)
+  const tabStops = await page.evaluate(() => [...document.querySelectorAll('[data-a11y-id]')].filter((n) => (n as HTMLElement).tabIndex >= 0).map((n) => n.getAttribute('data-a11y-id')))
+  check(tabStops.length === 1 && tabStops[0] === afterPage, `the tab stop followed the focus (${JSON.stringify(tabStops)})`)
+  await page.evaluate(() => (document.querySelector('[data-a11y-kind="mark"]') as HTMLElement).focus())
+  await page.keyboard.press('ArrowRight')
+  const onMark = await page.evaluate(() => (document.activeElement as HTMLElement | null)?.getAttribute('data-a11y-kind'))
+  check(onMark === 'mark', `ArrowRight moves between marks (${onMark})`)
+  await page.keyboard.press('Enter')
+  entries = await log(page)
+  const chosen = entries.filter((e) => e.name === 'onPointSelect').at(-1)?.args[0] as { cat?: string } | null | undefined
+  check(chosen != null && chosen.cat === 'b', `Enter selects the focused mark's datum (${JSON.stringify(chosen)})`)
+  const pressed = await page.evaluate(() => document.activeElement?.getAttribute('aria-pressed'))
+  check(pressed === 'true', `the selected mark is aria-pressed (${pressed})`)
+  await page.keyboard.press('Escape')
+  entries = await log(page)
+  check(entries.filter((e) => e.name === 'onSelectionChange').at(-1)?.args[0] === null, 'Escape clears the selection')
+
+  // ---- 8. selection values -------------------------------------------------------------------
+  console.log('[selection] a click reports a point, a drag an interval, both through onSelectionChange')
+  await mount(page, spec({ signals: [] }), { width: 400, height: 240 }, ['onSelectionChange'])
+  const bx = await page.locator('#chart-host').boundingBox()
+  const m0 = await markCenter(page, 0)
+  await page.mouse.click(m0.x, m0.y)
+  entries = await log(page)
+  const sel1 = entries.filter((e) => e.name === 'onSelectionChange').at(-1)?.args[0] as { type?: string; datum?: { cat?: string } } | null | undefined
+  check(sel1?.type === 'point' && sel1.datum?.cat === 'a', `click -> point selection of the clicked mark (${JSON.stringify(sel1)})`)
+  await page.mouse.move(bx!.x + 80, bx!.y + 60)
+  await page.mouse.down()
+  await page.mouse.move(bx!.x + 200, bx!.y + 140, { steps: 5 })
+  await page.mouse.up()
+  entries = await log(page)
+  const sel2 = entries.filter((e) => e.name === 'onSelectionChange').at(-1)?.args[0] as { type?: string; interval?: { x?: number[] } } | null | undefined
+  check(sel2?.type === 'interval' && sel2.interval?.x != null, `drag -> interval selection (${JSON.stringify(sel2)})`)
+  const persisted = await page.evaluate(() => document.querySelector('[data-testid="chart-brush-overlay"]')?.children.length ?? 0)
+  check(persisted === 1, 'the interval stays drawn after release')
+}
+
+/** `<SvgChart>` without `interaction`: renders, keeps what needs no hit testing, reports the rest. */
+async function plainSuite(page: Page): Promise<void> {
+  console.log('[SvgChart without interaction] renders, brushes and zooms; reports what it cannot do')
+  await mount(page, spec({ signals: [] }), { width: 400, height: 240, panZoom: true }, ['onSelect', 'onViewChange'])
+  const c = await markCenter(page, 1)
+  const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('svg') != null, c)
+  check(hit, 'the marks are reachable')
+  const pbox = await page.locator('#chart-host').boundingBox()
+  await page.mouse.move(pbox!.x + 150, pbox!.y + 100)
+  await page.mouse.wheel(0, -300)
+  await page.waitForTimeout(30)
+  check((await page.locator('#chart-host > div').first().getAttribute('data-aster-view')) === 'zoomed', 'wheel zoom works without interaction')
+  await page.keyboard.press('0')
+  await page.mouse.move(pbox!.x + 80, pbox!.y + 60)
+  await page.mouse.down()
+  await page.mouse.move(pbox!.x + 200, pbox!.y + 140, { steps: 6 })
+  await page.mouse.up()
+  let entries = await log(page)
+  const interval = entries.filter((e) => e.name === 'onSelect').at(-1)?.args[0] as { x?: number[] } | null | undefined
+  check(interval != null && interval.x != null, `interval brush (onSelect) works without interaction (${JSON.stringify(interval)})`)
+
+  const streams = spec({ signals: [{ name: 'picked', value: null, on: [{ events: 'click', update: 'datum.cat' }] }] })
+  await mount(page, streams, { width: 400, height: 240 }, ['onError'])
+  const rendered = await page.evaluate(() => document.querySelectorAll('svg .mark-symbol path').length)
+  check(rendered === 3, 'an event-stream spec still renders its marks')
+  entries = await log(page)
+  const errs = entries.filter((e) => e.name === 'onError').map((e) => String(e.args[0]))
+  check(errs.length === 1 && /event streams \(signal\.on\)/.test(errs[0]!) && /@aster\/react\/interaction/.test(errs[0]!), `an event-stream spec reports the documented error (${JSON.stringify(errs)})`)
+  const stamped = await page.evaluate(() => document.querySelectorAll('[data-datum]').length)
+  check(stamped === 0, 'and no data-datum is stamped (nothing reads it)')
+}
+
+const MODULES: Record<VariantName, Array<[RegExp, boolean, string]>> = {
+  Chart: [[/core\/dist\/canvas\.js$/, true, 'the canvas renderer'], [/core\/dist\/hit\.js$/, true, 'the hit index'], [/core\/dist\/signals\.js$/, true, 'the signal loop']],
+  'SvgChart+interaction': [[/core\/dist\/canvas\.js$/, false, 'the canvas renderer'], [/src\/canvas-capability\.ts$/, false, 'the canvas capability'], [/core\/dist\/hit\.js$/, true, 'the hit index'], [/core\/dist\/signals\.js$/, true, 'the signal loop']],
+  SvgChart: [[/core\/dist\/canvas\.js$/, false, 'the canvas renderer'], [/src\/canvas-capability\.ts$/, false, 'the canvas capability'], [/core\/dist\/hit\.js$/, false, 'the hit index'], [/core\/dist\/signals\.js$/, false, 'the signal loop'], [/src\/interaction-capability\.ts$/, false, 'the interaction capability']],
+}
+
+const browser = await chromium.launch()
+try {
+  for (const variant of ['Chart', 'SvgChart+interaction', 'SvgChart'] as const) {
+    console.log(`\n=== ${variant} ===`)
+    const { code, inputs } = await bundleVariant(variant)
+    for (const [re, wanted, what] of MODULES[variant]) {
+      check(inputs.some((f) => re.test(f)) === wanted, `the ${variant} bundle ${wanted ? 'contains' : 'does not contain'} ${what}`)
+    }
+    const page = await browser.newPage({ viewport: { width: 700, height: 500 } })
+    page.on('pageerror', (e) => { failures++; console.log(`  FAIL page error: ${e.message}`) })
+    await page.setContent('<!doctype html><html><body style="margin:0;font:12px sans-serif"><div id="root"></div></body></html>')
+    await page.addScriptTag({ content: code })
+    if (variant === 'SvgChart') await plainSuite(page)
+    else await suite(page)
+    await page.close()
+  }
 } finally {
   await browser.close()
 }
