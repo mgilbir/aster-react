@@ -285,6 +285,19 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
     sort: (seq: unknown) => (seq as unknown[]).slice().sort((a, b) => ascending(a as never, b as never)),
     merge: mergeObj,
     modify: (set: unknown, value: unknown, signal?: unknown) => set, // event-only; static no-op returns the set
+    // multi-touch gestures (vega-functions pinch.js); `event` must be a touch event
+    pinchDistance: (event: unknown) => {
+      const t = (event as { touches: Array<{ clientX: number; clientY: number }> }).touches
+      return Math.hypot(t[0]!.clientX - t[1]!.clientX, t[0]!.clientY - t[1]!.clientY)
+    },
+    pinchAngle: (event: unknown) => {
+      const t = (event as { touches: Array<{ clientX: number; clientY: number }> }).touches
+      return Math.atan2(t[0]!.clientY - t[1]!.clientY, t[0]!.clientX - t[1]!.clientX)
+    },
+    // vega-functions inscope.js: true when `item` descends from the current scope's group. The
+    // engine's signals live in the root scope, whose group is the root of every scene item, so
+    // any item is in scope (and nothing -- no item under the pointer -- is not).
+    inScope: (item: unknown) => item != null && typeof item === 'object',
     span: (arr: unknown) => { const a = arr as number[]; return a[a.length - 1]! - a[0]! },
     pluck,
     // strings

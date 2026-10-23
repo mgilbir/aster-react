@@ -258,14 +258,9 @@ function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSi
       // vega leaves such a signal undefined until the event.)
       // Keep the full event-stream spec: the host binds these via
       // bindSignalEvents (signals.ts) to drive the event loop.
-      const on = (s.on as SignalOnDef[]).map((o) => ({
-        events: o.events,
-        ...(typeof o.update === 'string' ? { update: o.update } : {}),
-        ...(o.between != null ? { between: o.between } : {}),
-        ...(o.throttle != null ? { throttle: o.throttle } : {}),
-        ...(o.debounce != null ? { debounce: o.debounce } : {}),
-        ...(o.consume != null ? { consume: o.consume } : {}),
-      })) as SignalOnDef[]
+      // Entries are kept whole (and copied, so the compiled chart never aliases the
+      // spec): the event loop interprets `events` (string | object | array) itself.
+      const on = (s.on as SignalOnDef[]).filter((o) => o != null && typeof o === 'object').map((o) => ({ ...o })) as SignalOnDef[]
       def.on = on
     }
     out.push(def)

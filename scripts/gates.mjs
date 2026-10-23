@@ -41,6 +41,10 @@ export const GATES = [
   { name: 'transform-matrix', args: ['transform-matrix'], why: 'transform option combinations vs the oracle' },
   { name: 'canvas', args: ['conformance:canvas'], tags: ['browser'], why: 'Chromium canvas pixel parity' },
   { name: 'batch', args: ['conformance:batch'], tags: ['browser'], why: 'batched-SVG pixel parity (denseMarks vs per-item)' },
+  {
+    name: 'signals-browser', args: ['conformance:signals'], tags: ['browser'],
+    why: 'signal event streams (selectors, between, filters, throttle, consume, native event) vs real vega in Chromium',
+  },
   { name: 'fuzz-replay', args: ['fuzz:replay'], why: 'every committed fuzz reproducer still passes' },
   { name: 'budget', args: ['--filter', '@aster/benchmarks', 'run', 'budget'], why: 'per-entry bundle size budgets' },
   { name: 'probe', args: ['probe'], blocking: false, why: 'known-gap probes (diagnostic only; never fails the run)' },
