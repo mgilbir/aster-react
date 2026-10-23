@@ -16,6 +16,8 @@ import { scaleConfigOf, discreteStep, sizeRange, countRange, discreteCount, uses
 import { getTimeUnitParts, normalizeTimeUnit, timeUnitFieldName, timeUnitTransform, type NormalTimeUnit } from './timeunit.js'
 import { binNames, binTransforms, normalizeBin, translateTransforms, type BinParams, type TransformContext, type TranslateState } from './transforms.js'
 
+const VEGA_SCHEMA = 'https://vega.github.io/schema/vega/v6.json'
+
 export { VLCompileError }
 
 // --- spec types (structural, loose) ------------------------------------------
@@ -388,7 +390,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   })
 
   const out: Record<string, unknown> = {}
-  if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
+  if (spec.$schema) out.$schema = VEGA_SCHEMA
   out.autosize = autosizeOf(spec) ?? 'pad'
   // theta-only layered views (pie labels) use the unstyled 'view' frame
   const anyXY = parsed.some((p) => p.fields.some((f) => f.channel === 'x' || f.channel === 'y'))
@@ -1135,7 +1137,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
       },
     ]
     const wrapOut: Record<string, unknown> = {}
-    if (spec.$schema) wrapOut.$schema = 'https://vega.github.io/schema/vega/v6.json'
+    if (spec.$schema) wrapOut.$schema = VEGA_SCHEMA
     wrapOut.autosize = autosizeOf(spec)
     wrapOut.data = wrapData
     wrapOut.signals = sizeSignalsOut
@@ -1299,7 +1301,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (rowField) data.push({ name: rowDomainName, source: baseName, transform: [{ type: 'aggregate', groupby: [rowField] }] })
 
   const out: Record<string, unknown> = {}
-  if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
+  if (spec.$schema) out.$schema = VEGA_SCHEMA
   out.autosize = autosizeOf(spec)
   out.data = data
   out.signals = sizeSignalsOut
@@ -1624,7 +1626,7 @@ function compileConcat(spec: VLSpec, ctx: CompileCtx): VLSpec {
     : kind === 'vconcat' ? 'column' : 'grid'
   const res = embedCells(cells, spec, ctx, layout)
   const out: Record<string, unknown> = {}
-  if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
+  if (spec.$schema) out.$schema = VEGA_SCHEMA
   out.autosize = autosizeOf(spec)
   if (res.rootWidth !== undefined) out.width = res.rootWidth
   if (res.rootHeight !== undefined) out.height = res.rootHeight
@@ -1732,7 +1734,7 @@ function compileRepeat(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const layout: 'row' | 'column' | 'grid' = grid || (!isGrid && columns !== undefined) ? 'grid' : isGrid && rowFields.length > 0 ? 'column' : 'row'
   const res = embedCells(cells, spec, ctx, layout)
   const out: Record<string, unknown> = {}
-  if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
+  if (spec.$schema) out.$schema = VEGA_SCHEMA
   out.autosize = autosizeOf(spec)
   if (res.rootWidth !== undefined) out.width = res.rootWidth
   if (res.rootHeight !== undefined) out.height = res.rootHeight
@@ -1951,7 +1953,7 @@ function compileBoxplot(spec: VLSpec, ctx: CompileCtx): VLSpec {
   ]
 
   const out: Record<string, unknown> = {}
-  if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
+  if (spec.$schema) out.$schema = VEGA_SCHEMA
   out.autosize = autosizeOf(spec)
   out.background = spec.background ?? 'white'
   out.padding = spec.padding ?? 5
@@ -5595,7 +5597,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
 
   const out: Record<string, unknown> = {}
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
-  if (spec.$schema) out.$schema = 'https://vega.github.io/schema/vega/v6.json'
+  if (spec.$schema) out.$schema = VEGA_SCHEMA
   // A clipped view cannot grow to contain overflowing guides: vega's
   // autosize-pad then measures only the (clipped) group, i.e. the plain view
   // size. Emit autosize none so the engine reproduces that viewport.
