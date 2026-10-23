@@ -72,7 +72,12 @@ const BUDGETS = {
   // 209 = measured 208.5 + 0.5. The compiler is ~51.5 kB gzip of that (react base 157.0): it grew
   // from ~22.6 kB when @aster/vl became production-usable (validation layer, VL transform table,
   // composition nesting, errorbar/errorband, config.scale, invalid-value modes, safe escaping).
-  '@aster/react/vl': 209 * 1024,
+  // 213.8 = measured 213.3 + 0.5 (owner approved). The React audit fixes grew the base entry 157.0 -> 161.7
+  // gzip and so this row by the same ~4.7 kB: positional-scale derivation and serialized scales (pan/zoom for
+  // any scale name and for worker scenes), the worker protocol (limits, text metrics and url policy by name,
+  // validation, bounded producer queue), content-keyed lifecycles, stream recovery, the roving-tabindex a11y
+  // tree and the LoadOptions pass-through.
+  '@aster/react/vl': 213.8 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
