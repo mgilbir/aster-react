@@ -29,6 +29,13 @@ export interface RuntimeInput {
    * denied images instead of throwing. See docs/LIMITS.md.
    */
   urlPolicy?: import('./url-policy.js').ImageUrlPolicy
+  /**
+   * Where the engine reports errors it recovers from, like vega's logger (default: the
+   * console). vega logs a failing expression -- a conditional-encode test, a signal in an
+   * encode, a transform's predicate, a sort -- and carries on with what the dataflow had
+   * computed; so does the engine, and every such report goes through here.
+   */
+  logger?: import('./logger.js').Logger
   /** Host text measurement (custom fonts, non-browser hosts). */
   textMetrics?: import('./text-metrics.js').TextMetricsProvider
   /** Named datasets. Overrides or fulfills spec data references by name. */

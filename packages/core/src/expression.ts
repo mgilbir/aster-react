@@ -37,6 +37,7 @@ function numericSequence(start: number, stop?: number, step?: number): number[] 
   return out
 }
 import { rgb, hsl, lab, hcl } from './color.js'
+import type { AstNode } from './expr-parser.js'
 import {
   accessor, ascending, extent, isArray, isBoolean, isDate, isNumber, isObject,
   isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, safeGet,
@@ -403,9 +404,29 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
   }
 }
 
+/**
+ * An expression that does not parse. vega finds these in `vega.parse` (before anything runs) and
+ * throws; the engine parses lazily, so the error surfaces mid-evaluation -- but it stays a throw: it
+ * is the spec that is wrong, not one datum, and the "log and carry on" recovery of runtime
+ * expression errors (see RuntimeInput.logger) does not apply to it.
+ */
+export class ExpressionParseError extends Error {
+  constructor(message: string, readonly expression: string, options?: { cause?: unknown }) {
+    super(message, options)
+    this.name = 'ExpressionParseError'
+  }
+}
+
 /** Compile an expression string to an evaluable function bound to a runtime. */
 export function compileExpr(expr: string, runtime: ExpressionRuntime): CompiledExpr {
-  const ast = parseExpression(expr)
+  let ast: AstNode
+  try {
+    ast = parseExpression(expr)
+  } catch (e) {
+    // limit violations keep their type (they are the engine's refusal, not a syntax error)
+    if (e instanceof Error && e.name === 'AsterLimitError') throw e
+    throw new ExpressionParseError(e instanceof Error ? e.message : String(e), expr, { cause: e })
+  }
   const functions = createFunctionContext(runtime)
   const evalParam = expressionInterpreter.parameter({ functions }, { ast })
   const evalHandler = expressionInterpreter.handler({ functions }, { ast })

@@ -3,12 +3,14 @@
  * renderer-neutral SceneRoot. Static execution mode: everything is evaluated
  * eagerly per call; the caller re-evaluates when inputs change.
  */
-import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
+import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, compileExprTransform, sortRows, sortOrder, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
-import { activeMeter, withLimits, meterItems, boundedCount, checkRowCount } from './limits.js'
+import { activeMeter, withLimits, meterItems, boundedCount, checkRowCount, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
+import { AsterUrlError } from './url-policy.js'
+import { consoleLogger, type Logger } from './logger.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale, type ScaleContext } from './scales.js'
 
 /** Scale types whose domain is an ordered set of discrete values. */
@@ -386,6 +388,26 @@ interface EvalContext {
   checkDeadline?: (phase?: string) => void
   /** URL policy for image marks (RuntimeInput.urlPolicy). */
   urlPolicy?: ImageUrlPolicy
+  /** Where recovered errors are reported (RuntimeInput.logger; default: the console). */
+  logger: Logger
+  /** An expression failed during this evaluation (its report was logged); the incremental state must not be committed. */
+  failed?: boolean
+  /** vega aborts the rest of an encode after its first error: later items stay unencoded. */
+  encodeAborted?: boolean
+  /** Datasets whose transform pipeline failed: nothing downstream of them is built. */
+  failedDatasets?: Set<string>
+}
+
+/**
+ * Report an error the engine recovers from, the way vega's Dataflow.error does: log it and go
+ * on. Errors that are the engine's own refusals -- limits, the URL policy, `[aster]` usage errors --
+ * and expressions that do not parse (vega throws those from vega.parse) are never recovered:
+ * they are rethrown to the caller.
+ */
+function reportEvalError(ctx: EvalContext, e: unknown): void {
+  if (e instanceof AsterLimitError || e instanceof AsterUrlError || e instanceof ExpressionParseError || (e instanceof Error && e.message.startsWith('[aster]'))) throw e
+  ctx.failed = true
+  ctx.logger.error(e)
 }
 
 /**
@@ -467,6 +489,7 @@ function prepareChartCtx(
     // run script, but a hostile spec can still make the viewer fetch an arbitrary
     // url (tracking pixel, IP leak). Hosts rendering foreign specs must opt in.
     urlPolicy: input.urlPolicy ?? (input.limits ? {} : undefined),
+    logger: input.logger ?? consoleLogger,
   }
   // A legend whose tickCount is an interval string on a non-time scale makes
   // vega's LegendEntries throw: the dataflow logs the error and the ViewLayout
@@ -1341,12 +1364,17 @@ export interface PendingEvaluation {
  */
 export function evaluateChartPending(chart: CompiledChart, input: RuntimeInput = {}): PendingEvaluation {
   const txn = beginTxn(chart)
-  const done: { draft?: IncrementalState } = {}
+  const done: { draft?: IncrementalState; failed?: boolean } = {}
   const scene = withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, done)))
   return {
     scene,
     commit() {
-      if (done.draft) STATES.set(chart, done.draft)
+      // An evaluation that logged a recovered error is not a base later pulses may be relative to
+      // (its items/datasets are the partial result of a failure): the committed state goes stale.
+      if (done.failed) {
+        const committed = STATES.get(chart)
+        if (committed) committed.stale = true
+      } else if (done.draft) STATES.set(chart, done.draft)
     },
   }
 }
@@ -1357,7 +1385,7 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   return pending.scene
 }
 
-function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState }): SceneRoot {
+function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
   const auto = chart.autosize
   const base = chart.padding
   // Differential-update generation (`txn.gen`): an unchanged (reused) item keeps
@@ -1531,6 +1559,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
   // The state the next incremental evaluation starts from; committed by the
   // caller once the scene is accepted.
   done.draft = ctx.draft
+  done.failed = ctx.failed === true
   return scene
 }
 
@@ -2856,7 +2885,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     checkRowCount(rows.length, `dataset "${name}"`)
     if (inPulse) inPulse = normalizePulse(inPulse, rows.length)
     let outPulse: StepPulse | null = inPulse
-    if (d.transform.length) {
+    if (d.transform.length) try {
       const prevDS = ctx.prev?.datasets.get(name)
       const tctx: StepTransformContext = {
         runtime: ctx.runtime,
@@ -2896,6 +2925,13 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         outPulse = null
       }
       ctx.draft.datasets.set(name, state)
+    } catch (e) {
+      // vega: a transform that throws is logged and the dataset publishes nothing (the rest of
+      // its pipeline never runs, so everything downstream of it is empty / never built).
+      reportEvalError(ctx, e)
+      ;(ctx.failedDatasets ??= new Set()).add(name)
+      rows = []
+      outPulse = null
     }
     ctx.datasets.set(name, rows)
     ctx.datasetPulses.set(name, outPulse)
@@ -3296,6 +3332,7 @@ function evaluateMark(
     return buildGroupMark(mark, ctx)
   }
   const source = mark.from?.data
+  if (source && ctx.failedDatasets?.has(source)) return null
 
   let items: SceneItem[]
   // Union bounds carried over from the previous group (pure appends only) and
@@ -3313,7 +3350,7 @@ function evaluateMark(
     if (mark.sort || mark.transform?.length) {
       rows = rawRows.map((r) => ({ ...r }))
       rowsCloned = true
-      if (mark.sort) {
+      if (mark.sort) try {
         // Vega mark sorts address scene-item properties: line/area sorting by
         // the dimension channel name ("x"/"y") orders rows by their encoded
         // position, not by a datum field of that name.
@@ -3338,14 +3375,24 @@ function evaluateMark(
           const f = ([] as unknown[]).concat((mark.sort as { field?: unknown }).field).map((n) => String(n).replace(/^datum(\.|\["?)|(?<=^datum.*)"?\]$/g, ''))
           rows = sortRows(rows, { ...mark.sort, field: f })
         }
+      } catch (e) {
+        // vega logs a sort that throws and leaves the rows in data order
+        reportEvalError(ctx, e)
+        rows = rawRows.map((r) => ({ ...r }))
       }
       if (mark.transform?.length) {
-        rows = applyTransforms(rows, mark.transform, {
-          runtime: ctx.runtime,
-          signals: ctx.signalParams,
-          hierarchies: ctx.hierarchies,
-          projections: ctx.projections,
-        }, source)
+        try {
+          rows = applyTransforms(rows, mark.transform, {
+            runtime: ctx.runtime,
+            signals: ctx.signalParams,
+            hierarchies: ctx.hierarchies,
+            projections: ctx.projections,
+          }, source)
+        } catch (e) {
+          // a mark-level transform that throws publishes nothing (see buildDatasetsOf)
+          reportEvalError(ctx, e)
+          return null
+        }
       }
     }
 
@@ -4413,7 +4460,10 @@ function buildRowHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup[]
         if (av !== bv) cmp = av == null ? 1 : bv == null ? -1 : (av < bv ? -1 : av > bv ? 1 : 0)
         return desc ? -cmp : cmp
       })
-    } catch {}
+    } catch (e) {
+      // vega logs a failing sort and leaves the rows in data order
+      reportEvalError(ctx, e)
+    }
   }
 
   const result: SceneGroup[] = []
@@ -4681,7 +4731,10 @@ function buildColumnHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
         const cmp = av === bv ? 0 : av == null ? 1 : bv == null ? -1 : (av < bv ? -1 : av > bv ? 1 : 0)
         return desc ? -cmp : cmp
       })
-    } catch {}
+    } catch (e) {
+      // vega logs a failing sort and leaves the rows in data order
+      reportEvalError(ctx, e)
+    }
   }
 
   const result: SceneGroup[] = []
@@ -4780,7 +4833,10 @@ function buildColumnFooterGroupColumn(mark: CompiledMark, ctx: EvalContext): Sce
         const cmp = av === bv ? 0 : av == null ? 1 : bv == null ? -1 : (av < bv ? -1 : av > bv ? 1 : 0)
         return desc ? -cmp : cmp
       })
-    } catch {}
+    } catch (e) {
+      // vega logs a failing sort and leaves the rows in data order
+      reportEvalError(ctx, e)
+    }
   }
 
   const result: SceneGroup[] = []
@@ -5472,6 +5528,7 @@ function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): Encode
 }
 
 function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
+  if (ctx.encodeAborted) return {}
   const plan = encodePlan(encode)
   const binding = ctx.encodeBinding
 
@@ -5482,28 +5539,54 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
   // `defined` is evaluated against the data tuple, as Vega does.
   let definedValue: unknown
   if (plan.definedSpec !== undefined) {
-    definedValue = resolveEncodeProperty(plan.definedSpec, datum, ctx, binding)
+    try {
+      definedValue = resolveEncodeProperty(plan.definedSpec, datum, ctx, binding)
+    } catch (e) {
+      reportEvalError(ctx, e)
+      ctx.encodeAborted = true
+      return {}
+    }
   }
 
   // Pass 1: resolve all non-signal values straight into the item (no
   // intermediate per-row object — this is the hottest loop in the engine).
   const item: SceneItem = {}
   const rec = item as unknown as Record<string, unknown>
-  for (const key of plan.plainKeys) {
-    const resolved = resolveEncodeProperty(encode[key], datum, ctx, binding)
-    if (resolved !== undefined) {
-      rec[key] = resolved
+  // vega's Encode throws at the first failing channel; the dataflow logs it and stops the run:
+  // this item keeps the channels evaluated before the failure and no later item is encoded.
+  try {
+    for (const key of plan.plainKeys) {
+      const resolved = resolveEncodeProperty(encode[key], datum, ctx, binding)
+      if (resolved !== undefined) {
+        rec[key] = resolved
+      }
     }
-  }
 
-  if (definedValue !== undefined) {
-    rec['defined'] = definedValue
-  }
-  for (const key of plan.signalKeys) {
-    const resolved = resolveEncodeProperty(encode[key], datum, ctx, binding)
-    if (resolved !== undefined) {
-      rec[key] = resolved
+    if (definedValue !== undefined) {
+      rec['defined'] = definedValue
     }
+    for (const key of plan.signalKeys) {
+      const resolved = resolveEncodeProperty(encode[key], datum, ctx, binding)
+      if (resolved !== undefined) {
+        rec[key] = resolved
+      }
+    }
+  } catch (e) {
+    reportEvalError(ctx, e)
+    ctx.encodeAborted = true
+    // vega evaluates the channels in spec order, so the failing item keeps exactly the channels
+    // BEFORE the failing one (the two passes above group plain values ahead of signals).
+    const partial: SceneItem = {}
+    const prec = partial as unknown as Record<string, unknown>
+    for (const key of Object.keys(encode)) {
+      try {
+        const v = resolveEncodeProperty(encode[key], datum, ctx, binding)
+        if (v !== undefined) prec[key] = v
+      } catch {
+        break
+      }
+    }
+    return partial
   }
   // Post-process: vega parse/mark `adjustSpatial` — resolve x2/xc/y2/yc into
   // x/y/width/height. Rule marks skip it entirely (their x2/y2 are line
