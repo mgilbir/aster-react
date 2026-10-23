@@ -1,39 +1,102 @@
 name: Release
 
+# Pushing a version tag (vX.Y.Z or vX.Y.Z-pre) is the only trigger. There is no
+# manual dispatch: a release always comes from a tag that names the version.
 on:
   push:
-    tags: ['v*']
-  workflow_dispatch:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
 
+# Read-only by default. `id-token: write` (npm provenance / trusted publishing)
+# exists only on the `publish` job below, which installs and builds nothing.
 permissions:
   contents: read
-  id-token: write # npm provenance / trusted publishing
 
 jobs:
-  publish:
+  # Everything that runs third-party code (dependency install scripts, builds,
+  # tests) happens here, with no token and no write permission.
+  verify:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm
+
+      # The tag must be v<version> and equal the version of every public package.
+      - name: Tag matches every package version
+        run: node scripts/check-release-tag.mjs "$GITHUB_REF_NAME"
+
+      # Releases are cut from main only.
+      - name: Tag commit is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm --filter @aster/conformance exec playwright install --with-deps chromium
+
+      # The full gate list (scripts/gates.mjs): build, deps boundary, typecheck, tests,
+      # verify-publish, conformance, sweeps, canvas/browser parity, bundle budgets.
+      - name: Gates (pnpm check)
+        run: pnpm check
+
+      # Pack exactly what the gates verified; the publish job ships these files.
+      - name: Pack public packages
+        run: |
+          mkdir -p release-tarballs
+          for pkg in core vl react; do
+            (cd "packages/$pkg" && pnpm pack --pack-destination "$GITHUB_WORKSPACE/release-tarballs")
+          done
+
+      - name: Upload tarballs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-tarballs
+          path: release-tarballs/*.tgz
+          if-no-files-found: error
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-24.04
+    # A protected environment: configure required reviewers (and restrict it to tags)
+    # under Settings > Environments > npm-release. NPM_TOKEN lives in that environment.
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write # npm provenance / trusted publishing
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
           registry-url: https://registry.npmjs.org
 
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm check:deps
-      - run: pnpm typecheck
-      - run: pnpm test
+      - name: Download tarballs
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-tarballs
+          path: release-tarballs
 
-      # Pack each public package, assert the tarball carries the licence files,
-      # and import/render through the published exports in a clean node_modules.
-      - run: pnpm verify:publish
-
-      # Private workspaces (conformance, benchmarks, demo) are skipped by
-      # pnpm; the three public packages carry publishConfig.provenance.
+      # No install, no build, no lifecycle scripts: only the verified tarballs are published.
       - name: Publish public packages
-        run: pnpm -r --filter './packages/**' publish --access public --provenance --no-git-checks
+        run: |
+          set -euo pipefail
+          # Dependencies first: @aster/react depends on @aster/core and @aster/vl.
+          for pkg in core vl react; do
+            npm publish release-tarballs/aster-"$pkg"-*.tgz --access public --provenance --ignore-scripts
+          done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
