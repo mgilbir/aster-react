@@ -4,7 +4,7 @@
 // writes a signal into the running view the way a slider, a dropdown or a
 // fired handler does, runs the dataflow again, and compares the second render.
 // The oracle does render -> view.signal(name, value) -> runAsync -> toSVG; the
-// engine does the same through vega.Options.SignalWrites.
+// engine does the same through a ChartSession (evaluate, then evaluate with the written signals).
 //
 // What is varied is a signal's value, and deliberately not only sensible ones:
 // a null, a word where a number goes, an empty list, a negative where only

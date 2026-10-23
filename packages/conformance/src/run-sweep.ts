@@ -32,7 +32,8 @@ import * as vega from 'vega'
 import * as vl from 'vega-lite'
 import '@aster/core/geo'
 import '@aster/core/transforms'
-import { renderSpec } from '@aster/core'
+import { renderSpec, renderSceneToSvg } from '@aster/core'
+import { createChartSession } from '@aster/core/dom'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { compile as compileVL } from '@aster/vl'
 import { renderWithVega, renderWithVegaChecked } from './render-vega.js'
@@ -177,7 +178,17 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
   let ourErr = ''
   try {
     const loaded = await loadSpecData(ourVgSpec as never, TRUSTED_LOAD_OPTIONS)
-    ourSvg = renderSpec(loaded as never)
+    if (c.writes?.length) {
+      // signals sweep: the engine does what the oracle does -- draw, write the
+      // signals into the running chart, draw again (an incremental session, so
+      // retained state across the write is compared too).
+      const session = createChartSession()
+      session.evaluate(loaded as never)
+      const input = { signals: Object.fromEntries(c.writes.map((w) => [w.name, w.value])) }
+      ourSvg = renderSceneToSvg(session.evaluate(loaded as never, input))
+    } else {
+      ourSvg = renderSpec(loaded as never)
+    }
   } catch (e) {
     ourErr = (e as Error).message
   }
