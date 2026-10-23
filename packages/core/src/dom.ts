@@ -190,7 +190,7 @@ export interface DomRenderOptions {
 const DENSE_SYMBOL_MIN = 512
 const DENSE_SYMBOL_CHUNK = 256
 
-interface DenseChunk { from: number; to: number; first: SceneItem; desc: DomDesc }
+interface DenseChunk { from: number; to: number; first: SceneItem; last: SceneItem; desc: DomDesc }
 interface DenseCache { items: SceneItem[]; chunkSize: number; chunks: Map<number, DenseChunk> }
 // Keyed by scene group: the runtime reuses the group (and its items array) for
 // incremental updates, so unchanged chunks keep their descriptor and their DOM.
@@ -248,6 +248,27 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
       continue
     }
     const from = i
+    // A cached FULL chunk (it stopped at the size bound, not at a paint break)
+    // whose first and last item are the same objects and whose items were all
+    // reused unchanged is still exactly that chunk: its boundary and paint were
+    // decided by those same unchanged items, so the per-item batchable/paint scan
+    // is skipped. Only the growing tail chunk is ever re-scanned, which keeps an
+    // append at one pass of cheap flag reads instead of two property-heavy ones.
+    const full = cachedChunks?.get(from)
+    if (full && full.first === first && full.to - from === chunkSize && full.to <= items.length
+      && items[full.to - 1] === full.last) {
+      let clean = true
+      for (let j = from; j < full.to; j++) {
+        if (!isClean(items[j]!)) { clean = false; break }
+      }
+      if (clean) {
+        full.desc.clean = true
+        chunks.set(from, full)
+        out.push(full.desc)
+        i = full.to
+        continue
+      }
+    }
     let to = i + 1
     while (to < items.length && to - from < chunkSize) {
       const cand = items[to]!
@@ -285,7 +306,7 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
     // A fresh desc object (never mutate a cached one): the patcher compares
     // against the previous descriptor, so reusing the object would hide the write.
     const desc: DomDesc = { tag: 'path', attrs: [['d', d], ...symbolAttrs(first)] }
-    const chunk: DenseChunk = { from, to, first, desc }
+    const chunk: DenseChunk = { from, to, first, last: items[to - 1]!, desc }
     chunks.set(from, chunk)
     out.push(desc)
     i = to

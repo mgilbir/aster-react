@@ -24,6 +24,9 @@ import { performance } from 'node:perf_hooks'
 import { ensureBuilt } from './ensure-built.js'
 import { summarize, table, fmt } from './stats.js'
 
+/** Dense append patch vs a full dense mount (same process). Set from measurements; see the notes at the call site. */
+const DENSE_APPEND_FLOOR = 200
+
 async function main(): Promise<void> {
   ensureBuilt()
   const argv = process.argv.slice(2)
@@ -240,6 +243,60 @@ async function main(): Promise<void> {
     process.exitCode = 1
   } else {
     console.log(`\n[incremental] DOM pass: patching is ${(serialize.median / Math.max(patch.median, 1e-9)).toFixed(2)}x cheaper`)
+  }
+
+  // Dense SVG streaming at scale: the per-append DOM work of a 100k-symbol chart
+  // (`denseMarks`, the `<ChartStream>` default path) against mounting the same
+  // scene from nothing, both timed in this process so machine speed cancels. The
+  // browser bench cannot see this regression class cheaply (frames are raster-bound
+  // there); an append that re-scans or rebuilds the whole mark instead of the tail
+  // chunk shows up here as a collapsed ratio.
+  const denseN = Math.max(5000, Number(arg('dense-points', '100000')))
+  const denseReps = Math.max(20, Math.min(reps, 60))
+  const denseStream = createChartStream(spec as never, { capacity: 8 })
+  denseStream.push({ data: { t: rows(denseN) } })
+  const denseFirst = denseStream.flush()
+  if (!denseFirst) throw new Error('dense stream produced no scene')
+  const mountTimes: number[] = []
+  for (let m = 0; m < 3; m++) {
+    const fresh = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    host.appendChild(fresh)
+    const tm = performance.now()
+    patchSceneDom(fresh, denseFirst.scene, { denseMarks: true })
+    mountTimes.push(performance.now() - tm)
+    fresh.remove()
+  }
+  const denseSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  host.appendChild(denseSvg)
+  patchSceneDom(denseSvg, denseFirst.scene, { denseMarks: true })
+  const denseTimes: number[] = []
+  for (let i = 0; i < denseReps; i++) {
+    denseStream.push({ append: { t: rows(batch, denseN + i * batch) } })
+    const f = denseStream.flush()
+    if (!f) continue
+    const t0 = performance.now()
+    patchSceneDom(denseSvg, f.scene, { denseMarks: true })
+    denseTimes.push(performance.now() - t0)
+  }
+  const dMount = summarize(mountTimes)
+  const dPatch = summarize(denseTimes.slice(3)) // drop the first appends (JIT, first chunk split)
+  const dRatio = dMount.median / Math.max(dPatch.median, 1e-9)
+  console.log(
+    table(
+      `dense SVG stream DOM — ${denseN} symbols, +${batch}/update, ${denseReps} updates (ms)`,
+      ['path', 'median', 'p95', 'max'],
+      [
+        ['mount (patchSceneDom into empty <svg>)', fmt(dMount.median), fmt(dMount.p95), fmt(dMount.max)],
+        ['append patch (patchSceneDom, dense)', fmt(dPatch.median, 2), fmt(dPatch.p95, 2), fmt(dPatch.max, 2)],
+        ['speedup (median)', `${dRatio.toFixed(1)}x`, '—', '—'],
+      ],
+    ),
+  )
+  if (!(dRatio >= DENSE_APPEND_FLOOR)) {
+    console.error(`\n[incremental] FAIL: a dense append patch is only ${dRatio.toFixed(1)}x cheaper than a full mount (floor ${DENSE_APPEND_FLOOR}x)`)
+    process.exitCode = 1
+  } else {
+    console.log(`\n[incremental] dense DOM pass: append patch is ${dRatio.toFixed(1)}x cheaper than a mount (floor ${DENSE_APPEND_FLOOR}x)`)
   }
 }
 
