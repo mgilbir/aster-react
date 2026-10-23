@@ -59,6 +59,16 @@ FIXTURES['write-differ'] = [w('move-inside', writeChart('none'), 30, {
   ourSpec: { ...writeChart('none'), marks: [{ type: 'rect', encode: { update: { x: { signal: 'px' }, y: { value: 10 }, width: { value: 20 }, height: { value: 10 }, fill: { value: 'tomato' } } } }] },
 })]
 
+// vega writes a text angle that is a word verbatim (`rotate(sideways)`): its document is not an SVG anyone can
+// judge. When the ORACLE's document is the unjudgeable one there is nothing to compare: an oracle-side failure
+// (a node-error); when only the engine's is, it stays a difference
+const angled = (angle) => ({
+  width: 60, height: 40, padding: 2, autosize: 'none', background: 'white',
+  marks: [{ type: 'text', encode: { update: { x: { value: 10 }, y: { value: 20 }, text: { value: 'hi' }, angle: { value: angle } } } }],
+})
+FIXTURES['oracle-unjudgeable'] = [c('plain-a', chart()), c('sideways', angled('sideways'))]
+FIXTURES['ours-unjudgeable'] = [{ ...c('sideways', angled(0)), ourSpec: angled('sideways') }]
+
 export function generate() {
   const name = process.env.FIXTURE ?? 'good'
   const cases = FIXTURES[name]

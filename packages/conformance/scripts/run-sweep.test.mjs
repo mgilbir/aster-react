@@ -80,6 +80,21 @@ describe('run-sweep verdicts', { timeout: 60_000 }, () => {
     expect(r.out).toMatch(/0 nondeterministic/)
   })
 
+  it('an oracle document nobody can judge is an oracle-side failure, held to the node-error ceiling', () => {
+    const over = sweep('oracle-unjudgeable', '--floor', '2', '--min-ok', '1', '--max-node-error', '0')
+    expect(over.code, over.out).toBe(1)
+    expect(over.out).toMatch(/\[node-error\] sideways: the oracle's own document cannot be judged/)
+    expect(over.out).toMatch(/NODE-ERROR CEILING EXCEEDED/)
+    const within = sweep('oracle-unjudgeable', '--floor', '2', '--min-ok', '1', '--max-node-error', '1')
+    expect(within.code, within.out).toBe(0)
+  })
+
+  it('an engine document the canonicalizer cannot judge is still a difference', () => {
+    const r = sweep('ours-unjudgeable', '--floor', '1', '--min-ok', '0', '--max-node-error', '5')
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toMatch(/\[differ\] sideways .*canonicalizer cannot judge/)
+  })
+
   it('counts oracle-side node-errors against a ceiling', () => {
     const over = sweep('node-error', '--floor', '2', '--min-ok', '1', '--max-node-error', '0')
     expect(over.code, over.out).toBe(1)

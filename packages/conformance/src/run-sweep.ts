@@ -230,6 +230,16 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 're
   try {
     diffs = diffCanonical(canonicalizeSvg(oracleSvg!), canonicalizeSvg(ourSvg!))
   } catch (e) {
+    // When the ORACLE's own document is the one that cannot be judged (vega wrote `rotate(sideways)` for a label
+    // angle that is a word: not an SVG transform at all) there is nothing to compare against: that is an oracle-side
+    // failure, counted with the node errors and held to their ceiling -- not a difference in the engine. A document of
+    // ours the canonicalizer refuses is still a difference.
+    let oracleJudgeable = true
+    try { canonicalizeSvg(oracleSvg!) } catch { oracleJudgeable = false }
+    if (!oracleJudgeable) {
+      console.error(`  [node-error] ${c.name}: the oracle's own document cannot be judged: ${(e as Error).message}`)
+      return 'node-error'
+    }
     console.error(`  [differ] ${c.name} (${c.family}.${c.property}): canonicalizer cannot judge: ${(e as Error).message}`)
     return 'differ'
   }
