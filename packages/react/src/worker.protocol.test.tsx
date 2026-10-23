@@ -80,6 +80,11 @@ describe('worker protocol carries limits and text metrics (C65)', () => {
     expect(response.error?.code).toBe('ASTER_LIMIT')
   })
 
+  it('maxRows counts host-supplied input.data, like renderSpec (limits are meters now)', () => {
+    const r = handleChartWorkerRequest({ id: 1, spec: specOf(2), input: { data: { t: Array.from({ length: 500 }, (_, i) => ({ x: i, y: i })) }, limits: { maxRows: 100 } } })
+    expect(r.error?.code).toBe('ASTER_LIMIT')
+  })
+
   it('maxSvgLength is checked on the serialized output like renderSpec', () => {
     const response = handleChartWorkerRequest({ id: 1, spec: specOf(5), input: { limits: { maxSvgLength: 50 } } })
     expect(response.error?.code).toBe('ASTER_LIMIT')
