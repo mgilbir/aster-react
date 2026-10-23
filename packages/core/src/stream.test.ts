@@ -522,3 +522,23 @@ describe('stream discard() recovery', () => {
     expect(stream.stats().dropped).toBe(0)
   })
 })
+
+describe('stream image url policy', () => {
+  const imgSpec = {
+    width: 50, height: 50, padding: 0, autosize: 'none',
+    data: [{ name: 't', values: [{ u: 'https://good.example/a.png' }, { u: 'https://evil.example/b.png' }] }],
+    marks: [{ type: 'image', from: { data: 't' }, encode: { update: { url: { field: 'u' }, x: { value: 0 }, y: { value: 0 } } } }],
+  } as unknown as VgSpec
+
+  it('initial.urlPolicy applies to every flush (denied images dropped via onDeny)', () => {
+    const denied: string[] = []
+    const stream = createChartStream(imgSpec, {
+      initial: { urlPolicy: { allow: (u) => u.host === 'good.example', onDeny: (u) => { denied.push(u) } } },
+    })
+    stream.flush()
+    expect(denied).toEqual(['https://evil.example/b.png'])
+    stream.push({ append: { t: [{ u: 'https://evil.example/c.png' }] } })
+    stream.flush()
+    expect(denied).toContain('https://evil.example/c.png')
+  })
+})
