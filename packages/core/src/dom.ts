@@ -584,7 +584,10 @@ function groupDescs(group: SceneGroup, frameW: number, frameH: number, clips: Cl
       if (clipId) d = g('g', pairs((w) => clipRefAttrs(clipId, w)), [d])
       children.push(d)
     }
-    return [g('g', attrs, children)]
+    const self = g('g', attrs, children)
+    // the group mark's own `clip` clips to the ENCLOSING group's frame, outside this group's transform
+    if (group.outerClip) return [g('g', pairs((w) => clipRefAttrs(clips.id({ x: 0, y: 0, w: frameW, h: frameH }), w)), [self])]
+    return [self]
   }
 
   // Vega-Lite rounds bars by wrapping each bar in a clipped scope.

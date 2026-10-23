@@ -226,6 +226,11 @@ function renderGroup(group: SceneGroup, frameW?: number, frameH?: number, clips?
       else out2 += renderLeaf(item, clips)
     }
     out2 += '</g>'
+    if (group.outerClip && clips && frameW != null && frameH != null) {
+      const cw = new StringAttrSink()
+      clipRefAttrs(clips.id({ x: 0, y: 0, w: frameW, h: frameH }), cw)
+      out2 = `<g${cw.s}>${out2}</g>`
+    }
     return out2
   }
 

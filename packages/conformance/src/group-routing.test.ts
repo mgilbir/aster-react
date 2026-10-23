@@ -27,18 +27,9 @@ async function oracleSvg(spec: Spec): Promise<string> {
   }
 }
 
-/**
- * Diffs between real vega and Aster for `spec`, minus the one known, separate gap: vega draws
- * every group's (unpainted) `background` path and Aster's nested-group renderer draws none
- * (a renderer matter, not routing). Exactly `groups` such paths may be missing, and they must be
- * rectangles with nothing painted; every other difference is returned.
- */
-async function compare(spec: Spec, groups: number): Promise<string[]> {
-  const diffs = diffCanonical(canonicalizeSvg(await oracleSvg(spec)), canonicalizeSvg(renderSpec(spec as never)))
-  const background = (d: string): boolean => /^only-oracle: path\|M[-\d.]+,[-\d.]+(L[-\d.]+,[-\d.]+){3}Z\|fill=none\|\|$/.test(d)
-  const known = diffs.filter(background)
-  expect(known.length, 'missing group background paths').toBe(groups)
-  return diffs.filter((d) => !background(d))
+/** Diffs (empty = identical) between real vega and Aster for `spec`. */
+async function compare(spec: Spec): Promise<string[]> {
+  return diffCanonical(canonicalizeSvg(await oracleSvg(spec)), canonicalizeSvg(renderSpec(spec as never)))
 }
 
 const DATA = [{ name: 't', values: [{ g: 'a', v: 10 }, { g: 'a', v: 20 }, { g: 'b', v: 30 }, { g: 'c', v: 40 }] }]
@@ -52,7 +43,7 @@ describe('groups route by role, not by name (C56)', () => {
   const NAMES = ['page_header', 'page_footer', 'header', 'footer', 'row_header', 'column_header', 'column_footer', 'my_header_row', 'footer_notes']
   it.each(NAMES)('a plain group named %s renders like vega', async (name) => {
     const spec = { ...FRAME, data: DATA, marks: [{ type: 'group', name, encode: { update: { x: { value: 12 }, y: { value: 8 }, width: { value: 150 }, height: { value: 60 } } }, marks: [rectIn()] }] }
-    expect(await compare(spec, 1)).toEqual([])
+    expect(await compare(spec)).toEqual([])
     // and the marks inside are really there (a group that renders nothing agrees with nothing)
     expect(renderSpec(spec as never)).toContain('fill="tomato"')
   })
@@ -68,12 +59,8 @@ describe('groups route by role, not by name (C56)', () => {
         marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'lx', field: 'v' }, y: { value: 2 }, width: { value: 4 }, height: { value: 4 }, fill: { value: 'teal' } } } }],
       }],
     }
-    // A scoped group draws its own (separate, pre-existing) background; the routing claim is
-    // that the child marks are drawn, at vega's positions.
-    const tealPaths = (svg: string): string[] => [...svg.matchAll(/<path d="([^"]+)" fill="teal"\/>/g)].map((m) => m[1]!)
-    const want = tealPaths(await oracleSvg(spec))
-    expect(want.length).toBe(4)
-    expect(tealPaths(renderSpec(spec as never))).toEqual(want)
+    expect(await compare(spec)).toEqual([])
+    expect(renderSpec(spec as never)).toContain('fill="teal"')
   })
 })
 
@@ -88,7 +75,7 @@ describe('facet groupby is read through array() (C56)', () => {
     }],
   })
   it('a string groupby renders like vega', async () => {
-    expect(await compare(facetSpec('g'), 3)).toEqual([])
+    expect(await compare(facetSpec('g'))).toEqual([])
   })
   it('a string groupby equals the one-element array form (and both draw one group per key)', () => {
     const a = renderSpec(facetSpec('g') as never)
@@ -97,6 +84,6 @@ describe('facet groupby is read through array() (C56)', () => {
     expect((a.match(/fill="steelblue"/g) ?? []).length).toBe(4)
   })
   it('the array form still renders like vega', async () => {
-    expect(await compare(facetSpec(['g']), 3)).toEqual([])
+    expect(await compare(facetSpec(['g']))).toEqual([])
   })
 })

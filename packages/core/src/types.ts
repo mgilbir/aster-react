@@ -555,6 +555,8 @@ export interface SceneRoot {
 
 export interface SceneGroup extends SceneItem {
   marktype?: string
+  /** The mark's own `clip`: clip this group to the ENCLOSING group's frame, on a wrapper outside the group's transform (vega: `clip(renderer, scene, scene.group)`). */
+  outerClip?: boolean
   name?: string
   role?: string
   /** Nested scene items (children of a group). */

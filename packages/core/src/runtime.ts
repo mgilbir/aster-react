@@ -3815,6 +3815,71 @@ function buildTrellisCell(
   } as SceneGroup
 }
 
+
+const GROUP_PAINT_KEYS = ['fill', 'stroke', 'strokeWidth', 'strokeOpacity', 'fillOpacity', 'opacity', 'strokeDash', 'strokeDashOffset', 'strokeCap', 'strokeJoin', 'strokeMiterLimit'] as const
+const GROUP_CORNER_KEYS = ['cornerRadius', 'cornerRadiusTopLeft', 'cornerRadiusTopRight', 'cornerRadiusBottomRight', 'cornerRadiusBottomLeft'] as const
+
+/**
+ * A group item's background (and, with `strokeForeground`, foreground) rectangle, as
+ * vega-scenegraph marks/group.js emits it: the rectangle of the item's own width/height (read
+ * `|| 0`) with its corner radii, inset by the stroke offset (`strokeOffset`, else 0.5 - |sw - 1| for
+ * a stroke between 0.5 and 1.5 wide), painted with the item's fill/stroke; with `strokeForeground`
+ * the stroke moves to a rectangle drawn after the contents.
+ */
+function groupBackground(geo: SceneItem): { background: SceneItem; foreground?: SceneItem } {
+  const rec = geo as unknown as Record<string, unknown>
+  const sw = (rec.strokeWidth ?? 1) as number
+  const off = rec.strokeOffset != null ? Number(rec.strokeOffset)
+    : rec.stroke && sw > 0.5 && sw < 1.5 ? 0.5 - Math.abs(sw - 1)
+    : 0
+  const shape: Record<string, unknown> = { x: off, y: off, width: rec.width, height: rec.height }
+  for (const k of GROUP_CORNER_KEYS) if (rec[k] !== undefined) shape[k] = rec[k]
+  const path = String(rectItemPath(shape as SceneItem))
+  const fore = !!rec.strokeForeground
+  const paint: Record<string, unknown> = {}
+  for (const k of GROUP_PAINT_KEYS) if (rec[k] !== undefined && rec[k] !== null && !(fore && k === 'stroke')) paint[k] = rec[k]
+  const background = { path, x: 0, y: 0, ...paint } as unknown as SceneItem
+  if (!fore || !rec.stroke) return { background }
+  const strokePaint: Record<string, unknown> = {}
+  for (const k of GROUP_PAINT_KEYS) if (rec[k] !== undefined && rec[k] !== null && k !== 'fill' && k !== 'fillOpacity') strokePaint[k] = rec[k]
+  return { background, foreground: { path, x: 0, y: 0, ...strokePaint } as unknown as SceneItem }
+}
+
+
+/**
+ * The items of a group item: background, contents, foreground. With the item's `clip` channel the CONTENTS
+ * (not the background or foreground, which vega draws outside the clip `<g>`) sit in a nested pass-through
+ * group clipped to the item's own rectangle, with its corner radii.
+ */
+function groupItems(geo: SceneItem, content: SceneItem[]): SceneItem[] {
+  const rec = geo as unknown as Record<string, unknown>
+  const bg = groupBackground(geo)
+  const out: SceneItem[] = [bg.background]
+  if (rec.clip) {
+    const corners: Record<string, unknown> = {}
+    for (const k of GROUP_CORNER_KEYS) if (rec[k] !== undefined) corners[k] = rec[k]
+    const d = Object.keys(corners).length ? String(rectItemPath({ x: 0, y: 0, width: rec.width, height: rec.height, ...corners } as SceneItem)) : undefined
+    out.push({
+      marktype: 'group', role: 'scope', items: content as SceneNode[], clip: true,
+      width: (rec.width as number) || 0, height: (rec.height as number) || 0, x: 0, y: 0,
+      ...(d && /[CcAa]/.test(d) ? { clipPathD: d } : {}),
+    } as unknown as SceneItem)
+  } else {
+    pushAll(out, content)
+  }
+  if (bg.foreground) out.push(bg.foreground)
+  return out
+}
+
+/** A mark's `clip`: a boolean, or `{signal}` evaluated like any signal (truthiness, as vega). */
+function markClip(mark: CompiledMark, ctx: EvalContext): boolean {
+  const c = (mark as { clip?: unknown }).clip
+  if (c !== null && typeof c === 'object' && typeof (c as { signal?: unknown }).signal === 'string') {
+    return !!ctx.runtime.expr((c as { signal: string }).signal)({}, ctx.signalParams)
+  }
+  return !!c
+}
+
 /** Group mark dispatch */
 function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | SceneGroup[] | null {
   // A vega-native trellis: a group mark carrying a `layout` def lays its facet
@@ -3868,29 +3933,22 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | Scen
     // scales just render children in the parent scope.
     const hasLocalScope = !!((mark as any).scales?.length || (mark as any).axes?.length || (mark as any).data?.length)
     if (hasLocalScope) return buildScopedGroup(mark, ctx)
-    const items: SceneItem[] = []
+    const grEnc = ((mark as any).encode?.update ?? {}) as Record<string, EncodeValue | EncodeValue[]>
+    const geoO = resolveEncodeSet(grEnc, {}, ctx, 'group')
+    const content: SceneItem[] = []
     for (const cm of tm.marks) {
       const r = evaluateMark(cm as CompiledMark, ctx)
       if (r) {
-        if (Array.isArray(r)) { for (const g of r) items.push(g) }
-        else items.push(r)
+        if (Array.isArray(r)) { for (const g of r) content.push(g) }
+        else content.push(r)
       }
     }
-    // Vega auto-clips groups that have cornerRadius: extract the value from
-    // the group encode and, when >0, emit a rounded-rect clip path matching
-    // the group's plot-area dimensions.
-    const grEnc = (mark as any).encode?.update
-    const grCR = grEnc?.cornerRadius
-    const grpCR = grCR && typeof grCR === 'object' && 'value' in grCR
-      ? (grCR as { value: number }).value
-      : (typeof grCR === 'number' ? grCR : 0)
-    const grpClip = mark.clip === true || grpCR > 0
-    const grpClipD = grpCR > 0
-      ? roundedRectPath(0, 0, ctx.width, ctx.height, Math.min(grpCR, ctx.width / 2, ctx.height / 2))
-      : undefined
-    // the group's own offset (vega-lite's stack_group_main child shifts back by `{group: 'y'}`)
-    const geoO = grEnc?.x != null || grEnc?.y != null ? resolveEncodeSet(grEnc, {}, ctx, 'group') : {}
-    return { marktype: 'group', name, role: (mark.role as string) ?? 'scope', items, clip: grpClip, ...(geoO.x ? { x: geoO.x as number } : {}), ...(geoO.y ? { y: geoO.y as number } : {}), ...(grpClipD ? { clipPathD: grpClipD } : {}) }
+    const items = groupItems(geoO, content)
+    return {
+      marktype: 'group', name, role: (mark.role as string) ?? 'scope', items,
+      ...(markClip(mark, ctx) ? { outerClip: true } : {}),
+      ...(geoO.x ? { x: geoO.x as number } : {}), ...(geoO.y ? { y: geoO.y as number } : {}),
+    }
   }
   throw new Error('[aster] unsupported group mark: ' + (name ?? '<unnamed>'))
 }
@@ -3932,36 +3990,25 @@ function buildScopedGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | nu
     scaleTypes: new Map([...ctx.scaleTypes, ...childTypeMap]),
   }
 
-  const items: SceneItem[] = []
-  // Vega draws the group background rect first (fill = view/cell default, or the
-  // encode's fill; stroke/cornerRadius from the encode).
-  {
-    const stroke = geo.stroke as string | undefined
-    const fill = geo.fill as string | undefined
-    const cr = (geo.cornerRadius as number | undefined) ?? 0
-    // Vega insets the group background by half a pixel (0.5) like the frame.
-    const bgPath = cr > 0
-      ? roundedRectPath(0.5, 0.5, gw, gh, Math.min(cr, gw / 2, gh / 2))
-      : `M0.5,0.5h${gw}v${gh}h-${gw}Z`
-    const sw = geo.strokeWidth as number | undefined
-    items.push({ path: bgPath, x: 0, y: 0, ...(fill ? { fill } : {}), ...(stroke ? { stroke, ...(sw != null ? { strokeWidth: sw } : {}) } : {}) } as SceneItem)
-  }
+  // Vega draws the group background rect first (the encode's fill/stroke/cornerRadius, see groupBackground).
+  const content: SceneItem[] = []
 
   for (const as of (mark as any).axes ?? []) {
     if (isAxisSpec(as)) {
       const a = buildAxisInline(as, child)
-      if (a) items.push(a)
+      if (a) content.push(a)
     }
   }
   for (const cm of (mark.marks ?? [])) {
     const r = evaluateMark(cm as CompiledMark, child)
     if (r) {
-      if (Array.isArray(r)) { for (const g of r) items.push(g) }
-      else items.push(r)
+      if (Array.isArray(r)) { for (const g of r) content.push(g) }
+      else content.push(r)
     }
   }
 
-  const grpClip = mark.clip === true
+  const items = groupItems(geo, content)
+  const outerClip = markClip(mark, ctx)
   return {
     marktype: 'group',
     name: mark.name,
@@ -3971,7 +4018,7 @@ function buildScopedGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | nu
     width: gw,
     height: gh,
     items,
-    clip: grpClip,
+    ...(outerClip ? { outerClip: true } : {}),
     __scales: snapshotScales(child.scales),
   } as SceneGroup
 }
@@ -4262,6 +4309,7 @@ function buildFacetCells(
 
     // vega paints a group's background BEFORE its content: bg, axes, marks.
     const bgItems: SceneItem[] = []
+    const foreItems: SceneItem[] = []
     const labelItems: SceneItem[] = []
     // Column-header labels with a non-top labelOrient are title items on the
     // cell's left/right side (vega-lite places them in the cell, not in a
@@ -4313,10 +4361,10 @@ function buildFacetCells(
     }
     const groupRounded = Object.keys(corners).length > 0
     if (groupRounded) {
-      // vega paints the rounded background, then the clipped scope (its zero-height
-      // background shifted back by the group's offset, then the marks)
+      // vega paints the rounded background, then the clipped scope (whose own group
+      // item draws its zero-height background, then the marks)
       cellD = rectItemPath({ x: 0, y: 0, width: size.x, height: size.y, ...corners } as SceneItem)!
-      bgItems.push({ path: cellD, x: 0, y: 0 } as SceneItem, { path: stacked === 'y' ? `M0,0h${size.x}v0h-${size.x}Z` : `M0,0h0v${size.y}h0Z`, x: 0 - pos.x, y: 0 - pos.y } as SceneItem)
+      bgItems.push({ path: cellD, x: 0, y: 0 } as SceneItem)
     } else if (cellStyle) {
       bgItems.push({
         path: `M0.5,0.5h${cellWidth}v${cellHeight}h-${cellWidth}Z`,
@@ -4338,15 +4386,18 @@ function buildFacetCells(
           x: 0, y: 0,
         } as SceneItem)
       } else {
-        bgItems.push({
-          path: `M0,0h0v0h0Z`,
-          x: 0, y: 0,
-        } as SceneItem)
+        // a plain facet group: its background is the group item's own rectangle (encoded size, fill, stroke...),
+        // evaluated against the facet key datum, exactly like any other group
+        const key: Row = {}
+        for (const k of facet.groupby) key[k] = g[0]?.[k]
+        const bg = groupBackground(resolveEncodeSet(grEnc ?? {}, key, tmpCtx, 'group'))
+        bgItems.push(bg.background)
+        if (bg.foreground) foreItems.push(bg.foreground)
       }
     }
 
     // a rounded stack group paints its background, then clips only its CONTENT to the rounded path
-    const content = [...bgItems, ...axisItems, ...nestedItems, ...labelItems]
+    const content = [...bgItems, ...axisItems, ...nestedItems, ...labelItems, ...foreItems]
     result.push({
       marktype: 'group', name: mark.name, role: 'scope',
       items: groupRounded

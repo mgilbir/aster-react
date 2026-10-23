@@ -713,11 +713,17 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
   const type = group.marktype
   if (!type || type === 'group') {
     ctx.save()
+    // the group mark's own `clip`: the enclosing frame, in the enclosing group's coordinates
+    if (group.outerClip) {
+      ctx.beginPath()
+      ctx.rect(0, 0, plotW, plotH)
+      ctx.clip()
+    }
     if (group.x != null || group.y != null) ctx.translate(group.x ?? 0, group.y ?? 0)
     if (group.clip === true) {
       ctx.beginPath()
       if (group.clipPathD) tracePath(ctx, parsePathData(group.clipPathD), group.x ?? 0, group.y ?? 0)
-      else ctx.rect(0, 0, plotW, plotH)
+      else ctx.rect(0, 0, group.width ?? plotW, group.height ?? plotH)
       ctx.clip()
     }
     for (const item of group.items ?? []) {
