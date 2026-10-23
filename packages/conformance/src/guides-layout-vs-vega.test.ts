@@ -75,6 +75,18 @@ describe('href: every mark kind draws its items inside <a xlink:href> like vega-
     })
   }
 
+  it('a hyperlinked group item sits inside its <a> (vega draws the link around the group)', async () => {
+    const spec: Spec = {
+      ...FRAME, data: DATA, marks: [{
+        type: 'group', from: { data: 't' }, encode: { update: { x: { field: 'a' }, y: { value: 5 }, width: { value: 20 }, height: { value: 20 }, stroke: { value: '#c00' }, href: { field: 'h' } } },
+        marks: [{ type: 'symbol', encode: { update: { x: { value: 5 }, y: { value: 5 } } } }],
+      }],
+    }
+    expect(await compare(spec)).toEqual([])
+    expect(diffCanonical(canonicalizeSvg(renderSpec(spec as never)), canonicalizeSvg(domSvg(spec)))).toEqual([])
+    expect(renderSpec(spec as never)).toContain('<a xlink:href="https://example.test/u?x=1&amp;y=&quot;2&quot;">')
+  })
+
   it('a script URL never reaches the markup, with or without a url policy', () => {
     const spec: Spec = { ...FRAME, data: DATA, marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { ...MARKS.symbol, href: { field: 'h' } } } }] }
     const hostile: Spec = { ...spec, data: HOSTILE }

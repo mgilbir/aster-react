@@ -227,6 +227,9 @@ function renderGroup(group: SceneGroup, frameW?: number, frameH?: number, clips?
       else out2 += renderLeaf(item, clips)
     }
     out2 += '</g>'
+    // a hyperlinked group item sits inside its <a> (SVGStringRenderer `process`)
+    const link = linkOpen(group)
+    if (link) out2 = link + out2 + linkClose(link)
     // vega's mark-level `clip`: the mark container is clipped to the ENCLOSING group's
     // frame (SVGStringRenderer `clip(renderer, scene, scene.group)`), outside the item's
     // own transform

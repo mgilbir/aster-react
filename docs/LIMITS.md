@@ -196,6 +196,27 @@ renderSpec(spec, { urlPolicy: {
 - `<Chart>` does not forward `urlPolicy` yet; set it where you call
   `renderSpec`/`evaluateChart`.
 
+## Hyperlinks (`href`)
+
+A mark's `href` channel is drawn the way Vega's SVG renderer draws it: the item's element
+sits inside `<a xlink:href="...">` (string renderer and DOM path alike; line, area and trail
+link through their first item). Two checks apply to the value:
+
+- Always, in every renderer: Vega's own link sanitizer. Only `http(s):`, `ftp:`, `mailto:`,
+  `tel:`, `callto:`, `cid:`, `xmpp:`, `file:`, `data:` and scheme-less (relative) URIs are
+  linked; `javascript:`, `vbscript:` and the like produce no link, whatever the spec says.
+  (`//host/p` gets `http:`, `file://` is stripped to the path, as in Vega.)
+- Under `limits` or an explicit `urlPolicy`, the URL policy above applies with the link
+  protocols `http:`, `https:`, `mailto:`, `tel:` (and relative URLs): anything else throws
+  `AsterUrlError`, or is dropped (the item is drawn without its link) when `onDeny` is set.
+
+## Container size
+
+`containerSize()` in expressions (Vega-Lite's `width: "container"`) returns
+`[undefined, undefined]`, like headless Vega, unless the host passes
+`containerSize: { width, height }` in the runtime input; Vega-Lite's own fallback size then
+applies. A host that has a DOM element to fill passes its `clientWidth` / `clientHeight`.
+
 ## Locale and formatter caches
 
 Expression `format`, `timeFormat`, `monthFormat`, ... read the **current**

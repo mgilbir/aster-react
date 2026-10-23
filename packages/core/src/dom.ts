@@ -605,7 +605,7 @@ function groupDescs(group: SceneGroup, frameW: number, frameH: number, clips: Cl
       if (clipId) d = g('g', pairs((w) => clipRefAttrs(clipId, w)), [d])
       children.push(d)
     }
-    const desc = g('g', attrs, children)
+    const desc = linked(group, g('g', attrs, children))
     // vega's mark-level `clip`: clipped to the ENCLOSING group's frame, outside the item's own transform
     if (group.markClip === true) return [g('g', pairs((w) => clipRefAttrs(clips.id({ x: 0, y: 0, w: frameW, h: frameH }), w)), [desc])]
     return [desc]

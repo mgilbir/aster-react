@@ -96,18 +96,7 @@ ignored.
 
 ## Known runtime gaps (Aster, not the compiler)
 
-Real vega renders our output identically to vega-lite's for the whole corpus.
-Aster's own runtime cannot yet render vega-lite's output for some shapes, so
-those specs live in `packages/conformance/corpus-vega-only` and are held to the
-real-vega check only:
-
-- wrapped facets, grid/nested concat and repeat layouts, shared legends and
-  child titles inside them;
-- facet header placement beyond the defaults (`labelAnchor`, `labelOrient`,
-  `orient`, `labels: false`);
-- dotted/nested field names, UTC time-unit labels (`%b` format), temporal colours
-  and text, the stdev extent, `ci0` / `ci1`, `containerSize()` sizing, and size /
-  opacity / strokeWidth legends over bars, lines and text;
-- a legend symbol with no `opacity` entry (Aster draws it at 0.7);
-- rounded stacked bars on the canvas renderer (the SVG renderer matches), and
-  `config.mark.cornerRadius` applied to the stack group.
+None are recorded: real vega renders our output identically to vega-lite's for the
+whole corpus, and Aster's runtime renders both, so `packages/conformance/corpus-vega-only`
+(where a spec lives while Aster cannot yet render vega-lite's output for it, held to the
+real-vega check only) is empty. A new gap is recorded there, with its measured root cause.

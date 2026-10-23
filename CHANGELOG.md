@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Group marks are vega scopes (audit C51, C55, C58, corpus-vega-only drained)**: every group mark
+  is built and laid out like vega (one group item per facet partition / datum, own scales and data,
+  `layout` grid, then axes, legends and the title), replacing the per-shape concat / facet / header
+  builders. Concat, repeat and wrapped / layered / nested facets, facet header placement
+  (`labelAnchor`, `labelOrient`, `orient`, `labels: false`, title anchors), nested legends
+  (compiled with the view's config, as are nested group axes) and composition-level legends now
+  match real vega; `corpus-vega-only` is empty. Gradient legends of time scales label and place
+  their Date ticks (corpus-tz covers New_York and Kolkata). Axis `encode` (labels, ticks, grid,
+  domain, title, axis) and legend `encode` (labels, title, symbols, legend) apply as in vega, and the
+  runtime no longer reads the non-vega `labelExpr` / legend `disable`. Symbol legends are one vega
+  symbol encode for every channel (size, opacity, strokeWidth, strokeDash, ...); a mark `sort` orders
+  encoded items (stacked-area / imputed-line series order); `href` is drawn as `<a xlink:href>`
+  under the URL policy; `containerSize()` reads `RuntimeInput.containerSize`; `signal.init` is an
+  expression, not a literal.
 - **@aster/vl round 2**: `config.scale` keys, `mark.invalid`, `bandSize`/`binSpacing`/secondary
   offsets, errorbar / errorband, the image mark, `"container"` sizing, `numberFormat` /
   `timeFormat` / `fieldTitle` config, vega-lite's axis order, zindex and color-legend rules, and the

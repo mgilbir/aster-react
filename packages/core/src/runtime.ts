@@ -1288,7 +1288,7 @@ function buildContent(
   ch: number,
   txn: EvalTxn,
   fitted = false,
-): { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; isFacetSpec: boolean } {
+): { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean } {
   const { ctx, width, height } = prepareChartCtx(
     chart, { ...input, width: cw, height: ch }, txn,
     fitted ? { width: true, height: true } : { width: input.width != null, height: input.height != null },
@@ -1322,8 +1322,8 @@ function buildContent(
   // 2) ViewLayout of the view's root group (vega-view-transforms): a `layout`
   // grid positions the child groups (cells, headers, footers, titles) first;
   // layoutGroup then lays out the axes, legends and title around them.
-  const isFacetSpec = ctx.chart.layout != null
-  if (isFacetSpec) {
+  const hasLayout = ctx.chart.layout != null
+  if (hasLayout) {
     try {
       trellisLayout({ marktype: 'group', items } as unknown as SceneGroup, resolveLayoutOptions(ctx.chart.layout!, ctx))
     } catch {
@@ -1340,8 +1340,6 @@ function buildContent(
   if (titleGroup) items.push(titleGroup)
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
-  const facetWidth = width
-  const facetHeight = height
 
   // 2d) viewSizeLayout padding (overflow) after the trellis layout.
   // A trellis layout that throws (vega's gridLayout does on e.g. fractional
@@ -1357,11 +1355,11 @@ function buildContent(
     || ctx.chart.autosize === 'none'
     ? ctx.chart.padding
     : computeGuidePadding(
-        items, facetWidth, facetHeight, ctx.chart.padding,
+        items, width, height, ctx.chart.padding,
         (ctx.chart.projections ?? []).some((p) => String(p.type).toLowerCase() === 'azimuthalequalarea' && Number(p.clipAngle) === 0),
       )
   const ordered = paintOrderOf(items)
-  return { items: ordered, padding, ctx, width: facetWidth, height: facetHeight, isFacetSpec }
+  return { items: ordered, padding, ctx, width, height, hasLayout }
 }
 
 /**
@@ -1430,7 +1428,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
     // A `width`/`height` signal (update or init, e.g. vega-lite's
     // `isFinite(containerSize()[0]) ? ... : 300`) resolves while the first
     // build runs; the fit viewport is that resolved size, not the default.
-    if (!built.isFacetSpec && (built.ctx.width !== cw || built.ctx.height !== ch)) {
+    if (!built.hasLayout && (built.ctx.width !== cw || built.ctx.height !== ch)) {
       initialW = cw = built.ctx.width
       initialH = ch = built.ctx.height
     }
@@ -3698,6 +3696,9 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       if (v != null) paint[k] = v
     }
     const bg = { path: bgPath, x: 0, y: 0, _bg: true, ...paint } as unknown as SceneItem
+    // a hyperlinked group (`href` in its encode) is vetted like any mark's link
+    let href = (geo as Record<string, unknown>).href
+    if (href != null && ctx.urlPolicy !== undefined && applyLinkUrlPolicy(href, ctx.urlPolicy) == null) href = undefined
     // the item's `clip` (encode) clips its content to its own box; the mark's `clip` clips the whole mark to the enclosing group
     const clip = (geo as Record<string, unknown>).clip === true
     const role = (mark.role as string | undefined) ?? 'scope'
@@ -3710,6 +3711,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       ...paint,
       datum: src.datum,
       _scope: true,
+      ...(href != null ? { href: href as string } : {}),
       ...(mark.clip === true ? { markClip: true } : {}),
     } as unknown as SceneGroup
     if (mark.scales?.length) group.__scales = snapshotScales(childCtx.scales)
@@ -4191,17 +4193,6 @@ function formatValue(v: unknown, spec: EncodeValue): unknown {
   if (cal === 'utc') return L.utcFormat(fmt)(v as Date)
   if (cal === 'time' || v instanceof Date) return L.timeFormat(fmt)(v as Date)
   return L.format(fmt)(v as number)
-}
-
-/**
- * Compute the effective content width for legend positioning.
- * For faceted charts, the actual content width is the cell width (from
- * child_width signal), not the top-level ctx.width which defaults to 500.
- */
-function legendContentWidth(ctx: EvalContext): number {
-  const cw = ctx.signalParams['child_width']
-  if (typeof cw === 'number' && Number.isFinite(cw) && cw < ctx.width) return cw
-  return ctx.width
 }
 
 /**
