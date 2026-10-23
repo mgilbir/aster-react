@@ -22,8 +22,9 @@ const spec = {
 class FakeWorker {
   listeners = new Set<(event: MessageEvent) => void>()
   streams = new Map<number, never>()
-  addEventListener(_type: string, fn: (event: MessageEvent) => void): void { this.listeners.add(fn) }
-  removeEventListener(_type: string, fn: (event: MessageEvent) => void): void { this.listeners.delete(fn) }
+  // Like a real Worker: only `message` listeners receive responses.
+  addEventListener(type: string, fn: (event: MessageEvent) => void): void { if (type === 'message') this.listeners.add(fn) }
+  removeEventListener(type: string, fn: (event: MessageEvent) => void): void { if (type === 'message') this.listeners.delete(fn) }
   postMessage(request: ChartWorkerStreamRequest): void {
     const response = handleChartWorkerStreamRequest(request, this.streams as never)
     queueMicrotask(() => { for (const fn of this.listeners) fn({ data: response } as MessageEvent) })

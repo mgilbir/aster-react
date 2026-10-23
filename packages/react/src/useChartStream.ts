@@ -9,17 +9,19 @@
 import * as React from 'react'
 import {
   createChartStream,
+  getStreamFlushFailure,
   renderSceneToSvg,
   type ChartStream,
   type DataPulse,
   type SceneRoot,
   type StreamBatch,
   type StreamFlush,
+  type StreamFlushFailure,
   type StreamOptions,
   type StreamStats,
   type VgSpec,
 } from '@aster/core'
-import { normalizeChartSpec } from './spec.js'
+import { normalizeChartSpec, useStableSpec } from './spec.js'
 
 export interface UseChartStreamOptions extends StreamOptions {
   /** Serialize the scene to SVG on every flush (default true). */
@@ -33,10 +35,24 @@ export interface UseChartStreamOptions extends StreamOptions {
   flushPolicy?: 'microtask' | 'raf'
 }
 
+/** What a failed flush left behind, and how much `discard()` dropped to recover. */
+export interface StreamFlushFailureInfo extends StreamFlushFailure {
+  /** Batches dropped by `stream.discard()` so the next flush does not fail again. */
+  discarded: number
+}
+
 export interface UseChartStreamResult {
   scene: SceneRoot | null
   svg: string | null
+  /**
+   * The last flush error (typed, e.g. `AsterLimitError`); cleared by the next
+   * successful flush. A failed flush is atomic, so the hook calls
+   * `stream.discard()` right after capturing it: the queue is dropped (see
+   * `flushFailure`) instead of failing every later flush with the same batch.
+   */
   error: Error | null
+  /** Queue state at the failure and the number of batches discarded; null when there is no flush error. */
+  flushFailure: StreamFlushFailureInfo | null
   /** Enqueue a batch; returns false when the backpressure policy rejected it. */
   push: (batch: StreamBatch) => boolean
   /** Apply queued batches now; returns null when there is nothing to do. */
@@ -50,7 +66,7 @@ export interface UseChartStreamResult {
   resume: () => void
   /** Stop accepting batches and drop the queue. */
   close: () => void
-  /** The underlying stream (stable until the spec/capacity/policy changes). */
+  /** The underlying stream (stable until the spec CONTENT, `capacity`, `policy` or `maxQueuedRows` changes). */
   stream: ChartStream
 }
 
@@ -58,24 +74,65 @@ interface StreamState {
   scene: SceneRoot | null
   svg: string | null
   error: Error | null
+  flushFailure: StreamFlushFailureInfo | null
 }
 
+/** Capture the failure info of a flush error, then recover the stream by discarding its queue. */
+function recoverFromFlushError(stream: ChartStream, e: unknown): { error: Error; flushFailure: StreamFlushFailureInfo | null } {
+  const error = e instanceof Error ? e : new Error(String(e))
+  const failure = getStreamFlushFailure(e)
+  return { error, flushFailure: failure ? { ...failure, discarded: stream.discard() } : null }
+}
+
+/** A state tagged with the stream it belongs to (a rebuilt stream discards the old one). */
+interface TaggedState extends StreamState {
+  stream: ChartStream
+}
+
+/**
+ * The stream is keyed on the spec CONTENT, `capacity` and `policy`: a parent
+ * re-render that hands in an equal (but new) inline `spec` keeps the stream and
+ * the rows streamed into it. `initial` is read when the stream is created.
+ *
+ * The first scene is primed synchronously while the stream is created, so a
+ * server render (where no effect runs) already contains the chart.
+ */
 export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}): UseChartStreamResult {
-  const { serialize = true, autoFlush = true, flushPolicy = 'microtask', capacity, policy, initial } = options
-  const normalized = React.useMemo(() => normalizeChartSpec(spec), [spec])
+  const { serialize = true, autoFlush = true, flushPolicy = 'microtask', capacity, policy, initial, maxQueuedRows, limits, textMetrics } = options
+  const stableSpec = useStableSpec(spec)
+  const normalized = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
   const streamRef = React.useRef<ChartStream | null>(null)
-  const streamKey = React.useRef<{ spec: VgSpec; capacity?: number; policy?: StreamOptions['policy'] } | null>(null)
+  const streamKey = React.useRef<{ spec: VgSpec; capacity?: number; policy?: StreamOptions['policy']; maxQueuedRows?: number } | null>(null)
+  const primedRef = React.useRef<TaggedState | null>(null)
   if (
     streamRef.current == null
     || streamKey.current?.spec !== normalized
     || streamKey.current?.capacity !== capacity
     || streamKey.current?.policy !== policy
+    || streamKey.current?.maxQueuedRows !== maxQueuedRows
   ) {
-    streamRef.current = createChartStream(normalized, { capacity, policy, initial })
-    streamKey.current = { spec: normalized, capacity, policy }
+    const created = createChartStream(normalized, {
+      capacity, policy, initial,
+      ...(maxQueuedRows != null ? { maxQueuedRows } : {}),
+      ...(limits ? { limits } : {}),
+      ...(textMetrics ? { textMetrics } : {}),
+    })
+    streamRef.current = created
+    streamKey.current = { spec: normalized, capacity, policy, maxQueuedRows }
+    let primed: StreamState
+    try {
+      const first = created.flush()
+      primed = first
+        ? { scene: first.scene, svg: serialize ? renderSceneToSvg(first.scene) : null, error: null, flushFailure: null }
+        : { scene: null, svg: null, error: null, flushFailure: null }
+    } catch (e) {
+      primed = { scene: null, svg: null, ...recoverFromFlushError(created, e) }
+    }
+    primedRef.current = { ...primed, stream: created }
   }
   const stream = streamRef.current
-  const [state, setState] = React.useState<StreamState>({ scene: null, svg: null, error: null })
+  const [tagged, setState] = React.useState<TaggedState | null>(null)
+  const state: StreamState = tagged != null && tagged.stream === stream ? tagged : primedRef.current!
   const mounted = React.useRef(true)
   const scheduled = React.useRef(false)
   const lastFlush = React.useRef<StreamFlush | null>(null)
@@ -96,13 +153,15 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
     lastFlush.current = result
     if (result) {
       setState({
+        stream,
         scene: result.scene,
         svg: serialize ? renderSceneToSvg(result.scene) : null,
         error: null,
+        flushFailure: null,
       })
     }
     return result
-  }, [serialize])
+  }, [serialize, stream])
 
   const flush = React.useCallback((): StreamFlush | null => {
     try {
@@ -122,8 +181,8 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
       }
       return null
     } catch (e) {
-      const error = e instanceof Error ? e : new Error(String(e))
-      if (mounted.current) setState((s) => ({ ...s, error }))
+      const failed = recoverFromFlushError(stream, e)
+      if (mounted.current) setState((s) => ({ ...(s != null && s.stream === stream ? s : primedRef.current!), ...failed }))
       return null
     }
   }, [commit, stream])
@@ -131,12 +190,9 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
   const flushRef = React.useRef(flush)
   flushRef.current = flush
 
-  // Prime the initial scene (and reset when the stream is rebuilt). Layout
-  // effect so the first paint already has the scene.
+  // A rebuilt stream starts from its own primed scene (see above).
   React.useLayoutEffect(() => {
     lastFlush.current = null
-    setState({ scene: null, svg: null, error: null })
-    flushRef.current()
   }, [stream])
 
   const schedule = React.useCallback((): void => {
@@ -179,13 +235,18 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
     stream.close()
   }, [stream])
 
+  // Stable identities (per stream), so a consumer can list them as dependencies.
+  const pending = React.useCallback(() => stream.pending(), [stream])
+  const pulse = React.useCallback(() => lastFlush.current?.pulse ?? stream.pulse(), [stream])
+  const stats = React.useCallback(() => stream.stats(), [stream])
+
   return {
     ...state,
     push,
     flush,
-    pending: () => stream.pending(),
-    pulse: () => lastFlush.current?.pulse ?? stream.pulse(),
-    stats: () => stream.stats(),
+    pending,
+    pulse,
+    stats,
     paused,
     pause,
     resume,

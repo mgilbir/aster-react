@@ -1,3 +1,4 @@
+import * as React from 'react'
 import type { VgSpec } from '@aster/core'
 import { compileVegaLite } from './vl-registry.js'
 
@@ -24,3 +25,58 @@ export function normalizeChartSpec(spec: VgSpec): VgSpec {
 export function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
   return value != null && typeof (value as { then?: unknown }).then === 'function'
 }
+
+const MAX_COMPARE_DEPTH = 64
+
+/**
+ * Structural equality of JSON-shaped values (specs, limits): primitives by
+ * `Object.is`, arrays and plain objects member by member, and anything else
+ * (functions, Map/Set, class instances, typed arrays) by identity. A structure
+ * deeper than 64 levels (or cyclic) compares unequal. Allocation-free and stops at
+ * the first difference, so re-checking an equal 100k-row inline spec costs one pass
+ * and a changed one usually a few steps.
+ */
+export function contentEqual(a: unknown, b: unknown, depth = 0): boolean {
+  if (Object.is(a, b)) return true
+  if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object') return false
+  if (depth > MAX_COMPARE_DEPTH) return false
+  const arrA = Array.isArray(a)
+  if (arrA !== Array.isArray(b)) return false
+  if (arrA) {
+    const x = a as unknown[]
+    const y = b as unknown[]
+    if (x.length !== y.length) return false
+    for (let i = 0; i < x.length; i++) if (!contentEqual(x[i], y[i], depth + 1)) return false
+    return true
+  }
+  const protoA = Object.getPrototypeOf(a) as unknown
+  if ((protoA !== Object.prototype && protoA !== null) || Object.getPrototypeOf(b) !== protoA) return false
+  const x = a as Record<string, unknown>
+  const y = b as Record<string, unknown>
+  let count = 0
+  for (const k in x) {
+    if (!Object.prototype.hasOwnProperty.call(x, k)) continue
+    count++
+    if (!Object.prototype.hasOwnProperty.call(y, k) || !contentEqual(x[k], y[k], depth + 1)) return false
+  }
+  let other = 0
+  for (const k in y) if (Object.prototype.hasOwnProperty.call(y, k)) other++
+  return count === other
+}
+
+/**
+ * Return the previously seen object while the value keeps the same CONTENT.
+ * A parent that rebuilds an inline `spec`/`limits` literal on every render then
+ * does not look like a change: lifecycles keyed on this value (streams,
+ * workers, scene sessions, memo deps) survive, instead of restarting on object
+ * identity and discarding streamed state. Values that cannot be compared by
+ * content keep identity semantics.
+ */
+export function useStableContent<T extends object | undefined>(value: T): T {
+  const ref = React.useRef<T>(value)
+  if (ref.current !== value && !contentEqual(ref.current, value)) ref.current = value
+  return ref.current
+}
+
+/** `useStableContent` for specs. */
+export const useStableSpec = (spec: VgSpec): VgSpec => useStableContent(spec)

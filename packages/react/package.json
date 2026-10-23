@@ -30,7 +30,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "prepack": "node ../../scripts/copy-legal.mjs"
+    "prepack": "node ../../scripts/copy-legal.mjs",
+    "test:browser": "tsx scripts/browser-interaction.mts"
   },
   "dependencies": {
     "@aster/core": "workspace:*",
@@ -40,6 +41,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.2.4",
     "axe-core": "^4.14.0",
+    "playwright": "^1.62.1",
     "react": "^19.0.0",
     "react-dom": "^19.2.8",
     "tsx": "^4.19.0",

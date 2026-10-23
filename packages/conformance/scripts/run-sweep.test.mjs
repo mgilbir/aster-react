@@ -87,4 +87,32 @@ describe('run-sweep verdicts', { timeout: 60_000 }, () => {
     const within = sweep('node-error', '--floor', '2', '--min-ok', '1', '--max-node-error', '1')
     expect(within.code, within.out).toBe(0)
   })
+
+  it('a signal write the engine renders like vega is ok', () => {
+    const r = sweep('write-ok', '--floor', '1', '--min-ok', '1', '--max-node-error', '0')
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toMatch(/1 ok, 0 retained/)
+  })
+
+  it('writes reach the engine: an engine that differs from both vega renders is a difference', () => {
+    const r = sweep('write-differ', '--floor', '1', '--min-ok', '0', '--max-node-error', '0', '--max-retained', '1')
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toMatch(/0 retained/)
+    expect(r.out).toMatch(/1 differ/)
+  })
+
+  it("counts cases where vega's own second render differs from its fresh one against a ceiling", () => {
+    const over = sweep('write-retained', '--floor', '1', '--min-ok', '0', '--max-node-error', '0', '--max-retained', '0')
+    expect(over.code, over.out).toBe(1)
+    expect(over.out).toMatch(/1 retained/)
+    expect(over.out).toMatch(/RETAINED CEILING EXCEEDED/)
+    const within = sweep('write-retained', '--floor', '1', '--min-ok', '0', '--max-node-error', '0', '--max-retained', '1')
+    expect(within.code, within.out).toBe(0)
+  })
+
+  it('retained cases without a ceiling are not a pass', () => {
+    const r = sweep('write-retained', '--floor', '1', '--min-ok', '0', '--max-node-error', '0')
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toMatch(/no --max-retained ceiling/)
+  })
 })

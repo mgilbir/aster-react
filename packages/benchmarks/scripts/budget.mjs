@@ -59,11 +59,14 @@ const BUDGETS = {
   // Faithful scale/projection/interpolator ports (vega-parser parseScale + vega-encode Scale transform,
   // vega-geo Projection, the d3-interpolate colour spaces): core 123.0 -> 124.0, dom 126.3 -> 127.3 gzip
   // (+1.0). Ceilings are measured + 0.5 kB (owner approved).
-  '@aster/core': 124.5 * 1024,
-  '@aster/core/dom': 127.8 * 1024,
+  // Vega-faithful signal event loop (event-selector parser, stream graph, event extension, logger: signals
+  // 32.4 -> 41.0 gzip, the entry also carries the expression engine), the entry evaluator, error recovery and group
+  // paint/clip (core 124.1 -> 125.3, dom 127.4 -> 128.6). Ceilings are measured + 0.5 kB (owner approved raises).
+  '@aster/core': 125.8 * 1024,
+  '@aster/core/dom': 129.1 * 1024,
   '@aster/core/canvas': 20 * 1024,
   '@aster/core/hit': 16 * 1024,
-  '@aster/core/signals': 36 * 1024,
+  '@aster/core/signals': 41.5 * 1024,
   // 180 kB leaves headroom for feature work; measured values are recorded at
   // the top of this file and in `pnpm bench:bundle`.
   '@aster/react': 180 * 1024,
@@ -72,7 +75,12 @@ const BUDGETS = {
   // 209 = measured 208.5 + 0.5. The compiler is ~51.5 kB gzip of that (react base 157.0): it grew
   // from ~22.6 kB when @aster/vl became production-usable (validation layer, VL transform table,
   // composition nesting, errorbar/errorband, config.scale, invalid-value modes, safe escaping).
-  '@aster/react/vl': 209 * 1024,
+  // 213.8 = measured 213.3 + 0.5 (owner approved). The React audit fixes grew the base entry 157.0 -> 161.7
+  // gzip and so this row by the same ~4.7 kB: positional-scale derivation and serialized scales (pan/zoom for
+  // any scale name and for worker scenes), the worker protocol (limits, text metrics and url policy by name,
+  // validation, bounded producer queue), content-keyed lifecycles, stream recovery, the roving-tabindex a11y
+  // tree and the LoadOptions pass-through.
+  '@aster/react/vl': 218.8 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

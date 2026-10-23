@@ -296,11 +296,13 @@ describe('stream flush atomicity (C19)', () => {
   it('an expression error raised by a bad row restores the stream, and a corrected snapshot then applies', () => {
     const exprSpec = {
       ...(titled as object),
-      data: [{ name: 't', transform: [{ type: 'formula', expr: 'datum.o.k', as: 'ok' }] }],
+      // A row without `o` is a LIMIT violation inside the expression (a plain TypeError would now be
+      // logged and recovered, like vega's; limit refusals are never recovered and still throw).
+      data: [{ name: 't', transform: [{ type: 'formula', expr: 'datum.o ? datum.o.k : length(sequence(0, 1e9))', as: 'ok' }] }],
     } as unknown as VgSpec
     const withO = (r: Row): Row & { o: { k: number } } => ({ ...r, o: { k: r.id } })
     const good = rowsOf(1, 4).map(withO)
-    const stream = createChartStream(exprSpec)
+    const stream = createChartStream(exprSpec, { initial: { limits: { maxRows: 1000 } } })
     stream.push({ data: { t: good } })
     stream.flush()
     stream.push({ append: { t: rowsOf(5, 1).map(withO) } })
@@ -321,7 +323,7 @@ describe('stream flush atomicity (C19)', () => {
     const fixed = [...good, withO(row(5)), withO(row(6))]
     stream.push({ data: { t: fixed } })
     stream.flush()
-    expect(renderSceneToSvg(stream.scene()!)).toBe(fresh(exprSpec, { data: { t: fixed }, signals: { sig: 2 } }))
+    expect(renderSceneToSvg(stream.scene()!)).toBe(fresh(exprSpec, { data: { t: fixed }, signals: { sig: 2 }, limits: { maxRows: 1000 } }))
   })
 
   it('a failed FIRST flush does not poison the stream', () => {
@@ -479,13 +481,14 @@ describe('stream limits (C49)', () => {
 describe('stream discard() recovery', () => {
   const exprSpec = {
     ...(titled as object),
-    data: [{ name: 't', transform: [{ type: 'formula', expr: 'datum.o.k', as: 'ok' }] }],
+    // see above: the failing row is a limit violation, which is never recovered
+    data: [{ name: 't', transform: [{ type: 'formula', expr: 'datum.o ? datum.o.k : length(sequence(0, 1e9))', as: 'ok' }] }],
   } as unknown as VgSpec
   const withO = (r: Row): Row & { o: { k: number } } => ({ ...r, o: { k: r.id } })
 
   for (const policy of ['coalesce', 'drop-oldest', 'error'] as StreamPolicy[]) {
     it(`${policy}: a bad batch followed by good ones keeps failing until discard(); then only later data applies`, () => {
-      const stream = createChartStream(exprSpec, { policy, capacity: 8 })
+      const stream = createChartStream(exprSpec, { policy, capacity: 8, initial: { limits: { maxRows: 1000 } } })
       const good = rowsOf(1, 3).map(withO)
       stream.push({ data: { t: good } })
       stream.flush()
@@ -509,7 +512,7 @@ describe('stream discard() recovery', () => {
       const after = withO(row(11))
       stream.push({ append: { t: [after] } })
       stream.flush()
-      expect(renderSceneToSvg(stream.scene()!)).toBe(fresh(exprSpec, { data: { t: [...good, after] } }))
+      expect(renderSceneToSvg(stream.scene()!)).toBe(fresh(exprSpec, { data: { t: [...good, after] }, limits: { maxRows: 1000 } }))
     })
   }
 
@@ -520,5 +523,25 @@ describe('stream discard() recovery', () => {
     stream.close()
     expect(stream.discard()).toBe(0)
     expect(stream.stats().dropped).toBe(0)
+  })
+})
+
+describe('stream image url policy', () => {
+  const imgSpec = {
+    width: 50, height: 50, padding: 0, autosize: 'none',
+    data: [{ name: 't', values: [{ u: 'https://good.example/a.png' }, { u: 'https://evil.example/b.png' }] }],
+    marks: [{ type: 'image', from: { data: 't' }, encode: { update: { url: { field: 'u' }, x: { value: 0 }, y: { value: 0 } } } }],
+  } as unknown as VgSpec
+
+  it('initial.urlPolicy applies to every flush (denied images dropped via onDeny)', () => {
+    const denied: string[] = []
+    const stream = createChartStream(imgSpec, {
+      initial: { urlPolicy: { allow: (u) => u.host === 'good.example', onDeny: (u) => { denied.push(u) } } },
+    })
+    stream.flush()
+    expect(denied).toEqual(['https://evil.example/b.png'])
+    stream.push({ append: { t: [{ u: 'https://evil.example/c.png' }] } })
+    stream.flush()
+    expect(denied).toContain('https://evil.example/c.png')
   })
 })

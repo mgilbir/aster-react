@@ -3,12 +3,14 @@
  * renderer-neutral SceneRoot. Static execution mode: everything is evaluated
  * eagerly per call; the caller re-evaluates when inputs change.
  */
-import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
+import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, compileExprTransform, sortOrder, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
-import { activeMeter, withLimits, boundedCount, checkRowCount, meterItems, meterTick } from './limits.js'
+import { activeMeter, withLimits, boundedCount, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
+import { AsterUrlError } from './url-policy.js'
+import { consoleLogger, type Logger } from './logger.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale, type ScaleContext } from './scales.js'
 
 /** Scale types whose domain is an ordered set of discrete values. */
@@ -390,6 +392,26 @@ interface EvalContext {
   checkDeadline?: (phase?: string) => void
   /** URL policy for image marks (RuntimeInput.urlPolicy). */
   urlPolicy?: ImageUrlPolicy
+  /** Where recovered errors are reported (RuntimeInput.logger; default: the console). */
+  logger: Logger
+  /** An expression failed during this evaluation (its report was logged); the incremental state must not be committed. */
+  failed?: boolean
+  /** vega aborts the rest of an encode after its first error: later items stay unencoded. */
+  encodeAborted?: boolean
+  /** Datasets whose transform pipeline failed: nothing downstream of them is built. */
+  failedDatasets?: Set<string>
+}
+
+/**
+ * Report an error the engine recovers from, the way vega's Dataflow.error does: log it and go
+ * on. Errors that are the engine's own refusals -- limits, the URL policy, `[aster]` usage errors --
+ * and expressions that do not parse (vega throws those from vega.parse) are never recovered:
+ * they are rethrown to the caller.
+ */
+function reportEvalError(ctx: EvalContext, e: unknown): void {
+  if (e instanceof AsterLimitError || e instanceof AsterUrlError || e instanceof ExpressionParseError || (e instanceof Error && e.message.startsWith('[aster]'))) throw e
+  ctx.failed = true
+  ctx.logger.error(e)
 }
 
 /**
@@ -479,6 +501,7 @@ function prepareChartCtx(
     // run script, but a hostile spec can still make the viewer fetch an arbitrary
     // url (tracking pixel, IP leak). Hosts rendering foreign specs must opt in.
     urlPolicy: input.urlPolicy ?? (input.limits ? {} : undefined),
+    logger: input.logger ?? consoleLogger,
   }
   // A legend whose tickCount is an interval string on a non-time scale makes
   // vega's LegendEntries throw: the dataflow logs the error and the ViewLayout
@@ -1382,12 +1405,17 @@ export interface PendingEvaluation {
  */
 export function evaluateChartPending(chart: CompiledChart, input: RuntimeInput = {}): PendingEvaluation {
   const txn = beginTxn(chart)
-  const done: { draft?: IncrementalState } = {}
+  const done: { draft?: IncrementalState; failed?: boolean } = {}
   const scene = withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, done)))
   return {
     scene,
     commit() {
-      if (done.draft) STATES.set(chart, done.draft)
+      // An evaluation that logged a recovered error is not a base later pulses may be relative to
+      // (its items/datasets are the partial result of a failure): the committed state goes stale.
+      if (done.failed) {
+        const committed = STATES.get(chart)
+        if (committed) committed.stale = true
+      } else if (done.draft) STATES.set(chart, done.draft)
     },
   }
 }
@@ -1398,7 +1426,7 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   return pending.scene
 }
 
-function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState }): SceneRoot {
+function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
   const auto = chart.autosize
   const base = chart.padding
   // Differential-update generation (`txn.gen`): an unchanged (reused) item keeps
@@ -1509,6 +1537,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
   // The state the next incremental evaluation starts from; committed by the
   // caller once the scene is accepted.
   done.draft = ctx.draft
+  done.failed = ctx.failed === true
   return scene
 }
 
@@ -1544,19 +1573,11 @@ export function getChartInfo(spec: VgSpec, input: RuntimeInput = {}): ChartInfo 
 }
 
 function getChartInfoImpl(spec: VgSpec, input: RuntimeInput): ChartInfo {
-  const chart = compileChart(spec)
-  const { ctx, width, height } = prepareChartCtx(chart, input)
-
-  // Build the full scene (cheap relative to the caller's own render pass) so
-  // the padding matches evaluateChart's viewSizeLayout computation exactly.
-  const scene = evaluateChart(chart, input)
-
-  return {
-    width,
-    height,
-    padding: chart.autosize === 'none' ? chart.padding : (scene.padding ?? chart.padding),
-    scales: ctx.scales,
-  }
+  // ONE evaluation: the info is read off the evaluated scene, so it is the scene's own plot size,
+  // padding and scales -- under autosize `fit`/`pad` too, where the size the scales were built for
+  // is the fitted one, not the spec's (C53). (This used to prepare a second, unfitted context and
+  // then evaluate the whole chart again.)
+  return chartInfoFromScene(evaluateChart(compileChart(spec), input))
 }
 
 /**
@@ -2853,7 +2874,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     checkRowCount(rows.length, `dataset "${name}"`)
     if (inPulse) inPulse = normalizePulse(inPulse, rows.length)
     let outPulse: StepPulse | null = inPulse
-    if (d.transform.length) {
+    if (d.transform.length) try {
       const prevDS = ctx.prev?.datasets.get(name)
       const tctx: StepTransformContext = {
         runtime: ctx.runtime,
@@ -2893,6 +2914,13 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         outPulse = null
       }
       ctx.draft.datasets.set(name, state)
+    } catch (e) {
+      // vega: a transform that throws is logged and the dataset publishes nothing (the rest of
+      // its pipeline never runs, so everything downstream of it is empty / never built).
+      reportEvalError(ctx, e)
+      ;(ctx.failedDatasets ??= new Set()).add(name)
+      rows = []
+      outPulse = null
     }
     ctx.datasets.set(name, rows)
     ctx.datasetPulses.set(name, outPulse)
@@ -3197,7 +3225,16 @@ function buildScales(ctx: EvalContext): void {
         continue
       }
     }
-    const scale = buildScale(def, scaleContext(ctx, def.name))
+    let scale: Scale
+    try {
+      scale = buildScale(def, scaleContext(ctx, def.name))
+    } catch (e) {
+      // vega: the Scale operator throws, the dataflow logs it and the run stops there -- this scale
+      // and every operator after it (later scales, every encode) are never evaluated.
+      reportEvalError(ctx, e)
+      ctx.encodeAborted = true
+      break
+    }
     ctx.scales.set(s.name, scale)
     ctx.scaleTypes.set(s.name, s.type)
     const entry: ScaleEntry = { scale, multi }
@@ -3293,6 +3330,7 @@ function evaluateMark(
     return buildGroupMark(mark, ctx)
   }
   const source = mark.from?.data
+  if (source && ctx.failedDatasets?.has(source)) return null
 
   let items: SceneItem[]
   // Union bounds carried over from the previous group (pure appends only) and
@@ -3310,12 +3348,18 @@ function evaluateMark(
     if (mark.transform?.length) {
       rows = rawRows.map((r) => ({ ...r }))
       rowsCloned = true
-      rows = applyTransforms(rows, mark.transform, {
-        runtime: ctx.runtime,
-        signals: ctx.signalParams,
-        hierarchies: ctx.hierarchies,
-        projections: ctx.projections,
-      }, source)
+      try {
+        rows = applyTransforms(rows, mark.transform, {
+          runtime: ctx.runtime,
+          signals: ctx.signalParams,
+          hierarchies: ctx.hierarchies,
+          projections: ctx.projections,
+        }, source)
+      } catch (e) {
+        // a mark-level transform that throws publishes nothing (see buildDatasetsOf)
+        reportEvalError(ctx, e)
+        return null
+      }
     }
 
     // Keep dataset order for rect items: vega's scene keeps data order and
@@ -3430,9 +3474,16 @@ function evaluateMark(
 
   // vega's SortItems: a mark `sort` orders the ENCODED items by their own
   // properties (`x`, `datum.t`, `datum["t"]`), after the encode and before the
-  // bound pass; stable. (The sort used to run on the data rows, which only
-  // agreed for datum fields.)
-  if (mark.sort && source) items = sortMarkItems(items, mark.sort)
+  // bound pass; stable. A sort that throws is logged and the items stay in data order.
+  if (mark.sort && source) {
+    try { items = sortMarkItems(items, mark.sort) } catch (e) { reportEvalError(ctx, e) }
+  }
+
+  // Items an aborted run never encoded: vega's mark container holds them but they carry no geometry or paint,
+  // so (but for the zero-size rect path the renderers already read as `|| 0`) nothing of them is drawn.
+  if (ctx.encodeAborted && items.some((it) => (it as { __unencoded?: boolean }).__unencoded === true)) {
+    items = items.filter((it) => (it as { __unencoded?: boolean }).__unencoded !== true)
+  }
 
   // Text marks encoded in polar coordinates (`radius` + `theta`, e.g. pie
   // labels): vega's text renderer offsets the anchor by
@@ -3441,7 +3492,10 @@ function evaluateMark(
   // area {fill: '#4c78a8'}, text {fill: '#000'} — applied when the encode
   // leaves the property unspecified.
   if (mark.type === 'line' || mark.type === 'area' || mark.type === 'text') {
-    const fill = mark.type === 'text' ? '#000' : mark.type === 'area' ? '#4c78a8' : undefined
+    // vega-parser's applyDefaults skips the fill/stroke defaults when the ENCODE defines either channel
+    const enc = (mark.encode?.update ?? mark.encode?.enter ?? {}) as Record<string, unknown>
+    const paintDefined = enc.fill != null || enc.stroke != null
+    const fill = paintDefined ? undefined : mark.type === 'text' ? '#000' : mark.type === 'area' ? '#4c78a8' : undefined
     for (const it of items) {
       const rec = it as unknown as Record<string, unknown>
       if (fill !== undefined && rec.fill === undefined) rec.fill = fill
@@ -3622,15 +3676,76 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] {
   meterItems(sources.length, 'group items')
   const groups = sources.map((src) => { meterTick('group item'); return buildGroupItem(mark, ctx, src) })
   // SortItems: the group items are ordered by their own properties (`datum["g"]`, `x`, ...)
-  return mark.sort && groups.length > 1 ? (sortMarkItems(groups as SceneItem[], mark.sort) as SceneGroup[]) : groups
+  if (mark.sort && groups.length > 1) {
+    try { return sortMarkItems(groups as SceneItem[], mark.sort) as SceneGroup[] } catch (e) {
+      // vega logs a sort that throws and leaves the items in data order
+      reportEvalError(ctx, e)
+    }
+  }
+  return groups
 }
 
-/** vega Bound's rectangle offset for a group background (marks/group.js `offset`). */
-function groupStrokeOffset(item: SceneItem): number {
-  const rec = item as Record<string, unknown>
+const GROUP_PAINT_KEYS = ['fill', 'stroke', 'strokeWidth', 'strokeOpacity', 'fillOpacity', 'opacity', 'strokeDash', 'strokeDashOffset', 'strokeCap', 'strokeJoin', 'strokeMiterLimit', 'strokeOffset'] as const
+const GROUP_CORNER_KEYS = ['cornerRadius', 'cornerRadiusTopLeft', 'cornerRadiusTopRight', 'cornerRadiusBottomRight', 'cornerRadiusBottomLeft'] as const
+
+/**
+ * A group item's background (and, with `strokeForeground`, foreground) rectangle, as
+ * vega-scenegraph marks/group.js emits it: the rectangle of the item's own width/height with its
+ * corner radii, inset by the stroke offset (`strokeOffset`, else 0.5 - |sw - 1| for a stroke between
+ * 0.5 and 1.5 wide), painted with the item's fill/stroke; with `strokeForeground` the stroke moves to
+ * a rectangle drawn after the contents. Both are flagged `_bg`: they are the group's own box, which
+ * the bounds pass covers through its width/height.
+ */
+function groupBackground(geo: SceneItem, w: number, h: number): { background: SceneItem; foreground?: SceneItem; path: string; paint: Record<string, unknown>; corners: boolean } {
+  const rec = geo as unknown as Record<string, unknown>
   const sw = rec.strokeWidth == null ? 1 : Number(rec.strokeWidth)
-  if (rec.strokeOffset != null) return Number(rec.strokeOffset)
-  return item.stroke && sw > 0.5 && sw < 1.5 ? 0.5 - Math.abs(sw - 1) : 0
+  const off = rec.strokeOffset != null ? Number(rec.strokeOffset) : rec.stroke && sw > 0.5 && sw < 1.5 ? 0.5 - Math.abs(sw - 1) : 0
+  const shape: Record<string, unknown> = { x: off, y: off, width: w, height: h }
+  let corners = false
+  for (const k of GROUP_CORNER_KEYS) if (rec[k] !== undefined) { shape[k] = rec[k]; corners = true }
+  const path = String(rectItemPath(shape as SceneItem))
+  const fore = !!rec.strokeForeground
+  const paint: Record<string, unknown> = {}
+  for (const k of GROUP_PAINT_KEYS) if (rec[k] != null) paint[k] = rec[k]
+  const own: Record<string, unknown> = {}
+  for (const k of GROUP_PAINT_KEYS) if (rec[k] != null && !(fore && k === 'stroke')) own[k] = rec[k]
+  const background = { path, x: 0, y: 0, _bg: true, ...own } as unknown as SceneItem
+  if (!fore || !rec.stroke) return { background, path, paint, corners }
+  const strokePaint: Record<string, unknown> = {}
+  for (const k of GROUP_PAINT_KEYS) if (rec[k] != null && k !== 'fill' && k !== 'fillOpacity') strokePaint[k] = rec[k]
+  return { background, foreground: { path, x: 0, y: 0, _bg: true, ...strokePaint } as unknown as SceneItem, path, paint, corners }
+}
+
+/**
+ * The items of a group item: background, contents, foreground. With the item's `clip` channel the CONTENTS
+ * (not the background or foreground, which vega draws outside the clip `<g>`) sit in a nested pass-through
+ * group clipped to the item's own rectangle, with its corner radii.
+ */
+function groupItems(geo: SceneItem, w: number, h: number, content: SceneItem[]): { items: SceneItem[]; paint: Record<string, unknown> } {
+  const rec = geo as unknown as Record<string, unknown>
+  const bg = groupBackground(geo, w, h)
+  const out: SceneItem[] = [bg.background]
+  if (rec.clip) {
+    let clipPathD: string | undefined
+    if (bg.corners) {
+      const d = String(rectItemPath({ x: 0, y: 0, width: w, height: h, ...Object.fromEntries(GROUP_CORNER_KEYS.filter((k) => rec[k] !== undefined).map((k) => [k, rec[k]])) } as SceneItem))
+      if (/[CcAa]/.test(d)) clipPathD = d
+    }
+    out.push({ marktype: 'group', role: 'scope', clip: true, ...(clipPathD ? { clipPathD } : {}), width: w, height: h, x: 0, y: 0, items: content as SceneNode[] } as unknown as SceneItem)
+  } else {
+    pushAll(out, content)
+  }
+  if (bg.foreground) out.push(bg.foreground)
+  return { items: out, paint: bg.paint }
+}
+
+/** A mark's `clip`: a boolean, or `{signal}` evaluated like any signal (truthiness, as vega). */
+function markClip(mark: CompiledMark, ctx: EvalContext): boolean {
+  const c = (mark as { clip?: unknown }).clip
+  if (c !== null && typeof c === 'object' && typeof (c as { signal?: unknown }).signal === 'string') {
+    return !!ctx.runtime.expr((c as { signal: string }).signal)({}, ctx.signalParams)
+  }
+  return !!c
 }
 
 function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource): SceneGroup {
@@ -3700,36 +3815,21 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     if (title) siblings.push(title)
     const ordered = paintOrderOf(siblings)
 
-    // the background: the group's own box (marks/group.js), rounded by its corner radii
-    const off = groupStrokeOffset(geo)
-    const corners: Record<string, number> = {}
-    for (const k of Object.keys(geo)) if (k.startsWith('cornerRadius') && Number(geo[k as keyof SceneItem])) corners[k] = Number(geo[k as keyof SceneItem])
-    const bgPath = Object.keys(corners).length
-      ? rectItemPath({ x: off, y: off, width: gw, height: gh, ...corners } as SceneItem)!
-      : `M${off},${off}h${gw}v${gh}h${-gw}Z`
-    const paint: Record<string, unknown> = {}
-    for (const k of ['fill', 'stroke', 'strokeWidth', 'strokeOpacity', 'fillOpacity', 'opacity', 'strokeDash', 'strokeDashOffset', 'strokeCap', 'strokeJoin', 'strokeMiterLimit', 'strokeOffset'] as const) {
-      const v = (geo as Record<string, unknown>)[k]
-      if (v != null) paint[k] = v
-    }
-    const bg = { path: bgPath, x: 0, y: 0, _bg: true, ...paint } as unknown as SceneItem
+    // the item's `clip` (encode) clips its content to its own box; the mark's `clip` clips the whole mark to the enclosing group
+    const { items: groupContent, paint } = groupItems(geo, gw, gh, ordered)
     // a hyperlinked group (`href` in its encode) is vetted like any mark's link
     let href = (geo as Record<string, unknown>).href
     if (href != null && ctx.urlPolicy !== undefined && applyLinkUrlPolicy(href, ctx.urlPolicy) == null) href = undefined
-    // the item's `clip` (encode) clips its content to its own box; the mark's `clip` clips the whole mark to the enclosing group
-    const clip = (geo as Record<string, unknown>).clip === true
     const role = (mark.role as string | undefined) ?? 'scope'
 
     const group = {
       marktype: 'group', name: mark.name, role, x: gx, y: gy, width: gw, height: gh,
-      items: clip
-        ? [bg, { marktype: 'group', role: 'scope', clip: true, ...(Object.keys(corners).length ? { clipPathD: bgPath } : {}), width: gw, height: gh, x: 0, y: 0, items: ordered } as SceneGroup]
-        : [bg, ...ordered],
+      items: groupContent,
       ...paint,
       datum: src.datum,
       _scope: true,
       ...(href != null ? { href: href as string } : {}),
-      ...(mark.clip === true ? { markClip: true } : {}),
+      ...(markClip(mark, ctx) ? { markClip: true } : {}),
     } as unknown as SceneGroup
     if (mark.scales?.length) group.__scales = snapshotScales(childCtx.scales)
     return group
@@ -3841,6 +3941,31 @@ interface EncodePlan {
   signalKeys: string[]
   /** The `defined` signal spec, resolved before datum mutation. */
   definedSpec: EncodeValue | EncodeValue[] | undefined
+  /** Each plain key's spec and its shape (EK_*), so the per-row loop does no shape tests. */
+  plainSpecs: Array<EncodeValue | EncodeValue[]>
+  plainKinds: Uint8Array
+}
+
+// Encode entry shapes with a dedicated per-row path; everything else takes the general evaluator.
+const EK_GENERIC = 0
+/** `{value: <primitive>}` and nothing else. */
+const EK_CONST = 1
+/** `{field: <path>}` and nothing else. */
+const EK_FIELD = 2
+/** `{scale: <name>, field: <path>}` and nothing else. */
+const EK_SCALE_FIELD = 3
+
+function encodeKind(spec: EncodeValue | EncodeValue[] | undefined): number {
+  if (spec == null || typeof spec !== 'object' || Array.isArray(spec)) return EK_GENERIC
+  const keys = Object.keys(spec)
+  const rec = spec as unknown as Record<string, unknown>
+  if (keys.length === 1) {
+    if (keys[0] === 'value' && (rec.value === null || typeof rec.value !== 'object')) return EK_CONST
+    if (keys[0] === 'field' && typeof rec.field === 'string') return EK_FIELD
+  } else if (keys.length === 2 && typeof rec.scale === 'string' && typeof rec.field === 'string') {
+    return EK_SCALE_FIELD
+  }
+  return EK_GENERIC
 }
 
 /** Per-mark, per-eval scale bindings for encode channels. The encode value
@@ -3892,12 +4017,15 @@ function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): Encode
     }
     plainKeys.push(key)
   }
-  plan = { plainKeys, signalKeys, definedSpec }
+  const plainSpecs = plainKeys.map((k) => encode[k]!)
+  const plainKinds = Uint8Array.from(plainSpecs, encodeKind)
+  plan = { plainKeys, signalKeys, definedSpec, plainSpecs, plainKinds }
   encodePlanCache.set(encode, plan)
   return plan
 }
 
 function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
+  if (ctx.encodeAborted) return { __unencoded: true } as SceneItem
   const plan = encodePlan(encode)
   const binding = ctx.encodeBinding
 
@@ -3908,68 +4036,98 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
   // `defined` is evaluated against the data tuple, as Vega does.
   let definedValue: unknown
   if (plan.definedSpec !== undefined) {
-    definedValue = resolveEncodeProperty(plan.definedSpec, datum, ctx, binding)
+    try {
+      definedValue = resolveEncodeProperty(plan.definedSpec, datum, ctx, binding)
+    } catch (e) {
+      reportEvalError(ctx, e)
+      ctx.encodeAborted = true
+      return {}
+    }
   }
 
   // Pass 1: resolve all non-signal values straight into the item (no
   // intermediate per-row object — this is the hottest loop in the engine).
   const item: SceneItem = {}
   const rec = item as unknown as Record<string, unknown>
-  for (const key of plan.plainKeys) {
-    const resolved = resolveEncodeProperty(encode[key], datum, ctx, binding)
-    if (resolved !== undefined) {
-      rec[key] = resolved
+  // vega's Encode throws at the first failing channel; the dataflow logs it and stops the run:
+  // this item keeps the channels evaluated before the failure and no later item is encoded.
+  try {
+    const { plainKeys, plainSpecs, plainKinds } = plan
+    for (let i = 0; i < plainKeys.length; i++) {
+      let resolved: unknown
+      switch (plainKinds[i]) {
+        case EK_CONST: resolved = (plainSpecs[i] as { value: unknown }).value; break
+        case EK_FIELD: resolved = getField(datum, (plainSpecs[i] as { field: string }).field); break
+        case EK_SCALE_FIELD: {
+          const spec = plainSpecs[i] as unknown as { scale: string; field: string }
+          const bound = binding?.get(spec)
+          if (bound) resolved = scaleValue(bound.scale, bound.type, getField(datum, spec.field))
+          else {
+            const s = ctx.scales.get(spec.scale)
+            resolved = s ? scaleValue(s, ctx.scaleTypes.get(spec.scale), getField(datum, spec.field)) : undefined
+          }
+          break
+        }
+        default: resolved = resolveEncodeProperty(plainSpecs[i], datum, ctx, binding)
+      }
+      if (resolved !== undefined) {
+        rec[plainKeys[i]!] = resolved
+      }
     }
-  }
 
-  if (definedValue !== undefined) {
-    rec['defined'] = definedValue
-  }
-  for (const key of plan.signalKeys) {
-    const resolved = resolveEncodeProperty(encode[key], datum, ctx, binding)
-    if (resolved !== undefined) {
-      rec[key] = resolved
+    if (definedValue !== undefined) {
+      rec['defined'] = definedValue
     }
+    for (const key of plan.signalKeys) {
+      const resolved = resolveEncodeProperty(encode[key], datum, ctx, binding)
+      if (resolved !== undefined) {
+        rec[key] = resolved
+      }
+    }
+  } catch (e) {
+    reportEvalError(ctx, e)
+    ctx.encodeAborted = true
+    // vega evaluates the channels in spec order, so the failing item keeps exactly the channels
+    // BEFORE the failing one (the two passes above group plain values ahead of signals).
+    const partial: SceneItem = {}
+    const prec = partial as unknown as Record<string, unknown>
+    for (const key of Object.keys(encode)) {
+      try {
+        const v = resolveEncodeProperty(encode[key], datum, ctx, binding)
+        if (v !== undefined) prec[key] = v
+      } catch {
+        break
+      }
+    }
+    return partial
   }
-  // Post-process: vega parse/mark `adjustSpatial` — resolve x2/xc/y2/yc into
-  // x/y/width/height. Rule marks skip it entirely (their x2/y2 are line
-  // endpoints, not edges); rect/group/image swap so x/y is the min edge.
-  // x2/y2 overwrite an encoded width/height; xc/yc only set x/y.
+  // Post-process: vega-runtime's `adjustSpatial`, which acts on the CHANNELS the encode defines
+  // (not on whether their values came out finite): x2/xc/y2/yc become x/y/width/height. Rule
+  // marks skip it entirely (their x2/y2 are line endpoints, not edges); rect/group/image swap so
+  // x/y is the min edge. The arithmetic is JS's, so a NaN or missing operand gives NaN, which the
+  // renderers read as 0 (`item.width || 0`) exactly as vega's do.
   if (marktype !== 'rule') {
     const canSwap = marktype === 'rect' || marktype === 'group' || marktype === 'image'
-    const num = (v: unknown): number | null =>
-      v != null && typeof v === 'number' && Number.isFinite(v) ? v : null
-    const x2 = num(rec['x2'])
-    const xc = num(rec['xc'])
-    const y2 = num(rec['y2'])
-    const yc = num(rec['yc'])
-    if (x2 != null) {
-      const x = num(rec['x'])
-      if (x != null) {
-        if (canSwap && x > x2) { rec['x'] = x2; rec['x2'] = x }
-        rec['width'] = (rec['x2'] as number) - (rec['x'] as number)
+    const has = (k: string): boolean => encode[k] != null
+    const n = (k: string): number => rec[k] as number
+    if (has('x2')) {
+      if (has('x')) {
+        if (canSwap && n('x') > n('x2')) { const t = rec['x']; rec['x'] = rec['x2']; rec['x2'] = t }
+        rec['width'] = n('x2') - n('x')
       } else {
-        rec['x'] = x2 - (num(rec['width']) ?? 0)
+        rec['x'] = n('x2') - (n('width') || 0)
       }
     }
-    if (xc != null) rec['x'] = xc - (num(rec['width']) ?? 0) / 2
-    if (y2 != null) {
-      const y = num(rec['y'])
-      if (y != null) {
-        if (canSwap && y > y2) { rec['y'] = y2; rec['y2'] = y }
-        rec['height'] = (rec['y2'] as number) - (rec['y'] as number)
+    if (has('xc')) rec['x'] = n('xc') - (n('width') || 0) / 2
+    if (has('y2')) {
+      if (has('y')) {
+        if (canSwap && n('y') > n('y2')) { const t = rec['y']; rec['y'] = rec['y2']; rec['y2'] = t }
+        rec['height'] = n('y2') - n('y')
       } else {
-        rec['y'] = y2 - (num(rec['height']) ?? 0)
+        rec['y'] = n('y2') - (n('height') || 0)
       }
     }
-    if (yc != null) rec['y'] = yc - (num(rec['height']) ?? 0) / 2
-    // A rect with a resolved position but no size channel (e.g. an x2 scale
-    // over an invalid aggregate) is zero-size, not absent: vega's
-    // adjustSpatial leaves width/height undefined and the rect path degenerates.
-    if (canSwap) {
-      if (rec['x'] != null && rec['width'] == null && rec['x2'] == null) rec['width'] = 0
-      if (rec['y'] != null && rec['height'] == null && rec['y2'] == null) rec['height'] = 0
-    }
+    if (has('yc')) rec['y'] = n('yc') - (n('height') || 0) / 2
   }
 
   return item
@@ -3983,22 +4141,15 @@ function resolveEncodeProperty(
 ): unknown {
   if (spec == null) return undefined
   if (Array.isArray(spec)) {
-    // Vega conditional encode: entries are tested in order; the first matching
-    // `test` wins, and an entry with no `test` is the unconditional fallback
-    // (the "otherwise" value).
+    // Vega conditional encode (vega-parser encode/rule.js): the entries become one
+    // expression `(test1)?v1:(test2)?v2:...:vN`, so tests run in order and only the
+    // matching branch is evaluated; an entry with no `test` is the "otherwise" value.
+    // A test or branch that throws is NOT caught here: in vega the whole encode
+    // throws and the dataflow logs it (see resolveEncodeSet, which reports it).
     for (const cond of spec) {
       if (cond && typeof cond === 'object' && 'test' in cond && typeof cond.test === 'string') {
-        try {
-          const test = ctx.runtime.expr(cond.test)
-          if (test(datum, ctx.signalParams)) {
-            try {
-              return resolveEncodeValueInternal(cond, datum, ctx, binding)
-            } catch {
-              return undefined
-            }
-          }
-        } catch {
-          // Expression evaluation failed (e.g., datum has no field); skip condition
+        if (ctx.runtime.expr(cond.test)(datum, ctx.signalParams)) {
+          return resolveEncodeValueInternal(cond, datum, ctx, binding)
         }
       } else if (cond && typeof cond === 'object') {
         return resolveEncodeValueInternal(cond, datum, ctx, binding)
@@ -4009,184 +4160,171 @@ function resolveEncodeProperty(
   return resolveEncodeValueInternal(spec, datum, ctx, binding)
 }
 
+/** The keys of an encode entry (vega-parser encode/entry.js). */
+interface EncodeEntry {
+  signal?: string
+  field?: unknown
+  value?: unknown
+  scale?: unknown
+  range?: unknown
+  band?: unknown
+  extra?: unknown
+  exponent?: unknown
+  mult?: unknown
+  offset?: unknown
+  round?: unknown
+  format?: unknown
+  formatType?: unknown
+}
+
+/**
+ * A property that may itself be an encode entry (vega entry.js `property()`):
+ * `mult`, `offset`, `exponent` and `band` take a number or a nested entry such as
+ * `{signal}`, `{field}` or `{scale, field}`.
+ */
+function entryProperty(p: unknown, datum: Row, ctx: EvalContext, binding?: EncodeBinding): unknown {
+  return p !== null && typeof p === 'object' ? resolveEncodeValueInternal(p as EncodeValue, datum, ctx, binding) : p
+}
+
+/** The group a `{group|parent}` field reference points at, `level` groups up (this engine has the enclosing facet group only). */
+function groupFieldValue(ref: { group?: unknown; parent?: unknown }, datum: Row, ctx: EvalContext): unknown {
+  if (ref.parent !== undefined) {
+    // `item.mark.group.datum[field]`: the facet cell's datum is the `parent` signal there
+    const parent = ctx.signalParams['parent']
+    return parent != null && typeof ref.parent === 'string' ? getField(parent as Row, ref.parent) : undefined
+  }
+  const key = ref.group
+  if (key === 'width') return ctx.width
+  if (key === 'height') return ctx.height
+  if (key === 'x') return ctx.groupX ?? 0
+  if (key === 'y') return ctx.groupY ?? 0
+  return 0
+}
+
+/** A field reference in any of vega's forms: a path, `{datum}`, `{signal}`, `{group}`, `{parent}`. */
+function encodeFieldValue(ref: unknown, datum: Row, ctx: EvalContext): unknown {
+  if (ref !== null && typeof ref === 'object' && !Array.isArray(ref)) {
+    const r = ref as { signal?: unknown; group?: unknown; parent?: unknown; datum?: unknown }
+    if (r.signal) return (datum as Record<string, unknown>)[ctx.runtime.expr(String(r.signal))(datum, ctx.signalParams) as string]
+    if (r.group !== undefined || r.parent !== undefined) return groupFieldValue(r, datum, ctx)
+    if (r.datum !== undefined) return encodeFieldValue(r.datum, datum, ctx)
+    throw new Error('Invalid field reference: ' + JSON.stringify(ref))
+  }
+  return getField(datum, ref as string)
+}
+
+/** The scale an entry names: a string, `{signal}` (an expression giving the name) or a field reference giving it. */
+function encodeScaleOf(enc: EncodeEntry, datum: Row, ctx: EvalContext, binding?: EncodeBinding): { scale: Scale | undefined; type: string | undefined } {
+  const ref = enc.scale
+  if (typeof ref === 'string') {
+    const bound = binding?.get(enc as object)
+    if (bound) return { scale: bound.scale, type: bound.type }
+    return { scale: ctx.scales.get(ref), type: ctx.scaleTypes.get(ref) }
+  }
+  const name = ref !== null && typeof ref === 'object' && (ref as { signal?: unknown }).signal
+    ? ctx.runtime.expr(String((ref as { signal: string }).signal))(datum, ctx.signalParams)
+    : encodeFieldValue(ref, datum, ctx)
+  return { scale: ctx.scales.get(name as string), type: ctx.scaleTypes.get(name as string) }
+}
+
+/** `_scale(scale, value)`: the engine's tolerant coercions around the scale call. */
+function scaleValue(s: Scale, type: string | undefined, raw: unknown): unknown {
+  if (raw === undefined) {
+    // A discrete domain can legitimately contain undefined (e.g. an aggregate
+    // over a nominal field); vega still maps that domain entry through the scale
+    // rather than dropping the channel.
+    const dom = s.domain?.() as unknown[] | undefined
+    if (!Array.isArray(dom) || !dom.includes(undefined)) return undefined
+  }
+  if ((type === 'time' || type === 'utc') && typeof raw === 'string') {
+    const dateObj = new Date(raw)
+    if (Number.isFinite(dateObj.getTime())) raw = dateObj
+  }
+  return s(raw)
+}
+
 function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, ctx: EvalContext, binding?: EncodeBinding): unknown {
   if (value == null || typeof value !== 'object') return value
-  // 1. Signal always takes priority - evaluate the expression
-  if ('signal' in value && value.signal !== undefined) {
-    try {
-      let result = ctx.runtime.expr(value.signal as string)(datum, ctx.signalParams)
-      if (result != null && typeof result === 'number') {
-        const multVal = (value as { mult?: number }).mult
-        if (typeof multVal === 'number') result *= multVal
-        const offsetVal = (value as { offset?: number }).offset
-        if (typeof offsetVal === 'number') result += offsetVal
-      }
-      return result
-    } catch {
-      return undefined
-    }
-  }
-  // 2. Scale resolution - maps a value (or datum field) through a scale
-  if ('scale' in value) {
-    const multVal = (value as { mult?: number }).mult
-    const offsetVal = (value as { offset?: number }).offset
-    // Per-mark binding (populated once per mark per eval) avoids two Map lookups
-    // per row per channel; fall back to the live maps for anything it missed.
-    const bound = binding?.get(value as object)
-    const scale = bound ? bound.scale : (ctx.scales.get(value.scale as string) as Scale | undefined)
-    const field = (value as { field?: unknown }).field
-    const bandSpec = (value as { band?: boolean | number | { signal: string } }).band
-    const offsetSpec = (value as { offset?: number | { signal: string } }).offset
-    let s = scale as Scale | undefined
+  // vega-parser encode/entry.js, evaluated instead of compiled to an expression:
+  //   value = (signal) | color | field | value;  value = scale(value);
+  //   pow(value, exponent);  value *= mult;  value += offset;  round(value)
+  // The code is concatenated TEXT there, so operator precedence matters: with a
+  // `band` the scale part is `_scale(..) + _bandwidth(..)*band`, and a trailing
+  // `*mult` binds to the bandwidth term only (see `tail` below).
+  const enc = value as EncodeEntry
+  let head: unknown
+  let hasHead = true
+  if (enc.signal) head = ctx.runtime.expr(enc.signal)(datum, ctx.signalParams)
+  else if (enc.field != null) head = encodeFieldValue(enc.field, datum, ctx)
+  else if (enc.value !== undefined) {
+    const v = enc.value
+    head = v !== null && typeof v === 'object' && 'signal' in v ? resolveEncodeValueInternal(v as EncodeValue, datum, ctx, binding) : v
+  } else hasHead = false
+
+  // `tail` is a product term added to `head` (the band step `_bandwidth(scale)*band`)
+  let tail: number | undefined
+  if (enc.scale != null) {
+    const { scale: s, type } = encodeScaleOf(enc, datum, ctx, binding)
     if (!s) return undefined
-    
-    // If scale is band and no field/value, return bandwidth (for {scale, band} encoding)
-    if (s.bandwidth && field == null) {
-      const litValue = (value as { value?: unknown }).value
-      let raw: unknown
-      if (litValue !== undefined) {
-        raw = litValue
-      } else {
-        // { scale: "x", band: 1 } - return bandwidth * band fraction, then
-        // apply the encode's offset/mult. Vega's `height: {scale:'y', band:1,
-        // offset:-1}` is the common bar-gap idiom.
-        const fraction = bandSpec === true ? 0.5 : (typeof bandSpec === 'number' ? bandSpec : 1)
-        let result = s.bandwidth() * fraction
-        if (offsetSpec != null) {
-          if (typeof offsetSpec === 'number') result += offsetSpec
-          else if (typeof offsetSpec === 'object' && 'signal' in offsetSpec) {
-            result += ctx.runtime.expr(offsetSpec.signal as string)(datum, ctx.signalParams) as number
-          }
-        }
-        if (typeof multVal === 'number') result *= multVal
-        return result
-      }
-    } else if (field != null) {
-      // 3a. Use datum field as the value to scale
+    if (enc.range != null) {
+      // lerp(_range(scale), +range)
+      const r = s.range() as number[]
+      const t = +(enc.range as number)
+      const lo = r.length <= 1 ? r[0] ?? 0 : r[0]!
+      const hi = r.length <= 1 ? r[0] ?? 0 : r[r.length - 1]!
+      head = (1 - t) * lo + t * hi
+      hasHead = true
     } else {
-      // 3b. Use literal value as input to scale
-      const litValue = (value as { value?: unknown }).value
-      if (litValue === undefined) return undefined
-    }
-    
-    // Get the value to scale
-    let raw: unknown
-    if (field != null) {
-      raw = getField(datum, field as string)
-    } else {
-      raw = (value as { value?: unknown }).value
-    }
-    if (raw === undefined) {
-      // A discrete domain can legitimately contain undefined (e.g. an
-      // aggregate over a nominal field); vega still maps that domain entry
-      // through the scale rather than dropping the channel.
-      const dom = s.domain?.() as unknown[] | undefined
-      if (!Array.isArray(dom) || !dom.includes(undefined)) return undefined
-    }
-    
-    const scaleType = bound ? bound.type : ctx.scaleTypes.get(value.scale as string)
-    if ((scaleType === 'time' || scaleType === 'utc') && typeof raw === 'string') {
-      const dateObj = new Date(raw)
-      if (dateObj instanceof Date && Number.isFinite(dateObj.getTime())) {
-        raw = dateObj
-      }
-    }
-    
-    const scaled = s(raw) as number
-    let position = scaled
-    
-    // 4. Band placement: position = scale(raw) + bandFraction * bandwidth
-    if (bandSpec != null && s.bandwidth) {
-      const bandwidth = s.bandwidth()
-      let bandFraction: number
-      if (bandSpec === true) {
-        bandFraction = 0.5
-      } else if (typeof bandSpec === 'number') {
-        bandFraction = bandSpec
-      } else if (bandSpec && typeof bandSpec === 'object' && 'signal' in bandSpec) {
-        bandFraction = ctx.runtime.expr(bandSpec.signal as string)(datum, ctx.signalParams) as number
-      } else {
-        bandFraction = 0.5
-      }
-      position = scaled + bandFraction * bandwidth
-    }
-    
-    // 5. Offset: add offset after band placement
-    if (offsetSpec != null) {
-      let offset: number
-      if (typeof offsetSpec === 'number') {
-        offset = offsetSpec
-      } else if (offsetSpec && typeof offsetSpec === 'object' && 'scale' in offsetSpec) {
-        // Scale-based offset (e.g. from Vega-Lite's xOffset encoding):
-        // { scale: "xOffset", field: "group" }
-        const offScale = ctx.scales.get((offsetSpec as { scale: string }).scale)
-        if (offScale) {
-          const offField = (offsetSpec as { field?: string }).field
-          const offRaw = offField ? getField(datum, offField) : undefined
-          offset = offRaw !== undefined ? offScale(offRaw) as number : 0
+      if (hasHead) head = scaleValue(s, type, head)
+      if (enc.band) {
+        // + _bandwidth(scale) [* band]   (a band of exactly 1, or `true`, has no factor)
+        const bw = typeof s.bandwidth === 'function' ? s.bandwidth() : 0
+        const factor = enc.band === true ? 1 : +(entryProperty(enc.band, datum, ctx, binding) as number)
+        const term = factor === 1 ? bw : bw * factor
+        if (enc.extra) {
+          // (datum.extra ? _scale(scale, datum.extra.value) : value)
+          const extra = (datum as { extra?: { value?: unknown } }).extra
+          head = extra ? scaleValue(s, type, extra.value) : hasHead ? (head as number) + term : term
+          hasHead = true
         } else {
-          offset = 0
+          tail = term
         }
-      } else if (offsetSpec && typeof offsetSpec === 'object' && 'signal' in offsetSpec) {
-        offset = ctx.runtime.expr(offsetSpec.signal as string)(datum, ctx.signalParams) as number
-      } else {
-        offset = 0
+      } else if (!hasHead) {
+        head = 0
+        hasHead = true
       }
-      position += offset
     }
-    
-    // Apply mult after scale resolution (only if it is an actual number, not a signal object).
-    // The offset was already applied in step 5 (offsetSpec) — applying the
-    // tail's offsetVal here would double it.
-    if (typeof multVal === 'number') position = position * multVal
-    if (offsetSpec == null && typeof offsetVal === 'number') position = position + offsetVal
-    return position
   }
-  if ('field' in value) {
-    // Handle Vega group field references: {field: {group: "width"}} etc.
-    // These reference the enclosing group's scenegraph properties.
-    const fieldSpec = value.field as unknown
-    if (fieldSpec != null && typeof fieldSpec === 'object' && !Array.isArray(fieldSpec) && 'group' in (fieldSpec as Record<string, unknown>)) {
-      const groupKey = (fieldSpec as { group: string }).group
-      let v: unknown
-      if (groupKey === 'width') v = ctx.width
-      else if (groupKey === 'height') v = ctx.height
-      else if (groupKey === 'x') v = ctx.groupX ?? 0
-      else if (groupKey === 'y') v = ctx.groupY ?? 0
-      else v = 0
-      if (v != null && typeof v === 'number') {
-        const multValField = (value as { mult?: number }).mult
-        if (multValField != null) v *= multValField
-        const offsetValField = (value as { offset?: number }).offset
-        if (offsetValField != null) v += offsetValField
-      }
-      return v
-    }
-    let v = getField(datum, value.field as string)
-    if (v != null && typeof v === 'number') {
-      const multValField = (value as { mult?: number }).mult
-      if (multValField != null) v *= multValField
-      const offsetValField = (value as { offset?: number }).offset
-      if (offsetValField != null) v += offsetValField
-      v = formatValue(v, value)
-    }
-    return v
+
+  const exponent = enc.exponent
+  const mult = enc.mult
+  const offset = enc.offset
+  if (exponent == null && mult == null && offset == null && !enc.round) {
+    if (tail !== undefined) return hasHead ? (head as number) + tail : tail
+    if (!hasHead) return undefined
+    return enc.field != null && enc.scale == null && enc.format !== undefined && typeof head === 'number' ? formatValue(head, value) : head
   }
-  if ('value' in value) {
-    const v = value.value
-    let result = typeof v === 'object' && v != null && 'signal' in v
-      ? (resolveEncodeValueInternal(v as EncodeValue, datum, ctx) as number)
-      : (v as number)
-    // Apply mult/offset
-    if (typeof result === 'number' && Number.isFinite(result)) {
-      const multVal = (value as { mult?: number }).mult
-      if (multVal != null) result *= multVal
-      const offsetVal = (value as { offset?: number }).offset
-      if (offsetVal != null) result += offsetVal
-    }
-    return result
+
+  // from here the text is `value [pow] [*mult] [+offset]`, rounded as a whole
+  let result: unknown
+  if (exponent != null) {
+    result = Math.pow(tail !== undefined ? (hasHead ? (head as number) + tail : tail) : (hasHead ? head : null) as number, +(entryProperty(exponent, datum, ctx, binding) as number))
+    tail = undefined
+  } else if (tail !== undefined) {
+    result = hasHead ? head : undefined
+  } else {
+    result = hasHead ? head : null
   }
-  return undefined
+  if (mult != null) {
+    const m = entryProperty(mult, datum, ctx, binding) as number
+    if (tail !== undefined) tail = tail * m
+    else result = (result as number) * m
+  }
+  if (tail !== undefined) result = !hasHead ? tail : (result as number) + tail
+  if (offset != null) result = (result as number) + (entryProperty(offset, datum, ctx, binding) as number)
+  if (enc.round) result = Math.round(result as number)
+  if (enc.field != null && enc.scale == null && enc.format !== undefined && typeof result === 'number') result = formatValue(result, value)
+  return result
 }
 
 /**

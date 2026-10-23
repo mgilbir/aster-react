@@ -5,7 +5,7 @@
  * chart through upstream vega (oracle) and through @aster/core, and compare the
  * SVG. A value upstream refuses is still a case: "both refuse" is agreement.
  *
- * Usage: npx tsx src/run-sweep.ts <sweep-name> --floor N --min-ok N --max-node-error N [--filter substr] [--vega-check]
+ * Usage: npx tsx src/run-sweep.ts <sweep-name> --floor N --min-ok N --max-node-error N [--max-retained N] [--filter substr] [--vega-check]
  *   sweeps: vega-schema | vega-lite-schema | values | signals
  *
  * The run only passes when ALL of these hold (a vacuous run must never pass):
@@ -32,7 +32,8 @@ import * as vega from 'vega'
 import * as vl from 'vega-lite'
 import '@aster/core/geo'
 import '@aster/core/transforms'
-import { renderSpec } from '@aster/core'
+import { renderSpec, renderSceneToSvg } from '@aster/core'
+import { createChartSession } from '@aster/core/dom'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { compile as compileVL } from '@aster/vl'
 import { renderWithVega, renderWithVegaChecked } from './render-vega.js'
@@ -87,6 +88,7 @@ interface SweepCase {
 
 interface Status {
   ok: number
+  retained: number
   bothRefused: number
   nodeError: number
   engineError: number
@@ -136,10 +138,30 @@ async function oracleIsNondeterministic(vgSpec: Record<string, unknown>, writes:
   }
 }
 
+/**
+ * The oracle's FRESH answer to a signals-sweep write: a new view whose signal starts at the written
+ * value (no earlier run to retain anything from). Null when that cannot be built or errors.
+ */
+async function renderOracleFresh(vgSpec: Record<string, unknown>, writes: NonNullable<SweepCase['writes']>): Promise<string | null> {
+  const spec = JSON.parse(JSON.stringify(vgSpec)) as { signals?: Array<Record<string, unknown>> }
+  for (const w of writes) {
+    const def = spec.signals?.find((s) => s.name === w.name)
+    if (!def) return null
+    def.value = w.value
+    delete def.init
+    delete def.update
+  }
+  try {
+    return await renderOracle(spec as Record<string, unknown>, undefined)
+  } catch {
+    return null
+  }
+}
+
 /** --vega-check: also render the Vega @aster/vl EMITS through real vega (see the header). */
 let vegaCheck = false
 
-async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'both-refused' | 'node-error' | 'engine-error' | 'differ' | 'nondeterministic' | 'vega-differ'> {
+async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'retained' | 'both-refused' | 'node-error' | 'engine-error' | 'differ' | 'nondeterministic' | 'vega-differ'> {
   // Vega-Lite cases compare the compiled Vega: upstream vl.compile vs
   // @aster/vl, each rendered through its own engine (a VL defect lives in
   // the spec it emits — see the sweep's header note).
@@ -177,7 +199,17 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
   let ourErr = ''
   try {
     const loaded = await loadSpecData(ourVgSpec as never, TRUSTED_LOAD_OPTIONS)
-    ourSvg = renderSpec(loaded as never)
+    if (c.writes?.length) {
+      // signals sweep: the engine does what the oracle does -- draw, write the
+      // signals into the running chart, draw again (an incremental session, so
+      // retained state across the write is compared too).
+      const session = createChartSession()
+      session.evaluate(loaded as never)
+      const input = { signals: Object.fromEntries(c.writes.map((w) => [w.name, w.value])) }
+      ourSvg = renderSceneToSvg(session.evaluate(loaded as never, input))
+    } else {
+      ourSvg = renderSpec(loaded as never)
+    }
   } catch (e) {
     ourErr = (e as Error).message
   }
@@ -222,6 +254,21 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
     }
   }
   if (diffs.length === 0) return 'ok'
+  if (c.writes?.length) {
+    // The engine is a pure function of (spec, data, signals): a session that writes a signal
+    // renders exactly what a fresh chart with that value renders (incremental === fresh, the
+    // stack's invariant). Vega's own incremental run is not: it retains the view size (autosize
+    // runs once, and again only when width/height/padding/autosize change) and other dataflow
+    // state, so its second render can differ from ITS OWN fresh render of the same signals.
+    // Such a case is 'retained' when the engine equals vega's fresh render and vega's second
+    // render does not; the count is a ceiling (--max-retained) that can only be lowered.
+    const fresh = await renderOracleFresh(vgSpec, c.writes)
+    if (fresh !== null) {
+      try {
+        if (diffCanonical(canonicalizeSvg(fresh), canonicalizeSvg(ourSvg!)).length === 0) return 'retained'
+      } catch { /* the canonicalizer cannot judge: a difference */ }
+    }
+  }
   if (isBootstrapCase(c) && (await oracleIsNondeterministic(vgSpec, c.writes, oracleSvg!))) return 'nondeterministic'
   console.error(`  [differ] ${c.name} (${c.family}.${c.property}): ${diffs[0]}`)
   return 'differ'
@@ -252,6 +299,7 @@ async function main(): Promise<void> {
   const floor = intFlag(args, '--floor')
   const minOk = intFlag(args, '--min-ok')
   const maxNodeError = intFlag(args, '--max-node-error')
+  const maxRetained = intFlag(args, '--max-retained')
   vegaCheck = args.includes('--vega-check')
   if (!filter) {
     for (const [name, v] of [['--floor', floor], ['--min-ok', minOk], ['--max-node-error', maxNodeError]] as const) {
@@ -275,7 +323,7 @@ async function main(): Promise<void> {
     }
     console.log(`[${sweepName}] ${out.skips.length} skipped properties (declared but not enumerable)`)
 
-    const status: Status = { ok: 0, bothRefused: 0, nodeError: 0, engineError: 0, differ: 0, nondeterministic: 0, vegaDiffer: 0, failNames: [] }
+    const status: Status = { ok: 0, retained: 0, bothRefused: 0, nodeError: 0, engineError: 0, differ: 0, nondeterministic: 0, vegaDiffer: 0, failNames: [] }
     const CONCURRENCY = 8
     let idx = 0
     const workers: Promise<void>[] = []
@@ -287,6 +335,7 @@ async function main(): Promise<void> {
             if (i >= all.length) break
             const r = await runOneCase(all[i]!, nodeModules)
             if (r === 'ok') status.ok++
+            else if (r === 'retained') status.retained++
             else if (r === 'both-refused') status.bothRefused++
             else if (r === 'nondeterministic') status.nondeterministic++
             else if (r === 'vega-differ') { status.vegaDiffer++; status.failNames.push(all[i]!.name) }
@@ -300,7 +349,7 @@ async function main(): Promise<void> {
     await Promise.all(workers)
 
     const total = all.length
-    console.log(`[${sweepName}] results: ${status.ok} ok, ${status.bothRefused} both-refused, ${status.nodeError} node-error, ${status.engineError} engine-error, ${status.differ} differ, ${status.nondeterministic} nondeterministic${vegaCheck ? `, ${status.vegaDiffer} vega-differ` : ''} / ${total}`)
+    console.log(`[${sweepName}] results: ${status.ok} ok, ${status.retained} retained, ${status.bothRefused} both-refused, ${status.nodeError} node-error, ${status.engineError} engine-error, ${status.differ} differ, ${status.nondeterministic} nondeterministic${vegaCheck ? `, ${status.vegaDiffer} vega-differ` : ''} / ${total}`)
     // Per-family scoreboard
     const fams = new Map<string, { ok: number; fail: number }>()
     for (const c of out.cases) {
@@ -325,6 +374,11 @@ async function main(): Promise<void> {
     }
     if (maxNodeError !== undefined && status.nodeError > maxNodeError) {
       problems.push(`NODE-ERROR CEILING EXCEEDED: ${status.nodeError} > --max-node-error ${maxNodeError} (oracle-side crashes grew)`)
+    }
+    if (maxRetained !== undefined && status.retained > maxRetained) {
+      problems.push(`RETAINED CEILING EXCEEDED: ${status.retained} > --max-retained ${maxRetained} (cases where vega's incremental run differs from its fresh run grew)`)
+    } else if (maxRetained === undefined && status.retained > 0) {
+      problems.push(`${status.retained} retained case(s) but no --max-retained ceiling given`)
     }
     if (status.failNames.length > 0) {
       console.error(`[${sweepName}] non-ok cases (differ/engine-error/node-error), ${status.failNames.length}:`)

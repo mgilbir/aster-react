@@ -37,6 +37,7 @@ function numericSequence(start: number, stop?: number, step?: number): number[] 
   return out
 }
 import { rgb, hsl, lab, hcl } from './color.js'
+import type { AstNode } from './expr-parser.js'
 import {
   accessor, ascending, extent, isArray, isBoolean, isDate, isNumber, isObject,
   isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, safeGet,
@@ -296,6 +297,19 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
     sort: (seq: unknown) => (seq as unknown[]).slice().sort((a, b) => ascending(a as never, b as never)),
     merge: mergeObj,
     modify: (set: unknown, value: unknown, signal?: unknown) => set, // event-only; static no-op returns the set
+    // multi-touch gestures (vega-functions pinch.js); `event` must be a touch event
+    pinchDistance: (event: unknown) => {
+      const t = (event as { touches: Array<{ clientX: number; clientY: number }> }).touches
+      return Math.hypot(t[0]!.clientX - t[1]!.clientX, t[0]!.clientY - t[1]!.clientY)
+    },
+    pinchAngle: (event: unknown) => {
+      const t = (event as { touches: Array<{ clientX: number; clientY: number }> }).touches
+      return Math.atan2(t[0]!.clientY - t[1]!.clientY, t[0]!.clientX - t[1]!.clientX)
+    },
+    // vega-functions inscope.js: true when `item` descends from the current scope's group. The
+    // engine's signals live in the root scope, whose group is the root of every scene item, so
+    // any item is in scope (and nothing -- no item under the pointer -- is not).
+    inScope: (item: unknown) => item != null && typeof item === 'object',
     span: (arr: unknown) => { const a = arr as number[]; return a[a.length - 1]! - a[0]! },
     pluck,
     // strings
@@ -401,9 +415,29 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
   }
 }
 
+/**
+ * An expression that does not parse. vega finds these in `vega.parse` (before anything runs) and
+ * throws; the engine parses lazily, so the error surfaces mid-evaluation -- but it stays a throw: it
+ * is the spec that is wrong, not one datum, and the "log and carry on" recovery of runtime
+ * expression errors (see RuntimeInput.logger) does not apply to it.
+ */
+export class ExpressionParseError extends Error {
+  constructor(message: string, readonly expression: string, options?: { cause?: unknown }) {
+    super(message, options)
+    this.name = 'ExpressionParseError'
+  }
+}
+
 /** Compile an expression string to an evaluable function bound to a runtime. */
 export function compileExpr(expr: string, runtime: ExpressionRuntime): CompiledExpr {
-  const ast = parseExpression(expr)
+  let ast: AstNode
+  try {
+    ast = parseExpression(expr)
+  } catch (e) {
+    // limit violations keep their type (they are the engine's refusal, not a syntax error)
+    if (e instanceof Error && e.name === 'AsterLimitError') throw e
+    throw new ExpressionParseError(e instanceof Error ? e.message : String(e), expr, { cause: e })
+  }
   const functions = createFunctionContext(runtime)
   const evalParam = expressionInterpreter.parameter({ functions }, { ast })
   const evalHandler = expressionInterpreter.handler({ functions }, { ast })

@@ -53,6 +53,34 @@ error, and `stream.discard()` drops the queued batches so the next flush can suc
 (otherwise every later flush fails the same way). See "Atomic flush" and "Recovering from
 a failed flush" in `docs/API.md`.
 
+## Recovered expression errors (`logger`)
+
+An expression that throws **at run time** is not a host error and not a reason to fail the render: vega's dataflow logs
+it and carries on with what it has computed, and so does the engine. The report goes to `RuntimeInput.logger` (a
+vega-shaped `{ error, warn, info?, debug? }`; default `console`; `<Chart logger>` and `SignalEventHooks.logger` forward
+it). Nothing is swallowed without a report, and each report is the original `Error`.
+
+| Where the expression threw | What is left (as in vega) |
+|---|---|
+| a conditional-encode `test` or branch, a `signal` or `field` in an encode | the failing item keeps the channels evaluated **before** the failing one (spec order); no later item, of this mark or any later one, is encoded or drawn (the run is aborted) |
+| a dataset transform (`filter`, `formula`, ...) or a mark-level `transform` | the dataset publishes no rows; marks sourced from it are not built |
+| a mark `sort`, a facet header `sort` | the rows stay in data order |
+| a scale that cannot be built (bad `scheme`, non-array `range`, ...) | the run stops there: this and later scales are absent and nothing is encoded |
+| a `signal.on` filter or update, while an event is handled | that event's delivery stops (updates already applied stand); the next event works |
+
+An evaluation that logged a recovery is not committed as the base of the next incremental one, so a following update
+re-derives from scratch. Items an aborted run never encoded are dropped from their mark (vega draws nothing for them
+either, apart from the zero-size rect path, which is invisible).
+
+**Never recovered** — these are the host's controls and the spec's own faults, and still throw: `AsterLimitError`,
+`AsterUrlError`, `[aster]` usage errors, and an expression that does not **parse** (`ExpressionParseError`; vega throws those
+from `vega.parse`). For signal event handlers a malformed selector or an unparsable update is reported when the handlers
+are bound and that handler is skipped.
+
+```ts
+renderSpec(spec, { logger: { error: (e) => telemetry.report(e), warn: () => {} } })
+```
+
 ## Other runtime errors
 
 - **Unsupported scale/mark/transform** — the compiler throws with the spec location or

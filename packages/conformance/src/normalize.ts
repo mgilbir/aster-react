@@ -255,11 +255,24 @@ function canonFamily(v: string): string {
   return v.trim().replace(/\s*,\s*/g, ',').replace(/'/g, '"')
 }
 
+/**
+ * `stroke-dasharray` as the SVG spec reads it: `none`, or a list of non-negative lengths / percentages.
+ * Any other value -- a word ("dashed"), a negative or non-finite number, a stray comma -- is INVALID and an
+ * invalid declaration is ignored, so the stroke is not dashed. Both engines print such a value verbatim
+ * (vega writes `strokeDash` as it finds it), and a browser draws both undashed; so they compare equal.
+ */
 function canonDash(v: string): string {
   const t = v.trim()
   if (t === 'none' || t === '') return ''
-  const parts = t.split(/[\s,]+/).filter(Boolean).map((p) => num(numAttr(p, 'stroke-dasharray')))
-  if (parts.every((p) => p === '0')) return '' // all-zero dash array disables dashing (SVG spec)
+  if (/^,|,\s*,|,$/.test(t)) return '' // an empty list item is a syntax error
+  const tokens = t.split(/[\s,]+/).filter(Boolean)
+  const parts: string[] = []
+  for (const tok of tokens) {
+    const m = /^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)(px|%)?$/.exec(tok)
+    if (!m || parseFloat(m[1]!) < 0) return ''
+    parts.push(num(parseFloat(m[1]!)) + (m[2] === '%' ? '%' : ''))
+  }
+  if (parts.every((p) => parseFloat(p) === 0)) return '' // all-zero dash array disables dashing (SVG spec)
   return parts.join(',')
 }
 

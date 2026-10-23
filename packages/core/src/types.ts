@@ -29,6 +29,13 @@ export interface RuntimeInput {
    * denied images instead of throwing. See docs/LIMITS.md.
    */
   urlPolicy?: import('./url-policy.js').ImageUrlPolicy
+  /**
+   * Where the engine reports errors it recovers from, like vega's logger (default: the
+   * console). vega logs a failing expression -- a conditional-encode test, a signal in an
+   * encode, a transform's predicate, a sort -- and carries on with what the dataflow had
+   * computed; so does the engine, and every such report goes through here.
+   */
+  logger?: import('./logger.js').Logger
   /** Host text measurement (custom fonts, non-browser hosts). */
   textMetrics?: import('./text-metrics.js').TextMetricsProvider
   /** Named datasets. Overrides or fulfills spec data references by name. */
@@ -204,18 +211,19 @@ export interface CompiledSignalDef {
   on?: SignalOnDef[]
 }
 
-/** One `signal.on` entry (vega SignalStream spec subset). */
+/**
+ * One `signal.on` entry (vega's signal update spec). `events` is whatever the spec
+ * had: a selector string, an event-stream object, an array of either, or
+ * `{signal}` / `{scale}` operator sources; `@aster/core/signals` interprets it.
+ */
 export interface SignalOnDef {
-  /** Event selector: 'mousemove', 'click', 'wheel', or a view-style string. */
-  events: string
-  /** Update expression; `event`, `datum` and signal refs are in scope. */
-  update?: string
-  /** Optional: only fire when a specific mark/datum is targeted. */
-  between?: unknown[]
-  throttle?: number
-  debounce?: number
-  consume?: boolean
+  events: unknown
+  /** Update: an expression string, or `{expr}` / `{value}` / `{signal}`. */
+  update?: string | { expr?: string; value?: unknown; signal?: string }
+  /** vega: pulse the signal even when the new value equals the old one. */
   force?: boolean
+  /** vega: `encode` set name (mark re-encode) -- mutually exclusive with `update`. */
+  encode?: unknown
 }
 
 export interface CompiledData {

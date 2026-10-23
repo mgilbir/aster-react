@@ -50,7 +50,10 @@ export interface StreamOptions {
   maxQueuedRows?: number
   /** Backpressure policy when the queue is full. Default `coalesce`. */
   policy?: StreamPolicy
-  /** Initial input (data/signals/size) used for the first flush. */
+  /**
+   * Initial input (data/signals/size) used for the first flush. `initial.urlPolicy`
+   * (the image-URL policy) applies to every flush; it is fixed for the stream's life.
+   */
   initial?: RuntimeInput
   /**
    * Budgets applied to every flush (same enforcement as `createChartSession`,
@@ -665,6 +668,7 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
         ...(nextDomainRaw ? { domainRaw: nextDomainRaw } : {}),
         ...(nextLimits ? { limits: nextLimits } : {}),
         ...(nextTextMetrics ? { textMetrics: nextTextMetrics } : {}),
+        ...(options.initial?.urlPolicy ? { urlPolicy: options.initial.urlPolicy } : {}),
         ...(Object.keys(dataPulse).length ? { dataPulse } : {}),
         ...(Object.keys(dataChanges).length ? { dataChanges } : {}),
         ...(changedDatasets.length ? { changedDatasets } : {}),

@@ -26,8 +26,14 @@ const svg = renderSpec(vegaSpec, {
   domainRaw: { x: [0, 25] },   // pan/zoom/brush domain override
   limits: { maxRows: 100_000, maxTimeMs: 2_000 },
   textMetrics: { measure: (text, font, size) => myFontEngine.measure(text, font, size) },
+  logger: { error: (...a) => report(a), warn: (...a) => report(a) },  // vega-shaped; default: console
 })
 ```
+
+`logger` (`RuntimeInput.logger`, type `Logger`) is where the engine reports an error it recovers from, as vega's
+dataflow does: an expression that throws while a chart is evaluated (a conditional-encode test, an encode signal, a
+filter or formula, a sort, a scale that cannot be built) is logged and the render carries on with what it has. See
+`docs/ERRORS.md` for exactly what survives each failure.
 
 `compileChart(spec)` produces the `CompiledChart` IR; `evaluateChart(chart, input)`
 resolves data/scales/encodes into a `SceneRoot`; `renderSceneToSvg(scene)` serializes
@@ -150,7 +156,22 @@ elements; non-React hosts can do the same. Legend entries are keyboard toggles.
 ### Interaction addons
 
 - `@aster/core/hit` — `buildHitIndex(scene)`, `query` and `queryMark` (guides excluded).
-- `@aster/core/signals` — `bindSceneSignals(svg, scene, values, hooks)`, `stampDatumAttrs`.
+- `@aster/core/signals` — `bindSceneSignals(svg, scene, values, hooks, { pick })`, `stampDatumAttrs`.
+  Binds every `signal.on` entry with vega's event-stream semantics: selector strings (`[mousedown, mouseup] > mousemove`,
+  `@name:click`, `symbol:click`, `window:keydown`, `click[event.shiftKey]{100}`, `mousedown!`), object-form `events`, arrays,
+  `{signal}` sources, `between`, filters, throttle, debounce, `consume` and `force`. `event` is the native event extended with
+  `item`, `vega` and `dataflow`, so `event.deltaY`, `event.shiftKey`, `x()`, `y()`, `item()` and `group()` behave as in vega;
+  `datum` is `event.item.datum`. A handler runs only when its stream matched; a signal's `update` re-runs only when a signal
+  it reads changed.
+  - `hooks.onSignal(name, value, all)` — once per signal that changed while an event was processed.
+  - `hooks.logger` — where bind-time errors (a malformed selector or expression: the handler is skipped) and run-time errors
+    (an expression that throws while an event is handled: that event's delivery stops, earlier updates stand) are reported;
+    default: the console. Nothing escapes the DOM listener.
+  - `hooks.preventDefault` — call `preventDefault()` on events of the chart's own surface (vega's `view.preventDefault()`,
+    default `false`; a `consume`d stream always prevents).
+  - `{ pick }` — `(x, y) => HitTarget | null`, e.g. `buildHitIndex(scene).query`: resolves `event.item` (mark type, name, role,
+    datum, enclosing group). Without it, or when it finds nothing, the item is read from the DOM (`data-datum` stamps and
+    `mark-*`/`role-*` classes), where mark names are not available. `<Chart>` passes its own hit index.
 - `@aster/core/dom` — `patchSceneDom`, `renderSceneToDomElement`, `createChartSession`.
 - `@aster/core/canvas` — `renderSceneToCanvas(scene, ctx, { dpr })`.
 - `@aster/core/load` — `loadSpecData(spec, { baseURL, allow, protocols, timeoutMs, maxBytes, ... })` for URL datasets, with a URL policy (safe defaults, see `docs/LIMITS.md`).
