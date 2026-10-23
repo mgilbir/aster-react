@@ -46,11 +46,11 @@ export const GATES = [
     why: 'signal event streams (selectors, between, filters, throttle, consume, native event) vs real vega in Chromium',
   },
   {
-    // Non-blocking until the layout/guide fixes land: 40 of 166 cases still differ (title / legend title / axis
-    // orient / label angle signals, group clip + background, view-size signals, a numeric fill, one
-    // canonicalizer limit). The floors are today's numbers and only ratchet; make this blocking at 0 differ.
+    // Non-blocking until the guide/layout lane lands: the 30 cases that still differ are all there (chart title
+    // and legend title signals, axis orient, label angle/limit, tick-count string, axis format, view-size signals).
+    // The floors are today's numbers and only ratchet; make this blocking at 0 differ.
     name: 'sweep-signals',
-    args: ['sweep-signals', '--', '--floor', '166', '--min-ok', '87', '--max-node-error', '1', '--max-retained', '36'],
+    args: ['sweep-signals', '--', '--floor', '166', '--min-ok', '97', '--max-node-error', '1', '--max-retained', '36'],
     blocking: false,
     why: 'a signal written into a running chart renders like vega (signals sweep; known gaps listed in the gate)',
   },
