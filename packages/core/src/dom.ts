@@ -39,9 +39,12 @@ import {
   lineElementAttrs,
   lineMarkAttrs,
   markContainerAttrs,
-  markGroupAttrs,
+  childNodes,
+  type GuideScope,
+  type SvgNode,
   paintAttrs,
   pathItemAttrs,
+  pathlessMarkAttrs,
   rectIsPainted,
   rectItemPath,
   rectPathAttrs,
@@ -509,12 +512,12 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
   switch (type) {
     case 'line': {
       const info = computeLinePath(group)
-      if (!info) return []
+      if (!info) return items.length ? [{ tag: 'path', attrs: pairs((w) => pathlessMarkAttrs('line', items[0]!, w)) }] : []
       return [linkedFirst(items, { tag: 'path', attrs: pairs((w) => lineMarkAttrs(info, w)) })]
     }
     case 'area': {
       const info = computeAreaPath(group)
-      if (!info) return []
+      if (!info) return items.length ? [{ tag: 'path', attrs: pairs((w) => pathlessMarkAttrs('area', items[0]!, w)) }] : []
       return [linkedFirst(items, { tag: 'path', attrs: pairs((w) => areaMarkAttrs(info, w)) })]
     }
     case 'trail': {
@@ -576,7 +579,7 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       const out: DomDesc[] = []
       for (const it of items) {
         if (!it.path) continue
-        out.push(cachedDesc(it, () => linked(it, { tag: 'path', attrs: pairs((w) => pathItemAttrs(it, w)), clean: isClean(it) })))
+        out.push(cachedDesc(it, () => linked(it, { tag: 'path', attrs: pairs((w) => pathItemAttrs(it, w, type === 'geoshape' ? 'shape' : type)), clean: isClean(it) })))
       }
       return out
     }
@@ -596,51 +599,46 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
 }
 
 /**
- * The element(s) a group renders to: usually one, several for clipped rounded
- * bars, none for an unknown mark type. `frameW`/`frameH` is the frame of the
- * group that contains this one (what a clipped mark clips to).
+ * The element(s) a data mark renders to: usually one, several for clipped rounded bars, none for an unknown mark type.
+ * `frameW`/`frameH` is the frame of the group that contains the mark (what its `clip` clips to).
  */
-function groupDescs(group: SceneGroup, frameW: number, frameH: number, clips: ClipCollector, options?: DomRenderOptions): DomDesc[] {
+function markDescs(group: SceneGroup, frameW: number, frameH: number, clips: ClipCollector, options: DomRenderOptions | undefined, scope: GuideScope): DomDesc[] {
   const type = group.marktype
-  const needsClip = group.clip === true
-  if (!type || type === 'group') {
-    // vega clips a group's content to the group's own width/height at (0,0) in
-    // its own frame (group.js `content`), or to its explicit clip path.
-    const gw = group.width ?? frameW
-    const gh = group.height ?? frameH
-    const attrs = pairs((w) => markGroupAttrs(group, w, needsClip ? clips : undefined, gw, gh))
-    const children: DomDesc[] = []
-    for (const item of group.items ?? []) {
-      const isGroup = (item as SceneGroup).marktype !== undefined || Array.isArray((item as SceneGroup).items)
-      if (isGroup) {
-        pushAll(children, groupDescs(item as SceneGroup, gw, gh, clips, options))
-        continue
-      }
+  if (!type) return []
+  // Vega-Lite rounds bars by wrapping each bar in a clipped scope.
+  if (type === 'rect' && isClippedRoundedRectGroup(group)) return clippedRoundedRectDescs(group, clips)
+
+  const containerAttrs = new PairAttrSink()
+  // A mark's clip is the size of the group that contains it (vega: `clip(renderer, scene, scene.group)`), on its container.
+  if (!markContainerAttrs(group, containerAttrs, group.clip === true ? groupClipId(group, clips, frameW, frameH) : null, scope)) return []
+  const inner = g('g', containerAttrs.out, markItems(group, type, options))
+  if (type === 'symbol' && group.hasLinks !== true && denseSymbolsEnabled(options, group.items ?? []) > 0) inner.dense = true
+  return [inner]
+}
+
+/** The descriptors of a structure tree (render.ts `childNodes`), attributes before children as the string renderer writes them. */
+function nodeDescs(nodes: readonly SvgNode[], clips: ClipCollector, options: DomRenderOptions | undefined): DomDesc[] {
+  const out: DomDesc[] = []
+  for (const n of nodes) {
+    if ('leaf' in n) {
+      const item = n.leaf
       let d = cachedDesc(item, () => leafDesc(item))
       // A clipped legend symbol hangs its clip-path on a `<g>` around the symbol,
       // never on the translated path itself (see `leafClipId`). The clip is
       // registered here, outside the item's cached descriptor, so a reused
       // descriptor still lands its clipPath in this render's defs.
-      const clipId = leafClipId(item, clips)
+      const clipId = n.wrapClip ? leafClipId(item, clips) : null
       if (clipId) d = g('g', pairs((w) => clipRefAttrs(clipId, w)), [d])
-      children.push(d)
+      out.push(d)
+    } else if ('mark' in n) {
+      pushAll(out, markDescs(n.mark, n.frameW, n.frameH, clips, options, n.scope))
+    } else {
+      const attrs = pairs(n.attrs)
+      const desc: DomDesc = n.children === undefined ? { tag: n.tag, attrs } : g(n.tag, attrs, nodeDescs(n.children, clips, options))
+      out.push(n.link ? linked(n.link, desc) : desc)
     }
-    const desc = linked(group, g('g', attrs, children))
-    // vega's mark-level `clip`: clipped to the ENCLOSING group's frame, outside the item's own transform
-    if (group.markClip === true) return [g('g', pairs((w) => clipRefAttrs(clips.id({ x: 0, y: 0, w: frameW, h: frameH }), w)), [desc])]
-    return [desc]
   }
-
-  // Vega-Lite rounds bars by wrapping each bar in a clipped scope.
-  if (type === 'rect' && isClippedRoundedRectGroup(group)) return clippedRoundedRectDescs(group, clips)
-
-  const containerAttrs = new PairAttrSink()
-  if (!markContainerAttrs(type, containerAttrs)) return []
-  const inner = g('g', containerAttrs.out, markItems(group, type, options))
-  if (type === 'symbol' && group.hasLinks !== true && denseSymbolsEnabled(options, group.items ?? []) > 0) inner.dense = true
-  // A mark's clip is the size of the group that contains it (vega: `clip(renderer, scene, scene.group)`).
-  if (needsClip) return [g('g', pairs((w) => clipRefAttrs(groupClipId(group, clips, frameW, frameH), w)), [inner])]
-  return [inner]
+  return out
 }
 
 export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {}): DomDesc {
@@ -653,7 +651,7 @@ export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {})
   const children: DomDesc[] = []
   if (scene.background) children.push({ tag: 'rect', attrs: pairs((w) => backgroundRectAttrs(scene, w)) })
   const marks: DomDesc[] = []
-  for (const n of scene.items ?? []) pushAll(marks, groupDescs(n, plotW, plotH, clips, options))
+  pushAll(marks, nodeDescs(childNodes(scene.items, plotW, plotH, { snaps: scene.__scales }, clips), clips, options))
   children.push(g('g', pairs((w) => viewGroupAttrs(scene, w)), [
     g('g', [
       ['class', 'mark-group role-frame root'],

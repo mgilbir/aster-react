@@ -280,7 +280,9 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 're
     }
   }
   if (isBootstrapCase(c) && (await oracleIsNondeterministic(vgSpec, c.writes, oracleSvg!))) return 'nondeterministic'
-  console.error(`  [differ] ${c.name} (${c.family}.${c.property}): ${diffs[0]}`)
+  // a structure divergence says nothing in its first line: show the lines that differ
+  const detail = diffs[0]!.startsWith('structure:') ? diffs.filter((d) => /^structure: [-+] /.test(d)).map((d) => d.slice(0, 260)).join(' | ') : ''
+  console.error(`  [differ] ${c.name} (${c.family}.${c.property}): ${diffs[0]}${detail ? ` -- ${detail}` : ''}`)
   return 'differ'
 }
 

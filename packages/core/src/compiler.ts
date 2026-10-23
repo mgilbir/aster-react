@@ -35,6 +35,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
   // set it never declared (`Undefined data set name`) before any view exists: same here, before anything runs.
   const rawSpec = normalizeSpecLists(givenSpec)
   checkDataReferences(rawSpec)
+  markSeq = 0
   // Vega parses a view with mergeConfig(defaultConfig(), spec.config): every
   // default below (mark, axis, legend, title, style, range...) is read from this
   // merged config, exactly as upstream does (see config-defaults.ts).
@@ -436,6 +437,7 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
     limit: (spec.limit as number | undefined) ?? (cfg.limit as number | undefined),
     lineBreak: (spec.lineBreak as string | undefined) ?? (cfg.lineBreak as string | undefined),
     frame: (spec.frame as string | undefined) ?? (cfg.frame as string | undefined),
+    ...((spec.aria ?? cfg.aria) === false ? { aria: false } : {}),
     encode: spec.encode as CompiledTitle['encode'],
   }
 }
@@ -575,12 +577,16 @@ function normalizeFrom(from: CompiledMark['from']): CompiledMark['from'] {
   return { ...from, facet: { ...facet, groupby } } as CompiledMark['from']
 }
 
+// (reset per chart: the same spec compiles to the same numbers, so scenes of equal charts are equal)
+let markSeq = 0
+
 function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>, scopeScales: CompiledScale[] = []): CompiledMark {
   const m = { ...m0 }
   if (cfgStyle || cfgMarktype) applyStyleDefaults(m, cfgStyle ?? {}, cfgMarktype)
   const out: CompiledMark = {
     type: m.type as string,
     name: (m.name as string) ?? 'marks',
+    seq: markSeq++,
   }
   // Vega evaluates `enter` when an item is created and `update` on every
   // pulse; in static rendering every item is created, so the effective set is
@@ -591,6 +597,11 @@ function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Reco
     out.encode = { ...enc, update: merged }
   }
   if (m.role !== undefined) out.role = m.role as string
+  // what the SVG container says about the mark (vega-scenegraph cssClass / ariaMarkAttributes): the name the SPEC gave it
+  // (`name` above defaults to 'marks'; vega adds no class then), its description, `aria: false`
+  if (m.name != null) out.userName = String(m.name)
+  if (typeof m.description === 'string') out.description = m.description
+  if (m.aria === false) out.aria = false
   if (m.style !== undefined) out.style = m.style as string | string[]
   if (m.from !== undefined) out.from = normalizeFrom(m.from as CompiledMark['from'])
   if (m.clip !== undefined) out.clip = m.clip as boolean

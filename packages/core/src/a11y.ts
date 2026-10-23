@@ -15,8 +15,7 @@
  */
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode, SceneRoot } from './types.js'
-import { currentLocale } from './locale.js'
-import { tickFormat } from './scale.js'
+import { axisLabel, guideTitleText, legendLabel, scalesFromSnapshots } from './guide-caption.js'
 import { pushAll } from './util.js'
 
 export type A11yKind = 'mark' | 'axis' | 'legend' | 'legend-entry' | 'title' | 'group'
@@ -150,68 +149,6 @@ function textOf(items: SceneItem[] | undefined): string | undefined {
   return texts.length ? texts.join(' ') : undefined
 }
 
-const DISCRETE = new Set(['band', 'point', 'ordinal', 'bin-ordinal'])
-const DISCRETIZING = new Set(['quantize', 'quantile', 'threshold'])
-// read per call, not snapshotted at import (C70)
-const loc = (): ReturnType<typeof currentLocale> => currentLocale()
-
-/** vega-scale domainCaption, using the same locale/tick formatting as vega. */
-function scaleCaption(
-  scales: Map<string, unknown>,
-  name: string | undefined,
-  format?: string,
-  formatType?: string,
-): string {
-  if (!name) return ''
-  const s = scales.get(name) as {
-    domain?: () => unknown[]
-    type?: string
-    bins?: unknown[]
-    labelValues?: unknown[]
-  } | undefined
-  if (!s || typeof s.domain !== 'function') return ''
-  const domain = s.domain()
-  const type = s.type ?? 'unknown'
-  if (!domain.length) {
-    return DISCRETE.has(type) ? '0 values: ' : 'values from NaN to NaN'
-  }
-  let spec = format
-  const temporal = type === 'time' || type === 'utc' || formatType === 'time' || formatType === 'utc'
-  if (!spec && temporal) {
-    spec = (type === 'utc' || formatType === 'utc') ? '%A, %d %B %Y, %X UTC' : '%A, %d %B %Y, %X'
-  }
-  // vega-scale expands abbreviated weekday/month specifiers for screen readers.
-  if (temporal && typeof spec === 'string') spec = spec.replace(/%a/g, '%A').replace(/%b/g, '%B')
-  let fmt = tickFormat(loc(), s as never, 5, spec, formatType, true)
-  if (type === 'quantile' || type === 'quantize') {
-    // vega-scale's thresholdFormat: quantile formats from quantiles, quantize
-    // from its domain; the minimum gap drives the shared precision.
-    const src = type === 'quantile' ? (s.labelValues ?? domain) : domain
-    const nums = src.map(Number).filter((v) => Number.isFinite(v))
-    let d = nums.length > 1 ? Math.abs(nums[1]! - nums[0]!) : (nums[0] ?? 0)
-    for (let i = 1; i < nums.length; i++) d = Math.min(d, Math.abs(nums[i]! - nums[i - 1]!))
-    fmt = loc().formatSpan(0, d, 30, spec) as unknown as (v: unknown) => string
-  }
-  const print = (v: unknown): string => {
-    try { return fmt(v) } catch { return String(v) }
-  }
-  if (DISCRETIZING.has(type)) {
-    const values = (s.labelValues ? [-Infinity, ...s.labelValues] : [domain[0], ...domain]) as unknown[]
-    const v = values.slice(1).map(print)
-    const n = v.length
-    return `${n} boundar${n === 1 ? 'y' : 'ies'}: ${v.join(', ')}`
-  }
-  if (DISCRETE.has(type)) {
-    const n = domain.length
-    const max = 7
-    const shown = n > max
-      ? domain.slice(0, max - 2).map(print).join(', ') + ', ending with ' + print(domain[n - 1])
-      : domain.map(print).join(', ')
-    return `${n} value${n === 1 ? '' : 's'}: ${shown}`
-  }
-  return `values from ${print(domain[0])} to ${print(domain[domain.length - 1])}`
-}
-
 function markNode(it: SceneItem, group: SceneGroup, id: string, tx: number, ty: number, opts: A11yOptions): A11yNode | null {
   if (it.aria === false) return null
   const b = itemBounds(it, tx, ty)
@@ -260,11 +197,8 @@ function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales
     }
   }
   const datum = ((group.items?.[0] as SceneItem | undefined)?.datum ?? {}) as Record<string, unknown>
-  const title = typeof datum.title === 'string'
-    ? datum.title
-    : typeof (group as unknown as { title?: string }).title === 'string'
-      ? (group as unknown as { title?: string }).title
-      : undefined
+  // (the caption quotes the title as drawn, like the SVG's: a title replaced by the guide's encode is the replacement)
+  const title = guideTitleText(group as { title?: string; items?: unknown[] }) ?? (typeof datum.title === 'string' ? datum.title : undefined)
   if (role === 'axis') {
     const orient = String(datum.orient ?? (group as unknown as { orient?: string }).orient ?? 'x')
     const scaleName = typeof datum.scale === 'string'
@@ -272,11 +206,8 @@ function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales
       : typeof (group as unknown as { scale?: string }).scale === 'string'
         ? (group as unknown as { scale?: string }).scale
         : undefined
-    const type = (scales.get(scaleName ?? '') as { type?: string } | undefined)?.type ?? 'linear'
-    const discrete = ['band', 'point', 'ordinal', 'bin-ordinal'].includes(type)
-    const xy = orient === 'left' || orient === 'right' ? 'Y' : 'X'
     const gm = group as unknown as { format?: string; formatType?: string }
-    const label = group.description ?? `${xy}-axis${title ? ` titled '${title}'` : ''} for a ${discrete ? 'discrete' : type} scale with ${scaleCaption(scales, scaleName, gm.format, gm.formatType)}`
+    const label = group.description ?? axisLabel({ orient, title, scale: scaleName, format: gm.format, formatType: gm.formatType }, scales)
     const dom = (scales.get(scaleName ?? '') as { domain?: () => unknown[] } | undefined)?.domain?.()
     const numeric = dom && dom.length >= 2 && typeof dom[0] === 'number' && typeof dom[dom.length - 1] === 'number'
     return {
@@ -291,15 +222,7 @@ function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales
     }
   }
   const gm = group as unknown as { legendType?: string; legendScale?: string; legendChannels?: string[]; legendFormat?: string; legendFormatType?: string }
-  const chan = typeof gm.legendType === 'string'
-    ? gm.legendType
-    : typeof datum.type === 'string'
-      ? datum.type
-      : 'symbol'
-  const channels = gm.legendChannels?.length ? gm.legendChannels : ['fill']
-  const channel = channels.map((p) => p + (p === 'fill' || p === 'stroke' ? ' color' : ''))
-    .reduce((a, b, i) => i === 0 ? b : i === channels.length - 1 ? `${a} and ${b}` : `${a}, ${b}`, '')
-  const label = group.description ?? `${chan[0]!.toUpperCase()}${chan.slice(1)} legend${title ? ` titled '${title}'` : ''} for ${channel} with ${scaleCaption(scales, gm.legendScale, gm.legendFormat, gm.legendFormatType)}`
+  const label = group.description ?? legendLabel({ ...gm, title }, scales, typeof datum.type === 'string' ? datum.type : 'symbol')
   return {
     id, kind: 'legend', marktype: 'group', role: 'graphics-symbol', roleDescription: 'legend',
     label, x: b.x1, y: b.y1, width: b.x2 - b.x1, height: b.y2 - b.y1,
@@ -397,29 +320,6 @@ function legendEntryNodes(
         symbol = leaf
       }
     }
-  }
-  return out
-}
-
-function scalesFromSnapshots(snaps: Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; labelValues?: unknown[] }>): Map<string, unknown> {
-  const out = new Map<string, unknown>()
-  for (const s of snaps) {
-    const domain = s.domain.slice()
-    const range = s.range.slice()
-    const obj: Record<string, unknown> = {
-      type: s.type,
-      domain: () => domain,
-      range: () => range,
-      ...(s.labelValues != null ? { labelValues: s.labelValues.slice() } : {}),
-      ...(s.bandwidth != null ? { bandwidth: () => s.bandwidth } : {}),
-    }
-    // Snapshot continuous scales need to answer vega-scale's span formatter;
-    // discrete domains use plain value formatting.
-    if (!DISCRETE.has(s.type)) {
-      obj.tickFormat = (count?: unknown, specifier?: unknown) =>
-        tickFormat(loc(), obj as never, count, specifier, undefined, true)
-    }
-    out.set(s.name, obj)
   }
   return out
 }

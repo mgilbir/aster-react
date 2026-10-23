@@ -192,6 +192,8 @@ export interface CompiledTitle {
   limit?: number
   lineBreak?: string
   frame?: string
+  /** `aria: false`: the title's container is aria-hidden in the SVG. */
+  aria?: boolean
   encode?: Record<string, Record<string, EncodeValue>>
 }
 
@@ -484,6 +486,14 @@ export interface CompiledLegend {
 export interface CompiledMark {
   type: string
   name: string
+  /** Position of the mark in the spec (compile order): the group items of one mark share its SVG container. */
+  seq?: number
+  /** The name the spec gave the mark (`name` is 'marks' when it gave none; vega then adds no class). */
+  userName?: string
+  /** The mark's `description` (the aria-label of its SVG container). */
+  description?: string
+  /** `aria: false`: the SVG container is aria-hidden. */
+  aria?: boolean
   role?: string
   style?: string | string[]
   from?: { data?: string; facet?: unknown; aggregate?: unknown }
@@ -615,6 +625,23 @@ export interface SceneGroup extends SceneItem {
   __source?: string
   /** Guide orientation (`left`/`right`/`top`/`bottom`) for axes. */
   orient?: string
+  /**
+   * Axis only: the marks vega-parser builds for it, in paint order (`grid`, `tick`, `label`, `domain`, `title`).
+   * The SVG draws a container for each, even an empty one; each item names its mark in `_part`.
+   */
+  parts?: string[]
+  /** Group items of one mark carry the mark's index in its parent, so consecutive items of a mark share one container. */
+  markIndex?: number
+  /** The mark's `interactive: false` (its SVG container then has `pointer-events="none"`). */
+  interactive?: boolean
+  /** Some item of the mark may carry a `description` (its encode has the channel): the SVG container then scans its items for it. */
+  describes?: boolean
+  /** The name the spec gave the mark: the last class token of its SVG container (vega cssClass). */
+  cssName?: string
+  /** The role the spec gave a data mark (`role` is always 'mark' on the scene for those): `role-<markRole>` in its class. */
+  markRole?: string
+  /** A group item's content scope when its encode `clip` is set: the `<g clip-path>` around the content, not a mark. */
+  contentClip?: boolean
   /** Guide scale name for axes/legends (accessibility metadata). */
   scale?: string
   /** Resolved guide title (accessibility metadata). */
@@ -700,6 +727,12 @@ export interface SceneItem {
   href?: string
   /** Internal: marks a legend title item so the builder can paint it last. */
   _legendTitle?: boolean
+  /**
+   * Internal: which vega mark of its guide a leaf item belongs to (the SVG draws one container per mark).
+   * Axis: `grid` `tick` `label` `domain` `title`. Legend: `bg` (the legend's own box), `col` (the entry
+   * column's box), `entry` (one entry's box), `symbol` `label` `gradient` `band` `title`.
+   */
+  _part?: string
   // accessibility
   ariaRole?: string
   ariaLabel?: string

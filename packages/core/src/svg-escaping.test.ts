@@ -190,8 +190,9 @@ describe('C2: SVG string renderer escapes every attribute and text value', () =>
     expect(svg).toContain('<clipPath')
     expect(svg).toContain('clip-path=')
     expect(svg).toContain('stop-color=')
-    expect(svg).toContain('role="axis"')
-    expect(svg).toContain('role="legend"')
+    // guides are vega's wrapper groups with their ARIA (not a bare `role="axis"`, which is no ARIA role)
+    expect(svg).toContain('class="mark-group role-axis" role="graphics-symbol" aria-roledescription="axis"')
+    expect(svg).toContain('class="mark-group role-legend" role="graphics-symbol" aria-roledescription="legend"')
     expect(() => parseXml(svg)).not.toThrow()
   })
 

@@ -12,6 +12,7 @@ import { itemTextWidth } from './text-metrics.js'
 import { ClipCollector, type ClipDef } from './svg-defs.js'
 import { customSymbolPathData } from './svg-path.js'
 import { sanitizeHref } from './url-policy.js'
+import { axisLabel, guideTitleText, legendLabel, scalesFromSnapshots, type ScaleSnapshots } from './guide-caption.js'
 export { ClipCollector, type ClipDef }
 import {
   line as d3Line,
@@ -172,9 +173,7 @@ export function renderSceneToSvg(scene: SceneRoot): string {
     clipRefAttrs(frameClipId, w)
     out += `<g${w.s}>`
   } else out += '<g>'
-  for (const node of scene.items) {
-    out += renderGroup(node, plotW, plotH, clips, scene.width, scene.height)
-  }
+  out += serializeNodes(childNodes(scene.items, plotW, plotH, { snaps: scene.__scales }, clips), clips)
   out += '</g>'
   out += '<path class="foreground" aria-hidden="true" d="" display="none"/>'
   out += '</g></g></g>'
@@ -208,76 +207,39 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   return out
 }
 
-function renderGroup(group: SceneGroup, frameW?: number, frameH?: number, clips?: ClipCollector, viewW?: number, viewH?: number): string {
+/**
+ * A data mark (rect, symbol, line...): its container `<g>` holding one element per item (or one for the whole mark).
+ * `frameW`/`frameH` is the frame of the group that contains the mark: what its `clip` clips to.
+ */
+function renderMark(group: SceneGroup, frameW: number, frameH: number, clips: ClipCollector): string {
   const type = group.marktype
-  const needsClip = clips
-    && group.clip === true
-    && frameW != null
-    && frameH != null
-
-  if (!type || type === 'group') {
-    // axis / legend / nested group whose items may be leaf shapes
-    // vega clips a group's content to the group's own width/height at (0,0) in
-    // its own frame (group.js `content`), or to its explicit clip path.
-    const gw = group.width ?? frameW
-    const gh = group.height ?? frameH
-    const w = new StringAttrSink()
-    markGroupAttrs(group, w, needsClip ? clips : undefined, gw!, gh!)
-    let out2 = `<g${w.s}>`
-    // children are laid out in this group's frame: marks clipped inside it clip to its size
-    for (const item of group.items ?? []) {
-      if (isGroup(item)) out2 += renderGroup(item, gw, gh, clips, viewW, viewH)
-      else out2 += renderLeaf(item, clips)
-    }
-    out2 += '</g>'
-    // a hyperlinked group item sits inside its <a> (SVGStringRenderer `process`)
-    const link = linkOpen(group)
-    if (link) out2 = link + out2 + linkClose(link)
-    // vega's mark-level `clip`: the mark container is clipped to the ENCLOSING group's
-    // frame (SVGStringRenderer `clip(renderer, scene, scene.group)`), outside the item's
-    // own transform
-    if (group.markClip === true && clips && frameW != null && frameH != null) {
-      const cw = new StringAttrSink()
-      clipRefAttrs(clips.id({ x: 0, y: 0, w: frameW, h: frameH }), cw)
-      return `<g${cw.s}>${out2}</g>`
-    }
-    return out2
-  }
-
+  if (!type) return ''
   // Vega-Lite rounds bars by wrapping each bar in a clipped scope. Vega's
   // SVG renderer keeps that group structure, so reproduce it here for rect
   // marks carrying per-item corner radii.
-  if (type === 'rect' && clips && isClippedRoundedRectGroup(group)) {
+  if (type === 'rect' && isClippedRoundedRectGroup(group)) {
     return renderClippedRoundedRects(group, clips)
   }
-
-  // For mark groups, wrap in a clip'd outer <g> if needed. A mark's clip is the
-  // size of the group that contains it (vega: `clip(renderer, scene, scene.group)`).
-  const inner = switchMarkup(type, group)
-
-  if (needsClip && clips) {
-    const w = new StringAttrSink()
-    clipRefAttrs(groupClipId(group, clips, frameW!, frameH!), w)
-    return `<g${w.s}>${inner}</g>`
-  }
-  return inner
+  const w = new StringAttrSink()
+  if (!markContainerAttrs(group, w, markClipId(group, clips, frameW, frameH))) return ''
+  return switchMarkup(type, group, `<g${w.s}>`)
 }
 
-function switchMarkup(type: string, group: SceneGroup): string {
+function switchMarkup(type: string, group: SceneGroup, open: string): string {
   switch (type) {
-    case 'line': return renderLine(group)
-    case 'area': return renderArea(group)
-    case 'symbol': return renderSymbols(group)
-    case 'circle': return renderCircles(group)
-    case 'rect': return renderRects(group)
-    case 'rule': return renderRules(group)
-    case 'text': return renderTexts(group)
-    case 'trail': return renderTrail(group)
-    case 'path': return renderPaths(group)
-    case 'shape': return renderPaths(group)
-    case 'geoshape': return renderPaths(group)
-    case 'image': return renderImages(group)
-    case 'arc': return renderArcs(group)
+    case 'line': return renderLine(group, open)
+    case 'area': return renderArea(group, open)
+    case 'symbol': return renderSymbols(group, open)
+    case 'circle': return renderCircles(group, open)
+    case 'rect': return renderRects(group, open)
+    case 'rule': return renderRules(group, open)
+    case 'text': return renderTexts(group, open)
+    case 'trail': return renderTrail(group, open)
+    case 'path': return renderPaths(group, open)
+    case 'shape': return renderPaths(group, open)
+    case 'geoshape': return renderPaths(group, open)
+    case 'image': return renderImages(group, open)
+    case 'arc': return renderArcs(group, open)
     default: return ''
   }
 }
@@ -287,13 +249,13 @@ function isGroup(item: SceneItem): item is SceneGroup {
 }
 
 /** Render an anchor leaf shape (path, symbol, text, line). */
-function renderLeaf(it: SceneItem, clips?: ClipCollector): string {
+function renderLeaf(it: SceneItem, clips?: ClipCollector, wrapClip = true): string {
   const w = new StringAttrSink()
   // Path items
   if (it.path != null) {
     // A clipped legend symbol (clipHeight): the clip hangs on a `<g>` around the
     // path, never on the translated `<path>` itself (see leafClipId).
-    const clipId = clips ? leafClipId(it, clips) : null
+    const clipId = clips && wrapClip ? leafClipId(it, clips) : null
     leafPathAttrs(it, w)
     const el = `<path${w.s}/>`
     if (!clipId) return el
@@ -317,9 +279,9 @@ function itemsOf(group: SceneGroup): SceneItem[] {
   return group.items ?? []
 }
 
-function renderLine(group: SceneGroup): string {
+function renderLine(group: SceneGroup, open: string): string {
   const items = itemsOf(group)
-  let out = markContainerOpen('line')
+  let out = open
   const pathInfo = computeLinePath(group)
   if (pathInfo) {
     const w = new StringAttrSink()
@@ -327,6 +289,11 @@ function renderLine(group: SceneGroup): string {
     // a line is one element for the whole mark: its link is the first item's
     const a = items.length ? linkOpen(items[0]!) : ''
     out += `${a}<path${w.s}/>${linkClose(a)}`
+  } else if (items.length) {
+    // no drawable point: vega still emits the mark's one element, without a `d` (its aria-label stays)
+    const w = new StringAttrSink()
+    pathlessMarkAttrs('line', items[0]!, w)
+    out += `<path${w.s}/>`
   }
   out += '</g>'
   return out
@@ -637,15 +604,19 @@ export function computeAreaPath(group: SceneGroup): {
   }
 }
 
-function renderArea(group: SceneGroup): string {
+function renderArea(group: SceneGroup, open: string): string {
   const info = computeAreaPath(group)
-  let out = markContainerOpen('area')
+  let out = open
   if (info) {
     const w = new StringAttrSink()
     areaMarkAttrs(info, w)
     const first = itemsOf(group)[0]
     const a = first ? linkOpen(first) : ''
     out += `${a}<path${w.s}/>${linkClose(a)}`
+  } else if (itemsOf(group).length) {
+    const w = new StringAttrSink()
+    pathlessMarkAttrs('area', itemsOf(group)[0]!, w)
+    out += `<path${w.s}/>`
   }
   out += '</g>'
   return out
@@ -752,9 +723,9 @@ function symbolPathImpl(shape: string | undefined, r: number, num: (x: number) =
   }
 }
 
-function renderSymbols(group: SceneGroup): string {
+function renderSymbols(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
-  let out = markContainerOpen('symbol')
+  let out = open
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
     // A null position (a geopoint the projection refused) renders at the
@@ -780,9 +751,9 @@ export function symbolMarkPath(it: SceneItem): GeneratedPath {
 }
 
 /** Circle mark: renders `<circle cx cy r>` elements (radius from `radius` or size). */
-function renderCircles(group: SceneGroup): string {
+function renderCircles(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
-  let out = markContainerOpen('circle')
+  let out = open
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
     if (it.x == null || it.y == null) continue
@@ -873,9 +844,9 @@ function renderClippedRoundedRects(group: SceneGroup, clips: ClipCollector): str
   return out
 }
 
-function renderRects(group: SceneGroup): string {
+function renderRects(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
-  let out = markContainerOpen('rect')
+  let out = open
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
     if (!rectIsPainted(it)) continue
@@ -950,9 +921,9 @@ function rectItemPathImpl(it: SceneItem): string | null {
   return `M${num(x0)},${num(y0)}h${num(w)}v${num(h)}h${num(-w)}Z`
 }
 
-function renderRules(group: SceneGroup): string {
+function renderRules(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
-  let out = markContainerOpen('rule')
+  let out = open
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
     // Vega defaults undefined x/y to 0 (scenegraph item defaults), so even
@@ -968,9 +939,9 @@ function renderRules(group: SceneGroup): string {
   return out
 }
 
-function renderTexts(group: SceneGroup): string {
+function renderTexts(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
-  let out = markContainerOpen('text')
+  let out = open
   for (const it of itemsOf(group)) {
     const el = textElement(it)
     if (el === '') continue
@@ -1101,9 +1072,9 @@ function truncateToLimit(it: SceneItem, text: string, fontSize: number): string 
   return text.slice(0, lo) + ellipsis
 }
 
-function renderPaths(group: SceneGroup): string {
+function renderPaths(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
-  let out = markContainerOpen('path')
+  let out = open
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
     if (!it.path) continue
@@ -1111,7 +1082,7 @@ function renderPaths(group: SceneGroup): string {
     // translate transform; items whose path already encodes absolute
     // coordinates (e.g. geoshape output) have x=y=0 and emit no transform).
     w.s = ''
-    pathItemAttrs(it, w)
+    pathItemAttrs(it, w, group.marktype === 'geoshape' ? 'shape' : group.marktype)
     out += links ? withLink(it, `<path${w.s}/>`) : `<path${w.s}/>`
   }
   out += '</g>'
@@ -1125,9 +1096,9 @@ function renderPaths(group: SceneGroup): string {
  * semicircular arcs around each endpoint), stroked with the first item's
  * stroke/strokeWidth. This mirrors vega's trail shape algorithm (d3-trail).
  */
-function renderTrail(group: SceneGroup): string {
+function renderTrail(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
-  let out = markContainerOpen('trail')
+  let out = open
   const items = itemsOf(group)
   if (items.length > 1) {
     const d = trailPath(items)
@@ -1233,9 +1204,9 @@ export function trailPath(items: SceneItem[]): GeneratedPath {
   return gen(out)
 }
 
-function renderImages(group: SceneGroup): string {
+function renderImages(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
-  let out = markContainerOpen('image')
+  let out = open
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
     if (it.url == null || it.x == null || it.y == null) continue
@@ -1268,9 +1239,9 @@ export function imageDesc(it: SceneItem): { x: number; y: number; w: number; h: 
   }
 }
 
-function renderArcs(group: SceneGroup): string {
+function renderArcs(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
-  let out = markContainerOpen('arc')
+  let out = open
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
     w.s = ''
@@ -1818,6 +1789,7 @@ export function leafSymbolPath(it: SceneItem): GeneratedPath {
 export function symbolElementAttrs(it: SceneItem, d: GeneratedPath, w: AttrSink): void {
   w.t('transform', rotateItemTransform(it))
   itemDatumAttr(it, w)
+  ariaItemAttrs(it, w, 'symbol')
   w.g('d', d)
   paintAttrs(it, w)
 }
@@ -1832,6 +1804,7 @@ export function textAttrs(it: SceneItem, w: AttrSink): ReturnType<typeof textIte
   if (d == null) return null
   const rec = recOf(it)
   itemDatumAttr(it, w)
+  ariaItemAttrs(it, w, 'text')
   w.t('transform', d.transform)
   w.a('text-anchor', svgTextAnchor(it.align))
   w.a('font-family', rec.font || 'sans-serif')
@@ -1845,6 +1818,7 @@ export function textAttrs(it: SceneItem, w: AttrSink): ReturnType<typeof textIte
 
 /** A straight line: guide leaf lines and rules (callers resolve the endpoints). */
 export function lineElementAttrs(x1: number, y1: number, x2: number, y2: number, it: SceneItem, w: AttrSink): void {
+  ariaItemAttrs(it, w, 'rule')
   w.n('x1', x1)
   w.n('y1', y1)
   w.n('x2', x2)
@@ -1870,12 +1844,23 @@ export function ruleEnds(it: SceneItem): [number, number, number, number] {
 
 /** A line mark's path: vega styles it from the first item; a stroked line defaults to width 2. */
 export function lineMarkAttrs(info: NonNullable<ReturnType<typeof computeLinePath>>, w: AttrSink): void {
+  ariaItemAttrs(info.first, w, 'line')
   w.g('d', info.path)
   paintAttrs(info.first, w, undefined, info.sw)
 }
 
+/**
+ * The element of a line / area mark none of whose points can be drawn: vega emits it without a `d`, styled from the first
+ * item like the path would be, so its aria-label is still there.
+ */
+export function pathlessMarkAttrs(kind: 'line' | 'area', first: SceneItem, w: AttrSink): void {
+  ariaItemAttrs(first, w, kind)
+  paintAttrs(first, w, undefined, kind === 'line' ? (first.strokeWidth ?? (first.stroke != null ? 2 : undefined)) : undefined)
+}
+
 /** An area mark's path: vega styles it from the first item. */
 export function areaMarkAttrs(info: NonNullable<ReturnType<typeof computeAreaPath>>, w: AttrSink): void {
+  ariaItemAttrs(info.first, w, 'area')
   w.g('d', info.path)
   paintAttrs(info.first, w)
 }
@@ -1883,6 +1868,7 @@ export function areaMarkAttrs(info: NonNullable<ReturnType<typeof computeAreaPat
 export function circleAttrs(it: SceneItem, w: AttrSink): void {
   const r = it.radius != null ? it.radius : Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
   itemDatumAttr(it, w)
+  ariaItemAttrs(it, w, 'circle')
   w.n('cx', it.x)
   w.n('cy', it.y)
   w.n('r', r)
@@ -1892,6 +1878,7 @@ export function circleAttrs(it: SceneItem, w: AttrSink): void {
 /** A rect mark item's path attributes (`datum: false` for the clipped-scope fallback, which never carried it). */
 export function rectPathAttrs(it: SceneItem, d: GeneratedPath, w: AttrSink, datum = true): void {
   if (datum) itemDatumAttr(it, w)
+  ariaItemAttrs(it, w, 'rect')
   w.g('d', d)
   paintAttrs(it, w)
 }
@@ -1903,16 +1890,18 @@ export function rectPathAttrs(it: SceneItem, d: GeneratedPath, w: AttrSink, datu
 export const rectIsPainted = (it: SceneItem): boolean => !(it.fill === null && it.stroke === null)
 
 /** A `path`/`shape`/`geoshape` item: vega path mark attr `[vector-effect] transform d`. */
-export function pathItemAttrs(it: SceneItem, w: AttrSink): void {
+export function pathItemAttrs(it: SceneItem, w: AttrSink, marktype = 'path'): void {
   if (pathVectorEffect(it)) w.v('vector-effect', 'non-scaling-stroke')
   w.t('transform', transformItemTransform(it))
   itemDatumAttr(it, w)
+  ariaItemAttrs(it, w, marktype)
   w.v('d', it.path)
   paintAttrs(it, w)
 }
 
 /** The trail polygon carries the full paint set of the FIRST item (vega). */
 export function trailAttrs(d: GeneratedPath, first: SceneItem, w: AttrSink): void {
+  ariaItemAttrs(first, w, 'trail')
   w.g('d', d)
   paintAttrs(first, w)
 }
@@ -1920,6 +1909,7 @@ export function trailAttrs(d: GeneratedPath, first: SceneItem, w: AttrSink): voi
 export function imageAttrs(it: SceneItem, w: AttrSink): void {
   const d = imageDesc(it)
   itemDatumAttr(it, w)
+  ariaItemAttrs(it, w, 'image')
   w.v('xlink:href', it.url)
   w.t('transform', `translate(${num(d.x)},${num(d.y)})`)
   w.n('width', d.w)
@@ -1941,6 +1931,7 @@ export function arcItemAttrs(it: SceneItem, w: AttrSink): void {
   const pa = recOf(it).padAngle as number | undefined ?? 0
   w.t('transform', rotateItemTransform(it))
   itemDatumAttr(it, w)
+  ariaItemAttrs(it, w, 'arc')
   w.g('d', arcPath(0, 0, r, r0, a0, a1, cr, pa))
   paintAttrs(it, w)
 }
@@ -1988,52 +1979,404 @@ export function frameAttrs(scene: SceneRoot, w: AttrSink): void {
   paintAttrs(frameItem(scene), w)
 }
 
-/**
- * A nested group's header attributes. When `clips` is passed the group is
- * clipped: to its own clip path, else to its own `gw` x `gh` at (0,0).
- */
-export function markGroupAttrs(group: SceneGroup, w: AttrSink, clips?: ClipCollector, gw = 0, gh = 0): void {
-  w.v('class', 'mark-group')
-  if (group.role) w.v('role', group.role)
-  if (clips) clipRefAttrs(groupClipId(group, clips, gw, gh), w)
-  if (group.x != null || group.y != null) w.t('transform', `translate(${num(group.x ?? 0)},${num(group.y ?? 0)})`)
-}
-
 export function stopAttrs(stop: { offset: number; color: string }, w: AttrSink): void {
   w.n('offset', stop.offset)
   w.v('stop-color', stop.color)
 }
 
+// --- accessibility and structure: vega-scenegraph's group, guide and title markup -----------------------------------
+//
+// vega-scenegraph draws every mark as a container `<g class="mark-<type> role-<role> <name>">` holding one element per
+// item; a group item is `<g transform>` + its background path + a content `<g>` (the child marks) + its foreground
+// path. Axes, legends and titles are group marks whose children are the marks of the guide (`role-axis-tick`,
+// `role-legend-entry`, ...), and the SVG says what they are to a screen reader through `role`, `aria-roledescription`
+// and `aria-label` (util/aria.js). Both renderers get that structure from `childNodes` below and every attribute from the
+// functions here, so the string and DOM outputs cannot differ.
+
+/** vega-scenegraph util/aria.js AriaIgnore: these roles are covered by their parent guide. */
+const ARIA_IGNORE: ReadonlySet<string> = new Set([
+  'axis-domain', 'axis-grid', 'axis-label', 'axis-tick', 'axis-title',
+  'legend-band', 'legend-entry', 'legend-gradient', 'legend-label', 'legend-title', 'legend-symbol', 'title',
+])
+
 /**
- * The container `<g>` of a mark type, or null when the type renders nothing.
- * Path-like marks (`shape`, `geoshape`) share the `path` container; arcs carry
- * only a class (vega).
+ * vega-scenegraph `ariaItemAttributes`: `aria-hidden` for an item with `aria: false`; else, for an item with a
+ * `description`, its aria-label, role (`ariaRole`, else graphics-object for a group and graphics-symbol for any other
+ * mark) and aria-roledescription (`ariaRoleDescription`, else `<mark type> mark`).
  */
-export function markContainerAttrs(type: string, w: AttrSink): boolean {
+export function ariaItemAttrs(it: SceneItem, w: AttrSink, marktype: string): void {
+  const d = it.description
+  if (d == null) {
+    if (it.aria === false) w.v('aria-hidden', 'true')
+    return
+  }
+  if (it.aria === false) { w.v('aria-hidden', 'true'); return }
+  w.v('aria-label', d)
+  w.v('role', it.ariaRole || (marktype === 'group' ? 'graphics-object' : 'graphics-symbol'))
+  w.v('aria-roledescription', it.ariaRoleDescription || `${marktype} mark`)
+}
+
+/** The scales a guide's caption reads: the snapshots of the nearest enclosing scope that has any (a11y.ts does the same). */
+export interface GuideScope {
+  snaps: ScaleSnapshots | undefined
+  map?: Map<string, unknown>
+}
+const scopeScales = (scope: GuideScope): Map<string, unknown> => (scope.map ??= scalesFromSnapshots(scope.snaps ?? []))
+
+/** vega-scenegraph titleCaption: the text of the title item, lines joined by a space. */
+function titleText(group: SceneGroup): string {
+  const first = (group.items?.[0] ?? {}) as SceneItem
+  const t = first.text
+  return Array.isArray(t) ? t.join(' ') : t == null ? '' : String(t)
+}
+
+/** The caption of a guide group's container (`aria-label`): the guide's own `description`, else vega's caption. */
+function guideCaption(group: SceneGroup, scope: GuideScope): string | undefined {
+  if (group.description != null) return group.description
+  switch (group.role) {
+    // (a guide whose scale is unknown has no caption: vega's ariaGuide catches the failure and writes no ARIA at all)
+    case 'axis': return scopeScales(scope).has(group.scale ?? '') ? axisLabel({ ...group, title: guideTitleText(group) }, scopeScales(scope)) : undefined
+    case 'legend': return scopeScales(scope).has(group.legendScale ?? '') ? legendLabel({ ...group, title: guideTitleText(group) }, scopeScales(scope)) : undefined
+    case 'title-text': return `Title text '${titleText(group)}'`
+    case 'title-subtitle': return `Subtitle text '${titleText(group)}'`
+    default: return undefined
+  }
+}
+
+/** vega-scenegraph `ariaMarkAttributes` for a mark container (the group or data mark `group` is). */
+function ariaMarkAttrs(group: SceneGroup, w: AttrSink, marktype: string, scope: GuideScope): void {
+  if (group.aria === false) { w.v('aria-hidden', 'true'); return }
+  const role = group.role
+  if (role !== undefined && ARIA_IGNORE.has(role)) return
+  if (role === 'axis' || role === 'legend' || role === 'title-text' || role === 'title-subtitle') {
+    // (an axis that draws nothing has no caption in vega either: its ariaGuide finds no mark to read)
+    if (role === 'axis' && unwrapAxis(group).parts.length === 0) return
+    const label = guideCaption(group, scope)
+    if (label === undefined) return
+    w.v('role', 'graphics-symbol')
+    w.v('aria-roledescription', role === 'title-text' ? 'title' : role === 'title-subtitle' ? 'subtitle' : role)
+    w.v('aria-label', label)
+    return
+  }
+  // an ordinary mark: an object when it is a group or text mark or any item describes itself, else a symbol
+  let recurse = marktype === 'group' || marktype === 'text'
+  if (!recurse && group.describes === true) recurse = (group.items ?? []).some((it) => (it as SceneItem).description != null && (it as SceneItem).aria !== false)
+  w.v('role', recurse ? 'graphics-object' : 'graphics-symbol')
+  w.v('aria-roledescription', `${marktype} mark container`)
+  w.v('aria-label', group.description)
+}
+
+/** vega-scenegraph cssClass: `mark-<type> role-<role> <name>`; the role and name are the spec's. */
+function cssClassOf(kind: string, group: SceneGroup): string {
+  const role = group.role === 'mark' ? (group.markRole ?? 'mark') : group.role
+  return `mark-${kind}${role ? ` role-${role}` : ''}${group.cssName ? ` ${group.cssName}` : ''}`
+}
+
+/** The clip a data mark's container carries (vega: `clip-path` on the container), or null. */
+function markClipId(group: SceneGroup, clips: ClipCollector, frameW: number, frameH: number): string | null {
+  return group.clip === true ? groupClipId(group, clips, frameW, frameH) : null
+}
+
+/** A mark that is not interactive: its container (and a group item's background / foreground) say `pointer-events="none"`. */
+const isInert = (group: SceneGroup): boolean => group.interactive === false || group.role === 'title-text' || group.role === 'title-subtitle'
+
+/**
+ * The container `<g>` of a data mark, or false when the type renders nothing. `scope` is only read for a guide's own
+ * text marks (the title); data marks need none.
+ */
+export function markContainerAttrs(group: SceneGroup, w: AttrSink, clipId: string | null = null, scope: GuideScope = { snaps: undefined }): boolean {
+  const type = group.marktype
   let kind: string
   switch (type) {
-    case 'arc':
-      w.v('class', 'mark-arc role-mark')
-      return true
     case 'line': case 'area': case 'trail': case 'symbol': case 'rect': case 'circle': case 'rule': case 'text': case 'image':
+    case 'arc': case 'path': case 'shape':
       kind = type
       break
-    case 'path': case 'shape': case 'geoshape':
-      kind = 'path'
+    case 'geoshape':
+      kind = 'shape'
       break
     default:
       return false
   }
-  w.v('class', `mark-${kind} role-mark`)
-  w.v('role', 'graphics-symbol')
-  w.v('aria-roledescription', `${kind} mark container`)
+  w.v('class', cssClassOf(kind, group))
+  if (clipId) clipRefAttrs(clipId, w)
+  ariaMarkAttrs(group, w, kind, scope)
+  if (isInert(group)) w.v('pointer-events', 'none')
   return true
 }
 
-function markContainerOpen(type: string): string {
-  const w = new StringAttrSink()
-  markContainerAttrs(type, w)
-  return `<g${w.s}>`
+/** The container `<g>` of a group mark (all the group items of one mark share it). */
+export function groupContainerAttrs(first: SceneGroup, w: AttrSink, clipId: string | null, scope: GuideScope): void {
+  w.v('class', cssClassOf('group', first))
+  if (clipId) clipRefAttrs(clipId, w)
+  ariaMarkAttrs(first, w, 'group', scope)
+}
+
+/** A group item's `<g>`: its `translate(x,y)`. */
+export function groupItemAttrs(dx: number, dy: number, w: AttrSink): void {
+  // (a group's `description` and `aria` are its MARK's: they are on the container, see ariaMarkAttrs)
+  w.t('transform', `translate(${num(dx)},${num(dy)})`)
+}
+
+/** The background path of a group item: the item's own box and paint (`bg`), else an unpainted box of `d`. */
+export function groupBackgroundAttrs(bg: SceneItem | null, d: GeneratedPath, inert: boolean, w: AttrSink): void {
+  w.v('class', 'background')
+  w.v('aria-hidden', 'true')
+  if (bg) leafPathAttrs(bg, w)
+  else w.g('d', d)
+  if (inert) w.v('pointer-events', 'none')
+}
+
+/** The foreground path of a group item: the stroke drawn over the content (`fg`), else the empty hidden path. */
+export function groupForegroundAttrs(fg: SceneItem | null, inert: boolean, w: AttrSink): void {
+  w.v('class', 'foreground')
+  w.v('aria-hidden', 'true')
+  if (fg) {
+    leafPathAttrs(fg, w)
+    if (inert) w.v('pointer-events', 'none')
+    return
+  }
+  w.v('d', '')
+  if (inert) w.v('pointer-events', 'none')
+  w.v('display', 'none')
+}
+
+/** What a part of a guide is drawn as: the container class of vega-parser's guide marks. */
+const GUIDE_PARTS: Record<string, string> = {
+  // axis
+  grid: 'mark-rule role-axis-grid',
+  tick: 'mark-rule role-axis-tick',
+  label: 'mark-text role-axis-label',
+  domain: 'mark-rule role-axis-domain',
+  title: 'mark-text role-axis-title',
+  // legend (the axis names `label` and `title` are the legend's too, with the legend role)
+  symbol: 'mark-symbol role-legend-symbol',
+  gradient: 'mark-rect role-legend-gradient',
+  band: 'mark-rect role-legend-band',
+}
+const LEGEND_PART_CLASS: Record<string, string> = {
+  label: 'mark-text role-legend-label',
+  title: 'mark-text role-legend-title',
+}
+
+/** The container of one guide mark: not interactive, so `pointer-events="none"`. */
+export function guidePartAttrs(guide: 'axis' | 'legend', part: string, clipId: string | null, w: AttrSink): void {
+  w.v('class', (guide === 'legend' ? LEGEND_PART_CLASS[part] : undefined) ?? GUIDE_PARTS[part]!)
+  if (clipId) clipRefAttrs(clipId, w)
+  w.v('pointer-events', 'none')
+}
+
+
+// --- the structure tree: what both renderers draw for groups and guides --------------------------------------------
+
+/** An element of the structure tree. `path` elements have no children; `link` wraps the element in its `<a>`. */
+export interface SvgEl {
+  tag: 'g' | 'path'
+  attrs: (w: AttrSink) => void
+  children?: SvgNode[]
+  link?: SceneItem
+}
+/** A leaf item of a guide (or of a group's content), drawn by the leaf renderers. */
+export interface SvgLeaf {
+  leaf: SceneItem
+  /** A clipped legend symbol hangs its clip on a `<g>` around the path, unless its container carries it (`leafClipId`). */
+  wrapClip: boolean
+}
+/** A data mark, drawn by the mark renderers. `frameW`/`frameH` is the frame of the group that contains it. */
+export interface SvgMark {
+  mark: SceneGroup
+  frameW: number
+  frameH: number
+  scope: GuideScope
+}
+export type SvgNode = SvgEl | SvgLeaf | SvgMark
+
+const el = (tag: 'g' | 'path', attrs: (w: AttrSink) => void, children?: SvgNode[], link?: SceneItem): SvgEl =>
+  (children === undefined ? (link === undefined ? { tag, attrs } : { tag, attrs, link }) : link === undefined ? { tag, attrs, children } : { tag, attrs, children, link })
+const noAttrs = (_w: AttrSink): void => {}
+const EMPTY_BOX = gen('M0,0h0v0h0Z')
+const boxPath = (w: number, h: number): GeneratedPath => gen(`M0,0h${num(w)}v${num(h)}h-${num(w)}Z`)
+const isGroupNode = (it: SceneItem): it is SceneGroup => isGroup(it) && (it.marktype === undefined || it.marktype === 'group')
+const flag = (it: SceneItem, key: string): boolean => (it as Record<string, unknown>)[key] === true
+
+/**
+ * The elements a list of scene children draws to, in order. Group items of one mark (consecutive, same `markIndex`)
+ * share one container `<g>`; a data mark is its own container; a bare leaf is a leaf. `frameW`/`frameH` is the frame
+ * of the group that holds them.
+ */
+export function childNodes(items: readonly SceneItem[] | undefined, frameW: number, frameH: number, scope: GuideScope, clips: ClipCollector): SvgNode[] {
+  const out: SvgNode[] = []
+  if (!items) return out
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]!
+    if (!isGroup(it)) { out.push({ leaf: it, wrapClip: true }); continue }
+    if (!isGroupNode(it)) { out.push({ mark: it, frameW, frameH, scope }); continue }
+    let j = i + 1
+    const id = it.markIndex
+    if (id !== undefined) {
+      while (j < items.length) {
+        const next = items[j]!
+        if (!isGroup(next) || !isGroupNode(next) || next.markIndex !== id) break
+        j++
+      }
+    }
+    out.push(groupContainer(items.slice(i, j) as SceneGroup[], frameW, frameH, scope, clips))
+    i = j - 1
+  }
+  return out
+}
+
+function groupContainer(run: SceneGroup[], frameW: number, frameH: number, scope: GuideScope, clips: ClipCollector): SvgEl {
+  const first = run[0]!
+  // vega's mark-level `clip`: the container is clipped to the frame of the enclosing group
+  const attrs = (w: AttrSink): void => groupContainerAttrs(first, w, first.markClip === true ? clips.id({ x: 0, y: 0, w: frameW, h: frameH }) : null, scope)
+  return el('g', attrs, run.map((g) => groupItem(g, frameW, frameH, scope, clips)))
+}
+
+function groupItem(g: SceneGroup, frameW: number, frameH: number, scope: GuideScope, clips: ClipCollector): SvgEl {
+  if (!flag(g, '_scope')) {
+    if (g.role === 'axis') return axisItem(g)
+    if (g.role === 'legend') return legendItem(g, clips)
+    if (g.role === 'title') return titleItem(g, frameW, frameH, scope)
+  }
+  const gw = g.width ?? frameW
+  const gh = g.height ?? frameH
+  const inner: GuideScope = g.__scales ? { snaps: g.__scales } : scope
+  const items = (g.items ?? []) as SceneItem[]
+  // group items hold [background, content..., foreground?]: the boxes the runtime drew (`_bg`)
+  const bg = items.length > 0 && flag(items[0]!, '_bg') ? items[0]! : null
+  const fg = items.length > 1 && flag(items[items.length - 1]!, '_bg') ? items[items.length - 1]! : null
+  let body = items.slice(bg ? 1 : 0, fg ? items.length - 1 : items.length)
+  let contentAttrs: (w: AttrSink) => void = noAttrs
+  let cw = gw
+  let ch = gh
+  const scopeNode = body.length === 1 && isGroup(body[0]!) && flag(body[0]!, 'contentClip') ? (body[0] as SceneGroup) : null
+  if (scopeNode) {
+    // the item's `clip` (encode): the content `<g>` is clipped to the item's own box or rounded-rect path
+    cw = scopeNode.width ?? gw
+    ch = scopeNode.height ?? gh
+    contentAttrs = (w) => clipRefAttrs(groupClipId(scopeNode, clips, cw, ch), w)
+    body = (scopeNode.items ?? []) as SceneItem[]
+  }
+  const inert = g.interactive === false
+  return el('g', (w) => groupItemAttrs(g.x ?? 0, g.y ?? 0, w), [
+    el('path', (w) => groupBackgroundAttrs(bg, boxPath(gw, gh), inert, w)),
+    el('g', contentAttrs, childNodes(body, cw, ch, inner, clips)),
+    el('path', (w) => groupForegroundAttrs(fg, inert, w)),
+  ], g)
+}
+
+/** The item `<g>` of a guide: its position, an unpainted box, the guide's marks, an empty foreground. */
+function guideItem(x: number, y: number, bg: SceneItem | null, marks: SvgEl[], box: GeneratedPath = EMPTY_BOX, loose: readonly SceneItem[] = []): SvgEl {
+  return el('g', (w) => groupItemAttrs(x, y, w), [
+    el('path', (w) => groupBackgroundAttrs(bg, box, true, w)),
+    el('g', noAttrs, loose.length ? [...marks, ...loose.map((leaf): SvgLeaf => ({ leaf, wrapClip: true }))] : marks),
+    el('path', (w) => groupForegroundAttrs(null, true, w)),
+  ])
+}
+
+/**
+ * An axis as its parts: raw-guide mode wraps the axis in a group that only carries the half-pixel shift, so the
+ * shift adds up and the parts are the inner group's.
+ */
+function unwrapAxis(outer: SceneGroup): { g: SceneGroup; dx: number; dy: number; leaves: SceneItem[]; parts: string[] } {
+  let g = outer
+  let dx = outer.x ?? 0
+  let dy = outer.y ?? 0
+  while (g.parts === undefined && g.items?.length === 1 && isGroup(g.items[0]!) && (g.items[0] as SceneGroup).role === 'axis') {
+    g = g.items[0] as SceneGroup
+    dx += g.x ?? 0
+    dy += g.y ?? 0
+  }
+  const leaves = (g.items ?? []) as SceneItem[]
+  const parts = g.parts ?? [...new Set(leaves.map((l) => l._part).filter((p): p is string => p !== undefined))]
+  return { g, dx, dy, leaves, parts }
+}
+
+function axisItem(outer: SceneGroup): SvgEl {
+  const { dx, dy, leaves, parts } = unwrapAxis(outer)
+  const marks = parts.map((part) => el('g', (w) => guidePartAttrs('axis', part, null, w), leaves.filter((l) => l._part === part).map((leaf) => ({ leaf, wrapClip: true }))))
+  // (leaves of a hand-built scene carry no part: they are drawn all the same, in the item's content)
+  const loose = leaves.filter((l) => l._part === undefined || !parts.includes(l._part))
+  return guideItem(dx, dy, null, marks, EMPTY_BOX, loose)
+}
+
+function legendItem(g: SceneGroup, clips: ClipCollector): SvgEl {
+  const leaves = (g.items ?? []) as SceneItem[]
+  const leaf = (it: SceneItem, wrapClip = true): SvgLeaf => ({ leaf: it, wrapClip })
+  let bg: SceneItem | null = null
+  const entries: Array<{ box: SceneItem | null; symbols: SceneItem[]; labels: SceneItem[] }> = []
+  const gradients: SceneItem[] = []
+  const bands: SceneItem[] = []
+  const labels: SceneItem[] = []
+  const titles: SceneItem[] = []
+  const loose: SceneItem[] = []
+  // symbols or gradient/bands: what the builder drew (an entry or a symbol leaf), else what it says it drew
+  const symbolStyle = leaves.some((l) => l._part === 'entry' || l._part === 'symbol')
+    || (!leaves.some((l) => l._part === 'gradient' || l._part === 'band') && g.legendType !== 'gradient' && g.legendType !== 'discrete')
+  let cur: (typeof entries)[number] | null = null
+  for (const it of leaves) {
+    switch (it._part) {
+      case 'bg': bg ??= it; break
+      case 'entry': entries.push((cur = { box: it, symbols: [], labels: [] })); break
+      case 'symbol': (cur ??= entries[entries.push({ box: null, symbols: [], labels: [] }) - 1]!).symbols.push(it); break
+      case 'label': if (symbolStyle) (cur ??= entries[entries.push({ box: null, symbols: [], labels: [] }) - 1]!).labels.push(it); else labels.push(it); break
+      case 'gradient': gradients.push(it); break
+      case 'band': bands.push(it); break
+      case 'title': titles.push(it); break
+      default: loose.push(it)
+    }
+  }
+  const col = (inside: SvgEl[]): SvgEl => el('g', (w) => w.v('class', 'mark-group role-legend-entry'), [guideItem(0, 0, null, inside)])
+  let entryMarks: SvgEl[]
+  if (symbolStyle) {
+    const items = entries.map((e) => el('g', (w) => groupItemAttrs(0, 0, w), [
+      el('path', (w) => groupBackgroundAttrs(e.box, EMPTY_BOX, true, w)),
+      el('g', noAttrs, [
+        el('g', (w) => guidePartAttrs('legend', 'symbol', e.symbols.length ? leafClipId(e.symbols[0]!, clips) : null, w), e.symbols.map((s) => leaf(s, false))),
+        el('g', (w) => guidePartAttrs('legend', 'label', null, w), e.labels.map((l) => leaf(l))),
+      ]),
+      el('path', (w) => groupForegroundAttrs(null, true, w)),
+    ]))
+    // (a legend whose entries failed to build has no entry scope at all: vega's subflow never ran)
+    entryMarks = entries.length === 0 && bg === null ? [] : [el('g', (w) => { w.v('class', 'mark-group role-scope'); w.v('role', 'graphics-object'); w.v('aria-roledescription', 'group mark container') }, items)]
+  } else {
+    const banded = g.legendType === 'discrete' || bands.length > 0
+    entryMarks = [
+      el('g', (w) => guidePartAttrs('legend', banded ? 'band' : 'gradient', null, w), (banded ? bands : gradients).map((l) => leaf(l))),
+      el('g', (w) => guidePartAttrs('legend', 'label', null, w), labels.map((l) => leaf(l))),
+    ]
+  }
+  const marks: SvgEl[] = [col(entryMarks)]
+  if (titles.length) marks.push(el('g', (w) => guidePartAttrs('legend', 'title', null, w), titles.map((t) => leaf(t))))
+  return guideItem(g.x ?? 0, g.y ?? 0, bg, marks, boxPath(g.width ?? 0, g.height ?? 0), loose)
+}
+
+function titleItem(g: SceneGroup, frameW: number, frameH: number, scope: GuideScope): SvgEl {
+  const marks = ((g.items ?? []) as SceneItem[]).map((m): SvgNode => (isGroup(m) ? { mark: m, frameW, frameH, scope } : { leaf: m, wrapClip: true }))
+  return el('g', (w) => groupItemAttrs(g.x ?? 0, g.y ?? 0, w), [
+    el('path', (w) => groupBackgroundAttrs(null, EMPTY_BOX, true, w)),
+    el('g', noAttrs, marks as SvgNode[]),
+    el('path', (w) => groupForegroundAttrs(null, true, w)),
+  ])
+}
+
+/** Serialize the structure tree. The attribute writers run in document order (clip ids are registered as they go). */
+export function serializeNodes(nodes: readonly SvgNode[], clips: ClipCollector): string {
+  let out = ''
+  for (const n of nodes) {
+    if ('leaf' in n) { out += renderLeaf(n.leaf, clips, n.wrapClip); continue }
+    if ('mark' in n) { out += renderMark(n.mark, n.frameW, n.frameH, clips); continue }
+    const w = new StringAttrSink()
+    n.attrs(w)
+    let el = n.children === undefined ? `<${n.tag}${w.s}/>` : `<${n.tag}${w.s}>${serializeNodes(n.children, clips)}</${n.tag}>`
+    if (n.link) {
+      const open = linkOpen(n.link)
+      if (open) el = open + el + '</a>'
+    }
+    out += el
+  }
+  return out
 }
 
 /** Gradient definition attributes (direction included). */
