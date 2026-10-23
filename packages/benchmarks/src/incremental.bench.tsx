@@ -18,6 +18,18 @@
  * paint/frame pacing). It is informational: the pass/fail gate stays on aster's
  * own incremental vs full comparison.
  *
+ * Gate floors (C86). At the calibrated shape (>= 10000 points and >= 30 updates, which is what
+ * `pnpm check` runs) each path must beat its baseline by a MEASURED floor, not just by >1x, so a large
+ * regression cannot pass. Floors are half of the median speedup measured on the development machine
+ * (`pnpm bench:incremental -- --points=10000 --reps=30`, three sequential runs, 2026-10-23):
+ *
+ *   incremental append vs full evaluate   15.8x - 16.7x   floor 8x
+ *   session whole-array replace vs full   23.7x - 25.0x   floor 12x
+ *   DOM patch vs full SVG serialization    3.3x -  3.7x   floor 1.6x
+ *
+ * Below the calibrated shape (speedup scales with the dataset) only the >1x check applies. Override with
+ * --min-append=, --min-replace=, --min-dom= (used to prove the gate bites).
+ *
  * Run: pnpm bench:incremental [--points=5000] [--batch=1] [--reps=100] [--vega=1]
  */
 import { performance } from 'node:perf_hooks'
@@ -35,6 +47,11 @@ async function main(): Promise<void> {
   const points = Number(arg('points', '5000'))
   const batch = Math.max(1, Number(arg('batch', '1')))
   const reps = Math.max(5, Number(arg('reps', '100')))
+  const calibrated = points >= 10000 && reps >= 30
+  const floorOf = (name: string, calibratedFloor: number): number => Number(arg(name, String(calibrated ? calibratedFloor : 1)))
+  const minAppend = floorOf('min-append', 8)
+  const minReplace = floorOf('min-replace', 12)
+  const minDom = floorOf('min-dom', 1.6)
 
   const { compileChart, evaluateChart, createChartStream, renderSceneToSvg } = await import('@aster/core')
 
@@ -185,17 +202,18 @@ async function main(): Promise<void> {
       ],
     ),
   )
-  if (!(replace.median < full.median)) {
-    console.error('\n[incremental] FAIL: whole-array replacement is not cheaper than a full evaluation')
+  const replaceRatio = full.median / Math.max(replace.median, 1e-9)
+  if (!(replace.median < full.median) || replaceRatio < minReplace) {
+    console.error(`\n[incremental] FAIL: whole-array replacement is ${replaceRatio.toFixed(2)}x cheaper than a full evaluation; floor ${minReplace}x`)
     process.exitCode = 1
   }
 
-  if (!(inc.median < full.median)) {
-    console.error('\n[incremental] FAIL: incremental append is not cheaper than full re-evaluation')
+  if (!(inc.median < full.median) || ratio < minAppend) {
+    console.error(`\n[incremental] FAIL: incremental append is ${ratio.toFixed(2)}x cheaper than full re-evaluation; floor ${minAppend}x`)
     process.exitCode = 1
     return
   }
-  console.log(`\n[incremental] pass: append is ${ratio.toFixed(2)}x cheaper (median), final rows ${svgRows}`)
+  console.log(`\n[incremental] pass: append is ${ratio.toFixed(2)}x cheaper (median, floor ${minAppend}x), final rows ${svgRows}`)
 
   // DOM path: patch the persistent <svg> vs re-serialize/replace the full SVG.
   // jsdom patching is slower than a browser, but the relative cost is the point.
@@ -238,11 +256,12 @@ async function main(): Promise<void> {
       ],
     ),
   )
-  if (!(patch.median < serialize.median)) {
-    console.error('\n[incremental] FAIL: DOM patching is not cheaper than full SVG serialization')
+  const domRatio = serialize.median / Math.max(patch.median, 1e-9)
+  if (!(patch.median < serialize.median) || domRatio < minDom) {
+    console.error(`\n[incremental] FAIL: DOM patching is ${domRatio.toFixed(2)}x cheaper than full SVG serialization; floor ${minDom}x`)
     process.exitCode = 1
   } else {
-    console.log(`\n[incremental] DOM pass: patching is ${(serialize.median / Math.max(patch.median, 1e-9)).toFixed(2)}x cheaper`)
+    console.log(`\n[incremental] DOM pass: patching is ${domRatio.toFixed(2)}x cheaper (floor ${minDom}x)`)
   }
 
   // Dense SVG streaming at scale: the per-append DOM work of a 100k-symbol chart

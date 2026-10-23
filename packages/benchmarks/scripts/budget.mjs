@@ -1,5 +1,5 @@
 import { build } from 'esbuild'
-import { writeFileSync, readFileSync, statSync, rmSync, mkdirSync } from 'node:fs'
+import { writeFileSync, readFileSync, statSync, rmSync, mkdirSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
@@ -62,14 +62,19 @@ const BUDGETS = {
   // Vega-faithful signal event loop (event-selector parser, stream graph, event extension, logger: signals
   // 32.4 -> 41.0 gzip, the entry also carries the expression engine), the entry evaluator, error recovery and group
   // paint/clip (core 124.1 -> 125.3, dom 127.4 -> 128.6). Ceilings are measured + 0.5 kB (owner approved raises).
-  '@aster/core': 125.8 * 1024,
-  '@aster/core/dom': 129.1 * 1024,
-  '@aster/core/canvas': 20 * 1024,
+  '@aster/core': 119.2 * 1024,
+  '@aster/core/dom': 122.7 * 1024,
+  '@aster/core/canvas': 16.2 * 1024,
   '@aster/core/hit': 16 * 1024,
   '@aster/core/signals': 41.5 * 1024,
-  // 180 kB leaves headroom for feature work; measured values are recorded at
-  // the top of this file and in `pnpm bench:bundle`.
-  '@aster/react': 180 * 1024,
+  // loadSpecData + the URL policy, SSRF guard and data-format readers (the addon is standalone, so this row
+  // is the whole loader, not its marginal cost on top of core). Budget is measured + 0.5 kB; see `pnpm bench:bundle`.
+  '@aster/core/load': 15.2 * 1024,
+  // C86: the old 180 kB budget sat ~20 kB above the measured 160.1 kB, so a 12% regression passed.
+  // Every row below is now measured + 0.5 kB (measured 2026-10-23, `pnpm --filter @aster/benchmarks run budget`:
+  // core 118.7, dom 122.2, canvas 15.7, hit 15.7, load 14.7, signals 41.0, react 160.1, react/vl 212.8).
+  // A change that needs more room edits the number here, in the PR, where the owner sees it.
+  '@aster/react': 160.6 * 1024,
   // Base + VL compiler. The compiler is opt-in (`import '@aster/react/vl'`),
   // so the base row above is the one to watch for React-side regressions.
   // 209 = measured 208.5 + 0.5. The compiler is ~51.5 kB gzip of that (react base 157.0): it grew
@@ -80,7 +85,7 @@ const BUDGETS = {
   // any scale name and for worker scenes), the worker protocol (limits, text metrics and url policy by name,
   // validation, bounded producer queue), content-keyed lifecycles, stream recovery, the roving-tabindex a11y
   // tree and the LoadOptions pass-through.
-  '@aster/react/vl': 218.8 * 1024,
+  '@aster/react/vl': 213.3 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
@@ -122,6 +127,14 @@ export default buildHitIndex
 `,
   },
   {
+    name: '@aster/core/load',
+    file: 'load.mjs',
+    platform: 'node',
+    src: String.raw`import { loadSpecData } from '@aster/core/load'
+export default loadSpecData
+`,
+  },
+  {
     name: '@aster/core/signals',
     file: 'signals.mjs',
     platform: 'node',
@@ -155,22 +168,49 @@ function setupTmp() {
   mkdirSync(TMP, { recursive: true })
 }
 
-function coreAlreadyBuilt() {
-  try {
-    statSync(join(MONOREPO_ROOT, 'packages', 'core', 'dist', 'index.js'))
-    statSync(join(MONOREPO_ROOT, 'packages', 'react', 'dist', 'index.js'))
-    return true
-  } catch {
-    return false
+const PUBLIC_PACKAGES = ['core', 'react', 'vl']
+const isBuildInput = (name) => /\.tsx?$/.test(name) && !/\.d\.ts$/.test(name) && !/\.(test|testlib|testkit)\.tsx?$/.test(name)
+
+function listSources(dir) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const p = join(dir, e.name)
+    return e.isDirectory() ? listSources(p) : isBuildInput(e.name) ? [p] : []
+  })
+}
+
+/**
+ * The budget must measure what `pnpm build` produces from the CURRENT sources (C86): a dist that is
+ * missing, or older than the source file it was built from, makes the numbers describe code that no
+ * longer exists. Returns a list of problems (empty when every dist file is at least as new as its source).
+ */
+function distProblems() {
+  const problems = []
+  for (const pkg of PUBLIC_PACKAGES) {
+    const srcDir = join(MONOREPO_ROOT, 'packages', pkg, 'src')
+    const distDir = join(MONOREPO_ROOT, 'packages', pkg, 'dist')
+    for (const file of listSources(srcDir)) {
+      const rel = file.slice(srcDir.length + 1).replace(/\.tsx?$/, '.js')
+      let dist
+      try {
+        dist = statSync(join(distDir, rel))
+      } catch {
+        problems.push(`packages/${pkg}/dist/${rel} is missing`)
+        continue
+      }
+      if (dist.mtimeMs < statSync(file).mtimeMs) problems.push(`packages/${pkg}/dist/${rel} is older than its source`)
+    }
   }
+  return problems
 }
 
 const KB = (n) => (n / 1024).toFixed(1)
 
 try {
   setupTmp()
-  if (!coreAlreadyBuilt()) {
-    console.error('Run `pnpm build` first')
+  const stale = distProblems()
+  if (stale.length) {
+    console.error(`Refusing to measure a stale or missing dist (${stale.length} problem${stale.length === 1 ? '' : 's'}); run \`pnpm build\` first:`)
+    for (const p of stale.slice(0, 5)) console.error(`  ${p}`)
     process.exit(1)
   }
 
