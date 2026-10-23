@@ -50,7 +50,7 @@ import { rowsEqual, type PulseChange } from './pulse.js'
 import { fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import { trellisLayout, gridLayout } from './trellis.js'
-import { boundAxisGroup, boundGroupItem, boundLeaf, boundText, Bounds, layoutBounds } from './bounds.js'
+import { boundAxisGroup, boundGroupItem, boundLeaf, boundText, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { itemTextWidth, nominalTextWidth, type FontProps } from './text-metrics.js'
 import { symbolPath, symbolPathExact, rectItemPath } from './render.js'
 
@@ -438,6 +438,8 @@ function prepareChartCtx(
   txn: EvalTxn = { prev: undefined, gen: 1, claimed: new Set() },
   /** Whether `input.width`/`input.height` is a size someone chose (the host or a fit resize), not just the resolved default. */
   explicitSize: { width: boolean; height: boolean } = { width: input.width != null, height: input.height != null },
+  /** The view size signals as written, negative included (see {@link signedViewSize}): the first autosize pass reads them so. */
+  signed?: { width?: number; height?: number },
 ): { ctx: EvalContext; width: number; height: number } {
   // The deadline belongs to the enclosing limits scope (evaluateChart /
   // getChartInfo / renderSpec / session), so one wall clock covers the whole
@@ -450,12 +452,12 @@ function prepareChartCtx(
   }
   checkDeadline('startup')
   const signals = dict(chart.signals, input.signals)
-  let width = resolveSize(chart.width, input.width, signals)
+  let width = signed?.width ?? resolveSize(chart.width, input.width, signals)
   // A Vega spec can define the chart height as a `height` signal (a special
   // signal that doubles as the view size), e.g. `signals:[{name:'height',
   // update: ...}]`, without a top-level numeric height. It's resolved later by
   // resolveSignalUpdates, so apply the fallback after that (see below).
-  let height = resolveSize(chart.height, input.height, signals)
+  let height = signed?.height ?? resolveSize(chart.height, input.height, signals)
   const signalParams = dict<unknown>({ width, height }, signals)
 
   const datasets = new Map<string, Row[]>()
@@ -802,7 +804,8 @@ function buildAxisAndLegend(
   // the anchor bounds scan the content items too.
   const anchorItems = [...contentItems]
 
-  for (const axis of axes) {
+  for (const axis0 of axes) {
+    const axis = resolveAxisOrient(axis0, ctx)
     const group = buildAxis(axis, ctx)
     if (group) {
       // Raw-guide mode: the axisLayout never ran, so the builder's baked 0.5
@@ -837,7 +840,7 @@ function buildAxisAndLegend(
   // a legend that VL kept must not remove it.)
   const built = legends
     .map((legend0) => {
-      const legend = legendWithGroupEncode(legend0, ctx)
+      const legend = legendWithGroupEncode(resolveGuideSignals(legend0, LEGEND_SIGNAL_KEPT, ctx), ctx)
       const group = buildLegend(legend, ctx)
       if (group) {
         placeLegendTitleLast(group, legend, ctx)
@@ -879,8 +882,10 @@ function buildAxisAndLegend(
     // legendParams anchors on the axis bounds only: xBounds unions the
     // vertical (left/right) axes, yBounds the horizontal ones; marks live in
     // viewBounds and never reach the anchor.
-    let xb = { x1: 0, y1: 0, x2: ctx.width, y2: ctx.height }
-    let yb = { x1: 0, y1: 0, x2: ctx.width, y2: ctx.height }
+    const layoutW = Math.max(0, ctx.width)
+    const layoutH = Math.max(0, ctx.height)
+    let xb = { x1: 0, y1: 0, x2: layoutW, y2: layoutH }
+    let yb = { x1: 0, y1: 0, x2: layoutW, y2: layoutH }
     for (const g of anchorItems) {
       // vega's getRole: every top-level group-typed mark is a scope and
       // unions into BOTH anchor bounds; axis marks split by orientation.
@@ -1003,8 +1008,8 @@ function buildAxisAndLegend(
       const aEnd = anchor === 'end'
       const aMiddle = anchor === 'middle'
       const mult = aEnd ? 1 : aMiddle ? 0.5 : 0
-      const W = ctx.width
-      const H = ctx.height
+      const W = layoutW
+      const H = layoutH
       let x: number
       let y: number
       let colEnd = false
@@ -1116,9 +1121,8 @@ function computeGuidePadding(
   let maxY = height
   const EPS = 1e-9
 
-  for (const group of items) {
-    const b = measureGuideGroup(group)
-    if (b.empty()) continue
+  const grow = (b: Bounds, group: SceneGroup): void => {
+    if (b.empty()) return
     // Axis bounds carry fp residue from measured label/title geometry where
     // vega's arithmetic is exact; collapse only that sub-ulp residue. Mark and
     // legend geometry is exact enough that a genuine positive residue (a bar
@@ -1135,6 +1139,9 @@ function computeGuidePadding(
     minY = Math.min(minY, b.y1 + ei + Math.min(0, nudgeY(b.y1)))
     maxY = Math.max(maxY, b.y2 - ei + Math.max(0, nudgeY(b.y2)))
   }
+  // a mark's `clip` bounds the mark to the frame it sits in (vega boundClip), a group mark across all its items
+  if (hasClippedMark(items)) eachMarkBounds(items, width, height, (n) => measureGuideGroup(n as SceneGroup), (b, n) => grow(b, n as SceneGroup))
+  else for (const group of items) grow(measureGuideGroup(group), group)
 
   // vega's viewSizeLayout (autosize pad): origin = spec padding + the ceil'd
   // overflow of the viewBounds on each side — no extra margin.
@@ -1313,11 +1320,18 @@ function buildContent(
   ch: number,
   txn: EvalTxn,
   fitted = false,
+  signed?: { width?: number; height?: number },
 ): { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean } {
-  const { ctx, width, height } = prepareChartCtx(
-    chart, { ...input, width: cw, height: ch }, txn,
+  const prepared = prepareChartCtx(
+    // (the first build reads the size from the spec and the host's input itself; only a fit-resize overrides it)
+    chart, fitted ? { ...input, width: cw, height: ch } : input, txn,
     fitted ? { width: true, height: true } : { width: input.width != null, height: input.height != null },
+    signed,
   )
+  const { ctx } = prepared
+  // the layout reads the view size as `Math.max(0, width)`; the signals themselves keep their sign
+  const width = Math.max(0, prepared.width)
+  const height = Math.max(0, prepared.height)
 
   // Partial re-evaluation: marks whose every input is provably unchanged reuse
   // the previous scene's group object as-is, and marks over a changed dataset
@@ -1434,19 +1448,15 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
   const signals = dict(chart.signals, input.signals)
   let initialW = resolveSize(chart.width, input.width, signals)
   let initialH = resolveSize(chart.height, input.height, signals)
-  // Vega's layout keeps the sign of a negative declared height: the rendered
-  // document grows by ceil(|height| / 2) beyond the clamped content height
-  // (width does not; negative widths collapse symmetrically).
-  const declaredHeight = input.height != null
-    ? input.height
-    : typeof chart.height === 'number'
-      ? chart.height
-      : chart.height && typeof chart.height === 'object' && 'signal' in chart.height
-        ? Number(signals[(chart.height as { signal: string }).signal])
-        : undefined
-  const negativeHeightExtra = typeof declaredHeight === 'number' && declaredHeight < 0
-    ? Math.ceil(-declaredHeight / 2)
-    : 0
+  // A negative view size: vega's first pass lays out content ranged on the signal as written (a scale over
+  // [0, -100]) and sizes the view from the overflow it finds (viewSizeLayout, once); the width / height
+  // signals are then clamped to 0 and the content is encoded again, but the view keeps the size and padding of
+  // the first pass. So the padding comes from a build with the signed sizes and the content from the clamped one.
+  const signedW = signedViewSize(chart.width, input.width, signals)
+  const signedH = signedViewSize(chart.height, input.height, signals)
+  const signedPadding = (signedW !== undefined || signedH !== undefined) && (auto === undefined || auto === 'pad')
+    ? buildContent(chart, input, signedW ?? initialW, signedH ?? initialH, txn, false, { width: signedW, height: signedH }).padding
+    : undefined
 
   // `fit`/`fit-x`/`fit-y` shrink the *content* to fit a fixed viewport, then
   // vega re-runs layout (resizeView) so scales are rebuilt at the fitted size.
@@ -1486,11 +1496,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
   }
   const { ctx, width, height } = built
   const items = built.items
-  // The negative-height half-pixel growth belongs at the top origin, which is
-  // where vega's title layout puts it (content shifts down with the root).
-  const padding = negativeHeightExtra
-    ? { ...built.padding, top: built.padding.top + negativeHeightExtra }
-    : built.padding
+  const padding = signedPadding ?? built.padding
 
   // 3) Build the scene: the document is the view's width / height signals plus the
   // padding (autosize pad grows it by what overflows). A composition's root group is
@@ -1693,13 +1699,15 @@ function buildTitleGroup(
 ): SceneGroup | null {
   if (!title0) return null
   // the text may be a signal (a group title reads its facet datum as `parent`)
-  let textStr: string
-  if (typeof title0.text === 'object' && title0.text && 'signal' in title0.text) {
+  // vega draws the title mark whatever its text (a text mark with no text is an empty `<text>`); a list is
+  // lines, anything else is its string
+  const toText = (v: unknown): string | string[] => Array.isArray(v) ? v.map(String) : v == null ? '' : String(v)
+  let textStr: string | string[]
+  if (!Array.isArray(title0.text) && typeof title0.text === 'object' && title0.text && 'signal' in title0.text) {
     try {
-      textStr = String(ctx!.runtime.expr(title0.text.signal)({}, { ...ctx!.signalParams, parent }))
+      textStr = toText(ctx!.runtime.expr(title0.text.signal)({}, { ...ctx!.signalParams, parent }))
     } catch { textStr = '' }
-  } else textStr = String(title0.text ?? '')
-  if (!textStr) return null
+  } else textStr = toText(title0.text)
   const title = { ...title0, text: textStr }
   const orient = title.orient ?? 'top'
   const isLR = orient === 'left' || orient === 'right'
@@ -1838,6 +1846,12 @@ function buildTitleGroup(
   }
 }
 
+/** The view size as written when it is a negative number (see the first autosize pass in evaluateChartImpl). */
+function signedViewSize(size: SizeSpec, override: number | undefined, signals: Record<string, unknown>): number | undefined {
+  const v = override != null ? override : typeof size === 'number' ? size : size && typeof size === 'object' && 'signal' in size ? signals[size.signal] : undefined
+  return typeof v === 'number' && v < 0 ? v : undefined
+}
+
 function resolveSize(size: SizeSpec, override: number | undefined, signals: Record<string, unknown>): number {
   // Vega clamps a negative view dimension to zero (`view.width()` returns 0);
   // the degenerate axes it then draws are what the oracle compares against.
@@ -1847,7 +1861,11 @@ function resolveSize(size: SizeSpec, override: number | undefined, signals: Reco
   if (size && typeof size === 'object') {
     if ('signal' in size) {
       const v = signals[size.signal]
-      return typeof v === 'number' ? clamp(v) : DEFAULT_SIZE
+      if (typeof v === 'number') return clamp(v)
+      // vega: the signal's value whatever it is; the autosize pad resize makes the `width` signal
+      // `Math.max(0, group.width || 0)` (viewSizeLayout), so null is 0 and a word NaN. An absent
+      // value is a signal still to be computed (its update expression): the default stands in.
+      return v === undefined ? DEFAULT_SIZE : Math.max(0, (v as number) || 0)
     }
     if ('step' in size) {
       throw new Error('[aster] width/height {step} sizing is not supported yet')
@@ -3567,7 +3585,7 @@ function evaluateMark(
     marktype: mark.type,
     name: mark.name,
     role: 'mark',
-    clip: mark.clip === true,
+    clip: markClip(mark, ctx),
     items,
     __source: mark.from?.data,
     ...(encodesHref(mark) ? { hasLinks: true } : {}),
@@ -4406,7 +4424,16 @@ function resolveLegendValues(legend: CompiledLegend, ctx: EvalContext): unknown[
   return Array.isArray(resolved) ? resolved : undefined
 }
 
-function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
+function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | null {
+  // `title: {signal}`: the title mark exists for any `title != null` (vega legend.js `datum.title`),
+  // its text is the signal's value (a list is lines, null is nothing)
+  let legend = legend0
+  const t0 = (legend0 as { title?: unknown }).title
+  if (t0 && typeof t0 === 'object' && !Array.isArray(t0) && typeof (t0 as { signal?: unknown }).signal === 'string') {
+    let v: unknown
+    try { v = ctx.runtime.expr((t0 as { signal: string }).signal)({}, ctx.signalParams) } catch (e) { reportEvalError(ctx, e); v = undefined }
+    legend = { ...legend0, title: (Array.isArray(v) ? v.map(String) : v == null ? '' : String(v)) as never }
+  }
   // Resolve the scale name (fill/stroke color legends, size legends, or shape legends).
   // vega-parser legend.js: the canonical scale is the first channel in LegendScales order
   const scaleName = legend.size ?? legend.shape ?? legend.fill ?? legend.stroke
@@ -5052,7 +5079,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const labelLimit = (legend as { labelLimit?: number }).labelLimit ?? 160
     const labelAlign = (legend as { labelAlign?: string }).labelAlign ?? 'left'
     const lblBaseline = (legend as { labelBaseline?: string }).labelBaseline ?? 'middle'
-    const titleStr = String(titleOver.text ?? legend.title ?? '')
+    // the title text: a list is lines; the title mark exists for any `title != null` (even ''), an empty text then draws an empty `<text>`
+    const titleRaw = (titleOver.text ?? legend.title) as unknown
+    const titleStr: string | string[] = Array.isArray(titleRaw) ? titleRaw.map(String) : titleRaw == null ? '' : String(titleRaw)
+    const hasTitle = (Array.isArray(titleStr) ? titleStr.length > 0 : titleStr !== '') || legend.title != null
     // vega legendLayout: w = ceil(bounds + 2*padding); the inner padding
     // shifts the whole content.
     const legendPad = (legend as { padding?: number }).padding ?? 0
@@ -5221,7 +5251,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // title bound (legendGroupLayout reads title.bounds: the Bound-pass text
     // bound at the title's pre-shift position — height drives the entry row,
     // width the left-title shift, x1 the overhang)
-    const tBound = titleStr
+    const tBound = hasTitle
       ? boundText(new Bounds(), {
           x: titleX, y: titleY, text: titleStr, align: tAlign,
           baseline: (titleBaseline ?? tBaseline) as SceneItem['baseline'],
@@ -5231,18 +5261,18 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // container shifts (legendGroupLayout): top titles push the entries down
     // by the title bound height + padding; left titles push them right by
     // ceil(title bound width) + padding.
-    const titleRow = titleStr && !ctx.rawGuides ? tBound.height() + titlePad : 0
-    const leftShift = titleStr && !ctx.rawGuides && titleOrient === 'left' ? Math.ceil(tBound.width()) + titlePad : 0
+    const titleRow = hasTitle && !ctx.rawGuides ? tBound.height() + titlePad : 0
+    const leftShift = hasTitle && !ctx.rawGuides && titleOrient === 'left' ? Math.ceil(tBound.width()) + titlePad : 0
     // overhang: a title bound poking left of the padding shifts the entries
     // AND the title right by the overhang (vega translates both)
-    const shift = titleStr && !ctx.rawGuides ? Math.max(0, Math.round(legendPad - tBound.x1)) : 0
+    const shift = hasTitle && !ctx.rawGuides ? Math.max(0, Math.round(legendPad - tBound.x1)) : 0
     // entry block base: top titles push entries down by the title row;
     // left titles push them right by title width + padding; right/bottom
     // leave the entries at the padding origin.
     // Raw-guide mode: the legendGroupLayout never ran — the entries keep
     // their encode positions (no title-row shift, no padding shifts).
     const entryX = ctx.rawGuides ? 0 : legendPad + shift + leftShift
-    const entryBaseY = ctx.rawGuides ? 0 : titleOrient === 'top' && titleStr ? titleRow : 0
+    const entryBaseY = ctx.rawGuides ? 0 : titleOrient === 'top' && hasTitle ? titleRow : 0
 
     // vega legendBounds: union the entry + title bounds, anchor x1/y1 at the
     // padding (clamping any overhang), then w/h = ceil(width + 2*padding).
@@ -5254,7 +5284,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const ey = ctx.rawGuides ? 0 : legendPad + entryBaseY + (posY[i] ?? 0)
       lb.add(ex + eb.x1, ey + eb.y1).add(ex + eb.x2, ey + eb.y2)
     })
-    if (titleStr && !ctx.rawGuides) {
+    if (hasTitle && !ctx.rawGuides) {
       const tb = tBound.clone().translate(shift, 0)
       lb.add(tb.x1, tb.y1).add(tb.x2, tb.y2)
     }
@@ -5301,7 +5331,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const borderStroke = legendBorderColor != null
     // vega's legend title item sits at (padding, padding) with baseline top;
     // the renderer bakes the baseline offset. titleBaseline overrides it.
-    if (titleStr) {
+    if (hasTitle) {
       items.push({ _legendTitle: true, text: titleStr, x: titleX + shift, y: titleY, baseline: (titleBaseline ?? tBaseline) as 'top', align: tAlign, fill: titleColor, fontSize: titleFs, fontWeight: titleWeight, ...(titleFont != null ? { font: titleFont } : {}), ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
     }
     // the entry groups are sorted before they are drawn (legend-symbol-groups: a
@@ -5450,6 +5480,72 @@ function viewSignal(ctx: EvalContext, name: 'width' | 'height'): number {
 /** The axis-level layout parameters vega's axis encode feeds the layout (`encode.axis`: offset, position, translate, titlePadding, minExtent, maxExtent, range). */
 const AXIS_GROUP_ENCODE_KEYS = ['offset', 'position', 'translate', 'titlePadding', 'minExtent', 'maxExtent', 'range'] as const
 
+/**
+ * Every property of a vega guide may be a signal: its value is what the signal holds when the guide is drawn
+ * (vega-parser `parseExpression` into the guide's encode). `{signal}` values are replaced by their value; the
+ * properties named in `kept` are read as signals by the code that uses them (an expression that must fall back,
+ * a value that is not a plain property) and stay as written. A failing expression is logged (the property is unset).
+ */
+function resolveGuideSignals<T extends object>(guide: T, kept: ReadonlySet<string>, ctx: EvalContext): T {
+  let out: Record<string, unknown> | undefined
+  const rec = guide as Record<string, unknown>
+  for (const key of Object.keys(rec)) {
+    if (kept.has(key)) continue
+    const v = rec[key]
+    if (v === null || typeof v !== 'object' || Array.isArray(v) || typeof (v as { signal?: unknown }).signal !== 'string') continue
+    let value: unknown
+    try { value = ctx.runtime.expr((v as { signal: string }).signal)({}, ctx.signalParams) } catch (e) { reportEvalError(ctx, e); value = undefined }
+    // null is a value, not "unset": it replaces the config / style default, and what a null then does is the
+    // consumer's (a text size of null is the text mark's own 11, a tick size of null is no tick)
+    if (value === null && Object.hasOwn(GUIDE_NULL_AS, key)) value = GUIDE_NULL_AS[key]
+    out ??= { ...rec }
+    out[key] = value
+  }
+  return (out ?? rec) as T
+}
+
+/** What a guide property that a signal sets to null amounts to (vega: the property is null on the mark's items). */
+const GUIDE_NULL_AS: Record<string, unknown> = {
+  labelFontSize: 11, titleFontSize: 11, tickSize: 0, labelPadding: 0, titlePadding: 0, labelOffset: 0, symbolSize: 64,
+}
+
+/** Legend properties that stay signals (see {@link AXIS_SIGNAL_KEPT}). */
+const LEGEND_SIGNAL_KEPT: ReadonlySet<string> = new Set(['tickCount', 'values', 'format', 'formatType', 'title', 'tickMinStep', 'encode', 'own', 'description', 'aria', 'columns', 'layout'])
+
+/** Axis properties that stay signals: their consumers evaluate them (with fallbacks) or are not plain values. */
+const AXIS_SIGNAL_KEPT: ReadonlySet<string> = new Set(['orientSignal', 'tickCount', 'values', 'format', 'formatType', 'title', 'tickMinStep', 'encode', 'own', 'description', 'aria'])
+
+/**
+ * An axis whose `orient` is a signal, with the signal's value in (vega: the axis group's `orient` property,
+ * which the layout and every guide mark's encode read). The config blocks it picks up follow the value's class.
+ */
+function resolveAxisOrient(axis: CompiledAxis, ctx: EvalContext): CompiledAxis {
+  if (!axis.orientSignal) return resolveGuideSignals(axis, AXIS_SIGNAL_KEPT, ctx)
+  let value: unknown
+  try { value = ctx.runtime.expr(axis.orientSignal.signal)({}, ctx.signalParams) } catch (e) { reportEvalError(ctx, e); value = undefined }
+  const orient = typeof value === 'string' ? value : ''
+  const variants = axis.orientSignal.variants
+  return resolveGuideSignals({ ...(ownGet(variants, orient) ?? variants['']!), orient }, AXIS_SIGNAL_KEPT, ctx)
+}
+
+/**
+ * vega's AxisTicks failing (an interval string on a non-time scale, a format that is no specifier) is logged and the
+ * axis never gets its ticks. Over a scale with literal domain the axis is not drawn at all. Over a data-driven domain
+ * the axis group exists with some of its child marks never made (the ticks and labels) while the domain and title
+ * marks are: the scenegraph has holes and vega's own SVG serializer crashes on them (`reading 'marktype'`), so there
+ * is no document -- a refusal here too.
+ */
+function axisTicksFailed(axis: CompiledAxis, ctx: EvalContext, e: unknown): null {
+  reportEvalError(ctx, e)
+  const sdef = ctx.chart.scales.find((sc) => sc.name === axis.scale)
+  const dataDomain = sdef !== undefined && sdef.domain !== null && typeof sdef.domain === 'object' && !Array.isArray(sdef.domain)
+    && ('data' in (sdef.domain as object) || 'fields' in (sdef.domain as object))
+  if (dataDomain && (axis.domain !== false || (axis.title !== undefined && axis.title !== null))) {
+    throw new Error(`[aster] the ticks of the axis over scale "${axis.scale}" failed (${e instanceof Error ? e.message : String(e)}); vega cannot serialize the half-built axis either`)
+  }
+  return null
+}
+
 function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   const scale = ctx.scales.get(axis0.scale)
   if (!scale) return null
@@ -5474,9 +5570,19 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   const encTitle = guideEncodeSet(axis.encode?.title)
   const guideDatum: Row = { scale: axis.scale, ticks: axis.ticks !== false, labels: axis.labels !== false, grid: !!axis.grid, domain: axis.domain !== false, title: axis.title != null }
   const orient = axis.orient
+  // vega draws any `orient` other than the four as a vertical axis (sign +1, labels aligned right) whose group
+  // layout never runs: the group sits at (0, 0) without the half-pixel delta and takes no part in the layout bounds
+  const knownOrient = orient === 'top' || orient === 'bottom' || orient === 'left' || orient === 'right'
+  const gDelta = knownOrient ? 0.5 : 0
+  const isXAxis0 = orient === 'top' || orient === 'bottom'
   // where the axis group's origin lies in our leaves' frame (the view edge it sits on)
-  const guideOrigin = { x: (orient === 'right' ? ctx.width : 0) + 0.5, y: (orient === 'bottom' ? ctx.height : 0) + 0.5 }
-  const ticks = axisTicks(axis, scale, ctx)
+  const guideOrigin = { x: (orient === 'right' ? ctx.width : 0) + gDelta, y: (orient === 'bottom' ? ctx.height : 0) + gDelta }
+  let ticks: unknown[]
+  try {
+    ticks = axisTicks(axis, scale, ctx)
+  } catch (e) {
+    return axisTicksFailed(axis, ctx, e)
+  }
   const items: SceneItem[] = []
   // vega's tick position (axisTicks tickPos): the ticks/grid sit at
   // scale + bandPosition*bandWidth + tickOffset, rounded when tickRound is on
@@ -5522,11 +5628,19 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   // log-scale labels, whose formatter only labels a subset of ticks depending
   // on the count.
   const count = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 10 : 10
-  const labelFormat = axisLabelFormat(axis, scale, count, ctx)
+  let labelFormat: (v: unknown) => unknown
+  const labelCache: string[] = []
+  try {
+    labelFormat = axisLabelFormat(axis, scale, count, ctx)
+    // vega's AxisTicks formats every tick as it makes the tuples: a format that throws (an invalid
+    // specifier) is logged and the axis never gets its ticks
+    for (let i = 0; i < ticks.length; i++) labelCache[i] = String(labelFormat(ticks[i]))
+  } catch (e) {
+    return axisTicksFailed(axis, ctx, e)
+  }
   // vega-encode AxisTicks tuples, the datum a tick / label / grid encode reads:
   // `{index (fraction 0..1), tickIndex, value, label}`; the `extra` entry is
   // `{index: -1, tickIndex: -1, extra: {value}, label: ''}`.
-  const labelCache: string[] = []
   const tickDatum = (te: { value: unknown; extra: boolean }, i: number): Row => {
     if (te.extra) return { index: -1, tickIndex: -1, extra: { value: te.value }, label: '' }
     return {
@@ -5574,8 +5688,8 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
         item.x = v + 0.5; item.x2 = v + 0.5
         item.y = gridOrigin + gridStart + 0.5; item.y2 = gridOrigin + gridEnd + 0.5
       } else {
-        item.y = v + 0.5; item.y2 = v + 0.5
-        item.x = gridOrigin + gridStart + 0.5; item.x2 = gridOrigin + gridEnd + 0.5
+        item.y = v + gDelta; item.y2 = v + gDelta
+        item.x = gridOrigin + gridStart + gDelta; item.x2 = gridOrigin + gridEnd + gDelta
       }
       item.stroke = (axis as { gridColor?: string }).gridColor ?? '#ddd'
       item.strokeWidth = (axis as { gridWidth?: number }).gridWidth ?? 1
@@ -5609,6 +5723,7 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       if (orient === 'left') { tick.x = 0.5; tick.x2 = -tickSize + 0.5; tick.y = v + 0.5; tick.y2 = v + 0.5 }
       else if (orient === 'right') { tick.x = ctx.width + 0.5; tick.x2 = ctx.width + tickSize + 0.5; tick.y = v + 0.5; tick.y2 = v + 0.5 }
       else if (orient === 'bottom') { tick.x = v + 0.5; tick.x2 = v + 0.5; tick.y = ctx.height + 0.5; tick.y2 = ctx.height + tickSize + 0.5 }
+      else if (!knownOrient) { tick.x = 0; tick.x2 = tickSize; tick.y = v; tick.y2 = v }
       else { tick.x = v + 0.5; tick.x2 = v + 0.5; tick.y = 0.5; tick.y2 = -tickSize + 0.5 }
       tick.stroke = axis.tickColor ?? '#888'
       tick.strokeWidth = axis.tickWidth ?? 1
@@ -5625,7 +5740,7 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       // (datum.value undefined) lands on NaN — the renderer's || 0 pins it
       // to the axis origin (only the perpendicular coordinate is real)
       const label: SceneItem = { text: te.extra ? '' : String(labelFormat(t)), x: 0, y: 0 }
-      const align = axis.labelAlign ?? (orient === 'left' ? 'right' : orient === 'right' ? 'left' : 'center')
+      const align = axis.labelAlign ?? (orient === 'right' ? 'left' : isXAxis0 ? 'center' : 'right')
       const baseline = axis.labelBaseline ?? (orient === 'top' ? 'bottom' : orient === 'bottom' ? 'top' : 'middle')
       // Vega axis labels (vega-encode axisLabels): the label y is the raw
       // extent — tickSize + labelPadding beyond the axis line for bottom/top,
@@ -5634,7 +5749,8 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       // carries an explicit baseline). Rotated labels keep the historical
       // bake (the rotation folds the offset into vega's rotate translate).
       const labelFs = axis.labelFontSize ?? 10
-      const labelAngle = typeof axis.labelAngle === 'number' ? axis.labelAngle : 0
+      // (any truthy value: vega passes the angle through as it is)
+      const labelAngle = axis.labelAngle ? axis.labelAngle : 0
       // Vega's renderer folds the baseline offset into the item position for
       // unrotated text but applies it inside the rotate frame for rotated
       // text — so rotated labels carry no baseline (no bake anywhere).
@@ -5692,6 +5808,7 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       }
       if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = (te.extra ? 0.5 : alongLabel) + dyv; label.align = alignEff as SceneItem['align'] }
       else if (orient === 'right') { label.x = ctx.width + tickSize + labelPadding + 0.5; label.y = (te.extra ? 0.5 : alongLabel) + dyv; label.align = alignEff as SceneItem['align'] }
+      else if (!knownOrient) { label.x = tickSize + labelPadding; label.y = (te.extra ? 0 : alongLabel - 0.5) + dyv; label.align = alignEff as SceneItem['align'] }
       else if (orient === 'bottom') {
         // Point scales (bw = 0) miss the band-scale `axisBand` tickOffset
         // (-0.5) that cancels vega's +0.5 axis-group translate, so their
@@ -5753,8 +5870,9 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     if (orient === 'left') { domainLine.x = 0.5; domainLine.x2 = 0.5; domainLine.y = axisStart + 0.5; domainLine.y2 = axisEnd + 0.5 }
     else if (orient === 'right') { domainLine.x = ctx.width + 0.5; domainLine.x2 = ctx.width + 0.5; domainLine.y = axisStart + 0.5; domainLine.y2 = axisEnd + 0.5 }
     else if (orient === 'bottom') { domainLine.x = axisStart + 0.5; domainLine.x2 = axisEnd + 0.5; domainLine.y = ctx.height + 0.5; domainLine.y2 = ctx.height + 0.5 }
+    else if (!knownOrient) { domainLine.x = 0; domainLine.x2 = 0; domainLine.y = axisStart; domainLine.y2 = axisEnd }
     else { domainLine.x = axisStart + 0.5; domainLine.x2 = axisEnd + 0.5; domainLine.y = 0.5; domainLine.y2 = 0.5 }
-    domainLine.stroke = axis.domainColor ?? '#888'
+    domainLine.stroke = axis.domainColor === null ? undefined : axis.domainColor ?? '#888'
     domainLine.strokeWidth = axis.domainWidth ?? 1
     if (axis.domainDash) domainLine.strokeDash = axis.domainDash
     if (axis.domainOpacity != null) domainLine.strokeOpacity = axis.domainOpacity
@@ -5871,6 +5989,12 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       t.y = anchorLerp + 0.5; t.align = 'center'; t.baseline = titleBaseline ?? 'bottom'
       ;(t as Record<string, unknown>).angle = titleAngle ?? (orient === 'left' ? -90 : 90)
     }
+    else {
+      // any other orient: a vertical axis at the origin whose title layout never ran (sign +1, no delta)
+      t.x = 0
+      t.y = anchorLerp; t.align = 'center'; t.baseline = titleBaseline ?? 'bottom'
+      ;(t as Record<string, unknown>).angle = titleAngle ?? 90
+    }
     // Raw-guide mode: the axisTitleLayout never ran, so the title keeps its
     // encode position — the lerp along the axis, and 0 across (the s+extent
     // offset is a layout product). The -0.5 raw shift then lands it at 0.
@@ -5927,8 +6051,8 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   // positions — the axis group sits at (0,0); only the perpendicular origin
   // (height/width) is dropped, which axisLayout would have applied. The
   // buildAxisAndLegend wrapper's -0.5 already cancels the baked delta.
-  const dxs = ctx.rawGuides ? (orient === 'right' ? -ctx.width : 0) : tr + (orient === 'left' ? -off : orient === 'right' ? off : posOff)
-  const dys = ctx.rawGuides ? (orient === 'bottom' ? -ctx.height : 0) : tr + (orient === 'bottom' ? off : orient === 'top' ? -off : posOff)
+  const dxs = ctx.rawGuides || !knownOrient ? (orient === 'right' ? -ctx.width : 0) : tr + (orient === 'left' ? -off : orient === 'right' ? off : posOff)
+  const dys = ctx.rawGuides || !knownOrient ? (orient === 'bottom' ? -ctx.height : 0) : tr + (orient === 'bottom' ? off : orient === 'top' ? -off : posOff)
   if (typeof process !== 'undefined' && process.env.ASTER_DBG_RAW) console.error('[raw]', orient, 'raw', ctx.rawGuides, 'dxs', dxs, 'dys', dys, 'n', items.length)
   // vega's grid rules cancel the axis `offset` on their cross-axis span
   // (axis-grid.js: gridStart/gridEnd carry `offset: sign * offset`), so the grid
@@ -5937,8 +6061,8 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   const specOff = typeof axis.own?.offset === 'number' ? axis.own.offset : 0
   const cancelSign = orient === 'left' || orient === 'top' ? 1 : -1
   const gridCross = tr + cancelSign * (specOff - off)
-  const gridDxs = ctx.rawGuides ? dxs : (orient === 'left' || orient === 'right' ? gridCross : dxs)
-  const gridDys = ctx.rawGuides ? dys : (orient === 'bottom' || orient === 'top' ? gridCross : dys)
+  const gridDxs = ctx.rawGuides || !knownOrient ? dxs : (orient === 'left' || orient === 'right' ? gridCross : dxs)
+  const gridDys = ctx.rawGuides || !knownOrient ? dys : (orient === 'bottom' || orient === 'top' ? gridCross : dys)
   if (dxs || dys || gridDxs || gridDys) {
     for (const it of items) {
       const rec = it as Record<string, unknown>
@@ -5970,7 +6094,9 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     // (content bottom for bottom, content top for top, 0 for left, content
     // right for right). These diverge once autosize fit shrinks width !=
     // height, so both are needed.
-    ...(orient === 'left' || orient === 'right'
+    ...(!knownOrient
+      ? { axis: { orient, range: axisRangeSpan, baseline: 0, translate: 0, position: 0, noLayout: true } }
+      : orient === 'left' || orient === 'right'
       ? { axis: { orient, range: axisRangeSpan, baseline: orient === 'right' ? ctx.width : 0, translate: ctx.rawGuides ? 0 : (typeof axis.translate === 'number' ? axis.translate : 0.5), position: posOff } }
       : { axis: { orient, range: axisRangeSpan, baseline: orient === 'bottom' ? ctx.height : 0, translate: ctx.rawGuides ? 0 : (typeof axis.translate === 'number' ? axis.translate : 0.5), position: posOff } }),
   } as SceneGroup
@@ -5996,15 +6122,20 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
     return []
   }
   let count: number | undefined
-  if (typeof axis.tickCount === 'number') count = axis.tickCount
-  else if (typeof axis.tickCount === 'string' || (axis.tickCount && typeof axis.tickCount === 'object' && !('signal' in (axis.tickCount as Record<string, unknown>)) && 'interval' in (axis.tickCount as Record<string, unknown>))) {
+  // vega's AxisTicks reads the (signal-resolved) tickCount through tickCount(scale, count, minstep)
+  let tickCountValue: unknown = axis.tickCount
+  if (tickCountValue && typeof tickCountValue === 'object' && typeof (tickCountValue as { signal?: unknown }).signal === 'string') {
+    tickCountValue = ctx.runtime.expr((tickCountValue as { signal: string }).signal)({}, ctx.signalParams)
+  }
+  if (typeof tickCountValue === 'number') count = tickCountValue
+  else if (typeof tickCountValue === 'string' || (tickCountValue && typeof tickCountValue === 'object' && !Array.isArray(tickCountValue) && 'interval' in (tickCountValue as Record<string, unknown>))) {
     // vega's tickCount util resolves an interval string against the scale:
     // legal only on time/utc scales, where it becomes a calendar interval the
-    // scale's ticks consume; anything else refuses upstream (so "both refuse"
-    // is agreement).  `{interval, step}` objects resolve the interval and
+    // scale's ticks consume; anything else is an error in the dataflow (the
+    // caller logs it and the axis is not drawn).  `{interval, step}` objects resolve the interval and
     // widen it with `every(step)`.
-    const raw = typeof axis.tickCount === 'string' ? axis.tickCount : (axis.tickCount as { interval?: unknown }).interval
-    const step = typeof axis.tickCount === 'object' && axis.tickCount !== null ? (axis.tickCount as { step?: unknown }).step : undefined
+    const raw = typeof tickCountValue === 'string' ? tickCountValue : (tickCountValue as { interval?: unknown }).interval
+    const step = typeof tickCountValue === 'object' && tickCountValue !== null ? (tickCountValue as { step?: unknown }).step : undefined
     if (typeof raw !== 'string') throw new Error('Invalid tick count.')
     if (scale.type !== 'time' && scale.type !== 'utc') {
       throw new Error('Only time and utc scales accept interval strings.')
@@ -6017,13 +6148,6 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
       const ival = scale.type === 'time' ? timeIntervalFor(raw) : utcIntervalFor(raw)
       if (!ival) throw new Error(`[aster] unknown time interval: ${raw}`)
       count = (step != null ? (ival as { every?: (n: number) => unknown }).every?.(step as number) : ival) as unknown as number
-    }
-  }
-  else if (axis.tickCount && typeof axis.tickCount === 'object') {
-    const expr = (axis.tickCount as { signal?: string }).signal
-    if (expr !== undefined) {
-      const v = ctx.runtime.expr(expr)({}, ctx.signalParams)
-      count = typeof v === 'number' ? v : undefined
     }
   }
   // Resolve tickMinStep (may be a number or a signal expression).
@@ -6145,12 +6269,17 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: 
   // Resolve format: may be a string or a signal expression.
   let fmt: string | undefined
   const rawFmt = axis.format ?? undefined
+  // d3's formatSpecifier reads whatever it is given through a regular expression, so a number is its digits
+  // (`42` is a width) and a thing that is no specifier at all is an invalid format
   if (typeof rawFmt === 'string') {
     fmt = rawFmt
+  } else if (rawFmt != null && typeof rawFmt !== 'object') {
+    fmt = String(rawFmt)
   } else if (rawFmt && typeof rawFmt === 'object' && 'signal' in (rawFmt as Record<string, unknown>) && ctx) {
     try {
       const v = ctx.runtime.expr((rawFmt as { signal: string }).signal)({}, ctx.signalParams)
       if (typeof v === 'string') fmt = v
+      else if (v != null) fmt = String(v)
     } catch {
       // Fallback: evaluate timeUnitSpecifier(...) inline when the expression
       // engine doesn't have it.  This is the common case for Vega-Lite

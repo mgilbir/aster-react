@@ -112,7 +112,10 @@ function roundedFramePath(x: number, y: number, w: number, h: number, r: number)
  * The root frame's background path. Shared by the SVG, DOM and canvas painters
  * so the frame's fill, stroke and rounded corners cannot drift between them.
  */
-export function frameBackgroundPath(scene: SceneRoot, plotW: number, plotH: number): GeneratedPath {
+export function frameBackgroundPath(scene: SceneRoot, plotW0: number, plotH0: number): GeneratedPath {
+  // vega's rectangle path reads `item.width || 0` / `item.height || 0`: a view size that is NaN draws a zero-size frame
+  const plotW = plotW0 || 0
+  const plotH = plotH0 || 0
   const frameInset = scene.frameStroke && scene.frameStrokeWidth == null ? 0.5 : 0
   return scene.frameCornerRadius != null && scene.frameCornerRadius > 0
     ? roundedFramePath(frameInset, frameInset, plotW, plotH, Math.min(scene.frameCornerRadius, plotW / 2, plotH / 2))
@@ -1047,7 +1050,10 @@ export function textItemDesc(it: SceneItem): {
   if (it.text == null) return null
   const rec = it as Record<string, unknown>
   const fontSize = vegaFontSize(it)
-  const angle = +(it.angle as number) || 0
+  // vega writes the angle as it is (`rotate(` + angle + `)` whenever it is truthy), so a word is a word in the
+  // document; the geometry (canvas, hit testing, bounds) reads the number it coerces to
+  const angleRaw = it.angle as unknown
+  const angle = +(angleRaw as number) || 0
   const dx = +(rec.dx as number) || 0
   const dy = (+(rec.dy as number) || 0) + baselineOffset(it)
   // vega anchorPoint: polar text offsets the anchor by (radius, theta - pi/2)
@@ -1063,8 +1069,8 @@ export function textItemDesc(it: SceneItem): {
   const lineHeight = rec.lineHeight != null ? (rec.lineHeight as number) : fontSize + 2
   let transform: GeneratedPath
   let px: number, py: number, ox: number, oy: number
-  if (angle) {
-    transform = gen(`translate(${num(x)},${num(y)}) rotate(${num(angle)})${dx || dy ? ` translate(${num(dx)},${num(dy)})` : ''}`)
+  if (angleRaw) {
+    transform = gen(`translate(${num(x)},${num(y)}) rotate(${angleText(angleRaw)})${dx || dy ? ` translate(${num(dx)},${num(dy)})` : ''}`)
     px = x; py = y; ox = dx; oy = dy
   } else {
     transform = gen(`translate(${num(x + dx)},${num(y + dy)})`)
@@ -1661,6 +1667,11 @@ export function itemDatumAttr(it: SceneItem, w: AttrSink): void {
   if (v) w.v('data-datum', v)
 }
 
+/** An angle as vega concatenates it into `rotate(...)`: a number as its digits, anything else as its (escaped) string. */
+function angleText(a: unknown): string {
+  return typeof a === 'number' ? num(a) : escAttr(String(a))
+}
+
 /**
  * vega-scenegraph util/svg/transform.js: `rotateItem` = translate(x||0, y||0)
  * [rotate(angle)]; `transformItem` adds scale(scaleX||1, scaleY||1) when either
@@ -1668,8 +1679,8 @@ export function itemDatumAttr(it: SceneItem, w: AttrSink): void {
  */
 export function rotateItemTransform(it: SceneItem): GeneratedPath {
   const a = it.angle
-  // numbers (through `num`) and constant words only: safe to write without the escaping scan
-  return gen(`translate(${num(it.x || 0)},${num(it.y || 0)})${a ? ` rotate(${num(a)})` : ''}`)
+  // numbers (through `num`) and escaped words only: safe to write without the escaping scan
+  return gen(`translate(${num(it.x || 0)},${num(it.y || 0)})${a ? ` rotate(${angleText(a)})` : ''}`)
 }
 export function transformItemTransform(it: SceneItem): GeneratedPath {
   const rec = recOf(it)

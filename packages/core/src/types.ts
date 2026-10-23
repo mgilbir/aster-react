@@ -170,7 +170,7 @@ export interface CompiledChart {
 
 export interface CompiledTitle {
   /** The text, or a signal expression (a group title reads its facet datum as `parent`). */
-  text: string | { signal: string }
+  text: string | string[] | { signal: string }
   subtitle?: string
   orient: 'top' | 'bottom' | 'left' | 'right' | 'none'
   anchor: 'start' | 'middle' | 'end'
@@ -332,7 +332,16 @@ export type GuideEncode = Record<string, GuideEncodeBlock>
 
 export interface CompiledAxis {
   scale: string
-  orient: 'top' | 'bottom' | 'left' | 'right'
+  /**
+   * 'top' | 'bottom' | 'left' | 'right', or whatever else the spec says (vega draws any other value as a vertical axis
+   * with a positive sign at the origin, and an `orient` signal can hold anything).
+   */
+  orient: 'top' | 'bottom' | 'left' | 'right' | (string & {})
+  /**
+   * An `orient` that is a signal: the axis compiled once per orient class (the config blocks it picks up depend on
+   * it), chosen when the signal's value is known. `''` is every other value.
+   */
+  orientSignal?: { signal: string; variants: Record<string, CompiledAxis> }
   grid?: boolean
   gridScale?: string
   domain?: boolean

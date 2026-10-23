@@ -752,7 +752,10 @@ export function boundLeaf(bounds: Bounds, it: SceneItem, miterPaths = false): Bo
  */
 export function boundAxisGroup(axis: SceneGroup): Bounds {
   const b = new Bounds()
-  const meta = (axis as Record<string, unknown>).axis as { orient: string; range: number; baseline?: number; translate?: number } | undefined
+  const meta = (axis as Record<string, unknown>).axis as { orient: string; range: number; baseline?: number; translate?: number; noLayout?: boolean } | undefined
+  // an axis whose orient is none of the four: axisLayout's `default` branch leaves its position undefined, so its
+  // bounds are NaN and union into nothing
+  if (meta?.noLayout === true) return b
   const orient = meta?.orient ?? 'left'
   const range = meta?.range ?? 0
   // The axis line's perpendicular position: for top/bottom axes it sits at the
@@ -957,6 +960,48 @@ export function boundLegendGroup(g: SceneGroup): Bounds {
 }
 
 /**
+ * vega-view-transforms' Bound pass ends every mark with `boundClip(mark)`: a mark with `clip` has its bounds
+ * intersected with the ENCLOSING group's frame [0, 0, group.width, group.height] (vega-scenegraph
+ * boundClip), so what a clipped mark draws outside the frame never grows the view. A group mark is one
+ * mark across all its items (they sit next to each other in the parent, flagged `markClip`); a typed mark
+ * is one scene node flagged `clip`. Calls `out` once per mark (a run of group items, or one node) with
+ * the mark's bounds. `measure` bounds one node and may return a shared (cached) object: it is copied
+ * before any intersection.
+ */
+/** Does any node of `items` carry a mark-level clip (see eachMarkBounds)? A cheap guard for the common unclipped case. */
+export function hasClippedMark(items: readonly SceneNode[]): boolean {
+  for (let i = 0; i < items.length; i++) {
+    const n = items[i] as SceneGroup
+    if (n.markClip === true || (n.clip === true && n.marktype !== undefined && n.marktype !== 'group')) return true
+  }
+  return false
+}
+
+export function eachMarkBounds(
+  items: readonly SceneNode[],
+  frameW: number,
+  frameH: number,
+  measure: (n: SceneNode) => Bounds,
+  out: (b: Bounds, first: SceneNode) => void,
+): void {
+  const frame = (): Bounds => new Bounds().set(0, 0, frameW, frameH)
+  for (let i = 0; i < items.length;) {
+    const n = items[i] as SceneGroup
+    if (n.markClip === true && n.marktype === 'group') {
+      const mb = new Bounds()
+      let j = i
+      while (j < items.length && (items[j] as SceneGroup).markClip === true && (items[j] as SceneGroup).name === n.name) mb.union(measure(items[j]!)), j++
+      out(mb.intersect(frame()), n)
+      i = j
+      continue
+    }
+    const b = measure(n)
+    out(n.clip === true && n.marktype !== undefined && n.marktype !== 'group' && Array.isArray(n.items) ? new Bounds().union(b).intersect(frame()) : b, n)
+    i++
+  }
+}
+
+/**
  * The bounds of a typed mark, cached per mark object: a scene that has been
  * returned is never written (C52), and a layout reads the same marks several
  * times (grid cells, guide anchors, titles), each time over every item.
@@ -985,11 +1030,19 @@ export function layoutBounds(node: SceneNode, out = new Bounds()): Bounds {
   if (g.role === 'legend') return out.union(boundLegendGroup(g))
   const b = new Bounds()
   if (!g.clip && g.items) {
-    for (const child of g.items) {
-      if ((child as Record<string, unknown>)._bg === true) continue
+    const measure = (child: SceneNode): Bounds => {
       const c = child as SceneGroup
-      if (c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items)) b.union(typedMarkBounds(c))
-      else layoutBounds(child, b)
+      return c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items) ? typedMarkBounds(c) : layoutBounds(child)
+    }
+    if (hasClippedMark(g.items)) {
+      eachMarkBounds(g.items.filter((child) => (child as Record<string, unknown>)._bg !== true), g.width || 0, g.height || 0, measure, (mb) => { b.union(mb) })
+    } else {
+      for (const child of g.items) {
+        if ((child as Record<string, unknown>)._bg === true) continue
+        const c = child as SceneGroup
+        if (c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items)) b.union(typedMarkBounds(c))
+        else layoutBounds(child, b)
+      }
     }
   }
   if ((g.clip || g.width || g.height) && !(g as Record<string, unknown>).noBound) b.add(0, 0).add(g.width || 0, g.height || 0)
@@ -1001,12 +1054,16 @@ export function layoutBounds(node: SceneNode, out = new Bounds()): Bounds {
 /** marks/group.js `bound` — exact (recursive, includes [0,0,w,h] rect). */
 export function boundGroupItem(bounds: Bounds, group: SceneGroup): Bounds {
   if (!group.clip && group.items) {
+    // the background is the group's own box (below), not an item: its rect and
+    // stroke are covered by the group's width/height and boundStroke
     const items = group.items
-    for (let j = 0; j < items.length; ++j) {
-      // the background is the group's own box (below), not an item: its rect and
-      // stroke are covered by the group's width/height and boundStroke
-      if ((items[j] as Record<string, unknown>)._bg === true) continue
-      boundLeaf(bounds, items[j] as SceneItem)
+    if (hasClippedMark(items)) {
+      eachMarkBounds(items.filter((child) => (child as Record<string, unknown>)._bg !== true), group.width || 0, group.height || 0, (child) => boundLeaf(new Bounds(), child as SceneItem), (mb) => { bounds.union(mb) })
+    } else {
+      for (let j = 0; j < items.length; ++j) {
+        if ((items[j] as Record<string, unknown>)._bg === true) continue
+        boundLeaf(bounds, items[j] as SceneItem)
+      }
     }
   }
   if ((group.clip || group.width || group.height) && !(group as Record<string, unknown>).noBound) {

@@ -329,6 +329,14 @@ function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: 
     // vega axisConfig precedence (vega-parser axisConfig): axis < axisX/axisY
     // (by orient) < axis<Orient> < axisBand (band scales) - later wins; the
     // axis def itself then wins over every block.
+    const orientRaw = a.orient as unknown
+    if (orientRaw && typeof orientRaw === 'object' && typeof (orientRaw as { signal?: unknown }).signal === 'string') {
+      // `orient: {signal}`: vega-parser axis-config picks the config blocks by the signal at run time
+      const variants: Record<string, CompiledAxis> = {}
+      for (const o of ['top', 'bottom', 'left', 'right', '']) variants[o] = compileGuideAxes([{ ...a, orient: o }], cfg, scales)[0]!
+      axes.push({ ...variants.left!, orientSignal: { signal: (orientRaw as { signal: string }).signal, variants } })
+      continue
+    }
     const orient = String(a.orient ?? '')
     const defaults: Record<string, unknown> = { ...cfgAxis }
     Object.assign(defaults, orient === 'top' || orient === 'bottom' ? cfgAxisX : cfgAxisY)
@@ -383,7 +391,8 @@ function compileLegend(l: Record<string, unknown>): CompiledLegend {
 }
 
 function compileTitle(value: unknown, config?: Record<string, unknown>): CompiledTitle | undefined {
-  if (value == null) return undefined
+  // vega's parser reads `if (spec.title)`: an empty-string (or otherwise falsy) title is no title, an object with empty text is one
+  if (!value) return undefined
   const spec = typeof value === 'string' ? { text: value } : (value as Record<string, unknown>)
   const cfg = (config?.title ?? {}) as Record<string, unknown>
   // vega-parser title.js: the text mark's style is the spec's `style` (default
@@ -398,7 +407,7 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
   const rawText = spec.text
   const text: CompiledTitle['text'] = rawText && typeof rawText === 'object' && 'signal' in (rawText as Record<string, unknown>)
     ? { signal: String((rawText as { signal: unknown }).signal) }
-    : typeof rawText === 'string' ? rawText : Array.isArray(rawText) ? rawText.map(String).join(' ') : String(rawText ?? '')
+    : typeof rawText === 'string' ? rawText : Array.isArray(rawText) ? rawText.map(String) : String(rawText ?? '')
   const fontSize = (spec.fontSize as number | undefined) ?? (cfg.fontSize as number | undefined) ?? (sty.fontSize as number | undefined) ?? 11
   return {
     text,
