@@ -638,13 +638,22 @@ function renderArea(group: SceneGroup): string {
 }
 
 /** Generate an SVG path d attribute for a given symbol shape and radius. */
-export const symbolPath = symbolPathImpl as (shape: string | undefined, r: number) => GeneratedPath
+export const symbolPath = ((shape: string | undefined, r: number) => symbolPathImpl(shape, r)) as (shape: string | undefined, r: number) => GeneratedPath
+
+/**
+ * The same symbol geometry with full-precision coordinates. vega's Bound pass
+ * traces the shape's draw calls exactly (the 3-decimal rounding belongs to the
+ * serialized `d` only), so anything that measures a symbol must use this.
+ */
+export function symbolPathExact(shape: string | undefined, r: number): string {
+  return symbolPathImpl(shape, r, String)
+}
 
 const HALF_SQRT3 = Math.sqrt(3) / 2 // vega util/constants HalfSqrt3
 
-function symbolPathImpl(shape: string | undefined, r: number): string {
-  // vega symbols serialize through d3-path Path(3) — coordinates round to 3.
-  const num = num3
+function symbolPathImpl(shape: string | undefined, r: number, num: (x: number) => string = num3): string {
+  // vega symbols serialize through d3-path Path(3) — coordinates round to 3
+  // (the bound pass traces the same shape unrounded: see symbolPathExact).
   // vega: `symbols(item.shape || 'circle')`
   switch (shape || 'circle') {
     case 'square':
@@ -725,7 +734,7 @@ function symbolPathImpl(shape: string | undefined, r: number): string {
       // scaled by sqrt(size)/2 (svg-path.ts); the result is built from numbers
       // and command letters only, so no input text reaches the document.
       // An invalid path throws vega's "Invalid SVG path" error, like vega.
-      return customSymbolPathData(shape!, r, num3)
+      return customSymbolPathData(shape!, r, num)
   }
 }
 

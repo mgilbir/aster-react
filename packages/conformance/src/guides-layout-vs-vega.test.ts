@@ -10,9 +10,10 @@ import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import '@aster/core/geo'
 import '@aster/core/transforms'
-import { compileChart, evaluateChart, renderSceneToSvg, renderSpec } from '@aster/core'
+import { buildA11yTree, compileChart, evaluateChart, getChartInfo, renderSceneToSvg, renderSpec } from '@aster/core'
 import { renderSceneToDomElement } from '@aster/core/dom'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { parseSvg, type XmlEl } from './svg-parse.js'
 
 type Spec = Record<string, unknown>
 
@@ -115,6 +116,25 @@ describe('signal init and containerSize(): a container-sized spec falls back lik
   it('only width is a container size', async () => {
     expect(await compare(body({ height: 77, autosize: { type: 'fit-x', contains: 'padding' }, signals: sizeSignals().slice(0, 1) }))).toEqual([])
   })
+  it('a host that has a container passes its size: containerSize() reads it, like vega\'s view container', async () => {
+    const spec = body({ autosize: { type: 'fit', contains: 'padding' }, signals: sizeSignals() })
+    // vega: a container element of known size (jsdom has no layout, so give it one)
+    const el = document.createElement('div')
+    Object.defineProperty(el, 'clientWidth', { value: 420 })
+    Object.defineProperty(el, 'clientHeight', { value: 260 })
+    document.body.appendChild(el)
+    const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { initialize(el: Element): unknown; runAsync(): Promise<unknown>; toSVG(): Promise<string>; finalize(): void } }).View(
+      vega.parse(spec as never), { renderer: 'none' })
+    view.initialize(el)
+    await view.runAsync()
+    const oracle = await view.toSVG()
+    view.finalize()
+    const ours = renderSpec(spec as never, { containerSize: { width: 420, height: 260 } })
+    expect(oracle).toContain('width="420"')
+    expect(diffCanonical(canonicalizeSvg(oracle), canonicalizeSvg(ours))).toEqual([])
+    // and without a container both fall back to the spec's own default
+    expect(renderSpec(spec as never)).toContain('width="300"')
+  })
   it('a host-supplied signal wins over init', () => {
     const svg = renderSpec(body({ autosize: 'none', signals: [{ name: 'width', init: '123' }, { name: 'height', value: 40 }] }) as never, { signals: { width: 80 } })
     expect(svg).toContain('width="90"')
@@ -161,5 +181,176 @@ describe('gradient legends are sized by the labels Overlap leaves visible', () =
     it(`horizontal gradientLength ${gl * 2}, tickCount ${tc}, labelOverlap ${method}`, async () => {
       expect(await compare(numeric({ orient: 'bottom', direction: 'horizontal', gradientLength: gl * 2, tickCount: tc, labelOverlap: method }))).toEqual([])
     })
+  }
+})
+
+describe('mark sort (vega SortItems) orders the encoded items by their own properties', () => {
+  const DATA2 = [{ name: 't', values: [{ a: 30, b: 20, g: 'p', w: 2 }, { a: 10, b: 60, g: 'p', w: 3 }, { a: 90, b: 40, g: 'p', w: 1 }, { a: 50, b: 10, g: 'q', w: 3 }, { a: 20, b: 80, g: 'q', w: 1 }] }]
+  const enc: Record<string, Record<string, unknown>> = {
+    line: { x: { field: 'a' }, y: { field: 'b' }, stroke: { value: '#c00' } },
+    area: { x: { field: 'a' }, y: { field: 'b' }, y2: { value: 85 }, fill: { value: 'gold' } },
+    trail: { x: { field: 'a' }, y: { field: 'b' }, size: { value: 4 }, fill: { value: 'orange' } },
+    symbol: { x: { field: 'a' }, y: { field: 'b' }, fill: { value: 'steelblue' } },
+    rect: { x: { field: 'a' }, y: { field: 'b' }, width: { value: 9 }, height: { value: 9 }, fill: { value: 'tomato' } },
+    text: { x: { field: 'a' }, y: { field: 'b' }, text: { field: 'g' } },
+  }
+  const sorts: Array<[string, unknown]> = [
+    ['the item property x', { field: 'x' }],
+    ['the item property y, descending', { field: 'y', order: 'descending' }],
+    ['a datum path', { field: 'datum.w' }],
+    ['a bracket datum accessor (vega-lite getSort)', { field: ['datum["w"]'], order: ['descending'] }],
+    ['two keys', { field: ['datum.g', 'x'], order: ['descending', 'ascending'] }],
+  ]
+  for (const type of Object.keys(enc)) for (const [name, sort] of sorts) {
+    it(`${type} sorted by ${name}`, async () => {
+      const spec: Spec = { ...FRAME, data: DATA2, marks: [{ type, sort, from: { data: 't' }, encode: { update: enc[type] } }] }
+      expect(await compare(spec)).toEqual([])
+    })
+  }
+})
+
+describe('a11y: the legend caption names its channels like vega (LegendScales order) and honours aria: false', () => {
+  const vegaLegendLabels = async (spec: Spec): Promise<string[]> => {
+    const out: string[] = []
+    const walk = (el: XmlEl): void => {
+      if (el.attrs['aria-roledescription'] === 'legend' && el.attrs['aria-label']) {
+        out.push(el.attrs['aria-label'].replace(/&#x([0-9a-f]+);/gi, (_m, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&'))
+      }
+      for (const c of el.children) if (typeof c !== 'string') walk(c)
+    }
+    walk(parseSvg(await oracleSvg(spec)))
+    return out.sort()
+  }
+  const ourLegendLabels = (spec: Spec): string[] => {
+    const scene = evaluateChart(compileChart(spec as never))
+    return buildA11yTree(scene, getChartInfo(spec as never).scales).nodes.filter((n) => n.kind === 'legend').map((n) => n.label).sort()
+  }
+  const base = (legend: Spec): Spec => ({
+    width: 120, height: 90, padding: 5, autosize: 'none',
+    data: [{ name: 't', values: [{ a: 1, c: 'u' }, { a: 5, c: 'v' }, { a: 9, c: 'w' }] }],
+    scales: [
+      { name: 'col', type: 'ordinal', domain: { data: 't', field: 'c' }, range: { scheme: 'category10' } },
+      { name: 'sz', type: 'linear', domain: { data: 't', field: 'a' }, range: [20, 200] },
+      { name: 'sw', type: 'linear', domain: { data: 't', field: 'a' }, range: [1, 6] },
+      { name: 'op', type: 'linear', domain: { data: 't', field: 'a' }, range: [0.2, 1] },
+      { name: 'shp', type: 'ordinal', domain: { data: 't', field: 'c' }, range: ['circle', 'square', 'diamond'] },
+      { name: 'dash', type: 'ordinal', domain: { data: 't', field: 'c' }, range: [[1, 0], [4, 2], [2, 2]] },
+    ],
+    legends: [legend],
+  })
+  const channelSets: Spec[] = [
+    { fill: 'col' }, { stroke: 'col' }, { size: 'sz' }, { shape: 'shp' }, { opacity: 'op' }, { strokeWidth: 'sw' }, { strokeDash: 'dash' },
+    { fill: 'col', size: 'sz' }, { fill: 'col', shape: 'shp' }, { stroke: 'col', strokeWidth: 'sw' }, { fill: 'col', stroke: 'col' },
+    { size: 'sz', shape: 'shp', fill: 'col' }, { strokeWidth: 'sw', strokeDash: 'dash' }, { fill: 'col', opacity: 'op' },
+  ]
+  for (const channels of channelSets) {
+    it(`legend over ${Object.keys(channels).join('+')}`, async () => {
+      const spec = base({ ...channels, title: 'T', type: 'symbol' })
+      expect(ourLegendLabels(spec)).toEqual(await vegaLegendLabels(spec))
+    })
+  }
+  it('aria: false drops the legend caption', async () => {
+    const spec = base({ fill: 'col', aria: false })
+    expect(await vegaLegendLabels(spec)).toEqual([])
+    expect(ourLegendLabels(spec)).toEqual([])
+  })
+})
+
+describe('symbol legends: every channel goes through vega\'s one symbol encode (legend-symbol-groups)', () => {
+  const data = [{ name: 't', values: [{ a: 0, b: 4, c: 'u' }, { a: 5, b: 9, c: 'v' }, { a: 10, b: 1, c: 'w' }, { a: 20, b: 3, c: 'x' }] }]
+  const scales = [
+    { name: 'col', type: 'ordinal', domain: { data: 't', field: 'c' }, range: { scheme: 'category10' } },
+    { name: 'sz', type: 'linear', domain: { data: 't', field: 'a' }, range: [0, 300], zero: true },
+    { name: 'sz2', type: 'sqrt', domain: { data: 't', field: 'b' }, range: [10, 200] },
+    { name: 'sw', type: 'linear', domain: { data: 't', field: 'a' }, range: [1, 6] },
+    { name: 'op', type: 'linear', domain: { data: 't', field: 'a' }, range: [0.1, 1] },
+    { name: 'shp', type: 'ordinal', domain: { data: 't', field: 'c' }, range: ['circle', 'square', 'triangle-up', 'diamond'] },
+    { name: 'dash', type: 'ordinal', domain: { data: 't', field: 'c' }, range: [[1, 0], [4, 2], [2, 2], [8, 3]] },
+    { name: 'seq', type: 'linear', domain: { data: 't', field: 'a' }, range: { scheme: 'blues' } },
+  ]
+  const frame = { width: 160, height: 100, padding: 5, autosize: 'none', data, scales }
+  const channelSets: Array<[string, Spec]> = [
+    ['size', { size: 'sz' }], ['size sqrt', { size: 'sz2' }], ['opacity', { opacity: 'op' }], ['strokeWidth', { strokeWidth: 'sw' }],
+    ['strokeDash', { strokeDash: 'dash' }], ['shape', { shape: 'shp' }], ['fill', { fill: 'col' }], ['stroke', { stroke: 'col' }],
+    ['fill+stroke', { fill: 'col', stroke: 'col' }], ['size+fill', { size: 'sz', fill: 'col' }], ['shape+fill', { shape: 'shp', fill: 'col' }],
+    ['opacity+stroke', { opacity: 'op', stroke: 'col' }], ['size+strokeWidth', { size: 'sz', strokeWidth: 'sw' }],
+    ['fill symbol (continuous ticks)', { fill: 'seq', type: 'symbol' }],
+  ]
+  const looks: Array<[string, Spec]> = [
+    ['defaults', {}],
+    ['square symbols', { symbolType: 'square' }],
+    ['stroke symbols', { symbolType: 'stroke' }],
+    ['triangle symbols', { symbolType: 'triangle-down' }],
+    ['vega-lite style encode (fill + transparent stroke)', { symbolType: 'square', encode: { symbols: { update: { fill: { value: '#4c78a8' }, stroke: { value: 'transparent' } } } } }],
+    ['vega-lite stroke encode', { encode: { symbols: { update: { stroke: { value: '#4c78a8' }, opacity: { value: 0.7 } } } } }],
+    ['symbolSize + symbolStrokeWidth + dash', { symbolSize: 150, symbolStrokeWidth: 3, symbolDash: [3, 1] }],
+    ['symbolFillColor + symbolStrokeColor + opacity', { symbolFillColor: 'orange', symbolStrokeColor: 'purple', symbolOpacity: 0.5 }],
+    ['horizontal, bottom', { direction: 'horizontal', orient: 'bottom' }],
+    ['two columns', { columns: 2 }],
+  ]
+  for (const [cname, channels] of channelSets) for (const [lname, look] of looks) {
+    it(`${cname} / ${lname}`, async () => {
+      const spec: Spec = { ...frame, legends: [{ type: 'symbol', title: 'T', ...channels, ...look }] }
+      expect(await compare(spec)).toEqual([])
+    })
+  }
+  const manyData = [{ name: 'm', values: Array.from({ length: 7 }, (_, i) => ({ k: `item ${i}`, n: (i + 1) * 3, w: i % 3 })) }]
+  const manyScales = [
+    { name: 'mcol', type: 'ordinal', domain: { data: 'm', field: 'k' }, range: { scheme: 'tableau10' } },
+    { name: 'msz', type: 'ordinal', domain: { data: 'm', field: 'k' }, range: [30, 60, 90, 120, 150, 180, 40] },
+  ]
+  for (const extra of [
+    { columns: 3 }, { columns: 3, gridAlign: 'all' }, { columns: 2, direction: 'horizontal' }, { direction: 'horizontal', gridAlign: 'all' },
+    { columns: 0 }, { gridAlign: 'all' }, { symbolLimit: 4 }, { columns: 3, rowPadding: 6, columnPadding: 14 }, { titleOrient: 'left', columns: 2 },
+    { padding: 6, columns: 2 }, { symbolOffset: 3, columns: 2 }, { clipHeight: 20, columns: 2 },
+  ]) {
+    for (const ch of [{ fill: 'mcol' }, { size: 'msz', fill: 'mcol' }]) {
+      it(`grid of entries ${JSON.stringify(ch)} ${JSON.stringify(extra)}`, async () => {
+        expect(await compare({ ...frame, data: manyData, scales: manyScales, legends: [{ type: 'symbol', title: 'Items', ...ch, ...extra }] })).toEqual([])
+      })
+    }
+  }
+  it('a size legend drops its first value when it maps to size 0 (vega#717)', async () => {
+    expect(await compare({ ...frame, legends: [{ size: 'sz', type: 'symbol' }] })).toEqual([])
+  })
+  it('explicit values, tickCount, tickMinStep', async () => {
+    for (const extra of [{ values: [2, 7, 11] }, { tickCount: 3 }, { tickCount: 6 }, { tickMinStep: 10 }]) {
+      expect(await compare({ ...frame, legends: [{ size: 'sz', type: 'symbol', ...extra }] })).toEqual([])
+    }
+  })
+  it('the legend with the greatest priority channel supplies the entries (size before fill)', async () => {
+    expect(await compare({ ...frame, legends: [{ fill: 'col', size: 'sz' }] })).toEqual([])
+  })
+  it('legend.disable is not a vega property: the legend is drawn', async () => {
+    expect(await compare({ ...frame, legends: [{ fill: 'col', disable: true }] })).toEqual([])
+  })
+})
+
+describe('C51: a nested group\'s axes follow config.axis like the view\'s', () => {
+  const nested = (config: Spec, axes: Spec[], extra: Spec = {}): Spec => ({
+    width: 200, height: 120, padding: 5, autosize: 'none', config,
+    data: [{ name: 't', values: [{ c: 'a', v: 3 }, { c: 'b', v: 8 }, { c: 'c', v: 5 }] }],
+    marks: [{
+      type: 'group', encode: { update: { x: { value: 20 }, y: { value: 10 }, width: { value: 150 }, height: { value: 80 }, stroke: { value: '#ccc' } } },
+      scales: [
+        { name: 'gx', type: 'band', domain: { data: 't', field: 'c' }, range: [0, 150], padding: 0.2 },
+        { name: 'gy', type: 'linear', domain: { data: 't', field: 'v' }, range: [80, 0], nice: true },
+      ],
+      axes,
+      marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'gx', field: 'c' }, width: { scale: 'gx', band: 1 }, y: { scale: 'gy', field: 'v' }, y2: { scale: 'gy', value: 0 }, fill: { value: 'steelblue' } } } }],
+      ...extra,
+    }],
+  })
+  const axes = [{ scale: 'gx', orient: 'bottom', title: 'cat' }, { scale: 'gy', orient: 'left', grid: true, title: 'value' }]
+  const configs: Array<[string, Spec]> = [
+    ['axis block', { axis: { domainColor: 'red', tickColor: 'blue', labelColor: 'green', gridColor: '#bbb', titleColor: 'purple', labelFontSize: 14 } }],
+    ['axisX / axisY', { axisX: { labelAngle: 45, tickSize: 9 }, axisY: { labelPadding: 8, domain: false } }],
+    ['axisBottom / axisLeft', { axisBottom: { tickColor: 'orange' }, axisLeft: { titleFontSize: 16 } }],
+    ['axisBand (the band scale of the group)', { axisBand: { tickOffset: 3, labelColor: 'brown' } }],
+    ['all blocks', { axis: { tickColor: 'gray' }, axisX: { tickSize: 8 }, axisBottom: { tickSize: 3 }, axisBand: { grid: true } }],
+    ['no config', {}],
+  ]
+  for (const [name, config] of configs) {
+    it(name, async () => expect(await compare(nested(config, axes))).toEqual([]))
   }
 })

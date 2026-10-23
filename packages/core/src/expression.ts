@@ -49,6 +49,11 @@ export interface ExpressionRuntime {
   data: (name: string) => unknown[] | undefined
   /** Compile an expression string against this runtime. */
   expr: (expr: string) => CompiledExpr
+  /**
+   * The view's container size (`containerSize()`), when the host has one. Absent
+   * (like headless vega, which has no container) it is `[undefined, undefined]`.
+   */
+  containerSize?: () => [number | undefined, number | undefined]
 }
 
 export type CompiledExpr = (datum: unknown, params?: Record<string, unknown>, event?: unknown) => unknown
@@ -253,9 +258,10 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
     abs: Math.abs, acos: Math.acos, asin: Math.asin, atan: Math.atan, atan2: Math.atan2,
     ceil: Math.ceil, cos: Math.cos, exp: Math.exp, floor: Math.floor, hypot: Math.hypot,
     // vega-functions: the view's container / the window. Headless vega has
-    // neither (`[undefined, undefined]`), and so does the core: a spec falls
-    // back to its own default size (vega-lite: `isFinite(containerSize()[0]) ? ... : 300`).
-    containerSize: () => [undefined, undefined],
+    // neither (`[undefined, undefined]`); here the host passes the container's
+    // size in RuntimeInput.containerSize, and without one a spec falls back to
+    // its own default size (vega-lite: `isFinite(containerSize()[0]) ? ... : 300`).
+    containerSize: () => runtime.containerSize?.() ?? [undefined, undefined],
     windowSize: () => [undefined, undefined],
     isFinite: Number.isFinite, isNaN: Number.isNaN, log: Math.log, pow: Math.pow,
     round: Math.round, sin: Math.sin, sqrt: Math.sqrt, tan: Math.tan,

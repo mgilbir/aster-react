@@ -175,9 +175,12 @@ function boundFull(item: SceneGroup, field: string): number | undefined {
  * gridLayout — exact port. Positions `groups` (cell groups) in a grid,
  * updating each group's x/y. Returns the union of the translated boxes.
  */
-export function gridLayout(groups: SceneGroup[], opt: Opt): Bounds {
+export function gridLayout(groups: SceneGroup[], opt: Opt, measure?: (g: SceneGroup) => Bounds): Bounds {
   const dirty = !opt.nodirty
-  const bbox: (g: SceneGroup) => Bounds = opt.bounds === 'flush' ? bboxFlush : bboxFull
+  // `measure` supplies the cells' bounds when the caller already holds them
+  // (legend entries: the Bound pass of their symbol and label); otherwise
+  // they are read off the cell groups as vega's `bounds: 'full' | 'flush'`.
+  const bbox: (g: SceneGroup) => Bounds = measure ?? (opt.bounds === 'flush' ? bboxFlush : bboxFull)
   const bounds = new Bounds().set(0, 0, 0, 0)
   const alignCol = get(opt.align, 'column')
   const alignRow = get(opt.align, 'row')
