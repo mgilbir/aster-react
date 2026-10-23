@@ -15,6 +15,7 @@
     "bench:runtime": "pnpm --filter @aster/benchmarks run bench:runtime",
     "bench:incremental": "pnpm --filter @aster/benchmarks run bench:incremental",
     "bench:differential": "pnpm --filter @aster/benchmarks run bench:differential",
+    "bench:pipeline": "pnpm --filter @aster/benchmarks run bench:pipeline",
     "bench:memory": "pnpm --filter @aster/benchmarks run bench:memory",
     "bench:bundle": "pnpm --filter @aster/benchmarks run bench:bundle",
     "bench:browser": "pnpm --filter @aster/benchmarks run bench:browser",
