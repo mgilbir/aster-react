@@ -3,6 +3,7 @@
  * Loaded by the `@aster/core/transforms` addon; the core bundle keeps only
  * the transforms a plain chart uses. Shared internals come from transform.ts.
  */
+import { ownGet } from './util.js'
 import type { CompiledTransform, SortSpec } from './types.js'
 import type { HierNode, Row, TransformContext } from './transform.js'
 import {
@@ -2725,7 +2726,7 @@ function linkpathRows(rows: Row[], t: Record<string, unknown>): Row[] {
   const as = (t.as as string | undefined) ?? 'path'
   const orient = (t.orient as string | undefined) ?? 'vertical'
   const shape = (t.shape as string | undefined) ?? 'line'
-  const path = LINK_PATHS[shape + '-' + orient] ?? LINK_PATHS[shape]
+  const path = ownGet(LINK_PATHS, shape + '-' + orient) ?? ownGet(LINK_PATHS, shape)
   if (!path) throw new Error(`[aster] linkpath unsupported type: ${shape}${t.orient ? '-' + orient : ''}`)
   return rows.map((r) => ({
     ...r,

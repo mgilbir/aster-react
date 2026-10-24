@@ -18,6 +18,7 @@
  * The stream owns a `ChartSession` and a spec. It never mutates the spec.
  */
 import { createChartSession, type ChartSession } from './session.js'
+import { dict } from './util.js'
 import { diffRows, type DataPulse, type DatasetPulse, type PulseRange } from './pulse.js'
 import type { RuntimeInput, SceneRoot, VgSpec } from './types.js'
 
@@ -135,7 +136,7 @@ function mergePulse(
 ): StreamPulseInput | null {
   if (!a) return b ?? null
   if (!b) return a
-  const out: StreamPulseInput = { ...a }
+  const out: StreamPulseInput = dict(a)
   for (const [name, next] of Object.entries(b)) {
     const prev = out[name]
     if (!prev) { out[name] = next; continue }
@@ -215,7 +216,7 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
   const base = new Map<string, unknown[]>(specRows)
   if (options.initial?.data) for (const [name, rows] of Object.entries(options.initial.data)) base.set(name, rows)
   const owned = new Set<string>()
-  let signals: Record<string, unknown> = { ...(options.initial?.signals ?? {}) }
+  let signals: Record<string, unknown> = dict(options.initial?.signals)
   let width = options.initial?.width
   let height = options.initial?.height
   let domainRaw = options.initial?.domainRaw
@@ -234,7 +235,7 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
 
   const cloneAppend = (append: Record<string, unknown[]> | undefined): Record<string, unknown[]> | undefined => {
     if (!append) return undefined
-    const out: Record<string, unknown[]> = {}
+    const out = dict<unknown[]>()
     for (const [name, list] of Object.entries(append)) out[name] = list.slice()
     return out
   }
@@ -245,20 +246,20 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     if (policy === 'coalesce') {
       if (queue.length) {
         const prev = queue[0]!
-        const append: Record<string, unknown[]> = { ...(prev.append ?? {}) }
+        const append = dict<unknown[]>(prev.append)
         for (const [name, list] of Object.entries(batch.append ?? {})) {
           const cur = append[name]
           if (cur) cur.push(...list)
           else append[name] = list.slice()
         }
         queue[0] = {
-          data: { ...(prev.data ?? {}), ...(batch.data ?? {}) },
+          data: dict(prev.data, batch.data),
           append,
           pulse: mergePulse(prev.pulse, batch.pulse) ?? undefined,
-          signals: { ...(prev.signals ?? {}), ...(batch.signals ?? {}) },
+          signals: dict(prev.signals, batch.signals),
           width: batch.width ?? prev.width,
           height: batch.height ?? prev.height,
-          domainRaw: { ...(prev.domainRaw ?? {}), ...(batch.domainRaw ?? {}) },
+          domainRaw: dict(prev.domainRaw, batch.domainRaw),
         }
         stats.coalesced++
         stats.depth = 1
@@ -427,7 +428,7 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
       const { pulse, lengths } = toDataPulse(targets)
       const changedDatasets = [...pulse.structural]
       const dataPulse: NonNullable<RuntimeInput['dataPulse']> = {}
-      const dataChanges: Record<string, number[]> = {}
+      const dataChanges = dict<number[]>()
       for (const [name, p] of pulse.datasets) {
         if (p.sameLength) dataChanges[name] = p.changed
         else {
@@ -466,10 +467,10 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
       }
       // Keep the latest values from every batch.
       for (const b of batches) {
-        if (b.signals) signals = { ...signals, ...b.signals }
+        if (b.signals) signals = dict(signals, b.signals)
         if (b.width != null) width = b.width
         if (b.height != null) height = b.height
-        if (b.domainRaw) domainRaw = { ...(domainRaw ?? {}), ...b.domainRaw }
+        if (b.domainRaw) domainRaw = dict(domainRaw, b.domainRaw)
       }
       const input: RuntimeInput = {
         data: Object.fromEntries(base),

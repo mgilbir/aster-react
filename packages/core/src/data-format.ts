@@ -8,7 +8,7 @@
  * which registers them into `dataFormatRegistry`.
  */
 import { dataFormatRegistry } from './registry.js'
-import { toBoolean, toDate, toNumber, toString } from './util.js'
+import { safeGet, toBoolean, toDate, toNumber, toString } from './util.js'
 
 /** vega-loader's typeParsers, backed by the ported converters (oracle-vector-tested). */
 export const typeParsers: Record<string, (v: unknown) => unknown> = {
@@ -44,7 +44,7 @@ export function coerceRows(rows: Record<string, unknown>[], parse: Record<string
   const fields = Object.keys(types)
   const parsers = fields.map((field) => {
     const type = types[field] as string
-    if (!typeParsers[type]) throw new Error(`[aster] illegal format pattern: ${field}:${type}`)
+    if (!Object.hasOwn(typeParsers, type)) throw new Error(`[aster] illegal format pattern: ${field}:${type}`)
     return typeParsers[type]!
   })
   const out = rows.map((r) => ({ ...r }))
@@ -143,7 +143,7 @@ dataFormatRegistry.set('json', (data, format) => {
     let v: unknown = parsed
     for (const seg of String(prop).split('.')) {
       if (v == null) return []
-      v = (v as Record<string, unknown>)[seg]
+      v = safeGet(v, seg)
     }
     parsed = v
   }

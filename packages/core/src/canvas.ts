@@ -128,7 +128,8 @@ function parsePathDataUncached(d: string): PathSeg[] {
       i++
       continue
     }
-    const n = ARG_COUNT[cmd.toUpperCase()] ?? 0
+    const up = cmd.toUpperCase()
+    const n = (Object.hasOwn(ARG_COUNT, up) ? ARG_COUNT[up] : undefined) ?? 0
     const a: number[] = []
     for (let k = 0; k < n; k++) a.push(next())
     const rel = cmd !== cmd.toUpperCase()

@@ -7,9 +7,11 @@ import type { CompiledTransform, SortSpec } from './types.js'
 import type { ExpressionRuntime } from './expression.js'
 import { geoRegistry, requireGeo, requireTransform } from './registry.js'
 import { nominalTextWidth } from './text-metrics.js'
+import { ownGet, safeGet } from './util.js'
 
 export interface TransformContext {
   runtime: ExpressionRuntime
+  /** Signal values by name. Must be prototype-less (the runtime supplies `dict(...)`): names are spec-supplied. */
   signals: Record<string, unknown>
   /** Cross-dataset lookup (used by 'lookup', deferred). */
   datasets?: (name: string) => unknown[] | undefined
@@ -648,7 +650,7 @@ export function aggregateGroup(rows: Row[], groupby: string[], fields: (string |
       row[as[i] ?? `${op}_${field}`] = best
       return
     }
-    const fn = AGGR[op]
+    const fn = ownGet(AGGR, op)
     if (!fn) throw new Error(`[aster] unsupported aggregate op "${op}"`)
     row[as[i] ?? `${op}_${field}`] = fn(values, rows)
   })
@@ -707,7 +709,7 @@ function pivotRows(rows: Row[], t: Record<string, unknown>): Row[] {
         // Vega's `count` op pivots on the number of matching rows per cell.
         row[as[i]!] = valueField == null ? g.length : g.filter((r) => r[keyField] === k).length
       } else {
-        const fn = AGGR[op]
+        const fn = ownGet(AGGR, op)
         if (!fn) throw new Error(`[aster] unsupported aggregate op "${op}"`)
         const subset = valueField == null ? [] : g.filter((r) => r[keyField] === k)
         row[as[i]!] = fn(valueField == null ? [] : fieldValues(subset, valueField), subset)
@@ -1743,7 +1745,7 @@ function labelRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContex
   for (let i = 0; i < positions; i++) {
     offs[i] = offsets[Math.min(i, offsets.length - 1)]!
     const name = anchors[Math.min(i, anchors.length - 1)]!
-    anc[i] = LABEL_ANCHOR_CODE[name] ?? 0
+    anc[i] = (Object.hasOwn(LABEL_ANCHOR_CODE, name) ? LABEL_ANCHOR_CODE[name] : undefined) ?? 0
   }
 
   // scaler (vega-label `util/scaler.js`) with padding 0.
@@ -1861,7 +1863,7 @@ export function getField(row: Row, path: string): unknown {
   let v: unknown = row
   for (const part of path.split('.')) {
     if (v == null || typeof v !== 'object') return undefined
-    v = (v as Record<string, unknown>)[part]
+    v = safeGet(v, part)
   }
   return v
 }

@@ -99,7 +99,8 @@ export interface Stream {
 }
 
 function streamGeometry(geometry: SR, stream: Stream): void {
-  if (geometry && streamGeometryType[geometry.type]) {
+  // own-property dispatch (d3-geo does the same): `type` comes from GeoJSON data
+  if (geometry && Object.hasOwn(streamGeometryType, geometry.type)) {
     (streamGeometryType[geometry.type] as (o: SR, s: Stream) => void)(geometry, stream)
   }
 }
@@ -173,7 +174,7 @@ function streamPolygon(coordinates: any, stream: Stream): void {
 }
 
 export function geoStream(object: SR, stream: Stream): void {
-  if (object && streamObjectType[object.type]) {
+  if (object && Object.hasOwn(streamObjectType, object.type)) {
     (streamObjectType[object.type] as (o: SR, s: Stream) => void)(object, stream)
   } else {
     streamGeometry(object, stream)

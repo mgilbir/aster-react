@@ -27,7 +27,9 @@ import { error, isObject, isString } from './util.js'
 
 /** Cache compiled formatters per specifier (vega-format's memoize). */
 function memoize<T, A>(method: (arg: A) => T): (arg: A) => T {
-  const cache: Record<string, T> = {}
+  // a Map: the specifier is spec/data-supplied (`constructor`, `__proto__`, ...)
+  // prototype-less: the specifier is spec/data-supplied (`constructor`, `__proto__`, ...)
+  const cache = Object.create(null) as Record<string, T>
   return (spec: A) => cache[String(spec)] || (cache[String(spec)] = method(spec))
 }
 

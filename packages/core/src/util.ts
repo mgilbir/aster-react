@@ -121,6 +121,8 @@ export function toBoolean(_: unknown): boolean | null {
  * pass through unchanged (milliseconds — *not* wrapped in a `Date`), `Date`
  * instances pass through, and anything else goes through `Date.parse`
  * (returning epoch milliseconds). An optional parser overrides the default.
+ * The *expression* `toDate` is unary (see `createFunctionContext`): a parser
+ * is a callable argument and must never be reachable from a spec string.
  */
 export function toDate(
   _: unknown,
@@ -220,6 +222,50 @@ export function splitAccessPath(p: unknown): string[] {
   return path
 }
 
+const hasOwn = Object.prototype.hasOwnProperty
+
+/**
+ * `obj[key]`, except that the prototype-chain/constructor keys of
+ * `DisallowedObjectProperties` resolve only when they are *own* properties of
+ * `obj` (a data column literally named `constructor` is data; the inherited
+ * `Object` constructor is not). This is the shared guard for every dynamic
+ * property walk (audit C1); a nullish `obj` falls through to the plain read,
+ * which throws as before.
+ */
+export function safeGet(obj: unknown, key: unknown): unknown {
+  const k = String(key)
+  if (obj != null && DisallowedObjectProperties.has(k) && !hasOwn.call(Object(obj), k)) return undefined
+  return (obj as Record<string, unknown>)[k]
+}
+
+/**
+ * Own-property read from a spec-keyed table (dataset, signal, scheme, ...).
+ * A plain `{}` table inherits `constructor`, `toString`, `__proto__` from
+ * `Object.prototype`, so `table[name]` for a spec/data-supplied `name` can
+ * return an inherited function or object (audit C50). Use this (or a `Map`)
+ * for every lookup keyed by a name that is not a compile-time constant.
+ */
+export function ownGet<T>(table: Readonly<Record<string, T>> | null | undefined, key: string): T | undefined {
+  return table != null && hasOwn.call(table, key) ? table[key] : undefined
+}
+
+/**
+ * Own-property write that is safe for any key: `__proto__` becomes an
+ * ordinary own data property instead of replacing the table's prototype.
+ */
+export function setOwn<T>(table: Record<string, T>, key: string, value: T): void {
+  Object.defineProperty(table, key, { value, writable: true, enumerable: true, configurable: true })
+}
+
+/**
+ * A fresh name-keyed table with no prototype (`__proto__` is an ordinary key
+ * and nothing is inherited), optionally filled from `sources` (own keys only;
+ * on a prototype-less target even an own `__proto__` key is plain data).
+ */
+export function dict<T = unknown>(...sources: Array<Readonly<Record<string, T>> | null | undefined>): Record<string, T> {
+  return Object.assign(Object.create(null) as Record<string, T>, ...sources)
+}
+
 /** Get a single path component (`obj[field]`). */
 function get1(field: string): (obj: unknown) => unknown {
   return (obj) => (obj as Record<string, unknown>)[field]
@@ -237,8 +283,13 @@ function getN(path: readonly string[]): (obj: unknown) => unknown {
   }
 }
 
-/** Composed getter: single-component fast path, walking otherwise. */
+/**
+ * Composed getter: single-component fast path, walking otherwise. Paths with
+ * no risky segment (all of them in practice) use the unguarded closures, so
+ * the hot path pays nothing for the guard.
+ */
 export function getter(path: readonly string[]): (obj: unknown) => unknown {
+  if (path.some((p) => DisallowedObjectProperties.has(p))) return (obj) => path.reduce(safeGet, obj)
   return path.length === 1 ? get1(path[0] as string) : getN(path)
 }
 
@@ -360,13 +411,13 @@ export function extent<T>(
 // --- accessors (constant accessor factories) ---------------------------------
 
 /** The `id` field accessor. */
-export const id = field('id')
+export const id = /* @__PURE__ */ field('id')
 /** The identity accessor. */
-export const identity = accessor((_) => _, [], 'identity')
-export const zero = accessor(() => 0, [], 'zero')
-export const one = accessor(() => 1, [], 'one')
-export const truthy = accessor(() => true, [], 'true')
-export const falsy = accessor(() => false, [], 'false')
+export const identity = /* @__PURE__ */ accessor((_) => _, [], 'identity')
+export const zero = /* @__PURE__ */ accessor(() => 0, [], 'zero')
+export const one = /* @__PURE__ */ accessor(() => 1, [], 'one')
+export const truthy = /* @__PURE__ */ accessor(() => true, [], 'true')
+export const falsy = /* @__PURE__ */ accessor(() => false, [], 'false')
 
 // --- expression helpers ------------------------------------------------------
 

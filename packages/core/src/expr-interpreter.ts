@@ -7,7 +7,7 @@
  * Pinned by oracle vectors recorded from the pinned vega-interpreter
  * (`testdata/vectors/vega-expression.json`, eval suites).
  */
-import { ascending, DisallowedObjectProperties } from './util.js'
+import { ascending, DisallowedObjectProperties, safeGet } from './util.js'
 import { type AstNode } from './expr-parser.js'
 
 // --- the interpreter's own default function table ----------------------------
@@ -204,7 +204,7 @@ const Visitors: Record<string, ($: EvalContext, n: AstNode) => unknown> = {
       : id === 'datum' ? $.datum
       : id === 'event' ? $.event
       : id === 'item' ? $.item
-      : Constants[id] || $.params['$' + id]
+      : (Object.hasOwn(Constants, id) ? Constants[id] : undefined) || $.params['$' + id]
   },
   MemberExpression: ($, n) => {
     const d = !n.computed
@@ -212,12 +212,19 @@ const Visitors: Record<string, ($: EvalContext, n: AstNode) => unknown> = {
     if (d) $.memberDepth += 1
     const p = $(n.property as AstNode)
     if (d) $.memberDepth -= 1
-    if (DisallowedMethods.has((o as Record<string, unknown>)[p as string])) {
+    // vega-interpreter returns the inert `Object` for `datum.constructor`
+    // (pinned by the oracle vectors), so a plain object keeps that read. But a
+    // risky key on a *function* (the `.constructor` of `Object`, which is
+    // `Function`) is never resolved, and DisallowedMethods stays as the
+    // faithful backstop. Calls refuse function values (see CallExpression),
+    // so what is returned here cannot be invoked.
+    const v = typeof o === 'function' ? safeGet(o, p) : (o as Record<string, unknown>)[p as string]
+    if (DisallowedMethods.has(v)) {
       // eslint-disable-next-line no-console
-      console.error(`Prevented interpretation of member "${p}" which could lead to insecure code execution`)
+      console.error(`Prevented interpretation of member "${String(p)}" which could lead to insecure code execution`)
       return undefined
     }
-    return (o as Record<string, unknown>)[p as string]
+    return v
   },
   CallExpression: ($, n) => {
     const args = n.arguments as AstNode[]
@@ -228,9 +235,22 @@ const Visitors: Record<string, ($: EvalContext, n: AstNode) => unknown> = {
       name = name.slice(1)
     }
     // special case "if" due to conditional evaluation of branches
-    return name === 'if'
-      ? ($(args[0] as AstNode) ? $(args[1] as AstNode) : $(args[2] as AstNode))
-      : (($.fn[name] || DefaultFunctions[name]) as (...a: unknown[]) => unknown).apply($.fn, args.map($))
+    if (name === 'if') return $(args[0] as AstNode) ? $(args[1] as AstNode) : $(args[2] as AstNode)
+    // Only own, table-registered functions are callable: names that exist on
+    // Object.prototype (constructor, toString, ...) are never functions here.
+    // An unknown name fails exactly as upstream does (`undefined.apply`), which the oracle vectors pin.
+    // Names that exist on Object.prototype (constructor, valueOf, ...) are never
+    // functions here; `toString` alone is a real table entry (coercion).
+    const f = name !== 'toString' && DisallowedObjectProperties.has(name) ? undefined : ($.fn[name] || DefaultFunctions[name])
+    const vals = args.map($)
+    // No expression function takes a callable (vega-functions has none that
+    // is reachable); refuse one rather than let a spec-reachable function
+    // value (e.g. a scale) be invoked by a built-in. The `is*` type inspectors
+    // only look at the value and are exempt.
+    if (!name.startsWith('is') && vals.some((v) => typeof v === 'function')) {
+      throw new Error(`Function argument refused: ${name}`)
+    }
+    return (f as (...a: unknown[]) => unknown).apply($.fn, vals)
   },
   ArrayExpression: ($, n) => (n.elements as AstNode[]).map($),  // array holes crash upstream too
   BinaryExpression: ($, n) => (Ops[n.operator as string] as (a: unknown, b: unknown) => unknown)($(n.left as AstNode), $(n.right as AstNode)),

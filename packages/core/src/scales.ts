@@ -5,6 +5,7 @@
  */
 import * as vs from './scale.js'
 import { interpolateRound } from './interp.js'
+import { ownGet } from './util.js'
 import { quantizeInterpolator } from './scale.js'
 import { hcl, rgb } from './color.js'
 import type { CompiledScale, ScaleDomain, ScaleRange } from './types.js'
@@ -21,6 +22,7 @@ export interface ColorScale extends Scale {
 export interface ScaleContext {
   width: number
   height: number
+  /** Signal values by name. Must be prototype-less (the runtime supplies `dict(...)`): names are spec-supplied. */
   signals: Record<string, unknown>
   /** `config.range` — a named range ('category', 'ramp', ...) resolves through
    * it before the built-in aliases (vega-parser's range lookup). */
@@ -728,7 +730,7 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string, 
         // scheme colors (ordinal) or keeps the scheme name (continuous, where
         // the interpolator needs the name); anything else refuses upstream
         // ('Unrecognized scale range value').
-        const cfg = ctx.configRange?.[range]
+        const cfg = ownGet(ctx.configRange, range)
         if (cfg != null) {
           if (Array.isArray(cfg)) return cfg
           if (cfg && typeof cfg === 'object' && 'scheme' in cfg) {
@@ -757,7 +759,8 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string, 
         const directRanges: Record<string, unknown[]> = {
           symbol: ['circle', 'square', 'triangle-up', 'cross', 'diamond', 'triangle-right', 'triangle-down', 'triangle-left'],
         }
-        if (directRanges[range]) return directRanges[range]
+        const direct = ownGet(directRanges, range)
+        if (direct) return direct
         // vega's config.js defaults: diverging carries extent [1, 0] (the
         // default reads the scheme backwards — and a user entry REPLACES the
         // default wholesale, so {scheme} alone reads forwards)
@@ -767,7 +770,7 @@ function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string, 
           ordinal: { scheme: 'blues' },
           diverging: { scheme: 'blueorange', extent: [1, 0] },
         }
-        const entry = aliases[range]
+        const entry = ownGet(aliases, range)
         const name = entry ? entry.scheme : range
         const scheme = vs.scheme(name)
         if (typeof scheme === 'function') {
