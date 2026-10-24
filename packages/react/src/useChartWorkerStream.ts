@@ -3,30 +3,67 @@
  * main thread only ships batches and receives scenes/pulses. When no Worker is
  * available the same hook falls back to a local stream, so hosts need one code
  * path.
+ *
+ * Lifecycle: the stream is keyed on the spec CONTENT (plus capacity/policy and
+ * the supplied `worker`). A parent re-render with an equal inline `spec`, a new
+ * `workerFactory` arrow, or a changed `serialize` does not restart it and does
+ * not discard streamed rows.
  */
 import * as React from 'react'
 import {
+  AsterStreamBackpressureError,
   createChartStream,
+  getStreamFlushFailure,
   renderSceneToSvg,
   type ChartStream,
   type DataPulse,
+  type RuntimeInput,
+  type StreamFlushFailure,
   type SceneRoot,
   type StreamBatch,
   type StreamOptions,
-  type StreamPolicy,
   type StreamStats,
   type VgSpec,
 } from '@aster/core'
-import { normalizeChartSpec } from './spec.js'
+import { mergeBatches } from './batches.js'
+import { normalizeChartSpec, useStableSpec } from './spec.js'
 import {
-  handleChartWorkerStreamRequest,
+  errorFromWire,
+  listenToWorker,
+  nextWorkerRequestId,
+  resolveWorkerTextMetrics,
+  resolveWorkerUrlPolicy,
+  useWorkerInstance,
+  wireTextMetrics,
+  wireUrlPolicy,
+  type ChartWorkerBatch,
   type ChartWorkerOptions,
   type ChartWorkerStreamRequest,
   type ChartWorkerStreamResponse,
+  type WorkerTextMetrics,
+  type WorkerUrlPolicyInput,
 } from './worker.js'
 
-export interface ChartWorkerStreamOptions extends ChartWorkerOptions, StreamOptions {
-  /** Serialize each received scene to SVG (default true). */
+export interface ChartWorkerStreamOptions extends ChartWorkerOptions, Omit<StreamOptions, 'initial' | 'textMetrics'> {
+  /**
+   * First-flush input. Read when the stream is (re)created. `textMetrics` is a
+   * provider name registered in the worker (an object only works without one);
+   * `urlPolicy` functions travel as a `registerWorkerUrlPolicy` name.
+   */
+  initial?: Omit<RuntimeInput, 'textMetrics' | 'urlPolicy'> & { textMetrics?: WorkerTextMetrics; urlPolicy?: WorkerUrlPolicyInput }
+  /**
+   * Host text measurement for every flush: a provider name registered in the
+   * worker (an object only works without one). Overrides `initial.textMetrics`.
+   */
+  textMetrics?: WorkerTextMetrics
+  /**
+   * `capacity` (batches), `maxQueuedRows` (rows; default 5,000,000), `policy` and
+   * `limits` are the stream's own options (see `StreamOptions`): the worker's stream
+   * enforces them, and the producer-side buffer applies the same bounds so
+   * `push()` answers truthfully. Under `coalesce` the stream holds one folded batch
+   * (`stats().capacity` is 1) and only the row bound applies.
+   */
+  /** Serialize each received scene to SVG (default true). Changing it never restarts the stream. */
   serialize?: boolean
   /** Flush once per microtask/`requestAnimationFrame` after a push (default true). */
   autoFlush?: boolean
@@ -38,8 +75,22 @@ export interface WorkerChartStreamResult {
   scene: SceneRoot | null
   svg: string | null
   error: Error | null
+  /**
+   * Set with a flush `error`: what was queued at the failure and how many batches the
+   * stream discarded so later flushes recover. Null otherwise; cleared by the next
+   * successful flush.
+   */
+  flushFailure: (StreamFlushFailure & { discarded: number }) | null
   pending: boolean
-  push: (batch: StreamBatch) => boolean
+  /** Increments each time the stream is (re)created (spec content, capacity, policy or worker changed). */
+  generation: number
+  /**
+   * Enqueue a batch. With a Worker the producer-side buffer applies the same
+   * `capacity`/`policy` as the stream, so the return value is final: `false`
+   * means the policy rejected the batch (`error` throws
+   * `AsterStreamBackpressureError`), `true` means it will be delivered.
+   */
+  push: (batch: ChartWorkerBatch) => boolean
   flush: () => void
   pulse: () => DataPulse | null
   stats: () => StreamStats | null
@@ -58,19 +109,22 @@ interface StreamUiState {
   scene: SceneRoot | null
   svg: string | null
   error: Error | null
+  flushFailure: (StreamFlushFailure & { discarded: number }) | null
   pending: boolean
+  generation: number
 }
 
 export function useChartWorkerStream(spec: VgSpec, options: ChartWorkerStreamOptions = {}): WorkerChartStreamResult {
   const {
-    worker, workerFactory, capacity, policy, initial,
+    worker, workerFactory, capacity, policy, initial, maxQueuedRows, limits, textMetrics,
     serialize = true, autoFlush = true, flushPolicy = 'microtask',
   } = options
-  const normalized = React.useMemo(() => normalizeChartSpec(spec), [spec])
-  const [state, setState] = React.useState<StreamUiState>({ scene: null, svg: null, error: null, pending: true })
-  const workerRef = React.useRef<Worker | null>(null)
+  const stableSpec = useStableSpec(spec)
+  const normalized = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
+  const [state, setState] = React.useState<StreamUiState>({ scene: null, svg: null, error: null, flushFailure: null, pending: true, generation: 0 })
+  const workerRef = useWorkerInstance(worker, workerFactory)
   const localRef = React.useRef<ChartStream | null>(null)
-  const batchesRef = React.useRef<StreamBatch[]>([])
+  const batchesRef = React.useRef<ChartWorkerBatch[]>([])
   const statsRef = React.useRef<StreamStats | null>(null)
   const pulseRef = React.useRef<DataPulse | null>(null)
   const acceptedRef = React.useRef<number | null>(null)
@@ -79,11 +133,24 @@ export function useChartWorkerStream(spec: VgSpec, options: ChartWorkerStreamOpt
   const pausedRef = React.useRef(false)
   const closedRef = React.useRef(false)
   const frameRef = React.useRef<number | null>(null)
-  const seqRef = React.useRef(0)
   const streamIdRef = React.useRef(0)
   const lastApplied = React.useRef(0)
   const scheduled = React.useRef(false)
   const mounted = React.useRef(true)
+  // Read at use time so they never restart the stream.
+  const serializeRef = React.useRef(serialize)
+  serializeRef.current = serialize
+  const initialRef = React.useRef(initial)
+  initialRef.current = initial
+  const queueCapacity = Math.max(1, capacity ?? 32)
+  const queueMaxRows = Math.max(1, maxQueuedRows ?? 5_000_000)
+  const queuePolicy = policy ?? 'coalesce'
+  // Rows waiting in the producer-side buffer (worker path); mirrors StreamStats.queuedRows.
+  const bufferedRowsRef = React.useRef(0)
+  const limitsRef = React.useRef(limits)
+  limitsRef.current = limits
+  const textMetricsRef = React.useRef(textMetrics)
+  textMetricsRef.current = textMetrics
 
   React.useEffect(() => {
     mounted.current = true
@@ -94,17 +161,9 @@ export function useChartWorkerStream(spec: VgSpec, options: ChartWorkerStreamOpt
     }
   }, [])
 
-  React.useEffect(() => {
-    if (worker !== undefined) {
-      workerRef.current = worker
-      return
-    }
-    workerRef.current = workerFactory ? workerFactory() : null
-    return () => {
-      workerRef.current?.terminate?.()
-      workerRef.current = null
-    }
-  }, [worker, workerFactory])
+  const fail = React.useCallback((error: Error, flushFailure: UiFailure | null = null): void => {
+    if (mounted.current) setState((s) => ({ ...s, error, flushFailure, pending: false }))
+  }, [])
 
   const apply = React.useCallback((response: ChartWorkerStreamResponse): void => {
     if (!mounted.current || response.id < lastApplied.current) return
@@ -114,48 +173,63 @@ export function useChartWorkerStream(spec: VgSpec, options: ChartWorkerStreamOpt
     if (response.accepted != null) acceptedRef.current = response.accepted
     if (response.rejected != null) rejectedRef.current = response.rejected
     if (response.error) {
-      setState((s) => ({
-        ...s,
-        error: Object.assign(new Error(response.error!.message), response.error),
-        pending: false,
-      }))
+      fail(errorFromWire(response.error), response.failure ?? null)
       return
     }
     if (response.scene) {
-      setState({
-        scene: response.scene,
-        svg: serialize ? (response.svg ?? renderSceneToSvg(response.scene)) : null,
+      const scene = response.scene
+      setState((s) => ({
+        ...s,
+        scene,
+        svg: serializeRef.current ? (response.svg ?? renderSceneToSvg(scene)) : null,
         error: null,
+        flushFailure: null,
         pending: false,
-      })
+      }))
     } else {
       setState((s) => ({ ...s, pending: false }))
     }
-  }, [serialize])
+  }, [fail])
 
-  const sendFlush = React.useCallback((batches: StreamBatch[]): void => {
+  /** A failed local flush is atomic: report it, then discard the queue so later flushes recover. */
+  const recoverLocal = React.useCallback((stream: ChartStream, e: unknown): void => {
+    const error = e instanceof Error ? e : new Error(String(e))
+    const info = getStreamFlushFailure(e) ?? { batches: stream.stats().depth, queuedRows: stream.stats().queuedRows }
+    fail(error, { ...info, discarded: stream.discard() })
+  }, [fail])
+
+  const sendFlush = React.useCallback((batches: ChartWorkerBatch[]): void => {
     const w = workerRef.current
     const streamId = streamIdRef.current
     if (!w) {
       const stream = localRef.current
       if (!stream) return
-      for (const b of batches) stream.push(b)
+      batchesRef.current = []
+      bufferedRowsRef.current = 0
       try {
+        for (const b of batches) stream.push(resolveLocalBatch(b))
         stream.flush()
         const scene = stream.scene()
-        if (scene) setState({ scene, svg: serialize ? renderSceneToSvg(scene) : null, error: null, pending: false })
+        if (scene) setState((s) => ({ ...s, scene, svg: serializeRef.current ? renderSceneToSvg(scene) : null, error: null, flushFailure: null, pending: false }))
         statsRef.current = stream.stats()
         pulseRef.current = stream.pulse()
       } catch (e) {
-        setState((s) => ({ ...s, error: e instanceof Error ? e : new Error(String(e)), pending: false }))
+        recoverLocal(stream, e)
       }
       return
     }
-    const id = ++seqRef.current
+    const id = nextWorkerRequestId()
     batchesRef.current = []
-    const request: ChartWorkerStreamRequest = { kind: 'stream', id, streamId, op: 'flush', batches }
-    w.postMessage(request)
-  }, [serialize])
+    bufferedRowsRef.current = 0
+    const request: ChartWorkerStreamRequest = {
+      kind: 'stream', id, streamId, op: 'flush', batches, serialize: serializeRef.current,
+    }
+    try {
+      w.postMessage(request)
+    } catch (e) {
+      fail(e instanceof Error ? e : new Error(String(e)))
+    }
+  }, [fail, recoverLocal, workerRef])
 
   const scheduleFlush = React.useCallback((): void => {
     if (!autoFlush || pausedRef.current || scheduled.current) return
@@ -174,24 +248,39 @@ export function useChartWorkerStream(spec: VgSpec, options: ChartWorkerStreamOpt
   }, [autoFlush, flushPolicy, sendFlush])
 
   React.useEffect(() => {
-    const streamId = ++streamIdRef.current
-    const id = ++seqRef.current
+    const streamId = nextWorkerRequestId()
+    streamIdRef.current = streamId
+    const id = nextWorkerRequestId()
     lastApplied.current = id
     batchesRef.current = []
-    setState({ scene: null, svg: null, error: null, pending: true })
+    bufferedRowsRef.current = 0
+    setState((s) => ({ scene: null, svg: null, error: null, flushFailure: null, pending: true, generation: s.generation + 1 }))
     closedRef.current = false
     const w = workerRef.current
+    const init = initialRef.current
     if (!w) {
-      const stream = createChartStream(normalized, { capacity, policy, initial })
+      let stream: ChartStream
+      try {
+        stream = createChartStream(normalized, {
+          capacity, policy,
+          ...(maxQueuedRows != null ? { maxQueuedRows } : {}),
+          ...(limitsRef.current ? { limits: limitsRef.current } : {}),
+          ...(textMetricsRef.current != null ? { textMetrics: resolveWorkerTextMetrics(textMetricsRef.current) } : {}),
+          ...(init ? { initial: localInitial(init) } : {}),
+        })
+      } catch (e) {
+        setState((s) => ({ ...s, scene: null, svg: null, error: e instanceof Error ? e : new Error(String(e)), pending: false }))
+        return
+      }
       localRef.current = stream
       try {
         stream.flush()
         const scene = stream.scene()
-        setState({ scene, svg: serialize && scene ? renderSceneToSvg(scene) : null, error: null, pending: false })
+        setState((s) => ({ ...s, scene, svg: serializeRef.current && scene ? renderSceneToSvg(scene) : null, error: null, flushFailure: null, pending: false }))
         statsRef.current = stream.stats()
         pulseRef.current = stream.pulse()
       } catch (e) {
-        setState({ scene: null, svg: null, error: e instanceof Error ? e : new Error(String(e)), pending: false })
+        recoverLocal(stream, e)
       }
       return () => {
         stream.close()
@@ -200,40 +289,81 @@ export function useChartWorkerStream(spec: VgSpec, options: ChartWorkerStreamOpt
     }
     localRef.current?.close()
     localRef.current = null
-    const request: ChartWorkerStreamRequest = {
-      kind: 'stream', id, streamId, op: 'init', spec: normalized,
-      options: { capacity, policy, initial },
+    let request: ChartWorkerStreamRequest
+    try {
+      if (init?.textMetrics != null) wireTextMetrics(init.textMetrics, true)
+      if (init?.urlPolicy != null) wireUrlPolicy(init.urlPolicy, true)
+      if (textMetricsRef.current != null) wireTextMetrics(textMetricsRef.current, true)
+      request = {
+        kind: 'stream', id, streamId, op: 'init', spec: normalized,
+        options: {
+          capacity, policy,
+          ...(maxQueuedRows != null ? { maxQueuedRows } : {}),
+          ...(limitsRef.current ? { limits: limitsRef.current } : {}),
+          ...(textMetricsRef.current != null ? { textMetrics: textMetricsRef.current } : {}),
+          ...(init ? { initial: init } : {}),
+        },
+        serialize: serializeRef.current,
+      }
+    } catch (e) {
+      fail(e instanceof Error ? e : new Error(String(e)))
+      return
     }
-    const onMessage = (event: MessageEvent<ChartWorkerStreamResponse>): void => {
+    const stop = listenToWorker(w, (event: MessageEvent<ChartWorkerStreamResponse>) => {
       const response = event.data
-      if (response.kind !== 'stream' || response.streamId !== streamId) return
+      if (response == null || response.kind !== 'stream' || response.streamId !== streamId) return
       apply(response)
+    }, fail)
+    try {
+      w.postMessage(request)
+    } catch (e) {
+      fail(e instanceof Error ? e : new Error(String(e)))
     }
-    w.addEventListener('message', onMessage)
-    w.postMessage(request)
     return () => {
-      w.removeEventListener('message', onMessage)
-      try { w.postMessage({ kind: 'stream', id: ++seqRef.current, streamId, op: 'close' }) } catch { /* terminated */ }
+      stop()
+      try { w.postMessage({ kind: 'stream', id: nextWorkerRequestId(), streamId, op: 'close' } satisfies ChartWorkerStreamRequest) } catch { /* terminated */ }
     }
-  }, [normalized, capacity, policy, worker, workerFactory, serialize, apply])
+  }, [normalized, capacity, policy, maxQueuedRows, worker, workerRef, apply, fail, recoverLocal])
 
-  // In case the worker is created asynchronously (workerFactory), the effect
-  // above runs after the setup effect and sees it in workerRef.
-  const push = React.useCallback((batch: StreamBatch): boolean => {
+  const push = React.useCallback((batch: ChartWorkerBatch): boolean => {
     if (closedRef.current) return false
     const local = localRef.current
     if (local) {
-      const accepted = local.push(batch)
+      const accepted = local.push(resolveLocalBatch(batch))
       if (accepted) scheduleFlush()
       return accepted
     }
-    // Worker path: the bounded queue lives in the worker; the main thread only
-    // batches until the next flush. A local capacity is a producer-side guard.
-    if (capacity != null && batchesRef.current.length >= capacity) return false
-    batchesRef.current.push(batch)
+    // Worker path: the producer-side buffer mirrors the stream's bounded queue
+    // and policy, so what it accepts the worker will accept too.
+    wireTextMetrics(batch.textMetrics, true)
+    // Same outcome as the stream's own bound: `error` throws, everything else returns false.
+    const rejectBatch = (bound: 'batches' | 'rows', limit: number): false => {
+      if (queuePolicy === 'error') throw new AsterStreamBackpressureError(limit, bound)
+      return false
+    }
+    const buf = batchesRef.current
+    const rows = batchRows(batch)
+    if (rows > queueMaxRows) return rejectBatch('rows', queueMaxRows)
+    if (queuePolicy === 'coalesce') {
+      // One folded batch; only the row bound applies, and it never discards queued data.
+      if (bufferedRowsRef.current + rows > queueMaxRows) return rejectBatch('rows', queueMaxRows)
+      if (buf.length) buf[0] = mergeBatches(buf[0]!, batch)
+      else buf.push(batch)
+      bufferedRowsRef.current = batchRows(buf[0]!)
+    } else {
+      while (buf.length >= queueCapacity || bufferedRowsRef.current + rows > queueMaxRows) {
+        if (queuePolicy !== 'drop-oldest') {
+          const batchBound = buf.length >= queueCapacity
+          return rejectBatch(batchBound ? 'batches' : 'rows', batchBound ? queueCapacity : queueMaxRows)
+        }
+        bufferedRowsRef.current -= batchRows(buf.shift()!)
+      }
+      buf.push(batch)
+      bufferedRowsRef.current += rows
+    }
     scheduleFlush()
     return true
-  }, [capacity, scheduleFlush])
+  }, [queueCapacity, queueMaxRows, queuePolicy, scheduleFlush])
 
   const flush = React.useCallback((): void => {
     if (localRef.current) {
@@ -261,27 +391,60 @@ export function useChartWorkerStream(spec: VgSpec, options: ChartWorkerStreamOpt
     if (frameRef.current != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frameRef.current)
     frameRef.current = null
     batchesRef.current = []
+    bufferedRowsRef.current = 0
     localRef.current?.close()
     const w = workerRef.current
     if (w) {
       try {
-        w.postMessage({ kind: 'stream', id: ++seqRef.current, streamId: streamIdRef.current, op: 'close' } satisfies ChartWorkerStreamRequest)
+        w.postMessage({ kind: 'stream', id: nextWorkerRequestId(), streamId: streamIdRef.current, op: 'close' } satisfies ChartWorkerStreamRequest)
       } catch { /* terminated */ }
     }
-  }, [])
+  }, [workerRef])
+
+  // Stable identities: they only read refs.
+  const pulse = React.useCallback(() => pulseRef.current, [])
+  const stats = React.useCallback(() => statsRef.current, [])
+  const accepted = React.useCallback(() => acceptedRef.current, [])
+  const rejected = React.useCallback(() => rejectedRef.current, [])
+  const depth = React.useCallback(() => localRef.current?.stats().depth ?? batchesRef.current.length, [])
 
   return {
     ...state,
     push,
     flush,
-    pulse: () => pulseRef.current,
-    stats: () => statsRef.current,
-    accepted: () => acceptedRef.current,
-    rejected: () => rejectedRef.current,
-    depth: () => localRef.current?.stats().depth ?? batchesRef.current.length,
+    pulse,
+    stats,
+    accepted,
+    rejected,
+    depth,
     paused,
     pause,
     resume,
     close,
   }
+}
+
+/** Resolve a worker-style batch (text metrics by name) for an in-realm stream. */
+function resolveLocalBatch(batch: ChartWorkerBatch): StreamBatch {
+  const { textMetrics, ...rest } = batch
+  return textMetrics != null ? { ...rest, textMetrics: resolveWorkerTextMetrics(textMetrics) } : rest
+}
+
+function localInitial(init: NonNullable<ChartWorkerStreamOptions['initial']>): NonNullable<StreamOptions['initial']> {
+  const { textMetrics, urlPolicy, ...rest } = init
+  return {
+    ...rest,
+    ...(textMetrics != null ? { textMetrics: resolveWorkerTextMetrics(textMetrics) } : {}),
+    ...(urlPolicy != null ? { urlPolicy: resolveWorkerUrlPolicy(urlPolicy) } : {}),
+  }
+}
+
+type UiFailure = StreamFlushFailure & { discarded: number }
+
+/** Rows a batch adds to the queue (snapshot rows plus appended rows), as the stream counts them. */
+function batchRows(b: ChartWorkerBatch): number {
+  let n = 0
+  for (const l of Object.values(b.data ?? {})) n += l.length
+  for (const l of Object.values(b.append ?? {})) n += l.length
+  return n
 }

@@ -69,5 +69,42 @@ describe('<Chart tooltip>', () => {
     act(() => { root.unmount() })
   })
 
+  // C21 is fixed in core: the scene's datum is the pure source row, so the tooltip
+  // needs no list of "engine" field names to hide (which also hid real data fields).
+  describe('shows pure datum values', () => {
+    const row = { label: 'L', x: 1, y: 2, size: 'XL', fill: 'red', text: 'hello', description: 'a thing', limit: 7 }
+    const dataSpec = { ...spec, data: [{ name: 'table', values: [row] }] }
+    const rect = { left: 0, top: 0, width: 410, height: 310, right: 410, bottom: 310, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+
+    it('SVG: every source field is listed with its source value; renderTooltip gets the exact row', () => {
+      const seen: unknown[] = []
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      act(() => { root.render(<Chart spec={dataSpec} width={400} height={300} tooltip />) })
+      const sym = container.querySelector('svg path[data-datum]') as Element
+      act(() => { sym.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 40, clientY: 60 })) })
+      const text = container.querySelector('[data-testid="chart-tooltip"]')!.textContent!
+      for (const [k, v] of Object.entries(row)) expect(text).toContain(`${k}: ${v}`)
+      act(() => { root.render(<Chart spec={dataSpec} width={400} height={300} renderTooltip={(d) => { seen.push(d); return null }} />) })
+      const sym2 = container.querySelector('svg path[data-datum]') as Element
+      act(() => { sym2.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 40, clientY: 60 })) })
+      expect(seen.at(-1)).toEqual(row)
+    })
+
+    it('canvas: the same values via the hit index', () => {
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      act(() => { root.render(<Chart spec={dataSpec} width={400} height={300} renderer="canvas" tooltip />) })
+      const host = container.firstElementChild as HTMLElement
+      host.getBoundingClientRect = () => rect
+      // symbol at x=1,y=2 on 0..10 scales over 400x300 + 5 padding
+      act(() => { host.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 5 + 40, clientY: 5 + 300 - 60 })) })
+      const text = container.querySelector('[data-testid="chart-tooltip"]')?.textContent ?? ''
+      for (const [k, v] of Object.entries(row)) expect(text).toContain(`${k}: ${v}`)
+    })
+  })
+
   afterEach(() => { document.body.innerHTML = '' })
 })

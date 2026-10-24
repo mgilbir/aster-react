@@ -45,8 +45,9 @@ describe('worker offload (R11.4)', () => {
     class FakeWorker {
       listeners = new Set<(event: MessageEvent) => void>()
       terminated = false
-      addEventListener(_type: string, fn: (event: MessageEvent) => void) { this.listeners.add(fn) }
-      removeEventListener(_type: string, fn: (event: MessageEvent) => void) { this.listeners.delete(fn) }
+      // Like a real Worker: only `message` listeners receive responses.
+      addEventListener(type: string, fn: (event: MessageEvent) => void) { if (type === 'message') this.listeners.add(fn) }
+      removeEventListener(type: string, fn: (event: MessageEvent) => void) { if (type === 'message') this.listeners.delete(fn) }
       postMessage(request: { id: number; spec: never; input?: never }) {
         const response = handleChartWorkerRequest(request)
         queueMicrotask(() => {

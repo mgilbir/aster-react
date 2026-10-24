@@ -23,7 +23,7 @@ class FakeWorker {
   listeners = new Set<(event: MessageEvent) => void>()
   streams = new Map<number, never>()
   terminated = false
-  addEventListener(_type: string, fn: (event: MessageEvent) => void): void { this.listeners.add(fn) }
+  addEventListener(type: string, fn: (event: MessageEvent) => void): void { if (type === 'message') this.listeners.add(fn) }
   removeEventListener(_type: string, fn: (event: MessageEvent) => void): void { this.listeners.delete(fn) }
   postMessage(request: ChartWorkerStreamRequest): void {
     const response = handleChartWorkerStreamRequest(request, this.streams as never)

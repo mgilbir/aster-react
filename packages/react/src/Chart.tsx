@@ -2,18 +2,21 @@ import * as React from 'react'
 import {
   buildA11yTree,
   chartInfoFromScene,
-  getChartInfo,
   renderSceneToSvg,
   AsterLimitError,
+  checkSvgLength,
   type A11yNode,
   type A11yOptions,
   type ChartInfo,
+  type ImageUrlPolicy,
   type SceneRoot,
   type SpecLimits,
   type TextMetricsProvider,
   type VgSpec,
 } from '@aster/core'
-import { isPromiseLike, normalizeChartSpec } from './spec.js'
+import { isPromiseLike, normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
+import { validateDataChanges } from './dataChanges.js'
+import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './serialScales.js'
 // The incremental DOM patcher ships as the `@aster/core/dom` addon: a
 // string-mode host never bundles it, while <Chart> (which supports the
 // `incremental` path) pulls it in explicitly. The canvas renderer is likewise
@@ -26,13 +29,15 @@ import {
 import { buildHitIndex, type HitIndex } from '@aster/core/hit'
 import { bindSceneSignals, stampDatumAttrs, type SignalBinding } from '@aster/core/signals'
 import {
-  cursorZoom,
-  domainOf,
+  baseDomainsOf,
   filterLegendScene,
   dragToDataInterval,
   keyboardView,
   normalizeView,
   panDomain,
+  pixelSpanOf,
+  positionalScales,
+  selectValueToInterval,
   selectionToPixels,
   viewToDomainRaw,
   zoomDomain,
@@ -52,17 +57,12 @@ const subscribeNothing = (): (() => void) => () => {}
 const clientOnly = (): boolean => false
 const serverOrHydrating = (): boolean => true
 
-/** Scene/encode channel fields that are engine-internal, not datum data. */
-const TOOLTIP_INTERNAL_FIELDS = new Set([
-  'x', 'y', 'x2', 'y2', 'xc', 'yc', 'width', 'height', 'opacity', 'fill', 'fill-opacity',
-  'stroke', 'stroke-width', 'stroke-dasharray', 'strokeOpacity', 'size', 'shape', 'angle',
-  'theta', 'radius', 'text', 'align', 'baseline', 'defined', 'startAngle', 'endAngle',
-  'innerRadius', 'outerRadius', 'ariaRoleDescription', 'ariaRole', 'ariaLabel', 'aria', 'description', 'path', 'url',
-  'limit', 'dir', 'dx', 'dy', 'cursor', 'href', 'tooltip', 'band',
-])
-
 export interface ChartProps {
-  /** A Vega spec, or a Vega-Lite spec compiled internally, or a promise of either. */
+  /**
+   * A Vega spec, a Vega-Lite spec (needs `import '@aster/react/vl'`), or a
+   * promise of either (suspends to the host's `<Suspense>`). Compared by
+   * content: re-rendering with an equal inline literal does no work.
+   */
   spec: VgSpec | Promise<VgSpec>
   /**
    * Pre-evaluated scene override (streaming): when provided, the chart renders
@@ -79,9 +79,20 @@ export interface ChartProps {
    * dataflow re-derives only the changed rows and reuses unchanged scene items
    * and DOM subtrees. Combine with an immutable `data` replacement (new array) of
    * the same length/order. When omitted, updates re-encode fully.
+   *
+   * The indices are validated: an unknown dataset, a non-integer or out-of-range
+   * index, or a dataset whose row count changed makes the whole changeset be
+   * ignored (the update is diffed in full, so the chart is still correct) and
+   * `onError` receives an `Error` describing the problem.
    */
   dataChanges?: Record<string, number[]>
+  /**
+   * Chart width in px. Without it the chart uses its container's measured
+   * width (and the spec's own width until the first measurement, e.g. on the
+   * server). Independent of `height`: giving one of them fixes only that one.
+   */
   width?: number
+  /** Chart height in px; see `width`. */
   height?: number
   ariaLabel?: string
   /**
@@ -98,9 +109,9 @@ export interface ChartProps {
   /**
    * Rendering backend: `'svg'` (default, SSR-safe) or `'canvas'`. Both render
    * the same scene through the shared geometry engine. Canvas handles
-   * devicePixelRatio and redraws on every scene change; the DOM tooltip and
-   * the spec-driven signal event loop are SVG-only (they read the rendered
-   * DOM). Selection brushing works in both.
+   * devicePixelRatio and redraws on every scene change. The spec-driven signal
+   * event loop (`signal.on` DOM event streams) is SVG-only; tooltips (hit
+   * index), selection brushing, pan/zoom and `ChartHandle.setSignal` work in both.
    */
   renderer?: 'svg' | 'canvas'
   /**
@@ -119,7 +130,12 @@ export interface ChartProps {
   denseMarks?: boolean | 'auto'
   className?: string
   style?: React.CSSProperties
+  /**
+   * Signal values for the spec's signals. Event- and input-driven values take
+   * precedence; they are overwritten whenever this prop changes.
+   */
   signals?: Record<string, unknown>
+  /** Interval brush: called with the dragged interval on release (`x`/`y` = the horizontal/vertical positional scale), and with `null` for a click. */
   onSelect?: (interval: SelectionInterval | null) => void
   /**
    * Point/click selection: called with the clicked mark's datum (or null for a
@@ -127,10 +143,13 @@ export interface ChartProps {
    * identically on the SVG and canvas backends.
    */
   onPointSelect?: (datum: Record<string, unknown> | null) => void
+  /** Persisted interval rectangle to draw (the legacy controlled form of `selection`). */
   brush?: SelectionInterval | null
   /**
    * Unified declarative selection (R10.2): either an interval or a point value.
-   * Controlled when supplied; `onSelectionChange` receives every change.
+   * Controlled when supplied (`select` wins when both are given);
+   * `onSelectionChange` receives every change. A controlled or internal interval
+   * is drawn as the persisted selection rectangle.
    */
   selection?: SelectValue | null
   /** Alias for `selection` (the declarative select value). */
@@ -141,13 +160,20 @@ export interface ChartProps {
    * uncontrolled unless `view` is supplied. Domains are fed back through the
    * scale layer (`domainRaw`), so marks and every guide recompute on both
    * rendering backends.
+   *
+   * `view`/`brush`/`selection` axes `x` and `y` mean the horizontal and vertical
+   * positional scale, whatever they are named: they are derived from the spec
+   * (see `positionalScales`), so `xscale`/`yscale` work like `x`/`y`.
    */
   panZoom?: boolean
-  /** Enable panning only (alias within `panZoom`). */
+  /**
+   * Enable panning only: drag and the arrow keys. `panZoom` enables both;
+   * `pan` and `zoom` together are equivalent to `panZoom`.
+   */
   pan?: boolean
-  /** Enable zooming only (alias within `panZoom`). */
+  /** Enable zooming only: wheel, pinch and the `+`/`-` keys. See `pan`. */
   zoom?: boolean
-  /** Controlled visible domain. Omit for uncontrolled pan/zoom. */
+  /** Controlled visible domain (`x`/`y` = the horizontal/vertical positional scale). Omit for uncontrolled pan/zoom. */
   view?: ViewDomain | null
   onViewChange?: (view: ViewDomain | null) => void
   /** Maximum zoom-in factor relative to the initial domain. Default 1000. */
@@ -155,18 +181,27 @@ export interface ChartProps {
   /**
    * Event-driven signals (vega-react's `signalListeners` convention): handlers
    * called when a signal changes, whether driven by the spec's `signal.on`
-   * DOM event streams or by the imperative path. The chart re-renders with
-   * the updated signal values after each event.
+   * DOM event streams, a bound input (`signal.bind`) or the imperative
+   * `ChartHandle.setSignal`. The chart re-renders with the updated signal
+   * values after each event.
    */
   signalListeners?: Record<string, (name: string, value: unknown) => void>
-  /** Internal: shared listeners (the event loop drives these). */
+  /** Internal: shared listeners (the event loop and bound inputs drive these). */
   onSignal?: (name: string, value: unknown) => void
+  /**
+   * @internal Used by `<ChartStream>`/`<ChartWorkerStream>` (with `sceneOverride`)
+   * to receive what this chart derives from props and gestures — the `domainRaw`
+   * of the pan/zoom view and the merged signal values — so the stream can
+   * re-evaluate with them.
+   */
+  onStreamInput?: (input: ChartStreamInput) => void
   /** Disable the spec-driven event loop (defaults to on when the spec has signal.on streams). */
   interactive?: boolean
   /**
    * Show a tooltip on hover over a mark: the datum's fields rendered as
-   * `key: value` at the cursor. Reads the `data-datum` attribute that
-   * stampDatumAttrs stamps onto scene items. Off by default.
+   * `key: value` at the cursor. Resolved through the scene on both renderers
+   * (the `data-datum` attribute on SVG, the hit index for canvas and batched
+   * dense marks). Off by default.
    */
   tooltip?: boolean
   /**
@@ -174,14 +209,41 @@ export interface ChartProps {
    * detached overlay). Providing this enables tooltips without `tooltip`.
    */
   renderTooltip?: (datum: Record<string, unknown>) => React.ReactNode
-  /** Budgets for untrusted specs (rows, marks, strings, paths, SVG size, time). */
+  /**
+   * Budgets for untrusted specs (rows, marks, strings, paths, SVG size, time),
+   * applied at every evaluation; a violation renders the error state and calls
+   * `onError` with an `AsterLimitError`. `maxSvgLength` is checked by serializing
+   * the scene (SVG renderer only), which costs one serialization per evaluation
+   * and so only happens when it is set. Compared by content: an inline literal
+   * is fine.
+   */
   limits?: SpecLimits
+  /**
+   * Policy for image-mark `url`s, forwarded to evaluation (`RuntimeInput.urlPolicy`):
+   * `baseURL`, `protocols`, a synchronous `allow(url)` veto and `onDeny` (drop the
+   * image instead of failing the chart). Applied with its defaults whenever `limits`
+   * is set. A denial without `onDeny` is a render error reported through `onError`.
+   * Functions are compared by identity, so memoize the object to avoid re-evaluating.
+   */
+  urlPolicy?: ImageUrlPolicy
   /** Host text measurement for custom fonts / non-browser engines. */
   textMetrics?: TextMetricsProvider
   /** Accessible scene tree (R10.6). Enabled by default; pass `false` to opt out. */
   a11y?: boolean | A11yOptions
-  /** Called when compile/evaluate fails (typed `AsterLimitError` for budgets). */
+  /**
+   * Called once per failed evaluation (typed `AsterLimitError` for budgets), and
+   * once per rejected `dataChanges` changeset. A new callback identity does not
+   * re-report the same error.
+   */
   onError?: (error: Error) => void
+}
+
+/** What a stream-fed chart asks its stream to apply (see `ChartProps.onStreamInput`). */
+export interface ChartStreamInput {
+  /** Scale-name -> domain overrides for the current pan/zoom view (absent = no view). */
+  domainRaw?: Record<string, unknown[]>
+  /** Merged signal values (props + events). */
+  signals: Record<string, unknown>
 }
 
 /** Imperative handle exposed by `<Chart ref={…}>` (R11.1). */
@@ -259,8 +321,15 @@ function sameDatum(a: unknown, b: unknown): boolean {
     || subset(b as Record<string, unknown>, a as Record<string, unknown>)
 }
 
+/** True when the spec has `signal.on` event streams (they resolve marks from `data-datum`). */
+function hasEventStreams(scene: SceneRoot | null): boolean {
+  const defs = (scene as { compiled?: { signalDefs?: Array<{ on?: unknown[] }> } } | null)?.compiled?.signalDefs
+  return defs?.some((d) => (d.on?.length ?? 0) > 0) ?? false
+}
+
 const isA11yNodeKey = (key: string): boolean =>
   key === 'Enter' || key === ' ' || key === 'Home' || key === 'End' || key === 'Escape'
+  || key === 'PageUp' || key === 'PageDown'
   || key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown'
   || key === '+' || key === '=' || key === '-'
 
@@ -285,7 +354,7 @@ function SignalBinds({ signals, values, onChange }: {
     const input = typeof bind.input === 'string' ? bind.input : 'range'
     const value = values[name] ?? def.value ?? bind.value
     const label = typeof bind.name === 'string' ? bind.name : name
-    const options = Array.isArray(bind.options)
+    const options: Array<{ value: unknown; label: string }> = Array.isArray(bind.options)
       ? (bind.options as unknown[]).map((o) => {
           if (o != null && typeof o === 'object') {
             const rec = o as Record<string, unknown>
@@ -314,11 +383,22 @@ function SignalBinds({ signals, values, onChange }: {
       )
     }
     if (input === 'select') {
+      // Options are addressed by index so a number/boolean/null option value
+      // round-trips with its type instead of being stringified by the DOM.
+      const selected = options.findIndex((o) => Object.is(o.value, value) || String(o.value) === String(value))
       return (
         <label key={name} data-signal={name} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
           <span>{label}</span>
-          <select aria-label={label} value={String(value ?? '')} onChange={(e) => set(e.currentTarget.value)}>
-            {options.map((o) => <option key={String(o.value)} value={String(o.value)}>{o.label}</option>)}
+          <select
+            aria-label={label}
+            value={selected >= 0 ? String(selected) : ''}
+            onChange={(e) => {
+              const option = options[Number(e.currentTarget.value)]
+              if (option) set(option.value)
+            }}
+          >
+            {selected < 0 && <option value="" disabled hidden />}
+            {options.map((o, i) => <option key={i} value={String(i)}>{o.label}</option>)}
           </select>
         </label>
       )
@@ -367,6 +447,7 @@ function SignalBinds({ signals, values, onChange }: {
   return (
     <div
       data-testid="chart-binds"
+      data-aster-binds=""
       style={{
         position: 'relative', zIndex: 2, display: 'flex', flexWrap: 'wrap', gap: 12,
         alignItems: 'center', padding: '6px 8px', fontSize: 12,
@@ -430,98 +511,83 @@ function ChartView({
   denseMarks = 'auto',
   signalListeners,
   onSignal,
+  onStreamInput,
   interactive = true,
   tooltip = false,
   renderTooltip,
   limits,
+  urlPolicy,
   textMetrics,
   a11y = true,
   onError,
   chartRef,
 }: Omit<ChartProps, 'spec'> & { spec: VgSpec; chartRef: React.ForwardedRef<ChartHandle> }) {
-  const spec = React.useMemo(() => normalizeChartSpec(rawSpec), [rawSpec])
+  // Content-stable: a parent that rebuilds an inline spec literal every render
+  // neither recompiles (Vega-Lite) nor re-evaluates.
+  const stableSpec = useStableSpec(rawSpec)
+  const spec = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
+  const stableLimits = useStableContent(limits)
+  // Which scales `view`/`brush`/`selection`'s `x`/`y` refer to.
+  const positional = React.useMemo(() => positionalScales(spec), [spec])
   const tooltipEnabled = tooltip || renderTooltip != null
   const containerRef = React.useRef<HTMLDivElement>(null)
-  const [measured, setMeasured] = React.useState<{ width: number; height: number }>({
-    width: 600,
-    height: 400,
-  })
-  const overlayRef = React.useRef<HTMLDivElement>(null)
+  // `null` until measured: the spec's own size renders meanwhile (and on the server).
+  const [measured, setMeasured] = React.useState<{ width: number; height: number } | null>(null)
 
   // Interaction state
-  const [isDragging, setIsDragging] = React.useState(false)
-  const [dragStartData, setDragStartData] = React.useState<SelectionInterval | null>(null)
-  const [dragEndData, setDragEndData] = React.useState<SelectionInterval | null>(null)
-  const [dragPixelStart, setDragPixelStart] = React.useState<{ x: number; y: number } | null>(null)
-  const [dragPixelEnd, setDragPixelEnd] = React.useState<{ x: number; y: number } | null>(null)
+  const [dragRect, setDragRect] = React.useState<{ x: number; y: number; width: number; height: number } | null>(null)
   const [tooltipInfo, setTooltipInfo] = React.useState<{ datum: Record<string, unknown>; x: number; y: number } | null>(null)
   const [internalView, setInternalView] = React.useState<ViewDomain | null>(null)
   const [internalSelection, setInternalSelection] = React.useState<SelectValue | null>(null)
   const [hiddenLegend, setHiddenLegend] = React.useState<Map<string, HiddenLegendEntry>>(() => new Map())
-  const renderErrorRef = React.useRef<Error | null>(null)
+  const [activeA11yId, setActiveA11yId] = React.useState<string | null>(null)
 
-  const useOverrides = width != null && height != null
+  // Props that only fire from callbacks are read through refs, so the handlers
+  // that use them keep a stable identity.
+  const onErrorRef = React.useRef(onError)
+  onErrorRef.current = onError
+  const signalListenersRef = React.useRef(signalListeners)
+  signalListenersRef.current = signalListeners
+  const onSignalRef = React.useRef(onSignal)
+  onSignalRef.current = onSignal
+  const onStreamInputRef = React.useRef(onStreamInput)
+  onStreamInputRef.current = onStreamInput
 
+  const needsMeasure = width == null || height == null
   React.useEffect(() => {
-    if (useOverrides) return
+    if (!needsMeasure) return
     const el = containerRef.current
     if (!el) return
     if (typeof ResizeObserver !== 'undefined') {
       const observer = new ResizeObserver((entries) => {
         const { width: w, height: h } = entries[0]?.contentRect ?? {}
-        if (w && h) {
-          setMeasured({ width: w, height: h })
-        }
+        if (w && h) setMeasured((prev) => (prev && prev.width === w && prev.height === h ? prev : { width: w, height: h }))
       })
       observer.observe(el)
       return () => observer.disconnect()
     }
-  }, [useOverrides])
+  }, [needsMeasure])
 
-  const renderWidth = useOverrides ? width : measured.width
-  const renderHeight = useOverrides ? height : measured.height
+  const renderWidth = width ?? measured?.width
+  const renderHeight = height ?? measured?.height
 
-  // `pan`/`zoom` are focused aliases for `panZoomEnabled`.
-  const panZoomEnabled = panZoom || pan === true || zoom === true
+  // `panZoom` enables both; `pan`/`zoom` enable one gesture family each.
+  const panEnabled = panZoom || pan
+  const zoomEnabled = panZoom || zoom
+  const panZoomEnabled = panEnabled || zoomEnabled
 
   // Session caches scene across renders whose inputs are unchanged (fresh
   // spec object with identical content costs nothing), mirroring Vega's
   // "skip work when nothing is dirty" behavior.
   const sessionRef = React.useRef<ReturnType<typeof createChartSession> | null>(null)
   if (sessionRef.current == null) sessionRef.current = createChartSession()
-
   const sceneRef = React.useRef<SceneRoot | null>(null)
-
-  // Base domains (before any pan/zoom) let a controlled view be clamped and
-  // reset without another compile pass.
-  const baseDomains = React.useMemo<ViewDomain>(() => {
-    if (!panZoomEnabled) return {}
-    try {
-      const info = getChartInfo(spec, { width: renderWidth, height: renderHeight, limits, textMetrics })
-      return {
-        x: domainOf(info.scales.get('x')) ?? undefined,
-        y: domainOf(info.scales.get('y')) ?? undefined,
-      }
-    } catch {
-      return {}
-    }
-  }, [panZoomEnabled, spec, renderWidth, renderHeight, limits, textMetrics])
-  const baseDomainsRef = React.useRef(baseDomains)
-  baseDomainsRef.current = baseDomains
 
   const currentView = controlledView !== undefined ? controlledView : internalView
   const viewRef = React.useRef(currentView)
   viewRef.current = currentView
+  const domainRaw = React.useMemo(() => viewToDomainRaw(currentView, positional), [currentView, positional])
 
-  const applyView = React.useCallback((next: ViewDomain | null) => {
-    const normalized = next == null ? null : normalizeView(next, baseDomainsRef.current)
-    if (controlledView === undefined) setInternalView(normalized)
-    onViewChange?.(normalized)
-  }, [controlledView, onViewChange])
-  const applyViewRef = React.useRef(applyView)
-  applyViewRef.current = applyView
-
-  const domainRaw = React.useMemo(() => viewToDomainRaw(currentView), [currentView])
   const signalStoreRef = React.useRef<SignalStore | null>(null)
   if (signalStoreRef.current == null) signalStoreRef.current = createSignalStore()
   const signalStore = signalStoreRef.current
@@ -535,31 +601,39 @@ function ChartView({
     [spec],
   )
 
-  const sceneGenRef = React.useRef(0)
-  React.useMemo<SceneRoot | null>(() => {
+  // Row counts of the previously evaluated `data`, to validate `dataChanges`.
+  const prevLengthsRef = React.useRef<Map<string, number>>(new Map())
+  const evaluation = React.useMemo<{ scene: SceneRoot | null; error: Error | null; problems: string[] }>(() => {
+    // Datum attributes must be on the scene items BEFORE the DOM is built:
+    // tooltips and the `signal.on` event loop both read `data-datum` off the
+    // rendered elements, and stamping afterwards (as the bind effect used to)
+    // leaves the first render without them, so mark events never saw a datum.
+    const wantsDatumAttrs = (sc: SceneRoot): boolean => tooltipEnabled || (interactive && renderer !== 'canvas' && hasEventStreams(sc))
     if (sceneOverride !== undefined) {
-      if (sceneOverride != null && tooltipEnabled) stampDatumAttrs(sceneOverride.items)
-      sceneRef.current = sceneOverride
-      renderErrorRef.current = null
-      return sceneOverride
+      if (sceneOverride != null && wantsDatumAttrs(sceneOverride)) stampDatumAttrs(sceneOverride.items)
+      return { scene: sceneOverride, error: null, problems: [] }
     }
     try {
-      const sc = sessionRef.current!.evaluate(spec, { data, dataChanges, width: renderWidth, height: renderHeight, signals: mergedSignals, limits, domainRaw, textMetrics })
-      // Tooltips read data-datum off the DOM; stamp the datum onto scene items
-      // before the markup/patch so the attribute is rendered.
-      if (tooltipEnabled) stampDatumAttrs(sc.items)
-      sceneRef.current = sc
-      renderErrorRef.current = null
-      return sc
+      const { changes, problems } = validateDataChanges(dataChanges, data, prevLengthsRef.current)
+      prevLengthsRef.current = new Map(Object.entries(data ?? {}).map(([name, rows]) => [name, rows.length]))
+      const sc = sessionRef.current!.evaluate(spec, {
+        data, dataChanges: changes, width: renderWidth, height: renderHeight,
+        signals: mergedSignals, limits: stableLimits, urlPolicy, domainRaw, textMetrics,
+      })
+      if (wantsDatumAttrs(sc)) stampDatumAttrs(sc.items)
+      // `maxSvgLength` bounds the serialized output. The DOM patcher never
+      // builds that string, so the budget is enforced by measuring one — only
+      // when the host asked for it (it costs a serialization per evaluation).
+      if (stableLimits?.maxSvgLength != null && renderer !== 'canvas') checkSvgLength(renderSceneToSvg(sc), stableLimits)
+      return { scene: sc, error: null, problems }
     } catch (err) {
-      sceneRef.current = null
-      renderErrorRef.current = err instanceof Error ? err : new Error(String(err))
-      return null
+      return { scene: null, error: err instanceof Error ? err : new Error(String(err)), problems: [] }
     }
-  }, [sceneOverride, spec, data, dataChanges, renderWidth, renderHeight, mergedSignals, tooltipEnabled, limits, domainRaw, textMetrics])
-  const scene = sceneRef.current
-  if (scene != null) sceneGenRef.current++
-  const sceneGen = sceneGenRef.current
+  }, [sceneOverride, spec, data, dataChanges, renderWidth, renderHeight, mergedSignals, tooltipEnabled, interactive, renderer, stableLimits, urlPolicy, domainRaw, textMetrics])
+  const scene = evaluation.scene
+  sceneRef.current = scene
+  const renderError = evaluation.error
+
   const displayScene = React.useMemo(
     () => scene ? filterLegendScene(scene, hiddenLegend.values()) : null,
     [scene, hiddenLegend],
@@ -577,34 +651,104 @@ function ChartView({
   const denseSvg = denseAllowed && renderer === 'svg' && (scene != null ? hasDenseSymbolMarks(scene) : false)
   const hydrating = React.useSyncExternalStore(subscribeNothing, clientOnly, serverOrHydrating)
 
-  const renderError = renderErrorRef.current
-
+  // One report per evaluation, however often the component re-renders while
+  // the same error persists (an inline `onError` must not refire).
   React.useEffect(() => {
-    if (renderError) onError?.(renderError)
-  }, [scene, renderError, onError])
+    if (evaluation.error) onErrorRef.current?.(evaluation.error)
+    for (const problem of evaluation.problems) onErrorRef.current?.(new Error(`[aster] ${problem}`))
+  }, [evaluation])
+
+  // Chart metadata comes straight from the evaluated scene. Doing a second
+  // compile+evaluate per render was the whole cost of an identical-content
+  // re-render; scene-derived info is free when the session returns its cached
+  // scene. A scene that crossed a structured clone (worker stream) has no live
+  // scales: the worker attached invertible descriptions of the continuous ones.
+  const chartInfo = React.useMemo<ChartInfo | null>(() => {
+    if (scene == null) return null
+    const info = chartInfoFromScene(scene)
+    if (info.scales.size > 0) return info
+    const serialized = (scene as unknown as Record<string, unknown>)[SCALE_INFO_KEY]
+    return Array.isArray(serialized) ? { ...info, scales: scalesFromSerialized(serialized as SerializedScale[]) } : info
+  }, [scene])
+  const chartInfoRef = React.useRef<ChartInfo | null>(null)
+  chartInfoRef.current = chartInfo
+
+  // Base domains (before any pan/zoom) let a controlled view be clamped and
+  // reset. Without a view the evaluated scene IS the base. While zoomed, the
+  // unzoomed domains come from a second evaluation of the same inputs minus the
+  // override (cached by its own session, so only data/size changes re-run it).
+  // A stream-fed scene cannot be re-evaluated here (its rows live in the
+  // stream), so it keeps the domains of the last unzoomed scene.
+  const baseSessionRef = React.useRef<ReturnType<typeof createChartSession> | null>(null)
+  const lastBaseRef = React.useRef<ViewDomain>({})
+  const zoomed = domainRaw != null
+  const fromStream = sceneOverride !== undefined
+  // Only data/size/signal changes re-run the second evaluation, not every
+  // pan/zoom frame (the view itself is not an input here).
+  const unzoomedDomains = React.useMemo<ViewDomain | null>(() => {
+    if (!panZoomEnabled || !zoomed || fromStream) return null
+    try {
+      if (baseSessionRef.current == null) baseSessionRef.current = createChartSession()
+      const baseScene = baseSessionRef.current.evaluate(spec, {
+        data, width: renderWidth, height: renderHeight, signals: mergedSignals, limits: stableLimits, urlPolicy, textMetrics,
+      })
+      return baseDomainsOf(chartInfoFromScene(baseScene), positional)
+    } catch {
+      return null
+    }
+  }, [panZoomEnabled, zoomed, fromStream, positional, spec, data, renderWidth, renderHeight, mergedSignals, stableLimits, urlPolicy, textMetrics])
+  const baseDomains = React.useMemo<ViewDomain>(() => {
+    if (!panZoomEnabled || chartInfo == null) return {}
+    if (!zoomed) return baseDomainsOf(chartInfo, positional)
+    if (fromStream) return { ...baseDomainsOf(chartInfo, positional), ...lastBaseRef.current }
+    return unzoomedDomains ?? lastBaseRef.current
+  }, [panZoomEnabled, chartInfo, zoomed, fromStream, positional, unzoomedDomains])
+  const baseDomainsRef = React.useRef(baseDomains)
+  baseDomainsRef.current = baseDomains
+  if (!zoomed) lastBaseRef.current = baseDomains
+
+  const applyView = React.useCallback((next: ViewDomain | null) => {
+    const normalized = next == null ? null : normalizeView(next, baseDomainsRef.current)
+    if (controlledView === undefined) setInternalView(normalized)
+    onViewChange?.(normalized)
+  }, [controlledView, onViewChange])
+  const applyViewRef = React.useRef(applyView)
+  applyViewRef.current = applyView
+
+  // A stream-fed chart hands its view/signals to the stream, which re-evaluates.
+  const streamInput = sceneOverride !== undefined
+  React.useEffect(() => {
+    if (streamInput) onStreamInputRef.current?.({ ...(domainRaw ? { domainRaw } : {}), signals: mergedSignals })
+  }, [streamInput, domainRaw, mergedSignals])
 
   // Incremental is the default: we still serialize the full SVG for the first
   // render (so server output and client hydration carry the markup), then the
   // patcher owns the <svg> and we stop re-serializing on later updates.
   const hasPatchedRef = React.useRef(false)
-  const markup = React.useMemo<string | null>(() => {
+  // The markup travels as one `{ __html }` object whose IDENTITY is what React
+  // compares (it re-parses on a new object even for an equal string, and CLEARS
+  // the element's children when the prop disappears). So after the first commit
+  // the same object keeps being passed (see `htmlProp`) instead of dropping the
+  // prop, which would wipe the <svg> the patcher owns and force a rebuild.
+  const markupBox = React.useMemo<{ __html: string } | null>(() => {
     if (displayScene == null) return null
     if (renderer === 'canvas') return null
-    // Streaming scenes are client-owned: create the DOM once in the layout
-    // effect and patch it afterwards. React clearing a stale
-    // dangerouslySetInnerHTML prop would otherwise replace the patched <svg>
-    // on the first streamed frame.
-    if (sceneOverride !== undefined) return null
+    // Streaming scenes are client-owned once mounted: create the DOM once in the
+    // layout effect and patch it afterwards, so a changed markup string never
+    // replaces the patched <svg> on a streamed frame. While rendering for the
+    // server (or hydrating that server output) the full markup is emitted like
+    // any other chart (ADR 0003), so a stream's first frame is in the HTML.
+    if (sceneOverride !== undefined && !hydrating) return null
     if (denseSvg && !hydrating) return null
     if (incremental && hasPatchedRef.current) return null
-    return renderSceneToSvg(displayScene)
+    return { __html: renderSceneToSvg(displayScene) }
   }, [incremental, renderer, displayScene, sceneOverride, denseSvg, hydrating])
-  // After the first commit the markup must leave the props entirely. The memo
-  // above is keyed on the scene, so on an identical-content re-render it would
-  // return its cached string and React (which re-applies a present
-  // `dangerouslySetInnerHTML`) would re-parse the whole SVG every render —
-  // the exact cost incremental mode exists to avoid.
-  const domMarkup = incremental && hasPatchedRef.current ? null : markup
+  const lastBoxRef = React.useRef<{ __html: string } | null>(null)
+  if (markupBox != null) lastBoxRef.current = markupBox
+  // After the first commit the patcher owns the DOM. `domMarkup` is non-null
+  // only for a commit that parsed fresh markup from the current scene.
+  const domMarkup = incremental && hasPatchedRef.current ? null : (markupBox?.__html ?? null)
+  const htmlProp = markupBox ?? (incremental && hasPatchedRef.current ? lastBoxRef.current : null)
 
   // Scene whose DOM we know is current (rendered as markup or patched here).
   const domSceneRef = React.useRef<SceneRoot | null>(null)
@@ -617,9 +761,16 @@ function ChartView({
   const canvasSnapshotRef = React.useRef<CanvasSceneSnapshot | null>(null)
   // Scene whose pixels are on the canvas (skip repaints for identical scenes).
   const canvasSceneRef = React.useRef<SceneRoot | null>(null)
-  // Canvas-mode hit testing: the tooltip resolves marks through the scene hit
-  // index instead of DOM attributes (canvas has none). Rebuilt per scene.
-  const hitIndexRef = React.useRef<{ idx: number; index: HitIndex | null }>({ idx: 0, index: null })
+  // The canvas element those two describe: a remounted element is blank.
+  const canvasElRef = React.useRef<HTMLCanvasElement | null>(null)
+  // Hit testing (canvas, batched dense marks, clicks) resolves marks through the
+  // scene hit index, rebuilt only when the displayed scene object changes.
+  const hitIndexRef = React.useRef<{ scene: SceneRoot | null; index: HitIndex | null }>({ scene: null, index: null })
+  const hitIndexFor = React.useCallback((target: SceneRoot | null): HitIndex | null => {
+    if (target == null) return null
+    if (hitIndexRef.current.scene !== target) hitIndexRef.current = { scene: target, index: buildHitIndex(target) }
+    return hitIndexRef.current.index
+  }, [])
   // Signal state lives in an external store consumed with useSyncExternalStore:
   // an event is a normal, synchronous state transition with a stable snapshot,
   // so concurrent renders never observe a half-applied signal set.
@@ -628,6 +779,8 @@ function ChartView({
   }, [signals, signalStore])
   // Incremental updates: create the <svg> once, then patch changed attributes
   // in place instead of re-serializing and re-parsing the whole markup every render.
+  // `renderer` is a dependency: switching back from canvas mounts a fresh, empty
+  // host element that must be filled even though the scene did not change.
   React.useLayoutEffect(() => {
     if (!displayScene || renderer === 'canvas') return
     // A sceneOverride still needs its DOM created: stream markup is client-owned
@@ -643,6 +796,9 @@ function ChartView({
       hasPatchedRef.current = true
       domSceneRef.current = displayScene
       domDenseRef.current = false // string markup is always per-item
+      // React has committed the string; never keep a large copy alive (and a
+      // later remount of the host starts empty and is filled below).
+      if (markupBox != null && incremental) markupBox.__html = ''
       return
     }
     const existing = host.firstElementChild
@@ -659,9 +815,12 @@ function ChartView({
     }
     domSceneRef.current = displayScene
     hasPatchedRef.current = true
-  }, [incremental, displayScene, sceneOverride, domMarkup, denseSvg])
+  }, [incremental, renderer, displayScene, sceneOverride, domMarkup, denseSvg])
 
+  // Spec-driven signal event loop (SVG only). Rebinds when the DOM, the scene
+  // or the signal values change — not on unrelated renders.
   const signalBindingRef = React.useRef<SignalBinding | null>(null)
+  const hasSignalListeners = signalListeners != null || onSignal != null
   React.useLayoutEffect(() => {
     if (!interactive || !scene || renderer === 'canvas') return
     const host = svgHostRef.current
@@ -671,22 +830,21 @@ function ChartView({
     const hasStreams = signalDefs?.some((d) => d.on?.length) ?? false
     // Bind when there is anything to drive/listen to, or when any signal exists
     // so ChartHandle.setSignal works on a purely imperative spec.
-    if (!hasStreams && !signalListeners && !onSignal && !signalDefs?.length) return
-    signalBindingRef.current?.detach()
-    stampDatumAttrs(scene.items)
-    signalBindingRef.current = bindSceneSignals(svg, scene, mergedSignals, {
+    if (!hasStreams && !hasSignalListeners && !signalDefs?.length) return
+    // The binding mutates the signal object it is given: hand it a copy.
+    const binding = bindSceneSignals(svg, scene, { ...mergedSignals }, {
       onSignal: (name, value, all) => {
         signalStore.set(all)
-        signalListeners?.[name]?.(name, value)
-        onSignal?.(name, value)
+        signalListenersRef.current?.[name]?.(name, value)
+        onSignalRef.current?.(name, value)
       },
     })
+    signalBindingRef.current = binding
     return () => {
-      signalBindingRef.current?.detach()
-      signalBindingRef.current = null
+      binding.detach()
+      if (signalBindingRef.current === binding) signalBindingRef.current = null
     }
-  })
-
+  }, [interactive, scene, displayScene, renderer, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore])
 
   // Canvas backend: size the backing store for devicePixelRatio and redraw the
   // whole scene whenever it changes (cheap relative to SVG serialization for
@@ -695,6 +853,12 @@ function ChartView({
     if (renderer !== 'canvas' || !displayScene) return
     const canvas = canvasRef.current
     if (!canvas) return
+    if (canvasElRef.current !== canvas) {
+      // A new <canvas> (first mount, or back from the SVG renderer) is blank.
+      canvasElRef.current = canvas
+      canvasSnapshotRef.current = null
+      canvasSceneRef.current = null
+    }
     const dpr = typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1
     const w = Math.max(1, Math.round(displayScene.width))
     const h = Math.max(1, Math.round(displayScene.height))
@@ -735,44 +899,12 @@ function ChartView({
   const hasSelection = onSelect != null || brush != null || onPointSelect != null
     || selection !== undefined || onSelectionChange != null
   const hasInteraction = hasSelection || panZoomEnabled
-  const chartInfoRef = React.useRef<ChartInfo | null>(null)
-
-  // Chart metadata comes straight from the evaluated scene. `getChartInfo`
-  // compiles + evaluates a second time; doing that on every render was the
-  // whole cost of an identical-content re-render (a fresh spec object, stable
-  // data arrays). Scene-derived info is free when the session returns its
-  // cached scene, so a no-op re-render does no compile/evaluate/scale work.
-  const sceneInfo = React.useMemo<ChartInfo | null>(
-    () => (scene != null ? chartInfoFromScene(scene) : null),
-    [scene],
-  )
-  // Scenes that crossed a structured clone (worker streams) have no live scale
-  // handles. Guide labels still work (`buildA11yTree` rebuilds from the
-  // serialized snapshots); interaction needs invertible scales, so rebuild the
-  // metadata from the spec — once per spec/size, never per no-op render.
-  const missingSceneScales = scene != null && (scene as { __scaleMap?: unknown }).__scaleMap === undefined
-  const [fallbackInfo, setFallbackInfo] = React.useState<ChartInfo | null>(null)
-  React.useEffect(() => {
-    if (!missingSceneScales || (!hasInteraction && a11y === false)) {
-      setFallbackInfo((prev) => (prev == null ? prev : null))
-      return
-    }
-    let info: ChartInfo | null = null
-    try {
-      info = getChartInfo(spec, { width: renderWidth, height: renderHeight, domainRaw, limits, textMetrics })
-    } catch { /* ignore */ }
-    setFallbackInfo((prev) => (prev === info ? prev : info))
-  }, [missingSceneScales, hasInteraction, a11y, spec, renderWidth, renderHeight, domainRaw, limits, textMetrics])
-  const chartInfo = (missingSceneScales ? fallbackInfo : null) ?? sceneInfo
-  chartInfoRef.current = chartInfo
 
   const selectionValue: SelectValue | null = select !== undefined
     ? select
     : selection !== undefined
       ? selection
       : internalSelection
-  const selectionRef = React.useRef(selectionValue)
-  selectionRef.current = selectionValue
   const emitSelection = React.useCallback((value: SelectValue | null) => {
     if (selection === undefined && select === undefined) setInternalSelection(value)
     onSelectionChange?.(value)
@@ -780,8 +912,19 @@ function ChartView({
   const emitSelectionRef = React.useRef(emitSelection)
   emitSelectionRef.current = emitSelection
 
+  // Latest gesture inputs, read by the stable pointer handlers below.
+  const gestureInputs = {
+    hasInteraction, hasSelection, panEnabled, zoomEnabled, displayScene, positional, maxZoom,
+    onSelect, onPointSelect, onSelectionChange,
+  }
+  const gestureInputsRef = React.useRef(gestureInputs)
+  gestureInputsRef.current = gestureInputs
+
   // --- pan/zoom gestures ---------------------------------------------------
   const gestureRef = React.useRef<'select' | 'pan' | null>(null)
+  const gestureStartRef = React.useRef<{ x: number; y: number } | null>(null)
+  const dragRef = React.useRef<{ start: { x: number; y: number }; end: { x: number; y: number } } | null>(null)
+  const capturedRef = React.useRef<number | null>(null)
   const panLastRef = React.useRef<{ x: number; y: number } | null>(null)
   const pointersRef = React.useRef<Map<number, { x: number; y: number }>>(new Map())
   const pinchRef = React.useRef<{ dist: number; cx: number; cy: number } | null>(null)
@@ -790,10 +933,13 @@ function ChartView({
     const info = chartInfoRef.current
     if (!info) return
     const base = baseDomainsRef.current
-    let next: ViewDomain = { ...(viewRef.current ?? {}) }
+    const names = gestureInputsRef.current.positional
+    const max = gestureInputsRef.current.maxZoom
+    const next: ViewDomain = { ...(viewRef.current ?? {}) }
     let changed = false
     for (const axis of axes) {
-      const scale = info.scales.get(axis) as { invert?: (v: number) => number } | undefined
+      const name = names[axis]
+      const scale = (name != null ? info.scales.get(name) : undefined) as { invert?: (v: number) => number } | undefined
       if (typeof scale?.invert !== 'function') continue
       const local = axis === 'x' ? px - info.padding.left : py - info.padding.top
       const anchor = scale.invert(local)
@@ -802,17 +948,17 @@ function ChartView({
       // value per gesture, not x from one call and y from a stale snapshot.
       const current = next[axis] ?? base[axis]
       if (!current) continue
-      const zoomed = zoomDomain(current, anchor, factor, base[axis] ? Math.abs(base[axis]![1] - base[axis]![0]) / Math.max(1, maxZoom) : undefined)
+      const zoomed = zoomDomain(current, anchor, factor, base[axis] ? Math.abs(base[axis]![1] - base[axis]![0]) / Math.max(1, max) : undefined)
       const b = base[axis]
       if (b && Math.abs(zoomed[1] - zoomed[0]) > Math.abs(b[1] - b[0])) continue
       next[axis] = zoomed
       changed = true
     }
     if (changed) applyViewRef.current(next)
-  }, [maxZoom])
+  }, [])
 
   React.useEffect(() => {
-    if (!panZoomEnabled) return
+    if (!zoomEnabled) return
     const el = containerRef.current
     if (!el) return
     const onWheel = (evt: WheelEvent): void => {
@@ -827,161 +973,157 @@ function ChartView({
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [panZoomEnabled, zoomAxes])
+  }, [zoomEnabled, zoomAxes])
 
-  const handlePointerDown = React.useCallback(
-    (e: React.PointerEvent) => {
-      if (!hasInteraction) return
-      const rect = containerRef.current?.getBoundingClientRect()
-      if (!rect) return
-      const x = e.clientX - rect.left
-      const y = e.clientY - rect.top
-      pointersRef.current.set(e.pointerId, { x, y })
-      if (pointersRef.current.size === 2) {
-        const [a, b] = [...pointersRef.current.values()]
-        pinchRef.current = { dist: Math.hypot(a!.x - b!.x, a!.y - b!.y), cx: (a!.x + b!.x) / 2, cy: (a!.y + b!.y) / 2 }
-        gestureRef.current = null
-        setIsDragging(false)
-        return
-      }
-      // Shift/middle-button pans; a plain drag brushes when a selection handler exists.
-      const wantsPan = panZoomEnabled && (!hasSelection || e.shiftKey || e.button === 1)
-      gestureRef.current = wantsPan ? 'pan' : hasSelection ? 'select' : panZoomEnabled ? 'pan' : null
-      if (gestureRef.current === 'pan') {
-        panLastRef.current = { x, y }
-        setIsDragging(true)
-      } else if (gestureRef.current === 'select') {
-        setDragPixelStart({ x, y })
-        setDragPixelEnd({ x, y })
-        setIsDragging(true)
-      }
-      const target = e.target as HTMLElement
-      target.setPointerCapture?.(e.pointerId)
-    },
-    [hasInteraction, hasSelection, panZoomEnabled],
-  )
-
-  const handlePointerMove = React.useCallback(
-    (e: React.PointerEvent) => {
-      const rect = containerRef.current?.getBoundingClientRect()
-      if (!rect) return
-      const x = e.clientX - rect.left
-      const y = e.clientY - rect.top
-      if (pointersRef.current.has(e.pointerId)) pointersRef.current.set(e.pointerId, { x, y })
-      if (pinchRef.current && pointersRef.current.size === 2) {
-        const [a, b] = [...pointersRef.current.values()]
-        const dist = Math.hypot(a!.x - b!.x, a!.y - b!.y)
-        const cx = (a!.x + b!.x) / 2
-        const cy = (a!.y + b!.y) / 2
-        const prev = pinchRef.current
-        if (prev.dist > 0 && dist > 0) {
-          const factor = dist / prev.dist
-          zoomAxes(['x', 'y'], cx, cy, factor)
-        }
-        pinchRef.current = { dist, cx, cy }
-        return
-      }
-      if (!isDragging || !hasInteraction) return
-      if (gestureRef.current === 'pan') {
-        const last = panLastRef.current
-        if (!last) return
-        const info = chartInfoRef.current
-        const base = baseDomainsRef.current
-        if (!info) return
-        const plotW = Math.max(1, info.width)
-        const plotH = Math.max(1, info.height)
-        const current = viewRef.current
-        const next: ViewDomain = { ...(current ?? {}) }
-        if (base.x) {
-          const d = (current?.x ?? base.x) as [number, number]
-          next.x = panDomain(d, -(x - last.x) / plotW)
-        }
-        if (base.y) {
-          const d = (current?.y ?? base.y) as [number, number]
-          next.y = panDomain(d, -(y - last.y) / plotH)
-        }
-        panLastRef.current = { x, y }
-        applyViewRef.current(next)
-        return
-      }
-      if (gestureRef.current === 'select' && dragPixelStart != null) {
-        setDragPixelEnd({ x, y })
-        const ci = chartInfoRef.current
-        if (ci) {
-          const interval = dragToDataInterval(dragPixelStart, { x, y }, ci)
-          setDragEndData(interval)
-        }
-      }
-    },
-    [isDragging, dragPixelStart, hasInteraction, zoomAxes],
-  )
-
-  const handlePointerUp = React.useCallback(
-    (e: React.PointerEvent) => {
-      pointersRef.current.delete(e.pointerId)
-      if (pointersRef.current.size < 2) pinchRef.current = null
-      const gesture = gestureRef.current
-      gestureRef.current = null
-      panLastRef.current = null
-      if (!isDragging && !hasInteraction) {
-        setIsDragging(false)
-        return
-      }
-      const rect = containerRef.current?.getBoundingClientRect()
-      if (!rect) {
-        setIsDragging(false)
-        return
-      }
-      const x = e.clientX - rect.left
-      const y = e.clientY - rect.top
-
-      if (gesture === 'select' && dragPixelStart != null) {
-        const dx = x - dragPixelStart.x
-        const dy = y - dragPixelStart.y
-        if (Math.abs(dx) < 3 && Math.abs(dy) < 3) {
-          // Tiny drag -> a click: resolve the mark under the pointer and clear
-          // any interval selection.
-          setDragStartData(null)
-          setDragEndData(null)
-          let datum: Record<string, unknown> | null = null
-          if (onPointSelect || onSelectionChange != null) {
-            if (hitIndexRef.current.index == null || hitIndexRef.current.idx !== sceneGen) {
-              hitIndexRef.current = displayScene ? { idx: sceneGen, index: buildHitIndex(displayScene) } : { idx: 0, index: null }
-            }
-            const target = hitIndexRef.current.index?.queryMark(x, y)
-            const raw = target?.item.datum
-            datum = raw != null && typeof raw === 'object' ? raw as Record<string, unknown> : null
-            onPointSelect?.(datum)
-          }
-          if (onSelect) onSelect(null)
-          if (onPointSelect || onSelectionChange != null) emitSelectionRef.current({ type: 'point', datum })
-        } else {
-          const ci = chartInfoRef.current
-          if (ci) {
-            const interval = dragToDataInterval(dragPixelStart, { x, y }, ci)
-            setDragStartData(interval)
-            setDragEndData(interval)
-            onSelect?.(interval)
-            emitSelectionRef.current({ type: 'interval', interval })
-          }
-        }
-      }
-      setIsDragging(false)
-      setDragPixelStart(null)
-      setDragPixelEnd(null)
-    },
-    [isDragging, hasInteraction, dragPixelStart, onSelect, onPointSelect, onSelectionChange, displayScene, sceneGen],
-  )
-
-  const cancelPointer = React.useCallback((e: React.PointerEvent) => {
+  // Pointer gestures live on the container, so the marks underneath keep
+  // receiving their own events (tooltips, `signal.on`, bound inputs). Pointer
+  // capture is taken only once a drag actually starts, so a plain click still
+  // targets the mark.
+  const endGesture = React.useCallback((e: React.PointerEvent): void => {
     pointersRef.current.delete(e.pointerId)
     if (pointersRef.current.size < 2) pinchRef.current = null
     gestureRef.current = null
+    gestureStartRef.current = null
     panLastRef.current = null
-    setIsDragging(false)
-    setDragPixelStart(null)
-    setDragPixelEnd(null)
+    dragRef.current = null
+    setDragRect(null)
+    if (capturedRef.current != null) {
+      try { containerRef.current?.releasePointerCapture?.(capturedRef.current) } catch { /* already released */ }
+      capturedRef.current = null
+    }
   }, [])
+
+  const handlePointerDown = React.useCallback((e: React.PointerEvent) => {
+    const g = gestureInputsRef.current
+    if (!g.hasInteraction) return
+    // Bound inputs and other form controls own their pointer input.
+    if ((e.target as Element | null)?.closest?.('[data-aster-binds], input, select, textarea, button, a')) return
+    if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
+    pointersRef.current.set(e.pointerId, { x, y })
+    if (pointersRef.current.size === 2) {
+      if (g.zoomEnabled) {
+        const [a, b] = [...pointersRef.current.values()]
+        pinchRef.current = { dist: Math.hypot(a!.x - b!.x, a!.y - b!.y), cx: (a!.x + b!.x) / 2, cy: (a!.y + b!.y) / 2 }
+      }
+      gestureRef.current = null
+      dragRef.current = null
+      setDragRect(null)
+      return
+    }
+    // Shift/middle-button pans; a plain drag brushes when a selection handler exists.
+    const wantsPan = g.panEnabled && (!g.hasSelection || e.shiftKey || e.button === 1)
+    gestureRef.current = wantsPan ? 'pan' : g.hasSelection ? 'select' : g.panEnabled ? 'pan' : null
+    gestureStartRef.current = { x, y }
+    if (gestureRef.current === 'pan') {
+      panLastRef.current = { x, y }
+    } else if (gestureRef.current === 'select') {
+      dragRef.current = { start: { x, y }, end: { x, y } }
+      setDragRect({ x, y, width: 0, height: 0 })
+    }
+  }, [])
+
+  const handlePointerMove = React.useCallback((e: React.PointerEvent) => {
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
+    const g = gestureInputsRef.current
+    if (pointersRef.current.has(e.pointerId)) pointersRef.current.set(e.pointerId, { x, y })
+    if (pinchRef.current && pointersRef.current.size === 2) {
+      const [a, b] = [...pointersRef.current.values()]
+      const dist = Math.hypot(a!.x - b!.x, a!.y - b!.y)
+      const cx = (a!.x + b!.x) / 2
+      const cy = (a!.y + b!.y) / 2
+      const prev = pinchRef.current
+      if (prev.dist > 0 && dist > 0) zoomAxes(['x', 'y'], cx, cy, dist / prev.dist)
+      pinchRef.current = { dist, cx, cy }
+      return
+    }
+    const gesture = gestureRef.current
+    if (gesture == null || !g.hasInteraction) return
+    // The button was released where we could not see it (outside the
+    // container, before capture): abandon the gesture instead of sticking to it.
+    if (e.pointerType === 'mouse' && e.buttons === 0) {
+      endGesture(e)
+      return
+    }
+    const start = gestureStartRef.current
+    if (capturedRef.current == null && start && Math.hypot(x - start.x, y - start.y) >= 3) {
+      try {
+        containerRef.current?.setPointerCapture?.(e.pointerId)
+        capturedRef.current = e.pointerId
+      } catch { /* synthetic pointer */ }
+    }
+    if (gesture === 'pan') {
+      const last = panLastRef.current
+      const info = chartInfoRef.current
+      if (!last || !info) return
+      const base = baseDomainsRef.current
+      const current = viewRef.current
+      const next: ViewDomain = { ...(current ?? {}) }
+      // Move the data with the pointer: the domain shifts against the drag along
+      // the scale's own orientation (a y scale running bottom-to-top inverts it).
+      const shift = (axis: 'x' | 'y', delta: number, plot: number): void => {
+        const baseDomain = base[axis]
+        if (!baseDomain || delta === 0) return
+        const d = (current?.[axis] ?? baseDomain) as [number, number]
+        const name = g.positional[axis]
+        const span = pixelSpanOf(name != null ? info.scales.get(name) : undefined, d) ?? plot
+        next[axis] = panDomain(d, -delta / span)
+      }
+      shift('x', x - last.x, Math.max(1, info.width))
+      shift('y', y - last.y, Math.max(1, info.height))
+      panLastRef.current = { x, y }
+      applyViewRef.current(next)
+      return
+    }
+    const drag = dragRef.current
+    if (gesture === 'select' && drag != null) {
+      drag.end = { x, y }
+      setDragRect({
+        x: Math.min(drag.start.x, x), y: Math.min(drag.start.y, y),
+        width: Math.abs(x - drag.start.x), height: Math.abs(y - drag.start.y),
+      })
+    }
+  }, [zoomAxes, endGesture])
+
+  const handlePointerUp = React.useCallback((e: React.PointerEvent) => {
+    const g = gestureInputsRef.current
+    const gesture = gestureRef.current
+    const drag = dragRef.current
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (gesture === 'select' && drag != null && rect) {
+      const x = e.clientX - rect.left
+      const y = e.clientY - rect.top
+      const dx = x - drag.start.x
+      const dy = y - drag.start.y
+      if (Math.abs(dx) < 3 && Math.abs(dy) < 3) {
+        // Tiny drag -> a click: resolve the mark under the pointer and clear
+        // any interval selection.
+        let datum: Record<string, unknown> | null = null
+        if (g.onPointSelect || g.onSelectionChange != null) {
+          const target = hitIndexFor(g.displayScene)?.queryMark(x, y)
+          const raw = target?.item.datum
+          datum = raw != null && typeof raw === 'object' ? raw as Record<string, unknown> : null
+          g.onPointSelect?.(datum)
+        }
+        g.onSelect?.(null)
+        if (g.onPointSelect || g.onSelectionChange != null) emitSelectionRef.current({ type: 'point', datum })
+      } else {
+        const ci = chartInfoRef.current
+        if (ci) {
+          const interval = dragToDataInterval(drag.start, { x, y }, ci, g.positional)
+          g.onSelect?.(interval)
+          emitSelectionRef.current({ type: 'interval', interval })
+        }
+      }
+    }
+    endGesture(e)
+  }, [endGesture, hitIndexFor])
 
   // --- accessibility -------------------------------------------------------
   const a11yOpts = React.useMemo(
@@ -994,11 +1136,18 @@ function ChartView({
   )
   const a11yTree = React.useMemo(() => {
     if (!displayScene || a11yOpts == null) return null
-    const scales = (chartInfo?.scales ?? new Map()) as Map<string, unknown>
-    return buildA11yTree(displayScene, scales, a11yOpts)
+    // Live scales when the scene has them; otherwise the serialized snapshots
+    // on the scene (worker clones) are used by buildA11yTree itself.
+    const live = (displayScene as { __scaleMap?: unknown }).__scaleMap !== undefined
+    const scales = (live ? chartInfo?.scales : undefined) ?? new Map()
+    return buildA11yTree(displayScene, scales as Map<string, unknown>, a11yOpts)
   }, [displayScene, a11yOpts, chartInfo])
   const a11yNodesRef = React.useRef<A11yNode[]>([])
   a11yNodesRef.current = a11yTree?.nodes ?? []
+  // Roving tabindex: exactly one node is a tab stop (the last focused one, else
+  // the first); arrows / PageUp / PageDown move between nodes.
+  const a11yNodes = a11yTree?.nodes
+  const tabStopId = a11yNodes?.some((n) => n.id === activeA11yId) ? activeA11yId : (a11yNodes?.[0]?.id ?? null)
 
   const moveA11yFocus = React.useCallback((current: A11yNode, delta: number | 'first' | 'last') => {
     const host = containerRef.current
@@ -1010,16 +1159,23 @@ function ChartView({
     const nextIdx = delta === 'first' ? 0 : delta === 'last' ? nodes.length - 1 : (idx + delta + nodes.length) % nodes.length
     const next = nodes[nextIdx]
     if (!next) return
+    setActiveA11yId(next.id)
     const el = host.querySelector<HTMLElement>(`[data-a11y-id="${next.id}"]`)
     el?.focus()
   }, [])
 
   const handleA11yKeyDown = React.useCallback((node: A11yNode, e: React.KeyboardEvent) => {
     if (!isA11yNodeKey(e.key)) return
+    const g = gestureInputsRef.current
     const base = baseDomainsRef.current
+    const swallow = (): void => { e.preventDefault(); e.stopPropagation() }
+    // Every node: PageUp/PageDown move along the tree (arrows are taken by the
+    // axis sliders for panning, so they cannot be the only way out of one).
+    if (e.key === 'PageDown') { swallow(); moveA11yFocus(node, 1); return }
+    if (e.key === 'PageUp') { swallow(); moveA11yFocus(node, -1); return }
     if (node.kind === 'legend-entry' && node.legendKey) {
       if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault(); e.stopPropagation()
+        swallow()
         const key = node.legendKey
         setHiddenLegend((prev) => {
           const next = new Map(prev)
@@ -1029,120 +1185,106 @@ function ChartView({
         })
         return
       }
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); moveA11yFocus(node, -1); return }
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); moveA11yFocus(node, 1); return }
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { swallow(); moveA11yFocus(node, -1); return }
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { swallow(); moveA11yFocus(node, 1); return }
       return
     }
     if (node.kind === 'mark') {
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); moveA11yFocus(node, -1); return }
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); moveA11yFocus(node, 1); return }
-      if (e.key === 'Home') { e.preventDefault(); e.stopPropagation(); moveA11yFocus(node, 'first'); return }
-      if (e.key === 'End') { e.preventDefault(); e.stopPropagation(); moveA11yFocus(node, 'last'); return }
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { swallow(); moveA11yFocus(node, -1); return }
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { swallow(); moveA11yFocus(node, 1); return }
+      if (e.key === 'Home') { swallow(); moveA11yFocus(node, 'first'); return }
+      if (e.key === 'End') { swallow(); moveA11yFocus(node, 'last'); return }
       if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault(); e.stopPropagation()
+        swallow()
         const datum = (node.datum != null && typeof node.datum === 'object') ? node.datum as Record<string, unknown> : null
-        onPointSelect?.(datum)
-        onSelect?.(null)
+        g.onPointSelect?.(datum)
+        g.onSelect?.(null)
         emitSelectionRef.current({ type: 'point', datum })
       }
       return
     }
     if (node.kind === 'axis' && node.scale && node.domain) {
-      const axis = node.scale === 'y' ? 'y' : 'x'
-      const result = keyboardView(e.key, viewRef.current, base, { axis, fast: e.shiftKey })
+      // The slider drives the horizontal or vertical positional scale it shows.
+      const axis: 'x' | 'y' | null = node.scale === g.positional.y ? 'y' : node.scale === g.positional.x ? 'x' : null
+      if (axis == null || !g.panEnabled && !g.zoomEnabled) return
+      const result = keyboardView(e.key, viewRef.current, base, { axis, fast: e.shiftKey, pan: g.panEnabled, zoom: g.zoomEnabled })
       if (result.handled) {
-        e.preventDefault(); e.stopPropagation()
+        swallow()
         applyViewRef.current(result.view ?? null)
       }
       return
     }
     if (node.kind === 'legend' || node.kind === 'title') {
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); moveA11yFocus(node, -1) }
-      else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); moveA11yFocus(node, 1) }
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { swallow(); moveA11yFocus(node, -1) }
+      else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { swallow(); moveA11yFocus(node, 1) }
     }
-  }, [moveA11yFocus, onPointSelect, onSelect])
+  }, [moveA11yFocus])
 
   const handleChartKeyDown = React.useCallback((e: React.KeyboardEvent) => {
     if (e.defaultPrevented) return
+    const g = gestureInputsRef.current
     if (e.key === 'Escape') {
       emitSelectionRef.current(null)
-      onSelect?.(null)
-      onPointSelect?.(null)
+      g.onSelect?.(null)
+      g.onPointSelect?.(null)
       return
     }
-    if (!panZoomEnabled) return
-    const result = keyboardView(e.key, viewRef.current, baseDomainsRef.current, { fast: e.shiftKey })
+    if (!g.panEnabled && !g.zoomEnabled) return
+    const result = keyboardView(e.key, viewRef.current, baseDomainsRef.current, { fast: e.shiftKey, pan: g.panEnabled, zoom: g.zoomEnabled })
     if (result.handled) {
       e.preventDefault()
       applyViewRef.current(result.view ?? null)
     }
-  }, [panZoomEnabled, onSelect, onPointSelect])
+  }, [])
 
   /**
-   * Tooltip fields: the datum row is the ORIGINAL data plus the encoded
-   * channel values resolveEncodeSet appends (x/y/width/fill/...). The tooltip
-   * is for reading the datum — hide the internal/positional channels and
-   * engine fields, keep the source data.
+   * Tooltip fields: the datum is the pure source row (encoded channel values are
+   * never written back into it), so every primitive field is shown as-is.
+   * Fields starting with `__` are engine bookkeeping and stay hidden.
    */
   const tooltipFields = React.useMemo(() => {
     if (!tooltipInfo) return [] as Array<[string, string]>
-    const fmt = ([k, v]: [string, unknown]): [string, string] => [k, typeof v === 'number' ? num(v) : String(v)]
-    const visible = Object.entries(tooltipInfo.datum).filter(
-      ([k, v]) => !k.startsWith('__') && !TOOLTIP_INTERNAL_FIELDS.has(k) && v != null && typeof v !== 'object',
-    )
-    // Specs whose source fields are themselves named like channels (x/y/...)
-    // would filter to nothing — vega-style fallback: show every field.
-    return (visible.length ? visible : Object.entries(tooltipInfo.datum).filter(([k, v]) => !k.startsWith('__') && v != null && typeof v !== 'object')).map(fmt)
+    return Object.entries(tooltipInfo.datum)
+      .filter(([k, v]) => !k.startsWith('__') && v != null && typeof v !== 'object')
+      .map(([k, v]): [string, string] => [k, typeof v === 'number' ? num(v) : String(v)])
   }, [tooltipInfo])
 
   const handleTooltipMove = React.useCallback(
     (e: React.MouseEvent) => {
-    if (!tooltipEnabled) return
-    const rect = containerRef.current?.getBoundingClientRect()
-    if (!rect) return
-    if (renderer === 'canvas' || denseSvg) {
-      // Canvas backend (and batched SVG marks): resolve through the scene hit index.
-      if (hitIndexRef.current.index == null || hitIndexRef.current.idx !== sceneGen) {
-        hitIndexRef.current = displayScene ? { idx: sceneGen, index: buildHitIndex(displayScene) } : { idx: 0, index: null }
+      if (!tooltipEnabled) return
+      const rect = containerRef.current?.getBoundingClientRect()
+      if (!rect) return
+      if (renderer === 'canvas' || denseSvg) {
+        // Canvas backend (and batched SVG marks): resolve through the scene hit index.
+        const target = hitIndexFor(displayScene)?.queryMark(e.clientX - rect.left, e.clientY - rect.top)
+        const datum = target?.item.datum as Record<string, unknown> | undefined
+        setTooltipInfo(datum != null && typeof datum === 'object' ? { datum, x: e.clientX - rect.left, y: e.clientY - rect.top } : null)
+        return
       }
-      const target = hitIndexRef.current.index?.queryMark(e.clientX - rect.left, e.clientY - rect.top)
-      const datum = target?.item.datum as Record<string, unknown> | undefined
-      setTooltipInfo(datum != null && typeof datum === 'object' ? { datum, x: e.clientX - rect.left, y: e.clientY - rect.top } : null)
-      return
-    }
-    // The hovered element may be a parent/child of the mark (e.g. a tspan or an
-    // axis line above it); walk up to the nearest element carrying data-datum.
-    const el = (e.target as HTMLElement).closest?.('[data-datum]') as HTMLElement | null
-    const raw = el?.dataset?.datum
-    if (!raw) { setTooltipInfo(null); return }
-    try {
-      const datum = JSON.parse(raw) as Record<string, unknown>
-      setTooltipInfo({ datum, x: e.clientX - rect.left, y: e.clientY - rect.top })
-    } catch { setTooltipInfo(null) }
+      // The hovered element may be a parent/child of the mark (e.g. a tspan or an
+      // axis line above it); walk up to the nearest element carrying data-datum.
+      const el = (e.target as HTMLElement).closest?.('[data-datum]') as HTMLElement | null
+      const raw = el?.dataset?.datum
+      if (!raw) { setTooltipInfo(null); return }
+      try {
+        const datum = JSON.parse(raw) as Record<string, unknown>
+        setTooltipInfo({ datum, x: e.clientX - rect.left, y: e.clientY - rect.top })
+      } catch { setTooltipInfo(null) }
     },
-    [tooltipEnabled, renderer],
+    [tooltipEnabled, renderer, denseSvg, displayScene, hitIndexFor],
   )
 
   const handleTooltipLeave = React.useCallback(() => {
     if (tooltipEnabled) setTooltipInfo(null)
   }, [tooltipEnabled])
 
-  // Brush pixel rect from persisted brush prop
+  // Persisted selection rectangle: the legacy `brush` prop, else the interval
+  // of the (controlled or internal) selection value.
+  const persistedInterval = brush ?? selectValueToInterval(selectionValue)
   const brushPixelRect = React.useMemo(() => {
-    if (!brush || chartInfo == null) return null
-    return selectionToPixels(brush, chartInfo)
-  }, [brush, chartInfo])
-
-  // Drag overlay pixel rect
-  const dragRect = React.useMemo(() => {
-    if (!dragPixelStart || !dragPixelEnd) return null
-    return {
-      x: Math.min(dragPixelStart.x, dragPixelEnd.x),
-      y: Math.min(dragPixelStart.y, dragPixelEnd.y),
-      width: Math.abs(dragPixelEnd.x - dragPixelStart.x),
-      height: Math.abs(dragPixelEnd.y - dragPixelStart.y),
-    }
-  }, [dragPixelStart, dragPixelEnd])
+    if (!persistedInterval || chartInfo == null) return null
+    return selectionToPixels(persistedInterval, chartInfo, positional)
+  }, [persistedInterval, chartInfo, positional])
 
   // --- imperative handle (R11.1) ------------------------------------------
   React.useImperativeHandle(chartRef, () => ({
@@ -1152,9 +1294,32 @@ function ChartView({
     getView: () => viewRef.current ?? null,
     setView: (next) => applyViewRef.current(next),
     resetView: () => applyViewRef.current(null),
-    setSignal: (name, value) => signalBindingRef.current?.setSignal(name, value),
+    // Portable: with the SVG event loop bound it runs the spec's dependent
+    // signal updates; otherwise (canvas, `interactive={false}`) the value is
+    // applied as a signal override. Listeners are notified either way.
+    setSignal: (name, value) => {
+      const binding = signalBindingRef.current
+      if (binding) {
+        binding.setSignal(name, value)
+        return
+      }
+      signalStoreRef.current?.merge({ [name]: value })
+      signalListenersRef.current?.[name]?.(name, value)
+      onSignalRef.current?.(name, value)
+    },
     getSignals: () => signalStoreRef.current?.get() ?? {},
   }), [])
+
+  const setBoundSignal = React.useCallback((name: string, value: unknown): void => {
+    const binding = signalBindingRef.current
+    if (binding) {
+      binding.setSignal(name, value)
+      return
+    }
+    signalStore.merge({ [name]: value })
+    signalListenersRef.current?.[name]?.(name, value)
+    onSignalRef.current?.(name, value)
+  }, [signalStore])
 
   if (scene === null) {
     const message = renderError instanceof AsterLimitError
@@ -1168,10 +1333,13 @@ function ChartView({
   // tooltip positions against <body> and lands off-screen after scrolling.
   const needsPositioning = hasInteraction || tooltipEnabled || a11yTree != null
   const outerStyle: React.CSSProperties = needsPositioning
-    ? { ...style, position: 'relative', width: '100%', height: '100%' }
+    ? { ...style, position: 'relative', width: '100%', height: '100%', ...(panZoomEnabled ? { touchAction: 'none' } : {}) }
     : { width: '100%', height: '100%', ...style }
 
   const role = a11yTree ? (ariaLabel ? 'group' : undefined) : ariaLabel ? 'img' : undefined
+  // The rendered SVG sits inside the scene padding; guide/mark boxes from the
+  // a11y tree are relative to the padded origin.
+  const pad = displayScene?.padding ?? { top: 0, right: 0, bottom: 0, left: 0 }
 
   return (
     <div
@@ -1185,20 +1353,22 @@ function ChartView({
       style={outerStyle}
       onMouseMove={handleTooltipMove}
       onMouseLeave={handleTooltipLeave}
+      onPointerDown={hasInteraction ? handlePointerDown : undefined}
+      onPointerMove={hasInteraction ? handlePointerMove : undefined}
+      onPointerUp={hasInteraction ? handlePointerUp : undefined}
+      onPointerCancel={hasInteraction ? endGesture : undefined}
       data-aster-view={currentView ? 'zoomed' : 'base'}
     >
       {hasInteraction && (
+        // Draw-only layer: it never takes pointer events (the gestures are
+        // handled on the container), so marks, tooltips, `signal.on` events
+        // and bound inputs underneath stay reachable.
         <div data-testid="chart-brush-overlay"
-          style={{ position: 'absolute', inset: 0, zIndex: 10, touchAction: panZoomEnabled ? 'none' : undefined }}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerCancel={cancelPointer}
+          style={{ position: 'absolute', inset: 0, zIndex: 10, pointerEvents: 'none' }}
         >
           {/* Live drag overlay */}
           {dragRect != null && (
             <div
-              ref={overlayRef}
               style={{
                 position: 'absolute',
                 left: dragRect.x,
@@ -1212,7 +1382,7 @@ function ChartView({
               }}
             />
           )}
-          {/* Persisted brush overlay */}
+          {/* Persisted selection overlay */}
           {brushPixelRect != null && (
             <div
               style={{
@@ -1242,14 +1412,14 @@ function ChartView({
           ref={svgHostRef}
           aria-hidden={a11yTree != null ? true : undefined}
           style={{ position: 'relative', zIndex: 1 }}
-          {...(domMarkup != null ? { dangerouslySetInnerHTML: { __html: domMarkup } } : {})}
+          {...(htmlProp != null ? { dangerouslySetInnerHTML: htmlProp } : {})}
         />
       )}
       {bindDefs.length > 0 && (
         <SignalBinds
           signals={bindDefs}
           values={mergedSignals}
-          onChange={(name, value) => signalStore.merge({ [name]: value })}
+          onChange={setBoundSignal}
         />
       )}
       {a11yTree != null && (
@@ -1281,12 +1451,12 @@ function ChartView({
                 aria-valuemin={slider ? node.domain?.[0] : undefined}
                 aria-valuemax={slider ? node.domain?.[1] : undefined}
                 aria-valuenow={slider && node.domain ? (node.domain[0] + node.domain[1]) / 2 : undefined}
-                tabIndex={0}
+                tabIndex={node.id === tabStopId ? 0 : -1}
                 onKeyDown={(e) => handleA11yKeyDown(node, e)}
                 style={{
                   position: 'absolute',
-                  left: Math.max(0, node.x),
-                  top: Math.max(0, node.y),
+                  left: Math.max(0, pad.left + node.x),
+                  top: Math.max(0, pad.top + node.y),
                   width: Math.max(1, node.width),
                   height: Math.max(1, node.height),
                   opacity: 0,
@@ -1296,7 +1466,7 @@ function ChartView({
                   borderRadius: 2,
                   outline: 'none',
                 }}
-                onFocus={(e) => { e.currentTarget.style.opacity = '0.001' }}
+                onFocus={(e) => { setActiveA11yId(node.id); e.currentTarget.style.opacity = '0.001' }}
                 onBlur={(e) => { e.currentTarget.style.opacity = '0' }}
               />
             )

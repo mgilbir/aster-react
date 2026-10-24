@@ -1,4 +1,4 @@
-import type { ChartInfo } from '@aster/core'
+import type { ChartInfo, VgSpec } from '@aster/core'
 
 export interface SelectionInterval {
   x?: [number, number]
@@ -25,14 +25,123 @@ export interface PixelPoint {
   y: number
 }
 
-/** Convert an SVG-local pixel drag rect into a data-space interval using the chart scales + padding. */
+/**
+ * Names of the scales that drive the horizontal and vertical positions. The
+ * `x`/`y` keys of `ViewDomain`, `SelectionInterval` and the `brush` prop always
+ * mean "the horizontal / vertical positional scale", whatever it is called.
+ */
+export interface PositionalScales {
+  x?: string
+  y?: string
+}
+
+/** Fallback when a spec gives no positional evidence: scales literally named `x`/`y`. */
+export const DEFAULT_POSITIONAL_SCALES: PositionalScales = { x: 'x', y: 'y' }
+
+const CONTINUOUS_SCALE_TYPES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc'])
+
+const X_CHANNELS = ['x', 'x2', 'xc']
+const Y_CHANNELS = ['y', 'y2', 'yc']
+
+function scaleNameOf(ref: unknown, out: string[]): void {
+  if (Array.isArray(ref)) {
+    for (const r of ref) scaleNameOf(r, out)
+    return
+  }
+  if (ref != null && typeof ref === 'object') {
+    const scale = (ref as { scale?: unknown }).scale
+    if (typeof scale === 'string') out.push(scale)
+  }
+}
+
+/**
+ * Derive the horizontal/vertical positional scales from a Vega spec, so
+ * pan/zoom, brushing and the keyboard contract work for any scale names
+ * (`xscale`/`yscale` as in the Vega tutorials, VL-compiled `x`/`y`, ...).
+ *
+ * Rule, applied to the root scope and every nested group scope:
+ * 1. candidates for an orientation, in order: scales of axes with orient
+ *    `bottom`/`top` (x) or `left`/`right` (y), then scales referenced by the
+ *    mark channels `x`/`x2`/`xc` (x) or `y`/`y2`/`yc` (y) in any encode set;
+ * 2. the first candidate whose definition is a continuous (invertible) type
+ *    (`linear`, `log`, `pow`, `sqrt`, `symlog`, `time`, `utc`) wins;
+ *    band/point/ordinal scales have no pannable domain and are skipped;
+ * 3. an orientation with no such candidate falls back to a continuous scale
+ *    literally named `x` / `y`, else it is left unset (no pan/zoom on it).
+ *
+ * When one orientation has several continuous scales (dual axes) only the first
+ * is driven; `ViewDomain` carries a single domain per orientation. Only scales
+ * declared at the root scope are interactive (they are the ones the evaluated
+ * scene exposes).
+ */
+export function positionalScales(spec: VgSpec): PositionalScales {
+  const defs = new Map<string, string>()
+  const rootScales = (spec as { scales?: unknown }).scales
+  if (Array.isArray(rootScales)) {
+    for (const d of rootScales) {
+      if (d && typeof d === 'object' && typeof (d as { name?: unknown }).name === 'string') {
+        const t = (d as { type?: unknown }).type
+        defs.set((d as { name: string }).name, typeof t === 'string' ? t : 'linear')
+      }
+    }
+  }
+  const axisX: string[] = []
+  const axisY: string[] = []
+  const markX: string[] = []
+  const markY: string[] = []
+  const seen = new Set<unknown>()
+  const walk = (node: unknown): void => {
+    if (!node || typeof node !== 'object' || seen.has(node)) return
+    seen.add(node)
+    const n = node as { axes?: unknown; marks?: unknown; encode?: unknown }
+    if (Array.isArray(n.axes)) {
+      for (const a of n.axes) {
+        if (!a || typeof a !== 'object') continue
+        const { scale, orient } = a as { scale?: unknown; orient?: unknown }
+        if (typeof scale !== 'string') continue
+        if (orient === 'bottom' || orient === 'top') axisX.push(scale)
+        else if (orient === 'left' || orient === 'right') axisY.push(scale)
+      }
+    }
+    if (n.encode && typeof n.encode === 'object') {
+      for (const set of Object.values(n.encode as Record<string, unknown>)) {
+        if (!set || typeof set !== 'object') continue
+        for (const ch of X_CHANNELS) scaleNameOf((set as Record<string, unknown>)[ch], markX)
+        for (const ch of Y_CHANNELS) scaleNameOf((set as Record<string, unknown>)[ch], markY)
+      }
+    }
+    if (Array.isArray(n.marks)) for (const m of n.marks) walk(m)
+  }
+  walk(spec)
+  const pick = (candidates: string[], fallback: string): string | undefined => {
+    for (const name of candidates) {
+      const type = defs.get(name)
+      if (type != null && CONTINUOUS_SCALE_TYPES.has(type)) return name
+    }
+    const type = defs.get(fallback)
+    return type != null && CONTINUOUS_SCALE_TYPES.has(type) ? fallback : undefined
+  }
+  const out: PositionalScales = {}
+  const x = pick([...axisX, ...markX], 'x')
+  const y = pick([...axisY, ...markY], 'y')
+  if (x != null) out.x = x
+  if (y != null) out.y = y
+  return out
+}
+
+/**
+ * Convert a container-local pixel drag (start/end) into a data-space interval
+ * using the positional scales and the scene padding. An axis whose scale has no
+ * numeric inverse (band/point) is omitted from the result.
+ */
 export function dragToDataInterval(
   start: PixelPoint,
   end: PixelPoint,
   info: ChartInfo,
+  names: PositionalScales = DEFAULT_POSITIONAL_SCALES,
 ): SelectionInterval {
-  const xScale = info.scales.get('x')
-  const yScale = info.scales.get('y')
+  const xScale = names.x != null ? info.scales.get(names.x) : undefined
+  const yScale = names.y != null ? info.scales.get(names.y) : undefined
   const out: SelectionInterval = {}
   const xInv = (xScale as { invert?: (v: number) => number } | undefined)?.invert
   const yInv = (yScale as { invert?: (v: number) => number } | undefined)?.invert
@@ -58,9 +167,10 @@ function isFiniteNumber(v: unknown): v is number {
 export function selectionToPixels(
   selection: SelectionInterval,
   info: ChartInfo,
+  names: PositionalScales = DEFAULT_POSITIONAL_SCALES,
 ): { x: number; y: number; width: number; height: number } {
-  const xScale = info.scales.get('x')
-  const yScale = info.scales.get('y')
+  const xScale = names.x != null ? info.scales.get(names.x) : undefined
+  const yScale = names.y != null ? info.scales.get(names.y) : undefined
 
   // Helper to call scale(value) for continuous scales
   const scaleVal = (s: unknown, v: number): number => {
@@ -137,7 +247,11 @@ export function zoomDomain(
   return [a, b]
 }
 
-/** Translate a domain by a fraction of its span (positive = data moves right/down). */
+/**
+ * Translate a domain by a fraction of its span. A positive fraction moves the
+ * visible window toward HIGHER values, so the data appears to move the other
+ * way (left on an ascending x scale).
+ */
 export function panDomain(domain: [number, number], fraction: number): [number, number] {
   const span = domain[1] - domain[0]
   const shift = span * fraction
@@ -157,12 +271,18 @@ export function normalizeView(view: ViewDomain | null | undefined, base: ViewDom
   return out.x || out.y ? out : null
 }
 
-/** Convert a view to the scale-domain overrides consumed by `RuntimeInput.domainRaw`. */
-export function viewToDomainRaw(view: ViewDomain | null | undefined): Record<string, unknown[]> | undefined {
+/**
+ * Convert a view to the scale-domain overrides consumed by
+ * `RuntimeInput.domainRaw`, keyed by the positional scale names.
+ */
+export function viewToDomainRaw(
+  view: ViewDomain | null | undefined,
+  names: PositionalScales = DEFAULT_POSITIONAL_SCALES,
+): Record<string, unknown[]> | undefined {
   if (view == null) return undefined
   const out: Record<string, unknown[]> = {}
-  if (view.x) out.x = [view.x[0], view.x[1]]
-  if (view.y) out.y = [view.y[0], view.y[1]]
+  if (view.x && names.x != null) out[names.x] = [view.x[0], view.x[1]]
+  if (view.y && names.y != null) out[names.y] = [view.y[0], view.y[1]]
   return Object.keys(out).length ? out : undefined
 }
 
@@ -171,15 +291,23 @@ const KEY_PAN_FAST = 0.25
 
 /**
  * Pure keyboard contract shared by the chart container and the accessible
- * axis sliders: arrows pan, +/- zoom, 0/Home resets, Escape clears selection.
- * Returns a new view (or `null` for reset) plus whether the key was handled.
+ * axis sliders: arrows pan, +/- zoom, 0/Home resets. (Escape clearing the
+ * selection is handled by `<Chart>` itself.) Returns a new view (or `null` for
+ * reset) plus whether the key was handled.
  */
 export function keyboardView(
   key: string,
   current: ViewDomain | null,
   base: ViewDomain,
-  opts: { fast?: boolean; axis?: 'x' | 'y'; anchor?: number } = {},
+  opts: { fast?: boolean; axis?: 'x' | 'y'; anchor?: number; pan?: boolean; zoom?: boolean } = {},
 ): { handled: boolean; view?: ViewDomain | null } {
+  // `pan: false` disables the arrow keys, `zoom: false` the +/- keys; reset
+  // (0/Home) is always available. Both default to enabled.
+  const canPan = opts.pan !== false
+  const canZoom = opts.zoom !== false
+  const isPanKey = key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown'
+  const isZoomKey = key === '+' || key === '=' || key === '-' || key === '_'
+  if ((isPanKey && !canPan) || (isZoomKey && !canZoom)) return { handled: false }
   const axis = opts.axis
   const step = opts.fast ? KEY_PAN_FAST : KEY_PAN
   const get = (a: 'x' | 'y'): [number, number] | undefined =>
@@ -249,7 +377,10 @@ function setFor(view: ViewDomain, base: ViewDomain, axis: 'x' | 'y', d: [number,
   return out
 }
 
-/** Interpolate a zoom around a cursor, clamped to the base domain's span. */
+/**
+ * Zoom around a cursor value. Zooming in stops at 1/1000 of the base span, and
+ * zooming out never exceeds the base domain (the base domain itself is returned).
+ */
 export function cursorZoom(
   current: ViewDomain | null,
   base: ViewDomain,
@@ -262,19 +393,30 @@ export function cursorZoom(
   if (!d) return out
   // Never zoom out past the original extent.
   const baseSpan = Math.abs(base[axis]![1] - base[axis]![0])
-  const currentSpan = Math.abs(d[1] - d[0])
-  const capped = factor > 1 && currentSpan <= baseSpan / 1e-9 ? factor : factor
-  const next = zoomDomain(d, anchorValue, capped, baseSpan / 1000)
+  const next = zoomDomain(d, anchorValue, factor, baseSpan / 1000)
   const span = Math.abs(next[1] - next[0])
   out[axis] = span > baseSpan ? base[axis] : next
   return out
 }
 
 /** The axis whose scale supports pan/zoom, in priority order. */
-export function continuousAxes(info: ChartInfo): Array<'x' | 'y'> {
+export function continuousAxes(
+  info: ChartInfo,
+  names: PositionalScales = DEFAULT_POSITIONAL_SCALES,
+): Array<'x' | 'y'> {
   const out: Array<'x' | 'y'> = []
-  if (domainOf(info.scales.get('x'))) out.push('x')
-  if (domainOf(info.scales.get('y'))) out.push('y')
+  if (names.x != null && domainOf(info.scales.get(names.x))) out.push('x')
+  if (names.y != null && domainOf(info.scales.get(names.y))) out.push('y')
+  return out
+}
+
+/** Base (pre-pan/zoom) domain of each positional scale, read from live scales. */
+export function baseDomainsOf(info: ChartInfo, names: PositionalScales): ViewDomain {
+  const out: ViewDomain = {}
+  const x = names.x != null ? domainOf(info.scales.get(names.x)) : null
+  const y = names.y != null ? domainOf(info.scales.get(names.y)) : null
+  if (x) out.x = x
+  if (y) out.y = y
   return out
 }
 
@@ -324,4 +466,18 @@ export function filterLegendScene(
     return next
   })
   return changed ? { ...scene, items } : scene
+}
+
+/**
+ * Signed pixel length of `domain` on `scale` (`scale(d1) - scale(d0)`): its sign
+ * tells whether data increases along or against the pixel axis (a y scale with
+ * range `[height, 0]` is negative), which a drag-to-pan needs to move the right
+ * way. Null when the scale cannot be evaluated.
+ */
+export function pixelSpanOf(scale: unknown, domain: [number, number]): number | null {
+  if (typeof scale !== 'function') return null
+  const f = scale as (v: number) => unknown
+  const a = Number(f(domain[0]))
+  const b = Number(f(domain[1]))
+  return Number.isFinite(a) && Number.isFinite(b) && a !== b ? b - a : null
 }
