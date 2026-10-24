@@ -81,6 +81,6 @@ jobs:
         if: matrix.node != 20
         run: node node_modules/vitest/vitest.mjs run
 
-      - name: Engine-sensitive unit tests (Node 20: no jsdom)
+      - name: Engine-sensitive unit tests (Node 20, no jsdom)
         if: matrix.node == 20
         run: node node_modules/vitest/vitest.mjs run scripts/differential- oracle-vectors.test
