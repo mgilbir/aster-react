@@ -51,8 +51,10 @@ you already know the delta; `dataChanges` remains the compact same-length form.
 import { createChartStream } from '@aster/core'
 
 const stream = createChartStream(spec, {
-  capacity: 32,              // queued batches (default 32; coalesce keeps 1)
+  capacity: 32,              // queued BATCHES (default 32; coalesce always holds 1)
+  maxQueuedRows: 5_000_000,  // queued ROWS (snapshot + appended), every policy
   policy: 'coalesce',        // 'coalesce' | 'drop-oldest' | 'drop-newest' | 'error'
+  limits: { maxItems: 50_000, maxRows: 1_000_000 }, // same budgets as the session
   initial: { signals: { theme: 'dark' } },
 })
 
@@ -63,10 +65,11 @@ stream.push({ append: { table: rows }, pulse: { table: explicitPulse } })
 
 stream.pending()   // the DataPulse that flush() would deliver
 const result = stream.flush()   // { scene, pulse, batches, noop } | null
-stream.stats()     // { depth, capacity, policy, coalesced, dropped, flushes }
+stream.stats()     // { depth, capacity, queuedRows, maxQueuedRows, policy, coalesced, dropped, flushes }
 stream.canAccept() // producer-side backpressure hint
 stream.scene()     // last flushed SceneRoot (null before the first flush)
-stream.close()
+stream.discard()   // drop all queued batches (recovery after a failed flush)
+stream.close()     // releases queue, rows, scene and session; later push -> false, flush -> null
 ```
 
 An empty first `flush()` primes the scene from the spec/initial snapshot; later empty
@@ -81,11 +84,64 @@ flushes are no-ops. The React bindings are:
   `<Chart>` (no per-flush SVG serialization).
 - `handleChartWorkerStreamRequest(request, streams)` — the pure worker protocol.
 
-`policy: 'coalesce'` merges queued appends/snapshots so a slow consumer sees one pulse
-for the latest state; `drop-oldest`/`drop-newest` bound the queue by discarding whole
-batches; `error` throws `AsterStreamBackpressureError`. Explicit `pulse` values are
-composed across coalesced batches when possible and otherwise fall back to a snapshot
-diff (still correct, just O(n)).
+**Batch order.** Queued batches fold in the order they were pushed, exactly as if
+they had been applied one at a time. Within a batch the order is: `data` (snapshot),
+then `append`, then `pulse`, then `signals`/`width`/`height`/`domainRaw`/`limits`/
+`textMetrics` (later batches win; a `null` `domainRaw` entry clears that override).
+This holds under every policy, so a coalesced snapshot-then-append keeps the appended
+rows. An explicit `pulse` is cleared by a later snapshot of the same dataset (the
+snapshot diff is authoritative). A same-length pulse followed by an append composes
+into an append-only pulse that still carries the in-place `changed` indices. When
+pulses cannot be composed (an inconsistent mapping, or in-place edits that a snapshot
+diff could not see) the dataset is re-derived (`changedDatasets`, no pulse): correct,
+just O(n). The stream passes the session its own complete change description and
+disables the session's identity-based auto-diff, so a row edited in place is never
+mistaken for unchanged.
+
+**Backpressure bounds.** There are two bounds, both enforced on `push`:
+
+- `capacity` bounds queued **batches** for `drop-oldest`/`drop-newest`/`error`.
+  `coalesce` folds everything into one queued batch, so it always holds one
+  (`stats().capacity` is `1`).
+- `maxQueuedRows` bounds queued **rows** (snapshot rows plus appended rows waiting for
+  a flush, across datasets) under every policy; it is what bounds `coalesce` memory.
+  Default 5,000,000. A batch larger than the bound is always refused.
+
+When a push would exceed a bound: `drop-newest` and `coalesce` reject it (`push` returns
+`false`, counted in `stats().dropped`; `coalesce` never discards already queued data),
+`drop-oldest` discards whole oldest batches until it fits, `error` throws
+`AsterStreamBackpressureError` (`code: 'ASTER_STREAM_BACKPRESSURE'`, `bound:
+'batches' | 'rows'`, `limit`). `canAccept()` is `true` only while both bounds have room
+(always `true` for `drop-oldest`). A paused or slow consumer therefore cannot grow the
+queue past `capacity` batches or `maxQueuedRows` rows. Rows already flushed belong to
+the stream's base snapshot and are the host's data, not queue memory.
+
+**Atomic flush.** `flush()` commits nothing until the evaluation succeeds. If it throws
+(an expression error, a limit, a deadline), the queue, the committed base rows,
+signals, size, `domainRaw`, limits, `textMetrics` and the stats are exactly as before the
+call; the failed batches stay queued. Push a corrected batch (a snapshot replaces
+earlier queued rows; `limits: {}` replaces the budget) and flush again.
+
+**Recovering from a failed flush.** Because a failed flush keeps its batches queued,
+every later flush fails the same way until they are removed. The error you get is the
+original one (`AsterLimitError`, an expression error, ...), unchanged. Call
+`getStreamFlushFailure(err)` to get `{ batches, queuedRows }` (what is still queued; the
+queue is folded, so the failing batch cannot be isolated and all of it took part), then
+`stream.discard()` to drop every queued batch. It returns how many were dropped and
+counts them in `stats().dropped`; committed rows and the last scene are untouched.
+Push fresh batches and flush again. Hosts that flush on a timer or microtask should call
+`discard()` in their flush `catch` (and report the error) so one bad batch cannot wedge
+the stream. Re-pushing a corrective snapshot also works, but only if you know to.
+
+**Limits.** `options.limits` / `initial.limits` / a batch's `limits` are enforced on
+every flush exactly as `createChartSession` enforces them (spec pre-flight, the
+`maxTimeMs` clock, scene limits), and `maxRows` additionally counts the rows the
+stream holds, which the session cannot see because they arrive via `input.data`.
+
+**close().** Releases the queue, the base rows, the last scene and the session.
+Afterwards `push` returns `false` (not counted as a drop), `flush` returns `null`,
+`scene()`/`pulse()` are `null`, `canAccept()` is `false`, and `session()` throws
+`AsterStreamClosedError` (`code: 'ASTER_STREAM_CLOSED'`). `close()` is idempotent.
 
 `buildA11yTree(scene, scales, options)` returns positioned, captioned nodes for marks,
 axes, legends, legend entries and titles. `<Chart>` projects them into focusable

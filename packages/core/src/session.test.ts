@@ -108,3 +108,55 @@ describe('createChartSession', () => {
     expect(b).not.toBe(a)
   })
 })
+
+describe('session explicit hints given together', () => {
+  const spec = {
+    width: 200, height: 100, padding: 5, autosize: 'none',
+    data: [
+      { name: 't' }, { name: 'u' },
+      { name: 'a', source: 't', transform: [{ type: 'aggregate', groupby: ['g'], fields: ['x'], ops: ['max'], as: ['m'] }] },
+    ],
+    scales: [
+      { name: 'sx', type: 'linear', domain: { data: 'a', field: 'm' }, range: 'width' },
+      { name: 'sy', type: 'linear', domain: { data: 'u', field: 'v' }, range: 'height' },
+    ],
+    marks: [
+      { type: 'symbol', from: { data: 'a' }, encode: { update: { x: { scale: 'sx', field: 'm' }, y: { value: 5 } } } },
+      { type: 'symbol', from: { data: 'u' }, encode: { update: { x: { value: 5 }, y: { scale: 'sy', field: 'v' } } } },
+    ],
+  } as unknown as VgSpec
+  const t1 = [{ g: 'A', x: 1 }, { g: 'B', x: 2 }]
+  const u1 = [{ v: 1 }, { v: 2 }]
+
+  it('keeps dataChanges for one dataset when dataPulse names another', async () => {
+    const { compileChart } = await import('./compiler.js')
+    const { evaluateChart } = await import('./runtime.js')
+    const t2 = [{ g: 'A', x: 1 }, { g: 'B', x: 40 }]
+    const u2 = [...u1, { v: 3 }]
+    const session = createChartSession()
+    session.evaluate(spec, { data: { t: t1, u: u1 }, autoChanges: false })
+    const got = session.evaluate(spec, {
+      data: { t: t2, u: u2 }, autoChanges: false,
+      dataChanges: { t: [1] },
+      dataPulse: { u: { changed: [], appendOnly: true, baseLength: 2, added: [[2, 3]] } },
+    })
+    const want = evaluateChart(compileChart(structuredClone(spec)), { data: { t: t2, u: u2 } })
+    expect(renderSceneToSvg(got)).toBe(renderSceneToSvg(want))
+  })
+
+  it('keeps changedDatasets named by the host when dataPulse is also given', async () => {
+    const { compileChart } = await import('./compiler.js')
+    const { evaluateChart } = await import('./runtime.js')
+    const t2 = [{ g: 'A', x: 1 }, { g: 'B', x: 40 }, { g: 'B', x: 1 }]
+    const u2 = [...u1, { v: 3 }]
+    const session = createChartSession()
+    session.evaluate(spec, { data: { t: t1, u: u1 }, autoChanges: false })
+    const got = session.evaluate(spec, {
+      data: { t: t2, u: u2 }, autoChanges: false,
+      changedDatasets: ['t'],
+      dataPulse: { u: { changed: [], from: [0, 1, -1], added: [[2, 3]], removed: [] } },
+    })
+    const want = evaluateChart(compileChart(structuredClone(spec)), { data: { t: t2, u: u2 } })
+    expect(renderSceneToSvg(got)).toBe(renderSceneToSvg(want))
+  })
+})
