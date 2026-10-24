@@ -2,10 +2,11 @@
  * Drift guards for the single gate list (scripts/gates.mjs).
  * The list is only a source of truth if nothing else keeps its own copy.
  */
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { parseDocument } from 'yaml'
 import { GATES } from './gates.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -115,4 +116,27 @@ describe('nothing keeps a second copy of the list', () => {
       }
     }
   })
+})
+
+describe('workflow files are valid YAML', () => {
+  // The text-based checks above cannot see a file GitHub refuses to load (an unquoted ": " in a
+  // step name made ci.yml invalid and no CI ran), so every workflow goes through a real parser.
+  const files = readdirSync(join(root, '.github', 'workflows')).filter((f) => /\.ya?ml$/.test(f))
+
+  it('finds the workflows', () => {
+    expect(files).toEqual(expect.arrayContaining(['ci.yml', 'nightly.yml', 'release.yml']))
+  })
+
+  for (const f of files) {
+    it(`${f} parses without errors or warnings and has \`on\` and \`jobs\``, () => {
+      const doc = parseDocument(read(`.github/workflows/${f}`), { prettyErrors: true })
+      expect(doc.errors.map(String), `${f}: YAML errors`).toEqual([])
+      expect(doc.warnings.map(String), `${f}: YAML warnings`).toEqual([])
+      const wf = doc.toJS()
+      expect(wf && typeof wf === 'object' && !Array.isArray(wf), `${f}: top level is a mapping`).toBe(true)
+      // YAML 1.1 loaders read the key `on` as boolean true; `yaml` 1.2 keeps the string.
+      expect(Object.keys(wf), f).toEqual(expect.arrayContaining(['on', 'jobs']))
+      expect(Object.keys(wf.jobs ?? {}).length, `${f}: at least one job`).toBeGreaterThan(0)
+    })
+  }
 })
