@@ -11,3 +11,11 @@ coverage/
 # copied into packages by scripts/copy-legal.mjs at pack time
 packages/*/LICENSE
 packages/*/THIRD_PARTY_NOTICES.md
+
+# Ad-hoc debug/scratch work (CONTRIBUTING: do not commit debug scripts).
+# Put throwaway scripts under a scratch dir outside the repo, or use these names.
+dbg*
+*.tmp.*
+chk-*
+/*.mts
+scratch/

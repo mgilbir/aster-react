@@ -66,6 +66,14 @@ try {
     for (const want of [...REQUIRED, ...REQUIRED_BY_PACKAGE[pkg]]) {
       if (!names.has(want)) fail(`@aster/${pkg} tarball is missing ${want}`)
     }
+    // Source maps point at ../src, which is not shipped: a dangling map is worse than none.
+    const maps = [...names].filter((n) => n.endsWith('.map'))
+    if (maps.length) fail(`@aster/${pkg} tarball ships source maps whose sources are not included: ${maps.slice(0, 3).join(', ')}`)
+    for (const n of names) {
+      if (!/\.(c|m)?js$/.test(n)) continue
+      const body = execFileSync('tar', ['-xzf', tarballs.get(pkg), '-O', `package/${n}`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+      if (/^\/\/# sourceMappingURL=/m.test(body)) fail(`@aster/${pkg}/${n} references a source map that is not in the tarball`)
+    }
     const manifest = JSON.parse(execFileSync('tar', ['-xzf', tarballs.get(pkg), '-O', 'package/package.json'], { encoding: 'utf8' }))
     if (manifest.private) fail(`@aster/${pkg} is private but was packed`)
     if (manifest.license !== 'BSD-3-Clause') fail(`@aster/${pkg} has license ${manifest.license}`)

@@ -23,7 +23,12 @@
   "bugs": {
     "url": "https://github.com/mgilbir/aster-react/issues"
   },
-  "keywords": "vega-lite, vega, compiler, charts",
+  "keywords": [
+    "vega-lite",
+    "vega",
+    "compiler",
+    "charts"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -33,6 +38,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md"
@@ -40,7 +46,7 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "default": "./dist/index.js"
     },
     "./package.json": "./package.json"
   }

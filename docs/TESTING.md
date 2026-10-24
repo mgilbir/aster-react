@@ -2,23 +2,39 @@
 
 ## Gates
 
+The PR gate list is defined once, in [`scripts/gates.mjs`](../scripts/gates.mjs).
+Run it with:
+
 ```bash
-pnpm check:deps        # runtime cannot import vega-*/d3-*/topojson-*
-pnpm typecheck
-pnpm build
-pnpm test              # unit + React interaction/SSR/a11y tests
-pnpm conformance       # 419-spec real-Vega oracle SVG diff
-pnpm scene-diff        # R8.1–R8.3: resolved scales/groups/items per scope
-pnpm a11y-parity       # guide captions vs vega-scenegraph aria-label
-pnpm transform-matrix  # transform option combinations vs the Vega oracle
-pnpm conformance:batch # batched-SVG pixel parity (denseMarks vs per-item)
-pnpm verify:publish    # npm pack: licences + exports + consumer smoke test
-pnpm sweep-vl          # 27,513-case Vega-Lite property sweep
-pnpm sweep-vega        # Vega schema sweep (7,538 ok / 0 differ; 8 both-refused,
-                       # 3 oracle-side node-errors: vega-interpreter's area
-                       # `bundle` interpolator and a negative trail radius)
-pnpm --filter @aster/benchmarks run budget  # per-entry bundle gates
+pnpm check                 # every gate, all failures reported
+pnpm check -- --list       # the gates, with what each one asserts
+pnpm check -- --only conformance,a11y-parity
+pnpm check -- --skip browser   # no Chromium installed (not the CI list)
 ```
+
+CI runs `pnpm check` and nothing else; nightly runs it and then the extras below.
+`scripts/gates.test.mjs` fails if a workflow or these docs grow their own copy.
+
+What the notable gates establish: the dependency check parses every import form
+and also scans the built `dist` (see `scripts/check-deps.mjs`); `conformance` is
+the 419-spec real-Vega SVG diff; `conformance-vl` compiles the Vega-Lite corpus
+with `@aster/vl` and diffs it against the Vega-Lite oracle.
+
+## Nightly sweeps
+
+```bash
+pnpm sweep-vl -- --floor N --min-ok N --max-node-error N      # Vega-Lite property sweep
+pnpm sweep-vega -- --floor N --min-ok N --max-node-error N    # Vega schema sweep
+```
+
+A sweep run only passes when cases actually ran, the generated count is at least
+`--floor`, the number of equal renders is at least `--min-ok`, nothing differs and
+Aster crashes on nothing. `--max-node-error` is a ceiling on cases the oracle
+itself crashes on (an Aster crash is never reclassified). The values the nightly
+workflow passes are in `.github/workflows/nightly.yml`; raise them when the
+schemas grow, never lower them. The Vega sweep's three oracle-side node-errors
+are vega-interpreter's area `bundle` interpolator (two cases) and a negative
+trail radius.
 
 The browser gate (`pnpm conformance:browser`) runs the same oracle protocol in
 Chromium with live text metrics. `pnpm conformance:batch` rasterizes the normal and
@@ -34,8 +50,9 @@ group/item multisets, and paint order wherever painted extents overlap.
 ```bash
 pnpm fuzz                         # 200 deterministic seeds
 pnpm fuzz -- --seeds 3000 --start 200
-pnpm fuzz:replay                  # every committed reproducer
 ```
+
+`pnpm fuzz:replay` (a PR gate, see `scripts/gates.mjs`) replays every committed reproducer.
 
 A failing seed is written as a standalone spec under
 `packages/conformance/fuzz-repro/`; replay it, fix the engine, then promote it into

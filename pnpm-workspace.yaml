@@ -2,13 +2,10 @@ packages:
   - packages/*
   - apps/*
 
+# Dependency lifecycle scripts: only esbuild needs its postinstall (platform
+# binary). workerd arrives via wrangler (apps/demo deploy tool); its download
+# is only needed for `wrangler dev`, never for static-assets deploys, so it is
+# explicitly not built.
 allowBuilds:
-  workerd: set this to true or false
-
-onlyBuiltDependencies:
-  - esbuild
-  - workerd
-
-# wrangler (demo deploy tool) bundles workerd; its postinstall download is
-# only needed for `wrangler dev`, not for static-assets deploys.
-strictDepBuilds: false
+  esbuild: true
+  workerd: false

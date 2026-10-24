@@ -7,11 +7,11 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "default": "./dist/index.js"
     },
     "./geo": {
       "types": "./dist/addon-geo.d.ts",
-      "import": "./dist/addon-geo.js"
+      "default": "./dist/addon-geo.js"
     },
     "./transforms": {
       "types": "./dist/addon-transforms.d.ts",
@@ -62,7 +62,14 @@
   "bugs": {
     "url": "https://github.com/mgilbir/aster-react/issues"
   },
-  "keywords": "vega, vega-lite, charts, dataviz, svg, d3",
+  "keywords": [
+    "vega",
+    "vega-lite",
+    "charts",
+    "dataviz",
+    "svg",
+    "d3"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -72,6 +79,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md"

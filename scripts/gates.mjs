@@ -1,0 +1,119 @@
+#!/usr/bin/env node
+/**
+ * The gate list: the single source of truth for "what must be green".
+ *
+ * `pnpm check` runs this; CI (.github/workflows/ci.yml) runs `pnpm check`;
+ * CONTRIBUTING.md and docs/TESTING.md point here instead of copying the list.
+ * To add, remove or reorder a gate, edit GATES below and nothing else
+ * (scripts/gates.test.mjs fails if a gate names a script that does not exist or
+ * if a workflow runs a gate outside this list).
+ *
+ * Usage:
+ *   pnpm check                          run every gate, report all failures
+ *   pnpm check -- --list                print the gates and exit
+ *   pnpm check -- --only conformance,a11y-parity
+ *   pnpm check -- --skip browser        skip gates tagged `browser` (needs no Chromium)
+ *   pnpm check -- --fail-fast           stop at the first failure
+ *
+ * Browser gates need Playwright Chromium:
+ *   pnpm --filter @aster/conformance exec playwright install --with-deps chromium
+ * Skipping them locally is allowed; CI never skips anything.
+ */
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+
+/** @type {{ name: string, args: string[], tags?: string[], blocking?: boolean, why: string }[]} */
+export const GATES = [
+  { name: 'build', args: ['build'], why: 'every package compiles to dist' },
+  { name: 'deps', args: ['check:deps'], why: 'runtime and built dist import none of vega/d3/topojson' },
+  { name: 'typecheck', args: ['typecheck'], why: 'all workspaces typecheck' },
+  { name: 'test', args: ['test'], why: 'unit, React interaction/SSR/a11y, script tests' },
+  { name: 'verify-publish', args: ['verify:publish'], why: 'packed tarballs: licences, exports, consumer smoke test' },
+  {
+    name: 'incremental-append', args: ['bench:incremental', '--', '--points=10000', '--reps=30'],
+    why: 'incremental append stays faster than a full re-render',
+  },
+  { name: 'conformance', args: ['conformance'], why: 'Vega corpus: SVG diff against the real Vega oracle' },
+  { name: 'conformance-vl', args: ['conformance-vl'], why: '@aster/vl compile + render against the Vega-Lite oracle' },
+  { name: 'scene-diff', args: ['scene-diff'], why: 'resolved scales/groups/items per scope' },
+  { name: 'a11y-parity', args: ['a11y-parity'], why: 'guide captions vs vega-scenegraph aria-label' },
+  { name: 'transform-matrix', args: ['transform-matrix'], why: 'transform option combinations vs the oracle' },
+  { name: 'canvas', args: ['conformance:canvas'], tags: ['browser'], why: 'Chromium canvas pixel parity' },
+  { name: 'batch', args: ['conformance:batch'], tags: ['browser'], why: 'batched-SVG pixel parity (denseMarks vs per-item)' },
+  { name: 'fuzz-replay', args: ['fuzz:replay'], why: 'every committed fuzz reproducer still passes' },
+  { name: 'budget', args: ['--filter', '@aster/benchmarks', 'run', 'budget'], why: 'per-entry bundle size budgets' },
+  { name: 'probe', args: ['probe'], blocking: false, why: 'known-gap probes (diagnostic only; never fails the run)' },
+]
+
+function csv(argv, flag) {
+  const i = argv.indexOf(flag)
+  if (i < 0) return null
+  const v = argv[i + 1]
+  if (!v || v.startsWith('--')) {
+    console.error(`[gates] ${flag} needs a comma-separated value`)
+    process.exit(2)
+  }
+  return v.split(',').map((s) => s.trim()).filter(Boolean)
+}
+
+function main() {
+  const argv = process.argv.slice(2)
+  if (argv.includes('--list')) {
+    for (const g of GATES) {
+      const tags = [...(g.tags ?? []), ...(g.blocking === false ? ['non-blocking'] : [])]
+      console.log(`${g.name.padEnd(18)} pnpm ${g.args.join(' ').padEnd(54)} ${g.why}${tags.length ? `  [${tags.join(',')}]` : ''}`)
+    }
+    return
+  }
+  const only = csv(argv, '--only')
+  const skip = csv(argv, '--skip') ?? []
+  const failFast = argv.includes('--fail-fast')
+  const known = new Set(GATES.flatMap((g) => [g.name, ...(g.tags ?? [])]))
+  for (const n of [...(only ?? []), ...skip]) {
+    if (!known.has(n)) {
+      console.error(`[gates] unknown gate or tag "${n}"; try --list`)
+      process.exit(2)
+    }
+  }
+
+  const selected = GATES.filter((g) => {
+    if (only && !only.includes(g.name)) return false
+    return !(skip.includes(g.name) || (g.tags ?? []).some((t) => skip.includes(t)))
+  })
+  if (selected.length === 0) {
+    console.error('[gates] no gates selected')
+    process.exit(2)
+  }
+
+  const inCI = process.env.GITHUB_ACTIONS === 'true'
+  const results = []
+  for (const g of selected) {
+    const t0 = Date.now()
+    if (inCI) console.log(`::group::${g.name}`)
+    console.log(`\n[gates] ${g.name}: pnpm ${g.args.join(' ')}`)
+    const r = spawnSync('pnpm', g.args, { stdio: 'inherit' })
+    const secs = ((Date.now() - t0) / 1000).toFixed(0)
+    const ok = r.status === 0
+    if (inCI) console.log('::endgroup::')
+    results.push({ name: g.name, ok, blocking: g.blocking !== false, secs })
+    if (!ok && inCI) console.log(`::${g.blocking === false ? 'warning' : 'error'}::gate ${g.name} failed`)
+    if (!ok && g.blocking !== false && failFast) break
+  }
+
+  console.log('\n[gates] summary')
+  for (const r of results) {
+    const tag = r.ok ? 'PASS' : r.blocking ? 'FAIL' : 'WARN'
+    console.log(`  ${tag}  ${r.name.padEnd(18)} ${r.secs}s`)
+  }
+  const failed = results.filter((r) => !r.ok && r.blocking)
+  if (selected.length < GATES.length) {
+    console.log(`[gates] NOTE: ${GATES.length - selected.length} gate(s) not run; this is not the full CI list`)
+  }
+  if (failed.length) {
+    console.error(`[gates] ${failed.length} blocking gate(s) failed: ${failed.map((r) => r.name).join(', ')}`)
+    process.exit(1)
+  }
+  console.log('[gates] all selected gates passed')
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) main()
