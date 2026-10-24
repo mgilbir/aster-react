@@ -1,8 +1,9 @@
 /**
  * Named regressions for the transform layer's Vega semantics (audit C24, C59, C94).
  *
- * The exhaustive check is `transform-vectors.test.ts` (thousands of params + rows
- * -> rows vectors recorded from real Vega). The tests here pin the headline
+ * The exhaustive check is `packages/conformance/scripts/differential-transforms.test.mts`
+ * (thousands of params + rows -> rows cases run live through real Vega and the engine).
+ * The tests here pin the headline
  * repros by name, the documented deviations from Vega, and properties the vectors
  * cannot express (uniformity, determinism, input immutability).
  */

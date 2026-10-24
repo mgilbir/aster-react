@@ -1,83 +1,37 @@
 /**
- * Records TRANSFORM-level oracle vectors: (transform params + input rows) ->
- * output rows, captured by running the pinned real Vega (vega 6.3.1, i.e.
- * vega-transforms / vega-encode / vega-statistics / vega-regression /
- * vega-hierarchy ...) on a one-dataset dataflow, written to
- * `packages/core/testdata/transform-vectors/vega-transforms*.json`.
+ * The TRANSFORM-level case list: (transform params + input rows [+ extra datasets])
+ * for every transform the engine implements, with deliberately odd inputs: numeric
+ * strings, null/undefined/NaN/Infinity, Dates, empty groups, nested field paths
+ * (`a.b`, `a\.b`, `a[0]`), omitted params (Vega's defaults for `as`, `ops`, `offset`,
+ * `sort`, ...), ties and stable order. Random cases come from a seeded PRNG, so the
+ * list is reproducible.
  *
- * `gen-vectors.mjs` pins the helper libraries one function at a time; this
- * generator pins the whole transform layer at the level the engine consumes it:
+ * Consumed by `differential-transforms.test.mts`, which runs each case through the
+ * pinned real Vega AND through `applyTransforms`, in the same process (hence the
+ * same JS engine), and compares the outputs strictly. There are no recorded
+ * outputs: recorded `Math.pow/exp/log` results differ in the last bit between V8
+ * versions, so a recording is only valid on the engine that made it.
  *
- *     data: [{ name: 'src', values: <rows>, transform: [<params>...] }]
- *
- * The replay (`packages/core/src/transform-vectors.test.ts`) feeds the same
- * params + rows to `applyTransforms` and demands the same rows back, strictly:
- * NaN, -0, undefined-valued keys, Dates, row order and thrown errors included.
- *
- * Inputs are deliberately odd: numeric strings, null/undefined/NaN/Infinity,
- * Dates, empty groups, nested field paths (`a.b`, `a\.b`, `a[0]`), omitted
- * params (Vega's defaults for `as`, `ops`, `offset`, `sort`, ...), ties and
- * stable order. Random cases come from a seeded PRNG so the file is
- * reproducible byte-for-byte.
+ * Case options (`opt`):
+ *   extra         datasets by name (lookup/cross-style references)
+ *   signals       signal names whose values are compared as well
+ *   tz            zone the case runs under (default UTC)
+ *   dropOnCrash   Vega crashing with an incidental TypeError means "not comparable"
+ *                 (always on for the `window` suite)
  *
  * Randomness: Vega's bootstrap (ci0/ci1), sample and a few statistics draw from
- * `vega-statistics`' global `random`. We pin it to the seeded LCG that
- * vega-statistics ships (`randomLCG`) at the start of every case, so those cases
- * are exact vectors too; Aster uses the same LCG with the same fixed seed per
- * evaluation (a deliberate, documented deviation from Vega's `Math.random`:
- * incremental evaluation must equal a fresh one).
- *
- *   pnpm --filter @aster/conformance run vectors:transforms
+ * `vega-statistics`' global `random`. The test pins it to the seeded LCG that
+ * vega-statistics ships (`randomLCG(SEED)`) before every case; Aster uses the same
+ * LCG with the same fixed seed per evaluation (a deliberate, documented deviation
+ * from Vega's `Math.random`: incremental evaluation must equal a fresh one).
  */
-import { createRequire } from 'node:module'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 
-process.env.TZ = 'UTC'
-
-const here = dirname(fileURLToPath(import.meta.url))
-const req = createRequire(join(here, '..', 'package.json'))
-const vega = await import(req.resolve('vega'))
-
-/** Seed for every random draw inside a recorded case (mirrored in the engine). */
+/** Seed for every random draw inside a case (mirrored in the engine). */
 export const SEED = 42
 
-// --- value codec (mirrors gen-vectors.mjs; Date NaN is kept) -------------------
-// Cycles are real: joinaggregate/window `argmin`/`values` write the tuple (or an
-// array containing it) back onto the tuple. A back-reference to an ancestor is
-// recorded as { $: 'cycle', up: n } (n levels up the encoding stack).
-function enc(v, stack = []) {
-  if (v === undefined) return { $: 'undef' }
-  if (typeof v === 'number') {
-    if (Number.isNaN(v)) return { $: 'nan' }
-    if (v === Infinity) return { $: 'inf' }
-    if (v === -Infinity) return { $: '-inf' }
-    if (v === 0 && 1 / v < 0) return { $: '-0' }
-    return v
-  }
-  if (v instanceof Date) return { $: 'date', ms: Number.isNaN(v.getTime()) ? null : v.getTime() }
-  if (v instanceof RegExp) return { $: 're', src: v.source, flags: v.flags }
-  if (typeof v === 'bigint') return { $: 'bigint', v: String(v) }
-  if (typeof v === 'function') return { $: 'fn' }
-  if (v !== null && typeof v === 'object') {
-    const at = stack.indexOf(v)
-    if (at >= 0) return { $: 'cycle', up: stack.length - at }
-    stack.push(v)
-    let out
-    if (Array.isArray(v)) out = v.map((x) => enc(x, stack))
-    else {
-      out = {}
-      for (const k of Object.keys(v)) out[k] = enc(v[k], stack)
-    }
-    stack.pop()
-    return out
-  }
-  return v
-}
-
-/** Deep structural clone that keeps Dates, NaN, undefined, -0 (structuredClone does). */
-const clone = (v) => structuredClone(v)
+const prevTz = process.env.TZ
+// Case inputs are built under UTC, whatever zone the importer runs in.
+process.env.TZ = 'UTC'
 
 // --- seeded PRNG for case construction (NOT the engine's LCG) -------------------
 function mulberry32(seed) {
@@ -93,95 +47,13 @@ const rnd = mulberry32(20260101)
 const pick = (a) => a[Math.floor(rnd() * a.length)]
 const int = (lo, hi) => lo + Math.floor(rnd() * (hi - lo + 1))
 
-// --- running real Vega ---------------------------------------------------------
+/** @type {{ suite: string, name: string, t: unknown[], rows: unknown[], opt: Record<string, any> }[]} */
+export const CASES = []
 
-/**
- * Run `transforms` over `rows` in real Vega. `extra` datasets are declared
- * first (for lookup/cross-style references). `signals` names are read back.
- */
-async function runVega(rows, transforms, { extra = {}, signals = [] } = {}) {
-  const data = []
-  for (const [name, v] of Object.entries(extra)) data.push({ name, values: clone(v) })
-  data.push({ name: 'src', values: clone(rows), transform: clone(transforms) })
-  const errors = []
-  let view
-  try {
-    vega.setRandom(vega.randomLCG(SEED))
-    const spec = { data }
-    view = new vega.View(vega.parse(spec), { renderer: 'none', logLevel: vega.None })
-  } catch (err) {
-    return { throw: err }
-  }
-  view.logger({
-    level() { return 1 },
-    error(...a) { errors.push(a.map((x) => (x && x.message) || String(x)).join(' ')); return this },
-    warn() { return this }, info() { return this }, debug() { return this },
-  })
-  try {
-    await view.runAsync()
-  } catch (err) {
-    return { throw: err }
-  }
-  if (errors.length) return { throw: new Error(errors[0].replace(/^Error: /, '')) }
-  const out = view.data('src')
-  const sig = {}
-  for (const s of signals) sig[s] = view.signal(s)
-  return { out, sig }
-}
-
-const suites = {}
-let totalCases = 0
-const pending = []
-const dropped = []
-
-/**
- * Register a case. `t` is one transform or an array (a chain). Options:
- *   extra   datasets by name        signals  signal names to capture
- *   tz      zone to record under    approx   relative tolerance for numerics
- */
+/** Register a case. `t` is one transform or an array (a chain). */
 function add(suite, name, t, rows, opt = {}) {
-  pending.push({ suite, name, t: Array.isArray(t) ? t : [t], rows, opt })
+  CASES.push({ suite, name, t: Array.isArray(t) ? t : [t], rows, opt })
 }
-
-async function flush() {
-  for (const { suite, name, t, rows, opt } of pending) {
-    if (opt.tz) process.env.TZ = opt.tz
-    else process.env.TZ = 'UTC'
-    const res = await runVega(rows, t, opt)
-    // A few inputs crash real Vega with an incidental TypeError (a window range
-    // frame that starts past the last row; dotbin on an empty source). Those are
-    // Vega bugs, not semantics worth pinning: dropped, not replicated.
-    if ((opt.dropOnCrash || suite === 'window') && res.throw && /Cannot read properties|is not a function/.test(String(res.throw.message))) {
-      dropped.push(`${suite} / ${name}: ${res.throw.message}`)
-      continue
-    }
-    let c
-    try {
-    c = {
-      name,
-      transform: enc(t),
-      rows: enc(rows),
-    }
-    if (opt.extra) c.extra = Object.fromEntries(Object.entries(opt.extra).map(([k, v]) => [k, enc(v)]))
-    if (opt.signals) c.signals = opt.signals
-    if (opt.approx) c.approx = opt.approx
-    if (opt.tz) c.tz = opt.tz
-    if (res.throw) {
-      c.want = { $: 'throw', message: String(res.throw.message ?? res.throw) }
-    } else {
-      c.want = enc(res.out)
-      if (opt.signals) c.wantSignals = Object.fromEntries(opt.signals.map((s) => [s, enc(res.sig[s])]))
-    }
-    } catch (err) { throw new Error(`case ${suite} / ${name}: ${err.message}`) }
-    ;(suites[suite] ??= []).push(c)
-    totalCases++
-  }
-  process.env.TZ = 'UTC'
-}
-
-// ============================================================================
-// shared input pools
-// ============================================================================
 
 const D = (s) => new Date(s)
 /** Values that stress coercion: numeric strings, nulls, NaN, Infinity, Dates, ... */
@@ -997,29 +869,6 @@ const TZS = ['America/New_York', 'Asia/Kolkata', 'Australia/Lord_Howe', 'Europe/
   add(S, 'nested fields', { type: 'geojson', fields: ['o.lon', 'o.lat'] }, pts.map((p) => ({ o: p })))
 }
 
-await flush()
 
-// ============================================================================
-// write
-// ============================================================================
-const oracle = `vega@${JSON.parse(readFileSync(join(dirname(req.resolve('vega')), '..', 'package.json'), 'utf8')).version}`
-const destDir = join(here, '..', '..', 'core', 'testdata', 'transform-vectors')
-mkdirSync(destDir, { recursive: true })
-
-function writeFile(name, filter) {
-  const out = { suites: {} }
-  let n = 0
-  for (const [suite, cases] of Object.entries(suites)) {
-    const keep = cases.filter(filter)
-    if (!keep.length) continue
-    out.suites[suite] = { oracle, kind: 'transform', seed: SEED, cases: keep }
-    n += keep.length
-  }
-  writeFileSync(join(destDir, name), JSON.stringify(out) + '\n')
-  console.log(`[vectors:transforms] wrote ${n} cases across ${Object.keys(out.suites).length} suites -> ${name}`)
-  return n
-}
-const timeN = writeFile('vega-transforms-time.json', (c) => c.tz != null)
-const mainN = writeFile('vega-transforms.json', (c) => c.tz == null)
-console.log(`[vectors:transforms] ${timeN + mainN} cases in total (${totalCases} recorded)`)
-for (const d of dropped) console.log(`[vectors:transforms] dropped (Vega TypeError): ${d}`)
+if (prevTz === undefined) delete process.env.TZ
+else process.env.TZ = prevTz
