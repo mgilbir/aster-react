@@ -298,8 +298,13 @@ function renderLine(group: SceneGroup, open: string): string {
   return out
 }
 
-/** Shared line-path geometry for the string renderer and the DOM patcher. */
-export function computeLinePath(group: SceneGroup): {
+/**
+ * Shared line-path geometry for the string renderer and the DOM patcher.
+ * `exact` serializes full-precision coordinates (vega's canvas draws a line
+ * from the unrounded numbers; only its SVG `d` is rounded to 3 decimals): the
+ * canvas backend passes it, the SVG paths never do.
+ */
+export function computeLinePath(group: SceneGroup, exact = false): {
   path: GeneratedPath
   stroke?: string
   sw?: number
@@ -310,6 +315,8 @@ export function computeLinePath(group: SceneGroup): {
   /** Vega styles a line from `items[0]`: its paint is the path's paint. */
   first: SceneItem
 } | null {
+  const n3 = exact ? num : num3
+  const digits = exact ? null : 3
   const items = itemsOf(group)
   if (!items.length) return null
 
@@ -337,7 +344,7 @@ export function computeLinePath(group: SceneGroup): {
         }
       }
       type Pt = { x: number; y: number; defined: boolean }
-      const lineGen = d3Line()
+      const lineGen = d3Line().digits(digits)
         .x((d) => (d as Pt).x)
         .y((d) => (d as Pt).y)
         .defined((d) => (d as Pt).defined)
@@ -386,10 +393,10 @@ export function computeLinePath(group: SceneGroup): {
         continue
       }
       if (!penDown) {
-        path += `M${num3(r.x)},${num3(r.y)}`
+        path += `M${n3(r.x)},${n3(r.y)}`
         penDown = true
       } else {
-        path += `L${num3(r.x)},${num3(r.y)}`
+        path += `L${n3(r.x)},${n3(r.y)}`
         hasLine = true
       }
     }
@@ -417,8 +424,8 @@ export function computeLinePath(group: SceneGroup): {
   }
 }
 
-/** Shared area-path geometry for the string renderer and the DOM patcher. */
-export function computeAreaPath(group: SceneGroup): {
+/** Shared area-path geometry for the string renderer and the DOM patcher; `exact` as for {@link computeLinePath}. */
+export function computeAreaPath(group: SceneGroup, exact = false): {
   path: GeneratedPath
   fill?: string | { gradient: string }
   fillOpacity?: number
@@ -430,6 +437,8 @@ export function computeAreaPath(group: SceneGroup): {
   /** Vega styles an area from `items[0]`: its paint is the path's paint. */
   first: SceneItem
 } | null {
+  const n3 = exact ? num : num3
+  const digits = exact ? null : 3
   const items = itemsOf(group)
 
   // Check for curve interpolation (Vega's `interpolate` encode)
@@ -474,7 +483,7 @@ export function computeAreaPath(group: SceneGroup): {
       if (isHorizontal) {
         // Horizontal area: d3 area with y as the cross-axis, x0/x1 as value axes
         type AreaPt = { y: number; x0: number; x1: number; defined: boolean }
-        const areaGen = d3Area()
+        const areaGen = d3Area().digits(digits)
           .y((d: unknown) => (d as AreaPt).y)
           .x0((d: unknown) => (d as AreaPt).x0)
           .x1((d: unknown) => (d as AreaPt).x1)
@@ -506,7 +515,7 @@ export function computeAreaPath(group: SceneGroup): {
       } else {
         // Vertical area (default)
         type AreaPt = { x: number; y0: number; y1: number; defined: boolean }
-        const areaGen = d3Area()
+        const areaGen = d3Area().digits(digits)
           .x((d: unknown) => (d as AreaPt).x)
           .y0((d: unknown) => (d as AreaPt).y0)
           .y1((d: unknown) => (d as AreaPt).y1)
@@ -550,9 +559,9 @@ export function computeAreaPath(group: SceneGroup): {
             const q = pts[j]!
             if (!q.defined) break
             if (isHorizontal) {
-              path += `L${num3(q.val2)},${num3(q.pos)}`
+              path += `L${n3(q.val2)},${n3(q.pos)}`
             } else {
-              path += `L${num3(q.pos)},${num3(q.val2)}`
+              path += `L${n3(q.pos)},${n3(q.val2)}`
             }
           }
           path += 'Z'
@@ -562,16 +571,16 @@ export function computeAreaPath(group: SceneGroup): {
       }
       if (!penDown) {
         if (isHorizontal) {
-          path += `M${num3(p.val)},${num3(p.pos)}`
+          path += `M${n3(p.val)},${n3(p.pos)}`
         } else {
-          path += `M${num3(p.pos)},${num3(p.val)}`
+          path += `M${n3(p.pos)},${n3(p.val)}`
         }
         penDown = true
       } else {
         if (isHorizontal) {
-          path += `L${num3(p.val)},${num3(p.pos)}`
+          path += `L${n3(p.val)},${n3(p.pos)}`
         } else {
-          path += `L${num3(p.pos)},${num3(p.val)}`
+          path += `L${n3(p.pos)},${n3(p.val)}`
         }
       }
     }

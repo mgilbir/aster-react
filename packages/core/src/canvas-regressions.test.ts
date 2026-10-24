@@ -5,6 +5,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { compileChart, evaluateChart } from './index.js'
+import { renderSceneToSvg } from './render.js'
 import { renderSceneToCanvas, renderSceneToCanvasAppend, snapshotCanvasScene } from './canvas.js'
 import { createChartStream } from './stream.js'
 import { makeRecorder, diffPaintMultisets } from './canvas-record.testlib.js'
@@ -152,5 +153,71 @@ describe('C96: the append path never serialises item arrays', () => {
     }
     expect(appended).toBeGreaterThan(5)
     expect(calls).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Nightly Firefox parity: a line/area is drawn from the UNROUNDED coordinates
+// ---------------------------------------------------------------------------
+
+describe('line and area canvas paths use full-precision coordinates (vega canvas parity)', () => {
+  // vega's canvas draws a line/area through d3-shape with the canvas as the path context (no
+  // rounding); only its SVG `d` is rounded to 3 decimals. Rounding the canvas path moved vertices by up
+  // to 5e-4px, which Firefox's rasteriser amplified at acute miter joins (vlx-order-channel-line,
+  // vlx-tr-window: 0.09% of pixels differ, bit-exact once the coordinates match).
+  const pts = [
+    { x: 85.71428571428571, y: 133.33333333333334 },
+    { x: 300, y: 0.0004999 },
+    { x: 171.42857142857142, y: 88.88888888888889 },
+    { x: 0, y: 155.55555555555557 },
+  ]
+  const polyOf = (records: ReturnType<typeof makeRecorder>['records'], op: 'fill' | 'stroke'): number[] =>
+    records.filter((r) => r.op === op).flatMap((r) => r.polys!.flatMap((p) => p.pts))
+  const flat = (xy: Array<{ x: number; y: number }>): number[] => xy.flatMap((p) => [p.x + 8, p.y + 5])
+
+  for (const interpolate of [undefined, 'monotone', 'step']) {
+    it(`line (${interpolate ?? 'linear'}): no coordinate is rounded; the SVG still is`, () => {
+      const items = pts.map((p) => ({ ...p, stroke: '#4c78a8', strokeWidth: 2, ...(interpolate ? { interpolate } : {}) }))
+      const scene = sceneOf([mark('line', items)])
+      const { ctx, records } = makeRecorder()
+      renderSceneToCanvas(scene, ctx)
+      const drawn = polyOf(records, 'stroke')
+      expect(drawn.length).toBeGreaterThan(0)
+      // every raw vertex coordinate appears verbatim among the drawn points
+      // step/monotone synthesise vertices; only the linear form passes the input vertices through
+      if (!interpolate) for (const v of flat(pts)) expect(drawn.some((d) => Math.abs(d - v) < 1e-9)).toBe(true)
+      expect(drawn.some((d) => Math.abs(d * 1000 - Math.round(d * 1000)) > 1e-6)).toBe(true)
+      expect(renderSceneToSvg(scene)).toContain('85.714,133.333')
+    })
+  }
+
+  it('line vertices are drawn verbatim (linear)', () => {
+    const items = pts.map((p) => ({ ...p, stroke: '#000', strokeWidth: 2 }))
+    const { ctx, records } = makeRecorder()
+    renderSceneToCanvas(sceneOf([mark('line', items)]), ctx)
+    expect(polyOf(records, 'stroke')).toEqual(flat(pts))
+  })
+
+  it('area outline is not rounded either; the SVG still is', () => {
+    const items = pts.map((p) => ({ x: p.x, y: p.y, y2: 140, fill: '#4c78a8' }))
+    const scene = sceneOf([mark('area', items)])
+    const { ctx, records } = makeRecorder()
+    renderSceneToCanvas(scene, ctx)
+    const drawn = polyOf(records, 'fill')
+    for (const v of flat(pts)) expect(drawn.some((d) => Math.abs(d - v) < 1e-9)).toBe(true)
+    expect(renderSceneToSvg(scene)).toContain('85.714,133.333')
+  })
+})
+
+describe('shape generators: .digits() works on line and area (d3-shape withPath)', () => {
+  it('digits(null) keeps full precision, digits(1) rounds, and no argument reads it back', async () => {
+    const { line, area } = await import('./shape.js')
+    const data = [{ x: 1.23456, y: 2.34567 }, { x: 3.45678, y: 4.56789 }]
+    const l = line().x((d) => (d as { x: number }).x).y((d) => (d as { y: number }).y)
+    expect(l.digits(null).digits()).toBe(null)
+    expect(l(data)).toBe('M1.23456,2.34567L3.45678,4.56789')
+    expect(l.digits(1)(data)).toBe('M1.2,2.3L3.5,4.6')
+    const a = area().x((d) => (d as { x: number }).x).y0(() => 0).y1((d) => (d as { y: number }).y)
+    expect(a.digits(null)(data)).toContain('1.23456')
   })
 })

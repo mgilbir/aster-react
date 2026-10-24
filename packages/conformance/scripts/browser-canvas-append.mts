@@ -38,13 +38,20 @@ export async function runAppendPixelOracle(
 import { canvasScenario } from ${JSON.stringify(join(CORE_SRC, 'canvas-append-scenario.testlib.ts'))}
 import { renderSceneToCanvas, renderSceneToCanvasAppend, snapshotCanvasScene } from ${JSON.stringify(join(CORE_SRC, 'canvas.ts'))}
 
+// Both canvases are software-backed (willReadFrequently). This oracle reads live back after EVERY
+// step but ref only once, and WebKit rasterises the same draw commands differently once a canvas
+// has been read back (anti-aliased edges differ, e.g. 76 pixels of two overlapping 1px rules; replaying
+// the recorded command streams with and without a mid-stream getImageData reproduces it with no Aster
+// code involved). Giving both canvases one backing removes that browser artefact and keeps the
+// comparison strict: any real append/full-repaint difference still fails (verified by planting one).
+const RF = { willReadFrequently: true }
 function mk(scene) {
   const c = document.createElement('canvas')
   c.width = Math.max(1, Math.round(scene.width)); c.height = Math.max(1, Math.round(scene.height))
   return c
 }
 function fullPaint(canvas, scene) {
-  const ctx = canvas.getContext('2d')
+  const ctx = canvas.getContext('2d', RF)
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   renderSceneToCanvas(scene, ctx, { dpr: 1 })
 }
@@ -55,14 +62,14 @@ window.__runAppend = (seed, steps, driver) => {
     if (live == null) live = mk(st.scene)
     if (live.width !== Math.round(st.scene.width) || live.height !== Math.round(st.scene.height)) { live = mk(st.scene); snap = null }
     let how = 'full repaint'
-    if (snap != null && renderSceneToCanvasAppend(snap, st.scene, live.getContext('2d'), { dpr: 1 })) { how = 'append path'; appended++ }
+    if (snap != null && renderSceneToCanvasAppend(snap, st.scene, live.getContext('2d', RF), { dpr: 1 })) { how = 'append path'; appended++ }
     else fullPaint(live, st.scene)
     snap = snapshotCanvasScene(st.scene)
     const ref = mk(st.scene)
     fullPaint(ref, st.fresh())
     if (ref.width !== live.width || ref.height !== live.height) return { appended, error: 'step ' + st.step + ': canvas size differs from the fresh scene (' + live.width + 'x' + live.height + ' vs ' + ref.width + 'x' + ref.height + ')' }
-    const a = live.getContext('2d').getImageData(0, 0, live.width, live.height).data
-    const b = ref.getContext('2d').getImageData(0, 0, ref.width, ref.height).data
+    const a = live.getContext('2d', RF).getImageData(0, 0, live.width, live.height).data
+    const b = ref.getContext('2d', RF).getImageData(0, 0, ref.width, ref.height).data
     let bad = 0, x1 = 1e9, y1 = 1e9, x2 = -1, y2 = -1
     for (let i = 0; i < a.length; i += 4) {
       if (a[i] !== b[i] || a[i + 1] !== b[i + 1] || a[i + 2] !== b[i + 2] || a[i + 3] !== b[i + 3]) {
