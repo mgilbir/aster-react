@@ -4,6 +4,7 @@
  * achieved by running vega-lite.compile in the app build / dev (oracle).
  */
 import { dict, ownGet } from './util.js'
+import { checkDataReferences, normalizeSpecLists } from './spec-structure.js'
 import { mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
 import type {
   CompiledAxis,
@@ -26,10 +27,15 @@ import type {
 
 export type { SizeSpec }
 
-export function compileChart(rawSpec: VgSpec): CompiledChart {
-  if (!rawSpec || typeof rawSpec !== 'object') {
+export function compileChart(givenSpec: VgSpec): CompiledChart {
+  if (!givenSpec || typeof givenSpec !== 'object') {
     throw new Error('[aster] compileChart expects a Vega spec object')
   }
+  // vega-parser reads every scope list through vega-util `array()` and refuses a spec that uses a data
+  // set it never declared (`Undefined data set name`) before any view exists: same here, before anything runs.
+  const rawSpec = normalizeSpecLists(givenSpec)
+  checkDataReferences(rawSpec)
+  markSeq = 0
   // Vega parses a view with mergeConfig(defaultConfig(), spec.config): every
   // default below (mark, axis, legend, title, style, range...) is read from this
   // merged config, exactly as upstream does (see config-defaults.ts).
@@ -75,7 +81,6 @@ export function compileChart(rawSpec: VgSpec): CompiledChart {
   }
 
   const scales: CompiledScale[] = []
-  if (spec.scales != null && !Array.isArray(spec.scales)) throw new Error('[aster] spec.scales must be an array of scale definitions')
   for (const s of (spec.scales as Array<Record<string, unknown>>) ?? []) {
     if (s === null || typeof s !== 'object' || Array.isArray(s)) throw new Error('[aster] a scale definition must be an object')
     scales.push(compileScale(s))
@@ -432,6 +437,7 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
     limit: (spec.limit as number | undefined) ?? (cfg.limit as number | undefined),
     lineBreak: (spec.lineBreak as string | undefined) ?? (cfg.lineBreak as string | undefined),
     frame: (spec.frame as string | undefined) ?? (cfg.frame as string | undefined),
+    ...((spec.aria ?? cfg.aria) === false ? { aria: false } : {}),
     encode: spec.encode as CompiledTitle['encode'],
   }
 }
@@ -571,12 +577,16 @@ function normalizeFrom(from: CompiledMark['from']): CompiledMark['from'] {
   return { ...from, facet: { ...facet, groupby } } as CompiledMark['from']
 }
 
+// (reset per chart: the same spec compiles to the same numbers, so scenes of equal charts are equal)
+let markSeq = 0
+
 function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>, scopeScales: CompiledScale[] = []): CompiledMark {
   const m = { ...m0 }
   if (cfgStyle || cfgMarktype) applyStyleDefaults(m, cfgStyle ?? {}, cfgMarktype)
   const out: CompiledMark = {
     type: m.type as string,
     name: (m.name as string) ?? 'marks',
+    seq: markSeq++,
   }
   // Vega evaluates `enter` when an item is created and `update` on every
   // pulse; in static rendering every item is created, so the effective set is
@@ -587,6 +597,11 @@ function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Reco
     out.encode = { ...enc, update: merged }
   }
   if (m.role !== undefined) out.role = m.role as string
+  // what the SVG container says about the mark (vega-scenegraph cssClass / ariaMarkAttributes): the name the SPEC gave it
+  // (`name` above defaults to 'marks'; vega adds no class then), its description, `aria: false`
+  if (m.name != null) out.userName = String(m.name)
+  if (typeof m.description === 'string') out.description = m.description
+  if (m.aria === false) out.aria = false
   if (m.style !== undefined) out.style = m.style as string | string[]
   if (m.from !== undefined) out.from = normalizeFrom(m.from as CompiledMark['from'])
   if (m.clip !== undefined) out.clip = m.clip as boolean

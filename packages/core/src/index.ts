@@ -40,6 +40,7 @@ export {
   type StreamStats,
 } from './stream.js'
 export type { ChartInfo } from './runtime.js'
+import './guide-caption.js' // (installs the guide captions renderSceneToSvg quotes in aria-label)
 export { renderSceneToSvg } from './render.js'
 export { consoleLogger, type Logger } from './logger.js'
 export { ExpressionParseError, registerExpressionFunction } from './expression.js'

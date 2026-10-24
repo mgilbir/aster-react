@@ -742,6 +742,8 @@ interface AxisLegendResult {
 /** Resolve a guide string/signal value for accessibility metadata. */
 function guideString(ctx: EvalContext, value: unknown): string | undefined {
   if (typeof value === 'string') return value
+  // (a numeric format is read as the specifier of its digits, like d3: `42` is a width of 42)
+  if (typeof value === 'number') return String(value)
   if (value && typeof value === 'object' && typeof (value as { signal?: unknown }).signal === 'string') {
     try {
       const v = ctx.runtime.expr(String((value as { signal: string }).signal))({}, ctx.signalParams)
@@ -826,6 +828,9 @@ function buildAxisAndLegend(
       ;(wrapped as unknown as { aria?: boolean; grid?: boolean; format?: string; formatType?: string }).formatType = guideString(ctx, axis.formatType)
       const at = guideTitle(ctx, axis.title)
       if (at) (wrapped as unknown as { title?: string }).title = at
+      // the axis' `description` is the aria-label of its container (vega-scenegraph ariaGuide: mark.description first)
+      const adesc = (axis as { description?: unknown }).description
+      if (typeof adesc === 'string') wrapped.description = adesc
       groups.push(wrapped)
       anchorItems.push(wrapped)
     }
@@ -850,6 +855,8 @@ function buildAxisAndLegend(
         ;(group as unknown as { aria?: boolean }).aria = (legend as { aria?: boolean }).aria
         const lt = guideTitle(ctx, legend.title)
         if (lt) (group as unknown as { title?: string }).title = lt
+        const ldesc = (legend as { description?: unknown }).description
+        if (typeof ldesc === 'string') group.description = ldesc
         const g = group as unknown as {
           legendScale?: string; legendChannels?: string[]; legendType?: string
           legendFormat?: string; legendFormatType?: string
@@ -859,17 +866,7 @@ function buildAxisAndLegend(
         g.legendScale = g.legendChannels.map((k) => String((legend as Record<string, unknown>)[k]))[0]
         g.legendFormat = guideString(ctx, (legend as Record<string, unknown>).format)
         g.legendFormatType = guideString(ctx, (legend as Record<string, unknown>).formatType)
-        const st = g.legendScale ? (ctx.scaleTypes.get(g.legendScale) ?? ctx.chart.scales.find((sc) => sc.name === g.legendScale)?.type) : undefined
-        const discrete = st === 'band' || st === 'point' || st === 'ordinal' || st === 'bin-ordinal'
-        const discretizing = st === 'threshold' || st === 'quantize' || st === 'quantile'
-        const color = g.legendChannels.some((k) => k === 'fill' || k === 'stroke')
-        const explicitGradient = legend.type === 'gradient' || legend.own?.gradientLength != null
-        g.legendType = legend.type === 'symbol'
-          ? 'symbol'
-          : explicitGradient ? 'gradient'
-            : color && discretizing ? 'discrete'
-              : color && st != null && !discrete ? 'gradient'
-                : 'symbol'
+        // (the legend type is the kind of legend the builder drew: gradient, discrete bands or symbols)
       }
       return { legend, group }
     })
@@ -1844,6 +1841,7 @@ function buildTitleGroup(
     x,
     y,
     items: textChildren,
+    ...(title.aria === false ? { aria: false } : {}),
   }
 }
 
@@ -3345,6 +3343,8 @@ function evaluateMark(
   ctx: EvalContext,
   prevGroup?: SceneGroup | null,
 ): SceneGroup | SceneGroup[] | null {
+  // a scale or an encode that threw stopped vega's run: the marks after it were never joined, so they are not in the scenegraph
+  if (ctx.encodeAborted) return null
   if (mark.type === 'group') {
     return buildGroupMark(mark, ctx)
   }
@@ -3590,6 +3590,7 @@ function evaluateMark(
     items,
     __source: mark.from?.data,
     ...(encodesHref(mark) ? { hasLinks: true } : {}),
+    ...markContainerInfo(mark),
   }
   if (carriedBounds) {
     for (const it of addedItems) carriedBounds.union(boundLeaf(new Bounds(), it))
@@ -3605,6 +3606,11 @@ function evaluateMark(
  * renderers additionally sanitize whatever they are handed (`sanitizeHref`,
  * vega-loader's rule), so with no policy a script URL is still never linked.
  */
+function encodesDescription(mark: CompiledMark): boolean {
+  const enc = mark.encode as Record<string, Record<string, unknown> | undefined> | undefined
+  return !!enc && Object.values(enc).some((set) => set && 'description' in set)
+}
+
 function encodesHref(mark: CompiledMark): boolean {
   const enc = mark.encode as Record<string, Record<string, unknown> | undefined> | undefined
   return !!enc && Object.values(enc).some((set) => set && 'href' in set)
@@ -3689,6 +3695,30 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
  * header / footer / title groups vega-lite emits around a facet are groups like
  * any other (their `role` is what the enclosing grid layout keys on).
  */
+// The group items of one mark share its container in the SVG (vega-scenegraph draws a mark as one `<g>` holding one
+// item `<g>` per item), so each item records which mark it came from. Ids are per compiled mark.
+const MARK_IDS = new WeakMap<CompiledMark, number>()
+let nextMarkId = -1
+function markIdOf(mark: CompiledMark): number {
+  // (a mark from `compileChart` carries its position in the spec; a hand-built one gets a negative id of its own)
+  if (mark.seq !== undefined) return mark.seq
+  let id = MARK_IDS.get(mark)
+  if (id === undefined) MARK_IDS.set(mark, (id = nextMarkId--))
+  return id
+}
+
+/** What the SVG container of a mark says beyond its type (vega-scenegraph cssClass, ariaMarkAttributes, pointer-events). */
+function markContainerInfo(mark: CompiledMark): Partial<SceneGroup> {
+  const out: Partial<SceneGroup> = {}
+  if (mark.userName !== undefined) out.cssName = mark.userName
+  if (mark.type !== 'group' && mark.role !== undefined) out.markRole = mark.role
+  if (mark.description !== undefined) out.description = mark.description
+  if (encodesDescription(mark)) out.describes = true
+  if (mark.aria === false) out.aria = false
+  if (mark.interactive === false) out.interactive = false
+  return out
+}
+
 function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] {
   const sources = groupSources(mark, ctx)
   // one group item (and one scope) per datum / facet partition: bounded like any generated item (maxItems, the clock)
@@ -3751,7 +3781,7 @@ function groupItems(geo: SceneItem, w: number, h: number, content: SceneItem[]):
     if (GROUP_CORNER_KEYS.some((k) => rec[k])) {
       clipPathD = String(rectItemPath({ x: 0, y: 0, width: w, height: h, ...Object.fromEntries(GROUP_CORNER_KEYS.filter((k) => rec[k] !== undefined).map((k) => [k, rec[k]])) } as SceneItem))
     }
-    out.push({ marktype: 'group', role: 'scope', clip: true, ...(clipPathD ? { clipPathD } : {}), width: w, height: h, x: 0, y: 0, items: content as SceneNode[] } as unknown as SceneItem)
+    out.push({ marktype: 'group', role: 'scope', clip: true, contentClip: true, ...(clipPathD ? { clipPathD } : {}), width: w, height: h, x: 0, y: 0, items: content as SceneNode[] } as unknown as SceneItem)
   } else {
     pushAll(out, content)
   }
@@ -3848,6 +3878,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       ...paint,
       datum: src.datum,
       _scope: true,
+      markIndex: markIdOf(mark),
+      ...markContainerInfo(mark),
       ...(href != null ? { href: href as string } : {}),
       ...(markClip(mark, ctx) ? { markClip: true } : {}),
     } as unknown as SceneGroup
@@ -4388,6 +4420,7 @@ function placeLegendTitleLast(group: SceneGroup, legend: CompiledLegend, ctx: Ev
   for (const it of items) {
     if (it.text == null) { rest.push(it); continue }
     const isTitle = it._legendTitle === true
+    it._part = isTitle ? 'title' : 'label'
     const font = isTitle ? L.titleFont : L.labelFont
     const weight = isTitle ? L.titleFontWeight : L.labelFontWeight
     const style = isTitle ? L.titleFontStyle : L.labelFontStyle
@@ -4492,7 +4525,13 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
     const titleStr = String(legend.title ?? '')
     const items: SceneItem[] = []
     if (titleStr) items.push({ _legendTitle: true, text: titleStr, x: 0, y: 0, align: 'left', baseline: 'top', fill: '#000', fontSize: 11 })
-    return { marktype: 'group', role: 'legend', x: 0, y: 0, width: 0, height: 0, items }
+    // (the kind of legend it would have been: vega-parser's legendType, decided before any entry is built)
+    const channels = ['size', 'shape', 'fill', 'stroke', 'strokeWidth', 'strokeDash', 'opacity'].filter((k) => (legend as unknown as Record<string, unknown>)[k] != null)
+    const discretizing = scaleType === 'quantile' || scaleType === 'quantize' || scaleType === 'threshold' || scaleType === 'bin-ordinal'
+    const asType = legend.type != null ? legend.type : channels.length === 1 && (legend.fill != null || legend.stroke != null)
+      ? (VEGA_CONTINUOUS_SCALES.has(scaleType) ? 'gradient' : discretizing ? 'discrete' : 'symbol') : 'symbol'
+    const legendType = asType === 'gradient' && discretizing ? 'discrete' : asType
+    return { marktype: 'group', role: 'legend', legendType, x: 0, y: 0, width: 0, height: 0, items }
   }
   // Domain values. A continuous symbol legend (opacity, or a color scale
   // without a gradient) lists generated ticks, not just the domain endpoints.
@@ -4688,7 +4727,7 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
         const hLimit = (legend as { titleLimit?: number }).titleLimit
         items.push({ _legendTitle: true, text: titleStr0, x: hX, y: hY, align: hAlign as SceneItem['align'], fill: titleColor0, fontSize: titleFs0, ...(hLimit != null ? { limit: hLimit } : {}), ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
       }
-      items.push({ path: `M0,0h${gradientLength}v${thickness}h${-gradientLength}Z`, x: 0, y: titleH0, fill: `url(#${gradientIdH})`, stroke: gradStrokeColor, strokeWidth: gradStrokeWidth, opacity: gradOpacityProp ?? 1 })
+      items.push({ _part: 'gradient', path: `M0,0h${gradientLength}v${thickness}h${-gradientLength}Z`, x: 0, y: titleH0, fill: `url(#${gradientIdH})`, stroke: gradStrokeColor, strokeWidth: gradStrokeWidth, opacity: gradOpacityProp ?? 1 })
       const labelStartH = items.length
       for (const [ti, t] of tickNums.entries()) {
         const tNum = legendNum(t, 0)
@@ -4711,9 +4750,9 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
         bgW = Math.max(bgW, boundLeaf(new Bounds(), lab).x2)
       }
       bgW = Math.ceil(bgW)
-      items.splice(bgSlot, 0, { path: gradCRH && gradCRH > 0 ? roundedRectPath(bgX0, bgY0, bgW, bgH, Math.min(gradCRH, bgW / 2, bgH / 2)) : `M${bgX0},${bgY0}h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
+      items.splice(bgSlot, 0, { _part: 'bg', path: gradCRH && gradCRH > 0 ? roundedRectPath(bgX0, bgY0, bgW, bgH, Math.min(gradCRH, bgW / 2, bgH / 2)) : `M${bgX0},${bgY0}h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
       if (gradStops.length && !ctx._defs.some((d) => d.id === gradientIdH)) ctx._defs.push({ id: gradientIdH, colorStops: gradStops, direction: 'horizontal' })
-      const gradientGroup = { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: bgH, items } as SceneGroup
+      const gradientGroup = { marktype: 'group', role: 'legend', legendType: 'gradient', x: 0, y: 0, width: bgW, height: bgH, items } as SceneGroup
       // vega legendLayout boundStrokes the outer rect with the legend's OWN
       // stroke (legend.strokeColor) — the gradient rect's decorative #ddd
       // zero-width stroke is not the group's and must not expand the bounds.
@@ -4798,9 +4837,10 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
     const bgXV = borderColor0 != null ? 0.5 : 0
     const bgYV = borderColor0 != null ? 0.5 : 0
     const gradCRV = (legend as { cornerRadius?: number }).cornerRadius
-    items.push({ path: gradCRV && gradCRV > 0 ? roundedRectPath(bgXV, bgYV, boxW, boxH, Math.min(gradCRV, boxW / 2, boxH / 2)) : `M${bgXV},${bgYV}h${boxW}v${boxH}h-${boxW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
+    items.push({ _part: 'bg', path: gradCRV && gradCRV > 0 ? roundedRectPath(bgXV, bgYV, boxW, boxH, Math.min(gradCRV, boxW / 2, boxH / 2)) : `M${bgXV},${bgYV}h${boxW}v${boxH}h-${boxW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
     // Gradient rect at legend-relative (0, titleH), thickness x L
     items.push({
+      _part: 'gradient',
       path: `M0,0h${vThickness}v${L}h${-vThickness}Z`,
       x: contentX, y: gradPad + titleH,
       fill: `url(#${gradientId})`,
@@ -4865,6 +4905,7 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
     const group: SceneGroup = {
       marktype: 'group',
       role: 'legend',
+      legendType: 'gradient',
       x: 0,
       y: 0,
       width: boxW,
@@ -4921,12 +4962,12 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
       const bgH = titleH + bandCount * SWATCH_H
       const items: SceneItem[] = []
       // Background box
-      items.push({ path: `M0,0h${outerWidth}v${bgH}h-${outerWidth}Z`, x: 0, y: 0 })
+      items.push({ _part: 'bg', path: `M0,0h${outerWidth}v${bgH}h-${outerWidth}Z`, x: 0, y: 0 })
       if (titleStrB) items.push({ _legendTitle: true, text: titleStrB, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11, fontWeight: 'bold' })
       // Band swatches (top-to-bottom: last range color first)
       for (let i = 0; i < bandCount; i++) {
         const y = titleH + (bandCount - 1 - i) * SWATCH_H
-        items.push({ path: `M0,${y}h${SWATCH_W}v${SWATCH_H}h-${SWATCH_W}Z`, x: 0, y: 0, fill: String(rangeVals[i]), stroke: '#ddd', strokeWidth: 0, opacity: 1 })
+        items.push({ _part: 'band', path: `M0,${y}h${SWATCH_W}v${SWATCH_H}h-${SWATCH_W}Z`, x: 0, y: 0, fill: String(rangeVals[i]), stroke: '#ddd', strokeWidth: 0, opacity: 1 })
       }
       // Labels at breakpoints (skip the first which is empty)
       for (let i = 1; i < bandCount; i++) {
@@ -4935,7 +4976,7 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
       }
       // Empty label at the bottom
       items.push({ text: '', x: 18, y: titleH + bandCount * SWATCH_H - 2, align: 'left', fill: '#000', fontSize: 10 })
-      return { marktype: 'group', role: 'legend', x: 0, y: 0, width: outerWidth, height: bgH, items }
+      return { marktype: 'group', role: 'legend', legendType: 'discrete', x: 0, y: 0, width: outerWidth, height: bgH, items }
     }
   }
 
@@ -5327,7 +5368,7 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
       : legendBorderColor != null
         ? `M${bgX},${bgY}h${bgW}v${bgH}h-${bgW}Z`
         : `M0,0h${bgW}v${bgH}h-${bgW}Z`
-    items.push({ path: bgPath, x: 0, y: 0, ...(legendFillColor != null ? { fill: legendFillColor } : {}), ...(legendBorderColor != null ? { stroke: String(legendBorderColor) } : {}), ...(legendBorderWidth != null ? { strokeWidth: legendBorderWidth } : {}), ...(legendBorderDash != null ? { strokeDash: legendBorderDash } : {}) })
+    items.push({ _part: 'bg', path: bgPath, x: 0, y: 0, ...(legendFillColor != null ? { fill: legendFillColor } : {}), ...(legendBorderColor != null ? { stroke: String(legendBorderColor) } : {}), ...(legendBorderWidth != null ? { strokeWidth: legendBorderWidth } : {}), ...(legendBorderDash != null ? { strokeDash: legendBorderDash } : {}) })
     // vega's legendLayout boundStrokes the outer rect only for the legend's
     // own border stroke — symbol strokes must not expand the legend bounds.
     const borderStroke = legendBorderColor != null
@@ -5353,7 +5394,7 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
       // Raw-guide mode: the entry backgrounds are bound-derived boxes — the
       // layout never ran, so they stay degenerate placeholders (vega drops
       // them).
-      items.push({ path: ctx.rawGuides ? 'M0,0h0v0h0Z' : `M0,0h${colWc}v${eb.y2}h-${colWc}Z`, x: entryX + colOff, y: legendPad + off })
+      items.push({ _part: 'entry', path: ctx.rawGuides ? 'M0,0h0v0h0Z' : `M0,0h${colWc}v${eb.y2}h-${colWc}Z`, x: entryX + colOff, y: legendPad + off })
       // vega renders the legend entry symbol in the shape requested by the
       // legend's symbolType; the measured path (symDs) matches the painted one.
       // vega coerces the NaN encode positions to 0 (anchorPoint/translateItem
@@ -5361,7 +5402,7 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
       // so zero the NaN part here rather than poisoning the whole sum
       const symX = entryX + colOff + (xSymIs[i]! || 0)
       const symY = legendPad + off + (ySymIs[i]! || 0)
-      items.push({ ...symbolItemPaint(symPropsOf[i]!), path: symDs[i]!, x: symX, y: symY } as SceneItem)
+      items.push({ ...symbolItemPaint(symPropsOf[i]!), _part: 'symbol', path: symDs[i]!, x: symX, y: symY } as SceneItem)
       // clipHeight clips the entry's symbols with a clipPath over the
       // laid-out entry rect (vega's guideMark clip + SVGStringRenderer clip:
       // rect (0,0,entry.width,entry.height) in the entry's local frame)
@@ -5371,7 +5412,7 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
       const lblItem = lblItems[i]!
       items.push({ ...lblItem, x: entryX + colOff + ((lblItem.x as number) || 0), y: legendPad + off + ((lblItem.y as number) || 0) })
     }
-    const out: SceneGroup = { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: bgH, items }
+    const out: SceneGroup = { marktype: 'group', role: 'legend', legendType: 'symbol', x: 0, y: 0, width: bgW, height: bgH, items }
     ;(out as unknown as Record<string, unknown>)._borderStroke = borderStroke
     return out
 
@@ -5705,6 +5746,7 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       // Vega's axisLayout bounds union only the ticks and labels marks; the
       // grid mark never extends the axis bound (nor the view bounds).
       ;(item as Record<string, unknown>)._grid = true
+      item._part = 'grid'
       items.push(item)
     }
   }
@@ -5735,6 +5777,7 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       if (axis.tickDashOffset != null) tick.strokeDashOffset = axis.tickDashOffset
       if (axis.tickOpacity != null) tick.strokeOpacity = axis.tickOpacity
       applyGuideEncode(tick, encTicks, tickDatum(te, ti), ctx, guideOrigin)
+      tick._part = 'tick'
       tickItems.push(tick)
     }
     if (axis.labels !== false) {
@@ -5838,6 +5881,7 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       label.fill = axis.labelColor ?? '#000'
       if (axis.labelOpacity != null) label.fillOpacity = axis.labelOpacity
       applyGuideEncode(label, encLabels, tickDatum(te, ti), ctx, guideOrigin)
+      label._part = 'label'
       labels.push(label)
     }
   }
@@ -5882,6 +5926,7 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     if (axis.domainDashOffset != null) domainLine.strokeDashOffset = axis.domainDashOffset
     applyGuideEncode(domainLine, encDomain, guideDatum, ctx, guideOrigin)
     ;(domainLine as Record<string, unknown>)._domain = true
+    domainLine._part = 'domain'
     items.push(domainLine)
   }
 
@@ -6037,6 +6082,7 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     t.fill = titleColor ?? '#000'
     applyGuideEncode(t, encTitle, guideDatum, ctx, guideOrigin)
     ;(t as Record<string, unknown>)._title = true
+    t._part = 'title'
     items.push(t)
   }
 
@@ -6088,6 +6134,9 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     marktype: 'group',
     role: 'axis',
     items,
+    // the marks vega-parser's axis builds (grid, ticks, labels, domain, title; axis.js `datum`): the SVG draws a
+    // container for each, empty or not
+    parts: (['grid', 'ticks', 'labels', 'domain', 'title'] as const).filter((k) => guideDatum[k]).map((k) => ({ grid: 'grid', ticks: 'tick', labels: 'label', domain: 'domain', title: 'title' })[k]),
     // axis geometry for the vega-faithful bounds port (boundAxisGroup):
     // `range` is the spine extent along the axis line — vega's axis encode
     // sets `range: abs(span(range(scale)))`, the SCALE's absolute range span

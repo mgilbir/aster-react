@@ -36,7 +36,18 @@ const rows = (n: number, from = 0): Array<{ x: number; y: number }> =>
     return { x: (k % 1000) / 1000, y: ((k * 7) % 100) / 10 }
   })
 
-/** Valid Vega spec, accepted by both the aster compiler and `vega.parse`. */
+/**
+ * Valid Vega spec, accepted by both the aster compiler and `vega.parse`.
+ *
+ * The symbol fill is explicit on purpose. Vega paints a bare symbol with its default
+ * config fill (#4c78a8) and Aster does too since the default config is applied; before
+ * that, the Aster side painted NOTHING (fill none) while vega painted 100k circles, so a
+ * 100k SVG frame measured compositor raster on one engine and an empty layer on the
+ * other (77 ms -> 148 ms per item, 16.7 -> 33.4 ms dense, with no change in JS work).
+ * Stating the fill makes every build and both engines paint the same pixels, so the
+ * numbers are comparable across history. The JS-side regression guard is the dense
+ * DOM pass in `bench:incremental`.
+ */
 const SPEC = {
   $schema: 'https://vega.github.io/schema/vega/v6.json',
   width: 800, height: 500, padding: 0, autosize: 'none', background: 'white',
@@ -47,7 +58,7 @@ const SPEC = {
   ],
   marks: [{
     type: 'symbol', from: { data: 't' },
-    encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 8 } } },
+    encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 8 }, fill: { value: '#4c78a8' } } },
   }],
 }
 

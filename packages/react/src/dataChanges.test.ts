@@ -76,12 +76,18 @@ describe('contentEqual (C32)', () => {
     expect(contentEqual(a, b)).toBe(false)
     expect(contentEqual(a, a)).toBe(true)
   })
-  it('is fast on a big equal spec (one allocation-free pass)', () => {
+  it('a big spec costs one pass over its skeleton: data rows are by identity, other big arrays by content', () => {
     const rows = () => Array.from({ length: 100_000 }, (_, i) => ({ x: i, y: i * 2, c: 'a' }))
-    const a = { data: [{ name: 't', values: rows() }] }
-    const b = { data: [{ name: 't', values: rows() }] }
+    const shared = rows()
     const t0 = performance.now()
-    expect(contentEqual(a, b)).toBe(true)
+    expect(contentEqual({ data: [{ name: 't', values: shared }] }, { data: [{ name: 't', values: shared }] }, 0, false, true)).toBe(true)
+    // a re-created equal rows array is a new input (the session's row diff finds it unchanged), without 100k row compares here
+    expect(contentEqual({ data: [{ name: 't', values: rows() }] }, { data: [{ name: 't', values: rows() }] }, 0, false, true)).toBe(false)
+    expect(contentEqual({ data: [{ name: 't', values: shared }] }, { data: [{ name: 't', values: shared.slice() }] })).toBe(true) // (content mode, for streams)
     expect(performance.now() - t0).toBeLessThan(500)
+    const big = () => ({ scales: [{ name: 's', domain: Array.from({ length: 100_000 }, (_, i) => i) }] })
+    const t1 = performance.now()
+    expect(contentEqual(big(), big())).toBe(true)
+    expect(performance.now() - t1).toBeLessThan(500)
   })
 })

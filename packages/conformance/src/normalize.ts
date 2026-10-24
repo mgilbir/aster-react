@@ -51,9 +51,19 @@
  *                    are resolved to the referenced content. Unreferenced defs
  *                    paint nothing and are ignored.
  *   N-nonvisual      class, role, aria-*, tabindex, pointer-events, xmlns*,
- *                    version, <title>/<desc> carry no pixels. (aria-* is gated
- *                    by the a11y-parity gate instead; pointer-events by the
- *                    interaction tests.)
+ *                    version, <title>/<desc> carry no pixels, so they are not part
+ *                    of a paint record. class, role and aria-* are compared
+ *                    separately as the STRUCTURE (see N-structure); pointer-events
+ *                    is gated by the interaction tests.
+ *   N-structure      what a screen reader sees is compared alongside the pixels: every
+ *                    <g> (its class, role, aria-roledescription, aria-label, aria-hidden),
+ *                    the background / foreground path of every group item, and every
+ *                    shape that carries role / aria-* , in document order and nesting
+ *                    depth. Not compared: transform, clip-path, pointer-events and
+ *                    the geometry of a group item (all in the paint records or
+ *                    interaction), shapes without ARIA (their count and geometry are
+ *                    paint records), <a> wrappers (transparent), <defs>. aria-label
+ *                    text is compared after XML decoding.
  *   N-bg             a first-painted, opaque, stroke-less rectangle covering
  *                    the whole canvas IS the canvas background (nothing can be
  *                    painted under it), and an `svg style="background-color"`
@@ -84,6 +94,11 @@ const LIN_PRECISION = 4
 export interface CanonicalResult {
   records: string[]
   root: string | null
+  /**
+   * The accessibility structure (N3): one line per container and per element that carries ARIA, in
+   * document order, indented by depth. See `structureLine`.
+   */
+  structure: string[]
 }
 
 type Mat = [number, number, number, number, number, number]
@@ -663,6 +678,35 @@ const SHAPE_ATTRS: Record<string, string[]> = {
   text: ['x', 'y', 'dx', 'dy'],
 }
 
+// -------------------------------------------------------------------- structure (N-structure)
+
+/** XML character references and the five named entities, decoded (N-entities for attribute text). */
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&#x([0-9a-f]+);/gi, (_m, h: string) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#([0-9]+);/g, (_m, d: string) => String.fromCodePoint(Number(d)))
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+}
+
+/**
+ * The structure line of one element, or null when it is not part of the structure. The line never carries
+ * geometry or paint (those are the records): class tokens, role, aria-roledescription, aria-label and
+ * aria-hidden only.
+ */
+function structureLine(tag: string, a: Record<string, string>): string | null {
+  const cls = a['class']?.trim().split(/\s+/).join('.')
+  const aria = [
+    a['role'] !== undefined ? `role=${a['role']}` : '',
+    a['aria-roledescription'] !== undefined ? `rd=${a['aria-roledescription']}` : '',
+    a['aria-label'] !== undefined ? `label=${JSON.stringify(decodeEntities(a['aria-label']))}` : '',
+    a['aria-hidden'] !== undefined ? `hidden=${a['aria-hidden']}` : '',
+  ].filter(Boolean).join(' ')
+  if (tag === 'g') return `g${cls ? ` .${cls}` : ''}${aria ? ` ${aria}` : ''}`
+  if (tag === 'path' && (cls === 'background' || cls === 'foreground')) return `path.${cls}${aria ? ` ${aria}` : ''}`
+  // any other element is in the structure only when it carries ARIA of its own
+  return aria ? `${tag}${cls ? ` .${cls}` : ''} ${aria}` : null
+}
+
 // -------------------------------------------------------------------- main
 
 export function canonicalizeSvg(svg: string): CanonicalResult {
@@ -682,9 +726,14 @@ export function canonicalizeSvg(svg: string): CanonicalResult {
   const styleBg = (/(?:^|;)\s*background(?:-color)?\s*:\s*([^;]+)/.exec(ra['style'] ?? ''))?.[1]
   if (styleBg !== undefined) bg = canonPaint(styleBg)
 
-  const walk = (el: XmlEl, parentM: Mat, parentEff: Record<string, string>, anc: string[]) => {
+  const structure: string[] = []
+  const walk = (el: XmlEl, parentM: Mat, parentEff: Record<string, string>, anc: string[], depth: number) => {
     const a = attrsOf(el)
     const m = mul(parentM, parseTransform(a['transform']))
+    // N-structure: the root <svg> and <a> wrappers are transparent
+    const line = el === rootEl || el.tag === 'a' || NONRENDERING.has(el.tag) ? null : structureLine(el.tag, el.attrs)
+    if (line !== null) structure.push(`${'  '.repeat(depth)}${line}`)
+    const childDepth = line !== null && el.tag === 'g' ? depth + 1 : depth
     const eff = { ...parentEff }
     for (const k of INHERITED) if (a[k] !== undefined) eff[k] = a[k]!
     if (CONTAINERS.has(el.tag)) {
@@ -695,7 +744,7 @@ export function canonicalizeSvg(svg: string): CanonicalResult {
       const legal = el === rootEl ? ROOT_ATTRS : el.tag === 'a' ? LINK_ATTRS : NO_ATTRS
       const effects = ownEffects(a, legal, m, ctx)
       const nextAnc = effects.length ? [...anc, `{${effects.join(';')}}`] : anc
-      for (const c of el.children) if (typeof c !== 'string') walk(c, m, eff, nextAnc)
+      for (const c of el.children) if (typeof c !== 'string') walk(c, m, eff, nextAnc, childDepth)
       return
     }
     if (NONRENDERING.has(el.tag)) return
@@ -726,7 +775,7 @@ export function canonicalizeSvg(svg: string): CanonicalResult {
   }
 
   const rootEff: Record<string, string> = {}
-  walk(rootEl, IDENT, rootEff, [])
+  walk(rootEl, IDENT, rootEff, [], 0)
 
   // N-bg: the first painted record, if it is an opaque full-canvas rect, is the background.
   if (recs.length && recs[0]!.isRect && !/^rgba\(/.test(recs[0]!.bgFill ?? '')) {
@@ -739,7 +788,7 @@ export function canonicalizeSvg(svg: string): CanonicalResult {
   }
 
   const root = `svg|${num(rootW)}|${num(rootH)}|${(ra['viewBox'] ?? '').trim().split(/[\s,]+/).map((v) => num(Number(v))).join(' ')}|bg=${bg}`
-  return { records: paintOrderNormalForm(recs), root }
+  return { records: paintOrderNormalForm(recs), root, structure }
 }
 
 /** N-degenerate: path whose points all coincide and whose stroke cannot draw a zero-length subpath. */
@@ -754,9 +803,24 @@ function isDegenerate(d: string, eff: Record<string, string>): boolean {
   return !strokeOn || (eff['stroke-linecap'] ?? 'butt') === 'butt'
 }
 
+/** The first lines where two structures diverge, with a line of context before. */
+function diffStructure(a: string[], b: string[]): string[] {
+  if (a.length === b.length && a.every((l, i) => l === b[i])) return []
+  let i = 0
+  while (i < a.length && i < b.length && a[i] === b[i]) i++
+  const ctx = i > 0 ? [`  ${a[i - 1]}`] : []
+  return [
+    `structure: ${a.length} oracle lines vs ${b.length} aster lines; first divergence at line ${i}`,
+    ...ctx.map((l) => `structure:   ${l}`),
+    `structure: - oracle: ${a[i] ?? '(end)'}`,
+    `structure: + aster:  ${b[i] ?? '(end)'}`,
+  ]
+}
+
 export function diffCanonical(a: CanonicalResult, b: CanonicalResult): string[] {
   const diffs: string[] = []
   if (a.root !== b.root) diffs.push(`root: ${a.root} vs ${b.root}`)
+  for (const d of diffStructure(a.structure, b.structure)) diffs.push(d)
   if (a.records.length === b.records.length && a.records.every((r, i) => r === b.records[i])) return diffs
   // Multiset difference first: a missing/extra record would otherwise shift every index.
   const counts = new Map<string, number>()

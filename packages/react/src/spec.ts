@@ -29,14 +29,15 @@ export function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
 const MAX_COMPARE_DEPTH = 64
 
 /**
- * Structural equality of JSON-shaped values (specs, limits): primitives by
+ * Structural equality of JSON-shaped values (specs, limits). With `rowsById` the inline `values` of a data set
+ * (an object inside a `data` list) are compared by identity: primitives by
  * `Object.is`, arrays and plain objects member by member, and anything else
  * (functions, Map/Set, class instances, typed arrays) by identity. A structure
  * deeper than 64 levels (or cyclic) compares unequal. Allocation-free and stops at
  * the first difference, so re-checking an equal 100k-row inline spec costs one pass
  * and a changed one usually a few steps.
  */
-export function contentEqual(a: unknown, b: unknown, depth = 0): boolean {
+export function contentEqual(a: unknown, b: unknown, depth = 0, dataset = false, rowsById = false): boolean {
   if (Object.is(a, b)) return true
   if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object') return false
   if (depth > MAX_COMPARE_DEPTH) return false
@@ -46,7 +47,7 @@ export function contentEqual(a: unknown, b: unknown, depth = 0): boolean {
     const x = a as unknown[]
     const y = b as unknown[]
     if (x.length !== y.length) return false
-    for (let i = 0; i < x.length; i++) if (!contentEqual(x[i], y[i], depth + 1)) return false
+    for (let i = 0; i < x.length; i++) if (!contentEqual(x[i], y[i], depth + 1, dataset, rowsById)) return false
     return true
   }
   const protoA = Object.getPrototypeOf(a) as unknown
@@ -57,7 +58,14 @@ export function contentEqual(a: unknown, b: unknown, depth = 0): boolean {
   for (const k in x) {
     if (!Object.prototype.hasOwnProperty.call(x, k)) continue
     count++
-    if (!Object.prototype.hasOwnProperty.call(y, k) || !contentEqual(x[k], y[k], depth + 1)) return false
+    if (!Object.prototype.hasOwnProperty.call(y, k)) return false
+    // a data set's inline rows are compared by identity: a re-created equal array is a new input for the session,
+    // whose row diff (diffRows) already finds "nothing changed" without this pass comparing every row a second time
+    if (rowsById && dataset && k === 'values' && Array.isArray(x[k])) {
+      if (!Object.is(x[k], y[k])) return false
+      continue
+    }
+    if (!contentEqual(x[k], y[k], depth + 1, k === 'data', rowsById)) return false
   }
   let other = 0
   for (const k in y) if (Object.prototype.hasOwnProperty.call(y, k)) other++
@@ -75,6 +83,18 @@ export function contentEqual(a: unknown, b: unknown, depth = 0): boolean {
 export function useStableContent<T extends object | undefined>(value: T): T {
   const ref = React.useRef<T>(value)
   if (ref.current !== value && !contentEqual(ref.current, value)) ref.current = value
+  return ref.current
+}
+
+/**
+ * `useStableContent` for the spec of a chart that evaluates through a scene session: the skeleton is compared by
+ * content, the inline rows of a data set by identity. A re-created equal rows array is a new input; the session's row diff
+ * (diffRows) finds it unchanged, so the rows are not compared a second time here (that pass cost 1.3 ms at 10k rows).
+ * Streams keep `useStableSpec`: a spec rebuilt every render must not restart them.
+ */
+export function useStableSpecRows(spec: VgSpec): VgSpec {
+  const ref = React.useRef<VgSpec>(spec)
+  if (ref.current !== spec && !contentEqual(ref.current, spec, 0, false, true)) ref.current = spec
   return ref.current
 }
 

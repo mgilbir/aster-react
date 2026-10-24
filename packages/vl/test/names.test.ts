@@ -38,7 +38,8 @@ describe('field names reach expressions only through JSON-escaped datum[...] rea
         for (const k of ['expr', 'signal'] as const) if (typeof o[k] === 'string') exprs.push(o[k] as string)
       }
       expect(exprs.length).toBeGreaterThan(0)
-      const known = new Set<string>([n.key])
+      // (the flat column the compiler materializes for a key that is not a plain identifier is its own too)
+      const known = new Set<string>([n.key, flatField(n.raw).key])
       for (const e of exprs) {
         for (const read of reads(e)) {
           // a datum read is either the user's key or a field this compiler generated
