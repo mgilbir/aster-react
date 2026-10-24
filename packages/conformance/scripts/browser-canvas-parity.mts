@@ -36,8 +36,9 @@ const BROWSER = arg('browser', 'chromium') as 'chromium' | 'firefox' | 'webkit'
 //   MEAN   and at most this mean per-channel difference over ALL pixels
 // Against vega's own canvas, 327 of 420 corpus entries are BIT-EXACT; the rest of the
 // agreeing entries differ only by the 3-decimal rounding of path coordinates (Aster
-// paints from the same path string the SVG renderer emits, vega's canvas from the
-// unrounded numbers). Worst such noise measured: 50 pixels over PIXEL out of 127,100
+// paints most marks from the same path string the SVG renderer emits, vega's canvas from the
+// unrounded numbers; line and area marks are the exception: they are drawn unrounded, because
+// Firefox amplified the rounding at acute miter joins). Worst such noise measured: 50 pixels over PIXEL out of 127,100
 // (RATIO 3.9e-4) and mean 0.029; the limits below sit just above that.
 // WebKit's rasteriser rounds path coverage differently from Skia: its worst measured noise
 // on the same corpus is 0.08% / mean 0.06 (line-curve-cardinal-tension-0-3.vg), so its
