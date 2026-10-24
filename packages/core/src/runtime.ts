@@ -41,6 +41,8 @@ import { dict, ownGet, minOf, maxOf, pushAll, SYMBOL_DEFAULT_SIZE } from './util
 import { applyImageUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, type PulseChange } from './pulse.js'
+import { fieldsOf, groupKeyFn } from './transform-agg.js'
+import { flattenLength } from './transform-basic.js'
 import { trellisLayout, measureBounds } from './trellis.js'
 import { baselineOffset, boundAxisGroup, boundGroupItem, boundLeaf, boundText, Bounds } from './bounds.js'
 import { itemTextWidth, nominalTextWidth, type FontProps } from './text-metrics.js'
@@ -177,8 +179,22 @@ function beginTxn(chart: CompiledChart): EvalTxn {
   return { prev, gen: (committed?.gen ?? 0) + 1, claimed: new Set() }
 }
 
+/** The partition key vega's aggregate/joinaggregate use (`String(a)|b|...`): the incremental grouping must equal the fresh one. */
 function groupKeyOf(row: Row, groupby: string[]): string {
-  return groupby.map((k) => String(row[k])).join('\u0000')
+  return groupKeyFn(groupby)(row)
+}
+
+/**
+ * Whether an aggregate / joinaggregate can be re-derived group by group.
+ * A cross-product, a custom `key` accessor or a bootstrap interval (ci0/ci1
+ * draws from one pseudo-random stream shared by all groups, so a group's value
+ * depends on the groups before it) must be recomputed from scratch.
+ */
+function groupwiseIncremental(t: CompiledTransform): boolean {
+  const p = t as { cross?: unknown; key?: unknown; ops?: unknown }
+  if (p.cross || p.key != null) return false
+  const ops = Array.isArray(p.ops) ? p.ops : []
+  return !ops.includes('ci0') && !ops.includes('ci1')
 }
 
 function buildAggState(input: Row[], groupby: string[], out: Row[]): AggState {
@@ -2102,13 +2118,9 @@ function foldPulse(
 interface FlattenState { sizes: number[]; offsets: number[] }
 
 function flattenSize(row: Row, fields: string[]): number {
-  let maxlen = 0
-  for (const f of fields) {
-    const a = (row as Record<string, unknown>)[f]
-    const len = Array.isArray(a) ? a.length : (a as { length?: number })?.length
-    maxlen = len == null ? NaN : Math.max(maxlen, len)
-  }
-  return Number.isFinite(maxlen) && maxlen > 0 ? maxlen : 0
+  // vega's output length for one tuple; `fields` may be access paths (`a.b`, `a[0]`)
+  const maxlen = flattenLength(fieldsOf(fields).map((f) => f(row)))
+  return maxlen > 0 ? maxlen : 0
 }
 
 function flattenPulse(
@@ -2204,11 +2216,6 @@ function aggregatePulse(
   // previous position.
   const outOrder = [...keyToIdx.keys()]
 
-  const agg = t as Record<string, unknown>
-  const aggFields = (agg.fields as (string | null)[] | undefined) ?? []
-  const aggOps = (agg.ops as string[] | undefined) ?? []
-  const aggAs = (agg.as as string[] | undefined) ?? []
-  const aggParams = agg.aggregate_params as (number | null)[] | undefined
   const outByKey = new Map<string, Row>()
   const out: Row[] = []
   const outFrom: number[] = []
@@ -2221,7 +2228,7 @@ function aggregatePulse(
     let next: Row
     if (!dirty.has(k) && oldRow) next = oldRow
     else {
-      next = aggregateGroup(idxs.map((i) => rows[i]!), groupby, aggFields, aggOps, aggAs, aggParams)
+      next = aggregateGroup(idxs.map((i) => rows[i]!), t)
       if (oldRow && rowsEqual(next, oldRow)) next = oldRow
     }
     const at = out.length
@@ -2324,11 +2331,6 @@ function aggregateAppendPulse(
   const out: Row[] = []
   const outFrom: number[] = []
   const changed: number[] = []
-  const agg = t as Record<string, unknown>
-  const aggFields = (agg.fields as (string | null)[] | undefined) ?? []
-  const aggOps = (agg.ops as string[] | undefined) ?? []
-  const aggAs = (agg.as as string[] | undefined) ?? []
-  const aggParams = agg.aggregate_params as (number | null)[] | undefined
   for (const k of outOrder) {
     const oldIdx = prevState.outIdx.get(k)
     const oldRow = prevState.outByKey.get(k)
@@ -2336,7 +2338,7 @@ function aggregateAppendPulse(
     if (!dirty.has(k) && oldRow) next = oldRow
     else {
       const idxs = keyToIdx.get(k)!
-      next = aggregateGroup(idxs.map((i) => rows[i]!), groupby, aggFields, aggOps, aggAs, aggParams)
+      next = aggregateGroup(idxs.map((i) => rows[i]!), t)
       if (oldRow && rowsEqual(next, oldRow)) next = oldRow
     }
     const at = out.length
@@ -2415,10 +2417,8 @@ function orderedAppendPulse(
 ): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
   const base = pulseBaseLength(input)
   if (!prev || !prevState || prevState.order.length !== base || prev.length !== base) return null
-  const type = String(t.type)
   const sort = (t as { sort?: SortSpec }).sort
-  const size = type === 'sample' ? ((t as { size?: number }).size ?? 0) : Infinity
-  const order = sortOrder(rows, sort, size)
+  const order = sortOrder(rows, sort)
   const oldPos = new Map<number, number>()
   for (let i = 0; i < prevState.order.length; i++) oldPos.set(prevState.order[i]!, i)
   const modified = isModified(input)
@@ -2439,62 +2439,6 @@ function orderedAppendPulse(
   const to = new Array<number>(prev.length).fill(-1)
   for (let i = 0; i < from.length; i++) if (from[i]! >= 0) to[from[i]!] = i
   return { rows: out, pulse: pulseOfMapping(from, to, changed), state: { order } }
-}
-
-/**
- * Window/stack: the full transform re-derives (group order/sort are global),
- * but the grouped output layout is compared group-by-group so unchanged rows
- * keep their item identity and the mapping still splices downstream.
- */
-function windowStackPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined, prevState: AggState | undefined,
-): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
-  const out = applyOne(rows, t, tctx, sourceName)
-  if (!prevState || !prev) return null
-  const groupby = (t as { groupby?: string[] }).groupby ?? []
-  const from = input.from!
-  const modified = isModified(input)
-  const keyToIdx = new Map<string, number[]>()
-  for (let i = 0; i < rows.length; i++) {
-    const k = groupKeyOf(rows[i]!, groupby)
-    let arr = keyToIdx.get(k)
-    if (!arr) keyToIdx.set(k, (arr = []))
-    arr.push(i)
-  }
-  const outOrder = [...keyToIdx.keys()]
-  // Old input index -> rank within its group, built once (indexOf per member
-  // made a large grouped window quadratic).
-  const oldRank = new Map<string, Map<number, number>>()
-  for (const [k, idxs] of prevState.keyToIdx) {
-    const ranks = new Map<number, number>()
-    for (let j = 0; j < idxs.length; j++) ranks.set(idxs[j]!, j)
-    oldRank.set(k, ranks)
-  }
-  let pos = 0
-  const outFrom = new Array<number>(out.length).fill(-1)
-  const changed: number[] = []
-  for (const k of outOrder) {
-    const idxs = keyToIdx.get(k)!
-    const oldStart = prevState.groupStart.get(k)
-    const ranks = oldRank.get(k)
-    for (let j = 0; j < idxs.length; j++) {
-      const ni = pos + j
-      const oldInput = from[idxs[j]!]!
-      if (oldInput < 0 || modified.has(idxs[j]!)) { changed.push(ni); continue }
-      const rank = ranks?.get(oldInput) ?? -1
-      if (rank < 0 || oldStart == null) { changed.push(ni); continue }
-      const oldOut = oldStart + rank
-      outFrom[ni] = oldOut
-      if (prev[oldOut] !== undefined && rowsEqual(out[ni]!, prev[oldOut]!)) out[ni] = prev[oldOut]!
-      else changed.push(ni)
-    }
-    pos += idxs.length
-  }
-  const to = new Array<number>(prev.length).fill(-1)
-  for (let i = 0; i < outFrom.length; i++) if (outFrom[i]! >= 0) to[outFrom[i]!] = i
-  const state = buildAggState(rows, groupby, out)
-  return { rows: out, pulse: pulseOfMapping(outFrom, to, changed), state }
 }
 
 /** sequence appends generated rows after the source rows; the tail is stable. */
@@ -2551,7 +2495,10 @@ function rowLocal(t: CompiledTransform, tctx: StepTransformContext): boolean {
   switch (type) {
     case 'formula':
       return !DATA_DEPENDENT_EXPR.test((t as { expr?: string }).expr ?? '')
-    case 'timeunit': case 'geoshape': case 'geopoint': case 'linkpath': case 'project':
+    case 'timeunit':
+      // without explicit units vega bins the data extent (global); inferUnits looks at every row
+      return (t as { units?: unknown }).units != null && !(t as { inferUnits?: unknown }).inferUnits && (t as { extent?: unknown }).extent === undefined
+    case 'geoshape': case 'geopoint': case 'linkpath': case 'project':
       return true
     case 'bin':
       // A fixed numeric extent makes the bins constant; a `signal` output is a
@@ -2564,23 +2511,30 @@ function rowLocal(t: CompiledTransform, tctx: StepTransformContext): boolean {
   }
 }
 
-/** `identifier` over an append-only pulse: ids are `row[as] ?? index + 1`. */
+/**
+ * `identifier` over an append-only pulse. Vega numbers only the tuples whose `as`
+ * value is falsy, in order (`t[as] || ++id`), so the new rows continue from the
+ * count the previous evaluation reached; a modified earlier row can renumber
+ * everything after it, which falls back to the aligned re-derive.
+ */
 function identifierAppendPulse(
-  rows: Row[], t: CompiledTransform, input: StepPulse, prev: Row[] | undefined,
-): { rows: Row[]; pulse: StepPulse } | null {
+  rows: Row[], t: CompiledTransform, input: StepPulse, prev: Row[] | undefined, prevState: IdentifierState | undefined,
+): { rows: Row[]; pulse: StepPulse; state: IdentifierState } | null {
   const base = pulseBaseLength(input)
-  if (!prev || prev.length !== base) return null
-  const as = (t as { as?: string }).as ?? 'id'
-  const derive = (i: number): Row => ({ ...rows[i]!, [as]: rows[i]![as] ?? i + 1 })
-  const changed: number[] = []
-  for (const i of input.changed) {
-    if (i < 0 || i >= base) continue
-    prev[i] = derive(i)
-    changed.push(i)
+  if (!prev || prev.length !== base || !prevState || input.changed.length) return null
+  const as = (t as { as?: string }).as
+  if (as === undefined) return null
+  let id = prevState.count
+  for (let i = base; i < rows.length; i++) {
+    const row = { ...rows[i]! }
+    row[as] = row[as] || ++id
+    prev.push(row)
   }
-  for (let i = base; i < rows.length; i++) prev.push(derive(i))
-  return { rows: prev, pulse: appendPulse(base, rows.length, changed) }
+  return { rows: prev, pulse: appendPulse(base, rows.length, []), state: { count: id } }
 }
+
+/** Ids handed out so far by an `identifier` step (the vega counter). */
+interface IdentifierState { count: number }
 
 /**
  * Apply one transform to a length-changing pulse. Returns `null` when the
@@ -2591,6 +2545,9 @@ function applyStepWithPulse(
   input: StepPulse, prev: Row[] | undefined, prevStepState: unknown,
 ): { rows: Row[]; pulse: StepPulse | null; state?: unknown } {
   const type = String(t.type)
+  if ((type === 'aggregate' || type === 'joinaggregate') && !groupwiseIncremental(t)) {
+    return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+  }
   if (input.appendOnly) {
     // Fast paths that never need the full mapping.
     const appendLocal = rowLocal(t, tctx)
@@ -2598,7 +2555,7 @@ function applyStepWithPulse(
       const fast = rowLocalAppendPulse(rows, t, tctx, sourceName, input, prev)
       if (fast) return fast
     } else if (type === 'identifier') {
-      const fast = identifierAppendPulse(rows, t, input, prev)
+      const fast = identifierAppendPulse(rows, t, input, prev, prevStepState as IdentifierState | undefined)
       if (fast) return fast
     } else if (type === 'filter') {
       const fast = filterAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined)
@@ -2612,7 +2569,7 @@ function applyStepWithPulse(
     } else if (type === 'joinaggregate') {
       const fast = joinAggregateAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
       if (fast) return fast
-    } else if (type === 'collect' || type === 'sample') {
+    } else if (type === 'collect') {
       const fast = orderedAppendPulse(rows, t, input, prev, prevStepState as { order: number[] } | undefined)
       if (fast) return fast
     } else if (type === 'geojson' || type === 'extent' || type === 'stratify') {
@@ -2673,7 +2630,8 @@ function applyStepWithPulse(
       return rederiveAligned(rows, t, tctx, sourceName, input, prev)
         ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
     case 'stack':
-      return windowStackPulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
+      // vega's stack writes y0/y1 onto each tuple in place: 1:1 with the input, in input order
+      return rederiveAligned(rows, t, tctx, sourceName, input, prev)
         ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
     case 'pie':
     case 'dotbin':
@@ -2698,8 +2656,7 @@ function applyStepWithPulse(
 
 /** Transform types that keep per-step incremental state (see `deriveStepState`). */
 function keepsStepState(type: string): boolean {
-  return type === 'filter' || type === 'flatten' || type === 'aggregate' || type === 'joinaggregate'
-    || type === 'window' || type === 'stack' || type === 'collect' || type === 'sample'
+  return type === 'filter' || type === 'flatten' || type === 'aggregate' || type === 'joinaggregate' || type === 'collect' || type === 'identifier'
 }
 
 /**
@@ -2720,11 +2677,15 @@ function deriveStepState(t: CompiledTransform, input: Row[], output: Row[], tctx
       for (const sz of sizes) { offsets.push(p); p += sz }
       return { sizes, offsets }
     }
-    case 'aggregate': case 'joinaggregate': case 'window': case 'stack':
+    case 'aggregate': case 'joinaggregate':
       return buildAggState(input, (t as { groupby?: string[] }).groupby ?? [], output)
-    case 'collect': case 'sample': {
-      const limit = t.type === 'sample' ? ((t as { size?: number }).size ?? 0) : Infinity
-      return { order: sortOrder(input, (t as { sort?: SortSpec }).sort, limit) }
+    case 'collect':
+      return { order: sortOrder(input, (t as { sort?: SortSpec }).sort) }
+    case 'identifier': {
+      const as = (t as { as?: string }).as
+      let count = 0
+      if (as !== undefined) for (const r of input) if (!r[as]) count++
+      return { count } satisfies IdentifierState
     }
     default:
       return undefined
@@ -5555,10 +5516,11 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
   const plan = encodePlan(encode)
   const binding = ctx.encodeBinding
 
-  // Resolve the `defined` signal BEFORE datum mutation. Vega evaluates
-  // `defined` against the original data tuple (before scale resolution),
-  // so expressions like `isValid(datum["y"])` must see the raw data
-  // value (null), not the scaled pixel position.
+  // The encoded channel values (pixels, colours, ...) live on the scene ITEM and
+  // are never written back onto the datum: `datum` is the caller's data row, and
+  // tooltips, signals and interactions read data values from it (C21). A data
+  // field named like a channel (`x`, `size`, `fill`) therefore keeps its value.
+  // `defined` is evaluated against the data tuple, as Vega does.
   let definedValue: unknown
   if (plan.definedSpec !== undefined) {
     definedValue = resolveEncodeProperty(plan.definedSpec, datum, ctx, binding)
@@ -5575,13 +5537,6 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
     }
   }
 
-  // Pass 2: mirror the resolved plain values onto the datum tuple, then resolve
-  // signal-value pairs, which may read those values back off `datum`.
-  for (const key of plan.plainKeys) {
-    const v = rec[key]
-    if (v !== undefined) datum[key as keyof Row] = v
-  }
-  // Apply the pre-resolved `defined` value (from before datum mutation).
   if (definedValue !== undefined) {
     rec['defined'] = definedValue
   }

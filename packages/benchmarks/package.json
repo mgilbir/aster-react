@@ -8,6 +8,7 @@
     "bench:bundle": "tsx scripts/bundle-size.mjs",
     "bench:runtime": "tsx src/runtime.bench.tsx",
     "bench:differential": "tsx src/differential.bench.tsx",
+    "bench:transforms": "tsx src/transform.bench.ts",
     "bench:memory": "node --expose-gc --import tsx src/memory.bench.tsx",
     "bench:browser": "tsx scripts/browser.bench.mjs",
     "bench:pipeline": "tsx src/pipeline.bench.tsx",

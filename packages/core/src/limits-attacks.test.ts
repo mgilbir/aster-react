@@ -189,10 +189,13 @@ describe('wall clock is sampled inside synchronous work (C7)', () => {
     expectLimit(r, /maxTimeMs exceeded during (mark (symbol )?encoding|dataset build|startup)/, 500)
   }, T)
 
-  it('O(n^2) window sum over 20k rows under 250 ms', async () => {
+  it('O(n^2) window median over 20k rows under 250 ms', async () => {
+    // The unbounded-frame window SUM is linear now (vega slides the frame incrementally: each
+    // row adds/removes only what changed), so the quadratic attack is a median, which re-sorts
+    // the whole frame at every row.
     const r = await attack(`
       const rows = Array.from({ length: 20000 }, (_, i) => ({ x: i }))
-      core.renderSpec({ data: [{ name: 't', transform: [{ type: 'window', ops: ['sum'], fields: ['x'], as: ['s'], frame: [null, null] }] }] },
+      core.renderSpec({ data: [{ name: 't', transform: [{ type: 'window', ops: ['median'], fields: ['x'], as: ['s'], frame: [null, null] }] }] },
         { data: { t: rows }, limits: { maxTimeMs: 250 } })`)
     expectLimit(r, /maxTimeMs/, 250)
   }, T)

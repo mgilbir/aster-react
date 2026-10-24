@@ -162,13 +162,14 @@ describe('bin options (vega-statistics parity)', () => {
     expect(out[1]).not.toHaveProperty('b1')
   })
 
-  it('coerces values like vega toNumber and uses null for invalid input', () => {
+  it('coerces values like vega toNumber: null stays null, an unparseable string is NaN', () => {
     const out = applyTransforms(
       [{ v: '12' }, { v: null }, { v: 'x' }, { v: -5 }, { v: 45 }],
       [{ type: 'bin', field: 'v', as: ['b0', 'b1'], extent: [0, 40], step: 10 } as never],
       ctx,
     )
-    expect(out.map((r) => r.b0)).toEqual([10, null, null, -Infinity, Infinity])
+    // real vega: bin0 is NaN (not null) for 'x' -- vega-transforms Bin only maps null/'' to null
+    expect(out.map((r) => r.b0)).toEqual([10, null, NaN, -Infinity, Infinity])
   })
 })
 

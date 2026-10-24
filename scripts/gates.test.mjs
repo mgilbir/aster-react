@@ -2,10 +2,11 @@
  * Drift guards for the single gate list (scripts/gates.mjs).
  * The list is only a source of truth if nothing else keeps its own copy.
  */
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { parseDocument } from 'yaml'
 import { GATES } from './gates.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -60,11 +61,32 @@ describe('nothing keeps a second copy of the list', () => {
     /^pnpm --filter @aster\/conformance exec playwright install /,
     /^pnpm check$/,
   ]
+  // The `unit` job (Node matrix) builds, then runs vitest directly under the matrix Node
+  // (pnpm 11 cannot itself run on Node 20). It adds no gate: it is `pnpm test` on other engines.
+  const allowedUnit = [
+    /^pnpm build$/,
+    /^node node_modules\/vitest\/vitest\.mjs run( scripts\/differential- oracle-vectors\.test)?$/,
+  ]
 
-  it('ci.yml only sets up the toolchain and runs `pnpm check`', () => {
+  it('ci.yml only sets up the toolchain, runs `pnpm check`, and the unit-test Node matrix', () => {
     const lines = runLines('.github/workflows/ci.yml')
     expect(lines).toContain('pnpm check')
-    for (const l of lines) expect(allowedCi.some((re) => re.test(l)), `ci.yml runs "${l}" outside the gate list`).toBe(true)
+    for (const l of lines) {
+      expect([...allowedCi, ...allowedUnit].some((re) => re.test(l)), `ci.yml runs "${l}" outside the gate list`).toBe(true)
+    }
+  })
+
+  it('the main ci job stays on Node 22; the unit job covers 20, 22 and the newest major', () => {
+    const ci = read('.github/workflows/ci.yml')
+    const [main, unit] = ci.split(/^  unit:$/m)
+    expect(unit, 'ci.yml has a `unit` job').toBeDefined()
+    expect(main).toMatch(/node-version: 22\b/)
+    expect(unit).toMatch(/node:\s*\[20, 22, node\]/)
+    // the matrix job runs what `pnpm test` runs, so it cannot drift from the root script
+    expect(rootPkg.scripts.test).toBe('vitest run')
+    expect(runLines('.github/workflows/ci.yml')).toContain('node node_modules/vitest/vitest.mjs run')
+    // and never grows a second gate list: `pnpm check` is run by the main job only
+    expect(unit).not.toMatch(/pnpm check/)
   })
 
   it('nightly.yml runs `pnpm check` before its extras and installs with a frozen lockfile', () => {
@@ -94,4 +116,27 @@ describe('nothing keeps a second copy of the list', () => {
       }
     }
   })
+})
+
+describe('workflow files are valid YAML', () => {
+  // The text-based checks above cannot see a file GitHub refuses to load (an unquoted ": " in a
+  // step name made ci.yml invalid and no CI ran), so every workflow goes through a real parser.
+  const files = readdirSync(join(root, '.github', 'workflows')).filter((f) => /\.ya?ml$/.test(f))
+
+  it('finds the workflows', () => {
+    expect(files).toEqual(expect.arrayContaining(['ci.yml', 'nightly.yml', 'release.yml']))
+  })
+
+  for (const f of files) {
+    it(`${f} parses without errors or warnings and has \`on\` and \`jobs\``, () => {
+      const doc = parseDocument(read(`.github/workflows/${f}`), { prettyErrors: true })
+      expect(doc.errors.map(String), `${f}: YAML errors`).toEqual([])
+      expect(doc.warnings.map(String), `${f}: YAML warnings`).toEqual([])
+      const wf = doc.toJS()
+      expect(wf && typeof wf === 'object' && !Array.isArray(wf), `${f}: top level is a mapping`).toBe(true)
+      // YAML 1.1 loaders read the key `on` as boolean true; `yaml` 1.2 keeps the string.
+      expect(Object.keys(wf), f).toEqual(expect.arrayContaining(['on', 'jobs']))
+      expect(Object.keys(wf.jobs ?? {}).length, `${f}: at least one job`).toBeGreaterThan(0)
+    })
+  }
 })

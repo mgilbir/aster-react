@@ -52,8 +52,12 @@ const BUDGETS = {
   // stratify/bin): core 113.4 -> 116.3, dom 116.6 -> 119.6 gzip (+2.9/+3.0). Ceilings are
   // measured + 0.5 kB; the owner decides whether to keep them (flagged in the PR).
   // Static ReDoS screen (regex-screen.ts, ~2.0 kB gzip): core 116.3 -> 118.3, dom 119.6 -> 121.7.
-  '@aster/core': 118.8 * 1024,
-  '@aster/core/dom': 122.2 * 1024,
+  // Vega-faithful transform layer (aggregate/joinaggregate/pivot/window measure engine incl. bootstrap CI,
+  // bin, timeunit with vega-time bin/detectTimeUnits, impute, lookup, stack, sample, access paths):
+  // core 118.3 -> 122.9, dom 121.7 -> 126.3 gzip (+4.6). Ceilings are measured + 0.5 kB; OWNER DECISION
+  // (flagged in the report): the old hand-written transforms were smaller because they were wrong.
+  '@aster/core': 123.4 * 1024,
+  '@aster/core/dom': 126.8 * 1024,
   '@aster/core/canvas': 20 * 1024,
   '@aster/core/hit': 16 * 1024,
   '@aster/core/signals': 36 * 1024,
