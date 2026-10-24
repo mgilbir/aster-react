@@ -38,8 +38,8 @@ export async function runAppendPixelOracle(
 import { canvasScenario } from ${JSON.stringify(join(CORE_SRC, 'canvas-append-scenario.testlib.ts'))}
 import { renderSceneToCanvas, renderSceneToCanvasAppend, snapshotCanvasScene } from ${JSON.stringify(join(CORE_SRC, 'canvas.ts'))}
 
-// Both canvases are software-backed (willReadFrequently). This oracle reads `live` back after EVERY
-// step but `ref` only once, and WebKit rasterises the same draw commands differently once a canvas
+// Both canvases are software-backed (willReadFrequently). This oracle reads live back after EVERY
+// step but ref only once, and WebKit rasterises the same draw commands differently once a canvas
 // has been read back (anti-aliased edges differ, e.g. 76 pixels of two overlapping 1px rules; replaying
 // the recorded command streams with and without a mid-stream getImageData reproduces it with no Aster
 // code involved). Giving both canvases one backing removes that browser artefact and keeps the
