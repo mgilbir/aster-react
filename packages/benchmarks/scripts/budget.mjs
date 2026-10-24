@@ -11,14 +11,15 @@ import { fileURLToPath } from 'node:url'
 // from the canvas/dom/hit/signals addons (or from the React wrapper) into the
 // base bundle fails a named row instead of being hidden by one aggregate.
 //
-// Measured 2026-10 (gzip, minified; react/react-dom external):
-//   @aster/core          109.0 kB
-//   @aster/core/dom      110.3 kB
-//   @aster/core/canvas    12.3 kB
-//   @aster/core/hit        1.5 kB
-//   @aster/core/signals   28.1 kB
-//   @aster/react         135.9 kB (Vega only)
-//   @aster/react/vl      158.4 kB (base + the from-scratch VL compiler, ~22.6 kB)
+// Measured 2026-10 on the integrated audit stack (gzip, minified; react/react-dom external;
+// main: core 109.2, dom 111.7, canvas 12.7, hit 1.5, signals 28.1, react 137.4, react/vl 159.8):
+//   @aster/core          113.4 kB
+//   @aster/core/dom      116.6 kB
+//   @aster/core/canvas    15.3 kB
+//   @aster/core/hit       15.6 kB
+//   @aster/core/signals   27.8 kB
+//   @aster/react         145.7 kB (Vega only)
+//   @aster/react/vl      168.1 kB (base + the from-scratch VL compiler)
 //
 // Re-baselined for the strict-oracle PR (+4.4 kB gzip on core and core/dom, measured
 // 113.6 / 116.4 kB; the previous budget was met to the byte). What the oracle forced in,
@@ -38,11 +39,19 @@ import { fileURLToPath } from 'node:url'
 // (+~4) are the R13 additions. The budget's job is
 // regression detection, so each entry gets measured headroom rather than a
 // number that no longer describes the library.
+//
+// Audit C43/C47 re-baseline: the DOM descriptor now takes every attribute from
+// render.ts's per-element lists (dom +2.4 kB: clipped rounded bars, leaf clips,
+// frame parity were missing from the DOM path), and the hit index picks against
+// the PAINTED geometry instead of bounding boxes (hit 1.5 -> 14.0 kB standalone:
+// path flattening, arc/line/area/trail outlines and the layout's text bounds).
+// Alongside @aster/core the hit entry shares most of that code, so its marginal
+// cost in an app is far smaller than the standalone row suggests.
 const BUDGETS = {
   '@aster/core': 115 * 1024,
   '@aster/core/dom': 118 * 1024,
   '@aster/core/canvas': 20 * 1024,
-  '@aster/core/hit': 6 * 1024,
+  '@aster/core/hit': 16 * 1024,
   '@aster/core/signals': 36 * 1024,
   // 180 kB leaves headroom for feature work; measured values are recorded at
   // the top of this file and in `pnpm bench:bundle`.

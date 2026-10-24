@@ -268,8 +268,11 @@ export function canonicalPath(segs: PathSeg[]): string {
   }).join('')
 }
 
+/** The part of a 2D context that path tracing needs (so geometry consumers can flatten a path without a canvas). */
+export type PathSink = Pick<CanvasLike, 'moveTo' | 'lineTo' | 'bezierCurveTo' | 'quadraticCurveTo' | 'arc' | 'closePath'>
+
 /** Replay parsed segments onto a canvas context, offset by (tx, ty). */
-export function tracePath(ctx: CanvasLike, segs: PathSeg[], tx = 0, ty = 0): void {
+export function tracePath(ctx: PathSink, segs: PathSeg[], tx = 0, ty = 0): void {
   // Track the current point and the last cubic/quadratic control point for
   // S/T smoothing, mirroring the SVG path semantics.
   let cx = 0, cy = 0
@@ -367,7 +370,7 @@ export function tracePath(ctx: CanvasLike, segs: PathSeg[], tx = 0, ty = 0): voi
 }
 
 /** Draw an elliptical arc segment as an ellipse-transformed arc. */
-function traceEllipse(ctx: CanvasLike, cx: number, cy: number, rx: number, ry: number, phi: number, start: number, end: number): void {
+function traceEllipse(ctx: PathSink, cx: number, cy: number, rx: number, ry: number, phi: number, start: number, end: number): void {
   // Sample the ellipse as small line segments (fallback path; not used by
   // vega marks, which emit circular arcs).
   const steps = 64
@@ -454,8 +457,6 @@ export interface CanvasSceneSnapshot {
   gen: number
 }
 
-const GUIDE_SIGNATURE = new WeakMap<SceneGroup, string>()
-
 export function snapshotCanvasScene(scene: SceneRoot): CanvasSceneSnapshot {
   const markLengths = new Map<SceneGroup, number>()
   const markArrays = new Map<SceneGroup, SceneItem[]>()
@@ -468,20 +469,44 @@ export function snapshotCanvasScene(scene: SceneRoot): CanvasSceneSnapshot {
   return { scene, markLengths, markArrays, gen: (scene as unknown as { __itemGen?: number }).__itemGen ?? 0 }
 }
 
-function groupSignature(g: SceneGroup): string {
-  const cached = GUIDE_SIGNATURE.get(g)
-  if (cached) return cached
-  let sig: string
-  try {
-    sig = JSON.stringify({
-      marktype: g.marktype, role: g.role, x: g.x, y: g.y, width: g.width, height: g.height,
-      clip: g.clip, clipPathD: g.clipPathD, items: g.items,
-    })
-  } catch {
-    sig = `#${Math.random()}`
+// Keys that never affect paint: engine bookkeeping (`__gen`, `__domDesc`, ...)
+// and the source datum (the encoded channels already carry everything painted).
+const NON_PAINT_KEYS = new Set(['datum', 'dataDatum', 'runtime', 'compiled'])
+
+/**
+ * Structural equality of two scene values over their painted fields, with a
+ * visit budget. Replaces the per-frame `JSON.stringify` of whole item arrays
+ * (audit C96): no allocation, stops at the first difference, ignores
+ * bookkeeping and the datum, and gives up (not equal) on a pathological graph.
+ */
+function samePaint(a: unknown, b: unknown, budget: { n: number }, depth = 0): boolean {
+  if (Object.is(a, b)) return true
+  if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object') return false
+  if (depth > 8 || --budget.n < 0) return false
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) if (!samePaint(a[i], b[i], budget, depth + 1)) return false
+    return true
   }
-  GUIDE_SIGNATURE.set(g, sig)
-  return sig
+  const ra = a as Record<string, unknown>
+  const rb = b as Record<string, unknown>
+  let na = 0
+  for (const k in ra) {
+    if (!Object.hasOwn(ra, k) || k.startsWith('__') || NON_PAINT_KEYS.has(k) || typeof ra[k] === 'function') continue
+    na++
+    if (!samePaint(ra[k], rb[k], budget, depth + 1)) return false
+  }
+  let nb = 0
+  for (const k in rb) {
+    if (!Object.hasOwn(rb, k) || k.startsWith('__') || NON_PAINT_KEYS.has(k) || typeof rb[k] === 'function') continue
+    nb++
+  }
+  return na === nb
+}
+
+/** True when two non-mark groups paint identically (a guide that was rebuilt but did not change). */
+function samePaintedGroup(a: SceneGroup, b: SceneGroup): boolean {
+  return samePaint(a, b, { n: 50_000 })
 }
 
 /** True when the engine re-encoded an existing item of this (shared) array after `gen`. */
@@ -492,10 +517,100 @@ function editedSince(items: SceneItem[], gen: number): boolean {
 
 const APPEND_SAFE = new Set(['symbol', 'text', 'rule', 'tick'])
 
+interface Box { x1: number; y1: number; x2: number; y2: number }
+
+/**
+ * Conservative painted extent of a group: a dry run of the real renderer
+ * against a context that only accumulates bounds (stroke widths and text
+ * extents over-estimated, clips ignored). Used to decide whether appended marks
+ * could land on paint that a full repaint draws ABOVE them.
+ */
+function paintExtent(group: SceneGroup, scene: SceneRoot, plotW: number, plotH: number, opts: RenderCanvasOptions): Box | null {
+  const rec = new ExtentContext()
+  renderGroup(group, rec, scene, plotW, plotH, { ...opts, batchSymbols: false })
+  return rec.box
+}
+
+/** Records the bounding box of everything a renderer would paint. */
+class ExtentContext implements CanvasLike {
+  box: Box | null = null
+  private m: [number, number, number, number, number, number] = [1, 0, 0, 1, 0, 0]
+  private stack: Array<{ m: [number, number, number, number, number, number]; lineWidth: number; font: string }> = []
+  private pts: Array<[number, number]> = []
+  fillStyle: unknown = '#000'
+  strokeStyle: unknown = '#000'
+  globalAlpha = 1
+  lineWidth = 1
+  lineCap = 'butt'
+  lineJoin = 'miter'
+  miterLimit = 10
+  font = '10px sans-serif'
+  textAlign = 'start'
+  textBaseline = 'alphabetic'
+  private tr(x: number, y: number): [number, number] {
+    const m = this.m
+    return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]
+  }
+  private add(x: number, y: number): void { this.pts.push(this.tr(x, y)) }
+  private merge(pts: Array<[number, number]>, grow: number): void {
+    for (const [x, y] of pts) {
+      if (!(Number.isFinite(x) && Number.isFinite(y))) continue
+      const b = this.box ?? (this.box = { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity })
+      if (x - grow < b.x1) b.x1 = x - grow
+      if (y - grow < b.y1) b.y1 = y - grow
+      if (x + grow > b.x2) b.x2 = x + grow
+      if (y + grow > b.y2) b.y2 = y + grow
+    }
+  }
+  save(): void { this.stack.push({ m: [...this.m] as ExtentContext['m'], lineWidth: this.lineWidth, font: this.font }) }
+  restore(): void { const s = this.stack.pop(); if (s) { this.m = s.m; this.lineWidth = s.lineWidth; this.font = s.font } }
+  translate(x: number, y: number): void { this.m = [this.m[0], this.m[1], this.m[2], this.m[3], this.m[0] * x + this.m[2] * y + this.m[4], this.m[1] * x + this.m[3] * y + this.m[5]] }
+  scale(x: number, y: number): void { this.m = [this.m[0] * x, this.m[1] * x, this.m[2] * y, this.m[3] * y, this.m[4], this.m[5]] }
+  rotate(a: number): void {
+    const c = Math.cos(a), s = Math.sin(a), m = this.m
+    this.m = [m[0] * c + m[2] * s, m[1] * c + m[3] * s, m[2] * c - m[0] * s, m[3] * c - m[1] * s, m[4], m[5]]
+  }
+  beginPath(): void { this.pts = [] }
+  moveTo(x: number, y: number): void { this.add(x, y) }
+  lineTo(x: number, y: number): void { this.add(x, y) }
+  bezierCurveTo(a: number, b: number, c: number, d: number, x: number, y: number): void { this.add(a, b); this.add(c, d); this.add(x, y) }
+  quadraticCurveTo(a: number, b: number, x: number, y: number): void { this.add(a, b); this.add(x, y) }
+  arc(x: number, y: number, r: number): void { this.add(x - r, y - r); this.add(x + r, y + r); this.add(x - r, y + r); this.add(x + r, y - r) }
+  closePath(): void {}
+  rect(x: number, y: number, w: number, h: number): void { this.add(x, y); this.add(x + w, y + h); this.add(x + w, y); this.add(x, y + h) }
+  clip(): void {}
+  fill(): void { this.merge(this.pts, 1) }
+  // A stroke reaches half a line width (times the miter limit at sharp corners) past the path.
+  stroke(): void { this.merge(this.pts, Math.max(1, this.lineWidth * Math.hypot(this.m[0], this.m[1])) * 2 + 1) }
+  fillRect(x: number, y: number, w: number, h: number): void {
+    this.merge([this.tr(x, y), this.tr(x + w, y + h), this.tr(x + w, y), this.tr(x, y + h)], 1)
+  }
+  setLineDash(): void {}
+  fillText(text: string, x: number, y: number): void {
+    const size = Number(/(\d+(?:\.\d+)?)px/.exec(this.font)?.[1] ?? 11)
+    // wide enough for any glyph run at this size and any alignment/baseline
+    const w = text.length * size * 1.2 + size
+    this.merge([this.tr(x - w, y - size * 1.5), this.tr(x + w, y + size * 1.5), this.tr(x - w, y + size * 1.5), this.tr(x + w, y - size * 1.5)], 2)
+  }
+  drawImage(_image: unknown, dx: number, dy: number, dw = 0, dh = 0): void {
+    this.merge([this.tr(dx, dy), this.tr(dx + dw, dy + dh), this.tr(dx + dw, dy), this.tr(dx, dy + dh)], 1)
+  }
+  createLinearGradient(): GradientLike { return { addColorStop() {} } }
+}
+
+const boxesOverlap = (a: Box, b: Box): boolean => a.x1 <= b.x2 && b.x1 <= a.x2 && a.y1 <= b.y2 && b.y1 <= a.y2
+
 /**
  * Paint only the appended items of a streamed scene on top of the existing
- * canvas, then repaint any changed groups that come after it. Returns false
- * when the scene changed in a way that needs a full repaint.
+ * canvas. Returns false when the result would not be exactly what a full
+ * repaint draws, so the caller repaints in full:
+ *
+ * - anything but ONE mark group gained items at its end, and every existing
+ *   item of every mark group is untouched (same lineage, no in-place re-encode);
+ * - every guide/group is unchanged (a changed one cannot be painted in place
+ *   without ghosting its old self; the context has no clear);
+ * - nothing painted AFTER the appended group could be covered by the appended
+ *   items (a full repaint draws those later groups above them: legend, title).
  */
 export function renderSceneToCanvasAppend(
   prev: CanvasSceneSnapshot,
@@ -516,70 +631,82 @@ export function renderSceneToCanvasAppend(
 
   let appendIndex = -1
   let appendFrom = 0
-  const repaint: number[] = []
   for (let i = 0; i < next.items.length; i++) {
     const ng = next.items[i]!
     const pg = a.items[i]!
-    if (ng === pg) {
-      if (pg.role !== 'mark') continue
-      const oldLen = prev.markLengths.get(pg) ?? 0
-      const items = (pg.items as SceneItem[] | undefined) ?? []
-      if (items.length < oldLen) return false
-      if (items.length === oldLen) continue
-      if (appendIndex >= 0) return false
-      if (!APPEND_SAFE.has(String(pg.marktype)) || pg.clip === true) return false
-      for (let j = 0; j < oldLen; j++) {
-        const it = items[j] as SceneItem & { __gen?: number }
-        if (it.__gen != null && it.__gen > prev.gen) return false
-      }
-      appendIndex = i
-      appendFrom = oldLen
-      continue
-    }
-    if (ng.role === 'mark') {
+    if (ng.role === 'mark' && pg.role === 'mark') {
       // Never read `pg.items`: a superseded group's items are a lazy snapshot
       // and reading them materialises an O(n) copy per frame. Everything the
       // append path needs about the previous scene is in the snapshot.
       const oldLen = prev.markLengths.get(pg)
       const snapArr = prev.markArrays.get(pg)
       if (oldLen === undefined || snapArr === undefined) return false
+      if (ng.marktype !== pg.marktype || ng.clip !== pg.clip || ng.x !== pg.x || ng.y !== pg.y
+        || ng.clipPathD !== pg.clipPathD || ng.width !== pg.width || ng.height !== pg.height) return false
       const nItems = (ng.items as SceneItem[] | undefined) ?? []
       // A different array is a structural rebuild (re-mapped or re-encoded
       // rows): not an append on top of what is painted.
       if (nItems !== snapArr) return false
       if (nItems.length < oldLen) return false
+      // The very same group object is not a superseded one (its items are
+      // live): an item re-encoded under it carries a newer `__gen`.
+      if (ng === pg) {
+        for (let j = 0; j < oldLen; j++) {
+          const gen = (nItems[j] as SceneItem & { __gen?: number }).__gen
+          if (gen != null && gen > prev.gen) return false
+        }
+      }
+      // The same array carries an in-place re-encode of an existing item
+      // (stamped with that evaluation's generation), in ANY reused group, also
+      // one that did not grow.
+      if (editedSince(nItems, prev.gen)) return false
       if (nItems.length > oldLen) {
         if (appendIndex >= 0 || !APPEND_SAFE.has(String(ng.marktype)) || ng.clip === true) return false
-        // Same array: the prefix is the same items unless one was re-encoded in
-        // place, which stamps the array with that evaluation's generation.
-        if (editedSince(nItems, prev.gen)) return false
         appendIndex = i
         appendFrom = oldLen
-        continue
       }
-      if (editedSince(nItems, prev.gen)) return false
       continue
     }
-    if (groupSignature(pg) === groupSignature(ng)) continue
-    // A changed guide before the append group cannot be painted in place
-    // without overpainting the existing marks.
-    if (appendIndex < 0) return false
-    repaint.push(i)
+    if (ng === pg) continue
+    // A changed guide cannot be painted in place: the old one stays underneath.
+    if (!samePaintedGroup(pg, ng)) return false
   }
   if (appendIndex < 0) return false
 
   const plotW = next.plotWidth ?? next.width - pb.left - pb.right
   const plotH = next.plotHeight ?? next.height - pb.top - pb.bottom
-  ctx.save()
-  if (opts.dpr != null && opts.dpr !== 1) ctx.scale(opts.dpr, opts.dpr)
-  ctx.translate(pb.left, pb.top)
   const g = next.items[appendIndex]!
   const nItems = (g.items as SceneItem[] | undefined) ?? []
   const slice: SceneGroup = { ...g, items: nItems.slice(appendFrom) }
+
+  // Paint a full repaint draws above the appended group (legend, title, later
+  // marks): appended items landing on it would be drawn over it instead.
+  let appendedExtent: Box | null | undefined
+  for (let i = appendIndex + 1; i < next.items.length; i++) {
+    const later = next.items[i]!
+    if (!(later.items?.length ?? 0)) continue
+    appendedExtent ??= paintExtent(slice, next, plotW, plotH, opts)
+    if (appendedExtent == null) break
+    const ext = laterExtent(later, next, plotW, plotH, opts)
+    if (ext != null && boxesOverlap(appendedExtent, ext)) return false
+  }
+
+  ctx.save()
+  if (opts.dpr != null && opts.dpr !== 1) ctx.scale(opts.dpr, opts.dpr)
+  ctx.miterLimit = 4 // the same graphics state a full repaint paints under
+  ctx.translate(pb.left, pb.top)
   renderGroup(slice, ctx, next, plotW, plotH, opts)
-  for (const i of repaint) renderGroup(next.items[i]!, ctx, next, plotW, plotH, opts)
   ctx.restore()
   return true
+}
+
+/** Painted extent of an unchanged group after the appended one, cached per group object. */
+const LATER_EXTENT = new WeakMap<SceneGroup, Box | null>()
+function laterExtent(group: SceneGroup, scene: SceneRoot, plotW: number, plotH: number, opts: RenderCanvasOptions): Box | null {
+  if (LATER_EXTENT.has(group)) return LATER_EXTENT.get(group)!
+  const box = paintExtent(group, scene, plotW, plotH, opts)
+  LATER_EXTENT.set(group, box)
+  return box
 }
 
 function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW: number, plotH: number, opts: RenderCanvasOptions = {}): void {
@@ -759,6 +886,8 @@ function fontString(it: SceneItem): string {
   return parts.join(' ')
 }
 
+const itemAngle = (it: SceneItem): number | undefined => (it as Record<string, unknown>).angle as number | undefined
+
 function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot): void {
   const defs = scene.defs
   // Path items (legend entries, tick labels' misc paths)
@@ -777,8 +906,13 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot): void 
       ctx.rect(clip.x ?? 0, clip.y ?? 0, clip.w, clip.h)
       ctx.clip()
     }
-    ctx.beginPath()
-    tracePath(ctx, segs, tx, ty)
+    if (itemAngle(it)) {
+      // the SVG element carries translate(x,y) rotate(angle): build in that frame
+      buildInItemFrame(ctx, tx, ty, itemAngle(it)!, 1, 1, () => tracePath(ctx, segs))
+    } else {
+      ctx.beginPath()
+      tracePath(ctx, segs, tx, ty)
+    }
     paintPath(ctx, segs, it, defs, 'auto')
     if (clip) ctx.restore()
     return
@@ -790,6 +924,12 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot): void 
     const r = it.radius
     const rNum = Number.isInteger(r) ? String(r) : String(Math.round(r * 1000) / 1000)
     const d = `M${rNum},0A${rNum},${rNum},0,1,1,${-rNum},0A${rNum},${rNum},0,1,1,${rNum},0`
+    if (itemAngle(it)) {
+      const segs = parsePathData(d)
+      buildInItemFrame(ctx, it.x ?? 0, it.y ?? 0, itemAngle(it)!, 1, 1, () => tracePath(ctx, segs))
+      paintPath(ctx, segs, it, defs, 'auto')
+      return
+    }
     ctx.beginPath()
     const segs = parsePathData(d).map((s) => {
       if (s.cmd === 'Z') return s
@@ -1059,6 +1199,8 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       ctx.beginPath()
       const segs = parsePathData(d)
       tracePath(ctx, segs)
+      // The trail polygon carries the FIRST item's full paint set, fill included
+      // (Vega-Lite encodes a trail's colour as `fill`; audit C23).
       paintPath(ctx, segs, first, defs, 'auto')
       return
     }

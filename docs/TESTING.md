@@ -83,6 +83,7 @@ and pixel-diffs them exactly (a pixel differs above 48 summed channel difference
 in `scripts/browser-canvas-parity.mts`. It gates canvas paint order, path replay and live text
 metrics; the call-by-call draw rules are asserted in `packages/core/src/canvas-draw.test.ts` and
 the recorded/jsdom canvas-vs-SVG differential stays in `packages/core/src/canvas.test.ts`.
+A second phase renders random append sequences to two real canvases (incremental append painting vs a full repaint of a freshly built scene) and requires every pixel to match after every step (`packages/conformance/scripts/browser-canvas-append.mts`, also runnable alone).
 
 The SVG oracle's canonicalizer (`packages/conformance/src/normalize.ts`) is strict: it records every
 paint, geometry and text attribute, the full transform and the paint order, and only normalizes

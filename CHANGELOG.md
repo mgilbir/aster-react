@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **DOM, canvas and hit-testing fixes** (audit C3, C22, C23, C41, C43, C47, C96): the
+  DOM patcher no longer leaves removed items drawn and drops others after a removal or
+  reorder; the string renderer and the DOM descriptor take every attribute from one
+  per-element list in `render.ts` (a first patch no longer rewrites gradient direction,
+  dashes, caps, the rounded frame, trail fill, ...); canvas append painting is exact
+  (in-place edits in other groups, changed guides, z-order against later groups and the
+  miter limit are handled by declining to a full repaint) and no longer serialises item
+  arrays per frame; trails paint their fill on canvas; the canvas honours symbol `angle`
+  and path `scaleX/scaleY`; the hit index picks against painted geometry (pies, maps,
+  lines, rotated text) and cannot be made to run out of memory by one oversized item.
+
 - **Incremental appends/inserts/deletes**: `diffRows`/`dataPulse` now carry an old↔new
   index mapping plus added/removed ranges. The runtime propagates length-changing
   pulses through row-wise, filter, fold/flatten, grouped and 1:1 geo/hierarchy

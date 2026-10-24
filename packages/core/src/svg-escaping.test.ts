@@ -330,8 +330,39 @@ describe('C2: SVG string renderer escapes every attribute and text value', () =>
 
   it('render.ts writes attribute values only through the shared writer (source guard)', () => {
     const src = readFileSync(join(import.meta.dirname, 'render.ts'), 'utf8')
-    const interpolations = [...src.matchAll(/="\$\{((?:[^{}]|\{[^{}]*\})*)\}/g)].map((m) => m[1]!.trim())
-    expect(interpolations.length).toBeGreaterThan(20)
+    const interpolations = [...src.split('\n').filter((l) => !/\bt\(name: string, value: string\)/.test(l)).join('\n').matchAll(/="\$\{((?:[^{}]|\{[^{}]*\})*)\}/g)].map((m) => m[1]!.trim())
+    // The per-element attribute lists write through the AttrSink writers (audit C43),
+    // so what is left to interpolate is the writers themselves plus a few constant-shaped
+    // sites; the check below still covers every one of them. (The floor only guards
+    // against the regex silently matching nothing.)
+    expect(interpolations.length).toBeGreaterThan(5)
+    // ... and no other code path may build an attribute from a variable name + value
+    // outside those writers: every ` ${name}="..."` template lives in attr/attrS/attrList
+    // or the StringAttrSink.
+    const named = src.split('\n').filter((l) => l.includes(' ${name}="'))
+    expect(named.length).toBeGreaterThan(0)
+    // (the `t(...)` writers take pre-built number strings; their call sites are checked below)
+    expect(named.filter((l) => !/escAttr\(|num\(|genD\(|rgb\(0, 0, 0\)|\bt\(name: string, value: string\)/.test(l)), 'a named attribute template that does not escape/format its value').toEqual([])
+    // `.t(name, value)` writes WITHOUT escaping, for strings built from num() output and
+    // constants only: every interpolation in such a call must be a num()/num3() call or a
+    // local that is itself built that way.
+    const numberLocals = new Set(['tx', 'ty', 'rot'])
+    const tCalls = src.split('\n').filter((l) => /\bw\.t\(/.test(l))
+    expect(tCalls.length).toBeGreaterThan(5)
+    // A `.t()` value that is not a template literal must be one of the typed builders:
+    // GeneratedPath transforms (numbers and constants only) or a content-addressed clip
+    // id / url (`clip` + base-36 hash, svg-defs.ts). Anything else is a planted raw value.
+    const TRUSTED_T_ARGS = new Set(['clipUrl(id)', 'id', 'd.transform', 'rotateItemTransform(it)', 'transformItemTransform(it)'])
+    const rawT = tCalls.map((l) => /\bw\.t\('[^']+', (.*)\)\s*$/.exec(l)?.[1]?.trim() ?? '')
+      .filter((arg) => !arg.startsWith('`') && !TRUSTED_T_ARGS.has(arg))
+    expect(rawT, 'unescaped .t() writer fed an untrusted expression').toEqual([])
+    const unsafeT = tCalls.flatMap((l) => [...l.matchAll(/\$\{((?:[^{}]|\{[^{}]*\})*)\}/g)].map((m) => m[1]!.trim()))
+      .filter((e) => !/^num3?\(/.test(e) && !numberLocals.has(e))
+    expect(unsafeT, 'unescaped .t() writer fed something other than numbers').toEqual([])
+    for (const name of numberLocals) {
+      const defs = src.split('\n').filter((l) => new RegExp(`\\bconst ${name} =`).test(l))
+      for (const d of defs) expect(d, `local ${name} must be built from num()`).toMatch(/num3?\(/)
+    }
     const bad = interpolations.filter((e) => !/^(num3?|escAttr|genD|fp)\(/.test(e))
     expect(bad, JSON.stringify(bad)).toEqual([])
   })
