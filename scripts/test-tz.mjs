@@ -6,8 +6,8 @@
  * hid every bug where a UTC scale formatted its labels in the viewer's local zone
  * (audit C25). This runs, per zone:
  *
- *   - the zone-aware unit tests (`*.tz.test.ts`) and the scale-spec oracle vectors
- *     (local-time scales were recorded per zone; UTC and numeric ones must not move)
+ *   - the zone-aware unit tests (`*.tz.test.ts`) and the live scale-spec differential
+ *     against real Vega (vega runs in the same process and zone; UTC and numeric scales must not move)
  *   - the time-zone corpus (`packages/conformance/corpus-tz`): raw Vega specs rendered
  *     by real vega and by Aster in that same zone, SVG diffed
  *
@@ -19,7 +19,7 @@ import { spawnSync } from 'node:child_process'
 export const ZONES = ['America/New_York', 'Asia/Kolkata']
 /** The corpus also runs in UTC (the default test run does not cover it). */
 const CORPUS_ZONES = ['UTC', ...ZONES]
-const UNIT_FILTERS = ['.tz.test.', 'scale-spec-vectors']
+const UNIT_FILTERS = ['.tz.test.', 'differential-scale-spec']
 
 function run(label, cmd, args, env) {
   console.log(`\n[tz] ${label}`)

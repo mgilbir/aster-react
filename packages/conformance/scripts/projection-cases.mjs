@@ -1,44 +1,10 @@
 /**
- * Records "projection spec -> built projection" oracle vectors from real vega
- * (the vega-geo Projection transform over vega-projection's registry), written to
- * `packages/core/testdata/vectors/spec-level/vega-projection.json`. Replayed by
- * `packages/core/src/projection-vectors.test.ts`.
- *
- *   pnpm --filter @aster/conformance run vectors:projection
+ * Projection oracle cases: a Vega projection spec (`projections: [{ name: 'p', ...params }]`)
+ * built by real vega (the vega-geo Projection transform over vega-projection's
+ * registry) and by Aster's `buildProjection`, then compared on the projection's
+ * properties, projected points and path strings over `GEOMS`. Consumed by
+ * `differential-projection.test.mts` (live, same engine; see there for why nothing is recorded).
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-process.env.TZ = 'UTC'
-const here = dirname(fileURLToPath(import.meta.url))
-const vega = await import('vega')
-
-function enc(v) {
-  if (v === undefined) return { $: 'undef' }
-  if (typeof v === 'number') {
-    if (Number.isNaN(v)) return { $: 'nan' }
-    if (v === Infinity) return { $: 'inf' }
-    if (v === -Infinity) return { $: '-inf' }
-    if (v === 0 && 1 / v < 0) return { $: '-0' }
-    return v
-  }
-  if (typeof v === 'function') return { $: 'fn' }
-  if (Array.isArray(v)) return v.map(enc)
-  if (v !== null && typeof v === 'object') {
-    const o = {}
-    for (const k of Object.keys(v).sort()) o[k] = enc(v[k])
-    return o
-  }
-  return v
-}
-const attempt = (f) => {
-  try {
-    return enc(f())
-  } catch {
-    return { $: 'throw' }
-  }
-}
 
 const poly = (ring) => ({ type: 'Polygon', coordinates: [ring] })
 const feature = (g, props = {}) => ({ type: 'Feature', properties: props, geometry: g })
@@ -50,16 +16,16 @@ const POINT = { type: 'Point', coordinates: [-95, 38] }
 const LINE = { type: 'LineString', coordinates: [[-120, 30], [-100, 40], [-80, 35]] }
 const MULTI = { type: 'MultiPolygon', coordinates: [[US.coordinates[0]], [EU.coordinates[0]]] }
 const FC = { type: 'FeatureCollection', features: [feature(US), feature(EU), feature(ASIA)] }
-const GEOMS = { us: US, eu: EU, asia: ASIA, world: WORLD, point: POINT, line: LINE, multi: MULTI, fc: FC }
+export const GEOMS = { us: US, eu: EU, asia: ASIA, world: WORLD, point: POINT, line: LINE, multi: MULTI, fc: FC }
 
-const POINTS = [[-95, 38], [0, 0], [10, 50], [120, -30], [-170, 60], [179, 10]]
+export const POINTS = [[-95, 38], [0, 0], [10, 50], [120, -30], [-170, 60], [179, 10]]
 const TYPES = ['albers', 'albersusa', 'albersUsa', 'AlbersUSA', 'azimuthalequalarea', 'azimuthalEqualArea', 'azimuthalequidistant', 'azimuthalEquidistant',
   'conicconformal', 'conicConformal', 'conicequalarea', 'conicEqualArea', 'conicequidistant', 'conicEquidistant', 'equalearth', 'equalEarth', 'EqualEarth',
   'equirectangular', 'Equirectangular', 'gnomonic', 'identity', 'mercator', 'Mercator', 'MERCATOR', 'mollweide', 'naturalearth1', 'naturalEarth1', 'NaturalEarth1',
   'orthographic', 'orthoGraphic', 'stereographic', 'transversemercator', 'transverseMercator']
 const UNKNOWN = ['robinson', 'albers-usa', 'natural-earth', 'conic-equal-area', 'azimuthal-equal-area', 'x', 'mercatorr', 'naturalEarth2']
 
-const cases = []
+export const cases = []
 const add = (name, params) => cases.push({ name, params })
 
 for (const t of TYPES) add(`type/${t}`, { type: t })
@@ -113,43 +79,3 @@ add('fit/albersusa-territories', { type: 'albersUsa', size: [300, 200], fit: [fe
 add('pointRadius/applies-to-path', { type: 'mercator', scale: 100, translate: [100, 100], pointRadius: 7 })
 add('pointRadius/with-fit', { type: 'mercator', size: [300, 200], fit: FC, pointRadius: 3 })
 
-function sampleOf(proj) {
-  const o = {}
-  const types = ['type', 'scale', 'translate', 'center', 'rotate', 'clipAngle', 'clipExtent', 'precision', 'parallels', 'reflectX', 'reflectY']
-  for (const m of types) if (typeof proj[m] === 'function') o[m] = attempt(() => proj[m]())
-  o.type = proj.type
-  o.points = POINTS.map((p) => attempt(() => proj(p)))
-  o.paths = {}
-  for (const [g, geo] of Object.entries(GEOMS)) o.paths[g] = attempt(() => proj.path(geo))
-  o.pointRadius = attempt(() => proj.path.pointRadius())
-  return o
-}
-
-async function build(params) {
-  const errors = []
-  const quiet = { level() { return this }, error(...a) { errors.push(a); return this }, warn() { return this }, info() { return this }, debug() { return this } }
-  const spec = structuredClone({ width: 300, height: 200, projections: [{ name: 'p', ...params }] })
-  const view = new vega.View(vega.parse(spec), { renderer: 'none', logLevel: vega.None, logger: quiet })
-  view.logger(quiet)
-  await view.runAsync()
-  if (errors.length) throw new Error(String(errors[0]))
-  return view.scale('p')
-}
-
-const out = []
-let throws = 0
-for (const c of cases) {
-  let want
-  try {
-    const p = await build(c.params)
-    want = sampleOf(p)
-  } catch {
-    want = { $: 'throw' }
-    throws++
-  }
-  out.push({ name: c.name, params: enc(c.params), want })
-}
-const dest = join(here, '..', '..', 'core', 'testdata', 'vectors', 'spec-level', 'vega-projection.json')
-mkdirSync(dirname(dest), { recursive: true })
-writeFileSync(dest, `{"oracle":${JSON.stringify('vega@' + vega.version)},"geoms":${JSON.stringify(GEOMS)},"points":${JSON.stringify(POINTS)},"cases":[\n${out.map((c) => JSON.stringify(c)).join(',\n')}\n]}\n`)
-console.log(`[vectors] wrote ${out.length} projection cases (${throws} oracle throws) -> ${dest}`)
