@@ -256,7 +256,8 @@ function compareScales(a: ScaleSnapshot[], b: ScaleSnapshot[], scope: string, di
     } else if (JSON.stringify(x.range) !== JSON.stringify(y.range)) {
       diffs.push(`${scope} scale ${name}: range ${JSON.stringify(x.range)} vs ${JSON.stringify(y.range)}`)
     }
-    if (x.bandwidth !== y.bandwidth) diffs.push(`${scope} scale ${name}: bandwidth ${x.bandwidth} vs ${y.bandwidth}`)
+    // NaN is the bandwidth of a band scale over a non-numeric range, on both sides
+    if (x.bandwidth !== y.bandwidth && !(Number.isNaN(x.bandwidth) && Number.isNaN(y.bandwidth))) diffs.push(`${scope} scale ${name}: bandwidth ${x.bandwidth} vs ${y.bandwidth}`)
   }
   return names.length
 }

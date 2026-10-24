@@ -76,14 +76,10 @@ export function compileChart(rawSpec: VgSpec): CompiledChart {
   }
 
   const scales: CompiledScale[] = []
+  if (spec.scales != null && !Array.isArray(spec.scales)) throw new Error('[aster] spec.scales must be an array of scale definitions')
   for (const s of (spec.scales as Array<Record<string, unknown>>) ?? []) {
-    const compiled = compileScale(s)
-    // Vega-Lite "category" range (unhandled by vega-scale) maps to tableau10 —
-    // unless a config.range.category shadows it (vega's range lookup consults
-    // the config block first). Resolved here, once, so evaluation never has to
-    // rewrite the compiled IR.
-    if (compiled.range === 'category' && !configRange?.category) compiled.range = 'tableau10'
-    scales.push(compiled)
+    if (s === null || typeof s !== 'object' || Array.isArray(s)) throw new Error('[aster] a scale definition must be an object')
+    scales.push(compileScale(s))
   }
 
   const axes: CompiledAxis[] = []
@@ -115,7 +111,7 @@ export function compileChart(rawSpec: VgSpec): CompiledChart {
 
   const projections: CompiledProjection[] = []
   for (const pr of (spec.projections as Array<Record<string, unknown>>) ?? []) {
-    projections.push(compileProjection(pr))
+    projections.push(compileProjection(pr, (cfg as { projection?: Record<string, unknown> }).projection))
   }
 
   return {
@@ -157,48 +153,20 @@ export function compileChart(rawSpec: VgSpec): CompiledChart {
  * `{signal}` object (resolved at runtime), or an expression string (e.g.
  * `"[width / 2, height / 2]"`).
  */
-function compileProjection(pr: Record<string, unknown>): CompiledProjection {
-  const num = (v: unknown): number | { signal: string } | undefined =>
-    typeof v === 'number' ? v : v && typeof v === 'object' && 'signal' in v ? { signal: String((v as { signal: unknown }).signal) } : undefined
-  const tup = (v: unknown): [number, number] | [number, number, number] | { signal: string } | undefined => {
-    // keep a third element: rotate's gamma component
-    if (Array.isArray(v) && v.length > 2) return [Number(v[0]), Number(v[1]), Number(v[2])] as [number, number, number]
-    if (Array.isArray(v)) return [Number(v[0]), Number(v[1])]
-    if (typeof v === 'string') return { signal: v }
-    if (v && typeof v === 'object' && 'signal' in v) return { signal: String((v as { signal: unknown }).signal) }
-    return undefined
-  }
-  const out: CompiledProjection = { name: pr.name as string, type: (pr.type as string) ?? 'mercator' }
-  if (pr.scale != null) out.scale = num(pr.scale)
-  if (pr.translate != null) out.translate = tup(pr.translate) as [number, number] | { signal: string }
-  if (pr.center != null) out.center = tup(pr.center) as [number, number] | { signal: string }
-  if (pr.rotate != null) out.rotate = tup(pr.rotate) as [number, number] | [number, number, number] | { signal: string }
-  if (pr.precision != null) out.precision = num(pr.precision)
-  if (pr.clipAngle != null) out.clipAngle = num(pr.clipAngle)
-  if (pr.reflectX != null) out.reflectX = !!pr.reflectX
-  if (pr.reflectY != null) out.reflectY = !!pr.reflectY
-  // Projection-specific parameters pass through (parallels, pointRadius,
-  // clipExtent, extent, fit, and the exotic projection params). Signals are
-  // kept in signal form so the runtime resolves them per evaluation.
-  const known = new Set(['type', 'name', 'scale', 'translate', 'center', 'rotate', 'precision', 'clipAngle', 'reflectX', 'reflectY'])
-  const params: Record<string, unknown> = {}
-  let hasParams = false
+function compileProjection(pr: Record<string, unknown>, config?: Record<string, unknown>): CompiledProjection {
+  // vega-parser: every parameter is carried (a signal stays a signal; the runtime
+  // resolves it per evaluation), then `config.projection` fills what the spec left out.
+  const out = dict<unknown>({ name: pr.name, type: (pr.type as string) || 'mercator' })
   for (const [k, v] of Object.entries(pr)) {
-    if (known.has(k) || v == null) continue
-    // Nested arrays (clipExtent [[x0,y0],[x1,y1]]) pass through verbatim:
-    // num/tup would coerce the inner arrays to NaN.
-    params[k] =
-      num(v) ??
-      (Array.isArray(v) ? v.map((x) => (typeof x === 'number' ? Number(x) : x)) : undefined) ??
-      tup(v) ??
-      (typeof v === 'boolean' ? v : v)
-    hasParams = true
+    if (k === 'name' || k === 'type' || v == null) continue
+    out[k] = v
   }
-  if (hasParams) out.params = params
-  return out
+  for (const [k, v] of Object.entries(config ?? {})) {
+    if (out[k] == null && v != null) out[k] = v
+  }
+  return out as unknown as CompiledProjection
 }
 
-/** Parse autosize field: string like 'none'/'pad'/'fit' OR {type: 'none'} -> the type string or undefined. */
 function resolveAutosize(value: unknown): string | undefined {
   if (value == null) return undefined
   if (typeof value === 'string') return value || undefined
@@ -276,7 +244,8 @@ function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSi
   for (const s of signals ?? []) {
     if (!s || typeof s !== 'object') continue
     const def: CompiledSignalDef = { name: s.name as string }
-    const value = s.value ?? s.init
+    // a null value is a value (`??` would fall through to `init` for it)
+    const value = s.value !== undefined ? s.value : s.init
     if (value !== undefined) def.value = value
     if (typeof s.update === 'string') def.update = s.update
     if (s.bind != null && (typeof s.bind === 'string' || typeof s.bind === 'object')) {
@@ -354,16 +323,16 @@ function compileTransform(t: Record<string, unknown>): CompiledTransform {
 }
 
 function compileScale(s: Record<string, unknown>): CompiledScale {
-  const out: CompiledScale = {
-    name: s.name as string,
-    type: s.type as CompiledScale['type'],
-    domain: s.domain as ScaleDomain,
-    range: s.range as ScaleRange,
+  // prototype-less: scale keys are spec data (`__proto__` stays a plain key)
+  const out = dict<unknown>({ name: s.name, type: s.type, domain: s.domain, range: s.range })
+  // vega-parser copies every other scale key through to the Scale transform
+  // (interpolateGamma, schemeExtent, domainImplicit, ...): a whitelist silently
+  // dropped whatever it forgot. buildScale ignores keys the scale has no setter for.
+  for (const key of Object.keys(s)) {
+    if (key === 'name' || key === 'type' || key === 'domain' || key === 'range') continue
+    if (s[key] !== undefined) out[key] = s[key]
   }
-  for (const key of ['zero', 'reverse', 'clamp', 'round', 'nice', 'padding', 'paddingInner', 'paddingOuter', 'rangeMin', 'rangeMax', 'base', 'exponent', 'constant', 'domainMin', 'domainMax', 'domainMid', 'bins', 'interpolate', 'scheme', 'align', 'domainRaw', 'unknown'] as const) {
-    if (s[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = s[key]
-  }
-  return out
+  return out as unknown as CompiledScale
 }
 
 function compileAxis(a: Record<string, unknown>): CompiledAxis {

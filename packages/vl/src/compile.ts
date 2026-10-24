@@ -2057,9 +2057,21 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       const discretePos = type === 'band' || type === 'point' || type === 'ordinal' || type === 'bin-ordinal'
       for (const [k, v] of Object.entries(def.scale)) {
         if (k === 'type' || k === 'zero' || k === 'nice' || k === 'padding' || k === 'paddingInner') continue
+        // vega-lite folds rangeMin / rangeMax into the range array (below); they are not Vega scale properties
+        if (k === 'rangeMin' || k === 'rangeMax') continue
         // discrete positional scales ignore continuous domain adjustments
         if (discretePos && (k === 'domain' || k === 'domainMin' || k === 'domainMax' || k === 'domainMid')) continue
+        // ... and a colour scheme or bins do not apply to a band/point scale (vega-lite drops them with a warning)
+        if (discretePos && (k === 'scheme' || k === 'bins')) continue
         sc[k] = v
+      }
+      const rMin = def.scale.rangeMin
+      const rMax = def.scale.rangeMax
+      if ((rMin != null || rMax != null) && Array.isArray(sc.range)) {
+        const r = (sc.range as unknown[]).slice()
+        if (rMin != null) r[0] = rMin
+        if (rMax != null) r[r.length - 1] = rMax
+        sc.range = r
       }
     }
     scales.push(sc)
@@ -2199,7 +2211,8 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         name: 'color',
         type: 'ordinal',
         domain: sortedDomain(colorDef, dataName),
-        range: (colorDef.scale?.range as unknown) ?? colorDef.scale?.scheme ?? 'category',
+        // vega-lite: a scheme is `range: {scheme}`; a bare string is a config.range name
+        range: (colorDef.scale?.range as unknown) ?? (colorDef.scale?.scheme != null ? schemeRange(colorDef.scale.scheme) : 'category'),
       })
     } else {
       const cs = colorDef.scale ?? {}
@@ -2216,7 +2229,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         ...(cs.range != null
           ? { range: cs.range }
           : cs.scheme != null
-            ? { range: { scheme: cs.scheme } }
+            ? { range: schemeRange(cs.scheme) }
             : { range: cs.domainMid != null ? 'diverging' : mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp' }),
         // vega-lite sets the colorspace for continuous color scales (probed:
         // interpolate hcl on ramp/scheme/diverging alike)
@@ -2238,6 +2251,15 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
   void width
   void height
   return scales
+}
+
+/** vega-lite's `scale.scheme` (a name, or `{name, extent, count}`) as a Vega range `{scheme, extent?, count?}`. */
+function schemeRange(scheme: unknown): Record<string, unknown> {
+  if (isObject(scheme)) {
+    const s = scheme as { name?: unknown; extent?: unknown; count?: unknown }
+    return { scheme: s.name, ...(s.extent != null ? { extent: s.extent } : {}), ...(s.count != null ? { count: s.count } : {}) }
+  }
+  return { scheme }
 }
 
 function zeroDefaultFor(mark: string, channel: string, orient: string): boolean {

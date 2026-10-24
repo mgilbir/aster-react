@@ -1,0 +1,61 @@
+{
+ "$schema": "https://vega.github.io/schema/vega/v6.json",
+ "width": 400,
+ "height": 200,
+ "padding": 5,
+ "autosize": "none",
+ "background": "white",
+ "data": [
+  {
+   "name": "d",
+   "values": [
+    {
+     "t": 1704085200000
+    }
+   ]
+  }
+ ],
+ "scales": [
+  {
+   "name": "x",
+   "type": "linear",
+   "domain": [
+    0,
+    10
+   ],
+   "range": "width"
+  },
+  {
+   "name": "y",
+   "type": "linear",
+   "domain": [
+    0,
+    10
+   ],
+   "range": "height"
+  }
+ ],
+ "marks": [
+  {
+   "type": "text",
+   "encode": {
+    "update": {
+     "x": {
+      "value": 10
+     },
+     "y": {
+      "value": 20
+     },
+     "text": {
+      "signal": "datum.t",
+      "format": "%Y-%m-%d %H:%M",
+      "formatType": "utc"
+     }
+    }
+   },
+   "from": {
+    "data": "d"
+   }
+  }
+ ]
+}

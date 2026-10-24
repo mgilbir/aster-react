@@ -15,6 +15,7 @@
     "bench": "pnpm bench:runtime && pnpm bench:incremental && pnpm bench:browser-stream && pnpm bench:differential && pnpm bench:memory && pnpm bench:bundle && pnpm bench:browser",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "bench:incremental": "tsx src/incremental.bench.tsx",
+    "bench:scales": "node scripts/scale-build.bench.mjs",
     "bench:browser-stream": "tsx scripts/browser-stream.bench.mjs"
   },
   "dependencies": {

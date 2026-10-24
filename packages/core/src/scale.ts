@@ -13,8 +13,32 @@ import {
 } from './arr.js'
 import { ownGet } from './util.js'
 import { boundedCount } from './limits.js'
-import { piecewise } from './interp.js'
-import { interpolateRgb } from './interp.js'
+import {
+  piecewise,
+  interpolateValue,
+  interpolateArray,
+  interpolateBasis,
+  interpolateBasisClosed,
+  interpolateDate,
+  interpolateDiscrete,
+  interpolateHue,
+  interpolateNumber,
+  interpolateNumberArray,
+  interpolateObject,
+  interpolateRound,
+  interpolateString,
+  interpolateZoom,
+  interpolateRgb,
+  interpolateRgbBasis,
+  interpolateRgbBasisClosed,
+  interpolateHsl,
+  interpolateHslLong,
+  interpolateLab,
+  interpolateHcl,
+  interpolateHclLong,
+  interpolateCubehelix,
+  interpolateCubehelixLong,
+} from './interp.js'
 import {
   identityScale,
   ordinal as d3Ordinal,
@@ -50,6 +74,7 @@ import {
   isString,
   array as arr,
   error,
+  toNumber,
 } from './util.js'
 import {
   millisecond,
@@ -96,7 +121,8 @@ export function bandSpace(count: number, paddingInner: number, paddingOuter: num
 // ---- numbers.js / slice.js --------------------------------------------------
 
 export function numbers(_: Iterable<unknown>): number[] {
-  return Array.from(_, (v) => +(v as number))
+  // vega-scale numbers.js: map(toNumber), so null / '' stay null (a bin boundary is not 0)
+  return Array.prototype.map.call(_, toNumber) as number[]
 }
 
 export const slice = Array.prototype.slice
@@ -293,7 +319,7 @@ export function scaleBinOrdinal(): SR {
 
   scale.domain = function (_?: Iterable<unknown>): unknown {
     if (arguments.length) {
-      domain = Array.from(_ as Iterable<unknown>, (v) => +(v as number))
+      domain = numbers(_ as Iterable<unknown>)
       return scale
     } else {
       return domain.slice()
@@ -389,7 +415,7 @@ export function isRegisteredScale(scale: SR): boolean {
 }
 
 /** Augment scales with their type and needed inverse methods. */
-function create(type: string, constructor: () => SR, metadata: string | string[]): () => SR {
+function create(type: string, constructor: () => SR, metadata?: string | string[]): () => SR {
   const ctr = function scale(this: unknown): SR {
     const s = constructor()
     if (!s.invertRange) {
@@ -461,7 +487,7 @@ const d3 = {
 }
 
 // identity scale
-scale(Identity, d3.scaleIdentity as unknown as () => SR, Continuous as string)
+scale(Identity, d3.scaleIdentity as unknown as () => SR) // upstream registers identity with no metadata (not continuous)
 // continuous scales
 scale(Linear, d3.scaleLinear as unknown as () => SR, Continuous)
 scale(Log, d3.scaleLog as unknown as () => SR, [Continuous, Log])
@@ -777,9 +803,35 @@ function method(type?: string): unknown {
   return ownGet(interpolators, name)
 }
 
-const interpolators: Record<string, unknown> = {
+// The d3-interpolate namespace vega-scale reads (`$[method(type)]`), by export
+// name. interpolateTransformCss/Svg are the only omissions: they parse CSS/SVG
+// transforms through a DOM node, which a headless engine has no use for (upstream
+// throws without a `document` too).
+const interpolators: Record<string, unknown> = Object.assign(Object.create(null), {
+  interpolate: interpolateValue,
+  interpolateArray,
+  interpolateBasis,
+  interpolateBasisClosed,
+  interpolateDate,
+  interpolateDiscrete,
+  interpolateHue,
+  interpolateNumber,
+  interpolateNumberArray,
+  interpolateObject,
+  interpolateRound,
+  interpolateString,
+  interpolateZoom,
   interpolateRgb,
-}
+  interpolateRgbBasis,
+  interpolateRgbBasisClosed,
+  interpolateHsl,
+  interpolateHslLong,
+  interpolateLab,
+  interpolateHcl,
+  interpolateHclLong,
+  interpolateCubehelix,
+  interpolateCubehelixLong,
+})
 
 // ---- schemes.js / palettes.js -----------------------------------------------
 

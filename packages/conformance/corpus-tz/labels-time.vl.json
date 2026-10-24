@@ -1,0 +1,17 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "width": 400,
+  "height": 300,
+  "padding": 5,
+  "autosize": "none",
+  "data": { "name": "table", "values": [
+    { "t": "2024-01-15", "v": 3 },
+    { "t": "2024-02-15", "v": 5 },
+    { "t": "2024-03-15", "v": 4 }
+  ] },
+  "mark": "line",
+  "encoding": {
+    "x": { "field": "t", "type": "temporal" },
+    "y": { "field": "v", "type": "quantitative" }
+  }
+}

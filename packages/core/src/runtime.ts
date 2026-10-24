@@ -6,9 +6,10 @@
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, compileExprTransform, sortRows, sortOrder, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row, type TransformContext } from './transform.js'
+import { fieldOf } from './transform-agg.js'
 import { activeMeter, withLimits, meterItems, boundedCount, checkRowCount } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
-import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
+import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale, type ScaleContext } from './scales.js'
 
 /** Scale types whose domain is an ordered set of discrete values. */
 const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
@@ -20,6 +21,7 @@ import type {
   CompiledData,
   CompiledLegend,
   CompiledMark,
+  CompiledProjection,
   CompiledScale,
   CompiledTransform,
   EncodeValue,
@@ -46,7 +48,7 @@ import { flattenLength } from './transform-basic.js'
 import { trellisLayout, measureBounds } from './trellis.js'
 import { baselineOffset, boundAxisGroup, boundGroupItem, boundLeaf, boundText, Bounds } from './bounds.js'
 import { itemTextWidth, nominalTextWidth, type FontProps } from './text-metrics.js'
-import { symbolPath } from './render.js'
+import { symbolPath, rectItemPath } from './render.js'
 
 const DEFAULT_SIZE = 500
 
@@ -320,6 +322,9 @@ interface EvalContext {
   signalParams: Record<string, unknown>
   width: number
   height: number
+  /** Position of the enclosing facet group, for `{field: {group: 'x' | 'y'}}` references. */
+  groupX?: number
+  groupY?: number
   datasets: Map<string, Row[]>
   /** A legend tickCount threw: the whole layout aborts (raw-guide mode). */
   rawGuides?: boolean
@@ -330,6 +335,8 @@ interface EvalContext {
    * so bindings can never outlive the scales they reference. */
   encodeBinding?: EncodeBinding
   projections: Map<string, unknown>
+  /** `datasets.size` when each fit projection was last built (see refreshProjection). */
+  projectionStamp: Map<string, number>
   runtime: ExpressionRuntime
   _defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }>
   /** Cached facet grid layout (computed once per chart). */
@@ -449,7 +456,7 @@ function prepareChartCtx(
   // Inputs besides the signals that change what a reused scale/item would be.
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}`
   const ctx: EvalContext = {
-    chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new Map(), runtime, _defs: defs,
+    chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new ProjectionRegistry(), projectionStamp: new Map(), runtime, _defs: defs,
     hierarchies: new Map(), affected: new Set(), incremental: false, deadline, checkDeadline,
     datasetPulses: new Map(),
     prev: txn.prev, draft: newState(txn.gen), gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
@@ -501,11 +508,6 @@ function prepareChartCtx(
   // fresh state is still recorded for the next call).
   ctx.incremental = changedNames.size > 0 && txn.prev !== undefined
 
-  // Remap Vega-Lite "category" range (unhandled by vega-scale) to tableau10 —
-  // unless a config.range.category shadows it (vega's range lookup consults
-  // the config block first). This is a per-evaluation override on the scale
-  // handed to buildScale, not a write to the compiled IR (see scaleDefOf).
-  //
   // Resolve signal `update` expressions, datasets, and scales to a fixed
   // point. Signals can reference data/scales and vice versa (e.g. brush-bounded
   // domains), which vega handles reactively; we emulate the initial pulse.
@@ -577,55 +579,68 @@ function ctxFpOf(ctx: EvalContext): string {
   return ctx.fpMemo ??= `${paramFpOf(ctx.signalParams)}\u0002${ctx.extraFp}`
 }
 
-/** Build d3-geo projections from the compiled spec, resolving signal params. */
+/**
+ * vega-parser `parseParameter`: a projection parameter with every `{signal}`
+ * (also inside arrays, e.g. a `clipExtent`) replaced by its value. `fit` may be a
+ * GeoJSON object itself (left as is) or a signal such as `data("source_0")`.
+ */
+function resolveProjectionParam(ctx: EvalContext, v: unknown): unknown {
+  if (Array.isArray(v)) return v.map((x) => resolveProjectionParam(ctx, x))
+  if (v && typeof v === 'object' && typeof (v as { signal?: unknown }).signal === 'string') {
+    try {
+      return ctx.runtime.expr((v as { signal: string }).signal)({}, ctx.signalParams)
+    } catch {
+      // The signal reads a dataset or scale that does not exist yet; the next pass resolves it.
+      return undefined
+    }
+  }
+  return v
+}
+
+/** Build the d3-geo projection one compiled definition describes, in the current context. */
+function buildProjectionOf(ctx: EvalContext, p: CompiledProjection): unknown {
+  const build = requireGeo() // throws an actionable error if the geo addon is absent
+  const resolved: Record<string, unknown> = dict<unknown>({ name: p.name, type: p.type })
+  for (const k of Object.keys(p)) {
+    if (k === 'name' || k === 'type') continue
+    resolved[k] = resolveProjectionParam(ctx, p[k])
+  }
+  return build(resolved as never, ctx.width, ctx.height)
+}
+
+/**
+ * Build the projections (vega-geo's Projection transform). A projection that
+ * `fit`s a dataset depends on that dataset, which may not exist yet in the early
+ * passes: such a projection is rebuilt whenever the set of built datasets has
+ * changed since (see `refreshProjection`), and once more at the end of preparation.
+ */
 function buildProjections(ctx: EvalContext): void {
   if (!ctx.chart.projections?.length) return
-  const build = requireGeo() // throws an actionable error if the geo addon is absent
-  const evalNum = (v: unknown): number | undefined => {
-    if (typeof v === 'number') return v
-    if (v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)) {
-      try { const r = ctx.runtime.expr(String((v as { signal: string }).signal))({}, ctx.signalParams); return typeof r === 'number' ? r : undefined } catch { return undefined }
-    }
-    return undefined
-  }
-  const evalTup = (v: unknown): [number, number] | [number, number, number] | undefined => {
-    // keep a third element: rotate's gamma component
-    if (Array.isArray(v) && v.length > 2) return [Number(v[0]), Number(v[1]), Number(v[2])]
-    if (Array.isArray(v)) return [Number(v[0]), Number(v[1])]
-    if (v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)) {
-      try {
-        const r = ctx.runtime.expr(String((v as { signal: string }).signal))({}, ctx.signalParams)
-        if (Array.isArray(r) && r.length > 2) return [Number(r[0]), Number(r[1]), Number(r[2])]
-        if (Array.isArray(r)) return [Number(r[0]), Number(r[1])]
-      } catch { /* ignore */ }
-    }
-    return undefined
-  }
-  const evalAny = (v: unknown): unknown => {
-    if (Array.isArray(v)) return v.map((x) => (x != null && typeof x === 'object' && 'signal' in (x as Record<string, unknown>) ? evalAny(x) : x))
-    if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string') return v
-    if (v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)) {
-      try { return ctx.runtime.expr(String((v as { signal: string }).signal))({}, ctx.signalParams) } catch { return undefined }
-    }
-    return v
-  }
   for (const p of ctx.chart.projections) {
-    const params: Record<string, unknown> | undefined = p.params
-      ? Object.fromEntries(Object.entries(p.params).map(([k, v]) => [k, evalAny(v)]))
-      : undefined
-    ctx.projections.set(p.name, build({
-      name: p.name,
-      type: p.type,
-      scale: evalNum(p.scale),
-      translate: evalTup(p.translate),
-      center: evalTup(p.center),
-      rotate: evalTup(p.rotate),
-      precision: evalNum(p.precision),
-      clipAngle: evalNum(p.clipAngle),
-      reflectX: p.reflectX,
-      reflectY: p.reflectY,
-      params,
-    }, ctx.width, ctx.height))
+    ctx.projections.set(p.name, buildProjectionOf(ctx, p))
+    ctx.projectionStamp.set(p.name, ctx.datasets.size)
+  }
+}
+
+/**
+ * Refresh the projection a dataset transform asks for. One that fits data is rebuilt when
+ * more datasets exist than when it was last built, so a `geopath`/`geoshape`
+ * transform in a later dataset sees the fit to the data built before it.
+ */
+function refreshProjection(ctx: EvalContext, name: string): void {
+  const def = ctx.chart.projections?.find((p) => p.name === name)
+  if (def?.fit && ctx.projectionStamp.get(name) !== ctx.datasets.size) {
+    ctx.projections.set(name, buildProjectionOf(ctx, def))
+    ctx.projectionStamp.set(name, ctx.datasets.size)
+  }
+}
+
+/** The projections map a dataset transform sees: reads go through `refreshProjection`. */
+class ProjectionRegistry extends Map<string, unknown> {
+  refresh: ((name: string) => void) | undefined
+  override get(name: string): unknown {
+    this.refresh?.(name)
+    return super.get(name)
   }
 }
 
@@ -1283,7 +1298,7 @@ function buildContent(
     ? ctx.chart.padding
     : computeGuidePadding(
         items, facetWidth, facetHeight, ctx.chart.padding,
-        (ctx.chart.projections ?? []).some((p) => p.type === 'azimuthalequalarea' && Number(p.clipAngle) === 0),
+        (ctx.chart.projections ?? []).some((p) => String(p.type).toLowerCase() === 'azimuthalequalarea' && Number(p.clipAngle) === 0),
       )
   // Vega's renderers visit top-level items in dataflow order: axes (including
   // grid axes) first, then marks/scopes, then legends, then the title. Our
@@ -2761,6 +2776,20 @@ function normalizePulse(p: StepPulse, rowCount: number): StepPulse {
 }
 
 function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): void {
+  // While datasets build, a transform asking for a projection that fits data gets it
+  // refreshed against the datasets built so far. The registry outlives the evaluation
+  // (scenes keep the transform contexts holding it), so the hook is bound only for this
+  // call and never leaves the evaluation context reachable from it.
+  const registry = ctx.projections as ProjectionRegistry
+  if (ctx.chart.projections?.some((p) => p.fit)) registry.refresh = (name) => refreshProjection(ctx, name)
+  try {
+    buildDatasetsOf(ctx, inputData)
+  } finally {
+    registry.refresh = undefined
+  }
+}
+
+function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>): void {
   ctx.dsEpoch++
   const sources = new Map<string, CompiledChart['data'][number]>()
   for (const d of ctx.chart.data) sources.set(d.name, d)
@@ -2939,15 +2968,24 @@ function discreteCensusApplies(dom: { sort?: unknown }): boolean {
   return !(sort && typeof sort === 'object' && !Array.isArray(sort) && 'op' in (sort as object))
 }
 
+/** vega-util toNumber as a number: null / '' / undefined are NaN (skipped by the extent). */
+function censusNumber(v: unknown): number {
+  return v == null || v === '' ? NaN : +(v as number)
+}
+
 function freshContCensus(dom: { data: string; field: string }, rows: Row[]): ContCensus {
   const vals = new Array<number>(rows.length)
   let lo = Infinity, hi = -Infinity
+  // an infinite value makes vega's extent [undefined, undefined]: nothing to prove stable
+  let infinite = false
+  const read = scaleFieldOf(dom.field)
   for (let i = 0; i < rows.length; i++) {
-    const v = Number(getField(rows[i]!, dom.field))
+    // vega's Extent reads toNumber(value): null / '' are not 0, they are absent
+    const v = censusNumber(read(rows[i]))
     vals[i] = v
-    if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v }
+    if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v } else if (v === Infinity || v === -Infinity) infinite = true
   }
-  const finite = lo <= hi
+  const finite = lo <= hi && !infinite
   let loCount = 0, hiCount = 0
   if (finite) for (const v of vals) { if (v === lo) loCount++; if (v === hi) hiCount++ }
   return { data: dom.data, field: dom.field, lo: finite ? lo : 0, hi: finite ? hi : 1, loCount, hiCount, finite, vals }
@@ -2957,8 +2995,9 @@ function freshDiscCensus(dom: { data: string; field: string }, rows: Row[]): Dis
   const counts = new Map<unknown, number>()
   const firstIdx = new Map<unknown, number>()
   const vals: unknown[] = new Array(rows.length)
+  const read = scaleFieldOf(dom.field)
   for (let i = 0; i < rows.length; i++) {
-    const v = getField(rows[i]!, dom.field)
+    const v = read(rows[i])
     vals[i] = v
     counts.set(v, (counts.get(v) ?? 0) + 1)
     if (!firstIdx.has(v)) firstIdx.set(v, i)
@@ -2984,12 +3023,15 @@ function advanceContCensus(cen: ContCensus, rows: Row[], pulse: StepPulse): Cont
       if (oldV === lo) loCount--
       if (oldV === hi) hiCount--
     }
-    if (newV === undefined || !Number.isFinite(newV)) return
+    if (newV === undefined) return
+    if (newV === Infinity || newV === -Infinity) { stable = false; return } // vega's extent breaks
+    if (!Number.isFinite(newV)) return
     if (newV < lo || newV > hi) { stable = false; return }
     if (newV === lo) loCount++
     if (newV === hi) hiCount++
   }
-  const valueAt = (i: number): number => Number(getField(rows[i]!, field))
+  const read = scaleFieldOf(field)
+  const valueAt = (i: number): number => censusNumber(read(rows[i]))
   const vals = cen.vals
   let nextVals: number[]
   if (pulse.appendOnly || (!pulse.from && !(pulse.added?.length) && !(pulse.removed?.length))) {
@@ -3041,9 +3083,10 @@ function advanceDiscCensus(cen: DiscCensus, rows: Row[], pulse: StepPulse): Disc
   const sameLength = pulse.appendOnly ? (pulse.baseLength === cen.vals.length && rows.length === cen.vals.length)
     : (!pulse.from && !(pulse.added?.length) && !(pulse.removed?.length) && rows.length === cen.vals.length)
   if (!sameLength) return null
+  const read = scaleFieldOf(cen.field)
   for (const i of pulse.changed) {
     if (i < 0 || i >= rows.length) return null
-    const nv = getField(rows[i]!, cen.field)
+    const nv = read(rows[i])
     const ov = cen.vals[i]
     if (Object.is(ov, nv) || ov === nv) continue
     const nCount = cen.counts.get(nv)
@@ -3067,8 +3110,32 @@ function claim(ctx: EvalContext, key: string): boolean {
   return true
 }
 
+/** A scale domain / census reads its field through the one shared accessor cache (vega-util `field()` semantics). */
+const scaleFieldOf = fieldOf
+
+/** The context a scale is built in: signals, config.range, datasets and the host domain override. */
+function scaleContext(ctx: EvalContext, name: string): ScaleContext {
+  return {
+    width: ctx.width,
+    height: ctx.height,
+    signals: ctx.signalParams,
+    configRange: ctx.chart.configRange,
+    domainRaw: ctx.domainRaw?.get(name),
+    evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
+    dataField: (dataName, field) => {
+      const rows = ctx.datasets.get(dataName) ?? []
+      const get = scaleFieldOf(field)
+      const out: unknown[] = new Array(rows.length)
+      for (let i = 0; i < rows.length; i++) out[i] = get(rows[i])
+      return out
+    },
+    dataRows: (dataName) => (ctx.datasets.get(dataName) ?? []) as Record<string, unknown>[],
+    hasData: (dataName) => ctx.datasets.has(dataName),
+    distinctCache: ctx.distinctCache,
+  }
+}
+
 function buildScales(ctx: EvalContext): void {
-  const scaleSignals = ctx.signalParams
   const prev = ctx.prev
   const entries = new Map<string, ScaleEntry>()
   // A scale whose domain references none of the affected datasets (closed over
@@ -3090,16 +3157,15 @@ function buildScales(ctx: EvalContext): void {
       entries.set(s.name, memo.entry)
       continue
     }
-    // Vega-lite emits `{ fields: [{data, field}, ...] }` domains for layered
-    // charts (several datasets contribute to one shared scale). scales.ts only
-    // understands single-dataset domains, so resolve the multi-dataset form
-    // here into a concrete domain for THIS evaluation (the IR keeps the declared
-    // domain, so a later evaluation re-resolves it — C12).
-    const multiDomain = resolveMultiDatasetDomain(s.domain, ctx)
+    // A `{ fields: [...] }` domain (vega-lite's layered charts: several datasets
+    // contribute to one shared scale) is resolved by buildScale itself, from the
+    // CURRENT datasets, every evaluation (C12): the IR keeps the declared domain.
+    // Such a scale has no single-dataset census, so it is never census-reused.
+    const multi = isMultiFieldDomain(s.domain)
     const prevEntry = prev?.scaleEntries.get(s.name)
-    const def: CompiledScale = multiDomain ? { ...s, domain: concreteDomain(s, multiDomain) } : s
-    const dom = multiDomain ? null : singleDataDomain(s.domain)
-    if (reusable && prevEntry && prevEntry.multi === (multiDomain != null)) {
+    const def: CompiledScale = s
+    const dom = multi ? null : singleDataDomain(s.domain)
+    if (reusable && prevEntry && prevEntry.multi === multi) {
       let reuse = !domainReferencesAffected(s.domain, ctx.affected)
       let entry = prevEntry
       // An affected single-data-domain scale can still be reused when its domain
@@ -3134,25 +3200,10 @@ function buildScales(ctx: EvalContext): void {
         continue
       }
     }
-    const scale = buildScale(def, {
-      width: ctx.width,
-      height: ctx.height,
-      signals: scaleSignals,
-      configRange: ctx.chart.configRange,
-      domainRaw: ctx.domainRaw?.get(s.name),
-      evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
-      dataField: (dataName, field) => {
-        const rows = ctx.datasets.get(dataName) ?? []
-        const out: unknown[] = []
-        for (const r of rows) out.push(getField(r, field))
-        return out
-      },
-      dataRows: (dataName) => (ctx.datasets.get(dataName) ?? []) as Record<string, unknown>[],
-      distinctCache: ctx.distinctCache,
-    })
+    const scale = buildScale(def, scaleContext(ctx, def.name))
     ctx.scales.set(s.name, scale)
     ctx.scaleTypes.set(s.name, s.type)
-    const entry: ScaleEntry = { scale, multi: multiDomain != null }
+    const entry: ScaleEntry = { scale, multi }
     // Track the domain census for a single-data-domain scale so a later update
     // can prove the domain unchanged instead of rescanning.
     if (dom) {
@@ -3182,63 +3233,11 @@ function domainReferencesAffected(domain: ScaleDomain, affected: Set<string>): b
   return false
 }
 
-/**
- * Resolve a vega-lite "multi-dataset" scale domain — `{ fields: [{data, field},
- * ...] }` (layered charts) — into a concrete domain array. Returns null when the
- * domain is not in that form, so scales.ts handles everything else unchanged.
- */
-function resolveMultiDatasetDomain(domain: ScaleDomain, ctx: EvalContext): unknown[] | null {
-  if (!domain || typeof domain !== 'object' || Array.isArray(domain)) return null
-  if ('signal' in domain) return null
-  const fields = (domain as { fields?: unknown }).fields
-  if (!Array.isArray(fields) || !fields.length) return null
-  const refs = fields as unknown[]
-  if (!refs.every((f) => f != null && typeof f === 'object' && typeof (f as { data?: unknown }).data === 'string' && typeof (f as { field?: unknown }).field === 'string')) {
-    return null
-  }
-  const all: unknown[] = []
-  for (const f of refs) {
-    const ref = f as { data: string; field: string }
-    const rows = ctx.datasets.get(ref.data) ?? []
-    for (const r of rows) all.push((r as Row)[ref.field])
-  }
-  return all
-}
-
-/** Collapse collected multi-dataset values into the concrete domain for a scale type. */
-function concreteDomain(scale: CompiledScale, values: unknown[]): unknown[] {
-  const type = scale.type
-  if (type === 'time' || type === 'utc') {
-    const ms: number[] = []
-    for (const v of values) {
-      const d = v instanceof Date ? v : typeof v === 'string' || typeof v === 'number' ? new Date(v) : null
-      if (d && Number.isFinite(d.getTime())) ms.push(d.getTime())
-    }
-    return ms.length ? [minOf(ms), maxOf(ms)] : []
-  }
-  if (CONTINUOUS_TYPES.has(type)) {
-    const finite = values
-      .map((v) => v instanceof Date ? v.getTime() : v)
-      .filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
-    return finite.length ? [minOf(finite), maxOf(finite)] : []
-  }
-  // Discrete scales: distinct values (sorted when the domain requests it).
-  const distinct: unknown[] = []
-  for (const v of values) if (!distinct.some((x) => x === v)) distinct.push(v)
-  const sort = (scale.domain as { sort?: unknown }).sort
-  if (sort === true || sort === 'ascending') {
-    distinct.sort((a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0)
-  } else if (sort === 'descending') {
-    distinct.sort((a, b) => String(a) > String(b) ? -1 : String(a) < String(b) ? 1 : 0)
-  } else if (sort && typeof sort === 'object' && !Array.isArray(sort)) {
-    const order = (sort as { order?: string }).order
-    if (order === 'descending') {
-      distinct.sort((a, b) => String(a) > String(b) ? -1 : String(a) < String(b) ? 1 : 0)
-    } else if (order === 'ascending' || !order) {
-      distinct.sort((a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0)
-    }
-  }
-  return distinct
+/** True for a `{ fields: [...] }` scale domain (several data fields feed one scale). */
+function isMultiFieldDomain(domain: ScaleDomain): boolean {
+  return !!domain && typeof domain === 'object' && !Array.isArray(domain)
+    && !('signal' in domain) && Array.isArray((domain as { fields?: unknown }).fields)
+    && (domain as { fields: unknown[] }).fields.length > 0
 }
 
 /**
@@ -3335,7 +3334,9 @@ function evaluateMark(
           })
           rows = idx.map((i) => rows[i]!)
         } else {
-          rows = sortRows(rows, mark.sort)
+          // vega-lite orders marks by `datum["f"]` accessors: they read the row's field `f`
+          const f = ([] as unknown[]).concat((mark.sort as { field?: unknown }).field).map((n) => String(n).replace(/^datum(\.|\["?)|(?<=^datum.*)"?\]$/g, ''))
+          rows = sortRows(rows, { ...mark.sort, field: f })
         }
       }
       if (mark.transform?.length) {
@@ -3665,25 +3666,15 @@ function buildTrellisCell(
   const gw = typeof geo.width === 'number' ? geo.width : ctx.width
   const gh = typeof geo.height === 'number' ? geo.height : ctx.height
 
+  // The cell's rows are the facet dataset for everything in the cell's scope -
+  // including the cell's own scales (a child scale's domain names the facet dataset).
+  const saved = ctx.datasets.get(facet.name)
+  ctx.datasets.set(facet.name, rows)
+
   const childScaleMap = new Map<string, Scale>()
   const childTypeMap = new Map<string, string>()
   for (const s of (mark as { scales?: CompiledScale[] }).scales ?? []) {
-    const scale = buildScale(s, {
-      width: ctx.width,
-      height: ctx.height,
-      signals: ctx.signalParams,
-      configRange: ctx.chart.configRange,
-      domainRaw: ctx.domainRaw?.get(s.name),
-      evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
-      dataField: (dn, field) => {
-        const rws = ctx.datasets.get(dn) ?? []
-        const out: unknown[] = []
-        for (const r of rws) out.push(getField(r, field))
-        return out
-      },
-      dataRows: (dn) => (ctx.datasets.get(dn) ?? []) as Record<string, unknown>[],
-      distinctCache: ctx.distinctCache,
-    })
+    const scale = buildScale(s, scaleContext(ctx, s.name))
     childScaleMap.set(s.name, scale)
     childTypeMap.set(s.name, s.type)
   }
@@ -3700,8 +3691,6 @@ function buildTrellisCell(
     // datum (compileExpr exposes params to expressions $-prefixed).
     signalParams: { ...ctx.signalParams, parent: datum },
   }
-  const saved = ctx.datasets.get(facet.name)
-  ctx.datasets.set(facet.name, rows)
 
   const items: SceneItem[] = []
   // Cell background: the encoded size, no fill, no inset (vega group
@@ -3854,7 +3843,9 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup | Scen
     const grpClipD = grpCR > 0
       ? roundedRectPath(0, 0, ctx.width, ctx.height, Math.min(grpCR, ctx.width / 2, ctx.height / 2))
       : undefined
-    return { marktype: 'group', name, role: (mark.role as string) ?? 'scope', items, clip: grpClip, ...(grpClipD ? { clipPathD: grpClipD } : {}) }
+    // the group's own offset (vega-lite's stack_group_main child shifts back by `{group: 'y'}`)
+    const geoO = grEnc?.x != null || grEnc?.y != null ? resolveEncodeSet(grEnc, {}, ctx, 'group') : {}
+    return { marktype: 'group', name, role: (mark.role as string) ?? 'scope', items, clip: grpClip, ...(geoO.x ? { x: geoO.x as number } : {}), ...(geoO.y ? { y: geoO.y as number } : {}), ...(grpClipD ? { clipPathD: grpClipD } : {}) }
   }
   throw new Error('[aster] unsupported group mark: ' + (name ?? '<unnamed>'))
 }
@@ -3880,22 +3871,7 @@ function buildScopedGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | nu
     // Vega's scale signal refs (`width`/`height`) resolve against the TOP-LEVEL
     // chart scope (parent), not the group's own encode dimensions. That's why a
     // nested group's y-axis domain spans 300 even though the group is 130 tall.
-    const scale = buildScale(cs, {
-      width: ctx.width,
-      height: ctx.height,
-      signals: ctx.signalParams,
-      configRange: ctx.chart.configRange,
-      domainRaw: ctx.domainRaw?.get(s.name),
-      evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
-      dataField: (dn, field) => {
-        const rows = ctx.datasets.get(dn) ?? []
-        const out: unknown[] = []
-        for (const r of rows) out.push(getField(r, field))
-        return out
-      },
-      dataRows: (dn) => (ctx.datasets.get(dn) ?? []) as Record<string, unknown>[],
-      distinctCache: ctx.distinctCache,
-    })
+    const scale = buildScale(cs, scaleContext(ctx, cs.name))
     childScaleMap.set(cs.name, scale)
     childTypeMap.set(cs.name, cs.type)
   }
@@ -4128,26 +4104,6 @@ function isTrellis(ctx: EvalContext): boolean {
 }
 
 /**
- * Walk a scene subtree and find the first item with y and y2 set (a rect mark
- * item). Returns the absolute height |y2 - y|, or null if not found.
- */
-function findBarHeight(items: SceneItem[]): number | null {
-  for (const item of items) {
-    const group = item as SceneGroup
-    if ((group.marktype !== undefined || Array.isArray(group.items)) && group.items) {
-      const h = findBarHeight(group.items)
-      if (h != null) return h
-    } else {
-      const it = item as Record<string, unknown>
-      if (it.y != null && it.y2 != null && typeof it.y === 'number' && typeof it.y2 === 'number') {
-        return Math.abs(it.y2 - it.y)
-      }
-    }
-  }
-  return null
-}
-
-/**
  * Generate an SVG path for a rounded rectangle with corner radius r,
  * using cubic bezier approximation matching vega-scenegraph (k ≈ 0.5523).
  */
@@ -4227,7 +4183,24 @@ function buildFacetCells(
     if (!g.length) continue
     ctx.datasets.set(facet.name, g)
 
-    const tmpCtx: EvalContext = { ...ctx, width: cellWidth, height: cellHeight }
+    // A facet group positioned by the aggregate of its own rows (vega-lite's
+    // stack_group_main: x/x2 or y/y2 from the min/max of the stack) takes its
+    // offset and extent from that datum; its children shift back by `{group: ...}`.
+    const pos = { x: 0, y: 0 }
+    const size = { x: cellWidth, y: cellHeight }
+    let stacked: 'x' | 'y' | undefined
+    const ag = (facet as { aggregate?: { fields: string[]; ops: string[] } }).aggregate
+    const gu = (mark.encode?.update ?? {}) as Record<string, EncodeValue>
+    if (ag?.ops) {
+      const fd = aggregateGroup(g, { type: 'aggregate', groupby: facet.groupby, fields: ag.fields, ops: ag.ops, as: ag.ops.map((op, i) => `${op}_${ag.fields[i]}`) })
+      for (const a of ['x', 'y'] as const) {
+        if (!gu[a] || !gu[`${a}2`]) continue
+        const lo = Number(resolveEncodeProperty(gu[a], fd, ctx))
+        const hi = Number(resolveEncodeProperty(gu[`${a}2`], fd, ctx))
+        if (isFinite(lo) && isFinite(hi)) { pos[a] = lo; size[a] = hi - lo; stacked = a }
+      }
+    }
+    const tmpCtx: EvalContext = { ...ctx, width: size.x, height: size.y, groupX: pos.x, groupY: pos.y }
     const nestedItems: SceneItem[] = []
     for (const cm of (mark as any).marks ?? []) {
       const ng = facetItemMark(cm, tmpCtx, facet.name)
@@ -4284,27 +4257,21 @@ function buildFacetCells(
     // When the facet group has cornerRadius, vega renders the group background
     // as a rounded rect matching the bar's actual dimensions (y2-y height from
     // the encode), and the inner scope background as a zero-height path.
+    let cellD: string | undefined
     const cellStyle = Array.isArray(mark.style) ? mark.style.includes('cell') : mark.style === 'cell'
-    // Extract cornerRadius from the group's encode
     const grEnc = (mark as any).encode?.update
-    const grCR = grEnc?.cornerRadius
-    const cellCornerRadius = grCR && typeof grCR === 'object' && 'value' in grCR
-      ? (grCR as { value: number }).value
-      : (typeof grCR === 'number' ? grCR : 0)
-    // Compute the actual bar height from the nested rect items
-    const barH = findBarHeight(nestedItems)
-    const bgH = barH ?? cellHeight
-    if (cellCornerRadius > 0 && barH != null) {
-      // Vega renders the group background as a rounded rect with cornerRadius
-      const cr = Math.min(cellCornerRadius, cellWidth / 2, bgH / 2)
-      const bgPath = roundedRectPath(0, 0, cellWidth, bgH, cr)
-      bgItems.push({ path: bgPath, x: 0, y: 0 } as SceneItem)
-      // Inner scope background: zero-height path (vega default for groups
-      // without explicit height)
-      bgItems.push({
-        path: `M0,0h${cellWidth}v0h-${cellWidth}Z`,
-        x: 0, y: 0,
-      } as SceneItem)
+    // an aggregate-positioned group carries any of the five corner radii (also per corner, or negative)
+    const corners: Record<string, number> = {}
+    for (const k in grEnc) {
+      const v = stacked && k.startsWith('cornerRadius') ? (grEnc[k] as { value?: number }).value : 0
+      if (v) corners[k] = v
+    }
+    const groupRounded = Object.keys(corners).length > 0
+    if (groupRounded) {
+      // vega paints the rounded background, then the clipped scope (its zero-height
+      // background shifted back by the group's offset, then the marks)
+      cellD = rectItemPath({ x: 0, y: 0, width: size.x, height: size.y, ...corners } as SceneItem)!
+      bgItems.push({ path: cellD, x: 0, y: 0 } as SceneItem, { path: stacked === 'y' ? `M0,0h${size.x}v0h-${size.x}Z` : `M0,0h0v${size.y}h0Z`, x: 0 - pos.x, y: 0 - pos.y } as SceneItem)
     } else if (cellStyle) {
       bgItems.push({
         path: `M0.5,0.5h${cellWidth}v${cellHeight}h-${cellWidth}Z`,
@@ -4316,7 +4283,6 @@ function buildFacetCells(
       // {field:{group:...}}); raw Vega facet cells (from.from.facet without
       // encode signals) don't, in which case Vega renders a zero-height
       // scope background that is degenerate after canonicalization.
-      const grEnc = (mark as any).encode?.update
       const hasExplicitSize = grEnc && (
         (grEnc.width && typeof grEnc.width === 'object' && ('signal' in grEnc.width || ('field' in grEnc.width && typeof grEnc.width.field === 'object'))) ||
         (grEnc.height && typeof grEnc.height === 'object' && ('signal' in grEnc.height || ('field' in grEnc.height && typeof grEnc.height.field === 'object')))
@@ -4337,10 +4303,10 @@ function buildFacetCells(
     result.push({
       marktype: 'group', name: mark.name, role: 'scope',
       items: [...bgItems, ...axisItems, ...nestedItems, ...labelItems],
-      clip: mark.clip === true || cellCornerRadius > 0,
-      width: cellWidth, height: cellHeight,
-      x: 0, y: 0,
-      ...(cellCornerRadius > 0 && barH != null ? { clipPathD: roundedRectPath(0, 0, cellWidth, bgH, Math.min(cellCornerRadius, cellWidth / 2, bgH / 2)) } : {}),
+      clip: mark.clip === true || groupRounded,
+      width: size.x, height: size.y,
+      x: pos.x, y: pos.y,
+      ...(groupRounded ? { clipPathD: cellD } : {}),
     })
   }
 
@@ -4356,30 +4322,23 @@ function buildFacetCellGroup(
 ): SceneGroup[] {
   const cells = buildFacetCells(mark, facet, ctx)
   if (!cells.length) return cells
-  // When the facet group has a scale-based x encode (e.g. VL bar charts with
+  // When the facet group has a scale-based x or y encode (e.g. VL bar charts with
   // cornerRadius compile to a faceted group where each cell is positioned at
-  // the band scale position), resolve each cell's x from the scale rather
-  // than using the grid layout.
-  const xEnc = (mark as any).encode?.update?.x
-  if (xEnc && typeof xEnc === 'object' && 'scale' in xEnc && 'field' in xEnc) {
-    const xScale = ctx.scales.get(xEnc.scale as string)
-    const fieldName = xEnc.field as string
-    if (xScale) {
-      const rows = ctx.datasets.get(facet.data) ?? []
-      const grouped = inlineGroupRows(rows, facet.groupby)
-      for (let i = 0; i < cells.length; i++) {
-        const g = grouped[i]
-        if (g && g.length > 0) {
-          const catVal = g[0]?.[fieldName]
-          const pos = xScale(catVal as string | number)
-          if (typeof pos === 'number' && Number.isFinite(pos) && cells[i]) {
-            cells[i]!.x = pos
-          }
-        }
-      }
-      return cells
+  // the band scale position), resolve each cell's position from the scale
+  // rather than using the grid layout.
+  let placed = false
+  for (const a of ['x', 'y'] as const) {
+    const enc = (mark as any).encode?.update?.[a]
+    const scale = enc && typeof enc === 'object' && 'scale' in enc && 'field' in enc ? ctx.scales.get(enc.scale as string) : undefined
+    if (!scale) continue
+    placed = true
+    const grouped = inlineGroupRows(ctx.datasets.get(facet.data) ?? [], facet.groupby)
+    for (let i = 0; i < cells.length; i++) {
+      const p = grouped[i]?.length ? scale(grouped[i]![0]![enc.field as string] as string | number) : undefined
+      if (typeof p === 'number' && Number.isFinite(p) && cells[i]) cells[i]![a] = p
     }
   }
+  if (placed) return cells
   const layout = getFacetLayout(ctx, cells)
   if (!layout) return cells
   for (let i = 0; i < cells.length; i++) {
@@ -5766,8 +5725,8 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
       let v: unknown
       if (groupKey === 'width') v = ctx.width
       else if (groupKey === 'height') v = ctx.height
-      else if (groupKey === 'x') v = 0
-      else if (groupKey === 'y') v = 0
+      else if (groupKey === 'x') v = ctx.groupX ?? 0
+      else if (groupKey === 'y') v = ctx.groupY ?? 0
       else v = 0
       if (v != null && typeof v === 'number') {
         const multValField = (value as { mult?: number }).mult
@@ -5804,13 +5763,26 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   return undefined
 }
 
+/**
+ * Which calendar a label is formatted in, vega-scale `tickFormat`'s precedence: a
+ * `time` scale / formatType is local time, then a `utc` scale / formatType is UTC.
+ * (A UTC scale formatted in local time shifts every label by the viewer's offset.)
+ */
+function calendarOf(scaleType: string | undefined, formatType: unknown): 'time' | 'utc' | undefined {
+  if (scaleType === 'time' || formatType === 'time') return 'time'
+  if (scaleType === 'utc' || formatType === 'utc') return 'utc'
+  return undefined
+}
+
 function formatValue(v: unknown, spec: EncodeValue): unknown {
   const format = (spec as { format?: unknown }).format
   const formatType = (spec as { formatType?: unknown }).formatType
   if (format === undefined) return v
   const fmt = format as string
   const L = locale(undefined)
-  if (formatType === 'time' || v instanceof Date) return L.timeFormat(fmt)(v as Date)
+  const cal = calendarOf(undefined, formatType)
+  if (cal === 'utc') return L.utcFormat(fmt)(v as Date)
+  if (cal === 'time' || v instanceof Date) return L.timeFormat(fmt)(v as Date)
   return L.format(fmt)(v as number)
 }
 
@@ -5875,7 +5847,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const L = locale(undefined)
     let fmt = (legend as { format?: unknown }).format
     const fmtType = (legend as { formatType?: unknown }).formatType
-    if (v == null) return fmtType === 'time' ? '' : String(v)
+    if (v == null) return fmtType === 'time' || fmtType === 'utc' ? '' : String(v)
     if (fmt != null && typeof fmt === 'object' && 'signal' in (fmt as Record<string, unknown>)) {
       const sig = String((fmt as { signal: string }).signal)
       try {
@@ -5886,9 +5858,11 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         fmt = evalTimeUnitSpecifier(sig)
       }
     }
-    if (fmtType === 'time' || v instanceof Date) {
+    const cal = calendarOf(ctx.scaleTypes.get(scaleName), fmtType) ?? (v instanceof Date ? 'time' : undefined)
+    if (cal) {
       const d = v instanceof Date ? v : new Date(Number(v))
-      return L.timeFormat(typeof fmt === 'string' ? fmt : '%b %d, %Y')(d)
+      const spec = typeof fmt === 'string' ? fmt : '%b %d, %Y'
+      return (cal === 'utc' ? L.utcFormat(spec) : L.timeFormat(spec))(d)
     }
     if (fmt !== undefined) return L.format(String(fmt))(typeof v === 'number' ? v : Number(v))
     // A continuous legend without an explicit format delegates to the scale's
@@ -5995,11 +5969,11 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     let tickNums = tickValues(scale, gradCount)
     const legendValues = (legend as { values?: unknown }).values
     if (Array.isArray(legendValues)) tickNums = legendValues
-    else if (tickNums.length < 3 && legendValues == null && d0 !== d1) {
+    else if (tickNums.length < 3 && legendValues == null && d0 !== d1 && !(Number.isNaN(Number(d0)) && Number.isNaN(Number(d1)))) {
       tickNums = [d0, d1]
     }
-    // An all-invalid (NaN) domain has no generated ticks; vega still emits a
-    // single 'NaN' label at the gradient midpoint.
+    // An all-invalid (NaN) domain has no generated ticks and no usable end
+    // points; vega (observed) emits a single 'NaN' label at the gradient midpoint.
     if (tickNums.length === 0 && legendValues == null && Number.isNaN(Number(d0))) tickNums = [NaN]
     const titleStr0 = String(legend.title ?? '')
     const titlePad0 = (legend as { titlePadding?: number }).titlePadding ?? 5
@@ -6020,13 +5994,14 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       }
     }
     const legendFormatType = (legend as { formatType?: unknown }).formatType
-    const legendTimeFormat = legendFormatType === 'time' || scaleType === 'time' || scaleType === 'utc'
+    const legendCalendar = calendarOf(scaleType, legendFormatType)
     const makeGradientFmt = (defaultFmt: string): ((v: unknown) => string) => {
       const L = locale(undefined)
       let base: (v: unknown) => string
-      if (legendTimeFormat) {
+      if (legendCalendar) {
         const fmt = resolvedLegendFormat ?? defaultFmt
-        base = (v: unknown) => L.timeFormat(fmt)(v instanceof Date ? v : new Date(Number(v)))
+        const format = legendCalendar === 'utc' ? L.utcFormat(fmt) : L.timeFormat(fmt)
+        base = (v: unknown) => format(v instanceof Date ? v : new Date(Number(v)))
       } else if (resolvedLegendFormat) {
         base = (v: unknown) => L.format(resolvedLegendFormat)(typeof v === 'number' ? v : Number(v))
       } else {
@@ -7425,9 +7400,12 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
             return (a + frac * (b - a)) * gridSign
           })()
         : frac * (isXAxis ? ctx.height : ctx.width) * gridSign
-      return Number.isFinite(v) ? v : 0
+      return v
     }
-    const gridStart = gridSpan(0)
+    // a non-numeric gridScale range (a band scale given a named colour range) has no
+    // start (vega draws the grid from the axis, +0.5) but its end stays NaN
+    const gridStartRaw = gridSpan(0)
+    const gridStart = Number.isFinite(gridStartRaw) ? gridStartRaw : 0
     const gridEnd = gridSpan(1)
     const gridOrigin = orient === 'right' ? ctx.width : orient === 'bottom' ? ctx.height : 0
     for (const te of tickEntries) {
@@ -7610,7 +7588,9 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     // For non-band scales, the range values determine the axis extent.
     const scaleRange = scale.range() as number[]
     const rangeStart: number = scaleRange.length > 0 ? Number(scaleRange[0]) || 0 : 0
-    const rangeEnd: number = scaleRange.length > 0 ? Number(scaleRange[scaleRange.length - 1]) || 0 : 0
+    // the far end stays NaN when the range is not numeric (a band scale given a named colour
+    // range): vega draws that domain rule to x2=NaN, only the start folds to 0
+    const rangeEnd: number = scaleRange.length > 0 ? Number(scaleRange[scaleRange.length - 1]) : 0
     // vega axis-domain: the rule runs from range(0) to range(1) of the scale —
     // NOT min to max — so a reversed range (every y axis) starts at the far end
     // (it decides where a dash pattern begins).
@@ -8036,13 +8016,15 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: 
       }
     }
   }
-  if (fmtType === 'time' || scale.type === 'time' || scale.type === 'utc') {
+  const calendar = calendarOf(scale.type, fmtType)
+  if (calendar) {
     const L = locale(undefined)
     // With no explicit format vega uses the time multi-format, which picks a
     // specifier per tick interval (e.g. '%B' for month ticks, '%b %d' for
     // day/week ticks). The `undefined` argument is passed explicitly to satisfy
     // the strict local type shim for vega-format.
-    return wrapLabelExpr(fmt ? L.timeFormat(fmt) : L.timeFormat(undefined as unknown as string))
+    const timeFormatter = calendar === 'utc' ? L.utcFormat : L.timeFormat
+    return wrapLabelExpr(fmt ? timeFormatter(fmt) : timeFormatter(undefined as unknown as string))
   }
   if (scale.type !== 'linear' && scale.type !== 'log' && scale.type !== 'pow' && scale.type !== 'sqrt' && scale.type !== 'symlog') {
     // vega applies an inherited numeric format specifier even to band/point

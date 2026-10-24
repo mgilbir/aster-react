@@ -1,0 +1,609 @@
+/**
+ * Scale-spec oracle cases: a Vega spec carrying one scale `s` (plus the data
+ * and signals it reads), built by real vega (vega-parser + vega-encode's Scale
+ * transform) and by Aster, then compared at the "scale spec -> built scale"
+ * level: type, domain, range, bins, sampled outputs, discretizing metadata.
+ *
+ * This is the level where `scales.ts::buildScale` (a port of vega-encode's
+ * Scale transform and vega-parser's scale parsing) lives; the vega-scale suite
+ * only exercises the scale classes themselves.
+ *
+ * Every case is `{ name, spec, probes? }`; `probes` defaults to values derived
+ * from the oracle scale's domain (recorded in the vector so the replay feeds the
+ * same inputs).
+ */
+
+const W = 300
+const H = 200
+
+const nums = [
+  { v: 3, w: 10, c: 'b' },
+  { v: 7, w: 20, c: 'a' },
+  { v: 1, w: 5, c: 'c' },
+  { v: 12, w: 1, c: 'a' },
+  { v: 5, w: 7, c: 'd' },
+]
+const negs = [{ v: -8 }, { v: -2 }, { v: -5 }, { v: -1 }]
+const mixed = [{ v: -4 }, { v: 9 }, { v: 2 }]
+const strNums = [{ v: '3' }, { v: '10' }, { v: '2' }, { v: '25' }]
+const withNulls = [{ v: 4 }, { v: null }, { v: 9 }, { v: NaN }, { v: undefined }, { v: 2 }]
+const posOnly = [{ v: 10 }, { v: 40 }, { v: 25 }, { v: 100 }]
+const tiny = [{ v: 0.12 }, { v: 0.37 }, { v: 0.9 }]
+const single = [{ v: 5 }]
+const same = [{ v: 6 }, { v: 6 }, { v: 6 }]
+const cats = [
+  { c: 'b', n: 3 }, { c: 'a', n: 9 }, { c: 'c', n: 1 }, { c: 'a', n: 4 }, { c: 'd', n: 7 }, { c: 'b', n: 2 },
+]
+const catsNull = [{ c: 'x' }, { c: null }, { c: 'y' }, { c: undefined }, { c: 'x' }]
+const catsNum = [{ c: 10 }, { c: 2 }, { c: 33 }, { c: 2 }, { c: 7 }]
+const days = 86400000
+const t0 = Date.UTC(2020, 0, 15, 8, 30)
+const dates = [{ t: t0 }, { t: t0 + 40 * days }, { t: t0 + 200 * days }, { t: t0 + 17 * days }]
+const hours = [{ t: Date.UTC(2021, 5, 3, 7, 12) }, { t: Date.UTC(2021, 5, 3, 19, 40) }, { t: Date.UTC(2021, 5, 4, 2, 5) }]
+const years = [{ t: Date.UTC(1999, 5, 1) }, { t: Date.UTC(2014, 2, 3) }, { t: Date.UTC(2031, 10, 9) }]
+
+const spec = (scale, rest = {}) => ({ width: W, height: H, ...rest, scales: [{ name: 's', ...scale }] })
+
+export const suites = {}
+function add(suite, name, sp, probes) {
+  const list = (suites[suite] ??= [])
+  if (list.some((c) => c.name === name)) throw new Error('duplicate scale-spec case ' + suite + '/' + name)
+  list.push({ name, spec: sp, ...(probes ? { probes } : {}) })
+}
+
+const dom = (data, field, extra = {}) => ({ domain: { data, field, ...extra } })
+const d = (rows, name = 'd') => ({ data: [{ name, values: rows }] })
+
+// ---- continuous: linear family, zero / nice / clamp / round / padding / reverse
+const CONT = ['linear', 'pow', 'sqrt', 'symlog', 'log']
+const dataFor = { linear: nums, pow: nums, sqrt: nums, symlog: nums, log: posOnly }
+for (const t of CONT) {
+  const rows = dataFor[t]
+  const base = { type: t, ...dom('d', 'v'), range: [0, 100] }
+  add('continuous', `${t}/plain`, spec(base, d(rows)))
+  add('continuous', `${t}/zero-true`, spec({ ...base, zero: true }, d(rows)))
+  add('continuous', `${t}/zero-false`, spec({ ...base, zero: false }, d(rows)))
+  add('continuous', `${t}/nice-true`, spec({ ...base, nice: true }, d(rows)))
+  add('continuous', `${t}/nice-5`, spec({ ...base, nice: 5 }, d(rows)))
+  add('continuous', `${t}/nice-10-zero`, spec({ ...base, nice: 10, zero: true }, d(rows)))
+  add('continuous', `${t}/clamp`, spec({ ...base, clamp: true }, d(rows)))
+  add('continuous', `${t}/round`, spec({ ...base, round: true }, d(rows)))
+  add('continuous', `${t}/padding`, spec({ ...base, padding: 10 }, d(rows)))
+  add('continuous', `${t}/padding-nice`, spec({ ...base, padding: 12, nice: true }, d(rows)))
+  add('continuous', `${t}/reverse`, spec({ ...base, reverse: true }, d(rows)))
+  add('continuous', `${t}/range-height`, spec({ ...base, range: 'height' }, d(rows)))
+  add('continuous', `${t}/range-width`, spec({ ...base, range: 'width' }, d(rows)))
+  add('continuous', `${t}/domainMin`, spec({ ...base, domainMin: rows === posOnly ? 5 : -2 }, d(rows)))
+  add('continuous', `${t}/domainMax`, spec({ ...base, domainMax: 150 }, d(rows)))
+  add('continuous', `${t}/domainMin-Max`, spec({ ...base, domainMin: rows === posOnly ? 5 : -2, domainMax: 150, zero: false }, d(rows)))
+  add('continuous', `${t}/domainMid-inside`, spec({ ...base, domainMid: 6 }, d(rows)))
+  add('continuous', `${t}/domainMid-above`, spec({ ...base, domainMid: 400 }, d(rows)))
+  add('continuous', `${t}/domainMid-below`, spec({ ...base, domainMid: 0.5 }, d(rows)))
+  add('continuous', `${t}/range-piecewise`, spec({ ...base, domain: [0, 5, 20], range: [0, 30, 100] }, d(rows)))
+  add('continuous', `${t}/range-reversed-domain`, spec({ ...base, domain: [20, 1] }, d(rows)))
+  add('continuous', `${t}/literal-domain`, spec({ ...base, domain: [2, 40] }, d(rows)))
+  add('continuous', `${t}/literal-domain-zero`, spec({ ...base, domain: [2, 40], zero: true }, d(rows)))
+  add('continuous', `${t}/literal-domain-3stop-zero`, spec({ ...base, domain: [3, 10, 40], range: [0, 20, 100], zero: true }, d(rows)))
+  add('continuous', `${t}/3stop-domainMin-Max`, spec({ ...base, domain: [3, 10, 40], range: [0, 20, 100], domainMin: 1, domainMax: 60 }, d(rows)))
+  add('continuous', `${t}/4stop-zero-nice`, spec({ ...base, domain: [3, 10, 20, 40], range: [0, 20, 50, 100], zero: true, nice: true }, d(rows)))
+  add('continuous', `${t}/domainRaw`, spec({ ...base, domainRaw: { signal: 'raw' } }, { ...d(rows), signals: [{ name: 'raw', value: [3, 33] }] }))
+  add('continuous', `${t}/domainRaw-ignores-zero`, spec({ ...base, domainRaw: { signal: 'raw' }, zero: true, nice: true }, { ...d(rows), signals: [{ name: 'raw', value: [3, 33] }] }))
+  add('continuous', `${t}/signal-domain`, spec({ ...base, domain: { signal: 'dm' } }, { ...d(rows), signals: [{ name: 'dm', value: [4, 44] }] }))
+  add('continuous', `${t}/signal-range`, spec({ ...base, range: [0, { signal: 'rr' }] }, { ...d(rows), signals: [{ name: 'rr', value: 77 }] }))
+  add('continuous', `${t}/signal-props`, spec({ ...base, clamp: { signal: 'cl' }, zero: { signal: 'zr' }, nice: { signal: 'ni' } }, { ...d(rows), signals: [{ name: 'cl', value: true }, { name: 'zr', value: false }, { name: 'ni', value: true }] }))
+  add('continuous', `${t}/two-fields`, spec({ ...base, domain: { data: 'd', fields: ['v', 'w'] } }, { data: [{ name: 'd', values: rows.map((r, i) => ({ ...r, w: r.v * 3 + i })) }] }))
+  add('continuous', `${t}/multi-data`, spec({ ...base, domain: { fields: [{ data: 'd', field: 'v' }, { data: 'e', field: 'u' }] } }, { data: [{ name: 'd', values: rows }, { name: 'e', values: [{ u: 90 }, { u: 0.5 }] }] }))
+  add('continuous', `${t}/multi-data-literal`, spec({ ...base, domain: { fields: [{ data: 'd', field: 'v' }, [200, 300]] } }, d(rows)))
+  add('continuous', `${t}/string-numbers`, spec({ ...base }, d(t === 'log' ? [{ v: '3' }, { v: '30' }, { v: '300' }] : strNums)))
+  add('continuous', `${t}/nulls-nans`, spec({ ...base }, d(t === 'log' ? [{ v: 4 }, { v: null }, { v: 90 }, { v: NaN }] : withNulls)))
+  add('continuous', `${t}/empty-data`, spec({ ...base }, d([])))
+  add('continuous', `${t}/single-value`, spec({ ...base }, d(single)))
+  add('continuous', `${t}/single-value-nice`, spec({ ...base, nice: true }, d(single)))
+  add('continuous', `${t}/identical-values`, spec({ ...base, zero: false }, d(same)))
+  add('continuous', `${t}/unknown-wrong-type-domain`, spec({ ...base, domain: ['a', 'b'] }, d(rows)))
+  add('continuous', `${t}/null-domain-entry`, spec({ ...base, domain: [null, 10] }, d(rows)))
+  add('continuous', `${t}/nan-domain-entry`, spec({ ...base, domain: [{ signal: '0/0' }, 10] }, d(rows)))
+  add('continuous', `${t}/string-literal-domain`, spec({ ...base, domain: ['4', '40'] }, d(rows)))
+  add('continuous', `${t}/no-domain`, spec({ type: t, range: [0, 100] }, d(rows)))
+  add('continuous', `${t}/domainMin-no-domain`, spec({ type: t, range: [0, 100], domainMin: 2 }, d(rows)))
+  add('continuous', `${t}/unsupported-property`, spec({ ...base, frobnicate: 3 }, d(rows)))
+}
+// type-specific parameters
+add('continuous', 'log/base-2', spec({ type: 'log', base: 2, ...dom('d', 'v'), range: [0, 100] }, d(posOnly)))
+add('continuous', 'log/base-e-nice', spec({ type: 'log', base: Math.E, ...dom('d', 'v'), range: [0, 100], nice: true }, d(posOnly)))
+add('continuous', 'log/base-signal', spec({ type: 'log', base: { signal: 'bs' }, ...dom('d', 'v'), range: [0, 100] }, { ...d(posOnly), signals: [{ name: 'bs', value: 4 }] }))
+add('continuous', 'log/negative-domain', spec({ type: 'log', ...dom('d', 'v'), range: [0, 100] }, d(negs)))
+add('continuous', 'log/zero-in-data', spec({ type: 'log', ...dom('d', 'v'), range: [0, 100] }, d([{ v: 0 }, { v: 10 }, { v: 100 }])))
+add('continuous', 'log/zero-in-literal-domain', spec({ type: 'log', domain: [0, 100], range: [0, 100] }))
+add('continuous', 'log/mixed-sign-domain', spec({ type: 'log', domain: [-10, 100], range: [0, 100] }))
+add('continuous', 'log/padding-literal', spec({ type: 'log', domain: [1, 1000], range: [0, 100], padding: 10 }))
+add('continuous', 'log/domainMid-literal', spec({ type: 'log', domain: [1, 1000], range: [0, 100], domainMid: 10 }))
+add('continuous', 'pow/exponent-2', spec({ type: 'pow', exponent: 2, ...dom('d', 'v'), range: [0, 100] }, d(nums)))
+add('continuous', 'pow/exponent-0.3-padding', spec({ type: 'pow', exponent: 0.3, ...dom('d', 'v'), range: [0, 100], padding: 8, zero: false }, d(nums)))
+add('continuous', 'pow/exponent-signal', spec({ type: 'pow', exponent: { signal: 'ex' }, ...dom('d', 'v'), range: [0, 100] }, { ...d(nums), signals: [{ name: 'ex', value: 1.5 }] }))
+add('continuous', 'pow/negative-data', spec({ type: 'pow', exponent: 2, ...dom('d', 'v'), range: [0, 100] }, d(negs)))
+add('continuous', 'pow/mixed-data', spec({ type: 'pow', exponent: 3, ...dom('d', 'v'), range: [0, 100] }, d(mixed)))
+add('continuous', 'sqrt/negative-data', spec({ type: 'sqrt', ...dom('d', 'v'), range: [0, 100] }, d(negs)))
+add('continuous', 'sqrt/mixed-data', spec({ type: 'sqrt', ...dom('d', 'v'), range: [0, 100] }, d(mixed)))
+add('continuous', 'symlog/constant-5', spec({ type: 'symlog', constant: 5, ...dom('d', 'v'), range: [0, 100] }, d(mixed)))
+add('continuous', 'symlog/constant-padding', spec({ type: 'symlog', constant: 2, ...dom('d', 'v'), range: [0, 100], padding: 9, zero: false }, d(mixed)))
+add('continuous', 'symlog/negative-data', spec({ type: 'symlog', ...dom('d', 'v'), range: [0, 100] }, d(negs)))
+add('continuous', 'linear/negative-data-zero', spec({ type: 'linear', ...dom('d', 'v'), range: [0, 100] }, d(negs)))
+add('continuous', 'linear/negative-data-nozero', spec({ type: 'linear', ...dom('d', 'v'), range: [0, 100], zero: false }, d(negs)))
+add('continuous', 'linear/mixed-data', spec({ type: 'linear', ...dom('d', 'v'), range: [100, 0] }, d(mixed)))
+add('continuous', 'linear/tiny-nice', spec({ type: 'linear', ...dom('d', 'v'), range: [0, 100], nice: true }, d(tiny)))
+add('continuous', 'linear/range-3-no-interp', spec({ type: 'linear', domain: [0, 10], range: [0, 50, 100] }))
+add('continuous', 'linear/numeric-range-interpolate-hcl', spec({ type: 'linear', domain: [0, 10], range: [0, 100], interpolate: 'hcl' }))
+add('continuous', 'linear/round-signal', spec({ type: 'linear', domain: [0, 7], range: [0, 100], round: { signal: 'rd' } }, { signals: [{ name: 'rd', value: true }] }))
+add('continuous', 'linear/range-object-step-error', spec({ type: 'linear', domain: [0, 7], range: { step: 20 } }))
+add('continuous', 'linear/range-string-unknown', spec({ type: 'linear', domain: [0, 7], range: 'bogus' }))
+add('continuous', 'linear/rangeMin-rangeMax', spec({ type: 'linear', domain: [0, 7], range: [0, 100], rangeMin: 10, rangeMax: 80 }))
+add('continuous', 'linear/domainImplicit-ignored', spec({ type: 'linear', domain: [0, 7], range: [0, 100], domainImplicit: true }))
+add('continuous', 'linear/no-range', spec({ type: 'linear', domain: [0, 7] }))
+add('continuous', 'linear/unknown-type', spec({ type: 'cubic', domain: [0, 7], range: [0, 1] }))
+add('continuous', 'linear/default-type', spec({ domain: [0, 7], range: [0, 100] }))
+
+// ---- identity
+add('identity', 'identity/plain', spec({ type: 'identity', domain: [0, 10] }), [0, 3, 10, 11, -1, NaN, null])
+add('identity', 'identity/clamp', spec({ type: 'identity', domain: [0, 10], clamp: true }), [0, 3, 10, 11, -1])
+add('identity', 'identity/range', spec({ type: 'identity', domain: [0, 10], range: [0, 100] }), [0, 3, 10])
+add('identity', 'identity/nice', spec({ type: 'identity', domain: [0.2, 9.7], nice: true }), [0, 3, 10])
+add('identity', 'identity/zero', spec({ type: 'identity', ...dom('d', 'v'), zero: true }, d(nums)), [0, 3, 10])
+
+// ---- time / utc
+for (const t of ['time', 'utc']) {
+  const b = { type: t, ...dom('d', 't'), range: [0, 250] }
+  add('temporal', `${t}/plain`, spec(b, d(dates)))
+  add('temporal', `${t}/nice-true`, spec({ ...b, nice: true }, d(dates)))
+  add('temporal', `${t}/nice-month`, spec({ ...b, nice: 'month' }, d(dates)))
+  add('temporal', `${t}/nice-week`, spec({ ...b, nice: 'week' }, d(dates)))
+  add('temporal', `${t}/nice-year-hours`, spec({ ...b, nice: 'year' }, d(hours)))
+  add('temporal', `${t}/nice-hour`, spec({ ...b, nice: 'hour' }, d(hours)))
+  add('temporal', `${t}/nice-interval-step`, spec({ ...b, nice: { interval: 'month', step: 3 } }, d(dates)))
+  add('temporal', `${t}/nice-count`, spec({ ...b, nice: 6 }, d(years)))
+  add('temporal', `${t}/nice-bad-interval`, spec({ ...b, nice: 'fortnight' }, d(dates)))
+  add('temporal', `${t}/zero-ignored`, spec({ ...b, zero: true }, d(dates)))
+  add('temporal', `${t}/clamp`, spec({ ...b, clamp: true }, d(dates)))
+  add('temporal', `${t}/padding`, spec({ ...b, padding: 12 }, d(dates)))
+  add('temporal', `${t}/reverse`, spec({ ...b, reverse: true }, d(dates)))
+  add('temporal', `${t}/domainMin-Max`, spec({ ...b, domainMin: t0 - 30 * days, domainMax: t0 + 400 * days }, d(dates)))
+  add('temporal', `${t}/literal-domain`, spec({ ...b, domain: [Date.UTC(2010, 0, 1), Date.UTC(2020, 6, 1)] }))
+  add('temporal', `${t}/literal-domain-3stop`, spec({ ...b, domain: [Date.UTC(2010, 0, 1), Date.UTC(2015, 0, 1), Date.UTC(2020, 0, 1)], range: [0, 50, 250] }))
+  add('temporal', `${t}/empty`, spec(b, d([])))
+  add('temporal', `${t}/single`, spec(b, d([dates[0]])))
+  add('temporal', `${t}/nulls`, spec(b, d([{ t: t0 }, { t: null }, { t: t0 + 9 * days }])))
+  add('temporal', `${t}/color-range-hcl`, spec({ ...b, range: ['#ffffe0', '#8b0000'], interpolate: 'hcl' }, d(dates)))
+  add('temporal', `${t}/color-scheme`, spec({ ...b, range: { scheme: 'blues' } }, d(dates)))
+}
+
+// ---- sequential / diverging colour (continuous types with a scheme)
+const SEQ_TYPES = ['linear', 'log', 'pow', 'sqrt', 'symlog']
+for (const t of SEQ_TYPES) {
+  const rows = t === 'log' ? posOnly : nums
+  const f = (name, scale, rest) => add('color-continuous', `${t}/${name}`, spec({ type: t, ...dom('d', 'v'), ...scale }, { ...d(rows), ...rest }))
+  f('scheme-range-object', { range: { scheme: 'blues' } })
+  f('scheme-top-level', { scheme: 'viridis' })
+  f('scheme-reverse', { range: { scheme: 'viridis' }, reverse: true })
+  f('scheme-extent', { range: { scheme: 'magma', extent: [0.2, 0.8] } })
+  f('scheme-extent-reverse', { range: { scheme: 'magma', extent: [0.2, 0.8] }, reverse: true })
+  f('scheme-uppercase-name', { range: { scheme: 'Viridis' } })
+  f('scheme-discrete-on-continuous', { range: { scheme: 'category10' } })
+  f('scheme-array', { range: { scheme: ['#fee', '#a00', '#300'] } })
+  f('scheme-array-hcl', { range: { scheme: ['#fee', '#a00', '#300'] }, interpolate: 'hcl' })
+  f('scheme-unknown', { range: { scheme: 'nope' } })
+  f('domainMid-scheme', { range: { scheme: 'redblue' }, domainMid: 6 })
+  f('domainMid-scheme-blueorange', { range: { scheme: 'blueorange' }, domainMid: 5, zero: false })
+  f('domainMid-extent', { range: { scheme: 'redyellowblue', extent: [1, 0] }, domainMid: 5 })
+  f('domainMid-reverse', { range: { scheme: 'redyellowblue' }, domainMid: 5, reverse: true })
+  f('domainMid-above', { range: { scheme: 'purplegreen' }, domainMid: 99 })
+  f('domainMid-below', { range: { scheme: 'purplegreen' }, domainMid: 0.2 })
+  f('domainMid-top-level-scheme', { scheme: 'spectral', domainMid: 6 })
+  f('domainMid-colour-array', { range: ['#f00', '#fff', '#00f'], domainMid: 6 })
+  f('domainMid-colour-array-2', { range: ['#f00', '#00f'], domainMid: 6 })
+  f('domainMid-three-literal', { domain: [1, 6, 12], range: { scheme: 'rdbu' } })
+  f('three-literal-colour-array', { domain: [1, 6, 12], range: ['#a00', '#fff', '#00a'] })
+  f('four-literal-colour-array', { domain: [1, 4, 8, 12], range: ['#a00', '#fff', '#00a', '#0a0'] })
+  f('domainMid-zero', { range: { scheme: 'blues' }, domainMid: 6, zero: true })
+  f('domainMid-domainMin-Max', { range: { scheme: 'blues' }, domainMid: 6, domainMin: 0, domainMax: 20 })
+  f('range-ramp', { range: 'ramp' })
+  f('range-heatmap', { range: 'heatmap' })
+  f('range-diverging', { range: 'diverging' })
+  f('range-diverging-mid', { range: 'diverging', domainMid: 5 })
+  f('range-category', { range: 'category' })
+  f('range-ordinal', { range: 'ordinal' })
+  f('range-symbol', { range: 'symbol' })
+  f('range-unknown-name', { range: 'bogus' })
+  f('colour-array-2', { range: ['#ffffe0', '#8b0000'] })
+  f('colour-array-2-hcl', { range: ['#ffffe0', '#8b0000'], interpolate: 'hcl' })
+  f('colour-array-3', { range: ['#ffffe0', '#6a9', '#8b0000'] })
+  f('colour-array-3-hcl', { range: ['#ffffe0', '#6a9', '#8b0000'], interpolate: 'hcl' })
+  f('colour-array-3-reverse', { range: ['#ffffe0', '#6a9', '#8b0000'], reverse: true })
+  f('colour-array-3-hcl-gamma', { range: ['#ffffe0', '#6a9', '#8b0000'], interpolate: { type: 'hcl', gamma: 2 } })
+  f('colour-array-rgb-gamma', { range: ['#ffffe0', '#6a9', '#8b0000'], interpolate: { type: 'rgb', gamma: 2.2 } })
+  f('colour-array-interpolate-gamma-key', { range: ['#ffffe0', '#8b0000'], interpolate: 'rgb', interpolateGamma: 0.5 })
+  f('colour-array-cubehelix', { range: ['#ffffe0', '#8b0000'], interpolate: 'cubehelix' })
+  f('colour-array-cubehelix-gamma', { range: ['#ffffe0', '#8b0000'], interpolate: { type: 'cubehelix', gamma: 3 } })
+  f('colour-array-cubehelix-long', { range: ['#ffffe0', '#8b0000'], interpolate: 'cubehelix-long' })
+  f('colour-array-hsl', { range: ['#ffffe0', '#8b0000'], interpolate: 'hsl' })
+  f('colour-array-hsl-long', { range: ['#ffffe0', '#8b0000'], interpolate: 'hsl-long' })
+  f('colour-array-lab', { range: ['#ffffe0', '#8b0000'], interpolate: 'lab' })
+  f('colour-array-hcl-long', { range: ['#ffffe0', '#8b0000'], interpolate: 'hcl-long' })
+  f('colour-array-rgb-basis', { range: ['#ffffe0', '#6a9', '#8b0000'], interpolate: 'rgb-basis' })
+  f('colour-array-rgb-basis-closed', { range: ['#ffffe0', '#6a9', '#8b0000'], interpolate: 'rgb-basis-closed' })
+  f('colour-array-unknown-interpolate', { range: ['#ffffe0', '#8b0000'], interpolate: 'bogus' })
+  // NOTE: `interpolate: {signal}` / `gamma: {signal}` are not covered: vega-parser's parseScaleInterpolate
+  // calls parseLiteral without a scope, so upstream throws a TypeError for them.
+  f('colour-array-with-zero', { range: ['#ffffe0', '#8b0000'], zero: true })
+  f('colour-array-with-nice', { range: ['#ffffe0', '#8b0000'], nice: true })
+  f('colour-array-with-padding', { range: ['#ffffe0', '#8b0000'], padding: 20 })
+  f('colour-array-with-clamp', { range: ['#ffffe0', '#8b0000'], clamp: true })
+  f('colour-array-domainMin-Max', { range: ['#ffffe0', '#8b0000'], domainMin: 0, domainMax: 20 })
+  f('colour-array-named', { range: ['red', 'green', 'rgb(0,0,255)'] })
+  f('scheme-nice', { range: { scheme: 'blues' }, nice: true })
+  f('scheme-zero', { range: { scheme: 'blues' }, zero: true })
+  f('scheme-padding', { range: { scheme: 'blues' }, padding: 15 })
+  f('scheme-clamp', { range: { scheme: 'blues' }, clamp: true })
+  f('scheme-domainMin-Max', { range: { scheme: 'blues' }, domainMin: -5, domainMax: 30 })
+  f('scheme-interpolate-ignored', { range: { scheme: 'blues' }, interpolate: 'hcl' })
+  f('scheme-reverse-descending-domain', { domain: [12, 1], range: { scheme: 'blues' }, reverse: true })
+  f('scheme-descending-domain', { domain: [12, 1], range: { scheme: 'blues' } })
+  f('scheme-single-value', { range: { scheme: 'blues' } }, d(single))
+  f('scheme-empty', { range: { scheme: 'blues' } }, d([]))
+  f('scheme-literal-domain', { domain: [2, 20], range: { scheme: 'greens' } })
+  f('scheme-literal-domain-zero', { domain: [2, 20], range: { scheme: 'greens' }, zero: true })
+  f('scheme-signal', { range: { scheme: { signal: 'sn' } } }, { signals: [{ name: 'sn', value: 'oranges' }] })
+  f('scheme-extent-signal', { range: { scheme: 'blues', extent: { signal: 'ex' } } }, { signals: [{ name: 'ex', value: [0.3, 1] }] })
+  f('scheme-domainRaw', { range: { scheme: 'blues' }, domainRaw: { signal: 'raw' } }, { signals: [{ name: 'raw', value: [2, 30] }] })
+  f('scheme-domainRaw-3', { range: { scheme: 'blues' }, domainRaw: { signal: 'raw' } }, { signals: [{ name: 'raw', value: [2, 10, 30] }] })
+  f('scheme-signal-domain-3', { range: { scheme: 'blues' }, domain: { signal: 'dm3' } }, { signals: [{ name: 'dm3', value: [1, 4, 9] }] })
+  f('scheme-signal-domain-2', { range: { scheme: 'blues' }, domain: { signal: 'dm2' } }, { signals: [{ name: 'dm2', value: [1, 9] }] })
+}
+// legacy `sequential` type
+add('color-continuous', 'sequential/scheme', spec({ type: 'sequential', ...dom('d', 'v'), range: { scheme: 'plasma' } }, d(nums)))
+add('color-continuous', 'sequential/scheme-reverse', spec({ type: 'sequential', ...dom('d', 'v'), range: { scheme: 'plasma' }, reverse: true }, d(nums)))
+add('color-continuous', 'sequential/colour-array', spec({ type: 'sequential', ...dom('d', 'v'), range: ['#fff', '#000'] }, d(nums)))
+add('color-continuous', 'sequential/zero', spec({ type: 'sequential', ...dom('d', 'v'), range: { scheme: 'plasma' }, zero: true }, d(nums)))
+add('color-continuous', 'sequential/padding', spec({ type: 'sequential', ...dom('d', 'v'), range: { scheme: 'plasma' }, padding: 20 }, d(nums)))
+add('color-continuous', 'sequential/domainMid', spec({ type: 'sequential', ...dom('d', 'v'), range: { scheme: 'plasma' }, domainMid: 6 }, d(nums)))
+add('color-continuous', 'sequential/clamp', spec({ type: 'sequential', ...dom('d', 'v'), range: { scheme: 'plasma' }, clamp: true }, d(nums)))
+add('color-continuous', 'sequential/nice', spec({ type: 'sequential', ...dom('d', 'v'), range: { scheme: 'plasma' }, nice: true }, d(nums)))
+add('color-continuous', 'sequential/no-range', spec({ type: 'sequential', ...dom('d', 'v') }, d(nums)))
+add('color-continuous', 'linear/config-range-override', spec({ type: 'linear', ...dom('d', 'v'), range: 'ramp' }, { ...d(nums), config: { range: { ramp: { scheme: 'reds' } } } }))
+add('color-continuous', 'linear/config-range-array', spec({ type: 'linear', ...dom('d', 'v'), range: 'mine' }, { ...d(nums), config: { range: { mine: ['#000', '#fff'] } } }))
+add('color-continuous', 'linear/config-diverging-extent', spec({ type: 'linear', ...dom('d', 'v'), range: 'diverging' }, { ...d(nums), config: { range: { diverging: { scheme: 'redblue' } } } }))
+add('color-continuous', 'linear/config-range-chain', spec({ type: 'linear', ...dom('d', 'v'), range: 'a' }, { ...d(nums), config: { range: { a: 'b', b: ['#000', '#fff'] } } }))
+add('color-continuous', 'time/diverging-not-applied', spec({ type: 'time', ...dom('d', 't'), range: { scheme: 'blues' }, domainMid: t0 + 20 * days }, d(dates)))
+
+// ---- discretizing: quantile / quantize / threshold / bin-ordinal
+const DISC = ['quantile', 'quantize', 'threshold']
+for (const t of DISC) {
+  const dm = t === 'threshold' ? { domain: [3, 6, 10] } : dom('d', 'v')
+  const f = (name, scale, rest) => add('discretizing', `${t}/${name}`, spec({ type: t, ...dm, ...scale }, { ...d(nums), ...rest }))
+  f('range-array', { range: ['#a00', '#0a0', '#00a', '#aa0'] })
+  f('range-array-reverse', { range: ['#a00', '#0a0', '#00a', '#aa0'], reverse: true })
+  f('range-numbers', { range: [1, 5, 9, 13, 20] })
+  f('scheme-continuous', { range: { scheme: 'blues' } })
+  f('scheme-continuous-count', { range: { scheme: 'blues', count: 3 } })
+  f('scheme-continuous-count-7', { range: { scheme: 'blues', count: 7 } })
+  f('scheme-continuous-count-string', { range: { scheme: 'blues', count: '4' } })
+  f('scheme-continuous-extent', { range: { scheme: 'blues', extent: [0.25, 1] } })
+  f('scheme-continuous-reverse', { range: { scheme: 'blues' }, reverse: true })
+  f('scheme-continuous-extent-reverse-count', { range: { scheme: 'viridis', extent: [0.1, 0.9], count: 6 }, reverse: true })
+  f('scheme-discrete', { range: { scheme: 'category10' } })
+  f('scheme-discrete-count', { range: { scheme: 'category10', count: 3 } })
+  f('scheme-discrete-reverse', { range: { scheme: 'category10' }, reverse: true })
+  f('scheme-discrete-count-reverse', { range: { scheme: 'tableau20', count: 4 }, reverse: true })
+  f('scheme-array', { range: { scheme: ['#fee', '#a00', '#300'] } })
+  f('scheme-array-hcl', { range: { scheme: ['#fee', '#a00', '#300'] }, interpolate: 'hcl' })
+  f('scheme-top-level', { scheme: 'oranges' })
+  f('scheme-top-level-reverse', { scheme: 'oranges', reverse: true })
+  f('range-ramp', { range: 'ramp' })
+  f('range-heatmap', { range: 'heatmap' })
+  f('range-diverging', { range: 'diverging' })
+  f('range-category', { range: 'category' })
+  f('range-ordinal', { range: 'ordinal' })
+  f('scheme-signal-count', { range: { scheme: 'greens', count: { signal: 'cnt' } } }, { signals: [{ name: 'cnt', value: 6 }] })
+  f('scheme-unknown', { range: { scheme: 'nope' } })
+  f('no-range', {})
+  f('single-range', { range: ['#000'] })
+  f('domainMin-Max', { domainMin: 0, domainMax: 20, range: ['#a00', '#0a0', '#00a'] })
+  f('nice', { nice: true, range: ['#a00', '#0a0', '#00a'] })
+  f('zero', { zero: true, range: ['#a00', '#0a0', '#00a'] })
+  f('unknown', { range: ['#a00', '#0a0'], unknown: 'grey' })
+  f('unknown-signal', { range: ['#a00', '#0a0'], unknown: { signal: 'uk' } }, { signals: [{ name: 'uk', value: 'purple' }] })
+}
+add('discretizing', 'quantile/string-numbers', spec({ type: 'quantile', ...dom('d', 'v'), range: ['a', 'b', 'c'] }, d(strNums)))
+add('discretizing', 'quantile/nulls-nans', spec({ type: 'quantile', ...dom('d', 'v'), range: ['a', 'b', 'c'] }, d(withNulls)))
+add('discretizing', 'quantile/many-values', spec({ type: 'quantile', ...dom('d', 'v'), range: ['a', 'b', 'c', 'd'] }, d(Array.from({ length: 41 }, (_, i) => ({ v: (i * 37) % 53 })))))
+add('discretizing', 'quantile/duplicates', spec({ type: 'quantile', ...dom('d', 'v'), range: ['a', 'b', 'c'] }, d([{ v: 1 }, { v: 1 }, { v: 1 }, { v: 2 }, { v: 9 }, { v: 9 }])))
+add('discretizing', 'quantile/multi-fields', spec({ type: 'quantile', domain: { data: 'd', fields: ['v', 'w'] }, range: ['a', 'b', 'c'] }, d(nums)))
+add('discretizing', 'quantile/multi-data', spec({ type: 'quantile', domain: { fields: [{ data: 'd', field: 'v' }, { data: 'e', field: 'u' }] }, range: ['a', 'b', 'c', 'd'] }, { data: [{ name: 'd', values: nums }, { name: 'e', values: [{ u: 90 }, { u: 0.5 }, { u: 44 }] }] }))
+add('discretizing', 'quantile/literal-domain', spec({ type: 'quantile', domain: [9, 1, 5, 3, 7], range: ['a', 'b', 'c'] }))
+add('discretizing', 'quantile/literal-domain-strings', spec({ type: 'quantile', domain: ['9', '1', '10', '3'], range: ['a', 'b'] }))
+add('discretizing', 'quantile/empty', spec({ type: 'quantile', ...dom('d', 'v'), range: ['a', 'b'] }, d([])))
+add('discretizing', 'quantile/sort-ignored', spec({ type: 'quantile', ...dom('d', 'v', { sort: true }), range: ['a', 'b'] }, d(nums)))
+add('discretizing', 'quantile/domainRaw', spec({ type: 'quantile', domainRaw: { signal: 'raw' }, range: ['a', 'b'] }, { ...d(nums), signals: [{ name: 'raw', value: [4, 2, 8, 6] }] }))
+add('discretizing', 'quantize/negative', spec({ type: 'quantize', ...dom('d', 'v'), range: ['a', 'b', 'c'] }, d(negs)))
+add('discretizing', 'quantize/zero-false', spec({ type: 'quantize', ...dom('d', 'v'), range: ['a', 'b', 'c'], zero: false }, d(nums)))
+add('discretizing', 'quantize/nice-5', spec({ type: 'quantize', ...dom('d', 'v'), range: ['a', 'b', 'c'], nice: 5 }, d(nums)))
+add('discretizing', 'quantize/literal-domain', spec({ type: 'quantize', domain: [0, 100], range: ['a', 'b', 'c', 'd'] }))
+add('discretizing', 'quantize/empty', spec({ type: 'quantize', ...dom('d', 'v'), range: ['a', 'b'] }, d([])))
+add('discretizing', 'quantize/single', spec({ type: 'quantize', ...dom('d', 'v'), range: ['a', 'b'] }, d(single)))
+add('discretizing', 'quantize/padding', spec({ type: 'quantize', ...dom('d', 'v'), range: ['a', 'b'], padding: 10 }, d(nums)))
+add('discretizing', 'threshold/scheme-count-thresholds', spec({ type: 'threshold', domain: [1, 2, 3, 4, 5, 6, 7], range: { scheme: 'blues' } }))
+add('discretizing', 'threshold/scheme-discrete-more-thresholds', spec({ type: 'threshold', domain: [1, 2, 3, 4], range: { scheme: 'category10' } }))
+add('discretizing', 'threshold/scheme-count-ignored', spec({ type: 'threshold', domain: [1, 2, 3], range: { scheme: 'blues', count: 9 } }))
+add('discretizing', 'threshold/signal-domain', spec({ type: 'threshold', domain: { signal: 'th' }, range: { scheme: 'greens' } }, { signals: [{ name: 'th', value: [10, 20] }] }))
+add('discretizing', 'threshold/data-domain', spec({ type: 'threshold', ...dom('d', 'v'), range: ['a', 'b'] }, d(nums)))
+add('discretizing', 'threshold/string-domain', spec({ type: 'threshold', domain: ['a', 'm', 'z'], range: ['1', '2', '3', '4'] }), ['b', 'n', 'zz'])
+add('discretizing', 'threshold/empty-domain', spec({ type: 'threshold', domain: [], range: ['a'] }))
+add('discretizing', 'threshold/unsorted-domain', spec({ type: 'threshold', domain: [9, 3, 6], range: ['a', 'b', 'c', 'd'] }))
+
+// bin-ordinal
+const binDom = { start: 0, stop: 20, step: 5 }
+add('bin-ordinal', 'bin-ordinal/bins-array-domain', spec({ type: 'bin-ordinal', domain: [0, 10, 20, 30], range: ['a', 'b', 'c'] }))
+add('bin-ordinal', 'bin-ordinal/bins-from-domain-scheme', spec({ type: 'bin-ordinal', domain: [0, 10, 20, 30, 40], range: { scheme: 'blues' } }))
+add('bin-ordinal', 'bin-ordinal/bins-from-domain-scheme-discrete', spec({ type: 'bin-ordinal', domain: [0, 10, 20, 30, 40], range: { scheme: 'category10' } }))
+add('bin-ordinal', 'bin-ordinal/bins-from-domain-scheme-reverse', spec({ type: 'bin-ordinal', domain: [0, 10, 20, 30, 40], range: { scheme: 'blues' }, reverse: true }))
+add('bin-ordinal', 'bin-ordinal/bins-array', spec({ type: 'bin-ordinal', bins: [0, 5, 10, 15], range: ['a', 'b', 'c'] }))
+add('bin-ordinal', 'bin-ordinal/bins-array-scheme', spec({ type: 'bin-ordinal', bins: [0, 5, 10, 15, 20], range: { scheme: 'greens' } }))
+add('bin-ordinal', 'bin-ordinal/bins-object', spec({ type: 'bin-ordinal', bins: binDom, range: { scheme: 'greens' } }, {}))
+add('bin-ordinal', 'bin-ordinal/bins-object-domain', spec({ type: 'bin-ordinal', bins: binDom, domain: [0, 20], range: ['a', 'b', 'c', 'd'] }))
+add('bin-ordinal', 'bin-ordinal/bins-and-domain', spec({ type: 'bin-ordinal', bins: [0, 5, 10], domain: [0, 5, 10], range: ['a', 'b'] }))
+add('bin-ordinal', 'bin-ordinal/bins-signal', spec({ type: 'bin-ordinal', bins: { signal: 'bn' }, range: ['a', 'b', 'c'] }, { signals: [{ name: 'bn', value: [0, 10, 20, 30] }] }))
+
+// ---- bins on continuous
+for (const t of ['linear', 'quantize', 'quantile', 'threshold']) {
+  const base = t === 'threshold' ? { domain: [3, 6, 10] } : dom('d', 'v')
+  const f = (name, scale, rest) => add('bins', `${t}/${name}`, spec({ type: t, ...base, range: t === 'linear' ? [0, 100] : ['a', 'b', 'c'], ...scale }, { ...d(nums), ...rest }))
+  f('array', { bins: [0, 4, 8, 12] })
+  f('array-zero-false', { bins: [0, 4, 8, 12], zero: false })
+  f('object-full', { bins: { start: 0, stop: 12, step: 4 } })
+  f('object-step-only', { bins: { step: 2 } })
+  f('object-start-stop-outside', { bins: { start: -10, stop: 100, step: 5 } })
+  f('object-inside', { bins: { start: 2, stop: 10, step: 2 } })
+  f('object-fraction-step', { bins: { start: 0.5, stop: 11.5, step: 1.5 } })
+  f('object-no-step', { bins: { start: 0, stop: 12 } })
+  f('signal-array', { bins: { signal: 'bn' } }, { signals: [{ name: 'bn', value: [0, 3, 6, 9] }] })
+  f('signal-object', { bins: { signal: 'bn' } }, { signals: [{ name: 'bn', value: { start: 0, stop: 12, step: 3 } }] })
+  f('object-step-signal', { bins: { step: { signal: 'st' } } }, { signals: [{ name: 'st', value: 3 }] })
+  f('with-nice', { bins: [0, 4, 8, 12], nice: true })
+  f('with-interpolate', { bins: [0, 4, 8, 12], interpolate: 'hcl' })
+}
+add('bins', 'linear/bins-colour-scheme', spec({ type: 'linear', ...dom('d', 'v'), range: { scheme: 'blues' }, bins: [0, 4, 8, 12] }, d(nums)))
+add('bins', 'linear/bins-colour-array-interpolate', spec({ type: 'linear', ...dom('d', 'v'), range: ['#fff', '#00a', '#000'], interpolate: 'hcl', bins: { step: 3 } }, d(nums)))
+
+// ---- ordinal
+{
+  const f = (name, scale, rest, probes) => add('ordinal', name, spec({ type: 'ordinal', ...scale }, { ...d(cats), ...rest }), probes)
+  f('ordinal/data-range-array', { ...dom('d', 'c'), range: ['#a00', '#0a0', '#00a'] })
+  f('ordinal/range-wraps', { ...dom('d', 'c'), range: ['x', 'y'] })
+  f('ordinal/range-empty', { ...dom('d', 'c'), range: [] })
+  f('ordinal/no-range', { ...dom('d', 'c') })
+  f('ordinal/sort-true', { ...dom('d', 'c', { sort: true }), range: ['1', '2', '3', '4'] })
+  f('ordinal/sort-ascending', { ...dom('d', 'c', { sort: 'ascending' }), range: ['1', '2', '3', '4'] })
+  f('ordinal/sort-descending', { ...dom('d', 'c', { sort: 'descending' }), range: ['1', '2', '3', '4'] })
+  f('ordinal/sort-order-descending', { ...dom('d', 'c', { sort: { order: 'descending' } }), range: ['1', '2', '3', '4'] })
+  f('ordinal/sort-order-ascending', { ...dom('d', 'c', { sort: { order: 'ascending' } }), range: ['1', '2', '3', '4'] })
+  f('ordinal/sort-key', { ...dom('d', 'c', { sort: { field: 'key', order: 'descending' } }), range: ['1', '2', '3', '4'] })
+  f('ordinal/sort-field-no-op', { ...dom('d', 'c', { sort: { field: 'n', order: 'descending' } }), range: ['1', '2', '3', '4'] })
+  for (const op of ['count', 'sum', 'min', 'max', 'mean', 'median', 'average', 'q1', 'q3', 'distinct', 'valid', 'missing', 'product', 'variance', 'variancep', 'stdev', 'stdevp', 'stderr']) {
+    f(`ordinal/sort-op-${op}`, { ...dom('d', 'c', { sort: { op, field: 'n' } }), range: ['1', '2', '3', '4'] })
+    f(`ordinal/sort-op-${op}-desc`, { ...dom('d', 'c', { sort: { op, field: 'n', order: 'descending' } }), range: ['1', '2', '3', '4'] })
+  }
+  f('ordinal/sort-op-count-nofield', { ...dom('d', 'c', { sort: { op: 'count' } }), range: ['1', '2', '3', '4'] })
+  f('ordinal/sort-op-count-desc-nofield', { ...dom('d', 'c', { sort: { op: 'count', order: 'descending' } }), range: ['1', '2', '3', '4'] })
+  f('ordinal/sort-op-sum-nofield-error', { ...dom('d', 'c', { sort: { op: 'sum' } }), range: ['1', '2', '3', '4'] })
+  f('ordinal/sort-op-unknown', { ...dom('d', 'c', { sort: { op: 'frob', field: 'n' } }), range: ['1', '2', '3', '4'] })
+  f('ordinal/sort-op-string-field-min', { ...dom('d', 'c', { sort: { op: 'min', field: 'c' } }), range: ['1', '2', '3', '4'] })
+  f('ordinal/sort-op-max-strings', { ...dom('d', 'c', { sort: { op: 'max', field: 's' } }), range: ['1', '2', '3', '4'] }, d([{ c: 'p', s: 'zz' }, { c: 'q', s: 'aa' }, { c: 'p', s: 'bb' }, { c: 'q', s: 'yy' }]))
+  f('ordinal/domain-numbers', { ...dom('d', 'c'), range: ['1', '2', '3', '4'] }, d(catsNum), [10, 2, 33, 7, 5, '10'])
+  f('ordinal/domain-numbers-sorted', { ...dom('d', 'c', { sort: true }), range: ['1', '2', '3', '4'] }, d(catsNum), [10, 2, 33, 7, 5])
+  f('ordinal/domain-nulls', { ...dom('d', 'c'), range: ['1', '2', '3', '4'] }, d(catsNull), ['x', 'y', null, undefined, 'q'])
+  f('ordinal/domain-nulls-sorted', { ...dom('d', 'c', { sort: true }), range: ['1', '2', '3', '4'] }, d(catsNull), ['x', 'y', null, undefined, 'q'])
+  f('ordinal/empty-data', { ...dom('d', 'c'), range: ['1', '2'] }, d([]), ['a'])
+  f('ordinal/implicit', { ...dom('d', 'c'), range: ['1', '2', '3', '4', '5'], domainImplicit: true }, undefined, ['a', 'zz', 'new'])
+  f('ordinal/implicit-false', { ...dom('d', 'c'), range: ['1', '2', '3', '4', '5'], domainImplicit: false }, undefined, ['a', 'zz', 'new'])
+  f('ordinal/implicit-signal', { ...dom('d', 'c'), range: ['1', '2', '3', '4', '5'], domainImplicit: { signal: 'im' } }, { signals: [{ name: 'im', value: true }] }, ['a', 'zz', 'new'])
+  f('ordinal/literal-domain', { domain: ['u', 'v', 'w'], range: ['1', '2', '3'] }, {}, ['u', 'v', 'w', 'x'])
+  f('ordinal/literal-domain-duplicates', { domain: ['u', 'v', 'u'], range: ['1', '2', '3'] }, {}, ['u', 'v', 'w'])
+  f('ordinal/literal-domain-implicit', { domain: ['u', 'v'], range: ['1', '2', '3'], domainImplicit: true }, {}, ['u', 'v', 'w', 'x'])
+  f('ordinal/signal-domain', { domain: { signal: 'od' }, range: ['1', '2', '3'] }, { signals: [{ name: 'od', value: ['p', 'q'] }] }, ['p', 'q', 'r'])
+  f('ordinal/domainRaw', { ...dom('d', 'c'), domainRaw: { signal: 'raw' }, range: ['1', '2', '3'] }, { signals: [{ name: 'raw', value: ['b', 'z'] }] }, ['b', 'z', 'a'])
+  f('ordinal/multi-fields-same-data', { domain: { data: 'd', fields: ['c', 'e'] }, range: ['1', '2', '3', '4', '5', '6'] }, d(cats.map((r, i) => ({ ...r, e: 'e' + (i % 3) }))), ['a', 'e0', 'e1', 'e2'])
+  f('ordinal/multi-fields-sorted', { domain: { data: 'd', fields: ['c', 'e'], sort: true }, range: ['1', '2', '3', '4', '5', '6'] }, d(cats.map((r, i) => ({ ...r, e: 'e' + (i % 3) }))), ['a', 'e0', 'e1', 'e2'])
+  f('ordinal/multi-data', { domain: { fields: [{ data: 'd', field: 'c' }, { data: 'e', field: 'k' }] }, range: ['1', '2', '3', '4', '5', '6'] }, { data: [{ name: 'd', values: cats }, { name: 'e', values: [{ k: 'zz' }, { k: 'a' }, { k: 'mm' }] }] }, ['a', 'b', 'zz', 'mm'])
+  f('ordinal/multi-data-sorted', { domain: { fields: [{ data: 'd', field: 'c' }, { data: 'e', field: 'k' }], sort: true }, range: ['1', '2', '3', '4', '5', '6'] }, { data: [{ name: 'd', values: cats }, { name: 'e', values: [{ k: 'zz' }, { k: 'a' }, { k: 'mm' }] }] }, ['a', 'b', 'zz', 'mm'])
+  f('ordinal/multi-data-sorted-desc', { domain: { fields: [{ data: 'd', field: 'c' }, { data: 'e', field: 'k' }], sort: { order: 'descending' } }, range: ['1', '2', '3', '4', '5', '6'] }, { data: [{ name: 'd', values: cats }, { name: 'e', values: [{ k: 'zz' }, { k: 'a' }, { k: 'mm' }] }] }, ['a', 'b', 'zz', 'mm'])
+  f('ordinal/multi-data-sort-count', { domain: { fields: [{ data: 'd', field: 'c' }, { data: 'e', field: 'k' }], sort: { op: 'count' } }, range: ['1', '2', '3', '4', '5', '6'] }, { data: [{ name: 'd', values: cats }, { name: 'e', values: [{ k: 'zz' }, { k: 'a' }, { k: 'mm' }] }] }, ['a', 'b', 'zz', 'mm'])
+  f('ordinal/multi-data-sort-max', { domain: { fields: [{ data: 'd', field: 'c' }, { data: 'e', field: 'k' }], sort: { op: 'max', field: 'n' } }, range: ['1', '2', '3', '4', '5', '6'] }, { data: [{ name: 'd', values: cats }, { name: 'e', values: [{ k: 'zz', n: 100 }, { k: 'a', n: 0 }, { k: 'mm', n: 5 }] }] }, ['a', 'b', 'zz', 'mm'])
+  f('ordinal/multi-data-sort-bad-op', { domain: { fields: [{ data: 'd', field: 'c' }, { data: 'e', field: 'k' }], sort: { op: 'mean', field: 'n' } }, range: ['1', '2'] }, { data: [{ name: 'd', values: cats }, { name: 'e', values: [{ k: 'zz', n: 100 }] }] }, ['a'])
+  f('ordinal/multi-data-literal-member', { domain: { fields: [{ data: 'd', field: 'c' }, ['lit1', 'lit2']] }, range: ['1', '2', '3', '4', '5', '6'] }, undefined, ['a', 'lit1', 'lit2'])
+  f('ordinal/multi-data-signal-member', { domain: { fields: [{ data: 'd', field: 'c' }, { signal: 'extra' }] }, range: ['1', '2', '3', '4', '5', '6'] }, { signals: [{ name: 'extra', value: ['sig1', 'sig2'] }] }, ['a', 'sig1', 'sig2'])
+  f('ordinal/multi-data-string-fields', { domain: { data: 'd', fields: ['c', 'c'] }, range: ['1', '2', '3', '4'] }, undefined, ['a', 'b'])
+  f('ordinal/multi-data-nulls', { domain: { fields: [{ data: 'd', field: 'c' }, { data: 'e', field: 'c' }] }, range: ['1', '2', '3', '4', '5', '6'] }, { data: [{ name: 'd', values: catsNull }, { name: 'e', values: [{ c: 'q' }, { c: null }] }] }, ['x', 'y', 'q', null])
+  f('ordinal/multi-data-numbers', { domain: { fields: [{ data: 'd', field: 'c' }, { data: 'e', field: 'c' }] }, range: ['1', '2', '3', '4', '5', '6'] }, { data: [{ name: 'd', values: catsNum }, { name: 'e', values: [{ c: 4 }, { c: 10 }] }] }, [10, 2, 33, 7, 4])
+  f('ordinal/multi-data-numbers-sorted', { domain: { fields: [{ data: 'd', field: 'c' }, { data: 'e', field: 'c' }], sort: true }, range: ['1', '2', '3', '4', '5', '6'] }, { data: [{ name: 'd', values: catsNum }, { name: 'e', values: [{ c: 4 }, { c: 10 }] }] }, [10, 2, 33, 7, 4])
+  // scheme ranges (C10)
+  for (const sc of ['category10', 'category20', 'tableau10', 'set1', 'paired', 'Category10']) {
+    f(`ordinal/range-scheme-${sc}`, { ...dom('d', 'c'), range: { scheme: sc } })
+  }
+  f('ordinal/range-scheme-top-level', { ...dom('d', 'c'), scheme: 'set2' })
+  f('ordinal/range-scheme-continuous', { ...dom('d', 'c'), range: { scheme: 'viridis' } })
+  f('ordinal/range-scheme-continuous-extent', { ...dom('d', 'c'), range: { scheme: 'viridis', extent: [0.2, 0.7] } })
+  f('ordinal/range-scheme-continuous-reverse', { ...dom('d', 'c'), range: { scheme: 'viridis' }, reverse: true })
+  f('ordinal/range-scheme-continuous-extent-reverse', { ...dom('d', 'c'), range: { scheme: 'blues', extent: [0.3, 1] }, reverse: true })
+  f('ordinal/range-scheme-discrete-reverse', { ...dom('d', 'c'), range: { scheme: 'category10' }, reverse: true })
+  f('ordinal/range-scheme-discrete-count-ignored', { ...dom('d', 'c'), range: { scheme: 'category10', count: 2 } })
+  f('ordinal/range-scheme-discrete-extent-ignored', { ...dom('d', 'c'), range: { scheme: 'category10', extent: [0.5, 1] } })
+  f('ordinal/range-scheme-array', { ...dom('d', 'c'), range: { scheme: ['#800', '#080', '#008'] } })
+  f('ordinal/range-scheme-array-interpolate', { ...dom('d', 'c'), range: { scheme: ['#800', '#080', '#008'] }, interpolate: 'hcl' })
+  f('ordinal/range-scheme-unknown', { ...dom('d', 'c'), range: { scheme: 'nope' } })
+  f('ordinal/range-scheme-signal', { ...dom('d', 'c'), range: { scheme: { signal: 'sn' } } }, { signals: [{ name: 'sn', value: 'dark2' }] })
+  f('ordinal/range-scheme-with-literal-domain', { domain: ['u', 'v', 'w'], range: { scheme: 'accent' } }, {}, ['u', 'v', 'w'])
+  f('ordinal/range-scheme-no-domain', { range: { scheme: 'accent' } }, {}, ['u', 'v'])
+  f('ordinal/range-category-name', { ...dom('d', 'c'), range: 'category' })
+  f('ordinal/range-ramp-name', { ...dom('d', 'c'), range: 'ramp' })
+  f('ordinal/range-heatmap-name', { ...dom('d', 'c'), range: 'heatmap' })
+  f('ordinal/range-ordinal-name', { ...dom('d', 'c'), range: 'ordinal' })
+  f('ordinal/range-diverging-name', { ...dom('d', 'c'), range: 'diverging' })
+  f('ordinal/range-symbol-name', { ...dom('d', 'c'), range: 'symbol' })
+  f('ordinal/range-config-name', { ...dom('d', 'c'), range: 'mine' }, { config: { range: { mine: ['#111', '#222'] } } })
+  f('ordinal/range-config-category-override', { ...dom('d', 'c'), range: 'category' }, { config: { range: { category: { scheme: 'set3' } } } })
+  f('ordinal/range-width', { ...dom('d', 'c'), range: 'width' })
+  f('ordinal/range-height', { ...dom('d', 'c'), range: 'height' })
+  f('ordinal/range-signal-array', { ...dom('d', 'c'), range: { signal: 'rr' } }, { signals: [{ name: 'rr', value: ['r1', 'r2', 'r3'] }] })
+  f('ordinal/range-array-with-signal-member', { ...dom('d', 'c'), range: ['r1', { signal: 'r2' }] }, { signals: [{ name: 'r2', value: 'rr2' }] })
+  f('ordinal/range-from-data', { ...dom('d', 'c'), range: { data: 'cols', field: 'color' } }, { data: [{ name: 'd', values: cats }, { name: 'cols', values: [{ color: 'red' }, { color: 'blue' }, { color: 'green' }] }] })
+  f('ordinal/range-from-data-multi', { ...dom('d', 'c'), range: { fields: [{ data: 'cols', field: 'color' }, { data: 'cols', field: 'other' }] } }, { data: [{ name: 'd', values: cats }, { name: 'cols', values: [{ color: 'red', other: 'x' }, { color: 'blue', other: 'y' }] }] })
+  f('ordinal/range-step-error', { ...dom('d', 'c'), range: { step: 10 } })
+  f('ordinal/range-nested-array', { ...dom('d', 'c'), range: [[1, 2], [3, 4], { signal: '[5, 6]' }] })
+  f('ordinal/range-numbers', { ...dom('d', 'c'), range: [10, 20, 30] })
+  f('ordinal/reverse-array', { ...dom('d', 'c'), range: ['1', '2', '3', '4'], reverse: true })
+  f('ordinal/round-ignored', { ...dom('d', 'c'), range: ['1', '2', '3', '4'], round: true })
+  f('ordinal/unknown', { ...dom('d', 'c'), range: ['1', '2', '3', '4'], unknown: '?' }, undefined, ['a', 'zz'])
+  f('ordinal/unknown-with-implicit', { ...dom('d', 'c'), range: ['1', '2', '3', '4'], unknown: '?', domainImplicit: true }, undefined, ['a', 'zz'])
+}
+
+// ---- band & point
+for (const t of ['band', 'point']) {
+  const f = (name, scale, rest, probes) => add('band-point', `${t}/${name}`, spec({ type: t, ...dom('d', 'c'), range: [0, 150], ...scale }, { ...d(cats), ...rest }), probes)
+  f('plain', {})
+  f('padding', { padding: 0.3 })
+  f('padding-inner-outer', { paddingInner: 0.2, paddingOuter: 0.6 })
+  f('padding-outer-only', { paddingOuter: 0.5 })
+  f('padding-inner-only', { paddingInner: 0.4 })
+  f('padding-and-inner', { padding: 0.5, paddingInner: 0.1 })
+  f('padding-and-outer', { padding: 0.5, paddingOuter: 0.1 })
+  f('align-0', { align: 0, paddingOuter: 0.5 })
+  f('align-1', { align: 1, paddingOuter: 0.5 })
+  f('align-signal', { align: { signal: 'al' }, paddingOuter: 0.5 }, { signals: [{ name: 'al', value: 0.2 }] })
+  f('round', { round: true })
+  f('round-padding', { round: true, padding: 0.2 })
+  f('reverse', { reverse: true })
+  f('reverse-padding-round', { reverse: true, padding: 0.1, round: true })
+  f('range-reversed', { range: [150, 0] })
+  f('range-width', { range: 'width' })
+  f('range-height', { range: 'height' })
+  f('range-signal', { range: [0, { signal: 'width' }] })
+  f('range-step', { range: { step: 25 } })
+  f('range-step-padding', { range: { step: 25 }, padding: 0.2 })
+  f('range-step-padding-inner-outer', { range: { step: 25 }, paddingInner: 0.1, paddingOuter: 0.4 })
+  f('range-step-signal', { range: { step: { signal: 'stp' } } }, { signals: [{ name: 'stp', value: 18 }] })
+  f('range-step-round', { range: { step: 21.7 }, round: true })
+  f('range-step-reverse', { range: { step: 25 }, reverse: true })
+  f('range-step-literal-domain', { domain: ['a', 'b', 'c'], range: { step: 30 } }, {}, ['a', 'b', 'c'])
+  f('range-step-empty-domain', { range: { step: 25 } }, d([]), ['a'])
+  f('range-step-zero', { range: { step: 0 } })
+  f('range-numbers-3', { range: [10, 20, 30] })
+  f('sort', { domain: { data: 'd', field: 'c', sort: true } })
+  f('sort-desc', { domain: { data: 'd', field: 'c', sort: { order: 'descending' } } })
+  f('sort-op-sum', { domain: { data: 'd', field: 'c', sort: { op: 'sum', field: 'n', order: 'descending' } } })
+  f('sort-op-mean', { domain: { data: 'd', field: 'c', sort: { op: 'mean', field: 'n' } } })
+  f('sort-op-count', { domain: { data: 'd', field: 'c', sort: { op: 'count' } } })
+  f('single', {}, d([{ c: 'only' }]), ['only', 'zz'])
+  f('empty', {}, d([]), ['a'])
+  f('literal-domain', { domain: ['p', 'q', 'r'] }, {}, ['p', 'q', 'r', 's'])
+  f('literal-numbers', { domain: [3, 1, 2] }, {}, [3, 1, 2, 4, '3'])
+  f('multi-data', { domain: { fields: [{ data: 'd', field: 'c' }, { data: 'e', field: 'k' }], sort: true } }, { data: [{ name: 'd', values: cats }, { name: 'e', values: [{ k: 'zz' }] }] }, ['a', 'zz'])
+  f('nulls', {}, d(catsNull), ['x', 'y', null, undefined])
+  f('numbers', {}, d(catsNum), [10, 2, 33, 7])
+  f('domainRaw', { domainRaw: { signal: 'raw' } }, { signals: [{ name: 'raw', value: ['m', 'n'] }] }, ['m', 'n'])
+  f('zero-ignored', { zero: true })
+  f('nice-ignored', { nice: true })
+  f('clamp-ignored', { clamp: true })
+  f('range-scheme-error', { range: { scheme: 'blues' } })
+  f('range-array-rangeMin-Max', { rangeMin: 10, rangeMax: 100 })
+  f('range-colour-name', { range: 'category' })
+}
+
+// ---- diverse leftovers: unknown/NaN/null edge domains across types
+for (const t of ['linear', 'time', 'quantize', 'sequential', 'ordinal', 'band']) {
+  add('edge', `${t}/domain-literal-empty`, spec({ type: t, domain: [], range: t === 'linear' || t === 'time' ? [0, 1] : ['a', 'b'] }))
+  add('edge', `${t}/domain-signal-undefined`, spec({ type: t, domain: { signal: 'nothere' }, range: t === 'linear' || t === 'time' ? [0, 1] : ['a', 'b'] }))
+  add('edge', `${t}/domain-signal-null`, spec({ type: t, domain: { signal: 'nl' }, range: t === 'linear' || t === 'time' ? [0, 1] : ['a', 'b'] }, { signals: [{ name: 'nl', value: null }] }))
+  add('edge', `${t}/data-lookup-error`, spec({ type: t, domain: { data: 'missing', field: 'v' }, range: t === 'linear' || t === 'time' ? [0, 1] : ['a', 'b'] }))
+}
+add('edge', 'linear/domain-extent-field-signal', spec({ type: 'linear', domain: { data: 'd', field: { signal: 'fld' } }, range: [0, 100] }, { ...d(nums), signals: [{ name: 'fld', value: 'w' }] }))
+add('edge', 'linear/domain-missing-field', spec({ type: 'linear', domain: { data: 'd', field: 'nonexistent' }, range: [0, 100] }, d(nums)))
+add('edge', 'linear/domain-field-nested', spec({ type: 'linear', domain: { data: 'd', field: 'a.b' }, range: [0, 100] }, d([{ a: { b: 3 } }, { a: { b: 9 } }])))
+add('edge', 'linear/domain-field-bracket', spec({ type: 'linear', domain: { data: 'd', field: 'a\\.b' }, range: [0, 100] }, d([{ 'a.b': 3 }, { 'a.b': 9 }])))
+add('edge', 'linear/domain-boolean-values', spec({ type: 'linear', domain: { data: 'd', field: 'v' }, range: [0, 100] }, d([{ v: true }, { v: false }, { v: true }])))
+add('edge', 'linear/domain-infinity', spec({ type: 'linear', domain: { data: 'd', field: 'v' }, range: [0, 100] }, d([{ v: 1 }, { v: Infinity }])))
+add('edge', 'linear/domain-datum-dates', spec({ type: 'linear', domain: { data: 'd', field: 'v' }, range: [0, 100] }, { data: [{ name: 'd', values: [{ v: '2020-01-01' }, { v: '2021-01-01' }], format: { parse: { v: 'date' } } }] }))
+add('edge', 'time/domain-from-date-strings', spec({ type: 'time', domain: { data: 'd', field: 'v' }, range: [0, 100] }, { data: [{ name: 'd', values: [{ v: '2020-01-01' }, { v: '2021-06-01' }], format: { parse: { v: 'date' } } }] }))
+add('edge', 'utc/domain-from-date-strings', spec({ type: 'utc', domain: { data: 'd', field: 'v' }, range: [0, 100] }, { data: [{ name: 'd', values: [{ v: '2020-01-01' }, { v: '2021-06-01' }], format: { parse: { v: 'date' } } }] }))
+add('edge', 'ordinal/domain-from-dates', spec({ type: 'ordinal', domain: { data: 'd', field: 'v' }, range: ['a', 'b', 'c'] }, { data: [{ name: 'd', values: [{ v: '2020-01-01' }, { v: '2021-06-01' }], format: { parse: { v: 'date' } } }] }), [Date.UTC(2020, 0, 1)])
+add('edge', 'ordinal/domain-objects-collapse', spec({ type: 'ordinal', domain: { data: 'd', field: 'v' }, range: ['a', 'b', 'c'] }, d([{ v: [1, 2] }, { v: [1, 2] }, { v: [3] }])), [])
+add('edge', 'linear/props-unknown-order', spec({ type: 'linear', range: [0, 100], nice: true, zero: false, domain: [1.3, 8.9], clamp: true }))
+add('edge', 'linear/nice-with-domainMid', spec({ type: 'linear', range: { scheme: 'blues' }, nice: true, domain: [1.3, 8.9], domainMid: 4.4 }))
+add('edge', 'linear/domainMid-no-domain', spec({ type: 'linear', range: [0, 100], domainMid: 4.4 }, d(nums)))
+
+// ---- seeded random scale specs: option combinations nobody enumerated ------------------------
+// (the generic shape of the bugs: any type x domain form x range form x option set)
+{
+  let seed = 0x5ca1e
+  const rnd = () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const pick = (a) => a[Math.floor(rnd() * a.length)]
+  const chance = (p) => rnd() < p
+  const types = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential', 'quantile', 'quantize', 'threshold', 'bin-ordinal', 'ordinal', 'band', 'point']
+  const schemes = ['blues', 'viridis', 'category10', 'tableau20', 'redblue', 'magma', 'set2', 'greens', 'rainbow', 'Spectral']
+  const colours = ['#fee', '#a00', '#0a5', '#00f', 'steelblue', 'rgb(10,200,30)', '#123456']
+  const interps = ['rgb', 'hcl', 'hsl', 'lab', 'cubehelix', 'hcl-long', 'cubehelix-long', 'hsl-long', 'rgb-basis', { type: 'rgb', gamma: 2.2 }, { type: 'cubehelix', gamma: 0.7 }, 'bogus']
+  const num = () => Math.round((rnd() * 200 - 40) * 10) / 10
+  for (let i = 0; i < 700; i++) {
+    const type = pick(types)
+    const discrete = ['ordinal', 'band', 'point', 'bin-ordinal'].includes(type)
+    const cont = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential'].includes(type)
+    const rows = discrete
+      ? Array.from({ length: 1 + Math.floor(rnd() * 8) }, () => ({ c: pick(['a', 'b', 'c', 'd', 'e', 'f', 1, 2, 3, null]), n: num() }))
+      : Array.from({ length: Math.floor(rnd() * 9) }, () => ({ v: type === 'log' ? Math.round(rnd() * 900 + 1) / 4 : type === 'time' || type === 'utc' ? Date.UTC(2020, 0, 1) + Math.floor(rnd() * 400) * 86400000 : chance(0.1) ? null : num() }))
+    const s = { type }
+    const f = discrete ? 'c' : 'v'
+    // domain form
+    const dform = pick(['data', 'data', 'data', 'literal', 'fields', 'literal-piecewise'])
+    if (dform === 'data') s.domain = { data: 'd', field: f, ...(discrete && chance(0.4) ? { sort: pick([true, { order: 'descending' }, { op: pick(['count', 'sum', 'max', 'mean']), field: 'n', order: pick(['ascending', 'descending']) }]) } : {}) }
+    else if (dform === 'fields') s.domain = { data: 'd', fields: [f, f] }
+    else if (dform === 'literal-piecewise' && cont) s.domain = [num(), num(), num()].sort(() => 0)
+    else s.domain = discrete ? ['x', 'y', 'z', 'x'].slice(0, 1 + Math.floor(rnd() * 3)) : type === 'threshold' ? [num(), num() + 100] : [num(), num() + 150]
+    if (type === 'bin-ordinal' && chance(0.5)) s.bins = pick([[0, 10, 20, 30], { start: 0, stop: 40, step: 10 }])
+    // range form
+    const rform = pick(['scheme', 'scheme', 'array', 'numbers', 'name', 'none', 'scheme-obj'])
+    if (rform === 'scheme') s.range = { scheme: pick(schemes), ...(chance(0.3) ? { extent: [rnd() * 0.4, 0.6 + rnd() * 0.4] } : {}), ...(chance(0.3) ? { count: 2 + Math.floor(rnd() * 6) } : {}) }
+    else if (rform === 'scheme-obj') s.range = { scheme: [pick(colours), pick(colours), ...(chance(0.5) ? [pick(colours)] : [])] }
+    else if (rform === 'array') s.range = Array.from({ length: 2 + Math.floor(rnd() * 4) }, () => pick(colours))
+    else if (rform === 'numbers') s.range = type === 'band' || type === 'point' ? [0, 100 + Math.floor(rnd() * 100)] : Array.from({ length: 2 + Math.floor(rnd() * (cont ? 2 : 4)) }, () => Math.round(rnd() * 100))
+    else if (rform === 'name') s.range = pick(['width', 'height', 'ramp', 'heatmap', 'category', 'diverging', 'ordinal'])
+    if ((type === 'band' || type === 'point') && chance(0.4)) s.range = { step: 10 + Math.floor(rnd() * 20) }
+    // options
+    if (chance(0.25)) s.zero = chance(0.5)
+    if (chance(0.25)) s.nice = pick([true, 3, 8, ...(type === 'time' || type === 'utc' ? ['day', 'month', { interval: 'year', step: 2 }] : [])])
+    if (chance(0.15)) s.clamp = true
+    if (chance(0.15)) s.round = true
+    if (chance(0.2)) s.padding = pick([0, 0.1, 0.5, 10, 25])
+    if (chance(0.1)) s.paddingInner = rnd()
+    if (chance(0.1)) s.paddingOuter = rnd()
+    if (chance(0.1)) s.align = rnd()
+    if (chance(0.2)) s.reverse = true
+    if (cont && chance(0.2)) s.domainMin = num()
+    if (cont && chance(0.2)) s.domainMax = num() + 120
+    if (cont && chance(0.2)) s.domainMid = num() + 40
+    if (chance(0.25)) s.interpolate = pick(interps)
+    if (chance(0.1)) s.interpolateGamma = 1 + rnd() * 2
+    if (chance(0.08)) s.scheme = pick(schemes)
+    if (chance(0.06)) s.schemeCount = 2 + Math.floor(rnd() * 5)
+    if (chance(0.06)) s.schemeExtent = [0.1, 0.9]
+    if (chance(0.1) && type === 'pow') s.exponent = 0.5 + rnd() * 2
+    if (chance(0.1) && type === 'log') s.base = pick([2, 10, Math.E])
+    if (chance(0.1) && type === 'symlog') s.constant = 1 + rnd() * 3
+    if (chance(0.1)) s.unknown = pick(['?', '#999', 0])
+    if (chance(0.05)) s.domainImplicit = true
+    if (chance(0.1) && !discrete && type !== 'bin-ordinal') s.bins = pick([[0, 25, 50, 75, 100], { step: 20 }, { start: 10, stop: 90, step: 10 }])
+    add('random', `random/${String(i).padStart(3, '0')}-${type}`, spec(s, d(rows)))
+  }
+}

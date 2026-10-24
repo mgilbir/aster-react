@@ -1,15 +1,23 @@
 /**
- * Scale construction. The scale layer is owned (ported from d3-scale and
- * vega-scale behind oracle vectors) so scale types, schemes, and tick logic
- * match vega exactly.
+ * Scale construction: a transcription of vega-parser's scale parsing
+ * (`parsers/scale.js`: domain / range / interpolate / nice / bins) and
+ * vega-encode's `Scale` transform (`scaleKey`, `configureDomain`,
+ * `configureBins`, `configureRange`, `configureScheme`, `configureRangeStep`),
+ * built on the owned d3-scale / vega-scale ports (`scale.ts`, `scale-d3.ts`).
+ *
+ * The structure follows upstream function for function so the two can be read
+ * side by side; behaviour is pinned by the "scale spec -> built scale" oracle
+ * vectors (`testdata/vectors/vega-scale-spec.json`), recorded from real vega.
+ * Deviations are marked `DEVIATION` where they exist.
  */
 import * as vs from './scale.js'
-import { interpolateRound } from './interp.js'
-import { ownGet, minOf, maxOf } from './util.js'
-import { boundedCount } from './limits.js'
-import { quantizeInterpolator } from './scale.js'
-import { hcl, rgb } from './color.js'
-import type { CompiledScale, ScaleDomain, ScaleRange } from './types.js'
+import { implicit as scaleImplicit } from './scale-d3.js'
+import { interpolateRound, interpolateValue } from './interp.js'
+import { range as sequence } from './arr.js'
+import { aggregateGroup } from './transform.js'
+import { aggregateRows } from './transform-agg.js'
+import { pushAll, ascending, error as raise, hasOwnProperty, isArray, isFunction, isObject, isString, ownGet, peek, toNumber } from './util.js'
+import type { CompiledScale } from './types.js'
 
 export type Scale = vs.Scale
 
@@ -32,8 +40,10 @@ export interface ScaleContext {
   evaluate?: (expr: string) => unknown
   /** Collect values of `field` across a named dataset. */
   dataField: (dataName: string, field: string) => unknown[]
-  /** Return all rows of a named dataset (for aggregate sort). */
+  /** Return all rows of a named dataset (identity keys the per-evaluation memo). */
   dataRows?: (dataName: string) => Record<string, unknown>[]
+  /** True when the named dataset exists (vega refuses a domain over an unknown dataset). */
+  hasData?: (dataName: string) => boolean
   /** Host/runtime domain override (vega `domainRaw`, pan/zoom, brush domains). */
   domainRaw?: unknown[]
   /**
@@ -45,801 +55,649 @@ export interface ScaleContext {
   distinctCache?: WeakMap<unknown[], Map<string, unknown[]>>
 }
 
+/** Continuous types (the runtime's domain census and gradient legends key on these). */
 export const CONTINUOUS_TYPES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential', 'quantize'])
-const INCLUDE_ZERO_TYPES = new Set(['linear', 'pow', 'sqrt'])
-const TIME_SCALE_TYPES = new Set(['time', 'utc'])
 
-/** d3-interpolate's hcl interpolator: hue takes the shortest arc (the ±360
- * correction), chroma/luminance/opacity interpolate linearly; the result
- * formats as `rgb(r, g, b)` like every engine color. */
-function interpolateHclStrings(a: string, b: string): (t: number) => string {
-  const A = hcl(a)
-  const B = hcl(b)
-  // d3-interpolate's hue(): an achromatic endpoint (NaN hue) holds the other
-  // endpoint's hue constant instead of poisoning the whole interpolation.
-  let h0 = A.h
-  let hStep = 0
-  if (isNaN(A.h)) h0 = B.h
-  else if (!isNaN(B.h)) {
-    const dh = B.h - A.h
-    hStep = dh > 180 || dh < -180 ? dh - 360 * Math.round(dh / 360) : dh
-  }
-  return (t) => {
-    const c = hcl(h0 + t * hStep, A.c + t * (B.c - A.c), A.l + t * (B.l - A.l), A.opacity + t * (B.opacity - A.opacity))
-    return c.formatRgb()
-  }
+/** vega-encode's parameter object (`_`); spec keys are data (see parseScale for how they are admitted). */
+type Params = Record<string, unknown>
+
+const DEFAULT_COUNT = 5
+
+/** vega-parser `config.range` defaults; a `config.range` key replaces the default entry wholesale. */
+const DEFAULT_CONFIG_RANGE: Record<string, unknown> = Object.assign(Object.create(null), {
+  category: { scheme: 'tableau10' },
+  ordinal: { scheme: 'blues' },
+  heatmap: { scheme: 'yellowgreenblue' },
+  ramp: { scheme: 'blues' },
+  diverging: { scheme: 'blueorange', extent: [1, 0] },
+  symbol: ['circle', 'square', 'triangle-up', 'cross', 'diamond', 'triangle-right', 'triangle-down', 'triangle-left'],
+})
+
+// ---- signals / literals (vega-parser parseLiteral / parseArray) ----------------
+
+function signalValue(signal: string, ctx: ScaleContext): unknown {
+  if (Object.hasOwn(ctx.signals, signal)) return ctx.signals[signal]
+  // vega-parser refuses an identifier that names no signal; anything else is an expression
+  if (IDENTIFIER.test(signal) && !EXPRESSION_CONSTANTS.has(signal)) raise(`Unrecognized signal name: ${signal}`)
+  if (!ctx.evaluate) raise(`Unrecognized signal expression: ${signal}`)
+  return ctx.evaluate!(signal)
 }
 
-/** vega-scale interpolateColors: d3-array piecewise over colorspace
- * interpolators (type 'hcl' or the 'rgb' fallback). */
-function piecewiseColors(palette: string[], type?: string): (t: number) => string {
-  const n = palette.length - 1
-  if (n < 1) return () => palette[0]!
-  const segs = palette.slice(0, -1).map((c, i) => {
-    if (type === 'hcl') return interpolateHclStrings(c, palette[i + 1]!)
-    const A = rgb(c)
-    const B = rgb(palette[i + 1]!)
-    return (t: number) => rgb(A.r + t * (B.r - A.r), A.g + t * (B.g - A.g), A.b + t * (B.b - A.b), A.opacity + t * (B.opacity - A.opacity)).formatRgb()
-  })
-  return (t) => {
-    if (t <= 0) return rgb(palette[0]!).formatRgb()
-    if (t >= 1) return rgb(palette[n]!).formatRgb()
-    const i = Math.min(Math.floor(t * n), n - 1)
-    return segs[i]!(t * n - i)
-  }
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/
+const EXPRESSION_CONSTANTS = new Set(['NaN', 'E', 'LN2', 'LN10', 'LOG2E', 'LOG10E', 'PI', 'SQRT1_2', 'SQRT2', 'MIN_VALUE', 'MAX_VALUE'])
+
+function parseLiteral(v: unknown, ctx: ScaleContext): unknown {
+  if (!isObject(v)) return v
+  const s = (v as { signal?: unknown }).signal
+  if (s) return signalValue(String(s), ctx)
+  return raise('Unsupported object: ' + JSON.stringify(v))
 }
 
-function resolveRawDomain(raw: unknown, ctx: ScaleContext): unknown[] | null {
-  if (raw == null) return null
-  if (Array.isArray(raw)) return raw
-  if (typeof raw === 'object') {
-    const signal = (raw as { signal?: unknown }).signal
-    if (typeof signal === 'string') {
-      try {
-        const value = ctx.evaluate?.(signal)
-        if (Array.isArray(value)) return value
-      } catch { /* unresolved signal this round */ }
-    }
-  }
-  if (typeof raw === 'string') {
-    try {
-      const value = ctx.evaluate?.(raw)
-      if (Array.isArray(value)) return value
-    } catch { /* unresolved signal this round */ }
-  }
-  return null
+function parseArray(v: unknown, ctx: ScaleContext): unknown {
+  const s = (v as { signal?: unknown }).signal
+  return s ? signalValue(String(s), ctx) : (v as unknown[]).map((x) => parseLiteral(x, ctx))
 }
 
-/** Continuous types vega turns into `sequential-<type>` when given a colour scheme (excludes time/utc). */
-const SEQUENTIAL_BASES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog'])
+// ---- sort specs / aggregate field names ---------------------------------------------
 
-export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
-  const type = c.type
-  const raw = ctx.domainRaw ?? c.domainRaw
-  // Vega's domainRaw is a *replacement* for the data-derived domain. It may be
-  // a literal array or a signal reference; resolve both once here so the rest
-  // of the scale pipeline (nice/zero/domainMin/domainMax) is unchanged.
-  const rawDomain = resolveRawDomain(raw, ctx)
-  const domain = rawDomain ?? resolveDomain(type, c.domain, ctx)
-  // vega-encode's scaleKey: a continuous colour scale with a domainMid (a
-  // 3-element domain) is built as a DIVERGING scale, not a linear one; the
-  // midpoint then maps to the interpolator's centre instead of falling off a
-  // mismatched domain/range.
-  const isColorRange = typeof c.range === 'string' || c.scheme != null
-  const diverging = c.domainMid != null && isColorRange
-    && (type === 'linear' || type === 'log' || type === 'pow' || type === 'sqrt' || type === 'symlog')
-  const factory = vs.scale(diverging ? `diverging-${type}` : type)
-  if (!factory) throw new Error(`[aster] unsupported scale type "${type}"`)
+interface Sort { op?: string; field?: string; order?: string }
 
-  let s = factory()
-  // A diverging scale's domain is always the 3-tuple [min, mid, max]. Splice
-  // domainMid in BEFORE handing it to d3 — reading back a 2-value domain from
-  // a diverging scale yields its default x2, so the later generic splice would
-  // insert at the wrong position (and d3 would drop the extra element).
-  let divergingDomain: number[] | undefined
-  if (diverging && c.domainMid != null && domain.length >= 2 && rawDomain == null) {
-    const d0 = Number(domain[0])
-    const d1 = Number(domain[domain.length - 1])
-    const mid = Number(c.domainMid)
-    divergingDomain = mid > d1 ? [d0, d1, mid] : mid < d0 ? [mid, d0, d1] : [d0, mid, d1]
-  }
-  s.domain(divergingDomain ?? domain)
-  // vega-encode's Scale transform disables d3's implicit ordinal domain once an
-  // explicit domain is set (`scale.unknown(undefined)`): an out-of-domain value
-  // maps to undefined instead of growing the domain (and its colour range).
-  if (type === 'ordinal' && c.domain != null) {
-    ;(s as unknown as { unknown?: (v: undefined) => unknown }).unknown?.(undefined)
-  }
-  // The identity scale maps its input straight through; it has no range (the
-  // schema's identity base declares none) and ignores nice/zero/round. Upstream
-  // configureRange is a no-op for it, so an absent range is not an error.
-  if (type === 'identity') {
-    if (c.clamp) s.clamp?.(true)
-    return s
-  }
+/** vega-parser util `aggrField`. */
+function aggrField(op: string | undefined, field: string | undefined): string {
+  return (op || '') + (op && field ? '_' : '') + (field ? field.replace(/\W+/g, '_').replace(/^_+|_+$/g, '') : '')
+}
 
-  // When the scale has a `scheme` property but no `range`, resolve the scheme
-  // to a concrete range.  Vega resolves `scheme` during the Scale encode
-  // transform; for ordinal scales this yields the scheme's color array.
-  let effectiveRange = c.range
-  if (effectiveRange == null && c.scheme) {
-    const schemeArr = vs.scheme(c.scheme)
-    if (Array.isArray(schemeArr)) {
-      effectiveRange = schemeArr as unknown as ScaleRange
-    } else if (typeof schemeArr === 'function') {
-      // Continuous scheme (e.g. 'viridis', 'blues'): pass the scheme name as
-      // a string so the continuous interpolation path handles it, rather than
-      // passing the interpolator function through resolveRange.
-      effectiveRange = c.scheme as unknown as ScaleRange
-    }
-  }
-  // Band/point scales with a step-based range (`{step: N}` or
-  // `{step: {signal}}`, emitted by Vega-Lite for facet/fit layouts): the step
-  // fully determines the range given the domain count, so set `.step()` and
-  // skip `.range()`.
-  const stepRange = effectiveRange && typeof effectiveRange === 'object' && !Array.isArray(effectiveRange) && 'step' in (effectiveRange as object)
-    ? (effectiveRange as unknown as { step: unknown }).step
-    : undefined
-  let range0: unknown[] | string | { __asterScheme: string; __asterExtent?: number[] }
-  if (stepRange !== undefined) {
-    const stepVal = typeof stepRange === 'number' ? stepRange
-      : stepRange && typeof stepRange === 'object' && 'signal' in stepRange
-        ? (resolveRangeSignal((stepRange as { signal: string }).signal, ctx) as number)
-        : NaN
-    // vega-scale's band `.step()` setter does NOT re-expand the range (it only
-    // derives step from an explicit range), so compute the range ourselves:
-    //   rangeEnd = step * bandSpace(count, paddingInner, paddingOuter)
-    const count = ((s as unknown as { domain: () => unknown[] }).domain() ?? []).length
-    const pInner = c.paddingInner ?? c.padding ?? 0
-    const pOuter = c.paddingOuter ?? c.padding ?? 0
-    const rangeEnd = Number.isFinite(stepVal) ? stepVal * vs.bandSpace(count, pInner, pOuter) : 1
-    ;(s as { range: (r: number[]) => unknown }).range([0, rangeEnd])
-    if (Number.isFinite(stepVal)) (s as { step?: (n: number) => unknown }).step?.(stepVal)
-    range0 = [0, rangeEnd]
+/** vega-parser `parseSort` (signals in op/field/order resolved first). */
+function parseSort(sort: unknown, multidomain: boolean, ctx: ScaleContext): Sort | undefined {
+  if (!sort) return undefined
+  let s: Sort
+  if (isObject(sort) && !isArray(sort)) {
+    const o = sort as { op?: unknown; field?: unknown; order?: unknown }
+    const sig = (v: unknown): unknown => (isObject(v) && (v as { signal?: unknown }).signal ? signalValue(String((v as { signal: string }).signal), ctx) : v)
+    s = { op: sig(o.op) as string | undefined, field: sig(o.field) as string | undefined, order: sig(o.order) as string | undefined }
   } else {
-    range0 = resolveRange(effectiveRange, ctx, type, (s.domain() as unknown[]).length)
+    s = {}
   }
-  // Handle continuous schemes: scheme strings like 'blues' for color interpolation
-  const isSchemeRef = range0 != null && typeof range0 === 'object' && '__asterScheme' in (range0 as object)
-  if ((typeof range0 === 'string' || isSchemeRef) && CONTINUOUS_TYPES.has(type)) {
-    const ref = range0 as string | { __asterScheme: string; __asterExtent?: number[] }
-    const schemeName = typeof ref === 'string' ? ref : ref.__asterScheme
-    const schemeExtent = typeof ref === 'string' ? undefined : ref.__asterExtent
-    const schemeFn = vs.scheme(schemeName)
-    if (typeof schemeFn === 'function') {
-      // vega-encode scaleKey: a continuous scale with an interpolating colour
-      // scheme and a two-value domain IS a `sequential-<type>` scale (a
-      // three-value one a diverging scale, handled above). Evaluating it as a
-      // plain linear scale with a colour interpolator maps values with a
-      // different float evaluation order, shifting colours by one unit.
-      if (!diverging && SEQUENTIAL_BASES.has(type) && (s.domain() as unknown[]).length === 2) {
-        const seq = vs.scale(`sequential-${type}`)?.()
-        if (seq) {
-          seq.domain(s.domain())
-          s = seq
-        }
-      }
-      s.range([0, 1])
-      const cs = s as ColorScale
-      // vega configureScheme/adjustScheme: the interpolator samples the
-      // scheme across flip(extent ?? [0,1], reverse) — reverse folds into
-      // the extent flip, and configureRange returns before any range flip
-      // for interpolating scales.
-      const e0 = schemeExtent ? schemeExtent[0]! : 0
-      const e1 = schemeExtent ? schemeExtent[1]! : 1
-      const baseA = c.reverse ? e1 : e0
-      const baseB = c.reverse ? e0 : e1
-      // d3's continuous bimap reverses the range for a descending domain;
-      // sequential scales do not. An interpolating color scale stores its
-      // palette as a [0,1] range, so fold that same reversal into the
-      // sampled extent instead of losing it in the interpolator.
-      const domNow = (s.domain() as unknown[])
-      // domainMin/domainMax are applied after the range is configured; fold
-      // their eventual endpoints into the descending-domain test.
-      const expectedFirst = c.domainMin != null && !Array.isArray(c.domainMin) ? c.domainMin : domNow[0]
-      const expectedLast = c.domainMax != null && !Array.isArray(c.domainMax) ? c.domainMax : domNow[domNow.length - 1]
-      const descending = domNow.length > 1
-        && Number(expectedLast) < Number(expectedFirst)
-      const flip = descending && type !== 'sequential' && !String((s as { type?: string }).type).startsWith('sequential')
-      const a = flip ? baseB : baseA
-      const b = flip ? baseA : baseB
-      const effectiveSchemeFn: SchemeFn = ((t: number) => (schemeFn as (t: number) => unknown)(a + t * (b - a)) as unknown) as SchemeFn
-      // d3 sequential/diverging scales use .interpolator() (not .interpolate)
-      if (typeof cs.interpolator === 'function') {
-        cs.interpolator(effectiveSchemeFn)
-      } else if (typeof (cs as any).interpolate === 'function') {
-        (cs as any).interpolate(() => effectiveSchemeFn)
-      }
-      cs.interpolator = () => effectiveSchemeFn
-    } else if (Array.isArray(schemeFn)) {
-      // a discrete-color scheme on a continuous scale: vega-scale
-      // interpolateColors(piecewise(interpolate(type||'rgb'), palette)) —
-      // the palette is sampled piecewise in the scale's colorspace
-      // (vega-lite emits interpolate 'hcl' for these)
-      const fn = piecewiseColors(schemeFn as string[], c.interpolate)
-      s.range([0, 1])
-      const cs = s as ColorScale
-      if (typeof cs.interpolator === 'function') cs.interpolator(fn as unknown as SchemeFn)
-      else if (typeof (cs as any).interpolate === 'function') (cs as any).interpolate(() => fn)
-      cs.interpolator = () => fn as unknown as SchemeFn
-    } else {
-      s.range(range0 as never)
-    }
-  } else if (
-    CONTINUOUS_TYPES.has(type) && type !== 'quantize' && Array.isArray(range0) && range0.length > 2 && c.interpolate != null
-    && range0.every((v) => typeof v === 'string')
-  ) {
-    // vega-scale resolves an explicit multi-color range array on an
-    // interpolating scale to a piecewise color interpolator. d3's polymap
-    // would pair it against the two-value domain and only use the first two
-    // colors; vega spreads the whole palette across the domain instead.
-    const fn = piecewiseColors(range0 as string[], c.interpolate)
-    s.range([0, 1])
-    const cs = s as ColorScale
-    if (typeof cs.interpolator === 'function') cs.interpolator(fn as unknown as SchemeFn)
-    else if (typeof (cs as any).interpolate === 'function') (cs as any).interpolate(() => fn)
-    cs.interpolator = () => fn as unknown as SchemeFn
-  } else {
-    s.range(range0 as never)
+  if (!s.field && !s.op) {
+    s.field = 'key'
+  } else if (!s.field && s.op !== 'count') {
+    raise('No field provided for sort aggregate op: ' + s.op)
+  } else if (multidomain && s.field) {
+    if (s.op && !MULTIDOMAIN_SORT_OPS[s.op]) raise('Multiple domain scales can not be sorted using ' + s.op)
   }
-  if (c.rangeMin != null || c.rangeMax != null) {
-    const r = (s.range() as unknown[]).slice()
-    if (r.length) {
-      if (c.rangeMin != null) r[0] = c.rangeMin
-      if (c.rangeMax != null) r[r.length - 1] = c.rangeMax
-      s.range(r as never)
-    }
-  }
-
-  // Don't reverse for scheme-based color: range [0,1] is the normalized domain
-  // Also skip zero/padding/round/clamp for color scales
-  if (!CONTINUOUS_TYPES.has(type)) {
-    if (c.reverse) s.range(s.range().slice().reverse() as unknown[])
-    if (c.round) s.round?.(true)
-    if (c.clamp) s.clamp?.(true)
-    if (c.padding != null) s.padding?.(c.padding)
-    if (c.paddingInner != null) s.paddingInner?.(c.paddingInner)
-    if (c.paddingOuter != null) s.paddingOuter?.(c.paddingOuter)
-    if (c.align != null) s.align?.(c.align)
-  }
-
-  // interpolating (scheme) scales return from configureRange before the
-  // range flip — reverse is folded into the extent-sampled interpolator
-  if (CONTINUOUS_TYPES.has(type) && typeof range0 !== 'string' && !isSchemeRef) {
-    if (c.reverse) s.range(s.range().slice().reverse() as unknown[])
-  } else if (rawDomain == null && (c.domainMin != null || c.domainMax != null)) {
-    applyDomainMinMax(s, c.domainMin, c.domainMax)
-  }
-  if (c.exponent != null) s.exponent?.(c.exponent)
-  if (c.constant != null) s.constant?.(c.constant)
-  if (c.base != null) s.base?.(c.base)
-  // vega's Scale transform configures rounding as `scale.round(round)` when
-  // the scale has the method (band/point), else `scale.interpolate(
-  // interpolateRound)` — continuous scales have no round method, so their
-  // rounding goes through the range interpolator.
-  if (c.round) {
-    if (typeof s.round === 'function') s.round(true)
-    else if (typeof (s as unknown as { interpolate?: unknown }).interpolate === 'function') {
-      ;(s as unknown as { interpolate: (f: unknown) => unknown }).interpolate(interpolateRound)
-    }
-  }
-  if (c.clamp) s.clamp?.(true)
-  if (c.padding != null) s.padding?.(c.padding)
-  if (c.paddingInner != null) s.paddingInner?.(c.paddingInner)
-  if (c.paddingOuter != null) s.paddingOuter?.(c.paddingOuter)
-
-  // A continuous scale whose range resolves to a color scheme is a sequential
-  // color scale; vega never applies `zero` extension to it (the domain maps
-  // directly onto [0,1] of the interpolator).
-  const isColorScheme = CONTINUOUS_TYPES.has(type) && (typeof range0 === 'string' || isSchemeRef)
-  const zero = rawDomain == null && !TIME_SCALE_TYPES.has(type)
-    && (c.zero != null ? c.zero : (!isColorScheme && INCLUDE_ZERO_TYPES.has(type)))
-  if (zero) applyZero(s)
-  if (rawDomain == null && (c.domainMin != null || c.domainMax != null)) applyDomainMinMax(s, c.domainMin, c.domainMax)
-  // Vega's Scale transform splices domainMid into the domain array so that the
-  // midpoint value is explicitly represented as a domain breakpoint.  The
-  // resulting piecewise-linear scale maps domainMid to a range value that
-  // maintains the same slope established by the surrounding domain/range pairs.
-  // The splice happens after zero/domainMin/domainMax (which establish the
-  // baseline domain) and before nice (which rounds the domain boundaries).
-  if (rawDomain == null && c.domainMid != null && CONTINUOUS_TYPES.has(type) && divergingDomain == null) {
-    applyDomainMid(s, c.domainMid)
-  }
-  // Vega's Scale transform adjusts continuous domains for minimum pixel
-  // padding (`padDomain`): the domain is zoomed out around its midpoint so the
-  // extreme data values land `padding` px inside the range. Applies to all
-  // continuous scales (linear/log/pow/sqrt/symlog/time/utc), matching vega's
-  // `includePad(type)` guard.
-  if (rawDomain == null && CONTINUOUS_TYPES.has(type) && c.padding != null) applyPixelPadding(s, c, c.padding)
-  if (rawDomain == null && c.nice) applyNice(s, c.nice)
-  if (c.exponent != null) s.exponent?.(c.exponent)
-  if (c.constant != null) s.constant?.(c.constant)
-  if (c.base != null) s.base?.(c.base)
-
-  // Set scale.bins if specified in the scale config.
-  // When scale.bins is set, the tickValues/tickCount helpers
-  // use validTicks(scale, scale.bins, count) instead of scale.ticks(count),
-  // which generates ticks from the actual bin boundaries.
-  if (Array.isArray(c.bins) && c.interpolate != null) {
-    ;(s as unknown as { bins: unknown[] }).bins = c.bins
-  } else if (c.bins && !Array.isArray(c.bins)) {
-    const binsVal = resolveBins(c.bins as { signal?: string }, ctx)
-    if (binsVal && typeof binsVal === 'object' && 'start' in binsVal && 'stop' in binsVal && 'step' in binsVal) {
-      const b = binsVal as { start: number; stop: number; step: number }
-      // Generate bin boundary array: [start, start+step, ..., stop]
-      const binArray: number[] = []
-      // A non-positive/NaN step never advances `v`: d3's range() yields no bins
-      // for it, where this loop used to spin forever (C8).
-      const binCount = (b.stop - b.start) / b.step + 1
-      const sane = b.step > 0 && Number.isFinite(binCount)
-      if (sane) boundedCount(binCount, 'scale bins')
-      for (let v = b.start; sane && v <= b.stop + b.step * 0.5; v += b.step) {
-        binArray.push(Math.round(v * 1e10) / 1e10)
-      }
-      ;(s as any).bins = binArray
-    }
-  }
-
   return s
 }
 
-function resolveBins(
-  bins: { signal?: string } | undefined | string,
-  ctx: ScaleContext,
-): Record<string, number> | undefined {
-  if (!bins) return undefined
-  if (typeof bins === 'string') {
-    const v = ctx.signals[bins]
-    if (v && typeof v === 'object' && 'start' in v && 'stop' in v && 'step' in v) {
-      return v as Record<string, number>
+const MULTIDOMAIN_SORT_OPS: Record<string, string> = Object.assign(Object.create(null), { min: 'min', max: 'max', count: 'sum' })
+
+// ---- discrete domains (Aggregate groupby + Values) ----------------------------------
+
+interface Tuple { key: unknown; count: number; [agg: string]: unknown }
+
+/** The aggregate of one group of cell values under vega's ops (an unknown op refuses, as upstream). */
+function aggregateOf(op: string, cells: unknown[]): unknown {
+  return aggregateGroup(cells.map((v) => ({ v })), { type: 'aggregate', groupby: [], fields: ['v'], ops: [op], as: ['r'] }).r
+}
+
+/**
+ * vega-parser `countsRef`: Aggregate groupby `key` (+ `count`, + the sort
+ * aggregate) over a dataset field. Groups are keyed by the stringified value —
+ * vega's cell table — so `1` and `'1'` are one group (the first value seen), and
+ * the output order is cell creation order.
+ */
+function countsTuples(ctx: ScaleContext, data: string, field: string, sort: Sort | undefined): Tuple[] {
+  const useOp = sort?.op && sort.field
+  const keys = fieldValues(ctx, data, field)
+  if (useOp) {
+    // the aggregate engine groups (same key rule) and measures in one pass
+    const vals = fieldValues(ctx, data, sort!.field!)
+    const rows: Array<{ g: unknown; v: unknown }> = new Array(keys.length)
+    for (let i = 0; i < keys.length; ++i) rows[i] = { g: keys[i], v: vals[i] }
+    const name = aggrField(sort!.op, sort!.field)
+    return aggregateRows(rows, { groupby: ['g'], fields: [null, 'v'], ops: ['count', sort!.op!], as: ['count', 'r'] })
+      .map((r) => ({ key: r.g, count: r.count as number, [name]: r.r }))
+  }
+  const cells = new Map<string, Tuple>()
+  for (let i = 0; i < keys.length; ++i) {
+    const k = keys[i]
+    const ck = String(k)
+    let tuple = cells.get(ck)
+    if (!tuple) cells.set(ck, (tuple = { key: k, count: 0 }))
+    tuple.count++
+  }
+  return Array.from(cells.values())
+}
+
+function fieldValues(ctx: ScaleContext, data: string, field: unknown): unknown[] {
+  if (ctx.hasData && !ctx.hasData(data)) raise('Can not find data set: ' + JSON.stringify(data))
+  return ctx.dataField(data, fieldName(field, ctx))
+}
+
+function fieldName(field: unknown, ctx: ScaleContext): string {
+  if (isString(field)) return field
+  const s = isObject(field) ? (field as { signal?: unknown }).signal : undefined
+  if (!s) raise('Unsupported field reference: ' + JSON.stringify(field))
+  return String(signalValue(String(s), ctx))
+}
+
+/** vega-transforms `Values` with a vega-util `compare(aggrField, order)` over the tuples (stable). */
+function valuesOf(tuples: Tuple[], sort: Sort | undefined): unknown[] {
+  if (!sort) return tuples.map((t) => t.key)
+  const name = aggrField(sort.op, sort.field)
+  const sign = (sort.order || 'ascending') === 'descending' ? -1 : 1
+  return tuples
+    .map((t, i) => ({ t, i }))
+    .sort((a, b) => ascending(a.t[name], b.t[name]) * sign || a.i - b.i)
+    .map((e) => e.t.key)
+}
+
+// ---- domains (vega-parser parseScaleDomain) ------------------------------------------
+
+function isDiscreteType(type: string): boolean { return !!vs.isDiscrete(type) }
+
+/** `memo`: the per-evaluation (rows identity, field) -> tuples cache for unsorted single-field domains. */
+function discreteDomain(ctx: ScaleContext, data: string, field: unknown, sort: Sort | undefined): unknown[] {
+  const name = fieldName(field, ctx)
+  const memoable = !(sort?.op && sort.field)
+  const rows = memoable && ctx.distinctCache && ctx.dataRows ? ctx.dataRows(data) : undefined
+  let tuples: Tuple[] | undefined
+  if (rows) {
+    let byField = ctx.distinctCache!.get(rows)
+    if (!byField) ctx.distinctCache!.set(rows, (byField = new Map()))
+    tuples = byField.get(name) as Tuple[] | undefined
+    if (!tuples) byField.set(name, (tuples = countsTuples(ctx, data, name, undefined)))
+  } else {
+    tuples = countsTuples(ctx, data, name, sort)
+  }
+  return valuesOf(tuples, sort)
+}
+
+/** vega-transforms `Extent` over a field's values: `[min, max]`, or `[undefined, undefined]` when infinite. */
+function extentOf(values: unknown[]): [number | undefined, number | undefined] {
+  let min = +Infinity
+  let max = -Infinity
+  for (let i = 0; i < values.length; ++i) {
+    const v = toNumber(values[i])
+    if (v != null) {
+      // NaNs will fail all comparisons!
+      if (v < min) min = v
+      if (v > max) max = v
     }
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return [undefined, undefined]
+  return [min, max]
+}
+
+function extentOfField(ctx: ScaleContext, data: string, field: unknown): [number | undefined, number | undefined] {
+  return extentOf(fieldValues(ctx, data, field))
+}
+
+/** vega-parser `parseScaleDomain`: the domain a scale spec's (or discrete range's) `domain` describes. */
+function parseScaleDomain(domain: unknown, spec: { type: string; domainMin?: unknown; domainMax?: unknown }, ctx: ScaleContext): unknown {
+  if (!domain) {
+    if (spec.domainMin != null || spec.domainMax != null) raise('No scale domain defined for domainMin/domainMax to override.')
+    return undefined // default domain
+  }
+  const d = domain as { signal?: unknown; fields?: unknown; data?: string; field?: unknown; sort?: unknown }
+  if (d.signal) return signalValue(String(d.signal), ctx)
+  if (isArray(domain)) return (domain as unknown[]).map((v) => parseLiteral(v, ctx)) // explicitDomain
+  if (d.fields) return multipleDomain(d as { fields: unknown[]; data?: string; sort?: unknown }, spec, ctx)
+  return singularDomain(d as { data: string; field: unknown; sort?: unknown }, spec, ctx)
+}
+
+function singularDomain(domain: { data: string; field: unknown; sort?: unknown }, spec: { type: string }, ctx: ScaleContext): unknown {
+  if (ctx.hasData ? !ctx.hasData(domain.data) : false) raise('Can not find data set: ' + JSON.stringify(domain.data))
+  if (isDiscreteType(spec.type)) return discreteDomain(ctx, domain.data, domain.field, parseSort(domain.sort, false, ctx))
+  if (vs.isQuantile(spec.type)) return fieldValues(ctx, domain.data, domain.field) // domainRef: the raw values
+  return extentOfField(ctx, domain.data, domain.field)
+}
+
+/** A `fields` member (vega-parser multipleDomain's reduce): a field of `data`, or a literal/signal value list. */
+interface Member { data?: string; field?: unknown; literal?: unknown[] }
+
+function multipleDomain(domain: { fields: unknown[]; data?: string; sort?: unknown }, spec: { type: string }, ctx: ScaleContext): unknown {
+  const fields: Member[] = domain.fields.map((d) => {
+    if (isString(d)) return { data: domain.data, field: d }
+    if (isArray(d)) return { literal: (d as unknown[]) }
+    const sig = (d as { signal?: unknown }).signal
+    if (sig) {
+      const v = signalValue(String(sig), ctx)
+      return { literal: isArray(v) ? (v as unknown[]) : [] }
+    }
+    return d as Member
+  })
+  const values = (f: Member): unknown[] => (f.literal ? f.literal : fieldValues(ctx, f.data as string, f.field))
+  if (isDiscreteType(spec.type)) return ordinalMultipleDomain(domain, ctx, fields)
+  if (vs.isQuantile(spec.type)) return fields.reduce<unknown[]>((all, f) => all.concat(values(f)), []) // quantileMultipleDomain
+  // numericMultipleDomain: MultiExtent over each member's extent
+  let min = +Infinity
+  let max = -Infinity
+  for (const f of fields) {
+    const e = extentOf(values(f))
+    if ((e[0] as number) < min) min = e[0] as number
+    if ((e[1] as number) > max) max = e[1] as number
+  }
+  return [min, max]
+}
+
+function ordinalMultipleDomain(domain: { sort?: unknown }, ctx: ScaleContext, fields: Member[]): unknown[] {
+  const sort = parseSort(domain.sort, true, ctx)
+  // value counts for each member (a literal list is its own one-column dataset)
+  const tuples: Tuple[] = []
+  for (const f of fields) {
+    if (f.literal) {
+      const cells = new Map<string, Tuple>()
+      for (const k of f.literal) {
+        const ck = String(k)
+        let tuple = cells.get(ck)
+        if (!tuple) cells.set(ck, (tuple = { key: k, count: 0 }))
+        tuple.count++
+      }
+      pushAll(tuples, Array.from(cells.values()))
+    } else {
+      if (ctx.hasData && !ctx.hasData(f.data as string)) raise('Can not find data set: ' + JSON.stringify(f.data))
+      pushAll(tuples, countsTuples(ctx, f.data as string, fieldName(f.field, ctx), sort))
+    }
+  }
+  // aggregate the results from each member: groupby key, summing/min/max-ing the sort column
+  let a: string | undefined
+  let v: string | undefined
+  if (sort) {
+    a = sort.op || 'count'
+    v = sort.field ? aggrField(a, sort.field) : 'count'
+  }
+  const op = a ? MULTIDOMAIN_SORT_OPS[a] : undefined
+  const cells = new Map<string, { tuple: Tuple; vals: unknown[] }>()
+  for (const t of tuples) {
+    const ck = String(t.key)
+    let cell = cells.get(ck)
+    if (!cell) cells.set(ck, (cell = { tuple: { key: t.key, count: 0 }, vals: [] }))
+    cell.tuple.count++
+    if (v) cell.vals.push(t[v])
+  }
+  const merged: Tuple[] = []
+  for (const cell of cells.values()) {
+    if (v && op) cell.tuple[v] = aggregateOf(op, cell.vals)
+    merged.push(cell.tuple)
+  }
+  return valuesOf(merged, sort)
+}
+
+// ---- range (vega-parser parseScaleRange) --------------------------------------------
+
+function parseScaleRange(spec: CompiledScale, ctx: ScaleContext, params: Params, userConfig: Record<string, unknown> | undefined, depth = 0): unknown {
+  let range: unknown = spec.range
+  const r = range as { signal?: unknown; scheme?: unknown; extent?: unknown; count?: unknown; step?: unknown }
+  if (r && r.signal) return signalValue(String(r.signal), ctx)
+  if (isString(range)) {
+    // config.range (the user's block over vega's defaults) names the range; a user key replaces the default entry
+    const inUser = userConfig != null && hasOwnProperty(userConfig, range)
+    if (inUser || hasOwnProperty(DEFAULT_CONFIG_RANGE, range)) {
+      if (depth > 32) raise('Scale range lookup cycles through config.range: ' + range)
+      const entry = inUser ? userConfig![range] : DEFAULT_CONFIG_RANGE[range]
+      return parseScaleRange({ ...spec, range: entry as CompiledScale['range'] }, ctx, params, userConfig, depth + 1)
+    } else if (range === 'width') {
+      range = [0, ctx.width]
+    } else if (range === 'height') {
+      range = isDiscreteType(spec.type) ? [0, ctx.height] : [ctx.height, 0]
+    } else {
+      raise('Unrecognized scale range value: ' + JSON.stringify(range))
+    }
+  } else if (r.scheme) {
+    params.scheme = isArray(r.scheme) ? parseArray(r.scheme, ctx) : parseLiteral(r.scheme, ctx)
+    if (r.extent) params.schemeExtent = parseArray(r.extent, ctx)
+    if (r.count) params.schemeCount = parseLiteral(r.count, ctx)
     return undefined
+  } else if (r.step) {
+    params.rangeStep = parseLiteral(r.step, ctx)
+    return undefined
+  } else if (isDiscreteType(spec.type) && !isArray(range)) {
+    return parseScaleDomain(range, spec, ctx)
+  } else if (!isArray(range)) {
+    raise('Unsupported range type: ' + JSON.stringify(range))
   }
-  if (bins.signal) {
-    const v = ctx.signals[bins.signal]
-    if (v && typeof v === 'object' && 'start' in v && 'stop' in v && 'step' in v) {
-      return v as Record<string, number>
+  return (range as unknown[]).map((v) => (isArray(v) ? parseArray : parseLiteral)(v, ctx))
+}
+
+// ---- parse + Scale transform --------------------------------------------------------
+
+/** The properties the Scale transform consumes itself (vega-encode's SKIP). */
+const SKIP = new Set([
+  'set', 'modified', 'clear', 'type', 'scheme', 'schemeExtent', 'schemeCount',
+  'domain', 'domainMin', 'domainMid', 'domainMax',
+  'domainRaw', 'domainImplicit', 'nice', 'zero', 'bins',
+  'range', 'rangeStep', 'round', 'reverse', 'interpolate', 'interpolateGamma',
+])
+
+/** vega-parser `parseScale`: the scale spec as the parameter object the Scale transform receives. */
+function parseScale(spec: CompiledScale, ctx: ScaleContext): Params {
+  const type = spec.type || 'linear'
+  if (!vs.isValidScaleType(type)) raise('Unrecognized scale type: ' + JSON.stringify(type))
+  // the spec itself, read as `type`-defaulted: copying it per build costs more than the build of a literal scale
+  const s = (spec.type ? spec : { ...spec, type }) as CompiledScale & Record<string, unknown>
+  // a plain object (cheaper than a dictionary-mode one on every build): the keys the spec
+  // contributes are copied through below with `__proto__` refused, and nothing reads a name
+  // the prototype also has
+  const params: Params = {}
+  params.type = type
+  params.domain = parseScaleDomain(s.domain, s, ctx)
+
+  if (s.range != null) params.range = parseScaleRange(s, ctx, params, ctx.configRange)
+
+  if (s.interpolate != null) {
+    const ip = s.interpolate as { type?: unknown; gamma?: unknown }
+    params.interpolate = parseLiteral((isObject(ip) && ip.type) || ip, undefinedScopeCtx(ctx))
+    if (isObject(ip) && ip.gamma != null) params.interpolateGamma = parseLiteral(ip.gamma, undefinedScopeCtx(ctx))
+  }
+
+  if (s.nice != null) {
+    const nice = s.nice as { signal?: unknown; interval?: unknown; step?: unknown }
+    params.nice = isObject(nice) && nice.signal
+      ? signalValue(String(nice.signal), ctx)
+      : isObject(nice)
+        ? { interval: parseLiteral(nice.interval, ctx), step: parseLiteral(nice.step, ctx) }
+        : parseLiteral(nice, ctx)
+  }
+
+  if (s.bins != null) {
+    const bins = s.bins as { signal?: unknown }
+    params.bins = (isObject(bins) && bins.signal) || isArray(bins)
+      ? parseArray(bins, ctx)
+      : objectProperty(bins as Record<string, unknown>, ctx)
+  }
+
+  // everything else is copied through (parseLiteral), in spec order
+  for (const key of Object.keys(s)) {
+    if (hasOwnProperty(params, key) || key === 'name' || key === '__proto__') continue
+    if (s[key] === undefined) continue
+    params[key] = parseLiteral(s[key], ctx)
+  }
+  return params
+}
+
+/** vega-parser `objectProperty`: an object whose members may each be signals. */
+function objectProperty(o: Record<string, unknown>, ctx: ScaleContext): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const k of Object.keys(o)) out[k] = parseLiteral(o[k], ctx)
+  return out
+}
+
+/**
+ * DEVIATION: vega-parser's `parseScaleInterpolate` calls `parseLiteral(x)` with
+ * no scope, so a `{signal}` interpolate/gamma dies with a TypeError upstream.
+ * Aster resolves it like every other literal instead of reproducing the crash.
+ */
+function undefinedScopeCtx(ctx: ScaleContext): ScaleContext { return ctx }
+
+export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
+  const _ = parseScale(c, ctx)
+  // Host/runtime domain override (pan/zoom, brushing): vega's `domainRaw` parameter.
+  const hostRaw = ctx.domainRaw ?? c.domainRaw
+  if (hostRaw != null) {
+    const resolved = isObject(hostRaw) && !isArray(hostRaw) ? parseLiteral(hostRaw, ctx) : hostRaw
+    if (resolved != null) _.domainRaw = resolved
+  }
+
+  const key = scaleKey(_)
+  const make = vs.scale(key)
+  if (!make) raise(`Unrecognized scale type: ${JSON.stringify(key)}`)
+  const scale = make!()
+
+  for (const k of Object.keys(_)) {
+    if (SKIP.has(k)) continue
+    // padding is a scale property for band/point but not others
+    if (k === 'padding' && includePad(scale.type)) continue
+    // invoke the scale property setter; an unsupported property is only a warning upstream
+    if (typeof scale[k] === 'function') (scale[k] as (v: unknown) => unknown)(_[k])
+  }
+
+  configureRange(scale, _, configureBins(scale, _, configureDomain(scale, _)))
+  return scale
+}
+
+function includeZero(scale: Scale): boolean {
+  const type = scale.type
+  return !scale.bins && (type === vs.Linear || type === vs.Pow || type === vs.Sqrt)
+}
+
+function includePad(type: string): boolean {
+  return !!vs.isContinuous(type) && type !== vs.Sequential
+}
+
+function scaleKey(_: Params): string {
+  const t = _.type as string
+  let d = ''
+  // backwards compatibility pre Vega 5.
+  if (t === vs.Sequential) return vs.Sequential + '-' + vs.Linear
+  if (isContinuousColor(_)) {
+    // NB upstream reads `_.rawDomain` (never set: the parameter is `domainRaw`)
+    const raw = _.rawDomain as unknown[] | undefined
+    const dom = _.domain as unknown[] | undefined
+    const n = raw ? raw.length : dom ? dom.length + +(_.domainMid != null) : 0
+    d = n === 2 ? vs.Sequential + '-' : n === 3 ? vs.Diverging + '-' : ''
+  }
+  return ((d + t) || vs.Linear).toLowerCase()
+}
+
+function isContinuousColor(_: Params): boolean {
+  const t = _.type as string
+  const range = _.range as unknown[] | undefined
+  return !!vs.isContinuous(t) && t !== vs.Time && t !== vs.UTC && !!(_.scheme || (range && range.length && range.every(isString)))
+}
+
+function configureDomain(scale: Scale, _: Params): number {
+  // check raw domain, if provided use that and exit early
+  const raw = rawDomain(scale, _.domainRaw)
+  if (raw > -1) return raw
+
+  let domain = _.domain as unknown[] | undefined
+  const type = scale.type as string
+  const zero = _.zero || (_.zero === undefined && includeZero(scale))
+
+  if (!domain) return 0
+
+  // adjust domain based on zero, min, max settings
+  if (zero || _.domainMin != null || _.domainMax != null || _.domainMid != null) {
+    if (!isArray(domain)) throw new TypeError('domain.slice is not a function')
+    domain = domain.slice()
+    const n = (domain.length - 1) || 1
+    if (zero) {
+      if ((domain[0] as number) > 0) domain[0] = 0
+      if ((domain[n] as number) < 0) domain[n] = 0
+    }
+    if (_.domainMin != null) domain[0] = _.domainMin
+    if (_.domainMax != null) domain[n] = _.domainMax
+
+    if (_.domainMid != null) {
+      const mid = _.domainMid as number
+      const i = mid > (domain[n] as number) ? n + 1 : mid < (domain[0] as number) ? 0 : n
+      domain.splice(i, 0, mid)
     }
   }
-  return undefined
+
+  // adjust continuous domain for minimum pixel padding
+  if (includePad(type) && _.padding && domain[0] !== peek(domain)) {
+    domain = padDomain(type, domain, _.range as number[], _.padding as number, _.exponent as number | undefined, _.constant as number | undefined)
+  }
+
+  // set the scale domain
+  scale.domain(domain)
+
+  // if ordinal scale domain is defined, prevent implicit domain construction as side-effect of scale lookup
+  if (type === vs.Ordinal) scale.unknown(_.domainImplicit ? scaleImplicit : undefined)
+
+  // perform 'nice' adjustment as requested
+  if (_.nice && scale.nice) {
+    scale.nice((_.nice !== true && vs.tickCount(scale, _.nice)) || null)
+  }
+
+  // return the cardinality of the domain
+  return domain.length
 }
 
-function applyNice(s: Scale, nice: boolean | number | string) {
-  if (!s.nice) return
-  // vega's Scale transform: `scale.nice((_.nice !== true && tickCount(scale,
-  // _.nice)) || null)` — every non-true nice goes through the tickCount util,
-  // which resolves an interval string against the scale (time/utc → calendar
-  // interval; anything else refuses, as upstream does).
-  if (nice !== true) s.nice(vs.tickCount(s as never, nice) ?? null)
-  else s.nice()
+function rawDomain(scale: Scale, raw: unknown): number {
+  if (raw) {
+    scale.domain(raw)
+    return (raw as unknown[]).length
+  }
+  return -1
 }
 
-function applyZero(s: Scale) {
-  const d = (s.domain() as number[]).slice()
-  if (!d.length) return
-  d[0] = Math.min(0, d[0]!)
-  d[1] = Math.max(0, d[1]!)
-  s.domain(d)
-}
-
-function applyDomainMinMax(s: Scale, min?: number, max?: number) {
-  const d = (s.domain() as number[]).slice()
-  if (min != null) d[0] = min
-  if (max != null) d[1] = max
-  s.domain(d)
-}
-
-/**
- * Vega's Scale transform: splice domainMid into the continuous domain array so
- * the midpoint is an explicit breakpoint.  The splice position mirrors Vega's
- * logic exactly: `i = mid > d[n] ? n+1 : mid < d[0] ? 0 : n`.  When the
- * midpoint falls inside the domain, it is inserted before the last element
- * (index n), creating a 3-element domain.  The range is left untouched; d3
- * handles mismatched domain/range lengths by extrapolating beyond the last
- * range value, matching vega-encode's behaviour.
- */
-function applyDomainMid(s: Scale, mid: number) {
-  const d = (s.domain() as number[]).slice()
-  const n = d.length - 1 || 1
-  const i = mid > d[n]! ? n + 1 : mid < d[0]! ? 0 : n
-  d.splice(i, 0, mid)
-  s.domain(d)
-}
-
-/**
- * vega-encode `padDomain`: zoom a continuous scale domain out around its
- * midpoint so the extreme domain values sit `pad` px inside the range
- * (`frac = span / (span - 2*pad)`). The zoom runs in the scale's transform
- * space: log zooms logarithmically, sqrt/pow exponentially, symlog through
- * log1p (vega-util zoom.js); everything else linearly.
- */
-function applyPixelPadding(s: Scale, c: CompiledScale, pad: number) {
-  const range = s.range() as number[]
-  if (range.length < 2) return
-  const span = Math.abs((range[range.length - 1] ?? 0) - (range[0] ?? 0))
-  if (!(span > 0)) return
-  const domain = (s.domain() as number[]).slice()
-  if (domain.length < 2 || domain[0] === domain[domain.length - 1]) return
-  if (!Number.isFinite(Number(domain[0])) || !Number.isFinite(Number(domain[domain.length - 1]))) return
+/** vega-encode `padDomain`: zoom the domain so the extremes sit `pad` px inside the range. */
+function padDomain(type: string, domain: unknown[], range: number[], pad: number, exponent?: number, constant?: number): unknown[] {
+  const span = Math.abs((peek(range) as number) - range[0]!)
   const frac = span / (span - 2 * pad)
-  const type = c.type
-  const d =
-    type === 'log' ? zoomLog(domain, frac)
-    : type === 'sqrt' ? zoomPow(domain, frac, 0.5)
-    : type === 'pow' ? zoomPow(domain, frac, (c.exponent as number) || 1)
-    : type === 'symlog' ? zoomSymlog(domain, frac, (c.constant as number) || 1)
-    : zoomLinear(domain, frac)
-  domain[0] = d[0] as unknown as number
-  domain[domain.length - 1] = d[1] as unknown as number
-  s.domain(domain)
+  const d = type === vs.Log ? zoomLog(domain as number[], frac)
+    : type === vs.Sqrt ? zoomPow(domain as number[], frac, 0.5)
+      : type === vs.Pow ? zoomPow(domain as number[], frac, exponent || 1)
+        : type === vs.Symlog ? zoomSymlog(domain as number[], frac, constant || 1)
+          : zoomLinear(domain as number[], frac)
+  domain = domain.slice()
+  domain[0] = d[0]
+  domain[domain.length - 1] = d[1]
+  return domain
 }
 
-// ---- vega-util zoom.js (domain-space zooming for padDomain) ----------------
-
+// vega-util zoom.js (domain-space zooming for padDomain; no anchor)
 const zoomExp = (sign: number) => (x: number) => sign * Math.exp(x)
 const zoomLogF = (sign: number) => (x: number) => Math.log(sign * x)
 const zoomSymlogF = (c: number) => (x: number) => Math.sign(x) * Math.log1p(Math.abs(x / c))
 const zoomSymexpF = (c: number) => (x: number) => Math.sign(x) * Math.expm1(Math.abs(x)) * c
-const zoomPowF = (exponent: number) => (x: number) => x < 0 ? -Math.pow(-x, exponent) : Math.pow(x, exponent)
+const zoomPowF = (exponent: number) => (x: number) => (x < 0 ? -Math.pow(-x, exponent) : Math.pow(x, exponent))
 
 function zoomDomain(domain: number[], frac: number, lift: (x: number) => number, ground: (x: number) => number): [number, number] {
   const d0 = lift(domain[0]!)
-  const d1 = lift(domain[domain.length - 1]!)
+  const d1 = lift(peek(domain) as number)
   const da = (d0 + d1) / 2
   return [ground(da + (d0 - da) * frac), ground(da + (d1 - da) * frac)]
 }
-
-function zoomLinear(domain: number[], frac: number): [number, number] {
-  return zoomDomain(domain, frac, Number, (x) => x)
-}
-
-function zoomLog(domain: number[], frac: number): [number, number] {
+const zoomLinear = (domain: number[], frac: number) => zoomDomain(domain, frac, Number, (x) => x)
+const zoomLog = (domain: number[], frac: number) => {
   const sign = Math.sign(domain[0]!)
   return zoomDomain(domain, frac, zoomLogF(sign), zoomExp(sign))
 }
+const zoomPow = (domain: number[], frac: number, exponent: number) => zoomDomain(domain, frac, zoomPowF(exponent), zoomPowF(1 / exponent))
+const zoomSymlog = (domain: number[], frac: number, constant: number) => zoomDomain(domain, frac, zoomSymlogF(constant), zoomSymexpF(constant))
 
-function zoomPow(domain: number[], frac: number, exponent: number): [number, number] {
-  return zoomDomain(domain, frac, zoomPowF(exponent), zoomPowF(1 / exponent))
-}
-
-function zoomSymlog(domain: number[], frac: number, constant: number): [number, number] {
-  return zoomDomain(domain, frac, zoomSymlogF(constant), zoomSymexpF(constant))
-}
-
-/** Continuous-domain reduction shared by the union forms. Returns null when
- * the values are not reducible to a continuous domain (caller falls through). */
-function mergeUnionDomain(type: string, all: unknown[]): [number, number] | [Date, Date] | null {
-  if (type === 'time' || type === 'utc') {
-    const dates = all.filter((v) => v instanceof Date && Number.isFinite((v as Date).getTime())) as Date[]
-    if (dates.length) {
-      const ms = dates.map((d) => d.getTime())
-      return [new Date(minOf(ms)), new Date(maxOf(ms))]
-    }
-    const nums = all.filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
-    if (nums.length) return [minOf(nums), maxOf(nums)]
-    return null
+function configureBins(scale: Scale, _: Params, count: number): number {
+  let bins = _.bins as unknown
+  if (bins && !isArray(bins)) {
+    // generate bin boundary array
+    const domain = scale.domain() as number[]
+    const lo = domain[0]!
+    const hi = peek(domain) as number
+    const b = bins as { step?: number; start?: number | null; stop?: number | null }
+    const step = b.step as number
+    let start = b.start == null ? lo : b.start
+    let stop = b.stop == null ? hi : b.stop
+    if (!step) raise('Scale bins parameter missing step property.')
+    if (start < lo) start = step * Math.ceil(lo / step)
+    if (stop > hi) stop = step * Math.floor(hi / step)
+    bins = sequence(start, stop + step / 2, step)
   }
-  const coercible = all
-    .map((v) => v instanceof Date ? v.getTime() : v)
-    .filter(
-      (v) => (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(+v)),
-    ) as number[]
-  if (!coercible.length) return null
-  return [minOf(coercible), maxOf(coercible)]
-}
 
-function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): unknown[] {
-  if (Array.isArray(domain)) return domain.slice()
-  if (domain && typeof domain === 'object' && !Array.isArray(domain)) {
-    if ('signal' in domain && domain.signal) {
-      // Try a plain signal name lookup first
-      const v = ctx.signals[domain.signal]
-      if (v != null) {
-        return Array.isArray(v) ? (v as unknown[]) : [v]
-      }
-      // Not a plain signal name — the signal name might be a JS expression string
-      // that references a bins object (e.g. "[bin_maxbins_10_v_bins.start, bin_maxbins_10_v_bins.stop]").
-      // Find the bins signal name embedded in the expression and expand it.
-      // Pattern: "[<name>.start, <name>.stop]" or similar
-      const binsMatch = domain.signal.match(/\[([^\]]*\.start)[\s,\s]*([^\]]*\.stop)?\]/)
-      if (binsMatch) {
-        const propExpr = binsMatch[1] as string  // e.g. "bin_maxbins_10_v_bins.start"
-        const dotIdx = propExpr.lastIndexOf('.')
-        if (dotIdx > 0) {
-          const sigKey = propExpr.substring(0, dotIdx)  // e.g. "bin_maxbins_10_v_bins"
-          const sigVal = ctx.signals[sigKey]
-          if (sigVal && typeof sigVal === 'object') {
-            const startVal = (sigVal as Record<string, unknown>).start
-            const stopVal = (sigVal as Record<string, unknown>).stop
-            if (typeof startVal === 'number' && typeof stopVal === 'number') {
-              return [startVal, stopVal]
-            }
-          }
-        }
-      }
-      throw new Error(`[aster] unresolved signal in scale domain: ${domain.signal}`)
-    }
-    // union domain: {fields: [{data, field}, ...]} — vega's multi-dataset
-    // union form used by layered charts
-    if ('fields' in domain && Array.isArray((domain as { fields?: unknown }).fields) &&
-        (domain as { fields?: unknown[] }).fields!.some((f) => f != null && typeof f === 'object')) {
-      const all: unknown[] = []
-      for (const f of (domain as { fields: unknown[] }).fields) {
-        if (f == null || typeof f !== 'object') continue
-        const e = f as { data?: string; field?: string }
-        if (typeof e.data === 'string' && typeof e.field === 'string') {
-          for (const val of ctx.dataField(e.data, e.field)) all.push(val)
-        }
-      }
-      const merged = mergeUnionDomain(type, all)
-      if (merged && (CONTINUOUS_TYPES.has(type) || type === 'threshold')) return merged
-      // discrete union (band/point): the distinct values, sorted per the
-      // domain's sort flag
-      const present = all.filter((v) => v != null)
-      const distinct = Array.from(new Set(present))
-      if ((domain as { sort?: unknown }).sort === true || (domain as { sort?: unknown }).sort === 'ascending') {
-        distinct.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
-      }
-      return distinct
-    }
-    if ('data' in domain) {
-      const { data, field, fields } = domain as { data: string; field?: string; fields?: string[] }
-      const domainDataRows = ctx.dataRows ? ctx.dataRows(data) : undefined
-      const fieldsToCollect = fields ?? (field ? [field] : [])
-      const all: unknown[] = []
-      for (const f of fieldsToCollect) {
-        for (const val of ctx.dataField(data, f)) all.push(val)
-      }
-      if (CONTINUOUS_TYPES.has(type) || type === 'threshold') {
-        if (type === 'time' || type === 'utc') {
-          const dates = all.filter(
-            (v) => v instanceof Date && Number.isFinite(v.getTime()),
-          ) as Date[]
-          if (dates.length) {
-            const ms = dates.map((d) => d.getTime())
-            return [minOf(ms), maxOf(ms)]
-          }
-          const nums = all.filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
-          if (nums.length) return [minOf(nums), maxOf(nums)]
-        }
-        // d3-scale coerces the domain through +d (strings like "28" become
-        // numbers); vega feeds it whatever the data holds. Keep strings that
-        // coerce, drop the rest — same observable behavior as d3.
-        const coercible = all
-          .map((v) => v instanceof Date ? v.getTime() : v)
-          .filter(
-            (v) => (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(+v)),
-          ) as number[]
-        if (!coercible.length) {
-          // vega's multi-field aggregate domain bottoms out at [0, 0] over an
-          // empty dataset; a single-field domain stays empty (no ticks)
-          return fieldsToCollect.length > 1 ? [0, 0] : []
-        }
-        return [minOf(coercible), maxOf(coercible)]
-      }
-      // `all` is freshly collected per call via ctx.dataField; cache the
-      // distinct pass by the underlying rows identity when available.
-      // Single-field domains only: multi-field collection stays uncached.
-      const vals = (all.length && all.every((v) => v == null)
-        ? [undefined]
-        : domainDataRows && fields == null && field != null
-          ? distinctValuesCached(ctx.distinctCache, domainDataRows, field, (rws, fld) =>
-              (ctx.dataField ?? ((_d: string, _f: string) => []))(data, fld))
-          : distinctValues(all)).slice() as unknown[]
-      const sortSpec = (domain as { sort?: unknown }).sort
-      if (sortSpec === true || sortSpec === 'ascending') {
-        vals.sort((a, b) => (a as string) < (b as string) ? -1 : (a as string) > (b as string) ? 1 : 0)
-      } else if (sortSpec === 'descending') {
-        vals.sort((a, b) => (a as string) > (b as string) ? -1 : (a as string) < (b as string) ? 1 : 0)
-      } else if (sortSpec && typeof sortSpec === 'object' && !Array.isArray(sortSpec)) {
-        const ss = sortSpec as { op?: string; field?: string; order?: string }
-        if (ss.op && ss.field && ctx.dataRows) {
-          // Aggregate sort: group rows by domain field, compute op per group, sort
-          const domainField = (domain as { field: string }).field
-          const dataName = (domain as { data: string }).data
-          const rows = ctx.dataRows(dataName)
-          const agg = new Map<unknown, number>()
-          for (const r of rows) {
-            const key = r[domainField]
-            const val = typeof r[ss.field] === 'number' ? r[ss.field] as number : Number(r[ss.field]) || 0
-            agg.set(key, (agg.get(key) ?? 0) + val)
-          }
-          const desc = ss.order === 'descending'
-          vals.sort((a, b) => {
-            const av = agg.get(a) ?? 0, bv = agg.get(b) ?? 0
-            return desc ? bv - av : av - bv
-          })
-        } else if (!ss.field || ss.field === 'key') {
-          // Alphabetical sort: {order: "descending"} or {order: "descending", field: "key"}
-          // The "key" field is a Vega-Lite marker for alphabetical sort.
-          // When sort has a real field but no op (e.g. {field: "val", order: "descending"}),
-          // Vega does not sort the domain — preserve insertion order.
-          const order = ss.order
-          if (order === 'descending') {
-            vals.sort((a, b) => (a as string) > (b as string) ? -1 : (a as string) < (b as string) ? 1 : 0)
-          } else if (order === 'ascending' || !order) {
-            vals.sort((a, b) => (a as string) < (b as string) ? -1 : (a as string) > (b as string) ? 1 : 0)
-          }
-        }
-      }
-      return vals
+  if (bins) {
+    // assign bin boundaries to scale instance
+    scale.bins = bins
+  } else if (scale.bins) {
+    // no current bins, remove bins if previously set
+    delete scale.bins
+  }
+
+  // special handling for bin-ordinal scales
+  if (scale.type === vs.BinOrdinal) {
+    if (!bins) {
+      // the domain specifies the bins
+      scale.bins = scale.domain()
+    } else if (!_.domain && !_.domainRaw) {
+      // the bins specify the domain
+      scale.domain(bins)
+      count = (bins as unknown[]).length
     }
   }
-  if (typeof domain === 'string') {
-    const v = ctx.signals[domain]
-    if (v == null) throw new Error(`[aster] unresolved signal domain: ${domain}`)
-    return Array.isArray(v) ? (v as unknown[]) : [v]
-  }
-  return []
+
+  // return domain cardinality
+  return count
 }
 
-// Per-evaluation, per-dataset-identity memo for ordinal domain collection. The
-// same (rows, field) pair is collected several times per evaluation (scale
-// domain, axis build, legend); the memo is owned by the evaluation (see
-// ScaleContext.distinctCache), never shared across evaluations.
-function distinctValuesCached(
-  cache: WeakMap<unknown[], Map<string, unknown[]>> | undefined,
-  rows: unknown[],
-  field: string,
-  collect: (rows: unknown[], field: string) => unknown[],
-): unknown[] {
-  if (!cache) return distinctValues(collect(rows, field))
-  let byField = cache.get(rows)
-  if (!byField) {
-    byField = new Map()
-    cache.set(rows, byField)
-  }
-  let vals = byField.get(field)
-  if (!vals) {
-    vals = distinctValues(collect(rows, field))
-    byField.set(field, vals)
-  }
-  return vals
-}
+function configureRange(scale: Scale, _: Params, count: number): void {
+  const type = scale.type as string
+  const round = _.round || false
+  let range = _.range as unknown
 
-function distinctValues(values: unknown[]): unknown[] {
-  const out: unknown[] = []
-  const seen = new Set<unknown>()
-  for (const v of values) {
-    // vega's discrete domain is an Aggregate groupby, and its object keys
-    // stringify the value: two distinct arrays/objects with the same string
-    // form collapse into one domain entry (the first). The `values` aggregate
-    // op emits an array per group, so this is what turns its domain into a
-    // single entry.
-    const key = v !== null && typeof v === 'object' && !(v instanceof Date) ? `obj:${String(v)}` : v
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(v)
-  }
-  return out
-}
-
-function resolveRangeSignal(signal: string, ctx: ScaleContext): unknown {
-  // Try direct signal name lookup first
-  const v = ctx.signals[signal]
-  if (v != null) return v
-  // Not a plain signal name — try evaluating as a Vega expression (e.g. "bandwidth('x')")
-  if (ctx.evaluate) {
-    try {
-      const result = ctx.evaluate(signal)
-      if (result != null) return result
-    } catch { /* fall through to error */ }
-  }
-  return undefined
-}
-
-function resolveRange(range: ScaleRange, ctx: ScaleContext, scaleType?: string, domainCount = 0): unknown[] | string | { __asterScheme: string; __asterExtent?: number[] } {
-  if (Array.isArray(range)) {
-    return range.map((r) => {
-      if (r && typeof r === 'object' && 'signal' in r) {
-        const v = resolveRangeSignal((r as { signal: string }).signal, ctx)
-        if (v == null) throw new Error(`[aster] unresolved signal range element: ${(r as { signal: string }).signal}`)
-        return v
+  // if range step specified, calculate full range extent
+  if (_.rangeStep != null) {
+    range = configureRangeStep(type, _, count)
+  } else if (_.scheme) {
+    // else if a range scheme is defined, use that
+    range = configureScheme(type, _, count)
+    if (isFunction(range)) {
+      if (scale.interpolator) {
+        scale.interpolator(range)
+        return
       }
-      return r
-    })
-  }
-  if (typeof range === 'string') {
-    switch (range) {
-      case 'width':
-        return [0, ctx.width]
-      case 'height':
-        // Vega resolves "height" to [0, height] for band/ordinal/point scales
-        // (natural top-to-bottom direction) and [height, 0] for continuous scales
-        // (inverted y-axis).
-        if (scaleType === 'band' || scaleType === 'ordinal' || scaleType === 'point') {
-          return [0, ctx.height]
-        }
-        return [ctx.height, 0]
-      default: {
-        // A named palette range on a positional band/point scale is not a
-        // numeric range: vega's parser yields [NaN, NaN] (probed: band
-        // ranges like "symbol"/"ramp" degenerate the scale, not colour it).
-        if (scaleType === 'band' || scaleType === 'point') return [NaN, NaN]
-        // A `config.range.<name>` entry resolves first (vega-parser's range
-        // lookup: the config block shadows the built-in range definitions).
-        // An array is the palette itself; a `{scheme}` object resolves to the
-        // scheme colors (ordinal) or keeps the scheme name (continuous, where
-        // the interpolator needs the name); anything else refuses upstream
-        // ('Unrecognized scale range value').
-        const cfg = ownGet(ctx.configRange, range)
-        if (cfg != null) {
-          if (Array.isArray(cfg)) return cfg
-          if (cfg && typeof cfg === 'object' && 'scheme' in cfg) {
-            const schemeName = (cfg as { scheme: string }).scheme
-            const extent = (cfg as { extent?: number[] }).extent
-            if (scaleType === 'band' || scaleType === 'ordinal' || scaleType === 'point') {
-              const colors = vs.scheme(schemeName)
-              if (Array.isArray(colors)) return colors
-              if (typeof colors === 'function') {
-                // vega configureScheme: a continuous scheme on a discrete
-                // scale quantizes to the DOMAIN cardinality (schemeCount
-                // applies only to quantile/quantize)
-                return quantizeInterpolator(colors as (t: number) => unknown, Math.max(domainCount, 1)) as unknown[]
-              }
-              throw new Error(`Unrecognized scale scheme: ${schemeName}`)
-            }
-            // continuous: thread the extent through to the interpolator
-            return extent ? { __asterScheme: schemeName, __asterExtent: extent } : schemeName
-          }
-          throw new Error(`Unrecognized scale range value: ${JSON.stringify(range)}`)
-        }
-        // Named ranges map to vega's config.defaults range entries (a continuous
-        // scheme unless overridden). `range: "heatmap"` (vega-lite's default for
-        // quantitative color) resolves to the yellowgreenblue scheme.
-        // Vega config default ranges for non-scheme ranges
-        const directRanges: Record<string, unknown[]> = {
-          symbol: ['circle', 'square', 'triangle-up', 'cross', 'diamond', 'triangle-right', 'triangle-down', 'triangle-left'],
-        }
-        const direct = ownGet(directRanges, range)
-        if (direct) return direct
-        // vega's config.js defaults: diverging carries extent [1, 0] (the
-        // default reads the scheme backwards — and a user entry REPLACES the
-        // default wholesale, so {scheme} alone reads forwards)
-        const aliases: Record<string, { scheme: string; extent?: number[] }> = {
-          ramp: { scheme: 'blues' },
-          heatmap: { scheme: 'yellowgreenblue' },
-          ordinal: { scheme: 'blues' },
-          diverging: { scheme: 'blueorange', extent: [1, 0] },
-        }
-        const entry = ownGet(aliases, range)
-        const name = entry ? entry.scheme : range
-        const scheme = vs.scheme(name)
-        if (typeof scheme === 'function') {
-          if (scaleType === 'band' || scaleType === 'ordinal' || scaleType === 'point') {
-            return quantizeInterpolator(scheme as (t: number) => unknown, Math.max(domainCount, 1)) as unknown[]
-          }
-          if (scaleType === 'quantile' || scaleType === 'quantize' || scaleType === 'threshold') {
-            const n = scaleType === 'threshold' ? Math.max(domainCount + 1, 2) : 5
-            return quantizeInterpolator(scheme as (t: number) => unknown, n) as unknown[]
-          }
-          return entry?.extent ? { __asterScheme: name, __asterExtent: entry.extent } : name
-        }
-        if (scheme) return scheme as unknown[]
-        throw new Error(`[aster] unsupported scale range "${name}"`)
-      }
+      raise(`Scale type ${type} does not support interpolating color schemes.`)
     }
   }
-  if (range && typeof range === 'object' && 'signal' in range) {
-    const v = resolveRangeSignal(range.signal, ctx)
-    if (v == null) throw new Error(`[aster] unresolved signal range: ${range.signal}`)
-    return Array.isArray(v) ? (v as unknown[]) : [v]
+
+  // given a range array for an interpolating scale, convert to interpolator
+  if (range && vs.isInterpolating(type)) {
+    scale.interpolator(vs.interpolateColors(flip(range as string[], _.reverse), _.interpolate as string | undefined, _.interpolateGamma as number | undefined))
+    return
   }
-  // Vega-lite emits `{ scheme: "blues" }` (or `{ scheme: "blues", extent: [...] }`)
-  // for sequential/diverging color scales.  Resolve to the scheme name string so
-  // buildScale's continuous-scheme branch picks it up.
-  if (range && typeof range === 'object' && 'scheme' in range) {
-    const schemeName = (range as { scheme: string }).scheme
-    const extent = (range as { extent?: number[] }).extent
-    if (typeof schemeName === 'string') {
-      if (scaleType === 'quantile' || scaleType === 'quantize' || scaleType === 'threshold') {
-        const scheme = vs.scheme(schemeName)
-        if (typeof scheme === 'function') return quantizeInterpolator(scheme as (t: number) => unknown, 5) as unknown[]
-      }
-      return extent ? { __asterScheme: schemeName, __asterExtent: extent } : schemeName
-    }
+
+  // configure rounding / interpolation
+  if (range && _.interpolate && scale.interpolate) {
+    scale.interpolate(vs.interpolate(_.interpolate as string, _.interpolateGamma as number | undefined))
+  } else if (isFunction(scale.round)) {
+    scale.round(round)
+  } else if (isFunction(scale.rangeRound)) {
+    scale.interpolate(round ? interpolateRound : interpolateValue)
   }
-  throw new Error(`[aster] unsupported scale range value`)
+
+  if (range) scale.range(flip(range as unknown[], _.reverse))
+}
+
+function configureRangeStep(type: string, _: Params, count: number): number[] {
+  if (type !== vs.Band && type !== vs.Point) raise('Only band and point scales support rangeStep.')
+  // calculate full range based on requested step size and padding
+  const outer = ((_.paddingOuter != null ? _.paddingOuter : _.padding) as number) || 0
+  const inner = type === vs.Point ? 1 : (((_.paddingInner != null ? _.paddingInner : _.padding) as number) || 0)
+  return [0, (_.rangeStep as number) * vs.bandSpace(count, inner, outer)]
+}
+
+function configureScheme(type: string, _: Params, count: number): unknown {
+  const extent = _.schemeExtent as number[] | undefined
+  let scheme: unknown
+  if (isArray(_.scheme)) {
+    scheme = vs.interpolateColors(_.scheme as string[], _.interpolate as string | undefined, _.interpolateGamma as number | undefined)
+  } else {
+    // `_.scheme.toLowerCase()` upstream: a non-string scheme is a TypeError there
+    if (!isString(_.scheme)) throw new TypeError('_.scheme.toLowerCase is not a function')
+    scheme = vs.scheme(_.scheme.toLowerCase())
+    if (!scheme) raise(`Unrecognized scheme name: ${_.scheme}`)
+  }
+
+  // determine size for potential discrete range
+  count = type === vs.Threshold ? count + 1
+    : type === vs.BinOrdinal ? count - 1
+      : type === vs.Quantile || type === vs.Quantize ? (+(_.schemeCount as number) || DEFAULT_COUNT)
+        : count
+
+  // adjust and/or quantize scheme as appropriate
+  return vs.isInterpolating(type) ? adjustScheme(scheme, extent, _.reverse)
+    : isFunction(scheme) ? vs.quantizeInterpolator(adjustScheme(scheme, extent) as SchemeFn, count)
+      : type === vs.Ordinal ? scheme : (scheme as unknown[]).slice(0, count)
+}
+
+function adjustScheme(scheme: unknown, extent: number[] | undefined, reverse?: unknown): unknown {
+  return isFunction(scheme) && (extent || reverse)
+    ? vs.interpolateRange(scheme as SchemeFn, flip(extent || [0, 1], reverse))
+    : scheme
+}
+
+function flip<T>(array: T[], reverse: unknown): T[] {
+  return reverse ? array.slice().reverse() : array
 }
 
 /** Tick helpers reused from vega-scale (used by the axis runtime). */

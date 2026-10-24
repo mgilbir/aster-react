@@ -20,6 +20,32 @@ and also scans the built `dist` (see `scripts/check-deps.mjs`); `conformance` is
 the 419-spec real-Vega SVG diff; `conformance-vl` compiles the Vega-Lite corpus
 with `@aster/vl` and diffs it against the Vega-Lite oracle.
 
+## Oracle vectors
+
+`packages/core/testdata/vectors/*.json` hold input/output pairs recorded from the pinned
+upstream libraries (`pnpm vectors`); each library the engine reimplements is replayed against
+them. Recordings only hold for results that do not depend on the V8 version
+(see "Why live" below).
+
+The **spec-level** suites work one level up and are LIVE differentials, not recordings
+(`packages/conformance/scripts/differential-{scale-spec,projection,interpolate}.test.mts`): a Vega **scale spec**
+(or projection spec, or interpolator) is built by real vega (vega-parser + vega-encode's Scale transform, vega-geo's
+Projection, vega-scale's interpolators) and by Aster in the same process, and the built object's type, domain, range,
+bins, sampled outputs, ticks and paths must agree exactly. A spec vega rejects must be rejected here too. The cases are
+in `scale-spec-cases.mjs` (hand-written edge cases plus 700 seeded random option combinations), `projection-cases.mjs`
+and `interpolate-cases.mjs`. Why live: `Math.pow/exp/log` and the trig functions are not bit-identical across V8
+versions, so an exactly-compared recording only holds on the Node that made it; running the oracle in the same engine
+needs no tolerance. Shared helpers: `differential-util.mts`.
+
+## Time zones
+
+The repo's default run pins `TZ=UTC`, which hides zone bugs (a UTC scale formatted in local
+time passes there). The `tz-matrix` gate (`pnpm test:tz`) re-runs the zone-aware unit tests
+(`*.tz.test.ts`), the live scale-spec differential (every case also runs in each zone inside the test) and
+`packages/conformance/corpus-tz` (raw Vega specs rendered by vega and Aster in the same zone)
+under `America/New_York` and `Asia/Kolkata`. Add a case to `corpus-tz` when a fix depends on
+the zone.
+
 ## Nightly sweeps
 
 ```bash
