@@ -32,6 +32,7 @@ function makeRecordingCtx(): { ctx: CanvasLike; records: DrawRecord[] } {
   const stack: Array<[number, number]> = []
   let ops: string[] = []
   let cur: string | null = null // pending paint info at fill/stroke time
+  let cp: [number, number] | null = null // current point (device space)
   let fillStyle: unknown = '#000'
   let strokeStyle: unknown = '#000'
   let globalAlpha = 1
@@ -50,13 +51,18 @@ function makeRecordingCtx(): { ctx: CanvasLike; records: DrawRecord[] } {
     restore() { const t = stack.pop(); if (t) { tx = t[0]; ty = t[1] } },
     translate(x, y) { tx += x; ty += y },
     scale(x) { tx *= x; ty *= x },
-    beginPath() { ops = [] },
-    moveTo(x, y) { ops.push(`M${fmt(x + tx)},${fmt(y + ty)}`) },
-    lineTo(x, y) { ops.push(`L${fmt(x + tx)},${fmt(y + ty)}`) },
-    bezierCurveTo(a, b, c, d, x, y) { ops.push(`C${fmt(a + tx)},${fmt(b + ty)},${fmt(c + tx)},${fmt(d + ty)},${fmt(x + tx)},${fmt(y + ty)}`) },
-    quadraticCurveTo(a, b, x, y) { ops.push(`Q${fmt(a + tx)},${fmt(b + ty)},${fmt(x + tx)},${fmt(y + ty)}`) },
+    beginPath() { ops = []; cp = null },
+    moveTo(x, y) { ops.push(`M${fmt(x + tx)},${fmt(y + ty)}`); cp = [x + tx, y + ty] },
+    lineTo(x, y) { ops.push(`L${fmt(x + tx)},${fmt(y + ty)}`); cp = [x + tx, y + ty] },
+    bezierCurveTo(a, b, c, d, x, y) { ops.push(`C${fmt(a + tx)},${fmt(b + ty)},${fmt(c + tx)},${fmt(d + ty)},${fmt(x + tx)},${fmt(y + ty)}`); cp = [x + tx, y + ty] },
+    quadraticCurveTo(a, b, x, y) { ops.push(`Q${fmt(a + tx)},${fmt(b + ty)},${fmt(x + tx)},${fmt(y + ty)}`); cp = [x + tx, y + ty] },
     arc(x, y, r, a0, a1, ccw = false) {
       const ax = x + tx, ay = y + ty
+      // a real canvas arc() first connects the current point to the arc's start with a
+      // straight line (or starts a subpath there when there is no current point)
+      const sx0 = ax + r * Math.cos(a0), sy0 = ay + r * Math.sin(a0)
+      if (cp === null) ops.push(`M${fmt(sx0)},${fmt(sy0)}`)
+      else if (Math.hypot(cp[0] - sx0, cp[1] - sy0) > 1e-6) ops.push(`L${fmt(sx0)},${fmt(sy0)}`)
       let delta = a1 - a0
       if (!ccw && delta < 0) delta += 2 * Math.PI
       if (ccw && delta > 0) delta -= 2 * Math.PI
@@ -68,12 +74,14 @@ function makeRecordingCtx(): { ctx: CanvasLike; records: DrawRecord[] } {
       const sweep = ccw ? 0 : 1
       if (Math.abs(Math.abs(delta) - 2 * Math.PI) < 1e-9) {
         ops.push(`CIRC(${fmt(ax)},${fmt(ay)},${fmt(r)})`)
+        cp = [sx0, sy0]
       } else {
         ops.push(`A${fmt(r)},${fmt(r)},0,${large},${sweep},${fmt(x2)},${fmt(y2)}`)
+        cp = [x2, y2]
       }
     },
     closePath() { ops.push('Z') },
-    rect(x, y, w, h) { ops.push(`M${fmt(x + tx)},${fmt(y + ty)}h${fmt(w)}v${fmt(h)}h${fmt(-w)}Z`) },
+    rect(x, y, w, h) { ops.push(`M${fmt(x + tx)},${fmt(y + ty)}h${fmt(w)}v${fmt(h)}h${fmt(-w)}Z`); cp = [x + tx, y + ty] },
     clip() { /* record clip as a marker for debugging */ },
     fill() {
       records.push({ kind: 'fill', path: ops.join(''), paint: paintStr(fillStyle, globalAlpha) })
@@ -173,34 +181,27 @@ function svgRecords(svg: string): DrawRecord[] {
     if (tok.startsWith('<text')) {
       const attrs = tok.slice(0, tok.indexOf('>'))
       const inner = tok.slice(tok.indexOf('>') + 1, tok.lastIndexOf('</text>'))
-      const angleAttr = attrOf(attrs, 'angle')
-      // angled text emits transform="translate(x,y) rotate(a)" (no x/y attrs)
-      const tmatch = /transform="translate\(([-\d.]+)(?:,([-\d.]+))?\) rotate\(([-\d.]+)\)"/.exec(attrs)
-      let x: number, y: number, rot: string
-      if (tmatch) {
-        x = Number(tmatch[1]) + tx
-        y = Number(tmatch[2] ?? 0) + ty
-        rot = `;rot=${fmtN(Number(tmatch[3]) * Math.PI / 180)}`
-        // the baseline offset rides as a dy in the rotated frame (canvas
-        // applies it as the fillText y inside the rotate)
-        const dy = attrOf(attrs, 'dy')
-        if (dy) y += Number(dy)
-      } else {
-        x = Number(attrOf(attrs, 'x') ?? 0) + tx
-        y = Number(attrOf(attrs, 'y') ?? 0) + ty
-        rot = angleAttr && angleAttr !== '0' ? `;rot=${fmtN(Number(angleAttr) * Math.PI / 180)}` : ''
-      }
-      const anchor = attrOf(attrs, 'text-anchor') ?? 'middle'
+      // vega's text transform: translate(x,y) [rotate(a) [translate(dx,dy)]]
+      // (the unrotated form folds dx/dy and the baseline offset into one translate)
+      const tmatch = /transform="translate\(([-\d.e]+),([-\d.e]+)\)(?: rotate\(([-\d.e]+)\))?(?: translate\(([-\d.e]+),([-\d.e]+)\))?"/.exec(attrs)
+      if (!tmatch) throw new Error(`text without a vega transform: ${attrs}`)
+      const x = Number(tmatch[1]) + (tmatch[4] != null ? Number(tmatch[4]) : 0) + tx
+      const y = Number(tmatch[2]) + (tmatch[5] != null ? Number(tmatch[5]) : 0) + ty
+      const rot = tmatch[3] != null ? `;rot=${fmtN(Number(tmatch[3]) * Math.PI / 180)}` : ''
+      const anchor = attrOf(attrs, 'text-anchor') ?? 'start'
       const align = anchor === 'start' ? 'left' : anchor === 'end' ? 'right' : 'center'
       const fs = attrOf(attrs, 'font-size')
       const fsNum = fs != null ? Number(String(fs).replace(/px$/, '')) : 11
       const fw = attrOf(attrs, 'font-weight')
+      const fst = attrOf(attrs, 'font-style')
       const fill = attrOf(attrs, 'fill') ?? '-'
       const op = Number(attrOf(attrs, 'opacity') ?? 1)
+      if (op === 0) continue // vega's canvas paints nothing at opacity 0 (draw.js)
+      if (inner === '') continue // vega's canvas skips empty text (marks/text.js draw)
       if (inner.includes('<tspan')) continue // multi-line: excluded from parity
       const content = inner
       const fam = attrOf(attrs, 'font-family') ?? 'sans-serif'
-      records.push({ kind: 'text', path: '', paint: `t=${content};x=${fmtN(x)};y=${fmtN(y)};align=${align};font=${[fw, `${fsNum}px`, fam].filter(Boolean).join(' ')}${rot};style=style=${fill};alpha=${fmtN(op)}` })
+      records.push({ kind: 'text', path: '', paint: `t=${content};x=${fmtN(x)};y=${fmtN(y)};align=${align};font=${[fst, fw, `${fsNum}px`, fam].filter(Boolean).join(' ')}${rot};style=style=${fill};alpha=${fmtN(op)}` })
       continue
     }
     const tag = m[1]!
@@ -220,8 +221,11 @@ function svgRecords(svg: string): DrawRecord[] {
       const so = Number(attrOf(attrs, 'stroke-opacity') ?? 1)
       const sw = attrOf(attrs, 'stroke-width')
       const dash = attrOf(attrs, 'stroke-dasharray')
-      if (fill) records.push({ kind: 'fill', path, paint: `style=${fill};alpha=${fmtN(op * fo)}` })
-      if (stroke) records.push({ kind: 'stroke', path, paint: `style=${stroke};alpha=${fmtN(op * so)};sw=${fmtN(Number(sw ?? 1))};dash=${dash ?? '-'}` })
+      // vega's canvas (util/canvas/draw.js, fill.js, stroke.js): opacity 0 paints
+      // nothing, a fill needs alpha > 0, a stroke needs width > 0 and alpha > 0
+      if (op === 0) continue
+      if (fill && op * fo > 0) records.push({ kind: 'fill', path, paint: `style=${fill};alpha=${fmtN(op * fo)}` })
+      if (stroke && Number(sw ?? 1) > 0 && op * so > 0) records.push({ kind: 'stroke', path, paint: `style=${stroke};alpha=${fmtN(op * so)};sw=${fmtN(Number(sw ?? 1))};dash=${dash ?? '-'}` })
     } else if (tag === 'line') {
       const x1 = Number(attrOf(attrs, 'x1') ?? 0) + tx
       const y1 = Number(attrOf(attrs, 'y1') ?? 0) + ty
@@ -232,7 +236,8 @@ function svgRecords(svg: string): DrawRecord[] {
       const op = Number(attrOf(attrs, 'opacity') ?? 1)
       const sw = attrOf(attrs, 'stroke-width')
       const dash = attrOf(attrs, 'stroke-dasharray')
-      if (stroke) records.push({ kind: 'stroke', path, paint: `style=${stroke};alpha=${fmtN(op)};sw=${fmtN(Number(sw ?? 1))};dash=${dash ?? '-'}` })
+      const lso = Number(attrOf(attrs, 'stroke-opacity') ?? 1)
+      if (op !== 0 && stroke && Number(sw ?? 1) > 0 && op * lso > 0) records.push({ kind: 'stroke', path, paint: `style=${stroke};alpha=${fmtN(op * lso)};sw=${fmtN(Number(sw ?? 1))};dash=${dash ?? '-'}` })
     } else if (tag === 'circle') {
       const cx = Number(attrOf(attrs, 'cx') ?? 0) + tx
       const cy = Number(attrOf(attrs, 'cy') ?? 0) + ty
@@ -244,8 +249,9 @@ function svgRecords(svg: string): DrawRecord[] {
       const fo = Number(attrOf(attrs, 'fill-opacity') ?? 1)
       const sw = attrOf(attrs, 'stroke-width')
       const so = Number(attrOf(attrs, 'stroke-opacity') ?? 1)
-      if (fill) records.push({ kind: 'fill', path, paint: `style=${fill};alpha=${fmtN(op * fo)}` })
-      if (stroke) records.push({ kind: 'stroke', path, paint: `style=${stroke};alpha=${fmtN(op * so)};sw=${fmtN(Number(sw ?? 1))};dash=-` })
+      if (op === 0) continue
+      if (fill && op * fo > 0) records.push({ kind: 'fill', path, paint: `style=${fill};alpha=${fmtN(op * fo)}` })
+      if (stroke && Number(sw ?? 1) > 0 && op * so > 0) records.push({ kind: 'stroke', path, paint: `style=${stroke};alpha=${fmtN(op * so)};sw=${fmtN(Number(sw ?? 1))};dash=-` })
     } else if (tag === 'rect') {
       const x = Number(attrOf(attrs, 'x') ?? 0) + tx
       const y = Number(attrOf(attrs, 'y') ?? 0) + ty

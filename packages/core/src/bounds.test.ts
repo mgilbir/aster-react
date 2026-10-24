@@ -34,10 +34,10 @@ describe('vega-exact bounds', () => {
   })
 
   it('bounds a circle symbol with miter stroke expansion', () => {
-    // vega: point at (40,48), size 30 (r=2.7386), stroke w2, miter → ±(r+4)
+    // vega: point at (40,48), no size → vega's default 64 (r=4), stroke w2, miter → ±(r+4)
     const b = new Bounds()
     boundLeaf(b, { x: 40, y: 48, stroke: '#4c78a8', strokeWidth: 2, opacity: 0.7, fill: 'transparent' })
-    const e = Math.sqrt(30) / 2 + 4
+    const e = Math.sqrt(64) / 2 + 4 // vega shapes.js: `sz = value(item.size, 64)`
     expect(b.x1).toBeCloseTo(40 - e, 10)
     expect(b.y2).toBeCloseTo(48 + e, 10)
   })

@@ -27,12 +27,18 @@ const FIXTURES = {
   })],
 }
 
-FIXTURES['ci-differ'] = [c('x-aggregate-ci0', {
-  // deterministic oracle, deterministic Aster difference (v6 default symbol fill/size are not applied by Aster)
+// deterministic oracle, deterministic Aster difference: the engine is handed the same
+// chart with a different fill (`ourSpec`), so the verdict path is exercised without
+// depending on a renderer defect that a later change may fix
+const differBase = {
   width: 60, height: 40, padding: 2, autosize: 'none', background: 'white',
   data: [{ name: 't', values: rows }],
-  marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { value: 10 }, y: { value: 10 } } } }],
-})]
+  marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { value: 10 }, y: { value: 10 }, size: { value: 30 }, fill: { value: 'steelblue' } } } }],
+}
+FIXTURES['ci-differ'] = [{
+  ...c('x-aggregate-ci0', differBase),
+  ourSpec: { ...differBase, marks: [{ ...differBase.marks[0], encode: { update: { ...differBase.marks[0].encode.update, fill: { value: 'tomato' } } } }] },
+}]
 
 export function generate() {
   const name = process.env.FIXTURE ?? 'good'

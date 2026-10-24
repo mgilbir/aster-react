@@ -72,6 +72,12 @@ interface SweepCase {
   spec: Record<string, unknown>
   writes?: Array<{ name: string; value: unknown }>
   lite?: boolean
+  /**
+   * Test fixtures only: render this spec through Aster INSTEAD of `spec`, so a
+   * fixture can produce a deterministic oracle/engine difference without
+   * depending on whichever renderer defect happens to exist today.
+   */
+  ourSpec?: Record<string, unknown>
 }
 
 interface Status {
@@ -129,7 +135,7 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
   // @aster/vl, each rendered through its own engine (a VL defect lives in
   // the spec it emits — see the sweep's header note).
   let vgSpec = c.spec as Record<string, unknown>
-  let ourVgSpec = c.spec as Record<string, unknown>
+  let ourVgSpec = (c.ourSpec ?? c.spec) as Record<string, unknown>
   if (c.lite) {
     try {
       vgSpec = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, unknown> } }).compile(c.spec).spec
@@ -176,9 +182,16 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
     console.error(`  [node-error] ${c.name}: ${oracleErr.split('\n')[0]}`)
     return 'node-error'
   }
-  const a = canonicalizeSvg(oracleSvg!)
-  const b = canonicalizeSvg(ourSvg!)
-  const diffs = diffCanonical(a, b)
+  // A document the canonicalizer cannot judge (an unsupported element, an
+  // unparseable transform...) is never "ok": it counts as a difference with the
+  // reason attached, so the strict oracle cannot be bypassed by exotic output.
+  let diffs: string[]
+  try {
+    diffs = diffCanonical(canonicalizeSvg(oracleSvg!), canonicalizeSvg(ourSvg!))
+  } catch (e) {
+    console.error(`  [differ] ${c.name} (${c.family}.${c.property}): canonicalizer cannot judge: ${(e as Error).message}`)
+    return 'differ'
+  }
   if (diffs.length === 0) return 'ok'
   if (isBootstrapCase(c) && (await oracleIsNondeterministic(vgSpec, c.writes, oracleSvg!))) return 'nondeterministic'
   console.error(`  [differ] ${c.name} (${c.family}.${c.property}): ${diffs[0]}`)

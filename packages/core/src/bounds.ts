@@ -7,8 +7,9 @@
  * Text width uses vega's headless estimate (`~~(0.8 * len * fontSize)`),
  * matching the oracle when no canvas is available.
  */
+import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
-import { computeLinePath, symbolPath, trailPath } from './render.js'
+import { computeAreaPath, computeLinePath, symbolPath, trailPath } from './render.js'
 import { itemTextWidth } from './text-metrics.js'
 
 // ---------------------------------------------------------------------------
@@ -674,7 +675,10 @@ export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = fa
   switch (mark.marktype) {
     case 'line':
     case 'area': {
-      const pathInfo = computeLinePath(mark)
+      // an area is bounded by its filled polygon (top edge AND baseline), a line
+      // by its polyline: computeLinePath on an area dropped the baseline, so
+      // autosize:pad clipped areas that extend below/above their top edge
+      const pathInfo = mark.marktype === 'area' ? computeAreaPath(mark) : computeLinePath(mark)
       if (pathInfo) {
         boundsFromPath(bounds, pathInfo.path)
         // the renderer resolves vega's default line/area strokeWidth=2 at
@@ -895,11 +899,10 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
     return boundRule(bounds, it)
   }
   if (it.x != null || it.y != null || it.size != null) {
-    // point symbol: size 30 / shape circle by default (our symbol renderer
-    // defaults `size ?? 30`). A symbol with a null position (a geopoint the
+    // point symbol: size 64 / shape circle by default (vega's `sz` default). A symbol with a null position (a geopoint the
     // projection refused) still bounds as a circle at (0,0): vega's `x - r`
     // coerces null to 0 (albersusa sweep case).
-    const r = Math.sqrt(((it.size as number) ?? 30)) / 2
+    const r = Math.sqrt(((it.size as number) ?? SYMBOL_DEFAULT_SIZE)) / 2
     // vega's symbol field accessors coerce a NaN/null position to 0 (`x || 0`);
     // a degenerate scale (log/symlog at zero) still paints the mark at the
     // origin, and its bounds drive the view padding just like any other symbol.

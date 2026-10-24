@@ -59,7 +59,7 @@ describe('buildHitIndex', () => {
     expect(index.query(50, 60)).toBeNull()
   })
 
-  it('respects paint order on overlap (rects paint first item on top)', () => {
+  it('respects paint order on overlap (rects paint in item order: the last item is on top)', () => {
     const scene = {
       width: 100,
       height: 100,
@@ -72,8 +72,8 @@ describe('buildHitIndex', () => {
       }],
     } as unknown as SceneRoot
     const index = buildHitIndex(scene)
-    // The renderer paints rect items reversed: item 0 lands on top.
-    expect(index.query(20, 20)?.item.datum).toEqual({ n: 1 })
+    // Every renderer paints rect items in item (data) order, like vega: the last one lands on top.
+    expect(index.query(20, 20)?.item.datum).toEqual({ n: 2 })
     expect(index.query(45, 45)?.item.datum).toEqual({ n: 2 })
     expect(index.query(5, 5)?.item.datum).toEqual({ n: 1 })
   })

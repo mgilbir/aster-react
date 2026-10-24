@@ -3,10 +3,14 @@
  * enough that geometry (paths, rects, lines, tick positions) matches the
  * reference renderer; the conformance diff compares normalized geometry.
  */
+import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
-import { baselineOffset } from './bounds.js'
+import { baselineOffset, fontSize as vegaFontSize } from './bounds.js'
 export { baselineOffset }
 import { itemTextWidth } from './text-metrics.js'
+import { ClipCollector, type ClipDef } from './svg-defs.js'
+import { customSymbolPathData } from './svg-path.js'
+export { ClipCollector, type ClipDef }
 import {
   line as d3Line,
   area as d3Area,
@@ -98,6 +102,39 @@ function roundedFramePath(x: number, y: number, w: number, h: number, r: number)
     + `L${f(x8)},${f(y8)}C${f(x8)},${f(y8 - kr1)},${f(x1 - kr1)},${f(y1)},${f(x1)},${f(y1)}Z`)
 }
 
+/**
+ * The root frame's background path. Shared by the SVG, DOM and canvas painters
+ * so the frame's fill, stroke and rounded corners cannot drift between them.
+ */
+export function frameBackgroundPath(scene: SceneRoot, plotW: number, plotH: number): GeneratedPath {
+  const frameInset = scene.frameStroke && scene.frameStrokeWidth == null ? 0.5 : 0
+  return scene.frameCornerRadius != null && scene.frameCornerRadius > 0
+    ? roundedFramePath(frameInset, frameInset, plotW, plotH, Math.min(scene.frameCornerRadius, plotW / 2, plotH / 2))
+    : gen(frameInset ? `M0.5,0.5h${num(plotW)}v${num(plotH)}h-${num(plotW)}Z` : `M0,0h${num(plotW)}v${num(plotH)}h-${num(plotW)}Z`)
+}
+
+/**
+ * The root frame's paint as an item, so the frame's background path goes through
+ * the same paint table (`PAINT_PROPS`) as every mark: fill, fill-opacity, stroke,
+ * stroke-opacity/width/linecap/linejoin/dasharray/dashoffset/miterlimit, opacity.
+ * Shared by the SVG, DOM and canvas painters.
+ */
+export function frameItem(scene: SceneRoot): SceneItem {
+  return {
+    fill: scene.frameFill || undefined,
+    fillOpacity: scene.frameFillOpacity,
+    stroke: scene.frameStroke || undefined,
+    strokeOpacity: scene.frameStrokeOpacity,
+    strokeWidth: scene.frameStrokeWidth,
+    strokeCap: scene.frameStrokeCap,
+    strokeJoin: scene.frameStrokeJoin,
+    strokeDash: scene.frameStrokeDash,
+    strokeDashOffset: scene.frameStrokeDashOffset,
+    strokeMiterLimit: scene.frameStrokeMiterLimit,
+    opacity: scene.frameOpacity,
+  } as SceneItem
+}
+
 export function renderSceneToSvg(scene: SceneRoot): string {
   // Keep fractional document sizes: vega's toSVG emits the resolved view size
   // verbatim (the browser may rasterize onto an integer backing store).
@@ -112,29 +149,22 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   out += `<g class="mark-group role-frame root" role="graphics-object" aria-roledescription="group mark container"><g transform="translate(0,0)">`
   const plotW = scene.plotWidth ?? scene.width - pad.left - pad.right
   const plotH = scene.plotHeight ?? scene.height - pad.top - pad.bottom
-  const frameInset = scene.frameStroke && scene.frameStrokeWidth == null ? 0.5 : 0
-  const frameD: GeneratedPath = scene.frameCornerRadius != null && scene.frameCornerRadius > 0
-    ? roundedFramePath(frameInset, frameInset, plotW, plotH, Math.min(scene.frameCornerRadius, plotW / 2, plotH / 2))
-    : gen(frameInset ? `M0.5,0.5h${num(plotW)}v${num(plotH)}h-${num(plotW)}Z` : `M0,0h${num(plotW)}v${num(plotH)}h-${num(plotW)}Z`)
-  out += `<path class="background" aria-hidden="true" d="${genD(frameD)}"${scene.frameFill ? attrS('fill', scene.frameFill) : ''}${scene.frameFillOpacity != null ? ` fill-opacity="${num(scene.frameFillOpacity)}"` : ''}${scene.frameStroke ? attrS('stroke', scene.frameStroke) : ''}${scene.frameStrokeWidth != null ? ` stroke-width="${num(scene.frameStrokeWidth)}"` : ''}${scene.frameStrokeDash ? (Array.isArray(scene.frameStrokeDash) ? attrList('stroke-dasharray', scene.frameStrokeDash) : attrS('stroke-dasharray', scene.frameStrokeDash)) : ''}${scene.frameOpacity != null ? ` opacity="${num(scene.frameOpacity)}"` : ''}/>`
-  // Collect clip refs during rendering. A clipped frame reserves clip1 for
-  // the plot area.
-  const clipN = { current: 0, paths: [] as (string | null)[], rects: [] as ({ w: number; h: number } | null)[] }
-  if (scene.frameClip) {
-    clipN.current = 1
-    clipN.paths.push(null)
-    clipN.rects.push({ w: plotW, h: plotH })
-  }
-  out += scene.frameClip ? '<g clip-path="url(#clip1)">' : '<g>'
+  const frameD = frameBackgroundPath(scene, plotW, plotH)
+  out += `<path class="background" aria-hidden="true" d="${genD(frameD)}"${paintStr(frameItem(scene))}/>`
+  // Clip regions are registered while rendering; ids are content-addressed
+  // (see svg-defs.ts) so they are deterministic and cannot collide across charts.
+  const clips = new ClipCollector()
+  const frameClipId = scene.frameClip ? clips.id({ x: 0, y: 0, w: plotW, h: plotH }) : null
+  out += frameClipId ? `<g clip-path="url(#${frameClipId})">` : '<g>'
   for (const node of scene.items) {
-    out += renderGroup(node, plotW, plotH, clipN, W, H)
+    out += renderGroup(node, plotW, plotH, clips, W, H)
   }
   out += '</g>'
   out += '<path class="foreground" aria-hidden="true" d="" display="none"/>'
   out += '</g></g></g>'
 
   // Emit defs at SVG root level (gradients + clip paths)
-  if (scene.defs?.length || clipN.current > 0) {
+  if (scene.defs?.length || clips.size > 0) {
     out += '<defs>'
     for (const def of scene.defs ?? []) {
       const horiz = def.direction === 'horizontal'
@@ -144,19 +174,7 @@ export function renderSceneToSvg(scene: SceneRoot): string {
       }
       out += '</linearGradient>'
     }
-    for (let i = 1; i <= clipN.current; i++) {
-      const d = clipN.paths[i - 1]
-      const r = clipN.rects[i - 1]
-      if (d) {
-        out += `<clipPath id="clip${i}"><path d="${escAttr(d)}"/></clipPath>`
-      } else if (r) {
-        // vega's clip (SVGStringRenderer): the clipped item's own width and
-        // height at (0,0) in its local frame
-        out += `<clipPath id="clip${i}"><rect x="0" y="0" width="${num(r.w)}" height="${num(r.h)}"/></clipPath>`
-      } else {
-        out += `<clipPath id="clip${i}"><rect x="0" y="0" width="${num(plotW)}" height="${num(plotH)}"/></clipPath>`
-      }
-    }
+    for (const [id, def] of clips.defs) out += clipPathMarkup(id, def)
     out += '</defs>'
   }
 
@@ -164,12 +182,19 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   return out
 }
 
-function renderGroup(group: SceneGroup, plotW?: number, plotH?: number, clipN?: { current: number; paths: (string | null)[]; rects: ({ w: number; h: number } | null)[] }, viewW?: number, viewH?: number): string {
+/** `<clipPath>` for a registered clip: a path, or a rect in the clipped element's frame. */
+function clipPathMarkup(id: string, def: ClipDef): string {
+  return 'd' in def
+    ? `<clipPath id="${escAttr(id)}"><path d="${escAttr(def.d)}"/></clipPath>`
+    : `<clipPath id="${escAttr(id)}"><rect x="${num(def.x)}" y="${num(def.y)}" width="${num(def.w)}" height="${num(def.h)}"/></clipPath>`
+}
+
+function renderGroup(group: SceneGroup, frameW?: number, frameH?: number, clips?: ClipCollector, viewW?: number, viewH?: number): string {
   const type = group.marktype
-  const needsClip = clipN
+  const needsClip = clips
     && group.clip === true
-    && plotW != null
-    && plotH != null
+    && frameW != null
+    && frameH != null
 
   if (!type || type === 'group') {
     // axis / legend / nested group whose items may be leaf shapes
@@ -177,15 +202,18 @@ function renderGroup(group: SceneGroup, plotW?: number, plotH?: number, clipN?: 
     if (group.x != null || group.y != null) transform = ` transform="translate(${num(group.x ?? 0)},${num(group.y ?? 0)})"`
     let out2 = '<g class="mark-group"'
     if (group.role) out2 += attrS('role', group.role)
+    // vega clips a group's content to the group's own width/height at (0,0) in
+    // its own frame (group.js `content`), or to its explicit clip path.
+    const gw = group.width ?? frameW
+    const gh = group.height ?? frameH
     if (needsClip) {
-      const clipId = ++clipN.current
-      clipN.paths.push(group.clipPathD ?? null)
-      out2 += ` clip-path="url(#clip${clipId})"`
+      out2 += ` clip-path="url(#${clips.id(group.clipPathD ? { d: group.clipPathD } : { x: 0, y: 0, w: gw!, h: gh! })})"`
     }
     out2 += `${transform}>`
+    // children are laid out in this group's frame: marks clipped inside it clip to its size
     for (const item of group.items ?? []) {
-      if (isGroup(item)) out2 += renderGroup(item, plotW, plotH, clipN, viewW, viewH)
-      else out2 += renderLeaf(item, clipN)
+      if (isGroup(item)) out2 += renderGroup(item, gw, gh, clips, viewW, viewH)
+      else out2 += renderLeaf(item, clips)
     }
     out2 += '</g>'
     return out2
@@ -194,18 +222,17 @@ function renderGroup(group: SceneGroup, plotW?: number, plotH?: number, clipN?: 
   // Vega-Lite rounds bars by wrapping each bar in a clipped scope. Vega's
   // SVG renderer keeps that group structure, so reproduce it here for rect
   // marks carrying per-item corner radii.
-  if (type === 'rect' && clipN
+  if (type === 'rect' && clips
     && (group.items ?? []).some((it) => hasRectCorner(it as SceneItem) && (it as unknown as { clip?: boolean }).clip === true)) {
-    return renderClippedRoundedRects(group, clipN)
+    return renderClippedRoundedRects(group, clips)
   }
 
-  // For mark groups, wrap in a clip'd outer <g> if needed
+  // For mark groups, wrap in a clip'd outer <g> if needed. A mark's clip is the
+  // size of the group that contains it (vega: `clip(renderer, scene, scene.group)`).
   const inner = switchMarkup(type, group)
 
-  if (needsClip && clipN) {
-    const clipId = ++clipN.current
-    clipN.paths.push(group.clipPathD ?? null)
-    return `<g clip-path="url(#clip${clipId})">${inner}</g>`
+  if (needsClip && clips) {
+    return `<g clip-path="url(#${clips.id(group.clipPathD ? { d: group.clipPathD } : { x: 0, y: 0, w: frameW!, h: frameH! })})">${inner}</g>`
   }
   return inner
 }
@@ -239,39 +266,18 @@ function dataDatumAttr(it: SceneItem): string {
   return v ? attrS('data-datum', v) : ''
 }
 
-/** Vega text `limit` truncation for bare guide leaves (width-getter path). */
-export function truncateLeaf(text: string, it: SceneItem, fontSize: number): string {
-  const limit = (it as Record<string, unknown>).limit as number | undefined
-  if (limit == null || !(limit > 0) || !text.length) return text
-  const estimateW = (str: string) => itemTextWidth(it, str)
-  if (estimateW(text) < limit) return text
-  const ellipsis = ((it as Record<string, unknown>).ellipsis as string | undefined) ?? '\u2026'
-  const lim = limit - estimateW(ellipsis)
-  let lo = 0
-  let hi = text.length
-  while (lo < hi) {
-    const mid = 1 + ((lo + hi) >>> 1)
-    if (estimateW(text.slice(0, mid)) < lim) lo = mid
-    else hi = mid - 1
-  }
-  return text.slice(0, lo) + ellipsis
-}
-
-function renderLeaf(it: SceneItem, clipN?: { current: number; paths: (string | null)[]; rects: ({ w: number; h: number } | null)[] }): string {
+function renderLeaf(it: SceneItem, clips?: ClipCollector): string {
   const dd = dataDatumAttr(it)
   // Path items
   if (it.path != null) {
-    // A clipped legend symbol (clipHeight): vega's SVGStringRenderer hangs
-    // the clip-path on the symbol's mark group and defs a rect over the
-    // containing entry's laid-out width/height.
-    let clipAttr = ''
-    const clip = (it as Record<string, unknown>)._clip as { w: number; h: number } | undefined
-    if (clip && clipN) {
-      const clipId = ++clipN.current
-      clipN.paths.push(null)
-      clipN.rects.push(clip)
-      clipAttr = ` clip-path="url(#clip${clipId})"`
-    }
+    // A clipped legend symbol (clipHeight): vega's SVGStringRenderer hangs the
+    // clip-path on the symbol's mark group (a `<g>` around the symbol, in the
+    // frame of the legend scope) and defs a rect over the containing entry's
+    // laid-out box. The clip must NOT sit on the translated `<path>` itself: a
+    // clip-path lives in the user space of the element it is on, including that
+    // element's own transform, which would shift the rect by the symbol position.
+    const clip = (it as Record<string, unknown>)._clip as { x?: number; y?: number; w: number; h: number } | undefined
+    const clipId = clip && clips ? clips.id({ x: clip.x ?? 0, y: clip.y ?? 0, w: clip.w, h: clip.h }) : null
     // Apply the item's x/y as a translate so legend/entry paths (whose `d`
     // starts at M0,0) land at their intended position, matching vega's
     // nested-scope transforms. Items with x=y=0 emit no transform.
@@ -280,45 +286,18 @@ function renderLeaf(it: SceneItem, clipN?: { current: number; paths: (string | n
     const angleP = (it as Record<string, unknown>).angle as number | undefined
     const rot = angleP ? ` rotate(${num(angleP)})` : ''
     const transform = (tx !== '0' || ty !== '0' || rot) ? ` transform="translate(${tx},${ty})${rot}"` : ''
-    return `<path${transform}${dd}${clipAttr} d="${escAttr(it.path)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-linejoin', (it as Record<string, unknown>).strokeJoin as string | undefined)}${attr('opacity', it.opacity)}/>`
+    const pathEl = `<path${transform}${dd} d="${escAttr(it.path)}"${paintStr(it)}/>`
+    return clipId ? `<g clip-path="url(#${clipId})">${pathEl}</g>` : pathEl
   }
   // Symbol items (shape path; 'circle' renders the arc form)
   if (it.shape != null && it.radius != null) {
     const d = symbolPath(it.shape as string, it.radius as number)
-    const angleS = (it as Record<string, unknown>).angle as number | undefined
-    const t = `transform="translate(${num(it.x || 0)},${num(it.y || 0)})${angleS ? ` rotate(${num(angleS)})` : ''}"`
-    return `<path ${t}${dd} d="${genD(d)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-linejoin', (it as Record<string, unknown>).strokeJoin as string | undefined)}${attr('opacity', it.opacity)}/>`
+    return `<path transform="${genD(rotateItemTransform(it))}"${dd} d="${genD(d)}"${paintStr(it)}/>`
   }
-  if (it.text != null) {
-    const fontSize = (it as Record<string, unknown>).fontSize as number | undefined
-    const fam = (it as Record<string, unknown>).font as string | undefined
-    // Vega's renderer shifts text down by the baseline offset (util/text.js
-    // `offset`); guide builders emit vega's raw item y, so the bake happens
-    // here, exactly where vega applies it. Rotated text keeps the offset in
-    // the rotate frame (vega emits `translate(x,y) rotate(a) translate(0,off)`
-    // — the item y stays raw), so no bake when an angle is present.
-    const baseline = it.baseline as string | undefined
-    const angle = (it as Record<string, unknown>).angle as number | undefined
-    const bOff = baseline && baseline !== 'alphabetic' && !(angle != null && angle !== 0)
-      ? baselineOffset(it)
-      : 0
-    // vega's text attr anchors through anchorPoint's `item.x || 0` coercion —
-    // a NaN position renders at the origin before the baseline offset is added
-    const y = num((it.y || 0) + bOff)
-    const raw = String(it.text)
-    const text = truncateLeaf(raw, it, fontSize ?? 11)
-    const fontWeight = (it as Record<string, unknown>).fontWeight as string | number | undefined
-    // Angled text: vega emits transform="translate(x,y) rotate(a)" with the
-    // baseline offset as a dy in the rotated frame (no x/y attrs).
-    if (angle != null && angle !== 0) {
-      const dy = baseline && baseline !== 'alphabetic' ? baselineOffset(it) : 0
-      return `<text transform="translate(${num(it.x || 0)},${num(it.y || 0)}) rotate(${num(angle)})"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('font-weight', fontWeight)}${dy ? ` dy="${num(dy)}"` : ''}${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}>${escText(text)}</text>`
-    }
-    return `<text x="${num(it.x || 0)}" y="${escAttr(y)}"${attr('text-anchor', it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle')}${fontSize != null ? ` font-size="${num(fontSize)}px"` : ''}${attr('font-weight', fontWeight)}${attr('font-family', fam)}${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}>${escText(text)}</text>`
-  }
+  if (it.text != null) return textElement(it)
   const x2 = it.x2 ?? it.x ?? 0
   const y2 = it.y2 ?? it.y ?? 0
-  return `<line x1="${num(it.x || 0)}" y1="${num(it.y || 0)}" x2="${num(x2)}" y2="${num(y2)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-opacity', it.strokeOpacity)}${attr('opacity', it.opacity)}/>`
+  return `<line x1="${num(it.x || 0)}" y1="${num(it.y || 0)}" x2="${num(x2)}" y2="${num(y2)}"${paintStr(it)}/>`
 }
 
 function itemsOf(group: SceneGroup): SceneItem[] {
@@ -330,8 +309,7 @@ function renderLine(group: SceneGroup): string {
   let out = `<g class="mark-line role-mark" role="graphics-symbol" aria-roledescription="line mark container">`
   const pathInfo = computeLinePath(group)
   if (pathInfo) {
-    const { path, stroke, sw, strokeDash, opacity, fillOpacity, fill } = pathInfo
-    out += `<path d="${genD(path)}"${attr('fill', fill)}${stroke ? attrS('stroke', stroke) : ''}${sw != null ? ` stroke-width="${num(sw)}"` : ''}${attr('stroke-dasharray', strokeDash)}${attr('fill-opacity', fillOpacity)}${opacity != null ? ` opacity="${num(opacity)}"` : ''}/>`
+    out += `<path d="${genD(pathInfo.path)}"${pathInfo.paint.map(([k, v]) => attr(k, v)).join('')}/>`
   }
   out += '</g>'
   return out
@@ -346,6 +324,8 @@ export function computeLinePath(group: SceneGroup): {
   opacity?: number
   fillOpacity?: number
   fill?: string
+  /** Every paint attribute of the first item (vega styles a line from `items[0]`). */
+  paint: Array<[string, unknown]>
 } | null {
   const items = itemsOf(group)
   if (!items.length) return null
@@ -450,6 +430,7 @@ export function computeLinePath(group: SceneGroup): {
     opacity,
     fillOpacity,
     fill: (items[0] as Record<string, unknown> | undefined)?.fill as string | undefined,
+    paint: paintAttrs(items[0]!, sw != null ? { strokeWidth: sw } : undefined),
   }
 }
 
@@ -463,6 +444,8 @@ export function computeAreaPath(group: SceneGroup): {
   strokeOpacity?: number
   opacity?: number
   strokeDash?: string
+  /** Every paint attribute of the first item (vega styles an area from `items[0]`). */
+  paint: Array<[string, unknown]>
 } | null {
   const items = itemsOf(group)
 
@@ -633,6 +616,7 @@ export function computeAreaPath(group: SceneGroup): {
     strokeOpacity: items[0]?.strokeOpacity as number | undefined,
     opacity: items[0]?.opacity as number | undefined,
     strokeDash: items[0]?.strokeDash as string | undefined,
+    paint: paintAttrs(items[0]!),
   }
 }
 
@@ -640,8 +624,7 @@ function renderArea(group: SceneGroup): string {
   const info = computeAreaPath(group)
   let out = `<g class="mark-area role-mark" role="graphics-symbol" aria-roledescription="area mark container">`
   if (info) {
-    const { path, fill, fillOpacity, stroke, strokeWidth, strokeOpacity, opacity, strokeDash } = info
-    out += `<path d="${genD(path)}"${fill ? attrS('fill', fill) : ''}${fillOpacity != null ? ` fill-opacity="${num(fillOpacity)}"` : ''}${attr('stroke', stroke)}${attr('stroke-width', strokeWidth)}${attr('stroke-dasharray', strokeDash)}${attr('stroke-opacity', strokeOpacity)}${attr('opacity', opacity)}/>`
+    out += `<path d="${genD(info.path)}"${info.paint.map(([k, v]) => attr(k, v)).join('')}/>`
   }
   out += '</g>'
   return out
@@ -650,10 +633,13 @@ function renderArea(group: SceneGroup): string {
 /** Generate an SVG path d attribute for a given symbol shape and radius. */
 export const symbolPath = symbolPathImpl as (shape: string | undefined, r: number) => GeneratedPath
 
+const HALF_SQRT3 = Math.sqrt(3) / 2 // vega util/constants HalfSqrt3
+
 function symbolPathImpl(shape: string | undefined, r: number): string {
   // vega symbols serialize through d3-path Path(3) — coordinates round to 3.
   const num = num3
-  switch (shape) {
+  // vega: `symbols(item.shape || 'circle')`
+  switch (shape || 'circle') {
     case 'square':
       return `M${num(-r)},${num(-r)}h${num(2 * r)}v${num(2 * r)}h${num(-2 * r)}Z`
     case 'cross': {
@@ -677,19 +663,19 @@ function symbolPathImpl(shape: string | undefined, r: number): string {
     case 'diamond':
       return `M${num(-r)},0L0,${num(-r)}L${num(r)},0L0,${num(r)}Z`
     case 'triangle-up': {
-      const h = r * 0.866
+      const h = r * HALF_SQRT3
       return `M0,${num(-h)}L${num(-r)},${num(h)}L${num(r)},${num(h)}Z`
     }
     case 'triangle-down': {
-      const h = r * 0.866
+      const h = r * HALF_SQRT3
       return `M0,${num(h)}L${num(-r)},${num(-h)}L${num(r)},${num(-h)}Z`
     }
     case 'triangle-right': {
-      const h = r * 0.866
+      const h = r * HALF_SQRT3
       return `M${num(h)},0L${num(-h)},${num(-r)}L${num(-h)},${num(r)}Z`
     }
     case 'triangle-left': {
-      const h = r * 0.866
+      const h = r * HALF_SQRT3
       return `M${num(-h)},0L${num(h)},${num(-r)}L${num(h)},${num(r)}Z`
     }
     case 'stroke':
@@ -720,13 +706,29 @@ function symbolPathImpl(shape: string | undefined, r: number): string {
       const o = h - r * (Math.sqrt(3) / 3)
       return `M0,${num(-h - o)}L${num(-r)},${num(h - o)}L${num(r)},${num(h - o)}Z`
     }
-    default:
+    case 'circle':
       // d3-symbol's circle through a canvas arc: the arcs only render for a
       // truthy radius, so with r=0 the path degenerates to its moveTo
       // ('M0,0') and with r=NaN to 'MNaN,0' — matching vega's renderer.
       return r > 0
         ? `M${num(r)},0A${num(r)},${num(r)},0,1,1,${num(-r)},0A${num(r)},${num(r)},0,1,1,${num(r)},0`
         : r === 0 ? 'M0,0' : `M${num(r)},0`
+    default:
+      // vega `symbols(name)`: any other name is a custom SVG path, parsed and
+      // scaled by sqrt(size)/2 (svg-path.ts); the result is built from numbers
+      // and command letters only, so no input text reaches the document.
+      //
+      // DELIBERATE DEVIATION from vega, which throws "Invalid SVG path" for a
+      // name that is neither built in nor a parseable path: such a shape is drawn
+      // as the default circle instead. @aster/vl currently emits the invalid
+      // `shape: "point"` for every Vega-Lite point mark (audit C71, fixed in the
+      // compiler PR); refusing it here would break every point chart compiled
+      // by it. Remove this fallback once that lands and let the error propagate.
+      try {
+        return customSymbolPathData(shape!, r, num3)
+      } catch {
+        return symbolPathImpl('circle', r)
+      }
   }
 }
 
@@ -735,7 +737,7 @@ function renderSymbols(group: SceneGroup): string {
   for (const it of itemsOf(group)) {
     // A null position (a geopoint the projection refused) renders at the
     // origin: vega emits `translate(null,null)`, which SVG treats as (0,0).
-    const size = (it.size as number) ?? 30
+    const size = (it.size as number) ?? SYMBOL_DEFAULT_SIZE
     const r = Math.sqrt(size) / 2
     const shape = (it as Record<string, unknown>).shape as string | undefined
     const d = symbolPath(shape, r)
@@ -744,11 +746,9 @@ function renderSymbols(group: SceneGroup): string {
     // into the item at mark-build time; a raw vega symbol mark with a stroke but
     // no style carries no default width.
     // Only output fill if it's explicitly set to a non-default value (transparent is SVG default for paths)
-    const fillAttr = it.fill != null && it.fill !== 'transparent' ? attrS('fill', it.fill) : ''
     // vega's symbol attr emits rotateItem(item) — full-precision numbers plus
     // the mark's rotation.
-    const angleS = (it as Record<string, unknown>).angle as number | undefined
-    out += `<path${dataDatumAttr(it)} transform="translate(${num(it.x || 0)},${num(it.y || 0)})${angleS ? ` rotate(${num(angleS)})` : ''}" d="${genD(d)}"${fillAttr}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-linejoin', (it as Record<string, unknown>).strokeJoin as string | undefined)}${attr('opacity', it.opacity)}/>`
+    out += `<path${dataDatumAttr(it)} transform="${genD(rotateItemTransform(it))}" d="${genD(d)}"${paintStr(it)}/>`
   }
   out += '</g>'
   return out
@@ -761,8 +761,8 @@ function renderCircles(group: SceneGroup): string {
     if (it.x == null || it.y == null) continue
     const r = it.radius != null
       ? it.radius
-      : Math.sqrt((it.size as number) ?? 30) / 2
-    out += `<circle${dataDatumAttr(it)} cx="${num(it.x)}" cy="${num(it.y)}" r="${num(r)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('opacity', it.opacity)}/>`
+      : Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
+    out += `<circle${dataDatumAttr(it)} cx="${num(it.x)}" cy="${num(it.y)}" r="${num(r)}"${paintStr(it)}/>`
   }
   out += '</g>'
   return out
@@ -789,28 +789,27 @@ function rectGeometry(it: SceneItem): { x: number; y: number; w: number; h: numb
 /** vega-scenegraph's clipped rounded-rect scopes for bar corner radii. */
 function renderClippedRoundedRects(
   group: SceneGroup,
-  clipN: { current: number; paths: (string | null)[]; rects: ({ w: number; h: number } | null)[] },
+  clips: ClipCollector,
 ): string {
   let out = ''
-  for (const it of itemsOf(group).slice().reverse()) {
+  for (const it of itemsOf(group)) {
     if (it.fill == null && it.stroke == null) continue
     const g = rectGeometry(it)
     if (!g) continue
     if (!hasRectCorner(it) || (it as unknown as { clip?: boolean }).clip !== true) {
       const d = rectItemPath(it)
-      if (d != null) out += `<path d="${genD(d)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
+      if (d != null) out += `<path d="${genD(d)}"${paintStr(it)}/>`
       continue
     }
     const round = rectItemPath({ ...it, x: 0, y: 0, width: g.w, height: g.h } as SceneItem)
     if (round == null) continue
-    const clipId = ++clipN.current
-    clipN.paths.push(round)
+    const clipId = clips.id({ d: round })
     const plain = gen(`M0,${num(g.y)}h${num(g.w)}v${num(g.h)}h${num(-g.w)}Z`)
     out += `<g transform="translate(${num(g.x)},${num(g.y)})">`
     out += `<path class="background" aria-hidden="true" d="${genD(round)}"/>`
-    out += `<g clip-path="url(#clip${clipId})"><g class="mark-group role-scope" role="graphics-object" aria-roledescription="group mark container"><g transform="translate(0,${num(-g.y)})">`
+    out += `<g clip-path="url(#${clipId})"><g class="mark-group role-scope" role="graphics-object" aria-roledescription="group mark container"><g transform="translate(0,${num(-g.y)})">`
     out += `<path class="background" aria-hidden="true" d="M0,0h${num(g.w)}v0h-${num(g.w)}Z"/>`
-    out += `<g><g class="mark-rect role-mark marks" role="graphics-object" aria-roledescription="rect mark container"><path${dataDatumAttr(it)} d="${genD(plain)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/></g></g>`
+    out += `<g><g class="mark-rect role-mark marks" role="graphics-object" aria-roledescription="rect mark container"><path${dataDatumAttr(it)} d="${genD(plain)}"${paintStr(it)}/></g></g>`
     out += `<path class="foreground" aria-hidden="true" d="" display="none"/></g></g></g>`
     out += `<path class="foreground" aria-hidden="true" d="" display="none"/></g>`
   }
@@ -819,13 +818,13 @@ function renderClippedRoundedRects(
 
 function renderRects(group: SceneGroup): string {
   let out = `<g class="mark-rect role-mark" role="graphics-symbol" aria-roledescription="rect mark container">`
-  for (const it of itemsOf(group).slice().reverse()) {
+  for (const it of itemsOf(group)) {
     // vega still emits an unpainted rect path (no fill/stroke attributes); only
     // explicitly-null paint marks (the selection brush frame) are skipped.
     if (it.fill === null && it.stroke === null) continue
     const d = rectItemPath(it)
     if (d == null) continue
-    out += `<path${dataDatumAttr(it)} d="${genD(d)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
+    out += `<path${dataDatumAttr(it)} d="${genD(d)}"${paintStr(it)}/>`
   }
   out += '</g>'
   return out
@@ -899,7 +898,7 @@ function renderRules(group: SceneGroup): string {
     const y = clean(it.y)
     const x2 = clean(it.x2, x)
     const y2 = clean(it.y2, y)
-    out += `<line x1="${num(x)}" y1="${num(y)}" x2="${num(x2)}" y2="${num(y2)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-opacity', it.strokeOpacity)}${attr('opacity', it.opacity)}/>`
+    out += `<line x1="${num(x)}" y1="${num(y)}" x2="${num(x2)}" y2="${num(y2)}"${paintStr(it)}/>`
   }
   out += '</g>'
   return out
@@ -907,28 +906,31 @@ function renderRules(group: SceneGroup): string {
 
 function renderTexts(group: SceneGroup): string {
   let out = `<g class="mark-text role-mark" role="graphics-symbol" aria-roledescription="text mark container">`
-  for (const it of itemsOf(group)) {
-    const d = textItemDesc(it)
-    if (d == null) continue
-    // Vega's SVG text renderer emits the first line as the text element's
-    // content and each following line as `<tspan x="0" dy="lineHeight">`
-    // (vega-scenegraph svg.js `textLines`).
-    // Single-line text renders as a plain text node (vega `m.text`); only
-    // genuinely multi-line items use tspans.
-    let inner = ''
-    if (d.lines.length === 1) {
-      inner = escText(d.text)
-    } else {
-      for (let i = 0; i < d.lines.length; i++) {
-        inner += i === 0
-          ? `<tspan>${escText(d.lines[i]!)}</tspan>`
-          : `<tspan x="0" dy="${num(d.lineHeight)}">${escText(d.lines[i]!)}</tspan>`
-      }
-    }
-    out += `<text x="${escAttr(d.x)}" y="${escAttr(d.y)}"${d.dyAttr}${d.attrs.map(([k, v]) => attr(k, v)).join('')}>${inner}</text>`
-  }
+  for (const it of itemsOf(group)) out += textElement(it)
   out += '</g>'
   return out
+}
+
+/**
+ * One `<text>` element, exactly vega-scenegraph's text markup: first line as
+ * the element content and each following line as `<tspan x="0" dy="lineHeight">`
+ * (svg.js `textLines`); a single line is a plain text node. Shared by mark text
+ * and guide labels so they cannot drift.
+ */
+function textElement(it: SceneItem): string {
+  const d = textItemDesc(it)
+  if (d == null) return ''
+  let inner = ''
+  if (d.lines.length === 1) {
+    inner = escText(d.text)
+  } else {
+    for (let i = 0; i < d.lines.length; i++) {
+      inner += i === 0
+        ? `<tspan>${escText(d.lines[i]!)}</tspan>`
+        : `<tspan x="0" dy="${num(d.lineHeight)}">${escText(d.lines[i]!)}</tspan>`
+    }
+  }
+  return `<text transform="${escAttr(d.transform)}"${d.attrs.map(([k, v]) => attr(k, v)).join('')}>${inner}</text>`
 }
 
 /** Split a text item into lines the way vega-scenegraph's `textLines` does. */
@@ -943,62 +945,75 @@ function textLinesOf(it: SceneItem): string[] {
   return [text.trim()]
 }
 
+/** vega-scenegraph `textAlign`: left/center/right -> start/middle/end; anything else is `start`. */
+export function svgTextAnchor(align: unknown): 'start' | 'middle' | 'end' {
+  return align === 'center' ? 'middle' : align === 'right' ? 'end' : 'start'
+}
+
 /**
- * Shared text-mark geometry for the string renderer and the DOM patcher.
- * Returns null for items with no text content. `x`/`y` are pre-formatted;
- * `attrs` is the ordered presentation-attribute list (fill, anchor, ...).
+ * Shared text geometry for the string renderer, the DOM patcher and the canvas
+ * painter, following vega-scenegraph's text mark (`marks/text.js` attr):
+ *
+ *   unrotated: transform = translate(x + dx, y + dy + baselineOffset)
+ *   rotated:   transform = translate(x, y) rotate(angle) [translate(dx, dy + baselineOffset)]
+ *
+ * plus text-anchor (`start` unless align is center/right) and the always-present
+ * font attributes (SVGStringRenderer `style()`: font-family defaults to
+ * sans-serif, font-size to 11px). Returns null for items with no text.
  */
 export function textItemDesc(it: SceneItem): {
-  x: string
-  y: string
-  dyAttr: string
+  /** SVG `transform` attribute value. */
+  transform: string
+  /** Ordered presentation attributes (text-anchor, font-*, paint). */
   attrs: Array<[string, unknown]>
   text: string
   /** Rendered lines after split/truncate; length > 1 means tspans follow. */
   lines: string[]
   lineHeight: number
+  /** Canvas placement: translate target, then the in-frame offset (after rotate). */
+  px: number
+  py: number
+  ox: number
+  oy: number
+  angle: number
 } | null {
   if (it.text == null) return null
-  // Vega's text renderer adds a baseline offset (rounded to whole px, vega
-  // util/text.js `offset`):
-  //   top → round(0.79 * fontSize), middle → round(0.30 * fontSize),
-  //   bottom → round(-0.21 * fontSize), default fontSize is 11.
-  const fontSize = (it as Record<string, unknown>).fontSize as number | undefined ?? 11
-  const fontWeight = (it as Record<string, unknown>).fontWeight as string | number | undefined
-  const baseline = it.baseline ?? 'alphabetic'
-  const baseX = it.x ?? 0
-  const baseY = it.y ?? 0
-  const angle = it.angle
-  // Apply dx/dy offsets from encode (data-driven positioning).
-  const dx = (it as Record<string, unknown>).dx as number | undefined ?? 0
-  const dy = (it as Record<string, unknown>).dy as number | undefined ?? 0
+  const rec = it as Record<string, unknown>
+  const fontSize = vegaFontSize(it)
+  const angle = +(it.angle as number) || 0
+  const dx = +(rec.dx as number) || 0
+  const dy = (+(rec.dy as number) || 0) + baselineOffset(it)
+  // vega anchorPoint: polar text offsets the anchor by (radius, theta - pi/2)
+  let x = +(it.x as number) || 0
+  let y = +(it.y as number) || 0
+  const radius = +(rec.radius as number) || 0
+  if (radius) {
+    const t = ((+(rec.theta as number) || 0)) - Math.PI / 2
+    x += radius * Math.cos(t)
+    y += radius * Math.sin(t)
+  }
   const lines = textLinesOf(it).map((l) => truncateToLimit(it, l, fontSize))
-  const lineHeight = (it as Record<string, unknown>).lineHeight as number | undefined ?? fontSize + 2
-  const text = lines[0]!
-  // When text is rotated, Vega renders with dy for baseline offset rather
-  // than baking it into y; for non-rotated text the offset goes into y.
-  const isRotated = angle != null && angle !== 0
-  // vega util/text.js `offset` — shared with the bounds port (bounds.ts).
-  const bsOffset = baseline && baseline !== 'alphabetic' ? baselineOffset(it as SceneItem) : 0
-  const x = num(baseX + dx)
-  const y = isRotated ? num(baseY + dy) : num(baseY + dy + bsOffset)
-  const textAnchor = it.align === 'right' ? 'end' : it.align === 'left' ? 'start' : 'middle'
-  const attrs: Array<[string, unknown]> = []
-  if (textAnchor != null) attrs.push(['text-anchor', textAnchor])
-  // Always emit the size/family: Vega's text style default is 11px sans-serif,
-  // but an omitted `font-size` in HTML/SVG means the browser default (16px).
-  attrs.push(['font-size', `${fontSize}px`])
-  attrs.push(['font-weight', fontWeight])
-  attrs.push(['font-family', ((it as Record<string, unknown>).font as string | undefined) ?? 'sans-serif'])
-  attrs.push(['fill', it.fill])
-  attrs.push(['fill-opacity', (it as Record<string, unknown>).fillOpacity])
-  attrs.push(['stroke', it.stroke])
-  attrs.push(['stroke-width', it.strokeWidth])
-  attrs.push(['stroke-dasharray', it.strokeDash])
-  attrs.push(['stroke-opacity', (it as Record<string, unknown>).strokeOpacity])
-  attrs.push(['opacity', it.opacity])
-  attrs.push(['angle', it.angle])
-  return { x, y, dyAttr: isRotated && bsOffset ? ` dy="${num(bsOffset)}"` : '', attrs, text, lines, lineHeight }
+  const lineHeight = rec.lineHeight != null ? (rec.lineHeight as number) : fontSize + 2
+  let transform: string
+  let px: number, py: number, ox: number, oy: number
+  if (angle) {
+    transform = `translate(${num(x)},${num(y)}) rotate(${num(angle)})`
+    if (dx || dy) transform += ` translate(${num(dx)},${num(dy)})`
+    px = x; py = y; ox = dx; oy = dy
+  } else {
+    transform = `translate(${num(x + dx)},${num(y + dy)})`
+    px = x + dx; py = y + dy; ox = 0; oy = 0
+  }
+  const attrs: Array<[string, unknown]> = [
+    ['text-anchor', svgTextAnchor(it.align)],
+    ['font-family', rec.font || 'sans-serif'],
+    ['font-size', `${num(fontSize)}px`],
+    ['font-style', rec.fontStyle],
+    ['font-variant', rec.fontVariant],
+    ['font-weight', rec.fontWeight],
+    ...paintAttrs(it),
+  ]
+  return { transform, attrs, text: lines[0]!, lines, lineHeight, px, py, ox, oy, angle }
 }
 
 /**
@@ -1027,17 +1042,8 @@ function renderPaths(group: SceneGroup): string {
   let out = `<g class="mark-path role-mark" role="graphics-symbol" aria-roledescription="path mark container">`
   for (const it of itemsOf(group)) {
     if (!it.path) continue
-    // Position the path at its item x/y (vega renders path marks with a
-    // translate transform; items whose path already encodes absolute
-    // coordinates (e.g. geoshape output) have x=y=0 and emit no transform).
-    // vega's transformItem appends scale(sx,sy) when the item carries it.
-    const tx = num(it.x || 0)
-    const ty = num(it.y || 0)
-    const sxp = (it as Record<string, unknown>).scaleX as number | undefined
-    const syp = (it as Record<string, unknown>).scaleY as number | undefined
-    const scaleT = (sxp != null && sxp !== 1) || (syp != null && syp !== 1) ? ` scale(${num(sxp ?? 1)},${num(syp ?? 1)})` : ''
-    const transform = (tx !== '0' || ty !== '0' || scaleT) ? ` transform="translate(${tx},${ty})${scaleT}"` : ''
-    out += `<path${transform} d="${escAttr(it.path)}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('opacity', it.opacity)}/>`
+    // vega path mark attr: [vector-effect] transform(translate rotate scale) d
+    out += `<path${pathVectorEffect(it) ? ' vector-effect="non-scaling-stroke"' : ''} transform="${genD(transformItemTransform(it))}" d="${escAttr(it.path)}"${paintStr(it)}/>`
   }
   out += '</g>'
   return out
@@ -1058,7 +1064,7 @@ function renderTrail(group: SceneGroup): string {
     if (d) {
       const first = items[0]!
       // vega's trail path carries the full paint set from the first item.
-      out += `<path d="${genD(d)}"${attr('fill', first.fill)}${attr('fill-opacity', first.fillOpacity)}${attr('opacity', first.opacity)}${attr('stroke', first.stroke)}${attr('stroke-width', first.strokeWidth)}${attr('stroke-dasharray', first.strokeDash)}/>`
+      out += `<path d="${genD(d)}"${paintStr(first)}/>`
     }
   }
   out += '</g>'
@@ -1160,19 +1166,37 @@ function renderImages(group: SceneGroup): string {
   let out = `<g class="mark-image role-mark" role="graphics-symbol" aria-roledescription="image mark container">`
   for (const it of itemsOf(group)) {
     if (it.url == null || it.x == null || it.y == null) continue
-    const w = it.width ?? 0
-    const h = it.height ?? 0
-    out += `<image${attrS('xlink:href', it.url)} transform="translate(${num(it.x)},${num(it.y)})" width="${num(w)}" height="${num(h)}" preserveAspectRatio="${escAttr(it.aspect === false ? 'none' : 'xMidYMid')}"/>`
+    const d = imageDesc(it)
+    out += `<image${attrS('xlink:href', it.url)} transform="translate(${num(d.x)},${num(d.y)})" width="${num(d.w)}" height="${num(d.h)}" preserveAspectRatio="${escAttr(it.aspect === false ? 'none' : 'xMidYMid')}"${paintStr(it, d.smooth ? undefined : IMAGE_PIXELATED)}/>`
   }
   out += '</g>'
   return out
 }
 
+/**
+ * vega image mark geometry (marks/image.js): the box is offset by the item's
+ * align (center/right) and baseline (middle/bottom); an absent width/height is
+ * 0 (the loaded bitmap's natural size is not known here).
+ */
+const IMAGE_PIXELATED = ['image-rendering: optimizeSpeed;', 'image-rendering: pixelated;'] as const
+
+export function imageDesc(it: SceneItem): { x: number; y: number; w: number; h: number; smooth: boolean } {
+  const w = it.width ?? 0
+  const h = it.height ?? 0
+  const align = it.align
+  const baseline = it.baseline
+  return {
+    x: (it.x || 0) - (align === 'center' ? w / 2 : align === 'right' ? w : 0),
+    y: (it.y || 0) - (baseline === 'middle' ? h / 2 : baseline === 'bottom' ? h : 0),
+    w,
+    h,
+    smooth: (it as Record<string, unknown>).smooth !== false,
+  }
+}
+
 function renderArcs(group: SceneGroup): string {
   let out = `<g class="mark-arc role-mark">`
   for (const it of itemsOf(group)) {
-    const x = it.x as number
-    const y = it.y as number
     const r = (it.outerRadius as number) ?? (it.radius as number) ?? 0
     const r0 = (it.innerRadius as number) ?? 0
     const a0 = (it.startAngle as number) ?? 0
@@ -1184,7 +1208,7 @@ function renderArcs(group: SceneGroup): string {
     // without a stroke, opacity, dash arrays).
     const cr = (it as Record<string, unknown>).cornerRadius as number | undefined ?? 0
     const pa = (it as Record<string, unknown>).padAngle as number | undefined ?? 0
-    out += `<path transform="translate(${num(x)},${num(y)})" d="${genD(arcPath(0, 0, r, r0, a0, a1, cr, pa))}"${attr('fill', it.fill)}${attr('fill-opacity', it.fillOpacity)}${attr('opacity', it.opacity)}${attr('stroke', it.stroke)}${attr('stroke-width', it.strokeWidth)}${attr('stroke-dasharray', it.strokeDash)}${attr('stroke-linecap', (it as Record<string, unknown>).strokeCap as string | undefined)}${attr('stroke-linejoin', (it as Record<string, unknown>).strokeJoin as string | undefined)}/>`
+    out += `<path transform="${genD(rotateItemTransform(it))}" d="${genD(arcPath(0, 0, r, r0, a0, a1, cr, pa))}"${paintStr(it)}/>`
   }
   out += '</g>'
   return out
@@ -1273,6 +1297,25 @@ export const arcPath = arcPathImpl as (cx: number, cy: number, rIn: number, r0In
 
 function arcPathImpl(cx: number, cy: number, rIn: number, r0In: number, a0in: number, a1in: number, cornerRadius = 0, padAngle = 0): string {
   const ctx = new PathEmitter()
+  arcInto(ctx, cx, cy, rIn, r0In, a0in, a1in, cornerRadius, padAngle)
+  return ctx.toString()
+}
+
+/** The drawing surface the d3-arc port targets: a d3-path or a canvas 2D context. */
+export interface ArcSink {
+  moveTo(x: number, y: number): void
+  lineTo(x: number, y: number): void
+  arc(x: number, y: number, r: number, a0: number, a1: number, ccw?: boolean): void
+  closePath(): void
+}
+
+/**
+ * d3-arc into any sink. The SVG path and the canvas painter share this one
+ * port: the canvas draws the exact arcs (like vega's canvas, which hands d3-arc
+ * the real context) instead of re-deriving circle centres from a path string
+ * rounded to 3 decimals, which is ill-conditioned for near-semicircular arcs.
+ */
+export function arcInto(ctx: ArcSink, cx: number, cy: number, rIn: number, r0In: number, a0in: number, a1in: number, cornerRadius = 0, padAngle = 0): void {
   let r0 = r0In
   let r1 = rIn
   let a0 = a0in - Math.PI / 2
@@ -1284,7 +1327,7 @@ function arcPathImpl(cx: number, cy: number, rIn: number, r0In: number, a0in: nu
     // point
     ctx.moveTo(0, 0)
     ctx.closePath()
-    return (ctx as unknown as { toString(): string }).toString()
+    return
   }
   if (da0abs > 2 * Math.PI - ARC_EPSILON) {
     // circle or annulus
@@ -1295,7 +1338,7 @@ function arcPathImpl(cx: number, cy: number, rIn: number, r0In: number, a0in: nu
       ctx.arc(0, 0, r0, a1, a0, cw)
     }
     ctx.closePath()
-    return (ctx as unknown as { toString(): string }).toString()
+    return
   }
   let a01 = a0
   let a11 = a1
@@ -1377,7 +1420,6 @@ function arcPathImpl(cx: number, cy: number, rIn: number, r0In: number, a0in: nu
   }
   ctx.closePath()
   void cx; void cy
-  return (ctx as unknown as { toString(): string }).toString()
 }
 
 function intersectArc(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number): [number, number] | undefined {
@@ -1440,6 +1482,113 @@ const escText = (s: string): string => (needsEscape(s, false) ? escapeXml(s, fal
 function escAttr(value: unknown): string {
   const s = String(value)
   return needsEscape(s, true) ? escapeXml(s, true) : s
+}
+
+/**
+ * vega-scenegraph's `stylesAttr` (util/svg/styles.js): the item property ->
+ * presentation attribute list that EVERY mark's SVG output goes through
+ * (SVGStringRenderer `style()`), in vega's order: fill, fillOpacity,
+ * stroke, strokeOpacity, strokeWidth, strokeCap (stroke-linecap), strokeJoin
+ * (stroke-linejoin), strokeDash (stroke-dasharray), strokeDashOffset,
+ * strokeMiterLimit, opacity, then the blend style. `paintAttrs` (pairs, for the
+ * DOM descriptors and the line/area helpers) and `paintStr` (markup) read the
+ * same properties in the same order, so a paint property can no longer be
+ * dropped by one mark kind only (C38/C48).
+ */
+
+/**
+ * vega-scenegraph util/svg/transform.js: `rotateItem` = translate(x||0, y||0)
+ * [rotate(angle)]; `transformItem` adds scale(scaleX||1, scaleY||1) when either
+ * scale is truthy. Every mark kind uses the one of these its vega mark uses.
+ */
+export function rotateItemTransform(it: SceneItem): GeneratedPath {
+  const a = it.angle
+  // numbers (through `num`) and constant words only: safe to write without the escaping scan
+  return gen(`translate(${num(it.x || 0)},${num(it.y || 0)})${a ? ` rotate(${num(a)})` : ''}`)
+}
+export function transformItemTransform(it: SceneItem): GeneratedPath {
+  const rec = it as Record<string, unknown>
+  return gen(rotateItemTransform(it) + (rec.scaleX || rec.scaleY ? ` scale(${num((rec.scaleX as number) || 1)},${num((rec.scaleY as number) || 1)})` : ''))
+}
+/** vega path mark: a non-unit scale keeps the stroke width (`vector-effect`). */
+export function pathVectorEffect(it: SceneItem): boolean {
+  const rec = it as Record<string, unknown>
+  return ((rec.scaleX as number) || 1) !== 1 || ((rec.scaleY as number) || 1) !== 1
+}
+
+/**
+ * Ordered `[attribute, value]` paint pairs of an item (nullish values omitted by
+ * the writers). The reads are written out one by one on purpose: a loop over the
+ * table reads `item[prop]` with a computed key, a megamorphic load that cost the
+ * string renderer ~2x at 10k symbols; named reads stay monomorphic.
+ */
+export function paintAttrs(it: SceneItem, overrides?: Record<string, unknown>, styles?: readonly string[]): Array<[string, unknown]> {
+  const out: Array<[string, unknown]> = []
+  let v: unknown
+  v = overrides && 'fill' in overrides ? overrides.fill : it.fill
+  if (v != null) out.push(['fill', v])
+  v = overrides && 'fillOpacity' in overrides ? overrides.fillOpacity : it.fillOpacity
+  if (v != null) out.push(['fill-opacity', v])
+  v = overrides && 'stroke' in overrides ? overrides.stroke : it.stroke
+  if (v != null) out.push(['stroke', v])
+  v = overrides && 'strokeOpacity' in overrides ? overrides.strokeOpacity : it.strokeOpacity
+  if (v != null) out.push(['stroke-opacity', v])
+  v = overrides && 'strokeWidth' in overrides ? overrides.strokeWidth : it.strokeWidth
+  if (v != null) out.push(['stroke-width', v])
+  v = overrides && 'strokeCap' in overrides ? overrides.strokeCap : it.strokeCap
+  if (v != null) out.push(['stroke-linecap', v])
+  v = overrides && 'strokeJoin' in overrides ? overrides.strokeJoin : it.strokeJoin
+  if (v != null) out.push(['stroke-linejoin', v])
+  v = overrides && 'strokeDash' in overrides ? overrides.strokeDash : it.strokeDash
+  if (v != null) out.push(['stroke-dasharray', v])
+  v = overrides && 'strokeDashOffset' in overrides ? overrides.strokeDashOffset : it.strokeDashOffset
+  if (v != null) out.push(['stroke-dashoffset', v])
+  v = overrides && 'strokeMiterLimit' in overrides ? overrides.strokeMiterLimit : it.strokeMiterLimit
+  if (v != null) out.push(['stroke-miterlimit', v])
+  v = overrides && 'opacity' in overrides ? overrides.opacity : it.opacity
+  if (v != null) out.push(['opacity', v])
+  // vega: stylesCss.blend -> style="mix-blend-mode: <blend>;" (after any mark styles)
+  const style = markStyle(it.blend, styles)
+  if (style) out.push(['style', style])
+  return out
+}
+
+function markStyle(blend: unknown, styles?: readonly string[]): string {
+  if (styles === undefined) return blend != null ? `mix-blend-mode: ${String(blend)};` : ''
+  return styles.join(' ') + (blend != null ? ` mix-blend-mode: ${String(blend)};` : '')
+}
+
+/** True when two items paint identically (every table property, and blend). */
+export function samePaint(a: SceneItem, b: SceneItem): boolean {
+  return same(a.fill, b.fill) && same(a.fillOpacity, b.fillOpacity) && same(a.stroke, b.stroke)
+    && same(a.strokeOpacity, b.strokeOpacity) && same(a.strokeWidth, b.strokeWidth) && same(a.strokeCap, b.strokeCap)
+    && same(a.strokeJoin, b.strokeJoin) && same(a.strokeDash, b.strokeDash) && same(a.strokeDashOffset, b.strokeDashOffset)
+    && same(a.strokeMiterLimit, b.strokeMiterLimit) && same(a.opacity, b.opacity) && a.blend === b.blend
+}
+
+function same(x: unknown, y: unknown): boolean {
+  if (x === y) return true
+  return Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((v, i) => v === y[i])
+}
+
+/** String-renderer form of {@link paintAttrs} (same reads, straight to markup). */
+function paintStr(it: SceneItem, styles?: readonly string[]): string {
+  let out = ''
+  let v: unknown
+  if ((v = it.fill) != null) out += attr('fill', v)
+  if ((v = it.fillOpacity) != null) out += attr('fill-opacity', v)
+  if ((v = it.stroke) != null) out += attr('stroke', v)
+  if ((v = it.strokeOpacity) != null) out += attr('stroke-opacity', v)
+  if ((v = it.strokeWidth) != null) out += attr('stroke-width', v)
+  if ((v = it.strokeCap) != null) out += attr('stroke-linecap', v)
+  if ((v = it.strokeJoin) != null) out += attr('stroke-linejoin', v)
+  if ((v = it.strokeDash) != null) out += attr('stroke-dasharray', v)
+  if ((v = it.strokeDashOffset) != null) out += attr('stroke-dashoffset', v)
+  if ((v = it.strokeMiterLimit) != null) out += attr('stroke-miterlimit', v)
+  if ((v = it.opacity) != null) out += attr('opacity', v)
+  const style = markStyle(it.blend, styles)
+  if (style) out += attrS('style', style)
+  return out
 }
 
 /** ` name="value"` for any non-nullish value, escaped. */

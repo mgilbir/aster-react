@@ -109,6 +109,9 @@ function resolveRawDomain(raw: unknown, ctx: ScaleContext): unknown[] | null {
   return null
 }
 
+/** Continuous types vega turns into `sequential-<type>` when given a colour scheme (excludes time/utc). */
+const SEQUENTIAL_BASES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog'])
+
 export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
   const type = c.type
   const raw = ctx.domainRaw ?? c.domainRaw
@@ -203,6 +206,18 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
     const schemeExtent = typeof ref === 'string' ? undefined : ref.__asterExtent
     const schemeFn = vs.scheme(schemeName)
     if (typeof schemeFn === 'function') {
+      // vega-encode scaleKey: a continuous scale with an interpolating colour
+      // scheme and a two-value domain IS a `sequential-<type>` scale (a
+      // three-value one a diverging scale, handled above). Evaluating it as a
+      // plain linear scale with a colour interpolator maps values with a
+      // different float evaluation order, shifting colours by one unit.
+      if (!diverging && SEQUENTIAL_BASES.has(type) && (s.domain() as unknown[]).length === 2) {
+        const seq = vs.scale(`sequential-${type}`)?.()
+        if (seq) {
+          seq.domain(s.domain())
+          s = seq
+        }
+      }
       s.range([0, 1])
       const cs = s as ColorScale
       // vega configureScheme/adjustScheme: the interpolator samples the
@@ -224,7 +239,7 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
       const expectedLast = c.domainMax != null && !Array.isArray(c.domainMax) ? c.domainMax : domNow[domNow.length - 1]
       const descending = domNow.length > 1
         && Number(expectedLast) < Number(expectedFirst)
-      const flip = descending && type !== 'sequential'
+      const flip = descending && type !== 'sequential' && !String((s as { type?: string }).type).startsWith('sequential')
       const a = flip ? baseB : baseA
       const b = flip ? baseA : baseB
       const effectiveSchemeFn: SchemeFn = ((t: number) => (schemeFn as (t: number) => unknown)(a + t * (b - a)) as unknown) as SchemeFn

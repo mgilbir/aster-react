@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeAll } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { compileChart, evaluateChart, renderSceneToSvg, renderSpec } from './index.js'
@@ -38,6 +38,9 @@ const BENIGN_KIND = {
   dash: [4, 2],
   path: 'M0,0L10,10',
   url: 'a.png',
+  // a symbol `shape` is a name or a custom SVG path (vega symbols()): it has its own
+  // kind because a valid path is re-serialized (scaled by the radius), see below
+  shape: 'circle',
 } as const
 
 type Kind = keyof typeof BENIGN_KIND
@@ -52,7 +55,7 @@ const CHANNELS: Record<string, Kind> = {
   tension: 'num',
   fill: 'color', stroke: 'color',
   strokeDash: 'dash',
-  shape: 'str', baseline: 'str', align: 'str', interpolate: 'str', orient: 'str', strokeJoin: 'str',
+  shape: 'shape', baseline: 'str', align: 'str', interpolate: 'str', orient: 'str', strokeJoin: 'str',
   strokeCap: 'str', font: 'str', fontWeight: 'str', text: 'str', role: 'str', dataDatum: 'str', ellipsis: 'str',
   lineBreak: 'str', aspect: 'str',
   path: 'path', clipPathD: 'path',
@@ -208,6 +211,20 @@ describe('C2: SVG string renderer escapes every attribute and text value', () =>
     })
   }
 
+  it('a symbol shape is a name or a custom SVG path: hostile text never reaches the document', () => {
+    const benign = skeletonOfSvg(renderSceneToSvg(withChannel('shape', BENIGN_KIND.shape)))
+    for (const h of HOSTILE) {
+      // an invalid path draws the default circle; one that parses is re-serialized
+      // from numbers, never copied
+      const svg = renderSceneToSvg(withChannel('shape', h))
+      expect(describeDiff(skeletonOfSvg(svg), benign), JSON.stringify(h)).toBeNull()
+      expect(svg, JSON.stringify(h)).not.toMatch(/onerror|onload|onclick|onmouseover|<script|<img/)
+    }
+    // a custom path that parses is drawn, scaled by the symbol radius
+    const ok = renderSceneToSvg(withChannel('shape', 'M-1,-1L1,1z'))
+    expect(ok).toMatch(/d="M-\d/)
+  })
+
   const allChannels = (valueFor: (kind: Kind) => unknown): SceneRoot => {
     const scene = baseScene()
     for (const [channel, kind] of Object.entries(CHANNELS)) {
@@ -281,24 +298,33 @@ describe('C2: SVG string renderer escapes every attribute and text value', () =>
     }
   })
 
-  it('DOM paths (fresh build and in-place patch) agree on structure for hostile scenes', () => {
-    ATTR_UNIVERSE.clear()
-    for (const [channel, kind] of Object.entries(CHANNELS)) {
-      learn(skeletonOf(renderSceneToDomElement(withChannel(channel, BENIGN_KIND[kind]), document) as Element))
-    }
-    learn(skeletonOf(renderSceneToDomElement(baseScene(), document) as Element))
-    for (const [channel, kind] of Object.entries(CHANNELS)) {
-      const benignScene = withChannel(channel, BENIGN_KIND[kind])
-      const benignDom = renderSceneToDomElement(benignScene, document) as Element
-      const benignSk = skeletonOf(benignDom)
-      for (const h of HOSTILE.slice(0, 4)) {
-        const hostileScene = withChannel(channel, hostileFor(kind, h))
-        const fresh = renderSceneToDomElement(hostileScene, document) as Element
-        expect(describeDiff(skeletonOf(fresh), benignSk), `fresh ${channel}=${JSON.stringify(h)}`).toBeNull()
-        const patched = renderSceneToDomElement(benignScene, document) as Element
-        patchSceneDom(patched as unknown as SVGSVGElement, hostileScene)
-        expect(describeDiff(skeletonOf(patched), benignSk), `patched ${channel}=${JSON.stringify(h)}`).toBeNull()
+  // One test per channel (each keeps every hostile value, fresh build AND in-place patch): a
+  // single test over all channels took ~2 s alone and exceeded the 5 s default when the whole
+  // suite ran in parallel. Coverage is unchanged; each test is a fraction of the time.
+  describe('DOM paths (fresh build and in-place patch) agree on structure for hostile scenes', () => {
+    // relearn the attribute universe from DOM skeletons when this group starts (not at collection
+    // time: that would wipe what the string-renderer tests above are about to use)
+    beforeAll(() => {
+      ATTR_UNIVERSE.clear()
+      for (const [channel, kind] of Object.entries(CHANNELS)) {
+        learn(skeletonOf(renderSceneToDomElement(withChannel(channel, BENIGN_KIND[kind]), document) as Element))
       }
+      learn(skeletonOf(renderSceneToDomElement(baseScene(), document) as Element))
+    })
+    for (const [channel, kind] of Object.entries(CHANNELS)) {
+      it(`channel ${channel}`, () => {
+        const benignScene = withChannel(channel, BENIGN_KIND[kind])
+        const benignDom = renderSceneToDomElement(benignScene, document) as Element
+        const benignSk = skeletonOf(benignDom)
+        for (const h of HOSTILE.slice(0, 4)) {
+          const hostileScene = withChannel(channel, hostileFor(kind, h))
+          const fresh = renderSceneToDomElement(hostileScene, document) as Element
+          expect(describeDiff(skeletonOf(fresh), benignSk), `fresh ${channel}=${JSON.stringify(h)}`).toBeNull()
+          const patched = renderSceneToDomElement(benignScene, document) as Element
+          patchSceneDom(patched as unknown as SVGSVGElement, hostileScene)
+          expect(describeDiff(skeletonOf(patched), benignSk), `patched ${channel}=${JSON.stringify(h)}`).toBeNull()
+        }
+      })
     }
   })
 

@@ -33,10 +33,11 @@ import type {
   SortSpec,
   VgSpec,
 } from './types.js'
-import { tickFormat, scaleFraction, tickValues, tickCount, isContinuous, validTicks } from './scale.js'
+import { hash53 } from './svg-defs.js'
+import { tickFormat, scaleFraction, scaleGradientStops, tickValues, tickCount, isContinuous, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet } from './util.js'
+import { dict, ownGet, SYMBOL_DEFAULT_SIZE } from './util.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, type PulseChange } from './pulse.js'
 import { trellisLayout, measureBounds } from './trellis.js'
@@ -221,14 +222,16 @@ function paramFpOf(params: Record<string, unknown>): string {
 }
 
 /**
- * Global gradient id counter, mirroring vega-scenegraph's module-level
- * `gradient_id`. Vega assigns `gradient_<n>` from a process-global counter that
- * is never reset, so the ids a spec receives depend on how many gradient legends
- * earlier specs in the same process already rendered. Matching that counter here
- * keeps the emitted `url(#gradient_n)` references in lockstep with vega when
- * both renderers run in the same process (as the conformance harness does).
+ * Gradient def ids are CONTENT-ADDRESSED: `gradient_<hash of direction + stops>`.
+ * They used to come from a process-global counter that never reset (copying
+ * vega-scenegraph's `gradient_id`), so the same chart got different ids on every
+ * render (SSR/hydration mismatch, `<defs>` churn) and two charts on one page both
+ * emitted `gradient_0` for different gradients. A content hash is deterministic
+ * per render, and two charts can only share an id when the gradient is identical.
  */
-let gradientIdCounter = 0
+function gradientDefId(direction: 'horizontal' | 'vertical', stops: ReadonlyArray<{ offset: number; color: string }>): string {
+  return 'gradient_' + hash53(direction + JSON.stringify(stops))
+}
 
 /** Cached recursive bounds for unchanged top-level mark groups. */
 const GROUP_BOUNDS = new WeakMap<SceneGroup, Bounds>()
@@ -445,7 +448,7 @@ function prepareChartCtx(
     // A non-integer/negative `columns` makes vega's symbol-legend gridLayout
     // throw (Array(columns) with a length that is not a valid uint32-ish int).
     // Gradient legends do not lay entries out in a grid and ignore columns.
-    if (l.gradientLength == null && typeof l.columns === 'number'
+    if (l.own?.gradientLength == null && typeof l.columns === 'number'
       && (l.columns > 0 ? !Number.isInteger(l.columns) : l.columns !== 0)) return true
     return false
   })
@@ -690,6 +693,7 @@ function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { gro
         : group
       // Carry guide identity for the accessible tree (R10.6) without changing
       // the serialized SVG: the fields are scene metadata only.
+      if (axis.zindex) (wrapped as unknown as { zindex?: number }).zindex = axis.zindex
       ;(wrapped as unknown as { orient?: string; scale?: string; title?: string }).orient = axis.orient
       ;(wrapped as unknown as { orient?: string; scale?: string; title?: string }).scale = axis.scale
       ;(wrapped as unknown as { aria?: boolean; grid?: boolean; format?: string; formatType?: string }).aria = axis.aria
@@ -713,6 +717,8 @@ function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { gro
     .map((legend) => {
       const group = buildLegend(legend, ctx)
       if (group) {
+        placeLegendTitleLast(group, legend)
+        if (legend.zindex) (group as unknown as { zindex?: number }).zindex = legend.zindex
         const lt = guideTitle(ctx, legend.title)
         if (lt) (group as unknown as { title?: string }).title = lt
         const g = group as unknown as {
@@ -727,7 +733,7 @@ function buildAxisAndLegend(ctx: EvalContext, contentItems: SceneGroup[]): { gro
         const discrete = st === 'band' || st === 'point' || st === 'ordinal' || st === 'bin-ordinal'
         const discretizing = st === 'threshold' || st === 'quantize' || st === 'quantile'
         const color = g.legendChannels.some((k) => k === 'fill' || k === 'stroke')
-        const explicitGradient = legend.type === 'gradient' || legend.gradientLength != null
+        const explicitGradient = legend.type === 'gradient' || legend.own?.gradientLength != null
         g.legendType = legend.type === 'symbol'
           ? 'symbol'
           : explicitGradient ? 'gradient'
@@ -1190,12 +1196,11 @@ function buildContent(
     }
     const result = evaluateMark(mark, ctx, prevGroup)
     if (result) {
-      if (Array.isArray(result)) {
-        for (const g of result) items.push(g)
-      } else {
-        items.push(result)
-        ctx.draft.groups.set(mark, result)
+      for (const g of Array.isArray(result) ? result : [result]) {
+        if (mark.zindex) (g as unknown as { zindex?: number }).zindex = mark.zindex
+        items.push(g)
       }
+      if (!Array.isArray(result)) ctx.draft.groups.set(mark, result)
     }
   }
 
@@ -1259,10 +1264,20 @@ function buildContent(
   // builders create marks first (guides need their bounds to anchor), so sort
   // the siblings into vega's paint order here. This is what keeps SVG and
   // canvas z-order identical for overlapping marks (e.g. an area over a grid).
+  // vega-scenegraph then z-orders the children (util/visit.js): marks without a
+  // `zindex` paint first, in order; the ones with a (truthy) `zindex` paint
+  // after, ascending (ties by order). Axes, legends and marks carry the spec's
+  // `zindex` (Vega-Lite gives non-grid axes zindex 1, drawing them over marks).
   const orderRank = (g: SceneGroup): number =>
     g.role === 'axis' ? 0 : g.role === 'legend' ? 2 : g.role === 'title' ? 3 : 1
+  const zOf = (g: SceneGroup): number => (g as unknown as { zindex?: number }).zindex || 0
   const ordered = items.length > 1
-    ? items.map((g, i) => ({ g, i })).sort((a, b) => orderRank(a.g) - orderRank(b.g) || a.i - b.i).map((x) => x.g)
+    ? items.map((g, i) => ({ g, i })).sort((a, b) => {
+        const za = zOf(a.g), zb = zOf(b.g)
+        if ((za !== 0) !== (zb !== 0)) return za !== 0 ? 1 : -1
+        if (za !== 0 && za !== zb) return za - zb
+        return orderRank(a.g) - orderRank(b.g) || a.i - b.i
+      }).map((x) => x.g)
     : items
   return { items: ordered, padding, ctx, width: facetWidth, height: facetHeight, isFacetSpec }
 }
@@ -1456,6 +1471,11 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
     frameStrokeDash: (ctx.chart as unknown as { frameStrokeDash?: number[] }).frameStrokeDash,
     frameCornerRadius: (ctx.chart as unknown as { frameCornerRadius?: number }).frameCornerRadius,
     frameClip: (ctx.chart as unknown as { frameClip?: boolean }).frameClip,
+    frameStrokeOpacity: ctx.chart.frameStrokeOpacity,
+    frameStrokeMiterLimit: ctx.chart.frameStrokeMiterLimit,
+    frameStrokeDashOffset: ctx.chart.frameStrokeDashOffset,
+    frameStrokeCap: ctx.chart.frameStrokeCap,
+    frameStrokeJoin: ctx.chart.frameStrokeJoin,
     padding: ctx.chart.autosize === 'none' ? ctx.chart.padding : padding,
     items,
   }
@@ -3338,10 +3358,8 @@ function evaluateMark(
       }
     }
 
-    // Keep dataset order for rect items: vega's scene keeps data order and its
-    // SVG renderer paints the array in reverse, which already puts the first
-    // datum on top. Reordering the scene here would make the scene-level
-    // differential (R8.3) report a paint order the renderer then reverses twice.
+    // Keep dataset order for rect items: vega's scene keeps data order and
+    // every renderer paints the array front to back (later datum on top).
     const encodeRows = rows
 
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
@@ -3974,7 +3992,7 @@ function cellContentBounds(cell: SceneGroup, cellW: number, cellH: number): { x1
         const x = it.x ?? 0, y = it.y ?? 0
         if (g.marktype === 'symbol') {
           // vega symbol bounds: center ± (radius + 2 * strokeWidth)
-          const size = it.size ?? 30
+          const size = it.size ?? SYMBOL_DEFAULT_SIZE
           const sw = it.strokeWidth ?? 2
           const half = Math.sqrt(size) / 2 + 2 * sw
           add(x - half, y - half, x + half, y + half)
@@ -4071,7 +4089,7 @@ function getFacetLayout(ctx: EvalContext, prebuilt?: SceneGroup[]): FacetGridLay
   const ncols = colDom && colDom.length ? colDom.length : 1
   const nrows = rowDom && rowDom.length ? rowDom.length : 1
   const layout = computeFacetGridLayout(cells, cellWidth, cellHeight, ncols, nrows)
-  if (process.env.ASTER_DEBUG_FACET) console.error('[facet]', { cellWidth, cellHeight, ncols, nrows, layout })
+  if (typeof process !== 'undefined' && process.env.ASTER_DEBUG_FACET) console.error('[facet]', { cellWidth, cellHeight, ncols, nrows, layout })
   ctx._facetLayout = layout
   return layout
 }
@@ -4204,7 +4222,9 @@ function buildFacetCells(
       }
     }
 
-    const cellItems: SceneItem[] = [...axisItems, ...nestedItems]
+    // vega paints a group's background BEFORE its content: bg, axes, marks.
+    const bgItems: SceneItem[] = []
+    const labelItems: SceneItem[] = []
     // Column-header labels with a non-top labelOrient are title items on the
     // cell's left/right side (vega-lite places them in the cell, not in a
     // header band). Bottom-oriented labels live in the column footer below.
@@ -4220,7 +4240,7 @@ function buildFacetCells(
       )
       const fk = facet.groupby[facet.groupby.length - 1]!
       const text = facetHeaderLabel(hm, g[0] ?? {}, fk, ctx)
-      cellItems.push({
+      labelItems.push({
         text,
         // the right-side title's rotated bound lands a hair inside the
         // integer where vega's lands on it; nudge only that edge.
@@ -4231,7 +4251,7 @@ function buildFacetCells(
         align: 'center',
         fill: (ht?.color as string) ?? '#000',
         fontSize: (ht?.fontSize as number | undefined) ?? 10,
-        ...(ht?.fontWeight != null ? { fontWeight: ht.fontWeight as SceneItem['fontWeight'] } : {}),
+        ...headerFont(ht),
         ...(ht?.limit != null ? { limit: ht.limit as number } : {}),
       })
     }
@@ -4258,15 +4278,15 @@ function buildFacetCells(
       // Vega renders the group background as a rounded rect with cornerRadius
       const cr = Math.min(cellCornerRadius, cellWidth / 2, bgH / 2)
       const bgPath = roundedRectPath(0, 0, cellWidth, bgH, cr)
-      cellItems.push({ path: bgPath, x: 0, y: 0 } as SceneItem)
+      bgItems.push({ path: bgPath, x: 0, y: 0 } as SceneItem)
       // Inner scope background: zero-height path (vega default for groups
       // without explicit height)
-      cellItems.push({
+      bgItems.push({
         path: `M0,0h${cellWidth}v0h-${cellWidth}Z`,
         x: 0, y: 0,
       } as SceneItem)
     } else if (cellStyle) {
-      cellItems.push({
+      bgItems.push({
         path: `M0.5,0.5h${cellWidth}v${cellHeight}h-${cellWidth}Z`,
         x: 0, y: 0, stroke: '#ddd',
       } as SceneItem)
@@ -4282,12 +4302,12 @@ function buildFacetCells(
         (grEnc.height && typeof grEnc.height === 'object' && ('signal' in grEnc.height || ('field' in grEnc.height && typeof grEnc.height.field === 'object')))
       )
       if (hasExplicitSize) {
-        cellItems.push({
+        bgItems.push({
           path: `M0,0h${cellWidth}v${cellHeight}h-${cellWidth}Z`,
           x: 0, y: 0,
         } as SceneItem)
       } else {
-        cellItems.push({
+        bgItems.push({
           path: `M0,0h0v0h0Z`,
           x: 0, y: 0,
         } as SceneItem)
@@ -4296,7 +4316,7 @@ function buildFacetCells(
 
     result.push({
       marktype: 'group', name: mark.name, role: 'scope',
-      items: cellItems,
+      items: [...bgItems, ...axisItems, ...nestedItems, ...labelItems],
       clip: mark.clip === true || cellCornerRadius > 0,
       width: cellWidth, height: cellHeight,
       x: 0, y: 0,
@@ -4353,6 +4373,16 @@ function buildFacetCellGroup(
 /** The label a facet header/title renders: the group's title signal
  * evaluated with the facet row as `parent` (vega's parent scope); a plain
  * string title is used verbatim, otherwise the facet value. */
+/** Text-style properties a facet header's title def carries (font, fontStyle, fontWeight). */
+function headerFont(t: Record<string, unknown> | undefined): Partial<SceneItem> {
+  if (!t) return {}
+  const out: Partial<SceneItem> = {}
+  if (t.font != null) out.font = t.font as string
+  if (t.fontStyle != null) out.fontStyle = t.fontStyle as string
+  if (t.fontWeight != null) out.fontWeight = t.fontWeight as SceneItem['fontWeight']
+  return out
+}
+
 function facetHeaderLabel(mark: CompiledMark, row: Row, fkey: string, ctx: EvalContext): string {
   const titleDef = (mark as unknown as { title?: { text?: unknown } }).title
   const t = titleDef?.text
@@ -4433,6 +4463,7 @@ function buildRowHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup[]
       ? [{
           text: facetHeaderLabel(mark, row, firstGroupby ?? '', ctx), x: -50, y: cellHeight / 2,
           angle: -90, align: 'center' as const, baseline: 'middle' as const, fill: '#000',
+          ...headerFont((mark as unknown as { title?: Record<string, unknown> }).title),
         }]
       : []
 
@@ -4578,7 +4609,7 @@ function buildRowTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | 
   return {
     marktype: 'group', name: mark.name, role: 'row-title',
     items: [
-        { text: titleText, x: rightSide ? titleHalf : -titleHalf, y: 0, angle: rightSide ? 90 : -90, align: 'center' as const, baseline: 'middle' as const, fill: '#000', fontSize: 11, fontWeight: 'bold' },
+        { text: titleText, x: rightSide ? titleHalf : -titleHalf, y: 0, angle: rightSide ? 90 : -90, align: 'center' as const, baseline: 'top' as const, fill: '#000', fontSize: 11, fontWeight: 'bold' },
       ],
     x: titleX, y: centerY,
   }
@@ -4703,8 +4734,7 @@ function buildColumnHeaderGroup(mark: CompiledMark, ctx: EvalContext): SceneGrou
       ...(hdrTitle.baseline != null ? { baseline: hdrTitle.baseline as SceneItem['baseline'] } : {}),
       ...(hdrTitle.angle != null ? { angle: hdrTitle.angle as number } : {}),
       fill: (hdrTitle.color as string) ?? '#000', fontSize: (hdrTitle.fontSize as number) ?? 10,
-      ...(hdrTitle.font != null ? { font: hdrTitle.font as string } : {}),
-      ...(hdrTitle.fontWeight != null ? { fontWeight: hdrTitle.fontWeight as SceneItem['fontWeight'] } : {}),
+      ...headerFont(hdrTitle),
       ...(hdrTitle.limit != null ? { limit: hdrTitle.limit as number } : {}),
     }
     // An explicit label angle/baseline/font size switches the header to
@@ -4796,7 +4826,7 @@ function buildColumnFooterGroupColumn(mark: CompiledMark, ctx: EvalContext): Sce
         text, x: cellWidth / 2, y: 80, align: 'center',
         fill: (ht.color as string) ?? '#000',
         fontSize: (ht.fontSize as number | undefined) ?? 10,
-        ...(ht.fontWeight != null ? { fontWeight: ht.fontWeight as SceneItem['fontWeight'] } : {}),
+        ...headerFont(ht),
         ...(ht.limit != null ? { limit: ht.limit as number } : {}),
       })
     }
@@ -4827,7 +4857,7 @@ function cellGroupXBounds(cells: SceneGroup[]): { minX: number; maxX: number } {
           const pi = p as SceneItem & { size?: number; strokeWidth?: number; width?: number }
           const px = cx + (pi.x ?? 0)
           if (g.marktype === 'symbol') {
-            const size = pi.size ?? 30
+            const size = pi.size ?? SYMBOL_DEFAULT_SIZE
             const sw = pi.strokeWidth ?? 2
             const r = Math.sqrt(size) / 2
             const ext = r + 2 * sw
@@ -4891,7 +4921,7 @@ function buildColumnTitleGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup
     ...(tDef.angle != null ? { angle: tDef.angle as number } : {}),
     fill: (tDef.color as string) ?? '#000', fontSize: (tDef.fontSize as number) ?? 11,
     fontWeight: (tDef.fontWeight as 'bold') ?? 'bold',
-    ...(tDef.font != null ? { font: tDef.font as string } : {}),
+    ...headerFont(tDef),
     ...(tDef.limit != null ? { limit: tDef.limit as number } : {}),
   }
   const titleH = useTitleBlock ? boundText(new Bounds(), titleItem).height() : 0
@@ -5144,12 +5174,13 @@ function buildConcatCellBody(mark: CompiledMark, ctx: EvalContext): SceneGroup {
   }
   return {
     marktype: 'group', name: mark.name, role: 'scope',
-    items: [...axisItems, ...nestedItems, {
+    items: [{
       // Each concat cell has a 0.5px-inset stroke='#ddd' background the size
-      // of the cell, matching vega's `style: cell` default background path.
+      // of the cell, matching vega's `style: cell` default background path
+      // (a group paints its background BEFORE its content).
       path: `M0.5,0.5h${cellWidth}v${cellHeight}h-${cellWidth}Z`,
       x: 0, y: 0, stroke: '#ddd',
-    } as SceneItem],
+    } as SceneItem, ...axisItems, ...nestedItems],
     width: cellWidth, height: cellHeight,
     x: 0, y: 0,
   }
@@ -5260,7 +5291,7 @@ function concatCellLocalBounds(cell: SceneGroup, cellW: number, cellH: number): 
           y2 = Math.max(y2, y + boff + (fontSize - Math.round(0.8 * fontSize)))
         }
       } else if (marktype === 'symbol' || it.size != null) {
-        const size = it.size ?? 30
+        const size = it.size ?? SYMBOL_DEFAULT_SIZE
         const sw = it.strokeWidth ?? 2
         // Vega's symbol bound adds the (miter) stroke extent and the cell
         // group's stroke expansion carries a further half pixel on each side.
@@ -5772,6 +5803,44 @@ function legendContentWidth(ctx: EvalContext): number {
   return ctx.width
 }
 
+/**
+ * vega's legend mark order: background, entries (per entry: bounds rect,
+ * symbol, label), then the title LAST (`role-legend-title`). The builders push
+ * the title where its layout is computed; it is moved to paint last here, and
+ * given vega's `guide-title` bold default.
+ */
+function placeLegendTitleLast(group: SceneGroup, legend: CompiledLegend): void {
+  const items = group.items
+  if (!items) return
+  // The legend's font properties apply to every title/label text whichever
+  // builder made it (gradient, symbol, band, columns...): an explicit item value
+  // (set by a builder that already honoured it) wins, then the legend property.
+  const L = legend as { titleFont?: string; titleFontWeight?: string | number; titleFontStyle?: string; labelFont?: string; labelFontWeight?: string | number; labelFontStyle?: string }
+  const rest: SceneItem[] = []
+  const titles: SceneItem[] = []
+  for (const it of items) {
+    if (it.text == null) { rest.push(it); continue }
+    const isTitle = it._legendTitle === true
+    const font = isTitle ? L.titleFont : L.labelFont
+    const weight = isTitle ? L.titleFontWeight : L.labelFontWeight
+    const style = isTitle ? L.titleFontStyle : L.labelFontStyle
+    if (font != null && it.font == null) it.font = font
+    if (style != null && it.fontStyle == null) it.fontStyle = style
+    if (isTitle) {
+      // `guide-title` is bold unless the legend says otherwise
+      it.fontWeight = weight != null ? weight : (it.fontWeight ?? 'bold')
+      titles.push(it)
+    } else {
+      if (weight != null && it.fontWeight == null) it.fontWeight = weight
+      rest.push(it)
+    }
+  }
+  group.items = [...rest.filter((it) => it.text == null || !it._legendTitle), ...titles]
+}
+
+/** vega-scale `isContinuous`: the scale types a gradient legend can draw. */
+const VEGA_CONTINUOUS_SCALES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential', 'diverging'])
+
 function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
   // Resolve the scale name (fill/stroke color legends, size legends, or shape legends).
   const scaleName = legend.shape ?? legend.stroke ?? legend.fill ?? legend.size ?? legend.opacity
@@ -5824,7 +5893,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // at its raw (0,0) position.
     const titleStr = String(legend.title ?? '')
     const items: SceneItem[] = []
-    if (titleStr) items.push({ text: titleStr, x: 0, y: 0, align: 'left', baseline: 'top', fill: '#000', fontSize: 11 })
+    if (titleStr) items.push({ _legendTitle: true, text: titleStr, x: 0, y: 0, align: 'left', baseline: 'top', fill: '#000', fontSize: 11 })
     return { marktype: 'group', role: 'legend', x: 0, y: 0, width: 0, height: 0, items }
   }
   // Domain values. A continuous symbol legend (opacity, or a color scale
@@ -5844,7 +5913,15 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
   // Vega defaults to gradient legends for interpolating scales (sequential,
   // diverging) even without an explicit gradientLength.
   const isInterpolating = scaleType === 'sequential'
-  if (CONTINUOUS_TYPES.has(scaleType) && (legend.gradientLength != null || isInterpolating)) {
+  // vega-parser legendType(): an explicit `type` wins; otherwise a fill/stroke
+  // legend over a single continuous scale is a gradient legend (no
+  // gradientLength needed).
+  const legendScaleCount = ['size', 'shape', 'fill', 'stroke', 'strokeWidth', 'strokeDash', 'opacity']
+    .filter((k) => (legend as unknown as Record<string, unknown>)[k] != null).length
+  const autoGradient = legend.type == null && legendScaleCount === 1 && (legend.fill != null || legend.stroke != null)
+    && VEGA_CONTINUOUS_SCALES.has(scaleType)
+  if (legend.type !== 'symbol' && CONTINUOUS_TYPES.has(scaleType)
+    && (legend.type === 'gradient' || autoGradient || legend.own?.gradientLength != null || isInterpolating)) {
     // Resolve gradientLength: number, signal object, or fallback to 200
     let GL: number = 200
     if (typeof legend.gradientLength === 'number') {
@@ -5861,7 +5938,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
 
     // Vega numbers gradient defs from a global counter; replicate that so the
     // `url(#gradient_n)` references match the oracle (which runs in-process).
-    const gradientId = 'gradient_' + gradientIdCounter++
+    // vega-functions gradient(): stops from the scale's ticks (see scaleGradientStops)
+    const gradStops = scaleGradientStops(scale as never)
+    const gradientIdH = gradientDefId('horizontal', gradStops)
+    const gradientId = gradientDefId('vertical', gradStops)
 
     // Gradient-legend paint properties (vega legend scheme defaults).
     const titleColor0 = (legend as { titleColor?: string }).titleColor ?? '#000'
@@ -5974,19 +6054,19 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         const hY = hBase === 'middle' ? Math.round(0.3 * titleFs0) : hBase === 'bottom' ? Math.round(-0.21 * titleFs0) : Math.round(0.79 * titleFs0)
         const hX = hAnchor === 'end' ? gradientLength : hAnchor === 'middle' ? gradientLength / 2 : 0
         const hLimit = (legend as { titleLimit?: number }).titleLimit
-        items.push({ text: titleStr0, x: hX, y: hY, align: hAlign as SceneItem['align'], fill: titleColor0, fontSize: titleFs0, ...(hLimit != null ? { limit: hLimit } : {}), ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
+        items.push({ _legendTitle: true, text: titleStr0, x: hX, y: hY, align: hAlign as SceneItem['align'], fill: titleColor0, fontSize: titleFs0, ...(hLimit != null ? { limit: hLimit } : {}), ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
       }
-      items.push({ path: `M0,0h${gradientLength}v${thickness}h${-gradientLength}Z`, x: 0, y: titleH0, fill: `url(#${gradientId})`, stroke: gradStrokeColor, strokeWidth: gradStrokeWidth, opacity: gradOpacityProp ?? 1 })
+      items.push({ path: `M0,0h${gradientLength}v${thickness}h${-gradientLength}Z`, x: 0, y: titleH0, fill: `url(#${gradientIdH})`, stroke: gradStrokeColor, strokeWidth: gradStrokeWidth, opacity: gradOpacityProp ?? 1 })
+      const labelStartH = items.length
       for (const t of tickNums) {
         const tNum = typeof t === 'number' ? t : 0
         const perc = gradientFraction(tNum)
         items.push({ text: legendFmt(tNum), x: perc * gradientLength, y: titleH0 + thickness + 10, align: 'center', fill: labelColor0, fontSize: labelFs0, ...((legend as { labelLimit?: number }).labelLimit != null ? { limit: (legend as { labelLimit?: number }).labelLimit } : {}), ...(labelOpacity0 != null ? { fillOpacity: labelOpacity0 } : {}) })
       }
-      const colorScale = scale as ColorScale
-      const stops = colorScale.interpolator
-        ? Array.from({ length: 17 }, (_, i) => ({ offset: i / 16, color: String((colorScale.interpolator as () => (t: number) => unknown)?.()(i / 16)) }))
-        : []
-      if (stops.length) ctx._defs.push({ id: gradientId, colorStops: stops, direction: 'horizontal' })
+      // vega-parser legend-gradient-labels: the labels go through the Overlap
+      // transform (config.legend.labelOverlap defaults to true)
+      applyOverlap(items.slice(labelStartH), (legend as { labelOverlap?: unknown }).labelOverlap, (legend as { labelSeparation?: number }).labelSeparation ?? 0)
+      if (gradStops.length && !ctx._defs.some((d) => d.id === gradientIdH)) ctx._defs.push({ id: gradientIdH, colorStops: gradStops, direction: 'horizontal' })
       const gradientGroup = { marktype: 'group', role: 'legend', x: 0, y: 0, width: bgW, height: bgH, items } as SceneGroup
       // vega legendLayout boundStrokes the outer rect with the legend's OWN
       // stroke (legend.strokeColor) — the gradient rect's decorative #ddd
@@ -6014,7 +6094,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const titleStr = String(legend.title ?? '')
     const titleWidth = titleStr.length > 0 ? nominalTextWidth(titleStr, Math.abs(titleFs0), 'bold') : 0
     const vThickness = (legend as { gradientThickness?: number }).gradientThickness ?? 16
-    const vLabelOffset = (legend as { labelOffset?: number }).labelOffset ?? 2
+    // vega legend-gradient-labels: value(spec.labelOffset, config.gradientLabelOffset)
+    const vLabelOffset = (legend.own?.labelOffset as number | undefined) ?? (legend as { gradientLabelOffset?: number }).gradientLabelOffset ?? 2
     const gradPad = (legend as { padding?: number }).padding ?? 0
     // vega's legendLayout sizes the legend box as ceil(bounds.width() + 2*pad).
     const outerWidth = Math.ceil(Math.max(vThickness + vLabelOffset + maxLabelW, titleWidth))
@@ -6074,17 +6155,22 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const vLimit = (legend as { titleLimit?: number }).titleLimit
       if (sideTitleG) {
         items.push({
+          _legendTitle: true,
           text: titleStr,
           x: titleOrientG === 'left' ? gradPad : gradPad + outerWidth + titlePad0,
           y: gradPad + L / 2,
           angle: titleOrientG === 'left' ? -90 : 90,
           align: 'center',
+          // vega rotates the title about its anchor and applies the title
+          // baseline (default top) INSIDE the rotated frame
+          baseline: ((legend as { titleBaseline?: string }).titleBaseline ?? (titleOrientG === 'right' ? 'bottom' : 'top')) as SceneItem['baseline'],
           fill: titleColor0, fontSize: titleFs0,
           ...(vLimit != null ? { limit: vLimit } : {}),
           ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}),
         })
       } else if (bottomTitleG) {
         items.push({
+          _legendTitle: true,
           text: titleStr,
           x: vX + contentX,
           y: gradPad + L + Math.round(0.79 * titleFs0) + titlePad0,
@@ -6094,7 +6180,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
           ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}),
         })
       } else {
-        items.push({ text: titleStr, x: vX + contentX, y: vY + gradPad, align: vAlign as SceneItem['align'], fill: titleColor0, fontSize: titleFs0, ...(vLimit != null ? { limit: vLimit } : {}), ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
+        items.push({ _legendTitle: true, text: titleStr, x: vX + contentX, y: vY + gradPad, align: vAlign as SceneItem['align'], fill: titleColor0, fontSize: titleFs0, ...(vLimit != null ? { limit: vLimit } : {}), ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
       }
     }
     // Labels. Vega positions each label at (1 - perc) * L and then shifts it by
@@ -6107,6 +6193,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     // the Unicode minus sign (U+2212) for negative values. Match that by using
     // the locale number formatter rather than String().
     const legendFmt = makeGradientFmt(d0n === d1n ? '.6f' : '.1~f')
+    const labelStartV = items.length
     for (const t of tickNums) {
       const tNum = typeof t === 'number' ? t : 0
       const perc = gradientFraction(tNum)
@@ -6117,14 +6204,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const yPos = titleH + (1 - perc) * L + baselineOffset
       items.push({ text: legendFmt(tNum), x: contentX + vThickness + vLabelOffset, y: gradPad + yPos, align: 'left', fill: labelColor0, fontSize: labelFs0, ...((legend as { labelLimit?: number }).labelLimit != null ? { limit: (legend as { labelLimit?: number }).labelLimit } : {}), ...(labelOpacity0 != null ? { fillOpacity: labelOpacity0 } : {}) })
     }
+    applyOverlap(items.slice(labelStartV), (legend as { labelOverlap?: unknown }).labelOverlap, (legend as { labelSeparation?: number }).labelSeparation ?? 0)
     // Gradient def from scale's interpolator
-    const colorScale = scale as ColorScale
-    const stops = colorScale.interpolator
-      ? Array.from({ length: 17 }, (_, i) => ({
-          offset: i / 16,
-          color: String((colorScale.interpolator as () => (t: number) => unknown)?.()(i / 16)),
-        }))
-      : []
     const group: SceneGroup = {
       marktype: 'group',
       role: 'legend',
@@ -6135,8 +6216,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       items,
     }
     ;(group as unknown as Record<string, unknown>)._borderStroke = borderColor0 != null
-    if (stops.length) {
-      ctx._defs.push({ id: gradientId, colorStops: stops })
+    if (gradStops.length && !ctx._defs.some((d) => d.id === gradientId)) {
+      ctx._defs.push({ id: gradientId, colorStops: gradStops })
     }
     return group
   }
@@ -6178,7 +6259,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const w = titleStr ? nominalTextWidth(titleStr, Math.abs(titleFs), 'bold') : 0
       const h = titleStr ? Math.abs(titleFs) : 0
       const items: SceneItem[] = [{ path: `M0,0h${w}v${h}h-${w}Z`, x: 0, y: 0 }]
-      if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: titleColor, fontSize: titleFs, fontWeight: 'bold', ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
+      if (titleStr) items.push({ _legendTitle: true, text: titleStr, x: 0, y: 9, align: 'left', fill: titleColor, fontSize: titleFs, fontWeight: 'bold', ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
       return { marktype: 'group', role: 'legend', x: 0, y: 0, width: w, height: h, items }
     }
     const sizeDomain = sizeScale.domain() as number[]
@@ -6254,7 +6335,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     if (ctx.rawGuides) {
       const rawItems: SceneItem[] = [{ path: 'M0,0h0v0h0Z', x: 0, y: 0 }]
       const rTitle = String(legend.title ?? '')
-      if (rTitle) rawItems.push({ text: rTitle, x: 0, y: 9, align: 'left', fill: titleColorS, fontSize: titleFsS, fontWeight: 'bold' })
+      if (rTitle) rawItems.push({ _legendTitle: true, text: rTitle, x: 0, y: 9, align: 'left', fill: titleColorS, fontSize: titleFsS, fontWeight: 'bold' })
       const rStroke = symStrokeColor ?? (strokeColor != null ? String(strokeColor) : '#888')
       for (const e of entries) {
         rawItems.push({ path: 'M0,0h0v0h0Z', x: 0, y: 0 })
@@ -6419,7 +6500,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         : titleBaselineH === 'bottom' ? Math.round(-0.21 * titleFsS) : Math.round(0.79 * titleFsS)
       if (titleStr.length > 0) {
         const limit = (legend as { titleLimit?: number }).titleLimit
-        items.push({ text: titleStr, x: titleXBase + legendPad, y: titleYOffH + legendPad, align: titleAlignS as SceneItem['align'], fill: titleColorS, fontSize: titleFsS, ...(limit != null ? { limit } : {}), ...(titleOpacityS != null ? { fillOpacity: titleOpacityS } : {}) })
+        items.push({ _legendTitle: true, text: titleStr, x: titleXBase + legendPad, y: titleYOffH + legendPad, align: titleAlignS as SceneItem['align'], fill: titleColorS, fontSize: titleFsS, ...(limit != null ? { limit } : {}), ...(titleOpacityS != null ? { fillOpacity: titleOpacityS } : {}) })
       }
       const symStrokeH = symStrokeColor ?? (strokeColor != null ? String(strokeColor) : '#888')
       const symOpacityH = opacity ?? 0.7
@@ -6470,7 +6551,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       : sideTitle
         ? Math.floor(bgHeight / 2) + 3 + legendPad
         : titleYOff + legendPad
-    items.push({ text: titleStr, x: titleTextX, y: titleTextY, align: (sideTitle ? 'left' : titleAlignS) as SceneItem['align'], fill: titleColorS, fontSize: titleFsS, ...(titleLimitS != null ? { limit: titleLimitS } : {}), ...(titleOpacityS != null ? { fillOpacity: titleOpacityS } : {}) })
+    items.push({ _legendTitle: true, text: titleStr, x: titleTextX, y: titleTextY, align: (sideTitle ? 'left' : titleAlignS) as SceneItem['align'], fill: titleColorS, fontSize: titleFsS, ...(titleLimitS != null ? { limit: titleLimitS } : {}), ...(titleOpacityS != null ? { fillOpacity: titleOpacityS } : {}) })
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]!
       const ey = entryYBaseS + legendPad + yPos[i]!
@@ -6527,7 +6608,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         } as SceneItem)
       }
       if (hasClipS && !ctx.rawGuides) {
-        ;(items[items.length - 1] as Record<string, unknown>)._clip = { w: entryWidth, h: b[i]!.y2 }
+        ;(items[items.length - 1] as Record<string, unknown>)._clip = { x: entryX, y: ey, w: entryWidth, h: b[i]!.y2 }
       }
       items.push({ text: e.label, x: labelX + entryXShiftS + legendPad + contentShiftS, y: labelBaselineS != null ? sy : sy + Math.round(0.3 * fontSize), align: labelAlignS as SceneItem['align'], ...(labelBaselineS != null ? { baseline: labelBaselineS as SceneItem['baseline'] } : {}), fill: labelColorS, fontSize, ...((legend as { labelLimit?: number }).labelLimit != null ? { limit: (legend as { labelLimit?: number }).labelLimit } : {}), ...(labelOpacityS != null ? { fillOpacity: labelOpacityS } : {}) })
     }
@@ -6580,7 +6661,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       const items: SceneItem[] = []
       // Background box
       items.push({ path: `M0,0h${outerWidth}v${bgH}h-${outerWidth}Z`, x: 0, y: 0 })
-      if (titleStrB) items.push({ text: titleStrB, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11, fontWeight: 'bold' })
+      if (titleStrB) items.push({ _legendTitle: true, text: titleStrB, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11, fontWeight: 'bold' })
       // Band swatches (top-to-bottom: last range color first)
       for (let i = 0; i < bandCount; i++) {
         const y = titleH + (bandCount - 1 - i) * SWATCH_H
@@ -6592,7 +6673,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
         items.push({ text: bandLabels[i - 1]!, x: 18, y, align: 'left', fill: '#000', fontSize: 10 })
       }
       // Empty label at the bottom
-      items.push({ text: '', x: 18, y: titleH + bandCount * SWATCH_H - 2, align: 'left', fill: '#000' })
+      items.push({ text: '', x: 18, y: titleH + bandCount * SWATCH_H - 2, align: 'left', fill: '#000', fontSize: 10 })
       return { marktype: 'group', role: 'legend', x: 0, y: 0, width: outerWidth, height: bgH, items }
     }
   }
@@ -6643,7 +6724,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const bgH = 16 + boxHeight
     const items: SceneItem[] = []
     items.push({ path: `M0,0h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0 })
-    items.push({ text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11, fontWeight: 'bold' })
+    items.push({ _legendTitle: true, text: String(legend.title ?? ''), x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11, fontWeight: 'bold' })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
       const sx = xs[i]!
@@ -6683,7 +6764,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
   // `direction`. Geometry calibrated to the oracle for a fill/square legend with
   // columns:2 (entryWidth=16+8*maxLabelLen, columnPadding=10, rowPadding=2,
   // fill boxHeight=11/rowStep=13; group at (offset, offset) from the corner).
-  if (/^(top|bottom)-(left|right)$/.test(orient) && !legend.size && !legend.gradientLength && legend.columns != null) {
+  if (/^(top|bottom)-(left|right)$/.test(orient) && !legend.size && !legend.own?.gradientLength && legend.columns != null) {
     const colorProp = legend.fill ? 'fill' : 'stroke'
     const symType = legend.symbolType ?? 'circle'
     const isStrokeLegend = !legend.fill
@@ -6713,7 +6794,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const outerWidth = gridW
     const items: SceneItem[] = []
     items.push({ path: `M0,0h${outerWidth}v${gridH}h-${outerWidth}Z`, x: 0, y: 0 })
-    if (titleStr) items.push({ text: titleStr, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11, fontWeight: 'bold' })
+    if (titleStr) items.push({ _legendTitle: true, text: titleStr, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11, fontWeight: 'bold' })
     for (let i = 0; i < n; i++) {
       const value = domain[i]
       const ex = colX[i % cols]!
@@ -7105,7 +7186,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
     const borderStroke = legendBorderColor != null
     // vega's legend title item sits at (padding, padding) with baseline top;
     // the renderer bakes the baseline offset. titleBaseline overrides it.
-    if (titleStr) items.push({ text: titleStr, x: titleX + shift, y: titleY, baseline: (titleBaseline ?? tBaseline) as 'top', align: tAlign, fill: titleColor, fontSize: titleFs, fontWeight: titleWeight, ...(titleFont != null ? { font: titleFont } : {}), ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
+    if (titleStr) items.push({ _legendTitle: true, text: titleStr, x: titleX + shift, y: titleY, baseline: (titleBaseline ?? tBaseline) as 'top', align: tAlign, fill: titleColor, fontSize: titleFs, fontWeight: titleWeight, ...(titleFont != null ? { font: titleFont } : {}), ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
     for (let i = 0; i < n; i++) {
       const e = entries[i]!
       const eb = ebs[i]!
@@ -7162,7 +7243,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
       // laid-out entry rect (vega's guideMark clip + SVGStringRenderer clip:
       // rect (0,0,entry.width,entry.height) in the entry's local frame)
       if (hasClip && !ctx.rawGuides) {
-        ;(items[items.length - 1] as Record<string, unknown>)._clip = { w: colWc, h: eb.y2 }
+        ;(items[items.length - 1] as Record<string, unknown>)._clip = { x: entryX + colOff, y: legendPad + off, w: colWc, h: eb.y2 }
       }
       items.push({
         text: e.label,
@@ -7203,6 +7284,52 @@ function roundedPos(scale: Scale, t: unknown): number {
   // zero-width band and round the plain scale value.
   if (bw > 0) return Math.floor(pos)
   return Math.round(pos)
+}
+
+/**
+ * vega-view-transforms' Overlap, for guide labels. `method`: true/'parity' hides
+ * every other item until no neighbours collide, 'greedy' hides items colliding
+ * with the last visible one; falsy does nothing. Items with a degenerate bound
+ * (no content) are skipped, the survivors reset to opacity 1 first, and at least
+ * two items are always kept (the last source item is resurrected when fewer than
+ * three survive). Bounds are the real text bounds (`boundLeaf`), so a truncated
+ * label (`limit`) collides as its truncated self.
+ */
+function applyOverlap(labels: SceneItem[], method: unknown, separation: number): void {
+  if (!method) return
+  const bounds = new Map<SceneItem, Bounds>()
+  const source = labels.filter((it) => {
+    const b = boundLeaf(new Bounds(), it)
+    bounds.set(it, b)
+    return !b.empty() && b.width() > 1 && b.height() > 1
+  })
+  if (!source.length) return
+  for (const it of source) it.opacity = 1
+  const intersects = (a: Bounds, b: Bounds): boolean =>
+    separation > Math.max(b.x1 - a.x2, a.x1 - b.x2, b.y1 - a.y2, a.y1 - b.y2)
+  const hasOverlap = (list: SceneItem[]): boolean => {
+    for (let i = 1; i < list.length; i++) if (intersects(bounds.get(list[i - 1]!)!, bounds.get(list[i]!)!)) return true
+    return false
+  }
+  let items = source
+  if (items.length < 3 || !hasOverlap(items)) return
+  const reduce = (list: SceneItem[]): SceneItem[] => {
+    if (method === 'greedy') {
+      let a: SceneItem | undefined
+      return list.filter((b, i) => {
+        if (!i || !intersects(bounds.get(a!)!, bounds.get(b)!)) { a = b; return true }
+        b.opacity = 0
+        return false
+      })
+    }
+    return list.filter((it, i) => (i % 2 ? ((it.opacity = 0), false) : true))
+  }
+  do { items = reduce(items) } while (items.length >= 3 && hasOverlap(items))
+  const last = source[source.length - 1]!
+  if (items.length < 3 && !last.opacity) {
+    if (items.length > 1) items[items.length - 1]!.opacity = 0
+    last.opacity = 1
+  }
 }
 
 function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
@@ -7294,6 +7421,10 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       item.strokeWidth = gridStyle.strokeWidth ?? (axis as { gridWidth?: number }).gridWidth ?? 1
       const gridDash = gridStyle.strokeDash ?? (axis as { gridDash?: number[] }).gridDash
       if (gridDash != null) item.strokeDash = gridDash
+      // vega axis-grid: strokeCap/strokeDashOffset/strokeOpacity come from gridCap/gridDashOffset/gridOpacity
+      if (axis.gridCap != null) item.strokeCap = axis.gridCap
+      if (axis.gridDashOffset != null) item.strokeDashOffset = axis.gridDashOffset
+      if (axis.gridOpacity != null) item.strokeOpacity = axis.gridOpacity
       if (gridStyle.opacity != null) item.opacity = gridStyle.opacity
       // Vega's axisLayout bounds union only the ticks and labels marks; the
       // grid mark never extends the axis bound (nor the view bounds).
@@ -7329,8 +7460,11 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       tick.stroke = axis.tickColor ?? '#888'
       tick.strokeWidth = axis.tickWidth ?? 1
       if (axis.tickDash) tick.strokeDash = axis.tickDash
+      // vega axis-ticks: strokeCap/strokeDashOffset/strokeOpacity
+      if (axis.tickCap != null) tick.strokeCap = axis.tickCap
+      if (axis.tickDashOffset != null) tick.strokeDashOffset = axis.tickDashOffset
+      if (axis.tickOpacity != null) tick.strokeOpacity = axis.tickOpacity
       tickItems.push(tick)
-      items.push(tick)
     }
     if (axis.labels !== false) {
       // vega's AxisTicks extra entry: an empty label whose scale lookup
@@ -7352,6 +7486,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       // text — so rotated labels carry no baseline (no bake anywhere).
       label.fontSize = labelFs
       if (axis.labelFont != null) label.font = axis.labelFont
+      if (axis.labelFontStyle != null) label.fontStyle = axis.labelFontStyle
+      if (axis.labelFontWeight != null) label.fontWeight = axis.labelFontWeight
       label.limit = axis.labelLimit ?? 180
       // Labels anchor at the unrounded scale + 0.5*bandWidth + tickOffset
       // (the axisBand -0.5 default folds against our baked +0.5 group delta)
@@ -7429,73 +7565,20 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
       label.fill = axis.labelColor ?? '#000'
       if (axis.labelOpacity != null) label.fillOpacity = axis.labelOpacity
       labels.push(label)
-      items.push(label)
     }
   }
 
-  // Vega's axis `labelOverlap` runs the Overlap transform over the label
-  // items: labels that would collide are hidden with opacity 0 (they stay in
-  // the scene). `true` falls back to the parity method (hide alternating
-  // labels until none overlap); 'greedy' hides items colliding with the
-  // last kept item. Bounds use the same headless text estimate vega uses.
-  // vega's Overlap transform drops labels with no content before running
-  // (`hasBounds`: empty text measures zero). The axis `extra` entry is exactly
-  // such a label — it must not shift the parity phases or become the "last
-  // source label" that the final preserve rule resurrects.
-  const overlapSource = labels.filter((it) => String(it.text ?? '').length > 0)
-  if (axis.labelOverlap && overlapSource.length >= 3) {
-    // vega Overlap: sep = _.separation || 0; a negative separation disables
-    // collisions, a positive one pads them.
-    const sep = (axis as { labelSeparation?: number }).labelSeparation ?? 0
-    const boundsOf = (it: SceneItem) => {
-      const w = itemTextWidth(it as FontProps, String(it.text ?? ''))
-      const x = it.x ?? 0
-      const x1 = it.align === 'right' ? x - w : it.align === 'center' ? x - w / 2 : x
-      const y = it.y ?? 0
-      return { x1, x2: x1 + w, y1: y, y2: y + 10 }
-    }
-    const intersects = (a: ReturnType<typeof boundsOf>, b: ReturnType<typeof boundsOf>) =>
-      sep > Math.max(b.x1 - a.x2, a.x1 - b.x2, b.y1 - a.y2, a.y1 - b.y2)
-    const hasOverlap = (list: SceneItem[]) => {
-      for (let i = 1; i < list.length; i++) {
-        if (i > 0 && intersects(boundsOf(list[i - 1]!), boundsOf(list[i]!))) return true
-      }
-      return false
-    }
-    for (const it of overlapSource) it.opacity = 1
-    let kept = overlapSource
-    if (hasOverlap(kept)) {
-      if (axis.labelOverlap === 'greedy') {
-        do {
-          const next: SceneItem[] = []
-          let prev: ReturnType<typeof boundsOf> | null = null
-          for (let i = 0; i < kept.length; i++) {
-            const it = kept[i]!
-            const b = boundsOf(it)
-            if (i === 0 || !prev || !intersects(prev, b)) { next.push(it); prev = b }
-            else it.opacity = 0
-          }
-          kept = next
-        } while (kept.length >= 3 && hasOverlap(kept))
-      } else {
-        do {
-          const next: SceneItem[] = []
-          for (let i = 0; i < kept.length; i++) {
-            if (i % 2) kept[i]!.opacity = 0
-            else next.push(kept[i]!)
-          }
-          kept = next
-        } while (kept.length >= 3 && hasOverlap(kept))
-      }
-      // Vega: if fewer than 3 labels survive and the last source label was
-      // hidden, un-hide it and hide the last survivor instead.
-      const last = overlapSource[overlapSource.length - 1]!
-      if (kept.length < 3 && !last.opacity) {
-        if (kept.length > 1) kept[kept.length - 1]!.opacity = 0
-        last.opacity = 1
-      }
-    }
+  // Vega's axis `labelOverlap` runs the Overlap transform over the label items
+  // (see applyOverlap): colliding labels are hidden with opacity 0 and stay in
+  // the scene. The axis `extra` entry has no content (zero bounds) and is
+  // skipped by the transform's own `hasBounds` filter.
+  if (axis.labelOverlap) {
+    applyOverlap(labels, axis.labelOverlap, (axis as { labelSeparation?: number }).labelSeparation ?? 0)
   }
+
+  // vega's axis mark order: grid, ticks, labels, domain, title (every tick
+  // before any label, not interleaved per tick).
+  items.push(...tickItems, ...labels)
 
   if (axis.domain !== false) {
     const domainLine: SceneItem = { x: 0, y: 0, x2: 0, y2: 0 }
@@ -7504,8 +7587,11 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     const scaleRange = scale.range() as number[]
     const rangeStart: number = scaleRange.length > 0 ? Number(scaleRange[0]) || 0 : 0
     const rangeEnd: number = scaleRange.length > 0 ? Number(scaleRange[scaleRange.length - 1]) || 0 : 0
-    const axisStart = Math.min(rangeStart, rangeEnd)
-    const axisEnd = Math.max(rangeStart, rangeEnd)
+    // vega axis-domain: the rule runs from range(0) to range(1) of the scale —
+    // NOT min to max — so a reversed range (every y axis) starts at the far end
+    // (it decides where a dash pattern begins).
+    const axisStart = rangeStart
+    const axisEnd = rangeEnd
     if (orient === 'left') { domainLine.x = 0.5; domainLine.x2 = 0.5; domainLine.y = axisStart + 0.5; domainLine.y2 = axisEnd + 0.5 }
     else if (orient === 'right') { domainLine.x = ctx.width + 0.5; domainLine.x2 = ctx.width + 0.5; domainLine.y = axisStart + 0.5; domainLine.y2 = axisEnd + 0.5 }
     else if (orient === 'bottom') { domainLine.x = axisStart + 0.5; domainLine.x2 = axisEnd + 0.5; domainLine.y = ctx.height + 0.5; domainLine.y2 = ctx.height + 0.5 }
@@ -7514,6 +7600,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     domainLine.strokeWidth = axis.domainWidth ?? 1
     if (axis.domainDash) domainLine.strokeDash = axis.domainDash
     if (axis.domainOpacity != null) domainLine.strokeOpacity = axis.domainOpacity
+    if (axis.domainCap != null) domainLine.strokeCap = axis.domainCap
+    if (axis.domainDashOffset != null) domainLine.strokeDashOffset = axis.domainDashOffset
     ;(domainLine as Record<string, unknown>)._domain = true
     items.push(domainLine)
   }
@@ -7655,6 +7743,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     // Vega emits font-size 11 on axis titles explicitly (bounds + canvas font).
     ;(t as Record<string, unknown>).fontSize = titleFs
     if (axis.titleFont != null) (t as Record<string, unknown>).font = axis.titleFont
+    if (axis.titleFontStyle != null) t.fontStyle = axis.titleFontStyle
     if ((axis as { titleLimit?: number }).titleLimit != null) {
       t.limit = (axis as { titleLimit?: number }).titleLimit
     }
@@ -7681,13 +7770,25 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   const dxs = ctx.rawGuides ? (orient === 'right' ? -ctx.width : 0) : tr + (orient === 'left' ? -off : orient === 'right' ? off : posOff)
   const dys = ctx.rawGuides ? (orient === 'bottom' ? -ctx.height : 0) : tr + (orient === 'bottom' ? off : orient === 'top' ? -off : posOff)
   if (typeof process !== 'undefined' && process.env.ASTER_DBG_RAW) console.error('[raw]', orient, 'raw', ctx.rawGuides, 'dxs', dxs, 'dys', dys, 'n', items.length)
-  if (dxs || dys) {
+  // vega's grid rules cancel the axis `offset` on their cross-axis span
+  // (axis-grid.js: gridStart/gridEnd carry `offset: sign * offset`), so the grid
+  // stays on the plot area while the rest of the axis moves out.
+  // The grid cancels the axis's OWN offset (`spec.offset`), not a config-merged one.
+  const specOff = typeof axis.own?.offset === 'number' ? axis.own.offset : 0
+  const cancelSign = orient === 'left' || orient === 'top' ? 1 : -1
+  const gridCross = tr + cancelSign * (specOff - off)
+  const gridDxs = ctx.rawGuides ? dxs : (orient === 'left' || orient === 'right' ? gridCross : dxs)
+  const gridDys = ctx.rawGuides ? dys : (orient === 'bottom' || orient === 'top' ? gridCross : dys)
+  if (dxs || dys || gridDxs || gridDys) {
     for (const it of items) {
       const rec = it as Record<string, unknown>
-      if (rec.x != null) rec.x = (rec.x as number) + dxs
-      if (rec.y != null) rec.y = (rec.y as number) + dys
-      if (rec.x2 != null) rec.x2 = (rec.x2 as number) + dxs
-      if (rec.y2 != null) rec.y2 = (rec.y2 as number) + dys
+      const grid = rec._grid === true
+      const sx = grid ? gridDxs : dxs
+      const sy = grid ? gridDys : dys
+      if (rec.x != null) rec.x = (rec.x as number) + sx
+      if (rec.y != null) rec.y = (rec.y as number) + sy
+      if (rec.x2 != null) rec.x2 = (rec.x2 as number) + sx
+      if (rec.y2 != null) rec.y2 = (rec.y2 as number) + sy
     }
   }
 

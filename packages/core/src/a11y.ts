@@ -13,6 +13,7 @@
  * legend titled '…' for color with N values: …") so a screen-reader user sees
  * the same description they would get from upstream Vega.
  */
+import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode, SceneRoot } from './types.js'
 import { locale } from './locale.js'
 import { tickFormat } from './scale.js'
@@ -99,7 +100,7 @@ function itemBounds(it: SceneItem, tx: number, ty: number): Bounds {
     x2b += it.radius
     y2b += it.radius
   }
-  const r = it.outerRadius ?? Math.sqrt((it.size as number) ?? 30) / 2
+  const r = it.outerRadius ?? Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
   if (it.size != null || it.outerRadius != null || it.shape != null) {
     x1 -= r
     y1 -= r

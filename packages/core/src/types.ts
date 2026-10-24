@@ -126,6 +126,11 @@ export interface CompiledChart {
   frameStrokeDash?: number[]
   frameCornerRadius?: number
   frameClip?: boolean
+  frameStrokeOpacity?: number
+  frameStrokeMiterLimit?: number
+  frameStrokeDashOffset?: number
+  frameStrokeCap?: string
+  frameStrokeJoin?: string
   data: CompiledData[]
   scales: CompiledScale[]
   axes: CompiledAxis[]
@@ -323,6 +328,20 @@ export interface CompiledAxis {
   domainWidth?: number
   domainDash?: number[]
   domainOpacity?: number
+  domainCap?: string
+  domainDashOffset?: number
+  gridColor?: string
+  gridWidth?: number
+  gridDash?: number[]
+  gridOpacity?: number
+  gridCap?: string
+  gridDashOffset?: number
+  tickCap?: string
+  tickOpacity?: number
+  tickDashOffset?: number
+  labelFontWeight?: string | number
+  labelFontStyle?: string
+  titleFontStyle?: string
   maxExtent?: number
   minExtent?: number
   titleAnchor?: string
@@ -330,6 +349,8 @@ export interface CompiledAxis {
   translate?: number | number[]
   position?: number
   offset?: number
+  /** The axis's own properties (before config merge). */
+  own?: Record<string, unknown>
   tickBand?: string
   values?: unknown[] | { signal: string }
   format?: string
@@ -341,6 +362,8 @@ export interface CompiledAxis {
 }
 
 export interface CompiledLegend {
+  /** The legend's own properties (before config merge). */
+  own?: Record<string, unknown>
   fill?: string
   stroke?: string
   size?: string
@@ -380,6 +403,7 @@ export interface CompiledLegend {
   titlePadding?: number
   titleFontSize?: number
   titleFontWeight?: string | number
+  titleFontStyle?: string
   titleFont?: string
   titleOpacity?: number
   titleColor?: string
@@ -491,6 +515,11 @@ export interface SceneRoot {
   frameCornerRadius?: number
   /** Clip the plot contents to the frame (config.view.clip). */
   frameClip?: boolean
+  frameStrokeOpacity?: number
+  frameStrokeMiterLimit?: number
+  frameStrokeDashOffset?: number
+  frameStrokeCap?: string
+  frameStrokeJoin?: string
   padding?: { top: number; right: number; bottom: number; left: number }
   items: SceneGroup[]
   /** Gradient definitions for use by fill="url(#...)" references. */
@@ -576,6 +605,7 @@ export interface SceneItem {
   fontSize?: number
   fontWeight?: string | number
   fontStyle?: string
+  fontVariant?: string
   // symbol
   shape?: string
   // image
@@ -588,8 +618,11 @@ export interface SceneItem {
   strokeOpacity?: number
   strokeWidth?: number
   strokeDash?: number[]
-  strokeLineCap?: string
-  strokeLineJoin?: string
+  strokeCap?: string
+  strokeJoin?: string
+  strokeDashOffset?: number
+  strokeMiterLimit?: number
+  blend?: string
   opacity?: number
   cornerRadius?: number
   cornerRadiusTopLeft?: number
@@ -598,6 +631,8 @@ export interface SceneItem {
   cornerRadiusBottomRight?: number
   zindex?: number
   cursor?: string
+  /** Internal: marks a legend title item so the builder can paint it last. */
+  _legendTitle?: boolean
   // accessibility
   ariaRole?: string
   ariaLabel?: string

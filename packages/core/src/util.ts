@@ -442,3 +442,6 @@ export function pluck(data: unknown, name: unknown): unknown {
   }
   return isArray(data) ? (data as unknown[]).map(f) : f(data)
 }
+
+/** vega-scenegraph `shapes.js` `sz`: an item without `size` is a 64px² symbol. */
+export const SYMBOL_DEFAULT_SIZE = 64

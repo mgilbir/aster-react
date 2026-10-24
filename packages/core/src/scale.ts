@@ -728,6 +728,36 @@ export function scaleFraction(source: SR, min: number, max: number): (t: number)
   }
 }
 
+/**
+ * The stops of a gradient legend, exactly vega-functions' `gradient(scale, p0,
+ * p1, count)`: the scale's tick values (`ticks(count || 15)`) with the domain
+ * endpoints added when missing, each at `fraction(value)` with colour
+ * `scale(value)`. Scales without `ticks` use their domain values as stops.
+ * A zero-span domain is expanded onto [0, 1] first (vega#1479).
+ */
+export function scaleGradientStops(source: SR, count?: number): Array<{ offset: number; color: string }> {
+  let sc: SR = source
+  let stops: number[] = source.domain()
+  let min = stops[0]!
+  let max = peek(stops)
+  let fraction: (t: number) => unknown = (t) => t
+  if (!(max - min)) {
+    const make = (n: string): (() => SR) => scale(n) as () => SR
+    sc = (source.interpolator
+      ? make('sequential')().interpolator(source.interpolator())
+      : make('linear')().interpolate(source.interpolate()).range(source.range())
+    ).domain([(min = 0), (max = 1)])
+  } else {
+    fraction = scaleFraction(source, min, max)
+  }
+  if (sc.ticks) {
+    stops = sc.ticks(+(count as number) || 15)
+    if (min !== stops[0]) stops.unshift(min)
+    if (max !== peek(stops)) stops.push(max)
+  }
+  return stops.map((v) => ({ offset: Number(fraction(v)), color: String(sc(v)) }))
+}
+
 export function interpolate(type?: string, gamma?: number): unknown {
   const interp = (method(type) as unknown as Record<string, unknown>)
   return gamma != null && interp && (interp as { gamma?: unknown }).gamma
