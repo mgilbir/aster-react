@@ -32,3 +32,55 @@ jobs:
       # what `pnpm check` runs locally). Do not add gates here; edit that file.
       - name: Gates (pnpm check)
         run: pnpm check
+
+  # Unit tests on every Node the package claims to support (engines: >=20), plus the
+  # newest current major. V8's Math.pow/exp/log are not bit-identical across versions,
+  # and the oracle differentials (packages/conformance/scripts/differential-*.test.mts)
+  # run real Vega in-process, so they are the guard that Aster equals Vega on each
+  # engine. Browsers are not needed here; the gate list in the `ci` job stays on 22.
+  #
+  # Two Node limits shape this job:
+  #  - pnpm 11 itself needs Node >= 22.13, so install and build run under 22 and only
+  #    the test run switches to the matrix Node (vitest is `pnpm test`, minus pnpm);
+  #  - the jsdom devDependency (30.x) needs Node ^22.22.2 || ^24.15 || >=26 (it fails
+  #    to load on 20), so on Node 20 the jsdom-based suites cannot run and only the
+  #    engine-sensitive, jsdom-free suites do: the oracle differentials and the
+  #    ADR-0001 oracle vectors. 22 and the newest major run everything.
+  unit:
+    name: unit (node ${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, node]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js 22 (toolchain)
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Setup Node.js ${{ matrix.node }} (test runtime)
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Unit tests (same as `pnpm test`)
+        if: matrix.node != 20
+        run: node node_modules/vitest/vitest.mjs run
+
+      - name: Engine-sensitive unit tests (Node 20: no jsdom)
+        if: matrix.node == 20
+        run: node node_modules/vitest/vitest.mjs run scripts/differential- oracle-vectors.test

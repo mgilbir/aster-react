@@ -60,11 +60,32 @@ describe('nothing keeps a second copy of the list', () => {
     /^pnpm --filter @aster\/conformance exec playwright install /,
     /^pnpm check$/,
   ]
+  // The `unit` job (Node matrix) builds, then runs vitest directly under the matrix Node
+  // (pnpm 11 cannot itself run on Node 20). It adds no gate: it is `pnpm test` on other engines.
+  const allowedUnit = [
+    /^pnpm build$/,
+    /^node node_modules\/vitest\/vitest\.mjs run( scripts\/differential- oracle-vectors\.test)?$/,
+  ]
 
-  it('ci.yml only sets up the toolchain and runs `pnpm check`', () => {
+  it('ci.yml only sets up the toolchain, runs `pnpm check`, and the unit-test Node matrix', () => {
     const lines = runLines('.github/workflows/ci.yml')
     expect(lines).toContain('pnpm check')
-    for (const l of lines) expect(allowedCi.some((re) => re.test(l)), `ci.yml runs "${l}" outside the gate list`).toBe(true)
+    for (const l of lines) {
+      expect([...allowedCi, ...allowedUnit].some((re) => re.test(l)), `ci.yml runs "${l}" outside the gate list`).toBe(true)
+    }
+  })
+
+  it('the main ci job stays on Node 22; the unit job covers 20, 22 and the newest major', () => {
+    const ci = read('.github/workflows/ci.yml')
+    const [main, unit] = ci.split(/^  unit:$/m)
+    expect(unit, 'ci.yml has a `unit` job').toBeDefined()
+    expect(main).toMatch(/node-version: 22\b/)
+    expect(unit).toMatch(/node:\s*\[20, 22, node\]/)
+    // the matrix job runs what `pnpm test` runs, so it cannot drift from the root script
+    expect(rootPkg.scripts.test).toBe('vitest run')
+    expect(runLines('.github/workflows/ci.yml')).toContain('node node_modules/vitest/vitest.mjs run')
+    // and never grows a second gate list: `pnpm check` is run by the main job only
+    expect(unit).not.toMatch(/pnpm check/)
   })
 
   it('nightly.yml runs `pnpm check` before its extras and installs with a frozen lockfile', () => {

@@ -111,13 +111,15 @@ paint, geometry and text attribute, the full transform and the paint order, and 
 representation differences it can justify (each is documented in the file).
 `normalize.test.ts` plants one difference at a time and requires each to be reported.
 
-## Transform vectors
+## Transform differential (live)
 
-`packages/conformance/scripts/gen-transform-vectors.mjs` (`pnpm --filter @aster/conformance run vectors:transforms`)
-records transform-level oracle vectors from the pinned real Vega: transform params + input rows -> output rows,
-one dataflow per case, into `packages/core/testdata/transform-vectors/`. `transform-vectors.test.ts` replays them
-strictly (NaN, -0, `undefined` keys, Dates, row order, cycles, thrown errors), re-runs every case over deep-frozen
-inputs (no transform may mutate its input), and `timeunit` cases carry the non-UTC zone they were recorded under.
-Bootstrap (ci0/ci1) and `sample` are recorded with vega-statistics' seeded LCG (seed 42), which the engine also uses.
+`packages/conformance/scripts/transform-cases.mjs` lists the transform-level cases (transform params + input rows ->
+output rows). `differential-transforms.test.mts` runs every case through the pinned real Vega and through
+`applyTransforms` in the same process and compares strictly (NaN, -0, `undefined` keys, Dates, row order, cycles,
+thrown errors), then re-runs every case over deep-frozen inputs (no transform may mutate its input). `timeunit` cases
+carry the non-UTC zone they run under. Nothing is recorded: `Math.pow/exp/log` differ in the last bit between V8
+versions, so numbers recorded under one Node cannot gate another; running the oracle in the same engine needs no
+tolerance. CI runs `pnpm test` on Node 20, 22 and the current major for this reason.
+Bootstrap (ci0/ci1) and `sample` use vega-statistics' seeded LCG (seed 42) on both sides.
 Deliberate deviations (documented in the code): seeded randomness instead of `Math.random`, `bin` without `extent`
 derives it from the data, lookup tables are prototype-less, and vega crashes that are TypeErrors are not replicated.
