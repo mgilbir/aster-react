@@ -4,8 +4,9 @@
  * or throw exactly where vega does. C42: no Math.min/max(...array) (or push
  * spread) over data-sized arrays: 300k rows must not overflow the stack.
  */
-import { describe, it, expect } from 'vitest'
-import { readFileSync, readdirSync } from 'node:fs'
+import { describe, it, expect, afterAll } from 'vitest'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { compileChart, evaluateChart, applyTransforms, renderSpec } from './index.js'
@@ -15,6 +16,56 @@ import { attack } from './attack.testkit.js'
 import type { VgSpec } from './types.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
+
+/**
+ * The `src` directories of the pnpm workspace packages: every directory matched by a
+ * `pnpm-workspace.yaml` `packages:` glob that has a `package.json` and a `src`. A stray directory
+ * (an ignored `packages/.tmp-debug`, a half-deleted package) is not a package and is skipped.
+ */
+function workspaceSrcDirs(root: string): string[] {
+  const yaml = readFileSync(join(root, 'pnpm-workspace.yaml'), 'utf8')
+  const globs: string[] = []
+  let inPackages = false
+  for (const line of yaml.split('\n')) {
+    if (/^packages:\s*$/.test(line)) { inPackages = true; continue }
+    if (!inPackages) continue
+    const m = /^\s+-\s+['"]?([^'"#\s]+)['"]?\s*(#.*)?$/.exec(line)
+    if (m) globs.push(m[1]!)
+    else if (/^\S/.test(line)) break // the next top-level key
+  }
+  const pkgDirs: string[] = []
+  for (const g of globs) {
+    if (g.startsWith('!')) continue
+    if (g.endsWith('/*')) {
+      const base = join(root, g.slice(0, -2))
+      if (existsSync(base)) for (const e of readdirSync(base, { withFileTypes: true })) if (e.isDirectory()) pkgDirs.push(join(base, e.name))
+    } else pkgDirs.push(join(root, g))
+  }
+  return pkgDirs
+    .filter((d) => existsSync(join(d, 'package.json')) && existsSync(join(d, 'src')) && statSync(join(d, 'src')).isDirectory())
+    .map((d) => join(d, 'src'))
+}
+
+/** `file:line` of every Math.min/max(...x) and push/unshift(...x) in the non-test sources under `dirs`. */
+function spreadOffenders(dirs: string[]): string[] {
+  const offenders: string[] = []
+  const walk = (dir: string): void => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name)
+      if (e.isDirectory()) { if (e.name !== 'node_modules' && e.name !== 'dist') walk(p) }
+      else if (/\.(ts|tsx)$/.test(e.name) && !/\.test\.|\.testkit\./.test(e.name)) {
+        readFileSync(p, 'utf8').split('\n').forEach((line, i) => {
+          if (/^\s*(\*|\/\/|\/\*)/.test(line) || /\.\.\.args\b/.test(line)) return // comments; builtin argument lists
+          if (/Math\.(min|max)\(\s*(0,\s*)?\.\.\./.test(line)) offenders.push(`${p}:${i + 1}`)
+          // the only allowlisted spreads: @aster/vl cast lists (small, spec-bounded; that package is another lane)
+          else if (/\.(push|unshift)\(\s*\.\.\.[A-Za-z_]/.test(line) && !/\.\.\.(d\.casts|pre)\b/.test(line)) offenders.push(`${p}:${i + 1}`)
+        })
+      }
+    }
+  }
+  for (const d of dirs) walk(d)
+  return offenders
+}
 
 /**
  * Oracle values recorded from the pinned vega 6.3.1 (vega-hierarchy / d3-hierarchy
@@ -186,25 +237,53 @@ describe('C42: data-sized arrays never go through argument spread', () => {
     expect(sink.length).toBe(N)
   })
 
-  it('the source has no Math.min/max(...x) or push(...x) left in packages/*/src ', () => {
-    const root = join(here, '..', '..')
-    const offenders: string[] = []
-    const walk = (dir: string): void => {
-      for (const e of readdirSync(dir, { withFileTypes: true })) {
-        const p = join(dir, e.name)
-        if (e.isDirectory()) { if (e.name !== 'node_modules' && e.name !== 'dist') walk(p) }
-        else if (/\.(ts|tsx)$/.test(e.name) && !/\.test\.|\.testkit\./.test(e.name)) {
-          readFileSync(p, 'utf8').split('\n').forEach((line, i) => {
-            if (/^\s*(\*|\/\/|\/\*)/.test(line) || /\.\.\.args\b/.test(line)) return // comments; builtin argument lists
-            if (/Math\.(min|max)\(\s*(0,\s*)?\.\.\./.test(line)) offenders.push(`${p}:${i + 1}`)
-            // the only allowlisted spreads: @aster/vl cast lists (small, spec-bounded; that package is another lane)
-            else if (/\.(push|unshift)\(\s*\.\.\.[A-Za-z_]/.test(line) && !/\.\.\.(d\.casts|pre)\b/.test(line)) offenders.push(`${p}:${i + 1}`)
-          })
+  it('the source has no Math.min/max(...x) or push(...x) left in the workspace packages\' src', () => {
+    const root = join(here, '..', '..', '..')
+    const dirs = workspaceSrcDirs(root)
+    for (const pkg of ['core', 'react', 'vl', 'conformance', 'benchmarks']) expect(dirs, pkg).toContain(join(root, 'packages', pkg, 'src')) // the scan is not vacuous
+    const offenders = spreadOffenders(dirs)
+    expect(offenders).toEqual([])
+  })
+
+  describe('the scan walks the real workspace packages only', () => {
+    const tmp: string[] = []
+    afterAll(() => { for (const d of tmp) rmSync(d, { recursive: true, force: true }) })
+    const fixture = (): string => {
+      const root = mkdtempSync(join(tmpdir(), 'aster-scan-'))
+      tmp.push(root)
+      writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n  - "apps/*"\n\nallowBuilds:\n  esbuild: true\n')
+      const pkg = (rel: string, src: Record<string, string> | null): void => {
+        mkdirSync(join(root, rel), { recursive: true })
+        writeFileSync(join(root, rel, 'package.json'), '{"name":"x"}')
+        if (src) {
+          mkdirSync(join(root, rel, 'src'), { recursive: true })
+          for (const [f, body] of Object.entries(src)) writeFileSync(join(root, rel, 'src', f), body)
         }
       }
+      pkg('packages/a', { 'ok.ts': 'export const m = Math.max(1, 2)\n' })
+      pkg('packages/no-src', null) // a workspace package without src
+      pkg('apps/demo', { 'main.ts': 'export const n = 1\n' })
+      mkdirSync(join(root, 'packages', '.tmp-debug'), { recursive: true }) // stray, ignored, empty
+      mkdirSync(join(root, 'packages', 'stray-with-junk', 'src'), { recursive: true }) // not a package: no package.json
+      writeFileSync(join(root, 'packages', 'stray-with-junk', 'src', 'bad.ts'), 'Math.max(...big)\n')
+      return root
     }
-    for (const pkg of readdirSync(root)) walk(join(root, pkg, 'src'))
-    expect(offenders).toEqual([])
+
+    it('a stray empty directory (or one without package.json/src) does not break it', () => {
+      const root = fixture()
+      const dirs = workspaceSrcDirs(root)
+      expect(dirs.map((d) => d.slice(root.length + 1)).sort()).toEqual([join('apps', 'demo', 'src'), join('packages', 'a', 'src')])
+      expect(spreadOffenders(dirs)).toEqual([])
+    })
+
+    it('still bites on a planted spread in a workspace package', () => {
+      const root = fixture()
+      writeFileSync(join(root, 'packages', 'a', 'src', 'bad.ts'), 'export const m = Math.max(...big)\nconst o: number[] = []\no.push(...big)\n')
+      expect(spreadOffenders(workspaceSrcDirs(root)).map((o) => o.slice(root.length + 1))).toEqual([
+        join('packages', 'a', 'src', 'bad.ts') + ':1',
+        join('packages', 'a', 'src', 'bad.ts') + ':3',
+      ])
+    })
   })
 
   const render = (spec: Record<string, unknown>) => evaluateChart(compileChart(spec as unknown as VgSpec), { data: { t: rows } })
