@@ -3,7 +3,8 @@
  * Loaded by the `@aster/core/transforms` addon; the core bundle keeps only
  * the transforms a plain chart uses. Shared internals come from transform.ts.
  */
-import { ownGet } from './util.js'
+import { ownGet, minOf, maxOf } from './util.js'
+import { activeMeter, checkRowCount, meterTick, guardedRegExp, checkRegexInput } from './limits.js'
 import type { CompiledTransform, SortSpec } from './types.js'
 import type { HierNode, Row, TransformContext } from './transform.js'
 import {
@@ -111,6 +112,9 @@ const MIN_RADIANS = 0.5 * Math.PI / 180
 function sampleCurve(f: (x: number) => number, extent: [number, number], minSteps: number, maxSteps: number): number[][] {
   minSteps = minSteps || 25
   maxSteps = Math.max(minSteps, maxSteps || 200)
+  // `steps`/`maxsteps` are spec parameters: bound the sample count before
+  // evaluating the density that many times (C9).
+  checkRowCount(maxSteps, 'density steps')
 
   const point = (x: number) => [x, f(x)]
   const minX = extent[0]
@@ -198,7 +202,7 @@ function kdeRows(rows: Row[], t: Record<string, unknown>): Row[] {
     // (vega-transforms KDE: minsteps = maxsteps = steps || maxsteps)
     if (!domain) {
       const vals = collectField(rows, field).filter(isFiniteNumber)
-      domain = vals.length ? [Math.min(...vals), Math.max(...vals)] : [0, 1]
+      domain = vals.length ? [minOf(vals), maxOf(vals)] : [0, 1]
     }
     minsteps = maxsteps = steps ?? maxsteps0
   }
@@ -212,6 +216,7 @@ function kdeRows(rows: Row[], t: Record<string, unknown>): Row[] {
     const local = domain ?? extentOf(support)
     if (!local) continue
     const curve = sampleCurve((x) => (cumulative ? dist.cdf(x) : dist.pdf(x)), local, minsteps, maxsteps)
+    checkRowCount(out.length + curve.length, 'kde')
     for (const v of curve) {
       const row: Row = {}
       for (const k of groupby) row[k] = g[0]?.[k]
@@ -235,6 +240,7 @@ function quantileRows(rows: Row[], t: Record<string, unknown>): Row[] {
 
   const groups = groupby.length ? groupRows(rows, groupby) : [rows]
   const out: Row[] = []
+  checkRowCount(groups.length * probs.length, 'quantile')
   for (const g of groups) {
     const values = quantilesOf(g, field, probs)
     for (let i = 0; i < probs.length; i++) {
@@ -450,6 +456,8 @@ function loessFit(rows: Row[], xField: string, yField: string, bandwidth: number
       let XY = 0
       let X2 = 0
       const denom = 1 / Math.abs(X[edge]! - dx || 1) // avoid singularity!
+      // O(window) per point, O(n^2) overall at a wide bandwidth: sample the clock.
+      meterTick('loess', i1 - i0 + 1)
 
       for (let k = i0; k <= i1; ++k) {
         const xk = X[k]!
@@ -755,6 +763,7 @@ function packSiblingsRandom(circles: HierNode[], random: () => number): number {
       sk = a._.r
       do {
         if (++guard > 100000) throw new Error('[aster] pack: front-chain walk did not terminate')
+        meterTick('pack')
         if (sj <= sk) {
         if (packIntersects(j!._, c._)) {
           b = j!
@@ -1326,7 +1335,7 @@ function wordcloudRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCo
     return v == null || v === '' ? 14 : Number(v)
   }
   const fsizeValues = rows.map(fsize).filter((v) => Number.isFinite(v))
-  const fsizeExtent = fsizeValues.length ? [Math.min(...fsizeValues), Math.max(...fsizeValues)] : undefined
+  const fsizeExtent = fsizeValues.length ? [minOf(fsizeValues), maxOf(fsizeValues)] : undefined
   const fsizeRange = (t.fontSizeRange as [number, number] | undefined) ?? [10, 50]
   const scaleFontSize = (v: number): number => {
     if (!fsizeExtent || fsizeExtent[0] === fsizeExtent[1]) return fsizeRange[0]
@@ -1387,6 +1396,8 @@ function wordcloudRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCo
     const hh = w.h / 2 + padding
     let t = 0
     for (let attempt = 0; attempt < 10000; attempt++) {
+      // each attempt is a scan over every placed word: O(words^2 * attempts)
+      meterTick('wordcloud', placed.length + 1)
       const theta = t * 0.1
       const x = cx + Math.round(theta * Math.cos(theta))
       const y = cy + Math.round(theta * Math.sin(theta))
@@ -1406,8 +1417,10 @@ function wordcloudRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCo
   // Write layout results back onto the input rows. Unplaced words get null
   // coordinates (vega writes NaN, which serializes to null).
   const out: Row[] = []
+  const wordOf = new Map<Row, CloudWord>()
+  for (const cw of words) wordOf.set(cw.datum, cw)
   for (const r of rows) {
-    const w = words.find((cw) => cw.datum === r)
+    const w = wordOf.get(r)
     if (w && w.placed) {
       out.push({
         ...r,
@@ -2411,6 +2424,7 @@ function voronoiRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   const delaunay = buildDelaunay(rows, xField, yField)
   const voronoi = buildVoronoi(delaunay, bounds)
   return rows.map((r, i) => {
+    meterTick('voronoi')
     const clipped = voronoiClip(voronoi, i)
     const isPoint = clipped !== null && clipped.length === 4 && clipped[0] === clipped[2] && clipped[1] === clipped[3]
     const path = isPoint ? null : voronoiCellPath(voronoi, i)
@@ -2472,8 +2486,13 @@ function crossRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContex
   const test = filter && ctx.runtime.expr(filter)
   const out: Row[] = []
   const n = rows.length
+  // Without a filter the output is exactly n*n rows: refuse it up front. With a
+  // filter the n*n candidates are still evaluated, so the wall clock is sampled
+  // inside the inner loop (C7).
+  if (!test) checkRowCount(n * n, 'cross')
   for (let i = 0; i < n; ++i) {
     const left = rows[i]!
+    meterTick('cross', n)
     for (let j = 0; j < n; ++j) {
       const cand: Row = { [a]: left, [b]: rows[j]! }
       if (!test || test(cand, ctx.signals)) {
@@ -2492,8 +2511,10 @@ function countpatternRows(rows: Row[], t: Record<string, unknown>): Row[] {
   const field = t.field as string
   const as = (t.as as [string, string]) ?? ['text', 'count']
   const cs = t.case as string | undefined
-  const match = new RegExp((t.pattern as string | undefined) ?? '[\\w\']+', 'g')
-  const stop = new RegExp('^' + (t.stopwords as string | undefined ?? '') + '$', 'i')
+  // Regex guard (safety deviation): pattern and per-row input lengths are capped
+  // under limits; catastrophic backtracking itself cannot be interrupted.
+  const match = guardedRegExp((t.pattern as string | undefined) ?? '[\\w\']+', 'g')
+  const stop = guardedRegExp('^' + (t.stopwords as string | undefined ?? '') + '$', 'i')
   const tokenize = (text: string): string[] => {
     let s = text
     if (cs === 'upper') s = text.toUpperCase()
@@ -2504,6 +2525,7 @@ function countpatternRows(rows: Row[], t: Record<string, unknown>): Row[] {
   for (const r of rows) {
     const raw = getField(r, field)
     if (raw == null) continue
+    checkRegexInput(String(raw))
     for (const tok of tokenize(raw as string)) {
       if (!stop.test(tok)) counts.set(tok, (counts.get(tok) ?? 0) + 1)
     }

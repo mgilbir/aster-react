@@ -17,7 +17,7 @@ import * as vl from 'vega-lite'
 import '@aster/core/geo' // registers d3-geo/d3-contour for geo/projection/contour specs
 import '@aster/core/transforms' // registers kde/regression/loess/pack/treemap/wordcloud/voronoi
 import { renderSpec } from '@aster/core'
-import { loadSpecData } from '@aster/core/load'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
@@ -53,7 +53,7 @@ async function runOne(entry: CorpusEntry): Promise<{ pass: boolean; diffs: strin
     const [oracleSvg, ourSvg] = await Promise.all([
       renderWithVega(spec),
       // url datasets resolve through the load addon, exactly what a real host does
-      loadSpecData(spec as never).then((loaded) => renderSpec(loaded as never)),
+      loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS).then((loaded) => renderSpec(loaded as never)),
     ])
     const oracle = canonicalizeSvg(oracleSvg)
     const ours = canonicalizeSvg(ourSvg)

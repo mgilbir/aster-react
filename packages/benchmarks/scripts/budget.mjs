@@ -48,8 +48,12 @@ import { fileURLToPath } from 'node:url'
 // Alongside @aster/core the hit entry shares most of that code, so its marginal
 // cost in an app is far smaller than the standalone row suggests.
 const BUDGETS = {
-  '@aster/core': 115 * 1024,
-  '@aster/core/dom': 118 * 1024,
+  // Untrusted-input work (limit meters, parser depth guard, image url policy, vega-exact
+  // stratify/bin): core 113.4 -> 116.3, dom 116.6 -> 119.6 gzip (+2.9/+3.0). Ceilings are
+  // measured + 0.5 kB; the owner decides whether to keep them (flagged in the PR).
+  // Static ReDoS screen (regex-screen.ts, ~2.0 kB gzip): core 116.3 -> 118.3, dom 119.6 -> 121.7.
+  '@aster/core': 118.8 * 1024,
+  '@aster/core/dom': 122.2 * 1024,
   '@aster/core/canvas': 20 * 1024,
   '@aster/core/hit': 16 * 1024,
   '@aster/core/signals': 36 * 1024,

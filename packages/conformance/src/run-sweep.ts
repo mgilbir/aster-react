@@ -28,7 +28,7 @@ import * as vl from 'vega-lite'
 import '@aster/core/geo'
 import '@aster/core/transforms'
 import { renderSpec } from '@aster/core'
-import { loadSpecData } from '@aster/core/load'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { compile as compileVL } from '@aster/vl'
 import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
@@ -167,7 +167,7 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'bo
   let ourSvg: string | null = null
   let ourErr = ''
   try {
-    const loaded = await loadSpecData(ourVgSpec as never)
+    const loaded = await loadSpecData(ourVgSpec as never, TRUSTED_LOAD_OPTIONS)
     ourSvg = renderSpec(loaded as never)
   } catch (e) {
     ourErr = (e as Error).message

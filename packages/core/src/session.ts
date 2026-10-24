@@ -19,7 +19,7 @@ import { compileChart } from './compiler.js'
 import { dict, ownGet } from './util.js'
 import { evaluateChartPending } from './runtime.js'
 import { refId, valueKey } from './fingerprint.js'
-import { checkSpecLimits, checkSceneLimits, createLimitClock } from './limits.js'
+import { checkSpecLimits, checkSceneLimits, createLimitClock, withLimits, activeMeter } from './limits.js'
 import { diffRows, type DataPulse } from './pulse.js'
 import type { CompiledChart, RuntimeInput, SceneRoot, VgSpec } from './types.js'
 
@@ -155,6 +155,8 @@ function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   parts.push(`w=${valueKey(input.width)}`, `h=${valueKey(input.height)}`)
   if (input.textMetrics) parts.push(`tm=#${refId(input.textMetrics)}`)
   if (input.limits) parts.push(`lim=${valueKey(input.limits)}`)
+  // image urls are vetted while the scene is built: a different policy can reject a scene a looser one accepted
+  if (input.urlPolicy) parts.push(`up=${valueKey(input.urlPolicy)}`)
   for (const name of Object.keys(input.domainRaw ?? {}).sort()) {
     parts.push(`d ${name}=${valueKey(input.domainRaw![name])}`)
   }
@@ -268,81 +270,85 @@ export function createChartSession(): ChartSession {
     return data
   }
 
-  return {
-    evaluate(spec, input = {}) {
-      const clock = createLimitClock(input.limits)
-      if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits)
-      clock.check('compile')
-      const skeleton = skeletonOf(spec)
-      const metaKey = metaKeyOf(skeleton, input)
-      const key = fingerprint(spec, input)
-      const currentRaw = rawDatasets(spec, input)
-      const { input: effectiveInput, pulse } = withAutoPulse(spec, input, currentRaw)
-      // An explicit change description (per-datum changeset, pulse, or a named
-      // changed dataset) means the data values changed — often in place, so the
-      // array identity and thus the fingerprint is unchanged — so the no-op
-      // cache must not short-circuit the re-evaluation.
-      const hinted = !!input.dataChanges || !!input.dataPulse || !!input.changedDatasets?.length
-      if (!hinted && key === lastKey && lastScene) {
-        lastRaw = currentRaw
-        lastPulse = pulse
-        return lastScene
-      }
-      // New row arrays with identical values are a no-op for the scene: the
-      // inferred pulse is empty and everything else matches the previous run.
-      if (input.autoChanges !== false && !hinted && !pulse.datasets.size && !pulse.structural.size && metaKey === lastMetaKey && lastScene) {
-        lastRaw = currentRaw
-        lastPulse = pulse
-        lastKey = key
-        return lastScene
-      }
-
-      // Compute everything into locals and commit only after every check has
-      // passed (C16): a limit that throws must leave the session — and the
-      // engine's incremental state — exactly as the previous accepted
-      // evaluation left them.
-      const recompile = skeleton !== lastSkeleton || !lastChart
-      const chart = recompile ? compileChart(spec) : lastChart!
-      clock.check('compile')
-      const pending = evaluateChartPending(chart, { ...effectiveInput, data: dataInput(currentRaw) })
-      clock.check('evaluate')
-      if (input.limits) checkSceneLimits(pending.scene, input.limits)
-      pending.commit()
-      lastChart = chart
-      lastSkeleton = skeleton
-      lastSpec = spec
-      lastScene = pending.scene
+  const evaluateOnce = (spec: VgSpec, input: RuntimeInput = {}): SceneRoot => {
+    const clock = activeMeter()?.clock ?? createLimitClock(input.limits)
+    if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits, input)
+    clock.check('compile')
+    const skeleton = skeletonOf(spec)
+    const metaKey = metaKeyOf(skeleton, input)
+    const key = fingerprint(spec, input)
+    const currentRaw = rawDatasets(spec, input)
+    const { input: effectiveInput, pulse } = withAutoPulse(spec, input, currentRaw)
+    // An explicit change description (per-datum changeset, pulse, or a named
+    // changed dataset) means the data values changed — often in place, so the
+    // array identity and thus the fingerprint is unchanged — so the no-op
+    // cache must not short-circuit the re-evaluation.
+    const hinted = !!input.dataChanges || !!input.dataPulse || !!input.changedDatasets?.length
+    if (!hinted && key === lastKey && lastScene) {
+      lastRaw = currentRaw
+      lastPulse = pulse
+      return lastScene
+    }
+    // New row arrays with identical values are a no-op for the scene: the
+    // inferred pulse is empty and everything else matches the previous run.
+    if (input.autoChanges !== false && !hinted && !pulse.datasets.size && !pulse.structural.size && metaKey === lastMetaKey && lastScene) {
+      lastRaw = currentRaw
+      lastPulse = pulse
       lastKey = key
-      lastMetaKey = metaKey
-      lastRaw = currentRaw
-      lastPulse = pulse
       return lastScene
-    },
-    change(input = {}) {
-      // Imperative per-datum update of the last compiled chart. No spec re-pass:
-      // the host drives changes via data/dataChanges/signals. Requires a prior
-      // evaluate (we need a compiled chart + spec to fingerprint against).
-      if (!lastChart || !lastSpec || !lastRaw) return null
-      const clock = createLimitClock(input.limits)
-      // Start from the data the last evaluation (or change) left behind; the
-      // host's `data` overrides win. A datum the host does not mention keeps its
-      // current value rather than reverting to the spec's original one.
-      const currentRaw = new Map(lastRaw)
-      for (const [name, rows] of Object.entries(input.data ?? {})) currentRaw.set(name, rows)
-      const { input: effectiveInput, pulse } = withAutoPulse(lastSpec, input, currentRaw)
-      const pending = evaluateChartPending(lastChart, { ...effectiveInput, data: dataInput(currentRaw) })
-      clock.check('change')
-      if (input.limits) checkSceneLimits(pending.scene, input.limits)
-      pending.commit()
-      lastScene = pending.scene
-      // Every key follows the state that was just committed, or the no-op cache
-      // would serve a scene built for different inputs (C15).
-      lastKey = fingerprint(lastSpec, { ...effectiveInput, data: dataInput(currentRaw) })
-      lastMetaKey = metaKeyOf(lastSkeleton, effectiveInput)
-      lastRaw = currentRaw
-      lastPulse = pulse
-      return lastScene
-    },
+    }
+
+    // Compute everything into locals and commit only after every check has
+    // passed (C16): a limit that throws must leave the session — and the
+    // engine's incremental state — exactly as the previous accepted
+    // evaluation left them.
+    const recompile = skeleton !== lastSkeleton || !lastChart
+    const chart = recompile ? compileChart(spec) : lastChart!
+    clock.check('compile')
+    const pending = evaluateChartPending(chart, { ...effectiveInput, data: dataInput(currentRaw) })
+    clock.check('evaluate')
+    if (input.limits) checkSceneLimits(pending.scene, input.limits)
+    pending.commit()
+    lastChart = chart
+    lastSkeleton = skeleton
+    lastSpec = spec
+    lastScene = pending.scene
+    lastKey = key
+    lastMetaKey = metaKey
+    lastRaw = currentRaw
+    lastPulse = pulse
+    return lastScene
+  }
+
+  const changeOnce = (input: RuntimeInput = {}): SceneRoot | null => {
+    // Imperative per-datum update of the last compiled chart. No spec re-pass:
+    // the host drives changes via data/dataChanges/signals. Requires a prior
+    // evaluate (we need a compiled chart + spec to fingerprint against).
+    if (!lastChart || !lastSpec || !lastRaw) return null
+    const clock = activeMeter()?.clock ?? createLimitClock(input.limits)
+    // Start from the data the last evaluation (or change) left behind; the
+    // host's `data` overrides win. A datum the host does not mention keeps its
+    // current value rather than reverting to the spec's original one.
+    const currentRaw = new Map(lastRaw)
+    for (const [name, rows] of Object.entries(input.data ?? {})) currentRaw.set(name, rows)
+    const { input: effectiveInput, pulse } = withAutoPulse(lastSpec, input, currentRaw)
+    const pending = evaluateChartPending(lastChart, { ...effectiveInput, data: dataInput(currentRaw) })
+    clock.check('change')
+    if (input.limits) checkSceneLimits(pending.scene, input.limits)
+    pending.commit()
+    lastScene = pending.scene
+    // Every key follows the state that was just committed, or the no-op cache
+    // would serve a scene built for different inputs (C15).
+    lastKey = fingerprint(lastSpec, { ...effectiveInput, data: dataInput(currentRaw) })
+    lastMetaKey = metaKeyOf(lastSkeleton, effectiveInput)
+    lastRaw = currentRaw
+    lastPulse = pulse
+    return lastScene
+  }
+
+  return {
+    evaluate: (spec, input = {}) => withLimits(input.limits, () => evaluateOnce(spec, input)),
+    change: (input = {}) => withLimits(input.limits, () => changeOnce(input)),
     last: () => (lastChart && lastScene ? { chart: lastChart, scene: lastScene } : null),
     pulse: () => lastPulse,
   }

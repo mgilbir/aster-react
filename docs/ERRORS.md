@@ -20,13 +20,19 @@ try {
 ## Budget errors
 
 `AsterLimitError` is thrown by `checkSpecLimits`, `checkSceneLimits`,
-`checkSvgLength` and `createLimitClock`. `<Chart>` renders an alert instead of
+`checkSvgLength` and `createLimitClock`, and by the meters inside transforms,
+the encode loop, guide generation, expression builtins and the expression parser
+(see `docs/LIMITS.md`). A violation raised anywhere in a render is never
+swallowed by a defensive `catch`: the call fails with it. Use `err.code ===
+'ASTER_LIMIT'` across a worker boundary. `<Chart>` renders an alert instead of
 calling an interaction handler, and reports the error through `onError`.
 
 | Message fragment | Meaning |
 |---|---|
-| `maxRows`, `maxMarks`, `maxDepth`, `maxStringLength` | pre-flight spec budget |
-| `maxItems`, `maxPathLength` | generated scene budget |
+| `maxRows`, `maxMarks`, `maxDepth`, `maxStringLength` | pre-flight spec budget; `maxRows` also caps any dataset a transform produces, `maxDepth` also covers expression nesting and cyclic specs (`spec contains a cycle`) |
+| `maxGeneratedRows`, `maxGeneratedBytes` | cumulative rows / characters generated during one evaluation |
+| `maxItems`, `maxPathLength` | generated scene budget (also tick counts and generated paths) |
+| `timeoutMs`, `maxBytes`, `maxRedirects` | `loadSpecData` request caps (`AsterLimitError`) |
 | `maxSvgLength` | serialized output budget |
 | `maxTimeMs exceeded during …` | wall-clock deadline (`compile`, `evaluate`, `render`, `mark encoding`, …) |
 
@@ -54,6 +60,13 @@ a failed flush" in `docs/API.md`.
 - **Addon missing** — the error names the exact import, e.g.
   `[aster] geo addon not loaded; import '@aster/core/geo' first`.
 - **Invalid URL/data** — `loadSpecData` rejects with the HTTP status or parse error.
+- **URL refused by the policy** — `AsterUrlError` (`code: 'ASTER_URL_DENIED'`, `reason`):
+  protocol, credentials, non-public host, `allow` veto, missing `baseURL`. Thrown by
+  `loadSpecData` before any request, and by image marks under `urlPolicy`/`limits`.
+- **Unloaded `url` dataset** — rendering a spec whose `url` dataset was never loaded throws
+  `dataset "x" has a url but no data was loaded for it` (call `loadSpecData` first).
+- **Stratify** — `[aster] stratify: cycle | multiple roots | missing: id | ambiguous: id | no root`
+  (vega's messages).
 - **Circular data reference** — named datasets cannot form a cycle.
 - **Render failure** — `<Chart>` surfaces `Chart render failed` (or the typed limit
   message) and calls `onError`; `useChart` returns `{ error }`.

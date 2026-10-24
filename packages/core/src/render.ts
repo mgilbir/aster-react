@@ -6,6 +6,7 @@
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { baselineOffset, fontSize as vegaFontSize } from './bounds.js'
+import { checkPathLength, metering } from './limits.js'
 export { baselineOffset }
 import { itemTextWidth } from './text-metrics.js'
 import { ClipCollector, type ClipDef } from './svg-defs.js'
@@ -44,7 +45,11 @@ import {
  */
 export type GeneratedPath = string & { readonly __generatedPath: true }
 const gen = (s: string): GeneratedPath => s as GeneratedPath
-const genD = (d: GeneratedPath): string => d
+// Every generated `d` (line/area/trail/arc/symbol/...) is written through an
+// AttrSink's `g()` (string AND DOM output share the `*Attrs` functions), which
+// calls this, so maxPathLength is enforced on the exact string at the one place
+// it is produced (C49). With no limits scope active it is one boolean load.
+const genD = (d: GeneratedPath): string => { if (metering) checkPathLength(d); return d }
 
 /**
  * Map Vega interpolation names to d3-shape curve constructors.
@@ -1579,7 +1584,7 @@ export class PairAttrSink implements AttrSink {
   v(name: string, value: unknown): void { if (value != null) this.out.push([name, String(value)]) }
   t(name: string, value: string): void { this.out.push([name, value]) }
   n(name: string, value: number | null | undefined): void { if (value != null) this.out.push([name, num(value)]) }
-  g(name: string, value: GeneratedPath): void { this.out.push([name, value]) }
+  g(name: string, value: GeneratedPath): void { this.out.push([name, genD(value)]) }
 }
 
 const recOf = (it: SceneItem): Record<string, unknown> => it as Record<string, unknown>

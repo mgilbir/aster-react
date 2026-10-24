@@ -10,6 +10,7 @@
   "exclude": [
     "src/**/*.test.ts",
     "src/**/*.test.tsx",
-    "src/**/*.testlib.ts"
+    "src/**/*.testlib.ts",
+    "src/**/*.testkit.ts"
   ]
 }

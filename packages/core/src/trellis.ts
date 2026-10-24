@@ -7,6 +7,7 @@
  */
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
 import { boundAxisGroup, Bounds, boundLeaf, boundsOf, boundsFromPath } from './bounds.js'
+import { boundedCount } from './limits.js'
 
 const Group = 'group'
 const Start = 0
@@ -183,6 +184,8 @@ export function gridLayout(groups: SceneGroup[], opt: Opt): Bounds {
   const padCol = get(opt.padding, 'column')
   const padRow = get(opt.padding, 'row')
   const ncols = (opt.columns as number) || groups.length
+  // `columns` comes from the spec: bound the per-column arrays before allocating them (C9).
+  if (ncols > 0) boundedCount(ncols, 'facet columns')
   const nrows = ncols <= 0 ? 1 : Math.ceil(groups.length / ncols)
   const n = groups.length
   const xOffset = new Array<number>(n).fill(0)
@@ -437,6 +440,7 @@ export function trellisLayout(group: SceneGroup, opt: Opt): void {
     opt.bounds === 'flush' ? boundFlush : boundFull
   const off = (opt.offset as Opt) ?? {}
   const ncols = (opt.columns as number) || groups.length
+  if (ncols > 0) boundedCount(ncols, 'facet columns')
   const nrows = ncols <= 0 ? 1 : Math.ceil(groups.length / ncols)
   const cells = nrows * ncols
   let x = 0

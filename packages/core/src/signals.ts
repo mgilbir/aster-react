@@ -12,7 +12,7 @@
  */
 import type { CompiledChart, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot } from './types.js'
 import { type ExpressionRuntime } from './expression.js'
-import { dict, ownGet, setOwn } from './util.js'
+import { dict, ownGet, setOwn, pushAll } from './util.js'
 
 export interface BoundEvent {
   event: string
@@ -61,7 +61,7 @@ const SUPPORTED_EVENTS = new Set([
 export function parseEventSelector(selector: unknown): string[] {
   const parts: string[] = []
   if (typeof selector === 'string') {
-    parts.push(...selector.split(/\s+/))
+    pushAll(parts, selector.split(/\s+/))
   } else if (Array.isArray(selector)) {
     for (const s of selector) {
       const t = typeof s === 'string' ? s : (s as { type?: unknown } | null)?.type

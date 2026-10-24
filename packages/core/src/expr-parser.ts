@@ -14,6 +14,8 @@
 
 // --- AST node types (vega-expression's constants) ----------------------------
 
+import { limitViolation } from './limits.js'
+
 export const RawCode = 'RawCode'
 export const Literal = 'Literal'
 export const Property = 'Property'
@@ -132,22 +134,58 @@ function isIdentifierPart(ch: number): boolean {
 
 // --- the parser --------------------------------------------------------------
 
+/**
+ * Deepest expression the parser accepts and the (recursive) interpreter can
+ * safely walk: 1000 nested productions or 1000 chained binary operators. Real
+ * specs stay far below it; a left-leaning `1+1+1+...` chain has tiny parser
+ * recursion but an AST as deep as it is long, so the AST is measured as well.
+ */
+export const EXPR_MAX_DEPTH = 1000
+
+/** Iterative AST depth check (the AST can be far deeper than the parser's own recursion). */
+function checkAstDepth(root: AstNode): void {
+  const stack: Array<[unknown, number]> = [[root, 1]]
+  while (stack.length) {
+    const [node, d] = stack.pop()!
+    if (d > EXPR_MAX_DEPTH) throw limitViolation(`maxDepth ${d} > ${EXPR_MAX_DEPTH} (expression nesting)`)
+    if (Array.isArray(node)) {
+      for (const x of node) stack.push([x, d])
+    } else if (node && typeof node === 'object') {
+      for (const x of Object.values(node as Record<string, unknown>)) {
+        if (x && typeof x === 'object') stack.push([x, d + 1])
+      }
+    }
+  }
+}
+
 class ExpressionParser {
   private source: string = ''
   private index = 0
   private length = 0
   private lookahead: Token | null = null
+  private depth = 0
+
+  /**
+   * Nesting guard for the recursive productions. Deviation from vega-expression
+   * (safety): a deeply nested expression is an AsterLimitError here, never a
+   * RangeError from the JS stack (C9).
+   */
+  private enter(): void {
+    if (++this.depth > EXPR_MAX_DEPTH) throw limitViolation(`maxDepth ${this.depth} > ${EXPR_MAX_DEPTH} (expression nesting)`)
+  }
 
   parse(code: string): AstNode {
     this.source = code
     this.index = 0
     this.length = this.source.length
     this.lookahead = null
+    this.depth = 0
     this.peek()
     const expr = this.parseExpression()
     if (this.lookahead!.type !== TokenEOF) {
       throw new Error('Unexpect token after expression.')
     }
+    checkAstDepth(expr)
     return expr
   }
 
@@ -1042,6 +1080,15 @@ class ExpressionParser {
 
   // 11.4 Unary Operators
   private parseUnaryExpression(): AstNode {
+    this.enter()
+    try {
+      return this.parseUnaryExpressionInner()
+    } finally {
+      this.depth--
+    }
+  }
+
+  private parseUnaryExpressionInner(): AstNode {
     let expr: AstNode
     if (this.lookahead!.type !== TokenPunctuator && this.lookahead!.type !== TokenKeyword) {
       expr = this.parsePostfixExpression()
@@ -1152,6 +1199,15 @@ class ExpressionParser {
 
   // 11.12 Conditional Operator
   private parseConditionalExpression(): AstNode {
+    this.enter()
+    try {
+      return this.parseConditionalExpressionInner()
+    } finally {
+      this.depth--
+    }
+  }
+
+  private parseConditionalExpressionInner(): AstNode {
     let expr = this.parseBinaryExpression()
     if (this.match('?')) {
       this.lex()

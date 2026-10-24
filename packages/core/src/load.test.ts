@@ -69,7 +69,8 @@ describe('data formats', () => {
     const spec = {
       data: [{ name: 't', url: 'data:text/csv,x,y%0A1,2%0A3,4', format: { type: 'csv' } }],
     } as unknown as VgSpec
-    const loaded = await loadSpecData(spec)
+    // data: URLs are denied by default (C6); this host opts in to exactly that protocol
+    const loaded = await loadSpecData(spec, { protocols: ['data:'] })
     expect((loaded.data as unknown as { values: unknown }[])[0]!.values).toEqual([{ x: '1', y: '2' }, { x: '3', y: '4' }])
     // and the loaded spec feeds the pipeline end to end
     const scene = evaluateChart(compileChart(loaded))

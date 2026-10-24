@@ -11,7 +11,7 @@ import * as vl from 'vega-lite'
 import '@aster/core/geo'
 import '@aster/core/transforms'
 import { buildA11yTree, compileChart, evaluateChart, getChartInfo } from '@aster/core'
-import { loadSpecData } from '@aster/core/load'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { renderWithVega } from '../src/render-vega.js'
 import { parseSvg, type XmlEl } from '../src/svg-parse.js'
 
@@ -56,7 +56,7 @@ async function main(): Promise<boolean> {
       ? (vl.compile(raw as never).spec as unknown as Record<string, unknown>)
       : raw
     try {
-      const loaded = await loadSpecData(spec as never) as Record<string, unknown>
+      const loaded = await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS) as Record<string, unknown>
       const [svg, scene] = await Promise.all([renderWithVega(loaded as never), Promise.resolve(evaluateChart(compileChart(loaded as never)))])
       const real = realCaptions(svg)
       const info = getChartInfo(loaded as never)

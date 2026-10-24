@@ -7,7 +7,7 @@
  * Text width uses vega's headless estimate (`~~(0.8 * len * fontSize)`),
  * matching the oracle when no canvas is available.
  */
-import { SYMBOL_DEFAULT_SIZE } from './util.js'
+import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
 import { computeAreaPath, computeLinePath, symbolPath, trailPath } from './render.js'
 import { itemTextWidth } from './text-metrics.js'
@@ -533,7 +533,7 @@ export function boundsFromPath(
   for (const tok of tokens) {
     cmd = tok.c
     nums.length = 0
-    nums.push(...tok.n)
+    pushAll(nums, tok.n)
     i = 0
     const rel = cmd === cmd.toLowerCase()
     const C = cmd.toUpperCase()

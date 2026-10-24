@@ -8,7 +8,7 @@ import * as vl from 'vega-lite'
 import '@aster/core/geo'
 import '@aster/core/transforms'
 import { renderSpec } from '@aster/core'
-import { loadSpecData } from '@aster/core/load'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { compile as compileVL } from '@aster/vl'
 
 const require = createRequire(import.meta.url)
@@ -52,6 +52,6 @@ await view.runAsync()
 writeFileSync('/tmp/case-oracle.svg', await view.toSVG())
 view.finalize()
 
-const loaded = await loadSpecData(ourVg as never)
+const loaded = await loadSpecData(ourVg as never, TRUSTED_LOAD_OPTIONS)
 writeFileSync('/tmp/case-ours.svg', renderSpec(loaded as never))
 console.log('wrote /tmp/case-source.vl.json /tmp/case-oracle.vg.json /tmp/case-ours.vg.json /tmp/case-oracle.svg /tmp/case-ours.svg')

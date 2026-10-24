@@ -153,7 +153,7 @@ elements; non-React hosts can do the same. Legend entries are keyboard toggles.
 - `@aster/core/signals` — `bindSceneSignals(svg, scene, values, hooks)`, `stampDatumAttrs`.
 - `@aster/core/dom` — `patchSceneDom`, `renderSceneToDomElement`, `createChartSession`.
 - `@aster/core/canvas` — `renderSceneToCanvas(scene, ctx, { dpr })`.
-- `@aster/core/load` — `loadSpecData(spec, { fetch })` for URL datasets.
+- `@aster/core/load` — `loadSpecData(spec, { baseURL, allow, protocols, timeoutMs, maxBytes, ... })` for URL datasets, with a URL policy (safe defaults, see `docs/LIMITS.md`).
 - `@aster/core/geo`, `@aster/core/transforms` — register projections/rare transforms.
 
 ## `@aster/react`

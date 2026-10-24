@@ -30,7 +30,7 @@
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { Bounds, boundText } from './bounds.js'
 import { parsePathData, tracePath, type PathSink } from './canvas.js'
-import { SYMBOL_DEFAULT_SIZE } from './util.js'
+import { SYMBOL_DEFAULT_SIZE, minOf, maxOf } from './util.js'
 import { arcPath, computeAreaPath, computeLinePath, rectItemPath, symbolPath, trailPath } from './render.js'
 
 export interface HitTarget {
@@ -493,10 +493,10 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
         if (pts.length === 0) return
         entries.push({
           item, marktype, kind: 'band',
-          x1: Math.min(...pts.map((p) => p[0])) - 2,
-          y1: Math.min(...pts.map((p) => p[1])) - 2,
-          x2: Math.max(...pts.map((p) => p[0])) + 2,
-          y2: Math.max(...pts.map((p) => p[1])) + 2,
+          x1: minOf(pts.map((p) => p[0])) - 2,
+          y1: minOf(pts.map((p) => p[1])) - 2,
+          x2: maxOf(pts.map((p) => p[0])) + 2,
+          y2: maxOf(pts.map((p) => p[1])) + 2,
         })
       }
     }

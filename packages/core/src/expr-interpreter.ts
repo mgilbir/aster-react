@@ -9,6 +9,7 @@
  */
 import { ascending, DisallowedObjectProperties, safeGet } from './util.js'
 import { type AstNode } from './expr-parser.js'
+import { guardedRegExp, checkRegexInput, checkRegexObject } from './limits.js'
 
 // --- the interpreter's own default function table ----------------------------
 
@@ -16,6 +17,10 @@ const slice = Array.prototype.slice
 
 const apply = (m: string, args: unknown[], cast?: (v: unknown) => unknown): unknown => {
   const obj = cast ? cast(args[0]) : args[0]
+  // a RegExp argument (replace/split/...) is screened and its input length-capped under limits
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] instanceof RegExp) { checkRegexObject(args[i] as RegExp); checkRegexInput(String(obj)) }
+  }
   const method = (obj as Record<string, unknown>)[m] as (...a: unknown[]) => unknown
   return method.apply(obj, slice.call(args, 1) as unknown[])
 }
@@ -101,8 +106,13 @@ export const DefaultFunctions: Record<string, (...args: never[]) => unknown> = {
   encodeURIComponent,
 
   // regexp functions
-  regexp: RegExp as unknown as (...args: never[]) => unknown,
-  test: (r, t) => RegExp(r as string).test(t as string),
+  regexp: ((p: string, f?: string) => guardedRegExp(String(p), f)) as unknown as (...args: never[]) => unknown,
+  test: (r, t) => {
+    const re = (r as unknown) instanceof RegExp ? (r as RegExp) : guardedRegExp(String(r))
+    if ((r as unknown) instanceof RegExp) checkRegexObject(r as RegExp)
+    checkRegexInput(String(t))
+    return re.test(t as string)
+  },
 } as Record<string, (...args: never[]) => unknown>
 
 // --- constants ---------------------------------------------------------------

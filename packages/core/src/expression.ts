@@ -10,7 +10,8 @@
  * (`./util.js`), the colour spaces (`./color.js`), the calendar (`./time.js`)
  * and the format layer (`./locale.js`).
  */
-import { locale } from './locale.js'
+import { currentLocale } from './locale.js'
+import { boundedCount, meterBytes, meterTick, guardedRegExp, checkRegexInput, checkRegexObject } from './limits.js'
 import { bandSpace } from './scale.js'
 import { parseExpression } from './expr-parser.js'
 import { expressionInterpreter } from './expr-interpreter.js'
@@ -24,8 +25,15 @@ function numericSequence(start: number, stop?: number, step?: number): number[] 
   if (stop === undefined) { stop = start; start = 0 }
   step = step ?? (stop < start ? -1 : 1)
   const len = Math.max(0, Math.ceil((stop - start) / step))
+  // Deviation from d3/vega (safety): under limits the length is bounded BEFORE
+  // the allocation (sequence(0, 5e7) would otherwise build a 400 MB array in
+  // one uninterruptible call), and the clock is sampled while filling (C9).
+  boundedCount(len, 'sequence', 'rows')
   const out = new Array(len)
-  for (let i = 0; i < len; i++) out[i] = start + i * step
+  for (let i = 0; i < len; i++) {
+    out[i] = start + i * step
+    if ((i & 0xffff) === 0xffff) meterTick('sequence', 1024)
+  }
   return out
 }
 import { rgb, hsl, lab, hcl } from './color.js'
@@ -45,11 +53,16 @@ export interface ExpressionRuntime {
 
 export type CompiledExpr = (datum: unknown, params?: Record<string, unknown>, event?: unknown) => unknown
 
-// The default locale — upstream's expression `format` goes through
-// vega-format's default locale (grouping included). The inherited code passed
-// the `defaultLocale` function itself as a locale definition, which silently
-// dropped grouping; the locale-vector suite pins the grouped behaviour.
-const L = locale()
+// The default locale -- upstream's expression `format` goes through
+// vega-format's default locale (grouping included). It is read per call (not
+// snapshotted at import) so a later `defaultLocale(...)` is honoured (C70).
+const L = {
+  format: (spec: string) => currentLocale().format(spec),
+  timeFormat: (spec: unknown) => currentLocale().timeFormat(spec),
+  utcFormat: (spec: unknown) => currentLocale().utcFormat(spec),
+  timeParse: (spec: string) => currentLocale().timeParse(spec),
+  utcParse: (spec: string) => currentLocale().utcParse(spec),
+}
 
 function isValid(value: unknown): boolean {
   return value != null && value === value
@@ -163,6 +176,8 @@ function truncate(value: unknown, count: number, align = 'right', ellipsis = '\u
 function pad(value: unknown, count: number, char = ' ', align = 'right'): string {
   const str = value == null ? '' : String(value)
   const len = Math.max(0, count - str.length)
+  // Deviation (safety): the padded string is bounded by the limits BEFORE it is built.
+  meterBytes(len + str.length, 'pad')
   if (align === 'left') return char.repeat(len) + str
   if (align === 'center') {
     const left = len >> 1
@@ -182,8 +197,13 @@ function mergeObj(...objs: unknown[]): unknown {
 }
 function testRe(reg: unknown, value: unknown): boolean {
   if (value == null) return false
-  const re = isRegExp(reg) ? (reg as RegExp) : new RegExp(String(reg))
-  return re.test(String(value))
+  // Regex guard (safety deviation): pattern and input lengths are capped under
+  // limits. This does NOT stop catastrophic backtracking (docs/LIMITS.md).
+  const re = isRegExp(reg) ? (reg as RegExp) : guardedRegExp(String(reg))
+  if (isRegExp(reg)) checkRegexObject(reg as RegExp)
+  const input = String(value)
+  checkRegexInput(input)
+  return re.test(input)
 }
 
 // --- WCAG luminance / contrast -----------------------------------------------
@@ -272,14 +292,22 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
     pad,
     parseFloat: (value: unknown) => parseFloat(String(value)),
     parseInt: (value: unknown, radix?: unknown) => parseInt(String(value), radix == null ? undefined : Number(radix)),
-    replace: (value: unknown, pattern: unknown, repl: unknown) => String(value).replace(pattern as string | RegExp, String(repl)),
-    split: (value: unknown, sep: unknown, limit?: unknown) => String(value).split(sep as string, limit == null ? undefined : Number(limit)),
+    replace: (value: unknown, pattern: unknown, repl: unknown) => {
+      const str = String(value)
+      if (isRegExp(pattern)) { checkRegexObject(pattern as RegExp); checkRegexInput(str) }
+      return str.replace(pattern as string | RegExp, String(repl))
+    },
+    split: (value: unknown, sep: unknown, limit?: unknown) => {
+      const str = String(value)
+      if (isRegExp(sep)) { checkRegexObject(sep as RegExp); checkRegexInput(str) }
+      return str.split(sep as string, limit == null ? undefined : Number(limit))
+    },
     substring: (value: unknown, start?: number, end?: number) => String(value).substring(start ?? 0, end),
     trim: (value: unknown) => String(value).trim(),
     truncate,
     upper: (value: unknown) => String(value).toUpperCase(),
     encodeURIComponent: (value: unknown) => encodeURIComponent(String(value)),
-    regexp: (pattern: unknown, flags?: unknown) => new RegExp(String(pattern), flags == null ? undefined : String(flags)),
+    regexp: (pattern: unknown, flags?: unknown) => guardedRegExp(String(pattern), flags == null ? undefined : String(flags)),
     // date-time
     now: () => Date.now(),
     datetime: (...args: unknown[]) => datetime(...(args as [unknown, unknown, unknown, unknown, unknown, unknown, unknown])),
@@ -323,6 +351,9 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
     data: (name: string) => runtime.data(name) ?? [],
     indata: (name: string, field: string, value: unknown) => {
       const rows = runtime.data(name) ?? []
+      // O(rows) per call and usually called per row: charge the scan so the
+      // wall clock is sampled inside the O(n^2) pattern (C7).
+      meterTick('indata', rows.length)
       let count = 0
       for (const r of rows) if (safeGet(r, field) === value) count++
       return count ? count : undefined

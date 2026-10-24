@@ -15,8 +15,9 @@
  */
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode, SceneRoot } from './types.js'
-import { locale } from './locale.js'
+import { currentLocale } from './locale.js'
 import { tickFormat } from './scale.js'
+import { pushAll } from './util.js'
 
 export type A11yKind = 'mark' | 'axis' | 'legend' | 'legend-entry' | 'title' | 'group'
 
@@ -151,7 +152,8 @@ function textOf(items: SceneItem[] | undefined): string | undefined {
 
 const DISCRETE = new Set(['band', 'point', 'ordinal', 'bin-ordinal'])
 const DISCRETIZING = new Set(['quantize', 'quantile', 'threshold'])
-const L = locale()
+// read per call, not snapshotted at import (C70)
+const loc = (): ReturnType<typeof currentLocale> => currentLocale()
 
 /** vega-scale domainCaption, using the same locale/tick formatting as vega. */
 function scaleCaption(
@@ -180,7 +182,7 @@ function scaleCaption(
   }
   // vega-scale expands abbreviated weekday/month specifiers for screen readers.
   if (temporal && typeof spec === 'string') spec = spec.replace(/%a/g, '%A').replace(/%b/g, '%B')
-  let fmt = tickFormat(L, s as never, 5, spec, formatType, true)
+  let fmt = tickFormat(loc(), s as never, 5, spec, formatType, true)
   if (type === 'quantile' || type === 'quantize') {
     // vega-scale's thresholdFormat: quantile formats from quantiles, quantize
     // from its domain; the minimum gap drives the shared precision.
@@ -188,7 +190,7 @@ function scaleCaption(
     const nums = src.map(Number).filter((v) => Number.isFinite(v))
     let d = nums.length > 1 ? Math.abs(nums[1]! - nums[0]!) : (nums[0] ?? 0)
     for (let i = 1; i < nums.length; i++) d = Math.min(d, Math.abs(nums[i]! - nums[i - 1]!))
-    fmt = L.formatSpan(0, d, 30, spec) as unknown as (v: unknown) => string
+    fmt = loc().formatSpan(0, d, 30, spec) as unknown as (v: unknown) => string
   }
   const print = (v: unknown): string => {
     try { return fmt(v) } catch { return String(v) }
@@ -415,7 +417,7 @@ function scalesFromSnapshots(snaps: Array<{ name: string; type: string; domain: 
     // discrete domains use plain value formatting.
     if (!DISCRETE.has(s.type)) {
       obj.tickFormat = (count?: unknown, specifier?: unknown) =>
-        tickFormat(L, obj as never, count, specifier, undefined, true)
+        tickFormat(loc(), obj as never, count, specifier, undefined, true)
     }
     out.set(s.name, obj)
   }
@@ -453,7 +455,7 @@ export function buildA11yTree(
     if (role === 'axis' || role === 'legend' || role === 'title') {
       const n = guideNode(group, `guide-${seq++}`, tx, ty, scopeScales)
       if (n) nodes.push(n)
-      if (role === 'legend') nodes.push(...legendEntryNodes(group, tx, ty, options))
+      if (role === 'legend') pushAll(nodes, legendEntryNodes(group, tx, ty, options))
       return
     }
     const kids = group.items
