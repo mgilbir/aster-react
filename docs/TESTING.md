@@ -31,7 +31,7 @@ result is the summary line it prints. They change with the code: re-run before q
 | What | Command | Result |
 |---|---|---|
 | Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 785 specs: 310 raw Vega, 475 Vega-Lite |
-| Unit, React, script and vector tests | `pnpm test` | 131 files, 11889 tests passed |
+| Unit, React, script and vector tests | `pnpm test` | 136 files, 12132 tests passed |
 | Time-zone matrix | `pnpm test:tz` | `[tz] all zones passed` (zone-sensitive vitest suites under America/New_York and Asia/Kolkata; `corpus-tz` under UTC and both) |
 | SVG corpus vs real Vega | `pnpm conformance` | 785/785 passed |
 | Vega-Lite corpus through `@aster/vl` | `pnpm conformance-vl` | 475 passed, 0 failed, 0 errored / 475 |
@@ -50,7 +50,24 @@ result is the summary line it prints. They change with the code: re-run before q
 | `<Chart>` interaction in Chromium | `pnpm --filter @aster/react run test:browser` | all checks passed |
 | Incremental gate | `pnpm bench:incremental -- --points=10000 --reps=30` | append 22.2x–26.7x (floor 8x), whole-array replace 22.0x–24.9x (floor 8x), DOM patch 4.9x–6.9x (floor 1.6x), dense 100k-symbol append patch vs mount 306x–332x (floor 200x) over three runs |
 | Bundle shaking | `pnpm check:bundle` | every documented import pattern still works after tree-shaking (`--blanket-false` must fail) |
-| Bundle budgets | `pnpm --filter @aster/benchmarks run budget` | all 11 import-pattern rows pass (sizes in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)) |
+| Bundle budgets | `pnpm --filter @aster/benchmarks run budget` | all 13 import-pattern rows pass (sizes in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)) |
+
+## React component tests: the variant matrix
+
+`<Chart>` and `<SvgChart>` are two shells over one `ChartCore`, so the component tests run on both instead of the light chart
+getting a thinner copy. `packages/react/src/testing/variants.tsx` provides `forEachVariant(needs, (Chart, variant) => …)`,
+which runs its body once per variant that has the declared capabilities (`svg`, `canvas`, `interaction`, `signals`) with the
+variant's component bound to the name `Chart`: `Chart` (all four), `SvgChart` (`svg`) and `SvgChart+interaction` (`svg`,
+`interaction`, `signals`). A variant that lacks a capability does not skip: it asserts the documented failure (the
+runtime report `<SvgChart>` gives, see [API.md](API.md#svgchart-and-the-interaction-capability)) in the test's place, and the
+plain `SvgChart` variant refuses interaction props and the missing-event-loop report, so a test that uses them must declare
+`interaction`/`signals`. `variant.it(needs, name, fn)` declares needs for a single test.
+
+Guards, all in `pnpm test`: `Chart.matrix.test.ts` (no test renders `<Chart>` outside the matrix without a listed reason),
+`Chart.shells.test.ts` (the shells stay thin; `lite` never reaches canvas/hit/signals), `Chart.types.test.ts` (type fixtures that
+must compile and must fail on exact lines, the props/handle parity assertions, and the documented examples) and
+`Chart.corpus-parity.test.tsx` (the DOM of `<Chart>`, `<SvgChart>` and `<SvgChart interaction>` equal over the 785 corpus
+specs: server markup, client mount, hydration).
 
 `retained` in the signals sweep means: the engine equals vega's fresh render of the same signals, and vega's own
 second render (after the signals were written into the running view) does not. See

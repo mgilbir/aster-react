@@ -3,6 +3,30 @@
 Interaction is expressed as React props and values, not an imperative view wrapper. The props below belong to
 `<Chart>`; `<ChartStream>` and `<ChartWorkerStream>` accept the same ones (see "Streams").
 
+## `<Chart>` or `<SvgChart>`
+
+Everything below is `<Chart>`. `<SvgChart>` (`@aster/react/lite`) takes the same props except `renderer`; the ones that
+need hit testing or the signal event loop need the `interaction` capability, passed as a prop
+(`<SvgChart spec={spec} interaction={interaction} />`, `interaction` from `@aster/react/interaction`). API.md has the
+full contract; in short:
+
+| | `<Chart>` | `<SvgChart>` | `<SvgChart interaction={interaction}>` |
+|---|---|---|---|
+| pan / zoom (`panZoom`, `pan`, `zoom`, `view`, `onViewChange`, keyboard) | yes | yes | yes |
+| interval brush (`onSelect`, `brush`) | yes | yes | yes |
+| bound inputs (`signal.bind`), `setSignal`, `signalListeners` | yes | yes (as signal overrides) | yes |
+| accessible tree, roving focus, legend toggling | yes | yes | yes |
+| tooltips (`tooltip`, `renderTooltip`) | yes | compile error; reported at runtime | yes |
+| point selection (`onPointSelect`, `selection`, `select`, `onSelectionChange`) | yes | compile error; reported at runtime | yes |
+| `signal.on` event streams, `preventDefault` | yes | reported: the chart renders but does not respond | yes |
+| `renderer="canvas"` | yes | compile error; renders SVG and reports | compile error; renders SVG and reports |
+
+Pan/zoom, brushing and the keyboard contract do not use the hit index, so the light chart keeps them. Choose `<SvgChart>`
+when bundle size matters and the chart is static, zoomable or brushable; add `interaction` when it needs tooltips,
+clicks on marks or `signal.on`; use `<Chart>` when you want all of it with no setup or need the canvas renderer.
+Every interaction check in `packages/react/scripts/browser-interaction.mts` runs against `<Chart>` and
+`<SvgChart interaction>` in real Chromium.
+
 ## Which scales `x` and `y` mean
 
 `ViewDomain`, `SelectionInterval` (the `onSelect`/`brush` interval) and the interval of a `SelectValue` have two keys,

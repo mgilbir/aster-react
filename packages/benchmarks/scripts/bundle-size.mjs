@@ -24,6 +24,19 @@ const ENTRIES = [
 export default Chart`,
   },
   {
+    label: '@aster/react <SvgChart> (lite)',
+    file: 'aster-lite.tsx',
+    src: `import { SvgChart } from '@aster/react/lite'
+export default SvgChart`,
+  },
+  {
+    label: '@aster/react <SvgChart> + interaction',
+    file: 'aster-lite-interaction.tsx',
+    src: `import { SvgChart } from '@aster/react/lite'
+import { interaction } from '@aster/react/interaction'
+export { SvgChart, interaction }`,
+  },
+  {
     label: 'react-vega <VegaEmbed>',
     file: 'react-vega.tsx',
     src: `import { VegaEmbed } from 'react-vega'

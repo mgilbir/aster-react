@@ -5,6 +5,7 @@ import { act } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { AsterUrlError } from '@aster/core'
 import { loadSpecData, loadSpecDataResource, useChartData, type UseChartResult } from './useChart'
+import { forEachVariant } from './testing/variants'
 
 const specOf = (url: string): never => ({
   width: 50, height: 50, padding: 0, autosize: 'none',
@@ -54,22 +55,24 @@ describe('loader options are forwarded (C93 / LoadOptions)', () => {
     await Promise.all([a, b])
   })
 
-  it('useChartData splits loader options from chart options', async () => {
-    const fetchImpl = csv()
-    let result: UseChartResult | null = null
-    function Chart(): React.ReactElement {
-      result = useChartData(specOf('data.csv'), { fetch: fetchImpl, baseURL: 'https://data.example/', limits: { maxRows: 100 }, width: 50, height: 50 })
-      return <div />
-    }
-    const host = document.createElement('div')
-    document.body.appendChild(host)
-    const root = createRoot(host)
-    await act(async () => { root.render(<React.Suspense fallback={null}><Chart /></React.Suspense>) })
-    await act(async () => { for (let i = 0; i < 100 && !result; i++) await new Promise((r) => setTimeout(r, 10)) })
-    expect(result!.error).toBeNull()
-    expect(result!.svg).toContain('<svg')
-    expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]![0].toString()).toBe('https://data.example/data.csv')
-    act(() => { root.unmount() })
+  forEachVariant(['svg'], (Chart) => {
+    it('useChartData splits loader options from chart options', async () => {
+      const fetchImpl = csv()
+      let result: UseChartResult | null = null
+      function Chart(): React.ReactElement {
+        result = useChartData(specOf('data.csv'), { fetch: fetchImpl, baseURL: 'https://data.example/', limits: { maxRows: 100 }, width: 50, height: 50 })
+        return <div />
+      }
+      const host = document.createElement('div')
+      document.body.appendChild(host)
+      const root = createRoot(host)
+      await act(async () => { root.render(<React.Suspense fallback={null}><Chart /></React.Suspense>) })
+      await act(async () => { for (let i = 0; i < 100 && !result; i++) await new Promise((r) => setTimeout(r, 10)) })
+      expect(result!.error).toBeNull()
+      expect(result!.svg).toContain('<svg')
+      expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]![0].toString()).toBe('https://data.example/data.csv')
+      act(() => { root.unmount() })
+    })
   })
 })
 

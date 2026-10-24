@@ -109,6 +109,35 @@ Because heavy feature areas are only used by a small fraction of specs, they are
 
 `@aster/react/vl` is the same pattern at the grammar level: the Vega-Lite compiler (`@aster/vl`) is registered by `import '@aster/react/vl'`, so Vega-only hosts do not pay for it. A spec that needs a gated feature without its addon loaded gets an actionable error naming what to import first. `packages/benchmarks/scripts/budget.mjs` gates one bundle per import pattern (core `renderSpec`, `useChart`, `<Chart>`, `<Chart>` + VL, and each core addon as its marginal cost on top of core); the measured sizes are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes).
 
+## ChartCore and the two shells
+
+`@aster/react` has one chart implementation, `ChartCore` (`packages/react/src/ChartCore.tsx`: evaluation, the DOM patcher, pan/zoom,
+selection, the a11y tree, the event loop). It receives its optional capabilities as injected values, never imports them:
+the canvas renderer (`CanvasCapability`, `@aster/core/canvas`) and hit testing + the signal loop (`InteractionCapability`,
+`@aster/core/hit`, `@aster/core/signals`). `<Chart>` (`Chart.tsx`) and `<SvgChart>` (`SvgChart.tsx`) are shells that render
+`<ChartCore>`: `<Chart>` injects both capabilities, `<SvgChart>` injects nothing itself and passes through the `interaction`
+its caller gives it. So `@aster/react/lite` (`SvgChart`) never reaches the canvas module, and `@aster/react/interaction`
+(the `interaction` value) is the only way hit and signals enter a lite bundle. The shell split costs `<Chart>` 0.7 kB gzip
+(the property reads through the capability objects, and the missing-capability report that only `<SvgChart>` can trigger).
+
+`<SvgChart>` was chosen over lazy-loading the heavy modules: nothing loads asynchronously, the first paint is synchronous and
+SSR-safe, and the cost is explicit in the importing code.
+
+**Making drift hard.** A second component that mostly copies the first is where a prop gets handled in one and forgotten in
+the other. Six mechanisms, each with a check that fails when the property it protects is broken:
+
+| Mechanism | Where | What breaks it |
+|---|---|---|
+| One implementation; the shells hold no logic | `Chart.shells.test.ts`: each shell at most 14 code lines, no hooks, no control flow, one `<ChartCore>`; the value-import graph of `lite.ts` never reaches `core/canvas`, `core/hit`, `core/signals` or the capability modules | a hook, a branch or a helper in a shell; a value import of a capability in `ChartCore` |
+| Props parity | `parity.assert.ts` (type-only, in `pnpm typecheck`): every `ChartProps` / `ChartHandle` key is shared (same type), interaction-only or excluded with a reason, in the lists of `svg-chart-types.ts` | a new prop on `<Chart>` nobody decided about; a shared prop whose type differs |
+| Type contract | `Chart.types.test.ts` compiles `type-fixtures/`: what must compile, what must fail on exactly the marked lines, and that a prop added to `ChartProps` or a method added to `ChartHandle` makes `parity.assert.ts` fail | loosening the union on `interaction`; a parity assertion that no longer fires |
+| One test matrix | `testing/variants.tsx`: `forEachVariant(needs, (Chart, variant) => …)` runs each component test on `Chart`, `SvgChart` and `SvgChart+interaction`. A test declares `svg`, `canvas`, `interaction`, `signals`; a variant that lacks one asserts the documented failure (the runtime report, or the refusal) in its place; the plain variant refuses interaction props and the event-stream report, so a test cannot pass vacuously on a variant that ignores what it exercises | a behaviour that differs between variants; a test that needs a capability it did not declare |
+| Matrix coverage | `Chart.matrix.test.ts`: no test file may render `<Chart>` outside the matrix unless listed in `DIRECT_CHART_TESTS` with a reason (stale entries fail) | a new test written against `Chart` directly |
+| Output parity | `Chart.corpus-parity.test.tsx` (in `pnpm test`): over all 785 corpus specs, server markup, a client mount and hydration of `<SvgChart interaction>` equal `<Chart renderer="svg">` byte for byte, and `<SvgChart>` equals it minus the `data-datum` stamps; the stamps and the a11y overlay are in the compared DOM | any markup, attribute or a11y difference |
+
+The browser gate, the bundle-shaking gate (module assertions on the esbuild metafile), the budget and `verify:publish` add
+the real-browser behaviour and the size/import guarantees ([PERFORMANCE.md](PERFORMANCE.md#bundle-sizes), [TESTING.md](TESTING.md)).
+
 ## Side effects and tree-shaking
 
 The package manifests declare `sideEffects` so a bundler can drop every module an app does not use: `@aster/vl` is `false`, `@aster/core` and `@aster/react` list the files below. A blanket `false` would be wrong because several documented imports work only through a module's top-level effect. The audit covered every module in `packages/{core,react,vl}/src` for top-level effects (registrations, `globalThis` writes, polyfills, prototype patches, mutable singletons whose initialisation matters, imports done only for their effect). Everything else that runs at import time only fills the module's own tables (`scale.ts` registers the scale types into its own map, `locale.ts`/`format.ts`/`time-format.ts` build their default locale, the `geo-*` ports and `time.ts` build their own constants and caches, `data-format.ts` registers the `json` reader in the registry it reads from), so it stays whenever the module is used and needs no listing.
@@ -123,7 +152,7 @@ The package manifests declare `sideEffects` so a bundler can drop every module a
 | react `vl.js` | `registerVegaLiteCompiler(...)` (a `globalThis` registry under `Symbol.for('@aster/react/vega-lite-compiler')`) | `import '@aster/react/vl'` |
 | react `worker-entry.js` | `globalThis.onmessage = ...` | `import '@aster/react/worker-entry'` is the worker's whole body |
 
-`scripts/check-bundle-shaking.mjs` (`pnpm check:bundle`, a `pnpm check` gate) bundles a tiny app per documented import pattern with esbuild (production, tree-shaking), executes the bundle in a fresh node process (jsdom where it needs a DOM) and asserts the behaviour: Vega-Lite registered and rendered, geo projections, rare transforms, URL and inline csv data, `<Chart>` on the server and the client, `useChart` with and without serialising, `/ssr` hydration, the worker handler and the worker entry, the dom/canvas/hit/signals addons, the lazy `await import('@aster/core/geo')` form, and negative controls (without the addon the spec asks for it). `node scripts/check-bundle-shaking.mjs --blanket-false` simulates `"sideEffects": false` and must fail (10 of 21 patterns do; `scripts/bundle-shaking.test.mjs` asserts it); `--bundler vite` runs the same patterns through Vite/Rollup (a vitest dependency in the pnpm store; not a gate). `pnpm verify:publish` repeats the exercise on the installed tarballs.
+`scripts/check-bundle-shaking.mjs` (`pnpm check:bundle`, a `pnpm check` gate) bundles a tiny app per documented import pattern with esbuild (production, tree-shaking), executes the bundle in a fresh node process (jsdom where it needs a DOM) and asserts the behaviour: Vega-Lite registered and rendered, geo projections, rare transforms, URL and inline csv data, `<Chart>` on the server and the client, `useChart` with and without serialising, `/ssr` hydration, the worker handler and the worker entry, the dom/canvas/hit/signals addons, `<SvgChart>` alone and with `interaction` (asserted on the esbuild metafile: no `core/canvas`, no `core/hit` or `core/signals` without the capability), the lazy `await import('@aster/core/geo')` form, and negative controls (without the addon the spec asks for it). `node scripts/check-bundle-shaking.mjs --blanket-false` simulates `"sideEffects": false` and must fail (10 of 23 patterns do; `scripts/bundle-shaking.test.mjs` asserts it); `--bundler vite` runs the same patterns through Vite/Rollup (a vitest dependency in the pnpm store; not a gate). `pnpm verify:publish` repeats the exercise on the installed tarballs.
 
 ## Scales
 

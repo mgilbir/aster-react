@@ -4,8 +4,9 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { AsterLimitError } from '@aster/core'
-import { Chart, type ChartHandle } from './Chart'
+import type { ChartHandle } from './Chart'
 import { useChart, type UseChartResult } from './useChart'
+import { forEachVariant } from './testing/variants'
 
 function mount(node: React.ReactElement) {
   const container = document.createElement('div')
@@ -41,49 +42,57 @@ describe('bound signal inputs (C66)', () => {
     } } }],
   } as never
 
-  it('notify onSignal and signalListeners, like the spec-driven event loop does', () => {
-    const onSignal = vi.fn()
-    const listener = vi.fn()
-    const ref = React.createRef<ChartHandle>()
-    const { container } = mount(<Chart ref={ref} spec={spec} width={100} height={50} onSignal={onSignal} signalListeners={{ w: listener }} />)
-    const range = container.querySelector('input[type="range"]') as HTMLInputElement
-    setInputValue(range, '70')
-    expect(listener).toHaveBeenCalledWith('w', 70)
-    expect(onSignal).toHaveBeenCalledWith('w', 70)
-    expect(ref.current!.getSignals().w).toBe(70)
-    const rect = ((ref.current!.getScene()!.items[0] as { items: Array<{ width: number }> }).items[0])!
-    expect(rect.width).toBe(70)
+  forEachVariant(['svg'], (Chart) => {
+    it('notify onSignal and signalListeners, like the spec-driven event loop does', () => {
+      const onSignal = vi.fn()
+      const listener = vi.fn()
+      const ref = React.createRef<ChartHandle>()
+      const { container } = mount(<Chart ref={ref} spec={spec} width={100} height={50} onSignal={onSignal} signalListeners={{ w: listener }} />)
+      const range = container.querySelector('input[type="range"]') as HTMLInputElement
+      setInputValue(range, '70')
+      expect(listener).toHaveBeenCalledWith('w', 70)
+      expect(onSignal).toHaveBeenCalledWith('w', 70)
+      expect(ref.current!.getSignals().w).toBe(70)
+      const rect = ((ref.current!.getScene()!.items[0] as { items: Array<{ width: number }> }).items[0])!
+      expect(rect.width).toBe(70)
+    })
   })
 
-  it('notify listeners on the canvas renderer too (no SVG event loop)', () => {
-    const onSignal = vi.fn()
-    const ref = React.createRef<ChartHandle>()
-    const { container } = mount(<Chart ref={ref} spec={spec} width={100} height={50} renderer="canvas" onSignal={onSignal} />)
-    setInputValue(container.querySelector('input[type="range"]') as HTMLInputElement, '33')
-    expect(onSignal).toHaveBeenCalledWith('w', 33)
-    expect(ref.current!.getSignals().w).toBe(33)
+  forEachVariant(['svg', 'canvas'], (Chart) => {
+    it('notify listeners on the canvas renderer too (no SVG event loop)', () => {
+      const onSignal = vi.fn()
+      const ref = React.createRef<ChartHandle>()
+      const { container } = mount(<Chart ref={ref} spec={spec} width={100} height={50} renderer="canvas" onSignal={onSignal} />)
+      setInputValue(container.querySelector('input[type="range"]') as HTMLInputElement, '33')
+      expect(onSignal).toHaveBeenCalledWith('w', 33)
+      expect(ref.current!.getSignals().w).toBe(33)
+    })
   })
 
-  it('a <select> keeps the option value type (number, not "30")', () => {
-    const listener = vi.fn()
-    const ref = React.createRef<ChartHandle>()
-    const { container } = mount(<Chart ref={ref} spec={spec} width={100} height={50} signalListeners={{ pick: listener }} />)
-    const select = container.querySelector('select') as HTMLSelectElement
-    expect(select.selectedOptions[0]!.textContent).toBe('20')
-    select.value = select.options[2]!.value
-    act(() => { select.dispatchEvent(new Event('change', { bubbles: true })) })
-    expect(listener).toHaveBeenCalledWith('pick', 30)
-    expect(ref.current!.getSignals().pick).toBe(30)
-    const rect = ((ref.current!.getScene()!.items[0] as { items: Array<{ height: number }> }).items[0])!
-    expect(rect.height).toBe(30)
+  forEachVariant(['svg'], (Chart) => {
+    it('a <select> keeps the option value type (number, not "30")', () => {
+      const listener = vi.fn()
+      const ref = React.createRef<ChartHandle>()
+      const { container } = mount(<Chart ref={ref} spec={spec} width={100} height={50} signalListeners={{ pick: listener }} />)
+      const select = container.querySelector('select') as HTMLSelectElement
+      expect(select.selectedOptions[0]!.textContent).toBe('20')
+      select.value = select.options[2]!.value
+      act(() => { select.dispatchEvent(new Event('change', { bubbles: true })) })
+      expect(listener).toHaveBeenCalledWith('pick', 30)
+      expect(ref.current!.getSignals().pick).toBe(30)
+      const rect = ((ref.current!.getScene()!.items[0] as { items: Array<{ height: number }> }).items[0])!
+      expect(rect.height).toBe(30)
+    })
   })
 
-  it('a checkbox reports a boolean', () => {
-    const listener = vi.fn()
-    const { container } = mount(<Chart spec={spec} width={100} height={50} signalListeners={{ flag: listener }} />)
-    const box = container.querySelector('input[type="checkbox"]') as HTMLInputElement
-    act(() => { box.click() })
-    expect(listener).toHaveBeenCalledWith('flag', false)
+  forEachVariant(['svg'], (Chart) => {
+    it('a checkbox reports a boolean', () => {
+      const listener = vi.fn()
+      const { container } = mount(<Chart spec={spec} width={100} height={50} signalListeners={{ flag: listener }} />)
+      const box = container.querySelector('input[type="checkbox"]') as HTMLInputElement
+      act(() => { box.click() })
+      expect(listener).toHaveBeenCalledWith('flag', false)
+    })
   })
 })
 
@@ -102,36 +111,42 @@ describe('dataChanges validation (C66)', () => {
   const yOfRow = (ref: React.RefObject<ChartHandle | null>, i: number): number =>
     ((ref.current!.getScene()!.items[0] as { items: Array<{ y: number }> }).items[i]!).y
 
-  it('a valid changeset still takes the differential path', () => {
-    const ref = React.createRef<ChartHandle>()
-    const onError = vi.fn()
-    const { rerender } = mount(<Chart ref={ref} spec={spec} data={{ t: rows(2) }} width={100} height={100} onError={onError} />)
-    rerender(<Chart ref={ref} spec={spec} data={{ t: rows(8) }} dataChanges={{ t: [1] }} width={100} height={100} onError={onError} />)
-    expect(yOfRow(ref, 1)).toBeCloseTo(20, 6)
-    expect(onError).not.toHaveBeenCalled()
+  forEachVariant(['svg'], (Chart) => {
+    it('a valid changeset still takes the differential path', () => {
+      const ref = React.createRef<ChartHandle>()
+      const onError = vi.fn()
+      const { rerender } = mount(<Chart ref={ref} spec={spec} data={{ t: rows(2) }} width={100} height={100} onError={onError} />)
+      rerender(<Chart ref={ref} spec={spec} data={{ t: rows(8) }} dataChanges={{ t: [1] }} width={100} height={100} onError={onError} />)
+      expect(yOfRow(ref, 1)).toBeCloseTo(20, 6)
+      expect(onError).not.toHaveBeenCalled()
+    })
   })
 
-  it.each([
-    ['an out-of-range index', { t: [7] }],
-    ['a fractional index', { t: [0.5] }],
-    ['an unknown dataset', { nope: [0] }],
-  ])('%s is reported and the update is still correct', (_label, changes) => {
-    const ref = React.createRef<ChartHandle>()
-    const onError = vi.fn<(e: Error) => void>()
-    const { rerender } = mount(<Chart ref={ref} spec={spec} data={{ t: rows(2) }} width={100} height={100} onError={onError} />)
-    rerender(<Chart ref={ref} spec={spec} data={{ t: rows(8) }} dataChanges={changes} width={100} height={100} onError={onError} />)
-    expect(yOfRow(ref, 1)).toBeCloseTo(20, 6) // y(8) with domain 0..10 over 100px: the new value, not the stale one
-    expect(onError).toHaveBeenCalledTimes(1)
-    expect(onError.mock.calls[0]![0].message).toMatch(/dataChanges/)
+  forEachVariant(['svg'], (Chart) => {
+    it.each([
+      ['an out-of-range index', { t: [7] }],
+      ['a fractional index', { t: [0.5] }],
+      ['an unknown dataset', { nope: [0] }],
+    ])('%s is reported and the update is still correct', (_label, changes) => {
+      const ref = React.createRef<ChartHandle>()
+      const onError = vi.fn<(e: Error) => void>()
+      const { rerender } = mount(<Chart ref={ref} spec={spec} data={{ t: rows(2) }} width={100} height={100} onError={onError} />)
+      rerender(<Chart ref={ref} spec={spec} data={{ t: rows(8) }} dataChanges={changes} width={100} height={100} onError={onError} />)
+      expect(yOfRow(ref, 1)).toBeCloseTo(20, 6) // y(8) with domain 0..10 over 100px: the new value, not the stale one
+      expect(onError).toHaveBeenCalledTimes(1)
+      expect(onError.mock.calls[0]![0].message).toMatch(/dataChanges/)
+    })
   })
 
-  it('a row-count change is rejected (changesets need an unchanged length)', () => {
-    const ref = React.createRef<ChartHandle>()
-    const onError = vi.fn<(e: Error) => void>()
-    const { rerender } = mount(<Chart ref={ref} spec={spec} data={{ t: rows(2) }} width={100} height={100} onError={onError} />)
-    rerender(<Chart ref={ref} spec={spec} data={{ t: [...rows(8), { a: 4, b: 4 }] }} dataChanges={{ t: [1] }} width={100} height={100} onError={onError} />)
-    expect(onError.mock.calls[0]![0].message).toMatch(/row count changed/)
-    expect((ref.current!.getScene()!.items[0] as { items: unknown[] }).items).toHaveLength(4)
+  forEachVariant(['svg'], (Chart) => {
+    it('a row-count change is rejected (changesets need an unchanged length)', () => {
+      const ref = React.createRef<ChartHandle>()
+      const onError = vi.fn<(e: Error) => void>()
+      const { rerender } = mount(<Chart ref={ref} spec={spec} data={{ t: rows(2) }} width={100} height={100} onError={onError} />)
+      rerender(<Chart ref={ref} spec={spec} data={{ t: [...rows(8), { a: 4, b: 4 }] }} dataChanges={{ t: [1] }} width={100} height={100} onError={onError} />)
+      expect(onError.mock.calls[0]![0].message).toMatch(/row count changed/)
+      expect((ref.current!.getScene()!.items[0] as { items: unknown[] }).items).toHaveLength(4)
+    })
   })
 })
 
@@ -188,16 +203,20 @@ describe('maxSvgLength is enforced, as the limits docs promise (C92 / JSDoc)', (
     marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'a' }, y: { scale: 'y', field: 'b' } } } }],
   } as never
 
-  it('<Chart> shows the error state and reports an AsterLimitError', () => {
-    const onError = vi.fn<(e: Error) => void>()
-    const { container } = mount(<Chart spec={spec} width={100} height={100} limits={{ maxSvgLength: 200 }} onError={onError} />)
-    expect(container.querySelector('[role="alert"]')).not.toBeNull()
-    expect(onError.mock.calls[0]![0]).toBeInstanceOf(AsterLimitError)
+  forEachVariant(['svg'], (Chart) => {
+    it('<Chart> shows the error state and reports an AsterLimitError', () => {
+      const onError = vi.fn<(e: Error) => void>()
+      const { container } = mount(<Chart spec={spec} width={100} height={100} limits={{ maxSvgLength: 200 }} onError={onError} />)
+      expect(container.querySelector('[role="alert"]')).not.toBeNull()
+      expect(onError.mock.calls[0]![0]).toBeInstanceOf(AsterLimitError)
+    })
   })
 
-  it('<Chart> renders when the output fits', () => {
-    const { container } = mount(<Chart spec={spec} width={100} height={100} limits={{ maxSvgLength: 1_000_000 }} />)
-    expect(container.querySelector('svg')).not.toBeNull()
+  forEachVariant(['svg'], (Chart) => {
+    it('<Chart> renders when the output fits', () => {
+      const { container } = mount(<Chart spec={spec} width={100} height={100} limits={{ maxSvgLength: 1_000_000 }} />)
+      expect(container.querySelector('svg')).not.toBeNull()
+    })
   })
 
   it('useChart reports it like renderSpec does', () => {

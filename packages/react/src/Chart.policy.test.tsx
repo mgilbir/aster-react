@@ -4,9 +4,10 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { AsterUrlError } from '@aster/core'
-import { Chart, type ChartHandle } from './Chart'
+import type { ChartHandle } from './Chart'
 import { ChartStream, type ChartStreamHandle } from './ChartStream'
 import { useChart, type UseChartResult } from './useChart'
+import { forEachVariant } from './testing/variants'
 
 const imgSpec = {
   width: 80, height: 40, padding: 0, autosize: 'none',
@@ -37,26 +38,32 @@ afterEach(() => { document.body.innerHTML = '' })
 describe('urlPolicy reaches evaluation (C93)', () => {
   const allow = (u: URL): boolean => u.host === 'good.example'
 
-  it('<Chart> drops denied images through onDeny', () => {
-    const onDeny = vi.fn()
-    const ref = React.createRef<ChartHandle>()
-    mount(<Chart ref={ref} spec={imgSpec} width={80} height={40} urlPolicy={{ allow, onDeny }} />)
-    expect(onDeny).toHaveBeenCalledWith('https://evil.example/b.png', expect.any(AsterUrlError))
-    expect(urls(ref.current!.getScene())).toEqual(['https://good.example/a.png', undefined])
+  forEachVariant(['svg'], (Chart) => {
+    it('<Chart> drops denied images through onDeny', () => {
+      const onDeny = vi.fn()
+      const ref = React.createRef<ChartHandle>()
+      mount(<Chart ref={ref} spec={imgSpec} width={80} height={40} urlPolicy={{ allow, onDeny }} />)
+      expect(onDeny).toHaveBeenCalledWith('https://evil.example/b.png', expect.any(AsterUrlError))
+      expect(urls(ref.current!.getScene())).toEqual(['https://good.example/a.png', undefined])
+    })
   })
 
-  it('<Chart> without onDeny: a denial is the error state, reported once as an AsterUrlError', () => {
-    const onError = vi.fn<(e: Error) => void>()
-    const { container } = mount(<Chart spec={imgSpec} width={80} height={40} urlPolicy={{ allow }} onError={onError} />)
-    expect(container.querySelector('[role="alert"]')).not.toBeNull()
-    expect(onError).toHaveBeenCalledTimes(1)
-    expect(onError.mock.calls[0]![0]).toBeInstanceOf(AsterUrlError)
+  forEachVariant(['svg'], (Chart) => {
+    it('<Chart> without onDeny: a denial is the error state, reported once as an AsterUrlError', () => {
+      const onError = vi.fn<(e: Error) => void>()
+      const { container } = mount(<Chart spec={imgSpec} width={80} height={40} urlPolicy={{ allow }} onError={onError} />)
+      expect(container.querySelector('[role="alert"]')).not.toBeNull()
+      expect(onError).toHaveBeenCalledTimes(1)
+      expect(onError.mock.calls[0]![0]).toBeInstanceOf(AsterUrlError)
+    })
   })
 
-  it('<Chart> without a policy and without limits keeps vega behaviour (images as given)', () => {
-    const ref = React.createRef<ChartHandle>()
-    mount(<Chart ref={ref} spec={imgSpec} width={80} height={40} />)
-    expect(urls(ref.current!.getScene())).toHaveLength(2)
+  forEachVariant(['svg'], (Chart) => {
+    it('<Chart> without a policy and without limits keeps vega behaviour (images as given)', () => {
+      const ref = React.createRef<ChartHandle>()
+      mount(<Chart ref={ref} spec={imgSpec} width={80} height={40} />)
+      expect(urls(ref.current!.getScene())).toHaveLength(2)
+    })
   })
 
   it('useChart forwards it too, and re-evaluates when it changes', () => {
