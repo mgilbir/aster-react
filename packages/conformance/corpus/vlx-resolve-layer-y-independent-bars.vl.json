@@ -1,0 +1,154 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "data": {
+    "name": "table",
+    "values": [
+      {
+        "c": "A",
+        "g": "p",
+        "x": 1,
+        "y": 2,
+        "v": 5,
+        "t": "2024-01-15",
+        "o": {
+          "v": 3
+        },
+        "IMDB Rating": 6.1,
+        "d": "x1"
+      },
+      {
+        "c": "B",
+        "g": "q",
+        "x": 2,
+        "y": 4,
+        "v": 9,
+        "t": "2024-02-20",
+        "o": {
+          "v": 7
+        },
+        "IMDB Rating": 7.4,
+        "d": "x2"
+      },
+      {
+        "c": "A",
+        "g": "q",
+        "x": 3,
+        "y": 3,
+        "v": 2,
+        "t": "2024-03-05",
+        "o": {
+          "v": 1
+        },
+        "IMDB Rating": 5.2,
+        "d": "x1"
+      },
+      {
+        "c": "C",
+        "g": "p",
+        "x": 4,
+        "y": 6,
+        "v": 7,
+        "t": "2024-05-30",
+        "o": {
+          "v": 4
+        },
+        "IMDB Rating": 8.8,
+        "d": "x3"
+      },
+      {
+        "c": "B",
+        "g": "p",
+        "x": 5,
+        "y": 5,
+        "v": 4,
+        "t": "2024-07-11",
+        "o": {
+          "v": 9
+        },
+        "IMDB Rating": 6.9,
+        "d": "x2"
+      },
+      {
+        "c": "C",
+        "g": "q",
+        "x": 6,
+        "y": 8,
+        "v": 6,
+        "t": "2024-09-02",
+        "o": {
+          "v": 2
+        },
+        "IMDB Rating": 7.7,
+        "d": "x3"
+      },
+      {
+        "c": "A",
+        "g": "p",
+        "x": 7,
+        "y": 7,
+        "v": 8,
+        "t": "2024-11-25",
+        "o": {
+          "v": 5
+        },
+        "IMDB Rating": 4.4,
+        "d": "x1"
+      },
+      {
+        "c": "B",
+        "g": "q",
+        "x": 8,
+        "y": 9,
+        "v": 3,
+        "t": "2024-12-31",
+        "o": {
+          "v": 8
+        },
+        "IMDB Rating": 9.1,
+        "d": "x2"
+      }
+    ]
+  },
+  "width": 300,
+  "height": 200,
+  "resolve": {
+    "scale": {
+      "y": "independent"
+    }
+  },
+  "layer": [
+    {
+      "mark": "bar",
+      "encoding": {
+        "x": {
+          "field": "c",
+          "type": "nominal"
+        },
+        "y": {
+          "field": "v",
+          "type": "quantitative",
+          "aggregate": "sum"
+        }
+      }
+    },
+    {
+      "mark": {
+        "type": "line",
+        "color": "red"
+      },
+      "encoding": {
+        "x": {
+          "field": "c",
+          "type": "nominal"
+        },
+        "y": {
+          "field": "y",
+          "type": "quantitative",
+          "aggregate": "mean"
+        }
+      }
+    }
+  ]
+}

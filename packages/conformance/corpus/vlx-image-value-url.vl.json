@@ -1,0 +1,46 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "data": {
+    "values": [
+      {
+        "c": "A",
+        "x": 1,
+        "y": 2,
+        "u": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+      },
+      {
+        "c": "B",
+        "x": 2,
+        "y": 4,
+        "u": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+      },
+      {
+        "c": "C",
+        "x": 3,
+        "y": 3,
+        "u": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+      }
+    ]
+  },
+  "width": 140,
+  "height": 90,
+  "mark": {
+    "type": "image",
+    "opacity": 0.5
+  },
+  "encoding": {
+    "x": {
+      "field": "c",
+      "type": "nominal"
+    },
+    "y": {
+      "field": "v",
+      "type": "quantitative"
+    },
+    "url": {
+      "value": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    }
+  }
+}

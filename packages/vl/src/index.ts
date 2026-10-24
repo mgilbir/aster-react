@@ -5,5 +5,5 @@
  * `@aster/core` then renders. Behaviour is pinned to the vega-lite oracle by
  * rendering-parity tests in the conformance package.
  */
-export { compile, compileUnit } from './compile.js'
+export { compile, compileUnit, VLCompileError } from './compile.js'
 export type { VLSpec } from './compile.js'

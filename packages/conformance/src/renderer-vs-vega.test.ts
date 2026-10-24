@@ -111,14 +111,10 @@ describe('N2: custom SVG path strings as symbol shapes', () => {
     })
   }
 
-  it('an invalid path draws the default circle (a documented deviation: vega throws), never the text', async () => {
-    const hostile = 'M0,0L1,1" onload="alert(1)'
-    const spec = markSpec('symbol', { shape: { value: hostile } })
+  it('refuses an invalid path the way Vega does, and writes nothing of it', async () => {
+    const spec = markSpec('symbol', { shape: { value: 'M0,0L1,1" onload="alert(1)' } })
     await expect(oracleSvg(spec)).rejects.toThrow(/Invalid SVG path/)
-    const svg = renderSpec(spec as never)
-    expect(svg).not.toContain('onload')
-    // the same chart with the circle shape renders identically
-    expect(svg).toBe(renderSpec(markSpec('symbol', { shape: { value: 'circle' } }) as never))
+    expect(() => renderSpec(spec as never)).toThrow(/Invalid SVG path/)
   })
 
   it('a path that parses is re-serialized from numbers: no input text reaches the document', () => {

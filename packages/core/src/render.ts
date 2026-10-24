@@ -719,18 +719,8 @@ function symbolPathImpl(shape: string | undefined, r: number): string {
       // vega `symbols(name)`: any other name is a custom SVG path, parsed and
       // scaled by sqrt(size)/2 (svg-path.ts); the result is built from numbers
       // and command letters only, so no input text reaches the document.
-      //
-      // DELIBERATE DEVIATION from vega, which throws "Invalid SVG path" for a
-      // name that is neither built in nor a parseable path: such a shape is drawn
-      // as the default circle instead. @aster/vl currently emits the invalid
-      // `shape: "point"` for every Vega-Lite point mark (audit C71, fixed in the
-      // compiler PR); refusing it here would break every point chart compiled
-      // by it. Remove this fallback once that lands and let the error propagate.
-      try {
-        return customSymbolPathData(shape!, r, num3)
-      } catch {
-        return symbolPathImpl('circle', r)
-      }
+      // An invalid path throws vega's "Invalid SVG path" error, like vega.
+      return customSymbolPathData(shape!, r, num3)
   }
 }
 

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **@aster/vl round 2**: `config.scale` keys, `mark.invalid`, `bandSize`/`binSpacing`/secondary
+  offsets, errorbar / errorband, the image mark, `"container"` sizing, `numberFormat` /
+  `timeFormat` / `fieldTitle` config, vega-lite's axis order, zindex and color-legend rules, and the
+  default invalid-value filter for null data.
+- **@aster/vl is production-usable**: every Vega-Lite feature either compiles to
+  Vega that renders like vega-lite 6.4.3 or throws a `VLCompileError` naming the
+  unsupported feature (audit C34-C37, C71-C74, C97). New validation layer, one
+  field-name escaping helper, VL transform translation, nested composition,
+  layer parent transforms/config, sort/condition/timeUnit/bin forms, shared
+  scales and legends, collision-free generated names, and `compile` never
+  mutates its input. `conformance-vl` now renders our output through real vega
+  and fails on vega errors or warnings. The opt-in `@aster/react/vl` bundle row
+  grew to ~189 kB gzip (proposed budget 190 kB, pending approval). Core: domain `sort: {op}` uses Vega's
+  aggregate ops and ordinal `{scheme}` ranges resolve to colours.
 - **Loader URL policy (breaking default)**: `loadSpecData(spec, options)` now vets every URL
   (protocols `http:`/`https:` only, no credentials, loopback/private/link-local hosts denied,
   relative urls need `baseURL`, an `allow(url)` hook re-run on every redirect hop) and bounds

@@ -376,9 +376,9 @@ export function boundsFromPath(
     bounds.add(p[0]!, p[1]!)
   }
 
-  const quadExtrema = (x0: number, x1: number, x2: number) => {
+  const quadExtrema = (x0: number, x1: number, x2: number, onY = false) => {
     const t = (x0 - x1) / (x0 + x2 - 2 * x1)
-    if (0 < t && t < 1) add(x0 + (x1 - x0) * t, bounds.y1)
+    if (0 < t && t < 1) { const v = x0 + (x1 - x0) * t; if (onY) add(bounds.x1, v); else add(v, bounds.y1) }
   }
   const cubic = (t: number, p0: number, p1: number, p2: number, p3: number) => {
     const s = 1 - t
@@ -386,7 +386,7 @@ export function boundsFromPath(
     const t2 = t * t
     return s2 * s * p0 + 3 * s2 * t * p1 + 3 * s * t2 * p2 + t2 * t * p3
   }
-  const cubicExtrema = (x0: number, x1: number, x2: number, x3: number) => {
+  const cubicExtrema = (x0: number, x1: number, x2: number, x3: number, onY = false) => {
     const a = x3 - x0 + 3 * x1 - 3 * x2
     const b = x0 + x2 - 2 * x1
     const c = x0 - x1
@@ -403,8 +403,9 @@ export function boundsFromPath(
     } else if (b !== 0) {
       t0 = 0.5 * c / b
     }
-    if (0 < t0 && t0 < 1) add(cubic(t0, x0, x1, x2, x3), bounds.y1)
-    if (0 < t1 && t1 < 1) add(cubic(t1, x0, x1, x2, x3), bounds.y1)
+    for (const t of [t0, t1]) {
+      if (0 < t && t < 1) { const v = cubic(t, x0, x1, x2, x3); if (onY) add(bounds.x1, v); else add(v, bounds.y1) }
+    }
   }
 
   // SVG arc (A command) → center parameterization → sample like boundContext.arc
@@ -580,7 +581,7 @@ export function boundsFromPath(
           const x = nextNum() + (rel ? lx : 0)
           const y = nextNum() + (rel ? ly : 0)
           cubicExtrema(lx, x1, x2, x)
-          cubicExtrema(ly, y1, y2, y)
+          cubicExtrema(ly, y1, y2, y, true)
           add(x, y)
           lx = x
           ly = y
@@ -595,7 +596,7 @@ export function boundsFromPath(
           const y = nextNum() + (rel ? ly : 0)
           // reflected control point: unknown previous control → use current point
           cubicExtrema(lx, lx, x2, x)
-          cubicExtrema(ly, ly, y2, y)
+          cubicExtrema(ly, ly, y2, y, true)
           add(x, y)
           lx = x
           ly = y
@@ -609,7 +610,7 @@ export function boundsFromPath(
           const x = nextNum() + (rel ? lx : 0)
           const y = nextNum() + (rel ? ly : 0)
           quadExtrema(lx, x1, x)
-          quadExtrema(ly, y1, y)
+          quadExtrema(ly, y1, y, true)
           add(x, y)
           lx = x
           ly = y
@@ -621,7 +622,7 @@ export function boundsFromPath(
           const x = nextNum() + (rel ? lx : 0)
           const y = nextNum() + (rel ? ly : 0)
           quadExtrema(lx, lx, x)
-          quadExtrema(ly, ly, y)
+          quadExtrema(ly, ly, y, true)
           add(x, y)
           lx = x
           ly = y

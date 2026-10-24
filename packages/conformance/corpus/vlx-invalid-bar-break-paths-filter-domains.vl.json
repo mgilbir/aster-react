@@ -1,0 +1,53 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "data": {
+    "values": [
+      {
+        "c": "A",
+        "x": 1,
+        "y": 2,
+        "s": 3,
+        "t": "2024-01-01"
+      },
+      {
+        "c": "B",
+        "x": 2,
+        "y": null,
+        "s": 5,
+        "t": "2024-02-01"
+      },
+      {
+        "c": "C",
+        "x": 3,
+        "y": 4,
+        "s": null,
+        "t": "2024-03-01"
+      },
+      {
+        "c": "D",
+        "x": 4,
+        "y": 3,
+        "s": 7,
+        "t": "2024-04-01"
+      }
+    ]
+  },
+  "width": 160,
+  "height": 100,
+  "mark": {
+    "type": "bar",
+    "invalid": "break-paths-filter-domains"
+  },
+  "encoding": {
+    "x": {
+      "field": "c",
+      "type": "nominal"
+    },
+    "y": {
+      "field": "y",
+      "type": "quantitative"
+    }
+  }
+}
