@@ -17,22 +17,19 @@
  */
 import { compileChart } from './compiler.js'
 import { dict, ownGet } from './util.js'
-import { evaluateChart } from './runtime.js'
+import { evaluateChartPending } from './runtime.js'
+import { refId, valueKey } from './fingerprint.js'
 import { checkSpecLimits, checkSceneLimits, createLimitClock } from './limits.js'
 import { diffRows, type DataPulse } from './pulse.js'
 import type { CompiledChart, RuntimeInput, SceneRoot, VgSpec } from './types.js'
 
-const REF_IDS = new WeakMap<object, number>()
-let REF_SEQ = 0
-
-function refId(v: unknown): number {
-  if (v === null || (typeof v !== 'object' && typeof v !== 'function')) return -1
-  let id = REF_IDS.get(v as object)
-  if (id === undefined) {
-    id = ++REF_SEQ
-    REF_IDS.set(v as object, id)
-  }
-  return id
+/**
+ * Fingerprint of a dataset value: object/array values by IDENTITY (the caveat in
+ * the file header), primitives (an inline JSON/CSV string) by typed VALUE — a
+ * replaced string must invalidate the cache (C15).
+ */
+function dataRefKey(v: unknown): string {
+  return v !== null && (typeof v === 'object' || typeof v === 'function') ? `#${refId(v as object)}` : valueKey(v)
 }
 
 /** Serialize the spec structure, leaving dataset values out (they're tracked by identity). */
@@ -49,7 +46,7 @@ function skeletonOf(spec: VgSpec): string {
     return JSON.stringify(copy) ?? ''
   } catch {
     // Non-serializable spec (cycles/functions): no caching, always re-evaluate.
-    return `\u0000uncacheable:${refId(spec)}:${Date.now()}`
+    return `\u0000uncacheable:${refId(spec as object)}:${Date.now()}`
   }
 }
 
@@ -65,7 +62,7 @@ function dataKeyOf(spec: VgSpec, input: RuntimeInput, out: string[]): void {
     const override = ownGet(input.data, d.name)
     const vals = override ?? d.values
     if (vals == null) continue
-    out.push(`${d.name}:${refId(vals)}`)
+    out.push(`${d.name}:${dataRefKey(vals)}`)
   }
 }
 
@@ -128,21 +125,6 @@ function pulseOfExplicit(changes: Record<string, number[]> | undefined): DataPul
   return { datasets, structural: new Set() }
 }
 
-/** Copy inline dataset values from a fresh spec into a structurally-identical compiled chart. */
-function syncValues(chart: CompiledChart, spec: VgSpec): void {
-  const data = (spec as { data?: unknown }).data
-  const specs: Array<Record<string, unknown>> = Array.isArray(data)
-    ? (data as Array<Record<string, unknown>>)
-    : data && typeof data === 'object'
-      ? [data as Record<string, unknown>]
-      : []
-  for (const s of specs) {
-    if (typeof s.name !== 'string') continue
-    const compiled = chart.data.find((d) => d.name === s.name)
-    if (compiled) compiled.values = s.values as unknown[] | undefined
-  }
-}
-
 export interface ChartSession {
   /** Evaluate `spec` + `input`, returning the cached scene when nothing changed. */
   evaluate(spec: VgSpec, input?: RuntimeInput): SceneRoot
@@ -162,19 +144,22 @@ export interface ChartSession {
   pulse: () => DataPulse | null
 }
 
-/** Non-data input fingerprint (skeleton + size/signals/domain overrides). */
+/**
+ * Non-data input fingerprint: skeleton + everything else evaluateChart consumes.
+ * Every component is TYPED (`valueKey`): width `undefined` vs `0`, signal `1` vs
+ * `"1"`, and so on never collide; limits are part of the key because a cached
+ * scene was accepted under specific budgets (C15/C49).
+ */
 function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   const parts: string[] = []
-  parts.push(`w=${input.width ?? ''}`, `h=${input.height ?? ''}`)
+  parts.push(`w=${valueKey(input.width)}`, `h=${valueKey(input.height)}`)
   if (input.textMetrics) parts.push(`tm=#${refId(input.textMetrics)}`)
+  if (input.limits) parts.push(`lim=${valueKey(input.limits)}`)
   for (const name of Object.keys(input.domainRaw ?? {}).sort()) {
-    parts.push(`d ${name}=${JSON.stringify(input.domainRaw![name])}`)
+    parts.push(`d ${name}=${valueKey(input.domainRaw![name])}`)
   }
   for (const name of Object.keys(input.signals ?? {}).sort()) {
-    const v = input.signals![name]
-    parts.push(
-      typeof v === 'object' || typeof v === 'function' ? `s ${name}=#${refId(v)}` : `s ${name}=${String(v)}`,
-    )
+    parts.push(`s ${name}=${valueKey(input.signals![name])}`)
   }
   return `${skeleton}\u0000${parts.join('\u0001')}`
 }
@@ -261,6 +246,17 @@ export function createChartSession(): ChartSession {
     }
   }
 
+  /**
+   * The session's view of the data as plain `input.data`: inline spec values and
+   * host overrides merged. The compiled IR is never re-pointed at new values
+   * (it is immutable); every evaluation is handed the current ones instead.
+   */
+  const dataInput = (raw: Map<string, unknown>): Record<string, unknown[]> => {
+    const data = dict<unknown[]>()
+    for (const [name, rows] of raw) data[name] = rows as unknown[]
+    return data
+  }
+
   return {
     evaluate(spec, input = {}) {
       const clock = createLimitClock(input.limits)
@@ -271,36 +267,40 @@ export function createChartSession(): ChartSession {
       const key = fingerprint(spec, input)
       const currentRaw = rawDatasets(spec, input)
       const { input: effectiveInput, pulse } = withAutoPulse(spec, input, currentRaw)
-      // A per-datum changeset implies the data values changed (often in place, so
-      // the array identity — and thus the fingerprint — is unchanged), so the
-      // no-op cache must not short-circuit the differential re-evaluation.
-      if (!input.dataChanges && !input.dataPulse && key === lastKey && lastScene) {
+      // An explicit change description (per-datum changeset, pulse, or a named
+      // changed dataset) means the data values changed — often in place, so the
+      // array identity and thus the fingerprint is unchanged — so the no-op
+      // cache must not short-circuit the re-evaluation.
+      const hinted = !!input.dataChanges || !!input.dataPulse || !!input.changedDatasets?.length
+      if (!hinted && key === lastKey && lastScene) {
         lastRaw = currentRaw
         lastPulse = pulse
         return lastScene
       }
       // New row arrays with identical values are a no-op for the scene: the
       // inferred pulse is empty and everything else matches the previous run.
-      if (input.autoChanges !== false && !input.dataChanges && !input.dataPulse && !pulse.datasets.size && !pulse.structural.size && metaKey === lastMetaKey && lastScene) {
+      if (input.autoChanges !== false && !hinted && !pulse.datasets.size && !pulse.structural.size && metaKey === lastMetaKey && lastScene) {
         lastRaw = currentRaw
         lastPulse = pulse
         lastKey = key
         return lastScene
       }
 
-      if (skeleton !== lastSkeleton || !lastChart) {
-        lastChart = compileChart(spec)
-        lastSkeleton = skeleton
-      } else {
-        // Same structure, different data: the compiled IR carries the previous
-        // spec's value references — point it at the current ones before evaluating.
-        syncValues(lastChart, spec)
-      }
-      lastSpec = spec
+      // Compute everything into locals and commit only after every check has
+      // passed (C16): a limit that throws must leave the session — and the
+      // engine's incremental state — exactly as the previous accepted
+      // evaluation left them.
+      const recompile = skeleton !== lastSkeleton || !lastChart
+      const chart = recompile ? compileChart(spec) : lastChart!
       clock.check('compile')
-      lastScene = evaluateChart(lastChart, effectiveInput)
+      const pending = evaluateChartPending(chart, { ...effectiveInput, data: dataInput(currentRaw) })
       clock.check('evaluate')
-      if (input.limits) checkSceneLimits(lastScene, input.limits)
+      if (input.limits) checkSceneLimits(pending.scene, input.limits)
+      pending.commit()
+      lastChart = chart
+      lastSkeleton = skeleton
+      lastSpec = spec
+      lastScene = pending.scene
       lastKey = key
       lastMetaKey = metaKey
       lastRaw = currentRaw
@@ -311,13 +311,23 @@ export function createChartSession(): ChartSession {
       // Imperative per-datum update of the last compiled chart. No spec re-pass:
       // the host drives changes via data/dataChanges/signals. Requires a prior
       // evaluate (we need a compiled chart + spec to fingerprint against).
-      if (!lastChart || !lastSpec) return null
+      if (!lastChart || !lastSpec || !lastRaw) return null
       const clock = createLimitClock(input.limits)
-      const currentRaw = rawDatasets(lastSpec, input)
+      // Start from the data the last evaluation (or change) left behind; the
+      // host's `data` overrides win. A datum the host does not mention keeps its
+      // current value rather than reverting to the spec's original one.
+      const currentRaw = new Map(lastRaw)
+      for (const [name, rows] of Object.entries(input.data ?? {})) currentRaw.set(name, rows)
       const { input: effectiveInput, pulse } = withAutoPulse(lastSpec, input, currentRaw)
-      lastScene = evaluateChart(lastChart, effectiveInput)
+      const pending = evaluateChartPending(lastChart, { ...effectiveInput, data: dataInput(currentRaw) })
       clock.check('change')
-      lastKey = fingerprint(lastSpec, effectiveInput)
+      if (input.limits) checkSceneLimits(pending.scene, input.limits)
+      pending.commit()
+      lastScene = pending.scene
+      // Every key follows the state that was just committed, or the no-op cache
+      // would serve a scene built for different inputs (C15).
+      lastKey = fingerprint(lastSpec, { ...effectiveInput, data: dataInput(currentRaw) })
+      lastMetaKey = metaKeyOf(lastSkeleton, effectiveInput)
       lastRaw = currentRaw
       lastPulse = pulse
       return lastScene

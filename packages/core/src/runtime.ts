@@ -5,7 +5,7 @@
  */
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { readData, type DataFormatSpec } from './data-format.js'
-import { applyTransforms, sortRows, sortOrder, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row, type TransformContext } from './transform.js'
+import { applyTransforms, compileExprTransform, sortRows, sortOrder, getField, geoJSONPath, computeBinStep, computeBinEps, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ColorScale } from './scales.js'
@@ -37,6 +37,7 @@ import { tickFormat, scaleFraction, tickValues, tickCount, isContinuous, validTi
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { dict, ownGet } from './util.js'
+import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, type PulseChange } from './pulse.js'
 import { trellisLayout, measureBounds } from './trellis.js'
 import { baselineOffset, boundAxisGroup, boundGroupItem, boundLeaf, boundText, Bounds } from './bounds.js'
@@ -44,21 +45,6 @@ import { itemTextWidth, nominalTextWidth, type FontProps } from './text-metrics.
 import { symbolPath } from './render.js'
 
 const DEFAULT_SIZE = 500
-
-// Reference identities for expression parameters (width/height/signals). A
-// parameter change (a new signal object, e.g. a brush extent) must invalidate
-// any row-wise transform cache that depends on it.
-const PARAM_IDS = new WeakMap<object, number>()
-let PARAM_SEQ = 0
-function paramRefId(v: unknown): number {
-  if (v === null || (typeof v !== 'object' && typeof v !== 'function')) return -1
-  let id = PARAM_IDS.get(v as object)
-  if (id === undefined) {
-    id = ++PARAM_SEQ
-    PARAM_IDS.set(v as object, id)
-  }
-  return id
-}
 
 /** Persistent per-group index for incremental group transforms. */
 interface AggState {
@@ -88,6 +74,105 @@ interface AggState {
 interface StepPulse extends PulseChange {
   /** True when the transform chain could not publish a trustworthy mapping. */
   full?: boolean
+}
+
+/**
+ * Per-dataset incremental state: the pipeline's step outputs and per-step
+ * auxiliary indexes (filter pass flags, group membership, flatten offsets,
+ * collect order), plus the params it was derived under.
+ */
+interface DatasetState {
+  /** Fingerprint (signals/size/domainRaw/metrics) the pipeline ran under. */
+  fp: string
+  /** Row count of the pipeline INPUT, to validate a published pulse against. */
+  inputLength: number
+  /** `steps[k]` = output of transform k. */
+  steps: Row[][]
+  /** Per-step state, keyed `${dataset}#${k}`. */
+  stepState: Map<string, unknown>
+}
+
+/** Min/max census of a continuous data-driven scale domain (C11). */
+interface ContCensus {
+  data: string
+  field: string
+  lo: number
+  hi: number
+  /** Number of rows currently holding `lo` / `hi`. */
+  loCount: number
+  hiCount: number
+  /** Whether the census has any finite value. */
+  finite: boolean
+  /** The numeric value of the field for every row of the dataset, by index. */
+  vals: number[]
+}
+
+/** Value census of a discrete data-driven scale domain. */
+interface DiscCensus {
+  data: string
+  field: string
+  vals: unknown[]
+  counts: Map<unknown, number>
+  firstIdx: Map<unknown, number>
+}
+
+interface ScaleEntry {
+  scale: Scale
+  /** The domain spans several datasets (`domain.fields`); never census-reused. */
+  multi: boolean
+  cont?: ContCensus
+  disc?: DiscCensus
+}
+
+/**
+ * Everything the incremental path remembers about the previous evaluation of
+ * one compiled chart (audit T1). The compiled IR is immutable; this object is the
+ * ONLY place per-chart evaluation memory lives, so correctness no longer
+ * depends on how many times per evaluation `buildScales`/`buildDatasets` run:
+ *
+ * - an evaluation reads the COMMITTED state (`ctx.prev`) and writes a fresh
+ *   draft (`ctx.draft`) from scratch;
+ * - the draft replaces the committed state exactly once, after the whole
+ *   evaluation (and, for sessions, every post-evaluation check) succeeded;
+ * - the few fast paths that update a structure in place for O(changed)
+ *   cost first `claim()` it: the committed state is then flagged `stale`, so an
+ *   evaluation that dies before committing can never leave a half-updated state
+ *   behind (the next evaluation re-derives from scratch).
+ */
+interface IncrementalState {
+  /** Evaluation counter; reused items keep the generation they were encoded in. */
+  gen: number
+  /** Fingerprint of the final evaluation context (signals, size, overrides). */
+  fp: string
+  /** The final top-level scales of the evaluation. */
+  scales: Map<string, Scale>
+  scaleEntries: Map<string, ScaleEntry>
+  datasets: Map<string, DatasetState>
+  /** Top-level mark groups, keyed by compiled-mark identity (C4). */
+  groups: Map<CompiledMark, SceneGroup>
+  /** True once a fast path updated a structure in place (see above). */
+  stale: boolean
+}
+
+function newState(gen: number): IncrementalState {
+  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), stale: false }
+}
+
+/** Committed state per compiled chart. Never stored on the IR itself. */
+const STATES = new WeakMap<CompiledChart, IncrementalState>()
+
+/** One evaluation's view of the committed state (shared across fit-loop passes). */
+interface EvalTxn {
+  prev: IncrementalState | undefined
+  gen: number
+  /** Structures this evaluation already updated in place (not reusable again). */
+  claimed: Set<string>
+}
+
+function beginTxn(chart: CompiledChart): EvalTxn {
+  const committed = STATES.get(chart)
+  const prev = committed && !committed.stale ? committed : undefined
+  return { prev, gen: (committed?.gen ?? 0) + 1, claimed: new Set() }
 }
 
 function groupKeyOf(row: Row, groupby: string[]): string {
@@ -123,13 +208,15 @@ function buildAggState(input: Row[], groupby: string[], out: Row[]): AggState {
   return { groupby, rowKey, keyToIdx, outOrder, outIdx, outByKey, groupStart, groupSize, out }
 }
 
-/** Fingerprint the expression params a row-wise transform can reference. */
+/**
+ * Fingerprint of everything that feeds expression evaluation and encoding
+ * besides the data: the signal params (width/height included). Typed and
+ * structural (fingerprint.ts), so a derived object-valued signal that is
+ * re-created each round (`[0, width]`) hashes equal when unchanged (C57).
+ */
 function paramFpOf(params: Record<string, unknown>): string {
   const parts: string[] = []
-  for (const k of Object.keys(params).sort()) {
-    const v = params[k]
-    parts.push(`${k}=${typeof v === 'object' ? '#' + paramRefId(v) : String(v)}`)
-  }
+  for (const k of Object.keys(params).sort()) parts.push(`${k}=${valueKey(params[k])}`)
   return parts.join('\u0001')
 }
 
@@ -145,6 +232,62 @@ let gradientIdCounter = 0
 
 /** Cached recursive bounds for unchanged top-level mark groups. */
 const GROUP_BOUNDS = new WeakMap<SceneGroup, Bounds>()
+
+/**
+ * Undo record for a mark whose items array was updated IN PLACE: the length it
+ * had, and the items it overwrote.
+ */
+interface ItemsUndo { oldLen: number; idx: number[]; items: SceneItem[] }
+
+/**
+ * Persistent-scene sharing without mutating a returned scene (C52).
+ *
+ * An append / same-length update advances the engine-owned items array in place
+ * (O(changes)) and hands it to the NEW group. The SUPERSEDED group — the one in
+ * the previously returned scene — gets its `items` replaced by a lazy snapshot:
+ * on first read it materialises (old length, overwritten items restored) from
+ * the newer group, then becomes an ordinary data property. A chain of superseded
+ * groups composes (materialising one reads its newer neighbour, itself possibly
+ * lazy), so scenes can be read in any order, or never.
+ *
+ * Retention: an older group references the newer one until it is read; a newer
+ * group never references an older one, so an unreferenced old scene is
+ * collectable. A scene retained for a long time without being read keeps one
+ * small undo record per later update alive (plus the items those updates
+ * overwrote).
+ */
+/**
+ * @internal Number of superseded groups materialised so far. Hot paths (DOM
+ * patch, canvas append, stream flush) must never advance it in steady state;
+ * tests assert exactly that.
+ */
+export function supersededMaterializations(): number { return materializedCount }
+let materializedCount = 0
+
+function supersedeItems(old: SceneGroup, next: SceneGroup, undo: ItemsUndo): void {
+  let link: { next: SceneGroup; undo: ItemsUndo } | null = { next, undo }
+  const settle = (value: SceneNode[] | undefined): void => {
+    link = null
+    Object.defineProperty(old, 'items', { value, writable: true, configurable: true, enumerable: true })
+  }
+  Object.defineProperty(old, 'items', {
+    configurable: true,
+    enumerable: true,
+    get(): SceneNode[] | undefined {
+      if (!link) return undefined
+      const { next: newer, undo: u } = link
+      materializedCount++
+      // Reading the newer group's items materialises it first if it is lazy too.
+      const base = (newer.items ?? []) as SceneItem[]
+      const arr = base.slice(0, u.oldLen)
+      // Reverse order: if an index was overwritten twice the earliest item wins.
+      for (let k = u.idx.length - 1; k >= 0; k--) arr[u.idx[k]!] = u.items[k]!
+      settle(arr as SceneNode[])
+      return arr as SceneNode[]
+    },
+    set(v: SceneNode[] | undefined) { settle(v) },
+  })
+}
 
 /** Mark types whose group bounds are exactly the union of their item bounds. */
 const UNION_BOUND_MARKS = new Set(['symbol', 'rect', 'text', 'rule', 'tick'])
@@ -175,27 +318,39 @@ interface EvalContext {
   _concatGrid?: ConcatGridState | null
   /** Hierarchy trees built by `stratify` transforms, keyed by data source name. */
   hierarchies: Map<string, unknown>
-  /** Per-datum differential update: dataset name -> indices whose rows changed. */
-  dataChanges?: Map<string, Set<number>>
-  /** Datasets affected by this update (dataChanges ∪ changedDatasets, closed over source chains). */
+  /** Datasets affected by this update (changed datasets closed over source and transform dependencies). */
   affected: Set<string>
-  /** True when the caller supplied change info (so incremental reuse is allowed). */
+  /** True when the caller supplied change info AND a committed previous state exists. */
   incremental: boolean
   /**
-   * Pulse propagation: the *output* row indices that changed per dataset,
-   * derived from the transform pipeline (row-wise -> same indices; aggregate ->
-   * dirty groups' output positions). null/absent means the dataset was fully
-   * re-derived (not incrementally safe for downstream item reuse).
-   */
-  datasetChanges?: Map<string, Set<number> | null>
-  /**
-   * Pulse propagation with index mapping: the output pulse per dataset. A
-   * length-changing update carries `from`/`to` so marks can splice their item
-   * array instead of re-encoding unchanged rows.
+   * Pulse propagation: the output pulse per dataset (after its transform
+   * pipeline). A same-length update carries only `changed`; a length-changing
+   * one additionally carries the old<->new index mapping (or the compact
+   * `appendOnly` form) so marks can splice their item array instead of
+   * re-encoding unchanged rows. null means the dataset was fully re-derived (no
+   * trustworthy mapping, nothing downstream may be spliced).
    */
   datasetPulses: Map<string, StepPulse | null>
-  /** Input pulses for source datasets (from the host/session). */
+  /** Input pulses for source datasets (from the host/session): `dataChanges` and `dataPulse`. */
   inputPulses?: Map<string, StepPulse>
+  /** The committed state of the previous evaluation (read-only; see IncrementalState). */
+  prev?: IncrementalState
+  /** The state this evaluation builds; committed by the caller on success. */
+  draft: IncrementalState
+  /** Evaluation generation (stamped on newly encoded items). */
+  gen: number
+  /** Structures already updated in place during this evaluation. */
+  claimed: Set<string>
+  /** Non-signal inputs that invalidate reuse (domainRaw, text metrics). */
+  extraFp: string
+  /** Memo for ctxFpOf; cleared whenever signalParams may have changed. */
+  fpMemo?: string
+  /** Bumped by every dataset (re)build pass; part of the scale-reuse stamp. */
+  dsEpoch: number
+  /** Census-reuse decisions already taken this evaluation (a census is advanced once). */
+  scaleReuse: Map<string, { stamp: string; entry: ScaleEntry }>
+  /** Distinct-value memo for discrete scale domains (lives for this evaluation only). */
+  distinctCache: WeakMap<unknown[], Map<string, unknown[]>>
   /** Wall-clock deadline (performance.now epoch) from `limits.maxTimeMs`. */
   deadline?: number
   /** Direct scale-domain overrides keyed by scale name. */
@@ -218,8 +373,15 @@ export interface ChartInfo {
 /**
  * Prepare the shared EvalContext used by both evaluateChart and getChartInfo.
  * This is a single source-of-truth for signal/size/dataset/scale setup.
+ *
+ * The compiled chart is never written: signals, scale domains and every cache
+ * live in `ctx` (this evaluation) or in the committed `IncrementalState`.
  */
-function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx: EvalContext; width: number; height: number } {
+function prepareChartCtx(
+  chart: CompiledChart,
+  input: RuntimeInput = {},
+  txn: EvalTxn = { prev: undefined, gen: 1, claimed: new Set() },
+): { ctx: EvalContext; width: number; height: number } {
   const started = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
   const maxTime = input.limits?.maxTimeMs
   const deadline = maxTime != null && Number.isFinite(maxTime) ? started + Math.max(0, maxTime) : undefined
@@ -261,10 +423,13 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
   }
 
   const defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }> = []
+  // Inputs besides the signals that change what a reused scale/item would be.
+  const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}`
   const ctx: EvalContext = {
     chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new Map(), runtime, _defs: defs,
     hierarchies: new Map(), affected: new Set(), incremental: false, deadline, checkDeadline,
     datasetPulses: new Map(),
+    prev: txn.prev, draft: newState(txn.gen), gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
   }
   // A legend whose tickCount is an interval string on a non-time scale makes
@@ -284,46 +449,44 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
       && (l.columns > 0 ? !Number.isInteger(l.columns) : l.columns !== 0)) return true
     return false
   })
-  if (input.dataChanges) {
-    ctx.dataChanges = new Map(Object.entries(input.dataChanges).map(([name, idxs]) => [name, new Set(idxs)]))
-  }
-  if (input.dataPulse) {
-    ctx.inputPulses = new Map(Object.entries(input.dataPulse).map(([name, p]) => [name, {
+  // Normalise every caller-supplied change description into one pulse per
+  // source dataset. `dataChanges` is the same-length form (`{changed}`);
+  // `dataPulse` carries the full mapping and wins when both name a dataset.
+  const inputPulses = new Map<string, StepPulse>()
+  for (const [name, idxs] of Object.entries(input.dataChanges ?? {})) inputPulses.set(name, { changed: [...idxs] })
+  for (const [name, p] of Object.entries(input.dataPulse ?? {})) {
+    inputPulses.set(name, {
       changed: p.changed ?? [],
       ...(p.from ? { from: p.from } : {}),
       ...(p.to ? { to: p.to } : {}),
       ...(p.added ? { added: p.added } : {}),
       ...(p.removed ? { removed: p.removed } : {}),
       ...(p.appendOnly ? { appendOnly: true, baseLength: p.baseLength } : {}),
-    }]))
-    // The length-preserving form of an explicit pulse is also a plain
-    // changeset: expose it to the row-wise/grouped/differential paths that
-    // consume `dataChanges` (and to the scale-domain census).
-    for (const [name, p] of ctx.inputPulses) {
-      if (p.from || !p.changed.length) continue
-      if (!ctx.dataChanges) ctx.dataChanges = new Map()
-      ctx.dataChanges.set(name, new Set(p.changed))
-    }
+    })
   }
-  const changedNames = new Set([
-    ...(input.changedDatasets ?? []),
-    ...(ctx.dataChanges ? ctx.dataChanges.keys() : []),
-    ...(ctx.inputPulses ? ctx.inputPulses.keys() : []),
-  ])
+  if (inputPulses.size) ctx.inputPulses = inputPulses
+  const changedNames = new Set([...(input.changedDatasets ?? []), ...inputPulses.keys()])
   ctx.affected = affectedDatasets(chart, changedNames)
-  ctx.incremental = changedNames.size > 0
-  ctx.datasetChanges = new Map()
+  // Incremental reuse needs both a statement of what changed and a previous
+  // state to be incremental FROM; otherwise everything re-derives (and the
+  // fresh state is still recorded for the next call).
+  ctx.incremental = changedNames.size > 0 && txn.prev !== undefined
 
   // Remap Vega-Lite "category" range (unhandled by vega-scale) to tableau10 —
   // unless a config.range.category shadows it (vega's range lookup consults
-  // the config block first).
-  for (const s of ctx.chart.scales) {
-    if (s.range === 'category' && !chart.configRange?.category) { ; (s as unknown as Record<string, unknown>).range = 'tableau10' }
-  }
+  // the config block first). This is a per-evaluation override on the scale
+  // handed to buildScale, not a write to the compiled IR (see scaleDefOf).
+  //
   // Resolve signal `update` expressions, datasets, and scales to a fixed
   // point. Signals can reference data/scales and vice versa (e.g. brush-bounded
   // domains), which vega handles reactively; we emulate the initial pulse.
   buildProjections(ctx)
+  // Signals that depend on nothing but other signals and the view size resolve
+  // BEFORE the first dataset build: building datasets under still-unresolved
+  // derived signals is pure waste (the loop below rebuilds them), and would
+  // also make the first pass's params differ from the previous evaluation's, so
+  // it could never be incremental.
+  for (let i = 0; i < 3 && resolveSignalUpdates(ctx, true); i++) { /* to a fixed point */ }
   buildDatasets(ctx, input.data ?? {})
   let changed = true
   let rounds = 0
@@ -362,6 +525,7 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
           width = v
           ctx.width = v
           ctx.signalParams.width = v
+          ctx.fpMemo = undefined
           buildScales(ctx)
         }
       } catch { /* leave the default */ }
@@ -369,14 +533,19 @@ function prepareChartCtx(chart: CompiledChart, input: RuntimeInput = {}): { ctx:
   }
   buildProjections(ctx)
 
-  // Record the expression params for the next per-datum update; buildDatasets
-  // (during this prepare) and canReuseItems (after) compare the current params
-  // against the *previous* eval's to decide whether caches/reuse are valid.
-  const chartMeta = ctx.chart as unknown as { __paramFp?: string; __prevParamFp?: string }
-  chartMeta.__prevParamFp = chartMeta.__paramFp
-  chartMeta.__paramFp = paramFpOf(signalParams)
+  // The final context fingerprint: the next evaluation compares its own
+  // (scale, mark) inputs against this to decide whether reuse is valid.
+  ctx.draft.fp = ctxFpOf(ctx)
 
   return { ctx, width, height }
+}
+
+/** Fingerprint of the evaluation context that reused scales/items were built under. */
+function ctxFpOf(ctx: EvalContext): string {
+  // Memoised: the params only change at the few known write sites, each of
+  // which clears the memo (resolveSignalUpdates, the width re-resolution, and
+  // the end of every dataset pass, since transforms may write signals).
+  return ctx.fpMemo ??= `${paramFpOf(ctx.signalParams)}\u0002${ctx.extraFp}`
 }
 
 /** Build d3-geo projections from the compiled spec, resolving signal params. */
@@ -431,24 +600,36 @@ function buildProjections(ctx: EvalContext): void {
   }
 }
 
+/** Expression functions that read datasets or scales (a signal using them cannot resolve before they exist). */
+const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspace|invert|copy|gradient)\s*\(/
+
 /**
  * Evaluate static signal `update` expressions in declaration order against the
  * current signal params (vega-expression rewrites bare identifiers to the
  * `$`-prefixed params our interpreter binds). Expressions that depend on not-yet
  * resolved values throw and are skipped for this round. Returns whether any
- * value changed (drives the fixed-point loop).
+ * value changed (drives the fixed-point loop). Values compare structurally
+ * (C57): an unchanged object-valued signal such as `[0, width]` is a fresh array
+ * every round and must not count as a change.
+ *
+ * Resolved values live in `ctx.signalParams` for THIS evaluation only: the
+ * compiled chart is never written (C17), so an evaluation is a pure function of
+ * (compiled spec, input).
+ *
+ * `staticOnly` resolves just the signals that do not read datasets or scales.
  */
-function resolveSignalUpdates(ctx: EvalContext): boolean {
+function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
   const defs = ctx.chart.signalDefs
   if (!defs?.length) return false
   let changed = false
   for (const def of defs) {
     if (!def.update) continue
+    if (staticOnly && DATA_DEPENDENT_EXPR.test(def.update)) continue
     try {
       const value = ctx.runtime.expr(def.update)(undefined, ctx.signalParams)
-      if (value !== undefined && value !== ctx.signalParams[def.name]) {
+      if (value !== undefined && !valuesEqual(value, ctx.signalParams[def.name])) {
         ctx.signalParams[def.name] = value
-        ctx.chart.signals[def.name] = value
+        ctx.fpMemo = undefined
         changed = true
       }
     } catch {
@@ -858,82 +1039,124 @@ function computeGuidePadding(
 }
 
 
+/** Walk every string reachable in a JSON-ish value (cycle-safe). */
+function walkStrings(
+  v: unknown,
+  visit: (s: string, owner: Record<string, unknown> | null) => void,
+  seen = new Set<object>(),
+  owner: Record<string, unknown> | null = null,
+  visitObject?: (o: Record<string, unknown>) => void,
+): void {
+  if (typeof v === 'string') { visit(v, owner); return }
+  if (v == null || typeof v !== 'object') return
+  if (seen.has(v as object)) return
+  seen.add(v as object)
+  if (Array.isArray(v)) { for (const x of v) walkStrings(x, visit, seen, owner, visitObject); return }
+  const rec = v as Record<string, unknown>
+  visitObject?.(rec)
+  for (const k of Object.keys(rec)) walkStrings(rec[k], visit, seen, rec, visitObject)
+}
+
+/** Expression functions that read scales. */
+const SCALE_FN_EXPR = /\b(scale|bandwidth|bandspace|invert|domain|range|copy|gradient)\s*\(/
+/** Expression functions that read datasets. */
+const DATA_FN_EXPR = /\b(data|indata)\s*\(/
+
+/** What a dataset's pipeline reads besides its `source`. */
+interface DatasetDeps { names: Set<string>; allData: boolean }
+const DATASET_DEPS = new WeakMap<CompiledChart, Map<string, DatasetDeps>>()
+
+function datasetDepsOf(chart: CompiledChart): Map<string, DatasetDeps> {
+  let deps = DATASET_DEPS.get(chart)
+  if (deps) return deps
+  deps = new Map()
+  const known = new Set(chart.data.map((d) => d.name))
+  for (const d of chart.data) {
+    const names = new Set<string>()
+    let allData = false
+    const src = (d as CompiledData & { source?: string }).source
+    if (src) names.add(src)
+    // Anything in the pipeline that names another dataset (lookup `from`, ...)
+    // or reads datasets from an expression makes this dataset depend on it.
+    walkStrings(d.transform, (str) => {
+      if (known.has(str) && str !== d.name) names.add(str)
+      if (DATA_FN_EXPR.test(str)) allData = true
+    })
+    deps.set(d.name, { names, allData })
+  }
+  DATASET_DEPS.set(chart, deps)
+  return deps
+}
+
 /**
- * The set of datasets affected by a change, closed transitively over `source`
- * chains: a derived dataset (source: A) changes whenever A changes.
+ * The set of datasets affected by a change, closed transitively over every way a
+ * dataset depends on another: a `source` chain, a transform naming another
+ * dataset (`lookup.from`, ...), or an expression reading datasets. A derived
+ * dataset changes whenever anything it reads changes.
  */
 function affectedDatasets(chart: CompiledChart, changed: Set<string>): Set<string> {
   const affected = new Set(changed)
+  const deps = datasetDepsOf(chart)
   let grew = true
   while (grew) {
     grew = false
     for (const d of chart.data) {
-      const src = (d as CompiledData & { source?: string }).source
-      if (src && affected.has(src) && !affected.has(d.name)) {
-        affected.add(d.name)
-        grew = true
-      }
+      if (affected.has(d.name)) continue
+      const dep = deps.get(d.name)!
+      let hit = dep.allData && affected.size > 0
+      if (!hit) for (const n of dep.names) if (affected.has(n)) { hit = true; break }
+      if (hit) { affected.add(d.name); grew = true }
     }
   }
   return affected
 }
 
-/** Collect the scale names a mark references in its encode (recursive). */
-function collectMarkScales(mark: CompiledMark): Set<string> {
-  const out = new Set<string>()
-  const enc = (mark as { encode?: Record<string, Record<string, unknown>> }).encode
-  if (!enc) return out
-  const walk = (v: unknown): void => {
-    if (v == null || typeof v !== 'object') return
-    if (Array.isArray(v)) { for (const x of v) walk(x); return }
-    const rec = v as Record<string, unknown>
-    if (typeof rec.scale === 'string') out.add(rec.scale)
-    for (const k of Object.keys(rec)) walk(rec[k])
-  }
-  for (const stage of Object.keys(enc)) walk(enc[stage])
+/** What a mark subtree reads: datasets, scales (by name or through expressions). */
+interface MarkDeps { names: Set<string>; allData: boolean; scales: Set<string>; allScales: boolean }
+const MARK_DEPS = new WeakMap<CompiledMark, MarkDeps>()
+
+function markDepsOf(mark: CompiledMark, chart: CompiledChart): MarkDeps {
+  let deps = MARK_DEPS.get(mark)
+  if (deps) return deps
+  const known = new Set(chart.data.map((d) => d.name))
+  const out: MarkDeps = { names: new Set(), allData: false, scales: new Set(), allScales: false }
+  walkStrings(mark, (str, owner) => {
+    if (known.has(str)) out.names.add(str)
+    if (DATA_FN_EXPR.test(str)) out.allData = true
+    if (SCALE_FN_EXPR.test(str)) out.allScales = true
+    if (owner && typeof owner.scale === 'string' && owner.scale === str) out.scales.add(str)
+  }, new Set(), null, (o) => {
+    // A scale chosen by a signal/expression object: any scale may be read.
+    if (o.scale != null && typeof o.scale === 'object') out.allScales = true
+  })
+  MARK_DEPS.set(mark, out)
   return out
 }
 
-/** A data-derived scale domain referencing an affected dataset. */
-function hasAffectedDomain(domain: ScaleDomain, affected: Set<string>): boolean {
-  if (domain && typeof domain === 'object' && !Array.isArray(domain)) {
-    const dataRef = (domain as { data?: unknown }).data
-    if (typeof dataRef === 'string' && affected.has(dataRef)) return true
-  }
-  return false
+/** The scale names a mark subtree can depend on. */
+function markScaleNames(mark: CompiledMark, chart: CompiledChart): string[] {
+  const deps = markDepsOf(mark, chart)
+  return deps.allScales ? chart.scales.map((s) => s.name) : [...deps.scales]
 }
 
-function markTouchesChangedData(mark: CompiledMark, chart: CompiledChart, changed: Set<string>): boolean {
-  // Marks with no `from` and no data-derived scale domain (static shapes)
-  // never depend on data changes.
-  const affected = affectedDatasets(chart, changed)
-  if (mark.from?.data && affected.has(mark.from.data)) return true
-  // A mark can draw from an unaffected dataset but be positioned by a scale
-  // whose domain spans a changed dataset; the reused group would hold stale
-  // positions, so treat it as touched.
-  for (const name of collectMarkScales(mark)) {
-    const scale = chart.scales.find((s) => s.name === name)
-    if (scale && hasAffectedDomain(scale.domain, affected)) return true
+/**
+ * Whole-group reuse (a top-level leaf mark whose output provably equals last
+ * evaluation's). Every input the mark reads must be unchanged: the evaluation
+ * context (signals, size, overrides), each dataset it reads (closed over
+ * dependencies), and each scale it reads (by object identity). Group marks
+ * (facets, trellises, scoped scopes) are always rebuilt: their layout is
+ * written by later passes, so reusing their objects is not sound (C14).
+ */
+function canReuseMarkGroup(mark: CompiledMark, ctx: EvalContext): boolean {
+  const prev = ctx.prev
+  if (!prev || !ctx.incremental || mark.type === 'group') return false
+  if (prev.fp !== ctx.draft.fp) return false
+  const deps = markDepsOf(mark, ctx.chart)
+  if (deps.allData ? ctx.affected.size > 0 : [...deps.names].some((n) => ctx.affected.has(n))) return false
+  for (const name of markScaleNames(mark, ctx.chart)) {
+    if (ctx.scales.get(name) !== prev.scales.get(name)) return false
   }
-  return false
-}
-
-/** Find the previous scene's top-level groups for a mark (by mark name or type). */
-function findReusableMarkGroup(prevItems: SceneGroup[], mark: CompiledMark): SceneGroup | null {
-  // Prefer the mark's source dataset (unambiguous for layered charts with
-  // multiple same-type marks); fall back to name, then role+marktype.
-  const src = mark.from?.data as string | undefined
-  if (src != null) {
-    for (const g of prevItems) {
-      if ((g as SceneGroup & { __source?: string }).__source === src) return g
-    }
-  }
-  const match = (g: SceneGroup): boolean =>
-    g.name === mark.name || (mark.name == null && g.role === 'mark' && g.marktype === mark.type)
-  for (const g of prevItems) {
-    if (match(g)) return g
-  }
-  return null
+  return true
 }
 
 /**
@@ -946,37 +1169,32 @@ function buildContent(
   input: RuntimeInput,
   cw: number,
   ch: number,
+  txn: EvalTxn,
 ): { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; isFacetSpec: boolean } {
-  const { ctx, width, height } = prepareChartCtx(chart, { ...input, width: cw, height: ch })
+  const { ctx, width, height } = prepareChartCtx(chart, { ...input, width: cw, height: ch }, txn)
 
-  // Partial re-evaluation: when the caller names the datasets whose values
-  // changed, marks drawing from untouched datasets reuse the previous scene's
-  // groups (item identity preserved for the DOM patcher), so an update to one
-  // dataset skips re-encoding every other mark.
-  const prevItems = (chart as unknown as { __prevItems?: SceneGroup[] }).__prevItems
-  // A per-datum changeset also marks its dataset as changed (it re-evaluates).
-  const changedSet = (input.changedDatasets || input.dataChanges)
-    ? new Set([...(input.changedDatasets ?? []), ...Object.keys(input.dataChanges ?? {})])
-    : null
-
+  // Partial re-evaluation: marks whose every input is provably unchanged reuse
+  // the previous scene's group object as-is, and marks over a changed dataset
+  // splice theirs (item identity preserved for the DOM patcher). Groups are
+  // matched by COMPILED-MARK IDENTITY, never by source dataset or name: two
+  // layers over one dataset, or several unnamed marks, are distinct (C4).
   const items: SceneGroup[] = []
 
   // 1) Build marks (plot area)
   for (const mark of ctx.chart.marks) {
-    if (changedSet && !markTouchesChangedData(mark, ctx.chart, changedSet) && prevItems) {
-      const reused = findReusableMarkGroup(prevItems, mark)
-      if (reused) {
-        items.push(reused)
-        continue
-      }
+    const prevGroup = ctx.prev?.groups.get(mark) ?? null
+    if (prevGroup && canReuseMarkGroup(mark, ctx)) {
+      items.push(prevGroup)
+      ctx.draft.groups.set(mark, prevGroup)
+      continue
     }
-    const prevGroup = prevItems ? findReusableMarkGroup(prevItems, mark) : null
     const result = evaluateMark(mark, ctx, prevGroup)
     if (result) {
       if (Array.isArray(result)) {
         for (const g of result) items.push(g)
       } else {
         items.push(result)
+        ctx.draft.groups.set(mark, result)
       }
     }
   }
@@ -1049,16 +1267,45 @@ function buildContent(
   return { items: ordered, padding, ctx, width: facetWidth, height: facetHeight, isFacetSpec }
 }
 
-export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
-  return withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input))
+/**
+ * An evaluation whose incremental state has not been committed yet. The scene is
+ * usable immediately; `commit()` makes this evaluation the base the next
+ * incremental one starts from. A host that runs post-evaluation checks (the
+ * session's limits) commits only after they pass, so a rejected evaluation can
+ * never become the state later pulses are relative to (C16).
+ */
+export interface PendingEvaluation {
+  scene: SceneRoot
+  commit(): void
 }
 
-function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
+/**
+ * Evaluate without committing the incremental state. The compiled chart is not
+ * written; call `commit()` once the scene has been accepted.
+ */
+export function evaluateChartPending(chart: CompiledChart, input: RuntimeInput = {}): PendingEvaluation {
+  const txn = beginTxn(chart)
+  const done: { draft?: IncrementalState } = {}
+  const scene = withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, done))
+  return {
+    scene,
+    commit() {
+      if (done.draft) STATES.set(chart, done.draft)
+    },
+  }
+}
+
+export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
+  const pending = evaluateChartPending(chart, input)
+  pending.commit()
+  return pending.scene
+}
+
+function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState }): SceneRoot {
   const auto = chart.autosize
   const base = chart.padding
-  // Differential-update generation: incremented each eval so an unchanged (reused)
-  // item keeps its previous generation and the DOM patcher can skip it.
-  ;(chart as unknown as { __gen?: number }).__gen = ((chart as unknown as { __gen?: number }).__gen ?? 0) + 1
+  // Differential-update generation (`txn.gen`): an unchanged (reused) item keeps
+  // the generation it was encoded in, so the DOM patcher can skip it.
   const signals = dict(chart.signals, input.signals)
   const initialW = resolveSize(chart.width, input.width, signals)
   const initialH = resolveSize(chart.height, input.height, signals)
@@ -1081,7 +1328,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput = {}): Scen
   // Reproduce that by iterating the content size to a fixed point.
   let cw = initialW
   let ch = initialH
-  let built = buildContent(chart, input, cw, ch)
+  let built = buildContent(chart, input, cw, ch, txn)
   if (auto === 'fit' || auto === 'fit-x' || auto === 'fit-y') {
     for (let i = 0; i < 5; i++) {
       const oL = built.padding.left - base.left
@@ -1102,7 +1349,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput = {}): Scen
       if (nw === cw && nh === ch) break
       cw = nw
       ch = nh
-      built = buildContent(chart, { ...input, changedDatasets: undefined }, cw, ch)
+      built = buildContent(chart, { ...input, changedDatasets: undefined }, cw, ch, txn)
     }
   }
   const { ctx, width, height } = built
@@ -1216,12 +1463,13 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput = {}): Scen
   ;(scene as unknown as { runtime?: unknown }).runtime = ctx.runtime
   ;(scene as unknown as { signalParams?: Record<string, unknown> }).signalParams = ctx.signalParams
   ;(scene as unknown as { compiled?: unknown }).compiled = ctx.chart
-  ;(scene as unknown as { __itemGen?: number }).__itemGen = (chart as unknown as { __gen?: number }).__gen
+  ;(scene as unknown as { __itemGen?: number }).__itemGen = txn.gen
   ;(scene as unknown as { __scales?: unknown }).__scales = snapshotScales(ctx.scales)
   ;(scene as unknown as { __scaleMap?: unknown }).__scaleMap = ctx.scales
-  // Partial re-evaluation memo
-  ;(chart as unknown as { __prevItems?: SceneGroup[] }).__prevItems = items
   if (ctx._defs.length) scene.defs = ctx._defs
+  // The state the next incremental evaluation starts from; committed by the
+  // caller once the scene is accepted.
+  done.draft = ctx.draft
   return scene
 }
 
@@ -1534,8 +1782,6 @@ type StepTransformContext = TransformContext & {
   datasets: (name: string) => Row[] | undefined
   /** Datasets affected by this update (for lookup safety). */
   affectedDatasets?: Set<string>
-  /** Per-step incremental state cache (filters/flatten/groups). */
-  stepCache?: Map<string, unknown>
 }
 
 /** New-value indices that were inserted (mapping `-1`). */
@@ -1681,7 +1927,8 @@ function filterAppendPulse(
   const base = pulseBaseLength(input)
   if (input.changed.length || !prev || !prevPass || prevPass.length !== base) return null
   const expr = (t as { expr?: string }).expr ?? ''
-  const fn = (row: Row): boolean => { try { return Boolean(tctx.runtime.expr(expr)(row, tctx.signals)) } catch { return false } }
+  const exprFn = compileExprTransform(expr, tctx)
+  const fn = (row: Row): boolean => Boolean(exprFn(row))
   const outBase = prev.length
   for (let i = base; i < rows.length; i++) {
     const passed = fn(rows[i]!)
@@ -1759,7 +2006,8 @@ function filterPulse(
   let acc = 0
   for (let i = 0; i < oldLen; i++) if (prevPass[i]) oldOut[i] = acc++
   const expr = (t as { expr?: string }).expr ?? ''
-  const fn = (row: Row): boolean => { try { return Boolean(tctx.runtime.expr(expr)(row, tctx.signals)) } catch { return false } }
+  const exprFn = compileExprTransform(expr, tctx)
+  const fn = (row: Row): boolean => Boolean(exprFn(row))
   const modified = isModified(input)
   const pass = new Array<boolean>(rows.length)
   const out: Row[] = []
@@ -1916,9 +2164,11 @@ function aggregatePulse(
     if (!arr) keyToIdx.set(k, (arr = []))
     arr.push(i)
   }
-  const outOrder: string[] = []
-  for (const k of prevState.outOrder) if (keyToIdx.has(k)) outOrder.push(k)
-  for (const k of keyToIdx.keys()) if (!prevState.outIdx.has(k)) outOrder.push(k)
+  // Output order is the FIRST-OCCURRENCE order of the groups in the current
+  // rows, exactly like the full aggregate (C52). Surviving groups that moved
+  // are expressed through the pulse mapping (`outFrom`), not by keeping their
+  // previous position.
+  const outOrder = [...keyToIdx.keys()]
 
   const agg = t as Record<string, unknown>
   const aggFields = (agg.fields as (string | null)[] | undefined) ?? []
@@ -2255,6 +2505,50 @@ function generatingPulse(
 }
 
 /**
+ * True when a transform's output row depends only on its own input row (plus
+ * the params the dataset fingerprint already covers), so the rows a pulse does
+ * not name keep their cached output. Anything that reads other rows, other
+ * datasets or writes a signal is NOT row-local (bin with a data-derived extent,
+ * a lookup into a dataset that changed, a formula calling data()/indata(),
+ * ...).
+ */
+function rowLocal(t: CompiledTransform, tctx: StepTransformContext): boolean {
+  const type = String(t.type)
+  switch (type) {
+    case 'formula':
+      return !DATA_DEPENDENT_EXPR.test((t as { expr?: string }).expr ?? '')
+    case 'timeunit': case 'geoshape': case 'geopoint': case 'linkpath': case 'project':
+      return true
+    case 'bin':
+      // A fixed numeric extent makes the bins constant; a `signal` output is a
+      // side effect a skipped re-run would lose.
+      return Array.isArray((t as { extent?: unknown }).extent) && !(t as { signal?: unknown }).signal
+    case 'lookup':
+      return !tctx.affectedDatasets?.has((t as { from?: string }).from ?? '')
+    default:
+      return false
+  }
+}
+
+/** `identifier` over an append-only pulse: ids are `row[as] ?? index + 1`. */
+function identifierAppendPulse(
+  rows: Row[], t: CompiledTransform, input: StepPulse, prev: Row[] | undefined,
+): { rows: Row[]; pulse: StepPulse } | null {
+  const base = pulseBaseLength(input)
+  if (!prev || prev.length !== base) return null
+  const as = (t as { as?: string }).as ?? 'id'
+  const derive = (i: number): Row => ({ ...rows[i]!, [as]: rows[i]![as] ?? i + 1 })
+  const changed: number[] = []
+  for (const i of input.changed) {
+    if (i < 0 || i >= base) continue
+    prev[i] = derive(i)
+    changed.push(i)
+  }
+  for (let i = base; i < rows.length; i++) prev.push(derive(i))
+  return { rows: prev, pulse: appendPulse(base, rows.length, changed) }
+}
+
+/**
  * Apply one transform to a length-changing pulse. Returns `null` when the
  * transform cannot publish a mapping (the caller then re-derives the rest).
  */
@@ -2265,12 +2559,12 @@ function applyStepWithPulse(
   const type = String(t.type)
   if (input.appendOnly) {
     // Fast paths that never need the full mapping.
-    const appendLocal = type === 'formula' || type === 'timeunit' || type === 'geoshape'
-      || type === 'geopoint' || type === 'linkpath' || type === 'project' || type === 'identifier'
-      || (type === 'bin' && Array.isArray((t as { extent?: unknown }).extent))
-      || (type === 'lookup' && !tctx.affectedDatasets?.has((t as { from?: string }).from ?? ''))
+    const appendLocal = rowLocal(t, tctx)
     if (appendLocal) {
       const fast = rowLocalAppendPulse(rows, t, tctx, sourceName, input, prev)
+      if (fast) return fast
+    } else if (type === 'identifier') {
+      const fast = identifierAppendPulse(rows, t, input, prev)
       if (fast) return fast
     } else if (type === 'filter') {
       const fast = filterAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined)
@@ -2288,7 +2582,8 @@ function applyStepWithPulse(
       const fast = orderedAppendPulse(rows, t, input, prev, prevStepState as { order: number[] } | undefined)
       if (fast) return fast
     } else if (type === 'geojson' || type === 'extent' || type === 'stratify') {
-      return { rows: applyOne(rows, t, tctx, sourceName), pulse: input }
+      const out = applyOne(rows, t, tctx, sourceName)
+      return { rows: out, pulse: out.length === rows.length ? input : null }
     }
     // Everything else needs old<->new indices; synthesise them only here.
     const from = mappingFromPulse(input, rows.length)
@@ -2301,30 +2596,25 @@ function applyStepWithPulse(
     case 'geopoint':
     case 'linkpath':
     case 'project':
-      return rowLocalPulse(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-    case 'bin': {
-      const fixed = Array.isArray((t as { extent?: unknown }).extent)
-      if (fixed) return rowLocalPulse(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+    case 'bin':
+    case 'lookup':
+      // Row-local transforms re-derive only the added/modified rows; the others
+      // of the same type (data-extent bin, a lookup into a changed dataset, a
+      // formula that reads datasets) are global and re-derive aligned.
+      if (rowLocal(t, tctx)) {
+        return rowLocalPulse(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+      }
+      if (type === 'bin') return rederiveAligned(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+      return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+    case 'identifier':
+      // Ids are positional (`i + 1`): inserts/deletes shift them. Re-derive
+      // aligned so retained rows keep their object only when the id is unchanged.
       return rederiveAligned(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-    }
-    case 'lookup': {
-      const from = (t as { from?: string }).from ?? ''
-      if (tctx.affectedDatasets?.has(from)) return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-      return rowLocalPulse(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-    }
-    case 'identifier': {
-      // Inserts/deletes shift index-derived ids; only an append-only pulse can
-      // reuse the retained ids.
-      const from = input.from!
-      const stable = from.every((old, i) => old < 0 || old === i)
-      if (stable) return rowLocalPulse(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-      return rederiveAligned(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-    }
     case 'geojson':
     case 'extent':
     case 'stratify': {
       const out = applyOne(rows, t, tctx, sourceName)
-      return { rows: out, pulse: input }
+      return { rows: out, pulse: out.length === rows.length ? input : null }
     }
     case 'filter':
       return filterPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined)
@@ -2342,6 +2632,12 @@ function applyStepWithPulse(
       return joinAggregatePulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
         ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
     case 'window':
+      // Window writes its results back in SOURCE order (1:1 with the input,
+      // whatever the partition/sort), so it aligns like any other index-
+      // preserving transform; a row's value can change without the row itself
+      // changing (its partition-mates did), which the content comparison finds.
+      return rederiveAligned(rows, t, tctx, sourceName, input, prev)
+        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
     case 'stack':
       return windowStackPulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
         ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
@@ -2366,37 +2662,114 @@ function applyStepWithPulse(
   }
 }
 
-/** Apply a transform chain with a length-changing pulse, step by step. */
+/** Transform types that keep per-step incremental state (see `deriveStepState`). */
+function keepsStepState(type: string): boolean {
+  return type === 'filter' || type === 'flatten' || type === 'aggregate' || type === 'joinaggregate'
+    || type === 'window' || type === 'stack' || type === 'collect' || type === 'sample'
+}
+
+/**
+ * The incremental state of one step, derived from scratch from the step's input
+ * and output (what a fully re-derived step leaves behind for the next pulse).
+ */
+function deriveStepState(t: CompiledTransform, input: Row[], output: Row[], tctx: StepTransformContext): unknown {
+  switch (t.type) {
+    case 'filter': {
+      const fn = compileExprTransform((t as { expr?: string }).expr ?? '', tctx)
+      return input.map((r) => Boolean(fn(r)))
+    }
+    case 'flatten': {
+      const fields = (t as { fields?: string[] }).fields ?? []
+      const sizes = input.map((r) => flattenSize(r, fields))
+      const offsets: number[] = []
+      let p = 0
+      for (const sz of sizes) { offsets.push(p); p += sz }
+      return { sizes, offsets }
+    }
+    case 'aggregate': case 'joinaggregate': case 'window': case 'stack':
+      return buildAggState(input, (t as { groupby?: string[] }).groupby ?? [], output)
+    case 'collect': case 'sample': {
+      const limit = t.type === 'sample' ? ((t as { size?: number }).size ?? 0) : Infinity
+      return { order: sortOrder(input, (t as { sort?: SortSpec }).sort, limit) }
+    }
+    default:
+      return undefined
+  }
+}
+
+/** Run one transform from scratch, leaving the state the next pulse starts from. */
+function applyOneWithState(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+): { rows: Row[]; state?: unknown } {
+  if (t.type === 'filter') {
+    // Predicate flags and output in one pass (same function, same errors as the
+    // plain transform).
+    const fn = compileExprTransform((t as { expr?: string }).expr ?? '', tctx)
+    const pass = new Array<boolean>(rows.length)
+    const out: Row[] = []
+    for (let i = 0; i < rows.length; i++) {
+      const ok = Boolean(fn(rows[i]!))
+      pass[i] = ok
+      if (ok) out.push(rows[i]!)
+    }
+    return { rows: out, state: pass }
+  }
+  const out = applyOne(rows, t, tctx, sourceName)
+  return keepsStepState(String(t.type)) ? { rows: out, state: deriveStepState(t, rows, out, tctx) } : { rows: out }
+}
+
+/**
+ * Apply a transform chain driven by a pulse, step by step. Reads the COMMITTED
+ * step outputs/state (`prevDS`) and records this evaluation's into `state`;
+ * once a step cannot publish a mapping (`pulse` becomes null) the remaining
+ * steps run from scratch but still leave their state behind.
+ */
 function applyPipelineWithPulse(
   rows: Row[], transforms: CompiledTransform[], tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prevSteps: Row[][] | undefined,
-): { rows: Row[]; pulse: StepPulse | null; steps: Row[][] } {
+  input: StepPulse, prevDS: DatasetState, state: DatasetState,
+): { rows: Row[]; pulse: StepPulse | null } {
   let cur = rows
   let pulse: StepPulse | null = input
-  const steps: Row[][] = []
-  const stepCache = (tctx as unknown as { stepCache?: Map<string, unknown> }).stepCache
   for (let k = 0; k < transforms.length; k++) {
     const t = transforms[k]!
-    const prev = prevSteps?.[k]
+    const key = `${sourceName}#${k}`
     if (!pulse) {
-      cur = applyOne(cur, t, tctx, sourceName)
-      steps.push(cur)
+      const res = applyOneWithState(cur, t, tctx, sourceName)
+      cur = res.rows
+      state.steps.push(cur)
+      if (res.state !== undefined) state.stepState.set(key, res.state)
       continue
     }
-    const key = `${sourceName}#${k}`
-    const prevState = stepCache?.get(key)
-    const res = applyStepWithPulse(cur, t, tctx, sourceName, pulse, prev, prevState)
+    const stepInput = cur
+    const res = applyStepWithPulse(cur, t, tctx, sourceName, pulse, prevDS.steps[k], prevDS.stepState.get(key))
     cur = res.rows
     pulse = res.pulse
-    steps.push(cur)
-    if (stepCache && res.state !== undefined) stepCache.set(key, res.state)
+    state.steps.push(cur)
+    const next = res.state !== undefined ? res.state
+      : keepsStepState(String(t.type)) ? deriveStepState(t, stepInput, cur, tctx) : undefined
+    if (next !== undefined) state.stepState.set(key, next)
   }
-  return { rows: cur, pulse, steps }
+  return { rows: cur, pulse }
+}
+
+/**
+ * A published pulse in the engine's two canonical shapes. A same-length update
+ * (`{changed}`) is exactly an append-only pulse whose base is the current length
+ * and that appends nothing, so ONE set of per-transform fast paths serves both
+ * (C13: there used to be a second, same-length-only engine with separate state).
+ */
+function normalizePulse(p: StepPulse, rowCount: number): StepPulse {
+  if (p.from || p.appendOnly || p.added?.length || p.removed?.length) return p
+  return { ...p, appendOnly: true, baseLength: rowCount }
 }
 
 function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): void {
+  ctx.dsEpoch++
   const sources = new Map<string, CompiledChart['data'][number]>()
   for (const d of ctx.chart.data) sources.set(d.name, d)
+  // The params this build pass runs under: cached pipeline state is only valid
+  // for the identical context (any signal/size/override change re-derives).
+  const passFp = ctxFpOf(ctx)
 
   const build = (name: string, seen: Set<string>): Row[] => {
     ctx.checkDeadline?.('dataset build')
@@ -2405,11 +2778,8 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
     if (!d) {
       const rows = (ownGet(inputData, name) as Row[] | undefined) ?? []
       ctx.datasets.set(name, rows)
-      ctx.datasetChanges?.set(name, ctx.dataChanges?.get(name) ?? null)
-      const pulse = ctx.inputPulses?.get(name) ?? (ctx.dataChanges?.get(name)
-        ? { changed: [...ctx.dataChanges.get(name)!] }
-        : null)
-      ctx.datasetPulses.set(name, pulse)
+      const given = ctx.inputPulses?.get(name)
+      ctx.datasetPulses.set(name, given ? normalizePulse(given, rows.length) : null)
       return rows
     }
     if (seen.has(name)) throw new Error(`[aster] circular data reference: ${name}`)
@@ -2423,8 +2793,9 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
       if ((d as { format?: DataFormatSpec }).format && srcDef?.values != null) {
         // Vega applies a derived dataset's `format` when (re-)parsing its
         // source's raw values (e.g. source = inline Topology, format =
-        // topojson feature extraction).
-        rows = readData(srcDef.values, (d as { format?: DataFormatSpec }).format)
+        // topojson feature extraction). The host's current values (input.data)
+        // win over the spec's compiled-in ones.
+        rows = readData(ownGet(inputData, src) ?? srcDef.values, (d as { format?: DataFormatSpec }).format)
         inPulse = ctx.inputPulses?.get(src) ?? null
       } else {
         rows = build(src, seen).map((r) => ({ ...r }))
@@ -2439,428 +2810,64 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
         // coercion; string values are parsed by the registered reader.
         rows = readData(d.values, d.format)
       }
+      inPulse = ctx.inputPulses?.get(name) ?? null
     } else {
       rows = ((ownGet(inputData, name) as Row[] | undefined) ?? []).map((r) => ({ ...r }))
+      inPulse = ctx.inputPulses?.get(name) ?? null
     }
-    if (!inPulse && !('source' in d && (d as CompiledChart['data'][number] & { source: string }).source)) {
-      inPulse = ctx.inputPulses?.get(name) ?? (ctx.dataChanges?.get(name)
-        ? { changed: [...ctx.dataChanges.get(name)!] }
-        : null)
-    }
-    const inputRows = rows
-    let outputChanges: Set<number> | null = null
-    let outPulse: StepPulse | null = null
+    if (inPulse) inPulse = normalizePulse(inPulse, rows.length)
+    let outPulse: StepPulse | null = inPulse
     if (d.transform.length) {
-      const chartMetaData = ctx.chart as unknown as {
-        __prevDatasetOutputs?: Map<string, Row[]>
-        __aggState?: Map<string, AggState>
-        __filterPassed?: Map<string, boolean[]>
-        __binState?: Map<string, { lo: number; hi: number; start: number; stop: number; step: number; out: Row[]; oldVals: number[] }>
-        __foldState?: Map<string, { n: number; out: Row[] }>
-        __flattenState?: Map<string, { offsets: number[]; sizes: number[]; out: Row[] }>
-        __prevStepOutputs?: Map<string, Row[][]>
-        __stepCache?: Map<string, unknown>
-        __paramFp?: string
+      const prevDS = ctx.prev?.datasets.get(name)
+      const tctx: StepTransformContext = {
+        runtime: ctx.runtime,
+        signals: ctx.signalParams,
+        // Cross-dataset access for the `lookup` transform. Build the referenced
+        // dataset on demand (it may be declared after this one in the spec).
+        datasets: (n) => {
+          if (!ctx.datasets.has(n) && sources.has(n)) build(n, new Set())
+          return ctx.datasets.get(n)
+        },
+        hierarchies: ctx.hierarchies,
+        projections: ctx.projections,
+        affectedDatasets: ctx.affected,
       }
-      const prevOutputs = chartMetaData.__prevDatasetOutputs
-      const prevSteps = chartMetaData.__prevStepOutputs?.get(name)
-      const changes = ctx.dataChanges?.get(name)
-      const lengthPulse = isLengthPulse(inPulse) ? inPulse : null
-      const paramsUnchanged = paramFpOf(ctx.signalParams) === chartMetaData.__paramFp
-      const single = d.transform.length === 1 ? (d.transform[0] as Record<string, unknown> | undefined) : null
-      const isAgg = single?.type === 'aggregate'
-      const isJoinAgg = single?.type === 'joinaggregate'
-      const isFilter = single?.type === 'filter'
-      const isBinData = single?.type === 'bin' && !Array.isArray((single as { extent?: unknown }).extent)
-      // A sort only reorders rows within each group; the group's contiguous
-      // output block keeps its length, so dirty-group re-derivation is still
-      // safe (all indices in the block are marked changed).
-      const isGrouped = (single?.type === 'window' || single?.type === 'stack')
-        && ((single as { groupby?: unknown }).groupby as string[] | undefined)?.length
-      const t = single!
-      let aggUpdated = false
-      // Incremental filter: re-evaluate the predicate only for changed rows and
-      // rebuild the (input-order) filtered output from the cached per-row pass
-      // status. The output length/order may change (rows dropped/kept), so the
-      // mark is not per-item reusable; the win is the O(n) predicate eval.
-      if (isFilter && ctx.incremental && changes && paramsUnchanged) {
-        const cachedPassed = chartMetaData.__filterPassed?.get(name)
-        const expr = (single as { expr?: string }).expr ?? ''
-        if (cachedPassed && cachedPassed.length === rows.length) {
-          let saw = false
-          for (const i of changes) if (i >= 0 && i < rows.length) { saw = true; break }
-          if (saw) {
-            const fn = (row: Row): boolean => { try { return Boolean(ctx.runtime.expr(expr)(row, ctx.signalParams)) } catch { return false } }
-            const newPassed = new Array<boolean>(rows.length)
-            const out: Row[] = []
-            for (let i = 0; i < rows.length; i++) {
-              const passed = changes.has(i) ? fn(rows[i]!) : cachedPassed[i]!
-              newPassed[i] = passed
-              if (passed) out.push(rows[i]!)
-            }
-            rows = out
-            if (!chartMetaData.__filterPassed) chartMetaData.__filterPassed = new Map()
-            chartMetaData.__filterPassed.set(name, newPassed)
-            aggUpdated = true
-          }
-        }
-      }
-      // Incremental bin (data-derived extent): re-bin only changed rows when the
-      // extent is unchanged. The extent shifts only if a changed row's new value
-      // falls outside [lo, hi], or its old value was at the boundary (the min or
-      // max may move), so those cases fall back to a full re-derive.
-      if (isBinData && ctx.incremental && changes && paramsUnchanged) {
-        const bs = chartMetaData.__binState?.get(name)
-        const field = (single as { field?: string }).field ?? ''
-        const as = (single as { as?: string[] }).as ?? ['b0', 'b1']
-        if (bs && bs.oldVals.length === rows.length) {
-          let safe = true
-          for (const i of changes) {
-            if (i < 0 || i >= rows.length) { safe = false; break }
-            const newV = Number((rows[i] as Record<string, unknown>)[field])
-            const oldV = bs.oldVals[i]!
-            if (newV < bs.lo || newV > bs.hi || oldV === bs.lo || oldV === bs.hi) { safe = false; break }
-          }
-          if (safe) {
-            const out = bs.out
-            for (const i of changes) {
-              if (i < 0 || i >= out.length) continue
-              const v = Number((rows[i] as Record<string, unknown>)[field])
-              const row = rows[i]!
-              if (!Number.isFinite(v) || v < bs.start || v > bs.stop) {
-                out[i] = { ...row, [as[0]!]: undefined, [as[1]!]: undefined }
-              } else {
-                const b0 = bs.start + Math.floor((v - bs.start) / bs.step) * bs.step
-                out[i] = { ...row, [as[0]!]: b0, [as[1]!]: b0 + bs.step }
-              }
-            }
-            rows = out
-            outputChanges = new Set(changes)
-            aggUpdated = true
-          }
-        }
-      }
-      // Incremental fold: each input row expands to exactly n output rows
-      // (index = inputIndex*n + fieldIndex), so a changed row's contiguous block
-      // is re-derived in place when the input length is unchanged.
-      if (single?.type === 'fold' && ctx.incremental && changes && paramsUnchanged) {
-        const fs = chartMetaData.__foldState?.get(name)
-        const n = ((single as { fields?: unknown[] }).fields ?? []).length
-        if (fs && fs.n === n && fs.out.length === rows.length * n) {
-          const out = fs.out
-          for (const i of changes) {
-            if (i < 0 || i >= rows.length) continue
-            const derived = applyTransforms([rows[i]!], [single as never], {
-              runtime: ctx.runtime, signals: ctx.signalParams, datasets: (x) => ctx.datasets.get(x) ?? [], hierarchies: ctx.hierarchies, projections: ctx.projections,
-            }, d.name)
-            for (let j = 0; j < n && j < derived.length; j++) out[i * n + j] = derived[j]!
-          }
-          rows = out
-          const allDirty = new Set<number>()
-          for (const i of changes) if (i >= 0 && i < rows.length / n) for (let j = 0; j < n; j++) allDirty.add(i * n + j)
-          outputChanges = allDirty
-          aggUpdated = true
-        }
-      }
-      // Incremental flatten: each row expands to `size[i]` rows (the max array
-      // length across its fields), placed at a cached per-row offset. Safe only
-      // when every changed row's arrays retain their length (so its index block
-      // stays fixed); a changed expand count shifts the offsets -> full re-derive.
-      if (single?.type === 'flatten' && ctx.incremental && changes && paramsUnchanged) {
-        const fs = chartMetaData.__flattenState?.get(name)
-        const fields = (single as { fields?: string[] }).fields ?? []
-        const sizeOf = (r: Row): number => {
-          let maxlen = 0
-          for (const f of fields) {
-            const a = (r as Record<string, unknown>)[f]
-            const len = Array.isArray(a) ? a.length : (a as { length?: number })?.length
-            maxlen = len == null ? NaN : Math.max(maxlen, len)
-          }
-          return Number.isFinite(maxlen) && maxlen > 0 ? maxlen : 0
-        }
-        if (fs && fs.offsets.length === rows.length) {
-          let safe = true
-          for (const i of changes) {
-            if (i < 0 || i >= rows.length) { safe = false; break }
-            if (sizeOf(rows[i]!) !== fs.sizes[i]) { safe = false; break }
-          }
-          if (safe) {
-            const out = fs.out
-            for (const i of changes) {
-              if (i < 0 || i >= rows.length) continue
-              const n = fs.sizes[i]!
-              const derived = applyTransforms([rows[i]!], [single as never], {
-                runtime: ctx.runtime, signals: ctx.signalParams, datasets: (x) => ctx.datasets.get(x) ?? [], hierarchies: ctx.hierarchies, projections: ctx.projections,
-              }, d.name)
-              for (let j = 0; j < n && j < derived.length; j++) out[fs.offsets[i]! + j] = derived[j]!
-            }
-            rows = out
-            const allDirty = new Set<number>()
-            for (const i of changes) if (i >= 0 && i < fs.offsets.length) for (let j = 0; j < fs.sizes[i]!; j++) allDirty.add(fs.offsets[i]! + j)
-            outputChanges = allDirty
-            aggUpdated = true
-          }
-        }
-      }
-      // Incremental group transforms (aggregate/joinaggregate/window/stack):
-      // re-derive only the groups touched by the changeset. Safe only when no
-      // changed row switches group (a membership change would add/remove/reorder
-      // output rows), which requires a full re-derive. aggregate emits one row per
-      // group; joinaggregate merges the group aggregate onto each (1:1) row;
-      // window/stack emit a grouped (contiguous per group) output.
-      if ((isAgg || isJoinAgg || isGrouped) && ctx.incremental && changes && paramsUnchanged) {
-        const groupby = (single!.groupby as string[] | undefined) ?? []
-        let state = chartMetaData.__aggState?.get(name)
-        if (state && state.rowKey.length === rows.length) {
-          const dirty = new Set<string>()
-          let safe = true
-          for (const i of changes) {
-            if (i < 0 || i >= rows.length) { safe = false; break }
-            const k = groupKeyOf(rows[i]!, groupby)
-            if (state!.rowKey[i] !== k) { safe = false; break }
-            dirty.add(k)
-          }
-          if (safe && dirty.size) {
-            const apply = (gRows: Row[]): Row[] => applyTransforms(gRows, [t as never], {
-              runtime: ctx.runtime,
-              signals: ctx.signalParams,
-              datasets: (n) => ctx.datasets.get(n) ?? [],
-              hierarchies: ctx.hierarchies,
-              projections: ctx.projections,
-            }, d.name)
-            if (isAgg) {
-              // The dirty groups' rows all share one group key (keyToIdx is the
-              // membership index), so aggregateGroup can be called directly —
-              // the generic pipeline would run groupRows and rebuild a Map per
-              // group for a group that is already known.
-              const aggFields = (t.fields as (string | null)[] | undefined) ?? []
-              const aggOps = (t.ops as string[] | undefined) ?? []
-              const aggAs = (t.as as string[] | undefined) ?? []
-              const aggParams = (t as { aggregate_params?: (number | null)[] }).aggregate_params
-              for (const g of dirty) {
-                const idxs = state!.keyToIdx.get(g)
-                if (!idxs) { safe = false; break }
-                const derived = aggregateGroup(idxs.map((idx) => rows[idx]!), state!.groupby, aggFields, aggOps, aggAs, aggParams)
-                state!.outByKey.set(g, derived)
-              }
-              if (safe) {
-                const out = state!.outOrder.map((k) => state!.outByKey.get(k)!)
-                state!.out = out
-                rows = out
-                chartMetaData.__aggState!.set(name, state!)
-                aggUpdated = true
-                const outIdx = state!.outIdx
-                outputChanges = new Set([...dirty].map((g) => outIdx.get(g)!).filter((i) => i != null))
-              }
-            } else {
-              const out = state!.out
-              for (const g of dirty) {
-                const idxs = state!.keyToIdx.get(g)
-                if (!idxs) { safe = false; break }
-                const derived = apply(idxs.map((idx) => rows[idx]!))
-                if (isJoinAgg) {
-                  derived.forEach((r, j) => { out[idxs[j]!] = r })
-                } else {
-                  const start = state!.groupStart.get(g)!
-                  derived.forEach((r, j) => { out[start + j] = r })
-                }
-              }
-              if (safe) {
-                rows = out
-                const allDirty = new Set<number>()
-                for (const g of dirty) {
-                  if (isJoinAgg) {
-                    for (const idx of state!.keyToIdx.get(g)!) allDirty.add(idx)
-                  } else {
-                    const start = state!.groupStart.get(g)!
-                    for (let j = 0; j < state!.keyToIdx.get(g)!.length; j++) allDirty.add(start + j)
-                  }
-                }
-                outputChanges = allDirty
-                chartMetaData.__aggState!.set(name, state!)
-                aggUpdated = true
-              }
-            }
-          }
-        }
-      }
-      // Row-wise transforms (formula/identifier) map index to index, so the
-      // output rows for indices not in the changeset are unchanged and can be
-      // reused. A global transform (filter/aggregate/stack/bin/...) invalidates
-      // every output row, and a change to any expression parameter (width or a
-      // signal) invalidates every formula, so both fall back to a full re-derive.
-      // Row-wise transforms preserve index/length: formula/identifier/timeunit
-      // always; bin with a fixed numeric extent (constant thresholds); lookup when
-      // its source dataset is unaffected (its join result is unchanged for
-      // unchanged rows — a row's lookup only needs re-deriving when the row
-      // changed).
-      const rowwise = d.transform.every(
-        (tm) => tm.type === 'formula' || tm.type === 'identifier' || tm.type === 'timeunit'
-          || (tm.type === 'bin' && Array.isArray((tm as { extent?: unknown }).extent))
-          || (tm.type === 'lookup' && !ctx.affected.has((tm as { from?: string }).from ?? '')),
-      )
-      const cached = prevOutputs?.get(name)
-      if (aggUpdated) {
-        // Incremental aggregate already produced the output; nothing to do.
-      } else if (changes && rowwise && paramsUnchanged && cached && cached.length === rows.length) {
-        const apply = (single: Row[]): Row[] => applyTransforms(single, d.transform, {
-          runtime: ctx.runtime,
-          signals: ctx.signalParams,
-          datasets: (n) => ctx.datasets.get(n) ?? [],
-          hierarchies: ctx.hierarchies,
-          projections: ctx.projections,
-        }, d.name)
-        const via = changes.size < rows.length / 2 ? changes : null
-        if (via) {
-          const out = cached.slice()
-          for (const i of via) {
-            if (i < 0 || i >= out.length) continue
-            const derived = apply([rows[i]!])
-            if (derived[0] != null) out[i] = derived[0]
-          }
-          rows = out
-          outputChanges = new Set(via)
-        } else {
-          rows = apply(rows)
-        }
-      } else if (lengthPulse && paramsUnchanged) {
-        const tctx: StepTransformContext = {
-          runtime: ctx.runtime,
-          signals: ctx.signalParams,
-          datasets: (n) => {
-            if (!ctx.datasets.has(n) && sources.has(n)) build(n, new Set())
-            return ctx.datasets.get(n)
-          },
-          hierarchies: ctx.hierarchies,
-          projections: ctx.projections,
-          affectedDatasets: ctx.affected,
-          stepCache: chartMetaData.__stepCache ?? (chartMetaData.__stepCache = new Map()),
-        }
-        const res = applyPipelineWithPulse(rows, d.transform, tctx, d.name, lengthPulse, prevSteps)
+      const state: DatasetState = { fp: passFp, inputLength: rows.length, steps: [], stepState: new Map() }
+      // Incremental only when every precondition is provable: the caller named a
+      // pulse, the previous state was built under identical params from an input
+      // of the length the pulse is relative to, and no earlier pass of THIS
+      // evaluation already updated that state in place.
+      const incremental = ctx.incremental && inPulse !== null && !inPulse.full && prevDS !== undefined
+        && prevDS.fp === passFp && prevDS.steps.length === d.transform.length
+        && prevDS.inputLength === pulseBaseLength(inPulse) && !ctx.claimed.has(`ds:${name}`)
+      if (incremental) {
+        claim(ctx, `ds:${name}`)
+        const res = applyPipelineWithPulse(rows, d.transform, tctx, name, inPulse!, prevDS, state)
         rows = res.rows
         outPulse = res.pulse
-        if (!chartMetaData.__prevStepOutputs) chartMetaData.__prevStepOutputs = new Map()
-        chartMetaData.__prevStepOutputs.set(d.name, res.steps)
       } else {
-        const tctx: StepTransformContext = {
-          runtime: ctx.runtime,
-          signals: ctx.signalParams,
-          // Cross-dataset access for the `lookup` transform. Build the referenced
-          // dataset on demand (it may be declared after this one in the spec).
-          datasets: (name) => {
-            if (!ctx.datasets.has(name) && sources.has(name)) build(name, new Set())
-            return ctx.datasets.get(name)
-          },
-          hierarchies: ctx.hierarchies,
-          projections: ctx.projections,
-          affectedDatasets: ctx.affected,
-          stepCache: chartMetaData.__stepCache ?? (chartMetaData.__stepCache = new Map()),
-        }
-        const steps: Row[][] = []
         let cur = rows
         for (let k = 0; k < d.transform.length; k++) {
-          cur = applyOne(cur, d.transform[k]!, tctx, d.name)
-          steps.push(cur)
+          const res = applyOneWithState(cur, d.transform[k]!, tctx, name)
+          cur = res.rows
+          state.steps.push(cur)
+          if (res.state !== undefined) state.stepState.set(`${name}#${k}`, res.state)
         }
         rows = cur
-        if (!chartMetaData.__prevStepOutputs) chartMetaData.__prevStepOutputs = new Map()
-        chartMetaData.__prevStepOutputs.set(d.name, steps)
-        // Populate per-step state for the next incremental pulse (filter/flatten/
-        // groups). This is cheap: the full transform already visited the rows.
-        const cache = chartMetaData.__stepCache ?? (chartMetaData.__stepCache = new Map())
-        for (let k = 0; k < d.transform.length; k++) {
-          const tm = d.transform[k]!
-          const key = `${d.name}#${k}`
-          const inputAtStep = k === 0 ? inputRows : steps[k - 1]!
-          if (tm.type === 'filter') {
-            const expr = (tm as { expr?: string }).expr ?? ''
-            const fn = (row: Row): boolean => { try { return Boolean(ctx.runtime.expr(expr)(row, ctx.signalParams)) } catch { return false } }
-            cache.set(key, inputAtStep.map((r) => fn(r)))
-          } else if (tm.type === 'flatten') {
-            const fields = (tm as { fields?: string[] }).fields ?? []
-            const sizes = inputAtStep.map((r) => flattenSize(r, fields))
-            const offsets: number[] = []
-            let p = 0
-            for (const sz of sizes) { offsets.push(p); p += sz }
-            cache.set(key, { sizes, offsets })
-          } else if (tm.type === 'aggregate' || tm.type === 'joinaggregate' || tm.type === 'window' || tm.type === 'stack') {
-            cache.set(key, buildAggState(inputAtStep, (tm as { groupby?: string[] }).groupby ?? [], steps[k]!))
-          } else if (tm.type === 'collect' || tm.type === 'sample') {
-            const limit = tm.type === 'sample' ? ((tm as { size?: number }).size ?? 0) : Infinity
-            cache.set(key, { order: sortOrder(inputAtStep, (tm as { sort?: SortSpec }).sort, limit) })
-          }
-        }
+        outPulse = null
       }
-      // Refresh the persistent group index whenever the group transform was
-      // fully re-derived (first eval, an unsafe changeset, or a non-incremental
-      // path).
-      if ((isAgg || isJoinAgg || isGrouped) && !aggUpdated) {
-        if (!chartMetaData.__aggState) chartMetaData.__aggState = new Map()
-        chartMetaData.__aggState.set(name, buildAggState(inputRows, (single as { groupby?: string[] }).groupby ?? [], rows))
-      }
-      if (isFilter && !aggUpdated) {
-        if (!chartMetaData.__filterPassed) chartMetaData.__filterPassed = new Map()
-        const expr = (single as { expr?: string }).expr ?? ''
-        const fn = (row: Row): boolean => { try { return Boolean(ctx.runtime.expr(expr)(row, ctx.signalParams)) } catch { return false } }
-        chartMetaData.__filterPassed.set(name, inputRows.map((r) => fn(r)))
-      }
-      if (isBinData && !aggUpdated) {
-        const field = (single as { field?: string }).field ?? ''
-        const vals = inputRows.map((r) => Number((r as Record<string, unknown>)[field]))
-        const finite = vals.filter((v) => Number.isFinite(v))
-        const lo = finite.length ? Math.min(...finite) : 0
-        const hi = finite.length ? Math.max(...finite) : 1
-        const span = hi - lo
-        const explicitStep = (single as { step?: number }).step
-        const step = typeof explicitStep === 'number' && explicitStep > 0 ? explicitStep : computeBinStep(span, (single as { maxbins?: number }).maxbins)
-        const eps = computeBinEps(step)
-        const start = lo < Math.floor(lo / step + eps) * step ? Math.floor(lo / step + eps) * step - step : Math.floor(lo / step + eps) * step
-        const stop = Math.ceil(hi / step) * step
-        if (!chartMetaData.__binState) chartMetaData.__binState = new Map()
-        chartMetaData.__binState.set(name, { lo, hi, start, stop, step, out: rows, oldVals: vals })
-      }
-      if (single?.type === 'fold' && !aggUpdated) {
-        if (!chartMetaData.__foldState) chartMetaData.__foldState = new Map()
-        chartMetaData.__foldState.set(name, { n: ((single as { fields?: unknown[] }).fields ?? []).length, out: rows })
-      }
-      if (single?.type === 'flatten' && !aggUpdated) {
-        const fields = (single as { fields?: string[] }).fields ?? []
-        const offsets: number[] = []
-        const sizes: number[] = []
-        let pos = 0
-        for (const r of inputRows) {
-          let maxlen = 0
-          for (const f of fields) {
-            const a = (r as Record<string, unknown>)[f]
-            const len = Array.isArray(a) ? a.length : (a as { length?: number })?.length
-            maxlen = len == null ? NaN : Math.max(maxlen, len)
-          }
-          const size = Number.isFinite(maxlen) && maxlen > 0 ? maxlen : 0
-          offsets.push(pos)
-          sizes.push(size)
-          pos += size
-        }
-        if (!chartMetaData.__flattenState) chartMetaData.__flattenState = new Map()
-        chartMetaData.__flattenState.set(name, { offsets, sizes, out: rows })
-      }
+      ctx.draft.datasets.set(name, state)
     }
     ctx.datasets.set(name, rows)
-    if (!d.transform.length) {
-      outputChanges = ctx.dataChanges?.get(name) ?? null
-      outPulse = inPulse
-    }
-    ctx.datasetChanges?.set(name, outputChanges)
     ctx.datasetPulses.set(name, outPulse)
-    // Cache the derived output for the next per-datum update.
-    const chartMeta = ctx.chart as unknown as { __prevDatasetOutputs?: Map<string, Row[]> }
-    if (!chartMeta.__prevDatasetOutputs) chartMeta.__prevDatasetOutputs = new Map()
-    chartMeta.__prevDatasetOutputs.set(name, rows)
     return rows
   }
 
   for (const d of ctx.chart.data) {
     build(d.name, new Set())
   }
+  // Transforms (extent, bin with a signal output) may have written signals.
+  ctx.fpMemo = undefined
 }
 
 /** Snapshot resolved scales into plain data for the scene differential (R8.1/R8.2). */
@@ -2907,173 +2914,217 @@ function snapshotScales(scales: Map<string, Scale>): Array<{ name: string; type:
   return out
 }
 
+/** The `{data, field}` form of a single-dataset scale domain, if it is one. */
+function singleDataDomain(domain: ScaleDomain): { data: string; field: string; sort?: unknown } | null {
+  if (domain && typeof domain === 'object' && !Array.isArray(domain)
+    && typeof (domain as { data?: unknown }).data === 'string' && typeof (domain as { field?: unknown }).field === 'string') {
+    return domain as { data: string; field: string; sort?: unknown }
+  }
+  return null
+}
+
+/** Discrete domains sorted by an aggregate depend on other fields: never census-reusable. */
+function discreteCensusApplies(dom: { sort?: unknown }): boolean {
+  const sort = dom.sort
+  return !(sort && typeof sort === 'object' && !Array.isArray(sort) && 'op' in (sort as object))
+}
+
+function freshContCensus(dom: { data: string; field: string }, rows: Row[]): ContCensus {
+  const vals = new Array<number>(rows.length)
+  let lo = Infinity, hi = -Infinity
+  for (let i = 0; i < rows.length; i++) {
+    const v = Number(getField(rows[i]!, dom.field))
+    vals[i] = v
+    if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v }
+  }
+  const finite = lo <= hi
+  let loCount = 0, hiCount = 0
+  if (finite) for (const v of vals) { if (v === lo) loCount++; if (v === hi) hiCount++ }
+  return { data: dom.data, field: dom.field, lo: finite ? lo : 0, hi: finite ? hi : 1, loCount, hiCount, finite, vals }
+}
+
+function freshDiscCensus(dom: { data: string; field: string }, rows: Row[]): DiscCensus {
+  const counts = new Map<unknown, number>()
+  const firstIdx = new Map<unknown, number>()
+  const vals: unknown[] = new Array(rows.length)
+  for (let i = 0; i < rows.length; i++) {
+    const v = getField(rows[i]!, dom.field)
+    vals[i] = v
+    counts.set(v, (counts.get(v) ?? 0) + 1)
+    if (!firstIdx.has(v)) firstIdx.set(v, i)
+  }
+  return { data: dom.data, field: dom.field, vals, counts, firstIdx }
+}
+
+/**
+ * Advance a continuous min/max census by a pulse, or return null when the domain
+ * can no longer be proven unchanged (a value left [lo,hi], or the LAST row
+ * holding the min/max moved away: the extreme itself moves — C11).
+ *
+ * An append-only pulse (which includes the same-length form) updates `vals` in
+ * place; the caller has claimed the entry. Any other mapping builds a fresh
+ * array.
+ */
+function advanceContCensus(cen: ContCensus, rows: Row[], pulse: StepPulse): ContCensus | null {
+  let { loCount, hiCount } = cen
+  const { lo, hi, field } = cen
+  let stable = true
+  const adjust = (oldV: number | undefined, newV: number | undefined): void => {
+    if (oldV !== undefined) {
+      if (oldV === lo) loCount--
+      if (oldV === hi) hiCount--
+    }
+    if (newV === undefined || !Number.isFinite(newV)) return
+    if (newV < lo || newV > hi) { stable = false; return }
+    if (newV === lo) loCount++
+    if (newV === hi) hiCount++
+  }
+  const valueAt = (i: number): number => Number(getField(rows[i]!, field))
+  const vals = cen.vals
+  let nextVals: number[]
+  if (pulse.appendOnly || (!pulse.from && !(pulse.added?.length) && !(pulse.removed?.length))) {
+    const base = pulse.appendOnly ? (pulse.baseLength ?? vals.length) : rows.length
+    if (base !== vals.length || rows.length < base) return null
+    for (const i of pulse.changed) {
+      if (i < 0 || i >= base) continue
+      const v = valueAt(i)
+      adjust(vals[i], v)
+      vals[i] = v
+    }
+    for (let i = base; i < rows.length; i++) {
+      const v = valueAt(i)
+      adjust(undefined, v)
+      vals.push(v)
+    }
+    nextVals = vals
+  } else if (pulse.from && pulse.from.length === rows.length && (pulse.to == null || pulse.to.length === vals.length)) {
+    const from = pulse.from
+    const modified = new Set(pulse.changed)
+    const retained = new Uint8Array(vals.length)
+    for (let i = 0; i < from.length; i++) {
+      const old = from[i]!
+      if (old >= vals.length) return null
+      if (old >= 0) retained[old] = 1
+    }
+    for (let old = 0; old < vals.length; old++) if (!retained[old]) adjust(vals[old], undefined)
+    nextVals = new Array<number>(rows.length)
+    for (let i = 0; i < rows.length; i++) {
+      const old = from[i]!
+      if (old >= 0 && !modified.has(i)) { nextVals[i] = vals[old]!; continue }
+      const v = valueAt(i)
+      nextVals[i] = v
+      adjust(old >= 0 ? vals[old] : undefined, v)
+    }
+  } else return null
+  // Without a row holding each extreme the min/max moved: re-derive.
+  if (!stable || loCount <= 0 || hiCount <= 0) return null
+  return { ...cen, loCount, hiCount, vals: nextVals }
+}
+
+/**
+ * Advance a discrete value census by a SAME-LENGTH pulse. The ordered domain is
+ * unchanged iff every changed row swaps its old value for one that already
+ * exists with an earlier first occurrence, while the old value keeps both a
+ * positive count and its own first occurrence. Anything else rebuilds.
+ */
+function advanceDiscCensus(cen: DiscCensus, rows: Row[], pulse: StepPulse): DiscCensus | null {
+  const sameLength = pulse.appendOnly ? (pulse.baseLength === cen.vals.length && rows.length === cen.vals.length)
+    : (!pulse.from && !(pulse.added?.length) && !(pulse.removed?.length) && rows.length === cen.vals.length)
+  if (!sameLength) return null
+  for (const i of pulse.changed) {
+    if (i < 0 || i >= rows.length) return null
+    const nv = getField(rows[i]!, cen.field)
+    const ov = cen.vals[i]
+    if (Object.is(ov, nv) || ov === nv) continue
+    const nCount = cen.counts.get(nv)
+    const nFirst = cen.firstIdx.get(nv)
+    if (nCount == null || nCount <= 0 || nFirst == null || nFirst > i) return null
+    const oCount = cen.counts.get(ov)
+    if (oCount == null || oCount <= 1) return null
+    if (cen.firstIdx.get(ov) === i) return null
+    cen.counts.set(ov, oCount - 1)
+    cen.counts.set(nv, nCount + 1)
+    cen.vals[i] = nv
+  }
+  return cen
+}
+
+/** Mark the committed state as updated in place (see IncrementalState). */
+function claim(ctx: EvalContext, key: string): boolean {
+  if (!ctx.prev || ctx.claimed.has(key)) return false
+  ctx.claimed.add(key)
+  ctx.prev.stale = true
+  return true
+}
+
 function buildScales(ctx: EvalContext): void {
   const scaleSignals = ctx.signalParams
-  const chartMeta = ctx.chart as unknown as { __cachedScales?: Map<string, { scale: Scale; multi: boolean }>; __scaleDomain?: Map<string, { data: string; field: string; lo: number; hi: number; oldVals: number[]; loCount: number; hiCount: number; finite: boolean }>; __scaleDomainDisc?: Map<string, { oldVals: unknown[]; counts: Map<unknown, number>; firstIdx: Map<unknown, number> }>; __paramFp?: string }
-  const cached = chartMeta.__cachedScales ?? (chartMeta.__cachedScales = new Map())
-  const domainCache = chartMeta.__scaleDomain ?? (chartMeta.__scaleDomain = new Map())
-  const discreteCache = chartMeta.__scaleDomainDisc ?? (chartMeta.__scaleDomainDisc = new Map())
+  const prev = ctx.prev
+  const entries = new Map<string, ScaleEntry>()
   // A scale whose domain references none of the affected datasets (closed over
-  // source chains) and whose size/signal params are unchanged is identical to
-  // the previous eval's scale — reuse it and skip the O(n) domain re-scan.
-  const paramsUnchanged = paramFpOf(ctx.signalParams) === chartMeta.__paramFp
+  // source and transform dependencies) and whose size/signal params are
+  // unchanged is identical to the previous evaluation's scale: reuse it and skip
+  // the O(n) domain re-scan. Reuse reads the COMMITTED state only; this call's
+  // result goes to the draft, so calling buildScales several times per
+  // evaluation (fixed-point rounds, size re-resolution) is harmless (T1, C5).
+  const fp = ctxFpOf(ctx)
+  const reusable = ctx.incremental && prev !== undefined && prev.fp === fp
+  const stamp = `${fp}#${ctx.dsEpoch}`
   for (const s of ctx.chart.scales) {
+    // This scale was already proven reusable under the very same params and
+    // dataset build earlier in this evaluation (the census advances once).
+    const memo = ctx.scaleReuse.get(s.name)
+    if (reusable && memo && memo.stamp === stamp) {
+      ctx.scales.set(s.name, memo.entry.scale)
+      ctx.scaleTypes.set(s.name, s.type)
+      entries.set(s.name, memo.entry)
+      continue
+    }
     // Vega-lite emits `{ fields: [{data, field}, ...] }` domains for layered
     // charts (several datasets contribute to one shared scale). scales.ts only
     // understands single-dataset domains, so resolve the multi-dataset form
-    // here into a concrete domain before building the scale.
+    // here into a concrete domain for THIS evaluation (the IR keeps the declared
+    // domain, so a later evaluation re-resolves it — C12).
     const multiDomain = resolveMultiDatasetDomain(s.domain, ctx)
-    const prev = cached.get(s.name)
-    if (multiDomain) {
-      // A multi-dataset domain resolves to a concrete array in-place (the IR is
-      // mutated), so it can never be safely reused — always re-resolve/rebuild.
-      if (prev?.multi) { ctx.scales.set(s.name, prev.scale); ctx.scaleTypes.set(s.name, s.type); continue }
-      ;(s as unknown as { domain: unknown }).domain = concreteDomain(s, multiDomain)
-    }
-    if (ctx.incremental && !multiDomain && !prev?.multi && paramsUnchanged && prev) {
+    const prevEntry = prev?.scaleEntries.get(s.name)
+    const def: CompiledScale = multiDomain ? { ...s, domain: concreteDomain(s, multiDomain) } : s
+    const dom = multiDomain ? null : singleDataDomain(s.domain)
+    if (reusable && prevEntry && prevEntry.multi === (multiDomain != null)) {
       let reuse = !domainReferencesAffected(s.domain, ctx.affected)
+      let entry = prevEntry
       // An affected single-data-domain scale can still be reused when its domain
-      // is provably unchanged: no changed row extends [lo,hi] and no changed row's
-      // old value sat at a boundary (which could move the min/max). This skips the
-      // O(n) domain re-scan for the common case (few points change, domain holds).
-      const CONTINUOUS = CONTINUOUS_TYPES
-      const DISCRETE = DISCRETE_TYPES
-      const dom = (typeof s.domain === 'object' && !Array.isArray(s.domain) && typeof (s.domain as { data?: unknown }).data === 'string')
-        ? (s.domain as { data: string; field: string })
-        : null
-      // Domain-stability reuse is only sound for continuous scales over numeric
-      // values: a discrete (band/ordinal) domain is a *set* of values, so a changed
-      // row introducing a new category changes the domain even though no min/max
-      // moved. Restrict reuse to continuous scales with finite domain values.
-      if (!reuse && dom && CONTINUOUS.has(s.type)) {
-        const prevDom = domainCache.get(s.name)
-        const changes = ctx.dataChanges?.get(dom.data)
+      // is provably unchanged (see the census helpers). This skips the O(n)
+      // domain re-scan for the common case (few points change, domain holds, or
+      // rows are appended inside the current domain).
+      if (!reuse && dom && !ctx.claimed.has(`scale:${s.name}`)) {
+        const pulse = ctx.datasetPulses.get(dom.data)
         const rows = ctx.datasets.get(dom.data) ?? []
-        if (prevDom && prevDom.finite && changes && changes.size && prevDom.oldVals.length === rows.length) {
-          let stable = true
-          let loCount = prevDom.loCount
-          let hiCount = prevDom.hiCount
-          for (const i of changes) {
-            if (i < 0 || i >= rows.length) { stable = false; break }
-            const newV = Number((rows[i] as Row)[dom.field])
-            const oldV = prevDom.oldVals[i]!
-            if (newV < prevDom.lo || newV > prevDom.hi) { stable = false; break }
-            // A changed row at the boundary only moves the domain if it was the
-            // last row holding that boundary (another row may still keep it).
-            if (oldV === prevDom.lo && --loCount <= 0) { stable = false; break }
-            if (oldV === prevDom.hi && --hiCount <= 0) { stable = false; break }
-          }
-          reuse = stable
-        }
-        // Length-changing pulse: update the min/max census by the added/removed/
-        // modified rows only. An append inside the current domain (the common
-        // streaming case) therefore keeps the scale object — and every encoded
-        // item — without an O(n) domain re-scan.
-        const pulse = ctx.inputPulses?.get(dom.data) ?? ctx.datasetPulses.get(dom.data)
-        if (!reuse && prevDom && prevDom.finite && pulse && isLengthPulse(pulse)) {
-          const oldVals = prevDom.oldVals
-          let lo = prevDom.lo, hi = prevDom.hi
-          let loCount = prevDom.loCount, hiCount = prevDom.hiCount
-          let stable = true
-          const adjust = (oldV: number | undefined, newV: number): void => {
-            if (oldV != null) {
-              if (oldV === lo) loCount--
-              if (oldV === hi) hiCount--
+        if (pulse && !pulse.full) {
+          if (CONTINUOUS_TYPES.has(s.type) && prevEntry.cont && prevEntry.cont.finite
+            && prevEntry.cont.data === dom.data && prevEntry.cont.field === dom.field) {
+            // The census is updated in place for the append-only form: claim it.
+            if (claim(ctx, `scale:${s.name}`)) {
+              const next = advanceContCensus(prevEntry.cont, rows, pulse)
+              if (next) { reuse = true; entry = { ...prevEntry, cont: next } }
             }
-            if (!Number.isFinite(newV)) return
-            if (newV < lo || newV > hi) { stable = false; return }
-            if (newV === lo) loCount++
-            if (newV === hi) hiCount++
-          }
-          const changedVals: Array<[number, number]> = []
-          const addedVals: number[] = []
-          if (pulse.appendOnly) {
-            const base = pulse.baseLength ?? oldVals.length
-            if (base === oldVals.length && rows.length >= base) {
-              for (const i of pulse.changed) {
-                if (i < 0 || i >= base) continue
-                const v = Number((rows[i] as Row)[dom.field])
-                adjust(oldVals[i]!, v)
-                changedVals.push([i, v])
-              }
-              for (let i = base; i < rows.length; i++) {
-                const v = Number((rows[i] as Row)[dom.field])
-                adjust(undefined, v)
-                addedVals.push(v)
-              }
-            } else stable = false
-          } else if (pulse.from && pulse.from.length === rows.length) {
-            const from = pulse.from
-            const modified = new Set(pulse.changed)
-            const newVals = new Array<number>(rows.length)
-            const retained = new Set<number>()
-            for (let i = 0; i < from.length; i++) if (from[i]! >= 0) retained.add(from[i]!)
-            for (let old = 0; old < oldVals.length; old++) {
-              if (retained.has(old)) continue
-              adjust(oldVals[old]!, NaN)
+          } else if (DISCRETE_TYPES.has(s.type) && prevEntry.disc && discreteCensusApplies(dom)
+            && prevEntry.disc.data === dom.data && prevEntry.disc.field === dom.field) {
+            if (claim(ctx, `scale:${s.name}`)) {
+              const next = advanceDiscCensus(prevEntry.disc, rows, pulse)
+              if (next) { reuse = true; entry = { ...prevEntry, disc: next } }
             }
-            for (let i = 0; i < rows.length; i++) {
-              const old = from[i]!
-              const dirty = old < 0 || modified.has(i)
-              const v = dirty ? Number((rows[i] as Row)[dom.field]) : oldVals[old]!
-              newVals[i] = v
-              if (dirty) adjust(old >= 0 ? oldVals[old]! : undefined, v)
-            }
-            if (stable) {
-              domainCache.set(s.name, {
-                ...prevDom, lo, hi, loCount, hiCount, oldVals: newVals,
-              })
-              reuse = true
-            }
-          } else stable = false
-          if (stable && pulse.appendOnly) {
-            for (const [i, v] of changedVals) oldVals[i] = v
-            for (const v of addedVals) oldVals.push(v)
-            domainCache.set(s.name, {
-              ...prevDom, lo, hi, loCount, hiCount, oldVals,
-            })
-            reuse = true
           }
-        }
-      }
-      // Discrete (band/point/ordinal) domains: the domain is the *ordered set*
-      // of distinct values, so stability needs a value census, not min/max.
-      // Track each value's multiplicity and first-occurrence index: the ordered
-      // domain is unchanged iff every changed row swaps its old value for one
-      // that already exists with an earlier first occurrence, while the old
-      // value keeps a positive count and its own first occurrence. Any ambiguity
-      // (a value appearing/vanishing, or a first occurrence moving) rebuilds.
-      if (!reuse && dom && DISCRETE_TYPES.has(s.type)) {
-        const disc = discreteCache.get(s.name)
-        const changes = ctx.dataChanges?.get(dom.data)
-        const rows = ctx.datasets.get(dom.data) ?? []
-        if (disc && disc.oldVals.length === rows.length && changes && changes.size) {
-          let stable = true
-          for (const i of changes) {
-            if (i < 0 || i >= rows.length) { stable = false; break }
-            const nv = (rows[i] as Row)[dom.field]
-            const ov = disc.oldVals[i]!
-            if (ov === nv) continue
-            const nCount = disc.counts.get(nv)
-            const nFirst = disc.firstIdx.get(nv)
-            if (nCount == null || nCount <= 0 || nFirst == null || nFirst > i) { stable = false; break }
-            const oCount = disc.counts.get(ov)
-            if (oCount == null || oCount <= 1) { stable = false; break }
-            if (disc.firstIdx.get(ov) === i) { stable = false; break }
-            disc.counts.set(ov, oCount - 1)
-            disc.counts.set(nv, nCount + 1)
-            disc.oldVals[i] = nv
-          }
-          if (stable) reuse = true
         }
       }
       if (reuse) {
-        ctx.scales.set(s.name, prev.scale)
+        ctx.scales.set(s.name, entry.scale)
         ctx.scaleTypes.set(s.name, s.type)
+        entries.set(s.name, entry)
+        ctx.scaleReuse.set(s.name, { stamp, entry })
         continue
       }
     }
-    const scale = buildScale(s, {
+    const scale = buildScale(def, {
       width: ctx.width,
       height: ctx.height,
       signals: scaleSignals,
@@ -3087,53 +3138,25 @@ function buildScales(ctx: EvalContext): void {
         return out
       },
       dataRows: (dataName) => (ctx.datasets.get(dataName) ?? []) as Record<string, unknown>[],
+      distinctCache: ctx.distinctCache,
     })
     ctx.scales.set(s.name, scale)
     ctx.scaleTypes.set(s.name, s.type)
-    cached.set(s.name, { scale, multi: multiDomain != null })
-    // Track the domain extent for a single-data-domain scale so it can be reused
-    // on a later per-datum update when the domain is provably unchanged.
-    if (typeof s.domain === 'object' && !Array.isArray(s.domain) && typeof (s.domain as { data?: unknown }).data === 'string') {
-      const dom = s.domain as { data: string; field: string }
+    const entry: ScaleEntry = { scale, multi: multiDomain != null }
+    // Track the domain census for a single-data-domain scale so a later update
+    // can prove the domain unchanged instead of rescanning.
+    if (dom) {
       const rows = ctx.datasets.get(dom.data) ?? []
       if (DISCRETE_TYPES.has(s.type)) {
-        // Census for discrete-domain stability: value multiplicity + first-occurrence
-        // index (see the reuse check above).
-        const counts = new Map<unknown, number>()
-        const firstIdx = new Map<unknown, number>()
-        const vals: unknown[] = []
-        for (let i = 0; i < rows.length; i++) {
-          const v = getField(rows[i]!, dom.field)
-          vals.push(v)
-          counts.set(v, (counts.get(v) ?? 0) + 1)
-          if (!firstIdx.has(v)) firstIdx.set(v, i)
-        }
-        discreteCache.set(s.name, { oldVals: vals, counts, firstIdx })
-      } else {
-        const vals = rows.map((r) => Number((r as Row)[dom.field]))
-        const finite = vals.filter((v) => Number.isFinite(v))
-        const lo = finite.length ? Math.min(...finite) : 0
-        const hi = finite.length ? Math.max(...finite) : 1
-        domainCache.set(s.name, {
-          data: dom.data,
-          field: dom.field,
-          lo,
-          hi,
-          oldVals: vals,
-          loCount: finite.length ? vals.filter((v) => v === lo).length : 0,
-          hiCount: finite.length ? vals.filter((v) => v === hi).length : 0,
-          finite: finite.length > 0,
-        })
+        if (discreteCensusApplies(dom)) entry.disc = freshDiscCensus(dom, rows)
+      } else if (CONTINUOUS_TYPES.has(s.type)) {
+        entry.cont = freshContCensus(dom, rows)
       }
     }
+    entries.set(s.name, entry)
   }
-  // Snapshot the final scale objects for this eval. The differential item-reuse
-  // check (canReuseItems) compares the next eval's scales against the PREVIOUS
-  // eval's: when a scale object is provably the same, unchanged rows re-encode
-  // identically even if the scale's domain references an affected dataset.
-  const meta = chartMeta as unknown as { __lastScales?: Map<string, Scale>; __prevScales?: Map<string, Scale> }
-  meta.__prevScales = meta.__lastScales
-  meta.__lastScales = new Map(ctx.scales)
+  ctx.draft.scaleEntries = entries
+  ctx.draft.scales = new Map(ctx.scales)
 }
 
 /** True when a scale domain references an affected dataset (data or multi-field). */
@@ -3211,10 +3234,13 @@ function concreteDomain(scale: CompiledScale, values: unknown[]): unknown[] {
 /**
  * Per-datum differential reuse is safe only when publishing the changed indices
  * actually captures every reason a *row* re-encodes to a different item:
- *  - the source dataset has a published changeset (index alignment),
- *  - row length/order is unchanged (no mark sort, no reordering transform),
- *  - the mark uses no scale whose data-domain spans a changed dataset (otherwise
- *    an unchanged row's position shifts when the domain recomputes).
+ *  - the source dataset has a published pulse (index alignment) consistent with
+ *    the previous group's item count,
+ *  - no mark sort/transform reorders or derives rows,
+ *  - the evaluation context (signals, width/height, overrides) is the one the
+ *    previous items were encoded under, and
+ *  - every scale the mark reads is the SAME object as last evaluation's (so an
+ *    unchanged row encodes to an identical item).
  */
 function reusablePulse(
   mark: CompiledMark,
@@ -3222,14 +3248,12 @@ function reusablePulse(
   source: string,
   rowCount: number,
   prevGroup: SceneGroup | null | undefined,
-  rectSorts: boolean,
 ): StepPulse | null {
-  if (!prevGroup) return null
-  // Pulse propagation: the *output* rows that changed for this source. A
-  // length-changing pulse additionally carries the old->new mapping. `null` means
-  // the dataset was fully re-derived without a trustworthy mapping.
-  const pulse = ctx.datasetPulses.get(source)
-    ?? (ctx.datasetChanges?.get(source) ? { changed: [...ctx.datasetChanges.get(source)!] } : null)
+  const prev = ctx.prev
+  if (!prevGroup || !prev || !ctx.incremental) return null
+  // The output pulse of the source dataset. `null` means it was fully
+  // re-derived without a trustworthy mapping.
+  const pulse = ctx.datasetPulses.get(source) ?? null
   if (!pulse || pulse.full) return null
   const prevItems = prevGroup.items as SceneItem[]
   if (pulse.appendOnly) {
@@ -3238,25 +3262,18 @@ function reusablePulse(
   } else if (pulse.from) {
     // Length-changing: retained rows can still be reused at their new index.
     if (pulse.from.length !== rowCount) return null
+    if (pulse.to && pulse.to.length !== prevItems.length) return null
   } else if (rowCount !== prevItems.length) {
     return null
   }
-  if (mark.sort || mark.transform?.length || rectSorts) return null
-  // A change to width/height or any signal shifts scale ranges and every
-  // formula, so the previously-encoded items would be stale. Only reuse when the
-  // expression params are identical to the previous eval.
-  if (paramFpOf(ctx.signalParams) !== (ctx.chart as unknown as { __prevParamFp?: string }).__prevParamFp) return null
-  // Bail if the mark uses a scale whose encoding behavior may have changed:
-  // either the scale object differs from the PREVIOUS eval's (its domain was
-  // re-derived), or — for multi-dataset domains, which are always re-resolved —
-  // the domain references an affected dataset.
-  const prevScales = (ctx.chart as unknown as { __prevScales?: Map<string, Scale> }).__prevScales
-  for (const name of collectMarkScales(mark)) {
-    const compiled = ctx.chart.scales.find((s) => s.name === name)
-    if (!compiled) continue
-    const cur = ctx.scales.get(name)
-    if (cur != null && cur === prevScales?.get(name)) continue
-    if (domainReferencesAffected(compiled.domain, ctx.affected)) return null
+  if (mark.sort || mark.transform?.length) return null
+  const deps = markDepsOf(mark, ctx.chart)
+  // Reading other datasets from an expression: an unchanged row can still
+  // encode differently, and no pulse describes that.
+  if (deps.allData) return null
+  if (prev.fp !== ctx.draft.fp) return null
+  for (const name of markScaleNames(mark, ctx.chart)) {
+    if (ctx.scales.get(name) !== prev.scales.get(name)) return null
   }
   return pulse
 }
@@ -3272,6 +3289,11 @@ function evaluateMark(
   const source = mark.from?.data
 
   let items: SceneItem[]
+  // Union bounds carried over from the previous group (pure appends only) and
+  // the items appended to it, so the cache survives without a recomputation.
+  let carriedBounds: Bounds | undefined
+  const addedItems: SceneItem[] = []
+  let pendingUndo: ItemsUndo | undefined
   if (source) {
     const rawRows = ctx.datasets.get(source) ?? []
     // Only clone rows when the pipeline will re-encode them all (a mark-level
@@ -3320,23 +3342,23 @@ function evaluateMark(
     // SVG renderer paints the array in reverse, which already puts the first
     // datum on top. Reordering the scene here would make the scene-level
     // differential (R8.3) report a paint order the renderer then reverses twice.
-    const rectSorts = false
-    const rectPermInv: number[] | null = null
     const encodeRows = rows
 
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
     ctx.encodeBinding = encodeBindingFor(update, ctx)
-    // Per-datum differential update: when the source dataset published a
-    // changeset and reuse is provably safe (no reordering, unchanged length, no
-    // scale whose encoding may have changed), keep the previous item objects for
-    // unchanged indices so the DOM patcher skips them and the re-encode of those
-    // items is skipped entirely (including the row clone). `rows` is in dataset
-    // order (changeset indices refer to it); rect marks map the dataset index to
-    // its paint position via the sort permutation.
-    const pulse = reusablePulse(mark, ctx, source, encodeRows.length, prevGroup, rectSorts)
+    // Per-datum differential update: when the source dataset published a pulse
+    // and reuse is provably safe (see reusablePulse), keep the previous item
+    // objects for unchanged indices so the DOM patcher skips them and the
+    // re-encode of those items is skipped entirely (including the row clone).
+    // `rows` is in dataset order (pulse indices refer to it).
+    //
+    // A returned scene is never observably written (C52): structural updates
+    // build a new array; appends/edits advance the engine-owned array in place
+    // and turn the superseded group into a lazy snapshot (supersedeItems).
+    const pulse = reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
     if (pulse) {
       const prevItems = prevGroup!.items as SceneItem[]
-      const gen = (ctx.chart as unknown as { __gen?: number }).__gen ?? 0
+      const gen = ctx.gen
       const encodeAt = (i: number): SceneItem => {
         const row = { ...(rows[i] as Row) }
         const res = resolveEncodeSet(update, row, ctx, mark.type)
@@ -3346,18 +3368,36 @@ function evaluateMark(
       }
       if (pulse.appendOnly) {
         const base = pulse.baseLength ?? prevItems.length
-        const cachedBounds = GROUP_BOUNDS.get(prevGroup!)
-        if (pulse.changed.length) GROUP_BOUNDS.delete(prevGroup!)
-        for (const i of pulse.changed) {
-          if (i < 0 || i >= base) continue
-          prevItems[i] = encodeAt(i)
+        // O(changes): advance the engine-owned array in place; the previous
+        // group is turned into a lazy snapshot below (supersedeItems).
+        const undo: ItemsUndo = { oldLen: prevItems.length, idx: [], items: [] }
+        // The cached union bounds carry over to the new group only for a pure
+        // append (re-encoded items could shrink them).
+        if (!pulse.changed.length) carriedBounds = GROUP_BOUNDS.get(prevGroup!)?.clone()
+        try {
+          for (const i of pulse.changed) {
+            if (i < 0 || i >= base) continue
+            undo.idx.push(i)
+            undo.items.push(prevItems[i]!)
+            prevItems[i] = encodeAt(i)
+          }
+          for (let i = base; i < encodeRows.length; i++) {
+            const item = encodeAt(i)
+            prevItems.push(item)
+            addedItems.push(item)
+          }
+        } catch (e) {
+          // Never leave the (still current) previous scene half-updated.
+          prevItems.length = undo.oldLen
+          for (let k = undo.idx.length - 1; k >= 0; k--) prevItems[undo.idx[k]!] = undo.items[k]!
+          throw e
         }
-        for (let i = base; i < encodeRows.length; i++) {
-          const item = encodeAt(i)
-          prevItems.push(item)
-          if (cachedBounds && !pulse.changed.length) cachedBounds.union(boundLeaf(new Bounds(), item))
-        }
+        // Stamp the array when an EXISTING item was re-encoded in place, so a
+        // consumer holding a snapshot (canvas append) can tell "pure append"
+        // from "edited" in O(1) without scanning, or reading, the old scene.
+        if (undo.idx.length) (prevItems as SceneItem[] & { __editGen?: number }).__editGen = ctx.gen
         items = prevItems
+        pendingUndo = undo
       } else if (pulse.from) {
         const modified = new Set(pulse.changed)
         const next = new Array<SceneItem>(encodeRows.length)
@@ -3368,25 +3408,15 @@ function evaluateMark(
         }
         items = next
       } else {
-        // Reuse the previous group's item ARRAY in place and replace only the
-        // changed indices — an O(changed) splice instead of an O(n) rebuild, the
-        // persistent-scene behavior that vega's pulse graph gives us. Reused items
-        // keep their previous generation; changed items get the current one.
+        const next = prevItems.slice()
         for (const i of pulse.changed) {
-          if (i < 0 || i >= prevItems.length) continue
-          const pos = rectPermInv ? rectPermInv[i]! : i
-          if (pos < 0 || pos >= prevItems.length) continue
-          const row = { ...(rows[i] as Row) }
-          const res = resolveEncodeSet(update, row, ctx, mark.type)
-          res.datum = row
-          res.__gen = gen
-          prevItems[pos] = res
+          if (i < 0 || i >= next.length) continue
+          next[i] = encodeAt(i)
         }
-        GROUP_BOUNDS.delete(prevGroup!)
-        items = prevItems
+        items = next
       }
     } else {
-      const gen = (ctx.chart as unknown as { __gen?: number }).__gen ?? 0
+      const gen = ctx.gen
       items = encodeRows.map((row) => {
         const copy = rowsCloned ? row : { ...row }
         const res = resolveEncodeSet(update, copy, ctx, mark.type)
@@ -3398,7 +3428,7 @@ function evaluateMark(
   } else {
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
     const res = resolveEncodeSet(update, {}, ctx, mark.type)
-    res.__gen = (ctx.chart as unknown as { __gen?: number }).__gen ?? 0
+    res.__gen = ctx.gen
     items = [res]
   }
 
@@ -3461,16 +3491,9 @@ function evaluateMark(
     }
   }
 
-  // The differential path reuses the previous group's item array in place, so
-  // the mark is genuinely persistent: return the same group object (identity
-  // preserved for the DOM patcher / scene consumers) rather than allocate a new
-  // container each eval. A fresh group (items array rebuilt) is still returned
-  // as new.
-  if (prevGroup && items === prevGroup.items) {
-    prevGroup.items = items
-    return prevGroup
-  }
-  return {
+  // Appended items extend the carried union bounds only now, after the mark
+  // defaults above ran (they can change an item's stroke and so its bounds).
+  const group: SceneGroup = {
     marktype: mark.type,
     name: mark.name,
     role: 'mark',
@@ -3478,6 +3501,12 @@ function evaluateMark(
     items,
     __source: mark.from?.data,
   }
+  if (carriedBounds) {
+    for (const it of addedItems) carriedBounds.union(boundLeaf(new Bounds(), it))
+    GROUP_BOUNDS.set(group, carriedBounds)
+  }
+  if (pendingUndo && prevGroup) supersedeItems(prevGroup, group, pendingUndo)
+  return group
 }
 
 /** Detect facet orientation from the compiled chart's domain datasets. */
@@ -3615,6 +3644,7 @@ function buildTrellisCell(
         return out
       },
       dataRows: (dn) => (ctx.datasets.get(dn) ?? []) as Record<string, unknown>[],
+      distinctCache: ctx.distinctCache,
     })
     childScaleMap.set(s.name, scale)
     childTypeMap.set(s.name, s.type)
@@ -3826,6 +3856,7 @@ function buildScopedGroup(mark: CompiledMark, ctx: EvalContext): SceneGroup | nu
         return out
       },
       dataRows: (dn) => (ctx.datasets.get(dn) ?? []) as Record<string, unknown>[],
+      distinctCache: ctx.distinctCache,
     })
     childScaleMap.set(cs.name, scale)
     childTypeMap.set(cs.name, cs.type)

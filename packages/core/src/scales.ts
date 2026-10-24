@@ -35,6 +35,13 @@ export interface ScaleContext {
   dataRows?: (dataName: string) => Record<string, unknown>[]
   /** Host/runtime domain override (vega `domainRaw`, pan/zoom, brush domains). */
   domainRaw?: unknown[]
+  /**
+   * Distinct-value memo keyed by the dataset rows ARRAY identity. It must live
+   * exactly as long as one evaluation: the incremental path (and hosts that
+   * mutate their arrays in place) reuse an array object with new contents, so a
+   * process-global memo would serve stale domains.
+   */
+  distinctCache?: WeakMap<unknown[], Map<string, unknown[]>>
 }
 
 export const CONTINUOUS_TYPES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential', 'quantize'])
@@ -595,7 +602,7 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
       const vals = (all.length && all.every((v) => v == null)
         ? [undefined]
         : domainDataRows && fields == null && field != null
-          ? distinctValuesCached(domainDataRows, field, (rws, fld) =>
+          ? distinctValuesCached(ctx.distinctCache, domainDataRows, field, (rws, fld) =>
               (ctx.dataField ?? ((_d: string, _f: string) => []))(data, fld))
           : distinctValues(all)).slice() as unknown[]
       const sortSpec = (domain as { sort?: unknown }).sort
@@ -645,17 +652,21 @@ function resolveDomain(type: string, domain: ScaleDomain, ctx: ScaleContext): un
   return []
 }
 
-// Per-dataset-identity cache for ordinal domain collection. The same (rows,
-// field) pair is collected multiple times per evaluate (scale domain, axis
-// build, legend); the rows array identity changes whenever transforms rerun,
-// so a WeakMap is naturally invalidated between evaluates.
-const distinctCache = new WeakMap<unknown[], Map<string, unknown[]>>()
-
-function distinctValuesCached(rows: unknown[], field: string, collect: (rows: unknown[], field: string) => unknown[]): unknown[] {
-  let byField = distinctCache.get(rows)
+// Per-evaluation, per-dataset-identity memo for ordinal domain collection. The
+// same (rows, field) pair is collected several times per evaluation (scale
+// domain, axis build, legend); the memo is owned by the evaluation (see
+// ScaleContext.distinctCache), never shared across evaluations.
+function distinctValuesCached(
+  cache: WeakMap<unknown[], Map<string, unknown[]>> | undefined,
+  rows: unknown[],
+  field: string,
+  collect: (rows: unknown[], field: string) => unknown[],
+): unknown[] {
+  if (!cache) return distinctValues(collect(rows, field))
+  let byField = cache.get(rows)
   if (!byField) {
     byField = new Map()
-    distinctCache.set(rows, byField)
+    cache.set(rows, byField)
   }
   let vals = byField.get(field)
   if (!vals) {

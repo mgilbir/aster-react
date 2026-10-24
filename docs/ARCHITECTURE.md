@@ -31,6 +31,22 @@ import { renderSpec, compileChart, evaluateChart, renderSceneToSvg,
          compileExpr, buildScale, applyTransforms } from '@aster/core'
 ```
 
+## Incremental evaluation
+
+**Guarantee.** For any spec and any sequence of updates (value changes that grow or shrink a domain, row inserts/removes/reorders, length changes, signal and size changes, `changedDatasets`, `dataChanges`, `dataPulse`, session `evaluate`/`change`), the scene an incremental or streamed update produces deep-equals `evaluateChart(compileChart(spec), input)` built from scratch at that step. This is a correctness guarantee, not a best-effort optimisation: `packages/core/src/incremental-oracle.test.ts` generates random specs and update sequences and compares every step with a freshly compiled chart (`ASTER_ORACLE_SEEDS=2000 pnpm vitest run packages/core/src/incremental-oracle.test.ts` for a long sweep; a failure prints the seed and a shrunk step list).
+
+**State model.**
+
+- The compiled IR (`CompiledChart`) is immutable. `evaluateChart` never writes it: derived signal values, resolved multi-dataset scale domains and the `category` range are per-evaluation (or resolved once at compile time).
+- Everything an evaluation remembers lives in one `IncrementalState` per compiled chart (`runtime.ts`): the previous final scales (plus their min/max or value census), each dataset pipeline's per-step outputs and indexes, and the previous top-level mark groups keyed by compiled-mark identity.
+- An evaluation reads the committed state and builds a fresh draft. The draft becomes the committed state exactly once, after the evaluation succeeds (`evaluateChart`) or after the session's limit checks pass (`evaluateChartPending(...).commit()`). The few fast paths that update a structure in place for O(changed) cost first *claim* it, which flags the committed state stale: an evaluation that dies before committing can never leave a half-updated state behind (the next evaluation re-derives from scratch).
+- Reuse is keyed by what a result actually depends on: the evaluation context (signals incl. `width`/`height`, `domainRaw`, text metrics; typed and structural, so an unchanged `[0, width]` derived signal is unchanged), every dataset the unit reads (closed over `source` chains, `lookup.from` and `data()`/`indata()` expressions), and each scale it reads (by object identity).
+- Mark groups are matched to the previous scene by compiled-mark identity, never by source dataset or name. Group marks (facets, trellises, scoped groups) are always rebuilt.
+
+**Scenes are never observably mutated after they are returned.** A structural update (insert/remove/reorder) builds a new items array. An append or same-length edit advances the engine-owned array in place (O(changes)) and hands it to the new group; the superseded group's `items` becomes a lazy snapshot (old length plus the overwritten items) that materialises on first read and composes across a chain, so earlier scenes can be read in any order, or never. Newer groups never reference older ones (an unreferenced old scene is collectable); an old scene that is retained but never read keeps one small undo record per later update alive. Always read `group.items` through the group: an array reference captured earlier is the engine's live array. The other live link is `scene.runtime` (the signal event loop's expression runtime), which reads the chart's datasets as they are *now*.
+
+**Transforms.** Same-length and length-changing updates go through one engine (`applyStepWithPulse`): a same-length pulse is an append-only pulse that appends nothing. Per-transform fast paths exist for row-local transforms, `filter`, `fold`, `flatten`, `aggregate`, `joinaggregate`, `collect`/`sample`, `identifier`; `window` (which writes results in source order) and `stack` re-derive and are compared row by row; everything else re-derives. A transform is row-local only when its output row depends on nothing but its input row.
+
 ## Expression Engine
 
 Expression evaluation uses two pure Vega packages:
@@ -156,7 +172,7 @@ Areas that are **known-incomplete** are captured as feature probes under `probes
 | Signals | Done | `update` resolved to a fixed point, plus event-driven `signal.on` streams via the signal→view event loop (`@aster/core/signals`) |
 | Interactions | Done | brush/selection (`onSelect`/`brush`), drag overlays, and the spec-driven signal event loop in `<Chart>` |
 | Data loaders | Done | `url` datasets with `csv`/`tsv`/`dsv`/`topojson` formats via `loadSpecData` (`@aster/core/load`); inline JSON + `format.parse` work in core |
-| Reactive dataflow | Done | per-datum differential updates via `input.dataChanges` / `<Chart dataChanges>`: the session skips its no-op cache when a changeset is present; the dataset pipeline re-derives only the changed rows (row-wise transforms, `filter`, `fold`, `flatten`, `bin`, `lookup`; grouped `aggregate`/`joinaggregate`/`window`/`stack` via a persistent group index), marks reuse unchanged items (persistent scene + item arrays + mark groups), and scales are reused when their domain is stable (continuous scales, boundary-count aware). `window`/`stack` with a `sort`, and the geo/layout operators, correctly fall back to a full re-derive. `bench:differential` documents the wins (row-wise ~16x, symbol ~8x at 50k pts / 1% changed). |
+| Reactive dataflow | Done | per-datum / length-changing pulses via `input.dataChanges` / `input.dataPulse` / session auto-diff (see "Incremental evaluation" above). One pulse engine serves same-length and length-changing updates; marks splice unchanged items, scales are reused when their domain is provably stable. The guarantee is exact equality with a fresh evaluation, enforced by `incremental-oracle.test.ts`. `bench:differential` documents the wins. |
 | Incremental DOM | Done | `<Chart>` defaults to `patchSceneDom` (keeps the `<svg>`, patches changed attributes); the full string is serialized once for the first render so SSR + hydration match. Reused items are marked clean and their DOM descriptors are cached, so a differential update patches only the changed subtrees (O(changed) render) rather than re-descending the whole scene. |
 | Canvas rendering | Open | SVG only |
 | Contour | Done | implemented and promoted into `corpus/` |

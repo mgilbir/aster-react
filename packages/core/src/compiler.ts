@@ -68,7 +68,13 @@ export function compileChart(spec: VgSpec): CompiledChart {
 
   const scales: CompiledScale[] = []
   for (const s of (spec.scales as Array<Record<string, unknown>>) ?? []) {
-    scales.push(compileScale(s))
+    const compiled = compileScale(s)
+    // Vega-Lite "category" range (unhandled by vega-scale) maps to tableau10 —
+    // unless a config.range.category shadows it (vega's range lookup consults
+    // the config block first). Resolved here, once, so evaluation never has to
+    // rewrite the compiled IR.
+    if (compiled.range === 'category' && !configRange?.category) compiled.range = 'tableau10'
+    scales.push(compiled)
   }
 
   const axes: CompiledAxis[] = []
@@ -251,10 +257,10 @@ function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSi
       def.bind = s.bind as Record<string, unknown> | string
     }
     if (Array.isArray(s.on)) {
-      // A signal may set its value from events; the first event `update` acts as
-      // the static initial value when there is no declared value.
-      const first = (s.on as Array<Record<string, unknown>>).find((o) => typeof o?.update === 'string')
-      if (value === undefined && first) def.update = first.update as string
+      // An event handler's `update` runs when its event fires; it is NOT a static
+      // initial value. (Promoting the first handler to `def.update` made a signal
+      // such as `(count||0)+1` tick on every evaluation with no event — C17;
+      // vega leaves such a signal undefined until the event.)
       // Keep the full event-stream spec: the host binds these via
       // bindSignalEvents (signals.ts) to drive the event loop.
       const on = (s.on as SignalOnDef[]).map((o) => ({

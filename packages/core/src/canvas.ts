@@ -440,6 +440,13 @@ export interface CanvasSceneSnapshot {
   scene: SceneRoot
   /** Top-level mark group -> item count at draw time (arrays may be mutated). */
   markLengths: Map<SceneGroup, number>
+  /**
+   * Top-level mark group -> its items array at draw time. An update that
+   * appends/edits in place hands the SAME array to the next group, so identity
+   * with this array proves "same lineage" without reading the superseded group
+   * (whose `items` is a lazy snapshot: reading it would materialise a copy).
+   */
+  markArrays: Map<SceneGroup, SceneItem[]>
   /** Scene generation (item `__gen` values older than this are unchanged). */
   gen: number
 }
@@ -448,10 +455,14 @@ const GUIDE_SIGNATURE = new WeakMap<SceneGroup, string>()
 
 export function snapshotCanvasScene(scene: SceneRoot): CanvasSceneSnapshot {
   const markLengths = new Map<SceneGroup, number>()
+  const markArrays = new Map<SceneGroup, SceneItem[]>()
   for (const g of scene.items) {
-    if (g.role === 'mark') markLengths.set(g, (g.items as SceneItem[] | undefined)?.length ?? 0)
+    if (g.role !== 'mark') continue
+    const items = (g.items as SceneItem[] | undefined) ?? []
+    markLengths.set(g, items.length)
+    markArrays.set(g, items)
   }
-  return { scene, markLengths, gen: (scene as unknown as { __itemGen?: number }).__itemGen ?? 0 }
+  return { scene, markLengths, markArrays, gen: (scene as unknown as { __itemGen?: number }).__itemGen ?? 0 }
 }
 
 function groupSignature(g: SceneGroup): string {
@@ -468,6 +479,12 @@ function groupSignature(g: SceneGroup): string {
   }
   GUIDE_SIGNATURE.set(g, sig)
   return sig
+}
+
+/** True when the engine re-encoded an existing item of this (shared) array after `gen`. */
+function editedSince(items: SceneItem[], gen: number): boolean {
+  const g = (items as SceneItem[] & { __editGen?: number }).__editGen
+  return g != null && g > gen
 }
 
 const APPEND_SAFE = new Set(['symbol', 'text', 'rule', 'tick'])
@@ -517,26 +534,27 @@ export function renderSceneToCanvasAppend(
       continue
     }
     if (ng.role === 'mark') {
-      const oldLen = prev.markLengths.get(pg) ?? ((pg.items as SceneItem[] | undefined)?.length ?? 0)
+      // Never read `pg.items`: a superseded group's items are a lazy snapshot
+      // and reading them materialises an O(n) copy per frame. Everything the
+      // append path needs about the previous scene is in the snapshot.
+      const oldLen = prev.markLengths.get(pg)
+      const snapArr = prev.markArrays.get(pg)
+      if (oldLen === undefined || snapArr === undefined) return false
       const nItems = (ng.items as SceneItem[] | undefined) ?? []
-      const pItems = (pg.items as SceneItem[] | undefined) ?? []
+      // A different array is a structural rebuild (re-mapped or re-encoded
+      // rows): not an append on top of what is painted.
+      if (nItems !== snapArr) return false
       if (nItems.length < oldLen) return false
       if (nItems.length > oldLen) {
         if (appendIndex >= 0 || !APPEND_SAFE.has(String(ng.marktype)) || ng.clip === true) return false
-        for (let j = 0; j < oldLen; j++) {
-          const ni = nItems[j] as SceneItem & { __gen?: number }
-          if (ni !== pItems[j]) return false
-          if (ni.__gen != null && ni.__gen > prev.gen) return false
-        }
+        // Same array: the prefix is the same items unless one was re-encoded in
+        // place, which stamps the array with that evaluation's generation.
+        if (editedSince(nItems, prev.gen)) return false
         appendIndex = i
         appendFrom = oldLen
         continue
       }
-      // same-length mark group: compare content; repaint if changed after the
-      // append group, otherwise fall back.
-      if (groupSignature(pg) === groupSignature(ng)) continue
-      if (appendIndex < 0) return false
-      repaint.push(i)
+      if (editedSince(nItems, prev.gen)) return false
       continue
     }
     if (groupSignature(pg) === groupSignature(ng)) continue
