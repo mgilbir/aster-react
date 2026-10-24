@@ -1211,6 +1211,7 @@ export interface LineGenerator {
   y(accessor: (d: unknown, i: number, data: unknown[]) => number): LineGenerator
   defined(accessor: (d: unknown, i: number, data: unknown[]) => boolean): LineGenerator
   curve(factory: CurveFactory): LineGenerator
+  digits(): number | null
   digits(n: number | null): LineGenerator
 }
 
@@ -1224,6 +1225,7 @@ export interface AreaGenerator {
   y1(accessor: ((d: unknown, i: number, data: unknown[]) => number) | null): AreaGenerator
   defined(accessor: (d: unknown, i: number, data: unknown[]) => boolean): AreaGenerator
   curve(factory: CurveFactory): AreaGenerator
+  digits(): number | null
   digits(n: number | null): AreaGenerator
 }
 
@@ -1232,7 +1234,9 @@ type Accessor = (d: unknown, i: number, data: unknown[]) => number
 /** The shapes' shared digits state (d3-shape's `withPath`). */
 function makePathFactory(shape: { digits?: (n: number | null) => unknown }): () => Path {
   let digits: number | null = 3
-  ;(shape as Record<string, unknown>).digits = function (_: number | null) {
+  // `shape` is the generator function itself, so this IS its public `.digits` (d3-shape's `withPath`).
+  ;(shape as Record<string, unknown>).digits = function (_?: number | null) {
+    if (arguments.length === 0) return digits
     if (_ == null) {
       digits = null
     } else {
@@ -1287,9 +1291,6 @@ export function line(): LineGenerator {
   }
   gen.context = function (_?: CurveContext | null) {
     return (arguments.length ? (_ == null ? context = output = null : output = curve(context = _ as CurveContext), gen as LineGenerator) : context) as never
-  }
-  gen.digits = function (_?: number | null) {
-    return (arguments.length ? ((line as unknown as Record<string, (n: number | null) => unknown>).digits!(_ as number | null), gen as LineGenerator) : null) as never
   }
   return gen
 }
@@ -1369,9 +1370,6 @@ export function area(): AreaGenerator {
   }
   gen.context = function (_?: CurveContext | null) {
     return (arguments.length ? (_ == null ? context = output = null : output = curve(context = _ as CurveContext), gen as AreaGenerator) : context) as never
-  }
-  gen.digits = function (_?: number | null) {
-    return (arguments.length ? ((area as unknown as Record<string, (n: number | null) => unknown>).digits!(_ as number | null), gen as AreaGenerator) : null) as never
   }
   return gen
 }

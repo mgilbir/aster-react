@@ -7,7 +7,8 @@
  * runs against a real `CanvasRenderingContext2D`, an OffscreenCanvas context,
  * or a recording mock in tests. Geometry is traced by replaying SVG path data
  * (`parsePathData` + `tracePath`), which keeps canvas output bit-identical to
- * the SVG path by construction.
+ * the SVG path by construction (line and area marks excepted: they are traced
+ * from full-precision coordinates like vega's canvas; see `computeLinePath(group, exact)`).
  */
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
@@ -838,7 +839,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
   const defs = scene.defs
   switch (type) {
     case 'line': {
-      const info = computeLinePath(group)
+      const info = computeLinePath(group, true)
       if (!info) return
       ctx.beginPath()
       const segs = parsePathData(info.path)
@@ -849,7 +850,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       return
     }
     case 'area': {
-      const info = computeAreaPath(group)
+      const info = computeAreaPath(group, true)
       if (!info) return
       ctx.beginPath()
       const segs = parsePathData(info.path)
