@@ -93,7 +93,6 @@ function resolveCurve(interpolate: string, orient?: string): unknown {
 function roundedFramePath(x: number, y: number, w: number, h: number, r: number): GeneratedPath {
   const c = 0.448084975506
   const kr1 = r * (1 - c)
-  const kr2 = r * c
   const f = (v: number) => String(Math.round(v * 1000) / 1000)
   const x1 = x + r, y1 = y
   const x2 = x + w - r, y2 = y

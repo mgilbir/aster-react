@@ -32,7 +32,7 @@ export const GATES = [
   { name: 'verify-publish', args: ['verify:publish'], why: 'packed tarballs: licences, exports, consumer smoke test' },
   {
     name: 'incremental-append', args: ['bench:incremental', '--', '--points=10000', '--reps=30'],
-    why: 'incremental append stays faster than a full re-render',
+    why: 'incremental append, whole-array replace and DOM patch beat their baselines by the measured floors (8x, 8x, 1.6x), not just by >1x',
   },
   { name: 'conformance', args: ['conformance'], why: 'Vega corpus: SVG diff against the real Vega oracle' },
   { name: 'conformance-vl', args: ['conformance-vl'], why: '@aster/vl compile + render against the Vega-Lite oracle' },

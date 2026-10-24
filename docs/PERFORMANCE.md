@@ -1,115 +1,172 @@
 # Performance
 
-Aster keeps the differential engine from earlier phases and adds opt-in boundaries so
-a chart pays only for the features it imports.
+Aster keeps a differential engine and adds opt-in boundaries so a chart pays only for the features it
+imports. This document describes the mechanisms, then gives the measurements. Every number is in
+[Reference measurements](#reference-measurements) or [Bundle sizes](#bundle-sizes) next to the command that
+produced it; the mechanisms below carry no numbers on purpose (they change with the code, the machine and
+the browser).
 
 ## What is fast
 
-- **Session caching**: `createChartSession` fingerprints the spec skeleton, dataset
-  identities, size, signals and `domainRaw`; identical inputs return the same scene.
-  `<Chart>` derives its interaction/a11y metadata from that scene
-  (`chartInfoFromScene`) instead of calling `getChartInfo`, which used to compile and
-  evaluate a second time on every render. Combined with dropping the
-  `dangerouslySetInnerHTML` prop after the first commit (React re-applies a present
-  one, so a cached markup string made every no-op render re-parse the whole SVG), an
-  identical-content re-render now costs ~0.3ms with zero DOM mutations (1k–10k
-  points, measured in `pnpm bench:browser`; Vega's wrappers: 0.1–0.2ms).
-- **Fixed-size charts**: when `autosize` is `none` (explicit width/height, the usual
-  dashboard case) evaluation skips Vega's overflow-padding pass, which measures the
-  recursive bounds of every top-level group. That walk was the dominant cost of a
-  one-row update on a large chart: line @1k browser update 4.1 → 3.1ms, 5k full
-  evaluate 1.5 → 1.2ms, 50k differential full re-encode 59 → 54ms, and a 100k
-  same-length array replacement ~16 → ~10ms. Charts with `autosize: pad/fit` keep
-  the full pass, and the 419-spec conformance corpus (which includes both) is
-  byte-identical.
-- **Auto-pulse inference**: `rowsEqual` compares plain rows with `for...in` instead
-  of two `Object.keys` allocations per row (~1.5x faster on 100k rows), so replacing
-  the whole data array stays cheap even without explicit `dataChanges`.
-- **Per-datum updates**: sessions diff replaced immutable source arrays automatically
-  (`autoChanges`), then re-encode only changed rows and reuse unchanged scene items;
-  explicit `dataChanges` remains available for custom batching. The source/transform
-  pulse is exposed through `session.pulse()`.
-- **Length-changing pulses**: appends/inserts/deletes carry an old↔new row mapping and
-  added/removed ranges. Row-wise, filter, fold/flatten, grouped (`aggregate`,
-  `joinaggregate`, `window`, `stack`) and 1:1 geo/hierarchy operators propagate it;
-  marks splice item arrays instead of re-encoding. `pnpm bench:incremental` reports
-  the win (a 10k-point symbol chart appending one row is ~29x cheaper at the median
-  than a full evaluate; 100k points ~216x). The benchmark runs in CI (10k/30 updates)
-  and nightly (100k/40). Steady-state appends are O(appended + changed) for the
-  common source→row-wise→mark path: the stream mutates its owned snapshot, the mark
-  group appends items and unions cached bounds, and continuous domains patch their
-  min/max census without rescanning. The benchmark also measures the DOM path:
-  patching a persistent `<svg>` with `patchSceneDom` is measurably cheaper (~1.2–1.6x)
-  than re-serializing the full SVG in jsdom (a browser shows a larger gap).
-- **Streams**: `createChartStream` adds a bounded queue with
-  coalesce/drop-oldest/drop-newest/error policies and explicit `flush()` pulses.
-  `<ChartStream>`/`<ChartWorkerStream>` reuse the SVG patcher and canvas backend;
-  canvas path parsing/symbol generation is cached, solid paints skip bbox
-  computation, dense same-paint symbol runs batch into one fill/stroke, and
-  append-only streamed scenes paint just the new mark items synchronously. In headless Chromium, a 10k-point stream at one append/frame holds
-  ~16.7ms median frames with 0% long frames on both SVG and canvas; 100k points
-  holds ~16.7ms on canvas (only the appended items are painted) while SVG is
-  ~77ms per frame, the remaining scaling boundary. That SVG cost is browser-side:
-  appending one node to a 100k-node SVG costs ~45ms/frame in headless Chromium even
-  with no framework involved, and ~145ms when every item carries a
-  `transform="translate(…)"` (which is how Vega — and therefore aster — emits
-  symbols). `contain`/`content-visibility` do not help; the opt-in `denseMarks` mode
-  does (fewer nodes, absolute coordinates — at the cost of SVG-DOM parity with Vega),
-  bringing the same stream to ~16.7ms. The same benchmark now runs a
-  direct Vega baseline on the identical spec/rows
-  (`view.change('t', changeset().insert(rows)).run()`): at 100k points it needs
-  ~170ms per frame on SVG (aster ~77ms, ~2.2x faster, ~17ms with `denseMarks`) and is frame-bound on canvas
-  like aster; at 10k both are frame-bound, but Vega reports ~2.3% long frames and
-  ~240 DOM mutations per append versus ~1 for aster. Compute only
-  (`pnpm bench:incremental`, `renderer: 'none'`) aster's append is ~13x cheaper than
-  `view.change` at 10k and ~62x at 100k, because Vega still walks the affected
-  operators for a one-tuple insert while aster splices items and patches the
-  domain census in O(appended).
-- **Incremental scales**: continuous/discrete domains are reused when a changeset
-  provably cannot move them; append-only continuous updates patch the min/max census
-  in O(appended) instead of rescanning the dataset.
-- **DOM patching**: the first render emits the full SVG for SSR; later updates patch
-  attributes in place instead of re-parsing the tree. The mount commit skips the
-  patcher (the browser just parsed that markup) and an append reuses the previous
-  patch's descriptors as an identity prefix, so only the new items are created —
-  an O(appended) SVG patch, not a re-walk of every sibling. Symbol descriptors are
-  cached per mark group, so an append rebuilds only new/dirty entries
-  (`patchSceneDom` at 100k: ~5.3 → ~3.8ms).
-- **Dense marks (`denseMarks`, default `'auto'`)**: dense symbol marks render as
-  chunked `<path>` elements with the position baked into `d` instead of one
-  transformed element per datum. At 100k points this turns 100k DOM nodes into ~400,
-  a client mount from ~620ms to **~280ms**, and a one-append-per-frame SVG stream
-  from ~79ms to **~16.7ms** (0% long frames), matching canvas. Chunks are bounded
-  (~256 items) and cached per group, so an append re-serializes one chunk
-  only. Only opaque marks batch (translucency must composite per item); rotated
-  marks keep their own element; `'auto'` stays per-item when the spec has
-  `signal.on` streams. SSR emits per-item markup for hydration and the client
-  switches to batched in place afterwards. Tooltips/hit-testing use the scene
-  index; `pnpm conformance:batch` gates pixel parity against the per-item
-  rendering.
-- **No-op renders**: identical content is free all the way through — the session
-  returns the cached scene, chart info/a11y derive from it, and the SVG/canvas
-  effects skip the DOM/canvas when the scene object is unchanged.
+- **Session caching**: `createChartSession` fingerprints the spec skeleton, dataset identities, size,
+  signals, `domainRaw` and the limits; identical inputs return the same scene. `<Chart>` derives its
+  interaction/a11y metadata from that scene (`chartInfoFromScene`) instead of calling `getChartInfo`, which
+  compiled and evaluated a second time on every render. The `dangerouslySetInnerHTML` prop is dropped
+  after the first commit (React re-applies a present one, so a cached markup string made every no-op render
+  re-parse the whole SVG). An identical-content re-render therefore costs no DOM mutation.
+- **Fixed-size charts**: when `autosize` is `none` (explicit width/height, the usual dashboard case)
+  evaluation skips Vega's overflow-padding pass, which measures the recursive bounds of every top-level
+  group. That walk dominated a one-row update on a large chart. Charts with `autosize: pad/fit` keep the full
+  pass (Vega's viewSizeLayout grows or fits the viewport), and the corpus, which includes both, renders
+  byte-identically.
+- **Auto-pulse inference**: `rowsEqual` compares plain rows with `for...in` instead of two `Object.keys`
+  allocations per row, so replacing the whole data array stays cheap even without explicit `dataChanges`.
+- **Per-datum updates**: sessions diff replaced immutable source arrays automatically (`autoChanges`), then
+  re-encode only changed rows and reuse unchanged scene items; explicit `dataChanges` remains available for
+  custom batching. The source/transform pulse is exposed through `session.pulse()`.
+- **Length-changing pulses**: appends/inserts/deletes carry an old to new row mapping and added/removed
+  ranges. Row-wise, filter, fold/flatten, grouped (`aggregate`, `joinaggregate`, `window`, `stack`) and 1:1
+  geo/hierarchy operators propagate it; marks splice item arrays instead of re-encoding. Steady-state appends
+  are O(appended + changed) for the common source, row-wise, mark path: the stream mutates its owned
+  snapshot, the mark group appends items and unions cached bounds, and continuous domains patch their min/max
+  census without rescanning. Transforms without a fast path re-derive; the result is still exactly a fresh
+  evaluation ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
+- **Streams**: `createChartStream` adds a bounded queue with coalesce/drop-oldest/drop-newest/error policies
+  and explicit `flush()` pulses. `<ChartStream>`/`<ChartWorkerStream>` reuse the SVG patcher and the canvas
+  backend; canvas path parsing and symbol generation are cached, solid paints skip bbox computation, dense
+  same-paint symbol runs batch into one fill/stroke, and append-only streamed scenes paint just the new mark
+  items.
+- **Incremental scales**: continuous and discrete domains are reused when a changeset provably cannot move
+  them; append-only continuous updates patch the min/max census in O(appended) instead of rescanning.
+- **DOM patching**: the first render emits the full SVG for SSR; later updates patch attributes in place.
+  The mount commit skips the patcher (the browser just parsed that markup) and an append reuses the previous
+  patch's descriptors as an identity prefix, so only the new items are created. Symbol descriptors are cached
+  per mark group.
+- **Dense marks (`denseMarks`, default `'auto'`)**: symbol marks with at least 512 items render as chunked
+  `<path>` elements (256 items per chunk, positions baked into `d`) instead of one transformed element per
+  datum. Chunks are cached per group, so an append re-serializes one chunk. Only opaque marks batch
+  (translucency must composite per item); rotated marks keep their own element; `'auto'` stays per-item when
+  the spec has `signal.on` streams. SSR emits per-item markup for hydration and the client switches to batched
+  in place. Tooltips and hit testing use the scene index; `pnpm conformance:batch` gates pixel parity against
+  the per-item rendering. The node count matters because appending one node to a very large SVG, and above
+  all one with a `transform` per item (how Vega writes symbols), is expensive in the browser whatever the
+  framework does.
+- **No-op renders**: identical content is free all the way through: the session returns the cached scene,
+  chart info/a11y derive from it, and the SVG/canvas effects skip the DOM/canvas when the scene object is
+  unchanged.
 - **Canvas**: full repaint is scheduled on `requestAnimationFrame` with DPR backing.
-- **Workers**: `useChartWorker` moves compile/evaluate/render off the main thread and
-  falls back to synchronous execution when workers are unavailable.
+- **Workers**: `useChartWorker` moves compile/evaluate/render off the main thread and falls back to the same
+  synchronous handler when workers are unavailable.
 
-## Bundle gates
+## Reference measurements
 
-`packages/benchmarks/scripts/budget.mjs` gates each published entry independently:
-core, dom, canvas, hit, signals and React. This prevents an addon import from silently
-inflating the base bundle. Measured gzip sizes are recorded next to the budgets.
+Measured 2026-10-23 on the development machine (Linux x86_64, node v26.11.1, headless Chromium from
+Playwright), one run each, nothing else running, after `pnpm build`. Timings are machine- and
+load-dependent: compare the ratios and the shape, and re-run before quoting. The incremental gate
+(`pnpm bench:incremental`) is the only one of these with a pass/fail floor; the floors and how they were
+chosen are at the top of `packages/benchmarks/src/incremental.bench.tsx`.
+
+### Compute: incremental append vs full evaluation (node, no paint)
+
+`pnpm bench:incremental -- --points=10000 --reps=30` (three runs, medians in ms), 800x500 symbol chart,
+one row appended per update:
+
+| Path | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| full `evaluateChart` | 2.3 | 2.5 | 2.2 |
+| `createChartStream` append + flush | 0.1 | 0.1 | 0.1 |
+| `view.change(changeset().insert(...)).run()` in vega (`renderer: 'none'`) | 1.0 | 1.0 | 1.0 |
+| append speedup vs full | 22.2x | 26.7x | 24.0x |
+| append vs vega | 10.1x | 11.2x | 11.3x |
+| whole-array replacement speedup vs full | 23.2x | 24.9x | 22.0x |
+| DOM patch (`patchSceneDom`, 4000 points, jsdom) vs `renderSceneToSvg` | 5.2x | 6.9x | 4.9x |
+| dense 100,000-symbol mark: append patch vs mount (ms) | 0.85 vs 283.1 (332x) | 0.87 vs 273.6 (316x) | 0.89 vs 273.2 (306x) |
+
+`pnpm bench:incremental -- --points=100000 --reps=40`: full evaluate 37.8 ms, stream append 0.2 ms
+(179x), vega `view.change` 12.6 ms (aster 60x cheaper), whole-array replacement 77x; dense append patch
+0.85 ms vs a 249.6 ms mount (293x).
+
+### Differential updates (node, no DOM)
+
+`pnpm bench:differential -- --points=50000` (about 1% of rows changed; `evaluateChart` with a changeset vs a full
+re-encode): row-wise `formula` 46.8 to 1.1 ms (40.9x), fixed-scale symbol 17.4 to 0.4 ms (45.7x),
+`aggregate` over 1000 groups 5.4 to 2.6 ms (2.1x). Scene evaluation plus `patchSceneDom` at 4000 points:
+9.9x, 9.7x and 3.4x for the same three cases.
+
+### Embedding: `<Chart>` vs react-vega and the vega-embed tutorial
+
+`pnpm bench:runtime` (jsdom, relative timings only; median update ms, 1000 points): line aster 3.2 /
+asterDom 2.6 / react-vega 6.3 / vega-embed hook 4.0; scatter 5.1 / 4.3 / 32.0 / 66.1; bar 12.0 / 11.0 / 78.3 /
+55.3. DOM nodes for the scatter chart: 82 vs 1073.
+
+`pnpm bench:browser -- --points=1000 --memory=false` (headless Chromium, median ms, first render / update):
+line aster 2.2 / 2.5, asterDom 1.4 / 1.9, react-vega 2.8 / 3.3, vega-embed hook 2.3 / 2.5; scatter aster
+2.7 / 3.4, asterDom 2.5 / 3.2, react-vega 7.7 / 8.4, vega-embed hook 7.3 / 8.2. Stable-content re-render
+(fresh spec object, same data): 0 DOM mutations on all four; 0.3 to 0.4 ms for aster vs 0.1 to 0.2 ms for the
+Vega wrappers. Under a one-update-per-frame stream the line and scatter charts hold 16.7 ms median frames on all
+four; long frames (over 21 ms) are 0.0% to 0.6% for aster, 0.0% to 3.4% for the Vega embeds.
+
+`pnpm bench:memory` (jsdom heap growth per cycle, steady state, kB): line update aster 23.0 /
+asterDom 15.5 / react-vega 42.1 / vega-embed hook 10.4; scatter update 16.0 / 13.5 / 31.9 / 19.0.
+
+### Streaming appends in a real browser: `<ChartStream>` vs vega `view.change`
+
+`pnpm bench:browser-stream` (one append per animation frame for 3 s, 800x500 symbol chart with an explicit
+symbol fill, headless Chromium, median frame / share of frames over 21 ms / DOM mutations per append):
+
+| Points | Backend | aster | vega `view.change` + `run` |
+|---|---|---|---|
+| 10,000 | SVG | 16.7 ms / 0.6% / 1.0 | 16.6 ms / 2.9% / 242.0 |
+| 10,000 | canvas | 16.6 ms / 0.0% / 0 | 16.7 ms / 0.0% / 0 |
+| 100,000 | SVG (per-item, `denseMarks` off) | 149.3 ms / 94.1% / 1.0 | 166.2 ms / 100.0% / 30,782.8 |
+| 100,000 | canvas | 16.7 ms / 0.0% / 0 | 18.6 ms / 19.3% / 0 |
+
+`pnpm bench:browser-stream -- --points=100000 --seconds=3 --engines=aster --renderers=svg --dense=0,1`
+(aster SVG, microtask flush): per-item 154.3 ms median frame, 94.4% long, 100,030 DOM nodes, 19 appends in 3 s;
+with `denseMarks` 33.3 ms, 97.7% long, 402 DOM nodes, 88 appends. Dense marks cut the per-frame cost by about
+4.6x; neither SVG variant holds a 16.7 ms frame at 100,000 points, canvas does.
+
+**Earlier figures for the 100,000-point SVG stream were wrong.** Previous versions of this document and of the
+README, CHANGELOG and benchmarks README quoted about 77 ms per frame per-item and 16.7 ms with 0% long frames with
+`denseMarks`. Those were measured on an unfilled render: the benchmark spec drew symbols without a `fill`, and before
+the default-config fix Aster rendered such symbols unfilled (Vega draws them filled), so the benchmark measured an
+empty paint layer. The benchmark spec now states its fill, and the numbers above are the filled render on this
+machine. I measured them on the current stack; the reviewer reports that the pre-audit baseline gives the same numbers once the fill is explicit (I did not re-run that).
+
+## Bundle sizes
+
+`pnpm bench:bundle` (esbuild, minified, react external): `@aster/react` `<Chart>` 163.9 kB gzip
+(472.4 kB minified, 138.6 kB brotli) vs react-vega 288.7 kB gzip and the official vega-embed tutorial 288.0 kB.
+
+`pnpm --filter @aster/benchmarks run budget` gates each published entry independently, so an addon
+import cannot silently inflate the base bundle. Each budget is the measured size plus 0.5 kB
+(`packages/benchmarks/scripts/budget.mjs` holds the history); a change that needs more room edits the number
+in the same PR:
+
+| Entry | Gzip (kB) | Budget (kB) |
+|---|---|---|
+| `@aster/core` | 123.0 | 123.5 |
+| `@aster/core/dom` | 127.2 | 127.7 |
+| `@aster/core/canvas` | 15.7 | 16.2 |
+| `@aster/core/hit` | 15.7 | 16.0 |
+| `@aster/core/load` | 14.7 | 15.2 |
+| `@aster/core/signals` | 41.0 | 41.5 |
+| `@aster/react` | 163.9 | 164.4 |
+| `@aster/react/vl` (React + the Vega-Lite compiler) | 218.3 | 218.8 |
+
+The Vega-Lite compiler is therefore 54.4 kB gzip on top of the base entry (218.3 minus 163.9); the standalone
+entries share most of their code with `@aster/core`, so their marginal cost in an app is far below the standalone
+numbers.
 
 ## Practical guidance
 
-- Large static dashboards: keep `<Chart incremental>` (default) and pass stable spec
-  objects. Memoize spec builders at the call site.
-- Streaming updates: use `createChartStream` (bounded queue, coalesced appends) or
-  supply `dataChanges` with the new immutable data array.
-- Global fitters (`kde`/`regression`/`loess`/`wordcloud`/`contour`) re-derive on an
-  append; the downstream change result is still correct.
+- Large static dashboards: keep `<Chart incremental>` (default) and pass stable spec objects. Memoize spec
+  builders at the call site.
+- Streaming updates: use `createChartStream` (bounded queue, coalesced appends) or supply `dataChanges` with
+  the new immutable data array.
+- Transforms with no fast path (the global fitters `kde`, `regression`, `loess`, `quantile`, `contour`,
+  `wordcloud`, ...) re-derive on an append; the downstream change result is still correct.
 - Huge or untrusted specs: combine `limits` with `useChartWorker`.
-- Dense marks: canvas avoids SVG node cost; hit testing uses a uniform grid above 400
-  items.
-- Accessibility tree: set `a11y={{ summaryThreshold: N }}` (default 150) to collapse
-  very dense marks into one summary node.
+- Dense marks: canvas avoids SVG node cost; hit testing uses a uniform grid above 400 items.
+- Accessibility tree: set `a11y={{ summaryThreshold: N }}` (default 150) to collapse very dense marks into one
+  summary node.

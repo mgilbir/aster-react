@@ -1,42 +1,48 @@
 /**
- * Pack-and-consume smoke test for the published packages.
+ * Pack-install-consume check for the published packages (C75).
  *
- * `pnpm check` exercises the workspace; this verifies the actual npm artifacts:
+ * `pnpm check` exercises the workspace; this verifies the artifact a consumer
+ * actually receives, built the way the release builds it:
  *
- *  1. every public package is packed (running its `prepack` licence copy),
- *  2. the tarball carries LICENSE, THIRD_PARTY_NOTICES.md, dist and types,
- *  3. the tarballs can be extracted into a clean `node_modules` and imported
- *     through their declared `exports` (core, addons, react, react/vl, worker,
- *     ssr) — including a Vega-Lite render through the opt-in addon.
- *
- * The release workflow has never run, so this is the only test of the packaging
- * itself. No network and no package manager install: tarballs are extracted
- * with `tar` and the React peer deps are symlinked from the workspace.
+ *  1. every public package is packed with `pnpm pack` (what `pnpm publish`
+ *     uses; `npm pack` would leave `workspace:*` ranges in the manifest),
+ *  2. no packed manifest still contains a `workspace:` range,
+ *  3. the tarball carries LICENSE, THIRD_PARTY_NOTICES.md, dist and types, and
+ *     no source maps that point at files that are not shipped,
+ *  4. the tarballs are INSTALLED with `npm install <tgz>` into a scratch
+ *     consumer project (offline: local files only, nothing is published or
+ *     fetched; the React peer dependencies are linked from the workspace),
+ *  5. EVERY entry declared in each manifest's `exports` is imported by name,
+ *     and its `types` and `default` targets exist,
+ *  6. `tsc` typechecks a consumer file that uses the public types, with
+ *     `module: nodenext` so the `exports` map and its `types` conditions are
+ *     resolved exactly as a consumer's compiler resolves them,
+ *  7. a Vega and a Vega-Lite render run through the installed packages.
  *
  * Run: node scripts/verify-publish.mjs   (after `pnpm build`)
+ * Test hook: ASTER_VERIFY_PUBLISH_ROOT=<dir> verifies a scratch copy of the
+ * repository instead of this one (scripts/verify-publish.test.mjs plants faults there).
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const root = dirname(dirname(fileURLToPath(import.meta.url)))
+const root = process.env.ASTER_VERIFY_PUBLISH_ROOT ?? dirname(dirname(fileURLToPath(import.meta.url)))
+// Test hook only: the fault-injection test sets this to `npm` to prove the `workspace:` check bites.
+const PACKER = process.env.ASTER_VERIFY_PUBLISH_PACKER ?? 'pnpm'
 const PUBLIC = ['core', 'react', 'vl']
 const REQUIRED = ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'dist/index.js', 'dist/index.d.ts']
-const REQUIRED_BY_PACKAGE = {
-  core: [
-    'dist/addon-dom.js', 'dist/canvas.js', 'dist/hit.js', 'dist/signals.js',
-    'dist/addon-geo.js', 'dist/addon-load.js', 'dist/addon-transforms.js',
-  ],
-  react: ['dist/vl.js', 'dist/ssr.js', 'dist/worker.js', 'dist/worker-entry.js'],
-  vl: [],
-}
+const TSC = join(dirname(dirname(fileURLToPath(import.meta.url))), 'node_modules', 'typescript', 'bin', 'tsc')
 
 function fail(message) {
   console.error(`[verify-publish] FAIL: ${message}`)
   process.exit(1)
 }
+
+const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...opts })
+const tarRead = (tgz, member) => run('tar', ['-xzf', tgz, '-O', `package/${member}`])
 
 for (const pkg of PUBLIC) {
   if (!existsSync(join(root, 'packages', pkg, 'dist', 'index.js'))) {
@@ -44,56 +50,146 @@ for (const pkg of PUBLIC) {
   }
 }
 
+/** Every `exports` key except `./package.json`, as [subpath, { types, default }]. */
+function entriesOf(manifest) {
+  return Object.entries(manifest.exports ?? {}).filter(([k]) => k !== './package.json')
+}
+
 const tmp = mkdtempSync(join(tmpdir(), 'aster-publish-'))
 try {
+  // 1) Pack the way the release packs: `pnpm pack` rewrites `workspace:` ranges to real versions.
   const tarballs = new Map()
+  const manifests = new Map()
   for (const pkg of PUBLIC) {
-    const out = execFileSync('npm', ['pack', '--json', '--pack-destination', tmp], {
-      cwd: join(root, 'packages', pkg),
-      encoding: 'utf8',
-    })
-    const packed = JSON.parse(out)
-    const file = packed[0]?.filename
-    if (!file) fail(`npm pack produced no tarball for @aster/${pkg}`)
-    tarballs.set(pkg, join(tmp, file))
-    console.log(`[verify-publish] packed @aster/${pkg} (${packed[0].entryCount} files, ${(packed[0].unpackedSize / 1024).toFixed(0)} kB)`)
+    const dest = join(tmp, 'tarballs', pkg)
+    mkdirSync(dest, { recursive: true })
+    run(PACKER, ['pack', '--pack-destination', dest], { cwd: join(root, 'packages', pkg), stdio: ['ignore', 'pipe', 'inherit'] })
+    const files = readdirSync(dest).filter((f) => f.endsWith('.tgz'))
+    if (files.length !== 1) fail(`${PACKER} pack produced ${files.length} tarballs for @aster/${pkg}`)
+    const file = join(dest, files[0])
+    tarballs.set(pkg, file)
+    manifests.set(pkg, JSON.parse(tarRead(file, 'package.json')))
+    console.log(`[verify-publish] packed @aster/${pkg} with ${PACKER} pack: ${files[0]}`)
   }
 
-  // 1) Tarball contents: licences + declaration/entry files.
+  // 2) No unresolved workspace ranges in any dependency field of any packed manifest.
   for (const pkg of PUBLIC) {
-    const listing = execFileSync('tar', ['-tzf', tarballs.get(pkg)], { encoding: 'utf8' })
+    const m = manifests.get(pkg)
+    for (const field of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+      for (const [dep, range] of Object.entries(m[field] ?? {})) {
+        if (/^(workspace|link|file):/.test(String(range))) {
+          fail(`@aster/${pkg} packed manifest has ${field}.${dep} = "${range}" (the published package would be uninstallable)`)
+        }
+      }
+    }
+  }
+
+  // 3) Tarball contents: licences, declaration/entry files for every export, no dangling source maps.
+  for (const pkg of PUBLIC) {
+    const listing = run('tar', ['-tzf', tarballs.get(pkg)])
     const names = new Set(listing.split('\n').map((l) => l.replace(/^package\//, '')).filter(Boolean))
-    for (const want of [...REQUIRED, ...REQUIRED_BY_PACKAGE[pkg]]) {
+    const m = manifests.get(pkg)
+    const wanted = [...REQUIRED]
+    for (const [sub, target] of entriesOf(m)) {
+      for (const cond of ['types', 'default']) {
+        if (typeof target?.[cond] !== 'string') fail(`@aster/${pkg} exports["${sub}"] has no "${cond}" condition`)
+        wanted.push(target[cond].replace(/^\.\//, ''))
+      }
+    }
+    for (const want of wanted) {
       if (!names.has(want)) fail(`@aster/${pkg} tarball is missing ${want}`)
     }
-    // Source maps point at ../src, which is not shipped: a dangling map is worse than none.
     const maps = [...names].filter((n) => n.endsWith('.map'))
     if (maps.length) fail(`@aster/${pkg} tarball ships source maps whose sources are not included: ${maps.slice(0, 3).join(', ')}`)
     for (const n of names) {
       if (!/\.(c|m)?js$/.test(n)) continue
-      const body = execFileSync('tar', ['-xzf', tarballs.get(pkg), '-O', `package/${n}`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-      if (/^\/\/# sourceMappingURL=/m.test(body)) fail(`@aster/${pkg}/${n} references a source map that is not in the tarball`)
+      if (/^\/\/# sourceMappingURL=/m.test(tarRead(tarballs.get(pkg), n))) fail(`@aster/${pkg}/${n} references a source map that is not in the tarball`)
     }
-    const manifest = JSON.parse(execFileSync('tar', ['-xzf', tarballs.get(pkg), '-O', 'package/package.json'], { encoding: 'utf8' }))
-    if (manifest.private) fail(`@aster/${pkg} is private but was packed`)
-    if (manifest.license !== 'BSD-3-Clause') fail(`@aster/${pkg} has license ${manifest.license}`)
+    if (m.private) fail(`@aster/${pkg} is private but was packed`)
+    if (m.license !== 'BSD-3-Clause') fail(`@aster/${pkg} has license ${m.license}`)
+    const notices = tarRead(tarballs.get(pkg), 'THIRD_PARTY_NOTICES.md')
+    if (!/Permission to use, copy, modify, and\/or distribute this software/.test(notices) || !/Redistribution and use in source and binary forms/.test(notices)) {
+      fail(`@aster/${pkg} THIRD_PARTY_NOTICES.md carries no licence texts`)
+    }
   }
 
-  // 2) Extract into a clean node_modules as a consumer would receive them.
+  // 4) Install the tarballs into a scratch consumer, like `npm install @aster/react` would, minus the registry.
   const project = join(tmp, 'consumer')
-  const modules = join(project, 'node_modules')
-  mkdirSync(join(modules, '@aster'), { recursive: true })
+  mkdirSync(project, { recursive: true })
+  writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'aster-consumer', private: true, type: 'module' }))
+  // Peers and type packages come from the workspace (linked, not fetched): local files only.
+  const reactDir = join(root, 'packages', 'react', 'node_modules')
+  const peers = ['react', 'react-dom', '@types/react', '@types/react-dom'].map((d) => {
+    const dir = join(reactDir, d)
+    if (!existsSync(dir)) fail(`workspace peer ${d} is not installed (run pnpm install)`)
+    return `file:${realpathSync(dir)}`
+  })
+  run('npm', [
+    'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--no-package-lock',
+    ...PUBLIC.map((p) => tarballs.get(p)), ...peers,
+  ], { cwd: project, stdio: ['ignore', 'pipe', 'inherit'] })
   for (const pkg of PUBLIC) {
-    const dest = join(modules, '@aster', pkg)
-    mkdirSync(dest, { recursive: true })
-    execFileSync('tar', ['-xzf', tarballs.get(pkg), '-C', dest, '--strip-components=1'])
-  }
-  // Peer deps come from the workspace (react, react-dom, scheduler).
-  for (const dep of ['react', 'react-dom', 'scheduler']) {
-    const from = join(root, 'packages', 'react', 'node_modules', dep)
-    if (existsSync(from)) symmetricLink(from, join(modules, dep))
+    const installed = join(project, 'node_modules', '@aster', pkg, 'package.json')
+    if (!existsSync(installed)) fail(`npm install did not install @aster/${pkg}`)
   }
 
+  // 5) Import EVERY declared export entry by its public specifier.
+  const specifiers = []
+  for (const pkg of PUBLIC) {
+    const m = manifests.get(pkg)
+    for (const [sub] of entriesOf(m)) specifiers.push(sub === '.' ? m.name : `${m.name}${sub.slice(1)}`)
+  }
+  writeFileSync(join(project, 'exports.mjs'), `
+const specifiers = ${JSON.stringify(specifiers)}
+for (const s of specifiers) {
+  const mod = await import(s)
+  console.log('[verify-publish] imported ' + s + ' (' + Object.keys(mod).length + ' exports)')
+}
+`)
+  try {
+    run(process.execPath, ['exports.mjs'], { cwd: project, stdio: ['ignore', 'inherit', 'inherit'] })
+  } catch {
+    fail('importing a declared export entry failed (see above)')
+  }
+
+  // 6) Typecheck a consumer that uses the public types, resolving through the `exports` map.
+  const typeImports = specifiers.map((s, i) => `import * as entry${i} from '${s}'\nvoid entry${i}`).join('\n')
+  writeFileSync(join(project, 'consumer.ts'), `${typeImports}
+import type { VgSpec, RuntimeInput, SceneRoot, SpecLimits, ChartInfo } from '@aster/core'
+import { renderSpec, evaluateChart, compileChart, getChartInfo, chartInfoFromScene, AsterLimitError } from '@aster/core'
+import { compile } from '@aster/vl'
+import { Chart } from '@aster/react'
+import type { ChartProps } from '@aster/react'
+import { createElement } from 'react'
+
+const spec: VgSpec = { width: 100, height: 50, marks: [] }
+const limits: SpecLimits = { maxMarks: 100 }
+const input: RuntimeInput = { limits }
+const svg: string = renderSpec(spec, input)
+const scene: SceneRoot = evaluateChart(compileChart(spec), input)
+const info: ChartInfo = getChartInfo(spec, input)
+const fromScene: ChartInfo = chartInfoFromScene(scene)
+const props: ChartProps = { spec, width: 100, height: 50 }
+const el = createElement(Chart, props)
+const err: boolean = new AsterLimitError('x').code === 'ASTER_LIMIT'
+const vega = compile({ mark: 'bar', data: { values: [] }, encoding: {} })
+void [svg, info, fromScene, el, err, vega]
+`)
+  writeFileSync(join(project, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: {
+      target: 'es2022', module: 'nodenext', moduleResolution: 'nodenext', jsx: 'react-jsx',
+      strict: true, noEmit: true, skipLibCheck: false, types: [], lib: ['es2022', 'dom'],
+    },
+    files: ['consumer.ts'],
+  }))
+  try {
+    run(process.execPath, [TSC, '-p', 'tsconfig.json'], { cwd: project, stdio: ['ignore', 'inherit', 'inherit'] })
+  } catch {
+    fail('the consumer file does not typecheck against the installed packages (see tsc output above)')
+  }
+  console.log('[verify-publish] consumer typecheck PASS (module nodenext, skipLibCheck off)')
+
+  // 7) Render Vega and Vega-Lite through the installed packages.
   writeFileSync(join(project, 'smoke.mjs'), `
 import assert from 'node:assert'
 import { createElement } from 'react'
@@ -158,20 +254,10 @@ const worker = handleChartWorkerRequest({ id: 1, spec: vega })
 assert.ok(worker.svg && worker.svg.includes('<svg'), 'worker request handler')
 assert.ok(worker.scene && !('runtime' in worker.scene), 'worker scene is clone-safe')
 
-console.log('[verify-publish] consumer smoke test PASS')
 `)
 
-  execFileSync(process.execPath, ['smoke.mjs'], { cwd: project, stdio: 'inherit' })
-  console.log('[verify-publish] PASS — tarballs carry licences, exports resolve, Vega and Vega-Lite render')
+  run(process.execPath, ['smoke.mjs'], { cwd: project, stdio: ['ignore','inherit','inherit'] })
+  console.log('[verify-publish] PASS — packed with pnpm, installed with npm, every export imports and typechecks, Vega and Vega-Lite render')
 } finally {
   rmSync(tmp, { recursive: true, force: true })
-}
-
-function symmetricLink(target, path) {
-  try {
-    symlinkSync(target, path, 'dir')
-  } catch (err) {
-    if (err && err.code === 'EEXIST') return
-    throw err
-  }
 }

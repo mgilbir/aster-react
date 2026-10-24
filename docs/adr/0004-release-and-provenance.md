@@ -27,3 +27,17 @@ the oracle (Vega) must never become a runtime dependency.
   it.
 - Lockstep versions avoid compatibility matrices between core/react/vl.
 - Provenance ties published tarballs to the commit and workflow run.
+
+## Amendments
+
+*2026-10-23, to match the code.* Decision 3 ("the ratchet runs in the release workflow before build/test") is
+replaced by a stronger one:
+
+- The release workflow runs only on a pushed version tag. A `verify` job with no token runs the tag/version check,
+  `pnpm install --frozen-lockfile` and `pnpm check` (the whole gate list, which includes the dependency boundary,
+  `verify:publish`, conformance and the bundle budgets), then packs the tarballs with `pnpm pack`.
+- A separate `publish` job in the protected `npm-release` environment holds `id-token: write`, downloads those
+  tarballs and publishes them with provenance, installing and building nothing.
+- Actions are pinned by commit SHA. Details and the one-time setup: [RELEASE.md](../RELEASE.md).
+- The tarballs are checked as consumers receive them: packed with `pnpm pack`, no `workspace:` ranges, licence
+  texts included, installed with `npm install`, every export imported and typechecked (`pnpm verify:publish`).

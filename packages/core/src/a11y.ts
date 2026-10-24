@@ -79,10 +79,6 @@ export interface A11yOptions {
 
 interface Bounds { x1: number; y1: number; x2: number; y2: number }
 
-function isGroup(n: SceneNode): n is SceneGroup {
-  return (n as SceneGroup).marktype !== undefined || Array.isArray((n as SceneGroup).items)
-}
-
 function itemBounds(it: SceneItem, tx: number, ty: number): Bounds {
   const x = tx + (it.x ?? 0)
   const y = ty + (it.y ?? 0)

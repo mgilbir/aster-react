@@ -37,3 +37,15 @@ carries signal values. Those are the only two mutation points interaction needs.
 - Accessibility and selection state are derived from the same scene, so they cannot
   drift from the rendered marks.
 - Canvas has no DOM signal streams; props/`setSignal` are the portable path.
+
+## Amendments
+
+*2026-10-23, to match the code.*
+
+- The last consequence is superseded: `ChartHandle.setSignal` works on every renderer. With the SVG event loop bound
+  it runs the spec's dependent signal updates; on canvas, or with `interactive={false}`, it applies the value as a
+  signal override. Listeners are notified either way. Canvas still has no DOM event streams, so a spec's `signal.on`
+  handlers only fire on SVG.
+- Pan/zoom is derived by scale position (the first continuous scale per orientation, root scope), not by scale name;
+  `pan` and `zoom` are separate switches. See [INTERACTION.md](../INTERACTION.md).
+- `<ChartStream>` supports the same interaction as `<Chart>` (pan/zoom, signals, selection, tooltips, a11y).

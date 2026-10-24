@@ -46,7 +46,7 @@ behaviour end to end, and it is the only route to rendering Vega-Lite directly.
 3. **The boundary is enforced by a ratchet.** `scripts/check-deps.mjs` fails on any
    banned import or dependency not listed in a package's `dep-baseline.json`, and on
    any baseline entry that no longer matches. Baselines start at the inherited state
-   and may only shrink; each phase of [ROADMAP.md](../ROADMAP.md#3-inventory-of-own-code-to-build)
+   and may only shrink; each phase of [ROADMAP.md](../ROADMAP.md#1-state)
    removes its entries when the replacement is verified.
 
 ## Consequences
@@ -63,3 +63,19 @@ behaviour end to end, and it is the only route to rendering Vega-Lite directly.
   instead of misusing `accessor` as a path factory (it could not have worked).
 - **Docs describe the target from the phase that changes it.** ARCHITECTURE sections
   that justify the borrowed stack are superseded by this ADR as each phase lands.
+
+## Amendments
+
+*2026-10-23, to match the code.* The decision stands; the mechanics moved:
+
+- The boundary covers `@aster/core`, `@aster/react` and `@aster/vl`, and checks the built `dist` (JS and `.d.ts`)
+  as well as the sources. It matches `vega`, `d3`, `topojson` and their `-*` packages (including `@types/` forms),
+  parses every import form with the TypeScript compiler (`scripts/lib/scan-imports.mjs`) and refuses a specifier it
+  cannot resolve statically.
+- The ratchet baselines (`dep-baseline.json`) are all empty: every port named in the ROADMAP's inventory is done, so
+  any banned import or dependency fails, and a baseline entry that matches nothing fails too.
+- The gate list is `scripts/gates.mjs` (`pnpm check`); the dependency check is the `deps` gate there.
+- Oracle vectors that depend on the time zone carry the zone they were recorded under (`UTC` or
+  `America/New_York`) and the replay pins it; the `tz-matrix` gate re-runs the zone-sensitive suites under non-UTC
+  zones.
+- The bundle gap to react-vega held; the per-entry sizes are in [PERFORMANCE.md](../PERFORMANCE.md).

@@ -20,11 +20,15 @@ Vega-Lite compiler or expression/transform semantics.
 
 Guidelines:
 
-- Keep `@aster/core` free of runtime `vega-*`/`d3-*` dependencies; the
-  dependency ratchet (`pnpm check:deps`) enforces this.
+- Keep `@aster/core`, `@aster/react` and `@aster/vl` free of `vega-*`/`d3-*`/`topojson-*`
+  dependencies and imports; the dependency boundary (`pnpm check:deps`) enforces this on the
+  sources and on the built `dist`.
+- When you port an algorithm or table from an upstream project, add that project's `LICENSE` text to
+  `THIRD_PARTY_NOTICES.md` (`scripts/notices.test.mjs` checks the texts against `node_modules`).
 - Add a conformance corpus spec (or a unit/oracle-vector test) for every fixed
   behaviour. `packages/conformance/probes` is for known gaps; promote a probe
   to `corpus/` when it passes.
 - Update `README.md` and `docs/ROADMAP.md` when a gate or known limitation
-  changes.
+  changes. A number in the docs (counts, sizes, speedups) must come from a command you ran on the
+  tree being documented, with the command written next to it.
 - Do not commit generated `dist/` output or ad-hoc debug scripts.

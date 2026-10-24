@@ -13,7 +13,6 @@ import bisectorDefault, {
   InternMap,
   quantile,
   quantileSorted,
-  range as sequence,
   tickIncrement,
   ticks,
   tickStep,
@@ -608,96 +607,6 @@ export function ordinal(domain?: Iterable<unknown>, range?: Iterable<unknown>): 
 
   initRange.apply(scale, arguments as any)
   return scale
-}
-
-// ---- band.js / point --------------------------------------------------------
-
-export function band(domain?: unknown[], range?: unknown[]): SR {
-  const scale: SR = ordinal().unknown(undefined)
-  const ordinalDomain = scale.domain
-  const ordinalRange = scale.range
-  let r0 = 0
-  let r1 = 1
-  let step: number
-  let bandwidth: number
-  let round = false
-  let paddingInner = 0
-  let paddingOuter = 0
-  let align = 0.5
-  delete scale.unknown
-
-  function rescale(): SR {
-    const n = ordinalDomain().length
-    const reverse = r1 < r0
-    let start = reverse ? r1 : r0
-    const stop = reverse ? r0 : r1
-    step = (stop - start) / Math.max(1, n - paddingInner + paddingOuter * 2)
-    if (round) step = Math.floor(step)
-    start += (stop - start - step * (n - paddingInner)) * align
-    bandwidth = step * (1 - paddingInner)
-    if (round) (start = Math.round(start)), (bandwidth = Math.round(bandwidth))
-    const values = sequence(n).map((i: number) => start + step * i)
-    return ordinalRange(reverse ? values.reverse() : values)
-  }
-
-  scale.domain = function (_?: Iterable<unknown>): unknown {
-    return arguments.length ? (ordinalDomain(_), rescale()) : ordinalDomain()
-  }
-
-  scale.range = function (_?: Iterable<unknown>): unknown {
-    return arguments.length ? (([r0, r1] = _ as unknown as [number, number]), (r0 = +r0), (r1 = +r1), rescale()) : [r0, r1]
-  }
-
-  scale.rangeRound = function (_?: Iterable<unknown>): unknown {
-    return ([r0, r1] = _ as unknown as [number, number]), (r0 = +r0), (r1 = +r1), (round = true), rescale()
-  }
-
-  scale.bandwidth = function (): number {
-    return bandwidth
-  }
-  scale.step = function (): number {
-    return step
-  }
-  scale.round = function (_?: boolean): unknown {
-    return arguments.length ? ((round = !!_), rescale()) : round
-  }
-  scale.padding = function (_?: number): unknown {
-    return arguments.length ? ((paddingInner = Math.min(1, (paddingOuter = +(_ as number)))), rescale()) : paddingInner
-  }
-  scale.paddingInner = function (_?: number): unknown {
-    return arguments.length ? ((paddingInner = Math.min(1, +(_ as number))), rescale()) : paddingInner
-  }
-  scale.paddingOuter = function (_?: number): unknown {
-    return arguments.length ? ((paddingOuter = +(_ as number)), rescale()) : paddingOuter
-  }
-  scale.align = function (_?: number): unknown {
-    return arguments.length ? ((align = Math.max(0, Math.min(1, +(_ as number)))), rescale()) : align
-  }
-
-  scale.copy = function () {
-    return band(ordinalDomain(), [r0, r1])
-      .round(round)
-      .paddingInner(paddingInner)
-      .paddingOuter(paddingOuter)
-      .align(align)
-  }
-
-  return initRange.apply(rescale(), arguments as any)
-}
-
-function pointish(scale: SR): SR {
-  const copy = scale.copy
-  scale.padding = scale.paddingOuter
-  delete scale.paddingInner
-  delete scale.paddingOuter
-  scale.copy = function () {
-    return pointish(copy())
-  }
-  return scale
-}
-
-export function point(domain?: unknown[], range?: unknown[]): SR {
-  return pointish(band.apply(null, arguments as any).paddingInner(1))
 }
 
 // ---- quantize.js / threshold.js / quantile.js -------------------------------
