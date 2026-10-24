@@ -32,7 +32,7 @@ pnpm bench:pipeline   # per-stage compute breakdown: aster compile/evaluate/seri
 pnpm bench:incremental # streaming append / whole-array replace / DOM patch vs their baselines;
                       # fails below measured floors (see the header of src/incremental.bench.tsx)
 pnpm bench:differential # changed-set update vs full re-encode (scene eval and DOM patch)
-pnpm --filter @aster/benchmarks run budget  # per-entry gzip budgets; refuses a stale dist
+pnpm --filter @aster/benchmarks run budget  # per-import-pattern gzip budgets (addons as marginal cost); refuses a stale dist
 pnpm bench:browser-stream # per-frame append: aster <ChartStream> vs vega view.change
                       # SVG/canvas, microtask/raf and run/runAsync
                       # flush policies, long frames + DOM mutations
@@ -80,7 +80,7 @@ The browser runner needs a Chromium for Playwright (`npx playwright install chro
 - `src/browser-entry.ts` — `window.__bench` API bundled into the browser page
 - `scripts/browser.bench.mjs` — esbuild + Playwright + CDP driver
 - `scripts/bundle-size.mjs` — per-approach payload table
-- `scripts/budget.mjs` — per-entry gzip gates for core, dom, canvas, hit, load, signals, React and React+VL; part of `pnpm check`. It compares each `dist` file with its source and exits if one is missing or older, so it never measures a stale build
+- `scripts/budget.mjs` — per-import-pattern gzip gates (core `renderSpec`, `useChart`, `<Chart>`, `<Chart>` + VL, and dom/canvas/hit/signals/load/geo/transforms as marginal cost on top of core); part of `pnpm check`. `ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1` bundles as if the manifests had no `sideEffects` field, and the `useChart`/`<Chart>` rows must then fail. It compares each `dist` file with its source and exits if one is missing or older, so it never measures a stale build
 
 ## Results
 

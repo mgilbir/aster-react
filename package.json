@@ -21,6 +21,7 @@
     "bench:browser": "pnpm --filter @aster/benchmarks run bench:browser",
     "bench:browser-stream": "pnpm --filter @aster/benchmarks run bench:browser-stream",
     "check:deps": "node scripts/check-deps.mjs",
+    "check:bundle": "node scripts/check-bundle-shaking.mjs",
     "vectors": "pnpm --filter @aster/conformance run vectors",
     "check": "node scripts/gates.mjs",
     "conformance-vl": "pnpm --filter @aster/conformance run conformance-vl",

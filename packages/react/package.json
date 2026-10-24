@@ -27,6 +27,10 @@
       "default": "./dist/vl.js"
     }
   },
+  "sideEffects": [
+    "./dist/vl.js",
+    "./dist/worker-entry.js"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

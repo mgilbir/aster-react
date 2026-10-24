@@ -135,28 +135,44 @@ machine. I measured them on the current stack; the reviewer reports that the pre
 
 ## Bundle sizes
 
-`pnpm bench:bundle` (esbuild, minified, react external): `@aster/react` `<Chart>` 163.9 kB gzip
-(472.4 kB minified, 138.6 kB brotli) vs react-vega 288.7 kB gzip and the official vega-embed tutorial 288.0 kB.
+`pnpm bench:bundle` (esbuild, minified, react external): `@aster/react` `<Chart>` 156.5 kB gzip
+(449.2 kB minified, 132.5 kB brotli) vs react-vega 288.7 kB gzip and the official vega-embed tutorial 288.0 kB.
 
-`pnpm --filter @aster/benchmarks run budget` gates each published entry independently, so an addon
-import cannot silently inflate the base bundle. Each budget is the measured size plus 0.5 kB
-(`packages/benchmarks/scripts/budget.mjs` holds the history); a change that needs more room edits the number
-in the same PR:
+`pnpm --filter @aster/benchmarks run budget` bundles one tiny app per documented import pattern (esbuild, minify,
+`NODE_ENV=production`, tree-shaking on, react external) and gates its gzip size (default level). The addon rows are
+MARGINAL: the addon's gzip added to the `@aster/core` app. The old rows measured each addon standalone, which
+double counted the code it shares with core (hit read 15.6 kB where an app pays about 5). Each budget is the measured
+size plus 0.5 kB (`packages/benchmarks/scripts/budget.mjs` holds the rationale); a change that needs more room edits
+the number in the same PR. Measured 2026-10-23 on the audit stack:
 
-| Entry | Gzip (kB) | Budget (kB) |
-|---|---|---|
-| `@aster/core` | 123.0 | 123.5 |
-| `@aster/core/dom` | 127.2 | 127.7 |
-| `@aster/core/canvas` | 15.7 | 16.2 |
-| `@aster/core/hit` | 15.7 | 16.0 |
-| `@aster/core/load` | 14.7 | 15.2 |
-| `@aster/core/signals` | 41.0 | 41.5 |
-| `@aster/react` | 163.9 | 164.4 |
-| `@aster/react/vl` (React + the Vega-Lite compiler) | 218.3 | 218.8 |
+| Import pattern | Before (gzip kB) | Now (gzip kB) | Budget (kB) |
+|---|---|---|---|
+| `import { renderSpec } from '@aster/core'` | 123.0 | 123.1 | 123.6 |
+| `import { useChart } from '@aster/react'` | 164.1 | 126.4 | 126.9 |
+| `import { Chart } from '@aster/react'` | 163.9 | 156.5 | 157.0 |
+| `import '@aster/react/vl'` + `<Chart>` | 218.3 | 210.7 | 211.2 |
+| core + `@aster/core/dom` (marginal) | 5.8 | 5.7 | 6.2 |
+| core + `@aster/core/canvas` (marginal) | 4.8 | 4.8 | 5.3 |
+| core + `@aster/core/hit` (marginal) | 5.1 | 5.0 | 5.5 |
+| core + `@aster/core/signals` (marginal) | 4.4 | 4.4 | 4.9 |
+| core + `@aster/core/load` (marginal) | 5.1 | 5.1 | 5.6 |
+| core + `@aster/core/geo` (marginal) | 12.4 | 12.3 | 12.8 |
+| core + `@aster/core/transforms` (marginal) | 15.1 | 15.1 | 15.6 |
 
-The Vega-Lite compiler is therefore 54.4 kB gzip on top of the base entry (218.3 minus 163.9); the standalone
-entries share most of their code with `@aster/core`, so their marginal cost in an app is far below the standalone
-numbers.
+"Before" is the same apps bundled with no `sideEffects` field (`ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1 node
+packages/benchmarks/scripts/budget.mjs`, run from `packages/benchmarks`; the Vega-Lite row also had the untrimmed validator). Without
+the field a bundler must assume every module has effects, so `import { useChart }` pulled in `Chart`, `ChartStream`,
+`useChartStream`, `useChartWorkerStream`, the worker host and `batches` (37.7 kB gzip it never calls). The manifests now
+list the files that really have an import effect (see [ARCHITECTURE.md](ARCHITECTURE.md#side-effects-and-tree-shaking)).
+The `useChart` and `<Chart>` rows fail if the field is removed or widened; `scripts/bundle-shaking.test.mjs` plants
+that fault and requires the budget to fail. The other direction (a list that is too narrow drops a registration) is
+caught by `pnpm check:bundle`, which bundles and executes each import pattern.
+
+The Vega-Lite compiler is 54.2 kB gzip on top of the base `<Chart>` (210.7 minus 156.5). Trimming the validation layer
+(`packages/vl/src/validate.ts`: allow-lists derived from one table each, shared message templates, dead branches removed;
+no check dropped, every message unchanged) took `@aster/vl` from 180,940 to 176,836 bytes minified (-4.1 kB) and from
+55,828 to 55,606 bytes gzip level 9 (-0.2 kB): the validator is mostly unique error text, which gzip already compresses well.
+Measure it with `node` and esbuild on `packages/vl/dist/index.js` (`@aster/core` external, minify).
 
 ## Practical guidance
 

@@ -62,7 +62,11 @@ export const GATES = [
     why: 'a signal written into a running chart renders like vega (signals sweep)',
   },
   { name: 'fuzz-replay', args: ['fuzz:replay'], why: 'every committed fuzz reproducer still passes' },
-  { name: 'budget', args: ['--filter', '@aster/benchmarks', 'run', 'budget'], why: 'per-entry bundle size budgets' },
+  {
+    name: 'bundle-shaking', args: ['check:bundle'],
+    why: 'each documented import pattern is bundled (esbuild, production, tree-shaking) and EXECUTED: sideEffects must not shake out a registration (VL, geo, transforms, load, guide captions, worker entry)',
+  },
+  { name: 'budget', args: ['--filter', '@aster/benchmarks', 'run', 'budget'], why: 'per-import-pattern bundle size budgets (useChart, <Chart>, <Chart>+VL, core, addons as marginal cost); fails if tree-shaking breaks' },
   { name: 'probe', args: ['probe'], blocking: false, why: 'known-gap probes (diagnostic only; never fails the run)' },
 ]
 
