@@ -1,0 +1,17 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 160, "height": 100, "padding": 5, "autosize": "none", "background": "white",
+  "signals": [{ "name": "clipped", "value": true }],
+  "marks": [
+    {
+      "type": "group", "name": "panel", "clip": { "signal": "clipped" },
+      "encode": { "update": { "x": { "value": 10 }, "y": { "value": 8 }, "width": { "value": 70 }, "height": { "value": 50 }, "fill": { "value": "#eef" }, "stroke": { "value": "#448" }, "strokeWidth": { "value": 2 }, "cornerRadius": { "value": 8 } } },
+      "marks": [{ "type": "rect", "encode": { "update": { "x": { "value": -5 }, "y": { "value": 12 }, "width": { "value": 120 }, "height": { "value": 16 }, "fill": { "value": "tomato" } } } }]
+    },
+    {
+      "type": "group", "name": "fg",
+      "encode": { "update": { "x": { "value": 90 }, "y": { "value": 8 }, "width": { "value": 60 }, "height": { "value": 50 }, "fill": { "value": "#efe" }, "stroke": { "value": "#c00" }, "strokeWidth": { "value": 3 }, "strokeForeground": { "value": true }, "clip": { "value": true } } },
+      "marks": [{ "type": "symbol", "encode": { "update": { "x": { "value": 55 }, "y": { "value": 25 }, "size": { "value": 1800 }, "fill": { "value": "steelblue" } } } }]
+    }
+  ]
+}

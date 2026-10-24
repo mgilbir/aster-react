@@ -41,6 +41,26 @@ export const GATES = [
   { name: 'transform-matrix', args: ['transform-matrix'], why: 'transform option combinations vs the oracle' },
   { name: 'canvas', args: ['conformance:canvas'], tags: ['browser'], why: 'Chromium canvas pixel parity' },
   { name: 'batch', args: ['conformance:batch'], tags: ['browser'], why: 'batched-SVG pixel parity (denseMarks vs per-item)' },
+  {
+    name: 'signals-browser', args: ['conformance:signals'], tags: ['browser'],
+    why: 'signal event streams (selectors, between, filters, throttle, consume, native event) vs real vega in Chromium',
+  },
+  {
+    name: 'react-browser', args: ['--filter', '@aster/react', 'run', 'test:browser'], tags: ['browser'],
+    why: '<Chart> pointer/keyboard interaction, selection, pan/zoom and the a11y overlay in a real Chromium',
+  },
+  {
+    name: 'browser-conformance', args: ['conformance:browser'], tags: ['browser'],
+    why: 'the corpus rendered by vega (string renderer) and Aster in Chromium with live canvas text metrics',
+  },
+  {
+    // The floors are today's numbers and only ratchet. `retained` counts the cases where vega's own second render
+    // differs from its fresh render of the same signals (autosize runs once, a half-failed dataflow keeps its old
+    // tick items...): the engine is a pure function of its inputs, so it renders the fresh one.
+    name: 'sweep-signals',
+    args: ['sweep-signals', '--', '--floor', '166', '--min-ok', '104', '--max-node-error', '2', '--max-retained', '59'],
+    why: 'a signal written into a running chart renders like vega (signals sweep)',
+  },
   { name: 'fuzz-replay', args: ['fuzz:replay'], why: 'every committed fuzz reproducer still passes' },
   { name: 'budget', args: ['--filter', '@aster/benchmarks', 'run', 'budget'], why: 'per-entry bundle size budgets' },
   { name: 'probe', args: ['probe'], blocking: false, why: 'known-gap probes (diagnostic only; never fails the run)' },

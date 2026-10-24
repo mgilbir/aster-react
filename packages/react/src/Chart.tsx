@@ -9,6 +9,7 @@ import {
   type A11yOptions,
   type ChartInfo,
   type ImageUrlPolicy,
+  type Logger,
   type SceneRoot,
   type SpecLimits,
   type TextMetricsProvider,
@@ -226,6 +227,18 @@ export interface ChartProps {
    * Functions are compared by identity, so memoize the object to avoid re-evaluating.
    */
   urlPolicy?: ImageUrlPolicy
+  /**
+   * Where recovered errors go (`RuntimeInput.logger`, vega's logger shape): an expression that
+   * throws while the chart is evaluated or while a `signal.on` event is handled is reported here
+   * and the chart carries on, like vega. Default: the console. Only its presence is a dependency;
+   * the latest object is always the one called.
+   */
+  logger?: Logger
+  /**
+   * Call `preventDefault()` on the events of `signal.on` streams from the chart's own surface
+   * (vega's `view.preventDefault()`, default false). A stream marked `consume` always prevents.
+   */
+  preventDefault?: boolean
   /** Host text measurement for custom fonts / non-browser engines. */
   textMetrics?: TextMetricsProvider
   /** Accessible scene tree (R10.6). Enabled by default; pass `false` to opt out. */
@@ -517,6 +530,8 @@ function ChartView({
   renderTooltip,
   limits,
   urlPolicy,
+  logger,
+  preventDefault,
   textMetrics,
   a11y = true,
   onError,
@@ -596,6 +611,15 @@ function ChartView({
     () => ({ ...(signals ?? {}), ...eventSignals }),
     [signals, eventSignals],
   )
+  // The logger object may change every render; evaluation and the event loop see one stable proxy that
+  // always calls the latest (a changing identity must not re-evaluate the chart).
+  const loggerRef = React.useRef(logger)
+  loggerRef.current = logger
+  const hasLogger = logger != null
+  const stableLogger = React.useMemo<Logger | undefined>(
+    () => (hasLogger ? { error: (...a) => loggerRef.current?.error(...a), warn: (...a) => loggerRef.current?.warn(...a) } : undefined),
+    [hasLogger],
+  )
   const bindDefs = React.useMemo(
     () => ((spec.signals as SignalBindDef[] | undefined) ?? []).filter((s) => s && s.bind != null),
     [spec],
@@ -618,7 +642,7 @@ function ChartView({
       prevLengthsRef.current = new Map(Object.entries(data ?? {}).map(([name, rows]) => [name, rows.length]))
       const sc = sessionRef.current!.evaluate(spec, {
         data, dataChanges: changes, width: renderWidth, height: renderHeight,
-        signals: mergedSignals, limits: stableLimits, urlPolicy, domainRaw, textMetrics,
+        signals: mergedSignals, limits: stableLimits, urlPolicy, domainRaw, textMetrics, logger: stableLogger,
       })
       if (wantsDatumAttrs(sc)) stampDatumAttrs(sc.items)
       // `maxSvgLength` bounds the serialized output. The DOM patcher never
@@ -629,7 +653,7 @@ function ChartView({
     } catch (err) {
       return { scene: null, error: err instanceof Error ? err : new Error(String(err)), problems: [] }
     }
-  }, [sceneOverride, spec, data, dataChanges, renderWidth, renderHeight, mergedSignals, tooltipEnabled, interactive, renderer, stableLimits, urlPolicy, domainRaw, textMetrics])
+  }, [sceneOverride, spec, data, dataChanges, renderWidth, renderHeight, mergedSignals, tooltipEnabled, interactive, renderer, stableLimits, urlPolicy, domainRaw, textMetrics, stableLogger])
   const scene = evaluation.scene
   sceneRef.current = scene
   const renderError = evaluation.error
@@ -690,13 +714,13 @@ function ChartView({
     try {
       if (baseSessionRef.current == null) baseSessionRef.current = createChartSession()
       const baseScene = baseSessionRef.current.evaluate(spec, {
-        data, width: renderWidth, height: renderHeight, signals: mergedSignals, limits: stableLimits, urlPolicy, textMetrics,
+        data, width: renderWidth, height: renderHeight, signals: mergedSignals, limits: stableLimits, urlPolicy, textMetrics, logger: stableLogger,
       })
       return baseDomainsOf(chartInfoFromScene(baseScene), positional)
     } catch {
       return null
     }
-  }, [panZoomEnabled, zoomed, fromStream, positional, spec, data, renderWidth, renderHeight, mergedSignals, stableLimits, urlPolicy, textMetrics])
+  }, [panZoomEnabled, zoomed, fromStream, positional, spec, data, renderWidth, renderHeight, mergedSignals, stableLimits, urlPolicy, textMetrics, stableLogger])
   const baseDomains = React.useMemo<ViewDomain>(() => {
     if (!panZoomEnabled || chartInfo == null) return {}
     if (!zoomed) return baseDomainsOf(chartInfo, positional)
@@ -832,19 +856,23 @@ function ChartView({
     // so ChartHandle.setSignal works on a purely imperative spec.
     if (!hasStreams && !hasSignalListeners && !signalDefs?.length) return
     // The binding mutates the signal object it is given: hand it a copy.
+    // `event.item` (mark type / name / role / datum / enclosing group) comes from the scene hit index, the
+    // same one that serves tooltips and clicks, so `@name:click` and `symbol:click` work without tooltips.
     const binding = bindSceneSignals(svg, scene, { ...mergedSignals }, {
       onSignal: (name, value, all) => {
         signalStore.set(all)
         signalListenersRef.current?.[name]?.(name, value)
         onSignalRef.current?.(name, value)
       },
-    })
+      ...(stableLogger ? { logger: stableLogger } : {}),
+      ...(preventDefault != null ? { preventDefault } : {}),
+    }, { pick: (x, y) => hitIndexFor(displayScene ?? scene)?.query(x, y) ?? null })
     signalBindingRef.current = binding
     return () => {
       binding.detach()
       if (signalBindingRef.current === binding) signalBindingRef.current = null
     }
-  }, [interactive, scene, displayScene, renderer, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore])
+  }, [interactive, scene, displayScene, renderer, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, stableLogger, preventDefault, hitIndexFor])
 
   // Canvas backend: size the backing store for devicePixelRatio and redraw the
   // whole scene whenever it changes (cheap relative to SVG serialization for

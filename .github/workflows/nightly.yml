@@ -32,9 +32,6 @@ jobs:
       - name: WebKit canvas parity
         run: pnpm conformance:canvas -- --browser=webkit
 
-      - name: Chromium SVG conformance
-        run: pnpm conformance:browser
-
       - name: Large incremental append benchmark
         run: pnpm bench:incremental -- --points=100000 --reps=40
 
@@ -48,7 +45,7 @@ jobs:
         run: pnpm bench:browser-stream -- --points=100000 --seconds=3 --engines=aster --renderers=svg --dense=0,1
 
       - name: Vega-Lite schema sweep
-        run: pnpm sweep-vl -- --floor 27513 --min-ok 27418 --max-node-error 21
+        run: pnpm sweep-vl -- --floor 27513 --min-ok 27452 --max-node-error 17 --vega-check
 
       - name: Vega schema sweep
         run: pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3

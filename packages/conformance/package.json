@@ -22,7 +22,8 @@
     "transform-matrix": "tsx scripts/transform-matrix.mts",
     "a11y-parity": "tsx scripts/a11y-parity.mts",
     "conformance:canvas": "tsx scripts/browser-canvas-parity.mts",
-    "conformance:batch": "tsx scripts/browser-svg-batch-parity.mts"
+    "conformance:batch": "tsx scripts/browser-svg-batch-parity.mts",
+    "conformance:signals": "tsx scripts/browser-signals.mts --min-cases=38"
   },
   "dependencies": {
     "@aster/core": "workspace:*",

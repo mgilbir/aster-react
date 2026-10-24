@@ -16,6 +16,7 @@ import { interpolateRound, interpolateValue } from './interp.js'
 import { range as sequence } from './arr.js'
 import { aggregateGroup } from './transform.js'
 import { aggregateRows } from './transform-agg.js'
+import { SpecParseError } from './parse-error.js'
 import { pushAll, ascending, error as raise, hasOwnProperty, isArray, isFunction, isObject, isString, ownGet, peek, toNumber } from './util.js'
 import type { CompiledScale } from './types.js'
 
@@ -246,6 +247,9 @@ function parseScaleDomain(domain: unknown, spec: { type: string; domainMin?: unk
 }
 
 function singularDomain(domain: { data: string; field: unknown; sort?: unknown }, spec: { type: string }, ctx: ScaleContext): unknown {
+  // vega-parser's scope.getData: a domain that names no data set at all (a bare string, number or `true`, or an
+  // object with no `data`) fails vega.parse itself, before any view exists
+  if (typeof domain.data !== 'string') throw new SpecParseError(`Undefined data set name: ${JSON.stringify(domain.data)}`)
   if (ctx.hasData ? !ctx.hasData(domain.data) : false) raise('Can not find data set: ' + JSON.stringify(domain.data))
   if (isDiscreteType(spec.type)) return discreteDomain(ctx, domain.data, domain.field, parseSort(domain.sort, false, ctx))
   if (vs.isQuantile(spec.type)) return fieldValues(ctx, domain.data, domain.field) // domainRef: the raw values
@@ -498,7 +502,8 @@ function configureDomain(scale: Scale, _: Params): number {
 
   // adjust domain based on zero, min, max settings
   if (zero || _.domainMin != null || _.domainMax != null || _.domainMid != null) {
-    if (!isArray(domain)) throw new TypeError('domain.slice is not a function')
+    // vega calls `domain.slice()` on whatever the domain is: a string slices fine (and d3 then reads it as
+    // an array of its characters), a number or object throws the TypeError the dataflow logs
     domain = domain.slice()
     const n = (domain.length - 1) || 1
     if (zero) {

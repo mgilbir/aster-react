@@ -39,18 +39,17 @@ export function compileChart(rawSpec: VgSpec): CompiledChart {
   const signals = resolveSignals(signalDefs)
   const cfg = (spec.config ?? {}) as Record<string, unknown>
   const cfgStyle = (cfg.style ?? {}) as Record<string, Record<string, unknown>>
-  const cfgAxis = (cfg.axis ?? {}) as Record<string, unknown>
-  const cfgAxisX = (cfg.axisX ?? {}) as Record<string, unknown>
-  const cfgAxisY = (cfg.axisY ?? {}) as Record<string, unknown>
-  const cfgAxisBand = (cfg.axisBand ?? {}) as Record<string, unknown>
-  const cfgLegend = (cfg.legend ?? {}) as Record<string, unknown>
   const background = (spec.background as string | null | undefined) ?? (cfg.background as string | null | undefined) ?? null
   const padding = normalizePadding(spec.padding as unknown)
   // Collect signal names before resolving them
   const sigNames = (spec.signals as Array<Record<string, unknown>> | undefined)?.map(s => (s as any)?.name || '').filter(Boolean) ?? []
   // We don't have the resolved signal values yet, so just use raw width/height
-  const width = typeof spec.width === 'number' ? spec.width : (typeof spec.width === 'object' ? spec.width as SizeSpec : DEFAULT_SIZE)
-  const height = typeof spec.height === 'number' ? spec.height : (typeof spec.height === 'object' ? spec.height as SizeSpec : DEFAULT_SIZE)
+  // A view with a `layout` and no size of its own (a composition: vega-lite sizes only the
+  // child groups) has vega's `width` / `height` signal value, 0 - unless a signal supplies it.
+  const defaultSize = (name: 'width' | 'height'): SizeSpec =>
+    spec.layout != null && !sigNames.includes(name) ? 0 : DEFAULT_SIZE
+  const width = typeof spec.width === 'number' ? spec.width : (typeof spec.width === 'object' ? spec.width as SizeSpec : defaultSize('width'))
+  const height = typeof spec.height === 'number' ? spec.height : (typeof spec.height === 'object' ? spec.height as SizeSpec : defaultSize('height'))
   const frameStroke = resolveFrameStroke(spec)
   const frameFill = resolveFrameFill(spec)
   const frameStrokeWidth = resolveFrameNumber(spec, 'strokeWidth')
@@ -82,29 +81,12 @@ export function compileChart(rawSpec: VgSpec): CompiledChart {
     scales.push(compileScale(s))
   }
 
-  const axes: CompiledAxis[] = []
-  for (const a of (spec.axes as Array<Record<string, unknown>>) ?? []) {
-    // vega axisConfig precedence (vega-parser axisConfig): axis < axisX/axisY
-    // (by orient) < axis<Orient> < axisBand (band scales) — later wins; the
-    // axis def itself then wins over every block.
-    const orient = String(a.orient ?? '')
-    const defaults: Record<string, unknown> = { ...cfgAxis }
-    Object.assign(defaults, orient === 'top' || orient === 'bottom' ? cfgAxisX : cfgAxisY)
-    const orientBlock = (cfg as Record<string, Record<string, unknown>>)[`axis${orient.charAt(0).toUpperCase()}${orient.slice(1)}`]
-    if (orient && typeof orientBlock === 'object') Object.assign(defaults, orientBlock)
-    const sc = scales.find((s) => s.name === a.scale)
-    if (sc?.type === 'band') Object.assign(defaults, cfgAxisBand)
-    axes.push(compileAxis(applyConfigDefaults(a, defaults, scales)))
-  }
-
-  const legends: CompiledLegend[] = []
-  for (const l of (spec.legends as Array<Record<string, unknown>>) ?? []) {
-    legends.push(compileLegend(applyConfigDefaults(l, cfgLegend, undefined, true)))
-  }
+  const axes = compileGuideAxes(spec.axes as Array<Record<string, unknown>> | undefined, cfg, scales)
+  const legends = compileGuideLegends(spec.legends as Array<Record<string, unknown>> | undefined, cfg)
 
   const marks: CompiledMark[] = []
   for (const m of (spec.marks as Array<Record<string, unknown>>) ?? []) {
-    marks.push(compileMark(m, cfgStyle, cfg as Record<string, Record<string, unknown>> | undefined))
+    marks.push(compileMark(m, cfgStyle, cfg as Record<string, Record<string, unknown>> | undefined, scales))
   }
 
   const title = compileTitle(spec.title, spec.config as Record<string, unknown> | undefined)
@@ -245,8 +227,9 @@ function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSi
     if (!s || typeof s !== 'object') continue
     const def: CompiledSignalDef = { name: s.name as string }
     // a null value is a value (`??` would fall through to `init` for it)
-    const value = s.value !== undefined ? s.value : s.init
-    if (value !== undefined) def.value = value
+    if (s.value !== undefined) def.value = s.value
+    // `init` is an expression (vega signal-updates: `op.initonly`), not a value.
+    if (typeof s.init === 'string' && s.update === undefined) def.init = s.init
     if (typeof s.update === 'string') def.update = s.update
     if (s.bind != null && (typeof s.bind === 'string' || typeof s.bind === 'object')) {
       def.bind = s.bind as Record<string, unknown> | string
@@ -258,14 +241,9 @@ function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSi
       // vega leaves such a signal undefined until the event.)
       // Keep the full event-stream spec: the host binds these via
       // bindSignalEvents (signals.ts) to drive the event loop.
-      const on = (s.on as SignalOnDef[]).map((o) => ({
-        events: o.events,
-        ...(typeof o.update === 'string' ? { update: o.update } : {}),
-        ...(o.between != null ? { between: o.between } : {}),
-        ...(o.throttle != null ? { throttle: o.throttle } : {}),
-        ...(o.debounce != null ? { debounce: o.debounce } : {}),
-        ...(o.consume != null ? { consume: o.consume } : {}),
-      })) as SignalOnDef[]
+      // Entries are kept whole (and copied, so the compiled chart never aliases the
+      // spec): the event loop interprets `events` (string | object | array) itself.
+      const on = (s.on as SignalOnDef[]).filter((o) => o != null && typeof o === 'object').map((o) => ({ ...o })) as SignalOnDef[]
       def.on = on
     }
     out.push(def)
@@ -335,6 +313,49 @@ function compileScale(s: Record<string, unknown>): CompiledScale {
   return out as unknown as CompiledScale
 }
 
+/**
+ * The axes of one scope (the view or a group mark) with their config defaults.
+ * vega applies the same lookup at every level - the config is the view's, the
+ * scales are those the scope can see - so a nested group's axes follow
+ * `config.axis` exactly as the top-level ones do (C51).
+ */
+function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: Record<string, unknown>, scales: CompiledScale[]): CompiledAxis[] {
+  const cfgAxis = (cfg.axis ?? {}) as Record<string, unknown>
+  const cfgAxisX = (cfg.axisX ?? {}) as Record<string, unknown>
+  const cfgAxisY = (cfg.axisY ?? {}) as Record<string, unknown>
+  const cfgAxisBand = (cfg.axisBand ?? {}) as Record<string, unknown>
+  const axes: CompiledAxis[] = []
+  for (const a of raw ?? []) {
+    // vega axisConfig precedence (vega-parser axisConfig): axis < axisX/axisY
+    // (by orient) < axis<Orient> < axisBand (band scales) - later wins; the
+    // axis def itself then wins over every block.
+    const orientRaw = a.orient as unknown
+    if (orientRaw && typeof orientRaw === 'object' && typeof (orientRaw as { signal?: unknown }).signal === 'string') {
+      // `orient: {signal}`: vega-parser axis-config picks the config blocks by the signal at run time
+      const variants: Record<string, CompiledAxis> = {}
+      for (const o of ['top', 'bottom', 'left', 'right', '']) variants[o] = compileGuideAxes([{ ...a, orient: o }], cfg, scales)[0]!
+      axes.push({ ...variants.left!, orientSignal: { signal: (orientRaw as { signal: string }).signal, variants } })
+      continue
+    }
+    const orient = String(a.orient ?? '')
+    const defaults: Record<string, unknown> = { ...cfgAxis }
+    Object.assign(defaults, orient === 'top' || orient === 'bottom' ? cfgAxisX : cfgAxisY)
+    const orientBlock = (cfg as Record<string, Record<string, unknown>>)[`axis${orient.charAt(0).toUpperCase()}${orient.slice(1)}`]
+    if (orient && typeof orientBlock === 'object') Object.assign(defaults, orientBlock)
+    // the innermost scale of that name wins (a group's own scale shadows the view's)
+    const sc = [...scales].reverse().find((s) => s.name === a.scale)
+    if (sc?.type === 'band') Object.assign(defaults, cfgAxisBand)
+    axes.push(compileAxis(applyConfigDefaults(a, defaults, scales)))
+  }
+  return axes
+}
+
+/** The legends of one scope with `config.legend` defaults (see {@link compileGuideAxes}). */
+function compileGuideLegends(raw: Array<Record<string, unknown>> | undefined, cfg: Record<string, unknown>): CompiledLegend[] {
+  const cfgLegend = (cfg.legend ?? {}) as Record<string, unknown>
+  return (raw ?? []).map((l) => compileLegend(applyConfigDefaults(l, cfgLegend, undefined, true)))
+}
+
 function compileAxis(a: Record<string, unknown>): CompiledAxis {
   const out: CompiledAxis = {
     scale: a.scale as string,
@@ -370,14 +391,24 @@ function compileLegend(l: Record<string, unknown>): CompiledLegend {
 }
 
 function compileTitle(value: unknown, config?: Record<string, unknown>): CompiledTitle | undefined {
-  if (value == null) return undefined
+  // vega's parser reads `if (spec.title)`: an empty-string (or otherwise falsy) title is no title, an object with empty text is one
+  if (!value) return undefined
   const spec = typeof value === 'string' ? { text: value } : (value as Record<string, unknown>)
   const cfg = (config?.title ?? {}) as Record<string, unknown>
+  // vega-parser title.js: the text mark's style is the spec's `style` (default
+  // 'group-title'); a property the title spec and config.title leave unset
+  // comes from that style's block of config.style.
+  const cfgStyle = (config?.style ?? {}) as Record<string, Record<string, unknown>>
+  const styleNames = ([] as unknown[]).concat(spec.style ?? 'group-title').map(String)
+  const sty: Record<string, unknown> = {}
+  for (const n of styleNames) Object.assign(sty, ownGet(cfgStyle, n))
   // Defaults mirror vega's config.title block (orient top, anchor middle,
-  // offset 4, subtitlePadding 3) and the vega-theme title style
-  // (fontSize 13, fontWeight bold).
-  const text = typeof spec.text === 'string' ? spec.text : String(spec.text ?? '')
-  const fontSize = (spec.fontSize as number | undefined) ?? (cfg.fontSize as number | undefined) ?? 13
+  // offset 4, subtitlePadding 3).
+  const rawText = spec.text
+  const text: CompiledTitle['text'] = rawText && typeof rawText === 'object' && 'signal' in (rawText as Record<string, unknown>)
+    ? { signal: String((rawText as { signal: unknown }).signal) }
+    : typeof rawText === 'string' ? rawText : Array.isArray(rawText) ? rawText.map(String) : String(rawText ?? '')
+  const fontSize = (spec.fontSize as number | undefined) ?? (cfg.fontSize as number | undefined) ?? (sty.fontSize as number | undefined) ?? 11
   return {
     text,
     subtitle: typeof spec.subtitle === 'string' ? spec.subtitle : spec.subtitle != null ? String(spec.subtitle) : undefined,
@@ -386,9 +417,10 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
     offset: (spec.offset as number | undefined) ?? (cfg.offset as number | undefined) ?? 4,
     subtitlePadding: (spec.subtitlePadding as number | undefined) ?? (cfg.subtitlePadding as number | undefined) ?? 3,
     fontSize,
-    fontWeight: (spec.fontWeight as CompiledTitle['fontWeight']) ?? (cfg.fontWeight as CompiledTitle['fontWeight']) ?? 'bold',
-    font: (spec.font as string | undefined) ?? (cfg.font as string | undefined),
-    color: (spec.color as string | undefined) ?? (cfg.color as string | undefined) ?? '#000',
+    fontWeight: (spec.fontWeight as CompiledTitle['fontWeight']) ?? (cfg.fontWeight as CompiledTitle['fontWeight']) ?? (sty.fontWeight as CompiledTitle['fontWeight']),
+    font: (spec.font as string | undefined) ?? (cfg.font as string | undefined) ?? (sty.font as string | undefined),
+    fontStyle: (spec.fontStyle as string | undefined) ?? (cfg.fontStyle as string | undefined) ?? (sty.fontStyle as string | undefined),
+    color: (spec.color as string | undefined) ?? (cfg.color as string | undefined) ?? (sty.fill as string | undefined) ?? '#000',
     baseline: (spec.baseline as string | undefined) ?? (cfg.baseline as string | undefined),
     align: (spec.align as string | undefined) ?? (cfg.align as string | undefined),
     angle: (spec.angle as number | undefined) ?? (cfg.angle as number | undefined),
@@ -408,16 +440,6 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
 function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string, unknown>, scales?: CompiledScale[], isLegend = false): Record<string, unknown> {
   if (!defaults || typeof defaults !== 'object') return o
   const out: Record<string, unknown> = { ...defaults, ...o }
-  // vega's `axisBand` style (tickOffset -0.5) is consulted through the guide
-  // fallback BEFORE config.axis on band-scale axes (axis-config.js: `band =
-  // scaleType === 'band' && config.axisBand`), so a config.tickOffset cannot
-  // override it there — but on every other scale the config value applies.
-  // Drop the config value only for band-scale axes and let the runtime
-  // default (the -0.5) apply.
-  if ('tickOffset' in defaults && !('tickOffset' in o) && scales) {
-    const sc = scales.find((s) => s.name === o.scale)
-    if (sc && (sc.type === 'band')) delete out.tickOffset
-  }
   // `position` is read as `spec.position` in vega's buildAxisEncode — never
   // through the `lookup(spec, config)` — so a config block's copy is dead
   // upstream.  Drop it too, or a config theme would reshift every axis.
@@ -537,7 +559,19 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
   Object.assign(update, defaults)
 }
 
-function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>): CompiledMark {
+/**
+ * vega reads `from.facet.groupby` through `array(...)`: a bare field name is a one-field
+ * groupby (`groupby: 'g'`), as in every transform's groupby. The runtime iterates arrays, so
+ * normalise once here (the spec itself is never written).
+ */
+function normalizeFrom(from: CompiledMark['from']): CompiledMark['from'] {
+  const facet = (from as { facet?: { groupby?: unknown } } | undefined)?.facet
+  if (facet === undefined || facet === null || typeof facet !== 'object' || Array.isArray(facet.groupby)) return from
+  const groupby = facet.groupby == null ? [] : [facet.groupby]
+  return { ...from, facet: { ...facet, groupby } } as CompiledMark['from']
+}
+
+function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>, scopeScales: CompiledScale[] = []): CompiledMark {
   const m = { ...m0 }
   if (cfgStyle || cfgMarktype) applyStyleDefaults(m, cfgStyle ?? {}, cfgMarktype)
   const out: CompiledMark = {
@@ -554,17 +588,24 @@ function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Reco
   }
   if (m.role !== undefined) out.role = m.role as string
   if (m.style !== undefined) out.style = m.style as string | string[]
-  if (m.from !== undefined) out.from = m.from as CompiledMark['from']
+  if (m.from !== undefined) out.from = normalizeFrom(m.from as CompiledMark['from'])
   if (m.clip !== undefined) out.clip = m.clip as boolean
   if (m.interactive !== undefined) out.interactive = m.interactive as boolean
   if (m.zindex !== undefined) out.zindex = m.zindex as number
   if (m.key !== undefined) out.key = m.key as string
   if (m.sort !== undefined) out.sort = m.sort as CompiledMark['sort']
   if (m.title !== undefined) out.title = m.title as CompiledMark['title']
+  // a group's title is a title like the view's, resolved against the same config (its text may read `parent`)
+  if (m.type === 'group' && m.title !== undefined && m.title !== null) out.groupTitle = compileTitle(m.title, cfgMarktype as unknown as Record<string, unknown> | undefined)
   if (m.layout !== undefined) out.layout = m.layout as Record<string, unknown>
-  if (m.marks !== undefined) out.marks = (m.marks as Array<Record<string, unknown>>).map((nm) => compileMark(nm, cfgStyle, cfgMarktype))
-  if ((m as any).axes !== undefined) out.axes = ((m as any).axes as Array<Record<string, unknown>>).map(compileAxis)
+  // a group's own scales are visible to its axes and its children, after the enclosing scope's
   if ((m as any).scales !== undefined) out.scales = ((m as any).scales as Array<Record<string, unknown>>).map(compileScale)
+  const inScope = out.scales ? [...scopeScales, ...out.scales] : scopeScales
+  if (m.marks !== undefined) out.marks = (m.marks as Array<Record<string, unknown>>).map((nm) => compileMark(nm, cfgStyle, cfgMarktype, inScope))
+  // a nested group's axes and legends are compiled like the view's: same config lookups (C51)
+  const cfgAll = (cfgMarktype ?? {}) as unknown as Record<string, unknown>
+  if ((m as any).axes !== undefined) out.axes = compileGuideAxes((m as any).axes as Array<Record<string, unknown>>, cfgAll, inScope)
+  if ((m as any).legends !== undefined) out.legends = compileGuideLegends((m as any).legends as Array<Record<string, unknown>>, cfgAll)
   if ((m as any).data !== undefined) out.data = ((m as any).data as Array<Record<string, unknown>>).map(compileData)
   if (Array.isArray(m.transform)) {
     out.transform = (m.transform as Array<Record<string, unknown>>).map(compileTransform)

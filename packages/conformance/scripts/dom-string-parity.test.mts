@@ -67,7 +67,9 @@ describe('DOM descriptor === string renderer over the conformance corpus (audit 
     let checked = 0
     for (const f of files) {
       const doc = JSON.parse(readFileSync(join(CORPUS_DIR, f), 'utf8'))
-      let spec = doc.spec ?? doc
+      // only a true wrapper doc ({ spec }) is unwrapped: a Vega-Lite repeat / facet spec carries a
+      // nested `spec` child of its own and has a $schema (same rule as run-vl.ts)
+      let spec = doc.$schema ? doc : (doc.spec ?? doc)
       if (f.endsWith('.vl.json')) spec = vl.compile(spec).spec
       let scene
       try {

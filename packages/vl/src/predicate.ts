@@ -81,6 +81,30 @@ function valueExpr(v: unknown, unit: string | undefined): string {
   return JSON.stringify(v)
 }
 
+/**
+ * vega-lite `valueExpr(v, {timeUnit, type})` (channeldef.ts), as the explicit scale-domain code calls it: a value that
+ * is a time (a DateTime, or any value of a temporal field / a field with a time unit) becomes a `datetime(...)`
+ * expression, a signal or expression stays itself, anything else is its JSON.
+ */
+export function domainValueExpr(v: unknown, type: string | undefined, unit: string | undefined): string {
+  let isTime = unit !== undefined || type === 'temporal'
+  let expr: string | undefined
+  if (isObj(v) && typeof v.expr === 'string') expr = v.expr
+  else if (isObj(v) && typeof v.signal === 'string') expr = v.signal
+  else if (isDateTime(v)) {
+    isTime = true
+    expr = dateTimeToExpr(v)
+  } else if (typeof v === 'string' || typeof v === 'number') {
+    if (isTime) {
+      expr = `datetime(${JSON.stringify(v)})`
+      if (unit !== undefined && /^(year|quarter|month|week|day|dayofyear|date|hours|minutes|seconds|milliseconds)$/.test(unit)) {
+        if ((typeof v === 'number' && v < 10000) || (typeof v === 'string' && Number.isNaN(Date.parse(v)))) expr = dateTimeToExpr({ [unit]: v })
+      }
+    }
+  }
+  return expr ?? JSON.stringify(v)
+}
+
 function fieldPredicateExpr(p: Obj): string {
   const field = p.field as string
   const tu = p.timeUnit !== undefined ? normalizeTimeUnit(p.timeUnit) : undefined

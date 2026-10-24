@@ -130,3 +130,62 @@ describe('image url policy (C93)', () => {
     })
   })
 })
+
+describe('hyperlinks (the href channel)', () => {
+  const linkSpec = (href: unknown): VgSpec => ({
+    width: 50, height: 50, data: [{ name: 't', values: [{ h: href }] }],
+    marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { value: 10 }, y: { value: 10 }, href: { field: 'h' } } } }],
+  } as unknown as VgSpec)
+  const anchors = (el: Element): string[] => [...el.querySelectorAll('a')].map((a) => a.getAttribute('xlink:href') ?? '')
+
+  it.each(['https://example.test/p?a=1&b=2', 'http://example.test/', 'mailto:me@example.test', 'tel:+15551234', 'rel/path.html', '/abs/path', '#frag', '//cdn.example.test/x'])(
+    'an allowed link is drawn in <a xlink:href>, string and DOM: %j', (href) => {
+      const expected = href.startsWith('//') ? `http:${href}` : href
+      const svg = renderSpec(linkSpec(href))
+      expect(svg).toContain(`<a xlink:href="${expected.replace(/&/g, '&amp;')}">`)
+      expect(anchors(domOf(linkSpec(href), {}))).toEqual([expected])
+    })
+
+  it.each(['javascript:alert(1)', ' javascript:alert(1)', 'java\tscript:alert(1)', 'JaVaScRiPt:alert(1)', 'vbscript:x', 'livescript:y'])(
+    'a script URL is never linked (vega-loader sanitize), with no policy at all: %j', (href) => {
+      expect(renderSpec(linkSpec(href))).not.toContain('<a ')
+      expect(anchors(domOf(linkSpec(href), {}))).toEqual([])
+    })
+
+  it('a non-string href is not a link', () => {
+    for (const h of [5, true, { a: 1 }, ['x'], null, '']) expect(renderSpec(linkSpec(h))).not.toContain('<a ')
+  })
+
+  it('the value is escaped, never interpreted', () => {
+    const svg = renderSpec(linkSpec('x"><script>alert(1)</script>'))
+    expect(svg).not.toContain('<script>')
+    expect(svg).toContain('&quot;&gt;&lt;script&gt;')
+  })
+
+  it('under limits (or a policy) a denied scheme throws a typed error, like image urls', () => {
+    for (const h of ['ftp://example.test/f', 'file:///etc/passwd', 'data:text/html,x', 'javascript:alert(1)']) {
+      expect(() => renderSpec(linkSpec(h), { limits: { maxRows: 100 } })).toThrowError(AsterUrlError)
+      expect(() => renderSpec(linkSpec(h), { urlPolicy: {} })).toThrowError(AsterUrlError)
+    }
+  })
+
+  it('allow() sees every link; onDeny drops only the link, in both renderers', () => {
+    const seen: string[] = []
+    const policy = { allow: (u: URL) => { seen.push(u.hostname); return u.hostname === 'ok.test' } }
+    expect(() => renderSpec(linkSpec('https://evil.test/'), { urlPolicy: policy })).toThrow(/refused by the allow hook/)
+    expect(renderSpec(linkSpec('https://ok.test/'), { urlPolicy: policy })).toContain('<a xlink:href="https://ok.test/">')
+    expect(seen).toEqual(['evil.test', 'ok.test'])
+    const denied: string[] = []
+    const input: RuntimeInput = { urlPolicy: { onDeny: (u) => denied.push(u) } }
+    expect(renderSpec(linkSpec('ftp://example.test/f'), input)).not.toContain('<a ')
+    expect(anchors(domOf(linkSpec('ftp://example.test/f'), input))).toEqual([])
+    expect(denied).toEqual(['ftp://example.test/f', 'ftp://example.test/f'])
+  })
+
+  it('a mark that encodes no href pays nothing: the policy is not consulted', () => {
+    const spec = { width: 50, height: 50, marks: [{ type: 'symbol', encode: { update: { x: { value: 1 }, y: { value: 1 } } } }] } as unknown as VgSpec
+    let calls = 0
+    renderSpec(spec, { urlPolicy: { allow: () => { calls++; return true } } })
+    expect(calls).toBe(0)
+  })
+})

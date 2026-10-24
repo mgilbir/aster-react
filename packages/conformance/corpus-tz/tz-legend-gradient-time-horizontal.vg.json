@@ -1,0 +1,54 @@
+{
+ "$schema": "https://vega.github.io/schema/vega/v6.json",
+ "width": 300,
+ "height": 150,
+ "padding": 5,
+ "autosize": "none",
+ "background": "white",
+ "data": [
+  {
+   "name": "d",
+   "values": [
+    {
+     "t": "2024-01-01T23:30:00Z"
+    },
+    {
+     "t": "2024-03-10T01:15:00Z"
+    },
+    {
+     "t": "2024-06-30T12:00:00Z"
+    },
+    {
+     "t": "2024-11-03T05:30:00Z"
+    }
+   ],
+   "format": {
+    "parse": {
+     "t": "date"
+    }
+   }
+  }
+ ],
+ "scales": [
+  {
+   "name": "c",
+   "type": "time",
+   "domain": {
+    "data": "d",
+    "field": "t"
+   },
+   "range": {
+    "scheme": "blues"
+   }
+  }
+ ],
+ "legends": [
+  {
+   "fill": "c",
+   "type": "gradient",
+   "orient": "bottom",
+   "direction": "horizontal",
+   "gradientLength": 240
+  }
+ ]
+}

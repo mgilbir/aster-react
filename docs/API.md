@@ -26,8 +26,14 @@ const svg = renderSpec(vegaSpec, {
   domainRaw: { x: [0, 25] },   // pan/zoom/brush domain override
   limits: { maxRows: 100_000, maxTimeMs: 2_000 },
   textMetrics: { measure: (text, font, size) => myFontEngine.measure(text, font, size) },
+  logger: { error: (...a) => report(a), warn: (...a) => report(a) },  // vega-shaped; default: console
 })
 ```
+
+`logger` (`RuntimeInput.logger`, type `Logger`) is where the engine reports an error it recovers from, as vega's
+dataflow does: an expression that throws while a chart is evaluated (a conditional-encode test, an encode signal, a
+filter or formula, a sort, a scale that cannot be built) is logged and the render carries on with what it has. See
+`docs/ERRORS.md` for exactly what survives each failure.
 
 `compileChart(spec)` produces the `CompiledChart` IR; `evaluateChart(chart, input)`
 resolves data/scales/encodes into a `SceneRoot`; `renderSceneToSvg(scene)` serializes
@@ -36,6 +42,30 @@ updates, diffs replaced immutable source arrays automatically (`autoChanges`, de
 on), supports explicit per-datum `dataChanges`, and exposes the source/transform pulse
 via `session.pulse()`. `buildPulseGraph(chart)` / `propagatePulse(graph, sources)` expose
 the same dataflow structure directly.
+
+### Custom expression functions
+
+`registerExpressionFunction(name, fn)` is the counterpart of vega's `expressionFunction(name, fn)`: expressions
+(`{signal: ...}`, filters, formulas, encodes) may then call `name(...)`. It is how Vega-Lite's custom `formatType`
+works: with `config.customFormatTypes: true`, `{"formatType": "price", "format": "$.2f"}` compiles (`@aster/vl`, as
+vega-lite) to `price(datum["v"], "$.2f")` for text, tooltip, href and description channels and to a
+`price(datum.value, "$.2f")` label encode for axes and legends. Register `price` before rendering, in vega too if
+you compare the two:
+
+```ts
+import { registerExpressionFunction } from '@aster/core'
+const off = registerExpressionFunction('price', (value, format) => myFormatter(format)(value))
+// ... render ...
+off() // removes it
+```
+
+The registry is global, as vega's is. A registered function is host code: the engine does not sandbox or meter it,
+and a spec decides its arguments, so register only functions that are safe for any arguments a spec you render can
+produce. A name that is not a plain identifier, or that an expression already means something by (a built-in
+function, a constant, `datum`, `event`, ...), or that starts with `_`, is refused. A custom `formatType` that is
+not registered fails like any unknown expression function. Without `customFormatTypes: true` vega-lite drops a
+custom `formatType` and its `format` from field definitions, axes and legends (a facet header keeps its own), and
+so does `@aster/vl`.
 
 ### Streaming and pulses
 
@@ -150,7 +180,22 @@ elements; non-React hosts can do the same. Legend entries are keyboard toggles.
 ### Interaction addons
 
 - `@aster/core/hit` — `buildHitIndex(scene)`, `query` and `queryMark` (guides excluded).
-- `@aster/core/signals` — `bindSceneSignals(svg, scene, values, hooks)`, `stampDatumAttrs`.
+- `@aster/core/signals` — `bindSceneSignals(svg, scene, values, hooks, { pick })`, `stampDatumAttrs`.
+  Binds every `signal.on` entry with vega's event-stream semantics: selector strings (`[mousedown, mouseup] > mousemove`,
+  `@name:click`, `symbol:click`, `window:keydown`, `click[event.shiftKey]{100}`, `mousedown!`), object-form `events`, arrays,
+  `{signal}` sources, `between`, filters, throttle, debounce, `consume` and `force`. `event` is the native event extended with
+  `item`, `vega` and `dataflow`, so `event.deltaY`, `event.shiftKey`, `x()`, `y()`, `item()` and `group()` behave as in vega;
+  `datum` is `event.item.datum`. A handler runs only when its stream matched; a signal's `update` re-runs only when a signal
+  it reads changed.
+  - `hooks.onSignal(name, value, all)` — once per signal that changed while an event was processed.
+  - `hooks.logger` — where bind-time errors (a malformed selector or expression: the handler is skipped) and run-time errors
+    (an expression that throws while an event is handled: that event's delivery stops, earlier updates stand) are reported;
+    default: the console. Nothing escapes the DOM listener.
+  - `hooks.preventDefault` — call `preventDefault()` on events of the chart's own surface (vega's `view.preventDefault()`,
+    default `false`; a `consume`d stream always prevents).
+  - `{ pick }` — `(x, y) => HitTarget | null`, e.g. `buildHitIndex(scene).query`: resolves `event.item` (mark type, name, role,
+    datum, enclosing group). Without it, or when it finds nothing, the item is read from the DOM (`data-datum` stamps and
+    `mark-*`/`role-*` classes), where mark names are not available. `<Chart>` passes its own hit index.
 - `@aster/core/dom` — `patchSceneDom`, `renderSceneToDomElement`, `createChartSession`.
 - `@aster/core/canvas` — `renderSceneToCanvas(scene, ctx, { dpr })`.
 - `@aster/core/load` — `loadSpecData(spec, { baseURL, allow, protocols, timeoutMs, maxBytes, ... })` for URL datasets, with a URL policy (safe defaults, see `docs/LIMITS.md`).

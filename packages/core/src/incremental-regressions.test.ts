@@ -326,10 +326,12 @@ describe('C16: a rejected evaluation commits nothing', () => {
   it('a mid-evaluation throw leaves the previous scene intact and later pulses sound', () => {
     // The formula throws on the appended row (no `obj`) AFTER it already
     // re-derived the changed row 0: the in-place fast path had half-updated its
-    // cache when it died.
+    // cache when it died. The failure is a LIMIT violation inside the expression: a
+    // plain TypeError is logged and recovered like vega's (C90) and does not throw,
+    // while a limit refusal never is.
     const spec = {
       ...BASE,
-      data: [{ name: 't', values: [], transform: [{ type: 'formula', expr: 'datum.obj.deep', as: 'f' }] }],
+      data: [{ name: 't', values: [], transform: [{ type: 'formula', expr: 'datum.obj ? datum.obj.deep : length(sequence(0, 1e9))', as: 'f' }] }],
       // The domain reads the derived field, so a stale cached row 0 (99) shows.
       scales: [lin('x', { data: 't', field: 'f' }, { zero: false })],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'f' }, y: { value: 5 } } } }],
@@ -339,7 +341,7 @@ describe('C16: a rejected evaluation commits nothing', () => {
     const a = evaluateChart(chart, { data: { t: [row(10), row(20)] } })
     const svgA = renderSceneToSvg(a)
     const bad = [row(99), row(20), { obj: undefined }]
-    expect(() => evaluateChart(chart, { data: { t: bad }, dataPulse: { t: { changed: [0], appendOnly: true, baseLength: 2, added: [[2, 3]] } } })).toThrow()
+    expect(() => evaluateChart(chart, { data: { t: bad }, limits: { maxRows: 1000 }, dataPulse: { t: { changed: [0], appendOnly: true, baseLength: 2, added: [[2, 3]] } } })).toThrow()
     expect(renderSceneToSvg(a)).toBe(svgA)
     // The next update is relative to the last SUCCESSFUL evaluation (row 0 is
     // back to 10): the half-updated cache must not leak 99 into the result.

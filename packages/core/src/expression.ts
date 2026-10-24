@@ -14,7 +14,7 @@ import { currentLocale } from './locale.js'
 import { boundedCount, meterBytes, meterTick, guardedRegExp, checkRegexInput, checkRegexObject } from './limits.js'
 import { bandSpace } from './scale.js'
 import { parseExpression } from './expr-parser.js'
-import { expressionInterpreter } from './expr-interpreter.js'
+import { expressionInterpreter, DefaultFunctions, ExpressionConstants, EventFunctions } from './expr-interpreter.js'
 import {
   timeOffset, utcOffset, timeSequence, utcSequence,
   dayofyear, utcdayofyear, week, utcweek, timeUnitSpecifier,
@@ -37,9 +37,10 @@ function numericSequence(start: number, stop?: number, step?: number): number[] 
   return out
 }
 import { rgb, hsl, lab, hcl } from './color.js'
+import type { AstNode } from './expr-parser.js'
 import {
   accessor, ascending, extent, isArray, isBoolean, isDate, isNumber, isObject,
-  isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, safeGet,
+  isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, safeGet, DisallowedObjectProperties,
 } from './util.js'
 
 export interface ExpressionRuntime {
@@ -49,6 +50,11 @@ export interface ExpressionRuntime {
   data: (name: string) => unknown[] | undefined
   /** Compile an expression string against this runtime. */
   expr: (expr: string) => CompiledExpr
+  /**
+   * The view's container size (`containerSize()`), when the host has one. Absent
+   * (like headless vega, which has no container) it is `[undefined, undefined]`.
+   */
+  containerSize?: () => [number | undefined, number | undefined]
 }
 
 export type CompiledExpr = (datum: unknown, params?: Record<string, unknown>, event?: unknown) => unknown
@@ -224,7 +230,65 @@ function contrastRatio(c1: unknown, c2: unknown): number {
 
 // -----------------------------------------------------------------------------
 
+/** The functions the host registered (see {@link registerExpressionFunction}). */
+const REGISTERED = new Map<string, (...args: never[]) => unknown>()
+/** Bumped on every registration change: a compiled expression compiled under an older registry re-validates before it runs. */
+let registryEpoch = 0
+
 function createFunctionContext(runtime: ExpressionRuntime): Record<string, unknown> {
+  const fns = createBuiltinFunctions(runtime)
+  for (const [name, fn] of REGISTERED) fns[name] = fn
+  return fns
+}
+
+let builtinNames: Set<string> | undefined
+/** Every name an expression already means something by: the functions, the constants, the keywords. */
+function reservedExpressionNames(): ReadonlySet<string> {
+  if (builtinNames === undefined) {
+    const stub: ExpressionRuntime = { scale: () => undefined, data: () => undefined, expr: () => () => undefined }
+    builtinNames = new Set([
+      ...Object.keys(createBuiltinFunctions(stub)), ...Object.keys(DefaultFunctions), ...Object.keys(ExpressionConstants),
+      'datum', 'event', 'item', 'this', 'true', 'false', 'null', 'undefined', 'if',
+    ])
+  }
+  return builtinNames
+}
+
+/**
+ * Register a function that expressions may call by name: the counterpart of vega's `expressionFunction(name, fn)`.
+ * It is how Vega-Lite's custom `formatType` works: `{"formatType": "price", "format": "$,.2f"}` compiles to the
+ * expression `price(datum["v"], "$,.2f")`, which calls whatever is registered as `price` -- here, and in vega
+ * for the same spec, before the chart is built.
+ *
+ * The registry is global (as vega's is) and holds host code: unlike the rest of the expression language it is not
+ * sandboxed or metered by the engine, and a spec chooses its arguments. Register only functions that are safe
+ * for any arguments a spec you render can produce.
+ *
+ * The name must be a plain identifier that is not already an expression function, constant or keyword (a host
+ * cannot silently replace `format`), and must not start with `_` (an underscore prefix is internal routing).
+ * Returns a function that removes the registration (restoring the one it replaced). Throws on a bad name or a
+ * non-function.
+ */
+export function registerExpressionFunction(name: string, fn: (...args: never[]) => unknown): () => void {
+  if (typeof name !== 'string' || !/^[A-Za-z$][A-Za-z0-9_$]*$/.test(name)) {
+    throw new Error(`[aster] registerExpressionFunction: "${String(name)}" is not a plain identifier`)
+  }
+  if (DisallowedObjectProperties.has(name) || reservedExpressionNames().has(name)) {
+    throw new Error(`[aster] registerExpressionFunction: "${name}" is already an expression function, constant or keyword`)
+  }
+  if (typeof fn !== 'function') throw new Error(`[aster] registerExpressionFunction: "${name}" needs a function`)
+  const previous = REGISTERED.get(name)
+  REGISTERED.set(name, fn)
+  registryEpoch++
+  return () => {
+    if (REGISTERED.get(name) !== fn) return
+    if (previous === undefined) REGISTERED.delete(name)
+    else REGISTERED.set(name, previous)
+    registryEpoch++
+  }
+}
+
+function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unknown> {
   const scaleObject = (name: unknown): Record<string, unknown> | undefined =>
     runtime.scale(String(name)) as unknown as Record<string, unknown> | undefined
   return {
@@ -252,6 +316,12 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
     // math
     abs: Math.abs, acos: Math.acos, asin: Math.asin, atan: Math.atan, atan2: Math.atan2,
     ceil: Math.ceil, cos: Math.cos, exp: Math.exp, floor: Math.floor, hypot: Math.hypot,
+    // vega-functions: the view's container / the window. Headless vega has
+    // neither (`[undefined, undefined]`); here the host passes the container's
+    // size in RuntimeInput.containerSize, and without one a spec falls back to
+    // its own default size (vega-lite: `isFinite(containerSize()[0]) ? ... : 300`).
+    containerSize: () => runtime.containerSize?.() ?? [undefined, undefined],
+    windowSize: () => [undefined, undefined],
     isFinite: Number.isFinite, isNaN: Number.isNaN, log: Math.log, pow: Math.pow,
     round: Math.round, sin: Math.sin, sqrt: Math.sqrt, tan: Math.tan,
     min: (...args: number[]) => Math.min(...args),
@@ -285,6 +355,19 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
     sort: (seq: unknown) => (seq as unknown[]).slice().sort((a, b) => ascending(a as never, b as never)),
     merge: mergeObj,
     modify: (set: unknown, value: unknown, signal?: unknown) => set, // event-only; static no-op returns the set
+    // multi-touch gestures (vega-functions pinch.js); `event` must be a touch event
+    pinchDistance: (event: unknown) => {
+      const t = (event as { touches: Array<{ clientX: number; clientY: number }> }).touches
+      return Math.hypot(t[0]!.clientX - t[1]!.clientX, t[0]!.clientY - t[1]!.clientY)
+    },
+    pinchAngle: (event: unknown) => {
+      const t = (event as { touches: Array<{ clientX: number; clientY: number }> }).touches
+      return Math.atan2(t[0]!.clientY - t[1]!.clientY, t[0]!.clientX - t[1]!.clientX)
+    },
+    // vega-functions inscope.js: true when `item` descends from the current scope's group. The
+    // engine's signals live in the root scope, whose group is the root of every scene item, so
+    // any item is in scope (and nothing -- no item under the pointer -- is not).
+    inScope: (item: unknown) => item != null && typeof item === 'object',
     span: (arr: unknown) => { const a = arr as number[]; return a[a.length - 1]! - a[0]! },
     pluck,
     // strings
@@ -390,13 +473,59 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
   }
 }
 
+/**
+ * An expression that does not parse. vega finds these in `vega.parse` (before anything runs) and
+ * throws; the engine parses lazily, so the error surfaces mid-evaluation -- but it stays a throw: it
+ * is the spec that is wrong, not one datum, and the "log and carry on" recovery of runtime
+ * expression errors (see RuntimeInput.logger) does not apply to it.
+ */
+export class ExpressionParseError extends Error {
+  constructor(message: string, readonly expression: string, options?: { cause?: unknown }) {
+    super(message, options)
+    this.name = 'ExpressionParseError'
+  }
+}
+
+/** Every called name must be a function of the current context (or an engine intrinsic: `if`, the event functions the signal loop supplies): else an ExpressionParseError, as vega's codegen. */
+function assertKnownFunctions(ast: AstNode, functions: Record<string, unknown>, expr: string): void {
+  const visit = (n: unknown): void => {
+    if (n === null || typeof n !== 'object') return
+    if (Array.isArray(n)) { for (const x of n) visit(x); return }
+    const node = n as { type?: string; callee?: { type?: string; name?: string } } & Record<string, unknown>
+    if (node.type === 'CallExpression' && node.callee?.type === 'Identifier' && typeof node.callee.name === 'string') {
+      let name = node.callee.name
+      if (name.startsWith('_')) name = name.slice(1)
+      if (name !== 'if' && !EventFunctions.includes(name) && !Object.hasOwn(functions, name) && !Object.hasOwn(DefaultFunctions, name)) {
+        throw new ExpressionParseError(`Unrecognized function: ${name}`, expr)
+      }
+    }
+    for (const k of Object.keys(node)) if (k !== 'type') visit(node[k])
+  }
+  visit(ast)
+}
+
 /** Compile an expression string to an evaluable function bound to a runtime. */
 export function compileExpr(expr: string, runtime: ExpressionRuntime): CompiledExpr {
-  const ast = parseExpression(expr)
+  let ast: AstNode
+  try {
+    ast = parseExpression(expr)
+  } catch (e) {
+    // limit violations keep their type (they are the engine's refusal, not a syntax error)
+    if (e instanceof Error && e.name === 'AsterLimitError') throw e
+    throw new ExpressionParseError(e instanceof Error ? e.message : String(e), expr, { cause: e })
+  }
+  // vega refuses an unknown function when it parses and generates code ("Unrecognized function: x"), not when it is called
   const functions = createFunctionContext(runtime)
+  assertKnownFunctions(ast, functions, expr)
+  const compiledEpoch = registryEpoch
   const evalParam = expressionInterpreter.parameter({ functions }, { ast })
   const evalHandler = expressionInterpreter.handler({ functions }, { ast })
-  const compiled = (datum: unknown, params: unknown, event?: unknown) => {
+  const compiled = (datum: unknown, params: unknown, event?: unknown): unknown => {
+    // the registry changed since this closure was made (a function disposed, replaced): compile again under the
+    // current one -- an unknown name is then refused as at first compile, a replaced one calls the new function
+    if (registryEpoch !== compiledEpoch) {
+      return compileExpr(expr, runtime)(datum, params as never, event)
+    }
     // Signal values are exposed to expressions as $-prefixed params (vega convention).
     const p: Record<string, unknown> = {}
     if (params) {

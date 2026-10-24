@@ -11,6 +11,7 @@ export { baselineOffset }
 import { itemTextWidth } from './text-metrics.js'
 import { ClipCollector, type ClipDef } from './svg-defs.js'
 import { customSymbolPathData } from './svg-path.js'
+import { sanitizeHref } from './url-policy.js'
 export { ClipCollector, type ClipDef }
 import {
   line as d3Line,
@@ -111,7 +112,10 @@ function roundedFramePath(x: number, y: number, w: number, h: number, r: number)
  * The root frame's background path. Shared by the SVG, DOM and canvas painters
  * so the frame's fill, stroke and rounded corners cannot drift between them.
  */
-export function frameBackgroundPath(scene: SceneRoot, plotW: number, plotH: number): GeneratedPath {
+export function frameBackgroundPath(scene: SceneRoot, plotW0: number, plotH0: number): GeneratedPath {
+  // vega's rectangle path reads `item.width || 0` / `item.height || 0`: a view size that is NaN draws a zero-size frame
+  const plotW = plotW0 || 0
+  const plotH = plotH0 || 0
   const frameInset = scene.frameStroke && scene.frameStrokeWidth == null ? 0.5 : 0
   return scene.frameCornerRadius != null && scene.frameCornerRadius > 0
     ? roundedFramePath(frameInset, frameInset, plotW, plotH, Math.min(scene.frameCornerRadius, plotW / 2, plotH / 2))
@@ -226,6 +230,17 @@ function renderGroup(group: SceneGroup, frameW?: number, frameH?: number, clips?
       else out2 += renderLeaf(item, clips)
     }
     out2 += '</g>'
+    // a hyperlinked group item sits inside its <a> (SVGStringRenderer `process`)
+    const link = linkOpen(group)
+    if (link) out2 = link + out2 + linkClose(link)
+    // vega's mark-level `clip`: the mark container is clipped to the ENCLOSING group's
+    // frame (SVGStringRenderer `clip(renderer, scene, scene.group)`), outside the item's
+    // own transform
+    if (group.markClip === true && clips && frameW != null && frameH != null) {
+      const cw = new StringAttrSink()
+      clipRefAttrs(clips.id({ x: 0, y: 0, w: frameW, h: frameH }), cw)
+      return `<g${cw.s}>${out2}</g>`
+    }
     return out2
   }
 
@@ -309,7 +324,9 @@ function renderLine(group: SceneGroup): string {
   if (pathInfo) {
     const w = new StringAttrSink()
     lineMarkAttrs(pathInfo, w)
-    out += `<path${w.s}/>`
+    // a line is one element for the whole mark: its link is the first item's
+    const a = items.length ? linkOpen(items[0]!) : ''
+    out += `${a}<path${w.s}/>${linkClose(a)}`
   }
   out += '</g>'
   return out
@@ -626,20 +643,31 @@ function renderArea(group: SceneGroup): string {
   if (info) {
     const w = new StringAttrSink()
     areaMarkAttrs(info, w)
-    out += `<path${w.s}/>`
+    const first = itemsOf(group)[0]
+    const a = first ? linkOpen(first) : ''
+    out += `${a}<path${w.s}/>${linkClose(a)}`
   }
   out += '</g>'
   return out
 }
 
 /** Generate an SVG path d attribute for a given symbol shape and radius. */
-export const symbolPath = symbolPathImpl as (shape: string | undefined, r: number) => GeneratedPath
+export const symbolPath = ((shape: string | undefined, r: number) => symbolPathImpl(shape, r)) as (shape: string | undefined, r: number) => GeneratedPath
+
+/**
+ * The same symbol geometry with full-precision coordinates. vega's Bound pass
+ * traces the shape's draw calls exactly (the 3-decimal rounding belongs to the
+ * serialized `d` only), so anything that measures a symbol must use this.
+ */
+export function symbolPathExact(shape: string | undefined, r: number): string {
+  return symbolPathImpl(shape, r, String)
+}
 
 const HALF_SQRT3 = Math.sqrt(3) / 2 // vega util/constants HalfSqrt3
 
-function symbolPathImpl(shape: string | undefined, r: number): string {
-  // vega symbols serialize through d3-path Path(3) — coordinates round to 3.
-  const num = num3
+function symbolPathImpl(shape: string | undefined, r: number, num: (x: number) => string = num3): string {
+  // vega symbols serialize through d3-path Path(3) — coordinates round to 3
+  // (the bound pass traces the same shape unrounded: see symbolPathExact).
   // vega: `symbols(item.shape || 'circle')`
   switch (shape || 'circle') {
     case 'square':
@@ -720,11 +748,12 @@ function symbolPathImpl(shape: string | undefined, r: number): string {
       // scaled by sqrt(size)/2 (svg-path.ts); the result is built from numbers
       // and command letters only, so no input text reaches the document.
       // An invalid path throws vega's "Invalid SVG path" error, like vega.
-      return customSymbolPathData(shape!, r, num3)
+      return customSymbolPathData(shape!, r, num)
   }
 }
 
 function renderSymbols(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('symbol')
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
@@ -738,7 +767,7 @@ function renderSymbols(group: SceneGroup): string {
     // rotateItem(item) — full-precision numbers plus the mark's rotation.
     w.s = ''
     symbolElementAttrs(it, symbolMarkPath(it), w)
-    out += `<path${w.s}/>`
+    out += links ? withLink(it, `<path${w.s}/>`) : `<path${w.s}/>`
   }
   out += '</g>'
   return out
@@ -752,13 +781,14 @@ export function symbolMarkPath(it: SceneItem): GeneratedPath {
 
 /** Circle mark: renders `<circle cx cy r>` elements (radius from `radius` or size). */
 function renderCircles(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('circle')
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
     if (it.x == null || it.y == null) continue
     w.s = ''
     circleAttrs(it, w)
-    out += `<circle${w.s}/>`
+    out += links ? withLink(it, `<circle${w.s}/>`) : `<circle${w.s}/>`
   }
   out += '</g>'
   return out
@@ -816,13 +846,14 @@ export function clippedRoundedRectEntries(group: SceneGroup): RoundedRectEntry[]
 }
 
 function renderClippedRoundedRects(group: SceneGroup, clips: ClipCollector): string {
+  const links = group.hasLinks === true
   let out = ''
   const w = new StringAttrSink()
   for (const e of clippedRoundedRectEntries(group)) {
     w.s = ''
     if (e.kind === 'plain') {
       rectPathAttrs(e.item, e.d, w, false)
-      out += `<path${w.s}/>`
+      out += links ? withLink(e.item, `<path${w.s}/>`) : `<path${w.s}/>`
       continue
     }
     const clipId = clips.id({ d: e.round })
@@ -834,7 +865,8 @@ function renderClippedRoundedRects(group: SceneGroup, clips: ClipCollector): str
     out += `<path class="background" aria-hidden="true" d="M0,0h${num(e.g.w)}v0h-${num(e.g.w)}Z"/>`
     w.s = ''
     rectPathAttrs(e.item, e.plain, w)
-    out += `<g><g class="mark-rect role-mark marks" role="graphics-object" aria-roledescription="rect mark container"><path${w.s}/></g></g>`
+    const a = group.hasLinks === true ? linkOpen(e.item) : ''
+    out += `<g><g class="mark-rect role-mark marks" role="graphics-object" aria-roledescription="rect mark container">${a}<path${w.s}/>${linkClose(a)}</g></g>`
     out += `<path class="foreground" aria-hidden="true" d="" display="none"/></g></g></g>`
     out += `<path class="foreground" aria-hidden="true" d="" display="none"/></g>`
   }
@@ -842,6 +874,7 @@ function renderClippedRoundedRects(group: SceneGroup, clips: ClipCollector): str
 }
 
 function renderRects(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('rect')
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
@@ -850,7 +883,7 @@ function renderRects(group: SceneGroup): string {
     if (d == null) continue
     w.s = ''
     rectPathAttrs(it, d, w)
-    out += `<path${w.s}/>`
+    out += links ? withLink(it, `<path${w.s}/>`) : `<path${w.s}/>`
   }
   out += '</g>'
   return out
@@ -859,7 +892,7 @@ function renderRects(group: SceneGroup): string {
 /**
  * Shared rect geometry for the string renderer and the DOM patcher.
  * Vega renders rect marks as path elements (with optional cornerRadius).
- * Returns null when the item has no resolvable width/height.
+ * Never null for a rect item: an unsized one is a zero-size path (vega).
  */
 export const rectItemPath = rectItemPathImpl as (it: SceneItem) => GeneratedPath | null
 
@@ -874,9 +907,14 @@ function rectItemPathImpl(it: SceneItem): string | null {
   // When x2/y2 are present, vega normalizes the rect so that x is the min
   // edge and width is positive (same for y). This keeps the path winding
   // consistent (positive h first) regardless of which edge is "x" vs "x2".
-  if (w == null && it.x2 != null) { w = Math.abs((it.x2 as number) - x0); x0 = Math.min(x0, it.x2 as number) }
-  if (h == null && it.y2 != null) { h = Math.abs((it.y2 as number) - y0); y0 = Math.min(y0, it.y2 as number) }
-  if (w == null || h == null) return null
+  // A non-finite x2/y2 (a NaN scale result) gives a NaN extent and leaves the origin where it is:
+  // `Math.min(x0, NaN)` would turn the origin itself into NaN.
+  if (w == null && it.x2 != null) { w = Math.abs((it.x2 as number) - x0); if (Number.isFinite(it.x2)) x0 = Math.min(x0, it.x2 as number) }
+  if (h == null && it.y2 != null) { h = Math.abs((it.y2 as number) - y0); if (Number.isFinite(it.y2)) y0 = Math.min(y0, it.y2 as number) }
+  // vega draws every rect item, an unsized one as a zero-size path at its origin
+  // (`item.width || 0`, `item.height || 0`), e.g. a scale that returned nothing for y2
+  if (w == null) w = 0
+  if (h == null) h = 0
   // Vega's rectangle path builders read `item.width || 0` and `item.height || 0`:
   // a NaN scale result (a degenerate range, e.g. `range: "symbol"` on a band
   // scale) renders a zero-size rect at the origin, not a `NaN` path.
@@ -886,14 +924,17 @@ function rectItemPathImpl(it: SceneItem): string | null {
   // per-corner radii clamped to min(w,h)/2, quarter arcs approximated by
   // cubics with C = 0.448084975506.
   const rec = it as Record<string, unknown>
-  const cr = (rec.cornerRadius as number | undefined) ?? 0
+  const cr = rec.cornerRadius
   const s = Math.min(w, h) / 2
-  const clampR = (v: unknown) => Math.max(0, Math.min(typeof v === 'number' ? v : cr, s))
+  // vega (marks' `tl`..`bl` accessors, then `clamp(+radius, 0, s)`): a corner falls back to
+  // `cornerRadius`, a falsy radius is 0, anything else is read with unary plus -- so a non-numeric
+  // radius ("round") is NaN, which is NOT "no corner": the path is the rounded one, in NaNs.
+  const clampR = (v: unknown) => Math.max(0, Math.min(+(((v ?? cr) as number) || 0), s))
   const tl = clampR(rec.cornerRadiusTopLeft)
   const tr = clampR(rec.cornerRadiusTopRight)
   const br = clampR(rec.cornerRadiusBottomRight)
   const bl = clampR(rec.cornerRadiusBottomLeft)
-  if (tl > 0 || tr > 0 || bl > 0 || br > 0) {
+  if (!(tl <= 0 && tr <= 0 && bl <= 0 && br <= 0)) {
     const C = 0.448084975506
     const x2 = x0 + w
     const y2 = y0 + h
@@ -910,6 +951,7 @@ function rectItemPathImpl(it: SceneItem): string | null {
 }
 
 function renderRules(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('rule')
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
@@ -920,15 +962,20 @@ function renderRules(group: SceneGroup): string {
     w.s = ''
     itemDatumAttr(it, w)
     lineElementAttrs(x, y, x2, y2, it, w)
-    out += `<line${w.s}/>`
+    out += links ? withLink(it, `<line${w.s}/>`) : `<line${w.s}/>`
   }
   out += '</g>'
   return out
 }
 
 function renderTexts(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('text')
-  for (const it of itemsOf(group)) out += textElement(it)
+  for (const it of itemsOf(group)) {
+    const el = textElement(it)
+    if (el === '') continue
+    out += links ? withLink(it, el) : el
+  }
   out += '</g>'
   return out
 }
@@ -1003,7 +1050,10 @@ export function textItemDesc(it: SceneItem): {
   if (it.text == null) return null
   const rec = it as Record<string, unknown>
   const fontSize = vegaFontSize(it)
-  const angle = +(it.angle as number) || 0
+  // vega writes the angle as it is (`rotate(` + angle + `)` whenever it is truthy), so a word is a word in the
+  // document; the geometry (canvas, hit testing, bounds) reads the number it coerces to
+  const angleRaw = it.angle as unknown
+  const angle = +(angleRaw as number) || 0
   const dx = +(rec.dx as number) || 0
   const dy = (+(rec.dy as number) || 0) + baselineOffset(it)
   // vega anchorPoint: polar text offsets the anchor by (radius, theta - pi/2)
@@ -1019,8 +1069,8 @@ export function textItemDesc(it: SceneItem): {
   const lineHeight = rec.lineHeight != null ? (rec.lineHeight as number) : fontSize + 2
   let transform: GeneratedPath
   let px: number, py: number, ox: number, oy: number
-  if (angle) {
-    transform = gen(`translate(${num(x)},${num(y)}) rotate(${num(angle)})${dx || dy ? ` translate(${num(dx)},${num(dy)})` : ''}`)
+  if (angleRaw) {
+    transform = gen(`translate(${num(x)},${num(y)}) rotate(${angleText(angleRaw)})${dx || dy ? ` translate(${num(dx)},${num(dy)})` : ''}`)
     px = x; py = y; ox = dx; oy = dy
   } else {
     transform = gen(`translate(${num(x + dx)},${num(y + dy)})`)
@@ -1052,6 +1102,7 @@ function truncateToLimit(it: SceneItem, text: string, fontSize: number): string 
 }
 
 function renderPaths(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('path')
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
@@ -1061,7 +1112,7 @@ function renderPaths(group: SceneGroup): string {
     // coordinates (e.g. geoshape output) have x=y=0 and emit no transform).
     w.s = ''
     pathItemAttrs(it, w)
-    out += `<path${w.s}/>`
+    out += links ? withLink(it, `<path${w.s}/>`) : `<path${w.s}/>`
   }
   out += '</g>'
   return out
@@ -1075,6 +1126,7 @@ function renderPaths(group: SceneGroup): string {
  * stroke/strokeWidth. This mirrors vega's trail shape algorithm (d3-trail).
  */
 function renderTrail(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('trail')
   const items = itemsOf(group)
   if (items.length > 1) {
@@ -1083,7 +1135,7 @@ function renderTrail(group: SceneGroup): string {
       const first = items[0]!
       const w = new StringAttrSink()
       trailAttrs(d, first, w)
-      out += `<path${w.s}/>`
+      out += links ? withLink(first, `<path${w.s}/>`) : `<path${w.s}/>`
     }
   }
   out += '</g>'
@@ -1182,13 +1234,14 @@ export function trailPath(items: SceneItem[]): GeneratedPath {
 }
 
 function renderImages(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('image')
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
     if (it.url == null || it.x == null || it.y == null) continue
     w.s = ''
     imageAttrs(it, w)
-    out += `<image${w.s}/>`
+    out += links ? withLink(it, `<image${w.s}/>`) : `<image${w.s}/>`
   }
   out += '</g>'
   return out
@@ -1216,12 +1269,13 @@ export function imageDesc(it: SceneItem): { x: number; y: number; w: number; h: 
 }
 
 function renderArcs(group: SceneGroup): string {
+  const links = group.hasLinks === true
   let out = markContainerOpen('arc')
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
     w.s = ''
     arcItemAttrs(it, w)
-    out += `<path${w.s}/>`
+    out += links ? withLink(it, `<path${w.s}/>`) : `<path${w.s}/>`
   }
   out += '</g>'
   return out
@@ -1509,11 +1563,8 @@ function attr(name: string, value: unknown): string {
   // Vega's SVG renderer omits a 'transparent' paint value (fill/stroke).
   if (value === 'transparent') return ''
   if (Array.isArray(value)) return attrList(name, value)
-  if (typeof value === 'number') {
-    // vega's SVG renderer coerces an invalid numeric paint to black.
-    if (name === 'fill' || name === 'stroke') return ` ${name}="rgb(0, 0, 0)"`
-    return ` ${name}="${num(value)}"`
-  }
+  // a number is written as is, a paint's too (`fill="0.43"`): vega's SVG renderer does not reinterpret it
+  if (typeof value === 'number') return ` ${name}="${num(value)}"`
   return ` ${name}="${escAttr(value)}"`
 }
 
@@ -1563,7 +1614,7 @@ export class StringAttrSink implements AttrSink {
 function attrValue(name: string, value: unknown): string | null {
   if (value == null || value === 'transparent') return null
   if (Array.isArray(value)) return value.map((x) => (typeof x === 'number' ? num(x) : String(x))).join(',')
-  if (typeof value === 'number') return name === 'fill' || name === 'stroke' ? 'rgb(0, 0, 0)' : num(value)
+  if (typeof value === 'number') return num(value)
   return String(value)
 }
 
@@ -1579,10 +1630,46 @@ export class PairAttrSink implements AttrSink {
 
 const recOf = (it: SceneItem): Record<string, unknown> => it as Record<string, unknown>
 
+/**
+ * The link a mark item sits in (vega-scenegraph SVGStringRenderer `href` /
+ * `process`: an item with a truthy `href` is wrapped in `<a xlink:href>`), or
+ * null. The value is sanitized here, in the one place both renderers read it.
+ */
+export function itemHref(it: SceneItem): string | null {
+  const h = recOf(it).href
+  return h ? sanitizeHref(h) : null
+}
+
+/** The `<a>` element's attributes. */
+export function linkAttrs(href: string, w: AttrSink): void {
+  w.v('xlink:href', href)
+}
+
+/** `<a xlink:href="...">` for a hyperlinked item, else ''. Pair with {@link linkClose}. */
+function linkOpen(it: SceneItem): string {
+  const href = itemHref(it)
+  if (href == null) return ''
+  const w = new StringAttrSink()
+  linkAttrs(href, w)
+  return `<a${w.s}>`
+}
+const linkClose = (open: string): string => (open ? '</a>' : '')
+/** `el` inside the item's link when it has one (the common, linkless case adds nothing but a property read). */
+function withLink(it: SceneItem, el: string): string {
+  if (!recOf(it).href) return el
+  const open = linkOpen(it)
+  return open ? open + el + '</a>' : el
+}
+
 /** `data-datum`, stamped by `stampDatumAttrs` so events can recover the datum. */
 export function itemDatumAttr(it: SceneItem, w: AttrSink): void {
   const v = (it as unknown as { dataDatum?: string }).dataDatum
   if (v) w.v('data-datum', v)
+}
+
+/** An angle as vega concatenates it into `rotate(...)`: a number as its digits, anything else as its (escaped) string. */
+function angleText(a: unknown): string {
+  return typeof a === 'number' ? num(a) : escAttr(String(a))
 }
 
 /**
@@ -1592,8 +1679,8 @@ export function itemDatumAttr(it: SceneItem, w: AttrSink): void {
  */
 export function rotateItemTransform(it: SceneItem): GeneratedPath {
   const a = it.angle
-  // numbers (through `num`) and constant words only: safe to write without the escaping scan
-  return gen(`translate(${num(it.x || 0)},${num(it.y || 0)})${a ? ` rotate(${num(a)})` : ''}`)
+  // numbers (through `num`) and escaped words only: safe to write without the escaping scan
+  return gen(`translate(${num(it.x || 0)},${num(it.y || 0)})${a ? ` rotate(${angleText(a)})` : ''}`)
 }
 export function transformItemTransform(it: SceneItem): GeneratedPath {
   const rec = recOf(it)

@@ -29,6 +29,13 @@ export interface RuntimeInput {
    * denied images instead of throwing. See docs/LIMITS.md.
    */
   urlPolicy?: import('./url-policy.js').ImageUrlPolicy
+  /**
+   * Where the engine reports errors it recovers from, like vega's logger (default: the
+   * console). vega logs a failing expression -- a conditional-encode test, a signal in an
+   * encode, a transform's predicate, a sort -- and carries on with what the dataflow had
+   * computed; so does the engine, and every such report goes through here.
+   */
+  logger?: import('./logger.js').Logger
   /** Host text measurement (custom fonts, non-browser hosts). */
   textMetrics?: import('./text-metrics.js').TextMetricsProvider
   /** Named datasets. Overrides or fulfills spec data references by name. */
@@ -38,6 +45,13 @@ export interface RuntimeInput {
   height?: number
   /** Static signal values for signals that are referenced but not event-driven. */
   signals?: Record<string, unknown>
+  /**
+   * The size of the element the chart fills, in pixels: what `containerSize()`
+   * returns in expressions (vega-lite's `width: "container"` reads it). Without
+   * it `containerSize()` is `[undefined, undefined]`, as in headless vega, and
+   * the spec falls back to its own default size.
+   */
+  containerSize?: { width: number; height: number }
   /**
    * Partial re-evaluation: the names of datasets whose VALUES changed since
    * the previous evaluate (the datasets' transform pipeline re-runs, and only
@@ -155,7 +169,8 @@ export interface CompiledChart {
 }
 
 export interface CompiledTitle {
-  text: string
+  /** The text, or a signal expression (a group title reads its facet datum as `parent`). */
+  text: string | string[] | { signal: string }
   subtitle?: string
   orient: 'top' | 'bottom' | 'left' | 'right' | 'none'
   anchor: 'start' | 'middle' | 'end'
@@ -164,6 +179,7 @@ export interface CompiledTitle {
   fontSize: number
   fontWeight?: string | number
   font?: string
+  fontStyle?: string
   color: string
   baseline?: string
   align?: string
@@ -184,24 +200,30 @@ export interface CompiledSignalDef {
   value?: unknown
   /** Static (`update`) expression, resolved to a fixed point. */
   update?: string
+  /**
+   * vega's `init`: an expression evaluated once, at startup (`op.initonly`).
+   * It is not a literal value: a string here is source code.
+   */
+  init?: string
   /** Input binding (`signal.bind`), rendered by interactive hosts. */
   bind?: Record<string, unknown> | string
   /** Event-driven handlers (`signal.on` streams), bound by the host. */
   on?: SignalOnDef[]
 }
 
-/** One `signal.on` entry (vega SignalStream spec subset). */
+/**
+ * One `signal.on` entry (vega's signal update spec). `events` is whatever the spec
+ * had: a selector string, an event-stream object, an array of either, or
+ * `{signal}` / `{scale}` operator sources; `@aster/core/signals` interprets it.
+ */
 export interface SignalOnDef {
-  /** Event selector: 'mousemove', 'click', 'wheel', or a view-style string. */
-  events: string
-  /** Update expression; `event`, `datum` and signal refs are in scope. */
-  update?: string
-  /** Optional: only fire when a specific mark/datum is targeted. */
-  between?: unknown[]
-  throttle?: number
-  debounce?: number
-  consume?: boolean
+  events: unknown
+  /** Update: an expression string, or `{expr}` / `{value}` / `{signal}`. */
+  update?: string | { expr?: string; value?: unknown; signal?: string }
+  /** vega: pulse the signal even when the new value equals the old one. */
   force?: boolean
+  /** vega: `encode` set name (mark re-encode) -- mutually exclusive with `update`. */
+  encode?: unknown
 }
 
 export interface CompiledData {
@@ -290,9 +312,36 @@ export interface CompiledScale {
   rangeStep?: unknown
 }
 
+/**
+ * A guide element's `encode` block (vega axis / legend `encode`): per element
+ * ('axis', 'ticks', 'labels', 'title', 'grid', 'domain'; legends: 'legend',
+ * 'title', 'labels', 'symbols', 'gradient', 'entries'), the property sets
+ * `enter` / `update` (the static render applies both, `update` last).
+ */
+export interface GuideEncodeBlock {
+  name?: string
+  interactive?: boolean
+  style?: string | string[]
+  enter?: Record<string, EncodeValue | EncodeValue[]>
+  update?: Record<string, EncodeValue | EncodeValue[]>
+  exit?: Record<string, EncodeValue | EncodeValue[]>
+  hover?: Record<string, EncodeValue | EncodeValue[]>
+}
+
+export type GuideEncode = Record<string, GuideEncodeBlock>
+
 export interface CompiledAxis {
   scale: string
-  orient: 'top' | 'bottom' | 'left' | 'right'
+  /**
+   * 'top' | 'bottom' | 'left' | 'right', or whatever else the spec says (vega draws any other value as a vertical axis
+   * with a positive sign at the origin, and an `orient` signal can hold anything).
+   */
+  orient: 'top' | 'bottom' | 'left' | 'right' | (string & {})
+  /**
+   * An `orient` that is a signal: the axis compiled once per orient class (the config blocks it picks up depend on
+   * it), chosen when the signal's value is known. `''` is every other value.
+   */
+  orientSignal?: { signal: string; variants: Record<string, CompiledAxis> }
   grid?: boolean
   gridScale?: string
   domain?: boolean
@@ -366,7 +415,7 @@ export interface CompiledAxis {
   zindex?: number
   aria?: boolean
   description?: string
-  encode?: Record<string, Record<string, EncodeValue>>
+  encode?: GuideEncode
 }
 
 export interface CompiledLegend {
@@ -427,7 +476,7 @@ export interface CompiledLegend {
   strokeColor?: string
   labelOverlap?: boolean | string
   symbolLimit?: number
-  encode?: Record<string, Record<string, EncodeValue>>
+  encode?: GuideEncode
   zindex?: number
   type?: 'gradient' | 'symbol'
 }
@@ -447,10 +496,14 @@ export interface CompiledMark {
   transform?: CompiledTransform[]
   /** Group mark title (for axis/row titles). */
   title?: unknown
+  /** A group's title, resolved like the view's (config.title, then its style). */
+  groupTitle?: CompiledTitle
   /** Nested marks within a group. */
   marks?: CompiledMark[]
-  /** Axis specifications within a group (nested scope). */
+  /** Axis specifications within a group (nested scope), with the view's config defaults applied. */
   axes?: CompiledAxis[]
+  /** Legend specifications within a group (nested scope), with the view's config defaults applied. */
+  legends?: CompiledLegend[]
   /** Scale specifications within a group (resolved against the group's size). */
   scales?: CompiledScale[]
   /** Data sets declared within a group's scope. */
@@ -552,6 +605,10 @@ export interface SceneGroup extends SceneItem {
   /** Nested scene items (children of a group). */
   items?: SceneNode[]
   clip?: boolean
+  /** The runtime sets it when some item of this mark carries an `href`: only then do the renderers look for links. */
+  hasLinks?: boolean
+  /** The MARK's `clip` (not the item's): this group item sits in a container clipped to the enclosing group's frame. */
+  markClip?: boolean
   /** Pre-computed rounded-rect path `d` for clip-path defs (when cornerRadius > 0). */
   clipPathD?: string
   /** @internal The mark's source dataset, used to match a mark to its previous group. */
@@ -639,6 +696,8 @@ export interface SceneItem {
   cornerRadiusBottomRight?: number
   zindex?: number
   cursor?: string
+  /** Hyperlink: the item's element is drawn inside `<a xlink:href>` (after `sanitizeHref`). */
+  href?: string
   /** Internal: marks a legend title item so the builder can paint it last. */
   _legendTitle?: boolean
   // accessibility

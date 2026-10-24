@@ -167,7 +167,12 @@ window.__runCanvas = async (entry) => {
     const compiled = isVl ? compile(spec) : spec
     const loaded = await loadSpecData(compiled as never, TRUSTED_LOAD_OPTIONS)
     // Oracle: official Vega on an in-DOM canvas.
+    // A specs' containerSize() reads this element: vega-embed measures the host, so the host gets a
+    // definite size and aster is told the same one (it has no DOM to measure).
+    const CONTAINER = { width: 420, height: 260 }
     const host = document.createElement('div')
+    host.style.width = CONTAINER.width + 'px'
+    host.style.height = CONTAINER.height + 'px'
     document.body.appendChild(host)
     const result = await embed(host, isVl ? spec : loaded, { actions: false, renderer: 'canvas' })
     const oracleCanvas = host.querySelector('canvas')
@@ -176,7 +181,7 @@ window.__runCanvas = async (entry) => {
     result.finalize()
     host.remove()
     // aster: same scene, canvas backend.
-    const scene = evaluateChart(compileChart(loaded as never))
+    const scene = evaluateChart(compileChart(loaded as never), { containerSize: CONTAINER })
     // A host supplies decoded bitmaps for image marks (the renderer never fetches):
     // do what a host does, so image marks are compared like every other mark.
     await attachImages(scene.items)

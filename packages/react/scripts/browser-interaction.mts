@@ -141,6 +141,48 @@ try {
   check(point != null && (point.args[0] as { cat?: string } | null)?.cat === 'c', `onPointSelect resolved the same mark (${JSON.stringify(point?.args)})`)
   check(!entries.some((e) => e.name === 'onSelect' && e.args[0] !== null), 'a click is not reported as an interval')
 
+  // ---- 2b. mark-scoped selectors resolve through the scene hit index (no tooltip, so no data-datum stamps) ---
+  console.log('[signal.on] @name:click, symbol:click, rect:click and click[filter] in <Chart>')
+  const scoped = spec({
+    signals: [
+      { name: 'byName', value: 'none', on: [{ events: '@dots:click', update: 'datum.cat' }] },
+      { name: 'byType', value: 'none', on: [{ events: 'symbol:click', update: 'datum.cat + ":" + event.item.mark.name' }] },
+      { name: 'byRect', value: 'none', on: [{ events: 'rect:click', update: 'event.item.mark.marktype + ":" + event.item.mark.name' }] },
+      { name: 'other', value: 'none', on: [{ events: '@nothing:click', update: '"wrong"' }] },
+      { name: 'shifted', value: 0, on: [{ events: 'click[event.shiftKey]', update: 'shifted + 1' }] },
+      { name: 'overName', value: 'none', on: [{ events: '@dots:mouseover', update: 'datum.cat' }, { events: '@dots:mouseout', update: '"none"' }] },
+    ],
+    marks: [
+      { type: 'rect', name: 'bars', encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { value: 60 }, height: { value: 30 }, fill: { value: '#9ecae9' } } } },
+      { type: 'symbol', name: 'dots', from: { data: 't' }, encode: { update: {
+        x: { scale: 'xscale', field: 'px' }, y: { scale: 'yscale', field: 'py' }, size: { value: 300 }, fill: { value: 'steelblue' },
+      } } },
+    ],
+  })
+  await mount(page, scoped, { width: 400, height: 240 }, [], ['byName', 'byType', 'byRect', 'other', 'shifted', 'overName'])
+  const dot = await markCenter(page, 1)
+  await page.mouse.move(dot.x, dot.y)
+  await page.waitForTimeout(30)
+  await page.mouse.click(dot.x, dot.y)
+  await page.waitForTimeout(30)
+  const bar = await page.evaluate(() => {
+    const r = document.querySelector('svg .mark-rect path')!.getBoundingClientRect()
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  })
+  await page.mouse.click(bar.x, bar.y)
+  await page.keyboard.down('Shift')
+  await page.mouse.click(bar.x, bar.y)
+  await page.keyboard.up('Shift')
+  await page.waitForTimeout(30)
+  entries = await log(page)
+  const last = (n: string): unknown => entries.filter((e) => e.name === `signal:${n}`).map((e) => e.args[1]).at(-1)
+  check(last('byName') === 'b', `@dots:click fired with the clicked datum (${JSON.stringify(last('byName'))})`)
+  check(last('byType') === 'b:dots', `symbol:click sees event.item.mark.name (${JSON.stringify(last('byType'))})`)
+  check(last('byRect') === 'rect:bars', `rect:click fired for the rect and carries its mark (${JSON.stringify(last('byRect'))})`)
+  check(last('other') === undefined, `@nothing:click never fires (${JSON.stringify(last('other'))})`)
+  check(last('shifted') === 1, `click[event.shiftKey] fired once, for the shifted click only (${JSON.stringify(last('shifted'))})`)
+  check(entries.filter((e) => e.name === 'signal:overName').map((e) => e.args[1]).includes('b'), '@dots:mouseover fired with the hovered datum')
+
   // ---- 3. bound inputs ----------------------------------------------------------------------
   console.log('[binds] range / select / checkbox with brush + pan/zoom enabled')
   await mount(page, spec(), { width: 400, height: 240, panZoom: true }, ['onSelect', 'onPointSelect'], ['size', 'mode', 'show'])

@@ -14,6 +14,7 @@ const read = (rel) => readFileSync(join(root, rel), 'utf8')
 const rootPkg = JSON.parse(read('package.json'))
 const confPkg = JSON.parse(read('packages/conformance/package.json'))
 const benchPkg = JSON.parse(read('packages/benchmarks/package.json'))
+const reactPkg = JSON.parse(read('packages/react/package.json'))
 
 /** The `run:` commands of a workflow file. */
 const runLines = (rel) =>
@@ -28,7 +29,7 @@ describe('gate list', () => {
     expect(new Set(names).size).toBe(names.length)
     for (const g of GATES) {
       if (g.args[0] === '--filter') {
-        const pkg = g.args[1] === '@aster/benchmarks' ? benchPkg : confPkg
+        const pkg = g.args[1] === '@aster/benchmarks' ? benchPkg : g.args[1] === '@aster/react' ? reactPkg : confPkg
         expect(g.args[2], g.name).toBe('run')
         expect(pkg.scripts, `${g.name}: ${g.args[3]}`).toHaveProperty(g.args[3])
       } else {
@@ -43,6 +44,21 @@ describe('gate list', () => {
       'build', 'deps', 'typecheck', 'test', 'verify-publish', 'conformance', 'conformance-vl',
       'scene-diff', 'a11y-parity', 'transform-matrix', 'canvas', 'batch', 'fuzz-replay', 'budget',
     ]) expect(names.has(want), want).toBe(true)
+  })
+
+  it('every real-browser script (one that drives Playwright) is a gate, or a benchmark', () => {
+    const covered = (pkgName, script) => GATES.some((g) => (
+      pkgName === 'root' ? g.args[0] === script
+        : g.args[0] === '--filter' ? g.args[2] === 'run' && g.args[3] === script && g.args[1] === pkgName
+          : g.args[0] === script))
+    for (const [dir, pkgName, pkg] of [['packages/conformance', '@aster/conformance', confPkg], ['packages/react', '@aster/react', reactPkg]]) {
+      for (const [script, cmd] of Object.entries(pkg.scripts)) {
+        const file = /\btsx\s+(scripts\/[\w.-]+\.mts)/.exec(cmd)?.[1]
+        if (!file || !/from 'playwright'/.test(read(`${dir}/${file}`))) continue
+        const inGates = GATES.some((g) => g.args.includes(script) || (g.args[0] === '--filter' && g.args[1] === pkgName && g.args[3] === script))
+        expect(inGates || covered(pkgName, script), `${pkgName} script "${script}" drives a real browser and is not in scripts/gates.mjs`).toBe(true)
+      }
+    }
   })
 
   it('builds before the dependency check (which inspects dist)', () => {

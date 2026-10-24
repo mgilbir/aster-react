@@ -117,7 +117,7 @@ export const DefaultFunctions: Record<string, (...args: never[]) => unknown> = {
 
 // --- constants ---------------------------------------------------------------
 
-const Constants: Record<string, unknown> = {
+export const ExpressionConstants: Record<string, unknown> = {
   NaN: NaN,
   E: Math.E,
   LN2: Math.LN2,
@@ -184,7 +184,7 @@ const Ops: Record<string, (a: unknown, b: unknown) => unknown> = {
 
 // --- security ----------------------------------------------------------------
 
-const EventFunctions = ['view', 'item', 'group', 'xy', 'x', 'y']
+export const EventFunctions = ['view', 'item', 'group', 'xy', 'x', 'y']
 
 const DisallowedMethods = new Set<unknown>([
   Function,
@@ -214,7 +214,7 @@ const Visitors: Record<string, ($: EvalContext, n: AstNode) => unknown> = {
       : id === 'datum' ? $.datum
       : id === 'event' ? $.event
       : id === 'item' ? $.item
-      : (Object.hasOwn(Constants, id) ? Constants[id] : undefined) || $.params['$' + id]
+      : (Object.hasOwn(ExpressionConstants, id) ? ExpressionConstants[id] : undefined) || $.params['$' + id]
   },
   MemberExpression: ($, n) => {
     const d = !n.computed

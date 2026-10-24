@@ -39,7 +39,7 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
   const deps: Required<{ [K in keyof RuntimeInput]: unknown }> = {
     limits, textMetrics: input.textMetrics, urlPolicy: input.urlPolicy, data: input.data, width: input.width, height: input.height, signals: input.signals,
     changedDatasets: input.changedDatasets, dataChanges: input.dataChanges, dataPulse: input.dataPulse,
-    autoChanges: input.autoChanges, domainRaw: input.domainRaw,
+    autoChanges: input.autoChanges, domainRaw: input.domainRaw, logger: input.logger, containerSize: input.containerSize,
   }
   return React.useMemo(() => {
     try {
