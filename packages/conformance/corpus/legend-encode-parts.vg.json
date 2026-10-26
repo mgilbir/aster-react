@@ -1,0 +1,38 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "description": "Every part of a legend takes an encode block: the entries group, the symbols, the labels, the title, the legend group itself (strokeWidth, strokeDash, fill, cornerRadius), the gradient, and the bands of a discrete legend.",
+  "width": 240,
+  "height": 120,
+  "padding": 5,
+  "autosize": "pad",
+  "scales": [
+    { "name": "cat", "type": "ordinal", "domain": [ "alpha", "beta", "gamma" ], "range": [ "#e41a1c", "#377eb8", "#4daf4a" ] },
+    { "name": "lin", "type": "linear", "domain": [0, 100], "range": [ "white", "steelblue" ] },
+    { "name": "qz", "type": "quantize", "domain": [0, 9], "range": [ "#eee", "#9bd", "#06c" ] },
+    { "name": "sz", "type": "linear", "domain": [0, 50], "range": [30, 300] }
+  ],
+  "legends": [
+    { "fill": "cat", "title": "symbols", "orient": "right", "strokeColor": "#555", "padding": 6, "cornerRadius": 4,
+      "encode": {
+        "legend": { "update": { "strokeWidth": { "value": 2 }, "strokeDash": { "value": [4, 2] }, "fill": { "value": "#fafafa" } } },
+        "entries": { "name": "ents", "interactive": true, "update": { "opacity": { "value": 0.8 }, "cornerRadius": { "value": 3 }, "stroke": { "value": "#999" } } },
+        "symbols": { "update": { "strokeWidth": { "value": 1.5 }, "stroke": { "value": "#222" }, "size": { "value": 150 } } },
+        "labels": { "update": { "fontSize": { "value": 13 }, "fill": { "value": "#a00" }, "text": { "signal": "upper(datum.value)" } } },
+        "title": { "update": { "fontSize": { "value": 14 }, "fill": { "value": "#006" } } }
+      } },
+    { "fill": "lin", "title": "gradient", "orient": "bottom", "direction": "horizontal", "gradientLength": 120,
+      "encode": {
+        "gradient": { "update": { "stroke": { "value": "#333" }, "strokeWidth": { "value": 1.5 }, "opacity": { "value": 0.9 } } },
+        "labels": { "update": { "fontStyle": { "value": "italic" } } }
+      } },
+    { "fill": "qz", "title": "bands", "orient": "left",
+      "encode": {
+        "legend": { "update": { "stroke": { "value": "#c60" }, "strokeWidth": { "value": 1 } } },
+        "gradient": { "update": { "stroke": { "value": "#fff" }, "strokeWidth": { "value": 2 } } },
+        "labels": { "update": { "fill": { "value": "#060" } } }
+      } },
+    { "size": "sz", "title": "sizes", "orient": "top-right", "direction": "horizontal",
+      "encode": { "symbols": { "update": { "fill": { "value": "#fc0" }, "stroke": { "value": "#630" } } } } }
+  ],
+  "marks": []
+}
