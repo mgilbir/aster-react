@@ -561,3 +561,9 @@ export const TUPLE_ID: unique symbol = Symbol.for('aster.tuple') as never
 export function isTuple(t: unknown): boolean {
   return !!(t && (typeof t === 'object' || typeof t === 'function') && (t as Record<symbol, unknown>)[TUPLE_ID])
 }
+
+/**
+ * The store key of a signal declared by a group scope: `<scope id>:<name>`. A scope id is the path of group marks
+ * from the root (`name@seq`, each plus `[key]` for a facet partition or a datum index): see `SceneGroup.scopeSignals`.
+ */
+export const scopedSignalName = (scopeId: string, name: string): string => `${scopeId}:${name}`

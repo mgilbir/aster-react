@@ -49,6 +49,8 @@ interface Case {
   expectStill?: string[]
   /** Both engines must have logged at least one error. */
   expectError?: boolean
+  /** The scoped signals (group items' own, in document order) must differ from their initial values on the vega side. */
+  expectScopedMoved?: boolean
 }
 
 const DATA = [
@@ -80,6 +82,32 @@ function chart(signals: unknown[], extra: Record<string, unknown> = {}): Record<
     ...extra,
   }
 }
+
+
+/**
+ * A view of two group marks side by side (each its own scope, declaring `signals`) over the same data: `left` spans view x
+ * 10..130, `right` 150..270. `top` are the view's own signals.
+ */
+function groups(signals: unknown[], top: unknown[] = [], extra: Record<string, unknown> = {}, inner: Record<string, unknown>[] = []): Record<string, unknown> {
+  const group = (name: string, x: number): Record<string, unknown> => ({
+    type: 'group', name, signals,
+    encode: { update: { x: { value: x }, y: { value: 0 }, width: { value: 120 }, height: { value: 180 }, fill: { value: '#eef' } } },
+    marks: [
+      { type: 'rect', name: 'cellbars', from: { data: 't' }, encode: { update: { x: { field: 'x', mult: 0.5 }, width: { value: 20 }, y: { value: 100 }, height: { value: 60 }, fill: { value: '#4c78a8' } } } },
+      ...inner,
+    ],
+  })
+  return {
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    width: 260, height: 190, padding: 10, autosize: 'none',
+    data: [{ name: 't', values: DATA }],
+    signals: top,
+    marks: [group('left', 0), group('right', 140)],
+    ...extra,
+  }
+}
+/** Pointer positions for `groups()` (svg coordinates): inside each group's empty area, on a bar, and outside both. */
+const G = { left: [40, 40], right: [190, 40], leftBar: [20, 120], rightBar: [170, 120], gap: [135, 40], below: [40, 188] } as const
 
 const sig = (name: string, on: unknown[], value: unknown = 0, extra: Record<string, unknown> = {}): Record<string, unknown> =>
   ({ name, value, on, ...extra })
@@ -334,6 +362,114 @@ const CASES: Case[] = [
     steps: [{ t: 'tap', x: 90, y: 90 }],
     expectMoved: ['tap'],
   },
+
+  // --- group scopes (a group mark's own signals: one copy per group item) ---
+  {
+    name: 'group-scope-click-counts-per-scope',
+    spec: groups([sig('n', [{ events: 'click', update: 'n + 1' }]), sig('last', [{ events: 'mousemove', update: '[x(), y()]' }], [0, 0])]),
+    steps: [{ t: 'click', x: G.left[0], y: G.left[1] }, { t: 'click', x: G.right[0], y: G.right[1] }, { t: 'click', x: G.right[0], y: G.right[1] }, ...moves([60, 70])],
+    expectMoved: [],
+    expectScopedMoved: true,
+  },
+  {
+    name: 'group-scope-click-outside-every-group-fires-nothing',
+    spec: groups([sig('n', [{ events: 'click', update: 'n + 1' }])]),
+    steps: [{ t: 'click', x: G.gap[0], y: G.gap[1] }, { t: 'click', x: G.below[0], y: G.below[1] }],
+    expectMoved: [],
+  },
+  {
+    name: 'group-scope-explicit-view-source-fires-in-every-scope',
+    spec: groups([sig('n', [{ events: { source: 'view', type: 'click' }, update: 'n + 1' }])]),
+    steps: [{ t: 'click', x: G.gap[0], y: G.gap[1] }],
+    expectMoved: [],
+    expectScopedMoved: true,
+  },
+  {
+    name: 'group-scope-markname-in-scope',
+    spec: groups([sig('hit', [{ events: '@cellbars:click', update: 'datum.k' }], 'none')]),
+    steps: [{ t: 'click', x: G.rightBar[0], y: G.rightBar[1] }],
+    expectMoved: [],
+    expectScopedMoved: true,
+  },
+  {
+    name: 'group-scope-push-outer-writes-the-view-signal',
+    spec: groups([{ name: 'total', push: 'outer', on: [{ events: 'click', update: 'total + 1' }] }], [{ name: 'total', value: 0 }]),
+    steps: [{ t: 'click', x: G.left[0], y: G.left[1] }, { t: 'click', x: G.right[0], y: G.right[1] }, { t: 'click', x: G.right[0], y: G.right[1] }],
+    expectMoved: ['total'],
+  },
+  {
+    name: 'group-scope-shadows-the-view-signal',
+    spec: groups([sig('n', [{ events: 'click', update: 'n + 10' }])], [sig('n', [{ events: { source: 'view', type: 'dblclick' }, update: 'n + 1' }])]),
+    steps: [{ t: 'click', x: G.left[0], y: G.left[1] }, { t: 'dblclick', x: G.gap[0], y: G.gap[1] }],
+    expectMoved: ['n'],
+    expectScopedMoved: true,
+  },
+  {
+    name: 'group-scope-reads-the-view-signal',
+    spec: groups([sig('seen', [{ events: 'click', update: 'base * 2' }], 0)], [sig('base', [{ events: { source: 'view', type: 'dblclick' }, update: 'x()' }], 1)]),
+    steps: [{ t: 'dblclick', x: G.gap[0], y: G.gap[1] }, { t: 'click', x: G.right[0], y: G.right[1] }],
+    expectMoved: ['base'],
+    expectScopedMoved: true,
+  },
+  {
+    name: 'group-scope-derived-and-signal-source',
+    spec: groups([
+      sig('n', [{ events: 'click', update: 'n + 1' }]),
+      { name: 'twice', update: 'n * 2' },
+      sig('echo', [{ events: { signal: 'n' }, update: 'n + 100' }], -1),
+    ]),
+    steps: [{ t: 'click', x: G.left[0], y: G.left[1] }, { t: 'click', x: G.left[0], y: G.left[1] }, { t: 'click', x: G.right[0], y: G.right[1] }],
+    expectMoved: [],
+    expectScopedMoved: true,
+  },
+  {
+    name: 'group-scope-between-drag-and-window-end',
+    spec: groups([
+      sig('start', [{ events: { source: 'scope', type: 'mousedown' }, update: 'x()' }], -1),
+      sig('drag', [{ events: { source: 'window', type: 'mousemove', consume: true, between: [{ source: 'scope', type: 'mousedown' }, { source: 'window', type: 'mouseup' }] }, update: '[start, x()]' }], [0, 0]),
+    ]),
+    steps: [...moves([30, 30]), { t: 'down' }, ...moves([50, 40], [90, 50], [220, 60]), { t: 'up' }, ...moves([60, 60]), { t: 'move', x: 180, y: 50 }, { t: 'down' }, ...moves([200, 60]), { t: 'up' }],
+    expectMoved: [],
+    expectScopedMoved: true,
+  },
+  {
+    name: 'group-scope-nested-scopes-see-the-enclosing-one',
+    spec: groups([sig('outerN', [{ events: 'click', update: 'outerN + 1' }]), sig('outerBase', [{ events: { source: 'view', type: 'dblclick' }, update: 'x()' }], 1)], [], {}, [{
+      type: 'group', name: 'inner', signals: [sig('innerN', [{ events: 'click', update: 'innerN + 1' }]), sig('seeBase', [{ events: 'click', update: 'outerBase * 2' }], -1)],
+      encode: { update: { x: { value: 5 }, y: { value: 5 }, width: { value: 50 }, height: { value: 50 }, fill: { value: '#fee' } } },
+      marks: [{ type: 'rect', name: 'innerbar', encode: { update: { x: { value: 5 }, y: { value: 5 }, width: { value: 10 }, height: { value: 10 }, fill: { value: '#c33' } } } }],
+    }]),
+    steps: [{ t: 'dblclick', x: G.gap[0], y: G.gap[1] }, { t: 'click', x: 20, y: 20 }, { t: 'click', x: 100, y: 120 }, { t: 'click', x: 170, y: 20 }],
+    expectMoved: [],
+    expectScopedMoved: true,
+  },
+  {
+    name: 'group-scope-a-group-without-marks-has-no-scope-group',
+    spec: groups([sig('outerN', [{ events: 'click', update: 'outerN + 1' }])], [], {}, [{
+      type: 'group', name: 'inner', signals: [sig('innerN', [{ events: 'click', update: 'innerN + 1' }])],
+      encode: { update: { x: { value: 5 }, y: { value: 5 }, width: { value: 50 }, height: { value: 50 }, fill: { value: '#fee' } } },
+    }]),
+    steps: [{ t: 'click', x: 20, y: 20 }, { t: 'click', x: 170, y: 20 }],
+    expectMoved: [],
+    expectScopedMoved: true,
+  },
+  {
+    name: 'group-scope-facet-cells-have-their-own-signals',
+    spec: {
+      $schema: 'https://vega.github.io/schema/vega/v6.json',
+      width: 260, height: 190, padding: 10, autosize: 'none',
+      data: [{ name: 't', values: DATA }],
+      marks: [{
+        type: 'group', name: 'cell', from: { facet: { name: 'facet', data: 't', groupby: 'k' } },
+        signals: [{ name: 'facet', value: {}, on: [{ events: [{ source: 'scope', type: 'pointermove' }], update: 'isTuple(facet) ? facet : group("cell").datum' }] }, sig('hits', [{ events: 'click', update: 'hits + 1' }]), sig('key', [{ events: 'mousemove', update: 'facet.k' }], '-'), sig('same', [{ events: 'click', update: 'isTuple(facet) ? 1 : 0' }], -1)],
+        encode: { update: { x: { signal: 'datum.x', offset: 0 }, y: { value: 0 }, width: { value: 70 }, height: { value: 180 }, fill: { value: '#eef' } } },
+        marks: [{ type: 'rect', from: { data: 'facet' }, encode: { update: { x: { value: 5 }, width: { value: 20 }, y: { value: 100 }, height: { value: 60 }, fill: { value: '#4c78a8' } } } }],
+      }],
+    },
+    steps: [{ t: 'click', x: 40, y: 30 }, { t: 'click', x: 40, y: 30 }, { t: 'click', x: 125, y: 30 }, ...moves([200, 40])],
+    expectMoved: [],
+    expectScopedMoved: true,
+  },
   // --- errors ---
   {
     name: 'update-error-logged-and-loop-continues',
@@ -386,13 +522,22 @@ document.body.appendChild(probe)
 
 let names = []
 let read = () => ({})
+let readScoped = () => []
+const normv = (v) => JSON.stringify(v, (k, x) => (typeof x === 'number' && !Number.isFinite(x) ? 'NaN/Inf:' + String(x) : x === undefined ? '__undefined__' : x && typeof x === 'object' && !Array.isArray(x) && 'mark' in x && ('x' in x || 'datum' in x) ? '[item]' : x))
 
 window.__mountVega = async (spec) => {
   const view = new vega.View(vega.parse(spec), { renderer: 'svg', container: holder, logger, hover: false })
   await view.runAsync()
   names = (spec.signals || []).map((s) => s.name)
   read = () => Object.fromEntries(names.map((n) => [n, view.signal(n)]))
-  window.__settle = () => view.runAsync()
+  // the signals of every group item's scope, in document order (vega: the sub-contexts of the view's state)
+  readScoped = () => {
+    const out = []
+    const walk = (st) => { for (const sub of st.subcontext || []) { if (Object.keys(sub.signals || {}).length) out.push(sub.signals); walk(sub) } }
+    walk(view.getState({ signals: vega.truthy, recurse: true }))
+    return out.map((o) => { const c = { ...o }; delete c.parent; return c })
+  }
+  window.__settle = async () => { await view.runAsync() }
 }
 
 window.__mountAster = async (spec) => {
@@ -404,12 +549,26 @@ window.__mountAster = async (spec) => {
   bindSceneSignals(svg, scene, store, { logger }, { pick: (x, y) => hit.query(x, y) })
   names = (spec.signals || []).map((s) => s.name)
   read = () => Object.fromEntries(names.map((n) => [n, Object.hasOwn(store, n) ? store[n] : scene.signalParams[n]]))
+  readScoped = () => {
+    const out = []
+    const walk = (g) => {
+      const sc = g.scopeSignals
+      if (sc) {
+        const o = {}
+        for (const d of sc.defs) { if (d.push === 'outer') continue; const k = sc.id + ':' + d.name; o[d.name] = Object.hasOwn(store, k) ? store[k] : sc.values[d.name] }
+        out.push(o)
+      }
+      for (const c of g.items || []) if (Array.isArray(c.items)) walk(c)
+    }
+    for (const g of scene.items) walk(g)
+    return out
+  }
   window.__settle = async () => {}
 }
 
 window.__read = () => {
   const norm = (v) => JSON.stringify(v, (k, x) => (typeof x === 'number' && !Number.isFinite(x) ? 'NaN/Inf:' + String(x) : x === undefined ? '__undefined__' : x))
-  return { signals: Object.fromEntries(Object.entries(read()).map(([k, v]) => [k, norm(v)])), errors: logs.filter((l) => l.startsWith('error:')) }
+  return { signals: Object.fromEntries(Object.entries(read()).map(([k, v]) => [k, norm(v)])), scoped: normv(readScoped()), errors: logs.filter((l) => l.startsWith('error:')) }
 }
 `
 
@@ -434,7 +593,7 @@ writeFileSync(join(OUT_DIR, 'index.html'), '<!doctype html><html><body style="ma
 const playwright = await import('playwright')
 const browser = await playwright.chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
 
-interface Observed { signals: Record<string, string>; errors: string[] }
+interface Observed { signals: Record<string, string>; scoped: string; errors: string[] }
 
 async function drive(engine: 'vega' | 'aster', c: Case): Promise<{ initial: Observed; final: Observed } | { error: string }> {
   const context = await browser.newContext({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1, hasTouch: true })
@@ -491,6 +650,8 @@ for (const c of cases) {
     for (const name of Object.keys(v.final.signals)) {
       if (v.final.signals[name] !== a.final.signals[name]) problems.push(`signal ${name}: vega=${v.final.signals[name]} aster=${a.final.signals[name]}`)
     }
+    if (v.final.scoped !== a.final.scoped) problems.push(`scoped signals: vega=${v.final.scoped} aster=${a.final.scoped}`)
+    if (c.expectScopedMoved && v.final.scoped === v.initial.scoped) problems.push(`VACUOUS: vega did not move any scoped signal (${v.final.scoped})`)
     for (const name of c.expectMoved) {
       if (v.final.signals[name] === v.initial.signals[name]) problems.push(`VACUOUS: vega did not move ${name} (${v.final.signals[name]})`)
     }

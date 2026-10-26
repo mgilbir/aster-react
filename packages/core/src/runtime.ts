@@ -44,7 +44,7 @@ import { hash53 } from './svg-defs.js'
 import { tickFormat, scaleFraction, scaleGradientStops, tickValues, tickCount, isContinuous, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, maxOf, pushAll } from './util.js'
+import { dict, ownGet, maxOf, pushAll, scopedSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, type PulseChange } from './pulse.js'
@@ -327,6 +327,8 @@ interface EvalContext {
   signalParams: Record<string, unknown>
   width: number
   height: number
+  /** The id of the enclosing signal scope (see `SceneGroup.scopeSignals`), '' at the root. */
+  scopeId?: string
   /** Position of the enclosing facet group, for `{field: {group: 'x' | 'y'}}` references. */
   groupX?: number
   groupY?: number
@@ -3600,6 +3602,8 @@ interface GroupSource {
   datum: Row
   rows?: Row[]
   facetName?: string
+  /** Names this item among its mark's (the facet partition's key, a datum's index): the identity of its signal scope. */
+  key?: string
 }
 
 interface FacetDef {
@@ -3632,19 +3636,25 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
       if (g) g.push(r)
       else parts.set(k, [r])
     }
-    return [...parts.values()].map((g) => {
+    return [...parts.entries()].map(([partKey, g]) => {
       let datum: Row = {}
       accessors.forEach((acc, i) => { datum[((acc as { fname?: string }).fname) ?? keys[i]!] = acc(g[0]!) })
       const ag = facet.aggregate
       if (ag?.ops) {
         // a facet aggregate (vega-lite's stack_group_main): the group item's datum carries it
         datum = { ...datum, ...aggregateGroup(g, { type: 'aggregate', groupby: keys, fields: ag.fields, ops: ag.ops, as: ag.ops.map((op, i) => `${op}_${ag.fields[i]}`) } as never) }
+      } else if (ag === undefined) {
+        // no facet aggregate: vega's own (vega-parser marks/data.js: an `aggregate` over the groupby, whose default op is
+        // `count`) makes the group item's datum, so a cell's datum carries the partition's size
+        datum = { ...datum, count: g.length }
       }
-      return { datum, rows: g, facetName: facet.name }
+      // (the aggregate's output is a tuple: `isTuple(group().datum)`)
+      Object.defineProperty(datum, TUPLE_ID, { value: true, enumerable: false })
+      return { datum, rows: g, facetName: facet.name, key: partKey }
     })
   }
   const data = mark.from?.data
-  if (data) return (ctx.datasets.get(data) ?? []).map((row) => ({ datum: row }))
+  if (data) return (ctx.datasets.get(data) ?? []).map((row, i) => ({ datum: row, key: String(i) }))
   return [{ datum: {} }]
 }
 
@@ -3759,6 +3769,38 @@ function markClip(mark: CompiledMark, ctx: EvalContext): boolean {
   return !!c
 }
 
+/**
+ * The signals a group item's scope declares (vega: a group mark's `signals`, one set per item): each starts from the value
+ * the host stored for it (`<scope id>:<name>`, the event loop's state, which outlives the scene), else its `init`, else its
+ * `value`; an `update` signal is derived and always recomputed. `push: "outer"` declares nothing here (its handlers write to
+ * the enclosing scope's signal). Returns the group's parameters (the enclosing ones plus these) and the scope's values.
+ */
+function scopeSignalValues(mark: CompiledMark, ctx: EvalContext, id: string, base: Record<string, unknown>): { params: Record<string, unknown>; values: Record<string, unknown> } {
+  const params = dict<unknown>(base)
+  const values: Record<string, unknown> = {}
+  const defs = (mark.signalDefs ?? []).filter((d) => d.push !== 'outer')
+  const evalIn = (code: string): unknown => {
+    try { return ctx.runtime.expr(code)({}, params) } catch (e) { reportEvalError(ctx, e); return undefined }
+  }
+  for (const d of defs) {
+    if (typeof d.update === 'string') continue
+    const key = scopedSignalName(id, d.name)
+    const v = Object.hasOwn(ctx.signalParams, key) ? ctx.signalParams[key] : typeof d.init === 'string' ? evalIn(d.init) : d.value
+    params[d.name] = v
+    values[d.name] = v
+  }
+  // derived signals read the others (and each other): a few rounds settle any acyclic chain
+  const derived = defs.filter((d) => typeof d.update === 'string')
+  for (let round = 0; round < Math.max(1, derived.length) && derived.length; round++) {
+    for (const d of derived) {
+      const v = evalIn(d.update!)
+      params[d.name] = v
+      values[d.name] = v
+    }
+  }
+  return { params, values }
+}
+
 function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource): SceneGroup {
   const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
   // the facet partition is a dataset for everything in this item's scope, its own scales included
@@ -3767,18 +3809,24 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
   // the group's own datasets (vega: a group's `data`), derived in this item's scope
   const savedData: Array<[string, Row[] | undefined]> = []
   try {
+    // this item's signal scope (its own signals, over the enclosing ones; a facet's `parent` is its datum)
+    const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
+    const outerParams = hasParent ? { ...ctx.signalParams, parent: src.datum } : ctx.signalParams
+    const scopeId = mark.signalDefs?.length ? `${ctx.scopeId ? ctx.scopeId + '/' : ''}${mark.userName ?? ''}@${markIdOf(mark)}${src.key !== undefined && src.key !== '' ? `[${src.key}]` : ''}` : undefined
+    const scoped = scopeId !== undefined ? scopeSignalValues(mark, ctx, scopeId, outerParams) : undefined
+    const scopeParams = scoped ? scoped.params : outerParams
     for (const d of mark.data ?? []) {
       const source = (d as CompiledData & { source?: string }).source
       let rows: Row[] = source ? (ctx.datasets.get(source) ?? []).map((r) => ({ ...r })) : d.values != null ? readData(d.values, d.format) : []
       checkRowCount(rows.length, `dataset "${d.name}"`)
       if (d.transform?.length) {
-        rows = applyTransforms(rows, d.transform, { runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections }, d.name)
+        rows = applyTransforms(rows, d.transform, { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }, d.name)
       }
       savedData.push([d.name, ctx.datasets.get(d.name)])
       ctx.datasets.set(d.name, rows)
     }
     const encode = (mark.encode?.update ?? {}) as Record<string, EncodeValue | EncodeValue[]>
-    const geo = resolveEncodeSet(encode, src.datum, ctx, 'group')
+    const geo = resolveEncodeSet(encode, src.datum, scoped ? { ...ctx, signalParams: scopeParams } : ctx, 'group')
     const gx = num(geo.x) ?? 0
     const gy = num(geo.y) ?? 0
     const gw = Math.max(0, num(geo.width) ?? 0)
@@ -3792,7 +3840,6 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       childScales.set(sdef.name, buildScale(sdef, scaleContext(ctx, sdef.name)))
       childTypes.set(sdef.name, sdef.type)
     }
-    const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
     const childCtx: EvalContext = {
       ...ctx,
       width: gw,
@@ -3801,7 +3848,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       groupY: gy,
       scales: childScales.size ? new Map([...ctx.scales, ...childScales]) : ctx.scales,
       scaleTypes: childTypes.size ? new Map([...ctx.scaleTypes, ...childTypes]) : ctx.scaleTypes,
-      signalParams: hasParent ? { ...ctx.signalParams, parent: src.datum } : ctx.signalParams,
+      signalParams: scopeParams,
+      ...(scopeId !== undefined ? { scopeId } : {}),
     }
 
     const content: SceneGroup[] = []
@@ -3845,6 +3893,11 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       ...(markClip(mark, ctx) ? { markClip: true } : {}),
     } as unknown as SceneGroup
     if (mark.scales?.length) group.__scales = snapshotScales(childCtx.scales)
+    if (scoped && scopeId !== undefined) {
+      group.scopeSignals = { id: scopeId, defs: mark.signalDefs!, values: scoped.values, hasContent: (mark.marks?.length ?? 0) + (mark.axes?.length ?? 0) + (mark.legends?.length ?? 0) > 0 || mark.groupTitle !== undefined }
+      // the scales this scope declares, for the handlers of its signals (`scale('x', ...)` resolves through the scope chain)
+      if (childScales.size) Object.defineProperty(group, '__scaleFns', { value: childScales, enumerable: false })
+    }
     return group
   } finally {
     for (const [name, prev] of savedData.reverse()) {

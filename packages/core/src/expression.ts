@@ -64,6 +64,12 @@ export interface ExpressionRuntime {
    */
   transformed?: (name: string, raw: readonly unknown[]) => unknown[]
   /**
+   * `inScope(item)`: whether the item lies within the group whose scope the expression runs in (vega-functions
+   * inscope.js reads `this.context.group`). Absent, the expression runs in the root scope, whose group is the root of
+   * every scene item: any item is in scope.
+   */
+  inScope?: (item: unknown) => boolean
+  /**
    * The view's container size (`containerSize()`), when the host has one. Absent
    * (like headless vega, which has no container) it is `[undefined, undefined]`.
    */
@@ -384,9 +390,9 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
       return Math.atan2(t[0]!.clientY - t[1]!.clientY, t[0]!.clientX - t[1]!.clientX)
     },
     // vega-functions inscope.js: true when `item` descends from the current scope's group. The
-    // engine's signals live in the root scope, whose group is the root of every scene item, so
-    // any item is in scope (and nothing -- no item under the pointer -- is not).
-    inScope: (item: unknown) => item != null && typeof item === 'object',
+    // root scope's group is the root of every scene item, so any item is in scope (and nothing -- no
+    // item under the pointer -- is not); a group scope (`runtime.inScope`) checks the item's group chain.
+    inScope: (item: unknown) => runtime.inScope ? runtime.inScope(item) : item != null && typeof item === 'object',
     span: (arr: unknown) => { const a = arr as number[]; return a[a.length - 1]! - a[0]! },
     pluck,
     // strings

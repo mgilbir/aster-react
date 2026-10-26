@@ -36,7 +36,8 @@ import { createChartSession } from './session.js'
 import { diffRows, type RowDiff } from './pulse.js'
 import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'
 import { renderSceneToSvg } from './index.js'
-import type { RuntimeInput, SceneRoot } from './types.js'
+import type { RuntimeInput, SceneGroup, SceneRoot } from './types.js'
+import { scopedSignalName } from './util.js'
 
 type Row = Record<string, unknown>
 type Rnd = () => number
@@ -141,6 +142,8 @@ export interface GenSpec {
   inlineValues: boolean
   /** A selection store dataset `sel` the scenario edits (see `scenarioSel`): field tuples, or `_vgsid_` ids. */
   store?: 'fields' | 'ids'
+  /** The scope ids of the two group scopes `scenarioScoped` adds (outer, and the one nested in it). */
+  scoped?: { outer: string; inner: string }
 }
 
 function genSpec(r: Rnd): GenSpec {
@@ -281,7 +284,7 @@ function genSpec(r: Rnd): GenSpec {
 // World + steps
 // ---------------------------------------------------------------------------
 
-interface World { t: Row[]; u: Row[]; sel: Row[]; /** the store holds `_vgsid_` ids (else field tuples) */ selIds?: boolean; sig: number; width: number | undefined; height: number | undefined }
+interface World { t: Row[]; u: Row[]; sel: Row[]; /** the store holds `_vgsid_` ids (else field tuples) */ selIds?: boolean; /** the values the events wrote to the signals of the two group scopes (see `scenarioScoped`) */ scoped?: { outer: number; inner: number }; sig: number; width: number | undefined; height: number | undefined }
 
 const GROUPS = ['A', 'B', 'C', 'D'] as const
 
@@ -310,7 +313,7 @@ function genWorld(r: Rnd): World {
 }
 
 type Op = 'edit' | 'grow' | 'shrink' | 'insert' | 'remove' | 'append' | 'truncate' | 'swap' | 'shuffle'
-  | 'replaceAll' | 'editU' | 'signal' | 'size' | 'noop' | 'edit-group' | 'store'
+  | 'replaceAll' | 'editU' | 'signal' | 'size' | 'noop' | 'edit-group' | 'store' | 'scoped'
 type Delivery = 'none' | 'changedDatasets' | 'dataChanges' | 'dataPulse' | 'inplace'
 type Via = 'evaluate' | 'change'
 
@@ -441,6 +444,12 @@ export function applyStep(w: World, s: Step): World {
       if (s.r[7]! < 0.6 && t.length) { const i = ix(s.r[6]!, t.length); t[i] = { ...t[i]!, ...rowAt(2), g: t[i]!.g } }
       break
     }
+    case 'scoped': {
+      // an event wrote the signals of the group scopes; often together with a data edit (reuse must notice the signal anyway)
+      next.scoped = { outer: Math.floor(s.r[0]! * 7), inner: Math.floor(s.r[1]! * 7) }
+      if (s.r[7]! < 0.5 && t.length) { const i = ix(s.r[6]!, t.length); t[i] = { ...t[i]!, ...rowAt(3), g: t[i]!.g } }
+      break
+    }
     case 'store': {
       // A `modify(sel, ...)` as vega-lite's selections issue it: replace with one tuple, add one (a shift-click),
       // toggle one, replace within a unit, or clear. The edit is the dataflow's own (modify.ts).
@@ -522,8 +531,14 @@ function sceneKey(scene: SceneRoot): { norm: unknown; svg: string } {
 // Harness
 // ---------------------------------------------------------------------------
 
+/** The signals the host stores for the group scopes of a scenario: what the event loop writes as `<scope id>:<name>`. */
+function scopedSignals(g: GenSpec, w: World): Record<string, unknown> {
+  if (!g.scoped || !w.scoped) return {}
+  return { [scopedSignalName(g.scoped.outer, 'gs')]: w.scoped.outer, [scopedSignalName(g.scoped.inner, 'gs')]: w.scoped.inner }
+}
+
 export function inputOf(g: GenSpec, w: World): RuntimeInput {
-  const input: RuntimeInput = { signals: { sig: w.sig } }
+  const input: RuntimeInput = { signals: { sig: w.sig, ...scopedSignals(g, w) } }
   if (w.width != null) input.width = w.width
   if (w.height != null) input.height = w.height
   input.data = { t: clone(w.t), u: clone(w.u), ...(g.store ? { sel: clone(w.sel) } : {}) }
@@ -700,7 +715,7 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
     return spec
   }
   const sessionInput = (w: World, extra: Partial<RuntimeInput>): RuntimeInput => {
-    const input: RuntimeInput = { signals: { sig: w.sig }, ...extra }
+    const input: RuntimeInput = { signals: { sig: w.sig, ...scopedSignals(g, w) }, ...extra }
     if (w.width != null) input.width = w.width
     if (w.height != null) input.height = w.height
     if (!g.inlineValues || extra.dataChanges || extra.dataPulse) input.data = { t: clone(w.t), u: clone(w.u), ...(g.store ? { sel: clone(w.sel) } : {}) }
@@ -806,6 +821,40 @@ export function scenarioSel(seed: number, nSteps: number): { g: GenSpec; world: 
   return { g: base.g, world: { ...base.world, selIds: ids }, steps }
 }
 
+/**
+ * The same scenarios with group scopes: a group mark declaring signals (one derived from the view's `sig`), whose marks read
+ * them, with a second scope nested in it that shadows one. The steps write the scopes' signals the way the event loop does
+ * (`<scope id>:gs` in the signal store), between the data edits, signal changes and resizes the base scenario already has.
+ */
+export function scenarioScoped(seed: number, nSteps: number): { g: GenSpec; world: World; steps: Step[] } {
+  const base = scenario(seed, nSteps)
+  const r = mulberry32(seed ^ 0x5c09ed)
+  const spec = base.g.spec
+  const xs = (spec.scales as Array<{ name: string }>).some((sc) => sc.name === 'x') && (spec.scales as Array<{ name: string }>).some((sc) => sc.name === 'y')
+  const group = {
+    type: 'group', name: 'sc_outer', signals: [{ name: 'gs', value: 2 }, { name: 'gd', update: 'gs * 2 + sig' }],
+    encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { value: 120 }, height: { value: 80 }, fill: { value: '#eee' } } },
+    marks: [
+      ...(xs ? [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'v' }, size: { signal: '10 + gs * 30 + gd' }, fill: { signal: 'gd > 6 ? "#c33" : "#33c"' } } } }] : []),
+      {
+        type: 'group', name: 'sc_inner', signals: [{ name: 'gs', value: 1 }],
+        encode: { update: { x: { value: 10 }, y: { value: 10 }, width: { value: 60 }, height: { value: 40 }, stroke: { value: '#999' } } },
+        marks: [{ type: 'rect', encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { signal: '10 + gs * 8' }, height: { value: 10 }, fill: { value: '#6a6' } } } }],
+      },
+    ],
+  }
+  ;(spec.marks as unknown[]).push(group)
+  // the scope ids the compiled chart gives them: the marks' places in the spec
+  const chart = compileChart(clone(spec) as never)
+  const outerMark = chart.marks.find((m) => m.name === 'sc_outer')!
+  const innerMark = outerMark.marks!.find((m) => m.name === 'sc_inner')!
+  const outer = `sc_outer@${outerMark.seq}`
+  base.g.scoped = { outer, inner: `${outer}/sc_inner@${innerMark.seq}` }
+  base.g.label += ' scoped'
+  const steps = base.steps.map((s) => (r() < 0.4 ? { ...s, op: 'scoped' as const } : s))
+  return { g: base.g, world: { ...base.world, scoped: { outer: 2, inner: 1 } }, steps }
+}
+
 /** Greedy delta-debugging: drop steps while the failure persists. */
 function shrink(target: 'chart' | 'session', g: GenSpec, world: World, steps: Step[], seed: number): Step[] {
   let cur = steps
@@ -904,6 +953,37 @@ describe('incremental === fresh with selection stores that are edited between up
     const failures: string[] = []
     for (const seed of seedsSel) {
       const f = checkSeed(seed, STEPS, scenarioSel)
+      if (f) failures.push(f)
+      if (failures.length >= MAX_FAIL) break
+    }
+    expect(failures.join('\n\n'), `${failures.length} failing seed(s)`).toBe('')
+  }, 600_000)
+})
+
+describe('incremental === fresh with group scopes whose signals events write between updates', () => {
+  it('the generator is deterministic per seed and the scopes are real', () => {
+    expect(JSON.stringify(scenarioScoped(7, 6))).toBe(JSON.stringify(scenarioScoped(7, 6)))
+    const sc = scenarioScoped(3, 4)
+    const scene = evaluateChart(compileChart(clone(sc.g.spec) as never), inputOf(sc.g, sc.world))
+    const ids: string[] = []
+    const walk = (g: SceneGroup): void => { if (g.scopeSignals) ids.push(g.scopeSignals.id); for (const c of g.items ?? []) if ((c as SceneGroup).items) walk(c as SceneGroup) }
+    for (const g of scene.items) walk(g)
+    expect(ids).toEqual([sc.g.scoped!.outer, sc.g.scoped!.inner])
+    expect(new Set(Array.from({ length: 40 }, (_, i) => scenarioScoped(i + 1, 12).steps.map((x) => x.op)).flat()).has('scoped')).toBe(true)
+  })
+
+  it('the scoped signals reach the scene: the stored value changes what is drawn', () => {
+    const sc = scenarioScoped(3, 4)
+    const a = evaluateChart(compileChart(clone(sc.g.spec) as never), inputOf(sc.g, sc.world))
+    const b = evaluateChart(compileChart(clone(sc.g.spec) as never), inputOf(sc.g, { ...sc.world, scoped: { outer: 6, inner: 5 } }))
+    expect(renderSceneToSvg(a)).not.toBe(renderSceneToSvg(b))
+  })
+
+  const seedsScoped = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
+  it(`holds for ${seedsScoped.length} seeds x ${STEPS} steps (chart reuse + session)`, () => {
+    const failures: string[] = []
+    for (const seed of seedsScoped) {
+      const f = checkSeed(seed, STEPS, scenarioScoped)
       if (f) failures.push(f)
       if (failures.length >= MAX_FAIL) break
     }

@@ -36,7 +36,7 @@ import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expres
 import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
-import { dict, ownGet, setOwn, TUPLE_ID } from './util.js'
+import { dict, ownGet, setOwn, TUPLE_ID, scopedSignalName } from './util.js'
 import { consoleLogger, type Logger } from './logger.js'
 
 export interface BoundEvent {
@@ -215,9 +215,10 @@ function mergeStreams(first: Stream, rest: Stream[]): Stream {
 interface OperatorSource { signal?: string; scale?: string }
 
 /** vega-parser update.js: a string is a selector; otherwise an array of stream objects and operator sources. */
-function normalizeEvents(events: unknown): { streams: StreamDef[]; sources: OperatorSource[] } {
+function normalizeEvents(events: unknown, defaultSource: 'view' | 'scope' = 'view'): { streams: StreamDef[]; sources: OperatorSource[] } {
   if (events == null) throw new Error('Signal update missing events specification.')
-  const list: unknown[] = typeof events === 'string' ? parseEventSelectorString(events, 'view') : Array.isArray(events) ? events : [events]
+  // (a selector string's default source is the view's, and a group scope's own in a subscope: vega-parser update.js)
+  const list: unknown[] = typeof events === 'string' ? parseEventSelectorString(events, defaultSource) : Array.isArray(events) ? events : [events]
   const streams: StreamDef[] = []
   const sources: OperatorSource[] = []
   for (const s of list) {
@@ -286,6 +287,51 @@ function identifiersOf(code: string): Set<string> {
 
 // --- the binding -------------------------------------------------------------
 
+/**
+ * A signal scope of the scene: a group item whose mark declares signals (vega: a group mark's `signals`; each item has its
+ * own copy, a facet cell included). Its signals shadow the enclosing scope's of the same name; `push: "outer"` writes to the
+ * enclosing one.
+ */
+interface Scope {
+  id: string
+  defs: CompiledSignalDef[]
+  /** The signals this scope declares (a `push: "outer"` entry declares none). */
+  names: Set<string>
+  /** The values the scene was evaluated with; the store (`<id>:<name>`) wins where an event has written. */
+  values: Record<string, unknown>
+  group: SceneGroup
+  /**
+   * vega's `context.group` is the group of the first mark created in the scope; a group with no marks (axes, legends, a
+   * title) has none, and `inScope` is then false for every item.
+   */
+  hasContent: boolean
+  parent: Scope | null
+}
+
+function collectScopes(scene: SceneRoot | undefined): Scope[] {
+  const out: Scope[] = []
+  if (!scene) return out
+  const walk = (g: SceneGroup, parent: Scope | null): void => {
+    let here = parent
+    const sc = g.scopeSignals
+    if (sc) {
+      here = { id: sc.id, defs: sc.defs, names: new Set(sc.defs.filter((d) => d.push !== 'outer').map((d) => d.name)), values: sc.values, group: g, hasContent: sc.hasContent, parent }
+      out.push(here)
+    }
+    for (const c of g.items ?? []) if (Array.isArray((c as SceneGroup).items)) walk(c as SceneGroup, here)
+  }
+  for (const r of scene.items) walk(r, null)
+  return out
+}
+
+/** vega-functions inScope: `item` is `group` or lies within it (an event item is a facade whose prototype is the scene item). */
+function itemWithin(item: unknown, group: object): boolean {
+  for (let cur = item as { mark?: { group?: object | null } } | null | undefined; cur; cur = cur.mark?.group as typeof cur) {
+    if ((cur as unknown) === group || Object.getPrototypeOf(cur) === group) return true
+  }
+  return false
+}
+
 type Update = { kind: 'expr'; code: string } | { kind: 'value'; value: unknown } | { kind: 'signal'; name: string }
 
 function updateOf(on: SignalOnDef): Update {
@@ -328,6 +374,16 @@ function bindSignalEventsDefs(
   opts: SignalBindOptions,
 ): SignalBinding {
   const logger: Logger = hooks.logger ?? consoleLogger
+  const scopes = collectScopes(opts.scene)
+  /** Every scoped signal by its store key (`<scope id>:<name>`). */
+  const scopeByKey = new Map<string, { scope: Scope; name: string }>()
+  for (const sc of scopes) for (const n of sc.names) scopeByKey.set(scopedSignalName(sc.id, n), { scope: sc, name: n })
+  /** The scope that declares `name` as seen from `scope` (null: the root scope's signal). */
+  const ownerOf = (scope: Scope | null, name: string): Scope | null => {
+    for (let sc = scope; sc; sc = sc.parent) if (sc.names.has(name)) return sc
+    return null
+  }
+  const keyOf = (owner: Scope | null, name: string): string => (owner ? scopedSignalName(owner.id, name) : name)
   const originX = opts.originX ?? 0
   const originY = opts.originY ?? 0
   const detachFns: Array<() => void> = []
@@ -387,52 +443,113 @@ function bindSignalEventsDefs(
     ...sceneRuntime,
     data: dataOf,
     modify: modifyData,
-    expr: (code) => compile(code),
+    expr: (code) => compileIn(bindRuntime, code),
   }
-  const compiledExprs = new Map<string, CompiledExpr>()
-  const compile = (code: string): CompiledExpr => {
-    let f = compiledExprs.get(code)
-    if (!f) compiledExprs.set(code, (f = compileExpr(code, bindRuntime)))
+  const compiledExprs = new WeakMap<ExpressionRuntime, Map<string, CompiledExpr>>()
+  const compileIn = (rt: ExpressionRuntime, code: string): CompiledExpr => {
+    let cache = compiledExprs.get(rt)
+    if (!cache) compiledExprs.set(rt, (cache = new Map()))
+    let f = cache.get(code)
+    if (!f) cache.set(code, (f = compileExpr(code, rt)))
     return f
+  }
+  /** A scale as a handler of `scope` sees it: the scales its group (and the groups around it) declare, then the view's. */
+  const scaleIn = (scope: Scope, name: string): ReturnType<ExpressionRuntime['scale']> => {
+    for (let sc: Scope | null = scope; sc; sc = sc.parent) {
+      const own = (sc.group as unknown as { __scaleFns?: Map<string, unknown> }).__scaleFns?.get(name)
+      if (own) return own as ReturnType<ExpressionRuntime['scale']>
+    }
+    return sceneRuntime.scale(name)
+  }
+  /** The expression runtime of a scope: `inScope` and `scale` see that group's scope. The root scope is the scene's. */
+  const scopeRuntimes = new Map<Scope, ExpressionRuntime>()
+  const runtimeFor = (scope: Scope | null): ExpressionRuntime => {
+    if (!scope) return bindRuntime
+    let rt = scopeRuntimes.get(scope)
+    if (!rt) {
+      const made: ExpressionRuntime = {
+        ...bindRuntime,
+        inScope: (item) => scope.hasContent && itemWithin(item, scope.group),
+        scale: (name) => scaleIn(scope, name),
+        expr: (code) => compileIn(made, code),
+      }
+      scopeRuntimes.set(scope, (rt = made))
+    }
+    return rt
   }
   const runtime = bindRuntime
 
-  /** The current value: the host's store wins, the evaluated scene's value is the baseline. */
-  const read = (name: string): unknown => (Object.hasOwn(signals, name) ? signals[name] : ownGet(signalParams, name))
-  const params = (): Record<string, unknown> => dict(signalParams, signals)
-
-  const markChanged = (name: string): void => {
-    if (txn && !txn.changed.includes(name)) txn.changed.push(name)
+  /** The current value of `name` as seen from `scope`: the host's store wins, the evaluated scene's value is the baseline. */
+  const read = (name: string, scope: Scope | null = null): unknown => {
+    const owner = ownerOf(scope, name)
+    if (!owner) return Object.hasOwn(signals, name) ? signals[name] : ownGet(signalParams, name)
+    const key = scopedSignalName(owner.id, name)
+    return Object.hasOwn(signals, key) ? signals[key] : owner.values[name]
   }
-  /** vega Dataflow.update: store the value when it differs (reference) or is forced. */
-  const update = (name: string, value: unknown, force: boolean): void => {
-    if (!force && read(name) === value) return
-    setOwn(signals, name, value)
-    markChanged(name)
+  /** The value stored under a store key (a root signal's name, or a scoped signal's `<scope id>:<name>`). */
+  const readKey = (key: string): unknown => {
+    const hit = scopeByKey.get(key)
+    return hit ? read(hit.name, hit.scope) : read(key)
+  }
+  /** What an expression of `scope` sees: the view's signals, then each enclosing scope's own over them, outermost first. */
+  const params = (scope: Scope | null = null): Record<string, unknown> => {
+    const p = dict(signalParams, signals)
+    if (!scope) return p
+    const chain: Scope[] = []
+    for (let sc: Scope | null = scope; sc; sc = sc.parent) chain.unshift(sc)
+    for (const sc of chain) {
+      for (const n of sc.names) p[n] = read(n, sc)
+      const datum = (sc.group as { datum?: unknown }).datum
+      if (datum !== undefined) p.parent = datum
+    }
+    return p
   }
 
-  const derived = defs.filter((d) => typeof d.update === 'string').map((d) => {
-    let deps = new Set<string>()
-    try { deps = identifiersOf(d.update!) } catch { /* an unparsable update is reported when it evaluates */ }
-    return { def: d, deps }
-  })
+  const markChanged = (key: string): void => {
+    if (txn && !txn.changed.includes(key)) txn.changed.push(key)
+  }
+  /** vega Dataflow.update: store the value when it differs (reference) or is forced. `owner` is the scope that declares the signal. */
+  const update = (owner: Scope | null, name: string, value: unknown, force: boolean): void => {
+    if (!force && read(name, owner) === value) return
+    const key = keyOf(owner, name)
+    setOwn(signals, key, value)
+    markChanged(key)
+  }
+  /** The ids an expression reads as store keys (data dependencies stay `data:NAME`): a name resolves in `scope` first. */
+  const depKeys = (scope: Scope | null, code: string): Set<string> => {
+    const out = new Set<string>()
+    for (const id of identifiersOf(code)) out.add(id.startsWith('data:') ? id : keyOf(ownerOf(scope, id), id))
+    return out
+  }
+
+  const derived: Array<{ scope: Scope | null; def: CompiledSignalDef; deps: Set<string> }> = []
+  for (const unit of [{ scope: null as Scope | null, list: defs }, ...scopes.map((sc) => ({ scope: sc as Scope | null, list: sc.defs.filter((d) => d.push !== 'outer') }))]) {
+    for (const d of unit.list) {
+      if (typeof d.update !== 'string') continue
+      let deps = new Set<string>()
+      try { deps = depKeys(unit.scope, d.update) } catch { /* an unparsable update is reported when it evaluates */ }
+      derived.push({ scope: unit.scope, def: d, deps })
+    }
+  }
 
   const cascade = (): void => {
     if (!txn) return
     // edits the first pass queued are applied now, and what reads those datasets runs again
     let frontier = new Set([...txn.changed, ...applyEdits().map(dataKey)])
     // acyclic in a valid spec; the bound keeps a cyclic one finite
-    for (let round = 0; round <= defs.length && frontier.size > 0; ++round) {
+    const bound = derived.length + signalHandlers.length + 1
+    for (let round = 0; round <= bound && frontier.size > 0; ++round) {
       const next = new Set<string>()
-      for (const { def, deps } of derived) {
+      for (const { scope, def, deps } of derived) {
         if (![...deps].some((n) => frontier.has(n))) continue
         try {
-          const v = runtime.expr(def.update!)(undefined, params())
+          const v = runtimeFor(scope).expr(def.update!)(undefined, params(scope))
           // vega: an operator whose inputs pulsed publishes its value; a fresh object is a change (reference comparison)
-          if (v !== read(def.name)) {
-            setOwn(signals, def.name, v)
-            markChanged(def.name)
-            next.add(def.name)
+          if (v !== read(def.name, scope)) {
+            const key = keyOf(scope, def.name)
+            setOwn(signals, key, v)
+            markChanged(key)
+            next.add(key)
           }
         } catch (e) {
           fail(` (update of "${def.name}")`, e)
@@ -463,7 +580,7 @@ function bindSignalEventsDefs(
       const { changed, edited } = txn
       txn = null
       for (const name of edited) hooks.onData?.(name, inputRows.get(name)!)
-      for (const name of changed) hooks.onSignal?.(name, read(name), signals)
+      for (const key of changed) hooks.onSignal?.(key, readKey(key), signals)
     }
   }
 
@@ -542,9 +659,9 @@ function bindSignalEventsDefs(
   }
 
   // ---- stream construction (vega-parser parseStream + vega-runtime stream.js) ---
-  const filterFn = (code: string): ((e: ExtEvent) => boolean) => {
-    const f = runtime.expr(code)
-    return (e) => Boolean(f(undefined, undefined, e))
+  const filterFn = (code: string, scope: Scope | null): ((e: ExtEvent) => boolean) => {
+    const f = runtimeFor(scope).expr(code)
+    return (e) => Boolean(f(undefined, params(scope), e))
   }
 
   const addListener = (target: EventTarget, type: string, send: (e: Event) => void): void => {
@@ -583,14 +700,14 @@ function bindSignalEventsDefs(
   }
 
   let nodeCounter = 0
-  const buildStream = (def: StreamDef & { markrole?: string }, keyBase: string): Stream => {
+  const buildStream = (def: StreamDef & { markrole?: string }, keyBase: string, scope: Scope | null): Stream => {
     if (def == null || typeof def !== 'object') throw new Error('Invalid stream specification: ' + JSON.stringify(def))
     let stream: Stream
     if (def.merge) {
-      const list = def.merge.map((m) => buildStream(m, keyBase))
+      const list = def.merge.map((m) => buildStream(m, keyBase, scope))
       stream = mergeStreams(list[0]!, list.slice(1))
     } else if (def.stream) {
-      stream = buildStream(def.stream, keyBase)
+      stream = buildStream(def.stream, keyBase, scope)
     } else if (def.type != null) {
       if (def.type === 'timer') {
         stream = rootFor('timer', def.throttle ?? 0)
@@ -609,8 +726,8 @@ function bindSignalEventsDefs(
     const id = ++nodeCounter
     if (def.between) {
       if (def.between.length !== 2) throw new Error('Stream "between" parameter must have 2 entries: ' + JSON.stringify(def))
-      const a = buildStream(def.between[0]!, keyBase)
-      const b = buildStream(def.between[1]!, keyBase)
+      const a = buildStream(def.between[0]!, keyBase, scope)
+      const b = buildStream(def.between[1]!, keyBase, scope)
       const st = stateFor(svg, `${keyBase}|between${id}`)
       const on = new Stream(); on.recv = () => { st.active = true }
       const off = new Stream(); off.recv = () => { st.active = false }
@@ -621,7 +738,7 @@ function bindSignalEventsDefs(
       s = filtered(s, null)
     }
     if (code) {
-      const f = filterFn(code)
+      const f = filterFn(code, scope)
       s = filtered(s, f)
     }
     if (def.throttle != null) {
@@ -659,44 +776,63 @@ function bindSignalEventsDefs(
   }
 
   // ---- bind every handler -------------------------------------------------------
-  const names = new Set(defs.map((d) => d.name))
-  defs.forEach((signal, si) => {
-    (signal.on ?? []).forEach((on, oi) => {
-      const where = ` (signal "${signal.name}", on[${oi}])`
-      try {
-        if (on.encode != null) throw new Error('`encode` updates (mark re-encode on event) are not supported; use `update`')
-        const upd = updateOf(on)
-        const { streams, sources } = normalizeEvents(on.events)
-        const force = on.force === true
-        const keyBase = `${si}:${signal.name}:${oi}:${JSON.stringify(on.events)}`
-        // the value an update produces for a delivery; `e` is the extended event (or a stand-in)
-        let compiled: ((datum: unknown, params?: Record<string, unknown>, event?: unknown) => unknown) | null = null
-        if (upd.kind === 'expr') compiled = runtime.expr(upd.code)
-        const evaluate = (e: unknown): unknown =>
-          upd.kind === 'expr' ? compiled!(undefined, params(), e) : upd.kind === 'value' ? upd.value : read(upd.name)
-        const terminal = (e: ExtEvent): void => update(signal.name, evaluate(e), force)
-        for (const def of streams) {
-          const stream = buildStream(def as StreamDef, keyBase)
-          const sink = new Stream()
-          sink.recv = terminal
-          stream.targets.push(sink)
+  // The view's signals, then each group scope's. A scope's handlers read and write through it: its own signals shadow
+  // the enclosing ones, `push: "outer"` writes to the enclosing scope's, and its selector strings default to the
+  // `scope` source (events within the scope's group).
+  const rootNames = new Set(defs.map((d) => d.name))
+  const units: Array<{ scope: Scope | null; defs: CompiledSignalDef[] }> = [{ scope: null, defs }, ...scopes.map((sc) => ({ scope: sc as Scope | null, defs: sc.defs }))]
+  for (const unit of units) {
+    const scope = unit.scope
+    unit.defs.forEach((signal, si) => {
+      (signal.on ?? []).forEach((on, oi) => {
+        const where = ` (signal "${signal.name}"${scope ? ` of scope "${scope.id}"` : ''}, on[${oi}])`
+        try {
+          if (on.encode != null) throw new Error('`encode` updates (mark re-encode on event) are not supported; use `update`')
+          // the signal this handler writes: its own, or the enclosing scope's for `push: "outer"`
+          let target: Scope | null = scope
+          if (signal.push === 'outer') {
+            if (!scope) throw new Error('`push: "outer"` needs an enclosing scope')
+            target = ownerOf(scope.parent, signal.name)
+            if (!target && !rootNames.has(signal.name)) throw new Error(`No prior signal definition for "outer" push: "${signal.name}"`)
+          }
+          const upd = updateOf(on)
+          const { streams, sources } = normalizeEvents(on.events, scope ? 'scope' : 'view')
+          const force = on.force === true
+          const keyBase = `${scope ? scope.id : ''}|${si}:${signal.name}:${oi}:${JSON.stringify(on.events)}`
+          const rt = runtimeFor(scope)
+          // the value an update produces for a delivery; `e` is the extended event (or a stand-in)
+          let compiled: ((datum: unknown, params?: Record<string, unknown>, event?: unknown) => unknown) | null = null
+          if (upd.kind === 'expr') compiled = rt.expr(upd.code)
+          const evaluate = (e: unknown): unknown =>
+            upd.kind === 'expr' ? compiled!(undefined, params(scope), e) : upd.kind === 'value' ? upd.value : read(upd.name, scope)
+          const terminal = (e: ExtEvent): void => update(target, signal.name, evaluate(e), force)
+          for (const def of streams) {
+            const stream = buildStream(def as StreamDef, keyBase, scope)
+            const sink = new Stream()
+            sink.recv = terminal
+            stream.targets.push(sink)
+          }
+          const onSignals = sources.filter((s) => s.signal != null)
+          if (onSignals.length) {
+            const deps = new Set<string>()
+            for (const s of onSignals) for (const key of depKeys(scope, s.signal!)) deps.add(key)
+            // only signals count (not the identifiers of an expression that are neither): this scope's chain, and the view's
+            for (const d of deps) {
+              const known = scopeByKey.has(d) || rootNames.has(d)
+              if (!known) deps.delete(d)
+            }
+            signalHandlers.push({ deps, run: () => { try { update(target, signal.name, evaluate({}), force) } catch (e) { fail(where, e) } } })
+          }
+          const onScales = new Set(sources.filter((s) => s.scale != null).map((s) => s.scale!))
+          if (onScales.size) {
+            scaleHandlers.push({ scales: onScales, run: () => { try { update(target, signal.name, evaluate({}), force) } catch (e) { fail(where, e) } } })
+          }
+        } catch (e) {
+          fail(where, e)
         }
-        const onSignals = sources.filter((s) => s.signal != null)
-        if (onSignals.length) {
-          const deps = new Set<string>()
-          for (const s of onSignals) for (const id of identifiersOf(s.signal!)) deps.add(id)
-          for (const d of deps) if (!names.has(d)) deps.delete(d)
-          signalHandlers.push({ deps, run: () => { try { update(signal.name, evaluate({}), force) } catch (e) { fail(where, e) } } })
-        }
-        const onScales = new Set(sources.filter((s) => s.scale != null).map((s) => s.scale!))
-        if (onScales.size) {
-          scaleHandlers.push({ scales: onScales, run: () => { try { update(signal.name, evaluate({}), force) } catch (e) { fail(where, e) } } })
-        }
-      } catch (e) {
-        fail(where, e)
-      }
+      })
     })
-  })
+  }
 
   // A scale event is a scale that was recomputed. The host binds again after every render, so the scales of this
   // scene are compared with those the loop saw last: a scale that differs fires its handlers, as one run.
@@ -720,7 +856,8 @@ function bindSignalEventsDefs(
   // Debounced deliveries re-enter the current binding; a re-bind reclaims them.
   const setSignal = (name: string, value: unknown): void => {
     if (name == null) return
-    run(() => update(name, value, true))
+    const hit = scopeByKey.get(name)
+    run(() => (hit ? update(hit.scope, hit.name, value, true) : update(null, name, value, true)))
   }
 
   return {
@@ -826,11 +963,13 @@ function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => Picke
       const container = map.get(p.item)
       const markGroup = container && isMark(container) ? container : undefined
       const m = (p.item as SceneItem).mark
+      // a picked group item (a facet cell, a nested view) names its own mark: vega's `item.mark.name` / `.role`
+      const own = markGroup === undefined && (p.item as SceneGroup).marktype === 'group' ? (p.item as SceneGroup) : undefined
       return {
         item: p.item,
         marktype: markGroup?.marktype ?? p.marktype,
-        name: markGroup?.name ?? m?.name,
-        role: markGroup?.role ?? m?.role,
+        name: markGroup?.name ?? m?.name ?? own?.name,
+        role: markGroup?.role ?? m?.role ?? own?.role,
         get group(): PickedItem | null { return enclosing(markGroup ?? p.item) },
       } as PickedItem
     },

@@ -70,6 +70,8 @@ interface Entry {
   tol?: number
   /** line/area/trail: the item to report for a hit at (x, y) */
   resolve?: (x: number, y: number) => SceneItem
+  /** A group item's own box (vega picks a group that has a fill or a stroke where no mark inside it is hit): never a data mark. */
+  groupBox?: true
 }
 
 export interface HitIndex {
@@ -244,6 +246,12 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     const gy = ty + (group.y ?? 0)
     const type = group.marktype
     if (!type || type === 'group') {
+      // vega-scenegraph marks/group.js pick: a group item that has a fill (or a stroke) is hit over its box, below its content
+      if (rec(group)._scope === true && group.interactive !== false && (rec(group).fill || rec(group).stroke)) {
+        const w = Number(group.width ?? 0)
+        const h = Number(group.height ?? 0)
+        if (w > 0 && h > 0) entries.push({ item: group, marktype: 'group', kind: 'band', groupBox: true, x1: gx, y1: gy, x2: gx + w, y2: gy + h })
+      }
       for (const item of group.items ?? []) {
         if (isGroup(item)) walk(item, gx, gy)
         else addLeaf(item, type ?? 'group', gx, gy)
@@ -548,7 +556,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     // Reverse scan: later entries paint on top (entries are kept in paint order).
     for (let i = entries.length - 1; i >= 0; i--) {
       const e = entries[i]!
-      if (dataOnly && e.item.datum == null) continue
+      if (dataOnly && (e.item.datum == null || e.groupBox)) continue
       if (hits(e, x, y)) return found(e, x, y)
     }
     return null
@@ -569,7 +577,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       if (b < 0 || (a >= 0 && list![a]! > big[b]!)) idx = list![a--]!
       else idx = big[b--]!
       const e = entries[idx]!
-      if (dataOnly && e.item.datum == null) continue
+      if (dataOnly && (e.item.datum == null || e.groupBox)) continue
       if (hits(e, x, y)) return found(e, x, y)
     }
     return null
@@ -634,7 +642,9 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       return hitGrid(x, y, true)
     },
     size(): number {
-      return entries.length
+      let n = 0
+      for (const e of entries) if (!e.groupBox) n++
+      return n
     },
   }
 }
