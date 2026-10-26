@@ -65,6 +65,19 @@ export function peek<T>(array: readonly T[]): T | undefined {
   return array[array.length - 1]
 }
 
+/**
+ * vega-util `lerp`: the point a fraction of the way between an array's ends (the first end for a falsy fraction, the
+ * last for 1, the first for an array with no last element). No arithmetic is done on the ends in those cases, so a
+ * non-numeric end is returned as it is.
+ */
+export function lerp(array: readonly unknown[], frac: unknown): number {
+  const lo = array[0] as number
+  const hi = array[array.length - 1] as number | undefined
+  const f = +(frac as number)
+  if (hi === undefined) return lo
+  return !f ? lo : f === 1 ? hi : lo + f * (hi - lo)
+}
+
 /** An object map of the array's (stringified) values to `true`. */
 export function toSet(_: readonly unknown[]): Record<string, true> {
   const s: Record<string, true> = {}

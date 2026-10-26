@@ -74,7 +74,7 @@ const SPEC = {
     { name: 'cat', type: 'ordinal', domain: [1, 2, 3], range: ['#111111', '#222222', '#333333'] },
   ],
   axes: [{ orient: 'bottom', scale: 'sx', title: 'x' }, { orient: 'left', scale: 'sy', grid: true, title: 'y' }],
-  legends: [{ fill: 'col', type: 'gradient', title: 'g' }, { fill: 'col2', type: 'gradient', orient: 'bottom', title: 'h' }, { fill: 'cat', title: 'c' }],
+  legends: [{ fill: 'col', type: 'gradient', title: 'g' }, { fill: 'col2', type: 'gradient', orient: 'bottom', direction: 'horizontal', title: 'h' }, { fill: 'cat', title: 'c' }],
   marks: [
     ...(['symbol', 'rect', 'text', 'rule', 'trail', 'arc', 'image', 'path', 'line', 'area'] as const).map((type) => ({
       type, from: { data: 't' },

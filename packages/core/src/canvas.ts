@@ -673,7 +673,7 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot): void 
     paintPath(ctx, segs, it, defs, 'auto')
     return
   }
-  if (it.text != null) {
+  if (it._kind === 'text' || (it._kind === undefined && it.text != null)) {
     renderTextItem(it, ctx, defs)
     return
   }
@@ -708,7 +708,7 @@ function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | unde
   const opacity = it.opacity == null ? 1 : (it.opacity as number)
   if (opacity === 0 || (it as Record<string, unknown>).fontSize as number <= 0) return
   const d = textItemDesc(it)
-  if (d == null || (typeof it.text === 'string' && it.text.length === 0)) return
+  if (d == null || it.text == null || (typeof it.text === 'string' && it.text.length === 0)) return
   const rec = it as Record<string, unknown>
   ctx.save()
   ctx.font = fontString(it)

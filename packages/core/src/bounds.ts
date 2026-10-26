@@ -9,7 +9,7 @@
  */
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
-import { computeAreaPath, computeLinePath, symbolPath, trailPath } from './render.js'
+import { computeAreaPath, computeLinePath, symbolPath, symbolPathExact, trailPath } from './render.js'
 import { itemTextWidth } from './text-metrics.js'
 
 // ---------------------------------------------------------------------------
@@ -752,7 +752,9 @@ export function boundLeaf(bounds: Bounds, it: SceneItem, miterPaths = false): Bo
  */
 export function boundAxisGroup(axis: SceneGroup): Bounds {
   const b = new Bounds()
-  const meta = (axis as Record<string, unknown>).axis as { orient: string; range: number; baseline?: number; translate?: number; noLayout?: boolean } | undefined
+  const meta = (axis as Record<string, unknown>).axis as { orient: string; range: number; baseline?: number; translate?: number; noLayout?: boolean; bounds?: Bounds } | undefined
+  // an axis built by guide-axis.ts carries the bounds its layout left on the mark (vega's `item.mark.bounds`)
+  if (meta?.bounds) return meta.noLayout === true ? b : meta.bounds.clone()
   // an axis whose orient is none of the four: axisLayout's `default` branch leaves its position undefined, so its
   // bounds are NaN and union into nothing
   if (meta?.noLayout === true) return b
@@ -825,22 +827,11 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
   const bounds = new Bounds()
   // Text first: a text mark inherits `radius`/`outerRadius` from the mark def
   // and config.text (e.g. config.text.outerRadius), but vega bounds text as
-  // text — those arc properties are inert for it.
-  if (it.text != null && (it as SceneGroup).marktype === undefined) {
-    // Bare text leaves carry vega's raw item y (the baseline shift is the
-    // renderer's bake) and vega's guide-label fontSize — 10 when the builder
-    // left it unset on a baseline-shifted label, 11 otherwise (guide titles).
-    const fsLeaf = it.fontSize as number | undefined
-    const fsEff = fsLeaf ?? (it.baseline != null && it.baseline !== 'alphabetic' ? 10 : 11)
-    const savedFs = it.fontSize
-    ;(it as Record<string, unknown>).fontSize = fsEff
-    const out = boundText(bounds, it)
-    ;(it as Record<string, unknown>).fontSize = savedFs
-    return out
-  }
-  if (it.text != null) {
-    return boundText(bounds, it)
-  }
+  // text -- those arc properties are inert for it. (A guide leaf is a text item
+  // like any other: its font size is the item's, 11 when it has none.)
+  if (it._kind === 'text' || (it._kind === undefined && it.text != null)) return boundText(bounds, it)
+  // a guide's rule says what it is, whatever other channels (a width, a height) its encode gave it
+  if (it._kind === 'rule') return boundRule(bounds, it)
   // Arc items: the geometry is angular (outerRadius/innerRadius/angles), not a
   // stored path — bound the annular sector analytically (vega bounds the
   // d3-arc path through the recording context; the analytic bbox matches to
@@ -897,12 +888,12 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
     const x = it.x || 0
     const y = it.y || 0
     const angle = (it as Record<string, unknown>).angle as number | undefined
-    if (it.shape === 'circle' || !angle) {
+    if (it.shape === 'circle') {
       bounds.add(-r, -r)
       bounds.add(r, r)
     } else {
-      boundsFromPath(bounds, symbolPath(String(it.shape), r))
-      bounds.rotate(angle * Math.PI / 180, 0, 0)
+      boundsFromPath(bounds, symbolPathExact(String(it.shape), r))
+      if (angle) bounds.rotate(angle * Math.PI / 180, 0, 0)
     }
     boundStroke(bounds, it, true)
     return bounds.translate(x, y)
@@ -951,6 +942,9 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
  */
 export function boundLegendGroup(g: SceneGroup): Bounds {
   const rec = g as Record<string, unknown>
+  // a legend built by guide-legend.ts carries the bounds its layout left on the mark (relative to the group's position)
+  const own = rec.legendBounds as Bounds | undefined
+  if (own) return own.clone().translate(g.x ?? 0, g.y ?? 0)
   const stroked = rec._borderStroke === true
     || (rec._borderStroke === undefined
       // vega's boundStroke expands by strokeWidth/2 - a zero-width stroke (the gradient rect's #ddd) does not move the bounds

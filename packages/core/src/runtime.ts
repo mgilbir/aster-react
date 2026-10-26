@@ -41,19 +41,22 @@ import type {
   VgSpec,
 } from './types.js'
 import { hash53 } from './svg-defs.js'
-import { tickFormat, scaleFraction, scaleGradientStops, tickValues, tickCount, isContinuous, validTicks } from './scale.js'
+import { tickFormat, scaleGradientStops, tickValues, tickCount, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, maxOf, pushAll } from './util.js'
+import { dict, ownGet, maxOf, pushAll, lerp } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, type PulseChange } from './pulse.js'
 import { fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
-import { trellisLayout, gridLayout } from './trellis.js'
-import { boundAxisGroup, boundGroupItem, boundLeaf, boundText, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
-import { nominalTextWidth } from './text-metrics.js'
-import { symbolPath, symbolPathExact, rectItemPath } from './render.js'
+import { trellisLayout } from './trellis.js'
+import { boundAxisGroup, boundGroupItem, boundLeaf, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
+import { rectItemPath } from './render.js'
+import { buildAxis as buildAxisGuide, tickBand } from './guide-axis.js'
+import { buildTitle as buildTitleGuide } from './guide-title.js'
+import { buildLegend as buildLegendGuide, legendType, LEGEND_SCALES, type GuideHost } from './guide-legend.js'
+import { isSignal, itemAriaOf, lookup, value, type GuideStyles, type UserEncode } from './guide-encode.js'
 
 const DEFAULT_SIZE = 500
 
@@ -756,26 +759,6 @@ function guideNumber(ctx: EvalContext, value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-/** The legend-group properties vega's legend encode feeds the layout (`encode.legend`: orient, offset, padding, titlePadding, cornerRadius, fill, stroke, x, y); the spec's encode wins. */
-const LEGEND_GROUP_ENCODE: Readonly<Record<string, string>> = {
-  orient: 'orient', offset: 'offset', padding: 'padding', titlePadding: 'titlePadding', cornerRadius: 'cornerRadius',
-  fill: 'fillColor', stroke: 'strokeColor', x: 'legendX', y: 'legendY',
-}
-
-function legendWithGroupEncode(legend: CompiledLegend, ctx: EvalContext): CompiledLegend {
-  const set = guideEncodeSet(legend.encode?.legend)
-  if (!set) return legend
-  const datum: Row = { title: legend.title != null, scales: {}, type: legend.type ?? 'symbol', vgrad: false }
-  const over: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(set)) {
-    const target = LEGEND_GROUP_ENCODE[k]
-    if (!target) continue
-    const r = resolveEncodeProperty(v, datum, ctx)
-    if (r !== undefined) over[target] = r
-  }
-  return Object.keys(over).length ? ({ ...legend, ...over } as CompiledLegend) : legend
-}
-
 /** Resolve a guide title (string or `{signal}`) for accessibility metadata. */
 function guideTitle(ctx: EvalContext, title: unknown): string | undefined {
   if (typeof title === 'string') return title
@@ -806,28 +789,27 @@ function buildAxisAndLegend(
     const axis = resolveAxisOrient(axis0, ctx)
     const group = buildAxis(axis, ctx)
     if (group) {
-      // Raw-guide mode: the axisLayout never ran, so the builder's baked 0.5
-      // render delta must be cancelled by the group translate (vega's raw
-      // items sit at their encode positions with no delta).
-      const wrapped = ctx.rawGuides
-        ? ({ marktype: 'group', role: 'axis', x: -0.5, y: -0.5, items: [group] } as SceneGroup)
-        : group
       // Carry guide identity for the accessible tree (R10.6) without changing
       // the serialized SVG: the fields are scene metadata only.
-      if (axis.zindex) (wrapped as unknown as { zindex?: number }).zindex = axis.zindex
-      ;(wrapped as unknown as { orient?: string; scale?: string; title?: string }).orient = axis.orient
-      ;(wrapped as unknown as { orient?: string; scale?: string; title?: string }).scale = axis.scale
-      ;(wrapped as unknown as { aria?: boolean; grid?: boolean; format?: string; formatType?: string }).aria = axis.aria
-      ;(wrapped as unknown as { aria?: boolean; grid?: boolean; format?: string; formatType?: string }).grid = axis.grid === true
-      ;(wrapped as unknown as { aria?: boolean; grid?: boolean; format?: string; formatType?: string }).format = guideString(ctx, axis.format)
-      ;(wrapped as unknown as { aria?: boolean; grid?: boolean; format?: string; formatType?: string }).formatType = guideString(ctx, axis.formatType)
+      const meta = group as unknown as { zindex?: number; orient?: string; scale?: string; title?: string; aria?: boolean; grid?: boolean; format?: string; formatType?: string }
+      // (the mark definition reads these as written -- vega-parser marks/definition.js: `+zindex || undefined`, `aria`,
+      // `description` -- so a signal object is not looked into: its zindex is none, its description is the object)
+      const zindex = +(axis.zindex as number) || undefined
+      if (zindex) meta.zindex = zindex
+      // (the caption reads the axis group item's own orient, which a user encode may have changed)
+      meta.orient = (typeof axis.orient === 'string' ? ((group as unknown as { axis?: { itemOrient?: string } }).axis?.itemOrient ?? axis.orient) : axis.orient)
+      meta.scale = axis.scale
+      meta.aria = axis.aria
+      meta.grid = guideScalar(ctx, axis.grid) === true
+      meta.format = guideString(ctx, axis.format)
+      meta.formatType = guideString(ctx, axis.formatType)
       const at = guideTitle(ctx, axis.title)
-      if (at) (wrapped as unknown as { title?: string }).title = at
+      if (at) meta.title = at
       // the axis' `description` is the aria-label of its container (vega-scenegraph ariaGuide: mark.description first)
       const adesc = (axis as { description?: unknown }).description
-      if (typeof adesc === 'string') wrapped.description = adesc
-      groups.push(wrapped)
-      anchorItems.push(wrapped)
+      if (adesc) group.description = adesc as string
+      groups.push(group)
+      anchorItems.push(group)
     }
   }
 
@@ -839,33 +821,36 @@ function buildAxisAndLegend(
   // (vega has no legend `disable`: that is a Vega-Lite config key, which the VL
   // compiler resolves by omitting the legend. A config.legend.disable merged into
   // a legend that VL kept must not remove it.)
+  type LegendProps = { orient?: unknown; offset?: unknown; x?: unknown; y?: unknown }
   const built = legends
-    .map((legend0) => {
-      const legend = legendWithGroupEncode(resolveGuideSignals(legend0, LEGEND_SIGNAL_KEPT, ctx), ctx)
+    .map((legend) => {
       const group = buildLegend(legend, ctx)
       if (group) {
-        placeLegendTitleLast(group, legend, ctx)
-        if (legend.zindex) (group as unknown as { zindex?: number }).zindex = legend.zindex
+        // (the mark definition reads these as written -- vega-parser marks/definition.js: `+zindex || undefined`,
+        // `aria`, `description` -- so a signal object is not looked into)
+        const zindex = +(legend.zindex as number) || undefined
+        if (zindex) (group as unknown as { zindex?: number }).zindex = zindex
         // `aria: false` removes the legend from the accessibility tree (and marks it aria-hidden)
         ;(group as unknown as { aria?: boolean }).aria = (legend as { aria?: boolean }).aria
         const lt = guideTitle(ctx, legend.title)
         if (lt) (group as unknown as { title?: string }).title = lt
         const ldesc = (legend as { description?: unknown }).description
-        if (typeof ldesc === 'string') group.description = ldesc
+        if (ldesc) group.description = ldesc as string
         const g = group as unknown as {
           legendScale?: string; legendChannels?: string[]; legendType?: string
           legendFormat?: string; legendFormatType?: string
         }
         // vega-parser LegendScales: the channels in priority order (the first is the canonical scale)
-        g.legendChannels = ['size', 'shape', 'fill', 'stroke', 'strokeWidth', 'strokeDash', 'opacity'].filter((k) => typeof (legend as Record<string, unknown>)[k] === 'string')
-        g.legendScale = g.legendChannels.map((k) => String((legend as Record<string, unknown>)[k]))[0]
-        g.legendFormat = guideString(ctx, (legend as Record<string, unknown>).format)
-        g.legendFormatType = guideString(ctx, (legend as Record<string, unknown>).formatType)
+        const own = (legend.own ?? {}) as Record<string, unknown>
+        g.legendChannels = LEGEND_SCALES.filter((k) => !!own[k])
+        g.legendScale = g.legendChannels.map((k) => String(own[k]))[0]
+        g.legendFormat = guideString(ctx, own.format)
+        g.legendFormatType = guideString(ctx, own.formatType)
         // (the legend type is the kind of legend the builder drew: gradient, discrete bands or symbols)
       }
-      return { legend, group }
+      return { legend, group, props: ((group as unknown as { legendProps?: LegendProps } | null)?.legendProps ?? {}) as LegendProps }
     })
-    .filter((x): x is { legend: CompiledLegend; group: SceneGroup } => x.group !== null)
+    .filter((x): x is { legend: CompiledLegend; group: SceneGroup; props: LegendProps } => x.group !== null)
     // A legend whose entries failed to build (an invalid tickCount interval
     // string) degenerates to a zero-size group with no items: vega still
     // creates it, but it renders nothing and takes no layout space.
@@ -909,14 +894,14 @@ function buildAxisAndLegend(
 
     // group legends by orient ('none' skips the grid: vega leaves the item
     // at its unlayouted position, which is the origin)
-    const byOrient = new Map<string, { legend: CompiledLegend; group: SceneGroup }[]>()
+    const byOrient = new Map<string, { legend: CompiledLegend; group: SceneGroup; props: LegendProps }[]>()
     for (const x of built) {
-      const orient = x.legend.orient ?? 'right'
+      const orient = String(x.props.orient ?? 'right')
       if (orient === 'none') {
         // legendLayout leaves an `orient: none` legend where its x / y encode put it
         // (legendX / legendY); every other orient is zeroed and placed by the grid
-        const lx = guideNumber(ctx, (x.legend as { legendX?: unknown }).legendX)
-        const ly = guideNumber(ctx, (x.legend as { legendY?: unknown }).legendY)
+        const lx = guideNumber(ctx, x.props.x)
+        const ly = guideNumber(ctx, x.props.y)
         if (lx !== undefined) x.group.x = lx
         if (ly !== undefined) x.group.y = ly
         continue
@@ -938,7 +923,8 @@ function buildAxisAndLegend(
       const nrows = Math.max(1, Math.ceil(n / ncols))
       // flush boxes: legendLayout zeroes x/y and sizes the legend to
       // ceil(childBounds + 2*padding) — our group.width/height.
-      const boxes = list.map((x) => ({ x1: 0, y1: 0, x2: x.group.width ?? 0, y2: x.group.height ?? 0 }))
+      // (vega's flush bounds read `item.width || 0`: a NaN size is none)
+      const boxes = list.map((x) => ({ x1: 0, y1: 0, x2: x.group.width || 0, y2: x.group.height || 0 }))
       const xOffset = boxes.map((b) => 8 + (b.x1 < 0 ? Math.ceil(-b.x1) : 0))
       const yOffset = boxes.map((b) => 8 + (b.y1 < 0 ? Math.ceil(-b.y1) : 0))
       const xExtent = Array<number>(ncols).fill(0)
@@ -993,7 +979,7 @@ function buildAxisAndLegend(
       // default 18; anchor = start/middle/end (default start).
       let specOffset: number | undefined = undefined
       for (const x of list) {
-        const o = x.legend.offset
+        const o = x.props.offset
         if (typeof o === 'number') specOffset = specOffset === undefined ? o : Math.max(specOffset, o)
       }
       const offset = specOffset ?? 18
@@ -1009,28 +995,25 @@ function buildAxisAndLegend(
       let rowEnd = false
       switch (orient) {
         case 'left':
-          // Epsilon guard: our axis bounds can be off vega's by 1 ulp (rotated
-          // title fp), and floor/ceil would turn that into a whole pixel of
-          // legend anchor shift (see computeGuidePadding's EPS note).
-          x = Math.floor(xb.x1 + 1e-9) - offset
+          x = Math.floor(xb.x1) - offset
           y = mult * H
           colEnd = true
           rowEnd = aEnd
           break
         case 'right':
-          x = Math.ceil(xb.x2 - 1e-9) + offset
+          x = Math.ceil(xb.x2) + offset
           y = mult * H
           rowEnd = aEnd
           break
         case 'top':
           x = mult * W
-          y = Math.floor(yb.y1 + 1e-9) - offset
+          y = Math.floor(yb.y1) - offset
           colEnd = aEnd
           rowEnd = true
           break
         case 'bottom':
           x = mult * W
-          y = Math.ceil(yb.y2 - 1e-9) + offset
+          y = Math.ceil(yb.y2) + offset
           colEnd = aEnd
           break
         case 'top-left':
@@ -1120,7 +1103,8 @@ function computeGuidePadding(
     // vega's arithmetic is exact; collapse only that sub-ulp residue. Mark and
     // legend geometry is exact enough that a genuine positive residue (a bar
     // whose right edge is the view width) must still grow the margin.
-    const ei = group.role === 'axis' ? EPS : 0
+    // (an axis's bounds are the exact arithmetic of vega's own: no guard)
+    const ei = 0
     // Geo shape bounds are traced through clipped projections; d3's clip
     // intersection leaves a sub-pixel fp tail that can sit exactly on an
     // integer in our port where vega's is just below/above it. Nudge only that
@@ -1594,31 +1578,7 @@ function buildTitleGroup(
   /** The datum a group title's `parent[...]` reads (its facet key). */
   parent?: Row,
 ): SceneGroup | null {
-  if (!title0) return null
-  // the text may be a signal (a group title reads its facet datum as `parent`)
-  // vega draws the title mark whatever its text (a text mark with no text is an empty `<text>`); a list is
-  // lines, anything else is its string
-  const toText = (v: unknown): string | string[] => Array.isArray(v) ? v.map(String) : v == null ? '' : String(v)
-  let textStr: string | string[]
-  if (!Array.isArray(title0.text) && typeof title0.text === 'object' && title0.text && 'signal' in title0.text) {
-    try {
-      textStr = toText(ctx!.runtime.expr(title0.text.signal)({}, { ...ctx!.signalParams, parent }))
-    } catch { textStr = '' }
-  } else textStr = toText(title0.text)
-  const title = { ...title0, text: textStr }
-  const orient = title.orient ?? 'top'
-  const isLR = orient === 'left' || orient === 'right'
-  const hasSub = !!title.subtitle
-  const subFs = title.subtitleFontSize ?? 12
-  const subPad = title.subtitlePadding ?? 3
-  const offset = title.offset ?? 4
-  const baseline = title.baseline ?? 'top'
-  const align = (title.align as SceneItem['align'] | undefined) ??
-    (title.anchor === 'start' ? 'left' : title.anchor === 'end' ? 'right' : 'center')
-  const angle = title.angle ?? (orient === 'left' ? -90 : orient === 'right' ? 90 : 0)
-  const dx = title.dx ?? 0
-  const dy = title.dy ?? 0
-
+  if (!title0 || !ctx) return null
   // viewBounds: [0,0,w,h] ∪ marks ∪ axis/legend bounds (axes measured in the
   // axis-internal frame; our scene bakes the 0.5px axis delta into the leaves
   // — shift it out). The title unions in afterwards, as in vega's layoutGroup.
@@ -1627,121 +1587,46 @@ function buildTitleGroup(
     if (g.role === 'title') continue
     b.union(measureGuideGroup(g))
   }
-  const vb = { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
-
-  // anchor position: frame=content maps over the viewBounds; frame=group over
-  // the group box. For vertical titles start/end run along y (left: y2→y1).
-  let start = 0
-  let end = isLR ? height : width
-  if (title.frame !== 'group') {
-    if (orient === 'left') { start = vb.y2; end = vb.y1 }
-    else if (orient === 'right') { start = vb.y1; end = vb.y2 }
-    else { start = vb.x1; end = vb.x2 }
-  } else if (orient === 'left') {
-    start = height; end = 0
-  }
-  const pos = title.anchor === 'start' ? start : title.anchor === 'end' ? end : (start + end) / 2
-
-  // Text bounds (vega marks/text bound): the title at (0,0); the subtitle at
-  // (sx,sy) where sy = titleBound.height + subtitlePadding (top/bottom) and
-  // sx = ±(titleBound.width + subtitlePadding) (left/right).
-  const tBound = boundText(new Bounds(), {
-    x: 0, y: 0, text: title.text, align, baseline, angle,
-    fontSize: title.fontSize, fontWeight: title.fontWeight, font: title.font, fontStyle: title.fontStyle,
-    dx, dy, ...(title.limit != null ? { limit: title.limit } : {}),
-  } as SceneItem)
-  let sx = 0
-  let sy = 0
-  let sBound: Bounds | undefined
-  if (hasSub) {
-    sx = isLR ? (orient === 'left' ? tBound.width() + subPad : -(tBound.width() + subPad)) : 0
-    // vega's subtitle-offset switch covers top/bottom/left/right only — orient
-    // 'none' matches no case, so the subtitle keeps the title's own offset
-    // (sx=sy=0) and overlaps it.
-    // Raw-guide mode: the titleLayout never ran — the subtitle keeps the
-    // title's own offset (0,0), overlapping it.
-    sy = isLR || orient === 'none' || raw ? 0 : tBound.height() + subPad
-    sBound = boundText(new Bounds(), {
-      x: sx, y: sy, text: title.subtitle!, align, baseline, angle,
-      fontSize: subFs, fontWeight: title.subtitleFontWeight, dx, dy,
-      ...(title.limit != null ? { limit: title.limit } : {}),
-    } as SceneItem)
-  }
-  const temp = sBound ? new Bounds().set(tBound.x1, tBound.y1, tBound.x2, tBound.y2).union(sBound) : tBound
-
-  let x = 0
-  let y = 0
-  switch (orient) {
-    case 'left': x = vb.x1 - temp.width() - offset; y = pos; break
-    case 'right': x = vb.x2 + temp.width() + offset; y = pos; break
-    case 'bottom': x = pos; y = vb.y2 + offset; break
-    case 'none': x = 0; y = 0; break
-    default: x = pos; y = vb.y1 - temp.height() - offset; break
-  }
-  if (raw) { x = 0; y = 0 }
-  // A floating-point epsilon on an integer title position (e.g. an axis-bound
-  // x1 of -46.00000000000001) makes viewSizeLayout ceil the padding one pixel
-  // early. Snap only near-integers; fractional anchored titles are untouched.
-  const snap = (v: number): number => Math.abs(v - Math.round(v)) < 1e-9 ? Math.round(v) : v
-  // Top/bottom anchors use integer view-bound origins; left/right titles subtract
-  // a measured text width whose fp tail is part of vega's own bound arithmetic.
-  if (orient !== 'left' && orient !== 'right') {
-    x = snap(x)
-    y = snap(y)
-  }
-
-  const textChildren: SceneNode[] = [
-    {
-      marktype: 'text',
-      role: 'title-text',
-      items: [{
-        x: 0,
-        y: 0,
-        text: title.text,
-        align,
-        baseline,
-        angle: angle || undefined,
-        fontSize: title.fontSize,
-        fontWeight: title.fontWeight,
-        ...(title.font != null ? { font: title.font } : {}),
-        ...(title.fontStyle != null ? { fontStyle: title.fontStyle } : {}),
-        fill: title.color,
-        dx,
-        dy,
-        ...(title.limit != null ? { limit: title.limit } : {}),
-      } as SceneItem],
-    } as SceneGroup,
-  ]
-
-  if (hasSub) {
-    textChildren.push({
-      marktype: 'text',
-      role: 'title-subtitle',
-      items: [{
-        x: sx,
-        y: sy,
-        text: title.subtitle!,
-        align,
-        baseline,
-        angle: angle || undefined,
-        fontSize: subFs,
-        fontWeight: title.subtitleFontWeight,
-        fill: title.subtitleColor ?? '#000',
-        dx,
-        dy,
-        ...(title.limit != null ? { limit: title.limit } : {}),
-      } as SceneItem],
-    } as SceneGroup)
-  }
-
-  return {
+  // (a group title reads its facet datum as `parent`)
+  const hostCtx = parent !== undefined ? { ...ctx, signalParams: { ...ctx.signalParams, parent } } : ctx
+  const built = buildTitleGuide({
+    spec: (title0.own ?? {}) as Record<string, unknown>, cfg: (title0.cfg ?? {}) as Record<string, unknown>,
+    viewBounds: b, width, height, raw, host: guideHost(hostCtx), style: guideStyles(ctx),
+  })
+  const g = built.group
+  const mark = (role: string, it: SceneItem, meta: { name?: string; interactive: boolean } | undefined): SceneGroup => ({
+    marktype: 'text', role, items: [it],
+    ...(it.href != null ? { hasLinks: true } : {}),
+    ...(meta?.name ? { cssName: meta.name } : {}),
+    ...(meta?.interactive ? { interactive: true } : {}),
+  }) as SceneGroup
+  const children: SceneGroup[] = [mark('title-text', built.title, built.partMeta.title)]
+  if (built.subtitle) children.push(mark('title-subtitle', built.subtitle, built.partMeta.subtitle))
+  // (the mark definition reads these as written -- vega-parser marks/definition.js: `+zindex || undefined`, `aria`, `description`)
+  const own = (title0.own ?? {}) as Record<string, unknown>
+  const cfg = (title0.cfg ?? {}) as Record<string, unknown>
+  const aria = value(own.aria, cfg.aria)
+  const description = value(own.description, cfg.description)
+  const zindex = +(value(own.zindex, cfg.zindex) as number) || undefined
+  const gb = groupBackground(g as SceneItem, +(g.width as number) || 0, +(g.height as number) || 0)
+  const out = {
     marktype: 'group',
     role: 'title',
-    x,
-    y,
-    items: textChildren,
-    ...(title.aria === false ? { aria: false } : {}),
-  }
+    x: (g.x as number) ?? 0,
+    y: (g.y as number) ?? 0,
+    items: children,
+    box: gb.background,
+    ...(gb.foreground ? { boxFg: gb.foreground } : {}),
+    ...(aria !== undefined ? { aria } : {}),
+    ...(description ? { description } : {}),
+    ...(zindex ? { zindex } : {}),
+    ...(built.partMeta.group?.name ? { cssName: built.partMeta.group.name } : {}),
+    ...(built.partMeta.group?.interactive ? { interactive: true } : {}),
+    ...(itemAriaOf(g) ? { itemAria: itemAriaOf(g) } : {}),
+    ...(g.href != null ? { href: g.href } : {}),
+  } as unknown as SceneGroup
+  vetGuideLinks(out, ctx)
+  return out
 }
 
 /** The view size as written when it is a negative number (see the first autosize pass in evaluateChartImpl). */
@@ -3692,15 +3577,6 @@ function markClip(mark: CompiledMark, ctx: EvalContext): boolean {
   return !!c
 }
 
-/** The aria channels an encode set gave a group item, or undefined when it gave none. */
-function groupItemAria(geo: SceneItem): SceneGroup['itemAria'] {
-  let out: NonNullable<SceneGroup['itemAria']> | undefined
-  for (const k of ['description', 'aria', 'ariaRole', 'ariaRoleDescription'] as const) {
-    if (geo[k] !== undefined) (out ??= {})[k] = geo[k] as never
-  }
-  return out
-}
-
 function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource): SceneGroup {
   const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
   // the facet partition is a dataset for everything in this item's scope, its own scales included
@@ -3775,7 +3651,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     if (href != null && ctx.urlPolicy !== undefined && applyLinkUrlPolicy(href, ctx.urlPolicy) == null) href = undefined
     const role = (mark.role as string | undefined) ?? 'scope'
     // the item's own aria channels (vega-scenegraph ariaItemAttributes, on the item's `<g>`)
-    const itemAria = groupItemAria(geo)
+    const itemAria = itemAriaOf(geo as Record<string, unknown>)
 
     const group = {
       marktype: 'group', name: mark.name, role, x: gx, y: gy, width: gw, height: gh,
@@ -3819,33 +3695,6 @@ function resolveLayoutOptions(layout: Record<string, unknown>, ctx: EvalContext)
   return resolve(layout) as Record<string, unknown>
 }
 
-/**
- * Generate an SVG path for a rounded rectangle with corner radius r,
- * using cubic bezier approximation matching vega-scenegraph (k ≈ 0.5523).
- */
-function roundedRectPath(x: number, y: number, w: number, h: number, r: number): string {
-  // vega-scenegraph uses C = 0.448084975506 (from spencermortensen.com/articles/bezier-circle)
-  // CP1 offset = r * (1 - C) (the larger offset, away from the corner)
-  // CP2 offset = r * C (the smaller offset, closer to the end point)
-  const c = 0.448084975506
-  const kr1 = r * (1 - c) // CP1 offset (from start, toward end)
-  const fmt = (v: number) => {
-    const n = Math.round(v * 1000) / 1000
-    return String(n)
-  }
-  const x1 = x + r, y1 = y
-  const x2 = x + w - r, y2 = y
-  const x3 = x + w, y3 = y + r
-  const x4 = x + w, y4 = y + h - r
-  const x5 = x + w - r, y5 = y + h
-  const x6 = x + r, y6 = y + h
-  const x7 = x, y7 = y + h - r
-  const x8 = x, y8 = y + r
-  return `M${fmt(x1)},${fmt(y1)}L${fmt(x2)},${fmt(y2)}C${fmt(x2 + kr1)},${fmt(y2)},${fmt(x3)},${fmt(y3 - kr1)},${fmt(x3)},${fmt(y3)}`
-    + `L${fmt(x4)},${fmt(y4)}C${fmt(x4)},${fmt(y4 + kr1)},${fmt(x5 + kr1)},${fmt(y5)},${fmt(x5)},${fmt(y5)}`
-    + `L${fmt(x6)},${fmt(y6)}C${fmt(x6 - kr1)},${fmt(y6)},${fmt(x7)},${fmt(y7 + kr1)},${fmt(x7)},${fmt(y7)}`
-    + `L${fmt(x8)},${fmt(y8)}C${fmt(x8)},${fmt(y8 - kr1)},${fmt(x1 - kr1)},${fmt(y1)},${fmt(x1)},${fmt(y1)}Z`
-}
 
 
 // ===========================================================================
@@ -4225,11 +4074,7 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
     if (!s) return undefined
     if (enc.range != null) {
       // lerp(_range(scale), +range)
-      const r = s.range() as number[]
-      const t = +(enc.range as number)
-      const lo = r.length <= 1 ? r[0] ?? 0 : r[0]!
-      const hi = r.length <= 1 ? r[0] ?? 0 : r[r.length - 1]!
-      head = (1 - t) * lo + t * hi
+      head = lerp(s.range() as number[], +(enc.range as number))
       hasHead = true
     } else {
       if (hasHead) head = scaleValue(s, type, head)
@@ -4307,49 +4152,6 @@ function formatValue(v: unknown, spec: EncodeValue): unknown {
   return L.format(fmt)(v as number)
 }
 
-/**
- * vega's legend mark order: background, entries (per entry: bounds rect,
- * symbol, label), then the title LAST (`role-legend-title`). The builders push
- * the title where its layout is computed; it is moved to paint last here, and
- * given vega's `guide-title` bold default.
- */
-function placeLegendTitleLast(group: SceneGroup, legend: CompiledLegend, ctx: EvalContext): void {
-  const items = group.items
-  if (!items) return
-  // The legend's font properties apply to every title/label text whichever
-  // builder made it (gradient, symbol, band, columns...): an explicit item value
-  // (set by a builder that already honoured it) wins, then the legend property.
-  const L = legend as { titleFont?: string; titleFontWeight?: string | number; titleFontStyle?: string; labelFont?: string; labelFontWeight?: string | number; labelFontStyle?: string }
-  const rest: SceneItem[] = []
-  const titles: SceneItem[] = []
-  for (const it of items) {
-    if (it.text == null) { rest.push(it); continue }
-    const isTitle = it._legendTitle === true
-    it._part = isTitle ? 'title' : 'label'
-    const font = isTitle ? L.titleFont : L.labelFont
-    const weight = isTitle ? L.titleFontWeight : L.labelFontWeight
-    const style = isTitle ? L.titleFontStyle : L.labelFontStyle
-    if (font != null && it.font == null) it.font = font
-    if (style != null && it.fontStyle == null) it.fontStyle = style
-    if (isTitle) {
-      // `guide-title` is bold unless the legend says otherwise
-      it.fontWeight = weight != null ? weight : (it.fontWeight ?? 'bold')
-      // ... and the spec's encode.title (the title mark's userEncode) has the last word, whichever builder drew it
-      applyGuideEncode(it, guideEncodeSet(legend.encode?.title), { title: legend.title != null, scales: {}, type: legend.type ?? 'symbol', vgrad: false }, ctx, { x: 0, y: 0 })
-      titles.push(it)
-    } else {
-      if (weight != null && it.fontWeight == null) it.fontWeight = weight
-      rest.push(it)
-    }
-  }
-  group.items = [...rest.filter((it) => it.text == null || !it._legendTitle), ...titles]
-}
-
-/** vega-scale `isContinuous`: the scale types a gradient legend can draw. */
-/** vega-parser LegendScales: the channels a legend can map, in priority order (the first is the canonical scale). */
-const LEGEND_SCALES = ['size', 'shape', 'fill', 'stroke', 'strokeWidth', 'strokeDash', 'opacity'] as const
-const VEGA_CONTINUOUS_SCALES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential', 'diverging'])
-
 /** A legend's explicit `values` (a literal array, a signal, or an array holding signals), or undefined. */
 function resolveLegendValues(legend: CompiledLegend, ctx: EvalContext): unknown[] | undefined {
   const raw = (legend as { values?: unknown }).values
@@ -4364,1044 +4166,101 @@ function resolveLegendValues(legend: CompiledLegend, ctx: EvalContext): unknown[
   return Array.isArray(resolved) ? resolved : undefined
 }
 
-function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | null {
-  // `title: {signal}`: the title mark exists for any `title != null` (vega legend.js `datum.title`),
-  // its text is the signal's value (a list is lines, null is nothing)
-  let legend = legend0
-  const t0 = (legend0 as { title?: unknown }).title
-  if (t0 && typeof t0 === 'object' && !Array.isArray(t0) && typeof (t0 as { signal?: unknown }).signal === 'string') {
-    let v: unknown
-    try { v = ctx.runtime.expr((t0 as { signal: string }).signal)({}, ctx.signalParams) } catch (e) { reportEvalError(ctx, e); v = undefined }
-    legend = { ...legend0, title: (Array.isArray(v) ? v.map(String) : v == null ? '' : String(v)) as never }
-  }
-  // Resolve the scale name (fill/stroke color legends, size legends, or shape legends).
-  // vega-parser legend.js: the canonical scale is the first channel in LegendScales order
-  const scaleName = legend.size ?? legend.shape ?? legend.fill ?? legend.stroke
-    ?? (typeof legend.strokeWidth === 'string' ? legend.strokeWidth : undefined)
-    ?? legend.strokeDash ?? legend.opacity
-  if (!scaleName) return null
-  // Legend labels honor formatType/format; a Vega-Lite timeUnit legend emits
-  // the format as a timeUnitSpecifier(...) signal, which must be resolved to
-  // its strftime specifier before formatting.
-  const legendLabel = (v: unknown): string => {
-    const L = locale(undefined)
-    let fmt = (legend as { format?: unknown }).format
-    const fmtType = (legend as { formatType?: unknown }).formatType
-    if (v == null) return fmtType === 'time' || fmtType === 'utc' ? '' : String(v)
-    if (fmt != null && typeof fmt === 'object' && 'signal' in (fmt as Record<string, unknown>)) {
-      const sig = String((fmt as { signal: string }).signal)
-      try {
-        const resolved = ctx.runtime.expr(sig)({}, ctx.signalParams)
-        if (typeof resolved === 'string') fmt = resolved
-        else fmt = undefined
-      } catch {
-        fmt = evalTimeUnitSpecifier(sig)
-      }
-    }
-    const cal = calendarOf(ctx.scaleTypes.get(scaleName), fmtType) ?? (v instanceof Date ? 'time' : undefined)
-    if (cal) {
-      const d = v instanceof Date ? v : new Date(Number(v))
-      const spec = typeof fmt === 'string' ? fmt : '%b %d, %Y'
-      return (cal === 'utc' ? L.utcFormat(spec) : L.timeFormat(spec))(d)
-    }
-    if (fmt !== undefined) return L.format(String(fmt))(typeof v === 'number' ? v : Number(v))
-    // A continuous legend without an explicit format delegates to the scale's
-    // locale span formatter (vega labelFormat → tickFormat), whose precision
-    // derives from the tick step — e.g. a degenerate [1,1] domain formats as
-    // '1.000000' rather than '1'.
-    if (isContinuous(ctx.scaleTypes.get(scaleName) ?? '') && scale) {
-      const rawCount = (legend as { tickCount?: unknown }).tickCount
-      const count = typeof rawCount === 'number' ? rawCount : 5
-      return tickFormat(L, scale, count)(v)
-    }
-    return String(v)
-  }
-  const scale = ctx.scales.get(scaleName)
+function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
+  const spec = (legend.own ?? {}) as Record<string, unknown>
+  const config = (legend.cfg ?? {}) as Record<string, unknown>
+  // vega-parser legend.js: the channels the legend maps, in LegendScales order; the first is the canonical scale
+  const channels: Array<[string, string]> = []
+  for (const c of LEGEND_SCALES) if (spec[c]) channels.push([c, String(spec[c])])
+  if (!channels.length) return null
+  const scale = ctx.scales.get(channels[0]![1])
   if (!scale) return null
-  const scaleType = ctx.scaleTypes.get(scaleName) ?? ''
+  const scaleType = ctx.scaleTypes.get(channels[0]![1]) ?? ''
+  // vega's `_('tickCount')`: a signal is what it holds
+  const tickCountRaw = guideScalar(ctx, value(spec.tickCount, config.tickCount))
   // A tickCount interval string ('day', 'month', ...) is only legal on time
   // scales: vega's LegendEntries transform throws, the dataflow swallows the
   // error and the legend renders with no entries (an empty degenerate group).
-  const tickCountRaw = (legend as { tickCount?: unknown }).tickCount
   if (typeof tickCountRaw === 'string' && scaleType !== 'time' && scaleType !== 'utc') {
     // vega's LegendEntries throws (the pulse aborts downstream of it): the
     // entries vanish but the legend title — whose encode ran earlier — stays
     // at its raw (0,0) position.
-    const titleStr = String(legend.title ?? '')
+    const title = guideScalar(ctx, spec.title)
+    const titleStr = title == null ? '' : String(title)
     const items: SceneItem[] = []
-    if (titleStr) items.push({ _legendTitle: true, text: titleStr, x: 0, y: 0, align: 'left', baseline: 'top', fill: '#000', fontSize: 11 })
+    if (titleStr) items.push({ _legendTitle: true, _part: 'title', _kind: 'text', text: titleStr, x: 0, y: 0, align: 'left', baseline: 'top', fill: '#000', fontSize: 11, fontWeight: 'bold' } as SceneItem)
     // (the kind of legend it would have been: vega-parser's legendType, decided before any entry is built)
-    const channels = ['size', 'shape', 'fill', 'stroke', 'strokeWidth', 'strokeDash', 'opacity'].filter((k) => (legend as unknown as Record<string, unknown>)[k] != null)
-    const discretizing = scaleType === 'quantile' || scaleType === 'quantize' || scaleType === 'threshold' || scaleType === 'bin-ordinal'
-    const asType = legend.type != null ? legend.type : channels.length === 1 && (legend.fill != null || legend.stroke != null)
-      ? (VEGA_CONTINUOUS_SCALES.has(scaleType) ? 'gradient' : discretizing ? 'discrete' : 'symbol') : 'symbol'
-    const legendType = asType === 'gradient' && discretizing ? 'discrete' : asType
-    return { marktype: 'group', role: 'legend', legendType, x: 0, y: 0, width: 0, height: 0, items }
+    return { marktype: 'group', role: 'legend', legendType: legendType(spec, scaleType), x: 0, y: 0, width: 0, height: 0, items }
   }
-  // Domain values. A continuous symbol legend (opacity, or a color scale
-  // without a gradient) lists generated ticks, not just the domain endpoints.
-  const rawDomain = scale.domain() as unknown[]
-  // vega LegendEntries: `values = _.values || labelValues(scale, count)`; the spec's
-  // values may be a signal, or an array holding signals.
-  const explicitValues = resolveLegendValues(legend, ctx)
-  // vega LegendEntries: count = tickCount(scale, _.count == null ? 5 : _.count, _.minstep)
-  let symbolCountSpec: unknown = tickCountRaw ?? 5
-  if (symbolCountSpec && typeof symbolCountSpec === 'object' && 'signal' in (symbolCountSpec as Record<string, unknown>)) {
-    try { symbolCountSpec = ctx.runtime.expr(String((symbolCountSpec as { signal: string }).signal))({}, ctx.signalParams) } catch { symbolCountSpec = 5 }
-  }
-  const symbolTickMinStep = (legend as { tickMinStep?: unknown }).tickMinStep
-  let domain: unknown[] = explicitValues
-    ?? (CONTINUOUS_TYPES.has(scaleType)
-    && typeof (scale as { ticks?: (n?: number) => unknown[] }).ticks === 'function'
-    ? tickValues(scale as never, tickCount(scale as never, symbolCountSpec, typeof symbolTickMinStep === 'number' ? symbolTickMinStep : undefined))
-    : rawDomain)
-  // ... "if first value maps to size zero, remove from list (vega#717)"
-  if (!explicitValues && domain.length && scale(domain[0]) === 0) domain = domain.slice(1)
-  // gradient legends position ticks across the true scale domain (not the
-  // generated tick list); symbol legends list the ticks themselves.
-  const d0 = rawDomain[0]
-  const d1 = rawDomain[rawDomain.length - 1]
-  const orient = legend.orient ?? 'right'
-
-  // --- Gradient legend (continuous scale + gradientLength) ---
-  // Vega defaults to gradient legends for interpolating scales (sequential,
-  // diverging) even without an explicit gradientLength.
-  const isInterpolating = scaleType === 'sequential'
-  // vega-parser legendType(): an explicit `type` wins; otherwise a fill/stroke
-  // legend over a single continuous scale is a gradient legend (no
-  // gradientLength needed).
-  const legendScaleCount = ['size', 'shape', 'fill', 'stroke', 'strokeWidth', 'strokeDash', 'opacity']
-    .filter((k) => (legend as unknown as Record<string, unknown>)[k] != null).length
-  const autoGradient = legend.type == null && legendScaleCount === 1 && (legend.fill != null || legend.stroke != null)
-    && VEGA_CONTINUOUS_SCALES.has(scaleType)
-  if (legend.type !== 'symbol' && CONTINUOUS_TYPES.has(scaleType)
-    && (legend.type === 'gradient' || autoGradient || legend.own?.gradientLength != null || isInterpolating)) {
-    // Resolve gradientLength: number, signal object, or fallback to 200
-    let GL: number = 200
-    if (typeof legend.gradientLength === 'number') {
-      GL = legend.gradientLength
-    } else if (legend.gradientLength && typeof legend.gradientLength === 'object' && 'signal' in legend.gradientLength) {
-      const signalVal = (legend.gradientLength as { signal: string }).signal
-      if (signalVal) {
-        const v = ctx.runtime.expr(signalVal)({}, ctx.signalParams)
-        GL = typeof v === 'number' ? v : 200
-      }
-    }
-    const gradientLength = GL
-    const L = gradientLength
-
-    // Vega numbers gradient defs from a global counter; replicate that so the
-    // `url(#gradient_n)` references match the oracle (which runs in-process).
-    // vega-functions gradient(): stops from the scale's ticks (see scaleGradientStops)
-    const gradStops = scaleGradientStops(scale as never)
-    const gradientIdH = gradientDefId('horizontal', gradStops)
-    const gradientId = gradientDefId('vertical', gradStops)
-
-    // The spec's encode.title: text / paint / font of the title mark, against the legend's datum.
-    const gradLegendDatum: Row = { title: legend.title != null, scales: {}, type: 'gradient', vgrad: !(legend.direction === 'horizontal' || orient === 'bottom' || orient === 'top') }
-    const gradTitleOver: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(guideEncodeSet(legend.encode?.title) ?? {})) {
-      const r = resolveEncodeProperty(v, gradLegendDatum, ctx)
-      if (r !== undefined) gradTitleOver[k] = r
-    }
-    // Gradient-legend paint properties (vega legend scheme defaults).
-    const titleColor0 = (gradTitleOver.fill as string | undefined) ?? (legend as { titleColor?: string }).titleColor ?? '#000'
-    const labelColor0 = (legend as { labelColor?: string }).labelColor ?? '#000'
-    const titleOpacity0 = (gradTitleOver.fillOpacity as number | undefined) ?? (legend as { titleOpacity?: number }).titleOpacity
-    const labelOpacity0 = (legend as { labelOpacity?: number }).labelOpacity
-    const titleFs0 = (gradTitleOver.fontSize as number | undefined) ?? (legend as { titleFontSize?: number }).titleFontSize ?? 11
-    const labelFs0 = (legend as { labelFontSize?: number }).labelFontSize ?? 10
-    const gradStrokeColor = (legend as { gradientStrokeColor?: string }).gradientStrokeColor ?? '#ddd'
-    const gradStrokeWidth = (legend as { gradientStrokeWidth?: number }).gradientStrokeWidth ?? 0
-    const gradOpacityProp = (legend as { gradientOpacity?: number }).gradientOpacity
-    const borderColor0 = (legend as { strokeColor?: string }).strokeColor
-    const fillColor0 = (legend as { fillColor?: string }).fillColor
-
-    // vega-encode's gradient legend uses
-    //   max(2, 2*floor(gradientLength/100))
-    // as the default tick count, and falls back to the domain endpoints when
-    // automatic label generation yields two or fewer entries.
-    const rawGradCount = (legend as { tickCount?: unknown }).tickCount
-    let gradCount = Math.max(2, 2 * Math.floor(L / 100))
-    if (typeof rawGradCount === 'number') gradCount = rawGradCount
-    else if (rawGradCount && typeof rawGradCount === 'object' && 'signal' in (rawGradCount as Record<string, unknown>)) {
-      const v = ctx.runtime.expr(String((rawGradCount as { signal: string }).signal))({}, ctx.signalParams)
-      if (typeof v === 'number') gradCount = v
-    }
-    const tickMinStep = (legend as { tickMinStep?: unknown }).tickMinStep
-    const counted = tickCount(scale, gradCount, typeof tickMinStep === 'number' ? tickMinStep : undefined)
-    if (typeof counted === 'number') gradCount = counted
-    let tickNums = tickValues(scale, gradCount)
-    const legendValues = explicitValues
-    if (Array.isArray(legendValues)) tickNums = legendValues
-    else if (tickNums.length < 3 && legendValues == null && d0 !== d1 && !(Number.isNaN(Number(d0)) && Number.isNaN(Number(d1)))) {
-      tickNums = [d0, d1]
-    }
-    // An all-invalid (NaN) domain has no generated ticks and no usable end
-    // points; vega (observed) emits a single 'NaN' label at the gradient midpoint.
-    if (tickNums.length === 0 && legendValues == null && Number.isNaN(Number(d0))) tickNums = [NaN]
-    const titleStr0 = String(gradTitleOver.text ?? legend.title ?? '')
-    const titlePad0 = (legend as { titlePadding?: number }).titlePadding ?? 5
-    const titleH0 = titleStr0.length > 0 ? titleFs0 + titlePad0 : 0
-    // Resolve the gradient label formatter once: legend.format may be a
-    // timeUnitSpecifier(...) signal, and formatType 'time' requires timeFormat
-    // (not the numeric format path).
-    const rawLegendFormat = (legend as { format?: unknown }).format
-    let resolvedLegendFormat: string | undefined
-    if (typeof rawLegendFormat === 'string') resolvedLegendFormat = rawLegendFormat
-    else if (rawLegendFormat && typeof rawLegendFormat === 'object' && 'signal' in (rawLegendFormat as Record<string, unknown>)) {
-      const sig = String((rawLegendFormat as { signal: string }).signal)
-      try {
-        const v = ctx.runtime.expr(sig)({}, ctx.signalParams)
-        if (typeof v === 'string') resolvedLegendFormat = v
-      } catch {
-        resolvedLegendFormat = evalTimeUnitSpecifier(sig)
-      }
-    }
-    const legendFormatType = (legend as { formatType?: unknown }).formatType
-    const legendCalendar = calendarOf(scaleType, legendFormatType)
-    // the spec's encode.labels (text, paint, font, ...), evaluated against the entry's datum
-    // {index, label, value, perc} (vega-encode LegendEntries); the label text is measured as encoded
-    const encLabels = guideEncodeSet(legend.encode?.labels)
-    // (the text was applied above, while measuring; the rest styles the item)
-    const encLabelsRest = encLabels && Object.fromEntries(Object.entries(encLabels).filter(([k]) => k !== 'text'))
-    const encodeLabel = (item: SceneItem, datum: Row): void => applyGuideEncode(item, encLabelsRest, datum, ctx, { x: 0, y: 0 })
-    const makeGradientFmt = (): ((v: unknown, idx?: number, perc?: number) => string) => {
-      const L = locale(undefined)
-      let base: (v: unknown) => string
-      if (legendCalendar) {
-        // vega-scale tickFormat: no specifier means the locale's multi-scale time format
-        const format = legendCalendar === 'utc' ? L.utcFormat(resolvedLegendFormat) : L.timeFormat(resolvedLegendFormat)
-        base = (v: unknown) => format(v instanceof Date ? v : new Date(Number(v)))
-      } else if (resolvedLegendFormat) {
-        base = (v: unknown) => L.format(resolvedLegendFormat)(typeof v === 'number' ? v : Number(v))
-      } else {
-        // vega labelFormat() with no explicit specifier delegates to the
-        // scale's locale tick formatter, which chooses decimal precision from
-        // the tick step (e.g. 8.0/8.5/9.0 for a [8,9] domain).
-        base = (v: unknown) => tickFormat(L, scale, gradCount)(v)
-      }
-      const textEnc = encLabels?.text
-      if (textEnc === undefined) return base
-      return (v: unknown, idx = 0, perc = 0) => {
-        const r = resolveEncodeProperty(textEnc, { index: idx, label: base(v), value: v, perc }, ctx)
-        return r === undefined ? base(v) : String(r)
-      }
-    }
-
-    // vega's scaleFraction() builds a positional copy of the scale over the
-    // legend domain, so non-linear scales (log/sqrt/symlog) place labels at
-    // their transformed positions rather than linearly.
-    // a time scale's domain and ticks are Dates: vega's scaleFraction subtracts them
-    // (milliseconds), so a Date is its time value, never a stand-in 0
-    const legendNum = (v: unknown, dflt: number): number => typeof v === 'number' ? v : v instanceof Date ? +v : dflt
-    const gradD0n = legendNum(d0, 0)
-    const gradD1n = legendNum(d1, 1)
-    const gradientFractionScale = scaleFraction(scale, gradD0n, gradD1n)
-    const gradientFraction = (v: number): number => {
-      const out = gradientFractionScale(v)
-      return typeof out === 'number' && Number.isFinite(out) ? out : 0.5
-    }
-
-    // --- horizontal gradient strip (top/bottom orient, or direction:horizontal) ---
-    // Vega lays the strip out left→right: title at y=9, the gradient rect at
-    // y=titleH (height=gradientThickness 16), labels beneath at the fractional
-    // position along the strip. Calibrated to the oracle.
-    if (legend.direction === 'horizontal' || orient === 'bottom' || orient === 'top') {
-      const thickness = legend.gradientThickness ?? 16
-      const legendFmt = makeGradientFmt()
-      const items: SceneItem[] = []
-      // legendLayout: the box spans the content from the legend origin to the right
-      // edge of everything in it (labels centred on their ticks overhang the strip);
-      // the left overhang is not part of it (legendBounds pins x1 to the padding).
-      let bgW = gradientLength
-      const bgH = titleH0 + thickness + 12
-      const bgX0 = borderColor0 != null ? 0.5 : 0
-      const bgY0 = borderColor0 != null ? 0.5 : 0
-      const gradCRH = (legend as { cornerRadius?: number }).cornerRadius
-      const bgSlot = items.length
-      if (titleStr0) {
-        const hAnchor = (legend as { titleAnchor?: string }).titleAnchor ?? 'start'
-        const hAlign = (legend as { titleAlign?: string }).titleAlign
-          ?? (hAnchor === 'end' ? 'right' : hAnchor === 'middle' ? 'center' : 'left')
-        const hBase = (legend as { titleBaseline?: string }).titleBaseline ?? 'top'
-        const hY = hBase === 'middle' ? Math.round(0.3 * titleFs0) : hBase === 'bottom' ? Math.round(-0.21 * titleFs0) : Math.round(0.79 * titleFs0)
-        const hX = hAnchor === 'end' ? gradientLength : hAnchor === 'middle' ? gradientLength / 2 : 0
-        const hTitleW = nominalTextWidth(titleStr0, Math.abs(titleFs0), 'bold')
-        bgW = Math.max(bgW, hX + (hAlign === 'center' ? hTitleW / 2 : hAlign === 'right' ? 0 : hTitleW))
-        const hLimit = (legend as { titleLimit?: number }).titleLimit
-        items.push({ _legendTitle: true, text: titleStr0, x: hX, y: hY, align: hAlign as SceneItem['align'], fill: titleColor0, fontSize: titleFs0, ...(hLimit != null ? { limit: hLimit } : {}), ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
-      }
-      items.push({ _part: 'gradient', path: `M0,0h${gradientLength}v${thickness}h${-gradientLength}Z`, x: 0, y: titleH0, fill: `url(#${gradientIdH})`, stroke: gradStrokeColor, strokeWidth: gradStrokeWidth, opacity: gradOpacityProp ?? 1 })
-      const labelStartH = items.length
-      for (const [ti, t] of tickNums.entries()) {
-        const tNum = legendNum(t, 0)
-        const perc = gradientFraction(tNum)
-        const labelText = legendFmt(tNum, ti, perc)
-        // vega-parser legend-gradient-labels: flush at the strip's ends, centred between them
-        const labelAlign = perc <= 0 ? 'left' : perc >= 1 ? 'right' : 'center'
-        // raw item y (strip + labelOffset) with baseline 'top': the renderer adds the baseline shift,
-        // so a spec's encode.labels baseline / fontSize move the label as in vega
-        const labelItem: SceneItem = { text: labelText, x: perc * gradientLength, y: titleH0 + thickness + ((legend.own?.labelOffset as number | undefined) ?? (legend as { gradientLabelOffset?: number }).gradientLabelOffset ?? 2), baseline: 'top', align: labelAlign, fill: labelColor0, fontSize: labelFs0, ...((legend as { labelLimit?: number }).labelLimit != null ? { limit: (legend as { labelLimit?: number }).labelLimit } : {}), ...(labelOpacity0 != null ? { fillOpacity: labelOpacity0 } : {}) }
-        encodeLabel(labelItem, { index: ti, label: String(labelText), value: t, perc })
-        items.push(labelItem)
-      }
-      // vega-parser legend-gradient-labels: the labels go through the Overlap
-      // transform (config.legend.labelOverlap defaults to true)
-      applyOverlap(items.slice(labelStartH), (legend as { labelOverlap?: unknown }).labelOverlap, (legend as { labelSeparation?: number }).labelSeparation ?? 0)
-      // vega's Overlap transform re-bounds the label mark from the VISIBLE labels only
-      for (const lab of items.slice(labelStartH)) {
-        if (lab.opacity === 0) continue
-        bgW = Math.max(bgW, boundLeaf(new Bounds(), lab).x2)
-      }
-      bgW = Math.ceil(bgW)
-      items.splice(bgSlot, 0, { _part: 'bg', path: gradCRH && gradCRH > 0 ? roundedRectPath(bgX0, bgY0, bgW, bgH, Math.min(gradCRH, bgW / 2, bgH / 2)) : `M${bgX0},${bgY0}h${bgW}v${bgH}h-${bgW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
-      if (gradStops.length && !ctx._defs.some((d) => d.id === gradientIdH)) ctx._defs.push({ id: gradientIdH, colorStops: gradStops, direction: 'horizontal' })
-      const gradientGroup = { marktype: 'group', role: 'legend', legendType: 'gradient', x: 0, y: 0, width: bgW, height: bgH, items } as SceneGroup
-      // vega legendLayout boundStrokes the outer rect with the legend's OWN
-      // stroke (legend.strokeColor) — the gradient rect's decorative #ddd
-      // zero-width stroke is not the group's and must not expand the bounds.
-      ;(gradientGroup as unknown as Record<string, unknown>)._borderStroke = borderColor0 != null
-      return gradientGroup
-    }
-
-    // The gradient rect inherits the legend's gradient encode opacity (vega-lite
-    // emits opacity 0.7 for stroke legends, 1 otherwise).
-    let gradientOpacity = 1
-    const gradEncode = (legend as unknown as { encode?: { gradient?: { update?: { opacity?: EncodeValue } } } }).encode?.gradient?.update?.opacity
-    if (gradEncode && typeof gradEncode === 'object' && 'value' in gradEncode) {
-      const ov = (gradEncode as { value?: unknown }).value
-      if (typeof ov === 'number') gradientOpacity = ov
-    }
-
-    // Outer background width = the wider of the label run and the title
-    // (vega measures both with textMetrics: labels 10px, title bold 11px).
-    // Measure the FORMATTED labels — vega-format emits U+2212 for negatives
-    // (16.96px for '−10' vs 14.45px for the ASCII '-10' of String(t)).
-    const measureFmt = makeGradientFmt()
-    const labelStrs = tickNums.map((t: unknown, i: number) => measureFmt(t, i, gradientFraction(legendNum(t, 0))))
-    // Overlap re-bounds the label mark from the labels it left visible, so the
-    // box is as wide as the widest of THOSE: decide visibility with the same
-    // positions the labels get below (the overlap test is x-independent here).
-    // (the label as it will be drawn, at the strip's x offset: the spec's encode.labels - fontSize,
-    // align, baseline, ... - shapes both the overlap test and the box)
-    const probeX = ((legend as { gradientThickness?: number }).gradientThickness ?? 16)
-      + ((legend.own?.labelOffset as number | undefined) ?? (legend as { gradientLabelOffset?: number }).gradientLabelOffset ?? 2)
-    const probe: SceneItem[] = tickNums.map((t: unknown, i: number) => {
-      const perc = gradientFraction(legendNum(t, 0))
-      const item: SceneItem = {
-        text: labelStrs[i]!, x: probeX, y: (1 - perc) * L, baseline: perc <= 0 ? 'bottom' : perc >= 1 ? 'top' : 'middle', align: 'left', fontSize: labelFs0,
-        ...((legend as { labelLimit?: number }).labelLimit != null ? { limit: (legend as { labelLimit?: number }).labelLimit } : {}),
-      }
-      encodeLabel(item, { index: i, label: labelStrs[i]!, value: t, perc })
-      return item
-    })
-    applyOverlap(probe, (legend as { labelOverlap?: unknown }).labelOverlap, (legend as { labelSeparation?: number }).labelSeparation ?? 0)
-    const probeBounds = probe.map((it) => boundLeaf(new Bounds(), it))
-    // the widest right edge among the labels Overlap left visible, measured from the strip's label offset
-    const maxLabelW = probe.reduce((m: number, it, i: number) => it.opacity === 0 ? m : Math.max(m, probeBounds[i]!.x2 - probeX), 0)
-    const titleStr = titleStr0
-    const titleWidth = titleStr.length > 0 ? nominalTextWidth(titleStr, Math.abs(titleFs0), 'bold') : 0
-    const vThickness = (legend as { gradientThickness?: number }).gradientThickness ?? 16
-    // vega legend-gradient-labels: value(spec.labelOffset, config.gradientLabelOffset)
-    const vLabelOffset = (legend.own?.labelOffset as number | undefined) ?? (legend as { gradientLabelOffset?: number }).gradientLabelOffset ?? 2
-    const gradPad = (legend as { padding?: number }).padding ?? 0
-    // vega's legendLayout sizes the legend box as ceil(bounds.width() + 2*pad).
-    const outerWidth = Math.ceil(Math.max(vThickness + vLabelOffset + maxLabelW, titleWidth))
-    const vAnchor = (legend as { titleAnchor?: string }).titleAnchor ?? 'start'
-    const vAlign = (legend as { titleAlign?: string }).titleAlign
-      ?? (vAnchor === 'end' ? 'right' : vAnchor === 'middle' ? 'center' : 'left')
-    const vX = vAnchor === 'end' ? outerWidth : vAnchor === 'middle' ? outerWidth / 2 : 0
-    const titleBoundsLeft = vX - (vAlign === 'center' ? titleWidth / 2 : vAlign === 'right' ? titleWidth : 0)
-    const titleBoundsRight = vX + (vAlign === 'center' ? titleWidth / 2 : vAlign === 'left' ? titleWidth : 0)
-    const negativeTitleExtra = titleFs0 < 0 ? Math.ceil(Math.abs(titleFs0) * 0.75) : 0
-    const titleExtraLeft = Math.max(0, -titleBoundsLeft) + negativeTitleExtra
-    const titleExtraRight = Math.max(0, titleBoundsRight - outerWidth)
-
-    const items: SceneItem[] = []
-    const titleOrientG = (legend as { titleOrient?: string }).titleOrient ?? 'top'
-    const sideTitleG = titleOrientG === 'left' || titleOrientG === 'right'
-    const bottomTitleG = titleOrientG === 'bottom'
-    const sideTitleW = sideTitleG && titleStr.length > 0 ? Math.abs(titleFs0) + titlePad0 : 0
-    // Title height: the row above the gradient only exists for a top title.
-    const titleH = titleStr.length > 0 && !sideTitleG && !bottomTitleG ? Math.abs(titleFs0) + titlePad0 : 0
-    const titleBottomH = titleStr.length > 0 && bottomTitleG ? Math.abs(titleFs0) + titlePad0 : 0
-    const gradStrokeExtra = gradStrokeWidth / 2
-    const boxW = Math.ceil(outerWidth + 2 * gradPad + titleExtraLeft + titleExtraRight + sideTitleW)
-    const contentX = gradPad + titleExtraLeft + (titleOrientG === 'left' ? sideTitleW : 0)
-    // Legend layout includes label bounds, which can extend below a short
-    // gradient (or below the domain when explicit values fall outside it).
-    const labelBottom = probe.reduce<number>((m, it, i) => {
-      if (it.opacity === 0) return m // hidden by Overlap: not in the label mark's bounds
-      return Math.max(m, gradPad + titleH + probeBounds[i]!.y2)
-    }, 0)
-    const boxH = Math.ceil(Math.max(titleH + titleBottomH + L + 2 * gradPad + gradStrokeExtra, labelBottom))
-    // Background box (0,0 to outerWidth, titleH+L) — the legend's own border
-    // stroke (legend.strokeColor) insets the rect half a pixel; fillColor
-    // paints it.
-    const bgXV = borderColor0 != null ? 0.5 : 0
-    const bgYV = borderColor0 != null ? 0.5 : 0
-    const gradCRV = (legend as { cornerRadius?: number }).cornerRadius
-    items.push({ _part: 'bg', path: gradCRV && gradCRV > 0 ? roundedRectPath(bgXV, bgYV, boxW, boxH, Math.min(gradCRV, boxW / 2, boxH / 2)) : `M${bgXV},${bgYV}h${boxW}v${boxH}h-${boxW}Z`, x: 0, y: 0, ...(fillColor0 != null ? { fill: fillColor0 } : {}), ...(borderColor0 != null ? { stroke: borderColor0 } : {}) })
-    // Gradient rect at legend-relative (0, titleH), thickness x L
-    items.push({
-      _part: 'gradient',
-      path: `M0,0h${vThickness}v${L}h${-vThickness}Z`,
-      x: contentX, y: gradPad + titleH,
-      fill: `url(#${gradientId})`,
-      stroke: gradStrokeColor,
-      strokeWidth: gradStrokeWidth,
-      opacity: gradOpacityProp ?? gradientOpacity,
-    })
-    // Title
-    if (titleStr.length > 0) {
-      const vBase = (legend as { titleBaseline?: string }).titleBaseline ?? 'top'
-      const vY = vBase === 'middle' ? Math.round(0.3 * titleFs0) : vBase === 'bottom' ? Math.round(-0.21 * titleFs0) : Math.round(0.79 * titleFs0)
-      const vLimit = (legend as { titleLimit?: number }).titleLimit
-      if (sideTitleG) {
-        items.push({
-          _legendTitle: true,
-          text: titleStr,
-          x: titleOrientG === 'left' ? gradPad : gradPad + outerWidth + titlePad0,
-          y: gradPad + L / 2,
-          angle: titleOrientG === 'left' ? -90 : 90,
-          align: 'center',
-          // vega rotates the title about its anchor and applies the title
-          // baseline (default top) INSIDE the rotated frame
-          baseline: ((legend as { titleBaseline?: string }).titleBaseline ?? (titleOrientG === 'right' ? 'bottom' : 'top')) as SceneItem['baseline'],
-          fill: titleColor0, fontSize: titleFs0,
-          ...(vLimit != null ? { limit: vLimit } : {}),
-          ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}),
-        })
-      } else if (bottomTitleG) {
-        items.push({
-          _legendTitle: true,
-          text: titleStr,
-          x: vX + contentX,
-          y: gradPad + L + Math.round(0.79 * titleFs0) + titlePad0,
-          align: vAlign as SceneItem['align'],
-          fill: titleColor0, fontSize: titleFs0,
-          ...(vLimit != null ? { limit: vLimit } : {}),
-          ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}),
-        })
-      } else {
-        items.push({ _legendTitle: true, text: titleStr, x: vX + contentX, y: vY + gradPad, align: vAlign as SceneItem['align'], fill: titleColor0, fontSize: titleFs0, ...(vLimit != null ? { limit: vLimit } : {}), ...(titleOpacity0 != null ? { fillOpacity: titleOpacity0 } : {}) })
-      }
-    }
-    // Labels. Vega positions each label at (1 - perc) * L and then shifts it by
-    // the text baseline offset (labels flush against the gradient edges get
-    // top/bottom baselines), rounding to whole pixels. Replicate that here.
-    // Vega formats gradient legend labels with the locale formatter, which uses
-    // the Unicode minus sign (U+2212) for negative values. Match that by using
-    // the locale number formatter rather than String().
-    const legendFmt = makeGradientFmt()
-    const labelStartV = items.length
-    for (const [ti, t] of tickNums.entries()) {
-      const tNum = legendNum(t, 0)
-      const perc = gradientFraction(tNum)
-      // raw item y with vega's flush baselines (legend-gradient-labels baselineExpr): the
-      // renderer adds the shift, so a spec's encode.labels baseline / fontSize move the label as in vega
-      const labelItem: SceneItem = { text: legendFmt(tNum, ti, perc), x: contentX + vThickness + vLabelOffset, y: gradPad + titleH + (1 - perc) * L, baseline: perc <= 0 ? 'bottom' : perc >= 1 ? 'top' : 'middle', align: 'left', fill: labelColor0, fontSize: labelFs0, ...((legend as { labelLimit?: number }).labelLimit != null ? { limit: (legend as { labelLimit?: number }).labelLimit } : {}), ...(labelOpacity0 != null ? { fillOpacity: labelOpacity0 } : {}) }
-      encodeLabel(labelItem, { index: ti, label: String(labelItem.text), value: t, perc })
-      items.push(labelItem)
-    }
-    applyOverlap(items.slice(labelStartV), (legend as { labelOverlap?: unknown }).labelOverlap, (legend as { labelSeparation?: number }).labelSeparation ?? 0)
-    // Gradient def from scale's interpolator
-    const group: SceneGroup = {
-      marktype: 'group',
-      role: 'legend',
-      legendType: 'gradient',
-      x: 0,
-      y: 0,
-      width: boxW,
-      height: boxH,
-      items,
-    }
-    ;(group as unknown as Record<string, unknown>)._borderStroke = borderColor0 != null
-    if (gradStops.length && !ctx._defs.some((d) => d.id === gradientId)) {
-      ctx._defs.push({ id: gradientId, colorStops: gradStops })
-    }
-    return group
-  }
-
-  // --- Band legend (quantile / quantize / threshold) ---
-  // Vega renders these scale types as a "band" legend: rectangular color
-  // swatches for each range value with text labels at quantile breakpoints.
-  if ((scaleType === 'quantile' || scaleType === 'quantize' || scaleType === 'threshold') && orient === 'right' || orient === undefined) {
-    const rangeVals = scale.range() as string[]
-    const bandCount = rangeVals.length
-    if (bandCount > 0 && orient === 'right' || orient === undefined) {
-      const SWATCH_W = 16
-      const SWATCH_H = Math.max(25, 200 / bandCount)
-      const sortedDomain = [...rawDomain].filter((v): v is number => typeof v === 'number').sort((a, b) => a - b)
-      const isThreshold = scaleType === 'threshold'
-      // Breakpoint label strings — the legend width is derived from the widest
-      // label (vega measures each label via textMetrics; no char heuristics).
-      const rawBreaks: Array<number | undefined> = []
-      for (let i = 1; i < bandCount; i++) {
-        let rawVal: number | undefined
-        if ((scaleType === 'quantize' || scaleType === 'quantile') && sortedDomain.length >= 2) {
-          // Quantize/quantile breakpoints are evenly spaced across the domain extent
-          const d0 = sortedDomain[0]!
-          const d1 = sortedDomain[sortedDomain.length - 1]!
-          rawVal = d0 + (d1 - d0) * i / bandCount
-        } else {
-          const nVals = sortedDomain.length
-          const idx = Math.ceil(i * nVals / bandCount) - 1
-          rawVal = idx >= 0 && idx < nVals ? sortedDomain[idx] : undefined
-        }
-        rawBreaks.push(rawVal)
-      }
-      const quantileFractional = rawBreaks.some((v) => v !== undefined && !Number.isInteger(v))
-      const bandLabels: string[] = rawBreaks.map((rawVal) => rawVal === undefined
-        ? ''
-        : isThreshold
-          ? String(rawVal)
-          : scaleType === 'quantile'
-            ? rawVal.toFixed(quantileFractional ? 2 : 1)
-            : (scaleType === 'quantize' ? String(Math.round(rawVal * 1e10) / 1e10) : (Number.isInteger(rawVal) ? rawVal + '.0' : String(rawVal))))
-      const maxLabelW = bandLabels.reduce((m: number, s: string) => Math.max(m, nominalTextWidth(s, 10)), 0)
-      const outerWidth = Math.ceil(18 + maxLabelW)
-      const titleStrB = String(legend.title ?? '')
-      const titleH = titleStrB.length > 0 ? 16 : 0
-      const bgH = titleH + bandCount * SWATCH_H
-      const items: SceneItem[] = []
-      // Background box
-      items.push({ _part: 'bg', path: `M0,0h${outerWidth}v${bgH}h-${outerWidth}Z`, x: 0, y: 0 })
-      if (titleStrB) items.push({ _legendTitle: true, text: titleStrB, x: 0, y: 9, align: 'left', fill: '#000', fontSize: 11, fontWeight: 'bold' })
-      // Band swatches (top-to-bottom: last range color first)
-      for (let i = 0; i < bandCount; i++) {
-        const y = titleH + (bandCount - 1 - i) * SWATCH_H
-        items.push({ _part: 'band', path: `M0,${y}h${SWATCH_W}v${SWATCH_H}h-${SWATCH_W}Z`, x: 0, y: 0, fill: String(rangeVals[i]), stroke: '#ddd', strokeWidth: 0, opacity: 1 })
-      }
-      // Labels at breakpoints (skip the first which is empty)
-      for (let i = 1; i < bandCount; i++) {
-        const y = titleH + (bandCount - i) * SWATCH_H + 3
-        items.push({ text: bandLabels[i - 1]!, x: 18, y, align: 'left', fill: '#000', fontSize: 10 })
-      }
-      // Empty label at the bottom
-      items.push({ text: '', x: 18, y: titleH + bandCount * SWATCH_H - 2, align: 'left', fill: '#000', fontSize: 10 })
-      return { marktype: 'group', role: 'legend', legendType: 'discrete', x: 0, y: 0, width: outerWidth, height: bgH, items }
+  // the format: a specifier, or a signal holding one (a timeUnit legend writes timeUnitSpecifier(...), which the
+  // expression engine may not have)
+  const specifierOf = (raw: unknown): unknown => {
+    if (!isSignal(raw)) return raw
+    try {
+      return ctx.runtime.expr(raw.signal)({}, ctx.signalParams)
+    } catch {
+      return evalTimeUnitSpecifier(raw.signal)
     }
   }
-
-  // --- Symbol legend (discrete) ---
-
-
-  // --- Symbol legend geometry (orient-independent: vertical entries; the
-  // grid anchor in buildAxisAndLegend positions every orient) ---
-  {
-    // --- vega legend-symbol-groups.js: the symbol's properties, in vega's own
-    // precedence. The legend's symbol* properties first (a legend WITHOUT a fill
-    // channel starts from the base fill / stroke: transparent / #888), then the
-    // scale of every channel the legend maps (size, shape, fill, stroke,
-    // strokeWidth, strokeDash, opacity) at the entry value, then the spec's own
-    // `encode.symbols` (enter, then update). One rule for every channel: there is
-    // no per-channel painting below this point.
-    const legendRec = legend as unknown as Record<string, unknown>
-    const symbolsEncode = (legend.encode as { symbols?: { enter?: Record<string, EncodeValue>; update?: Record<string, EncodeValue> } } | undefined)?.symbols
-    const hasFillChannel = legend.fill != null
-    const channelScales: Array<[string, Scale]> = []
-    for (const ch of LEGEND_SCALES) {
-      const scaleRef = legendRec[ch]
-      const sc = typeof scaleRef === 'string' ? ctx.scales.get(scaleRef) : undefined
-      if (sc) channelScales.push([ch, sc])
-    }
-    const baseEnter: Record<string, unknown> = {
-      fill: legendRec.symbolFillColor ?? (hasFillChannel ? undefined : legendRec.symbolBaseFillColor),
-      shape: legendRec.symbolType,
-      size: legendRec.symbolSize,
-      stroke: legendRec.symbolStrokeColor ?? (hasFillChannel ? undefined : legendRec.symbolBaseStrokeColor),
-      strokeDash: legendRec.symbolDash,
-      strokeDashOffset: legendRec.symbolDashOffset,
-      strokeWidth: legendRec.symbolStrokeWidth,
-    }
-    const symbolProps = (datum: Row): Record<string, unknown> => {
-      const out: Record<string, unknown> = {}
-      const put = (src: Record<string, unknown>): void => {
-        for (const [k, v] of Object.entries(src)) if (v !== undefined) out[k] = v
-      }
-      const scaled: Record<string, unknown> = {}
-      for (const [ch, sc] of channelScales) scaled[ch] = sc(datum.value)
-      put({ ...baseEnter, ...scaled })
-      for (const [k, v] of Object.entries(symbolsEncode?.enter ?? {})) {
-        const r = resolveEncodeProperty(v, datum, ctx)
-        if (r !== undefined) out[k] = r
-      }
-      put({ opacity: legendRec.symbolOpacity ?? 1, ...scaled })
-      for (const [k, v] of Object.entries(symbolsEncode?.update ?? {})) {
-        const r = resolveEncodeProperty(v, datum, ctx)
-        if (r !== undefined) out[k] = r
-      }
-      return out
-    }
-    // vega-parser legend.js sizeExpression: max(ceil(sqrt(size) + strokeWidth), fontSize),
-    // where size / strokeWidth are the channel's scale at the value when the legend maps
-    // it, else the symbol mark's encoded value (getEncoding: update, then enter).
-    const encodedSymbolValue = (name: string, datum: Row): unknown => {
-      const user = symbolsEncode?.update?.[name] ?? symbolsEncode?.enter?.[name]
-      return user !== undefined ? resolveEncodeProperty(user, datum, ctx) : baseEnter[name]
-    }
-    const symbolSizeOf = (v: unknown): number => {
-      const sc = channelScales.find(([ch]) => ch === 'size')?.[1]
-      return Number(sc ? sc(v) : (encodedSymbolValue('size', { value: v }) ?? 0))
-    }
-    const symbolStrokeWidthOf = (v: unknown): number => {
-      const sc = channelScales.find(([ch]) => ch === 'strokeWidth')?.[1]
-      return Number(sc ? sc(v) : (encodedSymbolValue('strokeWidth', { value: v }) ?? 0))
-    }
-    const symbolItemPaint = (props: Record<string, unknown>): Record<string, unknown> => {
-      const { shape: _shape, size: _size, ...paint } = props
-      return paint
-    }
-    const labelFs = (legend as { labelFontSize?: number }).labelFontSize ?? 10
-
-    // LegendEntries (vega-encode): symbolLimit caps the entry list —
-    // values.slice(0, limit-1) plus a trailing '…N entries' entry whose value
-    // is values[items.length]. The offset datum = max over the SLICED items
-    // of the size expression (0 when the slice is empty — the ellipsis-only
-    // legend collapses to offset 0); the size datum = the size expression
-    // (constant here — the size channel routes through the same expression).
-    // A negative symbolSize makes the expression NaN (sqrt of a negative),
-    // which flows through the layout as NaN item positions: vega's `x || 0`
-    // anchor coercion renders them at the origin.
-    const limitRaw = (legend as { symbolLimit?: number }).symbolLimit
-    const limit = limitRaw == null ? NaN : +limitRaw
-    const limitHits = !!(limit && domain.length > limit)
-    const entryValues = limitHits ? domain.slice(0, limit - 1) : domain
-    // legend.js sizeExpression: max(ceil(sqrt(size)+strokeWidth), fontSize).
-    // A strokeWidth channel resolves its scale per entry, so the expression
-    // (and thus the row height) varies: 10+scale(v), 10+lots of values.
-    // the label font size the size expression floors at: the labels' ENCODED fontSize
-    // (the spec's encode.labels over the legend's), else the legend's, else the style's
-    const encodedLabelFs = guideEncodeSet(legend.encode?.labels)?.fontSize
-    const sizeFloorFs = (() => {
-      if (encodedLabelFs === undefined) return labelFs
-      const r = resolveEncodeProperty(encodedLabelFs, {}, ctx)
-      return typeof r === 'number' ? r : labelFs
-    })()
-    const entrySizeD = (v: unknown): number =>
-      // (vega: `getEncoding('fontSize', ...) || getStyle('fontSize', ...)`: a zero font size falls back to the style's 10)
-      Math.max(Math.ceil(Math.sqrt(symbolSizeOf(v)) + symbolStrokeWidthOf(v)), sizeFloorFs || 10)
-    const offsetDatum = entryValues.length ? Math.max(0, maxOf(entryValues.map(entrySizeD))) : 0
-    const entries = entryValues.map((v: unknown) => ({ value: v, label: legendLabel(v), sizeD: entrySizeD(v) }))
-    if (limitHits) {
-      // vega's LegendEntries gives the ellipsis entry its OWN size expression
-      // (values[items.length]); the shared offset stays the max over the
-      // sliced (possibly empty) items.
-      const ev = domain[entryValues.length]
-      entries.push({ value: ev, label: `…${domain.length - entryValues.length} entries`, sizeD: entrySizeD(ev) })
-    }
-    const n = entries.length
-
-    // clipHeight: a truthy value moves the symbol/label y encode to
-    // clipHeight/2 (from the per-entry size datum), carries height=clipHeight
-    // into the entry bound (the noBound encode switches off), and clips each
-    // entry's symbols with a clipPath over the laid-out entry rect.
-    const clipHeightRaw = (legend as { clipHeight?: number }).clipHeight
-    const hasClip = clipHeightRaw != null ? !!clipHeightRaw : false
-
-    const labelOffset = (legend as { labelOffset?: number }).labelOffset ?? 4
-    const symbolOffset = (legend as { symbolOffset?: number }).symbolOffset ?? 0
-    const rowPadding = (legend as { rowPadding?: number }).rowPadding ?? 2
-    const colPad = (legend as { columnPadding?: number }).columnPadding ?? 10
-    const labelColor = (legend as { labelColor?: string }).labelColor ?? '#000'
-    const labelOpacity = (legend as { labelOpacity?: number }).labelOpacity
-    const labelFontWeight = (legend as { labelFontWeight?: string | number }).labelFontWeight
-    const labelFontStyle = (legend as { labelFontStyle?: string }).labelFontStyle
-    const labelFont = (legend as { labelFont?: string }).labelFont
-    // the spec's encode.title (vega legend-title.js userEncode): text, paint and font of the
-    // title mark, evaluated against the legend's datum, take precedence over the title properties
-    const legendDatum: Row = { title: legend.title != null, scales: {}, type: 'symbol', vgrad: false }
-    const titleOver: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(guideEncodeSet(legend.encode?.title) ?? {})) {
-      const r = resolveEncodeProperty(v, legendDatum, ctx)
-      if (r !== undefined) titleOver[k] = r
-    }
-    const titleFont = (titleOver.font as string | undefined) ?? (legend as { titleFont?: string }).titleFont
-    const titleColor = (titleOver.fill as string | undefined) ?? (legend as { titleColor?: string }).titleColor ?? '#000'
-    const titleOpacity = (titleOver.fillOpacity as number | undefined) ?? (legend as { titleOpacity?: number }).titleOpacity
-    const titleFs = (titleOver.fontSize as number | undefined) ?? (legend as { titleFontSize?: number }).titleFontSize ?? 11
-    const titlePad = (legend as { titlePadding?: number }).titlePadding ?? 5
-    const labelLimit = (legend as { labelLimit?: number }).labelLimit ?? 160
-    const labelAlign = (legend as { labelAlign?: string }).labelAlign ?? 'left'
-    const lblBaseline = (legend as { labelBaseline?: string }).labelBaseline ?? 'middle'
-    // the title text: a list is lines; the title mark exists for any `title != null` (even ''), an empty text then draws an empty `<text>`
-    const titleRaw = (titleOver.text ?? legend.title) as unknown
-    const titleStr: string | string[] = Array.isArray(titleRaw) ? titleRaw.map(String) : titleRaw == null ? '' : String(titleRaw)
-    const hasTitle = (Array.isArray(titleStr) ? titleStr.length > 0 : titleStr !== '') || legend.title != null
-    // vega legendLayout: w = ceil(bounds + 2*padding); the inner padding
-    // shifts the whole content.
-    const legendPad = (legend as { padding?: number }).padding ?? 0
-
-    // columns truthiness drives the x encode signal `(columns) ? datum.offset
-    // : datum.size` — spec.columns 0 and horizontal direction (entryColumns
-    // falls back to +isVertical = 0) read the size datum instead of the
-    // offset datum.
-    const direction = (legend as { direction?: string }).direction ?? 'vertical'
-    const specColumns = (legend as { columns?: number }).columns
-    const colsFlag = specColumns != null ? specColumns : direction === 'vertical' ? 1 : 0
-    const colsTruthy = !!colsFlag
-
-    // Entry columns (vega gridLayout: `ncols = opt.columns || groups.length`):
-    // unspecified → one column; 0 → every entry is its own column (falsy
-    // columns falls through to the group count).
-    // A non-integer/negative `columns` makes vega's legend gridLayout throw
-    // (invalid array length) — the layout aborts and the legend stays at its
-    // raw (0,0) position with the base one-column content (raw-guide mode
-    // skips the placement).
-    const ncols = colsFlag === 0
-      ? n
-      : colsFlag > 0 ? (Number.isInteger(colsFlag) ? colsFlag : 1)
-        : 1
-
-    // --- per-entry encoded positions and measured bounds (the Bound pass) ---
-    // symbol x = (columns ? offset : size)/2 + symbolOffset; label x =
-    // (columns ? offset : size) + labelOffset (no halving); y = clipHeight/2
-    // when clipped, else the size datum/2.
-    const symDs: string[] = []
-    const symPropsOf: Array<Record<string, unknown>> = []
-    const lblItems: SceneItem[] = []
-    const ySymIs: number[] = []
-    const encLabels = guideEncodeSet(legend.encode?.labels)
-    const childEncodeCtx = ctx
-    const ebs: Bounds[] = []
-    const yIs: number[] = []
-    const xSymIs: number[] = []
-    const xLblIs: number[] = []
-    for (const e of entries) {
-      const yI = hasClip ? (clipHeightRaw as number) / 2 : e.sizeD / 2
-      const xSymI = (colsTruthy ? offsetDatum : e.sizeD) / 2 + symbolOffset
-      const xLblI = (colsTruthy ? offsetDatum : e.sizeD) + symbolOffset + labelOffset
-      yIs.push(yI); xSymIs.push(xSymI); xLblIs.push(xLblI)
-      const entryDatum: Row = { value: e.value, label: e.label, index: entries.indexOf(e) }
-      const props = symbolProps(entryDatum)
-      // the spec's encode.symbols may also place the symbol (x / y in the entry's frame)
-      if (props.x !== undefined) xSymIs[xSymIs.length - 1] = Number(props.x)
-      if (props.y !== undefined) ySymIs.push(Number(props.y)); else ySymIs.push(yI)
-      const xSymFinal = xSymIs[xSymIs.length - 1]!
-      const symD = String(symbolPath(String(props.shape ?? 'circle'), Math.sqrt(Number(props.size)) / 2))
-      symDs.push(symD)
-      symPropsOf.push(props)
-      // symbol bound: traced path + stroke expansion (miter), translated by
-      // the item position with vega's `|| 0` NaN coercion — NaN positions
-      // leave the sentinel bounds untouched and the union no-ops.
-      const symItem = { ...symbolItemPaint(props), path: symbolPathExact(String(props.shape ?? 'circle'), Math.sqrt(Number(props.size)) / 2), x: xSymFinal, y: ySymIs[ySymIs.length - 1]! } as unknown as SceneItem
-      const symB = boundLeaf(new Bounds(), symItem)
-      // a clipped symbol mark (clipHeight) has its bounds cut to the clip region - the entry
-      // group's box, whose width is still 0 when the Bound pass runs (boundClip)
-      if (hasClip) symB.intersect(new Bounds().set(0, 0, 0, clipHeightRaw as number))
-      // label bound: boundText (truncation via limit, align-aware x1, negative
-      // fontSize flips through set())
-      // The label item as vega's legend-labels encode builds it, then the spec's encode.labels
-      // (text, paint, font, align, ...) on top; it is bounded and drawn as is.
-      const lblItem: SceneItem = {
-        text: e.label, x: xLblI, y: yI, baseline: lblBaseline as 'middle', align: labelAlign as 'left',
-        fill: labelColor, fontSize: labelFs, limit: labelLimit,
-        ...(labelOpacity != null ? { fillOpacity: labelOpacity } : {}),
-        ...(labelFont != null ? { font: labelFont } : {}),
-        ...(labelFontWeight != null ? { fontWeight: labelFontWeight } : {}),
-        ...(labelFontStyle != null ? { fontStyle: labelFontStyle } : {}),
-      }
-      applyGuideEncode(lblItem, encLabels, entryDatum, childEncodeCtx, { x: 0, y: 0 })
-      lblItems.push(lblItem)
-      const lblB = boundLeaf(new Bounds(), lblItem)
-      const eb = new Bounds().union(symB).union(lblB)
-      // entry group bound: (clip || width || height) && !noBound adds the
-      // corner points (0,0) and (width, height) — the width encodes 0
-      if (hasClip) eb.add(0, 0).add(0, clipHeightRaw as number)
-      ebs.push(eb)
-    }
-
-    // The entry groups are laid out by vega's gridLayout (legendSymbolLayout:
-    // align gridAlign, columns entryColumns, center rows, padding row/column,
-    // full bounds) over the SORTED entry groups; `paintOrder` is that order.
-    // The entry background uses the FLOAT column width and the entry's own bound
-    // height (legendEntryLayout: width = max bounds.x2 per column, height =
-    // bounds.y2 - y).
-    const paintOrder = Array.from({ length: n }, (_, i) => i)
-    if (direction !== 'horizontal') {
-      const nrowsSig = Math.ceil(n / Math.max(1, Number(colsFlag) || 0))
-      paintOrder.sort((x, y) => (x % nrowsSig) - (y % nrowsSig) || x - y)
-    }
-    const entryGroups: SceneGroup[] = paintOrder.map(() => ({ marktype: 'group', x: 0, y: 0, items: [] }) as unknown as SceneGroup)
-    gridLayout(entryGroups, {
-      align: (legend as { gridAlign?: string }).gridAlign ?? 'each',
-      columns: ncols,
-      center: { row: true, column: false },
-      padding: { row: rowPadding, column: colPad },
-      nodirty: true,
-    }, (g) => {
-      const eb = ebs[paintOrder[entryGroups.indexOf(g)]!]!
-      return eb.empty() ? new Bounds().set(0, 0, 0, 0) : eb.clone()
-    })
-    const posX: number[] = new Array(n)
-    const posY: number[] = new Array(n)
-    const colW: number[] = Array<number>(ncols).fill(0)
-    paintOrder.forEach((entryIdx, j) => {
-      posX[entryIdx] = entryGroups[j]!.x ?? 0
-      posY[entryIdx] = entryGroups[j]!.y ?? 0
-      const eb = ebs[entryIdx]!
-      if (!eb.empty()) colW[j % ncols] = Math.max(colW[j % ncols]!, eb.x2)
-    })
-    const colWOf = (i: number): number => colW[paintOrder.indexOf(i) % ncols] ?? 0
-    // vega legendTitleOffset reads the (shifted) entry container bounds:
-    // s = e.bounds.x2/y2 − item.padding — the max grid-positioned extent.
-    let sX = 0
-    let sY = 0
-    entries.forEach((_e, i) => {
-      const eb = ebs[i]!
-      if (eb.empty()) return
-      sX = Math.max(sX, (posX[i] ?? 0) + eb.x2)
-      sY = Math.max(sY, (posY[i] ?? 0) + eb.y2)
-    })
-
-    // vega legendGroupLayout + legendTitleOffset: the title sits relative to
-    // the entry block per titleOrient; top/right titles anchor along the
-    // entry x extent (sX = entry bound x2 − pad), left/right/bottom along the
-    // y extent (sY = entry bound y2 − pad); titleAlign changes the text
-    // anchor, and a title whose bound pokes left of the padding shifts the
-    // whole legend right by the overhang.
-    const titleOrient = (legend as { titleOrient?: string }).titleOrient ?? 'top'
-    const specTitleAnchor = (legend as { titleAnchor?: string }).titleAnchor
-    const titleAnchor = specTitleAnchor ?? ((titleOrient === 'left' || titleOrient === 'right') ? 'middle' : 'start')
-    const specTitleAlign = (titleOver.align as string | undefined) ?? (legend as { titleAlign?: string }).titleAlign
-    const anchorOffX = titleAnchor === 'end' ? Math.round(sX) : titleAnchor === 'middle' ? Math.round(sX / 2) : 0
-    const anchorOffY = titleAnchor === 'end' ? Math.round(sY) : titleAnchor === 'middle' ? Math.round(sY / 2) : 0
-    let titleX = legendPad
-    let titleY = legendPad
-    let tBaseline: 'top' | 'middle' | 'bottom' = 'top'
-    if (titleOrient === 'left') {
-      tBaseline = titleAnchor === 'end' ? 'bottom' : titleAnchor === 'middle' ? 'middle' : 'top'
-      titleY = legendPad + anchorOffY
-    } else if (titleOrient === 'right') {
-      tBaseline = titleAnchor === 'end' ? 'bottom' : titleAnchor === 'middle' ? 'middle' : 'top'
-      titleX = legendPad + Math.round(sX) + titlePad
-      titleY = legendPad + anchorOffY
-    } else if (titleOrient === 'bottom') {
-      titleY = legendPad + Math.round(sY) + titlePad
-      titleX = legendPad + anchorOffX
-    } else {
-      titleX = legendPad + anchorOffX
-    }
-    if (ctx.rawGuides) { titleX = 0; titleY = 0 }
-    // default align (vega exprAlign): left/right titleOrient → 'left' (non-
-    // vgrad); otherwise anchor-derived start→left, end→right, middle→center.
-    const tAlign = (specTitleAlign ?? (titleOrient === 'left' || titleOrient === 'right'
-      ? 'left'
-      : titleAnchor === 'end' ? 'right' : titleAnchor === 'middle' ? 'center' : 'left')) as 'left' | 'center' | 'right'
-    const titleLimit = (titleOver.limit as number | undefined) ?? (legend as { titleLimit?: number }).titleLimit
-    const titleBaseline = (titleOver.baseline as string | undefined) ?? (legend as { titleBaseline?: string }).titleBaseline
-    // vega's 'guide-title' style defaults fontWeight to bold — the title bound
-    // must measure with the same font the renderer emits.
-    const titleWeight = (titleOver.fontWeight as string | number | undefined) ?? (legend as { titleFontWeight?: string | number }).titleFontWeight ?? 'bold'
-    // title bound (legendGroupLayout reads title.bounds: the Bound-pass text
-    // bound at the title's pre-shift position — height drives the entry row,
-    // width the left-title shift, x1 the overhang)
-    const tBound = hasTitle
-      ? boundText(new Bounds(), {
-          x: titleX, y: titleY, text: titleStr, align: tAlign,
-          baseline: (titleBaseline ?? tBaseline) as SceneItem['baseline'],
-          fontSize: titleFs, fontWeight: titleWeight, ...(titleFont != null ? { font: titleFont } : {}), ...(titleLimit != null ? { limit: titleLimit } : {}),
-        } as unknown as SceneItem)
-      : new Bounds().set(0, 0, 0, 0)
-    // container shifts (legendGroupLayout): top titles push the entries down
-    // by the title bound height + padding; left titles push them right by
-    // ceil(title bound width) + padding.
-    const titleRow = hasTitle && !ctx.rawGuides ? tBound.height() + titlePad : 0
-    const leftShift = hasTitle && !ctx.rawGuides && titleOrient === 'left' ? Math.ceil(tBound.width()) + titlePad : 0
-    // overhang: a title bound poking left of the padding shifts the entries
-    // AND the title right by the overhang (vega translates both)
-    const shift = hasTitle && !ctx.rawGuides ? Math.max(0, Math.round(legendPad - tBound.x1)) : 0
-    // entry block base: top titles push entries down by the title row;
-    // left titles push them right by title width + padding; right/bottom
-    // leave the entries at the padding origin.
-    // Raw-guide mode: the legendGroupLayout never ran — the entries keep
-    // their encode positions (no title-row shift, no padding shifts).
-    const entryX = ctx.rawGuides ? 0 : legendPad + shift + leftShift
-    const entryBaseY = ctx.rawGuides ? 0 : titleOrient === 'top' && hasTitle ? titleRow : 0
-
-    // vega legendBounds: union the entry + title bounds, anchor x1/y1 at the
-    // padding (clamping any overhang), then w/h = ceil(width + 2*padding).
-    const lb = new Bounds()
-    entries.forEach((_e, i) => {
-      const eb = ebs[i]!
-      if (eb.empty()) return
-      const ex = ctx.rawGuides ? 0 : entryX + (posX[i] ?? 0)
-      const ey = ctx.rawGuides ? 0 : legendPad + entryBaseY + (posY[i] ?? 0)
-      lb.add(ex + eb.x1, ey + eb.y1).add(ex + eb.x2, ey + eb.y2)
-    })
-    if (hasTitle && !ctx.rawGuides) {
-      const tb = tBound.clone().translate(shift, 0)
-      lb.add(tb.x1, tb.y1).add(tb.x2, tb.y2)
-    }
-    if (lb.empty()) {
-      // empty legends anchor their upper-right corner at the padding
-      lb.x2 = legendPad
-      lb.y2 = legendPad
-    }
-    lb.x1 = legendPad
-    lb.y1 = legendPad
-    const bgW = Math.ceil(lb.width() + 2 * legendPad)
-    const bgH = Math.ceil(lb.height() + 2 * legendPad)
-
-    const items: SceneItem[] = []
-    const legendCornerRadius = (legend as { cornerRadius?: number }).cornerRadius
-    const legendFillColor = (legend as { fillColor?: string }).fillColor
-    // The legend border stroke (legend.strokeColor): the border rect insets
-    // half a pixel (crisp 1px stroke) and carries no explicit strokeWidth
-    // (the renderer default 1 applies); vega's legendLayout boundStrokes the
-    // outer rect, expanding the legend bounds by 1 on width and height.
-    const legendBorderColor = (legend as { strokeColor?: string }).strokeColor
-    // `strokeWidth` is a channel mapping when it names a scale; only a number
-    // is the legend border width.
-    const legendBorderWidthRaw = legend.strokeWidth
-    const legendBorderWidth = typeof legendBorderWidthRaw === 'number' ? legendBorderWidthRaw : undefined
-    const legendBorderDash = (legend as { strokeDash?: number[] }).strokeDash
-    // cornerRadius > 0 renders the border as a rounded rect at full size
-    // (vega's rectangle path with the corner radii); a border stroke insets
-    // the path half a pixel (crisp 1px stroke) without changing the size.
-    const bgX = legendBorderColor != null ? 0.5 : 0
-    const bgY = legendBorderColor != null ? 0.5 : 0
-    // Raw-guide mode: the legend item's size is a layout product — the
-    // background stays a degenerate placeholder (vega drops it).
-    const bgPath = ctx.rawGuides
-      ? 'M0,0h0v0h0Z'
-      : legendCornerRadius && legendCornerRadius > 0
-      ? roundedRectPath(bgX, bgY, bgW, bgH, Math.min(legendCornerRadius, bgW / 2, bgH / 2))
-      : legendBorderColor != null
-        ? `M${bgX},${bgY}h${bgW}v${bgH}h-${bgW}Z`
-        : `M0,0h${bgW}v${bgH}h-${bgW}Z`
-    items.push({ _part: 'bg', path: bgPath, x: 0, y: 0, ...(legendFillColor != null ? { fill: legendFillColor } : {}), ...(legendBorderColor != null ? { stroke: String(legendBorderColor) } : {}), ...(legendBorderWidth != null ? { strokeWidth: legendBorderWidth } : {}), ...(legendBorderDash != null ? { strokeDash: legendBorderDash } : {}) })
-    // vega's legendLayout boundStrokes the outer rect only for the legend's
-    // own border stroke — symbol strokes must not expand the legend bounds.
-    const borderStroke = legendBorderColor != null
-    // vega's legend title item sits at (padding, padding) with baseline top;
-    // the renderer bakes the baseline offset. titleBaseline overrides it.
-    if (hasTitle) {
-      items.push({ _legendTitle: true, text: titleStr, x: titleX + shift, y: titleY, baseline: (titleBaseline ?? tBaseline) as 'top', align: tAlign, fill: titleColor, fontSize: titleFs, fontWeight: titleWeight, ...(titleFont != null ? { font: titleFont } : {}), ...(titleLimit != null ? { limit: titleLimit } : {}), ...(titleOpacity != null ? { fillOpacity: titleOpacity } : {}) })
-    }
-    // the entry groups are sorted before they are drawn (legend-symbol-groups: a
-    // vertical legend sorts by [row, index] with row = index % nrows; a
-    // horizontal one by index), and the sort IS the paint order
-    for (const i of paintOrder) {
-      const e = entries[i]!
-      const eb = ebs[i]!
-      const value = e.value
-      // Raw-guide mode: the entry rows never got their layout offsets — every
-      // entry sits at its encode position (0), overlapping.
-      const off = ctx.rawGuides ? 0 : entryBaseY + (posY[i] ?? 0)
-      const colOff = ctx.rawGuides ? 0 : (posX[i] ?? 0)
-      const colWc = colWOf(i)
-      // The entry background: legendEntryLayout sizes it to the column's max
-      // bound width (float) and the entry's own bound height (bounds.y2 − y).
-      // Raw-guide mode: the entry backgrounds are bound-derived boxes — the
-      // layout never ran, so they stay degenerate placeholders (vega drops
-      // them).
-      items.push({ _part: 'entry', path: ctx.rawGuides ? 'M0,0h0v0h0Z' : `M0,0h${colWc}v${eb.y2}h-${colWc}Z`, x: entryX + colOff, y: legendPad + off })
-      // vega renders the legend entry symbol in the shape requested by the
-      // legend's symbolType; the measured path (symDs) matches the painted one.
-      // vega coerces the NaN encode positions to 0 (anchorPoint/translateItem
-      // `|| 0`) INSIDE the entry frame — the container/grid shifts still apply,
-      // so zero the NaN part here rather than poisoning the whole sum
-      const symX = entryX + colOff + (xSymIs[i]! || 0)
-      const symY = legendPad + off + (ySymIs[i]! || 0)
-      items.push({ ...symbolItemPaint(symPropsOf[i]!), _part: 'symbol', path: symDs[i]!, x: symX, y: symY } as SceneItem)
-      // clipHeight clips the entry's symbols with a clipPath over the
-      // laid-out entry rect (vega's guideMark clip + SVGStringRenderer clip:
-      // rect (0,0,entry.width,entry.height) in the entry's local frame)
-      if (hasClip && !ctx.rawGuides) {
-        ;(items[items.length - 1] as Record<string, unknown>)._clip = { x: entryX + colOff, y: legendPad + off, w: colWc, h: eb.y2 }
-      }
-      const lblItem = lblItems[i]!
-      items.push({ ...lblItem, x: entryX + colOff + ((lblItem.x as number) || 0), y: legendPad + off + ((lblItem.y as number) || 0) })
-    }
-    const out: SceneGroup = { marktype: 'group', role: 'legend', legendType: 'symbol', x: 0, y: 0, width: bgW, height: bgH, items }
-    ;(out as unknown as Record<string, unknown>)._borderStroke = borderStroke
-    return out
-
-  }
-
-  // Unsupported
-  return null
-}
-
-
-
-/**
- * vega-view-transforms' Overlap, for guide labels. `method`: true/'parity' hides
- * every other item until no neighbours collide, 'greedy' hides items colliding
- * with the last visible one; falsy does nothing. Items with a degenerate bound
- * (no content) are skipped, the survivors reset to opacity 1 first, and at least
- * two items are always kept (the last source item is resurrected when fewer than
- * three survive). Bounds are the real text bounds (`boundLeaf`), so a truncated
- * label (`limit`) collides as its truncated self.
- */
-function applyOverlap(labels: SceneItem[], method: unknown, separation: number): void {
-  if (!method) return
-  const bounds = new Map<SceneItem, Bounds>()
-  const source = labels.filter((it) => {
-    const b = boundLeaf(new Bounds(), it)
-    bounds.set(it, b)
-    return !b.empty() && b.width() > 1 && b.height() > 1
+  const formatType = guideScalar(ctx, spec.formatType) as string | undefined
+  const host = guideHost(ctx)
+  const built = buildLegendGuide({
+    spec, config, encode: (legend.encode ?? {}) as Record<string, UserEncode | undefined>,
+    channels, scale: scale as never, scaleType, scaleOf: (name) => ctx.scales.get(name) as never,
+    values: resolveLegendValues({ values: spec.values } as unknown as CompiledLegend, ctx),
+    count: tickCountRaw, minstep: guideScalar(ctx, spec.tickMinStep) as number | undefined,
+    limit: +(guideScalar(ctx, value(spec.symbolLimit, config.symbolLimit)) as number),
+    formatSpecifier: specifierOf(spec.format), formatType,
+    locale: locale(undefined), host, style: guideStyles(ctx), raw: !!ctx.rawGuides,
   })
-  if (!source.length) return
-  for (const it of source) it.opacity = 1
-  const intersects = (a: Bounds, b: Bounds): boolean =>
-    separation > Math.max(b.x1 - a.x2, a.x1 - b.x2, b.y1 - a.y2, a.y1 - b.y2)
-  const hasOverlap = (list: SceneItem[]): boolean => {
-    for (let i = 1; i < list.length; i++) if (intersects(bounds.get(list[i - 1]!)!, bounds.get(list[i]!)!)) return true
-    return false
-  }
-  let items = source
-  if (items.length < 3 || !hasOverlap(items)) return
-  const reduce = (list: SceneItem[]): SceneItem[] => {
-    if (method === 'greedy') {
-      let a: SceneItem | undefined
-      return list.filter((b, i) => {
-        if (!i || !intersects(bounds.get(a!)!, bounds.get(b)!)) { a = b; return true }
-        b.opacity = 0
-        return false
-      })
-    }
-    return list.filter((it, i) => (i % 2 ? ((it.opacity = 0), false) : true))
-  }
-  do { items = reduce(items) } while (items.length >= 3 && hasOverlap(items))
-  const last = source[source.length - 1]!
-  if (items.length < 3 && !last.opacity) {
-    if (items.length > 1) items[items.length - 1]!.opacity = 0
-    last.opacity = 1
+  const g = built.group
+  const group = {
+    marktype: 'group',
+    role: 'legend',
+    legendType: built.legendType,
+    x: 0,
+    y: 0,
+    width: built.width,
+    height: built.height,
+    items: built.leaves,
+    partMeta: built.partMeta,
+    ...(built.partMeta.legend?.name ? { cssName: built.partMeta.legend.name } : {}),
+    legendBounds: built.bounds,
+    ...(itemAriaOf(built.group) ? { itemAria: itemAriaOf(built.group) } : {}),
+    // what the legend layout reads off the group item
+    legendProps: { orient: g.orient, offset: g.offset, x: g.x, y: g.y },
+    ...(g.strokeWidth !== undefined ? { strokeWidth: g.strokeWidth } : {}),
+    ...(g.href != null ? { href: g.href } : {}),
+  } as unknown as SceneGroup
+  vetGuideLinks(group, ctx)
+  return group
+}
+
+/** What the guide encoders (guide-encode.ts) need of an evaluation: entries, expressions, scales, the view's signals. */
+function guideHost(ctx: EvalContext): GuideHost {
+  return {
+    entry: (spec, datum) => resolveEncodeProperty(spec as EncodeValue | EncodeValue[], datum, ctx),
+    expr: (code) => ctx.runtime.expr(code)({}, ctx.signalParams),
+    exprDatum: (code, datum) => ctx.runtime.expr(code)(datum, ctx.signalParams),
+    viewSignal: (name) => viewSignal(ctx, name),
+    scale: (name) => ctx.scales.get(name) as never,
+    report: (e) => reportEvalError(ctx, e),
+    gradient: (name, vertical) => {
+      // vega-functions gradient(): stops from the scale's ticks (see scaleGradientStops); the definition is the
+      // renderer's, content-addressed by direction and stops
+      const stops = scaleGradientStops(ctx.scales.get(name) as never)
+      const id = gradientDefId(vertical ? 'vertical' : 'horizontal', stops)
+      if (stops.length && !ctx._defs.some((d) => d.id === id)) ctx._defs.push(vertical ? { id, colorStops: stops } : { id, colorStops: stops, direction: 'horizontal' })
+      return `url(#${id})`
+    },
+    groupBox: (geo, w, h) => groupBackground(geo, w, h),
+    warn: (msg) => ctx.logger.warn(msg),
   }
 }
 
-type GuideEncodeSet = Record<string, EncodeValue | EncodeValue[]>
-
-/** A guide element's encode as vega applies it to a static render: `enter`, then `update` over it. */
-function guideEncodeSet(block: GuideEncodeBlock | undefined): GuideEncodeSet | undefined {
-  if (!block) return undefined
-  const merged = { ...(block.enter ?? {}), ...(block.update ?? {}) }
-  return Object.keys(merged).length ? merged : undefined
-}
-
-/**
- * Apply a guide element's user `encode` (vega axis / legend `encode.<element>`)
- * to one generated item, evaluated against that element's datum (a tick
- * `{index, tickIndex, value, label}`, or the guide's own datum). It runs where
- * vega's does, after the generated encode and before the layout measures the
- * mark, so a changed `fontSize`, `angle`, `text` or `x` moves the axis extent
- * and the title. Positions are in the guide group's frame: `origin` is where our
- * leaves put that frame (for an axis: its position plus the crisp 0.5 delta).
- */
-function applyGuideEncode(item: SceneItem, set: GuideEncodeSet | undefined, datum: Row, ctx: EvalContext, origin: { x: number; y: number }): void {
-  if (!set) return
-  const rec = item as Record<string, unknown>
-  for (const [key, spec] of Object.entries(set)) {
-    const v = resolveEncodeProperty(spec, datum, ctx)
-    if (v === undefined) continue
-    if (key === 'x' || key === 'x2') rec[key] = Number(v) + origin.x
-    else if (key === 'y' || key === 'y2') rec[key] = Number(v) + origin.y
-    else rec[key] = v
-  }
+/** `config.style` (and `config.lineBreak`) as the guide marks' defaults. */
+function guideStyles(ctx: EvalContext): GuideStyles {
+  return { styles: ctx.chart.style ?? {}, lineBreak: ctx.chart.lineBreak }
 }
 
 /** The view's width / height SIGNAL (what a nested group's axes grid to); the context size at the view level. */
@@ -5410,55 +4269,23 @@ function viewSignal(ctx: EvalContext, name: 'width' | 'height'): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : ctx[name]
 }
 
-/** The axis-level layout parameters vega's axis encode feeds the layout (`encode.axis`: offset, position, translate, titlePadding, minExtent, maxExtent, range). */
-const AXIS_GROUP_ENCODE_KEYS = ['offset', 'position', 'translate', 'titlePadding', 'minExtent', 'maxExtent', 'range'] as const
-
-/**
- * Every property of a vega guide may be a signal: its value is what the signal holds when the guide is drawn
- * (vega-parser `parseExpression` into the guide's encode). `{signal}` values are replaced by their value; the
- * properties named in `kept` are read as signals by the code that uses them (an expression that must fall back,
- * a value that is not a plain property) and stay as written. A failing expression is logged (the property is unset).
- */
-function resolveGuideSignals<T extends object>(guide: T, kept: ReadonlySet<string>, ctx: EvalContext): T {
-  let out: Record<string, unknown> | undefined
-  const rec = guide as Record<string, unknown>
-  for (const key of Object.keys(rec)) {
-    if (kept.has(key)) continue
-    const v = rec[key]
-    if (v === null || typeof v !== 'object' || Array.isArray(v) || typeof (v as { signal?: unknown }).signal !== 'string') continue
-    let value: unknown
-    try { value = ctx.runtime.expr((v as { signal: string }).signal)({}, ctx.signalParams) } catch (e) { reportEvalError(ctx, e); value = undefined }
-    // null is a value, not "unset": it replaces the config / style default, and what a null then does is the
-    // consumer's (a text size of null is the text mark's own 11, a tick size of null is no tick)
-    if (value === null && Object.hasOwn(GUIDE_NULL_AS, key)) value = GUIDE_NULL_AS[key]
-    out ??= { ...rec }
-    out[key] = value
-  }
-  return (out ?? rec) as T
-}
-
-/** What a guide property that a signal sets to null amounts to (vega: the property is null on the mark's items). */
-const GUIDE_NULL_AS: Record<string, unknown> = {
-  labelFontSize: 11, titleFontSize: 11, tickSize: 0, labelPadding: 0, titlePadding: 0, labelOffset: 0, symbolSize: 64,
-}
-
-/** Legend properties that stay signals (see {@link AXIS_SIGNAL_KEPT}). */
-const LEGEND_SIGNAL_KEPT: ReadonlySet<string> = new Set(['tickCount', 'values', 'format', 'formatType', 'title', 'tickMinStep', 'encode', 'own', 'description', 'aria', 'columns', 'layout'])
-
-/** Axis properties that stay signals: their consumers evaluate them (with fallbacks) or are not plain values. */
-const AXIS_SIGNAL_KEPT: ReadonlySet<string> = new Set(['orientSignal', 'tickCount', 'values', 'format', 'formatType', 'title', 'tickMinStep', 'encode', 'own', 'description', 'aria'])
-
 /**
  * An axis whose `orient` is a signal, with the signal's value in (vega: the axis group's `orient` property,
  * which the layout and every guide mark's encode read). The config blocks it picks up follow the value's class.
  */
 function resolveAxisOrient(axis: CompiledAxis, ctx: EvalContext): CompiledAxis {
-  if (!axis.orientSignal) return resolveGuideSignals(axis, AXIS_SIGNAL_KEPT, ctx)
+  if (!axis.orientSignal) return axis
   let value: unknown
   try { value = ctx.runtime.expr(axis.orientSignal.signal)({}, ctx.signalParams) } catch (e) { reportEvalError(ctx, e); value = undefined }
   const orient = typeof value === 'string' ? value : ''
   const variants = axis.orientSignal.variants
-  return resolveGuideSignals({ ...(ownGet(variants, orient) ?? variants['']!), orient }, AXIS_SIGNAL_KEPT, ctx)
+  return { ...(ownGet(variants, orient) ?? variants['']!), orient }
+}
+
+/** A guide property that may be a signal, as the value the signal holds. */
+function guideScalar(ctx: EvalContext, v: unknown): unknown {
+  if (!isSignal(v)) return v
+  try { return ctx.runtime.expr(v.signal)({}, ctx.signalParams) } catch (e) { reportEvalError(ctx, e); return undefined }
 }
 
 /**
@@ -5479,82 +4306,16 @@ function axisTicksFailed(axis: CompiledAxis, ctx: EvalContext, e: unknown): null
   return null
 }
 
-function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
-  const scale = ctx.scales.get(axis0.scale)
+function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
+  const scale = ctx.scales.get(axis.scale)
   if (!scale) return null
-  // vega-parser axis.js: the layout reads these off the axis group item, so a user `encode.axis`
-  // that sets them wins over the spec / config value.
-  const axisGroupEncode = guideEncodeSet(axis0.encode?.axis)
-  let axis = axis0
-  if (axisGroupEncode) {
-    const axisDatum: Row = { scale: axis0.scale, ticks: axis0.ticks !== false, labels: axis0.labels !== false, grid: !!axis0.grid, domain: axis0.domain !== false, title: axis0.title != null }
-    const over: Record<string, unknown> = {}
-    for (const key of AXIS_GROUP_ENCODE_KEYS) {
-      if (!(key in axisGroupEncode)) continue
-      const v = resolveEncodeProperty(axisGroupEncode[key], axisDatum, ctx)
-      if (v !== undefined) over[key] = v
-    }
-    if (Object.keys(over).length) axis = { ...axis0, ...over } as CompiledAxis
-  }
-  const encGrid = guideEncodeSet(axis.encode?.grid)
-  const encTicks = guideEncodeSet(axis.encode?.ticks)
-  const encLabels = guideEncodeSet(axis.encode?.labels)
-  const encDomain = guideEncodeSet(axis.encode?.domain)
-  const encTitle = guideEncodeSet(axis.encode?.title)
-  const guideDatum: Row = { scale: axis.scale, ticks: axis.ticks !== false, labels: axis.labels !== false, grid: !!axis.grid, domain: axis.domain !== false, title: axis.title != null }
-  const orient = axis.orient
-  // vega draws any `orient` other than the four as a vertical axis (sign +1, labels aligned right) whose group
-  // layout never runs: the group sits at (0, 0) without the half-pixel delta and takes no part in the layout bounds
-  const knownOrient = orient === 'top' || orient === 'bottom' || orient === 'left' || orient === 'right'
-  const gDelta = knownOrient ? 0.5 : 0
-  const isXAxis0 = orient === 'top' || orient === 'bottom'
-  // where the axis group's origin lies in our leaves' frame (the view edge it sits on)
-  const guideOrigin = { x: (orient === 'right' ? ctx.width : 0) + gDelta, y: (orient === 'bottom' ? ctx.height : 0) + gDelta }
+  const orient = String(axis.orient)
   let ticks: unknown[]
   try {
     ticks = axisTicks(axis, scale, ctx)
   } catch (e) {
     return axisTicksFailed(axis, ctx, e)
   }
-  const items: SceneItem[] = []
-  // vega's tick position (axisTicks tickPos): the ticks/grid sit at
-  // scale + bandPosition*bandWidth + tickOffset, rounded when tickRound is on
-  // (the default); for band scales the `axisBand` style supplies the -0.5
-  // tickOffset default, which an explicit tickOffset replaces. floor() of the
-  // band center is round(x - 0.5), so the default matches the old behavior.
-  const bw = scale.bandwidth ? scale.bandwidth() : 0
-  // vega's axisBand style keys on the scale TYPE (axis-config.js:
-  // `scaleType(spec.scale) === 'band' && config.axisBand`) — not on whether
-  // the bandwidth is non-zero — so a band scale with paddingInner 1 (bw 0)
-  // still gets the -0.5 tickOffset default.
-  const isBand = scale.type === 'band'
-  // vega guide-util tickBand: 'extent' forces band 1 / offset 0 / extra on;
-  // 'middle' forces band 0.5 with extra off; unset keeps bandPosition and
-  // the tickExtra flag.
-  const tickBandV = axis.tickBand as string | undefined
-  const extentTicks = tickBandV === 'extent'
-  const bandPos = extentTicks ? 1 : (tickBandV == null ? (axis.bandPosition ?? 0.5) : 0.5)
-  const tickExtraOn = extentTicks ? true : (tickBandV == null ? axis.tickExtra === true : false)
-  const tickOffsetEff = extentTicks ? 0 : (axis.tickOffset ?? (isBand ? -0.5 : 0))
-  const tickRoundOn = axis.tickRound !== false
-  // vega's AxisTicks `extra`: one more entry pegged to the FIRST tick value
-  // (empty label); its scale encode REPLACES the scale+bandwidth term with
-  // the raw scale of that value (entry.js: `datum.extra ? _scale(s, v0) :
-  // _scale(s, v) + _bandwidth(s)*band`), then offset and round apply.
-  const tickEntries = ticks.map((v) => ({ value: v, extra: false }))
-  if (tickExtraOn && ticks.length) tickEntries.push({ value: ticks[0]!, extra: true })
-  const pos = (t: unknown, isExtra = false): number => {
-    const scaled = scale(isExtra ? ticks[0]! : t) as number
-    // A NaN scale lookup (degenerate range/domain) renders at the axis origin:
-    // vega's encoders read `value || 0` on the whole tick position, so the band
-    // and tickOffset terms must not turn the NaN into a real -0.5.
-    if (!Number.isFinite(scaled)) return 0
-    const raw = scaled
-      + (isExtra ? 0 : isBand ? bandPos * bw : 0)
-      + tickOffsetEff
-    return tickRoundOn ? Math.round(raw) : raw
-  }
-
   // The approximate tick count used for label formatting. When the axis omits
   // tickCount, vega's axis ticks operator defaults to 10 (see vega-encode
   // AxisTicks: `_.count == null ? 10 : _.count`); matching that matters for
@@ -5564,500 +4325,99 @@ function buildAxis(axis0: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   let labelFormat: (v: unknown) => unknown
   const labelCache: string[] = []
   try {
-    labelFormat = axisLabelFormat(axis, scale, count, ctx)
+    labelFormat = axisLabelFormat(axis, scale, count, ctx, !!axisValues(axis, ctx))
     // vega's AxisTicks formats every tick as it makes the tuples: a format that throws (an invalid
     // specifier) is logged and the axis never gets its ticks
     for (let i = 0; i < ticks.length; i++) labelCache[i] = String(labelFormat(ticks[i]))
   } catch (e) {
     return axisTicksFailed(axis, ctx, e)
   }
+  const own = (axis.own ?? {}) as Record<string, unknown>
+  const cfg = (axis.cfg ?? {}) as Record<string, unknown>
   // vega-encode AxisTicks tuples, the datum a tick / label / grid encode reads:
-  // `{index (fraction 0..1), tickIndex, value, label}`; the `extra` entry is
+  // `{index (fraction 0..1), tickIndex, value, label}`; the `extra` entry (an
+  // extra tick pegged to the first value, for binned axes) is
   // `{index: -1, tickIndex: -1, extra: {value}, label: ''}`.
-  const tickDatum = (te: { value: unknown; extra: boolean }, i: number): Row => {
-    if (te.extra) return { index: -1, tickIndex: -1, extra: { value: te.value }, label: '' }
-    return {
-      index: i / ((ticks.length - 1) || 1),
-      tickIndex: i,
-      value: te.value,
-      label: (labelCache[i] ??= String(labelFormat(te.value))),
-    }
-  }
+  const band = tickBand(lookup(own, cfg))
+  const extra = isSignal(band.extra) ? ctx.runtime.expr(band.extra.signal)({}, ctx.signalParams) : band.extra
+  const rows: Row[] = ticks.map((value, i) => ({ index: i / ((ticks.length - 1) || 1), tickIndex: i, value, label: labelCache[i] }))
+  if (extra && ticks.length) rows.push({ index: -1, tickIndex: -1, extra: { value: ticks[0] }, label: '' })
+  meterItems(rows.length, 'axis ticks')
 
-  if (axis.grid) {
-    const gridScaleName = (axis as { gridScale?: string }).gridScale
-    const gridScale = gridScaleName ? ctx.scales.get(gridScaleName) : undefined
-    const gridRange = gridScale?.range?.() as number[] | undefined
-    // vega-parser's axis-grid encode (axis-util getSign/ifX): the grid tick
-    // rides the axis direction, while the cross-axis runs from the gridScale's
-    // range start to end, signed by the orient (+1 left/top, -1 right/bottom)
-    // and anchored at the axis spine. This matters whenever a channel's axis
-    // takes a perpendicular orient (x with orient right, y with orient bottom).
-    const isXAxis = orient === 'bottom' || orient === 'top'
-    const gridSign = orient === 'left' || orient === 'top' ? 1 : -1
-    const gridSpan = (frac: number): number => {
-      const v = gridRange && gridRange.length >= 2
-        ? (() => {
-            const a = Number(gridRange[0])
-            const b = Number(gridRange[gridRange.length - 1])
-            return (a + frac * (b - a)) * gridSign
-          })()
-        // vega-parser axis-grid: the cross-axis length is the VIEW's `height` / `width`
-        // signal, not the enclosing group's size (a nested group's axes still draw a
-        // grid as long as the whole view)
-        : frac * (isXAxis ? viewSignal(ctx, 'height') : viewSignal(ctx, 'width')) * gridSign
-      return v
-    }
-    // a non-numeric gridScale range (a band scale given a named colour range) has no
-    // start (vega draws the grid from the axis, +0.5) but its end stays NaN
-    const gridStartRaw = gridSpan(0)
-    const gridStart = Number.isFinite(gridStartRaw) ? gridStartRaw : 0
-    const gridEnd = gridSpan(1)
-    const gridOrigin = orient === 'right' ? ctx.width : orient === 'bottom' ? ctx.height : 0
-    for (const [ti, te] of tickEntries.entries()) {
-      const v = pos(te.value, te.extra)
-      const item: SceneItem = { x: 0, y: 0, x2: 0, y2: 0 }
-      if (isXAxis) {
-        item.x = v + 0.5; item.x2 = v + 0.5
-        item.y = gridOrigin + gridStart + 0.5; item.y2 = gridOrigin + gridEnd + 0.5
-      } else {
-        item.y = v + gDelta; item.y2 = v + gDelta
-        item.x = gridOrigin + gridStart + gDelta; item.x2 = gridOrigin + gridEnd + gDelta
-      }
-      item.stroke = (axis as { gridColor?: string }).gridColor ?? '#ddd'
-      item.strokeWidth = (axis as { gridWidth?: number }).gridWidth ?? 1
-      const gridDash = (axis as { gridDash?: number[] }).gridDash
-      if (gridDash != null) item.strokeDash = gridDash
-      // vega axis-grid: strokeCap/strokeDashOffset/strokeOpacity come from gridCap/gridDashOffset/gridOpacity
-      if (axis.gridCap != null) item.strokeCap = axis.gridCap
-      if (axis.gridDashOffset != null) item.strokeDashOffset = axis.gridDashOffset
-      if (axis.gridOpacity != null) item.strokeOpacity = axis.gridOpacity
-      applyGuideEncode(item, encGrid, tickDatum(te, ti), ctx, guideOrigin)
-      // Vega's axisLayout bounds union only the ticks and labels marks; the
-      // grid mark never extends the axis bound (nor the view bounds).
-      ;(item as Record<string, unknown>)._grid = true
-      item._part = 'grid'
-      items.push(item)
-    }
-  }
-
-  // ticks:false hides the marks AND zeroes the effective tick size: vega's
-  // axisLabels/titles position off the tickSize signal, which the axis
-  // encode sets to 0 when ticks are off.
-  const tickSize = axis.ticks === false ? 0 : (axis.tickSize ?? 5)
-  const labelPadding = axis.labelPadding ?? 2
-  const tickItems: SceneItem[] = []
-  const labels: SceneItem[] = []
-
-  for (const [ti, te] of tickEntries.entries()) {
-    const t = te.value
-    const v = pos(t, te.extra)
-    if (axis.ticks !== false) {
-      const tick: SceneItem = { x: 0, y: 0, x2: 0, y2: 0 }
-      if (orient === 'left') { tick.x = 0.5; tick.x2 = -tickSize + 0.5; tick.y = v + 0.5; tick.y2 = v + 0.5 }
-      else if (orient === 'right') { tick.x = ctx.width + 0.5; tick.x2 = ctx.width + tickSize + 0.5; tick.y = v + 0.5; tick.y2 = v + 0.5 }
-      else if (orient === 'bottom') { tick.x = v + 0.5; tick.x2 = v + 0.5; tick.y = ctx.height + 0.5; tick.y2 = ctx.height + tickSize + 0.5 }
-      else if (!knownOrient) { tick.x = 0; tick.x2 = tickSize; tick.y = v; tick.y2 = v }
-      else { tick.x = v + 0.5; tick.x2 = v + 0.5; tick.y = 0.5; tick.y2 = -tickSize + 0.5 }
-      tick.stroke = axis.tickColor ?? '#888'
-      tick.strokeWidth = axis.tickWidth ?? 1
-      if (axis.tickDash) tick.strokeDash = axis.tickDash
-      // vega axis-ticks: strokeCap/strokeDashOffset/strokeOpacity
-      if (axis.tickCap != null) tick.strokeCap = axis.tickCap
-      if (axis.tickDashOffset != null) tick.strokeDashOffset = axis.tickDashOffset
-      if (axis.tickOpacity != null) tick.strokeOpacity = axis.tickOpacity
-      applyGuideEncode(tick, encTicks, tickDatum(te, ti), ctx, guideOrigin)
-      tick._part = 'tick'
-      tickItems.push(tick)
-    }
-    if (axis.labels !== false) {
-      // vega's AxisTicks extra entry: an empty label whose scale lookup
-      // (datum.value undefined) lands on NaN — the renderer's || 0 pins it
-      // to the axis origin (only the perpendicular coordinate is real)
-      const label: SceneItem = { text: te.extra ? '' : String(labelFormat(t)), x: 0, y: 0 }
-      const align = axis.labelAlign ?? (orient === 'right' ? 'left' : isXAxis0 ? 'center' : 'right')
-      const baseline = axis.labelBaseline ?? (orient === 'top' ? 'bottom' : orient === 'bottom' ? 'top' : 'middle')
-      // Vega axis labels (vega-encode axisLabels): the label y is the raw
-      // extent — tickSize + labelPadding beyond the axis line for bottom/top,
-      // the scale position for left/right — with the baseline shift applied
-      // by the renderer (renderLeaf bakes baselineOffset when the item
-      // carries an explicit baseline). Rotated labels keep the historical
-      // bake (the rotation folds the offset into vega's rotate translate).
-      const labelFs = axis.labelFontSize ?? 10
-      // (any truthy value: vega passes the angle through as it is)
-      const labelAngle = axis.labelAngle ? axis.labelAngle : 0
-      // Vega's renderer folds the baseline offset into the item position for
-      // unrotated text but applies it inside the rotate frame for rotated
-      // text — so rotated labels carry no baseline (no bake anywhere).
-      label.fontSize = labelFs
-      if (axis.labelFont != null) label.font = axis.labelFont
-      if (axis.labelFontStyle != null) label.fontStyle = axis.labelFontStyle
-      if (axis.labelFontWeight != null) label.fontWeight = axis.labelFontWeight
-      label.limit = axis.labelLimit ?? 180
-      // Labels anchor at the unrounded scale + 0.5*bandWidth + tickOffset
-      // (the axisBand -0.5 default folds against our baked +0.5 group delta)
-      // + labelOffset — bandPosition and tickRound do not reach them (vega's
-      // axisLabels tickPos keeps band 0.5 and no round of its own).
-      const scaledLabel = scale(t) as number
-      const labelScaled = Number.isFinite(scaledLabel)
-      const rawOf = (labelScaled ? scaledLabel + (isBand ? 0.5 * bw : 0) : 0)
-      const labelOffset = axis.labelOffset ?? 0
-      // The along-axis label coordinate: vega's axisLabels position labels at
-      // the UNROUNDED tick position (band 0.5 + tickOffset — tickRound never
-      // reaches them) + labelOffset, for every orient. Keying on
-      // `scale.bandwidth` alone silently rounded point-scale labels, which
-      // skewed the view bounds (top margin ceil(-y1)) by a pixel.
-      const alongLabel = rawOf + (labelScaled ? tickOffsetEff : 0) + 0.5 + labelOffset
-      // vega's labelFlush (axis-labels.js): within labelFlush px of a range
-      // endpoint the label align (x orients) or baseline (y orients) flips to
-      // the endpoint side (vega-util flush: left needs l < r && l <= t, right
-      // just r <= t); with a nonzero labelFlushOffset the flushed labels also
-      // dx/dy inward — but only when the user did not pin labelAlign /
-      // labelBaseline. The flush compares the RAW scale(value).
-      const labelFlushRaw = axis.labelFlush as number | boolean | null | undefined
-      const flushOn = labelFlushRaw != null && (labelFlushRaw === 0 || !!labelFlushRaw)
-      const flushT = labelFlushRaw === true ? 1 : typeof labelFlushRaw === 'number' ? labelFlushRaw : 0
-      const flushOffset = (axis as { labelFlushOffset?: number }).labelFlushOffset ?? 0
-      const flushPick = (value: number, a: string | number, b: string | number, c: string | number): string | number => {
-        const rangeArr = scale.range() as number[]
-        let lo = Number(rangeArr[0])
-        let hi = Number(rangeArr[rangeArr.length - 1])
-        if (hi < lo) { const tmp = lo; lo = hi; hi = tmp }
-        const l = Math.abs(value - lo)
-        const r = Math.abs(hi - value)
-        return l < r && l <= flushT ? a : r <= flushT ? b : c
-      }
-      const rawScalePos = te.extra ? NaN : (scale(t) as number)
-      let alignEff = align
-      let baselineEff = baseline
-      let dxv = 0
-      let dyv = 0
-      if (flushOn) {
-        if (orient === 'bottom' || orient === 'top') {
-          if (axis.labelAlign == null) alignEff = flushPick(rawScalePos, 'left', 'right', 'center') as string
-          if (flushOffset && axis.labelAlign == null) dxv = flushPick(rawScalePos, -flushOffset, flushOffset, 0) as number
-        } else {
-          if (axis.labelBaseline == null) baselineEff = flushPick(rawScalePos, 'top', 'bottom', 'middle') as string
-          if (flushOffset && axis.labelBaseline == null) dyv = flushPick(rawScalePos, -flushOffset, flushOffset, 0) as number
-        }
-      }
-      if (orient === 'left')   { label.x = -tickSize - labelPadding + 0.5; label.y = (te.extra ? 0.5 : alongLabel) + dyv; label.align = alignEff as SceneItem['align'] }
-      else if (orient === 'right') { label.x = ctx.width + tickSize + labelPadding + 0.5; label.y = (te.extra ? 0.5 : alongLabel) + dyv; label.align = alignEff as SceneItem['align'] }
-      else if (!knownOrient) { label.x = tickSize + labelPadding; label.y = (te.extra ? 0 : alongLabel - 0.5) + dyv; label.align = alignEff as SceneItem['align'] }
-      else if (orient === 'bottom') {
-        // Point scales (bw = 0) miss the band-scale `axisBand` tickOffset
-        // (-0.5) that cancels vega's +0.5 axis-group translate, so their
-        // label anchor needs the +0.5 baked in.
-        label.x = (te.extra ? 0.5 : alongLabel) + dxv
-        label.y = ctx.height + tickSize + labelPadding + 0.5
-        label.align = alignEff as SceneItem['align']
-      }
-      else {
-        label.x = (te.extra ? 0.5 : alongLabel) + dxv
-        label.y = -(tickSize + labelPadding) + 0.5
-        label.align = alignEff as SceneItem['align']
-      }
-      // vega keeps the label baseline on rotated labels too: the renderer
-      // folds the baseline offset inside the rotate frame (translate(x,y)
-      // rotate(a) translate(dx,dy)) and the bound (marks/text.js bound) does
-      // the same, so the item carries the baseline either way — stripping it
-      // shifts the rotated bbox by the baseline offset and skews the root
-      // bounds by a pixel or two.
-      label.baseline = baselineEff as SceneItem['baseline']
-      // vega's axisLabels: labelAngle is an update patch on the text mark's
-      // angle — the renderer folds the baseline offset inside the rotate frame
-      // (hence no explicit baseline above when rotated).
-      if (labelAngle) (label as Record<string, unknown>).angle = labelAngle
-      label.fill = axis.labelColor ?? '#000'
-      if (axis.labelOpacity != null) label.fillOpacity = axis.labelOpacity
-      applyGuideEncode(label, encLabels, tickDatum(te, ti), ctx, guideOrigin)
-      label._part = 'label'
-      labels.push(label)
-    }
-  }
-
-  // Vega's axis `labelOverlap` runs the Overlap transform over the label items
-  // (see applyOverlap): colliding labels are hidden with opacity 0 and stay in
-  // the scene. The axis `extra` entry has no content (zero bounds) and is
-  // skipped by the transform's own `hasBounds` filter.
-  if (axis.labelOverlap) {
-    applyOverlap(labels, axis.labelOverlap, (axis as { labelSeparation?: number }).labelSeparation ?? 0)
-  }
-
-  // vega's axis mark order: grid, ticks, labels, domain, title (every tick
-  // before any label, not interleaved per tick).
-  pushAll(items, tickItems)
-  pushAll(items, labels)
-
-  if (axis.domain !== false) {
-    const domainLine: SceneItem = { x: 0, y: 0, x2: 0, y2: 0 }
-    // Compute the scale range extent for the axis domain line.
-    // For non-band scales, the range values determine the axis extent.
-    const scaleRange = scale.range() as number[]
-    const rangeStart: number = scaleRange.length > 0 ? Number(scaleRange[0]) || 0 : 0
-    // the far end stays NaN when the range is not numeric (a band scale given a named colour
-    // range): vega draws that domain rule to x2=NaN, only the start folds to 0
-    const rangeEnd: number = scaleRange.length > 0 ? Number(scaleRange[scaleRange.length - 1]) : 0
-    // vega axis-domain: the rule runs from range(0) to range(1) of the scale —
-    // NOT min to max — so a reversed range (every y axis) starts at the far end
-    // (it decides where a dash pattern begins).
-    const axisStart = rangeStart
-    const axisEnd = rangeEnd
-    if (orient === 'left') { domainLine.x = 0.5; domainLine.x2 = 0.5; domainLine.y = axisStart + 0.5; domainLine.y2 = axisEnd + 0.5 }
-    else if (orient === 'right') { domainLine.x = ctx.width + 0.5; domainLine.x2 = ctx.width + 0.5; domainLine.y = axisStart + 0.5; domainLine.y2 = axisEnd + 0.5 }
-    else if (orient === 'bottom') { domainLine.x = axisStart + 0.5; domainLine.x2 = axisEnd + 0.5; domainLine.y = ctx.height + 0.5; domainLine.y2 = ctx.height + 0.5 }
-    else if (!knownOrient) { domainLine.x = 0; domainLine.x2 = 0; domainLine.y = axisStart; domainLine.y2 = axisEnd }
-    else { domainLine.x = axisStart + 0.5; domainLine.x2 = axisEnd + 0.5; domainLine.y = 0.5; domainLine.y2 = 0.5 }
-    domainLine.stroke = axis.domainColor === null ? undefined : axis.domainColor ?? '#888'
-    domainLine.strokeWidth = axis.domainWidth ?? 1
-    if (axis.domainDash) domainLine.strokeDash = axis.domainDash
-    if (axis.domainOpacity != null) domainLine.strokeOpacity = axis.domainOpacity
-    if (axis.domainCap != null) domainLine.strokeCap = axis.domainCap
-    if (axis.domainDashOffset != null) domainLine.strokeDashOffset = axis.domainDashOffset
-    applyGuideEncode(domainLine, encDomain, guideDatum, ctx, guideOrigin)
-    ;(domainLine as Record<string, unknown>)._domain = true
-    domainLine._part = 'domain'
-    items.push(domainLine)
-  }
-
-  const title = axis.title
-  if (title !== undefined && title !== null && title !== '') {
-    const text =
-      typeof title === 'object' && 'signal' in title && title.signal !== undefined
-        ? String(ctx.runtime.expr(title.signal)({}, ctx.signalParams))
-        : String(title)
-    const t: SceneItem = { text, x: 0, y: 0 }
-    // Vega clears the laid-out tick+label extent before anchoring the title.
-    // When the domain is empty no ticks/labels are produced, the extent is 0,
-    // and the title sits closer to the axis (titlePadding + baseline shift).
-    const hasTickMarks = ticks.length > 0
-    const titlePadding = (axis as { titlePadding?: number }).titlePadding ?? 4
-    // Vega lays out the axis title beyond the axis content bounds:
-    //   extent = (ticks ? tickSize + 0.5 : 0) + (labels ? labelPadding + 9.5 : 0)
-    //   title  = extent + titlePadding + baseline offset (9 = round(0.79*11))
-    // (calibrated against the oracle for ticks/labels/titlePadding variants).
-    // Axis titles: our axis items carry absolute coordinates that bake in the
-    // axis group origin (0.5, 0.5) — vega renders its axis group at that
-    // offset and positions the title inside it, so the absolute equivalents
-    // are (all verified against oracle canonical records):
-    //   bottom: (w/2+0.5, h + 0.5 + [tick+0.5+labelPad+9.5+titlePad] + 9)
-    //   top:    (w/2+0.5, 0.5 - [tick+0.5+labelPad+9.5+titlePad] - 2)
-    //   left:   (-(tick+labelPad+labelWidth+3.5), h/2 + 0.5)   angle -90
-    //   right:  (w + tick+labelPad+labelWidth+4.5, h/2 + 0.5)  angle 90
-    // The +9/-2 are the baseline offsets (fs 11, top/bottom), baked for
-    // angle-0 titles; rotated titles render translate+rotate+offset.
-    // Title style properties (vega applies them through the title layout;
-    // the baseline offsets scale with the resolved fontSize).
-    const titleFs = (axis as { titleFontSize?: number }).titleFontSize ?? 11
-    const titleOpacity = (axis as { titleOpacity?: number }).titleOpacity
-    const titleColor = (axis as { titleColor?: string }).titleColor
-    // vega's 'guide-title' style defaults fontWeight to bold (guide titles
-    // include axis titles); vega-lite never emits an explicit weight.
-    const titleWeight = (axis as { titleFontWeight?: string | number }).titleFontWeight ?? 'bold'
-    const titleAlign = (axis as { titleAlign?: string }).titleAlign
-    const titleBaseline = (axis as { titleBaseline?: string }).titleBaseline
-    const titleX = (axis as { titleX?: number }).titleX
-    const titleY = (axis as { titleY?: number }).titleY
-    const titleAnchor = (axis as { titleAnchor?: string }).titleAnchor
-    const titleAngle = (axis as { titleAngle?: number }).titleAngle
-
-    // The title y is vega's raw layout position; the baseline shift is the
-    // renderer's (renderLeaf bakes baselineOffset for explicit baselines).
-    // vega's axisTitleLayout anchors the title at v = s + dl + titlePadding,
-    // where s is the clamped tick+label extent (axisLayout:
-    // s = max(minExtent, min(maxExtent, bounds.y2))). Our items bake the
-    // 0.5px axis-group delta, hence the ±0.5 on the absolute positions.
-    // vega's axisLayout unions the actual tick+label item bounds — stroke
-    // expansion and label rotation included — and anchors the title beyond
-    // them: s = the perpendicular extent clamped by minExtent/maxExtent
-    // (dl = multiLineOffset(title) is 0 for the single-line titles here).
-    // Our items bake the 0.5px axis-group delta, so the line-relative extent
-    // subtracts the baked line position per orient.
-    const guideB = new Bounds()
-    for (const it of [...tickItems, ...labels]) {
-      // vega's axisLayout bounds only the visible labels: an overlap-hidden
-      // (opacity 0) label must not push the title outward.
-      if (it.opacity === 0) continue
-      const bb = new Bounds()
-      boundLeaf(bb, it)
-      guideB.union(bb)
-    }
-    const minE = axis.minExtent ?? 0
-    const maxE = axis.maxExtent ?? 200
-    const clampS = (v: number): number => Math.max(minE, Math.min(maxE, v))
-    const sFor = (o: string): number => {
-      if (guideB.empty()) return 0
-      if (o === 'bottom') return clampS(guideB.y2 - (ctx.height + 0.5))
-      if (o === 'top') return clampS(0.5 - guideB.y1)
-      if (o === 'left') return clampS(0.5 - guideB.x1)
-      return clampS(guideB.x2 - (ctx.width + 0.5))
-    }
-
-    // vega's axis title anchor (axis-title.js): the position is the signal
-    // `lerp(range(scale), item.anchor === 'start' ? 0 : item.anchor === 'end'
-    // ? 1 : 0.5)` — along the axis for top/bottom (x), across for left/right
-    // (y) — and the align signal is `anchor === 'start' ? 'left' :
-    // anchor === 'end' ? 'right' : 'center'`.
-    const rng = (scale.range?.() as number[] | undefined) ?? []
-    const r0 = Array.isArray(rng) ? (rng[0] as number) ?? 0 : 0
-    const r1 = Array.isArray(rng) ? (rng[rng.length - 1] as number) ?? 0 : 0
-    const lerpRaw = titleAnchor === 'start' ? r0 : titleAnchor === 'end' ? r1 : (r0 + r1) / 2
-    // A degenerate range (NaN endpoints) places the title at the axis origin,
-    // matching vega's `|| 0` on the rendered coordinate.
-    const anchorLerp = Number.isFinite(lerpRaw) ? lerpRaw : 0
-
-    if (orient === 'bottom') {
-      t.x = anchorLerp + 0.5
-      t.y = ctx.height + 0.5 + sFor('bottom') + titlePadding
-      t.align = 'center'; t.baseline = titleBaseline ?? 'top'
-    }
-    else if (orient === 'top') {
-      t.x = anchorLerp + 0.5
-      // the top group sits at y = 0.5 (delta only), so no line offset to add
-      t.y = 0.5 - (sFor('top') + titlePadding)
-      t.align = 'center'; t.baseline = titleBaseline ?? 'bottom'
-    }
-    else if (orient === 'left' || orient === 'right') {
-      const sLR = sFor(orient)
-      t.x = orient === 'left' ? -(sLR + titlePadding) + 0.5 : ctx.width + sLR + titlePadding + 0.5
-      t.y = anchorLerp + 0.5; t.align = 'center'; t.baseline = titleBaseline ?? 'bottom'
-      ;(t as Record<string, unknown>).angle = titleAngle ?? (orient === 'left' ? -90 : 90)
-    }
-    else {
-      // any other orient: a vertical axis at the origin whose title layout never ran (sign +1, no delta)
-      t.x = 0
-      t.y = anchorLerp; t.align = 'center'; t.baseline = titleBaseline ?? 'bottom'
-      ;(t as Record<string, unknown>).angle = titleAngle ?? 90
-    }
-    // Raw-guide mode: the axisTitleLayout never ran, so the title keeps its
-    // encode position — the lerp along the axis, and 0 across (the s+extent
-    // offset is a layout product). The -0.5 raw shift then lands it at 0.
-    if (ctx.rawGuides) {
-      // the raw dys for bottom drops the height origin; the title must land
-      // at 0 across (bottom/top) or 0 along (left/right) after it.
-      if (orient === 'bottom') t.y = ctx.height + 0.5
-      else if (orient === 'top') t.y = 0.5
-      else t.x = 0.5
-    }
-    // Explicit titleX/titleY are the vega title mark's group-relative x/y,
-    // and the axis group sits at (0.5, ±0.5|height+0.5) per orient (vega
-    // axisLayout: top y=-offset, bottom y=height+offset, left x=-offset,
-    // right x=width+offset; delta = translate ?? 0.5) — so resolve them
-    // against the baked absolute origin.
-    if (titleX != null) t.x = titleX + (orient === 'right' ? ctx.width + 0.5 : 0.5)
-    if (titleY != null) t.y = titleY + (orient === 'bottom' ? ctx.height + 0.5 : 0.5)
-    if (titleAlign != null) t.align = titleAlign as SceneItem['align']
-    else if (titleAnchor === 'start') t.align = 'left'
-    else if (titleAnchor === 'end') t.align = 'right'
-    if (titleBaseline != null) t.baseline = titleBaseline as SceneItem['baseline']
-    // vega's axis-title: titleAngle is a require-update patch on the mark's
-    // angle — the enter default is 0 for horizontal orients (±90 for
-    // vertical, applied in the branches above), and an explicit titleAngle
-    // overrides either.
-    if (titleAngle != null && orient !== 'left' && orient !== 'right') {
-      ;(t as Record<string, unknown>).angle = titleAngle
-    }
-    // Vega emits font-size 11 on axis titles explicitly (bounds + canvas font).
-    ;(t as Record<string, unknown>).fontSize = titleFs
-    if (axis.titleFont != null) (t as Record<string, unknown>).font = axis.titleFont
-    if (axis.titleFontStyle != null) t.fontStyle = axis.titleFontStyle
-    if ((axis as { titleLimit?: number }).titleLimit != null) {
-      t.limit = (axis as { titleLimit?: number }).titleLimit
-    }
-    ;(t as Record<string, unknown>).fontWeight = titleWeight
-    if (titleOpacity != null) t.fillOpacity = titleOpacity
-    t.fill = titleColor ?? '#000'
-    applyGuideEncode(t, encTitle, guideDatum, ctx, guideOrigin)
-    ;(t as Record<string, unknown>)._title = true
-    t._part = 'title'
-    items.push(t)
-  }
-
-  // `translate` replaces the 0.5px axis-group delta and `offset` shifts the
-  // whole axis perpendicular to its line (vega axisLayout: x = -offset for
-  // left, y = height + offset for bottom, ...).
-  const trRaw = axis.translate
-  const tr = (typeof trRaw === 'number' ? trRaw : 0.5) - 0.5
-  const off = axis.offset ?? 0
-  // `position` anchors the whole axis group along its line (vega axisLayout:
-  // x = position for top/bottom, y = position for left/right).
-  const posOff = typeof axis.position === 'number' ? axis.position : 0
-  // Raw-guide mode (the layout aborted): the items keep their encode-frame
-  // positions — the axis group sits at (0,0); only the perpendicular origin
-  // (height/width) is dropped, which axisLayout would have applied. The
-  // buildAxisAndLegend wrapper's -0.5 already cancels the baked delta.
-  const dxs = ctx.rawGuides || !knownOrient ? (orient === 'right' ? -ctx.width : 0) : tr + (orient === 'left' ? -off : orient === 'right' ? off : posOff)
-  const dys = ctx.rawGuides || !knownOrient ? (orient === 'bottom' ? -ctx.height : 0) : tr + (orient === 'bottom' ? off : orient === 'top' ? -off : posOff)
-  if (typeof process !== 'undefined' && process.env.ASTER_DBG_RAW) console.error('[raw]', orient, 'raw', ctx.rawGuides, 'dxs', dxs, 'dys', dys, 'n', items.length)
-  // vega's grid rules cancel the axis `offset` on their cross-axis span
-  // (axis-grid.js: gridStart/gridEnd carry `offset: sign * offset`), so the grid
-  // stays on the plot area while the rest of the axis moves out.
-  // The grid cancels the axis's OWN offset (`spec.offset`), not a config-merged one.
-  const specOff = typeof axis.own?.offset === 'number' ? axis.own.offset : 0
-  const cancelSign = orient === 'left' || orient === 'top' ? 1 : -1
-  const gridCross = tr + cancelSign * (specOff - off)
-  const gridDxs = ctx.rawGuides || !knownOrient ? dxs : (orient === 'left' || orient === 'right' ? gridCross : dxs)
-  const gridDys = ctx.rawGuides || !knownOrient ? dys : (orient === 'bottom' || orient === 'top' ? gridCross : dys)
-  if (dxs || dys || gridDxs || gridDys) {
-    for (const it of items) {
-      const rec = it as Record<string, unknown>
-      const grid = rec._grid === true
-      const sx = grid ? gridDxs : dxs
-      const sy = grid ? gridDys : dys
-      if (rec.x != null) rec.x = (rec.x as number) + sx
-      if (rec.y != null) rec.y = (rec.y as number) + sy
-      if (rec.x2 != null) rec.x2 = (rec.x2 as number) + sx
-      if (rec.y2 != null) rec.y2 = (rec.y2 as number) + sy
-    }
-  }
-
-  // vega axis encode: `range: abs(span(range(scale)))` — the spine extent
+  const built = buildAxisGuide({
+    spec: own, cfg, scale: axis.scale, orient, encode: (axis.encode ?? {}) as Record<string, UserEncode | undefined>,
+    ticks: rows, width: ctx.width, height: ctx.height, raw: !!ctx.rawGuides, host: guideHost(ctx), style: guideStyles(ctx),
+  })
+  const knownOrient = orient === 'top' || orient === 'bottom' || orient === 'left' || orient === 'right'
+  const g = built.group
+  const href = g.href
+  const position = typeof g.position === 'number' ? g.position : 0
   const sr = scale.range() as number[]
-  const axisRangeSpan = typeof (axis as { range?: unknown }).range === 'number'
-    ? (axis as unknown as { range: number }).range
-    : sr.length > 1 ? Math.abs(Number(sr[sr.length - 1]) - Number(sr[0])) : 0
-
-  return {
+  const axisRangeSpan = typeof g.range === 'number' ? g.range : sr.length > 1 ? Math.abs(Number(sr[sr.length - 1]) - Number(sr[0])) : 0
+  // the axis group item is a group item like any other: its box is drawn at its (encoded) size, painted as encoded
+  const gb = groupBackground(g as SceneItem, +(g.width as number) || 0, +(g.height as number) || 0)
+  // (the axis's marks are in the view's frame, the group's own position baked in: so is its box)
+  const gx = +(g.x as number) || 0
+  const gy = +(g.y as number) || 0
+  gb.background.x = gx
+  gb.background.y = gy
+  if (gb.foreground) { gb.foreground.x = gx; gb.foreground.y = gy }
+  const out = {
     marktype: 'group',
     role: 'axis',
-    items,
+    items: built.leaves,
+    box: gb.background,
+    ...(gb.foreground ? { boxFg: gb.foreground } : {}),
     // the marks vega-parser's axis builds (grid, ticks, labels, domain, title; axis.js `datum`): the SVG draws a
     // container for each, empty or not
-    parts: (['grid', 'ticks', 'labels', 'domain', 'title'] as const).filter((k) => guideDatum[k]).map((k) => ({ grid: 'grid', ticks: 'tick', labels: 'label', domain: 'domain', title: 'title' })[k]),
-    // axis geometry for the vega-faithful bounds port (boundAxisGroup):
-    // `range` is the spine extent along the axis line — vega's axis encode
-    // sets `range: abs(span(range(scale)))`, the SCALE's absolute range span
-    // (a left axis over a width-ranged scale spans the width, not the view
-    // height); `baseline` is the perpendicular position of the axis line
-    // (content bottom for bottom, content top for top, 0 for left, content
-    // right for right). These diverge once autosize fit shrinks width !=
-    // height, so both are needed.
-    ...(!knownOrient
-      ? { axis: { orient, range: axisRangeSpan, baseline: 0, translate: 0, position: 0, noLayout: true } }
-      : orient === 'left' || orient === 'right'
-      ? { axis: { orient, range: axisRangeSpan, baseline: orient === 'right' ? ctx.width : 0, translate: ctx.rawGuides ? 0 : (typeof axis.translate === 'number' ? axis.translate : 0.5), position: posOff } }
-      : { axis: { orient, range: axisRangeSpan, baseline: orient === 'bottom' ? ctx.height : 0, translate: ctx.rawGuides ? 0 : (typeof axis.translate === 'number' ? axis.translate : 0.5), position: posOff } }),
-  } as SceneGroup
+    parts: built.parts,
+    partMeta: built.partMeta,
+    ...(built.partMeta.axis?.name ? { cssName: built.partMeta.axis.name } : {}),
+    ...(itemAriaOf(built.group) ? { itemAria: itemAriaOf(built.group) } : {}),
+    axis: { orient, itemOrient: typeof g.orient === 'string' ? g.orient : orient, range: axisRangeSpan, baseline: 0, translate: ctx.rawGuides ? 0 : (typeof g.translate === 'number' ? g.translate : 0.5), position, bounds: built.bounds, ...(knownOrient ? {} : { noLayout: true }) },
+    ...(href != null ? { href } : {}),
+  } as unknown as SceneGroup
+  vetGuideLinks(out, ctx)
+  return out
+}
+
+/** A hyperlink on a guide's group or marks goes through the URL policy like any mark's. */
+function vetGuideLinks(g: SceneGroup, ctx: EvalContext): void {
+  if (ctx.urlPolicy === undefined) return
+  const vet = (it: SceneItem): void => {
+    if (it.href != null && applyLinkUrlPolicy(it.href, ctx.urlPolicy!) == null) it.href = undefined
+  }
+  vet(g)
+  for (const it of g.items ?? []) vet(it as SceneItem)
+}
+
+/** An axis's `values`: what a signal holds when the ticks are made; null, undefined, 0 or '' is no values at all. */
+function axisValues(axis: CompiledAxis, ctx: EvalContext): unknown {
+  const vs: unknown = axis.values
+  if (vs && typeof vs === 'object' && !Array.isArray(vs) && 'signal' in (vs as Record<string, unknown>)) {
+    return ctx.runtime.expr((vs as { signal: string }).signal)({}, ctx.signalParams)
+  }
+  return vs
 }
 
 function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[] {
   // Explicit `values` override any generated ticks (vega AxisTicks sorts them).
-  if (axis.values !== undefined) {
-    let vs: unknown = axis.values
-    if (vs && typeof vs === 'object' && !Array.isArray(vs) && 'signal' in (vs as Record<string, unknown>)) {
-      try {
-        vs = ctx.runtime.expr((vs as { signal: string }).signal)({}, ctx.signalParams)
-      } catch {
-        return []
-      }
+  const vs = axisValues(axis, ctx)
+  if (vs) {
+    // vega AxisTicks: validTicks(scale, values, count) -- a value outside the scale's range is dropped, the rest are
+    // sorted in range order and thinned to the tick count (the number of values when the axis has none); a `values`
+    // that is no list is a TypeError in the dataflow (`ticks.map is not a function`)
+    if (!Array.isArray(vs)) throw new TypeError('ticks.map is not a function')
+    let given: unknown = axis.tickCount
+    if (given && typeof given === 'object' && typeof (given as { signal?: unknown }).signal === 'string') {
+      given = ctx.runtime.expr((given as { signal: string }).signal)({}, ctx.signalParams)
     }
-    if (Array.isArray(vs)) {
-      // vega AxisTicks: validTicks(scale, values, count) — values outside the
-      // scale's range are dropped and the rest are sorted in range order
-      // (a band axis with numeric picks therefore renders no ticks).
-      return validTicks(scale, vs.filter((v) => v != null), vs.length)
+    let minstep: unknown = axis.tickMinStep
+    if (minstep && typeof minstep === 'object' && typeof (minstep as { signal?: unknown }).signal === 'string') {
+      minstep = ctx.runtime.expr((minstep as { signal: string }).signal)({}, ctx.signalParams)
     }
-    return []
+    const tally = given == null ? vs.length : given
+    return validTicks(scale, vs, tickCount(scale, tally, minstep as number | undefined) as number)
   }
   let count: number | undefined
   // vega's AxisTicks reads the (signal-resolved) tickCount through tickCount(scale, count, minstep)
@@ -6199,7 +4559,7 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
   return ticks
 }
 
-function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: EvalContext): (v: unknown) => string {
+function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: EvalContext, noSkip = false): (v: unknown) => string {
   // (vega has no axis `labelExpr`: vega-lite compiles it to `encode.labels.update.text`,
   // which is applied to the label items themselves - see applyGuideEncode - so a raw
   // `labelExpr` is ignored here exactly as vega ignores it)
@@ -6250,7 +4610,7 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: 
     return (v) => String(v)
   }
   const L = locale(undefined)
-  return tickFormat(L, scale, count, fmt)
+  return tickFormat(L, scale, count, fmt, undefined, noSkip)
 
 }
 

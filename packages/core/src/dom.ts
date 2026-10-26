@@ -444,7 +444,7 @@ function leafDesc(it: SceneItem): DomDesc {
     symbolElementAttrs(it, leafSymbolPath(it), w)
     return { tag: 'path', attrs: w.out, clean: isClean(it) }
   }
-  if (it.text != null) {
+  if (it._kind === 'text' || (it._kind === undefined && it.text != null)) {
     const d = textDesc(it)
     if (d) return d
   }
@@ -566,7 +566,6 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
     case 'text': {
       const out: DomDesc[] = []
       for (const it of items) {
-        if (it.text == null) continue
         const d = cachedDesc(it, () => {
           const t = textDesc(it)!
           return linked(it, t)
@@ -631,7 +630,7 @@ function nodeDescs(nodes: readonly SvgNode[], clips: ClipCollector, options: Dom
       // descriptor still lands its clipPath in this render's defs.
       const clipId = n.wrapClip ? leafClipId(item, clips) : null
       if (clipId) d = g('g', pairs((w) => clipRefAttrs(clipId, w)), [d])
-      out.push(d)
+      out.push(linked(item, d))
     } else if ('mark' in n) {
       pushAll(out, markDescs(n.mark, n.frameW, n.frameH, clips, options, n.scope))
     } else {

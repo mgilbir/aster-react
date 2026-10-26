@@ -159,6 +159,10 @@ export interface CompiledChart {
   signals: Record<string, unknown>
   /** Raw signal definitions, including `update` expressions for static resolution. */
   signalDefs?: CompiledSignalDef[]
+  /** `config.style`: the named styles guide marks take their defaults from (vega-parser applyDefaults). */
+  style?: Record<string, Record<string, unknown>>
+  /** `config.lineBreak` (applied to every text mark that does not encode its own). */
+  lineBreak?: unknown
   /** Top-level chart title (string or object form, defaults merged from config.title). */
   title?: CompiledTitle
   /** Cartographic projections referenced by geo marks / the geoshape transform. */
@@ -195,6 +199,9 @@ export interface CompiledTitle {
   /** `aria: false`: the title's container is aria-hidden in the SVG. */
   aria?: boolean
   encode?: Record<string, Record<string, EncodeValue>>
+  /** The title spec as written (a string title is `{text}`), and `config.title`: vega's `lookup(own, cfg)`. */
+  own?: Record<string, unknown>
+  cfg?: Record<string, unknown>
 }
 
 export interface CompiledSignalDef {
@@ -410,6 +417,8 @@ export interface CompiledAxis {
   offset?: number
   /** The axis's own properties (before config merge). */
   own?: Record<string, unknown>
+  /** The config block the axis reads (`config.axis` with `axisX` / `axisY` / `axis<Orient>` / `axisBand` over it): vega's `lookup(own, cfg)`. */
+  cfg?: Record<string, unknown>
   tickBand?: string
   values?: unknown[] | { signal: string }
   format?: string
@@ -423,6 +432,8 @@ export interface CompiledAxis {
 export interface CompiledLegend {
   /** The legend's own properties (before config merge). */
   own?: Record<string, unknown>
+  /** `config.legend`: vega's `lookup(own, cfg)`. */
+  cfg?: Record<string, unknown>
   fill?: string
   stroke?: string
   size?: string
@@ -630,6 +641,15 @@ export interface SceneGroup extends SceneItem {
    * The SVG draws a container for each, even an empty one; each item names its mark in `_part`.
    */
   parts?: string[]
+  /**
+   * Guide only: what the spec's `encode.<part>` made of each mark of the guide (vega's guideMark): `name` is the last
+   * class token of the mark's SVG container, `interactive` lifts its `pointer-events: none`. `axis` / `legend` /
+   * `title` is the guide's group.
+   */
+  partMeta?: Record<string, { name?: string; interactive: boolean }>
+  /** A guide's group item as a box: its background (and, with `strokeForeground`, foreground) leaves (vega draws every group item's). */
+  box?: SceneItem
+  boxFg?: SceneItem
   /** Group items of one mark carry the mark's index in its parent, so consecutive items of a mark share one container. */
   markIndex?: number
   /** The mark's `interactive: false` (its SVG container then has `pointer-events="none"`). */
@@ -739,6 +759,8 @@ export interface SceneItem {
    * column's box), `entry` (one entry's box), `symbol` `label` `gradient` `band` `title`.
    */
   _part?: string
+  /** Internal: the kind of mark a guide leaf is, when its channels do not say (a text leaf whose text is null is still text). */
+  _kind?: 'text' | 'rule' | 'symbol' | 'rect'
   // accessibility
   ariaRole?: string
   ariaLabel?: string

@@ -131,6 +131,8 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     projections,
     configRange,
     autosizeContains,
+    style: cfgStyle,
+    ...(cfg.lineBreak != null ? { lineBreak: cfg.lineBreak } : {}),
     layout: (spec.layout as Record<string, unknown> | undefined) ?? undefined,
   }
 }
@@ -424,6 +426,8 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
     frame: (spec.frame as string | undefined) ?? (cfg.frame as string | undefined),
     ...((spec.aria ?? cfg.aria) === false ? { aria: false } : {}),
     encode: spec.encode as CompiledTitle['encode'],
+    own: spec,
+    cfg,
   }
 }
 
@@ -451,6 +455,7 @@ function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string
   // with `config.gradientLabelOffset` as their fallback, not `config.labelOffset`).
   // Keep the guide's own properties apart from the config-merged ones.
   out.own = o
+  out.cfg = defaults
   return out
 }
 
