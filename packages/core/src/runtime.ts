@@ -330,6 +330,9 @@ interface EvalContext {
   signalParams: Record<string, unknown>
   width: number
   height: number
+  /** The view's size, inside nested groups (whose `width` / `height` above are the group's own). A scale's `width` / `height` range is the view's. */
+  viewWidth?: number
+  viewHeight?: number
   /** Position of the enclosing facet group, for `{field: {group: 'x' | 'y'}}` references. */
   groupX?: number
   groupY?: number
@@ -3607,12 +3610,14 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     const childScales = new Map<string, Scale>()
     const childTypes = new Map<string, string>()
     for (const sdef of mark.scales ?? []) {
-      childScales.set(sdef.name, buildScale(sdef, scaleContext(ctx, sdef.name)))
+      childScales.set(sdef.name, buildScale(sdef, scaleContext({ ...ctx, width: ctx.viewWidth ?? ctx.width, height: ctx.viewHeight ?? ctx.height }, sdef.name)))
       childTypes.set(sdef.name, sdef.type)
     }
     const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
     const childCtx: EvalContext = {
       ...ctx,
+      viewWidth: ctx.viewWidth ?? ctx.width,
+      viewHeight: ctx.viewHeight ?? ctx.height,
       width: gw,
       height: gh,
       groupX: gx,
