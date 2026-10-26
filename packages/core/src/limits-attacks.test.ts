@@ -10,12 +10,18 @@ import { describe, it, expect } from 'vitest'
 import { attack, expectLimit, SLACK_MS } from './attack.testkit.js'
 
 const T = 40_000
+/**
+ * Wall-clock backstop for the attacks whose claim is a COUNT limit (maxRows, maxItems, maxStringLength...): generous, so a
+ * loaded machine cannot trip the clock before the count check and turn the expected error into maxTimeMs. The promptness of
+ * the refusal is still asserted, on CPU time (the third argument of expectLimit), which load does not inflate.
+ */
+const BACKSTOP_MS = 5000
 
 describe('single-call allocators are bounded before they allocate (C9)', () => {
   it('sequence transform: 5e7 rows under maxRows', async () => {
     const r = await attack(`
       core.renderSpec({ data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop: 5e7, as: 'x' }] }] },
-        { limits: { maxRows: 1000, maxTimeMs: 200 } })`)
+        { limits: { maxRows: 1000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxRows/, 200)
   }, T)
 
@@ -29,21 +35,21 @@ describe('single-call allocators are bounded before they allocate (C9)', () => {
   it('expression sequence(0, 5e7) in a formula', async () => {
     const r = await attack(`
       core.renderSpec({ data: [{ name: 't', values: [{ a: 1 }], transform: [{ type: 'formula', as: 'n', expr: 'length(sequence(0, 50000000))' }] }] },
-        { limits: { maxRows: 1000, maxTimeMs: 200 } })`)
+        { limits: { maxRows: 1000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxRows/, 200)
   }, T)
 
   it('expression pad(x, 5e7)', async () => {
     const r = await attack(`
       core.renderSpec({ data: [{ name: 't', values: [{ a: 1 }], transform: [{ type: 'formula', as: 'n', expr: "length(pad('x', 50000000))" }] }] },
-        { limits: { maxStringLength: 10000, maxTimeMs: 200 } })`)
+        { limits: { maxStringLength: 10000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxStringLength/, 200)
   }, T)
 
   it('number format width 5e7', async () => {
     const r = await attack(`
       core.renderSpec({ data: [{ name: 't', values: [{ a: 1 }], transform: [{ type: 'formula', as: 'n', expr: "length(format(1, '50000000d'))" }] }] },
-        { limits: { maxStringLength: 10000, maxTimeMs: 200 } })`)
+        { limits: { maxStringLength: 10000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxStringLength/, 200)
   }, T)
 
@@ -51,7 +57,7 @@ describe('single-call allocators are bounded before they allocate (C9)', () => {
     const r = await attack(`
       const expr = Array.from({ length: 50 }, () => "pad('x', 900)").join(' + ')
       core.renderSpec({ data: [{ name: 't', values: [{ a: 1 }], transform: [{ type: 'formula', as: 'n', expr: 'length(' + expr + ')' }] }] },
-        { limits: { maxStringLength: 10000, maxGeneratedBytes: 5000, maxTimeMs: 200 } })`)
+        { limits: { maxStringLength: 10000, maxGeneratedBytes: 5000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxGeneratedBytes/, 200)
   }, T)
 
@@ -61,7 +67,7 @@ describe('single-call allocators are bounded before they allocate (C9)', () => {
     axes: [{ orient: 'bottom', scale: 'x', ${extra} }] }`
 
   it('axis tickCount 2e6 (linear)', async () => {
-    const r = await attack(`core.renderSpec(${axisSpec('tickCount: 2000000')}, { limits: { maxItems: 1000, maxTimeMs: 200 } })`)
+    const r = await attack(`core.renderSpec(${axisSpec('tickCount: 2000000')}, { limits: { maxItems: 1000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxItems|ticks/, 200)
   }, T)
 
@@ -70,7 +76,7 @@ describe('single-call allocators are bounded before they allocate (C9)', () => {
       core.renderSpec({ width: 300, height: 200,
         scales: [{ name: 'x', type: 'time', domain: [0, 3.2e12], range: [0, 300] }],
         axes: [{ orient: 'bottom', scale: 'x', tickCount: 2000000 }] },
-        { limits: { maxItems: 1000, maxTimeMs: 200 } })`)
+        { limits: { maxItems: 1000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxItems|time ticks/, 200)
   }, T)
 
@@ -78,18 +84,18 @@ describe('single-call allocators are bounded before they allocate (C9)', () => {
     const r = await attack(`
       const spec = JSON.parse(trellisSpec)
       spec.layout.columns = 50000000
-      core.renderSpec(spec, { limits: { maxItems: 10000, maxTimeMs: 200 } })`)
+      core.renderSpec(spec, { limits: { maxItems: 10000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxItems|facet columns/, 200)
   }, T)
 
   it('kde steps 1e9 and quantile step 1e-9 are bounded by maxRows', async () => {
     const kde = await attack(`
       core.renderSpec({ data: [{ name: 't', values: [{ v: 1 }, { v: 2 }, { v: 3 }], transform: [{ type: 'kde', field: 'v', steps: 1000000000, resolve: 'shared' }] }] },
-        { limits: { maxRows: 1000, maxTimeMs: 200 } })`)
+        { limits: { maxRows: 1000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(kde, /maxRows/, 200)
     const q = await attack(`
       core.renderSpec({ data: [{ name: 't', values: [{ v: 1 }, { v: 2 }], transform: [{ type: 'quantile', field: 'v', step: 0.000000001 }] }] },
-        { limits: { maxRows: 1000, maxTimeMs: 200 } })`)
+        { limits: { maxRows: 1000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(q, /maxRows/, 200)
   }, T)
 
@@ -98,14 +104,14 @@ describe('single-call allocators are bounded before they allocate (C9)', () => {
       const rows = Array.from({ length: 3000 }, (_, i) => ({ g: 'g' + i, v: i }))
       const probs = Array.from({ length: 3000 }, (_, i) => i / 3000) // 9M output rows
       core.renderSpec({ data: [{ name: 't', transform: [{ type: 'quantile', field: 'v', groupby: ['g'], probs }] }] },
-        { data: { t: rows }, limits: { maxRows: 100000, maxTimeMs: 300 } })`)
+        { data: { t: rows }, limits: { maxRows: 100000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxRows/, 300)
   }, T)
 
   it('contour grid size 1e5 x 1e5', async () => {
     const r = await attack(`
       core.renderSpec({ data: [{ name: 't', values: [{ x: 1, y: 1 }, { x: 5, y: 5 }], transform: [{ type: 'contour', x: 'x', y: 'y', size: [100000, 100000] }] }] },
-        { limits: { maxRows: 100000, maxTimeMs: 200 } })`)
+        { limits: { maxRows: 100000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxRows/, 200)
   }, T)
 })
@@ -118,14 +124,14 @@ describe('generated rows count against maxRows (C7, C49)', () => {
       const f = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
       const rows = Array.from({ length: 400000 }, (_, i) => ({ a: i, b: i, c: i, d: i, e: i, f: i, g: i, h: i }))
       core.renderSpec({ data: [{ name: 't', transform: [{ type: 'fold', fields: f, as: ['k', 'v'] }] }] },
-        { data: { t: rows }, limits: { maxRows: 500000, maxTimeMs: 300 } })`)
+        { data: { t: rows }, limits: { maxRows: 500000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxRows/, 300)
   }, T)
 
   it('flatten: one row holding a 1e7 element array', async () => {
     const r = await attack(`
       core.renderSpec({ data: [{ name: 't', transform: [{ type: 'flatten', fields: ['xs'] }] }] },
-        { data: { t: [{ xs: new Array(10000000).fill(1) }] }, limits: { maxRows: 1000, maxTimeMs: 500 } })`)
+        { data: { t: [{ xs: new Array(10000000).fill(1) }] }, limits: { maxRows: 1000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxRows/, 500)
   }, T)
 
@@ -133,7 +139,7 @@ describe('generated rows count against maxRows (C7, C49)', () => {
     const r = await attack(`
       const rows = Array.from({ length: 5000 }, (_, i) => ({ i }))
       core.renderSpec({ data: [{ name: 't', transform: [{ type: 'cross' }] }] },
-        { data: { t: rows }, limits: { maxRows: 100000, maxTimeMs: 500 } })`)
+        { data: { t: rows }, limits: { maxRows: 100000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxRows/, 500)
   }, T)
 
@@ -149,7 +155,7 @@ describe('generated rows count against maxRows (C7, C49)', () => {
     const r = await attack(`
       const rows = Array.from({ length: 3000 }, (_, i) => ({ g: 'g' + i, k: i, v: 1 }))
       core.renderSpec({ data: [{ name: 't', transform: [{ type: 'impute', field: 'v', key: 'k', groupby: ['g'], value: 0 }] }] },
-        { data: { t: rows }, limits: { maxRows: 100000, maxTimeMs: 500 } })`)
+        { data: { t: rows }, limits: { maxRows: 100000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxRows/, 500)
   }, T)
 
@@ -305,21 +311,21 @@ describe('regular expressions: the caps that can be enforced (C7, T3)', () => {
   it('test() on a 1 MB host string with a quadratic pattern (passes the screen; the input cap stops it)', async () => {
     const r = await attack(`
       core.renderSpec({ data: [{ name: 't', transform: [{ type: 'filter', expr: 'test(/a+$/, datum.s)' }] }] },
-        { data: { t: [{ s: 'a'.repeat(1000000) + '!' }] }, limits: { maxStringLength: 1000, maxTimeMs: 200 } })`)
+        { data: { t: [{ s: 'a'.repeat(1000000) + '!' }] }, limits: { maxStringLength: 1000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxStringLength/, 200)
   }, T)
 
   it('countpattern on a long host string', async () => {
     const r = await attack(`
       core.renderSpec({ data: [{ name: 't', transform: [{ type: 'countpattern', field: 's', pattern: 'a+$' }] }] },
-        { data: { t: [{ s: 'a'.repeat(1000000) + '!' }] }, limits: { maxStringLength: 1000, maxTimeMs: 200 } })`)
+        { data: { t: [{ s: 'a'.repeat(1000000) + '!' }] }, limits: { maxStringLength: 1000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxStringLength/, 200)
   }, T)
 
   it('regexp() with an over-long pattern', async () => {
     const r = await attack(`
       core.renderSpec({ data: [{ name: 't', values: [{ a: 1 }], transform: [{ type: 'formula', as: 'n', expr: "test(regexp(pad('a', 5000, 'a')), 'a')" }] }] },
-        { limits: { maxStringLength: 100000, maxTimeMs: 200 } })`)
+        { limits: { maxStringLength: 100000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxStringLength/, 200)
   }, T)
 })
@@ -331,7 +337,7 @@ describe('topojson cannot amplify past the limits (C60)', () => {
       const topo = { type: 'Topology', arcs: [arc], objects: { g: { type: 'GeometryCollection', geometries: [
         { type: 'Polygon', arcs: [new Array(20000).fill(0)] } ] } } }
       core.renderSpec({ data: [{ name: 't', values: topo, format: { type: 'topojson', feature: 'g' } }] },
-        { limits: { maxRows: 100000, maxTimeMs: 500 } })`)
+        { limits: { maxRows: 100000, maxTimeMs: ${BACKSTOP_MS} } })`)
     expectLimit(r, /maxRows|maxGeneratedRows/, 500)
   }, T)
 })
