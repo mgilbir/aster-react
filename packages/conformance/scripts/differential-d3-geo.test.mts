@@ -34,11 +34,21 @@ const FACTORIES: Record<string, string> = {
 /** Aster's port names them without the `geo` prefix. */
 const asterName = (n: string) => n.charAt(3).toLowerCase() + n.slice(4)
 
-function runGeoOps(api: Api, theirs: boolean, type: string, ops: Op[]): unknown[] {
+/**
+ * geoPath rounds path strings to 3 decimals by default, which hides a 1-ulp divergence (a planted
+ * `* (1 + Number.EPSILON)` in the Mercator raw projection changed one point, not one path). So
+ * every program also runs with `geoPath().digits(null)`, where the last bit is visible.
+ */
+const MODES: Array<{ label: string; digits: number | null | undefined }> = [
+  { label: 'default digits', digits: undefined },
+  { label: 'full precision', digits: null },
+]
+
+function runGeoOps(api: Api, theirs: boolean, type: string, ops: Op[], digits: number | null | undefined): unknown[] {
   const samples = structuredClone(geoSamples) as Record<string, unknown>
   const factory = FACTORIES[type]!
   const p: any = api[theirs ? factory : asterName(factory)]()
-  const path = () => api.geoPath(p)
+  const path = () => { const g = api.geoPath(p); return digits === undefined ? g : g.digits(digits) }
   return ops.map(([name, ...args]) =>
     exact(() => {
       switch (name) {
@@ -69,13 +79,15 @@ const contourOf = (make: () => any, c: Contour) =>
   exact(() => make().smooth(c.smooth).size(c.size).thresholds(c.thresholds)(structuredClone(c.values)))
 
 describe(`d3-geo ${(d3Geo as unknown as { version?: string }).version ?? '3.1.1'} vs Aster geo-projections.ts (live)`, () => {
-  ;(geoPrograms as Array<{ type: string; ops: Op[] }>).forEach(({ type, ops }, i) => {
-    it(`geo #${i} ${type}`, () =>
-      withTz('UTC', () => {
-        const want = runGeoOps(d3Api, true, type, ops)
-        expect(runGeoOps(asterApi, false, type, ops)).toEqual(want)
-      }))
-  })
+  for (const m of MODES) {
+    ;(geoPrograms as Array<{ type: string; ops: Op[] }>).forEach(({ type, ops }, i) => {
+      it(`geo #${i} ${type} [${m.label}]`, () =>
+        withTz('UTC', () => {
+          const want = runGeoOps(d3Api, true, type, ops, m.digits)
+          expect(runGeoOps(asterApi, false, type, ops, m.digits)).toEqual(want)
+        }))
+    })
+  }
 
   contourCases.forEach((c: Contour, i: number) => {
     it(`contour #${i} ${c.grid} ${c.size} smooth=${c.smooth} t=${c.thresholds}`, () => {
