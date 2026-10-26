@@ -16,7 +16,6 @@
  */
 import { SpecParseError } from './parse-error.js'
 import { mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
-import { isContinuous, isDiscretizing } from './scale.js'
 
 /** vega-util `array()`: a non-array becomes the one-element list, `null`/`undefined` the empty list. */
 export function specList(value: unknown): unknown[] {
@@ -170,6 +169,17 @@ function declareGuideMark(names: Names, extras: unknown): void {
   }
 }
 
+/**
+ * vega-scale's `isContinuous` / `isDiscretizing` (the scale registry's metadata), restated here because this module
+ * must not import `scale.ts`: `limits.ts` reaches it, and scale.ts reaches `limits.ts`. A test pins both lists to the registry.
+ */
+export const CONTINUOUS_SCALE_TYPES: ReadonlySet<string> = new Set([
+  'linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc',
+  'sequential', 'sequential-linear', 'sequential-log', 'sequential-pow', 'sequential-sqrt', 'sequential-symlog',
+  'diverging-linear', 'diverging-log', 'diverging-pow', 'diverging-sqrt', 'diverging-symlog',
+])
+export const DISCRETIZING_SCALE_TYPES: ReadonlySet<string> = new Set(['quantile', 'quantize', 'threshold', 'bin-ordinal'])
+
 const rec = (v: unknown): Record<string, unknown> => (isRecord(v) ? v : {})
 const hasKey = (o: unknown, k: string): boolean => isRecord(o) && Object.hasOwn(o, k)
 const isSignalObject = (v: unknown): boolean => isRecord(v) && !!v.signal
@@ -225,9 +235,9 @@ function parseLegendNames(l: unknown, names: Names): void {
   const present = channels.filter((c) => !!l[c]).length
   let type = typeof l.type === 'string' && l.type ? l.type : 'symbol'
   if (!l.type && present === 1 && (l.fill || l.stroke)) {
-    type = scaleType && isContinuous(scaleType) ? 'gradient' : scaleType && isDiscretizing(scaleType) ? 'discrete' : 'symbol'
+    type = scaleType && CONTINUOUS_SCALE_TYPES.has(scaleType) ? 'gradient' : scaleType && DISCRETIZING_SCALE_TYPES.has(scaleType) ? 'discrete' : 'symbol'
   }
-  if (type === 'gradient' && scaleType && isDiscretizing(scaleType)) type = 'discrete'
+  if (type === 'gradient' && scaleType && DISCRETIZING_SCALE_TYPES.has(scaleType)) type = 'discrete'
   if (type === 'gradient' || type === 'discrete') {
     // the entry group has no layout of its own: its marks are parsed in the legend's scope
     declareGuideMark(names, encode.gradient)
