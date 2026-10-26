@@ -1,0 +1,25 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "width": 400,
+  "height": 300,
+  "config": {
+    "projection": {
+      "type": "orthographic",
+      "rotate": [
+        -10,
+        -35,
+        0
+      ]
+    }
+  },
+  "data": {
+    "sphere": true
+  },
+  "projection": {},
+  "mark": {
+    "type": "geoshape",
+    "fill": "lightblue"
+  }
+}

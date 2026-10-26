@@ -1,0 +1,279 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "width": 500,
+  "height": 300,
+  "projection": {
+    "type": "albersUsa"
+  },
+  "layer": [
+    {
+      "data": {
+        "values": [
+          {
+            "city": "Seattle",
+            "lon": -122.33,
+            "lat": 47.61,
+            "pop": 0.74,
+            "kind": "port"
+          },
+          {
+            "city": "Denver",
+            "lon": -104.99,
+            "lat": 39.74,
+            "pop": 0.71,
+            "kind": "hub"
+          },
+          {
+            "city": "Austin",
+            "lon": -97.74,
+            "lat": 30.27,
+            "pop": 0.96,
+            "kind": "hub"
+          },
+          {
+            "city": "Chicago",
+            "lon": -87.63,
+            "lat": 41.88,
+            "pop": 2.7,
+            "kind": "hub"
+          },
+          {
+            "city": "Boston",
+            "lon": -71.06,
+            "lat": 42.36,
+            "pop": 0.68,
+            "kind": "port"
+          },
+          {
+            "city": "Miami",
+            "lon": -80.19,
+            "lat": 25.76,
+            "pop": 0.47,
+            "kind": "port"
+          }
+        ]
+      },
+      "mark": "circle",
+      "encoding": {
+        "longitude": {
+          "field": "lon",
+          "type": "quantitative"
+        },
+        "latitude": {
+          "field": "lat",
+          "type": "quantitative"
+        },
+        "size": {
+          "field": "pop",
+          "type": "quantitative",
+          "legend": null
+        },
+        "color": {
+          "value": "steelblue"
+        }
+      }
+    },
+    {
+      "data": {
+        "values": {
+          "type": "FeatureCollection",
+          "features": [
+            {
+              "type": "Feature",
+              "properties": {
+                "name": "west",
+                "value": 4,
+                "cat": "a"
+              },
+              "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                  [
+                    [
+                      -124,
+                      42
+                    ],
+                    [
+                      -117,
+                      42
+                    ],
+                    [
+                      -117,
+                      32.7
+                    ],
+                    [
+                      -120,
+                      34
+                    ],
+                    [
+                      -124,
+                      40
+                    ],
+                    [
+                      -124,
+                      42
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "type": "Feature",
+              "properties": {
+                "name": "mountain",
+                "value": 7,
+                "cat": "b"
+              },
+              "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                  [
+                    [
+                      -117,
+                      49
+                    ],
+                    [
+                      -104,
+                      49
+                    ],
+                    [
+                      -104,
+                      37
+                    ],
+                    [
+                      -117,
+                      37
+                    ],
+                    [
+                      -117,
+                      49
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "type": "Feature",
+              "properties": {
+                "name": "plains",
+                "value": 1,
+                "cat": "a"
+              },
+              "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                  [
+                    [
+                      -104,
+                      49
+                    ],
+                    [
+                      -90,
+                      48
+                    ],
+                    [
+                      -90,
+                      36
+                    ],
+                    [
+                      -104,
+                      37
+                    ],
+                    [
+                      -104,
+                      49
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "type": "Feature",
+              "properties": {
+                "name": "east",
+                "value": 9,
+                "cat": "b"
+              },
+              "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                  [
+                    [
+                      -90,
+                      47
+                    ],
+                    [
+                      -76,
+                      45
+                    ],
+                    [
+                      -75,
+                      36
+                    ],
+                    [
+                      -90,
+                      36
+                    ],
+                    [
+                      -90,
+                      47
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "type": "Feature",
+              "properties": {
+                "name": "south",
+                "value": 6,
+                "cat": "a"
+              },
+              "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                  [
+                    [
+                      -100,
+                      36
+                    ],
+                    [
+                      -90,
+                      36
+                    ],
+                    [
+                      -92,
+                      29.5
+                    ],
+                    [
+                      -97,
+                      26
+                    ],
+                    [
+                      -102,
+                      30
+                    ],
+                    [
+                      -100,
+                      36
+                    ]
+                  ]
+                ]
+              }
+            }
+          ]
+        },
+        "format": {
+          "property": "features"
+        }
+      },
+      "mark": {
+        "type": "geoshape",
+        "fill": "lightgray",
+        "stroke": "white"
+      }
+    }
+  ]
+}

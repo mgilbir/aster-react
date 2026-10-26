@@ -7,11 +7,12 @@
  * oracle's; the rendered output must not.
  */
 
-import { renameDataRefs, renameFragment } from './embed.js'
+import { renameDataRefs, renameExpr, renameFragment } from './embed.js'
 import { VLCompileError, pushAll, signalSafe, flatField, datumRef as dref, genName, safeKey, splitAccessPath, validExpr } from './names.js'
-import { validateSpec } from './validate.js'
+import { validateGeoUnit, validateSpec } from './validate.js'
 import { predicateExpr, domainValueExpr } from './predicate.js'
 import { normalizeComposites } from './composite.js'
+import { ASSEMBLED_FROM, GEO_POSITION_CHANNELS, assembleProjection, finalProjectionName, geoDataTransforms, geoshapeTransform, hasProjection, mergeLayerProjections, parseUnitProjection, renameComponentSignals, type GeoUnit, type ProjectionComponent, type UnitGeo } from './geo.js'
 import { scaleConfigOf, discreteStep, sizeRange, countRange, discreteCount, usesUnaggregatedDomain, type ScaleCfg } from './scaleconfig.js'
 import { getTimeUnitParts, normalizeTimeUnit, timeUnitFieldName, timeUnitTransform, type NormalTimeUnit } from './timeunit.js'
 import { binNames, binTransforms, normalizeBin, translateTransforms, type BinParams, type TransformContext, type TranslateState } from './transforms.js'
@@ -121,7 +122,29 @@ export function compile(input: VLSpec): VLSpec {
   }
   const signals = paramSignals(normalized)
   if (signals.length) out.signals = [...signals, ...((out.signals as Record<string, unknown>[] | undefined) ?? [])]
+  assertNoGeoSignalClash(out)
   return exprRefsToSignals(out) as VLSpec
+}
+
+/**
+ * The `geojson` transforms publish a signal each (`geojson_0`, `layer_1_geojson_0`...), which a projection's
+ * fit reads: a parameter of the same name would be overwritten (vega-lite has the same hazard; here it throws).
+ */
+function assertNoGeoSignalClash(out: VLSpec): void {
+  const names = new Set<string>()
+  const visit = (n: unknown): void => {
+    if (Array.isArray(n)) { n.forEach(visit); return }
+    if (!isObject(n)) return
+    if (n.type === 'geojson' && typeof n.signal === 'string') names.add(n.signal)
+    for (const [k, v] of Object.entries(n)) if (k !== 'values') visit(v)
+  }
+  visit(out.data)
+  if (!names.size) return
+  for (const sg of (out.signals as Record<string, unknown>[] | undefined) ?? []) {
+    if (typeof sg.name === 'string' && names.has(sg.name)) {
+      throw new VLCompileError(`the parameter "${sg.name}" has the name of a signal the map's geojson transform publishes (geojson_N, <layer>_geojson_N); rename the parameter`)
+    }
+  }
 }
 
 /**
@@ -168,9 +191,11 @@ function exprRefsToSignals(node: unknown): unknown {
   const keys = Object.keys(node)
   if (keys.length === 1 && keys[0] === 'expr' && typeof node.expr === 'string') return { signal: node.expr }
   const out: Record<string, unknown> = {}
+  // a geojson / geopoint transform's `fields` entries are per-datum expressions (`{expr}`), not signals
+  const keepFields = node.type === 'geopoint' || node.type === 'geojson'
   for (const k of keys) {
     const v = node[k]
-    if (k === 'values') out[k] = v
+    if (k === 'values' || (keepFields && k === 'fields')) out[k] = v
     else if (k === 'value' && isObject(v) && Object.keys(v).length === 1 && typeof v.expr === 'string') out.signal = v.expr
     else out[k] = exprRefsToSignals(v)
   }
@@ -302,7 +327,7 @@ const LEAF_PATHS = new WeakMap<VLSpec, number[]>()
  */
 function collectLeaves(root: VLSpec): VLSpec[] {
   const leaves: VLSpec[] = []
-  interface Inherited { encoding: Record<string, unknown>; data: unknown; transform: unknown[] }
+  interface Inherited { encoding: Record<string, unknown>; data: unknown; transform: unknown[]; projection?: unknown }
   // (the layer indices above each leaf: vega-lite names a nested layer's marks `layer_0_layer_1_marks`)
   const visit = (node: VLSpec, inh: Inherited, path: number[] = []): void => {
     let data = inh.data
@@ -314,11 +339,15 @@ function collectLeaves(root: VLSpec): VLSpec[] {
     if (Array.isArray(node.transform)) pushAll(transform, node.transform as Record<string, unknown>[])
     const encoding = { ...inh.encoding, ...(isObject(node.encoding) ? (node.encoding as Record<string, unknown>) : {}) }
     if (Array.isArray(node.layer)) {
-      ;(node.layer as VLSpec[]).forEach((c, i) => visit(c, { encoding, data, transform }, [...path, i]))
+      const projection = node.projection !== undefined ? node.projection : inh.projection
+      ;(node.layer as VLSpec[]).forEach((c, i) => visit(c, { encoding, data, transform, projection }, [...path, i]))
       return
     }
-    const leaf: VLSpec = { ...node, encoding }
+    // a layer's projection reaches its units (vega-lite normalize mergeProjection: the child's own wins)
+    const projection = node.projection !== undefined ? node.projection : inh.projection
+    const leaf: VLSpec = { ...node, encoding, ...(projection !== undefined ? { projection } : {}) }
     LEAF_PATHS.set(leaf, path)
+    if (isGraticuleData(node.data)) GRATICULE_UNITS.add(leaf)
     if (data !== undefined) leaf.data = data
     else delete leaf.data
     if (transform.length) leaf.transform = transform
@@ -357,6 +386,12 @@ function containerSizing(spec: VLSpec, w: { container?: boolean }, h: { containe
   }
 }
 
+/** vega-lite `UnitModel.assembleGroupStyle`: a unit with an x or y channel is a `cell` (framed), any other a `view`. */
+function unitGroupStyle(spec: VLSpec): 'cell' | 'view' {
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  return enc.x != null || enc.y != null ? 'cell' : 'view'
+}
+
 /** Compile a multi-layer spec: per-source casts, per-layer pipelines,
  * unioned scales, one mark group per layer. */
 function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
@@ -384,6 +419,8 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const mark = typeof markRaw === 'string' ? markRaw : (markRaw as Record<string, unknown>).type as string
     const encoding = isObject(l.encoding) ? (l.encoding as Record<string, unknown>) : {}
     checkConstChannels(mark, encoding, markIsFilled(l, mark))
+    // (a layer's encoding merged into this unit: the map rules apply to the result)
+    validateGeoUnit(mark, encoding, 'encoding')
     const fields = parseEncodingFields(encoding, l.config, markRaw)
     const orient = inferOrient(l, mark, markRaw, fields)
     return { l, mark, markRaw, markSize: isObject(markRaw) ? (markRaw.size as number | undefined) : undefined, fields, orient, pipeline: [], seriesFields: [], dataName: '', rawName: '', rawLen: 0, usesRawDomain: false, group: 0 }
@@ -393,8 +430,11 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (spec.$schema) out.$schema = VEGA_SCHEMA
   out.autosize = autosizeOf(spec) ?? 'pad'
   // theta-only layered views (pie labels) use the unstyled 'view' frame
-  const anyXY = parsed.some((p) => p.fields.some((f) => f.channel === 'x' || f.channel === 'y'))
-  out.style = anyXY ? 'cell' : 'view'
+  // vega-lite assembleGroupStyle: the unique styles of the layers, in order
+  {
+    const styles = [...new Set(parsed.map((p) => unitGroupStyle(p.l)))]
+    out.style = styles.length > 1 ? styles : styles[0]
+  }
 
   // Layers are grouped by the data they read: layers sharing a source share
   // its dataset and one casts dataset; a layer with its own `data` gets its own.
@@ -419,6 +459,9 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     source.name = sourceName
     return { sourceName, castDone: new Set<string>(), casts: [], source, castsName: sourceName }
   })
+  const geoPlan = parsed.some((p) => hasProjection(p.mark, isObject(p.l.encoding) ? (p.l.encoding as Record<string, unknown>) : {}))
+    ? planLayerProjections(spec, parsed)
+    : undefined
   for (const p of parsed) {
     const g = groups[p.group]!
     const d = buildData(p.l, p.fields, p.mark, p.orient, g.castDone, ctx)
@@ -485,6 +528,11 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     perLayerScales.push(layerScales)
   })
   out.data = data
+  if (geoPlan) {
+    const projections = geoPlan.assemble((leaf) => parsed.find((p) => p.l === leaf)!.dataName)
+    if (projections.length) out.projections = projections
+    if (geoPlan.root) FRAG_PROJECTION.set(out, geoPlan.root)
+  }
 
   // y2/x2 endpoint fields extend the layer's positional scale domain
   parsed.forEach((p, i) => {
@@ -1378,6 +1426,10 @@ type SizePlan = 'root' | 'shared' | 'per-child'
 
 interface CompositeResult {
   data: Record<string, unknown>[]
+  /** the children's projections, hoisted to the root (each named after its cell) */
+  projections: Record<string, unknown>[]
+  /** the projection the children's merged into, when they did (a composite parent may merge it further) */
+  projectionComp?: ProjectionComponent
   signals: Record<string, unknown>[]
   marks: Record<string, unknown>[]
   scales: ScaleSpec[]
@@ -1397,7 +1449,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
   const parentData = isObject(parent.data) ? dataSource(parent.data, ctx.datasets) : undefined
   const parentSourceName = parentData && typeof parentData.name === 'string' ? parentData.name : ctx.sn(0)
   const parentTransform = Array.isArray(parent.transform) ? (parent.transform as unknown[]) : []
-  let nextSource = 1
+  // (the counter is the compile's, not this embedding's: a nested composite must not reuse a sibling's source names)
   let nextData = 0
   const data: Record<string, unknown>[] = []
   const emitted = new Map<string, string>() // source name -> JSON of its definition
@@ -1409,7 +1461,8 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
       if (parentData) child.data = { ...parentData, name: parentSourceName }
       if (parentTransform.length) child.transform = [...parentTransform, ...(Array.isArray(child.transform) ? child.transform : [])]
     } else if (isObject(child.data) && typeof child.data.name !== 'string') {
-      child.data = { ...dataSource(child.data, ctx.datasets), name: ctx.sn(nextSource++) }
+      ctx.nextSource ??= 1
+      child.data = { ...dataSource(child.data, ctx.datasets), name: ctx.sn(ctx.nextSource++) }
     }
     if (parent.config !== undefined) child.config = parent.config
     delete child.params
@@ -1433,6 +1486,9 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
   if (planH === 'shared') signals.push({ name: 'childHeight', value: sameH })
 
   const marks: Record<string, unknown>[] = []
+  const projections: Record<string, unknown>[] = []
+  /** the cells with projections: finished below, once their siblings' are known (vega-lite merges compatible ones) */
+  const cellGeo: Array<{ vg: VLSpec; prefix: string; projList: Record<string, unknown>[]; unitData: Record<string, unknown>[]; comp: ProjectionComponent | undefined }> = []
   const scaleLists = new Map<string, ScaleSpec[]>()
   const legendsByChannel = new Map<string, Record<string, unknown>>()
   const legendOrder: string[] = []
@@ -1482,8 +1538,14 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
       // everything but the shared (legend-bearing) channels is private to its child
       if (!SHARED_SCALES.has(sc.name)) scaleMap.set(sc.name, `${prefix}${sc.name}`)
     }
+    // maps: the geojson transforms' signals and the projections are global names: a cell's own are prefixed
+    const geojsonTransforms = unitData.flatMap((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).filter((t) => t.type === 'geojson' && typeof t.signal === 'string'))
+    for (const t of geojsonTransforms) sigMap.set(t.signal as string, `${prefix}${t.signal as string}`)
+    const projList = (vg.projections as Record<string, unknown>[] | undefined) ?? []
+    const projMap = new Map(projList.map((p) => [p.name as string, `${prefix}${p.name as string}`]))
     const renames = { signals: sigMap, scales: scaleMap, datasets: dnames }
     renameFragment(vg.layout, renames)
+    renameFragment(projList, renames)
     renameFragment(vg.scales, renames)
     renameFragment(vg.marks, renames)
     renameFragment(vg.axes ?? [], renames)
@@ -1492,6 +1554,23 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     for (const sc of scales) {
       const to = scaleMap.get(sc.name)
       if (to !== undefined) sc.name = to
+    }
+    if (projList.length) {
+      for (const t of geojsonTransforms) t.signal = sigMap.get(t.signal as string)
+      // the cell's own root component reads this cell's signals (its size, its geojson fits): in the composite's names
+      const comp = FRAG_PROJECTION.get(vg)
+      if (comp) {
+        renameComponentSignals(comp, (e) => renameExpr(e, renames), (n) => sigMap.get(n) ?? n)
+        // ...and its fit's datasets (each leaf once: a merged component lists a leaf per child it took over)
+        const seen = new Set<object>()
+        for (const d of comp.data ?? []) {
+          if (!('main' in d) || seen.has(d.main)) continue
+          seen.add(d.main)
+          const local = HANDLE_MAIN.get(d.main)!
+          HANDLE_MAIN.set(d.main, dnames.get(local) ?? local)
+        }
+      }
+      cellGeo.push({ vg, prefix, projList, unitData, comp })
     }
     // signal definitions carry their own (renamed) name
     for (const sg of ownSignals) {
@@ -1543,9 +1622,44 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     marks.push(group)
   })
 
+  // maps: vega-lite's parseNonUnitProjections for a concat / repeat: the children's projections merge into
+  // one (fitted to the union of their data) wherever no property conflicts
+  let projectionComp: ProjectionComponent | undefined
+  if (cellGeo.length) {
+    projectionComp = mergeLayerProjections(`${rootNamePrefix(parent)}projection`, cellGeo.map((c) => c.comp))
+    if (projectionComp) pushAll(projections, assembleProjection(projectionComp, (h) => HANDLE_MAIN.get(h)!))
+    for (const cell of cellGeo) {
+      // a projection the composite took over is drawn once, there; the others are named after their cell
+      const projMap = new Map<string, string>()
+      for (const pj of cell.projList) {
+        const from = ASSEMBLED_FROM.get(pj)
+        projMap.set(pj.name as string, from?.merged ? finalProjectionName(from)! : `${cell.prefix}${pj.name as string}`)
+      }
+      const retarget = (t: Record<string, unknown>): void => {
+        if ((t.type === 'geopoint' || t.type === 'geoshape') && typeof t.projection === 'string') t.projection = projMap.get(t.projection) ?? t.projection
+      }
+      for (const d of cell.unitData) for (const t of (d.transform as Record<string, unknown>[] | undefined) ?? []) retarget(t)
+      const walkMarks = (ms: unknown): void => {
+        for (const m of (ms as Record<string, unknown>[] | undefined) ?? []) {
+          for (const t of (m.transform as Record<string, unknown>[] | undefined) ?? []) retarget(t)
+          walkMarks(m.marks)
+        }
+      }
+      walkMarks(cell.vg.marks)
+      for (const pj of cell.projList) {
+        const from = ASSEMBLED_FROM.get(pj)
+        if (from?.merged) continue
+        pj.name = projMap.get(pj.name as string)
+        projections.push(pj)
+      }
+    }
+  }
+
   const mergedShared = mergeLayerScales([...scaleLists.values()].flat().map((s) => [s]))
   return {
     data,
+    projections,
+    ...(projectionComp ? { projectionComp } : {}),
     signals,
     marks,
     scales: [...independentScales, ...mergedShared],
@@ -1631,6 +1745,8 @@ function compileConcat(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (res.rootWidth !== undefined) out.width = res.rootWidth
   if (res.rootHeight !== undefined) out.height = res.rootHeight
   out.data = res.data
+  if (res.projections.length) out.projections = res.projections
+  if (res.projectionComp) FRAG_PROJECTION.set(out, res.projectionComp)
   if (res.signals.length) out.signals = res.signals
   out.layout = compositeLayout(spec, {
     align: 'each',
@@ -1707,6 +1823,44 @@ function compileRepeat(spec: VLSpec, ctx: CompileCtx): VLSpec {
       return o
     }
     if (Array.isArray(res.marks)) res.marks = (res.marks as Record<string, unknown>[]).map(walk)
+    // maps: the names the layer's projection, geojson signals and geopoint outputs carry follow the same renaming
+    if (Array.isArray(res.projections) && res.projections.length) {
+      const names = new Map<string, string>()
+      const note = (n: unknown): void => {
+        if (typeof n === 'string' && typeof rename(n) === 'string' && rename(n) !== n) names.set(n, rename(n) as string)
+      }
+      for (const pj of res.projections as Record<string, unknown>[]) note(pj.name)
+      for (const d of (res.data as Record<string, unknown>[]) ?? []) {
+        for (const t of (d.transform as Record<string, unknown>[] | undefined) ?? []) {
+          if (t.type === 'geojson') note(t.signal)
+          if (t.type === 'geopoint') for (const a of (t.as as unknown[]) ?? []) note(a)
+        }
+      }
+      const rn = { signals: names, scales: new Map<string, string>() }
+      renameFragment(res.projections, rn)
+      const retarget = (t: Record<string, unknown>): void => {
+        if (t.type === 'geojson' && typeof t.signal === 'string') t.signal = names.get(t.signal) ?? t.signal
+        if (t.type === 'geopoint') {
+          if (typeof t.projection === 'string') t.projection = names.get(t.projection) ?? t.projection
+          if (Array.isArray(t.as)) t.as = t.as.map((a) => (typeof a === 'string' ? names.get(a) ?? a : a))
+        }
+        if (t.type === 'geoshape' && typeof t.projection === 'string') t.projection = names.get(t.projection) ?? t.projection
+      }
+      for (const d of (res.data as Record<string, unknown>[]) ?? []) for (const t of (d.transform as Record<string, unknown>[] | undefined) ?? []) retarget(t)
+      for (const pj of res.projections as Record<string, unknown>[]) if (typeof pj.name === 'string') pj.name = names.get(pj.name) ?? pj.name
+      const visitMarks = (ms: unknown): void => {
+        for (const m of (ms as Record<string, unknown>[] | undefined) ?? []) {
+          for (const t of (m.transform as Record<string, unknown>[] | undefined) ?? []) retarget(t)
+          const upd = (m.encode as { update?: Record<string, unknown> } | undefined)?.update
+          for (const ch of ['x', 'y', 'x2', 'y2']) {
+            const v = upd?.[ch]
+            if (isObject(v) && typeof v.field === 'string' && names.has(v.field)) v.field = names.get(v.field)
+          }
+          visitMarks(m.marks)
+        }
+      }
+      visitMarks(res.marks)
+    }
     return res
   }
 
@@ -1739,6 +1893,8 @@ function compileRepeat(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (res.rootWidth !== undefined) out.width = res.rootWidth
   if (res.rootHeight !== undefined) out.height = res.rootHeight
   out.data = res.data
+  if (res.projections.length) out.projections = res.projections
+  if (res.projectionComp) FRAG_PROJECTION.set(out, res.projectionComp)
   if (res.signals.length) out.signals = res.signals
   out.layout = compositeLayout(spec, { align: 'all', columns })
   out.marks = res.marks
@@ -2129,8 +2285,8 @@ function checkConstChannels(mark: string, encoding: Record<string, unknown>, fil
     if (!isObject(def) || def.field !== undefined) continue
     const isDatum = def.datum !== undefined
     const isValue = def.value !== undefined && def.condition === undefined
-    if (isDatum && !['x', 'y', 'x2', 'y2', 'color'].includes(ch)) {
-      throw new VLCompileError(`encoding.${ch}.datum is not supported (datum works on x, y, x2, y2 and color)`)
+    if (isDatum && !['x', 'y', 'x2', 'y2', 'color', ...GEO_POSITION_CHANNELS].includes(ch)) {
+      throw new VLCompileError(`encoding.${ch}.datum is not supported (datum works on x, y, x2, y2, longitude, latitude and color)`)
     }
     if ((isDatum || isValue) && ['x', 'y', 'x2', 'y2'].includes(ch) && !pointLike) {
       throw new VLCompileError(`encoding.${ch}: a constant ${isDatum ? 'datum' : 'value'} position is not supported on the "${mark}" mark`)
@@ -2281,6 +2437,8 @@ function normalizeType(t: unknown, def: ChannelDef, channel: string): string {
   switch (channel) {
     case 'row': case 'column': case 'facet': case 'shape': case 'strokeDash':
       return 'nominal'
+    case 'longitude': case 'latitude':
+      return 'quantitative'
     case 'order':
       return 'ordinal'
   }
@@ -2500,6 +2658,8 @@ interface CompileCtx extends TransformContext {
   dn(i: number): string
   /** Generated name for an unnamed source dataset. */
   sn(i: number): string
+  /** The next unnamed child source index (`source_<n>`) a composite hands out; shared by nested composites. */
+  nextSource?: number
   /** A generated one-off dataset name (`row_domain`, ...), de-collided from user names. */
   fresh(base: string): string
 }
@@ -2570,6 +2730,11 @@ function makeCtx(top: VLSpec): CompileCtx {
 /** A Vega data entry for a VL `data` object (values/url/name + format), resolving named `datasets`. */
 function dataSource(data: Record<string, unknown>, datasets: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
+  // data generators (vega-lite SourceNode / GraticuleNode): the sphere is one GeoJSON row, a graticule a transform
+  if (data.sphere !== undefined) return { ...(typeof data.name === 'string' ? { name: data.name } : {}), values: [{ type: 'Sphere' }] }
+  if (data.graticule !== undefined) {
+    return { ...(typeof data.name === 'string' ? { name: data.name } : {}), transform: [{ type: 'graticule', ...(isObject(data.graticule) ? data.graticule : {}) }] }
+  }
   for (const [k, v] of Object.entries(data)) out[k] = v
   if (typeof data.name === 'string' && data.values === undefined && data.url === undefined && Array.isArray(datasets[data.name])) {
     out.values = datasets[data.name]
@@ -2738,6 +2903,13 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   for (const t of userOut) USER_TRANSFORMS.add(t)
   pushAll(pipeline, userOut)
 
+  // maps: the geojson (projection fit) and geopoint (longitude / latitude) transforms follow the
+  // user's transforms and the implicit parses, ahead of bin / timeUnit / aggregate
+  {
+    const geo = GEO_UNITS.get(spec)
+    if (geo) pushAll(pipeline, geoDataTransforms(spec, geo))
+  }
+
   // timeUnit: the timeunit transform floors each date to the unit
   const tuSeen = new Set<string>()
   for (const f of fields.filter((q) => q.tu && q.field)) {
@@ -2876,6 +3048,10 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
             for (const op of ['min', 'max']) fieldsOut.push({ op, field: f.field, as: genName(op, f.field) })
           }
         }
+      } else if (GEO_POSITION_CHANNELS.includes(f.channel as never)) {
+        // a projected position groups by the geopoint transform's output (vega-lite aggregate.ts addDimension)
+        const geo = GEO_UNITS.get(spec)
+        if (geo) groupby.push(`${geo.prefix}${f.channel.startsWith('longitude') ? 'x' : 'y'}${f.channel.endsWith('2') ? '2' : ''}`)
       } else if (!f.bin && f.field) {
         // vega-lite groups by every non-aggregated field: the dimension,
         // color/detail, and any other channel's raw field (an aggregate on
@@ -3281,7 +3457,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
   }
 
   // shape scale
-  const shapeDefS = fields.find((f) => f.channel === 'shape' && f.field)
+  const shapeDefS = fields.find((f) => f.channel === 'shape' && f.field && f.type !== 'geojson')
   if (shapeDefS) {
     scales.push({
       name: 'shape',
@@ -3906,7 +4082,7 @@ function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null, fie
 
 // --- legends -----------------------------------------------------------------
 
-function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number, cfgLegendIn?: Record<string, unknown>, markStrokeDash?: number[], formats: { numberFormat?: string; timeFormat?: string; customFormatTypes?: boolean; numberFormatType?: string; timeFormatType?: string } = {}): Record<string, unknown>[] {
+function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number, cfgLegendIn?: Record<string, unknown>, markStrokeDash?: number[], formats: { numberFormat?: string; timeFormat?: string; customFormatTypes?: boolean; numberFormatType?: string; timeFormatType?: string } = {}, paint: { fill?: string; stroke?: string } = {}): Record<string, unknown>[] {
   const legends: Record<string, unknown>[] = []
   // config.legend is a defaults layer: orient/direction keys are translated
   // into the compiled `direction`, everything else merges under the channel's
@@ -4030,7 +4206,8 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
   // the symbol of a size / strokeWidth / opacity legend follows the mark (legend/encode.ts symbols())
   const symbolFor = (channel: string): { symbolType: string; update: Record<string, unknown> } => {
     const filled = legendFilled
-    const base = mark === 'text' || mark === 'rule' ? 'black' : C.blue
+    // the symbol is painted like the mark: its constant colour (channel value, then mark def) over the mark's default
+    const base = (filled ? paint.fill : paint.stroke) ?? (mark === 'text' || mark === 'rule' ? 'black' : C.blue)
     const opacity = markOpacity ?? (['point', 'circle', 'square', 'tick'].includes(mark) ? reducedOpacity : undefined)
     const byColor = colorLegendShown
     const u: Record<string, unknown> = {}
@@ -4052,7 +4229,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     const sizeUser = { ...cfgDefaults, ...(sizeDef.legend ?? {}) }
     if (sizeUser.type === 'gradient') {
       const glg: Record<string, unknown> = {
-        size: 'size',
+        [mark === 'trail' ? 'strokeWidth' : 'size']: 'size',
         type: 'gradient',
         gradientLength: sizeUser.gradientLength ?? { signal: 'clamp(height, 64, 200)' },
         title: legendTitle(sizeDef, sizeUser),
@@ -4065,7 +4242,8 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     const sizeSym = symbolFor('size')
     if (sizeUser.symbolOpacity != null) delete sizeSym.update.opacity
     const sizeLg: Record<string, unknown> = {
-      size: 'size',
+      // (a trail's size scale is its stroke width: vega-lite legend/parse.ts getLegendDefWithScale)
+      [mark === 'trail' ? 'strokeWidth' : 'size']: 'size',
       symbolType: sizeSym.symbolType,
       title: legendTitle(sizeDef, sizeUser),
       encode: { symbols: { update: sizeSym.update } },
@@ -4076,7 +4254,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     push('size', sizeLg, sizeDef)
     }
   }
-  const shapeDefL = fields.find((f) => f.channel === 'shape' && f.field)
+  const shapeDefL = fields.find((f) => f.channel === 'shape' && f.field && f.type !== 'geojson')
   if (shapeDefL && shapeDefL.legend !== null && !legendSuppressed(shapeDefL)) {
     const shapeUser = { ...cfgDefaults, ...(shapeDefL.legend ?? {}) }
     const shapeLg: Record<string, unknown> = {
@@ -4196,10 +4374,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const yDef = fields.find((f) => f.channel === 'y')
   const colorDef = fields.find((f) => f.channel === 'color' && f.field)
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
-  const shapeDef = fields.find((f) => f.channel === 'shape' && f.field)
+  const shapeDef = fields.find((f) => f.channel === 'shape' && f.field && f.type !== 'geojson')
   const opacityDef = fields.find((f) => f.channel === 'opacity' && f.field)
   const strokeWidthDef = fields.find((f) => f.channel === 'strokeWidth' && f.field)
   const update: Record<string, unknown> = {}
+  /** the orientation the rule branch settled on (undefined: a line segment), for the geographic positions */
+  let ruleOrientOut: string | undefined
   const xOffsetDefM = fields.find((f) => f.channel === 'xOffset' && f.field)
   const yOffsetDefM = fields.find((f) => f.channel === 'yOffset' && f.field)
   const xOffsetPresent = xOffsetDefM != null
@@ -4660,7 +4840,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const hasX2Enc = x2Def != null || fields.some((f) => f.channel === 'x2')
     const hasY2Enc = y2Def != null || fields.some((f) => f.channel === 'y2')
     const specOrient = isObject(spec.mark) ? (spec.mark.orient as string | undefined) : undefined
-    const ruleOrient = specOrient
+    const ruleOrient = ruleOrientOut = specOrient
       ?? (hasX2Enc && hasY2Enc ? undefined
         : hasY2Enc ? 'vertical'
         : hasX2Enc ? 'horizontal'
@@ -4727,6 +4907,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       update.text = { signal: fieldTextExpr(textDef, { lineBreaks: false, spec }) }
     } else if (textDef && (textDef.raw as { value?: unknown }).value !== undefined) {
       update.text = { value: String((textDef.raw as { value?: unknown }).value) }
+    } else if (!textDef && isObject(spec.mark) && spec.mark.text !== undefined) {
+      // the mark def's own `text` (vega-lite passes every mark def property of the Vega mark set through)
+      update.text = { value: spec.mark.text }
     }
     update.align = { value: 'center' }
     update.baseline = { value: 'middle' }
@@ -4856,6 +5039,30 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
     if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef) }
     { const dfn = definedSignal(spec, fields, mark); if (dfn !== undefined) update.defined = dfn }
+  } else if (mark === 'geoshape') {
+    // vega-lite mark/geoshape.ts: baseEncodeEntry with colour included (a filled mark: bar's colour rules);
+    // the shape itself is drawn by the `geoshape` transform below, from the projection
+    const markDef = isObject(spec.mark) ? spec.mark : undefined
+    const filled = markIsFilled(spec, mark)
+    if (!filled) {
+      update.fill = { value: 'transparent' }
+      update.stroke = colorDef
+        ? { scale: 'color', field: aggFieldName(colorDef) }
+        : { value: (markDef?.stroke as string | undefined) ?? (cfgType?.stroke as string | undefined) ?? (cfgMark?.stroke as string | undefined) ?? markColor ?? C.blue }
+    } else {
+      update.fill = markDef?.fill != null
+        ? { value: markDef.fill }
+        : colorDef
+          ? { scale: 'color', field: aggFieldName(colorDef) }
+          : { value: (cfgType?.fill as string | undefined) ?? (cfgMark?.fill as string | undefined) ?? (cfgType?.color as string | undefined) ?? (cfgMark?.color as string | undefined) ?? markColor ?? C.blue }
+      const stroke = markDef?.stroke ?? cfgType?.stroke ?? cfgMark?.stroke
+      if (stroke != null) update.stroke = { value: stroke }
+    }
+    // an explicit null (`fill: null`, the usual way to draw an outline only) is the mark def's own value
+    if (markDef && markDef.fill === null) update.fill = { value: null }
+    if (markDef && markDef.stroke === null) update.stroke = { value: null }
+    if (markOpacity != null) update.opacity = { value: markOpacity }
+    update.ariaRoleDescription = { value: 'geoshape' }
   } else {
     throw new Error(`[aster/vl] mark type not supported yet: ${mark}`)
   }
@@ -4872,7 +5079,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       if (isObject(d) && d.value !== undefined && d.field === undefined && d.datum === undefined) update[ch] = { value: d.value }
     }
   }
-  fillMissingPositions(update, mark, fields)
+  // (a map unit's positions come from its geopoint output, never from a default)
+  if (!GEO_UNITS.has(spec)) fillMissingPositions(update, mark, fields)
 
   {
     // markDef.ariaRoleDescription (vega-lite getMarkPropOrConfig): what a composite mark's parts call themselves
@@ -4945,9 +5153,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (enc2 && typeof enc2 === 'object' && enc2.offset === undefined && typeof enc2.value === 'number' && enc2.value > 0) enc2.offset = radiusOff
   }
 
+  // maps: longitude / latitude positions are the geopoint transform's output fields (no scale, no offset)
+  const geo = GEO_UNITS.get(spec)
+  if (geo) applyGeoPositions(update, spec, mark, ruleOrientOut)
+
   const markSpec: Record<string, unknown> = {
     name: 'marks',
-    type: mark === 'bar' || mark === 'tick' ? 'rect' : mark === 'point' || mark === 'circle' || mark === 'square' ? 'symbol' : mark,
+    type: mark === 'bar' || mark === 'tick' ? 'rect' : mark === 'point' || mark === 'circle' || mark === 'square' ? 'symbol' : mark === 'geoshape' ? 'shape' : mark,
     style: [mark, ...(isObject(spec.mark) ? ([] as string[]).concat((spec.mark.style as string | string[] | undefined) ?? []) : [])],
     from: { data: dataName },
     encode: { update },
@@ -4957,6 +5169,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (typeof spec.mark.clip === 'boolean') markSpec.clip = spec.mark.clip
     if (typeof spec.mark.aria === 'boolean') markSpec.aria = spec.mark.aria
   }
+  // a projection that does not fit the data (the author gave its scale / translate) can draw outside the
+  // view: vega-lite clips such a unit (mark.ts projectionClip), unless the mark def says otherwise
+  if (geo && !geo.isFit && markSpec.clip === undefined) markSpec.clip = true
+  // the geoshape mark draws the projected shape of each datum
+  if (mark === 'geoshape' && geo) markSpec.transform = [geoshapeTransform(spec, geo)]
   {
     // config.mark.aria / config.<mark>.aria: false hides the mark from the accessibility tree (vega-lite getMarkGroups)
     const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
@@ -5070,6 +5287,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         name: 'marks',
         type: markSpec.type,
         style: [mark],
+        ...(markSpec.clip !== undefined ? { clip: markSpec.clip } : {}),
         ...(markSpec.aria !== undefined ? { aria: markSpec.aria } : {}),
         ...(markSortSpec ? { sort: markSortSpec } : {}),
         from: { data: 'faceted_path_main' },
@@ -5172,6 +5390,29 @@ function zeroOrMinRef(ch: 'x' | 'y', def: FieldDef | undefined, mark: string): u
   const band = def != null && positionalScaleType(mark, def) === 'band'
   const quantZero = !band && def?.scale?.zero !== false
   return quantZero ? { scale: ch, value: 0 } : { signal: `scale('${ch}', inrange(0, domain('${ch}')) ? 0 : domain('${ch}')[0])` }
+}
+
+/**
+ * Maps: the positions of a mark with `longitude` / `latitude` channels (vega-lite
+ * mark/encode/position-point.ts and position-range.ts). A position the author did not give as x / y /
+ * x2 / y2 is the geopoint transform's output field; no scale is involved and no offset applies.
+ */
+function applyGeoPositions(update: Record<string, unknown>, spec: VLSpec, mark: string, ruleOrient: string | undefined): void {
+  const geo = GEO_UNITS.get(spec)
+  if (!geo || mark === 'geoshape') return
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  const has = (c: string): boolean => enc[c] != null
+  if (!has('latitude') && !has('longitude')) return
+  const out = (c: string): { field: string } => ({ field: `${geo.prefix}${c}` })
+  // pointPosition: x and y
+  for (const ch of ['x', 'y'] as const) if (!has(ch)) update[ch] = out(ch)
+  if (mark === 'rule') {
+    // a rule is a line segment (both ranges) unless it is vertical (no x2) or horizontal (no y2)
+    for (const [ch, range] of [['x', ruleOrient !== 'vertical'], ['y', ruleOrient !== 'horizontal']] as const) {
+      if (!range || has(ch)) continue
+      update[`${ch}2`] = out(`${ch}2`)
+    }
+  }
 }
 
 /**
@@ -5298,6 +5539,8 @@ function fieldTextExpr(def: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec;
     return `format(${f}, ${JSON.stringify(fmt ?? cfg?.numberFormat ?? '')})`
   }
   if (fmt !== undefined) return `format(${f}, ${JSON.stringify(fmt)})`
+  // a geojson shape field is shown as the geometry itself (never joined as an array)
+  if (def.type === 'geojson') return `isValid(${f}) ? ${f} : ""+${f}`
   // (vega-lite addLineBreaksToTooltip reads a discrete field by its own name, not the aggregate's: `datum["c"]` for the `max` of c)
   if (opts.lineBreaks && (def.type === 'nominal' || def.type === 'ordinal') && def.tu === undefined && opts.format === undefined && guideFmt === undefined && guideFmtType === undefined) {
     const raw = refOf(def.field)
@@ -5399,6 +5642,8 @@ function markIsFilled(spec: VLSpec, mark: string): boolean {
   const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
   const cfgType = isObject(cfg?.[mark]) ? (cfg![mark] as Record<string, unknown>) : undefined
   const cfgMark = isObject(cfg?.mark) ? (cfg!.mark as Record<string, unknown>) : undefined
+  // vega-lite defaultFilled: a unit drawing a graticule is unfilled unless its mark def says otherwise
+  if (GRATICULE_UNITS.has(spec) && typeof md?.filled !== 'boolean') return false
   const v = md?.filled ?? cfgType?.filled ?? cfgMark?.filled
   return typeof v === 'boolean' ? v : mark !== 'point' && mark !== 'line' && mark !== 'rule'
 }
@@ -5564,6 +5809,82 @@ function showInvalidValues(spec: VLSpec, fields: FieldDef[], mark: string, scale
 
 // --- assembly ----------------------------------------------------------------
 
+// --- maps --------------------------------------------------------------------
+
+/** The geo facts of each unit (or layer leaf) that has a projection, read by buildData and buildMarks. */
+const GEO_UNITS = new WeakMap<object, UnitGeo>()
+/** The projection component a compiled view fragment owns at its root (a composite may merge it with its siblings'). */
+const FRAG_PROJECTION = new WeakMap<object, ProjectionComponent>()
+/** The main dataset (in its fragment's own names) of each leaf a projection component's fit reads. */
+const HANDLE_MAIN = new WeakMap<object, string>()
+/** Units whose OWN data is a graticule generator (vega-lite: `defaultFilled` is false for them). */
+const GRATICULE_UNITS = new WeakSet<object>()
+const isGraticuleData = (d: unknown): boolean => isObject(d) && d.graticule !== undefined
+
+/** vega-lite `model.getName` prefix of the root view: its `name`, when it has one. */
+function rootNamePrefix(spec: VLSpec): string {
+  return typeof spec.name === 'string' && spec.name !== '' ? `${signalSafe(spec.name)}_` : ''
+}
+
+/** The projection component of one unit, and the geo facts its transforms and mark need. */
+function unitProjection(spec: VLSpec, prefix: string, handle: object): ProjectionComponent | undefined {
+  const mark = typeof spec.mark === 'string' ? spec.mark : (spec.mark as Record<string, unknown>).type as string
+  const encoding = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  const config = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
+  const unit: GeoUnit = {
+    mark,
+    encoding,
+    projection: isObject(spec.projection) ? (spec.projection as Record<string, unknown>) : undefined,
+    configProjection: isObject(config?.projection) ? (config!.projection as Record<string, unknown>) : undefined,
+    prefix,
+    handle,
+  }
+  const component = parseUnitProjection(unit)
+  if (component) GEO_UNITS.set(spec, { component, isFit: component.isFit, prefix })
+  return component
+}
+
+/**
+ * The projections of a layered view (vega-lite parseProjection / assembleProjections): each unit's
+ * component, merged upwards through the layer tree wherever no property conflicts, assembled in
+ * vega-lite's order (a layer's own projection, then its children's).
+ */
+function planLayerProjections(root: VLSpec, parsed: Array<{ l: VLSpec }>): { root: ProjectionComponent | undefined; assemble: (mainOf: (leaf: VLSpec) => string) => Record<string, unknown>[] } {
+  const leafAt = new Map<string, { l: VLSpec; handle: object }>()
+  const paths: number[][] = []
+  for (const p of parsed) {
+    const path = LEAF_PATHS.get(p.l) ?? []
+    leafAt.set(path.join('/'), { l: p.l, handle: {} })
+    paths.push(path)
+  }
+  const handleLeaf = new Map<object, VLSpec>()
+  for (const { l, handle } of leafAt.values()) handleLeaf.set(handle, l)
+  const rootPrefix = rootNamePrefix(root)
+  const prefixOf = (path: number[]): string => rootPrefix + path.map((i) => `layer_${i}_`).join('')
+  interface PNode { comp?: ProjectionComponent; children: PNode[] }
+  const parse = (path: number[]): PNode => {
+    const leaf = leafAt.get(path.join('/'))
+    if (leaf) return { comp: unitProjection(leaf.l, prefixOf(path), leaf.handle), children: [] }
+    const childIdx = [...new Set(paths.filter((q) => q.length > path.length && path.every((v, i) => q[i] === v)).map((q) => q[path.length]!))].sort((a, b) => a - b)
+    const children = childIdx.map((i) => parse([...path, i]))
+    return { comp: mergeLayerProjections(`${prefixOf(path)}projection`, children.map((c) => c.comp)), children }
+  }
+  const tree = parse([])
+  return {
+    root: tree.comp,
+    assemble(mainOf) {
+      for (const { l, handle } of leafAt.values()) HANDLE_MAIN.set(handle, mainOf(l))
+      const out: Record<string, unknown>[] = []
+      const visit = (n: PNode): void => {
+        if (n.comp) pushAll(out, assembleProjection(n.comp, (h) => mainOf(handleLeaf.get(h)!)))
+        for (const c of n.children) visit(c)
+      }
+      visit(tree)
+      return out
+    },
+  }
+}
+
 /** Compile a single unit spec (validated; the input is not mutated). */
 export function compileUnit(input: VLSpec): VLSpec {
   const spec = cloneSpec(input)
@@ -5583,6 +5904,9 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // and x is not, or the mark def says otherwise
   const orient = inferOrient(spec, mark, markRaw, fields)
 
+  if (isGraticuleData(spec.data)) GRATICULE_UNITS.add(spec)
+  const unitHandle = {}
+  const unitProj = unitProjection(spec, rootNamePrefix(spec), unitHandle)
   const data = buildData(spec, fields, mark, orient, undefined, ctx)
   // vega-lite's default sizing: continuous dimensions get 300, discrete
   // dimensions size from the band step (bandspace(domain length) * step)
@@ -5611,7 +5935,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (!yStepForm && !hSpec.container) out.height = height
   // theta-only views (pie/donut) get vega-lite's unstyled 'view' frame — no
   // cell stroke, no half-pixel inset
-  out.style = mark === 'arc' ? 'view' : 'cell'
+  out.style = unitGroupStyle(spec)
   // Preserve a declared source dataset name (see compileLayered) — hosts key
   // data overrides/changesets on it.
   const unitSource: Record<string, unknown> = isObject(spec.data) ? dataSource(spec.data, ctx.datasets) : {}
@@ -5620,6 +5944,11 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const pd = pipelineDatasets(data, unitSourceName, unitSourceName, ctx, 0)
   out.data = [unitSource, ...pd.datasets]
   const dataName = pd.dataName
+  if (unitProj) {
+    HANDLE_MAIN.set(unitHandle, dataName)
+    out.projections = assembleProjection(unitProj, () => dataName)
+    FRAG_PROJECTION.set(out, unitProj)
+  }
   const builtMarks = buildMarks(spec, fields, mark, orient, dataName, markSize, ctx.dn(pd.next)) as Record<string, unknown>[] & { overlayData?: Record<string, unknown> }
   out.marks = builtMarks
   // interval-selection brush marks (vega-lite emits them around the unit's
@@ -5696,7 +6025,14 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
 /** Legends of one unit: mark-def and config paint propagate onto the legend symbols. */
 function buildUnitLegends(spec: VLSpec, fields: FieldDef[], mark: string, markRaw: unknown): Record<string, unknown>[] {
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
-  const markOpacity = isObject(markRaw) ? (markRaw.opacity as number | undefined) : undefined
+  // vega-lite legend/encode.ts getMaxValue: a constant (or the largest conditional) opacity of the encoding comes before the mark def's
+  const encOpacity = isObject(spec.encoding) && isObject(spec.encoding.opacity) ? (spec.encoding.opacity as Record<string, unknown>) : undefined
+  const encMaxOpacity: number | undefined = encOpacity === undefined ? undefined
+    : encOpacity.condition !== undefined
+      ? (Array.isArray(encOpacity.condition) ? encOpacity.condition : [encOpacity.condition]).reduce<number | undefined>(
+        (v, c) => (isObject(c) && typeof c.value === 'number' ? Math.max(v ?? -Infinity, c.value) : v), typeof encOpacity.value === 'number' ? encOpacity.value : undefined)
+      : typeof encOpacity.value === 'number' ? encOpacity.value : undefined
+  const markOpacity = encMaxOpacity ?? (isObject(markRaw) ? (markRaw.opacity as number | undefined) : undefined)
   // the legend symbols' stroke resolves through getMarkPropOrConfig
   // (markDef.stroke ?? config[type].stroke ?? config.mark.stroke — probed:
   // config.arc.stroke propagates onto the arc legend's symbols)
@@ -5738,5 +6074,21 @@ function buildUnitLegends(spec: VLSpec, fields: FieldDef[], mark: string, markRa
       numberFormatType: userConfig?.numberFormatType as string | undefined,
       timeFormatType: userConfig?.timeFormatType as string | undefined,
     },
+    legendPaint(spec, markRaw),
   )
+}
+
+/** The constant colour a legend symbol takes: a `value` colour channel, else the mark def's `fill` / `stroke` / `color`. */
+function legendPaint(spec: VLSpec, markRaw: unknown): { fill?: string; stroke?: string } {
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  const md = isObject(markRaw) ? markRaw : {}
+  const encValue = (ch: string): string | undefined => {
+    const d = enc[ch]
+    return isObject(d) && d.field === undefined && d.datum === undefined && typeof d.value === 'string' ? d.value : undefined
+  }
+  const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
+  return {
+    fill: encValue('fill') ?? encValue('color') ?? str(md.fill) ?? str(md.color),
+    stroke: encValue('stroke') ?? encValue('color') ?? str(md.stroke) ?? str(md.color),
+  }
 }

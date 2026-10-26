@@ -1,0 +1,20 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "width": 400,
+  "height": 300,
+  "data": {
+    "values": {
+      "type": "FeatureCollection",
+      "features": []
+    },
+    "format": {
+      "property": "features"
+    }
+  },
+  "projection": {
+    "type": "mercator"
+  },
+  "mark": "geoshape"
+}

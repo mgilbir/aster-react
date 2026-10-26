@@ -1,0 +1,67 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "width": 400,
+  "height": 300,
+  "data": {
+    "values": [
+      {
+        "city": "Seattle",
+        "lon": -122.33,
+        "lat": 47.61,
+        "pop": 0.74,
+        "kind": "port"
+      },
+      {
+        "city": "Denver",
+        "lon": -104.99,
+        "lat": 39.74,
+        "pop": 0.71,
+        "kind": "hub"
+      },
+      {
+        "city": "Austin",
+        "lon": -97.74,
+        "lat": 30.27,
+        "pop": 0.96,
+        "kind": "hub"
+      },
+      {
+        "city": "Chicago",
+        "lon": -87.63,
+        "lat": 41.88,
+        "pop": 2.7,
+        "kind": "hub"
+      },
+      {
+        "city": "Boston",
+        "lon": -71.06,
+        "lat": 42.36,
+        "pop": 0.68,
+        "kind": "port"
+      },
+      {
+        "city": "Miami",
+        "lon": -80.19,
+        "lat": 25.76,
+        "pop": 0.47,
+        "kind": "port"
+      }
+    ]
+  },
+  "projection": {
+    "type": "albersUsa"
+  },
+  "mark": "circle",
+  "encoding": {
+    "longitude": {
+      "field": "lon",
+      "type": "quantitative"
+    },
+    "latitude": {
+      "field": "lat",
+      "type": "quantitative"
+    }
+  }
+}

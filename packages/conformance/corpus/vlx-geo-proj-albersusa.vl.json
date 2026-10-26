@@ -1,0 +1,208 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "width": 400,
+  "height": 300,
+  "data": {
+    "values": {
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "properties": {
+            "name": "west",
+            "value": 4,
+            "cat": "a"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  -124,
+                  42
+                ],
+                [
+                  -117,
+                  42
+                ],
+                [
+                  -117,
+                  32.7
+                ],
+                [
+                  -120,
+                  34
+                ],
+                [
+                  -124,
+                  40
+                ],
+                [
+                  -124,
+                  42
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "name": "mountain",
+            "value": 7,
+            "cat": "b"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  -117,
+                  49
+                ],
+                [
+                  -104,
+                  49
+                ],
+                [
+                  -104,
+                  37
+                ],
+                [
+                  -117,
+                  37
+                ],
+                [
+                  -117,
+                  49
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "name": "plains",
+            "value": 1,
+            "cat": "a"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  -104,
+                  49
+                ],
+                [
+                  -90,
+                  48
+                ],
+                [
+                  -90,
+                  36
+                ],
+                [
+                  -104,
+                  37
+                ],
+                [
+                  -104,
+                  49
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "name": "east",
+            "value": 9,
+            "cat": "b"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  -90,
+                  47
+                ],
+                [
+                  -76,
+                  45
+                ],
+                [
+                  -75,
+                  36
+                ],
+                [
+                  -90,
+                  36
+                ],
+                [
+                  -90,
+                  47
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "name": "south",
+            "value": 6,
+            "cat": "a"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  -100,
+                  36
+                ],
+                [
+                  -90,
+                  36
+                ],
+                [
+                  -92,
+                  29.5
+                ],
+                [
+                  -97,
+                  26
+                ],
+                [
+                  -102,
+                  30
+                ],
+                [
+                  -100,
+                  36
+                ]
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    "format": {
+      "property": "features"
+    }
+  },
+  "projection": {
+    "type": "albersUsa"
+  },
+  "mark": {
+    "type": "geoshape",
+    "fill": "#4c78a8",
+    "stroke": "white"
+  }
+}

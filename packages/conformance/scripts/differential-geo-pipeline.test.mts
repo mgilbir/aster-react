@@ -19,8 +19,8 @@ import { canonicalizeSvg, diffCanonical } from '../src/normalize.ts'
 
 const poly = (ring: number[][]) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring] } })
 const SHAPES = [
-  poly([[-10, 35], [10, 36], [9, 50], [-11, 48], [-10, 35]]),
-  poly([[10, 36], [30, 38], [31, 50], [9, 50], [10, 36]]),
+  poly([[-10, 35], [-11, 48], [9, 50], [10, 36], [-10, 35]]),
+  poly([[10, 36], [9, 50], [31, 50], [30, 38], [10, 36]]),
 ]
 const POINTS = [
   { lon: -5, lat: 40, n: 1 },

@@ -42,8 +42,10 @@ const set = (s: string): ReadonlySet<string> => new Set(s.split(/\s+/).filter(Bo
 // --- vocabularies (from the vega-lite 6.4.3 JSON schema) ---------------------
 
 export const MARKS = set('arc area bar image line point rect rule text tick trail circle square geoshape boxplot errorbar errorband')
-/** Marks compile.ts implements end to end: every schema mark but `geoshape`. */
-export const SUPPORTED_MARKS: ReadonlySet<string> = new Set([...MARKS].filter((m) => m !== 'geoshape'))
+/** Marks compile.ts implements end to end: every schema mark. */
+export const SUPPORTED_MARKS: ReadonlySet<string> = new Set(MARKS)
+/** The marks that can be positioned by `longitude` / `latitude`; the other marks' geographic placement is not implemented. */
+const GEO_POSITION_MARKS = set('point circle square text line trail rule')
 
 const ALL_CHANNELS = set(
   'x y x2 y2 xOffset yOffset xError xError2 yError yError2 theta theta2 radius radius2 latitude longitude latitude2 longitude2 ' +
@@ -51,7 +53,8 @@ const ALL_CHANNELS = set(
     'row column facet',
 )
 /** Schema channels compile.ts does not consume (everything else in ALL_CHANNELS is supported; the rest throws). */
-const UNSUPPORTED_CHANNELS = set('theta2 radius2 latitude longitude latitude2 longitude2 key time')
+const UNSUPPORTED_CHANNELS = set('theta2 radius2 key time')
+const GEO_CHANNELS = set('longitude latitude longitude2 latitude2')
 const SUPPORTED_CHANNELS: ReadonlySet<string> = new Set([...ALL_CHANNELS].filter((c) => !UNSUPPORTED_CHANNELS.has(c)))
 
 const AGG_OPS = set(
@@ -167,6 +170,9 @@ const SCHEMA_CHILDREN: Record<Exclude<Kind, 'unit'>, ReadonlySet<Kind>> = {
 /** Implemented (parent -> child) nestings: today every schema-valid nesting is implemented; narrow this as the schema grows. */
 export const SUPPORTED_NESTING: Record<Exclude<Kind, 'unit'>, ReadonlySet<Kind>> = SCHEMA_CHILDREN
 
+/** Depth of facet operators above the view being validated (a map inside a facet is not supported). */
+let compositeDepth = 0
+
 /** Repeat variables in scope while validating a repeat's child spec. */
 let repeatVars: ReadonlySet<string> = new Set()
 
@@ -187,6 +193,7 @@ function checkFieldName(f: unknown, at: string): void {
 export function validateSpec(spec: unknown): void {
   if (!isObj(spec)) fail('', 'a Vega-Lite spec must be a JSON object')
   repeatVars = new Set()
+  compositeDepth = 0
   validateView(spec, '', true, undefined)
 }
 
@@ -209,7 +216,7 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
   validateSize(spec, at, top && (kind === 'unit' || kind === 'layer'))
   if (spec.params !== undefined) validateParams(spec.params, at('params'), top && kind === 'unit')
   if (spec.resolve !== undefined) validateResolve(spec.resolve, at('resolve'), kind)
-  if (spec.projection !== undefined) fail(at('projection'), 'map projections are not supported (geoshape marks are unavailable)')
+  if (spec.projection !== undefined) validateProjection(spec.projection, at('projection'))
   if (spec.view !== undefined) fail(at('view'), 'the view background property is not supported; set it through config.view')
   if (spec.usermeta !== undefined && !isObj(spec.usermeta)) mustBe(at('usermeta'), OBJECT)
   if (spec.config !== undefined) {
@@ -295,8 +302,20 @@ function validateData(spec: Obj, at: (k: string) => string): void {
   if (!isObj(data)) mustBe(at('data'), OBJECT)
   const kinds = ['values', 'url', 'name', 'sequence', 'sphere', 'graticule'].filter((k) => data[k] !== undefined)
   if (kinds.length === 0) fail(at('data'), 'needs one of `values`, `url`, `name`')
-  if (data.sequence !== undefined || data.sphere !== undefined || data.graticule !== undefined) {
-    fail(at('data'), 'data generators (sequence/sphere/graticule) are not supported')
+  if (data.sequence !== undefined) fail(at('data'), 'data generators: `sequence` is not supported (`sphere` and `graticule` are)')
+  if (data.sphere !== undefined || data.graticule !== undefined) {
+    if (data.sphere !== undefined && data.graticule !== undefined) fail(at('data'), '`sphere` and `graticule` cannot be combined')
+    const g = data.sphere !== undefined ? 'sphere' : 'graticule'
+    keysOf(data, set(`${g} name`), at('data'), 'data generator')
+    const v = data[g]
+    if (g === 'sphere') {
+      if (v !== true && !(isObj(v) && Object.keys(v).length === 0)) mustBe(at('data.sphere'), 'true')
+    } else if (v !== true) {
+      if (!isObj(v)) mustBe(at('data.graticule'), 'true or an object of graticule parameters')
+      keysOf(v, set('extent extentMajor extentMinor precision step stepMajor stepMinor'), at('data.graticule'), 'graticule')
+    }
+    if (data.name !== undefined && typeof data.name !== 'string') mustBe(at('data.name'), 'a string')
+    return
   }
   if (data.values !== undefined && data.url !== undefined) fail(at('data'), '`values` and `url` cannot be combined')
   keysOf(data, set('values url name format'), at('data'), 'data')
@@ -307,9 +326,18 @@ function validateData(spec: Obj, at: (k: string) => string): void {
   if (data.name !== undefined && typeof data.name !== 'string') mustBe(at('data.name'), 'a string')
   if (data.format !== undefined) {
     if (!isObj(data.format)) mustBe(at('data.format'), OBJECT)
-    keysOf(data.format, set('type parse property delimiter header'), at('data.format'), 'data.format')
+    keysOf(data.format, set('type parse property delimiter header feature mesh'), at('data.format'), 'data.format')
     const t = data.format.type
-    if (t !== undefined && !['json', 'csv', 'tsv', 'dsv'].includes(t as string)) fail(at('data.format.type'), `unsupported format type ${JSON.stringify(t)}`)
+    if (t !== undefined && !['json', 'csv', 'tsv', 'dsv', 'topojson'].includes(t as string)) fail(at('data.format.type'), `unsupported format type ${JSON.stringify(t)}`)
+    for (const k of ['feature', 'mesh'] as const) {
+      if (data.format[k] === undefined) continue
+      if (t !== 'topojson') fail(at(`data.format.${k}`), `\`${k}\` only applies to the "topojson" format`)
+      if (typeof data.format[k] !== 'string') mustBe(at(`data.format.${k}`), 'the name of a TopoJSON object')
+    }
+    if (t === 'topojson' && data.format.feature === undefined && data.format.mesh === undefined) {
+      fail(at('data.format'), 'a "topojson" format needs `feature` or `mesh` (the TopoJSON object to read)')
+    }
+    if (t === 'topojson' && data.format.feature !== undefined && data.format.mesh !== undefined) fail(at('data.format'), '`feature` and `mesh` cannot be combined')
     if (data.format.parse !== undefined && data.format.parse !== null && !isObj(data.format.parse)) mustBe(at('data.format.parse'), 'an object or null')
   }
 }
@@ -318,7 +346,7 @@ function validateData(spec: Obj, at: (k: string) => string): void {
 
 const CONFIG_KEYS = set(
   'autosize background padding axis axisBand axisX axisY axisLeft axisRight axisTop axisBottom legend header headerRow headerColumn headerFacet range ' +
-    'mark arc area bar circle geoshape image line point rect rule square text tick trail view title font scale style ' +
+    'mark arc area bar circle geoshape image line point rect rule square text tick trail view title font scale style projection ' +
     'aria countTitle fieldTitle lineBreak normalizedNumberFormat numberFormat timeFormat errorbar errorband ' +
     'customFormatTypes numberFormatType normalizedNumberFormatType timeFormatType',
 )
@@ -346,11 +374,72 @@ function validateConfig(cfg: Obj, path: string): void {
       }
     }
   }
+  if (cfg.projection !== undefined) validateProjection(cfg.projection, `${path}.projection`)
   if (cfg.customFormatTypes !== undefined && typeof cfg.customFormatTypes !== 'boolean') mustBe(`${path}.customFormatTypes`, 'a boolean')
   for (const k of ['numberFormatType', 'normalizedNumberFormatType', 'timeFormatType'] as const) {
     if (cfg[k] !== undefined && typeof cfg[k] !== 'string') mustBe(`${path}.${k}`, 'the name of a format function registered as an expression function')
   }
   if (cfg.autosize !== undefined) validateAutosize(cfg.autosize, `${path}.autosize`)
+}
+
+// --- projection --------------------------------------------------------------
+
+/** vega-lite `Projection` (the schema's property list) */
+const PROJECTION_KEYS = set(
+  'type clipAngle clipExtent center rotate precision reflectX reflectY coefficient distance fraction lobes parallel parallels ' +
+    'pointRadius radius ratio spacing tilt scale translate extent fit size',
+)
+/** vega-lite `ProjectionType`, lower-cased (vega reads the type case-insensitively), and the one extra projection vega registers */
+const PROJECTION_TYPES = set(
+  'albers albersusa azimuthalequalarea azimuthalequidistant conicconformal conicequalarea conicequidistant equalearth ' +
+    'equirectangular gnomonic identity mercator naturalearth1 orthographic stereographic transversemercator mollweide',
+)
+
+/** A projection property value that is a signal / expression reference rather than a literal. */
+const isRef = (v: unknown): boolean => isObj(v) && (typeof v.signal === 'string' || typeof v.expr === 'string')
+
+function validateProjection(p: unknown, at: string): void {
+  if (!isObj(p)) mustBe(at, OBJECT)
+  keysOf(p, PROJECTION_KEYS, at, 'projection')
+  for (const [k, v] of Object.entries(p)) {
+    if (v === undefined || isRef(v)) continue
+    const path = `${at}.${k}`
+    const num = (): void => { if (typeof v !== 'number' || !Number.isFinite(v)) mustBe(path, 'a number or a signal / expression reference') }
+    const pair = (): void => {
+      if (!(Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number' ? Number.isFinite(n) : isRef(n)))) mustBe(path, 'a [number, number] pair')
+    }
+    switch (k) {
+      case 'type':
+        if (typeof v !== 'string' || !PROJECTION_TYPES.has(v.toLowerCase())) fail(path, `unknown projection type ${JSON.stringify(v)}: expected one of albers, albersUsa, azimuthalEqualArea, azimuthalEquidistant, conicConformal, conicEqualArea, conicEquidistant, equalEarth, equirectangular, gnomonic, identity, mercator, naturalEarth1, orthographic, stereographic, transverseMercator (vega refuses any other)`)
+        break
+      case 'scale': case 'clipAngle': case 'precision': case 'coefficient': case 'distance': case 'fraction': case 'lobes':
+      case 'parallel': case 'pointRadius': case 'radius': case 'ratio': case 'spacing': case 'tilt':
+        num()
+        break
+      case 'reflectX': case 'reflectY':
+        if (typeof v !== 'boolean') mustBe(path, 'a boolean or a signal / expression reference')
+        break
+      case 'translate': case 'center': case 'parallels':
+        pair()
+        break
+      case 'rotate':
+        if (!(Array.isArray(v) && (v.length === 2 || v.length === 3) && v.every((n) => typeof n === 'number' ? Number.isFinite(n) : isRef(n)))) mustBe(path, 'a [lambda, phi] or [lambda, phi, gamma] array')
+        break
+      case 'clipExtent':
+        if (!(Array.isArray(v) && v.length === 2 && v.every((c) => Array.isArray(c) && c.length === 2 && c.every((n) => typeof n === 'number' ? Number.isFinite(n) : isRef(n))))) mustBe(path, 'a [[x0, y0], [x1, y1]] array')
+        break
+      case 'size':
+        pair()
+        break
+      case 'extent':
+        if (!(Array.isArray(v) && v.length === 2 && v.every((c) => Array.isArray(c) && c.length === 2))) mustBe(path, 'a [[x0, y0], [x1, y1]] array')
+        break
+      case 'fit':
+        // a GeoJSON feature(s) to fit to, or a boolean: vega fits the projection to it
+        if (typeof v !== 'boolean' && !isObj(v) && !Array.isArray(v)) mustBe(path, 'GeoJSON (or an array of it) to fit the projection to')
+        break
+    }
+  }
 }
 
 // --- params ------------------------------------------------------------------
@@ -475,6 +564,42 @@ function validateUnit(spec: Obj, at: (k: string) => string): void {
   const mark = validateMark(spec.mark, at('mark'))
   const enc = spec.encoding === undefined ? {} : spec.encoding
   validateEncoding(enc, at('encoding'), 'unit', mark)
+  if (isObj(enc)) validateGeoUnit(mark, enc, at('encoding'))
+  const faceted = isObj(enc) && (enc.row != null || enc.column != null || enc.facet != null)
+  if ((compositeDepth > 0 || faceted) && (mark === 'geoshape' || spec.projection !== undefined || (isObj(enc) && Object.keys(enc).some((c) => GEO_CHANNELS.has(c) && enc[c] != null)))) {
+    fail(at('mark'), 'maps (geoshape marks, projections, longitude / latitude) inside a facet are not supported: vega-lite 6.4.3 fits a facet\'s projection to a dataset it never defines (data("child_main")), so there is no output to match')
+  }
+}
+
+/**
+ * The map rules of one unit's (merged) encoding: which marks `longitude` / `latitude` can position,
+ * that a pair is complete, and that `geojson` shapes belong to `geoshape`. Also run on every layer
+ * leaf after a layer's encoding merges into it.
+ */
+export function validateGeoUnit(mark: string, enc: Obj, path: string): void {
+  const geoChannels = Object.keys(enc).filter((c) => GEO_CHANNELS.has(c) && enc[c] != null)
+  if (geoChannels.length) {
+    if (!GEO_POSITION_MARKS.has(mark)) {
+      fail(`${path}.${geoChannels[0]}`, `longitude / latitude positions are only implemented for the ${[...GEO_POSITION_MARKS].join(', ')} marks, not "${mark}"`)
+    }
+    const given = (c: string): boolean => enc[c] != null
+    for (const [lon, lat] of [['longitude', 'latitude'], ['longitude2', 'latitude2']] as const) {
+      if (given(lon) !== given(lat)) fail(`${path}.${given(lon) ? lon : lat}`, `needs its pair: give both \`${lon}\` and \`${lat}\` (vega-lite emits a geopoint transform for a half pair that vega refuses)`)
+    }
+    const projected = ['longitude', 'latitude', 'longitude2', 'latitude2'].some((c) => isObj(enc[c]) && (enc[c].field !== undefined || enc[c].datum !== undefined))
+    if (!projected) fail(`${path}.${geoChannels[0]}`, 'a longitude / latitude pair needs a `field` or `datum` (value-only positions get no projection in vega-lite)')
+  }
+  if (isObj(enc.shape) && enc.shape.type === 'geojson' && mark !== 'geoshape') {
+    fail(`${path}.shape.type`, 'a geojson shape field only applies to the geoshape mark')
+  }
+  if (mark === 'geoshape') {
+    for (const c of ['x', 'y', 'x2', 'y2', 'xOffset', 'yOffset', 'theta', 'radius', 'size', 'angle']) {
+      if (enc[c] != null) fail(`${path}.${c}`, `a geoshape mark is positioned by its projection: the "${c}" channel does not apply`)
+    }
+    if (isObj(enc.shape) && enc.shape.field !== undefined && enc.shape.type !== 'geojson') {
+      fail(`${path}.shape`, 'on a geoshape mark the shape channel carries the GeoJSON ({"field": ..., "type": "geojson"})')
+    }
+  }
 }
 
 // --- encoding ----------------------------------------------------------------
@@ -516,7 +641,19 @@ function validateChannelDef(ch: string, def: unknown, at: string): void {
   if (def.type !== undefined && !['quantitative', 'ordinal', 'nominal', 'temporal', 'geojson'].includes(def.type as string)) {
     fail(`${at}.type`, `unknown type ${JSON.stringify(def.type)}`)
   }
-  if (def.type === 'geojson') fail(`${at}.type`, 'geojson fields are not supported')
+  if (def.type === 'geojson' && ch !== 'shape') fail(`${at}.type`, 'the geojson type only applies to the shape channel of a geoshape mark')
+  if (GEO_CHANNELS.has(ch)) {
+    if (def.type !== undefined && def.type !== 'quantitative') fail(`${at}.type`, 'a longitude / latitude channel is quantitative')
+    for (const k of ['aggregate', 'bin', 'timeUnit', 'sort', 'stack', 'scale', 'axis', 'legend', 'condition', 'impute', 'band', 'bandPosition']) {
+      if (def[k] !== undefined) fail(`${at}.${k}`, `\`${k}\` does not apply to a longitude / latitude channel (it is projected, not scaled)`)
+    }
+  }
+  if (ch === 'shape' && def.type === 'geojson') {
+    for (const k of ['aggregate', 'bin', 'timeUnit', 'sort', 'scale', 'legend', 'condition', 'datum', 'value']) {
+      if (def[k] !== undefined) fail(`${at}.${k}`, `\`${k}\` does not apply to a geojson shape field`)
+    }
+    if (def.field === undefined) fail(at, 'a geojson shape needs a `field`')
+  }
   if (def.aggregate !== undefined) {
     if (isObj(def.aggregate)) {
       // {argmax: field} / {argmin: field}: the value of `field` on the row where the argument is extreme
@@ -933,7 +1070,8 @@ function validateFacetOperator(spec: Obj, at: (k: string) => string): void {
     checkFacetDef(facet, at('facet'))
     checkColumns(spec, at)
   }
-  validateView(spec.spec as Obj, at('spec'), false, 'facet')
+  compositeDepth++
+  try { validateView(spec.spec as Obj, at('spec'), false, 'facet') } finally { compositeDepth-- }
 }
 
 function validateRepeatOperator(spec: Obj, at: (k: string) => string): void {
