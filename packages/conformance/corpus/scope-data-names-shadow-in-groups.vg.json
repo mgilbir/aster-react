@@ -1,0 +1,36 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "description": "A data set name is owned by its scope: a nested group may reuse the name of a parent's data set and of a parent's named mark, and sibling groups may share one (vega-parser Scope.addData only refuses a name the SAME scope owns).",
+  "width": 300,
+  "height": 120,
+  "padding": 5,
+  "autosize": "none",
+  "data": [
+    { "name": "t", "values": [ { "k": "a", "v": 30 }, { "k": "b", "v": 80 } ] },
+    { "name": "m", "values": [ { "k": "x", "v": 10 } ] }
+  ],
+  "marks": [
+    { "type": "rect", "name": "bars", "from": { "data": "t" }, "encode": { "update": {
+      "x": { "field": "v", "mult": 1.2 }, "y": { "value": 4 }, "width": { "value": 18 }, "height": { "value": 10 }, "fill": { "value": "steelblue" } } } },
+    {
+      "type": "group", "name": "g1",
+      "data": [ { "name": "t", "values": [ { "k": "c", "v": 20 }, { "k": "d", "v": 60 } ] } ],
+      "encode": { "update": { "x": { "value": 0 }, "y": { "value": 20 }, "width": { "value": 140 }, "height": { "value": 90 }, "stroke": { "value": "#bbb" } } },
+      "marks": [
+        { "type": "symbol", "name": "bars", "from": { "data": "t" }, "encode": { "update": {
+          "x": { "field": "v" }, "y": { "value": 30 }, "size": { "value": 90 }, "fill": { "value": "firebrick" } } } },
+        { "type": "rect", "name": "m", "from": { "data": "t" }, "encode": { "update": {
+          "x": { "field": "v" }, "y": { "value": 60 }, "width": { "value": 12 }, "height": { "value": 12 }, "fill": { "value": "gold" } } } }
+      ]
+    },
+    {
+      "type": "group", "name": "g2",
+      "data": [ { "name": "t", "values": [ { "k": "e", "v": 45 } ] } ],
+      "encode": { "update": { "x": { "value": 150 }, "y": { "value": 20 }, "width": { "value": 140 }, "height": { "value": 90 }, "stroke": { "value": "#bbb" } } },
+      "marks": [
+        { "type": "symbol", "name": "bars", "from": { "data": "t" }, "encode": { "update": {
+          "x": { "field": "v" }, "y": { "value": 45 }, "size": { "value": 140 }, "fill": { "value": "seagreen" } } } }
+      ]
+    }
+  ]
+}
