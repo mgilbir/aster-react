@@ -371,3 +371,66 @@ describe('signal event streams (C20)', () => {
   })
 })
 
+
+describe('group scopes in the signal loop', () => {
+  /** Two sibling group marks that declare `signals` (and one mark each, so `inScope` has a group), over a view with its own. */
+  const bindGroups = (groupSignals: unknown[], top: unknown[], hooks: Parameters<typeof bindSceneSignals>[3] = {}) => {
+    const group = (name: string, x: number): Record<string, unknown> => ({
+      type: 'group', name, signals: groupSignals, encode: { update: { x: { value: x }, y: { value: 0 }, width: { value: 80 }, height: { value: 80 } } },
+      marks: [{ type: 'rect', encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { value: 10 }, height: { value: 10 } } } }],
+    })
+    const spec = { width: 200, height: 100, signals: top, marks: [group('left', 0), group('right', 100)] } as unknown as VgSpec
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const scene = evaluateChart(compileChart(spec))
+    host.innerHTML = renderSceneToSvg(scene)
+    const svg = host.querySelector('svg') as SVGSVGElement
+    svg.getBoundingClientRect = () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 } as DOMRect)
+    const store: Record<string, unknown> = {}
+    const calls: string[] = []
+    const ids = scene.items.map((g) => g.scopeSignals?.id)
+    const binding = bindSceneSignals(svg, scene, store, { onSignal: (n) => calls.push(n), ...hooks })
+    return { svg, scene, store, calls, ids, binding }
+  }
+
+  it('a scope\'s handlers write its own signal under <scope id>:<name>, and the view\'s sees none of it', () => {
+    const t = bindGroups([{ name: 'n', value: 0, on: [{ events: { source: 'view', type: 'click' }, update: 'n + 1' }] }], [{ name: 'n', value: 10 }])
+    fire(t.svg, 'click')
+    fire(t.svg, 'click')
+    expect(t.store[`${t.ids[0]}:n`]).toBe(2)
+    expect(t.store[`${t.ids[1]}:n`]).toBe(2)
+    expect(Object.hasOwn(t.store, 'n')).toBe(false)
+    t.binding.detach()
+  })
+
+  it('push "outer" writes the view\'s signal, the view\'s listener first and each scope after it', () => {
+    const t = bindGroups(
+      [{ name: 'log', push: 'outer', on: [{ events: { source: 'view', type: 'click' }, update: 'log + "S"' }] }],
+      [{ name: 'log', value: '', on: [{ events: { source: 'view', type: 'click' }, update: 'log + "R"' }] }],
+    )
+    fire(t.svg, 'click')
+    expect(t.store.log).toBe('RSS')
+    t.binding.detach()
+  })
+
+  it('what an event changed is told to the host once, after every scope has run (the host re-binds on being told)', () => {
+    const seen: Array<[string, unknown]> = []
+    const t = bindGroups(
+      [{ name: 'hits', push: 'outer', on: [{ events: { source: 'view', type: 'dblclick' }, update: 'hits + 1' }] }],
+      [{ name: 'hits', value: 0 }],
+      { onSignal: (n, v) => seen.push([n, v]) },
+    )
+    fire(t.svg, 'dblclick')
+    expect(seen).toEqual([['hits', 2]])
+    expect(t.calls).toEqual([])
+    t.binding.detach()
+  })
+
+  it('a selector string in a scope defaults to the scope source: only events whose item is in the scope', () => {
+    const t = bindGroups([{ name: 'n', value: 0, on: [{ events: 'click', update: 'n + 1' }] }], [])
+    // no item under the pointer (jsdom picks nothing here): nothing is in scope
+    fire(t.svg, 'click')
+    expect(Object.keys(t.store)).toEqual([])
+    t.binding.detach()
+  })
+})

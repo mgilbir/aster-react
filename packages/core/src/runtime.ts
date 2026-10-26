@@ -1659,10 +1659,10 @@ function buildTitleGroup(
   // axis-internal frame; our scene bakes the 0.5px axis delta into the leaves
   // — shift it out). The title unions in afterwards, as in vega's layoutGroup.
   const b = new Bounds().set(0, 0, width, height)
-  for (const g of items as SceneGroup[]) {
-    if (g.role === 'title') continue
-    b.union(measureGuideGroup(g))
-  }
+  const measured = (items as SceneGroup[]).filter((g) => g.role !== 'title')
+  // (a clipped mark -- an interval selection's brush -- has its bounds cut to the frame: Bound's boundClip)
+  if (hasClippedMark(measured)) eachMarkBounds(measured, width, height, (n) => measureGuideGroup(n as SceneGroup), (mb) => { b.union(mb) })
+  else for (const g of measured) b.union(measureGuideGroup(g))
   const vb = { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
 
   // anchor position: frame=content maps over the viewBounds; frame=group over

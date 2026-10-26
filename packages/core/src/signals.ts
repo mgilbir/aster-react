@@ -579,9 +579,23 @@ function bindSignalEventsDefs(
     } finally {
       const { changed, edited } = txn
       txn = null
-      for (const name of edited) hooks.onData?.(name, inputRows.get(name)!)
-      for (const key of changed) hooks.onSignal?.(key, readKey(key), signals)
+      for (const name of edited) notified.edited.add(name)
+      for (const key of changed) notified.changed.add(key)
+      if (batching === 0) flushNotified()
     }
+  }
+
+  // What the runs of one DOM event changed is told to the host once the event has been delivered to every scope that listens:
+  // the host re-renders (and binds again) on being told, which must not happen between two scopes' runs of the same event.
+  const notified = { changed: new Set<string>(), edited: new Set<string>() }
+  let batching = 0
+  const flushNotified = (): void => {
+    const edited = [...notified.edited]
+    const changed = [...notified.changed]
+    notified.edited.clear()
+    notified.changed.clear()
+    for (const name of edited) hooks.onData?.(name, inputRows.get(name)!)
+    for (const key of changed) hooks.onSignal?.(key, readKey(key), signals)
   }
 
   // ---- event extension (vega-view events-extend.js) ----------------------------
@@ -624,7 +638,11 @@ function bindSignalEventsDefs(
     return picked ? itemFacade(picked) : undefined
   }
 
+  /** The events already extended: several scopes' streams receive the same event, which is resolved (item, coordinates) once. */
+  const extendedEvents = new WeakSet<object>()
   const extend = (e: ExtEvent, withItem: boolean): ExtEvent => {
+    if (extendedEvents.has(e)) return e
+    extendedEvents.add(e)
     const point = pointOf(e)
     const item = withItem ? resolveItem(e) : undefined
     const itemGroup = item
@@ -669,35 +687,62 @@ function bindSignalEventsDefs(
     detachFns.push(() => target.removeEventListener(type, send))
   }
 
-  /** One root stream per `source:type` (vega Scope.event), with one DOM listener. */
-  const rootFor = (source: string, type: string | number): Stream => {
-    const key = source + ':' + type
-    const have = rootStreams.get(key)
-    if (have) return have
+  /**
+   * The root stream of `source:type` for a scope (vega Scope.event): the stream of the nearest enclosing scope that already
+   * has one, else a new one that belongs to this scope. A scope is parsed after the ones around it, so the view's streams
+   * are shared by every scope that listens to the same event (its handlers run in ONE dataflow run, the view's first); a
+   * stream a scope makes is its own and its inner scopes', and a sibling scope makes another. Each stream has one DOM
+   * listener (a delivery is one dataflow run), and they fire in the order they were made.
+   */
+  const rootFor = (scope: Scope | null, source: string, type: string | number): Stream => {
+    const suffix = '\u0000' + source + ':' + type
+    for (let sc: Scope | null = scope; ; sc = sc.parent) {
+      const found = rootStreams.get((sc ? sc.id : '') + suffix)
+      if (found) return found
+      if (!sc) break
+    }
+    const key = (scope ? scope.id : '') + suffix
     const s = new Stream()
     rootStreams.set(key, s)
-    const deliver = (e: ExtEvent, viaView: boolean, native: Event): void => {
+    /** The one run a delivery of `e` to this root stream is. */
+    const deliverTo = (stream: Stream, e: ExtEvent, viaView: boolean, native: Event): void => {
       run(() => {
         if (viaView && hooks.preventDefault) native.preventDefault?.()
-        s.receive(extend(e, viaView))
+        stream.receive(extend(e, viaView))
       })
     }
     if (source === 'timer') {
       const ms = Number(type)
-      const id = setInterval(() => deliver({ type: 'timer', timestamp: Date.now() } as unknown as ExtEvent, false, {} as Event), ms)
+      const id = setInterval(() => deliverTo(s, { type: 'timer', timestamp: Date.now() } as unknown as ExtEvent, false, {} as Event), ms)
       detachFns.push(() => clearInterval(id))
-    } else if (source === 'view') {
-      addListener(svg, String(type), (e) => deliver(e as ExtEvent, true, e))
-    } else if (source === 'window') {
-      if (typeof window !== 'undefined') addListener(window, String(type), (e) => deliver(e as ExtEvent, false, e))
-      else logger.warn('Can not resolve event source: window')
-    } else if (typeof document !== 'undefined') {
-      for (const el of Array.from(document.querySelectorAll(source))) addListener(el, String(type), (e) => deliver(e as ExtEvent, false, e))
-    } else {
-      logger.warn('Can not resolve event source: ' + source)
+      return s
     }
+    // A DOM source has one listener for every scope that listens to it, and the scopes' streams run in the order they were
+    // made (the view's first, then the scopes' in document order), each as its own dataflow run.
+    const listenKey = source + ':' + type
+    let streams = domStreams.get(listenKey)
+    if (!streams) {
+      const list: Stream[] = (streams = [])
+      domStreams.set(listenKey, list)
+      const deliver = (e: ExtEvent, viaView: boolean, native: Event): void => {
+        batching++
+        try { for (const stream of list) deliverTo(stream, e, viaView, native) } finally { if (--batching === 0) flushNotified() }
+      }
+      if (source === 'view') {
+        addListener(svg, String(type), (e) => deliver(e as ExtEvent, true, e))
+      } else if (source === 'window') {
+        if (typeof window !== 'undefined') addListener(window, String(type), (e) => deliver(e as ExtEvent, false, e))
+        else logger.warn('Can not resolve event source: window')
+      } else if (typeof document !== 'undefined') {
+        for (const el of Array.from(document.querySelectorAll(source))) addListener(el, String(type), (e) => deliver(e as ExtEvent, false, e))
+      } else {
+        logger.warn('Can not resolve event source: ' + source)
+      }
+    }
+    streams.push(s)
     return s
   }
+  const domStreams = new Map<string, Stream[]>()
 
   let nodeCounter = 0
   const buildStream = (def: StreamDef & { markrole?: string }, keyBase: string, scope: Scope | null): Stream => {
@@ -710,10 +755,10 @@ function bindSignalEventsDefs(
       stream = buildStream(def.stream, keyBase, scope)
     } else if (def.type != null) {
       if (def.type === 'timer') {
-        stream = rootFor('timer', def.throttle ?? 0)
+        stream = rootFor(scope, 'timer', def.throttle ?? 0)
         def = { between: def.between, filter: def.filter } as StreamDef
       } else {
-        stream = rootFor(def.source === 'scope' || !def.source ? 'view' : def.source, def.type)
+        stream = rootFor(scope, def.source === 'scope' || !def.source ? 'view' : def.source, def.type)
       }
     } else {
       throw new Error('Invalid stream specification: ' + JSON.stringify(def))

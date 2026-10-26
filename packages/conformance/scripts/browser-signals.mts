@@ -470,6 +470,58 @@ const CASES: Case[] = [
     expectMoved: [],
     expectScopedMoved: true,
   },
+  {
+    name: 'group-scope-listeners-run-in-vega-order-root-and-scope',
+    spec: groups([sig('seen', [{ events: 'click', update: 'seq' }], -1)], [sig('seq', [{ events: { source: 'view', type: 'click' }, update: 'seq + 1' }], 0)]),
+    steps: [{ t: 'click', x: G.left[0], y: G.left[1] }, { t: 'click', x: G.right[0], y: G.right[1] }],
+    expectMoved: ['seq'],
+    expectScopedMoved: true,
+  },
+  {
+    name: 'group-scope-derived-signal-source-reads-a-scope-handler-of-the-same-event',
+    spec: groups([{ name: 'tup', update: 'legsig' }, sig('tog', [{ events: 'click', update: 'event.shiftKey' }], false), sig('mod', [{ events: { signal: 'tup' }, update: 'tog ? "T" : "R"' }], 'init')], [sig('legsig', [{ events: { source: 'view', type: 'click' }, update: 'event.shiftKey ? "S" : "N"' }], '')]),
+    steps: [{ t: 'click', x: G.left[0], y: G.left[1] }, { t: 'keydown', key: 'Shift' }, { t: 'click', x: G.left[0], y: G.left[1] }, { t: 'keyup', key: 'Shift' }],
+    expectMoved: ['legsig'],
+    expectScopedMoved: true,
+  },
+  {
+    name: 'group-scope-order-root-then-scope-handlers-of-one-event',
+    spec: groups([{ name: 'log', push: 'outer', on: [{ events: 'click', update: 'log + "S"' }] }], [{ name: 'log', value: '', on: [{ events: { source: 'view', type: 'click' }, update: 'log + "R"' }] }]),
+    steps: [{ t: 'click', x: G.left[0], y: G.left[1] }, { t: 'click', x: G.right[0], y: G.right[1] }],
+    expectMoved: ['log'],
+  },
+  {
+    name: 'group-scope-order-scope-then-root-declared-handler',
+    spec: groups([{ name: 'log', push: 'outer', on: [{ events: { source: 'view', type: 'click' }, update: 'log + "S"' }] }], [{ name: 'log', value: '', on: [{ events: { source: 'view', type: 'click' }, update: 'log + "R"' }] }]),
+    steps: [{ t: 'click', x: G.left[0], y: G.left[1] }],
+    expectMoved: ['log'],
+  },
+  {
+    name: 'group-scope-order-two-scopes-and-root',
+    spec: groups([{ name: 'log', push: 'outer', on: [{ events: { source: 'view', type: 'dblclick' }, update: 'log + "s"' }] }], [{ name: 'log', value: '', on: [{ events: { source: 'view', type: 'dblclick' }, update: 'log + "R"' }] }]),
+    steps: [{ t: 'dblclick', x: G.gap[0], y: G.gap[1] }],
+    expectMoved: ['log'],
+  },
+  {
+    name: 'probe-signal-source-handler-reevaluates-when-another-referenced-signal-changes',
+    spec: chart([sig('a', [{ events: 'click', update: 'a + 1' }]), sig('c', [{ events: 'dblclick', update: 'c + 100' }]), sig('b', [{ events: { signal: 'a' }, update: 'a + c' }], -1)]),
+    steps: [{ t: 'click', x: 100, y: 100 }, { t: 'dblclick', x: 100, y: 100 }],
+    expectMoved: ['a', 'c'],
+  },
+  {
+    name: 'probe-scope-derived-source-then-scope-event-same-click',
+    spec: groups([{ name: 'tup', update: 'legsig' }, sig('tog', [{ events: 'click', update: 'event.shiftKey' }], false), sig('mod', [{ events: { signal: 'tup' }, update: 'tog ? "T" : "R"' }], 'init')], [sig('legsig', [{ events: { source: 'view', type: 'click' }, update: 'event.shiftKey ? "S" : "N"' }], '')]),
+    steps: [{ t: 'keydown', key: 'Shift' }, { t: 'click', x: G.left[0], y: G.left[1] }, { t: 'keyup', key: 'Shift' }],
+    expectMoved: [],
+    expectScopedMoved: true,
+  },
+  {
+    name: 'probe-scope-derived-source-tog-on-later-event',
+    spec: groups([{ name: 'tup', update: 'legsig' }, sig('tog', [{ events: 'dblclick', update: 'true' }], false), sig('mod', [{ events: { signal: 'tup' }, update: 'tog ? "T" : "R"' }], 'init')], [sig('legsig', [{ events: { source: 'view', type: 'click' }, update: '"S"' }], '')]),
+    steps: [{ t: 'click', x: G.left[0], y: G.left[1] }, { t: 'dblclick', x: G.left[0], y: G.left[1] }],
+    expectMoved: [],
+    expectScopedMoved: true,
+  },
   // --- errors ---
   {
     name: 'update-error-logged-and-loop-continues',
@@ -533,9 +585,9 @@ window.__mountVega = async (spec) => {
   // the signals of every group item's scope, in document order (vega: the sub-contexts of the view's state)
   readScoped = () => {
     const out = []
-    const walk = (st) => { for (const sub of st.subcontext || []) { if (Object.keys(sub.signals || {}).length) out.push(sub.signals); walk(sub) } }
+    const walk = (st) => { for (const sub of st.subcontext || []) { const own = { ...(sub.signals || {}) }; delete own.parent; if (Object.keys(own).length) out.push(own); walk(sub) } }
     walk(view.getState({ signals: vega.truthy, recurse: true }))
-    return out.map((o) => { const c = { ...o }; delete c.parent; return c })
+    return out
   }
   window.__settle = async () => { await view.runAsync() }
 }
@@ -556,7 +608,7 @@ window.__mountAster = async (spec) => {
       if (sc) {
         const o = {}
         for (const d of sc.defs) { if (d.push === 'outer') continue; const k = sc.id + ':' + d.name; o[d.name] = Object.hasOwn(store, k) ? store[k] : sc.values[d.name] }
-        out.push(o)
+        if (Object.keys(o).length) out.push(o)
       }
       for (const c of g.items || []) if (Array.isArray(c.items)) walk(c)
     }
@@ -665,6 +717,7 @@ for (const c of cases) {
       problems.push(`unexpected error log: vega=${JSON.stringify(v.final.errors)} aster=${JSON.stringify(a.final.errors)}`)
     }
   }
+  if (process.env.SIG_PRINT && !('error' in v)) console.log('  vega', c.name, JSON.stringify(v.final.signals), v.final.scoped)
   if (problems.length === 0) pass++
   else failures.push(`${c.name}: ${problems.join('; ')}`)
 }
