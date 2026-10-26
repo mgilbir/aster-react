@@ -1160,7 +1160,6 @@ function computeGuidePadding(
   width: number,
   height: number,
   base: { top: number; right: number; bottom: number; left: number },
-  zeroClipProjection = false,
 ): { top: number; right: number; bottom: number; left: number } {
   // Vega's autosize unions the *recursive* bounds of every top-level guide
   // (axis/legend) and mark into the viewBounds and grows the padding by the
@@ -1180,16 +1179,10 @@ function computeGuidePadding(
     // legend geometry is exact enough that a genuine positive residue (a bar
     // whose right edge is the view width) must still grow the margin.
     const ei = group.role === 'axis' ? EPS : 0
-    // Geo shape bounds are traced through clipped projections; d3's clip
-    // intersection leaves a sub-pixel fp tail that can sit exactly on an
-    // integer in our port where vega's is just below/above it. Nudge only that
-    // integer case on the vertical axis (the clip bound affected by it).
-    const geo = zeroClipProjection && (group.marktype === 'shape' || group.marktype === 'geoshape')
-    const nudgeY = (v: number): number => geo && Math.abs(v - Math.round(v)) < EPS ? (v < 0 ? -EPS : EPS) : 0
     minX = Math.min(minX, b.x1 + ei)
     maxX = Math.max(maxX, b.x2 - ei)
-    minY = Math.min(minY, b.y1 + ei + Math.min(0, nudgeY(b.y1)))
-    maxY = Math.max(maxY, b.y2 - ei + Math.max(0, nudgeY(b.y2)))
+    minY = Math.min(minY, b.y1 + ei)
+    maxY = Math.max(maxY, b.y2 - ei)
   }
   // a mark's `clip` bounds the mark to the frame it sits in (vega boundClip), a group mark across all its items
   if (hasClippedMark(items)) eachMarkBounds(items, width, height, (n) => measureGuideGroup(n as SceneGroup), (b, n) => grow(b, n as SceneGroup))
@@ -1445,10 +1438,7 @@ function buildContent(
     || ctx.rawGuides
     || ctx.chart.autosize === 'none'
     ? ctx.chart.padding
-    : computeGuidePadding(
-        items, width, height, ctx.chart.padding,
-        (ctx.chart.projections ?? []).some((p) => String(p.type).toLowerCase() === 'azimuthalequalarea' && Number(p.clipAngle) === 0),
-      )
+    : computeGuidePadding(items, width, height, ctx.chart.padding)
   const ordered = paintOrderOf(items)
   return { items: ordered, padding, ctx, width, height, hasLayout }
 }

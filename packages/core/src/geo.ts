@@ -138,4 +138,42 @@ export function projectedPath(projection: GeoProjection, geo: unknown): string {
   return d ?? ''
 }
 
+/**
+ * The bounds of a projected shape from its UNROUNDED geometry: vega-scenegraph bounds a `shape` item by
+ * running the shape generator through a bounding context (boundContext), not by parsing the 3-digit path
+ * string it draws, so a shape that touches a pixel boundary can sit a hair past it and move an ulp-exact
+ * layout (`ceil`, a grid's row height). `null` for a shape that draws nothing.
+ */
+export function projectedBounds(projection: GeoProjection, geo: unknown): [number, number, number, number] | null {
+  const g = (projection as { path?: { context(c?: unknown): unknown; (geo: unknown): unknown } }).path
+  if (!g) return null
+  let x1 = +Number.MAX_VALUE
+  let y1 = +Number.MAX_VALUE
+  let x2 = -Number.MAX_VALUE
+  let y2 = -Number.MAX_VALUE
+  const add = (x: number, y: number): void => {
+    if (x < x1) x1 = x
+    if (x > x2) x2 = x
+    if (y < y1) y1 = y
+    if (y > y2) y2 = y
+  }
+  g.context({
+    beginPath() {},
+    closePath() {},
+    moveTo: add,
+    lineTo: add,
+    // d3's point radius is a full circle
+    arc(cx: number, cy: number, r: number) {
+      add(cx - r, cy - r)
+      add(cx + r, cy + r)
+    },
+  })
+  try {
+    g(geo)
+  } finally {
+    g.context(null)
+  }
+  return x1 === +Number.MAX_VALUE ? null : [x1, y1, x2, y2]
+}
+
 export type { GeoProjection }

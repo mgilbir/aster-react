@@ -5,7 +5,7 @@
  */
 import type { CompiledTransform, SortSpec } from './types.js'
 import type { ExpressionRuntime } from './expression.js'
-import { geoRegistry, requireGeo, requireTransform } from './registry.js'
+import { SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './registry.js'
 import { nominalTextWidth } from './text-metrics.js'
 import { isArray } from './util.js'
 import { activeMeter, boundedCount, meterRows } from './limits.js'
@@ -149,7 +149,14 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
         const p = projection != null
           ? geoRegistry.projectedPath!(projection, geo)
           : geoJSONPath(geo)
-        return p !== undefined ? { ...r, [as as string]: p } : r
+        if (p === undefined) return r
+        const out = { ...r, [as as string]: p }
+        // the shape's unrounded bounds, for the bound pass (see projectedBounds)
+        if (projection != null && as === 'shape' && geoRegistry.projectedBounds) {
+          const b = geoRegistry.projectedBounds(projection, geo)
+          if (b) SHAPE_BOUNDS.set(out, b)
+        }
+        return out
       })
     }
     case 'kde':
