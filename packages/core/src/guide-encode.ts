@@ -530,7 +530,7 @@ export function encodeItems(def: GuideMarkDef, rows: Row[], group: Rec, host: En
   const plan = planOfDef(def, cfg)
   if (plan.batch === undefined) plan.batch = batchOf(plan)
   const batch = plan.batch
-  if (rows.length < 2 || batch === null) return rows.map((d) => encodeItem(def, d, group, host, cfg))
+  if (rows.length < 1 || batch === null) return rows.map((d) => encodeItem(def, d, group, host, cfg))
   const tmpl: Rec = { ...plan.enter.tmpl }
   const first: EntryScope = { host, datum: rows[0]!, item: tmpl, group }
   const per: Array<{ key: string; fast: (d: Row) => unknown }> = []
