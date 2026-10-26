@@ -880,7 +880,7 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
       })
     } else {
       // a projected shape bounds from its unrounded geometry, as vega's bound context sees it, not from the path string
-      const exact = it.datum && it.path === (it.datum as Record<string, unknown>).shape ? SHAPE_BOUNDS.get(it.datum as object) : undefined
+      const exact = it.datum && it.path === (it.datum as Record<string, unknown>).shape ? SHAPE_BOUNDS.get(it.datum as object)?.() : undefined
       if (exact) {
         bounds.add(exact[0], exact[1])
         bounds.add(exact[2], exact[3])

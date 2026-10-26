@@ -37,8 +37,11 @@ export const geoRegistry: GeoRegistry = {
   contourRun: null,
 }
 
-/** The unrounded bounds [x1, y1, x2, y2] of the path a `geoshape` transform wrote on a row (see `projectedBounds`). */
-export const SHAPE_BOUNDS = new WeakMap<object, [number, number, number, number]>()
+/**
+ * How to get the unrounded bounds [x1, y1, x2, y2] of the path a `geoshape` transform wrote on a row (see
+ * `projectedBounds`). A thunk: a chart that never measures its marks (`autosize: none`) never pays for it.
+ */
+export const SHAPE_BOUNDS = new WeakMap<object, () => [number, number, number, number] | null>()
 
 export function requireGeo(): NonNullable<GeoRegistry['buildProjection']> {
   if (!geoRegistry.buildProjection) throw new Error('[aster] this spec uses a geo projection; load the addon first: await import("@aster/core/geo")')

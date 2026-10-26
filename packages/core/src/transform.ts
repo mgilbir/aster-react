@@ -153,8 +153,9 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
         const out = { ...r, [as as string]: p }
         // the shape's unrounded bounds, for the bound pass (see projectedBounds)
         if (projection != null && as === 'shape' && geoRegistry.projectedBounds) {
-          const b = geoRegistry.projectedBounds(projection, geo)
-          if (b) SHAPE_BOUNDS.set(out, b)
+          const measure = geoRegistry.projectedBounds
+          let memo: ReturnType<typeof measure> | undefined
+          SHAPE_BOUNDS.set(out, () => (memo === undefined ? (memo = measure(projection, geo)) : memo))
         }
         return out
       })
