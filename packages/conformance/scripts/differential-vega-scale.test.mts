@@ -115,7 +115,7 @@ function runVstick(api: Api, c: Vstick): unknown {
   })
 }
 
-describe(`vega-scale ${(vegaScale as { version?: string }).version ?? ''} vs Aster scale.ts (live)`, () => {
+describe('vega-scale 8.1.2 vs Aster scale.ts (live)', () => {
   scalePrograms.forEach(({ type, dates, ops }: { type: string; dates?: boolean; ops: Op[] }, i: number) => {
     it(`scale #${i} ${type}`, () =>
       withTz('UTC', () => {
