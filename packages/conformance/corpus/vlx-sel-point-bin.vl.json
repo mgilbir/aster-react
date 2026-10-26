@@ -61,9 +61,8 @@
    "bin": true
   },
   "y": {
-   "field": "b",
-   "type": "quantitative",
-   "aggregate": "mean"
+   "aggregate": "count",
+   "type": "quantitative"
   },
   "color": {
    "condition": {
