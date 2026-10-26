@@ -242,7 +242,7 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
   validateData(spec, at)
   if (spec.transform !== undefined) validateTransforms(spec.transform, at('transform'))
   validateSize(spec, at, top && (kind === 'unit' || kind === 'layer'))
-  if (spec.params !== undefined) validateParams(spec.params, at('params'), kind === 'unit' && selOk, kind)
+  if (spec.params !== undefined) validateParams(spec.params, at('params'), kind !== 'layer' && selOk, kind, spec, at('params'))
   checkNamedSelectionView(spec, at)
   if (top && spec.name !== undefined && [...declaredParams.values()].includes('selection')) fail(at('name'), 'a named spec cannot declare selection parameters: vega-lite names its marks, signals and units after the view, which @aster/vl does not reproduce')
   if (spec.resolve !== undefined) validateResolve(spec.resolve, at('resolve'), kind)
@@ -280,17 +280,17 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
       if (!Array.isArray(arr) || arr.length === 0) mustBe(at(kind), 'a non-empty array of specs')
       arr.forEach((c, i) => {
         if (!isObj(c)) mustBe(`${at(kind)}[${i}]`, OBJECT)
-        validateView(c, `${at(kind)}[${i}]`, false, kind, false)
+        validateView(c, `${at(kind)}[${i}]`, false, kind, selOk)
       })
       if (spec.columns !== undefined && kind !== 'concat') fail(at('columns'), '`columns` is only valid on `concat`')
       checkColumns(spec, at)
       break
     }
     case 'facet':
-      validateFacetOperator(spec, at)
+      validateFacetOperator(spec, at, selOk)
       break
     case 'repeat':
-      validateRepeatOperator(spec, at)
+      validateRepeatOperator(spec, at, selOk)
       break
   }
 }
@@ -406,7 +406,25 @@ function validateConfig(cfg: Obj, path: string): void {
 
 const BIND_INPUTS = set('range checkbox radio select text number date datetime-local time month week color')
 
-function validateParams(params: unknown, path: string, selectionOk: boolean, kind: Kind): void {
+/**
+ * Why a selection parameter declared on a composition (concat, facet, repeat) cannot be pushed down to the units below it
+ * (vega-lite gives every unit a copy), or undefined when it can: a layer below would declare the same signals twice in one
+ * Vega scope, which Vega rejects, and a composite mark (boxplot, errorbar, errorband) is a layer once vega-lite has normalized it.
+ */
+function pushdownProblem(node: unknown): string | undefined {
+  if (!isObj(node)) return undefined
+  const mark = node.mark
+  const markType = typeof mark === 'string' ? mark : isObj(mark) ? mark.type : undefined
+  if (['boxplot', 'errorbar', 'errorband'].includes(markType as string)) return `a ${markType as string} is a layer once vega-lite has normalized it`
+  if (Array.isArray(node.layer)) return 'a layer below would declare the selection\'s signals twice in one Vega scope, which Vega rejects'
+  if (node.mark !== undefined && Array.isArray(node.params) && node.params.length > 0) return 'vega-lite replaces the parameters of a unit that has some of its own (so a variable parameter or a selection declared there would be lost)'
+  for (const k of ['hconcat', 'vconcat', 'concat']) {
+    if (Array.isArray(node[k])) for (const c of node[k] as unknown[]) { const p = pushdownProblem(c); if (p) return p }
+  }
+  return isObj(node.spec) ? pushdownProblem(node.spec) : undefined
+}
+
+function validateParams(params: unknown, path: string, selectionOk: boolean, kind: Kind, view?: Obj, viewPath?: string): void {
   if (!Array.isArray(params)) mustBe(path, 'an array of parameter definitions')
   params.forEach((p, i) => {
     const at = `${path}[${i}]`
@@ -416,10 +434,15 @@ function validateParams(params: unknown, path: string, selectionOk: boolean, kin
     paramNamesSeen.add(p.name)
     if (p.select !== undefined) {
       if (!selectionOk) {
-        fail(`${at}.select`, kind === 'unit'
-          ? 'selection parameters are supported on a unit view (a single view, or a unit inside a layer), not inside concat, facet or repeat views: their signals would need a Vega group scope'
-          : `selection parameters are supported on a unit view (or a unit inside a layer), not on a ${kind} spec itself: vega-lite emits the signals of a layer-level selection once per unit, which Vega rejects`)
+        fail(`${at}.select`, kind === 'layer'
+          ? 'a selection parameter on a layer spec itself: vega-lite gives every layer a copy of its signals in the same Vega scope, which Vega rejects; declare it on one of the layers'
+          : 'a selection parameter is not supported here')
       }
+      if (kind !== 'unit' && view !== undefined) {
+        const problem = pushdownProblem(kind === 'facet' || kind === 'repeat' ? view.spec : { [kind]: view[kind] })
+        if (problem) fail(`${at}.select`, `a selection parameter on a ${kind} spec is given to every unit below it (vega-lite), and ${problem}: declare it on a unit instead`)
+      }
+      if (p.views !== undefined) fail(`${at}.views`, '`views` (restricting a selection declared on a composition to some of its views) is not supported: declare the selection on the unit')
       validateSelection(p, at)
       return
     }
@@ -1091,7 +1114,7 @@ function validateDataSourceObj(d: Obj, at: string): void {
 
 // --- facet / repeat operators ------------------------------------------------
 
-function validateFacetOperator(spec: Obj, at: (k: string) => string): void {
+function validateFacetOperator(spec: Obj, at: (k: string) => string, selOk: boolean): void {
   const facet = spec.facet
   if (!isObj(facet)) mustBe(at('facet'), 'a field definition or {row, column}')
   if (!isObj(spec.spec)) fail(at('spec'), 'a facet spec needs a nested `spec`')
@@ -1120,10 +1143,10 @@ function validateFacetOperator(spec: Obj, at: (k: string) => string): void {
     checkFacetDef(facet, at('facet'))
     checkColumns(spec, at)
   }
-  validateView(spec.spec as Obj, at('spec'), false, 'facet', false)
+  validateView(spec.spec as Obj, at('spec'), false, 'facet', selOk)
 }
 
-function validateRepeatOperator(spec: Obj, at: (k: string) => string): void {
+function validateRepeatOperator(spec: Obj, at: (k: string) => string, selOk: boolean): void {
   const rep = spec.repeat
   if (!isObj(spec.spec)) fail(at('spec'), 'a repeat spec needs a nested `spec`')
   const fieldArr = (v: unknown, a: string): void => {
@@ -1145,7 +1168,7 @@ function validateRepeatOperator(spec: Obj, at: (k: string) => string): void {
   else if (isObj(rep)) for (const k of ['row', 'column', 'layer']) if (rep[k] !== undefined) vars.add(k)
   repeatVars = vars
   try {
-    validateView(spec.spec as Obj, at('spec'), false, 'repeat', false)
+    validateView(spec.spec as Obj, at('spec'), false, 'repeat', selOk)
   } finally {
     repeatVars = prev
   }

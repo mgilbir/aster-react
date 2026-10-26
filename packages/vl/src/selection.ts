@@ -8,8 +8,9 @@
  * emit is the same: a `<name>_store` dataset, the signals that turn events into tuples and tuples into store
  * edits (`modify`), brush and voronoi marks, and the top-level signal that resolves the store.
  *
- * Only unit specs and layers of units are supported (their signals live at the root of the Vega spec, like
- * the rest of the engine's event loop; see validate.ts for the refusals).
+ * A unit at the root (or in a layer at the root) puts its signals at the root of the Vega spec; a unit inside a
+ * concat, facet or repeat view puts them in its own group mark (a Vega group scope: one copy per group item), which
+ * is where vega-lite puts them too ({@link SelUnit.nested}, `push: "outer"`, the `facet` signal).
  */
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
 import { dateTimeToExpr, dateTimeToTimestamp, isDateTime } from './predicate.js'
@@ -141,6 +142,8 @@ export interface SelCmpt {
   clear?: StreamDef[] | false | string
   project: SelProject
   scales?: SelProjection[]
+  /** the unit is nested in a concat / facet / repeat view (see {@link SelUnit.nested}) */
+  nested?: boolean
   on?: unknown
   [k: string]: unknown
 }
@@ -183,7 +186,13 @@ export interface SelUnit {
   bindScale(channel: string, extent: { param: string; field: string }): void
   /** the channel's tooltip encoding for the voronoi cells (vega-lite `tooltip(model, {reactiveGeom: true})`) */
   voronoiTooltip(): Obj
-  /** a name of this unit's legend-bound channel, e.g. for `hasLegend` */
+  /**
+   * The unit sits inside a concat, facet or repeat view (vega-lite: `model.parent && !isTopLevelLayer(model)`): its
+   * signals are a group's, and the ones that feed a bound scale push to the view's.
+   */
+  nested: boolean
+  /** The facet channels around the unit (vega-lite `unitName`): each part of the unit's name that names its facet cell. */
+  facetFields?: ReadonlyArray<{ channel: string; field: string }>
 }
 
 const TIMER = (e: StreamDef): boolean => e.type === 'timer'
@@ -242,6 +251,7 @@ export function parseUnitSelections(unit: SelUnit, defs: Obj[], config: unknown)
       bind: def.bind,
       events: typeof defaults.on === 'string' ? parseEventSelectorString(defaults.on, 'scope') : array(duplicate(defaults.on) as StreamDef | StreamDef[]),
     } as unknown as SelCmpt
+    cmpt.nested = unit.nested
     cmpts[name] = cmpt
 
     if (cmpt.events?.find(TIMER)) throw new VLCompileError(`selection "${name}": timer events (animation) are not supported`)
@@ -495,7 +505,12 @@ export function assembleInit(init: unknown, isExpr = true, wrap: (s: string | nu
   return isExpr ? wrap(stringify(init) as string) : init
 }
 
-const unitNameOf = (unit: SelUnit): string => stringValue(unit.name)
+/** vega-lite `unitName`: the unit's name, as an expression, followed by its facet cell's (`+ '__facet_column_' + (facet["c"])`). */
+function unitNameOf(unit: SelUnit, escape = true): string {
+  let name = escape ? stringValue(unit.name) : unit.name
+  for (const f of unit.facetFields ?? []) name += ` + '__facet_${f.channel}_' + (facet[${stringValue(f.field)}])`
+  return name
+}
 
 const datumOf = (c: SelCmpt): string => (c.nearest ? '(item().isVoronoi ? datum.datum : datum)' : 'datum')
 
@@ -883,6 +898,7 @@ export function assembleUnitSelectionSignals(unit: SelUnit, cmpts: Record<string
       modifyExpr = toggleModifyExpr(unit, c)
     }
     if (inputsDefined(c)) signals = inputsSignals(c, signals)
+    if (scalesDefined(c)) signals = scalesSignals(unit, c, signals)
     if (legendsDefined(c)) signals = legendsSignals(c, signals)
     if (clearDefined(c)) signals = clearSignals(c, signals)
     if (isInterval && c.translate) signals = translateSignals(unit, c, signals)
@@ -892,6 +908,52 @@ export function assembleUnitSelectionSignals(unit: SelUnit, cmpts: Record<string
       on: [{ events: { signal: c.name + TUPLE }, update: `modify(${stringValue(c.name + STORE)}, ${modifyExpr})` }],
     })
   }
+  return cleanupEmptyOn(signals)
+}
+
+/** scales.ts `signals`: in a multiview display the signals that follow a bound scale push to the view's. */
+function scalesSignals(unit: SelUnit, c: SelCmpt, signals: Signal[]): Signal[] {
+  if (!unit.nested) return signals
+  for (const proj of c.scales ?? []) {
+    const sg = signals.find((x) => x.name === proj.signals.data)
+    if (!sg) continue
+    sg.push = 'outer'
+    delete sg.value
+    delete sg.update
+  }
+  return signals
+}
+
+/**
+ * scales.ts `topLevelSignals`: a multiview display's bound scales need the view's signals the units push to, and the
+ * named selection signal reassembled from them (vlSelectionResolve does not account for bound scales: each unit adds a
+ * tuple to the store, but the selection's state is the unit most recently updated).
+ */
+function scalesTopLevelSignals(c: SelCmpt, signals: Signal[]): Signal[] {
+  const bound = (c.scales ?? []).filter((proj) => signals.filter((s) => s.name === proj.signals.data).length === 0)
+  if (!c.nested || bound.length === 0) return signals
+  const named = signals.find((s) => s.name === c.name)
+  if (!named) return signals
+  let update = named.update as string
+  if (update.includes(VL_SELECTION_RESOLVE)) {
+    named.update = `{${bound.map((proj) => `${stringValue(replacePathInField(proj.field))}: ${proj.signals.data}`).join(', ')}}`
+  } else {
+    for (const proj of bound) {
+      const mapping = `${stringValue(replacePathInField(proj.field))}: ${proj.signals.data}`
+      if (!update.includes(mapping)) update = `${update.substring(0, update.length - 1)}, ${mapping}}`
+    }
+    named.update = update
+  }
+  return signals.concat(bound.map((proj) => ({ name: proj.signals.data as string })))
+}
+
+/** assemble.ts assembleFacetSignals: a facet's cells track which cell the pointer is in, for their units' names. */
+export function assembleFacetSignals(cellName: string, signals: Signal[]): Signal[] {
+  signals.unshift({
+    name: 'facet',
+    value: {},
+    on: [{ events: [{ source: 'scope', type: 'pointermove' }], update: `isTuple(facet) ? facet : group(${stringValue(cellName)}).datum` }],
+  })
   return cleanupEmptyOn(signals)
 }
 
@@ -909,6 +971,7 @@ export function assembleTopLevelSelectionSignals(cmpts: Record<string, SelCmpt>,
     hasSelections = true
     // inputs, scales (multiview only), legends, clear
     if (inputsDefined(c)) signals = inputsTopLevelSignals(c, signals)
+    if (scalesDefined(c)) signals = scalesTopLevelSignals(c, signals)
     if (legendsDefined(c)) signals = legendsTopLevelSignals(c, signals)
     if (clearDefined(c)) signals = clearTopLevelSignals(c, signals)
   }
@@ -935,8 +998,8 @@ export function assembleUnitSelectionData(unit: SelUnit, cmpts: Record<string, S
     if (c.init) {
       const fields = c.project.items.map(assembleProjection)
       store.values = c.project.hasSelectionId
-        ? c.init.map((i) => ({ unit: unit.name, [SELECTION_ID]: (assembleInit(i, false) as unknown[])[0] }))
-        : c.init.map((i) => ({ unit: unit.name, fields, values: assembleInit(i, false) }))
+        ? c.init.map((i) => ({ unit: unitNameOf(unit, false), [SELECTION_ID]: (assembleInit(i, false) as unknown[])[0] }))
+        : c.init.map((i) => ({ unit: unitNameOf(unit, false), fields, values: assembleInit(i, false) }))
     }
     if (!have.has(store.name as string)) {
       have.add(store.name as string)

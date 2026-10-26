@@ -19,17 +19,22 @@ const specs = readdirSync(ROOT)
 
 const signalsOf = (s: any): Array<[string, unknown]> => (s.signals ?? []).map((x: any) => [x.name, x])
 const storesOf = (s: any): unknown[] => (s.data ?? []).filter((d: any) => /_store$/.test(d.name))
-const marksOf = (s: any): unknown[] =>
-  (s.marks ?? []).map((m: any) => ({
-    name: m.name, type: m.type, interactive: m.interactive, clip: m.clip, cursor: m.encode?.update?.cursor,
-    encode: /brush|voronoi/.test(m.name) ? m.encode : undefined, transform: m.transform,
-  }))
-const scalesOf = (s: any): unknown[] => (s.scales ?? []).map((m: any) => ({ name: m.name, domainRaw: m.domainRaw }))
+/** Every mark of the tree (a composition's groups hold the views' marks), with the group scopes' signals. */
+const marksOf = (ms: any[] | undefined, path = ''): unknown[] =>
+  (ms ?? []).flatMap((m: any) => [
+    {
+      path: `${path}/${m.name}`, type: m.type, interactive: m.interactive, clip: m.clip, cursor: m.encode?.update?.cursor,
+      encode: /brush|voronoi/.test(m.name) ? m.encode : undefined, transform: m.transform, signals: m.signals,
+    },
+    ...marksOf(m.marks, `${path}/${m.name}`),
+  ])
+// (the order of a composition's scales is not part of what a render or an interaction sees: they are compared by name)
+const scalesOf = (s: any): unknown[] => (s.scales ?? []).map((m: any) => ({ name: m.name, domainRaw: m.domainRaw })).sort((a: any, b: any) => (a.name < b.name ? -1 : 1))
 const legendsOf = (s: any): unknown[] => (s.legends ?? []).map((l: any) => l.encode)
 
 describe('selection output is vega-lite\'s output', () => {
   it('covers the whole corpus of selection specs', () => {
-    expect(specs.length).toBeGreaterThanOrEqual(50)
+    expect(specs.length).toBeGreaterThanOrEqual(60)
   })
   for (const [name, spec] of specs) {
     it(name, () => {
@@ -38,7 +43,7 @@ describe('selection output is vega-lite\'s output', () => {
       expect(signalsOf(got).map(([n]) => n), 'signal names, in order').toEqual(signalsOf(want).map(([n]) => n))
       expect(signalsOf(got)).toEqual(signalsOf(want))
       expect(storesOf(got)).toEqual(storesOf(want))
-      expect(marksOf(got)).toEqual(marksOf(want))
+      expect(marksOf(got.marks)).toEqual(marksOf(want.marks))
       expect(scalesOf(got)).toEqual(scalesOf(want))
       expect(legendsOf(got)).toEqual(legendsOf(want))
     })

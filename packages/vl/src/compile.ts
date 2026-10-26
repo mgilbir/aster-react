@@ -13,7 +13,7 @@ import { validateSpec } from './validate.js'
 import { predicateExpr, domainValueExpr, paramLeaves } from './predicate.js'
 import {
   SELECTION_ID, STORE, assembleSelectionScaleDomain, assembleTopLevelSelectionSignals, assembleUnitSelectionData,
-  assembleUnitSelectionMarks, assembleUnitSelectionSignals, interactiveLegendSelections, parseUnitSelections, requiresSelectionId, selectionPredicate,
+  assembleFacetSignals, assembleUnitSelectionMarks, assembleUnitSelectionSignals, interactiveLegendSelections, parseUnitSelections, requiresSelectionId, selectionPredicate,
   stringValue, varName, type ParamPredicate, type SelCmpt, type SelUnit, type TimeUnitProjection,
 } from './selection.js'
 import { normalizeComposites } from './composite.js'
@@ -118,22 +118,52 @@ export function compile(input: VLSpec): VLSpec {
   validateSpec(spec)
   const normalized = normalizeComposites(spec, isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined) as VLSpec
   imageAsRect(normalized)
+  pushSelectionParams(normalized, [])
   const ctx = makeCtx(normalized)
-  const out = finalizeData(compileView(normalized, ctx), ctx)
+  const compiled = compileView(normalized, ctx)
+  const selParts = SEL_PARTS.get(compiled)
+  if (selParts) compiled.data = [...selParts.data, ...((compiled.data as Record<string, unknown>[] | undefined) ?? [])]
+  const out = finalizeData(compiled, ctx)
   // a named view names its marks after itself (vega-lite `model.getName`): `chart_marks`
   if (typeof normalized.name === 'string' && normalized.name !== '' && Array.isArray(out.marks)) {
     out.marks = (out.marks as Record<string, unknown>[]).map((m) => prefixMarkNames(m, `${signalSafe(normalized.name as string)}_`))
   }
   const signals = paramSignals(normalized)
   const layoutSignals = (out.signals as Record<string, unknown>[] | undefined) ?? []
-  const selectionSignals = SELECTION_SIGNALS.get(out)
-  if (selectionSignals) {
+  if (selParts) {
     // vega-lite's order: layout signals, the selections' top-level signals, the variable params, then the units' own
-    out.signals = [...layoutSignals, ...selectionSignals.top([]), ...signals, ...selectionSignals.unit]
+    out.signals = [...layoutSignals, ...selParts.top([]), ...signals, ...selParts.unit]
   } else if (signals.length) {
     out.signals = [...signals, ...layoutSignals]
   }
   return exprRefsToSignals(out) as VLSpec
+}
+
+/**
+ * vega-lite's normalizer (normalize/toplevelselection.ts) gives a selection parameter declared on a composition (concat,
+ * facet, repeat) to every unit below it: each unit then declares the selection in its own group (a multi-view selection).
+ * validate.ts has refused the cases where that would be wrong (a layer below, a unit with params of its own).
+ */
+function pushSelectionParams(node: unknown, inherited: Record<string, unknown>[]): void {
+  if (!isObject(node)) return
+  const concats = ['hconcat', 'vconcat', 'concat'].filter((k) => Array.isArray(node[k]))
+  const composite = concats.length > 0 || (isObject(node.spec) && (node.facet !== undefined || node.repeat !== undefined))
+  if (composite) {
+    let carried = inherited
+    if (Array.isArray(node.params)) {
+      const own = (node.params as unknown[]).filter((p): p is Record<string, unknown> => isObject(p) && p.select !== undefined)
+      if (own.length) {
+        carried = [...inherited, ...own]
+        const rest = (node.params as unknown[]).filter((p) => !(isObject(p) && p.select !== undefined))
+        if (rest.length) node.params = rest
+        else delete node.params
+      }
+    }
+    for (const k of concats) for (const c of node[k] as unknown[]) pushSelectionParams(c, carried)
+    if (isObject(node.spec)) pushSelectionParams(node.spec, carried)
+    return
+  }
+  if (inherited.length && node.layer === undefined && node.mark !== undefined) node.params = inherited.map((p) => structuredClone(p))
 }
 
 /**
@@ -419,7 +449,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     SPEC_CTX.set(p.l, ctx)
     const path = LEAF_PATHS.get(p.l)
     const sel = prepareUnitSelections(p.l, p.fields, p.mark, ctx, {
-      unitName: path?.length ? path.map((n) => `layer_${n}`).join('_') : `layer_${i}`,
+      unitName: childModelName(ctx.modelName, path?.length ? path.map((n) => `layer_${n}`).join('_') : `layer_${i}`),
       scaleName: (c) => (c === 'y' && resolveScaleEarly.y === 'independent' ? `layer_${i}_y` : c),
     })
     collectDomainParams(p.l, p.fields, ctx)
@@ -540,10 +570,11 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     })
   }
   // the selections' store datasets, in vega-lite's order (each unit's go in front of what came before)
+  const selData: Record<string, unknown>[] = []
   for (const sel of layerSel) {
     if (!sel?.unit) continue
-    const stores = assembleUnitSelectionData(sel.unit, sel.cmpts, new Set(data.map((d) => d.name as string)))
-    for (let k = stores.length - 1; k >= 0; k--) data.unshift(stores[k]!)
+    const stores = assembleUnitSelectionData(sel.unit, sel.cmpts, new Set([...selData, ...data].map((d) => d.name as string)))
+    for (let k = stores.length - 1; k >= 0; k--) selData.unshift(stores[k]!)
   }
   out.data = data
 
@@ -613,9 +644,9 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     if (applyScaleExtents(sel, scales.filter((sc) => sc.domainRaw === undefined), (c) => layerSel[i]?.unit?.scaleName(c) ?? c, ctx)) layerClip = true
   })
   parsed.forEach((p, i) => {
-    if (ctx.selections.size > 0 || layerClip) flagSelectionMarks(perLayerMarks[i]!, ctx.selections.size > 0, Object.keys(layerSel[i]?.cmpts ?? {}).length > 0, layerClip)
+    if (ctx.anySelection || layerClip) flagSelectionMarks(perLayerMarks[i]!, ctx.anySelection, Object.keys(layerSel[i]?.cmpts ?? {}).length > 0, layerClip)
   })
-  for (const sel of layerSel) if (sel?.unit) marks = assembleUnitSelectionMarks(sel.unit, sel.cmpts, marks)
+  for (const sel of layerSel) if (sel?.unit) marks = assembleSelectionMarks(sel.unit, sel.cmpts, marks)
   out.marks = marks
 
   // axes: one per positional channel, from the first layer that encodes it,
@@ -710,7 +741,8 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // the signals every unit's selections add (collected in compile())
   const selUnits = layerSel.filter((sel): sel is UnitSel => sel?.unit !== undefined)
   if (selUnits.length) {
-    SELECTION_SIGNALS.set(out, {
+    SEL_PARTS.set(out, {
+      data: selData,
       top: (signals) => selUnits.reduce((sg, sel) => assembleTopLevelSelectionSignals(sel.cmpts, sg), signals),
       unit: selUnits.flatMap((sel) => assembleUnitSelectionSignals(sel.unit, sel.cmpts)),
     })
@@ -995,7 +1027,16 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     innerSpec = { ...spec, encoding: enc }
     delete innerSpec.columns
   }
-  const inner = Array.isArray(innerSpec.layer) ? compileLayered(innerSpec, ctx) : compileUnitView(innerSpec, ctx)
+  // a unit in a cell carries its facet cell in its selections' unit name (`"child" + '__facet_column_' + (facet["c"])`)
+  const nameFacetField = (channel: string, def: Record<string, unknown> | undefined): { channel: string; field: string }[] => {
+    const fd = def ? parseChannel(channel, def) : null
+    return fd ? [{ channel, field: aggFieldName(fd) }] : []
+  }
+  const cellFacetFields = [...nameFacetField('row', rowDef), ...nameFacetField('column', colDef), ...nameFacetField('facet', wrapDef)]
+  const inner = inChildView(ctx, 'child', cellFacetFields, true, () => (Array.isArray(innerSpec.layer) ? compileLayered(innerSpec, ctx) : compileUnitView(innerSpec, ctx)))
+  const innerSel = SEL_PARTS.get(inner)
+  // the facet's cells declare the units' signals (and the `facet` signal that tracks the cell the pointer is in)
+  const cellName = childModelName(ctx.modelName, 'cell')
   // The inner unit may carry a DECLARED source name (vega-lite preserves it);
   // facet references must target whatever the inner marks actually read.
   const innerDataName = (((inner.marks as Record<string, unknown>[])?.[0]?.from as { data?: string } | undefined)?.data) ?? ctx.dn(0)
@@ -1108,6 +1149,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (!hasSig('child_width')) facetChildSignals.push({ name: 'child_width', value: typeof inner.width === 'number' ? inner.width : 300 })
   if (!hasSig('child_height')) facetChildSignals.push({ name: 'child_height', value: typeof inner.height === 'number' ? inner.height : 300 })
   const renames = { signals: sizeSigMap, scales: new Map<string, string>() }
+  if (innerSel) renameFragment(innerSel.unit, renames)
   renameFragment(inner.scales, renames)
   renameFragment(inner.axes ?? [], renames)
   renameFragment(inner.marks, renames)
@@ -1128,6 +1170,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const remapFrom = (m: Record<string, unknown>): Record<string, unknown> => {
     const c = { ...m }
     const from = c.from as { data?: string } | undefined
+    if (isSelectionMark(m)) return c // (the selections' marks read no data of the cell)
     if (from === undefined || from.data == null) c.from = { ...(from ?? {}), data: 'facet' }
     else if (cellMap.has(from.data)) c.from = { ...from, data: cellMap.get(from.data) }
     if (Array.isArray(c.marks)) c.marks = (c.marks as Record<string, unknown>[]).map(remapFrom)
@@ -1216,6 +1259,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
         from: { facet: { name: 'facet', data: baseName, groupby: [wrapField] } },
         sort: { field: [datumRef(wrapField)], order: [wrapOrder] },
         encode: { update: { width: { signal: 'child_width' }, height: { signal: 'child_height' } } },
+        ...(innerSel ? { signals: assembleFacetSignals(cellName, [...innerSel.unit]) } : {}),
         ...(cellData.length ? { data: cellData } : {}),
         ...(gridAxes.length ? { axes: gridAxes } : {}),
         marks: childMarks,
@@ -1226,6 +1270,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     wrapOut.autosize = autosizeOf(spec)
     wrapOut.data = wrapData
     wrapOut.signals = sizeSignalsOut
+    if (innerSel) SEL_PARTS.set(wrapOut, { data: innerSel.data, top: innerSel.top, unit: [] })
     wrapOut.layout = compositeLayout({ ...spec, spacing: spec.spacing ?? wrapDef?.spacing, align: spec.align ?? wrapDef?.align, bounds: spec.bounds ?? wrapDef?.bounds, center: spec.center ?? wrapDef?.center }, { align: 'all', columns: nCols })
     wrapOut.marks = wrapMarks
     wrapOut.scales = inner.scales
@@ -1371,6 +1416,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     from: { facet: { name: 'facet', data: baseName, groupby: facetGroupby } },
     sort: { field: facetGroupby.map(datumRef), order: facetGroupby.map((_, i) => (i === 0 && rowField ? rowOrder : colOrder)) },
     encode: { update: { width: { signal: 'child_width' }, height: { signal: 'child_height' } } },
+    ...(innerSel ? { signals: assembleFacetSignals(cellName, [...innerSel.unit]) } : {}),
     ...(cellData.length ? { data: cellData } : {}),
     ...(gridAxes.length ? { axes: gridAxes } : {}),
     marks: childMarks,
@@ -1390,6 +1436,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   out.autosize = autosizeOf(spec)
   out.data = data
   out.signals = sizeSignalsOut
+  if (innerSel) SEL_PARTS.set(out, { data: innerSel.data, top: innerSel.top, unit: [] })
   const rowSpacing = typeof rowDef?.spacing === 'number' ? rowDef.spacing : undefined
   const colSpacing = typeof colDef?.spacing === 'number' ? colDef.spacing : undefined
   // titleOrient right/bottom anchor the title group at the end; the anchor also picks the title band
@@ -1470,6 +1517,8 @@ interface CompositeResult {
   /** root size properties (the cross dimension of a single row/column) */
   rootWidth?: unknown
   rootHeight?: unknown
+  /** the selections of the children: their stores and top-level signals (their own signals are in their groups) */
+  selection?: SelParts
 }
 
 /**
@@ -1497,8 +1546,13 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
       child.data = { ...dataSource(child.data, ctx.datasets), name: ctx.sn(nextSource++) }
     }
     if (parent.config !== undefined) child.config = parent.config
-    delete child.params
-    const vg = compileChildFragment(child, ctx)
+    // (variable parameters are declared once at the root; the selections stay with the units they belong to)
+    if (Array.isArray(child.params)) {
+      const selections = (child.params as unknown[]).filter((p) => isObject(p) && p.select !== undefined)
+      if (selections.length) child.params = selections
+      else delete child.params
+    }
+    const vg = inChildView(ctx, cell.prefix.replace(/_$/, ''), [], true, () => compileChildFragment(child, ctx))
     return { cell, vg, spec: child }
   })
 
@@ -1522,6 +1576,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
   const legendsByChannel = new Map<string, Record<string, unknown>>()
   const legendOrder: string[] = []
   const independentScales: ScaleSpec[] = []
+  const selectionParts: SelParts[] = []
 
   frags.forEach(({ cell, vg }) => {
     const { prefix } = cell
@@ -1574,6 +1629,12 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     renameFragment(vg.axes ?? [], renames)
     renameFragment(vg.legends ?? [], renames)
     renameFragment(ownSignals, renames)
+    // the selections' signals keep their names (a selection is named once, for every unit); what they read of the view is renamed
+    const selParts = SEL_PARTS.get(vg)
+    if (selParts) {
+      renameFragment(selParts.unit, { signals: new Map([['width', wName], ['height', hName]]), scales: scaleMap, datasets: dnames })
+      selectionParts.push(selParts)
+    }
     for (const sc of scales) {
       const to = scaleMap.get(sc.name)
       if (to !== undefined) sc.name = to
@@ -1621,6 +1682,8 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
         }
     if (composite) group.layout = vg.layout
     if (vg.title) group.title = groupTitle(vg.title)
+    // a unit's selection signals are its group's (vega-lite: one copy per group item)
+    if (selParts?.unit.length) group.signals = selParts.unit
     // vega-lite names every mark after its model, and a child's model carries its parent's prefix (`concat_0_marks`)
     // (a repeat names its marks `child__x_marks` whatever view holds it)
     group.marks = cell.spec.repeat !== undefined ? (vg.marks as Record<string, unknown>[]) : (vg.marks as Record<string, unknown>[]).map((m) => prefixMarkNames(m, prefix))
@@ -1629,7 +1692,9 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
   })
 
   const mergedShared = mergeLayerScales([...scaleLists.values()].flat().map((s) => [s]))
+  const selection = mergeSelParts(selectionParts)
   return {
+    ...(selection ? { selection } : {}),
     data,
     signals,
     marks,
@@ -1643,6 +1708,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
 /** `m` and every mark below it, named with the child's model prefix (vega-lite `model.getName`). */
 function prefixMarkNames(m: Record<string, unknown>, prefix: string): Record<string, unknown> {
   const out: Record<string, unknown> = { ...m }
+  if (isSelectionMark(m)) return out
   // (the facet header titles are named `row-title` / `column-title` whatever the model)
   if (typeof m.name === 'string' && m.name !== 'row-title' && m.name !== 'column-title') out.name = `${prefix}${m.name}`
   if (Array.isArray(m.marks)) out.marks = (m.marks as Record<string, unknown>[]).map((c) => prefixMarkNames(c, prefix))
@@ -1717,6 +1783,7 @@ function compileConcat(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (res.rootHeight !== undefined) out.height = res.rootHeight
   out.data = res.data
   if (res.signals.length) out.signals = res.signals
+  if (res.selection) SEL_PARTS.set(out, res.selection)
   out.layout = compositeLayout(spec, {
     align: 'each',
     columns: kind === 'vconcat' ? 1 : columns,
@@ -1814,9 +1881,11 @@ function compileRepeat(spec: VLSpec, ctx: CompileCtx): VLSpec {
   } else {
     for (const v of colFields) cells.push({ prefix: `child__${signalSafe(String(v))}_`, spec: substituteRepeat(child, { repeat: v }) as VLSpec })
   }
-  const grid = isGrid && rowFields.length > 0 && colFields.length > 0
-  const columns = grid ? colFields.length : !isGrid ? spec.columns : rowFields.length > 0 ? 1 : undefined
-  const layout: 'row' | 'column' | 'grid' = grid || (!isGrid && columns !== undefined) ? 'grid' : isGrid && rowFields.length > 0 ? 'column' : 'row'
+  // vega-lite normalizes a repeat to a concat with `columns` (the column count, or 1 for rows alone): a grid, so the children
+  // share both sizes (`childWidth`, `childHeight`) whatever their number
+  const columns = isGrid ? (rowFields.length > 0 && colFields.length === 0 ? 1 : colFields.length) : spec.columns
+  // (a column of rows alone keeps its own plan: vega-lite sizes those children by its row layout)
+  const layout: 'row' | 'column' | 'grid' = isGrid && rowFields.length > 0 && colFields.length === 0 ? 'column' : columns !== undefined ? 'grid' : 'row'
   const res = embedCells(cells, spec, ctx, layout)
   const out: Record<string, unknown> = {}
   if (spec.$schema) out.$schema = VEGA_SCHEMA
@@ -1825,6 +1894,7 @@ function compileRepeat(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (res.rootHeight !== undefined) out.height = res.rootHeight
   out.data = res.data
   if (res.signals.length) out.signals = res.signals
+  if (res.selection) SEL_PARTS.set(out, res.selection)
   out.layout = compositeLayout(spec, { align: 'all', columns })
   out.marks = res.marks
   out.scales = res.scales
@@ -2593,8 +2663,37 @@ interface CompileCtx extends TransformContext {
   selectionIds: boolean
   /** Lookups from a selection: the dataset (unit data filtered by the selection) each one reads, by param. */
   selectionLookups: Map<string, { name: string }>
+  /**
+   * Some unit of the spec declares a selection (after the parameters of compositions are pushed down). Every unit's marks then
+   * carry the `interactive` flag (vega-lite: the selections of a view are those of all its units, whichever one asks).
+   */
+  anySelection: boolean
   /** The unit whose pipeline is being built. */
   currentUnit?: VLSpec
+  /** vega-lite's `model.name` of the view being compiled ('' at the root): `concat_0`, `child`, `concat_1_child__column_a`. */
+  modelName: string
+  /** How many concat / facet / repeat views enclose the view being compiled (a unit inside one declares its signals in a group). */
+  compositeDepth: number
+  /** The facet channels around the view being compiled, outermost first: a unit's name carries its cell's (vega-lite `unitName`). */
+  facetFields: ReadonlyArray<{ channel: string; field: string }>
+}
+
+/** The name of a child view: its parent's, then its own (vega-lite `model.getName`, which joins with `_`). */
+const childModelName = (parent: string, own: string): string => (parent ? `${parent}_${own}` : own)
+
+/** Compile `child` as the view named `own` inside the one being compiled (a concat child, a facet's cell, a repeated view). */
+function inChildView<T>(ctx: CompileCtx, own: string, facetFields: ReadonlyArray<{ channel: string; field: string }>, composite: boolean, f: () => T): T {
+  const saved = { modelName: ctx.modelName, compositeDepth: ctx.compositeDepth, facetFields: ctx.facetFields }
+  ctx.modelName = childModelName(ctx.modelName, own)
+  if (composite) ctx.compositeDepth++
+  ctx.facetFields = [...ctx.facetFields, ...facetFields]
+  try {
+    return f()
+  } finally {
+    ctx.modelName = saved.modelName
+    ctx.compositeDepth = saved.compositeDepth
+    ctx.facetFields = saved.facetFields
+  }
 }
 
 /** Every dataset name the user's spec declares or references (declared names are never renamed). */
@@ -2621,6 +2720,15 @@ function hashString(s: string): string {
   return (h >>> 0).toString(16).padStart(8, '0')
 }
 
+/** Whether any unit (or layer) in the spec tree declares a selection parameter. */
+function hasSelectionParams(node: unknown): boolean {
+  if (Array.isArray(node)) return node.some(hasSelectionParams)
+  if (!isObject(node)) return false
+  if (Array.isArray(node.params) && node.params.some((p) => isObject(p) && p.select !== undefined)) return true
+  for (const k of ['layer', 'hconcat', 'vconcat', 'concat']) if (hasSelectionParams(node[k])) return true
+  return isObject(node.spec) && hasSelectionParams(node.spec)
+}
+
 function makeCtx(top: VLSpec): CompileCtx {
   const lookups = new Map<string, Record<string, unknown>>()
   const datasets = isObject(top.datasets) ? (top.datasets as Record<string, unknown>) : {}
@@ -2638,6 +2746,10 @@ function makeCtx(top: VLSpec): CompileCtx {
     datasets,
     selections: new Map(),
     selectionIds: false,
+    anySelection: hasSelectionParams(top),
+    modelName: '',
+    compositeDepth: 0,
+    facetFields: [],
     dn: (i) => `${dataPrefix}_${i}`,
     sn: (i) => `${sourcePrefix}_${i}`,
     fresh: (base) => {
@@ -5704,7 +5816,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
 
   // selections: parsed first, since the data pipeline, the mark encodings and the scales all depend on them
   SPEC_CTX.set(spec, ctx)
-  const unitSel = prepareUnitSelections(spec, fields, mark, ctx, { unitName: '', scaleName: (c) => c })
+  const unitSel = prepareUnitSelections(spec, fields, mark, ctx, { unitName: ctx.modelName, scaleName: (c) => c })
   const domainSel = collectDomainParams(spec, fields, ctx)
   if (unitSel?.pointer && !(isObject(markRaw) && markRaw.cursor !== undefined)) {
     spec.mark = { ...(isObject(markRaw) ? markRaw : { type: markRaw }), cursor: 'pointer' }
@@ -5758,7 +5870,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   applyDomainUnion(fields, out.scales as ScaleSpec[])
   if (domainSel) domainSel.scales = out.scales as ScaleSpec[]
   const clipped = applyScaleExtents(domainSel, out.scales as ScaleSpec[], (c) => c, ctx)
-  if (unitSel || clipped) flagSelectionMarks(builtMarks, unitSel !== undefined || ctx.selections.size > 0, unitSel !== undefined, clipped)
+  if (unitSel || clipped || ctx.anySelection) flagSelectionMarks(builtMarks, ctx.anySelection, unitSel !== undefined, clipped)
   // discrete-dimension sizing: the scale spans steps and the view size is a
   // signal over the domain cardinality
   const sizeSignals: Record<string, unknown>[] = []
@@ -5794,8 +5906,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const assembled = assembleUnitSelections(unitSel, out.marks as Record<string, unknown>[], new Set())
   if (assembled.out) {
     out.marks = assembled.marks
-    out.data = [...assembled.out.data, ...(out.data as Record<string, unknown>[])]
-    SELECTION_SIGNALS.set(out, { top: assembled.out.topSignals, unit: assembled.out.unitSignals })
+    SEL_PARTS.set(out, { data: assembled.out.data, top: assembled.out.topSignals, unit: assembled.out.unitSignals })
   }
   rootChrome(out, spec)
   return out
@@ -5956,6 +6067,8 @@ function prepareUnitSelections(
       return typeof v === 'number' ? v : undefined
     },
     sizeSignal: (layout) => layout,
+    nested: ctx.compositeDepth > 0,
+    ...(ctx.facetFields.length ? { facetFields: ctx.facetFields } : {}),
     mark,
     firstMarkName: varName((opts.unitName ? `${opts.unitName}_` : '') + 'marks'),
     bindScale: (channel, extent) => { extents.set(channel, extent) },
@@ -5968,10 +6081,9 @@ function prepareUnitSelections(
     },
   }
   const cmpts = parseUnitSelections(unit, params, spec.config)
-  for (const c of Object.values(cmpts)) {
-    if (ctx.selections.has(c.name)) throw new VLCompileError(`parameter "${c.name}" is declared more than once`)
-    ctx.selections.set(c.name, c)
-  }
+  // (a parameter is declared once, and pushed to every unit of a composition or repeated with its view: the last wins, as
+  // in vega-lite's concat model, where the selection components of the children are merged by name)
+  for (const c of Object.values(cmpts)) ctx.selections.set(c.name, c)
   if (requiresSelectionId(cmpts)) ctx.selectionIds = true
   const unitSel: UnitSel = {
     cmpts,
@@ -6143,8 +6255,37 @@ function applyLegendSelections(lg: Record<string, unknown>, def: FieldDef, names
   lg.encode = out
 }
 
-/** The signals the selections of a compiled view add, gathered by compile() into the root's signal list. */
-const SELECTION_SIGNALS = new WeakMap<object, { top: (signals: Record<string, unknown>[]) => Record<string, unknown>[]; unit: Record<string, unknown>[] }>()
+/**
+ * What the selections of a compiled view add outside its own marks. The root (compile()) puts the store datasets in front of
+ * the data and the top-level signals among the view's; a unit's own signals go to the root too, unless the unit sits in a
+ * concat, facet or repeat view: then the group mark that holds it declares them (a Vega group scope, one copy per group item).
+ */
+interface SelParts {
+  /** the store datasets, in vega-lite's order (a later view's go in front of an earlier one's) */
+  data: Record<string, unknown>[]
+  /** the top-level signals, assembled over the ones before them */
+  top: (signals: Record<string, unknown>[]) => Record<string, unknown>[]
+  /** the units' own signals; a composition has none (its units' are in their groups) */
+  unit: Record<string, unknown>[]
+}
+const SEL_PARTS = new WeakMap<object, SelParts>()
+
+/**
+ * The marks the selections add (brush, voronoi): vega-lite names them after the selection, not after the view that holds them
+ * and they are no data mark of the view. The flag is an own symbol property, so a copy of the mark (a spread) keeps it.
+ */
+const SELECTION_MARK = Symbol('aster.vl.selectionMark')
+const isSelectionMark = (m: Record<string, unknown>): boolean => (m as Record<symbol, unknown>)[SELECTION_MARK] === true
+
+/** The selection parts of several views laid side by side (concat, repeat): each one's stores go in front of the ones before. */
+function mergeSelParts(parts: SelParts[]): SelParts | undefined {
+  if (parts.length === 0) return undefined
+  // each view passes over the data the views before it left: a store another view declared is not declared again
+  const seen = new Set<string>()
+  const groups = parts.map((part) => part.data.filter((d) => (seen.has(d.name as string) ? false : (seen.add(d.name as string), true))))
+  const data = groups.reverse().flat()
+  return { data, top: (signals) => parts.reduce((sg, part) => part.top(sg), signals), unit: [] }
+}
 
 /** Interactive legends (legends.ts parseInteractiveLegend + legend/encode.ts): a legend over a field a selection is bound to. */
 function applyLegendSelectionsOf(legends: Record<string, unknown>[], fields: FieldDef[], cmpts: Record<string, SelCmpt>): void {
@@ -6174,5 +6315,13 @@ function assembleUnitSelections(sel: UnitSel | undefined, marks: Record<string, 
     topSignals: (signals) => assembleTopLevelSelectionSignals(sel.cmpts, signals),
     unitSignals: assembleUnitSelectionSignals(sel.unit, sel.cmpts),
   }
-  return { marks: assembleUnitSelectionMarks(sel.unit, sel.cmpts, marks), out }
+  return { marks: assembleSelectionMarks(sel.unit, sel.cmpts, marks), out }
+}
+
+/** The unit's brush / voronoi marks around its own, noted as the selections' (they keep the selection's name when a view is embedded). */
+function assembleSelectionMarks(unit: SelUnit, cmpts: Record<string, SelCmpt>, marks: Record<string, unknown>[]): Record<string, unknown>[] {
+  const own = new Set(marks)
+  const out = assembleUnitSelectionMarks(unit, cmpts, marks)
+  for (const m of out) if (!own.has(m)) (m as Record<symbol, unknown>)[SELECTION_MARK] = true
+  return out
 }
