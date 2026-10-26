@@ -132,17 +132,48 @@ What works, and how it differs from Vega, precisely:
 - The state is the one Vega computes for the same input; `pnpm conformance:selections` drives the same native
   mouse, wheel and form-control input through vega-lite + Vega and through `@aster/vl` + `<Chart>` and compares every
   signal, every store and the SVG after each step (point click, shift-toggle, hover, `nearest`, brush, move, wheel
-  zoom, legend click, `select` / `radio` / `range` / `checkbox` bindings, `bind: "scales"`, layered filters and lookups).
+  zoom, legend click, `select` / `radio` / `range` / `checkbox` bindings, `bind: "scales"`, layered filters and lookups, and
+  across concat, facet and repeat views: a brush filtering another view, a point selection linking two, a selection
+  declared on the composition, a brush or a point per facet cell, bound scales shared by cells, a legend binding).
 - A scale event (`{scale: "x"}`, which an unbound interval selection listens to so that its brush follows its
   scale) fires when the chart is bound to a scene whose scale differs from the previous one's.
-- **Deviation:** a signal write is a fresh render ([Signals](#signals)). Vega keeps an axis's tick items across a
-  pan and appends the ones that come into view; Aster draws them in scale order. The same ticks are drawn; only
-  their paint order differs, and the autosize of a view whose axis labels change width is recomputed (set
-  `autosize: "none"` for a pan/zoom chart whose plot must not move).
+- **Deviation:** a signal write is a fresh render ([Signals](#signals)): after it Aster draws what a new chart with those
+  signal and store values draws, where Vega keeps the autosize, padding and axis-tick order it first computed. The
+  conformance gate holds this exactly and with no tolerance: a step passes when Aster equals Vega's retained render, or
+  when it equals the render of a NEW Vega view initialised with the same signals and stores (and Vega's own retained
+  render differs); those steps are counted against a ceiling (`--max-retained`, like `sweep-signals`). Set
+  `autosize: "none"` for a pan/zoom chart whose plot must not move.
 - **Deviation:** `modify(name, ..., tuple)` / `remove` compare a tuple read back from `data()` by value (the evaluation
   does not hand out its input rows), where Vega compares tuple identity.
-- Selections inside concat, facet and repeat views are refused by the compiler (their signals are scoped to a Vega
-  group, which the event loop does not scope); see packages/vl/README.md.
+- **Selections in concat, facet and repeat views** (linked brushing, a brush per facet cell, a selection declared on the
+  composition and given to every unit below it) work as in Vega: a unit's signals belong to its group mark, a Vega group
+  scope with one copy per view or cell. The event loop scopes them the way Vega does (see [Group scopes](#group-scopes)).
+  What it refuses is what vega-lite compiles to a Vega spec Vega rejects (a selection on a layer spec itself, or on a
+  composition with a layer below it): see packages/vl/README.md.
+
+### Group scopes
+
+A group mark's `signals` (`SceneGroup.scopeSignals` on each group item of the scene) are a scope: each item has its own
+copy, a facet cell's by its partition. The loop keeps the values events write under `<scope id>:<name>` in the signal
+store (`onSignal` reports that key; the scope id is the group mark's name and place in the spec, plus the partition's
+key), and hands them back to the next evaluation, which starts the scope's signals from them. What follows is Vega's own
+and is checked against it (`pnpm conformance:signals`, the group-scope cases):
+
+- a scope's signals shadow the enclosing scope's; `push: "outer"` makes a handler write the enclosing scope's signal;
+- a selector string defaults to the `scope` source (`inScope(event.item)`: events whose item is in the scope's group);
+  a group with no mark, axis, legend or title has no scope group, so `inScope` is false for every item;
+- a scope's streams are the ones of the nearest enclosing scope that already listens to the same `source:type` (the
+  view's, so a view-level handler and a scope's run in one dataflow run, the view's first), else its own; sibling
+  scopes each have their own, and each stream is one DOM listener delivering as one dataflow run, in the order the
+  streams were made. What an event changed is told to the host once, after all of them have run;
+- `group()`, `group("cell")`, `x(group())`... resolve to the scope's group items; a picked group item that has a fill or
+  a stroke (a facet cell, a nested view) is an event item where no mark inside is hit (never a data mark: tooltips and
+  `onClick` do not see it); a facet cell's datum is a tuple that carries the partition's `count`, like Vega's facet
+  aggregate;
+- `scale()` in a scope's handlers sees the scales its group (and the groups around it) declare.
+
+**Deviation:** Vega swallows the first firing of a `{signal}` handler that a scope declares on a signal of an enclosing
+scope that never pulsed before (an internal flag of its operator); Aster fires it. No Vega-Lite output relies on it.
 
 ## Pan and zoom
 

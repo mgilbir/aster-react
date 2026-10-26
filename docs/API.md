@@ -301,6 +301,9 @@ focusable elements; non-React hosts can do the same. The keyboard contract is in
     `panLog` / `panPow` / `panSymlog`, `zoomLinear` / `zoomLog` / `zoomPow` / `zoomSymlog` are part of the expression
     language (vega-selections 6.1.4, vega-functions, vega-util); `{scale}` event sources fire when a scale changed
     between two bindings.
+  - Group scopes: a group mark's `signals` (`SceneGroup.scopeSignals`) are read and written per group item; `onSignal` and
+    `setSignal` name them `<scope id>:<name>` (the id is `scopeSignals.id`), and the store holds them under that key:
+    see [INTERACTION.md](INTERACTION.md#group-scopes).
   - `hooks.logger` — where bind-time errors (a malformed selector or expression: the handler is skipped) and run-time errors
     (an expression that throws while an event is handled: that event's delivery stops, earlier updates stand) are reported;
     default: the console. Nothing escapes the DOM listener.
