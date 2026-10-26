@@ -139,17 +139,16 @@ Axes, legends and titles are built by ports of vega-parser's guide encoders: eve
 and legend entry is Vega's own encode, so the items carry what Vega's carry, and the document says what Vega's says
 (about 9% more bytes for a chart with a thousand ticks). The marks of a guide are planned once per compiled chart (the
 defaults from `config.style`, which channels are plain values, which depend on the datum, a tick position as a closure
-over its scale); each evaluation then runs only the channels that read the datum. Measured as CPU time of batches of evaluations of one compiled chart, seven runs alternating the tree before this work
-and this tree on a loaded machine (best batch of each run, ratios branch / before): a chart with 1,000 band ticks and
-1,000 grid lines evaluates in 2.0 ms where it took 1.7 ms (1.20x; it was 1.67x before the ticks and the grid lines were made
-from one template per evaluation), a 10,000-point line chart with ten ticks per axis is unchanged (0.98x), the small
-guide-heavy corpus charts (two axes and a legend, about 50 items) evaluate 1.08x to 1.37x (0.15 to 0.21 ms, at most 0.04 ms
-more) and their SVG serialization 1.03x to 1.18x. The first evaluation of a freshly compiled chart also builds the marks of
-its guides (they are kept per compiled chart): `renderSpec` of the small charts is 1.3x to 1.5x, about 0.08 ms. What is left
-per tick or grid line is a copy of the template (eight channels), one scale call and one store, about 0.2 us against 0.15 us
-for the leaves the guides used to build by hand. The remainder of the 1,000-tick chart is not in the guides' code: with the axes
-off the two trees evaluate the same chart in the same time, and with them the marks of the chart take longer too.
-`pnpm bench:incremental` (append, replace, DOM patch) is unchanged within noise.
+over its scale); each evaluation then runs only the channels that read the datum. Measured as CPU time of batches of evaluations of one compiled chart, the tree before this work and this tree running at the
+same time on two idle pinned cores, ten runs (best batch of each run, ratios branch / before; the machine is shared, so medians
+vary by 10 to 40% between runs and the best-of is the stable figure): a chart with 1,000 band ticks and 1,000 grid lines
+evaluates 1.10x (it was 1.67x before the guide marks were planned and the leaves built by one constructor per kind), a 10,000-point
+line chart 1.02x, the small guide-heavy corpus charts (two axes and a legend, about 50 items) 1.00x to 1.17x, and their SVG
+serialization 1.03x to 1.16x (the document is 7% larger). A first render (`renderSpec` of a spec nothing has compiled) is 1.11x to
+1.29x, about 0.04 to 0.1 ms: the marks of the guides are built and planned for each new chart. In Chromium (`bench:browser`, 1,000
+bars, three alternating runs on a quiet machine) the `<Chart>` mount, update and resize medians are within 0% to 4% of the tree
+before this work, except the update of the canvas-capable `aster` variant (8.3 to 10.2 ms). `pnpm bench:incremental` is unchanged
+within noise.
 
 ## Bundle sizes
 
