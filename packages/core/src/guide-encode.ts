@@ -14,6 +14,7 @@
  * they reach vega's, and the renderers and the bounds treat the item as they treat any mark's.
  */
 import type { EncodeValue, SceneGroup, SceneItem } from './types.js'
+import { lerp } from './util.js'
 
 export type Row = Record<string, unknown>
 type Rec = Record<string, unknown>
@@ -227,49 +228,121 @@ function isPlainValue(e: object): boolean {
  * for the one shape that a guide with a thousand items evaluates a thousand times. Anything else (a signal in a part, a
  * `mult`, a field path) takes the generic evaluator.
  */
-function compileScaleEntry(e: object, host: EntryHost): ((datum: Row) => unknown) | undefined {
+type Fast = (datum: Row) => unknown
+/** What an entry's shape was analysed to once: made into a closure for an evaluation (its scales) by calling it with the host. */
+type Binder = (host: EntryHost) => Fast | undefined
+
+const PLAIN_NAME = /^[A-Za-z_$][\w$]*$/
+
+/**
+ * The shapes the guides evaluate per datum, analysed once per entry and bound to an evaluation's scales: a bare field
+ * (a label's text), `{scale, field, band, extra, offset, round}` (a tick's position, vega-parser's entry.js: `scale(field) [+
+ * bandwidth * band] [+ offset]`, rounded) and the shapes of `analyseEntry`. Any other shape is `undefined`.
+ */
+function analyseScaleEntry(e: object): Binder | undefined {
   if (isArr(e)) return undefined
   // a bare field of the datum (a label's text): `datum[field]`
   const ks = Object.keys(e)
-  if (ks.length === 1 && ks[0] === 'field' && typeof (e as Rec).field === 'string' && /^[A-Za-z_$][\w$]*$/.test((e as Rec).field as string)) {
+  if (ks.length === 1 && ks[0] === 'field' && typeof (e as Rec).field === 'string' && PLAIN_NAME.test((e as Rec).field as string)) {
     const f = (e as Rec).field as string
-    return (datum) => datum[f]
+    const fast: Fast = (datum) => datum[f]
+    return () => fast
   }
-  if (host.entryScale === undefined) return undefined
   const { scale, field, band, extra, offset, round } = e as Rec
-  for (const k of Object.keys(e)) if (k !== 'scale' && k !== 'field' && k !== 'band' && k !== 'extra' && k !== 'offset' && k !== 'round') return undefined
+  for (const k of ks) if (k !== 'scale' && k !== 'field' && k !== 'band' && k !== 'extra' && k !== 'offset' && k !== 'round') return undefined
   const plain = (v: unknown): boolean => v === null || v === undefined || typeof v !== 'object'
-  if (typeof scale !== 'string' || typeof field !== 'string' || !/^[A-Za-z_$][\w$]*$/.test(field)) return undefined
+  if (typeof scale !== 'string' || typeof field !== 'string' || !PLAIN_NAME.test(field)) return undefined
   if (!plain(band) || !plain(extra) || !plain(offset) || !plain(round)) return undefined
-  const bound = host.entryScale(scale)
-  if (bound === undefined) return () => undefined
   const hasBand = !!band
   const factor = band === true ? 1 : +(band as number)
   const bare = offset == null && !round
-  const fn = bound.fn
-  const timeLike = bound.timeLike
-  // (the bandwidth of a scale is the same for every datum of an evaluation)
-  const term = hasBand ? (factor === 1 ? bound.bandwidth() : bound.bandwidth() * factor) : 0
-  const scaled = (raw: unknown): number => (raw === undefined || (timeLike && typeof raw === 'string') ? bound.call(raw) : fn(raw)) as number
-  if (!hasBand && bare) return (datum) => scaled(datum[field])
-  if (hasBand && !extra && bare) return (datum) => scaled(datum[field]) + term
-  return (datum) => {
-    let head = scaled(datum[field])
-    let tail: number | undefined
-    if (hasBand) {
-      if (extra) {
-        const x = (datum as { extra?: { value?: unknown } }).extra
-        head = x ? (bound.call(x.value) as number) : head + term
-      } else {
-        tail = term
+  return (host) => {
+    if (host.entryScale === undefined) return undefined
+    const bound = host.entryScale(scale)
+    if (bound === undefined) return () => undefined
+    const fn = bound.fn
+    const timeLike = bound.timeLike
+    // (the bandwidth of a scale is the same for every datum of an evaluation)
+    const term = hasBand ? (factor === 1 ? bound.bandwidth() : bound.bandwidth() * factor) : 0
+    const scaled = (raw: unknown): number => (raw === undefined || (timeLike && typeof raw === 'string') ? bound.call(raw) : fn(raw)) as number
+    if (!hasBand && bare) return (datum) => scaled(datum[field])
+    if (hasBand && !extra && bare) return (datum) => scaled(datum[field]) + term
+    return (datum) => {
+      let head = scaled(datum[field])
+      let tail: number | undefined
+      if (hasBand) {
+        if (extra) {
+          const x = (datum as { extra?: { value?: unknown } }).extra
+          head = x ? (bound.call(x.value) as number) : head + term
+        } else {
+          tail = term
+        }
       }
+      if (bare) return tail !== undefined ? head + tail : head
+      let result = tail !== undefined ? head + tail : head
+      if (offset != null) result = result + (offset as number)
+      if (round) result = Math.round(result)
+      return result
     }
-    if (bare) return tail !== undefined ? head + tail : head
-    let result = tail !== undefined ? head + tail : head
-    if (offset != null) result = result + (offset as number)
-    if (round) result = Math.round(result)
-    return result
   }
+}
+
+/**
+ * The entries a guide is made of, written out as closures: `{value}`, `{scale, range}`, either with `mult` and `offset`
+ * (which may themselves be such entries): vega-parser's entry.js for those shapes, `value | lerp(range(scale), range)`, times
+ * `mult`, plus `offset`, rounded. These are the whole of what a default axis or legend evaluates, so the engine's generic
+ * entry evaluator (which the marks' own channels run through) is not called for them at all. Another shape is `undefined`
+ * here, and goes to the generic evaluator.
+ */
+function analyseEntry(e: unknown): Binder | undefined {
+  if (e === null || typeof e !== 'object' || isArr(e)) return undefined
+  const { value, scale, range, mult, offset, round } = e as Rec
+  for (const k of Object.keys(e)) if (k !== 'value' && k !== 'scale' && k !== 'range' && k !== 'mult' && k !== 'offset' && k !== 'round') return undefined
+  const prop = (v: unknown): Binder | number | string | boolean | null | undefined | false => {
+    if (v === null || v === undefined || typeof v !== 'object') return v as number | undefined | null
+    return analyseEntry(v) ?? false
+  }
+  const m = prop(mult)
+  const o = prop(offset)
+  if (m === false || o === false) return undefined
+  if (scale !== undefined) {
+    if (typeof scale !== 'string' || range === undefined || value !== undefined) return undefined
+  } else if (value === undefined || (value !== null && typeof value === 'object')) {
+    return undefined
+  }
+  const r = +(range as number)
+  const rd = !!round
+  const mb = typeof m === 'function' ? m : undefined
+  const ob = typeof o === 'function' ? o : undefined
+  return (host) => {
+    let head: Fast
+    if (scale !== undefined) {
+      const sc = host.scale(scale as string)
+      if (!sc) return () => undefined
+      head = () => lerp(sc.range() as number[], r)
+    } else {
+      head = () => value
+    }
+    if (m === undefined && o === undefined && !rd) return head
+    const mc = mb !== undefined ? mb(host) : undefined
+    const oc = ob !== undefined ? ob(host) : undefined
+    return (d) => {
+      let result = head(d) as number
+      if (m != null) result = result * ((mc !== undefined ? mc(d) : m) as number)
+      if (o != null) result = result + ((oc !== undefined ? oc(d) : o) as number)
+      if (rd) result = Math.round(result)
+      return result
+    }
+  }
+}
+
+/** The closure for a step's entry in an evaluation, if it has one of the written-out shapes (analysed once, kept on the step). */
+function fastOf(st: Step, host: EntryHost): Fast | null {
+  if (st.fastHost === host) return st.fast ?? null
+  if (st.binder === undefined) st.binder = (analyseScaleEntry(st.entry as object) ?? analyseEntry(st.entry)) ?? null
+  st.fast = st.binder !== null ? st.binder(host) ?? null : null
+  st.fastHost = host
+  return st.fast
 }
 
 /** One channel of a block, classified once per mark: a plain value, a transcribed function, or an encode entry. */
@@ -282,10 +355,12 @@ interface Step {
   /** 0 constant, 1 function, 2 encode entry, 3 an entry that does not depend on the datum (evaluated once) */
   kind: 0 | 1 | 2 | 3 | 4
   cached?: boolean
-  /** the entry written out for its shape (see compileScaleEntry), made with the first item; `null` when it has none */
+  /** the entry written out for its shape (see analyseScaleEntry), made with the first item; `null` when it has none */
   fast?: ((datum: Row) => unknown) | null
   /** the evaluation `fast` was made for (it holds that evaluation's scale) */
   fastHost?: EntryHost
+  /** the entry's shape, analysed once (`null`: it has none of the written-out shapes) */
+  binder?: Binder | null
   /** a per-run entry: its value, and the evaluation it was made in */
   runHost?: EntryHost
 }
@@ -303,7 +378,7 @@ function isStaticEntry(e: object): boolean {
 
 /** A step with every field set, in one order: all steps share one shape. */
 const step = (key: string, kind: Step['kind'], fn?: EntryFn, entry?: EncodeValue | EncodeValue[], v?: unknown): Step =>
-  ({ key, fn, entry, v, kind, cached: false, fast: undefined, fastHost: undefined, runHost: undefined })
+  ({ key, fn, entry, v, kind, cached: false, fast: undefined, fastHost: undefined, binder: undefined, runHost: undefined })
 
 function stepsOf(block: Block, done?: Block): Step[] {
   const steps: Step[] = []
@@ -356,8 +431,8 @@ function runSteps(steps: Step[], scope: EntryScope): void {
         if (st.kind === 1 || st.kind === 4) {
           v = st.fn!(scope)
         } else {
-          if (st.fast === undefined || st.fastHost !== host) { st.fast = st.kind === 2 ? compileScaleEntry(st.entry as object, host) ?? null : null; st.fastHost = host }
-          v = st.fast !== null ? st.fast(datum) : host.entry(st.entry!, datum)
+          const fast = fastOf(st, host)
+          v = fast !== null ? fast(datum) : host.entry(st.entry!, datum)
         }
       } catch (err) {
         host.report(err)
@@ -466,7 +541,8 @@ export function encodeItems(def: GuideMarkDef, rows: Row[], group: Rec, host: En
         // (the same for every datum: evaluated once, for the evaluation or for good, as the steps do for the first item)
         if (st.kind === 3 ? st.cached !== true : st.runHost !== host) {
           try {
-            const v = st.kind === 4 ? st.fn!(first) : host.entry(st.entry!, rows[0]!)
+            const sf = st.kind === 3 ? fastOf(st, host) : null
+            const v = st.kind === 4 ? st.fn!(first) : sf !== null ? sf(rows[0]!) : host.entry(st.entry!, rows[0]!)
             st.v = v
             if (st.kind === 4) st.runHost = host
             else st.cached = true
@@ -477,8 +553,8 @@ export function encodeItems(def: GuideMarkDef, rows: Row[], group: Rec, host: En
         }
         tmpl[st.key] = st.v
       } else {
-        if (st.fast === undefined || st.fastHost !== host) { st.fast = compileScaleEntry(st.entry as object, host) ?? null; st.fastHost = host }
-        per.push({ key: st.key, fast: st.fast ?? ((d) => host.entry(st.entry!, d)) })
+        const pf = fastOf(st, host)
+        per.push({ key: st.key, fast: pf ?? ((d) => host.entry(st.entry!, d)) })
       }
     }
   }

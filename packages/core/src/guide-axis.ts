@@ -489,12 +489,12 @@ export function buildAxis(inp: AxisBuildInput): AxisBuilt {
     if (!mb && (part === 'tick' || part === 'label' || part === 'title')) {
       mb = new Bounds()
       const scratch = new Bounds()
-      for (const it of items) mb.union(boundLeaf(scratch.clear(), it))
+      for (let i = 0; i < items.length; i++) mb.union(boundLeaf(scratch.clear(), items[i]!))
     }
     if (mb) markBounds.set(part, mb)
     partMeta[part] = { name: def.name, interactive: def.interactive }
-    if (part === 'title') for (const it of items) titleItems.push(it)
-    for (const it of items) leaves.push(it)
+    if (part === 'title') for (let i = 0; i < items.length; i++) titleItems.push(items[i]!)
+    for (let i = 0; i < items.length; i++) leaves.push(items[i]!)
   }
   partMeta.axis = { name: inp.encode.axis?.name == null || !inp.encode.axis.name ? undefined : String(inp.encode.axis.name), interactive: !!inp.encode.axis?.interactive }
 
@@ -574,7 +574,8 @@ export function buildAxis(inp: AxisBuildInput): AxisBuilt {
   const gx = (group.x as number) || 0
   const gy = (group.y as number) || 0
   if (gx || gy) {
-    for (const it of leaves) {
+    for (let i = 0; i < leaves.length; i++) {
+      const it = leaves[i]!
       const r = it as Rec
       // (vega draws an item at `item.x || 0` inside the group: a NaN position is the group's origin)
       r.x = ((r.x as number) || 0) + gx
