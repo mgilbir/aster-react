@@ -59,9 +59,10 @@ forEachVariant(['svg'], (Chart, variant) => {
       act(() => { vi.advanceTimersByTime(250) })
       expect(onSignal).toHaveBeenCalledTimes(2)
       const svg = container.querySelector('svg')!
+      const host = svg.parentElement!
       act(() => { root.unmount() })
-      // a host that keeps the svg around (and in the document) is not what stops the timer: unmount releases it
-      document.body.appendChild(svg)
+      // a host that keeps the svg (and the element the timers belong to) in the document is not what stops the timer: unmount releases it
+      document.body.appendChild(host)
       onSignal.mockClear()
       act(() => { vi.advanceTimersByTime(50) }) // d3-timer's already requested frame runs once and finds nothing
       expect(vi.getTimerCount()).toBe(0)
