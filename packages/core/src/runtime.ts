@@ -44,7 +44,7 @@ import { hash53 } from './svg-defs.js'
 import { tickFormat, scaleFraction, scaleGradientStops, tickValues, tickCount, isContinuous, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, maxOf, pushAll } from './util.js'
+import { dict, ownGet, maxOf, pushAll, scopedSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, type PulseChange } from './pulse.js'
@@ -327,6 +327,8 @@ interface EvalContext {
   signalParams: Record<string, unknown>
   width: number
   height: number
+  /** The id of the enclosing signal scope (see `SceneGroup.scopeSignals`), '' at the root. */
+  scopeId?: string
   /** Position of the enclosing facet group, for `{field: {group: 'x' | 'y'}}` references. */
   groupX?: number
   groupY?: number
@@ -407,6 +409,8 @@ interface EvalContext {
   encodeAborted?: boolean
   /** Datasets whose transform pipeline failed: nothing downstream of them is built. */
   failedDatasets?: Set<string>
+  /** The items of the named marks built so far (a mark may read another mark's items as its data: `from: {data: <mark name>}`). */
+  markItems: Map<string, SceneItem[]>
 }
 
 /**
@@ -490,17 +494,19 @@ function prepareChartCtx(
     },
   }
 
+  const transformProjections = new ProjectionRegistry()
+  const transformHierarchies = new Map<string, unknown>()
   const defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }> = []
   // Inputs besides the signals that change what a reused scale/item would be.
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}`
   const ctx: EvalContext = {
-    chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new ProjectionRegistry(), projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
+    chart, signalParams, width, height, datasets, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
       ...(explicitSize.width ? ['width'] : []), ...(explicitSize.height ? ['height'] : []),
     ]),
-    hierarchies: new Map(), affected: new Set(), incremental: false, deadline, checkDeadline,
+    hierarchies: transformHierarchies, affected: new Set(), incremental: false, deadline, checkDeadline, markItems: new Map(),
     datasetPulses: new Map(),
     prev: txn.prev, draft: newState(txn.gen), gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
@@ -511,6 +517,16 @@ function prepareChartCtx(
     // url (tracking pixel, IP leak). Hosts rendering foreign specs must opt in.
     urlPolicy: input.urlPolicy ?? (input.limits ? {} : undefined),
     logger: input.logger ?? consoleLogger,
+  }
+  // The event loop shows a dataset it modified through its transform pipeline, before the next evaluation
+  // computes it (the rows of a modified selection store, sorted by its `collect`, for example).
+  // (It must not close over `ctx`: that reaches the previous evaluation's state, and a scene would keep every
+  // scene before it alive.)
+  runtime.transformed = (name, raw) => {
+    const d = chart.data.find((x) => x.name === name)
+    const rows = d?.values != null ? readData(raw as never, d.format) : (raw as Row[]).map((r) => ({ ...r }))
+    if (!d?.transform.length) return rows
+    return applyTransforms(rows, d.transform, { runtime, signals: signalParams, hierarchies: transformHierarchies, projections: transformProjections }, name)
   }
   // A legend whose tickCount is an interval string on a non-time scale makes
   // vega's LegendEntries throw: the dataflow logs the error and the ViewLayout
@@ -773,6 +789,9 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
     const expr = def.update ?? (initPending ? def.init : undefined)
     if (!expr) continue
     if (staticOnly && DATA_DEPENDENT_EXPR.test(expr)) continue
+    // an `init` that reads scales (a selection's initial brush: `[scale("x", 2), scale("x", 4)]`) runs once the scales exist:
+    // before that `scale()` of a missing scale is `undefined`, which would be taken for the initial value
+    if (initPending && SCALE_FN_EXPR.test(expr) && !ctx.chart.scales.every((sc) => ctx.scales.has(sc.name))) continue
     try {
       const value = ctx.runtime.expr(expr)(undefined, ctx.signalParams)
       // An `init` that reads a scale or a dataset is only settled once they exist: until the scales are built,
@@ -923,6 +942,16 @@ function buildAxisAndLegend(
         g.legendScale = g.legendChannels.map((k) => String((legend as Record<string, unknown>)[k]))[0]
         g.legendFormat = guideString(ctx, (legend as Record<string, unknown>).format)
         g.legendFormatType = guideString(ctx, (legend as Record<string, unknown>).formatType)
+        // the names the spec gave the legend's parts (`encode.symbols.name`...): vega puts them on the marks as classes
+        const partNames: Record<string, string> = {}
+        for (const part of ['title', 'labels', 'symbols', 'gradient', 'entries']) {
+          const name = legend.encode?.[part]?.name
+          if (typeof name === 'string' && name !== '') partNames[part] = name
+        }
+        if (Object.keys(partNames).length) (g as { partNames?: Record<string, string> }).partNames = partNames
+        const partInteractive: Record<string, boolean> = {}
+        for (const part of ['title', 'labels', 'symbols', 'gradient', 'entries']) if (legend.encode?.[part]?.interactive === true) partInteractive[part] = true
+        if (Object.keys(partInteractive).length) (g as { partInteractive?: Record<string, boolean> }).partInteractive = partInteractive
         // (the legend type is the kind of legend the builder drew: gradient, discrete bands or symbols)
       }
       return { legend, group }
@@ -1232,7 +1261,7 @@ function walkStrings(
 /** Expression functions that read scales. */
 const SCALE_FN_EXPR = /\b(scale|bandwidth|bandspace|invert|domain|range|copy|gradient)\s*\(/
 /** Expression functions that read datasets. */
-const DATA_FN_EXPR = /\b(data|indata)\s*\(/
+const DATA_FN_EXPR = /\b(data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(/
 
 /** What a dataset's pipeline reads besides its `source`. */
 interface DatasetDeps { names: Set<string>; allData: boolean }
@@ -1292,6 +1321,13 @@ function markDepsOf(mark: CompiledMark, chart: CompiledChart): MarkDeps {
   if (deps) return deps
   const known = new Set(chart.data.map((d) => d.name))
   const out: MarkDeps = { names: new Set(), allData: false, scales: new Set(), allScales: false }
+  // a mark reading another mark's items (`from: {data: <mark name>}`) depends on whatever that mark depends on
+  const readsMarkItems = (m: CompiledMark): boolean => {
+    const from = m.from?.data
+    if ((typeof from === 'string' && !known.has(from)) || (m.marks ?? []).some(readsMarkItems)) return true
+    return false
+  }
+  if (readsMarkItems(mark)) out.allData = true
   walkStrings(mark, (str, owner) => {
     if (known.has(str)) out.names.add(str)
     if (DATA_FN_EXPR.test(str)) out.allData = true
@@ -1675,10 +1711,10 @@ function buildTitleGroup(
   // axis-internal frame; our scene bakes the 0.5px axis delta into the leaves
   // — shift it out). The title unions in afterwards, as in vega's layoutGroup.
   const b = new Bounds().set(0, 0, width, height)
-  for (const g of items as SceneGroup[]) {
-    if (g.role === 'title') continue
-    b.union(measureGuideGroup(g))
-  }
+  const measured = (items as SceneGroup[]).filter((g) => g.role !== 'title')
+  // (a clipped mark -- an interval selection's brush -- has its bounds cut to the frame: Bound's boundClip)
+  if (hasClippedMark(measured)) eachMarkBounds(measured, width, height, (n) => measureGuideGroup(n as SceneGroup), (mb) => { b.union(mb) })
+  else for (const g of measured) b.union(measureGuideGroup(g))
   const vb = { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
 
   // anchor position: frame=content maps over the viewBounds; frame=group over
@@ -3301,6 +3337,17 @@ function evaluateMark(
   ctx: EvalContext,
   prevGroup?: SceneGroup | null,
 ): SceneGroup | SceneGroup[] | null {
+  const built = evaluateMarkItems(mark, ctx, prevGroup)
+  // a named mark's items are what a later mark of `from: {data: <name>}` reads
+  if (built && typeof mark.name === 'string' && mark.type !== 'group' && !Array.isArray(built)) ctx.markItems.set(mark.name, (built.items ?? []) as SceneItem[])
+  return built
+}
+
+function evaluateMarkItems(
+  mark: CompiledMark,
+  ctx: EvalContext,
+  prevGroup?: SceneGroup | null,
+): SceneGroup | SceneGroup[] | null {
   // a scale or an encode that threw stopped vega's run: the marks after it were never joined, so they are not in the scenegraph
   if (ctx.encodeAborted) return null
   if (mark.type === 'group') {
@@ -3316,17 +3363,20 @@ function evaluateMark(
   const addedItems: SceneItem[] = []
   let pendingUndo: ItemsUndo | undefined
   if (source) {
-    const rawRows = ctx.datasets.get(source) ?? []
+    // (a source that is no dataset but the name of a mark built before: that mark's items, shallow-copied as vega's tuples)
+    const rawRows = ctx.datasets.get(source) ?? ctx.markItems.get(source)?.map((it) => ({ ...(it as unknown as Row) })) ?? []
     // Only clone rows when the pipeline will re-encode them all (a mark-level
     // transform); the differential path reads the raw rows and clones
     // just the changed indices, so an unchanged row is never copied.
     let rows: Row[] = rawRows
     let rowsCloned = false
-    if (mark.transform?.length) {
+    // (a `voronoi` mark transform is vega's post-encoding kind: it runs on the encoded items, below)
+    const preTransforms = mark.transform?.filter((t) => t.type !== 'voronoi')
+    if (preTransforms?.length) {
       rows = rawRows.map((r) => ({ ...r }))
       rowsCloned = true
       try {
-        rows = applyTransforms(rows, mark.transform, {
+        rows = applyTransforms(rows, preTransforms, {
           runtime: ctx.runtime,
           signals: ctx.signalParams,
           hierarchies: ctx.hierarchies,
@@ -3449,6 +3499,19 @@ function evaluateMark(
     items = [res]
   }
 
+  // vega-parser mark.js: a mark's `transform`s that work on the encoded items (voronoi cells over the items'
+  // positions) run right after the encode: the items are the transform's tuples, so `datum.datum` is the source datum.
+  for (const t of mark.transform ?? []) {
+    if (t.type !== 'voronoi' || !source || items.length === 0) continue
+    try {
+      const cells = applyTransforms(items as unknown as Row[], [t], { runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections }, source)
+      const as = ((t as { as?: string }).as) ?? 'path'
+      items.forEach((it, i) => { (it as unknown as Row)[as] = (cells[i] as Row)[as] })
+    } catch (e) {
+      reportEvalError(ctx, e)
+    }
+  }
+
   // vega's SortItems: a mark `sort` orders the ENCODED items by their own
   // properties (`x`, `datum.t`, `datum["t"]`), after the encode and before the
   // bound pass; stable. A sort that throws is logged and the items stay in data order.
@@ -3538,6 +3601,12 @@ function evaluateMark(
 
   vetLinks(mark, items, ctx)
 
+  // An interactive mark's transparent items are still hit by the pointer: vega's live SVG draws them with
+  // `fill="transparent"`, which the string renderer (like ours) omits. `_hit` marks them for `pointer-events`.
+  if (mark.interactive !== false) {
+    for (const it of items) if ((it as { fill?: unknown }).fill === 'transparent') (it as unknown as Record<string, unknown>)._hit = true
+  }
+
   // Appended items extend the carried union bounds only now, after the mark
   // defaults above ran (they can change an item's stroke and so its bounds).
   const group: SceneGroup = {
@@ -3597,6 +3666,8 @@ interface GroupSource {
   datum: Row
   rows?: Row[]
   facetName?: string
+  /** Names this item among its mark's (the facet partition's key, a datum's index): the identity of its signal scope. */
+  key?: string
 }
 
 interface FacetDef {
@@ -3629,19 +3700,25 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
       if (g) g.push(r)
       else parts.set(k, [r])
     }
-    return [...parts.values()].map((g) => {
+    return [...parts.entries()].map(([partKey, g]) => {
       let datum: Row = {}
       accessors.forEach((acc, i) => { datum[((acc as { fname?: string }).fname) ?? keys[i]!] = acc(g[0]!) })
       const ag = facet.aggregate
       if (ag?.ops) {
         // a facet aggregate (vega-lite's stack_group_main): the group item's datum carries it
         datum = { ...datum, ...aggregateGroup(g, { type: 'aggregate', groupby: keys, fields: ag.fields, ops: ag.ops, as: ag.ops.map((op, i) => `${op}_${ag.fields[i]}`) } as never) }
+      } else if (ag === undefined) {
+        // no facet aggregate: vega's own (vega-parser marks/data.js: an `aggregate` over the groupby, whose default op is
+        // `count`) makes the group item's datum, so a cell's datum carries the partition's size
+        datum = { ...datum, count: g.length }
       }
-      return { datum, rows: g, facetName: facet.name }
+      // (the aggregate's output is a tuple: `isTuple(group().datum)`)
+      Object.defineProperty(datum, TUPLE_ID, { value: true, enumerable: false })
+      return { datum, rows: g, facetName: facet.name, key: partKey }
     })
   }
   const data = mark.from?.data
-  if (data) return (ctx.datasets.get(data) ?? []).map((row) => ({ datum: row }))
+  if (data) return (ctx.datasets.get(data) ?? []).map((row, i) => ({ datum: row, key: String(i) }))
   return [{ datum: {} }]
 }
 
@@ -3756,6 +3833,38 @@ function markClip(mark: CompiledMark, ctx: EvalContext): boolean {
   return !!c
 }
 
+/**
+ * The signals a group item's scope declares (vega: a group mark's `signals`, one set per item): each starts from the value
+ * the host stored for it (`<scope id>:<name>`, the event loop's state, which outlives the scene), else its `init`, else its
+ * `value`; an `update` signal is derived and always recomputed. `push: "outer"` declares nothing here (its handlers write to
+ * the enclosing scope's signal). Returns the group's parameters (the enclosing ones plus these) and the scope's values.
+ */
+function scopeSignalValues(mark: CompiledMark, ctx: EvalContext, id: string, base: Record<string, unknown>): { params: Record<string, unknown>; values: Record<string, unknown> } {
+  const params = dict<unknown>(base)
+  const values: Record<string, unknown> = {}
+  const defs = (mark.signalDefs ?? []).filter((d) => d.push !== 'outer')
+  const evalIn = (code: string): unknown => {
+    try { return ctx.runtime.expr(code)({}, params) } catch (e) { reportEvalError(ctx, e); return undefined }
+  }
+  for (const d of defs) {
+    if (typeof d.update === 'string') continue
+    const key = scopedSignalName(id, d.name)
+    const v = Object.hasOwn(ctx.signalParams, key) ? ctx.signalParams[key] : typeof d.init === 'string' ? evalIn(d.init) : d.value
+    params[d.name] = v
+    values[d.name] = v
+  }
+  // derived signals read the others (and each other): a few rounds settle any acyclic chain
+  const derived = defs.filter((d) => typeof d.update === 'string')
+  for (let round = 0; round < Math.max(1, derived.length) && derived.length; round++) {
+    for (const d of derived) {
+      const v = evalIn(d.update!)
+      params[d.name] = v
+      values[d.name] = v
+    }
+  }
+  return { params, values }
+}
+
 function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource): SceneGroup {
   const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
   // the facet partition is a dataset for everything in this item's scope, its own scales included
@@ -3764,18 +3873,24 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
   // the group's own datasets (vega: a group's `data`), derived in this item's scope
   const savedData: Array<[string, Row[] | undefined]> = []
   try {
+    // this item's signal scope (its own signals, over the enclosing ones; a facet's `parent` is its datum)
+    const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
+    const outerParams = hasParent ? { ...ctx.signalParams, parent: src.datum } : ctx.signalParams
+    const scopeId = mark.signalDefs?.length ? `${ctx.scopeId ? ctx.scopeId + '/' : ''}${mark.userName ?? ''}@${markIdOf(mark)}${src.key !== undefined && src.key !== '' ? `[${src.key}]` : ''}` : undefined
+    const scoped = scopeId !== undefined ? scopeSignalValues(mark, ctx, scopeId, outerParams) : undefined
+    const scopeParams = scoped ? scoped.params : outerParams
     for (const d of mark.data ?? []) {
       const source = (d as CompiledData & { source?: string }).source
       let rows: Row[] = source ? (ctx.datasets.get(source) ?? []).map((r) => ({ ...r })) : d.values != null ? readData(d.values, d.format) : []
       checkRowCount(rows.length, `dataset "${d.name}"`)
       if (d.transform?.length) {
-        rows = applyTransforms(rows, d.transform, { runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections }, d.name)
+        rows = applyTransforms(rows, d.transform, { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }, d.name)
       }
       savedData.push([d.name, ctx.datasets.get(d.name)])
       ctx.datasets.set(d.name, rows)
     }
     const encode = (mark.encode?.update ?? {}) as Record<string, EncodeValue | EncodeValue[]>
-    const geo = resolveEncodeSet(encode, src.datum, ctx, 'group')
+    const geo = resolveEncodeSet(encode, src.datum, scoped ? { ...ctx, signalParams: scopeParams } : ctx, 'group')
     const gx = num(geo.x) ?? 0
     const gy = num(geo.y) ?? 0
     const gw = Math.max(0, num(geo.width) ?? 0)
@@ -3789,7 +3904,6 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       childScales.set(sdef.name, buildScale(sdef, scaleContext(ctx, sdef.name)))
       childTypes.set(sdef.name, sdef.type)
     }
-    const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
     const childCtx: EvalContext = {
       ...ctx,
       width: gw,
@@ -3798,7 +3912,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       groupY: gy,
       scales: childScales.size ? new Map([...ctx.scales, ...childScales]) : ctx.scales,
       scaleTypes: childTypes.size ? new Map([...ctx.scaleTypes, ...childTypes]) : ctx.scaleTypes,
-      signalParams: hasParent ? { ...ctx.signalParams, parent: src.datum } : ctx.signalParams,
+      signalParams: scopeParams,
+      ...(scopeId !== undefined ? { scopeId } : {}),
     }
 
     const content: SceneGroup[] = []
@@ -3842,6 +3957,11 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       ...(markClip(mark, ctx) ? { markClip: true } : {}),
     } as unknown as SceneGroup
     if (mark.scales?.length) group.__scales = snapshotScales(childCtx.scales)
+    if (scoped && scopeId !== undefined) {
+      group.scopeSignals = { id: scopeId, defs: mark.signalDefs!, values: scoped.values, hasContent: (mark.marks?.length ?? 0) + (mark.axes?.length ?? 0) + (mark.legends?.length ?? 0) > 0 || mark.groupTitle !== undefined }
+      // the scales this scope declares, for the handlers of its signals (`scale('x', ...)` resolves through the scope chain)
+      if (childScales.size) Object.defineProperty(group, '__scaleFns', { value: childScales, enumerable: false })
+    }
     return group
   } finally {
     for (const [name, prev] of savedData.reverse()) {
@@ -5350,7 +5470,10 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
       // Raw-guide mode: the entry backgrounds are bound-derived boxes — the
       // layout never ran, so they stay degenerate placeholders (vega drops
       // them).
-      items.push({ _part: 'entry', path: ctx.rawGuides ? 'M0,0h0v0h0Z' : `M0,0h${colWc}v${eb.y2}h-${colWc}Z`, x: entryX + colOff, y: legendPad + off })
+      // (an item's datum is the entry it shows -- what `datum.value` reads in a legend's click handlers -- and a part the
+      // spec made `interactive` takes the pointer; the entry rows are transparent so the whole row does)
+      const entryDatum = { value, label: e.label, index: entries.indexOf(e) }
+      items.push({ _part: 'entry', path: ctx.rawGuides ? 'M0,0h0v0h0Z' : `M0,0h${colWc}v${eb.y2}h-${colWc}Z`, x: entryX + colOff, y: legendPad + off, datum: entryDatum, ...(legend.encode?.entries?.interactive === true ? { _hit: true } : {}) })
       // vega renders the legend entry symbol in the shape requested by the
       // legend's symbolType; the measured path (symDs) matches the painted one.
       // vega coerces the NaN encode positions to 0 (anchorPoint/translateItem
@@ -5358,7 +5481,9 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
       // so zero the NaN part here rather than poisoning the whole sum
       const symX = entryX + colOff + (xSymIs[i]! || 0)
       const symY = legendPad + off + (ySymIs[i]! || 0)
-      items.push({ ...symbolItemPaint(symPropsOf[i]!), _part: 'symbol', path: symDs[i]!, x: symX, y: symY } as SceneItem)
+      const symbolItem = { ...symbolItemPaint(symPropsOf[i]!), _part: 'symbol', path: symDs[i]!, x: symX, y: symY, datum: entryDatum } as SceneItem
+      if (legend.encode?.symbols?.interactive === true && (symbolItem as { fill?: unknown }).fill === 'transparent') (symbolItem as unknown as Record<string, unknown>)._hit = true
+      items.push(symbolItem)
       // clipHeight clips the entry's symbols with a clipPath over the
       // laid-out entry rect (vega's guideMark clip + SVGStringRenderer clip:
       // rect (0,0,entry.width,entry.height) in the entry's local frame)
@@ -5366,7 +5491,7 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
         ;(items[items.length - 1] as Record<string, unknown>)._clip = { x: entryX + colOff, y: legendPad + off, w: colWc, h: eb.y2 }
       }
       const lblItem = lblItems[i]!
-      items.push({ ...lblItem, x: entryX + colOff + ((lblItem.x as number) || 0), y: legendPad + off + ((lblItem.y as number) || 0) })
+      items.push({ ...lblItem, x: entryX + colOff + ((lblItem.x as number) || 0), y: legendPad + off + ((lblItem.y as number) || 0), datum: entryDatum })
     }
     const out: SceneGroup = { marktype: 'group', role: 'legend', legendType: 'symbol', x: 0, y: 0, width: bgW, height: bgH, items }
     ;(out as unknown as Record<string, unknown>)._borderStroke = borderStroke

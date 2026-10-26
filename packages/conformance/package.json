@@ -23,7 +23,8 @@
     "a11y-parity": "tsx scripts/a11y-parity.mts",
     "conformance:canvas": "tsx scripts/browser-canvas-parity.mts",
     "conformance:batch": "tsx scripts/browser-svg-batch-parity.mts",
-    "conformance:signals": "tsx scripts/browser-signals.mts --min-cases=44"
+    "conformance:signals": "tsx scripts/browser-signals.mts --min-cases=64",
+    "conformance:selections": "tsx scripts/browser-vl-selections.mts --min-cases=37 --max-retained=13"
   },
   "dependencies": {
     "@aster/core": "workspace:*",

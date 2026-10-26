@@ -28,22 +28,6 @@ const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !
 /** vega-lite's THROTTLE: the timer stream runs at 60 frames per second. */
 const THROTTLE = (1 / 60) * 1000
 
-export interface TimerSelection {
-  name: string
-  /** the projected fields: what the tuple holds a value of, and the store entries are matched on */
-  fields: Array<{ type: 'E'; field: string; channel?: string }>
-}
-
-export const storeName = (name: string): string => `${name}_store`
-
-/** Names the animation reserves (every one is a signal): a parameter or a selection may not take them. */
-export function animationSignalNames(name: string): string[] {
-  return [
-    'unit', name, 'anim_clock', 'last_tick_at', 'is_playing', 'eased_anim_clock', `${name}_domain`, 'min_extent',
-    'max_range_extent', 'anim_value', `${name}_tuple`, `${name}_tuple_fields`, `${name}_modify`,
-  ]
-}
-
 /** Is this a `select` whose `on` is a timer: `"timer"`, `"timer{<ms>}"` or `{"type": "timer"}` (vega-lite `isTimerSelection`)? */
 export function isTimerSelect(select: unknown): boolean {
   if (!isObj(select) || select.type !== 'point') return false
@@ -78,41 +62,12 @@ export function validateTimerSelection(param: Obj, at: string, fail: (path: stri
   if (param.bind !== undefined) fail(`${at}.bind`, 'a bound timer selection is not supported')
 }
 
-/** The timer selections declared at the top of a spec (validated: see `validateTimerSelection`). */
-export function timerSelections(root: Obj, timeField?: string): TimerSelection[] {
-  const out: TimerSelection[] = []
-  for (const p of Array.isArray(root.params) ? (root.params as Obj[]) : []) {
-    if (!isObj(p) || !isTimerSelect(p.select)) continue
-    const select = p.select as Obj
-    const fields = Array.isArray(select.fields)
-      ? (select.fields as string[]).map((field) => ({ type: 'E' as const, field }))
-      : timeField !== undefined ? [{ field: timeField, channel: 'time', type: 'E' as const }] : []
-    out.push({ name: p.name as string, fields })
-  }
-  return out
-}
-
-/** vega-lite `parseSelectionPredicate` for a point selection with the default resolve: the filter's expression. */
-export function selectionPredicate(sel: TimerSelection, empty: boolean | undefined): string {
-  const store = JSON.stringify(storeName(sel.name))
-  const test = `vlSelectionTest(${store}, datum)`
-  const length = `length(data(${store}))`
-  return empty === false ? `${length} && ${test}` : `!${length} || ${test}`
-}
-
-/** The store dataset: the timer selection's tuples, written by `modify`. */
-export function animationStore(sel: TimerSelection): Obj {
-  return { name: storeName(sel.name) }
-}
-
-/** vega-lite `animationSignals` + `topLevelSignals` + the selection's tuple and modify signals, for the one unit. */
-export function animationSignals(sel: TimerSelection, timeScale: string, unitName: string): Obj[] {
-  const name = sel.name
-  const tuple = `${name}_tuple`
-  const store = JSON.stringify(storeName(name))
-  return [
-    { name: 'unit', value: {}, on: [{ events: 'pointermove', update: 'isTuple(group()) ? group() : unit' }] },
-    { name, update: `vlSelectionResolve(${store}, "union", true, true)` },
+/**
+ * point.ts `topLevelSignals`: the clock of a timer selection. It advances by the time between ticks (`now() - last_tick_at`)
+ * while `is_playing` and wraps at the end of the `time` scale's range.
+ */
+export function animationTopLevelSignals(signals: Obj[]): Obj[] {
+  return signals.concat([
     {
       name: 'anim_clock',
       init: '0',
@@ -123,22 +78,31 @@ export function animationSignals(sel: TimerSelection, timeScale: string, unitNam
     },
     { name: 'last_tick_at', init: 'now()', on: [{ events: [{ signal: 'anim_clock' }, { signal: 'is_playing' }], update: 'now()' }] },
     { name: 'is_playing', init: 'true' },
+  ])
+}
+
+/** point.ts `animationSignals`: the clock eased, and the `time` scale's value at it. */
+export function animationSignals(selectionName: string, scaleName: string): Obj[] {
+  return [
     { name: 'eased_anim_clock', update: 'anim_clock' },
-    { name: `${name}_domain`, init: `domain('${timeScale}')` },
-    { name: 'min_extent', init: `extent(${name}_domain)[0]` },
-    { name: 'max_range_extent', init: `extent(range('${timeScale}'))[1]` },
-    { name: 'anim_value', update: `invert('${timeScale}', eased_anim_clock)` },
-    {
-      name: tuple,
-      on: [{
-        events: [{ signal: 'eased_anim_clock' }, { signal: 'anim_value' }],
-        update: `{unit: ${JSON.stringify(unitName)}, fields: ${tuple}_fields, values: [anim_value ? anim_value : min_extent]}`,
-        force: true,
-      }],
-    },
-    { name: `${tuple}_fields`, value: sel.fields.map((f) => ({ ...f })) },
-    { name: `${name}_modify`, on: [{ events: { signal: tuple }, update: `modify(${store}, ${tuple}, true)` }] },
+    { name: `${selectionName}_domain`, init: `domain('${scaleName}')` },
+    { name: 'min_extent', init: `extent(${selectionName}_domain)[0]` },
+    { name: 'max_range_extent', init: `extent(range('${scaleName}'))[1]` },
+    { name: 'anim_value', update: `invert('${scaleName}', eased_anim_clock)` },
   ]
+}
+
+/** point.ts `signals` of a timer selection: the tuple of the frame the clock is at. */
+export function animationTupleSignal(selectionName: string, unitName: string): Obj {
+  const tuple = `${selectionName}_tuple`
+  return {
+    name: tuple,
+    on: [{
+      events: [{ signal: 'eased_anim_clock' }, { signal: 'anim_value' }],
+      update: `{unit: ${unitName}, fields: ${tuple}_fields, values: [anim_value ? anim_value : min_extent]}`,
+      force: true,
+    }],
+  }
 }
 
 /** The `time` scale's range: one step per frame (vega-lite scale/range.ts, TIME). */

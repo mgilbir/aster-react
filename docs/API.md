@@ -294,6 +294,16 @@ focusable elements; non-React hosts can do the same. The keyboard contract is in
   `datum` is `event.item.datum`. A handler runs only when its stream matched; a signal's `update` re-runs only when a signal
   it reads changed. It returns `{ detach(), setSignal(name, value) }`.
   - `hooks.onSignal(name, value, all)` — once per signal that changed while an event was processed.
+  - `hooks.onData(name, rows)` — once per dataset that `modify(...)` edited (a Vega-Lite selection's `<name>_store`), with
+    its input rows. The host passes them back as `data[name]` to the next evaluation and as `{ data }` to the next
+    `bindSceneSignals`, so the dataset is an input like any other (`<Chart>` does this itself). The expression functions
+    `vlSelectionTest`, `vlSelectionIdTest`, `vlSelectionResolve`, `vlSelectionTuples`, `modify`, `isTuple`, `panLinear` /
+    `panLog` / `panPow` / `panSymlog`, `zoomLinear` / `zoomLog` / `zoomPow` / `zoomSymlog` are part of the expression
+    language (vega-selections 6.1.4, vega-functions, vega-util); `{scale}` event sources fire when a scale changed
+    between two bindings.
+  - Group scopes: a group mark's `signals` (`SceneGroup.scopeSignals`) are read and written per group item; `onSignal` and
+    `setSignal` name them `<scope id>:<name>` (the id is `scopeSignals.id`), and the store holds them under that key:
+    see [INTERACTION.md](INTERACTION.md#group-scopes).
   - `hooks.logger` — where bind-time errors (a malformed selector or expression: the handler is skipped) and run-time errors
     (an expression that throws while an event is handled: that event's delivery stops, earlier updates stand) are reported;
     default: the console. Nothing escapes the DOM listener.

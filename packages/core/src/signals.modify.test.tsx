@@ -33,7 +33,7 @@ function run(updates: string[]): { calls: Array<[string, unknown[]]>; store: Rec
   const { svg, scene } = mount(updates.map((u, i) => on(u, `s${i}`)))
   const calls: Array<[string, unknown[]]> = []
   let store: Record<string, unknown[]> = {}
-  const b = bind(svg, scene, {}, { onData: (name, rows, all) => { calls.push([name, rows]); store = all } })
+  const b = bind(svg, scene, {}, { onData: (name, rows) => { calls.push([name, rows]); store = { ...store, [name]: rows } } })
   click(svg)
   b.detach()
   return { calls, store, returns: undefined }

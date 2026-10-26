@@ -147,18 +147,18 @@ double counted the code it shares with core (hit read 15.6 kB where an app pays 
 size plus 0.5 kB (`packages/benchmarks/scripts/budget.mjs` holds the rationale); a change that needs more room edits
 the number in the same PR. Measured 2026-10-26 (after the Vega-Lite maps and animation work; the minified/brotli figures above predate it):
 
-| Import pattern | Before (gzip kB) | Now (gzip kB) | Budget (kB) |
+| Import pattern | Before selections (gzip kB) | Now (gzip kB) | Budget (kB) |
 |---|---|---|---|
-| `import { renderSpec } from '@aster/core'` | 123.0 | 125.3 | 125.8 |
-| `import { useChart } from '@aster/react'` | 164.1 | 128.6 | 129.1 |
-| `import { Chart } from '@aster/react'` | 163.9 | 161.1 | 161.6 |
-| `import { SvgChart } from '@aster/react/lite'` | n/a | 144.2 | 144.7 |
-| `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | n/a | 155.4 | 155.9 |
-| `import '@aster/react/vl'` + `<Chart>` | 218.3 | 223.5 | 224.0 |
+| `import { renderSpec } from '@aster/core'` | 123.1 | 126.3 | 126.8 |
+| `import { useChart } from '@aster/react'` | 126.4 | 129.7 | 130.3 |
+| `import { Chart } from '@aster/react'` | 157.2 | 163.2 | 163.8 |
+| `import { SvgChart } from '@aster/react/lite'` | 142.0 | 144.8 | 145.3 |
+| `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | 151.5 | 157.5 | 158.0 |
+| `import '@aster/react/vl'` + `<Chart>` | 211.3 | 230.7 | 231.2 |
 | core + `@aster/core/dom` (marginal) | 5.8 | 5.7 | 6.2 |
 | core + `@aster/core/canvas` (marginal) | 4.8 | 4.8 | 5.3 |
 | core + `@aster/core/hit` (marginal) | 5.1 | 5.0 | 5.5 |
-| core + `@aster/core/signals` (marginal) | 4.4 | 4.4 | 4.9 |
+| core + `@aster/core/signals` (marginal) | 4.4 | 6.8 | 7.4 |
 | core + `@aster/core/load` (marginal) | 5.1 | 5.1 | 5.6 |
 | core + `@aster/core/geo` (marginal) | 12.4 | 12.3 | 12.8 |
 | core + `@aster/core/transforms` (marginal) | 15.1 | 15.1 | 15.6 |

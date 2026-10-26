@@ -27,6 +27,25 @@ describe('buildHitIndex', () => {
     expect(index.query(-5, 5)).toBeNull()
   })
 
+  it('picks a group item that has a fill or a stroke where no mark inside it is hit (vega\'s group pick), but never as a data mark', () => {
+    const cell = (x: number, extra: Record<string, unknown>): Record<string, unknown> => ({
+      marktype: 'group', role: 'scope', _scope: true, x, y: 0, width: 50, height: 50, datum: { c: 'cell' }, ...extra,
+      items: [{ marktype: 'symbol', items: [{ x: 25, y: 25, size: 100, fill: '#4c78a8', datum: { v: 1 } }] }],
+    })
+    const scene = { width: 120, height: 60, items: [cell(0, { stroke: '#ddd' }), cell(60, {}), cell(120, { fill: '#eee', interactive: false })] } as unknown as SceneRoot
+    const index = buildHitIndex(scene)
+    // empty area of the cell with a stroke: the cell; of the one with neither: nothing; of a non-interactive one: nothing
+    expect(index.query(5, 5)?.marktype).toBe('group')
+    expect(index.query(5, 5)?.item).toBe(scene.items[0])
+    expect(index.query(65, 5)).toBeNull()
+    expect(index.query(125, 5)).toBeNull()
+    // a mark inside the cell is picked over the cell
+    expect(index.query(25, 25)?.item.datum).toEqual({ v: 1 })
+    // the cell is no data mark (a tooltip or a click handler must not take it for one), and it is no indexed mark item
+    expect(index.queryMark(5, 5)).toBeNull()
+    expect(index.size()).toBe(3)
+  })
+
   it('resolves symbols within radius + slack', () => {
     const scene = {
       width: 100,

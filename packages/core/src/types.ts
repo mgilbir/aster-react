@@ -211,6 +211,11 @@ export interface CompiledSignalDef {
   bind?: Record<string, unknown> | string
   /** Event-driven handlers (`signal.on` streams), bound by the host. */
   on?: SignalOnDef[]
+  /**
+   * `push: "outer"` (a group scope's signal only): the handlers write to the signal of the same name in the enclosing
+   * scope; the group declares no signal of its own.
+   */
+  push?: 'outer'
 }
 
 /**
@@ -518,6 +523,11 @@ export interface CompiledMark {
   scales?: CompiledScale[]
   /** Data sets declared within a group's scope. */
   data?: CompiledData[]
+  /**
+   * Signals declared within a group's scope (vega: a group mark's `signals`). Each group ITEM has its own copy: the
+   * values the event loop keeps for it live under `<scope id>:<name>` (see {@link SceneGroup.scopeSignals}).
+   */
+  signalDefs?: CompiledSignalDef[]
   /** Group mark grid layout (vega-native trellis `layout` def). */
   layout?: Record<string, unknown>
   /** Cartographic projections declared within a group's scope. */
@@ -630,6 +640,13 @@ export interface SceneGroup extends SceneItem {
    * The SVG draws a container for each, even an empty one; each item names its mark in `_part`.
    */
   parts?: string[]
+  /**
+   * A group item whose mark declares `signals` is a signal scope: `id` names the item (the mark's place in the spec, plus
+   * the facet partition's key) and the values its signals had when the scene was evaluated. The event loop
+   * (`@aster/core/signals`) keeps the values events write under `<id>:<name>` in the signal store, and hands
+   * them back in `RuntimeInput.signals` for the next evaluation.
+   */
+  scopeSignals?: { id: string; defs: CompiledSignalDef[]; values: Record<string, unknown>; /** false when the group holds no mark, axis, legend or title: vega then has no `context.group`, and `inScope` is false for every item */ hasContent: boolean }
   /** Group items of one mark carry the mark's index in its parent, so consecutive items of a mark share one container. */
   markIndex?: number
   /** The mark's `interactive: false` (its SVG container then has `pointer-events="none"`). */

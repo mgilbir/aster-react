@@ -25,7 +25,13 @@ import { fileURLToPath } from 'node:url'
 // core row grew (colour, calendar, format, transforms, scales, signals, limits, ...) is in docs/PERFORMANCE.md and the
 // git log of this file.
 //
-// Measured 2026-10-23 (kB gzip): core 123.1; marginal dom 5.7, canvas 4.8, hit 5.0, signals 4.4, load 5.1,
+// Selections (vega-selections port, modify, the vl* expression functions, dataset edits and {scale} events in the signal
+// loop, and the VL selection compiler) raised core to 125.7, signals 5.7, useChart 129.1, Chart 161.4, SvgChart 144.8,
+// SvgChart + interaction 155.7 and Chart + VL 227.6 (the VL row carries ~14 kB of the selection compiler).
+// Group scopes (scoped signals in the runtime, the loop's per-scope streams and batching, the group pick) and composed-view
+// selections in the VL compiler then took core to 126.3, signals 6.8, useChart 129.7, Chart 163.2, SvgChart + interaction 157.5
+// and Chart + VL 230.7.
+// Earlier measurement, 2026-10-23 (kB gzip): core 123.1; marginal dom 5.7, canvas 4.8, hit 5.0, signals 4.4, load 5.1,
 // geo 12.3, transforms 15.1; useChart 126.4; Chart 157.2; Chart + VL 211.3; SvgChart 142.0; SvgChart + interaction 151.5.
 // `<Chart>` was 156.5 (+ VL 210.7) before it became a shell over ChartCore with injected capabilities: the +0.7 is the
 // capability indirection (property reads the minifier cannot rename) and the report of a missing capability, which
@@ -35,21 +41,21 @@ import { fileURLToPath } from 'node:url'
 // the data hook); geo 12.5; useChart 128.6; Chart 161.1; SvgChart 144.2; SvgChart + interaction 155.4; Chart + VL 223.5
 // (+12.2 over the 211.3 above: the maps and animation compile in @aster/vl and the core runtime they need).
 const BUDGETS = {
-  '@aster/core': 125.8 * 1024,
+  '@aster/core': 126.8 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
   '+ @aster/core/canvas': 5.3 * 1024,
   '+ @aster/core/hit': 5.5 * 1024,
-  '+ @aster/core/signals': 6.3 * 1024,
+  '+ @aster/core/signals': 7.4 * 1024,
   '+ @aster/core/load': 5.6 * 1024,
   '+ @aster/core/geo': 12.8 * 1024,
   '+ @aster/core/transforms': 15.6 * 1024,
-  '@aster/react useChart': 129.1 * 1024,
-  '@aster/react Chart': 161.6 * 1024,
+  '@aster/react useChart': 130.3 * 1024,
+  '@aster/react Chart': 163.8 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 144.7 * 1024,
-  '@aster/react SvgChart + interaction': 155.9 * 1024,
+  '@aster/react SvgChart': 145.3 * 1024,
+  '@aster/react SvgChart + interaction': 158.0 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 224.0 * 1024,
+  '@aster/react Chart + VL': 231.2 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
