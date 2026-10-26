@@ -73,6 +73,50 @@ forEachVariant(['svg'], (Chart, variant) => {
       act(() => { root.unmount() })
     })
 
+    // A selection in a composition: the unit's signals are its group's (a vega group scope); the store is shared by the views.
+    variant.it(['signals'], 'in a concat view a click in one view recolours another that reads the selection, and the scope\'s state is kept', () => {
+      const listener = vi.fn()
+      const ref = React.createRef<ChartHandle>()
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      const unit = (extra: Record<string, unknown>): Record<string, unknown> => ({
+        width: 120, height: 80, mark: { type: 'point', size: 200 },
+        encoding: { x: { field: 'a', type: 'quantitative' }, y: { field: 'b', type: 'quantitative' }, color: { condition: { param: 'pick', field: 'c', type: 'nominal' }, value: 'lightgray' } },
+        ...extra,
+      })
+      const spec = {
+        $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
+        data: { values: [{ a: 1, b: 3, c: 'x' }, { a: 2, b: 5, c: 'y' }, { a: 3, b: 2, c: 'z' }] },
+        padding: 10, autosize: 'none',
+        hconcat: [unit({ params: [{ name: 'pick', select: 'point' }] }), unit({})],
+      } as never
+      act(() => { root.render(<Chart ref={ref} spec={spec} signalListeners={{ pick: listener }} />) })
+      const scene = ref.current!.getScene()!
+      const views = scene.items.filter((g) => g.role === 'scope')
+      expect(views).toHaveLength(2)
+      const marksOf = (view: number): string[] => Array.from(container.querySelectorAll('g.role-scope')[view]!.querySelectorAll('g.role-mark path')).map((p) => p.getAttribute('stroke') ?? '')
+      expect(new Set(marksOf(1)).size).toBe(3)
+      // the unit's signals belong to its group: a scope, in the scene, with the store key the loop writes
+      const scope = views[0]!.scopeSignals!
+      expect(scope.defs.some((d) => d.name === 'pick_tuple')).toBe(true)
+      expect(views[1]!.scopeSignals).toBeUndefined()
+
+      // a click on the 2nd mark of the first view
+      const mark = (views[0]!.items!.find((c) => (c as { marktype?: string }).marktype === 'symbol') as unknown as { items: Array<{ x: number; y: number }> }).items[1]!
+      const pad = scene.padding!
+      const path = container.querySelectorAll('g.role-scope')[0]!.querySelectorAll('g.role-mark path')[1]!
+      act(() => { path.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: pad.left + views[0]!.x! + mark.x, clientY: pad.top + views[0]!.y! + mark.y })) })
+      expect(listener).toHaveBeenCalled()
+      // the other view shows the selection: its marks (not selected there, since the selection is of the one datum) are grey but the one
+      expect(marksOf(1).filter((c) => c === 'lightgray')).toHaveLength(2)
+      expect(marksOf(0).filter((c) => c === 'lightgray')).toHaveLength(2)
+      // a re-render with an equal spec keeps it: the scope's state and the store are inputs the chart holds
+      act(() => { root.render(<Chart ref={ref} spec={JSON.parse(JSON.stringify(spec)) as never} signalListeners={{ pick: listener }} />) })
+      expect(marksOf(1).filter((c) => c === 'lightgray')).toHaveLength(2)
+      act(() => { root.unmount() })
+    })
+
     variant.it(['signals'], 'a selection with an initial value starts selected, and a click on nothing clears it', () => {
       const ref = React.createRef<ChartHandle>()
       const container = document.createElement('div')

@@ -13,6 +13,10 @@
  * A case that can never differ proves nothing, so each names the steps after which its selection store (or, for
  * bound scales, a scale domain / signal) must have changed on the vega side (`expect`): a vacuous case fails.
  *
+ * A composition (concat, facet, repeat) has one frame per view / cell: a step names the one it is aimed at (`view`, the
+ * index among the group frames in document order), and positions are fractions of that frame. Their signals live in
+ * group scopes, which are compared too (vega: the sub-contexts of the view's state).
+ *
  * Run: pnpm conformance:selections [--filter=substr] [--min-cases=N]   (after `pnpm build`)
  */
 import { writeFileSync, rmSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
@@ -41,14 +45,14 @@ void require
 
 /** Positions are fractions (0..1) of the plot frame, so both pages use the same absolute point. */
 type Step =
-  | { t: 'move'; x: number; y: number }
+  | { t: 'move'; x: number; y: number; view?: number }
   | { t: 'down' | 'up' }
-  | { t: 'click'; x: number; y: number; shift?: boolean }
-  | { t: 'dblclick'; x: number; y: number }
-  | { t: 'drag'; x0: number; y0: number; x1: number; y1: number; shift?: boolean }
-  | { t: 'wheel'; x: number; y: number; dy: number; shift?: boolean }
-  | { t: 'clickMark'; i: number; shift?: boolean; sel?: string }
-  | { t: 'moveMark'; i: number }
+  | { t: 'click'; x: number; y: number; shift?: boolean; view?: number }
+  | { t: 'dblclick'; x: number; y: number; view?: number }
+  | { t: 'drag'; x0: number; y0: number; x1: number; y1: number; shift?: boolean; view?: number }
+  | { t: 'wheel'; x: number; y: number; dy: number; shift?: boolean; view?: number }
+  | { t: 'clickMark'; i: number; shift?: boolean; sel?: string; view?: number }
+  | { t: 'moveMark'; i: number; view?: number }
   | { t: 'clickLegend'; part: string; i: number; shift?: boolean }
   | { t: 'dblclickLegend'; part: string; i: number }
   | { t: 'input'; i: number; value: string | boolean }
@@ -70,6 +74,9 @@ const base = (extra: Record<string, unknown>): Record<string, unknown> => ({
   $schema: 'https://vega.github.io/schema/vega-lite/v6.json', data: { values: ROWS }, width: 300, height: 200, ...extra,
 })
 const xy = { x: { field: 'a', type: 'quantitative' }, y: { field: 'b', type: 'quantitative' } }
+/** A composition has no size of its own: its views do. */
+const baseC = (extra: Record<string, unknown>): Record<string, unknown> => ({ $schema: 'https://vega.github.io/schema/vega-lite/v6.json', data: { values: ROWS }, ...extra })
+const unitV = (extra: Record<string, unknown>): Record<string, unknown> => ({ width: 150, height: 100, ...extra })
 const colorBy = (param: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   condition: { param, field: 'c', type: 'nominal', ...extra }, value: 'lightgray',
 })
@@ -222,6 +229,138 @@ const CASES: Case[] = [
     steps: [{ t: 'input', i: 0, value: '5' }, { t: 'input', i: 0, value: '2' }],
     moves: [0, 1],
   },
+  // --- compositions: the units' signals are their groups' (one scope per view / cell) ---
+  {
+    name: 'concat: a brush in one view filters another',
+    spec: baseC({
+      hconcat: [
+        unitV({ params: [sel('brush', { type: 'interval', encodings: ['x'] })], mark: 'point', encoding: xy }),
+        unitV({ transform: [{ filter: { param: 'brush' } }], mark: 'bar', encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'b', type: 'quantitative', aggregate: 'sum' } } }),
+      ],
+    }),
+    steps: [{ t: 'drag', x0: 0.2, y0: 0.5, x1: 0.6, y1: 0.5, view: 0 }, { t: 'drag', x0: 0.4, y0: 0.5, x1: 0.9, y1: 0.5, view: 0 }, { t: 'dblclick', x: 0.5, y: 0.5, view: 0 }],
+    moves: [0, 1, 2],
+  },
+  {
+    name: 'concat: a selection declared on the composition is shared by its views',
+    spec: baseC({
+      params: [sel('brush', 'interval')],
+      hconcat: [unitV({ mark: 'point', encoding: xy }), unitV({ mark: 'point', encoding: { x: { field: 'b', type: 'quantitative' }, y: { field: 'a', type: 'quantitative' } } })],
+    }),
+    steps: [{ t: 'drag', x0: 0.2, y0: 0.2, x1: 0.6, y1: 0.7, view: 0 }, { t: 'drag', x0: 0.3, y0: 0.3, x1: 0.8, y1: 0.9, view: 1 }, { t: 'dblclick', x: 0.5, y: 0.5, view: 1 }],
+    moves: [0, 1, 2],
+  },
+  {
+    name: 'vconcat: a point selection links two views',
+    spec: baseC({
+      vconcat: [
+        unitV({ params: [sel('pick', { type: 'point', fields: ['c'] })], mark: 'point', encoding: { ...xy, color: colorBy('pick') } }),
+        unitV({ mark: 'bar', encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'b', type: 'quantitative', aggregate: 'sum' }, color: colorBy('pick') } }),
+      ],
+    }),
+    steps: [{ t: 'clickMark', i: 1, view: 0 }, { t: 'clickMark', i: 0, shift: true, view: 0 }, { t: 'click', x: 0.5, y: 0.97, view: 0 }, { t: 'dblclick', x: 0.5, y: 0.5, view: 0 }],
+    moves: [0, 1, 2],
+  },
+  {
+    name: 'facet: a brush in each cell, the latest wins',
+    spec: baseC({ facet: { column: { field: 'c', type: 'nominal' } }, spec: unitV({ params: [sel('brush', 'interval')], mark: 'point', encoding: xy }) }),
+    steps: [{ t: 'drag', x0: 0.2, y0: 0.2, x1: 0.6, y1: 0.7, view: 0 }, { t: 'drag', x0: 0.3, y0: 0.3, x1: 0.8, y1: 0.9, view: 1 }, { t: 'dblclick', x: 0.5, y: 0.5, view: 1 }],
+    moves: [0, 1, 2],
+  },
+  {
+    name: 'facet: a point selection across cells, with shift to add',
+    spec: baseC({ facet: { column: { field: 'c', type: 'nominal' } }, spec: unitV({ params: [sel('pick', 'point')], mark: 'point', encoding: { ...xy, color: { condition: { param: 'pick', value: 'firebrick' }, value: 'lightgray' } } }) }),
+    steps: [{ t: 'clickMark', i: 0, view: 0 }, { t: 'clickMark', i: 0, view: 1 }, { t: 'clickMark', i: 0, shift: true, view: 2 }, { t: 'click', x: 0.5, y: 0.97, view: 1 }],
+    moves: [0, 1, 2, 3],
+  },
+  {
+    name: 'facet by row and column: point selections',
+    spec: baseC({
+      data: { values: ROWS.flatMap((r, i) => [{ ...r, e: 'p' }, { ...r, a: r.a + 10, e: 'q', c: ['x', 'y', 'z'][(i + 1) % 3] }]) },
+      facet: { row: { field: 'e', type: 'nominal' }, column: { field: 'c', type: 'nominal' } },
+      spec: unitV({ width: 100, height: 70, params: [sel('pick', 'point')], mark: 'point', encoding: { ...xy, color: { condition: { param: 'pick', value: 'firebrick' }, value: 'lightgray' } } }),
+    }),
+    steps: [{ t: 'clickMark', i: 0, view: 0 }, { t: 'clickMark', i: 0, view: 4 }, { t: 'clickMark', i: 0, shift: true, view: 1 }],
+    moves: [0, 1, 2],
+  },
+  {
+    name: 'repeat: a brush per repeated view',
+    spec: baseC({ repeat: { column: ['a', 'b'] }, spec: unitV({ params: [sel('brush', 'interval')], mark: 'point', encoding: { x: { field: { repeat: 'column' }, type: 'quantitative' }, y: { field: 'b', type: 'quantitative' } } }) }),
+    steps: [{ t: 'drag', x0: 0.2, y0: 0.2, x1: 0.6, y1: 0.7, view: 0 }, { t: 'drag', x0: 0.3, y0: 0.3, x1: 0.8, y1: 0.9, view: 1 }, { t: 'dblclick', x: 0.5, y: 0.5, view: 1 }],
+    moves: [0, 1, 2],
+  },
+  {
+    name: 'concat: bound scales pan one view and leave the other alone',
+    spec: baseC({ hconcat: [unitV({ params: [sel('grid', 'interval', { bind: 'scales' })], mark: 'point', encoding: xy }), unitV({ mark: 'point', encoding: xy })] }),
+    steps: [{ t: 'drag', x0: 0.5, y0: 0.5, x1: 0.3, y1: 0.6, view: 0 }, { t: 'wheel', x: 0.5, y: 0.5, dy: -120, view: 0 }, { t: 'dblclick', x: 0.5, y: 0.5, view: 0 }],
+    moves: [0, 1, 2],
+  },
+  {
+    name: 'concat: a layered view with a brush in one layer',
+    spec: baseC({
+      hconcat: [
+        { width: 150, height: 100, layer: [unitV({ params: [sel('brush', { type: 'interval', encodings: ['x'] })], mark: 'point', encoding: xy, width: undefined, height: undefined }), { mark: 'line', encoding: { ...xy, color: { value: 'steelblue' } } }] },
+        unitV({ transform: [{ filter: { param: 'brush' } }], mark: 'point', encoding: xy }),
+      ],
+    }),
+    steps: [{ t: 'drag', x0: 0.2, y0: 0.5, x1: 0.7, y1: 0.5, view: 0 }, { t: 'dblclick', x: 0.5, y: 0.5, view: 0 }],
+    moves: [0, 1],
+  },
+  {
+    name: 'facet wrap: an interval selection per cell',
+    spec: baseC({ facet: { field: 'c', type: 'nominal' }, columns: 2, spec: unitV({ params: [sel('brush', { type: 'interval', encodings: ['x'] })], mark: 'point', encoding: xy }) }),
+    steps: [{ t: 'drag', x0: 0.2, y0: 0.5, x1: 0.6, y1: 0.5, view: 0 }, { t: 'drag', x0: 0.3, y0: 0.5, x1: 0.8, y1: 0.5, view: 2 }],
+    moves: [0, 1],
+  },
+  {
+    name: 'nested concat: a brush filters its sibling inside a vconcat',
+    spec: baseC({
+      vconcat: [
+        { hconcat: [unitV({ params: [sel('brush', { type: 'interval', encodings: ['x'] })], mark: 'point', encoding: xy }), unitV({ transform: [{ filter: { param: 'brush' } }], mark: 'bar', encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'b', type: 'quantitative', aggregate: 'sum' } } })] },
+        unitV({ mark: 'point', encoding: xy }),
+      ],
+    }),
+    steps: [{ t: 'drag', x0: 0.2, y0: 0.5, x1: 0.6, y1: 0.5, view: 1 }, { t: 'dblclick', x: 0.5, y: 0.5, view: 1 }],
+    moves: [0, 1],
+  },
+  {
+    name: 'facet: bound scales are shared by the cells',
+    spec: baseC({ facet: { column: { field: 'c', type: 'nominal' } }, spec: unitV({ params: [sel('grid', 'interval', { bind: 'scales' })], mark: 'point', encoding: xy }) }),
+    steps: [{ t: 'drag', x0: 0.5, y0: 0.5, x1: 0.3, y1: 0.6, view: 1 }, { t: 'wheel', x: 0.5, y: 0.5, dy: -120, view: 0 }, { t: 'dblclick', x: 0.5, y: 0.5, view: 2 }],
+    moves: [0, 1, 2],
+  },
+  {
+    name: 'concat: a point selection bound to a legend filters another view',
+    spec: baseC({
+      hconcat: [
+        unitV({ params: [sel('pick', { type: 'point', fields: ['c'] }, { bind: 'legend' })], mark: 'point', encoding: { ...xy, color: { field: 'c', type: 'nominal' }, opacity: { condition: { param: 'pick', value: 1 }, value: 0.2 } } }),
+        unitV({ mark: 'bar', transform: [{ filter: { param: 'pick' } }], encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'b', type: 'quantitative', aggregate: 'sum' } } }),
+      ],
+    }),
+    steps: [{ t: 'clickLegend', part: 'symbols', i: 1 }, { t: 'clickLegend', part: 'symbols', i: 0, shift: true }, { t: 'dblclickLegend', part: 'symbols', i: 0 }],
+    moves: [0, 1, 2],
+  },
+  {
+    name: 'concat: a nearest point selection on hover',
+    spec: baseC({ hconcat: [unitV({ params: [sel('hover', { type: 'point', nearest: true, on: 'pointerover' })], mark: 'point', encoding: { ...xy, color: { condition: { param: 'hover', value: 'firebrick', empty: false }, value: 'gray' } } }), unitV({ mark: 'point', encoding: xy })] }),
+    steps: [{ t: 'moveMark', i: 1, view: 0 }, { t: 'moveMark', i: 3, view: 0 }],
+    moves: [0, 1],
+  },
+  {
+    name: 'facet of a layered unit: an interval selection in one layer',
+    spec: baseC({
+      facet: { column: { field: 'c', type: 'nominal' } },
+      spec: { width: 120, height: 80, layer: [{ params: [sel('brush', { type: 'interval', encodings: ['x'] })], mark: 'point', encoding: xy }, { mark: 'rule', encoding: { x: { aggregate: 'mean', field: 'a', type: 'quantitative' } } }] },
+    }),
+    steps: [{ t: 'drag', x0: 0.2, y0: 0.5, x1: 0.6, y1: 0.5, view: 0 }, { t: 'drag', x0: 0.3, y0: 0.5, x1: 0.8, y1: 0.5, view: 1 }, { t: 'dblclick', x: 0.5, y: 0.5, view: 1 }],
+    moves: [0, 1, 2],
+  },
+  {
+    name: 'repeat: a point selection over the repeated fields',
+    spec: baseC({ repeat: { column: ['a', 'b'] }, spec: unitV({ params: [sel('pick', { type: 'point', fields: ['c'] })], mark: 'point', encoding: { x: { field: { repeat: 'column' }, type: 'quantitative' }, y: { field: 'b', type: 'quantitative' }, color: { condition: { param: 'pick', field: 'c', type: 'nominal' }, value: 'lightgray' } } }) }),
+    steps: [{ t: 'clickMark', i: 1, view: 0 }, { t: 'clickMark', i: 3, shift: true, view: 1 }, { t: 'click', x: 0.5, y: 0.97, view: 0 }],
+    moves: [0, 1, 2],
+  },
 ]
 
 const cases = CASES.filter((c) => !FILTER || c.name.includes(FILTER))
@@ -248,6 +387,7 @@ binds.id = 'b'
 binds.style.cssText = 'position:absolute;left:20px;top:420px'
 document.body.appendChild(binds)
 window.__errors = []
+window.__freshErrors = []
 
 const norm = (v) => JSON.stringify(v, function (k, x) {
   if (typeof x === 'function') return undefined
@@ -261,23 +401,33 @@ const norm = (v) => JSON.stringify(v, function (k, x) {
 
 // A deep copy for the fresh view: setState hands the tuples, signal values and nested objects to a second dataflow, which
 // writes to them (ids, derived fields); sharing them with the retained view broke its next wheel event.
-const cloneState = (v, seen = new WeakSet()) => {
+const cloneState = (v, ancestors = new Set()) => {
   if (v instanceof Date) return new Date(v.getTime())
   if (v && typeof v === 'object') {
-    if (seen.has(v)) return undefined
+    if (ancestors.has(v)) return undefined // (a cycle: a scenegraph item reaches its group, which reaches it)
     if (!Array.isArray(v) && !(v instanceof Set) && 'mark' in v && ('x' in v || 'datum' in v)) return undefined // (a scenegraph item: event signals hold the one under the pointer)
-    seen.add(v)
-    if (v instanceof Set) return new Set([...v].map((x) => cloneState(x, seen)))
-    if (Array.isArray(v)) return v.map((x) => cloneState(x, seen))
-    const o = {}
-    for (const k of Object.keys(v)) o[k] = cloneState(v[k], seen)
-    return o
+    ancestors.add(v)
+    let out
+    if (v instanceof Set) out = new Set([...v].map((x) => cloneState(x, ancestors)))
+    else if (Array.isArray(v)) out = v.map((x) => cloneState(x, ancestors))
+    else {
+      out = {}
+      // (a signal that held a scenegraph item has nothing to restore: the fresh view's own value stays)
+      for (const k of Object.keys(v)) { const c = cloneState(v[k], ancestors); if (c !== undefined || v[k] === undefined) out[k] = c }
+    }
+    ancestors.delete(v)
+    return out
   }
   return typeof v === 'function' ? undefined : v
 }
 
 let names = []
 let stores = []
+window.__modlog = []
+if (${JSON.stringify(Boolean(process.env.SEL_MOD))}) {
+  const f0 = vega.expressionFunction('modify')
+  vega.expressionFunction('modify', function (...a) { const n = this.context.data[a[0]].input.value.length; const r = f0.apply(this, a); window.__modlog.push((this.context.group ? this.context.group.mark.name : '?') + ' ' + a[0] + ' pre=' + n + ' ins=' + JSON.stringify(a[1]) + ' rem=' + String(a[2]) + ' tog=' + JSON.stringify(a[3]) + ' -> ' + r + ' stamp=' + this.context.dataflow.stamp()); return r }) 
+}
 window.__mountVega = async (specVl) => {
   const vg = vl.compile(specVl).spec
   names = (vg.signals || []).map((s) => s.name)
@@ -287,6 +437,14 @@ window.__mountVega = async (specVl) => {
   window.__read = () => ({
     signals: Object.fromEntries(names.map((n) => [n, norm(view.signal(n))])),
     stores: Object.fromEntries(stores.map((n) => [n, norm(view.data(n))])),
+    scoped: (() => {
+      // the signals of every group item's scope, in document order (vega: the sub-contexts of the view's state)
+      const out = []
+      const walk = (st) => { for (const sub of st.subcontext || []) { const own = { ...(sub.signals || {}) }; delete own.parent; if (Object.keys(own).length) out.push(own); walk(sub) } }
+      walk(view.getState({ signals: vega.truthy, recurse: true }))
+      // (vega creates a facet's scopes in data order, the scene lists its cells sorted: compared as a set)
+      return JSON.stringify(out.map((o) => norm(o)).sort())
+    })(),
   })
   window.__svg = () => view.toSVG()
   window.__settle = async () => { await view.runAsync() }
@@ -294,9 +452,18 @@ window.__mountVega = async (specVl) => {
   // initialised from the first one's state. Aster renders fresh (docs/INTERACTION.md, "a signal write is a fresh
   // render"), vega retains its first autosize, padding and tick order; the driver tells the two apart with this.
   window.__fresh = async () => {
-    const state = view.getState({ signals: vega.truthy, data: vega.truthy, recurse: true })
-    const fresh = new vega.View(vega.parse(JSON.parse(JSON.stringify(vg))), { renderer: 'none', hover: false, logger: { level() { return this }, error() { return this }, warn() { return this }, info() { return this }, debug() { return this } } })
+    // (the default state: every signal that is not a proxy, and the data a modify() edited: the selection stores)
+    const state = view.getState()
+    const fresh = new vega.View(vega.parse(JSON.parse(JSON.stringify(vg))), { renderer: 'none', hover: false, logger: { level() { return this }, error(...a) { window.__freshErrors.push(a.map((x) => (x && x.stack ? x.stack : String(x))).join(' ').slice(0, 700)); return this }, warn() { return this }, info() { return this }, debug() { return this } } })
+    // The view's own signals and the stores first: the layout is then computed once, for the state it renders. The group
+    // scopes do not exist before the first run, so theirs follow (what they hold is drawn within the groups, it moves no layout).
+    fresh.setState(cloneState({ signals: state.signals, data: state.data }))
+    await fresh.runAsync()
     fresh.setState(cloneState(state))
+    await fresh.runAsync()
+    // (setState writes the values without waking what reads them: the scopes' marks are encoded again, which reads them)
+    const touchEncodes = (ctx) => { for (const sub of ctx.subcontext || []) { for (const op of Object.values(sub.nodes)) if (op instanceof vega.transforms.encode) fresh.touch(op); touchEncodes(sub) } }
+    touchEncodes(fresh._runtime)
     await fresh.runAsync()
     const svg = await fresh.toSVG()
     fresh.finalize()
@@ -305,20 +472,34 @@ window.__mountVega = async (specVl) => {
 }
 
 window.__mountAster = async (specVl) => {
-  const vg = vl.compile(specVl).spec // names only; the chart compiles the Vega-Lite spec itself
+  // (the chart compiles the Vega-Lite spec itself; its numbers are the view size a host gives <Chart>, which otherwise fills its
+  // container: a composition has none of its own, so 0 is the view's default size there)
+  const vg = vl.compile(specVl).spec
   names = (vg.signals || []).map((s) => s.name)
   stores = (vg.data || []).map((d) => d.name).filter((n) => /_store$/.test(n))
   window.__ref = React.createRef()
   const root = createRoot(holder)
-  flushSync(() => root.render(React.createElement(Chart, { ref: window.__ref, spec: specVl, width: specVl.width, height: specVl.height, onError: (e) => window.__errors.push('onError:' + String(e)), logger: { error: (...a) => window.__errors.push(a.map(String).join(' ')), warn() {} } })))
+  flushSync(() => root.render(React.createElement(Chart, { ref: window.__ref, spec: specVl, width: typeof vg.width === 'number' ? vg.width : 0, height: typeof vg.height === 'number' ? vg.height : 0, onError: (e) => window.__errors.push('onError:' + String(e)), logger: { error: (...a) => window.__errors.push(a.map(String).join(' ')), warn() {} } })))
   for (let i = 0; i < 200 && !(window.__ref.current && window.__ref.current.getScene()); i++) await new Promise((r) => setTimeout(r, 25))
   if (!window.__ref.current) throw new Error('chart did not mount: ' + JSON.stringify(window.__errors) + ' ref=' + String(window.__ref.current) + ' html=' + holder.innerHTML.slice(0, 300))
   window.__read = () => {
     const scene = window.__ref.current.getScene()
     const params = scene.signalParams
+    const scoped = []
+    const walk = (g) => {
+      const sc = g.scopeSignals
+      if (sc) {
+        const o = {}
+        for (const d of sc.defs) if (d.push !== 'outer') o[d.name] = sc.values[d.name]
+        if (Object.keys(o).length) scoped.push(o)
+      }
+      for (const c of g.items || []) if (Array.isArray(c.items)) walk(c)
+    }
+    for (const g of scene.items) walk(g)
     return {
       signals: Object.fromEntries(names.map((n) => [n, norm(params[n])])),
       stores: Object.fromEntries(stores.map((n) => [n, norm(scene.runtime.data(n))])),
+      scoped: JSON.stringify(scoped.map((o) => norm(o)).sort()),
     }
   }
   // (data-datum is the stamp the event loop reads the datum from; vega has no such attribute)
@@ -351,10 +532,10 @@ void readdirSync
 const playwright = await import('playwright')
 const browser = await playwright.chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
 
-interface Snapshot { signals: Record<string, string>; stores: Record<string, string>; svg: string; fresh?: string }
+interface Snapshot { signals: Record<string, string>; stores: Record<string, string>; scoped?: string; svg: string; fresh?: string }
 
 async function snapshot(page: Page, withFresh = false): Promise<Snapshot> {
-  const r = await page.evaluate(() => (window as unknown as { __read: () => { signals: Record<string, string>; stores: Record<string, string> } }).__read())
+  const r = await page.evaluate(() => (window as unknown as { __read: () => { signals: Record<string, string>; stores: Record<string, string>; scoped?: string } }).__read())
   const svg = await page.evaluate(() => Promise.resolve((window as unknown as { __svg: () => string | Promise<string> }).__svg()))
   if (!withFresh) return { ...r, svg }
   const fresh = await page.evaluate(() => (window as unknown as { __fresh: () => Promise<string> }).__fresh())
@@ -362,27 +543,38 @@ async function snapshot(page: Page, withFresh = false): Promise<Snapshot> {
 }
 
 interface Frame { x: number; y: number; w: number; h: number }
-async function frameOf(page: Page): Promise<Frame> {
-  // the plot frame: the first background path of the view
-  const b = await page.evaluate(() => {
-    // (the largest background path: a facet or concat view has one per cell, and a group mid-update can be empty for a frame)
-    const els = [...document.querySelectorAll('#c svg path.background')] as SVGGraphicsElement[]
-    let el: SVGGraphicsElement | null = null
-    let best = -1
-    for (const e of els) { const q = e.getBoundingClientRect(); if (q.width * q.height > best) { best = q.width * q.height; el = e } }
-    const r = (el ?? document.querySelector('#c svg')!).getBoundingClientRect()
-    return { x: r.left, y: r.top, w: r.width, h: r.height }
+/** The frames of the views, in document order: one per group item that is a view or a cell, else the single view's. */
+async function framesOf(page: Page): Promise<Frame[]> {
+  return page.evaluate(() => {
+    // (a composition's views and cells: groups named `<child>_group`, or `cell`; the groups a path mark makes are not views)
+    let els = [...document.querySelectorAll('#c svg g.role-scope.cell > g > path.background, #c svg g.role-scope[class$="_group"] > g > path.background')] as SVGGraphicsElement[]
+    if (!els.length) {
+      // a single view: its frame is the largest background path (a group mid-update can be empty for a frame)
+      const all = [...document.querySelectorAll('#c svg path.background')] as SVGGraphicsElement[]
+      let best = -1
+      let el: SVGGraphicsElement | null = null
+      for (const e of all) { const q = e.getBoundingClientRect(); if (q.width * q.height > best) { best = q.width * q.height; el = e } }
+      els = [(el ?? document.querySelector('#c svg')!) as SVGGraphicsElement]
+    }
+    return els.map((e) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height } })
   })
-  return b
+}
+async function frameOf(page: Page, view = 0): Promise<Frame> {
+  return (await framesOf(page))[view] ?? { x: 0, y: 0, w: 0, h: 0 }
 }
 
-const vegaFrames = new WeakMap<Page, Frame>()
+/** Vega keeps its first layout: the frames of its views are measured once, at the start of the case. */
+const vegaFrames = new WeakMap<Page, Frame[]>()
 
 async function runStep(page: Page, s: Step, engine: 'vega' | 'aster'): Promise<void> {
   // Vega keeps its first layout, and after a bound-scale pan its frame's background path collapses to 0x0 (the stale group
   // size), so vega's plot origin is measured once, at the start of the case. Aster's moves, so it is measured as needed.
-  let f = engine === 'vega' ? (vegaFrames.get(page) ?? (await frameOf(page))) : await frameOf(page)
-  if (engine === 'vega' && f.w > 0 && !vegaFrames.has(page)) vegaFrames.set(page, f)
+  const viewIdx = ('view' in s ? s.view : undefined) ?? 0
+  if (engine === 'vega' && !vegaFrames.has(page)) {
+    const all = await framesOf(page)
+    if (all.every((fr) => fr.w > 0)) vegaFrames.set(page, all)
+  }
+  let f = engine === 'vega' ? (vegaFrames.get(page)?.[viewIdx] ?? (await frameOf(page, viewIdx))) : await frameOf(page, viewIdx)
   if (process.env.SEL_DEBUG) console.log('frame', JSON.stringify(f))
   // Positions are fractions of the plot frame AS IT IS WHEN THE EVENT IS SENT. Aster renders fresh after every signal write,
   // so its padding (and with it the frame's place in the page) can move under a drag that pans an axis, where vega keeps
@@ -391,7 +583,7 @@ async function runStep(page: Page, s: Step, engine: 'vega' | 'aster'): Promise<v
     if (engine === 'vega') return // (vega keeps its first layout, so its frame does not move)
     for (let k = 0; k < 20; k++) {
       await page.evaluate(() => (window as unknown as { __settle: () => Promise<unknown> }).__settle())
-      f = await frameOf(page)
+      f = await frameOf(page, viewIdx)
       if (process.env.SEL_DEBUG) console.log('refresh', k, JSON.stringify(f))
       if (f.w > 0 && f.h > 0) return
       await page.waitForTimeout(25)
@@ -403,11 +595,14 @@ async function runStep(page: Page, s: Step, engine: 'vega' | 'aster'): Promise<v
     try { await fn() } finally { if (on) await page.keyboard.up('Shift') }
   }
   const markBox = async (i: number): Promise<[number, number]> => {
-    const b = await page.evaluate((idx) => {
-      const el = document.querySelectorAll('#c svg .mark-symbol.marks path, #c svg .mark-rect.marks path, #c svg .mark-symbol.layer_0_marks path')[idx] as SVGGraphicsElement
+    const b = await page.evaluate(([idx, view]) => {
+      // (in a composition: the marks inside the view's own group item)
+      const items = [...document.querySelectorAll('#c svg g.role-scope.cell > g, #c svg g.role-scope[class$="_group"] > g')]
+      const roots = items.length ? items : [document.querySelector('#c svg')!]
+      const el = roots[view]!.querySelectorAll('.mark-symbol.marks path, .mark-rect.marks path, .mark-symbol.layer_0_marks path, .mark-symbol[class*="_marks"] path, .mark-rect[class*="_marks"] path')[idx] as SVGGraphicsElement
       const r = el.getBoundingClientRect()
       return [r.left + r.width / 2, r.top + r.height / 2] as [number, number]
-    }, i)
+    }, [i, viewIdx] as const)
     return b
   }
   const legendBox = async (part: string, i: number): Promise<[number, number]> => page.evaluate(([p, idx]) => {
@@ -463,7 +658,7 @@ async function runStep(page: Page, s: Step, engine: 'vega' | 'aster'): Promise<v
   }
 }
 
-async function drive(engine: 'vega' | 'aster', c: Case): Promise<{ snaps: Snapshot[]; errors: string[] } | { error: string }> {
+async function drive(engine: 'vega' | 'aster', c: Case): Promise<{ snaps: Snapshot[]; errors: string[]; modlog?: string[] } | { error: string }> {
   const context = await browser.newContext({ viewport: { width: 900, height: 700 }, deviceScaleFactor: 1 })
   const page = await context.newPage()
   const pageErrors: string[] = []
@@ -487,7 +682,9 @@ async function drive(engine: 'vega' | 'aster', c: Case): Promise<{ snaps: Snapsh
     }
     if (pageErrors.length) return { error: `page errors: ${pageErrors.join(' | ')}` }
     const errors = await page.evaluate(() => (window as unknown as { __errors: string[] }).__errors)
-    return { snaps, errors }
+    if (process.env.SEL_DEBUG) console.log('fresh errors', JSON.stringify(await page.evaluate(() => (window as unknown as { __freshErrors: string[] }).__freshErrors)))
+    const modlog = await page.evaluate(() => (window as unknown as { __modlog?: string[] }).__modlog ?? [])
+    return { snaps, errors, modlog }
   } catch (e) {
     if (process.env.SEL_DEBUG) console.log((e as Error).stack, await page.evaluate(() => JSON.stringify((window as unknown as { __errors: string[] }).__errors) + document.body.innerHTML.slice(0, 600)))
     return { error: (e as Error).message.split('\n')[0]! + (pageErrors.length ? ` [page errors: ${pageErrors.join(' | ')}]` : '') }
@@ -509,6 +706,7 @@ for (const c of cases) {
     if (a.errors.length) problems.push(`aster logged: ${a.errors[0]!.slice(0, 200)}`)
     if (v.errors.length) problems.push(`vega logged: ${v.errors[0]!.slice(0, 200)}`)
     if (process.env.SEL_DEBUG) for (let i = 0; i < v.snaps.length; i++) console.log(i, "V", v.snaps[i]!.signals.pick_c_legend, v.snaps[i]!.signals.pick_toggle, v.snaps[i]!.signals.pick_tuple, "| A", a.snaps[i]!.signals.pick_c_legend, a.snaps[i]!.signals.pick_toggle, a.snaps[i]!.signals.pick_tuple)
+    if (process.env.SEL_MOD) console.log('modlog', JSON.stringify(v.modlog ?? null))
     for (let i = 0; i < v.snaps.length; i++) {
       const label = i === 0 ? 'initial' : `step ${i - 1} (${c.steps[i - 1]!.t})`
       const vs = v.snaps[i]!
@@ -516,10 +714,19 @@ for (const c of cases) {
       for (const n of Object.keys(vs.signals)) {
         if (vs.signals[n] !== as.signals[n]) problems.push(`${label}: signal ${n}: vega=${vs.signals[n]!.slice(0, 160)} aster=${as.signals[n]!.slice(0, 160)}`)
       }
+      if (vs.scoped !== as.scoped) {
+        // name the first scope that has no counterpart
+        const vsc = JSON.parse(vs.scoped!) as string[]
+        const asc = JSON.parse(as.scoped!) as string[]
+        const onlyV = vsc.find((x) => !asc.includes(x))
+        const onlyA = asc.find((x) => !vsc.includes(x))
+        const where = `${vsc.length} vs ${asc.length} scopes; only in vega: ${String(onlyV).slice(0, 300)}; only in aster: ${String(onlyA).slice(0, 300)}`
+        problems.push(`${label}: scoped signals: ${where}`)
+      }
       for (const n of Object.keys(vs.stores)) {
         if (vs.stores[n] !== as.stores[n]) problems.push(`${label}: store ${n}: vega=${vs.stores[n]!.slice(0, 200)} aster=${as.stores[n]!.slice(0, 200)}`)
       }
-      if (process.env.SEL_DUMP && i === 0) { writeFileSync('/tmp/fix-20-vl-selections-scratch/sel-vega.svg', vs.svg); writeFileSync('/tmp/fix-20-vl-selections-scratch/sel-aster.svg', as.svg) }
+      if (process.env.SEL_DUMP && i === Number(process.env.SEL_DUMP_AT ?? 0)) { writeFileSync('/tmp/fix-20-vl-selections-scratch/sel-vega.svg', vs.svg); writeFileSync('/tmp/fix-20-vl-selections-scratch/sel-aster.svg', as.svg); writeFileSync('/tmp/fix-20-vl-selections-scratch/sel-vega-fresh.svg', vs.fresh ?? '') }
       const retained = canonicalizeSvg(vs.svg)
       const aster = canonicalizeSvg(as.svg)
       const diffs = diffCanonical(retained, aster)
@@ -529,7 +736,7 @@ for (const c of cases) {
         // signal and store values EXACTLY, and vega's retained render really differs from that fresh one.
         const fresh = canonicalizeSvg(vs.fresh ?? vs.svg)
         if (diffCanonical(fresh, aster).length === 0 && diffCanonical(fresh, retained).length > 0) retainedSteps.push(`${c.name} / ${label}`)
-        else problems.push(`${label}: svg differs from vega's retained render and from vega's fresh render: ${String(diffs[0]).slice(0, 220)}`)
+        else problems.push(`${label}: svg differs from vega's retained render (${String(diffs[0]).slice(0, 160)}) and from vega's fresh render (${String(diffCanonical(fresh, aster)[0]).slice(0, 220)})`)
       }
     }
     for (const i of c.moves) {
