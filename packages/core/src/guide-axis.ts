@@ -397,6 +397,9 @@ export interface AxisBuildInput {
   ticks: Row[]
   /** the tuples' values are known to differ (the scale's own ticks, not a list the spec gave): the keyed join is the identity */
   distinctTicks?: boolean
+  /** where the marks of the axis are kept between evaluations, and whether to keep them (see runtime.ts chartGuides) */
+  store?: Map<object, unknown>
+  keep?: boolean
   /** the frame the axis sits on */
   width: number
   height: number
@@ -431,7 +434,6 @@ interface AxisDefs {
   marks: Array<{ part: string; def: GuideMarkDef; onTicks: boolean }>
   groupDef: GuideMarkDef
 }
-const AXIS_DEFS = new WeakMap<object, AxisDefs>()
 
 /** Build an axis from vega-parser's guides, evaluate it, lay it out. */
 export function buildAxis(inp: AxisBuildInput): AxisBuilt {
@@ -440,7 +442,7 @@ export function buildAxis(inp: AxisBuildInput): AxisBuilt {
 
   // the marks an axis is made of depend on its spec and the config (what is not known until a run is a signal, which
   // the entries read when they are evaluated): they are made once per compiled axis, and every evaluation reuses them
-  let defs = AXIS_DEFS.get(spec)
+  let defs = inp.store?.get(spec) as AxisDefs | undefined
   if (defs === undefined || defs.cfg !== cfg || defs.orient !== orient || defs.scale !== inp.scale || defs.encode !== inp.encode) {
     const _ = lookup(spec, cfg)
     const band = tickBand(_)
@@ -462,7 +464,7 @@ export function buildAxis(inp: AxisBuildInput): AxisBuilt {
     // the axis group item: its encode carries the layout parameters
     const groupDef: GuideMarkDef = { type: 'rule', role: 'axis', style: inp.encode.axis?.style, encode: groupEncode(p), interactive: false }
     defs = { cfg, orient, scale: inp.scale, encode: inp.encode, flags, marks, groupDef }
-    AXIS_DEFS.set(spec, defs)
+    if (inp.keep) inp.store?.set(spec, defs)
   }
   const datum: Row = { scale: inp.scale, ticks: defs.flags.ticks, labels: defs.flags.labels, grid: defs.flags.grid, domain: defs.flags.domain, title: defs.flags.title }
   const marks = defs.marks.map((m) => ({ part: m.part, def: m.def, data: m.onTicks ? inp.ticks : [datum] }))

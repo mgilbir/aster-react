@@ -258,6 +258,9 @@ function groupEncode(p: LegendParts): MarkEncode {
 }
 
 export interface LegendBuildInput {
+  /** where the marks of the legend are kept between evaluations, and whether to keep them (see runtime.ts chartGuides) */
+  store?: Map<object, unknown>
+  keep?: boolean
   spec: Rec
   config: Rec
   encode: Record<string, UserEncode | undefined>
@@ -322,7 +325,6 @@ interface LegendDefs {
   made: Map<string, GuideMarkDef>
   packs: Map<string, unknown>
 }
-const LEGEND_DEFS = new WeakMap<object, LegendDefs>()
 const made = (defs: LegendDefs, key: string, make: () => GuideMarkDef): GuideMarkDef => {
   let def = defs.made.get(key)
   if (def === undefined) defs.made.set(key, (def = make()))
@@ -339,10 +341,10 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
   const scales: Rec = {}
   for (const [c, n] of inp.channels) scales[c] = n
   p.scale = inp.channels[0]?.[1] ?? ''
-  let defs = LEGEND_DEFS.get(spec)
+  let defs = inp.store?.get(spec) as LegendDefs | undefined
   if (defs === undefined || defs.config !== config || defs.encode !== inp.encode || defs.scale !== p.scale || defs.type !== type || defs.vertical !== vertical) {
     defs = { config, encode: inp.encode, scale: p.scale, type, vertical, made: new Map(), packs: new Map() }
-    LEGEND_DEFS.set(spec, defs)
+    if (inp.keep) inp.store?.set(spec, defs)
   }
   p.defs = defs
   const datum: Row = { title: spec.title != null, scales, type, vgrad: type !== SymbolLegend && vertical }

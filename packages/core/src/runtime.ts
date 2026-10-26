@@ -4308,7 +4308,9 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
   }
   const formatType = guideScalar(ctx, spec.formatType) as string | undefined
   const host = guideHost(ctx)
+  const guides = chartGuides(ctx.chart)
   const built = buildLegendGuide({
+    store: guides.defs, keep: guides.evals > 1,
     spec, config, encode: (legend.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
     channels, scale: scale as never, scaleType, scaleOf: (name) => ctx.scales.get(name) as never,
     values: resolveLegendValues({ values: spec.values } as unknown as CompiledLegend, ctx),
@@ -4390,12 +4392,31 @@ function makeGuideHost(ctx: EvalContext): GuideHost {
 }
 
 /** `config.style` (and `config.lineBreak`) as the guide marks' defaults. */
-const GUIDE_STYLES = new WeakMap<CompiledChart, GuideStyles>()
+/**
+ * What the guide builders keep for a compiled chart. The marks of its guides are kept from the second evaluation on: a
+ * chart that is rendered once builds them, uses them and lets them go (what is kept is not free to keep).
+ */
+interface ChartGuideState {
+  evals: number
+  styles: GuideStyles
+  names: { scales: Map<string, CompiledScale>; data: Set<string> }
+  defs: Map<object, unknown>
+}
+const CHART_GUIDES = new WeakMap<CompiledChart, ChartGuideState>()
+function chartGuides(chart: CompiledChart): ChartGuideState {
+  let st = CHART_GUIDES.get(chart)
+  if (st === undefined) {
+    st = {
+      evals: 0, styles: { styles: chart.style ?? {}, lineBreak: chart.lineBreak },
+      names: { scales: new Map(chart.scales.map((sc) => [sc.name, sc])), data: new Set(chart.data.map((d) => d.name)) },
+      defs: new Map(),
+    }
+    CHART_GUIDES.set(chart, st)
+  }
+  return st
+}
 function guideStyles(ctx: EvalContext): GuideStyles {
-  // (one object per compiled chart: the plans of the guides' marks are kept against it)
-  let styles = GUIDE_STYLES.get(ctx.chart)
-  if (styles === undefined) GUIDE_STYLES.set(ctx.chart, (styles = { styles: ctx.chart.style ?? {}, lineBreak: ctx.chart.lineBreak }))
-  return styles
+  return chartGuides(ctx.chart).styles
 }
 
 /** The view's width / height SIGNAL (what a nested group's axes grid to); the context size at the view level. */
@@ -4426,15 +4447,11 @@ function guideScalar(ctx: EvalContext, v: unknown): unknown {
 /** What an absent `own` / `cfg` / `encode` of a guide is: one object, so that what is kept against it is found again. */
 const NO_PROPS: Record<string, never> = {}
 
-const ROOT_NAMES = new WeakMap<CompiledChart, { scales: Map<string, CompiledScale>; data: Set<string> }>()
 function rootScope(chart: CompiledChart): GuideScope {
   // (what the view declares is the compiled chart's; the scope's counters are the evaluation's)
-  let names = ROOT_NAMES.get(chart)
-  if (names === undefined) {
-    names = { scales: new Map(chart.scales.map((sc) => [sc.name, sc])), data: new Set(chart.data.map((d) => d.name)) }
-    ROOT_NAMES.set(chart, names)
-  }
-  return { path: [], nextChild: { n: 0 }, scales: names.scales, data: names.data }
+  const st = chartGuides(chart)
+  st.evals++
+  return { path: [], nextChild: { n: 0 }, scales: st.names.scales, data: st.names.data }
 }
 
 /**
@@ -4571,7 +4588,9 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   if (extra && ticks.length) rows.push({ index: -1, tickIndex: -1, extra: { value: ticks[0] }, label: '' })
   meterItems(rows.length, 'axis ticks')
 
+  const guides = chartGuides(ctx.chart)
   const built = buildAxisGuide({
+    store: guides.defs, keep: guides.evals > 1,
     spec: own, cfg, scale: axis.scale, orient, encode: (axis.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
     ticks: rows, distinctTicks: !axisValues(axis, ctx) && DISTINCT_TICK_SCALES.has(ctx.scaleTypes.get(axis.scale) ?? ''), width: ctx.width, height: ctx.height, raw: !!ctx.rawGuides, host: guideHost(ctx), style: guideStyles(ctx),
   })
