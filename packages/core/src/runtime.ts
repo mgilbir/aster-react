@@ -347,10 +347,16 @@ interface GuideScope {
  * built after it would have made is absent. The first pass of a build records the failures, the second runs with the
  * earliest one as the cut.
  */
+/**
+ * Where a pass stopped: an axis of a scope (`axis` is its index), or a legend (`legend` is its index; the scope's axes
+ * and marks come before the legends in vega's parse order, so they were all made).
+ */
+interface AbortPoint { path: number[]; axis: number; legend?: number; late?: boolean }
+
 interface AxisAbort {
-  failures: Array<{ path: number[]; axis: number; late?: boolean }>
+  failures: Array<AbortPoint>
   /** `late`: the failing operator is the last of its scope, so everything else of the scope was made */
-  cut?: { path: number[]; axis: number; late?: boolean }
+  cut?: AbortPoint
 }
 
 interface EvalContext {
@@ -544,16 +550,10 @@ function prepareChartCtx(
     urlPolicy: input.urlPolicy ?? (input.limits ? {} : undefined),
     logger: input.logger ?? consoleLogger,
   }
-  // A legend whose tickCount is an interval string on a non-time scale makes
-  // vega's LegendEntries throw: the dataflow logs the error and the ViewLayout
-  // transform never runs — the whole scene renders at raw encode positions
-  // (no axis layout, no title layout, default view size).
+  // A non-integer `columns` makes the symbol-legend grid layout throw: the ViewLayout never completes and
+  // the whole scene renders at raw encode positions (a legend whose entries cannot be made is an aborted
+  // pass in its scope instead: see axisTicksFailed).
   ctx.rawGuides = chart.legends.some((l) => {
-    if (typeof l.tickCount === 'string') {
-      const scaleName = l.shape ?? l.stroke ?? l.fill ?? l.size ?? l.opacity
-      const t = scaleName ? chart.scales.find((sc) => sc.name === scaleName)?.type : undefined
-      if (t !== 'time' && t !== 'utc') return true
-    }
     // A non-integer/negative `columns` makes vega's symbol-legend gridLayout
     // throw (Array(columns) with a length that is not a valid uint32-ish int).
     // Gradient legends do not lay entries out in a grid and ignore columns.
@@ -858,8 +858,8 @@ function buildAxisAndLegend(
   // a legend that VL kept must not remove it.)
   type LegendProps = { orient?: unknown; offset?: unknown; x?: unknown; y?: unknown }
   const built = legends
-    .map((legend) => {
-      const group = buildLegend(legend, ctx)
+    .map((legend, legendIndex) => {
+      const group = buildLegend(legend, ctx, legendIndex)
       if (group) {
         // (the mark definition reads these as written -- vega-parser marks/definition.js: `+zindex || undefined`,
         // `aria`, `description` -- so a signal object is not looked into)
@@ -933,6 +933,8 @@ function buildAxisAndLegend(
     const byOrient = new Map<string, { legend: CompiledLegend; group: SceneGroup; props: LegendProps }[]>()
     for (const x of built) {
       const orient = String(x.props.orient ?? 'right')
+      // (a legend whose entries were never made has nothing to lay out: it stays where its encode put it)
+      if ((x.group as unknown as { _entriesPending?: boolean })._entriesPending) continue
       if (orient === 'none') {
         // legendLayout leaves an `orient: none` legend where its x / y encode put it
         // (legendX / legendY); every other orient is zeroed and placed by the grid
@@ -1344,7 +1346,7 @@ function buildContent(
   const first = buildContentPass(chart, input, cw, ch, txn, fitted, signed)
   const failures = first.ctx.abort.failures
   if (!failures.length) return first
-  const cut = failures.reduce((a, b) => (compareInstances(a.path, b.path) || a.axis - b.axis) <= 0 ? a : b)
+  const cut = failures.reduce((a, b) => (compareInstances(a.path, b.path) || (a.axis === b.axis ? 0 : a.axis < b.axis ? -1 : 1) || (a.legend ?? 0) - (b.legend ?? 0)) <= 0 ? a : b)
   return buildContentPass(chart, input, cw, ch, txn, fitted, signed, cut)
 }
 
@@ -1380,7 +1382,7 @@ function buildContentPass(
   const items: SceneGroup[] = []
 
   // 1) Build marks (plot area)
-  for (const mark of stopped ? [] : ctx.chart.marks) {
+  for (const mark of stopped && cut!.legend === undefined ? [] : ctx.chart.marks) {
     const prevGroup = ctx.prev?.groups.get(mark) ?? null
     if (prevGroup && canReuseMarkGroup(mark, ctx)) {
       items.push(prevGroup)
@@ -1398,7 +1400,7 @@ function buildContentPass(
   }
 
   // the ViewLayout of a group never ran if the pass stopped below it: the view is always such a group
-  if (cut !== undefined) { ctx.rawGuides = true; ctx.pendingEntries = true }
+  if (cut !== undefined) { ctx.rawGuides = true; ctx.pendingEntries = entriesPending(0, cut.path.length) }
 
   // 2) ViewLayout of the view's root group (vega-view-transforms): a `layout`
   // grid positions the child groups (cells, headers, footers, titles) first;
@@ -1414,7 +1416,7 @@ function buildContentPass(
     }
   }
   const { groups: guideGroups } = stopped
-    ? buildAxisAndLegend(ctx, items, ctx.chart.axes.slice(0, cut!.axis), [])
+    ? buildAxisAndLegend(ctx, items, ctx.chart.axes.slice(0, cut!.axis), ctx.chart.legends.slice(0, cut!.legend ?? 0))
     : buildAxisAndLegend(ctx, items)
   for (const g of guideGroups) items.push(g)
 
@@ -3705,7 +3707,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     }
 
     const content: SceneGroup[] = []
-    for (const child of order > 0 || (order === 0 && !whole) ? [] : mark.marks ?? []) {
+    for (const child of order > 0 || (order === 0 && !whole && ctx.abort.cut!.legend === undefined) ? [] : mark.marks ?? []) {
       const r = evaluateMark(child, childCtx)
       if (r) pushAll(content, Array.isArray(r) ? r : [r])
     }
@@ -3720,11 +3722,13 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       }
     }
 
-    const guideCtx: EvalContext = scope.unsettled ? { ...childCtx, rawGuides: true, pendingEntries: true } : childCtx
+    const guideCtx: EvalContext = scope.unsettled || (ctx.abort.cut !== undefined && entriesPending(path.length, ctx.abort.cut.path.length))
+      ? { ...childCtx, ...(scope.unsettled ? { rawGuides: true } : {}), pendingEntries: entriesPending(path.length, ctx.abort.cut!.path.length) }
+      : childCtx
     const { groups: guides } = order > 0
       ? { groups: [] }
       : order === 0 && !whole
-        ? buildAxisAndLegend(guideCtx, content, (mark.axes ?? []).slice(0, ctx.abort.cut!.axis), [])
+        ? buildAxisAndLegend(guideCtx, content, (mark.axes ?? []).slice(0, ctx.abort.cut!.axis), (mark.legends ?? []).slice(0, ctx.abort.cut!.legend ?? 0))
         : buildAxisAndLegend(guideCtx, content, mark.axes ?? [], mark.legends ?? [])
     const siblings: SceneGroup[] = [...content, ...guides]
     const title = order > 0 || (order === 0 && !whole) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !!scope.unsettled, guideCtx, src.datum)
@@ -4254,7 +4258,7 @@ function resolveLegendValues(legend: CompiledLegend, ctx: EvalContext): unknown[
   return Array.isArray(resolved) ? resolved : undefined
 }
 
-function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
+function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): SceneGroup | null {
   const spec = (legend.own ?? NO_PROPS) as Record<string, unknown>
   const config = (legend.cfg ?? NO_PROPS) as Record<string, unknown>
   // vega-parser legend.js: the channels the legend maps, in LegendScales order; the first is the canonical scale
@@ -4266,20 +4270,29 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
   const scaleType = ctx.scaleTypes.get(channels[0]![1]) ?? ''
   // vega's `_('tickCount')`: a signal is what it holds
   const tickCountRaw = guideScalar(ctx, value(spec.tickCount, config.tickCount))
-  // A tickCount interval string ('day', 'month', ...) is only legal on time
-  // scales: vega's LegendEntries transform throws, the dataflow swallows the
-  // error and the legend renders with no entries (an empty degenerate group).
-  if ((typeof tickCountRaw === 'string' && scaleType !== 'time' && scaleType !== 'utc')
-    || (ctx.pendingEntries && legendType(spec, scaleType) === 'symbol')) {
-    // vega's LegendEntries throws (the pulse aborts downstream of it): the
-    // entries vanish but the legend title — whose encode ran earlier — stays
-    // at its raw (0,0) position.
+  // A tickCount interval string ('day', 'month', ...) is only legal on time scales: vega's LegendEntries throws, the
+  // dataflow pass aborts there, and the legend (and whatever comes after it in its scope) is never made
+  // (a scale ranked late in its own scope puts the failing operator last: the legend is then made without its entries,
+  // and the rest of the scope is made)
+  let entriesFailed = false
+  if (typeof tickCountRaw === 'string' && scaleType !== 'time' && scaleType !== 'utc') {
+    const own = ctx.scope.scales.get(channels[0]![1])
+    const late = own !== undefined && scaleIsLate(own, ctx.scope, ctx.chart)
+    ctx.abort.failures.push({ path: ctx.scope.path, axis: Infinity, legend: index, ...(late ? { late: true } : {}) })
+    if (!late) return null
+    entriesFailed = true
+  }
+  // a pass that stopped below this scope never made the entries of a symbol legend (they are a level further down)
+  if (entriesFailed || (ctx.pendingEntries && legendType(spec, scaleType) === 'symbol')) {
     const title = guideScalar(ctx, spec.title)
     const titleStr = title == null ? '' : String(title)
     const items: SceneItem[] = []
     if (titleStr) items.push({ _legendTitle: true, _part: 'title', _kind: 'text', text: titleStr, x: 0, y: 0, align: 'left', baseline: 'top', fill: '#000', fontSize: 11, fontWeight: 'bold' } as SceneItem)
-    // (the kind of legend it would have been: vega-parser's legendType, decided before any entry is built)
-    return { marktype: 'group', role: 'legend', legendType: legendType(spec, scaleType), x: 0, y: 0, width: 0, height: 0, items }
+    // (the kind of legend it would have been: vega-parser's legendType, decided before any entry is built; a gradient
+    // legend still has its gradient item, unencoded)
+    const kind = legendType(spec, scaleType)
+    if (entriesFailed && kind === 'gradient') items.push({ _part: 'gradient', _kind: 'rect', _bare: true, x: 0, y: 0, path: 'M0,0h0v0h0Z' } as unknown as SceneItem)
+    return { marktype: 'group', role: 'legend', legendType: kind, _entriesPending: true, x: 0, y: 0, width: 0, height: 0, items } as unknown as SceneGroup
   }
   // the format: a specifier, or a signal holding one (a timeUnit legend writes timeUnitSpecifier(...), which the
   // expression engine may not have)
@@ -4397,6 +4410,12 @@ function rootScope(chart: CompiledChart): GuideScope {
     data: new Set(chart.data.map((d) => d.name)),
   }
 }
+
+/**
+ * The entries of a symbol legend are a scope two levels below the one the legend is in: a pass that stopped at depth
+ * `stopped` never made them where that is not above it.
+ */
+const entriesPending = (depth: number, stopped: number): boolean => depth + 2 > stopped
 
 /** Instances are built level by level: the shallower first, those of one level in the order their parents made them. */
 function compareInstances(a: readonly number[], b: readonly number[]): number {

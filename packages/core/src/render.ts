@@ -2382,7 +2382,7 @@ function legendItem(g: SceneGroup, clips: ClipCollector): SvgEl {
     const banded = g.legendType === 'discrete' || bands.length > 0
     entryMarks = [el('g', (w) => guidePartAttrs('legend', banded ? 'band' : 'gradient', null, w, meta), (banded ? bands : gradients).map((l) => leaf(l)))]
     // (the labels come from the legend's entries: a legend whose entries failed to build has none, not even the container)
-    if (labels.length || gradients.length || bands.length || bg !== null) entryMarks.push(el('g', (w) => guidePartAttrs('legend', 'label', null, w, meta), labels.map((l) => leaf(l))))
+    if (labels.length || gradients.some((gr) => recOf(gr)._bare !== true) || bands.length || bg !== null) entryMarks.push(el('g', (w) => guidePartAttrs('legend', 'label', null, w, meta), labels.map((l) => leaf(l))))
   }
   const marks: SvgEl[] = [col(entryMarks)]
   if (titles.length) marks.push(el('g', (w) => guidePartAttrs('legend', 'title', null, w, meta), titles.map((t) => leaf(t))))
