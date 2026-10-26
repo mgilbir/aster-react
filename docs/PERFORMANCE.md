@@ -143,8 +143,8 @@ over its scale); each evaluation then runs only the channels that read the datum
 evaluations of one compiled chart, nine runs alternating the tree before this work and this tree on a loaded machine
 (best batch of each run): a chart with 1,000 band ticks and 1,000 grid lines evaluates in 3.7 ms where it took 2.2 ms
 (1.7x), a 10,000-point line chart with ten ticks per axis is unchanged (5.3 ms, 1.05x), the small guide-heavy corpus
-charts (two axes and a legend, 50 items) cost 6% to 60% more per evaluation (0.2 to 0.4 ms, a tenth of a millisecond
-more) and their SVG serialization 5% to 11% more. `pnpm bench:incremental` (append, replace, DOM patch) is unchanged
+charts (two axes and a legend, 50 items) cost 6% to 60% more per evaluation (0.2 to 0.4 ms, at most 0.14 ms more) and their SVG serialization up to 11%
+more. `pnpm bench:incremental` (append, replace, DOM patch) is unchanged
 within noise; `pnpm bench:browser` mount / update / resize of the 1,000-bar chart is 12% to 19% slower (median), line
 and scatter within 17%.
 
