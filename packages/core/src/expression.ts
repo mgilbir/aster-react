@@ -41,7 +41,9 @@ import type { AstNode } from './expr-parser.js'
 import {
   ascending, extent, isArray, isBoolean, isDate, isNumber, isObject,
   isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, safeGet, DisallowedObjectProperties,
+  inrange, clampRange, isTuple, panLinear, panLog, panPow, panSymlog, zoomLinear, zoomLog, zoomPow, zoomSymlog,
 } from './util.js'
+import { selectionTest, selectionIdTest, selectionResolve, selectionTuples } from './selections.js'
 
 export interface ExpressionRuntime {
   /** Scale lookup by name. Returns the scale callable, or undefined. */
@@ -50,6 +52,17 @@ export interface ExpressionRuntime {
   data: (name: string) => unknown[] | undefined
   /** Compile an expression string against this runtime. */
   expr: (expr: string) => CompiledExpr
+  /**
+   * The `modify(name, insert, remove, toggle, modify, values)` expression function: queue an edit of the
+   * named dataset. Only a host that owns datasets while it runs event handlers (the signal event loop)
+   * supplies it; without one `modify` changes nothing and returns 0.
+   */
+  modify?: (name: string, insert: unknown, remove: unknown, toggle: unknown, modify: unknown, values: unknown) => number
+  /**
+   * The rows dataset `name` publishes for the input rows `raw`: its transform pipeline run over them. The
+   * event loop shows a dataset it modified through this, before the next evaluation computes it for real.
+   */
+  transformed?: (name: string, raw: readonly unknown[]) => unknown[]
   /**
    * The view's container size (`containerSize()`), when the host has one. Absent
    * (like headless vega, which has no container) it is `[undefined, undefined]`.
@@ -191,11 +204,6 @@ function pad(value: unknown, count: number, char = ' ', align = 'right'): string
   }
   return str + char.repeat(len)
 }
-function inrange(value: unknown, range: unknown): boolean {
-  const [lo, hi] = range as [number, number]
-  const v = value as number
-  return lo < hi ? v >= lo && v <= hi : v >= hi && v <= lo
-}
 function mergeObj(...objs: unknown[]): unknown {
   // Like vega's merge (extend into {}), but an own `__proto__` key (JSON data)
   // must not leave the result with a foreign prototype: restore it.
@@ -329,14 +337,8 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     clamp: (value: number, lo: number, hi: number) => Math.min(Math.max(value, lo), hi),
     // arrays
     extent: (arr: unknown) => extent(arr as ArrayLike<unknown>), // unary: no accessor callable
-    clampRange: (r: unknown, lo: unknown, hi: unknown) => {
-      const [start, stop] = r as [number, number]
-      if (stop - start >= (hi as number) - (lo as number)) return [lo, hi]
-      if (start < (lo as number)) return [lo as number, start + ((hi as number) - (lo as number))]
-      if (stop > (hi as number)) return [stop - ((hi as number) - (lo as number)), hi]
-      return [start, stop]
-    },
-    inrange,
+    clampRange: (r: unknown, lo: unknown, hi: unknown) => clampRange(r as number[], lo as number, hi as number),
+    inrange: (value: unknown, range: unknown, left?: unknown, right?: unknown) => inrange(value, range as unknown[], left as boolean | undefined, right as boolean | undefined),
     join: (seq: unknown, sep?: unknown) => (seq as unknown[]).join(sep as string | undefined),
     lerp: (arr: unknown, t: unknown) => {
       const a = arr as number[]
@@ -354,7 +356,24 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     slice: sliceFn,
     sort: (seq: unknown) => (seq as unknown[]).slice().sort((a, b) => ascending(a as never, b as never)),
     merge: mergeObj,
-    modify: (set: unknown, value: unknown, signal?: unknown) => set, // event-only; static no-op returns the set
+    // dataset edits happen inside the signal event loop, which supplies runtime.modify; elsewhere there is nothing to edit
+    modify: (name: unknown, insert?: unknown, remove?: unknown, toggle?: unknown, modifyTuple?: unknown, values?: unknown) =>
+      runtime.modify ? runtime.modify(String(name), insert, remove, toggle, modifyTuple, values) : 0,
+    // vega-selections
+    vlSelectionTest: (name: unknown, datum: unknown, op?: unknown) => selectionTest(runtime.data(String(name)) as never, datum, op),
+    vlSelectionIdTest: (name: unknown, datum: unknown, op?: unknown) => selectionIdTest(runtime.data(String(name)) as never, datum, op),
+    vlSelectionResolve: (name: unknown, op?: unknown, isMulti?: unknown, vl5?: unknown) => selectionResolve(runtime.data(String(name)) as never, op, isMulti, vl5),
+    vlSelectionTuples: (items: unknown, base: unknown) => selectionTuples(items, base),
+    isTuple: (t: unknown) => isTuple(t),
+    // vega-util pan / zoom of a scale domain
+    panLinear: (domain: unknown, delta: unknown) => panLinear(domain as number[], delta as number),
+    panLog: (domain: unknown, delta: unknown) => panLog(domain as number[], delta as number),
+    panPow: (domain: unknown, delta: unknown, exponent: unknown) => panPow(domain as number[], delta as number, exponent as number),
+    panSymlog: (domain: unknown, delta: unknown, constant: unknown) => panSymlog(domain as number[], delta as number, constant as number),
+    zoomLinear: (domain: unknown, anchor: unknown, scale: unknown) => zoomLinear(domain as number[], anchor as number, scale as number),
+    zoomLog: (domain: unknown, anchor: unknown, scale: unknown) => zoomLog(domain as number[], anchor as number, scale as number),
+    zoomPow: (domain: unknown, anchor: unknown, scale: unknown, exponent: unknown) => zoomPow(domain as number[], anchor as number, scale as number, exponent as number),
+    zoomSymlog: (domain: unknown, anchor: unknown, scale: unknown, constant: unknown) => zoomSymlog(domain as number[], anchor as number, scale as number, constant as number),
     // multi-touch gestures (vega-functions pinch.js); `event` must be a touch event
     pinchDistance: (event: unknown) => {
       const t = (event as { touches: Array<{ clientX: number; clientY: number }> }).touches

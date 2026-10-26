@@ -468,3 +468,96 @@ export function pluck(data: unknown, name: unknown): unknown {
 
 /** vega-scenegraph `shapes.js` `sz`: an item without `size` is a 64px² symbol. */
 export const SYMBOL_DEFAULT_SIZE = 64
+
+// --- ranges and pan / zoom (vega-util inrange, clampRange, transform) ---------
+
+/**
+ * vega-util `inrange`: whether `value` lies within the span of `range` (its first and last entry, in either
+ * order). `left` / `right` choose inclusive (default) or exclusive comparisons for the lower / upper end.
+ */
+export function inrange(value: unknown, range: readonly unknown[], left?: boolean, right?: boolean): boolean {
+  let r0 = range[0] as number
+  let r1 = range[range.length - 1] as number
+  if (r0 > r1) {
+    const t = r0
+    r0 = r1
+    r1 = t
+  }
+  const inclusiveLeft = left === undefined || left
+  const inclusiveRight = right === undefined || right
+  const v = value as number
+  return (inclusiveLeft ? r0 <= v : r0 < v) && (inclusiveRight ? v <= r1 : v < r1)
+}
+
+/**
+ * vega-util `clampRange`: span-preserving clamp. A reversed range is put in order first; a span that fills
+ * `[min, max]` yields `[min, max]`; otherwise the range is translated until it sits inside.
+ */
+export function clampRange(range: readonly number[], min: number, max: number): number[] {
+  let lo = range[0] as number
+  let hi = range[1] as number
+  let span: number
+  if (hi < lo) {
+    span = hi
+    hi = lo
+    lo = span
+  }
+  span = hi - lo
+  return span >= max - min
+    ? [min, max]
+    : [(lo = Math.min(Math.max(lo, min), max - span)), lo + span]
+}
+
+type TransformFn = (x: number) => number
+type Anchor = number | null | undefined
+const expT = (sign: number): TransformFn => (x) => sign * Math.exp(x)
+const logT = (sign: number): TransformFn => (x) => Math.log(sign * x)
+const symlogT = (c: number): TransformFn => (x) => Math.sign(x) * Math.log1p(Math.abs(x / c))
+const symexpT = (c: number): TransformFn => (x) => Math.sign(x) * Math.expm1(Math.abs(x)) * c
+const powT = (exponent: number): TransformFn => (x) => (x < 0 ? -Math.pow(-x, exponent) : Math.pow(x, exponent))
+const coerceNumber: TransformFn = (x) => toNumber(x) ?? 0
+const identityT: TransformFn = (x) => x
+
+function pan(domain: readonly number[], delta: number, lift: TransformFn, ground: TransformFn): [number, number] {
+  if (!domain.length) error('Domain array must not be empty')
+  const d0 = lift(domain[0] as number)
+  const d1 = lift(domain[domain.length - 1] as number)
+  const dd = (d1 - d0) * delta
+  return [ground(d0 - dd), ground(d1 - dd)]
+}
+export const panLinear = (domain: readonly number[], delta: number): [number, number] => pan(domain, delta, coerceNumber, identityT)
+export const panLog = (domain: readonly number[], delta: number): [number, number] => {
+  const sign = Math.sign(domain[0] as number)
+  return pan(domain, delta, logT(sign), expT(sign))
+}
+export const panPow = (domain: readonly number[], delta: number, exponent: number): [number, number] => pan(domain, delta, powT(exponent), powT(1 / exponent))
+export const panSymlog = (domain: readonly number[], delta: number, constant: number): [number, number] => pan(domain, delta, symlogT(constant), symexpT(constant))
+
+function zoom(domain: readonly number[], anchor: Anchor, scale: number, lift: TransformFn, ground: TransformFn): [number, number] {
+  if (!domain.length) error('Domain array must not be empty')
+  const d0 = lift(domain[0] as number)
+  const d1 = lift(domain[domain.length - 1] as number)
+  const da = anchor != null ? lift(anchor) : (d0 + d1) / 2
+  return [ground(da + (d0 - da) * scale), ground(da + (d1 - da) * scale)]
+}
+export const zoomLinear = (domain: readonly number[], anchor: Anchor, scale: number): [number, number] => zoom(domain, anchor, scale, coerceNumber, identityT)
+export const zoomLog = (domain: readonly number[], anchor: Anchor, scale: number): [number, number] => {
+  const sign = Math.sign(domain[0] as number)
+  return zoom(domain, anchor, scale, logT(sign), expT(sign))
+}
+export const zoomPow = (domain: readonly number[], anchor: Anchor, scale: number, exponent: number): [number, number] => zoom(domain, anchor, scale, powT(exponent), powT(1 / exponent))
+export const zoomSymlog = (domain: readonly number[], anchor: Anchor, scale: number, constant: number): [number, number] => zoom(domain, anchor, scale, symlogT(constant), symexpT(constant))
+
+// --- tuples ------------------------------------------------------------------
+
+/**
+ * Marks an object as a data tuple (vega-dataflow's `Symbol('vega_id')`): the scene items the event loop
+ * hands to expressions (`item()`, `group()`) carry it, so `isTuple(group())` is true for a group item and
+ * false for the `{}` that `group()` returns when there is none.
+ */
+export const TUPLE_ID: unique symbol = Symbol.for('aster.tuple') as never
+
+/** vega-dataflow `isTuple`: whether the value is a registered tuple. */
+export function isTuple(t: unknown): boolean {
+  return !!(t && (typeof t === 'object' || typeof t === 'function') && (t as Record<symbol, unknown>)[TUPLE_ID])
+}

@@ -31,11 +31,13 @@
  * The host (React `<Chart>`, or any embedder) calls `bindSceneSignals` on the
  * rendered SVG and re-renders when `onSignal` fires.
  */
-import type { CompiledChart, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot, SignalOnDef } from './types.js'
-import { type ExpressionRuntime } from './expression.js'
+import type { CompiledChart, CompiledData, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot, SignalOnDef } from './types.js'
+import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
+import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'
+import { valuesEqual } from './fingerprint.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
-import { dict, ownGet, setOwn } from './util.js'
+import { dict, ownGet, setOwn, TUPLE_ID } from './util.js'
 import { consoleLogger, type Logger } from './logger.js'
 
 export interface BoundEvent {
@@ -73,6 +75,13 @@ export interface SignalEventHooks {
   /** Called once per signal that changed while an event (or `setSignal`) was processed. */
   onSignal?: (name: string, value: unknown, all: Record<string, unknown>) => void
   /**
+   * Called once per dataset that `modify(...)` edited while an event (or `setSignal`) was processed, with the
+   * dataset's input rows afterwards. The host keeps them and hands them back as `data[name]` to the next
+   * evaluation (and as `SignalBindOptions.data` when it binds again): that evaluation is then the scene vega
+   * would show, the dataset being an input like any other (selection stores are datasets).
+   */
+  onData?: (name: string, rows: unknown[]) => void
+  /**
    * Where errors and warnings go (vega's logger): a bad selector or expression is
    * reported at bind time, an expression that throws while an event is processed
    * is reported when it happens. Default: the console.
@@ -97,6 +106,12 @@ export interface SignalBindOptions {
   pick?: (x: number, y: number) => { item: object; marktype?: string } | null
   /** The scene, so a picked item's enclosing groups and mark name/role can be found. */
   scene?: SceneRoot
+  /**
+   * The input rows of the datasets as the evaluation was given them (`RuntimeInput.data`), so a dataset the
+   * host has edited through `onData` is continued from where it stands. A dataset not named here starts
+   * from the rows written in the spec.
+   */
+  data?: Record<string, unknown[]>
 }
 
 export interface SignalBinding {
@@ -220,7 +235,13 @@ function filterCode(def: StreamDef & { markrole?: string }): string | null {
 
 // --- expression helpers ------------------------------------------------------
 
-/** The identifiers an expression reads (signal references, among them). */
+/** The functions that read a dataset by the name in their first argument (vega-functions' dataVisitor / selectionVisitor). */
+const DATA_READERS = new Set(['data', 'indata', 'vlSelectionTest', 'vlSelectionIdTest', 'vlSelectionResolve'])
+
+/** The key under which an expression's dependence on the dataset `name` is tracked next to its signal names. */
+const dataKey = (name: string): string => `data:${name}`
+
+/** The identifiers an expression reads (signal references, among them), and `data:NAME` for every dataset it reads. */
 function identifiersOf(code: string): Set<string> {
   const out = new Set<string>()
   const visit = (n: unknown): void => {
@@ -233,7 +254,15 @@ function identifiersOf(code: string): Set<string> {
         visit(node.object)
         if (node.computed) visit(node.property)
         return
-      case 'CallExpression': visit(node.arguments); return
+      case 'CallExpression': {
+        const callee = node.callee as AstNode | undefined
+        const first = (node.arguments as AstNode[])[0]
+        if (callee?.type === 'Identifier' && DATA_READERS.has(callee.name as string) && first?.type === 'Literal' && typeof first.value === 'string') {
+          out.add(dataKey(first.value))
+        }
+        visit(node.arguments)
+        return
+      }
       case 'Property': visit(node.value); return
       default:
         for (const k of Object.keys(node)) if (k !== 'type') visit(node[k])
@@ -273,13 +302,14 @@ export function bindSignalEvents(
   hooks: SignalEventHooks = {},
   opts: SignalBindOptions = {},
 ): SignalBinding {
-  return bindSignalEventsDefs(svg, chart.signalDefs ?? [], runtime, signalParams, signals, hooks, opts)
+  return bindSignalEventsDefs(svg, chart.signalDefs ?? [], chart.data ?? [], runtime, signalParams, signals, hooks, opts)
 }
 
 function bindSignalEventsDefs(
   svg: SVGSVGElement,
   defs: CompiledSignalDef[],
-  runtime: ExpressionRuntime,
+  dataDefs: CompiledData[],
+  sceneRuntime: ExpressionRuntime,
   signalParams: Record<string, unknown>,
   signals: Record<string, unknown>,
   hooks: SignalEventHooks,
@@ -294,8 +324,65 @@ function bindSignalEventsDefs(
   const signalHandlers: Array<{ deps: Set<string>; run: () => void }> = []
   const fail = (what: string, e: unknown): void => logger.error(`signal event handler${what}: ${e instanceof Error ? e.message : String(e)}`)
 
+  // ---- datasets the handlers edit (`modify`) -------------------------------------------------
+  // A dataset an event handler modifies lives here, as its input rows; the rest of the datasets are the
+  // scene's. The transformed rows are what `data()` shows the handlers meanwhile.
+  const datasets = new Map(dataDefs.map((d) => [d.name, d]))
+  const inputRows = new Map<string, Array<Record<string, unknown>>>()
+  const liveRows = new Map<string, unknown[]>()
+  const rawOf = (name: string): Array<Record<string, unknown>> =>
+    inputRows.get(name) ?? (opts.data?.[name] as Array<Record<string, unknown>> | undefined) ?? (datasets.get(name)?.values as Array<Record<string, unknown>> | undefined) ?? []
+  const dataOf = (name: string): unknown[] | undefined => {
+    const raw = inputRows.get(name)
+    if (!raw) return sceneRuntime.data(name)
+    let rows = liveRows.get(name)
+    if (!rows) liveRows.set(name, (rows = sceneRuntime.transformed ? sceneRuntime.transformed(name, raw) : raw))
+    return rows
+  }
+
   // ---- the transaction: one native event (or setSignal) is one "run" ----------
-  let txn: { changed: string[] } | null = null
+  let txn: { changed: string[]; pending: Map<string, Changeset>; edited: Set<string> } | null = null
+
+  /** vega-functions modify.js: queue the edit; it is applied when the pass that asked for it has finished. */
+  const modifyData = (name: string, insert: unknown, remove: unknown, toggle: unknown, modifyTuple: unknown, values: unknown): number => {
+    if (!datasets.has(name)) throw new Error(`Cannot modify the unknown data set "${name}"`)
+    if (!txn) throw new Error('modify() is only available while an event is being handled')
+    const t = txn
+    return planModify(rawOf(name), () => {
+      let cs = t.pending.get(name)
+      if (!cs) t.pending.set(name, (cs = newChangeset()))
+      return cs
+    }, insert, remove, toggle, modifyTuple, values)
+  }
+  /** Pulse the queued edits into their datasets (vega: `df.runAfter(() => df.pulse(input, changes).run())`). */
+  const applyEdits = (): string[] => {
+    if (!txn || txn.pending.size === 0) return []
+    const touched: string[] = []
+    for (const [name, cs] of txn.pending) {
+      inputRows.set(name, applyChangeset(rawOf(name), cs))
+      liveRows.delete(name)
+      txn.edited.add(name)
+      touched.push(name)
+    }
+    txn.pending.clear()
+    return touched
+  }
+
+  // The runtime the handlers' expressions run in: the scene's, with the datasets as edited and `modify`.
+  const bindRuntime: ExpressionRuntime = {
+    ...sceneRuntime,
+    data: dataOf,
+    modify: modifyData,
+    expr: (code) => compile(code),
+  }
+  const compiledExprs = new Map<string, CompiledExpr>()
+  const compile = (code: string): CompiledExpr => {
+    let f = compiledExprs.get(code)
+    if (!f) compiledExprs.set(code, (f = compileExpr(code, bindRuntime)))
+    return f
+  }
+  const runtime = bindRuntime
+
   /** The current value: the host's store wins, the evaluated scene's value is the baseline. */
   const read = (name: string): unknown => (Object.hasOwn(signals, name) ? signals[name] : ownGet(signalParams, name))
   const params = (): Record<string, unknown> => dict(signalParams, signals)
@@ -318,7 +405,8 @@ function bindSignalEventsDefs(
 
   const cascade = (): void => {
     if (!txn) return
-    let frontier = new Set(txn.changed)
+    // edits the first pass queued are applied now, and what reads those datasets runs again
+    let frontier = new Set([...txn.changed, ...applyEdits().map(dataKey)])
     // acyclic in a valid spec; the bound keeps a cyclic one finite
     for (let round = 0; round <= defs.length && frontier.size > 0; ++round) {
       const next = new Set<string>()
@@ -326,7 +414,7 @@ function bindSignalEventsDefs(
         if (![...deps].some((n) => frontier.has(n))) continue
         try {
           const v = runtime.expr(def.update!)(undefined, params())
-          if (JSON.stringify(v) !== JSON.stringify(read(def.name))) {
+          if (!valuesEqual(v, read(def.name))) {
             setOwn(signals, def.name, v)
             markChanged(def.name)
             next.add(def.name)
@@ -341,6 +429,7 @@ function bindSignalEventsDefs(
         h.run()
         for (let i = before; i < txn.changed.length; ++i) next.add(txn.changed[i]!)
       }
+      for (const name of applyEdits()) next.add(dataKey(name))
       frontier = next
     }
   }
@@ -351,13 +440,14 @@ function bindSignalEventsDefs(
       try { fn() } catch (e) { fail('', e) }
       return
     }
-    txn = { changed: [] }
+    txn = { changed: [], pending: new Map(), edited: new Set() }
     try {
       try { fn() } catch (e) { fail('', e) }
       cascade()
     } finally {
-      const changed = txn.changed
+      const { changed, edited } = txn
       txn = null
+      for (const name of edited) hooks.onData?.(name, inputRows.get(name)!)
       for (const name of changed) hooks.onSignal?.(name, read(name), signals)
     }
   }
@@ -605,7 +695,7 @@ function itemFacade(p: PickedItem): object {
     interactive: true,
     get group(): object | null { return p.group ? itemFacade(p.group) : null },
   }
-  return Object.create(p.item, { mark: { value: mark, enumerable: true } }) as object
+  return Object.create(p.item, { mark: { value: mark, enumerable: true }, [TUPLE_ID]: { value: true } }) as object
 }
 
 /** `event.item` recovered from the DOM: the `data-datum` stamp and the mark container's classes. */
@@ -721,7 +811,7 @@ export function bindSceneSignals(
   scene: SceneRoot,
   signals: Record<string, unknown>,
   hooks: SignalEventHooks = {},
-  opts: Pick<SignalBindOptions, 'pick'> = {},
+  opts: Pick<SignalBindOptions, 'pick' | 'data'> = {},
 ): SignalBinding {
   const chart = (scene as unknown as { compiled?: CompiledChart }).compiled
   const runtime = scene.runtime as ExpressionRuntime | undefined

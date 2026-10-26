@@ -484,17 +484,19 @@ function prepareChartCtx(
     },
   }
 
+  const transformProjections = new ProjectionRegistry()
+  const transformHierarchies = new Map<string, unknown>()
   const defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }> = []
   // Inputs besides the signals that change what a reused scale/item would be.
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}`
   const ctx: EvalContext = {
-    chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new ProjectionRegistry(), projectionStamp: new Map(), runtime, _defs: defs,
+    chart, signalParams, width, height, datasets, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), runtime, _defs: defs,
     layoutState: { failed: false }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
       ...(explicitSize.width ? ['width'] : []), ...(explicitSize.height ? ['height'] : []),
     ]),
-    hierarchies: new Map(), affected: new Set(), incremental: false, deadline, checkDeadline,
+    hierarchies: transformHierarchies, affected: new Set(), incremental: false, deadline, checkDeadline,
     datasetPulses: new Map(),
     prev: txn.prev, draft: newState(txn.gen), gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
@@ -505,6 +507,16 @@ function prepareChartCtx(
     // url (tracking pixel, IP leak). Hosts rendering foreign specs must opt in.
     urlPolicy: input.urlPolicy ?? (input.limits ? {} : undefined),
     logger: input.logger ?? consoleLogger,
+  }
+  // The event loop shows a dataset it modified through its transform pipeline, before the next evaluation
+  // computes it (the rows of a modified selection store, sorted by its `collect`, for example).
+  // (It must not close over `ctx`: that reaches the previous evaluation's state, and a scene would keep every
+  // scene before it alive.)
+  runtime.transformed = (name, raw) => {
+    const d = chart.data.find((x) => x.name === name)
+    const rows = d?.values != null ? readData(raw as never, d.format) : (raw as Row[]).map((r) => ({ ...r }))
+    if (!d?.transform.length) return rows
+    return applyTransforms(rows, d.transform, { runtime, signals: signalParams, hierarchies: transformHierarchies, projections: transformProjections }, name)
   }
   // A legend whose tickCount is an interval string on a non-time scale makes
   // vega's LegendEntries throw: the dataflow logs the error and the ViewLayout
@@ -685,7 +697,7 @@ class ProjectionRegistry extends Map<string, unknown> {
 }
 
 /** Expression functions that read datasets or scales (a signal using them cannot resolve before they exist). */
-const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspace|invert|copy|gradient)\s*\(/
+const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspace|invert|copy|gradient|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(/
 
 /**
  * Evaluate static signal `update` expressions in declaration order against the
@@ -1177,7 +1189,7 @@ function walkStrings(
 /** Expression functions that read scales. */
 const SCALE_FN_EXPR = /\b(scale|bandwidth|bandspace|invert|domain|range|copy|gradient)\s*\(/
 /** Expression functions that read datasets. */
-const DATA_FN_EXPR = /\b(data|indata)\s*\(/
+const DATA_FN_EXPR = /\b(data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(/
 
 /** What a dataset's pipeline reads besides its `source`. */
 interface DatasetDeps { names: Set<string>; allData: boolean }

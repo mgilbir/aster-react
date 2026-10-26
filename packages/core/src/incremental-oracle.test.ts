@@ -34,6 +34,7 @@ import { compileChart } from './compiler.js'
 import { evaluateChart } from './runtime.js'
 import { createChartSession } from './session.js'
 import { diffRows, type RowDiff } from './pulse.js'
+import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'
 import { renderSceneToSvg } from './index.js'
 import type { RuntimeInput, SceneRoot } from './types.js'
 
@@ -138,6 +139,8 @@ export interface GenSpec {
   label: string
   /** Inline `values` in the spec (true) or only via `input.data` (false). */
   inlineValues: boolean
+  /** A selection store dataset `sel` the scenario edits (see `scenarioSel`): field tuples, or `_vgsid_` ids. */
+  store?: 'fields' | 'ids'
 }
 
 function genSpec(r: Rnd): GenSpec {
@@ -278,7 +281,7 @@ function genSpec(r: Rnd): GenSpec {
 // World + steps
 // ---------------------------------------------------------------------------
 
-interface World { t: Row[]; u: Row[]; sig: number; width: number | undefined; height: number | undefined }
+interface World { t: Row[]; u: Row[]; sel: Row[]; /** the store holds `_vgsid_` ids (else field tuples) */ selIds?: boolean; sig: number; width: number | undefined; height: number | undefined }
 
 const GROUPS = ['A', 'B', 'C', 'D'] as const
 
@@ -302,12 +305,12 @@ function genWorld(r: Rnd): World {
   return {
     t: Array.from({ length: n }, () => genRow(r)),
     u: keys.map((g) => ({ g, w: int(r, 1, 12) })),
-    sig: 3, width: undefined, height: undefined,
+    sel: [], sig: 3, width: undefined, height: undefined,
   }
 }
 
 type Op = 'edit' | 'grow' | 'shrink' | 'insert' | 'remove' | 'append' | 'truncate' | 'swap' | 'shuffle'
-  | 'replaceAll' | 'editU' | 'signal' | 'size' | 'noop' | 'edit-group'
+  | 'replaceAll' | 'editU' | 'signal' | 'size' | 'noop' | 'edit-group' | 'store'
 type Delivery = 'none' | 'changedDatasets' | 'dataChanges' | 'dataPulse' | 'inplace'
 type Via = 'evaluate' | 'change'
 
@@ -329,7 +332,7 @@ const ix = (x: number, n: number): number => (n <= 0 ? 0 : Math.min(n - 1, Math.
 
 /** Apply a step to a world, purely (new arrays, new row objects for changed rows). */
 export function applyStep(w: World, s: Step): World {
-  const next: World = { ...w, t: w.t.slice(), u: w.u.slice() }
+  const next: World = { ...w, t: w.t.slice(), u: w.u.slice(), sel: w.sel.slice() }
   const t = next.t
   const maxV = t.reduce((m, row) => Math.max(m, Number(row.v)), 0)
   const maxX = t.reduce((m, row) => Math.max(m, Number(row.x)), 0)
@@ -438,6 +441,29 @@ export function applyStep(w: World, s: Step): World {
       if (s.r[7]! < 0.6 && t.length) { const i = ix(s.r[6]!, t.length); t[i] = { ...t[i]!, ...rowAt(2), g: t[i]!.g } }
       break
     }
+    case 'store': {
+      // A `modify(sel, ...)` as vega-lite's selections issue it: replace with one tuple, add one (a shift-click),
+      // toggle one, replace within a unit, or clear. The edit is the dataflow's own (modify.ts).
+      const mode = Math.floor(s.r[0]! * 6)
+      const ids = w.selIds === true
+      const tuple = (k: number): Row => (ids
+        ? { unit: s.r[(k + 5) % 8]! < 0.3 ? 'u2' : '', _vgsid_: 1 + Math.floor(s.r[(k + 1) % 8]! * 9) }
+        : s.r[(k + 2) % 8]! < 0.5
+          ? { unit: '', fields: [{ field: 'g', type: 'E' }], values: [GROUPS[Math.floor(s.r[(k + 3) % 8]! * 4)]!] }
+          : { unit: '', fields: [{ field: 'x', type: 'R' }], values: [[Math.floor(s.r[(k + 3) % 8]! * 6), 5 + Math.floor(s.r[(k + 4) % 8]! * 8)]] })
+      let cs: Changeset | null = null
+      const changes = (): Changeset => (cs ??= newChangeset())
+      const rows = next.sel
+      const mod = (insert: unknown, remove: unknown, toggle: unknown): void => { planModify(rows, changes, insert, remove, toggle, null, null) }
+      if (mode === 0) mod(tuple(0), true, null)
+      else if (mode === 1) mod(tuple(1), null, null)
+      else if (mode === 2) mod(null, null, tuple(2))
+      else if (mode === 3 && rows.length) mod(null, null, { ...rows[Math.floor(s.r[1]! * rows.length)]! })
+      else if (mode === 4) mod(tuple(3), { unit: 'u2' }, null)
+      else mod(null, true, null)
+      next.sel = cs ? (applyChangeset(rows, cs) as Row[]) : rows
+      break
+    }
     case 'noop': break
   }
   return next
@@ -500,8 +526,7 @@ export function inputOf(g: GenSpec, w: World): RuntimeInput {
   const input: RuntimeInput = { signals: { sig: w.sig } }
   if (w.width != null) input.width = w.width
   if (w.height != null) input.height = w.height
-  input.data = { t: clone(w.t), u: clone(w.u) }
-  void g
+  input.data = { t: clone(w.t), u: clone(w.u), ...(g.store ? { sel: clone(w.sel) } : {}) }
   return input
 }
 
@@ -529,8 +554,8 @@ function toDataPulse(d: RowDiff): NonNullable<RuntimeInput['dataPulse']>[string]
 /** Truthful change hints for a step, given the previous and next worlds. */
 function hintsFor(s: Step, prev: World, next: World): Partial<RuntimeInput> {
   const hints: Partial<RuntimeInput> = {}
-  const touched: Array<'t' | 'u'> = []
-  for (const name of ['t', 'u'] as const) {
+  const touched: Array<'t' | 'u' | 'sel'> = []
+  for (const name of ['t', 'u', 'sel'] as const) {
     const a = prev[name], b = next[name]
     if (a.length !== b.length || b.some((row, i) => row !== a[i])) touched.push(name)
   }
@@ -623,14 +648,14 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
 
   if (target === 'chart') {
     const chart = compileChart(clone(g.spec) as never)
-    const live = { t: clone(world.t), u: clone(world.u) }
+    const live = { t: clone(world.t), u: clone(world.u), sel: clone(world.sel) }
     // The compiled IR must stay byte-identical across every evaluation (C12/C17).
     const irAtCompile = JSON.stringify(chart)
     const irCheck = (stepNo: number, op: string): RunResult | null => {
       const now = JSON.stringify(chart)
       return now === irAtCompile ? null : fail(stepNo, op, 'compiled IR mutated by evaluateChart', firstDiff(JSON.parse(irAtCompile), JSON.parse(now)) ?? '')
     }
-    const first = attempt(() => evaluateChart(chart, { ...inputOf(g, world), data: { t: live.t, u: live.u } }))
+    const first = attempt(() => evaluateChart(chart, { ...inputOf(g, world), data: { t: live.t, u: live.u, ...(g.store ? { sel: live.sel } : {}) } }))
     const r0 = compare(-1, 'init', first, world) ?? irCheck(-1, 'init')
     if (r0) return r0
     for (let i = 0; i < steps.length; i++) {
@@ -643,15 +668,16 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
       if (s.delivery === 'inplace') {
         // Mutate the previous arrays IN PLACE (the bench / host pattern): the
         // same array identity carries the new rows, announced via the hints.
-        for (const name of ['t', 'u'] as const) {
+        for (const name of ['t', 'u', 'sel'] as const) {
           const arr = live[name]
           arr.length = 0
           for (const row of world[name]) arr.push(clone(row))
         }
-        input.data = { t: live.t, u: live.u }
+        input.data = { t: live.t, u: live.u, ...(g.store ? { sel: live.sel } : {}) }
       } else {
         live.t = clone(world.t)
         live.u = clone(world.u)
+        live.sel = clone(world.sel)
       }
       const scene = attempt(() => evaluateChart(chart, input))
       const r = compare(i, `${s.op}/${s.delivery}`, scene, world) ?? irCheck(i, s.op)
@@ -668,6 +694,7 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
       for (const d of spec.data as Array<Record<string, unknown>>) {
         if (d.name === 't') d.values = clone(w.t)
         if (d.name === 'u') d.values = clone(w.u)
+        if (d.name === 'sel') d.values = clone(w.sel)
       }
     }
     return spec
@@ -676,7 +703,7 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
     const input: RuntimeInput = { signals: { sig: w.sig }, ...extra }
     if (w.width != null) input.width = w.width
     if (w.height != null) input.height = w.height
-    if (!g.inlineValues || extra.dataChanges || extra.dataPulse) input.data = { t: clone(w.t), u: clone(w.u) }
+    if (!g.inlineValues || extra.dataChanges || extra.dataPulse) input.data = { t: clone(w.t), u: clone(w.u), ...(g.store ? { sel: clone(w.sel) } : {}) }
     return input
   }
   const first = attempt(() => session.evaluate(specFor(world) as never, sessionInput(world, {})))
@@ -702,7 +729,7 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
     if (s.via === 'change') {
       // `change()` re-evaluates the last compiled chart: it must be handed the
       // complete state (data, signals, size), exactly like a host would.
-      const input = { ...sessionInput(world, extra), data: { t: clone(world.t), u: clone(world.u) } }
+      const input = { ...sessionInput(world, extra), data: { t: clone(world.t), u: clone(world.u), ...(g.store ? { sel: clone(world.sel) } : {}) } }
       scene = attempt(() => session.change(input))
     } else {
       scene = attempt(() => session.evaluate(specFor(world) as never, sessionInput(world, extra)))
@@ -728,6 +755,57 @@ export function scenario(seed: number, nSteps: number): { g: GenSpec; world: Wor
   return { g, world, steps }
 }
 
+/**
+ * The same scenarios with a selection store: a dataset `sel` (vega-lite's `<name>_store`: field tuples, or `_vgsid_`
+ * ids kept sorted by a `collect`) that the pipeline filters by (`vlSelectionTest` / `vlSelectionIdTest`), a mark
+ * highlights by, and a derived signal resolves (`vlSelectionResolve`), edited by `modify`-style updates between the
+ * data edits, signal changes and resizes the base scenario already has.
+ */
+export function scenarioSel(seed: number, nSteps: number): { g: GenSpec; world: World; steps: Step[] } {
+  const base = scenario(seed, nSteps)
+  const r = mulberry32(seed ^ 0x5e1ec7)
+  const ids = r() < 0.5
+  const spec = base.g.spec
+  const data = spec.data as Array<Record<string, unknown>>
+  const op = pick(r, ['union', 'intersect'] as const)
+  const test = ids ? 'vlSelectionIdTest("sel", datum)' : `vlSelectionTest("sel", datum, "${op}")`
+  const features = [`sel=${ids ? 'ids' : 'fields'}${ids ? '' : '/' + op}`]
+  data.unshift({
+    name: 'sel',
+    ...(base.g.inlineValues ? { values: [] } : {}),
+    ...(ids ? { transform: [{ type: 'collect', sort: { field: '_vgsid_' } }] } : {}),
+  })
+  const t = data.find((d) => d.name === 't')!
+  const head: Array<Record<string, unknown>> = ids ? [{ type: 'identifier', as: '_vgsid_' }] : []
+  const kinds = { filter: r() < 0.5, encode: r() < 0.7, signal: r() < 0.5 }
+  if (!kinds.filter && !kinds.encode && !kinds.signal) kinds.encode = true
+  if (kinds.filter) {
+    // guarded the way vega-lite writes it, or the bare test (which reads the store only through its own function)
+    head.push({ type: 'filter', expr: r() < 0.5 ? `!length(data("sel")) || ${test}` : test })
+    features.push('filter')
+  }
+  if (head.length) t.transform = [...head, ...((t.transform as Array<Record<string, unknown>> | undefined) ?? [])]
+  const marks = spec.marks as Array<Record<string, unknown>>
+  const first = marks.find((m) => (m.encode as { update?: Record<string, unknown> } | undefined)?.update?.fill !== undefined)
+  if (first && kinds.encode) {
+    const upd = (first.encode as { update: Record<string, unknown> }).update
+    upd.fill = [{ test: r() < 0.5 ? `length(data("sel")) && ${test}` : test, value: '#e45756' }, ...([] as unknown[]).concat(upd.fill)]
+    upd.opacity = [{ test, value: 1 }, { value: 0.45 }]
+    features.push('encode')
+  }
+  if (first && kinds.signal) {
+    ;(spec.signals as Array<Record<string, unknown>>).push({ name: 'selres', update: 'vlSelectionResolve("sel", "union", true, true)' })
+    const upd = (first.encode as { update: Record<string, unknown> }).update
+    upd.strokeWidth = { signal: 'isObject(selres) && selres.vlPoint ? 1 + length(selres.vlPoint.or) : 1' }
+    upd.stroke = { value: '#333' }
+    features.push('resolve')
+  }
+  base.g.label += ' ' + features.join(' ')
+  base.g.store = ids ? 'ids' : 'fields'
+  const steps = base.steps.map((s) => (r() < 0.4 ? { ...s, op: 'store' as const } : s))
+  return { g: base.g, world: { ...base.world, selIds: ids }, steps }
+}
+
 /** Greedy delta-debugging: drop steps while the failure persists. */
 function shrink(target: 'chart' | 'session', g: GenSpec, world: World, steps: Step[], seed: number): Step[] {
   let cur = steps
@@ -741,8 +819,8 @@ function shrink(target: 'chart' | 'session', g: GenSpec, world: World, steps: St
   return cur
 }
 
-export function checkSeed(seed: number, nSteps: number): string | null {
-  const { g, world, steps } = scenario(seed, nSteps)
+export function checkSeed(seed: number, nSteps: number, make: typeof scenario = scenario): string | null {
+  const { g, world, steps } = make(seed, nSteps)
   for (const target of ['chart', 'session'] as const) {
     const res = run(target, g, world, steps, seed)
     if (!res.failure) continue
@@ -792,6 +870,40 @@ describe('incremental === fresh evaluateChart(compileChart(spec)) (audit C84 / T
     const failures: string[] = []
     for (const seed of seeds) {
       const f = checkSeed(seed, STEPS)
+      if (f) failures.push(f)
+      if (failures.length >= MAX_FAIL) break
+    }
+    expect(failures.join('\n\n'), `${failures.length} failing seed(s)`).toBe('')
+  }, 600_000)
+})
+
+describe('incremental === fresh with selection stores that are edited between updates', () => {
+  it('the generator is deterministic per seed and covers fields, ids, filters, conditions and resolves', () => {
+    expect(JSON.stringify(scenarioSel(7, 6))).toBe(JSON.stringify(scenarioSel(7, 6)))
+    const all = Array.from({ length: 200 }, (_, i) => scenarioSel(i + 1, 1).g.label).join('\n')
+    for (const need of ['sel=ids', 'sel=fields/union', 'sel=fields/intersect', 'filter', 'encode', 'resolve']) {
+      expect(all, `generator never produces ${need}`).toContain(need)
+    }
+    const ops = new Set(Array.from({ length: 40 }, (_, i) => scenarioSel(i + 1, 12).steps.map((x) => x.op)).flat())
+    expect(ops.has('store')).toBe(true)
+  })
+
+  it('a store edit reaches the scene: the stores the scenarios build are not all empty', () => {
+    let nonEmpty = 0
+    for (let seed = 1; seed <= 40; seed++) {
+      let w = scenarioSel(seed, 12).world
+      const { steps } = scenarioSel(seed, 12)
+      for (const st of steps) w = applyStep(w, st)
+      if (w.sel.length) nonEmpty++
+    }
+    expect(nonEmpty).toBeGreaterThan(10)
+  })
+
+  const seedsSel = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
+  it(`holds for ${seedsSel.length} seeds x ${STEPS} steps (chart reuse + session)`, () => {
+    const failures: string[] = []
+    for (const seed of seedsSel) {
+      const f = checkSeed(seed, STEPS, scenarioSel)
       if (f) failures.push(f)
       if (failures.length >= MAX_FAIL) break
     }
