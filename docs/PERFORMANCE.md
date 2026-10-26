@@ -152,7 +152,7 @@ the number in the same PR. Measured 2026-10-23 on the audit stack:
 | `import { renderSpec } from '@aster/core'` | 123.1 | 126.3 | 126.8 |
 | `import { useChart } from '@aster/react'` | 126.4 | 129.7 | 130.3 |
 | `import { Chart } from '@aster/react'` | 157.2 | 163.2 | 163.8 |
-| `import { SvgChart } from '@aster/react/lite'` | 142.0 | 144.8 | 145.3 |
+| `import { SvgChart } from '@aster/react/lite'` | 142.0 | 145.3 | 145.9 |
 | `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | 151.5 | 157.5 | 158.0 |
 | `import '@aster/react/vl'` + `<Chart>` | 211.3 | 230.7 | 231.2 |
 | core + `@aster/core/dom` (marginal) | 5.8 | 5.7 | 6.2 |

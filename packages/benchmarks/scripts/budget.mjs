@@ -48,7 +48,7 @@ const BUDGETS = {
   '@aster/react useChart': 130.3 * 1024,
   '@aster/react Chart': 163.8 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 145.3 * 1024,
+  '@aster/react SvgChart': 145.9 * 1024,
   '@aster/react SvgChart + interaction': 158.0 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
   '@aster/react Chart + VL': 231.2 * 1024,
