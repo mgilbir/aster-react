@@ -744,7 +744,7 @@ class ProjectionRegistry extends Map<string, unknown> {
 }
 
 /** Expression functions that read datasets or scales (a signal using them cannot resolve before they exist). */
-const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspace|invert|copy|gradient)\s*\(/
+const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspace|invert|copy|gradient|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(/
 
 /**
  * Evaluate static signal `update` expressions in declaration order against the
@@ -775,7 +775,10 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
     if (staticOnly && DATA_DEPENDENT_EXPR.test(expr)) continue
     try {
       const value = ctx.runtime.expr(expr)(undefined, ctx.signalParams)
-      if (initPending && value !== undefined) ctx.initDone.add(def.name)
+      // An `init` that reads a scale or a dataset is only settled once they exist: until the scales are built,
+      // `domain('x')` of a scale that is not there yet is `[]`, which is not the value vega's dataflow computes.
+      const readsScales = DATA_DEPENDENT_EXPR.test(expr) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
+      if (initPending && value !== undefined && !readsScales) ctx.initDone.add(def.name)
       if (value !== undefined && !valuesEqual(value, ctx.signalParams[def.name])) {
         ctx.signalParams[def.name] = value
         ctx.fpMemo = undefined

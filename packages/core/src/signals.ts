@@ -32,11 +32,12 @@
  * rendered SVG and re-renders when `onSignal` fires.
  */
 import type { CompiledChart, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot, SignalOnDef } from './types.js'
-import { type ExpressionRuntime } from './expression.js'
+import { type ExpressionRuntime, withModifyHandler } from './expression.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
 import { dict, ownGet, setOwn } from './util.js'
 import { consoleLogger, type Logger } from './logger.js'
+import { timers, type Timer } from './timer.js'
 
 export interface BoundEvent {
   event: string
@@ -83,6 +84,13 @@ export interface SignalEventHooks {
    * (vega's `view.preventDefault()`, default false). `consume` always prevents.
    */
   preventDefault?: boolean
+  /**
+   * Called once per dataset a `modify(...)` call changed during a run (a selection's store, an animation's
+   * clock-selected frame), with its rows after the change. The loop never re-evaluates the chart itself: the host
+   * hands these rows back as `input.data[name]` on its next evaluation (and as `SignalBindOptions.data` when it
+   * re-binds), as it does the changed signals.
+   */
+  onData?: (name: string, rows: unknown[], all: Record<string, unknown[]>) => void
 }
 
 export interface SignalBindOptions {
@@ -97,10 +105,33 @@ export interface SignalBindOptions {
   pick?: (x: number, y: number) => { item: object; marktype?: string } | null
   /** The scene, so a picked item's enclosing groups and mark name/role can be found. */
   scene?: SceneRoot
+  /**
+   * What the state that outlives a binding (timer streams, throttle and debounce clocks, `between` windows) is kept
+   * for: an object that stays the same across the host's re-renders. Default: the svg element, which a host that
+   * patches its DOM keeps; a host that REPLACES the svg on every render passes its container (or any stable object),
+   * or each render would restart its timers.
+   */
+  owner?: EventTarget
+  /**
+   * The rows of the datasets `modify(...)` has changed so far (what the host got from `onData` and holds as
+   * `input.data`). A dataset not named here starts from the scene's own rows for it.
+   */
+  data?: Record<string, unknown[]>
 }
 
 export interface SignalBinding {
+  /**
+   * Stop delivering events to this binding. Timer streams (and pending debounces) are NOT stopped: a host
+   * re-binds after every render, and a timer is the view's, not one binding's (stopping it per render
+   * would restart the schedule every frame). Call `release` when the host is done with the svg.
+   */
   detach: () => void
+  /**
+   * `detach`, and stop everything the svg keeps running between bindings: its timer streams and pending
+   * debounces (vega's `view.finalize()`). Idempotent. A timer whose svg has left the document stops itself
+   * at its next tick even if the host never gets here.
+   */
+  release: () => void
   /** Manually set a signal (the imperative path, e.g. brush props). */
   setSignal: (name: string, value: unknown) => void
 }
@@ -141,6 +172,35 @@ interface StreamState {
 }
 
 const persisted = new WeakMap<EventTarget, Map<string, StreamState>>()
+
+/** A timer stream of one svg: it outlives the bindings (a host re-binds after every render) until `release`. */
+interface TimerState {
+  timer: Timer
+  /** Delivers a tick into the CURRENT binding (null while unbound). */
+  deliver: ((e: ExtEvent) => void) | null
+}
+const persistedTimers = new WeakMap<EventTarget, Map<string, TimerState>>()
+
+/** Stop every timer stream and pending debounce the owner keeps running between bindings. */
+function releaseOwner(owner: EventTarget): void {
+  const timersOf = persistedTimers.get(owner)
+  if (timersOf) {
+    for (const st of timersOf.values()) {
+      st.deliver = null
+      st.timer.stop()
+    }
+    persistedTimers.delete(owner)
+  }
+  const streams = persisted.get(owner)
+  if (streams) {
+    for (const st of streams.values()) {
+      if (st.tid) clearTimeout(st.tid)
+      st.tid = null
+      st.evt = null
+      st.deliver = null
+    }
+  }
+}
 
 function stateFor(owner: EventTarget, key: string): StreamState {
   let m = persisted.get(owner)
@@ -243,6 +303,22 @@ function identifiersOf(code: string): Set<string> {
   return out
 }
 
+// vega-functions modify.js: structural equality of the properties a removal / toggle names
+function equal(a: unknown, b: unknown): boolean {
+  if (a === b || (a !== a && b !== b)) return true
+  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((x, i) => equal(x, b[i]))
+  if (a != null && typeof a === 'object' && b != null && typeof b === 'object') return equalObject(a, b)
+  return false
+}
+function equalObject(a: unknown, b: unknown): boolean {
+  for (const key in a as object) {
+    if (!equal((a as Record<string, unknown>)[key], (b as Record<string, unknown> | undefined)?.[key])) return false
+  }
+  return true
+}
+/** vega isTuple: a row that already lives in a dataset (here: any plain object handed over as the tuple to remove). */
+const isTupleLike = (_: object): boolean => false
+
 // --- the binding -------------------------------------------------------------
 
 type Update = { kind: 'expr'; code: string } | { kind: 'value'; value: unknown } | { kind: 'signal'; name: string }
@@ -287,6 +363,8 @@ function bindSignalEventsDefs(
 ): SignalBinding {
   const logger: Logger = hooks.logger ?? consoleLogger
   const originX = opts.originX ?? 0
+  /** what outlives a binding is kept per owner (see SignalBindOptions.owner) */
+  const owner: EventTarget = opts.owner ?? svg
   const originY = opts.originY ?? 0
   const detachFns: Array<() => void> = []
   const rootStreams = new Map<string, Stream>()
@@ -308,6 +386,57 @@ function bindSignalEventsDefs(
     if (!force && read(name) === value) return
     setOwn(signals, name, value)
     markChanged(name)
+  }
+
+  // ---- datasets the handlers modify (vega-functions modify.js) ---------------------------------------
+  /** The rows the host holds for the datasets modify changed; every other dataset reads the scene's. */
+  const stores: Record<string, unknown[]> = dict(opts.data)
+  interface Change { remove: Array<(t: unknown) => boolean>; removeAll: boolean; insert: unknown[]; modify: Array<[object, string, unknown]> }
+  /** vega: a changeset per dataset, collected over one run and applied after it. */
+  const pending = new Map<string, Change>()
+  const rowsOf = (name: string): unknown[] => ownGet(stores, name) ?? runtime.data(name) ?? []
+  const equalProps = (props: unknown) => (t: unknown): boolean => equalObject(props, t)
+  const modifyImpl = (name: string, insert: unknown, remove: unknown, toggle: unknown, modifyTuple: unknown, values: unknown): number => {
+    const current = rowsOf(name)
+    // nothing to do!
+    if (!(current.length || insert || toggle)) return 0
+    let ch = pending.get(name)
+    if (!ch) pending.set(name, (ch = { remove: [], removeAll: false, insert: [], modify: [] }))
+    if (remove) {
+      if (remove === true) ch.removeAll = true
+      else if (Array.isArray(remove)) { const list = remove; ch.remove.push((t) => list.includes(t)) }
+      else if (remove != null && typeof remove === 'object' && isTupleLike(remove)) { const one = remove; ch.remove.push((t) => t === one) }
+      else ch.remove.push(equalProps(remove))
+    }
+    if (insert) for (const t of Array.isArray(insert) ? insert : [insert]) ch.insert.push(t)
+    if (toggle) {
+      const pred = equalProps(toggle)
+      if (current.some(pred)) ch.remove.push(pred)
+      else ch.insert.push(toggle)
+    }
+    if (modifyTuple) {
+      if (typeof modifyTuple === 'function') throw new Error('modify parameter must be a data tuple, not a function')
+      for (const key of Object.keys((values ?? {}) as object)) ch.modify.push([modifyTuple as object, key, (values as Record<string, unknown>)[key]])
+    }
+    return 1
+  }
+  /** Apply the queued changes (vega: `df.pulse(input, changes)` after the run): removals, then insertions, then field updates. */
+  const flushModifications = (): string[] => {
+    const changedNames: string[] = []
+    for (const [name, ch] of pending) {
+      let rows = rowsOf(name).slice()
+      if (ch.removeAll) rows = []
+      else if (ch.remove.length) rows = rows.filter((t) => !ch.remove.some((p) => p(t)))
+      for (const t of ch.insert) rows.push(t)
+      for (const [tuple, key, value] of ch.modify) {
+        const at = rows.indexOf(tuple)
+        if (at >= 0) rows[at] = { ...(rows[at] as object), [key]: value }
+      }
+      setOwn(stores, name, rows)
+      changedNames.push(name)
+    }
+    pending.clear()
+    return changedNames
   }
 
   const derived = defs.filter((d) => typeof d.update === 'string').map((d) => {
@@ -352,12 +481,18 @@ function bindSignalEventsDefs(
       return
     }
     txn = { changed: [] }
+    let changedData: string[] = []
     try {
-      try { fn() } catch (e) { fail('', e) }
-      cascade()
+      withModifyHandler(modifyImpl, () => {
+        try { fn() } catch (e) { fail('', e) }
+        cascade()
+      })
+      changedData = flushModifications()
     } finally {
       const changed = txn.changed
       txn = null
+      pending.clear()
+      for (const name of changedData) hooks.onData?.(name, ownGet(stores, name) ?? [], stores)
       for (const name of changed) hooks.onSignal?.(name, read(name), signals)
     }
   }
@@ -435,7 +570,7 @@ function bindSignalEventsDefs(
   }
 
   /** One root stream per `source:type` (vega Scope.event), with one DOM listener. */
-  const rootFor = (source: string, type: string | number): Stream => {
+  const rootFor = (source: string, type: string | number | undefined): Stream => {
     const key = source + ':' + type
     const have = rootStreams.get(key)
     if (have) return have
@@ -448,9 +583,30 @@ function bindSignalEventsDefs(
       })
     }
     if (source === 'timer') {
-      const ms = Number(type)
-      const id = setInterval(() => deliver({ type: 'timer', timestamp: Date.now() } as unknown as ExtEvent, false, {} as Event), ms)
-      detachFns.push(() => clearInterval(id))
+      // vega-view `view.timer(send, delay)`: d3-timer's `interval(tick, delay)` (no delay: every frame), whose tick hands
+      // the stream `{timestamp, elapsed}`. One timer per svg and delay, alive across re-bindings.
+      let byDelay = persistedTimers.get(owner)
+      if (!byDelay) persistedTimers.set(owner, (byDelay = new Map()))
+      let st = byDelay.get(key)
+      if (!st) {
+        const fresh: TimerState = { timer: undefined as unknown as Timer, deliver: null }
+        let wasConnected = false
+        fresh.timer = timers.interval((elapsed) => {
+          // an owner that has left the document no longer ticks (a host that forgot `release`)
+          const connected = (owner as Partial<Node>).isConnected ?? svg.isConnected
+          if (connected) wasConnected = true
+          else if (wasConnected) {
+            releaseOwner(owner)
+            return
+          }
+          fresh.deliver?.({ timestamp: Date.now(), elapsed } as unknown as ExtEvent)
+        }, type == null ? undefined : Number(type))
+        byDelay.set(key, (st = fresh))
+      }
+      const mine = (e: ExtEvent): void => deliver(e, false, {} as Event)
+      st.deliver = mine
+      const owned = st
+      detachFns.push(() => { if (owned.deliver === mine) owned.deliver = null })
     } else if (source === 'view') {
       addListener(svg, String(type), (e) => deliver(e as ExtEvent, true, e))
     } else if (source === 'window') {
@@ -475,7 +631,7 @@ function bindSignalEventsDefs(
       stream = buildStream(def.stream, keyBase)
     } else if (def.type != null) {
       if (def.type === 'timer') {
-        stream = rootFor('timer', def.throttle ?? 0)
+        stream = rootFor('timer', def.throttle)
         def = { between: def.between, filter: def.filter } as StreamDef
       } else {
         stream = rootFor(def.source === 'scope' || !def.source ? 'view' : def.source, def.type)
@@ -493,7 +649,7 @@ function bindSignalEventsDefs(
       if (def.between.length !== 2) throw new Error('Stream "between" parameter must have 2 entries: ' + JSON.stringify(def))
       const a = buildStream(def.between[0]!, keyBase)
       const b = buildStream(def.between[1]!, keyBase)
-      const st = stateFor(svg, `${keyBase}|between${id}`)
+      const st = stateFor(owner, `${keyBase}|between${id}`)
       const on = new Stream(); on.recv = () => { st.active = true }
       const off = new Stream(); off.recv = () => { st.active = false }
       a.targets.push(on)
@@ -508,7 +664,7 @@ function bindSignalEventsDefs(
     }
     if (def.throttle != null) {
       const pause = +def.throttle
-      const st = stateFor(svg, `${keyBase}|throttle${id}`)
+      const st = stateFor(owner, `${keyBase}|throttle${id}`)
       s = filtered(s, () => {
         const now = Date.now()
         if (now - st.last > pause) { st.last = now; return true }
@@ -518,7 +674,7 @@ function bindSignalEventsDefs(
     if (def.debounce != null) {
       const delay = +def.debounce
       const out = new Stream()
-      const st = stateFor(svg, `${keyBase}|debounce${id}`)
+      const st = stateFor(owner, `${keyBase}|debounce${id}`)
       const mine = (e: ExtEvent): void => run(() => out.receive(e))
       st.deliver = mine
       detachFns.push(() => { if (st.deliver === mine) st.deliver = null })
@@ -585,6 +741,10 @@ function bindSignalEventsDefs(
   return {
     detach: () => {
       for (const fn of detachFns.splice(0)) fn()
+    },
+    release: () => {
+      for (const fn of detachFns.splice(0)) fn()
+      releaseOwner(owner)
     },
     setSignal,
   }
@@ -721,14 +881,14 @@ export function bindSceneSignals(
   scene: SceneRoot,
   signals: Record<string, unknown>,
   hooks: SignalEventHooks = {},
-  opts: Pick<SignalBindOptions, 'pick'> = {},
+  opts: Pick<SignalBindOptions, 'pick' | 'data' | 'owner'> = {},
 ): SignalBinding {
   const chart = (scene as unknown as { compiled?: CompiledChart }).compiled
   const runtime = scene.runtime as ExpressionRuntime | undefined
   const signalParams = (scene as unknown as { signalParams?: Record<string, unknown> }).signalParams ?? {}
   if (!chart || !runtime) {
     // Non-interactive scene (no runtime handle): a no-op binding.
-    return { detach: () => {}, setSignal: () => {} }
+    return { detach: () => {}, release: () => {}, setSignal: () => {} }
   }
   return bindSignalEvents(
     svg,

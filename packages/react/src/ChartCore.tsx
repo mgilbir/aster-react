@@ -414,6 +414,16 @@ function ChartView({
     () => ({ ...(signals ?? {}), ...eventSignals }),
     [signals, eventSignals],
   )
+  // The datasets the event loop's `modify(...)` changed (an animation's frame selection, a selection's store): the loop
+  // owns them between evaluations, the chart reads them as data like the host's own, over which they take precedence.
+  const dataStoreRef = React.useRef<SignalStore | null>(null)
+  if (dataStoreRef.current == null) dataStoreRef.current = createSignalStore()
+  const dataStore = dataStoreRef.current
+  const eventData = React.useSyncExternalStore(dataStore.subscribe, dataStore.get, dataStore.get) as Record<string, Array<Record<string, unknown>>>
+  const mergedData = React.useMemo(
+    () => (Object.keys(eventData).length ? { ...(data ?? {}), ...eventData } : data),
+    [data, eventData],
+  )
   // The logger object may change every render; evaluation and the event loop see one stable proxy that
   // always calls the latest (a changing identity must not re-evaluate the chart).
   const loggerRef = React.useRef(logger)
@@ -444,7 +454,7 @@ function ChartView({
       const { changes, problems } = validateDataChanges(dataChanges, data, prevLengthsRef.current)
       prevLengthsRef.current = new Map(Object.entries(data ?? {}).map(([name, rows]) => [name, rows.length]))
       const sc = sessionRef.current!.evaluate(spec, {
-        data, dataChanges: changes, width: renderWidth, height: renderHeight,
+        data: mergedData, dataChanges: changes, width: renderWidth, height: renderHeight,
         signals: mergedSignals, limits: stableLimits, urlPolicy, domainRaw, textMetrics, logger: stableLogger,
       })
       if (wantsDatumAttrs(sc)) interaction?.stampDatumAttrs(sc.items)
@@ -456,7 +466,7 @@ function ChartView({
     } catch (err) {
       return { scene: null, error: err instanceof Error ? err : new Error(String(err)), problems: [] }
     }
-  }, [sceneOverride, spec, data, dataChanges, renderWidth, renderHeight, mergedSignals, tooltipEnabled, interactive, renderer, interaction, stableLimits, urlPolicy, domainRaw, textMetrics, stableLogger])
+  }, [sceneOverride, spec, data, mergedData, dataChanges, renderWidth, renderHeight, mergedSignals, tooltipEnabled, interactive, renderer, interaction, stableLimits, urlPolicy, domainRaw, textMetrics, stableLogger])
   const scene = evaluation.scene
   sceneRef.current = scene
   const renderError = evaluation.error
@@ -675,7 +685,13 @@ function ChartView({
   // Spec-driven signal event loop (SVG only). Rebinds when the DOM, the scene
   // or the signal values change — not on unrelated renders.
   const signalBindingRef = React.useRef<SignalBinding | null>(null)
+  /** The most recent binding and the host element whose timers it keeps: they outlive a re-bind and end at unmount (or a new host). */
+  const lastBindingRef = React.useRef<{ host: Element | null; release: () => void } | null>(null)
   const hasSignalListeners = signalListeners != null || onSignal != null
+  React.useEffect(() => () => {
+    lastBindingRef.current?.release()
+    lastBindingRef.current = null
+  }, [])
   React.useLayoutEffect(() => {
     if (!interactive || !scene || renderer === 'canvas' || interaction == null) return
     const host = svgHostRef.current
@@ -695,15 +711,20 @@ function ChartView({
         signalListenersRef.current?.[name]?.(name, value)
         onSignalRef.current?.(name, value)
       },
+      onData: (_name, _rows, all) => dataStore.set(all),
       ...(stableLogger ? { logger: stableLogger } : {}),
       ...(preventDefault != null ? { preventDefault } : {}),
-    }, { pick: (x, y) => hitIndexFor(displayScene ?? scene)?.query(x, y) ?? null })
+    }, { pick: (x, y) => hitIndexFor(displayScene ?? scene)?.query(x, y) ?? null, data: dataStore.get() as Record<string, unknown[]>, ...(host ? { owner: host } : {}) })
     signalBindingRef.current = binding
+    // a binding on a different host than the last one: the old host's timer streams are done
+    const prev = lastBindingRef.current
+    if (prev && prev.host !== host) prev.release()
+    lastBindingRef.current = { host, release: binding.release }
     return () => {
       binding.detach()
       if (signalBindingRef.current === binding) signalBindingRef.current = null
     }
-  }, [interactive, scene, displayScene, renderer, interaction, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, stableLogger, preventDefault, hitIndexFor])
+  }, [interactive, scene, displayScene, renderer, interaction, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, dataStore, stableLogger, preventDefault, hitIndexFor])
 
   // Canvas backend: size the backing store for devicePixelRatio and redraw the
   // whole scene whenever it changes (cheap relative to SVG serialization for

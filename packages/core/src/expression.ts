@@ -13,6 +13,7 @@
 import { currentLocale } from './locale.js'
 import { boundedCount, meterBytes, meterTick, guardedRegExp, checkRegexInput, checkRegexObject } from './limits.js'
 import { bandSpace } from './scale.js'
+import { selectionIdTest, selectionResolve, selectionTest, selectionTuples } from './selections.js'
 import { parseExpression } from './expr-parser.js'
 import { expressionInterpreter, DefaultFunctions, ExpressionConstants, EventFunctions } from './expr-interpreter.js'
 import {
@@ -42,6 +43,25 @@ import {
   ascending, extent, isArray, isBoolean, isDate, isNumber, isObject,
   isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, safeGet, DisallowedObjectProperties,
 } from './util.js'
+
+/** Queue a change to the named dataset: insert tuples, remove (`true`: all), toggle, modify. Returns 1 if anything was queued. */
+export type ModifyHandler = (name: string, insert: unknown, remove: unknown, toggle: unknown, modify: unknown, values: unknown) => number
+
+let activeModify: ModifyHandler | null = null
+
+/**
+ * Run `body` with `handler` serving `modify(...)` calls in expressions (the signal event loop wraps each handler's
+ * evaluation in it). Synchronous and re-entrant: the previous handler is restored when `body` returns or throws.
+ */
+export function withModifyHandler<T>(handler: ModifyHandler, body: () => T): T {
+  const prev = activeModify
+  activeModify = handler
+  try {
+    return body()
+  } finally {
+    activeModify = prev
+  }
+}
 
 export interface ExpressionRuntime {
   /** Scale lookup by name. Returns the scale callable, or undefined. */
@@ -354,7 +374,18 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     slice: sliceFn,
     sort: (seq: unknown) => (seq as unknown[]).slice().sort((a, b) => ascending(a as never, b as never)),
     merge: mergeObj,
-    modify: (set: unknown, value: unknown, signal?: unknown) => set, // event-only; static no-op returns the set
+    // vega-functions modify: queue a change to a dataset (a selection's store) for after the current run. Only the signal
+    // event loop can apply one (it owns the stores): everywhere else it has nothing to do, like vega's `_trigger === false`.
+    modify: (name: unknown, insert?: unknown, remove?: unknown, toggle?: unknown, modifyTuple?: unknown, values?: unknown) =>
+      activeModify ? activeModify(String(name), insert, remove, toggle, modifyTuple, values) : 0,
+    // Vega-Lite's selections (vega-selections): a store is a dataset
+    vlSelectionTest: (name: unknown, datum: unknown, op?: unknown) => selectionTest(runtime.data(String(name)), datum, op as string | undefined),
+    vlSelectionIdTest: (name: unknown, datum: unknown, op?: unknown) => selectionIdTest(runtime.data(String(name)), datum, op as string | undefined),
+    vlSelectionResolve: (name: unknown, op?: unknown, isMulti?: unknown, vl5?: unknown) =>
+      selectionResolve(runtime.data(String(name)), op as string | undefined, Boolean(isMulti), Boolean(vl5)),
+    vlSelectionTuples: (array: unknown, base: unknown) => selectionTuples(array, base),
+    // vega-dataflow isTuple: a scenegraph item (the event loop's item facades carry their `mark`) or an ingested row
+    isTuple: (t: unknown) => t != null && typeof t === 'object' && ('mark' in (t as object) || Object.hasOwn(t as object, Symbol.for('vega_id') as never)),
     // multi-touch gestures (vega-functions pinch.js); `event` must be a touch event
     pinchDistance: (event: unknown) => {
       const t = (event as { touches: Array<{ clientX: number; clientY: number }> }).touches
