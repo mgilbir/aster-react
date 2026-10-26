@@ -200,7 +200,8 @@ function svgRecords(svg: string): DrawRecord[] {
       if (op === 0) continue // vega's canvas paints nothing at opacity 0 (draw.js)
       if (inner === '') continue // vega's canvas skips empty text (marks/text.js draw)
       if (inner.includes('<tspan')) continue // multi-line: excluded from parity
-      const content = inner
+      // (the serializer escapes the text of the element; the canvas draws the characters)
+      const content = inner.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&')
       const fam = attrOf(attrs, 'font-family') ?? 'sans-serif'
       records.push({ kind: 'text', path: '', paint: `t=${content};x=${fmtN(x)};y=${fmtN(y)};align=${align};font=${[fst, fw, `${fsNum}px`, fam].filter(Boolean).join(' ')}${rot};style=style=${fill};alpha=${fmtN(op)}` })
       continue
