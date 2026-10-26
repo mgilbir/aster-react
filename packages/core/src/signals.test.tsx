@@ -315,5 +315,59 @@ describe('signal event streams (C20)', () => {
     expect(store.which).toBe('A:rect:bars')
     binding.detach()
   })
+
+  describe('{scale} event sources and edited datasets', () => {
+    const specFor = (lim: number): VgSpec => ({
+      width: 100, height: 100,
+      signals: [
+        { name: 'lim', value: lim },
+        { name: 'rescaled', value: 0, on: [{ events: [{ scale: 'x' }], update: 'rescaled + 1' }] },
+      ],
+      scales: [{ name: 'x', type: 'linear', domain: [0, { signal: 'lim' }], range: 'width' }],
+      marks: [],
+    }) as unknown as VgSpec
+
+    it('fires when the scale differs from the one the surface was last bound to, not when it is the same', () => {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+      const store: Record<string, unknown> = {}
+      const bindFor = (lim: number): ReturnType<typeof bindSceneSignals> =>
+        bindSceneSignals(svg, evaluateChart(compileChart(specFor(lim))), store)
+      bindFor(10).detach()
+      expect(store.rescaled).toBeUndefined() // the first binding only records the scale
+      bindFor(10).detach()
+      expect(store.rescaled).toBeUndefined()
+      bindFor(20).detach()
+      expect(store.rescaled).toBe(1)
+      bindFor(20).detach()
+      expect(store.rescaled).toBe(1)
+    })
+
+    it('modify() edits a dataset: the rows are reported, data() shows them to the same run, and the next binding continues from them', () => {
+      const spec = {
+        width: 100, height: 100,
+        data: [{ name: 'store' }],
+        signals: [
+          { name: 'go', value: 0 },
+          { name: 'edit', on: [{ events: { signal: 'go' }, update: 'modify("store", {k: go})' }] },
+          { name: 'count', update: 'length(data("store"))' },
+        ],
+        marks: [],
+      } as unknown as VgSpec
+      const scene = evaluateChart(compileChart(spec))
+      const rows: Record<string, unknown[]> = {}
+      const store: Record<string, unknown> = {}
+      const hooks = { onData: (name: string, r: unknown[]) => { rows[name] = r } }
+      const b1 = bindSceneSignals(document.createElementNS('http://www.w3.org/2000/svg', 'svg'), scene, store, hooks)
+      b1.setSignal('go', 1)
+      expect(rows.store).toEqual([{ k: 1 }])
+      expect(store.count).toBe(1)
+      b1.detach()
+      const b2 = bindSceneSignals(document.createElementNS('http://www.w3.org/2000/svg', 'svg'), scene, store, hooks, { data: rows })
+      b2.setSignal('go', 2)
+      expect(rows.store).toEqual([{ k: 1 }, { k: 2 }])
+      expect(store.count).toBe(2)
+      b2.detach()
+    })
+  })
 })
 
