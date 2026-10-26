@@ -62,6 +62,8 @@ interface SignalStore {
   subscribe: (listener: () => void) => () => void
   set: (next: Record<string, unknown>) => void
   merge: (next: Record<string, unknown>) => void
+  /** Empty the store without notifying (for a state derived from a render input). */
+  reset: () => void
 }
 
 function createSignalStore(): SignalStore {
@@ -81,6 +83,9 @@ function createSignalStore(): SignalStore {
     merge(next) {
       snapshot = { ...snapshot, ...next }
       emit()
+    },
+    reset() {
+      if (Object.keys(snapshot).length) snapshot = {}
     },
   }
 }
@@ -414,6 +419,23 @@ function ChartView({
     () => ({ ...(signals ?? {}), ...eventSignals }),
     [signals, eventSignals],
   )
+  // Datasets the spec's event handlers edit with `modify(...)` (a Vega-Lite selection's `<param>_store`): the
+  // event loop reports their rows, which are kept here and handed back as inputs, so a store is a dataset like any
+  // other and the evaluation after an edit is the one a fresh chart with those rows computes. They belong to the
+  // spec they were edited under.
+  const dataStoreRef = React.useRef<SignalStore | null>(null)
+  if (dataStoreRef.current == null) dataStoreRef.current = createSignalStore()
+  const dataStore = dataStoreRef.current
+  const storeOwnerRef = React.useRef(spec)
+  if (storeOwnerRef.current !== spec) {
+    storeOwnerRef.current = spec
+    dataStore.reset()
+  }
+  const editedData = React.useSyncExternalStore(dataStore.subscribe, dataStore.get, dataStore.get) as Record<string, unknown[]>
+  const inputData = React.useMemo(
+    () => (Object.keys(editedData).length ? { ...(data ?? {}), ...editedData } : data),
+    [data, editedData],
+  )
   // The logger object may change every render; evaluation and the event loop see one stable proxy that
   // always calls the latest (a changing identity must not re-evaluate the chart).
   const loggerRef = React.useRef(logger)
@@ -441,10 +463,10 @@ function ChartView({
       return { scene: sceneOverride, error: null, problems: [] }
     }
     try {
-      const { changes, problems } = validateDataChanges(dataChanges, data, prevLengthsRef.current)
-      prevLengthsRef.current = new Map(Object.entries(data ?? {}).map(([name, rows]) => [name, rows.length]))
+      const { changes, problems } = validateDataChanges(dataChanges, inputData, prevLengthsRef.current)
+      prevLengthsRef.current = new Map(Object.entries(inputData ?? {}).map(([name, rows]) => [name, rows.length]))
       const sc = sessionRef.current!.evaluate(spec, {
-        data, dataChanges: changes, width: renderWidth, height: renderHeight,
+        data: inputData, dataChanges: changes, width: renderWidth, height: renderHeight,
         signals: mergedSignals, limits: stableLimits, urlPolicy, domainRaw, textMetrics, logger: stableLogger,
       })
       if (wantsDatumAttrs(sc)) interaction?.stampDatumAttrs(sc.items)
@@ -456,7 +478,7 @@ function ChartView({
     } catch (err) {
       return { scene: null, error: err instanceof Error ? err : new Error(String(err)), problems: [] }
     }
-  }, [sceneOverride, spec, data, dataChanges, renderWidth, renderHeight, mergedSignals, tooltipEnabled, interactive, renderer, interaction, stableLimits, urlPolicy, domainRaw, textMetrics, stableLogger])
+  }, [sceneOverride, spec, inputData, dataChanges, renderWidth, renderHeight, mergedSignals, tooltipEnabled, interactive, renderer, interaction, stableLimits, urlPolicy, domainRaw, textMetrics, stableLogger])
   const scene = evaluation.scene
   sceneRef.current = scene
   const renderError = evaluation.error
@@ -544,13 +566,13 @@ function ChartView({
     try {
       if (baseSessionRef.current == null) baseSessionRef.current = createChartSession()
       const baseScene = baseSessionRef.current.evaluate(spec, {
-        data, width: renderWidth, height: renderHeight, signals: mergedSignals, limits: stableLimits, urlPolicy, textMetrics, logger: stableLogger,
+        data: inputData, width: renderWidth, height: renderHeight, signals: mergedSignals, limits: stableLimits, urlPolicy, textMetrics, logger: stableLogger,
       })
       return baseDomainsOf(chartInfoFromScene(baseScene), positional)
     } catch {
       return null
     }
-  }, [panZoomEnabled, zoomed, fromStream, positional, spec, data, renderWidth, renderHeight, mergedSignals, stableLimits, urlPolicy, textMetrics, stableLogger])
+  }, [panZoomEnabled, zoomed, fromStream, positional, spec, inputData, renderWidth, renderHeight, mergedSignals, stableLimits, urlPolicy, textMetrics, stableLogger])
   const baseDomains = React.useMemo<ViewDomain>(() => {
     if (!panZoomEnabled || chartInfo == null) return {}
     if (!zoomed) return baseDomainsOf(chartInfo, positional)
@@ -695,15 +717,16 @@ function ChartView({
         signalListenersRef.current?.[name]?.(name, value)
         onSignalRef.current?.(name, value)
       },
+      onData: (name, rows) => dataStore.merge({ [name]: rows }),
       ...(stableLogger ? { logger: stableLogger } : {}),
       ...(preventDefault != null ? { preventDefault } : {}),
-    }, { pick: (x, y) => hitIndexFor(displayScene ?? scene)?.query(x, y) ?? null })
+    }, { pick: (x, y) => hitIndexFor(displayScene ?? scene)?.query(x, y) ?? null, ...(inputData ? { data: inputData } : {}) })
     signalBindingRef.current = binding
     return () => {
       binding.detach()
       if (signalBindingRef.current === binding) signalBindingRef.current = null
     }
-  }, [interactive, scene, displayScene, renderer, interaction, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, stableLogger, preventDefault, hitIndexFor])
+  }, [interactive, scene, displayScene, renderer, interaction, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, dataStore, inputData, stableLogger, preventDefault, hitIndexFor])
 
   // Canvas backend: size the backing store for devicePixelRatio and redraw the
   // whole scene whenever it changes (cheap relative to SVG serialization for

@@ -60,7 +60,8 @@ describe('every compiled corpus spec is internally consistent (C71)', () => {
         // dataset references
         if (typeof o.from?.data === 'string') expect(data.has(o.from.data), `from.data "${o.from.data}" is undefined`).toBe(true)
         if (typeof o.data === 'string' && o.field !== undefined) expect(data.has(o.data), `domain data "${o.data}" is undefined`).toBe(true)
-        if (typeof o.source === 'string') expect(data.has(o.source), `dataset source "${o.source}" is undefined`).toBe(true)
+        // (an event stream {source: 'view', type: 'click'} also has a `source`; a dataset never has a `type`)
+        if (typeof o.source === 'string' && o.type === undefined) expect(data.has(o.source), `dataset source "${o.source}" is undefined`).toBe(true)
         // values real vega rejects (C71)
         if (o.shape && typeof o.shape === 'object' && 'value' in o.shape) expect(o.shape.value).not.toBe('point')
         if (o.type === 'stack') expect(['zero', 'center', 'normalize']).toContain(o.offset)

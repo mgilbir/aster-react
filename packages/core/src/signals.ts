@@ -156,6 +156,19 @@ interface StreamState {
 }
 
 const persisted = new WeakMap<EventTarget, Map<string, StreamState>>()
+/** What a binding last saw of each scale named by a `{scale}` event source, per surface (it survives a re-bind). */
+const scaleSnapshots = new WeakMap<EventTarget, Map<string, string>>()
+
+/** A scale's domain and range as one comparable string (Dates by time); `''` for no scale. */
+function scaleImage(scale: unknown): string {
+  const s = scale as { domain?: () => unknown[]; range?: () => unknown[] } | undefined
+  if (!s || typeof s.domain !== 'function') return ''
+  try {
+    return JSON.stringify([s.domain(), typeof s.range === 'function' ? s.range() : null], (_k, v: unknown) => (v instanceof Date ? v.getTime() : typeof v === 'number' && !Number.isFinite(v) ? String(v) : v))
+  } catch {
+    return ''
+  }
+}
 
 function stateFor(owner: EventTarget, key: string): StreamState {
   let m = persisted.get(owner)
@@ -322,6 +335,8 @@ function bindSignalEventsDefs(
   const rootStreams = new Map<string, Stream>()
   /** Signal-source handlers: run when a signal they reference changes. */
   const signalHandlers: Array<{ deps: Set<string>; run: () => void }> = []
+  /** `{scale}`-source handlers: run when a scale they name has changed since the scene the loop was last bound to. */
+  const scaleHandlers: Array<{ scales: Set<string>; run: () => void }> = []
   const fail = (what: string, e: unknown): void => logger.error(`signal event handler${what}: ${e instanceof Error ? e.message : String(e)}`)
 
   // ---- datasets the handlers edit (`modify`) -------------------------------------------------
@@ -639,7 +654,6 @@ function bindSignalEventsDefs(
         if (on.encode != null) throw new Error('`encode` updates (mark re-encode on event) are not supported; use `update`')
         const upd = updateOf(on)
         const { streams, sources } = normalizeEvents(on.events)
-        if (sources.some((s) => s.scale)) throw new Error('`{scale}` event sources are not supported')
         const force = on.force === true
         const keyBase = `${si}:${signal.name}:${oi}:${JSON.stringify(on.events)}`
         // the value an update produces for a delivery; `e` is the extended event (or a stand-in)
@@ -654,17 +668,41 @@ function bindSignalEventsDefs(
           sink.recv = terminal
           stream.targets.push(sink)
         }
-        if (sources.length) {
+        const onSignals = sources.filter((s) => s.signal != null)
+        if (onSignals.length) {
           const deps = new Set<string>()
-          for (const s of sources) for (const id of identifiersOf(s.signal!)) deps.add(id)
+          for (const s of onSignals) for (const id of identifiersOf(s.signal!)) deps.add(id)
           for (const d of deps) if (!names.has(d)) deps.delete(d)
           signalHandlers.push({ deps, run: () => { try { update(signal.name, evaluate({}), force) } catch (e) { fail(where, e) } } })
+        }
+        const onScales = new Set(sources.filter((s) => s.scale != null).map((s) => s.scale!))
+        if (onScales.size) {
+          scaleHandlers.push({ scales: onScales, run: () => { try { update(signal.name, evaluate({}), force) } catch (e) { fail(where, e) } } })
         }
       } catch (e) {
         fail(where, e)
       }
     })
   })
+
+  // A scale event is a scale that was recomputed. The host binds again after every render, so the scales of this
+  // scene are compared with those the loop saw last: a scale that differs fires its handlers, as one run.
+  if (scaleHandlers.length) {
+    const seen = scaleSnapshots.get(svg) ?? new Map<string, string>()
+    scaleSnapshots.set(svg, seen)
+    const changed = new Set<string>()
+    for (const name of new Set(scaleHandlers.flatMap((h) => [...h.scales]))) {
+      const now = scaleImage(sceneRuntime.scale(name))
+      const before = seen.get(name)
+      seen.set(name, now)
+      if (before !== undefined && before !== now) changed.add(name)
+    }
+    if (changed.size) {
+      run(() => {
+        for (const h of scaleHandlers) if ([...h.scales].some((n) => changed.has(n))) h.run()
+      })
+    }
+  }
 
   // Debounced deliveries re-enter the current binding; a re-bind reclaims them.
   const setSignal = (name: string, value: unknown): void => {

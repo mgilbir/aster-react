@@ -2182,8 +2182,9 @@ const LEGEND_PART_CLASS: Record<string, string> = {
 }
 
 /** The container of one guide mark: not interactive, so `pointer-events="none"`. */
-export function guidePartAttrs(guide: 'axis' | 'legend', part: string, clipId: string | null, w: AttrSink): void {
-  w.v('class', (guide === 'legend' ? LEGEND_PART_CLASS[part] : undefined) ?? GUIDE_PARTS[part]!)
+export function guidePartAttrs(guide: 'axis' | 'legend', part: string, clipId: string | null, w: AttrSink, name?: string): void {
+  // (a guide part the spec named -- legend `encode.symbols.name` -- carries the name as a class, as vega's mark does)
+  w.v('class', ((guide === 'legend' ? LEGEND_PART_CLASS[part] : undefined) ?? GUIDE_PARTS[part]!) + (name ? ` ${name}` : ''))
   if (clipId) clipRefAttrs(clipId, w)
   w.v('pointer-events', 'none')
 }
@@ -2349,27 +2350,29 @@ function legendItem(g: SceneGroup, clips: ClipCollector): SvgEl {
       default: loose.push(it)
     }
   }
+  // the names the spec gave the legend's parts (encode.<part>.name)
+  const names = (g as { partNames?: Record<string, string> }).partNames ?? {}
   const col = (inside: SvgEl[]): SvgEl => el('g', (w) => w.v('class', 'mark-group role-legend-entry'), [guideItem(0, 0, null, inside)])
   let entryMarks: SvgEl[]
   if (symbolStyle) {
     const items = entries.map((e) => el('g', (w) => groupItemAttrs(0, 0, w), [
       el('path', (w) => groupBackgroundAttrs(e.box, EMPTY_BOX, true, w)),
       el('g', noAttrs, [
-        el('g', (w) => guidePartAttrs('legend', 'symbol', e.symbols.length ? leafClipId(e.symbols[0]!, clips) : null, w), e.symbols.map((s) => leaf(s, false))),
-        el('g', (w) => guidePartAttrs('legend', 'label', null, w), e.labels.map((l) => leaf(l))),
+        el('g', (w) => guidePartAttrs('legend', 'symbol', e.symbols.length ? leafClipId(e.symbols[0]!, clips) : null, w, names.symbols), e.symbols.map((s) => leaf(s, false))),
+        el('g', (w) => guidePartAttrs('legend', 'label', null, w, names.labels), e.labels.map((l) => leaf(l))),
       ]),
       el('path', (w) => groupForegroundAttrs(null, true, w)),
     ]))
     // (a legend whose entries failed to build has no entry scope at all: vega's subflow never ran)
-    entryMarks = entries.length === 0 && bg === null ? [] : [el('g', (w) => { w.v('class', 'mark-group role-scope'); w.v('role', 'graphics-object'); w.v('aria-roledescription', 'group mark container') }, items)]
+    entryMarks = entries.length === 0 && bg === null ? [] : [el('g', (w) => { w.v('class', names.entries ? `mark-group role-scope ${names.entries}` : 'mark-group role-scope'); w.v('role', 'graphics-object'); w.v('aria-roledescription', 'group mark container') }, items)]
   } else {
     const banded = g.legendType === 'discrete' || bands.length > 0
-    entryMarks = [el('g', (w) => guidePartAttrs('legend', banded ? 'band' : 'gradient', null, w), (banded ? bands : gradients).map((l) => leaf(l)))]
+    entryMarks = [el('g', (w) => guidePartAttrs('legend', banded ? 'band' : 'gradient', null, w, names.gradient), (banded ? bands : gradients).map((l) => leaf(l)))]
     // (the labels come from the legend's entries: a legend whose entries failed to build has none, not even the container)
-    if (labels.length || gradients.length || bands.length) entryMarks.push(el('g', (w) => guidePartAttrs('legend', 'label', null, w), labels.map((l) => leaf(l))))
+    if (labels.length || gradients.length || bands.length) entryMarks.push(el('g', (w) => guidePartAttrs('legend', 'label', null, w, names.labels), labels.map((l) => leaf(l))))
   }
   const marks: SvgEl[] = [col(entryMarks)]
-  if (titles.length) marks.push(el('g', (w) => guidePartAttrs('legend', 'title', null, w), titles.map((t) => leaf(t))))
+  if (titles.length) marks.push(el('g', (w) => guidePartAttrs('legend', 'title', null, w, names.title), titles.map((t) => leaf(t))))
   return guideItem(g.x ?? 0, g.y ?? 0, bg, marks, boxPath(g.width ?? 0, g.height ?? 0), loose)
 }
 

@@ -401,6 +401,8 @@ interface EvalContext {
   encodeAborted?: boolean
   /** Datasets whose transform pipeline failed: nothing downstream of them is built. */
   failedDatasets?: Set<string>
+  /** The items of the named marks built so far (a mark may read another mark's items as its data: `from: {data: <mark name>}`). */
+  markItems: Map<string, SceneItem[]>
 }
 
 /**
@@ -496,7 +498,7 @@ function prepareChartCtx(
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
       ...(explicitSize.width ? ['width'] : []), ...(explicitSize.height ? ['height'] : []),
     ]),
-    hierarchies: transformHierarchies, affected: new Set(), incremental: false, deadline, checkDeadline,
+    hierarchies: transformHierarchies, affected: new Set(), incremental: false, deadline, checkDeadline, markItems: new Map(),
     datasetPulses: new Map(),
     prev: txn.prev, draft: newState(txn.gen), gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
@@ -726,6 +728,9 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
     const expr = def.update ?? (initPending ? def.init : undefined)
     if (!expr) continue
     if (staticOnly && DATA_DEPENDENT_EXPR.test(expr)) continue
+    // an `init` that reads scales (a selection's initial brush: `[scale("x", 2), scale("x", 4)]`) runs once the scales exist:
+    // before that `scale()` of a missing scale is `undefined`, which would be taken for the initial value
+    if (initPending && SCALE_FN_EXPR.test(expr) && !ctx.chart.scales.every((sc) => ctx.scales.has(sc.name))) continue
     try {
       const value = ctx.runtime.expr(expr)(undefined, ctx.signalParams)
       if (initPending && value !== undefined) ctx.initDone.add(def.name)
@@ -873,6 +878,13 @@ function buildAxisAndLegend(
         g.legendScale = g.legendChannels.map((k) => String((legend as Record<string, unknown>)[k]))[0]
         g.legendFormat = guideString(ctx, (legend as Record<string, unknown>).format)
         g.legendFormatType = guideString(ctx, (legend as Record<string, unknown>).formatType)
+        // the names the spec gave the legend's parts (`encode.symbols.name`...): vega puts them on the marks as classes
+        const partNames: Record<string, string> = {}
+        for (const part of ['title', 'labels', 'symbols', 'gradient', 'entries']) {
+          const name = legend.encode?.[part]?.name
+          if (typeof name === 'string' && name !== '') partNames[part] = name
+        }
+        if (Object.keys(partNames).length) (g as { partNames?: Record<string, string> }).partNames = partNames
         // (the legend type is the kind of legend the builder drew: gradient, discrete bands or symbols)
       }
       return { legend, group }
@@ -1249,6 +1261,13 @@ function markDepsOf(mark: CompiledMark, chart: CompiledChart): MarkDeps {
   if (deps) return deps
   const known = new Set(chart.data.map((d) => d.name))
   const out: MarkDeps = { names: new Set(), allData: false, scales: new Set(), allScales: false }
+  // a mark reading another mark's items (`from: {data: <mark name>}`) depends on whatever that mark depends on
+  const readsMarkItems = (m: CompiledMark): boolean => {
+    const from = m.from?.data
+    if ((typeof from === 'string' && !known.has(from)) || (m.marks ?? []).some(readsMarkItems)) return true
+    return false
+  }
+  if (readsMarkItems(mark)) out.allData = true
   walkStrings(mark, (str, owner) => {
     if (known.has(str)) out.names.add(str)
     if (DATA_FN_EXPR.test(str)) out.allData = true
@@ -3249,6 +3268,17 @@ function evaluateMark(
   ctx: EvalContext,
   prevGroup?: SceneGroup | null,
 ): SceneGroup | SceneGroup[] | null {
+  const built = evaluateMarkItems(mark, ctx, prevGroup)
+  // a named mark's items are what a later mark of `from: {data: <name>}` reads
+  if (built && typeof mark.name === 'string' && mark.type !== 'group' && !Array.isArray(built)) ctx.markItems.set(mark.name, (built.items ?? []) as SceneItem[])
+  return built
+}
+
+function evaluateMarkItems(
+  mark: CompiledMark,
+  ctx: EvalContext,
+  prevGroup?: SceneGroup | null,
+): SceneGroup | SceneGroup[] | null {
   // a scale or an encode that threw stopped vega's run: the marks after it were never joined, so they are not in the scenegraph
   if (ctx.encodeAborted) return null
   if (mark.type === 'group') {
@@ -3264,17 +3294,20 @@ function evaluateMark(
   const addedItems: SceneItem[] = []
   let pendingUndo: ItemsUndo | undefined
   if (source) {
-    const rawRows = ctx.datasets.get(source) ?? []
+    // (a source that is no dataset but the name of a mark built before: that mark's items, shallow-copied as vega's tuples)
+    const rawRows = ctx.datasets.get(source) ?? ctx.markItems.get(source)?.map((it) => ({ ...(it as unknown as Row) })) ?? []
     // Only clone rows when the pipeline will re-encode them all (a mark-level
     // transform); the differential path reads the raw rows and clones
     // just the changed indices, so an unchanged row is never copied.
     let rows: Row[] = rawRows
     let rowsCloned = false
-    if (mark.transform?.length) {
+    // (a `voronoi` mark transform is vega's post-encoding kind: it runs on the encoded items, below)
+    const preTransforms = mark.transform?.filter((t) => t.type !== 'voronoi')
+    if (preTransforms?.length) {
       rows = rawRows.map((r) => ({ ...r }))
       rowsCloned = true
       try {
-        rows = applyTransforms(rows, mark.transform, {
+        rows = applyTransforms(rows, preTransforms, {
           runtime: ctx.runtime,
           signals: ctx.signalParams,
           hierarchies: ctx.hierarchies,
@@ -3395,6 +3428,19 @@ function evaluateMark(
     const res = resolveEncodeSet(update, {}, ctx, mark.type)
     res.__gen = ctx.gen
     items = [res]
+  }
+
+  // vega-parser mark.js: a mark's `transform`s that work on the encoded items (voronoi cells over the items'
+  // positions) run right after the encode: the items are the transform's tuples, so `datum.datum` is the source datum.
+  for (const t of mark.transform ?? []) {
+    if (t.type !== 'voronoi' || !source || items.length === 0) continue
+    try {
+      const cells = applyTransforms(items as unknown as Row[], [t], { runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections }, source)
+      const as = ((t as { as?: string }).as) ?? 'path'
+      items.forEach((it, i) => { (it as unknown as Row)[as] = (cells[i] as Row)[as] })
+    } catch (e) {
+      reportEvalError(ctx, e)
+    }
   }
 
   // vega's SortItems: a mark `sort` orders the ENCODED items by their own

@@ -1338,12 +1338,12 @@ interface DelaunayPort {
 }
 
 /** `Delaunay.from(rows, xField, yField)` + `Delaunay._init` (d3-delaunay@6). */
-function buildDelaunay(rows: Row[], xField: string, yField: string): DelaunayPort {
+function buildDelaunay(rows: Row[], xOf: (r: Row) => unknown, yOf: (r: Row) => unknown): DelaunayPort {
   const n = rows.length
   const coords = new Float64Array(n * 2)
   for (let i = 0; i < n; i++) {
-    coords[i * 2] = Number(rows[i]![xField])
-    coords[i * 2 + 1] = Number(rows[i]![yField])
+    coords[i * 2] = xOf(rows[i]!) as number
+    coords[i * 2 + 1] = yOf(rows[i]!) as number
   }
   const del = new DelaunatorPort(coords)
   const d: DelaunayPort = {
@@ -1848,10 +1848,24 @@ function voronoiCellPath(v: VoronoiPort, i: number): string | null {
 }
 
 /** The vega `voronoi` transform: Delaunay triangulation → clipped cell paths. */
+/** A vega `field` parameter: a field name, `{field}`, or an `{expr}` evaluated per row (vega-lite's voronoi reads `datum.datum.x || 0`). */
+function fieldParam(param: unknown, ctx: TransformContext, what: string): (r: Row) => unknown {
+  if (typeof param === 'string') return (r) => getField(r, param)
+  if (param !== null && typeof param === 'object') {
+    const p = param as { field?: unknown; expr?: unknown }
+    if (typeof p.field === 'string') return (r) => getField(r, p.field as string)
+    if (typeof p.expr === 'string') {
+      const f = ctx.runtime.expr(p.expr)
+      return (r) => f(r, ctx.signals)
+    }
+  }
+  throw new Error(`voronoi: the ${what} parameter must be a field name, {field} or {expr}`)
+}
+
 function voronoiRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
   const as = (t.as as string | undefined) ?? 'path'
-  const xField = t.x as string
-  const yField = t.y as string
+  const xOf = fieldParam(t.x, ctx, 'x')
+  const yOf = fieldParam(t.y, ctx, 'y')
   const size = resolveSizeParam(t.size, ctx)
   let bounds: [number, number, number, number]
   if (size) {
@@ -1866,7 +1880,7 @@ function voronoiRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   // Nothing to do if no data (matches vega's early return).
   if (!rows.length) return rows
 
-  const delaunay = buildDelaunay(rows, xField, yField)
+  const delaunay = buildDelaunay(rows, xOf, yOf)
   const voronoi = buildVoronoi(delaunay, bounds)
   return rows.map((r, i) => {
     meterTick('voronoi')
