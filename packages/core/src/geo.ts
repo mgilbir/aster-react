@@ -151,6 +151,9 @@ export function projectedBounds(projection: GeoProjection, geo: unknown): [numbe
   let y1 = +Number.MAX_VALUE
   let x2 = -Number.MAX_VALUE
   let y2 = -Number.MAX_VALUE
+  // vega's boundContext maps every point through its (identity) rotation, `1*x + 0*y`, which turns a point at infinity
+  // (a clip that degenerates: stereographic at clipAngle 0 emits `LInfinity,NaN`) into NaN, and NaN extends nothing
+  const addp = (px: number, py: number): void => add(1 * px + 0 * py, 0 * px + 1 * py)
   const add = (x: number, y: number): void => {
     if (x < x1) x1 = x
     if (x > x2) x2 = x
@@ -160,8 +163,8 @@ export function projectedBounds(projection: GeoProjection, geo: unknown): [numbe
   g.context({
     beginPath() {},
     closePath() {},
-    moveTo: add,
-    lineTo: add,
+    moveTo: addp,
+    lineTo: addp,
     // d3's point radius is a full circle
     arc(cx: number, cy: number, r: number) {
       add(cx - r, cy - r)
