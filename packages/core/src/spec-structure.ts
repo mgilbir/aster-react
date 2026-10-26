@@ -211,6 +211,8 @@ function axisFlag(a: Record<string, unknown>, name: string, names: Names, cfg: R
 function parseAxisNames(a: unknown, names: Names, cfg: () => Record<string, unknown>): void {
   if (!isRecord(a)) return
   const encode = rec(a.encode)
+  // (the marks of an axis are named by its encode blocks alone: none, nothing to declare)
+  if (!Object.keys(encode).length) return
   const c = cfg()
   const flags: Array<[string, boolean]> = [
     ['grid', axisFlag(a, 'grid', names, c)],
@@ -228,6 +230,8 @@ function parseAxisNames(a: unknown, names: Names, cfg: () => Record<string, unkn
 function parseLegendNames(l: unknown, names: Names): void {
   if (!isRecord(l)) return
   const encode = rec(l.encode)
+  // (the marks of a legend are named by its encode blocks alone: none, nothing to declare)
+  if (!Object.keys(encode).length) return
   // the canonical scale: the first channel in LegendScales order
   const channels = ['size', 'shape', 'fill', 'stroke', 'strokeWidth', 'strokeDash', 'opacity']
   const scale = channels.map((c) => l[c]).find((s) => !!s)

@@ -208,13 +208,17 @@ export interface EntryHost {
   /** a failing entry is reported and its channel is left unset */
   report(e: unknown): void
   /** a scale by name as an entry calls it (the engine's coercions around the call, its bandwidth), for the entries that read one */
-  entryScale?(name: string): { call(raw: unknown): unknown; bandwidth(): number } | undefined
+  entryScale?(name: string): { call(raw: unknown): unknown; bandwidth(): number; /** the scale itself, and whether a string is read as a date by it */ fn: (v: unknown) => unknown; timeLike: boolean } | undefined
 }
 
 /** An entry that is nothing but a plain value (`{value: 3}`): what it gives does not depend on the datum. */
 function isPlainValue(e: object): boolean {
+  if (isArr(e)) return false
   const v = (e as { value?: unknown }).value
-  return !isArr(e) && (v === null || typeof v !== 'object') && Object.keys(e).length === 1 && 'value' in e
+  if (v !== null && typeof v === 'object') return false
+  let n = 0
+  for (const k in e) if (++n > 1 || k !== 'value') return false
+  return n === 1
 }
 
 /**
@@ -242,12 +246,17 @@ function compileScaleEntry(e: object, host: EntryHost): ((datum: Row) => unknown
   const hasBand = !!band
   const factor = band === true ? 1 : +(band as number)
   const bare = offset == null && !round
+  const fn = bound.fn
+  const timeLike = bound.timeLike
+  // (the bandwidth of a scale is the same for every datum of an evaluation)
+  const term = hasBand ? (factor === 1 ? bound.bandwidth() : bound.bandwidth() * factor) : 0
+  const scaled = (raw: unknown): number => (raw === undefined || (timeLike && typeof raw === 'string') ? bound.call(raw) : fn(raw)) as number
+  if (!hasBand && bare) return (datum) => scaled(datum[field])
+  if (hasBand && !extra && bare) return (datum) => scaled(datum[field]) + term
   return (datum) => {
-    let head = bound.call(datum[field]) as number
+    let head = scaled(datum[field])
     let tail: number | undefined
     if (hasBand) {
-      const bw = bound.bandwidth()
-      const term = factor === 1 ? bw : bw * factor
       if (extra) {
         const x = (datum as { extra?: { value?: unknown } }).extra
         head = x ? (bound.call(x.value) as number) : head + term
@@ -284,7 +293,7 @@ interface Step {
 /** An encode entry that is only numbers and words through `mult` / `offset` / `round` / `exponent`: the same for every datum. */
 function isStaticEntry(e: object): boolean {
   if (isArr(e)) return false
-  for (const k of Object.keys(e)) {
+  for (const k in e) {
     const v = (e as Rec)[k]
     if (k !== 'value' && k !== 'mult' && k !== 'offset' && k !== 'round' && k !== 'exponent') return false
     if (v !== null && typeof v === 'object') return false
@@ -292,18 +301,22 @@ function isStaticEntry(e: object): boolean {
   return true
 }
 
+/** A step with every field set, in one order: all steps share one shape. */
+const step = (key: string, kind: Step['kind'], fn?: EntryFn, entry?: EncodeValue | EncodeValue[], v?: unknown): Step =>
+  ({ key, fn, entry, v, kind, cached: false, fast: undefined, fastHost: undefined, runHost: undefined })
+
 function stepsOf(block: Block, done?: Block): Step[] {
   const steps: Step[] = []
-  for (const key of Object.keys(block)) {
+  for (const key in block) {
     const e = block[key]
     if (e == null) continue
-    if (typeof e === 'function') steps.push({ key, fn: e, kind: e.perRun === true ? 4 : 1 })
+    if (typeof e === 'function') steps.push(step(key, e.perRun === true ? 4 : 1, e))
     // (an encode entry the block before ran on the same item reads the datum and the scales, never the item: it gives the
     // same value again, and is not evaluated twice -- unless the block before moved a channel (adjustSpatial): the entry
     // then puts its own value back, so the caller passes no `done` block)
     else if (done !== undefined && done[key] === e) continue
-    else if (isPlainValue(e)) steps.push({ key, v: (e as { value?: unknown }).value, kind: 0 })
-    else steps.push({ key, entry: e as EncodeValue | EncodeValue[], kind: isStaticEntry(e) ? 3 : 2 })
+    else if (isPlainValue(e)) steps.push(step(key, 0, undefined, undefined, (e as { value?: unknown }).value))
+    else steps.push(step(key, isStaticEntry(e) ? 3 : 2, undefined, e as EncodeValue | EncodeValue[]))
   }
   return steps
 }
@@ -473,11 +486,14 @@ export function encodeItems(def: GuideMarkDef, rows: Row[], group: Rec, host: En
   Object.assign(tmpl, plan.update.tmpl)
   stage(batch.update)
   const out: SceneItem[] = new Array(rows.length)
+  const one = per.length === 1 ? per[0]!.fast : undefined
+  const oneKey = per.length === 1 ? per[0]!.key : ''
   for (let i = 0; i < rows.length; i++) {
     const d = rows[i]!
     const item: Rec = { ...tmpl }
     try {
-      for (let j = 0; j < per.length; j++) item[per[j]!.key] = per[j]!.fast(d)
+      if (one !== undefined) item[oneKey] = one(d)
+      else for (let j = 0; j < per.length; j++) item[per[j]!.key] = per[j]!.fast(d)
     } catch {
       // (an entry that throws is reported, and its channel left unset, by the item-by-item path)
       out[i] = encodeItem(def, d, group, host, cfg)

@@ -4365,7 +4365,7 @@ function makeGuideHost(ctx: EvalContext): GuideHost {
         }
         return s(raw)
       }
-      return { call, bandwidth: () => (typeof s.bandwidth === 'function' ? s.bandwidth() : 0) }
+      return { fn: s as (v: unknown) => unknown, timeLike, call, bandwidth: () => (typeof s.bandwidth === 'function' ? s.bandwidth() : 0) }
     },
     expr: (code) => ctx.runtime.expr(code)({}, ctx.signalParams),
     exprDatum: (code, datum) => ctx.runtime.expr(code)(datum, ctx.signalParams),
@@ -4422,12 +4422,15 @@ function guideScalar(ctx: EvalContext, v: unknown): unknown {
 /** What an absent `own` / `cfg` / `encode` of a guide is: one object, so that what is kept against it is found again. */
 const NO_PROPS: Record<string, never> = {}
 
+const ROOT_NAMES = new WeakMap<CompiledChart, { scales: Map<string, CompiledScale>; data: Set<string> }>()
 function rootScope(chart: CompiledChart): GuideScope {
-  return {
-    path: [], nextChild: { n: 0 },
-    scales: new Map(chart.scales.map((sc) => [sc.name, sc])),
-    data: new Set(chart.data.map((d) => d.name)),
+  // (what the view declares is the compiled chart's; the scope's counters are the evaluation's)
+  let names = ROOT_NAMES.get(chart)
+  if (names === undefined) {
+    names = { scales: new Map(chart.scales.map((sc) => [sc.name, sc])), data: new Set(chart.data.map((d) => d.name)) }
+    ROOT_NAMES.set(chart, names)
   }
+  return { path: [], nextChild: { n: 0 }, scales: names.scales, data: names.data }
 }
 
 /**
