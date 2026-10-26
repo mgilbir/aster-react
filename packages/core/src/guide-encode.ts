@@ -28,8 +28,11 @@ export interface EntryScope {
   group: Rec
 }
 
-/** A transcribed signal expression: computed in place of vega's expression text. */
-export type EntryFn = (s: EntryScope) => unknown
+/**
+ * A transcribed signal expression: computed in place of vega's expression text. `perRun` marks one that reads neither the
+ * datum nor the item (a size, a view signal): its value is the same for every item of an evaluation.
+ */
+export type EntryFn = ((s: EntryScope) => unknown) & { perRun?: boolean }
 export type Entry = EncodeValue | EncodeValue[] | EntryFn
 export type Block = Record<string, Entry | null | undefined>
 export interface MarkEncode {
@@ -261,12 +264,14 @@ interface Step {
   /** the plain value of a constant channel */
   v?: unknown
   /** 0 constant, 1 function, 2 encode entry, 3 an entry that does not depend on the datum (evaluated once) */
-  kind: 0 | 1 | 2 | 3
+  kind: 0 | 1 | 2 | 3 | 4
   cached?: boolean
   /** the entry written out for its shape (see compileScaleEntry), made with the first item; `null` when it has none */
   fast?: ((datum: Row) => unknown) | null
   /** the evaluation `fast` was made for (it holds that evaluation's scale) */
   fastHost?: EntryHost
+  /** a per-run entry: its value, and the evaluation it was made in */
+  runHost?: EntryHost
 }
 
 /** An encode entry that is only numbers and words through `mult` / `offset` / `round` / `exponent`: the same for every datum. */
@@ -285,7 +290,7 @@ function stepsOf(block: Block, done?: Block): Step[] {
   for (const key of Object.keys(block)) {
     const e = block[key]
     if (e == null) continue
-    if (typeof e === 'function') steps.push({ key, fn: e, kind: 1 })
+    if (typeof e === 'function') steps.push({ key, fn: e, kind: e.perRun === true ? 4 : 1 })
     // (an encode entry the block before ran on the same item reads the datum and the scales, never the item: it gives the
     // same value again, and is not evaluated twice -- unless the block before moved a channel (adjustSpatial): the entry
     // then puts its own value back, so the caller passes no `done` block)
@@ -324,11 +329,11 @@ function runSteps(steps: Step[], scope: EntryScope): void {
   for (let i = 0; i < steps.length; i++) {
     const st = steps[i]!
     let v: unknown
-    if (st.kind === 0 || (st.kind === 3 && st.cached === true)) {
+    if (st.kind === 0 || (st.kind === 3 && st.cached === true) || (st.kind === 4 && st.runHost === host)) {
       v = st.v
     } else {
       try {
-        if (st.kind === 1) {
+        if (st.kind === 1 || st.kind === 4) {
           v = st.fn!(scope)
         } else {
           if (st.fast === undefined || st.fastHost !== host) { st.fast = st.kind === 2 ? compileScaleEntry(st.entry as object, host) ?? null : null; st.fastHost = host }
@@ -338,7 +343,7 @@ function runSteps(steps: Step[], scope: EntryScope): void {
         host.report(err)
         continue
       }
-      if (st.kind === 3) { st.v = v; st.cached = true }
+      if (st.kind === 3) { st.v = v; st.cached = true } else if (st.kind === 4) { st.v = v; st.runHost = host }
     }
     // (vega's Encode assigns every channel, an undefined value too: an `update` entry that is undefined clears the `enter` one)
     item[st.key] = v
@@ -389,19 +394,26 @@ interface Plan {
   /** whether a block has a channel adjustSpatial rewrites (x2, xc, y2, yc) */
   spatialEnter: boolean
   spatialUpdate: boolean
+  /** the plan's items as one template (undefined until asked, null when the mark cannot) */
+  batch?: { enter: Step[]; update: Step[] } | null
 }
 
 // (a rule keeps its endpoints: adjustSpatial leaves it alone)
 const hasSpatial = (b: Block, type: string): boolean => type !== 'rule' && (b.x2 != null || b.xc != null || b.y2 != null || b.yc != null)
 
-/** One item of a mark: the `enter` block, then the `update` block over it (vega's first Encode pass). */
-export function encodeItem(def: GuideMarkDef, datum: Row, group: Rec, host: EntryHost, cfg: GuideStyles): SceneItem {
+function planOfDef(def: GuideMarkDef, cfg: GuideStyles): Plan {
   const memo = def as GuideMarkDef & { _plan?: Plan }
   let plan = memo._plan
   if (plan === undefined || plan.cfg !== cfg || plan.src !== def.encode) {
     const encode = applyDefaults(def.encode, def.type, def.style, cfg)
     plan = memo._plan = { cfg, src: def.encode, encode, enter: planOf(encode.enter, undefined, def.seed), update: planOf(encode.update, hasSpatial(encode.enter, def.type) ? undefined : encode.enter), spatialEnter: hasSpatial(encode.enter, def.type), spatialUpdate: hasSpatial(encode.update, def.type) }
   }
+  return plan
+}
+
+/** One item of a mark: the `enter` block, then the `update` block over it (vega's first Encode pass). */
+export function encodeItem(def: GuideMarkDef, datum: Row, group: Rec, host: EntryHost, cfg: GuideStyles): SceneItem {
+  const plan = planOfDef(def, cfg)
   const enter = plan.enter
   const item: Rec = enter.tmpl !== undefined ? { ...enter.tmpl } : def.seed !== undefined ? { ...def.seed } : {}
   const scope: EntryScope = { host, datum, item, group }
@@ -412,6 +424,74 @@ export function encodeItem(def: GuideMarkDef, datum: Row, group: Rec, host: Entr
   runSteps(update.dyn ?? update.steps, scope)
   if (plan.spatialUpdate) adjustSpatial(item, plan.encode.update, def.type)
   return item as SceneItem
+}
+
+/**
+ * Every item of a mark, one per datum. A mark whose channels are plain values, per-run values and positions over a scale
+ * (a rule: the ticks and the grid lines of an axis) is made from one template per evaluation, the values that do not
+ * depend on the datum already in it, and only the positions are computed per item; anything else is made item by item.
+ */
+export function encodeItems(def: GuideMarkDef, rows: Row[], group: Rec, host: EntryHost, cfg: GuideStyles): SceneItem[] {
+  const plan = planOfDef(def, cfg)
+  if (plan.batch === undefined) plan.batch = batchOf(plan)
+  const batch = plan.batch
+  if (rows.length < 2 || batch === null) return rows.map((d) => encodeItem(def, d, group, host, cfg))
+  const tmpl: Rec = { ...plan.enter.tmpl }
+  const first: EntryScope = { host, datum: rows[0]!, item: tmpl, group }
+  const per: Array<{ key: string; fast: (d: Row) => unknown }> = []
+  const stage = (steps: Step[]): void => {
+    for (let i = 0; i < steps.length; i++) {
+      const st = steps[i]!
+      if (st.kind === 3 || st.kind === 4) {
+        // (the same for every datum: evaluated once, for the evaluation or for good, as the steps do for the first item)
+        if (st.kind === 3 ? st.cached !== true : st.runHost !== host) {
+          try {
+            const v = st.kind === 4 ? st.fn!(first) : host.entry(st.entry!, rows[0]!)
+            st.v = v
+            if (st.kind === 4) st.runHost = host
+            else st.cached = true
+          } catch (err) {
+            host.report(err)
+            continue
+          }
+        }
+        tmpl[st.key] = st.v
+      } else {
+        if (st.fast === undefined || st.fastHost !== host) { st.fast = compileScaleEntry(st.entry as object, host) ?? null; st.fastHost = host }
+        per.push({ key: st.key, fast: st.fast ?? ((d) => host.entry(st.entry!, d)) })
+      }
+    }
+  }
+  stage(batch.enter)
+  Object.assign(tmpl, plan.update.tmpl)
+  stage(batch.update)
+  const out: SceneItem[] = new Array(rows.length)
+  for (let i = 0; i < rows.length; i++) {
+    const d = rows[i]!
+    const item: Rec = { ...tmpl }
+    try {
+      for (let j = 0; j < per.length; j++) item[per[j]!.key] = per[j]!.fast(d)
+    } catch {
+      // (an entry that throws is reported, and its channel left unset, by the item-by-item path)
+      out[i] = encodeItem(def, d, group, host, cfg)
+      continue
+    }
+    out[i] = item as SceneItem
+  }
+  return out
+}
+
+/**
+ * Whether a mark's items can be made from one template (see encodeItems), decided once per plan: its blocks have no
+ * function entry and no spatial adjustment, and no channel the enter block computes per datum is also given by the update
+ * block (the update value must win).
+ */
+function batchOf(plan: Plan): { enter: Step[]; update: Step[] } | null {
+  const { enter, update } = plan
+  if (enter.tmpl === undefined || update.tmpl === undefined || enter.dyn === undefined || update.dyn === undefined || plan.spatialEnter || plan.spatialUpdate) return null
+  const updateKeys = new Set<string>([...Object.keys(update.tmpl), ...update.dyn.map((st) => st.key)])
+  for (const st of enter.dyn) if (st.kind === 2 && updateKeys.has(st.key)) return null
+  return { enter: enter.dyn, update: update.dyn }
 }
 
 /** The aria channels an encoded item gave its element (vega-scenegraph ariaItemAttributes), or undefined when it gave none. */

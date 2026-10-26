@@ -137,6 +137,7 @@ interface LegendParts {
   _: Lookup
   scale: string
   encode: Record<string, UserEncode | undefined>
+  defs?: { packs: Map<string, unknown> }
 }
 
 const newEncode = (): MarkEncode => ({ enter: { opacity: zero }, update: { opacity: one }, exit: { opacity: zero } })
@@ -319,6 +320,7 @@ interface LegendDefs {
   type: string
   vertical: boolean
   made: Map<string, GuideMarkDef>
+  packs: Map<string, unknown>
 }
 const LEGEND_DEFS = new WeakMap<object, LegendDefs>()
 const made = (defs: LegendDefs, key: string, make: () => GuideMarkDef): GuideMarkDef => {
@@ -339,9 +341,10 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
   p.scale = inp.channels[0]?.[1] ?? ''
   let defs = LEGEND_DEFS.get(spec)
   if (defs === undefined || defs.config !== config || defs.encode !== inp.encode || defs.scale !== p.scale || defs.type !== type || defs.vertical !== vertical) {
-    defs = { config, encode: inp.encode, scale: p.scale, type, vertical, made: new Map() }
+    defs = { config, encode: inp.encode, scale: p.scale, type, vertical, made: new Map(), packs: new Map() }
     LEGEND_DEFS.set(spec, defs)
   }
+  p.defs = defs
   const datum: Row = { title: spec.title != null, scales, type, vgrad: type !== SymbolLegend && vertical }
   const group = encodeItem(made(defs, 'group', () => ({ type: 'rule', role: 'legend', style: inp.encode.legend?.style, encode: groupEncode(p), interactive: false })), datum, {}, host, style) as unknown as Rec
   const partMeta: LegendBuilt['partMeta'] = {
@@ -549,45 +552,53 @@ function buildSymbols(
   const symbolOffset = _('symbolOffset')
   const columnsRaw = _.entryColumns()
   const columns = isSignal(columnsRaw) ? (host.expr(columnsRaw.signal) as number) : (columnsRaw as number)
-  const xSignal = (s: EntryScope): unknown => (columns ? s.datum.offset : s.datum.size)
-  const half = (s: EntryScope): number => (xSignal(s) as number) * 0.5
-  const yEncode: Entry = height ? ({ ...(encoder(height) as Rec), mult: 0.5 } as unknown as EncodeValue) : ((s) => (s.datum.size as number) * 0.5)
+  // the marks of the entries depend on the spec and the config, and on whether the legend has columns: one set each
+  const packKey = columns ? 'sym1' : 'sym0'
+  let pack = p.defs?.packs.get(packKey) as { symEncode: MarkEncode; symbolsDef: GuideMarkDef; lblEncode: MarkEncode; labelsDef: GuideMarkDef } | undefined
+  if (pack === undefined) {
+    const xSignal = (s: EntryScope): unknown => (columns ? s.datum.offset : s.datum.size)
+    const half = (s: EntryScope): number => (xSignal(s) as number) * 0.5
+    const yEncode: Entry = height ? ({ ...(encoder(height) as Rec), mult: 0.5 } as unknown as EncodeValue) : ((s) => (s.datum.size as number) * 0.5)
 
-  // -- LEGEND SYMBOLS --
-  const symEnter: Block = {
-    opacity: zero,
-    // (an entry's offset is added only when the encode gives one: `offset != null`)
-    x: ((s) => (symbolOffset != null ? half(s) + num(s, symbolOffset) : half(s))) as Entry,
-    y: yEncode,
-  }
-  const symEncode: MarkEncode = { enter: symEnter, update: { opacity: one, x: symEnter.x, y: symEnter.y }, exit: { opacity: zero } }
-  let baseFill: unknown = null
-  let baseStroke: unknown = null
-  if (!spec.fill) {
-    baseFill = config.symbolBaseFillColor
-    baseStroke = config.symbolBaseStrokeColor
-  }
-  addEncoders(symEncode, {
-    fill: _('symbolFillColor', baseFill), shape: _('symbolType'), size: _('symbolSize'), stroke: _('symbolStrokeColor', baseStroke),
-    strokeDash: _('symbolDash'), strokeDashOffset: _('symbolDashOffset'), strokeWidth: _('symbolStrokeWidth'),
-  }, { opacity: _('symbolOpacity') })
-  for (const [c, name] of inp.channels) symEncode.update[c] = symEncode.enter[c] = { scale: name, field: 'value' } as unknown as EncodeValue
-  const symbolsDef = guideMark({ type: 'symbol', role: 'legend-symbol', encode: symEncode, interactive: false }, userEncode.symbols)
+    // -- LEGEND SYMBOLS --
+    const symEnter: Block = {
+      opacity: zero,
+      // (an entry's offset is added only when the encode gives one: `offset != null`)
+      x: ((s) => (symbolOffset != null ? half(s) + num(s, symbolOffset) : half(s))) as Entry,
+      y: yEncode,
+    }
+    const symEncode: MarkEncode = { enter: symEnter, update: { opacity: one, x: symEnter.x, y: symEnter.y }, exit: { opacity: zero } }
+    let baseFill: unknown = null
+    let baseStroke: unknown = null
+    if (!spec.fill) {
+      baseFill = config.symbolBaseFillColor
+      baseStroke = config.symbolBaseStrokeColor
+    }
+    addEncoders(symEncode, {
+      fill: _('symbolFillColor', baseFill), shape: _('symbolType'), size: _('symbolSize'), stroke: _('symbolStrokeColor', baseStroke),
+      strokeDash: _('symbolDash'), strokeDashOffset: _('symbolDashOffset'), strokeWidth: _('symbolStrokeWidth'),
+    }, { opacity: _('symbolOpacity') })
+    for (const [c, name] of inp.channels) symEncode.update[c] = symEncode.enter[c] = { scale: name, field: 'value' } as unknown as EncodeValue
+    const symbolsDef = guideMark({ type: 'symbol', role: 'legend-symbol', encode: symEncode, interactive: false }, userEncode.symbols)
 
-  // -- LEGEND LABELS --
-  const labelOffset = encoder(symbolOffset)
-  labelOffset.offset = _('labelOffset')
-  const lblEnter: Block = {
-    opacity: zero,
-    x: ((s) => (xSignal(s) as number) + num(s, labelOffset)) as Entry,
-    y: yEncode,
+    // -- LEGEND LABELS --
+    const labelOffset = encoder(symbolOffset)
+    labelOffset.offset = _('labelOffset')
+    const lblEnter: Block = {
+      opacity: zero,
+      x: ((s) => (xSignal(s) as number) + num(s, labelOffset)) as Entry,
+      y: yEncode,
+    }
+    const lblEncode: MarkEncode = { enter: lblEnter, update: { opacity: one, text: { field: 'label' } as EncodeValue, x: lblEnter.x, y: lblEnter.y }, exit: { opacity: zero } }
+    addEncoders(lblEncode, {
+      align: _('labelAlign'), baseline: _('labelBaseline'), fill: _('labelColor'), fillOpacity: _('labelOpacity'), font: _('labelFont'),
+      fontSize: _('labelFontSize'), fontStyle: _('labelFontStyle'), fontWeight: _('labelFontWeight'), limit: _('labelLimit'),
+    })
+    const labelsDef = guideMark({ type: 'text', role: 'legend-label', style: 'guide-label', encode: lblEncode, interactive: false }, userEncode.labels)
+    pack = { symEncode, symbolsDef, lblEncode, labelsDef }
+    p.defs?.packs.set(packKey, pack)
   }
-  const lblEncode: MarkEncode = { enter: lblEnter, update: { opacity: one, text: { field: 'label' } as EncodeValue, x: lblEnter.x, y: lblEnter.y }, exit: { opacity: zero } }
-  addEncoders(lblEncode, {
-    align: _('labelAlign'), baseline: _('labelBaseline'), fill: _('labelColor'), fillOpacity: _('labelOpacity'), font: _('labelFont'),
-    fontSize: _('labelFontSize'), fontStyle: _('labelFontStyle'), fontWeight: _('labelFontWeight'), limit: _('labelLimit'),
-  })
-  const labelsDef = guideMark({ type: 'text', role: 'legend-label', style: 'guide-label', encode: lblEncode, interactive: false }, userEncode.labels)
+  const { symEncode, symbolsDef, lblEncode, labelsDef } = pack
   partMeta.symbol = { name: symbolsDef.name, interactive: symbolsDef.interactive }
   partMeta.label = { name: labelsDef.name, interactive: labelsDef.interactive }
 

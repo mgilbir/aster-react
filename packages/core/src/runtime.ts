@@ -4339,14 +4339,33 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
 }
 
 /** What the guide encoders (guide-encode.ts) need of an evaluation: entries, expressions, scales, the view's signals. */
+const GUIDE_HOSTS = new WeakMap<EvalContext, GuideHost>()
 function guideHost(ctx: EvalContext): GuideHost {
+  // (one per evaluation context: the closures it holds read nothing else, and what an entry compiled for it can be kept)
+  let host = GUIDE_HOSTS.get(ctx)
+  if (host === undefined) GUIDE_HOSTS.set(ctx, (host = makeGuideHost(ctx)))
+  return host
+}
+function makeGuideHost(ctx: EvalContext): GuideHost {
   return {
     entry: (spec, datum) => resolveEncodeProperty(spec as EncodeValue | EncodeValue[], datum, ctx),
     entryScale: (name) => {
       const s = ctx.scales.get(name)
       if (!s) return undefined
       const type = ctx.scaleTypes.get(name)
-      return { call: (raw) => scaleValue(s, type, raw), bandwidth: () => (typeof s.bandwidth === 'function' ? s.bandwidth() : 0) }
+      // (scaleValue's coercions, written out here: the guides' scale calls do not share a call site with the marks')
+      const timeLike = type === 'time' || type === 'utc'
+      const call = (raw: unknown): unknown => {
+        if (raw === undefined) {
+          const dom = s.domain?.() as unknown[] | undefined
+          if (!Array.isArray(dom) || !dom.includes(undefined)) return undefined
+        } else if (timeLike && typeof raw === 'string') {
+          const dateObj = new Date(raw)
+          if (Number.isFinite(dateObj.getTime())) raw = dateObj
+        }
+        return s(raw)
+      }
+      return { call, bandwidth: () => (typeof s.bandwidth === 'function' ? s.bandwidth() : 0) }
     },
     expr: (code) => ctx.runtime.expr(code)({}, ctx.signalParams),
     exprDatum: (code, datum) => ctx.runtime.expr(code)(datum, ctx.signalParams),
@@ -4547,7 +4566,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
 
   const built = buildAxisGuide({
     spec: own, cfg, scale: axis.scale, orient, encode: (axis.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
-    ticks: rows, width: ctx.width, height: ctx.height, raw: !!ctx.rawGuides, host: guideHost(ctx), style: guideStyles(ctx),
+    ticks: rows, distinctTicks: !axisValues(axis, ctx) && DISTINCT_TICK_SCALES.has(ctx.scaleTypes.get(axis.scale) ?? ''), width: ctx.width, height: ctx.height, raw: !!ctx.rawGuides, host: guideHost(ctx), style: guideStyles(ctx),
   })
   const knownOrient = orient === 'top' || orient === 'bottom' || orient === 'left' || orient === 'right'
   const g = built.group
@@ -4593,6 +4612,9 @@ function vetGuideLinks(g: SceneGroup, ctx: EvalContext): void {
 }
 
 /** An axis's `values`: what a signal holds when the ticks are made; null, undefined, 0 or '' is no values at all. */
+/** Scales whose own ticks are strictly increasing (d3's) or the scale's distinct domain: no two ticks have one value. */
+const DISTINCT_TICK_SCALES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'band', 'point'])
+
 function axisValues(axis: CompiledAxis, ctx: EvalContext): unknown {
   const vs: unknown = axis.values
   if (vs && typeof vs === 'object' && !Array.isArray(vs) && 'signal' in (vs as Record<string, unknown>)) {

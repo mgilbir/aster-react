@@ -9,8 +9,8 @@ import type { SceneItem } from './types.js'
 import { lerp } from './util.js'
 import { Bounds, boundLeaf, boundStroke, multiLineOffset } from './bounds.js'
 import {
-  addEncoders, applyDefaults, encoder, encodeItem, extendEncode, getEncoding, guideMark, has, isSignal, joinByValue, lookup, one, value, zero,
-  type Block, type Entry, type EntryHost, type EntryScope, type GuideMarkDef, type GuideStyles, type Lookup, type MarkEncode, type Row, type UserEncode,
+  addEncoders, applyDefaults, encoder, encodeItem, encodeItems, extendEncode, getEncoding, guideMark, has, isSignal, joinByValue, lookup, one, value, zero,
+  type Block, type Entry, type EntryFn, type EntryHost, type EntryScope, type GuideMarkDef, type GuideStyles, type Lookup, type MarkEncode, type Row, type UserEncode,
 } from './guide-encode.js'
 import type { EncodeValue } from './types.js'
 
@@ -124,10 +124,15 @@ function gridMark(p: AxisParts, host: EntryHost): GuideMarkDef {
   })
   const tickPos = { scale, field: 'value', band: band.band, extra: band.extra, offset: band.offset, round: _('tickRound') } as unknown as EncodeValue
   // (the cross-axis length is the view's `height` / `width` SIGNAL: a nested group's axes grid as far as the whole view)
-  const along = (name: 'width' | 'height'): Entry => (s: EntryScope) => {
-    const base = s.host.viewSignal(name)
-    const m = base * sign
-    return offset == null ? m : m + Number(s.host.entry(isObj(offset) ? (offset as EncodeValue) : ({ value: offset } as EncodeValue), s.datum))
+  const along = (name: 'width' | 'height'): Entry => {
+    const fn = ((s: EntryScope) => {
+      const base = s.host.viewSignal(name)
+      const m = base * sign
+      return offset == null ? m : m + Number(s.host.entry(isObj(offset) ? (offset as EncodeValue) : ({ value: offset } as EncodeValue), s.datum))
+    }) as EntryFn
+    // (an offset that is an entry may read the datum; a number is the same for every tick)
+    fn.perRun = offset == null || !isObj(offset)
+    return fn
   }
   const gridStart = (vscale ? { scale: vscale, range: 0, mult: sign, offset } : { value: 0, offset }) as unknown as EncodeValue
   const gridEnd: Entry = vscale ? ({ scale: vscale, range: 1, mult: sign, offset } as unknown as EncodeValue) : (ifX(orient, along('height'), along('width')) as Entry)
@@ -238,7 +243,6 @@ function labelsMark(p: AxisParts, size: unknown): GuideMarkDef {
   return mark
 }
 
-type EntryFn = (s: EntryScope) => unknown
 
 /** guides/axis-title.js */
 function titleMark(p: AxisParts): GuideMarkDef {
@@ -391,6 +395,8 @@ export interface AxisBuildInput {
   encode: Record<string, UserEncode | undefined>
   /** the AxisTicks tuples: `{index, tickIndex, value, label}`, plus the `extra` entry */
   ticks: Row[]
+  /** the tuples' values are known to differ (the scale's own ticks, not a list the spec gave): the keyed join is the identity */
+  distinctTicks?: boolean
   /** the frame the axis sits on */
   width: number
   height: number
@@ -471,16 +477,17 @@ export function buildAxis(inp: AxisBuildInput): AxisBuilt {
   for (const { part, def, data } of marks) {
     const keyed = part === 'grid' || part === 'tick' || part === 'label'
     // (the grid, the ticks and the labels are keyed over the same tuples: one join)
-    const rows = keyed ? (joined !== null && joined[0] === data ? joined[1] : (joined = [data, joinByValue(data)])[1]) : data
+    const rows = keyed ? (joined !== null && joined[0] === data ? joined[1] : (joined = [data, inp.distinctTicks ? data : joinByValue(data)])[1]) : data
     // (every leaf is tagged with its kind and its part as it is made)
     def.seed ??= { _kind: def.type === 'text' ? 'text' : 'rule', _part: part }
-    const items: SceneItem[] = rows.map((d) => encodeItem(def, d, group, host, style))
+    const items: SceneItem[] = encodeItems(def, rows, group, host, style)
     let mb: Bounds | null = null
     if (def.overlap) mb = overlapItems(items, rows, def.overlap, host, bounds)
     // (the layout reads the bounds of the ticks, the labels and the title: a grid of a thousand lines is not measured)
     if (!mb && (part === 'tick' || part === 'label' || part === 'title')) {
       mb = new Bounds()
-      for (const it of items) mb.union(bounds(it))
+      const scratch = new Bounds()
+      for (const it of items) mb.union(boundLeaf(scratch.clear(), it))
     }
     if (mb) markBounds.set(part, mb)
     partMeta[part] = { name: def.name, interactive: def.interactive }
