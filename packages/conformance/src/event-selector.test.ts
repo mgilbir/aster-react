@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import { parseEventSelectorString } from '../../core/src/event-selector.js'
+import { parseEventSelectorString as parseInVl } from '../../vl/src/event-selector.js'
 
 const upstream = (vega as unknown as { parseSelector: (s: string, source?: string, marks?: Record<string, unknown>) => unknown }).parseSelector
 
@@ -63,6 +64,15 @@ describe('event selector parser matches vega-event-selector', () => {
       expect(agreedErrors).toBeGreaterThan(10)
     })
   }
+
+  it('the copy @aster/vl carries (it has no dependency on the engine) is the same parser', () => {
+    let compared = 0
+    for (const s of [...generate(), ...ODD]) {
+      expect(outcome(() => parseInVl(s, 'scope')), JSON.stringify(s)).toEqual(outcome(() => parseEventSelectorString(s, 'scope')))
+      compared++
+    }
+    expect(compared).toBeGreaterThan(1300)
+  })
 
   it('does not read inherited properties as mark types (a deliberate deviation)', () => {
     const got = parseEventSelectorString('constructor:click') as Array<{ source?: string; marktype?: string }>

@@ -34,7 +34,6 @@
 import type { CompiledChart, CompiledData, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot, SignalOnDef } from './types.js'
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'
-import { valuesEqual } from './fingerprint.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
 import { dict, ownGet, setOwn, TUPLE_ID } from './util.js'
@@ -429,7 +428,8 @@ function bindSignalEventsDefs(
         if (![...deps].some((n) => frontier.has(n))) continue
         try {
           const v = runtime.expr(def.update!)(undefined, params())
-          if (!valuesEqual(v, read(def.name))) {
+          // vega: an operator whose inputs pulsed publishes its value; a fresh object is a change (reference comparison)
+          if (v !== read(def.name)) {
             setOwn(signals, def.name, v)
             markChanged(def.name)
             next.add(def.name)
@@ -483,7 +483,13 @@ function bindSignalEventsDefs(
 
   const resolveItem = (e: ExtEvent): object | undefined => {
     let picked: PickedItem | null | undefined
-    if (opts.pick) {
+    // a legend's marks are named by the spec (`<field>_legend_symbols`...) and carry their entry as datum: the DOM says so
+    const inLegend = typeof (e.target as Element | null)?.closest === 'function' && (e.target as Element).closest('.role-legend') != null
+    if (inLegend) {
+      picked = domPick(svg, e.target)
+      if (picked && !picked.group && sceneInfo) picked.group = sceneInfo.root()
+    }
+    if (!picked && opts.pick) {
       const p = pointOf(e)
       const hit = opts.pick(p[0] + originX, p[1] + originY)
       picked = hit ? { marktype: hit.marktype, ...hit } as PickedItem : null
@@ -491,6 +497,13 @@ function bindSignalEventsDefs(
     }
     // no picker, or it found nothing under the pointer (e.g. no layout): what the DOM under the event says
     if (!picked) picked = domPick(svg, e.target)
+    // the painted frame of the view is the root group's background: vega picks it, so over the empty plot the item is the root group
+    if (!picked && opts.scene && sceneInfo && (opts.scene.frameFill || opts.scene.frameStroke)) {
+      const [px, py] = pointOf(e)
+      const w = opts.scene.plotWidth ?? opts.scene.width
+      const h = opts.scene.plotHeight ?? opts.scene.height
+      if (px >= 0 && py >= 0 && px <= w && py <= h) picked = sceneInfo.root()
+    }
     return picked ? itemFacade(picked) : undefined
   }
 
@@ -775,7 +788,7 @@ function sceneIndex(scene: SceneRoot): ReturnType<typeof buildSceneIndex> {
   return idx
 }
 
-function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => PickedItem } {
+function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => PickedItem; root: () => PickedItem } {
   let parents: WeakMap<object, SceneGroup> | null = null
   const ensure = (): WeakMap<object, SceneGroup> => {
     if (parents) return parents
@@ -807,6 +820,7 @@ function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => Picke
     return p ? groupPick(p) : rootGroup
   }
   return {
+    root: () => rootGroup,
     describe: (p) => {
       const map = ensure()
       const container = map.get(p.item)

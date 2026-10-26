@@ -885,6 +885,9 @@ function buildAxisAndLegend(
           if (typeof name === 'string' && name !== '') partNames[part] = name
         }
         if (Object.keys(partNames).length) (g as { partNames?: Record<string, string> }).partNames = partNames
+        const partInteractive: Record<string, boolean> = {}
+        for (const part of ['title', 'labels', 'symbols', 'gradient', 'entries']) if (legend.encode?.[part]?.interactive === true) partInteractive[part] = true
+        if (Object.keys(partInteractive).length) (g as { partInteractive?: Record<string, boolean> }).partInteractive = partInteractive
         // (the legend type is the kind of legend the builder drew: gradient, discrete bands or symbols)
       }
       return { legend, group }
@@ -3532,6 +3535,12 @@ function evaluateMarkItems(
 
   vetLinks(mark, items, ctx)
 
+  // An interactive mark's transparent items are still hit by the pointer: vega's live SVG draws them with
+  // `fill="transparent"`, which the string renderer (like ours) omits. `_hit` marks them for `pointer-events`.
+  if (mark.interactive !== false) {
+    for (const it of items) if ((it as { fill?: unknown }).fill === 'transparent') (it as unknown as Record<string, unknown>)._hit = true
+  }
+
   // Appended items extend the carried union bounds only now, after the mark
   // defaults above ran (they can change an item's stroke and so its bounds).
   const group: SceneGroup = {
@@ -5344,7 +5353,10 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
       // Raw-guide mode: the entry backgrounds are bound-derived boxes — the
       // layout never ran, so they stay degenerate placeholders (vega drops
       // them).
-      items.push({ _part: 'entry', path: ctx.rawGuides ? 'M0,0h0v0h0Z' : `M0,0h${colWc}v${eb.y2}h-${colWc}Z`, x: entryX + colOff, y: legendPad + off })
+      // (an item's datum is the entry it shows -- what `datum.value` reads in a legend's click handlers -- and a part the
+      // spec made `interactive` takes the pointer; the entry rows are transparent so the whole row does)
+      const entryDatum = { value, label: e.label, index: entries.indexOf(e) }
+      items.push({ _part: 'entry', path: ctx.rawGuides ? 'M0,0h0v0h0Z' : `M0,0h${colWc}v${eb.y2}h-${colWc}Z`, x: entryX + colOff, y: legendPad + off, datum: entryDatum, ...(legend.encode?.entries?.interactive === true ? { _hit: true } : {}) })
       // vega renders the legend entry symbol in the shape requested by the
       // legend's symbolType; the measured path (symDs) matches the painted one.
       // vega coerces the NaN encode positions to 0 (anchorPoint/translateItem
@@ -5352,7 +5364,9 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
       // so zero the NaN part here rather than poisoning the whole sum
       const symX = entryX + colOff + (xSymIs[i]! || 0)
       const symY = legendPad + off + (ySymIs[i]! || 0)
-      items.push({ ...symbolItemPaint(symPropsOf[i]!), _part: 'symbol', path: symDs[i]!, x: symX, y: symY } as SceneItem)
+      const symbolItem = { ...symbolItemPaint(symPropsOf[i]!), _part: 'symbol', path: symDs[i]!, x: symX, y: symY, datum: entryDatum } as SceneItem
+      if (legend.encode?.symbols?.interactive === true && (symbolItem as { fill?: unknown }).fill === 'transparent') (symbolItem as unknown as Record<string, unknown>)._hit = true
+      items.push(symbolItem)
       // clipHeight clips the entry's symbols with a clipPath over the
       // laid-out entry rect (vega's guideMark clip + SVGStringRenderer clip:
       // rect (0,0,entry.width,entry.height) in the entry's local frame)
@@ -5360,7 +5374,7 @@ function buildLegend(legend0: CompiledLegend, ctx: EvalContext): SceneGroup | nu
         ;(items[items.length - 1] as Record<string, unknown>)._clip = { x: entryX + colOff, y: legendPad + off, w: colWc, h: eb.y2 }
       }
       const lblItem = lblItems[i]!
-      items.push({ ...lblItem, x: entryX + colOff + ((lblItem.x as number) || 0), y: legendPad + off + ((lblItem.y as number) || 0) })
+      items.push({ ...lblItem, x: entryX + colOff + ((lblItem.x as number) || 0), y: legendPad + off + ((lblItem.y as number) || 0), datum: entryDatum })
     }
     const out: SceneGroup = { marktype: 'group', role: 'legend', legendType: 'symbol', x: 0, y: 0, width: bgW, height: bgH, items }
     ;(out as unknown as Record<string, unknown>)._borderStroke = borderStroke

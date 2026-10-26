@@ -46,6 +46,10 @@ export const GATES = [
     why: 'signal event streams (selectors, between, filters, throttle, consume, native event) vs real vega in Chromium',
   },
   {
+    name: 'selections-browser', args: ['conformance:selections'], tags: ['browser'],
+    why: 'Vega-Lite selections: the same native input (click, shift-click, drag, wheel, legend click, bound inputs, nearest, bound scales) through vega-lite + real vega and through @aster/vl + <Chart>; signals, selection stores and SVG compared after every step',
+  },
+  {
     name: 'react-browser', args: ['--filter', '@aster/react', 'run', 'test:browser'], tags: ['browser'],
     why: '<Chart> and <SvgChart interaction> pointer/keyboard interaction, selection, pan/zoom, signal.on, bound inputs and the a11y overlay in a real Chromium; <SvgChart> without interaction renders and reports the missing event loop',
   },

@@ -1701,6 +1701,8 @@ export function paintAttrs(it: SceneItem, w: AttrSink, styles?: readonly string[
   if ((v = it.strokeDashOffset) != null) w.a('stroke-dashoffset', v)
   if ((v = it.strokeMiterLimit) != null) w.a('stroke-miterlimit', v)
   if ((v = it.opacity) != null) w.a('opacity', v)
+  // a transparent fill that has to take the pointer (an interactive mark; see runtime.ts `_hit`)
+  if (recOf(it)._hit === true) w.v('pointer-events', 'visible')
   // vega: stylesCss.blend -> style="mix-blend-mode: <blend>;" (after any mark styles)
   const blend = it.blend
   if (styles !== undefined) w.v('style', styles.join(' ') + (blend != null ? ` mix-blend-mode: ${String(blend)};` : ''))
@@ -1713,6 +1715,7 @@ export function samePaint(a: SceneItem, b: SceneItem): boolean {
     && same(a.strokeOpacity, b.strokeOpacity) && same(a.strokeWidth, b.strokeWidth) && same(a.strokeCap, b.strokeCap)
     && same(a.strokeJoin, b.strokeJoin) && same(a.strokeDash, b.strokeDash) && same(a.strokeDashOffset, b.strokeDashOffset)
     && same(a.strokeMiterLimit, b.strokeMiterLimit) && same(a.opacity, b.opacity) && a.blend === b.blend
+    && recOf(a)._hit === recOf(b)._hit
 }
 
 function same(x: unknown, y: unknown): boolean {
@@ -2182,11 +2185,12 @@ const LEGEND_PART_CLASS: Record<string, string> = {
 }
 
 /** The container of one guide mark: not interactive, so `pointer-events="none"`. */
-export function guidePartAttrs(guide: 'axis' | 'legend', part: string, clipId: string | null, w: AttrSink, name?: string): void {
+export function guidePartAttrs(guide: 'axis' | 'legend', part: string, clipId: string | null, w: AttrSink, name?: string, interactive = false): void {
   // (a guide part the spec named -- legend `encode.symbols.name` -- carries the name as a class, as vega's mark does)
   w.v('class', ((guide === 'legend' ? LEGEND_PART_CLASS[part] : undefined) ?? GUIDE_PARTS[part]!) + (name ? ` ${name}` : ''))
   if (clipId) clipRefAttrs(clipId, w)
-  w.v('pointer-events', 'none')
+  // (a part the spec made `interactive` takes the pointer)
+  if (!interactive) w.v('pointer-events', 'none')
 }
 
 
@@ -2352,14 +2356,15 @@ function legendItem(g: SceneGroup, clips: ClipCollector): SvgEl {
   }
   // the names the spec gave the legend's parts (encode.<part>.name)
   const names = (g as { partNames?: Record<string, string> }).partNames ?? {}
+  const live = (g as { partInteractive?: Record<string, boolean> }).partInteractive ?? {}
   const col = (inside: SvgEl[]): SvgEl => el('g', (w) => w.v('class', 'mark-group role-legend-entry'), [guideItem(0, 0, null, inside)])
   let entryMarks: SvgEl[]
   if (symbolStyle) {
     const items = entries.map((e) => el('g', (w) => groupItemAttrs(0, 0, w), [
-      el('path', (w) => groupBackgroundAttrs(e.box, EMPTY_BOX, true, w)),
+      el('path', (w) => groupBackgroundAttrs(e.box, EMPTY_BOX, live.entries !== true, w)),
       el('g', noAttrs, [
-        el('g', (w) => guidePartAttrs('legend', 'symbol', e.symbols.length ? leafClipId(e.symbols[0]!, clips) : null, w, names.symbols), e.symbols.map((s) => leaf(s, false))),
-        el('g', (w) => guidePartAttrs('legend', 'label', null, w, names.labels), e.labels.map((l) => leaf(l))),
+        el('g', (w) => guidePartAttrs('legend', 'symbol', e.symbols.length ? leafClipId(e.symbols[0]!, clips) : null, w, names.symbols, live.symbols === true), e.symbols.map((s) => leaf(s, false))),
+        el('g', (w) => guidePartAttrs('legend', 'label', null, w, names.labels, live.labels === true), e.labels.map((l) => leaf(l))),
       ]),
       el('path', (w) => groupForegroundAttrs(null, true, w)),
     ]))
