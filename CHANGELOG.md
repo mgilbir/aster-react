@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Vega-Lite maps and animation (`@aster/vl`, runtime in `@aster/core`)**: `geoshape` marks, `projection` (every
+  property, `config.projection`), `longitude` / `latitude` (and `2`) channels and `{type: "geojson"}` compile to what
+  vega-lite 6.4.3 emits for units, layers, concats and repeats (inline GeoJSON / TopoJSON, `sphere` and `graticule`
+  generators; a unit fits its projection unless it gives `scale` / `translate`); maps in a facet stay refused, because
+  vega-lite emits a dataset it never defines. The `time` channel (vega-lite 6 animation: a `timer` point selection, the
+  `{filter: {param}}` frame filter, a band `time` scale) compiles to vega-lite's signals, `<main>_curr` dataset and
+  scale, and its first frame matches real vega. Runtime: `timer` event streams on a port of d3-timer (same
+  instants and `{timestamp, elapsed}` as vega), kept per chart host across re-binds and stopped on unmount /
+  `binding.release()` / `setTimerClock(null)`-controlled in tests; real `modify`; vega-selections' `vlSelection*`
+  functions; `<Chart>` keeps the datasets the loop writes. 109 `vlx-geo-*` and 16 `vlx-anim-*` corpus cases, a seeded
+  compile differential for animation, live differentials for the scheduler, the selection functions and the geo
+  pipeline, and a Playwright frame comparison against vega on a controlled clock (`pnpm conformance:signals`). Bundle
+  rows grew (selections, timers and `modify` in core; maps and animation in VL); budgets were raised in their own commit.
+
 - **`<SvgChart>` (`@aster/react/lite`) and the `interaction` capability (`@aster/react/interaction`)**: an SVG-only chart
   for size-sensitive apps. It never imports the canvas renderer (142.0 kB gzip against 157.2 for `<Chart>`); hit testing
   and the `signal.on` event loop arrive only as `<SvgChart interaction={interaction}>` (151.5 kB), a plain value, with no

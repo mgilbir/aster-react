@@ -693,3 +693,11 @@ dependency. Hosts that already bundle `@aster/vl` themselves can instead call
 `registerVegaLiteCompiler` from `@aster/react` with a function `(spec) => vegaSpec`;
 `hasVegaLiteCompiler()` reports whether one is registered. `compile` throws `VLCompileError` for
 anything outside the supported subset (see `docs/ERRORS.md`).
+
+Vega-Lite maps (`geoshape`, `projection`, `longitude` / `latitude`, `{type: "geojson"}`) and animation (the `time`
+channel with a `timer` point selection and `{filter: {param}}`) compile to what vega-lite 6.4.3 emits; maps in a facet and
+animations outside a single top-level unit throw (reasons in `packages/vl/README.md`). Running an animation needs
+the signal event loop (`<Chart>` or `<SvgChart interaction>`): `timer` streams run on a d3-timer port shared by the page,
+stop on unmount, and `setTimerClock` from `@aster/core` installs a controlled clock. `bindSceneSignals(..)` takes
+`{ owner, data }` (the element the timers belong to, the datasets the loop starts from), an `onData` hook, and returns a
+binding with `release()`.
