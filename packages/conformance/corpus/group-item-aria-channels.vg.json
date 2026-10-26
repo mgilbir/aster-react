@@ -1,0 +1,28 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "description": "Group items describe themselves like every other item: description, ariaRole and ariaRoleDescription from the encode set land on the item's own <g> (vega-scenegraph ariaItemAttributes), while the mark-level description stays on the container.",
+  "width": 300,
+  "height": 90,
+  "padding": 5,
+  "autosize": "none",
+  "data": [
+    { "name": "t", "values": [
+      { "k": "a", "v": 10, "d": "first tile", "r": "img", "rd": "a picture" },
+      { "k": "b", "v": 80, "d": null, "r": null, "rd": "" },
+      { "k": "c", "v": 150, "d": "", "r": "", "rd": null },
+      { "k": "d", "v": 220, "d": 42, "r": "region", "rd": "a region" }
+    ] }
+  ],
+  "marks": [
+    {
+      "type": "group", "from": { "data": "t" }, "description": "four tiles",
+      "encode": { "update": {
+        "x": { "field": "v" }, "y": { "value": 5 }, "width": { "value": 60 }, "height": { "value": 60 }, "stroke": { "value": "#999" },
+        "description": { "field": "d" }, "ariaRole": { "field": "r" }, "ariaRoleDescription": { "field": "rd" }
+      } },
+      "marks": [
+        { "type": "rect", "encode": { "update": { "x": { "value": 8 }, "y": { "value": 8 }, "width": { "value": 20 }, "height": { "value": 20 }, "fill": { "value": "steelblue" } } } }
+      ]
+    }
+  ]
+}

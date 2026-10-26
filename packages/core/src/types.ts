@@ -636,6 +636,12 @@ export interface SceneGroup extends SceneItem {
   interactive?: boolean
   /** Some item of the mark may carry a `description` (its encode has the channel): the SVG container then scans its items for it. */
   describes?: boolean
+  /**
+   * A group ITEM's own aria channels from its encode (vega-scenegraph `ariaItemAttributes`, written on the item's `<g>`):
+   * `description`, `aria`, `ariaRole`, `ariaRoleDescription`. Apart from the MARK's `description` / `aria` above, which
+   * are the container's.
+   */
+  itemAria?: Pick<SceneItem, 'description' | 'aria' | 'ariaRole' | 'ariaRoleDescription'>
   /** The name the spec gave the mark: the last class token of its SVG container (vega cssClass). */
   cssName?: string
   /** The role the spec gave a data mark (`role` is always 'mark' on the scene for those): `role-<markRole>` in its class. */

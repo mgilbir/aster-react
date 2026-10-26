@@ -358,6 +358,21 @@ export function buildA11yTree(
     if (!Array.isArray(kids)) return
     const local = group.__scales ? scalesFromSnapshots(group.__scales) : scopeScales
     const marktype = group.marktype
+    // vega-scenegraph: `aria: false` (the mark's, or a group item's own) puts `aria-hidden` on the element, which hides
+    // everything inside it; a group item that carries a `description` is described by its own role and role description
+    if (group.aria === false || group.itemAria?.aria === false) return
+    const own = group.itemAria
+    if (own && own.description != null) {
+      const w = Math.max(2, group.width ?? 0)
+      const h = Math.max(2, group.height ?? 0)
+      nodes.push({
+        id: `group-${seq++}`, kind: 'group', marktype: 'group',
+        role: own.ariaRole || 'graphics-object',
+        roleDescription: String(own.ariaRoleDescription || 'group mark'),
+        label: String(own.description),
+        x: gx, y: gy, width: w, height: h,
+      })
+    }
     if (role === 'mark' && marktype && marktype !== 'group') {
       const items = kids as SceneItem[]
       if (items.length > threshold) {

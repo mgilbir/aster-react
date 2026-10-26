@@ -2012,7 +2012,7 @@ const ARIA_IGNORE: ReadonlySet<string> = new Set([
  * `description`, its aria-label, role (`ariaRole`, else graphics-object for a group and graphics-symbol for any other
  * mark) and aria-roledescription (`ariaRoleDescription`, else `<mark type> mark`).
  */
-export function ariaItemAttrs(it: SceneItem, w: AttrSink, marktype: string): void {
+export function ariaItemAttrs(it: Pick<SceneItem, 'description' | 'aria' | 'ariaRole' | 'ariaRoleDescription'>, w: AttrSink, marktype: string): void {
   const d = it.description
   if (d == null) {
     if (it.aria === false) w.v('aria-hidden', 'true')
@@ -2134,9 +2134,12 @@ export function groupContainerAttrs(first: SceneGroup, w: AttrSink, clipId: stri
   ariaMarkAttrs(first, w, 'group', scope)
 }
 
-/** A group item's `<g>`: its `translate(x,y)`. */
-export function groupItemAttrs(dx: number, dy: number, w: AttrSink): void {
-  // (a group's `description` and `aria` are its MARK's: they are on the container, see ariaMarkAttrs)
+/**
+ * A group item's `<g>`: the item's own aria channels (vega-scenegraph `ariaItemAttributes`, which comes first), then its
+ * `translate(x,y)`. (A group MARK's `description` and `aria` are the container's: see ariaMarkAttrs.)
+ */
+export function groupItemAttrs(dx: number, dy: number, w: AttrSink, aria?: SceneGroup['itemAria']): void {
+  if (aria !== undefined) ariaItemAttrs(aria, w, 'group')
   w.t('transform', `translate(${num(dx)},${num(dy)})`)
 }
 
@@ -2281,7 +2284,7 @@ function groupItem(g: SceneGroup, frameW: number, frameH: number, scope: GuideSc
     body = (scopeNode.items ?? []) as SceneItem[]
   }
   const inert = g.interactive === false
-  return el('g', (w) => groupItemAttrs(g.x ?? 0, g.y ?? 0, w), [
+  return el('g', (w) => groupItemAttrs(g.x ?? 0, g.y ?? 0, w, g.itemAria), [
     el('path', (w) => groupBackgroundAttrs(bg, boxPath(gw, gh), inert, w)),
     el('g', contentAttrs, childNodes(body, cw, ch, inner, clips)),
     el('path', (w) => groupForegroundAttrs(fg, inert, w)),

@@ -3692,6 +3692,15 @@ function markClip(mark: CompiledMark, ctx: EvalContext): boolean {
   return !!c
 }
 
+/** The aria channels an encode set gave a group item, or undefined when it gave none. */
+function groupItemAria(geo: SceneItem): SceneGroup['itemAria'] {
+  let out: NonNullable<SceneGroup['itemAria']> | undefined
+  for (const k of ['description', 'aria', 'ariaRole', 'ariaRoleDescription'] as const) {
+    if (geo[k] !== undefined) (out ??= {})[k] = geo[k] as never
+  }
+  return out
+}
+
 function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource): SceneGroup {
   const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
   // the facet partition is a dataset for everything in this item's scope, its own scales included
@@ -3765,6 +3774,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     let href = (geo as Record<string, unknown>).href
     if (href != null && ctx.urlPolicy !== undefined && applyLinkUrlPolicy(href, ctx.urlPolicy) == null) href = undefined
     const role = (mark.role as string | undefined) ?? 'scope'
+    // the item's own aria channels (vega-scenegraph ariaItemAttributes, on the item's `<g>`)
+    const itemAria = groupItemAria(geo)
 
     const group = {
       marktype: 'group', name: mark.name, role, x: gx, y: gy, width: gw, height: gh,
@@ -3774,6 +3785,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       _scope: true,
       markIndex: markIdOf(mark),
       ...markContainerInfo(mark),
+      ...(itemAria !== undefined ? { itemAria } : {}),
       ...(href != null ? { href: href as string } : {}),
       ...(markClip(mark, ctx) ? { markClip: true } : {}),
     } as unknown as SceneGroup
