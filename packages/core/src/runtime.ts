@@ -4402,16 +4402,18 @@ interface ChartGuideState {
   names: { scales: Map<string, CompiledScale>; data: Set<string> }
   defs: Map<object, unknown>
 }
-const CHART_GUIDES = new WeakMap<CompiledChart, ChartGuideState>()
+const GUIDES = '__guides'
 function chartGuides(chart: CompiledChart): ChartGuideState {
-  let st = CHART_GUIDES.get(chart)
+  let st = (chart as unknown as Record<string, ChartGuideState | undefined>)[GUIDES]
   if (st === undefined) {
     st = {
       evals: 0, styles: { styles: chart.style ?? {}, lineBreak: chart.lineBreak },
       names: { scales: new Map(chart.scales.map((sc) => [sc.name, sc])), data: new Set(chart.data.map((d) => d.name)) },
       defs: new Map(),
     }
-    CHART_GUIDES.set(chart, st)
+    // (kept on the chart itself, out of sight of enumeration and comparison: a weak map entry per chart made every scavenge
+    // of a program that makes many charts slower)
+    Object.defineProperty(chart, GUIDES, { value: st, enumerable: false, writable: false })
   }
   return st
 }
