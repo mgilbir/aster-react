@@ -31,7 +31,7 @@ result is the summary line it prints. They change with the code: re-run before q
 | What | Command | Result |
 |---|---|---|
 | Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 785 specs: 310 raw Vega, 475 Vega-Lite |
-| Unit, React, script and vector tests | `pnpm test` | 136 files, 12132 tests passed |
+| Unit, React, script and vector tests | `pnpm test` | 140 files, 13152 tests passed |
 | Time-zone matrix | `pnpm test:tz` | `[tz] all zones passed` (zone-sensitive vitest suites under America/New_York and Asia/Kolkata; `corpus-tz` under UTC and both) |
 | SVG corpus vs real Vega | `pnpm conformance` | 785/785 passed |
 | Vega-Lite corpus through `@aster/vl` | `pnpm conformance-vl` | 475 passed, 0 failed, 0 errored / 475 |
