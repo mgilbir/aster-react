@@ -24,6 +24,7 @@ export function enc(v: unknown): unknown {
     return v
   }
   if (v instanceof Date) return Number.isNaN(v.getTime()) ? { $: 'baddate' } : { $: 'date', ms: v.getTime() }
+  if (v instanceof RegExp) return { $: 're', src: v.source, flags: v.flags }
   if (typeof v === 'function') return { $: 'fn' }
   if (typeof v === 'symbol') return { $: 'symbol', desc: v.description ?? null }
   if (Array.isArray(v) || ArrayBuffer.isView(v)) return Array.from(v as ArrayLike<unknown>, enc)
@@ -41,6 +42,18 @@ export const attempt = (f: () => unknown): unknown => {
     return enc(f())
   } catch {
     return { $: 'throw' }
+  }
+}
+
+/**
+ * `enc(f())`, or `{ $: 'throw', name, message }` when `f` throws: the strict comparator of the
+ * ADR-0001 vector suites (the error class AND its message must match, not just "both threw").
+ */
+export const exact = (f: () => unknown): unknown => {
+  try {
+    return enc(f())
+  } catch (err) {
+    return { $: 'throw', name: (err as Error).name, message: (err as Error).message }
   }
 }
 
