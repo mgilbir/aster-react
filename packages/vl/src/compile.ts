@@ -12,6 +12,7 @@ import { VLCompileError, pushAll, signalSafe, flatField, datumRef as dref, genNa
 import { validateGeoUnit, validateSpec } from './validate.js'
 import { predicateExpr, domainValueExpr } from './predicate.js'
 import { normalizeComposites } from './composite.js'
+import { animationSignals, animationStore, isTimerSelect, selectionPredicate, timeScaleRange, timerSelections, type TimerSelection } from './animation.js'
 import { ASSEMBLED_FROM, GEO_POSITION_CHANNELS, assembleProjection, finalProjectionName, geoDataTransforms, geoshapeTransform, hasProjection, mergeLayerProjections, parseUnitProjection, renameComponentSignals, type GeoUnit, type ProjectionComponent, type UnitGeo } from './geo.js'
 import { scaleConfigOf, discreteStep, sizeRange, countRange, discreteCount, usesUnaggregatedDomain, type ScaleCfg } from './scaleconfig.js'
 import { getTimeUnitParts, normalizeTimeUnit, timeUnitFieldName, timeUnitTransform, type NormalTimeUnit } from './timeunit.js'
@@ -678,7 +679,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     }
   }
   if (legends.length) out.legends = legends
-  rootChrome(out, spec)
+  rootChrome(out, spec, 'unit')
   return out
 }
 
@@ -753,7 +754,7 @@ function stepSignals(channel: 'x' | 'y', sc: ScaleSpec, stepReq?: number): Recor
 }
 
 /** Root-level properties every compile path shares: background, padding, config, title, description. */
-function rootChrome(out: Record<string, unknown>, spec: VLSpec): void {
+function rootChrome(out: Record<string, unknown>, spec: VLSpec, kind: 'unit' | 'composite' = 'composite'): void {
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
   out.background = spec.background ?? (userConfig?.background as string | undefined) ?? 'white'
   out.padding = spec.padding ?? (userConfig?.padding as unknown) ?? 5
@@ -770,8 +771,24 @@ function rootChrome(out: Record<string, unknown>, spec: VLSpec): void {
     }
     hide(out)
   }
-  if (spec.title) out.title = spec.title
+  if (spec.title) out.title = kind === 'unit' ? unitTitle(spec.title, userConfig) : spec.title
   if (spec.description) out.description = spec.description
+}
+
+/**
+ * vega-lite `assembleTitle` for a unit or layer: the title as a Vega title object, over config.title's anchor / frame /
+ * offset / orient, framed on the group (`frame: "group"`) unless it is anchored to a side: a centred title sits over the plot
+ * area, not over the plot plus its axes.
+ */
+function unitTitle(title: unknown, userConfig: Record<string, unknown> | undefined): unknown {
+  const cfg = isObject(userConfig?.title) ? (userConfig!.title as Record<string, unknown>) : {}
+  const nonMark: Record<string, unknown> = {}
+  for (const k of ['anchor', 'frame', 'offset', 'orient']) if (cfg[k]) nonMark[k] = cfg[k]
+  const def = typeof title === 'string' || Array.isArray(title) ? { text: title } : isObject(title) ? title : undefined
+  if (def === undefined) return title
+  const merged: Record<string, unknown> = { ...nonMark, ...def }
+  if (merged.text && (merged.anchor === 'middle' || merged.anchor === undefined)) merged.frame ??= 'group'
+  return merged
 }
 
 /** Scale properties the user wrote explicitly (vega-lite's explicit/implicit split). */
@@ -2660,6 +2677,8 @@ interface CompileCtx extends TransformContext {
   sn(i: number): string
   /** The next unnamed child source index (`source_<n>`) a composite hands out; shared by nested composites. */
   nextSource?: number
+  /** The timer selection that animates the (single, top-level) unit's `time` channel. */
+  timer?: TimerSelection
   /** A generated one-off dataset name (`row_domain`, ...), de-collided from user names. */
   fresh(base: string): string
 }
@@ -2700,7 +2719,10 @@ function makeCtx(top: VLSpec): CompileCtx {
   }
   const dataPrefix = prefixFree('data')
   const sourcePrefix = prefixFree('source')
+  const timeDef = isObject(top.encoding) && isObject((top.encoding as Record<string, unknown>).time) ? (top.encoding as Record<string, unknown>).time as Record<string, unknown> : undefined
+  const timers = timerSelections(top, typeof timeDef?.field === 'string' ? timeDef.field : undefined)
   const ctx: CompileCtx = {
+    ...(timers[0] && timeDef ? { timer: timers[0] } : {}),
     lookups,
     datasets,
     dn: (i) => `${dataPrefix}_${i}`,
@@ -2709,6 +2731,11 @@ function makeCtx(top: VLSpec): CompileCtx {
       let n = base
       while (userNames.has(n)) n = `${n}_`
       return n
+    },
+    selectionPredicate(param: string, empty: boolean | undefined): string {
+      const sel = timers.find((t) => t.name === param)
+      if (!sel) throw new VLCompileError(`filter: {"param": ${JSON.stringify(param)}} names no timer selection`)
+      return selectionPredicate(sel, empty)
     },
     addLookupSource(def: Record<string, unknown>): string {
       const entry = dataSource(def, datasets)
@@ -3454,6 +3481,17 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         })
       }
     }
+  }
+
+  // time scale (an animation's frames): a band scale, one step per frame (vega-lite scale/range.ts)
+  const timeDefS = fields.find((f) => f.channel === 'time' && f.field)
+  if (timeDefS) {
+    scales.push({
+      name: 'time',
+      type: 'band',
+      domain: { data: dataName, field: aggFieldName(timeDefS), sort: true },
+      range: timeScaleRange(userScaleCfg?.framesPerSecond),
+    })
   }
 
   // shape scale
@@ -5892,6 +5930,44 @@ export function compileUnit(input: VLSpec): VLSpec {
   return compileUnitView(spec, makeCtx(spec))
 }
 
+/**
+ * vega-lite assembleUnitSelectionData: the timer selection's frame filter (the `filter: {param}` transform) is removed
+ * from the main dataset to be the whole of the `<main>_curr` dataset. It is only there to find when the filter is in
+ * the main dataset's own transform list: a pipeline that split before it (an aggregate with a sort over the raw
+ * table) has the filter in an earlier dataset, which vega-lite does not search.
+ */
+function extractFrameFilter(data: DataPipeline, sel: TimerSelection): { filter: Record<string, unknown> } {
+  const isFrameFilter = (t: Record<string, unknown>): boolean =>
+    t.type === 'filter' && (t.expr === selectionPredicate(sel, true) || t.expr === selectionPredicate(sel, false))
+  const at = data.pipeline.findIndex(isFrameFilter)
+  if (at < 0) throw new VLCompileError(`transform: the {"filter": {"param": ${JSON.stringify(sel.name)}}} is not in the unit's data pipeline`)
+  if (data.usesRawDomain && data.pipeline.length > data.rawLen && at < data.rawLen) {
+    throw new VLCompileError(`transform: the {"filter": {"param": ${JSON.stringify(sel.name)}}} lands in the pre-aggregation table, not the main dataset; vega-lite 6.4.3 then emits marks that read a frame dataset it never defines`)
+  }
+  const [filter] = data.pipeline.splice(at, 1) as [Record<string, unknown>]
+  if (at < data.rawLen) data.rawLen--
+  const i = data.transforms.indexOf(filter)
+  if (i >= 0) data.transforms.splice(i, 1)
+  return { filter }
+}
+
+/**
+ * The marks of an animated unit read the frame dataset (the facet of a path group keeps the whole main dataset: vega-lite's
+ * `correctDataNames`), and a unit with a point selection is interactive with a pointer cursor.
+ */
+function animateMarks(marks: Record<string, unknown>[], dataName: string): void {
+  for (const m of marks) {
+    if (isObject(m.from) && m.from.data === dataName) m.from = { ...m.from, data: `${dataName}_curr` }
+    if (m.type === 'group') {
+      animateMarks((m.marks as Record<string, unknown>[] | undefined) ?? [], dataName)
+      continue
+    }
+    m.interactive = true
+    const update = (isObject(m.encode) ? (m.encode as { update?: Record<string, unknown> }).update : undefined)
+    if (update && update.cursor === undefined) update.cursor = { value: 'pointer' }
+  }
+}
+
 function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const markRaw = spec.mark
   const mark = typeof markRaw === 'string' ? markRaw : (markRaw as Record<string, unknown>).type as string
@@ -5908,6 +5984,8 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const unitHandle = {}
   const unitProj = unitProjection(spec, rootNamePrefix(spec), unitHandle)
   const data = buildData(spec, fields, mark, orient, undefined, ctx)
+  // animation: the selection's frame filter leaves the main dataset for the `_curr` dataset the marks read
+  const animation = ctx.timer && fields.some((f) => f.channel === 'time') ? extractFrameFilter(data, ctx.timer) : undefined
   // vega-lite's default sizing: continuous dimensions get 300, discrete
   // dimensions size from the band step (bandspace(domain length) * step)
   const xDefS = fields.find((f) => f.channel === 'x')
@@ -5942,14 +6020,24 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const unitSourceName = typeof unitSource.name === 'string' ? unitSource.name : ctx.sn(0)
   unitSource.name = unitSourceName
   const pd = pipelineDatasets(data, unitSourceName, unitSourceName, ctx, 0)
-  out.data = [unitSource, ...pd.datasets]
+  if (animation && pd.datasets.length === 0) {
+    // (vega-lite keeps an empty main dataset: the frame dataset derives from it)
+    const main = ctx.dn(0)
+    pd.datasets.push({ name: main, source: unitSourceName, transform: [] })
+    pd.dataName = main
+    pd.rawName = main
+    pd.next = 1
+  }
+  out.data = [...(animation ? [animationStore(ctx.timer!)] : []), unitSource, ...pd.datasets]
   const dataName = pd.dataName
+  if (animation) (out.data as Record<string, unknown>[]).push({ name: `${dataName}_curr`, source: dataName, transform: [animation.filter] })
   if (unitProj) {
     HANDLE_MAIN.set(unitHandle, dataName)
     out.projections = assembleProjection(unitProj, () => dataName)
     FRAG_PROJECTION.set(out, unitProj)
   }
   const builtMarks = buildMarks(spec, fields, mark, orient, dataName, markSize, ctx.dn(pd.next)) as Record<string, unknown>[] & { overlayData?: Record<string, unknown> }
+  if (animation) animateMarks(builtMarks, dataName)
   out.marks = builtMarks
   // interval-selection brush marks (vega-lite emits them around the unit's
   // marks: the shaded background first, the interactive brush frame after).
@@ -5957,7 +6045,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (Array.isArray(spec.params)) {
     const brushMarks: Record<string, unknown>[] = []
     for (const p of spec.params as Record<string, unknown>[]) {
-      if (!isObject(p.select)) continue
+      if (!isObject(p.select) || isTimerSelect(p.select)) continue
       const name = p.name as string
       const zero = { value: 0 }
       brushMarks.push(
@@ -5998,6 +6086,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
     pushAll(sizeSignals, stepSignals(channel, sc, stepReq))
   }
   if (unitContainer) sizeSignals.splice(0, 0, ...unitContainer.signals)
+  if (animation) sizeSignals.splice(0, 0, ...animationSignals(ctx.timer!, 'time', typeof spec.name === 'string' ? spec.name : ''))
   if (sizeSignals.length) out.signals = sizeSignals
   // the point overlay's dataset joins the size domain union
   if (builtMarks.overlayData) {
@@ -6018,7 +6107,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (axes.length) out.axes = axes
   const legends = buildUnitLegends(spec, fields, mark, markRaw)
   if (legends.length) out.legends = legends
-  rootChrome(out, spec)
+  rootChrome(out, spec, 'unit')
   return out
 }
 

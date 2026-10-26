@@ -17,6 +17,7 @@
  * vega-lite 6.4.3.
  */
 import { VLCompileError, splitAccessPath } from './names.js'
+import { isTimerSelect, validateTimerSelection } from './animation.js'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -53,7 +54,7 @@ const ALL_CHANNELS = set(
     'row column facet',
 )
 /** Schema channels compile.ts does not consume (everything else in ALL_CHANNELS is supported; the rest throws). */
-const UNSUPPORTED_CHANNELS = set('theta2 radius2 key time')
+const UNSUPPORTED_CHANNELS = set('theta2 radius2 key')
 const GEO_CHANNELS = set('longitude latitude longitude2 latitude2')
 const SUPPORTED_CHANNELS: ReadonlySet<string> = new Set([...ALL_CHANNELS].filter((c) => !UNSUPPORTED_CHANNELS.has(c)))
 
@@ -170,6 +171,11 @@ const SCHEMA_CHILDREN: Record<Exclude<Kind, 'unit'>, ReadonlySet<Kind>> = {
 /** Implemented (parent -> child) nestings: today every schema-valid nesting is implemented; narrow this as the schema grows. */
 export const SUPPORTED_NESTING: Record<Exclude<Kind, 'unit'>, ReadonlySet<Kind>> = SCHEMA_CHILDREN
 
+/** The names of the timer selections declared on the top-level unit being validated (the only place `{param}` filters may refer to). */
+let timerParams: ReadonlySet<string> = new Set()
+/** Is the view being validated a top-level unit (where selection params live)? */
+let validatingTopUnit = false
+
 /** Depth of facet operators above the view being validated (a map inside a facet is not supported). */
 let compositeDepth = 0
 
@@ -194,6 +200,8 @@ export function validateSpec(spec: unknown): void {
   if (!isObj(spec)) fail('', 'a Vega-Lite spec must be a JSON object')
   repeatVars = new Set()
   compositeDepth = 0
+  timerParams = new Set()
+  validatingTopUnit = false
   validateView(spec, '', true, undefined)
 }
 
@@ -211,6 +219,10 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
   }
   if (spec.$schema !== undefined && typeof spec.$schema !== 'string') mustBe(at('$schema'), 'a string')
 
+  validatingTopUnit = top && kind === 'unit'
+  timerParams = validatingTopUnit && Array.isArray(spec.params)
+    ? new Set((spec.params as unknown[]).filter((p): p is Obj => isObj(p) && isObj(p.select) && isTimerSelect(p.select) && typeof p.name === 'string').map((p) => p.name as string))
+    : new Set()
   validateData(spec, at)
   if (spec.transform !== undefined) validateTransforms(spec.transform, at('transform'))
   validateSize(spec, at, top && (kind === 'unit' || kind === 'layer'))
@@ -478,6 +490,15 @@ function validateParams(params: unknown, path: string, topUnit: boolean): void {
 
 function validateSelection(p: Obj, at: string): void {
   keysOf(p, set('name select value bind description'), at, 'selection parameter')
+  if (isObj(p.select) && isTimerSelect(p.select)) {
+    // an animation's clock: the one point selection that is supported (see animation.ts)
+    if (timerParams.size > 1) fail(at, 'only one timer selection is supported (vega-lite 6.4.3 ignores all but the first)')
+    for (const reserved of ['unit', 'anim_clock', 'last_tick_at', 'is_playing', 'eased_anim_clock', 'min_extent', 'max_range_extent', 'anim_value']) {
+      if (p.name === reserved) fail(`${at}.name`, `"${reserved}" is a signal an animation defines; name the selection something else`)
+    }
+    validateTimerSelection(p, at, fail)
+    return
+  }
   let sel = p.select
   if (typeof sel === 'string') sel = { type: sel }
   if (!isObj(sel)) mustBe(`${at}.select`, '"interval", "point" or an object with `type`')
@@ -565,9 +586,42 @@ function validateUnit(spec: Obj, at: (k: string) => string): void {
   const enc = spec.encoding === undefined ? {} : spec.encoding
   validateEncoding(enc, at('encoding'), 'unit', mark)
   if (isObj(enc)) validateGeoUnit(mark, enc, at('encoding'))
+  validateAnimation(spec, enc, at)
   const faceted = isObj(enc) && (enc.row != null || enc.column != null || enc.facet != null)
   if ((compositeDepth > 0 || faceted) && (mark === 'geoshape' || spec.projection !== undefined || (isObj(enc) && Object.keys(enc).some((c) => GEO_CHANNELS.has(c) && enc[c] != null)))) {
     fail(at('mark'), 'maps (geoshape marks, projections, longitude / latitude) inside a facet are not supported: vega-lite 6.4.3 fits a facet\'s projection to a dataset it never defines (data("child_main")), so there is no output to match')
+  }
+}
+
+/**
+ * An animation is a top-level unit with a `time` channel, ONE timer selection param, and a `filter: {param}` transform
+ * on it (animation.ts says why vega-lite 6.4.3 needs all three: without them it emits marks that read a dataset it never
+ * defines). Anything else that involves a timer selection or the time channel is refused here.
+ */
+function validateAnimation(spec: Obj, enc: unknown, at: (k: string) => string): void {
+  const hasTime = isObj(enc) && enc.time != null
+  if (!hasTime) {
+    if (timerParams.size) fail(at('params'), 'a timer selection animates the `time` channel: the unit has none')
+    return
+  }
+  const timeAt = at('encoding.time')
+  if (!validatingTopUnit) fail(timeAt, 'the time channel is supported on a single top-level unit spec only (not inside layer / concat / facet / repeat)')
+  if (timerParams.size !== 1) fail(timeAt, 'the time channel needs exactly one timer selection param ({"name": "anim", "select": {"type": "point", "on": "timer", "fields": [...]}}): without it vega-lite 6.4.3 emits marks that read a dataset it never defines')
+  const [name] = [...timerParams]
+  const filters = (Array.isArray(spec.transform) ? spec.transform : []).filter((t): t is Obj => isObj(t) && isObj(t.filter) && t.filter.param === name)
+  if (filters.length !== 1) fail(at('transform'), `the time channel needs the transform {"filter": {"param": ${JSON.stringify(name)}}} (once): it is the predicate that picks the current frame`)
+  const markDef = isObj(spec.mark) ? spec.mark : { type: spec.mark }
+  if (['boxplot', 'errorbar', 'errorband'].includes(markDef.type as string)) fail(at('mark'), `a "${String(markDef.type)}" is a layered composite mark: animating it is not supported`)
+  if (markDef.point !== undefined || markDef.line !== undefined) fail(at('mark'), 'a point / line overlay makes the unit a layer: animating it is not supported')
+  if (isObj(enc) && (enc.row != null || enc.column != null || enc.facet != null)) fail(timeAt, 'an animated unit cannot be faceted (vega-lite 6.4.3 leaves the facet reading the unfiltered data)')
+  const def = (enc as Obj).time
+  if (!isObj(def) || typeof def.field !== 'string') fail(timeAt, 'the time channel is a field definition ({"field": ..., "type": ...})')
+  for (const k of Object.keys(def)) {
+    if (!['field', 'type', 'timeUnit', 'title'].includes(k)) fail(`${timeAt}.${k}`, `\`${k}\` is not supported on the time channel (its scale is vega-lite's band scale over the field)`)
+  }
+  const param = (spec.params as Obj[]).find((p) => p.name === name)!
+  if (isObj(param.select) && param.select.encodings !== undefined && def.timeUnit !== undefined) {
+    fail(timeAt, 'a time unit on the field cannot be projected by `encodings`: list the field in `fields` (vega-lite 6.4.3 projects the raw field)')
   }
 }
 
@@ -776,11 +830,21 @@ function validateSort(sort: unknown, at: string, ch: string): void {
 
 const FIELD_PREDICATE_KEYS = ['equal', 'lt', 'lte', 'gt', 'gte', 'range', 'oneOf', 'valid'] as const
 
-/** Validate a VL predicate (string expression, field predicate, and/or/not). */
-export function validatePredicate(p: unknown, at: string): void {
+/**
+ * Validate a VL predicate (string expression, field predicate, and/or/not). A `{param}` predicate is accepted only as
+ * the whole of a `filter` transform (`allowParam`), and only for a timer selection (an animation's frame filter).
+ */
+export function validatePredicate(p: unknown, at: string, allowParam = false): void {
   if (typeof p === 'string') return
   if (!isObj(p)) fail(at, `a predicate must be an expression string or an object, got ${JSON.stringify(p)}`)
-  if (p.param !== undefined) fail(at, 'selection/param predicates ({"param": ...}) are not supported')
+  if (p.param !== undefined) {
+    if (!allowParam || !timerParams.has(p.param as string)) {
+      fail(at, 'selection/param predicates ({"param": ...}) are not supported, except a filter transform on a timer selection (an animation)')
+    }
+    keysOf(p, set('param empty'), at, 'param predicate')
+    if (p.empty !== undefined && typeof p.empty !== 'boolean') mustBe(`${at}.empty`, 'a boolean')
+    return
+  }
   if (p.and !== undefined || p.or !== undefined || p.not !== undefined) {
     const keys = Object.keys(p)
     if (keys.length !== 1) fail(at, 'and/or/not cannot be combined with other keys')
@@ -900,7 +964,7 @@ function validateTransform(kind: string, t: Obj, a: string): void {
   if (t.groupby !== undefined) validateFieldList(t.groupby, `${a}.groupby`)
   switch (kind) {
     case 'filter':
-      validatePredicate(t.filter, `${a}.filter`)
+      validatePredicate(t.filter, `${a}.filter`, true)
       break
     case 'calculate':
       needStr('calculate')

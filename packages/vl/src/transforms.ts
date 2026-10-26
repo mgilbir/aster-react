@@ -17,6 +17,8 @@ const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !
 export interface TransformContext {
   /** Register (or find) a Vega dataset for a lookup source; returns its name. */
   addLookupSource(def: Obj): string
+  /** The expression of a `{param, empty?}` selection predicate (a filter transform on a selection), when selections are in play. */
+  selectionPredicate?: (param: string, empty: boolean | undefined) => string
 }
 
 // --- bin ---------------------------------------------------------------------
@@ -161,7 +163,10 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
         }
       }
     }
-    out.push({ type: 'filter', expr: predicateExpr(t.filter) })
+    if (isObj(t.filter) && typeof t.filter.param === 'string') {
+      if (!ctx.selectionPredicate) throw new VLCompileError(`filter: {"param": ${JSON.stringify(t.filter.param)}} has no selection to test`)
+      out.push({ type: 'filter', expr: ctx.selectionPredicate(t.filter.param, t.filter.empty as boolean | undefined) })
+    } else out.push({ type: 'filter', expr: predicateExpr(t.filter) })
   } else if (t.bin !== undefined && t.field !== undefined) {
     const field = t.field as string
     const as = t.as as string | string[]
