@@ -485,6 +485,9 @@ export function encodeItems(def: GuideMarkDef, rows: Row[], group: Rec, host: En
   stage(batch.enter)
   Object.assign(tmpl, plan.update.tmpl)
   stage(batch.update)
+  // a rule or a text mark whose channels are all among the ones its leaf kind carries is made by that kind's constructor
+  const made = leavesOf(def, tmpl, per, rows, group, host, cfg)
+  if (made !== null) return made
   const out: SceneItem[] = new Array(rows.length)
   const one = per.length === 1 ? per[0]!.fast : undefined
   const oneKey = per.length === 1 ? per[0]!.key : ''
@@ -500,6 +503,58 @@ export function encodeItems(def: GuideMarkDef, rows: Row[], group: Rec, host: En
       continue
     }
     out[i] = item as SceneItem
+  }
+  return out
+}
+
+type Per = Array<{ key: string; fast: (d: Row) => unknown }>
+
+const RULE_FIELDS = new Set(['_kind', '_part', 'opacity', 'stroke', 'strokeCap', 'strokeDash', 'strokeDashOffset', 'strokeOpacity', 'strokeWidth', 'x', 'y', 'x2', 'y2'])
+const TEXT_FIELDS = new Set(['_kind', '_part', 'fill', 'fillOpacity', 'font', 'fontSize', 'fontStyle', 'fontWeight', 'opacity', 'angle', 'limit', 'lineHeight', 'lineBreak', 'align', 'baseline', 'dx', 'dy', 'x', 'y', 'text'])
+
+/**
+ * The leaves of a rule or a text mark, one constructor per kind: one object literal with every channel of the kind, set in
+ * one order (an absent channel is `undefined` up front), so all leaves of a kind share one shape and nothing is copied from a
+ * template. The plan's constants are the template's fields; only the channels that read the datum are computed per leaf. A
+ * mark with a channel outside the kind's set (a user encode adding one) takes the generic path: `null`.
+ */
+function leavesOf(def: GuideMarkDef, t: Rec, per: Per, rows: Row[], group: Rec, host: EntryHost, cfg: GuideStyles): SceneItem[] | null {
+  const fields = def.type === 'rule' ? RULE_FIELDS : def.type === 'text' ? TEXT_FIELDS : null
+  if (fields === null) return null
+  for (const k in t) if (!fields.has(k)) return null
+  // (the channels computed per datum are the leaf's position, and a label's text: any other takes the generic path)
+  for (const e of per) if (e.key !== 'x' && e.key !== 'y' && !(def.type === 'rule' ? e.key === 'x2' || e.key === 'y2' : e.key === 'text')) return null
+  const at = (k: string): ((d: Row) => unknown) | null => per.find((e) => e.key === k)?.fast ?? null
+  const out: SceneItem[] = new Array(rows.length)
+  const fx = at('x'), fy = at('y')
+  if (def.type === 'rule') {
+    const fx2 = at('x2'), fy2 = at('y2')
+    const { _kind, _part, opacity, stroke, strokeCap, strokeDash, strokeDashOffset, strokeOpacity, strokeWidth } = t
+    for (let i = 0; i < rows.length; i++) {
+      const d = rows[i]!
+      try {
+        out[i] = {
+          _kind, _part, opacity, stroke, strokeCap, strokeDash, strokeDashOffset, strokeOpacity, strokeWidth,
+          x: fx !== null ? fx(d) : t.x, y: fy !== null ? fy(d) : t.y, x2: fx2 !== null ? fx2(d) : t.x2, y2: fy2 !== null ? fy2(d) : t.y2,
+        } as unknown as SceneItem
+      } catch {
+        out[i] = encodeItem(def, d, group, host, cfg)
+      }
+    }
+    return out
+  }
+  const ftext = at('text')
+  const { _kind, _part, fill, fillOpacity, font, fontSize, fontStyle, fontWeight, opacity, angle, limit, lineHeight, lineBreak, align, baseline, dx, dy } = t
+  for (let i = 0; i < rows.length; i++) {
+    const d = rows[i]!
+    try {
+      out[i] = {
+        _kind, _part, fill, fillOpacity, font, fontSize, fontStyle, fontWeight, opacity, angle, limit, lineHeight, lineBreak, align, baseline, dx, dy,
+        x: fx !== null ? fx(d) : t.x, y: fy !== null ? fy(d) : t.y, text: ftext !== null ? ftext(d) : t.text,
+      } as unknown as SceneItem
+    } catch {
+      out[i] = encodeItem(def, d, group, host, cfg)
+    }
   }
   return out
 }
