@@ -151,14 +151,14 @@ the number in the same PR. Measured 2026-10-26 (after the Vega-Lite maps and ani
 |---|---|---|---|
 | `import { renderSpec } from '@aster/core'` | 123.1 | 126.3 | 126.8 |
 | `import { useChart } from '@aster/react'` | 126.4 | 129.7 | 130.3 |
-| `import { Chart } from '@aster/react'` | 157.2 | 163.2 | 163.8 |
-| `import { SvgChart } from '@aster/react/lite'` | 142.0 | 144.8 | 145.3 |
-| `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | 151.5 | 157.5 | 158.0 |
-| `import '@aster/react/vl'` + `<Chart>` | 211.3 | 230.7 | 231.2 |
+| `import { Chart } from '@aster/react'` | 157.2 | 164.8 | 165.3 |
+| `import { SvgChart } from '@aster/react/lite'` | 142.0 | 145.9 | 146.4 |
+| `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | 151.5 | 159.1 | 159.6 |
+| `import '@aster/react/vl'` + `<Chart>` | 211.3 | 240.0 | 240.5 |
 | core + `@aster/core/dom` (marginal) | 5.8 | 5.7 | 6.2 |
 | core + `@aster/core/canvas` (marginal) | 4.8 | 4.8 | 5.3 |
 | core + `@aster/core/hit` (marginal) | 5.1 | 5.0 | 5.5 |
-| core + `@aster/core/signals` (marginal) | 4.4 | 6.8 | 7.4 |
+| core + `@aster/core/signals` (marginal) | 4.4 | 7.8 | 8.3 |
 | core + `@aster/core/load` (marginal) | 5.1 | 5.1 | 5.6 |
 | core + `@aster/core/geo` (marginal) | 12.4 | 12.3 | 12.8 |
 | core + `@aster/core/transforms` (marginal) | 15.1 | 15.1 | 15.6 |
@@ -180,7 +180,7 @@ The `useChart` and `<Chart>` rows fail if the field is removed or widened; `scri
 that fault and requires the budget to fail. The other direction (a list that is too narrow drops a registration) is
 caught by `pnpm check:bundle`, which bundles and executes each import pattern.
 
-The Vega-Lite compiler is 62.4 kB gzip on top of the base `<Chart>` (223.5 minus 161.1; it was 54.1 before maps and animation, and the core grew 2.2 kB for timers, `modify`, the selection functions and the fit-projection registry). Trimming the validation layer
+The Vega-Lite compiler is 75.2 kB gzip on top of the base `<Chart>` (240.0 minus 164.8). It was 54.1 before the selections, maps and animation work: the selection compiler is most of the growth, then the maps (projections, geojson / geopoint data, geoshape marks) and the animation (the `time` channel's scale and frame dataset). Trimming the validation layer
 (`packages/vl/src/validate.ts`: allow-lists derived from one table each, shared message templates, dead branches removed;
 no check dropped, every message unchanged) took `@aster/vl` from 180,940 to 176,836 bytes minified (-4.1 kB) and from
 55,828 to 55,606 bytes gzip level 9 (-0.2 kB): the validator is mostly unique error text, which gzip already compresses well.
