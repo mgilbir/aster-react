@@ -406,6 +406,11 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     return { l, mark, markRaw, markSize: isObject(markRaw) ? (markRaw.size as number | undefined) : undefined, fields, orient, pipeline: [], seriesFields: [], dataName: '', rawName: '', rawLen: 0, usesRawDomain: false, group: 0 }
   })
 
+  for (const p of parsed) {
+    if (p.fields.some((f) => isObject(f.scale?.domain) && Array.isArray((f.scale!.domain as Record<string, unknown>).unionWith))) {
+      throw new VLCompileError('scale.domain {"unionWith": [...]} in a layered spec is not supported: the layers\' domains would have to merge with it')
+    }
+  }
   // selections: every unit's are parsed up front (a condition in one layer may test a selection of another)
   const resolveScaleEarly = isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).scale)
     ? ((spec.resolve as Record<string, Record<string, unknown>>).scale as Record<string, unknown>)
@@ -5910,6 +5915,10 @@ function prepareUnitSelections(
 ): UnitSel | undefined {
   const params = selectionParamsOf(spec)
   if (!params.length) return undefined
+  const md = isObject(spec.mark) ? spec.mark : {}
+  if ((md.point !== undefined && md.point !== false) || (md.line !== undefined && md.line !== false)) {
+    throw new VLCompileError('mark.point / mark.line (a path mark with an overlay) cannot carry selection parameters: vega-lite splits it into layers; write the layers')
+  }
   const extents = new Map<string, { param: string; field?: string; encoding?: string }>()
   const fieldOf = (channel: string): FieldDef | undefined => fields.find((f) => f.channel === channel && f.field && !f.datumOnly)
   const unit: SelUnit = {

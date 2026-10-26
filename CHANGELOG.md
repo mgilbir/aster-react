@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Vega-Lite params and selections**: `@aster/vl` compiles point and interval selections, `bind` to inputs / legend /
+  scales, `{param}` conditions, predicates and filters, lookups from a selection, `scale.domain` `{param}` /
+  `{unionWith}` and value params as vega-lite 6.4.3 does (a port of `compile/selection/*`), on a unit view and on the
+  units of a layer (concat, facet and repeat stay refused: Vega scopes their signals to a group). `@aster/core` gains
+  the expression functions behind them (vega-selections' `vlSelectionTest` / `vlSelectionIdTest` /
+  `vlSelectionResolve` / `vlSelectionTuples`, `modify` with vega's changeset semantics, `isTuple`, the pan / zoom
+  functions, faithful `inrange` and `clampRange`), `{scale}` event sources, and datasets the event loop edits
+  (`hooks.onData`); `<Chart>` keeps the edited rows. Runtime gaps closed on the way: legend part names and
+  interactive legends, a mark that reads another mark's items, the voronoi mark transform, pointer events on
+  transparent items and on the painted frame. Gates: 52 `vlx-sel-*` corpus specs render like vega-lite's output in
+  real vega and in Aster; `pnpm conformance:selections` drives the same native input through vega-lite + vega and
+  `@aster/vl` + `<Chart>` and compares signals, stores and SVG after every step; live differentials of every
+  selection function and of `modify` against the pinned vega; the incremental oracle edits selection stores.
+
 - **`<SvgChart>` (`@aster/react/lite`) and the `interaction` capability (`@aster/react/interaction`)**: an SVG-only chart
   for size-sensitive apps. It never imports the canvas renderer (142.0 kB gzip against 157.2 for `<Chart>`); hit testing
   and the `signal.on` event loop arrive only as `<SvgChart interaction={interaction}>` (151.5 kB), a plain value, with no

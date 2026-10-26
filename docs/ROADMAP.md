@@ -80,7 +80,7 @@ the tag are the owner's steps ([RELEASE.md](RELEASE.md)).
 
 Each item is something the code or the gates show today; none is a plan that has not been checked against them.
 
-- **Vega-Lite coverage.** What `@aster/vl` refuses today (params and selections beyond a static interval brush, maps,
+- **Vega-Lite coverage.** What `@aster/vl` refuses today (selections inside concat / facet / repeat views, maps,
   the `time` channel, data-driven `strokeDash` / `angle` / `fillOpacity` / `strokeOpacity`, pre-binned data,
   `timeUnit.maxbins`, `scale: null`, some composition nestings, horizontal boxplots, argmin/argmax transform ops, ...).
 - **Signals sweep.** Cases where real Vega's second render differs from its own fresh render (the `retained`

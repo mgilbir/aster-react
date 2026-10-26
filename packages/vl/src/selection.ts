@@ -82,18 +82,15 @@ const DEFAULT_SELECTION_CONFIG: Record<'point' | 'interval', Obj> = {
   },
 }
 
-function mergeInto(base: Obj, over: Obj): Obj {
-  const out: Obj = { ...base }
-  for (const [k, v] of Object.entries(over)) out[k] = isObj(v) && isObj(out[k]) ? mergeInto(out[k] as Obj, v) : duplicate(v)
-  return out
-}
-
-/** `config.selection` over the defaults (vega-lite `writeConfig(…, 'selection', selection, true)`). */
+/**
+ * `config.selection` over the defaults (vega-util `writeConfig(…, 'selection', selection, true)`): the point and
+ * interval blocks merge property by property, and a property (`mark`, `on`, `fields`...) replaces the default whole.
+ */
 export function selectionConfigOf(config: unknown): Record<'point' | 'interval', Obj> {
   const user = isObj(config) && isObj(config.selection) ? config.selection : {}
   return {
-    point: mergeInto(DEFAULT_SELECTION_CONFIG.point, isObj(user.point) ? user.point : {}),
-    interval: mergeInto(DEFAULT_SELECTION_CONFIG.interval, isObj(user.interval) ? user.interval : {}),
+    point: { ...DEFAULT_SELECTION_CONFIG.point, ...(isObj(user.point) ? duplicate(user.point) : {}) },
+    interval: { ...DEFAULT_SELECTION_CONFIG.interval, ...(isObj(user.interval) ? duplicate(user.interval) : {}) },
   }
 }
 

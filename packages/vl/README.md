@@ -80,15 +80,28 @@ an expression or a generated dataset/signal/scale name.
   conditions with `test` predicates (and/or/not, field predicates, DateTime values), time units
   (single, multi, `utc`, `step`), bin options, dotted/escaped/bracketed field names.
 
+- Params and selections on a unit view and on the units of a layer, as vega-lite 6.4.3 compiles them
+  (`src/selection.ts` ports `compile/selection/*`): point and interval selections; `fields`, `encodings`, `on`,
+  `clear`, `toggle`, `nearest`, `resolve`, `mark`, `translate`, `zoom`, `value` (initial values, DateTimes
+  included); `config.selection`; `bind` to inputs (`range`, `select`, `radio`, `checkbox`, ...), to the legend
+  (`"legend"` or `{legend: stream}`) and to `"scales"` (pan and zoom through the scale domains); `{param}` conditions
+  (`empty`) and predicates in `test`, `filter` (and, or, not) and `lookup.from`; `scale.domain` as `{param}` /
+  `{unionWith}`; variable parameters (`value`, `expr`, `bind`, `react`). Projections over a bin or a time unit work as
+  in vega-lite. A selection's state is its `<name>_store` dataset and the `<name>` signal, exactly as in vega-lite.
+  `nearest` needs the transforms addon (`import '@aster/core/transforms'`) for its voronoi cells. The interaction
+  needs the signal event loop (`<Chart>`, or `<SvgChart interaction>`): see docs/INTERACTION.md.
+
 ## Throws (not supported)
 
 Everything below throws a `VLCompileError` naming the feature and its path; nothing is silently
 ignored.
 
-- Params and selections: any `param` predicate or condition, `empty`, `push`, selection `value` and
-  `bind`, non-interval selections, interval selection options (a plain interval renders as its
-  static brush marks); `scale.domain` objects (`{param}`, `{unionWith}`) and `domainRaw`; parameter
-  references in `bin.extent`; lookups from a selection.
+- Params and selections in a composition: a selection parameter inside a concat, facet or repeat view (Vega scopes
+  their signals to a group, which the event loop does not), on a layer spec itself (vega-lite emits its signals once
+  per unit and Vega rejects the duplicates: declare it on a unit), on a named view, or on a path mark with an overlay
+  (`mark.point` / `mark.line`: write the layers); timer event streams (animation); `bin.extent` as a parameter; a
+  lookup from a selection of the same unit or of a later layer; `scale.domain.unionWith` in a layered spec; a
+  parameter's `push`.
 - Maps: `geoshape` marks, `projection`, `latitude` / `longitude` channels, `{type: "geojson"}`.
 - Animation: the `time` channel (`mark.time` and `config.scale.framesPerSecond` / `animationDuration` are accepted: without a `time` channel they change nothing in vega-lite either).
 - Data-driven channels without a scale / legend implementation yet: `strokeDash`, `angle`,

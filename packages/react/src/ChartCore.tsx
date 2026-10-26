@@ -426,11 +426,6 @@ function ChartView({
   const dataStoreRef = React.useRef<SignalStore | null>(null)
   if (dataStoreRef.current == null) dataStoreRef.current = createSignalStore()
   const dataStore = dataStoreRef.current
-  const storeOwnerRef = React.useRef(spec)
-  if (storeOwnerRef.current !== spec) {
-    storeOwnerRef.current = spec
-    dataStore.reset()
-  }
   const editedData = React.useSyncExternalStore(dataStore.subscribe, dataStore.get, dataStore.get) as Record<string, unknown[]>
   const inputData = React.useMemo(
     () => (Object.keys(editedData).length ? { ...(data ?? {}), ...editedData } : data),
@@ -694,6 +689,15 @@ function ChartView({
     hasPatchedRef.current = true
   }, [incremental, renderer, displayScene, sceneOverride, domMarkup, denseSvg])
 
+  // The edited rows belong to the chart (compiled spec) they were made under: another one starts from its own. (The
+  // compiled chart is the same object while only data changes, so appending rows or re-rendering an equal spec keeps them.)
+  const storeOwnerRef = React.useRef<unknown>(undefined)
+  React.useEffect(() => {
+    const compiled = (scene as unknown as { compiled?: unknown } | null)?.compiled
+    if (compiled === undefined) return
+    if (storeOwnerRef.current !== undefined && storeOwnerRef.current !== compiled && Object.keys(dataStore.get()).length) dataStore.set({})
+    storeOwnerRef.current = compiled
+  }, [scene, dataStore])
   // Spec-driven signal event loop (SVG only). Rebinds when the DOM, the scene
   // or the signal values change — not on unrelated renders.
   const signalBindingRef = React.useRef<SignalBinding | null>(null)

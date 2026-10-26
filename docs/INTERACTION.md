@@ -101,6 +101,49 @@ above (an orientation whose scale is not invertible is omitted).
 - Keyboard selection: `Enter` or `Space` on a focused mark node selects that mark's datum the same way (see
   "Accessibility").
 
+## Spec-driven selections (Vega-Lite `params`)
+
+A Vega-Lite spec declares its own selections (`params: [{name: "brush", select: "interval"}]`, `bind`, `{param}`
+conditions...). They are not the `selection` / `onSelectionChange` props above: those are `<Chart>`'s own gesture
+state (the rectangle it draws, the datum it picked) and know nothing about the spec. A spec-driven selection lives
+where Vega-Lite puts it, in the compiled Vega spec, and the chart exposes it the way Vega does:
+
+- the selection's **signals**, which the event loop writes as the user interacts: `<name>` is the resolved selection
+  (`vlSelectionResolve` of its store: `{ field: [values] }`, the interval's `[lo, hi]` per field, plus `vlPoint` for a
+  point selection), `<name>_tuple` the last tuple, `<name>_<field>` / `<name>_x` the bound-input and brush signals.
+  Read them with `signalListeners={{ brush: (name, value) => ... }}` or `onSignal`, write them with `signals` or
+  `ChartHandle.setSignal` (a write runs the dependent updates as an event would);
+- the selection's **store**, the dataset `<name>_store` (`view.data("brush_store")` in Vega): the event loop's
+  `modify(...)` edits it, and the chart keeps the edited rows and hands them back to the evaluation as an input, so
+  the scene after an interaction is the one a fresh chart with those rows computes. The ref has no `view.data()`
+  equivalent: read the selection through its signals (`<name>` resolves the store), or, outside React, through
+  `bindSceneSignals`' `onData` hook ([API.md](API.md)).
+
+`selection`, `onSelectionChange`, `onSelect` and `onPointSelect` do not report a spec-driven selection and a spec-driven
+selection does not read them. Do not enable both on one chart: the `selection*` / `onSelect` / `brush` gestures and a
+spec's interval brush listen to the same drag.
+
+What works, and how it differs from Vega, precisely:
+
+- The interaction needs the signal event loop: `<Chart>`, or `<SvgChart interaction={interaction}>`. `nearest` also
+  needs `import '@aster/core/transforms'` (its voronoi cells). `renderer="canvas"` and `interactive={false}` bind no event loop (see [Signals](#signals)), so no spec selection
+  reacts there. On `<ChartStream>` / `<ChartWorkerStream>` the edited store is not an input of the stream's
+  evaluation (only signals and the view are), so a spec selection does not update the scene there.
+- The state is the one Vega computes for the same input; `pnpm conformance:selections` drives the same native
+  mouse, wheel and form-control input through vega-lite + Vega and through `@aster/vl` + `<Chart>` and compares every
+  signal, every store and the SVG after each step (point click, shift-toggle, hover, `nearest`, brush, move, wheel
+  zoom, legend click, `select` / `radio` / `range` / `checkbox` bindings, `bind: "scales"`, layered filters and lookups).
+- A scale event (`{scale: "x"}`, which an unbound interval selection listens to so that its brush follows its
+  scale) fires when the chart is bound to a scene whose scale differs from the previous one's.
+- **Deviation:** a signal write is a fresh render ([Signals](#signals)). Vega keeps an axis's tick items across a
+  pan and appends the ones that come into view; Aster draws them in scale order. The same ticks are drawn; only
+  their paint order differs, and the autosize of a view whose axis labels change width is recomputed (set
+  `autosize: "none"` for a pan/zoom chart whose plot must not move).
+- **Deviation:** `modify(name, ..., tuple)` / `remove` compare a tuple read back from `data()` by value (the evaluation
+  does not hand out its input rows), where Vega compares tuple identity.
+- Selections inside concat, facet and repeat views are refused by the compiler (their signals are scoped to a Vega
+  group, which the event loop does not scope); see packages/vl/README.md.
+
 ## Pan and zoom
 
 `panZoom` enables both families; `pan` and `zoom` enable one each (`pan` + `zoom` is the same as `panZoom`).
