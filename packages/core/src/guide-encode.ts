@@ -224,7 +224,14 @@ function isPlainValue(e: object): boolean {
  * `mult`, a field path) takes the generic evaluator.
  */
 function compileScaleEntry(e: object, host: EntryHost): ((datum: Row) => unknown) | undefined {
-  if (isArr(e) || host.entryScale === undefined) return undefined
+  if (isArr(e)) return undefined
+  // a bare field of the datum (a label's text): `datum[field]`
+  const ks = Object.keys(e)
+  if (ks.length === 1 && ks[0] === 'field' && typeof (e as Rec).field === 'string' && /^[A-Za-z_$][\w$]*$/.test((e as Rec).field as string)) {
+    const f = (e as Rec).field as string
+    return (datum) => datum[f]
+  }
+  if (host.entryScale === undefined) return undefined
   const { scale, field, band, extra, offset, round } = e as Rec
   for (const k of Object.keys(e)) if (k !== 'scale' && k !== 'field' && k !== 'band' && k !== 'extra' && k !== 'offset' && k !== 'round') return undefined
   const plain = (v: unknown): boolean => v === null || v === undefined || typeof v !== 'object'
