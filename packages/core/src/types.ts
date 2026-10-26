@@ -677,7 +677,7 @@ export interface SceneGroup extends SceneItem {
   /** Legend scale/channels (accessibility caption metadata). */
   legendScale?: string
   legendChannels?: string[]
-  /** @internal Resolved scales in this nested scope (scene-differential metadata). */
+  /** @internal Resolved scales this nested scope declares itself, as vega's group context holds them (scene-differential metadata). */
   __scales?: ScaleSnapshot[]
 }
 

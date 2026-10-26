@@ -1,0 +1,30 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "description": "A scale declared at the root and scales declared in groups: a group's context holds its own scales (the scene differential compares those), while its axes may read the root's (a right axis over the root's y scale inside a group, captioned from it).",
+  "width": 200,
+  "height": 90,
+  "padding": 5,
+  "autosize": "none",
+  "scales": [
+    { "name": "y", "type": "linear", "domain": [0, 10], "range": "height" },
+    { "name": "c", "type": "ordinal", "domain": ["a", "b"], "range": ["#c00", "#06c"] }
+  ],
+  "axes": [ { "orient": "left", "scale": "y", "title": "root y" } ],
+  "marks": [
+    { "type": "group",
+      "encode": { "update": { "x": { "value": 30 }, "width": { "value": 60 }, "height": { "value": 70 }, "stroke": { "value": "#999" } } },
+      "scales": [ { "name": "x", "type": "linear", "domain": [0, 5], "range": "width" } ],
+      "axes": [ { "orient": "bottom", "scale": "x", "title": "own x" }, { "orient": "right", "scale": "y", "title": "root y again" } ],
+      "marks": [
+        { "type": "group",
+          "encode": { "update": { "x": { "value": 5 }, "width": { "value": 30 }, "height": { "value": 30 } } },
+          "scales": [ { "name": "z", "type": "linear", "domain": [0, 1], "range": "height" } ],
+          "axes": [ { "orient": "left", "scale": "z" }, { "orient": "top", "scale": "x" } ] }
+      ] },
+    { "type": "group",
+      "encode": { "update": { "x": { "value": 130 }, "width": { "value": 50 }, "height": { "value": 70 } } },
+      "scales": [ { "name": "x", "type": "linear", "domain": [0, 9], "range": "width" } ],
+      "axes": [ { "orient": "bottom", "scale": "x" } ] }
+  ],
+  "legends": [ { "fill": "c", "title": "root legend" } ]
+}

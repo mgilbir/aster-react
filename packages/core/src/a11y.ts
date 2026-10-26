@@ -356,7 +356,7 @@ export function buildA11yTree(
     }
     const kids = group.items
     if (!Array.isArray(kids)) return
-    const local = group.__scales ? scalesFromSnapshots(group.__scales) : scopeScales
+    const local = group.__scales ? new Map([...scopeScales, ...scalesFromSnapshots(group.__scales)]) : scopeScales
     const marktype = group.marktype
     // vega-scenegraph: `aria: false` (the mark's, or a group item's own) puts `aria-hidden` on the element, which hides
     // everything inside it; a group item that carries a `description` is described by its own role and role description

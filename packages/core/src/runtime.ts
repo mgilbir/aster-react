@@ -3753,7 +3753,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       ...(markClip(mark, ctx) ? { markClip: true } : {}),
     } as unknown as SceneGroup
     // (an instance the aborted pass never reached has no operators, so no scales)
-    if (mark.scales?.length && order <= 0) group.__scales = snapshotScales(childCtx.scales)
+    if (mark.scales?.length && order <= 0) group.__scales = snapshotScales(childScales)
     return group
   } finally {
     for (const [name, prev] of savedData.reverse()) {

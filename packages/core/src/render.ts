@@ -2275,7 +2275,8 @@ function groupItem(g: SceneGroup, frameW: number, frameH: number, scope: GuideSc
   }
   const gw = g.width ?? frameW
   const gh = g.height ?? frameH
-  const inner: GuideScope = g.__scales ? { snaps: g.__scales } : scope
+  // (a group's own scales; the ones of the scopes around it stay in reach, as a nested axis may read them)
+  const inner: GuideScope = g.__scales ? { snaps: [...(scope.snaps ?? []), ...g.__scales] } : scope
   const items = (g.items ?? []) as SceneItem[]
   // group items hold [background, content..., foreground?]: the boxes the runtime drew (`_bg`)
   const bg = items.length > 0 && flag(items[0]!, '_bg') ? items[0]! : null
