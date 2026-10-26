@@ -29,7 +29,7 @@ interface DrawRecord {
 function makeRecordingCtx(): { ctx: CanvasLike; records: DrawRecord[] } {
   const records: DrawRecord[] = []
   let tx = 0, ty = 0
-  const stack: Array<[number, number]> = []
+  const stack: Array<[number, number, number]> = []
   let ops: string[] = []
   let cur: string | null = null // pending paint info at fill/stroke time
   let cp: [number, number] | null = null // current point (device space)
@@ -47,8 +47,9 @@ function makeRecordingCtx(): { ctx: CanvasLike; records: DrawRecord[] } {
     return String(Math.round(n * 1000) / 1000)
   }
   const ctx: CanvasLike = {
-    save() { stack.push([tx, ty]) },
-    restore() { const t = stack.pop(); if (t) { tx = t[0]; ty = t[1] } },
+    // (the rotation is part of the saved transform: a rotated text must not rotate the ones drawn after it)
+    save() { stack.push([tx, ty, rotAngle]) },
+    restore() { const t = stack.pop(); if (t) { tx = t[0]; ty = t[1]; rotAngle = t[2] } },
     translate(x, y) { tx += x; ty += y },
     scale(x) { tx *= x; ty *= x },
     beginPath() { ops = []; cp = null },
