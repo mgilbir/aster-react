@@ -32,6 +32,8 @@ const argv = process.argv.slice(2)
 const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
 const FILTER = arg('filter', '')
 const MIN_CASES = Number(arg('min-cases', '0'))
+/** Ceiling on the steps classified `retained` (Aster == vega's fresh render != vega's retained render), like sweep-signals' --max-retained. */
+const MAX_RETAINED = Number(arg('max-retained', '1e9'))
 const require = createRequire(import.meta.url)
 void require
 
@@ -58,12 +60,6 @@ interface Case {
   steps: Step[]
   /** Indices of the steps after which the vega side's stores / signals must differ from before the step. */
   moves: number[]
-  /**
-   * Vega keeps the tick items of an axis across updates and appends the ones a pan brings in; Aster, a pure function
-   * of its inputs, draws them in scale order (docs/INTERACTION.md, "a signal write is a fresh render"). A case that
-   * pans or zooms a scale accepts exactly that difference: the SAME records in another paint order.
-   */
-  retainedTickOrder?: boolean
 }
 
 const ROWS = [
@@ -187,17 +183,15 @@ const CASES: Case[] = [
   },
   {
     name: 'bind scales: drag pans, wheel zooms, dblclick resets',
-    spec: base({ params: [sel('grid', 'interval', { bind: 'scales' })], autosize: 'none', padding: { left: 45, right: 15, top: 10, bottom: 35 }, mark: 'point', encoding: xy }),
+    spec: base({ params: [sel('grid', 'interval', { bind: 'scales' })], mark: 'point', encoding: xy }),
     steps: [{ t: 'drag', x0: 0.5, y0: 0.5, x1: 0.3, y1: 0.6 }, { t: 'wheel', x: 0.5, y: 0.5, dy: -120 }, { t: 'wheel', x: 0.2, y: 0.8, dy: 200 }, { t: 'dblclick', x: 0.5, y: 0.5 }],
     moves: [0, 1, 2, 3],
-    retainedTickOrder: true,
   },
   {
     name: 'bind scales on log and pow scales',
-    spec: base({ params: [sel('grid', 'interval', { bind: 'scales' })], autosize: 'none', padding: { left: 45, right: 15, top: 10, bottom: 35 }, mark: 'point', encoding: { x: { field: 'a', type: 'quantitative', scale: { type: 'log' } }, y: { field: 'b', type: 'quantitative', scale: { type: 'pow', exponent: 2 } } } }),
+    spec: base({ params: [sel('grid', 'interval', { bind: 'scales' })], mark: 'point', encoding: { x: { field: 'a', type: 'quantitative', scale: { type: 'log' } }, y: { field: 'b', type: 'quantitative', scale: { type: 'pow', exponent: 2 } } } }),
     steps: [{ t: 'drag', x0: 0.5, y0: 0.5, x1: 0.4, y1: 0.4 }, { t: 'wheel', x: 0.5, y: 0.5, dy: -150 }],
     moves: [0, 1],
-    retainedTickOrder: true,
   },
   {
     name: 'layers: brush in one layer filters another',
@@ -265,6 +259,23 @@ const norm = (v) => JSON.stringify(v, function (k, x) {
   return x
 })
 
+// A deep copy for the fresh view: setState hands the tuples, signal values and nested objects to a second dataflow, which
+// writes to them (ids, derived fields); sharing them with the retained view broke its next wheel event.
+const cloneState = (v, seen = new WeakSet()) => {
+  if (v instanceof Date) return new Date(v.getTime())
+  if (v && typeof v === 'object') {
+    if (seen.has(v)) return undefined
+    if (!Array.isArray(v) && !(v instanceof Set) && 'mark' in v && ('x' in v || 'datum' in v)) return undefined // (a scenegraph item: event signals hold the one under the pointer)
+    seen.add(v)
+    if (v instanceof Set) return new Set([...v].map((x) => cloneState(x, seen)))
+    if (Array.isArray(v)) return v.map((x) => cloneState(x, seen))
+    const o = {}
+    for (const k of Object.keys(v)) o[k] = cloneState(v[k], seen)
+    return o
+  }
+  return typeof v === 'function' ? undefined : v
+}
+
 let names = []
 let stores = []
 window.__mountVega = async (specVl) => {
@@ -279,6 +290,18 @@ window.__mountVega = async (specVl) => {
   })
   window.__svg = () => view.toSVG()
   window.__settle = async () => { await view.runAsync() }
+  // vega's FRESH render of the same spec at the retained view's current signal values and store contents: a new View
+  // initialised from the first one's state. Aster renders fresh (docs/INTERACTION.md, "a signal write is a fresh
+  // render"), vega retains its first autosize, padding and tick order; the driver tells the two apart with this.
+  window.__fresh = async () => {
+    const state = view.getState({ signals: vega.truthy, data: vega.truthy, recurse: true })
+    const fresh = new vega.View(vega.parse(JSON.parse(JSON.stringify(vg))), { renderer: 'none', hover: false, logger: { level() { return this }, error() { return this }, warn() { return this }, info() { return this }, debug() { return this } } })
+    fresh.setState(cloneState(state))
+    await fresh.runAsync()
+    const svg = await fresh.toSVG()
+    fresh.finalize()
+    return svg
+  }
 }
 
 window.__mountAster = async (specVl) => {
@@ -328,28 +351,52 @@ void readdirSync
 const playwright = await import('playwright')
 const browser = await playwright.chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
 
-interface Snapshot { signals: Record<string, string>; stores: Record<string, string>; svg: string }
+interface Snapshot { signals: Record<string, string>; stores: Record<string, string>; svg: string; fresh?: string }
 
-async function snapshot(page: Page): Promise<Snapshot> {
+async function snapshot(page: Page, withFresh = false): Promise<Snapshot> {
   const r = await page.evaluate(() => (window as unknown as { __read: () => { signals: Record<string, string>; stores: Record<string, string> } }).__read())
   const svg = await page.evaluate(() => Promise.resolve((window as unknown as { __svg: () => string | Promise<string> }).__svg()))
-  return { ...r, svg }
+  if (!withFresh) return { ...r, svg }
+  const fresh = await page.evaluate(() => (window as unknown as { __fresh: () => Promise<string> }).__fresh())
+  return { ...r, svg, fresh }
 }
 
 interface Frame { x: number; y: number; w: number; h: number }
 async function frameOf(page: Page): Promise<Frame> {
   // the plot frame: the first background path of the view
   const b = await page.evaluate(() => {
-    const el = document.querySelector('#c svg path.background') as SVGGraphicsElement | null
+    // (the largest background path: a facet or concat view has one per cell, and a group mid-update can be empty for a frame)
+    const els = [...document.querySelectorAll('#c svg path.background')] as SVGGraphicsElement[]
+    let el: SVGGraphicsElement | null = null
+    let best = -1
+    for (const e of els) { const q = e.getBoundingClientRect(); if (q.width * q.height > best) { best = q.width * q.height; el = e } }
     const r = (el ?? document.querySelector('#c svg')!).getBoundingClientRect()
     return { x: r.left, y: r.top, w: r.width, h: r.height }
   })
   return b
 }
 
-async function runStep(page: Page, s: Step): Promise<void> {
-  const f = await frameOf(page)
+const vegaFrames = new WeakMap<Page, Frame>()
+
+async function runStep(page: Page, s: Step, engine: 'vega' | 'aster'): Promise<void> {
+  // Vega keeps its first layout, and after a bound-scale pan its frame's background path collapses to 0x0 (the stale group
+  // size), so vega's plot origin is measured once, at the start of the case. Aster's moves, so it is measured as needed.
+  let f = engine === 'vega' ? (vegaFrames.get(page) ?? (await frameOf(page))) : await frameOf(page)
+  if (engine === 'vega' && f.w > 0 && !vegaFrames.has(page)) vegaFrames.set(page, f)
   if (process.env.SEL_DEBUG) console.log('frame', JSON.stringify(f))
+  // Positions are fractions of the plot frame AS IT IS WHEN THE EVENT IS SENT. Aster renders fresh after every signal write,
+  // so its padding (and with it the frame's place in the page) can move under a drag that pans an axis, where vega keeps
+  // its first layout; the same fraction of the current frame is the same point in view space in both.
+  const refresh = async (): Promise<void> => {
+    if (engine === 'vega') return // (vega keeps its first layout, so its frame does not move)
+    for (let k = 0; k < 20; k++) {
+      await page.evaluate(() => (window as unknown as { __settle: () => Promise<unknown> }).__settle())
+      f = await frameOf(page)
+      if (process.env.SEL_DEBUG) console.log('refresh', k, JSON.stringify(f))
+      if (f.w > 0 && f.h > 0) return
+      await page.waitForTimeout(25)
+    }
+  }
   const at = (x: number, y: number): [number, number] => [f.x + x * f.w, f.y + y * f.h]
   const shift = async (on: boolean | undefined, fn: () => Promise<void>): Promise<void> => {
     if (on) await page.keyboard.down('Shift')
@@ -393,6 +440,7 @@ async function runStep(page: Page, s: Step): Promise<void> {
         await page.mouse.down()
         await dbg('down')
         for (let k = 1; k <= 8; k++) {
+          await refresh()
           await page.mouse.move(...at(s.x0 + ((s.x1 - s.x0) * k) / 8, s.y0 + ((s.y1 - s.y0) * k) / 8))
           await dbg('move' + k)
         }
@@ -430,12 +478,12 @@ async function drive(engine: 'vega' | 'aster', c: Case): Promise<{ snaps: Snapsh
     if (process.env.SEL_DEBUG) console.log(engine, await page.evaluate(() => document.querySelector('#c svg path.background')!.outerHTML + (document.querySelector('#c svg .marks')?.outerHTML.slice(0, 600) ?? '')))
     const settle = (): Promise<unknown> => page.evaluate(() => (window as unknown as { __settle: () => Promise<unknown> }).__settle())
     await settle()
-    const snaps: Snapshot[] = [await snapshot(page)]
+    const snaps: Snapshot[] = [await snapshot(page, engine === 'vega' && !process.env.SEL_NOFRESH)]
     for (const s of c.steps) {
-      await runStep(page, s)
+      await runStep(page, s, engine)
       await settle()
       await settle()
-      snaps.push(await snapshot(page))
+      snaps.push(await snapshot(page, engine === 'vega' && !process.env.SEL_NOFRESH))
     }
     if (pageErrors.length) return { error: `page errors: ${pageErrors.join(' | ')}` }
     const errors = await page.evaluate(() => (window as unknown as { __errors: string[] }).__errors)
@@ -449,6 +497,7 @@ async function drive(engine: 'vega' | 'aster', c: Case): Promise<{ snaps: Snapsh
 }
 
 let pass = 0
+const retainedSteps: string[] = []
 const failures: string[] = []
 const t0 = Date.now()
 for (const c of cases) {
@@ -471,8 +520,17 @@ for (const c of cases) {
         if (vs.stores[n] !== as.stores[n]) problems.push(`${label}: store ${n}: vega=${vs.stores[n]!.slice(0, 200)} aster=${as.stores[n]!.slice(0, 200)}`)
       }
       if (process.env.SEL_DUMP && i === 0) { writeFileSync('/tmp/fix-20-vl-selections-scratch/sel-vega.svg', vs.svg); writeFileSync('/tmp/fix-20-vl-selections-scratch/sel-aster.svg', as.svg) }
-      const diffs = diffCanonical(canonicalizeSvg(vs.svg), canonicalizeSvg(as.svg)).filter((d) => !(c.retainedTickOrder && String(d).startsWith('paint-order: same records, different order')))
-      if (diffs.length) problems.push(`${label}: svg differs: ${String(diffs[0]).slice(0, 220)}`)
+      const retained = canonicalizeSvg(vs.svg)
+      const aster = canonicalizeSvg(as.svg)
+      const diffs = diffCanonical(retained, aster)
+      if (diffs.length) {
+        // The documented deviation: after a signal write Aster renders the FRESH result, vega keeps its first autosize,
+        // padding and tick order. Accepted only when Aster equals vega's own fresh render of the same spec at the same
+        // signal and store values EXACTLY, and vega's retained render really differs from that fresh one.
+        const fresh = canonicalizeSvg(vs.fresh ?? vs.svg)
+        if (diffCanonical(fresh, aster).length === 0 && diffCanonical(fresh, retained).length > 0) retainedSteps.push(`${c.name} / ${label}`)
+        else problems.push(`${label}: svg differs from vega's retained render and from vega's fresh render: ${String(diffs[0]).slice(0, 220)}`)
+      }
     }
     for (const i of c.moves) {
       const before = v.snaps[i]!
@@ -490,6 +548,12 @@ rmSync(OUT_DIR, { recursive: true, force: true })
 
 console.log(`\n[browser-vl-selections] ${pass}/${cases.length} cases agree with real vega + vega-lite (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
 for (const f of failures) console.log(`  FAIL ${f}`)
+console.log(`[browser-vl-selections] retained (Aster == vega's fresh render, vega's retained render differs): ${retainedSteps.length} step(s), ceiling ${MAX_RETAINED}`)
+for (const r of retainedSteps) console.log(`  retained ${r}`)
+if (retainedSteps.length > MAX_RETAINED) {
+  console.log(`[browser-vl-selections] RATCHET: ${retainedSteps.length} retained steps > --max-retained ${MAX_RETAINED}`)
+  process.exit(1)
+}
 if (MIN_CASES && cases.length < MIN_CASES) {
   console.log(`[browser-vl-selections] FLOOR: ${cases.length} cases < --min-cases ${MIN_CASES}`)
   process.exit(1)
