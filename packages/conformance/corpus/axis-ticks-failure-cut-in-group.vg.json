@@ -1,0 +1,226 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "description": "An axis whose ticks cannot be made (an interval string on a linear scale) stops vega's dataflow at that axis, in its own scope: the axes before it stand where they were encoded, and nothing after it in that scope -- its marks, its legends -- nor the groups built after it. This one is in a nested group (with a literal scale), between complete groups; the groups before it are complete.",
+  "width": 200,
+  "height": 90,
+  "padding": 5,
+  "autosize": "none",
+  "marks": [
+    {
+      "type": "group",
+      "encode": {
+        "update": {
+          "x": {
+            "value": 20
+          },
+          "width": {
+            "value": 50
+          },
+          "height": {
+            "value": 60
+          },
+          "stroke": {
+            "value": "#999"
+          }
+        }
+      },
+      "scales": [
+        {
+          "name": "x",
+          "type": "linear",
+          "domain": [
+            0,
+            5
+          ],
+          "range": "width"
+        },
+        {
+          "name": "y",
+          "type": "linear",
+          "domain": [
+            0,
+            10
+          ],
+          "range": "height"
+        }
+      ],
+      "axes": [
+        {
+          "orient": "top",
+          "scale": "x"
+        }
+      ],
+      "marks": [
+        {
+          "type": "rect",
+          "encode": {
+            "update": {
+              "x": {
+                "value": 2
+              },
+              "y": {
+                "value": 2
+              },
+              "width": {
+                "value": 8
+              },
+              "height": {
+                "value": 8
+              },
+              "fill": {
+                "value": "#4c78a8"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "group",
+      "encode": {
+        "update": {
+          "x": {
+            "value": 90
+          },
+          "width": {
+            "value": 50
+          },
+          "height": {
+            "value": 60
+          },
+          "stroke": {
+            "value": "#999"
+          }
+        }
+      },
+      "scales": [
+        {
+          "name": "x",
+          "type": "linear",
+          "domain": [
+            0,
+            5
+          ],
+          "range": "width"
+        },
+        {
+          "name": "y",
+          "type": "linear",
+          "domain": [
+            0,
+            10
+          ],
+          "range": "height"
+        }
+      ],
+      "axes": [
+        {
+          "orient": "top",
+          "scale": "x"
+        },
+        {
+          "orient": "bottom",
+          "scale": "x",
+          "tickCount": "week"
+        },
+        {
+          "orient": "right",
+          "scale": "y"
+        }
+      ],
+      "marks": [
+        {
+          "type": "rect",
+          "encode": {
+            "update": {
+              "x": {
+                "value": 2
+              },
+              "y": {
+                "value": 2
+              },
+              "width": {
+                "value": 8
+              },
+              "height": {
+                "value": 8
+              },
+              "fill": {
+                "value": "#e45756"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "group",
+      "encode": {
+        "update": {
+          "x": {
+            "value": 150
+          },
+          "width": {
+            "value": 40
+          },
+          "height": {
+            "value": 60
+          },
+          "stroke": {
+            "value": "#999"
+          }
+        }
+      },
+      "scales": [
+        {
+          "name": "x",
+          "type": "linear",
+          "domain": [
+            0,
+            5
+          ],
+          "range": "width"
+        },
+        {
+          "name": "y",
+          "type": "linear",
+          "domain": [
+            0,
+            10
+          ],
+          "range": "height"
+        }
+      ],
+      "axes": [
+        {
+          "orient": "top",
+          "scale": "x"
+        }
+      ],
+      "marks": [
+        {
+          "type": "rect",
+          "encode": {
+            "update": {
+              "x": {
+                "value": 2
+              },
+              "y": {
+                "value": 2
+              },
+              "width": {
+                "value": 8
+              },
+              "height": {
+                "value": 8
+              },
+              "fill": {
+                "value": "#54a24b"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

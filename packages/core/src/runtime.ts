@@ -325,8 +325,38 @@ function cacheableGroupBounds(g: SceneGroup): boolean {
   return g.role === 'mark' && UNION_BOUND_MARKS.has(String(g.marktype))
 }
 
+/**
+ * One vega-parser scope (the view, or a group item): the scales and data sets declared in it, and where its instance sits
+ * among the instances of every scope (vega builds the instances of nested scopes level by level).
+ */
+interface GuideScope {
+  parent?: GuideScope
+  /** the ordinals of this instance and of its ancestors, root first (the view is `[]`) */
+  path: number[]
+  /** the next ordinal for a group item built directly in this scope */
+  nextChild: { n: number }
+  scales: Map<string, CompiledScale>
+  /** the data sets declared in this scope: its `data`, the partition of a facet */
+  data: Set<string>
+  /** an instance at or after the aborted one is in this scope's subtree (or it is that instance): nothing laid it out */
+  unsettled?: boolean
+}
+
+/**
+ * Axes whose ticks failed (see axisTicksFailed). A failure aborts vega's dataflow pass: what its scope and the scopes
+ * built after it would have made is absent. The first pass of a build records the failures, the second runs with the
+ * earliest one as the cut.
+ */
+interface AxisAbort {
+  failures: Array<{ path: number[]; axis: number; late?: boolean }>
+  /** `late`: the failing operator is the last of its scope, so everything else of the scope was made */
+  cut?: { path: number[]; axis: number; late?: boolean }
+}
+
 interface EvalContext {
   chart: CompiledChart
+  scope: GuideScope
+  abort: AxisAbort
   signalParams: Record<string, unknown>
   width: number
   height: number
@@ -339,6 +369,8 @@ interface EvalContext {
   datasets: Map<string, Row[]>
   /** A legend tickCount threw: the whole layout aborts (raw-guide mode). */
   rawGuides?: boolean
+  /** The pass stopped below this scope: the legend entries of symbol legends (a level further down) were never made. */
+  pendingEntries?: boolean
   scales: Map<string, Scale>
   scaleTypes: Map<string, string>
   /** Per-mark, per-eval encode bindings (scale fn + type) so the per-row encode
@@ -494,7 +526,7 @@ function prepareChartCtx(
   // Inputs besides the signals that change what a reused scale/item would be.
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}`
   const ctx: EvalContext = {
-    chart, signalParams, width, height, datasets, scales, scaleTypes, projections: new ProjectionRegistry(), projectionStamp: new Map(), runtime, _defs: defs,
+    chart, scope: rootScope(chart), abort: { failures: [] }, signalParams, width, height, datasets, scales, scaleTypes, projections: new ProjectionRegistry(), projectionStamp: new Map(), runtime, _defs: defs,
     layoutState: { failed: false }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
@@ -788,9 +820,9 @@ function buildAxisAndLegend(
   // the anchor bounds scan the content items too.
   const anchorItems = [...contentItems]
 
-  for (const axis0 of axes) {
+  for (const [axisIndex, axis0] of axes.entries()) {
     const axis = resolveAxisOrient(axis0, ctx)
-    const group = buildAxis(axis, ctx)
+    const group = buildAxis(axis, ctx, axisIndex)
     if (group) {
       // Carry guide identity for the accessible tree (R10.6) without changing
       // the serialized SVG: the fields are scene metadata only.
@@ -857,7 +889,8 @@ function buildAxisAndLegend(
     // A legend whose entries failed to build (an invalid tickCount interval
     // string) degenerates to a zero-size group with no items: vega still
     // creates it, but it renders nothing and takes no layout space.
-    .filter((x) => !(x.group.width === 0 && x.group.height === 0 && (x.group.items?.length ?? 0) === 0))
+    // (a legend only waiting for its entries is a group like any other)
+    .filter((x) => ctx.pendingEntries || !(x.group.width === 0 && x.group.height === 0 && (x.group.items?.length ?? 0) === 0))
 
   if (built.length) {
     // legendParams anchors on the axis bounds only: xBounds unions the
@@ -1293,6 +1326,12 @@ function paintOrderOf(items: SceneGroup[]): SceneGroup[] {
  * autosize padding at a given content size. Extracted from evaluateChart so
  * `fit`/`fit-x`/`fit-y` can re-run at a shrinking content size and converge.
  */
+type BuiltContent = { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean }
+
+/**
+ * The content of the view. A failing axis (axisTicksFailed) aborts vega's dataflow pass at the operator that failed: the
+ * first pass finds out where, the second builds only what vega had made by then.
+ */
 function buildContent(
   chart: CompiledChart,
   input: RuntimeInput,
@@ -1301,6 +1340,23 @@ function buildContent(
   txn: EvalTxn,
   fitted = false,
   signed?: { width?: number; height?: number },
+): BuiltContent {
+  const first = buildContentPass(chart, input, cw, ch, txn, fitted, signed)
+  const failures = first.ctx.abort.failures
+  if (!failures.length) return first
+  const cut = failures.reduce((a, b) => (compareInstances(a.path, b.path) || a.axis - b.axis) <= 0 ? a : b)
+  return buildContentPass(chart, input, cw, ch, txn, fitted, signed, cut)
+}
+
+function buildContentPass(
+  chart: CompiledChart,
+  input: RuntimeInput,
+  cw: number,
+  ch: number,
+  txn: EvalTxn,
+  fitted = false,
+  signed?: { width?: number; height?: number },
+  cut?: AxisAbort['cut'],
 ): { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean } {
   const prepared = prepareChartCtx(
     // (the first build reads the size from the spec and the host's input itself; only a fit-resize overrides it)
@@ -1309,6 +1365,9 @@ function buildContent(
     signed,
   )
   const { ctx } = prepared
+  ctx.abort.cut = cut
+  // the instance the pass stopped in made its axes before the failing one, and nothing else of it
+  const stopped = cut !== undefined && !cut.late && compareInstances(ctx.scope.path, cut.path) === 0
   // the layout reads the view size as `Math.max(0, width)`; the signals themselves keep their sign
   const width = Math.max(0, prepared.width)
   const height = Math.max(0, prepared.height)
@@ -1321,7 +1380,7 @@ function buildContent(
   const items: SceneGroup[] = []
 
   // 1) Build marks (plot area)
-  for (const mark of ctx.chart.marks) {
+  for (const mark of stopped ? [] : ctx.chart.marks) {
     const prevGroup = ctx.prev?.groups.get(mark) ?? null
     if (prevGroup && canReuseMarkGroup(mark, ctx)) {
       items.push(prevGroup)
@@ -1338,11 +1397,14 @@ function buildContent(
     }
   }
 
+  // the ViewLayout of a group never ran if the pass stopped below it: the view is always such a group
+  if (cut !== undefined) { ctx.rawGuides = true; ctx.pendingEntries = true }
+
   // 2) ViewLayout of the view's root group (vega-view-transforms): a `layout`
   // grid positions the child groups (cells, headers, footers, titles) first;
   // layoutGroup then lays out the axes, legends and title around them.
   const hasLayout = ctx.chart.layout != null
-  if (hasLayout) {
+  if (hasLayout && cut === undefined) {
     try {
       trellisLayout({ marktype: 'group', items } as unknown as SceneGroup, resolveLayoutOptions(ctx.chart.layout!, ctx))
     } catch {
@@ -1351,11 +1413,13 @@ function buildContent(
       ctx.layoutState.failed = true
     }
   }
-  const { groups: guideGroups } = buildAxisAndLegend(ctx, items)
+  const { groups: guideGroups } = stopped
+    ? buildAxisAndLegend(ctx, items, ctx.chart.axes.slice(0, cut!.axis), [])
+    : buildAxisAndLegend(ctx, items)
   for (const g of guideGroups) items.push(g)
 
   // Top-level title.
-  const titleGroup = buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx)
+  const titleGroup = stopped ? null : buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx)
   if (titleGroup) items.push(titleGroup)
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
@@ -3614,8 +3678,21 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       childTypes.set(sdef.name, sdef.type)
     }
     const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
+    // vega builds the instances of nested scopes level by level: what an aborted pass did not reach is not made
+    const path = [...ctx.scope.path, ctx.scope.nextChild.n++]
+    const order = ctx.abort.cut === undefined ? -1 : compareInstances(path, ctx.abort.cut.path)
+    // (the instance that failed in its last operator was made whole)
+    const whole = order === 0 && ctx.abort.cut!.late === true
+    // (nothing laid out a group that has an instance at or after the stopped one in its subtree)
+    if (order >= 0) for (let up: GuideScope | undefined = ctx.scope; up && !up.unsettled; up = up.parent) up.unsettled = true
+    const scope: GuideScope = {
+      parent: ctx.scope, path, nextChild: { n: 0 }, unsettled: order >= 0,
+      scales: new Map((mark.scales ?? []).map((sc) => [sc.name, sc])),
+      data: new Set([...(mark.data ?? []).map((d) => d.name), ...(src.facetName !== undefined ? [src.facetName] : [])]),
+    }
     const childCtx: EvalContext = {
       ...ctx,
+      scope,
       viewWidth: ctx.viewWidth ?? ctx.width,
       viewHeight: ctx.viewHeight ?? ctx.height,
       width: gw,
@@ -3628,12 +3705,12 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     }
 
     const content: SceneGroup[] = []
-    for (const child of mark.marks ?? []) {
+    for (const child of order > 0 || (order === 0 && !whole) ? [] : mark.marks ?? []) {
       const r = evaluateMark(child, childCtx)
       if (r) pushAll(content, Array.isArray(r) ? r : [r])
     }
     // ViewLayout: a `layout` grid positions the child groups (headers, footers, titles, cells) first
-    if (mark.layout) {
+    if (mark.layout && !scope.unsettled) {
       try {
         trellisLayout({ marktype: 'group', items: content } as unknown as SceneGroup, resolveLayoutOptions(mark.layout, childCtx))
       } catch {
@@ -3643,9 +3720,14 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       }
     }
 
-    const { groups: guides } = buildAxisAndLegend(childCtx, content, mark.axes ?? [], mark.legends ?? [])
+    const guideCtx: EvalContext = scope.unsettled ? { ...childCtx, rawGuides: true, pendingEntries: true } : childCtx
+    const { groups: guides } = order > 0
+      ? { groups: [] }
+      : order === 0 && !whole
+        ? buildAxisAndLegend(guideCtx, content, (mark.axes ?? []).slice(0, ctx.abort.cut!.axis), [])
+        : buildAxisAndLegend(guideCtx, content, mark.axes ?? [], mark.legends ?? [])
     const siblings: SceneGroup[] = [...content, ...guides]
-    const title = buildTitleGroup(mark.groupTitle, siblings, gw, gh, false, childCtx, src.datum)
+    const title = order > 0 || (order === 0 && !whole) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !!scope.unsettled, guideCtx, src.datum)
     if (title) siblings.push(title)
     const ordered = paintOrderOf(siblings)
 
@@ -3670,7 +3752,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       ...(href != null ? { href: href as string } : {}),
       ...(markClip(mark, ctx) ? { markClip: true } : {}),
     } as unknown as SceneGroup
-    if (mark.scales?.length) group.__scales = snapshotScales(childCtx.scales)
+    // (an instance the aborted pass never reached has no operators, so no scales)
+    if (mark.scales?.length && order <= 0) group.__scales = snapshotScales(childCtx.scales)
     return group
   } finally {
     for (const [name, prev] of savedData.reverse()) {
@@ -4186,7 +4269,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
   // A tickCount interval string ('day', 'month', ...) is only legal on time
   // scales: vega's LegendEntries transform throws, the dataflow swallows the
   // error and the legend renders with no entries (an empty degenerate group).
-  if (typeof tickCountRaw === 'string' && scaleType !== 'time' && scaleType !== 'utc') {
+  if ((typeof tickCountRaw === 'string' && scaleType !== 'time' && scaleType !== 'utc')
+    || (ctx.pendingEntries && legendType(spec, scaleType) === 'symbol')) {
     // vega's LegendEntries throws (the pulse aborts downstream of it): the
     // entries vanish but the legend title — whose encode ran earlier — stays
     // at its raw (0,0) position.
@@ -4293,25 +4377,105 @@ function guideScalar(ctx: EvalContext, v: unknown): unknown {
   try { return ctx.runtime.expr(v.signal)({}, ctx.signalParams) } catch (e) { reportEvalError(ctx, e); return undefined }
 }
 
-/**
- * vega's AxisTicks failing (an interval string on a non-time scale, a format that is no specifier) is logged and the
- * axis never gets its ticks. Over a scale with literal domain the axis is not drawn at all. Over a data-driven domain
- * the axis group exists with some of its child marks never made (the ticks and labels) while the domain and title
- * marks are: the scenegraph has holes and vega's own SVG serializer crashes on them (`reading 'marktype'`), so there
- * is no document -- a refusal here too.
- */
-function axisTicksFailed(axis: CompiledAxis, ctx: EvalContext, e: unknown): null {
-  reportEvalError(ctx, e)
-  const sdef = ctx.chart.scales.find((sc) => sc.name === axis.scale)
-  const dataDomain = sdef !== undefined && sdef.domain !== null && typeof sdef.domain === 'object' && !Array.isArray(sdef.domain)
-    && ('data' in (sdef.domain as object) || 'fields' in (sdef.domain as object))
-  if (dataDomain && (axis.domain !== false || (axis.title !== undefined && axis.title !== null))) {
-    throw new Error(`[aster] the ticks of the axis over scale "${axis.scale}" failed (${e instanceof Error ? e.message : String(e)}); vega cannot serialize the half-built axis either`)
+function rootScope(chart: CompiledChart): GuideScope {
+  return {
+    path: [], nextChild: { n: 0 },
+    scales: new Map(chart.scales.map((sc) => [sc.name, sc])),
+    data: new Set(chart.data.map((d) => d.name)),
   }
-  return null
 }
 
-function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
+/** Instances are built level by level: the shallower first, those of one level in the order their parents made them. */
+function compareInstances(a: readonly number[], b: readonly number[]): number {
+  if (a.length !== b.length) return a.length - b.length
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i]! - b[i]!
+  return 0
+}
+
+/** The functions of an expression that read a data set or a scale: their operators are made after the signals. */
+const DATAFLOW_FUNCTIONS = new Set([
+  'data', 'indata', 'scale', 'bandwidth', 'bandspace', 'invert', 'copy', 'domain', 'range', 'gradient',
+  'treePath', 'treeAncestors', 'geoArea', 'geoBounds', 'geoCentroid', 'geoScale', 'vlSelectionTest', 'vlSelectionResolve',
+])
+const VIEW_SIGNALS = new Set(['width', 'height', 'padding', 'autosize', 'background', 'cursor', 'origin', 'parent', 'datum', 'event', 'item'])
+
+function expressionIdentifiers(text: string): string[] {
+  return (text.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, '""').match(/(?<![.\w$])[A-Za-z_$][\w$]*/g)) ?? []
+}
+
+/**
+ * Whether vega ranks a scale's operators after the ones of its own scope's axes, so that an axis over it does not find
+ * them where its operators run. vega-parser creates the operators of a scope in the order it parses it; a parameter that
+ * refers to an operator created later (a forward reference) is re-ranked when the dataflow connects its parameters, and
+ * the operator and everything downstream of it move after it. For a scale that is: a domain over a data set declared in
+ * its own scope (data comes after the scales it feeds are created), a domain of several fields (its union is made after
+ * the scale, wherever the data is), an expression that is not just a signal's name (its operator is created after the
+ * scale's), and -- in the view, whose signals are ranked with its scales -- a signal that reads data or a scale or a
+ * signal defined after it. The signals of the view rank below every operator of a nested scope: they are never late there.
+ */
+function scaleIsLate(sdef: CompiledScale, scope: GuideScope, chart: CompiledChart): boolean {
+  const defs = new Map<string, number>()
+  ;(chart.signalDefs ?? []).forEach((d, i) => { if (!defs.has(d.name)) defs.set(d.name, i) })
+  const known = (name: string): boolean => defs.has(name) || VIEW_SIGNALS.has(name) || name in chart.signals
+  const signalLate = (name: string, seen: Set<string>): boolean => {
+    if (seen.has(name)) return false
+    seen.add(name)
+    const i = defs.get(name)
+    if (i === undefined) return false
+    const d = chart.signalDefs![i]!
+    for (const text of [d.update, d.init]) {
+      if (typeof text !== 'string') continue
+      for (const id of expressionIdentifiers(text)) {
+        if (DATAFLOW_FUNCTIONS.has(id)) return true
+        const j = defs.get(id)
+        if (j !== undefined && (j > i || signalLate(id, seen))) return true
+      }
+    }
+    return false
+  }
+  const late = (v: unknown): boolean => {
+    if (Array.isArray(v)) return v.some(late)
+    if (v === null || typeof v !== 'object') return false
+    const o = v as Record<string, unknown>
+    if (typeof o.signal === 'string') {
+      const text = o.signal.trim()
+      return /^[A-Za-z_$][\w$]*$/.test(text) && known(text) ? scope.parent === undefined && signalLate(text, new Set()) : true
+    }
+    if (typeof o.data === 'string' && scope.data.has(o.data)) return true
+    return Object.values(o).some(late)
+  }
+  const { name: _name, type: _type, ...params } = sdef as unknown as Record<string, unknown>
+  const domain = params.domain
+  if (domain !== null && typeof domain === 'object' && !Array.isArray(domain) && 'fields' in domain) return true
+  return late(params)
+}
+
+/**
+ * vega's AxisTicks failing (an interval string on a non-time scale, a format that is no specifier) is logged and the
+ * axis never gets its ticks; the dataflow pass aborts, and every operator ranked after the failing one never runs.
+ *
+ * Which those are depends on the scale. One that is ranked late in the axis's own scope (scaleIsLate) is moved after the
+ * operators of the scope's axes, so the axis's marks are made without their ticks. With a domain or a title to draw the
+ * scenegraph has holes and vega's own SVG serializer crashes on them (`reading 'marktype'`): a refusal here too. With
+ * nothing after the missing marks the axis is an empty group, and the rest is made as it would have been (what was ranked
+ * after the failing operator is the axis itself). Any other scale leaves a clean
+ * cut: the axes before the failing one, and nothing that follows it in its scope -- its marks, legends, title -- nor
+ * anything of the scopes built after it (recorded here, applied by the build's second pass).
+ */
+function axisTicksFailed(axis: CompiledAxis, ctx: EvalContext, e: unknown, index: number): SceneGroup | null {
+  reportEvalError(ctx, e)
+  const own = ctx.scope.scales.get(axis.scale)
+  const late = own !== undefined && scaleIsLate(own, ctx.scope, ctx.chart)
+  if (late && (axis.domain !== false || (axis.title !== undefined && axis.title !== null))) {
+    throw new Error(`[aster] the ticks of the axis over scale "${axis.scale}" failed (${e instanceof Error ? e.message : String(e)}); vega cannot serialize the half-built axis either`)
+  }
+  ctx.abort.failures.push({ path: ctx.scope.path, axis: index, ...(late ? { late: true } : {}) })
+  if (!late) return null
+  // (the half-made axis: its group item, nothing in it -- not even the caption an encoded axis carries)
+  return { marktype: 'group', role: 'axis', x: 0, y: 0, width: 0, height: 0, items: [], parts: [] } as unknown as SceneGroup
+}
+
+function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGroup | null {
   const scale = ctx.scales.get(axis.scale)
   if (!scale) return null
   const orient = String(axis.orient)
@@ -4319,7 +4483,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
   try {
     ticks = axisTicks(axis, scale, ctx)
   } catch (e) {
-    return axisTicksFailed(axis, ctx, e)
+    return axisTicksFailed(axis, ctx, e, index)
   }
   // The approximate tick count used for label formatting. When the axis omits
   // tickCount, vega's axis ticks operator defaults to 10 (see vega-encode
@@ -4335,7 +4499,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext): SceneGroup | null {
     // specifier) is logged and the axis never gets its ticks
     for (let i = 0; i < ticks.length; i++) labelCache[i] = String(labelFormat(ticks[i]))
   } catch (e) {
-    return axisTicksFailed(axis, ctx, e)
+    return axisTicksFailed(axis, ctx, e, index)
   }
   const own = (axis.own ?? {}) as Record<string, unknown>
   const cfg = (axis.cfg ?? {}) as Record<string, unknown>
