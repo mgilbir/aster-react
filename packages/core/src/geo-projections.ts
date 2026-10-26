@@ -1,8 +1,8 @@
 /**
  * d3-geo projections (3.1.1): the projection factory machinery, fitting,
  * adaptive resampling, and the sixteen projection types Vega registers.
- * Faithful transcription verified against oracle vectors recorded from pinned
- * d3-geo@3.1.1.
+ * Faithful transcription verified by a live differential against pinned
+ * d3-geo@3.1.1 (`conformance/scripts/differential-d3-geo.test.mts`).
  */
 import {
   compose,

@@ -2,7 +2,8 @@
  * Line/area shape generation — a faithful port of the d3-shape (3.2.0)
  * surface the renderer uses (line, area, and the 19 curve families Vega's
  * `interpolate` channel names) on top of a faithful port of d3-path's Path
- * serializer. Pinned by oracle vectors (`testdata/vectors/d3-shape.json`).
+ * serializer. Pinned by a live differential against d3-shape
+ * (`conformance/scripts/differential-d3-shape.test.mts`).
  *
  * Not ported here: arc, pie, symbols, radial shapes, stack. The renderer
  * draws rects, rules and symbols with its own path builders; those shapes
