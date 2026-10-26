@@ -726,7 +726,16 @@ export function contentKey(v: unknown, depth = 0): string | undefined {
   }
 }
 
+/** The config blocks nobody can change and every chart without a config shares (the compiler registers them): only marks made against these are shared. */
+const SHAREABLE = new WeakSet<object>()
+export const markShareable = (block: object): void => { SHAREABLE.add(block) }
+export const isShareable = (block: object): boolean => SHAREABLE.has(block)
+/** A free-form part of a key: its length first, so that no two lists of parts write the same key. */
+export const keyPart = (v: unknown): string => { const s = String(v); return s.length + ':' + s }
+
 const SHARED = new Map<string, unknown>()
+/** @internal how many guide marks are shared (a test reads it: it must not grow with the specs a page renders). */
+export const sharedMarkCount = (): number => SHARED.size
 /** The marks another chart built for the same guide (same spec, same config object, same scale and orient). */
 export const sharedMarks = (key: string | undefined): unknown => (key === undefined ? undefined : SHARED.get(key))
 export function shareMarks(key: string | undefined, marks: unknown): void {

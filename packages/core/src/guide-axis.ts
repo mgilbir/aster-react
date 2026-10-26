@@ -9,7 +9,7 @@ import type { SceneItem } from './types.js'
 import { lerp } from './util.js'
 import { Bounds, boundLeaf, boundStroke, multiLineOffset } from './bounds.js'
 import {
-  addEncoders, applyDefaults, encoder, encodeItem, encodeItems, extendEncode, getEncoding, guideMark, has, isSignal, joinByValue, lookup, one, shareMarks, sharedMarks, contentKey, value, zero,
+  addEncoders, applyDefaults, encoder, encodeItem, encodeItems, extendEncode, getEncoding, guideMark, has, isSignal, joinByValue, lookup, one, shareMarks, sharedMarks, contentKey, isShareable, keyPart, value, zero,
   type Block, type Entry, type EntryFn, type EntryHost, type EntryScope, type GuideMarkDef, type GuideStyles, type Lookup, type MarkEncode, type Row, type UserEncode,
 } from './guide-encode.js'
 import type { EncodeValue } from './types.js'
@@ -438,7 +438,7 @@ interface AxisDefs {
 function keyOf(spec: Rec, inp: AxisBuildInput): string | undefined {
   const a = contentKey(spec)
   const e = a === undefined ? undefined : contentKey(inp.encode)
-  return e === undefined ? undefined : 'a' + inp.orient + '|' + inp.scale + '|' + a + '|' + e
+  return e === undefined ? undefined : 'a' + keyPart(inp.orient) + keyPart(inp.scale) + a + '|' + e
 }
 
 /** Build an axis from vega-parser's guides, evaluate it, lay it out. */
@@ -451,7 +451,7 @@ export function buildAxis(inp: AxisBuildInput): AxisBuilt {
   let defs = inp.store?.get(spec) as AxisDefs | undefined
   if (defs === undefined || defs.cfg !== cfg || defs.orient !== orient || defs.scale !== inp.scale || defs.encode !== inp.encode) {
     // a config nobody can change (the default one, frozen) makes the marks a function of the spec: charts share them
-    const sk = Object.isFrozen(cfg) ? keyOf(spec, inp) : undefined
+    const sk = isShareable(cfg) ? keyOf(spec, inp) : undefined
     const hit = sharedMarks(sk) as AxisDefs | undefined
     if (hit !== undefined && hit.cfg === cfg) defs = hit
     else {

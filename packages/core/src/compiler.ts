@@ -5,6 +5,7 @@
  */
 import { dict, ownGet } from './util.js'
 import { checkDataReferences, normalizeSpecLists } from './spec-structure.js'
+import { markShareable } from './guide-encode.js'
 import { defaultMergedConfig, mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
 import type {
   CompiledAxis,
@@ -315,7 +316,8 @@ function compileScale(s: Record<string, unknown>): CompiledScale {
  * scales are those the scope can see - so a nested group's axes follow
  * `config.axis` exactly as the top-level ones do (C51).
  */
-const AXIS_BLOCKS = new WeakMap<object, Map<string, Record<string, unknown>>>()
+/** the axis config blocks of the default config, by orient and band: four orients, two kinds of scale at most */
+const DEFAULT_AXIS_BLOCKS = new Map<string, Record<string, unknown>>()
 
 function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: Record<string, unknown>, scales: CompiledScale[]): CompiledAxis[] {
   const cfgAxis = (cfg.axis ?? {}) as Record<string, unknown>
@@ -340,7 +342,7 @@ function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: 
     const sc = [...scales].reverse().find((s) => s.name === a.scale)
     const band = sc?.type === 'band'
     // (the blocks of a config nobody can change are merged once: the guides' marks are kept against the result)
-    const memo = Object.isFrozen(cfg) ? AXIS_BLOCKS.get(cfg) ?? AXIS_BLOCKS.set(cfg, new Map()).get(cfg)! : undefined
+    const memo = cfg === defaultMergedConfig() ? DEFAULT_AXIS_BLOCKS : undefined
     const memoKey = `${orient}|${band}`
     let defaults = memo?.get(memoKey)
     if (defaults === undefined) {
@@ -349,7 +351,7 @@ function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: 
       const orientBlock = (cfg as Record<string, Record<string, unknown>>)[`axis${orient.charAt(0).toUpperCase()}${orient.slice(1)}`]
       if (orient && typeof orientBlock === 'object') Object.assign(defaults, orientBlock)
       if (band) Object.assign(defaults, cfgAxisBand)
-      if (memo !== undefined) { Object.freeze(defaults); memo.set(memoKey, defaults) }
+      if (memo !== undefined) { Object.freeze(defaults); markShareable(defaults); memo.set(memoKey, defaults) }
     }
     axes.push(compileAxis(applyConfigDefaults(a, defaults, scales)))
   }
@@ -359,6 +361,7 @@ function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: 
 /** The legends of one scope with `config.legend` defaults (see {@link compileGuideAxes}). */
 function compileGuideLegends(raw: Array<Record<string, unknown>> | undefined, cfg: Record<string, unknown>): CompiledLegend[] {
   const cfgLegend = (cfg.legend ?? {}) as Record<string, unknown>
+  if (cfg === defaultMergedConfig() && cfg.legend) markShareable(cfgLegend)
   return (raw ?? []).map((l) => compileLegend(applyConfigDefaults(l, cfgLegend, undefined, true)))
 }
 

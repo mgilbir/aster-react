@@ -57,6 +57,7 @@ import { buildAxis as buildAxisGuide, tickBand } from './guide-axis.js'
 import { buildTitle as buildTitleGuide } from './guide-title.js'
 import { buildLegend as buildLegendGuide, legendType, LEGEND_SCALES, type GuideHost } from './guide-legend.js'
 import { isSignal, itemAriaOf, lookup, value, type GuideStyles, type UserEncode } from './guide-encode.js'
+import { defaultMergedConfig } from './config-defaults.js'
 
 const DEFAULT_SIZE = 500
 
@@ -4403,14 +4404,12 @@ interface ChartGuideState {
   defs?: Map<object, unknown>
 }
 const GUIDES = '__guides'
-/** The styles of a chart whose config is the frozen default one are one object: the plans of the guides' marks are kept against it. */
-const DEFAULT_STYLES = new Map<object, GuideStyles>()
+/** The styles of a chart whose config is the default one are one object: the plans of the guides' marks are kept against it. */
+let DEFAULT_STYLES: GuideStyles | undefined
 function guideStylesOf(chart: CompiledChart): GuideStyles {
   const style = chart.style
-  if (style === undefined || !Object.isFrozen(style) || chart.lineBreak !== undefined) return { styles: style ?? {}, lineBreak: chart.lineBreak }
-  let st = DEFAULT_STYLES.get(style)
-  if (st === undefined) DEFAULT_STYLES.set(style, (st = { styles: style, lineBreak: undefined }))
-  return st
+  if (style === undefined || chart.lineBreak !== undefined || style !== (defaultMergedConfig().style as unknown)) return { styles: style ?? {}, lineBreak: chart.lineBreak }
+  return (DEFAULT_STYLES ??= { styles: style, lineBreak: undefined })
 }
 function chartGuides(chart: CompiledChart): ChartGuideState {
   let st = (chart as unknown as Record<string, ChartGuideState | undefined>)[GUIDES]
