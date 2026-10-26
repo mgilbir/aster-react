@@ -491,8 +491,21 @@ function bindSignalEventsDefs(
     const hit = scopeByKey.get(key)
     return hit ? read(hit.name, hit.scope) : read(key)
   }
-  /** What an expression of `scope` sees: the view's signals, then each enclosing scope's own over them, outermost first. */
+  /**
+   * What an expression of `scope` sees: the view's signals, then each enclosing scope's own over them, outermost first. It
+   * is built once between two writes of a signal (every filter of an event reads it before any handler writes).
+   */
   const params = (scope: Scope | null = null): Record<string, unknown> => {
+    const have = paramsMemo.get(scope)
+    if (have && have.gen === writes) return have.params
+    const p = buildParams(scope)
+    paramsMemo.set(scope, { gen: writes, params: p })
+    return p
+  }
+  const paramsMemo = new Map<Scope | null, { gen: number; params: Record<string, unknown> }>()
+  /** Counts the writes to the signal store: a memoised `params` is good until the next one. */
+  let writes = 0
+  const buildParams = (scope: Scope | null): Record<string, unknown> => {
     const p = dict(signalParams, signals)
     if (!scope) return p
     const chain: Scope[] = []
@@ -513,6 +526,7 @@ function bindSignalEventsDefs(
     if (!force && read(name, owner) === value) return
     const key = keyOf(owner, name)
     setOwn(signals, key, value)
+    writes++
     markChanged(key)
   }
   /** The ids an expression reads as store keys (data dependencies stay `data:NAME`): a name resolves in `scope` first. */
@@ -548,6 +562,7 @@ function bindSignalEventsDefs(
           if (v !== read(def.name, scope)) {
             const key = keyOf(scope, def.name)
             setOwn(signals, key, v)
+            writes++
             markChanged(key)
             next.add(key)
           }
