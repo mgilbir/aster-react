@@ -893,7 +893,6 @@ const SEEDS = Number(env('ASTER_ORACLE_SEEDS') ?? 40)
 const STEPS = Number(env('ASTER_ORACLE_STEPS') ?? 12)
 const START = Number(env('ASTER_ORACLE_START') ?? 1)
 const ONE = env('ASTER_ORACLE_SEED')
-const MAX_FAIL = Number(env('ASTER_ORACLE_MAXFAIL') ?? 5)
 
 describe('incremental === fresh evaluateChart(compileChart(spec)) (audit C84 / T1)', () => {
   it('the generator is deterministic per seed', () => {
@@ -915,15 +914,12 @@ describe('incremental === fresh evaluateChart(compileChart(spec)) (audit C84 / T
   })
 
   const seeds = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
-  it(`holds for ${seeds.length} seeds x ${STEPS} steps (chart reuse + session)`, () => {
-    const failures: string[] = []
-    for (const seed of seeds) {
-      const f = checkSeed(seed, STEPS)
-      if (f) failures.push(f)
-      if (failures.length >= MAX_FAIL) break
-    }
-    expect(failures.join('\n\n'), `${failures.length} failing seed(s)`).toBe('')
-  }, 600_000)
+  // one test per seed: a worker that runs one long synchronous test cannot answer its host (vitest's onTaskUpdate RPC)
+  for (const seed of seeds) {
+    it(`holds for seed ${seed} x ${STEPS} steps (chart reuse + session)`, () => {
+      expect(checkSeed(seed, STEPS) ?? '', `seed ${seed}`).toBe('')
+    }, 600_000)
+  }
 })
 
 describe('incremental === fresh with selection stores that are edited between updates', () => {
@@ -949,15 +945,12 @@ describe('incremental === fresh with selection stores that are edited between up
   })
 
   const seedsSel = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
-  it(`holds for ${seedsSel.length} seeds x ${STEPS} steps (chart reuse + session)`, () => {
-    const failures: string[] = []
-    for (const seed of seedsSel) {
-      const f = checkSeed(seed, STEPS, scenarioSel)
-      if (f) failures.push(f)
-      if (failures.length >= MAX_FAIL) break
-    }
-    expect(failures.join('\n\n'), `${failures.length} failing seed(s)`).toBe('')
-  }, 600_000)
+  // one test per seed: a worker that runs one long synchronous test cannot answer its host (vitest's onTaskUpdate RPC)
+  for (const seed of seedsSel) {
+    it(`holds for seed ${seed} x ${STEPS} steps (chart reuse + session)`, () => {
+      expect(checkSeed(seed, STEPS, scenarioSel) ?? '', `seed ${seed}`).toBe('')
+    }, 600_000)
+  }
 })
 
 describe('incremental === fresh with group scopes whose signals events write between updates', () => {
@@ -980,13 +973,10 @@ describe('incremental === fresh with group scopes whose signals events write bet
   })
 
   const seedsScoped = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
-  it(`holds for ${seedsScoped.length} seeds x ${STEPS} steps (chart reuse + session)`, () => {
-    const failures: string[] = []
-    for (const seed of seedsScoped) {
-      const f = checkSeed(seed, STEPS, scenarioScoped)
-      if (f) failures.push(f)
-      if (failures.length >= MAX_FAIL) break
-    }
-    expect(failures.join('\n\n'), `${failures.length} failing seed(s)`).toBe('')
-  }, 600_000)
+  // one test per seed: a worker that runs one long synchronous test cannot answer its host (vitest's onTaskUpdate RPC)
+  for (const seed of seedsScoped) {
+    it(`holds for seed ${seed} x ${STEPS} steps (chart reuse + session)`, () => {
+      expect(checkSeed(seed, STEPS, scenarioScoped) ?? '', `seed ${seed}`).toBe('')
+    }, 600_000)
+  }
 })

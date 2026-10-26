@@ -87,6 +87,8 @@ const stampedItems = (scene: unknown): number => {
   return n
 }
 
+const SLICE = 40
+
 describe('<SvgChart> renders what <Chart renderer="svg"> renders, over the whole corpus', () => {
   let specs: CorpusSpec[] = []
   beforeAll(async () => { specs = await Promise.all(corpusFiles().map(loadCorpusSpec)) }, 120_000)
@@ -95,10 +97,14 @@ describe('<SvgChart> renders what <Chart renderer="svg"> renders, over the whole
     expect(specs.length).toBeGreaterThanOrEqual(785)
   })
 
-  it('server markup', () => {
+  // Each pass is cut into slices of the corpus, one test each: one long synchronous test keeps a vitest worker from answering
+  // its host (Timeout calling onTaskUpdate), and a slice names where a difference is.
+  const slices = Array.from({ length: Math.ceil(corpusFiles().length / SLICE) }, (_, i) => [i * SLICE, (i + 1) * SLICE] as const)
+  let streams = 0
+  let stamped = 0
+  for (const [from, to] of slices) it(`server markup, specs ${from}-${to}`, () => {
     const failures: string[] = []
-    let streams = 0
-    for (const { name, spec } of specs) {
+    for (const { name, spec } of specs.slice(from, to)) {
       const chart = renderToString(element('chart', spec))
       const plain = renderToString(element('plain', spec))
       const rich = renderToString(element('rich', spec))
@@ -109,14 +115,15 @@ describe('<SvgChart> renders what <Chart renderer="svg"> renders, over the whole
       if (chart !== plain) streams++
     }
     expect(failures.slice(0, 20).join('\n'), `${failures.length} difference(s)`).toBe('')
-    // Not vacuous: the stamps exist for event-stream specs (otherwise `withoutStamps` is untested).
-    expect(streams).toBeGreaterThan(0)
   }, 600_000)
 
-  it('client mount, markup and scene', () => {
+  it('server markup is not vacuous: the stamps exist for event-stream specs (otherwise `withoutStamps` is untested)', () => {
+    expect(streams).toBeGreaterThan(0)
+  })
+
+  for (const [from, to] of slices) it(`client mount, markup and scene, specs ${from}-${to}`, () => {
     const failures: string[] = []
-    let stamped = 0
-    for (const { name, spec } of specs) {
+    for (const { name, spec } of specs.slice(from, to)) {
       const chart = clientMount('chart', spec)
       const plain = clientMount('plain', spec)
       const rich = clientMount('rich', spec)
@@ -130,12 +137,15 @@ describe('<SvgChart> renders what <Chart renderer="svg"> renders, over the whole
       if (stampedItems(plain.scene) !== 0) failures.push(`${name}: SvgChart (no interaction) stamped scene items`)
     }
     expect(failures.slice(0, 20).join('\n'), `${failures.length} difference(s)`).toBe('')
-    expect(stamped, 'event-stream specs must have stamped items, or the stamp comparison is vacuous').toBeGreaterThan(0)
   }, 600_000)
 
-  it('hydration of the server markup', () => {
+  it('client mount is not vacuous: event-stream specs have stamped items', () => {
+    expect(stamped, 'event-stream specs must have stamped items, or the stamp comparison is vacuous').toBeGreaterThan(0)
+  })
+
+  for (const [from, to] of slices) it(`hydration of the server markup, specs ${from}-${to}`, () => {
     const failures: string[] = []
-    for (const { name, spec } of specs) {
+    for (const { name, spec } of specs.slice(from, to)) {
       const chart = hydrate('chart', spec)
       const plain = hydrate('plain', spec)
       const rich = hydrate('rich', spec)
