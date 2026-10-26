@@ -315,8 +315,9 @@ function parseScope(spec: Record<string, unknown>, names: Names, cfg: () => Reco
  * Throw `SpecParseError` for the first data set a spec uses without declaring (vega-parser `getData`) or
  * declares twice in one scope (`addData`), in vega-parser's own order.
  */
-export function checkDataReferences(spec: Record<string, unknown>): void {
-  let merged: Record<string, unknown> | undefined
+export function checkDataReferences(spec: Record<string, unknown>, config?: Record<string, unknown>): void {
+  // (the merged config of the view, vega's `mergeConfig(defaultConfig(), spec.config)`: the caller has it already)
+  let merged: Record<string, unknown> | undefined = config
   const cfg = (): Record<string, unknown> => (merged ??= mergeVegaConfig(vegaDefaultConfig(), isRecord(spec.config) ? spec.config : undefined))
   const top = new Names()
   parseScope(spec, top, cfg)

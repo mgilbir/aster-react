@@ -416,59 +416,76 @@ export interface AxisBuilt {
   datum: Row
 }
 
+interface AxisDefs {
+  cfg: Rec
+  orient: string
+  scale: string
+  encode: Record<string, UserEncode | undefined>
+  flags: { ticks: boolean; labels: boolean; grid: boolean; domain: boolean; title: boolean }
+  marks: Array<{ part: string; def: GuideMarkDef; onTicks: boolean }>
+  groupDef: GuideMarkDef
+}
+const AXIS_DEFS = new WeakMap<object, AxisDefs>()
+
 /** Build an axis from vega-parser's guides, evaluate it, lay it out. */
 export function buildAxis(inp: AxisBuildInput): AxisBuilt {
   const { spec, cfg, host, style } = inp
-  const _ = lookup(spec, cfg)
   const orient = inp.orient
-  const band = tickBand(_)
-  const p: AxisParts = { spec, _, orient, scale: inp.scale, band, encode: inp.encode }
 
-  const datum: Row = { scale: inp.scale, ticks: !!_('ticks'), labels: !!_('labels'), grid: !!_('grid'), domain: !!_('domain'), title: spec.title != null }
-  const marks: Array<{ part: string; def: GuideMarkDef; data: Row[] }> = []
-  let size: unknown
-  if (datum.grid) marks.push({ part: 'grid', def: gridMark(p, host), data: inp.ticks })
-  if (datum.ticks) {
-    size = _('tickSize')
-    marks.push({ part: 'tick', def: ticksMark(p, size), data: inp.ticks })
+  // the marks an axis is made of depend on its spec and the config (what is not known until a run is a signal, which
+  // the entries read when they are evaluated): they are made once per compiled axis, and every evaluation reuses them
+  let defs = AXIS_DEFS.get(spec)
+  if (defs === undefined || defs.cfg !== cfg || defs.orient !== orient || defs.scale !== inp.scale || defs.encode !== inp.encode) {
+    const _ = lookup(spec, cfg)
+    const band = tickBand(_)
+    const p: AxisParts = { spec, _, orient, scale: inp.scale, band, encode: inp.encode }
+    const flags = { ticks: !!_('ticks'), labels: !!_('labels'), grid: !!_('grid'), domain: !!_('domain'), title: spec.title != null }
+    const marks: AxisDefs['marks'] = []
+    let size: unknown
+    if (flags.grid) marks.push({ part: 'grid', def: gridMark(p, host), onTicks: true })
+    if (flags.ticks) {
+      size = _('tickSize')
+      marks.push({ part: 'tick', def: ticksMark(p, size), onTicks: true })
+    }
+    if (flags.labels) {
+      size = flags.ticks ? size : 0
+      marks.push({ part: 'label', def: labelsMark(p, size), onTicks: true })
+    }
+    if (flags.domain) marks.push({ part: 'domain', def: domainMark(p), onTicks: false })
+    if (flags.title) marks.push({ part: 'title', def: titleMark(p), onTicks: false })
+    // the axis group item: its encode carries the layout parameters
+    const groupDef: GuideMarkDef = { type: 'rule', role: 'axis', style: inp.encode.axis?.style, encode: groupEncode(p), interactive: false }
+    defs = { cfg, orient, scale: inp.scale, encode: inp.encode, flags, marks, groupDef }
+    AXIS_DEFS.set(spec, defs)
   }
-  if (datum.labels) {
-    size = datum.ticks ? size : 0
-    marks.push({ part: 'label', def: labelsMark(p, size), data: inp.ticks })
-  }
-  if (datum.domain) marks.push({ part: 'domain', def: domainMark(p), data: [datum] })
-  if (datum.title) marks.push({ part: 'title', def: titleMark(p), data: [datum] })
-
-  // the axis group item: its encode carries the layout parameters
-  const groupDef: GuideMarkDef = { type: 'rule', role: 'axis', style: inp.encode.axis?.style, encode: groupEncode(p), interactive: false }
-  const group = encodeItem(groupDef, datum, {}, host, style) as unknown as Rec
+  const datum: Row = { scale: inp.scale, ticks: defs.flags.ticks, labels: defs.flags.labels, grid: defs.flags.grid, domain: defs.flags.domain, title: defs.flags.title }
+  const marks = defs.marks.map((m) => ({ part: m.part, def: m.def, data: m.onTicks ? inp.ticks : [datum] }))
+  const group = encodeItem(defs.groupDef, datum, {}, host, style) as unknown as Rec
 
   const leaves: SceneItem[] = []
   const markBounds = new Map<string, Bounds>()
   const bounds = (it: SceneItem): Bounds => boundLeaf(new Bounds(), it)
   const titleItems: SceneItem[] = []
   const partMeta: AxisBuilt['partMeta'] = {}
+  let joined: [Row[], Row[]] | null = null
   for (const { part, def, data } of marks) {
     const keyed = part === 'grid' || part === 'tick' || part === 'label'
-    const rows = keyed ? joinByValue(data) : data
-    const items: SceneItem[] = rows.map((d) => {
-      const it = encodeItem(def, d, group, host, style)
-      it._kind = def.type === 'text' ? 'text' : 'rule'
-      return it
-    })
+    // (the grid, the ticks and the labels are keyed over the same tuples: one join)
+    const rows = keyed ? (joined !== null && joined[0] === data ? joined[1] : (joined = [data, joinByValue(data)])[1]) : data
+    // (every leaf is tagged with its kind and its part as it is made)
+    def.seed ??= { _kind: def.type === 'text' ? 'text' : 'rule', _part: part }
+    const items: SceneItem[] = rows.map((d) => encodeItem(def, d, group, host, style))
     let mb: Bounds | null = null
     if (def.overlap) mb = overlapItems(items, rows, def.overlap, host, bounds)
-    if (!mb) {
+    // (the layout reads the bounds of the ticks, the labels and the title: a grid of a thousand lines is not measured)
+    if (!mb && (part === 'tick' || part === 'label' || part === 'title')) {
       mb = new Bounds()
       for (const it of items) mb.union(bounds(it))
     }
-    markBounds.set(part, mb)
+    if (mb) markBounds.set(part, mb)
     partMeta[part] = { name: def.name, interactive: def.interactive }
     if (part === 'title') for (const it of items) titleItems.push(it)
-    for (const it of items) {
-      ;(it as Rec)._part = part
-      leaves.push(it)
-    }
+    for (const it of items) leaves.push(it)
   }
   partMeta.axis = { name: inp.encode.axis?.name == null || !inp.encode.axis.name ? undefined : String(inp.encode.axis.name), interactive: !!inp.encode.axis?.interactive }
 

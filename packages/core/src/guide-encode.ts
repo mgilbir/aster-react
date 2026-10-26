@@ -173,6 +173,8 @@ export interface GuideMarkDef {
   name?: string
   interactive: boolean
   /** the Overlap transform's parameters, if the mark has any */
+  /** channels every item of the mark starts with (the scene's own tags: the kind of leaf, the part of the guide) */
+  seed?: Rec
   overlap?: { separation?: unknown; method?: unknown; order?: string; bound?: { scale: string; orient: string; tolerance: unknown } | null }
 }
 
@@ -202,23 +204,150 @@ export interface EntryHost {
   scale(name: string): (((v: unknown) => unknown) & { range(): unknown[]; domain(): unknown[] }) | undefined
   /** a failing entry is reported and its channel is left unset */
   report(e: unknown): void
+  /** a scale by name as an entry calls it (the engine's coercions around the call, its bandwidth), for the entries that read one */
+  entryScale?(name: string): { call(raw: unknown): unknown; bandwidth(): number } | undefined
+}
+
+/** An entry that is nothing but a plain value (`{value: 3}`): what it gives does not depend on the datum. */
+function isPlainValue(e: object): boolean {
+  const v = (e as { value?: unknown }).value
+  return !isArr(e) && (v === null || typeof v !== 'object') && Object.keys(e).length === 1 && 'value' in e
+}
+
+/**
+ * The entry `{scale, field, band, extra, offset, round}` -- every part a plain value, as a tick's position is -- as a
+ * function of the datum: vega-parser's entry.js, `scale(field) [+ bandwidth * band] [+ offset]`, rounded, written out
+ * for the one shape that a guide with a thousand items evaluates a thousand times. Anything else (a signal in a part, a
+ * `mult`, a field path) takes the generic evaluator.
+ */
+function compileScaleEntry(e: object, host: EntryHost): ((datum: Row) => unknown) | undefined {
+  if (isArr(e) || host.entryScale === undefined) return undefined
+  const { scale, field, band, extra, offset, round } = e as Rec
+  for (const k of Object.keys(e)) if (k !== 'scale' && k !== 'field' && k !== 'band' && k !== 'extra' && k !== 'offset' && k !== 'round') return undefined
+  const plain = (v: unknown): boolean => v === null || v === undefined || typeof v !== 'object'
+  if (typeof scale !== 'string' || typeof field !== 'string' || !/^[A-Za-z_$][\w$]*$/.test(field)) return undefined
+  if (!plain(band) || !plain(extra) || !plain(offset) || !plain(round)) return undefined
+  const bound = host.entryScale(scale)
+  if (bound === undefined) return () => undefined
+  const hasBand = !!band
+  const factor = band === true ? 1 : +(band as number)
+  const bare = offset == null && !round
+  return (datum) => {
+    let head = bound.call(datum[field]) as number
+    let tail: number | undefined
+    if (hasBand) {
+      const bw = bound.bandwidth()
+      const term = factor === 1 ? bw : bw * factor
+      if (extra) {
+        const x = (datum as { extra?: { value?: unknown } }).extra
+        head = x ? (bound.call(x.value) as number) : head + term
+      } else {
+        tail = term
+      }
+    }
+    if (bare) return tail !== undefined ? head + tail : head
+    let result = tail !== undefined ? head + tail : head
+    if (offset != null) result = result + (offset as number)
+    if (round) result = Math.round(result)
+    return result
+  }
+}
+
+/** One channel of a block, classified once per mark: a plain value, a transcribed function, or an encode entry. */
+interface Step {
+  key: string
+  fn?: EntryFn
+  entry?: EncodeValue | EncodeValue[]
+  /** the plain value of a constant channel */
+  v?: unknown
+  /** 0 constant, 1 function, 2 encode entry, 3 an entry that does not depend on the datum (evaluated once) */
+  kind: 0 | 1 | 2 | 3
+  cached?: boolean
+  /** the entry written out for its shape (see compileScaleEntry), made with the first item; `null` when it has none */
+  fast?: ((datum: Row) => unknown) | null
+  /** the evaluation `fast` was made for (it holds that evaluation's scale) */
+  fastHost?: EntryHost
+}
+
+/** An encode entry that is only numbers and words through `mult` / `offset` / `round` / `exponent`: the same for every datum. */
+function isStaticEntry(e: object): boolean {
+  if (isArr(e)) return false
+  for (const k of Object.keys(e)) {
+    const v = (e as Rec)[k]
+    if (k !== 'value' && k !== 'mult' && k !== 'offset' && k !== 'round' && k !== 'exponent') return false
+    if (v !== null && typeof v === 'object') return false
+  }
+  return true
+}
+
+function stepsOf(block: Block, done?: Block): Step[] {
+  const steps: Step[] = []
+  for (const key of Object.keys(block)) {
+    const e = block[key]
+    if (e == null) continue
+    if (typeof e === 'function') steps.push({ key, fn: e, kind: 1 })
+    // (an encode entry the block before ran on the same item reads the datum and the scales, never the item: it gives the
+    // same value again, and is not evaluated twice -- unless the block before moved a channel (adjustSpatial): the entry
+    // then puts its own value back, so the caller passes no `done` block)
+    else if (done !== undefined && done[key] === e) continue
+    else if (isPlainValue(e)) steps.push({ key, v: (e as { value?: unknown }).value, kind: 0 })
+    else steps.push({ key, entry: e as EncodeValue | EncodeValue[], kind: isStaticEntry(e) ? 3 : 2 })
+  }
+  return steps
+}
+
+/**
+ * A block's steps. With no transcribed function in it (nothing in it reads the item) the plain values are one template,
+ * copied onto every item, and only the entries that read the datum are run per item.
+ */
+interface BlockPlan {
+  steps: Step[]
+  tmpl?: Rec
+  dyn?: Step[]
+}
+
+function planOf(block: Block, done?: Block, seed?: Rec): BlockPlan {
+  const steps = stepsOf(block, done)
+  if (steps.some((st) => st.kind === 1)) return { steps }
+  const tmpl: Rec = seed ? { ...seed } : {}
+  const dyn: Step[] = []
+  for (const st of steps) {
+    if (st.kind === 0) tmpl[st.key] = st.v
+    else dyn.push(st)
+  }
+  return { steps, tmpl, dyn }
+}
+
+/** Run one block's steps in order, each seeing the item so far (`scope` is the one object every function entry of the item reads). */
+function runSteps(steps: Step[], scope: EntryScope): void {
+  const { host, datum, item } = scope
+  for (let i = 0; i < steps.length; i++) {
+    const st = steps[i]!
+    let v: unknown
+    if (st.kind === 0 || (st.kind === 3 && st.cached === true)) {
+      v = st.v
+    } else {
+      try {
+        if (st.kind === 1) {
+          v = st.fn!(scope)
+        } else {
+          if (st.fast === undefined || st.fastHost !== host) { st.fast = st.kind === 2 ? compileScaleEntry(st.entry as object, host) ?? null : null; st.fastHost = host }
+          v = st.fast !== null ? st.fast(datum) : host.entry(st.entry!, datum)
+        }
+      } catch (err) {
+        host.report(err)
+        continue
+      }
+      if (st.kind === 3) { st.v = v; st.cached = true }
+    }
+    // (vega's Encode assigns every channel, an undefined value too: an `update` entry that is undefined clears the `enter` one)
+    item[st.key] = v
+  }
 }
 
 /** Run one block: its entries in order, each seeing the item so far. */
 export function runBlock(block: Block, item: Rec, datum: Row, group: Rec, host: EntryHost): void {
-  for (const key of Object.keys(block)) {
-    const e = block[key]
-    if (e == null) continue
-    let v: unknown
-    try {
-      v = typeof e === 'function' ? e({ host, datum, item, group }) : host.entry(e as EncodeValue | EncodeValue[], datum)
-    } catch (err) {
-      host.report(err)
-      continue
-    }
-    // (vega's Encode assigns every channel, an undefined value too: an `update` entry that is undefined clears the `enter` one)
-    item[key] = v
-  }
+  runSteps(stepsOf(block), { host, datum, item, group })
 }
 
 /**
@@ -250,14 +379,38 @@ export function adjustSpatial(item: Rec, block: Block, marktype: string): void {
   if (has('yc')) item.y = n('yc') - (n('height') || 0) / 2
 }
 
+/** What a mark's items are made of: its defaults filled in, its blocks classified (once, however many items it has). */
+interface Plan {
+  cfg: GuideStyles
+  src: MarkEncode
+  encode: MarkEncode
+  enter: BlockPlan
+  update: BlockPlan
+  /** whether a block has a channel adjustSpatial rewrites (x2, xc, y2, yc) */
+  spatialEnter: boolean
+  spatialUpdate: boolean
+}
+
+// (a rule keeps its endpoints: adjustSpatial leaves it alone)
+const hasSpatial = (b: Block, type: string): boolean => type !== 'rule' && (b.x2 != null || b.xc != null || b.y2 != null || b.yc != null)
+
 /** One item of a mark: the `enter` block, then the `update` block over it (vega's first Encode pass). */
 export function encodeItem(def: GuideMarkDef, datum: Row, group: Rec, host: EntryHost, cfg: GuideStyles): SceneItem {
-  const encode = applyDefaults(def.encode, def.type, def.style, cfg)
-  const item: Rec = {}
-  runBlock(encode.enter, item, datum, group, host)
-  adjustSpatial(item, encode.enter, def.type)
-  runBlock(encode.update, item, datum, group, host)
-  adjustSpatial(item, encode.update, def.type)
+  const memo = def as GuideMarkDef & { _plan?: Plan }
+  let plan = memo._plan
+  if (plan === undefined || plan.cfg !== cfg || plan.src !== def.encode) {
+    const encode = applyDefaults(def.encode, def.type, def.style, cfg)
+    plan = memo._plan = { cfg, src: def.encode, encode, enter: planOf(encode.enter, undefined, def.seed), update: planOf(encode.update, hasSpatial(encode.enter, def.type) ? undefined : encode.enter), spatialEnter: hasSpatial(encode.enter, def.type), spatialUpdate: hasSpatial(encode.update, def.type) }
+  }
+  const enter = plan.enter
+  const item: Rec = enter.tmpl !== undefined ? { ...enter.tmpl } : def.seed !== undefined ? { ...def.seed } : {}
+  const scope: EntryScope = { host, datum, item, group }
+  runSteps(enter.dyn ?? enter.steps, scope)
+  if (plan.spatialEnter) adjustSpatial(item, plan.encode.enter, def.type)
+  const update = plan.update
+  if (update.tmpl !== undefined) Object.assign(item, update.tmpl)
+  runSteps(update.dyn ?? update.steps, scope)
+  if (plan.spatialUpdate) adjustSpatial(item, plan.encode.update, def.type)
   return item as SceneItem
 }
 
@@ -275,6 +428,26 @@ export function itemAriaOf(item: Rec): SceneGroup['itemAria'] {
  * as in vega-util's fastmap), made where the value first occurs and encoded against the last datum that has it.
  */
 export function joinByValue(data: Row[]): Row[] {
+  // (values that are all numbers, or all words, are the same key exactly when they are the same value: no need to
+  // write each as a string first)
+  const t0 = typeof data[0]?.value
+  if (data.length > 1 && (t0 === 'number' || t0 === 'string')) {
+    const seen = new Map<unknown, number>()
+    const out: Row[] = []
+    let uniform = true
+    for (const d of data) {
+      const v = d.value
+      if (typeof v !== t0) { uniform = false; break }
+      const at = seen.get(v)
+      if (at === undefined) {
+        seen.set(v, out.length)
+        out.push(d)
+      } else {
+        out[at] = d
+      }
+    }
+    if (uniform) return out
+  }
   const seen = new Map<string, number>()
   const out: Row[] = []
   for (const d of data) {

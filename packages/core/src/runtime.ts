@@ -4255,8 +4255,8 @@ function resolveLegendValues(legend: CompiledLegend, ctx: EvalContext): unknown[
 }
 
 function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
-  const spec = (legend.own ?? {}) as Record<string, unknown>
-  const config = (legend.cfg ?? {}) as Record<string, unknown>
+  const spec = (legend.own ?? NO_PROPS) as Record<string, unknown>
+  const config = (legend.cfg ?? NO_PROPS) as Record<string, unknown>
   // vega-parser legend.js: the channels the legend maps, in LegendScales order; the first is the canonical scale
   const channels: Array<[string, string]> = []
   for (const c of LEGEND_SCALES) if (spec[c]) channels.push([c, String(spec[c])])
@@ -4294,7 +4294,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
   const formatType = guideScalar(ctx, spec.formatType) as string | undefined
   const host = guideHost(ctx)
   const built = buildLegendGuide({
-    spec, config, encode: (legend.encode ?? {}) as Record<string, UserEncode | undefined>,
+    spec, config, encode: (legend.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
     channels, scale: scale as never, scaleType, scaleOf: (name) => ctx.scales.get(name) as never,
     values: resolveLegendValues({ values: spec.values } as unknown as CompiledLegend, ctx),
     count: tickCountRaw, minstep: guideScalar(ctx, spec.tickMinStep) as number | undefined,
@@ -4329,6 +4329,12 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext): SceneGroup | nul
 function guideHost(ctx: EvalContext): GuideHost {
   return {
     entry: (spec, datum) => resolveEncodeProperty(spec as EncodeValue | EncodeValue[], datum, ctx),
+    entryScale: (name) => {
+      const s = ctx.scales.get(name)
+      if (!s) return undefined
+      const type = ctx.scaleTypes.get(name)
+      return { call: (raw) => scaleValue(s, type, raw), bandwidth: () => (typeof s.bandwidth === 'function' ? s.bandwidth() : 0) }
+    },
     expr: (code) => ctx.runtime.expr(code)({}, ctx.signalParams),
     exprDatum: (code, datum) => ctx.runtime.expr(code)(datum, ctx.signalParams),
     viewSignal: (name) => viewSignal(ctx, name),
@@ -4348,8 +4354,12 @@ function guideHost(ctx: EvalContext): GuideHost {
 }
 
 /** `config.style` (and `config.lineBreak`) as the guide marks' defaults. */
+const GUIDE_STYLES = new WeakMap<CompiledChart, GuideStyles>()
 function guideStyles(ctx: EvalContext): GuideStyles {
-  return { styles: ctx.chart.style ?? {}, lineBreak: ctx.chart.lineBreak }
+  // (one object per compiled chart: the plans of the guides' marks are kept against it)
+  let styles = GUIDE_STYLES.get(ctx.chart)
+  if (styles === undefined) GUIDE_STYLES.set(ctx.chart, (styles = { styles: ctx.chart.style ?? {}, lineBreak: ctx.chart.lineBreak }))
+  return styles
 }
 
 /** The view's width / height SIGNAL (what a nested group's axes grid to); the context size at the view level. */
@@ -4376,6 +4386,9 @@ function guideScalar(ctx: EvalContext, v: unknown): unknown {
   if (!isSignal(v)) return v
   try { return ctx.runtime.expr(v.signal)({}, ctx.signalParams) } catch (e) { reportEvalError(ctx, e); return undefined }
 }
+
+/** What an absent `own` / `cfg` / `encode` of a guide is: one object, so that what is kept against it is found again. */
+const NO_PROPS: Record<string, never> = {}
 
 function rootScope(chart: CompiledChart): GuideScope {
   return {
@@ -4501,8 +4514,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   } catch (e) {
     return axisTicksFailed(axis, ctx, e, index)
   }
-  const own = (axis.own ?? {}) as Record<string, unknown>
-  const cfg = (axis.cfg ?? {}) as Record<string, unknown>
+  const own = (axis.own ?? NO_PROPS) as Record<string, unknown>
+  const cfg = (axis.cfg ?? NO_PROPS) as Record<string, unknown>
   // vega-encode AxisTicks tuples, the datum a tick / label / grid encode reads:
   // `{index (fraction 0..1), tickIndex, value, label}`; the `extra` entry (an
   // extra tick pegged to the first value, for binned axes) is
@@ -4514,7 +4527,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   meterItems(rows.length, 'axis ticks')
 
   const built = buildAxisGuide({
-    spec: own, cfg, scale: axis.scale, orient, encode: (axis.encode ?? {}) as Record<string, UserEncode | undefined>,
+    spec: own, cfg, scale: axis.scale, orient, encode: (axis.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
     ticks: rows, width: ctx.width, height: ctx.height, raw: !!ctx.rawGuides, host: guideHost(ctx), style: guideStyles(ctx),
   })
   const knownOrient = orient === 'top' || orient === 'bottom' || orient === 'left' || orient === 'right'

@@ -34,12 +34,13 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
   // vega-parser reads every scope list through vega-util `array()` and refuses a spec that uses a data
   // set it never declared (`Undefined data set name`) before any view exists: same here, before anything runs.
   const rawSpec = normalizeSpecLists(givenSpec)
-  checkDataReferences(rawSpec)
-  markSeq = 0
   // Vega parses a view with mergeConfig(defaultConfig(), spec.config): every
   // default below (mark, axis, legend, title, style, range...) is read from this
   // merged config, exactly as upstream does (see config-defaults.ts).
-  const spec: VgSpec = { ...rawSpec, config: mergeVegaConfig(vegaDefaultConfig(), rawSpec.config as Record<string, unknown> | undefined) as VgSpec['config'] }
+  const mergedConfig = mergeVegaConfig(vegaDefaultConfig(), rawSpec.config as Record<string, unknown> | undefined) as Record<string, unknown>
+  checkDataReferences(rawSpec, mergedConfig)
+  markSeq = 0
+  const spec: VgSpec = { ...rawSpec, config: mergedConfig as VgSpec['config'] }
 
   const signalDefs = compileSignalDefs(spec.signals as Array<Record<string, unknown>> | undefined)
   const signals = resolveSignals(signalDefs)

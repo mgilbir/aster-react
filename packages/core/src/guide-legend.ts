@@ -308,6 +308,25 @@ export interface LegendBuilt {
 
 const strOrUndef = (n: unknown): string | undefined => (n == null || n === '' ? undefined : String(n))
 
+/**
+ * The marks of a legend that its spec and the config decide (not the data, nor a signal's value: entries read those when
+ * they are evaluated), made once per compiled legend.
+ */
+interface LegendDefs {
+  config: Rec
+  encode: Record<string, UserEncode | undefined>
+  scale: string
+  type: string
+  vertical: boolean
+  made: Map<string, GuideMarkDef>
+}
+const LEGEND_DEFS = new WeakMap<object, LegendDefs>()
+const made = (defs: LegendDefs, key: string, make: () => GuideMarkDef): GuideMarkDef => {
+  let def = defs.made.get(key)
+  if (def === undefined) defs.made.set(key, (def = make()))
+  return def
+}
+
 /** Build a legend from vega-parser's guides, evaluate it, lay it out. */
 export function buildLegend(inp: LegendBuildInput): LegendBuilt {
   const { spec, config, host, style } = inp
@@ -318,8 +337,13 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
   const scales: Rec = {}
   for (const [c, n] of inp.channels) scales[c] = n
   p.scale = inp.channels[0]?.[1] ?? ''
+  let defs = LEGEND_DEFS.get(spec)
+  if (defs === undefined || defs.config !== config || defs.encode !== inp.encode || defs.scale !== p.scale || defs.type !== type || defs.vertical !== vertical) {
+    defs = { config, encode: inp.encode, scale: p.scale, type, vertical, made: new Map() }
+    LEGEND_DEFS.set(spec, defs)
+  }
   const datum: Row = { title: spec.title != null, scales, type, vgrad: type !== SymbolLegend && vertical }
-  const group = encodeItem({ type: 'rule', role: 'legend', style: inp.encode.legend?.style, encode: groupEncode(p), interactive: false }, datum, {}, host, style) as unknown as Rec
+  const group = encodeItem(made(defs, 'group', () => ({ type: 'rule', role: 'legend', style: inp.encode.legend?.style, encode: groupEncode(p), interactive: false })), datum, {}, host, style) as unknown as Rec
   const partMeta: LegendBuilt['partMeta'] = {
     legend: { name: strOrUndef(inp.encode.legend?.name), interactive: !!inp.encode.legend?.interactive },
   }
@@ -339,7 +363,7 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
 
   // (the padding is what the group item has: a missing one makes the layout's arithmetic NaN, as vega's)
   const pad = group.padding as number
-  const titleDef = datum.title ? titleMark(p) : undefined
+  const titleDef = datum.title ? made(defs, 'title', () => titleMark(p)) : undefined
   let titleItem: (SceneItem & Rec) | undefined
   let titleBounds = new Bounds()
   if (titleDef) {
@@ -372,10 +396,10 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
       type, scale: inp.scale, count, limit: inp.limit, values: inp.values, minstep: inp.minstep,
       formatSpecifier: inp.formatSpecifier, formatType: inp.formatType, locale: inp.locale, warn: (m) => host.warn(m),
     })
-    const firstDef = gradientLike
+    const firstDef = made(defs, gradientLike ? 'gradient' : 'band', () => gradientLike
       ? gradientMark(p, vertical, ((s: EntryScope) => (s.host as GuideHost).gradient(p.scale, vertical)) as Entry)
-      : bandMark(p, vertical)
-    const labelsDef = gradientLabelsMark(p, vertical)
+      : bandMark(p, vertical))
+    const labelsDef = made(defs, 'gradient-labels', () => gradientLabelsMark(p, vertical))
     // (the bands and the labels are keyed by value: entries with one value make one item)
     const keyed = joinByValue(entries as unknown as Row[])
     const firstItems: SceneItem[] = gradientLike ? [eval1(firstDef, datum, 'gradient')] : keyed.map((e) => eval1(firstDef, e, 'band'))
