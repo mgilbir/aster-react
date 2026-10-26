@@ -1,0 +1,218 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "description": "Quantize, quantile and threshold legends: the labels are the bin edges formatted like vega-encode (3.0, not 3: one decimal place per step, '< x' and '>= y' ends for the threshold scale, the quantile edges from the data), vertical and horizontal, and the legend box is as wide as its widest label. Symbol legends over the same scales (type symbol, or a size legend) label the intervals 'lo - hi' with '< hi' and '>= lo' ends.",
+  "width": 260,
+  "height": 140,
+  "padding": 5,
+  "autosize": "pad",
+  "data": [
+    {
+      "name": "t",
+      "values": [
+        {
+          "v": 1
+        },
+        {
+          "v": 2
+        },
+        {
+          "v": 3.5
+        },
+        {
+          "v": 4
+        },
+        {
+          "v": 7
+        },
+        {
+          "v": 8.25
+        },
+        {
+          "v": 9
+        },
+        {
+          "v": 12
+        }
+      ]
+    }
+  ],
+  "scales": [
+    {
+      "name": "qz",
+      "type": "quantize",
+      "domain": [
+        0,
+        9
+      ],
+      "range": [
+        "#eee",
+        "#bcd",
+        "#79b",
+        "#356"
+      ]
+    },
+    {
+      "name": "qz2",
+      "type": "quantize",
+      "domain": [
+        0,
+        1
+      ],
+      "nice": true,
+      "range": [
+        "#fee",
+        "#f99",
+        "#c33"
+      ]
+    },
+    {
+      "name": "ql",
+      "type": "quantile",
+      "domain": {
+        "data": "t",
+        "field": "v"
+      },
+      "range": [
+        "#efe",
+        "#9c9",
+        "#363"
+      ]
+    },
+    {
+      "name": "th",
+      "type": "threshold",
+      "domain": [
+        2,
+        5,
+        10.5
+      ],
+      "range": [
+        "#eef",
+        "#aaf",
+        "#66c",
+        "#226"
+      ]
+    },
+    {
+      "name": "th2",
+      "type": "threshold",
+      "domain": [
+        0.25,
+        0.5
+      ],
+      "range": [
+        "#fdd",
+        "#d88",
+        "#822"
+      ]
+    },
+    {
+      "name": "qsz",
+      "type": "quantize",
+      "domain": [
+        0,
+        100
+      ],
+      "range": [
+        40,
+        120,
+        300
+      ]
+    },
+    {
+      "name": "tsz",
+      "type": "threshold",
+      "domain": [
+        10,
+        20.5
+      ],
+      "range": [
+        40,
+        120,
+        300
+      ]
+    }
+  ],
+  "legends": [
+    {
+      "fill": "qz",
+      "title": "quantize",
+      "orient": "right"
+    },
+    {
+      "fill": "qz2",
+      "title": "quantize nice",
+      "orient": "right"
+    },
+    {
+      "fill": "ql",
+      "title": "quantile",
+      "orient": "right",
+      "format": ".1f"
+    },
+    {
+      "fill": "th",
+      "title": "threshold",
+      "orient": "left"
+    },
+    {
+      "fill": "th2",
+      "title": "threshold small",
+      "orient": "left",
+      "format": "%"
+    },
+    {
+      "fill": "qz",
+      "title": "horizontal quantize",
+      "orient": "bottom",
+      "direction": "horizontal"
+    },
+    {
+      "fill": "th",
+      "title": "horizontal threshold",
+      "orient": "top",
+      "direction": "horizontal",
+      "symbolType": "square"
+    },
+    {
+      "fill": "qz",
+      "type": "symbol",
+      "title": "quantize as symbols",
+      "orient": "none",
+      "legendX": 150,
+      "legendY": 0
+    },
+    {
+      "fill": "th",
+      "type": "symbol",
+      "title": "threshold as symbols",
+      "orient": "none",
+      "legendX": 150,
+      "legendY": 80
+    },
+    {
+      "fill": "ql",
+      "type": "symbol",
+      "title": "quantile as symbols",
+      "orient": "none",
+      "legendX": 150,
+      "legendY": 160
+    },
+    {
+      "size": "qsz",
+      "title": "quantize sizes",
+      "orient": "none",
+      "legendX": 0,
+      "legendY": 120,
+      "format": ".0f"
+    },
+    {
+      "size": "tsz",
+      "title": "threshold sizes",
+      "orient": "none",
+      "legendX": 0,
+      "legendY": 220
+    }
+  ],
+  "marks": []
+}

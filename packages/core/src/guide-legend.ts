@@ -473,10 +473,8 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     w = Math.ceil(lb.width() + w)
     h = Math.ceil(lb.height() + h)
   }
-  const orient = group.orient
-  const x = orient !== 'none' ? 0 : ((group.x as number) || 0)
-  const y = orient !== 'none' ? 0 : ((group.y as number) || 0)
-  const markBounds = boundStroke(new Bounds().set(x, y, x + w, y + h), group as SceneItem)
+  // (relative to the group's position: the scene adds the position a legend is given, legendX / legendY for `orient: none`)
+  const markBounds = boundStroke(new Bounds().set(0, 0, w, h), group as SceneItem)
 
   // the legend's own box, painted as a group item's background
   // (a legend whose layout never ran has no size: its box stays a placeholder)
