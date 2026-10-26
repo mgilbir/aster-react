@@ -2,7 +2,9 @@
 /**
  * Every budget gets a test that drives the REAL attack shape (C6-C9, C49, T3).
  * Each attack runs in a child process with a hard kill (see attack.testkit.ts);
- * the test asserts an AsterLimitError within `2 * maxTimeMs + SLACK`.
+ * the test asserts an AsterLimitError after at most `2 * maxTimeMs + SLACK` of CPU time
+ * (not wall time: that measures the scheduler on a loaded machine). Where a count can show the same
+ * thing, the test counts instead ("refused before encoding").
  */
 import { describe, it, expect } from 'vitest'
 import { attack, expectLimit, SLACK_MS } from './attack.testkit.js'
@@ -172,11 +174,34 @@ describe('generated rows count against maxRows (C7, C49)', () => {
   }, T)
 
   it('a mark over more rows than maxItems is refused before encoding', async () => {
-    const r = await attack(`
-      core.renderSpec({ width: 100, height: 100, data: [{ name: 't' }],
-        marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { value: 1 }, y: { value: 1 } } } }] },
-        { data: { t: new Array(3000000).fill({ a: 1 }) }, limits: { maxItems: 1000, maxTimeMs: 300 } })`)
-    expectLimit(r, /maxItems/, 300)
+    // Structural, not timed: every row shares ONE object `o` whose `touch` is a counting getter, and the mark
+    // encodes `x: {signal: 'datum.o.touch'}`, so `reads` is exactly the number of items the encoder visited
+    // (dataset ingest copies `o` by reference and never reads it). The refusal must leave it at 0; the
+    // control run proves the counter does see encoding when nothing refuses it.
+    const run = (rows: number, maxItems?: number) => attack(`
+      let reads = 0
+      const row = { o: { get touch() { reads++; return 1 } } }
+      const spec = { width: 100, height: 100, data: [{ name: 't' }],
+        marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { signal: 'datum.o.touch' }, y: { value: 1 } } } }] }
+      let err = null
+      try { core.renderSpec(spec, { data: { t: new Array(${rows}).fill(row) }${maxItems == null ? '' : `, limits: { maxItems: ${maxItems} }`} }) } catch (e) {
+        err = { name: e.name, code: e.code, message: String(e.message) }
+      }
+      return { reads, err }`)
+    type V = { reads: number; err: { name: string; code: string; message: string } | null }
+    const val = (r: Awaited<ReturnType<typeof run>>): V => {
+      expect(r.killed, r.stderr).toBe(false)
+      expect(r.threw, r.stderr).toBeNull()
+      return r.value as V
+    }
+    const refused = val(await run(3_000_000, 1000))
+    expect(refused.err?.name).toBe('AsterLimitError')
+    expect(refused.err?.code).toBe('ASTER_LIMIT')
+    expect(refused.err?.message).toMatch(/maxItems/)
+    expect(refused.reads).toBe(0)
+    const control = val(await run(2000))
+    expect(control.err).toBeNull()
+    expect(control.reads).toBeGreaterThanOrEqual(2000)
   }, T)
 })
 

@@ -77,17 +77,21 @@ describe('contentEqual (C32)', () => {
     expect(contentEqual(a, a)).toBe(true)
   })
   it('a big spec costs one pass over its skeleton: data rows are by identity, other big arrays by content', () => {
-    const rows = () => Array.from({ length: 100_000 }, (_, i) => ({ x: i, y: i * 2, c: 'a' }))
+    // Counted, not timed: a wall bound measures the machine. `reads` counts property reads on the rows.
+    let reads = 0
+    const rows = () => Array.from({ length: 100_000 }, (_, i) => ({ get x() { reads++; return i } }))
     const shared = rows()
-    const t0 = performance.now()
     expect(contentEqual({ data: [{ name: 't', values: shared }] }, { data: [{ name: 't', values: shared }] }, 0, false, true)).toBe(true)
     // a re-created equal rows array is a new input (the session's row diff finds it unchanged), without 100k row compares here
     expect(contentEqual({ data: [{ name: 't', values: rows() }] }, { data: [{ name: 't', values: rows() }] }, 0, false, true)).toBe(false)
     expect(contentEqual({ data: [{ name: 't', values: shared }] }, { data: [{ name: 't', values: shared.slice() }] })).toBe(true) // (content mode, for streams)
-    expect(performance.now() - t0).toBeLessThan(500)
-    const big = () => ({ scales: [{ name: 's', domain: Array.from({ length: 100_000 }, (_, i) => i) }] })
-    const t1 = performance.now()
-    expect(contentEqual(big(), big())).toBe(true)
-    expect(performance.now() - t1).toBeLessThan(500)
+    expect(reads).toBe(0)
+    // other big arrays are compared by content, in one pass: element reads grow linearly (a quadratic compare reads ~n^2)
+    const n = 100_000
+    let gets = 0
+    const counted = (): number[] => new Proxy(Array.from({ length: n }, (_, i) => i), { get(t, k, r) { gets++; return Reflect.get(t, k, r) } })
+    expect(contentEqual({ scales: [{ name: 's', domain: counted() }] }, { scales: [{ name: 's', domain: counted() }] })).toBe(true)
+    expect(gets).toBeGreaterThanOrEqual(2 * n)
+    expect(gets).toBeLessThanOrEqual(6 * n)
   })
 })
