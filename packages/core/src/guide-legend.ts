@@ -746,8 +746,10 @@ function cornersOf(g: Rec): Rec | undefined {
 /** The symbol item the bound pass reads: the shape and its radius (vega traces the shape's own path). */
 function symbolBoundItem(sym: SceneItem & Rec): SceneItem {
   const size = (sym.size != null ? sym.size : 64) as number
-  const item: Rec = { ...sym, shape: (sym.shape as string | undefined) || 'circle', radius: Math.sqrt(size) / 2 }
-  delete item.size
+  const item: Rec = {}
+  for (const k in sym) if (k !== 'size' && k !== 'shape') item[k] = sym[k]
+  item.shape = (sym.shape as string | undefined) || 'circle'
+  item.radius = Math.sqrt(size) / 2
   return item as SceneItem
 }
 
@@ -756,9 +758,9 @@ function bakeSymbol(sym: SceneItem & Rec): SceneItem & Rec {
   // (vega's symbol shape: `size` is 64 unless the item has one)
   const size = (sym.size != null ? sym.size : 64) as number
   const r = Math.sqrt(size) / 2
-  const leaf: Rec = { ...sym }
-  delete leaf.size
-  delete leaf.shape
+  const leaf: Rec = {}
+  // (copied without `size` and `shape`: a `delete` would turn the leaf into a dictionary-mode object)
+  for (const k in sym) if (k !== 'size' && k !== 'shape') leaf[k] = sym[k]
   leaf.path = String(symbolPath(sym.shape as string | undefined, r))
   leaf._part = 'symbol'
   leaf._kind = 'symbol'

@@ -375,6 +375,8 @@ interface EvalContext {
   datasets: Map<string, Row[]>
   /** A legend tickCount threw: the whole layout aborts (raw-guide mode). */
   rawGuides?: boolean
+  /** The guide host of this context (see guideHost). */
+  guideHost?: { ctx: EvalContext; host: GuideHost }
   /** The pass stopped below this scope: the legend entries of symbol legends (a level further down) were never made. */
   pendingEntries?: boolean
   scales: Map<string, Scale>
@@ -4339,11 +4341,13 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
 }
 
 /** What the guide encoders (guide-encode.ts) need of an evaluation: entries, expressions, scales, the view's signals. */
-const GUIDE_HOSTS = new WeakMap<EvalContext, GuideHost>()
 function guideHost(ctx: EvalContext): GuideHost {
-  // (one per evaluation context: the closures it holds read nothing else, and what an entry compiled for it can be kept)
-  let host = GUIDE_HOSTS.get(ctx)
-  if (host === undefined) GUIDE_HOSTS.set(ctx, (host = makeGuideHost(ctx)))
+  // (one per evaluation context: the closures it holds read nothing else, and what an entry compiled for it can be kept;
+  // a context made from this one by spreading carries the cache of its parent, which is not its own)
+  const kept = ctx.guideHost
+  if (kept !== undefined && kept.ctx === ctx) return kept.host
+  const host = makeGuideHost(ctx)
+  ctx.guideHost = { ctx, host }
   return host
 }
 function makeGuideHost(ctx: EvalContext): GuideHost {

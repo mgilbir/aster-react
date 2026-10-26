@@ -371,6 +371,24 @@ function boundImage(bounds: Bounds, item: SceneItem): Bounds {
  * (curve extrema via quadExtrema/cubicExtrema; arcs sampled at endpoints and
  * quarter-turn aligned interior points; full circles as center ± r).
  */
+/**
+ * The extent of a symbol shape's path at a radius, traced once: a legend measures the same few shapes in every evaluation.
+ * (Adding the two corners of the extent to the box is adding every point of the path to it.)
+ */
+const SHAPE_EXTENTS = new Map<string, [number, number, number, number]>()
+function addShapeExtent(bounds: Bounds, shape: string, r: number, pathOf: (shape: string, r: number) => unknown): void {
+  const key = shape + '|' + r + '|' + (pathOf === symbolPathExact ? 'e' : 'p')
+  let ext = SHAPE_EXTENTS.get(key)
+  if (ext === undefined) {
+    const b = new Bounds()
+    boundsFromPath(b, String(pathOf(shape, r)))
+    ext = [b.x1, b.y1, b.x2, b.y2]
+    if (SHAPE_EXTENTS.size > 256) SHAPE_EXTENTS.clear()
+    SHAPE_EXTENTS.set(key, ext)
+  }
+  if (ext[0] <= ext[2] && ext[1] <= ext[3]) bounds.add(ext[0], ext[1]).add(ext[2], ext[3])
+}
+
 export function boundsFromPath(
   bounds: Bounds,
   d: string,
@@ -892,7 +910,7 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
       bounds.add(-r, -r)
       bounds.add(r, r)
     } else {
-      boundsFromPath(bounds, symbolPathExact(String(it.shape), r))
+      addShapeExtent(bounds, String(it.shape), r, symbolPathExact)
       if (angle) bounds.rotate(angle * Math.PI / 180, 0, 0)
     }
     boundStroke(bounds, it, true)
@@ -926,7 +944,7 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
       bounds.add(-r, -r)
       bounds.add(r, r)
     } else {
-      boundsFromPath(bounds, symbolPath(shape, r))
+      addShapeExtent(bounds, shape, r, symbolPath)
       bounds.rotate(angle * Math.PI / 180, 0, 0)
     }
     boundStroke(bounds, it, true)
