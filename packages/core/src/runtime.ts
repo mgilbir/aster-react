@@ -516,12 +516,7 @@ function prepareChartCtx(
   // computes it (the rows of a modified selection store, sorted by its `collect`, for example).
   // (It must not close over `ctx`: that reaches the previous evaluation's state, and a scene would keep every
   // scene before it alive.)
-  runtime.transformed = (name, raw) => {
-    const d = chart.data.find((x) => x.name === name)
-    const rows = d?.values != null ? readData(raw as never, d.format) : (raw as Row[]).map((r) => ({ ...r }))
-    if (!d?.transform.length) return rows
-    return applyTransforms(rows, d.transform, { runtime, signals: signalParams, hierarchies: transformHierarchies, projections: transformProjections }, name)
-  }
+  runtime.transformed = makeTransformed(chart, runtime, signalParams, transformHierarchies, transformProjections)
   // A legend whose tickCount is an interval string on a non-time scale makes
   // vega's LegendEntries throw: the dataflow logs the error and the ViewLayout
   // transform never runs — the whole scene renders at raw encode positions
@@ -625,6 +620,26 @@ function prepareChartCtx(
   ctx.draft.fp = ctxFpOf(ctx)
 
   return { ctx, width, height }
+}
+
+/**
+ * `ExpressionRuntime.transformed` for one evaluation. A module-level factory, so the closure's context holds exactly these
+ * arguments: a closure made inside `prepareChartCtx` shares that function's context with its other closures, which reach
+ * the evaluation's state (and, through the incremental state, the previous scenes), and the scene would keep them alive.
+ */
+function makeTransformed(
+  chart: CompiledChart,
+  runtime: ExpressionRuntime,
+  signalParams: Record<string, unknown>,
+  hierarchies: Map<string, unknown>,
+  projections: ProjectionRegistry,
+): NonNullable<ExpressionRuntime['transformed']> {
+  return (name, raw) => {
+    const d = chart.data.find((x) => x.name === name)
+    const rows = d?.values != null ? readData(raw as never, d.format) : (raw as Row[]).map((r) => ({ ...r }))
+    if (!d?.transform.length) return rows
+    return applyTransforms(rows, d.transform, { runtime, signals: signalParams, hierarchies, projections }, name)
+  }
 }
 
 /** Fingerprint of the evaluation context that reused scales/items were built under. */
@@ -3298,6 +3313,7 @@ function evaluateMarkItems(
   let carriedBounds: Bounds | undefined
   const addedItems: SceneItem[] = []
   let pendingUndo: ItemsUndo | undefined
+  let hitMarked = false
   if (source) {
     // (a source that is no dataset but the name of a mark built before: that mark's items, shallow-copied as vega's tuples)
     const rawRows = ctx.datasets.get(source) ?? ctx.markItems.get(source)?.map((it) => ({ ...(it as unknown as Row) })) ?? []
@@ -3348,12 +3364,16 @@ function evaluateMarkItems(
     if (pulse) {
       const prevItems = prevGroup!.items as SceneItem[]
       const gen = ctx.gen
+      // (an interactive mark's transparent items are marked `_hit` as they are encoded: an update touches only these)
+      hitMarked = true
+      const hittable = mark.interactive !== false
       const encodeAt = (i: number): SceneItem => {
         if (meter) meter.tick('mark encoding')
         const row = { ...(rows[i] as Row) }
         const res = resolveEncodeSet(update, row, ctx, mark.type)
         res.datum = row
         res.__gen = gen
+        if (hittable && (res as { fill?: unknown }).fill === 'transparent') (res as unknown as Record<string, unknown>)._hit = true
         return res
       }
       if (pulse.appendOnly) {
@@ -3539,7 +3559,7 @@ function evaluateMarkItems(
 
   // An interactive mark's transparent items are still hit by the pointer: vega's live SVG draws them with
   // `fill="transparent"`, which the string renderer (like ours) omits. `_hit` marks them for `pointer-events`.
-  if (mark.interactive !== false) {
+  if (mark.interactive !== false && !hitMarked) {
     for (const it of items) if ((it as { fill?: unknown }).fill === 'transparent') (it as unknown as Record<string, unknown>)._hit = true
   }
 
