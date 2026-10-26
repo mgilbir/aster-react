@@ -147,6 +147,14 @@ at 1.05 and scatter evaluate at 1.04). The bar render is the document being larg
 grid lines carry the attributes Vega writes). `bench:incremental` (10,000 and 100,000 points) is within 0 to 5% on every row;
 `bench:browser`, 1,000 bars, four alternating runs, medians: `<Chart>` mount +2%, update -6%, resize -7%; the DOM variant +4%, -3%, -2%.
 
+Re-measured on the final tree (6 alternating runs, 80 fresh specs each, medians, load about 1), ratios against the code before
+this work: scatter compile 0.79, first evaluate 1.13, render 1.03, second evaluate 1.06; bar compile 0.72, first evaluate 1.09,
+render 1.05, second evaluate 0.92. A fresh compile + evaluate + render, 60 specs per kind in one process: line 0.80, bar 1.07.
+The known gap is the cold path, and it depends on what ran before: a fresh scatter is +3% after bar charts but +20 to 30% right after
+line charts (the code is still in the interpreter and baseline tiers for the first charts of a process). Warm, every phase is within 10%.
+Closing the cold gap would need a second, hand-written guide path, which this work deliberately does not have (one plan feeds every
+guide, so the output cannot drift between two paths).
+
 What made this cheap: a chart's guide marks are shared by every chart whose guide has the same content, config object, scale and orient
 (the merged default config is built once and frozen, so a spec without a config shares it), the entries of a guide are closures made once
 per entry and bound to an evaluation's scales (the marks' own evaluator is never called by a guide: sharing it made the marks' evaluation
