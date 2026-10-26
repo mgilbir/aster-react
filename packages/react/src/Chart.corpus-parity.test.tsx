@@ -92,7 +92,7 @@ describe('<SvgChart> renders what <Chart renderer="svg"> renders, over the whole
   beforeAll(async () => { specs = await Promise.all(corpusFiles().map(loadCorpusSpec)) }, 120_000)
 
   it('covers the whole corpus', () => {
-    expect(specs.length).toBeGreaterThanOrEqual(785)
+    expect(specs.length).toBeGreaterThanOrEqual(794)
   })
 
   it('server markup', () => {
