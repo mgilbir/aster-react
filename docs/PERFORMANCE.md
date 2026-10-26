@@ -133,11 +133,26 @@ the default-config fix Aster rendered such symbols unfilled (Vega draws them fil
 empty paint layer. The benchmark spec now states its fill, and the numbers above are the filled render on this
 machine. I measured them on the current stack; the reviewer reports that the pre-audit baseline gives the same numbers once the fill is explicit (I did not re-run that).
 
+### What the guides cost (2026-10-26)
+
+Axes, legends and titles are built by ports of vega-parser's guide encoders: every channel of every tick, grid line, label
+and legend entry is Vega's own encode, so the items carry what Vega's carry, and the document says what Vega's says
+(about 9% more bytes for a chart with a thousand ticks). The marks of a guide are planned once per compiled chart (the
+defaults from `config.style`, which channels are plain values, which depend on the datum, a tick position as a closure
+over its scale); each evaluation then runs only the channels that read the datum. Measured as CPU time of batches of
+evaluations of one compiled chart, nine runs alternating the tree before this work and this tree on a loaded machine
+(best batch of each run): a chart with 1,000 band ticks and 1,000 grid lines evaluates in 3.7 ms where it took 2.2 ms
+(1.7x), a 10,000-point line chart with ten ticks per axis is unchanged (5.3 ms, 1.05x), the small guide-heavy corpus
+charts (two axes and a legend, 50 items) cost 6% to 60% more per evaluation (0.2 to 0.4 ms, a tenth of a millisecond
+more) and their SVG serialization 5% to 11% more. `pnpm bench:incremental` (append, replace, DOM patch) is unchanged
+within noise; `pnpm bench:browser` mount / update / resize of the 1,000-bar chart is 12% to 19% slower (median), line
+and scatter within 17%.
+
 ## Bundle sizes
 
-`pnpm bench:bundle` (esbuild, minified, react external): `@aster/react` `<Chart>` 160.6 kB gzip
-(458.6 kB minified, 136.0 kB brotli), `<SvgChart>` from `@aster/react/lite` 145.1 kB gzip (419.2 kB minified, 123.8 kB brotli),
-`<SvgChart>` + `interaction` 154.8 kB gzip (443.2 kB minified, 131.5 kB brotli), vs react-vega 288.7 kB gzip and the official
+`pnpm bench:bundle` (esbuild, minified, react external): `@aster/react` `<Chart>` 162.0 kB gzip
+(462.0 kB minified, 137.0 kB brotli), `<SvgChart>` from `@aster/react/lite` 146.4 kB gzip (422.6 kB minified, 124.8 kB brotli),
+`<SvgChart>` + `interaction` 156.1 kB gzip (446.6 kB minified, 132.7 kB brotli), vs react-vega 288.7 kB gzip and the official
 vega-embed tutorial 288.0 kB.
 
 `pnpm --filter @aster/benchmarks run budget` bundles one tiny app per documented import pattern (esbuild, minify,
@@ -145,16 +160,16 @@ vega-embed tutorial 288.0 kB.
 MARGINAL: the addon's gzip added to the `@aster/core` app. The old rows measured each addon standalone, which
 double counted the code it shares with core (hit read 15.6 kB where an app pays about 5). Each budget is the measured
 size plus 0.5 kB (`packages/benchmarks/scripts/budget.mjs` holds the rationale); a change that needs more room edits
-the number in the same PR. Measured 2026-10-26 (the core rows grew by 3.1 kB with the runtime parity work: guide encoders, discretizing label formats, per-scope structure walk):
+the number in the same PR. Measured 2026-10-26 (the core rows grew by 4.4 kB with the runtime parity work: guide encoders, discretizing label formats, per-scope structure walk, and the plans that keep the guides fast):
 
 | Import pattern | Before (gzip kB) | Now (gzip kB) | Budget (kB) |
 |---|---|---|---|
-| `import { renderSpec } from '@aster/core'` | 123.0 | 126.2 | 126.7 |
-| `import { useChart } from '@aster/react'` | 164.1 | 129.7 | 130.2 |
-| `import { Chart } from '@aster/react'` | 163.9 | 160.6 | 161.1 |
-| `import { SvgChart } from '@aster/react/lite'` | n/a | 145.1 | 145.6 |
-| `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | n/a | 154.8 | 155.3 |
-| `import '@aster/react/vl'` + `<Chart>` | 218.3 | 214.8 | 215.3 |
+| `import { renderSpec } from '@aster/core'` | 123.0 | 127.5 | 128.0 |
+| `import { useChart } from '@aster/react'` | 164.1 | 131.1 | 131.6 |
+| `import { Chart } from '@aster/react'` | 163.9 | 162.0 | 162.5 |
+| `import { SvgChart } from '@aster/react/lite'` | n/a | 146.4 | 146.9 |
+| `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | n/a | 156.1 | 156.6 |
+| `import '@aster/react/vl'` + `<Chart>` | 218.3 | 216.1 | 216.6 |
 | core + `@aster/core/dom` (marginal) | 5.8 | 5.7 | 6.2 |
 | core + `@aster/core/canvas` (marginal) | 4.8 | 4.8 | 5.3 |
 | core + `@aster/core/hit` (marginal) | 5.1 | 5.0 | 5.5 |
@@ -180,7 +195,7 @@ The `useChart` and `<Chart>` rows fail if the field is removed or widened; `scri
 that fault and requires the budget to fail. The other direction (a list that is too narrow drops a registration) is
 caught by `pnpm check:bundle`, which bundles and executes each import pattern.
 
-The Vega-Lite compiler is 54.2 kB gzip on top of the base `<Chart>` (214.8 minus 160.6). Trimming the validation layer
+The Vega-Lite compiler is 54.1 kB gzip on top of the base `<Chart>` (216.1 minus 162.0). Trimming the validation layer
 (`packages/vl/src/validate.ts`: allow-lists derived from one table each, shared message templates, dead branches removed;
 no check dropped, every message unchanged) took `@aster/vl` from 180,940 to 176,836 bytes minified (-4.1 kB) and from
 55,828 to 55,606 bytes gzip level 9 (-0.2 kB): the validator is mostly unique error text, which gzip already compresses well.
