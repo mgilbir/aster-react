@@ -696,3 +696,41 @@ export function joinByValue(data: Row[]): Row[] {
   }
   return out
 }
+
+
+// --- marks shared between charts ---------------------------------------------------------------------------------------
+
+/**
+ * A key for a guide's spec: its content, written out (types tagged, so that NaN and null, 1 and '1' differ), or `undefined`
+ * when it holds anything that is not plain data or is large.
+ */
+export function contentKey(v: unknown, depth = 0): string | undefined {
+  if (v === undefined) return 'u'
+  if (v === null) return 'n'
+  switch (typeof v) {
+    case 'string': return 's' + v.length + ':' + v
+    case 'number': return 'd' + String(v)
+    case 'boolean': return v ? 'T' : 'F'
+    case 'object': {
+      if (depth > 6) return undefined
+      let out = isArr(v) ? '[' : '{'
+      for (const k in v as Rec) {
+        const part = contentKey((v as Rec)[k], depth + 1)
+        if (part === undefined) return undefined
+        out += (isArr(v) ? '' : k.length + ':' + k) + part + ','
+        if (out.length > 800) return undefined
+      }
+      return out + '}'
+    }
+    default: return undefined
+  }
+}
+
+const SHARED = new Map<string, unknown>()
+/** The marks another chart built for the same guide (same spec, same config object, same scale and orient). */
+export const sharedMarks = (key: string | undefined): unknown => (key === undefined ? undefined : SHARED.get(key))
+export function shareMarks(key: string | undefined, marks: unknown): void {
+  if (key === undefined) return
+  if (SHARED.size >= 300) SHARED.clear()
+  SHARED.set(key, marks)
+}

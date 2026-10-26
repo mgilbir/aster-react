@@ -171,3 +171,24 @@ export function mergeVegaConfig(...configs: Array<Cfg | undefined | null>): Cfg 
   }
   return out
 }
+
+
+let DEFAULT_MERGED: Cfg | undefined
+/**
+ * `mergeVegaConfig(vegaDefaultConfig())`, once, frozen: the config of every spec that gives none. Nothing reads a config
+ * and writes it back, so the compiled charts of such specs share it, and what is derived from it (the guides' config
+ * blocks, their marks) can be shared too.
+ */
+export function defaultMergedConfig(): Cfg {
+  if (DEFAULT_MERGED === undefined) {
+    const deepFreeze = (o: unknown): void => {
+      if (o !== null && typeof o === 'object' && !Object.isFrozen(o)) {
+        Object.freeze(o)
+        for (const k of Object.keys(o)) deepFreeze((o as Record<string, unknown>)[k])
+      }
+    }
+    DEFAULT_MERGED = mergeVegaConfig(vegaDefaultConfig())
+    deepFreeze(DEFAULT_MERGED)
+  }
+  return DEFAULT_MERGED
+}

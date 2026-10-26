@@ -335,9 +335,11 @@ interface GuideScope {
   path: number[]
   /** the next ordinal for a group item built directly in this scope */
   nextChild: { n: number }
-  scales: Map<string, CompiledScale>
-  /** the data sets declared in this scope: its `data`, the partition of a facet */
-  data: Set<string>
+  /** the scales this scope declares (the innermost of a name wins) */
+  scales: readonly CompiledScale[]
+  /** the data sets declared in this scope: its `data` (and, below, the partition of a facet) */
+  data: readonly { name: string }[]
+  facet?: string
   /** an instance at or after the aborted one is in this scope's subtree (or it is that instance): nothing laid it out */
   unsettled?: boolean
 }
@@ -3691,8 +3693,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     if (order >= 0) for (let up: GuideScope | undefined = ctx.scope; up && !up.unsettled; up = up.parent) up.unsettled = true
     const scope: GuideScope = {
       parent: ctx.scope, path, nextChild: { n: 0 }, unsettled: order >= 0,
-      scales: new Map((mark.scales ?? []).map((sc) => [sc.name, sc])),
-      data: new Set([...(mark.data ?? []).map((d) => d.name), ...(src.facetName !== undefined ? [src.facetName] : [])]),
+      scales: mark.scales ?? NO_DECLARED, data: mark.data ?? NO_DECLARED, facet: src.facetName,
     }
     const childCtx: EvalContext = {
       ...ctx,
@@ -4278,7 +4279,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
   // and the rest of the scope is made)
   let entriesFailed = false
   if (typeof tickCountRaw === 'string' && scaleType !== 'time' && scaleType !== 'utc') {
-    const own = ctx.scope.scales.get(channels[0]![1])
+    const own = scopeScale(ctx.scope, channels[0]![1])
     const late = own !== undefined && scaleIsLate(own, ctx.scope, ctx.chart)
     ctx.abort.failures.push({ path: ctx.scope.path, axis: Infinity, legend: index, ...(late ? { late: true } : {}) })
     if (!late) return null
@@ -4310,7 +4311,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
   const host = guideHost(ctx)
   const guides = chartGuides(ctx.chart)
   const built = buildLegendGuide({
-    store: guides.defs, keep: guides.evals > 1,
+    store: guides.evals > 1 ? (guides.defs ??= new Map()) : undefined, keep: guides.evals > 1,
     spec, config, encode: (legend.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
     channels, scale: scale as never, scaleType, scaleOf: (name) => ctx.scales.get(name) as never,
     values: resolveLegendValues({ values: spec.values } as unknown as CompiledLegend, ctx),
@@ -4399,17 +4400,23 @@ function makeGuideHost(ctx: EvalContext): GuideHost {
 interface ChartGuideState {
   evals: number
   styles: GuideStyles
-  names: { scales: Map<string, CompiledScale>; data: Set<string> }
-  defs: Map<object, unknown>
+  defs?: Map<object, unknown>
 }
 const GUIDES = '__guides'
+/** The styles of a chart whose config is the frozen default one are one object: the plans of the guides' marks are kept against it. */
+const DEFAULT_STYLES = new Map<object, GuideStyles>()
+function guideStylesOf(chart: CompiledChart): GuideStyles {
+  const style = chart.style
+  if (style === undefined || !Object.isFrozen(style) || chart.lineBreak !== undefined) return { styles: style ?? {}, lineBreak: chart.lineBreak }
+  let st = DEFAULT_STYLES.get(style)
+  if (st === undefined) DEFAULT_STYLES.set(style, (st = { styles: style, lineBreak: undefined }))
+  return st
+}
 function chartGuides(chart: CompiledChart): ChartGuideState {
   let st = (chart as unknown as Record<string, ChartGuideState | undefined>)[GUIDES]
   if (st === undefined) {
     st = {
-      evals: 0, styles: { styles: chart.style ?? {}, lineBreak: chart.lineBreak },
-      names: { scales: new Map(chart.scales.map((sc) => [sc.name, sc])), data: new Set(chart.data.map((d) => d.name)) },
-      defs: new Map(),
+      evals: 0, styles: guideStylesOf(chart),
     }
     // (kept on the chart itself, out of sight of enumeration and comparison: a weak map entry per chart made every scavenge
     // of a program that makes many charts slower)
@@ -4449,11 +4456,18 @@ function guideScalar(ctx: EvalContext, v: unknown): unknown {
 /** What an absent `own` / `cfg` / `encode` of a guide is: one object, so that what is kept against it is found again. */
 const NO_PROPS: Record<string, never> = {}
 
+const NO_DECLARED: readonly never[] = []
+/** The innermost scale of a name that a scope declares. */
+function scopeScale(scope: GuideScope, name: string): CompiledScale | undefined {
+  for (let i = scope.scales.length - 1; i >= 0; i--) if (scope.scales[i]!.name === name) return scope.scales[i]
+  return undefined
+}
+
 function rootScope(chart: CompiledChart): GuideScope {
   // (what the view declares is the compiled chart's; the scope's counters are the evaluation's)
   const st = chartGuides(chart)
   st.evals++
-  return { path: [], nextChild: { n: 0 }, scales: st.names.scales, data: st.names.data }
+  return { path: [], nextChild: { n: 0 }, scales: chart.scales, data: chart.data }
 }
 
 /**
@@ -4518,7 +4532,7 @@ function scaleIsLate(sdef: CompiledScale, scope: GuideScope, chart: CompiledChar
       const text = o.signal.trim()
       return /^[A-Za-z_$][\w$]*$/.test(text) && known(text) ? scope.parent === undefined && signalLate(text, new Set()) : true
     }
-    if (typeof o.data === 'string' && scope.data.has(o.data)) return true
+    if (typeof o.data === 'string' && (scope.facet === o.data || scope.data.some((d) => d.name === o.data))) return true
     return Object.values(o).some(late)
   }
   const { name: _name, type: _type, ...params } = sdef as unknown as Record<string, unknown>
@@ -4541,7 +4555,7 @@ function scaleIsLate(sdef: CompiledScale, scope: GuideScope, chart: CompiledChar
  */
 function axisTicksFailed(axis: CompiledAxis, ctx: EvalContext, e: unknown, index: number): SceneGroup | null {
   reportEvalError(ctx, e)
-  const own = ctx.scope.scales.get(axis.scale)
+  const own = scopeScale(ctx.scope, axis.scale)
   const late = own !== undefined && scaleIsLate(own, ctx.scope, ctx.chart)
   if (late && (axis.domain !== false || (axis.title !== undefined && axis.title !== null))) {
     throw new Error(`[aster] the ticks of the axis over scale "${axis.scale}" failed (${e instanceof Error ? e.message : String(e)}); vega cannot serialize the half-built axis either`)
@@ -4592,7 +4606,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
 
   const guides = chartGuides(ctx.chart)
   const built = buildAxisGuide({
-    store: guides.defs, keep: guides.evals > 1,
+    store: guides.evals > 1 ? (guides.defs ??= new Map()) : undefined, keep: guides.evals > 1,
     spec: own, cfg, scale: axis.scale, orient, encode: (axis.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
     ticks: rows, distinctTicks: !axisValues(axis, ctx) && DISTINCT_TICK_SCALES.has(ctx.scaleTypes.get(axis.scale) ?? ''), width: ctx.width, height: ctx.height, raw: !!ctx.rawGuides, host: guideHost(ctx), style: guideStyles(ctx),
   })

@@ -5,7 +5,7 @@
  */
 import { dict, ownGet } from './util.js'
 import { checkDataReferences, normalizeSpecLists } from './spec-structure.js'
-import { mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
+import { defaultMergedConfig, mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
 import type {
   CompiledAxis,
   CompiledChart,
@@ -37,7 +37,10 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
   // Vega parses a view with mergeConfig(defaultConfig(), spec.config): every
   // default below (mark, axis, legend, title, style, range...) is read from this
   // merged config, exactly as upstream does (see config-defaults.ts).
-  const mergedConfig = mergeVegaConfig(vegaDefaultConfig(), rawSpec.config as Record<string, unknown> | undefined) as Record<string, unknown>
+  const userConfig = rawSpec.config as Record<string, unknown> | undefined
+  const mergedConfig = (userConfig == null || (typeof userConfig === 'object' && !Array.isArray(userConfig) && Object.keys(userConfig).length === 0)
+    ? defaultMergedConfig()
+    : mergeVegaConfig(vegaDefaultConfig(), userConfig)) as Record<string, unknown>
   checkDataReferences(rawSpec, mergedConfig)
   markSeq = 0
   const spec: VgSpec = { ...rawSpec, config: mergedConfig as VgSpec['config'] }
@@ -312,6 +315,8 @@ function compileScale(s: Record<string, unknown>): CompiledScale {
  * scales are those the scope can see - so a nested group's axes follow
  * `config.axis` exactly as the top-level ones do (C51).
  */
+const AXIS_BLOCKS = new WeakMap<object, Map<string, Record<string, unknown>>>()
+
 function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: Record<string, unknown>, scales: CompiledScale[]): CompiledAxis[] {
   const cfgAxis = (cfg.axis ?? {}) as Record<string, unknown>
   const cfgAxisX = (cfg.axisX ?? {}) as Record<string, unknown>
@@ -331,13 +336,21 @@ function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: 
       continue
     }
     const orient = String(a.orient ?? '')
-    const defaults: Record<string, unknown> = { ...cfgAxis }
-    Object.assign(defaults, orient === 'top' || orient === 'bottom' ? cfgAxisX : cfgAxisY)
-    const orientBlock = (cfg as Record<string, Record<string, unknown>>)[`axis${orient.charAt(0).toUpperCase()}${orient.slice(1)}`]
-    if (orient && typeof orientBlock === 'object') Object.assign(defaults, orientBlock)
     // the innermost scale of that name wins (a group's own scale shadows the view's)
     const sc = [...scales].reverse().find((s) => s.name === a.scale)
-    if (sc?.type === 'band') Object.assign(defaults, cfgAxisBand)
+    const band = sc?.type === 'band'
+    // (the blocks of a config nobody can change are merged once: the guides' marks are kept against the result)
+    const memo = Object.isFrozen(cfg) ? AXIS_BLOCKS.get(cfg) ?? AXIS_BLOCKS.set(cfg, new Map()).get(cfg)! : undefined
+    const memoKey = `${orient}|${band}`
+    let defaults = memo?.get(memoKey)
+    if (defaults === undefined) {
+      defaults = { ...cfgAxis }
+      Object.assign(defaults, orient === 'top' || orient === 'bottom' ? cfgAxisX : cfgAxisY)
+      const orientBlock = (cfg as Record<string, Record<string, unknown>>)[`axis${orient.charAt(0).toUpperCase()}${orient.slice(1)}`]
+      if (orient && typeof orientBlock === 'object') Object.assign(defaults, orientBlock)
+      if (band) Object.assign(defaults, cfgAxisBand)
+      if (memo !== undefined) { Object.freeze(defaults); memo.set(memoKey, defaults) }
+    }
     axes.push(compileAxis(applyConfigDefaults(a, defaults, scales)))
   }
   return axes

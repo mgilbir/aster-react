@@ -16,7 +16,7 @@ import {
 } from './scale.js'
 import { overlapItems, type OverlapSpec } from './guide-axis.js'
 import {
-  addEncoders, encoder, encodeItem, extendEncode, getEncoding, guideMark, isSignal, itemAriaOf, joinByValue, lookup, one, value, zero,
+  addEncoders, encoder, encodeItem, extendEncode, getEncoding, guideMark, isSignal, itemAriaOf, joinByValue, lookup, one, shareMarks, sharedMarks, contentKey, value, zero,
   type Block, type Entry, type EntryHost, type EntryScope, type GuideMarkDef, type GuideStyles, type Lookup, type MarkEncode, type Row, type UserEncode,
 } from './guide-encode.js'
 
@@ -331,6 +331,13 @@ const made = (defs: LegendDefs, key: string, make: () => GuideMarkDef): GuideMar
   return def
 }
 
+function legendKey(spec: Rec, inp: LegendBuildInput, scale: string, type: string, vertical: boolean): string | undefined {
+  const a = contentKey(spec)
+  const e = a === undefined ? undefined : contentKey(inp.encode)
+  const c = e === undefined ? undefined : contentKey(inp.channels)
+  return c === undefined ? undefined : 'l' + scale + '|' + type + '|' + vertical + '|' + a + '|' + e + '|' + c
+}
+
 /** Build a legend from vega-parser's guides, evaluate it, lay it out. */
 export function buildLegend(inp: LegendBuildInput): LegendBuilt {
   const { spec, config, host, style } = inp
@@ -343,7 +350,13 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
   p.scale = inp.channels[0]?.[1] ?? ''
   let defs = inp.store?.get(spec) as LegendDefs | undefined
   if (defs === undefined || defs.config !== config || defs.encode !== inp.encode || defs.scale !== p.scale || defs.type !== type || defs.vertical !== vertical) {
-    defs = { config, encode: inp.encode, scale: p.scale, type, vertical, made: new Map(), packs: new Map() }
+    const sk = Object.isFrozen(config) ? legendKey(spec, inp, p.scale, type, vertical) : undefined
+    const hit = sharedMarks(sk) as LegendDefs | undefined
+    if (hit !== undefined && hit.config === config) defs = hit
+    else {
+      defs = { config, encode: inp.encode, scale: p.scale, type, vertical, made: new Map(), packs: new Map() }
+      shareMarks(sk, defs)
+    }
     if (inp.keep) inp.store?.set(spec, defs)
   }
   p.defs = defs
