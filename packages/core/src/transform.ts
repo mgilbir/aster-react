@@ -144,7 +144,8 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       const projection = projName != null ? ctx.projections?.get(String(projName)) : undefined
       if (projection != null && !geoRegistry.projectedPath) requireGeo() // throws: addon not loaded
       return rows.map((r) => {
-        const geo = field == null || field === 'datum' ? r : getField(r, field as string)
+        // vega's field is read off the scenegraph ITEM (`datum["geo"]` is item.datum.geo); a row here is the item's datum
+        const geo = field == null || field === 'datum' ? r : getField({ datum: r }, field as string)
         const p = projection != null
           ? geoRegistry.projectedPath!(projection, geo)
           : geoJSONPath(geo)
