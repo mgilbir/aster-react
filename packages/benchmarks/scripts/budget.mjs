@@ -25,17 +25,17 @@ import { fileURLToPath } from 'node:url'
 // core row grew (colour, calendar, format, transforms, scales, signals, limits, ...) is in docs/PERFORMANCE.md and the
 // git log of this file.
 //
-// Measured 2026-10-26 (kB gzip): core 128.4; marginal dom 5.7, canvas 4.8, hit 5.0, signals 4.4, load 5.1,
-// geo 12.3, transforms 15.1; useChart 131.9; Chart 162.8; Chart + VL 216.9; SvgChart 147.3; SvgChart + interaction 157.0.
-// The core rows grew by 5.3 kB (2026-10-23: core 123.1, useChart 126.4, Chart 157.2, Chart + VL 211.3, SvgChart 142.0,
-// SvgChart + interaction 151.5) with the runtime parity work (3.1 kB), the plans that keep it fast (1.3 kB) and the per-scope legend failure with the template batches (0.9 kB): axes, legends and titles are built by ports of vega-parser's
+// Measured 2026-10-26 (kB gzip): core 129.4; marginal dom 5.7, canvas 4.8, hit 5.0, signals 4.4, load 5.1,
+// geo 12.3, transforms 15.1; useChart 132.8; Chart 163.7; Chart + VL 217.8; SvgChart 148.2; SvgChart + interaction 157.8.
+// The core rows grew by 6.3 kB (2026-10-23: core 123.1, useChart 126.4, Chart 157.2, Chart + VL 211.3, SvgChart 142.0,
+// SvgChart + interaction 151.5) with the runtime parity work (3.1 kB), the plans that keep it fast (1.3 kB) the per-scope legend failure with the template batches (0.9 kB) and the leaf constructors (1.0 kB): axes, legends and titles are built by ports of vega-parser's
 // guide encoders (guide-encode / guide-axis / guide-legend / guide-title), the discretizing scales' label formats and
 // the per-scope structural walk of the spec replace the earlier approximations.
 // `<Chart>` was 156.5 (+ VL 210.7) before it became a shell over ChartCore with injected capabilities: the +0.7 is the
 // capability indirection (property reads the minifier cannot rename) and the report of a missing capability, which
 // `<Chart>` never needs but shares with `<SvgChart>` (one implementation is the point; see docs/ARCHITECTURE.md).
 const BUDGETS = {
-  '@aster/core': 128.9 * 1024,
+  '@aster/core': 129.9 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
   '+ @aster/core/canvas': 5.3 * 1024,
   '+ @aster/core/hit': 5.5 * 1024,
@@ -43,13 +43,13 @@ const BUDGETS = {
   '+ @aster/core/load': 5.6 * 1024,
   '+ @aster/core/geo': 12.8 * 1024,
   '+ @aster/core/transforms': 15.6 * 1024,
-  '@aster/react useChart': 132.4 * 1024,
-  '@aster/react Chart': 163.3 * 1024,
+  '@aster/react useChart': 133.3 * 1024,
+  '@aster/react Chart': 164.2 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 147.8 * 1024,
-  '@aster/react SvgChart + interaction': 157.5 * 1024,
+  '@aster/react SvgChart': 148.7 * 1024,
+  '@aster/react SvgChart + interaction': 158.3 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 217.4 * 1024,
+  '@aster/react Chart + VL': 218.3 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

@@ -18,7 +18,7 @@
     Vega's dataflow abort per scope: a clean cut after the axis for most scales, a refusal where Vega's own serializer
     crashes. Also fixed on the way: a scale in a group nested two levels deep ranges over the view's size, and an
     `orient: none` legend no longer widens the view by its `legendX` twice.
-  - The bundle budgets of the rows that contain `@aster/core` were raised by 5.3 kB gzip (128.9 kB for core). Guides cost
+  - The bundle budgets of the rows that contain `@aster/core` were raised by 6.3 kB gzip (129.9 kB for core). Guides cost
     more per item than before (every channel of every tick and label is Vega's own encode): see docs/PERFORMANCE.md.
 
 - **`<SvgChart>` (`@aster/react/lite`) and the `interaction` capability (`@aster/react/interaction`)**: an SVG-only chart
