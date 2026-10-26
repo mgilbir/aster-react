@@ -209,6 +209,9 @@ export interface EntryHost {
   /** a failing entry is reported and its channel is left unset */
   report(e: unknown): void
   /** a scale by name as an entry calls it (the engine's coercions around the call, its bandwidth), for the entries that read one */
+  /** what this evaluation made of the steps' entries (closures over its scales) and of the per-run ones: it, not the steps, keeps them */
+  fastCache: Map<object, unknown>
+  runCache: Map<object, unknown>
   entryScale?(name: string): { call(raw: unknown): unknown; bandwidth(): number; /** the scale itself, and whether a string is read as a date by it */ fn: (v: unknown) => unknown; timeLike: boolean } | undefined
 }
 
@@ -338,11 +341,14 @@ function analyseEntry(e: unknown): Binder | undefined {
 
 /** The closure for a step's entry in an evaluation, if it has one of the written-out shapes (analysed once, kept on the step). */
 function fastOf(st: Step, host: EntryHost): Fast | null {
-  if (st.fastHost === host) return st.fast ?? null
-  if (st.binder === undefined) st.binder = (analyseScaleEntry(st.entry as object) ?? analyseEntry(st.entry)) ?? null
-  st.fast = st.binder !== null ? st.binder(host) ?? null : null
-  st.fastHost = host
-  return st.fast
+  // (the closure belongs to the evaluation, which keeps it: a step that kept it would keep the evaluation's scales alive)
+  let f = host.fastCache.get(st) as Fast | null | undefined
+  if (f === undefined) {
+    if (st.binder === undefined) st.binder = (analyseScaleEntry(st.entry as object) ?? analyseEntry(st.entry)) ?? null
+    f = st.binder !== null ? st.binder(host) ?? null : null
+    host.fastCache.set(st, f)
+  }
+  return f
 }
 
 /** One channel of a block, classified once per mark: a plain value, a transcribed function, or an encode entry. */
@@ -355,14 +361,10 @@ interface Step {
   /** 0 constant, 1 function, 2 encode entry, 3 an entry that does not depend on the datum (evaluated once) */
   kind: 0 | 1 | 2 | 3 | 4
   cached?: boolean
-  /** the entry written out for its shape (see analyseScaleEntry), made with the first item; `null` when it has none */
-  fast?: ((datum: Row) => unknown) | null
   /** the evaluation `fast` was made for (it holds that evaluation's scale) */
-  fastHost?: EntryHost
   /** the entry's shape, analysed once (`null`: it has none of the written-out shapes) */
   binder?: Binder | null
   /** a per-run entry: its value, and the evaluation it was made in */
-  runHost?: EntryHost
 }
 
 /** An encode entry that is only numbers and words through `mult` / `offset` / `round` / `exponent`: the same for every datum. */
@@ -378,7 +380,7 @@ function isStaticEntry(e: object): boolean {
 
 /** A step with every field set, in one order: all steps share one shape. */
 const step = (key: string, kind: Step['kind'], fn?: EntryFn, entry?: EncodeValue | EncodeValue[], v?: unknown): Step =>
-  ({ key, fn, entry, v, kind, cached: false, fast: undefined, fastHost: undefined, binder: undefined, runHost: undefined })
+  ({ key, fn, entry, v, kind, cached: false, binder: undefined })
 
 function stepsOf(block: Block, done?: Block): Step[] {
   const steps: Step[] = []
@@ -424,8 +426,8 @@ function runSteps(steps: Step[], scope: EntryScope): void {
   for (let i = 0; i < steps.length; i++) {
     const st = steps[i]!
     let v: unknown
-    if (st.kind === 0 || (st.kind === 3 && st.cached === true) || (st.kind === 4 && st.runHost === host)) {
-      v = st.v
+    if (st.kind === 0 || (st.kind === 3 && st.cached === true) || (st.kind === 4 && host.runCache.has(st))) {
+      v = st.kind === 4 ? host.runCache.get(st) : st.v
     } else {
       try {
         if (st.kind === 1 || st.kind === 4) {
@@ -438,7 +440,7 @@ function runSteps(steps: Step[], scope: EntryScope): void {
         host.report(err)
         continue
       }
-      if (st.kind === 3) { st.v = v; st.cached = true } else if (st.kind === 4) { st.v = v; st.runHost = host }
+      if (st.kind === 3) { st.v = v; st.cached = true } else if (st.kind === 4) host.runCache.set(st, v)
     }
     // (vega's Encode assigns every channel, an undefined value too: an `update` entry that is undefined clears the `enter` one)
     item[st.key] = v
@@ -539,19 +541,18 @@ export function encodeItems(def: GuideMarkDef, rows: Row[], group: Rec, host: En
       const st = steps[i]!
       if (st.kind === 3 || st.kind === 4) {
         // (the same for every datum: evaluated once, for the evaluation or for good, as the steps do for the first item)
-        if (st.kind === 3 ? st.cached !== true : st.runHost !== host) {
+        if (st.kind === 3 ? st.cached !== true : !host.runCache.has(st)) {
           try {
             const sf = st.kind === 3 ? fastOf(st, host) : null
             const v = st.kind === 4 ? st.fn!(first) : sf !== null ? sf(rows[0]!) : host.entry(st.entry!, rows[0]!)
-            st.v = v
-            if (st.kind === 4) st.runHost = host
-            else st.cached = true
+            if (st.kind === 4) host.runCache.set(st, v)
+            else { st.v = v; st.cached = true }
           } catch (err) {
             host.report(err)
             continue
           }
         }
-        tmpl[st.key] = st.v
+        tmpl[st.key] = st.kind === 4 ? host.runCache.get(st) : st.v
       } else {
         const pf = fastOf(st, host)
         per.push({ key: st.key, fast: pf ?? ((d) => host.entry(st.entry!, d)) })

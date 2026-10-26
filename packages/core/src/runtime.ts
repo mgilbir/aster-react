@@ -4357,6 +4357,7 @@ function guideHost(ctx: EvalContext): GuideHost {
 function makeGuideHost(ctx: EvalContext): GuideHost {
   return {
     entry: (spec, datum) => resolveEncodeProperty(spec as EncodeValue | EncodeValue[], datum, ctx),
+    fastCache: new Map(), runCache: new Map(),
     entryScale: (name) => {
       const s = ctx.scales.get(name)
       if (!s) return undefined
