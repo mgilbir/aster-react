@@ -24,6 +24,7 @@ export type {
 } from './types.js'
 export { compileChart } from './compiler.js'
 export { DEFAULT_CURSOR, resolveCursor } from './cursor.js'
+export { clientToSvg, createPointMapper, type PointMapper } from './pointer.js'
 export { chartInfoFromScene, evaluateChart, getChartInfo } from './runtime.js'
 export {
   createChartStream,

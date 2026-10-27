@@ -434,3 +434,53 @@ describe('group scopes in the signal loop', () => {
     t.binding.detach()
   })
 })
+
+describe('pointer -> view coordinates (vega-scenegraph point(): the inverse of the svg screen CTM)', () => {
+  const spec = {
+    width: 200, height: 100, padding: { left: 30, top: 12, right: 5, bottom: 5 },
+    signals: [{ name: 'px', value: null, on: [{ events: 'mousemove', update: '[x(), y()]' }] }],
+    data: [{ name: 't', values: [{ x: 1 }] }],
+    marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { value: 5 }, width: { value: 50 }, y: { value: 5 }, height: { value: 50 }, fill: { value: '#4c78a8' } } } }],
+  } as unknown as VgSpec
+
+  const run = (setup: (svg: SVGSVGElement) => void, clientX: number, clientY: number): unknown => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const scene = evaluateChart(compileChart(structuredClone(spec)))
+    host.innerHTML = renderSceneToSvg(scene)
+    const svg = host.querySelector('svg') as SVGSVGElement
+    setup(svg)
+    let last: unknown = null
+    const binding = bindSceneSignals(svg, scene, {}, { onSignal: (_n, v) => { last = v } })
+    svg.dispatchEvent(new MouseEvent('mousemove', { clientX, clientY, bubbles: true }))
+    binding.detach()
+    host.remove()
+    return last
+  }
+  const ctm = (m: Partial<DOMMatrix>) => (svg: SVGSVGElement): void => { svg.getScreenCTM = () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0, ...m } as DOMMatrix) }
+
+  it('is the client point minus the svg origin and the view padding when nothing scales the svg', () => {
+    expect(run(ctm({ e: 100, f: 50 }), 142, 90)).toEqual([142 - 100 - 30, 90 - 50 - 12])
+  })
+
+  it('unscales a CSS-scaled svg (a viewBox against a smaller width): the pointer maps to view units, not pixels', () => {
+    // 0.5 px per svg unit, the svg at (100, 50): client (150, 100) is svg (100, 100)
+    expect(run(ctm({ a: 0.5, d: 0.5, e: 100, f: 50 }), 150, 100)).toEqual([100 - 30, 100 - 12])
+  })
+
+  it('follows a CSS transform on an ancestor (rotation and translation)', () => {
+    // a quarter turn: client = (e - svgY, f + svgX) -> svg (x, y) = (clientY - f, e - clientX)
+    expect(run(ctm({ a: 0, b: 1, c: -1, d: 0, e: 300, f: 20 }), 280, 90)).toEqual([90 - 20 - 30, 300 - 280 - 12])
+  })
+
+  it('without a screen CTM (no layout), unscales the bounding rect by its size over the layout size, then the border', () => {
+    const setup = (svg: SVGSVGElement): void => {
+      svg.getBoundingClientRect = () => ({ left: 10, top: 20, width: 120, height: 60 } as DOMRect)
+      Object.defineProperty(svg, 'offsetWidth', { value: 240 })
+      Object.defineProperty(svg, 'offsetHeight', { value: 120 })
+      Object.defineProperty(svg, 'clientLeft', { value: 2 })
+      Object.defineProperty(svg, 'clientTop', { value: 3 })
+    }
+    expect(run(setup, 70, 80)).toEqual([(70 - 10) / 0.5 - 2 - 30, (80 - 20) / 0.5 - 3 - 12])
+  })
+})

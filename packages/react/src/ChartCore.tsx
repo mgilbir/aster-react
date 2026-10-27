@@ -5,6 +5,7 @@ import {
   renderSceneToSvg,
   AsterLimitError,
   checkSvgLength,
+  createPointMapper,
   resolveCursor,
   type A11yNode,
   type A11yOptions,
@@ -754,7 +755,7 @@ function ChartView({
       onData: (name, rows) => dataStore.merge({ [name]: rows }),
       ...(stableLogger ? { logger: stableLogger } : {}),
       ...(preventDefault != null ? { preventDefault } : {}),
-    }, { pick: (x, y) => hitIndexFor(displayScene ?? scene)?.query(x, y) ?? null, containerSize: liveContainerSize, ...(inputData ? { data: inputData } : {}), ...(host ? { owner: host } : {}) })
+    }, { pick: (x, y) => hitIndexFor(displayScene ?? scene)?.pick(x, y) ?? null, containerSize: liveContainerSize, ...(inputData ? { data: inputData } : {}), ...(host ? { owner: host } : {}) })
     signalBindingRef.current = binding
     // a binding on a different host than the last one: the old host's timer streams are done
     const prev = lastBindingRef.current
@@ -845,9 +846,18 @@ function ChartView({
   const gestureStartRef = React.useRef<{ x: number; y: number } | null>(null)
   const dragRef = React.useRef<{ start: { x: number; y: number }; end: { x: number; y: number } } | null>(null)
   const capturedRef = React.useRef<number | null>(null)
+  const cssStartRef = React.useRef<{ x: number; y: number }>({ x: 0, y: 0 })
   const panLastRef = React.useRef<{ x: number; y: number } | null>(null)
   const pointersRef = React.useRef<Map<number, { x: number; y: number }>>(new Map())
   const pinchRef = React.useRef<{ dist: number; cx: number; cy: number } | null>(null)
+
+  // The pointer in the chart's own coordinates (the svg's user space; vega-scenegraph point()), read through the svg's screen
+  // CTM so a CSS-scaled, bordered or transformed chart maps right. Measured once and reused (no layout read per move); forgotten
+  // by `invalidatePointer` on anything that can change it.
+  const pointerMapper = React.useMemo(
+    () => createPointMapper(() => svgHostRef.current?.querySelector('svg, canvas') ?? containerRef.current),
+    [],
+  )
 
   const zoomAxes = React.useCallback((axes: Array<'x' | 'y'>, px: number, py: number, factor: number) => {
     const info = chartInfoRef.current
@@ -884,16 +894,14 @@ function ChartView({
     const onWheel = (evt: WheelEvent): void => {
       if (Math.abs(evt.deltaX) < 0.01 && Math.abs(evt.deltaY) < 0.01) return
       evt.preventDefault()
-      const rect = el.getBoundingClientRect()
-      const px = evt.clientX - rect.left
-      const py = evt.clientY - rect.top
+      const [px, py] = pointerMapper.map(evt.clientX, evt.clientY)
       const factor = Math.exp(-evt.deltaY * (evt.ctrlKey ? 0.01 : 0.0015))
       const axes: Array<'x' | 'y'> = Math.abs(evt.deltaX) > Math.abs(evt.deltaY) ? ['x'] : ['x', 'y']
       zoomAxes(axes, px, py, factor)
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [zoomEnabled, zoomAxes])
+  }, [zoomEnabled, zoomAxes, pointerMapper])
 
   // Pointer gestures live on the container, so the marks underneath keep
   // receiving their own events (tooltips, `signal.on`, bound inputs). Pointer
@@ -921,8 +929,7 @@ function ChartView({
     if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
+    const [x, y] = pointerMapper.map(e.clientX, e.clientY)
     pointersRef.current.set(e.pointerId, { x, y })
     if (pointersRef.current.size === 2) {
       if (g.zoomEnabled) {
@@ -942,15 +949,16 @@ function ChartView({
       panLastRef.current = { x, y }
     } else if (gestureRef.current === 'select') {
       dragRef.current = { start: { x, y }, end: { x, y } }
-      setDragRect({ x, y, width: 0, height: 0 })
+      // (the live rectangle is drawn in the container's own pixels)
+      cssStartRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+      setDragRect({ x: cssStartRef.current.x, y: cssStartRef.current.y, width: 0, height: 0 })
     }
-  }, [])
+  }, [pointerMapper])
 
   const handlePointerMove = React.useCallback((e: React.PointerEvent) => {
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
+    const [x, y] = pointerMapper.map(e.clientX, e.clientY)
     const g = gestureInputsRef.current
     if (pointersRef.current.has(e.pointerId)) pointersRef.current.set(e.pointerId, { x, y })
     if (pinchRef.current && pointersRef.current.size === 2) {
@@ -1004,21 +1012,19 @@ function ChartView({
     const drag = dragRef.current
     if (gesture === 'select' && drag != null) {
       drag.end = { x, y }
-      setDragRect({
-        x: Math.min(drag.start.x, x), y: Math.min(drag.start.y, y),
-        width: Math.abs(x - drag.start.x), height: Math.abs(y - drag.start.y),
-      })
+      const cx = e.clientX - rect.left
+      const cy = e.clientY - rect.top
+      const c0 = cssStartRef.current
+      setDragRect({ x: Math.min(c0.x, cx), y: Math.min(c0.y, cy), width: Math.abs(cx - c0.x), height: Math.abs(cy - c0.y) })
     }
-  }, [zoomAxes, endGesture])
+  }, [zoomAxes, endGesture, pointerMapper])
 
   const handlePointerUp = React.useCallback((e: React.PointerEvent) => {
     const g = gestureInputsRef.current
     const gesture = gestureRef.current
     const drag = dragRef.current
-    const rect = containerRef.current?.getBoundingClientRect()
-    if (gesture === 'select' && drag != null && rect) {
-      const x = e.clientX - rect.left
-      const y = e.clientY - rect.top
+    if (gesture === 'select' && drag != null) {
+      const [x, y] = pointerMapper.map(e.clientX, e.clientY)
       const dx = x - drag.start.x
       const dy = y - drag.start.y
       if (Math.abs(dx) < 3 && Math.abs(dy) < 3) {
@@ -1046,7 +1052,7 @@ function ChartView({
       }
     }
     endGesture(e)
-  }, [endGesture, hitIndexFor, interaction])
+  }, [endGesture, hitIndexFor, interaction, pointerMapper])
 
   // --- accessibility -------------------------------------------------------
   const a11yOpts = React.useMemo(
@@ -1179,7 +1185,8 @@ function ChartView({
       if (!rect) return
       if (renderer === 'canvas' || denseSvg) {
         // Canvas backend (and batched SVG marks): resolve through the scene hit index.
-        const target = hitIndexFor(displayScene)?.queryMark(e.clientX - rect.left, e.clientY - rect.top)
+        const [sx, sy] = pointerMapper.map(e.clientX, e.clientY)
+        const target = hitIndexFor(displayScene)?.queryMark(sx, sy)
         const datum = target?.item.datum as Record<string, unknown> | undefined
         setTooltipInfo(datum != null && typeof datum === 'object' ? { datum, x: e.clientX - rect.left, y: e.clientY - rect.top } : null)
         return
@@ -1194,7 +1201,7 @@ function ChartView({
         setTooltipInfo({ datum, x: e.clientX - rect.left, y: e.clientY - rect.top })
       } catch { setTooltipInfo(null) }
     },
-    [tooltipEnabled, renderer, denseSvg, displayScene, hitIndexFor],
+    [tooltipEnabled, renderer, denseSvg, displayScene, hitIndexFor, pointerMapper],
   )
 
   const handleTooltipLeave = React.useCallback(() => {
@@ -1216,10 +1223,6 @@ function ChartView({
     eventConfig: (scene as { compiled?: { eventConfig?: unknown } } | null)?.compiled?.eventConfig,
   }
   const cursorTrackerRef = React.useRef<CursorTracker | null>(null)
-  // The container's client origin and scale, measured at the first move after anything that can change it (a layout read per move is the
-  // cost of the cursor on a chart with item cursors): a commit, a resize, a scroll of the window or of any ancestor, the
-  // pointer entering the container.
-  const cursorRectRef = React.useRef<{ x: number; y: number; sx: number; sy: number } | null>(null)
   const handleCursorMove = React.useCallback((e: { clientX: number; clientY: number }) => {
     const live = cursorLiveRef.current
     const cap = live.interaction
@@ -1231,17 +1234,10 @@ function ChartView({
         pick: (clientX, clientY) => {
           const l = cursorLiveRef.current
           if (l.displayScene == null || l.interaction == null || !l.interaction.sceneHasCursor(l.displayScene)) return null
-          const el = containerRef.current
-          if (!el) return null
-          // vega-scenegraph point(): the client position minus the element's rect and border; also divided by the scale of a
-          // transformed ancestor (the rect is in screen pixels, the scene in the element's own)
-          const m = (cursorRectRef.current ??= (() => {
-            const r = el.getBoundingClientRect()
-            const sx = el.offsetWidth > 0 && r.width > 0 ? r.width / el.offsetWidth : 1
-            const sy = el.offsetHeight > 0 && r.height > 0 ? r.height / el.offsetHeight : 1
-            return { x: r.left + (el.clientLeft || 0) * sx, y: r.top + (el.clientTop || 0) * sy, sx, sy }
-          })())
-          return l.hitIndexFor(l.displayScene)?.pick((clientX - m.x) / m.sx, (clientY - m.y) / m.sy) ?? null
+          // the same map as the signal loop's, read once (a layout read per move is the cost of the cursor on a chart with
+          // item cursors; see `pointerMapper`)
+          const [px, py] = pointerMapper.map(clientX, clientY)
+          return l.hitIndexFor(l.displayScene)?.pick(px, py) ?? null
         },
         user: () => cursorLiveRef.current.user,
         onCursor: setCursor,
@@ -1249,28 +1245,35 @@ function ChartView({
       })
     }
     cursorTrackerRef.current.move(e.clientX, e.clientY)
-  }, [])
+  }, [pointerMapper])
   // Only a chart with something to show listens: an item of the scene has a cursor, or a `cursor` signal exists. A native
   // listener (the pointer moves hundreds of times a second; a synthetic event for each is not needed to read a point).
   const watchCursor = interaction != null && displayScene != null && (interaction.sceneHasCursor(displayScene) || userCursor !== undefined)
-  React.useLayoutEffect(() => { cursorRectRef.current = null })
+  // The map is measured at the first use after anything that can change it: a commit, a resize, a scroll of the window or of
+  // any ancestor, the pointer entering the container. Only a chart that reads the pointer listens.
+  React.useLayoutEffect(() => { pointerMapper.invalidate() })
+  const readsPointer = watchCursor || hasInteraction || tooltipEnabled || zoomEnabled
   React.useEffect(() => {
     const el = containerRef.current
-    if (!watchCursor || !el) return
-    const forget = (): void => { cursorRectRef.current = null }
-    el.addEventListener('pointermove', handleCursorMove, { passive: true })
+    if (!readsPointer || !el) return
+    const forget = (): void => pointerMapper.invalidate()
     el.addEventListener('pointerenter', forget, { passive: true })
     window.addEventListener('scroll', forget, { capture: true, passive: true })
     window.addEventListener('resize', forget, { passive: true })
     const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(forget) : null
     ro?.observe(el)
     return () => {
-      el.removeEventListener('pointermove', handleCursorMove)
       el.removeEventListener('pointerenter', forget)
       window.removeEventListener('scroll', forget, { capture: true })
       window.removeEventListener('resize', forget)
       ro?.disconnect()
     }
+  }, [readsPointer, pointerMapper, scene === null])
+  React.useEffect(() => {
+    const el = containerRef.current
+    if (!watchCursor || !el) return
+    el.addEventListener('pointermove', handleCursorMove, { passive: true })
+    return () => el.removeEventListener('pointermove', handleCursorMove)
   }, [watchCursor, handleCursorMove, scene === null])
   // the spec's `cursor` signal changed (vega: its operator re-runs)
   React.useLayoutEffect(() => {

@@ -146,7 +146,9 @@ forEachVariant(['svg'], (Chart, variant) => {
       const m = mount({ spec: s })
       let reads = 0
       let left = 0
-      m.container.getBoundingClientRect = () => { reads++; return { left, top: 0, right: left + 216, bottom: 136, width: 216, height: 136 } as DOMRect }
+      // (the chart's svg is what the pointer is mapped into; jsdom has no screen CTM, so its bounding rect is read)
+      const svg = m.container.querySelector('svg')!
+      svg.getBoundingClientRect = () => { reads++; return { left, top: 0, right: left + 216, bottom: 136, width: 216, height: 136 } as DOMRect }
       m.move(p.rect)
       expect(reads, 'the first move').toBe(1)
       // (the cursor changed: that commit forgets the measure once)

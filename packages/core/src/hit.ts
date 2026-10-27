@@ -241,8 +241,8 @@ function polysBox(polys: Poly[]): [number, number, number, number] | null {
 
 const isFilled = (it: { fill?: unknown }): boolean => it.fill != null && (it.fill as unknown) !== false
 const isStroked = (it: { stroke?: unknown }): boolean => it.stroke != null && (it.stroke as unknown) !== false && it.stroke !== 'transparent'
-const strokeTol = (it: { stroke?: unknown; strokeWidth?: unknown }): number =>
-  (isStroked(it) ? (((it.strokeWidth as number | undefined) ?? 1) / 2) : 0) + SLACK
+const strokeTol = (it: { stroke?: unknown; strokeWidth?: unknown }, slack = SLACK): number =>
+  (isStroked(it) ? (((it.strokeWidth as number | undefined) ?? 1) / 2) : 0) + slack
 
 // ---------------------------------------------------------------------------
 
@@ -256,12 +256,11 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     const gy = ty + (group.y ?? 0)
     const type = group.marktype
     if (!type || type === 'group') {
-      // vega-scenegraph marks/group.js pick: a group item that has a fill (or a stroke) is hit over its box, below its content
-      if (rec(group)._scope === true && group.interactive !== false && (rec(group).fill || rec(group).stroke)) {
-        const w = Number(group.width ?? 0)
-        const h = Number(group.height ?? 0)
-        if (w > 0 && h > 0) entries.push({ item: group, marktype: 'group', kind: 'band', groupBox: true, x1: gx, y1: gy, x2: gx + w, y2: gy + h })
-      }
+      // a group item's own box (vega-scenegraph marks/group.js): its background is painted under the content, its
+      // foreground over it. What the pointer meets is the painted rectangle -- the fill inside it, the stroke along it --
+      // exactly as the browser tests the `path.background` / `path.foreground` of the SVG.
+      const box = rec(group)._scope === true && group.interactive !== false ? groupBoxFaces(group, gx, gy) : { background: null, foreground: null }
+      if (box.background) entries.push(box.background)
       // an axis or a legend: its leaves are the marks of its parts, each interactive only if the spec said so
       const guide = rec(group)._scope !== true && (group.role === 'axis' || group.role === 'legend') ? group : null
       const meta = guide ? (outer?.partMeta ?? guide.partMeta) : undefined
@@ -276,6 +275,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
           addGuidePart(item, gx, gy, guide)
         }
       }
+      if (box.foreground) entries.push(box.foreground)
       return
     }
     const e0 = entries.length
@@ -306,6 +306,25 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     // paint-ordered and a single reverse scan yields the topmost.
     for (const e of rectOrder) entries.push(e)
     rectOrder.length = 0
+  }
+
+  /** The entries of a group item's background and foreground rectangles, at (gx, gy). */
+  function groupBoxFaces(group: SceneGroup, gx: number, gy: number): { background: Entry | null; foreground: Entry | null } {
+    const items = (group.items ?? []) as SceneItem[]
+    const isBox = (it: SceneItem | undefined): it is SceneItem => it !== undefined && rec(it)._bg === true && typeof it.path === 'string'
+    const face = (paint: { fill?: unknown; stroke?: unknown; strokeWidth?: unknown }, path: string): Entry | null => {
+      const e = geomEntry(group, 'group', () => flattenPath(path, (x, y) => [gx + x, gy + y]), paint, undefined, 0)
+      if (e) e.groupBox = true
+      return e
+    }
+    if (isBox(items[0])) {
+      const fg = items.length > 1 ? items[items.length - 1] : undefined
+      return { background: face(items[0], items[0].path as string), foreground: isBox(fg) ? face(fg, fg.path as string) : null }
+    }
+    // a scene without the boxes the runtime draws: the group's own rectangle
+    const w = Number(group.width ?? 0)
+    const h = Number(group.height ?? 0)
+    return { background: w > 0 && h > 0 ? face(group as SceneItem, `M0,0h${w}v${h}h${-w}Z`) : null, foreground: null }
   }
 
   /** Text entry from the layout's own text bounds, rotated about the anchor. */
@@ -383,14 +402,14 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   }
 
   /** A geometry entry: outline `build`t lazily, its bounding box (+ tolerance) known up front. */
-  function geomEntry(item: SceneItem, marktype: string, build: () => Poly[], paintSource: { fill?: unknown; stroke?: unknown; strokeWidth?: unknown }, resolve?: Entry['resolve']): Entry | null {
+  function geomEntry(item: SceneItem, marktype: string, build: () => Poly[], paintSource: { fill?: unknown; stroke?: unknown; strokeWidth?: unknown }, resolve?: Entry['resolve'], slack = SLACK): Entry | null {
     const polys = build()
     const box = polysBox(polys)
     if (!box) return null
     const fill = isFilled(paintSource)
     const stroke = isStroked(paintSource)
     if (!fill && !stroke) return null
-    const tol = stroke ? strokeTol(paintSource) : SLACK
+    const tol = stroke ? strokeTol(paintSource, slack) : slack
     return {
       item, marktype, kind: 'geom', polys, build, fill, tol, resolve,
       x1: box[0] - tol, y1: box[1] - tol, x2: box[2] + tol, y2: box[3] + tol,
@@ -467,10 +486,22 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
             return
           }
         }
+        // the browser (and vega's canvas pick) tests the painted rectangle: the fill inside it, the stroke along it -- half
+        // the stroke width outside it, and with no fill, only the stroke
+        const sw = isStroked(item) ? ((item.strokeWidth as number | undefined) ?? 1) / 2 : 0
+        if (!isFilled(item) && sw > 0) {
+          const d = rectItemPath({ ...item, x: x0, y: y0, width: w, height: h } as SceneItem)
+          if (d != null) {
+            const polys = flattenPath(d, (x, y) => [tx + x, ty + y])
+            const box = polysBox(polys)
+            if (box) rectOrder.push({ item, marktype, kind: 'geom', polys, fill: false, tol: sw, x1: box[0] - sw, y1: box[1] - sw, x2: box[2] + sw, y2: box[3] + sw })
+            return
+          }
+        }
         const lo = (a: number, b: number): number => Math.min(a, b)
         const hi = (a: number, b: number): number => Math.max(a, b)
         rectOrder.push({ item, marktype, kind: 'band' as const,
-          x1: tx + lo(x0, x0 + w), y1: ty + lo(y0, y0 + h), x2: tx + hi(x0, x0 + w), y2: ty + hi(y0, y0 + h) })
+          x1: tx + lo(x0, x0 + w) - sw, y1: ty + lo(y0, y0 + h) - sw, x2: tx + hi(x0, x0 + w) + sw, y2: ty + hi(y0, y0 + h) + sw })
         return
       }
       case 'symbol':
@@ -612,7 +643,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   type Mode = 0 | 1 | 2
   const ALL = 0, DATA = 1, PICK = 2
   const skipped = (e: Entry, mode: Mode): boolean =>
-    mode === PICK ? e.inert === true : e.pickOnly === true || (mode === DATA && (e.item.datum == null || e.groupBox === true))
+    mode === PICK ? e.inert === true : e.pickOnly === true || (mode === DATA && (e.inert === true || e.item.datum == null || e.groupBox === true))
 
   const found = (e: Entry, x: number, y: number): HitTarget => ({ item: e.resolve ? e.resolve(x, y) : e.item, marktype: e.marktype })
 

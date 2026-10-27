@@ -282,7 +282,7 @@ describe('text hits follow the layout text box, rotated', () => {
     const scene = evaluateChart(compileChart({
       width: 200, height: 100, padding: 30, autosize: 'none',
       scales: [{ name: 'x', type: 'linear', domain: [0, 100], range: 'width' }],
-      axes: [{ scale: 'x', orient: 'bottom', labelAngle: 90, labelAlign: 'right', labelBaseline: 'middle', labelFontSize: 14 }],
+      axes: [{ scale: 'x', orient: 'bottom', labelAngle: 90, labelAlign: 'right', labelBaseline: 'middle', labelFontSize: 14, encode: { labels: { interactive: true } } }],
     } as never))
     const axis = scene.items.find((g) => g.role === 'axis')!
     const labels = collectTexts(axis)

@@ -202,6 +202,73 @@ async function suite(page: Page): Promise<void> {
   check(last('shifted') === 1, `click[event.shiftKey] fired once, for the shifted click only (${JSON.stringify(last('shifted'))})`)
   check(entries.filter((e) => e.name === 'signal:overName').map((e) => e.args[1]).includes('b'), '@dots:mouseover fired with the hovered datum')
 
+  // ---- 2c. the pointer maps to view units whatever the host does to the svg ----------------------------------
+  // (vega-scenegraph point(): the inverse of the svg's screen CTM; the oracle here is the browser's own DOMMatrix inverse, so
+  // agreement is to a thousandth of a pixel; exact agreement with vega is the selections gate's)
+  console.log('[pointer] x() / y() in a CSS-scaled, bordered, transformed svg')
+  const pointerSpec = spec({ signals: [{ name: 'at', value: null, on: [{ events: 'pointermove', update: '[x(), y()]' }] }] })
+  for (const [label, css] of [
+    ['unstyled', ''],
+    ['max-width (scaled by its viewBox)', '#chart-host svg { max-width: 300px; height: auto }'],
+    ['bordered and padded svg', '#chart-host svg { border: 7px solid #888; padding: 11px }'],
+    ['under a CSS transform', '#chart-host { transform: scale(0.75); transform-origin: 20px 10px }'],
+  ] as const) {
+    await mount(page, pointerSpec, { width: 400, height: 240 }, [], ['at'])
+    await page.evaluate((c) => { let st = document.getElementById('host-css'); if (!st) { st = document.createElement('style'); st.id = 'host-css'; document.head.appendChild(st) } st.textContent = c }, css)
+    const pbox0 = await page.evaluate(() => { const r = document.querySelector('#chart-host svg')!.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height } })
+    for (const [fx, fy] of [[0.3, 0.4], [0.8, 0.7]] as const) {
+      const cx = pbox0.x + fx * pbox0.w
+      const cy = pbox0.y + fy * pbox0.h
+      await page.mouse.move(cx, cy)
+      await page.waitForTimeout(30)
+      const expected = await page.evaluate(({ cx, cy }) => {
+        const svg = document.querySelector('#chart-host svg') as unknown as SVGSVGElement
+        const p = new DOMPoint(cx, cy).matrixTransform(svg.getScreenCTM()!.inverse())
+        return [p.x - 30, p.y - 30]
+      }, { cx, cy })
+      const got = (await log(page)).filter((e) => e.name === 'signal:at').at(-1)?.args[1] as number[] | undefined
+      check(got != null && Math.abs(got[0]! - expected[0]!) < 1e-3 && Math.abs(got[1]! - expected[1]!) < 1e-3, `${label}: x(), y() at (${fx}, ${fy}) of the svg are ${JSON.stringify(expected.map((v) => +v.toFixed(3)))} (got ${JSON.stringify(got?.map((v) => +v.toFixed(3)))})`)
+    }
+  }
+
+  // ---- 2d. tooltip and pan/zoom in a CSS-scaled / transformed svg ---------------------------------------------
+  // (they read the pointer in the chart's own units, not in the container's pixels)
+  console.log('[host css] tooltip finds the hovered mark, drag-pan moves by the right amount')
+  const setCss = (css: string): Promise<void> => page.evaluate((c) => { let st = document.getElementById('host-css'); if (!st) { st = document.createElement('style'); st.id = 'host-css'; document.head.appendChild(st) } st.textContent = c }, css)
+  for (const [label, css] of [
+    ['max-width', '#chart-host svg { max-width: 300px; height: auto }'],
+    ['CSS transform', '#chart-host { transform: scale(0.7); transform-origin: 30px 20px }'],
+  ] as const) {
+    // (batched svg marks: >= 512 symbols in one mark, so the tooltip resolves through the scene hit index, queryMark)
+    const dense = spec({ signals: [], data: [{ name: 't', values: [{ px: 8, py: 8, cat: 'c' }, ...Array.from({ length: 600 }, (_, i) => ({ px: 0.2 + (i % 5) * 0.05, py: 0.2, cat: 'z' + i }))] }] })
+    await mount(page, dense, { width: 400, height: 240, tooltip: true, denseMarks: true }, [])
+    await page.waitForSelector('#chart-host svg')
+    await setCss(css)
+    const at = await page.evaluate(() => {
+      const svg = document.querySelector('#chart-host svg') as unknown as SVGSVGElement
+      // (x: 8 of [0, 10] over 400 units, y: 8 of [0, 10] over 240 units, upwards; the padding is 30)
+      return new DOMPoint(30 + 0.8 * 400, 30 + 0.2 * 240).matrixTransform(svg.getScreenCTM()!)
+    })
+    await page.mouse.move(at.x, at.y)
+    await page.waitForTimeout(40)
+    const tip2 = await page.locator('[data-testid="chart-tooltip"]').textContent({ timeout: 500 }).catch(() => null)
+    check(tip2 != null && tip2.includes('cat') && tip2.includes('c'), `${label}: the tooltip over a mark shows that mark (${JSON.stringify(tip2)})`)
+    await mount(page, spec({ signals: [] }), { width: 400, height: 240, pan: true }, ['onViewChange'])
+    await setCss(css)
+    const sc = await page.evaluate(() => { const svg = document.querySelector('#chart-host svg') as unknown as SVGSVGElement; return svg.getScreenCTM()!.a })
+    const pb = await page.locator('#chart-host').boundingBox()
+    await page.mouse.move(pb!.x + 100, pb!.y + 100)
+    await page.mouse.down()
+    await page.mouse.move(pb!.x + 140, pb!.y + 100, { steps: 4 })
+    await page.mouse.up()
+    const view = (await log(page)).filter((e) => e.name === 'onViewChange').at(-1)?.args[0] as { x?: number[] } | undefined
+    // 40 css px = 40/sc chart units; the plot is 400 units for the domain [0, 10]: the data moves with the pointer
+    const shift = view?.x != null ? -view.x[0]! : NaN
+    const want = (40 / sc) / 400 * 10
+    check(Math.abs(shift - want) < 0.01, `${label}: dragging 40 css px pans the domain by ${want.toFixed(3)} (got ${Number.isNaN(shift) ? shift : shift.toFixed(3)})`)
+  }
+  await page.evaluate(() => { document.getElementById('host-css')?.remove() })
+
   // ---- 3. bound inputs ----------------------------------------------------------------------
   console.log('[binds] range / select / checkbox with brush + pan/zoom enabled')
   await mount(page, spec(), { width: 400, height: 240, panZoom: true }, ['onSelect', 'onPointSelect'], ['size', 'mode', 'show'])

@@ -40,6 +40,7 @@ import { dict, ownGet, setOwn, TUPLE_ID, scopedSignalName } from './util.js'
 import { consoleLogger, type Logger } from './logger.js'
 import { timers, type Timer } from './timer.js'
 import { resolveCursor } from './cursor.js'
+import { clientToSvg } from './pointer.js'
 
 export interface BoundEvent {
   event: string
@@ -796,8 +797,8 @@ function bindSignalEventsDefs(
   const pointOf = (e: ExtEvent): [number, number] => {
     const t = (e as unknown as { changedTouches?: ArrayLike<{ clientX: number; clientY: number }> }).changedTouches
     const src = t ? t[0]! : (e as unknown as { clientX: number; clientY: number })
-    const rect = svg.getBoundingClientRect()
-    return [src.clientX - rect.left - (svg.clientLeft || 0) - originX, src.clientY - rect.top - (svg.clientTop || 0) - originY]
+    const [x, y] = clientToSvg(svg, src.clientX, src.clientY)
+    return [x - originX, y - originY]
   }
   const sceneInfo = opts.scene ? sceneIndex(opts.scene) : null
 
