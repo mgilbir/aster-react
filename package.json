@@ -37,6 +37,7 @@
     "a11y-parity": "pnpm --filter @aster/conformance run a11y-parity",
     "conformance:batch": "pnpm --filter @aster/conformance run conformance:batch",
     "conformance:signals": "pnpm --filter @aster/conformance run conformance:signals",
+    "conformance:selections": "pnpm --filter @aster/conformance run conformance:selections",
     "verify:publish": "node scripts/verify-publish.mjs"
   },
   "devDependencies": {

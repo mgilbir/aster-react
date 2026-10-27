@@ -36,12 +36,12 @@ function normalizeDay(d: number | string): number {
 }
 
 /** vega-lite `isDateTime`: any time-unit part present. */
-function isDateTime(o: unknown): o is Obj {
+export function isDateTime(o: unknown): o is Obj {
   return isObj(o) && ['year', 'quarter', 'month', 'week', 'day', 'dayofyear', 'date', 'hours', 'minutes', 'seconds', 'milliseconds'].some((k) => k in o)
 }
 
-/** vega-lite `dateTimeToExpr` (normalizing). */
-function dateTimeToExpr(d0: Obj): string {
+/** vega-lite `dateTimeParts(d, true)`: [year, month, date, hours, minutes, seconds, milliseconds], normalized. */
+function dateTimeParts(d0: Obj): Array<string | number> {
   let d = d0
   const parts: Array<string | number> = []
   if (d.day !== undefined && Object.keys(d).length > 1) {
@@ -56,7 +56,18 @@ function dateTimeToExpr(d0: Obj): string {
   else if (d.day !== undefined) parts.push(normalizeDay(d.day as number | string) + 1)
   else parts.push(1)
   for (const k of ['hours', 'minutes', 'seconds', 'milliseconds']) parts.push((d[k] as number | undefined) ?? 0)
-  return `${d.utc === true ? 'utc' : 'datetime'}(${parts.join(', ')})`
+  return parts
+}
+
+/** vega-lite `dateTimeToExpr` (normalizing). */
+export function dateTimeToExpr(d: Obj): string {
+  return `${d.utc === true ? 'utc' : 'datetime'}(${dateTimeParts(d).join(', ')})`
+}
+
+/** vega-lite `dateTimeToTimestamp`. */
+export function dateTimeToTimestamp(d: Obj): number {
+  const parts = dateTimeParts(d) as [number, number, number, number, number, number, number]
+  return d.utc === true ? +new Date(Date.UTC(...parts)) : +new Date(...parts)
 }
 
 /** vega-lite `valueExpr(v, {timeUnit, wrapTime: true})`. */
@@ -131,12 +142,29 @@ function fieldPredicateExpr(p: Obj): string {
   throw new VLCompileError(`invalid field predicate ${JSON.stringify(p)}`)
 }
 
-/** vega-lite `logicalExpr`: and/or/not composition with parenthesization. */
-export function predicateExpr(p: unknown): string {
+/** The `{param}` leaves of a (possibly composed) predicate. */
+export function paramLeaves(p: unknown, out: Array<{ param: string; empty?: boolean }> = []): Array<{ param: string; empty?: boolean }> {
+  if (!isObj(p)) return out
+  if (typeof p.param === 'string') out.push({ param: p.param, ...(p.empty !== undefined ? { empty: p.empty as boolean } : {}) })
+  for (const k of ['and', 'or'] as const) if (Array.isArray(p[k])) for (const q of p[k] as unknown[]) paramLeaves(q, out)
+  if (p.not !== undefined) paramLeaves(p.not, out)
+  return out
+}
+
+/**
+ * vega-lite `logicalExpr`: and/or/not composition with parenthesization. A `{param}` leaf is a selection (or
+ * variable parameter) test, which only `paramTest` (the compile context's) can write.
+ */
+export function predicateExpr(p: unknown, paramTest?: (pred: { param: string; empty?: boolean }) => string): string {
+  const sub = (q: unknown): string => predicateExpr(q, paramTest)
   if (typeof p === 'string') return p
   if (!isObj(p)) throw new VLCompileError(`invalid predicate ${JSON.stringify(p)}`)
-  if (p.not !== undefined) return `!(${predicateExpr(p.not)})`
-  if (p.and !== undefined) return `(${(p.and as unknown[]).map(predicateExpr).join(') && (')})`
-  if (p.or !== undefined) return `(${(p.or as unknown[]).map(predicateExpr).join(') || (')})`
+  if (p.not !== undefined) return `!(${sub(p.not)})`
+  if (p.and !== undefined) return `(${(p.and as unknown[]).map(sub).join(') && (')})`
+  if (p.or !== undefined) return `(${(p.or as unknown[]).map(sub).join(') || (')})`
+  if (typeof p.param === 'string') {
+    if (!paramTest) throw new VLCompileError(`a {"param": ${JSON.stringify(p.param)}} predicate needs the compile context`)
+    return paramTest({ param: p.param, ...(p.empty !== undefined ? { empty: p.empty as boolean } : {}) })
+  }
   return fieldPredicateExpr(p)
 }

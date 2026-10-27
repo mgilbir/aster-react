@@ -60,9 +60,16 @@ function parseSvg(svg: string): Element {
 }
 
 describe('DOM descriptor === string renderer over the conformance corpus (audit C43)', () => {
-  it('holds for every corpus scene, through the patch path and a fresh build', async () => {
-    const files = readdirSync(CORPUS_DIR).filter((f) => f.endsWith('.vg.json') || f.endsWith('.vl.json')).sort()
-    expect(files.length).toBeGreaterThan(300)
+  const allFiles = readdirSync(CORPUS_DIR).filter((f) => f.endsWith('.vg.json') || f.endsWith('.vl.json')).sort()
+  // The corpus is cut into slices, one test each: one long synchronous test keeps a vitest worker from answering its host
+  // (Timeout calling onTaskUpdate), and a slice names where a difference is.
+  const SLICE = 40
+  let checkedTotal = 0
+  it('covers the corpus', () => {
+    expect(allFiles.length).toBeGreaterThan(300)
+  })
+  for (let from = 0; from < allFiles.length; from += SLICE) it(`holds for corpus scenes ${from}-${from + SLICE}, through the patch path and a fresh build`, async () => {
+    const files = allFiles.slice(from, from + SLICE)
     const failures: string[] = []
     let checked = 0
     for (const f of files) {
@@ -90,7 +97,10 @@ describe('DOM descriptor === string renderer over the conformance corpus (audit 
         failures.push(`${f}: threw ${(e as Error).message}`)
       }
     }
-    expect(checked).toBeGreaterThan(300)
+    checkedTotal += checked
     expect(failures.join('\n'), `${failures.length} corpus scene(s) differ between the string and DOM renderers`).toBe('')
   }, 600_000)
+  it('built a scene for (nearly) the whole corpus', () => {
+    expect(checkedTotal).toBeGreaterThan(300)
+  })
 })
