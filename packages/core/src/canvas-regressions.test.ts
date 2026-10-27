@@ -221,3 +221,23 @@ describe('shape generators: .digits() works on line and area (d3-shape withPath)
     expect(a.digits(null)(data)).toContain('1.23456')
   })
 })
+
+// ---------------------------------------------------------------------------
+// A symbol whose position is not a number is drawn at 0, as vega's canvas draws it (`item.x || 0`)
+// ---------------------------------------------------------------------------
+
+describe('a symbol at a NaN position', () => {
+  const sym = (n: number, y: number): SceneRoot =>
+    sceneOf([mark('symbol', Array.from({ length: n }, (_, i) => ({ x: 10 + i, y, size: 30, fill: '#4c78a8' })))])
+
+  for (const n of [3, 300]) {
+    it(`draws where y = 0 draws it (${n} items: ${n >= 256 ? 'batched run' : 'one by one'})`, () => {
+      const a = makeRecorder()
+      renderSceneToCanvas(sym(n, Number.NaN), a.ctx)
+      const b = makeRecorder()
+      renderSceneToCanvas(sym(n, 0), b.ctx)
+      expect(a.records.filter((r) => r.op === 'fill').length).toBeGreaterThan(0)
+      expect(a.records).toEqual(b.records)
+    })
+  }
+})

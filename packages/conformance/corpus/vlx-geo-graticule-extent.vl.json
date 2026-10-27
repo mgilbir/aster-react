@@ -1,0 +1,32 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "width": 400,
+  "height": 260,
+  "projection": {
+    "type": "mercator"
+  },
+  "data": {
+    "graticule": {
+      "extent": [
+        [
+          -60,
+          -30
+        ],
+        [
+          60,
+          50
+        ]
+      ],
+      "step": [
+        10,
+        10
+      ]
+    }
+  },
+  "mark": {
+    "type": "geoshape",
+    "stroke": "green"
+  }
+}

@@ -1,0 +1,202 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "width": 400,
+  "height": 300,
+  "data": {
+    "values": {
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "properties": {
+            "name": "west",
+            "value": 3,
+            "cat": "a"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  -11,
+                  48
+                ],
+                [
+                  -2,
+                  52
+                ],
+                [
+                  9,
+                  50
+                ],
+                [
+                  10,
+                  36
+                ],
+                [
+                  0,
+                  33
+                ],
+                [
+                  -10,
+                  35
+                ],
+                [
+                  -11,
+                  48
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "name": "east",
+            "value": 5,
+            "cat": "b"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  9,
+                  50
+                ],
+                [
+                  18,
+                  52
+                ],
+                [
+                  31,
+                  50
+                ],
+                [
+                  30,
+                  38
+                ],
+                [
+                  20,
+                  34
+                ],
+                [
+                  10,
+                  36
+                ],
+                [
+                  9,
+                  50
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "name": "north-west",
+            "value": 2,
+            "cat": "a"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  -12,
+                  60
+                ],
+                [
+                  -3,
+                  65
+                ],
+                [
+                  8,
+                  63
+                ],
+                [
+                  9,
+                  50
+                ],
+                [
+                  -2,
+                  52
+                ],
+                [
+                  -11,
+                  48
+                ],
+                [
+                  -12,
+                  60
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "name": "north-east",
+            "value": 8,
+            "cat": "b"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  8,
+                  63
+                ],
+                [
+                  19,
+                  66
+                ],
+                [
+                  30,
+                  64
+                ],
+                [
+                  31,
+                  50
+                ],
+                [
+                  18,
+                  52
+                ],
+                [
+                  9,
+                  50
+                ],
+                [
+                  8,
+                  63
+                ]
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    "format": {
+      "property": "features"
+    }
+  },
+  "projection": {
+    "type": "mercator"
+  },
+  "mark": "geoshape",
+  "encoding": {
+    "color": {
+      "condition": {
+        "test": "datum.properties.value > 4",
+        "value": "firebrick"
+      },
+      "value": "lightgray"
+    }
+  }
+}

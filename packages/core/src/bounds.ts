@@ -11,6 +11,7 @@ import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
 import { computeAreaPath, computeLinePath, symbolPath, trailPath } from './render.js'
 import { itemTextWidth } from './text-metrics.js'
+import { SHAPE_BOUNDS } from './registry.js'
 
 // ---------------------------------------------------------------------------
 // Bounds — exact port of vega-scenegraph Bounds.js
@@ -883,7 +884,12 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
         return [cos * px - sin * py, sin * px + cos * py]
       })
     } else {
-      boundsFromPath(bounds, it.path)
+      // a projected shape bounds from its unrounded geometry, as vega's bound context sees it, not from the path string
+      const exact = it.datum && it.path === (it.datum as Record<string, unknown>).shape ? SHAPE_BOUNDS.get(it.datum as object)?.() : undefined
+      if (exact) {
+        bounds.add(exact[0], exact[1])
+        bounds.add(exact[2], exact[3])
+      } else boundsFromPath(bounds, it.path)
       // path marks carry scaleX/scaleY: vega's path bound renders the parsed
       // path through pathRender(ctx, x, y, sx, sy) — the path scales about its
       // local origin before the item translate.

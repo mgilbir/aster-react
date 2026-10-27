@@ -1,0 +1,154 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "width": 400,
+  "height": 300,
+  "data": {
+    "values": {
+      "type": "Topology",
+      "objects": {
+        "regions": {
+          "type": "GeometryCollection",
+          "geometries": [
+            {
+              "type": "Polygon",
+              "arcs": [
+                [
+                  -4,
+                  -3,
+                  -2,
+                  -1
+                ]
+              ],
+              "properties": {
+                "name": "A",
+                "value": 3,
+                "cat": "x"
+              }
+            },
+            {
+              "type": "Polygon",
+              "arcs": [
+                [
+                  1,
+                  -5
+                ]
+              ],
+              "properties": {
+                "name": "B",
+                "value": 8,
+                "cat": "y"
+              }
+            },
+            {
+              "type": "Polygon",
+              "arcs": [
+                [
+                  -3,
+                  -6
+                ]
+              ],
+              "properties": {
+                "name": "C",
+                "value": 5,
+                "cat": "x"
+              }
+            }
+          ]
+        }
+      },
+      "arcs": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            10,
+            0
+          ]
+        ],
+        [
+          [
+            10,
+            0
+          ],
+          [
+            10,
+            10
+          ]
+        ],
+        [
+          [
+            10,
+            10
+          ],
+          [
+            0,
+            10
+          ]
+        ],
+        [
+          [
+            0,
+            10
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        [
+          [
+            10,
+            0
+          ],
+          [
+            20,
+            0
+          ],
+          [
+            20,
+            10
+          ],
+          [
+            10,
+            10
+          ]
+        ],
+        [
+          [
+            0,
+            10
+          ],
+          [
+            0,
+            20
+          ],
+          [
+            10,
+            20
+          ],
+          [
+            10,
+            10
+          ]
+        ]
+      ]
+    },
+    "format": {
+      "type": "topojson",
+      "mesh": "regions"
+    }
+  },
+  "projection": {
+    "type": "mercator"
+  },
+  "mark": {
+    "type": "geoshape",
+    "filled": false,
+    "stroke": "firebrick",
+    "strokeWidth": 3
+  }
+}

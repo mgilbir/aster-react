@@ -10,12 +10,21 @@
  * prove nothing, so every case also names the signals that MUST have moved on
  * the vega side (`expectMoved`): a vacuous case fails the run.
  *
+ * Animations (Vega-Lite 6 `time` channel, a `timer` event stream and a selection store `modify` writes) run the
+ * same way but on a CONTROLLED CLOCK: Playwright's fake clock (Date, performance, timeouts, intervals and animation
+ * frames) is installed in both pages, paused at the same instant, and stepped by the same amounts; after each step the
+ * rendered frame (canonicalised SVG) and the animation's signals must agree with real vega. Because both pages run the
+ * same virtual time, a tick that lands a frame early or late on one side shows up as a different `anim_clock` and
+ * a different frame; a case whose vega frames never change would prove nothing, so it fails as vacuous.
+ *
  * Run: pnpm conformance:signals [--filter=substr] [--min-cases=N]
  */
 import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
+import { compile as compileVL } from '../../vl/src/index.ts'
+import { canonicalizeSvg, diffCanonical } from '../src/normalize.ts'
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
@@ -547,7 +556,7 @@ const cases = CASES.filter((c) => !FILTER || c.name.includes(FILTER))
 
 const entrySrc = `
 import * as vega from 'vega'
-import { compileChart, evaluateChart } from '@aster/core'
+import { compileChart, evaluateChart, renderSceneToSvg } from '@aster/core'
 import { renderSceneToDomElement } from '@aster/core/dom'
 import { buildHitIndex } from '@aster/core/hit'
 import { bindSceneSignals } from '@aster/core/signals'
@@ -616,6 +625,45 @@ window.__mountAster = async (spec) => {
     return out
   }
   window.__settle = async () => {}
+}
+
+// ---- animations: both engines driven by the page's (fake) clock; each exposes the current frame as SVG text ----
+window.__mountVegaAnim = async (spec) => {
+  const view = new vega.View(vega.parse(spec), { renderer: 'none', logger, hover: false })
+  await view.runAsync()
+  names = (spec.signals || []).map((s) => s.name)
+  read = () => Object.fromEntries(names.map((n) => [n, view.signal(n)]))
+  window.__settle = () => view.runAsync()
+  window.__frame = async () => { await view.runAsync(); return view.toSVG() }
+  window.__stop = () => { view.finalize() }
+}
+
+window.__mountAsterAnim = async (spec) => {
+  const compiled = compileChart(spec)
+  let signals = {}
+  let data = {}
+  let binding = null
+  let scene = null
+  let scheduled = false
+  const draw = () => {
+    scheduled = false
+    scene = evaluateChart(compiled, { signals, data })
+    const svg = renderSceneToDomElement(scene)
+    holder.replaceChildren(svg)
+    if (binding) binding.detach()
+    binding = bindSceneSignals(svg, scene, { ...signals }, {
+      onSignal: (_n, _v, all) => { signals = { ...all }; schedule() },
+      onData: (name, rows) => { data = { ...data, [name]: rows }; schedule() },
+      logger,
+    }, { data, owner: holder })
+  }
+  const schedule = () => { if (!scheduled) { scheduled = true; queueMicrotask(draw) } }
+  draw()
+  names = (spec.signals || []).map((s) => s.name)
+  read = () => Object.fromEntries(names.map((n) => [n, Object.hasOwn(signals, n) ? signals[n] : scene.signalParams[n]]))
+  window.__settle = async () => { for (let i = 0; i < 4; i++) await Promise.resolve() }
+  window.__frame = async () => { for (let i = 0; i < 4; i++) await Promise.resolve(); return renderSceneToSvg(scene) }
+  window.__stop = () => { if (binding) binding.release() }
 }
 
 window.__read = () => {
@@ -690,6 +738,88 @@ async function drive(engine: 'vega' | 'aster', c: Case): Promise<{ initial: Obse
   }
 }
 
+// ---- animation cases (controlled clock) ---------------------------------------------------------
+
+interface AnimCase {
+  name: string
+  /** the Vega-Lite spec; compiled with @aster/vl for both engines (vega-lite 6.4.3's own output is pinned by the corpus) */
+  vl: Record<string, unknown>
+  /** virtual times (ms since the mount) at which both engines are sampled */
+  at: number[]
+}
+
+const YEARS = [1990, 1991, 1992]
+const ANIM_ROWS = YEARS.flatMap((year, y) => ['a', 'b', 'c', 'd'].map((country, c) => ({
+  year, date: `${year}-06-15`, country, region: c % 2 ? 'west' : 'east', pop: 10 + 7 * c + 3 * y, life: 50 + 4 * c + 2 * y, fert: 5 - c * 0.5 - y * 0.3,
+})))
+const animBase = (extra: Record<string, unknown>): Record<string, unknown> => ({
+  $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
+  width: 240, height: 160, padding: 10, autosize: 'none',
+  data: { values: ANIM_ROWS },
+  params: [{ name: 'anim', select: { type: 'point', on: 'timer', fields: ['year'] } }],
+  transform: [{ filter: { param: 'anim' } }],
+  ...extra,
+})
+const scatter = { mark: { type: 'point', filled: true }, encoding: { x: { field: 'life', type: 'quantitative', scale: { zero: false } }, y: { field: 'fert', type: 'quantitative' }, size: { field: 'pop', type: 'quantitative' }, color: { field: 'region', type: 'nominal' }, time: { field: 'year', type: 'ordinal' } } }
+/** Instants that straddle the frame and cycle boundaries of a 2 fps (500 ms step, 1500 ms cycle) animation. */
+const SAMPLES = [0, 10, 17, 50, 100, 249, 251, 500, 749, 751, 1000, 1499, 1501, 2000, 3100]
+
+const ANIM_CASES: AnimCase[] = [
+  { name: 'anim-scatter-default-clock', vl: animBase(scatter), at: SAMPLES },
+  { name: 'anim-fps-4', vl: animBase({ ...scatter, config: { scale: { framesPerSecond: 4 } } }), at: SAMPLES },
+  { name: 'anim-empty-false-first-frame-blank', vl: animBase({ ...scatter, transform: [{ filter: { param: 'anim', empty: false } }] }), at: SAMPLES },
+  {
+    name: 'anim-bars-with-axes',
+    vl: animBase({ mark: 'bar', encoding: { x: { field: 'country', type: 'nominal' }, y: { field: 'pop', type: 'quantitative' }, color: { field: 'region', type: 'nominal' }, time: { field: 'year', type: 'ordinal' } } }),
+    at: SAMPLES,
+  },
+  {
+    name: 'anim-temporal-field',
+    vl: animBase({ params: [{ name: 'anim', select: { type: 'point', on: 'timer', fields: ['date'] } }], mark: 'circle', encoding: { x: { field: 'life', type: 'quantitative' }, y: { field: 'fert', type: 'quantitative' }, time: { field: 'date', type: 'temporal' } } }),
+    at: SAMPLES,
+  },
+  { name: 'anim-named-selection', vl: animBase({ params: [{ name: 'play', select: { type: 'point', on: 'timer', encodings: ['time'] } }], transform: [{ filter: { param: 'play' } }], mark: 'square', encoding: scatter.encoding }), at: SAMPLES },
+]
+
+const animCases = ANIM_CASES.filter((c) => !FILTER || c.name.includes(FILTER))
+
+interface Frame { t: number; svg: string; signals: Record<string, string>; errors: string[] }
+
+async function driveAnim(engine: 'vega' | 'aster', vg: Record<string, unknown>, at: number[]): Promise<Frame[] | { error: string }> {
+  const context = await browser.newContext({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1 })
+  const T0 = 1_700_000_000_000
+  // the fake clock is installed before the page exists, then paused at the same instant for both engines
+  await context.clock.install({ time: T0 })
+  const page = await context.newPage()
+  const pageErrors: string[] = []
+  page.on('pageerror', (e) => pageErrors.push(e.message.slice(0, 200)))
+  try {
+    await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
+    await page.waitForFunction(() => '__mountVegaAnim' in window, null, { timeout: 30_000 })
+    await page.clock.pauseAt(T0 + 5000)
+    await page.evaluate(async ([which, spec]) => {
+      const w = window as unknown as Record<string, (s: unknown) => Promise<void>>
+      await (which === 'vega' ? w.__mountVegaAnim! : w.__mountAsterAnim!)(spec)
+    }, [engine, vg] as const)
+    const frames: Frame[] = []
+    let now = 0
+    for (const t of at) {
+      if (t > now) await page.clock.runFor(t - now)
+      now = t
+      const svg = await page.evaluate(() => (window as unknown as { __frame: () => Promise<string> }).__frame())
+      const obs = await page.evaluate(() => (window as unknown as { __read: () => Observed }).__read())
+      frames.push({ t, svg, signals: obs.signals, errors: obs.errors })
+    }
+    await page.evaluate(() => (window as unknown as { __stop: () => void }).__stop())
+    if (pageErrors.length) return { error: `page errors: ${pageErrors.join(' | ')}` }
+    return frames
+  } catch (e) {
+    return { error: (e as Error).message.split('\n')[0]! }
+  } finally {
+    await context.close()
+  }
+}
+
 let pass = 0
 const failures: string[] = []
 const t0 = Date.now()
@@ -721,16 +851,42 @@ for (const c of cases) {
   if (problems.length === 0) pass++
   else failures.push(`${c.name}: ${problems.join('; ')}`)
 }
+for (const c of animCases) {
+  const vg = compileVL(c.vl as never) as Record<string, unknown>
+  const [v, a] = [await driveAnim('vega', vg, c.at), await driveAnim('aster', vg, c.at)]
+  const problems: string[] = []
+  if ('error' in v) problems.push(`vega side failed: ${v.error}`)
+  else if ('error' in a) problems.push(`aster side failed: ${a.error}`)
+  else {
+    const seen = new Set<string>()
+    v.forEach((vf, i) => {
+      const af = a[i]!
+      const diffs = diffCanonical(canonicalizeSvg(vf.svg), canonicalizeSvg(af.svg))
+      if (diffs.length) problems.push(`frame at ${vf.t} ms differs: ${String(diffs[0]).slice(0, 160)}`)
+      for (const name of Object.keys(vf.signals)) {
+        if (vf.signals[name] !== af.signals[name]) problems.push(`signal ${name} at ${vf.t} ms: vega=${vf.signals[name]} aster=${af.signals[name]}`)
+      }
+      if (vf.errors.length || af.errors.length) problems.push(`error log at ${vf.t} ms: vega=${JSON.stringify(vf.errors)} aster=${JSON.stringify(af.errors)}`)
+      seen.add(JSON.stringify(canonicalizeSvg(vf.svg).records))
+    })
+    // a vacuous comparison proves nothing: the clock must have run and the picture must have changed on the vega side
+    const last = v[v.length - 1]!
+    if (v[0]!.signals.anim_clock === last.signals.anim_clock) problems.push('VACUOUS: the animation clock never moved on the vega side')
+    if (seen.size < 2 && !c.name.includes('first-frame-blank')) problems.push('VACUOUS: every vega frame is the same picture')
+  }
+  if (problems.length === 0) pass++
+  else failures.push(`${c.name}: ${problems.slice(0, 6).join('; ')}`)
+}
 await browser.close()
 rmSync(OUT_DIR, { recursive: true, force: true })
 
-console.log(`\n[browser-signals] ${pass}/${cases.length} cases agree with real vega (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
+console.log(`\n[browser-signals] ${pass}/${cases.length + animCases.length} cases agree with real vega (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
 for (const f of failures) console.log(`  FAIL ${f}`)
-if (MIN_CASES && cases.length < MIN_CASES) {
-  console.log(`[browser-signals] FLOOR: ${cases.length} cases < --min-cases ${MIN_CASES}`)
+if (MIN_CASES && cases.length + animCases.length < MIN_CASES) {
+  console.log(`[browser-signals] FLOOR: ${cases.length + animCases.length} cases < --min-cases ${MIN_CASES}`)
   process.exit(1)
 }
-if (cases.length === 0) {
+if (cases.length + animCases.length === 0) {
   console.log('[browser-signals] no cases ran')
   process.exit(1)
 }

@@ -290,7 +290,7 @@ THE SOFTWARE.
 
 ## d3-hierarchy and others
 
-Projects: d3-hierarchy@3.1.2, d3-interpolate@3.0.1, d3-scale@4.0.2, d3-time-format@4.1.0
+Projects: d3-hierarchy@3.1.2, d3-interpolate@3.0.1, d3-scale@4.0.2, d3-time-format@4.1.0, d3-timer@3.0.1
 
 ```text
 Copyright 2010-2021 Mike Bostock

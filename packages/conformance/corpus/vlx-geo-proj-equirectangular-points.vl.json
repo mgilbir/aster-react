@@ -1,0 +1,55 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "width": 400,
+  "height": 300,
+  "data": {
+    "values": [
+      {
+        "lon": -74,
+        "lat": 40.7,
+        "n": 8
+      },
+      {
+        "lon": 2.35,
+        "lat": 48.85,
+        "n": 5
+      },
+      {
+        "lon": 139.7,
+        "lat": 35.7,
+        "n": 9
+      },
+      {
+        "lon": 151.2,
+        "lat": -33.9,
+        "n": 3
+      },
+      {
+        "lon": -43.2,
+        "lat": -22.9,
+        "n": 6
+      },
+      {
+        "lon": 28,
+        "lat": -26.2,
+        "n": 2
+      }
+    ]
+  },
+  "projection": {
+    "type": "equirectangular"
+  },
+  "mark": "circle",
+  "encoding": {
+    "longitude": {
+      "field": "lon",
+      "type": "quantitative"
+    },
+    "latitude": {
+      "field": "lat",
+      "type": "quantitative"
+    }
+  }
+}

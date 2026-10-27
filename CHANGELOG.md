@@ -23,6 +23,19 @@
   when Aster equals Vega's retained render or, where Vega keeps its first layout, a new Vega view initialised with the
   same state (counted against a ceiling, no tolerance); `pnpm conformance:signals` has the group-scope cases; live differentials of every
   selection function and of `modify` against the pinned vega; the incremental oracle edits selection stores.
+- **Vega-Lite maps and animation (`@aster/vl`, runtime in `@aster/core`)**: `geoshape` marks, `projection` (every
+  property, `config.projection`), `longitude` / `latitude` (and `2`) channels and `{type: "geojson"}` compile to what
+  vega-lite 6.4.3 emits for units, layers, concats and repeats (inline GeoJSON / TopoJSON, `sphere` and `graticule`
+  generators; a unit fits its projection unless it gives `scale` / `translate`); maps in a facet stay refused, because
+  vega-lite emits a dataset it never defines. The `time` channel (vega-lite 6 animation: a `timer` point selection, the
+  `{filter: {param}}` frame filter, a band `time` scale) compiles to vega-lite's signals, `<main>_curr` dataset and
+  scale through the selection compiler (a timer selection is a point selection whose events include a timer), and its
+  first frame matches real vega. Runtime: `timer` event streams on a port of d3-timer (same instants and
+  `{timestamp, elapsed}` as vega), kept per chart host across re-binds and stopped on unmount / `binding.release()`;
+  `setTimerClock` installs a controlled clock. A size legend beside a colour channel whose field is a condition's now
+  takes the channel's constant paint, as vega-lite's. 109 `vlx-geo-*` and 17 `vlx-anim-*` corpus cases, a seeded
+  compile differential for animation, live differentials for the timer scheduler and the geo pipeline, and a Playwright
+  frame comparison against vega on a controlled clock (`pnpm conformance:signals`, 6 animation cases).
 
 - **`<SvgChart>` (`@aster/react/lite`) and the `interaction` capability (`@aster/react/interaction`)**: an SVG-only chart
   for size-sensitive apps. It never imports the canvas renderer (142.0 kB gzip against 157.2 for `<Chart>`); hit testing

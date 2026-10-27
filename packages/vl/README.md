@@ -76,6 +76,18 @@ an expression or a generated dataset/signal/scale name.
   axis and mark blocks.
 - Mark keys: `binSpacing`, `minBandSize`, `bandSize` (vega-lite ignores it too), `x2Offset`,
   `y2Offset`, `theta2Offset`, `radius2Offset`, `style`, `smooth`, `aspect`, `clip`, `aria`.
+- Maps (`src/geo.ts`, a port of vega-lite's `compile/projection`): `geoshape` marks over GeoJSON / TopoJSON
+  (inline, `url`, or `sphere` / `graticule` generators) with `{type: "geojson"}` on `shape`; `projection`
+  with every property and `config.projection`; `longitude` / `latitude` (and `longitude2` / `latitude2`) on
+  point-like marks, text, line, trail and rule, layered over geoshapes. A unit fits its projection to its
+  geoshape data unless it gives `scale` or `translate`; layer, concat and repeat children share one
+  merged projection as vega-lite does. Vega's runtime computes the same projection as the Aster runtime
+  (`projectedBounds`), and the corpus holds a `vlx-geo-*` case per feature.
+- Animation (`src/animation.ts`): the `time` channel, driven by a `point` selection whose `on` is a
+  timer (`"timer"`, `"timer{ms}"`, `{type: "timer"}`) and the `{filter: {param}}` transform; `mark.time`,
+  `config.scale.framesPerSecond`. The signals, the `<main>_curr` frame dataset and the band `time` scale
+  are vega-lite's. The first frame draws all the data (the store is empty), as in vega; the runtime ticks
+  the clock with the same d3-timer schedule vega uses (see docs/INTERACTION.md#signals).
 - Sort forms (arrays, `ascending`/`descending`, channel, `{field, op, order}`, `{encoding}`),
   conditions with `test` predicates (and/or/not, field predicates, DateTime values), time units
   (single, multi, `utc`, `step`), bin options, dotted/escaped/bracketed field names.
@@ -105,11 +117,17 @@ ignored.
   errorband) below it (vega-lite gives every unit a copy of the selection's signals, and the layers would declare them
   twice in one Vega scope), on a composition whose units have params of their own (vega-lite replaces a unit's
   parameters with the inherited ones), with `views` (restricting a composition's selection to some of its views), on a
-  named view, or on a path mark with an overlay (`mark.point` / `mark.line`: write the layers). Also: timer event streams
-  (animation); `bin.extent` as a parameter; a lookup from a selection of the same unit or of a later layer;
+  named view, or on a path mark with an overlay (`mark.point` / `mark.line`: write the layers). Also: `bin.extent` as a parameter; a lookup from a selection of the same unit or of a later layer;
   `scale.domain.unionWith` in a layered spec; a parameter's `push`.
-- Maps: `geoshape` marks, `projection`, `latitude` / `longitude` channels, `{type: "geojson"}`.
-- Animation: the `time` channel (`mark.time` and `config.scale.framesPerSecond` / `animationDuration` are accepted: without a `time` channel they change nothing in vega-lite either).
+- Maps in a facet (`row` / `column` / `facet`, or a facet operator): vega-lite 6.4.3 fits the projection to
+  `data("child_main")`, a dataset it never defines, so there is no output to match. Longitude / latitude
+  positions on marks other than point, circle, square, text, line, trail and rule; a half pair
+  (only `longitude`); the `sequence` data generator.
+- Animation outside the one shape vega-lite 6.4.3 compiles to working output: a `time` channel needs a single
+  top-level unit with exactly one timer selection and the `{filter: {param}}` transform (without them vega-lite
+  emits marks that read a dataset it never defines); layers, concats, facets, composite marks
+  (boxplot / errorbar / errorband) and point / line overlays are refused, as are other keys on the `time`
+  definition and `bind` / `value` on the timer selection.
 - Data-driven channels without a scale / legend implementation yet: `strokeDash`, `angle`,
   `fillOpacity`, `strokeOpacity` (constants and conditions work); `key`.
 - Bins and time units: `bin: "binned"` / `binned: true` (pre-binned data), `timeUnit.maxbins`,

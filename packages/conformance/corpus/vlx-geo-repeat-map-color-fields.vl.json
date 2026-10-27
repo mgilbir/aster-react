@@ -1,0 +1,103 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "repeat": [
+    "value",
+    "other"
+  ],
+  "spec": {
+    "width": 180,
+    "height": 140,
+    "data": {
+      "values": {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "type": "Feature",
+            "properties": {
+              "value": 3,
+              "other": 9
+            },
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    -11,
+                    48
+                  ],
+                  [
+                    9,
+                    50
+                  ],
+                  [
+                    10,
+                    36
+                  ],
+                  [
+                    -10,
+                    35
+                  ],
+                  [
+                    -11,
+                    48
+                  ]
+                ]
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "value": 7,
+              "other": 2
+            },
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    9,
+                    50
+                  ],
+                  [
+                    31,
+                    50
+                  ],
+                  [
+                    30,
+                    38
+                  ],
+                  [
+                    10,
+                    36
+                  ],
+                  [
+                    9,
+                    50
+                  ]
+                ]
+              ]
+            }
+          }
+        ]
+      },
+      "format": {
+        "property": "features"
+      }
+    },
+    "projection": {
+      "type": "mercator"
+    },
+    "mark": "geoshape",
+    "encoding": {
+      "color": {
+        "field": {
+          "repeat": "repeat"
+        },
+        "type": "quantitative"
+      }
+    }
+  }
+}

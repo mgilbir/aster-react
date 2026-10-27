@@ -272,6 +272,18 @@ export function Signals(): React.ReactElement {
   nodes. `preventDefault` calls `preventDefault()` on the events of those streams from the chart's own surface;
   `logger` receives bind-time and run-time errors of the handlers.
 
+### Timers and animation
+
+`timer` event streams (`{"type": "timer", "throttle": 16.7}`, `"timer{100}"`) run on a port of d3-timer, the scheduler
+vega-view uses, so ticks fall on the same instants with the same `{timestamp, elapsed}` (`pnpm conformance:signals` drives
+real vega and Aster on one fake browser clock and compares frames). The timers belong to the chart's host element, not
+to one rendered SVG: a re-bind after each render keeps the schedule, and they stop when the chart unmounts, when the host
+element is removed from the document, or on `binding.release()` (vega's `view.finalize()`); nothing is left scheduled.
+`bindSceneSignals` takes `owner` (the element the timers belong to; `<Chart>` passes its host) and `setTimerClock` from
+`@aster/core` swaps the scheduler's clock for a controlled one (tests, hosts that step frames themselves). A Vega-Lite
+animation (the `time` channel and its timer selection, see `packages/vl/README.md`) is a timer stream whose clock
+signal feeds `modify` on the selection's store; the store and the other `modify` semantics are described above.
+
 **Deviation from Vega: a signal write is a fresh render.** Aster is a pure function of (spec, data, signals): the scene
 after a write equals the scene a fresh chart renders with those signal values. Vega's own second render can differ from
 its own fresh render of the same signals, because it retains dataflow state: autosize runs once and again only when

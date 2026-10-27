@@ -342,8 +342,14 @@ interface EvalContext {
    * so bindings can never outlive the scales they reference. */
   encodeBinding?: EncodeBinding
   projections: Map<string, unknown>
-  /** `datasets.size` when each fit projection was last built (see refreshProjection). */
-  projectionStamp: Map<string, number>
+  /** `datasets.size` and the registry's epoch when each fit projection was last built (see refreshProjection). */
+  projectionStamp: Map<string, string>
+  /** fit projections built before every source of their fit existed (a `geojson` signal a later dataset publishes) */
+  projectionIncomplete: Set<string>
+  /** a dataset transform consumed an incomplete projection: the datasets must be built again */
+  geoStale: boolean
+  /** while datasets build: build a named dataset now (a projection's fit can read one declared after its consumer) */
+  buildOnDemand?: (name: string) => void
   runtime: ExpressionRuntime
   _defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }>
   /** Shared by every scope of one evaluation: a layout threw (vega logs it and renders the scene unlaid-out). */
@@ -494,7 +500,7 @@ function prepareChartCtx(
   // Inputs besides the signals that change what a reused scale/item would be.
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}`
   const ctx: EvalContext = {
-    chart, signalParams, width, height, datasets, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), runtime, _defs: defs,
+    chart, signalParams, width, height, datasets, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
@@ -571,7 +577,10 @@ function prepareChartCtx(
   let changed = true
   let rounds = 0
   while (changed && rounds < 3) {
-    changed = resolveSignalUpdates(ctx)
+    // (a map whose projection was consumed before the `geojson` signals it fits were published builds again)
+    const geoStale = ctx.geoStale
+    ctx.geoStale = false
+    changed = resolveSignalUpdates(ctx) || geoStale
     buildScales(ctx)
     if (changed) {
       ctx.datasets.clear()
@@ -676,6 +685,15 @@ function buildProjectionOf(ctx: EvalContext, p: CompiledProjection): unknown {
     if (k === 'name' || k === 'type') continue
     resolved[k] = resolveProjectionParam(ctx, p[k])
   }
+  // A fit over several sources (`[data('a'), geojson_0]`) is not resolvable until every source exists
+  // (vega's dataflow runs the geojson transform first): the next pass resolves it.
+  let incomplete = p.fit != null && resolved.fit == null
+  if (Array.isArray(resolved.fit) && resolved.fit.some((f) => f == null)) {
+    resolved.fit = undefined
+    incomplete = true
+  }
+  if (incomplete) ctx.projectionIncomplete.add(p.name)
+  else ctx.projectionIncomplete.delete(p.name)
   return build(resolved as never, ctx.width, ctx.height)
 }
 
@@ -689,8 +707,13 @@ function buildProjections(ctx: EvalContext): void {
   if (!ctx.chart.projections?.length) return
   for (const p of ctx.chart.projections) {
     ctx.projections.set(p.name, buildProjectionOf(ctx, p))
-    ctx.projectionStamp.set(p.name, ctx.datasets.size)
+    ctx.projectionStamp.set(p.name, projectionStampOf(ctx))
   }
+}
+
+/** What a fit projection was built from: the datasets that existed and the fit signals written (geojson transforms). */
+function projectionStampOf(ctx: EvalContext): string {
+  return `${ctx.datasets.size}:${(ctx.projections as ProjectionRegistry).epoch}`
 }
 
 /**
@@ -700,15 +723,51 @@ function buildProjections(ctx: EvalContext): void {
  */
 function refreshProjection(ctx: EvalContext, name: string): void {
   const def = ctx.chart.projections?.find((p) => p.name === name)
-  if (def?.fit && ctx.projectionStamp.get(name) !== ctx.datasets.size) {
-    ctx.projections.set(name, buildProjectionOf(ctx, def))
-    ctx.projectionStamp.set(name, ctx.datasets.size)
+  if (!def?.fit) return
+  // the datasets the fit reads (vega's dataflow orders them first, whatever the declaration order)
+  for (const src of fitDatasets(def.fit)) {
+    if (ctx.datasets.has(src) || fitBuilding.has(src)) continue
+    fitBuilding.add(src)
+    try {
+      ctx.buildOnDemand?.(src)
+    } finally {
+      fitBuilding.delete(src)
+    }
   }
+  if (ctx.projectionStamp.get(name) !== projectionStampOf(ctx)) {
+    ctx.projections.set(name, buildProjectionOf(ctx, def))
+    ctx.projectionStamp.set(name, projectionStampOf(ctx))
+  }
+  // a consumer is about to use a projection that could not see all of its fit: build again afterwards
+  if (ctx.projectionIncomplete.has(name)) ctx.geoStale = true
+}
+
+/** Datasets whose build is in progress because a projection fit asked for them (a cycle would otherwise recurse). */
+const fitBuilding = new Set<string>()
+
+/** The names `data('name')` reads in a projection's `fit` signal. */
+function fitDatasets(fit: unknown): string[] {
+  const out: string[] = []
+  const visit = (v: unknown): void => {
+    if (Array.isArray(v)) v.forEach(visit)
+    else if (v && typeof v === 'object' && typeof (v as { signal?: unknown }).signal === 'string') {
+      for (const m of (v as { signal: string }).signal.matchAll(/\bdata\(\s*(['"])(.*?)\1\s*\)/g)) out.push(m[2]!)
+    }
+  }
+  visit(fit)
+  return out
 }
 
 /** The projections map a dataset transform sees: reads go through `refreshProjection`. */
 class ProjectionRegistry extends Map<string, unknown> {
   refresh: ((name: string) => void) | undefined
+  /** bumped when a `geojson` transform publishes a value a projection may fit */
+  epoch = 0
+  /** the projections that fit data (their derived coordinates are not row-local) */
+  fitNames: Set<string> | undefined
+  touch(): void {
+    this.epoch++
+  }
   override get(name: string): unknown {
     this.refresh?.(name)
     return super.get(name)
@@ -750,7 +809,10 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
     if (initPending && SCALE_FN_EXPR.test(expr) && !ctx.chart.scales.every((sc) => ctx.scales.has(sc.name))) continue
     try {
       const value = ctx.runtime.expr(expr)(undefined, ctx.signalParams)
-      if (initPending && value !== undefined) ctx.initDone.add(def.name)
+      // An `init` that reads a scale or a dataset is only settled once they exist: until the scales are built,
+      // `domain('x')` of a scale that is not there yet is `[]`, which is not the value vega's dataflow computes.
+      const readsScales = DATA_DEPENDENT_EXPR.test(expr) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
+      if (initPending && value !== undefined && !readsScales) ctx.initDone.add(def.name)
       if (value !== undefined && !valuesEqual(value, ctx.signalParams[def.name])) {
         ctx.signalParams[def.name] = value
         ctx.fpMemo = undefined
@@ -1145,7 +1207,6 @@ function computeGuidePadding(
   width: number,
   height: number,
   base: { top: number; right: number; bottom: number; left: number },
-  zeroClipProjection = false,
 ): { top: number; right: number; bottom: number; left: number } {
   // Vega's autosize unions the *recursive* bounds of every top-level guide
   // (axis/legend) and mark into the viewBounds and grows the padding by the
@@ -1165,16 +1226,10 @@ function computeGuidePadding(
     // legend geometry is exact enough that a genuine positive residue (a bar
     // whose right edge is the view width) must still grow the margin.
     const ei = group.role === 'axis' ? EPS : 0
-    // Geo shape bounds are traced through clipped projections; d3's clip
-    // intersection leaves a sub-pixel fp tail that can sit exactly on an
-    // integer in our port where vega's is just below/above it. Nudge only that
-    // integer case on the vertical axis (the clip bound affected by it).
-    const geo = zeroClipProjection && (group.marktype === 'shape' || group.marktype === 'geoshape')
-    const nudgeY = (v: number): number => geo && Math.abs(v - Math.round(v)) < EPS ? (v < 0 ? -EPS : EPS) : 0
     minX = Math.min(minX, b.x1 + ei)
     maxX = Math.max(maxX, b.x2 - ei)
-    minY = Math.min(minY, b.y1 + ei + Math.min(0, nudgeY(b.y1)))
-    maxY = Math.max(maxY, b.y2 - ei + Math.max(0, nudgeY(b.y2)))
+    minY = Math.min(minY, b.y1 + ei)
+    maxY = Math.max(maxY, b.y2 - ei)
   }
   // a mark's `clip` bounds the mark to the frame it sits in (vega boundClip), a group mark across all its items
   if (hasClippedMark(items)) eachMarkBounds(items, width, height, (n) => measureGuideGroup(n as SceneGroup), (b, n) => grow(b, n as SceneGroup))
@@ -1437,10 +1492,7 @@ function buildContent(
     || ctx.rawGuides
     || ctx.chart.autosize === 'none'
     ? ctx.chart.padding
-    : computeGuidePadding(
-        items, width, height, ctx.chart.padding,
-        (ctx.chart.projections ?? []).some((p) => String(p.type).toLowerCase() === 'azimuthalequalarea' && Number(p.clipAngle) === 0),
-      )
+    : computeGuidePadding(items, width, height, ctx.chart.padding)
   const ordered = paintOrderOf(items)
   return { items: ordered, padding, ctx, width, height, hasLayout }
 }
@@ -2493,7 +2545,10 @@ function rowLocal(t: CompiledTransform, tctx: StepTransformContext): boolean {
     case 'timeunit':
       // without explicit units vega bins the data extent (global); inferUnits looks at every row
       return (t as { units?: unknown }).units != null && !(t as { inferUnits?: unknown }).inferUnits && (t as { extent?: unknown }).extent === undefined
-    case 'geoshape': case 'geopoint': case 'linkpath': case 'project':
+    case 'geoshape': case 'geopoint':
+      // a projection that fits data moves with the data: a derived x/y or path is only valid for the fit it was made under
+      return !(tctx.projections as ProjectionRegistry | undefined)?.fitNames?.has(String((t as { projection?: unknown }).projection))
+    case 'linkpath': case 'project':
       return true
     case 'bin':
       // A fixed numeric extent makes the bins constant; a `signal` output is a
@@ -2762,6 +2817,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
   // call and never leaves the evaluation context reachable from it.
   const registry = ctx.projections as ProjectionRegistry
   if (ctx.chart.projections?.some((p) => p.fit)) registry.refresh = (name) => refreshProjection(ctx, name)
+  registry.fitNames = new Set((ctx.chart.projections ?? []).filter((p) => p.fit).map((p) => p.name))
   try {
     buildDatasetsOf(ctx, inputData)
   } finally {
@@ -2889,11 +2945,28 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     return rows
   }
 
-  for (const d of ctx.chart.data) {
-    build(d.name, new Set())
+  // a projection that fits data asks for the datasets it reads before it is used (see refreshProjection)
+  if (ctx.chart.projections?.some((p) => p.fit)) ctx.buildOnDemand = onDemandBuilder(ctx, sources, build)
+  try {
+    for (const d of ctx.chart.data) {
+      build(d.name, new Set())
+    }
+  } finally {
+    ctx.buildOnDemand = undefined
   }
   // Transforms (extent, bin with a signal output) may have written signals.
   ctx.fpMemo = undefined
+}
+
+/**
+ * The builder `refreshProjection` calls for a dataset a projection's fit reads before it is built. A function of its
+ * own, not a closure inside `buildDatasetsOf`: a closure there makes every variable it names a heap-allocated context
+ * slot of the dataset builder, which costs every chart (measured: 3x the p95 of a plain evaluation, from GC).
+ */
+function onDemandBuilder(ctx: EvalContext, sources: ReadonlyMap<string, unknown>, build: (name: string, seen: Set<string>) => unknown): (name: string) => void {
+  return (n) => {
+    if (!ctx.datasets.has(n) && sources.has(n)) build(n, new Set())
+  }
 }
 
 /** Snapshot resolved scales into plain data for the scene differential (R8.1/R8.2). */

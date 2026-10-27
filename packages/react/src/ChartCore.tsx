@@ -701,7 +701,13 @@ function ChartView({
   // Spec-driven signal event loop (SVG only). Rebinds when the DOM, the scene
   // or the signal values change — not on unrelated renders.
   const signalBindingRef = React.useRef<SignalBinding | null>(null)
+  /** The most recent binding and the host element whose timers it keeps: they outlive a re-bind and end at unmount (or a new host). */
+  const lastBindingRef = React.useRef<{ host: Element | null; release: () => void } | null>(null)
   const hasSignalListeners = signalListeners != null || onSignal != null
+  React.useEffect(() => () => {
+    lastBindingRef.current?.release()
+    lastBindingRef.current = null
+  }, [])
   React.useLayoutEffect(() => {
     if (!interactive || !scene || renderer === 'canvas' || interaction == null) return
     const host = svgHostRef.current
@@ -724,8 +730,12 @@ function ChartView({
       onData: (name, rows) => dataStore.merge({ [name]: rows }),
       ...(stableLogger ? { logger: stableLogger } : {}),
       ...(preventDefault != null ? { preventDefault } : {}),
-    }, { pick: (x, y) => hitIndexFor(displayScene ?? scene)?.query(x, y) ?? null, ...(inputData ? { data: inputData } : {}) })
+    }, { pick: (x, y) => hitIndexFor(displayScene ?? scene)?.query(x, y) ?? null, ...(inputData ? { data: inputData } : {}), ...(host ? { owner: host } : {}) })
     signalBindingRef.current = binding
+    // a binding on a different host than the last one: the old host's timer streams are done
+    const prev = lastBindingRef.current
+    if (prev && prev.host !== host) prev.release()
+    lastBindingRef.current = { host, release: binding.release }
     return () => {
       binding.detach()
       if (signalBindingRef.current === binding) signalBindingRef.current = null

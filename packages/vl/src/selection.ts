@@ -15,6 +15,7 @@
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
 import { dateTimeToExpr, dateTimeToTimestamp, isDateTime } from './predicate.js'
 import { VLCompileError } from './names.js'
+import { animationSignals, animationTopLevelSignals, animationTupleSignal } from './animation.js'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -197,6 +198,9 @@ export interface SelUnit {
 
 const TIMER = (e: StreamDef): boolean => e.type === 'timer'
 
+/** vega-lite `isTimerSelection`: a selection whose events include a timer animates the `time` channel. */
+export const isTimerSelection = (c: { events?: StreamDef[] }): boolean => c.events?.find(TIMER) !== undefined
+
 export const isScaleChannel = (c: string): boolean => c === 'x' || c === 'y'
 
 /** vega-lite `hasContinuousDomain` */
@@ -228,6 +232,7 @@ function disableDirectManipulation(c: SelCmpt, def: Obj): void {
 export function parseUnitSelections(unit: SelUnit, defs: Obj[], config: unknown): Record<string, SelCmpt> {
   const cmpts: Record<string, SelCmpt> = {}
   const selectionConfig = selectionConfigOf(config)
+  let timerSelections = 0
   for (const def of defs) {
     const name = varName(def.name as string)
     const selDef = def.select
@@ -254,7 +259,13 @@ export function parseUnitSelections(unit: SelUnit, defs: Obj[], config: unknown)
     cmpt.nested = unit.nested
     cmpts[name] = cmpt
 
-    if (cmpt.events?.find(TIMER)) throw new VLCompileError(`selection "${name}": timer events (animation) are not supported`)
+    if (isTimerSelection(cmpt)) {
+      // vega-lite ignores all but the first timer selection (validate.ts refuses a second one outright)
+      if (++timerSelections > 1) {
+        delete cmpts[name]
+        continue
+      }
+    }
 
     const def_ = duplicate(def)
     parsePoint(cmpt)
@@ -538,6 +549,8 @@ function pointSignals(unit: SelUnit, cmpts: Record<string, SelCmpt>, c: SelCmpt,
   let update = `unit: ${unitNameOf(unit)}, `
   if (project.hasSelectionId) {
     update += `${SELECTION_ID}: ${datum}[${stringValue(SELECTION_ID)}]`
+  } else if (isTimerSelection(c)) {
+    update += `fields: ${fieldsSg}, values: [anim_value ? anim_value : min_extent]`
   } else {
     const values = project.items
       .map((p) => {
@@ -551,6 +564,8 @@ function pointSignals(unit: SelUnit, cmpts: Record<string, SelCmpt>, c: SelCmpt,
     update += `fields: ${fieldsSg}, values: [${values}]`
   }
 
+  // timer event: the selection is for animation
+  if (isTimerSelection(c)) return signals.concat(animationSignals(name, unit.scaleName('time')) as Signal[], [animationTupleSignal(name, unitNameOf(unit)) as Signal])
   const events = c.events
   return signals.concat([{
     name: name + TUPLE,
@@ -566,7 +581,7 @@ function projectSignals(c: SelCmpt, signals: Signal[]): Signal[] {
 }
 
 // toggle.ts
-const toggleDefined = (c: SelCmpt): boolean => c.type === 'point' && !!c.toggle
+const toggleDefined = (c: SelCmpt): boolean => c.type === 'point' && !isTimerSelection(c) && !!c.toggle
 
 function toggleSignals(c: SelCmpt, signals: Signal[]): Signal[] {
   return signals.concat({ name: c.name + TOGGLE, value: false, on: [{ events: c.events, update: c.toggle }] })
@@ -669,7 +684,7 @@ function legendsSignals(c: SelCmpt, signals: Signal[]): Signal[] {
 }
 
 // clear.ts
-const clearDefined = (c: SelCmpt): boolean => c.clear !== undefined && c.clear !== false
+const clearDefined = (c: SelCmpt): boolean => c.clear !== undefined && c.clear !== false && !isTimerSelection(c)
 
 function clearTopLevelSignals(c: SelCmpt, signals: Signal[]): Signal[] {
   if (inputsDefined(c)) {
@@ -969,7 +984,8 @@ export function assembleTopLevelSelectionSignals(cmpts: Record<string, SelCmpt>,
       signals.push({ name, update: `${VL_SELECTION_RESOLVE}(${store}, ${stringValue(resolve)}${isPoint}` })
     }
     hasSelections = true
-    // inputs, scales (multiview only), legends, clear
+    // point: a timer selection's clock; then inputs, scales (multiview only), legends, clear
+    if (c.type === 'point' && isTimerSelection(c)) signals = animationTopLevelSignals(signals) as Signal[]
     if (inputsDefined(c)) signals = inputsTopLevelSignals(c, signals)
     if (scalesDefined(c)) signals = scalesTopLevelSignals(c, signals)
     if (legendsDefined(c)) signals = legendsTopLevelSignals(c, signals)
