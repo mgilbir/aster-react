@@ -1,0 +1,22 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "description": "A scale declared in a group nested two levels deep ranges over the view's width and height (the signals of the view), not over the size of the group it sits in or of the group around it.",
+  "width": 200,
+  "height": 80,
+  "padding": 5,
+  "autosize": "none",
+  "marks": [
+    { "type": "group",
+      "encode": { "update": { "x": { "value": 10 }, "y": { "value": 5 }, "width": { "value": 150 }, "height": { "value": 60 }, "stroke": { "value": "#aaa" } } },
+      "marks": [
+        { "type": "group",
+          "encode": { "update": { "x": { "value": 10 }, "y": { "value": 5 }, "width": { "value": 60 }, "height": { "value": 40 }, "stroke": { "value": "#c66" } } },
+          "scales": [
+            { "name": "x", "type": "linear", "domain": [0, 10], "range": "width" },
+            { "name": "y", "type": "linear", "domain": [0, 10], "range": "height" }
+          ],
+          "axes": [ { "orient": "bottom", "scale": "x" }, { "orient": "left", "scale": "y" } ],
+          "marks": [ { "type": "symbol", "encode": { "update": { "x": { "scale": "x", "value": 5 }, "y": { "scale": "y", "value": 5 }, "size": { "value": 100 }, "fill": { "value": "#4c78a8" } } } } ] }
+      ] }
+  ]
+}

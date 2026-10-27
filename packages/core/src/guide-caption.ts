@@ -4,15 +4,26 @@
  * SVG and the tree can not say different things about an axis. `a11y-parity` checks it against vega.
  */
 import { currentLocale } from './locale.js'
-import { tickFormat } from './scale.js'
+import { isDiscretizing, isTemporal, labelFormat, labelValues, tickFormat } from './scale.js'
 import { installGuideCaptions } from './render.js'
 
 export type ScaleSnapshots = Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; labelValues?: unknown[] }>
 
 const DISCRETE = new Set(['band', 'point', 'ordinal', 'bin-ordinal'])
-const DISCRETIZING = new Set(['quantize', 'quantile', 'threshold', 'bin-ordinal'])
 // read per call, not snapshotted at import (C70)
 const loc = (): ReturnType<typeof currentLocale> => currentLocale()
+
+/** vega-scale caption.js `format`: the labels the caption quotes are formatted as a legend would, with the temporal defaults of a screen reader. */
+function captionFormat(locale: ReturnType<typeof currentLocale>, scale: Rec, specifier: unknown, formatType: string | undefined): (v: unknown) => string {
+  const type = formatType || (scale.type as string)
+  // replace abbreviated time specifiers to improve screen reader experience
+  if (typeof specifier === 'string' && isTemporal(type)) specifier = specifier.replace(/%a/g, '%A').replace(/%b/g, '%B')
+  return (!specifier && type === 'time' ? locale.timeFormat('%A, %d %B %Y, %X')
+    : !specifier && type === 'utc' ? locale.utcFormat('%A, %d %B %Y, %X UTC')
+    : labelFormat(locale, scale as never, 5, '', specifier, formatType, true)) as unknown as (v: unknown) => string
+}
+
+type Rec = Record<string, unknown>
 
 /** vega-scale domainCaption, using the same locale/tick formatting as vega. */
 export function scaleCaption(
@@ -22,47 +33,24 @@ export function scaleCaption(
   formatType?: string,
 ): string {
   if (!name) return ''
-  const s = scales.get(name) as {
-    domain?: () => unknown[]
-    type?: string
-    bins?: unknown[]
-    labelValues?: unknown[]
-  } | undefined
+  const s = scales.get(name) as Rec & { domain?: () => unknown[]; type?: string } | undefined
   if (!s || typeof s.domain !== 'function') return ''
   const domain = s.domain()
   const type = s.type ?? 'unknown'
-  if (!domain.length) {
+  if (!domain.length && !isDiscretizing(type)) {
     return DISCRETE.has(type) ? '0 values: ' : 'values from NaN to NaN'
   }
-  let spec = format
-  // (vega-scale caption.js: the format type, when given, decides what kind of scale this is for the default)
-  const effective = formatType || type
-  const temporal = effective === 'time' || effective === 'utc'
-  if (!spec && temporal) {
-    spec = effective === 'utc' ? '%A, %d %B %Y, %X UTC' : '%A, %d %B %Y, %X'
-  }
-  // vega-scale expands abbreviated weekday/month specifiers for screen readers.
-  if (temporal && typeof spec === 'string') spec = spec.replace(/%a/g, '%A').replace(/%b/g, '%B')
-  let fmt = tickFormat(loc(), s as never, 5, spec, formatType, true)
-  if (type === 'quantile' || type === 'quantize' || type === 'bin-ordinal') {
-    // vega-scale's thresholdFormat: quantile formats from quantiles, quantize
-    // from its domain; the minimum gap drives the shared precision.
-    const src = type === 'quantile' || type === 'bin-ordinal' ? (s.labelValues ?? domain) : domain
-    const nums = src.map(Number).filter((v) => Number.isFinite(v))
-    let d = nums.length > 1 ? Math.abs(nums[1]! - nums[0]!) : (nums[0] ?? 0)
-    for (let i = 1; i < nums.length; i++) d = Math.min(d, Math.abs(nums[i]! - nums[i - 1]!))
-    fmt = loc().formatSpan(0, d, 30, spec) as unknown as (v: unknown) => string
-  }
+  const fmt = captionFormat(loc(), s, format, formatType)
   const print = (v: unknown): string => {
     try { return fmt(v) } catch { return String(v) }
   }
-  if (DISCRETIZING.has(type)) {
-    // (a bin-ordinal scale's label values are its bins without the last edge: vega-scale binValues)
-    const values = (type === 'bin-ordinal' ? (s.labelValues ?? domain).slice(0, -1) : s.labelValues ? [-Infinity, ...s.labelValues] : [domain[0], ...domain]) as unknown[]
-    const v = values.slice(1).map(print)
+  // if scale breaks domain into bins, describe boundaries
+  if (isDiscretizing(type)) {
+    const v = labelValues(s as never, undefined).slice(1).map(print)
     const n = v.length
     return `${n} boundar${n === 1 ? 'y' : 'ies'}: ${v.join(', ')}`
   }
+  // if scale domain is discrete, list values
   if (DISCRETE.has(type)) {
     const n = domain.length
     const max = 7
@@ -71,25 +59,34 @@ export function scaleCaption(
       : domain.map(print).join(', ')
     return `${n} value${n === 1 ? '' : 's'}: ${shown}`
   }
+  // if scale domain is continuous, describe value range
   return `values from ${print(domain[0])} to ${print(domain[domain.length - 1])}`
 }
 
 
+/**
+ * Pseudo scales for the captions, from the snapshots the scene carries: just what vega-scale's caption reads of a scale
+ * (its type, domain and range, the breakpoints of a discretizing scale, a tick formatter where d3's scale has one).
+ */
 export function scalesFromSnapshots(snaps: Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; labelValues?: unknown[] }>): Map<string, unknown> {
   const out = new Map<string, unknown>()
   for (const s of snaps) {
     const domain = s.domain.slice()
     const range = s.range.slice()
+    const values = s.labelValues?.slice()
     const obj: Record<string, unknown> = {
       type: s.type,
       domain: () => domain,
       range: () => range,
-      ...(s.labelValues != null ? { labelValues: s.labelValues.slice() } : {}),
+      ...(values != null ? { labelValues: values } : {}),
       ...(s.bandwidth != null ? { bandwidth: () => s.bandwidth } : {}),
     }
-    // Snapshot continuous scales need to answer vega-scale's span formatter;
-    // discrete domains use plain value formatting.
-    if (!DISCRETE.has(s.type)) {
+    // the breakpoints vega-scale's labels.js asks a discretizing scale for, and the bins of a binned one
+    if (s.type === 'quantile') obj.quantiles = () => values ?? []
+    else if (s.type === 'quantize') obj.thresholds = () => values ?? []
+    else if (s.type !== 'threshold' && values != null) obj.bins = values
+    // d3's continuous scales (and quantize, which is built on one, and vega's bin-ordinal) have a tickFormat; the others do not
+    if ((!DISCRETE.has(s.type) || s.type === 'bin-ordinal') && s.type !== 'quantile' && s.type !== 'threshold') {
       obj.tickFormat = (count?: unknown, specifier?: unknown) =>
         tickFormat(loc(), obj as never, count, specifier, undefined, true)
     }

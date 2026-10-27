@@ -186,7 +186,7 @@ function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales
   const b = union(absolute) ?? { x1: gx, y1: gy, x2: gx + (group.width ?? 2), y2: gy + (group.height ?? 2) }
   const allText = textOf((group.items ?? []).flatMap((x) => (Array.isArray((x as SceneGroup).items) ? (x as SceneGroup).items as SceneItem[] : [x as SceneItem])))
   if (role === 'title') {
-    const label = group.description ?? allText ?? 'Title'
+    const label = group.description ? String(group.description) : allText ?? 'Title'
     return {
       id, kind: 'title', marktype: 'group', role: 'heading', roleDescription: 'title',
       label, x: b.x1, y: b.y1, width: b.x2 - b.x1, height: b.y2 - b.y1,
@@ -203,7 +203,7 @@ function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales
         ? (group as unknown as { scale?: string }).scale
         : undefined
     const gm = group as unknown as { format?: string; formatType?: string }
-    const label = group.description ?? axisLabel({ orient, title, scale: scaleName, format: gm.format, formatType: gm.formatType }, scales)
+    const label = group.description ? String(group.description) : axisLabel({ orient, title, scale: scaleName, format: gm.format, formatType: gm.formatType }, scales)
     const dom = (scales.get(scaleName ?? '') as { domain?: () => unknown[] } | undefined)?.domain?.()
     const numeric = dom && dom.length >= 2 && typeof dom[0] === 'number' && typeof dom[dom.length - 1] === 'number'
     return {
@@ -218,7 +218,7 @@ function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales
     }
   }
   const gm = group as unknown as { legendType?: string; legendScale?: string; legendChannels?: string[]; legendFormat?: string; legendFormatType?: string }
-  const label = group.description ?? legendLabel({ ...gm, title }, scales, typeof datum.type === 'string' ? datum.type : 'symbol')
+  const label = group.description ? String(group.description) : legendLabel({ ...gm, title }, scales, typeof datum.type === 'string' ? datum.type : 'symbol')
   return {
     id, kind: 'legend', marktype: 'group', role: 'graphics-symbol', roleDescription: 'legend',
     label, x: b.x1, y: b.y1, width: b.x2 - b.x1, height: b.y2 - b.y1,
@@ -356,8 +356,23 @@ export function buildA11yTree(
     }
     const kids = group.items
     if (!Array.isArray(kids)) return
-    const local = group.__scales ? scalesFromSnapshots(group.__scales) : scopeScales
+    const local = group.__scales ? new Map([...scopeScales, ...scalesFromSnapshots(group.__scales)]) : scopeScales
     const marktype = group.marktype
+    // vega-scenegraph: `aria: false` (the mark's, or a group item's own) puts `aria-hidden` on the element, which hides
+    // everything inside it; a group item that carries a `description` is described by its own role and role description
+    if (group.aria === false || group.itemAria?.aria === false) return
+    const own = group.itemAria
+    if (own && own.description != null) {
+      const w = Math.max(2, group.width ?? 0)
+      const h = Math.max(2, group.height ?? 0)
+      nodes.push({
+        id: `group-${seq++}`, kind: 'group', marktype: 'group',
+        role: own.ariaRole || 'graphics-object',
+        roleDescription: String(own.ariaRoleDescription || 'group mark'),
+        label: String(own.description),
+        x: gx, y: gy, width: w, height: h,
+      })
+    }
     if (role === 'mark' && marktype && marktype !== 'group') {
       const items = kids as SceneItem[]
       if (items.length > threshold) {

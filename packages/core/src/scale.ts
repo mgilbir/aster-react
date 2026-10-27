@@ -708,6 +708,101 @@ function tickLog(scale: SR, count: unknown, values: boolean): number[] | ((d: nu
   return values ? ticks.filter(test) : test
 }
 
+// ---- legend.js / labels.js: what a legend draws for a scale ------------------
+
+export const SymbolLegend = 'symbol'
+export const DiscreteLegend = 'discrete'
+export const GradientLegend = 'gradient'
+
+/** The scale method that lists a discretizing scale's breakpoints, per type (vega-scale labels.js `symbols`). */
+const SYMBOL_METHOD: Record<string, string> = { [Quantile]: 'quantiles', [Quantize]: 'thresholds', [Threshold]: 'domain' }
+/** ... and the one whose values set the label precision (`formats`). */
+const FORMAT_METHOD: Record<string, string> = { [Quantile]: 'quantiles', [Quantize]: 'domain' }
+
+/** A legend's label values; `max` is the upper end of the last interval of a discretizing scale. */
+export type LabelValues = unknown[] & { max?: number }
+
+function thresholdValues(thresholds: unknown[]): LabelValues {
+  const values: LabelValues = [-Infinity, ...thresholds]
+  values.max = +Infinity
+  return values
+}
+
+function binValues(bins: unknown[]): LabelValues {
+  const values: LabelValues = bins.slice(0, -1)
+  values.max = peek(bins) as number
+  return values
+}
+
+/** vega-scale `labelValues`: the values a legend labels (bins, log ticks, a discretizing scale's thresholds, else the ticks). */
+export function labelValues(scale: SR, count: unknown): LabelValues {
+  const m = Object.hasOwn(SYMBOL_METHOD, scale.type) ? SYMBOL_METHOD[scale.type]! : undefined
+  return scale.bins ? binValues(scale.bins)
+    : scale.type === Log ? (tickLog(scale, count, true) as LabelValues)
+    : m ? thresholdValues((scale as unknown as Record<string, () => unknown[]>)[m]!())
+    : tickValues(scale, count)
+}
+
+/** vega-scale `thresholdFormat`: one precision for all the labels, from the smallest gap between breakpoints. */
+export function thresholdFormat(locale: Locale, scale: SR, specifier: unknown): (v: unknown) => string {
+  const _ = (scale as unknown as Record<string, () => number[]>)[FORMAT_METHOD[scale.type]!]!()
+  const n = _.length
+  let d = n > 1 ? _[1]! - _[0]! : _[0]!
+  for (let i = 1; i < n; ++i) d = Math.min(d, _[i]! - _[i - 1]!)
+  // tickCount = 3 ticks times 10 for increased resolution
+  return locale.formatSpan(0, d, 3 * 10, specifier) as unknown as (v: unknown) => string
+}
+
+const isDiscreteRange = (scale: SR): boolean => Object.hasOwn(SYMBOL_METHOD, scale.type) || !!scale.bins
+const orElse = <T>(value: T | null | undefined, dflt: T): T => (value != null ? value : dflt)
+const formatValue = (value: unknown, format: (v: unknown) => string): string | null => (Number.isFinite(value) ? format(value) : null)
+
+/** A legend label function: `(value, index, values) => label`. */
+export type LabelFormat = (value: unknown, index: number, array: LabelValues) => string | null
+
+/** vega-scale `labelFormat`: how a legend labels each of its values, by the kind of legend and scale. */
+export function labelFormat(
+  locale: Locale,
+  scale: SR,
+  count: unknown,
+  type: string,
+  specifier?: unknown,
+  formatType?: string,
+  noSkip?: boolean,
+): LabelFormat {
+  const format = Object.hasOwn(FORMAT_METHOD, scale.type) && formatType !== Time && formatType !== UTC
+    ? thresholdFormat(locale, scale, specifier)
+    : tickFormat(locale, scale, count, specifier, formatType, noSkip)
+  return type === SymbolLegend && isDiscreteRange(scale)
+    // an interval: `lo – hi`, `< hi` for the first, `≥ lo` for the last
+    ? (value, index, array) => {
+        const limit = orElse(array[index + 1], orElse(array.max, +Infinity))
+        const lo = formatValue(value, format)
+        const hi = formatValue(limit, format)
+        return lo && hi ? lo + ' \u2013 ' + hi : hi ? '< ' + hi : '\u2265 ' + lo
+      }
+    : type === DiscreteLegend
+      // the first value is the lower end of the first band: no label
+      ? (value, index) => (index ? format(value) : null)
+      : (value) => format(value)
+}
+
+/** vega-scale `labelFraction`: where along the legend each value of a discretizing scale sits. */
+export function labelFraction(scale: SR): (value: unknown) => number {
+  const domain = scale.domain() as number[]
+  const count = domain.length - 1
+  let lo = +domain[0]!
+  let hi = +peek(domain)!
+  let span = hi - lo
+  if (scale.type === Threshold) {
+    const adjust = count ? span / count : 0.1
+    lo -= adjust
+    hi += adjust
+    span = hi - lo
+  }
+  return (value) => ((value as number) - lo) / span
+}
+
 // ---- interpolate.js ---------------------------------------------------------
 
 const scaleProps = ['clamp', 'base', 'constant', 'exponent']

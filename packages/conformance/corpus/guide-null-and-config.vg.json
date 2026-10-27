@@ -1,0 +1,36 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "description": "null in a guide: a null in the config removes the default (the channel is absent, the style's applies), a null in the spec is no value (the config's applies), and a null from a signal is a value (a tick size of null draws no tick). The guide styles (guide-label, guide-title, group-title) and the orient blocks of the config apply to the guide marks.",
+  "width": 200,
+  "height": 120,
+  "padding": 8,
+  "autosize": "pad",
+  "signals": [ { "name": "nothing", "value": null } ],
+  "config": {
+    "axis": { "domainColor": null, "tickColor": "#a33", "labelPadding": null },
+    "axisY": { "tickSize": 9, "labelColor": "#33a" },
+    "legend": { "symbolStrokeWidth": null, "labelFontSize": 12 },
+    "title": { "color": null, "subtitleColor": "#777" },
+    "style": {
+      "guide-label": { "font": "serif", "fontStyle": "italic" },
+      "guide-title": { "fontWeight": "normal", "fill": "#075" },
+      "group-title": { "fontSize": 17 }
+    }
+  },
+  "data": [ { "name": "t", "values": [ { "k": "a", "v": 3 }, { "k": "b", "v": 8 }, { "k": "c", "v": 5 } ] } ],
+  "scales": [
+    { "name": "x", "type": "band", "domain": { "data": "t", "field": "k" }, "range": "width", "padding": 0.2 },
+    { "name": "y", "type": "linear", "domain": [0, 10], "range": "height", "nice": true },
+    { "name": "c", "type": "ordinal", "domain": [ "a", "b", "c" ], "range": "category" }
+  ],
+  "axes": [
+    { "orient": "bottom", "scale": "x", "title": "Letter", "tickSize": null },
+    { "orient": "left", "scale": "y", "title": "Value", "grid": true, "titlePadding": { "signal": "nothing" }, "labelOffset": null }
+  ],
+  "legends": [ { "fill": "c", "title": "Letter", "symbolSize": { "signal": "nothing" } } ],
+  "title": { "text": "A title", "subtitle": "and a subtitle" },
+  "marks": [
+    { "type": "rect", "from": { "data": "t" },
+      "encode": { "update": { "x": { "scale": "x", "field": "k" }, "width": { "scale": "x", "band": 1 }, "y": { "scale": "y", "field": "v" }, "y2": { "scale": "y", "value": 0 }, "fill": { "scale": "c", "field": "k" } } } }
+  ]
+}

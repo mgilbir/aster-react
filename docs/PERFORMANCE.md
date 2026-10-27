@@ -133,11 +133,38 @@ the default-config fix Aster rendered such symbols unfilled (Vega draws them fil
 empty paint layer. The benchmark spec now states its fill, and the numbers above are the filled render on this
 machine. I measured them on the current stack; the reviewer reports that the pre-audit baseline gives the same numbers once the fill is explicit (I did not re-run that).
 
+### What the guides cost (2026-10-26)
+
+Axes, legends and titles are built by ports of vega-parser's guide encoders: every channel of every tick, grid line, label
+and legend entry is Vega's own encode, so the items carry what Vega's carry, and the document says what Vega's says
+(about 9% more bytes for a chart with a thousand ticks). The marks of a guide are planned once per compiled chart (the
+defaults from `config.style`, which channels are plain values, which depend on the datum, a tick position as a closure
+over its scale); each evaluation then runs only the channels that read the datum. Measured with the 1,000-point scatter and bar fixtures (600 x 400), each phase on a spec nothing has compiled, medians of 16
+alternating runs on a quiet machine with `process.cpuUsage` (the first evaluation, the second evaluation of the same compiled chart,
+`renderSceneToSvg`, compile), ratios branch / before: scatter compile 0.78, evaluate 1.18, render 1.05, second evaluate 1.07; bar compile
+0.74, evaluate 1.04, render 1.12, second evaluate 1.02 (with 300 specs per run, once the code is warm: all within 1.05 except bar render
+at 1.05 and scatter evaluate at 1.04). The bar render is the document being larger (313,561 bytes against 289,209: the 1,000 ticks and 1,000
+grid lines carry the attributes Vega writes). `bench:incremental` (10,000 and 100,000 points) is within 0 to 5% on every row;
+`bench:browser`, 1,000 bars, four alternating runs, medians: `<Chart>` mount +2%, update -6%, resize -7%; the DOM variant +4%, -3%, -2%.
+
+Re-measured on the final tree (6 alternating runs, 80 fresh specs each, medians, load about 1), ratios against the code before
+this work: scatter compile 0.79, first evaluate 1.13, render 1.03, second evaluate 1.06; bar compile 0.72, first evaluate 1.09,
+render 1.05, second evaluate 0.92. A fresh compile + evaluate + render, 60 specs per kind in one process: line 0.80, bar 1.07.
+The known gap is the cold path, and it depends on what ran before: a fresh scatter is +3% after bar charts but +20 to 30% right after
+line charts (the code is still in the interpreter and baseline tiers for the first charts of a process). Warm, every phase is within 10%.
+Closing the cold gap would need a second, hand-written guide path, which this work deliberately does not have (one plan feeds every
+guide, so the output cannot drift between two paths).
+
+What made this cheap: a chart's guide marks are shared by every chart whose guide has the same content, config object, scale and orient
+(the merged default config is built once and frozen, so a spec without a config shares it), the entries of a guide are closures made once
+per entry and bound to an evaluation's scales (the marks' own evaluator is never called by a guide: sharing it made the marks' evaluation
+slower), ticks, grid lines and labels are made by one constructor per leaf kind, and nothing keeps a weak-map entry per chart.
+
 ## Bundle sizes
 
-`pnpm bench:bundle` (esbuild, minified, react external): `@aster/react` `<Chart>` 161.1 kB gzip
-(450.5 kB minified, 133.0 kB brotli), `<SvgChart>` from `@aster/react/lite` 144.2 kB gzip (411.2 kB minified, 120.8 kB brotli),
-`<SvgChart>` + `interaction` 155.4 kB gzip (435.2 kB minified, 128.5 kB brotli), vs react-vega 288.7 kB gzip and the official
+`pnpm bench:bundle` (esbuild, minified, react external): `@aster/react` `<Chart>` 172.4 kB gzip
+(489.2 kB minified, 145.9 kB brotli), `<SvgChart>` from `@aster/react/lite` 153.0 kB gzip (440.5 kB minified, 130.3 kB brotli),
+`<SvgChart>` + `interaction` 166.2 kB gzip (473.8 kB minified, 141.3 kB brotli), vs react-vega 288.7 kB gzip and the official
 vega-embed tutorial 288.0 kB.
 
 `pnpm --filter @aster/benchmarks run budget` bundles one tiny app per documented import pattern (esbuild, minify,
@@ -149,18 +176,18 @@ the number in the same PR. Measured 2026-10-26 (after the Vega-Lite maps and ani
 
 | Import pattern | Before selections (gzip kB) | Now (gzip kB) | Budget (kB) |
 |---|---|---|---|
-| `import { renderSpec } from '@aster/core'` | 123.1 | 126.3 | 126.8 |
-| `import { useChart } from '@aster/react'` | 126.4 | 129.7 | 130.3 |
-| `import { Chart } from '@aster/react'` | 157.2 | 164.8 | 165.3 |
-| `import { SvgChart } from '@aster/react/lite'` | 142.0 | 145.9 | 146.4 |
-| `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | 151.5 | 159.1 | 159.6 |
-| `import '@aster/react/vl'` + `<Chart>` | 211.3 | 240.0 | 240.5 |
+| `import { renderSpec } from '@aster/core'` | 123.1 | 133.8 | 134.3 |
+| `import { useChart } from '@aster/react'` | 126.4 | 137.7 | 138.2 |
+| `import { Chart } from '@aster/react'` | 157.2 | 172.4 | 172.9 |
+| `import { SvgChart } from '@aster/react/lite'` | 142.0 | 153.0 | 153.5 |
+| `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | 151.5 | 166.2 | 166.7 |
+| `import '@aster/react/vl'` + `<Chart>` | 211.3 | 247.4 | 247.9 |
 | core + `@aster/core/dom` (marginal) | 5.8 | 5.7 | 6.2 |
 | core + `@aster/core/canvas` (marginal) | 4.8 | 4.8 | 5.3 |
-| core + `@aster/core/hit` (marginal) | 5.1 | 5.0 | 5.5 |
-| core + `@aster/core/signals` (marginal) | 4.4 | 7.8 | 8.3 |
-| core + `@aster/core/load` (marginal) | 5.1 | 5.1 | 5.6 |
-| core + `@aster/core/geo` (marginal) | 12.4 | 12.3 | 12.8 |
+| core + `@aster/core/hit` (marginal) | 5.1 | 5.2 | 5.5 |
+| core + `@aster/core/signals` (marginal) | 4.4 | 7.7 | 8.3 |
+| core + `@aster/core/load` (marginal) | 5.1 | 5.0 | 5.6 |
+| core + `@aster/core/geo` (marginal) | 12.4 | 12.6 | 12.8 |
 | core + `@aster/core/transforms` (marginal) | 15.1 | 15.1 | 15.6 |
 
 "Before" is the same apps bundled with no `sideEffects` field (`ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1 node
@@ -180,7 +207,7 @@ The `useChart` and `<Chart>` rows fail if the field is removed or widened; `scri
 that fault and requires the budget to fail. The other direction (a list that is too narrow drops a registration) is
 caught by `pnpm check:bundle`, which bundles and executes each import pattern.
 
-The Vega-Lite compiler is 75.2 kB gzip on top of the base `<Chart>` (240.0 minus 164.8). It was 54.1 before the selections, maps and animation work: the selection compiler is most of the growth, then the maps (projections, geojson / geopoint data, geoshape marks) and the animation (the `time` channel's scale and frame dataset). Trimming the validation layer
+The Vega-Lite compiler is 75.0 kB gzip on top of the base `<Chart>` (247.4 minus 172.4). It was 54.1 before the selections, maps and animation work: the selection compiler is most of the growth, then the maps (projections, geojson / geopoint data, geoshape marks) and the animation (the `time` channel's scale and frame dataset). Trimming the validation layer
 (`packages/vl/src/validate.ts`: allow-lists derived from one table each, shared message templates, dead branches removed;
 no check dropped, every message unchanged) took `@aster/vl` from 180,940 to 176,836 bytes minified (-4.1 kB) and from
 55,828 to 55,606 bytes gzip level 9 (-0.2 kB): the validator is mostly unique error text, which gzip already compresses well.

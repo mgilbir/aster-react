@@ -1,0 +1,22 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "description": "A legend whose entries cannot be made (an interval string as tickCount over a linear scale) aborts vega's dataflow pass in its own scope: the legends before it are there with no entries, the failing one and whatever follows it in that scope are not, nor are the groups built after it; every guide stands where it was encoded. Here the failing legend is in the second of three groups.",
+  "width": 220,
+  "height": 90,
+  "padding": 5,
+  "autosize": "none",
+  "scales": [
+    { "name": "o", "type": "ordinal", "domain": ["a", "b"], "range": ["#c00", "#06c"] }
+  ],
+  "marks": [
+    { "type": "group", "encode": { "update": { "x": { "value": 5 }, "width": { "value": 60 }, "height": { "value": 60 }, "stroke": { "value": "#999" } } },
+      "legends": [ { "fill": "o", "title": "first group" } ] },
+    { "type": "group", "encode": { "update": { "x": { "value": 80 }, "width": { "value": 60 }, "height": { "value": 60 }, "stroke": { "value": "#999" } } },
+      "scales": [ { "name": "g", "type": "linear", "domain": [0, 10], "range": ["white", "black"] } ],
+      "legends": [ { "fill": "o", "title": "before" }, { "fill": "g", "tickCount": "week", "title": "failing" }, { "fill": "o", "title": "after" } ],
+      "marks": [ { "type": "rect", "encode": { "update": { "x": { "value": 3 }, "y": { "value": 3 }, "width": { "value": 8 }, "height": { "value": 8 }, "fill": { "value": "#4c78a8" } } } } ] },
+    { "type": "group", "encode": { "update": { "x": { "value": 155 }, "width": { "value": 60 }, "height": { "value": 60 }, "stroke": { "value": "#999" } } },
+      "legends": [ { "fill": "o", "title": "third group" } ] }
+  ],
+  "legends": [ { "fill": "o", "title": "view legend", "orient": "bottom", "direction": "horizontal" } ]
+}

@@ -174,7 +174,11 @@ Load the matching addon (`@aster/core/geo`, `@aster/core/transforms`, `@aster/co
 
 - **Unknown dataset names are fatal; unknown signal names are not.** An undeclared dataset used as a source (`from.data`,
   a scale domain) is `SpecParseError: Undefined data set name: "<name>"`, as `vega.parse`, from `compileChart` and so
-  from every host. `vega.parse` also throws on an unknown signal name (`Unrecognized signal name`); Aster renders such a
+  from every host. So is a name declared twice in one scope, `SpecParseError: Duplicate data set name: "<name>"`, with
+  vega-parser's scoping: data sets, named marks, a facet's name, `root`, and every user-named mark a guide is made of
+  (`encode.axis`, `encode.grid`, `encode.legend`, `encode.symbols`, ...) are data sets of the scope they are parsed in;
+  a nested group owns its own names and may shadow its parents'. (Names such as `toString` crash vega's own parser;
+  Aster does not reproduce that.) `vega.parse` also throws on an unknown signal name (`Unrecognized signal name`); Aster renders such a
   spec (the signal is `undefined`) without a report. An unknown scale `type` is not fatal either: vega throws at parse
   time, Aster logs it and stops building scales (see the table above).
 - **Spec lists follow vega-util `array()`.** `data`, `scales`, `marks`, ... may be a lone object (a one-element list)

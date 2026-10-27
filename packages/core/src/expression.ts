@@ -40,7 +40,7 @@ function numericSequence(start: number, stop?: number, step?: number): number[] 
 import { rgb, hsl, lab, hcl } from './color.js'
 import type { AstNode } from './expr-parser.js'
 import {
-  ascending, extent, isArray, isBoolean, isDate, isNumber, isObject,
+  ascending, extent, lerp as lerpOf, isArray, isBoolean, isDate, isNumber, isObject,
   isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, safeGet, DisallowedObjectProperties,
   inrange, clampRange, isTuple, panLinear, panLog, panPow, panSymlog, zoomLinear, zoomLog, zoomPow, zoomSymlog,
 } from './util.js'
@@ -346,12 +346,7 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     clampRange: (r: unknown, lo: unknown, hi: unknown) => clampRange(r as number[], lo as number, hi as number),
     inrange: (value: unknown, range: unknown, left?: unknown, right?: unknown) => inrange(value, range as unknown[], left as boolean | undefined, right as boolean | undefined),
     join: (seq: unknown, sep?: unknown) => (seq as unknown[]).join(sep as string | undefined),
-    lerp: (arr: unknown, t: unknown) => {
-      const a = arr as number[]
-      const s = a.length <= 1 ? a[0] ?? 0 : a[0]!
-      const e = a.length <= 1 ? a[0] ?? 0 : a[a.length - 1]!
-      return (1 - (t as number)) * s + (t as number) * e
-    },
+    lerp: (arr: unknown, t: unknown) => lerpOf(arr as number[], t),
     length: lengthOf,
     indexof: (seq: unknown, v: unknown) => (seq as { indexOf: (v: unknown) => number }).indexOf(v),
     lastindexof: (seq: unknown, v: unknown) => (seq as { lastIndexOf: (v: unknown) => number }).lastIndexOf(v),

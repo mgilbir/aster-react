@@ -1,0 +1,31 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "description": "A group item with aria: false is aria-hidden on its own <g> (and nothing else about the item is written); aria is read strictly (0 and null do not hide), per item; nested group items describe themselves too.",
+  "width": 300,
+  "height": 110,
+  "padding": 5,
+  "autosize": "none",
+  "data": [
+    { "name": "t", "values": [
+      { "k": "a", "v": 10, "on": true },
+      { "k": "b", "v": 80, "on": false },
+      { "k": "c", "v": 150, "on": 0 },
+      { "k": "d", "v": 220, "on": null }
+    ] }
+  ],
+  "marks": [
+    {
+      "type": "group", "from": { "data": "t" },
+      "encode": { "update": {
+        "x": { "field": "v" }, "y": { "value": 5 }, "width": { "value": 60 }, "height": { "value": 90 }, "stroke": { "value": "#bbb" },
+        "aria": { "field": "on" }, "description": { "signal": "'tile ' + datum.k" }
+      } },
+      "marks": [
+        { "type": "group",
+          "encode": { "update": { "x": { "value": 6 }, "y": { "value": 6 }, "width": { "value": 30 }, "height": { "value": 30 }, "fill": { "value": "#eee" },
+            "description": { "value": "inner" }, "ariaRole": { "value": "img" }, "aria": { "signal": "parent.v < 200" } } },
+          "marks": [ { "type": "symbol", "encode": { "update": { "x": { "value": 15 }, "y": { "value": 15 }, "size": { "value": 200 }, "fill": { "value": "tomato" } } } } ] }
+      ]
+    }
+  ]
+}

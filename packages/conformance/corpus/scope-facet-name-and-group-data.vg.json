@@ -1,0 +1,29 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "description": "A facet's name is a data set of the faceted group's own scope: two facets over one data set can both be called `f`, and a facet may be named like its parent's data set (vega-parser parseFacet: subscope.addData(name)).",
+  "width": 300,
+  "height": 140,
+  "padding": 5,
+  "autosize": "none",
+  "data": [ { "name": "t", "values": [ { "g": "p", "v": 10 }, { "g": "p", "v": 30 }, { "g": "q", "v": 20 }, { "g": "q", "v": 50 } ] } ],
+  "marks": [
+    {
+      "type": "group", "from": { "facet": { "name": "f", "data": "t", "groupby": "g" } },
+      "encode": { "update": { "x": { "value": 0 }, "y": { "signal": "datum.g === 'p' ? 0 : 70" }, "width": { "value": 140 }, "height": { "value": 60 }, "stroke": { "value": "#ccc" } } },
+      "marks": [ { "type": "rect", "from": { "data": "f" }, "encode": { "update": {
+        "x": { "field": "v", "mult": 2 }, "y": { "value": 10 }, "width": { "value": 14 }, "height": { "value": 30 }, "fill": { "value": "steelblue" } } } } ]
+    },
+    {
+      "type": "group", "from": { "facet": { "name": "f", "data": "t", "groupby": "g" } },
+      "encode": { "update": { "x": { "value": 150 }, "y": { "signal": "datum.g === 'p' ? 0 : 70" }, "width": { "value": 140 }, "height": { "value": 60 }, "stroke": { "value": "#ccc" } } },
+      "marks": [ { "type": "symbol", "from": { "data": "f" }, "encode": { "update": {
+        "x": { "field": "v", "mult": 2 }, "y": { "value": 30 }, "size": { "value": 100 }, "fill": { "value": "tomato" } } } } ]
+    },
+    {
+      "type": "group", "from": { "facet": { "name": "t", "data": "t", "groupby": "g" } },
+      "encode": { "update": { "x": { "value": 0 }, "y": { "value": 0 }, "width": { "value": 0 }, "height": { "value": 0 } } },
+      "marks": [ { "type": "rule", "from": { "data": "t" }, "encode": { "update": {
+        "x": { "field": "v", "mult": 1 }, "x2": { "field": "v", "mult": 1 }, "y": { "value": 100 }, "y2": { "value": 130 }, "stroke": { "value": "purple" } } } } ]
+    }
+  ]
+}

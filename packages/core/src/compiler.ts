@@ -5,7 +5,8 @@
  */
 import { dict, ownGet } from './util.js'
 import { checkDataReferences, normalizeSpecLists } from './spec-structure.js'
-import { mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
+import { markShareable } from './guide-encode.js'
+import { defaultMergedConfig, mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
 import type {
   CompiledAxis,
   CompiledChart,
@@ -34,12 +35,16 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
   // vega-parser reads every scope list through vega-util `array()` and refuses a spec that uses a data
   // set it never declared (`Undefined data set name`) before any view exists: same here, before anything runs.
   const rawSpec = normalizeSpecLists(givenSpec)
-  checkDataReferences(rawSpec)
-  markSeq = 0
   // Vega parses a view with mergeConfig(defaultConfig(), spec.config): every
   // default below (mark, axis, legend, title, style, range...) is read from this
   // merged config, exactly as upstream does (see config-defaults.ts).
-  const spec: VgSpec = { ...rawSpec, config: mergeVegaConfig(vegaDefaultConfig(), rawSpec.config as Record<string, unknown> | undefined) as VgSpec['config'] }
+  const userConfig = rawSpec.config as Record<string, unknown> | undefined
+  const mergedConfig = (userConfig == null || (typeof userConfig === 'object' && !Array.isArray(userConfig) && Object.keys(userConfig).length === 0)
+    ? defaultMergedConfig()
+    : mergeVegaConfig(vegaDefaultConfig(), userConfig)) as Record<string, unknown>
+  checkDataReferences(rawSpec, mergedConfig)
+  markSeq = 0
+  const spec: VgSpec = { ...rawSpec, config: mergedConfig as VgSpec['config'] }
 
   const signalDefs = compileSignalDefs(spec.signals as Array<Record<string, unknown>> | undefined)
   const signals = resolveSignals(signalDefs)
@@ -131,6 +136,8 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     projections,
     configRange,
     autosizeContains,
+    style: cfgStyle,
+    ...(cfg.lineBreak != null ? { lineBreak: cfg.lineBreak } : {}),
     layout: (spec.layout as Record<string, unknown> | undefined) ?? undefined,
   }
 }
@@ -310,6 +317,9 @@ function compileScale(s: Record<string, unknown>): CompiledScale {
  * scales are those the scope can see - so a nested group's axes follow
  * `config.axis` exactly as the top-level ones do (C51).
  */
+/** the axis config blocks of the default config, by orient and band: four orients, two kinds of scale at most */
+const DEFAULT_AXIS_BLOCKS = new Map<string, Record<string, unknown>>()
+
 function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: Record<string, unknown>, scales: CompiledScale[]): CompiledAxis[] {
   const cfgAxis = (cfg.axis ?? {}) as Record<string, unknown>
   const cfgAxisX = (cfg.axisX ?? {}) as Record<string, unknown>
@@ -329,13 +339,21 @@ function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: 
       continue
     }
     const orient = String(a.orient ?? '')
-    const defaults: Record<string, unknown> = { ...cfgAxis }
-    Object.assign(defaults, orient === 'top' || orient === 'bottom' ? cfgAxisX : cfgAxisY)
-    const orientBlock = (cfg as Record<string, Record<string, unknown>>)[`axis${orient.charAt(0).toUpperCase()}${orient.slice(1)}`]
-    if (orient && typeof orientBlock === 'object') Object.assign(defaults, orientBlock)
     // the innermost scale of that name wins (a group's own scale shadows the view's)
     const sc = [...scales].reverse().find((s) => s.name === a.scale)
-    if (sc?.type === 'band') Object.assign(defaults, cfgAxisBand)
+    const band = sc?.type === 'band'
+    // (the blocks of a config nobody can change are merged once: the guides' marks are kept against the result)
+    const memo = cfg === defaultMergedConfig() ? DEFAULT_AXIS_BLOCKS : undefined
+    const memoKey = `${orient}|${band}`
+    let defaults = memo?.get(memoKey)
+    if (defaults === undefined) {
+      defaults = { ...cfgAxis }
+      Object.assign(defaults, orient === 'top' || orient === 'bottom' ? cfgAxisX : cfgAxisY)
+      const orientBlock = (cfg as Record<string, Record<string, unknown>>)[`axis${orient.charAt(0).toUpperCase()}${orient.slice(1)}`]
+      if (orient && typeof orientBlock === 'object') Object.assign(defaults, orientBlock)
+      if (band) Object.assign(defaults, cfgAxisBand)
+      if (memo !== undefined) { Object.freeze(defaults); markShareable(defaults); memo.set(memoKey, defaults) }
+    }
     axes.push(compileAxis(applyConfigDefaults(a, defaults, scales)))
   }
   return axes
@@ -344,6 +362,7 @@ function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: 
 /** The legends of one scope with `config.legend` defaults (see {@link compileGuideAxes}). */
 function compileGuideLegends(raw: Array<Record<string, unknown>> | undefined, cfg: Record<string, unknown>): CompiledLegend[] {
   const cfgLegend = (cfg.legend ?? {}) as Record<string, unknown>
+  if (cfg === defaultMergedConfig() && cfg.legend) markShareable(cfgLegend)
   return (raw ?? []).map((l) => compileLegend(applyConfigDefaults(l, cfgLegend, undefined, true)))
 }
 
@@ -425,6 +444,8 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
     frame: (spec.frame as string | undefined) ?? (cfg.frame as string | undefined),
     ...((spec.aria ?? cfg.aria) === false ? { aria: false } : {}),
     encode: spec.encode as CompiledTitle['encode'],
+    own: spec,
+    cfg,
   }
 }
 
@@ -452,6 +473,7 @@ function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string
   // with `config.gradientLabelOffset` as their fallback, not `config.labelOffset`).
   // Keep the guide's own properties apart from the config-merged ones.
   out.own = o
+  out.cfg = defaults
   return out
 }
 

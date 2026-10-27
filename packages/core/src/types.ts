@@ -159,6 +159,10 @@ export interface CompiledChart {
   signals: Record<string, unknown>
   /** Raw signal definitions, including `update` expressions for static resolution. */
   signalDefs?: CompiledSignalDef[]
+  /** `config.style`: the named styles guide marks take their defaults from (vega-parser applyDefaults). */
+  style?: Record<string, Record<string, unknown>>
+  /** `config.lineBreak` (applied to every text mark that does not encode its own). */
+  lineBreak?: unknown
   /** Top-level chart title (string or object form, defaults merged from config.title). */
   title?: CompiledTitle
   /** Cartographic projections referenced by geo marks / the geoshape transform. */
@@ -195,6 +199,9 @@ export interface CompiledTitle {
   /** `aria: false`: the title's container is aria-hidden in the SVG. */
   aria?: boolean
   encode?: Record<string, Record<string, EncodeValue>>
+  /** The title spec as written (a string title is `{text}`), and `config.title`: vega's `lookup(own, cfg)`. */
+  own?: Record<string, unknown>
+  cfg?: Record<string, unknown>
 }
 
 export interface CompiledSignalDef {
@@ -415,6 +422,8 @@ export interface CompiledAxis {
   offset?: number
   /** The axis's own properties (before config merge). */
   own?: Record<string, unknown>
+  /** The config block the axis reads (`config.axis` with `axisX` / `axisY` / `axis<Orient>` / `axisBand` over it): vega's `lookup(own, cfg)`. */
+  cfg?: Record<string, unknown>
   tickBand?: string
   values?: unknown[] | { signal: string }
   format?: string
@@ -428,6 +437,8 @@ export interface CompiledAxis {
 export interface CompiledLegend {
   /** The legend's own properties (before config merge). */
   own?: Record<string, unknown>
+  /** `config.legend`: vega's `lookup(own, cfg)`. */
+  cfg?: Record<string, unknown>
   fill?: string
   stroke?: string
   size?: string
@@ -641,6 +652,15 @@ export interface SceneGroup extends SceneItem {
    */
   parts?: string[]
   /**
+   * Guide only: what the spec's `encode.<part>` made of each mark of the guide (vega's guideMark): `name` is the last
+   * class token of the mark's SVG container, `interactive` lifts its `pointer-events: none`. `axis` / `legend` /
+   * `title` is the guide's group.
+   */
+  partMeta?: Record<string, { name?: string; interactive: boolean }>
+  /** A guide's group item as a box: its background (and, with `strokeForeground`, foreground) leaves (vega draws every group item's). */
+  box?: SceneItem
+  boxFg?: SceneItem
+  /**
    * A group item whose mark declares `signals` is a signal scope: `id` names the item (the mark's place in the spec, plus
    * the facet partition's key) and the values its signals had when the scene was evaluated. The event loop
    * (`@aster/core/signals`) keeps the values events write under `<id>:<name>` in the signal store, and hands
@@ -653,6 +673,12 @@ export interface SceneGroup extends SceneItem {
   interactive?: boolean
   /** Some item of the mark may carry a `description` (its encode has the channel): the SVG container then scans its items for it. */
   describes?: boolean
+  /**
+   * A group ITEM's own aria channels from its encode (vega-scenegraph `ariaItemAttributes`, written on the item's `<g>`):
+   * `description`, `aria`, `ariaRole`, `ariaRoleDescription`. Apart from the MARK's `description` / `aria` above, which
+   * are the container's.
+   */
+  itemAria?: Pick<SceneItem, 'description' | 'aria' | 'ariaRole' | 'ariaRoleDescription'>
   /** The name the spec gave the mark: the last class token of its SVG container (vega cssClass). */
   cssName?: string
   /** The role the spec gave a data mark (`role` is always 'mark' on the scene for those): `role-<markRole>` in its class. */
@@ -668,7 +694,7 @@ export interface SceneGroup extends SceneItem {
   /** Legend scale/channels (accessibility caption metadata). */
   legendScale?: string
   legendChannels?: string[]
-  /** @internal Resolved scales in this nested scope (scene-differential metadata). */
+  /** @internal Resolved scales this nested scope declares itself, as vega's group context holds them (scene-differential metadata). */
   __scales?: ScaleSnapshot[]
 }
 
@@ -750,6 +776,8 @@ export interface SceneItem {
    * column's box), `entry` (one entry's box), `symbol` `label` `gradient` `band` `title`.
    */
   _part?: string
+  /** Internal: the kind of mark a guide leaf is, when its channels do not say (a text leaf whose text is null is still text). */
+  _kind?: 'text' | 'rule' | 'symbol' | 'rect'
   // accessibility
   ariaRole?: string
   ariaLabel?: string

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Runtime parity with Vega 6.3.1 (six documented gaps closed)**, each compared with real Vega by a differential test and
+  corpus specs:
+  - Axes, legends and titles are built by ports of vega-parser's guide encoders and vega-view-transforms' layouts, so
+    every property, every `encode` block (`legend`, `entries`, `symbols`, `labels`, `title`, `gradient`, bands) and every
+    `config.style` / config block reaches an item as in Vega, and `null` means what it means there for every guide
+    property (a `null` in the config removes a default, in the spec it is no value, from a signal it is a value).
+  - Quantize, quantile and threshold legends label their bins like vega-encode (`3.0`, `< 2`, `>= 10.5`, `lo - hi`
+    intervals for symbol legends) and are as wide as Vega's.
+  - Group items write their own `aria-label`, `role`, `aria-roledescription` and `aria-hidden` (string renderer, DOM path
+    and the accessibility tree).
+  - `Duplicate data set name` follows vega-parser's scoping (a nested group may shadow its parents' names, a name is
+    declared once per scope, guide parts and facets count).
+  - An axis whose ticks cannot be made (an interval string on a non-time scale, a format that is no specifier) follows
+    Vega's dataflow abort per scope: a clean cut after the axis for most scales, a refusal where Vega's own serializer
+    crashes. Also fixed on the way: a scale in a group nested two levels deep ranges over the view's size, and an
+    `orient: none` legend no longer widens the view by its `legendX` twice.
+  - The bundle budgets of the rows that contain `@aster/core` were raised by 7.2 kB gzip (130.8 kB for core). Guides cost
+    more per item than before (every channel of every tick and label is Vega's own encode): see docs/PERFORMANCE.md.
 - **Vega-Lite params and selections**: `@aster/vl` compiles point and interval selections, `bind` to inputs / legend /
   scales, `{param}` conditions, predicates and filters, lookups from a selection, `scale.domain` `{param}` /
   `{unionWith}` and value params as vega-lite 6.4.3 does (a port of `compile/selection/*`), on a unit view and on the

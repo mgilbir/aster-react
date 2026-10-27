@@ -135,7 +135,7 @@ the other. Six mechanisms, each with a check that fails when the property it pro
 | Type contract | `Chart.types.test.ts` compiles `type-fixtures/`: what must compile, what must fail on exactly the marked lines, and that a prop added to `ChartProps` or a method added to `ChartHandle` makes `parity.assert.ts` fail | loosening the union on `interaction`; a parity assertion that no longer fires |
 | One test matrix | `testing/variants.tsx`: `forEachVariant(needs, (Chart, variant) => …)` runs each component test on `Chart`, `SvgChart` and `SvgChart+interaction`. A test declares `svg`, `canvas`, `interaction`, `signals`; a variant that lacks one asserts the documented failure (the runtime report, or the refusal) in its place; the plain variant refuses interaction props and the event-stream report, so a test cannot pass vacuously on a variant that ignores what it exercises | a behaviour that differs between variants; a test that needs a capability it did not declare |
 | Matrix coverage | `Chart.matrix.test.ts`: no test file may render `<Chart>` outside the matrix unless listed in `DIRECT_CHART_TESTS` with a reason (stale entries fail) | a new test written against `Chart` directly |
-| Output parity | `Chart.corpus-parity.test.tsx` (in `pnpm test`): over all 785 corpus specs, server markup, a client mount and hydration of `<SvgChart interaction>` equal `<Chart renderer="svg">` byte for byte, and `<SvgChart>` equals it minus the `data-datum` stamps; the stamps and the a11y overlay are in the compared DOM | any markup, attribute or a11y difference |
+| Output parity | `Chart.corpus-parity.test.tsx` (in `pnpm test`): over all 794 corpus specs, server markup, a client mount and hydration of `<SvgChart interaction>` equal `<Chart renderer="svg">` byte for byte, and `<SvgChart>` equals it minus the `data-datum` stamps; the stamps and the a11y overlay are in the compared DOM | any markup, attribute or a11y difference |
 
 The browser gate, the bundle-shaking gate (module assertions on the esbuild metafile), the budget and `verify:publish` add
 the real-browser behaviour and the size/import guarantees ([PERFORMANCE.md](PERFORMANCE.md#bundle-sizes), [TESTING.md](TESTING.md)).
@@ -172,6 +172,8 @@ The SVG serializer in `packages/core/src/render.ts` walks the `SceneRoot` tree a
 
 - **Frame (plot bounds)** — rendered as a path with 0.5-pixel alignment when the view has a stroke, matching Vega's cell boundary; the view content sits in a `<g>` translated by the padding.
 - **Mark dispatch** — `renderGroup` routes on `marktype` (`group`, `line`, `area`, `symbol`, `rect`, `rule`, `text`, `trail`, `path`, `shape`, `geoshape`, `image`, `arc`); each mark kind has one `*Attrs(item, sink)` function (see "Renderers, the DOM patcher and hit testing" above).
+- **Guides** — axes, legends and titles are built by ports of vega-parser's guide encoders (`guide-encode.ts`: the `lookup` / `addEncoders` / `extendEncode` / `applyDefaults` pipeline that decides what a property does, `null` included; `guide-axis.ts`, `guide-legend.ts`, `guide-title.ts`) and of vega-view-transforms' layouts, so a property, an `encode` block or a `config.style` reaches an item the way it does in Vega, for every property rather than a list of them. The discretizing scales' legend labels are vega-encode's `labelFormat` / `labelValues` (`scale.ts`).
+- **Scopes and an aborted pass** — `spec-structure.ts` walks a spec in vega-parser's order and scoping (a data set name may repeat in a nested group but not in one scope). When an axis cannot make its ticks, Vega's dataflow pass aborts at that operator (`axisTicksFailed` in `runtime.ts`): a scale ranked late in its own scope leaves a scenegraph Vega cannot serialize (refused here), any other leaves a clean cut (the axes before it, unlaid-out, and nothing built after it in its scope or in the scopes built after it). The differential test `axis-ticks-failure-vs-vega.test.ts` pins the rule per scope.
 - **Path numbers** — paths produced by the d3-shape/d3-path ports (lines, areas, symbols, arcs) are written with d3-path's `digits = 3` rounding; rect and frame paths are written with raw doubles, as Vega does. The conformance canonicalizer does not paper over either.
 
 ## Conformance
@@ -205,6 +207,8 @@ Aster matches Vega's output wherever the oracle can be run; where it deliberatel
 | Unsupported or unknown features | throw a typed error naming the feature | some are silently ignored | no silent wrong charts; see [ERRORS.md](ERRORS.md) |
 | SVG output of dense marks (`denseMarks`) | batched `<path>` chunks; pixel parity gated by `pnpm conformance:batch` | one element per item | node cost of large SVG; opt-out with `denseMarks={false}` |
 | Oracle crashes | not reproduced (TypeErrors upstream) | crash | the sweeps count these as `node-error` |
+| An axis whose ticks fail over a late-ranked scale, with a domain or a title to draw | refused (`[aster] the ticks of the axis ... failed`) | the scenegraph has holes and Vega's own `toSVG` throws (`reading 'marktype'`) | there is no document to match; the cases Vega can draw are matched exactly |
+| Names that are members of `Object.prototype` (`toString`) for data sets or scales | handled as any name | `vega.parse` crashes | do not reproduce an upstream crash |
 
 ## Known Limitations / Roadmap
 
