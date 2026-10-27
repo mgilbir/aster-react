@@ -1,5 +1,6 @@
 vega/annual-temperature
 vega/area-chart
+vega/barley-trellis-plot
 vega/binned-scatter-plot
 vega/box-plot
 vega/calendar-view
@@ -10,6 +11,7 @@ vega/donut-chart
 vega/dot-plot
 vega/falkensee-population
 vega/flight-passengers
+vega/grouped-bar-chart
 vega/heatmap
 vega/histogram
 vega/horizon-graph

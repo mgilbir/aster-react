@@ -55,12 +55,12 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
   // Collect signal names before resolving them
   const sigNames = (spec.signals as Array<Record<string, unknown>> | undefined)?.map(s => (s as any)?.name || '').filter(Boolean) ?? []
   // We don't have the resolved signal values yet, so just use raw width/height
-  // A view with a `layout` and no size of its own (a composition: vega-lite sizes only the
-  // child groups) has vega's `width` / `height` signal value, 0 - unless a signal supplies it.
+  // A view with no size of its own has vega's `width` / `height` signal value, 0 (vega-parser: `spec.width || 0`) -
+  // unless a signal supplies it.
   // A `width` / `height` signal the spec declares IS the view size (vega: it is the signal), so the size reads it: its
   // literal `value` where it has one, and the default only while an `init` / `update` is still to be computed.
   const defaultSize = (name: 'width' | 'height'): SizeSpec =>
-    sigNames.includes(name) ? { signal: name } : spec.layout != null ? 0 : DEFAULT_SIZE
+    sigNames.includes(name) ? { signal: name } : 0
   const width = typeof spec.width === 'number' ? spec.width : (typeof spec.width === 'object' ? spec.width as SizeSpec : defaultSize('width'))
   const height = typeof spec.height === 'number' ? spec.height : (typeof spec.height === 'object' ? spec.height as SizeSpec : defaultSize('height'))
   const frameStroke = resolveFrameStroke(spec)
@@ -218,8 +218,6 @@ function resolveFrameDash(spec: VgSpec): number[] | undefined {
   const v = frameStyleValue(spec, 'strokeDash')
   return Array.isArray(v) ? v.map(Number) : undefined
 }
-
-const DEFAULT_SIZE = 500
 
 function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSignalDef[] {
   const out: CompiledSignalDef[] = []

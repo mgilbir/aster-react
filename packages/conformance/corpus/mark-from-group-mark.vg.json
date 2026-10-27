@@ -1,0 +1,11 @@
+{"$schema":"https://vega.github.io/schema/vega/v6.json","width":240,"height":120,"padding":5,
+"data":[{"name":"rows","values":[{"g":"a","v":3},{"g":"a","v":5},{"g":"b","v":2},{"g":"b","v":8},{"g":"c","v":6}]}],
+"scales":[
+{"name":"gy","type":"band","domain":{"data":"rows","field":"g"},"range":"height","padding":0.2},
+{"name":"x","type":"linear","domain":{"data":"rows","field":"v"},"range":[0,100],"nice":true}],
+"marks":[
+{"name":"cells","type":"group","from":{"facet":{"data":"rows","name":"part","groupby":"g"}},
+ "encode":{"update":{"y":{"scale":"gy","field":"g"},"height":{"scale":"gy","band":1},"width":{"value":110},"stroke":{"value":"#ccc"}}},
+ "marks":[{"type":"symbol","from":{"data":"part"},"encode":{"update":{"x":{"scale":"x","field":"v"},"y":{"value":8},"size":{"value":40},"fill":{"value":"teal"}}}}]},
+{"type":"text","from":{"data":"cells"},"encode":{"update":{"x":{"field":"width","offset":8},"y":{"field":"y","offset":{"field":"height","mult":0.5}},"text":{"field":"datum.g"},"baseline":{"value":"middle"},"fill":{"value":"#000"}}}},
+{"type":"rect","from":{"data":"cells"},"encode":{"update":{"x":{"value":150},"y":{"field":"y"},"width":{"field":"height"},"height":{"field":"height"},"fill":{"value":"#ddd"}}}}]}

@@ -2177,25 +2177,18 @@ const LINK_PATHS: Record<string, (sx: number, sy: number, tx: number, ty: number
   'diagonal-radial': linkDiagonalR,
 }
 
-function linkpathRows(rows: Row[], t: Record<string, unknown>): Row[] {
-  const sxField = (t.sourceX as string | undefined) ?? 'source.x'
-  const syField = (t.sourceY as string | undefined) ?? 'source.y'
-  const txField = (t.targetX as string | undefined) ?? 'target.x'
-  const tyField = (t.targetY as string | undefined) ?? 'target.y'
+function linkpathRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+  // (each endpoint is a field or an `{expr}`, like any vega `field` parameter)
+  const sx = geoAccessor(t.sourceX ?? 'source.x', ctx)
+  const sy = geoAccessor(t.sourceY ?? 'source.y', ctx)
+  const tx = geoAccessor(t.targetX ?? 'target.x', ctx)
+  const ty = geoAccessor(t.targetY ?? 'target.y', ctx)
   const as = (t.as as string | undefined) ?? 'path'
   const orient = (t.orient as string | undefined) ?? 'vertical'
   const shape = (t.shape as string | undefined) ?? 'line'
   const path = ownGet(LINK_PATHS, shape + '-' + orient) ?? ownGet(LINK_PATHS, shape)
   if (!path) throw new Error(`[aster] linkpath unsupported type: ${shape}${t.orient ? '-' + orient : ''}`)
-  return rows.map((r) => ({
-    ...r,
-    [as]: path(
-      getField(r, sxField) as number,
-      getField(r, syField) as number,
-      getField(r, txField) as number,
-      getField(r, tyField) as number,
-    ),
-  }))
+  return rows.map((r) => ({ ...r, [as]: path(sx(r) as number, sy(r) as number, tx(r) as number, ty(r) as number) }))
 }
 
 // -- addon registration ------------------------------------------------------

@@ -1364,7 +1364,8 @@ function markDepsOf(mark: CompiledMark, chart: CompiledChart): MarkDeps {
   // a mark reading another mark's items (`from: {data: <mark name>}`) depends on whatever that mark depends on
   const readsMarkItems = (m: CompiledMark): boolean => {
     const from = m.from?.data
-    if ((typeof from === 'string' && !known.has(from)) || (m.marks ?? []).some(readsMarkItems)) return true
+    const lookupFrom = (m.transform ?? []).some((t) => t.type === 'lookup' && typeof (t as { from?: unknown }).from === 'string' && !known.has((t as { from: string }).from))
+    if ((typeof from === 'string' && !known.has(from)) || lookupFrom || (m.marks ?? []).some(readsMarkItems)) return true
     return false
   }
   if (readsMarkItems(mark)) out.allData = true
@@ -3333,6 +3334,12 @@ function reusablePulse(
   return pulse
 }
 
+/** A mark `transform` vega runs on the encoded items (see evaluateMarkItems). */
+const ITEM_TRANSFORMS: ReadonlySet<string> = new Set(['voronoi', 'lookup', 'linkpath'])
+function isItemTransform(t: CompiledTransform): boolean {
+  return ITEM_TRANSFORMS.has(String(t.type))
+}
+
 function evaluateMark(
   mark: CompiledMark,
   ctx: EvalContext,
@@ -3340,7 +3347,11 @@ function evaluateMark(
 ): SceneGroup | SceneGroup[] | null {
   const built = evaluateMarkItems(mark, ctx, prevGroup)
   // a named mark's items are what a later mark of `from: {data: <name>}` reads
-  if (built && typeof mark.name === 'string' && mark.type !== 'group' && !Array.isArray(built)) ctx.markItems.set(mark.name, (built.items ?? []) as SceneItem[])
+  if (built && typeof mark.name === 'string') {
+    // (a group mark's items are the group items themselves, a mark's are the items of its container)
+    if (mark.type === 'group') { if (Array.isArray(built)) ctx.markItems.set(mark.name, built as unknown as SceneItem[]) }
+    else if (!Array.isArray(built)) ctx.markItems.set(mark.name, (built.items ?? []) as SceneItem[])
+  }
   return built
 }
 
@@ -3372,8 +3383,9 @@ function evaluateMarkItems(
     // just the changed indices, so an unchanged row is never copied.
     let rows: Row[] = rawRows
     let rowsCloned = false
-    // (a `voronoi` mark transform is vega's post-encoding kind: it runs on the encoded items, below)
-    const preTransforms = mark.transform?.filter((t) => t.type !== 'voronoi')
+    // (vega runs a mark's transforms on the ENCODED items, after the encode; `voronoi`, `lookup` and `linkpath`,
+    // which read item properties (`datum.index`, `sourceNode.x`) and other marks' items, are run that way below)
+    const preTransforms = mark.transform?.filter((t) => !isItemTransform(t))
     if (preTransforms?.length) {
       rows = rawRows.map((r) => ({ ...r }))
       rowsCloned = true
@@ -3506,13 +3518,23 @@ function evaluateMarkItems(
   }
 
   // vega-parser mark.js: a mark's `transform`s that work on the encoded items (voronoi cells over the items'
-  // positions) run right after the encode: the items are the transform's tuples, so `datum.datum` is the source datum.
+  // positions, a lookup of another mark's items by `datum.index`, a link path between looked-up items) run right
+  // after the encode: the items are the transform's tuples, so `datum.datum` is the source datum. What they
+  // compute is written onto the items, in order (the next transform reads it).
   for (const t of mark.transform ?? []) {
-    if (t.type !== 'voronoi' || !source || items.length === 0) continue
+    if (!isItemTransform(t) || !source || items.length === 0) continue
     try {
-      const cells = applyTransforms(items as unknown as Row[], [t], { runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections }, source)
-      const as = ((t as { as?: string }).as) ?? 'path'
-      items.forEach((it, i) => { (it as unknown as Row)[as] = (cells[i] as Row)[as] })
+      const out = applyTransforms(items as unknown as Row[], [t], {
+        runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections,
+        // (`lookup` `from` is a dataset, or the name of a mark: its items)
+        datasets: (n) => ctx.datasets.get(n) ?? (ctx.markItems.get(n) as unknown as Row[] | undefined),
+      }, source)
+      if (t.type === 'voronoi') {
+        const as = ((t as { as?: string }).as) ?? 'path'
+        items.forEach((it, i) => { (it as unknown as Row)[as] = (out[i] as Row)[as] })
+      } else {
+        items.forEach((it, i) => { Object.assign(it as unknown as Row, out[i]) })
+      }
     } catch (e) {
       reportEvalError(ctx, e)
     }
@@ -3906,8 +3928,16 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     // facet partition as data
     const childScales = new Map<string, Scale>()
     const childTypes = new Map<string, string>()
+    // (`range: "width" | "height"` is the signal of that name as the scope sees it: a group that declares its own
+    // `height` signal sizes its scales by that, and so do the scopes below it)
+    const scopedView = (name: 'width' | 'height'): number => {
+      const v = scoped?.values[name]
+      return typeof v === 'number' && Number.isFinite(v) ? v : (name === 'width' ? ctx.viewWidth ?? ctx.width : ctx.viewHeight ?? ctx.height)
+    }
+    const viewW = scopedView('width')
+    const viewH = scopedView('height')
     for (const sdef of mark.scales ?? []) {
-      childScales.set(sdef.name, buildScale(sdef, scaleContext({ ...ctx, width: ctx.viewWidth ?? ctx.width, height: ctx.viewHeight ?? ctx.height }, sdef.name)))
+      childScales.set(sdef.name, buildScale(sdef, scaleContext({ ...ctx, width: viewW, height: viewH }, sdef.name)))
       childTypes.set(sdef.name, sdef.type)
     }
     // vega builds the instances of nested scopes level by level: what an aborted pass did not reach is not made
@@ -3924,8 +3954,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     const childCtx: EvalContext = {
       ...ctx,
       scope,
-      viewWidth: ctx.viewWidth ?? ctx.width,
-      viewHeight: ctx.viewHeight ?? ctx.height,
+      viewWidth: viewW,
+      viewHeight: viewH,
       width: gw,
       height: gh,
       groupX: gx,

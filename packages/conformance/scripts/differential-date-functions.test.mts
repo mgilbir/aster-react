@@ -7,10 +7,13 @@
  * The inputs include every kind a spec can feed in: null, undefined, '', numbers, NaN, numeric and date strings,
  * Dates (valid and invalid), booleans, arrays, objects.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import * as vega from 'vega'
 import { compileExpr, type ExpressionRuntime } from '../../core/src/expression.ts'
 import { exact, quietLogger, withTz } from './differential-util.mts'
+
+// each case sweeps hundreds of inputs through a real vega View: slower than a unit test, more so under a parallel run
+vi.setConfig({ testTimeout: 60_000 })
 
 const runtime: ExpressionRuntime = {
   scale: () => undefined,

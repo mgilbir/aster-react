@@ -1,11 +1,11 @@
 {
   "pass": {
     "static": {
-      "vega": 40,
+      "vega": 43,
       "vl": 256
     },
     "react": {
-      "vega": 33,
+      "vega": 35,
       "vl": 191
     }
   },
