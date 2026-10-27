@@ -140,6 +140,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     autosizeContains,
     style: cfgStyle,
     ...(cfg.lineBreak != null ? { lineBreak: cfg.lineBreak } : {}),
+    ...(cfg.events != null && typeof cfg.events === 'object' ? { eventConfig: cfg.events as CompiledChart['eventConfig'] } : {}),
     layout: (spec.layout as Record<string, unknown> | undefined) ?? undefined,
   }
 }
