@@ -26,6 +26,21 @@ jobs:
       - name: Gates (pnpm check)
         run: pnpm check
 
+      # The official Vega / Vega-Lite example galleries (packages/conformance/gallery/README.md). They are fetched, not committed:
+      # the cache is keyed on the manifest (pinned commits + sha256 of every file) and the fetch step verifies every file against
+      # it whether or not the cache hit. The gate itself reads only the local cache.
+      - name: Restore official gallery cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: packages/conformance/.gallery
+          key: gallery-${{ hashFiles('packages/conformance/gallery/manifest.json') }}
+
+      - name: Fetch official galleries (verified against the manifest)
+        run: pnpm gallery:fetch
+
+      - name: Official gallery conformance (static + React path)
+        run: pnpm conformance:gallery
+
       - name: Firefox canvas parity
         run: pnpm conformance:canvas -- --browser=firefox
 

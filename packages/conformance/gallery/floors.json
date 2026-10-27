@@ -1,0 +1,10 @@
+{
+  "pass": {
+    "static": { "vega": 37, "vl": 251 },
+    "react": { "vega": 30, "vl": 186 }
+  },
+  "maxUnverifiable": {
+    "static": { "vega": 7, "vl": 10 },
+    "react": { "vega": 7, "vl": 10 }
+  }
+}
