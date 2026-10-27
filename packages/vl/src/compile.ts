@@ -934,7 +934,7 @@ function rootChrome(out: Record<string, unknown>, spec: VLSpec, kind: 'unit' | '
     }
     hide(out)
   }
-  if (spec.title) out.title = kind === 'unit' ? unitTitle(spec.title, userConfig) : spec.title
+  if (spec.title) out.title = unitTitle(spec.title, userConfig, kind)
   if (spec.description) out.description = spec.description
 }
 
@@ -943,14 +943,18 @@ function rootChrome(out: Record<string, unknown>, spec: VLSpec, kind: 'unit' | '
  * offset / orient, framed on the group (`frame: "group"`) unless it is anchored to a side: a centred title sits over the plot
  * area, not over the plot plus its axes.
  */
-function unitTitle(title: unknown, userConfig: Record<string, unknown> | undefined): unknown {
+function unitTitle(title: unknown, userConfig: Record<string, unknown> | undefined, kind: 'unit' | 'composite' = 'unit'): unknown {
   const cfg = isObject(userConfig?.title) ? (userConfig!.title as Record<string, unknown>) : {}
   const nonMark: Record<string, unknown> = {}
   for (const k of ['anchor', 'frame', 'offset', 'orient']) if (cfg[k]) nonMark[k] = cfg[k]
   const def = typeof title === 'string' || Array.isArray(title) ? { text: title } : isObject(title) ? title : undefined
   if (def === undefined) return title
   const merged: Record<string, unknown> = { ...nonMark, ...def }
-  if (merged.text && (merged.anchor === 'middle' || merged.anchor === undefined)) merged.frame ??= 'group'
+  // model.ts assembleTitle: a unit / layer framed on its group when centred; a composition (laid out by Vega) anchors at the start
+  if (merged.text) {
+    if (kind === 'unit') { if (merged.anchor === 'middle' || merged.anchor === undefined) merged.frame ??= 'group' }
+    else merged.anchor ??= 'start'
+  }
   return merged
 }
 
@@ -1062,7 +1066,11 @@ function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
     }
     if (merged.type === 'band' && (merged.paddingInner !== undefined || merged.paddingOuter !== undefined)) delete merged.padding
     // domain: union data references; identical non-reference domains merge
-    const domains = list.map((s) => s.domain)
+    // (scale/domain.ts mergeValuesWithExplicit on `domains`: an explicitly specified domain beats the implicit ones; only
+    // domains of the same explicitness are unioned)
+    const explicitDomains = list.filter((s) => EXPLICIT_SCALE_PROPS.get(s)?.has('domain'))
+    const domains = (explicitDomains.length ? explicitDomains : list).map((s) => s.domain)
+    if (explicitDomains.length) explicitMerged.add('domain')
     if (domains.every((d) => deepEq(d, domains[0]))) merged.domain = domains[0]
     else {
       const entries: DomainEntry[] = []
@@ -1925,11 +1933,28 @@ function legendChannel(lg: Record<string, unknown>): string {
  * (a legend describing both fill and stroke), titles join, the first legend's
  * other properties win; a symbol default of `fill: transparent` yields to a fill.
  */
+/** Legends whose title was written by the user (`legend.title`, or the field def's `title` it shows): vega-lite's explicit title. */
+const EXPLICIT_LEGEND_TITLE = new WeakSet<object>()
+
+/**
+ * compile/legend/parse.ts mergeLegendComponent: the legends of one scale merge. The title follows split.ts
+ * mergeValuesWithExplicit and common.ts mergeTitle: an explicit title beats an implicit one, equal titles stay,
+ * anything else (both explicit or both implicit) is joined with ", ".
+ */
 function mergeLegend(into: Record<string, unknown>, other: Record<string, unknown>): void {
   for (const k of LEGEND_SCALE_KEYS) if (into[k] === undefined && other[k] !== undefined) into[k] = other[k]
-  if (typeof into.title === 'string' && typeof other.title === 'string' && into.title !== other.title && !into.title.split(', ').includes(other.title)) {
-    into.title = `${into.title}, ${other.title}`
+  const intoExplicit = EXPLICIT_LEGEND_TITLE.has(into)
+  const otherExplicit = EXPLICIT_LEGEND_TITLE.has(other)
+  if (into.title === undefined || into.title === null) {
+    if (other.title !== undefined) into.title = other.title
+  } else if (intoExplicit && !otherExplicit) {
+    // the explicit title stays
+  } else if (otherExplicit && !intoExplicit) {
+    if (other.title !== undefined) into.title = other.title
+  } else if (typeof into.title === 'string' && typeof other.title === 'string') {
+    if (into.title !== other.title && other.title) into.title = `${into.title}, ${other.title}`
   }
+  if (otherExplicit) EXPLICIT_LEGEND_TITLE.add(into)
   const upd = (into.encode as { symbols?: { update?: Record<string, unknown> } } | undefined)?.symbols?.update
   if (upd && into.fill !== undefined) {
     delete upd.fill
@@ -3748,7 +3773,8 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
     return sc
   }
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
-  if (sizeDef) scales.push(numericScale('size', sizeDef, sizeRange(mark, cfgS, step, stepExpr), true))
+  // (properties.ts zero(): a size scale includes zero unless it discretizes a continuous domain)
+  if (sizeDef) scales.push(numericScale('size', sizeDef, sizeRange(mark, cfgS, step, stepExpr), !['quantile', 'quantize', 'threshold'].includes(String(sizeDef.scale?.type))))
   const strokeWidthDef = fields.find((f) => f.channel === 'strokeWidth' && f.field)
   if (strokeWidthDef) scales.push(numericScale('strokeWidth', strokeWidthDef, [cfgS.minStrokeWidth, cfgS.maxStrokeWidth], false))
   const opacityDefS = fields.find((f) => f.channel === 'opacity' && f.field)
@@ -4285,7 +4311,8 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
       grid: false,
       zindex: axisZindex,
     }
-    if (title !== null) labelAxis.title = title
+    // assemble.ts: `titleString ? {title} : {}` - an empty title is no title
+    if (title) labelAxis.title = title
     if (isContinuousScaleType(sc.type)) {
       if (def.channel === 'x') labelAxis.labelFlush = true
       // log axes carry no explicit tickCount — vega's axis defaults to 10,
@@ -4454,6 +4481,8 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     }
     legendsByKey[key] = lg
     legendDefs[key] = def
+    // legend/parse.ts isExplicit: the title is the legend's own, or the field def's title
+    if ((isObject(def.legend) && 'title' in def.legend) || (def.title !== undefined && lg.title === def.title)) EXPLICIT_LEGEND_TITLE.add(lg)
     order.push(key)
   }
   // the paint a legend symbol shows: vega-lite fills every mark but point, line and rule unless configured (trail never)
@@ -4634,8 +4663,9 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     if (opLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) opLg.direction = 'horizontal'
     push('opacity', opLg, opacityLegendDef)
   }
-  // legends over the SAME field (a colour and a shape both on `c`) are one legend
-  const sigOf = (d: FieldDef): string => JSON.stringify([d.source, d.aggregate ?? null, d.bin ? 1 : 0, d.timeUnit ?? null, channelTitle(d)])
+  // legends over the SAME domain (a colour and a shape both on `c`) are one legend (legend/assemble.ts assembleLegends: keyed by
+  // the scale's domains, so differing titles do not keep them apart - they merge by mergeTitleComponent)
+  const sigOf = (d: FieldDef): string => JSON.stringify([d.source, d.aggregate ?? null, d.bin ? 1 : 0, d.timeUnit ?? null])
   const merged = new Map<string, string>()
   for (const key of order) {
     const sig = sigOf(legendDefs[key]!)
@@ -5932,7 +5962,8 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
   const tooltipTitle = (d: FieldDef): string => {
-    const t = channelTitle(d)
+    // tooltip.ts add(): `fieldDef.title || defaultTitle(fieldDef)` - an empty or null title falls back to the default
+    const t = channelTitle(d.title ? d : { ...d, title: undefined })
     return (Array.isArray(t) ? t.join(', ') : String(t)).replace(/"/g, '\\"')
   }
   /** vega-lite tooltipData: one `title -> text expression` per field, the first of a title wins. */

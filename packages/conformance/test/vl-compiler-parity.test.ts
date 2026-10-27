@@ -82,6 +82,29 @@ const GROUPS: Record<string, Case[]> = {
     ['binned text', { data: DATA, mark: 'text', encoding: { x: q('x', { bin: true }), y: q('y', { bin: true }), text: { aggregate: 'count' } } }],
     ['binned line', { data: DATA, mark: 'line', encoding: { x: q('x', { bin: true }), y: { aggregate: 'count' } } }],
   ],
+  // model.ts assembleTitle: a composition anchors its title at the start; axis.ts: an empty title is no title; tooltip.ts:
+  // `fieldDef.title || defaultTitle`
+  'titles (area_density_facet, bar_default_tooltip_title_null)': [
+    ['hconcat title', { data: DATA, title: 'A concat', hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }] }],
+    ['vconcat title object with a subtitle', { data: DATA, title: { text: 'A concat', subtitle: 'sub' }, vconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['facet title', { data: DATA, title: 'A facet', facet: { row: n('g') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['repeat title', { data: DATA, title: 'A repeat', repeat: ['y', 'v'], spec: { mark: 'point', encoding: { x: q('x'), y: q('y', { field: { repeat: 'repeat' } }) } } }],
+    ['composition title with config.title.anchor', { data: DATA, config: { title: { anchor: 'end' } }, title: 'A concat', hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['unit title, middle anchor', { data: DATA, title: { text: 'A unit', anchor: 'middle' }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
+    ['layer title', { data: DATA, title: 'A layer', layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] }],
+    ['empty field title and a null axis title, with a tooltip', { data: DATA, mark: { type: 'bar', tooltip: true }, encoding: { x: n('c', { title: '' }), y: q('v', { axis: { title: null } }) } }],
+    ['null field title', { data: DATA, mark: { type: 'bar', tooltip: true }, encoding: { x: n('c', { title: null }), y: q('v') } }],
+  ],
+  // legend/parse.ts mergeLegendComponent + split.ts mergeValuesWithExplicit + common.ts mergeTitle
+  'legend titles merge (circle_scale_quantile, dynamic_color_legend)': [
+    ['one legend for a size and a colour on a field, one with a legend title', { data: DATA, mark: 'circle', encoding: { y: n('c'), size: q('v', { scale: { type: 'quantile' } }), color: q('v', { scale: { type: 'quantile' }, legend: { title: 'Quantile' } }) } }],
+    ['the same with a field title instead', { data: DATA, mark: 'circle', encoding: { y: n('c'), size: q('v', { scale: { type: 'quantize' } }), color: q('v', { scale: { type: 'quantize' }, title: 'Quantize' }) } }],
+    ['layers: an explicit legend title beats an implicit one', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } }, { mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('c', { title: 'Letter' }) } }] }],
+    ['layers: two implicit titles join', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } }, { mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('g') } }] }],
+    ['layers: two explicit titles join', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c', { title: 'One' }) } }, { mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('g', { title: 'Two' }) } }] }],
+    ['vconcat: an explicit colour title and domain beat the implicit ones', { data: DATA, vconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c', { title: 'Letter', scale: { domain: ['C', 'B', 'A'] } }) } }, { mark: 'bar', encoding: { x: { aggregate: 'count' }, y: n('c'), color: n('c') } }] }],
+    ['a quantize size scale has no zero', { data: DATA, mark: 'circle', encoding: { x: q('x'), y: q('y'), size: q('v', { scale: { type: 'quantize' } }) } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
