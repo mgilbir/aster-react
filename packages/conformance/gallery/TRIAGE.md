@@ -1,0 +1,266 @@
+# Gallery triage (snapshot)
+
+Generated from a run of `pnpm conformance:gallery` at the commit that introduced the gate, by `scripts/gallery-triage.mts`
+(per-spec data: `triage.json`). **No engine bug is fixed in the branch that added this**; this is the map for splitting the fixes.
+
+## Numbers
+
+| path | grammar | pass | fail | error | unverifiable | total |
+|---|---|---|---|---|---|---|
+| static | Vega | 37 | 31 | 18 | 7 | 93 |
+| static | Vega-Lite | 251 | 236 | 130 | 10 | 627 |
+| react | Vega | 30 | 36 | 20 | 7 | 93 |
+| react | Vega-Lite | 186 | 301 | 130 | 10 | 627 |
+
+Static -> react status of the 720 specs: 212 pass/pass, 261 fail/fail, 147 error/error, 15 unverifiable/unverifiable, **75 pass static / fail react**,
+4 fail static / pass react, and 6 single moves (see "React-path-only differences").
+
+How to read the categories. A *category* is a tested claim where it says "verified", otherwise a located one:
+
+* `error`: the message.
+* *compiler* vs *runtime* (Vega-Lite only): Aster's runtime is run on the Vega **vega-lite itself compiled**. If that already differs,
+  the defect is in the runtime ("runtime"); if it matches the oracle and only the Vega `@aster/vl` emitted differs, it is the compiler
+  ("compiler"). For a compiler spec one group of vega-lite's output at a time (size/layout signals; scales+axes+legends;
+  data+marks; title/config) is grafted into `@aster/vl`'s output: the group whose graft makes the render equal is where the defect is
+  ("not isolated" = no single group or pair does; the difference is spread).
+* runtime categories marked **verified** were confirmed by applying the claimed fix to the spec and seeing the render become equal
+  (primitive `values` wrapped; `time(` rewritten to `toNumber(`), or by a record-level normalisation that makes the two sides equal.
+  Those marked *located* come from deleting one component (a mark, the axes, the title) from the Vega for both engines until the
+  render becomes equal; they say where the difference lives, not what it is.
+* A spec has one category here; one defect can hide a second one behind it.
+
+## Categories (static path, every spec that did not pass or was unverifiable is accounted for)
+
+| count | category | representative | its first diff |
+|---|---|---|---|
+| 125 | error: @aster/vl rejects a valid Vega-Lite feature | `vl/arc_params` | `[aster/vl] hconcat[0].mark.radius2: mark-def radius2 is not supported` |
+| 83 | compiler: scales+guides (scales, axes, legends) + data+marks | `vl/arc_facet` | `only-oracle: path/M5.096,200.621A150,150,0,0,0,70.948,330.239L155,206Z/fill=#54a24b//` |
+| 47 | compiler: size/layout (signals, width, height, autosize, padding, layout) | `vl/animated_hop` | `only-oracle: path/M43.5,10.5L63.5,10.5L63.5,310.5L43.5,310.5Z/fill=none;stroke=#dddddd;stroke-width=1//` |
+| 22 | compiler: scales+guides (scales, axes, legends) | `vl/bar_default_tooltip_title_null` | `- oracle:             path.foreground hidden=true // + aster:                g .mark-text.role-axis-title` |
+| 18 | compiler: not isolated by grafting | `vl/bar_1d_temporal` | `only-oracle: path/M17.5,5.5L317.5,5.5L317.5,25.5L17.5,25.5Z/fill=none;stroke=#dddddd;stroke-width=1//` |
+| 16 | runtime: other (not isolated) | `vega/parallel-coordinates` | `only-oracle: path/M86,10L202,181.556L318,209.6L434,230L550,321.111L666,294.444L782,410/fill=none;stroke=#4682b` |
+| 13 | error: runtime lacks a Vega transform / expression function / transform backend | `vega/airport-connections` | `[aster] unsupported transform type "geopath"` |
+| 10 | error: runtime rejects a spec value that vega takes from a signal / another dataset | `vega/annual-precipitation` | `Projection type must be a name string.` |
+| 9 | compiler: data+marks | `vl/area_overlay` | `- oracle:         g .mark-line.role-mark.layer_1_marks role=graphics-object rd=line mark container // + aster:` |
+| 9 | runtime: expression `time(x)` returns a Date, not a timestamp | `vl/circle_github_punchcard` | `- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label="Y-axis titled 'time (day)' for a` |
+| 8 | runtime: inline primitive `values` are not wrapped as {data: v} | `vega/dot-plot` | `only-oracle: line/159.5,74.75/159.5,79.75/stroke=#888888;stroke-width=1//` |
+| 6 | runtime: facet / cell group layout or order | `vega/brushing-scatter-plots` | `only-oracle: line/106.5,551.5/106.5,556.5/stroke=#cccccc;stroke-width=1//` |
+| 5 | runtime: a mark reading `from: {data: <mark name>}` (a group mark's items) draws nothing | `vega/arc-diagram` | `- oracle:         g .mark-path.role-mark role=graphics-symbol rd=path mark container // + aster:          g .m` |
+| 5 | runtime: path: a line/area with breaks closes each piece with Z (vega: M..L..M..L) | `vl/layer_null_data` | `only-oracle: path/M43,157.273L85.857,10M171.571,10L214.429,75.455M300.143,10L343,75.455/fill=none;stroke=#4c78` |
+| 4 | runtime: geo (shape marks / projection fit), root size off by 1-2 px | `vega/earthquakes` | `only-oracle: path/M139.801,429.599M139.801,438.527A8.928,8.928,0,1,1,139.801,420.671A8.928,8.928,0,1,1,139.801` |
+| 4 | runtime: numbers: coordinates differ in the 3rd decimal (rounding / summation order) | `vl/interactive_legend` | `only-oracle: path/M6,125.706L8.524,125.406L10.886,125.331L13.41,122.475L15.853,123.044L18.378,125.619L20.821,1` |
+| 3 | runtime: a text mark positioned from an undefined signal changes the autosize bounds | `vega/bar-chart` | `only-oracle: line/113.5,216.5/113.5,221.5/stroke=#888888;stroke-width=1//` |
+| 3 | runtime: guide (removing axes) | `vega/histogram-null-values` | `- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label="X-axis for a linear scale with v` |
+| 3 | runtime: other (mark[0] group) | `vega/job-voyager` | `only-oracle: path/M21,10L74,10L128,10L181,10L288,10L341,10L394,11L448,12L501,10L554,13L608,12L661,13L714,13L76` |
+| 3 | compiler: size/layout (signals, width, height, autosize, padding, layout) + data+marks | `vl/bar_1d_dimension_only` | `only-oracle: path/M43.5,10.5L63.5,10.5L63.5,310.5L43.5,310.5Z/fill=none;stroke=#dddddd;stroke-width=1//` |
+| 3 | runtime: serialisation: text content escapes `"` as &quot; (vega leaves it raw) | `vl/bar_axis_title_quoted` | `only-oracle: text/141.5,355.5/"Quoted" Title/fill=#000000;font-family=sans-serif;font-size=11;font-weight=700;` |
+| 3 | compiler: size/layout (signals, width, height, autosize, padding, layout) + scales+guides (scales, axes, legends) | `vl/circle_scale_quantile` | `- oracle:         g .mark-group.role-legend role=graphics-symbol rd=legend label="Symbol legend titled 'Quanti` |
+| 2 | runtime: guide (removing axes; removing title) | `vega/top-k-plot-with-others` | `only-oracle: line/202.5,398.5/202.5,403.5/stroke=#888888;stroke-width=1//` |
+| 2 | compiler: scales+guides (scales, axes, legends) + title/config/projections | `vl/dynamic_color_legend` | `- oracle:         g .mark-group.role-legend role=graphics-symbol rd=legend label="Symbol legend titled 'Weathe` |
+| 1 | runtime: guide (removing title) | `vega/flight-passengers` | `- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label="X-axis for a time scale with val` |
+| 1 | runtime: other (mark[0] group "everything") | `vega/platformer` | `only-oracle: path/M15.625,46.875L28.125,46.875L28.125,59.375L15.625,59.375Z/fill=#00ffff;fill-opacity=0//{clip` |
+| 1 | runtime: other (mark[1] group) | `vega/regression` | `- oracle:         g .mark-group.role-scope role=graphics-object rd=group mark container // + aster:        pat` |
+| 1 | runtime: other (mark[2] group) | `vega/u-district-cuisine` | `only-oracle: line/112.5,91/112.5,457/stroke=#dddddd;stroke-width=1;stroke-dasharray=3,2//` |
+| 1 | compiler: title/config/projections | `vl/area_density_facet` | `only-oracle: text/5,15.5/Distribution of Body Mass of Penguins/fill=#000000;font-family=sans-serif;font-size=1` |
+| 1 | runtime: gradient fill object stringified on a path (area/line) | `vl/area_gradient` | `- oracle:         g .mark-area.role-mark.layer_0_marks role=graphics-object rd=area mark container // + aster:` |
+| 1 | runtime: image: href is not resolved against the loader baseURL (harness gives vega a baseURL) | `vl/scatter_image` | `only-oracle: image/83.692,236.308/50/50/href=https://gallery.invalid/data/ffox.png/fill=none/@preserveAspectRa` |
+| 1 | runtime: other (mark[0] group "concat_0_group") | `vl/test_invalid_break_paths_filter_domains` | `- oracle:                     g .mark-group.role-axis role=graphics-symbol rd=axis label="X-axis titled 'a' fo` |
+| 1 | runtime: arc: large-arc flag of an elliptical arc differs | `vl/trail_color` | `only-oracle: path/M51.269,294.552L53.771,295.856A0.577,0.577,0,1,1,53.24,296.881L50.731,295.59A0.584,0.584,0,1` |
+| 17 | unverifiable (oracle not comparable) | see below | |
+
+### Members of the small categories
+
+* **runtime: other (not isolated)** (16): `vega/parallel-coordinates`, `vega/probability-density`, `vega/reorderable-matrix`, `vega/time-units`, `vega/wind-vectors`, `vega/zoomable-circle-packing`, `vl/arc_radial`, `vl/bar_custom_time_domain`, `vl/isotype_grid`, `vl/line_override_dynamic_format`, `vl/line_timestamp_domain`, `vl/nested_concat_align`, `vl/rect_binned_heatmap`, `vl/test_invalid_break_paths_show_domains`, `vl/test_invalid_break_paths_show_path_domains`, `vl/test_invalid_default`
+* **error: runtime lacks a Vega transform / expression function / transform backend** (13): `vega/airport-connections`, `vega/beeswarm-plot`, `vega/crossfilter-flights`, `vega/dorling-cartogram`, `vega/edge-bundling`, `vega/force-directed-layout`, `vega/map-with-tooltip`, `vega/packed-bubble-chart`, `vega/quantile-dot-plot`, `vega/radial-tree-layout`, `vega/tree-layout`, `vega/volcano-contours`, `vl/point_quantile_quantile`
+* **error: runtime rejects a spec value that vega takes from a signal / another dataset** (10): `vega/annual-precipitation`, `vega/distortion-comparison`, `vega/donut-chart-labelled`, `vega/overview-plus-detail`, `vega/quantile-quantile-plot`, `vega/world-map`, `vl/geo_params_projections`, `vl/interactive_airport_crossfilter`, `vl/point_scale_range_field`, `vl/trellis_selections`
+* **compiler: data+marks** (9): `vl/area_overlay`, `vl/histogram_log`, `vl/interactive_overview_detail`, `vl/isotype_bar_chart_emoji`, `vl/layer_arc_label`, `vl/layer_bar_labels_style`, `vl/line_shape_overlay`, `vl/tick_width_band`, `vl/waterfall_chart`
+* **runtime: expression `time(x)` returns a Date, not a timestamp** (9): `vl/circle_github_punchcard`, `vl/circle_labelangle_orient_signal`, `vl/line_conditional_axis`, `vl/line_conditional_axis_config`, `vl/line_default_format`, `vl/line_narrow_yearmonth_span`, `vl/line_narrow_yearquarter_span`, `vl/line_override_static_format`, `vl/rect_lasagna`
+* **runtime: inline primitive `values` are not wrapped as {data: v}** (8): `vega/dot-plot`, `vega/horizon-graph`, `vega/radial-plot`, `vl/bar_tooltip_aggregate`, `vl/bar_tooltip_groupby`, `vl/circle_wilkinson_dotplot`, `vl/circle_wilkinson_dotplot_stacked`, `vl/layer_line_window`
+* **runtime: facet / cell group layout or order** (6): `vega/brushing-scatter-plots`, `vl/isotype_bar_chart`, `vl/trellis_area_sort_array`, `vl/trellis_barley`, `vl/trellis_barley_layer_median`, `vl/trellis_row_column`
+* **runtime: a mark reading `from: {data: <mark name>}` (a group mark's items) draws nothing** (5): `vega/arc-diagram`, `vega/barley-trellis-plot`, `vega/grouped-bar-chart`, `vega/labeled-scatter-plot`, `vega/radar-chart`
+* **runtime: path: a line/area with breaks closes each piece with Z (vega: M..L..M..L)** (5): `vl/layer_null_data`, `vl/line_skip_invalid`, `vl/line_skip_invalid_mid`, `vl/line_skip_invalid_mid_cap_square`, `vl/line_skip_invalid_mid_overlay`
+* **runtime: geo (shape marks / projection fit), root size off by 1-2 px** (4): `vega/earthquakes`, `vl/geo_graticule`, `vl/geo_graticule_object`, `vl/geo_text`
+* **runtime: numbers: coordinates differ in the 3rd decimal (rounding / summation order)** (4): `vl/interactive_legend`, `vl/interactive_legend_dblclick`, `vl/stacked_area`, `vl/stacked_area_stream`
+* **runtime: a text mark positioned from an undefined signal changes the autosize bounds** (3): `vega/bar-chart`, `vega/budget-forecasts`, `vega/word-cloud`
+* **runtime: guide (removing axes)** (3): `vega/histogram-null-values`, `vega/zoomable-binned-plot`, `vega/zoomable-scatter-plot`
+* **runtime: other (mark[0] group)** (3): `vega/job-voyager`, `vega/nested-bar-chart`, `vega/projections`
+* **compiler: size/layout (signals, width, height, autosize, padding, layout) + data+marks** (3): `vl/bar_1d_dimension_only`, `vl/bar_grouped_label`, `vl/tick_grouped`
+* **runtime: serialisation: text content escapes `"` as &quot; (vega leaves it raw)** (3): `vl/bar_axis_title_quoted`, `vl/bar_grouped_thin`, `vl/bar_grouped_thin_minBandSize`
+* **compiler: size/layout (signals, width, height, autosize, padding, layout) + scales+guides (scales, axes, legends)** (3): `vl/circle_scale_quantile`, `vl/circle_scale_quantize`, `vl/circle_scale_threshold`
+* **runtime: guide (removing axes; removing title)** (2): `vega/top-k-plot-with-others`, `vega/top-k-plot`
+* **compiler: scales+guides (scales, axes, legends) + title/config/projections** (2): `vl/dynamic_color_legend`, `vl/interactive_seattle_weather`
+* **runtime: guide (removing title)** (1): `vega/flight-passengers`
+* **runtime: other (mark[0] group "everything")** (1): `vega/platformer`
+* **runtime: other (mark[1] group)** (1): `vega/regression`
+* **runtime: other (mark[2] group)** (1): `vega/u-district-cuisine`
+* **compiler: title/config/projections** (1): `vl/area_density_facet`
+* **runtime: gradient fill object stringified on a path (area/line)** (1): `vl/area_gradient`
+* **runtime: image: href is not resolved against the loader baseURL (harness gives vega a baseURL)** (1): `vl/scatter_image`
+* **runtime: other (mark[0] group "concat_0_group")** (1): `vl/test_invalid_break_paths_filter_domains`
+* **runtime: arc: large-arc flag of an elliptical arc differs** (1): `vl/trail_color`
+
+### Members of the large categories
+
+See `triage.json` (`category`, `culprit`, `first` per spec).
+
+## The three specs from the demo
+
+| spec | static | react | category / evidence |
+|---|---|---|---|
+| `vega/donut-chart-labelled` | error: `Missing required "sequence" parameter: "start"` | fail: no donut at all (root 264 x 264 vs 441 x 301) | runtime rejects a value vega takes from a signal (`sequence.start = {signal: "rightExt[0]"}` from an `extent` in another dataset). On the React path `<Chart>` mounts without the chart instead of reporting it. |
+| `vega/barley-trellis-plot` | fail: 6 oracle-only `text` records (`Crookston`, ...) | same | a mark reading `from: {data: "site"}`, the name of a group mark, draws nothing. Ablation: removing mark[1] (the text mark) makes the renders equal. |
+| `vega/radial-plot` | fail (every arc differs) | same | **verified**: wrapping the primitive `values: [12, 23, ...]` as `{data: v}` makes the render identical (0 diffs), so inline primitive `values` are not wrapped; the arcs are `d="MNaN,NaN..."`. Same cause: `vl/arc_radial`, `vl/bar_tooltip_aggregate`, `vl/bar_tooltip_groupby`, `vega/dot-plot`, `vega/horizon-graph`, ... (the 8 in the table). |
+
+## Verified or located causes behind the larger categories
+
+Runtime (Aster's runtime differs on vega's own Vega):
+
+* **`time(x)` returns a Date.** `time(datetime(2006,0,1))` is `1136073600000` in vega and a `Date` in Aster, so
+  `time(datetime(year(d),0,1)) === time(datetime(2006,0,1))` (the Vega-Lite `filter: {timeUnit, equal}`) is never true and the
+  chart loses its rows. Verified by rewriting `time(` to `toNumber(`: the renders become equal for the 9 specs.
+* **Broken line/area segments are closed.** `M43,235L93,85ZM193,197.5...` (Aster) vs `M43,235L93,85M193,197.5...` (vega) for a
+  line with invalid points (`line_skip_invalid*`, `layer_null_data`; also in `test_invalid_*`, which have further layout diffs).
+* **Stacked-area coordinates differ in the 3rd decimal** (`111.712` vs `111.713`; `stacked_area*`, `interactive_legend*`).
+* **Trail marks**: the large-arc flag of the cap arcs differs (`trail_color`).
+* **Gradient fill on an `area` path is stringified** (`fill=[object Object]`; `area_gradient`).
+* **Empty-string stroke**: vega paints `stroke=""` as a stroke attribute, Aster drops it, which moves the group background by half a
+  pixel (`isotype_grid`, `isotype_bar_chart`).
+* **A text mark positioned by `scale(undefined signal)`** (`x: {scale, signal: "tooltip.category"}` with `tooltip = {}`) takes part in
+  vega's autosize bounds (6 px); Aster ignores it. Verified by ablation on `vega/bar-chart` (removing the text mark: 0 diffs).
+* **Geo**: `geoshape` / `shape` marks make the view 1-2 px smaller than vega's (projection fit extent); `vl/geo_*`, `vega/earthquakes`.
+* **Text content escaping**: Aster writes `&quot;` for `"` inside `<text>`, vega writes the raw quote (valid XML both ways; only
+  the string differs): `bar_axis_title_quoted`, `bar_grouped_thin*`.
+* **Image `href`** is left relative by Aster; vega resolves it against the loader `baseURL` (the harness gives vega one so that data
+  resolves). Probably by design; listed so that it is not mistaken for a layout bug.
+* Facet cells / row order (`trellis_barley*`, `trellis_row_column`, `trellis_area_sort_array`, `vega/brushing-scatter-plots`):
+  the cell group is where the render diverges (rows come out at different positions).
+* Located only: signal-valued axis `offset` is a candidate for `zoomable-scatter-plot` / `zoomable-binned-plot` (the axis ticks are
+  where the diff is); `histogram-null-values`, `top-k-plot*`, `flight-passengers` (axis / title located, cause not isolated).
+
+Compiler (`@aster/vl` emits a Vega whose render differs while Aster's runtime renders vega-lite's Vega correctly): 188 specs,
+spread as in the table. Features of the source that the failing specs share (a spec can have several; "of 188"): `timeUnit` 39,
+`layer` 43, `config` 35, `bin` 34, `concat` 23, `selection params` 22, `tooltip` 21, `legend` 20, `xOffset/yOffset` 19, `facet/row/column` 18,
+`overlay line/point` 17, `title: null` 15, `test_invalid_*` 13, `repeat` 10, `errorbar/errorband` 8, `bandPosition` 6, `stack` 5.
+Representatives that were read through to the cause:
+
+* `xOffset`/`yOffset` (`bar_grouped`, ...): vega-lite makes the step `x_step = 20 * bandspace(domain('xOffset').length, 0, 0) / (1-0.2)`;
+  `@aster/vl` emits `x_step = 20`, so the view is half as wide (359 vs 183 px).
+* One positional channel only (`bar_1d`, `point_1d`, ...): vega-lite makes the 1D view `height: 20`; `@aster/vl` leaves 300.
+* `timeUnit` with `bandPosition` / a time-unit scale (`bar_month_temporal_band_center`, `rect_heatmap_weather_temporal_center_band`, ...): the
+  scale domain is a single date ("December to December", "31 to 31") instead of the range.
+* `area` with `line: true` / `point: true` (`area_overlay`): the overlay layers differ (`.mark-line` expected, `.mark-symbol` emitted).
+* `title: null` on an axis (`bar_default_tooltip_title_null`): the axis title is still drawn.
+* Ranged encodings (`boxplot_preaggregated`): vega-lite drops the axis title, `@aster/vl` draws one.
+* Legend titles merged across size and colour on the same field (`circle_scale_quantile`: `Quantile, b` vs `Quantile`).
+* Binned ordinal (`histogram_ordinal`): the bins are not produced (2 values instead of 10).
+* `title: {text, anchor: "start"}` on a layered facet (`area_density_facet`): the anchor is lost.
+* `aggregate: distinct` (`bar_distinct`): the y domain is `0 .. 1`.
+
+## Errors (148 on the static path)
+
+Aster or `@aster/vl` threw. 125 are `@aster/vl` refusing a valid Vega-Lite feature with an explicit message (it never renders
+something wrong silently; the messages are the work list); 23 come from the runtime.
+
+| count | message (normalised) | where | example |
+|---|---|---|---|
+| 10 | a condition needs exactly one of `value`, `field`, `datum` | @aster/vl | `vl/selection_composition_and` |
+| 9 | timeUnit "...": binned time units are not supported | @aster/vl | `vl/bar_binned_yearmonth_grouped` |
+| 9 | a channel definition needs `field`, `value`, `datum` or `aggregate: "..."` | @aster/vl | `vl/bar_bullet_expr_bind` |
+| 8 | the view background property is not supported; set it through config.view | @aster/vl | `vl/concat_population_pyramid` |
+| 8 | a facet field definition needs `type` | @aster/vl | `vl/facet_column_facet_column_point_future` |
+| 7 | [aster] unsupported transform type "..." | runtime | `vega/airport-connections` |
+| 7 | boxplot only supports the x and y channels | @aster/vl | `vl/boxplot_2D_horizontal_color_size` |
+| 5 | this config property is valid Vega-Lite but is not supported by @aster/vl (it would be silently ignored) | @aster/vl | `vl/boxplot_minmax_2D_horizontal_custom_midtick_color` |
+| 5 | channel-level `impute` is not supported | @aster/vl | `vl/line_encoding_impute_keyvals` |
+| 4 | Projection type must be a name string. | runtime | `vega/annual-precipitation` |
+| 4 | boxplot requires plain x and y fields (no aggregate, bin or timeUnit) | @aster/vl | `vl/boxplot_1D_horizontal` |
+| 4 | boxplot supports only field, type and title on x/y | @aster/vl | `vl/boxplot_1D_invalid` |
+| 3 | a constant datum position is not supported on the "..." mark | @aster/vl | `vl/area_overlay_with_y2` |
+| 3 | encoding.size is not supported on the "..." mark | @aster/vl | `vl/bar_aggregate_size` |
+| 3 | pre-binned data (binned: true) is not supported; let @aster/vl bin the field or use a bin transform | @aster/vl | `vl/bar_binned_data` |
+| 3 | `resolve` has no meaning on a single unit spec | @aster/vl | `vl/bar_grouped_facet_independent_scale` |
+| 3 | duplicate parameter name "..." | @aster/vl | `vl/concat_hover` |
+| 3 | positional mark-def constants (x/xN/y/yN) are not supported; use encoding | @aster/vl | `vl/interactive_global_development` |
+| 3 | a data-driven strokeDash (scale + legend) is not supported; use a constant {"...": ...} or a condition | @aster/vl | `vl/line_dashed_part` |
+| 2 | Disabled. | runtime | `vega/beeswarm-plot` |
+| 2 | Unrecognized function: geoCentroid | runtime | `vega/dorling-cartogram` |
+| 2 | a data-driven angle (scale + legend) is not supported; use a constant {"...": ...} or a condition | @aster/vl | `vl/arc_radial_histogram` |
+| 2 | `scale: null` (identity/disabled scale) is not supported | @aster/vl | `vl/bar_color_disabled_scale` |
+| 2 | width must be a non-negative number or {"...": n}, got {"...":N,"...":"..."} | @aster/vl | `vl/bar_grouped_custom_padding` |
+| 2 | layers specify conflicting values for scale "..." property "..." | @aster/vl | `vl/concat_bar_scales_discretize` |
+| 2 | maps (geoshape marks, projections, longitude / latitude) inside a facet are not supported: vega-lite N.N.N fit | @aster/vl | `vl/geo_trellis` |
+| 2 | Undefined data set name: "..." | runtime | `vl/interactive_airport_crossfilter` |
+| 2 | must be a [min, max] pair of numbers (parameter references are not supported) | @aster/vl | `vl/interactive_bin_extent` |
+| 2 | layers give scale "..." incompatible types ("..." and "..."); vega-lite would make them independent scales, wh | @aster/vl | `vl/interactive_line_hover` |
+| 2 | a variable parameter needs `value` or `expr` | @aster/vl | `vl/interactive_paintbrush_simple_false` |
+| 2 | temporal/DateTime datums are not supported | @aster/vl | `vl/layer_line_datum_rule_datetime` |
+| 2 | data generators: `sequence` is not supported (`sphere` and `graticule` are) | @aster/vl | `vl/sequence_line` |
+| 1 | [aster] Missing required "..." parameter: "..." | runtime | `vega/donut-chart-labelled` |
+| 1 | Unrecognized signal name: detailDomain | runtime | `vega/overview-plus-detail` |
+| 1 | Unrecognized function: quantileLogNormal | runtime | `vega/quantile-dot-plot` |
+| 1 | [aster] dataset "...": url must be a string (a signal-valued url cannot be resolved ahead of time) | runtime | `vega/quantile-quantile-plot` |
+| 1 | mark-def radiusN is not supported | @aster/vl | `vl/arc_params` |
+| 1 | op "..." is not supported in transforms (use {"...":"..."} with a join) | @aster/vl | `vl/bar_argmax_transform` |
+| 1 | encoding.xOffset.datum is not supported (datum works on x, y, xN, yN, longitude, latitude and color) | @aster/vl | `vl/bar_grouped_repeated` |
+| 1 | spacing is only meaningful on composition specs | @aster/vl | `vl/facet_grid_bar` |
+| 1 | unknown channel "..." | @aster/vl | `vl/interactive_1d_geo_brush` |
+| 1 | domainRaw is not supported | @aster/vl | `vl/interactive_point_domainRaw_binding` |
+| 1 | mark type not supported yet: boxplot | @aster/vl | `vl/layer_boxplot_circle` |
+| 1 | pre-binned data (bin: "...") is not supported; let @aster/vl bin the field (bin: true) or use a bin transform | @aster/vl | `vl/layer_cumulative_histogram` |
+| 1 | layers give scale "..." different explicit or signal-based domains, which cannot be merged | @aster/vl | `vl/layer_histogram_global_mean` |
+| 1 | regression `params: true` is not supported | @aster/vl | `vl/layer_point_line_regression` |
+| 1 | encoding.stroke.datum is not supported (datum works on x, y, xN, yN, longitude, latitude and color) | @aster/vl | `vl/line_color_halo` |
+| 1 | a constant value position is not supported on the "..." mark | @aster/vl | `vl/parallel_coordinate` |
+| 1 | unknown bind property "..." | @aster/vl | `vl/param_search_input` |
+| 1 | a domain object must be {"...": ...}, {"...": [...]} or a signal; give an array or "..." | @aster/vl | `vl/point_constant_legend_domain` |
+| 1 | Unrecognized function: quantileUniform | runtime | `vl/point_quantile_quantile` |
+| 1 | Undefined data set name: undefined | runtime | `vl/point_scale_range_field` |
+| 1 | must be a non-empty array of {op, field?, as?} | @aster/vl | `vl/vconcat_flatten` |
+
+## Unverifiable (the oracle cannot be compared)
+
+Static path:
+
+* `vega/bar-line-toggle` (static): oracle-nondeterministic (random)
+* `vega/contour-plot` (static): oracle-error
+* `vega/density-heatmaps` (static): oracle-error
+* `vega/earthquakes-globe` (static): oracle-nondeterministic (random)
+* `vega/error-bars` (static): oracle-nondeterministic (unknown)
+* `vega/hypothetical-outcome-plots` (static): oracle-nondeterministic (random)
+* `vega/pi-monte-carlo` (static): oracle-nondeterministic (random)
+* `vl/errorband_2d_horizontal_color_encoding` (static): oracle-nondeterministic (unknown)
+* `vl/errorband_2d_vertical_borders` (static): oracle-nondeterministic (unknown)
+* `vl/errorbar_2d_vertical_ticks` (static): oracle-nondeterministic (unknown)
+* `vl/layer_line_errorband_2d_horizontal_borders_strokedash` (static): oracle-nondeterministic (unknown)
+* `vl/layer_line_errorband_ci` (static): oracle-nondeterministic (unknown)
+* `vl/layer_point_errorbar_2d_horizontal_ci` (static): oracle-nondeterministic (unknown)
+* `vl/layer_point_errorbar_ci` (static): oracle-nondeterministic (unknown)
+* `vl/point_offset_random` (static): oracle-nondeterministic (random)
+* `vl/point_ordinal_bin_offset_random` (static): oracle-nondeterministic (random)
+* `vl/sample_scatterplot` (static): oracle-nondeterministic (random)
+
+React path: vega/bar-line-toggle, vega/earthquakes-globe, vega/error-bars, vega/hypothetical-outcome-plots, vega/pi-monte-carlo, vega/platformer, vega/word-cloud, vl/errorband_2d_horizontal_color_encoding, vl/errorband_2d_vertical_borders, vl/errorbar_2d_vertical_ticks, vl/layer_line_errorband_2d_horizontal_borders_strokedash, vl/layer_line_errorband_ci, vl/layer_point_errorbar_2d_horizontal_ci, vl/layer_point_errorbar_ci, vl/point_offset_random, vl/point_ordinal_bin_offset_random, vl/sample_scatterplot
+
+`oracle-error` for `contour-plot` / `density-heatmaps` is vega's own heatmap transform needing a canvas on Node (the browser path
+renders them with vega and reports Aster's `unsupported transform type "kdeNd"`). The `errorband`/`errorbar` `ci` and `sample` specs
+use bootstrap sampling; `random()` specs use `random()`; neither engine is seeded, so there is nothing exact to compare.
+
+## React-path-only differences
+
+75 specs pass on the static path and fail through `<Chart>` (the oracle is the same vega in the same Chromium):
+
+* **parameters / selections with an initial `value`** (about 40, e.g. `interactive_brush`, `interactive_paintbrush*`, `selection_project_*`,
+  `selection_translate_*`, `selection_resolution_*`, `selection_insert`, `interactive_point_init`, `param_expr`, `animated_gapminder`):
+  read off `interactive_brush`: the oracle draws the points outside the initial brush in grey (`stroke=#808080 opacity=0.7`); the
+  mounted `<Chart>` does not. `renderSpec` gets it right, so the difference is in how `<Chart>` initialises the signals. The other
+  members share the same first diff (symbol paths with a grey / dimmed paint only in the oracle); each was not read individually.
+* **stepped / faceted sizing** (`facet_custom*`, `repeat_histogram`, `repeat_splom_cars`, `repeat_line_weather`, `bar_count_minimap`,
+  `bar_column_fold`, `bar_grouped_facet`, `bar_size_responsive`): e.g. `facet_custom` is 476 px tall through `<Chart>` against vega's
+  411 in the same 600 x 400 host (an extra `fill=none` frame path only in Aster). Cause not isolated.
+* **everything else** (`vega/clock`, `pacman`, `table-scrollbar`, `warming-stripes`, `serpentine-timeline`, `global-development`, ...): not
+  investigated; marks that vega draws are missing in the mounted chart. `vega/watch` never settles (a timer: `chart-threw: no stable
+  <svg>` after 8 s) - a clock-driven spec has no stable first frame in the browser.
+
+4 specs fail statically and pass through `<Chart>` (`vega/flight-passengers`, `top-k-plot`, `top-k-plot-with-others`,
+`vl/bar_axis_title_quoted`): not investigated. The first three pass when `<Chart>` is handed the spec's numeric `width` / `height` and the oracle runs in a host
+(the static path has neither); `bar_axis_title_quoted` passes in the browser (the two serialisations of the quote agree there; not investigated).
