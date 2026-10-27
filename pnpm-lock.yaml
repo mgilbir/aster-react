@@ -194,6 +194,9 @@ importers:
       typescript:
         specifier: ^5.8.0
         version: 5.9.3
+      vega-datasets:
+        specifier: 3.2.1
+        version: 3.2.1
       vega-embed:
         specifier: ^7.1.0
         version: 7.1.0(vega-lite@6.4.3(vega@6.3.1))(vega@6.3.1)
@@ -1745,6 +1748,9 @@ packages:
 
   vega-dataflow@6.1.2:
     resolution: {integrity: sha512-0/HBBlzPERh0wV5kUOh/N4aAAmb3rB18Kfpej+nWvDIjPk3dixTapNkVVkoA9CsB5dY5bY+HNqiM/Pp4XPduGQ==}
+
+  vega-datasets@3.2.1:
+    resolution: {integrity: sha512-lTSwZA6yq6qSU2YZm+6bqILiIvTPPxn4itir7jPGFmHIdPvUfQ9pCzzcrklYywMJgLUbaIeSkZQdiJd6wBxPug==}
 
   vega-embed@7.1.0:
     resolution: {integrity: sha512-ZmEIn5XJrQt7fSh2lwtSdXG/9uf3yIqZnvXFEwBJRppiBgrEWZcZbj6VK3xn8sNTFQ+sQDXW5sl/6kmbAW3s5A==}
@@ -3307,6 +3313,10 @@ snapshots:
       vega-format: 2.1.2
       vega-loader: 5.1.2
       vega-util: 2.1.2
+
+  vega-datasets@3.2.1:
+    dependencies:
+      d3-dsv: 3.0.1
 
   vega-embed@7.1.0(vega-lite@6.4.3(vega@6.3.1))(vega@6.3.1):
     dependencies:

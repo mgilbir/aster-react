@@ -111,6 +111,19 @@ describe('nothing keeps a second copy of the list', () => {
     expect(lines).toContain('pnpm install --frozen-lockfile')
   })
 
+  it('nightly.yml fetches the official galleries from the manifest (cached on it, pinned by SHA) before the gallery gate', () => {
+    const text = read('.github/workflows/nightly.yml')
+    const lines = runLines('.github/workflows/nightly.yml')
+    expect(lines).toContain('pnpm gallery:fetch')
+    expect(lines).toContain('pnpm conformance:gallery')
+    expect(lines.indexOf('pnpm gallery:fetch')).toBeLessThan(lines.indexOf('pnpm conformance:gallery'))
+    // the cache action is pinned by commit SHA (like release.yml) and keyed on the manifest's hash
+    expect(text).toMatch(/uses: actions\/cache@[0-9a-f]{40}\b/)
+    expect(text).toMatch(/key: gallery-\$\{\{ hashFiles\('packages\/conformance\/gallery\/manifest\.json'\) \}\}/)
+    // the gate is not in the PR gate list: it needs the fetched cache (see packages/conformance/gallery/README.md)
+    expect(GATES.map((g) => g.name)).not.toContain('gallery')
+  })
+
   it('every workflow installs with --frozen-lockfile', () => {
     for (const wf of ['ci', 'nightly', 'release']) {
       const installs = runLines(`.github/workflows/${wf}.yml`).filter((l) => /^pnpm (install|i)\b/.test(l))

@@ -24,6 +24,8 @@
     "conformance:canvas": "tsx scripts/browser-canvas-parity.mts",
     "conformance:batch": "tsx scripts/browser-svg-batch-parity.mts",
     "conformance:signals": "tsx scripts/browser-signals.mts --min-cases=64",
+    "gallery:fetch": "tsx scripts/gallery-fetch.mts",
+    "conformance:gallery": "tsx src/gallery/run.ts",
     "conformance:selections": "tsx scripts/browser-vl-selections.mts --min-cases=49 --max-retained=13"
   },
   "dependencies": {
@@ -52,6 +54,7 @@
     "topojson-client": "3.1.0",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0",
+    "vega-datasets": "3.2.1",
     "vega-embed": "^7.1.0",
     "vega-expression": "6.2.1",
     "vega-format": "2.1.2",
