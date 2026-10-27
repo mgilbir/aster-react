@@ -51,6 +51,9 @@ export interface ChartWorkerRequest {
     data?: Record<string, unknown[]>
     width?: number
     height?: number
+    /** `containerSize()` in the spec's expressions, and the measured container (see `RuntimeInput`). */
+    containerSize?: { width: number; height: number }
+    measuredSize?: { width: number; height: number }
     signals?: Record<string, unknown>
     domainRaw?: Record<string, unknown[]>
     /** Budgets enforced inside the worker (same semantics as `renderSpec`). */
@@ -314,6 +317,9 @@ export function wireTextMetrics(tm: WorkerTextMetrics | undefined, viaWorker: bo
 export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
   width?: number
   height?: number
+  /** The container the spec is sized to (`containerSize()`); `measuredSize` is the one it fills (see `RuntimeInput`). */
+  containerSize?: { width: number; height: number }
+  measuredSize?: { width: number; height: number }
   data?: Record<string, unknown[]>
   signals?: Record<string, unknown>
   domainRaw?: Record<string, unknown[]>
@@ -330,6 +336,11 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
   urlPolicy?: WorkerUrlPolicyInput
 } = {}): WorkerChartResult {
   const { worker, workerFactory, width, height, data, signals, domainRaw, limits, textMetrics, urlPolicy } = options
+  // (compared by value: an inline `{ width, height }` literal must not re-post the request on every render)
+  const csKey = options.containerSize ? `${options.containerSize.width}x${options.containerSize.height}` : ''
+  const msKey = options.measuredSize ? `${options.measuredSize.width}x${options.measuredSize.height}` : ''
+  const sizesRef = React.useRef({ containerSize: options.containerSize, measuredSize: options.measuredSize })
+  sizesRef.current = { containerSize: options.containerSize, measuredSize: options.measuredSize }
   const stableSpec = useStableSpec(spec)
   // Budgets are compared by content: an inline `limits={{...}}` must not
   // re-post the request on every render.
@@ -367,6 +378,8 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
         id, spec: stableSpec,
         input: {
           width, height, data, signals, domainRaw,
+          ...(sizesRef.current.containerSize ? { containerSize: sizesRef.current.containerSize } : {}),
+          ...(sizesRef.current.measuredSize ? { measuredSize: sizesRef.current.measuredSize } : {}),
           ...(stableLimits ? { limits: stableLimits } : {}),
           ...(textMetrics != null ? { textMetrics: wireTextMetrics(textMetrics, w != null) } : {}),
           ...(urlPolicy != null ? { urlPolicy: wireUrlPolicy(urlPolicy, w != null) } : {}),
@@ -393,7 +406,7 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
       fail(e instanceof Error ? e : new Error(String(e)))
     }
     return stop
-  }, [stableSpec, width, height, data, signals, domainRaw, stableLimits, textMetricsKey, urlPolicyKey, worker, workerRef])
+  }, [stableSpec, width, height, csKey, msKey, data, signals, domainRaw, stableLimits, textMetricsKey, urlPolicyKey, worker, workerRef])
 
   return state
 }

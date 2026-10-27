@@ -284,7 +284,14 @@ function genSpec(r: Rnd): GenSpec {
 // World + steps
 // ---------------------------------------------------------------------------
 
-interface World { t: Row[]; u: Row[]; sel: Row[]; /** the store holds `_vgsid_` ids (else field tuples) */ selIds?: boolean; /** the values the events wrote to the signals of the two group scopes (see `scenarioScoped`) */ scoped?: { outer: number; inner: number }; sig: number; width: number | undefined; height: number | undefined }
+interface World { t: Row[]; u: Row[]; sel: Row[]; /** the store holds `_vgsid_` ids (else field tuples) */ selIds?: boolean; /** the values the events wrote to the signals of the two group scopes (see `scenarioScoped`) */ scoped?: { outer: number; inner: number }; sig: number; width: number | undefined; height: number | undefined
+  /** The host's container element size (`containerSize`, see `scenarioContainer`). */
+  container?: { width: number; height: number } | undefined
+  /** The container a <Chart> without size props measured (`measuredSize`). */
+  measured?: { width: number; height: number } | undefined
+  /** The `width` / `height` signal values a `window:resize` handler wrote through the event loop (see `scenarioContainer`). */
+  sizeSig?: { width?: number; height?: number } | undefined
+}
 
 const GROUPS = ['A', 'B', 'C', 'D'] as const
 
@@ -313,7 +320,7 @@ function genWorld(r: Rnd): World {
 }
 
 type Op = 'edit' | 'grow' | 'shrink' | 'insert' | 'remove' | 'append' | 'truncate' | 'swap' | 'shuffle'
-  | 'replaceAll' | 'editU' | 'signal' | 'size' | 'noop' | 'edit-group' | 'store' | 'scoped'
+  | 'replaceAll' | 'editU' | 'signal' | 'size' | 'noop' | 'edit-group' | 'store' | 'scoped' | 'resize'
 type Delivery = 'none' | 'changedDatasets' | 'dataChanges' | 'dataPulse' | 'inplace'
 type Via = 'evaluate' | 'change'
 
@@ -444,6 +451,19 @@ export function applyStep(w: World, s: Step): World {
       if (s.r[7]! < 0.6 && t.length) { const i = ix(s.r[6]!, t.length); t[i] = { ...t[i]!, ...rowAt(2), g: t[i]!.g } }
       break
     }
+    case 'resize': {
+      // The viewport was resized: the host's container changes size, the spec's `window:resize` handlers write the
+      // `width` / `height` signals (to the container, or to their 300 fallback when the container has no size), and the
+      // host may also fix or release the view size itself. Often together with a data edit.
+      const known = s.r[0]! < 0.7
+      next.container = known ? { width: 200 + Math.floor(s.r[1]! * 400), height: 150 + Math.floor(s.r[2]! * 250) } : undefined
+      next.measured = next.container && s.r[6]! < 0.6 ? { ...next.container } : undefined
+      next.sizeSig = s.r[3]! < 0.15 ? undefined : { width: next.container?.width ?? 300, height: next.container?.height ?? 300 }
+      if (s.r[4]! < 0.3) { next.width = 150 + Math.floor(s.r[5]! * 200); next.height = s.r[3]! < 0.5 ? undefined : 120 + Math.floor(s.r[2]! * 160) }
+      else if (s.r[4]! < 0.45) { next.width = undefined; next.height = undefined }
+      if (s.r[7]! < 0.6 && t.length) { const i = ix(s.r[6]!, t.length); t[i] = { ...t[i]!, ...rowAt(4), g: t[i]!.g } }
+      break
+    }
     case 'scoped': {
       // an event wrote the signals of the group scopes; often together with a data edit (reuse must notice the signal anyway)
       next.scoped = { outer: Math.floor(s.r[0]! * 7), inner: Math.floor(s.r[1]! * 7) }
@@ -537,10 +557,18 @@ function scopedSignals(g: GenSpec, w: World): Record<string, unknown> {
   return { [scopedSignalName(g.scoped.outer, 'gs')]: w.scoped.outer, [scopedSignalName(g.scoped.inner, 'gs')]: w.scoped.inner }
 }
 
+/** What the host adds for the view size: the container it measured, and the size signals the event loop wrote. */
+function sizeInputs(w: World, input: RuntimeInput): void {
+  if (w.container) input.containerSize = w.container
+  if (w.measured) input.measuredSize = w.measured
+  if (w.sizeSig) Object.assign(input.signals!, w.sizeSig)
+}
+
 export function inputOf(g: GenSpec, w: World): RuntimeInput {
   const input: RuntimeInput = { signals: { sig: w.sig, ...scopedSignals(g, w) } }
   if (w.width != null) input.width = w.width
   if (w.height != null) input.height = w.height
+  sizeInputs(w, input)
   input.data = { t: clone(w.t), u: clone(w.u), ...(g.store ? { sel: clone(w.sel) } : {}) }
   return input
 }
@@ -548,8 +576,10 @@ export function inputOf(g: GenSpec, w: World): RuntimeInput {
 function reference(g: GenSpec, w: World): SceneRoot | Error {
   try {
     const spec = clone(g.spec)
-    // The reference sees the SAME visible state: data via input.data, always.
-    return evaluateChart(compileChart(spec as never), inputOf(g, w))
+    // The reference sees the SAME visible state: data via input.data, always. A view size the host fixed IS the size:
+    // the `width` / `height` signals a `window:resize` handler wrote do not move it, so the reference never sees them.
+    const sizeSig = w.sizeSig && { ...(w.width == null ? { width: w.sizeSig.width } : {}), ...(w.height == null ? { height: w.sizeSig.height } : {}) }
+    return evaluateChart(compileChart(spec as never), inputOf(g, { ...w, sizeSig }))
   } catch (e) {
     return e as Error
   }
@@ -718,6 +748,7 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
     const input: RuntimeInput = { signals: { sig: w.sig, ...scopedSignals(g, w) }, ...extra }
     if (w.width != null) input.width = w.width
     if (w.height != null) input.height = w.height
+    sizeInputs(w, input)
     if (!g.inlineValues || extra.dataChanges || extra.dataPulse) input.data = { t: clone(w.t), u: clone(w.u), ...(g.store ? { sel: clone(w.sel) } : {}) }
     return input
   }
@@ -855,6 +886,39 @@ export function scenarioScoped(seed: number, nSteps: number): { g: GenSpec; worl
   return { g: base.g, world: { ...base.world, scoped: { outer: 2, inner: 1 } }, steps }
 }
 
+/**
+ * The same scenarios on container-sized views, as `width: "container"` compiles (vega-lite): no top-level width / height,
+ * `width` / `height` signals whose `init` reads `containerSize()` and that a `window:resize` handler re-runs, and an
+ * `autosize` of any kind that contains the padding. The steps resize the viewport the way a browser does (the container
+ * changes size, the handlers write the signals) and fix or release the view size from the host, between the data edits,
+ * signal changes and size changes the base scenario already has. Every step is compared with a fresh evaluation, and a
+ * view size the host fixed must not be moved by those signals.
+ */
+export function scenarioContainer(seed: number, nSteps: number): { g: GenSpec; world: World; steps: Step[] } {
+  const base = scenario(seed, nSteps)
+  const r = mulberry32(seed ^ 0xc0117a)
+  const spec = base.g.spec
+  // a third of the views keep their own numeric size: the measured container then sizes them (a <Chart> without size props)
+  const fill = r() < 0.3
+  if (fill) {
+    base.g.label += ' container(fill)'
+  } else {
+    delete spec.width
+    delete spec.height
+    const auto = pick(r, ['fit', 'fit', 'fit-x', 'fit-y', 'pad', 'none'] as const)
+    spec.autosize = { type: auto, contains: 'padding' }
+    const size = (i: 0 | 1): Record<string, unknown> => {
+      const expr = `isFinite(containerSize()[${i}]) ? containerSize()[${i}] : 300`
+      return { init: expr, on: [{ update: expr, events: 'window:resize' }] }
+    }
+    const sigs = spec.signals as Array<Record<string, unknown>>
+    sigs.unshift({ name: 'width', ...size(0) }, { name: 'height', ...size(1) })
+    base.g.label += ` container(${auto})`
+  }
+  const steps = base.steps.map((s) => (r() < 0.45 ? { ...s, op: 'resize' as const } : s))
+  return { g: base.g, world: { ...base.world, container: { width: 480, height: 300 } }, steps }
+}
+
 /** Greedy delta-debugging: drop steps while the failure persists. */
 function shrink(target: 'chart' | 'session', g: GenSpec, world: World, steps: Step[], seed: number): Step[] {
   let cur = steps
@@ -977,6 +1041,38 @@ describe('incremental === fresh with group scopes whose signals events write bet
   for (const seed of seedsScoped) {
     it(`holds for seed ${seed} x ${STEPS} steps (chart reuse + session)`, () => {
       expect(checkSeed(seed, STEPS, scenarioScoped) ?? '', `seed ${seed}`).toBe('')
+    }, 600_000)
+  }
+})
+
+describe('incremental === fresh on container-sized views that are resized between updates', () => {
+  it('the generator is deterministic per seed and the views are container-sized', () => {
+    expect(JSON.stringify(scenarioContainer(7, 6))).toBe(JSON.stringify(scenarioContainer(7, 6)))
+    const all = Array.from({ length: 200 }, (_, i) => scenarioContainer(i + 1, 1).g.label).join('\n')
+    for (const need of ['container(fit)', 'container(fit-x)', 'container(fit-y)', 'container(pad)', 'container(none)', 'container(fill)']) {
+      expect(all, `generator never produces ${need}`).toContain(need)
+    }
+    const ops = new Set(Array.from({ length: 40 }, (_, i) => scenarioContainer(i + 1, 12).steps.map((x) => x.op)).flat())
+    expect(ops.has('resize')).toBe(true)
+    expect(ops.has('size')).toBe(true)
+  })
+
+  it('the container reaches the scene, and a view size the host fixed is not moved by the size signals', () => {
+    const sc = scenarioContainer(3, 4)
+    const at = (w: Partial<World>): SceneRoot => evaluateChart(compileChart(clone(sc.g.spec) as never), inputOf(sc.g, { ...sc.world, width: undefined, height: undefined, sizeSig: undefined, ...w }))
+    expect(renderSceneToSvg(at({ container: { width: 420, height: 280 } }))).not.toBe(renderSceneToSvg(at({ container: { width: 320, height: 200 } })))
+    // the unfixed view follows the signals the event loop wrote ...
+    expect(renderSceneToSvg(at({ sizeSig: { width: 300, height: 300 } }))).not.toBe(renderSceneToSvg(at({})))
+    // ... a fixed one does not
+    const fixed = { width: 480, height: 260 }
+    expect(renderSceneToSvg(at({ ...fixed, sizeSig: { width: 300, height: 300 } }))).toBe(renderSceneToSvg(at({ ...fixed })))
+  })
+
+  const seedsContainer = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
+  // one test per seed: a worker that runs one long synchronous test cannot answer its host (vitest's onTaskUpdate RPC)
+  for (const seed of seedsContainer) {
+    it(`holds for seed ${seed} x ${STEPS} steps (chart reuse + session)`, () => {
+      expect(checkSeed(seed, STEPS, scenarioContainer) ?? '', `seed ${seed}`).toBe('')
     }, 600_000)
   }
 })

@@ -512,13 +512,18 @@ function prepareChartCtx(
   }
   checkDeadline('startup')
   const signals = dict(chart.signals, input.signals)
-  let width = signed?.width ?? resolveSize(chart.width, input.width, signals)
+  let width = signed?.width ?? resolveSize(chart.width, viewOverride(chart, input, 'width'), signals)
   // A Vega spec can define the chart height as a `height` signal (a special
   // signal that doubles as the view size), e.g. `signals:[{name:'height',
   // update: ...}]`, without a top-level numeric height. It's resolved later by
   // resolveSignalUpdates, so apply the fallback after that (see below).
-  let height = signed?.height ?? resolveSize(chart.height, input.height, signals)
+  let height = signed?.height ?? resolveSize(chart.height, viewOverride(chart, input, 'height'), signals)
   const signalParams = dict<unknown>({ width, height }, signals)
+  // An explicit view size (the host's `width` / `height`, a measured container, the fit loop's resize) is the
+  // size, so the `width` / `height` signals read it too: a signal value a host or the event loop supplied
+  // (a `window:resize` handler re-running `containerSize()`) must not split the signal from the view it sizes.
+  if (explicitSize.width && input.width != null) signalParams.width = width
+  if (explicitSize.height && input.height != null) signalParams.height = height
 
   const datasets = new Map<string, Row[]>()
   const scales = new Map<string, Scale>()
@@ -532,7 +537,10 @@ function prepareChartCtx(
   const runtime: ExpressionRuntime = {
     scale: (name) => scales.get(name),
     data: (name) => datasets.get(name),
-    containerSize: () => (input.containerSize ? [input.containerSize.width, input.containerSize.height] : [undefined, undefined]),
+    containerSize: () => {
+      const c = input.containerSize ?? input.measuredSize
+      return c ? [c.width, c.height] : [undefined, undefined]
+    },
     expr: (expr) => {
       let compiled = exprCache.get(expr)
       if (!compiled) {
@@ -547,7 +555,7 @@ function prepareChartCtx(
   const transformHierarchies = new Map<string, unknown>()
   const defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }> = []
   // Inputs besides the signals that change what a reused scale/item would be.
-  const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}`
+  const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}`
   const ctx: EvalContext = {
     chart, scope: rootScope(chart), abort: { failures: [] }, signalParams, width, height, datasets, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false }, initDone: new Set(), hostSignals: new Set([
@@ -1590,14 +1598,14 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
   // Differential-update generation (`txn.gen`): an unchanged (reused) item keeps
   // the generation it was encoded in, so the DOM patcher can skip it.
   const signals = dict(chart.signals, input.signals)
-  let initialW = resolveSize(chart.width, input.width, signals)
-  let initialH = resolveSize(chart.height, input.height, signals)
+  let initialW = resolveSize(chart.width, viewOverride(chart, input, 'width'), signals)
+  let initialH = resolveSize(chart.height, viewOverride(chart, input, 'height'), signals)
   // A negative view size: vega's first pass lays out content ranged on the signal as written (a scale over
   // [0, -100]) and sizes the view from the overflow it finds (viewSizeLayout, once); the width / height
   // signals are then clamped to 0 and the content is encoded again, but the view keeps the size and padding of
   // the first pass. So the padding comes from a build with the signed sizes and the content from the clamped one.
-  const signedW = signedViewSize(chart.width, input.width, signals)
-  const signedH = signedViewSize(chart.height, input.height, signals)
+  const signedW = signedViewSize(chart.width, viewOverride(chart, input, 'width'), signals)
+  const signedH = signedViewSize(chart.height, viewOverride(chart, input, 'height'), signals)
   const signedPadding = (signedW !== undefined || signedH !== undefined) && (auto === undefined || auto === 'pad')
     ? buildContent(chart, input, signedW ?? initialW, signedH ?? initialH, txn, false, { width: signedW, height: signedH }).padding
     : undefined
@@ -1800,6 +1808,25 @@ function buildTitleGroup(
 function signedViewSize(size: SizeSpec, override: number | undefined, signals: Record<string, unknown>): number | undefined {
   const v = override != null ? override : typeof size === 'number' ? size : size && typeof size === 'object' && 'signal' in size ? signals[size.signal] : undefined
   return typeof v === 'number' && v < 0 ? v : undefined
+}
+
+/**
+ * The one value the view's `width` / `height` takes from the host, if it gives one (every consumer -- scales, layout,
+ * autosize, the svg, the signal expressions read -- starts from this, so none can disagree with another). In Vega the
+ * size is a signal and the later write wins, so from the strongest: the size the host fixed (`input.width`), a value it
+ * wrote to the signal (a bound input, an event handler), and the container it measured, which only sizes a spec that
+ * does not drive the signal itself.
+ */
+function viewOverride(chart: CompiledChart, input: RuntimeInput, dim: 'width' | 'height'): number | undefined {
+  const fixed = input[dim]
+  if (fixed != null) return fixed
+  const written = input.signals?.[dim]
+  if (typeof written === 'number') return written
+  const measured = input.measuredSize?.[dim]
+  if (measured == null) return undefined
+  const size = chart[dim]
+  const drives = (size !== null && typeof size === 'object' && 'signal' in size) || (chart.signalDefs ?? []).some((d) => d.name === dim)
+  return drives ? undefined : measured
 }
 
 function resolveSize(size: SizeSpec, override: number | undefined, signals: Record<string, unknown>): number {

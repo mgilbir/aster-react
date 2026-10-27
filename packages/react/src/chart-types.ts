@@ -48,6 +48,11 @@ export interface ChartProps {
    * Chart width in px. Without it the chart uses its container's measured
    * width (and the spec's own width until the first measurement, e.g. on the
    * server). Independent of `height`: giving one of them fixes only that one.
+   * A fixed size is the view's size for a container-sized spec too (Vega-Lite's
+   * `width: 'container'`): its `width` / `height` signals, including a
+   * `window:resize` handler's, do not move it. The measured container (no prop)
+   * only sizes a spec that has no such signal; one that drives them keeps
+   * doing so, and reads the container through `containerSize()`.
    */
   width?: number
   /** Chart height in px; see `width`. */
