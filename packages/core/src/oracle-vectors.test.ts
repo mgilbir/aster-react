@@ -10,6 +10,11 @@
  *   'fn'       — plain functions: `fn(...args)` -> want
  *   'accessor' — accessor factories: report fields/name and the value on a datum
  *   'color'    — colour constructors: project the object's fields and methods
+ *
+ * Only suites whose results do not depend on the V8 version are recorded. vega-scale, d3-geo
+ * (with d3-contour), d3-shape and vega-expression go through Math.pow/exp/log/trig/sqrt, which
+ * differ in the last bit between Node versions, so they are LIVE differentials (the pinned
+ * upstream and Aster in one process; `packages/conformance/scripts/differential-*.test.mts`).
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -40,33 +45,14 @@ import {
   type FormatSpecifier,
 } from './format.js'
 import { locale, type Locale } from './locale.js'
-import { parseExpression, type AstNode } from './expr-parser.js'
-import { interpret } from './expr-interpreter.js'
 import { dsvFormat } from './dsv.js'
 import { feature as topoFeature, mesh as topoMesh } from './topojson.js'
-import * as scalePort from './scale.js'
-import * as geoPort from './geo-projections.js'
-import contoursPort from './contour.js'
-import {
-  line as shapeLine, area as shapeArea, curveBasis, curveBasisClosed, curveBasisOpen,
-  curveBundle, curveCardinal, curveCardinalClosed, curveCardinalOpen, curveCatmullRom,
-  curveCatmullRomClosed, curveCatmullRomOpen, curveLinear, curveLinearClosed,
-  curveMonotoneX, curveMonotoneY, curveNatural, curveStep, curveStepAfter,
-  curveStepBefore, type CurveFactory,
-} from './shape.js'
 
 const vectorsDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'testdata', 'vectors')
 
 interface VectorFile {
   suites: Record<string, Suite>
 }
-const SHAPE_CURVES: Record<string, CurveFactory> = {
-  curveBasis, curveBasisClosed, curveBasisOpen, curveBundle, curveCardinal,
-  curveCardinalClosed, curveCardinalOpen, curveCatmullRom, curveCatmullRomClosed,
-  curveCatmullRomOpen, curveLinear, curveLinearClosed, curveMonotoneX,
-  curveMonotoneY, curveNatural, curveStep, curveStepAfter, curveStepBefore,
-}
-
 interface TopoObjectLike {
   type: string
   objects?: Record<string, unknown>
@@ -76,7 +62,7 @@ interface TopoObjectLike {
 
 interface Suite {
   oracle: string
-  kind?: 'fn' | 'accessor' | 'color' | 'apply1' | 'interval' | 'specifier' | 'ast' | 'eval' | 'dsvcustom' | 'topomesh' | 'scale' | 'vsticks' | 'geo' | 'contour'
+  kind?: 'fn' | 'accessor' | 'color' | 'apply1' | 'interval' | 'specifier' | 'dsvcustom' | 'topomesh'
   variant?: string
   tz?: string
   cases: Array<{ args: unknown[]; want: unknown; variant?: string }>
@@ -162,33 +148,6 @@ const fns: Record<string, (...args: any[]) => any> = {
   topoFeatureCollection: (topology: never) => topoFeature(topology, (topology as { objects: { squares: never } }).objects.squares),
   topoFeatureNamed: (topology: never, name: string) => topoFeature(topology, name),
   topoMesh: (topology: never) => topoMesh(topology),
-  scheme: (name: string) => {
-    const s = scalePort.scheme(name)
-    if (Array.isArray(s)) return s
-    if (typeof s === 'function') {
-      const ts: unknown[] = []
-      for (let i = 0; i <= 20; ++i) ts.push((s as (t: number) => unknown)(i / 20))
-      return ts
-    }
-    return s
-  },
-  shape: (curveName: string, opts: Record<string, number>, points: number[][]) => {
-    let factory = SHAPE_CURVES[curveName] as CurveFactory
-    if (opts.beta !== undefined) factory = factory.beta!(opts.beta)
-    if (opts.tension !== undefined) factory = factory.tension!(opts.tension)
-    if (opts.alpha !== undefined) factory = factory.alpha!(opts.alpha)
-    // point sets carrying a third element were recorded through .defined
-    const gen = shapeLine().x((d: unknown) => (d as number[])[0] as number).y((d: unknown) => (d as number[])[1] as number)
-    if (points.some((p) => p.length > 2)) gen.defined((d: unknown) => (d as number[])[2] as unknown as boolean)
-    return gen.curve(factory)(points)
-  },
-  shapeArea: (curveName: string, opts: Record<string, number>, points: number[][]) => {
-    let factory = SHAPE_CURVES[curveName] as CurveFactory
-    if (opts.beta !== undefined) factory = factory.beta!(opts.beta)
-    if (opts.tension !== undefined) factory = factory.tension!(opts.tension)
-    if (opts.alpha !== undefined) factory = factory.alpha!(opts.alpha)
-    return shapeArea().x((d: unknown) => (d as number[])[0] as number).y0((d: unknown) => (d as number[])[1] as number).y1((d: unknown) => (d as number[])[2] as number).curve(factory)(points)
-  },
 }
 
 const applyFns: Record<string, (...args: any[]) => any> = {
@@ -310,62 +269,6 @@ function expectSuite(name: string, suite: Suite, run: (args: unknown[], want: un
   })
 }
 
-/**
- * Execute a recorded op program against a scale from the port. Mirrors the
- * generator's runScaleOps exactly: ops run in order, each op contributes one
- * result, throws tagged.
- */
-function runScaleOps(scaleApi: typeof scalePort, type: string, dates: boolean, ops: [string, ...unknown[]][]): unknown[] {
-  const s = (scaleApi.scale(type) as unknown as () => any)()
-  const results: unknown[] = []
-  const D = (v: unknown) => (dates && v != null ? new Date(v as number) : v)
-  for (const [name, ...args] of ops) {
-    results.push(
-      call(() => {
-        switch (name) {
-          case 'domain':
-            s.domain(dates ? (args[0] as number[]).map(D) : args[0])
-            return s.domain()
-          case 'range': s.range(args[0]); return s.range()
-          case 'rangeRound': s.rangeRound(args[0]); return s.range()
-          case 'clamp': return s.clamp(args[0])
-          case 'unknown': return s.unknown(args[0])
-          case 'nice': s.nice(args[0]); return s.domain()
-          case 'base': return s.base(args[0])
-          case 'exponent': return s.exponent(args[0])
-          case 'constant': return s.constant(args[0])
-          case 'round': return s.round(args[0])
-          case 'padding': return s.padding(args[0])
-          case 'paddingInner': return s.paddingInner(args[0])
-          case 'paddingOuter': return s.paddingOuter(args[0])
-          case 'align': return s.align(args[0])
-          case 'invert': return s.invert(D(args[0]))
-          case 'invertRange': return s.invertRange(args[0])
-          case 'invertExtent': return s.invertExtent(args[0])
-          case 'ticks': return s.ticks ? s.ticks(args[0] ?? undefined) : undefined
-          case 'tickFormat': {
-            const fmt = s.tickFormat(args[0] ?? undefined, args[1] ?? undefined)
-            return (args.slice(2) as unknown[]).map((v) => fmt(D(v)))
-          }
-          case 'copy': {
-            const c = s.copy()
-            c.domain(args[0] !== undefined ? (dates ? (args[0] as number[]).map(D) : args[0]) : s.domain())
-            return [c.domain(), s.domain(), c(s(args.length ? args[0] : undefined) === undefined ? null : (s.domain() as unknown[])[0])]
-          }
-          case 'bandwidth': return s.bandwidth()
-          case 'step': return s.step()
-          case 'thresholds': return s.thresholds()
-          case 'quantiles': return s.quantiles()
-          case 'bins': s.bins = args[0]; return s.bins
-          case 'call': return s(D(args[0]))
-          default: throw new Error('unknown op ' + name)
-        }
-      }, []),
-    )
-  }
-  return results
-}
-
 // --- load every vector file and replay by kind -------------------------------
 
 const files = readdirSync(vectorsDir).filter((f) => f.endsWith('.json')).sort()
@@ -417,25 +320,6 @@ for (const file of files) {
             return
           }
           expect(enc(call(built as (...a: never[]) => unknown, [args[args.length - 1]]))).toEqual(want)
-        })
-        continue
-      }
-      if (suite.kind === 'ast') {
-        expectSuite(name, suite, (args, want) => {
-          expect(enc(call(parseExpression as (...a: never[]) => unknown, args as [string]))).toEqual(want)
-        })
-        continue
-      }
-      if (suite.kind === 'eval') {
-        expectSuite(name, suite, (args, want) => {
-          // evaluate with an empty host table: the evaluator's own default
-          // function table (ported from vega-interpreter) supplies the core
-          const [code, datum, params] = args as [string, unknown, Record<string, unknown>]
-          const got = call(() => {
-            const ast = parseExpression(code)
-            return interpret(ast, {}, params ?? {}, datum)
-          }, [])
-          expect(enc(got)).toEqual(want)
         })
         continue
       }
@@ -492,117 +376,6 @@ for (const file of files) {
         expectSuite(name, suite, (args, want, extra) => {
           const [topology, objName] = args as [TopoObjectLike, string]
           const got = topoMesh(topology as never, (topology as { objects: Record<string, unknown> }).objects[objName] as never, filters[extra!.variant!] as never)
-          expect(enc(got)).toEqual(want)
-        })
-        continue
-      }
-      if (suite.kind === 'geo') {
-        const geoSamples: Record<string, unknown> = {
-          poly1: { type: 'Polygon', coordinates: [[[-10, -10], [10, -10], [10, 10], [-10, 10], [-10, -10]]] },
-          polyAntimeridian: { type: 'Polygon', coordinates: [[[170, -20], [-170, -20], [-170, 20], [170, 20], [170, -20]]] },
-          mpoly: { type: 'MultiPolygon', coordinates: [
-            [[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]],
-            [[[20, 20], [30, 20], [30, 30], [20, 30], [20, 20]]],
-          ] },
-          line: { type: 'LineString', coordinates: [[-120, 40], [-100, 35], [-80, 30], [-60, 45]] },
-          points: { type: 'MultiPoint', coordinates: [[0, 0], [45, 45], [-120, -60], [179.9, 60]] },
-          sphere: { type: 'Sphere' },
-          feature: undefined,
-          collection: undefined,
-        }
-        geoSamples.feature = { type: 'Feature', geometry: geoSamples.poly1 }
-        geoSamples.collection = { type: 'FeatureCollection', features: [
-          { type: 'Feature', geometry: geoSamples.poly1 },
-          { type: 'Feature', geometry: geoSamples.line },
-        ] }
-        const geoFactories: Record<string, () => any> = {
-          albers: geoPort.albers, albersUsa: geoPort.albersUsa,
-          azimuthalEqualArea: geoPort.azimuthalEqualArea, azimuthalEquidistant: geoPort.azimuthalEquidistant,
-          conicConformal: geoPort.conicConformal, conicEqualArea: geoPort.conicEqualArea,
-          conicEquidistant: geoPort.conicEquidistant, equalEarth: geoPort.equalEarth,
-          equirectangular: geoPort.equirectangular, gnomonic: geoPort.gnomonic,
-          mercator: geoPort.mercator, naturalEarth1: geoPort.naturalEarth1,
-          orthographic: geoPort.orthographic, stereographic: geoPort.stereographic,
-          transverseMercator: geoPort.transverseMercator,
-        }
-        expectSuite(name, suite, (args, want) => {
-          const [type, ops] = args as [string, [string, ...unknown[]][]]
-          const p: any = geoFactories[type]!()
-          const results: unknown[] = []
-          for (const [op, ...oa] of ops) {
-            results.push(
-              call(() => {
-                switch (op) {
-                  case 'scale': p.scale(oa[0]); return p.scale()
-                  case 'translate': p.translate(oa[0]); return p.translate()
-                  case 'center': p.center(oa[0]); return p.center()
-                  case 'rotate': p.rotate(oa[0]); return p.rotate()
-                  case 'precision': p.precision(oa[0]); return p.precision()
-                  case 'clipAngle': p.clipAngle(oa[0]); return p.clipAngle()
-                  case 'parallels': p.parallels(oa[0]); return p.parallels()
-                  case 'reflectX': p.reflectX(oa[0]); return p.reflectX()
-                  case 'reflectY': p.reflectY(oa[0]); return p.reflectY()
-                  case 'path': return geoPort.geoPath(p)(geoSamples[oa[0] as string])
-                  case 'area': return geoPort.geoPath(p).area(geoSamples[oa[0] as string])
-                  case 'bounds': return geoPort.geoPath(p).bounds(geoSamples[oa[0] as string])
-                  case 'centroid': return geoPort.geoPath(p).centroid(geoSamples[oa[0] as string])
-                  case 'measure': return geoPort.geoPath(p).measure(geoSamples[oa[0] as string])
-                  case 'call': return (p as (pt: unknown) => unknown)(oa[0])
-                  case 'invert': return p.invert ? p.invert(oa[0]) : undefined
-                  default: throw new Error('unknown geo op ' + op)
-                }
-              }, []),
-            )
-          }
-          expect(enc(results)).toEqual(want)
-        })
-        continue
-      }
-      if (suite.kind === 'contour') {
-        expectSuite(name, suite, (args, want) => {
-          const [values, thresholds, size, smooth] = args as [number[], number[], [number, number], boolean]
-          const got = call((v: number[], t: number[], s: [number, number], sm: boolean) =>
-            contoursPort().smooth(sm).size(s).thresholds(t)(v) as unknown, [values, thresholds, size, smooth])
-          expect(enc(got)).toEqual(want)
-        })
-        continue
-      }
-      if (suite.kind === 'scale') {
-        expectSuite(name, suite, (args, want) => {
-          const [type, dates, ops] = args as [string, boolean, [string, ...unknown[]][]]
-          expect(enc(runScaleOps(scalePort, type, dates, ops))).toEqual(want)
-        })
-        continue
-      }
-      if (suite.kind === 'vsticks') {
-        const makeScale = (type: string, domain: unknown[], dates: boolean) => {
-          const s = (scalePort.scale(type) as () => any)()
-          s.domain(dates ? domain.map((v) => new Date(v as number)) : domain)
-          return s
-        }
-        expectSuite(name, suite, (args, want) => {
-          const [op, type, domain, a, b, c] = args as [string, string, unknown[], unknown, unknown, unknown]
-          let got: unknown
-          switch (op) {
-            case 'tickCount':
-              got = call(() => scalePort.tickCount(makeScale(type, domain, false), a as number, b == null ? undefined : (b as number)), [])
-              break
-            case 'tickValues':
-              got = call(() => scalePort.tickValues(makeScale(type, domain, c as boolean), a ?? undefined), [])
-              break
-            case 'tickValuesInterval':
-              got = call(() => {
-                const s = makeScale(type, domain, c as boolean)
-                const count = b != null ? { interval: a, step: b } : a
-                return scalePort.tickValues(s, scalePort.tickCount(s, count))
-              }, [])
-              break
-            case 'bandSpace':
-              got = call(() => scalePort.bandSpace(type as unknown as number, domain as unknown as number, a as unknown as number), [])
-              break
-            default:
-              throw new Error(`unsupported vsticks op "${op}"`)
-          }
           expect(enc(got)).toEqual(want)
         })
         continue

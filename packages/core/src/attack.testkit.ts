@@ -4,7 +4,9 @@
  * A regression that lets an attack through would otherwise hang (or exhaust the
  * memory of) the test runner itself. The child bundles the real sources with
  * esbuild, runs the attack body, and reports the error it got plus the wall time
- * measured INSIDE the child (so node start-up is not counted).
+ * measured INSIDE the child (so node start-up is not counted), and the CPU time it burned. Time bounds are
+ * asserted on the CPU time: "the budget stops the work promptly" is a claim about work done, and
+ * wall time under a loaded machine (CI neighbours, parallel test workers) measures the scheduler instead.
  * Excluded from the published build (tsconfig.build.json).
  */
 import { expect } from 'vitest'
@@ -30,6 +32,8 @@ export interface AttackResult {
   value?: unknown
   /** Wall time inside the child, from the start of the attack to the throw/return. */
   ms: number
+  /** CPU time (user + system, ms) the child burned from the start of the attack to the throw/return; immune to scheduling delays. */
+  cpuMs: number
   killed: boolean
   stderr: string
 }
@@ -49,12 +53,13 @@ export async function attack(body: string): Promise<AttackResult> {
     import ${JSON.stringify(join(here, 'addon-transforms.ts'))}
     const trellisSpec = ${JSON.stringify(trellisSpec)}
     const t0 = performance.now()
+    const c0 = process.cpuUsage()
     let threw = null
     let value
     try { value = await (async () => { ${body} })() } catch (e) {
       threw = { name: e && e.name, code: e && e.code, message: String(e && e.message).slice(0, 300) }
     }
-    console.log('RESULT ' + JSON.stringify({ threw, value, ms: performance.now() - t0 }))
+    console.log('RESULT ' + JSON.stringify({ threw, value, ms: performance.now() - t0, cpuMs: (() => { const c = process.cpuUsage(c0); return (c.user + c.system) / 1000 })() }))
   `
   const out = await build({
     stdin: { contents: entry, resolveDir: here, loader: 'ts' },
@@ -76,18 +81,18 @@ export async function attack(body: string): Promise<AttackResult> {
     child.on('close', () => {
       clearTimeout(timer)
       const line = stdout.split('\n').find((l) => l.startsWith('RESULT '))
-      const parsed = line ? (JSON.parse(line.slice(7)) as { threw: AttackResult['threw']; value?: unknown; ms: number }) : { threw: null, ms: Infinity }
+      const parsed = line ? (JSON.parse(line.slice(7)) as { threw: AttackResult['threw']; value?: unknown; ms: number; cpuMs: number }) : { threw: null, ms: Infinity, cpuMs: Infinity }
       resolve({ ...parsed, killed, stderr: stderr.slice(0, 500) })
     })
   })
 }
 
-/** The attack must fail with an AsterLimitError naming `fragment`, in bounded time. */
+/** The attack must fail with an AsterLimitError naming `fragment`, having burned a bounded amount of CPU. */
 export function expectLimit(r: AttackResult, fragment: RegExp, maxTimeMs?: number): void {
   expect(r.killed, `child had to be killed (hang). stderr: ${r.stderr}`).toBe(false)
   expect(r.threw, `no error thrown (the attack succeeded). stderr: ${r.stderr}`).not.toBeNull()
   expect(r.threw!.name, JSON.stringify(r)).toBe('AsterLimitError')
   expect(r.threw!.code).toBe('ASTER_LIMIT')
   expect(r.threw!.message).toMatch(fragment)
-  if (maxTimeMs != null) expect(r.ms).toBeLessThan(2 * maxTimeMs + SLACK_MS)
+  if (maxTimeMs != null) expect(r.cpuMs, `cpu ${r.cpuMs} ms (wall ${r.ms} ms)`).toBeLessThan(2 * maxTimeMs + SLACK_MS)
 }
