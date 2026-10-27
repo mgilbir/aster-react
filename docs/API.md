@@ -311,8 +311,8 @@ focusable elements; non-React hosts can do the same. The keyboard contract is in
     prevented when `config.events.defaults` names neither `prevent` nor `allow`. The config decides first (vega's default is
     `{allow: ['wheel']}`, so every listened view event but `wheel` is prevented); a `consume`d stream always prevents.
   - `{ pick }` — `(x, y) => HitTarget | null`, e.g. `buildHitIndex(scene).query`: resolves `event.item` (mark type, name, role,
-    datum, enclosing group). Without it, or when it finds nothing, the item is read from the DOM (`data-datum` stamps and
-    `mark-*`/`role-*` classes), where mark names are not available. `<Chart>` passes its own hit index.
+    datum, enclosing group). Without it, or when it finds nothing, the item is read from the DOM (the `mark-*`/`role-*`
+    classes, and a `data-datum` stamp if `stampDatumAttrs` was called), where mark names are not available. `<Chart>` passes its own hit index.
 - `@aster/core/dom` — `patchSceneDom`, `renderSceneToDomElement`, `createChartSession`, `hasDenseSymbolMarks`.
 - `@aster/core/canvas` — `renderSceneToCanvas(scene, ctx, { dpr })`.
 - `@aster/core/load` — `loadSpecData(spec, { baseURL, allow, protocols, timeoutMs, maxBytes, ... })` for URL datasets, with a URL policy (safe defaults, see `docs/LIMITS.md`).
@@ -428,7 +428,7 @@ point selection and the a11y tree resolve through the scene.
 - `true` always batches (still only marks with at least 512 items), `false` disables.
 - Client-only mounts batch directly. SSR/hydrated pages emit the per-item markup on
   the server (so hydration matches) and switch to batched in place after hydration.
-- Per-mark `data-datum` attributes are not emitted for batched chunks, and a mark with `href` links is never batched.
+- A mark with `href` links is never batched.
 
 Pan, zoom and brushing are driven through scale `domainRaw`; the gestures, the keyboard contract and the rule that
 picks the scales are in `docs/INTERACTION.md`.
@@ -468,7 +468,7 @@ export function Interactive(): React.ReactElement {
 ```
 
 **The capability.** `interaction` (from `@aster/react/interaction`) is a plain frozen value bundling hit testing
-(`@aster/core/hit`) and the signal event loop (`@aster/core/signals`: `bindSceneSignals`, `stampDatumAttrs`). It is passed as
+(`@aster/core/hit`) and the signal event loop (`@aster/core/signals`: `bindSceneSignals`). It is passed as
 a prop: there is no registry, no global and no side-effect import (`sideEffects` needs no entry), so a bundler drops it
 when it is not imported and `<SvgChart>` without it contains none of that code. `<Chart>` has it built in.
 
@@ -509,7 +509,8 @@ missing Vega-Lite compiler, where nothing meaningful can be drawn). The report g
 
 Without `interaction`, `setSignal` and bound inputs (`signal.bind`) still work as signal overrides, exactly as on
 `<Chart renderer="canvas">`; the spec's `signal.on` updates do not run. Server markup is identical with or without
-`interaction`, except that a spec with event streams gets no `data-datum` attributes without it (nothing reads them).
+`interaction`, and equals vega's: no per-item datum attribute is written (the mark under the pointer is found through the scene
+hit index).
 
 Sizes (gzip, `pnpm --filter @aster/benchmarks run budget`): `<Chart>` 157.2 kB, `<SvgChart>` 142.0 kB,
 `<SvgChart>` + `interaction` 151.5 kB ([PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Use `<Chart>` unless that 15 kB

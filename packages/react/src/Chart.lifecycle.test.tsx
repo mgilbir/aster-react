@@ -128,13 +128,13 @@ describe('tooltips read the current scene (C33)', () => {
       const { host, rerender } = mount(<Chart spec={dotSpec(dots(3))} width={400} height={300} tooltip a11y={false} />)
       const hoverFirst = (): string | undefined => {
         // Per-item DOM: the pointer is over the mark element. Batched DOM: it is over the svg.
-        const target = host.querySelector('svg g.mark-symbol path[data-datum], svg g.mark-symbol path') ?? host
+        const target = host.querySelector('svg g.mark-symbol path') ?? host
         act(() => { target.dispatchEvent(new MouseEvent('mousemove', { clientX: 10, clientY: 10, bubbles: true })) })
         return host.querySelector('[data-testid="chart-tooltip"]')?.textContent ?? undefined
       }
       expect(hoverFirst()).toContain('p0')
       rerender(<Chart spec={dotSpec(dots(700))} width={400} height={300} tooltip a11y={false} />)
-      // 700 symbols are batched into chunked paths: no per-mark data-datum anymore.
+      // 700 symbols are batched into chunked paths.
       expect(host.querySelectorAll('svg g.mark-symbol > path').length).toBeLessThan(20)
       expect(hoverFirst()).toContain('p0')
     })
@@ -241,7 +241,7 @@ describe('the DOM the patcher owns is never rebuilt by React (C28 follow-up)', (
   })
 
   forEachVariant(['svg', 'signals'], (Chart) => {
-    it('stamps data-datum before the DOM is built, so signal.on mark events see a datum on the first render', () => {
+    it('signal.on mark events see their datum on the first render, with no datum attribute in the markup', () => {
       const spec = {
         ...(barSpec([{ cat: 'a', v: 5 }]) as Record<string, unknown>),
         signals: [{ name: 'picked', value: null, on: [{ events: 'click', update: 'datum.cat' }] }],
@@ -249,8 +249,8 @@ describe('the DOM the patcher owns is never rebuilt by React (C28 follow-up)', (
       const listener = vi.fn()
       const { container } = mount(<Chart spec={spec} width={100} height={100} signalListeners={{ picked: listener }} />)
       const bar = container.querySelector('svg .mark-rect path')!
-      expect(bar.getAttribute('data-datum')).toContain('"cat":"a"')
-      act(() => { bar.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+      expect(bar.hasAttribute('data-datum')).toBe(false)
+      act(() => { bar.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 50, clientY: 75 })) })
       expect(listener).toHaveBeenCalledWith('picked', 'a')
     })
   })

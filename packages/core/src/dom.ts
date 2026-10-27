@@ -184,8 +184,7 @@ export interface DomRenderOptions {
    * the DOM intentionally stops mirroring Vega's per-item structure: 100k
    * symbols become a few hundred paths, which is what keeps large SVG streams
    * inside the frame budget. Tooltips and hit-testing resolve through the scene
-   * hit index (`@aster/core/hit`), and per-mark `data-datum`/signal bindings are
-   * not emitted.
+   * hit index (`@aster/core/hit`).
    */
   denseMarks?: boolean
   /** Maximum items per batched path (default 256). */
@@ -363,7 +362,7 @@ function symbolItems(group: SceneGroup, items: SceneItem[]): DomDesc[] {
 /**
  * True when a scene has a symbol mark large enough for `denseMarks` batching.
  * `<Chart>` uses this to decide whether hit-testing must go through the scene
- * index (batched marks carry no per-item `data-datum`).
+ * index (batched marks are not one element per item).
  */
 export function hasDenseSymbolMarks(scene: SceneRoot, minItems = DENSE_SYMBOL_MIN): boolean {
   const walk = (group: SceneGroup): boolean => {
