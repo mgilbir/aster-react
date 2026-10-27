@@ -4,8 +4,8 @@
  * anything that could execute code (Function, eval, timers, prototype
  * accessors) is refused by name, exactly as upstream does.
  *
- * Pinned by oracle vectors recorded from the pinned vega-interpreter
- * (`testdata/vectors/vega-expression.json`, eval suites).
+ * Pinned by a live differential against the pinned vega-interpreter
+ * (`conformance/scripts/differential-vega-expression.test.mts`, eval suites).
  */
 import { ascending, DisallowedObjectProperties, safeGet } from './util.js'
 import { type AstNode } from './expr-parser.js'

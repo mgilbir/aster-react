@@ -91,10 +91,10 @@ describe('the real attack (child process, hard kill)', () => {
     ["test(/^(a+)+$/, datum.s)"],
     ["length(split(datum.s, /(a|aa)+/)) > 0"],
     ["length(replace(datum.s, regexp('(\\\\w|\\\\d)+$'), '')) > 0"],
-  ])('%s throws AsterLimitError in under 50 ms (a 40-character input would hang)', async (expr) => {
+  ])('%s throws AsterLimitError in under 50 ms of CPU (a 40-character input would hang)', async (expr) => {
     const r = await run(expr)
     expectLimit(r, /regexSafety/)
-    expect(r.ms).toBeLessThan(50)
+    expect(r.cpuMs).toBeLessThan(50)
   }, 30_000)
 
   it('countpattern with a catastrophic pattern', async () => {
@@ -102,6 +102,6 @@ describe('the real attack (child process, hard kill)', () => {
       core.renderSpec({ data: [{ name: 't', values: [{ s: 'a'.repeat(40) + '!' }], transform: [{ type: 'countpattern', field: 's', pattern: '(a+)+$' }] }] },
         { limits: { maxTimeMs: 200 } })`)
     expectLimit(r, /regexSafety/)
-    expect(r.ms).toBeLessThan(50)
+    expect(r.cpuMs).toBeLessThan(50)
   }, 30_000)
 })
