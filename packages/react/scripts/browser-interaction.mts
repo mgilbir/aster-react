@@ -104,7 +104,7 @@ const markCenter = (page: Page, index: number): Promise<Pt> => page.evaluate((i)
 const log = (page: Page): Promise<Array<{ name: string; args: unknown[] }>> => page.evaluate(() => (window as never as { __log: Array<{ name: string; args: unknown[] }> }).__log)
 const mount = async (page: Page, s: Record<string, unknown>, props: Record<string, unknown>, record: string[] = [], listen: string[] = []): Promise<void> => {
   await page.evaluate(([sp, pr, rc, ls]) => (window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, rc, ls), [s, props, record, listen] as const)
-  await page.waitForSelector('svg .mark-symbol path')
+  await page.waitForSelector(props.renderer === 'canvas' ? '#chart-host canvas' : 'svg .mark-symbol path')
 }
 
 
@@ -390,6 +390,59 @@ async function suite(page: Page): Promise<void> {
   await page.evaluate(() => { window.scrollTo(0, 0); for (const id of ['text-before', 'text-after', 'tall']) document.getElementById(id)!.remove() })
 }
 
+/**
+ * The cursor of the hovered item (vega-view cursor.js): a Vega-Lite selection bound to the legend gives its symbols, labels and
+ * entries `cursor: pointer`, so the container shows the pointer while the mouse is over the legend, as in vega, and
+ * is back to the default off it. Real mouse input in real Chromium, on the SVG renderer and (where there is one) on canvas.
+ */
+async function cursorSuite(page: Page, renderers: Array<'svg' | 'canvas'>): Promise<void> {
+  const legendSpec = compileVl({
+    $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+    width: 300, height: 160,
+    data: { values: [{ a: 1, b: 2, c: 'p' }, { a: 3, b: 5, c: 'q' }, { a: 6, b: 4, c: 'r' }] },
+    params: [{ name: 'pick', select: { type: 'point', fields: ['c'] }, bind: 'legend' }],
+    mark: 'point',
+    encoding: {
+      x: { field: 'a', type: 'quantitative' }, y: { field: 'b', type: 'quantitative' },
+      color: { field: 'c', type: 'nominal' },
+      opacity: { condition: { param: 'pick', value: 1 }, value: 0.2 },
+    },
+  } as never) as Record<string, unknown>
+  const cursorOf = (): Promise<string> => page.evaluate(() => getComputedStyle(document.querySelector('#chart-host > div')!).cursor)
+  // where the legend's parts are, measured on the SVG rendition (the canvas has no elements to measure)
+  await mount(page, legendSpec, { width: 520, height: 240 })
+  // (no named inner functions: the page function is serialized, and a bundler's name helper would not exist there)
+  const parts = await page.evaluate(() => {
+    const symbol = document.querySelectorAll('svg .role-legend-symbol path')[1]!.getBoundingClientRect()
+    const label = document.querySelectorAll('svg .role-legend-label text')[2]!.getBoundingClientRect()
+    const entry = document.querySelectorAll('svg .role-legend-entry .role-scope path.background')[0]!.getBoundingClientRect()
+    const host = document.querySelector('#chart-host')!.getBoundingClientRect()
+    return {
+      symbol: { x: symbol.left + symbol.width / 2, y: symbol.top + symbol.height / 2 },
+      label: { x: label.left + label.width / 2, y: label.top + label.height / 2 },
+      entry: { x: entry.left + 2, y: entry.top + 2 },
+      plain: { x: host.left + 8, y: host.top + 8 },
+    }
+  })
+  for (const renderer of renderers) {
+    console.log(`[cursor] a legend-bound selection shows the pointer over the legend and not off it (${renderer})`)
+    await mount(page, legendSpec, { width: 520, height: 240, renderer })
+    await page.mouse.move(parts.plain.x, parts.plain.y)
+    check((await cursorOf()) === 'default', `${renderer}: off the legend the cursor is the default (${await cursorOf()})`)
+    for (const [what, pt] of [['symbol', parts.symbol], ['label', parts.label], ['entry', parts.entry]] as const) {
+      await page.mouse.move(pt.x, pt.y)
+      check((await cursorOf()) === 'pointer', `${renderer}: over a legend ${what} the cursor is the pointer (${await cursorOf()})`)
+      await page.mouse.move(parts.plain.x, parts.plain.y)
+      check((await cursorOf()) === 'default', `${renderer}: back off the legend the cursor resets (${await cursorOf()})`)
+    }
+    // a click on the legend re-renders the chart (the selection changes) while the pointer stays on it: the cursor stays
+    await page.mouse.move(parts.symbol.x, parts.symbol.y)
+    await page.mouse.click(parts.symbol.x, parts.symbol.y)
+    await page.waitForTimeout(30)
+    check((await cursorOf()) === 'pointer', `${renderer}: the cursor stays the pointer through the re-render a click causes (${await cursorOf()})`)
+  }
+}
+
 /** `<SvgChart>` without `interaction`: renders, keeps what needs no hit testing, reports the rest. */
 async function plainSuite(page: Page): Promise<void> {
   console.log('[SvgChart without interaction] renders, brushes and zooms; reports what it cannot do')
@@ -441,7 +494,7 @@ try {
     await page.setContent('<!doctype html><html><body style="margin:0;font:12px sans-serif"><div id="root"></div></body></html>')
     await page.addScriptTag({ content: code })
     if (variant === 'SvgChart') await plainSuite(page)
-    else await suite(page)
+    else { await suite(page); await cursorSuite(page, variant === 'Chart' ? ['svg', 'canvas'] : ['svg']) }
     await page.close()
   }
 } finally {
