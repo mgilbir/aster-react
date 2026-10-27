@@ -66,10 +66,15 @@ describe('buildHitIndex', () => {
       ],
     } as unknown as SceneRoot
     const index = buildHitIndex(scene)
-    expect(index.query(10, 10)).toBeNull()
-    expect(index.query(50, 10)?.item.datum).toEqual({ v: 'live' })
-    expect(index.query(10, 60)).toBeNull()
-    expect(index.query(50, 60)?.item._part).toBe('tick')
+    // pick(): vega's event.item. It looks through what is not interactive and finds the interactive guide parts
+    expect(index.pick(10, 10)).toBeNull()
+    expect(index.pick(50, 10)?.item.datum).toEqual({ v: 'live' })
+    expect(index.pick(10, 60)).toBeNull()
+    expect(index.pick(50, 60)?.item._part).toBe('tick')
+    // queryMark() (tooltips, point selection) never reports an inert mark, as the svg's pointer-events: none; query() still paints them
+    expect(index.queryMark(10, 10)).toBeNull()
+    expect(index.queryMark(50, 10)?.item.datum).toEqual({ v: 'live' })
+    expect(index.query(10, 10)?.item.datum).toEqual({ v: 'inert' })
   })
 
   it('picks a rect along its stroke -- half a stroke width outside its box -- and a rect with no fill only there', () => {

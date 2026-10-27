@@ -1,5 +1,5 @@
 import { buildHitIndex } from '@aster/core/hit'
-import { bindSceneSignals, stampDatumAttrs } from '@aster/core/signals'
+import { bindSceneSignals, createCursorTracker, sceneHasCursor, stampDatumAttrs } from '@aster/core/signals'
 import type { InteractionCapability } from './capabilities.js'
 
 export type { InteractionCapability } from './capabilities.js'
@@ -18,4 +18,6 @@ export const interaction: InteractionCapability = /* @__PURE__ */ Object.freeze(
   buildHitIndex,
   bindSceneSignals,
   stampDatumAttrs,
+  createCursorTracker,
+  sceneHasCursor,
 })

@@ -39,6 +39,8 @@ import { parseEventSelectorString, type StreamDef } from './event-selector.js'
 import { dict, ownGet, setOwn, TUPLE_ID, scopedSignalName } from './util.js'
 import { consoleLogger, type Logger } from './logger.js'
 import { timers, type Timer } from './timer.js'
+import { resolveCursor } from './cursor.js'
+import { clientToSvg } from './pointer.js'
 
 export interface BoundEvent {
   event: string
@@ -161,6 +163,95 @@ export function parseEventSelector(selector: unknown): string[] {
   defs.forEach(visit)
   return out
 }
+
+// --- the cursor (vega-view cursor.js) ------------------------------------------------
+
+/** What the cursor tracker needs from its host. */
+export interface CursorTrackerOptions {
+  /**
+   * The item under the point `move` was given (`HitIndex.pick` of the view-space position: the topmost item that takes the
+   * pointer), or null. The point is the host's to define: a host that knows no item has a cursor answers null without
+   * converting it.
+   */
+  pick: (x: number, y: number) => { item: object } | null
+  /** The value of the spec's `cursor` signal now (a string; undefined when the spec has none). Read at every move and refresh. */
+  user: () => unknown
+  /** Told the cursor to show whenever it changes (null: none). Never told the same value twice in a row. */
+  onCursor: (cursor: string | null) => void
+  /** `config.events`: a `view` rule that blocks `pointermove` stops the tracker from ever looking (vega's `permit`). */
+  eventConfig?: CompiledChart['eventConfig']
+}
+
+export interface CursorTracker {
+  /** The pointer moved to this point (vega: a `pointermove` of the view): read the `cursor` of the item `pick` finds there, report the result. */
+  move: (x: number, y: number) => void
+  /** The `cursor` signal changed (vega: its operator re-runs): report the cursor with the item the pointer was last over. */
+  refresh: () => void
+}
+
+/**
+ * vega-view `cursor.js`: the item cursor is taken at every pointermove (`event.item && event.item.cursor || null`, so
+ * moving off the items resets it), the visible cursor is `resolveCursor(user, item)`. The host owns where it is shown.
+ * Framework-agnostic: nothing here touches the DOM.
+ */
+export function createCursorTracker(opts: CursorTrackerOptions): CursorTracker {
+  // `opts` is read afresh at every call: a host that re-renders updates it in place, the tracker (and the item it holds) stays
+  const blocked = (): boolean => {
+    // vega-view events.js `permit(view, 'view', 'pointermove')`: `false`, or a list / object of types that lacks it, blocks it
+    const rule = opts.eventConfig?.view
+    return rule === false || (rule != null && typeof rule === 'object' && !(Array.isArray(rule) ? rule.includes('pointermove') : (rule as Record<string, unknown>).pointermove))
+  }
+  let item: string | null = null
+  // vega rewrites the signal as `{user, item}` at a pointermove (user: its value, or 'default' when that is falsy): until the
+  // host changes the value, that is what the signal holds
+  let hasMoved = false
+  let movedRaw: unknown
+  let movedUser: unknown
+  const signal = (): unknown => {
+    const raw = opts.user()
+    if (!hasMoved || movedRaw !== raw) return raw
+    return typeof movedUser === 'string' ? movedUser : { user: movedUser, item }
+  }
+  let shown: string | null = resolveCursor(opts.user(), null)
+  const report = (): void => {
+    const next = resolveCursor(signal(), item)
+    if (next === shown) return
+    shown = next
+    opts.onCursor(next)
+  }
+  return {
+    move(x, y) {
+      if (blocked()) return
+      const raw = opts.user()
+      if (!hasMoved || movedRaw !== raw) {
+        hasMoved = true
+        movedRaw = raw
+        movedUser = raw ? (typeof raw === 'string' ? raw : (raw as { user?: unknown }).user) : 'default'
+      }
+      const c = (opts.pick(x, y)?.item as { cursor?: unknown } | undefined)?.cursor
+      item = typeof c === 'string' && c !== '' ? c : null
+      report()
+    },
+    refresh: report,
+  }
+}
+
+/** Whether any item of the scene has a `cursor` channel (so a host can skip picking on every pointermove when none does). */
+export function sceneHasCursor(scene: SceneRoot): boolean {
+  let known = cursorScenes.get(scene)
+  if (known === undefined) {
+    const walk = (nodes: readonly SceneNode[] | undefined): boolean => {
+      for (const n of nodes ?? []) {
+        if ((n as SceneItem).cursor != null) return true
+        if (walk((n as SceneGroup).items)) return true
+      }
+      return false
+    }
+    cursorScenes.set(scene, (known = walk(scene.items)))
+  }
+  return known
+}
+const cursorScenes = new WeakMap<SceneRoot, boolean>()
 
 // --- event streams ---------------------------------------------------------
 
@@ -1039,30 +1130,6 @@ function bindSignalEventsDefs(
 
 function defineExt(e: object, key: string, value: unknown): void {
   Object.defineProperty(e, key, { value, writable: true, configurable: true, enumerable: false })
-}
-
-/**
- * A client (viewport) point in the svg's own user space, as vega-scenegraph's `point(event, el)` maps it: the inverse of the
- * svg's screen CTM, which carries everything between the two -- the viewBox against a CSS-scaled width, the svg's border and
- * padding, and any CSS transform on an ancestor. Without a usable CTM (no layout), the bounding rect: unscaled by its size over
- * the untransformed layout size, then the border.
- */
-export function clientToSvg(svg: SVGSVGElement, clientX: number, clientY: number): [number, number] {
-  const ctm = typeof svg.getScreenCTM === 'function' ? svg.getScreenCTM() : null
-  if (ctm) {
-    const det = ctm.a * ctm.d - ctm.b * ctm.c
-    if (det) {
-      const x = clientX - ctm.e
-      const y = clientY - ctm.f
-      return [(ctm.d * x - ctm.c * y) / det, (ctm.a * y - ctm.b * x) / det]
-    }
-  }
-  const rect = svg.getBoundingClientRect()
-  const w = (svg as unknown as HTMLElement).offsetWidth
-  const h = (svg as unknown as HTMLElement).offsetHeight
-  const sx = w ? rect.width / w : 1
-  const sy = h ? rect.height / h : 1
-  return [(clientX - rect.left) / sx - (svg.clientLeft || 0), (clientY - rect.top) / sy - (svg.clientTop || 0)]
 }
 
 // --- items ---------------------------------------------------------------------

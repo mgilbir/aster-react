@@ -127,6 +127,9 @@ importers:
       '@aster/core':
         specifier: workspace:*
         version: link:../core
+      '@aster/react':
+        specifier: workspace:*
+        version: link:../react
       '@aster/vl':
         specifier: workspace:*
         version: link:../vl
@@ -140,6 +143,12 @@ importers:
       '@types/node':
         specifier: ^22.20.1
         version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: ^19.2.4
+        version: 19.2.4(@types/react@19.2.18)
       d3-array:
         specifier: 3.2.4
         version: 3.2.4
@@ -170,6 +179,12 @@ importers:
       playwright:
         specifier: ^1.62.1
         version: 1.62.1
+      react:
+        specifier: ^19.0.0
+        version: 19.2.8
+      react-dom:
+        specifier: ^19.2.8
+        version: 19.2.8(react@19.2.8)
       topojson-client:
         specifier: 3.1.0
         version: 3.1.0

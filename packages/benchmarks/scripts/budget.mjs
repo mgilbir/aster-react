@@ -51,9 +51,10 @@ import { fileURLToPath } from 'node:url'
 // vega's event config (config.events prevent/allow, ported from vega-view) and one resolved view size (measuredSize, a
 // live containerSize) then took, measured 2026-10-27 (kB gzip): core 133.9, useChart 137.8, Chart 172.9, SvgChart 153.4,
 // SvgChart + interaction 166.7, Chart + VL 247.9.
-// The pointer mapped through the svg's screen CTM and the hit index picking what the browser paints (group boxes and rect
-// strokes by their painted geometry, no guide part or mark that is not interactive), measured 2026-10-27 (kB gzip): marginal
-// hit 5.6 (+0.1), signals 8.0; Chart 173.4, SvgChart + interaction 167.2, Chart + VL 248.5.
+// The item cursor (vega-view cursor.js: resolveCursor, the pointer tracker, HitIndex.pick with its interactivity and the
+// guide parts it finds, the container's cursor state in ChartCore) then took, measured (kB gzip): hit marginal 5.6 (+0.4),
+// Chart 174.1 (+1.2), SvgChart 153.9 (+0.5), SvgChart + interaction 167.8 (+1.1), Chart + VL 249.1 (+1.2). Core and the
+// other marginal rows stay inside their ceilings.
 const BUDGETS = {
   '@aster/core': 134.3 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
@@ -64,12 +65,12 @@ const BUDGETS = {
   '+ @aster/core/geo': 12.8 * 1024,
   '+ @aster/core/transforms': 15.6 * 1024,
   '@aster/react useChart': 138.2 * 1024,
-  '@aster/react Chart': 173.9 * 1024,
+  '@aster/react Chart': 174.6 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 153.5 * 1024,
-  '@aster/react SvgChart + interaction': 167.7 * 1024,
+  '@aster/react SvgChart': 154.4 * 1024,
+  '@aster/react SvgChart + interaction': 168.4 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 249.0 * 1024,
+  '@aster/react Chart + VL': 249.7 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

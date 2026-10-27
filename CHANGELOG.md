@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The cursor of the hovered item** (vega-view `cursor.js`): the chart container shows the `cursor` channel of the item
+  under the pointer (a legend-bound Vega-Lite selection makes its symbols, labels and entries `pointer`), the spec's
+  `cursor` signal wins unless it is `'default'`, and moving off the items resets it. Rendered as React state through the
+  container's `style`, on `<Chart>` (SVG and canvas) and `<SvgChart interaction>`, compared with a real vega view by a
+  differential test. `HitIndex.pick` (new) is vega's `event.item` (interactive items only, guide parts included), and
+  legend entries and group items now carry their `cursor`.
 - **Runtime parity with Vega 6.3.1 (six documented gaps closed)**, each compared with real Vega by a differential test and
   corpus specs:
   - Axes, legends and titles are built by ports of vega-parser's guide encoders and vega-view-transforms' layouts, so

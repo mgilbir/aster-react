@@ -72,6 +72,10 @@ interface Entry {
   resolve?: (x: number, y: number) => SceneItem
   /** A group item's own box (vega picks a group that has a fill or a stroke where no mark inside it is hit): never a data mark. */
   groupBox?: true
+  /** Not interactive (its mark / guide part says `pointer-events: none`): `pick` looks through it. */
+  inert?: true
+  /** A guide part the other queries never saw (an interactive legend entry, symbol path, gradient, tick...): only `pick` finds it. */
+  pickOnly?: true
 }
 
 export interface HitIndex {
@@ -81,6 +85,12 @@ export interface HitIndex {
    * paint above marks and must not swallow clicks/tooltips.
    */
   queryMark(x: number, y: number): HitTarget | null
+  /**
+   * vega's `event.item`: the topmost item that takes the pointer. Unlike `query` it looks through what is not interactive
+   * (a mark with `interactive: false`, a guide part the spec did not make `interactive`) and finds the guide parts that are
+   * (a legend's entry boxes, symbols and labels, an axis' ticks...), which is where the item's `cursor` channel is read.
+   */
+  pick(x: number, y: number): HitTarget | null
   /** Number of indexed mark items. */
   size(): number
 }
@@ -234,30 +244,6 @@ const isStroked = (it: { stroke?: unknown }): boolean => it.stroke != null && (i
 const strokeTol = (it: { stroke?: unknown; strokeWidth?: unknown }, slack = SLACK): number =>
   (isStroked(it) ? (((it.strokeWidth as number | undefined) ?? 1) / 2) : 0) + slack
 
-/**
- * Whether a leaf of a guide takes the pointer: a guide's marks are not interactive unless the spec's `encode.<part>`
- * says so (render.ts gives the others `pointer-events="none"`). A leaf of no part (a hand-built scene) is drawn in the
- * item's content, and takes it.
- */
-function guideLeafInteractive(group: SceneGroup, meta: SceneGroup['partMeta'] | undefined, leaf: SceneItem): boolean {
-  const part = leaf._part
-  if (part === undefined || meta === undefined) return true
-  if (group.role === 'axis') return meta[part]?.interactive ?? false
-  if (group.role === 'legend') {
-    switch (part) {
-      case 'bg': return meta.legend?.interactive ?? false
-      case 'entry': return meta.entries?.interactive ?? false
-      case 'gradient':
-      case 'band': {
-        const banded = group.legendType === 'discrete' || ((group.items ?? []) as SceneItem[]).some((l) => l._part === 'band')
-        return meta[banded ? 'band' : 'gradient']?.interactive ?? false
-      }
-      default: return meta[part]?.interactive ?? true
-    }
-  }
-  return true
-}
-
 // ---------------------------------------------------------------------------
 
 export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
@@ -265,7 +251,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   // Rect-mark entries are collected per mark and flushed after it; every renderer
   // paints rect marks in item (data) order, like vega, so the list stays in paint order.
   const rectOrder: Entry[] = []
-  const walk = (group: SceneGroup, tx: number, ty: number, inherited?: SceneGroup['partMeta']): void => {
+  const walk = (group: SceneGroup, tx: number, ty: number, outer?: SceneGroup): void => {
     const gx = tx + (group.x ?? 0)
     const gy = ty + (group.y ?? 0)
     const type = group.marktype
@@ -275,17 +261,33 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       // exactly as the browser tests the `path.background` / `path.foreground` of the SVG.
       const box = rec(group)._scope === true && group.interactive !== false ? groupBoxFaces(group, gx, gy) : { background: null, foreground: null }
       if (box.background) entries.push(box.background)
-      // an axis wrapped for raw-guide mode names its parts on the outer group (render.ts `axisItem`)
-      const meta = (inherited ?? group.partMeta) ?? undefined
+      // an axis or a legend: its leaves are the marks of its parts, each interactive only if the spec said so
+      const guide = rec(group)._scope !== true && (group.role === 'axis' || group.role === 'legend') ? group : null
+      const meta = guide ? (outer?.partMeta ?? guide.partMeta) : undefined
       for (const item of group.items ?? []) {
-        if (isGroup(item)) walk(item, gx, gy, group.role === 'axis' ? meta : undefined)
-        else if (guideLeafInteractive(group, meta, item)) addLeaf(item, type ?? 'group', gx, gy)
+        if (isGroup(item)) { walk(item, gx, gy, guide ?? outer); continue }
+        if (!guide) { addLeaf(item, type ?? 'group', gx, gy); continue }
+        const before = entries.length
+        addLeaf(item, 'group', gx, gy)
+        if (!partInteractive(guide, meta, item)) {
+          for (let i = before; i < entries.length; i++) entries[i]!.inert = true
+        } else if (entries.length === before) {
+          addGuidePart(item, gx, gy, guide)
+        }
       }
       if (box.foreground) entries.push(box.foreground)
       return
     }
-    // vega does not pick a mark that is not interactive (its SVG container says `pointer-events="none"`)
-    if (isInert(group)) return
+    const e0 = entries.length
+    const r0 = rectOrder.length
+    addMark(group, type, gx, gy)
+    // a mark that is not interactive takes no pointer (its container says `pointer-events: none`)
+    if (isInert(group)) {
+      for (let i = e0; i < entries.length; i++) entries[i]!.inert = true
+      for (let i = r0; i < rectOrder.length; i++) rectOrder[i]!.inert = true
+    }
+  }
+  const addMark = (group: SceneGroup, type: string, gx: number, gy: number): void => {
     switch (type) {
       case 'line': addLine(group, gx, gy); return
       case 'area': addArea(group, gx, gy); return
@@ -369,6 +371,34 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
         x2: tx + (item.x ?? 0) + r + 2, y2: ty + (item.y ?? 0) + r + 2,
       })
     }
+  }
+
+  /** Whether the spec made the guide part a leaf belongs to `interactive` (a leaf of a hand-built scene names no part: it is). */
+  function partInteractive(guide: SceneGroup, meta: SceneGroup['partMeta'], leaf: SceneItem): boolean {
+    const part = leaf._part
+    if (part === undefined) return true
+    const key = part === 'entry' ? 'entries' : part === 'bg' ? guide.role! : part
+    return meta?.[key]?.interactive === true
+  }
+
+  /**
+   * An interactive guide part drawn as a path or a rule (a legend's entry box, symbol, gradient or band; an axis' tick, grid
+   * line or domain): found by `pick` only. The entry box is the entry's group item, the guide's own `bg` is the guide's group item.
+   */
+  function addGuidePart(item: SceneItem, tx: number, ty: number, guide: SceneGroup): void {
+    const before = entries.length
+    const part = item._part
+    if (item._kind === 'rule' || (item.path == null && item.x2 != null)) {
+      addMarkItem(item, 'rule', tx, ty)
+    } else if (typeof item.path === 'string') {
+      const ox = tx + (item.x || 0)
+      const oy = ty + (item.y || 0)
+      const path = item.path
+      const marktype = part === 'entry' || part === 'bg' ? 'group' : part === 'gradient' || part === 'band' ? 'rect' : item._kind ?? 'symbol'
+      const e = geomEntry(part === 'bg' ? guide : item, marktype, () => flattenPath(path, (x, y) => [ox + x, oy + y]), item)
+      if (e) entries.push(e)
+    }
+    for (let i = before; i < entries.length; i++) entries[i]!.pickOnly = true
   }
 
   /** A geometry entry: outline `build`t lazily, its bounding box (+ tolerance) known up front. */
@@ -609,19 +639,25 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     }
   }
 
+  // what a query looks at: `ALL` the painted items the guides and marks have, `DATA` the data-bearing ones, `PICK` what takes the pointer
+  type Mode = 0 | 1 | 2
+  const ALL = 0, DATA = 1, PICK = 2
+  const skipped = (e: Entry, mode: Mode): boolean =>
+    mode === PICK ? e.inert === true : e.pickOnly === true || (mode === DATA && (e.inert === true || e.item.datum == null || e.groupBox === true))
+
   const found = (e: Entry, x: number, y: number): HitTarget => ({ item: e.resolve ? e.resolve(x, y) : e.item, marktype: e.marktype })
 
-  const hitLinear = (x: number, y: number, dataOnly = false): HitTarget | null => {
+  const hitLinear = (x: number, y: number, mode: Mode = ALL): HitTarget | null => {
     // Reverse scan: later entries paint on top (entries are kept in paint order).
     for (let i = entries.length - 1; i >= 0; i--) {
       const e = entries[i]!
-      if (dataOnly && (e.item.datum == null || e.groupBox)) continue
+      if (skipped(e, mode)) continue
       if (hits(e, x, y)) return found(e, x, y)
     }
     return null
   }
 
-  const hitGrid = (x: number, y: number, dataOnly = false): HitTarget | null => {
+  const hitGrid = (x: number, y: number, mode: Mode = ALL): HitTarget | null => {
     // Draw order matters for overlapping marks: the topmost painted item is
     // the one with the highest index. Merge the cell's list and the big list
     // (both ascending) from their ends.
@@ -636,7 +672,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       if (b < 0 || (a >= 0 && list![a]! > big[b]!)) idx = list![a--]!
       else idx = big[b--]!
       const e = entries[idx]!
-      if (dataOnly && (e.item.datum == null || e.groupBox)) continue
+      if (skipped(e, mode)) continue
       if (hits(e, x, y)) return found(e, x, y)
     }
     return null
@@ -696,13 +732,19 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     },
     queryMark(x: number, y: number): HitTarget | null {
       if (entries.length === 0) return null
-      if (entries.length <= GRID_THRESHOLD) return hitLinear(x, y, true)
+      if (entries.length <= GRID_THRESHOLD) return hitLinear(x, y, DATA)
       if (grid == null) buildGrid()
-      return hitGrid(x, y, true)
+      return hitGrid(x, y, DATA)
+    },
+    pick(x: number, y: number): HitTarget | null {
+      if (entries.length === 0) return null
+      if (entries.length <= GRID_THRESHOLD) return hitLinear(x, y, PICK)
+      if (grid == null) buildGrid()
+      return hitGrid(x, y, PICK)
     },
     size(): number {
       let n = 0
-      for (const e of entries) if (!e.groupBox) n++
+      for (const e of entries) if (!e.groupBox && !e.pickOnly) n++
       return n
     },
   }

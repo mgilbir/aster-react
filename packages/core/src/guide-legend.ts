@@ -733,6 +733,7 @@ function buildSymbols(
     const gb = host.groupBox({ ...(g as SceneItem) } as SceneItem, inp.raw ? 0 : colWc, inp.raw ? 0 : eb.y2)
     const box = { ...gb.background, _part: 'entry', x: at.x, y: at.y, datum: entryDatum } as SceneItem & Rec
     if (entriesEncode?.interactive === true) box._hit = true
+    if (g.cursor != null) box.cursor = g.cursor
     const ia = itemAriaOf(g)
     if (ia) box.itemAria = ia
     if (g.href != null) box.href = g.href
