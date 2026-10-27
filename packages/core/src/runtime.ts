@@ -519,6 +519,11 @@ function prepareChartCtx(
   // resolveSignalUpdates, so apply the fallback after that (see below).
   let height = signed?.height ?? resolveSize(chart.height, input.height, signals)
   const signalParams = dict<unknown>({ width, height }, signals)
+  // An explicit view size (the host's `width` / `height`, a measured container, the fit loop's resize) is the
+  // size, so the `width` / `height` signals read it too: a signal value a host or the event loop supplied
+  // (a `window:resize` handler re-running `containerSize()`) must not split the signal from the view it sizes.
+  if (explicitSize.width && input.width != null) signalParams.width = width
+  if (explicitSize.height && input.height != null) signalParams.height = height
 
   const datasets = new Map<string, Row[]>()
   const scales = new Map<string, Scale>()

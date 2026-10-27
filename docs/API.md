@@ -400,7 +400,7 @@ import. Vega specs need no extra import. Worker hosts must import `@aster/react/
 since compilation happens there.
 
 **Props.** `spec` (compared by content: an equal inline literal does no work; the one exception is a dataset's inline `values` array, which is compared by identity, so a re-created but equal rows array is a new input, which the session's row diff finds unchanged and applies as a no-op; the streaming components keep the full content comparison, so a spec rebuilt every render does not restart a stream), `data`, `dataChanges`, `width`,
-`height` (each independent; without them the chart measures its container), `ariaLabel`, `className`, `style`,
+`height` (each independent; without them the chart measures its container; a given one is the view's size even for a container-sized spec, whose `width` / `height` signals and `window:resize` handlers do not move it), `ariaLabel`, `className`, `style`,
 `signals`, `signalListeners`, `onSignal`, `interactive`, `preventDefault`, `renderer`, `incremental`, `denseMarks`,
 `tooltip`, `renderTooltip`, `selection`/`select`, `onSelectionChange`, `onSelect`, `onPointSelect`, `brush`, `panZoom`,
 `pan`, `zoom`, `view`, `onViewChange`, `maxZoom`, `a11y`, `limits`, `urlPolicy`, `logger`, `textMetrics`, `onError`.

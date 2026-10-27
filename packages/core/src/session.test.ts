@@ -160,3 +160,42 @@ describe('session explicit hints given together', () => {
     expect(renderSceneToSvg(got)).toBe(renderSceneToSvg(want))
   })
 })
+
+describe('session: the container size is part of the view', () => {
+  // vega-lite's `width: "container"`: the size signals read `containerSize()`
+  const containerSpec = {
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    padding: 5,
+    autosize: { type: 'fit', contains: 'padding' },
+    signals: [
+      { name: 'width', init: 'isFinite(containerSize()[0]) ? containerSize()[0] : 300' },
+      { name: 'height', init: 'isFinite(containerSize()[1]) ? containerSize()[1] : 300' },
+    ],
+    data: [{ name: 'table', values: [{ x: 0, y: 1 }, { x: 1, y: 3 }] }],
+    scales: [
+      { name: 'x', type: 'linear', domain: { data: 'table', field: 'x' }, range: [0, { signal: 'width' }] },
+      { name: 'y', type: 'linear', domain: { data: 'table', field: 'y' }, range: [{ signal: 'height' }, 0] },
+    ],
+    axes: [{ scale: 'x', orient: 'bottom' }, { scale: 'y', orient: 'left' }],
+    marks: [{ type: 'symbol', from: { data: 'table' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' } } } }],
+  } as unknown as VgSpec
+
+  it('a resized container re-evaluates, as a fresh session would', () => {
+    const session = createChartSession()
+    const a = session.evaluate(containerSpec, { containerSize: { width: 480, height: 300 } })
+    expect(a.width).toBe(480)
+    const b = session.evaluate(containerSpec, { containerSize: { width: 320, height: 200 } })
+    const fresh = createChartSession().evaluate(containerSpec, { containerSize: { width: 320, height: 200 } })
+    expect([b.width, b.height]).toEqual([320, 200])
+    expect(renderSceneToSvg(b)).toBe(renderSceneToSvg(fresh))
+  })
+
+  it('an explicit width / height is the view size whatever the size signals say', () => {
+    const fixed = { width: 480, height: 260 }
+    const plain = renderSceneToSvg(createChartSession().evaluate(containerSpec, { ...fixed }))
+    // what a `window:resize` handler writes when the container has no size
+    const withSignals = createChartSession().evaluate(containerSpec, { ...fixed, signals: { width: 300, height: 300 } })
+    expect([withSignals.width, withSignals.height]).toEqual([480, 260])
+    expect(renderSceneToSvg(withSignals)).toBe(plain)
+  })
+})
