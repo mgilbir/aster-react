@@ -4,7 +4,7 @@
  * eagerly per call; the caller re-evaluates when inputs change.
  */
 import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
-import { readData, type DataFormatSpec } from './data-format.js'
+import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { activeMeter, withLimits, boundedCount, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
@@ -696,7 +696,7 @@ function makeTransformed(
 ): NonNullable<ExpressionRuntime['transformed']> {
   return (name, raw) => {
     const d = chart.data.find((x) => x.name === name)
-    const rows = d?.values != null ? readData(raw as never, d.format) : (raw as Row[]).map((r) => ({ ...r }))
+    const rows = d?.values != null ? readData(raw as never, d.format) : ingestRows(raw as Row[]).map((r) => ({ ...r }))
     if (!d?.transform.length) return rows
     return applyTransforms(rows, d.transform, { runtime, signals: signalParams, hierarchies, projections }, name)
   }
@@ -2861,7 +2861,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
           `or pass the rows as input.data["${name}"]`,
         )
       }
-      rows = (given ?? []).map((r) => ({ ...r }))
+      rows = ingestRows(given ?? []).map((r) => ({ ...r }))
       inPulse = ctx.inputPulses?.get(name) ?? null
     }
     // Inline values, host `input.data`, a `source` copy and a loaded dataset all

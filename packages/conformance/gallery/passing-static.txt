@@ -8,16 +8,19 @@ vega/clock
 vega/connected-scatter-plot
 vega/county-unemployment
 vega/donut-chart
+vega/dot-plot
 vega/falkensee-population
 vega/global-development
 vega/heatmap
 vega/histogram
+vega/horizon-graph
 vega/interactive-legend
 vega/line-chart
 vega/loess-regression
 vega/pacman
 vega/pie-chart
 vega/population-pyramid
+vega/radial-plot
 vega/scatter-plot
 vega/scatter-plot-null-values
 vega/serpentine-timeline
@@ -151,6 +154,7 @@ vl/layer_histogram
 vl/layer_line_color_rule
 vl/layer_line_datum_rule
 vl/layer_line_mean_point_raw
+vl/layer_line_window
 vl/layer_point_errorbar_2d_horizontal
 vl/layer_point_errorbar_2d_horizontal_color_encoding
 vl/layer_point_errorbar_2d_horizontal_custom_ticks
@@ -168,6 +172,7 @@ vl/line
 vl/line_calculate
 vl/line_color
 vl/line_color_label
+vl/line_default_format
 vl/line_detail
 vl/line_impute_keyvals
 vl/line_impute_transform_frame
@@ -182,7 +187,10 @@ vl/line_monotone
 vl/line_month
 vl/line_narrow_2year_span
 vl/line_narrow_year_span
+vl/line_narrow_yearmonth_span
+vl/line_narrow_yearquarter_span
 vl/line_outside_domain
+vl/line_override_static_format
 vl/line_params
 vl/line_quarter_legend
 vl/line_step
