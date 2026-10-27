@@ -391,8 +391,31 @@ function ChartView({
     }
   }, [needsMeasure])
 
-  const renderWidth = width ?? measured?.width
-  const renderHeight = height ?? measured?.height
+  // The size props FIX the view; the measured container only sizes a spec that does not drive its own `width` /
+  // `height` signals (a bound slider, a handler, vega-lite's `"container"` keep doing so, as in Vega where
+  // `view.width(w)` is a signal write and the later write wins). The container the spec is sized to
+  // (`containerSize()`) is the props where given and the measured element for the rest.
+  const sizedWidth = width ?? measured?.width
+  const sizedHeight = height ?? measured?.height
+  const containerSize = React.useMemo(
+    () => (sizedWidth != null && sizedHeight != null ? { width: sizedWidth, height: sizedHeight } : undefined),
+    [sizedWidth, sizedHeight],
+  )
+  const sizeInput = React.useMemo(
+    () => ({
+      ...(width != null ? { width } : {}), ...(height != null ? { height } : {}),
+      ...(containerSize ? { containerSize } : {}), ...(measured ? { measuredSize: measured } : {}),
+    }),
+    [width, height, containerSize, measured],
+  )
+  // `containerSize()` in a handler (a `window:resize` one) reads the element as it is when the event fires, like
+  // vega's `view.container().clientWidth`, not the size of the last render.
+  const liveSizeRef = React.useRef<() => [number | undefined, number | undefined]>(() => [undefined, undefined])
+  liveSizeRef.current = () => {
+    const el = containerRef.current
+    return [width ?? (el?.clientWidth || measured?.width), height ?? (el?.clientHeight || measured?.height)]
+  }
+  const liveContainerSize = React.useCallback(() => liveSizeRef.current(), [])
 
   // `panZoom` enables both; `pan`/`zoom` enable one gesture family each.
   const panEnabled = panZoom || pan
@@ -461,7 +484,7 @@ function ChartView({
       const { changes, problems } = validateDataChanges(dataChanges, inputData, prevLengthsRef.current)
       prevLengthsRef.current = new Map(Object.entries(inputData ?? {}).map(([name, rows]) => [name, rows.length]))
       const sc = sessionRef.current!.evaluate(spec, {
-        data: inputData, dataChanges: changes, width: renderWidth, height: renderHeight,
+        data: inputData, dataChanges: changes, ...sizeInput,
         signals: mergedSignals, limits: stableLimits, urlPolicy, domainRaw, textMetrics, logger: stableLogger,
       })
       if (wantsDatumAttrs(sc)) interaction?.stampDatumAttrs(sc.items)
@@ -473,7 +496,7 @@ function ChartView({
     } catch (err) {
       return { scene: null, error: err instanceof Error ? err : new Error(String(err)), problems: [] }
     }
-  }, [sceneOverride, spec, inputData, dataChanges, renderWidth, renderHeight, mergedSignals, tooltipEnabled, interactive, renderer, interaction, stableLimits, urlPolicy, domainRaw, textMetrics, stableLogger])
+  }, [sceneOverride, spec, inputData, dataChanges, sizeInput, mergedSignals, tooltipEnabled, interactive, renderer, interaction, stableLimits, urlPolicy, domainRaw, textMetrics, stableLogger])
   const scene = evaluation.scene
   sceneRef.current = scene
   const renderError = evaluation.error
@@ -561,13 +584,13 @@ function ChartView({
     try {
       if (baseSessionRef.current == null) baseSessionRef.current = createChartSession()
       const baseScene = baseSessionRef.current.evaluate(spec, {
-        data: inputData, width: renderWidth, height: renderHeight, signals: mergedSignals, limits: stableLimits, urlPolicy, textMetrics, logger: stableLogger,
+        data: inputData, ...sizeInput, signals: mergedSignals, limits: stableLimits, urlPolicy, textMetrics, logger: stableLogger,
       })
       return baseDomainsOf(chartInfoFromScene(baseScene), positional)
     } catch {
       return null
     }
-  }, [panZoomEnabled, zoomed, fromStream, positional, spec, inputData, renderWidth, renderHeight, mergedSignals, stableLimits, urlPolicy, textMetrics, stableLogger])
+  }, [panZoomEnabled, zoomed, fromStream, positional, spec, inputData, sizeInput, mergedSignals, stableLimits, urlPolicy, textMetrics, stableLogger])
   const baseDomains = React.useMemo<ViewDomain>(() => {
     if (!panZoomEnabled || chartInfo == null) return {}
     if (!zoomed) return baseDomainsOf(chartInfo, positional)
@@ -730,7 +753,7 @@ function ChartView({
       onData: (name, rows) => dataStore.merge({ [name]: rows }),
       ...(stableLogger ? { logger: stableLogger } : {}),
       ...(preventDefault != null ? { preventDefault } : {}),
-    }, { pick: (x, y) => hitIndexFor(displayScene ?? scene)?.query(x, y) ?? null, ...(inputData ? { data: inputData } : {}), ...(host ? { owner: host } : {}) })
+    }, { pick: (x, y) => hitIndexFor(displayScene ?? scene)?.query(x, y) ?? null, containerSize: liveContainerSize, ...(inputData ? { data: inputData } : {}), ...(host ? { owner: host } : {}) })
     signalBindingRef.current = binding
     // a binding on a different host than the last one: the old host's timer streams are done
     const prev = lastBindingRef.current
@@ -740,7 +763,7 @@ function ChartView({
       binding.detach()
       if (signalBindingRef.current === binding) signalBindingRef.current = null
     }
-  }, [interactive, scene, displayScene, renderer, interaction, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, dataStore, inputData, stableLogger, preventDefault, hitIndexFor])
+  }, [interactive, scene, displayScene, renderer, interaction, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, dataStore, inputData, stableLogger, preventDefault, hitIndexFor, liveContainerSize])
 
   // Canvas backend: size the backing store for devicePixelRatio and redraw the
   // whole scene whenever it changes (cheap relative to SVG serialization for

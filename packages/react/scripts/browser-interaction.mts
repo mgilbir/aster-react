@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { build } from 'esbuild'
 import { chromium, type Page } from 'playwright'
+import { compile as compileVl } from '@aster/vl'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PKG = dirname(HERE)
@@ -318,6 +319,75 @@ async function suite(page: Page): Promise<void> {
   check(sel2?.type === 'interval' && sel2.interval?.x != null, `drag -> interval selection (${JSON.stringify(sel2)})`)
   const persisted = await page.evaluate(() => document.querySelector('[data-testid="chart-brush-overlay"]')?.children.length ?? 0)
   check(persisted === 1, 'the interval stays drawn after release')
+
+  // ---- 9. default actions: a drag selects no text, a wheel still scrolls the page ------------------
+  // vega's view prevents the default action of the view events a stream listens to (all but `wheel`, config.events.defaults
+  // {allow: ['wheel']}). Without it the drag of an interval brush also drags a text selection over the axis labels and the
+  // page around the chart, and a mouse wheel over a chart that does not zoom must still scroll the page.
+  console.log('[default actions] an interval-selection drag selects no text; a wheel over a non-zoomable chart scrolls the page')
+  const brushSpec = compileVl({
+    $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+    width: 300, height: 160,
+    data: { values: [{ a: 1, b: 2 }, { a: 3, b: 5 }, { a: 6, b: 4 }, { a: 8, b: 9 }] },
+    params: [{ name: 'brush', select: 'interval' }],
+    mark: 'point',
+    encoding: { x: { field: 'a', type: 'quantitative' }, y: { field: 'b', type: 'quantitative' } },
+  } as never) as Record<string, unknown>
+  const wheelSpec = spec({ signals: [{ name: 'w', value: 0, on: [{ events: 'wheel', update: 'event.deltaY' }] }] })
+  await page.evaluate(() => {
+    const before = document.createElement('p'); before.id = 'text-before'; before.textContent = 'Selectable text above the chart. '.repeat(6)
+    const after = document.createElement('p'); after.id = 'text-after'; after.textContent = 'Selectable text below the chart. '.repeat(12)
+    const tall = document.createElement('div'); tall.id = 'tall'; tall.style.height = '1500px'
+    const root = document.getElementById('root')!
+    root.before(before); root.after(after); after.after(tall)
+    window.getSelection()!.removeAllRanges()
+  })
+  await mount(page, brushSpec, { width: 400, height: 240 }, [], ['brush_x'])
+  const hbox = await page.locator('#chart-host').boundingBox()
+  const afterBox = await page.locator('#text-after').boundingBox()
+  // end points of the drag: over the axis labels to the left of the plot, below the x axis, and out over the text below
+  const ends: Array<[string, Pt]> = [
+    ['over the y axis labels', { x: hbox!.x + 10, y: hbox!.y + 60 }],
+    ['over the x axis labels', { x: hbox!.x + 120, y: hbox!.y + 200 }],
+    ['out over the page text', { x: afterBox!.x + 200, y: afterBox!.y + 15 }],
+  ]
+  // a first drag draws the brush; the next ones start inside it (the brush moves) and outside it (a new brush)
+  await page.mouse.move(hbox!.x + 120, hbox!.y + 60)
+  await page.mouse.down()
+  await page.mouse.move(hbox!.x + 200, hbox!.y + 110, { steps: 5 })
+  await page.mouse.up()
+  const brush = (await log(page)).filter((e) => e.name === 'signal:brush_x').at(-1)?.args[1] as number[] | undefined
+  check(Array.isArray(brush) && brush.length === 2 && brush[1]! > brush[0]!, `the drag brushed an interval (${JSON.stringify(brush)})`)
+  const starts: Array<[string, Pt]> = [['starting inside the brush', { x: hbox!.x + 140, y: hbox!.y + 85 }], ['starting outside the brush', { x: hbox!.x + 270, y: hbox!.y + 40 }]]
+  for (const [from, start] of starts) {
+    for (const [where, end] of ends) {
+      await page.evaluate(() => window.getSelection()!.removeAllRanges())
+      await page.mouse.move(start.x, start.y)
+      await page.mouse.down()
+      await page.mouse.move(start.x - 15, start.y + 10, { steps: 3 })
+      await page.mouse.move(end.x, end.y, { steps: 8 })
+      const selected = await page.evaluate(() => window.getSelection()!.toString())
+      await page.mouse.up()
+      check(selected === '', `dragging an interval brush ${from} and ${where} selects no text (${JSON.stringify(selected.slice(0, 40))})`)
+    }
+  }
+  await mount(page, wheelSpec, { width: 400, height: 240 }, [], ['w'])
+  await page.evaluate(() => {
+    const w = window as never as { __wheel: boolean[] }
+    w.__wheel = []
+    document.addEventListener('wheel', (e) => w.__wheel.push(e.defaultPrevented), { passive: true })
+  })
+  const wbox = await page.locator('#chart-host').boundingBox()
+  await page.mouse.move(wbox!.x + 150, wbox!.y + 100)
+  const scrollBefore = await page.evaluate(() => window.scrollY)
+  await page.mouse.wheel(0, 200)
+  await page.waitForTimeout(100)
+  const wheelSeen = await page.evaluate(() => (window as never as { __wheel: boolean[] }).__wheel)
+  const wheelLog = (await log(page)).filter((e) => e.name === 'signal:w')
+  check(wheelLog.length > 0, 'the wheel stream of the chart handled the wheel event')
+  check(wheelSeen.length > 0 && wheelSeen.every((p) => !p), `a wheel event over a chart that listens to it is not prevented (${JSON.stringify(wheelSeen)})`)
+  check((await page.evaluate(() => window.scrollY)) > scrollBefore, 'and the page scrolls')
+  await page.evaluate(() => { window.scrollTo(0, 0); for (const id of ['text-before', 'text-after', 'tall']) document.getElementById(id)!.remove() })
 }
 
 /** `<SvgChart>` without `interaction`: renders, keeps what needs no hit testing, reports the rest. */

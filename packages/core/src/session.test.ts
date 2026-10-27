@@ -160,3 +160,85 @@ describe('session explicit hints given together', () => {
     expect(renderSceneToSvg(got)).toBe(renderSceneToSvg(want))
   })
 })
+
+describe('session: the container size is part of the view', () => {
+  // vega-lite's `width: "container"`: the size signals read `containerSize()`
+  const containerSpec = {
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    padding: 5,
+    autosize: { type: 'fit', contains: 'padding' },
+    signals: [
+      { name: 'width', init: 'isFinite(containerSize()[0]) ? containerSize()[0] : 300' },
+      { name: 'height', init: 'isFinite(containerSize()[1]) ? containerSize()[1] : 300' },
+    ],
+    data: [{ name: 'table', values: [{ x: 0, y: 1 }, { x: 1, y: 3 }] }],
+    scales: [
+      { name: 'x', type: 'linear', domain: { data: 'table', field: 'x' }, range: [0, { signal: 'width' }] },
+      { name: 'y', type: 'linear', domain: { data: 'table', field: 'y' }, range: [{ signal: 'height' }, 0] },
+    ],
+    axes: [{ scale: 'x', orient: 'bottom' }, { scale: 'y', orient: 'left' }],
+    marks: [{ type: 'symbol', from: { data: 'table' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' } } } }],
+  } as unknown as VgSpec
+
+  it('a resized container re-evaluates, as a fresh session would', () => {
+    const session = createChartSession()
+    const a = session.evaluate(containerSpec, { containerSize: { width: 480, height: 300 } })
+    expect(a.width).toBe(480)
+    const b = session.evaluate(containerSpec, { containerSize: { width: 320, height: 200 } })
+    const fresh = createChartSession().evaluate(containerSpec, { containerSize: { width: 320, height: 200 } })
+    expect([b.width, b.height]).toEqual([320, 200])
+    expect(renderSceneToSvg(b)).toBe(renderSceneToSvg(fresh))
+  })
+
+  it('an explicit width / height is the view size whatever the size signals say', () => {
+    const fixed = { width: 480, height: 260 }
+    const plain = renderSceneToSvg(createChartSession().evaluate(containerSpec, { ...fixed }))
+    // what a `window:resize` handler writes when the container has no size
+    const withSignals = createChartSession().evaluate(containerSpec, { ...fixed, signals: { width: 300, height: 300 } })
+    expect([withSignals.width, withSignals.height]).toEqual([480, 260])
+    expect(renderSceneToSvg(withSignals)).toBe(plain)
+  })
+})
+
+describe('one view size: scales, layout, svg and the width signal never disagree', () => {
+  // `width` is a signal the spec reads through the x scale range, a mark and the layout alike
+  const withSignal = {
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    height: 50, padding: 0, autosize: 'none',
+    signals: [{ name: 'width', value: 300 }],
+    data: [{ name: 't', values: [{ v: 1 }] }],
+    scales: [{ name: 'x', type: 'linear', domain: [0, 1], range: 'width' }],
+    marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { value: 0 }, y: { value: 0 }, height: { value: 10 }, width: { signal: 'width' } } } }],
+  } as unknown as VgSpec
+  const numeric = { ...(withSignal as object), width: 400, signals: [] } as unknown as VgSpec
+  type S = { width: number; plotWidth: number; items: Array<{ items: Array<{ width: number }> }>; __scales: Array<{ range: number[] }> }
+  /** [svg width, plot width, the signal as a mark reads it, the x scale's range end] */
+  const sizes = (spec: VgSpec, input: Parameters<ReturnType<typeof createChartSession>['evaluate']>[1]): number[] => {
+    const sc = createChartSession().evaluate(spec, input) as unknown as S
+    return [sc.width, sc.plotWidth, sc.items[0]!.items[0]!.width, Number(sc.__scales[0]!.range[1])]
+  }
+
+  it('a fixed width wins over a width signal, in every consumer', () => {
+    expect(sizes(withSignal, { width: 480, signals: { width: 300 } })).toEqual([480, 480, 480, 480])
+    expect(sizes(withSignal, { width: 480 })).toEqual([480, 480, 480, 480])
+  })
+
+  it('without a fixed width the signal is the size, and the measured container only sizes a spec that has no such signal', () => {
+    expect(sizes(withSignal, {})).toEqual([300, 300, 300, 300])
+    expect(sizes(withSignal, { measuredSize: { width: 700, height: 200 } })).toEqual([300, 300, 300, 300])
+    expect(sizes(numeric, { measuredSize: { width: 700, height: 200 } })).toEqual([700, 700, 700, 700])
+  })
+
+  it('a value written to the signal (a bound input, a handler) beats the measured container, and is the one every consumer reads', () => {
+    const measuredSize = { width: 700, height: 200 }
+    expect(sizes(withSignal, { measuredSize, signals: { width: 250 } })).toEqual([250, 250, 250, 250])
+    expect(sizes(numeric, { measuredSize, signals: { width: 250 } })).toEqual([250, 250, 250, 250])
+  })
+
+  it('containerSize() is the container; without one it is the measured container', () => {
+    const probe = { ...(withSignal as object), signals: [{ name: 'cw', init: 'containerSize()[0]' }], marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { value: 0 }, y: { value: 0 }, height: { value: 10 }, width: { signal: 'cw' } } } }], scales: [] } as unknown as VgSpec
+    const w = (input: Parameters<ReturnType<typeof createChartSession>['evaluate']>[1]): number => (createChartSession().evaluate(probe, input) as unknown as S).items[0]!.items[0]!.width
+    expect(w({ containerSize: { width: 320, height: 100 }, measuredSize: { width: 700, height: 200 } })).toBe(320)
+    expect(w({ measuredSize: { width: 700, height: 200 } })).toBe(700)
+  })
+})

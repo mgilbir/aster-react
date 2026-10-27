@@ -48,6 +48,9 @@ import { fileURLToPath } from 'node:url'
 // Runtime parity (guides built from ports of vega-parser's guide encoders, shared immutable plans, per-scope abort model,
 // legend part metadata) on top of the above, measured 2026-10-27 (kB gzip): core 133.8 (+8.5 over 125.3; the guide ports),
 // useChart 137.7, Chart 172.4, SvgChart 153.0, SvgChart + interaction 166.2, Chart + VL 247.4. Marginal rows unchanged.
+// vega's event config (config.events prevent/allow, ported from vega-view) and one resolved view size (measuredSize, a
+// live containerSize) then took, measured 2026-10-27 (kB gzip): core 133.9, useChart 137.8, Chart 172.9, SvgChart 153.4,
+// SvgChart + interaction 166.7, Chart + VL 247.9.
 const BUDGETS = {
   '@aster/core': 134.3 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
@@ -58,12 +61,12 @@ const BUDGETS = {
   '+ @aster/core/geo': 12.8 * 1024,
   '+ @aster/core/transforms': 15.6 * 1024,
   '@aster/react useChart': 138.2 * 1024,
-  '@aster/react Chart': 172.9 * 1024,
+  '@aster/react Chart': 173.4 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
   '@aster/react SvgChart': 153.5 * 1024,
-  '@aster/react SvgChart + interaction': 166.7 * 1024,
+  '@aster/react SvgChart + interaction': 167.2 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 247.9 * 1024,
+  '@aster/react Chart + VL': 248.4 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

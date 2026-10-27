@@ -172,16 +172,16 @@ vega-embed tutorial 288.0 kB.
 MARGINAL: the addon's gzip added to the `@aster/core` app. The old rows measured each addon standalone, which
 double counted the code it shares with core (hit read 15.6 kB where an app pays about 5). Each budget is the measured
 size plus 0.5 kB (`packages/benchmarks/scripts/budget.mjs` holds the rationale); a change that needs more room edits
-the number in the same PR. Measured 2026-10-26 (after the Vega-Lite maps and animation work; the minified/brotli figures above predate it):
+the number in the same PR. Measured 2026-10-27 (after the runtime parity work, vega's event config and the single resolved view size; the minified/brotli figures above predate it):
 
 | Import pattern | Before selections (gzip kB) | Now (gzip kB) | Budget (kB) |
 |---|---|---|---|
-| `import { renderSpec } from '@aster/core'` | 123.1 | 133.8 | 134.3 |
-| `import { useChart } from '@aster/react'` | 126.4 | 137.7 | 138.2 |
-| `import { Chart } from '@aster/react'` | 157.2 | 172.4 | 172.9 |
-| `import { SvgChart } from '@aster/react/lite'` | 142.0 | 153.0 | 153.5 |
-| `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | 151.5 | 166.2 | 166.7 |
-| `import '@aster/react/vl'` + `<Chart>` | 211.3 | 247.4 | 247.9 |
+| `import { renderSpec } from '@aster/core'` | 123.1 | 133.9 | 134.3 |
+| `import { useChart } from '@aster/react'` | 126.4 | 137.8 | 138.2 |
+| `import { Chart } from '@aster/react'` | 157.2 | 172.9 | 173.4 |
+| `import { SvgChart } from '@aster/react/lite'` | 142.0 | 153.4 | 153.5 |
+| `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | 151.5 | 166.7 | 167.2 |
+| `import '@aster/react/vl'` + `<Chart>` | 211.3 | 247.9 | 248.4 |
 | core + `@aster/core/dom` (marginal) | 5.8 | 5.7 | 6.2 |
 | core + `@aster/core/canvas` (marginal) | 4.8 | 4.8 | 5.3 |
 | core + `@aster/core/hit` (marginal) | 5.1 | 5.2 | 5.5 |

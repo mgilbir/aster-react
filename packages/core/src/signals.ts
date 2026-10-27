@@ -88,8 +88,9 @@ export interface SignalEventHooks {
    */
   logger?: Logger
   /**
-   * Call `preventDefault()` on events of the `view` source before handling them
-   * (vega's `view.preventDefault()`, default false). `consume` always prevents.
+   * vega's `view.preventDefault()` (default false): whether events of the `view` source are prevented when
+   * `config.events.defaults` names neither `prevent` nor `allow`. The config decides first (by default every view
+   * event but `wheel` is prevented, see `preventsEvent`); `consume` always prevents.
    */
   preventDefault?: boolean
 }
@@ -119,6 +120,12 @@ export interface SignalBindOptions {
    * or each render would restart its timers.
    */
   owner?: EventTarget
+  /**
+   * `containerSize()` for the handlers' expressions, read when an event fires (vega: the view container's live
+   * `clientWidth` / `clientHeight`). Without it they read the size the scene was evaluated with, which a
+   * `window:resize` handler would see a render behind.
+   */
+  containerSize?: () => [number | undefined, number | undefined]
 }
 
 export interface SignalBinding {
@@ -203,6 +210,30 @@ function releaseOwner(owner: EventTarget): void {
     }
   }
 }
+type EventDefaults = { prevent?: unknown; allow?: unknown }
+
+/** vega-view `initializeEventConfig`: `config.events.defaults`, with a `prevent` / `allow` list read as a set of types. */
+function eventDefaults(config: CompiledChart['eventConfig']): EventDefaults {
+  const d = { ...(config?.defaults ?? {}) } as EventDefaults
+  for (const k of ['prevent', 'allow'] as const) if (Array.isArray(d[k])) d[k] = new Set(d[k] as unknown[])
+  return d
+}
+
+/**
+ * vega-view `events.js` `prevent(view, type)`: whether an event of the `view` source is prevented before it is handled.
+ * `prevent: false` or `allow: true` -> never; `prevent: true` or `allow: false` -> always; a `prevent` list -> the types
+ * in it; an `allow` list -> the types not in it; none of these -> `view.preventDefault()`. vega-parser's default config
+ * is `allow: ['wheel']`, so a page still scrolls over a chart that does not handle wheel (or whose config allows it).
+ */
+function preventsEvent(d: EventDefaults, viewPreventDefault: boolean, type: string): boolean {
+  const { prevent, allow } = d
+  return prevent === false || allow === true ? false
+    : prevent === true || allow === false ? true
+    : prevent ? (prevent as Set<string>).has(type)
+    : allow ? !(allow as Set<string>).has(type)
+    : viewPreventDefault
+}
+
 /** What a binding last saw of each scale named by a `{scale}` event source, per surface (it survives a re-bind). */
 const scaleSnapshots = new WeakMap<EventTarget, Map<string, string>>()
 
@@ -408,7 +439,7 @@ export function bindSignalEvents(
   hooks: SignalEventHooks = {},
   opts: SignalBindOptions = {},
 ): SignalBinding {
-  return bindSignalEventsDefs(svg, chart.signalDefs ?? [], chart.data ?? [], runtime, signalParams, signals, hooks, opts)
+  return bindSignalEventsDefs(svg, chart.signalDefs ?? [], chart.data ?? [], runtime, signalParams, signals, hooks, opts, chart.eventConfig)
 }
 
 function bindSignalEventsDefs(
@@ -420,7 +451,9 @@ function bindSignalEventsDefs(
   signals: Record<string, unknown>,
   hooks: SignalEventHooks,
   opts: SignalBindOptions,
+  eventConfig?: CompiledChart['eventConfig'],
 ): SignalBinding {
+  const preventDefaults = eventDefaults(eventConfig)
   const logger: Logger = hooks.logger ?? consoleLogger
   const scopes = collectScopes(opts.scene)
   /** Every scoped signal by its store key (`<scope id>:<name>`). */
@@ -493,6 +526,7 @@ function bindSignalEventsDefs(
     ...sceneRuntime,
     data: dataOf,
     modify: modifyData,
+    ...(opts.containerSize ? { containerSize: opts.containerSize } : {}),
     expr: (code) => compileIn(bindRuntime, code),
   }
   const compiledExprs = new WeakMap<ExpressionRuntime, Map<string, CompiledExpr>>()
@@ -772,7 +806,7 @@ function bindSignalEventsDefs(
     /** The one run a delivery of `e` to this root stream is. */
     const deliverTo = (stream: Stream, e: ExtEvent, viaView: boolean, native: Event): void => {
       run(() => {
-        if (viaView && hooks.preventDefault) native.preventDefault?.()
+        if (viaView && preventsEvent(preventDefaults, hooks.preventDefault === true, String(type))) native.preventDefault?.()
         stream.receive(extend(e, viaView))
       })
     }
@@ -1137,7 +1171,7 @@ export function bindSceneSignals(
   scene: SceneRoot,
   signals: Record<string, unknown>,
   hooks: SignalEventHooks = {},
-  opts: Pick<SignalBindOptions, 'pick' | 'data' | 'owner'> = {},
+  opts: Pick<SignalBindOptions, 'pick' | 'data' | 'owner' | 'containerSize'> = {},
 ): SignalBinding {
   const chart = (scene as unknown as { compiled?: CompiledChart }).compiled
   const runtime = scene.runtime as ExpressionRuntime | undefined
