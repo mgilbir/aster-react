@@ -50,6 +50,8 @@ type Step =
   | { t: 'click'; x: number; y: number; shift?: boolean; view?: number }
   | { t: 'dblclick'; x: number; y: number; view?: number }
   | { t: 'drag'; x0: number; y0: number; x1: number; y1: number; shift?: boolean; view?: number }
+  /** Press at the first point, move through the rest (`steps` mouse moves per leg: 1 is a jump), release at the last unless `hold`. Points may lie outside the frame, even outside the window. */
+  | { t: 'path'; pts: Array<[number, number]>; steps?: number; hold?: boolean; shift?: boolean; view?: number }
   | { t: 'wheel'; x: number; y: number; dy: number; shift?: boolean; view?: number }
   | { t: 'clickMark'; i: number; shift?: boolean; sel?: string; view?: number }
   | { t: 'moveMark'; i: number; view?: number }
@@ -64,6 +66,8 @@ interface Case {
   steps: Step[]
   /** Indices of the steps after which the vega side's stores / signals must differ from before the step. */
   moves: number[]
+  /** CSS applied to the page of BOTH engines before the chart mounts: the svg sized, bordered, padded or transformed by its host. */
+  css?: string
 }
 
 const ROWS = [
@@ -361,8 +365,57 @@ const CASES: Case[] = [
     steps: [{ t: 'clickMark', i: 1, view: 0 }, { t: 'clickMark', i: 3, shift: true, view: 1 }, { t: 'click', x: 0.5, y: 0.97, view: 0 }],
     moves: [0, 1, 2],
   },
+  ...hostedCases(),
 ]
 
+/**
+ * The brush follows the pointer exactly, wherever the chart sits and however its host sizes it: pointer -> view coordinates is
+ * vega's (the svg's screen CTM, so a CSS-scaled, bordered, padded or transformed svg is mapped like vega maps it), and the
+ * group transform is each enclosing group's x/y. Every cell / view of a composition is pressed in, and each press leaves the
+ * frame a different way: through an edge, the header, the axes, the gap between cells, the padding, out of the window and back,
+ * released outside; slowly and in one jump.
+ */
+function hostedCases(): Case[] {
+  type P = Array<[number, number]>
+  // (all fractions of the pressed cell; the cell's own x range is 0..1, so > 1 is the gap and the next cell, < 0 the one before)
+  const exits: Array<{ name: string; pts: P; steps?: number }> = [
+    { name: 'inside', pts: [[0.25, 0.3], [0.55, 0.5], [0.8, 0.7]], steps: 4 },
+    { name: 'right edge', pts: [[0.3, 0.4], [0.9, 0.5], [1.05, 0.6]], steps: 3 },
+    { name: 'header', pts: [[0.5, 0.5], [0.45, -0.1], [0.4, -0.35]], steps: 3 },
+    { name: 'x axis', pts: [[0.6, 0.5], [0.55, 1.1], [0.5, 1.35]], steps: 3 },
+    { name: 'y axis', pts: [[0.2, 0.5], [-0.1, 0.45], [-0.35, 0.4]], steps: 3 },
+    { name: 'cell border', pts: [[0.4, 0.5], [0.99, 0.5], [1.003, 0.45], [0.5, 1.003]], steps: 2 },
+    { name: 'padding, fast', pts: [[0.2, 0.4], [-0.4, -0.3]], steps: 1 },
+    { name: 'gap', pts: [[0.7, 0.3], [1.08, 0.35], [1.12, 0.5]], steps: 2 },
+    { name: 'out of the window and back', pts: [[0.5, 0.5], [-9, 0.5], [0.3, 0.2]], steps: 2 },
+    { name: 'released outside the window', pts: [[0.4, 0.5], [0.9, 0.9], [-9, 2.5]], steps: 1 },
+  ]
+  /** `views`: the frames pressed in (document order; a concat inside a concat has a frame of its own before its children's). */
+  const make = (name: string, spec: Record<string, unknown>, views: number | number[], css?: string): Case => {
+    const steps: Step[] = []
+    for (const view of typeof views === 'number' ? Array.from({ length: views }, (_, i) => i) : views) for (const e of exits) steps.push({ t: 'path', pts: e.pts, steps: e.steps, view })
+    return { name, spec, steps, moves: steps.map((_, i) => i), css }
+  }
+  const facet = (extra: Record<string, unknown> = {}): Record<string, unknown> => baseC({ facet: { column: { field: 'c', type: 'nominal' } }, spec: unitV({ params: [sel('brush', 'interval')], mark: 'point', encoding: xy }), ...extra })
+  const scaled = '#c svg { max-width: 400px; height: auto }'
+  const boxed = '#c svg { border: 6px solid #888; padding: 9px; box-sizing: content-box }'
+  const transformed = '#c { transform: scale(0.8) rotate(0deg); transform-origin: 0 0 }'
+  const unitB = (n: string): Record<string, unknown> => unitV({ params: [sel(n, 'interval')], mark: 'point', encoding: xy })
+  return [
+    make('hosted: facet, a brush path from each cell', facet(), 3),
+    make('hosted: facet in a CSS-scaled svg (max-width), a brush path from each cell', facet(), 3, scaled),
+    make('hosted: facet in a bordered, padded svg, a brush path from each cell', facet(), 3, boxed),
+    make('hosted: facet under a CSS transform, a brush path from each cell', facet(), 3, transformed),
+    make('hosted: facet with a spec padding and a CSS-scaled svg', facet({ padding: { left: 31, top: 12, right: 7, bottom: 20 } }), 3, scaled),
+    make('hosted: facet by row and column in a CSS-scaled svg', baseC({ data: { values: ROWS.flatMap((r, i) => [{ ...r, e: 'p' }, { ...r, a: r.a + 10, e: 'q', c: ['x', 'y', 'z'][(i + 1) % 3] }]) }, facet: { row: { field: 'e', type: 'nominal' }, column: { field: 'c', type: 'nominal' } }, spec: unitV({ width: 100, height: 70, params: [sel('brush', 'interval')], mark: 'point', encoding: xy }) }), [0, 2, 3, 5], scaled),
+    make('hosted: facet wrap in a CSS-scaled svg', baseC({ facet: { field: 'c', type: 'nominal' }, columns: 2, spec: unitB('brush') }), 3, scaled),
+    make('hosted: hconcat, a brush path from each view, CSS-scaled', baseC({ hconcat: [unitB('b0'), unitB('b1'), unitB('b2')] }), 3, scaled),
+    make('hosted: vconcat, a brush path from each view, CSS-scaled', baseC({ vconcat: [unitB('b0'), unitB('b1')] }), 2, scaled),
+    make('hosted: nested concat (vconcat of hconcat), a brush path from each view, CSS-scaled', baseC({ vconcat: [{ hconcat: [unitB('b0'), unitB('b1')] }, unitB('b2')] }), [1, 2, 3], scaled),
+    make('hosted: facet of a layered unit under a CSS transform', baseC({ facet: { column: { field: 'c', type: 'nominal' } }, spec: { width: 150, height: 100, layer: [{ params: [sel('brush', 'interval')], mark: 'point', encoding: xy }, { mark: 'line', encoding: xy }] } }), 3, transformed),
+    make('hosted: single view with a spec padding in a CSS-scaled svg', base({ padding: 25, params: [sel('brush', 'interval')], mark: 'point', encoding: xy }), 1, '#c svg { max-width: 360px; height: auto }'),
+  ]
+}
 const cases = CASES.filter((c) => !FILTER || c.name.includes(FILTER))
 
 // ---- page bundle ------------------------------------------------------------------
@@ -633,13 +686,23 @@ async function runStep(page: Page, s: Step, engine: 'vega' | 'aster'): Promise<v
         }
         await page.mouse.move(...at(s.x0, s.y0))
         await page.mouse.down()
-        await dbg('down')
         for (let k = 1; k <= 8; k++) {
           await refresh()
           await page.mouse.move(...at(s.x0 + ((s.x1 - s.x0) * k) / 8, s.y0 + ((s.y1 - s.y0) * k) / 8))
           await dbg('move' + k)
         }
         await page.mouse.up()
+      })
+      break
+    case 'path':
+      await shift(s.shift, async () => {
+        await page.mouse.move(...at(...s.pts[0]!))
+        await page.mouse.down()
+        for (const pt of s.pts.slice(1)) {
+          await refresh()
+          await page.mouse.move(...at(...pt), { steps: s.steps ?? 1 })
+        }
+        if (!s.hold) await page.mouse.up()
       })
       break
     case 'wheel': await shift(s.shift, async () => { await page.mouse.move(...at(s.x, s.y)); await page.mouse.wheel(0, s.dy) }); break
@@ -665,6 +728,7 @@ async function drive(engine: 'vega' | 'aster', c: Case): Promise<{ snaps: Snapsh
   page.on('pageerror', (e) => pageErrors.push(e.message.slice(0, 300)))
   try {
     await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
+    if (c.css) await page.addStyleTag({ content: c.css })
     await page.waitForFunction(() => '__mountVega' in window, null, { timeout: 30_000 })
     await page.evaluate(async ([which, spec]) => {
       const w = window as unknown as Record<string, (s: unknown) => Promise<void>>
