@@ -706,8 +706,8 @@ function bindSignalEventsDefs(
   const pointOf = (e: ExtEvent): [number, number] => {
     const t = (e as unknown as { changedTouches?: ArrayLike<{ clientX: number; clientY: number }> }).changedTouches
     const src = t ? t[0]! : (e as unknown as { clientX: number; clientY: number })
-    const rect = svg.getBoundingClientRect()
-    return [src.clientX - rect.left - (svg.clientLeft || 0) - originX, src.clientY - rect.top - (svg.clientTop || 0) - originY]
+    const [x, y] = clientToSvg(svg, src.clientX, src.clientY)
+    return [x - originX, y - originY]
   }
   const sceneInfo = opts.scene ? sceneIndex(opts.scene) : null
 
@@ -1039,6 +1039,30 @@ function bindSignalEventsDefs(
 
 function defineExt(e: object, key: string, value: unknown): void {
   Object.defineProperty(e, key, { value, writable: true, configurable: true, enumerable: false })
+}
+
+/**
+ * A client (viewport) point in the svg's own user space, as vega-scenegraph's `point(event, el)` maps it: the inverse of the
+ * svg's screen CTM, which carries everything between the two -- the viewBox against a CSS-scaled width, the svg's border and
+ * padding, and any CSS transform on an ancestor. Without a usable CTM (no layout), the bounding rect: unscaled by its size over
+ * the untransformed layout size, then the border.
+ */
+export function clientToSvg(svg: SVGSVGElement, clientX: number, clientY: number): [number, number] {
+  const ctm = typeof svg.getScreenCTM === 'function' ? svg.getScreenCTM() : null
+  if (ctm) {
+    const det = ctm.a * ctm.d - ctm.b * ctm.c
+    if (det) {
+      const x = clientX - ctm.e
+      const y = clientY - ctm.f
+      return [(ctm.d * x - ctm.c * y) / det, (ctm.a * y - ctm.b * x) / det]
+    }
+  }
+  const rect = svg.getBoundingClientRect()
+  const w = (svg as unknown as HTMLElement).offsetWidth
+  const h = (svg as unknown as HTMLElement).offsetHeight
+  const sx = w ? rect.width / w : 1
+  const sy = h ? rect.height / h : 1
+  return [(clientX - rect.left) / sx - (svg.clientLeft || 0), (clientY - rect.top) / sy - (svg.clientTop || 0)]
 }
 
 // --- items ---------------------------------------------------------------------

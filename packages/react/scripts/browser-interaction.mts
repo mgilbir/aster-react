@@ -202,6 +202,37 @@ async function suite(page: Page): Promise<void> {
   check(last('shifted') === 1, `click[event.shiftKey] fired once, for the shifted click only (${JSON.stringify(last('shifted'))})`)
   check(entries.filter((e) => e.name === 'signal:overName').map((e) => e.args[1]).includes('b'), '@dots:mouseover fired with the hovered datum')
 
+  // ---- 2c. the pointer maps to view units whatever the host does to the svg ----------------------------------
+  // (vega-scenegraph point(): the inverse of the svg's screen CTM; the oracle here is the browser's own DOMMatrix inverse, so
+  // agreement is to a thousandth of a pixel; exact agreement with vega is the selections gate's)
+  console.log('[pointer] x() / y() in a CSS-scaled, bordered, transformed svg')
+  const pointerSpec = spec({ signals: [{ name: 'at', value: null, on: [{ events: 'pointermove', update: '[x(), y()]' }] }] })
+  for (const [label, css] of [
+    ['unstyled', ''],
+    ['max-width (scaled by its viewBox)', '#chart-host svg { max-width: 300px; height: auto }'],
+    ['bordered and padded svg', '#chart-host svg { border: 7px solid #888; padding: 11px }'],
+    ['under a CSS transform', '#chart-host { transform: scale(0.75); transform-origin: 20px 10px }'],
+  ] as const) {
+    await mount(page, pointerSpec, { width: 400, height: 240 }, [], ['at'])
+    await page.evaluate((c) => { let st = document.getElementById('host-css'); if (!st) { st = document.createElement('style'); st.id = 'host-css'; document.head.appendChild(st) } st.textContent = c }, css)
+    const pbox0 = await page.evaluate(() => { const r = document.querySelector('#chart-host svg')!.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height } })
+    for (const [fx, fy] of [[0.3, 0.4], [0.8, 0.7]] as const) {
+      const cx = pbox0.x + fx * pbox0.w
+      const cy = pbox0.y + fy * pbox0.h
+      await page.mouse.move(cx, cy)
+      await page.waitForTimeout(30)
+      const expected = await page.evaluate(({ cx, cy }) => {
+        const svg = document.querySelector('#chart-host svg') as unknown as SVGSVGElement
+        const p = new DOMPoint(cx, cy).matrixTransform(svg.getScreenCTM()!.inverse())
+        return [p.x - 30, p.y - 30]
+      }, { cx, cy })
+      const got = (await log(page)).filter((e) => e.name === 'signal:at').at(-1)?.args[1] as number[] | undefined
+      check(got != null && Math.abs(got[0]! - expected[0]!) < 1e-3 && Math.abs(got[1]! - expected[1]!) < 1e-3, `${label}: x(), y() at (${fx}, ${fy}) of the svg are ${JSON.stringify(expected.map((v) => +v.toFixed(3)))} (got ${JSON.stringify(got?.map((v) => +v.toFixed(3)))})`)
+    }
+  }
+
+  await page.evaluate(() => { document.getElementById('host-css')?.remove() })
+
   // ---- 3. bound inputs ----------------------------------------------------------------------
   console.log('[binds] range / select / checkbox with brush + pan/zoom enabled')
   await mount(page, spec(), { width: 400, height: 240, panZoom: true }, ['onSelect', 'onPointSelect'], ['size', 'mode', 'show'])
