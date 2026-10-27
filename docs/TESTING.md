@@ -43,10 +43,11 @@ result is the summary line it prints. They change with the code: re-run before q
 | Signals sweep | `pnpm sweep-signals -- --floor 166 --min-ok 104 --max-node-error 2 --max-retained 59` | 104 ok, 59 retained, 1 both-refused, 2 node-error, 0 differ / 166 |
 | Gap probes (diagnostic) | `pnpm probe` | 2/2 pass |
 | Fuzz reproducers | `pnpm fuzz:replay` | 2/2 pass |
-| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 794/794 passed |
-| Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium 795/795 passed; append painting vs full repaint: 120 scenarios, 265 append frames, 0 failing |
-| Batched (dense) SVG vs per-item SVG pixels | `pnpm conformance:batch` | 61/61 passed |
-| Signal event streams vs real Vega | `pnpm conformance:signals` | 38/38 cases agree |
+| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 785/785 passed |
+| Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium 786/786 passed; append painting vs full repaint: 120 scenarios, 265 append frames, 0 failing |
+| Batched (dense) SVG vs per-item SVG pixels | `pnpm conformance:batch` | 57/57 passed |
+| Signal event streams vs real Vega | `pnpm conformance:signals` | 58/58 cases agree (group scopes among them) |
+| Vega-Lite selections vs real Vega (same native input, signals/stores/SVG compared per step) | `pnpm conformance:selections` | 37/37 cases agree (concat, facet and repeat views among them; steps where Vega keeps its first layout are held to a new Vega view's render, 13 of them, ceiling 13) |
 | `<Chart>` interaction in Chromium | `pnpm --filter @aster/react run test:browser` | all checks passed |
 | Incremental gate | `pnpm bench:incremental -- --points=10000 --reps=30` | append 22.2x–26.7x (floor 8x), whole-array replace 22.0x–24.9x (floor 8x), DOM patch 4.9x–6.9x (floor 1.6x), dense 100k-symbol append patch vs mount 306x–332x (floor 200x) over three runs |
 | Bundle shaking | `pnpm check:bundle` | every documented import pattern still works after tree-shaking (`--blanket-false` must fail) |

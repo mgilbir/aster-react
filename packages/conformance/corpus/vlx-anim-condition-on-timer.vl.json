@@ -1,0 +1,173 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "width": 320,
+  "height": 220,
+  "data": {
+    "values": [
+      {
+        "year": 1990,
+        "date": "1990-06-15",
+        "country": "a",
+        "region": "east",
+        "pop": 10,
+        "life": 50,
+        "fert": 5.0
+      },
+      {
+        "year": 1990,
+        "date": "1990-06-15",
+        "country": "b",
+        "region": "west",
+        "pop": 17,
+        "life": 54,
+        "fert": 4.5
+      },
+      {
+        "year": 1990,
+        "date": "1990-06-15",
+        "country": "c",
+        "region": "east",
+        "pop": 24,
+        "life": 58,
+        "fert": 4.0
+      },
+      {
+        "year": 1990,
+        "date": "1990-06-15",
+        "country": "d",
+        "region": "south",
+        "pop": 31,
+        "life": 62,
+        "fert": 3.5
+      },
+      {
+        "year": 1991,
+        "date": "1991-06-15",
+        "country": "a",
+        "region": "east",
+        "pop": 13,
+        "life": 52,
+        "fert": 4.7
+      },
+      {
+        "year": 1991,
+        "date": "1991-06-15",
+        "country": "b",
+        "region": "west",
+        "pop": 20,
+        "life": 56,
+        "fert": 4.2
+      },
+      {
+        "year": 1991,
+        "date": "1991-06-15",
+        "country": "c",
+        "region": "east",
+        "pop": 27,
+        "life": 60,
+        "fert": 3.7
+      },
+      {
+        "year": 1991,
+        "date": "1991-06-15",
+        "country": "d",
+        "region": "south",
+        "pop": 34,
+        "life": 64,
+        "fert": 3.2
+      },
+      {
+        "year": 1992,
+        "date": "1992-06-15",
+        "country": "a",
+        "region": "east",
+        "pop": 16,
+        "life": 54,
+        "fert": 4.4
+      },
+      {
+        "year": 1992,
+        "date": "1992-06-15",
+        "country": "b",
+        "region": "west",
+        "pop": 23,
+        "life": 58,
+        "fert": 3.9
+      },
+      {
+        "year": 1992,
+        "date": "1992-06-15",
+        "country": "c",
+        "region": "east",
+        "pop": 30,
+        "life": 62,
+        "fert": 3.4
+      },
+      {
+        "year": 1992,
+        "date": "1992-06-15",
+        "country": "d",
+        "region": "south",
+        "pop": 37,
+        "life": 66,
+        "fert": 2.9
+      }
+    ]
+  },
+  "params": [
+    {
+      "name": "anim",
+      "select": {
+        "type": "point",
+        "on": "timer",
+        "fields": [
+          "year"
+        ]
+      }
+    }
+  ],
+  "transform": [
+    {
+      "filter": {
+        "param": "anim"
+      }
+    }
+  ],
+  "mark": {
+    "type": "point",
+    "filled": true
+  },
+  "encoding": {
+    "x": {
+      "field": "life",
+      "type": "quantitative",
+      "scale": {
+        "zero": false
+      }
+    },
+    "y": {
+      "field": "fert",
+      "type": "quantitative"
+    },
+    "size": {
+      "field": "pop",
+      "type": "quantitative"
+    },
+    "color": {
+      "condition": {
+        "test": {
+          "param": "anim"
+        },
+        "field": "region",
+        "type": "nominal"
+      },
+      "value": "lightgray"
+    },
+    "time": {
+      "field": "year",
+      "type": "ordinal"
+    }
+  }
+}

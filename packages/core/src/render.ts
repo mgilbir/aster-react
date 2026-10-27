@@ -1700,6 +1700,8 @@ export function paintAttrs(it: SceneItem, w: AttrSink, styles?: readonly string[
   if ((v = it.strokeDashOffset) != null) w.a('stroke-dashoffset', v)
   if ((v = it.strokeMiterLimit) != null) w.a('stroke-miterlimit', v)
   if ((v = it.opacity) != null) w.a('opacity', v)
+  // a transparent fill that has to take the pointer (an interactive mark; see runtime.ts `_hit`)
+  if (recOf(it)._hit === true) w.v('pointer-events', 'visible')
   // vega: stylesCss.blend -> style="mix-blend-mode: <blend>;" (after any mark styles)
   const blend = it.blend
   if (styles !== undefined) w.v('style', styles.join(' ') + (blend != null ? ` mix-blend-mode: ${String(blend)};` : ''))
@@ -1712,6 +1714,7 @@ export function samePaint(a: SceneItem, b: SceneItem): boolean {
     && same(a.strokeOpacity, b.strokeOpacity) && same(a.strokeWidth, b.strokeWidth) && same(a.strokeCap, b.strokeCap)
     && same(a.strokeJoin, b.strokeJoin) && same(a.strokeDash, b.strokeDash) && same(a.strokeDashOffset, b.strokeDashOffset)
     && same(a.strokeMiterLimit, b.strokeMiterLimit) && same(a.opacity, b.opacity) && a.blend === b.blend
+    && recOf(a)._hit === recOf(b)._hit
 }
 
 function same(x: unknown, y: unknown): boolean {
@@ -2363,6 +2366,7 @@ function legendItem(g: SceneGroup, clips: ClipCollector): SvgEl {
       default: loose.push(it)
     }
   }
+  // the names the spec gave the legend's parts (encode.<part>.name)
   const col = (inside: SvgEl[]): SvgEl => el('g', (w) => w.v('class', 'mark-group role-legend-entry'), [guideItem(0, 0, null, inside)])
   const entriesName = meta?.entries?.name
   let entryMarks: SvgEl[]

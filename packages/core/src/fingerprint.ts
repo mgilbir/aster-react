@@ -11,6 +11,8 @@
  *   a fresh array on every evaluation. Keyed by identity it defeated every
  *   cache; keyed by structure, an unchanged value hashes to the same key.
  *
+ * A Set (the extensional selection `vlSelectionResolve` returns) is plain data too: its values in insertion order.
+ *
  * Anything that is not plain data (functions, class instances, Maps, typed
  * arrays, over-large or cyclic structures) falls back to a per-object identity
  * id: the key then differs for a different object, which is always the safe
@@ -75,6 +77,15 @@ function keyOf(v: unknown, depth: number, budget: { nodes: number }): string | n
     }
     return `[${parts.join(',')}]`
   }
+  if (obj instanceof Set) {
+    const parts: string[] = []
+    for (const x of obj) {
+      const k = keyOf(x, depth + 1, budget)
+      if (k == null) return null
+      parts.push(k)
+    }
+    return `S[${parts.join(',')}]`
+  }
   if (!isPlainObject(obj)) return `#${refId(obj)}`
   const parts: string[] = []
   for (const name of Object.keys(obj).sort()) {
@@ -105,7 +116,14 @@ function eq(a: unknown, b: unknown, depth: number, budget: { nodes: number }): b
     for (let i = 0; i < a.length; i++) if (!eq(a[i], b[i], depth + 1, budget)) return false
     return true
   }
-  if (Array.isArray(b) || !isPlainObject(a) || !isPlainObject(b)) return false
+  if (a instanceof Set) {
+    if (!(b instanceof Set) || a.size !== b.size) return false
+    const bs = [...b]
+    let i = 0
+    for (const x of a) if (!eq(x, bs[i++], depth + 1, budget)) return false
+    return true
+  }
+  if (Array.isArray(b) || b instanceof Set || !isPlainObject(a) || !isPlainObject(b)) return false
   const ak = Object.keys(a)
   if (ak.length !== Object.keys(b).length) return false
   for (const k of ak) {

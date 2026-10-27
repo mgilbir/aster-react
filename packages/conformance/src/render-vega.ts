@@ -8,9 +8,10 @@ export async function renderWithVega(vgSpec: Record<string, unknown>): Promise<s
   const runtime = vega.parse(vgSpec as any)
   const view = new (vega as any).View(runtime, { renderer: 'none' })
   await view.runAsync()
-  const svg = await view.toSVG()
+  // The first frame: stop the view's timers (a Vega-Lite animation's clock) before they can tick. `toSVG` awaits further runs, and on
+  // a busy event loop a timer that is due would land between them and draw frame two; a spec without timers is unaffected.
   view.finalize()
-  return svg
+  return view.toSVG()
 }
 
 export interface CheckedRender {
@@ -57,6 +58,7 @@ export async function renderWithVegaChecked(vgSpec: Record<string, unknown>): Pr
     const view = new (vega as any).View(runtime, { renderer: 'none', logger })
     try {
       await view.runAsync()
+      view.finalize() // the first frame: no timer ticks before the SVG is drawn (see renderWithVega)
       svg = await view.toSVG()
     } finally {
       view.finalize()

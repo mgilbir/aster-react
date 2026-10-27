@@ -800,33 +800,34 @@ function renderSymbolRuns(items: SceneItem[], ctx: CanvasLike, defs: SceneDefs[]
     if (!run.length) return
     if (run[0]!.angle || run.some((it) => isGradientPaint(it.fill) || isGradientPaint(it.stroke))) {
       for (const it of run) {
-        if (it.x == null || it.y == null) continue
+        const x = it.x || 0
+        const y = it.y || 0
         const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
         const d = cachedSymbolPath((it as Record<string, unknown>).shape as string | undefined, r)
         const segs = parsePathData(d)
-        buildInItemFrame(ctx, it.x, it.y, ((it as Record<string, unknown>).angle as number) || 0, 1, 1, () => tracePath(ctx, segs))
-        paintPath(ctx, segs, it, defs, 'auto', segsBboxAt(segs, it.x, it.y))
+        buildInItemFrame(ctx, x, y, ((it as Record<string, unknown>).angle as number) || 0, 1, 1, () => tracePath(ctx, segs))
+        paintPath(ctx, segs, it, defs, 'auto', segsBboxAt(segs, x, y))
       }
       run = []
       return
     }
     ctx.beginPath()
     for (const it of run) {
-      if (it.x == null || it.y == null) continue
+      const x = it.x || 0
+      const y = it.y || 0
       const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
       const shape = (it as Record<string, unknown>).shape as string | undefined
       if (shape == null || shape === 'circle') {
-        ctx.moveTo(it.x + r, it.y)
-        ctx.arc(it.x, it.y, r, 0, 2 * Math.PI, false)
+        ctx.moveTo(x + r, y)
+        ctx.arc(x, y, r, 0, 2 * Math.PI, false)
       } else {
-        tracePath(ctx, parsePathData(cachedSymbolPath(shape, r)), it.x, it.y)
+        tracePath(ctx, parsePathData(cachedSymbolPath(shape, r)), x, y)
       }
     }
     paintPath(ctx, [], run[0]!, defs, 'auto')
     run = []
   }
   for (const it of items) {
-    if (it.x == null || it.y == null) continue
     const k = symbolPaintKey(it)
     if (run.length && k !== key) flush()
     key = k
@@ -864,16 +865,18 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
         renderSymbolRuns(items, ctx, defs)
       } else {
         for (const it of items) {
-          if (it.x == null || it.y == null) continue
+          // vega's canvas draws a symbol at `item.x || 0`, `item.y || 0`: a NaN or missing position is 0
+          const x = it.x || 0
+          const y = it.y || 0
           const size = (it.size as number) ?? SYMBOL_DEFAULT_SIZE
           const r = Math.sqrt(size) / 2
           const shape = (it as Record<string, unknown>).shape as string | undefined
           const d = cachedSymbolPath(shape, r)
           const segs = parsePathData(d)
           const angle = ((it as Record<string, unknown>).angle as number) || 0
-          if (angle) buildInItemFrame(ctx, it.x, it.y, angle, 1, 1, () => tracePath(ctx, segs))
-          else { ctx.beginPath(); tracePath(ctx, segs, it.x, it.y) }
-          paintPath(ctx, segs, it, defs, 'auto', isGradientPaint(it.fill) || isGradientPaint(it.stroke) ? segsBboxAt(segs, it.x, it.y) : undefined)
+          if (angle) buildInItemFrame(ctx, x, y, angle, 1, 1, () => tracePath(ctx, segs))
+          else { ctx.beginPath(); tracePath(ctx, segs, x, y) }
+          paintPath(ctx, segs, it, defs, 'auto', isGradientPaint(it.fill) || isGradientPaint(it.stroke) ? segsBboxAt(segs, x, y) : undefined)
         }
       }
       return

@@ -17,6 +17,8 @@
  * vega-lite 6.4.3.
  */
 import { VLCompileError, splitAccessPath } from './names.js'
+import { isTimerSelect, validateTimerSelection } from './animation.js'
+import { parseEventSelectorString } from './event-selector.js'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -42,8 +44,10 @@ const set = (s: string): ReadonlySet<string> => new Set(s.split(/\s+/).filter(Bo
 // --- vocabularies (from the vega-lite 6.4.3 JSON schema) ---------------------
 
 export const MARKS = set('arc area bar image line point rect rule text tick trail circle square geoshape boxplot errorbar errorband')
-/** Marks compile.ts implements end to end: every schema mark but `geoshape`. */
-export const SUPPORTED_MARKS: ReadonlySet<string> = new Set([...MARKS].filter((m) => m !== 'geoshape'))
+/** Marks compile.ts implements end to end: every schema mark. */
+export const SUPPORTED_MARKS: ReadonlySet<string> = new Set(MARKS)
+/** The marks that can be positioned by `longitude` / `latitude`; the other marks' geographic placement is not implemented. */
+const GEO_POSITION_MARKS = set('point circle square text line trail rule')
 
 const ALL_CHANNELS = set(
   'x y x2 y2 xOffset yOffset xError xError2 yError yError2 theta theta2 radius radius2 latitude longitude latitude2 longitude2 ' +
@@ -51,7 +55,8 @@ const ALL_CHANNELS = set(
     'row column facet',
 )
 /** Schema channels compile.ts does not consume (everything else in ALL_CHANNELS is supported; the rest throws). */
-const UNSUPPORTED_CHANNELS = set('theta2 radius2 latitude longitude latitude2 longitude2 key time')
+const UNSUPPORTED_CHANNELS = set('theta2 radius2 key')
+const GEO_CHANNELS = set('longitude latitude longitude2 latitude2')
 const SUPPORTED_CHANNELS: ReadonlySet<string> = new Set([...ALL_CHANNELS].filter((c) => !UNSUPPORTED_CHANNELS.has(c)))
 
 const AGG_OPS = set(
@@ -167,6 +172,16 @@ const SCHEMA_CHILDREN: Record<Exclude<Kind, 'unit'>, ReadonlySet<Kind>> = {
 /** Implemented (parent -> child) nestings: today every schema-valid nesting is implemented; narrow this as the schema grows. */
 export const SUPPORTED_NESTING: Record<Exclude<Kind, 'unit'>, ReadonlySet<Kind>> = SCHEMA_CHILDREN
 
+/** The names of the timer selections declared on the top-level unit being validated (the only place `{param}` filters may refer to). */
+let timerParams: ReadonlySet<string> = new Set()
+/** The names of every timer selection param in the spec (an animation's selection may sit in a view that has a name). */
+let timerNames: Set<string> = new Set()
+/** Is the view being validated a top-level unit (where selection params live)? */
+let validatingTopUnit = false
+
+/** Depth of facet operators above the view being validated (a map inside a facet is not supported). */
+let compositeDepth = 0
+
 /** Repeat variables in scope while validating a repeat's child spec. */
 let repeatVars: ReadonlySet<string> = new Set()
 
@@ -184,13 +199,53 @@ function checkFieldName(f: unknown, at: string): void {
   splitAccessPath(f) // throws on a malformed access path
 }
 
+/** The parameters the spec declares, by name: `selection` or `variable`. A param referenced anywhere must be one of these. */
+let declaredParams: Map<string, 'selection' | 'variable'> = new Map()
+
+function collectParams(node: unknown, into: Map<string, 'selection' | 'variable'>, timers?: Set<string>): void {
+  if (Array.isArray(node)) { node.forEach((n) => collectParams(n, into, timers)); return }
+  if (!isObj(node)) return
+  if (Array.isArray(node.params)) {
+    for (const p of node.params) {
+      if (isObj(p) && typeof p.name === 'string' && !into.has(p.name)) into.set(p.name, p.select !== undefined ? 'selection' : 'variable')
+      if (timers && isObj(p) && typeof p.name === 'string' && isTimerSelect(p.select)) timers.add(p.name)
+    }
+  }
+  for (const k of ['layer', 'hconcat', 'vconcat', 'concat']) collectParams(node[k], into, timers)
+  if (isObj(node.spec)) collectParams(node.spec, into, timers)
+}
+
+/** `{param}` must name a declared parameter. */
+function checkParamRef(name: unknown, at: string): void {
+  if (typeof name !== 'string') mustBe(at, 'a parameter name')
+  if (!declaredParams.has(name)) fail(at, `parameter ${JSON.stringify(name)} is not declared in \`params\``)
+}
+
 export function validateSpec(spec: unknown): void {
   if (!isObj(spec)) fail('', 'a Vega-Lite spec must be a JSON object')
   repeatVars = new Set()
-  validateView(spec, '', true, undefined)
+  compositeDepth = 0
+  timerParams = new Set()
+  validatingTopUnit = false
+  declaredParams = new Map()
+  timerNames = new Set()
+  collectParams(spec, declaredParams, timerNames)
+  paramNamesSeen = new Set()
+  validateView(spec, '', true, undefined, true)
 }
 
-function validateView(spec: Obj, path: string, top: boolean, parent: Kind | undefined): void {
+/** A view that carries a name names its marks and units after it; the selections' fixed names would then disagree. */
+function checkNamedSelectionView(spec: Obj, at: (k: string) => string): void {
+  // (a timer selection is the exception: an animation's signals are not named after the view, only its tuple's `unit` is)
+  if (spec.name !== undefined && ((Array.isArray(spec.params) && spec.params.some((p) => isObj(p) && p.select !== undefined && !isTimerSelect(p.select))))) {
+    fail(at('name'), 'a view with selection parameters cannot be named: vega-lite names its marks, signals and units after the view, which @aster/vl does not reproduce')
+  }
+}
+
+/** Every parameter name must be unique across the whole spec. */
+let paramNamesSeen: Set<string> = new Set()
+
+function validateView(spec: Obj, path: string, top: boolean, parent: Kind | undefined, selOk: boolean): void {
   const kind = viewKind(spec, path)
   const at = (k: string): string => (path ? `${path}.${k}` : k)
   if (!top && spec.config !== undefined) fail(at('config'), 'config is only allowed at the top level of a spec')
@@ -204,12 +259,18 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
   }
   if (spec.$schema !== undefined && typeof spec.$schema !== 'string') mustBe(at('$schema'), 'a string')
 
+  validatingTopUnit = top && kind === 'unit'
+  timerParams = validatingTopUnit && Array.isArray(spec.params)
+    ? new Set((spec.params as unknown[]).filter((p): p is Obj => isObj(p) && isObj(p.select) && isTimerSelect(p.select) && typeof p.name === 'string').map((p) => p.name as string))
+    : new Set()
   validateData(spec, at)
   if (spec.transform !== undefined) validateTransforms(spec.transform, at('transform'))
   validateSize(spec, at, top && (kind === 'unit' || kind === 'layer'))
-  if (spec.params !== undefined) validateParams(spec.params, at('params'), top && kind === 'unit')
+  if (spec.params !== undefined) validateParams(spec.params, at('params'), kind !== 'layer' && selOk, kind, spec, at('params'))
+  checkNamedSelectionView(spec, at)
+  if (top && spec.name !== undefined && [...declaredParams].some(([n, k]) => k === 'selection' && !timerNames.has(n))) fail(at('name'), 'a named spec cannot declare selection parameters: vega-lite names its marks, signals and units after the view, which @aster/vl does not reproduce')
   if (spec.resolve !== undefined) validateResolve(spec.resolve, at('resolve'), kind)
-  if (spec.projection !== undefined) fail(at('projection'), 'map projections are not supported (geoshape marks are unavailable)')
+  if (spec.projection !== undefined) validateProjection(spec.projection, at('projection'))
   if (spec.view !== undefined) fail(at('view'), 'the view background property is not supported; set it through config.view')
   if (spec.usermeta !== undefined && !isObj(spec.usermeta)) mustBe(at('usermeta'), OBJECT)
   if (spec.config !== undefined) {
@@ -232,7 +293,7 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
       if (spec.encoding !== undefined) validateEncoding(spec.encoding, at('encoding'), 'layer')
       spec.layer.forEach((c, i) => {
         if (!isObj(c)) mustBe(`${at('layer')}[${i}]`, OBJECT)
-        validateView(c, `${at('layer')}[${i}]`, false, 'layer')
+        validateView(c, `${at('layer')}[${i}]`, false, 'layer', selOk)
       })
       break
     }
@@ -243,17 +304,17 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
       if (!Array.isArray(arr) || arr.length === 0) mustBe(at(kind), 'a non-empty array of specs')
       arr.forEach((c, i) => {
         if (!isObj(c)) mustBe(`${at(kind)}[${i}]`, OBJECT)
-        validateView(c, `${at(kind)}[${i}]`, false, kind)
+        validateView(c, `${at(kind)}[${i}]`, false, kind, selOk)
       })
       if (spec.columns !== undefined && kind !== 'concat') fail(at('columns'), '`columns` is only valid on `concat`')
       checkColumns(spec, at)
       break
     }
     case 'facet':
-      validateFacetOperator(spec, at)
+      validateFacetOperator(spec, at, selOk)
       break
     case 'repeat':
-      validateRepeatOperator(spec, at)
+      validateRepeatOperator(spec, at, selOk)
       break
   }
 }
@@ -295,8 +356,20 @@ function validateData(spec: Obj, at: (k: string) => string): void {
   if (!isObj(data)) mustBe(at('data'), OBJECT)
   const kinds = ['values', 'url', 'name', 'sequence', 'sphere', 'graticule'].filter((k) => data[k] !== undefined)
   if (kinds.length === 0) fail(at('data'), 'needs one of `values`, `url`, `name`')
-  if (data.sequence !== undefined || data.sphere !== undefined || data.graticule !== undefined) {
-    fail(at('data'), 'data generators (sequence/sphere/graticule) are not supported')
+  if (data.sequence !== undefined) fail(at('data'), 'data generators: `sequence` is not supported (`sphere` and `graticule` are)')
+  if (data.sphere !== undefined || data.graticule !== undefined) {
+    if (data.sphere !== undefined && data.graticule !== undefined) fail(at('data'), '`sphere` and `graticule` cannot be combined')
+    const g = data.sphere !== undefined ? 'sphere' : 'graticule'
+    keysOf(data, set(`${g} name`), at('data'), 'data generator')
+    const v = data[g]
+    if (g === 'sphere') {
+      if (v !== true && !(isObj(v) && Object.keys(v).length === 0)) mustBe(at('data.sphere'), 'true')
+    } else if (v !== true) {
+      if (!isObj(v)) mustBe(at('data.graticule'), 'true or an object of graticule parameters')
+      keysOf(v, set('extent extentMajor extentMinor precision step stepMajor stepMinor'), at('data.graticule'), 'graticule')
+    }
+    if (data.name !== undefined && typeof data.name !== 'string') mustBe(at('data.name'), 'a string')
+    return
   }
   if (data.values !== undefined && data.url !== undefined) fail(at('data'), '`values` and `url` cannot be combined')
   keysOf(data, set('values url name format'), at('data'), 'data')
@@ -307,9 +380,18 @@ function validateData(spec: Obj, at: (k: string) => string): void {
   if (data.name !== undefined && typeof data.name !== 'string') mustBe(at('data.name'), 'a string')
   if (data.format !== undefined) {
     if (!isObj(data.format)) mustBe(at('data.format'), OBJECT)
-    keysOf(data.format, set('type parse property delimiter header'), at('data.format'), 'data.format')
+    keysOf(data.format, set('type parse property delimiter header feature mesh'), at('data.format'), 'data.format')
     const t = data.format.type
-    if (t !== undefined && !['json', 'csv', 'tsv', 'dsv'].includes(t as string)) fail(at('data.format.type'), `unsupported format type ${JSON.stringify(t)}`)
+    if (t !== undefined && !['json', 'csv', 'tsv', 'dsv', 'topojson'].includes(t as string)) fail(at('data.format.type'), `unsupported format type ${JSON.stringify(t)}`)
+    for (const k of ['feature', 'mesh'] as const) {
+      if (data.format[k] === undefined) continue
+      if (t !== 'topojson') fail(at(`data.format.${k}`), `\`${k}\` only applies to the "topojson" format`)
+      if (typeof data.format[k] !== 'string') mustBe(at(`data.format.${k}`), 'the name of a TopoJSON object')
+    }
+    if (t === 'topojson' && data.format.feature === undefined && data.format.mesh === undefined) {
+      fail(at('data.format'), 'a "topojson" format needs `feature` or `mesh` (the TopoJSON object to read)')
+    }
+    if (t === 'topojson' && data.format.feature !== undefined && data.format.mesh !== undefined) fail(at('data.format'), '`feature` and `mesh` cannot be combined')
     if (data.format.parse !== undefined && data.format.parse !== null && !isObj(data.format.parse)) mustBe(at('data.format.parse'), 'an object or null')
   }
 }
@@ -318,9 +400,9 @@ function validateData(spec: Obj, at: (k: string) => string): void {
 
 const CONFIG_KEYS = set(
   'autosize background padding axis axisBand axisX axisY axisLeft axisRight axisTop axisBottom legend header headerRow headerColumn headerFacet range ' +
-    'mark arc area bar circle geoshape image line point rect rule square text tick trail view title font scale style ' +
+    'mark arc area bar circle geoshape image line point rect rule square text tick trail view title font scale style projection ' +
     'aria countTitle fieldTitle lineBreak normalizedNumberFormat numberFormat timeFormat errorbar errorband ' +
-    'customFormatTypes numberFormatType normalizedNumberFormatType timeFormatType',
+    'customFormatTypes numberFormatType normalizedNumberFormatType timeFormatType selection',
 )
 const CONFIG_SCALE_KEYS = set(
   'bandPaddingInner bandPaddingOuter barBandPaddingInner tickBandPaddingInner rectBandPaddingInner bandWithNestedOffsetPaddingInner bandWithNestedOffsetPaddingOuter offsetBandPaddingInner offsetBandPaddingOuter pointPadding continuousPadding round nice zero xReverse clamp useUnaggregatedDomain invalid minBandSize maxBandSize minFontSize maxFontSize minOpacity maxOpacity minSize maxSize minStrokeWidth maxStrokeWidth quantileCount quantizeCount framesPerSecond animationDuration',
@@ -346,6 +428,19 @@ function validateConfig(cfg: Obj, path: string): void {
       }
     }
   }
+  if (cfg.projection !== undefined) validateProjection(cfg.projection, `${path}.projection`)
+  if (cfg.selection !== undefined) {
+    if (!isObj(cfg.selection)) mustBe(`${path}.selection`, OBJECT)
+    keysOf(cfg.selection, set('point interval'), `${path}.selection`, 'selection config')
+    for (const t of ['point', 'interval'] as const) {
+      const c = cfg.selection[t]
+      if (c === undefined) continue
+      if (!isObj(c)) mustBe(`${path}.selection.${t}`, OBJECT)
+      keysOf(c, set(t === 'interval' ? 'clear encodings fields mark on resolve translate zoom' : 'clear encodings fields nearest on resolve toggle'), `${path}.selection.${t}`, `${t} selection config`)
+      if (c.on !== undefined) validateStream(c.on, `${path}.selection.${t}.on`, 'on', false)
+      if (c.clear !== undefined) validateStream(c.clear, `${path}.selection.${t}.clear`, 'clear', true)
+    }
+  }
   if (cfg.customFormatTypes !== undefined && typeof cfg.customFormatTypes !== 'boolean') mustBe(`${path}.customFormatTypes`, 'a boolean')
   for (const k of ['numberFormatType', 'normalizedNumberFormatType', 'timeFormatType'] as const) {
     if (cfg[k] !== undefined && typeof cfg[k] !== 'string') mustBe(`${path}.${k}`, 'the name of a format function registered as an expression function')
@@ -353,21 +448,107 @@ function validateConfig(cfg: Obj, path: string): void {
   if (cfg.autosize !== undefined) validateAutosize(cfg.autosize, `${path}.autosize`)
 }
 
+// --- projection --------------------------------------------------------------
+
+/** vega-lite `Projection` (the schema's property list) */
+const PROJECTION_KEYS = set(
+  'type clipAngle clipExtent center rotate precision reflectX reflectY coefficient distance fraction lobes parallel parallels ' +
+    'pointRadius radius ratio spacing tilt scale translate extent fit size',
+)
+/** vega-lite `ProjectionType`, lower-cased (vega reads the type case-insensitively), and the one extra projection vega registers */
+const PROJECTION_TYPES = set(
+  'albers albersusa azimuthalequalarea azimuthalequidistant conicconformal conicequalarea conicequidistant equalearth ' +
+    'equirectangular gnomonic identity mercator naturalearth1 orthographic stereographic transversemercator mollweide',
+)
+
+/** A projection property value that is a signal / expression reference rather than a literal. */
+const isRef = (v: unknown): boolean => isObj(v) && (typeof v.signal === 'string' || typeof v.expr === 'string')
+
+function validateProjection(p: unknown, at: string): void {
+  if (!isObj(p)) mustBe(at, OBJECT)
+  keysOf(p, PROJECTION_KEYS, at, 'projection')
+  for (const [k, v] of Object.entries(p)) {
+    if (v === undefined || isRef(v)) continue
+    const path = `${at}.${k}`
+    const num = (): void => { if (typeof v !== 'number' || !Number.isFinite(v)) mustBe(path, 'a number or a signal / expression reference') }
+    const pair = (): void => {
+      if (!(Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number' ? Number.isFinite(n) : isRef(n)))) mustBe(path, 'a [number, number] pair')
+    }
+    switch (k) {
+      case 'type':
+        if (typeof v !== 'string' || !PROJECTION_TYPES.has(v.toLowerCase())) fail(path, `unknown projection type ${JSON.stringify(v)}: expected one of albers, albersUsa, azimuthalEqualArea, azimuthalEquidistant, conicConformal, conicEqualArea, conicEquidistant, equalEarth, equirectangular, gnomonic, identity, mercator, naturalEarth1, orthographic, stereographic, transverseMercator (vega refuses any other)`)
+        break
+      case 'scale': case 'clipAngle': case 'precision': case 'coefficient': case 'distance': case 'fraction': case 'lobes':
+      case 'parallel': case 'pointRadius': case 'radius': case 'ratio': case 'spacing': case 'tilt':
+        num()
+        break
+      case 'reflectX': case 'reflectY':
+        if (typeof v !== 'boolean') mustBe(path, 'a boolean or a signal / expression reference')
+        break
+      case 'translate': case 'center': case 'parallels':
+        pair()
+        break
+      case 'rotate':
+        if (!(Array.isArray(v) && (v.length === 2 || v.length === 3) && v.every((n) => typeof n === 'number' ? Number.isFinite(n) : isRef(n)))) mustBe(path, 'a [lambda, phi] or [lambda, phi, gamma] array')
+        break
+      case 'clipExtent':
+        if (!(Array.isArray(v) && v.length === 2 && v.every((c) => Array.isArray(c) && c.length === 2 && c.every((n) => typeof n === 'number' ? Number.isFinite(n) : isRef(n))))) mustBe(path, 'a [[x0, y0], [x1, y1]] array')
+        break
+      case 'size':
+        pair()
+        break
+      case 'extent':
+        if (!(Array.isArray(v) && v.length === 2 && v.every((c) => Array.isArray(c) && c.length === 2))) mustBe(path, 'a [[x0, y0], [x1, y1]] array')
+        break
+      case 'fit':
+        // a GeoJSON feature(s) to fit to, or a boolean: vega fits the projection to it
+        if (typeof v !== 'boolean' && !isObj(v) && !Array.isArray(v)) mustBe(path, 'GeoJSON (or an array of it) to fit the projection to')
+        break
+    }
+  }
+}
+
 // --- params ------------------------------------------------------------------
 
 const BIND_INPUTS = set('range checkbox radio select text number date datetime-local time month week color')
 
-function validateParams(params: unknown, path: string, topUnit: boolean): void {
+/**
+ * Why a selection parameter declared on a composition (concat, facet, repeat) cannot be pushed down to the units below it
+ * (vega-lite gives every unit a copy), or undefined when it can: a layer below would declare the same signals twice in one
+ * Vega scope, which Vega rejects, and a composite mark (boxplot, errorbar, errorband) is a layer once vega-lite has normalized it.
+ */
+function pushdownProblem(node: unknown): string | undefined {
+  if (!isObj(node)) return undefined
+  const mark = node.mark
+  const markType = typeof mark === 'string' ? mark : isObj(mark) ? mark.type : undefined
+  if (['boxplot', 'errorbar', 'errorband'].includes(markType as string)) return `a ${markType as string} is a layer once vega-lite has normalized it`
+  if (Array.isArray(node.layer)) return 'a layer below would declare the selection\'s signals twice in one Vega scope, which Vega rejects'
+  if (node.mark !== undefined && Array.isArray(node.params) && node.params.length > 0) return 'vega-lite replaces the parameters of a unit that has some of its own (so a variable parameter or a selection declared there would be lost)'
+  for (const k of ['hconcat', 'vconcat', 'concat']) {
+    if (Array.isArray(node[k])) for (const c of node[k] as unknown[]) { const p = pushdownProblem(c); if (p) return p }
+  }
+  return isObj(node.spec) ? pushdownProblem(node.spec) : undefined
+}
+
+function validateParams(params: unknown, path: string, selectionOk: boolean, kind: Kind, view?: Obj, viewPath?: string): void {
   if (!Array.isArray(params)) mustBe(path, 'an array of parameter definitions')
-  const names = new Set<string>()
   params.forEach((p, i) => {
     const at = `${path}[${i}]`
     if (!isObj(p)) mustBe(at, OBJECT)
     if (typeof p.name !== 'string' || !/^[A-Za-z_$][\w$]*$/.test(p.name)) fail(`${at}.name`, `parameter names must be identifiers, got ${JSON.stringify(p.name)}`)
-    if (names.has(p.name)) fail(`${at}.name`, `duplicate parameter name "${p.name}"`)
-    names.add(p.name)
+    if (paramNamesSeen.has(p.name)) fail(`${at}.name`, `duplicate parameter name "${p.name}"`)
+    paramNamesSeen.add(p.name)
     if (p.select !== undefined) {
-      if (!topUnit) fail(`${at}.select`, 'selection parameters are only supported on a single top-level unit spec (not inside layer/concat/facet/repeat views)')
+      if (!selectionOk) {
+        fail(`${at}.select`, kind === 'layer'
+          ? 'a selection parameter on a layer spec itself: vega-lite gives every layer a copy of its signals in the same Vega scope, which Vega rejects; declare it on one of the layers'
+          : 'a selection parameter is not supported here')
+      }
+      if (kind !== 'unit' && view !== undefined) {
+        const problem = pushdownProblem(kind === 'facet' || kind === 'repeat' ? view.spec : { [kind]: view[kind] })
+        if (problem) fail(`${at}.select`, `a selection parameter on a ${kind} spec is given to every unit below it (vega-lite), and ${problem}: declare it on a unit instead`)
+      }
+      if (p.views !== undefined) fail(`${at}.views`, '`views` (restricting a selection declared on a composition to some of its views) is not supported: declare the selection on the unit')
       validateSelection(p, at)
       return
     }
@@ -375,31 +556,148 @@ function validateParams(params: unknown, path: string, topUnit: boolean): void {
     keysOf(p, set('name value expr bind react description push'), at, 'parameter')
     if (p.expr !== undefined && p.value !== undefined) fail(at, '`expr` and `value` cannot be combined')
     if (p.expr !== undefined && typeof p.expr !== 'string') mustBe(`${at}.expr`, 'an expression string')
-    if (p.push !== undefined) fail(`${at}.push`, '`push` is not supported')
+    if (p.push !== undefined) fail(`${at}.push`, '`push` is not a Vega-Lite parameter property (it is Vega\'s signal scoping, which vega-lite sets itself where it needs it)')
     if (p.react !== undefined && p.react !== false && p.react !== true) mustBe(`${at}.react`, 'a boolean')
     if (p.bind !== undefined) {
       if (p.expr !== undefined) fail(`${at}.bind`, 'a parameter with `expr` cannot be bound to an input')
-      if (!isObj(p.bind)) mustBe(`${at}.bind`, 'an input binding object (legend/scales bindings are not supported)')
-      keysOf(p.bind, set('input min max step options labels name debounce element'), `${at}.bind`, 'bind')
-      if (typeof p.bind.input !== 'string' || !BIND_INPUTS.has(p.bind.input)) fail(`${at}.bind.input`, `unsupported input type ${JSON.stringify(p.bind.input)}`)
+      if (!isObj(p.bind)) mustBe(`${at}.bind`, 'an input binding object (legend/scales bindings belong to selection parameters)')
+      validateBinding(p.bind, `${at}.bind`)
     }
     if (p.value === undefined && p.expr === undefined) fail(at, 'a variable parameter needs `value` or `expr`')
   })
 }
 
+/** An input binding (vega signal `bind`). */
+function validateBinding(bind: Obj, at: string): void {
+  keysOf(bind, set('input min max step options labels name debounce element'), at, 'bind')
+  if (typeof bind.input !== 'string' || !BIND_INPUTS.has(bind.input)) fail(`${at}.input`, `unsupported input type ${JSON.stringify(bind.input)}`)
+}
+
+const SELECTION_RESOLVE = set('global union intersect')
+const BRUSH_KEYS = set('cursor fill fillOpacity stroke strokeDash strokeDashOffset strokeOpacity strokeWidth')
+/** The channels a selection can project (vega-lite SingleDefUnitChannel). */
+const PROJECTABLE_CHANNELS = set(
+  'x y xOffset yOffset x2 y2 xError yError xError2 yError2 theta theta2 radius radius2 color fill stroke opacity fillOpacity strokeOpacity strokeWidth strokeDash size angle shape key text href url description detail order tooltip',
+)
+
+/** An event stream: a selector string or a stream object; both must parse, and a timer (animation) stream is refused. */
+function validateStream(v: unknown, at: string, what: string, allowBoolean: boolean): void {
+  if (typeof v === 'boolean') {
+    if (!allowBoolean) mustBe(at, `${what}: an event stream`)
+    return
+  }
+  const check = (events: ReturnType<typeof parseEventSelectorString>): void => {
+    const visit = (e: ReturnType<typeof parseEventSelectorString>[number]): void => {
+      if (e.type === 'timer') fail(at, `${what}: timer event streams (animation) are not supported`)
+      e.merge?.forEach(visit)
+      e.between?.forEach(visit)
+      if (e.stream) visit(e.stream)
+    }
+    events.forEach(visit)
+  }
+  if (typeof v === 'string') {
+    try {
+      check(parseEventSelectorString(v, 'scope'))
+    } catch (e) {
+      if (e instanceof VLCompileError) throw e
+      fail(at, `${what}: invalid event selector ${JSON.stringify(v)} (${e instanceof Error ? e.message : String(e)})`)
+    }
+    return
+  }
+  if (isObj(v)) {
+    if (v.type === 'timer' || JSON.stringify(v).includes('"timer"')) fail(at, `${what}: timer event streams (animation) are not supported`)
+    return
+  }
+  mustBe(at, `${what}: an event selector string or an event stream object`)
+}
+
+/** A selection's initial value for one projection: a scalar, a DateTime, or (interval) a [lo, hi] pair of them. */
+function validateInitValue(v: unknown, at: string, interval: boolean): void {
+  const scalar = (x: unknown): boolean => x === null || typeof x === 'string' || typeof x === 'number' || typeof x === 'boolean' || isDateTimeLike(x)
+  if (interval) {
+    if (!(Array.isArray(v) && v.length === 2 && v.every(scalar))) mustBe(at, 'a [lo, hi] pair of numbers, strings, booleans or DateTime objects')
+  } else if (!scalar(v)) mustBe(at, 'a number, string, boolean, null or DateTime object')
+}
+
+const isDateTimeLike = (o: unknown): boolean =>
+  isObj(o) && ['year', 'quarter', 'month', 'week', 'day', 'dayofyear', 'date', 'hours', 'minutes', 'seconds', 'milliseconds'].some((k) => k in o)
+
 function validateSelection(p: Obj, at: string): void {
   keysOf(p, set('name select value bind description'), at, 'selection parameter')
+  if (isObj(p.select) && isTimerSelect(p.select)) {
+    // an animation's clock: the one point selection that is supported (see animation.ts)
+    if (timerParams.size > 1) fail(at, 'only one timer selection is supported (vega-lite 6.4.3 ignores all but the first)')
+    for (const reserved of ['unit', 'anim_clock', 'last_tick_at', 'is_playing', 'eased_anim_clock', 'min_extent', 'max_range_extent', 'anim_value']) {
+      if (p.name === reserved) fail(`${at}.name`, `"${reserved}" is a signal an animation defines; name the selection something else`)
+    }
+    validateTimerSelection(p, at, fail)
+    return
+  }
   let sel = p.select
   if (typeof sel === 'string') sel = { type: sel }
   if (!isObj(sel)) mustBe(`${at}.select`, '"interval", "point" or an object with `type`')
-  if (sel.type !== 'interval') {
-    fail(`${at}.select`, `selection type ${JSON.stringify(sel.type)} is not supported (only a plain "interval" selection, rendered as its static brush marks without interaction)`)
+  if (sel.type !== 'interval' && sel.type !== 'point') {
+    fail(`${at}.select`, `selection type ${JSON.stringify(sel.type)} is not valid: use "point" or "interval" (the legacy "single" and "multi" types are not supported)`)
   }
-  for (const k of Object.keys(sel)) {
-    if (k !== 'type') fail(`${at}.select.${k}`, 'interval selection options are not supported (only the default interval selection)')
+  const interval = sel.type === 'interval'
+  keysOf(sel, set(interval ? 'type clear encodings fields mark on resolve translate zoom' : 'type clear encodings fields nearest on resolve toggle'), `${at}.select`, `${sel.type} selection`)
+  if (sel.on !== undefined) validateStream(sel.on, `${at}.select.on`, 'on', false)
+  if (sel.clear !== undefined) validateStream(sel.clear, `${at}.select.clear`, 'clear', true)
+  if (sel.resolve !== undefined && !(typeof sel.resolve === 'string' && SELECTION_RESOLVE.has(sel.resolve))) mustBe(`${at}.select.resolve`, '"global", "union" or "intersect"')
+  if (sel.encodings !== undefined) {
+    if (!Array.isArray(sel.encodings)) mustBe(`${at}.select.encodings`, 'an array of channel names')
+    for (const c of sel.encodings) if (typeof c !== 'string' || !PROJECTABLE_CHANNELS.has(c)) fail(`${at}.select.encodings`, `unknown channel ${JSON.stringify(c)}`)
   }
-  if (p.value !== undefined) fail(`${at}.value`, 'initial selection values are not supported')
-  if (p.bind !== undefined) fail(`${at}.bind`, 'selection bindings (e.g. "scales") are not supported')
+  if (sel.fields !== undefined) {
+    if (!Array.isArray(sel.fields) || !sel.fields.every((f) => typeof f === 'string' && f !== '')) mustBe(`${at}.select.fields`, 'an array of field names')
+    for (const f of sel.fields as string[]) {
+      if (f !== '_vgsid_' && (splitAccessPath(f).length !== 1 || splitAccessPath(f)[0] !== f)) {
+        fail(`${at}.select.fields`, `a selection cannot be projected over the nested or escaped field ${JSON.stringify(f)}`)
+      }
+    }
+  }
+  if (!interval) {
+    if (sel.toggle !== undefined && typeof sel.toggle !== 'boolean' && typeof sel.toggle !== 'string') mustBe(`${at}.select.toggle`, 'a boolean or an expression string')
+    if (sel.nearest !== undefined && typeof sel.nearest !== 'boolean') mustBe(`${at}.select.nearest`, 'a boolean')
+  } else {
+    for (const k of ['translate', 'zoom'] as const) if (sel[k] !== undefined) validateStream(sel[k], `${at}.select.${k}`, k, true)
+    if (sel.mark !== undefined) {
+      if (!isObj(sel.mark)) mustBe(`${at}.select.mark`, OBJECT)
+      keysOf(sel.mark, BRUSH_KEYS, `${at}.select.mark`, 'brush mark')
+    }
+  }
+
+  if (p.value !== undefined) {
+    const v = p.value
+    if (interval) {
+      if (!isObj(v)) mustBe(`${at}.value`, 'an object mapping channels to [lo, hi] pairs')
+      for (const [k, x] of Object.entries(v)) validateInitValue(x, `${at}.value.${k}`, true)
+    } else if (Array.isArray(v)) {
+      for (const [i, m] of v.entries()) {
+        if (!isObj(m)) mustBe(`${at}.value[${i}]`, 'an object mapping fields or channels to values')
+        for (const [k, x] of Object.entries(m)) validateInitValue(x, `${at}.value[${i}].${k}`, false)
+      }
+    } else validateInitValue(v, `${at}.value`, false)
+  }
+
+  if (p.bind !== undefined) {
+    const b = p.bind
+    if (interval) {
+      if (b !== 'scales') fail(`${at}.bind`, 'an interval selection can only be bound to "scales"')
+    } else if (b === 'legend') {
+      // a legend binding
+    } else if (isObj(b) && b.legend !== undefined) {
+      keysOf(b, set('legend'), `${at}.bind`, 'legend binding')
+      validateStream(b.legend, `${at}.bind.legend`, 'legend', false)
+    } else if (isObj(b) && typeof b.input === 'string') {
+      validateBinding(b, `${at}.bind`)
+    } else if (isObj(b)) {
+      for (const [f, x] of Object.entries(b)) {
+        if (!isObj(x)) mustBe(`${at}.bind.${f}`, 'an input binding object')
+        validateBinding(x, `${at}.bind.${f}`)
+      }
+    } else mustBe(`${at}.bind`, '"legend", {"legend": stream}, an input binding or a map of field/encoding to input bindings')
+  }
 }
 
 // --- resolve -----------------------------------------------------------------
@@ -475,6 +773,75 @@ function validateUnit(spec: Obj, at: (k: string) => string): void {
   const mark = validateMark(spec.mark, at('mark'))
   const enc = spec.encoding === undefined ? {} : spec.encoding
   validateEncoding(enc, at('encoding'), 'unit', mark)
+  if (isObj(enc)) validateGeoUnit(mark, enc, at('encoding'))
+  validateAnimation(spec, enc, at)
+  const faceted = isObj(enc) && (enc.row != null || enc.column != null || enc.facet != null)
+  if ((compositeDepth > 0 || faceted) && (mark === 'geoshape' || spec.projection !== undefined || (isObj(enc) && Object.keys(enc).some((c) => GEO_CHANNELS.has(c) && enc[c] != null)))) {
+    fail(at('mark'), 'maps (geoshape marks, projections, longitude / latitude) inside a facet are not supported: vega-lite 6.4.3 fits a facet\'s projection to a dataset it never defines (data("child_main")), so there is no output to match')
+  }
+}
+
+/**
+ * An animation is a top-level unit with a `time` channel, ONE timer selection param, and a `filter: {param}` transform
+ * on it (animation.ts says why vega-lite 6.4.3 needs all three: without them it emits marks that read a dataset it never
+ * defines). Anything else that involves a timer selection or the time channel is refused here.
+ */
+function validateAnimation(spec: Obj, enc: unknown, at: (k: string) => string): void {
+  const hasTime = isObj(enc) && enc.time != null
+  if (!hasTime) {
+    if (timerParams.size) fail(at('params'), 'a timer selection animates the `time` channel: the unit has none')
+    return
+  }
+  const timeAt = at('encoding.time')
+  if (!validatingTopUnit) fail(timeAt, 'the time channel is supported on a single top-level unit spec only (not inside layer / concat / facet / repeat)')
+  if (timerParams.size !== 1) fail(timeAt, 'the time channel needs exactly one timer selection param ({"name": "anim", "select": {"type": "point", "on": "timer", "fields": [...]}}): without it vega-lite 6.4.3 emits marks that read a dataset it never defines')
+  const [name] = [...timerParams]
+  const filters = (Array.isArray(spec.transform) ? spec.transform : []).filter((t): t is Obj => isObj(t) && isObj(t.filter) && t.filter.param === name)
+  if (filters.length !== 1) fail(at('transform'), `the time channel needs the transform {"filter": {"param": ${JSON.stringify(name)}}} (once): it is the predicate that picks the current frame`)
+  const markDef = isObj(spec.mark) ? spec.mark : { type: spec.mark }
+  if (['boxplot', 'errorbar', 'errorband'].includes(markDef.type as string)) fail(at('mark'), `a "${String(markDef.type)}" is a layered composite mark: animating it is not supported`)
+  if (markDef.point !== undefined || markDef.line !== undefined) fail(at('mark'), 'a point / line overlay makes the unit a layer: animating it is not supported')
+  if (isObj(enc) && (enc.row != null || enc.column != null || enc.facet != null)) fail(timeAt, 'an animated unit cannot be faceted (vega-lite 6.4.3 leaves the facet reading the unfiltered data)')
+  const def = (enc as Obj).time
+  if (!isObj(def) || typeof def.field !== 'string') fail(timeAt, 'the time channel is a field definition ({"field": ..., "type": ...})')
+  for (const k of Object.keys(def)) {
+    if (!['field', 'type', 'timeUnit', 'title'].includes(k)) fail(`${timeAt}.${k}`, `\`${k}\` is not supported on the time channel (its scale is vega-lite's band scale over the field)`)
+  }
+  const param = (spec.params as Obj[]).find((p) => p.name === name)!
+  if (isObj(param.select) && param.select.encodings !== undefined && def.timeUnit !== undefined) {
+    fail(timeAt, 'a time unit on the field cannot be projected by `encodings`: list the field in `fields` (vega-lite 6.4.3 projects the raw field)')
+  }
+}
+
+/**
+ * The map rules of one unit's (merged) encoding: which marks `longitude` / `latitude` can position,
+ * that a pair is complete, and that `geojson` shapes belong to `geoshape`. Also run on every layer
+ * leaf after a layer's encoding merges into it.
+ */
+export function validateGeoUnit(mark: string, enc: Obj, path: string): void {
+  const geoChannels = Object.keys(enc).filter((c) => GEO_CHANNELS.has(c) && enc[c] != null)
+  if (geoChannels.length) {
+    if (!GEO_POSITION_MARKS.has(mark)) {
+      fail(`${path}.${geoChannels[0]}`, `longitude / latitude positions are only implemented for the ${[...GEO_POSITION_MARKS].join(', ')} marks, not "${mark}"`)
+    }
+    const given = (c: string): boolean => enc[c] != null
+    for (const [lon, lat] of [['longitude', 'latitude'], ['longitude2', 'latitude2']] as const) {
+      if (given(lon) !== given(lat)) fail(`${path}.${given(lon) ? lon : lat}`, `needs its pair: give both \`${lon}\` and \`${lat}\` (vega-lite emits a geopoint transform for a half pair that vega refuses)`)
+    }
+    const projected = ['longitude', 'latitude', 'longitude2', 'latitude2'].some((c) => isObj(enc[c]) && (enc[c].field !== undefined || enc[c].datum !== undefined))
+    if (!projected) fail(`${path}.${geoChannels[0]}`, 'a longitude / latitude pair needs a `field` or `datum` (value-only positions get no projection in vega-lite)')
+  }
+  if (isObj(enc.shape) && enc.shape.type === 'geojson' && mark !== 'geoshape') {
+    fail(`${path}.shape.type`, 'a geojson shape field only applies to the geoshape mark')
+  }
+  if (mark === 'geoshape') {
+    for (const c of ['x', 'y', 'x2', 'y2', 'xOffset', 'yOffset', 'theta', 'radius', 'size', 'angle']) {
+      if (enc[c] != null) fail(`${path}.${c}`, `a geoshape mark is positioned by its projection: the "${c}" channel does not apply`)
+    }
+    if (isObj(enc.shape) && enc.shape.field !== undefined && enc.shape.type !== 'geojson') {
+      fail(`${path}.shape`, 'on a geoshape mark the shape channel carries the GeoJSON ({"field": ..., "type": "geojson"})')
+    }
+  }
 }
 
 // --- encoding ----------------------------------------------------------------
@@ -516,7 +883,19 @@ function validateChannelDef(ch: string, def: unknown, at: string): void {
   if (def.type !== undefined && !['quantitative', 'ordinal', 'nominal', 'temporal', 'geojson'].includes(def.type as string)) {
     fail(`${at}.type`, `unknown type ${JSON.stringify(def.type)}`)
   }
-  if (def.type === 'geojson') fail(`${at}.type`, 'geojson fields are not supported')
+  if (def.type === 'geojson' && ch !== 'shape') fail(`${at}.type`, 'the geojson type only applies to the shape channel of a geoshape mark')
+  if (GEO_CHANNELS.has(ch)) {
+    if (def.type !== undefined && def.type !== 'quantitative') fail(`${at}.type`, 'a longitude / latitude channel is quantitative')
+    for (const k of ['aggregate', 'bin', 'timeUnit', 'sort', 'stack', 'scale', 'axis', 'legend', 'condition', 'impute', 'band', 'bandPosition']) {
+      if (def[k] !== undefined) fail(`${at}.${k}`, `\`${k}\` does not apply to a longitude / latitude channel (it is projected, not scaled)`)
+    }
+  }
+  if (ch === 'shape' && def.type === 'geojson') {
+    for (const k of ['aggregate', 'bin', 'timeUnit', 'sort', 'scale', 'legend', 'condition', 'datum', 'value']) {
+      if (def[k] !== undefined) fail(`${at}.${k}`, `\`${k}\` does not apply to a geojson shape field`)
+    }
+    if (def.field === undefined) fail(at, 'a geojson shape needs a `field`')
+  }
   if (def.aggregate !== undefined) {
     if (isObj(def.aggregate)) {
       // {argmax: field} / {argmin: field}: the value of `field` on the row where the argument is extreme
@@ -570,7 +949,19 @@ function validateScaleDef(scale: Obj, at: string): void {
     // vega-lite passes a domain that is neither an array nor 'unaggregated' nor a {param}/{unionWith}/signal object on to
     // vega as it is (a string, a number, `true`: scale/domain.ts parseSingleChannelDomain), where it fails the
     // scale (vega.parse: "Undefined data set name"). So does this: it compiles, and the runtime refuses it.
-    if (isObj(d) && typeof (d as Obj).signal !== 'string') fail(`${at}.domain`, 'domain objects ({param}, {unionWith}) are not supported; give an array or "unaggregated"')
+    if (isObj(d) && typeof (d as Obj).signal !== 'string') {
+      if (d.param !== undefined) {
+        keysOf(d, set('param field encoding'), `${at}.domain`, 'domain param')
+        checkParamRef(d.param, `${at}.domain.param`)
+        if (d.field !== undefined && typeof d.field !== 'string') mustBe(`${at}.domain.field`, 'a field name')
+        if (d.encoding !== undefined && !(typeof d.encoding === 'string' && PROJECTABLE_CHANNELS.has(d.encoding))) mustBe(`${at}.domain.encoding`, 'a channel name')
+      } else if (d.unionWith !== undefined) {
+        keysOf(d, set('unionWith'), `${at}.domain`, 'domain')
+        if (!Array.isArray(d.unionWith) || d.unionWith.length === 0) mustBe(`${at}.domain.unionWith`, 'a non-empty array of values')
+      } else {
+        fail(`${at}.domain`, 'a domain object must be {"param": ...}, {"unionWith": [...]} or a signal; give an array or "unaggregated"')
+      }
+    }
   }
 }
 
@@ -639,11 +1030,19 @@ function validateSort(sort: unknown, at: string, ch: string): void {
 
 const FIELD_PREDICATE_KEYS = ['equal', 'lt', 'lte', 'gt', 'gte', 'range', 'oneOf', 'valid'] as const
 
-/** Validate a VL predicate (string expression, field predicate, and/or/not). */
-export function validatePredicate(p: unknown, at: string): void {
+/**
+ * Validate a VL predicate (string expression, field predicate, and/or/not). A `{param}` predicate is accepted only as
+ * the whole of a `filter` transform (`allowParam`), and only for a timer selection (an animation's frame filter).
+ */
+export function validatePredicate(p: unknown, at: string, allowParam = false): void {
   if (typeof p === 'string') return
   if (!isObj(p)) fail(at, `a predicate must be an expression string or an object, got ${JSON.stringify(p)}`)
-  if (p.param !== undefined) fail(at, 'selection/param predicates ({"param": ...}) are not supported')
+  if (p.param !== undefined) {
+    keysOf(p, set('param empty'), at, 'param predicate')
+    checkParamRef(p.param, `${at}.param`)
+    if (p.empty !== undefined && typeof p.empty !== 'boolean') mustBe(`${at}.empty`, 'a boolean')
+    return
+  }
   if (p.and !== undefined || p.or !== undefined || p.not !== undefined) {
     const keys = Object.keys(p)
     if (keys.length !== 1) fail(at, 'and/or/not cannot be combined with other keys')
@@ -671,10 +1070,15 @@ function validateCondition(cond: unknown, at: string): void {
   const one = (c: unknown, a: string, inArray: boolean): void => {
     if (!isObj(c)) fail(a, 'a condition must be an object')
     keysOf(c, set('test param empty value field datum type aggregate bin timeUnit sort scale legend title format formatType bandPosition'), a, 'condition')
-    if (c.param !== undefined) fail(`${a}.param`, 'selection/param-driven conditions ({"param": ...}) are not supported; use `test`')
-    if (c.empty !== undefined) fail(`${a}.empty`, '`empty` only applies to selection conditions, which are not supported')
-    if (c.test === undefined) fail(a, 'a condition needs `test`')
-    validatePredicate(c.test, `${a}.test`)
+    if (c.param !== undefined && c.test !== undefined) fail(a, 'a condition takes `test` or `param`, not both')
+    if (c.param !== undefined) {
+      checkParamRef(c.param, `${a}.param`)
+      if (c.empty !== undefined && typeof c.empty !== 'boolean') mustBe(`${a}.empty`, 'a boolean')
+    } else {
+      if (c.empty !== undefined) fail(`${a}.empty`, '`empty` only applies to a condition on a `param`')
+      if (c.test === undefined) fail(a, 'a condition needs `test` or `param`')
+      validatePredicate(c.test, `${a}.test`)
+    }
     const kinds = ['value', 'field', 'datum'].filter((k) => c[k] !== undefined)
     if (kinds.length !== 1) fail(a, 'a condition needs exactly one of `value`, `field`, `datum`')
     if (inArray && kinds[0] !== 'value') fail(a, 'conditions in an array must be value conditions')
@@ -763,7 +1167,7 @@ function validateTransform(kind: string, t: Obj, a: string): void {
   if (t.groupby !== undefined) validateFieldList(t.groupby, `${a}.groupby`)
   switch (kind) {
     case 'filter':
-      validatePredicate(t.filter, `${a}.filter`)
+      validatePredicate(t.filter, `${a}.filter`, true)
       break
     case 'calculate':
       needStr('calculate')
@@ -845,10 +1249,15 @@ function validateTransform(kind: string, t: Obj, a: string): void {
     case 'lookup':
       needStr('lookup')
       if (!isObj(t.from)) fail(`${a}.from`, 'lookup needs `from`')
-      if (t.from.param !== undefined) fail(`${a}.from`, 'lookup from a selection is not supported')
-      keysOf(t.from, set('data key fields'), `${a}.from`, 'lookup from')
-      if (!isObj(t.from.data)) mustBe(`${a}.from.data`, 'a data source object')
-      validateDataSourceObj(t.from.data, `${a}.from.data`)
+      if (t.from.param !== undefined) {
+        keysOf(t.from, set('param key fields'), `${a}.from`, 'lookup from')
+        checkParamRef(t.from.param, `${a}.from.param`)
+        if (declaredParams.get(t.from.param as string) !== 'selection') fail(`${a}.from.param`, `cannot look up the variable parameter ${JSON.stringify(t.from.param)}: only a selection can be a lookup source`)
+      } else {
+        keysOf(t.from, set('data key fields'), `${a}.from`, 'lookup from')
+        if (!isObj(t.from.data)) mustBe(`${a}.from.data`, 'a data source object')
+        validateDataSourceObj(t.from.data, `${a}.from.data`)
+      }
       if (typeof t.from.key !== 'string') mustBe(`${a}.from.key`, 'a field name')
       if (t.from.fields !== undefined) validateFieldList(t.from.fields, `${a}.from.fields`)
       asNames('as')
@@ -904,7 +1313,7 @@ function validateDataSourceObj(d: Obj, at: string): void {
 
 // --- facet / repeat operators ------------------------------------------------
 
-function validateFacetOperator(spec: Obj, at: (k: string) => string): void {
+function validateFacetOperator(spec: Obj, at: (k: string) => string, selOk: boolean): void {
   const facet = spec.facet
   if (!isObj(facet)) mustBe(at('facet'), 'a field definition or {row, column}')
   if (!isObj(spec.spec)) fail(at('spec'), 'a facet spec needs a nested `spec`')
@@ -933,10 +1342,11 @@ function validateFacetOperator(spec: Obj, at: (k: string) => string): void {
     checkFacetDef(facet, at('facet'))
     checkColumns(spec, at)
   }
-  validateView(spec.spec as Obj, at('spec'), false, 'facet')
+  compositeDepth++
+  try { validateView(spec.spec as Obj, at('spec'), false, 'facet', selOk) } finally { compositeDepth-- }
 }
 
-function validateRepeatOperator(spec: Obj, at: (k: string) => string): void {
+function validateRepeatOperator(spec: Obj, at: (k: string) => string, selOk: boolean): void {
   const rep = spec.repeat
   if (!isObj(spec.spec)) fail(at('spec'), 'a repeat spec needs a nested `spec`')
   const fieldArr = (v: unknown, a: string): void => {
@@ -958,7 +1368,7 @@ function validateRepeatOperator(spec: Obj, at: (k: string) => string): void {
   else if (isObj(rep)) for (const k of ['row', 'column', 'layer']) if (rep[k] !== undefined) vars.add(k)
   repeatVars = vars
   try {
-    validateView(spec.spec as Obj, at('spec'), false, 'repeat')
+    validateView(spec.spec as Obj, at('spec'), false, 'repeat', selOk)
   } finally {
     repeatVars = prev
   }

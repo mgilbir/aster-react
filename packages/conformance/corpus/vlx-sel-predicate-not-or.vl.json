@@ -1,0 +1,94 @@
+{
+ "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+ "data": {
+  "values": [
+   {
+    "a": 1,
+    "b": 3,
+    "c": "x",
+    "d": "2020-01-01"
+   },
+   {
+    "a": 2,
+    "b": 5,
+    "c": "y",
+    "d": "2020-03-01"
+   },
+   {
+    "a": 3,
+    "b": 2,
+    "c": "x",
+    "d": "2020-06-01"
+   },
+   {
+    "a": 4,
+    "b": 6,
+    "c": "z",
+    "d": "2020-09-01"
+   },
+   {
+    "a": 5,
+    "b": 4,
+    "c": "y",
+    "d": "2021-01-01"
+   },
+   {
+    "a": 6,
+    "b": 7,
+    "c": "z",
+    "d": "2021-04-01"
+   }
+  ]
+ },
+ "width": 300,
+ "height": 200,
+ "params": [
+  {
+   "name": "p1",
+   "select": {
+    "type": "point",
+    "fields": [
+     "c"
+    ]
+   }
+  },
+  {
+   "name": "b1",
+   "select": {
+    "type": "interval",
+    "encodings": [
+     "x"
+    ]
+   }
+  }
+ ],
+ "mark": "point",
+ "encoding": {
+  "x": {
+   "field": "a",
+   "type": "quantitative"
+  },
+  "y": {
+   "field": "b",
+   "type": "quantitative"
+  },
+  "color": {
+   "condition": {
+    "test": {
+     "or": [
+      {
+       "param": "p1"
+      },
+      {
+       "not": {
+        "param": "b1"
+       }
+      }
+     ]
+    },
+    "value": "firebrick"
+   },
+   "value": "lightgray"
+  }
+ }
+}

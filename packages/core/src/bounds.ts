@@ -11,6 +11,7 @@ import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
 import { computeAreaPath, computeLinePath, symbolPath, symbolPathExact, trailPath } from './render.js'
 import { itemTextWidth } from './text-metrics.js'
+import { SHAPE_BOUNDS } from './registry.js'
 
 // ---------------------------------------------------------------------------
 // Bounds — exact port of vega-scenegraph Bounds.js
@@ -783,6 +784,7 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
   // (`range`). They diverge when autosize fit makes width != height.
   const baseline = meta?.baseline ?? (orient === 'left' || orient === 'right' ? 0 : range)
   const tickLabelBounds = new Bounds()
+  const titleBounds = new Bounds()
   let axisTitleText = ''
   for (const it of axis.items ?? []) {
     const leaf = it as SceneItem
@@ -799,7 +801,8 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
     boundLeaf(bb, leaf)
     bb.translate(-(meta?.translate ?? 0.5), -(meta?.translate ?? 0.5))
     b.union(bb)
-    if (!(leaf as Record<string, unknown>)._title) tickLabelBounds.union(bb)
+    if ((leaf as Record<string, unknown>)._title) titleBounds.union(bb)
+    else tickLabelBounds.union(bb)
   }
   // spine rect per orient; s = tick/label extent beyond the axis line,
   // clamped by the axis minExtent/maxExtent (vega axisLayout:
@@ -835,7 +838,10 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
     // the only value that must stay put when exact (a variancep title lands on
     // -86 while a count title carries -46.00000000000001).
     if (b.x1 !== Math.trunc(b.x1)) b.x1 -= 1e-8
-    b.y1 -= 1e-8
+    // The same for y1, and only when the TITLE is what sets it: a title that stays inside the axis (a 16-character
+    // count title on a 200px axis) carries no residue, and nudging the tick labels' exact -5 past it made the margin
+    // one pixel too tall.
+    if (!titleBounds.empty() && titleBounds.y1 <= b.y1) b.y1 -= 1e-8
   }
   return b
 }
@@ -887,7 +893,12 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
         return [cos * px - sin * py, sin * px + cos * py]
       })
     } else {
-      boundsFromPath(bounds, it.path)
+      // a projected shape bounds from its unrounded geometry, as vega's bound context sees it, not from the path string
+      const exact = it.datum && it.path === (it.datum as Record<string, unknown>).shape ? SHAPE_BOUNDS.get(it.datum as object)?.() : undefined
+      if (exact) {
+        bounds.add(exact[0], exact[1])
+        bounds.add(exact[2], exact[3])
+      } else boundsFromPath(bounds, it.path)
       // path marks carry scaleX/scaleY: vega's path bound renders the parsed
       // path through pathRender(ctx, x, y, sx, sy) — the path scales about its
       // local origin before the item translate.

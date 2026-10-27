@@ -7,7 +7,7 @@ import { error, hasOwnProperty, minOf, maxOf, ownGet } from './util.js'
 import { compareOf, fieldOf } from './transform-agg.js'
 import { checkRowCount, meterTick } from './limits.js'
 import type { HierNode, Row, TransformContext } from './transform.js'
-import { eachAfter, eachBefore, getField, resolveSizeParam } from './transform.js'
+import { compileExprTransform, eachAfter, eachBefore, getField, resolveSizeParam } from './transform.js'
 import { transformRegistry } from './registry.js'
 import { countpatternRows as countpatternStatsRows, densityRows, kdeRows, loessRows, quantileRows, regressionRows } from './transform-stats.js'
 import { nominalTextWidth } from './text-metrics.js'
@@ -1338,12 +1338,12 @@ interface DelaunayPort {
 }
 
 /** `Delaunay.from(rows, xField, yField)` + `Delaunay._init` (d3-delaunay@6). */
-function buildDelaunay(rows: Row[], xField: string, yField: string): DelaunayPort {
+function buildDelaunay(rows: Row[], xOf: (r: Row) => unknown, yOf: (r: Row) => unknown): DelaunayPort {
   const n = rows.length
   const coords = new Float64Array(n * 2)
   for (let i = 0; i < n; i++) {
-    coords[i * 2] = Number(rows[i]![xField])
-    coords[i * 2 + 1] = Number(rows[i]![yField])
+    coords[i * 2] = xOf(rows[i]!) as number
+    coords[i * 2 + 1] = yOf(rows[i]!) as number
   }
   const del = new DelaunatorPort(coords)
   const d: DelaunayPort = {
@@ -1848,10 +1848,24 @@ function voronoiCellPath(v: VoronoiPort, i: number): string | null {
 }
 
 /** The vega `voronoi` transform: Delaunay triangulation → clipped cell paths. */
+/** A vega `field` parameter: a field name, `{field}`, or an `{expr}` evaluated per row (vega-lite's voronoi reads `datum.datum.x || 0`). */
+function fieldParam(param: unknown, ctx: TransformContext, what: string): (r: Row) => unknown {
+  if (typeof param === 'string') return (r) => getField(r, param)
+  if (param !== null && typeof param === 'object') {
+    const p = param as { field?: unknown; expr?: unknown }
+    if (typeof p.field === 'string') return (r) => getField(r, p.field as string)
+    if (typeof p.expr === 'string') {
+      const f = ctx.runtime.expr(p.expr)
+      return (r) => f(r, ctx.signals)
+    }
+  }
+  throw new Error(`voronoi: the ${what} parameter must be a field name, {field} or {expr}`)
+}
+
 function voronoiRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
   const as = (t.as as string | undefined) ?? 'path'
-  const xField = t.x as string
-  const yField = t.y as string
+  const xOf = fieldParam(t.x, ctx, 'x')
+  const yOf = fieldParam(t.y, ctx, 'y')
   const size = resolveSizeParam(t.size, ctx)
   let bounds: [number, number, number, number]
   if (size) {
@@ -1866,7 +1880,7 @@ function voronoiRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   // Nothing to do if no data (matches vega's early return).
   if (!rows.length) return rows
 
-  const delaunay = buildDelaunay(rows, xField, yField)
+  const delaunay = buildDelaunay(rows, xOf, yOf)
   const voronoi = buildVoronoi(delaunay, bounds)
   return rows.map((r, i) => {
     meterTick('voronoi')
@@ -2043,48 +2057,59 @@ function dotbinRows(rows: Row[], t: Record<string, unknown>, ctx: TransformConte
 // geopoint (vega-geo GeoPoint) — lon/lat -> x/y through a named projection
 // ---------------------------------------------------------------------------
 
+/**
+ * A vega `field` parameter on a geo transform: a field name (an access path), or `{expr}` -- an
+ * expression evaluated per datum (vega-lite writes a `datum` / `value` position this way).
+ */
+function geoAccessor(f: unknown, ctx: TransformContext): (r: Row) => unknown {
+  if (f !== null && typeof f === 'object' && typeof (f as { expr?: unknown }).expr === 'string') {
+    return compileExprTransform((f as { expr: string }).expr, ctx)
+  }
+  return (r) => getField(r, f as string)
+}
+
 function geopointRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
   const projName = String(t.projection)
   const projection = ctx.projections?.get(projName)
   if (!projection) throw new Error(`[aster] geopoint: unknown projection "${projName}"`)
-  const fields = (t.fields as [string, string]) ?? ['lon', 'lat']
+  const fields = (t.fields as [unknown, unknown]) ?? ['lon', 'lat']
+  const lon = geoAccessor(fields[0], ctx)
+  const lat = geoAccessor(fields[1], ctx)
   const as = (t.as as [string, string]) ?? ['x', 'y']
   const proj = projection as (p: [number, number]) => [number, number] | null
   return rows.map((r) => {
-    const xy = proj([getField(r, fields[0]!) as number, getField(r, fields[1]!) as number])
+    const xy = proj([lon(r) as number, lat(r) as number])
     return xy ? { ...r, [as[0]!]: xy[0], [as[1]!]: xy[1] } : { ...r, [as[0]!]: undefined, [as[1]!]: undefined }
   })
 }
 
 // ---------------------------------------------------------------------------
 // geojson (vega-geo GeoJSON) — consolidate points/features into one GeoJSON
-// object (the transform's value, consumed by projection fit); rows unchanged.
+// object (the transform's value, published as the `signal` param, consumed by projection fit); rows unchanged.
 // ---------------------------------------------------------------------------
 
-function geojsonRows(rows: Row[], t: Record<string, unknown>): Row[] {
-  const fields = (t.fields as [string, string] | undefined) ?? null
-  const geojsonField = t.geojson as string | undefined
-  const features: unknown[] = []
+function geojsonRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+  const fields = t.fields as [unknown, unknown] | undefined
+  const lon = fields ? geoAccessor(fields[0], ctx) : undefined
+  const lat = fields ? geoAccessor(fields[1], ctx) : undefined
+  // vega-geo: `geojson || (!fields && identity)` -- with neither, each row is itself a feature
+  const geojson: ((r: Row) => unknown) | undefined = t.geojson != null ? geoAccessor(t.geojson, ctx) : fields ? undefined : (r) => r
+  let features: unknown[] = []
   const points: [number, number][] = []
-  for (const r of rows) {
-    if (geojsonField) {
-      const geo = getField(r, geojsonField)
-      if (geo != null) features.push(geo)
-    } else if (fields) {
-      points.push([getField(r, fields[0]!) as number, getField(r, fields[1]!) as number])
+  if (geojson) for (const r of rows) features.push(geojson(r))
+  if (lon && lat) {
+    for (const r of rows) {
+      let x = lon(r)
+      let y = lat(r)
+      if (x != null && y != null && (x = +(x as number)) === x && (y = +(y as number)) === y) points.push([x as number, y as number])
     }
+    features = features.concat({ type: 'Feature', geometry: { type: 'MultiPoint', coordinates: points } })
   }
-  let geo: Record<string, unknown>
-  if (points.length) {
-    geo = { type: 'MultiPoint', coordinates: points }
-  } else if (features.length === 1) {
-    geo = features[0] as Record<string, unknown>
-  } else {
-    geo = { type: 'FeatureCollection', features }
+  if (typeof t.signal === 'string') {
+    ctx.signals[t.signal] = { type: 'FeatureCollection', features }
+    // a projection that fits this value is stale now
+    ;(ctx.projections as { touch?: () => void } | undefined)?.touch?.()
   }
-  // vega exposes the consolidated value to the projection fit machinery; the
-  // rows themselves pass through unchanged.
-  void geo
   return rows
 }
 

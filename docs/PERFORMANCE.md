@@ -162,9 +162,9 @@ slower), ticks, grid lines and labels are made by one constructor per leaf kind,
 
 ## Bundle sizes
 
-`pnpm bench:bundle` (esbuild, minified, react external): `@aster/react` `<Chart>` 164.6 kB gzip
-(469.7 kB minified, 139.4 kB brotli), `<SvgChart>` from `@aster/react/lite` 149.1 kB gzip (430.3 kB minified, 127.1 kB brotli),
-`<SvgChart>` + `interaction` 158.8 kB gzip (454.3 kB minified, 134.9 kB brotli), vs react-vega 288.7 kB gzip and the official
+`pnpm bench:bundle` (esbuild, minified, react external): `@aster/react` `<Chart>` 161.1 kB gzip
+(450.5 kB minified, 133.0 kB brotli), `<SvgChart>` from `@aster/react/lite` 144.2 kB gzip (411.2 kB minified, 120.8 kB brotli),
+`<SvgChart>` + `interaction` 155.4 kB gzip (435.2 kB minified, 128.5 kB brotli), vs react-vega 288.7 kB gzip and the official
 vega-embed tutorial 288.0 kB.
 
 `pnpm --filter @aster/benchmarks run budget` bundles one tiny app per documented import pattern (esbuild, minify,
@@ -172,20 +172,20 @@ vega-embed tutorial 288.0 kB.
 MARGINAL: the addon's gzip added to the `@aster/core` app. The old rows measured each addon standalone, which
 double counted the code it shares with core (hit read 15.6 kB where an app pays about 5). Each budget is the measured
 size plus 0.5 kB (`packages/benchmarks/scripts/budget.mjs` holds the rationale); a change that needs more room edits
-the number in the same PR. Measured 2026-10-26 (the core rows grew by 7.2 kB with the runtime parity work: guide encoders, discretizing label formats, per-scope structure walk, the plans that keep the guides fast and the per-scope legend failure):
+the number in the same PR. Measured 2026-10-26 (after the Vega-Lite maps and animation work; the minified/brotli figures above predate it):
 
-| Import pattern | Before (gzip kB) | Now (gzip kB) | Budget (kB) |
+| Import pattern | Before selections (gzip kB) | Now (gzip kB) | Budget (kB) |
 |---|---|---|---|
-| `import { renderSpec } from '@aster/core'` | 123.0 | 130.3 | 130.8 |
-| `import { useChart } from '@aster/react'` | 164.1 | 133.7 | 134.2 |
-| `import { Chart } from '@aster/react'` | 163.9 | 164.6 | 165.1 |
-| `import { SvgChart } from '@aster/react/lite'` | n/a | 149.1 | 149.6 |
-| `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | n/a | 158.8 | 159.3 |
-| `import '@aster/react/vl'` + `<Chart>` | 218.3 | 218.8 | 219.3 |
+| `import { renderSpec } from '@aster/core'` | 123.1 | 126.3 | 126.8 |
+| `import { useChart } from '@aster/react'` | 126.4 | 129.7 | 130.3 |
+| `import { Chart } from '@aster/react'` | 157.2 | 164.8 | 165.3 |
+| `import { SvgChart } from '@aster/react/lite'` | 142.0 | 145.9 | 146.4 |
+| `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | 151.5 | 159.1 | 159.6 |
+| `import '@aster/react/vl'` + `<Chart>` | 211.3 | 240.0 | 240.5 |
 | core + `@aster/core/dom` (marginal) | 5.8 | 5.7 | 6.2 |
 | core + `@aster/core/canvas` (marginal) | 4.8 | 4.8 | 5.3 |
 | core + `@aster/core/hit` (marginal) | 5.1 | 5.0 | 5.5 |
-| core + `@aster/core/signals` (marginal) | 4.4 | 4.4 | 4.9 |
+| core + `@aster/core/signals` (marginal) | 4.4 | 7.8 | 8.3 |
 | core + `@aster/core/load` (marginal) | 5.1 | 5.1 | 5.6 |
 | core + `@aster/core/geo` (marginal) | 12.4 | 12.3 | 12.8 |
 | core + `@aster/core/transforms` (marginal) | 15.1 | 15.1 | 15.6 |
@@ -207,7 +207,7 @@ The `useChart` and `<Chart>` rows fail if the field is removed or widened; `scri
 that fault and requires the budget to fail. The other direction (a list that is too narrow drops a registration) is
 caught by `pnpm check:bundle`, which bundles and executes each import pattern.
 
-The Vega-Lite compiler is 54.1 kB gzip on top of the base `<Chart>` (218.8 minus 164.6). Trimming the validation layer
+The Vega-Lite compiler is 75.2 kB gzip on top of the base `<Chart>` (240.0 minus 164.8). It was 54.1 before the selections, maps and animation work: the selection compiler is most of the growth, then the maps (projections, geojson / geopoint data, geoshape marks) and the animation (the `time` channel's scale and frame dataset). Trimming the validation layer
 (`packages/vl/src/validate.ts`: allow-lists derived from one table each, shared message templates, dead branches removed;
 no check dropped, every message unchanged) took `@aster/vl` from 180,940 to 176,836 bytes minified (-4.1 kB) and from
 55,828 to 55,606 bytes gzip level 9 (-0.2 kB): the validator is mostly unique error text, which gzip already compresses well.

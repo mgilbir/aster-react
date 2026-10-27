@@ -44,7 +44,7 @@ import { hash53 } from './svg-defs.js'
 import { tickFormat, scaleGradientStops, tickValues, tickCount, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, maxOf, pushAll, lerp } from './util.js'
+import { dict, ownGet, maxOf, pushAll, lerp, scopedSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, type PulseChange } from './pulse.js'
@@ -372,6 +372,8 @@ interface EvalContext {
   /** The view's size, inside nested groups (whose `width` / `height` above are the group's own). A scale's `width` / `height` range is the view's. */
   viewWidth?: number
   viewHeight?: number
+  /** The id of the enclosing signal scope (see `SceneGroup.scopeSignals`), '' at the root. */
+  scopeId?: string
   /** Position of the enclosing facet group, for `{field: {group: 'x' | 'y'}}` references. */
   groupX?: number
   groupY?: number
@@ -389,8 +391,14 @@ interface EvalContext {
    * so bindings can never outlive the scales they reference. */
   encodeBinding?: EncodeBinding
   projections: Map<string, unknown>
-  /** `datasets.size` when each fit projection was last built (see refreshProjection). */
-  projectionStamp: Map<string, number>
+  /** `datasets.size` and the registry's epoch when each fit projection was last built (see refreshProjection). */
+  projectionStamp: Map<string, string>
+  /** fit projections built before every source of their fit existed (a `geojson` signal a later dataset publishes) */
+  projectionIncomplete: Set<string>
+  /** a dataset transform consumed an incomplete projection: the datasets must be built again */
+  geoStale: boolean
+  /** while datasets build: build a named dataset now (a projection's fit can read one declared after its consumer) */
+  buildOnDemand?: (name: string) => void
   runtime: ExpressionRuntime
   _defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }>
   /** Shared by every scope of one evaluation: a layout threw (vega logs it and renders the scene unlaid-out). */
@@ -450,6 +458,8 @@ interface EvalContext {
   encodeAborted?: boolean
   /** Datasets whose transform pipeline failed: nothing downstream of them is built. */
   failedDatasets?: Set<string>
+  /** The items of the named marks built so far (a mark may read another mark's items as its data: `from: {data: <mark name>}`). */
+  markItems: Map<string, SceneItem[]>
 }
 
 /**
@@ -533,17 +543,19 @@ function prepareChartCtx(
     },
   }
 
+  const transformProjections = new ProjectionRegistry()
+  const transformHierarchies = new Map<string, unknown>()
   const defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }> = []
   // Inputs besides the signals that change what a reused scale/item would be.
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}`
   const ctx: EvalContext = {
-    chart, scope: rootScope(chart), abort: { failures: [] }, signalParams, width, height, datasets, scales, scaleTypes, projections: new ProjectionRegistry(), projectionStamp: new Map(), runtime, _defs: defs,
+    chart, scope: rootScope(chart), abort: { failures: [] }, signalParams, width, height, datasets, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
       ...(explicitSize.width ? ['width'] : []), ...(explicitSize.height ? ['height'] : []),
     ]),
-    hierarchies: new Map(), affected: new Set(), incremental: false, deadline, checkDeadline,
+    hierarchies: transformHierarchies, affected: new Set(), incremental: false, deadline, checkDeadline, markItems: new Map(),
     datasetPulses: new Map(),
     prev: txn.prev, draft: newState(txn.gen), gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
@@ -555,6 +567,11 @@ function prepareChartCtx(
     urlPolicy: input.urlPolicy ?? (input.limits ? {} : undefined),
     logger: input.logger ?? consoleLogger,
   }
+  // The event loop shows a dataset it modified through its transform pipeline, before the next evaluation
+  // computes it (the rows of a modified selection store, sorted by its `collect`, for example).
+  // (It must not close over `ctx`: that reaches the previous evaluation's state, and a scene would keep every
+  // scene before it alive.)
+  runtime.transformed = makeTransformed(chart, runtime, signalParams, transformHierarchies, transformProjections)
   // A non-integer `columns` makes the symbol-legend grid layout throw: the ViewLayout never completes and
   // the whole scene renders at raw encode positions (a legend whose entries cannot be made is an aborted
   // pass in its scope instead: see axisTicksFailed).
@@ -603,7 +620,10 @@ function prepareChartCtx(
   let changed = true
   let rounds = 0
   while (changed && rounds < 3) {
-    changed = resolveSignalUpdates(ctx)
+    // (a map whose projection was consumed before the `geojson` signals it fits were published builds again)
+    const geoStale = ctx.geoStale
+    ctx.geoStale = false
+    changed = resolveSignalUpdates(ctx) || geoStale
     buildScales(ctx)
     if (changed) {
       ctx.datasets.clear()
@@ -654,6 +674,26 @@ function prepareChartCtx(
   return { ctx, width, height }
 }
 
+/**
+ * `ExpressionRuntime.transformed` for one evaluation. A module-level factory, so the closure's context holds exactly these
+ * arguments: a closure made inside `prepareChartCtx` shares that function's context with its other closures, which reach
+ * the evaluation's state (and, through the incremental state, the previous scenes), and the scene would keep them alive.
+ */
+function makeTransformed(
+  chart: CompiledChart,
+  runtime: ExpressionRuntime,
+  signalParams: Record<string, unknown>,
+  hierarchies: Map<string, unknown>,
+  projections: ProjectionRegistry,
+): NonNullable<ExpressionRuntime['transformed']> {
+  return (name, raw) => {
+    const d = chart.data.find((x) => x.name === name)
+    const rows = d?.values != null ? readData(raw as never, d.format) : (raw as Row[]).map((r) => ({ ...r }))
+    if (!d?.transform.length) return rows
+    return applyTransforms(rows, d.transform, { runtime, signals: signalParams, hierarchies, projections }, name)
+  }
+}
+
 /** Fingerprint of the evaluation context that reused scales/items were built under. */
 function ctxFpOf(ctx: EvalContext): string {
   // Memoised: the params only change at the few known write sites, each of
@@ -688,6 +728,15 @@ function buildProjectionOf(ctx: EvalContext, p: CompiledProjection): unknown {
     if (k === 'name' || k === 'type') continue
     resolved[k] = resolveProjectionParam(ctx, p[k])
   }
+  // A fit over several sources (`[data('a'), geojson_0]`) is not resolvable until every source exists
+  // (vega's dataflow runs the geojson transform first): the next pass resolves it.
+  let incomplete = p.fit != null && resolved.fit == null
+  if (Array.isArray(resolved.fit) && resolved.fit.some((f) => f == null)) {
+    resolved.fit = undefined
+    incomplete = true
+  }
+  if (incomplete) ctx.projectionIncomplete.add(p.name)
+  else ctx.projectionIncomplete.delete(p.name)
   return build(resolved as never, ctx.width, ctx.height)
 }
 
@@ -701,8 +750,13 @@ function buildProjections(ctx: EvalContext): void {
   if (!ctx.chart.projections?.length) return
   for (const p of ctx.chart.projections) {
     ctx.projections.set(p.name, buildProjectionOf(ctx, p))
-    ctx.projectionStamp.set(p.name, ctx.datasets.size)
+    ctx.projectionStamp.set(p.name, projectionStampOf(ctx))
   }
+}
+
+/** What a fit projection was built from: the datasets that existed and the fit signals written (geojson transforms). */
+function projectionStampOf(ctx: EvalContext): string {
+  return `${ctx.datasets.size}:${(ctx.projections as ProjectionRegistry).epoch}`
 }
 
 /**
@@ -712,15 +766,51 @@ function buildProjections(ctx: EvalContext): void {
  */
 function refreshProjection(ctx: EvalContext, name: string): void {
   const def = ctx.chart.projections?.find((p) => p.name === name)
-  if (def?.fit && ctx.projectionStamp.get(name) !== ctx.datasets.size) {
-    ctx.projections.set(name, buildProjectionOf(ctx, def))
-    ctx.projectionStamp.set(name, ctx.datasets.size)
+  if (!def?.fit) return
+  // the datasets the fit reads (vega's dataflow orders them first, whatever the declaration order)
+  for (const src of fitDatasets(def.fit)) {
+    if (ctx.datasets.has(src) || fitBuilding.has(src)) continue
+    fitBuilding.add(src)
+    try {
+      ctx.buildOnDemand?.(src)
+    } finally {
+      fitBuilding.delete(src)
+    }
   }
+  if (ctx.projectionStamp.get(name) !== projectionStampOf(ctx)) {
+    ctx.projections.set(name, buildProjectionOf(ctx, def))
+    ctx.projectionStamp.set(name, projectionStampOf(ctx))
+  }
+  // a consumer is about to use a projection that could not see all of its fit: build again afterwards
+  if (ctx.projectionIncomplete.has(name)) ctx.geoStale = true
+}
+
+/** Datasets whose build is in progress because a projection fit asked for them (a cycle would otherwise recurse). */
+const fitBuilding = new Set<string>()
+
+/** The names `data('name')` reads in a projection's `fit` signal. */
+function fitDatasets(fit: unknown): string[] {
+  const out: string[] = []
+  const visit = (v: unknown): void => {
+    if (Array.isArray(v)) v.forEach(visit)
+    else if (v && typeof v === 'object' && typeof (v as { signal?: unknown }).signal === 'string') {
+      for (const m of (v as { signal: string }).signal.matchAll(/\bdata\(\s*(['"])(.*?)\1\s*\)/g)) out.push(m[2]!)
+    }
+  }
+  visit(fit)
+  return out
 }
 
 /** The projections map a dataset transform sees: reads go through `refreshProjection`. */
 class ProjectionRegistry extends Map<string, unknown> {
   refresh: ((name: string) => void) | undefined
+  /** bumped when a `geojson` transform publishes a value a projection may fit */
+  epoch = 0
+  /** the projections that fit data (their derived coordinates are not row-local) */
+  fitNames: Set<string> | undefined
+  touch(): void {
+    this.epoch++
+  }
   override get(name: string): unknown {
     this.refresh?.(name)
     return super.get(name)
@@ -728,7 +818,7 @@ class ProjectionRegistry extends Map<string, unknown> {
 }
 
 /** Expression functions that read datasets or scales (a signal using them cannot resolve before they exist). */
-const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspace|invert|copy|gradient)\s*\(/
+const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspace|invert|copy|gradient|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(/
 
 /**
  * Evaluate static signal `update` expressions in declaration order against the
@@ -757,9 +847,15 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
     const expr = def.update ?? (initPending ? def.init : undefined)
     if (!expr) continue
     if (staticOnly && DATA_DEPENDENT_EXPR.test(expr)) continue
+    // an `init` that reads scales (a selection's initial brush: `[scale("x", 2), scale("x", 4)]`) runs once the scales exist:
+    // before that `scale()` of a missing scale is `undefined`, which would be taken for the initial value
+    if (initPending && SCALE_FN_EXPR.test(expr) && !ctx.chart.scales.every((sc) => ctx.scales.has(sc.name))) continue
     try {
       const value = ctx.runtime.expr(expr)(undefined, ctx.signalParams)
-      if (initPending && value !== undefined) ctx.initDone.add(def.name)
+      // An `init` that reads a scale or a dataset is only settled once they exist: until the scales are built,
+      // `domain('x')` of a scale that is not there yet is `[]`, which is not the value vega's dataflow computes.
+      const readsScales = DATA_DEPENDENT_EXPR.test(expr) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
+      if (initPending && value !== undefined && !readsScales) ctx.initDone.add(def.name)
       if (value !== undefined && !valuesEqual(value, ctx.signalParams[def.name])) {
         ctx.signalParams[def.name] = value
         ctx.fpMemo = undefined
@@ -1127,7 +1223,6 @@ function computeGuidePadding(
   width: number,
   height: number,
   base: { top: number; right: number; bottom: number; left: number },
-  zeroClipProjection = false,
 ): { top: number; right: number; bottom: number; left: number } {
   // Vega's autosize unions the *recursive* bounds of every top-level guide
   // (axis/legend) and mark into the viewBounds and grows the padding by the
@@ -1148,16 +1243,10 @@ function computeGuidePadding(
     // whose right edge is the view width) must still grow the margin.
     // (an axis's bounds are the exact arithmetic of vega's own: no guard)
     const ei = 0
-    // Geo shape bounds are traced through clipped projections; d3's clip
-    // intersection leaves a sub-pixel fp tail that can sit exactly on an
-    // integer in our port where vega's is just below/above it. Nudge only that
-    // integer case on the vertical axis (the clip bound affected by it).
-    const geo = zeroClipProjection && (group.marktype === 'shape' || group.marktype === 'geoshape')
-    const nudgeY = (v: number): number => geo && Math.abs(v - Math.round(v)) < EPS ? (v < 0 ? -EPS : EPS) : 0
     minX = Math.min(minX, b.x1 + ei)
     maxX = Math.max(maxX, b.x2 - ei)
-    minY = Math.min(minY, b.y1 + ei + Math.min(0, nudgeY(b.y1)))
-    maxY = Math.max(maxY, b.y2 - ei + Math.max(0, nudgeY(b.y2)))
+    minY = Math.min(minY, b.y1 + ei)
+    maxY = Math.max(maxY, b.y2 - ei)
   }
   // a mark's `clip` bounds the mark to the frame it sits in (vega boundClip), a group mark across all its items
   if (hasClippedMark(items)) eachMarkBounds(items, width, height, (n) => measureGuideGroup(n as SceneGroup), (b, n) => grow(b, n as SceneGroup))
@@ -1204,7 +1293,7 @@ function walkStrings(
 /** Expression functions that read scales. */
 const SCALE_FN_EXPR = /\b(scale|bandwidth|bandspace|invert|domain|range|copy|gradient)\s*\(/
 /** Expression functions that read datasets. */
-const DATA_FN_EXPR = /\b(data|indata)\s*\(/
+const DATA_FN_EXPR = /\b(data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(/
 
 /** What a dataset's pipeline reads besides its `source`. */
 interface DatasetDeps { names: Set<string>; allData: boolean }
@@ -1264,6 +1353,13 @@ function markDepsOf(mark: CompiledMark, chart: CompiledChart): MarkDeps {
   if (deps) return deps
   const known = new Set(chart.data.map((d) => d.name))
   const out: MarkDeps = { names: new Set(), allData: false, scales: new Set(), allScales: false }
+  // a mark reading another mark's items (`from: {data: <mark name>}`) depends on whatever that mark depends on
+  const readsMarkItems = (m: CompiledMark): boolean => {
+    const from = m.from?.data
+    if ((typeof from === 'string' && !known.has(from)) || (m.marks ?? []).some(readsMarkItems)) return true
+    return false
+  }
+  if (readsMarkItems(mark)) out.allData = true
   walkStrings(mark, (str, owner) => {
     if (known.has(str)) out.names.add(str)
     if (DATA_FN_EXPR.test(str)) out.allData = true
@@ -1444,10 +1540,7 @@ function buildContentPass(
     || ctx.rawGuides
     || ctx.chart.autosize === 'none'
     ? ctx.chart.padding
-    : computeGuidePadding(
-        items, width, height, ctx.chart.padding,
-        (ctx.chart.projections ?? []).some((p) => String(p.type).toLowerCase() === 'azimuthalequalarea' && Number(p.clipAngle) === 0),
-      )
+    : computeGuidePadding(items, width, height, ctx.chart.padding)
   const ordered = paintOrderOf(items)
   return { items: ordered, padding, ctx, width, height, hasLayout }
 }
@@ -1657,10 +1750,10 @@ function buildTitleGroup(
   // axis-internal frame; our scene bakes the 0.5px axis delta into the leaves
   // — shift it out). The title unions in afterwards, as in vega's layoutGroup.
   const b = new Bounds().set(0, 0, width, height)
-  for (const g of items as SceneGroup[]) {
-    if (g.role === 'title') continue
-    b.union(measureGuideGroup(g))
-  }
+  const measured = (items as SceneGroup[]).filter((g) => g.role !== 'title')
+  // (a clipped mark -- an interval selection's brush -- has its bounds cut to the frame: Bound's boundClip)
+  if (hasClippedMark(measured)) eachMarkBounds(measured, width, height, (n) => measureGuideGroup(n as SceneGroup), (mb) => { b.union(mb) })
+  else for (const g of measured) b.union(measureGuideGroup(g))
   // (a group title reads its facet datum as `parent`)
   const hostCtx = parent !== undefined ? { ...ctx, signalParams: { ...ctx.signalParams, parent } } : ctx
   const built = buildTitleGuide({
@@ -2401,7 +2494,10 @@ function rowLocal(t: CompiledTransform, tctx: StepTransformContext): boolean {
     case 'timeunit':
       // without explicit units vega bins the data extent (global); inferUnits looks at every row
       return (t as { units?: unknown }).units != null && !(t as { inferUnits?: unknown }).inferUnits && (t as { extent?: unknown }).extent === undefined
-    case 'geoshape': case 'geopoint': case 'linkpath': case 'project':
+    case 'geoshape': case 'geopoint':
+      // a projection that fits data moves with the data: a derived x/y or path is only valid for the fit it was made under
+      return !(tctx.projections as ProjectionRegistry | undefined)?.fitNames?.has(String((t as { projection?: unknown }).projection))
+    case 'linkpath': case 'project':
       return true
     case 'bin':
       // A fixed numeric extent makes the bins constant; a `signal` output is a
@@ -2670,6 +2766,7 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
   // call and never leaves the evaluation context reachable from it.
   const registry = ctx.projections as ProjectionRegistry
   if (ctx.chart.projections?.some((p) => p.fit)) registry.refresh = (name) => refreshProjection(ctx, name)
+  registry.fitNames = new Set((ctx.chart.projections ?? []).filter((p) => p.fit).map((p) => p.name))
   try {
     buildDatasetsOf(ctx, inputData)
   } finally {
@@ -2797,11 +2894,28 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     return rows
   }
 
-  for (const d of ctx.chart.data) {
-    build(d.name, new Set())
+  // a projection that fits data asks for the datasets it reads before it is used (see refreshProjection)
+  if (ctx.chart.projections?.some((p) => p.fit)) ctx.buildOnDemand = onDemandBuilder(ctx, sources, build)
+  try {
+    for (const d of ctx.chart.data) {
+      build(d.name, new Set())
+    }
+  } finally {
+    ctx.buildOnDemand = undefined
   }
   // Transforms (extent, bin with a signal output) may have written signals.
   ctx.fpMemo = undefined
+}
+
+/**
+ * The builder `refreshProjection` calls for a dataset a projection's fit reads before it is built. A function of its
+ * own, not a closure inside `buildDatasetsOf`: a closure there makes every variable it names a heap-allocated context
+ * slot of the dataset builder, which costs every chart (measured: 3x the p95 of a plain evaluation, from GC).
+ */
+function onDemandBuilder(ctx: EvalContext, sources: ReadonlyMap<string, unknown>, build: (name: string, seen: Set<string>) => unknown): (name: string) => void {
+  return (n) => {
+    if (!ctx.datasets.has(n) && sources.has(n)) build(n, new Set())
+  }
 }
 
 /** Snapshot resolved scales into plain data for the scene differential (R8.1/R8.2). */
@@ -3196,6 +3310,17 @@ function evaluateMark(
   ctx: EvalContext,
   prevGroup?: SceneGroup | null,
 ): SceneGroup | SceneGroup[] | null {
+  const built = evaluateMarkItems(mark, ctx, prevGroup)
+  // a named mark's items are what a later mark of `from: {data: <name>}` reads
+  if (built && typeof mark.name === 'string' && mark.type !== 'group' && !Array.isArray(built)) ctx.markItems.set(mark.name, (built.items ?? []) as SceneItem[])
+  return built
+}
+
+function evaluateMarkItems(
+  mark: CompiledMark,
+  ctx: EvalContext,
+  prevGroup?: SceneGroup | null,
+): SceneGroup | SceneGroup[] | null {
   // a scale or an encode that threw stopped vega's run: the marks after it were never joined, so they are not in the scenegraph
   if (ctx.encodeAborted) return null
   if (mark.type === 'group') {
@@ -3210,18 +3335,22 @@ function evaluateMark(
   let carriedBounds: Bounds | undefined
   const addedItems: SceneItem[] = []
   let pendingUndo: ItemsUndo | undefined
+  let hitMarked = false
   if (source) {
-    const rawRows = ctx.datasets.get(source) ?? []
+    // (a source that is no dataset but the name of a mark built before: that mark's items, shallow-copied as vega's tuples)
+    const rawRows = ctx.datasets.get(source) ?? ctx.markItems.get(source)?.map((it) => ({ ...(it as unknown as Row) })) ?? []
     // Only clone rows when the pipeline will re-encode them all (a mark-level
     // transform); the differential path reads the raw rows and clones
     // just the changed indices, so an unchanged row is never copied.
     let rows: Row[] = rawRows
     let rowsCloned = false
-    if (mark.transform?.length) {
+    // (a `voronoi` mark transform is vega's post-encoding kind: it runs on the encoded items, below)
+    const preTransforms = mark.transform?.filter((t) => t.type !== 'voronoi')
+    if (preTransforms?.length) {
       rows = rawRows.map((r) => ({ ...r }))
       rowsCloned = true
       try {
-        rows = applyTransforms(rows, mark.transform, {
+        rows = applyTransforms(rows, preTransforms, {
           runtime: ctx.runtime,
           signals: ctx.signalParams,
           hierarchies: ctx.hierarchies,
@@ -3257,12 +3386,16 @@ function evaluateMark(
     if (pulse) {
       const prevItems = prevGroup!.items as SceneItem[]
       const gen = ctx.gen
+      // (an interactive mark's transparent items are marked `_hit` as they are encoded: an update touches only these)
+      hitMarked = true
+      const hittable = mark.interactive !== false
       const encodeAt = (i: number): SceneItem => {
         if (meter) meter.tick('mark encoding')
         const row = { ...(rows[i] as Row) }
         const res = resolveEncodeSet(update, row, ctx, mark.type)
         res.datum = row
         res.__gen = gen
+        if (hittable && (res as { fill?: unknown }).fill === 'transparent') (res as unknown as Record<string, unknown>)._hit = true
         return res
       }
       if (pulse.appendOnly) {
@@ -3342,6 +3475,19 @@ function evaluateMark(
     const res = resolveEncodeSet(update, {}, ctx, mark.type)
     res.__gen = ctx.gen
     items = [res]
+  }
+
+  // vega-parser mark.js: a mark's `transform`s that work on the encoded items (voronoi cells over the items'
+  // positions) run right after the encode: the items are the transform's tuples, so `datum.datum` is the source datum.
+  for (const t of mark.transform ?? []) {
+    if (t.type !== 'voronoi' || !source || items.length === 0) continue
+    try {
+      const cells = applyTransforms(items as unknown as Row[], [t], { runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections }, source)
+      const as = ((t as { as?: string }).as) ?? 'path'
+      items.forEach((it, i) => { (it as unknown as Row)[as] = (cells[i] as Row)[as] })
+    } catch (e) {
+      reportEvalError(ctx, e)
+    }
   }
 
   // vega's SortItems: a mark `sort` orders the ENCODED items by their own
@@ -3433,6 +3579,12 @@ function evaluateMark(
 
   vetLinks(mark, items, ctx)
 
+  // An interactive mark's transparent items are still hit by the pointer: vega's live SVG draws them with
+  // `fill="transparent"`, which the string renderer (like ours) omits. `_hit` marks them for `pointer-events`.
+  if (mark.interactive !== false && !hitMarked) {
+    for (const it of items) if ((it as { fill?: unknown }).fill === 'transparent') (it as unknown as Record<string, unknown>)._hit = true
+  }
+
   // Appended items extend the carried union bounds only now, after the mark
   // defaults above ran (they can change an item's stroke and so its bounds).
   const group: SceneGroup = {
@@ -3492,6 +3644,8 @@ interface GroupSource {
   datum: Row
   rows?: Row[]
   facetName?: string
+  /** Names this item among its mark's (the facet partition's key, a datum's index): the identity of its signal scope. */
+  key?: string
 }
 
 interface FacetDef {
@@ -3524,19 +3678,25 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
       if (g) g.push(r)
       else parts.set(k, [r])
     }
-    return [...parts.values()].map((g) => {
+    return [...parts.entries()].map(([partKey, g]) => {
       let datum: Row = {}
       accessors.forEach((acc, i) => { datum[((acc as { fname?: string }).fname) ?? keys[i]!] = acc(g[0]!) })
       const ag = facet.aggregate
       if (ag?.ops) {
         // a facet aggregate (vega-lite's stack_group_main): the group item's datum carries it
         datum = { ...datum, ...aggregateGroup(g, { type: 'aggregate', groupby: keys, fields: ag.fields, ops: ag.ops, as: ag.ops.map((op, i) => `${op}_${ag.fields[i]}`) } as never) }
+      } else if (ag === undefined) {
+        // no facet aggregate: vega's own (vega-parser marks/data.js: an `aggregate` over the groupby, whose default op is
+        // `count`) makes the group item's datum, so a cell's datum carries the partition's size
+        datum = { ...datum, count: g.length }
       }
-      return { datum, rows: g, facetName: facet.name }
+      // (the aggregate's output is a tuple: `isTuple(group().datum)`)
+      Object.defineProperty(datum, TUPLE_ID, { value: true, enumerable: false })
+      return { datum, rows: g, facetName: facet.name, key: partKey }
     })
   }
   const data = mark.from?.data
-  if (data) return (ctx.datasets.get(data) ?? []).map((row) => ({ datum: row }))
+  if (data) return (ctx.datasets.get(data) ?? []).map((row, i) => ({ datum: row, key: String(i) }))
   return [{ datum: {} }]
 }
 
@@ -3651,6 +3811,38 @@ function markClip(mark: CompiledMark, ctx: EvalContext): boolean {
   return !!c
 }
 
+/**
+ * The signals a group item's scope declares (vega: a group mark's `signals`, one set per item): each starts from the value
+ * the host stored for it (`<scope id>:<name>`, the event loop's state, which outlives the scene), else its `init`, else its
+ * `value`; an `update` signal is derived and always recomputed. `push: "outer"` declares nothing here (its handlers write to
+ * the enclosing scope's signal). Returns the group's parameters (the enclosing ones plus these) and the scope's values.
+ */
+function scopeSignalValues(mark: CompiledMark, ctx: EvalContext, id: string, base: Record<string, unknown>): { params: Record<string, unknown>; values: Record<string, unknown> } {
+  const params = dict<unknown>(base)
+  const values: Record<string, unknown> = {}
+  const defs = (mark.signalDefs ?? []).filter((d) => d.push !== 'outer')
+  const evalIn = (code: string): unknown => {
+    try { return ctx.runtime.expr(code)({}, params) } catch (e) { reportEvalError(ctx, e); return undefined }
+  }
+  for (const d of defs) {
+    if (typeof d.update === 'string') continue
+    const key = scopedSignalName(id, d.name)
+    const v = Object.hasOwn(ctx.signalParams, key) ? ctx.signalParams[key] : typeof d.init === 'string' ? evalIn(d.init) : d.value
+    params[d.name] = v
+    values[d.name] = v
+  }
+  // derived signals read the others (and each other): a few rounds settle any acyclic chain
+  const derived = defs.filter((d) => typeof d.update === 'string')
+  for (let round = 0; round < Math.max(1, derived.length) && derived.length; round++) {
+    for (const d of derived) {
+      const v = evalIn(d.update!)
+      params[d.name] = v
+      values[d.name] = v
+    }
+  }
+  return { params, values }
+}
+
 function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource): SceneGroup {
   const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
   // the facet partition is a dataset for everything in this item's scope, its own scales included
@@ -3659,18 +3851,24 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
   // the group's own datasets (vega: a group's `data`), derived in this item's scope
   const savedData: Array<[string, Row[] | undefined]> = []
   try {
+    // this item's signal scope (its own signals, over the enclosing ones; a facet's `parent` is its datum)
+    const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
+    const outerParams = hasParent ? { ...ctx.signalParams, parent: src.datum } : ctx.signalParams
+    const scopeId = mark.signalDefs?.length ? `${ctx.scopeId ? ctx.scopeId + '/' : ''}${mark.userName ?? ''}@${markIdOf(mark)}${src.key !== undefined && src.key !== '' ? `[${src.key}]` : ''}` : undefined
+    const scoped = scopeId !== undefined ? scopeSignalValues(mark, ctx, scopeId, outerParams) : undefined
+    const scopeParams = scoped ? scoped.params : outerParams
     for (const d of mark.data ?? []) {
       const source = (d as CompiledData & { source?: string }).source
       let rows: Row[] = source ? (ctx.datasets.get(source) ?? []).map((r) => ({ ...r })) : d.values != null ? readData(d.values, d.format) : []
       checkRowCount(rows.length, `dataset "${d.name}"`)
       if (d.transform?.length) {
-        rows = applyTransforms(rows, d.transform, { runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections }, d.name)
+        rows = applyTransforms(rows, d.transform, { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }, d.name)
       }
       savedData.push([d.name, ctx.datasets.get(d.name)])
       ctx.datasets.set(d.name, rows)
     }
     const encode = (mark.encode?.update ?? {}) as Record<string, EncodeValue | EncodeValue[]>
-    const geo = resolveEncodeSet(encode, src.datum, ctx, 'group')
+    const geo = resolveEncodeSet(encode, src.datum, scoped ? { ...ctx, signalParams: scopeParams } : ctx, 'group')
     const gx = num(geo.x) ?? 0
     const gy = num(geo.y) ?? 0
     const gw = Math.max(0, num(geo.width) ?? 0)
@@ -3684,7 +3882,6 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       childScales.set(sdef.name, buildScale(sdef, scaleContext({ ...ctx, width: ctx.viewWidth ?? ctx.width, height: ctx.viewHeight ?? ctx.height }, sdef.name)))
       childTypes.set(sdef.name, sdef.type)
     }
-    const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
     // vega builds the instances of nested scopes level by level: what an aborted pass did not reach is not made
     const path = [...ctx.scope.path, ctx.scope.nextChild.n++]
     const order = ctx.abort.cut === undefined ? -1 : compareInstances(path, ctx.abort.cut.path)
@@ -3707,7 +3904,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       groupY: gy,
       scales: childScales.size ? new Map([...ctx.scales, ...childScales]) : ctx.scales,
       scaleTypes: childTypes.size ? new Map([...ctx.scaleTypes, ...childTypes]) : ctx.scaleTypes,
-      signalParams: hasParent ? { ...ctx.signalParams, parent: src.datum } : ctx.signalParams,
+      signalParams: scopeParams,
+      ...(scopeId !== undefined ? { scopeId } : {}),
     }
 
     const content: SceneGroup[] = []
@@ -3762,6 +3960,11 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     } as unknown as SceneGroup
     // (an instance the aborted pass never reached has no operators, so no scales)
     if (mark.scales?.length && order <= 0) group.__scales = snapshotScales(childScales)
+    if (scoped && scopeId !== undefined) {
+      group.scopeSignals = { id: scopeId, defs: mark.signalDefs!, values: scoped.values, hasContent: (mark.marks?.length ?? 0) + (mark.axes?.length ?? 0) + (mark.legends?.length ?? 0) > 0 || mark.groupTitle !== undefined }
+      // the scales this scope declares, for the handlers of its signals (`scale('x', ...)` resolves through the scope chain)
+      if (childScales.size) Object.defineProperty(group, '__scaleFns', { value: childScales, enumerable: false })
+    }
     return group
   } finally {
     for (const [name, prev] of savedData.reverse()) {

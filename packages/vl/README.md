@@ -76,21 +76,58 @@ an expression or a generated dataset/signal/scale name.
   axis and mark blocks.
 - Mark keys: `binSpacing`, `minBandSize`, `bandSize` (vega-lite ignores it too), `x2Offset`,
   `y2Offset`, `theta2Offset`, `radius2Offset`, `style`, `smooth`, `aspect`, `clip`, `aria`.
+- Maps (`src/geo.ts`, a port of vega-lite's `compile/projection`): `geoshape` marks over GeoJSON / TopoJSON
+  (inline, `url`, or `sphere` / `graticule` generators) with `{type: "geojson"}` on `shape`; `projection`
+  with every property and `config.projection`; `longitude` / `latitude` (and `longitude2` / `latitude2`) on
+  point-like marks, text, line, trail and rule, layered over geoshapes. A unit fits its projection to its
+  geoshape data unless it gives `scale` or `translate`; layer, concat and repeat children share one
+  merged projection as vega-lite does. Vega's runtime computes the same projection as the Aster runtime
+  (`projectedBounds`), and the corpus holds a `vlx-geo-*` case per feature.
+- Animation (`src/animation.ts`): the `time` channel, driven by a `point` selection whose `on` is a
+  timer (`"timer"`, `"timer{ms}"`, `{type: "timer"}`) and the `{filter: {param}}` transform; `mark.time`,
+  `config.scale.framesPerSecond`. The signals, the `<main>_curr` frame dataset and the band `time` scale
+  are vega-lite's. The first frame draws all the data (the store is empty), as in vega; the runtime ticks
+  the clock with the same d3-timer schedule vega uses (see docs/INTERACTION.md#signals).
 - Sort forms (arrays, `ascending`/`descending`, channel, `{field, op, order}`, `{encoding}`),
   conditions with `test` predicates (and/or/not, field predicates, DateTime values), time units
   (single, multi, `utc`, `step`), bin options, dotted/escaped/bracketed field names.
+
+- Params and selections on a unit view, on the units of a layer, and on the units of a concat, hconcat, vconcat, facet or
+  repeat view (linked brushing across views, a cross-view filter, a brush per facet cell or repeated view, a selection
+  declared on the composition and given to every unit below it), as vega-lite 6.4.3 compiles them
+  (`src/selection.ts` ports `compile/selection/*`): point and interval selections; `fields`, `encodings`, `on`,
+  `clear`, `toggle`, `nearest`, `resolve`, `mark`, `translate`, `zoom`, `value` (initial values, DateTimes
+  included); `config.selection`; `bind` to inputs (`range`, `select`, `radio`, `checkbox`, ...), to the legend
+  (`"legend"` or `{legend: stream}`) and to `"scales"` (pan and zoom through the scale domains); `{param}` conditions
+  (`empty`) and predicates in `test`, `filter` (and, or, not) and `lookup.from`; `scale.domain` as `{param}` /
+  `{unionWith}`; variable parameters (`value`, `expr`, `bind`, `react`). Projections over a bin or a time unit work as
+  in vega-lite. A selection's state is its `<name>_store` dataset and the `<name>` signal, exactly as in vega-lite.
+  `nearest` needs the transforms addon (`import '@aster/core/transforms'`) for its voronoi cells. The interaction
+  needs the signal event loop (`<Chart>`, or `<SvgChart interaction>`): see docs/INTERACTION.md. In a composition a unit's
+  signals are its group mark's (a Vega group scope: one copy per view or facet cell, `push: "outer"` for the signals that
+  feed a bound scale, the `facet` signal in a facet's cells), and the named selection, its store and `unit` stay at the root.
 
 ## Throws (not supported)
 
 Everything below throws a `VLCompileError` naming the feature and its path; nothing is silently
 ignored.
 
-- Params and selections: any `param` predicate or condition, `empty`, `push`, selection `value` and
-  `bind`, non-interval selections, interval selection options (a plain interval renders as its
-  static brush marks); `scale.domain` objects (`{param}`, `{unionWith}`) and `domainRaw`; parameter
-  references in `bin.extent`; lookups from a selection.
-- Maps: `geoshape` marks, `projection`, `latitude` / `longitude` channels, `{type: "geojson"}`.
-- Animation: the `time` channel (`mark.time` and `config.scale.framesPerSecond` / `animationDuration` are accepted: without a `time` channel they change nothing in vega-lite either).
+- Params and selections that vega-lite itself compiles to a Vega spec that Vega rejects or that has no well-defined meaning:
+  on a layer spec itself, or on a concat / facet / repeat that has a layer or a composite mark (boxplot, errorbar,
+  errorband) below it (vega-lite gives every unit a copy of the selection's signals, and the layers would declare them
+  twice in one Vega scope), on a composition whose units have params of their own (vega-lite replaces a unit's
+  parameters with the inherited ones), with `views` (restricting a composition's selection to some of its views), on a
+  named view, or on a path mark with an overlay (`mark.point` / `mark.line`: write the layers). Also: `bin.extent` as a parameter; a lookup from a selection of the same unit or of a later layer;
+  `scale.domain.unionWith` in a layered spec; a parameter's `push`.
+- Maps in a facet (`row` / `column` / `facet`, or a facet operator): vega-lite 6.4.3 fits the projection to
+  `data("child_main")`, a dataset it never defines, so there is no output to match. Longitude / latitude
+  positions on marks other than point, circle, square, text, line, trail and rule; a half pair
+  (only `longitude`); the `sequence` data generator.
+- Animation outside the one shape vega-lite 6.4.3 compiles to working output: a `time` channel needs a single
+  top-level unit with exactly one timer selection and the `{filter: {param}}` transform (without them vega-lite
+  emits marks that read a dataset it never defines); layers, concats, facets, composite marks
+  (boxplot / errorbar / errorband) and point / line overlays are refused, as are other keys on the `time`
+  definition and `bind` / `value` on the timer selection.
 - Data-driven channels without a scale / legend implementation yet: `strokeDash`, `angle`,
   `fillOpacity`, `strokeOpacity` (constants and conditions work); `key`.
 - Bins and time units: `bin: "binned"` / `binned: true` (pre-binned data), `timeUnit.maxbins`,

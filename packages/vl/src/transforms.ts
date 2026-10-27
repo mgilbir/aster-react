@@ -8,15 +8,26 @@
  * injection) cannot reach back into the caller's spec or into a sibling.
  */
 import { pushAll, genSignal, safeKey, splitAccessPath, VLCompileError, datumPathRef } from './names.js'
-import { predicateExpr } from './predicate.js'
+import { predicateExpr, paramLeaves } from './predicate.js'
 import { getTimeUnitParts, normalizeTimeUnit, timeUnitTransform } from './timeunit.js'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
 
+export interface ParamTest {
+  param: string
+  empty?: boolean
+}
+
 export interface TransformContext {
   /** Register (or find) a Vega dataset for a lookup source; returns its name. */
   addLookupSource(def: Obj): string
+  /** The expression testing `datum` against a param (a selection, or a variable parameter coerced to boolean). */
+  selectionTest?(pred: ParamTest): string
+  /** The time-unit transforms a selection over a time-unit field needs in the pipeline that tests it. */
+  selectionTimeUnits?(param: string): Array<{ as: string; field: string; timeUnit: unknown }>
+  /** The dataset a lookup `from: {param}` reads: the selection's unit data, filtered by the selection. */
+  addSelectionLookup?(param: string): string
 }
 
 // --- bin ---------------------------------------------------------------------
@@ -128,6 +139,8 @@ const PARSE_FN: Record<Parse, string> = { number: 'toNumber', string: 'toString'
 export interface TranslateState {
   /** field -> how it was parsed (or 'derived'); mirrors vega-lite's ancestorParse. */
   parsed: Map<string, Parse | 'derived'>
+  /** the unit has a selection that projects `_vgsid_`: an aggregate is followed by an identifier transform */
+  requiresSelectionId?: boolean
 }
 
 /** Translate one VL transform. Returns the Vega transforms it expands to. */
@@ -161,7 +174,17 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
         }
       }
     }
-    out.push({ type: 'filter', expr: predicateExpr(t.filter) })
+    // a selection over a time-unit field filters rows by that unit: the unit's transform is put in front of the
+    // filter unless this pipeline already derived it (vega-lite TimeUnitNode.insertAsParentOf + RemoveDuplicateTimeUnits)
+    for (const leaf of paramLeaves(t.filter)) {
+      for (const tu of ctx.selectionTimeUnits?.(leaf.param) ?? []) {
+        if (st.parsed.get(tu.as) === 'derived') continue
+        parseFirst(tu.field, 'date')
+        out.push(timeUnitTransform(normalizeTimeUnit(tu.timeUnit), tu.field, tu.as))
+        derived([tu.as, `${tu.as}_end`])
+      }
+    }
+    out.push({ type: 'filter', expr: predicateExpr(t.filter, ctx.selectionTest) })
   } else if (t.bin !== undefined && t.field !== undefined) {
     const field = t.field as string
     const as = t.as as string | string[]
@@ -190,6 +213,7 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
       as.push((d.as as string | undefined) ?? defaultAs(d))
     }
     out.push({ type: 'aggregate', groupby: copyArr((t.groupby as string[] | undefined) ?? []), ops, fields, as })
+    if (st.requiresSelectionId) out.push({ type: 'identifier', as: '_vgsid_' })
     derived(as)
   } else if (t.joinaggregate !== undefined) {
     const ops: string[] = []
@@ -310,15 +334,19 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
     derived([impute])
   } else if (t.lookup !== undefined) {
     const from = t.from as Obj
-    const source = ctx.addLookupSource(from.data as Obj)
+    const isParam = typeof from.param === 'string'
+    if (isParam && ctx.addSelectionLookup === undefined) throw new VLCompileError('a lookup from a selection is not available here')
+    const source = isParam ? ctx.addSelectionLookup!(from.param as string) : ctx.addLookupSource(from.data as Obj)
     const lt: Obj = { type: 'lookup', from: source, key: from.key, fields: [t.lookup] }
     if (Array.isArray(from.fields)) {
       lt.values = [...(from.fields as string[])]
       if (t.as !== undefined) lt.as = Array.isArray(t.as) ? [...(t.as as string[])] : [t.as]
     } else {
       // no fields: the whole record is nested under `as`
-      if (typeof t.as !== 'string') throw new VLCompileError('a lookup without `from.fields` needs `as` (a string) to name the nested record')
-      lt.as = [t.as]
+      // (a lookup from a selection is named after the selection when `as` is absent)
+      const asName = t.as ?? (isParam ? from.param : undefined)
+      if (typeof asName !== 'string') throw new VLCompileError('a lookup without `from.fields` needs `as` (a string) to name the nested record')
+      lt.as = [asName]
     }
     // vega-lite 6.4.3 forwards `default` only when truthy (a 0/''/false default is dropped upstream)
     if (t.default) lt.default = t.default

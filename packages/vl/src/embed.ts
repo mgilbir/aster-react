@@ -94,8 +94,8 @@ export function renameFragment(node: unknown, r: Renames): void {
   for (const [k, v] of Object.entries(node)) {
     if (k === 'signal' && typeof v === 'string') {
       node[k] = renameExpr(v, r)
-    } else if ((k === 'update' || k === 'init') && typeof v === 'string' && typeof node.name === 'string') {
-      // a signal definition's expression
+    } else if ((k === 'update' || k === 'init') && typeof v === 'string' && (typeof node.name === 'string' || node.events !== undefined)) {
+      // a signal definition's expression, or the update of one of its `on` handlers
       node[k] = renameExpr(v, r)
     } else if ((k === 'scale' || k === 'gridScale') && typeof v === 'string') {
       node[k] = r.scales.get(v) ?? v

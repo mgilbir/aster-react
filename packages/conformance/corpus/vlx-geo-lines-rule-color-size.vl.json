@@ -1,0 +1,79 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "width": 500,
+  "height": 300,
+  "projection": {
+    "type": "albersUsa"
+  },
+  "data": {
+    "values": [
+      {
+        "from": "Seattle",
+        "to": "Denver",
+        "lon": -122.33,
+        "lat": 47.61,
+        "lon2": -104.99,
+        "lat2": 39.74,
+        "n": 3,
+        "rank": 1
+      },
+      {
+        "from": "Denver",
+        "to": "Chicago",
+        "lon": -104.99,
+        "lat": 39.74,
+        "lon2": -87.63,
+        "lat2": 41.88,
+        "n": 5,
+        "rank": 2
+      },
+      {
+        "from": "Chicago",
+        "to": "Boston",
+        "lon": -87.63,
+        "lat": 41.88,
+        "lon2": -71.06,
+        "lat2": 42.36,
+        "n": 2,
+        "rank": 3
+      },
+      {
+        "from": "Austin",
+        "to": "Miami",
+        "lon": -97.74,
+        "lat": 30.27,
+        "lon2": -80.19,
+        "lat2": 25.76,
+        "n": 4,
+        "rank": 4
+      }
+    ]
+  },
+  "mark": "rule",
+  "encoding": {
+    "longitude": {
+      "field": "lon",
+      "type": "quantitative"
+    },
+    "latitude": {
+      "field": "lat",
+      "type": "quantitative"
+    },
+    "longitude2": {
+      "field": "lon2"
+    },
+    "latitude2": {
+      "field": "lat2"
+    },
+    "color": {
+      "field": "from",
+      "type": "nominal"
+    },
+    "strokeWidth": {
+      "field": "n",
+      "type": "quantitative"
+    }
+  }
+}

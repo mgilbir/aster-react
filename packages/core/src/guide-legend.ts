@@ -722,13 +722,17 @@ function buildSymbols(
 
   // the leaves: per entry (in paint order) its box, its symbol, its label, positions in the entry group's frame
   paintOrder.forEach((idx, j) => {
-    const { g, sym, lbl } = items[idx]!
+    const { e, g, sym, lbl } = items[idx]!
+    // (an item's datum is the entry it shows -- what `datum.value` reads in a legend's click handlers -- and a part the spec
+    // made `interactive` takes the pointer; the entry rows are transparent so the whole row does)
+    const entryDatum = { value: e.value, label: e.label, index: e.index }
     const eb = ebs[idx]!
     const at = pos[idx]!
     const colWc = colW[j % ncols] ?? 0
     // legendEntryLayout: the box is as wide as its column and as tall as its own bound
     const gb = host.groupBox({ ...(g as SceneItem) } as SceneItem, inp.raw ? 0 : colWc, inp.raw ? 0 : eb.y2)
-    const box = { ...gb.background, _part: 'entry', x: at.x, y: at.y } as SceneItem & Rec
+    const box = { ...gb.background, _part: 'entry', x: at.x, y: at.y, datum: entryDatum } as SceneItem & Rec
+    if (entriesEncode?.interactive === true) box._hit = true
     const ia = itemAriaOf(g)
     if (ia) box.itemAria = ia
     if (g.href != null) box.href = g.href
@@ -737,7 +741,10 @@ function buildSymbols(
     s.x = ((sym.x as number) || 0) + at.x
     s.y = ((sym.y as number) || 0) + at.y
     if (hasClip) (s as Rec)._clip = { x: at.x, y: at.y, w: colWc, h: eb.y2, corners: cornersOf(g) }
+    ;(s as Rec).datum = entryDatum
+    if (userEncode.symbols?.interactive === true && (s as Rec).fill === 'transparent') (s as Rec)._hit = true
     out.push(s)
+    lbl.datum = entryDatum
     lbl.x = ((lbl.x as number) || 0) + at.x
     lbl.y = ((lbl.y as number) || 0) + at.y
     out.push(lbl)
