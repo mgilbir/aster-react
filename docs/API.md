@@ -307,8 +307,9 @@ focusable elements; non-React hosts can do the same. The keyboard contract is in
   - `hooks.logger` — where bind-time errors (a malformed selector or expression: the handler is skipped) and run-time errors
     (an expression that throws while an event is handled: that event's delivery stops, earlier updates stand) are reported;
     default: the console. Nothing escapes the DOM listener.
-  - `hooks.preventDefault` — call `preventDefault()` on events of the chart's own surface (vega's `view.preventDefault()`,
-    default `false`; a `consume`d stream always prevents).
+  - `hooks.preventDefault` — vega's `view.preventDefault()` (default `false`): whether events of the chart's own surface are
+    prevented when `config.events.defaults` names neither `prevent` nor `allow`. The config decides first (vega's default is
+    `{allow: ['wheel']}`, so every listened view event but `wheel` is prevented); a `consume`d stream always prevents.
   - `{ pick }` — `(x, y) => HitTarget | null`, e.g. `buildHitIndex(scene).query`: resolves `event.item` (mark type, name, role,
     datum, enclosing group). Without it, or when it finds nothing, the item is read from the DOM (`data-datum` stamps and
     `mark-*`/`role-*` classes), where mark names are not available. `<Chart>` passes its own hit index.

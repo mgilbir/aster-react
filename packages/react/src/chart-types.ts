@@ -192,8 +192,9 @@ export interface ChartProps {
    */
   logger?: Logger
   /**
-   * Call `preventDefault()` on the events of `signal.on` streams from the chart's own surface
-   * (vega's `view.preventDefault()`, default false). A stream marked `consume` always prevents.
+   * vega's `view.preventDefault()` (default false): whether the events of `signal.on` streams from the chart's own
+   * surface are prevented when `config.events.defaults` names neither `prevent` nor `allow` (by default the config
+   * prevents all but `wheel`). A stream marked `consume` always prevents.
    */
   preventDefault?: boolean
   /** Host text measurement for custom fonts / non-browser engines. */
