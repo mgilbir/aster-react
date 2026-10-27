@@ -5,6 +5,7 @@ import {
   renderSceneToSvg,
   AsterLimitError,
   checkSvgLength,
+  resolveCursor,
   type A11yNode,
   type A11yOptions,
   type ChartInfo,
@@ -21,7 +22,7 @@ import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './se
 import { createChartSession, hasDenseSymbolMarks, patchSceneDom, renderSceneToDomElement } from '@aster/core/dom'
 import type { CanvasSceneSnapshot } from '@aster/core/canvas'
 import type { HitIndex } from '@aster/core/hit'
-import type { SignalBinding } from '@aster/core/signals'
+import type { CursorTracker, SignalBinding } from '@aster/core/signals'
 import type { CanvasCapability, InteractionCapability } from './capabilities.js'
 import type { ChartHandle, ChartProps, ChartStreamInput } from './chart-types.js'
 import {
@@ -1200,6 +1201,83 @@ function ChartView({
     if (tooltipEnabled) setTooltipInfo(null)
   }, [tooltipEnabled])
 
+  // --- the cursor (vega-view cursor.js) -------------------------------------
+  // The cursor the container shows is state, rendered through its `style` like any other style: the hovered item's `cursor`
+  // channel (read at each pointermove, so moving off the items resets it), or the spec's `cursor` signal, which wins
+  // unless it is 'default' (`resolveCursor`). The state is set only when the cursor changes, so pointermoves over the
+  // same item cost no render, and a re-render keeps it (the tracker, with the item it holds, outlives renders).
+  const userCursor = Object.hasOwn(mergedSignals, 'cursor')
+    ? mergedSignals.cursor
+    : (scene as { signalParams?: Record<string, unknown> } | null)?.signalParams?.cursor
+  const [cursor, setCursor] = React.useState<string | null>(() => resolveCursor(userCursor, null))
+  const cursorLiveRef = React.useRef({ user: userCursor, displayScene, hitIndexFor, interaction, eventConfig: undefined as unknown })
+  cursorLiveRef.current = {
+    user: userCursor, displayScene, hitIndexFor, interaction,
+    eventConfig: (scene as { compiled?: { eventConfig?: unknown } } | null)?.compiled?.eventConfig,
+  }
+  const cursorTrackerRef = React.useRef<CursorTracker | null>(null)
+  // The container's client origin and scale, measured at the first move after anything that can change it (a layout read per move is the
+  // cost of the cursor on a chart with item cursors): a commit, a resize, a scroll of the window or of any ancestor, the
+  // pointer entering the container.
+  const cursorRectRef = React.useRef<{ x: number; y: number; sx: number; sy: number } | null>(null)
+  const handleCursorMove = React.useCallback((e: { clientX: number; clientY: number }) => {
+    const live = cursorLiveRef.current
+    const cap = live.interaction
+    if (cap == null) return
+    if (cursorTrackerRef.current == null) {
+      cursorTrackerRef.current = cap.createCursorTracker({
+        // the point is the pointer's client position; the container is measured only if an item of the scene has a cursor
+        // to look for (otherwise the hit index is not even built, and a pointermove costs no layout read)
+        pick: (clientX, clientY) => {
+          const l = cursorLiveRef.current
+          if (l.displayScene == null || l.interaction == null || !l.interaction.sceneHasCursor(l.displayScene)) return null
+          const el = containerRef.current
+          if (!el) return null
+          // vega-scenegraph point(): the client position minus the element's rect and border; also divided by the scale of a
+          // transformed ancestor (the rect is in screen pixels, the scene in the element's own)
+          const m = (cursorRectRef.current ??= (() => {
+            const r = el.getBoundingClientRect()
+            const sx = el.offsetWidth > 0 && r.width > 0 ? r.width / el.offsetWidth : 1
+            const sy = el.offsetHeight > 0 && r.height > 0 ? r.height / el.offsetHeight : 1
+            return { x: r.left + (el.clientLeft || 0) * sx, y: r.top + (el.clientTop || 0) * sy, sx, sy }
+          })())
+          return l.hitIndexFor(l.displayScene)?.pick((clientX - m.x) / m.sx, (clientY - m.y) / m.sy) ?? null
+        },
+        user: () => cursorLiveRef.current.user,
+        onCursor: setCursor,
+        get eventConfig() { return cursorLiveRef.current.eventConfig as never },
+      })
+    }
+    cursorTrackerRef.current.move(e.clientX, e.clientY)
+  }, [])
+  // Only a chart with something to show listens: an item of the scene has a cursor, or a `cursor` signal exists. A native
+  // listener (the pointer moves hundreds of times a second; a synthetic event for each is not needed to read a point).
+  const watchCursor = interaction != null && displayScene != null && (interaction.sceneHasCursor(displayScene) || userCursor !== undefined)
+  React.useLayoutEffect(() => { cursorRectRef.current = null })
+  React.useEffect(() => {
+    const el = containerRef.current
+    if (!watchCursor || !el) return
+    const forget = (): void => { cursorRectRef.current = null }
+    el.addEventListener('pointermove', handleCursorMove, { passive: true })
+    el.addEventListener('pointerenter', forget, { passive: true })
+    window.addEventListener('scroll', forget, { capture: true, passive: true })
+    window.addEventListener('resize', forget, { passive: true })
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(forget) : null
+    ro?.observe(el)
+    return () => {
+      el.removeEventListener('pointermove', handleCursorMove)
+      el.removeEventListener('pointerenter', forget)
+      window.removeEventListener('scroll', forget, { capture: true })
+      window.removeEventListener('resize', forget)
+      ro?.disconnect()
+    }
+  }, [watchCursor, handleCursorMove, scene === null])
+  // the spec's `cursor` signal changed (vega: its operator re-runs)
+  React.useLayoutEffect(() => {
+    if (cursorTrackerRef.current) cursorTrackerRef.current.refresh()
+    else setCursor(resolveCursor(userCursor, null))
+  }, [userCursor])
+
   // Persisted selection rectangle: the legacy `brush` prop, else the interval
   // of the (controlled or internal) selection value.
   const persistedInterval = brush ?? selectValueToInterval(selectionValue)
@@ -1254,9 +1332,14 @@ function ChartView({
   // positioned ancestor even on a non-interactive chart. Without this the
   // tooltip positions against <body> and lands off-screen after scrolling.
   const needsPositioning = hasInteraction || tooltipEnabled || a11yTree != null
-  const outerStyle: React.CSSProperties = needsPositioning
+  const baseStyle: React.CSSProperties = needsPositioning
     ? { ...style, position: 'relative', width: '100%', height: '100%', ...(panZoomEnabled ? { touchAction: 'none' } : {}) }
     : { width: '100%', height: '100%', ...style }
+  // vega shows 'default' where no item and no spec signal says otherwise; a host's own `style.cursor` takes that place, but
+  // not the cursor of an item or of the spec's `cursor` signal, which is the chart saying what is under the pointer
+  const outerStyle: React.CSSProperties = cursor === null ? baseStyle
+    : cursor === 'default' ? { cursor, ...baseStyle }
+    : { ...baseStyle, cursor }
 
   const role = a11yTree ? (ariaLabel ? 'group' : undefined) : ariaLabel ? 'img' : undefined
   // The rendered SVG sits inside the scene padding; guide/mark boxes from the

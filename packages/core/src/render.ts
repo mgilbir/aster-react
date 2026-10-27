@@ -2110,7 +2110,7 @@ function markClipId(group: SceneGroup, clips: ClipCollector, frameW: number, fra
 }
 
 /** A mark that is not interactive: its container (and a group item's background / foreground) say `pointer-events="none"`. */
-const isInert = (group: SceneGroup): boolean => group.interactive === false || ((group.role === 'title-text' || group.role === 'title-subtitle') && group.interactive !== true)
+export const isInert = (group: SceneGroup): boolean => group.interactive === false || ((group.role === 'title-text' || group.role === 'title-subtitle') && group.interactive !== true)
 
 /**
  * The container `<g>` of a data mark, or false when the type renders nothing. `scope` is only read for a guide's own

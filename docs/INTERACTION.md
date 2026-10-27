@@ -302,6 +302,18 @@ hidden) at the cursor. `renderTooltip(datum)` replaces the content inside the ch
 itself. Both SVG (the `data-datum` attributes) and canvas and batched dense marks (the hit index) resolve the hovered
 mark. Tooltips are off by default.
 
+## Cursor
+
+The chart's container shows the mouse cursor Vega's view shows (`vega-view` `cursor.js`): the `cursor` channel of the item
+under the pointer (a mark's `encode.update.cursor`, which is also how a Vega-Lite selection bound to a legend makes its
+symbols, labels and entries `pointer`), or, when the spec has a signal named `cursor` (or the host passes one in `signals`),
+that signal's value unless it is `'default'`. Moving off the items resets it; with nothing to show the container says
+`cursor: default`, as Vega does. The cursor is React state rendered through the container's `style` (a re-render keeps it,
+a pointermove over the same item renders nothing); a `style.cursor` of the host is shown where the chart says `default`.
+Item cursors need hit testing (`<Chart>`, or `<SvgChart interaction={interaction}>`), on the SVG and the canvas renderer;
+the `cursor` signal works in every variant. Not supported: `config.events.globalCursor` (Vega then writes `document.body`;
+a chart does not style the page).
+
 ## Accessibility
 
 The rendered SVG itself carries Vega's accessibility structure: axes, legends and titles are `role-axis` / `role-legend` / `role-title` containers with `role="graphics-symbol"`, `aria-roledescription` and a caption `aria-label`, data marks have their container and item labels (`aria: false` hides them), and the conformance gate compares this structure with real Vega's. The focusable overlay below is separate and shares the same captions.

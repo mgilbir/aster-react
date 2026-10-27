@@ -1798,6 +1798,7 @@ function buildTitleGroup(
     ...(built.partMeta.group?.name ? { cssName: built.partMeta.group.name } : {}),
     ...(built.partMeta.group?.interactive ? { interactive: true } : {}),
     ...(itemAriaOf(g) ? { itemAria: itemAriaOf(g) } : {}),
+    ...(cursorOf(g) !== undefined ? { cursor: cursorOf(g) } : {}),
     ...(g.href != null ? { href: g.href } : {}),
   } as unknown as SceneGroup
   vetGuideLinks(out, ctx)
@@ -3982,6 +3983,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       markIndex: markIdOf(mark),
       ...markContainerInfo(mark),
       ...(itemAria !== undefined ? { itemAria } : {}),
+      ...(cursorOf(geo) !== undefined ? { cursor: cursorOf(geo) } : {}),
       ...(href != null ? { href: href as string } : {}),
       ...(markClip(mark, ctx) ? { markClip: true } : {}),
     } as unknown as SceneGroup
@@ -4003,6 +4005,12 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       else ctx.datasets.delete(src.facetName)
     }
   }
+}
+
+/** A group item's own `cursor` channel (vega: `item.cursor`, what the pointer shows over the group), when it is a name. */
+function cursorOf(item: object): string | undefined {
+  const c = (item as { cursor?: unknown }).cursor
+  return typeof c === 'string' && c !== '' ? c : undefined
 }
 
 /** The layout options of a group mark / the view: signals resolved (vega scope.objectProperty). */
@@ -4568,6 +4576,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     // what the legend layout reads off the group item
     legendProps: { orient: g.orient, offset: g.offset, x: g.x, y: g.y },
     ...(g.strokeWidth !== undefined ? { strokeWidth: g.strokeWidth } : {}),
+    ...(cursorOf(g) !== undefined ? { cursor: cursorOf(g) } : {}),
     ...(g.href != null ? { href: g.href } : {}),
   } as unknown as SceneGroup
   vetGuideLinks(group, ctx)
@@ -4866,6 +4875,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
     partMeta: built.partMeta,
     ...(built.partMeta.axis?.name ? { cssName: built.partMeta.axis.name } : {}),
     ...(itemAriaOf(built.group) ? { itemAria: itemAriaOf(built.group) } : {}),
+    ...(cursorOf(built.group) !== undefined ? { cursor: cursorOf(built.group) } : {}),
     axis: { orient, itemOrient: typeof g.orient === 'string' ? g.orient : orient, range: axisRangeSpan, baseline: 0, translate: ctx.rawGuides ? 0 : (typeof g.translate === 'number' ? g.translate : 0.5), position, bounds: built.bounds, ...(knownOrient ? {} : { noLayout: true }) },
     ...(href != null ? { href } : {}),
   } as unknown as SceneGroup

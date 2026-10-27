@@ -174,9 +174,10 @@ export interface CompiledChart {
   lineBreak?: unknown
   /**
    * `config.events` (vega's `eventConfig`, defaults merged: `{defaults: {allow: ['wheel']}}`): which events of the
-   * `view` source get `preventDefault()` (see `signals.ts`).
+   * `view` source get `preventDefault()` (see `signals.ts`); `view` (false, or a list / set of event types) blocks the
+   * view's event listeners that are not named.
    */
-  eventConfig?: { defaults?: { prevent?: unknown; allow?: unknown } }
+  eventConfig?: { defaults?: { prevent?: unknown; allow?: unknown }; view?: unknown }
   /** Top-level chart title (string or object form, defaults merged from config.title). */
   title?: CompiledTitle
   /** Cartographic projections referenced by geo marks / the geoshape transform. */
