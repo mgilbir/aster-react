@@ -27,23 +27,74 @@ describe('buildHitIndex', () => {
     expect(index.query(-5, 5)).toBeNull()
   })
 
-  it('picks a group item that has a fill or a stroke where no mark inside it is hit (vega\'s group pick), but never as a data mark', () => {
+  it('picks a group item where its painted box is -- the fill inside it, the stroke along it -- and no mark inside is hit (vega\'s group pick), but never as a data mark', () => {
     const cell = (x: number, extra: Record<string, unknown>): Record<string, unknown> => ({
       marktype: 'group', role: 'scope', _scope: true, x, y: 0, width: 50, height: 50, datum: { c: 'cell' }, ...extra,
       items: [{ marktype: 'symbol', items: [{ x: 25, y: 25, size: 100, fill: '#4c78a8', datum: { v: 1 } }] }],
     })
-    const scene = { width: 120, height: 60, items: [cell(0, { stroke: '#ddd' }), cell(60, {}), cell(120, { fill: '#eee', interactive: false })] } as unknown as SceneRoot
+    const scene = { width: 180, height: 60, items: [cell(0, { stroke: '#ddd' }), cell(60, {}), cell(120, { fill: '#eee', interactive: false }), cell(180, { fill: '#eee' })] } as unknown as SceneRoot
     const index = buildHitIndex(scene)
-    // empty area of the cell with a stroke: the cell; of the one with neither: nothing; of a non-interactive one: nothing
-    expect(index.query(5, 5)?.marktype).toBe('group')
-    expect(index.query(5, 5)?.item).toBe(scene.items[0])
+    // a cell with a stroke and no fill: the stroke along its edge (half a stroke width outside the box too), not the inside
+    expect(index.query(0.2, 25)?.marktype).toBe('group')
+    expect(index.query(0.2, 25)?.item).toBe(scene.items[0])
+    expect(index.query(50.4, 25)?.item).toBe(scene.items[0])
+    expect(index.query(51, 25)).toBeNull()
+    expect(index.query(5, 5)).toBeNull()
+    // of the one with neither: nothing; of a non-interactive one: nothing
     expect(index.query(65, 5)).toBeNull()
     expect(index.query(125, 5)).toBeNull()
+    // a cell with a fill: its whole box
+    expect(index.query(185, 5)?.item).toBe(scene.items[3])
     // a mark inside the cell is picked over the cell
     expect(index.query(25, 25)?.item.datum).toEqual({ v: 1 })
     // the cell is no data mark (a tooltip or a click handler must not take it for one), and it is no indexed mark item
-    expect(index.queryMark(5, 5)).toBeNull()
-    expect(index.size()).toBe(3)
+    expect(index.queryMark(0.2, 25)).toBeNull()
+    expect(index.queryMark(185, 5)).toBeNull()
+    expect(index.size()).toBe(4)
+  })
+
+  it('does not pick a mark that is not interactive, nor the guide parts that are not (their SVG containers say pointer-events none)', () => {
+    const scene = {
+      width: 100, height: 100,
+      items: [
+        { marktype: 'symbol', interactive: false, items: [{ x: 10, y: 10, size: 100, fill: '#4c78a8', datum: { v: 'inert' } }] },
+        { marktype: 'symbol', items: [{ x: 50, y: 10, size: 100, fill: '#4c78a8', datum: { v: 'live' } }] },
+        { marktype: 'group', role: 'axis', partMeta: { label: { interactive: false }, tick: { interactive: true } }, items: [
+          { _part: 'label', text: 'a', x: 10, y: 60, fill: '#000', fontSize: 10 },
+          { _part: 'tick', shape: 'circle', radius: 3, x: 50, y: 60 },
+        ] },
+      ],
+    } as unknown as SceneRoot
+    const index = buildHitIndex(scene)
+    expect(index.query(10, 10)).toBeNull()
+    expect(index.query(50, 10)?.item.datum).toEqual({ v: 'live' })
+    expect(index.query(10, 60)).toBeNull()
+    expect(index.query(50, 60)?.item._part).toBe('tick')
+  })
+
+  it('picks a rect along its stroke -- half a stroke width outside its box -- and a rect with no fill only there', () => {
+    const scene = {
+      width: 200, height: 100,
+      items: [{
+        marktype: 'rect',
+        items: [
+          { x: 10, y: 10, width: 40, height: 40, fill: '#333', stroke: '#fff', strokeWidth: 4, datum: { r: 'filled' } },
+          { x: 100, y: 10, width: 40, height: 40, stroke: '#000', strokeWidth: 4, datum: { r: 'hollow' } },
+        ],
+      }],
+    } as unknown as SceneRoot
+    const index = buildHitIndex(scene)
+    // the fill and 2px of stroke outside the box, but no further
+    expect(index.query(30, 30)?.item.datum).toEqual({ r: 'filled' })
+    expect(index.query(8.5, 30)?.item.datum).toEqual({ r: 'filled' })
+    expect(index.query(7.5, 30)).toBeNull()
+    expect(index.query(52.5, 30)).toBeNull()
+    expect(index.query(51.5, 30)?.item.datum).toEqual({ r: 'filled' })
+    // no fill: the stroke ring only, not the inside
+    expect(index.query(101, 30)?.item.datum).toEqual({ r: 'hollow' })
+    expect(index.query(120, 30)).toBeNull()
+    expect(index.query(98.5, 30)?.item.datum).toEqual({ r: 'hollow' })
+    expect(index.query(97.5, 30)).toBeNull()
   })
 
   it('resolves symbols within radius + slack', () => {
