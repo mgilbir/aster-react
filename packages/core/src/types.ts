@@ -163,6 +163,11 @@ export interface CompiledChart {
   style?: Record<string, Record<string, unknown>>
   /** `config.lineBreak` (applied to every text mark that does not encode its own). */
   lineBreak?: unknown
+  /**
+   * `config.events` (vega's `eventConfig`, defaults merged: `{defaults: {allow: ['wheel']}}`): which events of the
+   * `view` source get `preventDefault()` (see `signals.ts`).
+   */
+  eventConfig?: { defaults?: { prevent?: unknown; allow?: unknown } }
   /** Top-level chart title (string or object form, defaults merged from config.title). */
   title?: CompiledTitle
   /** Cartographic projections referenced by geo marks / the geoshape transform. */
