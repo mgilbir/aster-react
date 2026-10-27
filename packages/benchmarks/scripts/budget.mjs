@@ -45,8 +45,11 @@ import { fileURLToPath } from 'node:url'
 // (+0.6), SvgChart + interaction 159.1 (+1.1): the timer port, the fit-projection registry and unrounded geoshape bounds
 // in core; Chart + VL 240.0 (+8.8): the maps (projections, geojson / geopoint data, geoshape marks) and animation (the time
 // channel's scale, frame dataset and the timer selection) compile in @aster/vl.
+// Runtime parity (guides built from ports of vega-parser's guide encoders, shared immutable plans, per-scope abort model,
+// legend part metadata) on top of the above, measured 2026-10-27 (kB gzip): core 133.8 (+8.5 over 125.3; the guide ports),
+// useChart 137.7, Chart 172.4, SvgChart 153.0, SvgChart + interaction 166.2, Chart + VL 247.4. Marginal rows unchanged.
 const BUDGETS = {
-  '@aster/core': 126.8 * 1024,
+  '@aster/core': 134.3 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
   '+ @aster/core/canvas': 5.3 * 1024,
   '+ @aster/core/hit': 5.5 * 1024,
@@ -54,13 +57,13 @@ const BUDGETS = {
   '+ @aster/core/load': 5.6 * 1024,
   '+ @aster/core/geo': 12.8 * 1024,
   '+ @aster/core/transforms': 15.6 * 1024,
-  '@aster/react useChart': 130.3 * 1024,
-  '@aster/react Chart': 165.3 * 1024,
+  '@aster/react useChart': 138.2 * 1024,
+  '@aster/react Chart': 172.9 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 146.4 * 1024,
-  '@aster/react SvgChart + interaction': 159.6 * 1024,
+  '@aster/react SvgChart': 153.5 * 1024,
+  '@aster/react SvgChart + interaction': 166.7 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 240.5 * 1024,
+  '@aster/react Chart + VL': 247.9 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
