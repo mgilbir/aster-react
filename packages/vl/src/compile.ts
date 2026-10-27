@@ -20,7 +20,7 @@ import { normalizeComposites } from './composite.js'
 import { timeScaleRange } from './animation.js'
 import { isTimerSelection } from './selection.js'
 import { ASSEMBLED_FROM, GEO_POSITION_CHANNELS, assembleProjection, finalProjectionName, geoDataTransforms, geoshapeTransform, hasProjection, mergeLayerProjections, parseUnitProjection, renameComponentSignals, type GeoUnit, type ProjectionComponent, type UnitGeo } from './geo.js'
-import { scaleConfigOf, discreteStep, sizeRange, countRange, discreteCount, usesUnaggregatedDomain, type ScaleCfg } from './scaleconfig.js'
+import { scaleConfigOf, discreteStep, viewContinuousSize, viewDiscreteSize, sizeRange, countRange, discreteCount, usesUnaggregatedDomain, type ScaleCfg } from './scaleconfig.js'
 import { getTimeUnitParts, normalizeTimeUnit, timeUnitFieldName, timeUnitTransform, type NormalTimeUnit } from './timeunit.js'
 import { binNames, binTransforms, normalizeBin, translateTransforms, type BinParams, type TransformContext, type TranslateState } from './transforms.js'
 
@@ -410,11 +410,34 @@ function collectLeaves(root: VLSpec): VLSpec[] {
 }
 
 /** A width/height spec: a fixed size, a {step} request, "container" or unspecified. */
-function sizeSpec(v: unknown): { fixed?: number; step?: number; container?: boolean } {
+interface SizeReq { fixed?: number; step?: number; stepFor?: 'position' | 'offset'; container?: boolean }
+function sizeSpec(v: unknown): SizeReq {
   if (v === 'container') return { container: true }
   if (typeof v === 'number') return { fixed: v }
-  if (isObject(v) && typeof v.step === 'number') return { step: v.step }
+  if (isObject(v) && typeof v.step === 'number') return { step: v.step, ...(v.for === 'position' || v.for === 'offset' ? { stepFor: v.for } : {}) }
   return {}
+}
+
+/**
+ * How a view is sized along one dimension: vega-lite `layoutsize/parse.ts defaultUnitSize` over the spec's own
+ * width / height. `scaleType` is the type of the x / y scale (undefined: the view has none, a 1D view);
+ * `continuousDefault` is the geoshape / projection / arc rule (they take the continuous size).
+ */
+type ViewSize = { step: number } | { fixed: number } | { container: true }
+function sizePlan(spec: VLSpec, sizeType: 'width' | 'height', req: SizeReq, scaleType: string | undefined, continuousDefault: boolean): ViewSize {
+  if (req.container) return { container: true }
+  const discreteScale = scaleType === 'band' || scaleType === 'point'
+  if (req.step !== undefined && discreteScale) return { step: req.step }
+  if (req.fixed !== undefined) return { fixed: req.fixed }
+  if (scaleType === undefined && !continuousDefault) {
+    const d = viewDiscreteSize(spec, sizeType)
+    return { fixed: typeof d === 'number' ? d : d.step }
+  }
+  if (discreteScale) {
+    const d = viewDiscreteSize(spec, sizeType)
+    return typeof d === 'number' ? { fixed: d } : { step: d.step }
+  }
+  return { fixed: viewContinuousSize(spec, sizeType) }
 }
 
 /**
@@ -559,8 +582,8 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const perLayerScales: ScaleSpec[][] = []
   const perLayerMarks: Record<string, unknown>[][] = []
   // size scales/domains need sizes only through signals, resolved after merging
-  const width: unknown = wSpec.fixed ?? 300
-  const height: unknown = hSpec.fixed ?? 300
+  const width: unknown = wSpec.fixed ?? viewContinuousSize(spec, 'width')
+  const height: unknown = hSpec.fixed ?? viewContinuousSize(spec, 'height')
   parsed.forEach((p, i) => {
     const g = groups[p.group]!
     let rawName: string
@@ -754,21 +777,23 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // discrete-dimension sizing (after the scales are merged): the scale spans
   // steps and the view size is a signal over the domain cardinality
   const sizeSignals: Record<string, unknown>[] = []
-  for (const [channel, fixed, stepReq, isContainer] of [['x', wSpec.fixed, wSpec.step, wSpec.container], ['y', hSpec.fixed, hSpec.step, hSpec.container]] as const) {
-    if (fixed !== undefined || isContainer) continue
+  const layerContinuous = parsed.some((p) => p.mark === 'arc' || hasProjection(p.mark, isObject(p.l.encoding) ? (p.l.encoding as Record<string, unknown>) : {}))
+  const layerPlans = (['x', 'y'] as const).map((channel) => {
     const sc = scales.find((s) => s.name === channel)
-    if (!sc || (sc.type !== 'band' && sc.type !== 'point')) continue
-    pushAll(sizeSignals, stepSignals(channel, sc, stepReq))
-  }
-  const xStepped = sizeSignals.some((s) => s.name === 'width')
-  const yStepped = sizeSignals.some((s) => s.name === 'height')
+    const req = channel === 'x' ? wSpec : hSpec
+    const plan = sizePlan(spec, channel === 'x' ? 'width' : 'height', req, sc ? String(sc.type) : undefined, layerContinuous)
+    if ('step' in plan) pushAll(sizeSignals, stepSignals(channel, scales as ScaleSpec[], plan.step, req.stepFor))
+    return plan
+  })
+  const xStepped = 'step' in layerPlans[0]!
+  const yStepped = 'step' in layerPlans[1]!
   const container = containerSizing(spec, wSpec, hSpec)
   if (container) {
     out.autosize = container.autosize
     sizeSignals.splice(0, 0, ...container.signals)
   }
-  if (!xStepped && !wSpec.container) out.width = width
-  if (!yStepped && !hSpec.container) out.height = height
+  if (!xStepped && !wSpec.container) out.width = 'fixed' in layerPlans[0]! ? layerPlans[0].fixed : width
+  if (!yStepped && !hSpec.container) out.height = 'fixed' in layerPlans[1]! ? layerPlans[1].fixed : height
   if (sizeSignals.length) out.signals = sizeSignals
 
   const legends: Record<string, unknown>[] = []
@@ -805,6 +830,8 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
  * A point-positioned mark (line, point, text, trail, area) layered over a bar shares the bar's
  * BAND scale: it must sit at the band's centre (`band: 0.5`) rather than its start.
  */
+const OFFSET_POINT_MARKS = new Set(['point', 'circle', 'square', 'text', 'line', 'area', 'trail', 'rule'])
+
 function centerPointMarksOnBands(marks: Record<string, unknown>[], scales: ScaleSpec[]): void {
   const bandScales = new Set(scales.filter((s) => s.type === 'band').map((s) => s.name))
   if (!bandScales.size) return
@@ -814,7 +841,7 @@ function centerPointMarksOnBands(marks: Record<string, unknown>[], scales: Scale
       const upd = (m.encode as { update?: Record<string, unknown> } | undefined)?.update
       for (const k of ['x', 'y']) {
         const ref = upd?.[k] as Record<string, unknown> | undefined
-        if (ref && typeof ref.scale === 'string' && bandScales.has(ref.scale) && ref.band === undefined && ref.field !== undefined) ref.band = 0.5
+        if (ref && typeof ref.scale === 'string' && bandScales.has(ref.scale) && ref.band === undefined && ref.field !== undefined && !(isObject(ref.offset) && typeof ref.offset.scale === 'string' && ref.offset.scale === `${k}Offset`)) ref.band = 0.5
       }
     }
     for (const sub of (m.marks as Record<string, unknown>[] | undefined) ?? []) visit(sub)
@@ -860,13 +887,28 @@ function uniquifyLayerMarks(marks: Record<string, unknown>[], layerIndex: number
 }
 
 /** The step-form size signals of a discrete scale: `<ch>_step` plus the size signal over the domain cardinality. */
-function stepSignals(channel: 'x' | 'y', sc: ScaleSpec, stepReq?: number): Record<string, unknown>[] {
+function stepSignals(channel: 'x' | 'y', scales: ScaleSpec[], step: number, stepForReq?: 'position' | 'offset'): Record<string, unknown>[] {
+  const sc = scales.find((s) => s.name === channel)
+  if (!sc) return []
   const stepName = `${channel}_step`
   sc.range = { step: { signal: stepName } }
   const pi = (sc.paddingInner as number) ?? (sc.padding as number) ?? 0
   const po = (sc.paddingOuter as number) ?? (sc.padding as number) ?? 0
+  // scale/range.ts getPositionStep / getOffsetStep: with a discrete offset channel the step is the offset's
+  // (`for: "offset"`, the default), so the position scale takes step x (offset cardinality) / (1 - paddingInner)
+  const offsetName = `${channel}Offset`
+  const offset = scales.find((s) => s.name === offsetName)
+  const offsetDiscrete = offset !== undefined && (offset.type === 'band' || offset.type === 'point')
+  const stepFor = offsetDiscrete ? (stepForReq ?? 'offset') : 'position'
+  let stepSignal: Record<string, unknown> = { name: stepName, value: step }
+  if (stepFor === 'offset' && offset) {
+    let count = `domain('${offsetName}').length`
+    if (offset.type === 'band') count = `bandspace(${count}, ${(offset.paddingInner as number) ?? (offset.padding as number) ?? 0}, ${(offset.paddingOuter as number) ?? (offset.padding as number) ?? 0})`
+    stepSignal = { name: stepName, update: `${step} * ${count} / (1-${pi})` }
+    if (sc.type === 'band') offset.range = { step }
+  }
   return [
-    { name: stepName, value: stepReq ?? 20 },
+    stepSignal,
     { name: channel === 'x' ? 'width' : 'height', update: `bandspace(domain('${channel}').length, ${pi}, ${po}) * ${stepName}` },
   ]
 }
@@ -5399,6 +5441,18 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   if (xOff !== undefined) for (const ch of ['x', 'x2', 'xc']) withOffset(ch, xOff)
   // a rule's baseline endpoint stays at zero; only its value endpoint shifts
   if (yOff !== undefined) for (const ch of mark === 'rule' ? ['y', 'yc'] : ['y', 'y2', 'yc']) withOffset(ch, yOff)
+  // an xOffset / yOffset CHANNEL on a point-positioned mark (compile/mark/encode/offset.ts positionOffset): the position is
+  // offset by the offset scale's value, centred in its band, and sits at the start of its own band (bandPosition 0). Bars and
+  // rects lay their offset out through the band geometry above.
+  if (OFFSET_POINT_MARKS.has(mark)) {
+    for (const [pos, offCh] of [['x', 'xOffset'], ['y', 'yOffset']] as const) {
+      const offDef = fields.find((f) => f.channel === offCh && f.field)
+      const ref = (update[pos] ?? update[`${pos}c`]) as Record<string, unknown> | undefined
+      if (!offDef || !ref || ref.scale !== pos || ref.field === undefined) continue
+      delete ref.band
+      ref.offset = { scale: offCh, field: aggFieldName(offDef), ...(isDiscreteType(offDef.type) ? { band: 0.5 } : {}) }
+    }
+  }
   // arc polar offsets apply to the angles/radius channels
   const thetaOff = markDefP?.thetaOffset as number | undefined
   if (thetaOff !== undefined) {
@@ -6225,10 +6279,13 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const yDefS = fields.find((f) => f.channel === 'y')
   const wSpec = sizeSpec(spec.width)
   const hSpec = sizeSpec(spec.height)
-  const xStepForm = xDefS != null && ['band', 'point'].includes(positionalScaleType(mark, xDefS)) && wSpec.fixed === undefined && !wSpec.container
-  const yStepForm = yDefS != null && ['band', 'point'].includes(positionalScaleType(mark, yDefS)) && hSpec.fixed === undefined && !hSpec.container
-  const width: unknown = wSpec.fixed ?? (xStepForm ? 0 : 300)
-  const height: unknown = hSpec.fixed ?? (yStepForm ? 0 : 300)
+  const continuousDefault = mark === 'arc' || hasProjection(mark, encoding)
+  const wPlan = sizePlan(spec, 'width', wSpec, xDefS != null ? positionalScaleType(mark, xDefS) : undefined, continuousDefault)
+  const hPlan = sizePlan(spec, 'height', hSpec, yDefS != null ? positionalScaleType(mark, yDefS) : undefined, continuousDefault)
+  const xStepForm = 'step' in wPlan
+  const yStepForm = 'step' in hPlan
+  const width: unknown = 'fixed' in wPlan ? wPlan.fixed : 0
+  const height: unknown = 'fixed' in hPlan ? hPlan.fixed : 0
 
   const out: Record<string, unknown> = {}
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
@@ -6285,11 +6342,9 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // discrete-dimension sizing: the scale spans steps and the view size is a
   // signal over the domain cardinality
   const sizeSignals: Record<string, unknown>[] = []
-  for (const [channel, defS, stepForm, stepReq] of [['x', xDefS, xStepForm, wSpec.step], ['y', yDefS, yStepForm, hSpec.step]] as const) {
-    if (!stepForm || !defS) continue
-    const sc = (out.scales as ScaleSpec[]).find((s) => s.name === channel)
-    if (!sc) continue
-    pushAll(sizeSignals, stepSignals(channel, sc, stepReq))
+  for (const [channel, defS, plan, req] of [['x', xDefS, wPlan, wSpec], ['y', yDefS, hPlan, hSpec]] as const) {
+    if (!('step' in plan) || !defS) continue
+    pushAll(sizeSignals, stepSignals(channel, out.scales as ScaleSpec[], plan.step, req.stepFor))
   }
   if (unitContainer) sizeSignals.splice(0, 0, ...unitContainer.signals)
   if (sizeSignals.length) out.signals = sizeSignals

@@ -338,7 +338,8 @@ function validateSize(spec: Obj, at: (k: string) => string, containerOk: boolean
     const v = spec[k]
     if (v === undefined) continue
     if (typeof v === 'number' && Number.isFinite(v) && v >= 0) continue
-    if (isObj(v) && Object.keys(v).length === 1 && typeof v.step === 'number' && v.step > 0) continue
+    // (vega-lite `Step`: {step, for?: "position" | "offset"})
+    if (isObj(v) && typeof v.step === 'number' && v.step > 0 && Object.keys(v).every((x) => x === 'step' || (x === 'for' && (v.for === 'position' || v.for === 'offset')))) continue
     if (v === 'container') {
       if (containerOk) continue
       fail(at(k), `${k}: "container" is only supported on a top-level unit or layer view; give a number or {"step": n}`)

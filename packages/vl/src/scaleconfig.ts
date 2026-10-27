@@ -30,10 +30,33 @@ export function scaleConfigOf(spec: { config?: unknown }): ScaleCfg {
   return { ...DEFAULT_SCALE_CONFIG, ...(c?.scale && typeof c.scale === 'object' ? c.scale : {}) }
 }
 
-/** The discrete step vega-lite sizes marks against: the spec's `{step}` or the default 20. */
-export function discreteStep(spec: { width?: unknown; height?: unknown }, ch: 'width' | 'height'): number {
+const viewConfigOf = (spec: { config?: unknown }): Record<string, unknown> => {
+  const c = spec.config as { view?: unknown } | undefined
+  return c?.view !== null && typeof c?.view === 'object' ? (c.view as Record<string, unknown>) : {}
+}
+
+/** vega-lite `getViewConfigContinuousSize`: `config.view.width` / `continuousWidth` (default 300). */
+export function viewContinuousSize(spec: { config?: unknown }, ch: 'width' | 'height'): number {
+  const v = viewConfigOf(spec)
+  const size = v[ch] ?? v[ch === 'width' ? 'continuousWidth' : 'continuousHeight']
+  return typeof size === 'number' ? size : 300
+}
+
+/** vega-lite `getViewConfigDiscreteSize`: `config.view.width` / `discreteWidth`, else `{step: config.view.step}` (default 20). */
+export function viewDiscreteSize(spec: { config?: unknown }, ch: 'width' | 'height'): number | { step: number } {
+  const v = viewConfigOf(spec)
+  const size = v[ch] ?? v[ch === 'width' ? 'discreteWidth' : 'discreteHeight']
+  if (typeof size === 'number') return size
+  if (size !== null && typeof size === 'object' && typeof (size as { step?: unknown }).step === 'number') return { step: (size as { step: number }).step }
+  return { step: typeof v.step === 'number' ? v.step : 20 }
+}
+
+/** The discrete step vega-lite sizes marks against: the spec's `{step}`, else the view config's (default 20). */
+export function discreteStep(spec: { width?: unknown; height?: unknown; config?: unknown }, ch: 'width' | 'height'): number {
   const v = spec[ch] as { step?: number } | undefined
-  return typeof v === 'object' && v !== null && typeof v.step === 'number' ? v.step : 20
+  if (typeof v === 'object' && v !== null && typeof v.step === 'number') return v.step
+  const d = viewDiscreteSize(spec, ch)
+  return typeof d === 'object' ? d.step : 20
 }
 
 /** `[min, max]` of a size scale (range.ts sizeRangeMin/sizeRangeMax). */
