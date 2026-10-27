@@ -55,6 +55,9 @@ import { fileURLToPath } from 'node:url'
 // guide parts it finds, the container's cursor state in ChartCore) then took, measured (kB gzip): hit marginal 5.6 (+0.4),
 // Chart 174.1 (+1.2), SvgChart 153.9 (+0.5), SvgChart + interaction 167.8 (+1.1), Chart + VL 249.1 (+1.2). Core and the
 // other marginal rows stay inside their ceilings.
+// The pointer through the svg's screen CTM (core/pointer.ts, one cached map for the cursor, tooltip and gestures), the
+// painted-geometry hit index and the inert flags, merged, measured (kB gzip): hit marginal 5.8, Chart 174.8, SvgChart 154.3,
+// SvgChart + interaction 168.7, Chart + VL 249.9.
 const BUDGETS = {
   '@aster/core': 134.3 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
@@ -65,12 +68,12 @@ const BUDGETS = {
   '+ @aster/core/geo': 12.8 * 1024,
   '+ @aster/core/transforms': 15.6 * 1024,
   '@aster/react useChart': 138.2 * 1024,
-  '@aster/react Chart': 174.6 * 1024,
+  '@aster/react Chart': 175.3 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
   '@aster/react SvgChart': 154.4 * 1024,
-  '@aster/react SvgChart + interaction': 168.4 * 1024,
+  '@aster/react SvgChart + interaction': 169.2 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 249.7 * 1024,
+  '@aster/react Chart + VL': 250.4 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
