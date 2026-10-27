@@ -334,6 +334,12 @@ link through their first item). Two checks apply to the value:
 `containerSize: { width, height }` in the runtime input; Vega-Lite's own fallback size then
 applies. A host that has a DOM element to fill passes its `clientWidth` / `clientHeight`.
 
+`measuredSize: { width, height }` is the element a host lets the chart fill. It is the view size of a
+spec with no `width` / `height` signal; a spec that drives those signals keeps doing so (the container
+reaches it through `containerSize()`, which falls back to `measuredSize`). The view size has one value
+for every consumer (scales, layout, marks and expressions); from the strongest: a fixed `width` /
+`height`, a value written to the `width` / `height` signal (`signals`), then `measuredSize`.
+
 ## Locale and formatter caches
 
 Expression `format`, `timeFormat`, `monthFormat`, ... read the **current**
