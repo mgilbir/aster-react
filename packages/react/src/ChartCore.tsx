@@ -1216,6 +1216,10 @@ function ChartView({
     eventConfig: (scene as { compiled?: { eventConfig?: unknown } } | null)?.compiled?.eventConfig,
   }
   const cursorTrackerRef = React.useRef<CursorTracker | null>(null)
+  // The container's client origin and scale, measured at the first move after anything that can change it (a layout read per move is the
+  // cost of the cursor on a chart with item cursors): a commit, a resize, a scroll of the window or of any ancestor, the
+  // pointer entering the container.
+  const cursorRectRef = React.useRef<{ x: number; y: number; sx: number; sy: number } | null>(null)
   const handleCursorMove = React.useCallback((e: { clientX: number; clientY: number }) => {
     const live = cursorLiveRef.current
     const cap = live.interaction
@@ -1226,8 +1230,18 @@ function ChartView({
         // to look for (otherwise the hit index is not even built, and a pointermove costs no layout read)
         pick: (clientX, clientY) => {
           const l = cursorLiveRef.current
-          const rect = l.displayScene != null && l.interaction != null && l.interaction.sceneHasCursor(l.displayScene) ? containerRef.current?.getBoundingClientRect() : undefined
-          return rect ? l.hitIndexFor(l.displayScene)?.pick(clientX - rect.left, clientY - rect.top) ?? null : null
+          if (l.displayScene == null || l.interaction == null || !l.interaction.sceneHasCursor(l.displayScene)) return null
+          const el = containerRef.current
+          if (!el) return null
+          // vega-scenegraph point(): the client position minus the element's rect and border; also divided by the scale of a
+          // transformed ancestor (the rect is in screen pixels, the scene in the element's own)
+          const m = (cursorRectRef.current ??= (() => {
+            const r = el.getBoundingClientRect()
+            const sx = el.offsetWidth > 0 && r.width > 0 ? r.width / el.offsetWidth : 1
+            const sy = el.offsetHeight > 0 && r.height > 0 ? r.height / el.offsetHeight : 1
+            return { x: r.left + (el.clientLeft || 0) * sx, y: r.top + (el.clientTop || 0) * sy, sx, sy }
+          })())
+          return l.hitIndexFor(l.displayScene)?.pick((clientX - m.x) / m.sx, (clientY - m.y) / m.sy) ?? null
         },
         user: () => cursorLiveRef.current.user,
         onCursor: setCursor,
@@ -1236,13 +1250,28 @@ function ChartView({
     }
     cursorTrackerRef.current.move(e.clientX, e.clientY)
   }, [])
-  // (a native listener: the pointer moves hundreds of times a second, and a synthetic event for each is not needed to read a point)
+  // Only a chart with something to show listens: an item of the scene has a cursor, or a `cursor` signal exists. A native
+  // listener (the pointer moves hundreds of times a second; a synthetic event for each is not needed to read a point).
+  const watchCursor = interaction != null && displayScene != null && (interaction.sceneHasCursor(displayScene) || userCursor !== undefined)
+  React.useLayoutEffect(() => { cursorRectRef.current = null })
   React.useEffect(() => {
     const el = containerRef.current
-    if (!interaction || !el) return
+    if (!watchCursor || !el) return
+    const forget = (): void => { cursorRectRef.current = null }
     el.addEventListener('pointermove', handleCursorMove, { passive: true })
-    return () => el.removeEventListener('pointermove', handleCursorMove)
-  }, [interaction, handleCursorMove, scene === null])
+    el.addEventListener('pointerenter', forget, { passive: true })
+    window.addEventListener('scroll', forget, { capture: true, passive: true })
+    window.addEventListener('resize', forget, { passive: true })
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(forget) : null
+    ro?.observe(el)
+    return () => {
+      el.removeEventListener('pointermove', handleCursorMove)
+      el.removeEventListener('pointerenter', forget)
+      window.removeEventListener('scroll', forget, { capture: true })
+      window.removeEventListener('resize', forget)
+      ro?.disconnect()
+    }
+  }, [watchCursor, handleCursorMove, scene === null])
   // the spec's `cursor` signal changed (vega: its operator re-runs)
   React.useLayoutEffect(() => {
     if (cursorTrackerRef.current) cursorTrackerRef.current.refresh()

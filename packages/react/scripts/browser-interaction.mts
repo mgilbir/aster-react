@@ -441,6 +441,33 @@ async function cursorSuite(page: Page, renderers: Array<'svg' | 'canvas'>): Prom
     await page.waitForTimeout(30)
     check((await cursorOf()) === 'pointer', `${renderer}: the cursor stays the pointer through the re-render a click causes (${await cursorOf()})`)
   }
+
+  // The container's rect is cached between moves; the point must stay exact where the page is scrolled and where an ancestor
+  // is CSS-transformed (vega-scenegraph point(): client position minus the element's bounding rect).
+  const layouts: Array<[string, string]> = [
+    ['a scrolled page', 'document.getElementById("pad").style.height="400px"; window.scrollTo(0, 170)'],
+    ['a scaled, translated ancestor', 'document.getElementById("pad").style.height="0"; window.scrollTo(0, 0); document.getElementById("root").style.cssText="transform-origin:0 0;transform:translate(37px,23px) scale(0.8)"'],
+  ]
+  await page.evaluate(() => { const pad = document.createElement('div'); pad.id = 'pad'; document.getElementById('root')!.before(pad) })
+  for (const [name, setup] of layouts) {
+    await page.evaluate(setup)
+    for (const renderer of renderers) {
+      await mount(page, legendSpec, { width: 520, height: 240 })
+      const at = await page.evaluate(() => {
+        const sym = document.querySelectorAll('svg .role-legend-symbol path')[1]!.getBoundingClientRect()
+        const host = document.querySelector('#chart-host')!.getBoundingClientRect()
+        return { sx: sym.left + sym.width / 2, sy: sym.top + sym.height / 2, hx: host.left + 8, hy: host.top + 8 }
+      })
+      await mount(page, legendSpec, { width: 520, height: 240, renderer })
+      await page.mouse.move(at.hx, at.hy)
+      check((await cursorOf()) === 'default', `${renderer}, ${name}: off the legend the cursor is the default (${await cursorOf()})`)
+      await page.mouse.move(at.sx, at.sy)
+      check((await cursorOf()) === 'pointer', `${renderer}, ${name}: over the legend symbol the cursor is the pointer (${await cursorOf()})`)
+      await page.mouse.move(at.sx - 40, at.sy)
+      check((await cursorOf()) === 'default', `${renderer}, ${name}: 40px left of the symbol it is the default (${await cursorOf()})`)
+    }
+  }
+  await page.evaluate(() => { document.getElementById('pad')!.remove(); document.getElementById('root')!.style.cssText = ''; window.scrollTo(0, 0) })
 }
 
 /** `<SvgChart>` without `interaction`: renders, keeps what needs no hit testing, reports the rest. */

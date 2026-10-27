@@ -140,6 +140,58 @@ forEachVariant(['svg'], (Chart, variant) => {
       }
     })
 
+    variant.it(['interaction'], 'measures the container once, not per move, and again after a scroll, a resize, a pointer entering or a commit', () => {
+      const s = spec()
+      const p = points(s)
+      const m = mount({ spec: s })
+      let reads = 0
+      let left = 0
+      m.container.getBoundingClientRect = () => { reads++; return { left, top: 0, right: left + 216, bottom: 136, width: 216, height: 136 } as DOMRect }
+      m.move(p.rect)
+      expect(reads, 'the first move').toBe(1)
+      // (the cursor changed: that commit forgets the measure once)
+      m.move(p.rect)
+      reads = 0
+      for (let i = 0; i < 30; i++) m.move(p.rect)
+      expect(reads, 'reads for 30 more moves').toBe(0)
+      expect(m.container.style.cursor).toBe('pointer')
+      // the page scrolls / an ancestor is moved: the same client point is now off the item
+      left = 100
+      act(() => { window.dispatchEvent(new Event('scroll')) })
+      m.move(p.rect)
+      expect(m.container.style.cursor, 'after a scroll').toBe('default')
+      left = 0
+      act(() => { window.dispatchEvent(new Event('resize')) })
+      m.move(p.rect)
+      expect(m.container.style.cursor, 'after a resize').toBe('pointer')
+      left = 100
+      act(() => { m.container.dispatchEvent(new Event('pointerenter')) })
+      m.move(p.rect)
+      expect(m.container.style.cursor, 'after the pointer entered (a transformed ancestor)').toBe('default')
+      left = 0
+      m.rerender({ className: 'y' })
+      m.move(p.rect)
+      expect(m.container.style.cursor, 'after a commit').toBe('pointer')
+    })
+
+    it('listens to the pointer only when an item has a cursor or a cursor signal exists', () => {
+      const added: string[] = []
+      const orig = HTMLElement.prototype.addEventListener
+      HTMLElement.prototype.addEventListener = function (this: HTMLElement, type: string, ...rest: never[]) { if (type === 'pointermove' && this.hasAttribute('data-aster-view')) added.push(type); return (orig as (...a: unknown[]) => void).call(this, type, ...rest) } as never
+      try {
+        const plain = spec({ legends: [], marks: [{ type: 'rect', encode: { update: { x: { value: 10 }, y: { value: 10 }, width: { value: 40 }, height: { value: 40 }, fill: { value: '#4c78a8' } } } }] })
+        mount({ spec: plain })
+        expect(added, 'a chart with nothing to show').toEqual([])
+        const withSignal = mount({ spec: { ...plain, signals: [{ name: 'cursor', value: 'wait' }] } })
+        expect(withSignal.container.style.cursor).toBe('wait')
+        if (variant.has(['interaction'])) {
+          expect(added.length, 'a cursor signal').toBe(1)
+          mount({ spec: spec() })
+          expect(added.length, 'item cursors').toBe(2)
+        }
+      } finally { HTMLElement.prototype.addEventListener = orig }
+    })
+
     it('stays the default under a pointer that moves over a chart whose items have no cursor', () => {
       const s = spec({ legends: [], marks: [{ type: 'rect', encode: { update: { x: { value: 10 }, y: { value: 10 }, width: { value: 40 }, height: { value: 40 }, fill: { value: '#4c78a8' } } } }] })
       const m = mount({ spec: s })
