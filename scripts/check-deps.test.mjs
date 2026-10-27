@@ -3,12 +3,12 @@
  * a violation in a throw-away repo fixture and runs the real CLI against it; the
  * clean fixture and the negative controls prove the check is not simply failing.
  */
-import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
+import { spawnAsync } from './lib/spawn-async.mjs'
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'check-deps.mjs')
 const PKGS = ['core', 'react', 'vl']
@@ -35,8 +35,8 @@ function fixture(edit = () => {}) {
   return root
 }
 
-function run(root, ...args) {
-  const r = spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: 'utf8' })
+async function run(root, ...args) {
+  const r = await spawnAsync(process.execPath, [script, ...args], { cwd: root, encoding: 'utf8' })
   return { code: r.status, out: r.stdout + r.stderr }
 }
 
@@ -45,8 +45,8 @@ afterAll(() => {
 })
 
 describe('check-deps', () => {
-  it('passes on a clean repo', () => {
-    const r = run(fixture())
+  it('passes on a clean repo', async () => {
+    const r = await run(fixture())
     expect(r.code, r.out).toBe(0)
   })
 
@@ -83,10 +83,10 @@ describe('check-deps', () => {
     'mts file': `import 'vega'\n`,
   }
   for (const [name, text] of Object.entries(srcViolations)) {
-    it(`src: ${name}`, () => {
+    it(`src: ${name}`, async () => {
       const ext = name === 'jsx file' ? 'tsx' : name === 'mts file' ? 'mts' : 'ts'
       const root = fixture((w) => w(`packages/core/src/bad.${ext}`, text))
-      const r = run(root)
+      const r = await run(root)
       expect(r.code, r.out).toBe(1)
       // detected as the banned package itself, not merely rejected as unreadable
       expect(r.out).toMatch(/banned import not in baseline: packages\/core\/src\/bad\.\w+ imports "(@types\/)?(vega|d3|topojson)/)
@@ -102,8 +102,8 @@ describe('check-deps', () => {
     'createRequire': `import { createRequire } from 'node:module'\nexport const r = createRequire(import.meta.url)\n`,
   }
   for (const [name, text] of Object.entries(unanalyzable)) {
-    it(`src: unanalyzable ${name}`, () => {
-      const r = run(fixture((w) => w('packages/react/src/bad.ts', text)))
+    it(`src: unanalyzable ${name}`, async () => {
+      const r = await run(fixture((w) => w('packages/react/src/bad.ts', text)))
       expect(r.code, r.out).toBe(1)
       expect(r.out).toMatch(/unanalyzable/)
     })
@@ -118,45 +118,45 @@ describe('check-deps', () => {
     'imports alias': { imports: { '#v': { node: 'vega', default: './x.js' } } },
   }
   for (const [name, patch] of Object.entries(manifestViolations)) {
-    it(`manifest: ${name}`, () => {
+    it(`manifest: ${name}`, async () => {
       const root = fixture((w) =>
         w('packages/vl/package.json', JSON.stringify({ name: '@aster/vl', ...patch })))
-      const r = run(root)
+      const r = await run(root)
       expect(r.code, r.out).toBe(1)
       expect(r.out).toMatch(/packages\/vl\/package\.json|banned dependency/)
     })
   }
 
   describe('built dist', () => {
-    it('flags a banned import in dist .js while src is clean', () => {
-      const r = run(fixture((w) => w('packages/core/dist/leak.js', `import * as v from 'vega'\nexport { v }\n`)))
+    it('flags a banned import in dist .js while src is clean', async () => {
+      const r = await run(fixture((w) => w('packages/core/dist/leak.js', `import * as v from 'vega'\nexport { v }\n`)))
       expect(r.code, r.out).toBe(1)
       expect(r.out).toMatch(/shipped output: packages\/core\/dist\/leak\.js/)
     })
-    it('flags a banned import in dist .d.ts', () => {
-      const r = run(fixture((w) => w('packages/react/dist/types.d.ts', `export type S = import('vega-lite').TopLevelSpec\n`)))
+    it('flags a banned import in dist .d.ts', async () => {
+      const r = await run(fixture((w) => w('packages/react/dist/types.d.ts', `export type S = import('vega-lite').TopLevelSpec\n`)))
       expect(r.code, r.out).toBe(1)
       expect(r.out).toMatch(/shipped output: packages\/react\/dist\/types\.d\.ts/)
     })
-    it('flags a nested dist .cjs require', () => {
-      const r = run(fixture((w) => w('packages/vl/dist/deep/x.cjs', `module.exports = require('d3-array')\n`)))
+    it('flags a nested dist .cjs require', async () => {
+      const r = await run(fixture((w) => w('packages/vl/dist/deep/x.cjs', `module.exports = require('d3-array')\n`)))
       expect(r.code, r.out).toBe(1)
       expect(r.out).toMatch(/packages\/vl\/dist\/deep\/x\.cjs/)
     })
-    it('fails when dist is missing, passes with --src-only', () => {
+    it('fails when dist is missing, passes with --src-only', async () => {
       const root = fixture()
       rmSync(join(root, 'packages/core/dist'), { recursive: true })
-      expect(run(root).code).toBe(1)
-      expect(run(root, '--src-only').code).toBe(0)
+      expect((await run(root)).code).toBe(1)
+      expect((await run(root, '--src-only')).code).toBe(0)
     })
-    it('--src-only does not hide a src violation', () => {
+    it('--src-only does not hide a src violation', async () => {
       const root = fixture((w) => w('packages/core/src/bad.ts', `import 'vega'\n`))
-      expect(run(root, '--src-only').code).toBe(1)
+      expect((await run(root, '--src-only')).code).toBe(1)
     })
   })
 
   describe('negative controls (must not be flagged)', () => {
-    it('ignores comments, strings, relative/internal/builtin imports and lookalike names', () => {
+    it('ignores comments, strings, relative/internal/builtin imports and lookalike names', async () => {
       const root = fixture((w) => {
         w('packages/core/src/ok.ts', [
           `// import 'vega'  and  require('d3')`,
@@ -176,13 +176,13 @@ describe('check-deps', () => {
           '',
         ].join('\n'))
       })
-      const r = run(root)
+      const r = await run(root)
       expect(r.code, r.out).toBe(0)
     })
-    it('allows devDependencies on the oracle (tests/benchmarks use it)', () => {
+    it('allows devDependencies on the oracle (tests/benchmarks use it)', async () => {
       const root = fixture((w) =>
         w('packages/core/package.json', JSON.stringify({ name: '@aster/core', devDependencies: { vega: '^6' } })))
-      expect(run(root).code).toBe(0)
+      expect((await run(root)).code).toBe(0)
     })
   })
 })

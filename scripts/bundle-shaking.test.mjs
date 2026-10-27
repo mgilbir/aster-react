@@ -6,11 +6,11 @@
  * `"sideEffects": false`, and a manifest with no `sideEffects` at all. A gate that has never been seen
  * to fail proves nothing. They bundle the built packages, so they need `pnpm build` (the `build` gate runs first).
  */
-import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { spawnAsync } from './lib/spawn-async.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = (pkg) => JSON.parse(readFileSync(join(root, 'packages', pkg, 'package.json'), 'utf8'))
@@ -45,17 +45,17 @@ describe('sideEffects manifests', () => {
   })
 })
 
-const run = (script, args, env = {}) => spawnSync(process.execPath, [join(root, script), ...args], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 280_000 })
+const run = (script, args, env = {}) => spawnAsync(process.execPath, [join(root, script), ...args], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 280_000 })
 
 describe('the gates bite', () => {
-  it('check-bundle-shaking passes on the manifests as they are', () => {
-    const r = run('scripts/check-bundle-shaking.mjs', [])
+  it('check-bundle-shaking passes on the manifests as they are', async () => {
+    const r = await run('scripts/check-bundle-shaking.mjs', [])
     expect(r.stdout + r.stderr).toContain('all patterns passed')
     expect(r.status).toBe(0)
   }, 300_000)
 
-  it('check-bundle-shaking FAILS when every module is declared side-effect free ("sideEffects": false)', () => {
-    const r = run('scripts/check-bundle-shaking.mjs', ['--blanket-false'])
+  it('check-bundle-shaking FAILS when every module is declared side-effect free ("sideEffects": false)', async () => {
+    const r = await run('scripts/check-bundle-shaking.mjs', ['--blanket-false'])
     expect(r.status).toBe(1)
     // the patterns that live on an import side effect must be the ones that break
     for (const name of ['core-renderSpec', 'core-geo', 'core-transforms', 'core-load-bare', 'core-dom', 'react-vl', 'react-worker', 'react-worker-entry']) {
@@ -63,8 +63,8 @@ describe('the gates bite', () => {
     }
   }, 300_000)
 
-  it('the budget FAILS when the manifests do not shake (no sideEffects field): the useChart row regains Chart, streams and workers', () => {
-    const r = run('packages/benchmarks/scripts/budget.mjs', [], { ASTER_BUDGET_IGNORE_SIDE_EFFECTS: '1' })
+  it('the budget FAILS when the manifests do not shake (no sideEffects field): the useChart row regains Chart, streams and workers', async () => {
+    const r = await run('packages/benchmarks/scripts/budget.mjs', [], { ASTER_BUDGET_IGNORE_SIDE_EFFECTS: '1' })
     expect(r.status).toBe(1)
     expect(r.stdout).toMatch(/@aster\/react useChart .*FAIL/)
     expect(r.stdout).toMatch(/@aster\/react Chart .*FAIL/)
