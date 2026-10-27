@@ -1,7 +1,7 @@
 /**
  * vega-scale (8.1.2): the scale registry, tick helpers, and colour scheme
- * registry as Vega uses them. Faithful transcription verified against oracle
- * vectors recorded from pinned vega-scale@8.1.2.
+ * registry as Vega uses them. Faithful transcription verified by a live differential
+ * against pinned vega-scale@8.1.2 (`conformance/scripts/differential-vega-scale.test.mts`).
  *
  * Supersedes the `vega-scale` runtime dependency.
  */

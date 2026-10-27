@@ -1,7 +1,8 @@
 /**
  * d3-contour (4.0.2): marching-squares isoline extraction with rings stitched
  * into polygons, as Vega's contour transform uses it. Faithful transcription
- * verified against oracle vectors recorded from pinned d3-contour@4.0.2.
+ * verified by a live differential against pinned d3-contour@4.0.2
+ * (`conformance/scripts/differential-d3-geo.test.mts`).
  */
 import { tickIncrement, ticks } from './arr.js'
 
