@@ -43,6 +43,7 @@ import {
   GroupedBarSpec,
   RadarSpec,
 } from './specs.js'
+import { SHOWCASE } from './showcase'
 
 /**
  * The oracle column (official vega-embed) lives in its own chunk and streams
@@ -598,6 +599,18 @@ export function App() {
         </div>
         <div className="playground-wrap">
           <SpecPlayground />
+        </div>
+      </section>
+
+      <section id="new">
+        <div className="section-head">
+          <h2>New in this build — same spec, both engines</h2>
+          <p className="desc">Selections across composed views, maps, the time channel and discretizing legends. Each spec is from the conformance corpus, where it is checked against the official toolchain.</p>
+        </div>
+        <div className="grid">
+          {SHOWCASE.map((s) => (
+            <CompareCard key={s.title} title={s.title} desc={s.desc} spec={s.raw} aster={s.aster} wide={s.wide === 'wide'} />
+          ))}
         </div>
       </section>
 

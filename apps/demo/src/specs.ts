@@ -1,7 +1,7 @@
 export const LineSpec = {
   $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
-  width: { signal: 'width' },
-  height: { signal: 'height' },
+  width: 'container',
+  height: 'container',
   padding: 5,
   data: { name: 'table', values: [{ x: 0, y: 10 }, { x: 1, y: 20 }, { x: 2, y: 15 }, { x: 3, y: 25 }] },
   mark: 'line',

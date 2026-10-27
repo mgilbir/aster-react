@@ -25,7 +25,10 @@ export function VegaPane({ spec, width, height, responsiveHeight, ariaLabel }: {
 }) {
   const ref = React.useRef<HTMLDivElement>(null)
   const [error, setError] = React.useState<string | null>(null)
-  const responsive = width == null || height == null
+  // Container-driven only when the spec asks for it (`"container"` or a signal). A spec without a top-level size (a
+  // concat, a facet, Vega-Lite's default sizing) renders at its own size, as it does in vega-embed.
+  const bySignal = (v: unknown): boolean => v === 'container' || (typeof v === 'object' && v !== null && 'signal' in v)
+  const responsive = bySignal(spec.width) || bySignal(spec.height)
   React.useEffect(() => {
     const el = ref.current
     if (!el) return
@@ -33,7 +36,7 @@ export function VegaPane({ spec, width, height, responsiveHeight, ariaLabel }: {
     let finalized: { finalize(): void } | null = null
     let observer: ResizeObserver | null = null
     setError(null)
-    const sized = !responsive ? { ...spec, width, height } : spec
+    const sized = !responsive && width != null && height != null ? { ...spec, width, height } : spec
     embed(el, sized as never, { actions: false, renderer: 'svg' })
       .then((result) => {
         if (cancelled) {
@@ -75,7 +78,7 @@ export function VegaPane({ spec, width, height, responsiveHeight, ariaLabel }: {
       ref={ref}
       aria-label={ariaLabel}
       role="img"
-      style={responsive ? { height: responsiveHeight ?? 400 } : undefined}
+      style={responsive ? { width: '100%', height: responsiveHeight ?? 400 } : undefined}
     />
   )
 }
