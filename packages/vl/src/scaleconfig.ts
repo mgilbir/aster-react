@@ -60,19 +60,20 @@ export function discreteStep(spec: { width?: unknown; height?: unknown; config?:
 }
 
 /** `[min, max]` of a size scale (range.ts sizeRangeMin/sizeRangeMax). */
-export function sizeRange(mark: string, cfg: ScaleCfg, step: number): [number, number] {
+export function sizeRange(mark: string, cfg: ScaleCfg, step: number, stepExpr?: string): [number, number | { signal: string }] {
   switch (mark) {
-    case 'bar': case 'tick': return [cfg.minBandSize, cfg.maxBandSize ?? step - 1]
+    case 'bar': case 'tick': return [cfg.minBandSize, cfg.maxBandSize ?? (stepExpr ? { signal: `${stepExpr} - 1` } : step - 1)]
     case 'line': case 'trail': case 'rule': return [cfg.minStrokeWidth, cfg.maxStrokeWidth]
     case 'text': return [cfg.minFontSize, cfg.maxFontSize]
-    default: return [cfg.minSize, cfg.maxSize || (0.95 * step) ** 2]
+    default: return [cfg.minSize, cfg.maxSize || (stepExpr ? { signal: `pow(0.95 * ${stepExpr}, 2)` } : (0.95 * step) ** 2)]
   }
 }
 
 /** range.ts `interpolateRange`: `count` values spread over [min, max] for a continuous-to-discrete scale. */
-export function countRange(min: number, max: number, count: number): { signal: string } {
-  const step = `(${max} - ${min}) / (${count} - 1)`
-  return { signal: `sequence(${min}, ${max} + ${step}, ${step})` }
+export function countRange(min: number, max: number | { signal: string }, count: number): { signal: string } {
+  const rMax = typeof max === 'object' ? max.signal : max
+  const step = `(${rMax} - ${min}) / (${count} - 1)`
+  return { signal: `sequence(${min}, ${rMax} + ${step}, ${step})` }
 }
 
 /** The number of range values a quantile / quantize / threshold scale takes (range.ts defaultContinuousToDiscreteCount). */

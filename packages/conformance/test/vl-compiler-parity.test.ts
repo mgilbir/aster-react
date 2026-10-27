@@ -42,6 +42,11 @@ const GROUPS: Record<string, Case[]> = {
     ['continuous x and y use config.view.continuousWidth / continuousHeight', { data: DATA, config: { view: { continuousWidth: 150, continuousHeight: 90 } }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
     ['discrete x uses config.view.step', { data: DATA, config: { view: { step: 31 } }, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }],
     ['discrete x with config.view.discreteWidth as a number', { data: DATA, config: { view: { discreteWidth: 140 } }, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }],
+    ['vertical bar with only a temporal x (bar_1d_temporal)', { data: DATA, mark: { type: 'bar', orient: 'vertical' }, encoding: { x: t('t') } }],
+    ['horizontal bar with only a quantitative y (bar_1d_dimension_only)', { data: DATA, mark: { type: 'bar', orient: 'horizontal' }, encoding: { y: q('v') } }],
+    ['vertical bar with only a nominal x', { data: DATA, mark: 'bar', encoding: { x: n('c') } }],
+    ['bar with config.scale.barBandPaddingInner and only a temporal x', { data: DATA, config: { scale: { barBandPaddingInner: 0.3 } }, mark: { type: 'bar', orient: 'vertical' }, encoding: { x: t('t') } }],
+    ['bar with config.scale.bandPaddingInner and no position', { data: DATA, config: { scale: { bandPaddingInner: 0.4 } }, mark: { type: 'bar', orient: 'vertical' }, encoding: { color: n('c') } }],
     ['layered 1D bar and text', { data: DATA, layer: [{ mark: 'bar', encoding: { y: q('v') } }, { mark: 'text', encoding: { y: q('v'), text: q('v') } }] }],
   ],
   // scale/range.ts getPositionStep / getOffsetStep: the step belongs to the OFFSET scale when its channel is discrete
@@ -55,6 +60,27 @@ const GROUPS: Record<string, Case[]> = {
     ['grouped bars with an explicit scale padding', { data: DATA, mark: 'bar', encoding: { x: n('c', { scale: { paddingInner: 0.4 } }), y: q('v', { aggregate: 'sum' }), xOffset: n('g'), color: n('g') } }],
     ['stacked and grouped bars', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), xOffset: n('g'), color: n('g') } }],
     ['layered grouped bars and text', { data: DATA, layer: [{ mark: 'bar', encoding: { x: n('c'), y: q('v'), xOffset: n('g'), color: n('g') } }, { mark: 'text', encoding: { x: n('c'), y: q('v'), xOffset: n('g'), text: q('v') } }] }],
+  ],
+  // layoutsize/assemble.ts sizeExpr: bandspace(n, paddingInner, paddingOuter) where a POINT scale has paddingInner = 1
+  'step signals of a point scale (argmin_spaces, circle_flatten, circle_scale_quantile)': [
+    ['point mark over a nominal y', { data: DATA, mark: 'point', encoding: { x: q('x'), y: n('c') } }],
+    ['point mark over a nominal x', { data: DATA, mark: 'point', encoding: { x: n('c'), y: q('y') } }],
+    ['point mark, explicit scale padding', { data: DATA, mark: 'point', encoding: { x: q('x'), y: n('c', { scale: { padding: 0.2 } }) } }],
+    ['point mark, explicit paddingOuter', { data: DATA, mark: 'point', encoding: { x: q('x'), y: n('c', { scale: { paddingOuter: 0.1 } }) } }],
+    ['point mark, config.scale.pointPadding', { data: DATA, config: { scale: { pointPadding: 0.3 } }, mark: 'point', encoding: { x: q('x'), y: n('c') } }],
+    ['line over an ordinal x with width.step', { data: DATA, width: { step: 33 }, mark: 'line', encoding: { x: { field: 'c', type: 'ordinal' }, y: q('y') } }],
+    ['circle with a quantile colour and a nominal y', { data: DATA, mark: 'circle', encoding: { x: q('x'), y: n('c'), color: q('v', { scale: { type: 'quantile' } }) } }],
+  ],
+  // data/parse.ts: the user's transforms run BEFORE bin (the extent is of the filtered rows); valueref.ts midPoint: a binned field
+  // on a point-positioned mark sits at the middle of its bin; scale/range.ts getBinStepSignal: bins set the size range's step
+  'binned fields on point marks, bin after transform (circle_binned, hconcat_weather)': [
+    ['filter then bin', { data: DATA, transform: [{ filter: 'datum.x > 2' }], mark: 'bar', encoding: { x: q('x', { bin: true }), y: { aggregate: 'count' } } }],
+    ['calculate then bin', { data: DATA, transform: [{ calculate: 'datum.x * 10', as: 'x10' }], mark: 'bar', encoding: { x: q('x10', { bin: true }), y: { aggregate: 'count' } } }],
+    ['filter then bin in an hconcat', { data: DATA, transform: [{ filter: 'datum.x > 2' }], hconcat: [{ mark: 'bar', encoding: { x: q('x', { bin: true }), y: { aggregate: 'count' } } }, { mark: 'point', encoding: { x: q('x', { bin: true }), y: q('y', { bin: true }), size: { aggregate: 'count' } } }] }],
+    ['binned circle with a count size', { data: DATA, mark: 'circle', encoding: { x: q('x', { bin: true }), y: q('y', { bin: true }), size: { aggregate: 'count' } } }],
+    ['binned circle, x only, with a count size', { data: DATA, mark: 'circle', encoding: { x: q('x', { bin: { maxbins: 3 } }), y: n('c'), size: { aggregate: 'count' } } }],
+    ['binned text', { data: DATA, mark: 'text', encoding: { x: q('x', { bin: true }), y: q('y', { bin: true }), text: { aggregate: 'count' } } }],
+    ['binned line', { data: DATA, mark: 'line', encoding: { x: q('x', { bin: true }), y: { aggregate: 'count' } } }],
   ],
 }
 

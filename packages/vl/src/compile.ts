@@ -623,7 +623,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       nextData++
       data.push(builtMarks.overlayData)
     }
-    const layerScales = buildScales(p.l, p.fields, p.mark, p.orient, p.dataName, width, height, p.seriesFields, p.rawName)
+    const layerScales = buildScales(p.l, p.fields, p.mark, p.orient, p.dataName, wSpec, hSpec, p.seriesFields, p.rawName)
     showInvalidValues(p.l, p.fields, p.mark, layerScales, builtMarks)
     perLayerScales.push(layerScales)
   })
@@ -830,6 +830,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
  * A point-positioned mark (line, point, text, trail, area) layered over a bar shares the bar's
  * BAND scale: it must sit at the band's centre (`band: 0.5`) rather than its start.
  */
+const BIN_MID_MARKS = new Set(['point', 'circle', 'square', 'text', 'line', 'area', 'trail', 'rule'])
 const OFFSET_POINT_MARKS = new Set(['point', 'circle', 'square', 'text', 'line', 'area', 'trail', 'rule'])
 
 function centerPointMarksOnBands(marks: Record<string, unknown>[], scales: ScaleSpec[]): void {
@@ -892,8 +893,10 @@ function stepSignals(channel: 'x' | 'y', scales: ScaleSpec[], step: number, step
   if (!sc) return []
   const stepName = `${channel}_step`
   sc.range = { step: { signal: stepName } }
-  const pi = (sc.paddingInner as number) ?? (sc.padding as number) ?? 0
+  // layoutsize/assemble.ts sizeExpr: only a band scale has a real paddingInner; a point scale has n - 1 steps between n points,
+  // which is paddingInner = 1 (vega-scale band.js)
   const po = (sc.paddingOuter as number) ?? (sc.padding as number) ?? 0
+  const pi = sc.type === 'point' ? 1 : ((sc.paddingInner as number) ?? (sc.padding as number) ?? 0)
   // scale/range.ts getPositionStep / getOffsetStep: with a discrete offset channel the step is the offset's
   // (`for: "offset"`, the default), so the position scale takes step x (offset cardinality) / (1 - paddingInner)
   const offsetName = `${channel}Offset`
@@ -904,7 +907,7 @@ function stepSignals(channel: 'x' | 'y', scales: ScaleSpec[], step: number, step
   if (stepFor === 'offset' && offset) {
     let count = `domain('${offsetName}').length`
     if (offset.type === 'band') count = `bandspace(${count}, ${(offset.paddingInner as number) ?? (offset.padding as number) ?? 0}, ${(offset.paddingOuter as number) ?? (offset.padding as number) ?? 0})`
-    stepSignal = { name: stepName, update: `${step} * ${count} / (1-${pi})` }
+    stepSignal = { name: stepName, update: `${step} * ${count} / (1-${(sc.paddingInner as number) ?? (sc.padding as number)})` }
     if (sc.type === 'band') offset.range = { step }
   }
   return [
@@ -1741,10 +1744,18 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     // maps: the geojson transforms' signals and the projections are global names: a cell's own are prefixed
     const geojsonTransforms = unitData.flatMap((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).filter((t) => t.type === 'geojson' && typeof t.signal === 'string'))
     for (const t of geojsonTransforms) sigMap.set(t.signal as string, `${prefix}${t.signal as string}`)
+    // a binned field's extent / bins signals are the cell's own as well (bin.ts getBinSignalName names them after the model)
+    const binTransforms = unitData.flatMap((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).filter((t) => (t.type === 'bin' || t.type === 'extent') && typeof t.signal === 'string'))
+    for (const t of binTransforms) sigMap.set(t.signal as string, `${prefix}${t.signal as string}`)
     const projList = (vg.projections as Record<string, unknown>[] | undefined) ?? []
     const projMap = new Map(projList.map((p) => [p.name as string, `${prefix}${p.name as string}`]))
     const renames = { signals: sigMap, scales: scaleMap, datasets: dnames }
     renameFragment(vg.layout, renames)
+    for (const t of binTransforms) {
+      const own = t.signal as string
+      renameFragment(t, renames)
+      t.signal = sigMap.get(own)
+    }
     renameFragment(projList, renames)
     renameFragment(vg.scales, renames)
     renameFragment(vg.marks, renames)
@@ -3076,9 +3087,10 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   // binning: extent + bin transforms ahead of any aggregate
   const binFields = fields.filter((f) => f.bin)
   const binSignals = new Map<string, { startField: string; endField: string; binsSignal: string }>()
+  const binPipeline: Record<string, unknown>[] = []
   for (const f of binFields) {
     const names = binNames(f.binParams!, f.field)
-    pushAll(pipeline, binTransforms(f.binParams!, f.field, names))
+    pushAll(binPipeline, binTransforms(f.binParams!, f.field, names))
     binSignals.set(f.field, { startField: names.start, endField: names.end, binsSignal: names.signal })
   }
 
@@ -3198,6 +3210,9 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     const geo = GEO_UNITS.get(spec)
     if (geo) pushAll(pipeline, geoDataTransforms(spec, geo))
   }
+
+  // binning (data/parse.ts: user transforms, geo, THEN bin, then timeUnit): the extent is taken over the filtered rows
+  pushAll(pipeline, binPipeline)
 
   // timeUnit: the timeunit transform floors each date to the unit
   const tuSeen = new Set<string>()
@@ -3564,7 +3579,7 @@ function positionalScaleType(mark: string, def: FieldDef): string {
   return 'linear'
 }
 
-function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: string, dataName: string, width: unknown, height: unknown, series: FieldDef[] = [], rawName: string = dataName): ScaleSpec[] {
+function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: string, dataName: string, wReq: SizeReq, hReq: SizeReq, series: FieldDef[] = [], rawName: string = dataName): ScaleSpec[] {
   const scales: ScaleSpec[] = []
   const dc: DomainCtx = { rawName, fields, mark, orient, series, cfg: scaleConfigOf(spec) }
   const userScaleCfg = isObject(spec.config) && isObject((spec.config as Record<string, unknown>).scale)
@@ -3683,6 +3698,13 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         sc.range = r
       }
     }
+    // (a scale assembles its explicit properties before its implicit ones - split.ts combine() - and vega applies a point scale's
+    // `padding` (both paddings) in key order, so the implicit padding follows an explicit paddingOuter)
+    if (type === 'point' && def.scale?.padding === undefined && sc.padding !== undefined) {
+      const implicitPadding = sc.padding
+      delete sc.padding
+      sc.padding = implicitPadding
+    }
     withRangeLimits(sc, def.scale)
     recordExplicit(sc, def.scale)
     scales.push(sc)
@@ -3690,8 +3712,20 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
 
   // size / strokeWidth / opacity: numeric ranges from config.scale (range.ts defaultRange)
   const cfgS = dc.cfg
-  const step = Math.min(discreteStep(spec, 'width'), discreteStep(spec, 'height'))
-  const numericScale = (name: string, def: FieldDef, range: [number, number], zero: boolean): ScaleSpec => {
+  const widthStep = wReq.step ?? discreteStep(spec, 'width')
+  const heightStep = hReq.step ?? discreteStep(spec, 'height')
+  const step = Math.min(widthStep, heightStep)
+  // range.ts getBinStepSignal: a binned x / y contributes the width (height) per bin to the step the size range derives from
+  const binStep = (ch: 'x' | 'y'): string | undefined => {
+    const d = fields.find((f) => f.channel === ch && f.field && f.bin && !f.datumOnly)
+    if (!d) return undefined
+    const bins = binNames(d.binParams!, d.field).signal
+    return `${ch === 'x' ? 'width' : 'height'} / ((${bins}.stop - ${bins}.start) / ${bins}.step)`
+  }
+  const binStepX = binStep('x')
+  const binStepY = binStep('y')
+  const stepExpr = binStepX || binStepY ? `min(${binStepX ?? widthStep}, ${binStepY ?? heightStep})` : undefined
+  const numericScale = (name: string, def: FieldDef, range: [number, number | { signal: string }], zero: boolean): ScaleSpec => {
     const discrete = isDiscreteType(def.type)
     const userType = def.scale?.type as string | undefined
     const type = discrete ? 'point' : ['linear', 'log', 'pow', 'sqrt', 'symlog', 'quantile', 'quantize', 'threshold'].includes(userType ?? '') ? userType! : 'linear'
@@ -3714,7 +3748,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
     return sc
   }
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
-  if (sizeDef) scales.push(numericScale('size', sizeDef, sizeRange(mark, cfgS, step), true))
+  if (sizeDef) scales.push(numericScale('size', sizeDef, sizeRange(mark, cfgS, step, stepExpr), true))
   const strokeWidthDef = fields.find((f) => f.channel === 'strokeWidth' && f.field)
   if (strokeWidthDef) scales.push(numericScale('strokeWidth', strokeWidthDef, [cfgS.minStrokeWidth, cfgS.maxStrokeWidth], false))
   const opacityDefS = fields.find((f) => f.channel === 'opacity' && f.field)
@@ -3854,8 +3888,6 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
     }
   }
 
-  void width
-  void height
   // the user's scale properties on the non-positional channels count as explicit too
   for (const f of fields) {
     if (!f.scale || f.channel === 'x' || f.channel === 'y') continue
@@ -5384,7 +5416,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
   }
   // (a map unit's positions come from its geopoint output, never from a default)
-  if (!GEO_UNITS.has(spec)) fillMissingPositions(update, mark, fields)
+  if (!GEO_UNITS.has(spec)) fillMissingPositions(update, mark, fields, orient, scaleConfigOf(spec))
 
   {
     // markDef.ariaRoleDescription (vega-lite getMarkPropOrConfig): what a composite mark's parts call themselves
@@ -5451,6 +5483,24 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       if (!offDef || !ref || ref.scale !== pos || ref.field === undefined) continue
       delete ref.band
       ref.offset = { scale: offCh, field: aggFieldName(offDef), ...(isDiscreteType(offDef.type) ? { band: 0.5 } : {}) }
+    }
+  }
+  // a binned field on a point-positioned mark sits at the middle of its bin (valueref.ts midPoint / interpolatedSignalRef:
+  // bandPosition 0.5 over a continuous scale), not at the bin start
+  if (BIN_MID_MARKS.has(mark)) {
+    for (const pos of ['x', 'y'] as const) {
+      const def = fields.find((f) => f.channel === pos && f.field && f.bin && !f.datumOnly)
+      if (!def) continue
+      for (const key of [pos, `${pos}c`]) {
+        const ref = update[key] as Record<string, unknown> | undefined
+        const bn = binNames(def.binParams!, def.field)
+        if (!ref || ref.scale !== pos || ref.field !== bn.start) continue
+        if (positionalScaleType(mark, def) === 'band' || positionalScaleType(mark, def) === 'point') continue
+        update[key] = {
+          signal: `scale(${JSON.stringify(pos)}, 0.5 * datum[${JSON.stringify(bn.start)}] + 0.5 * datum[${JSON.stringify(bn.end)}])`,
+          ...(ref.offset !== undefined ? { offset: ref.offset } : {}),
+        }
+      }
     }
   }
   // arc polar offsets apply to the angles/radius channels
@@ -5738,7 +5788,7 @@ function applyGeoPositions(update: Record<string, unknown>, spec: VLSpec, mark: 
  * group, and centers ticks/bars with a fractional size. (The same defaults
  * hold for a channel that is only a datum/value.)
  */
-function fillMissingPositions(update: Record<string, unknown>, mark: string, fields: FieldDef[]): void {
+function fillMissingPositions(update: Record<string, unknown>, mark: string, fields: FieldDef[], orient: string, scaleCfg: ScaleCfg): void {
   const has = (...ks: string[]): boolean => ks.some((k) => update[k] !== undefined)
   const hasX = has('x', 'xc', 'x2')
   const hasY = has('y', 'yc', 'y2')
@@ -5757,10 +5807,20 @@ function fillMissingPositions(update: Record<string, unknown>, mark: string, fie
       if (!hasX) { update.xc = midX; update.width = { signal: '0.75 * width' } }
       if (!hasY) { update.yc = midY; update.height = { signal: '0.75 * height' } }
       break
-    case 'bar':
-      if (!hasX) { update.xc = midX; update.width = { signal: '0.9 * width' } }
-      if (!hasY) { update.yc = midY; update.height = { signal: '0.9 * height' } }
+    case 'bar': {
+      // position-rect.ts rectPosition: the band channel of the orientation (x of a vertical bar, y of a horizontal one) is
+      // centred with a size of (1 - barBandPaddingInner) of the view (defaultSizeRef); the other channel is a range from
+      // zeroOrMax to zeroOrMin, i.e. the whole view
+      const padding = (scaleCfg.bandPaddingInner ?? scaleCfg.barBandPaddingInner) as number | undefined
+      const span = (size: 'width' | 'height'): unknown => (typeof padding === 'number' ? { signal: `${1 - padding} * ${size}` } : { value: 18 })
+      if (!hasX) {
+        if (orient === 'vertical') { update.xc = midX; update.width = span('width') } else { update.x = groupW; update.x2 = { value: 0 } }
+      }
+      if (!hasY) {
+        if (orient === 'horizontal') { update.yc = midY; update.height = span('height') } else { update.y = { value: 0 }; update.y2 = groupH }
+      }
       break
+    }
     case 'area':
       if (!hasX) update.x = { value: 0 }
       if (!hasY) update.y = groupH
@@ -6332,7 +6392,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (builtMarks.overlayData) {
     ;(out.data as Record<string, unknown>[]).push(builtMarks.overlayData)
   }
-  out.scales = buildScales(spec, fields, mark, orient, dataName, width, height, data.seriesFields, pd.rawName)
+  out.scales = buildScales(spec, fields, mark, orient, dataName, wSpec, hSpec, data.seriesFields, pd.rawName)
   applyScaleConfig(out.scales as ScaleSpec[], isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined)
   showInvalidValues(spec, fields, mark, out.scales as ScaleSpec[], builtMarks)
   applyDomainUnion(fields, out.scales as ScaleSpec[])
