@@ -119,6 +119,12 @@ export interface SignalBindOptions {
    * or each render would restart its timers.
    */
   owner?: EventTarget
+  /**
+   * `containerSize()` for the handlers' expressions, read when an event fires (vega: the view container's live
+   * `clientWidth` / `clientHeight`). Without it they read the size the scene was evaluated with, which a
+   * `window:resize` handler would see a render behind.
+   */
+  containerSize?: () => [number | undefined, number | undefined]
 }
 
 export interface SignalBinding {
@@ -493,6 +499,7 @@ function bindSignalEventsDefs(
     ...sceneRuntime,
     data: dataOf,
     modify: modifyData,
+    ...(opts.containerSize ? { containerSize: opts.containerSize } : {}),
     expr: (code) => compileIn(bindRuntime, code),
   }
   const compiledExprs = new WeakMap<ExpressionRuntime, Map<string, CompiledExpr>>()
@@ -1137,7 +1144,7 @@ export function bindSceneSignals(
   scene: SceneRoot,
   signals: Record<string, unknown>,
   hooks: SignalEventHooks = {},
-  opts: Pick<SignalBindOptions, 'pick' | 'data' | 'owner'> = {},
+  opts: Pick<SignalBindOptions, 'pick' | 'data' | 'owner' | 'containerSize'> = {},
 ): SignalBinding {
   const chart = (scene as unknown as { compiled?: CompiledChart }).compiled
   const runtime = scene.runtime as ExpressionRuntime | undefined

@@ -93,5 +93,36 @@ forEachVariant(['signals'], (Chart, variant) => {
         expect(svgOf(live).outerHTML).toBe(svgOf(fresh).outerHTML)
       } finally { ro.restore(); vi.restoreAllMocks() }
     })
+
+    variant.it(['signals'], 'without size props a container-sized spec follows the container through window resizes, as a fresh mount', () => {
+      const box = { current: { width: 700, height: 200 } }
+      const ro = stubResizeObserver(box)
+      // the element as the browser lays it out: what `containerSize()` reads when the `window:resize` handler runs
+      const proto = HTMLElement.prototype
+      const saved = [Object.getOwnPropertyDescriptor(proto, 'clientWidth'), Object.getOwnPropertyDescriptor(proto, 'clientHeight')] as const
+      Object.defineProperty(proto, 'clientWidth', { configurable: true, get: () => box.current.width })
+      Object.defineProperty(proto, 'clientHeight', { configurable: true, get: () => box.current.height })
+      try {
+        const chart = (edits: Record<number, number>, changed: number[] | undefined): React.ReactElement => (
+          <Chart spec={spec} data={{ table: rowsAt(edits) }} {...(changed ? { dataChanges: { table: changed } } : {})} />
+        )
+        const live = mount(chart({}, undefined))
+        expect(size(live)).toEqual(['700', '200'])
+        const edits: Record<number, number> = {}
+        for (const [i, to] of [[7, { width: 500, height: 220 }], [14, { width: 320, height: 180 }]] as const) {
+          edits[i] = 12 + i
+          box.current = to
+          ro.fire()
+          resizeWindow()
+          act(() => { (roots[0] as unknown as { render(n: React.ReactElement): void }).render(chart(edits, [i])) })
+          const fresh = mount(chart(edits, undefined))
+          expect(size(live), `after the resize to ${to.width}x${to.height}`).toEqual([String(to.width), String(to.height)])
+          expect(svgOf(live).outerHTML).toBe(svgOf(fresh).outerHTML)
+        }
+      } finally {
+        ro.restore()
+        for (const [k, d] of [['clientWidth', saved[0]], ['clientHeight', saved[1]]] as const) { if (d) Object.defineProperty(proto, k, d); else delete (proto as unknown as Record<string, unknown>)[k] }
+      }
+    })
   })
 })

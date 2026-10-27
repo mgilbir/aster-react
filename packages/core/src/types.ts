@@ -53,6 +53,15 @@ export interface RuntimeInput {
    */
   containerSize?: { width: number; height: number }
   /**
+   * The measured size of the element the chart fills, when the host lets the chart fill it. It is the view size of a
+   * spec that does not size itself (no `width` / `height` signal): the same as an explicit `width` / `height`
+   * for such a spec, but a spec that drives those signals itself (a bound slider, a handler, vega-lite's
+   * `"container"`) keeps doing so and only sees the container through `containerSize()`. As in Vega, where
+   * `view.width(w)` is a signal write, the later write wins: a `width` / `height` in `signals` beats it, and an
+   * explicit `width` / `height` beats both. Without `containerSize` it is also what `containerSize()` returns.
+   */
+  measuredSize?: { width: number; height: number }
+  /**
    * Partial re-evaluation: the names of datasets whose VALUES changed since
    * the previous evaluate (the datasets' transform pipeline re-runs, and only
    * the marks drawing from them — directly or via a derived source chain —

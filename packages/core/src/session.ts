@@ -155,6 +155,7 @@ function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   parts.push(`w=${valueKey(input.width)}`, `h=${valueKey(input.height)}`)
   // `containerSize()` is read by the spec's width / height signals: a resized container is a different view
   if (input.containerSize) parts.push(`cs=${valueKey(input.containerSize)}`)
+  if (input.measuredSize) parts.push(`ms=${valueKey(input.measuredSize)}`)
   if (input.textMetrics) parts.push(`tm=#${refId(input.textMetrics)}`)
   if (input.limits) parts.push(`lim=${valueKey(input.limits)}`)
   // image urls are vetted while the scene is built: a different policy can reject a scene a looser one accepted

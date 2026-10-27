@@ -287,6 +287,8 @@ function genSpec(r: Rnd): GenSpec {
 interface World { t: Row[]; u: Row[]; sel: Row[]; /** the store holds `_vgsid_` ids (else field tuples) */ selIds?: boolean; /** the values the events wrote to the signals of the two group scopes (see `scenarioScoped`) */ scoped?: { outer: number; inner: number }; sig: number; width: number | undefined; height: number | undefined
   /** The host's container element size (`containerSize`, see `scenarioContainer`). */
   container?: { width: number; height: number } | undefined
+  /** The container a <Chart> without size props measured (`measuredSize`). */
+  measured?: { width: number; height: number } | undefined
   /** The `width` / `height` signal values a `window:resize` handler wrote through the event loop (see `scenarioContainer`). */
   sizeSig?: { width?: number; height?: number } | undefined
 }
@@ -455,6 +457,7 @@ export function applyStep(w: World, s: Step): World {
       // host may also fix or release the view size itself. Often together with a data edit.
       const known = s.r[0]! < 0.7
       next.container = known ? { width: 200 + Math.floor(s.r[1]! * 400), height: 150 + Math.floor(s.r[2]! * 250) } : undefined
+      next.measured = next.container && s.r[6]! < 0.6 ? { ...next.container } : undefined
       next.sizeSig = s.r[3]! < 0.15 ? undefined : { width: next.container?.width ?? 300, height: next.container?.height ?? 300 }
       if (s.r[4]! < 0.3) { next.width = 150 + Math.floor(s.r[5]! * 200); next.height = s.r[3]! < 0.5 ? undefined : 120 + Math.floor(s.r[2]! * 160) }
       else if (s.r[4]! < 0.45) { next.width = undefined; next.height = undefined }
@@ -557,6 +560,7 @@ function scopedSignals(g: GenSpec, w: World): Record<string, unknown> {
 /** What the host adds for the view size: the container it measured, and the size signals the event loop wrote. */
 function sizeInputs(w: World, input: RuntimeInput): void {
   if (w.container) input.containerSize = w.container
+  if (w.measured) input.measuredSize = w.measured
   if (w.sizeSig) Object.assign(input.signals!, w.sizeSig)
 }
 
@@ -894,17 +898,23 @@ export function scenarioContainer(seed: number, nSteps: number): { g: GenSpec; w
   const base = scenario(seed, nSteps)
   const r = mulberry32(seed ^ 0xc0117a)
   const spec = base.g.spec
-  delete spec.width
-  delete spec.height
-  const auto = pick(r, ['fit', 'fit', 'fit-x', 'fit-y', 'pad', 'none'] as const)
-  spec.autosize = { type: auto, contains: 'padding' }
-  const size = (i: 0 | 1): Record<string, unknown> => {
-    const expr = `isFinite(containerSize()[${i}]) ? containerSize()[${i}] : 300`
-    return { init: expr, on: [{ update: expr, events: 'window:resize' }] }
+  // a third of the views keep their own numeric size: the measured container then sizes them (a <Chart> without size props)
+  const fill = r() < 0.3
+  if (fill) {
+    base.g.label += ' container(fill)'
+  } else {
+    delete spec.width
+    delete spec.height
+    const auto = pick(r, ['fit', 'fit', 'fit-x', 'fit-y', 'pad', 'none'] as const)
+    spec.autosize = { type: auto, contains: 'padding' }
+    const size = (i: 0 | 1): Record<string, unknown> => {
+      const expr = `isFinite(containerSize()[${i}]) ? containerSize()[${i}] : 300`
+      return { init: expr, on: [{ update: expr, events: 'window:resize' }] }
+    }
+    const sigs = spec.signals as Array<Record<string, unknown>>
+    sigs.unshift({ name: 'width', ...size(0) }, { name: 'height', ...size(1) })
+    base.g.label += ` container(${auto})`
   }
-  const sigs = spec.signals as Array<Record<string, unknown>>
-  sigs.unshift({ name: 'width', ...size(0) }, { name: 'height', ...size(1) })
-  base.g.label += ` container(${auto})`
   const steps = base.steps.map((s) => (r() < 0.45 ? { ...s, op: 'resize' as const } : s))
   return { g: base.g, world: { ...base.world, container: { width: 480, height: 300 } }, steps }
 }
@@ -1039,7 +1049,7 @@ describe('incremental === fresh on container-sized views that are resized betwee
   it('the generator is deterministic per seed and the views are container-sized', () => {
     expect(JSON.stringify(scenarioContainer(7, 6))).toBe(JSON.stringify(scenarioContainer(7, 6)))
     const all = Array.from({ length: 200 }, (_, i) => scenarioContainer(i + 1, 1).g.label).join('\n')
-    for (const need of ['container(fit)', 'container(fit-x)', 'container(fit-y)', 'container(pad)', 'container(none)']) {
+    for (const need of ['container(fit)', 'container(fit-x)', 'container(fit-y)', 'container(pad)', 'container(none)', 'container(fill)']) {
       expect(all, `generator never produces ${need}`).toContain(need)
     }
     const ops = new Set(Array.from({ length: 40 }, (_, i) => scenarioContainer(i + 1, 12).steps.map((x) => x.op)).flat())
