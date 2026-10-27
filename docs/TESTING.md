@@ -31,7 +31,7 @@ result is the summary line it prints. They change with the code: re-run before q
 | What | Command | Result |
 |---|---|---|
 | Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 785 specs: 310 raw Vega, 475 Vega-Lite |
-| Unit, React, script and vector tests | `pnpm test` | 136 files, 12132 tests passed |
+| Unit, React, script and vector tests | `pnpm test` | 140 files, 13152 tests passed |
 | Time-zone matrix | `pnpm test:tz` | `[tz] all zones passed` (zone-sensitive vitest suites under America/New_York and Asia/Kolkata; `corpus-tz` under UTC and both) |
 | SVG corpus vs real Vega | `pnpm conformance` | 785/785 passed |
 | Vega-Lite corpus through `@aster/vl` | `pnpm conformance-vl` | 475 passed, 0 failed, 0 errored / 475 |
@@ -77,9 +77,34 @@ second render (after the signals were written into the running view) does not. S
 ## Oracle vectors
 
 `packages/core/testdata/vectors/*.json` hold input/output pairs recorded from the pinned
-upstream libraries (`pnpm vectors`); each library the engine reimplements is replayed against
-them. Recordings only hold for results that do not depend on the V8 version
-(see "Why live" below).
+upstream libraries (`pnpm vectors`); the libraries the engine reimplements are replayed against
+them (`packages/core/src/oracle-vectors.test.ts`). Recordings only hold for results that do not
+depend on the V8 version (see "Why live" below), so only those suites stay recorded: vega-util,
+d3-color (compared with a 1e-6 tolerance, because of its cbrt/pow round-trips), d3-format and
+vega-format, vega-time, d3-dsv and topojson-client.
+
+The four suites that went through `Math.pow/exp/log`, the trig functions or `sqrt` are LIVE
+differentials, with their inputs in importable case modules beside the tests (the old recordings
+broke CI once, Node 22 against Node 26):
+
+| Suite (former vector file) | Test | Inputs | Cases |
+|---|---|---|---|
+| vega-scale: op programs, DST programs, scheme registry, tick helpers | `differential-vega-scale.test.mts` | `vega-scale-cases.mjs` | 43 + 2 + 68 + 60 |
+| d3-geo projections and `geoPath`, d3-contour | `differential-d3-geo.test.mts` | `d3-geo-cases.mjs` | 18 + 30 (geo twice, see below) |
+| d3-shape lines, areas, curve families | `differential-d3-shape.test.mts` | `d3-shape-cases.mjs` | 247 + 9 (each twice, see below) |
+| vega-expression parser and vega-interpreter evaluator (all five kinds) | `differential-vega-expression.test.mts` | `vega-expression-cases.mjs` | 92 + 23 + 74 + 18 + 10 |
+
+The pinned upstream and Aster run in ONE process on identical inputs and are compared strictly: `NaN`,
+`-0`, `undefined`, `Date`s, and thrown errors (class and message) all count, with no tolerance, no skip list
+and no allow list (`exact()` in `differential-util.mts`). Each test ends with a coverage floor at the old
+recorded case count, so the suites cannot shrink silently. The expression parser kinds are
+engine-independent and would have stayed recorded, but they are live too (it costs nothing and keeps the whole
+file out of `testdata`); the evaluator kinds are not (`pow`, `sqrt`, the `Math` table, and the V8 wording of the
+TypeErrors that `evalSecurity` pins).
+
+d3-shape and d3-geo round path coordinates to 3 decimals by default, which hides a 1-ulp divergence (a planted
+`* (1 + Number.EPSILON)` in a Catmull-Rom curve and in the Mercator raw projection left every string identical).
+Their cases therefore run twice, at the default digits and at full precision (`.digits(null)`).
 
 The **spec-level** suites work one level up and are LIVE differentials, not recordings
 (`packages/conformance/scripts/differential-{scale-spec,projection,interpolate}.test.mts`): a Vega **scale spec**

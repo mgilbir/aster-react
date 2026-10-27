@@ -1,8 +1,8 @@
 /**
  * The Vega expression grammar's parser — a faithful port of vega-expression
  * (6.2.1), which itself derives from Esprima. Produces the same AST shape
- * upstream does (plain `{type, …}` nodes), pinned by oracle vectors recorded
- * from the pinned vega-expression (`testdata/vectors/vega-expression.json`).
+ * upstream does (plain `{type, …}` nodes), pinned by a live differential
+ * against the pinned vega-expression (`conformance/scripts/differential-vega-expression.test.mts`).
  *
  * Deviations from JavaScript-on-purpose, exactly as upstream: keywords other
  * than `if` are rejected ("Disabled."), there are no assignments, no sequence
