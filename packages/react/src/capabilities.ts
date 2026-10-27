@@ -4,7 +4,7 @@ import type {
   snapshotCanvasScene,
 } from '@aster/core/canvas'
 import type { buildHitIndex } from '@aster/core/hit'
-import type { bindSceneSignals, stampDatumAttrs } from '@aster/core/signals'
+import type { bindSceneSignals, createCursorTracker, sceneHasCursor, stampDatumAttrs } from '@aster/core/signals'
 
 /**
  * Capabilities are plain values handed to `ChartCore`; there is no registry and no side-effect
@@ -21,11 +21,14 @@ export interface CanvasCapability {
 
 /**
  * Hit testing (`@aster/core/hit`) and the signal event loop (`@aster/core/signals`): tooltips,
- * point selection, `signal.on` event streams, `data-datum` stamping.
+ * point selection, `signal.on` event streams, `data-datum` stamping, and the item cursor (an item's `cursor` channel
+ * shown while the pointer is over it).
  * Import the value from `@aster/react/interaction`.
  */
 export interface InteractionCapability {
   readonly buildHitIndex: typeof buildHitIndex
   readonly bindSceneSignals: typeof bindSceneSignals
   readonly stampDatumAttrs: typeof stampDatumAttrs
+  readonly createCursorTracker: typeof createCursorTracker
+  readonly sceneHasCursor: typeof sceneHasCursor
 }
