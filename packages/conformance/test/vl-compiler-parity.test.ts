@@ -477,6 +477,15 @@ const GROUPS: Record<string, Case[]> = {
     ['a sequence aggregated', { data: { sequence: { start: 0, stop: 10, step: 1, as: 'n' } }, mark: 'point', encoding: { x: q('n'), y: q('n', { aggregate: 'sum' }) } }],
     ['a named sequence in a layer', { layer: [{ data: { sequence: { start: 0, stop: 5, step: 1, as: 'u' } }, mark: 'point', encoding: { x: q('u'), y: q('u') } }, { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y') } }] }],
   ],
+  // transform.ts AggregateTransform / facet.ts normalizeFacetedUnit: an aggregate with no measures only groups; a faceted unit's layout properties are the facet's
+  'grouping aggregates and the layout of faceted units (vconcat_flatten, facet_grid_bar)': [
+    ['an aggregate with no measures (the distinct groups)', { data: DATA, transform: [{ aggregate: [], groupby: ['c', 'g'] }], mark: 'point', encoding: { x: n('c'), y: n('g') } }],
+    ['an aggregate with no measures in a concat child', { data: DATA, vconcat: [{ transform: [{ aggregate: [], groupby: ['c'] }], mark: 'point', encoding: { x: n('c') } }, { mark: 'point', encoding: { x: q('x'), y: q('y') } }] }],
+    ['a faceted unit with a spacing', { data: DATA, spacing: 5, mark: 'point', encoding: { x: q('x'), y: q('y'), row: n('g'), column: n('c') } }],
+    ['a faceted unit with row and column spacing', { data: DATA, spacing: { row: 3, column: 40 }, mark: 'point', encoding: { x: q('x'), y: q('y'), row: n('g'), column: n('c') } }],
+    ['a wrapped faceted unit with align and bounds', { data: DATA, align: 'each', bounds: 'flush', mark: 'point', encoding: { x: q('x'), y: q('y'), facet: n('c', { columns: 2 }) } }],
+    ['a faceted unit with a center', { data: DATA, center: true, mark: 'point', encoding: { x: q('x'), y: q('y'), column: n('c') } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
@@ -557,7 +566,7 @@ describe('@aster/vl == vega-lite: nested fields in predicates and transforms (ro
   const px = { x: { field: 'x', type: 'quantitative' } }
   const pt = (transform: unknown[]) => ({ data: NESTED, transform, mark: 'point', encoding: px })
   // (an ENCODING of a nested field is flattened under a hashed key here and under the joined path in vega-lite: those compare by render only)
-  const RENDER_ONLY = new Set(['filter oneOf with a nested y encoding', 'encodings of a nested field'])
+  const RENDER_ONLY = new Set(['filter oneOf with a nested y encoding', 'encodings of a nested field', 'a nested field under a flatten output', 'a nested field under a calculated object', 'a nested field of the source next to a flatten'])
   const SITES: Array<[string, Record<string, any>]> = [
     ['filter equal', pt([{ filter: { field: 'o.v', equal: 1 } }])],
     ['filter range', pt([{ filter: { field: 'o.v', range: [1, 2] } }])],
@@ -572,6 +581,9 @@ describe('@aster/vl == vega-lite: nested fields in predicates and transforms (ro
     ['an aggregate transform', { data: NESTED, transform: [{ aggregate: [{ op: 'sum', field: 'o.v', as: 's' }], groupby: ['c'] }], mark: 'point', encoding: { x: { field: 's', type: 'quantitative' } } }],
     ['a bin transform', { data: NESTED, transform: [{ bin: true, field: 'o.v', as: 'b' }], mark: 'point', encoding: { x: { field: 'b', type: 'quantitative' } } }],
     ['encodings of a nested field', { data: NESTED, mark: 'point', encoding: { x: px.x, color: { field: 'o.v', type: 'nominal' }, tooltip: { field: 'o.v', type: 'quantitative' } } }],
+    ['a nested field under a flatten output', { data: { values: [{ id: 'a', lc: [{ time: 1, mag: 18 }, { time: 2, mag: 19 }] }, { id: 'b', lc: [{ time: 1, mag: 20 }, { time: 3, mag: 22 }] }] }, transform: [{ flatten: ['lc'] }], mark: 'point', encoding: { x: { field: 'lc.time', type: 'quantitative' }, y: { field: 'lc.mag', type: 'quantitative' }, color: n('id') } }],
+    ['a nested field under a calculated object', { data: DATA, transform: [{ calculate: '{u: datum.x * 2, w: {z: datum.y}}', as: 'o' }], mark: 'point', encoding: { x: { field: 'o.u', type: 'quantitative' }, y: { field: 'o.w.z', type: 'quantitative' } } }],
+    ['a nested field of the source next to a flatten', { data: { values: [{ o: { v: 1 }, lc: [{ t: 1 }, { t: 2 }] }, { o: { v: 2 }, lc: [{ t: 3 }] }] }, transform: [{ flatten: ['lc'] }], mark: 'point', encoding: { x: { field: 'lc.t', type: 'quantitative' }, y: { field: 'o.v', type: 'quantitative' } } }],
   ]
   /** The expressions of the pipeline that name a field: the filters and the formulas that write a joined path. */
   const exprs = (vg: any): string[] =>

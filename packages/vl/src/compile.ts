@@ -3195,13 +3195,29 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   }
   const ownSelectionId = UNIT_SEL.get(spec)?.ownId === true
 
+  const userTransforms = Array.isArray(spec.transform) ? (spec.transform as Record<string, unknown>[]) : []
+  // fields a user transform produces are derived: vega-lite never re-parses them
+  const derivedKeys = new Set<string>()
+  {
+    const probe: TranslateState = { parsed: new Map() }
+    translateTransforms(userTransforms, ctx, probe)
+    for (const [k, v] of probe.parsed) if (v === 'derived') derivedKeys.add(k)
+    // a sequence generator's rows are numbers already (sequence.ts producedFields)
+    if (isObject(spec.data) && isObject(spec.data.sequence)) derivedKeys.add(typeof spec.data.sequence.as === 'string' ? spec.data.sequence.as : 'data')
+  }
   // flatten nested/escaped source paths into the flat keys the rest of the
   // compiler reads (names.ts flatField); once per distinct key per source
+  // (a path under a field a user transform produces - a flatten's output, say - can only be read once that transform has run: its
+  // copy follows the transforms, as a parse node placed after them, and the copy is not parsed again)
+  const lateFlat: Record<string, unknown>[] = []
   const addFlat = (userPath: string): void => {
     const ff = flatField(userPath)
     if (ff.expr === undefined || castDone.has(`flat:${ff.key}`)) return
     castDone.add(`flat:${ff.key}`)
-    casts.push({ type: 'formula', expr: ff.expr, as: ff.key })
+    if (derivedKeys.has(splitAccessPath(userPath)[0]!)) {
+      lateFlat.push({ type: 'formula', expr: ff.expr, as: ff.key })
+      derivedKeys.add(ff.key)
+    } else casts.push({ type: 'formula', expr: ff.expr, as: ff.key })
   }
   for (const f of fields) if (f.flatExpr !== undefined) addFlat(f.source)
   for (const p of referencedPaths(spec.encoding)) addFlat(p)
@@ -3247,7 +3263,6 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   const continuousDimension = dimension != null && !isDiscreteType(dimension.type)
 
   // the oracle skips casts only in the discrete-dimension stack+filter pipeline
-  const userTransforms = Array.isArray(spec.transform) ? (spec.transform as Record<string, unknown>[]) : []
   const GENERATING = new Set(['regression', 'quantile', 'loess', 'kde', 'density'])
   const lastUser = userTransforms.length
     ? (userTransforms[userTransforms.length - 1] as Record<string, unknown>)
@@ -3273,15 +3288,6 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     !fields.some((f) => f.timeUnit) &&
     fields.some((f) => f.channel === measureChannel && f.type === 'quantitative') &&
     !continuousDimension)
-  // fields a user transform produces are derived: vega-lite never re-parses them
-  const derivedKeys = new Set<string>()
-  {
-    const probe: TranslateState = { parsed: new Map() }
-    translateTransforms(userTransforms, ctx, probe)
-    for (const [k, v] of probe.parsed) if (v === 'derived') derivedKeys.add(k)
-    // a sequence generator's rows are numbers already (sequence.ts producedFields)
-    if (isObject(spec.data) && isObject(spec.data.sequence)) derivedKeys.add(typeof spec.data.sequence.as === 'string' ? spec.data.sequence.as : 'data')
-  }
   const castTypes = new Map<string, 'number' | 'date'>()
   if (!skipCasts) {
     // a field carrying a timeUnit anywhere in the encoding casts as a date,
@@ -3332,6 +3338,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   ctx.currentUnit = undefined
   for (const t of userOut) USER_TRANSFORMS.add(t)
   pushAll(pipeline, userOut)
+  pushAll(pipeline, lateFlat)
 
   // maps: the geojson (projection fit) and geopoint (longitude / latitude) transforms follow the
   // user's transforms and the implicit parses, ahead of bin / timeUnit / aggregate

@@ -281,7 +281,9 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
   if (spec.autosize !== undefined) validateAutosize(spec.autosize, at('autosize'))
   if (spec.datasets !== undefined && !isObj(spec.datasets)) mustBe(at('datasets'), 'an object mapping names to arrays')
   for (const k of ['align', 'bounds', 'center', 'spacing', 'columns'] as const) {
-    if (spec[k] !== undefined && (kind === 'unit' || kind === 'layer')) fail(at(k), `${k} is only meaningful on composition specs`)
+    // (a unit faceted through its encoding is a facet: normalize/facet.ts moves its layout properties onto it)
+    const faceted = kind === 'unit' && isObj(spec.encoding) && (spec.encoding.row != null || spec.encoding.column != null || spec.encoding.facet != null)
+    if (spec[k] !== undefined && (kind === 'unit' || kind === 'layer') && !faceted) fail(at(k), `${k} is only meaningful on composition specs`)
   }
 
   switch (kind) {
@@ -1255,7 +1257,8 @@ function validateTransform(kind: string, t: Obj, a: string): void {
     case 'aggregate':
     case 'joinaggregate': {
       const defs = t[kind]
-      if (!Array.isArray(defs) || defs.length === 0) mustBe(`${a}.${kind}`, 'a non-empty array of {op, field?, as?}')
+      // (an aggregate with no measures only groups: the distinct values of its groupby)
+      if (!Array.isArray(defs) || (defs.length === 0 && kind === 'joinaggregate')) mustBe(`${a}.${kind}`, kind === 'aggregate' ? 'an array of {op, field?, as?}' : 'a non-empty array of {op, field?, as?}')
       defs.forEach((d, i) => {
         const da = `${a}.${kind}[${i}]`
         if (!isObj(d)) mustBe(da, OBJECT)
