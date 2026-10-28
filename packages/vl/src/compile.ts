@@ -10,7 +10,7 @@
 import { renameDataRefs, renameExpr, renameFragment } from './embed.js'
 import { VLCompileError, pushAll, signalSafe, flatField, datumRef as dref, genName, safeKey, splitAccessPath, validExpr } from './names.js'
 import { validateGeoUnit, validateSpec } from './validate.js'
-import { predicateExpr, domainValueExpr, paramLeaves } from './predicate.js'
+import { predicateExpr, domainValueExpr, paramLeaves, isDateTime as isDateTimeValue } from './predicate.js'
 import {
   SELECTION_ID, STORE, assembleSelectionScaleDomain, assembleTopLevelSelectionSignals, assembleUnitSelectionData,
   assembleFacetSignals, assembleUnitSelectionMarks, assembleUnitSelectionSignals, interactiveLegendSelections, parseUnitSelections, requiresSelectionId, selectionPredicate,
@@ -53,6 +53,8 @@ export interface ChannelDef {
 }
 
 export interface FieldDef {
+  /** the unit encodes this x / y's offset channel too (xOffset / yOffset): its discrete scale is a band (scale/type.ts hasNestedOffsetScale) */
+  nestedOffset?: boolean
   /** the title config.fieldTitle / config.countTitle give a field with no title of its own */
   autoTitle?: string
   channel: string
@@ -149,7 +151,58 @@ export function compile(input: VLSpec): VLSpec {
     out.signals = [...signals, ...layoutSignals]
   }
   assertNoGeoSignalClash(out)
+  assembleConditionalAxisProps(out)
   return exprRefsToSignals(out) as VLSpec
+}
+
+
+/**
+ * axis/assemble.ts assembleAxis: a conditional axis property (`gridColor: {condition: {test, value}, value}`) is a custom
+ * encoding of its part (grid / ticks / labels) for the corresponding Vega property, or a signal for the few that have no
+ * fixed Vega property. Grid properties belong to the grid axis only.
+ */
+const CONDITIONAL_AXIS_PROPS: Record<string, { part: string; vgProp: string } | null> = {
+  labelAlign: { part: 'labels', vgProp: 'align' }, labelBaseline: { part: 'labels', vgProp: 'baseline' }, labelColor: { part: 'labels', vgProp: 'fill' },
+  labelFont: { part: 'labels', vgProp: 'font' }, labelFontSize: { part: 'labels', vgProp: 'fontSize' }, labelFontStyle: { part: 'labels', vgProp: 'fontStyle' },
+  labelFontWeight: { part: 'labels', vgProp: 'fontWeight' }, labelOpacity: { part: 'labels', vgProp: 'opacity' }, labelOffset: null, labelPadding: null,
+  gridColor: { part: 'grid', vgProp: 'stroke' }, gridDash: { part: 'grid', vgProp: 'strokeDash' }, gridDashOffset: { part: 'grid', vgProp: 'strokeDashOffset' },
+  gridOpacity: { part: 'grid', vgProp: 'opacity' }, gridWidth: { part: 'grid', vgProp: 'strokeWidth' },
+  tickColor: { part: 'ticks', vgProp: 'stroke' }, tickDash: { part: 'ticks', vgProp: 'strokeDash' }, tickDashOffset: { part: 'ticks', vgProp: 'strokeDashOffset' },
+  tickOpacity: { part: 'ticks', vgProp: 'opacity' }, tickSize: null, tickWidth: { part: 'ticks', vgProp: 'strokeWidth' },
+}
+const GRID_ONLY_AXIS_PROPS = new Set(['gridColor', 'gridDash', 'gridDashOffset', 'gridOpacity', 'gridWidth', 'gridCap'])
+
+function assembleConditionalAxisProps(node: unknown): void {
+  if (Array.isArray(node)) { for (const n of node) assembleConditionalAxisProps(n); return }
+  if (!isObject(node)) return
+  if (Array.isArray(node.axes)) {
+    for (const axis of node.axes as Record<string, unknown>[]) {
+      if (!isObject(axis)) continue
+      const isGrid = axis.grid === true
+      for (const prop of Object.keys(axis)) {
+        const value = axis[prop]
+        if (!isGrid && GRID_ONLY_AXIS_PROPS.has(prop) && isObject(value) && value.condition !== undefined) { delete axis[prop]; continue }
+        if (!(prop in CONDITIONAL_AXIS_PROPS) || !isObject(value) || value.condition === undefined) continue
+        const { condition, ...rest } = value
+        const test = (c: Record<string, unknown>): Record<string, unknown> => {
+          const { test: t, ...ref } = c
+          return { test: typeof t === 'string' ? t : predicateExpr(t), ...ref }
+        }
+        const conditions = ([] as unknown[]).concat(condition) as Record<string, unknown>[]
+        const index = CONDITIONAL_AXIS_PROPS[prop]
+        if (index) {
+          const encode = (isObject(axis.encode) ? axis.encode : (axis.encode = {})) as Record<string, Record<string, Record<string, unknown>>>
+          const part = (encode[index.part] ??= {})
+          ;(part.update ??= {})[index.vgProp] = [...conditions.map(test), rest]
+          delete axis[prop]
+        } else {
+          const ref = (v: Record<string, unknown>): string => ('signal' in v ? String(v.signal) : JSON.stringify(v.value))
+          axis[prop] = { signal: conditions.map((c) => { const { test: t, ...r } = c; return `${typeof t === 'string' ? t : predicateExpr(t)} ? ${ref(r)} : ` }).join('') + ref(rest) }
+        }
+      }
+    }
+  }
+  for (const v of Object.values(node)) if (v !== null && typeof v === 'object') assembleConditionalAxisProps(v)
 }
 
 /** vega-lite `stack(initMarkdef(markDef, encoding, config), encoding)`: the measure a unit stacks and how. */
@@ -868,6 +921,8 @@ function centerPointMarksOnBands(marks: Record<string, unknown>[], scales: Scale
       for (const k of ['x', 'y']) {
         const ref = upd?.[k] as Record<string, unknown> | undefined
         if (ref && typeof ref.scale === 'string' && bandScales.has(ref.scale) && ref.band === undefined && ref.field !== undefined && !(isObject(ref.offset) && typeof ref.offset.scale === 'string' && ref.offset.scale === `${k}Offset`)) ref.band = 0.5
+        // an offset along a band scale sits at the middle of its band (valueref.ts midPoint: band scales get a band position)
+        if (ref && isObject(ref.offset) && typeof ref.offset.scale === 'string' && bandScales.has(ref.offset.scale) && ref.offset.band === undefined) ref.offset.band = 0.5
       }
     }
     for (const sub of (m.marks as Record<string, unknown>[] | undefined) ?? []) visit(sub)
@@ -1090,6 +1145,13 @@ function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
       if (k !== 'name' && k !== 'type' && k !== 'domain' && k !== 'range' && !scalePropApplies(name, merged.type, k)) delete (merged as Record<string, unknown>)[k]
     }
     if (merged.type === 'band' && (merged.paddingInner !== undefined || merged.paddingOuter !== undefined)) delete merged.padding
+    // an offset scale judged band by the merge takes the band layers' outer padding, not a point layer's half step
+    // (scale properties are computed from the MERGED type: properties.ts paddingOuter)
+    if (merged.type === 'band' && /Offset$/.test(name) && !explicitMerged.has('paddingOuter')) {
+      const own = list.find((sc) => sc.type === 'band')?.paddingOuter
+      if (own !== undefined) merged.paddingOuter = own
+      else delete merged.paddingOuter
+    }
     // domain: union data references; identical non-reference domains merge
     // (scale/domain.ts mergeValuesWithExplicit on `domains`: an explicitly specified domain beats the implicit ones; only
     // domains of the same explicitness are unioned)
@@ -2718,6 +2780,9 @@ function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown
       fields.push(channel === 'fill' || channel === 'stroke' ? { ...g, paint: channel } : g)
     }
   }
+  for (const f of fields) {
+    if ((f.channel === 'x' || f.channel === 'y') && fields.some((o) => o.channel === `${f.channel}Offset` && o.field)) f.nestedOffset = true
+  }
   return fields
 }
 
@@ -3662,7 +3727,7 @@ function timeUnitMinStepSignal(tu: NormalTimeUnit): string | null {
     case 'seconds': end.seconds += step; break
     case 'milliseconds': end.milliseconds += step; break
   }
-  const fmt = (x: typeof d): string => `${tu.utc ? 'utc' : 'datetime'}(${x.year}, ${x.month}, ${x.date}, ${x.hours}, ${x.minutes}, ${x.seconds}, ${x.milliseconds})`
+  const fmt = (x: typeof d): string => `datetime(${x.year}, ${x.month}, ${x.date}, ${x.hours}, ${x.minutes}, ${x.seconds}, ${x.milliseconds})`
   return `${fmt(end)} - ${fmt(d)}`
 }
 
@@ -3696,6 +3761,11 @@ function withRangeLimits(sc: ScaleSpec, user: Record<string, unknown> | undefine
   sc.range = r
 }
 
+/** scale/parse.ts: a domainMin / domainMax that is a time (a DateTime, or of a temporal / time-unit field) is a datetime signal. */
+function domainLimit(v: unknown, def: FieldDef): unknown {
+  return isDateTimeValue(v) || def.type === 'temporal' || def.timeUnit ? { signal: domainValueExpr(v, def.type, def.timeUnit) } : v
+}
+
 /** scale/domain.ts: the domain of a binned field is the extent of its bins. */
 function binsDomain(def: FieldDef): { signal: string } {
   const bins = binNames(def.binParams!, def.field).signal
@@ -3707,13 +3777,13 @@ function positionalScaleType(mark: string, def: FieldDef): string {
     // a discrete positional channel only honors the two discrete positional
     // scale types; anything else falls back to the mark's natural type
     // (probed: nominal x + scale type linear/ordinal/threshold → band)
-    const natural = mark === 'bar' || mark === 'rect' || mark === 'tick' || mark === 'rule' || mark === 'image' ? 'band' : 'point'
+    const natural = mark === 'bar' || mark === 'rect' || mark === 'tick' || mark === 'rule' || mark === 'image' || def.nestedOffset ? 'band' : 'point'
     const user = def.scale?.type as string | undefined
     return user === 'point' || user === 'band' ? user : natural
   }
   // (an identity scale is not available to a field: vega-lite falls back to the default type)
   if (def.scale?.type && def.scale.type !== 'identity') return def.scale.type as string
-  if (def.type === 'temporal') return 'time'
+  if (def.type === 'temporal') return def.tu?.utc ? 'utc' : 'time'
   return 'linear'
 }
 
@@ -3763,6 +3833,8 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
     if (isContinuousScaleType(type) && userScaleCfg?.continuousPadding != null && def.scale?.padding == null) {
       sc.padding = userScaleCfg.continuousPadding as number
     }
+    // (a continuous scale pads by the scale's own `padding`; the bar rule below leaves an explicit one alone)
+    if (isContinuousScaleType(type) && typeof def.scale?.padding === 'number') sc.padding = def.scale.padding
     // a continuous positional scale reverses for sort:descending (a discrete
     // scale carries the order in its domain sort instead)
     if (def.sort === 'descending' && type !== 'band' && type !== 'point' && type !== 'ordinal' && type !== 'bin-ordinal') sc.reverse = true
@@ -3775,7 +3847,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       !def.timeUnit && def.stack == null
       && (cfgMarkType?.discreteBandSize ?? cfgMarkBlock?.discreteBandSize) !== 0
       // a continuous bar dimension pads by half a bar; band/point scales pad through paddingInner/Outer
-      && isContinuousScaleType(type)
+      && isContinuousScaleType(type) && def.scale?.padding == null
     ) sc.padding = 5
     if (type === 'linear' || type === 'log' || type === 'pow' || type === 'sqrt' || type === 'symlog') {
       const zeroDefault = explicitDom !== undefined ? zeroForCustomDomain(explicitDom) : type === 'log' ? false : zeroDefaultFor(mark, channel, orient)
@@ -3825,7 +3897,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
         if (!scalePropApplies(channel, sc.type, k)) continue
         // a discrete scale's explicit domain is resolved by sortedDomain (a list of values)
         if (k === 'domain') continue
-        sc[k] = v
+        sc[k] = (k === 'domainMin' || k === 'domainMax') ? domainLimit(v, def) : v
       }
       const rMin = def.scale.rangeMin
       const rMax = def.scale.rangeMax
@@ -3900,14 +3972,25 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
     if (offDef) {
       const dimChannel = ch === 'xOffset' ? 'x' : 'y'
       if (isDiscreteType(offDef.type)) {
-        scales.push({
-          name: ch,
-          type: 'band',
-          domain: sortedDomain(offDef, dataName, dc),
-          range: [0, { signal: `bandwidth('${dimChannel}')` }],
-          ...(dc.cfg.offsetBandPaddingInner !== undefined ? { paddingInner: dc.cfg.offsetBandPaddingInner } : {}),
-          ...(dc.cfg.offsetBandPaddingOuter !== undefined ? { paddingOuter: dc.cfg.offsetBandPaddingOuter } : {}),
-        })
+        // scale/type.ts defaultType + properties.ts paddingOuter: a rect-based mark offsets within a band; any other mark
+        // offsets along a point scale whose outer padding is half a step (so the points align with the band centres)
+        const offsetBand = ['bar', 'rect', 'image', 'rule', 'tick'].includes(mark)
+        scales.push(offsetBand
+          ? {
+              name: ch,
+              type: 'band',
+              domain: sortedDomain(offDef, dataName, dc),
+              range: [0, { signal: `bandwidth('${dimChannel}')` }],
+              ...(dc.cfg.offsetBandPaddingInner !== undefined ? { paddingInner: dc.cfg.offsetBandPaddingInner } : {}),
+              ...(dc.cfg.offsetBandPaddingOuter !== undefined ? { paddingOuter: dc.cfg.offsetBandPaddingOuter } : {}),
+            }
+          : {
+              name: ch,
+              type: 'point',
+              domain: sortedDomain(offDef, dataName, dc),
+              range: [0, { signal: `bandwidth('${dimChannel}')` }],
+              paddingOuter: 0.5,
+            })
       } else {
         scales.push({
           name: ch,
@@ -4436,6 +4519,8 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
           if ((userAxis as Record<string, unknown>)[gk] !== undefined) gridAxis[gk] = (userAxis as Record<string, unknown>)[gk]
         }
       }
+      // axis/properties.ts defaultTickMinStep: an integer format ('d') ticks at whole numbers only
+      if (userAxis?.format === 'd') gridAxis.tickMinStep = userAxis.tickMinStep ?? 1
       gridAxes.push(gridAxis)
     }
 
@@ -4469,6 +4554,7 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
     if ((def.timeUnit && !isObject(def.sort)) || (def.type !== 'nominal' && def.type !== 'ordinal')) {
       labelAxis.labelOverlap = sc.type === 'log' || sc.type === 'symlog' ? 'greedy' : true
     }
+    if (userAxis?.format === 'd' && labelAxis.tickMinStep === undefined) labelAxis.tickMinStep = userAxis.tickMinStep ?? 1
     // a time unit's duration is the smallest meaningful tick step, whatever the scale type
     if (def.tu && labelAxis.tickMinStep === undefined) {
       const stepExpr = timeUnitMinStepSignal(def.tu)
@@ -5674,7 +5760,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       const ref = (update[pos] ?? update[`${pos}c`]) as Record<string, unknown> | undefined
       if (!offDef || !ref || ref.scale !== pos || ref.field === undefined) continue
       delete ref.band
-      ref.offset = { scale: offCh, field: aggFieldName(offDef), ...(isDiscreteType(offDef.type) ? { band: 0.5 } : {}) }
+      ref.offset = { scale: offCh, field: aggFieldName(offDef), ...(isDiscreteType(offDef.type) && ['bar', 'rect', 'image', 'rule', 'tick'].includes(mark) ? { band: 0.5 } : {}) }
     }
   }
   // a binned field on a point-positioned mark sits at the middle of its bin (valueref.ts midPoint / interpolatedSignalRef:
@@ -6068,10 +6154,12 @@ function fieldTextExpr(def: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec;
   // a time format: formatType "time", or no formatType and a temporal field / a time unit
   const timeFormatted = formatType === 'time' || (formatType === undefined && (def.type === 'temporal' || def.tu !== undefined))
   if (timeFormatted) {
-    if (def.tu && fmt === undefined) return `timeFormat(${f}, ${timeUnitFormatSignal(def.tu.unit)})`
+    // (timeFormatExpression: a UTC time unit, or a utc scale, formats in UTC)
+    const timeFn = def.tu?.utc || def.scale?.type === 'utc' ? 'utcFormat' : 'timeFormat'
+    if (def.tu && fmt === undefined) return `${timeFn}(${f}, ${timeUnitFormatSignal(def.tu.unit)})`
     // (vega-lite's timeFormatExpression: config.timeFormatType applies to a raw time with no format)
     if (def.tu === undefined && typeof cfg?.timeFormatType === 'string') return customFormatExpr(cfg.timeFormatType, f, fmt)
-    return `timeFormat(${f}, ${JSON.stringify(fmt ?? cfg?.timeFormat ?? DEFAULT_TIME_FORMAT)})`
+    return `${timeFn}(${f}, ${JSON.stringify(fmt ?? cfg?.timeFormat ?? DEFAULT_TIME_FORMAT)})`
   }
   if (def.bin) return binFormatExpr(f, binEnd, fmt, formatType, binCfg)
   if (opts.normalizeStack && (def.type === 'quantitative' || typeof fmt === 'string')) {
@@ -6216,7 +6304,6 @@ function applyNonPositionConstants(update: Record<string, unknown>, spec: VLSpec
     const hasValue = def.value !== undefined
     if (!hasCondition && !hasValue) continue
     const prop = vgPropFor(channel, mark, filled)
-    const mainIsField = def.field !== undefined || def.aggregate === 'count' || def.datum !== undefined
     const entries: Record<string, unknown>[] = []
     if (hasCondition) {
       for (const c of (Array.isArray(def.condition) ? def.condition : [def.condition]) as Record<string, unknown>[]) {
@@ -6235,11 +6322,10 @@ function applyNonPositionConstants(update: Record<string, unknown>, spec: VLSpec
         entries.push(entry)
       }
     }
+    // (conditional.ts wrapCondition: a condition-only channel falls back to the mark's default for that property)
     const main: Record<string, unknown> | Record<string, unknown>[] | undefined = hasValue
       ? { value: def.value }
-      : mainIsField
-        ? (update[prop] as Record<string, unknown> | undefined)
-        : undefined
+      : (update[prop] as Record<string, unknown> | undefined)
     const parts = main === undefined ? entries : [...entries, ...(Array.isArray(main) ? main : [main])]
     if (parts.length === 0) continue
     // a test-bearing entry must use the array form or Vega never runs the test

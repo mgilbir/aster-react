@@ -189,6 +189,20 @@ const GROUPS: Record<string, Case[]> = {
     ['lines per series, one per column', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('c'), column: n('g') } }],
     ['layered lines and points per series, one per row', { data: DATA, facet: { row: n('g') }, spec: { width: 120, height: 60, layer: [{ mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('c') } }, { mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } }] } }],
   ],
+  // axis/assemble.ts conditional axis values, axis/properties.ts tickMinStep, scale/properties.ts padding, offsets of points,
+  // scale/parse.ts domainMin as a datetime, conditional.ts wrapCondition, timeunit UTC
+  'axis, scale and channel details (bar_negative, point_grouped, line_domainminmax)': [
+    ['a conditional grid colour', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum', axis: { gridColor: { condition: { test: 'datum.value === 0', value: 'black' }, value: '#ddd' } } }) } }],
+    ['a conditional label colour and tick width on both axes', { data: DATA, config: { axis: { labelColor: { condition: { test: 'datum.value > 3', value: 'red' }, value: 'black' }, tickWidth: { condition: { test: 'datum.value === 0', value: 3 }, value: 1 } } }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
+    ['a continuous scale padding', { data: DATA, mark: 'bar', encoding: { x: q('x', { scale: { padding: 20 } }), y: n('c') } }],
+    ['an integer axis format sets the tick min step', { data: DATA, mark: 'bar', encoding: { x: q('x', { axis: { format: 'd' } }), y: q('v') } }],
+    ['points offset along a point scale', { data: DATA, mark: 'point', encoding: { x: n('c'), y: q('v'), xOffset: n('g'), color: n('g') } }],
+    ['text and bars share an offset scale', { data: DATA, layer: [{ mark: 'bar', encoding: { x: n('c'), y: q('v'), xOffset: n('g') } }, { mark: 'text', encoding: { x: n('c'), y: q('v'), xOffset: n('g'), text: q('v') } }] }],
+    ['a time domainMin / domainMax given as DateTimes', { data: DATA, mark: 'line', encoding: { x: t('t', { scale: { domainMin: { year: 2002 }, domainMax: { year: 2005 } } }), y: q('v') } }],
+    ['a condition-only opacity falls back to the mark config', { data: DATA, config: { point: { opacity: 0.5 } }, mark: 'point', encoding: { x: q('x'), y: q('y'), opacity: { condition: [{ test: 'datum.x > 2', value: 0.25 }] } } }],
+    ['a condition-only colour falls back to the mark colour', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { test: 'datum.x > 2', value: '#aaa' } } } }],
+    ['a UTC time unit', { data: DATA, mark: { type: 'point', tooltip: true }, encoding: { x: { field: 't', timeUnit: 'utcyearmonthdate', type: 'temporal' }, y: q('v') } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
@@ -204,6 +218,8 @@ const DATA_NODES = (vg: any): string[] =>
     .filter((ty: string) => ['aggregate', 'bin', 'extent', 'stack', 'impute', 'window', 'joinaggregate', 'timeunit', 'pivot', 'flatten', 'fold', 'lookup', 'sequence'].includes(ty))
 
 const DATA_NODE_KINDS = (vg: any): string[] => [...new Set(DATA_NODES(vg))].sort()
+/** The tick steps of the axes (one entry per axis, in order). */
+const AXIS_STEPS = (vg: any): unknown[] => (vg.axes ?? []).map((a: any) => ({ orient: a.orient, grid: a.grid, tickMinStep: a.tickMinStep }))
 const plain = (v: unknown) => JSON.parse(JSON.stringify(v))
 const deepFreeze = <T,>(v: T): T => {
   if (v !== null && typeof v === 'object' && !Object.isFrozen(v)) {
@@ -217,6 +233,7 @@ async function check(spec: Record<string, any>): Promise<void> {
   const oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, any> } }).compile(plain(spec)).spec
   const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
   expect(plain(SIZE_KEYS(ours)), 'size / layout of the compiled Vega').toEqual(plain(SIZE_KEYS(oracle)))
+  expect(plain(AXIS_STEPS(ours)), 'axis tick steps').toEqual(plain(AXIS_STEPS(oracle)))
   expect(DATA_NODE_KINDS(ours), 'data-shaping transforms').toEqual(DATA_NODE_KINDS(oracle))
   const [ref, mine, refChecked] = await Promise.all([renderWithVega(oracle), renderWithVegaChecked(plain(ours)), renderWithVegaChecked(oracle)])
   const inherited = new Set([...refChecked.errors, ...refChecked.warnings])

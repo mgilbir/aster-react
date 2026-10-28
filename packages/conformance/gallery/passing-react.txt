@@ -46,6 +46,7 @@ vl/area_vertical
 vl/argmin_spaces
 vl/bar
 vl/bar_1d
+vl/bar_1d_binned
 vl/bar_1d_default_size
 vl/bar_1d_dimension_only
 vl/bar_1d_step_config
@@ -81,6 +82,7 @@ vl/bar_grouped_label
 vl/bar_grouped_stacked
 vl/bar_grouped_step_for_offset
 vl/bar_grouped_step_for_position
+vl/bar_grouped_thin
 vl/bar_invalid_color_show
 vl/bar_invalid_color_show_override
 vl/bar_layered_transparent
@@ -88,6 +90,9 @@ vl/bar_month
 vl/bar_month_temporal
 vl/bar_month_temporal_initial
 vl/bar_multi_values_per_categories
+vl/bar_narrow_int_span
+vl/bar_negative
+vl/bar_negative_horizontal_label
 vl/bar_params
 vl/bar_params_bound
 vl/bar_percent_of_total
@@ -189,6 +194,7 @@ vl/line_color_binned
 vl/line_color_label
 vl/line_color_with_scale_domain
 vl/line_detail
+vl/line_domainminmax
 vl/line_impute_keyvals
 vl/line_impute_transform_frame
 vl/line_impute_transform_value
@@ -234,10 +240,13 @@ vl/point_color_quantitative
 vl/point_color_shape_constant
 vl/point_color_with_shape
 vl/point_colorramp_size
+vl/point_conditional_opacity
 vl/point_diverging_color
 vl/point_dot_timeunit_color
 vl/point_filled
+vl/point_grouped
 vl/point_href
+vl/point_invalid_color
 vl/point_log
 vl/point_no_axis_domain_grid
 vl/point_ordinal_color
@@ -286,6 +295,7 @@ vl/tick_strip_tick_band
 vl/tick_strip_with_height
 vl/time_custom_step
 vl/time_output_utc_scale
+vl/time_output_utc_timeunit
 vl/time_parse_local
 vl/time_parse_utc
 vl/time_parse_utc_format
