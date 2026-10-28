@@ -461,7 +461,7 @@ interface EvalContext {
   failedDatasets?: Set<string>
   /** a dataset's transform threw: the pass stopped before the scales, marks and guides (see buildDatasetsOf) */
   datasetAborted?: boolean
-  /** the declaration index of the first dataset whose transform threw: vega ranks its operators in declaration order (see buildDatasetsOf) */
+  /** the rank (see datasetRanksOf) of the first dataset whose transform threw: what is ranked after it never ran (see buildDatasetsOf) */
   failedFrom?: number
   /** The items of the named marks built so far (a mark may read another mark's items as its data: `from: {data: <mark name>}`). */
   markItems: Map<string, SceneItem[]>
@@ -1436,6 +1436,45 @@ function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
   return out
 }
 
+const DATASET_RANKS = new WeakMap<CompiledChart, { rank: Map<string, number>; order: string[] }>()
+
+/**
+ * The order vega's dataflow runs the datasets in, and so what a throw stops: operators are ranked in declaration order, and an
+ * operator that reads one ranked after it (its source, a dataset a transform names, the writer of a signal it reads) is
+ * re-ranked past everything ranked so far, with everything that reads it (vega-dataflow `connect` / `rerank`, in the order
+ * vega-runtime connects the parameters). A pass that hits a throwing operator stops: only what is ranked before it has run.
+ * At the grain of a dataset: its operators are taken as one (a dataset whose later transform alone reads a forward signal is
+ * ranked as a whole).
+ */
+function datasetRanksOf(chart: CompiledChart): { rank: Map<string, number>; order: string[] } {
+  let out = DATASET_RANKS.get(chart)
+  if (out) return out
+  const names = chart.data.map((d) => d.name)
+  const n = names.length
+  const rank = new Map<string, number>(names.map((nm, i) => [nm, i + 1] as const))
+  const targets = new Map<string, string[]>()
+  const deps = datasetDepsOf(chart)
+  const prereqs = signalPrereqsOf(chart)
+  let counter = n
+  for (const name of names) {
+    const reads = [...(deps.get(name)?.names ?? []), ...(prereqs.get(name) ?? [])].filter((m) => rank.has(m) && m !== name)
+    for (const m of reads) { const t = targets.get(m); if (t) t.push(name); else targets.set(m, [name]) }
+    if (!reads.some((m) => rank.get(m)! > rank.get(name)!)) continue
+    // rerank(name): the operator and, depth first, everything connected to read it
+    const queue = [name]
+    // (vega throws on a cycle; here a cycle is reported where the build meets it, so the walk is only bounded)
+    for (let pops = 0; queue.length && pops < 4 * n * n + 16; pops++) {
+      const cur = queue.pop()!
+      rank.set(cur, ++counter)
+      const list = targets.get(cur)
+      if (list) for (let i = list.length; --i >= 0;) queue.push(list[i]!)
+    }
+  }
+  out = { rank, order: [...names].sort((a, b) => rank.get(a)! - rank.get(b)!) }
+  DATASET_RANKS.set(chart, out)
+  return out
+}
+
 /**
  * The set of datasets affected by a change, closed transitively over every way a
  * dataset depends on another: a `source` chain, a transform naming another
@@ -1811,6 +1850,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
   ;(scene as unknown as { __itemGen?: number }).__itemGen = txn.gen
   ;(scene as unknown as { __scales?: unknown }).__scales = snapshotScales(ctx.scales)
   ;(scene as unknown as { __scaleMap?: unknown }).__scaleMap = ctx.scales
+  Object.defineProperty(scene, '__datasets', { value: { rows: ctx.datasets, failed: ctx.failedDatasets }, enumerable: false, configurable: true })
   if (ctx._defs.length) scene.defs = ctx._defs
   // The state the next incremental evaluation starts from; committed by the
   // caller once the scene is accepted.
@@ -1840,6 +1880,20 @@ export function chartInfoFromScene(scene: SceneRoot): ChartInfo {
     // Reconstruct from the live map when a scene came from a worker/SSR clone.
     scales: scales ?? new Map(),
   }
+}
+
+/**
+ * The rows each of the spec's datasets ended with in the evaluation that made `scene` (vega's `view.data(name)`), read-only:
+ * the same arrays the marks and scales read. A dataset that never ran -- a transform of its own threw, or it is ranked after the
+ * one that did (see `buildDatasetsOf`) -- is `null`, as in vega, where its output was never produced. Empty for a scene that did
+ * not come from this runtime (a clone, a worker).
+ */
+export function datasetsOfScene(scene: SceneRoot): ReadonlyMap<string, readonly unknown[] | null> {
+  const made = scene.__datasets
+  if (!made) return new Map()
+  const out = new Map<string, readonly unknown[] | null>()
+  for (const [name, rows] of made.rows) out.set(name, made.failed?.has(name) ? null : rows)
+  return out
 }
 
 /**
@@ -2934,7 +2988,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
   ctx.failedFrom = undefined
   const sources = new Map<string, CompiledChart['data'][number]>()
   for (const d of ctx.chart.data) sources.set(d.name, d)
-  const declIndex = new Map(ctx.chart.data.map((d, i) => [d.name, i] as const))
+  const { rank: dsRank, order: dsOrder } = datasetRanksOf(ctx.chart)
   // The params this build pass runs under: cached pipeline state is only valid
   // for the identical context (any signal/size/override change re-derives).
   const passFp = ctxFpOf(ctx)
@@ -2952,7 +3006,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     }
     if (seen.has(name)) throw new Error(`[aster] circular data reference: ${name}`)
     seen.add(name)
-    if (ctx.failedFrom !== undefined && declIndex.get(name)! > ctx.failedFrom) {
+    if (ctx.failedFrom !== undefined && dsRank.get(name)! > ctx.failedFrom) {
       // ranked after the failing dataset (a source or a signal it feeds pulled this one in early): it never ran
       ;(ctx.failedDatasets ??= new Set()).add(name)
       ctx.datasets.set(name, [])
@@ -3071,7 +3125,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       // its pipeline never runs, so everything downstream of it is empty / never built).
       reportEvalError(ctx, e)
       ;(ctx.failedDatasets ??= new Set()).add(name)
-      ctx.failedFrom = Math.min(ctx.failedFrom ?? Infinity, ctx.chart.data.findIndex((x) => x.name === name))
+      ctx.failedFrom = Math.min(ctx.failedFrom ?? Infinity, dsRank.get(name)!)
       rows = []
       outPulse = null
     }
@@ -3086,17 +3140,18 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
   // a projection that fits data asks for the datasets it reads before it is used (see refreshProjection)
   if (ctx.chart.projections?.some((p) => p.fit)) ctx.buildOnDemand = onDemandBuilder(ctx, sources, build)
   try {
-    for (const [i, d] of ctx.chart.data.entries()) {
-      if (ctx.failedFrom !== undefined && i > ctx.failedFrom && !ctx.datasets.has(d.name)) {
-        // vega: the pass stopped at the failing transform; the operators of the datasets declared after it (ranked after it)
-        // never ran. What is declared before it ran, and a dataset that was only built early for its signals is judged by its own rank.
-        ;(ctx.failedDatasets ??= new Set()).add(d.name)
-        ctx.datasets.set(d.name, [])
-        ctx.datasetPulses.set(d.name, null)
+    for (const name of dsOrder) {
+      if (ctx.failedFrom !== undefined && dsRank.get(name)! > ctx.failedFrom && !ctx.datasets.has(name)) {
+        // vega: the pass stopped at the failing transform; the operators ranked after it never ran
+        ;(ctx.failedDatasets ??= new Set()).add(name)
+        ctx.datasets.set(name, [])
+        ctx.datasetPulses.set(name, null)
         continue
       }
-      build(d.name, new Set())
+      build(name, new Set())
     }
+    // (a dataset vega re-ranked past the scales and marks fails after some of them ran -- the ones that read nothing re-ranked,
+    // and the joins of marks over datasets that were not; this stops all of them: see datasetRanksOf)
     if (ctx.failedDatasets?.size) ctx.encodeAborted = ctx.datasetAborted = true
   } finally {
     ctx.buildOnDemand = undefined

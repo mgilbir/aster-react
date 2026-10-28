@@ -667,6 +667,11 @@ export interface SceneRoot {
    * and evaluating a second time. Not serializable — stripped by worker clones.
    */
   __scaleMap?: Map<string, unknown>
+  /**
+   * @internal The rows each spec dataset ended with in this evaluation, and the names of the ones that never ran (see
+   * `datasetsOfScene`). Non-enumerable, so it is not part of the scene's structure; not serializable.
+   */
+  __datasets?: { rows: ReadonlyMap<string, readonly unknown[]>; failed: ReadonlySet<string> | undefined }
 }
 
 export interface SceneGroup extends SceneItem {

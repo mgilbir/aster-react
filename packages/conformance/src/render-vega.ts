@@ -20,6 +20,8 @@ export interface CheckedRender {
   errors: string[]
   /** vega logger warn() calls (invalid scale refs, bad encodings, ...). */
   warnings: string[]
+  /** `view.data(name)` of every top-level dataset the spec declares, after the first run (the tuples as plain objects). */
+  datasets: Record<string, unknown[]>
 }
 
 /**
@@ -53,12 +55,14 @@ export async function renderWithVegaChecked(vgSpec: Record<string, unknown>): Pr
     },
   }
   let svg = ''
+  const datasets: Record<string, unknown[]> = {}
   try {
     const runtime = vega.parse(vgSpec as any)
     const view = new (vega as any).View(runtime, { renderer: 'none', logger })
     try {
       await view.runAsync()
       view.finalize() // the first frame: no timer ticks before the SVG is drawn (see renderWithVega)
+      for (const d of (vgSpec.data as Array<{ name: string }> | undefined) ?? []) datasets[d.name] = JSON.parse(JSON.stringify(view.data(d.name)))
       svg = await view.toSVG()
     } finally {
       view.finalize()
@@ -66,5 +70,5 @@ export async function renderWithVegaChecked(vgSpec: Record<string, unknown>): Pr
   } catch (e) {
     errors.push(e instanceof Error ? e.message : String(e))
   }
-  return { svg, errors, warnings }
+  return { svg, errors, warnings, datasets }
 }
