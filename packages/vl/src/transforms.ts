@@ -7,7 +7,7 @@
  * later in-place edit of the emitted transforms (e.g. facet group-by
  * injection) cannot reach back into the caller's spec or into a sibling.
  */
-import { pushAll, genSignal, safeKey, splitAccessPath, VLCompileError, datumPathRef } from './names.js'
+import { pushAll, genSignal, safeKey, splitAccessPath, VLCompileError, datumPathRef, guardedPathRef, replacePathInField } from './names.js'
 import { predicateExpr, paramLeaves } from './predicate.js'
 import { getTimeUnitParts, normalizeTimeUnit, timeUnitTransform } from './timeunit.js'
 
@@ -150,13 +150,12 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
     for (const n of names) st.parsed.set(n, 'derived')
   }
   const parseFirst = (field: string, type: Parse): void => {
-    // flat keys only: a nested path cannot be written back with `as`
-    if (splitAccessPath(field).length !== 1) return
-    const key = splitAccessPath(field)[0]!
+    // (the parse writes the value back under the joined path, `o.v`; a predicate then reads that flat key)
+    const key = splitAccessPath(field).join('.')
     const prev = st.parsed.get(key)
     if (prev !== undefined) return
     st.parsed.set(key, type)
-    out.push({ type: 'formula', expr: `${PARSE_FN[type]}(${datumPathRef(field)})`, as: key })
+    out.push({ type: 'formula', expr: `${PARSE_FN[type]}(${guardedPathRef(field)})`, as: key })
   }
 
   if (t.calculate !== undefined) {
@@ -166,12 +165,11 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
     const implicit = new Map<string, Parse>()
     implicitFromFilter(t.filter, implicit)
     for (const [f, type] of implicit) {
-      const prev = st.parsed.get(splitAccessPath(f)[0]!)
+      const key = splitAccessPath(f).join('.')
+      const prev = st.parsed.get(key)
       if (prev === undefined || (prev !== type && prev !== 'derived')) {
-        if (splitAccessPath(f).length === 1) {
-          st.parsed.set(f, type)
-          out.push({ type: 'formula', expr: `${PARSE_FN[type]}(${datumPathRef(f)})`, as: splitAccessPath(f)[0]! })
-        }
+        st.parsed.set(key, type)
+        out.push({ type: 'formula', expr: `${PARSE_FN[type]}(${guardedPathRef(f)})`, as: key })
       }
     }
     // a selection over a time-unit field filters rows by that unit: the unit's transform is put in front of the
@@ -192,8 +190,8 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
     const bin = normalizeBin(t.bin)
     const names = binNames(bin, field)
     const { extent, ...params } = bin
-    if (extent === undefined) out.push({ type: 'extent', field, signal: names.extentSignal })
-    const bt: Obj = { type: 'bin', field, as: asArr, signal: names.signal, extent: extent !== undefined ? [...(extent as number[])] : { signal: names.extentSignal } }
+    if (extent === undefined) out.push({ type: 'extent', field: replacePathInField(field), signal: names.extentSignal })
+    const bt: Obj = { type: 'bin', field: replacePathInField(field), as: asArr, signal: names.signal, extent: extent !== undefined ? [...(extent as number[])] : { signal: names.extentSignal } }
     for (const [k, v] of Object.entries(params)) bt[k] = copyArr(v)
     out.push(bt)
     derived(asArr)
@@ -209,10 +207,10 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
     const as: string[] = []
     for (const d of t.aggregate as Obj[]) {
       ops.push(d.op as string)
-      fields.push(typeof d.field === 'string' ? d.field : null)
+      fields.push(typeof d.field === 'string' ? replacePathInField(d.field) : null)
       as.push((d.as as string | undefined) ?? defaultAs(d))
     }
-    out.push({ type: 'aggregate', groupby: copyArr((t.groupby as string[] | undefined) ?? []), ops, fields, as })
+    out.push({ type: 'aggregate', groupby: ((t.groupby as string[] | undefined) ?? []).map(replacePathInField), ops, fields, as })
     if (st.requiresSelectionId) out.push({ type: 'identifier', as: '_vgsid_' })
     derived(as)
   } else if (t.joinaggregate !== undefined) {

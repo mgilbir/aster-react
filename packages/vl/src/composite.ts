@@ -298,14 +298,41 @@ function normalizeErrorBand(spec: Obj, config: Obj): Obj {
   }
 }
 
+/** channeldef.ts defaultType: the type a field definition without one gets (the composites read the types to orient themselves). */
+function defaultType(channel: string, def: Obj): string {
+  if (channel === 'latitude' || channel === 'longitude') return 'quantitative'
+  if (['row', 'column', 'facet', 'shape', 'strokeDash'].includes(channel)) return 'nominal'
+  if (channel === 'order') return 'ordinal'
+  if (Array.isArray(def.sort)) return 'ordinal'
+  if (def.timeUnit) return 'temporal'
+  if (def.bin || (def.aggregate && !isObj(def.aggregate))) return 'quantitative'
+  const st = isObj(def.scale) ? def.scale.type : undefined
+  if (['linear', 'log', 'pow', 'sqrt', 'symlog', 'identity', 'sequential', 'quantile', 'quantize', 'threshold', 'bin-ordinal'].includes(st)) return 'quantitative'
+  if (st === 'time' || st === 'utc') return 'temporal'
+  return 'nominal'
+}
+
+function withTypes(encoding: Obj): Obj {
+  const out: Obj = {}
+  for (const [channel, def] of Object.entries(encoding)) {
+    out[channel] = isObj(def) && def.type === undefined && (def.field !== undefined || def.aggregate === 'count') && def.datum === undefined && def.value === undefined && !['x2', 'y2', 'xError', 'yError', 'xError2', 'yError2', 'theta2', 'radius2'].includes(channel)
+      ? { ...def, type: defaultType(channel, def) }
+      : def
+  }
+  return out
+}
+
 const kindOf = (spec: Obj): 'errorbar' | 'errorband' | undefined => {
   const t = isObj(spec.mark) ? spec.mark.type : spec.mark
   return t === 'errorbar' || t === 'errorband' ? t : undefined
 }
 
-/** Replace every errorbar / errorband unit in the spec tree by its layer of simple marks. */
-export function normalizeComposites(node: unknown, userConfig: Obj | undefined): unknown {
-  if (Array.isArray(node)) return node.map((n) => normalizeComposites(n, userConfig))
+/**
+ * Replace every errorbar / errorband unit in the spec tree by its layer of simple marks. A unit under a layer shares the
+ * layer's encoding (`inherited`), which its dimensions and groupings come from.
+ */
+export function normalizeComposites(node: unknown, userConfig: Obj | undefined, inherited: Obj = {}): unknown {
+  if (Array.isArray(node)) return node.map((n) => normalizeComposites(n, userConfig, inherited))
   if (!isObj(node)) return node
   const config: Obj = {
     errorbar: { ...DEFAULT_CONFIG.errorbar, ...(userConfig?.errorbar ?? {}) },
@@ -313,11 +340,175 @@ export function normalizeComposites(node: unknown, userConfig: Obj | undefined):
   }
   const kind = kindOf(node)
   if (kind) {
-    const spec = { ...node, encoding: node.encoding ?? {} }
+    const spec = { ...node, encoding: withTypes({ ...inherited, ...(node.encoding ?? {}) }) }
     return kind === 'errorbar' ? normalizeErrorBar(spec, config) : normalizeErrorBand(spec, config)
   }
   const out: Obj = { ...node }
-  for (const k of ['layer', 'hconcat', 'vconcat', 'concat']) if (node[k] !== undefined) out[k] = normalizeComposites(node[k], userConfig)
-  if (node.spec !== undefined) out.spec = normalizeComposites(node.spec, userConfig)
+  if (node.layer !== undefined) out.layer = normalizeComposites(node.layer, userConfig, { ...inherited, ...(isObj(node.encoding) ? node.encoding : {}) })
+  for (const k of ['hconcat', 'vconcat', 'concat']) if (node[k] !== undefined) out[k] = normalizeComposites(node[k], userConfig, {})
+  if (node.spec !== undefined) out.spec = normalizeComposites(node.spec, userConfig, {})
   return out
+}
+
+// --- path overlays (normalize/pathoverlay.ts) --------------------------------------------------------------------------
+
+const DEFAULT_REDUCED_OPACITY = 0.7
+const OVERLAY_MARKS = new Set(['line', 'rule', 'trail', 'area'])
+
+const pick = (o: Obj, keys: string[]): Obj => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]))
+const omit = (o: Obj, keys: string[]): Obj => Object.fromEntries(Object.entries(o).filter(([k]) => !keys.includes(k)))
+
+/** The point overlay of a path mark: `point` on the mark, `config.<mark>.point`, or a `shape` channel (getPointOverlay). */
+function getPointOverlay(markDef: Obj, markConfig: Obj, encoding: Obj): Obj | null | undefined {
+  if (markDef.point === 'transparent') return { opacity: 0 }
+  if (markDef.point) return isObj(markDef.point) ? markDef.point : {}
+  if (markDef.point !== undefined) return null
+  if (markConfig.point || encoding.shape) return isObj(markConfig.point) ? markConfig.point : {}
+  return undefined
+}
+
+/** The line overlay of an area mark: `line` on the mark or `config.area.line` (getLineOverlay). */
+function getLineOverlay(markDef: Obj, markConfig: Obj): Obj | null | undefined {
+  if (markDef.line) return markDef.line === true ? {} : markDef.line
+  if (markDef.line !== undefined) return null
+  if (markConfig.line) return markConfig.line === true ? {} : markConfig.line
+  return undefined
+}
+
+export interface StackProps {
+  fieldChannel: string
+  offset?: string
+  /** the orientation the mark ends up with (init.ts orient) */
+  orient?: string
+}
+
+/** The marks a layer of mark + overlay replaces: `point` / `line` leave the mark definition. */
+function dropLineAndPoint(markDef: Obj): Obj | string {
+  const mark = omit(markDef, ['point', 'line'])
+  return Object.keys(mark).length > 1 ? mark : (mark.type as string)
+}
+
+/**
+ * Replace every line / area / rule / trail unit that carries a point (or, for an area, a line) overlay by the layer
+ * vega-lite normalizes it to: the mark, then its line, then its points, over the same encoding (a stacked measure's
+ * `stack` carried over, `x2` / `y2` and `shape` dropped from the overlays).
+ * `stackOf` answers the stack properties of a unit spec; `inherited` is the encoding a parent layer shares.
+ */
+export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit: Obj) => StackProps | undefined, inherited: Obj = {}): unknown {
+  if (Array.isArray(node)) return node.map((n) => normalizePathOverlays(n, config, stackOf, inherited))
+  if (!isObj(node)) return node
+  if (node.layer !== undefined) {
+    const encoding = { ...inherited, ...(isObj(node.encoding) ? node.encoding : {}) }
+    return { ...node, layer: (node.layer as unknown[]).map((c) => normalizePathOverlays(c, config, stackOf, encoding)) }
+  }
+  for (const k of ['hconcat', 'vconcat', 'concat']) {
+    if (node[k] !== undefined) return { ...node, [k]: normalizePathOverlays(node[k], config, stackOf, {}) }
+  }
+  if (node.spec !== undefined) return { ...node, spec: normalizePathOverlays(node.spec, config, stackOf, {}) }
+  if (node.mark === undefined) return node
+
+  // a unit faceted through its encoding becomes a facet over the overlay layer (normalize/facet.ts first)
+  if (isObj(node.encoding) && (node.encoding.row !== undefined || node.encoding.column !== undefined || node.encoding.facet !== undefined)) {
+    const { row, column, facet, ...rest } = node.encoding
+    const { width, height, params, projection, mark, name, ...outerRest } = node
+    const inner = normalizePathOverlays({ ...(width !== undefined ? { width } : {}), ...(height !== undefined ? { height } : {}), ...(params ? { params } : {}), ...(projection !== undefined ? { projection } : {}), ...(name !== undefined ? { name } : {}), mark, encoding: rest }, config, stackOf, inherited)
+    if (inner === undefined || (isObj(inner) && inner.layer === undefined)) return node
+    const { encoding: _e, ...facetOuter } = outerRest
+    void _e
+    return { ...facetOuter, facet: facet !== undefined ? facet : { ...(row !== undefined ? { row } : {}), ...(column !== undefined ? { column } : {}) }, spec: inner }
+  }
+
+  const { params, projection, mark, name, encoding: own, ...outer } = node
+  const markDef: Obj = isObj(mark) ? mark : { type: mark }
+  if (!OVERLAY_MARKS.has(markDef.type)) return node
+  const encoding: Obj = { ...inherited, ...(isObj(own) ? own : {}) }
+  const markConfig: Obj = isObj(config[markDef.type]) ? config[markDef.type] : {}
+  const pointOverlay = getPointOverlay(markDef, markConfig, encoding)
+  const lineOverlay = markDef.type === 'area' ? getLineOverlay(markDef, markConfig) : undefined
+  if (!pointOverlay && !lineOverlay) return node
+
+  const opacitySet = (k: string): boolean => (markDef[k] ?? markConfig[k] ?? (isObj(config.mark) ? config.mark[k] : undefined)) !== undefined
+  const layer: Obj[] = [
+    {
+      ...(name !== undefined ? { name } : {}),
+      ...(params ? { params } : {}),
+      mark: dropLineAndPoint({
+        ...(markDef.type === 'area' && !opacitySet('opacity') && !opacitySet('fillOpacity') ? { opacity: DEFAULT_REDUCED_OPACITY } : {}),
+        ...markDef,
+      }),
+      encoding: omit(own === undefined ? {} : (own as Obj), ['shape']),
+    },
+  ]
+  // a stacked measure stacks the overlays alike
+  const stackProps = stackOf({ ...node, encoding })
+  let overlayEncoding: Obj = encoding
+  if (stackProps) {
+    overlayEncoding = {
+      ...encoding,
+      [stackProps.fieldChannel]: { ...(encoding[stackProps.fieldChannel] as Obj), ...(stackProps.offset ? { stack: stackProps.offset } : {}) },
+    }
+  }
+  // (overlays must not be ranged: x2 / y2 would make them rules)
+  overlayEncoding = omit(overlayEncoding, ['y2', 'x2'])
+  // the overlays carry what the parent layer shares only through their own encoding: drop what the layer would inherit twice
+  const ownOverlay = (e: Obj): Obj => omit(e, Object.keys(inherited).filter((k) => deepEq(inherited[k], e[k])))
+  if (lineOverlay) {
+    layer.push({
+      ...(projection !== undefined ? { projection } : {}),
+      mark: { type: 'line', ...pick(markDef, ['clip', 'interpolate', 'tension', 'tooltip']), ...lineOverlay },
+      encoding: ownOverlay(overlayEncoding),
+    })
+  }
+  if (pointOverlay) {
+    layer.push({
+      ...(projection !== undefined ? { projection } : {}),
+      mark: { type: 'point', opacity: 1, filled: true, ...pick(markDef, ['clip', 'tooltip']), ...pointOverlay },
+      encoding: ownOverlay(overlayEncoding),
+    })
+  }
+  return { ...outer, layer }
+}
+
+const deepEq = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
+
+// --- stack order (unit.ts alignStackOrderWithColorDomain) --------------------------------------------------------------
+
+/**
+ * A unit that has no `order` channel but a nominal colour with an explicit domain list orders its stack (or its offset
+ * groups) like that list: a sort index calculated from the domain becomes the `order` channel. `inherited` is the
+ * encoding a parent layer shares; `stackOf` answers the stack properties of a unit.
+ */
+export function alignStackOrders(node: unknown, stackOf: (unit: Obj) => StackProps | undefined, inherited: Obj = {}): unknown {
+  if (Array.isArray(node)) return node.map((n) => alignStackOrders(n, stackOf, inherited))
+  if (!isObj(node)) return node
+  if (node.layer !== undefined) {
+    const encoding = { ...inherited, ...(isObj(node.encoding) ? node.encoding : {}) }
+    return { ...node, layer: alignStackOrders(node.layer, stackOf, encoding) }
+  }
+  for (const k of ['hconcat', 'vconcat', 'concat']) if (node[k] !== undefined) return { ...node, [k]: alignStackOrders(node[k], stackOf, {}) }
+  if (node.spec !== undefined) return { ...node, spec: alignStackOrders(node.spec, stackOf, {}) }
+  if (node.mark === undefined) return node
+
+  const own: Obj = isObj(node.encoding) ? node.encoding : {}
+  const encoding: Obj = { ...inherited, ...own }
+  if (encoding.order) return node
+  const colorField = encoding.fill ?? encoding.color
+  if (!isObj(colorField) || typeof colorField.field !== 'string') return node
+  const type = colorField.type ?? defaultType('color', colorField)
+  const domain = isObj(colorField.scale) ? colorField.scale.domain : undefined
+  if (!Array.isArray(domain) || type !== 'nominal') return node
+  const offsetChannel = encoding.xOffset ? 'xOffset' : encoding.yOffset ? 'yOffset' : undefined
+  const offsetDef = offsetChannel ? encoding[offsetChannel] : undefined
+  if (offsetChannel && isObj(offsetDef) && offsetDef.field !== undefined && !offsetDef.sort) {
+    return { ...node, encoding: { ...own, [offsetChannel]: { ...offsetDef, sort: domain } } }
+  }
+  const stack = stackOf({ ...node, encoding })
+  if (!stack) return node
+  const as = `_${colorField.field}_sort_index`
+  const sort = (isObj(node.mark) ? node.mark.orient : undefined) === 'horizontal' || (!(isObj(node.mark) && node.mark.orient) && stack.orient === 'horizontal') ? 'ascending' : 'descending'
+  return {
+    ...node,
+    transform: [...(Array.isArray(node.transform) ? node.transform : []), { calculate: `indexof(${JSON.stringify(domain)}, datum['${colorField.field}'])`, as }],
+    encoding: { ...own, order: { field: as, type: 'quantitative', sort } },
+  }
 }
