@@ -1,7 +1,7 @@
 // errorbar and errorband composite marks: vega-lite 6.4.3 compositemark/{errorbar,errorband,common}.ts.
 // A composite mark is a normalization: the unit spec becomes a layer of simple marks (tick, rule, area, rect,
 // line) over a shared aggregate transform, which the ordinary layer compiler then handles.
-import { VLCompileError, genName } from './names.js'
+import { VLCompileError, genName, splitAccessPath } from './names.js'
 import { getTimeUnitParts } from './timeunit.js'
 import { normalizeTimeUnit } from './validate.js'
 
@@ -80,6 +80,28 @@ function orientAndInput(spec: Obj, composite: string): { orient: 'vertical' | 'h
   throw new VLCompileError(`${composite} has no ranged axis`)
 }
 
+/**
+ * vega-lite normalize/core.ts mergeEncoding (for a layer): a channel the unit defines as a field / datum def inherits the
+ * properties its layer gives it (`{...parent, ...child}`), a conditional one inherits into its condition, any other definition
+ * (a value, `null`) replaces it, and a channel only the layer defines is the layer's.
+ */
+export function mergeEncoding(parent: Obj, child: unknown): Obj {
+  const own: Obj = isObj(child) ? child : {}
+  const isFieldOrDatum = (d: unknown): d is Obj => isObj(d) && (!!d.field || d.aggregate === 'count' || 'datum' in d)
+  const out: Obj = {}
+  for (const channel of new Set([...Object.keys(parent), ...Object.keys(own)])) {
+    const c = own[channel]
+    const p = parent[channel]
+    if (isFieldOrDatum(c)) out[channel] = { ...(isObj(p) ? p : {}), ...c }
+    else if (isObj(c) && isFieldOrDatum(c.condition)) out[channel] = { ...c, condition: { ...(isObj(p) ? p : {}), ...c.condition } }
+    else if (c || c === null) out[channel] = c
+    else out[channel] = p
+  }
+  return out
+}
+
+const NON_POSITION_SCALE_CHANNELS = new Set(['color', 'fill', 'stroke', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'size', 'angle', 'shape'])
+
 /** Pull aggregate / time-unit out of the remaining channels into transforms (encoding.ts extractTransformsFromEncoding). */
 function extractTransforms(old: Obj, composite: string): { timeUnits: Obj[]; aggregate: Obj[]; groupby: string[]; encoding: Obj } {
   const timeUnits: Obj[] = []
@@ -102,11 +124,18 @@ function extractTransforms(old: Obj, composite: string): { timeUnits: Obj[]; agg
     if (typeof agg === 'object' && agg !== null) throw new VLCompileError(`${composite}: argmin/argmax on ${channel} is not supported`)
     const as = timeUnit ? genName(normalizeTimeUnit(timeUnit).unit, field) : genName(String(agg), field)
     const title = isObj(def.axis) && def.axis.title !== undefined ? undefined : verbalTitle(def)
-    encoding[channel] = { ...(def.title === undefined && title !== undefined ? { title } : {}), ...rest, field: as }
+    const newDef: Obj = { ...(def.title === undefined && title !== undefined ? { title } : {}), ...rest, field: as }
+    encoding[channel] = newDef
     if (agg) aggregate.push({ op: agg, ...(field ? { field } : {}), as })
     else {
       timeUnits.push({ timeUnit, field, as })
       groupby.push(as)
+      // (encoding.ts extractTransformsFromEncoding: a time unit on a non-temporal field is formatted as time all the same)
+      if (def.type !== undefined && def.type !== 'temporal') {
+        if (channel === 'text' || channel === 'tooltip') newDef.formatType = 'time'
+        else if (NON_POSITION_SCALE_CHANNELS.has(channel)) newDef.legend = { formatType: 'time', ...(isObj(newDef.legend) ? newDef.legend : {}) }
+        else if (channel === 'x' || channel === 'y') newDef.axis = { formatType: 'time', ...(isObj(newDef.axis) ? newDef.axis : {}) }
+      }
     }
   }
   return { timeUnits, aggregate, groupby, encoding }
@@ -298,6 +327,234 @@ function normalizeErrorBand(spec: Obj, config: Obj): Obj {
   }
 }
 
+// --- boxplot (compositemark/boxplot.ts) -------------------------------------------------------------------------------
+
+const BOXPLOT_CONFIG: Obj = { size: 14, extent: 1.5, box: {}, median: { color: 'white' }, outliers: {}, rule: {}, ticks: null }
+
+/** config.ts mergeConfig for one composite mark's config: objects merge deeply, anything else is replaced. */
+function mergeDeep(base: Obj, over: Obj | undefined): Obj {
+  const out: Obj = { ...base }
+  for (const [k, v] of Object.entries(over ?? {})) out[k] = isObj(v) && isObj(out[k]) ? mergeDeep(out[k], v) : v
+  return out
+}
+
+const dq = (name: string): string => `datum['${name.replaceAll("'", "\\'")}']`
+
+/** common.ts partLayerMixins: one part of a composite mark as a unit spec, or none when the part is switched off. */
+function partLayerMixins(markDef: Obj, partName: string, cfg: Obj, base: Obj): Obj[] {
+  const { clip, color, opacity } = markDef
+  const own = markDef[partName]
+  if (!(own || (own === undefined && cfg[partName]))) return []
+  return [
+    {
+      ...base,
+      mark: {
+        ...(isObj(cfg[partName]) ? cfg[partName] : {}),
+        ...(clip ? { clip } : {}),
+        ...(color ? { color } : {}),
+        ...(opacity ? { opacity } : {}),
+        ...(isObj(base.mark) ? base.mark : { type: base.mark }),
+        style: `${markDef.type}-${partName}`,
+        ...(isObj(own) ? own : {}),
+      },
+    },
+  ]
+}
+
+/** common.ts filterTooltipWithAggregatedField: an aggregate tooltip is computed with the box, a raw one decorates the outliers. */
+function filterTooltipWithAggregatedField(old: Obj): { customTooltipWithoutAggregatedField?: unknown; filteredEncoding: Obj } {
+  const { tooltip, ...filteredEncoding } = old
+  if (!tooltip) return { filteredEncoding }
+  let withAgg: Obj[] | undefined
+  let without: Obj[] | Obj | undefined
+  if (Array.isArray(tooltip)) {
+    for (const t of tooltip) {
+      if (t.aggregate) (withAgg ??= []).push(t)
+      else (without = (without as Obj[] | undefined) ?? []), (without as Obj[]).push(t)
+    }
+    if (withAgg) filteredEncoding.tooltip = withAgg
+  } else if (tooltip.aggregate) filteredEncoding.tooltip = tooltip
+  else without = tooltip
+  if (Array.isArray(without) && without.length === 1) without = without[0]
+  return { customTooltipWithoutAggregatedField: without, filteredEncoding }
+}
+
+/** encoding.ts fieldDefs: every field def of an encoding (a conditional one through its condition), arrays flattened. */
+function fieldDefsOf(encoding: Obj): Obj[] {
+  const out: Obj[] = []
+  for (const def of Object.values(encoding)) {
+    for (const d of Array.isArray(def) ? def : [def]) {
+      if (isObj(d) && d.field !== undefined) out.push(d)
+      else if (isObj(d) && isObj(d.condition) && d.condition.field !== undefined) out.push(d.condition)
+    }
+  }
+  return out
+}
+
+/** common.ts getCompositeMarkTooltip. */
+function getCompositeMarkTooltip(summary: Array<{ fieldPrefix: string; titlePrefix: string }>, continuous: Obj, encodingWithoutContinuousAxis: Obj): Obj {
+  if ('tooltip' in encodingWithoutContinuousAxis) return { tooltip: encodingWithoutContinuousAxis.tooltip }
+  const mainTitle = ` of ${continuous.title ?? continuous.field}`
+  const five = summary.map(({ fieldPrefix, titlePrefix }) => ({ field: fieldPrefix + continuous.field, type: continuous.type, title: titlePrefix + mainTitle }))
+  const seen = new Set<string>()
+  const others: Obj[] = []
+  for (const d of fieldDefsOf(encodingWithoutContinuousAxis)) {
+    const { legend: _l, axis: _a, header: _h, scale: _s, ...plain } = d
+    const key = JSON.stringify(plain)
+    if (!seen.has(key)) (seen.add(key), others.push(plain))
+  }
+  return { tooltip: [...five, ...others] }
+}
+
+function normalizeBoxPlot(spec: Obj, userConfig: Obj | undefined): Obj {
+  const config = mergeDeep(BOXPLOT_CONFIG, isObj(userConfig?.boxplot) ? (userConfig!.boxplot as Obj) : undefined)
+  const { mark, encoding, params: _params, projection: _projection, ...outerSpec } = spec
+  void _params
+  void _projection
+  const markDef: Obj = isObj(mark) ? mark : { type: mark }
+  const extent: 'min-max' | number = markDef.extent ?? config.extent
+  const minMax = extent === 'min-max'
+  if (!minMax && !(typeof extent === 'number' && Number.isFinite(extent) && extent >= 0)) throw new VLCompileError(`mark.extent must be a non-negative number or "min-max", got ${JSON.stringify(extent)}`)
+  // getMarkPropOrConfig('size'): the mark def, then config.boxplot, then config.mark
+  const sizeValue = markDef.size ?? config.size ?? (isObj(userConfig?.mark) ? (userConfig!.mark as Obj).size : undefined)
+  const invalid = markDef.invalid
+
+  const orient = orientOf({ mark: markDef, encoding }, 'boxplot')
+  const axis = orient === 'vertical' ? 'y' : 'x'
+  const { [axis]: oldContinuous, ...oldWithoutContinuous } = encoding as Obj
+  const { aggregate: _agg, ...continuous } = oldContinuous as Obj
+  void _agg
+  if (continuous.field === undefined) throw new VLCompileError(`boxplot: the ${axis} channel needs a field`)
+  const f = continuous.field as string
+  const aliased = splitAccessPath(f).join('.')
+  const { customTooltipWithoutAggregatedField, filteredEncoding } = filterTooltipWithAggregatedField(oldWithoutContinuous)
+  const { timeUnits, aggregate, groupby, encoding: encodingWithoutContinuousAxis } = extractTransforms(filteredEncoding, 'boxplot')
+  const ticksOrient = orient === 'vertical' ? 'horizontal' : 'vertical'
+
+  const nm = (prefix: string): string => `${prefix}_${aliased}`
+  const quartiles = (): Obj[] => [{ op: 'q1', field: f, as: nm('lower_box') }, { op: 'q3', field: f, as: nm('upper_box') }]
+  const boxSpecific: Obj[] = [
+    ...quartiles(),
+    { op: 'median', field: f, as: nm('mid_box') },
+    { op: 'min', field: f, as: minMax ? nm('lower_whisker') : nm('min') },
+    { op: 'max', field: f, as: minMax ? nm('upper_whisker') : nm('max') },
+  ]
+  const transform: Obj[] = [...timeUnits, { aggregate: [...aggregate, ...boxSpecific], groupby }]
+
+  const { color, size, ...encodingWithoutSizeColorAndContinuousAxis } = encodingWithoutContinuousAxis
+  const title = continuous.title ?? f
+  const { scale, axis: axisDef } = continuous
+  const makePart = (sharedEncoding: Obj) => ({ partName, mark: partMark, positionPrefix, endPositionPrefix, extraEncoding }: { partName: string; mark: Obj; positionPrefix: string; endPositionPrefix?: string; extraEncoding?: Obj }): Obj[] =>
+    partLayerMixins(markDef, partName, config, {
+      mark: partMark,
+      encoding: {
+        [axis]: { field: `${positionPrefix}_${f}`, type: continuous.type, title, ...(scale !== undefined ? { scale } : {}), ...(axisDef !== undefined ? { axis: axisDef } : {}) },
+        ...(endPositionPrefix ? { [`${axis}2`]: { field: `${endPositionPrefix}_${f}` } } : {}),
+        ...sharedEncoding,
+        ...(extraEncoding ?? {}),
+      },
+    })
+  const makeExtent = makePart(encodingWithoutSizeColorAndContinuousAxis)
+  const makeBox = makePart(encodingWithoutContinuousAxis)
+  const defaultBoxColor = (isObj(config.box) ? config.box.color : isObj(userConfig?.mark) ? (userConfig!.mark as Obj).color : undefined) || '#4c78a8'
+  const makeMidTick = makePart({
+    ...encodingWithoutSizeColorAndContinuousAxis,
+    ...(size ? { size } : {}),
+    color: { condition: { test: `${dq(`lower_box_${f}`)} >= ${dq(`upper_box_${f}`)}`, ...(color || { value: defaultBoxColor }) } },
+  })
+
+  const fiveSummary = getCompositeMarkTooltip(
+    [
+      { fieldPrefix: minMax ? 'upper_whisker_' : 'max_', titlePrefix: 'Max' },
+      { fieldPrefix: 'upper_box_', titlePrefix: 'Q3' },
+      { fieldPrefix: 'mid_box_', titlePrefix: 'Median' },
+      { fieldPrefix: 'lower_box_', titlePrefix: 'Q1' },
+      { fieldPrefix: minMax ? 'lower_whisker_' : 'min_', titlePrefix: 'Min' },
+    ],
+    continuous,
+    encodingWithoutContinuousAxis,
+  )
+  const endTick = { type: 'tick', color: 'black', opacity: 1, orient: ticksOrient, invalid, aria: false }
+  const whiskerTooltip = minMax
+    ? fiveSummary
+    : getCompositeMarkTooltip([{ fieldPrefix: 'upper_whisker_', titlePrefix: 'Upper Whisker' }, { fieldPrefix: 'lower_whisker_', titlePrefix: 'Lower Whisker' }], continuous, encodingWithoutContinuousAxis)
+  const whiskerLayers = [
+    ...makeExtent({ partName: 'rule', mark: { type: 'rule', invalid, aria: false }, positionPrefix: 'lower_whisker', endPositionPrefix: 'lower_box', extraEncoding: whiskerTooltip }),
+    ...makeExtent({ partName: 'rule', mark: { type: 'rule', invalid, aria: false }, positionPrefix: 'upper_box', endPositionPrefix: 'upper_whisker', extraEncoding: whiskerTooltip }),
+    ...makeExtent({ partName: 'ticks', mark: endTick, positionPrefix: 'lower_whisker', extraEncoding: whiskerTooltip }),
+    ...makeExtent({ partName: 'ticks', mark: endTick, positionPrefix: 'upper_whisker', extraEncoding: whiskerTooltip }),
+  ]
+  const boxLayers: Obj[] = [
+    ...(minMax ? whiskerLayers : []),
+    ...makeBox({
+      partName: 'box',
+      mark: { type: 'bar', ...(sizeValue ? { size: sizeValue } : {}), orient, invalid, ariaRoleDescription: 'box' },
+      positionPrefix: 'lower_box',
+      endPositionPrefix: 'upper_box',
+      extraEncoding: fiveSummary,
+    }),
+    ...makeMidTick({
+      partName: 'median',
+      mark: {
+        type: 'tick',
+        invalid,
+        ...(isObj(config.median) && config.median.color ? { color: config.median.color } : {}),
+        ...(sizeValue ? { size: sizeValue } : {}),
+        orient: ticksOrient,
+        aria: false,
+      },
+      positionPrefix: 'mid_box',
+      extraEncoding: fiveSummary,
+    }),
+  ]
+  if (minMax) return { ...outerSpec, transform: ((outerSpec.transform as Obj[] | undefined) ?? []).concat(transform), layer: boxLayers }
+
+  // Tukey box plot
+  const lowerBoxExpr = dq(`lower_box_${aliased}`)
+  const upperBoxExpr = dq(`upper_box_${aliased}`)
+  const iqrExpr = `(${upperBoxExpr} - ${lowerBoxExpr})`
+  const lowerWhiskerExpr = `${lowerBoxExpr} - ${extent} * ${iqrExpr}`
+  const upperWhiskerExpr = `${upperBoxExpr} + ${extent} * ${iqrExpr}`
+  const fieldExpr = dq(f)
+  const joinaggregate: Obj = { joinaggregate: quartiles(), groupby }
+  const filteredWhiskerSpec: Obj = {
+    transform: [
+      { filter: `(${lowerWhiskerExpr} <= ${fieldExpr}) && (${fieldExpr} <= ${upperWhiskerExpr})` },
+      {
+        aggregate: [
+          { op: 'min', field: f, as: nm('lower_whisker') },
+          { op: 'max', field: f, as: nm('upper_whisker') },
+          { op: 'min', field: `lower_box_${f}`, as: nm('lower_box') },
+          { op: 'max', field: `upper_box_${f}`, as: nm('upper_box') },
+          ...aggregate,
+        ],
+        groupby,
+      },
+    ],
+    layer: whiskerLayers,
+  }
+  const { tooltip: _t, ...encodingWithoutSizeColorContinuousAxisAndTooltip } = encodingWithoutSizeColorAndContinuousAxis
+  void _t
+  const outlier = partLayerMixins(markDef, 'outliers', config, {
+    transform: [{ filter: `(${fieldExpr} < ${lowerWhiskerExpr}) || (${fieldExpr} > ${upperWhiskerExpr})` }],
+    mark: 'point',
+    encoding: {
+      [axis]: { field: f, type: continuous.type, title, ...(scale !== undefined ? { scale } : {}), ...(axisDef !== undefined ? { axis: axisDef } : {}) },
+      ...encodingWithoutSizeColorContinuousAxisAndTooltip,
+      ...(color ? { color } : {}),
+      ...(customTooltipWithoutAggregatedField ? { tooltip: customTooltipWithoutAggregatedField } : {}),
+    },
+  })[0]
+  const filteredTransforms = [...timeUnits, joinaggregate]
+  let filtered: Obj
+  if (outlier) filtered = { transform: filteredTransforms, layer: [outlier, filteredWhiskerSpec] }
+  else {
+    filtered = filteredWhiskerSpec
+    filtered.transform = [...filteredTransforms, ...filtered.transform]
+  }
+  return { ...outerSpec, layer: [filtered, { transform, layer: boxLayers }] }
+}
+
 /** channeldef.ts defaultType: the type a field definition without one gets (the composites read the types to orient themselves). */
 function defaultType(channel: string, def: Obj): string {
   if (channel === 'latitude' || channel === 'longitude') return 'quantitative'
@@ -322,9 +579,9 @@ function withTypes(encoding: Obj): Obj {
   return out
 }
 
-const kindOf = (spec: Obj): 'errorbar' | 'errorband' | undefined => {
+const kindOf = (spec: Obj): 'boxplot' | 'errorbar' | 'errorband' | undefined => {
   const t = isObj(spec.mark) ? spec.mark.type : spec.mark
-  return t === 'errorbar' || t === 'errorband' ? t : undefined
+  return t === 'boxplot' || t === 'errorbar' || t === 'errorband' ? t : undefined
 }
 
 /**
@@ -340,11 +597,12 @@ export function normalizeComposites(node: unknown, userConfig: Obj | undefined, 
   }
   const kind = kindOf(node)
   if (kind) {
-    const spec = { ...node, encoding: withTypes({ ...inherited, ...(node.encoding ?? {}) }) }
+    const spec = { ...node, encoding: withTypes(mergeEncoding(inherited, node.encoding)) }
+    if (kind === 'boxplot') return normalizeBoxPlot(spec, userConfig)
     return kind === 'errorbar' ? normalizeErrorBar(spec, config) : normalizeErrorBand(spec, config)
   }
   const out: Obj = { ...node }
-  if (node.layer !== undefined) out.layer = normalizeComposites(node.layer, userConfig, { ...inherited, ...(isObj(node.encoding) ? node.encoding : {}) })
+  if (node.layer !== undefined) out.layer = normalizeComposites(node.layer, userConfig, mergeEncoding(inherited, node.encoding))
   for (const k of ['hconcat', 'vconcat', 'concat']) if (node[k] !== undefined) out[k] = normalizeComposites(node[k], userConfig, {})
   if (node.spec !== undefined) out.spec = normalizeComposites(node.spec, userConfig, {})
   return out
@@ -398,7 +656,7 @@ export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit
   if (Array.isArray(node)) return node.map((n) => normalizePathOverlays(n, config, stackOf, inherited))
   if (!isObj(node)) return node
   if (node.layer !== undefined) {
-    const encoding = { ...inherited, ...(isObj(node.encoding) ? node.encoding : {}) }
+    const encoding = mergeEncoding(inherited, node.encoding)
     return { ...node, layer: (node.layer as unknown[]).map((c) => normalizePathOverlays(c, config, stackOf, encoding)) }
   }
   for (const k of ['hconcat', 'vconcat', 'concat']) {
@@ -421,7 +679,7 @@ export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit
   const { params, projection, mark, name, encoding: own, ...outer } = node
   const markDef: Obj = isObj(mark) ? mark : { type: mark }
   if (!OVERLAY_MARKS.has(markDef.type)) return node
-  const encoding: Obj = { ...inherited, ...(isObj(own) ? own : {}) }
+  const encoding: Obj = mergeEncoding(inherited, own)
   const markConfig: Obj = isObj(config[markDef.type]) ? config[markDef.type] : {}
   const pointOverlay = getPointOverlay(markDef, markConfig, encoding)
   const lineOverlay = markDef.type === 'area' ? getLineOverlay(markDef, markConfig) : undefined
@@ -482,7 +740,7 @@ export function alignStackOrders(node: unknown, stackOf: (unit: Obj) => StackPro
   if (Array.isArray(node)) return node.map((n) => alignStackOrders(n, stackOf, inherited))
   if (!isObj(node)) return node
   if (node.layer !== undefined) {
-    const encoding = { ...inherited, ...(isObj(node.encoding) ? node.encoding : {}) }
+    const encoding = mergeEncoding(inherited, node.encoding)
     return { ...node, layer: alignStackOrders(node.layer, stackOf, encoding) }
   }
   for (const k of ['hconcat', 'vconcat', 'concat']) if (node[k] !== undefined) return { ...node, [k]: alignStackOrders(node[k], stackOf, {}) }
@@ -490,7 +748,7 @@ export function alignStackOrders(node: unknown, stackOf: (unit: Obj) => StackPro
   if (node.mark === undefined) return node
 
   const own: Obj = isObj(node.encoding) ? node.encoding : {}
-  const encoding: Obj = { ...inherited, ...own }
+  const encoding: Obj = mergeEncoding(inherited, own)
   if (encoding.order) return node
   const colorField = encoding.fill ?? encoding.color
   if (!isObj(colorField) || typeof colorField.field !== 'string') return node

@@ -1,12 +1,13 @@
 /**
- * The deterministic sample of (A, B) spec pairs of the spec-swap path: ONE mounted <Chart> is given spec A, then spec B, and must show
- * what a fresh mount of B (and vega) shows. The sample is a pure function of the gallery listing (a seeded PRNG), so a pair id means the
- * same pair on every machine and the passing list (gallery/passing-swap.txt) can name pairs.
+ * The sample of (A, B) spec pairs of the spec-swap path: ONE mounted <Chart> is given spec A, then spec B, and must show
+ * what a fresh mount of B (and vega) shows. `generateSwapPairs` is the seeded selection that MADE gallery/swap-pairs.txt; the gate
+ * runs that committed file, not this function (it depends on the passing lists, which other changes raise). Regenerate deliberately:
+ * `pnpm conformance:gallery --regenerate-swap-pairs`.
  *
  * It is made of: the three pairs a playground user reported; every kind of spec that holds state across a prop change, as A (what is left
  * behind) and as B (what must start clean) -- timers, selections / event handlers, facets, maps; and a seeded random remainder.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { GALLERY_DIR, listGallery, readSpec, type GallerySpec } from './lib.js'
 import type { SwapPair } from './react.js'
@@ -28,7 +29,7 @@ const CATEGORIES: Record<string, (json: string) => boolean> = {
   map: (j) => /"projection|"geoshape"|"geopath"|"type":\s*"shape"/.test(j),
 }
 
-export function swapPairs(all: GallerySpec[] = listGallery()): SwapPair[] {
+export function generateSwapPairs(all: GallerySpec[] = listGallery()): SwapPair[] {
   const byId = new Map(all.map((g) => [g.id, g]))
   const rand = mulberry32(0x5eed)
   // B is a spec the fresh-mount gate already holds to vega, so "equals a fresh mount" and "equals vega" are the same claim for it
@@ -59,4 +60,18 @@ export function swapPairs(all: GallerySpec[] = listGallery()): SwapPair[] {
   }
   for (let i = 0; i < SWAP_PAIRS_RANDOM; i++) add(pick(left), pick(passing))
   return pairs
+}
+
+export const SWAP_PAIRS_FILE = join(GALLERY_DIR, 'swap-pairs.txt')
+
+/** The committed pair list: one `A => B` per line. */
+export function readSwapPairIds(): string[] {
+  return readFileSync(SWAP_PAIRS_FILE, 'utf8').split('\n').filter(Boolean)
+}
+
+/** Deliberately replace the committed list with a fresh seeded selection over the current passing lists. */
+export function regenerateSwapPairs(): number {
+  const pairs = generateSwapPairs()
+  writeFileSync(SWAP_PAIRS_FILE, pairs.map((p) => p.id).sort().join('\n') + '\n')
+  return pairs.length
 }

@@ -120,7 +120,8 @@ function fieldPredicateExpr(p: Obj): string {
   const field = p.field as string
   const tu = p.timeUnit !== undefined ? normalizeTimeUnit(p.timeUnit) : undefined
   const raw = flatAccessRef(field)
-  const fieldExpr = tu ? `time(${timeUnitFieldExpr(tu, field)})` : raw
+  // (a binned time unit's field already holds the start of its unit)
+  const fieldExpr = tu ? `time(${tu.binned ? raw : timeUnitFieldExpr(tu, field)})` : raw
   const val = (v: unknown): string => valueExpr(v, tu ? (tu.utc ? 'utc' + tu.unit : tu.unit) : undefined)
   if (p.equal !== undefined) return `${fieldExpr}===${val(p.equal)}`
   if (p.lt !== undefined) return `${fieldExpr}<${val(p.lt)}`

@@ -81,6 +81,8 @@ export interface NormalTimeUnit {
   unit: string
   utc: boolean
   step?: number
+  /** the field already holds the start of the unit (`binnedyearmonth`): no timeunit transform runs on it */
+  binned?: boolean
 }
 
 /**
@@ -90,11 +92,13 @@ export interface NormalTimeUnit {
 export function normalizeTimeUnit(tu: unknown, path = 'timeUnit'): NormalTimeUnit {
   let unit: unknown = tu
   let utc = false
+  let binned = false
   let step: number | undefined
   if (isObj(tu)) {
     keysOf(tu, set('unit utc step maxbins binned'), path, 'timeUnit')
     if (tu.maxbins !== undefined) fail(path, 'timeUnit.maxbins (adaptive time-unit binning) is not supported')
-    if (tu.binned !== undefined) fail(path, 'timeUnit.binned is not supported')
+    if (tu.binned !== undefined && typeof tu.binned !== 'boolean') mustBe(`${path}.binned`, 'a boolean')
+    binned = tu.binned === true
     unit = tu.unit
     utc = tu.utc === true
     if (tu.step !== undefined) {
@@ -104,15 +108,19 @@ export function normalizeTimeUnit(tu: unknown, path = 'timeUnit'): NormalTimeUni
   }
   if (typeof unit !== 'string') fail(path, `timeUnit must be a unit string or {unit}, got ${JSON.stringify(tu)}`)
   let u: string = unit
+  // (timeunit.ts normalizeTimeUnit: "binnedutcyearmonth" is the binned, UTC year-month)
+  if (u.startsWith('binned')) {
+    binned = true
+    u = u.slice(6)
+  }
   if (u.startsWith('utc')) {
     utc = true
     u = u.slice(3)
   }
-  if (u.startsWith('binned')) fail(path, `timeUnit ${JSON.stringify(tu)}: binned time units are not supported`)
   if (!SINGLE_TIME_UNITS.includes(u) && !MULTI_TIME_UNITS.has(u)) {
     fail(path, `unknown timeUnit ${JSON.stringify(tu)}`)
   }
-  return { unit: u, utc, ...(step !== undefined ? { step } : {}) }
+  return { unit: u, utc, ...(step !== undefined ? { step } : {}), ...(binned ? { binned } : {}) }
 }
 
 // --- entry -------------------------------------------------------------------
@@ -269,9 +277,9 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
   if (spec.params !== undefined) validateParams(spec.params, at('params'), kind !== 'layer' && selOk, kind, spec, at('params'))
   checkNamedSelectionView(spec, at)
   if (top && spec.name !== undefined && [...declaredParams].some(([n, k]) => k === 'selection' && !timerNames.has(n))) fail(at('name'), 'a named spec cannot declare selection parameters: vega-lite names its marks, signals and units after the view, which @aster/vl does not reproduce')
-  if (spec.resolve !== undefined) validateResolve(spec.resolve, at('resolve'), kind)
+  if (spec.resolve !== undefined) validateResolve(spec.resolve, at('resolve'), kind, isObj(spec.encoding) && (spec.encoding.row != null || spec.encoding.column != null || spec.encoding.facet != null))
   if (spec.projection !== undefined) validateProjection(spec.projection, at('projection'))
-  if (spec.view !== undefined) fail(at('view'), 'the view background property is not supported; set it through config.view')
+  if (spec.view !== undefined) validateViewBackground(spec.view, kind, at('view'))
   if (spec.usermeta !== undefined && !isObj(spec.usermeta)) mustBe(at('usermeta'), OBJECT)
   if (spec.config !== undefined) {
     // (a nested config was rejected above)
@@ -281,12 +289,14 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
   if (spec.autosize !== undefined) validateAutosize(spec.autosize, at('autosize'))
   if (spec.datasets !== undefined && !isObj(spec.datasets)) mustBe(at('datasets'), 'an object mapping names to arrays')
   for (const k of ['align', 'bounds', 'center', 'spacing', 'columns'] as const) {
-    if (spec[k] !== undefined && (kind === 'unit' || kind === 'layer')) fail(at(k), `${k} is only meaningful on composition specs`)
+    // (a unit faceted through its encoding is a facet: normalize/facet.ts moves its layout properties onto it)
+    const faceted = kind === 'unit' && isObj(spec.encoding) && (spec.encoding.row != null || spec.encoding.column != null || spec.encoding.facet != null)
+    if (spec[k] !== undefined && (kind === 'unit' || kind === 'layer') && !faceted) fail(at(k), `${k} is only meaningful on composition specs`)
   }
 
   switch (kind) {
     case 'unit':
-      validateUnit(spec, at)
+      validateUnit(spec, at, top)
       break
     case 'layer': {
       if (!Array.isArray(spec.layer) || spec.layer.length === 0) mustBe(at('layer'), 'a non-empty array of specs')
@@ -311,7 +321,7 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
       break
     }
     case 'facet':
-      validateFacetOperator(spec, at, selOk)
+      validateFacetOperator(spec, at, selOk, top)
       break
     case 'repeat':
       validateRepeatOperator(spec, at, selOk)
@@ -357,7 +367,18 @@ function validateData(spec: Obj, at: (k: string) => string): void {
   if (!isObj(data)) mustBe(at('data'), OBJECT)
   const kinds = ['values', 'url', 'name', 'sequence', 'sphere', 'graticule'].filter((k) => data[k] !== undefined)
   if (kinds.length === 0) fail(at('data'), 'needs one of `values`, `url`, `name`')
-  if (data.sequence !== undefined) fail(at('data'), 'data generators: `sequence` is not supported (`sphere` and `graticule` are)')
+  if (data.sequence !== undefined) {
+    if (kinds.length > 1) fail(at('data'), 'a `sequence` data generator cannot be combined with another data source')
+    keysOf(data, set('sequence name'), at('data'), 'data generator')
+    const q = data.sequence
+    if (!isObj(q)) mustBe(at('data.sequence'), 'an object {start, stop, step, as}')
+    keysOf(q, set('start stop step as'), at('data.sequence'), 'sequence')
+    for (const k of ['start', 'stop'] as const) if (typeof q[k] !== 'number' || !Number.isFinite(q[k])) mustBe(at(`data.sequence.${k}`), 'a finite number')
+    if (q.step !== undefined && (typeof q.step !== 'number' || !Number.isFinite(q.step) || q.step === 0)) mustBe(at('data.sequence.step'), 'a non-zero number')
+    if (q.as !== undefined && typeof q.as !== 'string') mustBe(at('data.sequence.as'), 'a field name')
+    if (data.name !== undefined && typeof data.name !== 'string') mustBe(at('data.name'), 'a string')
+    return
+  }
   if (data.sphere !== undefined || data.graticule !== undefined) {
     if (data.sphere !== undefined && data.graticule !== undefined) fail(at('data'), '`sphere` and `graticule` cannot be combined')
     const g = data.sphere !== undefined ? 'sphere' : 'graticule'
@@ -402,7 +423,7 @@ function validateData(spec: Obj, at: (k: string) => string): void {
 const CONFIG_KEYS = set(
   'autosize background padding axis axisBand axisX axisY axisLeft axisRight axisTop axisBottom legend header headerRow headerColumn headerFacet range ' +
     'mark arc area bar circle geoshape image line point rect rule square text tick trail view title font scale style projection ' +
-    'aria countTitle fieldTitle lineBreak normalizedNumberFormat numberFormat timeFormat errorbar errorband ' +
+    'aria countTitle fieldTitle lineBreak normalizedNumberFormat numberFormat timeFormat boxplot errorbar errorband concat facet tooltipFormat ' +
     'customFormatTypes numberFormatType normalizedNumberFormatType timeFormatType selection',
 )
 const CONFIG_SCALE_KEYS = set(
@@ -428,6 +449,25 @@ function validateConfig(cfg: Obj, path: string): void {
         if (v !== 'zero-or-min' && !(isObj(v) && 'value' in v)) mustBe(`${path}.scale.invalid.${ch}`, '"zero-or-min" or {"value": ...}')
       }
     }
+  }
+  for (const k of ['concat', 'facet'] as const) {
+    const c = cfg[k]
+    if (c === undefined) continue
+    if (!isObj(c)) mustBe(`${path}.${k}`, OBJECT)
+    keysOf(c, set('columns spacing'), `${path}.${k}`, `${k} config`)
+    if (c.columns !== undefined && !(Number.isInteger(c.columns) && (c.columns as number) > 0)) mustBe(`${path}.${k}.columns`, 'a positive integer')
+    if (c.spacing !== undefined && typeof c.spacing !== 'number') mustBe(`${path}.${k}.spacing`, 'a number')
+  }
+  if (cfg.tooltipFormat !== undefined) {
+    if (!isObj(cfg.tooltipFormat)) mustBe(`${path}.tooltipFormat`, OBJECT)
+    keysOf(cfg.tooltipFormat, set('numberFormat numberFormatType normalizedNumberFormat normalizedNumberFormatType timeFormat timeFormatType'), `${path}.tooltipFormat`, 'tooltip format config')
+    for (const [k, v] of Object.entries(cfg.tooltipFormat)) if (typeof v !== 'string') mustBe(`${path}.tooltipFormat.${k}`, 'a string')
+  }
+  if (cfg.boxplot !== undefined) {
+    if (!isObj(cfg.boxplot)) mustBe(`${path}.boxplot`, OBJECT)
+    keysOf(cfg.boxplot, set('size extent box median outliers rule ticks'), `${path}.boxplot`, 'boxplot config')
+    const ext = cfg.boxplot.extent
+    if (ext !== undefined && ext !== 'min-max' && !(typeof ext === 'number' && Number.isFinite(ext) && ext >= 0)) mustBe(`${path}.boxplot.extent`, '"min-max" or a non-negative number')
   }
   if (cfg.projection !== undefined) validateProjection(cfg.projection, `${path}.projection`)
   if (cfg.selection !== undefined) {
@@ -511,7 +551,7 @@ function validateProjection(p: unknown, at: string): void {
 
 // --- params ------------------------------------------------------------------
 
-const BIND_INPUTS = set('range checkbox radio select text number date datetime-local time month week color')
+const BIND_INPUTS = set('range checkbox radio select text number date datetime-local time month week color search tel url email password')
 
 /**
  * Why a selection parameter declared on a composition (concat, facet, repeat) cannot be pushed down to the units below it
@@ -564,13 +604,14 @@ function validateParams(params: unknown, path: string, selectionOk: boolean, kin
       if (!isObj(p.bind)) mustBe(`${at}.bind`, 'an input binding object (legend/scales bindings belong to selection parameters)')
       validateBinding(p.bind, `${at}.bind`)
     }
-    if (p.value === undefined && p.expr === undefined) fail(at, 'a variable parameter needs `value` or `expr`')
+    // (a bound parameter starts as its input's value)
+    if (p.value === undefined && p.expr === undefined && p.bind === undefined) fail(at, 'a variable parameter needs `value`, `expr` or `bind`')
   })
 }
 
 /** An input binding (vega signal `bind`). */
 function validateBinding(bind: Obj, at: string): void {
-  keysOf(bind, set('input min max step options labels name debounce element'), at, 'bind')
+  keysOf(bind, set('input min max step options labels name debounce element placeholder autocomplete'), at, 'bind')
   if (typeof bind.input !== 'string' || !BIND_INPUTS.has(bind.input)) fail(`${at}.input`, `unsupported input type ${JSON.stringify(bind.input)}`)
 }
 
@@ -705,7 +746,7 @@ function validateSelection(p: Obj, at: string): void {
 
 const RESOLVE_CHANNELS = set('x y xOffset yOffset theta radius color fill stroke opacity fillOpacity strokeOpacity strokeWidth strokeDash size angle shape time')
 
-function validateResolve(r: unknown, path: string, kind: Kind): void {
+function validateResolve(r: unknown, path: string, kind: Kind, facetedUnit = false): void {
   if (!isObj(r)) mustBe(path, OBJECT)
   keysOf(r, set('scale axis legend'), path, 'resolve')
   for (const what of ['scale', 'axis', 'legend'] as const) {
@@ -717,7 +758,20 @@ function validateResolve(r: unknown, path: string, kind: Kind): void {
       if (v !== 'shared' && v !== 'independent') mustBe(`${path}.${what}.${ch}`, `"shared" or "independent", got ${JSON.stringify(v)}`)
     }
   }
-  if (kind === 'unit') fail(path, '`resolve` has no meaning on a single unit spec')
+  // a unit faceted through its encoding is a facet over that unit: its resolve is the facet's
+  if (kind === 'unit' && !facetedUnit) fail(path, '`resolve` has no meaning on a single unit spec')
+  if (kind === 'facet' || facetedUnit) {
+    for (const what of ['scale', 'axis', 'legend'] as const) {
+      const m = r[what]
+      if (!isObj(m)) continue
+      for (const [ch, v] of Object.entries(m)) {
+        if (v !== 'independent') continue
+        // only independent x / y scales are laid out (each cell with its own scale and axes); a guide's own resolution is not
+        if (what === 'scale' && (ch === 'x' || ch === 'y')) continue
+        fail(`${path}.${what}.${ch}`, `an independent ${what} resolution of ${ch} inside a facet is not supported yet (independent x and y scales are)`)
+      }
+    }
+  }
 }
 
 // --- unit specs --------------------------------------------------------------
@@ -748,6 +802,22 @@ function validateInvalidMode(v: unknown, at: string): void {
   if (v !== undefined && v !== null && !(typeof v === 'string' && INVALID_MODES.has(v))) fail(at, `unknown invalid-value mode ${JSON.stringify(v)}: expected ${[...INVALID_MODES].join(', ')} or null`)
 }
 
+/** vega-lite `ViewBackground`: the group's own fill / stroke / opacity ..., on a unit or a layer. */
+const VIEW_BACKGROUND_KEYS = set('cornerRadius fillOpacity opacity strokeCap strokeDash strokeDashOffset strokeJoin strokeMiterLimit strokeOpacity strokeWidth fill stroke cursor style')
+function validateViewBackground(view: unknown, kind: string, at: string): void {
+  if (kind !== 'unit' && kind !== 'layer') fail(at, `\`view\` is a property of a unit or a layer spec, not of a ${kind}`)
+  if (!isObj(view)) mustBe(at, OBJECT)
+  keysOf(view, VIEW_BACKGROUND_KEYS, at, 'view')
+  for (const [k, v] of Object.entries(view)) {
+    if (k === 'style') {
+      if (typeof v !== 'string' && !(Array.isArray(v) && v.every((x) => typeof x === 'string'))) mustBe(`${at}.style`, 'a style name or an array of style names')
+    } else if (isObj(v)) fail(`${at}.${k}`, 'a signal or expression reference is not supported in a view background; give a literal value')
+  }
+}
+
+/** The marks pointPosition places (position-point.ts): the mark def's x / y stand for a missing channel. */
+const POINT_POSITIONED_MARKS = set('point circle square text')
+
 function validateMark(mark: unknown, at: string): string {
   let def: Obj
   if (typeof mark === 'string') def = { type: mark }
@@ -761,6 +831,12 @@ function validateMark(mark: unknown, at: string): string {
     for (const k of Object.keys(def)) {
       if (!MARK_DEF_KEYS.has(k)) fail(`${at}.${k}`, `unknown mark property "${k}"`)
       const why = UNSUPPORTED_MARK_KEYS[k]
+      // a point-positioned mark takes its x / y from the mark def: a number, or the view's `width` / `height` (valueref.ts widthHeightValueOrSignalRef)
+      if (why && (k === 'x' || k === 'y') && POINT_POSITIONED_MARKS.has(type)) {
+        const edge = k === 'x' ? 'width' : 'height'
+        if (typeof def[k] !== 'number' && def[k] !== edge) mustBe(`${at}.${k}`, `a number or "${edge}" (an expression or signal is not supported)`)
+        continue
+      }
       if (why) fail(`${at}.${k}`, why)
       if (k === 'order' && def.order !== false && def.order !== null && def.order !== true) fail(`${at}.order`, 'only order: false/null/true is supported')
     }
@@ -770,13 +846,14 @@ function validateMark(mark: unknown, at: string): string {
   return type
 }
 
-function validateUnit(spec: Obj, at: (k: string) => string): void {
+function validateUnit(spec: Obj, at: (k: string) => string, top = true): void {
   const mark = validateMark(spec.mark, at('mark'))
   const enc = spec.encoding === undefined ? {} : spec.encoding
   validateEncoding(enc, at('encoding'), 'unit', mark)
   if (isObj(enc)) validateGeoUnit(mark, enc, at('encoding'))
   validateAnimation(spec, enc, at)
   const faceted = isObj(enc) && (enc.row != null || enc.column != null || enc.facet != null)
+  if (!top && isObj(enc) && enc.facet != null) fail(at('encoding.facet'), 'a wrapped facet (the `facet` channel) nested in another composition is not supported yet')
   if ((compositeDepth > 0 || faceted) && (mark === 'geoshape' || spec.projection !== undefined || (isObj(enc) && Object.keys(enc).some((c) => GEO_CHANNELS.has(c) && enc[c] != null)))) {
     fail(at('mark'), 'maps (geoshape marks, projections, longitude / latitude) inside a facet are not supported: vega-lite 6.4.3 fits a facet\'s projection to a dataset it never defines (data("child_main")), so there is no output to match')
   }
@@ -868,17 +945,19 @@ function validateEncoding(enc: unknown, path: string, where: 'unit' | 'layer', m
         continue
       }
     } else if (Array.isArray(def)) fail(at, `channel "${ch}" does not accept an array of definitions`)
-    validateChannelDef(ch, def, at)
+    validateChannelDef(ch, def, at, where === 'layer')
   }
 }
 
-function validateChannelDef(ch: string, def: unknown, at: string): void {
+const NO_SCALE_CHANNELS = set('color fill stroke opacity fillOpacity strokeOpacity strokeWidth')
+
+function validateChannelDef(ch: string, def: unknown, at: string, shared = false): void {
   if (!isObj(def)) fail(at, 'a channel definition must be an object')
   keysOf(def, ch === 'row' || ch === 'column' || ch === 'facet' ? FACET_CHANNEL_DEF_KEYS : FIELD_DEF_KEYS, at, 'channel definition')
   if (def.value !== undefined && (def.field !== undefined || def.datum !== undefined)) fail(at, '`value` cannot be combined with `field`/`datum`')
   if (def.field !== undefined && def.datum !== undefined) fail(at, '`field` and `datum` cannot be combined')
   if (def.field !== undefined) checkFieldName(def.field, `${at}.field`)
-  if (def.field === undefined && def.value === undefined && def.datum === undefined && def.aggregate !== 'count' && def.condition === undefined && def.expr === undefined) {
+  if (def.field === undefined && def.value === undefined && def.datum === undefined && def.aggregate !== 'count' && def.condition === undefined && def.expr === undefined && !shared && !(ch === 'order' && def.sort !== undefined)) {
     fail(at, 'a channel definition needs `field`, `value`, `datum` or `aggregate: "count"`')
   }
   if (def.type !== undefined && !['quantitative', 'ordinal', 'nominal', 'temporal', 'geojson'].includes(def.type as string)) {
@@ -912,8 +991,13 @@ function validateChannelDef(ch: string, def: unknown, at: string): void {
       if (def.aggregate !== 'count' && def.field === undefined) fail(`${at}.aggregate`, `aggregate "${def.aggregate}" needs a field`)
     }
   }
-  if (def.bin !== undefined) validateBin(def.bin, `${at}.bin`)
-  if (def.timeUnit !== undefined) normalizeTimeUnit(def.timeUnit, `${at}.timeUnit`)
+  if (def.bin !== undefined) validateBin(def.bin, `${at}.bin`, ch === 'x' || ch === 'y')
+  if ((def.bin === 'binned' || (isObj(def.bin) && def.bin.binned === true)) && ch !== 'x' && ch !== 'y') fail(`${at}.bin`, 'pre-binned data (bin: "binned") only applies to the x and y channels')
+  if (def.timeUnit !== undefined) {
+    const tu = normalizeTimeUnit(def.timeUnit, `${at}.timeUnit`)
+    // (a binned time unit on a discrete field leaves its mark without an orientation in vega-lite, which is not reproduced)
+    if (tu.binned && (def.type === 'ordinal' || def.type === 'nominal')) fail(`${at}.timeUnit`, 'a binned time unit on an ordinal or nominal field is not supported yet; use a temporal field')
+  }
   if (def.timeUnit !== undefined && def.bin) fail(at, '`timeUnit` and `bin` cannot be combined')
   if (def.sort !== undefined) validateSort(def.sort, `${at}.sort`, ch)
   // "wiggle" is not in the vega-lite 6 schema but vega-lite 6.4.3 accepts it and
@@ -921,14 +1005,23 @@ function validateChannelDef(ch: string, def: unknown, at: string): void {
   if (def.stack !== undefined && !['zero', 'center', 'normalize', 'wiggle', true, false, null].includes(def.stack as never)) {
     fail(`${at}.stack`, `unsupported stack ${JSON.stringify(def.stack)}`)
   }
-  if (def.impute !== undefined) fail(`${at}.impute`, 'channel-level `impute` is not supported')
+  if (def.impute !== undefined) {
+    if (ch !== 'x' && ch !== 'y') fail(`${at}.impute`, '`impute` only applies to the x and y channels')
+    const im = def.impute
+    if (!isObj(im)) mustBe(`${at}.impute`, OBJECT)
+    keysOf(im, set('method value frame keyvals'), `${at}.impute`, 'impute')
+    if (im.method !== undefined && !['value', 'median', 'max', 'min', 'mean'].includes(im.method as string)) fail(`${at}.impute.method`, `unknown impute method ${JSON.stringify(im.method)}`)
+    if (im.frame !== undefined && !(Array.isArray(im.frame) && im.frame.length === 2)) fail(`${at}.impute.frame`, 'must be a [start, end] pair')
+    if (im.keyvals !== undefined) validateImputeKeyvals(im.keyvals, `${at}.impute.keyvals`)
+  }
   if (def.band !== undefined) fail(`${at}.band`, '`band` is not supported')
   if (def.bandPosition !== undefined && typeof def.bandPosition !== 'number') mustBe(`${at}.bandPosition`, 'a number')
   if (def.condition !== undefined) validateCondition(def.condition, `${at}.condition`)
   for (const k of ['axis', 'legend', 'scale'] as const) {
     if (def[k] !== undefined && def[k] !== null && !isObj(def[k])) mustBe(`${at}.${k}`, 'an object or null')
   }
-  if (def.scale === null) fail(`${at}.scale`, '`scale: null` (identity/disabled scale) is not supported')
+  // (`scale: null` reads the field's values as they are; for a position it would need the pixel values to be known)
+  if (def.scale === null && !NO_SCALE_CHANNELS.has(ch)) fail(`${at}.scale`, `\`scale: null\` (identity/disabled scale) is not supported on the ${ch} channel`)
   if (isObj(def.scale)) validateScaleDef(def.scale, `${at}.scale`)
 }
 
@@ -966,11 +1059,19 @@ function validateScaleDef(scale: Obj, at: string): void {
   }
 }
 
-function validateBin(bin: unknown, at: string): void {
-  if (bin === 'binned') fail(at, 'pre-binned data (bin: "binned") is not supported; let @aster/vl bin the field (bin: true) or use a bin transform')
+function validateBin(bin: unknown, at: string, prebinned = false): void {
+  if (bin === 'binned') {
+    if (!prebinned) fail(at, 'pre-binned data (bin: "binned") is a property of an x or y channel')
+    return
+  }
   if (bin === true || bin === false) return
   if (!isObj(bin)) fail(at, `bin must be true or a bin-params object, got ${JSON.stringify(bin)}`)
-  if (bin.binned === true) fail(`${at}.binned`, 'pre-binned data (binned: true) is not supported; let @aster/vl bin the field or use a bin transform')
+  if (bin.binned === true) {
+    if (!prebinned) fail(`${at}.binned`, 'pre-binned data (binned: true) is a property of an x or y channel')
+    keysOf(bin, set('binned step'), at, 'pre-binned bin')
+    if (bin.step !== undefined && (typeof bin.step !== 'number' || !(bin.step > 0))) mustBe(`${at}.step`, 'a positive number')
+    return
+  }
   keysOf(bin, set('anchor base binned divide extent maxbins minstep nice step steps'), at, 'bin')
   const num = (k: string, pos = true): void => {
     const v = bin[k]
@@ -1080,16 +1181,16 @@ function validateCondition(cond: unknown, at: string): void {
       if (c.test === undefined) fail(a, 'a condition needs `test` or `param`')
       validatePredicate(c.test, `${a}.test`)
     }
+    // (a count needs no field: `{param, aggregate: "count"}` is a field def, conditional.ts ConditionalValueDef / FieldDef)
     const kinds = ['value', 'field', 'datum'].filter((k) => c[k] !== undefined)
-    if (kinds.length !== 1) fail(a, 'a condition needs exactly one of `value`, `field`, `datum`')
-    if (inArray && kinds[0] !== 'value') fail(a, 'conditions in an array must be value conditions')
+    const isCount = kinds.length === 0 && c.aggregate === 'count'
+    if (kinds.length !== 1 && !isCount) fail(a, 'a condition needs exactly one of `value`, `field`, `datum`, or `aggregate: "count"`')
+    if (inArray && !(kinds[0] === 'value')) fail(a, 'conditions in an array must be value conditions')
     if (c.field !== undefined) {
       if (typeof c.field !== 'string') mustBe(`${a}.field`, 'a string')
       splitAccessPath(c.field)
     }
     if (c.timeUnit !== undefined) normalizeTimeUnit(c.timeUnit, `${a}.timeUnit`)
-    if (c.bin !== undefined) fail(`${a}.bin`, 'binned conditional fields are not supported')
-    if (c.aggregate !== undefined) fail(`${a}.aggregate`, 'aggregated conditional fields are not supported')
   }
   if (Array.isArray(cond)) {
     if (cond.length === 0) fail(at, 'a condition array must not be empty')
@@ -1124,6 +1225,15 @@ const TRANSFORM_KEYS: Record<string, ReadonlySet<string>> = {
 export const TRANSFORM_NAMES = Object.keys(TRANSFORM_KEYS)
 /** The transforms whose key doubles as a secondary key elsewhere, and the key that makes them the primary one. */
 const COMPANION: Record<string, string> = { bin: 'field', timeUnit: 'field', extent: 'param' }
+
+/** `keyvals`: the key values to impute over, a list or a `{start, stop, step}` sequence. */
+function validateImputeKeyvals(kv: unknown, at: string): void {
+  if (Array.isArray(kv)) return
+  if (!isObj(kv)) mustBe(at, 'an array or a {start, stop, step} sequence')
+  keysOf(kv, set('start stop step'), at, 'keyvals sequence')
+  if (typeof kv.stop !== 'number') mustBe(`${at}.stop`, 'a number')
+  for (const k of ['start', 'step'] as const) if (kv[k] !== undefined && typeof kv[k] !== 'number') mustBe(`${at}.${k}`, 'a number')
+}
 
 function validateFieldList(v: unknown, at: string): void {
   if (!Array.isArray(v) || !v.every((s) => typeof s === 'string')) mustBe(at, 'an array of field names')
@@ -1192,7 +1302,8 @@ function validateTransform(kind: string, t: Obj, a: string): void {
     case 'aggregate':
     case 'joinaggregate': {
       const defs = t[kind]
-      if (!Array.isArray(defs) || defs.length === 0) mustBe(`${a}.${kind}`, 'a non-empty array of {op, field?, as?}')
+      // (an aggregate with no measures only groups: the distinct values of its groupby)
+      if (!Array.isArray(defs) || (defs.length === 0 && kind === 'joinaggregate')) mustBe(`${a}.${kind}`, kind === 'aggregate' ? 'an array of {op, field?, as?}' : 'a non-empty array of {op, field?, as?}')
       defs.forEach((d, i) => {
         const da = `${a}.${kind}[${i}]`
         if (!isObj(d)) mustBe(da, OBJECT)
@@ -1200,7 +1311,6 @@ function validateTransform(kind: string, t: Obj, a: string): void {
         if (typeof d.op !== 'string' || !AGG_OPS.has(d.op)) fail(`${da}.op`, `unknown aggregate op ${JSON.stringify(d.op)}`)
         if (d.op !== 'count' && typeof d.field !== 'string') fail(`${da}.field`, `op "${d.op}" needs a field`)
         if (d.field !== undefined) splitAccessPath(d.field as string)
-        if (d.op === 'argmax' || d.op === 'argmin') fail(`${da}.op`, `op "${d.op}" is not supported in transforms (use {"op":"max"} with a join)`)
         if (d.as !== undefined && typeof d.as !== 'string') mustBe(`${da}.as`, 'a string')
       })
       break
@@ -1245,7 +1355,7 @@ function validateTransform(kind: string, t: Obj, a: string): void {
       needStr('key')
       if (t.method !== undefined && !['value', 'median', 'max', 'min', 'mean'].includes(t.method as string)) fail(`${a}.method`, `unknown impute method ${JSON.stringify(t.method)}`)
       if (t.frame !== undefined && !(Array.isArray(t.frame) && t.frame.length === 2)) fail(`${a}.frame`, 'must be a [start, end] pair')
-      if (t.keyvals !== undefined && !Array.isArray(t.keyvals)) mustBe(`${a}.keyvals`, 'an array (key-value ranges are not supported)')
+      if (t.keyvals !== undefined) validateImputeKeyvals(t.keyvals, `${a}.keyvals`)
       break
     case 'lookup':
       needStr('lookup')
@@ -1282,7 +1392,7 @@ function validateTransform(kind: string, t: Obj, a: string): void {
       needStr('regression')
       needStr('on')
       if (t.method !== undefined && !['linear', 'log', 'exp', 'pow', 'quad', 'poly'].includes(t.method as string)) fail(`${a}.method`, `unknown regression method ${JSON.stringify(t.method)}`)
-      if (t.params === true) fail(`${a}.params`, 'regression `params: true` is not supported')
+      if (t.params !== undefined && typeof t.params !== 'boolean') mustBe(`${a}.params`, 'a boolean')
       asNames('as', 2)
       break
     case 'quantile':
@@ -1314,23 +1424,25 @@ function validateDataSourceObj(d: Obj, at: string): void {
 
 // --- facet / repeat operators ------------------------------------------------
 
-function validateFacetOperator(spec: Obj, at: (k: string) => string, selOk: boolean): void {
+function validateFacetOperator(spec: Obj, at: (k: string) => string, selOk: boolean, top = true): void {
   const facet = spec.facet
   if (!isObj(facet)) mustBe(at('facet'), 'a field definition or {row, column}')
   if (!isObj(spec.spec)) fail(at('spec'), 'a facet spec needs a nested `spec`')
   const mapping = facet.row !== undefined || facet.column !== undefined
+  // (a wrapped facet inside another composition lays its cells out differently from vega-lite's here: refused rather than drawn wrong)
+  if (!mapping && !top) fail(at('facet'), 'a wrapped facet (a single `facet` field) nested in another composition is not supported yet')
   const checkFacetDef = (d: unknown, a: string): void => {
     if (!isObj(d)) mustBe(a, 'a field definition')
     keysOf(d, set('field type aggregate bin timeUnit sort title header bandPosition'), a, 'facet field definition')
     if (typeof d.field !== 'string') fail(`${a}.field`, 'a facet field definition needs `field`')
     splitAccessPath(d.field)
-    if (d.type === undefined && d.aggregate === undefined && d.bin === undefined && d.timeUnit === undefined) fail(`${a}.type`, 'a facet field definition needs `type`')
     if (d.bin !== undefined) validateBin(d.bin, `${a}.bin`)
     if (d.timeUnit !== undefined) normalizeTimeUnit(d.timeUnit, `${a}.timeUnit`)
     if (d.sort !== undefined) {
       const s = d.sort
       if (!(s === 'ascending' || s === 'descending' || s === null || Array.isArray(s) || isObj(s))) fail(`${a}.sort`, 'unknown facet sort form')
       if (isObj(s) || Array.isArray(s)) validateSort(s, `${a}.sort`, 'row')
+      if (isObj(s) && typeof s.field !== 'string') fail(`${a}.sort.field`, 'a facet sort by an aggregate needs the `field` to aggregate')
     }
     if (d.header !== undefined && !isObj(d.header)) mustBe(`${a}.header`, OBJECT)
   }
