@@ -130,12 +130,26 @@ export function buildProjection(spec: ResolvedProjection, _width?: number, _heig
  * the row so its path item bounds stay empty rather than falling back to a
  * point bound at the origin).
  */
-export function projectedPath(projection: GeoProjection, geo: unknown): string {
+export function projectedPath(projection: GeoProjection, geo: unknown, pointRadius?: unknown): string {
   // Use the projection's persistent bound path when present: it carries the
   // projection's pointRadius (and any per-transform overrides applied to it).
-  const g = (projection as { path?: (geo: unknown) => string | undefined }).path
-  const d = g ? g(geo) : (geoPath(projection)(geo as never) as string | undefined)
+  const g = (projection as { path?: PointPath }).path
+  if (g && pointRadius != null) return withPointRadius(g, pointRadius, () => g(geo) as string | undefined) ?? ''
+  const d = g ? (g(geo) as string | undefined) : (geoPath(projection)(geo as never) as string | undefined)
   return d ?? ''
+}
+
+type PointPath = { (geo: unknown): unknown; pointRadius(): unknown; pointRadius(r: unknown): unknown }
+
+/** vega-geo GeoShape: the path draws points with the given radius (a number, or a function of the GeoJSON object) for one shape, then restores it. */
+function withPointRadius<T>(path: PointPath, radius: unknown, run: () => T): T {
+  const prev = path.pointRadius()
+  path.pointRadius(radius)
+  try {
+    return run()
+  } finally {
+    path.pointRadius(prev)
+  }
 }
 
 /**
@@ -144,7 +158,7 @@ export function projectedPath(projection: GeoProjection, geo: unknown): string {
  * string it draws, so a shape that touches a pixel boundary can sit a hair past it and move an ulp-exact
  * layout (`ceil`, a grid's row height). `null` for a shape that draws nothing.
  */
-export function projectedBounds(projection: GeoProjection, geo: unknown): [number, number, number, number] | null {
+export function projectedBounds(projection: GeoProjection, geo: unknown, pointRadius?: unknown): [number, number, number, number] | null {
   const g = (projection as { path?: { context(c?: unknown): unknown; (geo: unknown): unknown } }).path
   if (!g) return null
   let x1 = +Number.MAX_VALUE
@@ -172,7 +186,8 @@ export function projectedBounds(projection: GeoProjection, geo: unknown): [numbe
     },
   })
   try {
-    g(geo)
+    if (pointRadius != null) withPointRadius(g as unknown as PointPath, pointRadius, () => g(geo))
+    else g(geo)
   } finally {
     g.context(null)
   }

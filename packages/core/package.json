@@ -48,6 +48,7 @@
     "./dist/addon-geo.js",
     "./dist/addon-load.js",
     "./dist/addon-transforms.js",
+    "./dist/stats-functions.js",
     "./dist/transform-extra.js"
   ],
   "scripts": {

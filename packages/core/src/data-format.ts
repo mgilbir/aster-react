@@ -137,7 +137,28 @@ export function readData(data: unknown, format?: DataFormatSpec): Record<string,
   // vega-loader.read deletes the d3-dsv `columns` annotation before returning
   if (Object.hasOwn(rows, 'columns')) delete (rows as { columns?: unknown }).columns
   if (schema.parse) rows = coerceRows(rows, schema.parse)
-  return rows
+  return ingestRows(rows)
+}
+
+/**
+ * vega-dataflow `ingest`: a datum that is not an object is wrapped as `{data: datum}` (`[12, 23]` is two rows
+ * `{data: 12}`, `{data: 23}`). Returns the input array when every row is already an object, so the common case
+ * costs one scan and no copy.
+ */
+export function ingestRows<T>(rows: readonly T[]): Record<string, unknown>[] {
+  const n = rows.length
+  for (let i = 0; i < n; ++i) {
+    const v = rows[i]
+    if (v === null || (typeof v !== 'object' && typeof v !== 'function')) {
+      const out: Record<string, unknown>[] = new Array(n)
+      for (let j = 0; j < n; ++j) {
+        const r = rows[j]
+        out[j] = r !== null && (typeof r === 'object' || typeof r === 'function') ? (r as Record<string, unknown>) : { data: r }
+      }
+      return out
+    }
+  }
+  return rows as unknown as Record<string, unknown>[]
 }
 
 // Built-in JSON reader (no dependencies; `property` is a dotted path).

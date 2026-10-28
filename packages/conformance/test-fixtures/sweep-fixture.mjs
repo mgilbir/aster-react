@@ -14,10 +14,10 @@ const c = (name, spec) => ({ name, family: 'fixture', property: name, spec })
 const FIXTURES = {
   // both engines render the same thing
   good: [c('plain-a', chart()), c('plain-b', chart())],
-  // oracle renders, Aster refuses ("unsupported transform type force"): a ci0 name must not hide it
-  'ci-crash': [c('x-aggregate-ci0', chart({ transform: [{ type: 'force' }] }))],
+  // oracle renders, Aster refuses ("unsupported transform type nest"): a ci0 name must not hide it
+  'ci-crash': [c('x-aggregate-ci0', chart({ transform: [{ type: 'nest', keys: ['a'] }] }))],
   // same crash on a non-ci name (control for the masking test)
-  'plain-crash': [c('x-plain', chart({ transform: [{ type: 'force' }] }))],
+  'plain-crash': [c('x-plain', chart({ transform: [{ type: 'nest', keys: ['a'] }] }))],
   // the oracle crashes on an unknown mark, Aster renders it: a node-error
   'node-error': [c('plain-a', chart()), c('oracle-only-crash', { width: 10, height: 10, marks: [{ type: 'nosuchmark' }] })],
   // oracle is genuinely random, so two engines legitimately differ on a ci case

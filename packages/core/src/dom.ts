@@ -669,8 +669,15 @@ export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {})
   if (scene.defs?.length || clips.size > 0) {
     const defsChildren: DomDesc[] = []
     for (const def of scene.defs ?? []) {
+      if (def.kind === 'radial') {
+        defsChildren.push({
+          tag: 'pattern',
+          attrs: [['id', 'p_' + def.id], ['viewBox', '0,0,1,1'], ['width', '100%'], ['height', '100%'], ['preserveAspectRatio', 'xMidYMid slice']],
+          children: [{ tag: 'rect', attrs: [['width', '1'], ['height', '1'], ['fill', `url(#${def.id})`]] }],
+        })
+      }
       defsChildren.push({
-        tag: 'linearGradient',
+        tag: def.kind === 'radial' ? 'radialGradient' : 'linearGradient',
         attrs: pairs((w) => gradientAttrs(def, w)),
         children: def.colorStops.map((stop) => ({ tag: 'stop', attrs: pairs((w) => stopAttrs(stop, w)) })),
       })

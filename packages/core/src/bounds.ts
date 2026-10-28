@@ -728,11 +728,17 @@ export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = fa
       }
       return bounds
     }
+    case 'text': {
+      // marks/text.js bound: every item of a text mark is text, whether or not its `text` came out defined (a text
+      // mark positioned and filled from a signal that holds nothing still has the bounds of an empty line at (0, 0))
+      for (const it of items) bounds.union(boundText(new Bounds(), { ...it, _kind: 'text' } as SceneItem))
+      return bounds
+    }
     default:
       // vega's arc/path/symbol bounds always expand with miter semantics
       // (vega-scenegraph bound.js: boundStroke(bounds, item, true)) — the
       // miterLimit default of 4 makes the expansion miterLimit*sw/2 per side
-      const miter = miterPaths || mark.marktype === 'arc' || mark.marktype === 'path' || mark.marktype === 'symbol'
+      const miter = miterPaths || mark.marktype === 'arc' || mark.marktype === 'path' || mark.marktype === 'symbol' || mark.marktype === 'shape' || (mark.marktype as string) === 'geoshape'
       for (const it of items) boundLeaf(bounds, it, miter)
       return bounds
   }

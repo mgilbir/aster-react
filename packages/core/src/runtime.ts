@@ -4,7 +4,7 @@
  * eagerly per call; the caller re-evaluates when inputs change.
  */
 import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
-import { readData, type DataFormatSpec } from './data-format.js'
+import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { activeMeter, withLimits, boundedCount, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
@@ -31,6 +31,7 @@ import type {
   CompiledTransform,
   EncodeValue,
   RuntimeInput,
+  SceneDef,
   ScaleDomain,
   SceneGroup,
   SceneItem,
@@ -40,14 +41,14 @@ import type {
   SortSpec,
   VgSpec,
 } from './types.js'
-import { hash53 } from './svg-defs.js'
+import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
 import { tickFormat, scaleGradientStops, tickValues, tickCount, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { dict, ownGet, maxOf, pushAll, lerp, scopedSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
-import { rowsEqual, type PulseChange } from './pulse.js'
+import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import { trellisLayout } from './trellis.js'
@@ -400,7 +401,7 @@ interface EvalContext {
   /** while datasets build: build a named dataset now (a projection's fit can read one declared after its consumer) */
   buildOnDemand?: (name: string) => void
   runtime: ExpressionRuntime
-  _defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }>
+  _defs: SceneDef[]
   /** Shared by every scope of one evaluation: a layout threw (vega logs it and renders the scene unlaid-out). */
   layoutState: { failed: boolean }
   /** Signals whose `init` expression has run (it runs once). */
@@ -519,6 +520,9 @@ function prepareChartCtx(
   // resolveSignalUpdates, so apply the fallback after that (see below).
   let height = signed?.height ?? resolveSize(chart.height, viewOverride(chart, input, 'height'), signals)
   const signalParams = dict<unknown>({ width, height }, signals)
+  // A signal the spec declares without a value (it is written by a handler later) exists, with the value undefined
+  // (vega-parser refuses a reference to a name that is no signal, not one that holds nothing yet)
+  for (const def of chart.signalDefs ?? []) if (!(def.name in signalParams)) signalParams[def.name] = undefined
   // An explicit view size (the host's `width` / `height`, a measured container, the fit loop's resize) is the
   // size, so the `width` / `height` signals read it too: a signal value a host or the event loop supplied
   // (a `window:resize` handler re-running `containerSize()`) must not split the signal from the view it sizes.
@@ -537,6 +541,11 @@ function prepareChartCtx(
   const runtime: ExpressionRuntime = {
     scale: (name) => scales.get(name),
     data: (name) => datasets.get(name),
+    projection: (name) => transformProjections.get(name),
+    tree: (name) => {
+      const root = transformHierarchies.get(name)
+      return root === undefined ? undefined : { root, rows: datasets.get(name) ?? [] }
+    },
     containerSize: () => {
       const c = input.containerSize ?? input.measuredSize
       return c ? [c.width, c.height] : [undefined, undefined]
@@ -553,7 +562,7 @@ function prepareChartCtx(
 
   const transformProjections = new ProjectionRegistry()
   const transformHierarchies = new Map<string, unknown>()
-  const defs: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }> = []
+  const defs: SceneDef[] = []
   // Inputs besides the signals that change what a reused scale/item would be.
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}`
   const ctx: EvalContext = {
@@ -696,10 +705,17 @@ function makeTransformed(
 ): NonNullable<ExpressionRuntime['transformed']> {
   return (name, raw) => {
     const d = chart.data.find((x) => x.name === name)
-    const rows = d?.values != null ? readData(raw as never, d.format) : (raw as Row[]).map((r) => ({ ...r }))
+    const rows = d?.values != null ? readData(raw as never, d.format) : ingestRows(raw as Row[]).map((r) => ({ ...r }))
     if (!d?.transform.length) return rows
     return applyTransforms(rows, d.transform, { runtime, signals: signalParams, hierarchies, projections }, name)
   }
+}
+
+/** A dataset's inline `values`: the array, or what a `{signal}` holds (vega-parser: a signal-valued `values` loads dynamically). */
+function inlineValues(ctx: Pick<EvalContext, 'runtime' | 'signalParams'>, values: unknown): unknown {
+  const expr = values !== null && typeof values === 'object' && !Array.isArray(values) ? (values as { signal?: unknown }).signal : undefined
+  if (typeof expr !== 'string') return values
+  return ctx.runtime.expr(expr)(undefined, ctx.signalParams)
 }
 
 /** Fingerprint of the evaluation context that reused scales/items were built under. */
@@ -731,7 +747,8 @@ function resolveProjectionParam(ctx: EvalContext, v: unknown): unknown {
 /** Build the d3-geo projection one compiled definition describes, in the current context. */
 function buildProjectionOf(ctx: EvalContext, p: CompiledProjection): unknown {
   const build = requireGeo() // throws an actionable error if the geo addon is absent
-  const resolved: Record<string, unknown> = dict<unknown>({ name: p.name, type: p.type })
+  // (the type is a parameter like any other: `type: {signal: "projectionName"}`)
+  const resolved: Record<string, unknown> = dict<unknown>({ name: p.name, type: resolveProjectionParam(ctx, p.type) })
   for (const k of Object.keys(p)) {
     if (k === 'name' || k === 'type') continue
     resolved[k] = resolveProjectionParam(ctx, p[k])
@@ -1315,8 +1332,7 @@ function datasetDepsOf(chart: CompiledChart): Map<string, DatasetDeps> {
   for (const d of chart.data) {
     const names = new Set<string>()
     let allData = false
-    const src = (d as CompiledData & { source?: string }).source
-    if (src) names.add(src)
+    for (const src of sourceNames(d)) names.add(src)
     // Anything in the pipeline that names another dataset (lookup `from`, ...)
     // or reads datasets from an expression makes this dataset depend on it.
     walkStrings(d.transform, (str) => {
@@ -1327,6 +1343,91 @@ function datasetDepsOf(chart: CompiledChart): Map<string, DatasetDeps> {
   }
   DATASET_DEPS.set(chart, deps)
   return deps
+}
+
+/**
+ * The datasets that must be built before `d` because they publish a signal it reads. vega's dataflow orders operators by
+ * what they read, so an `extent` / `bin` / `geojson` that writes a signal runs before the transform whose parameter or
+ * expression reads it, wherever the two datasets are declared (the signal may also be read through a signal that is
+ * computed from it). Reads are found by name in the transforms' parameters and expressions.
+ */
+/** Whether dataset `a` is derived from `b` (through sources or datasets its transforms name). */
+function dependsOn(chart: CompiledChart, a: string, b: string): boolean {
+  const deps = datasetDepsOf(chart)
+  const seen = new Set<string>()
+  const stack = [a]
+  while (stack.length) {
+    const n = stack.pop()!
+    for (const m of deps.get(n)?.names ?? []) {
+      if (m === b) return true
+      if (!seen.has(m)) { seen.add(m); stack.push(m) }
+    }
+  }
+  return false
+}
+
+/** The datasets some `force` transform (a dataset's or a mark's) takes link rows from. */
+const FORCE_LINKS = new WeakMap<CompiledChart, Set<string>>()
+function forceLinkDatasets(chart: CompiledChart): Set<string> {
+  let out = FORCE_LINKS.get(chart)
+  if (out) return out
+  out = new Set()
+  const visit = (transforms: readonly CompiledTransform[] | undefined): void => {
+    for (const t of transforms ?? []) {
+      if (t.type !== 'force') continue
+      for (const f of (t as { forces?: Array<{ force?: string; links?: unknown }> }).forces ?? []) {
+        if (f.force === 'link' && typeof f.links === 'string') out!.add(f.links)
+      }
+    }
+  }
+  const walk = (marks: readonly CompiledMark[] | undefined): void => {
+    for (const m of marks ?? []) { visit(m.transform); walk(m.marks) }
+  }
+  for (const d of chart.data) visit(d.transform)
+  walk(chart.marks)
+  FORCE_LINKS.set(chart, out)
+  return out
+}
+
+const SIGNAL_PREREQS = new WeakMap<CompiledChart, Map<string, string[]>>()
+const IDENT = /[A-Za-z_$][\w$]*/g
+
+function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
+  let out = SIGNAL_PREREQS.get(chart)
+  if (out) return out
+  out = new Map()
+  const writers = new Map<string, string[]>()
+  for (const d of chart.data) {
+    for (const t of d.transform ?? []) {
+      const sig = (t as { signal?: unknown }).signal
+      if (typeof sig === 'string') (writers.get(sig) ?? writers.set(sig, []).get(sig)!).push(d.name)
+    }
+  }
+  if (writers.size) {
+    const defs = new Map((chart.signalDefs ?? []).map((sd) => [sd.name, sd] as const))
+    const identsOf = (v: unknown, into: Set<string>): void => {
+      walkStrings(v, (str) => { for (const m of str.matchAll(IDENT)) into.add(m[0]) })
+    }
+    for (const d of chart.data) {
+      const read = new Set<string>()
+      identsOf(d.transform, read)
+      if (d.values !== null && typeof d.values === 'object' && !Array.isArray(d.values)) identsOf(d.values, read)
+      // a signal computed from other signals reads what they read
+      const queue = [...read]
+      for (let i = 0; i < queue.length; i++) {
+        const sd = defs.get(queue[i]!)
+        if (!sd) continue
+        const more = new Set<string>()
+        identsOf([sd.update, sd.init], more)
+        for (const n of more) if (!read.has(n)) { read.add(n); queue.push(n) }
+      }
+      const first: string[] = []
+      for (const n of read) for (const w of writers.get(n) ?? []) if (w !== d.name && !first.includes(w) && !dependsOn(chart, w, d.name)) first.push(w)
+      if (first.length) out.set(d.name, first)
+    }
+  }
+  SIGNAL_PREREQS.set(chart, out)
+  return out
 }
 
 /**
@@ -1364,7 +1465,8 @@ function markDepsOf(mark: CompiledMark, chart: CompiledChart): MarkDeps {
   // a mark reading another mark's items (`from: {data: <mark name>}`) depends on whatever that mark depends on
   const readsMarkItems = (m: CompiledMark): boolean => {
     const from = m.from?.data
-    if ((typeof from === 'string' && !known.has(from)) || (m.marks ?? []).some(readsMarkItems)) return true
+    const lookupFrom = (m.transform ?? []).some((t) => t.type === 'lookup' && typeof (t as { from?: unknown }).from === 'string' && !known.has((t as { from: string }).from))
+    if ((typeof from === 'string' && !known.has(from)) || lookupFrom || (m.marks ?? []).some(readsMarkItems)) return true
     return false
   }
   if (readsMarkItems(mark)) out.allData = true
@@ -1615,7 +1717,17 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
   // Reproduce that by iterating the content size to a fixed point.
   let cw = initialW
   let ch = initialH
-  let built = buildContent(chart, input, cw, ch, txn)
+  let built: BuiltContent
+  if (auto === 'none' && chart.autosizeContains === 'padding') {
+    // autosize `none` with `contains: "padding"`: the view's width / height INCLUDE the padding, so the group (the
+    // width / height signals, every scale and expression that reads them) gets what is left (vega-view-transforms
+    // viewSizeLayout: `width = viewWidth`, the padding taken out of it), as a resize of the view does.
+    cw = Math.max(0, initialW - base.left - base.right)
+    ch = Math.max(0, initialH - base.top - base.bottom)
+    built = buildContent(chart, input, cw, ch, txn, true)
+  } else {
+    built = buildContent(chart, input, cw, ch, txn)
+  }
   if (auto === 'fit' || auto === 'fit-x' || auto === 'fit-y') {
     // A `width`/`height` signal (update or init, e.g. vega-lite's
     // `isFinite(containerSize()[0]) ? ... : 300`) resolves while the first
@@ -2523,7 +2635,7 @@ function rowLocal(t: CompiledTransform, tctx: StepTransformContext): boolean {
     case 'timeunit':
       // without explicit units vega bins the data extent (global); inferUnits looks at every row
       return (t as { units?: unknown }).units != null && !(t as { inferUnits?: unknown }).inferUnits && (t as { extent?: unknown }).extent === undefined
-    case 'geoshape': case 'geopoint':
+    case 'geoshape': case 'geopath': case 'geopoint':
       // a projection that fits data moves with the data: a derived x/y or path is only valid for the fit it was made under
       return !(tctx.projections as ProjectionRegistry | undefined)?.fitNames?.has(String((t as { projection?: unknown }).projection))
     case 'linkpath': case 'project':
@@ -2612,6 +2724,7 @@ function applyStepWithPulse(
     case 'formula':
     case 'timeunit':
     case 'geoshape':
+    case 'geopath':
     case 'geopoint':
     case 'linkpath':
     case 'project':
@@ -2667,6 +2780,7 @@ function applyStepWithPulse(
     case 'pack':
     case 'partition':
     case 'treemap':
+    case 'tree':
     case 'voronoi':
       return rederiveAligned(rows, t, tctx, sourceName, input, prev)
         ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
@@ -2824,22 +2938,36 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     }
     if (seen.has(name)) throw new Error(`[aster] circular data reference: ${name}`)
     seen.add(name)
+    // the datasets that write a signal this one reads come first; the signals computed from theirs follow
+    const prereqs = signalPrereqsOf(ctx.chart).get(name)
+    if (prereqs) {
+      let built = false
+      for (const w of prereqs) if (!ctx.datasets.has(w) && !seen.has(w)) { build(w, seen); built = true }
+      if (built) resolveSignalUpdates(ctx)
+    }
 
     let rows: Row[]
     let inPulse: StepPulse | null = null
-    if ('source' in d && (d as CompiledChart['data'][number] & { source: string }).source) {
-      const src = (d as CompiledChart['data'][number] & { source: string }).source
+    const srcNames = sourceNames(d)
+    if (srcNames.length > 1) {
+      // several sources: their rows, one source after the other (each pulse adds its tuples in turn)
+      rows = srcNames.flatMap((n) => build(n, seen).map((r) => ({ ...r })))
+    } else if (srcNames.length === 1) {
+      const src = srcNames[0]!
       const srcDef = ctx.chart.data.find((sd) => sd.name === src)
       if ((d as { format?: DataFormatSpec }).format && srcDef?.values != null) {
         // Vega applies a derived dataset's `format` when (re-)parsing its
         // source's raw values (e.g. source = inline Topology, format =
         // topojson feature extraction). The host's current values (input.data)
         // win over the spec's compiled-in ones.
-        rows = readData(ownGet(inputData, src) ?? srcDef.values, (d as { format?: DataFormatSpec }).format)
+        rows = readData(ownGet(inputData, src) ?? inlineValues(ctx, srcDef.values), (d as { format?: DataFormatSpec }).format)
         inPulse = ctx.inputPulses?.get(src) ?? null
       } else {
         rows = build(src, seen).map((r) => ({ ...r }))
         inPulse = ctx.datasetPulses.get(src) ?? null
+        // (vega: the backing tree travels with the source array, `pulse.source.root`, to a dataset derived from it)
+        const root = ctx.hierarchies.get(src)
+        if (root !== undefined && !ctx.hierarchies.has(name)) ctx.hierarchies.set(name, root)
       }
     } else if (d.values != null) {
       const given = ownGet(inputData, name)
@@ -2848,7 +2976,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       } else {
         // vega-loader read semantics: object arrays pass through format.parse
         // coercion; string values are parsed by the registered reader.
-        rows = readData(d.values, d.format)
+        rows = readData(inlineValues(ctx, d.values), d.format)
       }
       inPulse = ctx.inputPulses?.get(name) ?? null
     } else {
@@ -2862,7 +2990,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
           `or pass the rows as input.data["${name}"]`,
         )
       }
-      rows = (given ?? []).map((r) => ({ ...r }))
+      rows = ingestRows(given ?? []).map((r) => ({ ...r }))
       inPulse = ctx.inputPulses?.get(name) ?? null
     }
     // Inline values, host `input.data`, a `source` copy and a loaded dataset all
@@ -2918,6 +3046,9 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       rows = []
       outPulse = null
     }
+    // a dataset a `force` link force reads gets its link rows rewritten (their ends become the nodes): they are this
+    // evaluation's own copies, never the spec's
+    if (forceLinkDatasets(ctx.chart).has(name)) rows = rows.map((r) => ({ ...r }))
     ctx.datasets.set(name, rows)
     ctx.datasetPulses.set(name, outPulse)
     return rows
@@ -3334,6 +3465,12 @@ function reusablePulse(
   return pulse
 }
 
+/** A mark `transform` vega runs on the encoded items (see evaluateMarkItems). */
+const ITEM_TRANSFORMS: ReadonlySet<string> = new Set(['voronoi', 'lookup', 'linkpath', 'force', 'geopath'])
+function isItemTransform(t: CompiledTransform): boolean {
+  return ITEM_TRANSFORMS.has(String(t.type))
+}
+
 function evaluateMark(
   mark: CompiledMark,
   ctx: EvalContext,
@@ -3341,7 +3478,11 @@ function evaluateMark(
 ): SceneGroup | SceneGroup[] | null {
   const built = evaluateMarkItems(mark, ctx, prevGroup)
   // a named mark's items are what a later mark of `from: {data: <name>}` reads
-  if (built && typeof mark.name === 'string' && mark.type !== 'group' && !Array.isArray(built)) ctx.markItems.set(mark.name, (built.items ?? []) as SceneItem[])
+  if (built && typeof mark.name === 'string') {
+    // (a group mark's items are the group items themselves, a mark's are the items of its container)
+    if (mark.type === 'group') { if (Array.isArray(built)) ctx.markItems.set(mark.name, built as unknown as SceneItem[]) }
+    else if (!Array.isArray(built)) ctx.markItems.set(mark.name, (built.items ?? []) as SceneItem[])
+  }
   return built
 }
 
@@ -3373,8 +3514,9 @@ function evaluateMarkItems(
     // just the changed indices, so an unchanged row is never copied.
     let rows: Row[] = rawRows
     let rowsCloned = false
-    // (a `voronoi` mark transform is vega's post-encoding kind: it runs on the encoded items, below)
-    const preTransforms = mark.transform?.filter((t) => t.type !== 'voronoi')
+    // (vega runs a mark's transforms on the ENCODED items, after the encode; `voronoi`, `lookup` and `linkpath`,
+    // which read item properties (`datum.index`, `sourceNode.x`) and other marks' items, are run that way below)
+    const preTransforms = mark.transform?.filter((t) => !isItemTransform(t))
     if (preTransforms?.length) {
       rows = rawRows.map((r) => ({ ...r }))
       rowsCloned = true
@@ -3507,13 +3649,25 @@ function evaluateMarkItems(
   }
 
   // vega-parser mark.js: a mark's `transform`s that work on the encoded items (voronoi cells over the items'
-  // positions) run right after the encode: the items are the transform's tuples, so `datum.datum` is the source datum.
+  // positions, a lookup of another mark's items by `datum.index`, a link path between looked-up items) run right
+  // after the encode: the items are the transform's tuples, so `datum.datum` is the source datum. What they
+  // compute is written onto the items, in order (the next transform reads it).
   for (const t of mark.transform ?? []) {
-    if (t.type !== 'voronoi' || !source || items.length === 0) continue
+    if (!isItemTransform(t) || !source || items.length === 0) continue
     try {
-      const cells = applyTransforms(items as unknown as Row[], [t], { runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections }, source)
-      const as = ((t as { as?: string }).as) ?? 'path'
-      items.forEach((it, i) => { (it as unknown as Row)[as] = (cells[i] as Row)[as] })
+      const out = applyTransforms(items as unknown as Row[], [t], {
+        runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections,
+        // (`lookup` `from` is a dataset, or the name of a mark: its items)
+        datasets: (n) => ctx.datasets.get(n) ?? (ctx.markItems.get(n) as unknown as Row[] | undefined),
+        // (vega's tuples: a force layout moves the items themselves)
+        inPlace: true,
+      }, source)
+      if (t.type === 'voronoi') {
+        const as = ((t as { as?: string }).as) ?? 'path'
+        items.forEach((it, i) => { (it as unknown as Row)[as] = (out[i] as Row)[as] })
+      } else {
+        items.forEach((it, i) => { Object.assign(it as unknown as Row, out[i]) })
+      }
     } catch (e) {
       reportEvalError(ctx, e)
     }
@@ -3680,6 +3834,8 @@ interface GroupSource {
 interface FacetDef {
   name: string
   data: string
+  /** Pre-faceted data: each datum holds the array of the group's rows in this field. */
+  field?: string
   groupby?: string | string[]
   aggregate?: { fields: string[]; ops: string[] }
 }
@@ -3692,6 +3848,17 @@ interface FacetDef {
  */
 function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
   const facet = (mark.from as { facet?: FacetDef } | undefined)?.facet
+  if (facet?.field !== undefined) {
+    // vega-transforms PreFacet: one group item per datum (the datum is the item's datum), its rows the array the
+    // datum holds in `field`
+    const get = fieldOf(facet.field)
+    return (ctx.datasets.get(facet.data) ?? []).map((row, i) => ({
+      datum: row,
+      rows: ingestRows((get(row) as Row[]).map((x) => x)),
+      facetName: facet.name,
+      key: String(i),
+    }))
+  }
   if (facet) {
     const keys = ([] as string[]).concat(facet.groupby ?? [])
     if (!keys.length) return []
@@ -3887,8 +4054,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     const scoped = scopeId !== undefined ? scopeSignalValues(mark, ctx, scopeId, outerParams) : undefined
     const scopeParams = scoped ? scoped.params : outerParams
     for (const d of mark.data ?? []) {
-      const source = (d as CompiledData & { source?: string }).source
-      let rows: Row[] = source ? (ctx.datasets.get(source) ?? []).map((r) => ({ ...r })) : d.values != null ? readData(d.values, d.format) : []
+      const sources = sourceNames(d)
+      let rows: Row[] = sources.length ? sources.flatMap((n) => (ctx.datasets.get(n) ?? []).map((r) => ({ ...r }))) : d.values != null ? readData(inlineValues(ctx, d.values), d.format) : []
       checkRowCount(rows.length, `dataset "${d.name}"`)
       if (d.transform?.length) {
         rows = applyTransforms(rows, d.transform, { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }, d.name)
@@ -3907,8 +4074,16 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     // facet partition as data
     const childScales = new Map<string, Scale>()
     const childTypes = new Map<string, string>()
+    // (`range: "width" | "height"` is the signal of that name as the scope sees it: a group that declares its own
+    // `height` signal sizes its scales by that, and so do the scopes below it)
+    const scopedView = (name: 'width' | 'height'): number => {
+      const v = scoped?.values[name]
+      return typeof v === 'number' && Number.isFinite(v) ? v : (name === 'width' ? ctx.viewWidth ?? ctx.width : ctx.viewHeight ?? ctx.height)
+    }
+    const viewW = scopedView('width')
+    const viewH = scopedView('height')
     for (const sdef of mark.scales ?? []) {
-      childScales.set(sdef.name, buildScale(sdef, scaleContext({ ...ctx, width: ctx.viewWidth ?? ctx.width, height: ctx.viewHeight ?? ctx.height }, sdef.name)))
+      childScales.set(sdef.name, buildScale(sdef, scaleContext({ ...ctx, width: viewW, height: viewH }, sdef.name)))
       childTypes.set(sdef.name, sdef.type)
     }
     // vega builds the instances of nested scopes level by level: what an aborted pass did not reach is not made
@@ -3925,8 +4100,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     const childCtx: EvalContext = {
       ...ctx,
       scope,
-      viewWidth: ctx.viewWidth ?? ctx.width,
-      viewHeight: ctx.viewHeight ?? ctx.height,
+      viewWidth: viewW,
+      viewHeight: viewH,
       width: gw,
       height: gh,
       groupX: gx,
@@ -4165,6 +4340,16 @@ function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): Encode
   return plan
 }
 
+/**
+ * A paint that is a gradient object stays on the item (vega's scene keeps it too); its definition goes into the scene's
+ * defs, which the renderers reference it by (see `gradientRef`).
+ */
+function registerGradient(paint: object, ctx: EvalContext): void {
+  if (!isGradientPaint(paint)) return
+  const def = gradientDefOf(paint)
+  if (!ctx._defs.some((d) => d.id === def.id)) ctx._defs.push(def)
+}
+
 function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
   if (ctx.encodeAborted) return { __unencoded: true } as SceneItem
   const plan = encodePlan(encode)
@@ -4242,6 +4427,11 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
     }
     return partial
   }
+  // a gradient object as a paint (`{gradient: 'linear', stops: [...]}`): its definition joins the scene's defs
+  const fillPaint = rec['fill']
+  if (fillPaint !== null && typeof fillPaint === 'object') registerGradient(fillPaint, ctx)
+  const strokePaint = rec['stroke']
+  if (strokePaint !== null && typeof strokePaint === 'object') registerGradient(strokePaint, ctx)
   // Post-process: vega-runtime's `adjustSpatial`, which acts on the CHANNELS the encode defines
   // (not on whether their values came out finite): x2/xc/y2/yc become x/y/width/height. Rule
   // marks skip it entirely (their x2/y2 are line endpoints, not edges); rect/group/image swap so

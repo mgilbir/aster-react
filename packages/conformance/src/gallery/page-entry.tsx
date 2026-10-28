@@ -116,9 +116,12 @@ async function chartSvg(vg: Record<string, unknown>): Promise<string> {
   try {
     vgOracle = g.kind === 'vl' ? (vl.compile(g.spec as never).spec as unknown as Record<string, unknown>) : g.spec
     stray.length = 0
-    oracle = canonicalizeSvg(await oracleSvg(vgOracle))
+    // (vega changes the rows of an inline dataset in place -- a force layout rewrites its link rows -- so each run, and
+    // the chart that follows, gets its own copy of the spec)
+    const fresh = (): Record<string, unknown> => JSON.parse(JSON.stringify(vgOracle)) as Record<string, unknown>
+    oracle = canonicalizeSvg(await oracleSvg(fresh()))
     await checkStray()
-    const again = diffCanonical(oracle, canonicalizeSvg(await oracleSvg(vgOracle)))
+    const again = diffCanonical(oracle, canonicalizeSvg(await oracleSvg(fresh())))
     await checkStray()
     if (again.length) return { status: 'unverifiable', reason: 'oracle-nondeterministic', first: again[0]!.slice(0, 240) }
     // A timer-driven view (a `timer` stream, `now()`) is mounted LIVE by <Chart>: its timers keep ticking, so what is on screen when
@@ -141,7 +144,7 @@ async function chartSvg(vg: Record<string, unknown>): Promise<string> {
   try {
     stray.length = 0
     // an app hands <Chart> the spec it has; a Vega-Lite spec goes through the registered compiler (normalizeChartSpec is what <Chart> itself calls)
-    const vg = g.kind === 'vl' ? (normalizeChartSpec(JSON.parse(JSON.stringify(g.spec)) as never) as Record<string, unknown>) : g.spec
+    const vg = g.kind === 'vl' ? (normalizeChartSpec(JSON.parse(JSON.stringify(g.spec)) as never) as Record<string, unknown>) : JSON.parse(JSON.stringify(g.spec)) as Record<string, unknown>
     ours = await chartSvg(vg)
     await checkStray()
   } catch (e) {

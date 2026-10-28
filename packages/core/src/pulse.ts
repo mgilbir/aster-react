@@ -58,13 +58,13 @@ export interface RowDiff {
 const ROWWISE = new Set<string>([
   'formula', 'identifier', 'timeunit',
   // 1:1 geo transforms: each output row depends only on its own input row.
-  'geoshape', 'geopoint', 'linkpath', 'project', 'geojson',
+  'geoshape', 'geopath', 'geopoint', 'linkpath', 'project', 'geojson',
 ])
 const GROUPED = new Set<string>(['aggregate', 'joinaggregate', 'window', 'stack'])
 /** Transforms whose output row count/order is independent of the input order. */
 const EXPANDING = new Set<string>([
-  'fold', 'flatten', 'pivot', 'geojson', 'geopoint', 'geoshape', 'contour', 'linkpath',
-  'kde', 'quantile', 'regression', 'loess', 'pack', 'partition', 'treemap', 'wordcloud',
+  'fold', 'flatten', 'pivot', 'geojson', 'geopoint', 'geoshape', 'geopath', 'contour', 'linkpath',
+  'kde', 'quantile', 'regression', 'loess', 'pack', 'partition', 'treemap', 'tree', 'treelinks', 'force', 'kde2d', 'isocontour', 'wordcloud',
   'voronoi', 'cross', 'countpattern', 'dotbin', 'project', 'label', 'stratify', 'sequence',
   'graticule',
 ])
@@ -75,8 +75,8 @@ const EXPANDING = new Set<string>([
  * bins, hierarchical layout). Their output can be spliced by index.
  */
 const INDEX_PRESERVING = new Set<string>([
-  'formula', 'identifier', 'timeunit', 'geoshape', 'geopoint', 'linkpath', 'project',
-  'geojson', 'label', 'pie', 'dotbin', 'pack', 'partition', 'treemap', 'voronoi',
+  'formula', 'identifier', 'timeunit', 'geoshape', 'geopath', 'geopoint', 'linkpath', 'project',
+  'geojson', 'label', 'pie', 'dotbin', 'pack', 'partition', 'treemap', 'tree', 'voronoi',
 ])
 
 /** Transforms that re-derive every output but never change the input mapping. */
@@ -244,7 +244,9 @@ export interface DataPulse {
 
 export interface PulseNode {
   name: string
+  /** The dataset this one derives from (the first, when it derives from several: see `sources`). */
   source?: string
+  sources?: string[]
   transforms: string[]
   downstream: string[]
   marks: string[]
@@ -258,6 +260,12 @@ export interface PulseGraph {
   nodes: Map<string, PulseNode>
   /** Source dataset -> mark names drawing from it (directly or via groups). */
   markSources: Map<string, string[]>
+}
+
+/** The names a dataset derives from: its `source`, one name or a list (vega-parser: `array(data.source)`). */
+export function sourceNames(d: CompiledData): string[] {
+  const s = d.source
+  return s === undefined || s === '' ? [] : Array.isArray(s) ? s : [s]
 }
 
 function transformsOf(d: CompiledData): CompiledTransform[] {
@@ -280,7 +288,8 @@ export function buildPulseGraph(chart: CompiledChart): PulseGraph {
   for (const d of chart.data) {
     nodes.set(d.name, {
       name: d.name,
-      source: (d as CompiledData & { source?: string }).source,
+      source: sourceNames(d)[0],
+      ...(sourceNames(d).length > 1 ? { sources: sourceNames(d) } : {}),
       transforms: transformsOf(d).map((t) => String(t.type)),
       downstream: [],
       marks: [],
@@ -289,7 +298,7 @@ export function buildPulseGraph(chart: CompiledChart): PulseGraph {
     })
   }
   for (const node of nodes.values()) {
-    if (node.source && nodes.has(node.source)) nodes.get(node.source)!.downstream.push(node.name)
+    for (const src of node.sources ?? (node.source ? [node.source] : [])) if (nodes.has(src)) nodes.get(src)!.downstream.push(node.name)
   }
   const markSources = new Map<string, string[]>()
   const walkMarks = (marks: CompiledMark[] | undefined): void => {

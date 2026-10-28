@@ -14,6 +14,7 @@ import { accessorName, error, extent as vegaExtent, hasOwnProperty } from './uti
 import { fieldOf, fieldsOf, quantiles, type Row } from './transform-agg.js'
 import { d3Range, required } from './transform-basic.js'
 import { checkRegexInput, checkRowCount, guardedRegExp, meterTick } from './limits.js'
+import { SQRT2PI, cumulativeNormal, densityNormal } from './stats-functions.js'
 
 type Params = Record<string, unknown>
 type Get = (d: unknown) => unknown
@@ -112,54 +113,6 @@ export function bandwidthOf(arr: ArrayLike<unknown>): number {
   const h = (q[2]! - q[0]!) / 1.34
   const v = Math.min(d as number, h) || d || Math.abs(q[0]!) || 1
   return 1.06 * (v as number) * Math.pow(n, -0.2)
-}
-
-const SQRT2PI = Math.sqrt(2 * Math.PI)
-
-function densityNormal(value: number, mean: number | undefined, stdev: number | undefined): number {
-  const sd = stdev == null ? 1 : stdev
-  const z = (value - (mean || 0)) / sd
-  return Math.exp(-0.5 * z * z) / (sd * SQRT2PI)
-}
-
-/** West (2009) approximation of the normal CDF. */
-function cumulativeNormal(value: number, mean: number | undefined, stdev: number | undefined): number {
-  const m = mean || 0
-  const sd = stdev == null ? 1 : stdev
-  const z = (value - m) / sd
-  const Z = Math.abs(z)
-  let cd: number
-  if (Z > 37) {
-    cd = 0
-  } else {
-    const exp = Math.exp(-Z * Z / 2)
-    let sum: number
-    if (Z < 7.07106781186547) {
-      sum = 3.52624965998911e-02 * Z + 0.700383064443688
-      sum = sum * Z + 6.37396220353165
-      sum = sum * Z + 33.912866078383
-      sum = sum * Z + 112.079291497871
-      sum = sum * Z + 221.213596169931
-      sum = sum * Z + 220.206867912376
-      cd = exp * sum
-      sum = 8.83883476483184e-02 * Z + 1.75566716318264
-      sum = sum * Z + 16.064177579207
-      sum = sum * Z + 86.7807322029461
-      sum = sum * Z + 296.564248779674
-      sum = sum * Z + 637.333633378831
-      sum = sum * Z + 793.826512519948
-      sum = sum * Z + 440.413735824752
-      cd = cd / sum
-    } else {
-      sum = Z + 0.65
-      sum = Z + 4 / sum
-      sum = Z + 3 / sum
-      sum = Z + 2 / sum
-      sum = Z + 1 / sum
-      cd = exp / sum / 2.506628274631
-    }
-  }
-  return z > 0 ? 1 - cd : cd
 }
 
 // ---------------------------------------------------------------------------

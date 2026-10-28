@@ -50,15 +50,22 @@ export class Path {
   private _: string
   private _append: (strings: TemplateStringsArray, ...values: unknown[]) => void
 
+  /** The rounding factor (10 ** digits) of the hot commands, or 0 for full precision; same output as `_append`. */
+  private _k: number
+
   constructor(digits?: number) {
     this._x0 = this._y0 = // start of current subpath
     this._x1 = this._y1 = null as unknown as number // end of current subpath
     this._ = ''
     this._append = digits == null ? append : appendRound(digits)
+    this._k = digits == null ? 0 : (Math.floor(digits) <= 15 ? 10 ** Math.floor(digits) : 0)
   }
 
   moveTo(x: number, y: number): void {
-    this._append`M${this._x0 = this._x1 = +x},${this._y0 = this._y1 = +y}`
+    this._x0 = this._x1 = +x
+    this._y0 = this._y1 = +y
+    const k = this._k
+    this._ += k ? 'M' + Math.round(this._x0 * k) / k + ',' + Math.round(this._y0 * k) / k : 'M' + this._x0 + ',' + this._y0
   }
 
   closePath(): void {
@@ -69,7 +76,10 @@ export class Path {
   }
 
   lineTo(x: number, y: number): void {
-    this._append`L${this._x1 = +x},${this._y1 = +y}`
+    this._x1 = +x
+    this._y1 = +y
+    const k = this._k
+    this._ += k ? 'L' + Math.round(this._x1 * k) / k + ',' + Math.round(this._y1 * k) / k : 'L' + this._x1 + ',' + this._y1
   }
 
   quadraticCurveTo(x1: number, y1: number, x: number, y: number): void {
@@ -1314,8 +1324,8 @@ export function area(): AreaGenerator {
     let j = 0
     const arr = array(data)
     const n = arr.length
-    const x0z = new Array(n)
-    const y0z = new Array(n)
+    const x0z = new Float64Array(n)
+    const y0z = new Float64Array(n)
     if (context == null) output = curve(buffer = path())
     for (let i = 0; i <= n; ++i) {
       if (!(i < n && defined(d = arr[i], i, arr)) === defined0) {
