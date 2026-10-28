@@ -160,6 +160,8 @@ export interface CompiledChart {
   frameStrokeDashOffset?: number
   frameStrokeCap?: string
   frameStrokeJoin?: string
+  /** `config.legend.layout` (defaults merged in): the legend grid's anchor, frame, offset, margin, direction, bounds, center, by orient. */
+  legendLayout?: Record<string, unknown>
   /** The view's own `encode` (vega-parser parseView: the root group's encode), `enter` under `update`. */
   frameEncode?: Record<string, EncodeValue | EncodeValue[]>
   data: CompiledData[]

@@ -128,6 +128,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     frameStrokeDashOffset,
     frameStrokeCap,
     frameStrokeJoin,
+    ...((typeof (cfg.legend as { layout?: unknown } | undefined)?.layout === 'object' && (cfg.legend as { layout?: unknown }).layout !== null) ? { legendLayout: (cfg.legend as { layout: Record<string, unknown> }).layout } : {}),
     ...(spec.encode !== undefined ? { frameEncode: { ...((spec.encode as { enter?: object }).enter ?? {}), ...((spec.encode as { update?: object }).update ?? {}) } as NonNullable<CompiledChart['frameEncode']> } : {}),
     data,
     scales,

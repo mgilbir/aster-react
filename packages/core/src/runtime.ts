@@ -52,7 +52,7 @@ import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import { trellisLayout } from './trellis.js'
-import { boundAxisGroup, boundGroupItem, boundLeaf, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
+import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
 import { buildAxis as buildAxisGuide, tickBand } from './guide-axis.js'
 import { buildTitle as buildTitleGuide } from './guide-title.js'
@@ -1152,16 +1152,43 @@ function buildAxisAndLegend(
       if (ctx.rawGuides) continue
       if (typeof process !== 'undefined' && process.env.ASTER_DEBUG_LEG) console.error('[leg]', orient, 'xb', JSON.stringify(xb), 'yb', JSON.stringify(yb), 'W', ctx.width, 'H', ctx.height)
       const n = list.length
-      // columns: vertical direction (left/right) stacks in one column; the
-      // horizontal default lays all legends out in one row.
-      const ncols = orient === 'left' || orient === 'right' ? 1 : n
+      // legendParams (vega-view-transforms layout/legend.js): `config.legend.layout`, the orient's own block over the general one
+      const layoutCfg = (ctx.chart.legendLayout ?? {}) as Record<string, unknown>
+      const orientCfg = (layoutCfg[orient] ?? {}) as Record<string, unknown>
+      const cfgOf = (key: string, d?: unknown): unknown => (orientCfg[key] != null ? orientCfg[key] : layoutCfg[key] != null ? layoutCfg[key] : d)
+      // if legends specify an offset directly, the maximum is used
+      let specOffset: number | undefined = undefined
+      for (const x of list) {
+        const o = x.props.offset
+        if (typeof o === 'number') specOffset = specOffset === undefined ? o : Math.max(specOffset, o)
+      }
+      const offset = specOffset ?? (cfgOf('offset', 0) as number)
+      const anchor = cfgOf('anchor', 'start')
+      const frame = cfgOf('frame', 'group')
+      const mult = anchor === 'end' ? 1 : anchor === 'middle' ? 0.5 : 0
+      const W = layoutW
+      const H = layoutH
+      const ax = frame === 'bounds' ? xb.x1 + mult * (xb.x2 - xb.x1) : mult * (W || (yb.x2 - yb.x1) + 2 * yb.x1)
+      const ay = frame === 'bounds' ? yb.y1 + mult * (yb.y2 - yb.y1) : mult * (H || (xb.y2 - xb.y1) + 2 * xb.y1)
+      const margin = cfgOf('margin', 8) as number
+      const full = cfgOf('bounds', 'flush') !== 'flush'
+      const center = cfgOf('center')
+      const centerOf = (key: 'column' | 'row'): unknown => {
+        const v = center !== null && typeof center === 'object' ? (center as Record<string, unknown>)[key] : center
+        return v != null ? v : 0
+      }
+      // gridLayout: one column when the direction is vertical, else a row; align `each`
+      const ncols = cfgOf('direction') === 'vertical' ? 1 : n
       const nrows = Math.max(1, Math.ceil(n / ncols))
-      // flush boxes: legendLayout zeroes x/y and sizes the legend to
-      // ceil(childBounds + 2*padding) — our group.width/height.
-      // (vega's flush bounds read `item.width || 0`: a NaN size is none)
-      const boxes = list.map((x) => ({ x1: 0, y1: 0, x2: x.group.width || 0, y2: x.group.height || 0 }))
-      const xOffset = boxes.map((b) => 8 + (b.x1 < 0 ? Math.ceil(-b.x1) : 0))
-      const yOffset = boxes.map((b) => 8 + (b.y1 < 0 ? Math.ceil(-b.y1) : 0))
+      // the boxes: the flush ones (legendLayout sized each legend to ceil(childBounds + 2*padding): our group.width / height), or
+      // the legend's own bounds relative to its origin
+      const boxes = list.map((x) => {
+        if (!full) return { x1: 0, y1: 0, x2: x.group.width || 0, y2: x.group.height || 0 }
+        const lb = boundLegendGroup(x.group)
+        return lb.empty() ? { x1: 0, y1: 0, x2: 0, y2: 0 } : { x1: lb.x1 - (x.group.x || 0), y1: lb.y1 - (x.group.y || 0), x2: lb.x2 - (x.group.x || 0), y2: lb.y2 - (x.group.y || 0) }
+      })
+      const xOffset = boxes.map((b) => margin + (b.x1 < 0 ? Math.ceil(-b.x1) : 0))
+      const yOffset = boxes.map((b) => margin + (b.y1 < 0 ? Math.ceil(-b.y1) : 0))
       const xExtent = Array<number>(ncols).fill(0)
       const yExtent = Array<number>(nrows).fill(0)
       boxes.forEach((b, i) => {
@@ -1199,7 +1226,20 @@ function buildAxisAndLegend(
           dy[i] = y
         }
       }
-      // laid-out block bounds (flush boxes translated by dx/dy)
+      // centering (the legends are at x = y = 0 here)
+      if (centerOf('column') && nrows > 1) {
+        for (let i = 0; i < n; i++) {
+          const x = xExtent[i % ncols]! - boxes[i]!.x2 - dx[i]!
+          if (x > 0) dx[i]! += x / 2
+        }
+      }
+      if (centerOf('row') && ncols !== 1) {
+        for (let i = 0; i < n; i++) {
+          const y = yExtent[~~(i / ncols)]! - boxes[i]!.y2 - dy[i]!
+          if (y > 0) dy[i]! += y / 2
+        }
+      }
+      // laid-out block bounds (the boxes translated by dx/dy)
       let bx1 = Infinity, by1 = Infinity, bx2 = -Infinity, by2 = -Infinity
       boxes.forEach((b, i) => {
         bx1 = Math.min(bx1, b.x1 + dx[i]!)
@@ -1210,83 +1250,32 @@ function buildAxisAndLegend(
       const bw = bx2 - bx1
       const bh = by2 - by1
 
-      // anchor: offset = the legends' own offset (max) else the config
-      // default 18; anchor = start/middle/end (default start).
-      let specOffset: number | undefined = undefined
-      for (const x of list) {
-        const o = x.props.offset
-        if (typeof o === 'number') specOffset = specOffset === undefined ? o : Math.max(specOffset, o)
-      }
-      const offset = specOffset ?? 18
-      const anchor = (list[0]!.legend as { anchor?: unknown }).anchor
-      const aEnd = anchor === 'end'
-      const aMiddle = anchor === 'middle'
-      const mult = aEnd ? 1 : aMiddle ? 0.5 : 0
-      const W = layoutW
-      const H = layoutH
+      // the anchor of the grid: where it sits, and which of its edges that point is
       let x: number
       let y: number
-      let colEnd = false
-      let rowEnd = false
+      let column: unknown = 'start'
+      let row: unknown = 'start'
       switch (orient) {
-        case 'left':
-          x = Math.floor(xb.x1) - offset
-          y = mult * H
-          colEnd = true
-          rowEnd = aEnd
-          break
-        case 'right':
-          x = Math.ceil(xb.x2) + offset
-          y = mult * H
-          rowEnd = aEnd
-          break
-        case 'top':
-          x = mult * W
-          y = Math.floor(yb.y1) - offset
-          colEnd = aEnd
-          rowEnd = true
-          break
-        case 'bottom':
-          x = mult * W
-          y = Math.ceil(yb.y2) + offset
-          colEnd = aEnd
-          break
-        case 'top-left':
-          x = offset
-          y = offset
-          break
-        case 'top-right':
-          x = W - offset
-          y = offset
-          colEnd = true
-          break
-        case 'bottom-left':
-          x = offset
-          y = H - offset
-          rowEnd = true
-          break
-        case 'bottom-right':
-          x = W - offset
-          y = H - offset
-          colEnd = true
-          rowEnd = true
-          break
-        default:
-          x = Math.ceil(xb.x2) + offset
-          y = mult * H
-          rowEnd = aEnd
-          break
+        case 'left': x = Math.floor(xb.x1) - offset; column = 'end'; y = ay; row = anchor; break
+        case 'right': x = Math.ceil(xb.x2) + offset; y = ay; row = anchor; break
+        case 'top': y = Math.floor(yb.y1) - offset; row = 'end'; x = ax; column = anchor; break
+        case 'bottom': y = Math.ceil(yb.y2) + offset; x = ax; column = anchor; break
+        case 'top-left': x = offset; y = offset; break
+        case 'top-right': x = W - offset; y = offset; column = 'end'; break
+        case 'bottom-left': x = offset; y = H - offset; row = 'end'; break
+        case 'bottom-right': x = W - offset; y = H - offset; column = 'end'; row = 'end'; break
+        default: x = Math.ceil(xb.x2) + offset; y = ay; row = anchor; break
       }
-      if (colEnd) x -= bw
-      if (rowEnd) y -= bh
-      void aMiddle
+      if (column === 'end') x -= bw
+      else if (column === 'middle') x -= bw / 2
+      if (row === 'end') y -= bh
+      else if (row === 'middle') y -= bh / 2
       x = Math.round(x)
       y = Math.round(y)
       list.forEach((x1, i) => {
         x1.group.x = x + dx[i]!
         x1.group.y = y + dy[i]!
       })
-      void aMiddle
     }
 
     for (const x of built) groups.push(x.group)
@@ -1864,11 +1853,13 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
     ? buildContent(chart, input, signedW ?? initialW, signedH ?? initialH, txn, false, { width: signedW, height: signedH }).padding
     : undefined
 
-  // `fit`/`fit-x`/`fit-y` shrink the *content* to fit a fixed viewport, then
-  // vega re-runs layout (resizeView) so scales are rebuilt at the fitted size.
-  // Reproduce that by iterating the content size to a fixed point.
+  // `fit`/`fit-x`/`fit-y` shrink the *content* to fit a fixed viewport: viewSizeLayout measures the overflow of the first pass
+  // (once: the pass after it sets the width signal with the resize skipped, so the layout does not run again), and the content is
+  // built again at the fitted size. The view keeps the padding the first pass found; what the second pass overflows by is not
+  // looked at (a title anchored to the bounds, or any overflow that depends on the width, ends up wherever it ends up).
   let cw = initialW
   let ch = initialH
+  let firstPassPadding: BuiltContent['padding'] | undefined
   let built: BuiltContent
   if (auto === 'none' && chart.autosizeContains === 'padding') {
     // autosize `none` with `contains: "padding"`: the view's width / height INCLUDE the padding, so the group (the
@@ -1888,7 +1879,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
       initialW = cw = built.ctx.width
       initialH = ch = built.ctx.height
     }
-    for (let i = 0; i < 5; i++) {
+    {
       const oL = built.padding.left - base.left
       const oR = built.padding.right - base.right
       const oT = built.padding.top - base.top
@@ -1904,25 +1895,36 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
       if (auto === 'fit') { nw = Math.max(0, initialW - padW - oL - oR); nh = Math.max(0, initialH - padH - oT - oB) }
       else if (auto === 'fit-x') { nw = Math.max(0, initialW - padW - oL - oR); nh = ch }
       else { nw = cw; nh = Math.max(0, initialH - padH - oT - oB) }
-      if (nw === cw && nh === ch) break
-      cw = nw
-      ch = nh
-      built = buildContent(chart, { ...input, changedDatasets: undefined }, cw, ch, txn, true)
+      if (nw !== cw || nh !== ch) {
+        firstPassPadding = built.padding
+        cw = nw
+        ch = nh
+        built = buildContent(chart, { ...input, changedDatasets: undefined }, cw, ch, txn, true)
+      }
     }
   }
   const { ctx, width, height } = built
   const items = built.items
-  const padding = signedPadding ?? built.padding
+  const padding = signedPadding ?? firstPassPadding ?? built.padding
 
   // 3) Build the scene: the document is the view's width / height signals plus the
   // padding (autosize pad grows it by what overflows). A composition's root group is
   // 0 x 0 (vega: no `width` signal value), so only its padding and overflow remain.
-  const sceneWidth = ctx.chart.autosize !== 'none'
-    ? width + padding.left + padding.right
-    : width + ctx.chart.padding.left + ctx.chart.padding.right
-  const sceneHeight = ctx.chart.autosize !== 'none'
-    ? height + padding.top + padding.bottom
-    : height + ctx.chart.padding.top + ctx.chart.padding.bottom
+  // (a fitted dimension is the viewport as the spec gave it -- plus its padding unless the size contains it -- even when the overflow
+  // is wider than the viewport and the content is squeezed to nothing)
+  const fitW = (auto === 'fit' || auto === 'fit-x') && firstPassPadding !== undefined
+  const fitH = (auto === 'fit' || auto === 'fit-y') && firstPassPadding !== undefined
+  const contains = chart.autosizeContains === 'padding'
+  const sceneWidth = fitW
+    ? initialW + (contains ? 0 : base.left + base.right)
+    : ctx.chart.autosize !== 'none'
+      ? width + padding.left + padding.right
+      : width + ctx.chart.padding.left + ctx.chart.padding.right
+  const sceneHeight = fitH
+    ? initialH + (contains ? 0 : base.top + base.bottom)
+    : ctx.chart.autosize !== 'none'
+      ? height + padding.top + padding.bottom
+      : height + ctx.chart.padding.top + ctx.chart.padding.bottom
 
   const scene: SceneRoot = {
     width: sceneWidth,
@@ -4037,7 +4039,7 @@ interface FacetDef {
   /** Pre-faceted data: each datum holds the array of the group's rows in this field. */
   field?: string
   groupby?: string | string[]
-  aggregate?: { fields: string[]; ops: string[] }
+  aggregate?: { fields: string[]; ops: string[]; as?: Array<string | null> }
 }
 
 /**
@@ -4095,7 +4097,7 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
       const ag = facet.aggregate
       if (ag?.ops) {
         // a facet aggregate (vega-lite's stack_group_main): the group item's datum carries it
-        datum = { ...datum, ...aggregateGroup(g, { type: 'aggregate', groupby: keys, fields: ag.fields, ops: ag.ops, as: ag.ops.map((op, i) => `${op}_${ag.fields[i]}`) } as never) }
+        datum = { ...datum, ...aggregateGroup(g, { type: 'aggregate', groupby: keys, fields: ag.fields, ops: ag.ops, as: ag.ops.map((op, i) => ag.as?.[i] ?? `${op}_${ag.fields[i]}`) } as never) }
       } else if (ag === undefined) {
         // no facet aggregate: vega's own (vega-parser marks/data.js: an `aggregate` over the groupby, whose default op is
         // `count`) makes the group item's datum, so a cell's datum carries the partition's size
@@ -4300,7 +4302,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     const viewW = scopedView('width')
     const viewH = scopedView('height')
     for (const sdef of mark.scales ?? []) {
-      childScales.set(sdef.name, buildScale(sdef, scaleContext({ ...ctx, width: viewW, height: viewH }, sdef.name)))
+      childScales.set(sdef.name, buildScale(sdef, scaleContext({ ...ctx, signalParams: scopeParams, width: viewW, height: viewH }, sdef.name)))
       childTypes.set(sdef.name, sdef.type)
     }
     // vega builds the instances of nested scopes level by level: what an aborted pass did not reach is not made

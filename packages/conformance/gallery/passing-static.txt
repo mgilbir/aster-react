@@ -1,4 +1,5 @@
 vega/airport-connections
+vega/annual-precipitation
 vega/annual-temperature
 vega/arc-diagram
 vega/area-chart
@@ -58,8 +59,11 @@ vega/sunburst
 vega/table-scrollbar
 vega/time-units
 vega/timelines
+vega/top-k-plot
+vega/top-k-plot-with-others
 vega/tree-layout
 vega/treemap
+vega/u-district-cuisine
 vega/violin-plot
 vega/volcano-contours
 vega/warming-stripes
