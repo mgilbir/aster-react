@@ -96,7 +96,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a timer event stream in the selection config', unit({ config: { selection: { point: { on: 'timer' } } } }), /timer event streams/],
   ['a parameter with an invalid name', unit({ params: [{ name: 'my param', value: 1 }] }), /identifiers/],
   ['duplicate parameter names', unit({ params: [{ name: 'p', value: 1 }, { name: 'p', value: 2 }] }), /duplicate parameter/],
-  ['a parameter with neither value nor expr', unit({ params: [{ name: 'p' }] }), /needs `value` or `expr`/],
+  ['a parameter with neither value nor expr', unit({ params: [{ name: 'p' }] }), /needs `value`, `expr` or `bind`/],
   ['an unknown bind input', unit({ params: [{ name: 'p', value: 1, bind: { input: 'dial' } }] }), /input type/],
   // --- conditions (C35)
   ['a param condition', unit({ encoding: { x: xq, y: yq, color: { condition: { param: 'brush', value: 'red' }, value: 'grey' } } }), /param/],

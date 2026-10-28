@@ -543,7 +543,7 @@ function validateProjection(p: unknown, at: string): void {
 
 // --- params ------------------------------------------------------------------
 
-const BIND_INPUTS = set('range checkbox radio select text number date datetime-local time month week color')
+const BIND_INPUTS = set('range checkbox radio select text number date datetime-local time month week color search tel url email password')
 
 /**
  * Why a selection parameter declared on a composition (concat, facet, repeat) cannot be pushed down to the units below it
@@ -596,13 +596,14 @@ function validateParams(params: unknown, path: string, selectionOk: boolean, kin
       if (!isObj(p.bind)) mustBe(`${at}.bind`, 'an input binding object (legend/scales bindings belong to selection parameters)')
       validateBinding(p.bind, `${at}.bind`)
     }
-    if (p.value === undefined && p.expr === undefined) fail(at, 'a variable parameter needs `value` or `expr`')
+    // (a bound parameter starts as its input's value)
+    if (p.value === undefined && p.expr === undefined && p.bind === undefined) fail(at, 'a variable parameter needs `value`, `expr` or `bind`')
   })
 }
 
 /** An input binding (vega signal `bind`). */
 function validateBinding(bind: Obj, at: string): void {
-  keysOf(bind, set('input min max step options labels name debounce element'), at, 'bind')
+  keysOf(bind, set('input min max step options labels name debounce element placeholder autocomplete'), at, 'bind')
   if (typeof bind.input !== 'string' || !BIND_INPUTS.has(bind.input)) fail(`${at}.input`, `unsupported input type ${JSON.stringify(bind.input)}`)
 }
 

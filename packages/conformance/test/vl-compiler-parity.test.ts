@@ -539,6 +539,12 @@ const GROUPS: Record<string, Case[]> = {
     ['an identity colour next to a scaled size', { data: { values: [{ x: 1, y: 2, col: 'red', s: 3 }, { x: 2, y: 3, col: 'blue', s: 9 }] }, mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('col', { scale: null }), size: q('s') } }],
     ['an identity colour in a layer', { data: { values: [{ x: 1, y: 2, col: 'red' }, { x: 2, y: 3, col: 'blue' }] }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('col', { scale: null }) } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] }],
   ],
+  // param.ts: a variable parameter bound to an input needs no initial value of its own (interactive_paintbrush_simple_true)
+  'bound parameters without a value (interactive_paintbrush_simple_true, interactive_paintbrush_simple_false)': [
+    ['a checkbox toggling a colour field', { data: DATA, params: [{ name: 'toggle', bind: { input: 'checkbox' } }], mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { param: 'toggle', field: 'c', type: 'nominal' }, value: 'steelblue' } } }],
+    ['a checkbox and a pointer selection', { data: DATA, params: [{ name: 'toggle', bind: { input: 'checkbox' } }, { name: 'brush', select: { type: 'point', on: 'pointerover' } }], mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { param: 'toggle', field: 'c', type: 'nominal' }, value: 'steelblue' }, size: { condition: { param: 'brush', value: 300 }, value: 50 } } }],
+    ['a range input without a value used in a test', { data: DATA, params: [{ name: 'cut', bind: { input: 'range', min: 0, max: 8, step: 1 } }], mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { test: 'datum.x > cut', value: 'red' }, value: 'grey' } } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
@@ -715,5 +721,25 @@ describe('@aster/vl == vega-lite: config.tooltipFormat', () => {
       expect(tooltips(ours)).toEqual(tooltips(oracle))
       expect(descriptions(ours)).toEqual(descriptions(oracle))
     })
+  }
+})
+
+// compile/selection/... parseParameter: an input binding's own properties (placeholder, autocomplete, debounce, element) reach the signal
+describe('@aster/vl == vega-lite: input bindings', () => {
+  const binds = (vg: any): unknown[] => (vg.signals ?? []).filter((sg: any) => sg.bind).map((sg: any) => [sg.name, sg.bind])
+  const BINDS: Array<[string, Record<string, unknown>]> = [
+    ['a search input with a placeholder and a name', { input: 'search', placeholder: 'Car model', name: 'Search' }],
+    ['a text input with autocomplete', { input: 'text', placeholder: 'Type', autocomplete: 'off' }],
+    ['a range with a debounce and an element', { input: 'range', min: 0, max: 5, step: 1, debounce: 100, element: '#ctl' }],
+  ]
+  for (const [name, bind] of BINDS) {
+    it(name, async () => {
+      const spec = { data: DATA, params: [{ name: 'q', value: '', bind }], mark: 'point', encoding: { x: q('x'), y: q('y'), opacity: { condition: { test: 'test(regexp(q,"i"), datum.c)', value: 0.8 }, value: 0.1 } } }
+      const oracle = (vl as any).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      expect(binds(oracle).length).toBe(1)
+      expect(binds(ours)).toEqual(binds(oracle))
+      await check(spec)
+    }, 30_000)
   }
 })
