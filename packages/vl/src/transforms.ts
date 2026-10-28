@@ -37,6 +37,9 @@ export type BinParams = Record<string, unknown>
 /** vega-lite `normalizeBin` for the bin default (maxbins 10 for x/y/transforms). */
 export function normalizeBin(bin: unknown, maxbinsDefault = 10): BinParams {
   if (bin === true) return { maxbins: maxbinsDefault }
+  // pre-binned data (bin: "binned" / {binned: true, step}): the field already holds the bins' starts, a secondary field their ends
+  if (bin === 'binned') return { binned: true }
+  if (isObj(bin) && bin.binned === true) return { binned: true, ...(bin.step !== undefined ? { step: bin.step } : {}) }
   if (isObj(bin)) {
     if (!bin.maxbins && !bin.step) return { ...bin, maxbins: maxbinsDefault }
     return { ...bin }
@@ -59,6 +62,8 @@ export interface BinNames {
 
 /** Generated field/signal names for a binned field (flat-safe, identifier-safe). */
 export function binNames(bin: BinParams, fieldPath: string): BinNames {
+  // (pre-binned: the start is the field itself, the end is the secondary field - or, as vega-lite assumes, `<field>_end`)
+  if (bin.binned === true) return { start: fieldPath, end: typeof bin.end === 'string' ? bin.end : `${fieldPath}_end`, signal: '', extentSignal: '' }
   const key = binKey(bin)
   const start = safeKey(`${key}_${fieldPath}`)
   return {
@@ -344,7 +349,7 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
   } else if (t.sample !== undefined) {
     out.push({ type: 'sample', size: t.sample })
   } else if (t.impute !== undefined) {
-    out.push(...imputeTransforms(t))
+    pushAll(out, imputeTransforms(t))
     derived([t.impute as string])
   } else if (t.lookup !== undefined) {
     const from = t.from as Obj

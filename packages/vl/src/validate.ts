@@ -977,7 +977,8 @@ function validateChannelDef(ch: string, def: unknown, at: string, shared = false
       if (def.aggregate !== 'count' && def.field === undefined) fail(`${at}.aggregate`, `aggregate "${def.aggregate}" needs a field`)
     }
   }
-  if (def.bin !== undefined) validateBin(def.bin, `${at}.bin`)
+  if (def.bin !== undefined) validateBin(def.bin, `${at}.bin`, ch === 'x' || ch === 'y')
+  if ((def.bin === 'binned' || (isObj(def.bin) && def.bin.binned === true)) && ch !== 'x' && ch !== 'y') fail(`${at}.bin`, 'pre-binned data (bin: "binned") only applies to the x and y channels')
   if (def.timeUnit !== undefined) normalizeTimeUnit(def.timeUnit, `${at}.timeUnit`)
   if (def.timeUnit !== undefined && def.bin) fail(at, '`timeUnit` and `bin` cannot be combined')
   if (def.sort !== undefined) validateSort(def.sort, `${at}.sort`, ch)
@@ -1040,11 +1041,19 @@ function validateScaleDef(scale: Obj, at: string): void {
   }
 }
 
-function validateBin(bin: unknown, at: string): void {
-  if (bin === 'binned') fail(at, 'pre-binned data (bin: "binned") is not supported; let @aster/vl bin the field (bin: true) or use a bin transform')
+function validateBin(bin: unknown, at: string, prebinned = false): void {
+  if (bin === 'binned') {
+    if (!prebinned) fail(at, 'pre-binned data (bin: "binned") is a property of an x or y channel')
+    return
+  }
   if (bin === true || bin === false) return
   if (!isObj(bin)) fail(at, `bin must be true or a bin-params object, got ${JSON.stringify(bin)}`)
-  if (bin.binned === true) fail(`${at}.binned`, 'pre-binned data (binned: true) is not supported; let @aster/vl bin the field or use a bin transform')
+  if (bin.binned === true) {
+    if (!prebinned) fail(`${at}.binned`, 'pre-binned data (binned: true) is a property of an x or y channel')
+    keysOf(bin, set('binned step'), at, 'pre-binned bin')
+    if (bin.step !== undefined && (typeof bin.step !== 'number' || !(bin.step > 0))) mustBe(`${at}.step`, 'a positive number')
+    return
+  }
   keysOf(bin, set('anchor base binned divide extent maxbins minstep nice step steps'), at, 'bin')
   const num = (k: string, pos = true): void => {
     const v = bin[k]

@@ -399,6 +399,9 @@ function inferOrient(spec: VLSpec, mark: string, markRaw: unknown, fields: Field
   const y2 = has('y2')
   let phase = mark === 'text' ? 'bar' : mark
   if (phase === 'bar') {
+    // (init.ts orient: a pre-binned position decides the orientation)
+    if (xDef?.field && isPrebinned(xDef)) return 'vertical'
+    if (yDef?.field && isPrebinned(yDef)) return 'horizontal'
     if (xDef?.field && yDef?.aggregate && !xDef.aggregate && yDef.field) return 'vertical'
     if (yDef?.field && xDef?.aggregate && !yDef.aggregate && xDef.field) return 'horizontal'
     if (y2 || x2) {
@@ -469,7 +472,13 @@ function collectLeaves(root: VLSpec): VLSpec[] {
     }
     // a layer's projection reaches its units (vega-lite normalize mergeProjection: the child's own wins)
     const projection = node.projection !== undefined ? node.projection : inh.projection
-    const leaf: VLSpec = { ...node, encoding, ...(projection !== undefined ? { projection } : {}) }
+    // (a channel only the layer gave, and only partially - a type, a scale, an axis, no field - encodes nothing in the unit)
+    const unitEncoding: Record<string, unknown> = {}
+    for (const [ch, def] of Object.entries(encoding)) {
+      const partial = isObject(def) && def.field === undefined && def.datum === undefined && def.value === undefined && def.condition === undefined && def.aggregate !== 'count' && def.expr === undefined
+      if (!partial) unitEncoding[ch] = def
+    }
+    const leaf: VLSpec = { ...node, encoding: unitEncoding, ...(projection !== undefined ? { projection } : {}) }
     LEAF_PATHS.set(leaf, path)
     if (isGraticuleData(node.data)) GRATICULE_UNITS.add(leaf)
     if (data !== undefined) leaf.data = data
@@ -1442,7 +1451,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     }
   }
   // a binned facet field: the extent + bin transforms ahead of everything (data/parse.ts, before timeUnit)
-  for (const fd of facetFds.filter((f) => f.bin)) {
+  for (const fd of facetFds.filter((f) => f.bin && !isPrebinned(f))) {
     const names = binNames(fd.binParams!, fd.field)
     if (preSeen.has(names.start)) continue
     preSeen.add(names.start)
@@ -2782,6 +2791,11 @@ function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown
   }
   for (const f of fields) {
     if ((f.channel === 'x' || f.channel === 'y') && fields.some((o) => o.channel === `${f.channel}Offset` && o.field)) f.nestedOffset = true
+    // pre-binned data: the bins' ends are the secondary channel's field
+    if (isPrebinned(f)) {
+      const d2 = encoding[`${f.channel}2`]
+      if (isObject(d2) && typeof d2.field === 'string') f.binParams = { ...f.binParams!, end: flatField(d2.field).key }
+    }
   }
   return fields
 }
@@ -2965,7 +2979,7 @@ export function channelTitle(def: FieldDef): unknown {
   if (def.autoTitle !== undefined) return def.autoTitle
   if (def.aggregate === 'count') return 'Count of Records'
   if (def.argAgg) return `${def.source} for ${def.argAgg.op === 'argmax' ? 'max' : 'min'} ${def.argAgg.argSource}`
-  if (def.bin) return `${def.source} (binned)`
+  if (def.bin && !isPrebinned(def)) return `${def.source} (binned)`
   if (def.tu) return `${def.source} (${getTimeUnitParts(def.tu.unit).join('-')})`
   if (def.aggregate) {
     const op = def.aggregate
@@ -3307,7 +3321,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   const binPipeline: Record<string, unknown>[] = []
   for (const f of binFields) {
     const names = binNames(f.binParams!, f.field)
-    pushAll(binPipeline, binTransforms(f.binParams!, f.field, names))
+    if (!isPrebinned(f)) pushAll(binPipeline, binTransforms(f.binParams!, f.field, names))
     binSignals.set(f.field, { startField: names.start, endField: names.end, binsSignal: names.signal })
   }
 
@@ -3718,6 +3732,9 @@ function thetaStackInfo(mark: string, fields: FieldDef[]): { stacked: boolean; f
   return { stacked: radiusDef == null, field: thetaDef.field }
 }
 
+/** Pre-binned data (`bin: "binned"`): the field holds the bins' starts and no bin transform is made. */
+const isPrebinned = (f: FieldDef): boolean => f.binParams?.binned === true
+
 /** A binned field of a discrete type (ordinal / nominal): its bins are the categories. */
 function binDiscrete(f: FieldDef): boolean {
   return !!f.bin && isDiscreteType(f.type) && (f.channel === 'x' || f.channel === 'y' || f.channel === 'xOffset' || f.channel === 'yOffset')
@@ -3866,6 +3883,12 @@ function domainLimit(v: unknown, def: FieldDef): unknown {
   return isDateTimeValue(v) || def.type === 'temporal' || def.timeUnit ? { signal: domainValueExpr(v, def.type, def.timeUnit) } : v
 }
 
+/** The scale's `bins` property of a binned field: the bin transform's signal, or the step of pre-binned data. */
+function binsProp(def: FieldDef): Record<string, unknown> | undefined {
+  if (isPrebinned(def)) return typeof def.binParams!.step === 'number' ? { step: def.binParams!.step } : undefined
+  return { signal: binNames(def.binParams!, def.field).signal }
+}
+
 /** scale/domain.ts: the domain of a binned field is the extent of its bins. */
 function binsDomain(def: FieldDef): { signal: string } {
   const bins = binNames(def.binParams!, def.field).signal
@@ -3962,13 +3985,14 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       const niceDefault = def.bin || Array.isArray(explicitDom) || def.scale?.domainMin != null || def.scale?.domainMax != null ? undefined : true
       const niceValue = (def.scale?.nice as unknown) ?? niceDefault
       if (niceValue !== undefined) sc.nice = niceValue
-      if (def.bin) sc.bins = { signal: binNames(def.binParams!, def.field).signal }
+      if (def.bin) { const b = binsProp(def); if (b) sc.bins = b }
       // binned scales: no zero/nice; domain comes from bin start/end
       // (zero must be explicitly false — a missing key means the engine's
       // linear default kicks in and extends the domain to 0)
       if (def.bin) {
         sc.zero = false
-        sc.nice = false
+        // (pre-binned data gets no nice key at all)
+        if (!isPrebinned(def)) sc.nice = false
         delete sc.padding
       }
     } else if (type === 'band') {
@@ -4051,7 +4075,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       domain: userDomain ?? (discrete ? sortedDomain(def, dataName, dc) : def.bin ? binsDomain(def) : unaggregatedDomain(def, dataName, cfgS) ?? { data: dataName, field: aggFieldName(def) }),
       range: def.scale?.range ?? (['quantile', 'quantize', 'threshold'].includes(type) ? countRange(range[0], range[1], discreteCount(type, cfgS, explicitDom)) : range),
     }
-    if (def.bin && !discrete && userDomain === undefined) sc.bins = { signal: binNames(def.binParams!, def.field).signal }
+    if (def.bin && !discrete && userDomain === undefined) { const b = binsProp(def); if (b) sc.bins = b }
     if (def.sort === 'descending') sc.reverse = true
     if (!discrete && scalePropApplies(name, type, 'zero')) sc.zero = (def.scale?.zero as boolean | undefined) ?? (explicitDom !== undefined && isContinuousScaleType(type) ? zeroForCustomDomain(explicitDom) : type === 'log' ? false : zero)
     for (const [k, v] of Object.entries(def.scale ?? {})) {
@@ -4331,6 +4355,10 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
   const unagg = unaggregatedDomain(def, dataName, dc.cfg)
   if (unagg !== undefined) return unagg
   if (def.bin && binDiscrete(def)) return sortedDomain(def, dataName, dc)
+  if (def.bin && isPrebinned(def)) {
+    const bn = binNames(def.binParams!, def.field)
+    return { data: dataName, fields: [bn.start, bn.end] }
+  }
   if (def.bin) {
     const sig = binNames(def.binParams!, def.field).signal
     return { signal: `[${sig}.start, ${sig}.stop]` }
@@ -4671,7 +4699,7 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
       if (def.channel === 'x') labelAxis.labelFlush = true
       // log axes carry no explicit tickCount — vega's axis defaults to 10,
       // which drives the log label filter (3/30/300 stay visible)
-      if (sc.type !== 'log' && !suppressTickCount) labelAxis.tickCount = def.bin
+      if (sc.type !== 'log' && !suppressTickCount) labelAxis.tickCount = def.bin && !isPrebinned(def)
         ? { signal: def.channel === 'x' ? 'ceil(width/10)' : 'ceil(height/10)' }
         : tickCountSignal
       if (def.timeUnit) {
@@ -6249,15 +6277,16 @@ function bandPositionOf(spec: VLSpec, mark: string, def: FieldDef, hasSecondary:
     if (typeof configured === 'number') return configured
     return mark === 'bar' || mark === 'rect' || mark === 'tick' ? 0.5 : undefined
   }
-  if (def.bin) return 0.5
+  if (def.bin && !isPrebinned(def)) return 0.5
   return undefined
 }
 
 /** The names of the start / end fields of a time-unit or binned def; a rect off the band middle reads the offsetted ones. */
-function rectBandFields(def: FieldDef, useRectOffsetField: boolean): { start: string; end: string } {
+function rectBandFields(def: FieldDef, useRectOffsetField: boolean): { start: string; end: string; bandEnd?: string } {
   if (def.bin) {
     const bn = binNames(def.binParams!, def.field)
-    return { start: bn.start, end: bn.end }
+    // (position-rect.ts rectBinPosition measures the band on `<field>_end` whatever the secondary field is called)
+    return { start: bn.start, end: bn.end, ...(isPrebinned(def) ? { bandEnd: `${def.field}_end` } : {}) }
   }
   const start = timeUnitField(def)
   return useRectOffsetField ? { start: `${start}_offsetted_rect_start`, end: `${start}_offsetted_rect_end` } : { start, end: `${start}_end` }
@@ -6367,7 +6396,7 @@ function setBinnedRect(update: Record<string, unknown>, ch: 'x' | 'y', def: Fiel
   const { start, end } = rectBandFields(def, useRectOffsetField)
   // the size of the band is read from the plain start / end of the value, whatever the position fields are
   const plain = rectBandFields(def, false)
-  const band = `abs(scale("${ch}", datum[${JSON.stringify(plain.end)}]) - scale("${ch}", datum[${JSON.stringify(plain.start)}]))`
+  const band = `abs(scale("${ch}", datum[${JSON.stringify(plain.bandEnd ?? plain.end)}]) - scale("${ch}", datum[${JSON.stringify(plain.start)}]))`
   const minBandSize = geometry.minBandSize
   // position-rect.ts getBinSpacing: the axis translate, the scale's reverse, the mark's visual offset and the spacing
   const axisObj = isObject(def.axis) ? def.axis : undefined
@@ -6624,6 +6653,8 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
     const t = channelTitle(d.title ? d : { ...d, title: undefined })
     return (Array.isArray(t) ? t.join(', ') : String(t)).replace(/"/g, '\\"')
   }
+  /** tooltip.ts tooltipData: the end of a pre-binned position is shown with its start (`start – end`), not on its own. */
+  const prebinnedEnd = (f: FieldDef): boolean => (f.channel === 'x2' || f.channel === 'y2') && fields.some((m) => m.channel === f.channel[0] && isPrebinned(m))
   /** vega-lite tooltipData: one `title -> text expression` per field, the first of a title wins. */
   const objectEntries = (defs: FieldDef[], s: VLSpec = spec): Array<[string, string]> => {
     const seen = new Set<string>()
@@ -6658,7 +6689,7 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
   } else if (enc.tooltip === undefined && markTooltip !== undefined && markTooltip !== false && markTooltip !== null) {
     const t = markTooltip
     if (t === true || (isObject(t) && t.content === 'encoding')) {
-      const o = objectOf(fields.filter((f) => !f.datumOnly && f.field && f.channel !== 'tooltip' && f.channel !== 'row' && f.channel !== 'column' && f.channel !== 'facet'))
+      const o = objectOf(fields.filter((f) => !f.datumOnly && f.field && f.channel !== 'tooltip' && f.channel !== 'row' && f.channel !== 'column' && f.channel !== 'facet' && !prebinnedEnd(f)))
       if (o) update.tooltip = { signal: o }
     } else if (typeof t === 'string') update.tooltip = { value: t }
     else if (isObject(t) && t.content === 'data') update.tooltip = { signal: 'datum' }
@@ -6682,7 +6713,7 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
       else if (cfg.aria !== false) {
         // (in vega-lite's channel order, initEncoding's walk over UNIT_CHANNELS, not the order the spec wrote them in)
         const rank = (f: FieldDef): number => { const i = UNIT_CHANNEL_ORDER.indexOf(f.channel); return i < 0 ? UNIT_CHANNEL_ORDER.length : i }
-        const defs = fields.filter((f) => !f.datumOnly && f.field && f.channel !== 'description' && f.channel !== 'row' && f.channel !== 'column' && f.channel !== 'facet')
+        const defs = fields.filter((f) => !f.datumOnly && f.field && f.channel !== 'description' && f.channel !== 'row' && f.channel !== 'column' && f.channel !== 'facet' && !prebinnedEnd(f))
           .map((f, i) => ({ f, i })).sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i).map((x) => x.f)
         const sig = objectEntries(defs, tipSpec).filter(([key]) => !key.startsWith('_'))
           .map(([key, value]) => `"${key}: " + (${value.replaceAll('\\n', ' ')})`)

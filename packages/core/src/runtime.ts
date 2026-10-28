@@ -5209,6 +5209,10 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
   if (tickMinStep != null && tickMinStep > 0 && typeof count === 'number') {
     const counted = tickCount(scale, count, tickMinStep)
     if (typeof counted === 'number') count = counted
+  } else if (typeof count === 'number' && (scale as { bins?: unknown }).bins) {
+    // (vega's tickCount raises the count to the number of bin edges, so a binned scale ticks every edge)
+    const counted = tickCount(scale, count)
+    if (typeof counted === 'number') count = counted
   }
 
   // For continuous non-time scales with tickMinStep but no tickCount, generate

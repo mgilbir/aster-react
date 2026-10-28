@@ -118,8 +118,10 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['time-unit maxbins', unit({ encoding: { x: { field: 't', type: 'temporal', timeUnit: { maxbins: 6 } } } }), /maxbins/],
   ['a time-unit step of zero', unit({ encoding: { x: { field: 't', type: 'temporal', timeUnit: { unit: 'month', step: 0 } } } }), /step/],
   // --- bin (C74)
-  ['pre-binned data', unit({ encoding: { x: { field: 'x', type: 'quantitative', bin: 'binned' } } }), /pre-binned/],
-  ['binned: true', unit({ encoding: { x: { field: 'x', type: 'quantitative', bin: { binned: true } } } }), /pre-binned/],
+  ['pre-binned data off the positions', unit({ encoding: { x: xq, color: { field: 'x', type: 'quantitative', bin: 'binned' } } }), /property of an x or y channel/],
+  ['binned: true off the positions', unit({ encoding: { x: xq, size: { field: 'x', type: 'quantitative', bin: { binned: true } } } }), /property of an x or y channel/],
+  ['binned: true in a bin transform', unit({ transform: [{ bin: { binned: true }, field: 'x', as: 'b' }] }), /property of an x or y channel/],
+  ['pre-binned data with a bin parameter', unit({ encoding: { x: { ...xq, bin: { binned: true, maxbins: 5 } }, x2: { field: 'y' } } }), /maxbins/],
   ['an unknown bin option', unit({ encoding: { x: { field: 'x', type: 'quantitative', bin: { buckets: 4 } } } }), /unknown bin property/],
   ['a negative maxbins', unit({ encoding: { x: { field: 'x', type: 'quantitative', bin: { maxbins: -1 } } } }), /positive number/],
   ['a bad extent', unit({ encoding: { x: { field: 'x', type: 'quantitative', bin: { extent: [5, 1] } } } }), /min must be less/],

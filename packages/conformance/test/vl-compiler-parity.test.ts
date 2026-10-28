@@ -46,6 +46,12 @@ const GAPS = {
     { a: 2, b: 81, c: 0 }, { a: 2, b: 53, c: 1 }, { a: 3, b: 19, c: 0 },
   ],
 }
+const BINS = {
+  values: [
+    { bin_start: 8, bin_end: 10, count: 7, g: 'a' }, { bin_start: 10, bin_end: 12, count: 29, g: 'b' }, { bin_start: 12, bin_end: 14, count: 71, g: 'a' },
+    { bin_start: 14, bin_end: 16, count: 127, g: 'b' }, { bin_start: 16, bin_end: 18, count: 94, g: 'a' }, { bin_start: 18, bin_end: 20, count: 54, g: 'b' },
+  ],
+}
 const NULLS = {
   values: [
     { a: null, b: 100, c: 5 },
@@ -544,6 +550,20 @@ const GROUPS: Record<string, Case[]> = {
     ['a checkbox toggling a colour field', { data: DATA, params: [{ name: 'toggle', bind: { input: 'checkbox' } }], mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { param: 'toggle', field: 'c', type: 'nominal' }, value: 'steelblue' } } }],
     ['a checkbox and a pointer selection', { data: DATA, params: [{ name: 'toggle', bind: { input: 'checkbox' } }, { name: 'brush', select: { type: 'point', on: 'pointerover' } }], mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { param: 'toggle', field: 'c', type: 'nominal' }, value: 'steelblue' }, size: { condition: { param: 'brush', value: 300 }, value: 50 } } }],
     ['a range input without a value used in a test', { data: DATA, params: [{ name: 'cut', bind: { input: 'range', min: 0, max: 8, step: 1 } }], mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { test: 'datum.x > cut', value: 'red' }, value: 'grey' } } }],
+  ],
+  // position-rect.ts rectBinPosition, init.ts orient, scale `bins` (bar_binned_data, histogram_bin_transform, wheat_wages): bin: "binned" is a
+  // field of bin starts with a secondary field of ends, drawn as the bins of a histogram
+  'pre-binned data (bar_binned_data, histogram_bin_transform, layer_cumulative_histogram, wheat_wages)': [
+    ['pre-binned bars with a step', { data: BINS, mark: 'bar', encoding: { x: { field: 'bin_start', bin: { binned: true, step: 2 } }, x2: { field: 'bin_end' }, y: q('count') } }],
+    ['pre-binned bars with the string form', { data: BINS, mark: 'bar', encoding: { x: { field: 'bin_start', bin: 'binned', type: 'quantitative' }, x2: { field: 'bin_end' }, y: q('count') } }],
+    ['horizontal pre-binned bars', { data: BINS, mark: 'bar', encoding: { y: { field: 'bin_start', bin: { binned: true, step: 2 } }, y2: { field: 'bin_end' }, x: q('count') } }],
+    ['pre-binned bars with a colour', { data: BINS, mark: 'bar', encoding: { x: { field: 'bin_start', bin: { binned: true, step: 2 } }, x2: { field: 'bin_end' }, y: q('count'), color: n('g') } }],
+    ['pre-binned bars with a bin spacing of zero', { data: BINS, config: { bar: { binSpacing: 0 } }, mark: 'bar', encoding: { x: { field: 'bin_start', bin: { binned: true, step: 2 } }, x2: { field: 'bin_end' }, y: q('count') } }],
+    ['pre-binned bars with a title and a scale', { data: BINS, mark: 'bar', encoding: { x: { field: 'bin_start', bin: { binned: true, step: 2 }, title: 'Binned', scale: { domain: [0, 20] } }, x2: { field: 'bin_end' }, y: q('count') } }],
+    ['pre-binned rects', { data: BINS, mark: 'rect', encoding: { x: { field: 'bin_start', bin: { binned: true, step: 2 } }, x2: { field: 'bin_end' }, y: n('g'), color: q('count') } }],
+    ['pre-binned bars next to a line over the same position', { data: BINS, encoding: { x: { type: 'quantitative', axis: { tickCount: 4, title: 'Position' } }, y: { type: 'quantitative', axis: { zindex: 1 } } }, layer: [{ mark: 'bar', encoding: { x: { field: 'bin_start', bin: 'binned' }, x2: { field: 'bin_end' }, y: { field: 'count' } } }, { mark: 'line', encoding: { x: { field: 'bin_start' }, y: { field: 'count' } } }, { mark: 'rule', encoding: { x: { field: 'bin_end' } } }] }],
+    ['pre-binned bars made by a bin transform', { data: DATA, transform: [{ bin: true, field: 'v', as: 'bv' }], mark: 'bar', encoding: { x: { field: 'bv', bin: { binned: true, step: 2 }, title: 'V (binned)' }, x2: { field: 'bv_end' }, y: { aggregate: 'count' } } }],
+    ['cumulative pre-binned bars', { data: DATA, transform: [{ bin: true, field: 'v', as: 'bv' }, { aggregate: [{ op: 'count', as: 'count' }], groupby: ['bv', 'bv_end'] }, { sort: [{ field: 'bv' }], window: [{ op: 'sum', field: 'count', as: 'cum' }], frame: [null, 0] }], encoding: { x: { field: 'bv', type: 'quantitative', scale: { zero: false }, bin: 'binned' }, x2: { field: 'bv_end' } }, layer: [{ mark: 'bar', encoding: { y: q('cum') } }, { mark: { type: 'bar', color: 'yellow', opacity: 0.5 }, encoding: { y: q('count') } }] }],
   ],
 }
 
