@@ -183,8 +183,76 @@ export interface PathSink {
   closePath(): void
 }
 
-/** Replay parsed segments onto a canvas context, offset by (tx, ty). */
-export function tracePath(ctx: PathSink, segs: PathSeg[], tx = 0, ty = 0): void {
+/**
+ * vega-scenegraph path/arc.js (Inkscape svgtopdf): an SVG endpoint arc as cubic beziers of at most a quarter turn each. vega's canvas
+ * draws an arc of a path string -- a path mark, a custom symbol shape -- this way, so does `tracePath` with `arcs: 'bezier'`.
+ * Returns six numbers per bezier (c1x, c1y, c2x, c2y, x, y), absolute.
+ */
+export function arcBeziers(ox: number, oy: number, rx: number, ry: number, rotateX: number, large: number, sweep: number, x: number, y: number): number[] {
+  const th = (rotateX * Math.PI) / 180
+  const sinTh = Math.sin(th)
+  const cosTh = Math.cos(th)
+  rx = Math.abs(rx)
+  ry = Math.abs(ry)
+  const px = cosTh * (ox - x) * 0.5 + sinTh * (oy - y) * 0.5
+  const py = cosTh * (oy - y) * 0.5 - sinTh * (ox - x) * 0.5
+  let pl = (px * px) / (rx * rx) + (py * py) / (ry * ry)
+  if (pl > 1) {
+    pl = Math.sqrt(pl)
+    rx *= pl
+    ry *= pl
+  }
+  const a00 = cosTh / rx
+  const a01 = sinTh / rx
+  const a10 = -sinTh / ry
+  const a11 = cosTh / ry
+  const x0 = a00 * ox + a01 * oy
+  const y0 = a10 * ox + a11 * oy
+  const x1 = a00 * x + a01 * y
+  const y1 = a10 * x + a11 * y
+  const d = (x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)
+  let sfactorSq = 1 / d - 0.25
+  if (sfactorSq < 0) sfactorSq = 0
+  let sfactor = Math.sqrt(sfactorSq)
+  // eslint-disable-next-line eqeqeq
+  if (sweep == large) sfactor = -sfactor
+  const xc = 0.5 * (x0 + x1) - sfactor * (y1 - y0)
+  const yc = 0.5 * (y0 + y1) + sfactor * (x1 - x0)
+  const th0 = Math.atan2(y0 - yc, x0 - xc)
+  const th1 = Math.atan2(y1 - yc, x1 - xc)
+  let thArc = th1 - th0
+  const Tau = 2 * Math.PI
+  if (thArc < 0 && sweep === 1) thArc += Tau
+  else if (thArc > 0 && sweep === 0) thArc -= Tau
+  const segs = Math.ceil(Math.abs(thArc / (Math.PI / 2 + 0.001)))
+  const out: number[] = []
+  const b00 = cosTh * rx
+  const b01 = -sinTh * ry
+  const b10 = sinTh * rx
+  const b11 = cosTh * ry
+  for (let i = 0; i < segs; ++i) {
+    const t0 = th0 + (i * thArc) / segs
+    const t1 = th0 + ((i + 1) * thArc) / segs
+    const thHalf = 0.5 * (t1 - t0)
+    const sinThH2 = Math.sin(thHalf * 0.5)
+    const t = ((8 / 3) * sinThH2 * sinThH2) / Math.sin(thHalf)
+    const cos0 = Math.cos(t0), sin0 = Math.sin(t0), cos1 = Math.cos(t1), sin1 = Math.sin(t1)
+    const bx1 = xc + cos0 - t * sin0
+    const by1 = yc + sin0 + t * cos0
+    const bx3 = xc + cos1
+    const by3 = yc + sin1
+    const bx2 = bx3 + t * sin1
+    const by2 = by3 - t * cos1
+    out.push(b00 * bx1 + b01 * by1, b10 * bx1 + b11 * by1, b00 * bx2 + b01 * by2, b10 * bx2 + b11 * by2, b00 * bx3 + b01 * by3, b10 * bx3 + b11 * by3)
+  }
+  return out
+}
+
+/**
+ * Replay parsed segments onto a canvas context, offset by (tx, ty). An arc is a canvas arc (a circular one) by default; with
+ * `arcs: 'bezier'` it is vega's bezier approximation of an SVG arc (see {@link arcBeziers}).
+ */
+export function tracePath(ctx: PathSink, segs: PathSeg[], tx = 0, ty = 0, arcs: 'exact' | 'bezier' = 'exact'): void {
   // Track the current point and the last cubic/quadratic control point for
   // S/T smoothing, mirroring the SVG path semantics.
   let cx = 0, cy = 0
@@ -221,6 +289,15 @@ export function tracePath(ctx: PathSink, segs: PathSeg[], tx = 0, ty = 0): void 
         break
       }
       case 'A': {
+        if (arcs === 'bezier') {
+          // vega path/render.js drawArc: the arc's beziers, from the current point (a zero radius is a line there too)
+          const b = s.rx === 0 || s.ry === 0 || (cx === s.x && cy === s.y) ? [] : arcBeziers(cx, cy, s.rx, s.ry, s.rot, s.large, s.sweep, s.x, s.y)
+          if (!b.length) ctx.lineTo(s.x + tx, s.y + ty)
+          for (let k = 0; k < b.length; k += 6) ctx.bezierCurveTo(b[k]! + tx, b[k + 1]! + ty, b[k + 2]! + tx, b[k + 3]! + ty, b[k + 4]! + tx, b[k + 5]! + ty)
+          cx = s.x; cy = s.y
+          lastC = lastQ = null
+          break
+        }
         // Convert the SVG endpoint arc to canvas arc parameters.
         const x1 = cx, y1 = cy
         const x2 = s.x, y2 = s.y
