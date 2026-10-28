@@ -288,7 +288,7 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
 
   switch (kind) {
     case 'unit':
-      validateUnit(spec, at)
+      validateUnit(spec, at, top)
       break
     case 'layer': {
       if (!Array.isArray(spec.layer) || spec.layer.length === 0) mustBe(at('layer'), 'a non-empty array of specs')
@@ -313,7 +313,7 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
       break
     }
     case 'facet':
-      validateFacetOperator(spec, at, selOk)
+      validateFacetOperator(spec, at, selOk, top)
       break
     case 'repeat':
       validateRepeatOperator(spec, at, selOk)
@@ -415,7 +415,7 @@ function validateData(spec: Obj, at: (k: string) => string): void {
 const CONFIG_KEYS = set(
   'autosize background padding axis axisBand axisX axisY axisLeft axisRight axisTop axisBottom legend header headerRow headerColumn headerFacet range ' +
     'mark arc area bar circle geoshape image line point rect rule square text tick trail view title font scale style projection ' +
-    'aria countTitle fieldTitle lineBreak normalizedNumberFormat numberFormat timeFormat boxplot errorbar errorband ' +
+    'aria countTitle fieldTitle lineBreak normalizedNumberFormat numberFormat timeFormat boxplot errorbar errorband concat facet tooltipFormat ' +
     'customFormatTypes numberFormatType normalizedNumberFormatType timeFormatType selection',
 )
 const CONFIG_SCALE_KEYS = set(
@@ -441,6 +441,19 @@ function validateConfig(cfg: Obj, path: string): void {
         if (v !== 'zero-or-min' && !(isObj(v) && 'value' in v)) mustBe(`${path}.scale.invalid.${ch}`, '"zero-or-min" or {"value": ...}')
       }
     }
+  }
+  for (const k of ['concat', 'facet'] as const) {
+    const c = cfg[k]
+    if (c === undefined) continue
+    if (!isObj(c)) mustBe(`${path}.${k}`, OBJECT)
+    keysOf(c, set('columns spacing'), `${path}.${k}`, `${k} config`)
+    if (c.columns !== undefined && !(Number.isInteger(c.columns) && (c.columns as number) > 0)) mustBe(`${path}.${k}.columns`, 'a positive integer')
+    if (c.spacing !== undefined && typeof c.spacing !== 'number') mustBe(`${path}.${k}.spacing`, 'a number')
+  }
+  if (cfg.tooltipFormat !== undefined) {
+    if (!isObj(cfg.tooltipFormat)) mustBe(`${path}.tooltipFormat`, OBJECT)
+    keysOf(cfg.tooltipFormat, set('numberFormat numberFormatType normalizedNumberFormat normalizedNumberFormatType timeFormat timeFormatType'), `${path}.tooltipFormat`, 'tooltip format config')
+    for (const [k, v] of Object.entries(cfg.tooltipFormat)) if (typeof v !== 'string') mustBe(`${path}.tooltipFormat.${k}`, 'a string')
   }
   if (cfg.boxplot !== undefined) {
     if (!isObj(cfg.boxplot)) mustBe(`${path}.boxplot`, OBJECT)
@@ -818,13 +831,14 @@ function validateMark(mark: unknown, at: string): string {
   return type
 }
 
-function validateUnit(spec: Obj, at: (k: string) => string): void {
+function validateUnit(spec: Obj, at: (k: string) => string, top = true): void {
   const mark = validateMark(spec.mark, at('mark'))
   const enc = spec.encoding === undefined ? {} : spec.encoding
   validateEncoding(enc, at('encoding'), 'unit', mark)
   if (isObj(enc)) validateGeoUnit(mark, enc, at('encoding'))
   validateAnimation(spec, enc, at)
   const faceted = isObj(enc) && (enc.row != null || enc.column != null || enc.facet != null)
+  if (!top && isObj(enc) && enc.facet != null) fail(at('encoding.facet'), 'a wrapped facet (the `facet` channel) nested in another composition is not supported yet')
   if ((compositeDepth > 0 || faceted) && (mark === 'geoshape' || spec.projection !== undefined || (isObj(enc) && Object.keys(enc).some((c) => GEO_CHANNELS.has(c) && enc[c] != null)))) {
     fail(at('mark'), 'maps (geoshape marks, projections, longitude / latitude) inside a facet are not supported: vega-lite 6.4.3 fits a facet\'s projection to a dataset it never defines (data("child_main")), so there is no output to match')
   }
@@ -1380,11 +1394,13 @@ function validateDataSourceObj(d: Obj, at: string): void {
 
 // --- facet / repeat operators ------------------------------------------------
 
-function validateFacetOperator(spec: Obj, at: (k: string) => string, selOk: boolean): void {
+function validateFacetOperator(spec: Obj, at: (k: string) => string, selOk: boolean, top = true): void {
   const facet = spec.facet
   if (!isObj(facet)) mustBe(at('facet'), 'a field definition or {row, column}')
   if (!isObj(spec.spec)) fail(at('spec'), 'a facet spec needs a nested `spec`')
   const mapping = facet.row !== undefined || facet.column !== undefined
+  // (a wrapped facet inside another composition lays its cells out differently from vega-lite's here: refused rather than drawn wrong)
+  if (!mapping && !top) fail(at('facet'), 'a wrapped facet (a single `facet` field) nested in another composition is not supported yet')
   const checkFacetDef = (d: unknown, a: string): void => {
     if (!isObj(d)) mustBe(a, 'a field definition')
     keysOf(d, set('field type aggregate bin timeUnit sort title header bandPosition'), a, 'facet field definition')

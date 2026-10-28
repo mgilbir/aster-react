@@ -18,7 +18,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['an unknown mark property', unit({ mark: { type: 'point', sparkle: true } }), /unknown mark property "sparkle"/],
   ['an unsupported mark property', unit({ mark: { type: 'bar', timeUnitBandSize: 2 } }), /timeUnitBandSize/],
   ['config nested in a child spec', { data: DATA, hconcat: [unit({ config: {} })] }, /config is only allowed at the top level/],
-  ['an unsupported config key', unit({ config: { facet: { spacing: 4 } } }), /config\.facet/],
+  ['an unsupported config key', unit({ config: { fontSize: { xs: 3 } } }), /config\.fontSize/],
   ['an unknown projection type', unit({ mark: 'geoshape', projection: { type: 'robinson' } }), /unknown projection type/],
   ['an unknown projection property', unit({ mark: 'geoshape', projection: { zoom: 3 } }), /unknown projection property "zoom"/],
   ['a projection property of the wrong kind', unit({ mark: 'geoshape', projection: { scale: 'big' } }), /projection\.scale/],
@@ -128,6 +128,8 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['an unknown resolve channel', { data: DATA, resolve: { scale: { banana: 'shared' } }, hconcat: [unit()] }, /unknown channel "banana"/],
   ['a bad resolve value', { data: DATA, resolve: { scale: { color: 'both' } }, hconcat: [unit()] }, /"shared" or "independent"/],
   ['resolve on a unit', unit({ resolve: { scale: { y: 'independent' } } }), /no meaning on a single unit/],
+  ['a wrapped faceted unit nested in a concat', { data: DATA, hconcat: [unit(), unit({ encoding: { x: xq, y: yq, facet: { ...cn, columns: 2 } } })] }, /wrapped facet.*nested in another composition/],
+  ['a wrapped facet operator nested in a concat', { data: DATA, vconcat: [unit(), { facet: cn, spec: unit() }] }, /wrapped facet.*nested in another composition/],
   ['an independent scale in a facet', { data: DATA, facet: { row: cn }, spec: unit(), resolve: { scale: { y: 'independent' } } }, /independent resolution inside a facet/],
   ['an independent axis in a faceted unit', unit({ encoding: { x: xq, y: yq, column: cn }, resolve: { axis: { x: 'independent' } } }), /independent resolution inside a facet/],
 ]

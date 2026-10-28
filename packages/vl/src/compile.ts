@@ -122,6 +122,8 @@ export function compile(input: VLSpec): VLSpec {
   const spec = cloneSpec(input)
   validateSpec(spec)
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
+  normalizeNestedFacetedUnits(spec, false)
+  applyCompositionConfig(spec, spec)
   const normalized = alignStackOrders(normalizePathOverlays(normalizeComposites(spec, userConfig), userConfig ?? {}, unitStackProps), unitStackProps) as VLSpec
   // (the overlays are layers now: `config.<mark>.point / line` have done their job)
   if (userConfig) {
@@ -562,6 +564,68 @@ function viewEncode(spec: VLSpec): { update: Record<string, unknown> } | undefin
   return Object.keys(update).length ? { update } : undefined
 }
 
+/**
+ * normalize/facet.ts normalizeFacetedUnit: a unit with a `row`, `column` or `facet` channel is a facet operator over the unit that
+ * keeps the other channels; the layout properties stay on the facet. The top-level unit is compiled in its encoded form; the ones
+ * nested in a composition become the operator here.
+ */
+function normalizeNestedFacetedUnits(node: unknown, nested: boolean): void {
+  if (!isObject(node)) return
+  for (const k of ['hconcat', 'vconcat', 'concat']) {
+    const kids = node[k]
+    if (Array.isArray(kids)) kids.forEach((c, i) => { kids[i] = normalizeNestedFacetedUnit(c); normalizeNestedFacetedUnits(kids[i], true) })
+  }
+  if (Array.isArray(node.layer)) node.layer.forEach((c) => normalizeNestedFacetedUnits(c, nested))
+  if (isObject(node.spec)) {
+    if (node.repeat !== undefined) node.spec = normalizeNestedFacetedUnit(node.spec)
+    normalizeNestedFacetedUnits(node.spec, true)
+  }
+}
+
+function normalizeNestedFacetedUnit(c: unknown): unknown {
+  if (!isObject(c) || c.mark === undefined || !isObject(c.encoding)) return c
+  const { row, column, facet, ...encoding } = c.encoding as Record<string, unknown>
+  if (row == null && column == null && facet == null) return c
+  const { mark, width, height, view, projection, params, encoding: _e, ...outer } = c
+  void _e
+  const inner: Record<string, unknown> = { ...(width !== undefined ? { width } : {}), ...(height !== undefined ? { height } : {}), ...(view !== undefined ? { view } : {}), ...(projection !== undefined ? { projection } : {}), ...(params !== undefined ? { params } : {}), mark, encoding }
+  const mapping = facet != null ? facet : { ...(row != null ? { row } : {}), ...(column != null ? { column } : {}) }
+  return { ...outer, facet: mapping, spec: inner }
+}
+
+/**
+ * spec/base.ts extractCompositionLayout: `config.concat` (concat, hconcat, vconcat and repeat) and `config.facet` give a composition
+ * its default `spacing` and, for a concat or a wrapped facet, its `columns`; the spec's own values win (a partial row / column
+ * spacing falls back to the config's). Applied to every composition of the tree.
+ */
+function applyCompositionConfig(node: VLSpec, root: VLSpec): void {
+  const cfg = isObject(root.config) ? (root.config as Record<string, unknown>) : undefined
+  const visit = (n: unknown): void => {
+    if (Array.isArray(n)) { n.forEach(visit); return }
+    if (!isObject(n)) return
+    const enc = isObject(n.encoding) ? (n.encoding as Record<string, unknown>) : {}
+    const facetedUnit = n.mark !== undefined && (enc.row != null || enc.column != null || enc.facet != null)
+    const type = n.facet !== undefined || facetedUnit ? 'facet' : n.hconcat !== undefined || n.vconcat !== undefined || n.concat !== undefined || n.repeat !== undefined ? 'concat' : undefined
+    const c = type && isObject(cfg?.[type]) ? (cfg![type] as Record<string, unknown>) : undefined
+    if (c) {
+      if (typeof c.spacing === 'number') {
+        if (n.spacing === undefined) n.spacing = c.spacing
+        else if (isObject(n.spacing)) n.spacing = { row: n.spacing.row ?? c.spacing, column: n.spacing.column ?? c.spacing }
+      }
+      const wrapped = type === 'facet' ? (isObject(n.facet) ? n.facet.row === undefined && n.facet.column === undefined : isObject(enc.facet) && enc.row === undefined && enc.column === undefined) : n.concat !== undefined || (n.repeat !== undefined && Array.isArray(n.repeat))
+      if (c.columns !== undefined && wrapped && n.columns === undefined && !(isObject(enc.facet) && enc.facet.columns !== undefined)) n.columns = c.columns
+    }
+    for (const k of ['hconcat', 'vconcat', 'concat', 'layer']) if (Array.isArray(n[k])) visit(n[k])
+    if (isObject(n.spec)) visit(n.spec)
+  }
+  visit(node)
+}
+
+/** The merged title of a layered axis on a field def: it replaces the def's own title, and its axis title when it has one. */
+function withAxisTitle(f: FieldDef, title: string): FieldDef {
+  return { ...f, title, ...(isObject(f.axis) && typeof f.axis.title === 'string' ? { axis: { ...f.axis, title } } : {}) } as FieldDef
+}
+
 /** Compile a multi-layer spec: per-source casts, per-layer pipelines,
  * unioned scales, one mark group per layer. */
 function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
@@ -883,7 +947,9 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       // an explicit title on either endpoint replaces the generated "primary, secondary" pair
       // (an explicit null title - on the field or its axis - removes the axis title: common.ts mergeTitleComponent)
       if (f.title === null || d2?.title === null || (isObject(f.axis) && f.axis.title === null)) nullTitle = true
-      const explicit = [f.title, d2?.title].filter((x): x is string => typeof x === 'string' && x !== '')
+      // (an `axis.title` is explicit as well, and the whole title of that layer's axis)
+      const axisTitle = isObject(f.axis) && typeof f.axis.title === 'string' && f.axis.title !== '' ? f.axis.title : undefined
+      const explicit = axisTitle !== undefined ? [axisTitle] : [f.title, d2?.title].filter((x): x is string => typeof x === 'string' && x !== '')
       if (explicit.length) { given.push(explicit.join(', ')); continue }
       const t = ((f.axis as Record<string, unknown> | null | undefined)?.title as string) ?? (channelTitle(f) as string)
       if (t) titles.push(t)
@@ -892,7 +958,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     // titles the user wrote win over the ones derived from fields (mergeTitleComponent)
     const uniq = Array.from(new Set(given.length ? given : titles))
     const axisFields = base.fields.filter((f) => f.channel === ch).map((f) =>
-      nullTitle ? ({ ...f, title: null } as unknown as FieldDef) : uniq.length > 1 || given.length ? ({ ...f, title: uniq.join(', ') } as FieldDef) : f,
+      nullTitle ? ({ ...f, title: null } as unknown as FieldDef) : uniq.length > 1 || given.length ? withAxisTitle(f, uniq.join(', ')) : f,
     )
     const gridScaleName = ch === 'x' && indepY ? `layer_${firstYLayer}_y` : undefined
     const built = buildAxes(axisFields, axisMark(base.markRaw, base.mark), scales as ScaleSpec[], undefined, gridScaleName, userConfig)
@@ -900,7 +966,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     // other layers that share it
     for (const other of layersWith.slice(1)) {
       const otherFields = other.fields.filter((f) => f.channel === ch).map((f) =>
-        nullTitle ? ({ ...f, title: null } as unknown as FieldDef) : uniq.length > 1 || given.length ? ({ ...f, title: uniq.join(', ') } as FieldDef) : f,
+        nullTitle ? ({ ...f, title: null } as unknown as FieldDef) : uniq.length > 1 || given.length ? withAxisTitle(f, uniq.join(', ')) : f,
       )
       for (const a2 of buildAxes(otherFields, axisMark(other.markRaw, other.mark), scales as ScaleSpec[], undefined, gridScaleName, userConfig)) {
         const a1 = built.find((a) => a.grid === a2.grid && a.orient === a2.orient)
@@ -6509,7 +6575,7 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
     return (Array.isArray(t) ? t.join(', ') : String(t)).replace(/"/g, '\\"')
   }
   /** vega-lite tooltipData: one `title -> text expression` per field, the first of a title wins. */
-  const objectEntries = (defs: FieldDef[]): Array<[string, string]> => {
+  const objectEntries = (defs: FieldDef[], s: VLSpec = spec): Array<[string, string]> => {
     const seen = new Set<string>()
     const out: Array<[string, string]> = []
     for (const d of defs) {
@@ -6519,16 +6585,18 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
       // a secondary channel's def has no type of its own: it takes its main channel's (vega-lite tooltipData)
       const main = SECONDARY_MAIN[d.channel] !== undefined ? defs.find((m) => m.channel === SECONDARY_MAIN[d.channel]) ?? fields.find((m) => m.channel === SECONDARY_MAIN[d.channel]) : undefined
       const typed = main !== undefined && main.type !== d.type ? { ...d, type: main.type } : d
-      out.push([key, fieldTextExpr(typed, { lineBreaks: true, spec, normalizeStack: normalizedStack(d) })])
+      out.push([key, fieldTextExpr(typed, { lineBreaks: true, spec: s, normalizeStack: normalizedStack(d) })])
     }
     return out
   }
   const objectOf = (defs: FieldDef[]): string | undefined => {
-    const kv = objectEntries(defs).map(([key, value]) => `"${key}": ${value}`)
+    const kv = objectEntries(defs, tipSpec).map(([key, value]) => `"${key}": ${value}`)
     return kv.length ? `{${kv.join(', ')}}` : undefined
   }
   // tooltip (getMarkPropOrConfig: the mark definition, then config.<mark>, then config.mark)
   const tipCfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+  // tooltip.ts tooltipData: the formats are the config's overlaid by config.tooltipFormat
+  const tipSpec: VLSpec = isObject(tipCfg.tooltipFormat) ? { ...spec, config: { ...tipCfg, ...tipCfg.tooltipFormat } } : spec
   const tipMark = isObject(spec.mark) ? String((spec.mark as Record<string, unknown>).type) : String(spec.mark)
   const markTooltip = md.tooltip ?? (isObject(tipCfg[tipMark]) ? (tipCfg[tipMark] as Record<string, unknown>).tooltip : undefined) ?? (isObject(tipCfg.mark) ? (tipCfg.mark as Record<string, unknown>).tooltip : undefined)
   const tipDefs = fields.filter((f) => f.channel === 'tooltip' && !f.datumOnly)
@@ -6566,7 +6634,7 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
         const rank = (f: FieldDef): number => { const i = UNIT_CHANNEL_ORDER.indexOf(f.channel); return i < 0 ? UNIT_CHANNEL_ORDER.length : i }
         const defs = fields.filter((f) => !f.datumOnly && f.field && f.channel !== 'description' && f.channel !== 'row' && f.channel !== 'column' && f.channel !== 'facet')
           .map((f, i) => ({ f, i })).sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i).map((x) => x.f)
-        const sig = objectEntries(defs).filter(([key]) => !key.startsWith('_'))
+        const sig = objectEntries(defs, tipSpec).filter(([key]) => !key.startsWith('_'))
           .map(([key, value]) => `"${key}: " + (${value.replaceAll('\\n', ' ')})`)
           .map((part, i) => (i > 0 ? part.replace(/^"/, '"; ') : part))
           .join(' + ')

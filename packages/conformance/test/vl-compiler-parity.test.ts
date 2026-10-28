@@ -486,6 +486,32 @@ const GROUPS: Record<string, Case[]> = {
     ['a wrapped faceted unit with align and bounds', { data: DATA, align: 'each', bounds: 'flush', mark: 'point', encoding: { x: q('x'), y: q('y'), facet: n('c', { columns: 2 }) } }],
     ['a faceted unit with a center', { data: DATA, center: true, mark: 'point', encoding: { x: q('x'), y: q('y'), column: n('c') } }],
   ],
+  // spec/base.ts extractCompositionLayout: config.concat / config.facet give compositions their default spacing and columns
+  'composition config (rect_mosaic_labelled, line_concat_facet)': [
+    ['config.concat.spacing on an hconcat', { data: DATA, config: { concat: { spacing: 60 } }, hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['config.concat.spacing under an own spacing', { data: DATA, config: { concat: { spacing: 60 } }, spacing: 5, hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['config.concat.columns on a concat', { data: DATA, config: { concat: { columns: 2, spacing: 10 } }, concat: [1, 2, 3].map((i) => ({ width: 60, height: 60, mark: 'point', encoding: { x: q('x'), y: q(i === 1 ? 'y' : 'v') } })) }],
+    ['config.concat.columns under a vconcat (one column all the same)', { data: DATA, config: { concat: { columns: 3 } }, vconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['config.concat.spacing on a repeat', { data: DATA, config: { concat: { spacing: 50 } }, repeat: ['y', 'v'], spec: { width: 80, height: 80, mark: 'point', encoding: { x: q('x'), y: { field: { repeat: 'repeat' }, type: 'quantitative' } } } }],
+    ['config.facet.spacing on a facet', { data: DATA, config: { facet: { spacing: 4 } }, facet: { row: n('g') }, spec: { width: 80, height: 60, mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['config.facet.spacing on a faceted unit', { data: DATA, config: { facet: { spacing: 4 } }, width: 80, height: 60, mark: 'point', encoding: { x: q('x'), y: q('y'), column: n('c') } }],
+    ['config.facet.columns on a wrapped facet', { data: DATA, config: { facet: { columns: 2 } }, facet: n('c'), spec: { width: 60, height: 60, mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['config.facet.columns does not apply to a row and column facet', { data: DATA, config: { facet: { columns: 2, spacing: 12 } }, facet: { row: n('g'), column: n('c') }, spec: { width: 60, height: 60, mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a partial facet spacing falls back to the config', { data: DATA, config: { facet: { spacing: 4 } }, spacing: { row: 30 }, facet: { row: n('g'), column: n('c') }, spec: { width: 60, height: 60, mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a faceted unit in an hconcat', { data: DATA, hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { width: 60, height: 40, mark: 'point', encoding: { x: q('x'), y: q('y'), row: n('g') } }] }],
+    ['a faceted unit with a column in a vconcat', { data: DATA, vconcat: [{ width: 60, height: 40, mark: 'point', encoding: { x: q('x'), y: q('y'), column: n('c') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a faceted unit with a title and layout in a concat', { data: DATA, hconcat: [{ title: 'Faceted', spacing: 3, width: 60, height: 40, mark: 'point', encoding: { x: q('x'), y: q('y'), row: n('g'), column: n('c') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a faceted unit as the spec of a repeat', { data: DATA, repeat: ['y', 'v'], spec: { width: 60, height: 40, mark: 'point', encoding: { x: q('x'), y: { field: { repeat: 'repeat' }, type: 'quantitative' }, row: n('g') } } }],
+    ['a facet nested in an hconcat under config.concat', { data: DATA, config: { concat: { spacing: 33 }, facet: { spacing: 2 } }, hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { width: 60, height: 40, mark: 'point', encoding: { x: q('x'), y: q('y'), row: n('g') } }] }],
+  ],
+  // axis/parse.ts mergeAxisComponent + common.ts mergeTitleComponent: a title written on an axis beats the titles derived from fields
+  'axis titles of layers (rect_mosaic_labelled)': [
+    ['an axis title in the second layer', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('v', { axis: { title: 'Cyl' } }) } }] }],
+    ['an axis title in the first layer', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y', { axis: { title: 'First' } }) } }, { mark: 'line', encoding: { x: q('x'), y: q('v') } }] }],
+    ['an axis title and a field title in two layers', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y', { title: 'Field' }) } }, { mark: 'line', encoding: { x: q('x'), y: q('v', { axis: { title: 'Axis' } }) } }] }],
+    ['two axis titles', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y', { axis: { title: 'One' } }) } }, { mark: 'line', encoding: { x: q('x'), y: q('v', { axis: { title: 'Two' } }) } }] }],
+    ['an axis title with a ranged layer', { data: DATA, layer: [{ mark: 'bar', encoding: { x: n('c'), y: q('y'), y2: { field: 'v' } } }, { mark: 'text', encoding: { x: n('c'), y: q('v', { axis: { title: 'Range' } }), text: n('c') } }] }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
@@ -628,4 +654,39 @@ describe('@aster/vl == vega-lite: a sequence is not cast', () => {
     const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
     expect(casts(ours)).toEqual(casts(oracle))
   })
+})
+
+// compile/mark/encode/tooltip.ts tooltipData: the tooltip's formats are the config's overlaid by config.tooltipFormat
+describe('@aster/vl == vega-lite: config.tooltipFormat', () => {
+  const tooltips = (vg: any): string[] => {
+    const out: string[] = []
+    const walk = (ms: any[]): void => { for (const m of ms ?? []) { if (m.encode?.update?.tooltip) out.push(JSON.stringify(m.encode.update.tooltip)); walk(m.marks) } }
+    walk(vg.marks)
+    return out
+  }
+  const base = { data: { values: [{ a: 1.23456, b: 2.5, t: '2020-03-04', c: 'k' }] } }
+  const CASES: Array<[string, Record<string, any>]> = [
+    ['a number format for the tooltips only', { ...base, config: { tooltipFormat: { numberFormat: '.8f' }, numberFormat: 'd' }, mark: { type: 'bar', tooltip: true }, encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'a', type: 'quantitative' } } }],
+    ['a time format for the tooltips only', { ...base, config: { tooltipFormat: { timeFormat: '%Y' }, timeFormat: '%d' }, mark: { type: 'point', tooltip: true }, encoding: { x: { field: 't', type: 'temporal' }, y: { field: 'b', type: 'quantitative' } } }],
+    ['a tooltip encoding with the tooltip format', { ...base, config: { tooltipFormat: { numberFormat: '.1f' } }, mark: 'point', encoding: { x: { field: 'a', type: 'quantitative' }, tooltip: [{ field: 'a', type: 'quantitative' }, { field: 'b', type: 'quantitative' }] } }],
+    ['a single tooltip field with the tooltip format', { ...base, config: { tooltipFormat: { numberFormat: '.3f' } }, mark: 'point', encoding: { x: { field: 'a', type: 'quantitative' }, tooltip: { field: 'b', type: 'quantitative' } } }],
+    ['a custom number format type for the tooltips', { ...base, config: { customFormatTypes: true, tooltipFormat: { numberFormat: '$', numberFormatType: 'price' } }, mark: { type: 'bar', tooltip: true }, encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'a', type: 'quantitative' } } }],
+    ['no tooltip format', { ...base, config: { numberFormat: '.2f' }, mark: { type: 'bar', tooltip: true }, encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'a', type: 'quantitative' } } }],
+  ]
+  // (the screen-reader description of a mark reads the same formats)
+  const descriptions = (vg: any): string[] => {
+    const out: string[] = []
+    const walk = (ms: any[]): void => { for (const m of ms ?? []) { if (m.encode?.update?.description) out.push(JSON.stringify(m.encode.update.description)); walk(m.marks) } }
+    walk(vg.marks)
+    return out
+  }
+  for (const [name, spec] of CASES) {
+    it(name, () => {
+      const oracle = (vl as any).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      expect(tooltips(oracle).length).toBeGreaterThan(0)
+      expect(tooltips(ours)).toEqual(tooltips(oracle))
+      expect(descriptions(ours)).toEqual(descriptions(oracle))
+    })
+  }
 })
