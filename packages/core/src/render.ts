@@ -78,15 +78,38 @@ const CURVE_MAP: Record<string, unknown> = {
   'step-before': curveStepBefore,
 }
 
+// vega-scenegraph path/shapes.js: the generators are built once; each call sets its curve (and digits) and runs it
+const itemX = (d: unknown): number => ((d as SceneItem).x as number) || 0
+const itemY = (d: unknown): number => ((d as SceneItem).y as number) || 0
+const itemXW = (d: unknown): number => (((d as SceneItem).x as number) || 0) + (((d as SceneItem).width as number) || 0)
+const itemYH = (d: unknown): number => (((d as SceneItem).y as number) || 0) + (((d as SceneItem).height as number) || 0)
+const itemDefined = (d: unknown): boolean => !((d as SceneItem).defined === false)
+const lineShape = d3Line().x(itemX).y(itemY).defined(itemDefined)
+const areaVShape = d3Area().x(itemX).y1(itemY).y0(itemYH).defined(itemDefined)
+const areaHShape = d3Area().y(itemY).x1(itemX).x0(itemXW).defined(itemDefined)
+
 /**
- * Resolve a Vega interpolation name to a d3-shape curve.
- * For "monotone" without axis qualifier, vega defaults to monotoneX (vertical).
+ * vega-scenegraph path/curves.js: the d3-shape curve named by an `interpolate` value (`monotone` follows the
+ * orientation; `bundle` / `cardinal*` / `catmull-rom*` take the tension as beta / tension / alpha). An absent
+ * or unknown name is the linear curve.
  */
-function resolveCurve(interpolate: string, orient?: string): unknown {
-  if (interpolate === 'monotone') {
-    return orient === 'horizontal' ? curveMonotoneY : curveMonotoneX
+function vegaCurve(interpolate: string | undefined, orient: string | undefined, tension: number | undefined): unknown {
+  const type = interpolate || 'linear'
+  let curve: unknown
+  if (type === 'monotone') curve = orient === 'horizontal' ? curveMonotoneY : curveMonotoneX
+  else if (Object.hasOwn(CURVE_MAP, type)) curve = CURVE_MAP[type]
+  else return curveLinear
+  if (tension != null) {
+    const cf = curve as Record<string, ((v: number) => unknown) | undefined>
+    const name = TENSION_PARAM[type]
+    if (name !== undefined && typeof cf[name] === 'function') curve = cf[name]!(tension)
   }
-  return Object.hasOwn(CURVE_MAP, interpolate) ? CURVE_MAP[interpolate] ?? null : null
+  return curve
+}
+const TENSION_PARAM: Record<string, string> = {
+  'bundle': 'beta',
+  'cardinal': 'tension', 'cardinal-open': 'tension', 'cardinal-closed': 'tension',
+  'catmull-rom': 'alpha', 'catmull-rom-open': 'alpha', 'catmull-rom-closed': 'alpha',
 }
 
 /** Vega-scenegraph's rounded-rect path (C = 0.448084975506 bezier circle). */
@@ -320,89 +343,12 @@ export function computeLinePath(group: SceneGroup, exact = false): {
   const items = itemsOf(group)
   if (!items.length) return null
 
-  // Check if this line has curve interpolation (Vega's `interpolate` encode)
+  // vega-scenegraph path/shapes.js: d3's line generator over the items, `x(item) = item.x || 0`, `y` likewise,
+  // `defined(item) = !(item.defined === false)`, the curve named by the first item's `interpolate` (a gap is
+  // the curve's own lineEnd / lineStart, not a closed sub-path)
   const firstItem = items[0] as Record<string, unknown> | undefined
-  const interpolate = firstItem?.interpolate as string | undefined
-  const orient = firstItem?.orient as string | undefined
-  const tension = firstItem?.tension as number | undefined
-
-  let path = ''
-  if (interpolate && interpolate !== 'linear') {
-    // Use d3-shape for curve interpolation
-    const curve = resolveCurve(interpolate, orient)
-    if (curve) {
-      let curveFn: unknown = curve
-      // Apply tension for curves that support it (bundle, cardinal, cardinal-open, cardinal-closed)
-      if (tension != null && curveFn) {
-        const cf = curveFn as Record<string, ((v: number) => unknown) | undefined>
-        if (interpolate === 'bundle' && typeof cf.beta === 'function') {
-          curveFn = cf.beta(tension)
-        } else if ((interpolate === 'cardinal' || interpolate === 'cardinal-open' || interpolate === 'cardinal-closed') && typeof cf.tension === 'function') {
-          curveFn = cf.tension(tension)
-        } else if ((interpolate === 'catmull-rom' || interpolate === 'catmull-rom-open' || interpolate === 'catmull-rom-closed') && typeof cf.alpha === 'function') {
-          curveFn = cf.alpha(tension)
-        }
-      }
-      type Pt = { x: number; y: number; defined: boolean }
-      const lineGen = d3Line().digits(digits)
-        .x((d) => (d as Pt).x)
-        .y((d) => (d as Pt).y)
-        .defined((d) => (d as Pt).defined)
-        .curve(curveFn as never)
-
-      // Build contiguous runs of defined points (same as linear path)
-      const runs: Array<{ x: number; y: number; defined: boolean }> = items.map((it) => ({
-        x: it.x as number,
-        y: it.y as number,
-        defined: it.defined !== false && it.x != null && it.y != null,
-      }))
-      // Split into segments at undefined points and generate curve per segment
-      const segments: Array<Array<{ x: number; y: number; defined: boolean }>> = []
-      let current: Array<{ x: number; y: number; defined: boolean }> = []
-      for (const r of runs) {
-        if (!r.defined) {
-          if (current.length > 1) segments.push(current)
-          current = []
-        } else {
-          current.push(r)
-        }
-      }
-      if (current.length > 1) segments.push(current)
-
-      for (const seg of segments) {
-        const d = lineGen(seg)
-        if (d) path += d
-      }
-    }
-  }
-
-  // Fallback: linear interpolation (or if curve failed)
-  if (!path) {
-    const runs: Array<{ x: number; y: number; defined: boolean }> = items.map((it) => ({
-      x: it.x as number,
-      y: it.y as number,
-      defined: it.defined !== false && it.x != null && it.y != null,
-    }))
-    let penDown = false
-    let hasLine = false
-    for (let i = 0; i < runs.length; i++) {
-      const r = runs[i]!
-      if (!r.defined) {
-        if (penDown) path += 'Z'
-        penDown = false
-        continue
-      }
-      if (!penDown) {
-        path += `M${n3(r.x)},${n3(r.y)}`
-        penDown = true
-      } else {
-        path += `L${n3(r.x)},${n3(r.y)}`
-        hasLine = true
-      }
-    }
-    // Vega appends Z for degenerate single-point line segments (only M, no L).
-    if (penDown && !hasLine) path += 'Z'
-  }
+  const curve = vegaCurve(firstItem?.interpolate as string | undefined, firstItem?.orient as string | undefined, firstItem?.tension as number | undefined)
+  const path = (lineShape.digits(digits).curve(curve as never)(items as never) ?? '') as string
 
   if (!path) return null
   const stroke = group.items?.[0]?.stroke as string | undefined
@@ -441,162 +387,12 @@ export function computeAreaPath(group: SceneGroup, exact = false): {
   const digits = exact ? null : 3
   const items = itemsOf(group)
 
-  // Check for curve interpolation (Vega's `interpolate` encode)
+  // vega-scenegraph path/shapes.js: d3's area generator, `x(item) = item.x || 0`, the baseline `y + height` (or, for a
+  // horizontal area, `x + width`), `defined(item) = !(item.defined === false)`, the curve named by the first item
   const firstItem = items[0] as Record<string, unknown> | undefined
-  const interpolate = firstItem?.interpolate as string | undefined
-  const orient = firstItem?.orient as string | undefined
-  const tension = firstItem?.tension as number | undefined
-  const isHorizontal = orient === 'horizontal'
-
-  // For horizontal areas: y is the independent axis, x/x2 are the value axes.
-  // For vertical areas (default): x is the independent axis, y/y2 are the value axes.
-  // Vega's area shape reads the baseline as y0 = y + height (d3-shape area
-  // y0 accessor `yh`), NOT the raw y2 — adjustSpatial folds x2/y2 into
-  // width/height, so the baseline follows the (possibly yc-shifted) y.
-  const pts: Array<{ pos: number; val: number; val2: number; defined: boolean }> = items.map((it) => ({
-    pos: isHorizontal ? (it.y as number) : (it.x as number),
-    val: isHorizontal ? (it.x as number) : (it.y as number),
-    val2: isHorizontal
-      // Horizontal areas use x/x2 (not y2); when neither x2 nor width exists the
-      // area degenerates to its value edge, exactly like vega's x0 accessor.
-      ? (it.x ?? 0) + ((it.width as number | undefined) ?? (((it.x2 as number) ?? (it.x ?? 0)) - (it.x ?? 0)))
-      : (it.y ?? 0) + ((it.height as number | undefined) ?? (((it.y2 as number) ?? (it.y ?? 0)) - (it.y ?? 0))),
-    defined: it.defined !== false && it.x != null && it.y != null,
-  }))
-
-  let path = ''
-  if (interpolate && interpolate !== 'linear') {
-    const curve = resolveCurve(interpolate, orient)
-    if (curve) {
-      let curveFn: unknown = curve
-      if (tension != null && curveFn) {
-        const cf = curveFn as Record<string, ((v: number) => unknown) | undefined>
-        if (interpolate === 'bundle' && typeof cf.beta === 'function') {
-          curveFn = cf.beta(tension)
-        } else if ((interpolate === 'cardinal' || interpolate === 'cardinal-open' || interpolate === 'cardinal-closed') && typeof cf.tension === 'function') {
-          curveFn = cf.tension(tension)
-        } else if ((interpolate === 'catmull-rom' || interpolate === 'catmull-rom-open' || interpolate === 'catmull-rom-closed') && typeof cf.alpha === 'function') {
-          curveFn = cf.alpha(tension)
-        }
-      }
-
-      if (isHorizontal) {
-        // Horizontal area: d3 area with y as the cross-axis, x0/x1 as value axes
-        type AreaPt = { y: number; x0: number; x1: number; defined: boolean }
-        const areaGen = d3Area().digits(digits)
-          .y((d: unknown) => (d as AreaPt).y)
-          .x0((d: unknown) => (d as AreaPt).x0)
-          .x1((d: unknown) => (d as AreaPt).x1)
-          .defined((d: unknown) => (d as AreaPt).defined)
-          .curve(curveFn as never)
-
-        const runs: Array<AreaPt> = pts.map((p) => ({
-          y: p.pos,
-          x0: p.val2,
-          x1: p.val,
-          defined: p.defined,
-        }))
-        const segments: Array<Array<AreaPt>> = []
-        let current: Array<AreaPt> = []
-        for (const r of runs) {
-          if (!r.defined) {
-            if (current.length > 1) segments.push(current)
-            current = []
-          } else {
-            current.push(r)
-          }
-        }
-        if (current.length > 1) segments.push(current)
-
-        for (const seg of segments) {
-          const d = areaGen(seg)
-          if (d) path += d
-        }
-      } else {
-        // Vertical area (default)
-        type AreaPt = { x: number; y0: number; y1: number; defined: boolean }
-        const areaGen = d3Area().digits(digits)
-          .x((d: unknown) => (d as AreaPt).x)
-          .y0((d: unknown) => (d as AreaPt).y0)
-          .y1((d: unknown) => (d as AreaPt).y1)
-          .defined((d: unknown) => (d as AreaPt).defined)
-          .curve(curveFn as never)
-
-        const runs: Array<AreaPt> = pts.map((p) => ({
-          x: p.pos,
-          y0: p.val2,
-          y1: p.val,
-          defined: p.defined,
-        }))
-        const segments: Array<Array<AreaPt>> = []
-        let current: Array<AreaPt> = []
-        for (const r of runs) {
-          if (!r.defined) {
-            if (current.length > 1) segments.push(current)
-            current = []
-          } else {
-            current.push(r)
-          }
-        }
-        if (current.length > 1) segments.push(current)
-
-        for (const seg of segments) {
-          const d = areaGen(seg)
-          if (d) path += d
-        }
-      }
-    }
-  }
-
-  // Fallback: linear interpolation (or if curve failed)
-  if (!path) {
-    let penDown = false
-    for (let i = 0; i < pts.length; i++) {
-      const p = pts[i]!
-      if (!p.defined) {
-        if (penDown) {
-          for (let j = i - 1; j >= 0; j--) {
-            const q = pts[j]!
-            if (!q.defined) break
-            if (isHorizontal) {
-              path += `L${n3(q.val2)},${n3(q.pos)}`
-            } else {
-              path += `L${n3(q.pos)},${n3(q.val2)}`
-            }
-          }
-          path += 'Z'
-          penDown = false
-        }
-        continue
-      }
-      if (!penDown) {
-        if (isHorizontal) {
-          path += `M${n3(p.val)},${n3(p.pos)}`
-        } else {
-          path += `M${n3(p.pos)},${n3(p.val)}`
-        }
-        penDown = true
-      } else {
-        if (isHorizontal) {
-          path += `L${n3(p.val)},${n3(p.pos)}`
-        } else {
-          path += `L${n3(p.pos)},${n3(p.val)}`
-        }
-      }
-    }
-    if (penDown) {
-      for (let j = pts.length - 1; j >= 0; j--) {
-        const q = pts[j]!
-        if (!q.defined) break
-        if (isHorizontal) {
-          path += `L${num(q.val2)},${num(q.pos)}`
-        } else {
-          path += `L${num(q.pos)},${num(q.val2)}`
-        }
-      }
-      path += 'Z'
-    }
-  }
+  const curve = vegaCurve(firstItem?.interpolate as string | undefined, firstItem?.orient as string | undefined, firstItem?.tension as number | undefined)
+  const shape = firstItem?.orient === 'horizontal' ? areaHShape : areaVShape
+  const path = (shape.digits(digits).curve(curve as never)(items as never) ?? '') as string
 
   if (!path) return null
   return {
