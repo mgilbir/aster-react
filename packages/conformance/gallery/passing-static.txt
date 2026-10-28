@@ -102,6 +102,11 @@ vl/bar_array_aggregate
 vl/bar_axis_orient
 vl/bar_axis_space_saving
 vl/bar_axis_title_quoted
+vl/bar_binned_data
+vl/bar_binned_yearmonth_grouped
+vl/bar_binned_yearmonth_grouped_center_band
+vl/bar_binned_yearmonth_label
+vl/bar_binnedyearmonth
 vl/bar_color_disabled_scale
 vl/bar_column_fold
 vl/bar_column_pivot
@@ -155,6 +160,7 @@ vl/bar_q_qpow
 vl/bar_qq_stack
 vl/bar_qq_stack_horizontal
 vl/bar_ranged_not_binned
+vl/bar_simple_binned_timeunit_special_chars
 vl/bar_simple_extent
 vl/bar_size_default
 vl/bar_size_explicit_bad
@@ -248,12 +254,14 @@ vl/histogram
 vl/histogram_bin_change
 vl/histogram_bin_spacing
 vl/histogram_bin_spacing_reverse
+vl/histogram_bin_transform
 vl/histogram_invalid_null
 vl/histogram_log
 vl/histogram_no_spacing
 vl/histogram_nonlinear
 vl/histogram_ordinal
 vl/histogram_ordinal_sort
+vl/histogram_rel_freq
 vl/histogram_reverse
 vl/interactive_area_brush
 vl/interactive_bar_select_highlight
@@ -301,10 +309,12 @@ vl/layer_bar_labels_style
 vl/layer_bar_line
 vl/layer_bar_line_union
 vl/layer_bar_month
+vl/layer_bar_tick_binned_time_band_position
 vl/layer_boxplot_circle
 vl/layer_candlestick
 vl/layer_circle_independent_color
 vl/layer_color_legend_left
+vl/layer_cumulative_histogram
 vl/layer_dual_axis
 vl/layer_falkensee
 vl/layer_histogram
@@ -391,6 +401,7 @@ vl/line_step
 vl/line_strokedash
 vl/line_timeunit_transform
 vl/lookup
+vl/nested_concat_align
 vl/param_expr
 vl/param_search_input
 vl/point_1d
@@ -431,6 +442,7 @@ vl/point_params
 vl/point_quantile_quantile
 vl/point_shape_custom
 vl/point_tooltip
+vl/rect_binned_heatmap
 vl/rect_heatmap
 vl/rect_heatmap_weather
 vl/rect_heatmap_weather_temporal_center_band
@@ -568,6 +580,7 @@ vl/tick_width_band
 vl/time_custom_step
 vl/time_output_utc_scale
 vl/time_output_utc_timeunit
+vl/time_parse_binnedutc_with_escaped_field
 vl/time_parse_local
 vl/time_parse_utc
 vl/time_parse_utc_format
@@ -592,6 +605,7 @@ vl/trellis_stacked_bar
 vl/vconcat_flatten
 vl/vconcat_weather
 vl/waterfall_chart
+vl/wheat_wages
 vl/window_cumulative_running_average
 vl/window_impute_null
 vl/window_rank
