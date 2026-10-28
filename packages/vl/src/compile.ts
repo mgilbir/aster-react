@@ -2750,8 +2750,8 @@ function checkConstChannels(mark: string, encoding: Record<string, unknown>, fil
     if (!isObject(def) || def.field !== undefined) continue
     const isDatum = def.datum !== undefined
     const isValue = def.value !== undefined && def.condition === undefined
-    if (isDatum && !['x', 'y', 'x2', 'y2', 'color', ...GEO_POSITION_CHANNELS].includes(ch)) {
-      throw new VLCompileError(`encoding.${ch}.datum is not supported (datum works on x, y, x2, y2, longitude, latitude and color)`)
+    if (isDatum && !['x', 'y', 'x2', 'y2', 'color', 'fill', 'stroke', ...GEO_POSITION_CHANNELS].includes(ch)) {
+      throw new VLCompileError(`encoding.${ch}.datum is not supported (datum works on x, y, x2, y2, longitude, latitude, color, fill and stroke)`)
     }
     if ((isDatum || isValue) && ['x', 'y', 'x2', 'y2'].includes(ch) && !pointLike) {
       throw new VLCompileError(`encoding.${ch}: a constant ${isDatum ? 'datum' : 'value'} position is not supported on the "${mark}" mark`)
@@ -4495,7 +4495,7 @@ function isStacked(def: FieldDef, mark: string, orient: string, allFields?: Fiel
     )
     const positional = new Set(['x', 'y', 'x2', 'y2', 'xOffset', 'yOffset', 'theta', 'radius', 'row', 'column', 'facet'])
     const stackBy = allFields.filter(
-      (f) => f.field && !positional.has(f.channel) && !f.aggregate && !groupFields.has(f.field),
+      (f) => f.field && !f.datumOnly && !positional.has(f.channel) && !f.aggregate && !groupFields.has(f.field),
     )
     if (allFields.some((f) => f.aggregate) && stackBy.length === 0) return false
     // (stack.ts: a ranged STACK field - its own secondary channel - never stacks; the other axis may be ranged)

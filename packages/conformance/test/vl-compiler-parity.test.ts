@@ -620,6 +620,14 @@ const GROUPS: Record<string, Case[]> = {
     ['a histogram and raw points', { data: DATA, layer: [{ mark: 'bar', encoding: { x: q('v', { bin: { maxbins: 4 } }), y: { aggregate: 'count' } } }, { mark: 'point', encoding: { x: q('v') } }] }],
     ['two histograms of different fields', { data: DATA, layer: [{ mark: 'bar', encoding: { x: q('v', { bin: true }), y: { aggregate: 'count' } } }, { mark: { type: 'bar', opacity: 0.4 }, encoding: { x: q('y', { bin: true }), y: { aggregate: 'count' } } }] }],
   ],
+  // channeldef.ts datum defs on the paint channels: a constant that the colour scale maps (line_color_halo)
+  'datums on fill and stroke (line_color_halo)': [
+    ['a line stroked by a datum', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('v'), stroke: { datum: 'series A', type: 'nominal' } } }],
+    ['a bar filled by a datum', { data: DATA, mark: { type: 'bar', filled: true }, encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), fill: { datum: 'Total', type: 'nominal' } } }],
+    ['lines of a repeated layer, each stroked by its field name', { data: DATA, repeat: { layer: ['x', 'y'] }, spec: { mark: 'line', encoding: { x: q('v'), y: { field: { repeat: 'layer' }, type: 'quantitative' }, stroke: { datum: { repeat: 'layer' }, type: 'nominal' } } } }],
+    ['a halo under coloured lines', { data: DATA, repeat: { layer: ['x', 'y'] }, spec: { layer: [{ mark: { type: 'line', stroke: 'white', strokeWidth: 4 }, encoding: { x: q('v'), y: { field: { repeat: 'layer' }, type: 'quantitative' } } }, { mark: 'line', encoding: { x: q('v'), y: { field: { repeat: 'layer' }, type: 'quantitative' }, stroke: { datum: { repeat: 'layer' }, type: 'nominal' } } }] } }],
+    ['two datums in two layers share the scale', { data: DATA, layer: [{ mark: 'line', encoding: { x: q('x'), y: q('y'), stroke: { datum: 'A', type: 'nominal' } } }, { mark: 'line', encoding: { x: q('x'), y: q('v'), stroke: { datum: 'B', type: 'nominal' } } }] }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({

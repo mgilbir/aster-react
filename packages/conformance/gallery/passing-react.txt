@@ -94,6 +94,7 @@ vl/bar_aggregate_sort_mean
 vl/bar_aggregate_transform
 vl/bar_aggregate_vertical
 vl/bar_argmax
+vl/bar_argmax_transform
 vl/bar_array_aggregate
 vl/bar_axis_orient
 vl/bar_axis_space_saving
@@ -314,6 +315,7 @@ vl/layer_cumulative_histogram
 vl/layer_dual_axis
 vl/layer_falkensee
 vl/layer_histogram
+vl/layer_histogram_global_mean
 vl/layer_line_co2_concentration
 vl/layer_line_color_rule
 vl/layer_line_datum_rule
@@ -336,6 +338,7 @@ vl/layer_point_errorbar_pre_aggregated_symmetric_error
 vl/layer_point_errorbar_pre_aggregated_upper_lower
 vl/layer_point_errorbar_stdev
 vl/layer_point_line_loess
+vl/layer_point_line_regression
 vl/layer_precipitation_mean
 vl/layer_ranged_dot
 vl/layer_rect_extent
@@ -343,6 +346,7 @@ vl/layer_scatter_errorband_1D_stdev_global_mean
 vl/layer_scatter_errorband_1d_stdev
 vl/layer_single_color
 vl/layer_text_heatmap
+vl/layer_text_heatmap_joinaggregate
 vl/layer_timeunit_rect
 vl/line
 vl/line_bump
