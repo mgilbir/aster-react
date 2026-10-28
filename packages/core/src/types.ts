@@ -160,6 +160,10 @@ export interface CompiledChart {
   frameStrokeDashOffset?: number
   frameStrokeCap?: string
   frameStrokeJoin?: string
+  /** `config.legend.layout` (defaults merged in): the legend grid's anchor, frame, offset, margin, direction, bounds, center, by orient. */
+  legendLayout?: Record<string, unknown>
+  /** The view's own `encode` (vega-parser parseView: the root group's encode), `enter` under `update`. */
+  frameEncode?: Record<string, EncodeValue | EncodeValue[]>
   data: CompiledData[]
   scales: CompiledScale[]
   axes: CompiledAxis[]
@@ -632,6 +636,9 @@ export interface SceneRoot {
    *  plot rect is carried separately rather than derived by subtraction. */
   plotWidth?: number
   plotHeight?: number
+  /** Where the root group sits inside the padding (the view `encode`'s x / y; default 0). */
+  frameX?: number
+  frameY?: number
   /** @internal The expression runtime for this evaluation (event-loop wiring). */
   runtime?: unknown
   /** @internal The compiled chart for this evaluation. */
@@ -667,6 +674,11 @@ export interface SceneRoot {
    * and evaluating a second time. Not serializable — stripped by worker clones.
    */
   __scaleMap?: Map<string, unknown>
+  /**
+   * @internal The rows each spec dataset ended with in this evaluation, and the names of the ones that never ran (see
+   * `datasetsOfScene`). Non-enumerable, so it is not part of the scene's structure; not serializable.
+   */
+  __datasets?: { rows: ReadonlyMap<string, readonly unknown[]>; failed: ReadonlySet<string> | undefined }
 }
 
 export interface SceneGroup extends SceneItem {
@@ -709,6 +721,8 @@ export interface SceneGroup extends SceneItem {
   scopeSignals?: { id: string; defs: CompiledSignalDef[]; values: Record<string, unknown>; /** false when the group holds no mark, axis, legend or title: vega then has no `context.group`, and `inScope` is false for every item */ hasContent: boolean }
   /** Group items of one mark carry the mark's index in its parent, so consecutive items of a mark share one container. */
   markIndex?: number
+  /** A group mark with no items: this node only stands for its (empty) container in the scene; it is no group item. */
+  emptyMark?: boolean
   /** The mark's `interactive: false` (its SVG container then has `pointer-events="none"`). */
   interactive?: boolean
   /** Some item of the mark may carry a `description` (its encode has the channel): the SVG container then scans its items for it. */

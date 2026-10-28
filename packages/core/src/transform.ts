@@ -179,6 +179,10 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
         return out
       })
     }
+    case 'crossfilter':
+      return requireTransform('crossfilter')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'resolvefilter':
+      return requireTransform('resolvefilter')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'kde':
       return requireTransform('kde')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'pie':
@@ -261,7 +265,9 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     case 'label':
       return labelRows(rows, t as Record<string, unknown>, ctx)
     case 'timeunit':
-      return timeunitRows(rows, t)
+      return timeunitRows(rows, t, (info) => {
+        if (t.signal) ctx.signals[t.signal as string] = info
+      })
     case 'identifier':
       return identifierRows(rows, t)
     case 'pivot':

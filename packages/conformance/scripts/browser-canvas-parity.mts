@@ -108,6 +108,43 @@ const synthetic: Entry[] = [
     },
   },
 ]
+// The arcs of a path string (a path mark, a custom symbol shape). vega's canvas draws them as the cubic beziers of path/arc.js
+// (segments of at most a quarter turn), not as canvas arcs; the jsdom record parity compares SVG arcs with canvas arcs and cannot
+// judge these, so they are compared here, in pixels against vega's canvas, and are not corpus specs.
+const PATH_ARCS: Array<[string, string]> = [
+  ['circ-small', 'M20,150 A100,100 0 0,1 180,150'],
+  ['circ-large', 'M20,150 A60,60 0 1,1 120,100'],
+  ['ellipse', 'M20,150 A120,50 0 0,1 280,150'],
+  ['ellipse-rotated', 'M60,160 A140,40 35 0,1 260,100'],
+  ['ellipse-large-sweep0', 'M60,160 A100,60 -20 1,0 260,120'],
+  ['scaled-radii', 'M20,100 A10,10 0 0,1 280,100'],
+  ['closed-pie', 'M150,150 L150,40 A110,110 0 1,1 60,215 Z'],
+]
+for (const [name, d] of PATH_ARCS) {
+  synthetic.push({
+    name: `canvas-path-arc-${name}`,
+    spec: {
+      $schema: 'https://vega.github.io/schema/vega/v6.json', width: 300, height: 300, padding: 5, autosize: 'none', background: 'white',
+      marks: [{ type: 'path', encode: { update: { path: { value: d }, stroke: { value: 'black' }, strokeWidth: { value: 10 }, fill: { value: 'rgba(255,100,0,0.4)' } } } }],
+    },
+  })
+}
+const CUSTOM_SHAPES: Array<[string, string]> = [
+  ['ring', 'M-1,0 A1,1 0 1,1 1,0 A1,1 0 1,1 -1,0 M0.5,0 A0.5,0.5 0 0,0 -0.5,0 Z'],
+  ['ellipse', 'M0,-1 A1.2,0.5 30 1,1 1,0.4 L0,1 Z'],
+]
+for (const [name, shape] of CUSTOM_SHAPES) {
+  synthetic.push({
+    name: `canvas-symbol-custom-arc-${name}`,
+    spec: {
+      $schema: 'https://vega.github.io/schema/vega/v6.json', width: 300, height: 200, padding: 5, autosize: 'none', background: 'white',
+      marks: [
+        { type: 'symbol', encode: { update: { x: { value: 100 }, y: { value: 100 }, size: { value: 9000 }, shape: { value: shape }, stroke: { value: 'black' }, strokeWidth: { value: 8 }, fill: { value: 'rgba(0,120,255,0.4)' } } } },
+        { type: 'symbol', encode: { update: { x: { value: 220 }, y: { value: 100 }, size: { value: 6000 }, shape: { value: shape }, angle: { value: 40 }, stroke: { value: 'black' }, strokeWidth: { value: 5 }, fill: { value: 'rgba(255,120,0,0.4)' } } } },
+      ],
+    },
+  })
+}
 const all = [...loadCorpus(), ...synthetic].filter((e) => !FILTER || e.name.includes(FILTER))
 const entries = all.filter((e) => !SKIP.has(e.name)).slice(0, LIMIT || undefined)
 const skippedNames = all.filter((e) => SKIP.has(e.name)).map((e) => e.name)

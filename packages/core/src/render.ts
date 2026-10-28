@@ -156,7 +156,7 @@ export function frameItem(scene: SceneRoot): SceneItem {
   return {
     fill: scene.frameFill || undefined,
     fillOpacity: scene.frameFillOpacity,
-    stroke: scene.frameStroke || undefined,
+    stroke: scene.frameStroke === 'transparent' ? undefined : scene.frameStroke ?? undefined,
     strokeOpacity: scene.frameStrokeOpacity,
     strokeWidth: scene.frameStrokeWidth,
     strokeCap: scene.frameStrokeCap,
@@ -182,7 +182,7 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   w.s = ''
   viewGroupAttrs(scene, w)
   out += `<g${w.s}>`
-  out += `<g class="mark-group role-frame root" role="graphics-object" aria-roledescription="group mark container"><g transform="translate(0,0)">`
+  out += `<g class="mark-group role-frame root" role="graphics-object" aria-roledescription="group mark container"><g transform="translate(${num(scene.frameX ?? 0)},${num(scene.frameY ?? 0)})">`
   const { plotW, plotH } = scenePlotSize(scene)
   w.s = ''
   frameAttrs(scene, w)
@@ -2033,7 +2033,7 @@ function groupContainer(run: SceneGroup[], frameW: number, frameH: number, scope
   const first = run[0]!
   // vega's mark-level `clip`: the container is clipped to the frame of the enclosing group
   const attrs = (w: AttrSink): void => groupContainerAttrs(first, w, first.markClip === true ? clips.id({ x: 0, y: 0, w: frameW, h: frameH }) : null, scope)
-  return el('g', attrs, run.map((g) => groupItem(g, frameW, frameH, scope, clips)))
+  return el('g', attrs, run.filter((g) => !flag(g, 'emptyMark')).map((g) => groupItem(g, frameW, frameH, scope, clips)))
 }
 
 function groupItem(g: SceneGroup, frameW: number, frameH: number, scope: GuideScope, clips: ClipCollector): SvgEl {

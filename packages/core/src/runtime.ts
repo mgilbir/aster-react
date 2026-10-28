@@ -52,7 +52,7 @@ import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateRows, fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import { trellisLayout } from './trellis.js'
-import { boundAxisGroup, boundGroupItem, boundLeaf, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
+import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
 import { buildAxis as buildAxisGuide, tickBand } from './guide-axis.js'
 import { buildTitle as buildTitleGuide } from './guide-title.js'
@@ -461,8 +461,14 @@ interface EvalContext {
   failedDatasets?: Set<string>
   /** a dataset's transform threw: the pass stopped before the scales, marks and guides (see buildDatasetsOf) */
   datasetAborted?: boolean
-  /** the declaration index of the first dataset whose transform threw: vega ranks its operators in declaration order (see buildDatasetsOf) */
+  /** the rank (see datasetRanksOf) of the first dataset whose transform threw: what is ranked after it never ran (see buildDatasetsOf) */
   failedFrom?: number
+  /** a signal ranked last threw: the pass's post-run work (the layout that grows the padding) did not happen */
+  postRunLost?: boolean
+  /** the pass stopped before the root group's size was encoded (a signal threw): the frame is 0 x 0 */
+  rootUnsized?: boolean
+  /** The error each signal's expression threw the last time it was evaluated (a later evaluation that succeeds clears it). */
+  signalErrors?: Map<string, unknown>
   /** The items of the named marks built so far (a mark may read another mark's items as its data: `from: {data: <mark name>}`). */
   markItems: Map<string, SceneItem[]>
 }
@@ -523,7 +529,8 @@ function prepareChartCtx(
   // update: ...}]`, without a top-level numeric height. It's resolved later by
   // resolveSignalUpdates, so apply the fallback after that (see below).
   let height = signed?.height ?? resolveSize(chart.height, viewOverride(chart, input, 'height'), signals)
-  const signalParams = dict<unknown>({ width, height }, signals)
+  // (`padding` is the view's own signal like `width` and `height`: the spec's padding, as vega-parser normalises it)
+  const signalParams = dict<unknown>({ width, height, padding: { ...chart.padding } }, signals)
   // A signal the spec declares without a value (it is written by a handler later) exists, with the value undefined
   // (vega-parser refuses a reference to a name that is no signal, not one that holds nothing yet)
   for (const def of chart.signalDefs ?? []) if (!(def.name in signalParams)) signalParams[def.name] = undefined
@@ -638,13 +645,14 @@ function prepareChartCtx(
   // it could never be incremental.
   for (let i = 0; i < 3 && resolveSignalUpdates(ctx, true); i++) { /* to a fixed point */ }
   buildDatasets(ctx, input.data ?? {})
+  const readsScales = datasetsReadScales(chart)
   let changed = true
   let rounds = 0
   while (changed && rounds < 3) {
     // (a map whose projection was consumed before the `geojson` signals it fits were published builds again)
     const geoStale = ctx.geoStale
     ctx.geoStale = false
-    changed = resolveSignalUpdates(ctx) || geoStale
+    changed = resolveSignalUpdates(ctx) || geoStale || (rounds === 0 && readsScales)
     buildScales(ctx)
     if (changed) {
       ctx.datasets.clear()
@@ -687,6 +695,10 @@ function prepareChartCtx(
     }
   }
   buildProjections(ctx)
+  // (a view size that is the signal that threw is the signal's value, none: 0)
+  const threw = abortAtThrowingSignal(ctx)
+  if (threw === 'width') { width = 0; ctx.width = 0 }
+  if (threw === 'height') { height = 0; ctx.height = 0 }
 
   // The final context fingerprint: the next evaluation compares its own
   // (scale, mark) inputs against this to decide whether reuse is valid.
@@ -864,6 +876,56 @@ const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspa
  *
  * `staticOnly` resolves just the signals that do not read datasets or scales.
  */
+/** Whether a view signal calls a function that reads data or a scale, or reads a signal that does. */
+function signalReadsDataflow(chart: CompiledChart, defs: ReadonlyMap<string, number>, name: string, seen: Set<string>): boolean {
+  if (seen.has(name)) return false
+  seen.add(name)
+  const i = defs.get(name)
+  if (i === undefined) return false
+  const d = chart.signalDefs![i]!
+  for (const text of [d.update, d.init]) {
+    if (typeof text !== 'string') continue
+    for (const id of expressionIdentifiers(text)) {
+      if (DATAFLOW_FUNCTIONS.has(id) || (defs.has(id) && signalReadsDataflow(chart, defs, id, seen))) return true
+    }
+  }
+  return false
+}
+
+/**
+ * vega runs its signals first, in declaration order, and a signal whose expression throws stops the whole pass: it is logged,
+ * the signals after it never get a value and nothing ranked after the signals runs -- every dataset, scale, mark and guide.
+ * Resolving signals in rounds, a throw is first "a dependency is not there yet"; the one that is still thrown when the last
+ * round has run is a throw -- unless it reads data or a scale (or a signal that does): that is settled only with them, and a
+ * throw there is not told from a dependency that is missing; such a signal is left as it was. One that reads a signal declared
+ * after it is ranked after the datasets (vega re-ranks it past everything): they and the marks ran.
+ */
+function abortAtThrowingSignal(ctx: EvalContext): string | undefined {
+  const errors = ctx.signalErrors
+  if (!errors?.size) return undefined
+  const defs = ctx.chart.signalDefs ?? []
+  const index = new Map<string, number>()
+  defs.forEach((d, i) => { if (!index.has(d.name)) index.set(d.name, i) })
+  for (const def of defs) {
+    if (!errors.has(def.name) || ctx.hostSignals.has(def.name)) continue
+    // (one that reads data or a scale is settled only once they are built, with the signals they feed: not told from a throw)
+    if (signalReadsDataflow(ctx.chart, index, def.name, new Set())) continue
+    reportEvalError(ctx, errors.get(def.name))
+    // (a signal ranked after the datasets throws after them: they and the marks ran, and only the pass's post-run work, the
+    // layout that grows the padding, is lost: see the padding of evaluateChartImpl)
+    if (signalIsLate(ctx.chart, index, def.name, new Set())) { ctx.postRunLost = true; return undefined }
+    ctx.rootUnsized = true
+    for (const d of ctx.chart.data) {
+      ;(ctx.failedDatasets ??= new Set()).add(d.name)
+      ctx.datasets.set(d.name, [])
+      ctx.datasetPulses.set(d.name, null)
+    }
+    ctx.encodeAborted = ctx.datasetAborted = true
+    return def.name
+  }
+  return undefined
+}
+
 function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
   const defs = ctx.chart.signalDefs
   if (!defs?.length) return false
@@ -885,13 +947,16 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
       // `domain('x')` of a scale that is not there yet is `[]`, which is not the value vega's dataflow computes.
       const readsScales = DATA_DEPENDENT_EXPR.test(expr) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
       if (initPending && value !== undefined && !readsScales) ctx.initDone.add(def.name)
+      ctx.signalErrors?.delete(def.name)
       if (value !== undefined && !valuesEqual(value, ctx.signalParams[def.name])) {
         ctx.signalParams[def.name] = value
         ctx.fpMemo = undefined
         changed = true
       }
-    } catch {
-      // Unresolved dependency this round; keep previous value.
+    } catch (e) {
+      // Unresolved dependency this round; keep previous value. (What is still thrown once everything the expression can
+      // read exists is a throw, not a dependency that is missing: see abortAtThrowingSignal.)
+      ;(ctx.signalErrors ??= new Map()).set(def.name, e)
     }
   }
   return changed
@@ -1087,16 +1152,43 @@ function buildAxisAndLegend(
       if (ctx.rawGuides) continue
       if (typeof process !== 'undefined' && process.env.ASTER_DEBUG_LEG) console.error('[leg]', orient, 'xb', JSON.stringify(xb), 'yb', JSON.stringify(yb), 'W', ctx.width, 'H', ctx.height)
       const n = list.length
-      // columns: vertical direction (left/right) stacks in one column; the
-      // horizontal default lays all legends out in one row.
-      const ncols = orient === 'left' || orient === 'right' ? 1 : n
+      // legendParams (vega-view-transforms layout/legend.js): `config.legend.layout`, the orient's own block over the general one
+      const layoutCfg = (ctx.chart.legendLayout ?? {}) as Record<string, unknown>
+      const orientCfg = (layoutCfg[orient] ?? {}) as Record<string, unknown>
+      const cfgOf = (key: string, d?: unknown): unknown => (orientCfg[key] != null ? orientCfg[key] : layoutCfg[key] != null ? layoutCfg[key] : d)
+      // if legends specify an offset directly, the maximum is used
+      let specOffset: number | undefined = undefined
+      for (const x of list) {
+        const o = x.props.offset
+        if (typeof o === 'number') specOffset = specOffset === undefined ? o : Math.max(specOffset, o)
+      }
+      const offset = specOffset ?? (cfgOf('offset', 0) as number)
+      const anchor = cfgOf('anchor', 'start')
+      const frame = cfgOf('frame', 'group')
+      const mult = anchor === 'end' ? 1 : anchor === 'middle' ? 0.5 : 0
+      const W = layoutW
+      const H = layoutH
+      const ax = frame === 'bounds' ? xb.x1 + mult * (xb.x2 - xb.x1) : mult * (W || (yb.x2 - yb.x1) + 2 * yb.x1)
+      const ay = frame === 'bounds' ? yb.y1 + mult * (yb.y2 - yb.y1) : mult * (H || (xb.y2 - xb.y1) + 2 * xb.y1)
+      const margin = cfgOf('margin', 8) as number
+      const full = cfgOf('bounds', 'flush') !== 'flush'
+      const center = cfgOf('center')
+      const centerOf = (key: 'column' | 'row'): unknown => {
+        const v = center !== null && typeof center === 'object' ? (center as Record<string, unknown>)[key] : center
+        return v != null ? v : 0
+      }
+      // gridLayout: one column when the direction is vertical, else a row; align `each`
+      const ncols = cfgOf('direction') === 'vertical' ? 1 : n
       const nrows = Math.max(1, Math.ceil(n / ncols))
-      // flush boxes: legendLayout zeroes x/y and sizes the legend to
-      // ceil(childBounds + 2*padding) — our group.width/height.
-      // (vega's flush bounds read `item.width || 0`: a NaN size is none)
-      const boxes = list.map((x) => ({ x1: 0, y1: 0, x2: x.group.width || 0, y2: x.group.height || 0 }))
-      const xOffset = boxes.map((b) => 8 + (b.x1 < 0 ? Math.ceil(-b.x1) : 0))
-      const yOffset = boxes.map((b) => 8 + (b.y1 < 0 ? Math.ceil(-b.y1) : 0))
+      // the boxes: the flush ones (legendLayout sized each legend to ceil(childBounds + 2*padding): our group.width / height), or
+      // the legend's own bounds relative to its origin
+      const boxes = list.map((x) => {
+        if (!full) return { x1: 0, y1: 0, x2: x.group.width || 0, y2: x.group.height || 0 }
+        const lb = boundLegendGroup(x.group)
+        return lb.empty() ? { x1: 0, y1: 0, x2: 0, y2: 0 } : { x1: lb.x1 - (x.group.x || 0), y1: lb.y1 - (x.group.y || 0), x2: lb.x2 - (x.group.x || 0), y2: lb.y2 - (x.group.y || 0) }
+      })
+      const xOffset = boxes.map((b) => margin + (b.x1 < 0 ? Math.ceil(-b.x1) : 0))
+      const yOffset = boxes.map((b) => margin + (b.y1 < 0 ? Math.ceil(-b.y1) : 0))
       const xExtent = Array<number>(ncols).fill(0)
       const yExtent = Array<number>(nrows).fill(0)
       boxes.forEach((b, i) => {
@@ -1134,7 +1226,20 @@ function buildAxisAndLegend(
           dy[i] = y
         }
       }
-      // laid-out block bounds (flush boxes translated by dx/dy)
+      // centering (the legends are at x = y = 0 here)
+      if (centerOf('column') && nrows > 1) {
+        for (let i = 0; i < n; i++) {
+          const x = xExtent[i % ncols]! - boxes[i]!.x2 - dx[i]!
+          if (x > 0) dx[i]! += x / 2
+        }
+      }
+      if (centerOf('row') && ncols !== 1) {
+        for (let i = 0; i < n; i++) {
+          const y = yExtent[~~(i / ncols)]! - boxes[i]!.y2 - dy[i]!
+          if (y > 0) dy[i]! += y / 2
+        }
+      }
+      // laid-out block bounds (the boxes translated by dx/dy)
       let bx1 = Infinity, by1 = Infinity, bx2 = -Infinity, by2 = -Infinity
       boxes.forEach((b, i) => {
         bx1 = Math.min(bx1, b.x1 + dx[i]!)
@@ -1145,83 +1250,32 @@ function buildAxisAndLegend(
       const bw = bx2 - bx1
       const bh = by2 - by1
 
-      // anchor: offset = the legends' own offset (max) else the config
-      // default 18; anchor = start/middle/end (default start).
-      let specOffset: number | undefined = undefined
-      for (const x of list) {
-        const o = x.props.offset
-        if (typeof o === 'number') specOffset = specOffset === undefined ? o : Math.max(specOffset, o)
-      }
-      const offset = specOffset ?? 18
-      const anchor = (list[0]!.legend as { anchor?: unknown }).anchor
-      const aEnd = anchor === 'end'
-      const aMiddle = anchor === 'middle'
-      const mult = aEnd ? 1 : aMiddle ? 0.5 : 0
-      const W = layoutW
-      const H = layoutH
+      // the anchor of the grid: where it sits, and which of its edges that point is
       let x: number
       let y: number
-      let colEnd = false
-      let rowEnd = false
+      let column: unknown = 'start'
+      let row: unknown = 'start'
       switch (orient) {
-        case 'left':
-          x = Math.floor(xb.x1) - offset
-          y = mult * H
-          colEnd = true
-          rowEnd = aEnd
-          break
-        case 'right':
-          x = Math.ceil(xb.x2) + offset
-          y = mult * H
-          rowEnd = aEnd
-          break
-        case 'top':
-          x = mult * W
-          y = Math.floor(yb.y1) - offset
-          colEnd = aEnd
-          rowEnd = true
-          break
-        case 'bottom':
-          x = mult * W
-          y = Math.ceil(yb.y2) + offset
-          colEnd = aEnd
-          break
-        case 'top-left':
-          x = offset
-          y = offset
-          break
-        case 'top-right':
-          x = W - offset
-          y = offset
-          colEnd = true
-          break
-        case 'bottom-left':
-          x = offset
-          y = H - offset
-          rowEnd = true
-          break
-        case 'bottom-right':
-          x = W - offset
-          y = H - offset
-          colEnd = true
-          rowEnd = true
-          break
-        default:
-          x = Math.ceil(xb.x2) + offset
-          y = mult * H
-          rowEnd = aEnd
-          break
+        case 'left': x = Math.floor(xb.x1) - offset; column = 'end'; y = ay; row = anchor; break
+        case 'right': x = Math.ceil(xb.x2) + offset; y = ay; row = anchor; break
+        case 'top': y = Math.floor(yb.y1) - offset; row = 'end'; x = ax; column = anchor; break
+        case 'bottom': y = Math.ceil(yb.y2) + offset; x = ax; column = anchor; break
+        case 'top-left': x = offset; y = offset; break
+        case 'top-right': x = W - offset; y = offset; column = 'end'; break
+        case 'bottom-left': x = offset; y = H - offset; row = 'end'; break
+        case 'bottom-right': x = W - offset; y = H - offset; column = 'end'; row = 'end'; break
+        default: x = Math.ceil(xb.x2) + offset; y = ay; row = anchor; break
       }
-      if (colEnd) x -= bw
-      if (rowEnd) y -= bh
-      void aMiddle
+      if (column === 'end') x -= bw
+      else if (column === 'middle') x -= bw / 2
+      if (row === 'end') y -= bh
+      else if (row === 'middle') y -= bh / 2
       x = Math.round(x)
       y = Math.round(y)
       list.forEach((x1, i) => {
         x1.group.x = x + dx[i]!
         x1.group.y = y + dy[i]!
       })
-      void aMiddle
     }
 
     for (const x of built) groups.push(x.group)
@@ -1302,6 +1356,23 @@ function computeGuidePadding(
   }
 }
 
+
+/**
+ * The view's own `encode` (vega-parser parseView: the root group mark's encode): `x` / `y` place the root group inside the padding,
+ * the paint channels paint its box over what `config.view` gave it.
+ */
+function frameEncodeOf(ctx: EvalContext): FrameEncode | undefined {
+  const geo = resolveEncodeSet(ctx.chart.frameEncode!, {}, ctx, 'group') as unknown as Record<string, unknown>
+  const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+  const paint: Record<string, unknown> = {}
+  const PAINT: Array<[string, string]> = [
+    ['fill', 'frameFill'], ['stroke', 'frameStroke'], ['strokeWidth', 'frameStrokeWidth'], ['fillOpacity', 'frameFillOpacity'], ['opacity', 'frameOpacity'],
+    ['strokeDash', 'frameStrokeDash'], ['strokeOpacity', 'frameStrokeOpacity'], ['strokeMiterLimit', 'frameStrokeMiterLimit'],
+    ['strokeDashOffset', 'frameStrokeDashOffset'], ['strokeCap', 'frameStrokeCap'], ['strokeJoin', 'frameStrokeJoin'], ['cornerRadius', 'frameCornerRadius'], ['clip', 'frameClip'],
+  ]
+  for (const [from, to] of PAINT) if (geo[from] !== undefined) paint[to] = geo[from]
+  return { x: num(geo.x) ?? 0, y: num(geo.y) ?? 0, paint: paint as Partial<SceneRoot> }
+}
 
 /** Walk every string reachable in a JSON-ish value (cycle-safe). */
 function walkStrings(
@@ -1436,6 +1507,61 @@ function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
   return out
 }
 
+const READS_SCALES = new WeakMap<CompiledChart, boolean>()
+
+/**
+ * Whether some dataset's transforms read a scale (`domain('x')`, `scale('x', v)`): vega ranks such an operator after the scale,
+ * so it sees the scale as built; the datasets are built before the scales here, and once more after them.
+ */
+function datasetsReadScales(chart: CompiledChart): boolean {
+  let out = READS_SCALES.get(chart)
+  if (out === undefined) {
+    out = false
+    for (const d of chart.data) walkStrings(d.transform, (str) => { if (SCALE_FN_EXPR.test(str)) out = true })
+    READS_SCALES.set(chart, out)
+  }
+  return out
+}
+
+const DATASET_RANKS = new WeakMap<CompiledChart, { rank: Map<string, number>; order: string[] }>()
+
+/**
+ * The order vega's dataflow runs the datasets in, and so what a throw stops: operators are ranked in declaration order, and an
+ * operator that reads one ranked after it (its source, a dataset a transform names, the writer of a signal it reads) is
+ * re-ranked past everything ranked so far, with everything that reads it (vega-dataflow `connect` / `rerank`, in the order
+ * vega-runtime connects the parameters). A pass that hits a throwing operator stops: only what is ranked before it has run.
+ * At the grain of a dataset: its operators are taken as one (a dataset whose later transform alone reads a forward signal is
+ * ranked as a whole).
+ */
+function datasetRanksOf(chart: CompiledChart): { rank: Map<string, number>; order: string[] } {
+  let out = DATASET_RANKS.get(chart)
+  if (out) return out
+  const names = chart.data.map((d) => d.name)
+  const n = names.length
+  const rank = new Map<string, number>(names.map((nm, i) => [nm, i + 1] as const))
+  const targets = new Map<string, string[]>()
+  const deps = datasetDepsOf(chart)
+  const prereqs = signalPrereqsOf(chart)
+  let counter = n
+  for (const name of names) {
+    const reads = [...(deps.get(name)?.names ?? []), ...(prereqs.get(name) ?? [])].filter((m) => rank.has(m) && m !== name)
+    for (const m of reads) { const t = targets.get(m); if (t) t.push(name); else targets.set(m, [name]) }
+    if (!reads.some((m) => rank.get(m)! > rank.get(name)!)) continue
+    // rerank(name): the operator and, depth first, everything connected to read it
+    const queue = [name]
+    // (vega throws on a cycle; here a cycle is reported where the build meets it, so the walk is only bounded)
+    for (let pops = 0; queue.length && pops < 4 * n * n + 16; pops++) {
+      const cur = queue.pop()!
+      rank.set(cur, ++counter)
+      const list = targets.get(cur)
+      if (list) for (let i = list.length; --i >= 0;) queue.push(list[i]!)
+    }
+  }
+  out = { rank, order: [...names].sort((a, b) => rank.get(a)! - rank.get(b)!) }
+  DATASET_RANKS.set(chart, out)
+  return out
+}
+
 /**
  * The set of datasets affected by a change, closed transitively over every way a
  * dataset depends on another: a `source` chain, a transform naming another
@@ -1545,7 +1671,10 @@ function paintOrderOf(items: SceneGroup[]): SceneGroup[] {
  * autosize padding at a given content size. Extracted from evaluateChart so
  * `fit`/`fit-x`/`fit-y` can re-run at a shrinking content size and converge.
  */
-type BuiltContent = { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean }
+type BuiltContent = { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean; frame: FrameEncode | undefined }
+
+/** What the view's own `encode` gives the root group: where it sits, and the paint of its box (see frameEncodeOf). */
+interface FrameEncode { x: number; y: number; paint: Partial<SceneRoot> }
 
 /**
  * The content of the view. A failing axis (axisTicksFailed) aborts vega's dataflow pass at the operator that failed: the
@@ -1576,7 +1705,7 @@ function buildContentPass(
   fitted = false,
   signed?: { width?: number; height?: number },
   cut?: AxisAbort['cut'],
-): { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean } {
+): BuiltContent {
   const prepared = prepareChartCtx(
     // (the first build reads the size from the spec and the host's input itself; only a fit-resize overrides it)
     chart, fitted ? { ...input, width: cw, height: ch } : input, txn,
@@ -1637,11 +1766,14 @@ function buildContentPass(
     : buildAxisAndLegend(ctx, items)
   for (const g of guideGroups) items.push(g)
 
-  // Top-level title.
-  const titleGroup = stopped ? null : buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx)
+  // Top-level title. (A pass that stopped at a failing dataset or signal never made it: it is ranked after them.)
+  const titleGroup = stopped || ctx.datasetAborted ? null : buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx)
   if (titleGroup) items.push(titleGroup)
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
+
+  // (the view's bounds are those of the root's content relative to its origin: where the root sits does not move them)
+  const frame = ctx.chart.frameEncode !== undefined && !ctx.datasetAborted ? frameEncodeOf(ctx) : undefined
 
   // 2d) viewSizeLayout padding (overflow) after the trellis layout.
   // A trellis layout that throws (vega's gridLayout does on e.g. fractional
@@ -1655,12 +1787,13 @@ function buildContentPass(
   // (a scale or an encode that threw stopped vega's run before its ViewLayout: no overflow growth)
   const padding = ctx.layoutState.failed
     || ctx.encodeAborted === true
+    || ctx.postRunLost === true
     || ctx.rawGuides
     || ctx.chart.autosize === 'none'
     ? ctx.chart.padding
     : computeGuidePadding(items, width, height, ctx.chart.padding)
   const ordered = paintOrderOf(items)
-  return { items: ordered, padding, ctx, width, height, hasLayout }
+  return { items: ordered, padding, ctx, width, height, hasLayout, frame }
 }
 
 /**
@@ -1720,11 +1853,13 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
     ? buildContent(chart, input, signedW ?? initialW, signedH ?? initialH, txn, false, { width: signedW, height: signedH }).padding
     : undefined
 
-  // `fit`/`fit-x`/`fit-y` shrink the *content* to fit a fixed viewport, then
-  // vega re-runs layout (resizeView) so scales are rebuilt at the fitted size.
-  // Reproduce that by iterating the content size to a fixed point.
+  // `fit`/`fit-x`/`fit-y` shrink the *content* to fit a fixed viewport: viewSizeLayout measures the overflow of the first pass
+  // (once: the pass after it sets the width signal with the resize skipped, so the layout does not run again), and the content is
+  // built again at the fitted size. The view keeps the padding the first pass found; what the second pass overflows by is not
+  // looked at (a title anchored to the bounds, or any overflow that depends on the width, ends up wherever it ends up).
   let cw = initialW
   let ch = initialH
+  let firstPassPadding: BuiltContent['padding'] | undefined
   let built: BuiltContent
   if (auto === 'none' && chart.autosizeContains === 'padding') {
     // autosize `none` with `contains: "padding"`: the view's width / height INCLUDE the padding, so the group (the
@@ -1744,7 +1879,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
       initialW = cw = built.ctx.width
       initialH = ch = built.ctx.height
     }
-    for (let i = 0; i < 5; i++) {
+    {
       const oL = built.padding.left - base.left
       const oR = built.padding.right - base.right
       const oT = built.padding.top - base.top
@@ -1760,34 +1895,46 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
       if (auto === 'fit') { nw = Math.max(0, initialW - padW - oL - oR); nh = Math.max(0, initialH - padH - oT - oB) }
       else if (auto === 'fit-x') { nw = Math.max(0, initialW - padW - oL - oR); nh = ch }
       else { nw = cw; nh = Math.max(0, initialH - padH - oT - oB) }
-      if (nw === cw && nh === ch) break
-      cw = nw
-      ch = nh
-      built = buildContent(chart, { ...input, changedDatasets: undefined }, cw, ch, txn, true)
+      if (nw !== cw || nh !== ch) {
+        firstPassPadding = built.padding
+        cw = nw
+        ch = nh
+        built = buildContent(chart, { ...input, changedDatasets: undefined }, cw, ch, txn, true)
+      }
     }
   }
   const { ctx, width, height } = built
   const items = built.items
-  const padding = signedPadding ?? built.padding
+  const padding = signedPadding ?? firstPassPadding ?? built.padding
 
   // 3) Build the scene: the document is the view's width / height signals plus the
   // padding (autosize pad grows it by what overflows). A composition's root group is
   // 0 x 0 (vega: no `width` signal value), so only its padding and overflow remain.
-  const sceneWidth = ctx.chart.autosize !== 'none'
-    ? width + padding.left + padding.right
-    : width + ctx.chart.padding.left + ctx.chart.padding.right
-  const sceneHeight = ctx.chart.autosize !== 'none'
-    ? height + padding.top + padding.bottom
-    : height + ctx.chart.padding.top + ctx.chart.padding.bottom
+  // (a fitted dimension is the viewport as the spec gave it -- plus its padding unless the size contains it -- even when the overflow
+  // is wider than the viewport and the content is squeezed to nothing)
+  const fitW = (auto === 'fit' || auto === 'fit-x') && firstPassPadding !== undefined
+  const fitH = (auto === 'fit' || auto === 'fit-y') && firstPassPadding !== undefined
+  const contains = chart.autosizeContains === 'padding'
+  const sceneWidth = fitW
+    ? initialW + (contains ? 0 : base.left + base.right)
+    : ctx.chart.autosize !== 'none'
+      ? width + padding.left + padding.right
+      : width + ctx.chart.padding.left + ctx.chart.padding.right
+  const sceneHeight = fitH
+    ? initialH + (contains ? 0 : base.top + base.bottom)
+    : ctx.chart.autosize !== 'none'
+      ? height + padding.top + padding.bottom
+      : height + ctx.chart.padding.top + ctx.chart.padding.bottom
 
   const scene: SceneRoot = {
     width: sceneWidth,
     height: sceneHeight,
     // the frame background is the root group's own box: the view's width x height
     // (a composition's is the degenerate M0,0h0v0h0Z)
-    plotWidth: width,
-    plotHeight: height,
-    background: ctx.chart.background,
+    plotWidth: ctx.rootUnsized ? 0 : width,
+    plotHeight: ctx.rootUnsized ? 0 : height,
+    // (`background` is a view signal: a spec that declares one sets the background through it; one with no value leaves the spec's)
+    background: ctx.signalParams.background !== undefined && (chart.signalDefs ?? []).some((d) => d.name === 'background') ? (ctx.signalParams.background as string | null) : ctx.chart.background,
     frameStroke: ctx.chart.frameStroke,
     frameFill: (ctx.chart as unknown as { frameFill?: string }).frameFill,
     frameStrokeWidth: (ctx.chart as unknown as { frameStrokeWidth?: number }).frameStrokeWidth,
@@ -1803,6 +1950,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
     frameStrokeJoin: ctx.chart.frameStrokeJoin,
     padding: ctx.chart.autosize === 'none' ? ctx.chart.padding : padding,
     items,
+    ...(built.frame ? { ...built.frame.paint, ...(built.frame.x !== 0 ? { frameX: built.frame.x } : {}), ...(built.frame.y !== 0 ? { frameY: built.frame.y } : {}) } : {}),
   }
   // Event-loop wiring (non-serialized internals)
   ;(scene as unknown as { runtime?: unknown }).runtime = ctx.runtime
@@ -1811,6 +1959,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
   ;(scene as unknown as { __itemGen?: number }).__itemGen = txn.gen
   ;(scene as unknown as { __scales?: unknown }).__scales = snapshotScales(ctx.scales)
   ;(scene as unknown as { __scaleMap?: unknown }).__scaleMap = ctx.scales
+  Object.defineProperty(scene, '__datasets', { value: { rows: ctx.datasets, failed: ctx.failedDatasets }, enumerable: false, configurable: true })
   if (ctx._defs.length) scene.defs = ctx._defs
   // The state the next incremental evaluation starts from; committed by the
   // caller once the scene is accepted.
@@ -1840,6 +1989,20 @@ export function chartInfoFromScene(scene: SceneRoot): ChartInfo {
     // Reconstruct from the live map when a scene came from a worker/SSR clone.
     scales: scales ?? new Map(),
   }
+}
+
+/**
+ * The rows each of the spec's datasets ended with in the evaluation that made `scene` (vega's `view.data(name)`), read-only:
+ * the same arrays the marks and scales read. A dataset that never ran -- a transform of its own threw, or it is ranked after the
+ * one that did (see `buildDatasetsOf`) -- is `null`, as in vega, where its output was never produced. Empty for a scene that did
+ * not come from this runtime (a clone, a worker).
+ */
+export function datasetsOfScene(scene: SceneRoot): ReadonlyMap<string, readonly unknown[] | null> {
+  const made = scene.__datasets
+  if (!made) return new Map()
+  const out = new Map<string, readonly unknown[] | null>()
+  for (const [name, rows] of made.rows) out.set(name, made.failed?.has(name) ? null : rows)
+  return out
 }
 
 /**
@@ -2642,7 +2805,8 @@ function rowLocal(t: CompiledTransform, tctx: StepTransformContext): boolean {
       return !DATA_DEPENDENT_EXPR.test((t as { expr?: string }).expr ?? '')
     case 'timeunit':
       // without explicit units vega bins the data extent (global); inferUnits looks at every row
-      return (t as { units?: unknown }).units != null && !(t as { inferUnits?: unknown }).inferUnits && (t as { extent?: unknown }).extent === undefined
+      // (a `signal` output is a side effect a skipped re-run would lose, and covers every row)
+      return (t as { units?: unknown }).units != null && !(t as { inferUnits?: unknown }).inferUnits && (t as { extent?: unknown }).extent === undefined && !(t as { signal?: unknown }).signal
     case 'geoshape': case 'geopath': case 'geopoint':
       // a projection that fits data moves with the data: a derived x/y or path is only valid for the fit it was made under
       return !(tctx.projections as ProjectionRegistry | undefined)?.fitNames?.has(String((t as { projection?: unknown }).projection))
@@ -2934,7 +3098,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
   ctx.failedFrom = undefined
   const sources = new Map<string, CompiledChart['data'][number]>()
   for (const d of ctx.chart.data) sources.set(d.name, d)
-  const declIndex = new Map(ctx.chart.data.map((d, i) => [d.name, i] as const))
+  const { rank: dsRank, order: dsOrder } = datasetRanksOf(ctx.chart)
   // The params this build pass runs under: cached pipeline state is only valid
   // for the identical context (any signal/size/override change re-derives).
   const passFp = ctxFpOf(ctx)
@@ -2952,7 +3116,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     }
     if (seen.has(name)) throw new Error(`[aster] circular data reference: ${name}`)
     seen.add(name)
-    if (ctx.failedFrom !== undefined && declIndex.get(name)! > ctx.failedFrom) {
+    if (ctx.failedFrom !== undefined && dsRank.get(name)! > ctx.failedFrom) {
       // ranked after the failing dataset (a source or a signal it feeds pulled this one in early): it never ran
       ;(ctx.failedDatasets ??= new Set()).add(name)
       ctx.datasets.set(name, [])
@@ -3071,7 +3235,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       // its pipeline never runs, so everything downstream of it is empty / never built).
       reportEvalError(ctx, e)
       ;(ctx.failedDatasets ??= new Set()).add(name)
-      ctx.failedFrom = Math.min(ctx.failedFrom ?? Infinity, ctx.chart.data.findIndex((x) => x.name === name))
+      ctx.failedFrom = Math.min(ctx.failedFrom ?? Infinity, dsRank.get(name)!)
       rows = []
       outPulse = null
     }
@@ -3086,17 +3250,18 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
   // a projection that fits data asks for the datasets it reads before it is used (see refreshProjection)
   if (ctx.chart.projections?.some((p) => p.fit)) ctx.buildOnDemand = onDemandBuilder(ctx, sources, build)
   try {
-    for (const [i, d] of ctx.chart.data.entries()) {
-      if (ctx.failedFrom !== undefined && i > ctx.failedFrom && !ctx.datasets.has(d.name)) {
-        // vega: the pass stopped at the failing transform; the operators of the datasets declared after it (ranked after it)
-        // never ran. What is declared before it ran, and a dataset that was only built early for its signals is judged by its own rank.
-        ;(ctx.failedDatasets ??= new Set()).add(d.name)
-        ctx.datasets.set(d.name, [])
-        ctx.datasetPulses.set(d.name, null)
+    for (const name of dsOrder) {
+      if (ctx.failedFrom !== undefined && dsRank.get(name)! > ctx.failedFrom && !ctx.datasets.has(name)) {
+        // vega: the pass stopped at the failing transform; the operators ranked after it never ran
+        ;(ctx.failedDatasets ??= new Set()).add(name)
+        ctx.datasets.set(name, [])
+        ctx.datasetPulses.set(name, null)
         continue
       }
-      build(d.name, new Set())
+      build(name, new Set())
     }
+    // (a dataset vega re-ranked past the scales and marks fails after some of them ran -- the ones that read nothing re-ranked,
+    // and the joins of marks over datasets that were not; this stops all of them: see datasetRanksOf)
     if (ctx.failedDatasets?.size) ctx.encodeAborted = ctx.datasetAborted = true
   } finally {
     ctx.buildOnDemand = undefined
@@ -3901,6 +4066,24 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
     const keys = ([] as string[]).concat(facet.groupby ?? [])
     if (!keys.length) return []
     const rows = ctx.datasets.get(facet.data) ?? []
+    const from = mark.from?.data
+    if (from !== undefined && ctx.datasets.has(from)) {
+      // vega-parser marks/data.js: with `from.data` the items are ITS rows (the datum is the row, not a partition key), and each
+      // item's facet is the rows of `facet.data` that share its key; a row with no partition still gets an item, a partition no
+      // row asks for none
+      const keyOfRow = groupKeyFn(keys)
+      const byKey = new Map<string, Row[]>()
+      for (const r of rows) {
+        const k = keyOfRow(r)
+        const g = byKey.get(k)
+        if (g) g.push(r)
+        else byKey.set(k, [r])
+      }
+      return (ctx.datasets.get(from) ?? []).map((row, i) => {
+        const part = byKey.get(keyOfRow(row))
+        return { datum: row, rows: part ?? [], facetName: facet.name, key: String(i) }
+      })
+    }
     // the keys are vega fields (`a.b`, `a\.b`): the partition is by the accessor
     const keyOf = groupKeyFn(keys)
     const parts = new Map<string, Row[]>()
@@ -3965,6 +4148,8 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] {
   // one group item (and one scope) per datum / facet partition: bounded like any generated item (maxItems, the clock)
   meterItems(sources.length, 'group items')
   const groups = sources.map((src) => { meterTick('group item'); return buildGroupItem(mark, ctx, src) })
+  // a group mark with no items is still a container in the scenegraph (vega-scenegraph draws every mark's `<g>`)
+  if (!groups.length) return [{ marktype: 'group', role: (mark.role as string | undefined) ?? 'scope', name: mark.name, items: [], emptyMark: true, markIndex: markIdOf(mark), ...markContainerInfo(mark), ...(markClip(mark, ctx) ? { markClip: true } : {}) } as unknown as SceneGroup]
   // SortItems: the group items are ordered by their own properties (`datum["g"]`, `x`, ...)
   if (mark.sort && groups.length > 1) {
     try { return sortMarkItems(groups as SceneItem[], mark.sort) as SceneGroup[] } catch (e) {
@@ -4120,7 +4305,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     const viewW = scopedView('width')
     const viewH = scopedView('height')
     for (const sdef of mark.scales ?? []) {
-      childScales.set(sdef.name, buildScale(sdef, scaleContext({ ...ctx, width: viewW, height: viewH }, sdef.name)))
+      childScales.set(sdef.name, buildScale(sdef, scaleContext({ ...ctx, signalParams: scopeParams, width: viewW, height: viewH }, sdef.name)))
       childTypes.set(sdef.name, sdef.type)
     }
     if (childScales.size) {
@@ -4560,14 +4745,24 @@ function entryProperty(p: unknown, datum: Row, ctx: EvalContext, binding?: Encod
   return p !== null && typeof p === 'object' ? resolveEncodeValueInternal(p as EncodeValue, datum, ctx, binding) : p
 }
 
+/**
+ * The name a field reference gives: a path as written, or -- when the reference is itself a reference (`{parent: {datum: 'f'}}`,
+ * vega-parser resolveField's recursion) -- the value that reference reads off the datum, used as a plain key.
+ */
+function fieldName(f: unknown, datum: Row, ctx: EvalContext): { name: unknown; path: boolean } {
+  return typeof f === 'string' ? { name: f, path: true } : { name: encodeFieldValue(f, datum, ctx), path: false }
+}
+
 /** The group a `{group|parent}` field reference points at, `level` groups up (this engine has the enclosing facet group only). */
 function groupFieldValue(ref: { group?: unknown; parent?: unknown }, datum: Row, ctx: EvalContext): unknown {
   if (ref.parent !== undefined) {
     // `item.mark.group.datum[field]`: the facet cell's datum is the `parent` signal there
     const parent = ctx.signalParams['parent']
-    return parent != null && typeof ref.parent === 'string' ? getField(parent as Row, ref.parent) : undefined
+    if (parent == null) return undefined
+    const f = fieldName(ref.parent, datum, ctx)
+    return f.path ? getField(parent as Row, f.name as string) : (parent as Record<string, unknown>)[f.name as string]
   }
-  const key = ref.group
+  const key = fieldName(ref.group, datum, ctx).name
   if (key === 'width') return ctx.width
   if (key === 'height') return ctx.height
   if (key === 'x') return ctx.groupX ?? 0
@@ -4581,7 +4776,10 @@ function encodeFieldValue(ref: unknown, datum: Row, ctx: EvalContext): unknown {
     const r = ref as { signal?: unknown; group?: unknown; parent?: unknown; datum?: unknown }
     if (r.signal) return (datum as Record<string, unknown>)[ctx.runtime.expr(String(r.signal))(datum, ctx.signalParams) as string]
     if (r.group !== undefined || r.parent !== undefined) return groupFieldValue(r, datum, ctx)
-    if (r.datum !== undefined) return encodeFieldValue(r.datum, datum, ctx)
+    if (r.datum !== undefined) {
+      const f = fieldName(r.datum, datum, ctx)
+      return f.path ? getField(datum, f.name as string) : (datum as Record<string, unknown>)[f.name as string]
+    }
     throw new Error('Invalid field reference: ' + JSON.stringify(ref))
   }
   return getField(datum, ref as string)
@@ -4968,6 +5166,27 @@ function expressionIdentifiers(text: string): string[] {
 }
 
 /**
+ * Whether a view signal is ranked after the data and scales (see scaleIsLate): it calls a function that reads data or a scale,
+ * or reads a signal defined after it or one that is itself late. A signal that is not is ranked before every dataset.
+ */
+function signalIsLate(chart: CompiledChart, defs: ReadonlyMap<string, number>, name: string, seen: Set<string>): boolean {
+  if (seen.has(name)) return false
+  seen.add(name)
+  const i = defs.get(name)
+  if (i === undefined) return false
+  const d = chart.signalDefs![i]!
+  for (const text of [d.update, d.init]) {
+    if (typeof text !== 'string') continue
+    for (const id of expressionIdentifiers(text)) {
+      if (DATAFLOW_FUNCTIONS.has(id)) return true
+      const j = defs.get(id)
+      if (j !== undefined && (j > i || signalIsLate(chart, defs, id, seen))) return true
+    }
+  }
+  return false
+}
+
+/**
  * Whether vega ranks a scale's operators after the ones of its own scope's axes, so that an axis over it does not find
  * them where its operators run. vega-parser creates the operators of a scope in the order it parses it; a parameter that
  * refers to an operator created later (a forward reference) is re-ranked when the dataflow connects its parameters, and
@@ -4981,22 +5200,7 @@ function scaleIsLate(sdef: CompiledScale, scope: GuideScope, chart: CompiledChar
   const defs = new Map<string, number>()
   ;(chart.signalDefs ?? []).forEach((d, i) => { if (!defs.has(d.name)) defs.set(d.name, i) })
   const known = (name: string): boolean => defs.has(name) || VIEW_SIGNALS.has(name) || name in chart.signals
-  const signalLate = (name: string, seen: Set<string>): boolean => {
-    if (seen.has(name)) return false
-    seen.add(name)
-    const i = defs.get(name)
-    if (i === undefined) return false
-    const d = chart.signalDefs![i]!
-    for (const text of [d.update, d.init]) {
-      if (typeof text !== 'string') continue
-      for (const id of expressionIdentifiers(text)) {
-        if (DATAFLOW_FUNCTIONS.has(id)) return true
-        const j = defs.get(id)
-        if (j !== undefined && (j > i || signalLate(id, seen))) return true
-      }
-    }
-    return false
-  }
+  const signalLate = (name: string, seen: Set<string>): boolean => signalIsLate(chart, defs, name, seen)
   const late = (v: unknown): boolean => {
     if (Array.isArray(v)) return v.some(late)
     if (v === null || typeof v !== 'object') return false
@@ -5039,6 +5243,18 @@ function axisTicksFailed(axis: CompiledAxis, ctx: EvalContext, e: unknown, index
   return { marktype: 'group', role: 'axis', x: 0, y: 0, width: 0, height: 0, items: [], parts: [] } as unknown as SceneGroup
 }
 
+/** The count the tick labels are formatted for: the axis's tick count through vega's tickCount (bins, tickMinStep). */
+function labelTickCount(axis: CompiledAxis, scale: Scale, count: number, ctx: EvalContext): number {
+  let minstep: unknown = axis.tickMinStep
+  if (minstep && typeof minstep === 'object' && typeof (minstep as { signal?: unknown }).signal === 'string') {
+    try { minstep = ctx.runtime.expr((minstep as { signal: string }).signal)({}, ctx.signalParams) } catch { minstep = undefined }
+  }
+  const step = typeof minstep === 'number' && Number.isFinite(minstep) && minstep > 0 ? minstep : undefined
+  if (step === undefined && !(scale as { bins?: unknown }).bins) return count
+  const counted = tickCount(scale, count, step)
+  return typeof counted === 'number' ? counted : count
+}
+
 function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGroup | null {
   const scale = ctx.scales.get(axis.scale)
   if (!scale) return null
@@ -5054,7 +5270,10 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   // AxisTicks: `_.count == null ? 10 : _.count`); matching that matters for
   // log-scale labels, whose formatter only labels a subset of ticks depending
   // on the count.
-  const count = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 10 : 10
+  const count0 = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 10 : 10
+  // (AxisTicks formats with tickCount(scale, tally, minstep) too: a scale with bins asks for a tick per boundary, a minimum step
+  // thins the count)
+  const count = labelTickCount(axis, scale, count0, ctx)
   let labelFormat: (v: unknown) => unknown
   const labelCache: string[] = []
   try {
@@ -5214,12 +5433,9 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
   // count to one tick per minimum step: count = min(count, span/minstep + 1)
   // and, for non-temporal non-log scales, shrinks count until tickStep >=
   // minStep. tickCount() implements that rule for every scale type.
-  if (tickMinStep != null && tickMinStep > 0 && typeof count === 'number') {
-    const counted = tickCount(scale, count, tickMinStep)
-    if (typeof counted === 'number') count = counted
-  } else if (typeof count === 'number' && (scale as { bins?: unknown }).bins) {
-    // (vega's tickCount raises the count to the number of bin edges, so a binned scale ticks every edge)
-    const counted = tickCount(scale, count)
+  // (a scale with bins asks for at least one tick per bin boundary, whatever the count)
+  if (typeof count === 'number' && ((tickMinStep != null && tickMinStep > 0) || (scale as { bins?: unknown }).bins)) {
+    const counted = tickCount(scale, count, tickMinStep != null && tickMinStep > 0 ? tickMinStep : undefined)
     if (typeof counted === 'number') count = counted
   }
 
@@ -5341,6 +5557,10 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: 
     // day/week ticks). The `undefined` argument is passed explicitly to satisfy
     // the strict local type shim for vega-format.
     const timeFormatter = calendar === 'utc' ? L.utcFormat : L.timeFormat
+    // (an object is the multi-format specifier: a pattern per interval, `{year: '%y', quarter: '%b'}`)
+    if (fmt === undefined && rawFmt !== null && typeof rawFmt === 'object' && !Array.isArray(rawFmt) && !('signal' in (rawFmt as Record<string, unknown>))) {
+      return timeFormatter(rawFmt as unknown as string)
+    }
     return fmt ? timeFormatter(fmt) : timeFormatter(undefined as unknown as string)
   }
   if (scale.type !== 'linear' && scale.type !== 'log' && scale.type !== 'pow' && scale.type !== 'sqrt' && scale.type !== 'symlog') {

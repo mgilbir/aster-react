@@ -5,9 +5,18 @@
  * same failure the same way (not an empty chart where vega draws content, nor content where vega stops).
  */
 import { describe, it, expect } from 'vitest'
-import { renderSpec } from '@aster/core'
+import { renderSpec, evaluateChart, compileChart, datasetsOfScene } from '@aster/core'
 import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
+
+/** the rows of each spec dataset in Aster's evaluation, as plain objects (vega's `view.data(name)`) */
+function asterDatasets(spec: any): Record<string, unknown[]> {
+  const scene = evaluateChart(compileChart(JSON.parse(JSON.stringify(spec))), { logger: { error: () => {}, warn: () => {} } } as never)
+  const all = datasetsOfScene(scene)
+  const out: Record<string, unknown[]> = {}
+  for (const d of spec.data ?? []) out[d.name] = JSON.parse(JSON.stringify(all.get(d.name) ?? null))
+  return out
+}
 
 const BAD = 'datum["o"]["v"]>0'
 const base = (): any => ({
@@ -46,6 +55,12 @@ const CASES: Record<string, (s: any) => void> = {
     s.axes = [{ orient: 'bottom', scale: 'x' }]
     s.padding = 5
   },
+  'a filter that throws, with a title and a legend': (s) => {
+    s.data[0].transform = [{ type: 'filter', expr: BAD }]
+    s.title = { text: 'T' }
+    s.scales.push({ name: 'col', type: 'ordinal', domain: ['p', 'q'], range: ['red', 'blue'] })
+    s.legends = [{ fill: 'col' }]
+  },
   'a mark encode that throws on its third item': (s) => { s.marks[0].encode.update.y = { signal: 'datum["o"]["v"]' } },
 }
 
@@ -58,6 +73,8 @@ describe('a throwing expression is contained like vega contains it', () => {
       expect(vega.errors.length, 'the case must make vega log an error').toBeGreaterThan(0)
       const mine = renderSpec(JSON.parse(JSON.stringify(spec))) as string
       expect(diffCanonical(canonicalizeSvg(vega.svg), canonicalizeSvg(mine)).slice(0, 3)).toEqual([])
+      // what each dataset ended with: the render cannot tell a dataset that ran from one that did not (every mark is ranked after every dataset)
+      expect(asterDatasets(spec)).toEqual(vega.datasets)
     }, 30_000)
   }
   it('the same data with the guarded expression keeps the rows that pass', async () => {
@@ -95,6 +112,13 @@ describe('a throwing transform and the signal-ordered dataset build', () => {
       ...frame, data: [seq(), base(), { name: 'bad', values: [{ x: 1 }], transform: [BADROW] }, { name: 'after', values: [{ v: 1 }] }],
       scales: [scaleX('seq')], marks: [bars('seq'), bars('after', 40)],
     },
+    'a dataset derived from a reader that is ranked after the throw is ranked after it too': {
+      ...frame, data: [seq(), { name: 'late', source: 'seq' }, { name: 'bad', values: [{ x: 1 }], transform: [BADROW] }, base()], scales: [scaleX('seq')], marks: [bars('seq'), bars('late', 40)],
+    },
+    'two throws: the first one in rank order stops the pass': {
+      ...frame, data: [{ name: 'ok', values: [{ v: 1 }] }, { name: 'bad1', values: [{ x: 1 }], transform: [BADROW] }, { name: 'bad2', values: [{ x: 1 }], transform: [BADROW] }, { name: 'ok2', values: [{ v: 3 }] }],
+      scales: [scaleX('ok')], marks: [bars('ok')],
+    },
   }
   for (const [name, spec] of Object.entries(CASES2)) {
     it(name, async () => {
@@ -104,6 +128,30 @@ describe('a throwing transform and the signal-ordered dataset build', () => {
       const mine = renderSpec(JSON.parse(JSON.stringify(spec)), { logger: { error: (e: unknown) => { errors.push(e) }, warn: () => {} } } as never) as string
       expect(errors.length, 'the engine logs the failure').toBeGreaterThan(0)
       expect(diffCanonical(canonicalizeSvg(vega.svg), canonicalizeSvg(mine)).slice(0, 3)).toEqual([])
+      // what each dataset ended with: the render cannot tell a dataset that ran from one that did not (every mark is ranked after every dataset)
+      expect(asterDatasets(spec)).toEqual(vega.datasets)
     }, 30_000)
   }
+})
+
+// A dataset that vega re-ranked past the scales and marks (it reads a signal a later dataset writes) throws after the marks that
+// read nothing late ran, and vega draws them. Aster stops all of them (a known gap, see datasetRanksOf), so only the datasets are
+// compared here: they are what the rank decides.
+describe('a throw in a dataset re-ranked past the scales and marks: the datasets', () => {
+  it('the datasets declared before it, after it and the writer it waits for', async () => {
+    const spec = {
+      $schema: 'https://vega.github.io/schema/vega/v5.json', width: 300, height: 120,
+      data: [
+        { name: 'seq', transform: [{ type: 'sequence', start: { signal: 'ext[0]' }, stop: { signal: 'ext[1] + 1' }, as: 'v' }, { type: 'filter', expr: 'datum["o"]["v"]>0' }] },
+        { name: 'plain', values: [{ v: 2 }] },
+        { name: 'base', values: [{ x: 3 }, { x: 9 }], transform: [{ type: 'extent', field: 'x', signal: 'ext' }] },
+      ],
+      marks: [{ type: 'rect', from: { data: 'plain' }, encode: { update: { x: { value: 1 }, width: { value: 4 }, y: { value: 10 }, height: { value: 8 } } } }],
+    }
+    const vega = await renderWithVegaChecked(JSON.parse(JSON.stringify(spec)))
+    expect(vega.errors.length).toBeGreaterThan(0)
+    expect(vega.datasets.plain).not.toBeNull()
+    expect(vega.datasets.seq).toBeNull()
+    expect(asterDatasets(spec)).toEqual(vega.datasets)
+  }, 30_000)
 })

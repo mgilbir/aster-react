@@ -128,6 +128,8 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     frameStrokeDashOffset,
     frameStrokeCap,
     frameStrokeJoin,
+    ...((typeof (cfg.legend as { layout?: unknown } | undefined)?.layout === 'object' && (cfg.legend as { layout?: unknown }).layout !== null) ? { legendLayout: (cfg.legend as { layout: Record<string, unknown> }).layout } : {}),
+    ...(spec.encode !== undefined ? { frameEncode: { ...((spec.encode as { enter?: object }).enter ?? {}), ...((spec.encode as { update?: object }).update ?? {}) } as NonNullable<CompiledChart['frameEncode']> } : {}),
     data,
     scales,
     axes,
@@ -191,10 +193,6 @@ function frameStyleValue(spec: VgSpec, prop: string): unknown {
     const block = config?.style?.[String(name)]
     if (block && prop in block) v = block[prop]
   }
-  // the root group's own `encode.update` (vega-lite's `view` background) wins over its styles: a plain `{value}` is the frame's
-  // value (`null` unsets it); a signal / field reference is not a constant frame value and is left to the style
-  const own = (spec.encode as { update?: Record<string, unknown> } | undefined)?.update?.[prop]
-  if (own !== null && typeof own === 'object' && !Array.isArray(own) && 'value' in own) v = (own as { value: unknown }).value
   return v
 }
 
@@ -206,8 +204,8 @@ function resolveFrameFill(spec: VgSpec): string | undefined {
 
 function resolveFrameStroke(spec: VgSpec): string | undefined {
   const stroke = frameStyleValue(spec, 'stroke')
-  // A 'transparent' stroke is still a stroke to vega (the frame is inset by half a pixel for it); the painters omit its paint.
-  return typeof stroke === 'string' && stroke !== '' ? stroke : undefined
+  // (a 'transparent' stroke is a stroke to the scenegraph -- the frame is inset by its half width -- that the SVG leaves out)
+  return typeof stroke === 'string' ? stroke : undefined
 }
 
 function resolveFrameNumber(spec: VgSpec, prop: string): number | undefined {

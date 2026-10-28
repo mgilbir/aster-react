@@ -1,1 +1,1302 @@
-[{"id":"vega/airport-connections","status":"error","where":"runtime","category":"error: runtime lacks a Vega transform / expression function / transform backend","first":"[aster] unsupported transform type \"geopath\""},{"id":"vega/annual-precipitation","status":"error","where":"runtime","category":"error: runtime rejects a spec value that vega takes from a signal / another dataset","first":"Projection type must be a name string."},{"id":"vega/arc-diagram","status":"fail","where":"runtime","category":"runtime: a mark reading `from: {data: <mark name>}` (a group mark's items) draws nothing","first":"- oracle:         g .mark-path.role-mark role=graphics-symbol rd=path mark container || + aster:    "},{"id":"vega/bar-chart","status":"fail","where":"runtime","category":"runtime: a text mark positioned from an undefined signal changes the autosize bounds","culprit":"mark[1] text","first":"only-oracle: line|113.5,216.5|113.5,221.5|stroke=#888888;stroke-width=1||"},{"id":"vega/barley-trellis-plot","status":"fail","where":"runtime","category":"runtime: a mark reading `from: {data: <mark name>}` (a group mark's items) draws nothing","culprit":"mark[1] text","first":"only-oracle: text|236,133|Crookston|fill=#000000;font-family=sans-serif;font-size=11;font-weight=700"},{"id":"vega/beeswarm-plot","status":"error","where":"runtime","category":"error: runtime lacks a Vega transform / expression function / transform backend","first":"Disabled."},{"id":"vega/brushing-scatter-plots","status":"fail","where":"runtime","category":"runtime: facet / cell group layout or order","culprit":"mark[1] group \"cell\"","first":"only-oracle: line|106.5,551.5|106.5,556.5|stroke=#cccccc;stroke-width=1||"},{"id":"vega/budget-forecasts","status":"fail","where":"runtime","category":"runtime: a text mark positioned from an undefined signal changes the autosize bounds","culprit":"mark[0] group; mark[1] line; mark[2] line; mark[3] symbol; mark[4] rule; mark[5] symbol \"handle\"; mark[6] text; mark[7] group; removing axes","first":"- oracle:         g .mark-group.role-scope role=graphics-object rd=group mark container || + aster: "},{"id":"vega/crossfilter-flights","status":"error","where":"runtime","category":"error: runtime lacks a Vega transform / expression function / transform backend","first":"[aster] unsupported transform type \"crossfilter\""},{"id":"vega/distortion-comparison","status":"error","where":"runtime","category":"error: runtime rejects a spec value that vega takes from a signal / another dataset","first":"Projection type must be a name string."},{"id":"vega/donut-chart-labelled","status":"error","where":"runtime","category":"error: runtime rejects a spec value that vega takes from a signal / another dataset","first":"[aster] Missing required \"sequence\" parameter: \"start\""},{"id":"vega/dorling-cartogram","status":"error","where":"runtime","category":"error: runtime lacks a Vega transform / expression function / transform backend","first":"Unrecognized function: geoCentroid"},{"id":"vega/dot-plot","status":"fail","where":"runtime","category":"runtime: inline primitive `values` are not wrapped as {data: v}","first":"only-oracle: line|159.5,74.75|159.5,79.75|stroke=#888888;stroke-width=1||"},{"id":"vega/earthquakes","status":"fail","where":"runtime","category":"runtime: geo (shape marks / projection fit), root size off by 1-2 px","culprit":"mark[2] shape","first":"only-oracle: path|M139.801,429.599M139.801,438.527A8.928,8.928,0,1,1,139.801,420.671A8.928,8.928,0,1"},{"id":"vega/edge-bundling","status":"error","where":"runtime","category":"error: runtime lacks a Vega transform / expression function / transform backend","first":"[aster] unsupported transform type \"tree\""},{"id":"vega/flight-passengers","status":"fail","where":"runtime","category":"runtime: guide (removing title)","culprit":"removing title","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis for a time scal"},{"id":"vega/force-directed-layout","status":"error","where":"runtime","category":"error: runtime lacks a Vega transform / expression function / transform backend","first":"Disabled."},{"id":"vega/grouped-bar-chart","status":"fail","where":"runtime","category":"runtime: a mark reading `from: {data: <mark name>}` (a group mark's items) draws nothing","culprit":"mark[0] group","first":"only-oracle: path|M17,170L181,170L181,185L17,185Z|fill=#1f77b4||"},{"id":"vega/histogram-null-values","status":"fail","where":"runtime","category":"runtime: guide (removing axes)","culprit":"removing axes","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis for a linear sc"},{"id":"vega/horizon-graph","status":"fail","where":"runtime","category":"runtime: inline primitive `values` are not wrapped as {data: v}","culprit":"mark[0] group","first":"- oracle:               g .mark-group.role-scope role=graphics-object rd=group mark container || + a"},{"id":"vega/job-voyager","status":"fail","where":"runtime","category":"runtime: other (mark[0] group)","culprit":"mark[0] group","first":"only-oracle: path|M21,10L74,10L128,10L181,10L288,10L341,10L394,11L448,12L501,10L554,13L608,12L661,13"},{"id":"vega/labeled-scatter-plot","status":"fail","where":"runtime","category":"runtime: a mark reading `from: {data: <mark name>}` (a group mark's items) draws nothing","culprit":"mark[2] text","first":"only-oracle: line|0,148|5,148|stroke=#888888;stroke-width=1||"},{"id":"vega/map-with-tooltip","status":"error","where":"runtime","category":"error: runtime lacks a Vega transform / expression function / transform backend","first":"Unrecognized function: geoCentroid"},{"id":"vega/nested-bar-chart","status":"fail","where":"runtime","category":"runtime: other (mark[0] group)","culprit":"mark[0] group","first":"only-oracle: path|M17,101L167,101L167,119L17,119Z|fill=#e45756||"},{"id":"vega/overview-plus-detail","status":"error","where":"runtime","category":"error: runtime rejects a spec value that vega takes from a signal / another dataset","first":"Unrecognized signal name: detailDomain"},{"id":"vega/packed-bubble-chart","status":"error","where":"runtime","category":"error: runtime lacks a Vega transform / expression function / transform backend","first":"[aster] unsupported transform type \"force\""},{"id":"vega/parallel-coordinates","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"only-oracle: path|M86,10L202,181.556L318,209.6L434,230L550,321.111L666,294.444L782,410|fill=none;str"},{"id":"vega/platformer","status":"fail","where":"runtime","category":"runtime: other (mark[0] group \"everything\")","culprit":"mark[0] group \"everything\"","first":"only-oracle: path|M15.625,46.875L28.125,46.875L28.125,59.375L15.625,59.375Z|fill=#00ffff;fill-opacit"},{"id":"vega/probability-density","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"only-oracle: path|M111.655,131L112.655,131L112.655,136L111.655,136Z|fill=#4682b4;fill-opacity=0.4||"},{"id":"vega/projections","status":"fail","where":"runtime","category":"runtime: other (mark[0] group)","culprit":"mark[0] group","first":"- oracle:             path.foreground hidden=true || + aster:                g .mark-shape.role-mark"},{"id":"vega/quantile-dot-plot","status":"error","where":"runtime","category":"error: runtime lacks a Vega transform / expression function / transform backend","first":"Unrecognized function: quantileLogNormal"},{"id":"vega/quantile-quantile-plot","status":"error","where":"runtime","category":"error: runtime rejects a spec value that vega takes from a signal / another dataset","first":"[aster] dataset \"points\": url must be a string (a signal-valued url cannot be resolved ahead of time"},{"id":"vega/radar-chart","status":"fail","where":"runtime","category":"runtime: a mark reading `from: {data: <mark name>}` (a group mark's items) draws nothing","first":"only-oracle: line|55.845,130.579|200,200|stroke=#d3d3d3;stroke-width=1||"},{"id":"vega/radial-plot","status":"fail","where":"runtime","category":"runtime: inline primitive `values` are not wrapped as {data: v}","first":"only-oracle: path|M115,41.569A58.431,58.431,0,0,1,141.681,48.017L124.133,82.207A20,20,0,0,0,115,80Z|"},{"id":"vega/radial-tree-layout","status":"error","where":"runtime","category":"error: runtime lacks a Vega transform / expression function / transform backend","first":"[aster] unsupported transform type \"tree\""},{"id":"vega/regression","status":"fail","where":"runtime","category":"runtime: other (mark[1] group)","culprit":"mark[1] group","first":"- oracle:         g .mark-group.role-scope role=graphics-object rd=group mark container || + aster: "},{"id":"vega/reorderable-matrix","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"only-oracle: path|M140,280L149,280L149,289L140,289Z|fill=#f58518||"},{"id":"vega/time-units","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis for a discrete "},{"id":"vega/top-k-plot-with-others","status":"fail","where":"runtime","category":"runtime: guide (removing axes; removing title)","culprit":"removing axes; removing title","first":"only-oracle: line|202.5,398.5|202.5,403.5|stroke=#888888;stroke-width=1||"},{"id":"vega/top-k-plot","status":"fail","where":"runtime","category":"runtime: guide (removing axes; removing title)","culprit":"removing axes; removing title","first":"only-oracle: line|202.5,398.5|202.5,403.5|stroke=#888888;stroke-width=1||"},{"id":"vega/tree-layout","status":"error","where":"runtime","category":"error: runtime lacks a Vega transform / expression function / transform backend","first":"[aster] unsupported transform type \"tree\""},{"id":"vega/u-district-cuisine","status":"fail","where":"runtime","category":"runtime: other (mark[2] group)","culprit":"mark[2] group","first":"only-oracle: line|112.5,91|112.5,457|stroke=#dddddd;stroke-width=1;stroke-dasharray=3,2||"},{"id":"vega/volcano-contours","status":"error","where":"runtime","category":"error: runtime lacks a Vega transform / expression function / transform backend","first":"[aster] unsupported transform type \"isocontour\""},{"id":"vega/wind-vectors","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"only-oracle: path|M100.167,455.32L98.764,450.671L97.506,451.258Z|lin=-0.9063,0.4226,-0.4226,-0.9063|"},{"id":"vega/word-cloud","status":"fail","where":"runtime","category":"runtime: a text mark positioned from an undefined signal changes the autosize bounds","culprit":"mark[0] text","first":"- oracle:         g .mark-text.role-mark role=graphics-object rd=text mark container || + aster:    "},{"id":"vega/world-map","status":"error","where":"runtime","category":"error: runtime rejects a spec value that vega takes from a signal / another dataset","first":"Projection type must be a name string."},{"id":"vega/zoomable-binned-plot","status":"fail","where":"runtime","category":"runtime: guide (removing axes)","culprit":"removing axes","first":"only-oracle: line|0.5,117.5|3.5,117.5|stroke=#888888;stroke-width=1||"},{"id":"vega/zoomable-circle-packing","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"- oracle:         g .mark-symbol.role-mark.circles role=graphics-symbol rd=symbol mark container lab"},{"id":"vega/zoomable-scatter-plot","status":"fail","where":"runtime","category":"runtime: guide (removing axes)","culprit":"removing axes","first":"only-oracle: line|0.5,117.5|3.5,117.5|stroke=#888888;stroke-width=1||"},{"id":"vl/animated_hop","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M43.5,10.5L63.5,10.5L63.5,310.5L43.5,310.5Z|fill=none;stroke=#dddddd;stroke-width="},{"id":"vl/arc_facet","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M5.096,200.621A150,150,0,0,0,70.948,330.239L155,206Z|fill=#54a24b||"},{"id":"vl/arc_ordinal_theta","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M155,136.25A18.75,18.75,0,0,1,168.258,141.742L155,155Z|fill=#4c78a8||"},{"id":"vl/arc_params","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] hconcat[0].mark.radius2: mark-def radius2 is not supported"},{"id":"vl/arc_pie_pyramid","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M211.569,211.569A80,80,0,1,0,98.431,211.569L155,155Z|fill=#416d9d||"},{"id":"vl/arc_radial","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"- oracle:         g .mark-arc.role-mark.layer_0_marks role=graphics-object rd=arc mark container || "},{"id":"vl/arc_radial_histogram","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.angle: a data-driven angle (scale + legend) is not supported; use a constant {\"v"},{"id":"vl/area_density_facet","status":"fail","where":"compiler","category":"compiler: title/config/projections","culprit":"title/config/projections","first":"only-oracle: text|5,15.5|Distribution of Body Mass of Penguins|fill=#000000;font-family=sans-serif;f"},{"id":"vl/area_gradient","status":"fail","where":"runtime","category":"runtime: gradient fill object stringified on a path (area/line)","culprit":"mark[0] area \"layer_0_marks\"","first":"- oracle:         g .mark-area.role-mark.layer_0_marks role=graphics-object rd=area mark container |"},{"id":"vl/area_overlay","status":"fail","where":"compiler","category":"compiler: data+marks","culprit":"data+marks","first":"- oracle:         g .mark-line.role-mark.layer_1_marks role=graphics-object rd=line mark container |"},{"id":"vl/area_overlay_with_y2","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.y2: a constant datum position is not supported on the \"area\" mark"},{"id":"vl/area_temperature_range","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M51,190.2L52.644,203.4L54.288,196.8L55.932,193.8L57.575,193.8L59.219,193.8L60.863,"},{"id":"vl/argmin_spaces","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M107.5,28.5L407.5,28.5L407.5,88.5L107.5,88.5Z|fill=none;stroke=#dddddd;stroke-widt"},{"id":"vl/bar_1d","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M6.5,5.5L306.5,5.5L306.5,25.5L6.5,25.5Z|fill=none;stroke=#dddddd;stroke-width=1||"},{"id":"vl/bar_1d_binned","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:           path role=graphics-symbol rd=bar label=\"delay (binned): −10 – 0\" || + aster:    "},{"id":"vl/bar_1d_dimension_only","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout) + data+marks","culprit":"size/layout (signals, width, height, autosize, padding, layout) + data+marks","first":"only-oracle: path|M43.5,10.5L63.5,10.5L63.5,310.5L43.5,310.5Z|fill=none;stroke=#dddddd;stroke-width="},{"id":"vl/bar_1d_step_config","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M6.5,5.5L306.5,5.5L306.5,20.5L6.5,20.5Z|fill=none;stroke=#dddddd;stroke-width=1||"},{"id":"vl/bar_1d_temporal","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"only-oracle: path|M17.5,5.5L317.5,5.5L317.5,25.5L17.5,25.5Z|fill=none;stroke=#dddddd;stroke-width=1|"},{"id":"vl/bar_aggregate_size","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.size is not supported on the \"bar\" mark"},{"id":"vl/bar_argmax_transform","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] transform[0].aggregate[0].op: op \"argmax\" is not supported in transforms (use {\"op\":\"max\""},{"id":"vl/bar_axis_space_saving","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: line|6.5,121.5|306.5,121.5|stroke=#dddddd;stroke-width=1||"},{"id":"vl/bar_axis_title_quoted","status":"fail","where":"runtime","category":"runtime: serialisation: text content escapes `\"` as &quot; (vega leaves it raw)","first":"only-oracle: text|141.5,355.5|\"Quoted\" Title|fill=#000000;font-family=sans-serif;font-size=11;font-w"},{"id":"vl/bar_binned_data","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x.bin.binned: pre-binned data (binned: true) is not supported; let @aster/vl bin"},{"id":"vl/bar_binned_yearmonth_grouped","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] transform[0].filter.timeUnit: timeUnit \"binnedyearmonth\": binned time units are not suppo"},{"id":"vl/bar_binned_yearmonth_grouped_center_band","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] transform[0].filter.timeUnit: timeUnit \"binnedyearmonth\": binned time units are not suppo"},{"id":"vl/bar_binned_yearmonth_label","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] transform[1].filter.timeUnit: timeUnit \"binnedyearmonth\": binned time units are not suppo"},{"id":"vl/bar_binned_yearmonth_label_band_center","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] transform[1].filter.timeUnit: timeUnit \"binnedyearmonth\": binned time units are not suppo"},{"id":"vl/bar_binnedyearmonth","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x.timeUnit: timeUnit \"binnedyearmonth\": binned time units are not supported"},{"id":"vl/bar_bullet_expr_bind","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x: a channel definition needs `field`, `value`, `datum` or `aggregate: \"count\"`"},{"id":"vl/bar_color_disabled_scale","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color.scale: `scale: null` (identity/disabled scale) is not supported"},{"id":"vl/bar_custom_time_domain","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'a (hour"},{"id":"vl/bar_default_tooltip_title_null","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"- oracle:             path.foreground hidden=true || + aster:                g .mark-text.role-axis-"},{"id":"vl/bar_distinct","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"Y-axis titled 'Distinc"},{"id":"vl/bar_diverging_stack_population_pyramid","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"only-oracle: path|M7,6L17,6L17,16L7,16Z|fill=#675193||"},{"id":"vl/bar_group_timeunit","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M115.775,224.286L123.974,224.286L123.974,260L115.775,260Z|fill=#f58518||"},{"id":"vl/bar_grouped","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M310,27L320,27L320,37L310,37Z|fill=#4c78a8||"},{"id":"vl/bar_grouped_custom_color_domain","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"only-oracle: path|M310,27L320,27L320,37L310,37Z|fill=#4c78a8||"},{"id":"vl/bar_grouped_custom_padding","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] width: width must be a non-negative number or {\"step\": n}, got {\"step\":50,\"for\":\"position"},{"id":"vl/bar_grouped_errorbar","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'Cylinde"},{"id":"vl/bar_grouped_facet_independent_scale","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] resolve: `resolve` has no meaning on a single unit spec"},{"id":"vl/bar_grouped_facet_independent_scale_fixed_width","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] resolve: `resolve` has no meaning on a single unit spec"},{"id":"vl/bar_grouped_horizontal","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M35.5,5.5L335.5,5.5L335.5,245.5L35.5,245.5Z|fill=none;stroke=#dddddd;stroke-width="},{"id":"vl/bar_grouped_label","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout) + data+marks","culprit":"size/layout (signals, width, height, autosize, padding, layout) + data+marks","first":"only-oracle: path|M310,36L320,36L320,46L310,46Z|fill=#4c78a8||"},{"id":"vl/bar_grouped_repeated","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.xOffset.datum is not supported (datum works on x, y, x2, y2, longitude, latitude"},{"id":"vl/bar_grouped_stacked","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M492,105L502,105L502,115L492,115Z|fill=#d62728||"},{"id":"vl/bar_grouped_step_for_offset","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M358,27L368,27L368,37L358,37Z|fill=#4c78a8||"},{"id":"vl/bar_grouped_step_for_position","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] width: width must be a non-negative number or {\"step\": n}, got {\"step\":50,\"for\":\"position"},{"id":"vl/bar_grouped_thin","status":"fail","where":"runtime","category":"runtime: serialisation: text content escapes `\"` as &quot; (vega leaves it raw)","first":"only-oracle: path|M101.245,310L101.495,310L101.495,310L101.245,310Z|fill=#4c78a8||"},{"id":"vl/bar_grouped_thin_minBandSize","status":"fail","where":"runtime","category":"runtime: serialisation: text content escapes `\"` as &quot; (vega leaves it raw)","first":"only-oracle: path|M104.706,310L108.706,310L108.706,310L104.706,310Z|fill=#4c78a8||"},{"id":"vl/bar_grouped_timeunit_yearweek","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M43.755,201.429L45.767,201.429L45.767,255L43.755,255Z|fill=#4c78a8||"},{"id":"vl/bar_heatlane","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'Horsepo"},{"id":"vl/bar_layered_weather","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.y: a channel definition needs `field`, `value`, `datum` or `aggregate: \"count\"`"},{"id":"vl/bar_month_band","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M104.992,43.343L121.779,43.343L121.779,310L104.992,310Z|fill=#4c78a8||"},{"id":"vl/bar_month_band_config","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M104.992,43.343L121.779,43.343L121.779,310L104.992,310Z|fill=#4c78a8||"},{"id":"vl/bar_month_temporal_band_center","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'date (m"},{"id":"vl/bar_month_temporal_band_center_config","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'date (m"},{"id":"vl/bar_narrow_int_span","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"only-aster: line|118.5,10.5|118.5,310.5|stroke=#dddddd;stroke-width=1||"},{"id":"vl/bar_negative","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"only-oracle: line|51.5,224.5|231.5,224.5|stroke=#000000;stroke-width=1||"},{"id":"vl/bar_negative_horizontal_label","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'b' for "},{"id":"vl/bar_simple_binned_timeunit_special_chars","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.y.timeUnit: timeUnit \"binnedutcyearmonthdate\": binned time units are not support"},{"id":"vl/bar_temporal_color_config_time_unit_band_position","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Gradient legend ti"},{"id":"vl/bar_tooltip_aggregate","status":"fail","where":"runtime","category":"runtime: inline primitive `values` are not wrapped as {data: v}","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"Y-axis titled 'Mean of"},{"id":"vl/bar_tooltip_groupby","status":"fail","where":"runtime","category":"runtime: inline primitive `values` are not wrapped as {data: v}","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"Y-axis titled 'Mean of"},{"id":"vl/bar_x_offset_without_x","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"only-oracle: path|M51.5,10.5L71.5,10.5L71.5,310.5L51.5,310.5Z|fill=none;stroke=#dddddd;stroke-width="},{"id":"vl/bar_yearmonth_center_band","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'date (y"},{"id":"vl/boxplot_1D_horizontal","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] boxplot requires plain x and y fields (no aggregate, bin or timeUnit)"},{"id":"vl/boxplot_1D_horizontal_custom_mark","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] boxplot requires plain x and y fields (no aggregate, bin or timeUnit)"},{"id":"vl/boxplot_1D_horizontal_explicit","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] boxplot requires plain x and y fields (no aggregate, bin or timeUnit)"},{"id":"vl/boxplot_1D_invalid","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x.axis: boxplot supports only field, type and title on x/y"},{"id":"vl/boxplot_1D_vertical","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] boxplot requires plain x and y fields (no aggregate, bin or timeUnit)"},{"id":"vl/boxplot_2D_horizontal","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x.scale: boxplot supports only field, type and title on x/y"},{"id":"vl/boxplot_2D_horizontal_color_size","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.size: boxplot only supports the x and y channels"},{"id":"vl/boxplot_2D_vertical","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color: boxplot only supports the x and y channels"},{"id":"vl/boxplot_2D_vertical_single_per_group","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x.axis: boxplot supports only field, type and title on x/y"},{"id":"vl/boxplot_2D_vertical_single_per_group_color","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color: boxplot only supports the x and y channels"},{"id":"vl/boxplot_groupped","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color: boxplot only supports the x and y channels"},{"id":"vl/boxplot_minmax_2D_horizontal","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x.scale: boxplot supports only field, type and title on x/y"},{"id":"vl/boxplot_minmax_2D_horizontal_custom_midtick_color","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] config.boxplot: this config property is valid Vega-Lite but is not supported by @aster/vl"},{"id":"vl/boxplot_minmax_2D_vertical","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color: boxplot only supports the x and y channels"},{"id":"vl/boxplot_preaggregated","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis for a linear sc"},{"id":"vl/boxplot_preaggregated_with_height","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis for a linear sc"},{"id":"vl/boxplot_tooltip_aggregate","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.tooltip: boxplot only supports the x and y channels"},{"id":"vl/boxplot_tooltip_not_aggregate","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.tooltip: boxplot only supports the x and y channels"},{"id":"vl/brush_table","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"- oracle:               g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Symbol legen"},{"id":"vl/circle_binned","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M384.5,31A1,1,0,1,1,382.5,31A1,1,0,1,1,384.5,31|fill=#4c78a8||"},{"id":"vl/circle_binned_maxbins_2","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M441,31A1,1,0,1,1,439,31A1,1,0,1,1,441,31|fill=#4c78a8||"},{"id":"vl/circle_binned_maxbins_20","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M377.5,31A1,1,0,1,1,375.5,31A1,1,0,1,1,377.5,31|fill=#4c78a8||"},{"id":"vl/circle_binned_maxbins_5","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M399,31A1,1,0,1,1,397,31A1,1,0,1,1,399,31|fill=#4c78a8||"},{"id":"vl/circle_custom_tick_labels","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"- oracle:           path role=graphics-symbol rd=circle label=\"Mean of IMDB Rating: 6.50082644628; M"},{"id":"vl/circle_flatten","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M59.5,5.5L359.5,5.5L359.5,105.5L59.5,105.5Z|fill=none;stroke=#dddddd;stroke-width="},{"id":"vl/circle_github_punchcard","status":"fail","where":"runtime","category":"runtime: expression `time(x)` returns a Date, not a timestamp","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"Y-axis titled 'time (d"},{"id":"vl/circle_labelangle_orient_signal","status":"fail","where":"runtime","category":"runtime: expression `time(x)` returns a Date, not a timestamp","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"Y-axis titled 'time (d"},{"id":"vl/circle_natural_disasters","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:             path.foreground hidden=true || + aster:                g .mark-text.role-axis-"},{"id":"vl/circle_scale_quantile","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout) + scales+guides (scales, axes, legends)","culprit":"size/layout (signals, width, height, autosize, padding, layout) + scales+guides (scales, axes, legends)","first":"- oracle:         g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Symbol legend titl"},{"id":"vl/circle_scale_quantize","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout) + scales+guides (scales, axes, legends)","culprit":"size/layout (signals, width, height, autosize, padding, layout) + scales+guides (scales, axes, legends)","first":"- oracle:         g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Symbol legend titl"},{"id":"vl/circle_scale_threshold","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout) + scales+guides (scales, axes, legends)","culprit":"size/layout (signals, width, height, autosize, padding, layout) + scales+guides (scales, axes, legends)","first":"- oracle:         g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Symbol legend titl"},{"id":"vl/circle_wilkinson_dotplot","status":"fail","where":"runtime","category":"runtime: inline primitive `values` are not wrapped as {data: v}","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'data' f"},{"id":"vl/circle_wilkinson_dotplot_stacked","status":"fail","where":"runtime","category":"runtime: inline primitive `values` are not wrapped as {data: v}","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'data' f"},{"id":"vl/concat_bar_layer_circle","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:               g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Symbol legen"},{"id":"vl/concat_bar_scales_discretize","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] layers specify conflicting values for scale \"size\" property \"range\""},{"id":"vl/concat_bar_scales_discretize_2_cols","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] layers specify conflicting values for scale \"size\" property \"range\""},{"id":"vl/concat_hover","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] hconcat[1].params[0].name: duplicate parameter name \"hover\""},{"id":"vl/concat_hover_filter","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] hconcat[1].layer[0].params[0].name: duplicate parameter name \"hover\""},{"id":"vl/concat_layer_voyager_result","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] vconcat[0].encoding.x: a channel definition needs `field`, `value`, `datum` or `aggregate"},{"id":"vl/concat_marginal_histograms","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:                   path.foreground hidden=true || + aster:                      g .mark-tex"},{"id":"vl/concat_population_pyramid","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] hconcat[1].view: the view background property is not supported; set it through config.vie"},{"id":"vl/concat_weather","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:               g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 't"},{"id":"vl/config_numberFormatType_test","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-row-header.row_header role=graphics-object rd=group mark contai"},{"id":"vl/config_numberFormatType_tooltip","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] config.tooltipFormat: this config property is valid Vega-Lite but is not supported by @as"},{"id":"vl/dynamic_color_legend","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + title/config/projections","culprit":"scales+guides (scales, axes, legends) + title/config/projections","first":"- oracle:         g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Symbol legend titl"},{"id":"vl/embedded_csv","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M51.5,12.5L71.5,12.5L71.5,312.5L51.5,312.5Z|fill=none;stroke=#dddddd;stroke-width="},{"id":"vl/errorband_tooltip","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"- oracle:         g .mark-group.role-axis hidden=true || + aster:          g .mark-group.role-axis r"},{"id":"vl/errorbar_aggregate","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.size is not supported on the \"tick\" mark"},{"id":"vl/errorbar_horizontal_aggregate","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.size is not supported on the \"tick\" mark"},{"id":"vl/facet_bullet","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] spec.encoding.x: a channel definition needs `field`, `value`, `datum` or `aggregate: \"cou"},{"id":"vl/facet_column_facet_column_point_future","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] facet.column.type: a facet field definition needs `type`"},{"id":"vl/facet_column_facet_row_point_future","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] facet.column.type: a facet field definition needs `type`"},{"id":"vl/facet_cross_independent_scale","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] facet.row.type: a facet field definition needs `type`"},{"id":"vl/facet_grid_bar","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] spacing: spacing is only meaningful on composition specs"},{"id":"vl/facet_independent_scale","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] facet.column.type: a facet field definition needs `type`"},{"id":"vl/facet_independent_scale_layer_broken","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] facet.column.type: a facet field definition needs `type`"},{"id":"vl/facet_row_facet_row_point_future","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] facet.row.type: a facet field definition needs `type`"},{"id":"vl/geo_choropleth","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"- oracle:           path role=graphics-symbol rd=geoshape label=\"rate: 0.065\" || + aster:           "},{"id":"vl/geo_graticule","status":"fail","where":"runtime","category":"runtime: geo (shape marks / projection fit), root size off by 1-2 px","culprit":"mark[0] shape \"marks\"","first":"only-oracle: path|M107,207L107,207M107,7M107,207L87.491,205.079L68.732,199.388L51.443,190.147L36.289"},{"id":"vl/geo_graticule_object","status":"fail","where":"runtime","category":"runtime: geo (shape marks / projection fit), root size off by 1-2 px","culprit":"mark[0] shape \"marks\"","first":"only-oracle: path|M107,7L107,14.612L107,36.289M88.384,8.748L92.342,10.041L96.889,15.225L107,36.289M6"},{"id":"vl/geo_layer_line_london","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] view: the view background property is not supported; set it through config.view"},{"id":"vl/geo_line","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"root: svg|814|512|0 0 814 512|bg=#ffffff vs svg|813|512|0 0 813 512|bg=#ffffff"},{"id":"vl/geo_params_projections","status":"error","where":"runtime","category":"error: runtime rejects a spec value that vega takes from a signal / another dataset","first":"Projection type must be a name string."},{"id":"vl/geo_repeat","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:                 path role=graphics-symbol rd=geoshape label=\"population: 3411307; geo: [ob"},{"id":"vl/geo_rule","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"root: svg|814|512|0 0 814 512|bg=#ffffff vs svg|813|512|0 0 813 512|bg=#ffffff"},{"id":"vl/geo_text","status":"fail","where":"runtime","category":"runtime: geo (shape marks / projection fit), root size off by 1-2 px","culprit":"mark[0] shape \"layer_0_marks\"","first":"only-oracle: path|M26.222,481.591L25.631,480.002L24.797,479.137L24.869,478.902L25.84,479.801L26.477,"},{"id":"vl/geo_trellis","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] mark: maps (geoshape marks, projections, longitude / latitude) inside a facet are not sup"},{"id":"vl/hconcat_weather","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:               g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 't"},{"id":"vl/histogram_bin_spacing_reverse","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M102.333,248.8L132.667,248.8L132.667,310L102.333,310Z|fill=#4c78a8||"},{"id":"vl/histogram_bin_transform","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x.bin.binned: pre-binned data (binned: true) is not supported; let @aster/vl bin"},{"id":"vl/histogram_log","status":"fail","where":"compiler","category":"compiler: data+marks","culprit":"data+marks","first":"only-oracle: path|M136.714,235L158.143,235L158.143,310L136.714,310Z|fill=#4c78a8||"},{"id":"vl/histogram_nonlinear","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"- oracle:             path.foreground hidden=true || + aster:                g .mark-text.role-axis-"},{"id":"vl/histogram_ordinal","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'IMDB Ra"},{"id":"vl/histogram_ordinal_sort","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'IMDB Ra"},{"id":"vl/histogram_rel_freq","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x.bin.binned: pre-binned data (binned: true) is not supported; let @aster/vl bin"},{"id":"vl/histogram_reverse","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M168,14.5L200.333,14.5L200.333,310L168,310Z|fill=#4c78a8||"},{"id":"vl/interactive_1d_geo_brush","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] layer[1].params[0].select.encodings: unknown channel \"latitude\""},{"id":"vl/interactive_airport_crossfilter","status":"error","where":"runtime","category":"error: runtime rejects a spec value that vega takes from a signal / another dataset","first":"Undefined data set name: \"lookup_brush\""},{"id":"vl/interactive_bin_extent","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] vconcat[1].encoding.x.bin.extent: must be a [min, max] pair of numbers (parameter referen"},{"id":"vl/interactive_bin_extent_bottom","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] vconcat[0].encoding.x.bin.extent: must be a [min, max] pair of numbers (parameter referen"},{"id":"vl/interactive_concat_layer","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:               g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Gradient leg"},{"id":"vl/interactive_crossfilter","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:               g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 't"},{"id":"vl/interactive_dashboard_europe_pop","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] hconcat[1].params[0].name: duplicate parameter name \"brush\""},{"id":"vl/interactive_geo_earthquakes","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"root: svg|311|315|0 0 311 315|bg=#ffffff vs svg|311|314|0 0 311 314|bg=#ffffff"},{"id":"vl/interactive_geo_facet_species","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] mark: maps (geoshape marks, projections, longitude / latitude) inside a facet are not sup"},{"id":"vl/interactive_global_development","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] layer[0].mark.x: positional mark-def constants (x/x2/y/y2) are not supported; use encodin"},{"id":"vl/interactive_histogram_full_height_hover","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M101.333,10L133.667,10L133.667,310L101.333,310Z|fill=#eeeeee|opacity=0|"},{"id":"vl/interactive_layered_crossfilter","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:               g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 't"},{"id":"vl/interactive_layered_crossfilter_discrete","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:               g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 't"},{"id":"vl/interactive_legend","status":"fail","where":"runtime","category":"runtime: numbers: coordinates differ in the 3rd decimal (rounding / summation order)","first":"only-oracle: path|M6,125.706L8.524,125.406L10.886,125.331L13.41,122.475L15.853,123.044L18.378,125.61"},{"id":"vl/interactive_legend_dblclick","status":"fail","where":"runtime","category":"runtime: numbers: coordinates differ in the 3rd decimal (rounding / summation order)","first":"only-oracle: path|M6,125.706L8.524,125.406L10.886,125.331L13.41,122.475L15.853,123.044L18.378,125.61"},{"id":"vl/interactive_line_brush_cursor","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] view: the view background property is not supported; set it through config.view"},{"id":"vl/interactive_line_hover","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] layers give scale \"x\" incompatible types (\"time\" and \"linear\"); vega-lite would make them"},{"id":"vl/interactive_line_point_hover","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"only-oracle: path|M384,32A5,5,0,1,1,374,32A5,5,0,1,1,384,32|fill=#4c78a8;stroke=#4c78a8;stroke-width"},{"id":"vl/interactive_multi_line_label","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"only-oracle: path|M484,32A5,5,0,1,1,474,32A5,5,0,1,1,484,32|fill=#4c78a8;stroke=#4c78a8;stroke-width"},{"id":"vl/interactive_multi_line_pivot_tooltip","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"only-oracle: path|M484,32A5,5,0,1,1,474,32A5,5,0,1,1,484,32|fill=none;stroke=#4c78a8;stroke-width=1."},{"id":"vl/interactive_overview_detail","status":"fail","where":"compiler","category":"compiler: data+marks","culprit":"data+marks","first":"- oracle:                   path.foreground hidden=true || + aster:                      g .mark-tex"},{"id":"vl/interactive_paintbrush_simple_false","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] params[0]: a variable parameter needs `value` or `expr`"},{"id":"vl/interactive_paintbrush_simple_true","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] params[0]: a variable parameter needs `value` or `expr`"},{"id":"vl/interactive_panzoom_vconcat_shared","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M104.239,428.462A2.739,2.739,0,1,1,98.761,428.462A2.739,2.739,0,1,1,104.239,428.46"},{"id":"vl/interactive_point_domainRaw_binding","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x.scale.domainRaw: domainRaw is not supported"},{"id":"vl/interactive_seattle_weather","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + title/config/projections","culprit":"scales+guides (scales, axes, legends) + title/config/projections","first":"- oracle:         g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Symbol legend titl"},{"id":"vl/interactive_stocks_nearest_index","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"- oracle:         g .mark-rule.role-mark.layer_2_marks role=graphics-symbol rd=rule mark container |"},{"id":"vl/isotype_bar_chart","status":"fail","where":"runtime","category":"runtime: facet / cell group layout or order","culprit":"mark[1] group \"cell\"","first":"- oracle:         g .mark-group.role-row-header.row_header role=graphics-object rd=group mark contai"},{"id":"vl/isotype_bar_chart_emoji","status":"fail","where":"compiler","category":"compiler: data+marks","culprit":"data+marks","first":"- oracle:         g .mark-group.role-row-header.row_header role=graphics-object rd=group mark contai"},{"id":"vl/isotype_grid","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"only-oracle: path|M5,5L405,5L405,405L5,405Z|fill=none;stroke=;stroke-width=1||"},{"id":"vl/layer_arc_label","status":"fail","where":"compiler","category":"compiler: data+marks","culprit":"data+marks","first":"only-oracle: text|118.847,240.42|d|fill=#72b7b2;font-family=sans-serif;font-size=11;text-anchor=midd"},{"id":"vl/layer_bar_annotations","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] layer[1].layer[1].mark.x: positional mark-def constants (x/x2/y/y2) are not supported; us"},{"id":"vl/layer_bar_circle_grouped","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"only-oracle: path|M310,27L320,27L320,37L310,37Z|fill=#4c78a8||"},{"id":"vl/layer_bar_fruit","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"- oracle:           path role=graphics-symbol rd=bar label=\"count: 21; name: 🍊; Number of fruit: 21"},{"id":"vl/layer_bar_grouped_line_ungrouped","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M310,27L320,27L320,37L310,37Z|fill=#4c78a8||"},{"id":"vl/layer_bar_labels_grey","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] layer[1].mark.x: positional mark-def constants (x/x2/y/y2) are not supported; use encodin"},{"id":"vl/layer_bar_labels_style","status":"fail","where":"compiler","category":"compiler: data+marks","culprit":"data+marks","first":"only-oracle: text|190.727,18|28|fill=#000000;font-family=sans-serif;font-size=11||"},{"id":"vl/layer_bar_tick_binned_time_band_position","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x.timeUnit: timeUnit \"binnedutcyear\": binned time units are not supported"},{"id":"vl/layer_bar_tick_datum_grouped","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.y: a constant datum position is not supported on the \"tick\" mark"},{"id":"vl/layer_boxplot_circle","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] mark type not supported yet: boxplot"},{"id":"vl/layer_candlestick","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.y: a channel definition needs `field`, `value`, `datum` or `aggregate: \"count\"`"},{"id":"vl/layer_circle_independent_color","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Symbol legend titl"},{"id":"vl/layer_color_legend_left","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"only-oracle: path|M16,32A5,5,0,1,1,6,32A5,5,0,1,1,16,32|fill=#4c78a8;stroke=#4c78a8;stroke-width=1.5"},{"id":"vl/layer_cumulative_histogram","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x.bin: pre-binned data (bin: \"binned\") is not supported; let @aster/vl bin the f"},{"id":"vl/layer_dual_axis","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M43,227.71L80.015,211.398L114.642,186.129L151.657,159.8L187.478,117.04L224.493,86L"},{"id":"vl/layer_falkensee","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'year (y"},{"id":"vl/layer_histogram_global_mean","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] layers give scale \"x\" different explicit or signal-based domains, which cannot be merged"},{"id":"vl/layer_likert","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] view: the view background property is not supported; set it through config.view"},{"id":"vl/layer_line_co2_concentration","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x: a channel definition needs `field`, `value`, `datum` or `aggregate: \"count\"`"},{"id":"vl/layer_line_datum_rule_datetime","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x.datum: temporal/DateTime datums are not supported"},{"id":"vl/layer_line_errorband_pre_aggregated","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"- oracle:         g .mark-group.role-axis hidden=true || + aster:          g .mark-group.role-axis r"},{"id":"vl/layer_line_rolling_mean_point_raw","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.y: a channel definition needs `field`, `value`, `datum` or `aggregate: \"count\"`"},{"id":"vl/layer_line_window","status":"fail","where":"runtime","category":"runtime: inline primitive `values` are not wrapped as {data: v}","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"Y-axis titled 'Frames "},{"id":"vl/layer_null_data","status":"fail","where":"runtime","category":"runtime: path: a line/area with breaks closes each piece with Z (vega: M..L..M..L)","first":"only-oracle: path|M43,157.273L85.857,10M171.571,10L214.429,75.455M300.143,10L343,75.455|fill=none;st"},{"id":"vl/layer_overlay","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"- oracle:         g .mark-line.role-mark.layer_0_layer_0_marks role=graphics-object rd=line mark con"},{"id":"vl/layer_point_errorbar_1d_horizontal","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"only-oracle: path|M6.5,5.5L306.5,5.5L306.5,25.5L6.5,25.5Z|fill=none;stroke=#dddddd;stroke-width=1||"},{"id":"vl/layer_point_errorbar_1d_vertical","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"only-oracle: path|M59.5,10.5L79.5,10.5L79.5,310.5L59.5,310.5Z|fill=none;stroke=#dddddd;stroke-width="},{"id":"vl/layer_point_errorbar_stdev","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'Barley "},{"id":"vl/layer_point_line_regression","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] layer[2].transform[0].params: regression `params: true` is not supported"},{"id":"vl/layer_ranged_dot","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M131.5,5.5L431.5,5.5L431.5,105.5L131.5,105.5Z|fill=none;stroke=#dddddd;stroke-widt"},{"id":"vl/layer_rect_extent","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M43,30.4L343,30.4L343,256L43,256Z|fill=#4c78a8|opacity=0.2|"},{"id":"vl/layer_scatter_errorband_1D_stdev_global_mean","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"Y-axis titled 'Miles p"},{"id":"vl/layer_scatter_errorband_1d_stdev","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"Y-axis titled 'Miles p"},{"id":"vl/layer_text_heatmap_joinaggregate","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] layers give scale \"color\" incompatible types (\"linear\" and \"ordinal\"); vega-lite would ma"},{"id":"vl/layer_timeunit_rect","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'month' "},{"id":"vl/line_bump","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M83.5,5.5L383.5,5.5L383.5,65.5L83.5,65.5Z|fill=none;stroke=#dddddd;stroke-width=1|"},{"id":"vl/line_color_binned","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'Year' f"},{"id":"vl/line_color_halo","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.stroke.datum is not supported (datum works on x, y, x2, y2, longitude, latitude "},{"id":"vl/line_color_with_scale_domain","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M107.5,5.5L187.5,5.5L187.5,305.5L107.5,305.5Z|fill=none;stroke=#dddddd;stroke-widt"},{"id":"vl/line_concat_facet","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] config.facet: this config property is valid Vega-Lite but is not supported by @aster/vl ("},{"id":"vl/line_conditional_axis","status":"fail","where":"runtime","category":"runtime: expression `time(x)` returns a Date, not a timestamp","culprit":"removing axes","first":"only-oracle: line|260.5,10.5|260.5,310.5|stroke=#dddddd;stroke-width=1||"},{"id":"vl/line_conditional_axis_config","status":"fail","where":"runtime","category":"runtime: expression `time(x)` returns a Date, not a timestamp","culprit":"removing axes","first":"only-oracle: line|260.5,10.5|260.5,310.5|stroke=#dddddd;stroke-width=1||"},{"id":"vl/line_dashed_part","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.strokeDash: a data-driven strokeDash (scale + legend) is not supported; use a co"},{"id":"vl/line_default_format","status":"fail","where":"runtime","category":"runtime: expression `time(x)` returns a Date, not a timestamp","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'date' f"},{"id":"vl/line_domainminmax","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"- oracle:         g .mark-group.role-axis hidden=true || + aster:        path.foreground hidden=true"},{"id":"vl/line_encoding_impute_keyvals","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.y.impute: channel-level `impute` is not supported"},{"id":"vl/line_encoding_impute_keyvals_sequence","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.y.impute: channel-level `impute` is not supported"},{"id":"vl/line_impute_frame","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.y.impute: channel-level `impute` is not supported"},{"id":"vl/line_impute_method","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.y.impute: channel-level `impute` is not supported"},{"id":"vl/line_impute_value","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.y.impute: channel-level `impute` is not supported"},{"id":"vl/line_month_center_band","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'date (m"},{"id":"vl/line_month_center_band_offset","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M103.18,43.343L123.59,43.343L123.59,310L103.18,310Z|fill=#4c78a8||"},{"id":"vl/line_narrow_yearmonth_span","status":"fail","where":"runtime","category":"runtime: expression `time(x)` returns a Date, not a timestamp","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'date (y"},{"id":"vl/line_narrow_yearquarter_span","status":"fail","where":"runtime","category":"runtime: expression `time(x)` returns a Date, not a timestamp","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'date (y"},{"id":"vl/line_overlay","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Symbol legend titl"},{"id":"vl/line_overlay_stroked","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M384,34A5,5,0,1,1,374,34A5,5,0,1,1,384,34|fill=#ffffff;stroke=#4c78a8;stroke-width"},{"id":"vl/line_override_dynamic_format","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'date' f"},{"id":"vl/line_override_static_format","status":"fail","where":"runtime","category":"runtime: expression `time(x)` returns a Date, not a timestamp","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'date' f"},{"id":"vl/line_shape_overlay","status":"fail","where":"compiler","category":"compiler: data+marks","culprit":"data+marks","first":"- oracle:         g .mark-line.role-mark.layer_0_marks role=graphics-object rd=line mark container |"},{"id":"vl/line_skip_invalid","status":"fail","where":"runtime","category":"runtime: path: a line/area with breaks closes each piece with Z (vega: M..L..M..L)","first":"only-oracle: path|M43,235L93,85M193,197.5L243,85L293,10L343,160|fill=none;stroke=#4c78a8;stroke-widt"},{"id":"vl/line_skip_invalid_mid","status":"fail","where":"runtime","category":"runtime: path: a line/area with breaks closes each piece with Z (vega: M..L..M..L)","first":"only-oracle: path|M43,235L93,85M193,197.5ZM293,10L343,160|fill=none;stroke=#4c78a8;stroke-width=2||"},{"id":"vl/line_skip_invalid_mid_cap_square","status":"fail","where":"runtime","category":"runtime: path: a line/area with breaks closes each piece with Z (vega: M..L..M..L)","first":"only-oracle: path|M43,235L93,85M193,197.5ZM293,10L343,160|fill=none;stroke=#4c78a8;stroke-width=2;st"},{"id":"vl/line_skip_invalid_mid_overlay","status":"fail","where":"runtime","category":"runtime: path: a line/area with breaks closes each piece with Z (vega: M..L..M..L)","first":"only-oracle: path|M43,235L93,85M193,197.5ZM293,10L343,160|fill=none;stroke=#4c78a8;stroke-width=2||"},{"id":"vl/line_slope","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M162,32L172,32|fill=none;stroke=#4c78a8;stroke-width=1.5||"},{"id":"vl/line_sort_axis","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M51.5,10.5L111.5,10.5L111.5,310.5L51.5,310.5Z|fill=none;stroke=#dddddd;stroke-widt"},{"id":"vl/line_strokedash","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.strokeDash: a data-driven strokeDash (scale + legend) is not supported; use a co"},{"id":"vl/line_timestamp_domain","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'ts' for"},{"id":"vl/nested_concat_align","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"- oracle:               g .mark-group.role-scope.child__column_Rotten_Tomatoes_Rating_group role=gra"},{"id":"vl/parallel_coordinate","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.y: a constant value position is not supported on the \"tick\" mark"},{"id":"vl/param_search_input","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] params[0].bind: unknown bind property \"placeholder\""},{"id":"vl/point_1d","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M6.5,5.5L306.5,5.5L306.5,25.5L6.5,25.5Z|fill=none;stroke=#dddddd;stroke-width=1||"},{"id":"vl/point_1d_array","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M5.5,5.5L65.5,5.5L65.5,25.5L5.5,25.5Z|fill=none;stroke=#dddddd;stroke-width=1||"},{"id":"vl/point_2d_aggregate","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M35.5,5.5L95.5,5.5L95.5,305.5L35.5,305.5Z|fill=none;stroke=#dddddd;stroke-width=1|"},{"id":"vl/point_2d_array","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M35.5,12.5L95.5,12.5L95.5,312.5L35.5,312.5Z|fill=none;stroke=#dddddd;stroke-width="},{"id":"vl/point_2d_array_named","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"only-oracle: path|M35.5,12.5L95.5,12.5L95.5,312.5L35.5,312.5Z|fill=none;stroke=#dddddd;stroke-width="},{"id":"vl/point_angle_windvector","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.angle: a data-driven angle (scale + legend) is not supported; use a constant {\"v"},{"id":"vl/point_background","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] view: the view background property is not supported; set it through config.view"},{"id":"vl/point_binned_color","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:           path role=graphics-symbol rd=point label=\"Horsepower: 130; Miles_per_Gallon: 18;"},{"id":"vl/point_binned_opacity","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:           path role=graphics-symbol rd=point label=\"Horsepower: 130; Miles_per_Gallon: 18;"},{"id":"vl/point_binned_size","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:           path role=graphics-symbol rd=point label=\"Horsepower: 130; Miles_per_Gallon: 18;"},{"id":"vl/point_conditional_opacity","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M103.239,154A2.739,2.739,0,1,1,97.761,154A2.739,2.739,0,1,1,103.239,154|fill=none;"},{"id":"vl/point_constant_legend_domain","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color.scale.domain: a domain object must be {\"param\": ...}, {\"unionWith\": [...]}"},{"id":"vl/point_dot_timeunit_color","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M324,21L340,21L340,85L324,85Z|fill=url(linearGradient{x1=0;x2=0;y1=1;y2=0}[stop(0;"},{"id":"vl/point_grouped","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"only-oracle: path|M320,34A5,5,0,1,1,310,34A5,5,0,1,1,320,34|fill=none;stroke=#4c78a8;stroke-width=1."},{"id":"vl/point_invalid_color","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M51.5,12.5L351.5,12.5L351.5,312.5L51.5,312.5Z|fill=none;stroke=#dddddd;stroke-widt"},{"id":"vl/point_overlap","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M17.739,15A2.739,2.739,0,1,1,12.261,15A2.739,2.739,0,1,1,17.739,15|fill=none;strok"},{"id":"vl/point_quantile_quantile","status":"error","where":"runtime","category":"error: runtime lacks a Vega transform / expression function / transform backend","first":"Unrecognized function: quantileUniform"},{"id":"vl/point_scale_range_field","status":"error","where":"runtime","category":"error: runtime rejects a spec value that vega takes from a signal / another dataset","first":"Undefined data set name: undefined"},{"id":"vl/point_shape_custom","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"only-oracle: path|M367,33L368.176,33.618L367.951,32.309L368.902,31.382L367.587,31.191L367,30L366.413"},{"id":"vl/rect_binned_heatmap","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"- oracle:           path role=graphics-symbol rd=rect mark label=\"IMDB Rating (binned): 9.2 – 9.4; R"},{"id":"vl/rect_heatmap_weather","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M472,22L488,22L488,178L472,178Z|fill=url(linearGradient{x1=0;x2=0;y1=1;y2=0}[stop("},{"id":"vl/rect_heatmap_weather_temporal_center_band","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'Day' fo"},{"id":"vl/rect_heatmap_weather_temporal_center_band_config","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'Day' fo"},{"id":"vl/rect_lasagna","status":"fail","where":"runtime","category":"runtime: expression `time(x)` returns a Date, not a timestamp","culprit":"removing axes","first":"- oracle:           path role=graphics-symbol rd=rect mark label=\"Time: 2000; symbol: MSFT; Price: 3"},{"id":"vl/rect_mosaic_labelled","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] config.concat: this config property is valid Vega-Lite but is not supported by @aster/vl "},{"id":"vl/rect_mosaic_labelled_with_offset","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] config.concat: this config property is valid Vega-Lite but is not supported by @aster/vl "},{"id":"vl/rect_mosaic_simple","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M117.315,5L305,5L305,132.559L117.315,132.559Z|fill=#e45756|opacity=0.8|"},{"id":"vl/rect_params","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x: a constant datum position is not supported on the \"rect\" mark"},{"id":"vl/repeat_child_layer","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M344.5,11.5L584.5,11.5L584.5,311.5L344.5,311.5Z|fill=none;stroke=#dddddd;stroke-wi"},{"id":"vl/repeat_histogram_autosize","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"only-oracle: path|M52.5,11.5L294.5,11.5L294.5,311.5L52.5,311.5Z|fill=none;stroke=#dddddd;stroke-widt"},{"id":"vl/repeat_histogram_flights","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:               g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 't"},{"id":"vl/repeat_independent_colors","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:               g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Symbol legen"},{"id":"vl/repeat_layer","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-line.role-mark.child__layer_US_Gross_marks role=graphics-object rd=line ma"},{"id":"vl/repeat_splom","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"- oracle:         g .mark-group.role-scope.child__row_Beak_Length__mm_column_Body_Mass__g__group rol"},{"id":"vl/rule_color_mean","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M51.5,10.5L71.5,10.5L71.5,310.5L51.5,310.5Z|fill=none;stroke=#dddddd;stroke-width="},{"id":"vl/rule_extent","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: line|101,25.5|101,248|stroke=#000000;stroke-width=1||"},{"id":"vl/rule_params","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.x.datum: temporal/DateTime datums are not supported"},{"id":"vl/scatter_image","status":"fail","where":"runtime","category":"runtime: image: href is not resolved against the loader baseURL (harness gives vega a baseURL)","first":"only-oracle: image|83.692,236.308|50|50|href=https://gallery.invalid/data/ffox.png|fill=none|@preser"},{"id":"vl/selection_composition_and","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`"},{"id":"vl/selection_composition_or","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`"},{"id":"vl/selection_heatmap","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M173,21L189,21L189,141L173,141Z|fill=url(linearGradient{x1=0;x2=0;y1=1;y2=0}[stop("},{"id":"vl/selection_project_interval","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`"},{"id":"vl/selection_project_interval_x","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`"},{"id":"vl/selection_project_interval_x_y","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`"},{"id":"vl/selection_project_interval_y","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`"},{"id":"vl/selection_project_multi_cylinders_origin","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"only-oracle: path|M362.67,142L371.33,137L371.33,147Z|fill=none;stroke=#808080;stroke-width=1.5|opaci"},{"id":"vl/selection_project_multi_origin","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"only-oracle: path|M362.67,142L371.33,137L371.33,147Z|fill=none;stroke=#808080;stroke-width=1.5|opaci"},{"id":"vl/selection_project_single_cylinders_origin","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"only-oracle: path|M362.67,142L371.33,137L371.33,147Z|fill=none;stroke=#808080;stroke-width=1.5|opaci"},{"id":"vl/selection_project_single_origin","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"only-oracle: path|M362.67,142L371.33,137L371.33,147Z|fill=none;stroke=#808080;stroke-width=1.5|opaci"},{"id":"vl/selection_type_interval","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`"},{"id":"vl/selection_type_point","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`"},{"id":"vl/selection_type_single_dblclick","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`"},{"id":"vl/selection_type_single_pointerover","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`"},{"id":"vl/sequence_line","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] data: data generators: `sequence` is not supported (`sphere` and `graticule` are)"},{"id":"vl/sequence_line_fold","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] data: data generators: `sequence` is not supported (`sphere` and `graticule` are)"},{"id":"vl/stacked_area","status":"fail","where":"runtime","category":"runtime: numbers: coordinates differ in the 3rd decimal (rounding / summation order)","first":"only-oracle: path|M75,157.013L77.524,158.013L79.886,159.613L82.41,164.75L84.853,163.013L87.378,159.9"},{"id":"vl/stacked_area_binned","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M83.667,308.5L117,297.1L150.333,280L183.667,228.1L217,120.1L250.333,14.5L283.667,8"},{"id":"vl/stacked_area_overlay","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"- oracle:         g .mark-group.role-scope.layer_0_pathgroup role=graphics-object rd=group mark cont"},{"id":"vl/stacked_area_stream","status":"fail","where":"runtime","category":"runtime: numbers: coordinates differ in the 3rd decimal (rounding / summation order)","first":"only-oracle: path|M6,125.706L8.524,125.406L10.886,125.331L13.41,122.475L15.853,123.044L18.378,125.61"},{"id":"vl/stacked_area_without_agg","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-scope.layer_0_pathgroup role=graphics-object rd=group mark cont"},{"id":"vl/stacked_bar_1d","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M6.5,5.5L306.5,5.5L306.5,25.5L6.5,25.5Z|fill=none;stroke=#dddddd;stroke-width=1||"},{"id":"vl/stacked_bar_count_corner_radius_stroke","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M61,18.846L61,18.846C65.967,18.846,70,22.879,70,27.846L70,296C70,300.967,65.967,30"},{"id":"vl/stacked_bar_h_custom_color_domain","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M255.92,126L293.46,126L293.46,144L255.92,144Z|fill=#72b7b2||"},{"id":"vl/stacked_bar_h_normalized_labeled","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: text|116.328,16.5|9310714|fill=#ffffff;font-family=sans-serif;font-size=11;text-anchor="},{"id":"vl/stacked_bar_v_ascending","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.order: a channel definition needs `field`, `value`, `datum` or `aggregate: \"coun"},{"id":"vl/stacked_bar_weather","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M52,122.692L70,122.692L70,145.769L52,145.769Z|fill=#aec7e8||"},{"id":"vl/stocks-2009-layered-line-point","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.strokeDash: a data-driven strokeDash (scale + legend) is not supported; use a co"},{"id":"vl/ternary","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] layer[9].layer[0].encoding.fill.scale: `scale: null` (identity/disabled scale) is not sup"},{"id":"vl/test_invalid_break_paths_filter_domains","status":"fail","where":"runtime","category":"runtime: other (mark[0] group \"concat_0_group\")","culprit":"mark[0] group \"concat_0_group\"","first":"- oracle:                     g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis tit"},{"id":"vl/test_invalid_break_paths_show_domains","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"- oracle:                     g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis tit"},{"id":"vl/test_invalid_break_paths_show_path_domains","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"only-oracle: path|M220.5,208.5L320.5,208.5L320.5,308.5L220.5,308.5Z|fill=none;stroke=#dddddd;stroke-"},{"id":"vl/test_invalid_color_filter","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M211.5,180.5L311.5,180.5L311.5,280.5L211.5,280.5Z|fill=none;stroke=#dddddd;stroke-"},{"id":"vl/test_invalid_color_filter_but_include_in_scale_invalid","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M227.5,185.5L327.5,185.5L327.5,285.5L227.5,285.5Z|fill=none;stroke=#dddddd;stroke-"},{"id":"vl/test_invalid_color_show","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M227.5,185.5L327.5,185.5L327.5,285.5L227.5,285.5Z|fill=none;stroke=#dddddd;stroke-"},{"id":"vl/test_invalid_color_size_config_scale","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"- oracle:         g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Symbol legend titl"},{"id":"vl/test_invalid_color_size_mark_filter_only","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"- oracle:         g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Symbol legend titl"},{"id":"vl/test_invalid_color_size_mark_show_only","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends)","culprit":"scales+guides (scales, axes, legends)","first":"- oracle:         g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Symbol legend titl"},{"id":"vl/test_invalid_default","status":"fail","where":"runtime","category":"runtime: other (not isolated)","first":"only-oracle: path|M220.5,208.5L320.5,208.5L320.5,308.5L220.5,308.5Z|fill=none;stroke=#dddddd;stroke-"},{"id":"vl/test_invalid_filter","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M220.5,208.5L320.5,208.5L320.5,308.5L220.5,308.5Z|fill=none;stroke=#dddddd;stroke-"},{"id":"vl/test_invalid_null","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M220.5,208.5L320.5,208.5L320.5,308.5L220.5,308.5Z|fill=none;stroke=#dddddd;stroke-"},{"id":"vl/test_invalid_opacity_filter","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M211.5,180.5L311.5,180.5L311.5,280.5L211.5,280.5Z|fill=none;stroke=#dddddd;stroke-"},{"id":"vl/test_invalid_opacity_filter_but_include_in_scale_invalid","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M227.5,185.5L327.5,185.5L327.5,285.5L227.5,285.5Z|fill=none;stroke=#dddddd;stroke-"},{"id":"vl/test_invalid_opacity_show","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M227.5,185.5L327.5,185.5L327.5,285.5L227.5,285.5Z|fill=none;stroke=#dddddd;stroke-"},{"id":"vl/test_invalid_show","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M220.5,208.5L320.5,208.5L320.5,308.5L220.5,308.5Z|fill=none;stroke=#dddddd;stroke-"},{"id":"vl/test_single_point_color","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M17.739,15A2.739,2.739,0,1,1,12.261,15A2.739,2.739,0,1,1,17.739,15|fill=none;strok"},{"id":"vl/test_subobject_missing","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'rank' f"},{"id":"vl/text_format","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M75.5,5.5L125.5,5.5L125.5,65.5L75.5,65.5Z|fill=none;stroke=#dddddd;stroke-width=1|"},{"id":"vl/text_tooltip_image","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] view: the view background property is not supported; set it through config.view"},{"id":"vl/tick_dot","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M6.5,5.5L306.5,5.5L306.5,25.5L6.5,25.5Z|fill=none;stroke=#dddddd;stroke-width=1||"},{"id":"vl/tick_dot_thickness","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M6.5,5.5L306.5,5.5L306.5,25.5L6.5,25.5Z|fill=none;stroke=#dddddd;stroke-width=1||"},{"id":"vl/tick_grouped","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout) + data+marks","culprit":"size/layout (signals, width, height, autosize, padding, layout) + data+marks","first":"only-oracle: path|M320,32A5,5,0,1,1,310,32A5,5,0,1,1,320,32|fill=#4c78a8|opacity=0.7|"},{"id":"vl/tick_histogram","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: path|M100.833,296.6L134.167,296.6L134.167,297.6L100.833,297.6Z|fill=#4c78a8||"},{"id":"vl/tick_sort","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M6.5,5.5L306.5,5.5L306.5,25.5L6.5,25.5Z|fill=none;stroke=#dddddd;stroke-width=1||"},{"id":"vl/tick_timeunit","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'date (y"},{"id":"vl/tick_width_band","status":"fail","where":"compiler","category":"compiler: data+marks","culprit":"data+marks","first":"only-oracle: path|M116.625,144.5L135.375,144.5L135.375,145.5L116.625,145.5Z|fill=#4c78a8|opacity=0.7"},{"id":"vl/time_output_utc_timeunit","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'date (y"},{"id":"vl/time_parse_binnedutc","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.y.timeUnit: timeUnit \"binnedutcyearmonthdatehours\": binned time units are not su"},{"id":"vl/time_parse_binnedutc_with_escaped_field","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.y.timeUnit: timeUnit \"binnedutcyearmonth\": binned time units are not supported"},{"id":"vl/time_parse_local","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M67.5,5.5L87.5,5.5L87.5,45.5L67.5,45.5Z|fill=none;stroke=#dddddd;stroke-width=1||"},{"id":"vl/time_parse_utc","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M67.5,13.5L87.5,13.5L87.5,33.5L67.5,33.5Z|fill=none;stroke=#dddddd;stroke-width=1|"},{"id":"vl/time_parse_utc_format","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M67.5,5.5L87.5,5.5L87.5,45.5L67.5,45.5Z|fill=none;stroke=#dddddd;stroke-width=1||"},{"id":"vl/trail_color","status":"fail","where":"runtime","category":"runtime: arc: large-arc flag of an elliptical arc differs","first":"only-oracle: path|M51.269,294.552L53.771,295.856A0.577,0.577,0,1,1,53.24,296.881L50.731,295.59A0.584"},{"id":"vl/trail_comet","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] view: the view background property is not supported; set it through config.view"},{"id":"vl/trellis_area","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:                       path role=graphics-symbol rd=area mark label=\"Time: Jan 01, 2000; Pr"},{"id":"vl/trellis_area_seattle","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] spec.view: the view background property is not supported; set it through config.view"},{"id":"vl/trellis_area_sort_array","status":"fail","where":"runtime","category":"runtime: facet / cell group layout or order","culprit":"mark[3] group \"cell\"","first":"- oracle:                     g .mark-text.role-title-text role=graphics-symbol rd=title label=\"Titl"},{"id":"vl/trellis_bar_histogram_label_rotated","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"only-oracle: line|130.5,955.5|130.5,960.5|stroke=#888888;stroke-width=1||"},{"id":"vl/trellis_bar_no_header","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-row-header.row_header role=graphics-object rd=group mark contai"},{"id":"vl/trellis_barley","status":"fail","where":"runtime","category":"runtime: facet / cell group layout or order","culprit":"mark[3] group \"trellis_barley_cell\"","first":"- oracle:         g .mark-group.role-column-title.facet-title role=graphics-object rd=group mark con"},{"id":"vl/trellis_barley_independent","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] resolve: `resolve` has no meaning on a single unit spec"},{"id":"vl/trellis_barley_layer_median","status":"fail","where":"runtime","category":"runtime: facet / cell group layout or order","culprit":"mark[3] group \"trellis_barley_cell\"","first":"- oracle:                     g .mark-text.role-title-text role=graphics-symbol rd=title label=\"Titl"},{"id":"vl/trellis_column_year","status":"fail","where":"compiler","category":"compiler: not isolated by grafting","first":"- oracle:                       path role=graphics-symbol rd=line mark label=\"date (quarter): Q1; Me"},{"id":"vl/trellis_cross_sort","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] facet.row.type: a facet field definition needs `type`"},{"id":"vl/trellis_cross_sort_array","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] facet.row.type: a facet field definition needs `type`"},{"id":"vl/trellis_line_quarter","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: line|1000.5,368.5|1000.5,373.5|stroke=#888888;stroke-width=1||"},{"id":"vl/trellis_row_column","status":"fail","where":"runtime","category":"runtime: facet / cell group layout or order","culprit":"mark[5] group \"cell\"","first":"- oracle:             path.foreground hidden=true || + aster:                g .mark-group.role-axis"},{"id":"vl/trellis_scatter_binned_row","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:                     g .mark-text.role-title-text role=graphics-symbol rd=title label=\"Titl"},{"id":"vl/trellis_selections","status":"error","where":"runtime","category":"error: runtime rejects a spec value that vega takes from a signal / another dataset","first":"Undefined data set name: \"child_marks\""},{"id":"vl/vconcat_flatten","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] vconcat[0].transform[0].aggregate: must be a non-empty array of {op, field?, as?}"},{"id":"vl/vconcat_weather","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:               g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 't"},{"id":"vl/waterfall_chart","status":"fail","where":"compiler","category":"compiler: data+marks","culprit":"data+marks","first":"only-oracle: line|130.214,138.981|232.357,138.981|stroke=#404040;stroke-width=2||"},{"id":"vl/wheat_wages","status":"error","where":"compiler","category":"error: @aster/vl rejects a valid Vega-Lite feature","first":"[aster/vl] encoding.y: a channel definition needs `field`, `value`, `datum` or `aggregate: \"count\"`"},{"id":"vl/window_cumulative_running_average","status":"fail","where":"compiler","category":"compiler: scales+guides (scales, axes, legends) + data+marks","culprit":"scales+guides (scales, axes, legends) + data+marks","first":"- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"Y-axis titled 'Miles P"},{"id":"vl/window_rank","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"only-oracle: path|M174,44L184,44|fill=none;stroke=#000000;stroke-width=1.5||"},{"id":"vl/window_top_k_others","status":"fail","where":"compiler","category":"compiler: size/layout (signals, width, height, autosize, padding, layout)","culprit":"size/layout (signals, width, height, autosize, padding, layout)","first":"- oracle:           path role=graphics-symbol rd=bar label=\"Mean of aggregate_gross: 88760226.8386; "}]
+[
+ {
+  "id": "vega/flight-passengers",
+  "kind": "vega",
+  "status": "fail",
+  "first": "paint-order: same records, different order; first divergence at record 24: text|71.5,243.5|Oct 2019|fill=#555555;font-family=sans-serif;font-size=10;text-anchor=middle||  |  text|51.664,243.5|Sep 2019|fill=#555555;font-family=sans-serif;fon...",
+  "firstContent": "paint-order: same records, different order; first divergence at record 24: text|71.5,243.5|Oct 2019|fill=#555555;font-family=sans-serif;font-size=10;text-anchor=middle||  |  text|51.664,243.5|Sep 2019|fill=#555555;font-family=sans-serif;fon...",
+  "flags": [],
+  "where": "runtime",
+  "signature": null,
+  "tags": [],
+  "culprit": "removing axes; removing title",
+  "category": "runtime: guide (removing axes; removing title)"
+ },
+ {
+  "id": "vega/histogram-null-values",
+  "kind": "vega",
+  "status": "fail",
+  "first": "structure: 32 oracle lines vs 32 aster lines; first divergence at line 5",
+  "firstContent": "- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis for a linear scale with values from 1 to 10\" || + aster:          g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis for a linear scale wit...",
+  "flags": [],
+  "where": "runtime",
+  "signature": null,
+  "tags": [],
+  "culprit": "removing axes",
+  "category": "runtime: guide (removing axes)"
+ },
+ {
+  "id": "vega/labeled-scatter-plot",
+  "kind": "vega",
+  "status": "fail",
+  "first": "root: svg|810|610|0 0 810 610|bg= vs svg|852|648|0 0 852 648|bg=",
+  "firstContent": "only-oracle: line|0,148|5,148|stroke=#888888;stroke-width=1||",
+  "flags": [
+   "mark-name-data"
+  ],
+  "where": "runtime",
+  "signature": null,
+  "tags": [],
+  "culprit": "mark[2] text",
+  "category": "runtime: a mark reading `from: {data: <mark name>}` (a group mark's items) draws nothing"
+ },
+ {
+  "id": "vega/platformer",
+  "kind": "vega",
+  "status": "fail",
+  "first": "only-oracle: path|M15.625,46.875L28.125,46.875L28.125,59.375L15.625,59.375Z|fill=#00ffff;fill-opacity=0||{clip-path=url(clipPath{rect|0,0|400|400})}",
+  "firstContent": "only-oracle: path|M15.625,46.875L28.125,46.875L28.125,59.375L15.625,59.375Z|fill=#00ffff;fill-opacity=0||{clip-path=url(clipPath{rect|0,0|400|400})}",
+  "flags": [],
+  "where": "runtime",
+  "signature": null,
+  "tags": [],
+  "culprit": "mark[0] group \"everything\"",
+  "category": "runtime: other (mark[0] group \"everything\")"
+ },
+ {
+  "id": "vega/projections",
+  "kind": "vega",
+  "status": "fail",
+  "first": "root: svg|0|0|0 0 0 0|bg= vs svg|940|1740|0 0 940 1740|bg=",
+  "firstContent": "- oracle:             path.foreground hidden=true || + aster:                g .mark-shape.role-mark role=graphics-symbol rd=shape mark container",
+  "flags": [],
+  "where": "runtime",
+  "signature": null,
+  "tags": [],
+  "culprit": "mark[0] group",
+  "category": "runtime: other (mark[0] group)"
+ },
+ {
+  "id": "vega/word-cloud",
+  "kind": "vega",
+  "status": "fail",
+  "first": "structure: 7 oracle lines vs 6 aster lines; first divergence at line 5",
+  "firstContent": "- oracle:         g .mark-text.role-mark role=graphics-object rd=text mark container || + aster:        path.foreground hidden=true",
+  "flags": [],
+  "where": "runtime",
+  "signature": null,
+  "tags": [],
+  "culprit": "mark[0] text",
+  "category": "runtime: a text mark positioned from an undefined signal changes the autosize bounds"
+ },
+ {
+  "id": "vl/arc_ordinal_theta",
+  "kind": "vl",
+  "status": "fail",
+  "first": "only-oracle: path|M155,136.25A18.75,18.75,0,0,1,168.258,141.742L155,155Z|fill=#4c78a8||",
+  "firstContent": "only-oracle: path|M155,136.25A18.75,18.75,0,0,1,168.258,141.742L155,155Z|fill=#4c78a8||",
+  "flags": [],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": "scales+guides (scales, axes, legends) + data+marks",
+  "category": "compiler: scales+guides (scales, axes, legends) + data+marks"
+ },
+ {
+  "id": "vl/arc_params",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] hconcat[0].mark.radius2: mark-def radius2 is not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/arc_radial",
+  "kind": "vl",
+  "status": "fail",
+  "first": "root: svg|312|319|0 0 312 319|bg=#ffffff vs svg|314|314|0 0 314 314|bg=#ffffff",
+  "firstContent": "only-oracle: path|M210.825,94.543A82.45,82.45,0,0,0,176.366,76.857L161.698,137.56A20,20,0,0,1,170.056,141.85Z|fill=#f58518;stroke=#ffffff;stroke-width=1||",
+  "flags": [
+   "primitive-values"
+  ],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": "scales+guides (scales, axes, legends) + data+marks",
+  "category": "compiler: scales+guides (scales, axes, legends) + data+marks"
+ },
+ {
+  "id": "vl/arc_radial_histogram",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.angle: a data-driven angle (scale + legend) is not supported; use a constant {\"value\": ...} or a condition",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/area_overlay_with_y2",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.y2: a constant datum position is not supported on the \"area\" mark",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/bar_aggregate_size",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.size is not supported on the \"bar\" mark",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/bar_argmax_transform",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] transform[0].aggregate[0].op: op \"argmax\" is not supported in transforms (use {\"op\":\"max\"} with a join)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/bar_binned_data",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x.bin.binned: pre-binned data (binned: true) is not supported; let @aster/vl bin the field or use a bin transform",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/bar_binned_yearmonth_grouped",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] transform[0].filter.timeUnit: timeUnit \"binnedyearmonth\": binned time units are not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/bar_binned_yearmonth_grouped_center_band",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] transform[0].filter.timeUnit: timeUnit \"binnedyearmonth\": binned time units are not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/bar_binned_yearmonth_label",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] transform[1].filter.timeUnit: timeUnit \"binnedyearmonth\": binned time units are not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/bar_binned_yearmonth_label_band_center",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] transform[1].filter.timeUnit: timeUnit \"binnedyearmonth\": binned time units are not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/bar_binnedyearmonth",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x.timeUnit: timeUnit \"binnedyearmonth\": binned time units are not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/bar_bullet_expr_bind",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x: a channel definition needs `field`, `value`, `datum` or `aggregate: \"count\"`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/bar_color_disabled_scale",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color.scale: `scale: null` (identity/disabled scale) is not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/bar_grouped_custom_padding",
+  "kind": "vl",
+  "status": "fail",
+  "first": "only-oracle: path|M111,119.091L122.429,119.091L122.429,310L111,310Z|fill=#4c78a8||",
+  "firstContent": "only-oracle: path|M111,119.091L122.429,119.091L122.429,310L111,310Z|fill=#4c78a8||",
+  "flags": [],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": "scales+guides (scales, axes, legends)",
+  "category": "compiler: scales+guides (scales, axes, legends)"
+ },
+ {
+  "id": "vl/bar_grouped_facet_independent_scale",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] resolve: `resolve` has no meaning on a single unit spec",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/bar_grouped_facet_independent_scale_fixed_width",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] resolve: `resolve` has no meaning on a single unit spec",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/bar_grouped_repeated",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.xOffset.datum is not supported (datum works on x, y, x2, y2, longitude, latitude and color)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/bar_heatlane",
+  "kind": "vl",
+  "status": "fail",
+  "first": "only-oracle: path|M111,40.75L134.333,40.75C135.989,40.75,137.333,42.094,137.333,43.75L137.333,150.25C137.333,151.906,135.989,153.25,134.333,153.25L111,153.25C109.344,153.25,108,151.906,108,150.25L108,43.75C108,42.094,109.344,40.75,111,40.75...",
+  "firstContent": "only-oracle: path|M111,40.75L134.333,40.75C135.989,40.75,137.333,42.094,137.333,43.75L137.333,150.25C137.333,151.906,135.989,153.25,134.333,153.25L111,153.25C109.344,153.25,108,151.906,108,150.25L108,43.75C108,42.094,109.344,40.75,111,40.75...",
+  "flags": [],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": "scales+guides (scales, axes, legends) + data+marks",
+  "category": "compiler: scales+guides (scales, axes, legends) + data+marks"
+ },
+ {
+  "id": "vl/bar_layered_weather",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.y: a channel definition needs `field`, `value`, `datum` or `aggregate: \"count\"`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/bar_simple_binned_timeunit_special_chars",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.y.timeUnit: timeUnit \"binnedutcyearmonthdate\": binned time units are not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_1D_horizontal",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] boxplot requires plain x and y fields (no aggregate, bin or timeUnit)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_1D_horizontal_custom_mark",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] boxplot requires plain x and y fields (no aggregate, bin or timeUnit)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_1D_horizontal_explicit",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] boxplot requires plain x and y fields (no aggregate, bin or timeUnit)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_1D_invalid",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x.axis: boxplot supports only field, type and title on x/y",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_1D_vertical",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] boxplot requires plain x and y fields (no aggregate, bin or timeUnit)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_2D_horizontal",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x.scale: boxplot supports only field, type and title on x/y",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_2D_horizontal_color_size",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.size: boxplot only supports the x and y channels",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_2D_vertical",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color: boxplot only supports the x and y channels",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_2D_vertical_single_per_group",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x.axis: boxplot supports only field, type and title on x/y",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_2D_vertical_single_per_group_color",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color: boxplot only supports the x and y channels",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_groupped",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color: boxplot only supports the x and y channels",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_minmax_2D_horizontal",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x.scale: boxplot supports only field, type and title on x/y",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_minmax_2D_horizontal_custom_midtick_color",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] config.boxplot: this config property is valid Vega-Lite but is not supported by @aster/vl (it would be silently ignored)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_minmax_2D_vertical",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color: boxplot only supports the x and y channels",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_tooltip_aggregate",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.tooltip: boxplot only supports the x and y channels",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/boxplot_tooltip_not_aggregate",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.tooltip: boxplot only supports the x and y channels",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/circle_labelangle_orient_signal",
+  "kind": "vl",
+  "status": "fail",
+  "first": "root: svg|659|182|0 0 659 182|bg=#ffffff vs svg|669|182|0 0 669 182|bg=#ffffff",
+  "firstContent": "only-oracle: path|M5.5,37.5L485.5,37.5L485.5,177.5L5.5,177.5Z|fill=none;stroke=#dddddd;stroke-width=1||",
+  "flags": [
+   "time()"
+  ],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": "scales+guides (scales, axes, legends) + data+marks",
+  "category": "compiler: scales+guides (scales, axes, legends) + data+marks"
+ },
+ {
+  "id": "vl/circle_wilkinson_dotplot_stacked",
+  "kind": "vl",
+  "status": "fail",
+  "first": "root: svg|129|160|0 0 129 160|bg=#ffffff vs svg|137|160|0 0 137 160|bg=#ffffff",
+  "firstContent": "- oracle:         g .mark-group.role-axis role=graphics-symbol rd=axis label=\"Y-axis titled 'Count of Records' for a linear scale with values from 0 to 10\" || + aster:          g .mark-group.role-axis role=graphics-symbol rd=axis label=\"Y-a...",
+  "flags": [
+   "primitive-values"
+  ],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": "scales+guides (scales, axes, legends) + data+marks",
+  "category": "compiler: scales+guides (scales, axes, legends) + data+marks"
+ },
+ {
+  "id": "vl/concat_hover",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] hconcat[1].params[0].name: duplicate parameter name \"hover\"",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/concat_hover_filter",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] hconcat[1].layer[0].params[0].name: duplicate parameter name \"hover\"",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/concat_layer_voyager_result",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] vconcat[0].encoding.x: a channel definition needs `field`, `value`, `datum` or `aggregate: \"count\"`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/concat_population_pyramid",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] hconcat[1].view: the view background property is not supported; set it through config.view",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/config_numberFormatType_tooltip",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] config.tooltipFormat: this config property is valid Vega-Lite but is not supported by @aster/vl (it would be silently ignored)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/errorbar_aggregate",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.size is not supported on the \"tick\" mark",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/errorbar_horizontal_aggregate",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.size is not supported on the \"tick\" mark",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/facet_bullet",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] spec.encoding.x: a channel definition needs `field`, `value`, `datum` or `aggregate: \"count\"`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/facet_column_facet_column_point_future",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] facet.column.type: a facet field definition needs `type`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/facet_column_facet_row_point_future",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] facet.column.type: a facet field definition needs `type`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/facet_cross_independent_scale",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] facet.row.type: a facet field definition needs `type`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/facet_grid_bar",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] spacing: spacing is only meaningful on composition specs",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/facet_independent_scale",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] facet.column.type: a facet field definition needs `type`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/facet_independent_scale_layer_broken",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] facet.column.type: a facet field definition needs `type`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/facet_row_facet_row_point_future",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] facet.row.type: a facet field definition needs `type`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/geo_choropleth",
+  "kind": "vl",
+  "status": "fail",
+  "first": "structure: 3627 oracle lines vs 3160 aster lines; first divergence at line 6",
+  "firstContent": "- oracle:           path role=graphics-symbol rd=geoshape label=\"rate: 0.065\" || + aster:            path role=graphics-symbol rd=geoshape label=\"rate: 0.078\"",
+  "flags": [],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": "size/layout (signals, width, height, autosize, padding, layout)",
+  "category": "compiler: size/layout (signals, width, height, autosize, padding, layout)"
+ },
+ {
+  "id": "vl/geo_layer_line_london",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] view: the view background property is not supported; set it through config.view",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/geo_repeat",
+  "kind": "vl",
+  "status": "fail",
+  "first": "structure: 219 oracle lines vs 216 aster lines; first divergence at line 61",
+  "firstContent": "- oracle:                 path role=graphics-symbol rd=geoshape label=\"population: 3411307; geo: [object Object]\" || + aster:                g .mark-group.role-legend role=graphics-symbol rd=legend label=\"Gradient legend titled 'population'...",
+  "flags": [],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": "size/layout (signals, width, height, autosize, padding, layout)",
+  "category": "compiler: size/layout (signals, width, height, autosize, padding, layout)"
+ },
+ {
+  "id": "vl/geo_trellis",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] mark: maps (geoshape marks, projections, longitude / latitude) inside a facet are not supported: vega-lite 6.4.3 fits a facet's projection to a dataset it never defines (data(\"child_main\")), so there is no output to match",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/histogram_bin_transform",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x.bin.binned: pre-binned data (binned: true) is not supported; let @aster/vl bin the field or use a bin transform",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/histogram_rel_freq",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x.bin.binned: pre-binned data (binned: true) is not supported; let @aster/vl bin the field or use a bin transform",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/interactive_1d_geo_brush",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] layer[1].params[0].select.encodings: unknown channel \"latitude\"",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/interactive_airport_crossfilter",
+  "kind": "vl",
+  "status": "error",
+  "first": "Undefined data set name: \"lookup_brush\"",
+  "category": "error: runtime rejects a spec value that vega takes from a signal / another dataset",
+  "where": "runtime"
+ },
+ {
+  "id": "vl/interactive_bin_extent",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] vconcat[1].encoding.x.bin.extent: must be a [min, max] pair of numbers (parameter references are not supported)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/interactive_bin_extent_bottom",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] vconcat[0].encoding.x.bin.extent: must be a [min, max] pair of numbers (parameter references are not supported)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/interactive_dashboard_europe_pop",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] hconcat[1].params[0].name: duplicate parameter name \"brush\"",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/interactive_geo_facet_species",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] mark: maps (geoshape marks, projections, longitude / latitude) inside a facet are not supported: vega-lite 6.4.3 fits a facet's projection to a dataset it never defines (data(\"child_main\")), so there is no output to match",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/interactive_global_development",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] layer[0].mark.x: positional mark-def constants (x/x2/y/y2) are not supported; use encoding",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/interactive_line_brush_cursor",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] view: the view background property is not supported; set it through config.view",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/interactive_line_hover",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] layers give scale \"x\" incompatible types (\"time\" and \"linear\"); vega-lite would make them independent scales, which @aster/vl does not support",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/interactive_paintbrush_simple_false",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] params[0]: a variable parameter needs `value` or `expr`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/interactive_paintbrush_simple_true",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] params[0]: a variable parameter needs `value` or `expr`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/interactive_panzoom_vconcat_shared",
+  "kind": "vl",
+  "status": "fail",
+  "first": "only-oracle: path|M104.239,428.462A2.739,2.739,0,1,1,98.761,428.462A2.739,2.739,0,1,1,104.239,428.462|fill=none;stroke=#4c78a8;stroke-width=2|opacity=0.7|{clip-path=url(clipPath{rect|44,365|300|300})}",
+  "firstContent": "only-oracle: path|M104.239,428.462A2.739,2.739,0,1,1,98.761,428.462A2.739,2.739,0,1,1,104.239,428.462|fill=none;stroke=#4c78a8;stroke-width=2|opacity=0.7|{clip-path=url(clipPath{rect|44,365|300|300})}",
+  "flags": [],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": "data+marks",
+  "category": "compiler: data+marks"
+ },
+ {
+  "id": "vl/interactive_point_domainRaw_binding",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x.scale.domainRaw: domainRaw is not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/layer_bar_annotations",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] layer[1].layer[1].mark.x: positional mark-def constants (x/x2/y/y2) are not supported; use encoding",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/layer_bar_labels_grey",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] layer[1].mark.x: positional mark-def constants (x/x2/y/y2) are not supported; use encoding",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/layer_bar_tick_binned_time_band_position",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x.timeUnit: timeUnit \"binnedutcyear\": binned time units are not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/layer_bar_tick_datum_grouped",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.y: a constant datum position is not supported on the \"tick\" mark",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/layer_boxplot_circle",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] mark type not supported yet: boxplot",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/layer_candlestick",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.y: a channel definition needs `field`, `value`, `datum` or `aggregate: \"count\"`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/layer_cumulative_histogram",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x.bin: pre-binned data (bin: \"binned\") is not supported; let @aster/vl bin the field (bin: true) or use a bin transform",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/layer_histogram_global_mean",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] layers give scale \"x\" different explicit or signal-based domains, which cannot be merged",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/layer_likert",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] view: the view background property is not supported; set it through config.view",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/layer_line_co2_concentration",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x: a channel definition needs `field`, `value`, `datum` or `aggregate: \"count\"`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/layer_line_datum_rule_datetime",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x.datum: temporal/DateTime datums are not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/layer_line_rolling_mean_point_raw",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.y: a channel definition needs `field`, `value`, `datum` or `aggregate: \"count\"`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/layer_point_line_regression",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] layer[2].transform[0].params: regression `params: true` is not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/layer_text_heatmap_joinaggregate",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] layers give scale \"color\" incompatible types (\"linear\" and \"ordinal\"); vega-lite would make them independent scales, which @aster/vl does not support",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/line_color_halo",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.stroke.datum is not supported (datum works on x, y, x2, y2, longitude, latitude and color)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/line_concat_facet",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] config.facet: this config property is valid Vega-Lite but is not supported by @aster/vl (it would be silently ignored)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/line_dashed_part",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.strokeDash: a data-driven strokeDash (scale + legend) is not supported; use a constant {\"value\": ...} or a condition",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/line_encoding_impute_keyvals",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.y.impute: channel-level `impute` is not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/line_encoding_impute_keyvals_sequence",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.y.impute: channel-level `impute` is not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/line_impute_frame",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.y.impute: channel-level `impute` is not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/line_impute_method",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.y.impute: channel-level `impute` is not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/line_impute_value",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.y.impute: channel-level `impute` is not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/line_override_dynamic_format",
+  "kind": "vl",
+  "status": "fail",
+  "first": "structure: 38 oracle lines vs 38 aster lines; first divergence at line 36",
+  "firstContent": "- oracle:           path role=graphics-symbol rd=line mark label=\"date: Jan 01, 2006; price: 432.66\" || + aster:            path role=graphics-symbol rd=line mark label=\"date: 06; price: 432.66\"",
+  "flags": [
+   "time()"
+  ],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": "size/layout (signals, width, height, autosize, padding, layout)",
+  "category": "compiler: size/layout (signals, width, height, autosize, padding, layout)"
+ },
+ {
+  "id": "vl/line_strokedash",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.strokeDash: a data-driven strokeDash (scale + legend) is not supported; use a constant {\"value\": ...} or a condition",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/parallel_coordinate",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.y: a constant value position is not supported on the \"tick\" mark",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/param_search_input",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] params[0].bind: unknown bind property \"placeholder\"",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/point_angle_windvector",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.angle: a data-driven angle (scale + legend) is not supported; use a constant {\"value\": ...} or a condition",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/point_background",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] view: the view background property is not supported; set it through config.view",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/point_constant_legend_domain",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color.scale.domain: a domain object must be {\"param\": ...}, {\"unionWith\": [...]} or a signal; give an array or \"unaggregated\"",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/point_scale_range_field",
+  "kind": "vl",
+  "status": "error",
+  "first": "Undefined data set name: undefined",
+  "category": "error: runtime rejects a spec value that vega takes from a signal / another dataset",
+  "where": "runtime"
+ },
+ {
+  "id": "vl/rect_mosaic_labelled",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] config.concat: this config property is valid Vega-Lite but is not supported by @aster/vl (it would be silently ignored)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/rect_mosaic_labelled_with_offset",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] config.concat: this config property is valid Vega-Lite but is not supported by @aster/vl (it would be silently ignored)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/rect_params",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x: a constant datum position is not supported on the \"rect\" mark",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/rule_params",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.x.datum: temporal/DateTime datums are not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/scatter_image",
+  "kind": "vl",
+  "status": "fail",
+  "first": "only-oracle: image|83.692,236.308|50|50|href=https://gallery.invalid/data/ffox.png|fill=none|@preserveAspectRatio=xMidYMid|",
+  "firstContent": "only-oracle: image|83.692,236.308|50|50|href=https://gallery.invalid/data/ffox.png|fill=none|@preserveAspectRatio=xMidYMid|",
+  "flags": [],
+  "where": "runtime",
+  "signature": "image: href is not resolved against the loader baseURL (harness gives vega a baseURL)",
+  "tags": [],
+  "category": "runtime: image: href is not resolved against the loader baseURL (harness gives vega a baseURL)"
+ },
+ {
+  "id": "vl/selection_composition_and",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/selection_composition_or",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/selection_project_interval",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/selection_project_interval_x",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/selection_project_interval_x_y",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/selection_project_interval_y",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/selection_type_interval",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/selection_type_point",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/selection_type_single_dblclick",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/selection_type_single_pointerover",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.color.condition: a condition needs exactly one of `value`, `field`, `datum`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/sequence_line",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] data: data generators: `sequence` is not supported (`sphere` and `graticule` are)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/sequence_line_fold",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] data: data generators: `sequence` is not supported (`sphere` and `graticule` are)",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/stacked_bar_v_ascending",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.order: a channel definition needs `field`, `value`, `datum` or `aggregate: \"count\"`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/stocks-2009-layered-line-point",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.strokeDash: a data-driven strokeDash (scale + legend) is not supported; use a constant {\"value\": ...} or a condition",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/ternary",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] layer[9].layer[0].encoding.fill.scale: `scale: null` (identity/disabled scale) is not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/test_invalid_break_paths_filter_domains",
+  "kind": "vl",
+  "status": "fail",
+  "first": "root: svg|673|368|0 0 673 368|bg=#ffffff vs svg|669|368|0 0 669 368|bg=#ffffff",
+  "firstContent": "- oracle:                     g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'a' for a linear scale with values from −5 to 5\" || + aster:                      g .mark-group.role-axis role=graphics-symbol rd=axis l...",
+  "flags": [],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": "scales+guides (scales, axes, legends) + data+marks",
+  "category": "compiler: scales+guides (scales, axes, legends) + data+marks"
+ },
+ {
+  "id": "vl/test_invalid_break_paths_show_domains",
+  "kind": "vl",
+  "status": "fail",
+  "first": "root: svg|662|366|0 0 662 366|bg=#ffffff vs svg|669|368|0 0 669 368|bg=#ffffff",
+  "firstContent": "- oracle:                     g .mark-group.role-axis role=graphics-symbol rd=axis label=\"X-axis titled 'a' for a linear scale with values from −10 to 10\" || + aster:                      g .mark-group.role-axis role=graphics-symbol rd=axis...",
+  "flags": [],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": "scales+guides (scales, axes, legends) + data+marks",
+  "category": "compiler: scales+guides (scales, axes, legends) + data+marks"
+ },
+ {
+  "id": "vl/text_tooltip_image",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] view: the view background property is not supported; set it through config.view",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/time_parse_binnedutc",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.y.timeUnit: timeUnit \"binnedutcyearmonthdatehours\": binned time units are not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/time_parse_binnedutc_with_escaped_field",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.y.timeUnit: timeUnit \"binnedutcyearmonth\": binned time units are not supported",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/trail_comet",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] view: the view background property is not supported; set it through config.view",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/trellis_area_seattle",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] spec.view: the view background property is not supported; set it through config.view",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/trellis_area_sort_array",
+  "kind": "vl",
+  "status": "fail",
+  "first": "structure: 189 oracle lines vs 189 aster lines; first divergence at line 33",
+  "firstContent": "- oracle:                     g .mark-text.role-title-text role=graphics-symbol rd=title label=\"Title text 'MSFT'\" || + aster:                      g .mark-text.role-title-text role=graphics-symbol rd=title label=\"Title text 'AAPL'\"",
+  "flags": [],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": "scales+guides (scales, axes, legends) + data+marks",
+  "category": "compiler: scales+guides (scales, axes, legends) + data+marks"
+ },
+ {
+  "id": "vl/trellis_barley",
+  "kind": "vl",
+  "status": "fail",
+  "first": "structure: 331 oracle lines vs 331 aster lines; first divergence at line 5",
+  "firstContent": "- oracle:         g .mark-group.role-column-title.facet-title role=graphics-object rd=group mark container || + aster:          g .mark-group.role-column-title.trellis_barley_facet-title role=graphics-object rd=group mark container",
+  "flags": [],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": null,
+  "category": "compiler: not isolated by grafting"
+ },
+ {
+  "id": "vl/trellis_barley_independent",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] resolve: `resolve` has no meaning on a single unit spec",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/trellis_barley_layer_median",
+  "kind": "vl",
+  "status": "fail",
+  "first": "structure: 369 oracle lines vs 369 aster lines; first divergence at line 33",
+  "firstContent": "- oracle:                     g .mark-text.role-title-text role=graphics-symbol rd=title label=\"Title text 'Grand Rapids'\" || + aster:                      g .mark-text.role-title-text role=graphics-symbol rd=title label=\"Title text 'Crooks...",
+  "flags": [],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": null,
+  "category": "compiler: not isolated by grafting"
+ },
+ {
+  "id": "vl/trellis_cross_sort",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] facet.row.type: a facet field definition needs `type`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/trellis_cross_sort_array",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] facet.row.type: a facet field definition needs `type`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/trellis_row_column",
+  "kind": "vl",
+  "status": "fail",
+  "first": "root: svg|1142|1683|0 0 1142 1683|bg=#ffffff vs svg|1142|1039|0 0 1142 1039|bg=#ffffff",
+  "firstContent": "- oracle:             path.foreground hidden=true || + aster:                g .mark-group.role-axis hidden=true",
+  "flags": [],
+  "where": "compiler",
+  "signature": null,
+  "tags": [],
+  "culprit": "scales+guides (scales, axes, legends) + data+marks",
+  "category": "compiler: scales+guides (scales, axes, legends) + data+marks"
+ },
+ {
+  "id": "vl/trellis_selections",
+  "kind": "vl",
+  "status": "error",
+  "first": "Undefined data set name: \"child_marks\"",
+  "category": "error: runtime rejects a spec value that vega takes from a signal / another dataset",
+  "where": "runtime"
+ },
+ {
+  "id": "vl/vconcat_flatten",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] vconcat[0].transform[0].aggregate: must be a non-empty array of {op, field?, as?}",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ },
+ {
+  "id": "vl/wheat_wages",
+  "kind": "vl",
+  "status": "error",
+  "first": "[aster/vl] encoding.y: a channel definition needs `field`, `value`, `datum` or `aggregate: \"count\"`",
+  "category": "error: @aster/vl rejects a valid Vega-Lite feature",
+  "where": "compiler"
+ }
+]

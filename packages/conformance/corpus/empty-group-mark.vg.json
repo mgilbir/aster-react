@@ -1,0 +1,80 @@
+{
+ "$schema": "https://vega.github.io/schema/vega/v5.json",
+ "width": 120,
+ "height": 60,
+ "padding": 5,
+ "data": [
+  {
+   "name": "none",
+   "values": []
+  }
+ ],
+ "marks": [
+  {
+   "type": "rect",
+   "encode": {
+    "update": {
+     "x": {
+      "value": 5
+     },
+     "y": {
+      "value": 5
+     },
+     "width": {
+      "value": 20
+     },
+     "height": {
+      "value": 10
+     },
+     "fill": {
+      "value": "tomato"
+     }
+    }
+   }
+  },
+  {
+   "type": "group",
+   "from": {
+    "data": "none"
+   },
+   "marks": [
+    {
+     "type": "symbol",
+     "encode": {
+      "update": {
+       "x": {
+        "value": 3
+       },
+       "y": {
+        "value": 3
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "type": "rect",
+   "name": "after",
+   "encode": {
+    "update": {
+     "x": {
+      "value": 40
+     },
+     "y": {
+      "value": 5
+     },
+     "width": {
+      "value": 20
+     },
+     "height": {
+      "value": 10
+     },
+     "fill": {
+      "value": "navy"
+     }
+    }
+   }
+  }
+ ]
+}
