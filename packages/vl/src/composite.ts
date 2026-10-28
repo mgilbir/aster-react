@@ -298,14 +298,41 @@ function normalizeErrorBand(spec: Obj, config: Obj): Obj {
   }
 }
 
+/** channeldef.ts defaultType: the type a field definition without one gets (the composites read the types to orient themselves). */
+function defaultType(channel: string, def: Obj): string {
+  if (channel === 'latitude' || channel === 'longitude') return 'quantitative'
+  if (['row', 'column', 'facet', 'shape', 'strokeDash'].includes(channel)) return 'nominal'
+  if (channel === 'order') return 'ordinal'
+  if (Array.isArray(def.sort)) return 'ordinal'
+  if (def.timeUnit) return 'temporal'
+  if (def.bin || (def.aggregate && !isObj(def.aggregate))) return 'quantitative'
+  const st = isObj(def.scale) ? def.scale.type : undefined
+  if (['linear', 'log', 'pow', 'sqrt', 'symlog', 'identity', 'sequential', 'quantile', 'quantize', 'threshold', 'bin-ordinal'].includes(st)) return 'quantitative'
+  if (st === 'time' || st === 'utc') return 'temporal'
+  return 'nominal'
+}
+
+function withTypes(encoding: Obj): Obj {
+  const out: Obj = {}
+  for (const [channel, def] of Object.entries(encoding)) {
+    out[channel] = isObj(def) && def.type === undefined && (def.field !== undefined || def.aggregate === 'count') && def.datum === undefined && def.value === undefined && !['x2', 'y2', 'xError', 'yError', 'xError2', 'yError2', 'theta2', 'radius2'].includes(channel)
+      ? { ...def, type: defaultType(channel, def) }
+      : def
+  }
+  return out
+}
+
 const kindOf = (spec: Obj): 'errorbar' | 'errorband' | undefined => {
   const t = isObj(spec.mark) ? spec.mark.type : spec.mark
   return t === 'errorbar' || t === 'errorband' ? t : undefined
 }
 
-/** Replace every errorbar / errorband unit in the spec tree by its layer of simple marks. */
-export function normalizeComposites(node: unknown, userConfig: Obj | undefined): unknown {
-  if (Array.isArray(node)) return node.map((n) => normalizeComposites(n, userConfig))
+/**
+ * Replace every errorbar / errorband unit in the spec tree by its layer of simple marks. A unit under a layer shares the
+ * layer's encoding (`inherited`), which its dimensions and groupings come from.
+ */
+export function normalizeComposites(node: unknown, userConfig: Obj | undefined, inherited: Obj = {}): unknown {
+  if (Array.isArray(node)) return node.map((n) => normalizeComposites(n, userConfig, inherited))
   if (!isObj(node)) return node
   const config: Obj = {
     errorbar: { ...DEFAULT_CONFIG.errorbar, ...(userConfig?.errorbar ?? {}) },
@@ -313,12 +340,13 @@ export function normalizeComposites(node: unknown, userConfig: Obj | undefined):
   }
   const kind = kindOf(node)
   if (kind) {
-    const spec = { ...node, encoding: node.encoding ?? {} }
+    const spec = { ...node, encoding: withTypes({ ...inherited, ...(node.encoding ?? {}) }) }
     return kind === 'errorbar' ? normalizeErrorBar(spec, config) : normalizeErrorBand(spec, config)
   }
   const out: Obj = { ...node }
-  for (const k of ['layer', 'hconcat', 'vconcat', 'concat']) if (node[k] !== undefined) out[k] = normalizeComposites(node[k], userConfig)
-  if (node.spec !== undefined) out.spec = normalizeComposites(node.spec, userConfig)
+  if (node.layer !== undefined) out.layer = normalizeComposites(node.layer, userConfig, { ...inherited, ...(isObj(node.encoding) ? node.encoding : {}) })
+  for (const k of ['hconcat', 'vconcat', 'concat']) if (node[k] !== undefined) out[k] = normalizeComposites(node[k], userConfig, {})
+  if (node.spec !== undefined) out.spec = normalizeComposites(node.spec, userConfig, {})
   return out
 }
 

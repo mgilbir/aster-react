@@ -639,7 +639,8 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     uniquifyLayerMarks(builtMarks, LEAF_PATHS.get(p.l)?.length ? LEAF_PATHS.get(p.l)!.map((n) => `layer_${n}`).join('_') : i)
     perLayerMarks.push(builtMarks)
     const layerScales = buildScales(p.l, p.fields, p.mark, p.orient, p.dataName, wSpec, hSpec, p.seriesFields, p.rawName)
-    showInvalidValues(p.l, p.fields, p.mark, layerScales, builtMarks)
+    // (shared scales are judged merged, below; an independent y scale is the layer's own)
+    if (isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).scale) && ((spec.resolve as Record<string, Record<string, unknown>>).scale as Record<string, unknown>).y === 'independent') showInvalidValues(p.l, p.fields, p.mark, layerScales, builtMarks)
     perLayerScales.push(layerScales)
   })
   // a lookup reads its source dataset by name, which must be declared before it (vega resolves names in order)
@@ -698,9 +699,11 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       const rewrite = (m: Record<string, unknown>): void => {
         const enc = (m.encode as { update?: Record<string, unknown> } | undefined)?.update
         if (enc) {
-          for (const k of ['y', 'y2']) {
-            const v = enc[k] as Record<string, unknown> | undefined
-            if (v && v.scale === 'y') v.scale = `layer_${i}_y`
+          for (const k of ['y', 'y2', 'yc']) {
+            // (a position with an invalid-value test is a list of refs)
+            for (const v of ([] as unknown[]).concat(enc[k] ?? []) as Array<Record<string, unknown> | undefined>) {
+              if (v && v.scale === 'y') v.scale = `layer_${i}_y`
+            }
           }
         }
         for (const sub of (m.marks as Record<string, unknown>[] | undefined) ?? []) rewrite(sub)
@@ -721,6 +724,9 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     : mergeLayerScales(perLayerScales)
   out.scales = scales
   applyScaleConfig(scales, isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined)
+  // invalid = "show": a layer positions its invalid values against the scale it shares, not its own (a point's zero-including
+  // scale does not decide for the line it is merged with)
+  if (!indepY) parsed.forEach((p, i) => showInvalidValues(p.l, p.fields, p.mark, scales, perLayerMarks[i]!))
   centerPointMarksOnBands(marks, scales)
   // selections: scales that follow a param, the marks' interactive flags and clip, the units' brush / voronoi marks
   let layerClip = false
@@ -769,10 +775,13 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     // per layer: the channel's title followed by its endpoint field
     const titles: string[] = []
     const given: string[] = []
+    let nullTitle = false
     for (const p of layersWith) {
       const f = p.fields.find((q) => q.channel === ch)!
       const d2 = p.fields.find((q) => q.channel === second && q.field)
       // an explicit title on either endpoint replaces the generated "primary, secondary" pair
+      // (an explicit null title - on the field or its axis - removes the axis title: common.ts mergeTitleComponent)
+      if (f.title === null || d2?.title === null || (isObject(f.axis) && f.axis.title === null)) nullTitle = true
       const explicit = [f.title, d2?.title].filter((x): x is string => typeof x === 'string' && x !== '')
       if (explicit.length) { given.push(explicit.join(', ')); continue }
       const t = ((f.axis as Record<string, unknown> | null | undefined)?.title as string) ?? (channelTitle(f) as string)
@@ -782,7 +791,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     // titles the user wrote win over the ones derived from fields (mergeTitleComponent)
     const uniq = Array.from(new Set(given.length ? given : titles))
     const axisFields = base.fields.filter((f) => f.channel === ch).map((f) =>
-      uniq.length > 1 ? ({ ...f, title: uniq.join(', ') } as FieldDef) : f,
+      nullTitle ? ({ ...f, title: null } as unknown as FieldDef) : uniq.length > 1 || given.length ? ({ ...f, title: uniq.join(', ') } as FieldDef) : f,
     )
     for (const a of buildAxes(axisFields, axisMark(base.markRaw, base.mark), scales as ScaleSpec[], undefined, ch === 'x' && indepY ? `layer_${firstYLayer}_y` : undefined, userConfig)) axes.push(a)
   }
@@ -794,7 +803,8 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const sizeSignals: Record<string, unknown>[] = []
   const layerContinuous = parsed.some((p) => p.mark === 'arc' || hasProjection(p.mark, isObject(p.l.encoding) ? (p.l.encoding as Record<string, unknown>) : {}))
   const layerPlans = (['x', 'y'] as const).map((channel) => {
-    const sc = scales.find((s) => s.name === channel)
+    // (an independent y scale is named after its layer)
+    const sc = scales.find((s) => s.name === channel) ?? (indepY && channel === 'y' ? scales.find(isIndepYScale) : undefined)
     const req = channel === 'x' ? wSpec : hSpec
     const plan = sizePlan(spec, channel === 'x' ? 'width' : 'height', req, sc ? String(sc.type) : undefined, layerContinuous)
     if ('step' in plan) pushAll(sizeSignals, stepSignals(channel, scales as ScaleSpec[], plan.step, req.stepFor))
@@ -1885,7 +1895,8 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
           encode: { update: { width: { signal: wName }, height: { signal: hName } } },
         }
     if (composite) group.layout = vg.layout
-    if (vg.title) group.title = groupTitle(vg.title)
+    // (the child's title is assembled already: framed on its group for a unit / layer, anchored at the start for a composition)
+    if (vg.title) group.title = vg.title
     // a unit's selection signals are its group's (vega-lite: one copy per group item)
     if (selParts?.unit.length) group.signals = selParts.unit
     // vega-lite names every mark after its model, and a child's model carries its parent's prefix (`concat_0_marks`)
@@ -1928,6 +1939,26 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     }
   }
 
+  // legend/assemble.ts assembleLegends: legends of different channels over the SAME domain (a colour in one view, a size in
+  // another, both of field `c`) are one legend, whatever the channel
+  {
+    const domainKey = (ch: string): string | undefined => {
+      const d = scaleLists.get(ch)?.[0]?.domain
+      return d === undefined ? undefined : JSON.stringify(isObject(d) && typeof d.data === 'string' ? { ...d, data: undefined } : d)
+    }
+    const byDomain = new Map<string, string>()
+    for (const ch of [...legendOrder]) {
+      const key = domainKey(ch)
+      if (key === undefined) continue
+      const into = byDomain.get(key)
+      if (into === undefined) byDomain.set(key, ch)
+      else if (legendsByChannel.get(into)!.orient === legendsByChannel.get(ch)!.orient) {
+        mergeLegend(legendsByChannel.get(into)!, legendsByChannel.get(ch)!)
+        legendsByChannel.delete(ch)
+        legendOrder.splice(legendOrder.indexOf(ch), 1)
+      }
+    }
+  }
   const mergedShared = mergeLayerScales([...scaleLists.values()].flat().map((s) => [s]))
   const selection = mergeSelParts(selectionParts)
   return {
@@ -1954,12 +1985,6 @@ function prefixMarkNames(m: Record<string, unknown>, prefix: string): Record<str
   return out
 }
 
-/** A child view's title becomes a group title framed on the child's group, as vega-lite does. */
-function groupTitle(title: unknown): unknown {
-  if (typeof title === 'string' || Array.isArray(title)) return { text: title, frame: 'group' }
-  if (isObject(title)) return { frame: 'group', ...title }
-  return title
-}
 
 function cellPrefixed(name: string, prefix: string): boolean {
   return name.startsWith(prefix)
@@ -4966,7 +4991,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       if (yDef) {
         if (y2DefB) {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
-          update.y2 = { scale: 'y', field: y2DefB.field }
+          update.y2 = { scale: 'y', field: aggFieldName(y2DefB) }
         } else if (mark === 'rect' && (yDef.bin || (yDef.timeUnit && positionalScaleType(mark, yDef) !== 'band'))) {
           // a rect's second dimension may be binned too (2d heatmaps)
           if (yDef.bin) {
@@ -5182,7 +5207,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (yDef) {
       const stacked = isStacked(yDef, mark, orient, fields)
       update.y = { scale: 'y', field: stacked ? `${aggFieldName(yDef)}_end` : aggFieldName(yDef) }
-      if (orient !== 'horizontal') {
+      const areaY2 = fields.find((f) => f.channel === 'y2' && f.field && !f.datumOnly)
+      if (areaY2 && orient !== 'horizontal') {
+        // a ranged area: y2 is the other end
+        update.y2 = { scale: 'y', field: aggFieldName(areaY2) }
+      } else if (orient !== 'horizontal') {
         // vertical area: y is the value axis, y2 the baseline
         update.y2 = stacked
           ? { scale: 'y', field: `${aggFieldName(yDef)}_start` }
@@ -5296,8 +5325,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       ?? (hasX2Enc && hasY2Enc ? undefined
         : hasY2Enc ? 'vertical'
         : hasX2Enc ? 'horizontal'
-        : (xDef != null && yDef == null) ? 'vertical'
-        : (yDef != null && xDef == null) ? 'horizontal'
+        // (init.ts orient: `x && !y` is about the channels, a constant `value` position included)
+        : (hasEncodingChannel(spec, 'x') && !hasEncodingChannel(spec, 'y')) ? 'vertical'
+        : (hasEncodingChannel(spec, 'y') && !hasEncodingChannel(spec, 'x')) ? 'horizontal'
         : (xIsMeasure && !yIsMeasure) ? 'horizontal'
         : (!xIsMeasure && yIsMeasure) ? 'vertical'
         : (xIsMeasure && yIsMeasure) ? 'vertical'
@@ -5310,8 +5340,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const ruleYOff = ruleDef.yOffset as number | undefined
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef), ...(positionalScaleType(mark, xDef) === 'band' ? { band: 0.5 } : {}), ...(ruleXOff !== undefined ? { offset: ruleXOff } : {}) }
     if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef), ...(positionalScaleType(mark, yDef) === 'band' ? { band: 0.5 } : {}), ...(ruleYOff !== undefined ? { offset: ruleYOff } : {}) }
-    if (x2Def) update.x2 = { scale: 'x', field: x2Def.field }
-    if (y2Def) update.y2 = { scale: 'y', field: y2Def.field }
+    if (x2Def) update.x2 = { scale: 'x', field: aggFieldName(x2Def) }
+    if (y2Def) update.y2 = { scale: 'y', field: aggFieldName(y2Def) }
     // pointPosition2OrSize zeroOrMin (scaledZeroOrMinOrMax): with no explicit
     // x2/y2 (and no width/height encode), the rule spans to scale zero —
     // {value: 0} when the domain definitely contains zero, otherwise the
@@ -5532,7 +5562,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
   }
   // (a map unit's positions come from its geopoint output, never from a default)
-  if (!GEO_UNITS.has(spec)) fillMissingPositions(update, mark, fields, orient, scaleConfigOf(spec))
+  if (!GEO_UNITS.has(spec)) fillMissingPositions(update, mark, fields, orient, scaleConfigOf(spec), ruleOrientOut)
 
   {
     // markDef.ariaRoleDescription (vega-lite getMarkPropOrConfig): what a composite mark's parts call themselves
@@ -5877,7 +5907,13 @@ function applyGeoPositions(update: Record<string, unknown>, spec: VLSpec, mark: 
  * group, and centers ticks/bars with a fractional size. (The same defaults
  * hold for a channel that is only a datum/value.)
  */
-function fillMissingPositions(update: Record<string, unknown>, mark: string, fields: FieldDef[], orient: string, scaleCfg: ScaleCfg): void {
+/** Does the unit encode the channel at all (a field, a datum or a constant value)? */
+function hasEncodingChannel(spec: VLSpec, channel: string): boolean {
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  return enc[channel] != null
+}
+
+function fillMissingPositions(update: Record<string, unknown>, mark: string, fields: FieldDef[], orient: string, scaleCfg: ScaleCfg, ruleOrient?: string): void {
   const has = (...ks: string[]): boolean => ks.some((k) => update[k] !== undefined)
   const hasX = has('x', 'xc', 'x2')
   const hasY = has('y', 'yc', 'y2')
@@ -5919,8 +5955,15 @@ function fillMissingPositions(update: Record<string, unknown>, mark: string, fie
       if (!hasY) { update.y = { value: 0 }; update.y2 = groupH }
       break
     case 'rule':
-      if (!hasX) { update.x = groupW; update.x2 = { value: 0 } }
-      if (!hasY) { update.y = { value: 0 }; update.y2 = groupH }
+      // rule.ts: a missing x is zeroOrMax (the whole width, x2 at zero) for a horizontal rule and the middle otherwise
+      // (with an x2 unless the rule is vertical); a missing y likewise for a vertical rule
+      if (!hasX && !hasY) break // (a rule with neither x nor y shows nothing)
+      if (!hasX) {
+        if (ruleOrient === 'horizontal') { update.x = groupW; update.x2 = { value: 0 } } else { update.x = midX; if (ruleOrient !== 'vertical') update.x2 = { value: 0 } }
+      }
+      if (!hasY) {
+        if (ruleOrient === 'vertical') { update.y = { value: 0 }; update.y2 = groupH } else { update.y = midY; if (ruleOrient !== 'horizontal') update.y2 = groupH }
+      }
       break
   }
 }
@@ -6044,15 +6087,18 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
     const kv = objectEntries(defs).map(([key, value]) => `"${key}": ${value}`)
     return kv.length ? `{${kv.join(', ')}}` : undefined
   }
-  // tooltip
+  // tooltip (getMarkPropOrConfig: the mark definition, then config.<mark>, then config.mark)
+  const tipCfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+  const tipMark = isObject(spec.mark) ? String((spec.mark as Record<string, unknown>).type) : String(spec.mark)
+  const markTooltip = md.tooltip ?? (isObject(tipCfg[tipMark]) ? (tipCfg[tipMark] as Record<string, unknown>).tooltip : undefined) ?? (isObject(tipCfg.mark) ? (tipCfg.mark as Record<string, unknown>).tooltip : undefined)
   const tipDefs = fields.filter((f) => f.channel === 'tooltip' && !f.datumOnly)
   if (Array.isArray(enc.tooltip)) {
     const o = objectOf(tipDefs)
     if (o) update.tooltip = { signal: o }
   } else if (tipDefs.length === 1 && isObject(enc.tooltip) && (enc.tooltip as Record<string, unknown>).field !== undefined) {
     update.tooltip = { signal: fieldTextExpr(tipDefs[0]!, { lineBreaks: true, spec }) }
-  } else if (enc.tooltip === undefined && md.tooltip !== undefined && md.tooltip !== false && md.tooltip !== null) {
-    const t = md.tooltip
+  } else if (enc.tooltip === undefined && markTooltip !== undefined && markTooltip !== false && markTooltip !== null) {
+    const t = markTooltip
     if (t === true || (isObject(t) && t.content === 'encoding')) {
       const o = objectOf(fields.filter((f) => !f.datumOnly && f.field && f.channel !== 'tooltip' && f.channel !== 'row' && f.channel !== 'column' && f.channel !== 'facet'))
       if (o) update.tooltip = { signal: o }
@@ -6246,7 +6292,7 @@ function showInvalidValues(spec: VLSpec, fields: FieldDef[], mark: string, scale
   const cands = invalidCandidates(spec, fields, mark).filter((c) => c.mode === 'show')
   if (!cands.length) return
   const cfgInvalid = (scaleConfigOf(spec) as { invalid?: Record<string, unknown> }).invalid
-  const positional = !['bar', 'rect', 'rule', 'arc'].includes(mark)
+  const positional = !['rule', 'arc'].includes(mark)
   const filled = markIsFilled(spec, mark)
   const visit = (m: Record<string, unknown>): void => {
     if (m.type === 'group') { for (const c of (m.marks as Record<string, unknown>[] | undefined) ?? []) visit(c); return }
@@ -6255,7 +6301,8 @@ function showInvalidValues(spec: VLSpec, fields: FieldDef[], mark: string, scale
     for (const { def } of cands) {
       const ch = def.channel
       if ((ch === 'x' || ch === 'y') ? !positional : !['color', 'size', 'opacity', 'strokeWidth'].includes(ch)) continue
-      const prop = ch === 'color' ? (isObject(update.fill) && (update.fill as Record<string, unknown>).scale === 'color' || Array.isArray(update.fill) ? 'fill' : 'stroke') : ch === 'size' ? vgPropFor('size', mark, filled) : ch
+      // (a centred bar position is `xc` / `yc`)
+      const prop = ch === 'color' ? (isObject(update.fill) && (update.fill as Record<string, unknown>).scale === 'color' || Array.isArray(update.fill) ? 'fill' : 'stroke') : ch === 'size' ? vgPropFor('size', mark, filled) : (ch === 'x' || ch === 'y') && update[ch] === undefined && update[`${ch}c`] !== undefined ? `${ch}c` : ch
       const cur = update[prop]
       const main = (Array.isArray(cur) ? cur[cur.length - 1] : cur) as Record<string, unknown> | undefined
       const sc = scales.find((x) => x.name === ch)

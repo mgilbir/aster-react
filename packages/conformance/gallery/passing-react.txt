@@ -41,6 +41,7 @@ vl/area_horizon
 vl/area_invalid_null
 vl/area_overlay
 vl/area_params
+vl/area_temperature_range
 vl/area_vertical
 vl/argmin_spaces
 vl/bar
@@ -73,6 +74,7 @@ vl/bar_fit
 vl/bar_gantt
 vl/bar_gantt_config_no_zero
 vl/bar_grouped
+vl/bar_grouped_errorbar
 vl/bar_grouped_fixed_width
 vl/bar_grouped_horizontal
 vl/bar_grouped_label
@@ -109,6 +111,8 @@ vl/bar_tooltip_title
 vl/bar_yearmonth
 vl/bar_yearmonth_custom_format
 vl/bar_yearmonthdate_minBandSize
+vl/boxplot_preaggregated
+vl/boxplot_preaggregated_with_height
 vl/circle
 vl/circle_binned
 vl/circle_binned_maxbins_2
@@ -122,6 +126,7 @@ vl/circle_scale_quantize
 vl/circle_scale_threshold
 vl/connected_scatterplot
 vl/embedded_csv
+vl/errorband_tooltip
 vl/errorbar_tooltip
 vl/geo_circle
 vl/geo_constant_value
@@ -147,11 +152,14 @@ vl/layer_bar_line
 vl/layer_bar_line_union
 vl/layer_bar_month
 vl/layer_color_legend_left
+vl/layer_dual_axis
 vl/layer_histogram
 vl/layer_line_color_rule
 vl/layer_line_datum_rule
 vl/layer_line_mean_point_raw
 vl/layer_overlay
+vl/layer_point_errorbar_1d_horizontal
+vl/layer_point_errorbar_1d_vertical
 vl/layer_point_errorbar_2d_horizontal
 vl/layer_point_errorbar_2d_horizontal_color_encoding
 vl/layer_point_errorbar_2d_horizontal_custom_ticks
@@ -161,9 +169,13 @@ vl/layer_point_errorbar_2d_vertical
 vl/layer_point_errorbar_pre_aggregated_asymmetric_error
 vl/layer_point_errorbar_pre_aggregated_symmetric_error
 vl/layer_point_errorbar_pre_aggregated_upper_lower
+vl/layer_point_errorbar_stdev
 vl/layer_point_line_loess
 vl/layer_precipitation_mean
 vl/layer_ranged_dot
+vl/layer_rect_extent
+vl/layer_scatter_errorband_1D_stdev_global_mean
+vl/layer_scatter_errorband_1d_stdev
 vl/layer_single_color
 vl/layer_text_heatmap
 vl/line
@@ -232,6 +244,7 @@ vl/point_tooltip
 vl/rect_heatmap
 vl/rect_heatmap_weather
 vl/rule_color_mean
+vl/rule_extent
 vl/square
 vl/stacked_area_normalize
 vl/stacked_area_ordinal
@@ -272,6 +285,7 @@ vl/time_output_utc_scale
 vl/time_parse_local
 vl/time_parse_utc
 vl/time_parse_utc_format
+vl/window_cumulative_running_average
 vl/window_impute_null
 vl/window_rank
 vl/window_top_k

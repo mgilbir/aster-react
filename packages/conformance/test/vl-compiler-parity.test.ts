@@ -23,6 +23,16 @@ const DATA = {
     { c: 'C', g: 'q', x: 6, y: 8, v: 6, t: '2006-01-01' },
   ],
 }
+const NULLS = {
+  values: [
+    { a: null, b: 100, c: 5 },
+    { a: -10, b: null, c: 3 },
+    { a: -5, b: -25, c: null },
+    { a: 1, b: 30, c: 7 },
+    { a: 5, b: 40, c: 2 },
+    { a: 10, b: null, c: 9 },
+  ],
+}
 const q = (field: string, extra: Record<string, unknown> = {}) => ({ field, type: 'quantitative', ...extra })
 const n = (field: string, extra: Record<string, unknown> = {}) => ({ field, type: 'nominal', ...extra })
 const t = (field: string, extra: Record<string, unknown> = {}) => ({ field, type: 'temporal', ...extra })
@@ -144,6 +154,28 @@ const GROUPS: Record<string, Case[]> = {
     ['line with points under a shared encoding', { data: DATA, encoding: { x: q('x'), y: q('y') }, layer: [{ mark: { type: 'line', point: true } }, { mark: 'text', encoding: { text: q('v') } }] }],
     ['line with points, faceted by a row channel', { data: DATA, mark: { type: 'line', point: true }, encoding: { x: q('x'), y: q('y'), row: n('g') } }],
     ['trail with points', { data: DATA, mark: { type: 'trail', point: true }, encoding: { x: q('x'), y: q('y'), size: q('v') } }],
+  ],
+  // mark/encode/position-point.ts + valueref.ts: invalid values "show"; common.ts getMarkPropOrConfig: config.mark.tooltip
+  'invalid values, config tooltips, child titles (test_invalid_show, test_invalid_filter)': [
+    ['invalid show: a bar, a line with points and an area in an hconcat', { data: NULLS, config: { mark: { invalid: 'show', tooltip: true } }, title: 'Invalid', hconcat: [{ mark: 'bar', encoding: { x: q('a'), y: q('b') } }, { mark: { type: 'line', point: true }, encoding: { x: q('a'), y: q('b') } }, { mark: 'area', encoding: { x: q('a'), y: q('b') } }, { mark: 'point', encoding: { x: q('a'), y: q('b') } }] }],
+    ['invalid filter in a vconcat of hconcats with titles', { data: NULLS, config: { mark: { invalid: 'filter' } }, vconcat: [{ title: 'Quantitative X', hconcat: [{ mark: 'point', encoding: { x: q('a'), y: q('b') } }, { mark: 'bar', encoding: { x: q('a'), y: q('b') } }] }, { title: { text: 'Ordinal X', anchor: 'middle' }, hconcat: [{ mark: 'point', encoding: { x: { field: 'a', type: 'ordinal' }, y: q('b') } }] }] }],
+    ['config.<mark>.tooltip', { data: DATA, config: { point: { tooltip: true } }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
+    ['config.mark.tooltip overridden by the mark', { data: DATA, config: { mark: { tooltip: true } }, mark: { type: 'point', tooltip: false }, encoding: { x: q('x'), y: q('y') } }],
+    ['a color in one view and a size in another over one field share a legend', { data: DATA, concat: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: q('v') } }, { mark: 'point', encoding: { x: q('x'), y: q('y'), size: q('v') } }] }],
+    ['independent y scales with invalid show', { data: NULLS, config: { mark: { invalid: 'show' } }, resolve: { scale: { y: 'independent' } }, layer: [{ mark: 'point', encoding: { x: q('a'), y: q('b') } }, { mark: 'line', encoding: { x: q('a'), y: q('c') } }] }],
+  ],
+  // pointOrRangePosition + aggregate.ts: a ranged channel's aggregated field; rule.ts: the middle of a missing position;
+  // compositemark: the types a composite reads are inferred, and the layer's shared encoding groups it
+  'ranged channels, rules, composite marks (rule_extent, errorband_tooltip, bar_grouped_errorbar)': [
+    ['rule between aggregated min and max', { data: DATA, mark: 'rule', encoding: { x: n('c'), y: q('v', { aggregate: 'min' }), y2: q('v', { aggregate: 'max' }) } }],
+    ['area between aggregated min and max', { data: DATA, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'max' }), y2: q('v', { aggregate: 'min' }) } }],
+    ['bar between aggregated min and max', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'min' }), y2: q('v', { aggregate: 'max' }) } }],
+    ['horizontal rule with only x', { data: DATA, mark: { type: 'rule', orient: 'horizontal' }, encoding: { x: q('x'), x2: q('v') } }],
+    ['vertical rule with only y', { data: DATA, mark: { type: 'rule', orient: 'vertical' }, encoding: { y: q('y'), y2: q('v') } }],
+    ['errorband without types', { data: DATA, mark: 'errorband', encoding: { y: { field: 'v', type: 'quantitative' }, x: { timeUnit: 'year', field: 't' } } }],
+    ['grouped bars with an errorbar sharing the layer encoding', { data: DATA, encoding: { x: n('c'), xOffset: n('g') }, layer: [{ mark: 'bar', encoding: { y: q('v', { aggregate: 'mean' }), color: n('g') } }, { mark: 'errorbar', encoding: { y: q('v') } }] }],
+    ['layered axis: one explicit title wins over an implicit one', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('v', { title: 'Value' }) } }] }],
+    ['layered axis: a null title removes it', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('v', { title: null }) } }] }],
   ],
 }
 
