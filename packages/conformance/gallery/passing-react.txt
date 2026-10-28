@@ -138,7 +138,9 @@ vl/histogram
 vl/histogram_bin_change
 vl/histogram_bin_spacing
 vl/histogram_invalid_null
+vl/histogram_log
 vl/histogram_no_spacing
+vl/histogram_nonlinear
 vl/interactive_area_brush
 vl/joinaggregate_mean_difference
 vl/joinaggregate_mean_difference_by_year
@@ -153,6 +155,7 @@ vl/layer_bar_line_union
 vl/layer_bar_month
 vl/layer_color_legend_left
 vl/layer_dual_axis
+vl/layer_falkensee
 vl/layer_histogram
 vl/layer_line_color_rule
 vl/layer_line_datum_rule
@@ -243,6 +246,7 @@ vl/point_params
 vl/point_tooltip
 vl/rect_heatmap
 vl/rect_heatmap_weather
+vl/rect_mosaic_simple
 vl/rule_color_mean
 vl/rule_extent
 vl/square

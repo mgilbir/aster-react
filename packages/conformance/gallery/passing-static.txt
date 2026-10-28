@@ -40,6 +40,7 @@ vl/animated_gapminder
 vl/animated_hop
 vl/arc_color_mappings
 vl/arc_donut
+vl/arc_facet
 vl/arc_pie
 vl/arc_pie_normalize_tooltip
 vl/area
@@ -160,7 +161,9 @@ vl/histogram
 vl/histogram_bin_change
 vl/histogram_bin_spacing
 vl/histogram_invalid_null
+vl/histogram_log
 vl/histogram_no_spacing
+vl/histogram_nonlinear
 vl/interactive_area_brush
 vl/interactive_bar_select_highlight
 vl/interactive_brush
@@ -196,6 +199,7 @@ vl/layer_bar_line_union
 vl/layer_bar_month
 vl/layer_color_legend_left
 vl/layer_dual_axis
+vl/layer_falkensee
 vl/layer_histogram
 vl/layer_line_color_rule
 vl/layer_line_datum_rule
@@ -288,6 +292,7 @@ vl/point_params
 vl/point_tooltip
 vl/rect_heatmap
 vl/rect_heatmap_weather
+vl/rect_mosaic_simple
 vl/repeat_child_layer
 vl/repeat_histogram
 vl/repeat_histogram_flights
@@ -383,8 +388,10 @@ vl/time_parse_local
 vl/time_parse_utc
 vl/time_parse_utc_format
 vl/trellis_anscombe
+vl/trellis_area
 vl/trellis_bar
 vl/trellis_bar_histogram
+vl/trellis_column_year
 vl/trellis_line_quarter
 vl/trellis_scatter
 vl/trellis_scatter_binned_row

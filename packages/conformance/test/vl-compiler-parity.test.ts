@@ -167,6 +167,10 @@ const GROUPS: Record<string, Case[]> = {
   // pointOrRangePosition + aggregate.ts: a ranged channel's aggregated field; rule.ts: the middle of a missing position;
   // compositemark: the types a composite reads are inferred, and the layer's shared encoding groups it
   'ranged channels, rules, composite marks (rule_extent, errorband_tooltip, bar_grouped_errorbar)': [
+    ['bar between two quantitative x values', { data: DATA, mark: 'bar', encoding: { x: q('x'), x2: q('v'), y: n('c') } }],
+    ['bar between two quantitative y values, count', { data: DATA, mark: 'bar', encoding: { x: q('x'), x2: q('v'), y: { aggregate: 'count' } } }],
+    ['bar between two points of an ordinal scale', { data: DATA, mark: 'bar', encoding: { x: { field: 'c', type: 'ordinal', scale: { type: 'point', padding: 0 } }, x2: { field: 'g' }, y: q('v') } }],
+    ['rect between two quantitative values on both axes', { data: DATA, mark: 'rect', encoding: { x: q('x'), x2: q('v'), y: q('y'), y2: q('x') } }],
     ['rule between aggregated min and max', { data: DATA, mark: 'rule', encoding: { x: n('c'), y: q('v', { aggregate: 'min' }), y2: q('v', { aggregate: 'max' }) } }],
     ['area between aggregated min and max', { data: DATA, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'max' }), y2: q('v', { aggregate: 'min' }) } }],
     ['bar between aggregated min and max', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'min' }), y2: q('v', { aggregate: 'max' }) } }],
@@ -176,6 +180,14 @@ const GROUPS: Record<string, Case[]> = {
     ['grouped bars with an errorbar sharing the layer encoding', { data: DATA, encoding: { x: n('c'), xOffset: n('g') }, layer: [{ mark: 'bar', encoding: { y: q('v', { aggregate: 'mean' }), color: n('g') } }, { mark: 'errorbar', encoding: { y: q('v') } }] }],
     ['layered axis: one explicit title wins over an implicit one', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('v', { title: 'Value' }) } }] }],
     ['layered axis: a null title removes it', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('v', { title: null }) } }] }],
+  ],
+  // resolve.ts defaultScaleResolve: a facet's cells own their theta scale; model.ts assembleGroupStyle; facet path groups
+  'faceted arcs and series (arc_facet, trellis_area)': [
+    ['arcs, one pie per column', { data: DATA, mark: 'arc', encoding: { column: n('g'), theta: q('v', { aggregate: 'sum' }), color: n('c') } }],
+    ['arcs, one pie per wrapped facet', { data: DATA, facet: n('g'), columns: 2, spec: { mark: 'arc', encoding: { theta: q('v', { aggregate: 'sum' }), color: n('c') } } }],
+    ['stacked areas, one per row', { data: DATA, width: 120, height: 40, mark: 'area', encoding: { x: q('x'), y: q('y'), color: n('c', { legend: null }), row: n('g') } }],
+    ['lines per series, one per column', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('c'), column: n('g') } }],
+    ['layered lines and points per series, one per row', { data: DATA, facet: { row: n('g') }, spec: { width: 120, height: 60, layer: [{ mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('c') } }, { mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } }] } }],
   ],
 }
 

@@ -1277,7 +1277,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     for (const d of innerData) {
       for (const t of (d.transform as Record<string, unknown>[]) ?? []) {
         if (USER_TRANSFORMS.has(t)) continue
-        if (t.type === 'stack' || t.type === 'aggregate' || t.type === 'joinaggregate' || t.type === 'pivot') {
+        if (t.type === 'stack' || t.type === 'aggregate' || t.type === 'joinaggregate' || t.type === 'pivot' || t.type === 'impute') {
           if (Array.isArray(t.groupby)) t.groupby = [...t.groupby, ...facetKeys]
         } else if (t.type === 'window') {
           if (Array.isArray(t.partitionby)) t.partitionby = [...t.partitionby, ...facetKeys]
@@ -1343,9 +1343,15 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // child marks read the per-cell datasets
   const remapFrom = (m: Record<string, unknown>): Record<string, unknown> => {
     const c = { ...m }
-    const from = c.from as { data?: string } | undefined
+    const from = c.from as { data?: string; facet?: { name?: string; data?: string } } | undefined
     if (isSelectionMark(m)) return c // (the selections' marks read no data of the cell)
-    if (from === undefined || from.data == null) c.from = { ...(from ?? {}), data: 'facet' }
+    if (from?.facet !== undefined) {
+      // a series group (one path per series) facets the CELL's data; the facet is named after the child model
+      const oldName = from.facet.name
+      const newName = typeof oldName === 'string' ? oldName.replace(/^faceted_path_/, 'faceted_path_child_') : oldName
+      if (typeof oldName === 'string' && typeof newName === 'string') cellMap.set(oldName, newName)
+      c.from = { ...from, facet: { ...from.facet, ...(typeof newName === 'string' ? { name: newName } : {}), data: from.facet.data !== undefined && cellMap.has(from.facet.data) ? cellMap.get(from.facet.data) : 'facet' } }
+    } else if (from === undefined || from.data == null) c.from = { ...(from ?? {}), data: 'facet' }
     else if (cellMap.has(from.data)) c.from = { ...from, data: cellMap.get(from.data) }
     if (Array.isArray(c.marks)) c.marks = (c.marks as Record<string, unknown>[]).map(remapFrom)
     return c
@@ -1357,6 +1363,20 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     ...(Array.isArray(m.marks) ? { marks: (m.marks as Record<string, unknown>[]).map(prefixNames) } : {}),
   })
   const childMarks = (inner.marks as Record<string, unknown>[]).map(remapFrom).map(prefixNames)
+  // resolve.ts defaultScaleResolve: a facet shares every scale but theta, which each cell owns (`child_theta`, over the cell's data)
+  const cellScales: Record<string, unknown>[] = []
+  {
+    const innerScales = (inner.scales as ScaleSpec[]) ?? []
+    const at = innerScales.findIndex((sc) => sc.name === 'theta')
+    if (at >= 0) {
+      const theta = innerScales.splice(at, 1)[0]!
+      const dom = isObject(theta.domain) && typeof theta.domain.data === 'string' ? { ...theta.domain, data: cellMap.get(theta.domain.data) ?? 'facet' } : theta.domain
+      cellScales.push({ ...theta, name: 'child_theta', domain: dom })
+      renameFragment(childMarks, { signals: new Map<string, string>(), scales: new Map([['theta', 'child_theta']]) })
+    }
+  }
+  // (assembleGroupStyle: a view with an x or y channel is a framed cell, any other a plain view)
+  const cellStyle = (Array.isArray(innerSpec.layer) ? collectLeaves(innerSpec).some((l) => unitGroupStyle(l) === 'cell') : unitGroupStyle(innerSpec) === 'cell') ? 'cell' : 'view'
 
   const facetGroupby = [...colsOf(rowFd, rowField), ...colsOf(colFd, colField), ...colsOf(wrapFd, wrapField)]
   const facetSortFields = [rowField, colField, wrapField].filter(Boolean) as string[]
@@ -1418,25 +1438,27 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const wrapOrder = facetOrder(wrapDef)
     const cellTitle = parentTitle(wrapField, wrapFd) as Record<string, unknown>
     delete cellTitle.orient
+    // (the row headers / column footers exist only to carry the axes: none, no group and no sequence behind it)
     const wrapData = [...innerData, { name: facetDomain, source: baseName, transform: [{ type: 'aggregate', groupby: colsOf(wrapFd, wrapField) }] },
-      { name: rowSeq, transform: [{ type: 'sequence', start: 0, stop: nCols === undefined ? 1 : { signal: `ceil(length(data(${JSON.stringify(facetDomain)})) / ${nCols})` } }] },
-      { name: colSeq, transform: [{ type: 'sequence', start: 0, stop: { signal: nCols === undefined ? `length(data(${JSON.stringify(facetDomain)}))` : `min(length(data(${JSON.stringify(facetDomain)})), ${nCols})` } }] },
+      ...(yLabelAxes.length ? [{ name: rowSeq, transform: [{ type: 'sequence', start: 0, stop: nCols === undefined ? 1 : { signal: `ceil(length(data(${JSON.stringify(facetDomain)})) / ${nCols})` } }] }] : []),
+      ...(xLabelAxes.length ? [{ name: colSeq, transform: [{ type: 'sequence', start: 0, stop: { signal: nCols === undefined ? `length(data(${JSON.stringify(facetDomain)}))` : `min(length(data(${JSON.stringify(facetDomain)})), ${nCols})` } }] }] : []),
     ]
     const wrapMarks: Record<string, unknown>[] = [
       { name: 'facet-title', type: 'group', role: 'column-title', title: { text: hdrW.title ?? channelTitle(wrapFd), style: 'guide-title', offset: (hdrW.titlePadding as number | undefined) ?? 10 } },
-      { name: 'row_header', type: 'group', role: 'row-header', from: { data: rowSeq }, encode: { update: { height: { signal: 'child_height' } } }, ...(yLabelAxes.length ? { axes: yLabelAxes } : {}) },
-      { name: 'column_footer', type: 'group', role: 'column-footer', from: { data: colSeq }, encode: { update: { width: { signal: 'child_width' } } }, ...(xLabelAxes.length ? { axes: xLabelAxes } : {}) },
+      ...(yLabelAxes.length ? [{ name: 'row_header', type: 'group', role: 'row-header', from: { data: rowSeq }, encode: { update: { height: { signal: 'child_height' } } }, axes: yLabelAxes }] : []),
+      ...(xLabelAxes.length ? [{ name: 'column_footer', type: 'group', role: 'column-footer', from: { data: colSeq }, encode: { update: { width: { signal: 'child_width' } } }, axes: xLabelAxes }] : []),
       {
         name: 'cell',
         type: 'group',
         title: cellTitle,
-        style: 'cell',
+        style: cellStyle,
         from: { facet: { name: 'facet', data: baseName, groupby: colsOf(wrapFd, wrapField) } },
         sort: { field: [datumRef(wrapField)], order: [wrapOrder] },
         encode: { update: { width: { signal: 'child_width' }, height: { signal: 'child_height' } } },
         ...(innerSel ? { signals: assembleFacetSignals(cellName, [...innerSel.unit]) } : {}),
         ...(cellData.length ? { data: cellData } : {}),
         ...(gridAxes.length ? { axes: gridAxes } : {}),
+        ...(cellScales.length ? { scales: cellScales } : {}),
         marks: childMarks,
       },
     ]
@@ -1587,13 +1609,14 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     name: 'cell',
     type: 'group',
     ...(cellTitle ? { title: cellTitle } : {}),
-    style: 'cell',
+    style: cellStyle,
     from: { facet: { name: 'facet', data: baseName, groupby: facetGroupby } },
     sort: { field: facetSortFields.map(datumRef), order: facetSortFields.map((_, i) => (i === 0 && rowField ? rowOrder : colOrder)) },
     encode: { update: { width: { signal: 'child_width' }, height: { signal: 'child_height' } } },
     ...(innerSel ? { signals: assembleFacetSignals(cellName, [...innerSel.unit]) } : {}),
     ...(cellData.length ? { data: cellData } : {}),
     ...(gridAxes.length ? { axes: gridAxes } : {}),
+    ...(cellScales.length ? { scales: cellScales } : {}),
     marks: childMarks,
   })
 
@@ -4184,7 +4207,8 @@ function isStacked(def: FieldDef, mark: string, orient: string, allFields?: Fiel
       (f) => f.field && !positional.has(f.channel) && !f.aggregate && !groupFields.has(f.field),
     )
     if (allFields.some((f) => f.aggregate) && stackBy.length === 0) return false
-    if (allFields.some((f) => (f.channel === 'x2' || f.channel === 'y2') && f.field)) return false
+    // (stack.ts: a ranged STACK field - its own secondary channel - never stacks; the other axis may be ranged)
+    if (allFields.some((f) => f.channel === `${def.channel}2` && f.field)) return false
   }
   return true
 }
@@ -5110,6 +5134,16 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           else if (mark === 'rect') update.x2 = zeroOrMinRef('x', xDef, mark)
         }
       }
+    }
+    // position-rect.ts rectPosition: a channel with a secondary channel (x + x2, y + y2) that is not binned is a plain range
+    // between the two refs (rangePosition), whatever the scale: the band-size rules above are for single-channel positions
+    for (const [pos, def] of [['x', xDef], ['y', yDef]] as const) {
+      const def2 = fields.find((f) => f.channel === `${pos}2` && f.field && !f.datumOnly)
+      if (!def || !def2 || def.bin || def.datumOnly) continue
+      const band = positionalScaleType(mark, def) === 'band' ? { band: 0.5 } : {}
+      for (const k of [pos, `${pos}c`, `${pos}2`, pos === 'x' ? 'width' : 'height']) delete update[k]
+      update[pos] = { scale: pos, field: aggFieldName(def), ...band }
+      update[`${pos}2`] = { scale: pos, field: aggFieldName(def2), ...band }
     }
   } else if (mark === 'point' || mark === 'circle' || mark === 'square') {
     const filledSetting = isObject(spec.mark) && spec.mark.filled !== undefined
