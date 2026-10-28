@@ -157,11 +157,16 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       const projName = (t as { projection?: unknown }).projection
       const projection = projName != null ? ctx.projections?.get(String(projName)) : undefined
       if (projection != null && !geoRegistry.projectedPath) requireGeo() // throws: addon not loaded
+      // vega-geo GeoShape `pointRadius`: a number, or an expression of the GeoJSON object (d3 calls it with that object)
+      const prParam = (t as { pointRadius?: unknown }).pointRadius
+      const pointRadius: unknown = prParam != null && typeof prParam === 'object' && typeof (prParam as { expr?: unknown }).expr === 'string'
+        ? ((f) => (feature: unknown): number => +(f(feature as Row) as number))(compileExprTransform((prParam as { expr: string }).expr, ctx))
+        : prParam
       return rows.map((r) => {
         // vega's field is read off the scenegraph ITEM (`datum["geo"]` is item.datum.geo); a row here is the item's datum
         const geo = field == null || field === 'datum' ? r : getField({ datum: r }, field as string)
         const p = projection != null
-          ? geoRegistry.projectedPath!(projection, geo)
+          ? geoRegistry.projectedPath!(projection, geo, pointRadius)
           : geoJSONPath(geo)
         if (p === undefined) return r
         const out = { ...r, [as as string]: p }
@@ -169,7 +174,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
         if (projection != null && as === 'shape' && geoRegistry.projectedBounds) {
           const measure = geoRegistry.projectedBounds
           let memo: ReturnType<typeof measure> | undefined
-          SHAPE_BOUNDS.set(out, () => (memo === undefined ? (memo = measure(projection, geo)) : memo))
+          SHAPE_BOUNDS.set(out, () => (memo === undefined ? (memo = measure(projection, geo, pointRadius)) : memo))
         }
         return out
       })

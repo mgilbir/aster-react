@@ -23,12 +23,12 @@ export interface GeoRegistry {
   /** d3-geo projection builder (see geo.ts); null until the addon is loaded. */
   buildProjection: ((spec: unknown, width: number, height: number) => unknown) | null
   /** GeoJSON -> SVG path through a d3-geo projection; null until loaded. */
-  projectedPath: ((projection: unknown, geo: unknown) => string) | null
+  projectedPath: ((projection: unknown, geo: unknown, pointRadius?: unknown) => string) | null
   /** The unrounded bounds [x1, y1, x2, y2] of a projected shape (what vega's bound pass sees); null until loaded. */
-  projectedBounds: ((projection: unknown, geo: unknown) => [number, number, number, number] | null) | null
-  /** d3-contour marching squares over a raster grid; null until loaded. */
+  projectedBounds: ((projection: unknown, geo: unknown, pointRadius?: unknown) => [number, number, number, number] | null) | null
   /** vega-projection's `defaultPath`: d3's geoPath with no projection (a `geopath` that names none draws raw coordinates). */
   defaultPath: (() => unknown) | null
+  /** d3-contour marching squares over a raster grid; null until loaded. */
   contourRun: ((values: number[] | Float32Array, thresholds: number[], size: [number, number], smooth: boolean) => ContourFeature[]) | null
 }
 

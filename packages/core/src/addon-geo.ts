@@ -20,10 +20,10 @@ geoRegistry.buildProjection = (spec, width, height) =>
   buildProjection(spec as Parameters<typeof buildProjection>[0], width, height)
 const defaultPath = geoPath()
 geoRegistry.defaultPath = () => defaultPath
-geoRegistry.projectedPath = (projection, geo): string =>
-  projectedPath(projection as Parameters<typeof projectedPath>[0], geo)
-geoRegistry.projectedBounds = (projection, geo) =>
-  projectedBounds(projection as Parameters<typeof projectedBounds>[0], geo)
+geoRegistry.projectedPath = (projection, geo, pointRadius): string =>
+  projectedPath(projection as Parameters<typeof projectedPath>[0], geo, pointRadius)
+geoRegistry.projectedBounds = (projection, geo, pointRadius) =>
+  projectedBounds(projection as Parameters<typeof projectedBounds>[0], geo, pointRadius)
 // the contour generator sets thresholds via `.thresholds(array)`, then is
 // called as `contours(values)` — it has no 2-arg form (vega's fork does).
 geoRegistry.contourRun = (values, thresholds, size, smooth) =>

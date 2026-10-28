@@ -2,6 +2,7 @@ vega/airport-connections
 vega/annual-temperature
 vega/arc-diagram
 vega/area-chart
+vega/bar-chart
 vega/barley-trellis-plot
 vega/beeswarm-plot
 vega/binned-scatter-plot
@@ -16,6 +17,7 @@ vega/donut-chart
 vega/donut-chart-labelled
 vega/dorling-cartogram
 vega/dot-plot
+vega/earthquakes
 vega/edge-bundling
 vega/falkensee-population
 vega/force-directed-layout
@@ -84,6 +86,7 @@ vl/bar_aggregate_vertical
 vl/bar_argmax
 vl/bar_array_aggregate
 vl/bar_axis_orient
+vl/bar_axis_title_quoted
 vl/bar_column_fold
 vl/bar_column_pivot
 vl/bar_conditional_opacity
@@ -140,9 +143,15 @@ vl/facet_custom_header
 vl/geo_circle
 vl/geo_constant_value
 vl/geo_custom_projection
+vl/geo_graticule
+vl/geo_graticule_object
 vl/geo_layer
+vl/geo_line
+vl/geo_params_projections
 vl/geo_point
+vl/geo_rule
 vl/geo_sphere
+vl/geo_text
 vl/histogram
 vl/histogram_bin_change
 vl/histogram_bin_spacing
@@ -151,6 +160,7 @@ vl/histogram_no_spacing
 vl/interactive_area_brush
 vl/interactive_bar_select_highlight
 vl/interactive_brush
+vl/interactive_geo_earthquakes
 vl/interactive_index_chart
 vl/interactive_legend
 vl/interactive_legend_dblclick
@@ -314,6 +324,7 @@ vl/tick_strip_tick_band
 vl/tick_strip_with_height
 vl/time_custom_step
 vl/time_output_utc_scale
+vl/trail_color
 vl/trellis_anscombe
 vl/trellis_bar
 vl/trellis_bar_histogram
