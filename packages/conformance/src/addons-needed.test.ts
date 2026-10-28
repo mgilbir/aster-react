@@ -17,7 +17,7 @@ import '@aster/core/geo'
 import '@aster/core/transforms'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import {
-  addonsNeeded, isAddonLoaded, missingAddons, LOAD_ADDON_FORMATS, TRANSFORMS_ADDON_TYPES, type AddonName,
+  addonsNeeded, isAddonLoaded, missingAddons, ADDON_FUNCTIONS, registeredFunctionNames, withdrawFunctions, LOAD_ADDON_FORMATS, TRANSFORMS_ADDON_TYPES, type AddonName,
 } from '@aster/core/addons'
 import { dataFormatRegistry, geoRegistry, renderSpec, transformRegistry, type TransformFn, type VgSpec } from '@aster/core'
 
@@ -33,10 +33,29 @@ const saved = {
   geo: { ...geoRegistry },
   load: new Map<string, Reader>([...dataFormatRegistry].filter(([f]) => f !== 'json')),
 }
+// an add-on's expression functions are part of what it registers: withdrawn with it, put back with it
+// (read from the add-ons' sources, not from the detector's table that is under test: a table that forgot a function must not also forget to withdraw it)
+const CORE_SRC = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'core', 'src')
+const sourceOf = (f: string): string => readFileSync(join(CORE_SRC, f), 'utf8')
+const registeredIn = (f: string): string[] => [...sourceOf(f).matchAll(/register(?:Runtime)?ExpressionFunction\('(\w+)'/g)].map((m) => m[1]!)
+const REGISTERED_BY: Record<'transforms' | 'geo', string[]> = {
+  geo: registeredIn('addon-geo.ts'),
+  // stats-functions.ts registers the entries of its FUNCTIONS object in a loop
+  transforms: [...registeredIn('transform-extra.ts'), ...(/const FUNCTIONS = \{([^}]*)\}/.exec(sourceOf('stats-functions.ts'))![1]!.match(/\w+/g) ?? [])],
+}
+const functionsOf = (name: 'transforms' | 'geo'): string[] => REGISTERED_BY[name]
+const withdrawn = new Map<AddonName, () => void>()
+function setFunctions(name: AddonName, on: boolean): void {
+  if (name === 'load') return
+  const restore = withdrawn.get(name)
+  if (on && restore) { restore(); withdrawn.delete(name) }
+  else if (!on && !restore) withdrawn.set(name, withdrawFunctions(functionsOf(name)))
+}
 function setLoaded(name: AddonName, on: boolean): void {
+  setFunctions(name, on)
   if (name === 'transforms') for (const [t, fn] of saved.transforms) { if (on) transformRegistry.set(t, fn); else transformRegistry.delete(t) }
   else if (name === 'load') for (const [f, r] of saved.load) { if (on) dataFormatRegistry.set(f, r); else dataFormatRegistry.delete(f) }
-  else Object.assign(geoRegistry, on ? saved.geo : { buildProjection: null, projectedPath: null, projectedBounds: null, contourRun: null })
+  else Object.assign(geoRegistry, on ? saved.geo : Object.fromEntries(Object.keys(saved.geo).map((k) => [k, null])))
 }
 const setOnly = (loaded: ReadonlySet<AddonName>): void => { for (const a of ADDONS) setLoaded(a, loaded.has(a)) }
 
@@ -116,6 +135,24 @@ describe('the detector\'s tables are the add-ons\' registrations', () => {
     expect(asked.size).toBeGreaterThan(10)
     expect([...asked].filter((t) => !TRANSFORMS_ADDON_TYPES.includes(t))).toEqual([])
   })
+  it('ADDON_FUNCTIONS is the expression functions the add-ons register, each under the add-on that registers it', () => {
+    setOnly(new Set(ADDONS))
+    expect(registeredFunctionNames().sort()).toEqual(Object.keys(ADDON_FUNCTIONS).sort())
+    expect(registeredFunctionNames().sort()).toEqual([...REGISTERED_BY.geo, ...REGISTERED_BY.transforms].sort())
+    for (const addon of ['geo', 'transforms'] as const) {
+      expect(REGISTERED_BY[addon].length).toBeGreaterThan(1)
+      for (const f of REGISTERED_BY[addon]) expect(ADDON_FUNCTIONS[f], f).toBe(addon)
+    }
+    const call = (name: string) => ({ marks: [{ type: 'text', encode: { update: { text: { signal: `${name}(0)` } } } }] }) as VgSpec
+    for (const [name, addon] of Object.entries(ADDON_FUNCTIONS)) {
+      expect([...addonsNeeded(call(name))], name).toEqual([addon])
+      // without the add-on the engine names it (rather than "Unrecognized function")
+      const other = ADDONS.filter((a) => a !== addon)
+      setOnly(new Set(other))
+      expect(() => renderSpec(call(name)), name).toThrow(new RegExp(`load the addon first: await import\\("@aster/core/${addon}"\\)`))
+      setOnly(new Set(ADDONS))
+    }
+  })
   it('LOAD_ADDON_FORMATS is what @aster/core/load registers beyond the built-in json', () => {
     setOnly(new Set(ADDONS))
     expect([...dataFormatRegistry.keys()].filter((f) => f !== 'json').sort()).toEqual([...LOAD_ADDON_FORMATS].sort())
@@ -130,6 +167,28 @@ describe('addonsNeeded reads the structure, not the text', () => {
     expect(only({ marks: [{ type: 'group', data: [{ name: 'd', values: 'a\n1', format: { type: 'csv' } }] }] })).toBe('load')
     expect(only({ data: [{ name: 'd', transform: [{ type: 'contour', size: [1, 1] }] }] })).toBe('geo')
     expect(only({ projections: [{ name: 'p', type: 'mercator' }] })).toBe('geo')
+  })
+  it('finds an add-on function in every kind of expression a spec carries, and only there', () => {
+    const fn = 'geoArea(null, datum)'
+    const sig = (extra: Record<string, unknown>): VgSpec => ({ signals: [{ name: 's', ...extra }] })
+    expect(only(sig({ update: fn }))).toBe('geo')
+    expect(only(sig({ init: fn }))).toBe('geo')
+    expect(only(sig({ on: [{ events: 'click', update: fn }] }))).toBe('geo')
+    expect(only(sig({ on: [{ events: { type: 'click', filter: fn }, update: '1' }] }))).toBe('geo')
+    expect(only(sig({ on: [{ events: `click[${fn} > 0]`, update: '1' }] }))).toBe('geo')
+    expect(only({ data: [{ name: 'd', transform: [{ type: 'formula', expr: fn, as: 'a' }] }] })).toBe('geo')
+    expect(only({ data: [{ name: 'd', transform: [{ type: 'filter', expr: fn }] }] })).toBe('geo')
+    expect(only({ data: [{ name: 'd', transform: [{ type: 'extent', field: 'x', signal: 'e' }, { type: 'bin', field: 'x', extent: { signal: fn } }] }] })).toBe('geo')
+    expect(only({ marks: [{ type: 'group', marks: [{ type: 'rect', encode: { update: { x: { signal: fn }, fill: [{ test: fn, value: 'red' }, { value: 'blue' }] } } }] }] })).toBe('geo')
+    expect(only({ scales: [{ name: 'x', type: 'linear', domain: { signal: 'sampleNormal(0, 1)' }, range: [0, 1] }] })).toBe('transforms')
+    expect(only({ signals: [{ name: 's', update: 'sampleNormal() + geoArea(null, 1)' }] })).toBe('transforms,geo')
+    // a call that does not parse is the engine's to report; a name that is not called, or is data, is nothing
+    expect(only(sig({ update: 'geoArea(' }))).toBe('')
+    expect(only(sig({ update: 'geoArea' }))).toBe('')
+    expect(only(sig({ update: "'geoArea(1)'" }))).toBe('')
+    expect(only(sig({ value: 'geoArea(1)' }))).toBe('')
+    expect(only({ data: [{ name: 'd', values: [{ update: 'geoArea(1)', expr: 'geoArea(1)' }] }] })).toBe('')
+    expect(only({ marks: [{ type: 'text', encode: { update: { text: { value: 'geoArea(1)' } } } }] })).toBe('')
   })
   it('does not take the word for the thing: a field, a signal or a string that says "pie" needs nothing', () => {
     expect(only({ data: [{ name: 'pie', values: [{ type: 'pie', format: { type: 'csv' } }], transform: [{ type: 'filter', expr: "datum.type == 'pie'" }] }], signals: [{ name: 'projections', value: ['pie', 'kde'] }], marks: [{ type: 'rect', name: 'treemap', encode: { update: { fill: { value: 'geo' } } } }], projections: [] })).toBe('')

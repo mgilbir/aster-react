@@ -15,6 +15,7 @@ import { boundedCount, meterBytes, meterTick, guardedRegExp, checkRegexInput, ch
 import { bandSpace } from './scale.js'
 import { selectionIdTest, selectionResolve, selectionTest, selectionTuples } from './selections.js'
 import { parseExpression } from './expr-parser.js'
+import { ADDON_FUNCTIONS } from './addon-functions.js'
 import { expressionInterpreter, DefaultFunctions, ExpressionConstants, EventFunctions } from './expr-interpreter.js'
 import {
   timeOffset, utcOffset, timeSequence, utcSequence,
@@ -247,6 +248,28 @@ function createFunctionContext(runtime: ExpressionRuntime): Record<string, unkno
 export function registerRuntimeExpressionFunction(name: string, make: (runtime: ExpressionRuntime) => (...args: never[]) => unknown): void {
   REGISTERED_BOUND.set(name, make)
   registryEpoch++
+}
+
+/** Every function name an add-on or the host registered (not the built-ins): for the tests that check the add-on tables. */
+export function registeredExpressionFunctionNames(): string[] {
+  return [...new Set([...REGISTERED_BOUND.keys(), ...REGISTERED.keys()])]
+}
+
+/**
+ * Take the named functions out of the registry (the add-ons', as if their module had not been imported); the returned function puts
+ * them back. For the tests of `@aster/core/addons`, which check the detector against an app that has not loaded an add-on.
+ */
+export function withdrawExpressionFunctions(names: readonly string[]): () => void {
+  const bound = names.flatMap((n) => REGISTERED_BOUND.has(n) ? [[n, REGISTERED_BOUND.get(n)!] as const] : [])
+  const plain = names.flatMap((n) => REGISTERED.has(n) ? [[n, REGISTERED.get(n)!] as const] : [])
+  for (const [n] of bound) REGISTERED_BOUND.delete(n)
+  for (const [n] of plain) REGISTERED.delete(n)
+  registryEpoch++
+  return () => {
+    for (const [n, f] of bound) REGISTERED_BOUND.set(n, f)
+    for (const [n, f] of plain) REGISTERED.set(n, f)
+    registryEpoch++
+  }
 }
 
 let builtinNames: Set<string> | undefined
@@ -506,7 +529,10 @@ function assertKnownFunctions(ast: AstNode, functions: Record<string, unknown>, 
       let name = node.callee.name
       if (name.startsWith('_')) name = name.slice(1)
       if (name !== 'if' && !EventFunctions.includes(name) && !Object.hasOwn(functions, name) && !Object.hasOwn(DefaultFunctions, name)) {
-        throw new ExpressionParseError(`Unrecognized function: ${name}`, expr)
+        const addon = Object.hasOwn(ADDON_FUNCTIONS, name) ? ADDON_FUNCTIONS[name] : undefined
+        throw new ExpressionParseError(addon
+          ? `[aster] this spec calls the expression function "${name}"; load the addon first: await import("@aster/core/${addon}")`
+          : `Unrecognized function: ${name}`, expr)
       }
     }
     for (const k of Object.keys(node)) if (k !== 'type') visit(node[k])
