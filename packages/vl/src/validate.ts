@@ -357,7 +357,18 @@ function validateData(spec: Obj, at: (k: string) => string): void {
   if (!isObj(data)) mustBe(at('data'), OBJECT)
   const kinds = ['values', 'url', 'name', 'sequence', 'sphere', 'graticule'].filter((k) => data[k] !== undefined)
   if (kinds.length === 0) fail(at('data'), 'needs one of `values`, `url`, `name`')
-  if (data.sequence !== undefined) fail(at('data'), 'data generators: `sequence` is not supported (`sphere` and `graticule` are)')
+  if (data.sequence !== undefined) {
+    if (kinds.length > 1) fail(at('data'), 'a `sequence` data generator cannot be combined with another data source')
+    keysOf(data, set('sequence name'), at('data'), 'data generator')
+    const q = data.sequence
+    if (!isObj(q)) mustBe(at('data.sequence'), 'an object {start, stop, step, as}')
+    keysOf(q, set('start stop step as'), at('data.sequence'), 'sequence')
+    for (const k of ['start', 'stop'] as const) if (typeof q[k] !== 'number' || !Number.isFinite(q[k])) mustBe(at(`data.sequence.${k}`), 'a finite number')
+    if (q.step !== undefined && (typeof q.step !== 'number' || !Number.isFinite(q.step) || q.step === 0)) mustBe(at('data.sequence.step'), 'a non-zero number')
+    if (q.as !== undefined && typeof q.as !== 'string') mustBe(at('data.sequence.as'), 'a field name')
+    if (data.name !== undefined && typeof data.name !== 'string') mustBe(at('data.name'), 'a string')
+    return
+  }
   if (data.sphere !== undefined || data.graticule !== undefined) {
     if (data.sphere !== undefined && data.graticule !== undefined) fail(at('data'), '`sphere` and `graticule` cannot be combined')
     const g = data.sphere !== undefined ? 'sphere' : 'graticule'

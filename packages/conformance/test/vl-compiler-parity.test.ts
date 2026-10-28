@@ -469,6 +469,14 @@ const GROUPS: Record<string, Case[]> = {
     ['an imputed value with a detail channel', { data: GAPS, mark: 'line', encoding: { x: q('a'), y: q('b', { impute: { value: 3, keyvals: [4] } }), detail: n('c') } }],
     ['an imputed point mark', { data: GAPS, mark: 'point', encoding: { x: q('a'), y: q('b', { impute: { value: 3, keyvals: [4] } }), color: n('c') } }],
   ],
+  // compile/data/sequence.ts: a sequence generator is the source (sequence_line, sequence_line_fold)
+  'sequence data (sequence_line, sequence_line_fold)': [
+    ['a function of a generated sequence', { data: { sequence: { start: 0, stop: 12.7, step: 0.1, as: 'x' } }, transform: [{ calculate: 'sin(datum.x)', as: 'sin(x)' }], width: 300, height: 150, mark: 'line', encoding: { x: q('x'), y: q('sin(x)') } }],
+    ['two functions folded', { data: { sequence: { start: 0, stop: 7, step: 0.5, as: 'x' } }, transform: [{ calculate: 'sin(datum.x)', as: 'sin(x)' }, { calculate: 'cos(datum.x)', as: 'cos(x)' }, { fold: ['sin(x)', 'cos(x)'] }], mark: 'line', encoding: { x: q('x'), y: q('value'), color: n('key', { title: null }) } }],
+    ['a sequence with the default output name and step', { data: { sequence: { start: 1, stop: 6 } }, mark: 'bar', encoding: { x: q('data', { bin: true }), y: { aggregate: 'count' } } }],
+    ['a sequence aggregated', { data: { sequence: { start: 0, stop: 10, step: 1, as: 'n' } }, mark: 'point', encoding: { x: q('n'), y: q('n', { aggregate: 'sum' }) } }],
+    ['a named sequence in a layer', { layer: [{ data: { sequence: { start: 0, stop: 5, step: 1, as: 'u' } }, mark: 'point', encoding: { x: q('u'), y: q('u') } }, { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y') } }] }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
@@ -597,4 +605,15 @@ describe('@aster/vl == vega-lite: layers that bin the same field (concat_bar_lay
     expect(new Set(sigs).size, 'a signal is declared once').toBe(sigs.length)
     await check(spec)
   }, 30_000)
+})
+
+// compile/data/sequence.ts producedFields: the generated numbers are not parsed again (no cast formula in front of the pipeline)
+describe('@aster/vl == vega-lite: a sequence is not cast', () => {
+  const casts = (vg: any): string[] => (vg.data ?? []).flatMap((d: any) => d.transform ?? []).filter((t: any) => t.type === 'formula' && /toNumber|toDate/.test(t.expr)).map((t: any) => t.expr)
+  it('the output name is left alone', () => {
+    const spec = { data: { sequence: { start: 0, stop: 6, step: 1, as: 'x' } }, mark: 'point', encoding: { x: q('x'), y: q('x') } }
+    const oracle = (vl as any).compile(plain(spec)).spec
+    const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+    expect(casts(ours)).toEqual(casts(oracle))
+  })
 })

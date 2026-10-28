@@ -3146,6 +3146,8 @@ function dataSource(data: Record<string, unknown>, datasets: Record<string, unkn
   const out: Record<string, unknown> = {}
   // data generators (vega-lite SourceNode / GraticuleNode): the sphere is one GeoJSON row, a graticule a transform
   if (data.sphere !== undefined) return { ...(typeof data.name === 'string' ? { name: data.name } : {}), values: [{ type: 'Sphere' }] }
+  // (compile/data/sequence.ts: the generated rows are the source itself)
+  if (data.sequence !== undefined) return { ...(typeof data.name === 'string' ? { name: data.name } : {}), transform: [{ type: 'sequence', ...(data.sequence as Record<string, unknown>) }] }
   if (data.graticule !== undefined) {
     return { ...(typeof data.name === 'string' ? { name: data.name } : {}), transform: [{ type: 'graticule', ...(isObject(data.graticule) ? data.graticule : {}) }] }
   }
@@ -3277,6 +3279,8 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     const probe: TranslateState = { parsed: new Map() }
     translateTransforms(userTransforms, ctx, probe)
     for (const [k, v] of probe.parsed) if (v === 'derived') derivedKeys.add(k)
+    // a sequence generator's rows are numbers already (sequence.ts producedFields)
+    if (isObject(spec.data) && isObject(spec.data.sequence)) derivedKeys.add(typeof spec.data.sequence.as === 'string' ? spec.data.sequence.as : 'data')
   }
   const castTypes = new Map<string, 'number' | 'date'>()
   if (!skipCasts) {
