@@ -1933,7 +1933,8 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
     // (a composition's is the degenerate M0,0h0v0h0Z)
     plotWidth: ctx.rootUnsized ? 0 : width,
     plotHeight: ctx.rootUnsized ? 0 : height,
-    background: ctx.chart.background,
+    // (`background` is a view signal: a spec that declares one sets the background through it; one with no value leaves the spec's)
+    background: ctx.signalParams.background !== undefined && (chart.signalDefs ?? []).some((d) => d.name === 'background') ? (ctx.signalParams.background as string | null) : ctx.chart.background,
     frameStroke: ctx.chart.frameStroke,
     frameFill: (ctx.chart as unknown as { frameFill?: string }).frameFill,
     frameStrokeWidth: (ctx.chart as unknown as { frameStrokeWidth?: number }).frameStrokeWidth,

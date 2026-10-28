@@ -377,17 +377,104 @@ function boundImage(bounds: Bounds, item: SceneItem): Bounds {
  * (Adding the two corners of the extent to the box is adding every point of the path to it.)
  */
 const SHAPE_EXTENTS = new Map<string, [number, number, number, number]>()
-function addShapeExtent(bounds: Bounds, shape: string, r: number, pathOf: (shape: string, r: number) => unknown): void {
-  const key = shape + '|' + r + '|' + (pathOf === symbolPathExact ? 'e' : 'p')
+function addShapeExtent(bounds: Bounds, shape: string, r: number, pathOf: (shape: string, r: number) => unknown, angle = 0): void {
+  const key = shape + '|' + r + '|' + (pathOf === symbolPathExact ? 'e' : 'p') + (angle ? '|' + angle : '')
   let ext = SHAPE_EXTENTS.get(key)
   if (ext === undefined) {
     const b = new Bounds()
-    boundsFromPath(b, String(pathOf(shape, r)))
+    boundsFromPath(b, angle ? rotatePath(String(pathOf(shape, r)), angle) : String(pathOf(shape, r)))
     ext = [b.x1, b.y1, b.x2, b.y2]
     if (SHAPE_EXTENTS.size > 256) SHAPE_EXTENTS.clear()
     SHAPE_EXTENTS.set(key, ext)
   }
   if (ext[0] <= ext[2] && ext[1] <= ext[3]) bounds.add(ext[0], ext[1]).add(ext[2], ext[3])
+}
+
+/**
+ * A path with every point rotated about the origin, in absolute commands. vega's boundContext rotates the points a shape's path
+ * hands it (control points too) before it takes extrema, so the bounds of a rotated shape are not those of its unrotated box
+ * turned; an arc keeps its radii and takes the turn on its x-axis rotation.
+ */
+export function rotatePath(d: string, deg: number): string {
+  const rot = deg * (Math.PI / 180)
+  const cos = Math.cos(rot)
+  const sin = Math.sin(rot)
+  const px = (x: number, y: number): string => `${cos * x - sin * y},${sin * x + cos * y}`
+  const re = /([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/g
+  const toks: Array<{ c: string; n: number[] }> = []
+  let cur: { c: string; n: number[] } | null = null
+  for (let m = re.exec(d); m; m = re.exec(d)) {
+    if (m[1]) toks.push((cur = { c: m[1], n: [] }))
+    else if (cur) cur.n.push(parseFloat(m[2]!))
+  }
+  let x = 0
+  let y = 0
+  let sx = 0
+  let sy = 0
+  let out = ''
+  for (const t of toks) {
+    const rel = t.c === t.c.toLowerCase()
+    const n = t.n
+    switch (t.c.toUpperCase()) {
+      case 'M':
+        for (let i = 0; i + 1 < n.length; i += 2) {
+          x = n[i]! + (rel ? x : 0); y = n[i + 1]! + (rel ? y : 0)
+          if (i === 0) { sx = x; sy = y }
+          out += (i === 0 ? 'M' : 'L') + px(x, y)
+        }
+        break
+      case 'L':
+        for (let i = 0; i + 1 < n.length; i += 2) { x = n[i]! + (rel ? x : 0); y = n[i + 1]! + (rel ? y : 0); out += 'L' + px(x, y) }
+        break
+      case 'H':
+        for (const v of n) { x = v + (rel ? x : 0); out += 'L' + px(x, y) }
+        break
+      case 'V':
+        for (const v of n) { y = v + (rel ? y : 0); out += 'L' + px(x, y) }
+        break
+      case 'C':
+        for (let i = 0; i + 5 < n.length; i += 6) {
+          const o = rel ? [x, y] : [0, 0]
+          out += `C${px(n[i]! + o[0]!, n[i + 1]! + o[1]!)},${px(n[i + 2]! + o[0]!, n[i + 3]! + o[1]!)},${px(n[i + 4]! + o[0]!, n[i + 5]! + o[1]!)}`
+          x = n[i + 4]! + o[0]!; y = n[i + 5]! + o[1]!
+        }
+        break
+      case 'S':
+        // (the control point the tracer assumes without a previous curve: the current point)
+        for (let i = 0; i + 3 < n.length; i += 4) {
+          const o = rel ? [x, y] : [0, 0]
+          out += `C${px(x, y)},${px(n[i]! + o[0]!, n[i + 1]! + o[1]!)},${px(n[i + 2]! + o[0]!, n[i + 3]! + o[1]!)}`
+          x = n[i + 2]! + o[0]!; y = n[i + 3]! + o[1]!
+        }
+        break
+      case 'Q':
+        for (let i = 0; i + 3 < n.length; i += 4) {
+          const o = rel ? [x, y] : [0, 0]
+          out += `Q${px(n[i]! + o[0]!, n[i + 1]! + o[1]!)},${px(n[i + 2]! + o[0]!, n[i + 3]! + o[1]!)}`
+          x = n[i + 2]! + o[0]!; y = n[i + 3]! + o[1]!
+        }
+        break
+      case 'T':
+        for (let i = 0; i + 1 < n.length; i += 2) {
+          const nx = n[i]! + (rel ? x : 0)
+          const ny = n[i + 1]! + (rel ? y : 0)
+          out += `Q${px(x, y)},${px(nx, ny)}`
+          x = nx; y = ny
+        }
+        break
+      case 'A':
+        for (let i = 0; i + 6 < n.length; i += 7) {
+          x = n[i + 5]! + (rel ? x : 0); y = n[i + 6]! + (rel ? y : 0)
+          out += `A${n[i]},${n[i + 1]},${n[i + 2]! + deg},${n[i + 3]},${n[i + 4]},${px(x, y)}`
+        }
+        break
+      case 'Z':
+        x = sx; y = sy
+        out += 'Z'
+        break
+    }
+  }
+  return out
 }
 
 export function boundsFromPath(
@@ -927,8 +1014,7 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
       bounds.add(-r, -r)
       bounds.add(r, r)
     } else {
-      addShapeExtent(bounds, String(it.shape), r, symbolPathExact)
-      if (angle) bounds.rotate(angle * Math.PI / 180, 0, 0)
+      addShapeExtent(bounds, String(it.shape), r, symbolPathExact, angle)
     }
     boundStroke(bounds, it, true)
     return bounds.translate(x, y)
@@ -957,12 +1043,12 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
     const angle = (it as Record<string, unknown>).angle as number | undefined
     // 'point' is not a symbol name: vega's d3-symbol fallback is a circle,
     // whose bounds are rotation-invariant.
-    if (!shape || shape === 'circle' || shape === 'point' || !angle) {
+    // (every other shape is traced, rotated or not: vega's symbol bound is the shape's path through boundContext)
+    if (!shape || shape === 'circle' || shape === 'point') {
       bounds.add(-r, -r)
       bounds.add(r, r)
     } else {
-      addShapeExtent(bounds, shape, r, symbolPath)
-      bounds.rotate(angle * Math.PI / 180, 0, 0)
+      addShapeExtent(bounds, shape, r, symbolPathExact, angle)
     }
     boundStroke(bounds, it, true)
     return bounds.translate(x, y)

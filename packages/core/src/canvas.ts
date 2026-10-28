@@ -597,7 +597,8 @@ function paintPath(
   const bb = bbox ?? (isGradient(fill) || isGradient(stroke) ? segsBbox(segs) : null)
   const rec = it as unknown as Record<string, unknown>
   if (rec.blend != null) ctx.globalCompositeOperation = String(rec.blend)
-  if (fill != null && (fill as unknown) !== false && fill !== 'transparent') {
+  // (vega's canvas draws a paint only when it is truthy: an empty string is none, while its SVG writes the attribute)
+  if (fill != null && (fill as unknown) !== false && fill !== 'transparent' && fill !== '') {
     const a = opacity * (it.fillOpacity == null ? 1 : (it.fillOpacity as number))
     if (a > 0) {
       ctx.globalAlpha = a
@@ -607,7 +608,7 @@ function paintPath(
       ctx.fill()
     }
   }
-  if (stroke != null && (stroke as unknown) !== false && stroke !== 'transparent') {
+  if (stroke != null && (stroke as unknown) !== false && stroke !== 'transparent' && stroke !== '') {
     const lw = it.strokeWidth != null ? (it.strokeWidth as number) : 1
     const a = opacity * (it.strokeOpacity == null ? 1 : (it.strokeOpacity as number))
     if (lw > 0 && a > 0) {

@@ -266,7 +266,8 @@ function multipleDomain(domain: { fields: unknown[]; data?: string; sort?: unkno
     const sig = (d as { signal?: unknown }).signal
     if (sig) {
       const v = signalValue(String(sig), ctx)
-      return { literal: isArray(v) ? (v as unknown[]) : [] }
+      // (vega: `setdata(name, signal)` ingests vega-util `array(value)` -- a scalar is one tuple, no value none)
+      return { literal: v == null ? [] : isArray(v) ? (v as unknown[]) : [v] }
     }
     return d as Member
   })

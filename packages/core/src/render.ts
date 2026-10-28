@@ -156,7 +156,7 @@ export function frameItem(scene: SceneRoot): SceneItem {
   return {
     fill: scene.frameFill || undefined,
     fillOpacity: scene.frameFillOpacity,
-    stroke: scene.frameStroke || undefined,
+    stroke: scene.frameStroke ?? undefined,
     strokeOpacity: scene.frameStrokeOpacity,
     strokeWidth: scene.frameStrokeWidth,
     strokeCap: scene.frameStrokeCap,
