@@ -130,6 +130,8 @@ vl/bar_grouped
 vl/bar_grouped_custom_color_domain
 vl/bar_grouped_errorbar
 vl/bar_grouped_facet
+vl/bar_grouped_facet_independent_scale
+vl/bar_grouped_facet_independent_scale_fixed_width
 vl/bar_grouped_fixed_width
 vl/bar_grouped_horizontal
 vl/bar_grouped_label
@@ -234,9 +236,13 @@ vl/errorband_tooltip
 vl/errorbar_aggregate
 vl/errorbar_horizontal_aggregate
 vl/errorbar_tooltip
+vl/facet_bullet
+vl/facet_cross_independent_scale
 vl/facet_custom
 vl/facet_custom_header
 vl/facet_grid_bar
+vl/facet_independent_scale
+vl/facet_independent_scale_layer_broken
 vl/geo_circle
 vl/geo_constant_value
 vl/geo_custom_projection
@@ -357,6 +363,7 @@ vl/line_bump
 vl/line_calculate
 vl/line_color
 vl/line_color_binned
+vl/line_color_halo
 vl/line_color_label
 vl/line_color_with_scale_domain
 vl/line_concat_facet
