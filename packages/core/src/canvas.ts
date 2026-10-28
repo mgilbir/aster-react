@@ -13,6 +13,7 @@
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneDef, SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { gradientDefOf, isGradientPaint as isGradientObject } from './svg-defs.js'
+import { Bounds, boundLeaf, boundTypedMark } from './bounds.js'
 import { parsePathData, tracePath, type PathSeg, type PathSink } from './path-data.js'
 
 // Path-data parsing and replay live in path-data.ts (hit.ts needs them without the renderer); the public surface is unchanged.
@@ -60,6 +61,8 @@ export interface CanvasLike {
   createLinearGradient(x0: number, y0: number, x1: number, y1: number): GradientLike
   /** (absent on a minimal context: a radial gradient paint is then not drawn) */
   createRadialGradient?(x0: number, y0: number, r0: number, x1: number, y1: number, r1: number): GradientLike
+  /** (absent on a minimal context: a linear gradient that is not axis aligned is then painted in absolute coordinates) */
+  createPattern?(image: unknown, repetition: string): unknown
   scale(x: number, y: number): void
   fillStyle: unknown
   strokeStyle: unknown
@@ -144,7 +147,7 @@ export function renderSceneToCanvas(scene: SceneRoot, ctx: CanvasLike, opts: Ren
     ctx.fillStyle = scene.background
     ctx.fillRect(0, 0, W, H)
   }
-  ctx.translate(pad.left, pad.top)
+  ctx.translate(pad.left + (scene.frameX ?? 0), pad.top + (scene.frameY ?? 0))
 
   // Root frame background path: fill, stroke, dash, opacity and rounded
   // corners, from the same path the SVG renderer emits.
@@ -517,9 +520,16 @@ function resolvePaint(
       bbox.x1 + p(def.x2, 0.5) * w, bbox.y1 + p(def.y2, 0.5) * h, Math.max(w, h) * p(def.r2, 0.5),
     )
   } else if (def.x1 != null || def.y1 != null || def.x2 != null || def.y2 != null) {
+    const x1 = p(def.x1, 0), y1 = p(def.y1, 0), x2 = p(def.x2, 1), y2 = p(def.y2, 0)
+    if (!(x1 === x2 || y1 === y2 || w === h)) {
+      // not axis aligned: vega's canvas renders the gradient into a w x h image in normalized box coordinates and paints with a
+      // no-repeat pattern of it (#2365) -- a pattern sits at the origin of the context, not at the item
+      const pattern = diagonalGradient(ctx, def.colorStops, x1, y1, x2, y2, w, h)
+      if (pattern !== undefined) return pattern
+    }
     g = ctx.createLinearGradient(
-      bbox.x1 + p(def.x1, 0) * w, bbox.y1 + p(def.y1, 0) * h,
-      bbox.x1 + p(def.x2, 1) * w, bbox.y1 + p(def.y2, 0) * h,
+      bbox.x1 + x1 * w, bbox.y1 + y1 * h,
+      bbox.x1 + x2 * w, bbox.y1 + y2 * h,
     )
   } else {
     const horiz = def.direction === 'horizontal'
@@ -538,6 +548,39 @@ function resolvePaint(
 }
 
 interface Bbox { x1: number; y1: number; x2: number; y2: number }
+
+/** vega-scenegraph util/canvas/gradient.js, the non-axis-aligned branch: the gradient in an image, as a no-repeat pattern. */
+function diagonalGradient(ctx: CanvasLike, stops: ReadonlyArray<{ offset: number; color: string }>, x1: number, y1: number, x2: number, y2: number, w: number, h: number): unknown {
+  if (!ctx.createPattern || !(w > 0) || !(h > 0)) return undefined
+  const host = (ctx as unknown as { canvas?: { ownerDocument?: { createElement(tag: string): unknown } } }).canvas
+  const g = globalThis as unknown as { document?: { createElement(tag: string): unknown }; OffscreenCanvas?: new (w: number, h: number) => unknown }
+  const doc = host?.ownerDocument ?? g.document
+  let image: { width: number; height: number; getContext(type: string): CanvasLike | null } | undefined
+  if (doc) {
+    image = doc.createElement('canvas') as typeof image
+    if (image) { image.width = Math.ceil(w); image.height = Math.ceil(h) }
+  } else if (g.OffscreenCanvas) {
+    image = new g.OffscreenCanvas(Math.ceil(w), Math.ceil(h)) as typeof image
+  }
+  const ictx = image?.getContext('2d')
+  if (!image || !ictx) return undefined
+  ictx.scale(w, h)
+  const gradient = ictx.createLinearGradient(x1, y1, x2, y2)
+  for (const stop of stops) gradient.addColorStop(stop.offset, stop.color)
+  ictx.fillStyle = gradient
+  ictx.fillRect(0, 0, w, h)
+  return ctx.createPattern(image, 'no-repeat') ?? undefined
+}
+
+/**
+ * The box a gradient is laid over: vega's `item.bounds`, which is the item's bounds with its stroke (a miter join for arcs, symbols
+ * and paths) -- or, for a line / area / trail, the bounds of the whole mark, held by its first item.
+ */
+function gradientBox(it: SceneItem, mark?: SceneGroup, miter = true): Bbox | undefined {
+  if (!(isGradientPaint(it.fill) || isGradientPaint(it.stroke))) return undefined
+  const b = mark ? boundTypedMark(new Bounds(), mark) : boundLeaf(new Bounds(), it, miter)
+  return b.empty() ? undefined : { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
+}
 
 /** Compute the bbox of parsed segments (for objectBoundingBox gradients). */
 function segsBbox(segs: PathSeg[]): Bbox {
@@ -559,12 +602,6 @@ function segsBbox(segs: PathSeg[]): Bbox {
   }
   if (!Number.isFinite(bb.x1)) return { x1: 0, y1: 0, x2: 0, y2: 0 }
   return bb
-}
-
-/** Bounds of parsed segments after the item translate (gradient boxes live in device space). */
-function segsBboxAt(segs: PathSeg[], x: number, y: number): Bbox {
-  const bb = segsBbox(segs)
-  return { x1: bb.x1 + x, y1: bb.y1 + y, x2: bb.x2 + x, y2: bb.y2 + y }
 }
 
 /**
@@ -597,7 +634,8 @@ function paintPath(
   const bb = bbox ?? (isGradient(fill) || isGradient(stroke) ? segsBbox(segs) : null)
   const rec = it as unknown as Record<string, unknown>
   if (rec.blend != null) ctx.globalCompositeOperation = String(rec.blend)
-  if (fill != null && (fill as unknown) !== false && fill !== 'transparent') {
+  // (vega's canvas draws a paint only when it is truthy: an empty string is none, while its SVG writes the attribute)
+  if (fill != null && (fill as unknown) !== false && fill !== 'transparent' && fill !== '') {
     const a = opacity * (it.fillOpacity == null ? 1 : (it.fillOpacity as number))
     if (a > 0) {
       ctx.globalAlpha = a
@@ -607,7 +645,7 @@ function paintPath(
       ctx.fill()
     }
   }
-  if (stroke != null && (stroke as unknown) !== false && stroke !== 'transparent') {
+  if (stroke != null && (stroke as unknown) !== false && stroke !== 'transparent' && stroke !== '') {
     const lw = it.strokeWidth != null ? (it.strokeWidth as number) : 1
     const a = opacity * (it.strokeOpacity == null ? 1 : (it.strokeOpacity as number))
     if (lw > 0 && a > 0) {
@@ -833,7 +871,7 @@ function renderSymbolRuns(items: SceneItem[], ctx: CanvasLike, defs: SceneDefs[]
         const d = cachedSymbolPath((it as Record<string, unknown>).shape as string | undefined, r)
         const segs = parsePathData(d)
         buildInItemFrame(ctx, x, y, ((it as Record<string, unknown>).angle as number) || 0, 1, 1, () => tracePath(ctx, segs))
-        paintPath(ctx, segs, it, defs, 'auto', segsBboxAt(segs, x, y))
+        paintPath(ctx, segs, it, defs, 'auto', gradientBox(it))
       }
       run = []
       return
@@ -874,7 +912,8 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       tracePath(ctx, segs)
       // vega draws a line mark from its first item with the full fill + stroke
       // paint (closed lines can be filled); stroke width defaults to 2 with a stroke.
-      paintPath(ctx, segs, { ...group.items![0]!, strokeWidth: info.sw ?? group.items![0]!.strokeWidth } as SceneItem, defs, 'auto')
+      const first = { ...group.items![0]!, strokeWidth: info.sw ?? group.items![0]!.strokeWidth } as SceneItem
+      paintPath(ctx, segs, first, defs, 'auto', gradientBox(first, group))
       return
     }
     case 'area': {
@@ -883,7 +922,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       ctx.beginPath()
       const segs = parsePathData(info.path)
       tracePath(ctx, segs)
-      paintPath(ctx, segs, group.items![0]!, defs, 'auto')
+      paintPath(ctx, segs, group.items![0]!, defs, 'auto', gradientBox(group.items![0]!, group))
       return
     }
     case 'symbol': {
@@ -903,7 +942,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
           const angle = ((it as Record<string, unknown>).angle as number) || 0
           if (angle) buildInItemFrame(ctx, x, y, angle, 1, 1, () => tracePath(ctx, segs))
           else { ctx.beginPath(); tracePath(ctx, segs, x, y) }
-          paintPath(ctx, segs, it, defs, 'auto', isGradientPaint(it.fill) || isGradientPaint(it.stroke) ? segsBboxAt(segs, x, y) : undefined)
+          paintPath(ctx, segs, it, defs, 'auto', gradientBox(it))
         }
       }
       return
@@ -927,7 +966,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
         ctx.beginPath()
         const segs = parsePathData(d)
         tracePath(ctx, segs)
-        paintPath(ctx, segs, it, defs, 'auto')
+        paintPath(ctx, segs, it, defs, 'auto', gradientBox(it, undefined, false))
       }
       return
     }
@@ -962,12 +1001,14 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       tracePath(ctx, segs)
       // The trail polygon carries the FIRST item's full paint set, fill included
       // (Vega-Lite encodes a trail's colour as `fill`; audit C23).
-      paintPath(ctx, segs, first, defs, 'auto')
+      paintPath(ctx, segs, first, defs, 'auto', gradientBox(first, group))
       return
     }
     case 'path':
     case 'shape':
     case 'geoshape': {
+      // (only a path mark parses a path string: vega draws its arcs as beziers; a shape's geo path goes to the context directly)
+      const arcs = type === 'path' ? 'bezier' : 'exact'
       for (const it of group.items ?? []) {
         if (!it.path) continue
         // vega path mark: translate, rotate, then the path scaled by (scaleX||1, scaleY||1)
@@ -976,8 +1017,8 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
         const sx = (rec.scaleX as number) || 1
         const sy = (rec.scaleY as number) || 1
         const segs = parsePathData(it.path)
-        buildInItemFrame(ctx, it.x || 0, it.y || 0, angle, sx, sy, () => tracePath(ctx, segs))
-        paintPath(ctx, segs, it, defs, 'auto', isGradientPaint(it.fill) || isGradientPaint(it.stroke) ? segsBboxAt(segs, it.x || 0, it.y || 0) : undefined)
+        buildInItemFrame(ctx, it.x || 0, it.y || 0, angle, sx, sy, () => tracePath(ctx, segs, 0, 0, arcs))
+        paintPath(ctx, segs, it, defs, 'auto', gradientBox(it))
       }
       return
     }
@@ -1004,12 +1045,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
         arcInto(ctx, 0, 0, r, r0, a0, a1, cr, pa)
         if (angle) ctx.rotate((-angle * Math.PI) / 180)
         ctx.translate(-ax, -ay)
-        let abb: Bbox | undefined
-        if (isGradientPaint(it.fill) || isGradientPaint(it.stroke)) {
-          const bb = segsBbox(parsePathData(arcPath(0, 0, r, r0, a0, a1, cr, pa)))
-          abb = { x1: bb.x1 + ax, y1: bb.y1 + ay, x2: bb.x2 + ax, y2: bb.y2 + ay }
-        }
-        paintPath(ctx, [], it, defs, 'auto', abb)
+        paintPath(ctx, [], it, defs, 'auto', gradientBox(it))
       }
       return
     }

@@ -705,7 +705,10 @@ export function detectTimeUnits(data: Row[], f: (d: unknown) => unknown, utc: bo
   return { units: g.units!, step: g.step! }
 }
 
-export function timeunitRows(rows: Row[], p: Params): Row[] {
+/** What vega's TimeUnit publishes as its `signal`: the floor function itself, read for its properties. */
+export interface TimeUnitInfo { unit: string; units: string[]; step: number; start: number | Date; stop: number | Date }
+
+export function timeunitRows(rows: Row[], p: Params, publish?: (info: TimeUnitInfo) => void): Row[] {
   required('timeunit', p, 'field')
   const field = fieldOf(p.field)
   const band = p.interval !== false
@@ -736,7 +739,10 @@ export function timeunitRows(rows: Row[], p: Params): Row[] {
   const ival = (utc ? utcIntervalFor : timeIntervalFor)(unit)
   const offset = ival ? (d: Date, s: number): Date => ival.offset(d, s) : undefined
 
-  return rows.map((r) => {
+  // (the extent of the bins goes with the signal: vega's TimeUnit tracks it as it visits the tuples)
+  let min: number | Date = Infinity
+  let max: number | Date = -Infinity
+  const out = rows.map((r) => {
     const t = derive(r)
     const v = field(t)
     if (v == null) {
@@ -744,10 +750,15 @@ export function timeunitRows(rows: Row[], p: Params): Row[] {
       if (band) t[u1] = null
     } else {
       const a = floor(v)
+      let b: unknown = a
       t[u0] = a
-      if (band) t[u1] = offset ? offset(a, step) : undefined
+      if (band) t[u1] = b = offset ? offset(a, step) : undefined
+      if (a < min) min = a
+      if ((b as number) > (max as number)) max = b as number
     }
     return t
   })
+  publish?.({ unit, units: tunits, step, start: min, stop: max })
+  return out
 }
 

@@ -1991,7 +1991,83 @@ function voronoiRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
 }
 
 
+// -- crossfilter / resolvefilter (vega-crossfilter) ----------------------------------
+
+/** What `crossfilter` publishes as its `signal`: the per-tuple filter bitmaps `resolvefilter` reads (vega-crossfilter Bitmaps). */
+export interface CrossfilterBitmaps { mask: number; data(): Row[]; curr(): Uint32Array; prev(): Uint32Array }
+
+const ascendingValues = (a: unknown, b: unknown): number => (a == null || b == null ? NaN : (a as number) < (b as number) ? -1 : (a as number) > (b as number) ? 1 : (a as number) >= (b as number) ? 0 : NaN)
+
+/** d3-array `bisectLeft` (the comparable-self check included): the position of `x` among the sorted `a`. */
+function bisectLeftValues(a: readonly unknown[], x: unknown): number {
+  let lo = 0
+  let hi = a.length
+  if (lo < hi) {
+    if (ascendingValues(x, x) !== 0) return hi
+    do {
+      const mid = (lo + hi) >>> 1
+      if (ascendingValues(a[mid], x) < 0) lo = mid + 1
+      else hi = mid
+    } while (lo < hi)
+  }
+  return lo
+}
+
+/**
+ * An indexed multi-dimensional filter (vega-crossfilter CrossFilter): bit `i` of a tuple's state is set when the tuple lies outside
+ * `query[i]` -- below it or at/above its end, by the sorted order of `fields[i]` -- so a tuple passes when no bit is set. The
+ * tuples go on (each carrying its `_index`), the bitmaps are the transform's `signal`.
+ */
+function crossfilterRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+  const fields = ([] as unknown[]).concat(t.fields ?? [])
+  const query = ([] as unknown[]).concat(t.query ?? []) as Array<[unknown, unknown]>
+  if (!fields.length) error('[aster] crossfilter requires "fields"')
+  const m = query.length
+  const data = rows.map((r, i) => ({ ...r, _index: i }))
+  const n = data.length
+  const curr = new Uint32Array(n)
+  const prev = new Uint32Array(n)
+  const all = 0xff
+  for (let i = 0; i < n; i++) prev[i] = all
+  for (let d = 0; d < m; d++) {
+    const f = fieldOf(fields[d])
+    const values = data.map((r) => f(r))
+    const index = new Uint32Array(n)
+    for (let i = 0; i < n; i++) index[i] = i
+    // vega-crossfilter SortedIndex: the index permuted by the values, `<` / `>` order (an incomparable pair is a tie)
+    Array.prototype.sort.call(index, (a: number, b: number) => (values[a]! < values[b]! ? -1 : values[a]! > values[b]! ? 1 : 0))
+    const sorted = Array.from(index, (k) => values[k])
+    const lo = bisectLeftValues(sorted, query[d]![0])
+    const hi = bisectLeftValues(sorted, query[d]![1])
+    const bit = 1 << d
+    for (let i = 0; i < lo; i++) curr[index[i]!]! |= bit
+    for (let i = hi; i < n; i++) curr[index[i]!]! |= bit
+  }
+  if (typeof t.signal === 'string') {
+    // (the mask is all that is hashed with the signals: the arrays stay out of reach of a context fingerprint)
+    const bits = { mask: m ? (1 << m) - 1 : 0 } as CrossfilterBitmaps
+    Object.defineProperties(bits, { data: { value: () => data }, curr: { value: () => curr }, prev: { value: () => prev } })
+    ctx.signals[t.signal] = bits
+  }
+  return data
+}
+
+/**
+ * Tuples that pass a crossfilter's bitmaps, ignoring some dimensions (vega-crossfilter ResolveFilter): `ignore` is a bit mask of the
+ * dimensions to leave out. When every dimension that changed is ignored, nothing propagates -- the first evaluation changed them all.
+ */
+function resolvefilterRows(rows: Row[], t: Record<string, unknown>): Row[] {
+  const bitmap = t.filter as CrossfilterBitmaps | undefined
+  if (!bitmap || typeof bitmap.curr !== 'function') error('[aster] resolvefilter requires a "filter" from a crossfilter transform')
+  const ignore = ~(Number(t.ignore) || 0)
+  if ((bitmap.mask & ignore) === 0) return []
+  const curr = bitmap.curr()
+  return rows.filter((r) => !(curr[(r as { _index: number })._index]! & ignore))
+}
+
 // -- addon registration ------------------------------------------------------
+transformRegistry.set('crossfilter', crossfilterRows)
+transformRegistry.set('resolvefilter', (rows, t) => resolvefilterRows(rows, t))
 transformRegistry.set('kde', kdeRows)
 transformRegistry.set('density', (rows, t, ctx) => densityRows(rows, t, ctx?.datasets))
 transformRegistry.set('quantile', quantileRows)

@@ -1,0 +1,60 @@
+{
+ "$schema": "https://vega.github.io/schema/vega/v5.json",
+ "width": 200,
+ "height": 100,
+ "padding": 10,
+ "scales": [
+  {
+   "name": "x",
+   "type": "linear",
+   "domain": [
+    0,
+    10
+   ],
+   "range": "width"
+  }
+ ],
+ "axes": [
+  {
+   "orient": "bottom",
+   "scale": "x"
+  }
+ ],
+ "marks": [
+  {
+   "type": "rect",
+   "encode": {
+    "update": {
+     "x": {
+      "value": 20
+     },
+     "y": {
+      "value": 10
+     },
+     "width": {
+      "value": 50
+     },
+     "height": {
+      "value": 30
+     },
+     "fill": {
+      "value": "steelblue"
+     }
+    }
+   }
+  }
+ ],
+ "encode": {
+  "enter": {
+   "fill": {
+    "value": "#eeeeee"
+   },
+   "stroke": {
+    "value": "red"
+   },
+   "strokeWidth": {
+    "value": 3
+   }
+  }
+ }
+}

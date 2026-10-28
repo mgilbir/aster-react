@@ -298,8 +298,8 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   // Scene items live in plot coordinates; pointer queries arrive in viewport
   // coordinates, so include the root padding translation (as the renderer does
   // with its top-level translate group).
-  const padX = scene.padding?.left ?? 0
-  const padY = scene.padding?.top ?? 0
+  const padX = (scene.padding?.left ?? 0) + (scene.frameX ?? 0)
+  const padY = (scene.padding?.top ?? 0) + (scene.frameY ?? 0)
   for (const node of scene.items) {
     walk(node, padX, padY)
     // Flush rect entries in paint order so the global list is strictly
