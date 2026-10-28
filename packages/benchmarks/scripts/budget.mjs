@@ -71,8 +71,12 @@ import { fileURLToPath } from 'node:url'
 // geo expression functions, the default path, the point radius); transforms marginal 23.2 (+7.6: tree / treelinks, force
 // with the d3-quadtree it needs, kde2d, isocontour, geopath, the distribution functions, treePath); useChart 139.2, Chart 176.4,
 // SvgChart 155.5, SvgChart + interaction 170.0, Chart + VL 251.6.
+// Merged with the add-on auto-load (#38), measured (kB gzip): core 135.3 (+0.3 over the 135.0 above: the add-on function names the
+// expression compiler reads to say which add-on to load); useChart 142.1, Chart 178.2, SvgChart 159.7, SvgChart + interaction
+// 173.2, Chart + VL 253.5. The two sets of changes add up: the gallery work moves code core shares with the add-ons into the
+// chunks the entry imports by name (the same chunk boundary as above), and the detector now parses expressions.
 const BUDGETS = {
-  '@aster/core': 135.5 * 1024,
+  '@aster/core': 135.8 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
   '+ @aster/core/canvas': 5.3 * 1024,
   '+ @aster/core/hit': 6.1 * 1024,
@@ -80,13 +84,13 @@ const BUDGETS = {
   '+ @aster/core/load': 5.6 * 1024,
   '+ @aster/core/geo': 14.8 * 1024,
   '+ @aster/core/transforms': 23.7 * 1024,
-  '@aster/react useChart': 140.4 * 1024,
-  '@aster/react Chart': 177.1 * 1024,
+  '@aster/react useChart': 142.6 * 1024,
+  '@aster/react Chart': 178.7 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 158.0 * 1024,
-  '@aster/react SvgChart + interaction': 172.2 * 1024,
+  '@aster/react SvgChart': 160.2 * 1024,
+  '@aster/react SvgChart + interaction': 173.7 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 252.5 * 1024,
+  '@aster/react Chart + VL': 254.0 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
