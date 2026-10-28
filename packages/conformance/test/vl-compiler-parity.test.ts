@@ -23,6 +23,41 @@ const DATA = {
     { c: 'C', g: 'q', x: 6, y: 8, v: 6, t: '2006-01-01' },
   ],
 }
+const BOX = {
+  values: Array.from({ length: 48 }, (_, i) => ({
+    c: ['A', 'B', 'C'][i % 3],
+    g: i % 2 ? 'p' : 'q',
+    x: i % 5,
+    v: [3, 5, 4, 6, 5, 4, 7, 5, 6, 4, 5, 6, 40, 5, 6, 4, -30, 5, 4, 6][i % 20] + (i % 7),
+    t: `${2000 + (i % 4)}-01-01`,
+  })),
+}
+const SPARSE = {
+  values: [
+    { c: 'A', g: 'p', x: 1, v: 2 },
+    { c: 'B', g: 'q', x: 2, v: 5 },
+    { c: 'A', g: 'q', x: 3, v: 3 },
+    { c: 'B', g: 'q', x: 4, v: 6 },
+  ],
+}
+const GAPS = {
+  values: [
+    { a: 0, b: 28, c: 0 }, { a: 0, b: 91, c: 1 }, { a: 1, b: 43, c: 0 }, { a: 1, b: 55, c: 1 },
+    { a: 2, b: 81, c: 0 }, { a: 2, b: 53, c: 1 }, { a: 3, b: 19, c: 0 },
+  ],
+}
+const BINS = {
+  values: [
+    { bin_start: 8, bin_end: 10, count: 7, g: 'a' }, { bin_start: 10, bin_end: 12, count: 29, g: 'b' }, { bin_start: 12, bin_end: 14, count: 71, g: 'a' },
+    { bin_start: 14, bin_end: 16, count: 127, g: 'b' }, { bin_start: 16, bin_end: 18, count: 94, g: 'a' }, { bin_start: 18, bin_end: 20, count: 54, g: 'b' },
+  ],
+}
+const MONTHS = {
+  values: [
+    { d: '2005-01-01', v: 5, g: 'p' }, { d: '2005-01-01', v: 7, g: 'q' }, { d: '2005-02-01', v: 6, g: 'p' }, { d: '2005-02-01', v: 3, g: 'q' },
+    { d: '2005-03-01', v: 9, g: 'p' }, { d: '2005-03-01', v: 4, g: 'q' }, { d: '2006-04-01', v: 8, g: 'p' },
+  ],
+}
 const NULLS = {
   values: [
     { a: null, b: 100, c: 5 },
@@ -296,6 +331,321 @@ const GROUPS: Record<string, Case[]> = {
     ['an ordinal bin with a colour', { data: DATA, mark: 'bar', encoding: { x: { bin: true, field: 'x', type: 'ordinal' }, y: { aggregate: 'count' }, color: n('g') } }],
     ['an ordinal bin with a number format', { data: DATA, mark: 'bar', encoding: { x: { bin: true, field: 'x', type: 'ordinal', axis: { format: '.1f' } }, y: { aggregate: 'count' } } }],
   ],
+  // conditional.ts + channeldef.ts getFieldDef: a condition that is itself a field def (here a count) drives the channel's scale and legend
+  'a conditional field def with an aggregate (selection_project_interval, selection_type_point, selection_composition_and)': [
+    ['an interval param over a conditional count', { data: DATA, params: [{ name: 'pts', select: 'interval' }], mark: 'rect', encoding: { y: n('g'), x: n('c'), color: { condition: { param: 'pts', aggregate: 'count' }, value: 'grey' } } }],
+    ['a point param over a conditional count', { data: DATA, params: [{ name: 'pts', select: 'point' }], mark: 'rect', encoding: { y: n('g'), x: n('c'), color: { condition: { param: 'pts', aggregate: 'count' }, value: 'grey' } } }],
+    ['a point param on pointerover over a conditional count', { data: DATA, params: [{ name: 'pts', select: { type: 'point', on: 'pointerover' } }], mark: 'rect', encoding: { y: n('g'), x: n('c'), color: { condition: { param: 'pts', aggregate: 'count' }, value: 'grey' } } }],
+    ['a conjunction of intervals over a conditional count', { data: DATA, params: [{ name: 'a', select: { type: 'interval', on: '[pointerdown[!event.shiftKey], pointerup] > pointermove' } }, { name: 'b', select: { type: 'interval', on: '[pointerdown[event.shiftKey], pointerup] > pointermove' } }], mark: 'rect', encoding: { y: n('g'), x: n('c'), color: { condition: { test: { and: [{ param: 'a' }, { param: 'b' }] }, aggregate: 'count' }, value: 'grey' } } }],
+    ['a disjunction of intervals over a conditional count', { data: DATA, params: [{ name: 'a', select: 'interval' }, { name: 'b', select: { type: 'interval', on: '[pointerdown[event.shiftKey], pointerup] > pointermove' } }], mark: 'rect', encoding: { y: n('g'), x: n('c'), color: { condition: { test: { or: [{ param: 'a' }, { param: 'b' }] }, aggregate: 'count' }, value: 'grey' } } }],
+    ['an interval param over a conditional sum', { data: DATA, params: [{ name: 'pts', select: 'interval' }], mark: 'rect', encoding: { y: n('g'), x: n('c'), color: { condition: { param: 'pts', aggregate: 'sum', field: 'v', type: 'quantitative' }, value: 'grey' } } }],
+    ['an interval param over a conditional mean on a plain channel', { data: DATA, params: [{ name: 'pts', select: 'interval' }], mark: 'rect', encoding: { y: n('g'), x: n('c'), fill: { condition: { param: 'pts', aggregate: 'mean', field: 'v', type: 'quantitative' }, value: 'grey' } } }],
+    ['a point param over a conditional bin', { data: DATA, params: [{ name: 'pts', select: 'point' }], mark: 'point', encoding: { y: q('y'), x: q('x'), color: { condition: { param: 'pts', bin: true, field: 'v', type: 'quantitative' }, value: 'grey' } } }],
+    ['a test condition over a conditional count with an explicit type', { data: DATA, mark: 'rect', encoding: { y: n('g'), x: n('c'), color: { condition: { test: 'datum.v > 4', aggregate: 'count', type: 'quantitative' }, value: 'grey' } } }],
+  ],
+  // compositemark/boxplot.ts normalizeBoxPlot (+ common.ts): a boxplot is a layer of simple marks over aggregates, in either
+  // orientation, over any shared channel, with the part switches of the mark def and of config.boxplot
+  'boxplot, every orientation and part (boxplot_2D_horizontal, boxplot_1D_horizontal, boxplot_groupped, boxplot_tooltip_aggregate, layer_boxplot_circle)': [
+    ['a vertical boxplot', { data: BOX, mark: 'boxplot', encoding: { x: n('c'), y: q('v', { scale: { zero: false } }) } }],
+    ['a horizontal boxplot', { data: BOX, mark: 'boxplot', encoding: { y: n('c'), x: q('v', { scale: { zero: false } }) } }],
+    ['a vertical boxplot with a colour field and no legend', { data: BOX, mark: 'boxplot', encoding: { x: n('c'), color: n('c', { legend: null }), y: q('v') } }],
+    ['a horizontal boxplot with a constant size and colour', { data: BOX, mark: 'boxplot', encoding: { y: n('c'), x: q('v'), size: { value: 10 }, color: { value: 'teal' } } }],
+    ['a one-dimensional horizontal boxplot', { data: BOX, mark: 'boxplot', encoding: { x: q('v', { scale: { zero: false } }) } }],
+    ['a one-dimensional vertical boxplot', { data: BOX, mark: 'boxplot', encoding: { y: q('v', { scale: { zero: false } }) } }],
+    ['a one-dimensional boxplot with a custom median and ticks', { data: BOX, mark: { type: 'boxplot', extent: 1.5, median: { color: 'red' }, ticks: true }, encoding: { x: q('v') } }],
+    ['a min-max horizontal boxplot', { data: BOX, mark: { type: 'boxplot', extent: 'min-max' }, encoding: { y: n('c'), x: q('v', { scale: { zero: false } }) } }],
+    ['a min-max vertical boxplot with a colour', { data: BOX, mark: { type: 'boxplot', extent: 'min-max' }, encoding: { x: n('c'), color: n('c', { legend: null }), y: q('v') } }],
+    ['a min-max boxplot with a median colour from config.boxplot', { data: BOX, config: { boxplot: { median: { color: 'orange' } } }, mark: { type: 'boxplot', extent: 'min-max' }, encoding: { y: n('c'), x: q('v') } }],
+    ['a boxplot with an extent of 3 iqr', { data: BOX, mark: { type: 'boxplot', extent: 3 }, encoding: { x: n('c'), y: q('v') } }],
+    ['a boxplot with an aggregate tooltip', { data: BOX, mark: 'boxplot', encoding: { y: n('c'), x: q('v'), tooltip: { field: 'v', aggregate: 'mean' } } }],
+    ['a boxplot with a raw tooltip', { data: BOX, mark: 'boxplot', encoding: { y: n('c'), x: q('v'), tooltip: { field: 'v', type: 'quantitative' } } }],
+    ['a grouped boxplot through an offset', { data: BOX, mark: 'boxplot', encoding: { x: n('c'), color: n('g'), xOffset: n('g'), y: q('v') } }],
+    ['a boxplot with an axis and a title on the dimension', { data: BOX, mark: 'boxplot', encoding: { x: n('c', { axis: { labelAngle: 0 }, title: 'Group' }), y: q('v', { axis: { title: 'Value' } }) } }],
+    ['a boxplot that drops the invalid values', { data: BOX, mark: { type: 'boxplot', invalid: 'filter' }, encoding: { x: q('x', { axis: { labelAngle: 0 } }), y: q('v') } }],
+    ['a boxplot without outliers', { data: BOX, mark: { type: 'boxplot', outliers: false }, encoding: { y: n('c'), x: q('v') } }],
+    ['a boxplot without a box colour but with an opacity and a size', { data: BOX, mark: { type: 'boxplot', opacity: 0.5, size: 20, color: 'purple' }, encoding: { x: n('c'), y: q('v') } }],
+    ['a boxplot after a filter', { data: BOX, transform: [{ filter: 'datum.x > 1' }], mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }],
+    ['a boxplot over an ordinal dimension with an explicit orient', { data: BOX, mark: { type: 'boxplot', orient: 'vertical' }, encoding: { x: { field: 'x', type: 'ordinal' }, y: q('v') } }],
+    ['a boxplot over a time unit', { data: BOX, mark: 'boxplot', encoding: { x: { field: 't', timeUnit: 'year', type: 'ordinal' }, y: q('v') } }],
+    ['a boxplot with data exactly on the whisker fences (the inlier test is inclusive)', { data: { values: Array.from({ length: 11 }, (_, i) => ({ c: 'A', v: i })) }, mark: { type: 'boxplot', extent: 0.5 }, encoding: { x: n('c'), y: q('v') } }],
+    ['a boxplot in a layer with circles', { data: BOX, width: 300, layer: [{ mark: { type: 'boxplot', outliers: false }, encoding: { y: { field: 'c', type: 'ordinal' }, x: q('v', { title: 'population' }) } }, { mark: 'circle', encoding: { y: { field: 'c', type: 'ordinal' }, x: q('v', { title: 'population' }), color: { value: 'black' }, opacity: { value: 0.2 } } }] }],
+    ['a boxplot in a concat', { data: BOX, hconcat: [{ mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }, { mark: 'boxplot', encoding: { x: n('g'), y: q('v') } }] }],
+    ['a boxplot under a shared layer encoding', { data: BOX, encoding: { x: n('c') }, layer: [{ mark: 'boxplot', encoding: { y: q('v') } }, { mark: 'tick', encoding: { y: q('v', { aggregate: 'mean' }) } }] }],
+  ],
+  // channeldef.ts getBandSize + position-rect.ts positionAndSize: the size of a bar / tick (mark def or encoding value) is its band size
+  // on any scale, in the middle of an offset sub-band, and on a view that lacks the band channel
+  'explicit sizes of bars and ticks (boxplot_1D_invalid, boxplot_2D_horizontal_color_size, errorbar_aggregate)': [
+    ['a bar with a size over a quantitative x', { data: DATA, mark: { type: 'bar', size: 14 }, encoding: { x: q('x'), y: q('v') } }],
+    ['a horizontal bar with a size over a quantitative y', { data: DATA, mark: { type: 'bar', size: 9, orient: 'horizontal' }, encoding: { y: q('x'), x: q('v') } }],
+    ['a bar with a size over a temporal x', { data: DATA, mark: { type: 'bar', size: 12 }, encoding: { x: t('t'), y: q('v') } }],
+    ['a bar with a size value in the encoding', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), size: { value: 10 } } }],
+    ['a tick with a size value in the encoding', { data: DATA, mark: 'tick', encoding: { x: n('c'), y: q('v'), size: { value: 10 } } }],
+    ['a bar with an encoding size that overrides the mark size', { data: DATA, mark: { type: 'bar', size: 30 }, encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), size: { value: 8 } } }],
+    ['bars with a size inside an offset sub-band', { data: DATA, mark: { type: 'bar', size: 7 }, encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), xOffset: n('g'), color: n('g') } }],
+    ['horizontal bars with a size inside an offset sub-band', { data: DATA, mark: { type: 'bar', size: 7 }, encoding: { y: n('c'), x: q('v', { aggregate: 'sum' }), yOffset: n('g'), color: n('g') } }],
+    ['ticks with a size inside an offset sub-band', { data: DATA, mark: { type: 'tick', size: 9 }, encoding: { x: n('c'), y: q('v'), xOffset: n('g'), color: n('g') } }],
+    ['a one-dimensional horizontal bar with a size', { data: DATA, mark: { type: 'bar', size: 11 }, encoding: { x: q('v', { aggregate: 'sum' }) } }],
+    ['a one-dimensional vertical bar with a size', { data: DATA, mark: { type: 'bar', size: 11 }, encoding: { y: q('v', { aggregate: 'sum' }) } }],
+    ['a one-dimensional vertical tick with a size', { data: DATA, mark: { type: 'tick', size: 11, orient: 'vertical' }, encoding: { x: q('v') } }],
+    ['a one-dimensional horizontal tick with a size', { data: DATA, mark: { type: 'tick', size: 11, orient: 'horizontal' }, encoding: { y: q('v') } }],
+    ['a one-dimensional horizontal tick with a size on the other axis', { data: DATA, mark: { type: 'tick', size: 11, orient: 'horizontal' }, encoding: { x: q('v') } }],
+    ['a one-dimensional vertical tick with a size on the other axis', { data: DATA, mark: { type: 'tick', size: 11, orient: 'vertical' }, encoding: { y: q('v') } }],
+  ],
+  // model.ts assembleGroupEncodeEntry / assembleEncodeFromView, unit.ts assembleGroupStyle: the `view` background is the view group's own encode
+  'the view background (point_background, layer_likert, trail_comet, concat_population_pyramid, trellis_area_seattle)': [
+    ['a filled unit view', { data: DATA, view: { fill: 'yellow' }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
+    ['a unit view without a stroke', { data: DATA, view: { stroke: null }, mark: 'trail', encoding: { x: q('x'), y: q('y'), size: q('v') } }],
+    ['a unit view with a transparent stroke', { data: DATA, view: { stroke: 'transparent' }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
+    ['a unit view with every group property', { data: DATA, view: { fill: '#eee', fillOpacity: 0.5, stroke: 'red', strokeWidth: 3, strokeOpacity: 0.8, strokeDash: [4, 2], strokeDashOffset: 1, strokeCap: 'round', strokeJoin: 'bevel', cornerRadius: 8, opacity: 0.9 }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
+    ['a layer view without a stroke', { data: DATA, view: { stroke: null }, layer: [{ mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }, { mark: 'rule', encoding: { y: q('v', { aggregate: 'mean' }) } }] }],
+    ['a layer view of a map-less unframed view', { data: DATA, view: { fill: 'lightgray', stroke: null }, encoding: { theta: q('v', { stack: true }), color: n('c') }, layer: [{ mark: { type: 'arc', outerRadius: 80 } }, { mark: { type: 'text', radius: 90 }, encoding: { text: n('c') } }] }],
+    ['a view style', { data: DATA, view: { style: 'view' }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
+    ['a view style list over the fill', { data: DATA, view: { style: ['cell', 'view'], fill: 'pink' }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
+    ['a view style in a layer', { data: DATA, layer: [{ view: { style: 'view' }, mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] }],
+    ['a view on one child of an hconcat', { data: DATA, hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { view: { stroke: null }, mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a view on a layer child of a vconcat', { data: DATA, vconcat: [{ view: { fill: 'lavender' }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a view on the spec of a facet', { data: DATA, facet: { row: n('g') }, spec: { view: { stroke: null }, mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a view on the spec of a column facet', { data: DATA, facet: { column: n('g') }, spec: { view: { fill: 'honeydew' }, mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a view on the spec of a wrapped facet', { data: DATA, facet: n('c'), columns: 2, spec: { view: { stroke: null }, mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a view on a layered spec of a facet', { data: DATA, facet: { row: n('g') }, spec: { view: { fill: 'azure' }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] } }],
+    ['a view on the spec of a repeat', { data: DATA, repeat: ['y', 'v'], spec: { view: { fill: 'ivory' }, mark: 'point', encoding: { x: q('x'), y: { field: { repeat: 'repeat' }, type: 'quantitative' } } } }],
+    ['a view with config.view', { data: DATA, config: { view: { stroke: 'blue' } }, view: { fill: 'cornsilk' }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
+  ],
+  // channeldef.ts defaultType: a facet field def without a type is nominal (facet_row_facet_row_point_future, facet_independent_scale)
+  'facet field defs without a type (facet_column_facet_row_point_future, facet_cross_independent_scale, trellis_cross_sort)': [
+    ['a row facet without a type', { data: DATA, facet: { row: { field: 'g' } }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a column facet without a type', { data: DATA, facet: { column: { field: 'g' } }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a row and a column facet without types', { data: DATA, facet: { row: { field: 'g' }, column: { field: 'c' } }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a wrapped facet without a type', { data: DATA, facet: { field: 'c' }, columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a facet in the encoding without a type', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), row: { field: 'g' } } }],
+    ['a facet in the encoding with a sort and no type', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), column: { field: 'c', sort: 'descending' } } }],
+    ['a row facet with a header and no type', { data: DATA, facet: { row: { field: 'g', header: { labelAngle: 0 } } }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+  ],
+  // compile/facet.ts assembleFacet / facetSortFields, data/facet.ts, joinaggregatefacet.ts, calculate.ts sortArrayIndexField:
+  // facet sorts by an aggregate or by a list, and the cross of a row and a column facet (trellis_cross_sort, facet_sort_*)
+  'facet sorts and crossed facets (trellis_cross_sort, trellis_cross_sort_array, facet_cross_sparse)': [
+    ['a row facet sorted by a median', { data: DATA, facet: { row: n('c', { sort: { op: 'median', field: 'v', order: 'descending' } }) }, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a column facet sorted by the default operation', { data: DATA, facet: { column: n('c', { sort: { field: 'v' } }) }, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a column facet sorted by a list', { data: DATA, facet: { column: n('c', { sort: ['C', 'A', 'B'] }) }, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a row facet sorted by a partial list', { data: DATA, facet: { row: n('c', { sort: ['B'] }) }, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a wrapped facet sorted by a mean', { data: DATA, facet: n('c', { sort: { op: 'mean', field: 'v', order: 'descending' } }), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a wrapped facet sorted by a list', { data: DATA, facet: n('c', { sort: ['C', 'B', 'A'] }), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a crossed facet sorted by medians', { data: DATA, facet: { row: n('g', { sort: { op: 'median', field: 'x' } }), column: n('c', { sort: { op: 'median', field: 'v' } }) }, spec: { width: 50, height: 50, mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a crossed facet sorted by lists', { data: DATA, facet: { row: n('g', { sort: ['q', 'p'] }), column: n('c', { sort: ['C', 'A', 'B'] }) }, spec: { width: 50, height: 50, mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a crossed facet with one sorted channel', { data: DATA, facet: { row: n('g'), column: n('c', { sort: { op: 'max', field: 'v', order: 'descending' } }) }, spec: { width: 50, height: 50, mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a crossed facet whose combinations are not all present', { data: SPARSE, facet: { row: n('g'), column: n('c') }, spec: { width: 50, height: 50, mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a facet transform that spans the cells, under a layered spec (it runs once, before the facet)', { data: DATA, transform: [{ joinaggregate: [{ op: 'mean', field: 'v', as: 'm' }], groupby: ['g'] }], facet: { row: n('c') }, spec: { width: 80, height: 60, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('v') } }, { mark: 'rule', encoding: { y: q('m', { aggregate: 'mean' }) } }] } }],
+    ['a facet window transform that spans the cells, under a layered spec', { data: DATA, transform: [{ window: [{ op: 'rank', as: 'r' }], sort: [{ field: 'v' }] }], facet: { column: n('c') }, spec: { width: 80, height: 60, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('r') } }, { mark: 'rule', encoding: { y: q('r', { aggregate: 'max' }) } }] } }],
+    ['a faceted unit with a shared resolve (its resolve is the facet\'s)', { data: DATA, mark: 'point', resolve: { scale: { y: 'shared' }, axis: { x: 'shared' } }, encoding: { x: q('x'), y: q('v'), column: n('c') } }],
+    ['a facet in the encoding sorted by an aggregate', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('v'), row: n('c', { sort: { op: 'sum', field: 'v' } }) } }],
+  ],
+  // normalize/core.ts mergeEncoding: a layer's shared channel defs merge into the layers' (a def with no field is a partial one)
+  'shared layer encodings that merge into the layers (bar_layered_weather, layer_candlestick, layer_likert, stacked_bar_v_ascending)': [
+    ['a shared quantitative y with a scale and an axis, the fields in the layers', { data: DATA, encoding: { x: n('c'), y: { type: 'quantitative', scale: { domain: [0, 12] }, axis: { title: 'Value' } } }, layer: [{ mark: 'bar', encoding: { y: { field: 'v' }, y2: { field: 'y' } } }, { mark: 'point', encoding: { y: { field: 'v' } } }] }],
+    ['a shared x with a scale and no zero, the field in the layers', { data: DATA, encoding: { y: n('c'), x: { type: 'quantitative', scale: { zero: false }, title: 'X' } }, layer: [{ mark: 'point', encoding: { x: { field: 'x' } } }, { mark: 'point', encoding: { x: { field: 'v' } } }] }],
+    ['a partial shared channel that no layer completes', { data: DATA, encoding: { x: q('x'), y: { type: 'quantitative', axis: { title: 'Nothing' } } }, layer: [{ mark: 'rule', encoding: { y: { field: 'v' } } }, { mark: 'point' }] }],
+    ['a shared field def a layer overrides in part', { data: DATA, encoding: { x: q('x', { axis: { grid: false } }), y: q('y') }, layer: [{ mark: 'point' }, { mark: 'line', encoding: { y: { field: 'v' } } }] }],
+    ['a shared colour a layer replaces by a value', { data: DATA, encoding: { x: q('x'), y: q('y'), color: n('c') }, layer: [{ mark: 'point' }, { mark: 'line', encoding: { color: { value: 'black' } } }] }],
+    ['a shared colour a layer drops with null', { data: DATA, encoding: { x: q('x'), y: q('y'), color: n('c') }, layer: [{ mark: 'point' }, { mark: 'line', encoding: { color: null } }] }],
+    ['a nested layer whose parents both share a channel', { data: DATA, encoding: { x: q('x') }, layer: [{ encoding: { y: { type: 'quantitative', scale: { zero: false } } }, layer: [{ mark: 'point', encoding: { y: { field: 'v' } } }, { mark: 'line', encoding: { y: { field: 'y' } } }] }] }],
+    ['a stacked bar with an order that only gives the direction (ascending)', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), color: n('g'), order: { sort: 'ascending' } } }],
+    ['a stacked bar with an order that only gives the direction (descending)', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), color: n('g'), order: { sort: 'descending' } } }],
+    ['a horizontal stacked bar with an order that only gives the direction', { data: DATA, mark: 'bar', encoding: { y: n('c'), x: q('v', { aggregate: 'sum' }), color: n('g'), order: { sort: 'descending' } } }],
+    ['a shared partial order with a sort', { data: DATA, encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), order: { sort: 'ascending' } }, layer: [{ mark: 'bar', encoding: { color: n('g'), order: { field: 'g' } } }] }],
+    ['a shared partial channel under a concat', { data: DATA, vconcat: [{ encoding: { x: { type: 'quantitative', scale: { domain: [0, 8] }, axis: { title: 'T' } } }, layer: [{ mark: 'point', encoding: { x: { field: 'x' }, y: q('y') } }, { mark: 'rule', encoding: { x: { field: 'v' } } }] }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a shared partial channel under a facet', { data: DATA, facet: { column: n('g') }, spec: { encoding: { y: { type: 'quantitative', scale: { zero: false } } }, layer: [{ mark: 'point', encoding: { x: q('x'), y: { field: 'v' } } }, { mark: 'line', encoding: { x: q('x'), y: { field: 'y' } } }] } }],
+  ],
+  // position-point.ts pointPositionDefaultRef / valueref.ts widthHeightValueOrSignalRef: the mark def's x / y position a point-placed mark
+  'positions in the mark def (layer_likert, layer_bar_annotations, layer_bar_labels_grey, interactive_global_development)': [
+    ['a text at a mark-def x and y', { data: DATA, mark: { type: 'text', x: 40, y: 30, text: 'hello' } }],
+    ['a text at the right edge', { data: DATA, layer: [{ mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }, { mark: { type: 'text', align: 'right', baseline: 'bottom', dx: -2, dy: -2, x: 'width', text: 'edge' } }] }],
+    ['a text at the bottom edge', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: { type: 'text', y: 'height', baseline: 'bottom', x: 20, text: 'floor' } }] }],
+    ['texts at a mark-def x beside a y field', { data: DATA, layer: [{ mark: 'bar', encoding: { y: n('c'), x: q('v', { aggregate: 'sum' }) } }, { mark: { type: 'text', align: 'left', x: 5 }, encoding: { y: n('c'), text: n('c') } }] }],
+    ['texts at a mark-def y beside an x field', { data: DATA, layer: [{ mark: 'point', encoding: { x: n('c'), y: q('v') } }, { mark: { type: 'text', y: -5, align: 'center', baseline: 'bottom' }, encoding: { x: n('c'), text: n('c') } }] }],
+    ['a point at a mark-def y', { data: DATA, mark: { type: 'point', y: 100 }, encoding: { x: q('x') } }],
+    ['a circle at the mark-def x', { data: DATA, mark: { type: 'circle', x: 'width' }, encoding: { y: q('y') } }],
+    ['the encoding wins over the mark def', { data: DATA, mark: { type: 'point', x: 5 }, encoding: { x: q('x'), y: q('y') } }],
+    ['a large text at a mark-def position', { data: DATA, mark: { type: 'text', fontSize: 80, x: 150, y: 100, opacity: 0.06 }, encoding: { text: n('c') } }],
+  ],
+  // data/impute.ts makeFromEncoding + assemble: a channel-level impute is the impute transform over the other position channel
+  'channel-level impute (line_encoding_impute_keyvals, line_encoding_impute_keyvals_sequence, line_impute_frame)': [
+    ['an imputed value with key values', { data: GAPS, mark: 'line', encoding: { x: q('a', { scale: { nice: 1 } }), y: q('b', { impute: { value: 100, keyvals: [4] } }), color: n('c') } }],
+    ['an imputed value with a key value sequence', { data: GAPS, mark: 'line', encoding: { x: q('a', { scale: { nice: 1 } }), y: q('b', { impute: { value: 100, keyvals: { start: 4, stop: 6 } } }), color: n('c') } }],
+    ['an imputed value with a stepped sequence', { data: GAPS, mark: 'line', encoding: { x: q('a'), y: q('b', { impute: { value: 0, keyvals: { start: 0, stop: 8, step: 2 } } }), color: n('c') } }],
+    ['an imputed mean over a frame', { data: GAPS, mark: 'line', encoding: { x: q('a', { scale: { nice: 1 } }), y: q('b', { impute: { method: 'mean', frame: [-2, 2] } }), color: n('c') } }],
+    ['an imputed maximum', { data: GAPS, mark: 'line', encoding: { x: q('a'), y: q('b', { impute: { method: 'max', keyvals: [5] } }), color: n('c') } }],
+    ['an imputed x over a y key', { data: GAPS, mark: 'line', encoding: { y: q('a'), x: q('b', { impute: { value: 50, keyvals: [4] } }), color: n('c') }, }],
+    ['an imputed value without a series', { data: GAPS, mark: 'line', encoding: { x: q('a'), y: q('b', { impute: { value: 7, keyvals: [-1] } }) } }],
+    ['an imputed area stacked by colour', { data: GAPS, mark: 'area', encoding: { x: q('a'), y: q('b', { impute: { value: 0, keyvals: [4] } }), color: n('c') } }],
+    ['an imputed aggregate', { data: GAPS, mark: 'line', encoding: { x: q('a'), y: q('b', { aggregate: 'sum', impute: { value: 0, keyvals: [4] } }), color: n('c') } }],
+    ['an imputed value with a detail channel', { data: GAPS, mark: 'line', encoding: { x: q('a'), y: q('b', { impute: { value: 3, keyvals: [4] } }), detail: n('c') } }],
+    ['an imputed point mark', { data: GAPS, mark: 'point', encoding: { x: q('a'), y: q('b', { impute: { value: 3, keyvals: [4] } }), color: n('c') } }],
+  ],
+  // compile/data/sequence.ts: a sequence generator is the source (sequence_line, sequence_line_fold)
+  'sequence data (sequence_line, sequence_line_fold)': [
+    ['a function of a generated sequence', { data: { sequence: { start: 0, stop: 12.7, step: 0.1, as: 'x' } }, transform: [{ calculate: 'sin(datum.x)', as: 'sin(x)' }], width: 300, height: 150, mark: 'line', encoding: { x: q('x'), y: q('sin(x)') } }],
+    ['two functions folded', { data: { sequence: { start: 0, stop: 7, step: 0.5, as: 'x' } }, transform: [{ calculate: 'sin(datum.x)', as: 'sin(x)' }, { calculate: 'cos(datum.x)', as: 'cos(x)' }, { fold: ['sin(x)', 'cos(x)'] }], mark: 'line', encoding: { x: q('x'), y: q('value'), color: n('key', { title: null }) } }],
+    ['a sequence with the default output name and step', { data: { sequence: { start: 1, stop: 6 } }, mark: 'bar', encoding: { x: q('data', { bin: true }), y: { aggregate: 'count' } } }],
+    ['a sequence aggregated', { data: { sequence: { start: 0, stop: 10, step: 1, as: 'n' } }, mark: 'point', encoding: { x: q('n'), y: q('n', { aggregate: 'sum' }) } }],
+    ['a named sequence in a layer', { layer: [{ data: { sequence: { start: 0, stop: 5, step: 1, as: 'u' } }, mark: 'point', encoding: { x: q('u'), y: q('u') } }, { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y') } }] }],
+  ],
+  // transform.ts AggregateTransform / facet.ts normalizeFacetedUnit: an aggregate with no measures only groups; a faceted unit's layout properties are the facet's
+  'grouping aggregates and the layout of faceted units (vconcat_flatten, facet_grid_bar)': [
+    ['an aggregate with no measures (the distinct groups)', { data: DATA, transform: [{ aggregate: [], groupby: ['c', 'g'] }], mark: 'point', encoding: { x: n('c'), y: n('g') } }],
+    ['an aggregate with no measures in a concat child', { data: DATA, vconcat: [{ transform: [{ aggregate: [], groupby: ['c'] }], mark: 'point', encoding: { x: n('c') } }, { mark: 'point', encoding: { x: q('x'), y: q('y') } }] }],
+    ['a faceted unit with a spacing', { data: DATA, spacing: 5, mark: 'point', encoding: { x: q('x'), y: q('y'), row: n('g'), column: n('c') } }],
+    ['a faceted unit with row and column spacing', { data: DATA, spacing: { row: 3, column: 40 }, mark: 'point', encoding: { x: q('x'), y: q('y'), row: n('g'), column: n('c') } }],
+    ['a wrapped faceted unit with align and bounds', { data: DATA, align: 'each', bounds: 'flush', mark: 'point', encoding: { x: q('x'), y: q('y'), facet: n('c', { columns: 2 }) } }],
+    ['a faceted unit with a center', { data: DATA, center: true, mark: 'point', encoding: { x: q('x'), y: q('y'), column: n('c') } }],
+  ],
+  // spec/base.ts extractCompositionLayout: config.concat / config.facet give compositions their default spacing and columns
+  'composition config (rect_mosaic_labelled, line_concat_facet)': [
+    ['config.concat.spacing on an hconcat', { data: DATA, config: { concat: { spacing: 60 } }, hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['config.concat.spacing under an own spacing', { data: DATA, config: { concat: { spacing: 60 } }, spacing: 5, hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['config.concat.columns on a concat', { data: DATA, config: { concat: { columns: 2, spacing: 10 } }, concat: [1, 2, 3].map((i) => ({ width: 60, height: 60, mark: 'point', encoding: { x: q('x'), y: q(i === 1 ? 'y' : 'v') } })) }],
+    ['config.concat.columns under a vconcat (one column all the same)', { data: DATA, config: { concat: { columns: 3 } }, vconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['config.concat.spacing on a repeat', { data: DATA, config: { concat: { spacing: 50 } }, repeat: ['y', 'v'], spec: { width: 80, height: 80, mark: 'point', encoding: { x: q('x'), y: { field: { repeat: 'repeat' }, type: 'quantitative' } } } }],
+    ['config.facet.spacing on a facet', { data: DATA, config: { facet: { spacing: 4 } }, facet: { row: n('g') }, spec: { width: 80, height: 60, mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['config.facet.spacing on a faceted unit', { data: DATA, config: { facet: { spacing: 4 } }, width: 80, height: 60, mark: 'point', encoding: { x: q('x'), y: q('y'), column: n('c') } }],
+    ['config.facet.columns on a wrapped facet', { data: DATA, config: { facet: { columns: 2 } }, facet: n('c'), spec: { width: 60, height: 60, mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['config.facet.columns does not apply to a row and column facet', { data: DATA, config: { facet: { columns: 2, spacing: 12 } }, facet: { row: n('g'), column: n('c') }, spec: { width: 60, height: 60, mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a partial facet spacing falls back to the config', { data: DATA, config: { facet: { spacing: 4 } }, spacing: { row: 30 }, facet: { row: n('g'), column: n('c') }, spec: { width: 60, height: 60, mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a faceted unit in an hconcat', { data: DATA, hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { width: 60, height: 40, mark: 'point', encoding: { x: q('x'), y: q('y'), row: n('g') } }] }],
+    ['a faceted unit with a column in a vconcat', { data: DATA, vconcat: [{ width: 60, height: 40, mark: 'point', encoding: { x: q('x'), y: q('y'), column: n('c') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a faceted unit with a title and layout in a concat', { data: DATA, hconcat: [{ title: 'Faceted', spacing: 3, width: 60, height: 40, mark: 'point', encoding: { x: q('x'), y: q('y'), row: n('g'), column: n('c') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a faceted unit as the spec of a repeat', { data: DATA, repeat: ['y', 'v'], spec: { width: 60, height: 40, mark: 'point', encoding: { x: q('x'), y: { field: { repeat: 'repeat' }, type: 'quantitative' }, row: n('g') } } }],
+    ['a facet nested in an hconcat under config.concat', { data: DATA, config: { concat: { spacing: 33 }, facet: { spacing: 2 } }, hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { width: 60, height: 40, mark: 'point', encoding: { x: q('x'), y: q('y'), row: n('g') } }] }],
+  ],
+  // axis/parse.ts mergeAxisComponent + common.ts mergeTitleComponent: a title written on an axis beats the titles derived from fields
+  'axis titles of layers (rect_mosaic_labelled)': [
+    ['an axis title in the second layer', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('v', { axis: { title: 'Cyl' } }) } }] }],
+    ['an axis title in the first layer', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y', { axis: { title: 'First' } }) } }, { mark: 'line', encoding: { x: q('x'), y: q('v') } }] }],
+    ['an axis title and a field title in two layers', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y', { title: 'Field' }) } }, { mark: 'line', encoding: { x: q('x'), y: q('v', { axis: { title: 'Axis' } }) } }] }],
+    ['two axis titles', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y', { axis: { title: 'One' } }) } }, { mark: 'line', encoding: { x: q('x'), y: q('v', { axis: { title: 'Two' } }) } }] }],
+    ['an axis title with a ranged layer', { data: DATA, layer: [{ mark: 'bar', encoding: { x: n('c'), y: q('y'), y2: { field: 'v' } } }, { mark: 'text', encoding: { x: n('c'), y: q('v', { axis: { title: 'Range' } }), text: n('c') } }] }],
+  ],
+  // scale/range.ts STROKEDASH + legend/parse.ts: a strokeDash field has an ordinal scale over the dash patterns and a legend
+  'stroke dash scales and legends (line_strokedash, line_dashed_part, stocks-2009-layered-line-point)': [
+    ['a line dashed by a field', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), strokeDash: n('g') } }],
+    ['a line dashed and coloured by the same field', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('g'), strokeDash: n('g') } }],
+    ['a line dashed and coloured by different fields', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('c'), strokeDash: n('g') } }],
+    ['a dashed line with an explicit range', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), strokeDash: n('g', { scale: { range: [[8, 2], [2, 2]] } }) } }],
+    ['a dashed line with no legend', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), strokeDash: n('g', { legend: null }) } }],
+    ['a dashed line with a titled legend', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), strokeDash: n('g', { title: 'Group', legend: { orient: 'bottom' } }) } }],
+    ['a dashed point', { data: DATA, mark: { type: 'point', filled: false }, encoding: { x: q('x'), y: q('y'), strokeDash: n('g') } }],
+    ['a dashed bar outline', { data: DATA, mark: { type: 'bar', stroke: 'black' }, encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), strokeDash: n('g') } }],
+    ['a dashed area', { data: DATA, mark: { type: 'area', stroke: 'black' }, encoding: { x: q('x'), y: q('y'), strokeDash: n('g') } }],
+    ['a layered line (dashed) and point (shaped) over one field', { data: DATA, transform: [{ filter: 'datum.x > 0' }], layer: [{ mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('g'), strokeDash: n('g') } }, { mark: { type: 'point', filled: true, size: 60, opacity: 1 }, encoding: { x: q('x'), y: q('y'), color: n('g'), shape: n('g') } }] }],
+    ['a dashed line in a concat shares the scale', { data: DATA, hconcat: [{ mark: 'line', encoding: { x: q('x'), y: q('y'), strokeDash: n('g') } }, { mark: 'line', encoding: { x: q('x'), y: q('v'), strokeDash: n('g') } }] }],
+    ['a dashed trail', { data: DATA, mark: 'trail', encoding: { x: q('x'), y: q('y'), size: q('v'), strokeDash: n('g') } }],
+    ['a dashed line with a condition on the colour', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), strokeDash: n('g'), color: { value: 'red' } } }],
+  ],
+  // scale/parse.ts (`scale: null` has no scale component): the field's own values paint the mark (bar_color_disabled_scale, ternary)
+  'identity scales (bar_color_disabled_scale, ternary)': [
+    ['a bar painted by colour names in the data', { data: { values: [{ k: 'a', v: 3, col: 'red' }, { k: 'b', v: 5, col: '#00ff00' }, { k: 'c', v: 2, col: 'steelblue' }] }, mark: 'bar', encoding: { x: n('k'), y: q('v'), color: n('col', { scale: null }) } }],
+    ['points filled by colour names', { data: { values: [{ x: 1, y: 2, col: 'red' }, { x: 2, y: 3, col: 'blue' }] }, mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('col', { scale: null }) } }],
+    ['a fill from the data on a bar', { data: { values: [{ k: 'a', v: 3, col: 'red' }, { k: 'b', v: 5, col: 'green' }] }, mark: 'bar', encoding: { x: n('k'), y: q('v'), fill: n('col', { scale: null }) } }],
+    ['a stroke from the data on a point', { data: { values: [{ x: 1, y: 2, col: 'red' }, { x: 2, y: 3, col: 'blue' }] }, mark: { type: 'point', filled: false }, encoding: { x: q('x'), y: q('y'), stroke: n('col', { scale: null }) } }],
+    ['opacity from the data', { data: { values: [{ x: 1, y: 2, o: 0.2 }, { x: 2, y: 3, o: 0.9 }] }, mark: 'circle', encoding: { x: q('x'), y: q('y'), opacity: q('o', { scale: null }) } }],
+    ['stroke widths from the data', { data: { values: [{ x: 1, y: 2, w: 1 }, { x: 2, y: 3, w: 6 }] }, mark: 'point', encoding: { x: q('x'), y: q('y'), strokeWidth: q('w', { scale: null }) } }],
+    ['an identity colour next to a scaled size', { data: { values: [{ x: 1, y: 2, col: 'red', s: 3 }, { x: 2, y: 3, col: 'blue', s: 9 }] }, mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('col', { scale: null }), size: q('s') } }],
+    ['an identity colour in a layer', { data: { values: [{ x: 1, y: 2, col: 'red' }, { x: 2, y: 3, col: 'blue' }] }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('col', { scale: null }) } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] }],
+  ],
+  // param.ts: a variable parameter bound to an input needs no initial value of its own (interactive_paintbrush_simple_true)
+  'bound parameters without a value (interactive_paintbrush_simple_true, interactive_paintbrush_simple_false)': [
+    ['a checkbox toggling a colour field', { data: DATA, params: [{ name: 'toggle', bind: { input: 'checkbox' } }], mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { param: 'toggle', field: 'c', type: 'nominal' }, value: 'steelblue' } } }],
+    ['a checkbox and a pointer selection', { data: DATA, params: [{ name: 'toggle', bind: { input: 'checkbox' } }, { name: 'brush', select: { type: 'point', on: 'pointerover' } }], mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { param: 'toggle', field: 'c', type: 'nominal' }, value: 'steelblue' }, size: { condition: { param: 'brush', value: 300 }, value: 50 } } }],
+    ['a range input without a value used in a test', { data: DATA, params: [{ name: 'cut', bind: { input: 'range', min: 0, max: 8, step: 1 } }], mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { test: 'datum.x > cut', value: 'red' }, value: 'grey' } } }],
+  ],
+  // position-rect.ts rectBinPosition, init.ts orient, scale `bins` (bar_binned_data, histogram_bin_transform, wheat_wages): bin: "binned" is a
+  // field of bin starts with a secondary field of ends, drawn as the bins of a histogram
+  'pre-binned data (bar_binned_data, histogram_bin_transform, layer_cumulative_histogram, wheat_wages)': [
+    ['pre-binned bars with a step', { data: BINS, mark: 'bar', encoding: { x: { field: 'bin_start', bin: { binned: true, step: 2 } }, x2: { field: 'bin_end' }, y: q('count') } }],
+    ['pre-binned bars with the string form', { data: BINS, mark: 'bar', encoding: { x: { field: 'bin_start', bin: 'binned', type: 'quantitative' }, x2: { field: 'bin_end' }, y: q('count') } }],
+    ['horizontal pre-binned bars', { data: BINS, mark: 'bar', encoding: { y: { field: 'bin_start', bin: { binned: true, step: 2 } }, y2: { field: 'bin_end' }, x: q('count') } }],
+    ['pre-binned bars with a colour', { data: BINS, mark: 'bar', encoding: { x: { field: 'bin_start', bin: { binned: true, step: 2 } }, x2: { field: 'bin_end' }, y: q('count'), color: n('g') } }],
+    ['pre-binned bars with a bin spacing of zero', { data: BINS, config: { bar: { binSpacing: 0 } }, mark: 'bar', encoding: { x: { field: 'bin_start', bin: { binned: true, step: 2 } }, x2: { field: 'bin_end' }, y: q('count') } }],
+    ['pre-binned bars with a title and a scale', { data: BINS, mark: 'bar', encoding: { x: { field: 'bin_start', bin: { binned: true, step: 2 }, title: 'Binned', scale: { domain: [0, 20] } }, x2: { field: 'bin_end' }, y: q('count') } }],
+    ['pre-binned rects', { data: BINS, mark: 'rect', encoding: { x: { field: 'bin_start', bin: { binned: true, step: 2 } }, x2: { field: 'bin_end' }, y: n('g'), color: q('count') } }],
+    ['pre-binned bars next to a line over the same position', { data: BINS, encoding: { x: { type: 'quantitative', axis: { tickCount: 4, title: 'Position' } }, y: { type: 'quantitative', axis: { zindex: 1 } } }, layer: [{ mark: 'bar', encoding: { x: { field: 'bin_start', bin: 'binned' }, x2: { field: 'bin_end' }, y: { field: 'count' } } }, { mark: 'line', encoding: { x: { field: 'bin_start' }, y: { field: 'count' } } }, { mark: 'rule', encoding: { x: { field: 'bin_end' } } }] }],
+    ['pre-binned bars made by a bin transform', { data: DATA, transform: [{ bin: true, field: 'v', as: 'bv' }], mark: 'bar', encoding: { x: { field: 'bv', bin: { binned: true, step: 2 }, title: 'V (binned)' }, x2: { field: 'bv_end' }, y: { aggregate: 'count' } } }],
+    ['cumulative pre-binned bars', { data: DATA, transform: [{ bin: true, field: 'v', as: 'bv' }, { aggregate: [{ op: 'count', as: 'count' }], groupby: ['bv', 'bv_end'] }, { sort: [{ field: 'bv' }], window: [{ op: 'sum', field: 'count', as: 'cum' }], frame: [null, 0] }], encoding: { x: { field: 'bv', type: 'quantitative', scale: { zero: false }, bin: 'binned' }, x2: { field: 'bv_end' } }, layer: [{ mark: 'bar', encoding: { y: q('cum') } }, { mark: { type: 'bar', color: 'yellow', opacity: 0.5 }, encoding: { y: q('count') } }] }],
+  ],
+  // timeunit.ts TimeUnitNode (binned) + predicate.ts: a binned time unit's field already holds the start of its unit; the end is made
+  // only for rect-based marks or a band position (bar_binnedyearmonth, bar_binned_yearmonth_*, layer_bar_tick_binned_time_band_position)
+  'binned time units (bar_binnedyearmonth, bar_binned_yearmonth_grouped, bar_binned_yearmonth_label, time_parse_binnedutc_with_escaped_field)': [
+    ['bars over a binned year-month', { data: MONTHS, mark: 'bar', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['bars over a binned UTC year', { data: MONTHS, mark: 'bar', encoding: { x: { timeUnit: 'binnedutcyear', field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['horizontal bars over a binned UTC year-month-date', { data: MONTHS, mark: 'bar', encoding: { y: { timeUnit: 'binnedutcyearmonthdate', field: 'd', type: 'temporal' }, x: q('v') } }],
+    ['bars over the object form of a binned time unit', { data: MONTHS, mark: 'bar', encoding: { x: { timeUnit: { unit: 'yearmonth', binned: true }, field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['bars over a binned time unit with a step', { data: MONTHS, mark: 'bar', encoding: { x: { timeUnit: { unit: 'yearmonth', binned: true, step: 2 }, field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['grouped bars over a binned year-month', { data: MONTHS, mark: 'bar', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal' }, xOffset: n('g'), color: n('g'), y: q('v') } }],
+    ['a filter over a binned time unit', { data: MONTHS, transform: [{ filter: { timeUnit: 'binnedyearmonth', field: 'd', range: [{ year: 2005, month: 1 }, { year: 2005, month: 3 }] } }], mark: 'bar', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['a filter over a binned time unit reads the raw dates', { data: { values: [{ d: '2005-01-15', v: 5 }, { d: '2005-02-15', v: 6 }, { d: '2005-03-15', v: 9 }, { d: '2005-03-01', v: 4 }] }, transform: [{ filter: { timeUnit: 'binnedyearmonth', field: 'd', range: [{ year: 2005, month: 1 }, { year: 2005, month: 3 }] } }], mark: 'point', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['bars and labels at the middle of a binned unit', { data: MONTHS, encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal', bandPosition: 0.5 }, y: q('v') }, layer: [{ mark: 'bar' }, { mark: { type: 'text', baseline: 'bottom' }, encoding: { text: q('v') } }] }],
+    ['bars and a tick at the start of a binned unit', { data: MONTHS, config: { bar: { timeUnitBandPosition: 0 }, tick: { timeUnitBandPosition: 0 } }, encoding: { x: { timeUnit: 'binnedutcyear', field: 'd', type: 'temporal' }, y: q('v') }, layer: [{ mark: 'bar' }, { mark: { type: 'tick', size: 20 } }] }],
+    ['points over a binned unit (no end is made)', { data: MONTHS, mark: 'point', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['a line over a binned unit', { data: MONTHS, mark: 'line', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['a binned unit on a field with an escaped name', { data: { values: [{ "a(b'c)": '2011-12-10' }, { "a(b'c)": '2011-10-12' }] }, mark: 'bar', encoding: { y: { timeUnit: 'binnedutcyearmonth', field: "a(b\\'c)", type: 'temporal' } } }],
+  ],
+  // transform.ts AggregateTransform: argmax / argmin keep the winning row, whose fields are read by a bracketed path (bar_argmax_transform)
+  'argmax and argmin in aggregate transforms (bar_argmax_transform)': [
+    ['the value of the row with the largest field', { data: DATA, transform: [{ aggregate: [{ op: 'argmax', field: 'v', as: 'top' }], groupby: ['c'] }], mark: 'bar', encoding: { x: { field: "top['x']", type: 'quantitative' }, y: n('c') } }],
+    ['the value of the row with the smallest field', { data: DATA, transform: [{ aggregate: [{ op: 'argmin', field: 'v', as: 'low' }], groupby: ['g'] }], mark: 'bar', encoding: { y: { field: "low['y']", type: 'quantitative' }, x: n('g') } }],
+    ['argmax next to another measure', { data: DATA, transform: [{ aggregate: [{ op: 'argmax', field: 'v', as: 'top' }, { op: 'sum', field: 'v', as: 'total' }], groupby: ['c'] }], mark: 'point', encoding: { x: { field: "top['x']", type: 'quantitative' }, y: q('total'), color: n('c') } }],
+    ['argmax in a joinaggregate', { data: DATA, transform: [{ joinaggregate: [{ op: 'argmax', field: 'v', as: 'top' }], groupby: ['c'] }, { calculate: "datum.top.x", as: 'topx' }], mark: 'point', encoding: { x: q('x'), y: q('topx'), color: n('c') } }],
+  ],
+  // transform.ts RegressionTransform params: true: one row with the model's coefficients and R squared (layer_point_line_regression)
+  'regression parameters (layer_point_line_regression)': [
+    ['the R squared of a linear fit as a label', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: { type: 'line', color: 'firebrick' }, transform: [{ regression: 'y', on: 'x' }], encoding: { x: q('x'), y: q('y') } }, { transform: [{ regression: 'y', on: 'x', params: true }, { calculate: "'R2: ' + format(datum.rSquared, '.2f')", as: 'R2' }], mark: { type: 'text', color: 'firebrick', x: 'width', align: 'right', y: -5 }, encoding: { text: { type: 'nominal', field: 'R2' } } }] }],
+    ['a quadratic fit parameters', { data: DATA, transform: [{ regression: 'y', on: 'x', method: 'quad', params: true }, { calculate: 'datum.coef[0]', as: 'c0' }], mark: 'text', encoding: { text: q('c0') } }],
+    ['a grouped fit parameters', { data: DATA, transform: [{ regression: 'y', on: 'x', groupby: ['g'], params: true }, { calculate: 'datum.rSquared', as: 'r2' }], mark: 'bar', encoding: { x: n('g'), y: q('r2') } }],
+    ['params: false is the fitted line', { data: DATA, transform: [{ regression: 'y', on: 'x', params: false }], mark: 'line', encoding: { x: q('x'), y: q('y') } }],
+  ],
+  // scale/assemble.ts + resolve.ts: layers whose scales of a channel cannot merge (or that ask for it) keep one each, named after the layer
+  // (layer_text_heatmap_joinaggregate)
+  'independent non-position scales in layers (layer_text_heatmap_joinaggregate)': [
+    ['a quantitative and a nominal colour with an explicit domain', { data: DATA, encoding: { x: n('c'), y: n('g') }, layer: [{ mark: 'rect', encoding: { color: q('v', { title: 'V', legend: { direction: 'horizontal', gradientLength: 120 } }) } }, { mark: 'text', encoding: { text: q('v'), color: { field: 'g', type: 'nominal', scale: { domain: ['p', 'q'], range: ['black', 'white'] }, legend: null } } }] }],
+    ['colour scales kept apart by resolve', { data: DATA, resolve: { scale: { color: 'independent' } }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } }, { mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('g') } }] }],
+    ['colour scales kept apart by resolve, with legends', { data: DATA, resolve: { scale: { color: 'independent' } }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: q('v') } }, { mark: { type: 'tick', thickness: 3 }, encoding: { x: q('x'), y: q('y'), color: n('c') } }] }],
+    ['size scales kept apart by resolve', { data: DATA, resolve: { scale: { size: 'independent' } }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), size: q('v') } }, { mark: 'circle', encoding: { x: q('x'), y: q('v'), size: q('y') } }] }],
+    ['opacity scales kept apart by resolve', { data: DATA, resolve: { scale: { opacity: 'independent' } }, layer: [{ mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), opacity: q('x', { aggregate: 'mean' }) } }, { mark: 'point', encoding: { x: n('c'), y: q('v', { aggregate: 'mean' }), opacity: q('y', { aggregate: 'max' }) } }] }],
+    ['compatible colours still share one scale', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } }, { mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('c') } }] }],
+    ['a layer with no colour next to one with', { data: DATA, resolve: { scale: { color: 'independent' } }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] }],
+  ],
+  // scale/domain.ts mergeDomains: a signal domain (the extent of a bin transform) is one member of the union (layer_histogram_global_mean)
+  'a binned layer next to a plain one (layer_histogram_global_mean)': [
+    ['a histogram and the mean as a rule', { data: DATA, layer: [{ mark: 'bar', encoding: { x: q('v', { bin: true }), y: { aggregate: 'count' } } }, { mark: 'rule', encoding: { x: q('v', { aggregate: 'mean' }), color: { value: 'red' }, size: { value: 5 } } }] }],
+    ['a rule first, then the histogram', { data: DATA, layer: [{ mark: 'rule', encoding: { x: q('v', { aggregate: 'mean' }), color: { value: 'red' } } }, { mark: 'bar', encoding: { x: q('v', { bin: true }), y: { aggregate: 'count' } } }] }],
+    ['a histogram and raw points', { data: DATA, layer: [{ mark: 'bar', encoding: { x: q('v', { bin: { maxbins: 4 } }), y: { aggregate: 'count' } } }, { mark: 'point', encoding: { x: q('v') } }] }],
+    ['two histograms of different fields', { data: DATA, layer: [{ mark: 'bar', encoding: { x: q('v', { bin: true }), y: { aggregate: 'count' } } }, { mark: { type: 'bar', opacity: 0.4 }, encoding: { x: q('y', { bin: true }), y: { aggregate: 'count' } } }] }],
+  ],
+  // channeldef.ts datum defs on the paint channels: a constant that the colour scale maps (line_color_halo)
+  'datums on fill and stroke (line_color_halo)': [
+    ['a line stroked by a datum', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('v'), stroke: { datum: 'series A', type: 'nominal' } } }],
+    ['a bar filled by a datum', { data: DATA, mark: { type: 'bar', filled: true }, encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), fill: { datum: 'Total', type: 'nominal' } } }],
+    ['lines of a repeated layer, each stroked by its field name', { data: DATA, repeat: { layer: ['x', 'y'] }, spec: { mark: 'line', encoding: { x: q('v'), y: { field: { repeat: 'layer' }, type: 'quantitative' }, stroke: { datum: { repeat: 'layer' }, type: 'nominal' } } } }],
+    ['a halo under coloured lines', { data: DATA, repeat: { layer: ['x', 'y'] }, spec: { layer: [{ mark: { type: 'line', stroke: 'white', strokeWidth: 4 }, encoding: { x: q('v'), y: { field: { repeat: 'layer' }, type: 'quantitative' } } }, { mark: 'line', encoding: { x: q('v'), y: { field: { repeat: 'layer' }, type: 'quantitative' }, stroke: { datum: { repeat: 'layer' }, type: 'nominal' } } }] } }],
+    ['two datums in two layers share the scale', { data: DATA, layer: [{ mark: 'line', encoding: { x: q('x'), y: q('y'), stroke: { datum: 'A', type: 'nominal' } } }, { mark: 'line', encoding: { x: q('x'), y: q('v'), stroke: { datum: 'B', type: 'nominal' } } }] }],
+  ],
+  // facet.ts getCardinalityAggregateForChild, model.ts getSizeSignalRef, layoutsize/assemble.ts, data/facet.ts: an independent x / y scale lives in
+  // each cell; a step-sized discrete one makes the cell as wide as its own cardinality (facet_independent_scale, facet_cross_independent_scale, facet_bullet)
+  'independent position scales in facets (facet_independent_scale, facet_cross_independent_scale, bar_grouped_facet_independent_scale, facet_bullet)': [
+    ['a column facet with an independent discrete x', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { column: n('g') }, spec: { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } } }],
+    ['a column facet with an independent discrete x and a step', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { column: n('g') }, spec: { width: { step: 17 }, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), color: n('g') } } }],
+    ['a column facet with an independent discrete x of fixed width', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { column: n('g') }, spec: { width: 100, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } } }],
+    ['a row facet with an independent discrete y', { data: DATA, resolve: { scale: { y: 'independent' } }, facet: { row: n('g') }, spec: { mark: 'bar', encoding: { y: n('c'), x: q('v', { aggregate: 'sum' }) } } }],
+    ['a row and column facet with independent x and y', { data: SPARSE, resolve: { scale: { x: 'independent', y: 'independent' } }, facet: { row: n('g'), column: n('c') }, spec: { mark: 'rect', encoding: { x: n('x'), y: n('v') } } }],
+    ['a row and column facet with only x independent', { data: SPARSE, resolve: { scale: { x: 'independent' } }, facet: { row: n('g'), column: n('c') }, spec: { mark: 'rect', encoding: { x: n('x'), y: n('v') } } }],
+    ['an independent point x scale', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { column: n('g') }, spec: { mark: 'point', encoding: { x: n('c'), y: q('v') } } }],
+    ['an independent continuous x', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { column: n('g') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['an independent continuous y in rows', { data: DATA, resolve: { scale: { y: 'independent' } }, facet: { row: n('g') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['an independent x with the header at the bottom', { data: DATA, resolve: { scale: { x: 'independent' } }, mark: 'bar', encoding: { column: n('g', { header: { orient: 'bottom' } }), x: n('c', { axis: null }), y: q('v', { aggregate: 'sum' }), color: n('c') } }],
+    ['an independent x over a layered spec', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { column: n('g') }, spec: { width: { step: 17 }, layer: [{ mark: 'line', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }, { mark: 'point', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }] } }],
+    ['independent continuous x over layers of bars (a bullet)', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { row: n('c') }, spacing: 10, spec: { encoding: { x: { type: 'quantitative', scale: { nice: false }, title: null } }, layer: [{ mark: { type: 'bar', color: '#eee' }, encoding: { x: { field: 'v' } } }, { mark: { type: 'bar', color: 'steelblue', size: 10 }, encoding: { x: { field: 'y' } } }, { mark: { type: 'tick', color: 'black' }, encoding: { x: { field: 'x' } } }] } }],
+    ['shared scales keep the header axes', { data: DATA, facet: { column: n('g') }, spec: { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } } }],
+    ['a facet whose cells have an x axis and no y scale', { data: DATA, facet: { row: n('g') }, spec: { mark: 'point', encoding: { x: q('x', { axis: { grid: true } }) } } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
@@ -376,7 +726,7 @@ describe('@aster/vl == vega-lite: nested fields in predicates and transforms (ro
   const px = { x: { field: 'x', type: 'quantitative' } }
   const pt = (transform: unknown[]) => ({ data: NESTED, transform, mark: 'point', encoding: px })
   // (an ENCODING of a nested field is flattened under a hashed key here and under the joined path in vega-lite: those compare by render only)
-  const RENDER_ONLY = new Set(['filter oneOf with a nested y encoding', 'encodings of a nested field'])
+  const RENDER_ONLY = new Set(['filter oneOf with a nested y encoding', 'encodings of a nested field', 'a nested field under a flatten output', 'a nested field under a calculated object', 'a nested field of the source next to a flatten'])
   const SITES: Array<[string, Record<string, any>]> = [
     ['filter equal', pt([{ filter: { field: 'o.v', equal: 1 } }])],
     ['filter range', pt([{ filter: { field: 'o.v', range: [1, 2] } }])],
@@ -391,6 +741,9 @@ describe('@aster/vl == vega-lite: nested fields in predicates and transforms (ro
     ['an aggregate transform', { data: NESTED, transform: [{ aggregate: [{ op: 'sum', field: 'o.v', as: 's' }], groupby: ['c'] }], mark: 'point', encoding: { x: { field: 's', type: 'quantitative' } } }],
     ['a bin transform', { data: NESTED, transform: [{ bin: true, field: 'o.v', as: 'b' }], mark: 'point', encoding: { x: { field: 'b', type: 'quantitative' } } }],
     ['encodings of a nested field', { data: NESTED, mark: 'point', encoding: { x: px.x, color: { field: 'o.v', type: 'nominal' }, tooltip: { field: 'o.v', type: 'quantitative' } } }],
+    ['a nested field under a flatten output', { data: { values: [{ id: 'a', lc: [{ time: 1, mag: 18 }, { time: 2, mag: 19 }] }, { id: 'b', lc: [{ time: 1, mag: 20 }, { time: 3, mag: 22 }] }] }, transform: [{ flatten: ['lc'] }], mark: 'point', encoding: { x: { field: 'lc.time', type: 'quantitative' }, y: { field: 'lc.mag', type: 'quantitative' }, color: n('id') } }],
+    ['a nested field under a calculated object', { data: DATA, transform: [{ calculate: '{u: datum.x * 2, w: {z: datum.y}}', as: 'o' }], mark: 'point', encoding: { x: { field: 'o.u', type: 'quantitative' }, y: { field: 'o.w.z', type: 'quantitative' } } }],
+    ['a nested field of the source next to a flatten', { data: { values: [{ o: { v: 1 }, lc: [{ t: 1 }, { t: 2 }] }, { o: { v: 2 }, lc: [{ t: 3 }] }] }, transform: [{ flatten: ['lc'] }], mark: 'point', encoding: { x: { field: 'lc.t', type: 'quantitative' }, y: { field: 'o.v', type: 'quantitative' } } }],
   ]
   /** The expressions of the pipeline that name a field: the filters and the formulas that write a joined path. */
   const exprs = (vg: any): string[] =>
@@ -424,4 +777,92 @@ describe('@aster/vl == vega-lite: layers that bin the same field (concat_bar_lay
     expect(new Set(sigs).size, 'a signal is declared once').toBe(sigs.length)
     await check(spec)
   }, 30_000)
+})
+
+// compile/data/sequence.ts producedFields: the generated numbers are not parsed again (no cast formula in front of the pipeline)
+describe('@aster/vl == vega-lite: a sequence is not cast', () => {
+  const casts = (vg: any): string[] => (vg.data ?? []).flatMap((d: any) => d.transform ?? []).filter((t: any) => t.type === 'formula' && /toNumber|toDate/.test(t.expr)).map((t: any) => t.expr)
+  it('the output name is left alone', () => {
+    const spec = { data: { sequence: { start: 0, stop: 6, step: 1, as: 'x' } }, mark: 'point', encoding: { x: q('x'), y: q('x') } }
+    const oracle = (vl as any).compile(plain(spec)).spec
+    const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+    expect(casts(ours)).toEqual(casts(oracle))
+  })
+})
+
+// compile/mark/encode/tooltip.ts tooltipData: the tooltip's formats are the config's overlaid by config.tooltipFormat
+describe('@aster/vl == vega-lite: config.tooltipFormat', () => {
+  const tooltips = (vg: any): string[] => {
+    const out: string[] = []
+    const walk = (ms: any[]): void => { for (const m of ms ?? []) { if (m.encode?.update?.tooltip) out.push(JSON.stringify(m.encode.update.tooltip)); walk(m.marks) } }
+    walk(vg.marks)
+    return out
+  }
+  const base = { data: { values: [{ a: 1.23456, b: 2.5, t: '2020-03-04', c: 'k' }] } }
+  const CASES: Array<[string, Record<string, any>]> = [
+    ['a number format for the tooltips only', { ...base, config: { tooltipFormat: { numberFormat: '.8f' }, numberFormat: 'd' }, mark: { type: 'bar', tooltip: true }, encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'a', type: 'quantitative' } } }],
+    ['a time format for the tooltips only', { ...base, config: { tooltipFormat: { timeFormat: '%Y' }, timeFormat: '%d' }, mark: { type: 'point', tooltip: true }, encoding: { x: { field: 't', type: 'temporal' }, y: { field: 'b', type: 'quantitative' } } }],
+    ['a tooltip encoding with the tooltip format', { ...base, config: { tooltipFormat: { numberFormat: '.1f' } }, mark: 'point', encoding: { x: { field: 'a', type: 'quantitative' }, tooltip: [{ field: 'a', type: 'quantitative' }, { field: 'b', type: 'quantitative' }] } }],
+    ['a single tooltip field with the tooltip format', { ...base, config: { tooltipFormat: { numberFormat: '.3f' } }, mark: 'point', encoding: { x: { field: 'a', type: 'quantitative' }, tooltip: { field: 'b', type: 'quantitative' } } }],
+    ['a custom number format type for the tooltips', { ...base, config: { customFormatTypes: true, tooltipFormat: { numberFormat: '$', numberFormatType: 'price' } }, mark: { type: 'bar', tooltip: true }, encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'a', type: 'quantitative' } } }],
+    ['no tooltip format', { ...base, config: { numberFormat: '.2f' }, mark: { type: 'bar', tooltip: true }, encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'a', type: 'quantitative' } } }],
+  ]
+  // (the screen-reader description of a mark reads the same formats)
+  const descriptions = (vg: any): string[] => {
+    const out: string[] = []
+    const walk = (ms: any[]): void => { for (const m of ms ?? []) { if (m.encode?.update?.description) out.push(JSON.stringify(m.encode.update.description)); walk(m.marks) } }
+    walk(vg.marks)
+    return out
+  }
+  for (const [name, spec] of CASES) {
+    it(name, () => {
+      const oracle = (vl as any).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      expect(tooltips(oracle).length).toBeGreaterThan(0)
+      expect(tooltips(ours)).toEqual(tooltips(oracle))
+      expect(descriptions(ours)).toEqual(descriptions(oracle))
+    })
+  }
+})
+
+// compile/selection/... parseParameter: an input binding's own properties (placeholder, autocomplete, debounce, element) reach the signal
+describe('@aster/vl == vega-lite: input bindings', () => {
+  const binds = (vg: any): unknown[] => (vg.signals ?? []).filter((sg: any) => sg.bind).map((sg: any) => [sg.name, sg.bind])
+  const BINDS: Array<[string, Record<string, unknown>]> = [
+    ['a search input with a placeholder and a name', { input: 'search', placeholder: 'Car model', name: 'Search' }],
+    ['a text input with autocomplete', { input: 'text', placeholder: 'Type', autocomplete: 'off' }],
+    ['a range with a debounce and an element', { input: 'range', min: 0, max: 5, step: 1, debounce: 100, element: '#ctl' }],
+  ]
+  for (const [name, bind] of BINDS) {
+    it(name, async () => {
+      const spec = { data: DATA, params: [{ name: 'q', value: '', bind }], mark: 'point', encoding: { x: q('x'), y: q('y'), opacity: { condition: { test: 'test(regexp(q,"i"), datum.c)', value: 0.8 }, value: 0.1 } } }
+      const oracle = (vl as any).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      expect(binds(oracle).length).toBe(1)
+      expect(binds(ours)).toEqual(binds(oracle))
+      await check(spec)
+    }, 30_000)
+  }
+})
+
+// facet.ts assembleDefaultLayout + axis/assemble.ts assembleAxisSignals: cells are not aligned along an independent direction (unless both row and column
+// are given), and a cell whose axis has no grid scale gets the child's size as its own `width` / `height`
+describe('@aster/vl == vega-lite: the layout and the signals of a faceted cell', () => {
+  const cell = (vg: any): any => (vg.marks ?? []).find((m: any) => m.type === 'group' && m.style === 'cell' || m.name === 'cell')
+  const SPECS: Array<[string, Record<string, any>]> = [
+    ['a column facet with an independent x', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { column: n('g') }, spec: { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } } }],
+    ['a row facet with an independent y', { data: DATA, resolve: { scale: { y: 'independent' } }, facet: { row: n('g') }, spec: { mark: 'bar', encoding: { y: n('c'), x: q('v', { aggregate: 'sum' }) } } }],
+    ['a row facet with an independent x (still aligned)', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { row: n('g') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a row and column facet with independent scales', { data: SPARSE, resolve: { scale: { x: 'independent', y: 'independent' } }, facet: { row: n('g'), column: n('c') }, spec: { mark: 'rect', encoding: { x: n('x'), y: n('v') } } }],
+    ['cells with an x axis and no y scale', { data: DATA, facet: { row: n('g') }, spec: { mark: 'point', encoding: { x: q('x', { axis: { grid: true } }) } } }],
+    ['cells with a y axis and no x scale', { data: DATA, facet: { column: n('g') }, spec: { mark: 'point', encoding: { y: q('y', { axis: { grid: true } }) } } }],
+  ]
+  for (const [name, spec] of SPECS) {
+    it(name, () => {
+      const oracle = (vl as any).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      expect(plain(ours.layout?.align)).toEqual(plain(oracle.layout?.align))
+      expect(plain(cell(ours)?.signals ?? null)).toEqual(plain(cell(oracle)?.signals ?? null))
+    })
+  }
 })

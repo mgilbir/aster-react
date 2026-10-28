@@ -39,6 +39,8 @@ export function timeUnitToString(tu: NormalTimeUnit): string {
 
 /** Generated output field name `unit_field` for a time-unit field. */
 export function timeUnitFieldName(tu: NormalTimeUnit, field: string): string {
+  // (a binned time unit is the field itself)
+  if (tu.binned) return field
   return genName(timeUnitToString(tu), field)
 }
 

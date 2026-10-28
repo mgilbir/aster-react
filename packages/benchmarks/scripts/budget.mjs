@@ -81,6 +81,7 @@ import { fileURLToPath } from 'node:url'
 // The dataflow-failure containment (a throwing dataset stops the pass like vega's): SvgChart +0.1.
 // Merged with the add-on auto-load and the gallery runtime work (#38, #39), measured (kB gzip): Chart + VL 261.5 (253.5 there, plus the
 // compiler rules above: +8.0); every other row is within its budget: core 135.5, useChart 142.3, Chart 178.4, SvgChart 159.9, SvgChart +
+// Independent facet scales and the rest of the refusals lifted in the gallery work: Chart + VL 266.9.
 // interaction 173.4.
 // The gallery runtime work (fix/gallery-runtime-2), measured (kB gzip): core 137.9 (+2.4 over 135.5: the dataflow rank and the signal
 // abort, the view encode, the config legend layout, bounds traced for every symbol shape and rotated paths, the canvas gradient and

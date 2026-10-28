@@ -104,6 +104,21 @@ When the numbers improve the gate says so: raise `floors.json` and regenerate th
 It is **not** in `scripts/gates.mjs` (so `pnpm check` stays hermetic and needs no fetch): it takes about 90 s and needs the cache,
 so it runs in `.github/workflows/nightly.yml` after a cached fetch.
 
+## The spec-swap path
+
+Every other path mounts fresh. This one holds a mounted chart to what a fresh mount shows when its `spec` PROP CHANGES (a playground
+re-rendering one `<Chart>`): ONE `<Chart>` is given spec A, runs for a moment (its timers tick, the pointer moves, presses and
+releases over it), is given spec B, settles, and the canonical SVG is compared with a fresh mount of B and with vega's B. The pairs
+are the COMMITTED list `swap-pairs.txt` (one `A => B` per line), made once by the seeded selection in `src/gallery/swap-pairs.ts`: the three a playground user reported, timer /
+selection / facet / map specs both as the spec left behind and as the one that follows, and a seeded remainder (223 pairs; B is
+always a spec the react path passed when the list was made, so equal to a fresh mount means equal to vega). The gate reads only
+that file, so other changes to the passing lists do not change the sample. A pair whose B no longer passes a fresh mount (or whose spec left the
+gallery) is SKIPPED with a reason and listed in the output -- never a swap regression, the static and react ratchets own that. The ratchet
+(`floors.json` `swap`): every runnable pair must pass and equal vega's B, at least `minRunnable` pairs must be runnable (the sample cannot
+erode silently), unverifiable ceiling. `pnpm conformance:gallery --regenerate-swap-pairs` rewrites the list deliberately (review the diff). It is reported apart
+from the fresh-mount counts, and runs after the other paths (a load-dependent timeout of a data load would otherwise decide it).
+On origin/main 187 of the 223 pairs passed; the rest left the old chart's elements, timers or state behind.
+
 ## Triage
 
 `TRIAGE.md` is the snapshot of why each non-passing spec does not pass; `triage.json` is the same per spec;

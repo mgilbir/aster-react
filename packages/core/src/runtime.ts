@@ -49,7 +49,7 @@ import { dict, ownGet, maxOf, pushAll, lerp, scopedSignalName, TUPLE_ID } from '
 import { applyImageUrlPolicy, applyLinkUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
-import { fieldsOf, groupKeyFn } from './transform-agg.js'
+import { aggregateRows, fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import { trellisLayout } from './trellis.js'
 import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
@@ -4032,8 +4032,6 @@ interface GroupSource {
   facetName?: string
   /** Names this item among its mark's (the facet partition's key, a datum's index): the identity of its signal scope. */
   key?: string
-  /** A cell no tuple fell into: vega's Facet makes the subflow (the marks, axes, legends and title inside) when a tuple of the key arrives, so it has none. */
-  noSubflow?: boolean
 }
 
 interface FacetDef {
@@ -4042,7 +4040,7 @@ interface FacetDef {
   /** Pre-faceted data: each datum holds the array of the group's rows in this field. */
   field?: string
   groupby?: string | string[]
-  aggregate?: { fields: string[]; ops: string[]; as?: Array<string | null>; cross?: boolean }
+  aggregate?: { fields?: string[]; ops?: string[]; as?: string[]; cross?: boolean }
 }
 
 /**
@@ -4083,12 +4081,10 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
       }
       return (ctx.datasets.get(from) ?? []).map((row, i) => {
         const part = byKey.get(keyOfRow(row))
-        return { datum: row, rows: part ?? [], facetName: facet.name, key: String(i), ...(part ? {} : { noSubflow: true }) }
+        return { datum: row, rows: part ?? [], facetName: facet.name, key: String(i) }
       })
     }
-    // the keys are vega fields (`a.b`, `a\.b`): partition by the accessor, and name the key
-    // tuple's properties by the accessor's own name (Facet: `tuple[fn.fname] = fn(t)`)
-    const accessors = fieldsOf(keys)
+    // the keys are vega fields (`a.b`, `a\.b`): the partition is by the accessor
     const keyOf = groupKeyFn(keys)
     const parts = new Map<string, Row[]>()
     for (const r of rows) {
@@ -4097,45 +4093,18 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
       if (g) g.push(r)
       else parts.set(k, [r])
     }
+    // vega's own facet aggregate (vega-parser marks/data.js): an `aggregate` over the groupby makes the group item's datum - the
+    // key fields plus the facet's measures, `count` by default (a cell's datum carries the partition's size); with `cross` it also
+    // makes the empty cells of the full cross-product of the key values
     const ag = facet.aggregate
-    const make = (g: Row[], first: Row | undefined, given?: Row): GroupSource => {
-      let datum: Row = given ?? {}
-      if (given === undefined) accessors.forEach((acc, i) => { datum[((acc as { fname?: string }).fname) ?? keys[i]!] = acc(first!) })
-      if (ag?.ops) {
-        // a facet aggregate (vega-lite's stack_group_main): the group item's datum carries it
-        datum = { ...datum, ...aggregateGroup(g, { type: 'aggregate', groupby: keys, fields: ag.fields, ops: ag.ops, as: ag.ops.map((op, i) => ag.as?.[i] ?? `${op}_${ag.fields[i]}`) } as never) }
-      } else {
-        // no facet aggregate ops: vega's own (vega-parser marks/data.js: an `aggregate` over the groupby, whose default op is
-        // `count`) makes the group item's datum, so a cell's datum carries the partition's size
-        datum = { ...datum, count: g.length }
-      }
+    const as = ag?.as ?? (ag?.ops ? ag.ops.map((op, i) => `${op}_${ag.fields?.[i]}`) : undefined)
+    const tuples = aggregateRows(rows, { groupby: keys, ...(ag?.ops ? { fields: ag.fields, ops: ag.ops, as } : {}), ...(ag?.cross ? { cross: true } : {}) })
+    return tuples.map((datum) => {
+      const partKey = keyOf(datum)
       // (the aggregate's output is a tuple: `isTuple(group().datum)`)
       Object.defineProperty(datum, TUPLE_ID, { value: true, enumerable: false })
-      return { datum, rows: g, facetName: facet.name, key: '', ...(g.length === 0 ? { noSubflow: true } : {}) }
-    }
-    const out: GroupSource[] = [...parts.entries()].map(([partKey, g]) => ({ ...make(g, g[0]), key: partKey }))
-    if (ag?.cross && keys.length > 1) {
-      // Aggregate `cross`: the cells of the cross-product of the groupby values, the empty ones too and after the others. The values
-      // of a field are the keys of a plain object (vega: `vals[i][v] = v`), so integer-like ones come first, in ascending order.
-      const vals: Array<Record<string, unknown>> = keys.map(() => ({}))
-      const seen = new Set<string>()
-      for (const cell of out) {
-        const idx = accessors.map((acc, i) => { const v = acc(cell.rows![0]!); vals[i]![String(v)] = v; return String(v) })
-        seen.add(idx.join('|'))
-      }
-      const names = accessors.map((acc, i) => ((acc as { fname?: string }).fname) ?? keys[i]!)
-      const generate = (base: string, tuple: Row, index: number): void => {
-        const v = vals[index]!
-        for (const k in v) {
-          const key = base ? base + '|' + k : k
-          const t = { ...tuple, [names[index]!]: v[k] }
-          if (index + 1 < keys.length) generate(key, t, index + 1)
-          else if (!seen.has(key)) out.push({ ...make([], undefined, t), key })
-        }
-      }
-      generate('', {}, 0)
-    }
-    return out
+      return { datum, rows: parts.get(partKey) ?? [], facetName: facet.name, key: partKey }
+    })
   }
   const data = mark.from?.data
   if (data) return (ctx.datasets.get(data) ?? []).map((row, i) => ({ datum: row, key: String(i) }))
@@ -4291,9 +4260,14 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
   const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
   // the facet partition is a dataset for everything in this item's scope, its own scales included
   const savedFacet = src.facetName !== undefined ? ctx.datasets.get(src.facetName) : undefined
+  // a cell of the full cross-product with no rows of its own (`cross` on a facet aggregate): vega's facet subflow never starts for
+  // it, so the item is the empty group - none of its marks, axes, legends or title exist
+  const hollow = src.facetName !== undefined && (src.rows?.length ?? 0) === 0
   if (src.facetName !== undefined) ctx.datasets.set(src.facetName, src.rows!)
   // the group's own datasets (vega: a group's `data`), derived in this item's scope
   const savedData: Array<[string, Row[] | undefined]> = []
+  // the scales this item declares are visible to the expressions of its content (`bandwidth('child_x')`), over the enclosing ones
+  let restoreScaleFns: (() => void) | undefined
   try {
     // this item's signal scope (its own signals, over the enclosing ones; a facet's `parent` is its datum)
     const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
@@ -4334,6 +4308,11 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       childScales.set(sdef.name, buildScale(sdef, scaleContext({ ...ctx, signalParams: scopeParams, width: viewW, height: viewH }, sdef.name)))
       childTypes.set(sdef.name, sdef.type)
     }
+    if (childScales.size) {
+      const outerScale = ctx.runtime.scale
+      ctx.runtime.scale = (n) => (childScales.get(n) as never) ?? outerScale(n)
+      restoreScaleFns = () => { ctx.runtime.scale = outerScale }
+    }
     // vega builds the instances of nested scopes level by level: what an aborted pass did not reach is not made
     const path = [...ctx.scope.path, ctx.scope.nextChild.n++]
     const order = ctx.abort.cut === undefined ? -1 : compareInstances(path, ctx.abort.cut.path)
@@ -4361,7 +4340,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     }
 
     const content: SceneGroup[] = []
-    for (const child of src.noSubflow || order > 0 || (order === 0 && !whole && ctx.abort.cut!.legend === undefined) ? [] : mark.marks ?? []) {
+    for (const child of hollow || order > 0 || (order === 0 && !whole && ctx.abort.cut!.legend === undefined) ? [] : mark.marks ?? []) {
       const r = evaluateMark(child, childCtx)
       if (r) pushAll(content, Array.isArray(r) ? r : [r])
     }
@@ -4379,13 +4358,13 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     const guideCtx: EvalContext = scope.unsettled || (ctx.abort.cut !== undefined && entriesPending(path.length, ctx.abort.cut.path.length))
       ? { ...childCtx, ...(scope.unsettled ? { rawGuides: true } : {}), pendingEntries: entriesPending(path.length, ctx.abort.cut!.path.length) }
       : childCtx
-    const { groups: guides } = src.noSubflow || order > 0
+    const { groups: guides } = hollow || order > 0
       ? { groups: [] }
       : order === 0 && !whole
         ? buildAxisAndLegend(guideCtx, content, (mark.axes ?? []).slice(0, ctx.abort.cut!.axis), (mark.legends ?? []).slice(0, ctx.abort.cut!.legend ?? 0))
         : buildAxisAndLegend(guideCtx, content, mark.axes ?? [], mark.legends ?? [])
     const siblings: SceneGroup[] = [...content, ...guides]
-    const title = src.noSubflow || order > 0 || (order === 0 && !whole) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !!scope.unsettled, guideCtx, src.datum)
+    const title = hollow || order > 0 || (order === 0 && !whole) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !!scope.unsettled, guideCtx, src.datum)
     if (title) siblings.push(title)
     const ordered = paintOrderOf(siblings)
 
@@ -4420,6 +4399,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     }
     return group
   } finally {
+    restoreScaleFns?.()
     for (const [name, prev] of savedData.reverse()) {
       if (prev !== undefined) ctx.datasets.set(name, prev)
       else ctx.datasets.delete(name)

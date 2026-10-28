@@ -62,7 +62,10 @@ export async function renderWithVegaChecked(vgSpec: Record<string, unknown>): Pr
     try {
       await view.runAsync()
       view.finalize() // the first frame: no timer ticks before the SVG is drawn (see renderWithVega)
-      for (const d of (vgSpec.data as Array<{ name: string }> | undefined) ?? []) datasets[d.name] = JSON.parse(JSON.stringify(view.data(d.name)))
+      for (const d of (vgSpec.data as Array<{ name: string }> | undefined) ?? []) {
+        // (a dataset whose tuples hold themselves -- an argmax over a joinaggregate -- is not plain data: it is left out)
+        try { datasets[d.name] = JSON.parse(JSON.stringify(view.data(d.name) ?? null)) as unknown[] } catch { /* not serializable */ }
+      }
       svg = await view.toSVG()
     } finally {
       view.finalize()
