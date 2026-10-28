@@ -18,5 +18,10 @@
       "vega": 11,
       "vl": 12
     }
+  },
+  "swap": {
+    "pass": 0,
+    "vsOracle": 0,
+    "maxUnverifiable": 999
   }
 }
