@@ -222,6 +222,27 @@ const GROUPS: Record<string, Case[]> = {
     ['a shape scale with its own range, through a selection condition', { data: DATA, params: [{ name: 'pts', select: { type: 'point', fields: ['c'], toggle: false } }], mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { param: 'pts', field: 'g', type: 'nominal' }, value: 'grey' }, shape: { condition: { param: 'pts', field: 'c', type: 'nominal', scale: { range: ['triangle-left', 'triangle-right', 'triangle-up'] } }, value: 'circle' } } }],
     ['a pie ordered by the order channel with a custom angular range', { data: DATA, mark: { type: 'arc', outerRadius: 80 }, encoding: { theta: q('v', { scale: { range: [2.35, 8.63] }, stack: true }), color: n('c'), order: { field: 'x' } } }],
   ],
+  // position-rect.ts rectBinPosition + data/timeunit.ts offsetedRectFormulas + channeldef.ts getBandPosition / getBandSize
+  'bands of time units and bins (bar_month_band, bar_month_temporal_band_center, line_month_center_band, tick_histogram)': [
+    ['a bar with a relative width over a time unit', { data: DATA, mark: { type: 'bar', width: { band: 0.7 } }, encoding: { x: { timeUnit: 'year', field: 't' }, y: q('v', { aggregate: 'sum' }) } }],
+    ['a bar with a relative width through config.bar.timeUnitBandSize', { data: DATA, config: { bar: { timeUnitBandSize: 0.6 } }, mark: 'bar', encoding: { x: { timeUnit: 'year', field: 't' }, y: q('v', { aggregate: 'sum' }) } }],
+    ['a bar at the start of its time unit (bandPosition 0)', { data: DATA, mark: 'bar', encoding: { x: { timeUnit: 'year', field: 't', type: 'temporal', bandPosition: 0 }, y: q('v', { aggregate: 'sum' }) } }],
+    ['a bar a quarter into its time unit', { data: DATA, mark: 'bar', encoding: { x: { timeUnit: 'year', field: 't', type: 'temporal', bandPosition: 0.25 }, y: q('v', { aggregate: 'sum' }) } }],
+    ['a bar with config.bar.timeUnitBandPosition', { data: DATA, config: { bar: { timeUnitBandPosition: 0 } }, mark: 'bar', encoding: { x: { timeUnit: 'year', field: 't' }, y: q('v', { aggregate: 'sum' }) } }],
+    ['a bar with a time unit on y', { data: DATA, mark: 'bar', encoding: { y: { timeUnit: 'year', field: 't', type: 'temporal', bandPosition: 0 }, x: q('v', { aggregate: 'sum' }) } }],
+    ['a rect heatmap over two time units', { data: DATA, mark: 'rect', encoding: { x: { timeUnit: 'year', field: 't', type: 'temporal', bandPosition: 0 }, y: { timeUnit: 'month', field: 't', type: 'temporal', bandPosition: 0 }, color: q('v', { aggregate: 'sum' }) } }],
+    ['a bar with a visual offset on its band ends', { data: DATA, mark: { type: 'bar', xOffset: -2, x2Offset: 2 }, encoding: { x: { timeUnit: 'year', field: 't', type: 'temporal' }, y: q('v', { aggregate: 'sum' }) } }],
+    ['a line at the middle of its time unit', { data: DATA, mark: 'line', encoding: { x: { timeUnit: 'year', field: 't', type: 'temporal', bandPosition: 0.5 }, y: q('v', { aggregate: 'sum' }) } }],
+    ['points at the end of their time unit', { data: DATA, mark: 'point', encoding: { x: { timeUnit: 'year', field: 't', type: 'temporal', bandPosition: 1 }, y: q('v', { aggregate: 'sum' }) } }],
+    ['a line with no band position has no band end', { data: DATA, mark: 'line', encoding: { x: { timeUnit: 'year', field: 't', type: 'temporal' }, y: q('v', { aggregate: 'sum' }) } }],
+    ['ticks over a time unit', { data: DATA, mark: 'tick', encoding: { x: { timeUnit: 'year', field: 't', type: 'temporal' }, y: q('v', { aggregate: 'sum' }) } }],
+    ['ticks over a bin', { data: DATA, mark: 'tick', encoding: { x: q('x', { bin: true }), y: { aggregate: 'count' } } }],
+    ['a reversed histogram', { data: DATA, mark: 'bar', encoding: { x: q('x', { bin: true, scale: { reverse: true } }), y: { aggregate: 'count' } } }],
+    ['a histogram sorted descending, without bin spacing', { data: DATA, config: { bar: { binSpacing: 0 } }, mark: 'bar', encoding: { x: q('x', { bin: true, sort: 'descending' }), y: { aggregate: 'count' } } }],
+    ['a histogram with an axis translate', { data: DATA, mark: 'bar', encoding: { x: q('x', { bin: true, axis: { translate: 0 } }), y: { aggregate: 'count' } } }],
+    ['a time unit on the colour with a band end', { data: DATA, config: { bar: { timeUnitBandPosition: 0 } }, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), color: { timeUnit: 'year', field: 't', type: 'temporal' } } }],
+    ['a rect between two time-unit values', { data: { values: [{ a: 'May 1, 2010', b: 'July 15, 2010' }] }, mark: 'rect', encoding: { x: { timeUnit: 'month', field: 'a', type: 'temporal' }, x2: { timeUnit: 'month', field: 'b' } } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({

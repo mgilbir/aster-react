@@ -732,7 +732,8 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       const d = sc.domain as { data?: string; field?: string; fields?: unknown } | undefined
       if (d && typeof d === 'object' && !Array.isArray(d) && typeof d.data === 'string') {
         const fieldList = Array.isArray(d.fields) ? [...d.fields as string[]] : [d.field as string]
-        if (!fieldList.includes(d2.field)) fieldList.push(d2.field as string)
+        // (the secondary channel's own field - its aggregate / time unit applied)
+        if (!fieldList.includes(aggFieldName(d2))) fieldList.push(aggFieldName(d2))
         sc.domain = { data: d.data, fields: fieldList }
       }
     }
@@ -3425,6 +3426,11 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     if (tuSeen.has(as)) continue
     tuSeen.add(as)
     pipeline.push(timeUnitTransform(f.tu!, f.field, as))
+    // timeunit.ts offsetedRectFormulas: a rect-based mark's time unit that is not at the middle of its band (bandPosition)
+    // reads start / end positions interpolated between the unit and the unit before it
+    const hasSecondary = fields.some((g) => g.channel === `${f.channel}2`)
+    const bp = (f.channel === 'x' || f.channel === 'y') && RECT_BASED_MARKS.has(mark) ? bandPositionOf(spec, mark, f, hasSecondary) : undefined
+    if (bp !== undefined && bp !== 0.5) pushAll(pipeline, offsettedRectFormulas(as, bp, f.tu!))
   }
 
   // arc marks: theta stacking (pie layout). vega-lite stacks the theta
@@ -3572,7 +3578,13 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
         // over a quantitative y groups by y)
         groupby.push(aggFieldName(f))
         // a time-unit band on a rect-based mark also spans to its end (vega-lite hasBandEnd)
-        if (f.tu && f.type === 'temporal' && (mark === 'bar' || mark === 'rect') && !fields.some((g) => g.channel === `${f.channel}2`)) groupby.push(`${aggFieldName(f)}_end`)
+        // (aggregate.ts addDimension: the end of the band when it has one, and the offsetted rect fields off its middle)
+        const hasSecondary = fields.some((g) => g.channel === `${f.channel}2`)
+        const bp = f.tu && f.type === 'temporal' ? bandPositionOf(spec, mark, f, hasSecondary) : undefined
+        if (f.tu && f.type === 'temporal' && bp !== undefined) {
+          groupby.push(`${aggFieldName(f)}_end`)
+          if (RECT_BASED_MARKS.has(mark) && bp !== 0.5 && (f.channel === 'x' || f.channel === 'y')) groupby.push(`${aggFieldName(f)}_offsetted_rect_start`, `${aggFieldName(f)}_offsetted_rect_end`)
+        }
       }
     }
     if (hasCount) fieldsOut.push({ op: 'count', as: '__count', field: null })
@@ -3797,7 +3809,7 @@ function positionalScaleType(mark: string, def: FieldDef): string {
 
 function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: string, dataName: string, wReq: SizeReq, hReq: SizeReq, series: FieldDef[] = [], rawName: string = dataName): ScaleSpec[] {
   const scales: ScaleSpec[] = []
-  const dc: DomainCtx = { rawName, fields, mark, orient, series, cfg: scaleConfigOf(spec) }
+  const dc: DomainCtx = { rawName, fields, mark, orient, series, cfg: scaleConfigOf(spec), specConfig: spec.config }
   const userScaleCfg = isObject(spec.config) && isObject((spec.config as Record<string, unknown>).scale)
     ? (spec.config as Record<string, unknown>).scale as Record<string, unknown>
     : undefined
@@ -4106,7 +4118,12 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       scales.push({
         name: 'color',
         type: colorScaleType,
-        domain: explicitDomainOf(colorDef) !== undefined ? explicitDomainValue(explicitDomainOf(colorDef), colorDef) : { data: dataName, field: aggFieldName(colorDef) },
+        domain: explicitDomainOf(colorDef) !== undefined
+          ? explicitDomainValue(explicitDomainOf(colorDef), colorDef)
+          // domain.ts: a time unit with a band end spans start..end
+          : colorDef.tu && colorDef.type === 'temporal' && ['time', 'utc'].includes(colorScaleType) && bandPositionOf(spec, mark, colorDef, false) !== undefined
+            ? { data: dataName, fields: [timeUnitField(colorDef), `${timeUnitField(colorDef)}_end`] }
+            : { data: dataName, field: aggFieldName(colorDef) },
         // vega-lite's quantitative color range: 'heatmap' scheme for
         // rect/geoshape marks, a ramp otherwise; a domainMid makes it
         // diverging; an explicit scheme replaces the range (probed)
@@ -4222,8 +4239,14 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
     const sig = binNames(def.binParams!, def.field).signal
     return { signal: `[${sig}.start, ${sig}.stop]` }
   }
-  if (def.timeUnit && (mark === 'bar' || mark === 'rect') && !isDiscreteType(def.type)) {
-    return { data: dataName, fields: [timeUnitField(def), `${timeUnitField(def)}_end`] }
+  if (def.timeUnit && !isDiscreteType(def.type) && def.type === 'temporal' && ['time', 'utc'].includes(positionalScaleType(mark, def))) {
+    // domain.ts: a time unit with a band end spans start..end (the offsetted rect fields off the middle of a rect's band)
+    const hasSecondary = (fields ?? []).some((g) => g.channel === `${def.channel}2`)
+    const bp = bandPositionOf({ config: dc.specConfig } as VLSpec, mark, def, hasSecondary)
+    if (bp !== undefined) {
+      const offsetted = RECT_BASED_MARKS.has(mark) && bp !== 0.5 && (def.channel === 'x' || def.channel === 'y')
+      return { data: dataName, fields: [timeUnitField(def) + (offsetted ? '_offsetted_rect_start' : ''), timeUnitField(def) + (offsetted ? '_offsetted_rect_end' : '_end')] }
+    }
   }
   // a stack property on a discrete channel is inert (vega-lite ignores it)
   if (def.stack === 'normalize' && def.type === 'quantitative' && !def.bin) return [0, 1]
@@ -4306,6 +4329,8 @@ function isStacked(def: FieldDef, mark: string, orient: string, allFields?: Fiel
 
 /** What a discrete scale domain needs to resolve a sort definition. */
 interface DomainCtx {
+  /** the spec's config (band positions read the mark config) */
+  specConfig?: unknown
   /** the raw (pre-aggregate) dataset sort-by-field/array domains read */
   rawName: string
   fields: FieldDef[]
@@ -5034,7 +5059,6 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       update[`cornerRadius${b}`] = { value: cornerRadiusEnd }
     }
     if (mark === 'bar') update.ariaRoleDescription = { value: 'bar' }
-    const binSp = binGeometry(spec, mark)
     const stacked = yDef && isStacked(yDef, mark, orient, fields)
     if (orient === 'vertical') {
       if (xDef) {
@@ -5053,10 +5077,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
           update.width = { value: (cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize }
         } else if (xDef.timeUnit && sc !== 'band') {
-          setBinnedRect(update, 'x', timeUnitField(xDef), `${timeUnitField(xDef)}_end`, binSp.spacing, binSp.minBandSize)
+          setBinnedRect(update, 'x', xDef, spec, mark)
         } else if (xDef.bin) {
           const bn = binNames(xDef.binParams!, xDef.field)
-          setBinnedRect(update, 'x', bn.start, bn.end, binSp.spacing, binSp.minBandSize)
+          setBinnedRect(update, 'x', xDef, spec, mark)
         } else if (sc === 'band') {
           // BarConfig band alignment/size (probed): align 'right' anchors
           // the bar with x2 at the band position; a size/discreteBandSize
@@ -5114,8 +5138,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           // a rect's second dimension may be binned too (2d heatmaps)
           if (yDef.bin) {
             const bn = binNames(yDef.binParams!, yDef.field)
-            setBinnedRect(update, 'y', bn.start, bn.end, binSp.spacing, binSp.minBandSize)
-          } else setBinnedRect(update, 'y', timeUnitField(yDef), `${timeUnitField(yDef)}_end`, binSp.spacing, binSp.minBandSize)
+            setBinnedRect(update, 'y', yDef, spec, mark)
+          } else setBinnedRect(update, 'y', yDef, spec, mark)
         } else if (stacked) {
           update.y = { scale: 'y', field: `${aggFieldName(yDef)}_end` }
           update.y2 = { scale: 'y', field: `${aggFieldName(yDef)}_start` }
@@ -5161,10 +5185,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
           update.height = { value: (cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize }
         } else if (yDef.timeUnit && sc !== 'band') {
-          setBinnedRect(update, 'y', timeUnitField(yDef), `${timeUnitField(yDef)}_end`, binSp.spacing, binSp.minBandSize)
+          setBinnedRect(update, 'y', yDef, spec, mark)
         } else if (yDef.bin) {
           const bn = binNames(yDef.binParams!, yDef.field)
-          setBinnedRect(update, 'y', bn.start, bn.end, binSp.spacing, binSp.minBandSize)
+          setBinnedRect(update, 'y', yDef, spec, mark)
         } else if (sc === 'band') {
           const yAlignH = (markDef?.baseline ?? cfgType?.baseline ?? cfgMark?.baseline) as string | undefined
           const hExplicitSize = (((mark === 'bar' ? markDef?.size : undefined)
@@ -5211,8 +5235,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         } else if (mark === 'rect' && (xDef.bin || (xDef.timeUnit && positionalScaleType(mark, xDef) !== 'band'))) {
           if (xDef.bin) {
             const bn = binNames(xDef.binParams!, xDef.field)
-            setBinnedRect(update, 'x', bn.start, bn.end, binSp.spacing, binSp.minBandSize)
-          } else setBinnedRect(update, 'x', timeUnitField(xDef), `${timeUnitField(xDef)}_end`, binSp.spacing, binSp.minBandSize)
+            setBinnedRect(update, 'x', xDef, spec, mark)
+          } else setBinnedRect(update, 'x', xDef, spec, mark)
         } else if (stackedX) {
           update.x = { scale: 'x', field: `${aggFieldName(xDef)}_end` }
           update.x2 = { scale: 'x', field: `${aggFieldName(xDef)}_start` }
@@ -5411,7 +5435,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
     if (sizeField) {
       const isBand = positionalScaleType(mark, sizeField) === 'band'
-      if (sizeDef) {
+      // position-rect.ts rectPosition: a binned / time-unit size axis spans its bin (tick.ts calls rectPosition for it)
+      const binnedSizeAxis = !isBand && !sizeDef && sizeRaw === undefined && (sizeField.bin || (sizeField.tu && sizeField.type === 'temporal'))
+        && !fields.some((f) => f.channel === `${sizeAxis}2` || f.channel === `${sizeAxis}Offset`)
+      if (binnedSizeAxis) {
+        setBinnedRect(update, sizeAxis, sizeField, spec, mark)
+      } else if (sizeDef) {
         update[`${sizeAxis}c`] = { scale: sizeAxis, field: aggFieldName(sizeField), ...(isBand ? { band: 0.5 } : {}) }
         update[sizeVg] = { scale: 'size', field: aggFieldName(sizeDef) }
       } else if (sizeRaw !== undefined) {
@@ -5772,26 +5801,33 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
   }
   // a binned field on a point-positioned mark sits at the middle of its bin (valueref.ts midPoint / interpolatedSignalRef:
-  // bandPosition 0.5 over a continuous scale), not at the bin start; so does a binned size / opacity / ... through its scale
+  // bandPosition 0.5 over a continuous scale), not at the bin start; so does a binned size / opacity / ... through its scale,
+  // and a time unit with a band position (the field's own, or the mark config's timeUnitBandPosition) sits at that point of its unit
   if (BIN_MID_MARKS.has(mark)) {
-    const midpoint = (node: unknown, scaleName: string, start: string, end: string): unknown => {
-      if (Array.isArray(node)) return node.map((x) => midpoint(x, scaleName, start, end))
+    const midpoint = (node: unknown, scaleName: string, start: string, end: string, bp: number): unknown => {
+      if (Array.isArray(node)) return node.map((x) => midpoint(x, scaleName, start, end, bp))
       if (!isObject(node) || node.scale !== scaleName || node.field !== start) return node
       return {
-        signal: `scale(${JSON.stringify(scaleName)}, 0.5 * datum[${JSON.stringify(start)}] + 0.5 * datum[${JSON.stringify(end)}])`,
+        ...(bp === 1
+          ? { scale: scaleName, field: end }
+          : { signal: `scale(${JSON.stringify(scaleName)}, ${1 - bp} * datum[${JSON.stringify(start)}] + ${bp} * datum[${JSON.stringify(end)}])` }),
         ...(node.offset !== undefined ? { offset: node.offset } : {}),
       }
     }
     for (const def of fields) {
-      if (!def.field || !def.bin || def.datumOnly || def.channel === 'row' || def.channel === 'column' || def.channel === 'facet') continue
+      if (!def.field || def.datumOnly || def.channel === 'row' || def.channel === 'column' || def.channel === 'facet') continue
+      const timeBand = def.tu && def.type === 'temporal' && (def.channel === 'x' || def.channel === 'y')
+      if (!def.bin && !timeBand) continue
+      const bp = def.bin ? (def.bandPosition ?? 0.5) : bandPositionOf(spec, mark, def, fields.some((g) => g.channel === `${def.channel}2`))
+      if (!bp) continue
       const scaleName = def.channel
       const discrete = def.channel === 'x' || def.channel === 'y'
         ? ['band', 'point'].includes(positionalScaleType(mark, def))
         : def.channel === 'color' ? (def.scale?.type === undefined || def.scale.type === 'bin-ordinal') && def.type === 'quantitative'
           : isDiscreteType(def.type) || def.channel === 'shape' || def.channel === 'strokeDash'
       if (discrete) continue
-      const bn = binNames(def.binParams!, def.field)
-      for (const key of Object.keys(update)) update[key] = midpoint(update[key], scaleName, bn.start, bn.end)
+      const names = def.bin ? binNames(def.binParams!, def.field) : { start: timeUnitField(def), end: `${timeUnitField(def)}_end` }
+      for (const key of Object.keys(update)) update[key] = midpoint(update[key], scaleName, names.start, names.end, bp)
     }
   }
   // arc polar offsets apply to the angles/radius channels
@@ -5962,26 +5998,113 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   return out
 }
 
+
+/** timeunit.ts offsetedRectFormulas (and offsetExpr): the start and end positions of a rect off the middle of its time-unit band. */
+function offsettedRectFormulas(startField: string, rectBandPosition: number, tu: NormalTimeUnit): Record<string, unknown>[] {
+  const endField = `${startField}_end`
+  const start = `datum[${JSON.stringify(startField).replace(/"/g, "'")}]`
+  const end = `datum[${JSON.stringify(endField).replace(/"/g, "'")}]`
+  const parts = getTimeUnitParts(tu.unit)
+  const smallest = parts[parts.length - 1]!
+  // getDateTimePartAndStep: quarter is three months, a week is one 'week' part
+  const step = tu.step ?? 1
+  const { part, mult } = smallest === 'quarter' ? { part: 'month', mult: 3 } : smallest === 'dayofyear' ? { part: 'date', mult: 1 } : { part: smallest, mult: 1 }
+  const offset = `${tu.utc ? 'utcOffset' : 'timeOffset'}('${part}', ${start}, ${-step * mult})`
+  const interpolate = (a: string, b: string, fraction: number): string => `${1 - fraction} * ${a} + ${fraction} * ${b}`
+  return [
+    { type: 'formula', expr: interpolate(offset, start, rectBandPosition + 0.5), as: `${startField}_offsetted_rect_start` },
+    { type: 'formula', expr: interpolate(start, end, rectBandPosition + 0.5), as: `${startField}_offsetted_rect_end` },
+  ]
+}
+
+/** vega-lite `getMarkConfig(prop, mark, config)`: config.<mark>.<prop> over config.mark.<prop>. */
+function markConfigProp(spec: VLSpec, mark: string, prop: string): unknown {
+  const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+  const ofType = isObject(cfg[mark]) ? (cfg[mark] as Record<string, unknown>)[prop] : undefined
+  return ofType ?? (isObject(cfg.mark) ? (cfg.mark as Record<string, unknown>)[prop] : undefined)
+}
+
+const RECT_BASED_MARKS = new Set(['rect', 'bar', 'image', 'arc', 'tick'])
+
+/**
+ * vega-lite `getBandPosition`: where in its band a time-unit / binned value sits. The field's own `bandPosition`, else
+ * (time unit with no secondary channel) the mark config's `timeUnitBandPosition` - 0.5 on rect, bar and tick -, else 0.5 for a
+ * binned field.
+ */
+function bandPositionOf(spec: VLSpec, mark: string, def: FieldDef, hasSecondary: boolean): number | undefined {
+  if (def.bandPosition !== undefined) return def.bandPosition
+  if (def.tu && !hasSecondary) {
+    const configured = markConfigProp(spec, mark, 'timeUnitBandPosition')
+    if (typeof configured === 'number') return configured
+    return mark === 'bar' || mark === 'rect' || mark === 'tick' ? 0.5 : undefined
+  }
+  if (def.bin) return 0.5
+  return undefined
+}
+
+/** The names of the start / end fields of a time-unit or binned def; a rect off the band middle reads the offsetted ones. */
+function rectBandFields(def: FieldDef, useRectOffsetField: boolean): { start: string; end: string } {
+  if (def.bin) {
+    const bn = binNames(def.binParams!, def.field)
+    return { start: bn.start, end: bn.end }
+  }
+  const start = timeUnitField(def)
+  return useRectOffsetField ? { start: `${start}_offsetted_rect_start`, end: `${start}_offsetted_rect_end` } : { start, end: `${start}_end` }
+}
+
 /**
  * A binned / time-unit-binned rect position: the end value on the main channel and
  * the start on the secondary, each nudged by the axis translate (0.5) plus half the
  * bin spacing (or, when the bin is thinner than minBandSize, half the shortfall) -
  * vega-lite `getBinSpacing`. `x` and `y2` are the "end" channels.
  */
-function setBinnedRect(update: Record<string, unknown>, ch: 'x' | 'y', startField: string, endField: string, spacing: number, minBandSize: number): void {
-  const e = JSON.stringify(endField)
-  const st = JSON.stringify(startField)
-  const band = `abs(scale("${ch}", datum[${e}]) - scale("${ch}", datum[${st}]))`
-  const offsetFor = (isEnd: boolean): { signal: string } => {
+function setBinnedRect(update: Record<string, unknown>, ch: 'x' | 'y', def: FieldDef, spec: VLSpec, mark: string, hasSecondary = false): void {
+  const geometry = binGeometry(spec, mark)
+  const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+  const sizeProp = ch === 'x' ? 'width' : 'height'
+  // channeldef.ts getBandSize: the mark's own relative band, else the time unit's (config.timeUnitBandSize, 1) or the whole bin
+  const markSize = md[sizeProp] ?? (isObject((spec.config as Record<string, unknown> | undefined)?.[mark]) ? ((spec.config as Record<string, Record<string, unknown>>)[mark]!)[sizeProp] : undefined)
+  const sizeBand = isObject(markSize) && typeof markSize.band === 'number'
+    ? markSize.band
+    : def.tu && !hasSecondary ? (typeof markConfigProp(spec, mark, 'timeUnitBandSize') === 'number' ? (markConfigProp(spec, mark, 'timeUnitBandSize') as number) : 1) : 1
+  const bandPositionForBandSize = (1 - sizeBand) / 2
+  const bandPosition = bandPositionOf(spec, mark, def, hasSecondary)
+  const useRectOffsetField = def.tu !== undefined && bandPosition !== 0.5
+  const { start, end } = rectBandFields(def, useRectOffsetField)
+  // the size of the band is read from the plain start / end of the value, whatever the position fields are
+  const plain = rectBandFields(def, false)
+  const band = `abs(scale("${ch}", datum[${JSON.stringify(plain.end)}]) - scale("${ch}", datum[${JSON.stringify(plain.start)}]))`
+  const minBandSize = geometry.minBandSize
+  // position-rect.ts getBinSpacing: the axis translate, the scale's reverse, the mark's visual offset and the spacing
+  const axisObj = isObject(def.axis) ? def.axis : undefined
+  const translate = axisObj?.translate ?? 0.5
+  const translateExpr = isObject(translate) && typeof translate.signal === 'string' ? translate.signal : String(translate)
+  const cfgScale = isObject((spec.config as Record<string, unknown> | undefined)?.scale) ? ((spec.config as Record<string, Record<string, unknown>>).scale as Record<string, unknown>) : {}
+  let reverse: unknown = def.scale?.reverse
+  if (reverse === undefined && def.sort === 'descending' && !isDiscreteType(def.type)) reverse = true
+  if (reverse === undefined && ch === 'x' && cfgScale.xReverse !== undefined) reverse = cfgScale.xReverse
+  const reverseExpr = isObject(reverse) && typeof reverse.signal === 'string' ? reverse.signal : reverse ? String(reverse) : ''
+  const offsetOf = (k: string): unknown => md[k]
+  const exprOf = (v: unknown): string => (isObject(v) && typeof v.signal === 'string' ? v.signal : isObject(v) && typeof v.expr === 'string' ? v.expr : v ? JSON.stringify(v) : '')
+  const offsetFor = (isEnd: boolean, offset: unknown): { signal: string } => {
     const sign = isEnd ? '' : '-'
-    const spacingOffset = (isEnd ? -spacing / 2 : spacing / 2) + 0 // + 0: never "-0"
-    return { signal: `0.5 + (${band} < ${minBandSize} ? ${sign}0.5 * (${minBandSize} - (${band})) : ${spacingOffset})` }
+    const spacingOffset = (isEnd ? -geometry.spacing / 2 : geometry.spacing / 2) + 0 // + 0: never "-0"
+    const sizeOffset = `(${band} < ${minBandSize} ? ${sign}0.5 * (${minBandSize} - (${band})) : ${spacingOffset})`
+    const offsetExpr = exprOf(offset)
+    const r = reverseExpr ? `(${reverseExpr} ? -1 : 1) * ` : ''
+    const o = offsetExpr ? `(${offsetExpr} + ${sizeOffset})` : sizeOffset
+    return { signal: `${translateExpr} + ${r}${o}` }
   }
-  update[ch] = { scale: ch, field: endField, offset: offsetFor(ch === 'x') }
-  update[`${ch}2`] = { scale: ch, field: startField, offset: offsetFor(ch === 'y') }
+  // interpolatedSignalRef: the start (position 0), the end (1) or a point between them
+  const interpolated = (bp: number, offset: { signal: string }): Record<string, unknown> => {
+    if (bp === 0 || bp === 1) return { scale: ch, field: bp === 0 ? start : end, offset }
+    return { signal: `scale("${ch}", ${1 - bp} * datum[${JSON.stringify(start)}] + ${bp} * datum[${JSON.stringify(end)}])`, offset }
+  }
+  const offset1 = offsetOf(`${ch}Offset`)
+  const offset2 = offsetOf(`${ch}2Offset`) ?? offset1
+  update[ch] = interpolated(1 - bandPositionForBandSize, offsetFor(ch === 'x', offset1))
+  update[`${ch}2`] = interpolated(bandPositionForBandSize, offsetFor(ch === 'y', offset2))
 }
-
-/** bin spacing / minimum bar width of a rect-based mark (bar: 1 / 0.25; other marks: 0 / 0.25). */
 function binGeometry(spec: VLSpec, mark: string): { spacing: number; minBandSize: number } {
   const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
   const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
