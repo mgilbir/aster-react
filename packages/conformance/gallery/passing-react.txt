@@ -7,10 +7,12 @@ vega/beeswarm-plot
 vega/binned-scatter-plot
 vega/box-plot
 vega/brushing-scatter-plots
+vega/budget-forecasts
 vega/calendar-view
 vega/circle-packing
 vega/connected-scatter-plot
 vega/county-unemployment
+vega/crossfilter-flights
 vega/distortion-comparison
 vega/donut-chart
 vega/dorling-cartogram
@@ -39,6 +41,7 @@ vega/population-pyramid
 vega/probability-density
 vega/quantile-dot-plot
 vega/quantile-quantile-plot
+vega/radar-chart
 vega/radial-plot
 vega/radial-tree-layout
 vega/regression
@@ -64,7 +67,6 @@ vega/wheat-and-wages
 vega/wheat-plot
 vega/wind-vectors
 vega/zoomable-binned-plot
-vega/zoomable-circle-packing
 vega/zoomable-scatter-plot
 vega/zoomable-world-map
 vl/airport_connections

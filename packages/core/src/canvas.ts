@@ -144,7 +144,7 @@ export function renderSceneToCanvas(scene: SceneRoot, ctx: CanvasLike, opts: Ren
     ctx.fillStyle = scene.background
     ctx.fillRect(0, 0, W, H)
   }
-  ctx.translate(pad.left, pad.top)
+  ctx.translate(pad.left + (scene.frameX ?? 0), pad.top + (scene.frameY ?? 0))
 
   // Root frame background path: fill, stroke, dash, opacity and rounded
   // corners, from the same path the SVG renderer emits.

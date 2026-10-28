@@ -128,6 +128,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     frameStrokeDashOffset,
     frameStrokeCap,
     frameStrokeJoin,
+    ...(spec.encode !== undefined ? { frameEncode: { ...((spec.encode as { enter?: object }).enter ?? {}), ...((spec.encode as { update?: object }).update ?? {}) } as NonNullable<CompiledChart['frameEncode']> } : {}),
     data,
     scales,
     axes,

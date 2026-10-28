@@ -179,6 +179,10 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
         return out
       })
     }
+    case 'crossfilter':
+      return requireTransform('crossfilter')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'resolvefilter':
+      return requireTransform('resolvefilter')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'kde':
       return requireTransform('kde')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'pie':

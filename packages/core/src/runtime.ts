@@ -1368,6 +1368,23 @@ function computeGuidePadding(
 }
 
 
+/**
+ * The view's own `encode` (vega-parser parseView: the root group mark's encode): `x` / `y` place the root group inside the padding,
+ * the paint channels paint its box over what `config.view` gave it.
+ */
+function frameEncodeOf(ctx: EvalContext): FrameEncode | undefined {
+  const geo = resolveEncodeSet(ctx.chart.frameEncode!, {}, ctx, 'group') as unknown as Record<string, unknown>
+  const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+  const paint: Record<string, unknown> = {}
+  const PAINT: Array<[string, string]> = [
+    ['fill', 'frameFill'], ['stroke', 'frameStroke'], ['strokeWidth', 'frameStrokeWidth'], ['fillOpacity', 'frameFillOpacity'], ['opacity', 'frameOpacity'],
+    ['strokeDash', 'frameStrokeDash'], ['strokeOpacity', 'frameStrokeOpacity'], ['strokeMiterLimit', 'frameStrokeMiterLimit'],
+    ['strokeDashOffset', 'frameStrokeDashOffset'], ['strokeCap', 'frameStrokeCap'], ['strokeJoin', 'frameStrokeJoin'], ['cornerRadius', 'frameCornerRadius'], ['clip', 'frameClip'],
+  ]
+  for (const [from, to] of PAINT) if (geo[from] !== undefined) paint[to] = geo[from]
+  return { x: num(geo.x) ?? 0, y: num(geo.y) ?? 0, paint: paint as Partial<SceneRoot> }
+}
+
 /** Walk every string reachable in a JSON-ish value (cycle-safe). */
 function walkStrings(
   v: unknown,
@@ -1665,7 +1682,10 @@ function paintOrderOf(items: SceneGroup[]): SceneGroup[] {
  * autosize padding at a given content size. Extracted from evaluateChart so
  * `fit`/`fit-x`/`fit-y` can re-run at a shrinking content size and converge.
  */
-type BuiltContent = { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean }
+type BuiltContent = { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean; frame: FrameEncode | undefined }
+
+/** What the view's own `encode` gives the root group: where it sits, and the paint of its box (see frameEncodeOf). */
+interface FrameEncode { x: number; y: number; paint: Partial<SceneRoot> }
 
 /**
  * The content of the view. A failing axis (axisTicksFailed) aborts vega's dataflow pass at the operator that failed: the
@@ -1696,7 +1716,7 @@ function buildContentPass(
   fitted = false,
   signed?: { width?: number; height?: number },
   cut?: AxisAbort['cut'],
-): { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean } {
+): BuiltContent {
   const prepared = prepareChartCtx(
     // (the first build reads the size from the spec and the host's input itself; only a fit-resize overrides it)
     chart, fitted ? { ...input, width: cw, height: ch } : input, txn,
@@ -1763,6 +1783,9 @@ function buildContentPass(
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
 
+  // (the view's bounds are those of the root's content relative to its origin: where the root sits does not move them)
+  const frame = ctx.chart.frameEncode !== undefined && !ctx.datasetAborted ? frameEncodeOf(ctx) : undefined
+
   // 2d) viewSizeLayout padding (overflow) after the trellis layout.
   // A trellis layout that throws (vega's gridLayout does on e.g. fractional
   // `columns`) aborts vega's whole ViewLayout transform: the scene renders
@@ -1781,7 +1804,7 @@ function buildContentPass(
     ? ctx.chart.padding
     : computeGuidePadding(items, width, height, ctx.chart.padding)
   const ordered = paintOrderOf(items)
-  return { items: ordered, padding, ctx, width, height, hasLayout }
+  return { items: ordered, padding, ctx, width, height, hasLayout, frame }
 }
 
 /**
@@ -1924,6 +1947,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
     frameStrokeJoin: ctx.chart.frameStrokeJoin,
     padding: ctx.chart.autosize === 'none' ? ctx.chart.padding : padding,
     items,
+    ...(built.frame ? { ...built.frame.paint, ...(built.frame.x !== 0 ? { frameX: built.frame.x } : {}), ...(built.frame.y !== 0 ? { frameY: built.frame.y } : {}) } : {}),
   }
   // Event-loop wiring (non-serialized internals)
   ;(scene as unknown as { runtime?: unknown }).runtime = ctx.runtime
@@ -4124,6 +4148,8 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] {
   // one group item (and one scope) per datum / facet partition: bounded like any generated item (maxItems, the clock)
   meterItems(sources.length, 'group items')
   const groups = sources.map((src) => { meterTick('group item'); return buildGroupItem(mark, ctx, src) })
+  // a group mark with no items is still a container in the scenegraph (vega-scenegraph draws every mark's `<g>`)
+  if (!groups.length) return [{ marktype: 'group', role: (mark.role as string | undefined) ?? 'scope', name: mark.name, items: [], emptyMark: true, markIndex: markIdOf(mark), ...markContainerInfo(mark), ...(markClip(mark, ctx) ? { markClip: true } : {}) } as unknown as SceneGroup]
   // SortItems: the group items are ordered by their own properties (`datum["g"]`, `x`, ...)
   if (mark.sort && groups.length > 1) {
     try { return sortMarkItems(groups as SceneItem[], mark.sort) as SceneGroup[] } catch (e) {
