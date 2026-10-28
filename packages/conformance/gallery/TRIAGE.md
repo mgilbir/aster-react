@@ -16,6 +16,28 @@ text. Still open on the runtime side: a root `encode` with `x` / `y` (`vega/rada
 `crossfilter` transform, facet cell layout, the timer-driven `vega/donut-chart-labelled` on the React path, and the React-path-only
 differences (a `data-datum` attribute on every item of a chart with event streams, among them `vega/force-directed-layout`).
 
+## Update: runtime fixes (branch fix/gallery-runtime-2)
+
+Gate after: static Vega 80 / 93, Vega-Lite 476 / 627; react Vega 76 (77 when `vega/zoomable-circle-packing` is not over its 10 s load
+limit on a busy machine), Vega-Lite 474. Closed: a throw's rank (and `datasetsOfScene` to see it), a throwing top-level signal, the
+view's `encode`, an empty group mark's container, `crossfilter` / `resolvefilter`, the `padding` and `background` view signals, a
+timeunit's signal, group facets over `from.data`, facet `cross` cells, nested field references, scale-reading transforms, the legend
+layout config, autosize `fit` measured once, symbol / arc bounds, scale `bins` ticks, time multi-format, canvas gradient boxes and path
+arcs. Still open on the runtime side, with the reason:
+
+* `vega/flight-passengers`: vega's DataJoin keeps the axis items of the first pass and appends the ones the second pass adds (a `fit`
+  chart whose ticks change with the width): same records, different order.
+* `vega/histogram-null-values`: the scale's `bins` survive into vega's second pass (a url dataset needs two), which then leaves out
+  the zero of the domain; one pass here includes it.
+* `vega/labeled-scatter-plot` (label) and `vega/word-cloud` (wordcloud): both need vega's canvas bitmaps; the word cloud is also random
+  by design (`Math.random` in vega-wordcloud), so it can never be verified. The `label` port has no bitmap collision (not done).
+* `vega/platformer`: a timer-driven game whose signals depend on each other through `frame`.
+* `vega/projections`: the oracle itself fails (the extended d3-geo-projection names are not registered in vega); Aster draws them.
+* `vl/scatter_image`: by design (vega resolves the href against the loader baseURL).
+* `vl/geo_choropleth`, `vl/geo_repeat`: vega keeps items of its first pass (never encoded, no `d`) that the filtered dataset no longer has.
+* the three `error` specs that are `lookup` of a selection store (`vl/interactive_airport_crossfilter`, `vl/point_scale_range_field`,
+  `vl/trellis_selections`), and the rest of `vl/` that fail, are in the compiler (`@aster/vl`): the Vega they emit differs.
+
 ## Numbers
 
 | path | grammar | pass | fail | error | unverifiable | total |
