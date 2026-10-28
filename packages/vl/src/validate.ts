@@ -1386,7 +1386,7 @@ function validateTransform(kind: string, t: Obj, a: string): void {
       needStr('regression')
       needStr('on')
       if (t.method !== undefined && !['linear', 'log', 'exp', 'pow', 'quad', 'poly'].includes(t.method as string)) fail(`${a}.method`, `unknown regression method ${JSON.stringify(t.method)}`)
-      if (t.params === true) fail(`${a}.params`, 'regression `params: true` is not supported')
+      if (t.params !== undefined && typeof t.params !== 'boolean') mustBe(`${a}.params`, 'a boolean')
       asNames('as', 2)
       break
     case 'quantile':

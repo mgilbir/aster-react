@@ -398,7 +398,8 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
     for (const [k, v] of Object.entries(rest)) rt[k] = copyArr(v)
     rt.as = as
     out.push(rt)
-    derived(as)
+    // (params: true replaces the fitted points by one row of the model: its coefficients and R squared)
+    derived(t.params === true ? ['coef', 'rSquared'] : as)
   } else if (t.quantile !== undefined) {
     const as = asPair(t.as, 'prob', 'value')
     const { quantile, as: _as, ...rest } = t

@@ -595,6 +595,13 @@ const GROUPS: Record<string, Case[]> = {
     ['argmax next to another measure', { data: DATA, transform: [{ aggregate: [{ op: 'argmax', field: 'v', as: 'top' }, { op: 'sum', field: 'v', as: 'total' }], groupby: ['c'] }], mark: 'point', encoding: { x: { field: "top['x']", type: 'quantitative' }, y: q('total'), color: n('c') } }],
     ['argmax in a joinaggregate', { data: DATA, transform: [{ joinaggregate: [{ op: 'argmax', field: 'v', as: 'top' }], groupby: ['c'] }, { calculate: "datum.top.x", as: 'topx' }], mark: 'point', encoding: { x: q('x'), y: q('topx'), color: n('c') } }],
   ],
+  // transform.ts RegressionTransform params: true: one row with the model's coefficients and R squared (layer_point_line_regression)
+  'regression parameters (layer_point_line_regression)': [
+    ['the R squared of a linear fit as a label', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: { type: 'line', color: 'firebrick' }, transform: [{ regression: 'y', on: 'x' }], encoding: { x: q('x'), y: q('y') } }, { transform: [{ regression: 'y', on: 'x', params: true }, { calculate: "'R2: ' + format(datum.rSquared, '.2f')", as: 'R2' }], mark: { type: 'text', color: 'firebrick', x: 'width', align: 'right', y: -5 }, encoding: { text: { type: 'nominal', field: 'R2' } } }] }],
+    ['a quadratic fit parameters', { data: DATA, transform: [{ regression: 'y', on: 'x', method: 'quad', params: true }, { calculate: 'datum.coef[0]', as: 'c0' }], mark: 'text', encoding: { text: q('c0') } }],
+    ['a grouped fit parameters', { data: DATA, transform: [{ regression: 'y', on: 'x', groupby: ['g'], params: true }, { calculate: 'datum.rSquared', as: 'r2' }], mark: 'bar', encoding: { x: n('g'), y: q('r2') } }],
+    ['params: false is the fitted line', { data: DATA, transform: [{ regression: 'y', on: 'x', params: false }], mark: 'line', encoding: { x: q('x'), y: q('y') } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
