@@ -1,11 +1,1 @@
-{"$schema":"https://vega.github.io/schema/vega/v6.json","width":300,"height":60,"padding":5,
-"data":[
-{"name":"nodes","values":[{"id":0,"n":"a"},{"id":1,"n":"b"},{"id":2,"n":"c"},{"id":3,"n":"d"}]},
-{"name":"edges","values":[{"s":0,"t":2,"w":1},{"s":1,"t":3,"w":2},{"s":0,"t":3,"w":3},{"s":3,"t":1,"w":1}]}],
-"scales":[{"name":"pos","type":"point","domain":{"data":"nodes","field":"id"},"range":"width","padding":0.5}],
-"marks":[
-{"name":"dots","type":"symbol","from":{"data":"nodes"},"encode":{"update":{"x":{"scale":"pos","field":"id"},"y":{"value":50},"size":{"value":30},"fill":{"value":"#333"}}}},
-{"type":"path","from":{"data":"edges"},"encode":{"update":{"stroke":{"value":"#c00"},"strokeOpacity":{"value":0.5},"strokeWidth":{"field":"w"}}},
- "transform":[
-  {"type":"lookup","from":"dots","key":"datum.id","fields":["datum.s","datum.t"],"as":["sourceNode","targetNode"]},
-  {"type":"linkpath","sourceX":{"expr":"min(datum.sourceNode.x, datum.targetNode.x)"},"targetX":{"expr":"max(datum.sourceNode.x, datum.targetNode.x)"},"sourceY":{"expr":"datum.sourceNode.y"},"targetY":{"expr":"datum.targetNode.y"},"shape":"arc"}]}]}
+{"$schema": "https://vega.github.io/schema/vega/v6.json", "width": 300, "height": 60, "padding": 5, "data": [{"name": "nodes", "values": [{"id": 0, "n": "a"}, {"id": 1, "n": "b"}, {"id": 2, "n": "c"}, {"id": 3, "n": "d"}]}, {"name": "edges", "values": [{"s": 0, "t": 2, "w": 1}, {"s": 1, "t": 3, "w": 2}, {"s": 0, "t": 3, "w": 3}, {"s": 3, "t": 1, "w": 1}]}], "scales": [{"name": "pos", "type": "point", "domain": {"data": "nodes", "field": "id"}, "range": "width", "padding": 0.5}], "marks": [{"name": "dots", "type": "symbol", "from": {"data": "nodes"}, "encode": {"update": {"x": {"scale": "pos", "field": "id"}, "y": {"value": 50}, "size": {"value": 30}, "fill": {"value": "#333"}}}}, {"type": "path", "from": {"data": "edges"}, "encode": {"update": {"stroke": {"value": "#c00"}, "strokeOpacity": {"value": 0.5}, "strokeWidth": {"field": "w"}}}, "transform": [{"type": "lookup", "from": "dots", "key": "datum.id", "fields": ["datum.s", "datum.t"], "as": ["sourceNode", "targetNode"]}, {"type": "linkpath", "sourceX": {"expr": "min(datum.sourceNode.x, datum.targetNode.x)"}, "targetX": {"expr": "max(datum.sourceNode.x, datum.targetNode.x)"}, "sourceY": {"expr": "datum.sourceNode.y"}, "targetY": {"expr": "datum.targetNode.y"}, "shape": "curve"}]}]}

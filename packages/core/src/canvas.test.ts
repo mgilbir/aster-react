@@ -112,6 +112,9 @@ function makeRecordingCtx(): { ctx: CanvasLike; records: DrawRecord[] } {
       // element bbox); the recorder just returns a stop-collecting stub.
       return { addColorStop() {} }
     },
+    createRadialGradient(x0, y0, r0, x1, y1, r1): GradientLike {
+      return { addColorStop() {} }
+    },
     get fillStyle() { return fillStyle },
     set fillStyle(v: unknown) {
       fillStyle = v

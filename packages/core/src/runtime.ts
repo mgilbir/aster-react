@@ -41,7 +41,7 @@ import type {
   SortSpec,
   VgSpec,
 } from './types.js'
-import { hash53 } from './svg-defs.js'
+import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
 import { tickFormat, scaleGradientStops, tickValues, tickCount, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
@@ -4340,32 +4340,13 @@ function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): Encode
 }
 
 /**
- * vega-scenegraph Gradient.js `gradientRef`: a paint that is a gradient object becomes a reference to a definition
- * in the scene's defs (`url(#id)`; a radial gradient is referenced through its pattern wrapper). The id is the object's
- * own, else a hash of its definition; the coordinates default as vega's do (linear 0,0 -> 1,0; radial centred, r 0 -> 0.5).
- * Anything that is not a gradient is left as it is.
+ * A paint that is a gradient object stays on the item (vega's scene keeps it too); its definition goes into the scene's
+ * defs, which the renderers reference it by (see `gradientRef`).
  */
-function internGradient(paint: object, ctx: EvalContext): unknown {
-  const g = paint as { gradient?: unknown; id?: unknown; stops?: unknown } & Record<string, unknown>
-  if (typeof g.gradient !== 'string') return paint
-  const radial = g.gradient === 'radial'
-  const num = (v: unknown, d: number): number => (v != null ? +(v as number) : d)
-  const given = typeof g.id === 'string' && g.id !== ''
-  const def: SceneDef = {
-    id: '',
-    colorStops: (Array.isArray(g.stops) ? g.stops : []).map((st: { offset?: unknown; color?: unknown }) => ({ offset: +(st.offset as number), color: String(st.color) })),
-    kind: radial ? 'radial' : 'linear',
-  }
-  const keys = radial ? (['x1', 'y1', 'r1', 'x2', 'y2', 'r2'] as const) : (['x1', 'y1', 'x2', 'y2'] as const)
-  const defaults: Record<string, number> = radial ? { x1: 0.5, y1: 0.5, r1: 0, x2: 0.5, y2: 0.5, r2: 0.5 } : { x1: 0, y1: 0, x2: 1, y2: 0 }
-  for (const k of keys) {
-    // (a gradient with an id of its own is taken as written: the coordinates it omits stay out of the definition)
-    const v = given ? g[k] : num(g[k], defaults[k]!)
-    if (v != null) (def as unknown as Record<string, number>)[k] = +(v as number)
-  }
-  def.id = given ? String(g.id) : 'gradient_' + hash53(JSON.stringify([def.kind, keys.map((k) => (def as unknown as Record<string, number>)[k]), def.colorStops]))
+function registerGradient(paint: object, ctx: EvalContext): void {
+  if (!isGradientPaint(paint)) return
+  const def = gradientDefOf(paint)
   if (!ctx._defs.some((d) => d.id === def.id)) ctx._defs.push(def)
-  return `url(#${radial ? 'p_' : ''}${def.id})`
 }
 
 function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
@@ -4445,11 +4426,11 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
     }
     return partial
   }
-  // a gradient object as a paint (`{gradient: 'linear', stops: [...]}`): the renderers draw a reference to its definition
+  // a gradient object as a paint (`{gradient: 'linear', stops: [...]}`): its definition joins the scene's defs
   const fillPaint = rec['fill']
-  if (fillPaint !== null && typeof fillPaint === 'object') rec['fill'] = internGradient(fillPaint, ctx)
+  if (fillPaint !== null && typeof fillPaint === 'object') registerGradient(fillPaint, ctx)
   const strokePaint = rec['stroke']
-  if (strokePaint !== null && typeof strokePaint === 'object') rec['stroke'] = internGradient(strokePaint, ctx)
+  if (strokePaint !== null && typeof strokePaint === 'object') registerGradient(strokePaint, ctx)
   // Post-process: vega-runtime's `adjustSpatial`, which acts on the CHANNELS the encode defines
   // (not on whether their values came out finite): x2/xc/y2/yc become x/y/width/height. Rule
   // marks skip it entirely (their x2/y2 are line endpoints, not edges); rect/group/image swap so

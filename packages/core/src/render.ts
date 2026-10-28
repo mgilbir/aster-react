@@ -9,7 +9,7 @@ import { baselineOffset, fontSize as vegaFontSize } from './bounds.js'
 import { checkPathLength, metering } from './limits.js'
 export { baselineOffset }
 import { itemTextWidth } from './text-metrics.js'
-import { ClipCollector, type ClipDef } from './svg-defs.js'
+import { ClipCollector, gradientRef, isGradientPaint, type ClipDef } from './svg-defs.js'
 import { customSymbolPathData } from './svg-path.js'
 import { sanitizeHref } from './url-policy.js'
 import type { ScaleSnapshots } from './guide-caption.js'
@@ -1433,6 +1433,9 @@ export function pathVectorEffect(it: SceneItem): boolean {
   return ((rec.scaleX as number) || 1) !== 1 || ((rec.scaleY as number) || 1) !== 1
 }
 
+/** A fill or stroke as it is written: a gradient object is the reference to its definition. */
+const paintOf = (v: unknown): unknown => (typeof v === 'object' && isGradientPaint(v) ? gradientRef(v) : v)
+
 /**
  * vega-scenegraph's `stylesAttr` (util/svg/styles.js): the item property ->
  * presentation attribute list that EVERY mark's SVG output goes through
@@ -1452,9 +1455,9 @@ export function paintAttrs(it: SceneItem, w: AttrSink, styles?: readonly string[
   // `!= null` before each call: most properties of most items are absent, and the
   // string renderer is dominated by exactly these checks at 10k+ marks.
   let v: unknown
-  if ((v = it.fill) != null) w.a('fill', v)
+  if ((v = it.fill) != null) w.a('fill', paintOf(v))
   if ((v = it.fillOpacity) != null) w.a('fill-opacity', v)
-  if ((v = it.stroke) != null) w.a('stroke', v)
+  if ((v = it.stroke) != null) w.a('stroke', paintOf(v))
   if ((v = it.strokeOpacity) != null) w.a('stroke-opacity', v)
   if ((v = strokeWidth ?? it.strokeWidth) != null) w.a('stroke-width', v)
   if ((v = it.strokeCap) != null) w.a('stroke-linecap', v)

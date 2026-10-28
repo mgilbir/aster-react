@@ -1,11 +1,1 @@
-{"$schema":"https://vega.github.io/schema/vega/v6.json","width":200,"height":150,"padding":5,
-"data":[{"name":"rows","values":[{"c":"a","p":"x","v":3},{"c":"a","p":"y","v":6},{"c":"b","p":"x","v":9},{"c":"b","p":"y","v":4},{"c":"b","p":"z","v":7}]}],
-"scales":[
-{"name":"cy","type":"band","domain":{"data":"rows","field":"c"},"range":"height","padding":0.2},
-{"name":"vx","type":"linear","domain":{"data":"rows","field":"v"},"range":"width","zero":true,"nice":true}],
-"axes":[{"orient":"left","scale":"cy"},{"orient":"bottom","scale":"vx"}],
-"marks":[{"type":"group","from":{"facet":{"data":"rows","name":"part","groupby":"c"}},
- "encode":{"enter":{"y":{"scale":"cy","field":"c"}}},
- "signals":[{"name":"height","update":"bandwidth('cy')"},{"name":"width","update":"60"}],
- "scales":[{"name":"py","type":"band","domain":{"data":"rows","field":"p"},"range":"height"},{"name":"pw","type":"linear","domain":[0,10],"range":"width"}],
- "marks":[{"type":"rect","from":{"data":"part"},"encode":{"enter":{"y":{"scale":"py","field":"p"},"height":{"scale":"py","band":1},"x":{"value":0},"x2":{"scale":"pw","field":"v"},"fill":{"value":"steelblue"}}}}]}]}
+{"$schema": "https://vega.github.io/schema/vega/v6.json", "width": 200, "height": 150, "padding": 5, "data": [{"name": "rows", "values": [{"c": "b", "p": "x", "v": 9}, {"c": "b", "p": "y", "v": 4}, {"c": "b", "p": "z", "v": 7}, {"c": "b", "p": "w", "v": 2}]}], "scales": [{"name": "cy", "type": "band", "domain": {"data": "rows", "field": "c"}, "range": "height", "padding": 0.2}, {"name": "vx", "type": "linear", "domain": {"data": "rows", "field": "v"}, "range": "width", "zero": true, "nice": true}], "axes": [{"orient": "left", "scale": "cy"}, {"orient": "bottom", "scale": "vx"}], "marks": [{"type": "group", "from": {"facet": {"data": "rows", "name": "part", "groupby": "c"}}, "encode": {"enter": {"y": {"scale": "cy", "field": "c"}}}, "signals": [{"name": "height", "update": "bandwidth('cy')"}, {"name": "width", "update": "60"}], "scales": [{"name": "py", "type": "band", "domain": {"data": "rows", "field": "p"}, "range": "height"}, {"name": "pw", "type": "linear", "domain": [0, 10], "range": "width"}], "marks": [{"type": "rect", "from": {"data": "part"}, "encode": {"enter": {"y": {"scale": "py", "field": "p"}, "height": {"scale": "py", "band": 1}, "x": {"value": 0}, "x2": {"scale": "pw", "field": "v"}, "fill": {"value": "steelblue"}}}}]}]}

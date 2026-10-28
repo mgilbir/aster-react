@@ -175,7 +175,8 @@ window.__runCanvas = async (entry) => {
     host.style.width = CONTAINER.width + 'px'
     host.style.height = CONTAINER.height + 'px'
     document.body.appendChild(host)
-    const result = await embed(host, isVl ? spec : loaded, { actions: false, renderer: 'canvas' })
+    // (vega changes the rows of an inline dataset in place -- a force layout rewrites its link rows -- so it gets a copy)
+    const result = await embed(host, structuredClone(isVl ? spec : loaded), { actions: false, renderer: 'canvas' })
     const oracleCanvas = host.querySelector('canvas')
     if (!oracleCanvas) throw new Error('oracle produced no canvas')
     const a = pixels(oracleCanvas)

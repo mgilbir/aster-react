@@ -12,6 +12,7 @@
  */
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneDef, SceneGroup, SceneItem, SceneRoot } from './types.js'
+import { gradientDefOf, isGradientPaint as isGradientObject } from './svg-defs.js'
 import { parsePathData, tracePath, type PathSeg, type PathSink } from './path-data.js'
 
 // Path-data parsing and replay live in path-data.ts (hit.ts needs them without the renderer); the public surface is unchanged.
@@ -475,23 +476,30 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
 
 /** Resolve a paint value; `{gradient: id}` resolves through scene defs. */
 function resolvePaint(
-  paint: string | { gradient: string } | undefined,
+  paint: string | { gradient: string } | object | undefined,
   ctx: CanvasLike,
   defs: SceneDefs[] | undefined,
   bbox: { x1: number; y1: number; x2: number; y2: number } | null,
 ): unknown {
   if (paint == null) return undefined
+  let def: SceneDef | undefined
   let id: string | undefined
-  if (typeof paint === 'string') {
-    // Scene items reference gradients as `url(#gradient_N)` (matching the SVG
-    // serialization); resolve through the scene defs.
-    const mm = /^url\(#([^)]+)\)$/.exec(paint)
-    if (!mm) return paint
-    id = mm[1]!
+  if (isGradientObject(paint)) {
+    // a gradient object (vega's own paint): its definition is a function of it
+    def = gradientDefOf(paint)
+    id = def.id
   } else {
-    id = paint.gradient
+    if (typeof paint === 'string') {
+      // Scene items reference gradients as `url(#gradient_N)` (matching the SVG
+      // serialization); resolve through the scene defs.
+      const mm = /^url\(#(?:p_)?([^)]+)\)$/.exec(paint)
+      if (!mm) return paint
+      id = mm[1]!
+    } else {
+      id = (paint as { gradient: string }).gradient
+    }
+    def = defs?.find((d) => d.id === id)
   }
-  const def = defs?.find((d) => d.id === id)
   if (!def || !bbox) {
     // Dangling gradient reference (no def): pass the reference through so the
     // record matches the SVG serialization.
@@ -524,7 +532,8 @@ function resolvePaint(
     )
   }
   for (const stop of def.colorStops) g.addColorStop(stop.offset, stop.color)
-  ;(g as unknown as { __gradId?: string }).__gradId = id
+  // (the reference an svg paint writes for it: a radial gradient is reached through its pattern)
+  ;(g as unknown as { __gradId?: string }).__gradId = (def.kind === 'radial' ? 'p_' : '') + id
   return g
 }
 
