@@ -613,6 +613,13 @@ const GROUPS: Record<string, Case[]> = {
     ['compatible colours still share one scale', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } }, { mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('c') } }] }],
     ['a layer with no colour next to one with', { data: DATA, resolve: { scale: { color: 'independent' } }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] }],
   ],
+  // scale/domain.ts mergeDomains: a signal domain (the extent of a bin transform) is one member of the union (layer_histogram_global_mean)
+  'a binned layer next to a plain one (layer_histogram_global_mean)': [
+    ['a histogram and the mean as a rule', { data: DATA, layer: [{ mark: 'bar', encoding: { x: q('v', { bin: true }), y: { aggregate: 'count' } } }, { mark: 'rule', encoding: { x: q('v', { aggregate: 'mean' }), color: { value: 'red' }, size: { value: 5 } } }] }],
+    ['a rule first, then the histogram', { data: DATA, layer: [{ mark: 'rule', encoding: { x: q('v', { aggregate: 'mean' }), color: { value: 'red' } } }, { mark: 'bar', encoding: { x: q('v', { bin: true }), y: { aggregate: 'count' } } }] }],
+    ['a histogram and raw points', { data: DATA, layer: [{ mark: 'bar', encoding: { x: q('v', { bin: { maxbins: 4 } }), y: { aggregate: 'count' } } }, { mark: 'point', encoding: { x: q('v') } }] }],
+    ['two histograms of different fields', { data: DATA, layer: [{ mark: 'bar', encoding: { x: q('v', { bin: true }), y: { aggregate: 'count' } } }, { mark: { type: 'bar', opacity: 0.4 }, encoding: { x: q('y', { bin: true }), y: { aggregate: 'count' } } }] }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({

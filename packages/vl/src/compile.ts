@@ -1228,13 +1228,15 @@ function recordExplicit(sc: ScaleSpec, userScale: Record<string, unknown> | unde
 const deepEq = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
 
 /** One member of a unioned domain: a (data, field) reference or a literal value list (a datum). */
-type DomainEntry = { data: string; field: string } | unknown[]
+type DomainEntry = { data: string; field: string } | { signal: string } | unknown[]
 
 /** The entries a domain reads, or null when the domain is a signal or otherwise not unionable. */
 function domainEntries(domain: unknown): DomainEntry[] | null {
   if (Array.isArray(domain)) return [domain]
   if (!isObject(domain)) return null
-  const d = domain as { data?: unknown; field?: unknown; fields?: unknown }
+  const d = domain as { data?: unknown; field?: unknown; fields?: unknown; signal?: unknown }
+  // (a signal domain is a member of a union - the extent of a bin transform, say - as vega's `fields` list allows)
+  if (typeof d.signal === 'string' && d.data === undefined && d.fields === undefined) return [{ signal: d.signal }]
   if (typeof d.data === 'string' && typeof d.field === 'string') return [{ data: d.data, field: d.field }]
   if (typeof d.data === 'string' && Array.isArray(d.fields) && d.fields.every((f) => typeof f === 'string')) {
     return (d.fields as string[]).map((f) => ({ data: d.data as string, field: f }))
@@ -1357,7 +1359,7 @@ function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
         throw new VLCompileError(`layers sort the shared scale "${name}" differently`)
       }
       const sort = sorts[0]
-      const refs = entries.filter((e): e is { data: string; field: string } => !Array.isArray(e))
+      const refs = entries.filter((e): e is { data: string; field: string } => !Array.isArray(e) && 'data' in e)
       const sameData = refs.length === entries.length && entries.length > 0 && refs.every((e) => e.data === refs[0]!.data)
       merged.domain = {
         ...(sameData
@@ -4042,8 +4044,8 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       // linear default kicks in and extends the domain to 0)
       if (def.bin) {
         sc.zero = false
-        // (pre-binned data gets no nice key at all)
-        if (!isPrebinned(def)) sc.nice = false
+        // (scale/properties.ts nice: a binned field gets none - the key is left out, so a layer that wants one decides)
+        delete sc.nice
         delete sc.padding
       }
     } else if (type === 'band') {
