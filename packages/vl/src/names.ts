@@ -154,6 +154,16 @@ export function guardedPathRef(userPath: string): string {
   return parts.map((_, i) => 'datum' + parts.slice(0, i + 1).map((p) => `[${JSON.stringify(p)}]`).join('')).join(' && ')
 }
 
+/** util.ts flatAccessWithDatum: the flattened field, `datum["o.v"]` for `o.v` (the copy a parse transform wrote under the joined path). */
+export function flatAccessRef(userPath: string): string {
+  return `datum[${JSON.stringify(splitAccessPath(userPath).join('.'))}]`
+}
+
+/** util.ts replacePathInField: a path as a Vega field name that reads the flat key, `o\\.v` for `o.v`. */
+export function replacePathInField(userPath: string): string {
+  return splitAccessPath(userPath).map((p) => p.replace(/(\[|\]|\.|'|")/g, '\\$1')).join('\\.')
+}
+
 /** Generated field name `prefix_key` (flat-safe). */
 export function genName(prefix: string, key: string): string {
   return safeKey(`${prefix}_${key}`)

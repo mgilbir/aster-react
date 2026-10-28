@@ -573,7 +573,8 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
       }
     }
   }
-  Object.assign(update, defaults)
+  // (vega applies the defaults in the `enter` set, ahead of the mark's own channels: an encode that throws partway leaves the item with them)
+  m.encode = { ...enc, update: { ...defaults, ...update } }
 }
 
 /**

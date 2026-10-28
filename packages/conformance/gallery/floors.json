@@ -1,6 +1,6 @@
 {
   "pass": {
-    "static": { "vega": 37, "vl": 432 },
+    "static": { "vega": 37, "vl": 433 },
     "react": { "vega": 30, "vl": 317 }
   },
   "maxUnverifiable": {

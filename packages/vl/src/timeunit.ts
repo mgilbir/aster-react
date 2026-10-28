@@ -5,7 +5,7 @@
  */
 import { genName } from './names.js'
 import { normalizeTimeUnit, type NormalTimeUnit } from './validate.js'
-import { datumPathRef } from './names.js'
+import { guardedPathRef, replacePathInField } from './names.js'
 
 export type { NormalTimeUnit }
 export { normalizeTimeUnit }
@@ -45,7 +45,7 @@ export function timeUnitFieldName(tu: NormalTimeUnit, field: string): string {
 /** The Vega `timeunit` transform for `field` -> [as, as_end]. */
 export function timeUnitTransform(tu: NormalTimeUnit, fieldPath: string, as: string): Record<string, unknown> {
   return {
-    field: fieldPath,
+    field: replacePathInField(fieldPath),
     type: 'timeunit',
     units: getTimeUnitParts(tu.unit),
     ...(tu.utc ? { timezone: 'utc' } : {}),
@@ -60,7 +60,7 @@ export function timeUnitTransform(tu: NormalTimeUnit, fieldPath: string, as: str
  * `userPath` is the user's (possibly nested) field path.
  */
 export function timeUnitFieldExpr(tu: NormalTimeUnit, userPath: string): string {
-  const ref = datumPathRef(userPath)
+  const ref = guardedPathRef(userPath)
   const utc = tu.utc ? 'utc' : ''
   const fn = (part: string): string => (part === 'quarter' ? `(${utc}quarter(${ref})-1)` : `${utc}${part}(${ref})`)
   const d: Record<string, string> = {}

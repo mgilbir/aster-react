@@ -367,3 +367,44 @@ describe('@aster/vl == vega-lite: the guarded flatten expression of a nested fie
     })
   }
 })
+
+// Every place a field accessor reaches an expression: vega-lite reads the FLATTENED field (`datum["o.v"]`, written by a parse
+// formula that guards the path) in filters, conditions and time-unit predicates, and escapes the dot in the transforms that read
+// a field by name (aggregate, bin, extent, timeunit). Rows without the parent object must not stop the chart.
+describe('@aster/vl == vega-lite: nested fields in predicates and transforms (rows missing the parent object)', () => {
+  const NESTED = { values: [{ o: { v: 1, t: '2020-01-01' }, x: 1, c: 'a' }, { o: { v: 2, t: '2021-01-01' }, x: 2, c: 'b' }, { o: { v: 1, t: '2022-01-01' }, x: 3, c: 'a' }, { x: 4, c: 'b' }] }
+  const px = { x: { field: 'x', type: 'quantitative' } }
+  const pt = (transform: unknown[]) => ({ data: NESTED, transform, mark: 'point', encoding: px })
+  // (an ENCODING of a nested field is flattened under a hashed key here and under the joined path in vega-lite: those compare by render only)
+  const RENDER_ONLY = new Set(['filter oneOf with a nested y encoding', 'encodings of a nested field'])
+  const SITES: Array<[string, Record<string, any>]> = [
+    ['filter equal', pt([{ filter: { field: 'o.v', equal: 1 } }])],
+    ['filter range', pt([{ filter: { field: 'o.v', range: [1, 2] } }])],
+    ['filter oneOf with a nested y encoding', { data: NESTED, transform: [{ filter: { field: 'o.v', oneOf: [1] } }], mark: 'point', encoding: { x: px.x, y: { field: 'o.v', type: 'quantitative' } } }],
+    ['filter lt', pt([{ filter: { field: 'o.v', lt: 2 } }])],
+    ['filter gt, gte, lte', pt([{ filter: { and: [{ field: 'o.v', gt: 0 }, { field: 'o.v', gte: 1 }, { field: 'o.v', lte: 2 }] } }])],
+    ['filter valid', pt([{ filter: { field: 'o.v', valid: true } }])],
+    ['filter on a time unit', pt([{ filter: { field: 'o.t', timeUnit: 'year', equal: 2021 } }])],
+    ['filter with a string value', { data: { values: [{ o: { s: 'p' }, x: 1 }, { x: 2 }] }, transform: [{ filter: { field: 'o.s', equal: 'p' } }], mark: 'point', encoding: px }],
+    ['a condition test', { data: NESTED, mark: 'point', encoding: { x: px.x, color: { condition: { test: { field: 'o.v', equal: 1 }, value: 'red' }, value: 'blue' } } }],
+    ['a timeUnit transform', { data: NESTED, transform: [{ timeUnit: 'year', field: 'o.t', as: 'yr' }], mark: 'point', encoding: { x: { field: 'yr', type: 'temporal' }, y: px.x } }],
+    ['an aggregate transform', { data: NESTED, transform: [{ aggregate: [{ op: 'sum', field: 'o.v', as: 's' }], groupby: ['c'] }], mark: 'point', encoding: { x: { field: 's', type: 'quantitative' } } }],
+    ['a bin transform', { data: NESTED, transform: [{ bin: true, field: 'o.v', as: 'b' }], mark: 'point', encoding: { x: { field: 'b', type: 'quantitative' } } }],
+    ['encodings of a nested field', { data: NESTED, mark: 'point', encoding: { x: px.x, color: { field: 'o.v', type: 'nominal' }, tooltip: { field: 'o.v', type: 'quantitative' } } }],
+  ]
+  /** The expressions of the pipeline that name a field: the filters and the formulas that write a joined path. */
+  const exprs = (vg: any): string[] =>
+    (vg.data ?? []).flatMap((d: any) => d.transform ?? []).filter((t: any) => t.type === 'filter' || (t.type === 'formula' && String(t.as).includes('.'))).map((t: any) => `${t.type}:${t.as ?? ''}:${t.expr}`).filter((s: string) => /o[.\\"]/.test(s))
+  const fields = (vg: any): string[] => (vg.data ?? []).flatMap((d: any) => d.transform ?? []).filter((t: any) => ['aggregate', 'bin', 'extent', 'timeunit'].includes(t.type)).map((t: any) => JSON.stringify([t.type, t.field, t.fields, t.groupby])).filter((s: string) => s.includes('o'))
+  for (const [name, spec] of SITES) {
+    it(name, async () => {
+      const oracle = (vl as any).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      if (!RENDER_ONLY.has(name)) {
+        expect(exprs(ours).sort()).toEqual(exprs(oracle).sort())
+        expect(fields(ours)).toEqual(fields(oracle))
+      }
+      await check(spec)
+    }, 30_000)
+  }
+})

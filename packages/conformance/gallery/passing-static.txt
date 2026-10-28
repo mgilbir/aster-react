@@ -214,6 +214,7 @@ vl/interactive_point_init
 vl/interactive_query_widgets
 vl/interactive_seattle_weather
 vl/interactive_splom
+vl/interactive_stocks_nearest_index
 vl/isotype_bar_chart_emoji
 vl/joinaggregate_mean_difference
 vl/joinaggregate_mean_difference_by_year

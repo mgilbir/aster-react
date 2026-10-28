@@ -458,6 +458,8 @@ interface EvalContext {
   encodeAborted?: boolean
   /** Datasets whose transform pipeline failed: nothing downstream of them is built. */
   failedDatasets?: Set<string>
+  /** a dataset's transform threw: the pass stopped before the scales, marks and guides (see buildDatasetsOf) */
+  datasetAborted?: boolean
   /** The items of the named marks built so far (a mark may read another mark's items as its data: `from: {data: <mark name>}`). */
   markItems: Map<string, SceneItem[]>
 }
@@ -925,6 +927,8 @@ function buildAxisAndLegend(
   legends: CompiledLegend[] = ctx.chart.legends,
 ): { groups: SceneGroup[] } {
   const groups: SceneGroup[] = []
+  // (the pass stopped at a failing dataset: no axis or legend was made)
+  if (ctx.datasetAborted) return { groups }
   // vega's layoutGroup walks the content children together with the guides:
   // the anchor bounds scan the content items too.
   const anchorItems = [...contentItems]
@@ -1544,7 +1548,9 @@ function buildContentPass(
   // grow the padding from guide/mark overflow, so measuring every top-level
   // group's recursive bounds here would be pure cost (O(items) per evaluation,
   // and the dominant cost of a one-row update on a 100k-point chart).
+  // (a scale or an encode that threw stopped vega's run before its ViewLayout: no overflow growth)
   const padding = ctx.layoutState.failed
+    || ctx.encodeAborted === true
     || ctx.rawGuides
     || ctx.chart.autosize === 'none'
     ? ctx.chart.padding
@@ -2804,6 +2810,10 @@ function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): 
 
 function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>): void {
   ctx.dsEpoch++
+  // (the datasets build again once the signals they read resolve: what failed on an earlier round is judged anew)
+  if (ctx.datasetAborted) ctx.encodeAborted = false
+  ctx.datasetAborted = false
+  ctx.failedDatasets = undefined
   const sources = new Map<string, CompiledChart['data'][number]>()
   for (const d of ctx.chart.data) sources.set(d.name, d)
   // The params this build pass runs under: cached pipeline state is only valid
@@ -2869,7 +2879,13 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     checkRowCount(rows.length, `dataset "${name}"`)
     if (inPulse) inPulse = normalizePulse(inPulse, rows.length)
     let outPulse: StepPulse | null = inPulse
-    if (d.transform.length) try {
+    // vega: the dataset downstream of one whose transform threw is never evaluated (the pass stopped at the failing operator)
+    const failedSource = 'source' in d && typeof (d as { source?: unknown }).source === 'string' && ctx.failedDatasets?.has((d as { source: string }).source) === true
+    if (failedSource) {
+      ;(ctx.failedDatasets ??= new Set()).add(name)
+      rows = []
+      outPulse = null
+    } else if (d.transform.length) try {
       const prevDS = ctx.prev?.datasets.get(name)
       const tctx: StepTransformContext = {
         runtime: ctx.runtime,
@@ -2926,8 +2942,16 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
   if (ctx.chart.projections?.some((p) => p.fit)) ctx.buildOnDemand = onDemandBuilder(ctx, sources, build)
   try {
     for (const d of ctx.chart.data) {
+      if (ctx.failedDatasets?.size && !ctx.datasets.has(d.name)) {
+        // vega: the pass stopped at the failing transform; the operators of the datasets declared after it never ran
+        ;(ctx.failedDatasets ??= new Set()).add(d.name)
+        ctx.datasets.set(d.name, [])
+        ctx.datasetPulses.set(d.name, null)
+        continue
+      }
       build(d.name, new Set())
     }
+    if (ctx.failedDatasets?.size) ctx.encodeAborted = ctx.datasetAborted = true
   } finally {
     ctx.buildOnDemand = undefined
   }
