@@ -14,7 +14,7 @@ import {
   type SceneRoot,
   type VgSpec,
 } from '@aster/core'
-import { isPromiseLike, normalizeChartSpec, useStableContent, useStableSpecRows } from './spec.js'
+import { isPromiseLike, normalizeChartSpec, useChartEpoch, useStableContent, useStableSpecRows } from './spec.js'
 import { useAddons } from './addons.js'
 import { validateDataChanges } from './dataChanges.js'
 import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './serialScales.js'
@@ -293,16 +293,31 @@ export const ChartCore = React.forwardRef<ChartHandle, ChartCoreProps>(function 
     // would mask it and always show our placeholder instead.
     return <AsyncChart {...props} spec={props.spec} chartRef={ref} />
   }
-  return <ChartView {...props} spec={props.spec} chartRef={ref} />
+  return <SpecChart {...props} spec={props.spec} chartRef={ref} />
 })
 
 function AsyncChart({ spec, chartRef, ...props }: Omit<ChartCoreProps, 'spec'> & { spec: PromiseLike<VgSpec>; chartRef: React.ForwardedRef<ChartHandle> }) {
   const resolved = React.use(spec as Promise<VgSpec>)
-  return <ChartView {...props} spec={resolved} chartRef={chartRef} />
+  return <SpecChart {...props} spec={resolved} chartRef={chartRef} />
+}
+
+/**
+ * The chart of ONE spec. A chart owns state that belongs to the spec it was made under (the DOM its patcher keeps, the
+ * timers and event streams of its bindings, signal values, an edited store, a selection, a zoom, hidden legend entries, a
+ * drag in flight), so a `spec` that changes to another chart is a new chart: it is keyed by the spec's identity and starts as
+ * a fresh mount does, whatever the old one was doing. A change of only the rows of its inline datasets, and every change of
+ * `data`, signals or size, keeps the chart and its incremental path (see `useChartEpoch`).
+ */
+function SpecChart({ spec: rawSpec, chartRef, ...props }: Omit<ChartCoreProps, 'spec'> & { spec: VgSpec; chartRef: React.ForwardedRef<ChartHandle> }) {
+  // Content-stable: a parent that rebuilds an inline spec literal every render
+  // neither recompiles (Vega-Lite) nor re-evaluates.
+  const stableSpec = useStableSpecRows(rawSpec)
+  const spec = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
+  return <ChartView key={useChartEpoch(spec)} {...props} spec={spec} chartRef={chartRef} />
 }
 
 function ChartView({
-  spec: rawSpec,
+  spec,
   sceneOverride,
   data,
   dataChanges,
@@ -344,10 +359,6 @@ function ChartView({
   interaction,
   chartRef,
 }: Omit<ChartCoreProps, 'spec'> & { spec: VgSpec; chartRef: React.ForwardedRef<ChartHandle> }) {
-  // Content-stable: a parent that rebuilds an inline spec literal every render
-  // neither recompiles (Vega-Lite) nor re-evaluates.
-  const stableSpec = useStableSpecRows(rawSpec)
-  const spec = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
   // The opt-in add-ons the spec needs (transforms, geo, load) arrive before the first evaluation: this suspends while
   // they load, so there is no render of the half-ready chart and no error to flash. A failed import is a chart error.
   const addonError = useAddons(sceneOverride !== undefined ? null : spec)

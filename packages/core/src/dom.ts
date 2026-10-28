@@ -755,14 +755,6 @@ function patchEl(el: Element, desc: DomDesc): void {
   // element that currently shows a different item (audit C3).
   if (desc.clean && last === desc) return
 
-  // Switching a mark container between per-item elements and batched paths is a
-  // structural change: rebuilding the (few hundred) chunk elements is much
-  // cheaper than diffing it against tens of thousands of per-item nodes.
-  if (desc.dense === true && (last == null || last.dense !== true) && desc.children) {
-    el.replaceChildren(...desc.children.map((c) => createEl(c, el.ownerDocument)))
-    return
-  }
-
   // Attributes: fast path compares against the cached descriptor.
   if (last && sameAttrNames(last.attrs, desc.attrs)) {
     for (let i = 0; i < desc.attrs.length; i++) {
@@ -771,6 +763,16 @@ function patchEl(el: Element, desc: DomDesc): void {
     }
   } else {
     syncAttrsFromDom(el, desc)
+  }
+
+  // Switching a mark container between per-item elements and batched paths is a
+  // structural change: rebuilding the (few hundred) chunk elements is much
+  // cheaper than diffing it against tens of thousands of per-item nodes. (After
+  // the attributes: the container itself may be another mark's, e.g. a `.mark-rect`
+  // that now holds symbols, and its own class / role must follow.)
+  if (desc.dense === true && (last == null || last.dense !== true) && desc.children) {
+    el.replaceChildren(...desc.children.map((c) => createEl(c, el.ownerDocument)))
+    return
   }
 
   if (desc.text !== undefined) {
@@ -809,10 +811,14 @@ function patchEl(el: Element, desc: DomDesc): void {
   }
   const n = Math.min(have, want.length)
   let cur = el.firstElementChild
-  for (let i = 0; i < n && cur != null; i++, cur = cur.nextElementSibling) {
+  for (let i = 0; i < n && cur != null; i++) {
     const w = want[i]!
+    // the next sibling is read BEFORE a replacement detaches `cur` (a detached node has none, which would end the walk
+    // after the first changed tag and leave every later child showing the previous scene)
+    const next: Element | null = cur.nextElementSibling
     if (cur.tagName === w.tag) patchEl(cur, w)
     else el.replaceChild(createEl(w, el.ownerDocument), cur)
+    cur = next
   }
   // Removals (have > want) and appends (want > have) — walk the tail via links.
   if (have > want.length) {

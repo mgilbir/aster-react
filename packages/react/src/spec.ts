@@ -1,5 +1,6 @@
 import * as React from 'react'
 import type { VgSpec } from '@aster/core'
+import { chartSkeleton } from '@aster/core/dom'
 import { compileVegaLite } from './vl-registry.js'
 
 /** True when the value looks like a Vega-Lite grammar rather than a Vega spec. */
@@ -100,3 +101,20 @@ export function useStableSpecRows(spec: VgSpec): VgSpec {
 
 /** `useStableContent` for specs. */
 export const useStableSpec = (spec: VgSpec): VgSpec => useStableContent(spec)
+
+/**
+ * Which chart a spec is: a number that changes when the spec changes to ANOTHER chart and not when only the rows
+ * of its inline datasets do (the `chartSkeleton` the scene session compiles by). A chart keeps state that belongs to the
+ * spec it was made under -- timers, the pointer interaction in flight, signal values, a selection, a zoom, hidden legend
+ * entries, the DOM the patcher owns -- so a changed chart starts as a fresh mount would, while a data-only change keeps
+ * everything and stays on the incremental path.
+ */
+export function useChartEpoch(spec: VgSpec): number {
+  const skeleton = React.useMemo(() => chartSkeleton(spec), [spec])
+  const [state, setState] = React.useState({ skeleton, epoch: 0 })
+  if (state.skeleton === skeleton) return state.epoch
+  // derived state, set while rendering: React re-renders this component at once, before anything is committed
+  const next = { skeleton, epoch: state.epoch + 1 }
+  setState(next)
+  return next.epoch
+}

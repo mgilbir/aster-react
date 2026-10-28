@@ -68,49 +68,98 @@ async function oracleSvg(vg: Record<string, unknown>, liveMs = 0): Promise<strin
   }
 }
 
+/** Wait until the svg exists and its markup stops changing (the container is measured after the first paint). */
+async function settleMarkup(host: HTMLElement, failure: () => Error | null, onStable?: (html: string) => void): Promise<string> {
+  let last = ''
+  let stable = 0
+  const t0 = performance.now()
+  while (performance.now() - t0 < 8000) {
+    await sleep(40)
+    const e = failure()
+    if (e) throw e
+    const svg = host.querySelector('svg')
+    const html = svg ? svg.outerHTML : ''
+    if (html && html === last) {
+      if (++stable >= 5) {
+        onStable?.(html)
+        return html
+      }
+    } else { stable = 0; last = html }
+  }
+  throw failure() ?? new Error('no stable <svg> within 8 s')
+}
+
+const sizeProps = (vg: Record<string, unknown>): Record<string, unknown> => {
+  const props: Record<string, unknown> = {}
+  if (typeof vg.width === 'number') props.width = vg.width
+  if (typeof vg.height === 'number') props.height = vg.height
+  return props
+}
+
 async function chartSvg(vg: Record<string, unknown>): Promise<string> {
   const host = makeHost()
   const root = createRoot(host)
   let error: Error | null = null
   try {
     const loaded = (await loadSpecData(JSON.parse(JSON.stringify(vg)) as never, { ...TRUSTED, baseURL: BASE })) as Record<string, unknown>
-    const props: Record<string, unknown> = {}
-    if (typeof vg.width === 'number') props.width = vg.width
-    if (typeof vg.height === 'number') props.height = vg.height
     // what <Chart> imports on its own: the add-ons loaded now (an earlier spec's, or the data step's) are not its doing
     const before = new Set(ADDONS.filter(isAddonLoaded))
-    root.render(React.createElement(Chart, { spec: loaded as never, onError: (e: Error) => { error = e }, ...props }))
-    // settle: the svg exists and the markup stops changing (the container is measured after the first paint)
-    let last = ''
-    let stable = 0
-    const t0 = performance.now()
-    while (performance.now() - t0 < 8000) {
-      await sleep(40)
-      if (error) throw error
-      const svg = host.querySelector('svg')
-      const html = svg ? svg.outerHTML : ''
-      if (html && html === last) {
-        if (++stable >= 5) {
-          // <Chart> imported exactly the add-ons `addonsNeeded` names for this spec that the page did not have yet: a plain spec
-          // imported nothing, and nothing was imported for nothing. (That `addonsNeeded` is exact is addons-needed.test.ts's
-          // differential; this checks the shell loaded what the detector said, over all 720 specs.)
-          const needed = addonsNeeded(loaded as never)
-          const after = ADDONS.filter(isAddonLoaded)
-          const extra = after.filter((a) => !before.has(a) && !needed.includes(a))
-          const missing = needed.filter((a) => !after.includes(a))
-          if (extra.length || missing.length) throw new Error(`add-on auto-load: needs [${needed}], page had [${[...before]}], now has [${after}]: imported for nothing [${extra}], not imported [${missing}]`)
-          return html
-        }
-      } else { stable = 0; last = html }
-    }
-    throw new Error(error ? (error as Error).message : 'no stable <svg> within 8 s')
+    root.render(React.createElement(Chart, { spec: loaded as never, onError: (e: Error) => { error = e }, ...sizeProps(vg) }))
+    return await settleMarkup(host, () => error, () => {
+      // <Chart> imported exactly the add-ons `addonsNeeded` names for this spec that the page did not have yet: a plain spec
+      // imported nothing, and nothing was imported for nothing. (That `addonsNeeded` is exact is addons-needed.test.ts's
+      // differential; this checks the shell loaded what the detector said, over all 720 specs.)
+      const needed = addonsNeeded(loaded as never)
+      const after = ADDONS.filter(isAddonLoaded)
+      const extra = after.filter((a) => !before.has(a) && !needed.includes(a))
+      const missing = needed.filter((a) => !after.includes(a))
+      if (extra.length || missing.length) throw new Error(`add-on auto-load: needs [${needed}], page had [${[...before]}], now has [${after}]: imported for nothing [${extra}], not imported [${missing}]`)
+    })
   } finally {
     root.unmount()
     host.remove()
   }
 }
 
-;(window as unknown as { __runGallery: (g: In) => Promise<Out> }).__runGallery = async (g: In): Promise<Out> => {
+/**
+ * ONE mounted <Chart> whose `spec` prop changes: A, then B (what a playground does). The markup after B settles is what a fresh
+ * mount of B must also produce. A may be time-driven (its timers must be released by the change), so A is only given a moment.
+ */
+async function chartSwapSvg(a: Record<string, unknown>, b: Record<string, unknown>): Promise<string> {
+  const host = makeHost()
+  const root = createRoot(host)
+  let error: Error | null = null
+  try {
+    const loadedA = (await loadSpecData(JSON.parse(JSON.stringify(a)) as never, { ...TRUSTED, baseURL: BASE })) as Record<string, unknown>
+    const loadedB = (await loadSpecData(JSON.parse(JSON.stringify(b)) as never, { ...TRUSTED, baseURL: BASE })) as Record<string, unknown>
+    const onError = (e: Error): void => { error = e }
+    root.render(React.createElement(Chart, { spec: loadedA as never, onError, ...sizeProps(a) }))
+    // A is drawn and has been live for a moment (its timers tick, its signals are bound); an A that errors is simply an A that left nothing behind
+    for (let i = 0; i < 40 && !host.querySelector('svg') && !error; i++) await sleep(25)
+    await sleep(120)
+    // an interaction in flight: the pointer moves over A, presses, drags and releases (its selection / hover / drag state is A's)
+    const svg = host.querySelector('svg')
+    if (svg) {
+      const r = svg.getBoundingClientRect()
+      const at = (fx: number, fy: number): Record<string, number> => ({ clientX: r.left + r.width * fx, clientY: r.top + r.height * fy })
+      const fire = (type: string, fx: number, fy: number): void => {
+        svg.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, buttons: type === 'mouseup' ? 0 : 1, ...at(fx, fy) }))
+      }
+      fire('mousemove', 0.4, 0.4); fire('mousedown', 0.4, 0.4); fire('mousemove', 0.6, 0.6); fire('mouseup', 0.6, 0.6)
+      await sleep(40)
+    }
+    error = null
+    // the same element type at the same position: React updates the mounted <Chart>
+    root.render(React.createElement(Chart, { spec: loadedB as never, onError, ...sizeProps(b) }))
+    return await settleMarkup(host, () => error)
+  } finally {
+    root.unmount()
+    host.remove()
+  }
+}
+
+/** The oracle for one gallery spec, or why there is none (`unverifiable`). */
+async function oracleOf(g: In): Promise<{ oracle: ReturnType<typeof canonicalizeSvg> } | Out> {
   let vgOracle: Record<string, unknown>
   let oracle
   try {
@@ -140,6 +189,13 @@ async function chartSvg(vg: Record<string, unknown>): Promise<string> {
     stray.length = 0
     return { status: 'unverifiable', reason: 'oracle-error', first: msg(e) }
   }
+  return { oracle }
+}
+
+;(window as unknown as { __runGallery: (g: In) => Promise<Out> }).__runGallery = async (g: In): Promise<Out> => {
+  const o = await oracleOf(g)
+  if (!('oracle' in o)) return o
+  const oracle = o.oracle
   let ours: string
   try {
     stray.length = 0
@@ -154,6 +210,49 @@ async function chartSvg(vg: Record<string, unknown>): Promise<string> {
     const diffs = diffCanonical(oracle, canonicalizeSvg(ours))
     if (diffs.length === 0) return { status: 'pass' }
     return { status: 'fail', ...summarizeDiffs(diffs) }
+  } catch (e) {
+    return { status: 'error', reason: 'chart-svg-not-canonicalizable', first: msg(e) }
+  }
+}
+
+interface SwapIn { a: In; b: In }
+interface SwapOut extends Out { /** the swapped chart also equals vega's B (it always does when the fresh mount does) */ vsOracle?: boolean }
+
+const vegaOf = (g: In): Record<string, unknown> => g.kind === 'vl' ? (normalizeChartSpec(JSON.parse(JSON.stringify(g.spec)) as never) as Record<string, unknown>) : JSON.parse(JSON.stringify(g.spec)) as Record<string, unknown>
+
+;(window as unknown as { __runSwap: (p: SwapIn) => Promise<SwapOut> }).__runSwap = async ({ a, b }: SwapIn): Promise<SwapOut> => {
+  const o = await oracleOf(b)
+  if (!('oracle' in o)) return o
+  let fresh: string
+  let swapped: string
+  let specA: Record<string, unknown>
+  try {
+    specA = vegaOf(a)
+  } catch (e) {
+    return { status: 'unverifiable', reason: 'a-not-renderable', first: msg(e) }
+  }
+  try {
+    stray.length = 0
+    fresh = await chartSvg(vegaOf(b))
+    await checkStray()
+  } catch (e) {
+    // B does not even mount fresh: the gallery gate reports that; there is no fresh frame to hold the swap to
+    return { status: 'unverifiable', reason: 'fresh-mount-failed', first: msg(e) }
+  }
+  try {
+    stray.length = 0
+    swapped = await chartSwapSvg(specA, vegaOf(b))
+    await checkStray()
+  } catch (e) {
+    return { status: 'error', reason: 'swap-threw', first: msg(e) }
+  }
+  try {
+    const cf = canonicalizeSvg(fresh)
+    const cs = canonicalizeSvg(swapped)
+    const diffs = diffCanonical(cf, cs)
+    const vsOracle = diffCanonical(o.oracle, cs).length === 0
+    if (diffs.length === 0) return { status: 'pass', vsOracle }
+    return { status: 'fail', vsOracle, ...summarizeDiffs(diffs) }
   } catch (e) {
     return { status: 'error', reason: 'chart-svg-not-canonicalizable', first: msg(e) }
   }

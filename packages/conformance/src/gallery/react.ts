@@ -29,6 +29,18 @@ async function routeOffline(ctx: BrowserContext, html: string, js: string): Prom
 }
 
 export async function runReact(specs: GallerySpec[], onResult: (o: Outcome) => void, workers = 3): Promise<Outcome[]> {
+  return runPage(specs, '__runGallery', (g) => ({ id: g.id, kind: g.kind, spec: readSpec(g) }), onResult, workers)
+}
+
+/** The spec-swap path: ONE mounted <Chart> goes from spec A to spec B; `vsOracle` also says whether it equals vega's B. */
+export interface SwapPair { id: string; a: GallerySpec; b: GallerySpec }
+export type SwapOutcome = Outcome & { vsOracle?: boolean }
+export async function runSwap(pairs: SwapPair[], onResult: (o: SwapOutcome) => void, workers = 3): Promise<SwapOutcome[]> {
+  const side = (g: GallerySpec): unknown => ({ id: g.id, kind: g.kind, spec: readSpec(g) })
+  return runPage(pairs, '__runSwap', (p) => ({ a: side(p.a), b: side(p.b) }), onResult, workers)
+}
+
+async function runPage<I extends { id: string }, O extends Outcome>(specs: I[], fn: '__runGallery' | '__runSwap', payload: (i: I) => unknown, onResult: (o: O) => void, workers: number): Promise<O[]> {
   const tmp = mkdtempSync(join(tmpdir(), 'aster-gallery-'))
   try {
     mkdirSync(tmp, { recursive: true })
@@ -40,7 +52,7 @@ export async function runReact(specs: GallerySpec[], onResult: (o: Outcome) => v
     const js = bundle.outputFiles[0]!.text
     const html = '<!doctype html><html><body><script src="./page.js"></script></body></html>'
     const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
-    const results = new Map<string, Outcome>()
+    const results = new Map<string, O>()
     const queue = [...specs]
     const worker = async (): Promise<void> => {
       const ctx = await browser.newContext()
@@ -53,13 +65,13 @@ export async function runReact(specs: GallerySpec[], onResult: (o: Outcome) => v
       await open()
       for (let g = queue.shift(); g; g = queue.shift()) {
         const t0 = Date.now()
-        let o: Outcome
+        let o: O
         try {
-          const r = await page.evaluate((s) => (window as never as { __runGallery: (s: unknown) => Promise<Record<string, unknown>> }).__runGallery(s), { id: g.id, kind: g.kind, spec: readSpec(g) })
-          o = { id: g.id, ms: Date.now() - t0, ...(r as object) } as Outcome
+          const r = await page.evaluate(([name, arg]) => (window as never as Record<string, (s: unknown) => Promise<Record<string, unknown>>>)[name as string]!(arg), [fn, payload(g)] as const)
+          o = { id: g.id, ms: Date.now() - t0, ...(r as object) } as O
         } catch (e) {
           // the page itself died (crash / out of memory): a failure of the spec, and a fresh page for the next one
-          o = { id: g.id, ms: Date.now() - t0, status: 'error', reason: 'page-crashed', first: (e instanceof Error ? e.message : String(e)).slice(0, 240) }
+          o = { id: g.id, ms: Date.now() - t0, status: 'error', reason: 'page-crashed', first: (e instanceof Error ? e.message : String(e)).slice(0, 240) } as O
           await page.close().catch(() => undefined)
           page = await ctx.newPage()
           await open()

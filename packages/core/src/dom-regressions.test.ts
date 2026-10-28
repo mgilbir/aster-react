@@ -213,3 +213,66 @@ describe('C43: the two sinks apply the same value rules', () => {
     })
   }
 })
+
+// ---------------------------------------------------------------------------
+// A scene of ANOTHER chart patched over the DOM of this one (a `spec` prop that changes)
+// ---------------------------------------------------------------------------
+
+describe('patching the DOM of one chart into another chart', () => {
+  const base = { width: 200, height: 100, padding: 0, autosize: 'none' }
+  const labels = (n: number) => ({
+    ...base, data: [{ name: 't', values: Array.from({ length: n }, (_, i) => ({ i })) }],
+    marks: [{ type: 'text', from: { data: 't' }, encode: { update: { x: { signal: 'datum.i * 10' }, y: { value: 20 }, text: { signal: 'datum.i' } } } }],
+  })
+  const rules = (n: number) => ({
+    ...base, data: [{ name: 't', values: Array.from({ length: n }, (_, i) => ({ i })) }],
+    marks: [{ type: 'rule', from: { data: 't' }, encode: { update: { x: { signal: 'datum.i * 10' }, y: { value: 0 }, y2: { value: 50 }, stroke: { value: 'black' } } } }],
+  })
+  const rects = (n: number) => ({
+    ...base, data: [{ name: 't', values: Array.from({ length: n }, (_, i) => ({ i })) }],
+    marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { signal: 'datum.i * 10' }, width: { value: 5 }, y: { value: 0 }, height: { value: 30 } } } }],
+  })
+  const dots = (n: number) => ({
+    ...base, data: [{ name: 't', values: Array.from({ length: n }, (_, i) => ({ x: (i * 37) % 200, y: (i * 23) % 100 })) }],
+    marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' }, size: { value: 30 } } } }],
+  })
+  const sceneOf = (spec: unknown): SceneRoot => evaluateChart(compileChart(spec as never))
+
+  it('every child follows the new scene when the children change tag (the walk survives a replaced child)', () => {
+    // 6 <text> children become 6 <line> children: the first replacement used to end the walk, so children 1..5 stayed <text>
+    const svg = mkSvg()
+    patchSceneDom(svg, sceneOf(labels(6)))
+    patchSceneDom(svg, sceneOf(rules(6)))
+    const fresh = renderSceneToDomElement(sceneOf(rules(6)), document)
+    expect(firstDomDiff(canon(fresh), canon(svg))).toBeNull()
+    expect(svg.querySelectorAll('text').length).toBe(0)
+    expect(svg.querySelectorAll('line').length).toBe(6)
+  })
+
+  it('A -> B -> A over every pair of mark kinds equals a fresh render, with and without batched marks', () => {
+    const specs = { text: labels(6), rule: rules(6), rect: rects(6), rect9: rects(9), text3: labels(3), dots: dots(600) }
+    for (const dense of [false, true]) {
+      for (const [an, a] of Object.entries(specs)) {
+        for (const [bn, b] of Object.entries(specs)) {
+          // batched marks only exist for a big symbol mark: with them on, the pairs that involve one
+          if (dense && an !== 'dots' && bn !== 'dots') continue
+          const svg = mkSvg()
+          patchSceneDom(svg, sceneOf(a), { denseMarks: dense })
+          patchSceneDom(svg, sceneOf(b), { denseMarks: dense })
+          expect(firstDomDiff(canon(renderSceneToDomElement(sceneOf(b), document, { denseMarks: dense })), canon(svg)), `${an} -> ${bn} dense=${dense}`).toBeNull()
+          patchSceneDom(svg, sceneOf(a), { denseMarks: dense })
+          expect(firstDomDiff(canon(renderSceneToDomElement(sceneOf(a), document, { denseMarks: dense })), canon(svg)), `${an} -> ${bn} -> ${an} dense=${dense}`).toBeNull()
+        }
+      }
+    }
+  }, 60_000)
+
+  it('a mark container that becomes batched takes the new mark\'s own class and role', () => {
+    // rects -> dense symbols: the <g> that held the rects is now the symbols' container (`mark-symbol`, not `mark-rect`)
+    const svg = mkSvg()
+    patchSceneDom(svg, sceneOf(rects(1000)), { denseMarks: true })
+    patchSceneDom(svg, sceneOf(dots(600)), { denseMarks: true })
+    expect(svg.querySelector('.mark-rect')).toBeNull()
+    expect(firstDomDiff(canon(renderSceneToDomElement(sceneOf(dots(600)), document, { denseMarks: true })), canon(svg))).toBeNull()
+  })
+})
