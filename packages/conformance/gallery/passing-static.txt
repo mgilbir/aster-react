@@ -155,6 +155,7 @@ vl/circle_binned_maxbins_5
 vl/circle_bubble_health_income
 vl/circle_custom_tick_labels
 vl/circle_flatten
+vl/circle_natural_disasters
 vl/circle_opacity
 vl/circle_scale_quantile
 vl/circle_scale_quantize
@@ -382,6 +383,7 @@ vl/selection_zoom_brush_wheel
 vl/selection_zoom_scatterplot_shift-wheel
 vl/selection_zoom_scatterplot_wheel
 vl/square
+vl/stacked_area_binned
 vl/stacked_area_normalize
 vl/stacked_area_ordinal
 vl/stacked_area_overlay
@@ -391,6 +393,7 @@ vl/stacked_bar_count
 vl/stacked_bar_count_corner_radius_config
 vl/stacked_bar_count_corner_radius_mark
 vl/stacked_bar_count_corner_radius_mark_x
+vl/stacked_bar_count_corner_radius_stroke
 vl/stacked_bar_h
 vl/stacked_bar_h_custom_color_domain
 vl/stacked_bar_h_normalized_labeled
@@ -445,6 +448,7 @@ vl/trellis_anscombe
 vl/trellis_area
 vl/trellis_bar
 vl/trellis_bar_histogram
+vl/trellis_bar_histogram_label_rotated
 vl/trellis_bar_no_header
 vl/trellis_column_year
 vl/trellis_line_quarter

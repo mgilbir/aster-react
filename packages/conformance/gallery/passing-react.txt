@@ -140,6 +140,7 @@ vl/circle_binned_maxbins_20
 vl/circle_binned_maxbins_5
 vl/circle_custom_tick_labels
 vl/circle_flatten
+vl/circle_natural_disasters
 vl/circle_opacity
 vl/circle_scale_quantile
 vl/circle_scale_quantize
@@ -285,6 +286,7 @@ vl/repeat_layer
 vl/rule_color_mean
 vl/rule_extent
 vl/square
+vl/stacked_area_binned
 vl/stacked_area_normalize
 vl/stacked_area_ordinal
 vl/stacked_area_overlay
@@ -294,6 +296,7 @@ vl/stacked_bar_count
 vl/stacked_bar_count_corner_radius_config
 vl/stacked_bar_count_corner_radius_mark
 vl/stacked_bar_count_corner_radius_mark_x
+vl/stacked_bar_count_corner_radius_stroke
 vl/stacked_bar_h
 vl/stacked_bar_h_custom_color_domain
 vl/stacked_bar_h_normalized_labeled

@@ -1581,7 +1581,8 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     }
     return out
   }
-  const headerAngle = (v: unknown): number | undefined => (typeof v === 'number' ? normalizeAngle(v) : undefined)
+  // (header/assemble.ts passes the angle as written: -90 is not 270 to defaultHeaderGuideBaseline)
+  const headerAngle = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined)
   // defaultHeaderGuideBaseline / defaultHeaderGuideAlign
   const guideBaseline = (angle: number | undefined, hc: 'row' | 'column'): Record<string, unknown> => {
     if (angle === undefined) return {}
@@ -1597,7 +1598,9 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   }
   const titleGroup = (ch: 'row' | 'column', def: Record<string, unknown>, fd: FieldDef | null | undefined, field: string): Record<string, unknown> => {
     const hc = headerChannelOf(ch, hdrProp('titleOrient', def, ch))
-    const angle = headerAngle(hdrProp('titleAngle', def, ch))
+    // (assembleTitleGroup normalizes the title angle; assembleLabelTitle does not)
+    const titleAngleRaw = hdrProp('titleAngle', def, ch)
+    const angle = typeof titleAngleRaw === 'number' ? normalizeAngle(titleAngleRaw) : undefined
     const header = isObject(def.header) ? (def.header as Record<string, unknown>) : {}
     return {
       name: `${ch}-title`,
@@ -3535,19 +3538,27 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     const dimField = dimDef ? aggFieldName(dimDef) : undefined
     seriesFields = stackByFields(fields, dimensionChannel)
     const stackField = aggFieldName(m)
+    const midDim = dimDef !== undefined && usesBinMid(spec, dimDef, mark, fields)
+    if (midDim) {
+      const bn = binNames(dimDef!.binParams!, dimDef!.field)
+      const start = JSON.stringify(bn.start)
+      const end = JSON.stringify(bn.end)
+      out.push({ type: 'formula', expr: `isValid(datum[${start}]) && isFinite(+datum[${start}]) ? 0.5*datum[${start}]+0.5*datum[${end}] : datum[${start}]`, as: binMidName(dimDef!) })
+    }
+    const stackDim = midDim ? binMidName(dimDef!) : dimField
     if (continuousDimension && (mark === 'area' || mark === 'line' || mark === 'trail')) {
       out.push({
         type: 'impute',
         field: stackField,
         groupby: seriesFields.map((f) => aggFieldName(f)),
-        key: dimField!,
+        key: stackDim!,
         method: 'value',
         value: 0,
       })
     }
     out.push({
       type: 'stack',
-      groupby: [dimField, ...fields.filter((f) => f.channel === (dimensionChannel === 'x' ? 'xOffset' : 'yOffset')).map((f) => aggFieldName(f))].filter(Boolean),
+      groupby: [stackDim, ...fields.filter((f) => f.channel === (dimensionChannel === 'x' ? 'xOffset' : 'yOffset')).map((f) => aggFieldName(f))].filter(Boolean),
       field: stackField,
       sort: stackSortParams(fields, seriesFields, measureChannel),
       as: [`${stackField}_start`, `${stackField}_end`],
@@ -4872,7 +4883,8 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     const opacity = markOpacity ?? (['point', 'circle', 'square', 'tick'].includes(mark) ? reducedOpacity : undefined)
     // a colour legend colours the symbols only when the channel is a field of its own: a channel whose field is a
     // condition's (`{condition: {test, field}, value: "lightgray"}`) is a value def to the legend, whose constant paints them
-    const byColor = colorLegendShown && !colorDef?.fromCondition
+    // (legend/encode.ts symbols(): a colour channel that is a field makes the symbols black, whether or not its own legend is shown)
+    const byColor = colorDef != null && !colorDef.fromCondition
     const u: Record<string, unknown> = {}
     if (filled) {
       if (byColor) Object.assign(u, { fill: { value: 'black' }, fillOpacity: { value: opacity ?? 1 } })
@@ -5911,6 +5923,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           : isDiscreteType(def.type) || def.channel === 'shape' || def.channel === 'strokeDash'
       if (discrete) continue
       const names = def.bin ? binNames(def.binParams!, def.field) : { start: timeUnitField(def), end: `${timeUnitField(def)}_end` }
+      if (usesBinMid(spec, def, mark, fields)) {
+        // (valueref.ts midPoint: a stacked, imputed dimension reads the precomputed bin middle)
+        for (const key of Object.keys(update)) {
+          const ref = update[key]
+          if (isObject(ref) && ref.scale === scaleName && ref.field === names.start) update[key] = { ...ref, field: binMidName(def) }
+        }
+        continue
+      }
       for (const key of Object.keys(update)) update[key] = midpoint(update[key], scaleName, names.start, names.end, bp)
     }
   }
@@ -5987,7 +6007,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       const e = update[k] as Record<string, unknown> | undefined
       return isObject(e) && ('signal' in e || Boolean(e.value))
     })
-    if (hasRadius && !fields.some((f) => f.channel === 'size') && measureDef && dimDef && isStacked(measureDef, mark, orient, fields) && positionalScaleType(mark, dimDef) === 'band') {
+    if (hasRadius && !fields.some((f) => f.channel === 'size') && measureDef && dimDef && isStacked(measureDef, mark, orient, fields)) {
       const v = orient === 'vertical'
       const mc = v ? 'y' : 'x'
       const dc = v ? 'x' : 'y'
@@ -6005,6 +6025,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       groupUpdate[mc] = { signal: `min(${extents})` }
       groupUpdate[`${mc}2`] = { signal: `max(${extents})` }
       groupUpdate.clip = { value: true }
+      // mark.ts getStackGroup: the stroke properties are the group's too (the outline is drawn on the clipped group, in front)
+      for (const prop of ['stroke', 'strokeWidth', 'strokeJoin', 'strokeCap', 'strokeDash', 'strokeDashOffset', 'strokeMiterLimit', 'strokeOpacity']) {
+        if (update[prop] !== undefined) groupUpdate[prop] = update[prop]
+      }
+      if (groupUpdate.stroke) {
+        groupUpdate.strokeForeground = { value: true }
+        groupUpdate.strokeOffset = { value: 0 }
+      }
       const ownMarkDef = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
       for (const k of cornerKeys) {
         groupUpdate[k] = update[k]
@@ -6021,7 +6049,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           facet: {
             data: dataName,
             name: 'stack_group_main',
-            groupby: [aggFieldName(dimDef)],
+            // (a binned / time-unit dimension also groups by the end of its band)
+            groupby: dimDef.bin ? [aggFieldName(dimDef), binNames(dimDef.binParams!, dimDef.field).end] : dimDef.tu ? [aggFieldName(dimDef), `${aggFieldName(dimDef)}_end`] : [aggFieldName(dimDef)],
             aggregate: { fields: [start, start, end, end], ops: ['min', 'max', 'min', 'max'] },
           },
         },
@@ -6099,6 +6128,19 @@ function offsettedRectFormulas(startField: string, rectBandPosition: number, tu:
     { type: 'formula', expr: interpolate(offset, start, rectBandPosition + 0.5), as: `${startField}_offsetted_rect_start` },
     { type: 'formula', expr: interpolate(start, end, rectBandPosition + 0.5), as: `${startField}_offsetted_rect_end` },
   ]
+}
+
+/**
+ * stack.ts `impute` + data/stack.ts: a binned dimension of a stacked area / line / trail is imputed (zero-filled) and stacked
+ * over the bin's middle, a `<bin>_mid` field computed ahead of the impute.
+ */
+function binMidName(def: FieldDef): string {
+  return `${binNames(def.binParams!, def.field).start}_mid`
+}
+function usesBinMid(spec: VLSpec, def: FieldDef | undefined, mark: string, fields: FieldDef[]): boolean {
+  if (!def || !def.bin || (def.channel !== 'x' && def.channel !== 'y') || !(mark === 'area' || mark === 'line' || mark === 'trail')) return false
+  const orient = inferOrient(spec, mark, spec.mark, fields)
+  return fields.some((f) => (f.channel === 'x' || f.channel === 'y') && f.channel !== def.channel && isStacked(f, mark, orient, fields))
 }
 
 /** vega-lite `getMarkConfig(prop, mark, config)`: config.<mark>.<prop> over config.mark.<prop>. */
@@ -6662,7 +6704,7 @@ function invalidCandidates(spec: VLSpec, fields: FieldDef[], mark: string): Arra
   return [...byField.values()]
 }
 
-const invalidFieldName = (f: FieldDef): string => (f.bin ? binNames(f.binParams!, f.field).start : aggFieldName(f))
+const invalidFieldName = (f: FieldDef, mid = false): string => (f.bin ? (mid ? binMidName(f) : binNames(f.binParams!, f.field).start) : aggFieldName(f))
 const validExprOf = (ref: string): string => `isValid(${ref}) && isFinite(+${ref})`
 
 /** The filter that keeps invalid values out of the data (FilterInvalidNode), where the marks must not see them. */
@@ -6683,7 +6725,7 @@ function definedSignal(spec: VLSpec, fields: FieldDef[], mark: string): unknown 
   const refs = new Set(
     invalidCandidates(spec, fields, mark)
       .filter((c) => c.mode.startsWith('break-paths'))
-      .map(({ def }) => `datum[${JSON.stringify(invalidFieldName(def))}]`),
+      .map(({ def }) => `datum[${JSON.stringify(invalidFieldName(def, usesBinMid(spec, def, mark, fields)))}]`),
   )
   return refs.size ? { signal: [...refs].map(validExprOf).join(' && ') } : undefined
 }

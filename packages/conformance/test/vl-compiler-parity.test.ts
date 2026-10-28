@@ -217,6 +217,8 @@ const GROUPS: Record<string, Case[]> = {
   'headers, shapes and arcs (trellis_bar_no_header, point_shape_custom, arc_pie_pyramid)': [
     ['a facet row without a header', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), row: n('g', { header: null }) } }],
     ['a facet row with an empty header title', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), row: n('g', { header: { title: '' } }) } }],
+    ['a facet row header with a negative label angle', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), row: n('g', { header: { labelAngle: -90 } }) } }],
+    ['a facet column header with title and label angles', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), column: n('g', { header: { labelAngle: 45, titleAngle: -90 } }) } }],
     ['a facet column and row, one without a header', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), row: n('g', { header: null }), column: n('c') } }],
     ['a constant custom shape names the legend symbols', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c'), size: q('v'), shape: { value: 'M0,0.2L0.2351,0.3236 0.1902,0.0618 0.3804,-0.1236 0,-0.4 -0.3804,-0.1236 -0.1902,0.0618 -0.2351,0.3236 0,0.2Z' } } }],
     ['a shape scale with its own range, through a selection condition', { data: DATA, params: [{ name: 'pts', select: { type: 'point', fields: ['c'], toggle: false } }], mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { param: 'pts', field: 'g', type: 'nominal' }, value: 'grey' }, shape: { condition: { param: 'pts', field: 'c', type: 'nominal', scale: { range: ['triangle-left', 'triangle-right', 'triangle-up'] } }, value: 'circle' } } }],
@@ -274,6 +276,14 @@ const GROUPS: Record<string, Case[]> = {
     ['a text style overriding the default alignment', { data: DATA, config: { style: { label: { align: 'left', baseline: 'middle', dx: 3 } } }, layer: [{ mark: 'bar', encoding: { y: n('c'), x: q('v', { aggregate: 'sum' }) } }, { mark: { type: 'text', style: 'label' }, encoding: { y: n('c'), x: q('v', { aggregate: 'sum' }), text: q('v', { aggregate: 'sum' }) } }] }],
     ['config.text alignment replaces the default', { data: DATA, config: { text: { align: 'right', dx: -5, dy: 5 } }, mark: 'text', encoding: { x: q('x'), y: q('y'), text: q('v') } }],
     ['a rule between two ordinal positions', { data: DATA, layer: [{ mark: 'bar', encoding: { x: { field: 'c', type: 'ordinal', sort: null }, y: q('v') } }, { mark: { type: 'rule', xOffset: -5, x2Offset: 5 }, encoding: { x: { field: 'c', type: 'ordinal', sort: null }, x2: { field: 'g' }, y: q('v') } }] }],
+  ],
+  // stack.ts impute with bins (bin_mid), mark.ts getStackGroup (stroke, band end), legend/encode.ts symbols
+  'stacked bins, rounded stacks, symbol legends (stacked_area_binned, stacked_bar_count_corner_radius_stroke, circle_natural_disasters)': [
+    ['a stacked area over bins', { data: DATA, mark: 'area', encoding: { x: q('x', { bin: true }), y: { aggregate: 'count' }, color: n('g') } }],
+    ['a stacked area over bins with an explicit maxbins', { data: DATA, mark: 'area', encoding: { x: q('x', { bin: { maxbins: 3 } }), y: { aggregate: 'sum', field: 'v', type: 'quantitative' }, color: n('c') } }],
+    ['rounded stacked bars with a stroke over a time unit', { data: DATA, config: { bar: { strokeWidth: 2 } }, mark: { type: 'bar', cornerRadius: 10, stroke: 'black' }, encoding: { x: { timeUnit: 'year', field: 't', type: 'ordinal' }, y: { aggregate: 'count' }, color: n('g') } }],
+    ['rounded stacked bars over a bin', { data: DATA, mark: { type: 'bar', cornerRadius: 6 }, encoding: { x: q('x', { bin: true }), y: { aggregate: 'count' }, color: n('g') } }],
+    ['a size legend with the colour legend turned off', { data: DATA, mark: { type: 'circle', opacity: 0.8, stroke: 'black', strokeWidth: 1 }, encoding: { x: q('x'), y: n('c'), size: q('v', { title: 'Size', legend: { clipHeight: 30 } }), color: n('c', { legend: null }) } }],
   ],
 }
 
