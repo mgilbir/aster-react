@@ -157,6 +157,7 @@ const GROUPS: Record<string, Case[]> = {
   ],
   // mark/encode/position-point.ts + valueref.ts: invalid values "show"; common.ts getMarkPropOrConfig: config.mark.tooltip
   'invalid values, config tooltips, child titles (test_invalid_show, test_invalid_filter)': [
+    ['a line over the valid aggregate of a temporal field (coerced to quantitative, so cast to a number)', { data: { values: [{ c: 'alpha', v: 28, t: '2024-01-07' }, { c: 'beta', v: 55, t: '2024-03-19' }] }, mark: 'line', encoding: { x: { field: 't', type: 'temporal', aggregate: 'valid' }, y: { field: 'v', type: 'quantitative' } } }],
     ['invalid show: a bar, a line with points and an area in an hconcat', { data: NULLS, config: { mark: { invalid: 'show', tooltip: true } }, title: 'Invalid', hconcat: [{ mark: 'bar', encoding: { x: q('a'), y: q('b') } }, { mark: { type: 'line', point: true }, encoding: { x: q('a'), y: q('b') } }, { mark: 'area', encoding: { x: q('a'), y: q('b') } }, { mark: 'point', encoding: { x: q('a'), y: q('b') } }] }],
     ['invalid filter in a vconcat of hconcats with titles', { data: NULLS, config: { mark: { invalid: 'filter' } }, vconcat: [{ title: 'Quantitative X', hconcat: [{ mark: 'point', encoding: { x: q('a'), y: q('b') } }, { mark: 'bar', encoding: { x: q('a'), y: q('b') } }] }, { title: { text: 'Ordinal X', anchor: 'middle' }, hconcat: [{ mark: 'point', encoding: { x: { field: 'a', type: 'ordinal' }, y: q('b') } }] }] }],
     ['config.<mark>.tooltip', { data: DATA, config: { point: { tooltip: true } }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],

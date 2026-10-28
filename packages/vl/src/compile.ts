@@ -3405,7 +3405,8 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
       // count/distinct/valid/missing over a nominal/ordinal field counts raw
       // values — vega-lite does not coerce the source column (only temporal
       // sources go through toNumber).
-      if (f.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(String(f.aggregate))) continue
+      // (a temporal field declared under one of them is coerced to quantitative with a warning, and then does cast to a number)
+      if (f.aggregate != null && declared !== 'temporal' && ['count', 'distinct', 'valid', 'missing'].includes(String(f.aggregate))) continue
       if (timeUnitFields.has(f.field) || f.timeUnit || f.type === 'temporal') {
         // A temporal axis formatted as a number makes upstream skip the toDate
         // cast entirely (the time scale then gets raw strings and an invalid
