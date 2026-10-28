@@ -17,6 +17,7 @@ const TEXT = '<text transform="translate(10,20)" fill="#000" font-family="sans-s
 const RECT = '<rect x="5" y="6" width="20" height="10" fill="#4c78a8"/>'
 const LINE = '<line x1="0" y1="0" x2="50" y2="0" stroke="#888" stroke-width="1"/>'
 const grad = (c: string, extra = '') => `<defs><linearGradient id="gradient_9" x1="0" y1="0" x2="1" y2="0"${extra}><stop offset="0" stop-color="red"/><stop offset="1" stop-color="${c}"/></linearGradient></defs><rect width="30" height="30" fill="url(#gradient_9)"/>`
+const radial = (c: string) => `<defs><pattern id="p_g7" viewBox="0,0,1,1" width="100%" height="100%" preserveAspectRatio="xMidYMid slice"><rect width="1" height="1" fill="url(#g7)"/></pattern><radialGradient id="g7" fx="0.5" fy="0.5" fr="0" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="${c}"/></radialGradient></defs><rect width="30" height="30" fill="url(#p_g7)"/>`
 const clip = (w: number) => `<defs><clipPath id="clip1"><rect x="0" y="0" width="${w}" height="20"/></clipPath></defs><g clip-path="url(#clip1)">${RECT}</g>`
 
 /** [name, oracle svg, aster svg]: every pair differs visibly and must be reported. */
@@ -30,6 +31,13 @@ const PLANTED: Array<[string, string, string]> = [
   ['font-family', wrap(TEXT), wrap(TEXT.replace('sans-serif', 'serif'))],
   ['font-family omitted', wrap(TEXT), wrap(TEXT.replace(' font-family="sans-serif"', ''))],
   ['text content', wrap(TEXT), wrap(TEXT.replace('>hi<', '>ho<'))],
+  ['text content that differs after its references are decoded', wrap(TEXT.replace('>hi<', '>&quot;a&quot; &amp; b<')), wrap(TEXT.replace('>hi<', '>&quot;a&quot; &amp; c<'))],
+  ['a double-escaped reference is the text of a reference, not the character', wrap(TEXT.replace('>hi<', '>&amp;quot;x<')), wrap(TEXT.replace('>hi<', '>&quot;x<'))],
+  ['two different numeric character references', wrap(TEXT.replace('>hi<', '>&#65;<')), wrap(TEXT.replace('>hi<', '>&#66;<'))],
+  ['a quote against a missing quote', wrap(TEXT.replace('>hi<', '>&quot;hi&quot;<')), wrap(TEXT.replace('>hi<', '>&quot;hi<'))],
+  ['a radial gradient (in its pattern): stop colour', wrap(radial('blue')), wrap(radial('green'))],
+  ['a radial gradient (in its pattern): radius', wrap(radial('blue')), wrap(radial('blue').replace('r="0.5"', 'r="0.4"'))],
+  ['a radial gradient (in its pattern) against a linear one', wrap(radial('blue')), wrap(grad('blue'))],
   ['opacity 0 vs absent element', wrap(`${TEXT.replace('<text', '<text opacity="0"')}${RECT}`), wrap(RECT)],
   ['opacity 0 vs opacity 1', wrap(TEXT.replace('<text', '<text opacity="0"')), wrap(TEXT.replace('<text', '<text opacity="1"'))],
   ['group opacity', wrap(`<g opacity="0.5">${RECT}</g>`), wrap(RECT)],
@@ -112,6 +120,9 @@ const EQUIVALENT: Array<[string, string, string]> = [
   ['initial values', wrap(LINE), wrap(LINE.replace('<line', '<line opacity="1" stroke-opacity="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-dashoffset="0"'))],
   ['relative vs absolute path', wrap('<path d="M1,1h10v10h-10Z" fill="red"/>'), wrap('<path d="M1,1L11,1L11,11L1,11Z" fill="red"/>')],
   ['H/V vs L', wrap('<path d="M1,1H11V11H1Z" fill="red"/>'), wrap('<path d="M1 1 L 11 1 L 11 11 L 1 11 Z" fill="red"/>')],
+  ['text spelt with character references', wrap(TEXT.replace('>hi<', '>&quot;it&apos;s&quot; &amp; &lt;b&gt;<')), wrap(TEXT.replace('>hi<', '>"it\'s" &#38; &#x3c;b&#62;<'))],
+  ['text spelt with a raw and with a named quote', wrap(TEXT.replace('>hi<', '>"Quoted" Title<')), wrap(TEXT.replace('>hi<', '>&quot;Quoted&quot; Title<'))],
+  ['a radial gradient: ids of the pattern and the gradient', wrap(radial('blue')), wrap(radial('blue').replace(/g7/g, 'gradient_31'))],
   ['gradient ids', wrap(grad('blue')), wrap(grad('blue').replace(/gradient_9/g, 'gradient_77'))],
   ['clip ids', wrap(clip(20)), wrap(clip(20).replace(/clip1/g, 'clip42'))],
   ['unreferenced defs', wrap(RECT), wrap(`<defs><clipPath id="c"><rect width="1" height="1"/></clipPath></defs>${RECT}`)],

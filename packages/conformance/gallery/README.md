@@ -6,7 +6,7 @@ paths a user takes, and compares the canonical SVG exactly (`src/normalize.ts`, 
 | path   | oracle                                                         | Aster                                                                                                          |
 |--------|----------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
 | static | vega in Node (`vega-lite` compiles first for Vega-Lite)        | `loadSpecData` + `renderSpec` (`@aster/vl` compiles Vega-Lite)                                                 |
-| react  | the same vega in headless Chromium, in a 600 x 400 host        | `<Chart>` mounted as an app would: `@aster/react/vl`, `@aster/core/geo` + `/transforms`, data through `loadSpecData`, **no** size props unless the (compiled) spec has numeric top-level `width` / `height` |
+| react  | the same vega in headless Chromium, in a 600 x 400 host        | `<Chart>` mounted as an app would: `@aster/react/vl`, **no** add-on imported (`<Chart>` loads geo / transforms itself, and the page checks it loaded exactly what the spec needs), data through `loadSpecData`, **no** size props unless the (compiled) spec has numeric top-level `width` / `height` |
 
 Both read the data from the pinned `vega-datasets` package (3.2.1, the version both repositories' lockfiles use) through one offline
 `fetch`; the browser page has every request routed to disk or aborted. There is no network at test time.
@@ -80,14 +80,20 @@ Every spec ends in exactly one of:
 * `error` - Aster (or `@aster/vl`) threw, or its SVG could not be canonicalised.
 * `unverifiable` - the **oracle** cannot be compared: it is not a function of its inputs (it renders differently when rendered
   twice: `random()`, bootstrap / sample transforms, timers) or vega itself fails (vega's heatmap needs a canvas on Node). Always
-  listed with the reason; never counted as a pass; capped by a ceiling.
+  listed with the reason; never counted as a pass; capped by a ceiling. On the React path a spec with a `timer` stream or `now()`
+  gets one more measurement: its oracle view is left running for 1.3 s and the document compared with the first frame
+  (`oracle-time-dependent`). `<Chart>` mounts such a view live, so its markup keeps changing (`watch` redraws every 10 ms and used
+  to hang the settle loop); if the oracle's own document moves with time there is no frame to compare against.
 
 Nothing is tolerated silently: all `fail` and `error` lines are printed. The runs are deterministic (four consecutive runs gave
 identical outcomes for all 720 specs on both paths).
 
 ## The ratchet
 
-* `floors.json` - passing count per path and grammar (may only go up) and the unverifiable ceiling (may only go down).
+* `floors.json` - passing count per path and grammar (may only go up) and the unverifiable ceiling (may only go down). The one
+  exception so far: the React ceiling went from 7 / 10 to 11 / 12 when time-dependent oracles started to be measured
+  (`vega/clock`, `pacman`, `watch`, `donut-chart-labelled`, `vl/animated_gapminder`, `animated_hop`: each was a fail or an error
+  on that path, or hung; none was a pass). They are still checked on the static path, where the first frame is what is compared.
 * `passing-static.txt`, `passing-react.txt` - the specs that pass today; each must still pass (a count floor alone lets a fix hide
   a regression).
 * the number of specs read must equal the manifest.

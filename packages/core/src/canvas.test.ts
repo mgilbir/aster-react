@@ -112,6 +112,9 @@ function makeRecordingCtx(): { ctx: CanvasLike; records: DrawRecord[] } {
       // element bbox); the recorder just returns a stop-collecting stub.
       return { addColorStop() {} }
     },
+    createRadialGradient(x0, y0, r0, x1, y1, r1): GradientLike {
+      return { addColorStop() {} }
+    },
     get fillStyle() { return fillStyle },
     set fillStyle(v: unknown) {
       fillStyle = v
@@ -152,7 +155,9 @@ function fmtA(n: number): string {
 // stack and emit the same record shapes.
 // ---------------------------------------------------------------------------
 
-function svgRecords(svg: string): DrawRecord[] {
+function svgRecords(svgIn: string): DrawRecord[] {
+  // (what <defs> holds is referenced, never drawn: a radial gradient's pattern wrapper has a rect of its own)
+  const svg = svgIn.replace(/<defs>[\s\S]*?<\/defs>/g, '')
   const records: DrawRecord[] = []
   const stack: Array<[number, number]> = [[0, 0]]
   const at = (): [number, number] => stack[stack.length - 1]!

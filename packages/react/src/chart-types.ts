@@ -86,7 +86,7 @@ export interface ChartProps {
    * but the pixels are identical — 100k symbols become a few hundred paths,
    * which keeps large SVG scenes inside the frame budget. Tooltips, point
    * selection and a11y resolve through the scene, so they keep working;
-   * per-mark `data-datum` attributes and spec `signal.on` mark events do not.
+   * spec `signal.on` mark events, which resolve their item the same way, do too.
    * Ignored for canvas (already batched). Server rendering always emits the
    * per-item markup so hydration matches; a client-only mount batches directly.
    */
@@ -162,9 +162,9 @@ export interface ChartProps {
   interactive?: boolean
   /**
    * Show a tooltip on hover over a mark: the datum's fields rendered as
-   * `key: value` at the cursor. Resolved through the scene on both renderers
-   * (the `data-datum` attribute on SVG, the hit index for canvas and batched
-   * dense marks). Off by default.
+   * `key: value` at the cursor. Resolved through the scene hit index on every
+   * renderer (SVG, canvas and batched dense marks alike; the SVG carries no
+   * per-item datum attribute, as vega's does not). Off by default.
    */
   tooltip?: boolean
   /**

@@ -408,3 +408,20 @@ describe('@aster/vl == vega-lite: nested fields in predicates and transforms (ro
     }, 30_000)
   }
 })
+
+// optimize/mergebins.ts: layers that bin the same field share one bin node (one extent, one bins signal)
+describe('@aster/vl == vega-lite: layers that bin the same field (concat_bar_layer_circle)', () => {
+  const binned = { x: { bin: { maxbins: 10 }, field: 'x', type: 'quantitative' }, y: { bin: { maxbins: 10 }, field: 'y', type: 'quantitative' }, size: { aggregate: 'count', type: 'quantitative' } }
+  const SEL = { name: 'pts', select: { type: 'point', encodings: ['x'] } }
+  const GROUP = { mark: 'bar', params: [SEL], encoding: { x: { field: 'c', type: 'nominal' }, y: { aggregate: 'count', type: 'quantitative' } } }
+  const CASES2: Array<[string, Record<string, any>]> = [
+    ['a layer filtered by a selection bins with the first layer\'s extent', { data: DATA, vconcat: [{ layer: [{ mark: 'circle', encoding: { ...binned, opacity: { value: 0.4 } } }, { transform: [{ filter: { param: 'pts' } }], mark: 'circle', encoding: binned }] }, GROUP] }],
+    ['a layer filtered by a predicate', { data: DATA, layer: [{ mark: 'circle', encoding: binned }, { transform: [{ filter: 'datum.v > 4' }], mark: 'circle', encoding: { ...binned, color: { value: 'red' } } }] }],
+  ]
+  for (const [name, spec] of CASES2) it(name, async () => {
+    const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+    const sigs = (ours.data as any[]).flatMap((d) => d.transform ?? []).filter((t: any) => typeof t.signal === 'string' && (t.type === 'bin' || t.type === 'extent')).map((t: any) => `${t.type}:${t.signal}`)
+    expect(new Set(sigs).size, 'a signal is declared once').toBe(sigs.length)
+    await check(spec)
+  }, 30_000)
+})

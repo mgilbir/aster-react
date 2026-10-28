@@ -94,7 +94,7 @@ describe('expression — function library (oracle-calibrated)', () => {
   it('date-time accessors from datetime()', () => {
     expect(run('year(datetime(2021, 2, 15))')).toBe(2021)
     expect(run('month(datetime(2021, 2, 15))')).toBe(2)
-    expect(run('quarter(datetime(2021, 2, 15))')).toBe(0)
+    expect(run('quarter(datetime(2021, 2, 15))')).toBe(1)
     expect(run('utcyear(utc(2021, 2, 15))')).toBe(2021)
   })
   it('indata returns match count', () => {

@@ -1,0 +1,13 @@
+{"$schema":"https://vega.github.io/schema/vega/v6.json","width":300,"height":200,"padding":5,"autosize":"none",
+"data":[
+{"name":"nums","values":[12,23,5,31,18]},
+{"name":"mixed","values":["a",true,{"data":7},[3,4]]},
+{"name":"derived","source":"nums","transform":[{"type":"filter","expr":"datum.data > 10"}]}],
+"scales":[
+{"name":"x","type":"band","domain":{"data":"nums","field":"data","sort":true},"range":"width","padding":0.1},
+{"name":"y","type":"linear","domain":{"data":"nums","field":"data"},"range":"height","zero":true,"nice":true}],
+"marks":[
+{"type":"rect","from":{"data":"nums"},"encode":{"update":{"x":{"scale":"x","field":"data"},"width":{"scale":"x","band":1},"y":{"scale":"y","field":"data"},"y2":{"scale":"y","value":0},"fill":{"value":"steelblue"}}}},
+{"type":"symbol","from":{"data":"derived"},"encode":{"update":{"x":{"scale":"x","field":"data","band":0.5},"y":{"value":10},"size":{"signal":"datum.data * 3"},"fill":{"value":"firebrick"}}}},
+{"type":"text","from":{"data":"mixed"},"encode":{"update":{"x":{"signal":"10 + 20 * isNumber(datum.data)"},"y":{"signal":"20 + 15 * indexof(['a',true,7,0],datum.data)"},"text":{"signal":"isArray(datum.data) ? 'arr' : isObject(datum.data) ? 'obj' : toString(datum.data)"}}}}],
+"axes":[{"scale":"x","orient":"bottom"},{"scale":"y","orient":"left"}]}

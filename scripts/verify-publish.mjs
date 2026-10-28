@@ -219,8 +219,8 @@ void [liteEl, richEl, fullEl]
   writeFileSync(join(project, 'smoke.mjs'), `
 import assert from 'node:assert'
 import { createElement } from 'react'
-import { renderToString } from 'react-dom/server'
-import { renderSpec, compileChart, evaluateChart } from '@aster/core'
+import { renderToString, renderToReadableStream } from 'react-dom/server'
+import { renderSpec, compileChart, evaluateChart, transformRegistry } from '@aster/core'
 import { createChartSession, patchSceneDom } from '@aster/core/dom'
 import { renderSceneToCanvas } from '@aster/core/canvas'
 import { buildHitIndex } from '@aster/core/hit'
@@ -283,8 +283,20 @@ assert.ok(liteHtml.includes('<svg'), '<SvgChart> renders Vega through the publis
 const richHtml = renderToString(createElement(SvgChart, { spec: vega, width: 200, height: 120, a11y: false, interaction }))
 assert.ok(richHtml === chartHtml, '<SvgChart interaction> renders exactly the markup <Chart> renders')
 assert.ok(liteHtml === richHtml, '<SvgChart> renders the same markup with or without interaction when the spec has no event streams')
-assert.ok(renderToString(createElement(SvgChart, { spec: vega, width: 200, height: 120, a11y: false, interaction, tooltip: true })).includes('data-datum='), '<SvgChart interaction tooltip> stamps the datum')
-assert.ok(Object.isFrozen(interaction) && typeof interaction.buildHitIndex === 'function' && typeof interaction.bindSceneSignals === 'function' && typeof interaction.stampDatumAttrs === 'function', 'the interaction capability')
+const tipHtml = renderToString(createElement(SvgChart, { spec: vega, width: 200, height: 120, a11y: false, interaction, tooltip: true }))
+assert.ok(tipHtml.includes('<svg') && !tipHtml.includes('data-datum'), '<SvgChart interaction tooltip> writes the markup of vega: the hovered datum comes from the hit index, not an attribute')
+assert.ok(Object.isFrozen(interaction) && typeof interaction.buildHitIndex === 'function' && typeof interaction.bindSceneSignals === 'function' && typeof interaction.createCursorTracker === 'function' && typeof interaction.sceneHasCursor === 'function' && !('stampDatumAttrs' in interaction), 'the interaction capability')
+
+// The packed packages load the add-ons a spec needs by themselves (nothing above registered the transforms add-on): a streaming
+// server render waits for the dynamic import, in Node's own ESM loader, from the installed tarball, and sends the chart.
+assert.equal(transformRegistry.size, 0, 'no add-on is registered before the auto-load')
+const pie = { width: 120, height: 120, padding: 0, data: [{ name: 't', values: [{ v: 1 }, { v: 2 }, { v: 3 }], transform: [{ type: 'pie', field: 'v' }] }],
+  marks: [{ type: 'arc', from: { data: 't' }, encode: { update: { x: { value: 60 }, y: { value: 60 }, outerRadius: { value: 50 }, startAngle: { field: 'startAngle' }, endAngle: { field: 'endAngle' }, fill: { value: 'tomato' } } } }] }
+const streamed = await renderToReadableStream(createElement(Chart, { spec: pie, width: 120, height: 120, a11y: false }))
+await streamed.allReady
+const pieHtml = await new Response(streamed).text()
+assert.ok(pieHtml.includes('<svg') && pieHtml.includes('mark-arc'), '<Chart> loaded the transforms add-on by itself and rendered the pie')
+assert.ok(transformRegistry.size > 0, 'and the add-on is registered now')
 
 const worker = handleChartWorkerRequest({ id: 1, spec: vega })
 assert.ok(worker.svg && worker.svg.includes('<svg'), 'worker request handler')

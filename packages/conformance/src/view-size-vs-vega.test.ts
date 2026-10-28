@@ -64,6 +64,22 @@ const container: Spec = {
   }),
 }
 
+// a composition (what vega-lite makes of a facet / concat / repeat): `layout` at the top, no size of its own. Vega sizes the
+// view from the laid-out groups (the `width` / `height` signals are outputs there, 0 until then), so a container does not
+// size it; a size the host does give (a prop, a signal write) still does
+const cell = (i: number): Spec => ({
+  type: 'group', name: `cell${i}`,
+  encode: { update: { width: { value: 90 + 20 * (i % 2) }, height: { value: 60 + 15 * i }, stroke: { value: '#999' } } },
+  scales: [{ name: 'cx', type: 'band', domain: { data: 't', field: 'k' }, range: 'width', padding: 0.1 }, { name: 'cy', type: 'linear', domain: { data: 't', field: 'v' }, range: 'height', nice: true, zero: true }],
+  axes: [{ orient: 'bottom', scale: 'cx' }, { orient: 'left', scale: 'cy' }],
+  marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'cx', field: 'k' }, width: { scale: 'cx', band: 1 }, y: { scale: 'cy', field: 'v' }, y2: { scale: 'cy', value: 0 }, fill: { value: 'steelblue' } } } }],
+})
+const composed: Spec = {
+  padding: 5, data: [{ name: 't', values: ROWS }],
+  layout: { padding: 20, columns: 2, bounds: 'full', align: 'all' },
+  marks: [0, 1, 2, 3].map(cell),
+}
+
 describe('the view size, against vega (a signal write, the later one wins)', () => {
   const cases: Array<[string, Spec, (v: View, el: ReturnType<typeof containerEl>) => Promise<void> | void, RuntimeInput, { width: number; height: number }?]> = [
     ['a spec that sizes itself: its own signal values', driven, () => {}, {}],
@@ -73,6 +89,9 @@ describe('the view size, against vega (a signal write, the later one wins)', () 
     ['a fixed size set on the view (view.width / view.height)', driven, (v) => { v.width(480); v.height(260) }, { width: 480, height: 260 }],
     ['a numeric size, the container measured (the chart fills it)', fixed, (v) => { v.width(700); v.height(260) }, { measuredSize: { width: 700, height: 260 } }],
     ['a numeric size, then a value written to the signal', fixed, (v) => { v.height(260); v.signal('width', 250) }, { measuredSize: { width: 700, height: 260 }, signals: { width: 250 } }],
+    ['a composition (layout, no size): the container measured does not size it', composed, () => {}, { measuredSize: { width: 600, height: 400 } }],
+    ['a composition, the host fixed the height: the width is still the layout\'s', composed, (v) => { v.height(250) }, { height: 250, measuredSize: { width: 600, height: 400 } }],
+    ['a composition, a value written to the width signal beats the layout', composed, (v) => { v.signal('width', 520) }, { signals: { width: 520 }, measuredSize: { width: 600, height: 400 } }],
     // vega's container is the element the view is attached to; its size is read when the signals are computed
     ['a container-sized spec: the container is its size', container, () => {}, { containerSize: { width: 600, height: 240 } }, { width: 600, height: 240 }],
     ['a container-sized spec, the container measured', container, () => {}, { measuredSize: { width: 520, height: 200 } }, { width: 520, height: 200 }],

@@ -47,6 +47,7 @@ const BAR_VG = corpus('bar-bands.vg.json')
 const BAR_VL = corpus('bar-basic.vl.json')
 const GEO_VG = corpus('geo-vlout-mercator-translate.vg.json')
 const TREEMAP_VG = corpus('treemap.vg.json')
+
 const REGRESSION_VG = {
   width: 200, height: 100,
   data: [{
@@ -306,14 +307,14 @@ const PATTERNS = [
       flushSync(() => createRoot(host).render(React.createElement(SvgChart, { ref, interaction, spec: ${lit(SIGNAL_VG)}, width: 100, height: 100, tooltip: true, onError: (e) => errors.push(e.message) })))
       const before = ref.current.getSignals().clicks
       flushSync(() => { host.querySelector('svg').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
-      const rect = host.querySelector('[data-datum]')
+      const rect = host.querySelector('.mark-rect path')
       rect.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: 15, clientY: 15 }))
       await new Promise((r) => setTimeout(r, 30)) // a continuous event: React renders it on the next tick
-      return { before: before ?? null, after: ref.current.getSignals().clicks, errors, stamped: !!rect, tooltip: !!host.querySelector('[data-testid="chart-tooltip"]') }`,
+      return { before: before ?? null, after: ref.current.getSignals().clicks, errors, stamped: host.querySelector('[data-datum]') !== null, tooltip: !!host.querySelector('[data-testid="chart-tooltip"]') }`,
     check: (r) => [
       [r.after === 1, 'the click ran the spec\'s signal.on handler (the event loop is bound)'],
       [r.errors.length === 0, 'no capability is reported missing'],
-      [r.stamped && r.tooltip, 'data-datum is stamped and the tooltip resolves the hovered datum'],
+      [!r.stamped && r.tooltip, 'the markup carries no data-datum (it is vega\'s), and the tooltip resolves the hovered datum through the hit index'],
     ],
     modules: (m) => [
       [hasModule(m.contributing, 'core', 'hit') && hasModule(m.contributing, 'core', 'signals'), 'hit.js and signals.js contribute code'],
@@ -332,6 +333,90 @@ const PATTERNS = [
       [/data-scene="yes"/.test(r.html) && /class="mark-rect/.test(r.html), 'useChart returns the scene and the svg'],
       [/data-w="\d+"/.test(r.headless) && /data-svg="null"/.test(r.headless), 'headless useChart (serialize: false) returns a scene only'],
     ],
+  },
+  {
+    name: 'react-autoload',
+    why: "<Chart> with nothing imported: a plain spec imports no add-on; pie, a projection and csv text load theirs on demand, from chunks the entry does not contain, and render what the static path renders",
+    split: true,
+    dom: true,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster/react'\nimport { renderSpec, geoRegistry, transformRegistry, dataFormatRegistry } from '@aster/core'`,
+    body: `
+      const registered = () => ({ geo: geoRegistry.buildProjection !== null, transforms: transformRegistry.size > 0, load: dataFormatRegistry.has('csv') })
+      const mount = (spec) => {
+        const host = document.createElement('div'); document.body.appendChild(host)
+        flushSync(() => createRoot(host).render(React.createElement(React.Suspense, { fallback: React.createElement('i', { id: 'fb' }) }, React.createElement(Chart, { spec, width: 300, height: 200, a11y: false }))))
+        return host
+      }
+      const svgOf = (host) => host.querySelector('svg')?.outerHTML ?? null
+      const staticSvg = (spec) => { const h = document.createElement('div'); h.innerHTML = renderSpec(spec, { width: 300, height: 200 }); return h.firstElementChild.outerHTML }
+      const settle = async (host) => { for (let i = 0; i < 400 && !host.querySelector('svg'); i++) await new Promise((r) => setTimeout(r, 10)) }
+      const out = {}
+      const plain = mount(${lit(BAR_VG)})
+      out.plainSync = !!plain.querySelector('svg') && !plain.querySelector('#fb')
+      out.afterPlain = registered()
+      const pie = mount(${lit(corpus('t-pie.vg.json'))})
+      out.pieFallback = !!pie.querySelector('#fb')
+      await settle(pie)
+      out.afterPie = registered()
+      out.pieSame = svgOf(pie) === staticSvg(${lit(corpus('t-pie.vg.json'))})
+      const geo = mount(${lit(GEO_VG)})
+      out.geoFallback = !!geo.querySelector('#fb')
+      await settle(geo)
+      out.afterGeo = registered()
+      out.geoSame = svgOf(geo) === staticSvg(${lit(GEO_VG)})
+      const CSV = { width: 100, height: 40, padding: 0, data: [{ name: 't', values: 'k,v\\na,1\\nb,2', format: { type: 'csv', parse: { v: 'number' } } }],
+        scales: [{ name: 'x', type: 'linear', domain: { data: 't', field: 'v' }, range: 'width' }],
+        marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'v' }, y: { value: 10 } } } }] }
+      const csv = mount(CSV)
+      out.csvFallback = !!csv.querySelector('#fb')
+      await settle(csv)
+      out.afterCsv = registered()
+      out.csvSame = svgOf(csv) === staticSvg(CSV)
+      return out`,
+    check: (r) => [
+      [r.plainSync === true, 'a plain spec renders in the first commit, with no fallback'],
+      [r.afterPlain.geo === false && r.afterPlain.transforms === false && r.afterPlain.load === false, 'and imports no add-on (nothing registered after it)'],
+      [r.pieFallback === true && r.afterPie.transforms === true && r.afterPie.geo === false && r.afterPie.load === false, 'pie: the fallback shows, then only the transforms add-on is loaded'],
+      [r.pieSame === true, 'pie renders what renderSpec renders'],
+      [r.geoFallback === true && r.afterGeo.geo === true && r.afterGeo.load === false, 'a projection: the fallback shows, then the geo add-on is loaded (not load)'],
+      [r.geoSame === true, 'the map renders what renderSpec renders'],
+      [r.csvFallback === true && r.afterCsv.load === true, 'csv text: the fallback shows, then the load add-on is loaded'],
+      [r.csvSame === true, 'the csv chart renders what renderSpec renders'],
+    ],
+    modules: (m) => {
+      const geoOut = outputsWith(m, 'core', 'addon-geo')
+      const trOut = outputsWith(m, 'core', 'transform-extra')
+      const loadOut = outputsWith(m, 'core', 'addon-load')
+      return [
+        [geoOut.length === 1 && !geoOut[0].initial, 'the geo add-on is in a chunk of its own, loaded on demand (not by the entry)'],
+        [trOut.length === 1 && !trOut[0].initial, 'the transforms add-on is in a chunk of its own, loaded on demand'],
+        [loadOut.length === 1 && !loadOut[0].initial, 'the load add-on is in a chunk of its own, loaded on demand'],
+        [new Set([geoOut[0]?.file, trOut[0]?.file, loadOut[0]?.file]).size === 3, 'and each in its own chunk, so a spec pays for the add-ons it needs only'],
+      ]
+    },
+  },
+  {
+    name: 'react-autoload-static',
+    why: "an app that imports an add-on itself: <Chart> renders at once, the add-on is in the entry once and no chunk of it is built twice",
+    split: true,
+    dom: true,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport '@aster/core/geo'\nimport { Chart } from '@aster/react'\nimport { renderSpec } from '@aster/core'`,
+    body: `
+      const host = document.createElement('div'); document.body.appendChild(host)
+      flushSync(() => createRoot(host).render(React.createElement(React.Suspense, { fallback: React.createElement('i', { id: 'fb' }) }, React.createElement(Chart, { spec: ${lit(GEO_VG)}, width: 300, height: 200, a11y: false }))))
+      const h = document.createElement('div'); h.innerHTML = renderSpec(${lit(GEO_VG)}, { width: 300, height: 200 })
+      return { sync: !!host.querySelector('svg') && !host.querySelector('#fb'), same: host.querySelector('svg')?.outerHTML === h.firstElementChild.outerHTML }`,
+    check: (r) => [
+      [r.sync === true, 'the map renders in the first commit (the add-on is found, nothing is imported)'],
+      [r.same === true, 'and is what renderSpec renders'],
+    ],
+    modules: (m) => {
+      const geoOut = outputsWith(m, 'core', 'addon-geo')
+      return [
+        [geoOut.length === 1 && geoOut[0].initial, 'the geo add-on is in one output, loaded up front with the entry (the dynamic import of it resolves to the same module)'],
+        [outputsWith(m, 'core', 'addon-transforms').length + outputsWith(m, 'core', 'transform-extra').filter((o) => o.initial).length === 0, 'and the add-ons it did not import are not loaded up front'],
+      ]
+    },
   },
   {
     name: 'react-vl',
@@ -443,15 +528,30 @@ function modulesOf(metafile) {
   const rel = (f) => f.replace(/\\/g, '/')
   const parsed = new Set(Object.keys(metafile.inputs).map(rel))
   const contributing = new Set()
-  for (const out of Object.values(metafile.outputs)) {
-    for (const [f, info] of Object.entries(out.inputs)) if (info.bytesInOutput > 0) contributing.add(rel(f))
+  const outputs = []
+  for (const [file, out] of Object.entries(metafile.outputs)) {
+    const inputs = []
+    for (const [f, info] of Object.entries(out.inputs)) if (info.bytesInOutput > 0) { contributing.add(rel(f)); inputs.push(rel(f)) }
+    // (esbuild gives every chunk that a dynamic import() starts an entryPoint too; the app is the one built from app.mjs)
+    outputs.push({ file: rel(file), entry: /app\.mjs$/.test(out.entryPoint ?? ''), inputs, static: out.imports.filter((i) => i.kind === 'import-statement').map((i) => rel(i.path)) })
   }
-  return { parsed: [...parsed], contributing: [...contributing] }
+  // what loads up front: the app and every chunk it (transitively) imports with a static import - the rest is fetched on demand
+  const initial = new Set()
+  const visit = (f) => {
+    if (initial.has(f)) return
+    initial.add(f)
+    for (const i of outputs.find((o) => o.file === f)?.static ?? []) visit(i)
+  }
+  for (const o of outputs) if (o.entry) visit(o.file)
+  for (const o of outputs) o.initial = initial.has(o.file)
+  return { parsed: [...parsed], contributing: [...contributing], outputs }
 }
 
 /** Dist modules of the three packages, by name: `dist('core', 'canvas')` matches packages/core/dist/canvas.js. */
 const distRe = (pkg, name) => new RegExp(`packages/${pkg}/dist/${name}\\.js$`)
 const hasModule = (list, pkg, name) => list.some((f) => distRe(pkg, name).test(f))
+/** The output files (entry or chunk) in which a dist module contributes code. */
+const outputsWith = (m, pkg, name) => m.outputs.filter((o) => hasModule(o.inputs, pkg, name))
 
 async function viteBuild(p, entry, out) {  // (no module report: the metafile is esbuild's)
   if (BLANKET_FALSE) throw new Error('--blanket-false is an esbuild plugin; for vite edit the manifests instead')
@@ -549,6 +649,7 @@ try {
     }
     if (argv.includes('--verbose')) console.log(JSON.stringify(outcome.result).slice(0, 600))
     // `p.modules(m)`: assertions on what the bundle is made of (esbuild only; skipped under --bundler vite)
+    if (argv.includes('--outputs') && outcome.modules?.outputs) for (const o of outcome.modules.outputs) console.log('  out', o.file, o.entry ? 'ENTRY' : '', o.inputs.filter((f) => /addon|transform-extra/.test(f)).join(','))
     const checks = [...p.check(outcome.result), ...(p.modules && outcome.modules ? p.modules(outcome.modules) : [])]
     const bad = checks.filter(([ok]) => !ok).map(([, what]) => what)
     if (bad.length) {

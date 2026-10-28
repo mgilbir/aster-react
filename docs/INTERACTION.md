@@ -299,8 +299,8 @@ that can only be lowered (`scripts/gates.mjs`).
 
 `tooltip` renders the datum's primitive fields (`key: value`, numbers rounded to 3 decimals, fields starting with `__`
 hidden) at the cursor. `renderTooltip(datum)` replaces the content inside the chart's React tree and enables tooltips by
-itself. Both SVG (the `data-datum` attributes) and canvas and batched dense marks (the hit index) resolve the hovered
-mark. Tooltips are off by default.
+itself. The hovered mark is resolved through the scene hit index on every renderer (the SVG carries no per-item datum
+attribute, as vega's does not). Tooltips are off by default.
 
 ## Cursor
 

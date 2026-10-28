@@ -125,7 +125,8 @@ export interface RuntimeInput {
 
 export interface CompiledProjection {
   name: string
-  type: string
+  /** A projection name, or a `{signal}` that yields one. */
+  type: string | { signal: string }
   /**
    * Every other projection parameter as the spec wrote it (scale, translate,
    * center, rotate, parallels, clipAngle, clipExtent, pointRadius, fit, size,
@@ -185,6 +186,11 @@ export interface CompiledChart {
   /** Signal values supplied by the host (not serialized). */
   /** Root-level trellis layout options (vega spec `layout`), when present. */
   layout?: Record<string, unknown>
+  /**
+   * The view dimensions the spec leaves to its own layout: a composition (a top-level `layout`) with no size and no
+   * `width` / `height` signal. Vega sizes that view from the laid-out groups, so a host's container does not size it.
+   */
+  contentSized?: ReadonlyArray<'width' | 'height'>
 }
 
 export interface CompiledTitle {
@@ -255,11 +261,30 @@ export interface SignalOnDef {
   encode?: unknown
 }
 
+/**
+ * A gradient definition of a scene: referenced by a paint as `url(#id)`. A legend's gradient names a `direction`; a
+ * gradient object of a mark's paint gives its own coordinates (fractions of the item's box; `kind` 'radial' also `r1`/`r2`).
+ */
+export interface SceneDef {
+  id: string
+  colorStops: Array<{ offset: number; color: string }>
+  direction?: 'vertical' | 'horizontal'
+  kind?: 'linear' | 'radial'
+  x1?: number
+  y1?: number
+  x2?: number
+  y2?: number
+  r1?: number
+  r2?: number
+}
+
 export interface CompiledData {
   name: string
-  /** Inline values when present in the spec. */
+  /** Inline values when present in the spec (or a `{signal}` that yields them). */
   values?: unknown[]
   url?: string
+  /** The dataset(s) this one derives from: one name, or several (their rows, concatenated in this order). */
+  source?: string | string[]
   format?: Record<string, unknown>
   transform: CompiledTransform[]
 }
@@ -630,7 +655,7 @@ export interface SceneRoot {
   padding?: { top: number; right: number; bottom: number; left: number }
   items: SceneGroup[]
   /** Gradient definitions for use by fill="url(#...)" references. */
-  defs?: Array<{ id: string; colorStops: Array<{ offset: number; color: string }>; direction?: 'vertical' | 'horizontal' }>
+  defs?: SceneDef[]
   name?: string
   ariaRole?: string
   ariaLabel?: string

@@ -58,26 +58,43 @@ import { fileURLToPath } from 'node:url'
 // The pointer through the svg's screen CTM (core/pointer.ts, one cached map for the cursor, tooltip and gestures), the
 // painted-geometry hit index and the inert flags, merged, measured (kB gzip): hit marginal 5.8, Chart 174.8, SvgChart 154.3,
 // SvgChart + interaction 168.7, Chart + VL 249.9.
+// Add-on auto-load (the shells and hooks read which add-ons a spec needs and import them on demand: @aster/core/addons, the
+// Suspense wait in @aster/react), measured (kB gzip, the entry and the chunks it imports statically; the add-ons are chunks
+// fetched on demand and are not counted): useChart 139.9 (+2.0), Chart 176.6 (+1.8), SvgChart 157.5 (+3.2), SvgChart +
+// interaction 171.7 (+3.0), Chart + VL 252.0 (+2.1). The code itself is +0.7..0.9 (the detector, its tables, the loader and the
+// hook; measured with the add-ons kept out of the bundle); the rest is the chunk boundary a bundler draws once the add-ons are
+// dynamic imports: the code core shares with them moves to chunks the entry imports by name. The data-datum stamp that left
+// ChartCore (the markup is vega's) is already netted out. The core and marginal rows are unchanged.
+// The gallery runtime work (docs/CHANGELOG: gallery conformance), measured (kB gzip): core 135.0 (+0.7: date functions as vega
+// has them, ingest of primitive rows, d3's line and area generators over the items, gradient defs, source lists and the
+// signal-ordered dataset build, the item transforms of a mark, trail through the d3-path buffer); geo marginal 14.3 (+1.5: the
+// geo expression functions, the default path, the point radius); transforms marginal 23.2 (+7.6: tree / treelinks, force
+// with the d3-quadtree it needs, kde2d, isocontour, geopath, the distribution functions, treePath); useChart 139.2, Chart 176.4,
+// SvgChart 155.5, SvgChart + interaction 170.0, Chart + VL 251.6.
+// Merged with the add-on auto-load (#38), measured (kB gzip): core 135.3 (+0.3 over the 135.0 above: the add-on function names the
+// expression compiler reads to say which add-on to load); useChart 142.1, Chart 178.2, SvgChart 159.7, SvgChart + interaction
+// 173.2, Chart + VL 253.5. The two sets of changes add up: the gallery work moves code core shares with the add-ons into the
+// chunks the entry imports by name (the same chunk boundary as above), and the detector now parses expressions.
 // The @aster/vl compiler ports vega-lite's layout-size, band/bin/time-unit position, path-overlay, stack-order, resolve and
 // legend-merge rules (gallery conformance): Chart + VL 257.6 (+7.7: the binned discrete fields and the layered axis merge came last).
 // Nothing outside the VL row moved.
 // The dataflow-failure containment (a throwing dataset stops the pass like vega's): SvgChart 154.4 (+0.1 over the budget before it).
 const BUDGETS = {
-  '@aster/core': 134.3 * 1024,
+  '@aster/core': 135.8 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
   '+ @aster/core/canvas': 5.3 * 1024,
   '+ @aster/core/hit': 6.1 * 1024,
   '+ @aster/core/signals': 8.3 * 1024,
   '+ @aster/core/load': 5.6 * 1024,
-  '+ @aster/core/geo': 12.8 * 1024,
-  '+ @aster/core/transforms': 15.6 * 1024,
-  '@aster/react useChart': 138.2 * 1024,
-  '@aster/react Chart': 175.3 * 1024,
+  '+ @aster/core/geo': 14.8 * 1024,
+  '+ @aster/core/transforms': 23.7 * 1024,
+  '@aster/react useChart': 142.6 * 1024,
+  '@aster/react Chart': 178.7 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 154.9 * 1024,
-  '@aster/react SvgChart + interaction': 169.2 * 1024,
+  '@aster/react SvgChart': 160.2 * 1024,
+  '@aster/react SvgChart + interaction': 173.7 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 258.1 * 1024,
+  '@aster/react Chart + VL': 254.0 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
@@ -274,25 +291,43 @@ try {
   }
 
   const sizes = new Map()
+  const lazyKb = new Map()
   let failed = false
   for (const entry of ENTRIES) {
     const entryPath = join(TMP, entry.file)
-    const outPath = join(TMP, 'out.mjs')
+    const outDir = join(TMP, 'out')
+    rmSync(outDir, { recursive: true, force: true })
     writeFileSync(entryPath, entry.src)
-    await build({
+    // Code-split, so an add-on that is only ever `import()`ed (the shells load @aster/core/geo, /transforms and /load on demand,
+    // see @aster/core/addons) is a chunk of its own, as it is in a real build. The row counts what the page loads up front: the
+    // entry and every chunk it imports statically, not the chunks fetched later and only by a spec that needs them.
+    const built = await build({
       entryPoints: [entryPath],
       bundle: true,
       minify: true,
       format: 'esm',
       platform: entry.platform,
+      splitting: true,
       write: true,
-      outfile: outPath,
+      outdir: outDir,
+      metafile: true,
+      absWorkingDir: MONOREPO_ROOT,
       logLevel: 'silent',
       external: entry.external,
       define: { 'process.env.NODE_ENV': '"production"' },
       plugins: IGNORE_SIDE_EFFECTS ? [ignoreSideEffects] : [],
     })
-    const buf = readFileSync(outPath)
+    const outputs = built.metafile.outputs
+    const entryOut = Object.keys(outputs).find((o) => outputs[o].entryPoint)
+    const initial = new Set()
+    const visit = (o) => {
+      if (initial.has(o)) return
+      initial.add(o)
+      for (const imp of outputs[o].imports) if (imp.kind === 'import-statement' && outputs[imp.path]) visit(imp.path)
+    }
+    visit(entryOut)
+    lazyKb.set(entry.name, Object.keys(outputs).filter((o) => !initial.has(o)).reduce((n, o) => n + gzipSync(readFileSync(join(MONOREPO_ROOT, o))).length, 0))
+    const buf = Buffer.concat([...initial].map((o) => readFileSync(join(MONOREPO_ROOT, o))))
     const gz = gzipSync(buf).length
     sizes.set(entry.name, { min: buf.length, gz })
     // Marginal rows report what the addon adds on top of its base row.
@@ -304,7 +339,7 @@ try {
     const pass = measured <= budget
     if (!pass) failed = true
     console.log(
-      `${entry.name.padEnd(26)} min=${KB(base ? buf.length - base.min : buf.length).padStart(7)} kB  gzip=${KB(measured).padStart(6)} kB${base ? ' (marginal)' : '           '}  budget=${KB(budget).padStart(5)} kB  ${pass ? 'PASS' : 'FAIL'}`,
+      `${entry.name.padEnd(26)} min=${KB(base ? buf.length - base.min : buf.length).padStart(7)} kB  gzip=${KB(measured).padStart(6)} kB${base ? ' (marginal)' : '           '}  budget=${KB(budget).padStart(5)} kB  ${pass ? 'PASS' : 'FAIL'}${lazyKb.get(entry.name) ? `  (+${KB(lazyKb.get(entry.name))} kB gzip in chunks loaded on demand)` : ''}`,
     )
   }
   if (failed) process.exit(1)

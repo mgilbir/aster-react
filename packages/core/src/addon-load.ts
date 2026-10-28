@@ -16,6 +16,7 @@ import { feature as topoFeature, mesh as topoMesh } from './topojson.js'
 import { dataFormatRegistry } from './registry.js'
 import { readData, type DataFormatSpec, type inferTypes as _inferTypes } from './data-format.js'
 import type { VgSpec } from './types.js'
+import { compileExpr, type ExpressionRuntime } from './expression.js'
 import { AsterLimitError, checkRowCount, withLimits, type SpecLimits } from './limits.js'
 import { AsterUrlError, DEFAULT_LOAD_PROTOCOLS, checkBasicUrl, type UrlPolicyBase } from './url-policy.js'
 
@@ -374,23 +375,65 @@ type Json = Record<string, unknown>
 
 interface LoadTask { def: Json; url: string; format: DataFormatSpec | undefined; name: string }
 
+const NO_DATA_RUNTIME: ExpressionRuntime = {
+  scale: () => undefined,
+  data: () => undefined,
+  expr: (e) => compileExpr(e, NO_DATA_RUNTIME),
+}
+
+/**
+ * The values the spec's top-level signals start with: a literal `value`, else the `init` / `update` expression
+ * over the signals before it (one that needs data or scales is left undefined).
+ */
+function initialSignals(spec: Json): Record<string, unknown> {
+  const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>
+  for (const k of ['width', 'height'] as const) if (typeof spec[k] === 'number') out[k] = spec[k]
+  const defs = Array.isArray(spec.signals) ? (spec.signals as Json[]) : []
+  for (const def of defs) {
+    if (!def || typeof def !== 'object' || typeof def.name !== 'string') continue
+    let v: unknown = def.value
+    const expr = typeof def.init === 'string' ? def.init : typeof def.update === 'string' ? def.update : undefined
+    if (v === undefined && expr !== undefined) {
+      try { v = compileExpr(expr, NO_DATA_RUNTIME)(undefined, out) } catch { v = undefined }
+    }
+    out[def.name] = v
+  }
+  return out
+}
+
+/** A `{signal: <expression>}` url as the string it evaluates to over the initial signals, or undefined. */
+function signalString(url: unknown, signals: Record<string, unknown>): string | undefined {
+  const expr = url !== null && typeof url === 'object' ? (url as { signal?: unknown }).signal : undefined
+  if (typeof expr !== 'string') return undefined
+  try {
+    const v = compileExpr(expr, NO_DATA_RUNTIME)(undefined, signals)
+    return typeof v === 'string' ? v : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * Copy only the paths of `spec` that hold url datasets (top level AND inside
  * nested group marks, at any depth) and queue one task per dataset. The input is
  * never mutated; untouched branches are shared with it.
  */
 function planLoads(spec: Json, tasks: LoadTask[]): Json {
+  let signals: Record<string, unknown> | undefined
   const visitData = (list: unknown): unknown => {
     if (!Array.isArray(list)) return list
     let changed = false
     const out = list.map((d) => {
       const def = d as Json | null
       if (def && typeof def === 'object' && def.url != null && def.values == null) {
-        if (typeof def.url !== 'string') {
-          throw new Error(`[aster] dataset "${String(def.name)}": url must be a string (a signal-valued url cannot be resolved ahead of time)`)
+        // vega loads a `{signal}` url dynamically (a Load operator re-run when the signal changes); a static spec
+        // is loaded for the value the signal has when the view starts
+        const url = typeof def.url === 'string' ? def.url : signalString(def.url, (signals ??= initialSignals(spec)))
+        if (url === undefined) {
+          throw new Error(`[aster] dataset "${String(def.name)}": url must be a string (or a {signal} whose initial value is one)`)
         }
         const copy: Json = { ...def }
-        tasks.push({ def: copy, url: def.url, format: def.format as DataFormatSpec | undefined, name: String(def.name) })
+        tasks.push({ def: copy, url, format: def.format as DataFormatSpec | undefined, name: String(def.name) })
         changed = true
         return copy
       }

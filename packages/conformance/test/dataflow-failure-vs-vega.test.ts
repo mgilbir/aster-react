@@ -68,3 +68,42 @@ describe('a throwing expression is contained like vega contains it', () => {
     expect(diffCanonical(canonicalizeSvg(vega.svg), canonicalizeSvg(renderSpec(JSON.parse(JSON.stringify(spec))) as string)).slice(0, 3)).toEqual([])
   })
 })
+
+// The failure composes with the signal-ordered build: vega ranks a dataset after the dataset whose extent signal it reads,
+// wherever the two are declared, and a throw stops everything ranked after it (not what was declared after it).
+describe('a throwing transform and the signal-ordered dataset build', () => {
+  const frame = { $schema: 'https://vega.github.io/schema/vega/v5.json', width: 300, height: 120, padding: 5, autosize: 'none' }
+  const bars = (data: string, y = 10): any => ({ type: 'rect', from: { data }, encode: { update: { x: { scale: 'x', field: 'v' }, width: { value: 4 }, y: { value: y }, height: { value: 8 }, fill: { value: 'firebrick' } } } })
+  const scaleX = (data: string): any => ({ name: 'x', type: 'linear', domain: { data, field: 'v' }, range: 'width' })
+  const seq = (extra: any[] = []): any => ({ name: 'seq', transform: [{ type: 'sequence', start: { signal: 'ext[0]' }, stop: { signal: 'ext[1] + 1' }, as: 'v' }, ...extra] })
+  const base = (extra: any[] = []): any => ({ name: 'base', values: [{ x: 3 }, { x: 9 }, { x: 5 }], transform: [...extra, { type: 'extent', field: 'x', signal: 'ext' }] })
+  const BADROW = { type: 'filter', expr: 'datum["o"]["v"]>0' }
+  const CASES2: Record<string, any> = {
+    'the throw is downstream of the dataset the signals order first': {
+      ...frame, data: [seq([BADROW]), base()], scales: [scaleX('seq')], marks: [bars('seq')],
+    },
+    'the throw is in a dataset derived from the signal-ordered one': {
+      ...frame, data: [seq(), { name: 'late', source: 'seq', transform: [BADROW] }, base()], scales: [scaleX('seq')], marks: [bars('seq'), bars('late', 40)],
+    },
+    'the throw is upstream: the writer of the signal fails before its extent': {
+      ...frame, data: [seq(), base([{ type: 'formula', expr: 'datum["o"]["v"]', as: 'q' }])], scales: [scaleX('seq')], marks: [bars('seq')],
+    },
+    'the throw is in a dataset declared between the reader and the writer': {
+      ...frame, data: [seq(), { name: 'bad', values: [{ x: 1 }], transform: [BADROW] }, base()], scales: [scaleX('seq')], marks: [bars('seq')],
+    },
+    'a dataset declared before the throw runs even when it is ordered after a later writer': {
+      ...frame, data: [seq(), base(), { name: 'bad', values: [{ x: 1 }], transform: [BADROW] }, { name: 'after', values: [{ v: 1 }] }],
+      scales: [scaleX('seq')], marks: [bars('seq'), bars('after', 40)],
+    },
+  }
+  for (const [name, spec] of Object.entries(CASES2)) {
+    it(name, async () => {
+      const vega = await renderWithVegaChecked(JSON.parse(JSON.stringify(spec)))
+      expect(vega.errors.length, 'the case must make vega log an error').toBeGreaterThan(0)
+      const errors: unknown[] = []
+      const mine = renderSpec(JSON.parse(JSON.stringify(spec)), { logger: { error: (e: unknown) => { errors.push(e) }, warn: () => {} } } as never) as string
+      expect(errors.length, 'the engine logs the failure').toBeGreaterThan(0)
+      expect(diffCanonical(canonicalizeSvg(vega.svg), canonicalizeSvg(mine)).slice(0, 3)).toEqual([])
+    }, 30_000)
+  }
+})

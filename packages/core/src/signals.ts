@@ -104,7 +104,7 @@ export interface SignalBindOptions {
    * Resolve a view-space position (page coords minus the svg origin, padding
    * included) to the scene item under it -- `buildHitIndex(scene).query` from
    * `@aster/core/hit` fits. Without it `event.item` is recovered from the DOM
-   * (the `data-datum` stamp and the `mark-*`/`role-*` classes).
+   * (the `mark-*`/`role-*` classes, and the `data-datum` stamp when `stampDatumAttrs` was called).
    */
   pick?: (x: number, y: number) => { item: object; marktype?: string } | null
   /** The scene, so a picked item's enclosing groups and mark name/role can be found. */
@@ -809,6 +809,12 @@ function bindSignalEventsDefs(
     if (inLegend) {
       picked = domPick(svg, e.target)
       if (picked && !picked.group && sceneInfo) picked.group = sceneInfo.root()
+      // the entry (the datum) is the scene item under the pointer: the rendered markup carries no stamp of it
+      if (picked && opts.pick) {
+        const p = pointOf(e)
+        const hit = opts.pick(p[0] + originX, p[1] + originY)
+        if (hit && (hit.item as { datum?: unknown }).datum != null) picked.item = hit.item
+      }
     }
     if (!picked && opts.pick) {
       const p = pointOf(e)
@@ -1236,6 +1242,25 @@ function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => Picke
   }
 }
 
+/**
+ * A datum as JSON. A datum may refer to itself (a `joinaggregate` with `ops: ["values"]` puts the group's tuples,
+ * itself among them, on every tuple of the group): the reference that closes the circle is left out.
+ */
+function datumJson(datum: unknown): string | undefined {
+  try {
+    return JSON.stringify(datum)
+  } catch {
+    const ancestors: unknown[] = []
+    return JSON.stringify(datum, function (this: unknown, _key: string, value: unknown) {
+      if (value === null || typeof value !== 'object') return value
+      while (ancestors.length && ancestors[ancestors.length - 1] !== this) ancestors.pop()
+      if (ancestors.includes(value)) return undefined
+      ancestors.push(value)
+      return value
+    })
+  }
+}
+
 /** Stamp `data-datum` on mark items so event targeting can recover the datum. */
 export function stampDatumAttrs(items: SceneNode[]): void {
   const walk = (node: SceneNode): void => {
@@ -1246,7 +1271,7 @@ export function stampDatumAttrs(items: SceneNode[]): void {
     }
     const it = node as SceneItem
     if (it.datum != null && typeof it.datum === 'object') {
-      ;(it as unknown as { dataDatum?: string }).dataDatum = JSON.stringify(it.datum)
+      ;(it as unknown as { dataDatum?: string }).dataDatum = datumJson(it.datum)
     }
   }
   for (const it of items) walk(it)

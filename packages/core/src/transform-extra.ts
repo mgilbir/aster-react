@@ -8,9 +8,13 @@ import { compareOf, fieldOf } from './transform-agg.js'
 import { checkRowCount, meterTick } from './limits.js'
 import type { HierNode, Row, TransformContext } from './transform.js'
 import { compileExprTransform, eachAfter, eachBefore, getField, resolveSizeParam } from './transform.js'
-import { transformRegistry } from './registry.js'
+import { geoRegistry, requireGeo, transformRegistry } from './registry.js'
+import { registerRuntimeExpressionFunction, type ExpressionRuntime } from './expression.js'
 import { countpatternRows as countpatternStatsRows, densityRows, kdeRows, loessRows, quantileRows, regressionRows } from './transform-stats.js'
 import { nominalTextWidth } from './text-metrics.js'
+import { forceRows } from './force-layout.js'
+import { isocontourRows, kde2dRows } from './raster-transforms.js'
+import { clusterTree, defaultSeparation, oneSeparation, tidyTree } from './hierarchy-tree.js'
 
 // -- pack / partition / treemap (d3-hierarchy layouts) -----------------------
 
@@ -88,6 +92,101 @@ function writeTree(rows: Row[], root: HierNode, fields: string[], as: string[]):
 }
 
 const hasParam = (p: Record<string, unknown>, name: string): boolean => name in p
+
+/**
+ * The vega `tree` transform (vega-hierarchy Tree): Reingold-Tilford `tidy` or dendrogram `cluster` layout of the
+ * stratify-built tree; writes `as` (default x, y, depth, children).
+ */
+function treeRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext, sourceName?: string): Row[] {
+  const root = backingTree('Tree', ctx, sourceName)
+  const fields = ['x', 'y', 'depth', 'children']
+  const as = (t.as as string[] | undefined) ?? fields
+  prepareTree(root, rows, t)
+  const method = (t.method as string | undefined) || 'tidy'
+  if (method !== 'tidy' && method !== 'cluster') error('Unrecognized Tree layout method: ' + method)
+  // (d3's size() and nodeSize() each switch the layout to their mode; the one set last wins)
+  let size: [number, number] | null = [1, 1]
+  let nodeSize: [number, number] | null = null
+  if (hasParam(t, 'size')) { const s = t.size as number[]; size = [+s[0]!, +s[1]!]; nodeSize = null }
+  if (hasParam(t, 'nodeSize')) { const s = t.nodeSize as number[]; nodeSize = [+s[0]!, +s[1]!]; size = null }
+  const options = { size, nodeSize, separation: t.separation !== false ? defaultSeparation : oneSeparation }
+  if (method === 'tidy') tidyTree(root, options)
+  else clusterTree(root, options)
+  return writeTree(rows, root, fields, as)
+}
+
+/**
+ * The vega `treelinks` transform (vega-hierarchy TreeLinks): one `{source, target}` row per edge of the backing tree
+ * whose two ends are rows of this dataset (parent and child). The tuples a tree layout wrote onto are the rows of the
+ * dataset the tree was built for; they are found by their position in it, or by identity when the rows were filtered.
+ */
+function treelinksRows(rows: Row[], _t: Record<string, unknown>, ctx: TransformContext, sourceName?: string): Row[] {
+  const root = sourceName ? (ctx.hierarchies?.get(sourceName) as HierNode | undefined) : undefined
+  if (!root) error('TreeLinks transform requires a tree data source.')
+  const nodes: HierNode[] = []
+  breadthFirst(root, (n) => nodes.push(n))
+  const rowOf = treeRowLookup(rows, nodes)
+  const out: Row[] = []
+  for (const node of nodes) {
+    const t = rowOf(node)
+    const p = node.parent && rowOf(node.parent)
+    if (p && t) out.push({ source: p, target: t })
+  }
+  return out
+}
+
+/** d3 `node.each`: the node and its descendants, breadth first. */
+function breadthFirst(root: HierNode, callback: (node: HierNode) => void): void {
+  const queue: HierNode[] = [root]
+  for (let i = 0; i < queue.length; ++i) {
+    const node = queue[i]!
+    callback(node)
+    for (const c of node.children) queue.push(c)
+  }
+}
+
+/** The row of a dataset that stands for a tree node: the row at the node's position, when the dataset still has one row per node. */
+function treeRowLookup(rows: Row[], nodes: HierNode[]): (node: HierNode) => Row | undefined {
+  if (rows.length === nodes.length) return (node) => (node.idx !== undefined && node.idx >= 0 ? rows[node.idx] : undefined)
+  const present = new Set(rows)
+  return (node) => (present.has(node.data) ? node.data : undefined)
+}
+
+// `treePath(tree, source, target)` / `treeAncestors(tree, node)` (vega-functions tree.js): the rows on the path between
+// two keyed nodes of a dataset's tree, the ancestors of one (itself first); undefined for a key the tree lacks.
+interface TreeOfDataset { root: HierNode; rows: Row[] }
+const treeOfDataset = (runtime: ExpressionRuntime, name: unknown): { lookup: Map<string, HierNode>; rowOf: (n: HierNode) => Row | undefined } | undefined => {
+  const t = runtime.tree?.(String(name)) as TreeOfDataset | undefined
+  if (!t?.root.lookup) return undefined
+  const nodes: HierNode[] = []
+  breadthFirst(t.root, (n) => nodes.push(n))
+  return { lookup: t.root.lookup, rowOf: treeRowLookup(t.rows, nodes) }
+}
+const pathBetween = (s: HierNode, e: HierNode): HierNode[] => {
+  // d3 `node.path(end)`: up from s to the least common ancestor, then down to e
+  const up = (n: HierNode): HierNode[] => { const a: HierNode[] = [n]; for (let p = n.parent; p; p = p.parent) a.push(p); return a }
+  const sa = up(s)
+  const ea = up(e)
+  const common = new Set(sa)
+  const lca = ea.find((n) => common.has(n))!
+  const out = sa.slice(0, sa.indexOf(lca) + 1)
+  const down = ea.slice(0, ea.indexOf(lca)).reverse()
+  return out.concat(down)
+}
+registerRuntimeExpressionFunction('treePath', (runtime) => (name?: unknown, source?: unknown, target?: unknown): unknown => {
+  const tree = treeOfDataset(runtime, name)
+  const s = tree?.lookup.get(String(source))
+  const t = tree?.lookup.get(String(target))
+  return tree && s && t ? pathBetween(s, t).map((n) => tree.rowOf(n) ?? n.data) : undefined
+})
+registerRuntimeExpressionFunction('treeAncestors', (runtime) => (name?: unknown, node?: unknown): unknown => {
+  const tree = treeOfDataset(runtime, name)
+  const n = tree?.lookup.get(String(node))
+  if (!tree || !n) return undefined
+  const out: Row[] = []
+  for (let p: HierNode | null = n; p; p = p.parent) out.push(tree.rowOf(p) ?? p.data)
+  return out
+})
 
 /** The vega `pack` transform: d3-hierarchy circle packing of the stratify-built tree. */
 function packRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext, sourceName?: string): Row[] {
@@ -1901,6 +2000,11 @@ transformRegistry.set('loess', loessRows)
 transformRegistry.set('pack', packRows)
 transformRegistry.set('partition', partitionRows)
 transformRegistry.set('treemap', treemapRows)
+transformRegistry.set('tree', treeRows)
+transformRegistry.set('force', forceRows)
+transformRegistry.set('kde2d', kde2dRows)
+transformRegistry.set('isocontour', isocontourRows)
+transformRegistry.set('treelinks', treelinksRows)
 transformRegistry.set('wordcloud', wordcloudRows)
 transformRegistry.set('voronoi', voronoiRows)
 
@@ -2084,6 +2188,36 @@ function geopointRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCon
 }
 
 // ---------------------------------------------------------------------------
+// geopath (vega-geo GeoPath) — the SVG path of each row's GeoJSON through a named projection
+// ---------------------------------------------------------------------------
+
+type BoundGeoPath = { (geo: unknown): unknown; pointRadius(): unknown; pointRadius(r: unknown): unknown; context(c: unknown): unknown }
+
+function geopathRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+  // (a geopath without a projection draws with d3's default path: the coordinates as they are)
+  let path: BoundGeoPath | undefined
+  if (t.projection == null) {
+    if (!geoRegistry.defaultPath) requireGeo() // throws: the geo addon is not loaded
+    path = geoRegistry.defaultPath!() as BoundGeoPath
+  } else {
+    const projName = String(t.projection)
+    path = (ctx.projections?.get(projName) as { path?: BoundGeoPath } | undefined)?.path
+    if (!path) throw new Error(`[aster] geopath: unknown projection "${projName}"`)
+  }
+  // (no field: the row itself is the GeoJSON feature)
+  const field = t.field == null ? (r: Row): unknown => r : geoAccessor(t.field, ctx)
+  const as = (t.as as string | undefined) || 'path'
+  const prev = path.pointRadius()
+  path.context(null)
+  if (t.pointRadius != null) path.pointRadius(t.pointRadius)
+  try {
+    return rows.map((r) => ({ ...r, [as]: path(field(r)) }))
+  } finally {
+    path.pointRadius(prev)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // geojson (vega-geo GeoJSON) — consolidate points/features into one GeoJSON
 // object (the transform's value, published as the `signal` param, consumed by projection fit); rows unchanged.
 // ---------------------------------------------------------------------------
@@ -2177,25 +2311,18 @@ const LINK_PATHS: Record<string, (sx: number, sy: number, tx: number, ty: number
   'diagonal-radial': linkDiagonalR,
 }
 
-function linkpathRows(rows: Row[], t: Record<string, unknown>): Row[] {
-  const sxField = (t.sourceX as string | undefined) ?? 'source.x'
-  const syField = (t.sourceY as string | undefined) ?? 'source.y'
-  const txField = (t.targetX as string | undefined) ?? 'target.x'
-  const tyField = (t.targetY as string | undefined) ?? 'target.y'
+function linkpathRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+  // (each endpoint is a field or an `{expr}`, like any vega `field` parameter)
+  const sx = geoAccessor(t.sourceX ?? 'source.x', ctx)
+  const sy = geoAccessor(t.sourceY ?? 'source.y', ctx)
+  const tx = geoAccessor(t.targetX ?? 'target.x', ctx)
+  const ty = geoAccessor(t.targetY ?? 'target.y', ctx)
   const as = (t.as as string | undefined) ?? 'path'
   const orient = (t.orient as string | undefined) ?? 'vertical'
   const shape = (t.shape as string | undefined) ?? 'line'
   const path = ownGet(LINK_PATHS, shape + '-' + orient) ?? ownGet(LINK_PATHS, shape)
   if (!path) throw new Error(`[aster] linkpath unsupported type: ${shape}${t.orient ? '-' + orient : ''}`)
-  return rows.map((r) => ({
-    ...r,
-    [as]: path(
-      getField(r, sxField) as number,
-      getField(r, syField) as number,
-      getField(r, txField) as number,
-      getField(r, tyField) as number,
-    ),
-  }))
+  return rows.map((r) => ({ ...r, [as]: path(sx(r) as number, sy(r) as number, tx(r) as number, ty(r) as number) }))
 }
 
 // -- addon registration ------------------------------------------------------
@@ -2204,5 +2331,6 @@ transformRegistry.set('cross', crossRows)
 transformRegistry.set('countpattern', countpatternStatsRows)
 transformRegistry.set('dotbin', dotbinRows)
 transformRegistry.set('geopoint', geopointRows)
+transformRegistry.set('geopath', geopathRows)
 transformRegistry.set('geojson', geojsonRows)
 transformRegistry.set('linkpath', linkpathRows)
