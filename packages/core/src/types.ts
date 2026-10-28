@@ -185,6 +185,11 @@ export interface CompiledChart {
   /** Signal values supplied by the host (not serialized). */
   /** Root-level trellis layout options (vega spec `layout`), when present. */
   layout?: Record<string, unknown>
+  /**
+   * The view dimensions the spec leaves to its own layout: a composition (a top-level `layout`) with no size and no
+   * `width` / `height` signal. Vega sizes that view from the laid-out groups, so a host's container does not size it.
+   */
+  contentSized?: ReadonlyArray<'width' | 'height'>
 }
 
 export interface CompiledTitle {

@@ -29,6 +29,9 @@ export {
   registerVegaLiteCompiler,
   type VegaLiteCompiler,
 } from './vl-registry.js'
+// The opt-in core add-ons a spec needs (transforms, geo, load) are imported on demand by the shells and hooks; this is the
+// same step for hosts that cannot wait inside React (a server that calls renderChartToStaticMarkup, a prefetch).
+export { loadAddonsFor } from './addons.js'
 export {
   useChart,
   useSpecData,

@@ -14,7 +14,9 @@ declare const spec: Record<string, unknown> // a Vega or Vega-Lite spec
 export const Demo = () => <Chart spec={spec} panZoom tooltip a11y limits={{ maxTimeMs: 2000 }} />
 ```
 
-Vega specs need only the first import. Without `@aster/react/vl`, a Vega-Lite spec throws an error naming the missing
+Vega specs need only the first import. The opt-in core add-ons (`@aster/core/transforms`, `/geo`, `/load`) are loaded on demand when
+a spec needs them: the chart suspends meanwhile (wrap it in `<Suspense>` for a fallback), then renders as it would have with the add-on
+imported. See docs/API.md. Without `@aster/react/vl`, a Vega-Lite spec throws an error naming the missing
 import; if you compile Vega-Lite specs in a worker, import the addon in the worker entry too.
 
 For a smaller bundle there is an SVG-only chart: `<SvgChart>` from `@aster/react/lite` (142 kB gzip against 157 kB for
