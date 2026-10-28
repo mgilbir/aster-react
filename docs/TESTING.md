@@ -40,7 +40,7 @@ result is the summary line it prints. They change with the code: re-run before q
 | Transform option combinations | `pnpm transform-matrix` | 75/76 match (1 browser-only case skipped here, run by `conformance:browser`) |
 | Vega schema sweep | `pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3` | 7538 ok, 8 both-refused, 3 node-error (the oracle crashes), 0 engine-error, 0 differ / 7549 |
 | Vega-Lite schema sweep | `pnpm sweep-vl -- --floor 27513 --min-ok 27452 --max-node-error 17 --vega-check` | 27452 ok, 44 both-refused, 17 node-error, 0 engine-error, 0 differ, 0 vega-differ / 27513 |
-| Signals sweep | `pnpm sweep-signals -- --floor 166 --min-ok 104 --max-node-error 2 --max-retained 59` | 104 ok, 59 retained, 1 both-refused, 2 node-error, 0 differ / 166 |
+| Signals sweep | `pnpm sweep-signals -- --floor 166 --min-ok 103 --max-node-error 2 --max-retained 60` | 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ / 166 |
 | Gap probes (diagnostic) | `pnpm probe` | 2/2 pass |
 | Fuzz reproducers | `pnpm fuzz:replay` | 2/2 pass |
 | Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 992/993 passed; `vlx-geo-lines-trail-size` fails (a path differs by trailing digits; it fails identically on the maps branch before this merge, open) |

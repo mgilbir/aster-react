@@ -61,8 +61,10 @@ export const GATES = [
     // The floors are today's numbers and only ratchet. `retained` counts the cases where vega's own second render
     // differs from its fresh render of the same signals (autosize runs once, a half-failed dataflow keeps its old
     // tick items...): the engine is a pure function of its inputs, so it renders the fresh one.
+    // One case moved from ok to retained (104 -> 103 / 59 -> 60) when symbol bounds became exact: a-mark-shape--M0-0L8-8Z writes a custom
+    // path shape, whose real extent now sizes the fresh view as vega's does, while vega's second render keeps the first shape's size.
     name: 'sweep-signals',
-    args: ['sweep-signals', '--', '--floor', '166', '--min-ok', '104', '--max-node-error', '2', '--max-retained', '59'],
+    args: ['sweep-signals', '--', '--floor', '166', '--min-ok', '103', '--max-node-error', '2', '--max-retained', '60'],
     why: 'a signal written into a running chart renders like vega (signals sweep)',
   },
   { name: 'fuzz-replay', args: ['fuzz:replay'], why: 'every committed fuzz reproducer still passes' },
