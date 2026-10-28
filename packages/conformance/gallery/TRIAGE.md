@@ -9,11 +9,14 @@ Generated from a run of `pnpm conformance:gallery` at the commit that introduced
 |---|---|---|---|---|---|---|
 | static | Vega | 37 | 31 | 18 | 7 | 93 |
 | static | Vega-Lite | 251 | 236 | 130 | 10 | 627 |
-| react | Vega | 30 | 36 | 20 | 7 | 93 |
-| react | Vega-Lite | 186 | 301 | 130 | 10 | 627 |
+| react | Vega | 37 | 26 | 19 | 11 | 93 |
+| react | Vega-Lite | 251 | 234 | 130 | 12 | 627 |
 
-Static -> react status of the 720 specs: 212 pass/pass, 261 fail/fail, 147 error/error, 15 unverifiable/unverifiable, **75 pass static / fail react**,
-4 fail static / pass react, and 6 single moves (see "React-path-only differences").
+The react rows are after the React-path fixes (below); at the commit that introduced the gate they were 30 / 36 / 20 / 7 and 186 / 301 / 130 / 10.
+
+Static -> react status of the 720 specs, now: 284 pass/pass, 260 fail/fail, 147 error/error, 15 unverifiable/unverifiable, **0 pass static / fail
+react** (there were 75), 4 pass static / unverifiable react (time-dependent oracles, see "React-path-only differences"), 4 fail static / pass
+react, and 6 single moves.
 
 How to read the categories. A *category* is a tested claim where it says "verified", otherwise a located one:
 
@@ -247,19 +250,27 @@ use bootstrap sampling; `random()` specs use `random()`; neither engine is seede
 
 ## React-path-only differences
 
-75 specs pass on the static path and fail through `<Chart>` (the oracle is the same vega in the same Chromium):
+At the commit that introduced the gate, 75 specs passed on the static path and failed through `<Chart>` (the oracle is the same vega in
+the same Chromium). All 75 are resolved; the React path passes exactly the specs the static path does (288 each).
 
-* **parameters / selections with an initial `value`** (about 40, e.g. `interactive_brush`, `interactive_paintbrush*`, `selection_project_*`,
-  `selection_translate_*`, `selection_resolution_*`, `selection_insert`, `interactive_point_init`, `param_expr`, `animated_gapminder`):
-  read off `interactive_brush`: the oracle draws the points outside the initial brush in grey (`stroke=#808080 opacity=0.7`); the
-  mounted `<Chart>` does not. `renderSpec` gets it right, so the difference is in how `<Chart>` initialises the signals. The other
-  members share the same first diff (symbol paths with a grey / dimmed paint only in the oracle); each was not read individually.
-* **stepped / faceted sizing** (`facet_custom*`, `repeat_histogram`, `repeat_splom_cars`, `repeat_line_weather`, `bar_count_minimap`,
-  `bar_column_fold`, `bar_grouped_facet`, `bar_size_responsive`): e.g. `facet_custom` is 476 px tall through `<Chart>` against vega's
-  411 in the same 600 x 400 host (an extra `fill=none` frame path only in Aster). Cause not isolated.
-* **everything else** (`vega/clock`, `pacman`, `table-scrollbar`, `warming-stripes`, `serpentine-timeline`, `global-development`, ...): not
-  investigated; marks that vega draws are missing in the mounted chart. `vega/watch` never settles (a timer: `chart-threw: no stable
-  <svg>` after 8 s) - a clock-driven spec has no stable first frame in the browser.
+* **`data-datum` attributes (about 48 specs)**: `interactive_brush`, `interactive_paintbrush*`, `selection_*`, `param_expr`,
+  `interactive_point_init`, `vega/clock`, `stock-index-chart`, ... Every spec with `signal.on` event streams (and every chart with a
+  tooltip) had a JSON copy of each datum written onto its mark elements as `data-datum`, so the mounted DOM differed from vega's by an
+  attribute on every mark. The canonical diff printed one paint record per mark, which looked like "the un-selected marks are not dimmed";
+  the paint was equal (the selection store was seeded and resolved correctly: the first record that differed was a grey symbol only
+  because its attribute list differed). The mark under the pointer is now found through the scene hit index on every renderer, and the
+  stamp is gone from `<Chart>` / `<SvgChart>`.
+* **stepped / faceted sizing (about 20 specs)**: `facet_custom*`, `repeat_*`, `trellis_*`, `bar_column_fold`, `bar_count_minimap`,
+  `selection_filter*`, `selection_resolution_*`, `point_invalid_size_show`, ... A composition (top-level `layout`, no width/height: what
+  vega-lite makes of a facet / concat / repeat) is sized by its layout in vega. `<Chart>` measures its container and made that the view
+  size, so the root became 600 x 400 with the content inside (an extra empty frame path, 476 px against 411). The measured container
+  no longer sizes a dimension that the layout owns (`CompiledChart.contentSized`); the host's size props and a value written to the
+  signal still win.
+* **timer-driven specs (`vega/clock`, `pacman`, `watch`, `donut-chart-labelled`, `vl/animated_gapminder`, `animated_hop`)**: `<Chart>`
+  mounts the view live, so its timers keep ticking. The oracle's own document changes with time (measured: the same view left running
+  for 1.3 s), so there is no frame to compare against; they are `unverifiable` (`oracle-time-dependent`) on the React path instead of
+  hanging the settle loop (`watch` redraws every 10 ms) or passing and failing with the second they were rendered in (`clock`). They are
+  still compared on the static path, which takes the first frame.
 
 4 specs fail statically and pass through `<Chart>` (`vega/flight-passengers`, `top-k-plot`, `top-k-plot-with-others`,
 `vl/bar_axis_title_quoted`): not investigated. The first three pass when `<Chart>` is handed the spec's numeric `width` / `height` and the oracle runs in a host
