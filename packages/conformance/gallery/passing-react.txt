@@ -122,6 +122,7 @@ vl/bar_corner_radius_end
 vl/bar_count_minimap
 vl/bar_custom_sort_full
 vl/bar_custom_sort_partial
+vl/bar_custom_time_domain
 vl/bar_default_tooltip_title_null
 vl/bar_distinct
 vl/bar_diverging_stack_population_pyramid
@@ -361,8 +362,10 @@ vl/line_skip_invalid_mid_overlay
 vl/line_slope
 vl/line_sort_axis
 vl/line_step
+vl/line_timestamp_domain
 vl/line_timeunit_transform
 vl/lookup
+vl/nested_concat_align
 vl/param_expr
 vl/point_1d
 vl/point_1d_array
@@ -401,6 +404,7 @@ vl/point_params
 vl/point_quantile_quantile
 vl/point_shape_custom
 vl/point_tooltip
+vl/rect_binned_heatmap
 vl/rect_heatmap
 vl/rect_heatmap_weather
 vl/rect_heatmap_weather_temporal_center_band

@@ -4032,6 +4032,8 @@ interface GroupSource {
   facetName?: string
   /** Names this item among its mark's (the facet partition's key, a datum's index): the identity of its signal scope. */
   key?: string
+  /** A cell no tuple fell into: vega's Facet makes the subflow (the marks, axes, legends and title inside) when a tuple of the key arrives, so it has none. */
+  noSubflow?: boolean
 }
 
 interface FacetDef {
@@ -4040,7 +4042,7 @@ interface FacetDef {
   /** Pre-faceted data: each datum holds the array of the group's rows in this field. */
   field?: string
   groupby?: string | string[]
-  aggregate?: { fields: string[]; ops: string[]; as?: Array<string | null> }
+  aggregate?: { fields: string[]; ops: string[]; as?: Array<string | null>; cross?: boolean }
 }
 
 /**
@@ -4079,7 +4081,10 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
         if (g) g.push(r)
         else byKey.set(k, [r])
       }
-      return (ctx.datasets.get(from) ?? []).map((row, i) => ({ datum: row, rows: byKey.get(keyOfRow(row)) ?? [], facetName: facet.name, key: String(i) }))
+      return (ctx.datasets.get(from) ?? []).map((row, i) => {
+        const part = byKey.get(keyOfRow(row))
+        return { datum: row, rows: part ?? [], facetName: facet.name, key: String(i), ...(part ? {} : { noSubflow: true }) }
+      })
     }
     // the keys are vega fields (`a.b`, `a\.b`): partition by the accessor, and name the key
     // tuple's properties by the accessor's own name (Facet: `tuple[fn.fname] = fn(t)`)
@@ -4092,22 +4097,45 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
       if (g) g.push(r)
       else parts.set(k, [r])
     }
-    return [...parts.entries()].map(([partKey, g]) => {
-      let datum: Row = {}
-      accessors.forEach((acc, i) => { datum[((acc as { fname?: string }).fname) ?? keys[i]!] = acc(g[0]!) })
-      const ag = facet.aggregate
+    const ag = facet.aggregate
+    const make = (g: Row[], first: Row | undefined, given?: Row): GroupSource => {
+      let datum: Row = given ?? {}
+      if (given === undefined) accessors.forEach((acc, i) => { datum[((acc as { fname?: string }).fname) ?? keys[i]!] = acc(first!) })
       if (ag?.ops) {
         // a facet aggregate (vega-lite's stack_group_main): the group item's datum carries it
         datum = { ...datum, ...aggregateGroup(g, { type: 'aggregate', groupby: keys, fields: ag.fields, ops: ag.ops, as: ag.ops.map((op, i) => ag.as?.[i] ?? `${op}_${ag.fields[i]}`) } as never) }
-      } else if (ag === undefined) {
-        // no facet aggregate: vega's own (vega-parser marks/data.js: an `aggregate` over the groupby, whose default op is
+      } else {
+        // no facet aggregate ops: vega's own (vega-parser marks/data.js: an `aggregate` over the groupby, whose default op is
         // `count`) makes the group item's datum, so a cell's datum carries the partition's size
         datum = { ...datum, count: g.length }
       }
       // (the aggregate's output is a tuple: `isTuple(group().datum)`)
       Object.defineProperty(datum, TUPLE_ID, { value: true, enumerable: false })
-      return { datum, rows: g, facetName: facet.name, key: partKey }
-    })
+      return { datum, rows: g, facetName: facet.name, key: '', ...(g.length === 0 ? { noSubflow: true } : {}) }
+    }
+    const out: GroupSource[] = [...parts.entries()].map(([partKey, g]) => ({ ...make(g, g[0]), key: partKey }))
+    if (ag?.cross && keys.length > 1) {
+      // Aggregate `cross`: the cells of the cross-product of the groupby values, the empty ones too and after the others. The values
+      // of a field are the keys of a plain object (vega: `vals[i][v] = v`), so integer-like ones come first, in ascending order.
+      const vals: Array<Record<string, unknown>> = keys.map(() => ({}))
+      const seen = new Set<string>()
+      for (const cell of out) {
+        const idx = accessors.map((acc, i) => { const v = acc(cell.rows![0]!); vals[i]![String(v)] = v; return String(v) })
+        seen.add(idx.join('|'))
+      }
+      const names = accessors.map((acc, i) => ((acc as { fname?: string }).fname) ?? keys[i]!)
+      const generate = (base: string, tuple: Row, index: number): void => {
+        const v = vals[index]!
+        for (const k in v) {
+          const key = base ? base + '|' + k : k
+          const t = { ...tuple, [names[index]!]: v[k] }
+          if (index + 1 < keys.length) generate(key, t, index + 1)
+          else if (!seen.has(key)) out.push({ ...make([], undefined, t), key })
+        }
+      }
+      generate('', {}, 0)
+    }
+    return out
   }
   const data = mark.from?.data
   if (data) return (ctx.datasets.get(data) ?? []).map((row, i) => ({ datum: row, key: String(i) }))
@@ -4333,7 +4361,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     }
 
     const content: SceneGroup[] = []
-    for (const child of order > 0 || (order === 0 && !whole && ctx.abort.cut!.legend === undefined) ? [] : mark.marks ?? []) {
+    for (const child of src.noSubflow || order > 0 || (order === 0 && !whole && ctx.abort.cut!.legend === undefined) ? [] : mark.marks ?? []) {
       const r = evaluateMark(child, childCtx)
       if (r) pushAll(content, Array.isArray(r) ? r : [r])
     }
@@ -4351,13 +4379,13 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     const guideCtx: EvalContext = scope.unsettled || (ctx.abort.cut !== undefined && entriesPending(path.length, ctx.abort.cut.path.length))
       ? { ...childCtx, ...(scope.unsettled ? { rawGuides: true } : {}), pendingEntries: entriesPending(path.length, ctx.abort.cut!.path.length) }
       : childCtx
-    const { groups: guides } = order > 0
+    const { groups: guides } = src.noSubflow || order > 0
       ? { groups: [] }
       : order === 0 && !whole
         ? buildAxisAndLegend(guideCtx, content, (mark.axes ?? []).slice(0, ctx.abort.cut!.axis), (mark.legends ?? []).slice(0, ctx.abort.cut!.legend ?? 0))
         : buildAxisAndLegend(guideCtx, content, mark.axes ?? [], mark.legends ?? [])
     const siblings: SceneGroup[] = [...content, ...guides]
-    const title = order > 0 || (order === 0 && !whole) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !!scope.unsettled, guideCtx, src.datum)
+    const title = src.noSubflow || order > 0 || (order === 0 && !whole) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !!scope.unsettled, guideCtx, src.datum)
     if (title) siblings.push(title)
     const ordered = paintOrderOf(siblings)
 
@@ -5235,6 +5263,18 @@ function axisTicksFailed(axis: CompiledAxis, ctx: EvalContext, e: unknown, index
   return { marktype: 'group', role: 'axis', x: 0, y: 0, width: 0, height: 0, items: [], parts: [] } as unknown as SceneGroup
 }
 
+/** The count the tick labels are formatted for: the axis's tick count through vega's tickCount (bins, tickMinStep). */
+function labelTickCount(axis: CompiledAxis, scale: Scale, count: number, ctx: EvalContext): number {
+  let minstep: unknown = axis.tickMinStep
+  if (minstep && typeof minstep === 'object' && typeof (minstep as { signal?: unknown }).signal === 'string') {
+    try { minstep = ctx.runtime.expr((minstep as { signal: string }).signal)({}, ctx.signalParams) } catch { minstep = undefined }
+  }
+  const step = typeof minstep === 'number' && Number.isFinite(minstep) && minstep > 0 ? minstep : undefined
+  if (step === undefined && !(scale as { bins?: unknown }).bins) return count
+  const counted = tickCount(scale, count, step)
+  return typeof counted === 'number' ? counted : count
+}
+
 function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGroup | null {
   const scale = ctx.scales.get(axis.scale)
   if (!scale) return null
@@ -5250,7 +5290,10 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   // AxisTicks: `_.count == null ? 10 : _.count`); matching that matters for
   // log-scale labels, whose formatter only labels a subset of ticks depending
   // on the count.
-  const count = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 10 : 10
+  const count0 = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 10 : 10
+  // (AxisTicks formats with tickCount(scale, tally, minstep) too: a scale with bins asks for a tick per boundary, a minimum step
+  // thins the count)
+  const count = labelTickCount(axis, scale, count0, ctx)
   let labelFormat: (v: unknown) => unknown
   const labelCache: string[] = []
   try {
@@ -5410,8 +5453,9 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
   // count to one tick per minimum step: count = min(count, span/minstep + 1)
   // and, for non-temporal non-log scales, shrinks count until tickStep >=
   // minStep. tickCount() implements that rule for every scale type.
-  if (tickMinStep != null && tickMinStep > 0 && typeof count === 'number') {
-    const counted = tickCount(scale, count, tickMinStep)
+  // (a scale with bins asks for at least one tick per bin boundary, whatever the count)
+  if (typeof count === 'number' && ((tickMinStep != null && tickMinStep > 0) || (scale as { bins?: unknown }).bins)) {
+    const counted = tickCount(scale, count, tickMinStep != null && tickMinStep > 0 ? tickMinStep : undefined)
     if (typeof counted === 'number') count = counted
   }
 
@@ -5533,6 +5577,10 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: 
     // day/week ticks). The `undefined` argument is passed explicitly to satisfy
     // the strict local type shim for vega-format.
     const timeFormatter = calendar === 'utc' ? L.utcFormat : L.timeFormat
+    // (an object is the multi-format specifier: a pattern per interval, `{year: '%y', quarter: '%b'}`)
+    if (fmt === undefined && rawFmt !== null && typeof rawFmt === 'object' && !Array.isArray(rawFmt) && !('signal' in (rawFmt as Record<string, unknown>))) {
+      return timeFormatter(rawFmt as unknown as string)
+    }
     return fmt ? timeFormatter(fmt) : timeFormatter(undefined as unknown as string)
   }
   if (scale.type !== 'linear' && scale.type !== 'log' && scale.type !== 'pow' && scale.type !== 'sqrt' && scale.type !== 'symlog') {

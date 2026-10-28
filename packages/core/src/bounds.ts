@@ -264,21 +264,19 @@ export function boundArcItem(bounds: Bounds, it: SceneItem): Bounds {
   // d3-arc measures angles from the +y-up axis (12 o'clock); our path frame
   // rotates by -PI/2 so the path angle t maps to the direction
   // (cos(t - PI/2), sin(t - PI/2)) in y-down canvas coordinates.
-  const a0 = ((it.startAngle ?? 0) as number) - Math.PI / 2
-  let a1 = ((it.endAngle ?? 0) as number) - Math.PI / 2
-  // sweep length in (0, 2π]: our stack emits descending arcs (start > end),
-  // and the swept point set is direction-independent for bounding — vega's
-  // bound context normalizes the arc the same way (swaps sa/ea, samples the
-  // interior points aligned to 90°).
-  let da = a1 - a0
-  if (da >= 2 * Math.PI || da <= -2 * Math.PI) da = 2 * Math.PI
-  else if (da < 0) da += 2 * Math.PI
-  a1 = a0 + da
+  // d3-arc sweeps from the start angle to the end angle, clockwise when the end is greater and counterclockwise when it is
+  // smaller (a descending arc, as a stack emits): either way the span is the interval between them, a full turn from 2π on. (vega's
+  // bound context normalizes the arc the same way -- swaps sa/ea -- and samples the interior points aligned to 90°.)
+  const s0 = ((it.startAngle ?? 0) as number) - Math.PI / 2
+  const s1 = ((it.endAngle ?? 0) as number) - Math.PI / 2
+  let a0 = Math.min(s0, s1)
+  let a1 = Math.max(s0, s1)
+  if (a1 - a0 >= 2 * Math.PI) a1 = a0 + 2 * Math.PI
   const add = (rad: number, ang: number): void => {
     bounds.add(cx + rad * Math.cos(ang), cy + rad * Math.sin(ang))
   }
-  add(r, a0)
-  add(r, a1)
+  add(r, s0)
+  add(r, s1)
   // cardinal directions inside the span
   for (const card of [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2, 2 * Math.PI]) {
     for (const laps of [-2 * Math.PI, 0, 2 * Math.PI]) {

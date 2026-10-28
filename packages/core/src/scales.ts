@@ -259,15 +259,23 @@ function singularDomain(domain: { data: string; field: unknown; sort?: unknown }
 /** A `fields` member (vega-parser multipleDomain's reduce): a field of `data`, or a literal/signal value list. */
 interface Member { data?: string; field?: unknown; literal?: unknown[] }
 
+/**
+ * The values of a literal member's `data` field once vega has ingested it (Tuple.ingest): an object is the tuple itself, so the
+ * field reads its `data` property (a Date, an array have none); anything else becomes `{data: value}`.
+ */
+function ingested(values: readonly unknown[]): unknown[] {
+  return values.map((x) => (x !== null && (typeof x === 'object' || typeof x === 'function') ? (x as { data?: unknown }).data : x))
+}
+
 function multipleDomain(domain: { fields: unknown[]; data?: string; sort?: unknown }, spec: { type: string }, ctx: ScaleContext): unknown {
   const fields: Member[] = domain.fields.map((d) => {
     if (isString(d)) return { data: domain.data, field: d }
-    if (isArray(d)) return { literal: (d as unknown[]) }
+    if (isArray(d)) return { literal: ingested(d as unknown[]) }
     const sig = (d as { signal?: unknown }).signal
     if (sig) {
       const v = signalValue(String(sig), ctx)
       // (vega: `setdata(name, signal)` ingests vega-util `array(value)` -- a scalar is one tuple, no value none)
-      return { literal: v == null ? [] : isArray(v) ? (v as unknown[]) : [v] }
+      return { literal: ingested(v == null ? [] : isArray(v) ? (v as unknown[]) : [v]) }
     }
     return d as Member
   })

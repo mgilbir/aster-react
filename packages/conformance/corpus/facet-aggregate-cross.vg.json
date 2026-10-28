@@ -1,0 +1,6 @@
+{"$schema":"https://vega.github.io/schema/vega/v5.json","width":120,"height":200,"padding":5,
+ "data":[{"name":"rows","values":[{"a":3,"b":"x","v":1},{"a":1,"b":"y","v":2},{"a":3,"b":"y","v":3},{"a":2,"b":"z","v":4},{"a":1,"b":"x","v":5},{"a":3,"b":"x","v":6}]}],
+ "marks":[{"type":"group","from":{"facet":{"name":"f","data":"rows","groupby":["a","b"],"aggregate":{"cross":true}}},
+  "sort":{"field":["datum.a","datum.b"],"order":["ascending","ascending"]},
+  "encode":{"update":{"x":{"value":0},"y":{"signal":"datum.a * 30 + (datum.b == 'x' ? 0 : datum.b == 'y' ? 8 : 16)"},"width":{"value":100},"height":{"value":6},"stroke":{"value":"gray"}}},
+  "marks":[{"type":"text","encode":{"update":{"x":{"value":2},"y":{"value":5},"text":{"signal":"join([parent.a, parent.b, parent.count], '/')"},"fontSize":{"value":5}}}}]}]}

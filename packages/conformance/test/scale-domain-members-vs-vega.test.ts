@@ -25,6 +25,14 @@ const CASES: Record<string, any> = {
   'ordinal: a literal array and a scalar signal': base('ordinal', [[5, 3], { signal: 's' }], 4, { sort: true }),
   'linear: a data field and a scalar signal': base('linear', [{ data: 'd', field: 'n' }, { signal: 's' }], 100),
   'linear: a data field and an array signal': base('linear', [{ data: 'd', field: 'n' }, { signal: 's' }], [-10, 60]),
+  'time: signals that are tuples ({data: date}), as vega-lite writes a custom domain': {
+    ...frame,
+    scales: [{ name: 'k', type: 'time', domain: { fields: [{ signal: '{data: datetime(2017, 6, 14)}' }, { signal: '{data: datetime(2017, 6, 20)}' }] }, range: [0, 200] }],
+    axes: [{ orient: 'bottom', scale: 'k' }],
+  },
+  'linear: a signal that is a tuple': base('linear', [{ data: 'd', field: 'n' }, { signal: 's' }], { data: 100 }),
+  'linear: a signal that is a tuple without data': base('linear', [{ data: 'd', field: 'n' }, { signal: 's' }], { other: 100 }),
+  'linear: a literal array of tuples and numbers': base('linear', [[{ data: 90 }, 3], { data: 'd', field: 'n' }], 0),
   'quantile': { ...base('quantile', [{ data: 'd', field: 'n' }, { signal: 's' }], 100), scales: [{ name: 'k', type: 'quantile', domain: { fields: [{ data: 'd', field: 'n' }, { signal: 's' }] }, range: ['red', 'green'] }], axes: undefined, legends: [{ fill: 'k' }] },
 }
 describe('scale domain members', () => {

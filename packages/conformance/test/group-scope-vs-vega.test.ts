@@ -55,3 +55,39 @@ describe('group scopes', () => {
     }, 30_000)
   }
 })
+
+// A facet aggregate with `cross`: the cells of the cross-product of the groupby values, the empty ones last (vega Aggregate).
+describe('a facet aggregate with cross', () => {
+  const pairs = [
+    { a: 3, b: 'x', v: 1 }, { a: 1, b: 'y', v: 2 }, { a: 3, b: 'y', v: 3 }, { a: 2, b: 'z', v: 4 }, { a: 1, b: 'x', v: 5 }, { a: 3, b: 'x', v: 6 },
+  ]
+  const cells = (aggregate: Record<string, unknown> | undefined, sort: unknown, groupby: string[] = ['a', 'b'], text = "join([parent.a, parent.b, parent.count], '/')"): any => ({
+    ...frame,
+    height: 200,
+    data: [{ name: 'rows', values: pairs }],
+    marks: [{
+      type: 'group',
+      from: { facet: { name: 'f', data: 'rows', groupby, ...(aggregate ? { aggregate } : {}) } },
+      ...(sort ? { sort } : {}),
+      encode: { update: { x: { value: 0 }, y: { signal: 'datum.a * 30 + (datum.b == "x" ? 0 : datum.b == "y" ? 8 : 16)' }, width: { value: 100 }, height: { value: 6 }, stroke: { value: 'gray' } } },
+      marks: [{ type: 'text', encode: { update: { x: { value: 2 }, y: { value: 5 }, text: { signal: text }, fontSize: { value: 5 } } } }],
+    }],
+  })
+  const CASES: Record<string, any> = {
+    'cross, sorted': cells({ cross: true }, { field: ['datum.a', 'datum.b'], order: ['ascending', 'ascending'] }),
+    'cross, in the order the cells come': cells({ cross: true }, undefined),
+    'cross with ops': cells({ cross: true, ops: ['sum'], fields: ['v'], as: ['total'] }, { field: ['datum.a', 'datum.b'], order: ['ascending', 'ascending'] }, ['a', 'b'], "join([parent.a, parent.b, parent.total], '/')"),
+    'cross over one field is no cross': cells({ cross: true }, undefined, ['a'], "join([parent.a, parent.count], '/')"),
+    'no cross: the cells that exist': cells({}, { field: ['datum.a', 'datum.b'], order: ['ascending', 'ascending'] }),
+  }
+  for (const [name, s] of Object.entries(CASES)) {
+    it(name, async () => {
+      const vega = await renderWithVegaChecked(JSON.parse(JSON.stringify(s)))
+      expect(vega.errors).toEqual([])
+      const errors: unknown[] = []
+      const mine = renderSpec(JSON.parse(JSON.stringify(s)), { logger: { error: (e: unknown) => { errors.push(e) }, warn: () => {} } } as never) as string
+      expect(errors).toEqual([])
+      expect(diffCanonical(canonicalizeSvg(vega.svg), canonicalizeSvg(mine)).slice(0, 3)).toEqual([])
+    }, 30_000)
+  }
+})

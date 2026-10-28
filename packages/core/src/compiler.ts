@@ -204,8 +204,8 @@ function resolveFrameFill(spec: VgSpec): string | undefined {
 
 function resolveFrameStroke(spec: VgSpec): string | undefined {
   const stroke = frameStyleValue(spec, 'stroke')
-  // Vega serializes a 'transparent' frame stroke as no stroke at all.
-  return typeof stroke === 'string' && stroke !== 'transparent' ? stroke : undefined
+  // (a 'transparent' stroke is a stroke to the scenegraph -- the frame is inset by its half width -- that the SVG leaves out)
+  return typeof stroke === 'string' ? stroke : undefined
 }
 
 function resolveFrameNumber(spec: VgSpec, prop: string): number | undefined {
