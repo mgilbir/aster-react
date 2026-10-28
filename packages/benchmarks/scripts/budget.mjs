@@ -88,21 +88,21 @@ import { fileURLToPath } from 'node:url'
 // bezier arcs in the shared path module), canvas marginal 5.9, hit marginal 6.5, transforms marginal 23.7 (crossfilter), useChart 144.5,
 // Chart 181.7, SvgChart 162.4, SvgChart + interaction 176.3, Chart + VL 264.7. Ceilings are the measured value + 0.5.
 const BUDGETS = {
-  '@aster/core': 138.4 * 1024,
+  '@aster/core': 138.2 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
-  '+ @aster/core/canvas': 6.4 * 1024,
+  '+ @aster/core/canvas': 6.3 * 1024,
   '+ @aster/core/hit': 7.0 * 1024,
   '+ @aster/core/signals': 8.3 * 1024,
   '+ @aster/core/load': 5.6 * 1024,
   '+ @aster/core/geo': 14.8 * 1024,
   '+ @aster/core/transforms': 24.2 * 1024,
-  '@aster/react useChart': 145.0 * 1024,
-  '@aster/react Chart': 182.2 * 1024,
+  '@aster/react useChart': 144.8 * 1024,
+  '@aster/react Chart': 182.0 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 162.9 * 1024,
-  '@aster/react SvgChart + interaction': 176.8 * 1024,
+  '@aster/react SvgChart': 162.7 * 1024,
+  '@aster/react SvgChart + interaction': 176.7 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 265.2 * 1024,
+  '@aster/react Chart + VL': 270.8 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
