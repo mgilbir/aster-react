@@ -351,6 +351,8 @@ vl/selection_bind_cylyr
 vl/selection_bind_origin
 vl/selection_brush_timeunit
 vl/selection_clear_brush
+vl/selection_composition_and
+vl/selection_composition_or
 vl/selection_concat
 vl/selection_filter
 vl/selection_filter_composition
@@ -362,6 +364,10 @@ vl/selection_interval_mark_style
 vl/selection_layer_bar_month
 vl/selection_multi_condition
 vl/selection_project_binned_interval
+vl/selection_project_interval
+vl/selection_project_interval_x
+vl/selection_project_interval_x_y
+vl/selection_project_interval_y
 vl/selection_project_multi
 vl/selection_project_multi_cylinders
 vl/selection_project_multi_cylinders_origin
@@ -380,8 +386,12 @@ vl/selection_translate_brush_drag
 vl/selection_translate_brush_shift-drag
 vl/selection_translate_scatterplot_drag
 vl/selection_translate_scatterplot_shift-drag
+vl/selection_type_interval
 vl/selection_type_interval_invert
+vl/selection_type_point
 vl/selection_type_point_zorder
+vl/selection_type_single_dblclick
+vl/selection_type_single_pointerover
 vl/selection_zoom_brush_shift-wheel
 vl/selection_zoom_brush_wheel
 vl/selection_zoom_scatterplot_shift-wheel

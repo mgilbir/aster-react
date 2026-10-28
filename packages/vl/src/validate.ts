@@ -1080,16 +1080,16 @@ function validateCondition(cond: unknown, at: string): void {
       if (c.test === undefined) fail(a, 'a condition needs `test` or `param`')
       validatePredicate(c.test, `${a}.test`)
     }
+    // (a count needs no field: `{param, aggregate: "count"}` is a field def, conditional.ts ConditionalValueDef / FieldDef)
     const kinds = ['value', 'field', 'datum'].filter((k) => c[k] !== undefined)
-    if (kinds.length !== 1) fail(a, 'a condition needs exactly one of `value`, `field`, `datum`')
-    if (inArray && kinds[0] !== 'value') fail(a, 'conditions in an array must be value conditions')
+    const isCount = kinds.length === 0 && c.aggregate === 'count'
+    if (kinds.length !== 1 && !isCount) fail(a, 'a condition needs exactly one of `value`, `field`, `datum`, or `aggregate: "count"`')
+    if (inArray && !(kinds[0] === 'value')) fail(a, 'conditions in an array must be value conditions')
     if (c.field !== undefined) {
       if (typeof c.field !== 'string') mustBe(`${a}.field`, 'a string')
       splitAccessPath(c.field)
     }
     if (c.timeUnit !== undefined) normalizeTimeUnit(c.timeUnit, `${a}.timeUnit`)
-    if (c.bin !== undefined) fail(`${a}.bin`, 'binned conditional fields are not supported')
-    if (c.aggregate !== undefined) fail(`${a}.aggregate`, 'aggregated conditional fields are not supported')
   }
   if (Array.isArray(cond)) {
     if (cond.length === 0) fail(at, 'a condition array must not be empty')

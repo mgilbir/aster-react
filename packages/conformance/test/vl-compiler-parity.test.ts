@@ -296,6 +296,18 @@ const GROUPS: Record<string, Case[]> = {
     ['an ordinal bin with a colour', { data: DATA, mark: 'bar', encoding: { x: { bin: true, field: 'x', type: 'ordinal' }, y: { aggregate: 'count' }, color: n('g') } }],
     ['an ordinal bin with a number format', { data: DATA, mark: 'bar', encoding: { x: { bin: true, field: 'x', type: 'ordinal', axis: { format: '.1f' } }, y: { aggregate: 'count' } } }],
   ],
+  // conditional.ts + channeldef.ts getFieldDef: a condition that is itself a field def (here a count) drives the channel's scale and legend
+  'a conditional field def with an aggregate (selection_project_interval, selection_type_point, selection_composition_and)': [
+    ['an interval param over a conditional count', { data: DATA, params: [{ name: 'pts', select: 'interval' }], mark: 'rect', encoding: { y: n('g'), x: n('c'), color: { condition: { param: 'pts', aggregate: 'count' }, value: 'grey' } } }],
+    ['a point param over a conditional count', { data: DATA, params: [{ name: 'pts', select: 'point' }], mark: 'rect', encoding: { y: n('g'), x: n('c'), color: { condition: { param: 'pts', aggregate: 'count' }, value: 'grey' } } }],
+    ['a point param on pointerover over a conditional count', { data: DATA, params: [{ name: 'pts', select: { type: 'point', on: 'pointerover' } }], mark: 'rect', encoding: { y: n('g'), x: n('c'), color: { condition: { param: 'pts', aggregate: 'count' }, value: 'grey' } } }],
+    ['a conjunction of intervals over a conditional count', { data: DATA, params: [{ name: 'a', select: { type: 'interval', on: '[pointerdown[!event.shiftKey], pointerup] > pointermove' } }, { name: 'b', select: { type: 'interval', on: '[pointerdown[event.shiftKey], pointerup] > pointermove' } }], mark: 'rect', encoding: { y: n('g'), x: n('c'), color: { condition: { test: { and: [{ param: 'a' }, { param: 'b' }] }, aggregate: 'count' }, value: 'grey' } } }],
+    ['a disjunction of intervals over a conditional count', { data: DATA, params: [{ name: 'a', select: 'interval' }, { name: 'b', select: { type: 'interval', on: '[pointerdown[event.shiftKey], pointerup] > pointermove' } }], mark: 'rect', encoding: { y: n('g'), x: n('c'), color: { condition: { test: { or: [{ param: 'a' }, { param: 'b' }] }, aggregate: 'count' }, value: 'grey' } } }],
+    ['an interval param over a conditional sum', { data: DATA, params: [{ name: 'pts', select: 'interval' }], mark: 'rect', encoding: { y: n('g'), x: n('c'), color: { condition: { param: 'pts', aggregate: 'sum', field: 'v', type: 'quantitative' }, value: 'grey' } } }],
+    ['an interval param over a conditional mean on a plain channel', { data: DATA, params: [{ name: 'pts', select: 'interval' }], mark: 'rect', encoding: { y: n('g'), x: n('c'), fill: { condition: { param: 'pts', aggregate: 'mean', field: 'v', type: 'quantitative' }, value: 'grey' } } }],
+    ['a point param over a conditional bin', { data: DATA, params: [{ name: 'pts', select: 'point' }], mark: 'point', encoding: { y: q('y'), x: q('x'), color: { condition: { param: 'pts', bin: true, field: 'v', type: 'quantitative' }, value: 'grey' } } }],
+    ['a test condition over a conditional count with an explicit type', { data: DATA, mark: 'rect', encoding: { y: n('g'), x: n('c'), color: { condition: { test: 'datum.v > 4', aggregate: 'count', type: 'quantitative' }, value: 'grey' } } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({

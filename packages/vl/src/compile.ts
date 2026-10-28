@@ -2613,7 +2613,7 @@ function parseChannel(channel: string, def: unknown): FieldDef | null {
     // a channel whose only field is conditional (color: {condition: {test, field}, value}):
     // the conditional field drives the channel's scale and legend
     const conds = (Array.isArray(raw.condition) ? raw.condition : [raw.condition]) as ChannelDef[]
-    const withField = conds.filter((c) => c.field !== undefined)
+    const withField = conds.filter((c) => c.field !== undefined || (c.aggregate === 'count' && c.value === undefined && c.datum === undefined))
     if (withField.length > 1) throw new VLCompileError(`encoding.${channel}.condition: only one conditional field per channel is supported`)
     if (withField.length === 1) {
       const { test: _t, ...rest } = withField[0] as ChannelDef & { test?: unknown }
@@ -6686,14 +6686,14 @@ function applyNonPositionConstants(update: Record<string, unknown>, spec: VLSpec
       for (const c of (Array.isArray(def.condition) ? def.condition : [def.condition]) as Record<string, unknown>[]) {
         const entry: Record<string, unknown> = { test: c.param !== undefined ? predicateWithParams(ctxOf(spec), { param: c.param as string, ...(c.empty !== undefined ? { empty: c.empty as boolean } : {}) }) : predicateWithParams(ctxOf(spec), c.test) }
         if (c.value !== undefined) entry.value = c.value
-        else if (c.field !== undefined) {
+        else if (c.field !== undefined || c.aggregate === 'count') {
           const target = fields.find((f) => f.channel === channel || ((channel === 'fill' || channel === 'stroke') && f.channel === 'color' && f.paint === channel))
           if (!target) throw new VLCompileError(`encoding.${channel}.condition: the conditional field has no scale`)
-          const cf = flatField(String(c.field)).key
+          const cf = c.field === undefined ? '__count' : flatField(String(c.field)).key
           if (cf !== target.field && !target.fromCondition) {
             throw new VLCompileError(`encoding.${channel}.condition.field: a conditional field must be the channel's own field or its only conditional field`)
           }
-          entry.scale = channel
+          entry.scale = target.channel
           entry.field = aggFieldName(target)
         } else throw new VLCompileError(`encoding.${channel}.condition: datum conditions are not supported`)
         entries.push(entry)
