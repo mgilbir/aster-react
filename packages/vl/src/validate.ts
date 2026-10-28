@@ -1305,7 +1305,6 @@ function validateTransform(kind: string, t: Obj, a: string): void {
         if (typeof d.op !== 'string' || !AGG_OPS.has(d.op)) fail(`${da}.op`, `unknown aggregate op ${JSON.stringify(d.op)}`)
         if (d.op !== 'count' && typeof d.field !== 'string') fail(`${da}.field`, `op "${d.op}" needs a field`)
         if (d.field !== undefined) splitAccessPath(d.field as string)
-        if (d.op === 'argmax' || d.op === 'argmin') fail(`${da}.op`, `op "${d.op}" is not supported in transforms (use {"op":"max"} with a join)`)
         if (d.as !== undefined && typeof d.as !== 'string') mustBe(`${da}.as`, 'a string')
       })
       break

@@ -75,7 +75,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a dotted output name', unit({ transform: [{ calculate: '1', as: 'a.b' }] }), /must not contain/],
   ['an aggregate with an unknown op', unit({ transform: [{ aggregate: [{ op: 'sumsum', field: 'x' }], groupby: ['c'] }] }), /unknown aggregate op/],
   ['an aggregate op without a field', unit({ transform: [{ aggregate: [{ op: 'sum' }], groupby: ['c'] }] }), /needs a field/],
-  ['an argmax transform op', unit({ transform: [{ aggregate: [{ op: 'argmax', field: 'x' }], groupby: ['c'] }] }), /argmax/],
+  ['an argmax window op', unit({ transform: [{ window: [{ op: 'argmax', field: 'x' }], groupby: ['c'] }] }), /argmax/],
   ['a window with a bad op', unit({ transform: [{ window: [{ op: 'sparkle' }] }] }), /unknown window op/],
   ['a filter predicate with two operators', unit({ transform: [{ filter: { field: 'x', gt: 1, lt: 3 } }] }), /exactly one of/],
   ['a selection predicate over an undeclared param', unit({ transform: [{ filter: { param: 'brush' } }] }), /parameter "brush" is not declared/],

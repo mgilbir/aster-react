@@ -588,6 +588,13 @@ const GROUPS: Record<string, Case[]> = {
     ['a line over a binned unit', { data: MONTHS, mark: 'line', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal' }, y: q('v') } }],
     ['a binned unit on a field with an escaped name', { data: { values: [{ "a(b'c)": '2011-12-10' }, { "a(b'c)": '2011-10-12' }] }, mark: 'bar', encoding: { y: { timeUnit: 'binnedutcyearmonth', field: "a(b\\'c)", type: 'temporal' } } }],
   ],
+  // transform.ts AggregateTransform: argmax / argmin keep the winning row, whose fields are read by a bracketed path (bar_argmax_transform)
+  'argmax and argmin in aggregate transforms (bar_argmax_transform)': [
+    ['the value of the row with the largest field', { data: DATA, transform: [{ aggregate: [{ op: 'argmax', field: 'v', as: 'top' }], groupby: ['c'] }], mark: 'bar', encoding: { x: { field: "top['x']", type: 'quantitative' }, y: n('c') } }],
+    ['the value of the row with the smallest field', { data: DATA, transform: [{ aggregate: [{ op: 'argmin', field: 'v', as: 'low' }], groupby: ['g'] }], mark: 'bar', encoding: { y: { field: "low['y']", type: 'quantitative' }, x: n('g') } }],
+    ['argmax next to another measure', { data: DATA, transform: [{ aggregate: [{ op: 'argmax', field: 'v', as: 'top' }, { op: 'sum', field: 'v', as: 'total' }], groupby: ['c'] }], mark: 'point', encoding: { x: { field: "top['x']", type: 'quantitative' }, y: q('total'), color: n('c') } }],
+    ['argmax in a joinaggregate', { data: DATA, transform: [{ joinaggregate: [{ op: 'argmax', field: 'v', as: 'top' }], groupby: ['c'] }, { calculate: "datum.top.x", as: 'topx' }], mark: 'point', encoding: { x: q('x'), y: q('topx'), color: n('c') } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
