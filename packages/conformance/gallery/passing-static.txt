@@ -188,6 +188,8 @@ vl/histogram_invalid_null
 vl/histogram_log
 vl/histogram_no_spacing
 vl/histogram_nonlinear
+vl/histogram_ordinal
+vl/histogram_ordinal_sort
 vl/histogram_reverse
 vl/interactive_area_brush
 vl/interactive_bar_select_highlight
@@ -232,6 +234,7 @@ vl/layer_falkensee
 vl/layer_histogram
 vl/layer_line_color_rule
 vl/layer_line_datum_rule
+vl/layer_line_errorband_pre_aggregated
 vl/layer_line_mean_point_raw
 vl/layer_overlay
 vl/layer_point_errorbar_1d_horizontal

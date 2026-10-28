@@ -849,7 +849,20 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const axisFields = base.fields.filter((f) => f.channel === ch).map((f) =>
       nullTitle ? ({ ...f, title: null } as unknown as FieldDef) : uniq.length > 1 || given.length ? ({ ...f, title: uniq.join(', ') } as FieldDef) : f,
     )
-    for (const a of buildAxes(axisFields, axisMark(base.markRaw, base.mark), scales as ScaleSpec[], undefined, ch === 'x' && indepY ? `layer_${firstYLayer}_y` : undefined, userConfig)) axes.push(a)
+    const gridScaleName = ch === 'x' && indepY ? `layer_${firstYLayer}_y` : undefined
+    const built = buildAxes(axisFields, axisMark(base.markRaw, base.mark), scales as ScaleSpec[], undefined, gridScaleName, userConfig)
+    // axis/parse.ts mergeAxisComponent: what the first layer's axis lacks (a time unit's format and tick step, say) comes from the
+    // other layers that share it
+    for (const other of layersWith.slice(1)) {
+      const otherFields = other.fields.filter((f) => f.channel === ch).map((f) =>
+        nullTitle ? ({ ...f, title: null } as unknown as FieldDef) : uniq.length > 1 || given.length ? ({ ...f, title: uniq.join(', ') } as FieldDef) : f,
+      )
+      for (const a2 of buildAxes(otherFields, axisMark(other.markRaw, other.mark), scales as ScaleSpec[], undefined, gridScaleName, userConfig)) {
+        const a1 = built.find((a) => a.grid === a2.grid && a.orient === a2.orient)
+        if (a1) for (const [k, v] of Object.entries(a2)) if ((a1 as Record<string, unknown>)[k] === undefined && v !== undefined) (a1 as Record<string, unknown>)[k] = v
+      }
+    }
+    for (const a of built) axes.push(a)
   }
   // every grid axis is emitted before any main axis (grids paint under the domains and labels)
   if (axes.length) out.axes = [...axes.filter((a) => a.grid === true), ...axes.filter((a) => a.grid !== true)]
@@ -3438,6 +3451,15 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
 
   // binning (data/parse.ts: user transforms, geo, THEN bin, then timeUnit): the extent is taken over the filtered rows
   pushAll(pipeline, binPipeline)
+  // a binned discrete field is named by its bin's text (data/bin.ts: `<bin>_range`)
+  for (const f of binFields) {
+    if (!binDiscrete(f)) continue
+    const bn = binNames(f.binParams!, f.field)
+    const rangeField = `${bn.start}_range`
+    if (pipeline.some((t) => t.type === 'formula' && t.as === rangeField)) continue
+    const dfn = defFormat(f)
+    pipeline.push({ type: 'formula', expr: binFormatExpr(dref(bn.start), dref(bn.end), dfn.format, dfn.formatType, spec.config as never), as: rangeField })
+  }
 
   // timeUnit: the timeunit transform floors each date to the unit
   const tuSeen = new Set<string>()
@@ -3580,6 +3602,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
       if (f.bin) {
         const bin = binSignals.get(f.field)!
         groupby.push(bin.startField, bin.endField)
+        if (binDiscrete(f)) groupby.push(`${bin.startField}_range`)
         continue
       }
       if (f.aggregate) {
@@ -3697,8 +3720,14 @@ function thetaStackInfo(mark: string, fields: FieldDef[]): { stacked: boolean; f
   return { stacked: radiusDef == null, field: thetaDef.field }
 }
 
+/** A binned field of a discrete type (ordinal / nominal): its bins are the categories. */
+function binDiscrete(f: FieldDef): boolean {
+  return !!f.bin && isDiscreteType(f.type) && (f.channel === 'x' || f.channel === 'y' || f.channel === 'xOffset' || f.channel === 'yOffset')
+}
+
 function aggFieldName(f: FieldDef): string {
-  if (f.bin) return binNames(f.binParams!, f.field).start
+  // (channeldef.ts binRequiresRange: a binned discrete field is positioned by its bin's text, the `_range` field)
+  if (f.bin) return binDiscrete(f) ? `${binNames(f.binParams!, f.field).start}_range` : binNames(f.binParams!, f.field).start
   if (f.tu) return timeUnitField(f)
   if (f.aggregate === 'count') return '__count'
   if (f.aggregate) return aggregateAs(f)
@@ -3912,18 +3941,20 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
     // scale carries the order in its domain sort instead)
     if (def.sort === 'descending' && type !== 'band' && type !== 'point' && type !== 'ordinal' && type !== 'bin-ordinal') sc.reverse = true
     const measureChannel = orient === 'vertical' ? 'y' : 'x'
+    // init.ts orient: a mark ranged on both axes has no orientation, so neither axis is its dimension (zero and padding follow config)
+    const rangedBoth = (mark === 'bar' || mark === 'rule') && fields.some((f) => f.channel === 'x2' && f.field) && fields.some((f) => f.channel === 'y2' && f.field)
     // rect marks with two discrete channels (heatmaps) use unpadded bands
     // bar/rect marks pad the dimension channel; timeUnit dimensions use the
     // offset-encoded band layout instead and stay unpadded
     if (
-      mark === 'bar' && channel !== measureChannel &&
+      mark === 'bar' && !rangedBoth && channel !== measureChannel &&
       !def.timeUnit && def.stack == null
       && (cfgMarkType?.discreteBandSize ?? cfgMarkBlock?.discreteBandSize) !== 0
       // a continuous bar dimension pads by half a bar; band/point scales pad through paddingInner/Outer
       && isContinuousScaleType(type) && def.scale?.padding == null
     ) sc.padding = 5
     if (type === 'linear' || type === 'log' || type === 'pow' || type === 'sqrt' || type === 'symlog') {
-      const zeroDefault = explicitDom !== undefined ? zeroForCustomDomain(explicitDom) : type === 'log' ? false : zeroDefaultFor(mark, channel, orient)
+      const zeroDefault = explicitDom !== undefined ? zeroForCustomDomain(explicitDom) : type === 'log' ? false : rangedBoth ? true : zeroDefaultFor(mark, channel, orient)
       if (type !== 'log' || def.scale?.zero != null) {
         sc.zero = (def.scale?.zero as boolean | undefined) ?? zeroDefault
       }
@@ -4288,6 +4319,7 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
   if (def.datumOnly) return [def.datum]
   const unagg = unaggregatedDomain(def, dataName, dc.cfg)
   if (unagg !== undefined) return unagg
+  if (def.bin && binDiscrete(def)) return sortedDomain(def, dataName, dc)
   if (def.bin) {
     const sig = binNames(def.binParams!, def.field).signal
     return { signal: `[${sig}.start, ${sig}.stop]` }
@@ -4446,6 +4478,10 @@ function sortedDomain(def: FieldDef, dataName: string, dc: DomainCtx): unknown {
   const main = { data: dataName, field }
   const sort = def.sort
   if (sort === null) return main
+  // domain.ts: the categories of a binned field are the bins' texts, in the order of their starts
+  if (binDiscrete(def) && (sort === undefined || sort === 'ascending' || sort === 'descending')) {
+    return { ...main, sort: { field: binNames(def.binParams!, def.field).start, op: 'min', ...(sort === 'descending' ? { order: 'descending' } : {}) } }
+  }
   if (sort === undefined || sort === 'ascending') return { ...main, sort: true }
   // vega-lite assembles {op: 'min', field: <the domain field>, order} as just {order}
   if (sort === 'descending') return { ...main, sort: { order: 'descending' } }
@@ -5133,8 +5169,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.width = { value: (cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize }
         } else if (xDef.timeUnit && sc !== 'band') {
           setBinnedRect(update, 'x', xDef, spec, mark)
-        } else if (xDef.bin) {
-          const bn = binNames(xDef.binParams!, xDef.field)
+        } else if (xDef.bin && !binDiscrete(xDef)) {
           setBinnedRect(update, 'x', xDef, spec, mark)
         } else if (sc === 'band') {
           // BarConfig band alignment/size (probed): align 'right' anchors
@@ -5189,7 +5224,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         if (y2DefB) {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
           update.y2 = { scale: 'y', field: aggFieldName(y2DefB) }
-        } else if (mark === 'rect' && (yDef.bin || (yDef.timeUnit && positionalScaleType(mark, yDef) !== 'band'))) {
+        } else if (mark === 'rect' && ((yDef.bin && !binDiscrete(yDef)) || (yDef.timeUnit && positionalScaleType(mark, yDef) !== 'band'))) {
           // a rect's second dimension may be binned too (2d heatmaps)
           if (yDef.bin) {
             const bn = binNames(yDef.binParams!, yDef.field)
@@ -5241,8 +5276,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.height = { value: (cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize }
         } else if (yDef.timeUnit && sc !== 'band') {
           setBinnedRect(update, 'y', yDef, spec, mark)
-        } else if (yDef.bin) {
-          const bn = binNames(yDef.binParams!, yDef.field)
+        } else if (yDef.bin && !binDiscrete(yDef)) {
           setBinnedRect(update, 'y', yDef, spec, mark)
         } else if (sc === 'band') {
           const yAlignH = (markDef?.baseline ?? cfgType?.baseline ?? cfgMark?.baseline) as string | undefined
@@ -5287,7 +5321,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           // an explicit x2 field: the bar spans x → x2 (ranged bar)
           update.x = { scale: 'x', field: aggFieldName(xDef) }
           update.x2 = { scale: 'x', field: aggFieldName(x2Field) }
-        } else if (mark === 'rect' && (xDef.bin || (xDef.timeUnit && positionalScaleType(mark, xDef) !== 'band'))) {
+        } else if (mark === 'rect' && ((xDef.bin && !binDiscrete(xDef)) || (xDef.timeUnit && positionalScaleType(mark, xDef) !== 'band'))) {
           if (xDef.bin) {
             const bn = binNames(xDef.binParams!, xDef.field)
             setBinnedRect(update, 'x', xDef, spec, mark)
@@ -6467,13 +6501,19 @@ function defFormat(def: FieldDef): { format: string | undefined; formatType: str
 }
 
 function fieldTextExpr(def: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec; expr?: 'datum' | 'parent'; format?: string; formatType?: string; normalizeStack?: boolean }): string {
-  const name = aggFieldName(def)
+  // (a binned field is shown from its bin's start and end, never from the `_range` text that positions it)
+  const name = def.bin ? binNames(def.binParams!, def.field).start : aggFieldName(def)
   const refOf = (n: string): string => (opts.expr === 'parent' ? `parent[${JSON.stringify(n)}]` : dref(n))
   // a normalized stack shows its share: end - start (vega-lite fieldToFormat)
   const f = opts.normalizeStack ? `${refOf(`${name}_end`)}-${refOf(`${name}_start`)}` : refOf(name)
   const { format: guideFmt, formatType: guideFmtType } = defFormat(def)
   const fmt = opts.format ?? guideFmt
   const formatType = opts.formatType ?? guideFmtType
+  // addLineBreaksToTooltip comes first: a discrete field (a binned one included) shows its own value, line breaks joined
+  if (opts.lineBreaks && (def.type === 'nominal' || def.type === 'ordinal') && def.tu === undefined && opts.format === undefined && guideFmt === undefined && guideFmtType === undefined) {
+    const raw = refOf(def.field)
+    return `isValid(${raw}) ? isArray(${raw}) ? join(${raw}, '\\n') : ${raw} : ""+${raw}`
+  }
   const binEnd = def.bin ? refOf(binNames(def.binParams!, def.field).end) : ''
   const binCfg = (opts.spec.config as { numberFormat?: string; numberFormatType?: string; customFormatTypes?: boolean } | undefined)
   // vega-lite formatSignalRef

@@ -283,7 +283,17 @@ const GROUPS: Record<string, Case[]> = {
     ['a stacked area over bins with an explicit maxbins', { data: DATA, mark: 'area', encoding: { x: q('x', { bin: { maxbins: 3 } }), y: { aggregate: 'sum', field: 'v', type: 'quantitative' }, color: n('c') } }],
     ['rounded stacked bars with a stroke over a time unit', { data: DATA, config: { bar: { strokeWidth: 2 } }, mark: { type: 'bar', cornerRadius: 10, stroke: 'black' }, encoding: { x: { timeUnit: 'year', field: 't', type: 'ordinal' }, y: { aggregate: 'count' }, color: n('g') } }],
     ['rounded stacked bars over a bin', { data: DATA, mark: { type: 'bar', cornerRadius: 6 }, encoding: { x: q('x', { bin: true }), y: { aggregate: 'count' }, color: n('g') } }],
+    ['a layered axis takes the time unit format and step of another layer', { data: DATA, layer: [{ mark: 'errorband', encoding: { y: q('v', { scale: { zero: false } }), y2: { field: 'y' }, x: { field: 't', timeUnit: 'year' } } }, { mark: 'line', encoding: { y: q('v'), x: { field: 't', timeUnit: 'year' } } }] }],
     ['a size legend with the colour legend turned off', { data: DATA, mark: { type: 'circle', opacity: 0.8, stroke: 'black', strokeWidth: 1 }, encoding: { x: q('x'), y: n('c'), size: q('v', { title: 'Size', legend: { clipHeight: 30 } }), color: n('c', { legend: null }) } }],
+  ],
+  // channeldef.ts binRequiresRange + domain.ts: a binned ordinal / nominal field is a band over its bins' texts
+  'binned discrete fields (histogram_ordinal)': [
+    ['a histogram over an ordinal bin', { data: DATA, mark: 'bar', encoding: { x: { bin: true, field: 'x', type: 'ordinal' }, y: { aggregate: 'count' } } }],
+    ['an ordinal bin sorted by count, descending', { data: DATA, mark: 'bar', encoding: { x: { bin: true, field: 'x', type: 'ordinal', sort: '-y' }, y: { aggregate: 'count' } } }],
+    ['an ordinal bin sorted descending', { data: DATA, mark: 'bar', encoding: { x: { bin: { maxbins: 3 }, field: 'x', type: 'ordinal', sort: 'descending' }, y: { aggregate: 'count' } } }],
+    ['a horizontal histogram over a nominal bin', { data: DATA, mark: 'bar', encoding: { y: { bin: true, field: 'v', type: 'nominal' }, x: { aggregate: 'count' } } }],
+    ['an ordinal bin with a colour', { data: DATA, mark: 'bar', encoding: { x: { bin: true, field: 'x', type: 'ordinal' }, y: { aggregate: 'count' }, color: n('g') } }],
+    ['an ordinal bin with a number format', { data: DATA, mark: 'bar', encoding: { x: { bin: true, field: 'x', type: 'ordinal', axis: { format: '.1f' } }, y: { aggregate: 'count' } } }],
   ],
 }
 
