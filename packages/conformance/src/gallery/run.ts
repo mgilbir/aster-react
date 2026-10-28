@@ -84,7 +84,9 @@ const runPath = async (p: 'static' | 'react' | 'swap'): Promise<void> => {
     results.react = await runReact(specs, () => undefined, 4)
   }
 }
-await Promise.all(PATHS.map(runPath))
+await Promise.all(PATHS.filter((p) => p !== 'swap').map(runPath))
+// the swap path runs alone: it is the one that holds a chart across timers and a pointer drag, and the data loads of the other paths in flight would only add load-dependent timeouts to it
+if (PATHS.includes('swap')) await runPath('swap')
 
 const kindOf = (id: string): Kind => (id.startsWith('vega/') ? 'vega' : 'vl')
 const dump: Record<string, Outcome[]> = {}

@@ -104,6 +104,18 @@ When the numbers improve the gate says so: raise `floors.json` and regenerate th
 It is **not** in `scripts/gates.mjs` (so `pnpm check` stays hermetic and needs no fetch): it takes about 90 s and needs the cache,
 so it runs in `.github/workflows/nightly.yml` after a cached fetch.
 
+## The spec-swap path
+
+Every other path mounts fresh. This one holds a mounted chart to what a fresh mount shows when its `spec` PROP CHANGES (a playground
+re-rendering one `<Chart>`): ONE `<Chart>` is given spec A, runs for a moment (its timers tick, the pointer moves, presses and
+releases over it), is given spec B, settles, and the canonical SVG is compared with a fresh mount of B and with vega's B. The pairs
+(`src/gallery/swap-pairs.ts`) are a seeded sample, a pure function of the listing: the three a playground user reported, timer /
+selection / facet / map specs both as the spec left behind and as the one that follows, and a seeded remainder (223 pairs; B is
+always a spec the react path already passes, so equal to a fresh mount means equal to vega). It has its own ratchet in
+`floors.json` (`swap`: pairs passing, pairs also equal to vega, unverifiable ceiling) and `passing-swap.txt`, is reported apart
+from the fresh-mount counts, and runs after the other paths (a load-dependent timeout of a data load would otherwise decide it).
+On origin/main 187 of the 223 pairs passed; the rest left the old chart's elements, timers or state behind.
+
 ## Triage
 
 `TRIAGE.md` is the snapshot of why each non-passing spec does not pass; `triage.json` is the same per spec;
