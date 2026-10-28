@@ -378,6 +378,8 @@ function getLineOverlay(markDef: Obj, markConfig: Obj): Obj | null | undefined {
 export interface StackProps {
   fieldChannel: string
   offset?: string
+  /** the orientation the mark ends up with (init.ts orient) */
+  orient?: string
 }
 
 /** The marks a layer of mark + overlay replaces: `point` / `line` leave the mark definition. */
@@ -468,3 +470,45 @@ export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit
 }
 
 const deepEq = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
+
+// --- stack order (unit.ts alignStackOrderWithColorDomain) --------------------------------------------------------------
+
+/**
+ * A unit that has no `order` channel but a nominal colour with an explicit domain list orders its stack (or its offset
+ * groups) like that list: a sort index calculated from the domain becomes the `order` channel. `inherited` is the
+ * encoding a parent layer shares; `stackOf` answers the stack properties of a unit.
+ */
+export function alignStackOrders(node: unknown, stackOf: (unit: Obj) => StackProps | undefined, inherited: Obj = {}): unknown {
+  if (Array.isArray(node)) return node.map((n) => alignStackOrders(n, stackOf, inherited))
+  if (!isObj(node)) return node
+  if (node.layer !== undefined) {
+    const encoding = { ...inherited, ...(isObj(node.encoding) ? node.encoding : {}) }
+    return { ...node, layer: alignStackOrders(node.layer, stackOf, encoding) }
+  }
+  for (const k of ['hconcat', 'vconcat', 'concat']) if (node[k] !== undefined) return { ...node, [k]: alignStackOrders(node[k], stackOf, {}) }
+  if (node.spec !== undefined) return { ...node, spec: alignStackOrders(node.spec, stackOf, {}) }
+  if (node.mark === undefined) return node
+
+  const own: Obj = isObj(node.encoding) ? node.encoding : {}
+  const encoding: Obj = { ...inherited, ...own }
+  if (encoding.order) return node
+  const colorField = encoding.fill ?? encoding.color
+  if (!isObj(colorField) || typeof colorField.field !== 'string') return node
+  const type = colorField.type ?? defaultType('color', colorField)
+  const domain = isObj(colorField.scale) ? colorField.scale.domain : undefined
+  if (!Array.isArray(domain) || type !== 'nominal') return node
+  const offsetChannel = encoding.xOffset ? 'xOffset' : encoding.yOffset ? 'yOffset' : undefined
+  const offsetDef = offsetChannel ? encoding[offsetChannel] : undefined
+  if (offsetChannel && isObj(offsetDef) && offsetDef.field !== undefined && !offsetDef.sort) {
+    return { ...node, encoding: { ...own, [offsetChannel]: { ...offsetDef, sort: domain } } }
+  }
+  const stack = stackOf({ ...node, encoding })
+  if (!stack) return node
+  const as = `_${colorField.field}_sort_index`
+  const sort = (isObj(node.mark) ? node.mark.orient : undefined) === 'horizontal' || (!(isObj(node.mark) && node.mark.orient) && stack.orient === 'horizontal') ? 'ascending' : 'descending'
+  return {
+    ...node,
+    transform: [...(Array.isArray(node.transform) ? node.transform : []), { calculate: `indexof(${JSON.stringify(domain)}, datum['${colorField.field}'])`, as }],
+    encoding: { ...own, order: { field: as, type: 'quantitative', sort } },
+  }
+}

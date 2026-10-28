@@ -32,6 +32,7 @@ vl/arc_color_mappings
 vl/arc_donut
 vl/arc_pie
 vl/arc_pie_normalize_tooltip
+vl/arc_pie_pyramid
 vl/area
 vl/area_cumulative_freq
 vl/area_density
@@ -69,12 +70,15 @@ vl/bar_corner_radius_end
 vl/bar_custom_sort_full
 vl/bar_custom_sort_partial
 vl/bar_default_tooltip_title_null
+vl/bar_distinct
+vl/bar_diverging_stack_population_pyramid
 vl/bar_diverging_stack_transform
 vl/bar_filter_calc
 vl/bar_fit
 vl/bar_gantt
 vl/bar_gantt_config_no_zero
 vl/bar_grouped
+vl/bar_grouped_custom_color_domain
 vl/bar_grouped_errorbar
 vl/bar_grouped_fixed_width
 vl/bar_grouped_horizontal
@@ -252,6 +256,7 @@ vl/point_no_axis_domain_grid
 vl/point_ordinal_color
 vl/point_overlap
 vl/point_params
+vl/point_shape_custom
 vl/point_tooltip
 vl/rect_heatmap
 vl/rect_heatmap_weather
@@ -269,6 +274,7 @@ vl/stacked_bar_count_corner_radius_config
 vl/stacked_bar_count_corner_radius_mark
 vl/stacked_bar_count_corner_radius_mark_x
 vl/stacked_bar_h
+vl/stacked_bar_h_custom_color_domain
 vl/stacked_bar_h_order
 vl/stacked_bar_h_order_custom
 vl/stacked_bar_normalize
@@ -278,6 +284,7 @@ vl/stacked_bar_size
 vl/stacked_bar_sum_opacity
 vl/stacked_bar_unaggregate
 vl/stacked_bar_v
+vl/stacked_bar_weather
 vl/test_aggregate_nested
 vl/test_field_with_spaces
 vl/test_single_point_color

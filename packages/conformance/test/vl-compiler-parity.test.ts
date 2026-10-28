@@ -203,6 +203,25 @@ const GROUPS: Record<string, Case[]> = {
     ['a condition-only colour falls back to the mark colour', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { test: 'datum.x > 2', value: '#aaa' } } } }],
     ['a UTC time unit', { data: DATA, mark: { type: 'point', tooltip: true }, encoding: { x: { field: 't', timeUnit: 'utcyearmonthdate', type: 'temporal' }, y: q('v') } }],
   ],
+  // unit.ts alignStackOrderWithColorDomain; legend/assemble.ts; formatparse.ts (no cast under count / distinct)
+  'stack order, symbol legends, distinct (stacked_bar_weather, bar_diverging_stack_population_pyramid, bar_distinct)': [
+    ['stacked bars ordered like the colour domain', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), color: n('g', { scale: { domain: ['q', 'p'], range: ['#111', '#999'] } }) } }],
+    ['horizontal stacked bars ordered like the colour domain', { data: DATA, mark: 'bar', encoding: { y: n('c'), x: q('v', { aggregate: 'sum' }), color: n('g', { scale: { domain: ['q', 'p'] } }) } }],
+    ['grouped bars take the colour domain as the offset sort', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), xOffset: n('g'), color: n('g', { scale: { domain: ['q', 'p'] } }) } }],
+    ['a stack with an order channel is left alone', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), order: { aggregate: 'count', type: 'quantitative' }, color: n('g', { scale: { domain: ['q', 'p'] } }) } }],
+    ['a symbol legend on top is not a gradient', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), color: n('g', { legend: { orient: 'top', title: null } }) } }],
+    ['a gradient legend on top', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), color: q('v', { legend: { orient: 'top' } }) } }],
+    ['distinct count of a text field', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: { aggregate: 'distinct', field: 'g' } } }],
+  ],
+  // header/facet.ts (header: null, an empty title), legend/properties.ts symbolType, scale/range.ts (theta, shape), stack order
+  'headers, shapes and arcs (trellis_bar_no_header, point_shape_custom, arc_pie_pyramid)': [
+    ['a facet row without a header', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), row: n('g', { header: null }) } }],
+    ['a facet row with an empty header title', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), row: n('g', { header: { title: '' } }) } }],
+    ['a facet column and row, one without a header', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), row: n('g', { header: null }), column: n('c') } }],
+    ['a constant custom shape names the legend symbols', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c'), size: q('v'), shape: { value: 'M0,0.2L0.2351,0.3236 0.1902,0.0618 0.3804,-0.1236 0,-0.4 -0.3804,-0.1236 -0.1902,0.0618 -0.2351,0.3236 0,0.2Z' } } }],
+    ['a shape scale with its own range, through a selection condition', { data: DATA, params: [{ name: 'pts', select: { type: 'point', fields: ['c'], toggle: false } }], mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { param: 'pts', field: 'g', type: 'nominal' }, value: 'grey' }, shape: { condition: { param: 'pts', field: 'c', type: 'nominal', scale: { range: ['triangle-left', 'triangle-right', 'triangle-up'] } }, value: 'circle' } } }],
+    ['a pie ordered by the order channel with a custom angular range', { data: DATA, mark: { type: 'arc', outerRadius: 80 }, encoding: { theta: q('v', { scale: { range: [2.35, 8.63] }, stack: true }), color: n('c'), order: { field: 'x' } } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({

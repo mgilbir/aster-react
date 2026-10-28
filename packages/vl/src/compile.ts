@@ -16,7 +16,7 @@ import {
   assembleFacetSignals, assembleUnitSelectionMarks, assembleUnitSelectionSignals, interactiveLegendSelections, parseUnitSelections, requiresSelectionId, selectionPredicate,
   stringValue, varName, type ParamPredicate, type SelCmpt, type SelUnit, type TimeUnitProjection,
 } from './selection.js'
-import { normalizeComposites, normalizePathOverlays } from './composite.js'
+import { alignStackOrders, normalizeComposites, normalizePathOverlays } from './composite.js'
 import { timeScaleRange } from './animation.js'
 import { isTimerSelection } from './selection.js'
 import { ASSEMBLED_FROM, GEO_POSITION_CHANNELS, assembleProjection, finalProjectionName, geoDataTransforms, geoshapeTransform, hasProjection, mergeLayerProjections, parseUnitProjection, renameComponentSignals, type GeoUnit, type ProjectionComponent, type UnitGeo } from './geo.js'
@@ -122,7 +122,7 @@ export function compile(input: VLSpec): VLSpec {
   const spec = cloneSpec(input)
   validateSpec(spec)
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
-  const normalized = normalizePathOverlays(normalizeComposites(spec, userConfig), userConfig ?? {}, unitStackProps) as VLSpec
+  const normalized = alignStackOrders(normalizePathOverlays(normalizeComposites(spec, userConfig), userConfig ?? {}, unitStackProps), unitStackProps) as VLSpec
   // (the overlays are layers now: `config.<mark>.point / line` have done their job)
   if (userConfig) {
     const cfg = { ...userConfig }
@@ -151,7 +151,7 @@ export function compile(input: VLSpec): VLSpec {
     out.signals = [...signals, ...layoutSignals]
   }
   assertNoGeoSignalClash(out)
-  assembleConditionalAxisProps(out)
+  assembleGuides(out)
   return exprRefsToSignals(out) as VLSpec
 }
 
@@ -172,9 +172,11 @@ const CONDITIONAL_AXIS_PROPS: Record<string, { part: string; vgProp: string } | 
 }
 const GRID_ONLY_AXIS_PROPS = new Set(['gridColor', 'gridDash', 'gridDashOffset', 'gridOpacity', 'gridWidth', 'gridCap'])
 
-function assembleConditionalAxisProps(node: unknown): void {
-  if (Array.isArray(node)) { for (const n of node) assembleConditionalAxisProps(n); return }
+function assembleGuides(node: unknown): void {
+  if (Array.isArray(node)) { for (const n of node) assembleGuides(n); return }
   if (!isObject(node)) return
+  // legend/assemble.ts: a falsy legend title (null, '') is no title
+  if (Array.isArray(node.legends)) for (const lg of node.legends as Record<string, unknown>[]) if (isObject(lg) && 'title' in lg && !lg.title) delete lg.title
   if (Array.isArray(node.axes)) {
     for (const axis of node.axes as Record<string, unknown>[]) {
       if (!isObject(axis)) continue
@@ -202,18 +204,18 @@ function assembleConditionalAxisProps(node: unknown): void {
       }
     }
   }
-  for (const v of Object.values(node)) if (v !== null && typeof v === 'object') assembleConditionalAxisProps(v)
+  for (const v of Object.values(node)) if (v !== null && typeof v === 'object') assembleGuides(v)
 }
 
 /** vega-lite `stack(initMarkdef(markDef, encoding, config), encoding)`: the measure a unit stacks and how. */
-function unitStackProps(unit: Record<string, unknown>): { fieldChannel: string; offset?: string } | undefined {
+function unitStackProps(unit: Record<string, unknown>): { fieldChannel: string; offset?: string; orient?: string } | undefined {
   const markRaw = unit.mark
   const mark = typeof markRaw === 'string' ? markRaw : isObject(markRaw) ? String(markRaw.type) : ''
   const encoding = isObject(unit.encoding) ? (unit.encoding as Record<string, unknown>) : {}
   const fields = parseEncodingFields(encoding, unit.config, markRaw)
   const orient = inferOrient(unit as VLSpec, mark, markRaw, fields)
   const measure = fields.find((f) => (f.channel === 'x' || f.channel === 'y') && isStacked(f, mark, orient, fields))
-  return measure ? { fieldChannel: measure.channel, offset: measureStackOffset(measure) } : undefined
+  return measure ? { fieldChannel: measure.channel, offset: measureStackOffset(measure), orient } : undefined
 }
 
 /**
@@ -1625,6 +1627,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     }
   }
   const labelsOn = (def: Record<string, unknown> | undefined): boolean => {
+    if (def?.header === null) return false // (header: null - no title and no labels)
     const own = isObject(def?.header) ? (def!.header as Record<string, unknown>).labels : undefined
     return (own ?? cfgHeaderBase.labels ?? true) as boolean
   }
@@ -1635,7 +1638,9 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   ]
   const marks: Record<string, unknown>[] = []
   // title groups first (row, then column), then the header/footer groups per channel
-  for (const c of channels) if (c.field && c.def) marks.push(titleGroup(c.ch, c.def, c.fd, c.field))
+  // (a header title that is empty - or a header that is null - is no title group)
+  const hasTitle = (c: { def?: Record<string, unknown> }): boolean => c.def?.header !== null && !(isObject(c.def?.header) && 'title' in (c.def!.header as Record<string, unknown>) && !(c.def!.header as Record<string, unknown>).title)
+  for (const c of channels) if (c.field && c.def && hasTitle(c)) marks.push(titleGroup(c.ch, c.def, c.fd, c.field))
   let cellTitle: Record<string, unknown> | undefined
   for (const c of channels) {
     const faceted = c.field !== undefined && c.def !== undefined
@@ -1720,13 +1725,14 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const layoutSpacing = spec.spacing ?? (rowSpacing != null || colSpacing != null ? { row: rowSpacing ?? 20, column: colSpacing ?? 20 } : 20)
   const layoutAlign = spec.align ?? (perChannel('align') ? { row: rowDef?.align ?? 'all', column: colDef?.align ?? 'all' } : 'all')
   const layoutCenter = spec.center ?? (perChannel('center') ? { row: rowDef?.center ?? false, column: colDef?.center ?? false } : undefined)
+  const titleOffsets: Record<string, number> = {
+    ...(rowField && hasTitle({ def: rowDef }) ? { rowTitle: 10 } : {}),
+    ...(colField && hasTitle({ def: colDef }) ? { columnTitle: 10 } : {}),
+  }
   out.layout = {
     padding: layoutSpacing,
     ...(Object.keys(layoutTitleAnchor).length ? { titleAnchor: layoutTitleAnchor } : {}),
-    offset: {
-      ...(rowField ? { rowTitle: 10 } : {}),
-      ...(colField ? { columnTitle: 10 } : {}),
-    },
+    ...(Object.keys(titleOffsets).length ? { offset: titleOffsets } : {}),
     columns: colField ? { signal: `length(data(${JSON.stringify(columnDomainName)}))` } : 1,
     bounds: spec.bounds ?? 'full',
     align: layoutAlign,
@@ -3365,8 +3371,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
       // count/distinct/valid/missing over a nominal/ordinal field counts raw
       // values — vega-lite does not coerce the source column (only temporal
       // sources go through toNumber).
-      if (f.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(String(f.aggregate))
-        && (declared === 'nominal' || declared === 'ordinal')) continue
+      if (f.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(String(f.aggregate))) continue
       if (timeUnitFields.has(f.field) || f.timeUnit || f.type === 'temporal') {
         // A temporal axis formatted as a number makes upstream skip the toDate
         // cast entirely (the time scale then gets raw strings and an invalid
@@ -3468,7 +3473,10 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
         type: 'stack',
         groupby: [],
         field: thetaDef.field,
-        sort: colorF ? { field: [aggFieldName(colorF)], order: ['ascending'] } : { field: [], order: [] },
+        // (stack.ts: the order channel sorts the stack, else the stack-by fields)
+        sort: fields.some((f) => f.channel === 'order' && f.field && !f.datumOnly)
+          ? stackSortParams(fields, [], 'x')
+          : colorF ? { field: [aggFieldName(colorF)], order: ['ascending'] } : { field: [], order: [] },
         as: [`${thetaDef.field}_start`, `${thetaDef.field}_end`],
         offset: thetaDef.stack === 'normalize' ? 'normalize' : 'zero',
       })
@@ -4022,7 +4030,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       name: 'shape',
       type: 'ordinal',
       domain: sortedDomain(shapeDefS, dataName, dc),
-      range: 'symbol',
+      range: shapeDefS.scale?.range ?? 'symbol',
     })
   }
 
@@ -4038,7 +4046,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       domain: mark === 'arc' && arcThetaS?.stacked
         ? { data: dataName, fields: [`${arcThetaS.field}_start`, `${arcThetaS.field}_end`] }
         : { data: dataName, field: arcThetaS?.field ?? thetaDef.field },
-      range: [0, 6.283185307179586],
+      range: Array.isArray(thetaDef.scale?.range) ? thetaDef.scale!.range : [0, 6.283185307179586],
       // the theta def's sort reverses the angular scale
       reverse: thetaDef.sort === 'descending' ? true : undefined,
       zero: true,
@@ -4664,7 +4672,7 @@ function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null, fie
 
 // --- legends -----------------------------------------------------------------
 
-function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number, cfgLegendIn?: Record<string, unknown>, markStrokeDash?: number[], formats: { numberFormat?: string; timeFormat?: string; customFormatTypes?: boolean; numberFormatType?: string; timeFormatType?: string } = {}, paint: { fill?: string; stroke?: string; markFill?: string } = {}): Record<string, unknown>[] {
+function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number, cfgLegendIn?: Record<string, unknown>, markStrokeDash?: number[], formats: { numberFormat?: string; timeFormat?: string; customFormatTypes?: boolean; numberFormatType?: string; timeFormatType?: string } = {}, paint: { fill?: string; stroke?: string; markFill?: string; shape?: string } = {}): Record<string, unknown>[] {
   const legends: Record<string, unknown>[] = []
   // config.legend is a defaults layer: orient/direction keys are translated
   // into the compiled `direction`, everything else merges under the channel's
@@ -4734,7 +4742,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
       if (opacity) lg.encode = { gradient: { update: { opacity: { value: opacity } } } }
     } else {
-      lg.symbolType = ['bar', 'rect', 'square'].includes(mark) ? 'square' : ['line', 'trail', 'rule'].includes(mark) ? 'stroke' : 'circle'
+      lg.symbolType = paint.shape ?? (['bar', 'rect', 'square'].includes(mark) ? 'square' : ['line', 'trail', 'rule'].includes(mark) ? 'stroke' : 'circle')
       // the mark's own paint and opacity ride along on the symbols (legend/encode.ts symbols())
       const symUpdate: Record<string, unknown> = {}
       if (!legendFilled && !['line', 'rule', 'trail'].includes(mark)) symUpdate.fill = { value: paint.markFill ?? 'transparent' }
@@ -4752,7 +4760,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       lg[k] = v
     }
     // top/bottom gradients measure along the chart width
-    if ((lg.orient === 'top' || lg.orient === 'bottom' || lg.direction === 'horizontal')
+    if (colorGradient && (lg.orient === 'top' || lg.orient === 'bottom' || lg.direction === 'horizontal')
       && userLegend.gradientLength == null && !('gradientLength' in userLegend)) {
       lg.gradientLength = { signal: 'clamp(width, 100, 200)' }
     }
@@ -4807,7 +4815,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       if (!byColor) u.stroke = { value: markStroke ?? base }
     }
     if (channel !== 'opacity' && opacity) u.opacity = { value: opacity }
-    return { symbolType: ['bar', 'rect', 'square'].includes(mark) ? 'square' : ['line', 'trail', 'rule'].includes(mark) ? 'stroke' : 'circle', update: u }
+    return { symbolType: paint.shape ?? (['bar', 'rect', 'square'].includes(mark) ? 'square' : ['line', 'trail', 'rule'].includes(mark) ? 'stroke' : 'circle'), update: u }
   }
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
   if (sizeDef && sizeDef.legend !== null && !legendSuppressed(sizeDef)) {
@@ -4849,7 +4857,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       symbolType: 'circle',
       title: legendTitle(shapeDefL, shapeUser),
       // (a filled mark - a point overlay is one - paints the symbols like the mark; an unfilled point strokes them)
-      encode: { symbols: { update: legendFilled ? symbolFor('shape').update : { fill: { value: 'transparent' }, ...(colorLegendShown ? {} : { stroke: { value: C.blue } }), opacity: { value: markOpacity ?? reducedOpacity ?? 1 } } } },
+      encode: { symbols: { update: legendFilled ? symbolFor('shape').update : { fill: { value: 'transparent' }, ...(colorLegendShown && !colorDef?.fromCondition ? {} : { stroke: { value: paint.stroke ?? C.blue } }), opacity: { value: markOpacity ?? reducedOpacity ?? 1 } } } },
     }
     applyTimeUnitLegend(shapeLg, shapeDefL, shapeUser, formats)
     forwardLegendProps(shapeUser, shapeLg, false)
@@ -6738,7 +6746,7 @@ function buildUnitLegends(spec: VLSpec, fields: FieldDef[], mark: string, markRa
 }
 
 /** The constant colour a legend symbol takes: a `value` colour channel, else the mark def's `fill` / `stroke` / `color`. */
-function legendPaint(spec: VLSpec, markRaw: unknown): { fill?: string; stroke?: string; markFill?: string } {
+function legendPaint(spec: VLSpec, markRaw: unknown): { fill?: string; stroke?: string; markFill?: string; shape?: string } {
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   const md = isObject(markRaw) ? markRaw : {}
   const encValue = (ch: string): string | undefined => {
@@ -6751,6 +6759,8 @@ function legendPaint(spec: VLSpec, markRaw: unknown): { fill?: string; stroke?: 
     stroke: encValue('stroke') ?? encValue('color') ?? str(md.stroke) ?? str(md.color),
     // (the mark definition's own fill: what an unfilled mark's legend symbols are filled with)
     markFill: str(md.fill),
+    // legend/properties.ts symbolType: a constant shape (a value def, else the mark's) is every non-shape legend's symbol
+    shape: encValue('shape') ?? str(md.shape),
   }
 }
 
