@@ -19,6 +19,9 @@ import { fileURLToPath } from 'node:url'
 import type { VgSpec } from '@aster/core'
 import { isAddonLoaded, loadAddons } from '@aster/core/addons'
 import { forEachVariant } from './testing/variants'
+import { ignoreSuspendedActWarning } from './testing/quiet'
+
+ignoreSuspendedActWarning()
 
 vi.mock('@aster/core/addons', async (importOriginal) => {
   const real = await importOriginal<typeof import('@aster/core/addons')>()

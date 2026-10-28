@@ -15,7 +15,7 @@
  */
 import * as React from 'react'
 import type { VgSpec } from '@aster/core'
-import { loadAddons, missingAddons, type AddonName } from '@aster/core/addons'
+import { addonsNeeded, loadAddons, notLoaded, type AddonName } from '@aster/core/addons'
 
 /** One promise per set of add-ons: what resolves to `null` (loaded) or the error that stopped it. */
 const settled = new Map<string, Promise<Error | null>>()
@@ -36,8 +36,11 @@ function settle(names: readonly AddonName[]): Promise<Error | null> {
  * which is never evaluated here) needs nothing.
  */
 export function useAddons(spec: VgSpec | null): Error | null {
-  const missing = spec === null ? [] : missingAddons(spec)
+  // what the spec needs is a walk of the spec: once per spec, not once per render (a signal event re-renders the chart often)
+  const needed = React.useMemo(() => (spec === null ? NO_ADDONS : addonsNeeded(spec)), [spec])
+  const missing = notLoaded(needed)
   return missing.length === 0 ? null : React.use(settle(missing))
 }
+const NO_ADDONS: readonly AddonName[] = []
 
 export { loadAddonsFor } from '@aster/core/addons'

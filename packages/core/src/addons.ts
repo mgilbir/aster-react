@@ -33,18 +33,16 @@ const FORMAT_TYPES = new Set(LOAD_ADDON_FORMATS)
 type Json = Record<string, unknown>
 const isObj = (v: unknown): v is Json => v !== null && typeof v === 'object'
 
-const needed = new WeakMap<object, readonly AddonName[]>()
 const NONE: readonly AddonName[] = Object.freeze([])
 
 /**
  * The add-ons `spec` needs, read from its structure alone: a transform of the transforms add-on, a `contour` transform or
  * a projection (geo), a text data format (load), in `data` and in the `data` / `transform` of every mark at any depth of
- * nesting. The result is cached per spec object, so asking again on every render costs one lookup.
+ * nesting. A walk of the spec each time it is asked (a host that renders again keeps the answer: the React hook memoizes it per
+ * spec), so a spec edited in place is read as it is now.
  */
 export function addonsNeeded(spec: VgSpec): readonly AddonName[] {
   if (!isObj(spec)) return NONE
-  const hit = needed.get(spec)
-  if (hit) return hit
   let transforms = false
   let geo = Array.isArray(spec.projections) && spec.projections.length > 0
   let load = false
@@ -81,9 +79,7 @@ export function addonsNeeded(spec: VgSpec): readonly AddonName[] {
   if (transforms) out.push('transforms')
   if (geo) out.push('geo')
   if (load) out.push('load')
-  const result = out.length ? Object.freeze(out) : NONE
-  needed.set(spec, result)
-  return result
+  return out.length ? Object.freeze(out) : NONE
 }
 
 /** Whether an add-on's registrations are present, however they got there (a static import, an earlier `loadAddons`). */
@@ -95,12 +91,16 @@ export function isAddonLoaded(name: AddonName): boolean {
   }
 }
 
-/** The add-ons `spec` needs that are not loaded yet; empty for a plain chart and for an app that imported them. */
+/** The add-ons in `needed` that are not loaded yet; empty for a plain chart and for an app that imported them. */
+export function notLoaded(needed: readonly AddonName[]): readonly AddonName[] {
+  if (needed.length === 0) return needed
+  const missing = needed.filter((a) => !isAddonLoaded(a))
+  return missing.length === needed.length ? needed : missing
+}
+
+/** The add-ons `spec` needs that are not loaded yet. */
 export function missingAddons(spec: VgSpec): readonly AddonName[] {
-  const all = addonsNeeded(spec)
-  if (all.length === 0) return all
-  const missing = all.filter((a) => !isAddonLoaded(a))
-  return missing.length === all.length ? all : missing
+  return notLoaded(addonsNeeded(spec))
 }
 
 const importers: Record<AddonName, () => Promise<unknown>> = {

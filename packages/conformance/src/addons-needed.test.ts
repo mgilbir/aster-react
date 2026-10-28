@@ -134,7 +134,7 @@ describe('addonsNeeded reads the structure, not the text', () => {
   it('does not take the word for the thing: a field, a signal or a string that says "pie" needs nothing', () => {
     expect(only({ data: [{ name: 'pie', values: [{ type: 'pie', format: { type: 'csv' } }], transform: [{ type: 'filter', expr: "datum.type == 'pie'" }] }], signals: [{ name: 'projections', value: ['pie', 'kde'] }], marks: [{ type: 'rect', name: 'treemap', encode: { update: { fill: { value: 'geo' } } } }], projections: [] })).toBe('')
   })
-  it('is not fooled by a deep or cyclic marks tree, and costs one lookup the second time', () => {
+  it('is not fooled by a deep or cyclic marks tree, and reads a spec edited in place as it is now', () => {
     const deep: VgSpec = { marks: [] }
     let cur = deep
     for (let i = 0; i < 5000; i++) { const g: VgSpec = { type: 'group', marks: [] }; (cur.marks as unknown[]).push(g); cur = g }
@@ -142,6 +142,9 @@ describe('addonsNeeded reads the structure, not the text', () => {
     const cyc: VgSpec = { marks: [] }
     ;(cyc.marks as unknown[]).push(cyc)
     expect(only(cyc)).toBe('')
-    expect(addonsNeeded(cyc)).toBe(addonsNeeded(cyc))
+    const edited: VgSpec = { data: [{ name: 'd' }] }
+    expect(only(edited)).toBe('')
+    ;(edited.data as Array<Record<string, unknown>>)[0]!.transform = [{ type: 'kde' }]
+    expect(only(edited)).toBe('transforms')
   })
 })

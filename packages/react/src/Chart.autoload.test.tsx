@@ -19,6 +19,9 @@ import { fileURLToPath } from 'node:url'
 import { renderSpec, geoRegistry, transformRegistry, type VgSpec } from '@aster/core'
 import { isAddonLoaded } from '@aster/core/addons'
 import { forEachVariant } from './testing/variants'
+import { ignoreSuspendedActWarning } from './testing/quiet'
+
+ignoreSuspendedActWarning()
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 

@@ -17,6 +17,9 @@ import { isAddonLoaded } from '@aster/core/addons'
 import { useChart } from './useChart'
 import { useChartStream } from './useChartStream'
 import { useChartWorker } from './worker'
+import { ignoreSuspendedActWarning } from './testing/quiet'
+
+ignoreSuspendedActWarning()
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
