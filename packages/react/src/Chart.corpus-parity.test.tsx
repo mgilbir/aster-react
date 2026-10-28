@@ -9,13 +9,13 @@
  *   - hydration of the server markup (`hydrateRoot`), with no recoverable hydration error.
  * The a11y overlay and the bound-input controls are part of that DOM, so the accessible tree is compared too.
  *
- * Two relations, no allow-list of tolerated differences:
- *   <SvgChart interaction={interaction}>  ===  <Chart renderer="svg">          (everything, including the `data-datum` stamps)
- *   <SvgChart>                            ===  <Chart renderer="svg"> minus its `data-datum` attributes
- * The only thing `interaction` adds to the markup is the `data-datum` stamp that `signal.on` mark events read, and only for
- * specs that have event streams; without the capability nothing can read them, so they are not emitted.
+ * One relation, no allow-list of tolerated differences:
+ *   <SvgChart interaction={interaction}>  ===  <SvgChart>  ===  <Chart renderer="svg">
+ * The `interaction` capability adds nothing to the markup, even for a spec with `signal.on` event streams: the mark under the
+ * pointer is found through the scene hit index, so the DOM is the markup vega writes (no per-item `data-datum` attribute;
+ * the oracle gates compare the mounted DOM with vega's, exactly). Nothing in the compared DOM may carry the attribute.
  *
- * The scenes are the same too: the handle's `getScene()` must agree between the variants (same marks, same stamps).
+ * The scenes are the same too: the handle's `getScene()` must agree between the variants (same marks, none stamped).
  */
 import * as React from 'react'
 import { createRoot, hydrateRoot } from 'react-dom/client'
@@ -36,9 +36,6 @@ const element = (v: VariantName, spec: VgSpec, ref?: React.Ref<ChartHandle>): Re
   v === 'chart' ? <Chart spec={spec} renderer="svg" ref={ref} />
     : v === 'plain' ? <SvgChart spec={spec} ref={ref} />
       : <SvgChart spec={spec} interaction={interaction} ref={ref} />
-
-/** The `data-datum` stamps are the only thing the interaction capability adds to the markup. */
-export const withoutStamps = (html: string): string => html.replace(/ data-datum="[^"]*"/g, '')
 
 /** A short description of the first difference between two strings, or null when equal. */
 export function firstDifference(a: string, b: string): string | null {
@@ -100,8 +97,6 @@ describe('<SvgChart> renders what <Chart renderer="svg"> renders, over the whole
   // Each pass is cut into slices of the corpus, one test each: one long synchronous test keeps a vitest worker from answering
   // its host (Timeout calling onTaskUpdate), and a slice names where a difference is.
   const slices = Array.from({ length: Math.ceil(corpusFiles().length / SLICE) }, (_, i) => [i * SLICE, (i + 1) * SLICE] as const)
-  let streams = 0
-  let stamped = 0
   for (const [from, to] of slices) it(`server markup, specs ${from}-${to}`, () => {
     const failures: string[] = []
     for (const { name, spec } of specs.slice(from, to)) {
@@ -110,15 +105,16 @@ describe('<SvgChart> renders what <Chart renderer="svg"> renders, over the whole
       const rich = renderToString(element('rich', spec))
       const dRich = firstDifference(chart, rich)
       if (dRich) failures.push(`${name}: SvgChart+interaction vs Chart ${dRich}`)
-      const dPlain = firstDifference(withoutStamps(chart), plain)
-      if (dPlain) failures.push(`${name}: SvgChart vs Chart minus stamps ${dPlain}`)
-      if (chart !== plain) streams++
+      const dPlain = firstDifference(chart, plain)
+      if (dPlain) failures.push(`${name}: SvgChart vs Chart ${dPlain}`)
+      if (chart.includes('data-datum')) failures.push(`${name}: the server markup carries a data-datum attribute`)
     }
     expect(failures.slice(0, 20).join('\n'), `${failures.length} difference(s)`).toBe('')
   }, 600_000)
 
-  it('server markup is not vacuous: the stamps exist for event-stream specs (otherwise `withoutStamps` is untested)', () => {
-    expect(streams).toBeGreaterThan(0)
+  it('is not vacuous: the corpus has specs with event streams, the ones that used to be stamped', () => {
+    const withEvents = specs.filter(({ spec }) => (spec.signals as Array<{ on?: unknown[] }> | undefined)?.some((s) => s.on?.length))
+    expect(withEvents.length).toBeGreaterThan(20)
   })
 
   for (const [from, to] of slices) it(`client mount, markup and scene, specs ${from}-${to}`, () => {
@@ -129,19 +125,16 @@ describe('<SvgChart> renders what <Chart renderer="svg"> renders, over the whole
       const rich = clientMount('rich', spec)
       const dRich = firstDifference(chart.html, rich.html)
       if (dRich) failures.push(`${name}: SvgChart+interaction vs Chart ${dRich}`)
-      const dPlain = firstDifference(withoutStamps(chart.html), plain.html)
-      if (dPlain) failures.push(`${name}: SvgChart vs Chart minus stamps ${dPlain}`)
-      // the same scene, with the same stamped items
-      if (stampedItems(chart.scene) !== stampedItems(rich.scene)) failures.push(`${name}: stamped scene items differ between Chart and SvgChart+interaction`)
-      stamped += stampedItems(chart.scene)
-      if (stampedItems(plain.scene) !== 0) failures.push(`${name}: SvgChart (no interaction) stamped scene items`)
+      const dPlain = firstDifference(chart.html, plain.html)
+      if (dPlain) failures.push(`${name}: SvgChart vs Chart ${dPlain}`)
+      if (chart.html.includes('data-datum')) failures.push(`${name}: the mounted DOM carries a data-datum attribute`)
+      // the scenes are never stamped either
+      for (const [label, v] of [['Chart', chart], ['SvgChart', plain], ['SvgChart+interaction', rich]] as const) {
+        if (stampedItems(v.scene) !== 0) failures.push(`${name}: ${label} stamped scene items`)
+      }
     }
     expect(failures.slice(0, 20).join('\n'), `${failures.length} difference(s)`).toBe('')
   }, 600_000)
-
-  it('client mount is not vacuous: event-stream specs have stamped items', () => {
-    expect(stamped, 'event-stream specs must have stamped items, or the stamp comparison is vacuous').toBeGreaterThan(0)
-  })
 
   for (const [from, to] of slices) it(`hydration of the server markup, specs ${from}-${to}`, () => {
     const failures: string[] = []
@@ -151,8 +144,9 @@ describe('<SvgChart> renders what <Chart renderer="svg"> renders, over the whole
       const rich = hydrate('rich', spec)
       const dRich = firstDifference(chart.html, rich.html)
       if (dRich) failures.push(`${name}: SvgChart+interaction vs Chart ${dRich}`)
-      const dPlain = firstDifference(withoutStamps(chart.html), plain.html)
-      if (dPlain) failures.push(`${name}: SvgChart vs Chart minus stamps ${dPlain}`)
+      const dPlain = firstDifference(chart.html, plain.html)
+      if (dPlain) failures.push(`${name}: SvgChart vs Chart ${dPlain}`)
+      if (chart.html.includes('data-datum')) failures.push(`${name}: the hydrated DOM carries a data-datum attribute`)
       for (const [label, h] of [['Chart', chart], ['SvgChart', plain], ['SvgChart+interaction', rich]] as const) {
         if (h.recoverable.length) failures.push(`${name}: ${label} hydration mismatch: ${h.recoverable[0]}`)
       }
@@ -163,6 +157,5 @@ describe('<SvgChart> renders what <Chart renderer="svg"> renders, over the whole
   it('the comparison bites: a one-attribute difference is reported', () => {
     expect(firstDifference('<svg a="1"/>', '<svg a="2"/>')).toMatch(/^at 8 /)
     expect(firstDifference('<svg a="1"/>', '<svg a="1"/>')).toBeNull()
-    expect(withoutStamps('<path data-datum="{&quot;x&quot;:1}" d="M0"/>')).toBe('<path d="M0"/>')
   })
 })

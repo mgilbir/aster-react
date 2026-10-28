@@ -311,8 +311,8 @@ focusable elements; non-React hosts can do the same. The keyboard contract is in
     prevented when `config.events.defaults` names neither `prevent` nor `allow`. The config decides first (vega's default is
     `{allow: ['wheel']}`, so every listened view event but `wheel` is prevented); a `consume`d stream always prevents.
   - `{ pick }` — `(x, y) => HitTarget | null`, e.g. `buildHitIndex(scene).query`: resolves `event.item` (mark type, name, role,
-    datum, enclosing group). Without it, or when it finds nothing, the item is read from the DOM (`data-datum` stamps and
-    `mark-*`/`role-*` classes), where mark names are not available. `<Chart>` passes its own hit index.
+    datum, enclosing group). Without it, or when it finds nothing, the item is read from the DOM (the `mark-*`/`role-*`
+    classes, and a `data-datum` stamp if `stampDatumAttrs` was called), where mark names are not available. `<Chart>` passes its own hit index.
 - `@aster/core/dom` — `patchSceneDom`, `renderSceneToDomElement`, `createChartSession`, `hasDenseSymbolMarks`.
 - `@aster/core/canvas` — `renderSceneToCanvas(scene, ctx, { dpr })`.
 - `@aster/core/load` — `loadSpecData(spec, { baseURL, allow, protocols, timeoutMs, maxBytes, ... })` for URL datasets, with a URL policy (safe defaults, see `docs/LIMITS.md`).
@@ -394,6 +394,20 @@ specs:
 import '@aster/react/vl'   // side effect: registers the from-scratch VL compiler
 ```
 
+**Add-ons load themselves.** A spec that needs an opt-in core add-on (`@aster/core/transforms`: `pie`, `treemap`, `kde`, ...;
+`@aster/core/geo`: projections, `contour`; `@aster/core/load`: `csv`/`tsv`/`dsv`/`topojson` formats) renders with nothing imported:
+`<Chart>`, `<SvgChart>`, `useChart`, `useChartStream`, `<ChartStream>` and the worker hooks read what the spec needs
+(`addonsNeeded` in `@aster/core/addons`) and import it. The wait is a Suspense wait, the same as for an async `spec`: put a
+`<Suspense fallback>` above the chart to show something meanwhile (without one the new root commits when the chart is ready; to keep an
+existing chart on screen while a changed spec's add-on loads, update inside `startTransition`). A spec that needs no add-on never
+suspends and imports nothing; an app that imported the add-on itself never loads it twice. A failed import reaches `onError`
+(`error` in the hooks) once. Server rendering: `renderToPipeableStream` / `renderToReadableStream` wait for the import and
+send the chart; `renderToString` renders the `<Suspense>` fallback (the client renders the chart) and `renderChartToStaticMarkup` /
+`hydrateChart` are synchronous, so `await loadAddonsFor(spec)` (or a static `import '@aster/core/geo'` in the server entry) before them.
+In a worker, the shipped `@aster/react/worker-entry` imports what a message's spec needs before handling it; `url` data is never
+fetched automatically (`useSpecData` / `loadSpecData`), only its readers load. Bundlers split the add-ons into chunks fetched on
+demand; the bundle budget counts what loads up front.
+
 The base `@aster/react` entry does not include the Vega-Lite compiler; importing `@aster/react/vl` adds about 54.2 kB
 gzip to the bundle (`<Chart>` 157.2 kB, `<Chart>` + `@aster/react/vl` 211.3 kB, measured by
 `pnpm --filter @aster/benchmarks run budget`; see [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the addon throws an error naming the missing
@@ -428,7 +442,7 @@ point selection and the a11y tree resolve through the scene.
 - `true` always batches (still only marks with at least 512 items), `false` disables.
 - Client-only mounts batch directly. SSR/hydrated pages emit the per-item markup on
   the server (so hydration matches) and switch to batched in place after hydration.
-- Per-mark `data-datum` attributes are not emitted for batched chunks, and a mark with `href` links is never batched.
+- A mark with `href` links is never batched.
 
 Pan, zoom and brushing are driven through scale `domainRaw`; the gestures, the keyboard contract and the rule that
 picks the scales are in `docs/INTERACTION.md`.
@@ -468,7 +482,7 @@ export function Interactive(): React.ReactElement {
 ```
 
 **The capability.** `interaction` (from `@aster/react/interaction`) is a plain frozen value bundling hit testing
-(`@aster/core/hit`) and the signal event loop (`@aster/core/signals`: `bindSceneSignals`, `stampDatumAttrs`). It is passed as
+(`@aster/core/hit`) and the signal event loop (`@aster/core/signals`: `bindSceneSignals`). It is passed as
 a prop: there is no registry, no global and no side-effect import (`sideEffects` needs no entry), so a bundler drops it
 when it is not imported and `<SvgChart>` without it contains none of that code. `<Chart>` has it built in.
 
@@ -509,7 +523,8 @@ missing Vega-Lite compiler, where nothing meaningful can be drawn). The report g
 
 Without `interaction`, `setSignal` and bound inputs (`signal.bind`) still work as signal overrides, exactly as on
 `<Chart renderer="canvas">`; the spec's `signal.on` updates do not run. Server markup is identical with or without
-`interaction`, except that a spec with event streams gets no `data-datum` attributes without it (nothing reads them).
+`interaction`, and equals vega's: no per-item datum attribute is written (the mark under the pointer is found through the scene
+hit index).
 
 Sizes (gzip, `pnpm --filter @aster/benchmarks run budget`): `<Chart>` 157.2 kB, `<SvgChart>` 142.0 kB,
 `<SvgChart>` + `interaction` 151.5 kB ([PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Use `<Chart>` unless that 15 kB

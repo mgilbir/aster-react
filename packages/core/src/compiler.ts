@@ -63,6 +63,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     sigNames.includes(name) ? { signal: name } : 0
   const width = typeof spec.width === 'number' ? spec.width : (typeof spec.width === 'object' ? spec.width as SizeSpec : defaultSize('width'))
   const height = typeof spec.height === 'number' ? spec.height : (typeof spec.height === 'object' ? spec.height as SizeSpec : defaultSize('height'))
+  const contentSized = (['width', 'height'] as const).filter((d) => spec.layout != null && spec[d] == null && !sigNames.includes(d))
   const frameStroke = resolveFrameStroke(spec)
   const frameFill = resolveFrameFill(spec)
   const frameStrokeWidth = resolveFrameNumber(spec, 'strokeWidth')
@@ -142,6 +143,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     ...(cfg.lineBreak != null ? { lineBreak: cfg.lineBreak } : {}),
     ...(cfg.events != null && typeof cfg.events === 'object' ? { eventConfig: cfg.events as CompiledChart['eventConfig'] } : {}),
     layout: (spec.layout as Record<string, unknown> | undefined) ?? undefined,
+    ...(contentSized.length ? { contentSized } : {}),
   }
 }
 

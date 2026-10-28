@@ -26,6 +26,7 @@ import {
   type VgSpec,
 } from '@aster/core'
 import { mergeBatches } from './batches.js'
+import { loadAddons, missingAddons } from '@aster/core/addons'
 import { normalizeChartSpec, useStableSpec } from './spec.js'
 import {
   errorFromWire,
@@ -259,31 +260,41 @@ export function useChartWorkerStream(spec: VgSpec, options: ChartWorkerStreamOpt
     const w = workerRef.current
     const init = initialRef.current
     if (!w) {
-      let stream: ChartStream
-      try {
-        stream = createChartStream(normalized, {
-          capacity, policy,
-          ...(maxQueuedRows != null ? { maxQueuedRows } : {}),
-          ...(limitsRef.current ? { limits: limitsRef.current } : {}),
-          ...(textMetricsRef.current != null ? { textMetrics: resolveWorkerTextMetrics(textMetricsRef.current) } : {}),
-          ...(init ? { initial: localInitial(init) } : {}),
-        })
-      } catch (e) {
-        setState((s) => ({ ...s, scene: null, svg: null, error: e instanceof Error ? e : new Error(String(e)), pending: false }))
-        return
+      // No Worker: the stream lives here, so the add-ons its spec needs are loaded in this realm before it is created
+      // (at once for a chart that needs none, which is the common case).
+      let cancelled = false
+      let stream: ChartStream | null = null
+      const start = (): void => {
+        if (cancelled) return
+        try {
+          stream = createChartStream(normalized, {
+            capacity, policy,
+            ...(maxQueuedRows != null ? { maxQueuedRows } : {}),
+            ...(limitsRef.current ? { limits: limitsRef.current } : {}),
+            ...(textMetricsRef.current != null ? { textMetrics: resolveWorkerTextMetrics(textMetricsRef.current) } : {}),
+            ...(init ? { initial: localInitial(init) } : {}),
+          })
+        } catch (e) {
+          setState((s) => ({ ...s, scene: null, svg: null, error: e instanceof Error ? e : new Error(String(e)), pending: false }))
+          return
+        }
+        localRef.current = stream
+        try {
+          stream.flush()
+          const scene = stream.scene()
+          setState((s) => ({ ...s, scene, svg: serializeRef.current && scene ? renderSceneToSvg(scene) : null, error: null, flushFailure: null, pending: false }))
+          statsRef.current = stream.stats()
+          pulseRef.current = stream.pulse()
+        } catch (e) {
+          recoverLocal(stream, e)
+        }
       }
-      localRef.current = stream
-      try {
-        stream.flush()
-        const scene = stream.scene()
-        setState((s) => ({ ...s, scene, svg: serializeRef.current && scene ? renderSceneToSvg(scene) : null, error: null, flushFailure: null, pending: false }))
-        statsRef.current = stream.stats()
-        pulseRef.current = stream.pulse()
-      } catch (e) {
-        recoverLocal(stream, e)
-      }
+      const missing = missingAddons(normalized)
+      if (missing.length === 0) start()
+      else loadAddons(missing).then(start, (e: unknown) => { if (!cancelled) fail(e instanceof Error ? e : new Error(String(e))) })
       return () => {
-        stream.close()
+        cancelled = true
+        stream?.close()
         if (localRef.current === stream) localRef.current = null
       }
     }
