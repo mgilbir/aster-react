@@ -244,7 +244,9 @@ export interface DataPulse {
 
 export interface PulseNode {
   name: string
+  /** The dataset this one derives from (the first, when it derives from several: see `sources`). */
   source?: string
+  sources?: string[]
   transforms: string[]
   downstream: string[]
   marks: string[]
@@ -258,6 +260,12 @@ export interface PulseGraph {
   nodes: Map<string, PulseNode>
   /** Source dataset -> mark names drawing from it (directly or via groups). */
   markSources: Map<string, string[]>
+}
+
+/** The names a dataset derives from: its `source`, one name or a list (vega-parser: `array(data.source)`). */
+export function sourceNames(d: CompiledData): string[] {
+  const s = d.source
+  return s === undefined || s === '' ? [] : Array.isArray(s) ? s : [s]
 }
 
 function transformsOf(d: CompiledData): CompiledTransform[] {
@@ -280,7 +288,8 @@ export function buildPulseGraph(chart: CompiledChart): PulseGraph {
   for (const d of chart.data) {
     nodes.set(d.name, {
       name: d.name,
-      source: (d as CompiledData & { source?: string }).source,
+      source: sourceNames(d)[0],
+      ...(sourceNames(d).length > 1 ? { sources: sourceNames(d) } : {}),
       transforms: transformsOf(d).map((t) => String(t.type)),
       downstream: [],
       marks: [],
@@ -289,7 +298,7 @@ export function buildPulseGraph(chart: CompiledChart): PulseGraph {
     })
   }
   for (const node of nodes.values()) {
-    if (node.source && nodes.has(node.source)) nodes.get(node.source)!.downstream.push(node.name)
+    for (const src of node.sources ?? (node.source ? [node.source] : [])) if (nodes.has(src)) nodes.get(src)!.downstream.push(node.name)
   }
   const markSources = new Map<string, string[]>()
   const walkMarks = (marks: CompiledMark[] | undefined): void => {

@@ -125,7 +125,8 @@ export interface RuntimeInput {
 
 export interface CompiledProjection {
   name: string
-  type: string
+  /** A projection name, or a `{signal}` that yields one. */
+  type: string | { signal: string }
   /**
    * Every other projection parameter as the spec wrote it (scale, translate,
    * center, rotate, parallels, clipAngle, clipExtent, pointRadius, fit, size,
@@ -257,9 +258,11 @@ export interface SignalOnDef {
 
 export interface CompiledData {
   name: string
-  /** Inline values when present in the spec. */
+  /** Inline values when present in the spec (or a `{signal}` that yields them). */
   values?: unknown[]
   url?: string
+  /** The dataset(s) this one derives from: one name, or several (their rows, concatenated in this order). */
+  source?: string | string[]
   format?: Record<string, unknown>
   transform: CompiledTransform[]
 }

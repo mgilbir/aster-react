@@ -17,6 +17,7 @@ vega/histogram
 vega/horizon-graph
 vega/line-chart
 vega/loess-regression
+vega/overview-plus-detail
 vega/pie-chart
 vega/population-pyramid
 vega/radial-plot

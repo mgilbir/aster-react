@@ -47,7 +47,7 @@ import { compileChart } from './compiler.js'
 import { dict, ownGet, maxOf, pushAll, lerp, scopedSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
-import { rowsEqual, type PulseChange } from './pulse.js'
+import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import { trellisLayout } from './trellis.js'
@@ -519,6 +519,9 @@ function prepareChartCtx(
   // resolveSignalUpdates, so apply the fallback after that (see below).
   let height = signed?.height ?? resolveSize(chart.height, viewOverride(chart, input, 'height'), signals)
   const signalParams = dict<unknown>({ width, height }, signals)
+  // A signal the spec declares without a value (it is written by a handler later) exists, with the value undefined
+  // (vega-parser refuses a reference to a name that is no signal, not one that holds nothing yet)
+  for (const def of chart.signalDefs ?? []) if (!(def.name in signalParams)) signalParams[def.name] = undefined
   // An explicit view size (the host's `width` / `height`, a measured container, the fit loop's resize) is the
   // size, so the `width` / `height` signals read it too: a signal value a host or the event loop supplied
   // (a `window:resize` handler re-running `containerSize()`) must not split the signal from the view it sizes.
@@ -702,6 +705,13 @@ function makeTransformed(
   }
 }
 
+/** A dataset's inline `values`: the array, or what a `{signal}` holds (vega-parser: a signal-valued `values` loads dynamically). */
+function inlineValues(ctx: Pick<EvalContext, 'runtime' | 'signalParams'>, values: unknown): unknown {
+  const expr = values !== null && typeof values === 'object' && !Array.isArray(values) ? (values as { signal?: unknown }).signal : undefined
+  if (typeof expr !== 'string') return values
+  return ctx.runtime.expr(expr)(undefined, ctx.signalParams)
+}
+
 /** Fingerprint of the evaluation context that reused scales/items were built under. */
 function ctxFpOf(ctx: EvalContext): string {
   // Memoised: the params only change at the few known write sites, each of
@@ -731,7 +741,8 @@ function resolveProjectionParam(ctx: EvalContext, v: unknown): unknown {
 /** Build the d3-geo projection one compiled definition describes, in the current context. */
 function buildProjectionOf(ctx: EvalContext, p: CompiledProjection): unknown {
   const build = requireGeo() // throws an actionable error if the geo addon is absent
-  const resolved: Record<string, unknown> = dict<unknown>({ name: p.name, type: p.type })
+  // (the type is a parameter like any other: `type: {signal: "projectionName"}`)
+  const resolved: Record<string, unknown> = dict<unknown>({ name: p.name, type: resolveProjectionParam(ctx, p.type) })
   for (const k of Object.keys(p)) {
     if (k === 'name' || k === 'type') continue
     resolved[k] = resolveProjectionParam(ctx, p[k])
@@ -1315,8 +1326,7 @@ function datasetDepsOf(chart: CompiledChart): Map<string, DatasetDeps> {
   for (const d of chart.data) {
     const names = new Set<string>()
     let allData = false
-    const src = (d as CompiledData & { source?: string }).source
-    if (src) names.add(src)
+    for (const src of sourceNames(d)) names.add(src)
     // Anything in the pipeline that names another dataset (lookup `from`, ...)
     // or reads datasets from an expression makes this dataset depend on it.
     walkStrings(d.transform, (str) => {
@@ -1327,6 +1337,68 @@ function datasetDepsOf(chart: CompiledChart): Map<string, DatasetDeps> {
   }
   DATASET_DEPS.set(chart, deps)
   return deps
+}
+
+/**
+ * The datasets that must be built before `d` because they publish a signal it reads. vega's dataflow orders operators by
+ * what they read, so an `extent` / `bin` / `geojson` that writes a signal runs before the transform whose parameter or
+ * expression reads it, wherever the two datasets are declared (the signal may also be read through a signal that is
+ * computed from it). Reads are found by name in the transforms' parameters and expressions.
+ */
+/** Whether dataset `a` is derived from `b` (through sources or datasets its transforms name). */
+function dependsOn(chart: CompiledChart, a: string, b: string): boolean {
+  const deps = datasetDepsOf(chart)
+  const seen = new Set<string>()
+  const stack = [a]
+  while (stack.length) {
+    const n = stack.pop()!
+    for (const m of deps.get(n)?.names ?? []) {
+      if (m === b) return true
+      if (!seen.has(m)) { seen.add(m); stack.push(m) }
+    }
+  }
+  return false
+}
+
+const SIGNAL_PREREQS = new WeakMap<CompiledChart, Map<string, string[]>>()
+const IDENT = /[A-Za-z_$][\w$]*/g
+
+function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
+  let out = SIGNAL_PREREQS.get(chart)
+  if (out) return out
+  out = new Map()
+  const writers = new Map<string, string[]>()
+  for (const d of chart.data) {
+    for (const t of d.transform ?? []) {
+      const sig = (t as { signal?: unknown }).signal
+      if (typeof sig === 'string') (writers.get(sig) ?? writers.set(sig, []).get(sig)!).push(d.name)
+    }
+  }
+  if (writers.size) {
+    const defs = new Map((chart.signalDefs ?? []).map((sd) => [sd.name, sd] as const))
+    const identsOf = (v: unknown, into: Set<string>): void => {
+      walkStrings(v, (str) => { for (const m of str.matchAll(IDENT)) into.add(m[0]) })
+    }
+    for (const d of chart.data) {
+      const read = new Set<string>()
+      identsOf(d.transform, read)
+      if (d.values !== null && typeof d.values === 'object' && !Array.isArray(d.values)) identsOf(d.values, read)
+      // a signal computed from other signals reads what they read
+      const queue = [...read]
+      for (let i = 0; i < queue.length; i++) {
+        const sd = defs.get(queue[i]!)
+        if (!sd) continue
+        const more = new Set<string>()
+        identsOf([sd.update, sd.init], more)
+        for (const n of more) if (!read.has(n)) { read.add(n); queue.push(n) }
+      }
+      const first: string[] = []
+      for (const n of read) for (const w of writers.get(n) ?? []) if (w !== d.name && !first.includes(w) && !dependsOn(chart, w, d.name)) first.push(w)
+      if (first.length) out.set(d.name, first)
+    }
+  }
+  SIGNAL_PREREQS.set(chart, out)
+  return out
 }
 
 /**
@@ -2834,18 +2906,29 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     }
     if (seen.has(name)) throw new Error(`[aster] circular data reference: ${name}`)
     seen.add(name)
+    // the datasets that write a signal this one reads come first; the signals computed from theirs follow
+    const prereqs = signalPrereqsOf(ctx.chart).get(name)
+    if (prereqs) {
+      let built = false
+      for (const w of prereqs) if (!ctx.datasets.has(w) && !seen.has(w)) { build(w, seen); built = true }
+      if (built) resolveSignalUpdates(ctx)
+    }
 
     let rows: Row[]
     let inPulse: StepPulse | null = null
-    if ('source' in d && (d as CompiledChart['data'][number] & { source: string }).source) {
-      const src = (d as CompiledChart['data'][number] & { source: string }).source
+    const srcNames = sourceNames(d)
+    if (srcNames.length > 1) {
+      // several sources: their rows, one source after the other (each pulse adds its tuples in turn)
+      rows = srcNames.flatMap((n) => build(n, seen).map((r) => ({ ...r })))
+    } else if (srcNames.length === 1) {
+      const src = srcNames[0]!
       const srcDef = ctx.chart.data.find((sd) => sd.name === src)
       if ((d as { format?: DataFormatSpec }).format && srcDef?.values != null) {
         // Vega applies a derived dataset's `format` when (re-)parsing its
         // source's raw values (e.g. source = inline Topology, format =
         // topojson feature extraction). The host's current values (input.data)
         // win over the spec's compiled-in ones.
-        rows = readData(ownGet(inputData, src) ?? srcDef.values, (d as { format?: DataFormatSpec }).format)
+        rows = readData(ownGet(inputData, src) ?? inlineValues(ctx, srcDef.values), (d as { format?: DataFormatSpec }).format)
         inPulse = ctx.inputPulses?.get(src) ?? null
       } else {
         rows = build(src, seen).map((r) => ({ ...r }))
@@ -2858,7 +2941,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       } else {
         // vega-loader read semantics: object arrays pass through format.parse
         // coercion; string values are parsed by the registered reader.
-        rows = readData(d.values, d.format)
+        rows = readData(inlineValues(ctx, d.values), d.format)
       }
       inPulse = ctx.inputPulses?.get(name) ?? null
     } else {
@@ -3918,8 +4001,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     const scoped = scopeId !== undefined ? scopeSignalValues(mark, ctx, scopeId, outerParams) : undefined
     const scopeParams = scoped ? scoped.params : outerParams
     for (const d of mark.data ?? []) {
-      const source = (d as CompiledData & { source?: string }).source
-      let rows: Row[] = source ? (ctx.datasets.get(source) ?? []).map((r) => ({ ...r })) : d.values != null ? readData(d.values, d.format) : []
+      const sources = sourceNames(d)
+      let rows: Row[] = sources.length ? sources.flatMap((n) => (ctx.datasets.get(n) ?? []).map((r) => ({ ...r }))) : d.values != null ? readData(inlineValues(ctx, d.values), d.format) : []
       checkRowCount(rows.length, `dataset "${d.name}"`)
       if (d.transform?.length) {
         rows = applyTransforms(rows, d.transform, { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }, d.name)

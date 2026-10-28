@@ -10,6 +10,7 @@ vega/clock
 vega/connected-scatter-plot
 vega/county-unemployment
 vega/donut-chart
+vega/donut-chart-labelled
 vega/dot-plot
 vega/falkensee-population
 vega/global-development
@@ -20,6 +21,7 @@ vega/horizon-graph
 vega/interactive-legend
 vega/line-chart
 vega/loess-regression
+vega/overview-plus-detail
 vega/pacman
 vega/pie-chart
 vega/population-pyramid

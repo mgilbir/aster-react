@@ -280,9 +280,7 @@ function compileData(d: Record<string, unknown>): CompiledData {
   if (d.values !== undefined) compiled.values = d.values as unknown[]
   if (d.url !== undefined) compiled.url = d.url as string
   if (d.format !== undefined) compiled.format = d.format as Record<string, unknown>
-  if (d.source !== undefined) {
-    ;(compiled as CompiledData & { source: string }).source = d.source as string
-  }
+  if (d.source !== undefined) compiled.source = (Array.isArray(d.source) ? d.source.map(String) : d.source) as string | string[]
   for (const t of (d.transform as Array<Record<string, unknown>>) ?? []) {
     compiled.transform.push(compileTransform(t))
   }
