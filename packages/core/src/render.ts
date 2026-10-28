@@ -4,12 +4,12 @@
  * reference renderer; the conformance diff compares normalized geometry.
  */
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
-import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
+import type { SceneDef, SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { baselineOffset, fontSize as vegaFontSize } from './bounds.js'
 import { checkPathLength, metering } from './limits.js'
 export { baselineOffset }
 import { itemTextWidth } from './text-metrics.js'
-import { ClipCollector, type ClipDef } from './svg-defs.js'
+import { ClipCollector, gradientRef, isGradientPaint, type ClipDef } from './svg-defs.js'
 import { customSymbolPathData } from './svg-path.js'
 import { sanitizeHref } from './url-policy.js'
 import type { ScaleSnapshots } from './guide-caption.js'
@@ -35,6 +35,7 @@ import {
   curveStep,
   curveStepAfter,
   curveStepBefore,
+  Path,
 } from './shape.js'
 
 /**
@@ -78,15 +79,38 @@ const CURVE_MAP: Record<string, unknown> = {
   'step-before': curveStepBefore,
 }
 
+// vega-scenegraph path/shapes.js: the generators are built once; each call sets its curve (and digits) and runs it
+const itemX = (d: unknown): number => ((d as SceneItem).x as number) || 0
+const itemY = (d: unknown): number => ((d as SceneItem).y as number) || 0
+const itemXW = (d: unknown): number => (((d as SceneItem).x as number) || 0) + (((d as SceneItem).width as number) || 0)
+const itemYH = (d: unknown): number => (((d as SceneItem).y as number) || 0) + (((d as SceneItem).height as number) || 0)
+const itemDefined = (d: unknown): boolean => !((d as SceneItem).defined === false)
+const lineShape = d3Line().x(itemX).y(itemY).defined(itemDefined)
+const areaVShape = d3Area().x(itemX).y1(itemY).y0(itemYH).defined(itemDefined)
+const areaHShape = d3Area().y(itemY).x1(itemX).x0(itemXW).defined(itemDefined)
+
 /**
- * Resolve a Vega interpolation name to a d3-shape curve.
- * For "monotone" without axis qualifier, vega defaults to monotoneX (vertical).
+ * vega-scenegraph path/curves.js: the d3-shape curve named by an `interpolate` value (`monotone` follows the
+ * orientation; `bundle` / `cardinal*` / `catmull-rom*` take the tension as beta / tension / alpha). An absent
+ * or unknown name is the linear curve.
  */
-function resolveCurve(interpolate: string, orient?: string): unknown {
-  if (interpolate === 'monotone') {
-    return orient === 'horizontal' ? curveMonotoneY : curveMonotoneX
+function vegaCurve(interpolate: string | undefined, orient: string | undefined, tension: number | undefined): unknown {
+  const type = interpolate || 'linear'
+  let curve: unknown
+  if (type === 'monotone') curve = orient === 'horizontal' ? curveMonotoneY : curveMonotoneX
+  else if (Object.hasOwn(CURVE_MAP, type)) curve = CURVE_MAP[type]
+  else return curveLinear
+  if (tension != null) {
+    const cf = curve as Record<string, ((v: number) => unknown) | undefined>
+    const name = TENSION_PARAM[type]
+    if (name !== undefined && typeof cf[name] === 'function') curve = cf[name]!(tension)
   }
-  return Object.hasOwn(CURVE_MAP, interpolate) ? CURVE_MAP[interpolate] ?? null : null
+  return curve
+}
+const TENSION_PARAM: Record<string, string> = {
+  'bundle': 'beta',
+  'cardinal': 'tension', 'cardinal-open': 'tension', 'cardinal-closed': 'tension',
+  'catmull-rom': 'alpha', 'catmull-rom-open': 'alpha', 'catmull-rom-closed': 'alpha',
 }
 
 /** Vega-scenegraph's rounded-rect path (C = 0.448084975506 bezier circle). */
@@ -181,15 +205,25 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   if (scene.defs?.length || clips.size > 0) {
     out += '<defs>'
     for (const def of scene.defs ?? []) {
+      const tag = def.kind === 'radial' ? 'radialGradient' : 'linearGradient'
+      if (def.kind === 'radial') {
+        // (vega wraps a radial gradient in a pattern: an SVG radial gradient is in bounding-box units, a canvas one is circular)
+        w.s = ''
+        w.v('id', 'p_' + def.id); w.v('viewBox', '0,0,1,1'); w.v('width', '100%'); w.v('height', '100%'); w.v('preserveAspectRatio', 'xMidYMid slice')
+        out += `<pattern${w.s}>`
+        w.s = ''
+        w.v('width', '1'); w.v('height', '1'); w.v('fill', `url(#${def.id})`)
+        out += `<rect${w.s}/></pattern>`
+      }
       w.s = ''
       gradientAttrs(def, w)
-      out += `<linearGradient${w.s}>`
+      out += `<${tag}${w.s}>`
       for (const stop of def.colorStops) {
         w.s = ''
         stopAttrs(stop, w)
         out += `<stop${w.s}/>`
       }
-      out += '</linearGradient>'
+      out += `</${tag}>`
     }
     for (const [id, def] of clips.defs) {
       w.s = ''
@@ -320,89 +354,12 @@ export function computeLinePath(group: SceneGroup, exact = false): {
   const items = itemsOf(group)
   if (!items.length) return null
 
-  // Check if this line has curve interpolation (Vega's `interpolate` encode)
+  // vega-scenegraph path/shapes.js: d3's line generator over the items, `x(item) = item.x || 0`, `y` likewise,
+  // `defined(item) = !(item.defined === false)`, the curve named by the first item's `interpolate` (a gap is
+  // the curve's own lineEnd / lineStart, not a closed sub-path)
   const firstItem = items[0] as Record<string, unknown> | undefined
-  const interpolate = firstItem?.interpolate as string | undefined
-  const orient = firstItem?.orient as string | undefined
-  const tension = firstItem?.tension as number | undefined
-
-  let path = ''
-  if (interpolate && interpolate !== 'linear') {
-    // Use d3-shape for curve interpolation
-    const curve = resolveCurve(interpolate, orient)
-    if (curve) {
-      let curveFn: unknown = curve
-      // Apply tension for curves that support it (bundle, cardinal, cardinal-open, cardinal-closed)
-      if (tension != null && curveFn) {
-        const cf = curveFn as Record<string, ((v: number) => unknown) | undefined>
-        if (interpolate === 'bundle' && typeof cf.beta === 'function') {
-          curveFn = cf.beta(tension)
-        } else if ((interpolate === 'cardinal' || interpolate === 'cardinal-open' || interpolate === 'cardinal-closed') && typeof cf.tension === 'function') {
-          curveFn = cf.tension(tension)
-        } else if ((interpolate === 'catmull-rom' || interpolate === 'catmull-rom-open' || interpolate === 'catmull-rom-closed') && typeof cf.alpha === 'function') {
-          curveFn = cf.alpha(tension)
-        }
-      }
-      type Pt = { x: number; y: number; defined: boolean }
-      const lineGen = d3Line().digits(digits)
-        .x((d) => (d as Pt).x)
-        .y((d) => (d as Pt).y)
-        .defined((d) => (d as Pt).defined)
-        .curve(curveFn as never)
-
-      // Build contiguous runs of defined points (same as linear path)
-      const runs: Array<{ x: number; y: number; defined: boolean }> = items.map((it) => ({
-        x: it.x as number,
-        y: it.y as number,
-        defined: it.defined !== false && it.x != null && it.y != null,
-      }))
-      // Split into segments at undefined points and generate curve per segment
-      const segments: Array<Array<{ x: number; y: number; defined: boolean }>> = []
-      let current: Array<{ x: number; y: number; defined: boolean }> = []
-      for (const r of runs) {
-        if (!r.defined) {
-          if (current.length > 1) segments.push(current)
-          current = []
-        } else {
-          current.push(r)
-        }
-      }
-      if (current.length > 1) segments.push(current)
-
-      for (const seg of segments) {
-        const d = lineGen(seg)
-        if (d) path += d
-      }
-    }
-  }
-
-  // Fallback: linear interpolation (or if curve failed)
-  if (!path) {
-    const runs: Array<{ x: number; y: number; defined: boolean }> = items.map((it) => ({
-      x: it.x as number,
-      y: it.y as number,
-      defined: it.defined !== false && it.x != null && it.y != null,
-    }))
-    let penDown = false
-    let hasLine = false
-    for (let i = 0; i < runs.length; i++) {
-      const r = runs[i]!
-      if (!r.defined) {
-        if (penDown) path += 'Z'
-        penDown = false
-        continue
-      }
-      if (!penDown) {
-        path += `M${n3(r.x)},${n3(r.y)}`
-        penDown = true
-      } else {
-        path += `L${n3(r.x)},${n3(r.y)}`
-        hasLine = true
-      }
-    }
-    // Vega appends Z for degenerate single-point line segments (only M, no L).
-    if (penDown && !hasLine) path += 'Z'
-  }
+  const curve = vegaCurve(firstItem?.interpolate as string | undefined, firstItem?.orient as string | undefined, firstItem?.tension as number | undefined)
+  const path = (lineShape.digits(digits).curve(curve as never)(items as never) ?? '') as string
 
   if (!path) return null
   const stroke = group.items?.[0]?.stroke as string | undefined
@@ -441,162 +398,12 @@ export function computeAreaPath(group: SceneGroup, exact = false): {
   const digits = exact ? null : 3
   const items = itemsOf(group)
 
-  // Check for curve interpolation (Vega's `interpolate` encode)
+  // vega-scenegraph path/shapes.js: d3's area generator, `x(item) = item.x || 0`, the baseline `y + height` (or, for a
+  // horizontal area, `x + width`), `defined(item) = !(item.defined === false)`, the curve named by the first item
   const firstItem = items[0] as Record<string, unknown> | undefined
-  const interpolate = firstItem?.interpolate as string | undefined
-  const orient = firstItem?.orient as string | undefined
-  const tension = firstItem?.tension as number | undefined
-  const isHorizontal = orient === 'horizontal'
-
-  // For horizontal areas: y is the independent axis, x/x2 are the value axes.
-  // For vertical areas (default): x is the independent axis, y/y2 are the value axes.
-  // Vega's area shape reads the baseline as y0 = y + height (d3-shape area
-  // y0 accessor `yh`), NOT the raw y2 — adjustSpatial folds x2/y2 into
-  // width/height, so the baseline follows the (possibly yc-shifted) y.
-  const pts: Array<{ pos: number; val: number; val2: number; defined: boolean }> = items.map((it) => ({
-    pos: isHorizontal ? (it.y as number) : (it.x as number),
-    val: isHorizontal ? (it.x as number) : (it.y as number),
-    val2: isHorizontal
-      // Horizontal areas use x/x2 (not y2); when neither x2 nor width exists the
-      // area degenerates to its value edge, exactly like vega's x0 accessor.
-      ? (it.x ?? 0) + ((it.width as number | undefined) ?? (((it.x2 as number) ?? (it.x ?? 0)) - (it.x ?? 0)))
-      : (it.y ?? 0) + ((it.height as number | undefined) ?? (((it.y2 as number) ?? (it.y ?? 0)) - (it.y ?? 0))),
-    defined: it.defined !== false && it.x != null && it.y != null,
-  }))
-
-  let path = ''
-  if (interpolate && interpolate !== 'linear') {
-    const curve = resolveCurve(interpolate, orient)
-    if (curve) {
-      let curveFn: unknown = curve
-      if (tension != null && curveFn) {
-        const cf = curveFn as Record<string, ((v: number) => unknown) | undefined>
-        if (interpolate === 'bundle' && typeof cf.beta === 'function') {
-          curveFn = cf.beta(tension)
-        } else if ((interpolate === 'cardinal' || interpolate === 'cardinal-open' || interpolate === 'cardinal-closed') && typeof cf.tension === 'function') {
-          curveFn = cf.tension(tension)
-        } else if ((interpolate === 'catmull-rom' || interpolate === 'catmull-rom-open' || interpolate === 'catmull-rom-closed') && typeof cf.alpha === 'function') {
-          curveFn = cf.alpha(tension)
-        }
-      }
-
-      if (isHorizontal) {
-        // Horizontal area: d3 area with y as the cross-axis, x0/x1 as value axes
-        type AreaPt = { y: number; x0: number; x1: number; defined: boolean }
-        const areaGen = d3Area().digits(digits)
-          .y((d: unknown) => (d as AreaPt).y)
-          .x0((d: unknown) => (d as AreaPt).x0)
-          .x1((d: unknown) => (d as AreaPt).x1)
-          .defined((d: unknown) => (d as AreaPt).defined)
-          .curve(curveFn as never)
-
-        const runs: Array<AreaPt> = pts.map((p) => ({
-          y: p.pos,
-          x0: p.val2,
-          x1: p.val,
-          defined: p.defined,
-        }))
-        const segments: Array<Array<AreaPt>> = []
-        let current: Array<AreaPt> = []
-        for (const r of runs) {
-          if (!r.defined) {
-            if (current.length > 1) segments.push(current)
-            current = []
-          } else {
-            current.push(r)
-          }
-        }
-        if (current.length > 1) segments.push(current)
-
-        for (const seg of segments) {
-          const d = areaGen(seg)
-          if (d) path += d
-        }
-      } else {
-        // Vertical area (default)
-        type AreaPt = { x: number; y0: number; y1: number; defined: boolean }
-        const areaGen = d3Area().digits(digits)
-          .x((d: unknown) => (d as AreaPt).x)
-          .y0((d: unknown) => (d as AreaPt).y0)
-          .y1((d: unknown) => (d as AreaPt).y1)
-          .defined((d: unknown) => (d as AreaPt).defined)
-          .curve(curveFn as never)
-
-        const runs: Array<AreaPt> = pts.map((p) => ({
-          x: p.pos,
-          y0: p.val2,
-          y1: p.val,
-          defined: p.defined,
-        }))
-        const segments: Array<Array<AreaPt>> = []
-        let current: Array<AreaPt> = []
-        for (const r of runs) {
-          if (!r.defined) {
-            if (current.length > 1) segments.push(current)
-            current = []
-          } else {
-            current.push(r)
-          }
-        }
-        if (current.length > 1) segments.push(current)
-
-        for (const seg of segments) {
-          const d = areaGen(seg)
-          if (d) path += d
-        }
-      }
-    }
-  }
-
-  // Fallback: linear interpolation (or if curve failed)
-  if (!path) {
-    let penDown = false
-    for (let i = 0; i < pts.length; i++) {
-      const p = pts[i]!
-      if (!p.defined) {
-        if (penDown) {
-          for (let j = i - 1; j >= 0; j--) {
-            const q = pts[j]!
-            if (!q.defined) break
-            if (isHorizontal) {
-              path += `L${n3(q.val2)},${n3(q.pos)}`
-            } else {
-              path += `L${n3(q.pos)},${n3(q.val2)}`
-            }
-          }
-          path += 'Z'
-          penDown = false
-        }
-        continue
-      }
-      if (!penDown) {
-        if (isHorizontal) {
-          path += `M${n3(p.val)},${n3(p.pos)}`
-        } else {
-          path += `M${n3(p.pos)},${n3(p.val)}`
-        }
-        penDown = true
-      } else {
-        if (isHorizontal) {
-          path += `L${n3(p.val)},${n3(p.pos)}`
-        } else {
-          path += `L${n3(p.pos)},${n3(p.val)}`
-        }
-      }
-    }
-    if (penDown) {
-      for (let j = pts.length - 1; j >= 0; j--) {
-        const q = pts[j]!
-        if (!q.defined) break
-        if (isHorizontal) {
-          path += `L${num(q.val2)},${num(q.pos)}`
-        } else {
-          path += `L${num(q.pos)},${num(q.val2)}`
-        }
-      }
-      path += 'Z'
-    }
-  }
+  const curve = vegaCurve(firstItem?.interpolate as string | undefined, firstItem?.orient as string | undefined, firstItem?.tension as number | undefined)
+  const shape = firstItem?.orient === 'horizontal' ? areaHShape : areaVShape
+  const path = (shape.digits(digits).curve(curve as never)(items as never) ?? '') as string
 
   if (!path) return null
   return {
@@ -1121,86 +928,33 @@ function renderTrail(group: SceneGroup, open: string): string {
 }
 
 /** Compute the vega/d3-trail polygon path for a run of trail items. */
-/** Full-precision coordinate formatting: vega's trail 'd' comes from the
- * d3-path buffer, whose stringifier emits JS number strings verbatim (unlike
- * the rounded rect/area emitters). */
-const fp = (x: number): string => num(x)
-
 export function trailPath(items: SceneItem[]): GeneratedPath {
-  // Exact emulation of vega's trail generator through the d3-path buffer:
-  // coordinates emit as JS number strings (full precision), arc endpoints
-  // recompute through cos/sin of the segment angle (not the normalized
-  // vector), and coincident points suppress the L.
-  let out = ''
+  // vega-scenegraph path/trail.js, through the d3-path buffer (full precision: its stringifier emits JS number
+  // strings): x and y are `item.x || 0`, the size `item.size || 1`, an item with `defined === false` ends the run.
+  const context = new Path()
   let ready = false
   let x1 = 0, y1 = 0, r1 = 0
-  // d3-path state: last emitted point (null = path empty)
-  let px: number | null = null
-  let py: number | null = null
-  const EPS = 1e-12
-  const moveTo = (x: number, y: number): void => {
-    out += `M${fp(x)},${fp(y)}`
-    px = x; py = y
-  }
-  const lineTo = (x: number, y: number): void => {
-    if (px === null || py === null) { moveTo(x, y); return }
-    if (Math.abs(px - x) > EPS || Math.abs(py - y) > EPS) {
-      out += `L${fp(x)},${fp(y)}`
-      px = x; py = y
-    }
-  }
-  const arc = (x: number, y: number, r: number, a0: number, a1: number): void => {
-    const dx = r * Math.cos(a0)
-    const dy = r * Math.sin(a0)
-    const x0 = x + dx
-    const y0 = y + dy
-    lineTo(x0, y0)
-    if (!r) return
-    let da = a1 - a0
-    if (da < 0) da = (da % (2 * Math.PI)) + 2 * Math.PI
-    if (da > 2 * Math.PI - EPS) {
-      // complete circle: two arcs
-      out += `A${fp(r)},${fp(r)},0,1,1,${fp(x - dx)},${fp(y - dy)}`
-      out += `A${fp(r)},${fp(r)},0,1,1,${fp(x0)},${fp(y0)}`
-      px = x0; py = y0
-    } else if (da > EPS) {
-      const ex = x + r * Math.cos(a1)
-      const ey = y + r * Math.sin(a1)
-      out += `A${fp(r)},${fp(r)},0,${da >= Math.PI ? 1 : 0},1,${fp(ex)},${fp(ey)}`
-      px = ex; py = ey
-    }
-  }
-  for (const it of items) {
-    // vega's trail generator: `size || 1` (a zero size falls back to 1) and
-    // `defined === false` breaks the segment (the polygon ends; a new run
-    // starts at the next defined point).
-    if (it.defined === false) {
-      ready = false
-      continue
-    }
-    const x2 = it.x as number
-    const y2 = it.y as number
-    const r2 = ((it.size as number) || 1) / 2
+  const point = (x2: number, y2: number, w2: number): void => {
+    const r2 = w2 / 2
     if (ready) {
-      const ux0 = y1 - y2
-      const uy0 = x2 - x1
-      if (ux0 || uy0) {
-        const ud = Math.hypot(ux0, uy0)
-        const ux = ux0 / ud
-        const uy = uy0 / ud
-        // segment angle; the arc endpoints go through cos/sin of it
-        const t = Math.atan2(uy0, ux0)
-        moveTo(x1 - ux * r1, y1 - uy * r1)
-        lineTo(x2 - ux * r2, y2 - uy * r2)
-        arc(x2, y2, r2, t - Math.PI, t)
-        lineTo(x1 + ux * r1, y1 + uy * r1)
-        arc(x1, y1, r1, t, t + Math.PI)
-        out += 'Z'
+      let ux = y1 - y2
+      let uy = x2 - x1
+      if (ux || uy) {
+        // get normal vector
+        const ud = Math.hypot(ux, uy)
+        const rx = (ux /= ud) * r1
+        const ry = (uy /= ud) * r1
+        const t = Math.atan2(uy, ux)
+        // draw segment
+        context.moveTo(x1 - rx, y1 - ry)
+        context.lineTo(x2 - ux * r2, y2 - uy * r2)
+        context.arc(x2, y2, r2, t - Math.PI, t)
+        context.lineTo(x1 + rx, y1 + ry)
+        context.arc(x1, y1, r1, t, t + Math.PI)
       } else {
-        // Identical consecutive points: a full circle cap around the point.
-        arc(x2, y2, r2, 0, 2 * Math.PI)
-        out += 'Z'
+        context.arc(x2, y2, r2, 0, 2 * Math.PI)
       }
+      context.closePath()
     } else {
       ready = true
     }
@@ -1208,7 +962,16 @@ export function trailPath(items: SceneItem[]): GeneratedPath {
     y1 = y2
     r1 = r2
   }
-  return gen(out)
+  const n = items.length
+  let defined0 = false
+  for (let i = 0; i <= n; ++i) {
+    const it = items[i]
+    if (!(i < n && !(it!.defined === false)) === defined0) {
+      if (defined0 = !defined0) ready = false
+    }
+    if (defined0) point(+((it!.x as number) || 0), +((it!.y as number) || 0), +((it!.size as number) || 1))
+  }
+  return gen(context + '')
 }
 
 function renderImages(group: SceneGroup, open: string): string {
@@ -1670,6 +1433,9 @@ export function pathVectorEffect(it: SceneItem): boolean {
   return ((rec.scaleX as number) || 1) !== 1 || ((rec.scaleY as number) || 1) !== 1
 }
 
+/** A fill or stroke as it is written: a gradient object is the reference to its definition. */
+const paintOf = (v: unknown): unknown => (typeof v === 'object' && isGradientPaint(v) ? gradientRef(v) : v)
+
 /**
  * vega-scenegraph's `stylesAttr` (util/svg/styles.js): the item property ->
  * presentation attribute list that EVERY mark's SVG output goes through
@@ -1689,9 +1455,9 @@ export function paintAttrs(it: SceneItem, w: AttrSink, styles?: readonly string[
   // `!= null` before each call: most properties of most items are absent, and the
   // string renderer is dominated by exactly these checks at 10k+ marks.
   let v: unknown
-  if ((v = it.fill) != null) w.a('fill', v)
+  if ((v = it.fill) != null) w.a('fill', paintOf(v))
   if ((v = it.fillOpacity) != null) w.a('fill-opacity', v)
-  if ((v = it.stroke) != null) w.a('stroke', v)
+  if ((v = it.stroke) != null) w.a('stroke', paintOf(v))
   if ((v = it.strokeOpacity) != null) w.a('stroke-opacity', v)
   if ((v = strokeWidth ?? it.strokeWidth) != null) w.a('stroke-width', v)
   if ((v = it.strokeCap) != null) w.a('stroke-linecap', v)
@@ -2421,10 +2187,19 @@ export function serializeNodes(nodes: readonly SvgNode[], clips: ClipCollector):
   return out
 }
 
-/** Gradient definition attributes (direction included). */
-export function gradientAttrs(def: { id: string; direction?: string }, w: AttrSink): void {
+/** Gradient definition attributes: the coordinates it carries, else the legend gradient's direction. */
+export function gradientAttrs(def: SceneDef, w: AttrSink): void {
   w.v('id', def.id)
-  if (def.direction === 'horizontal') {
+  if (def.kind === 'radial') {
+    // vega-scenegraph: the inner circle is the focal point (fx, fy, fr), the outer one the gradient's (cx, cy, r)
+    for (const [attr, v] of [['fx', def.x1], ['fy', def.y1], ['fr', def.r1], ['cx', def.x2], ['cy', def.y2], ['r', def.r2]] as const) {
+      if (v != null) w.v(attr, String(v))
+    }
+  } else if (def.x1 != null || def.y1 != null || def.x2 != null || def.y2 != null) {
+    for (const [attr, v] of [['x1', def.x1], ['x2', def.x2], ['y1', def.y1], ['y2', def.y2]] as const) {
+      if (v != null) w.v(attr, String(v))
+    }
+  } else if (def.direction === 'horizontal') {
     w.v('x1', '0'); w.v('x2', '1'); w.v('y1', '0'); w.v('y2', '0')
   } else {
     w.v('x1', '0'); w.v('x2', '0'); w.v('y1', '1'); w.v('y2', '0')

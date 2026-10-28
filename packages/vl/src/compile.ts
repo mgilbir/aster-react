@@ -723,6 +723,26 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     if (isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).scale) && ((spec.resolve as Record<string, Record<string, unknown>>).scale as Record<string, unknown>).y === 'independent') showInvalidValues(p.l, p.fields, p.mark, layerScales, builtMarks)
     perLayerScales.push(layerScales)
   })
+  // optimize/mergebins.ts: the layers that bin the same field with the same parameters share ONE bin node. Its extent is taken once,
+  // over the rows of the first layer's pipeline; a later layer (a filtered one, say) bins with that extent instead of writing the
+  // signal again over its own rows
+  {
+    const signals = new Set<string>()
+    for (const d of data) {
+      const tf = d.transform as Record<string, unknown>[] | undefined
+      if (!tf?.some((t) => (t.type === 'extent' || t.type === 'bin') && typeof t.signal === 'string')) continue
+      d.transform = tf.flatMap((t) => {
+        if ((t.type !== 'extent' && t.type !== 'bin') || typeof t.signal !== 'string') return [t]
+        const first = !signals.has(t.signal)
+        signals.add(t.signal)
+        if (first) return [t]
+        // (a signal is declared once: the later bin only writes its fields, reading the shared extent)
+        if (t.type === 'extent') return []
+        const { signal: _dropped, ...rest } = t
+        return [rest]
+      })
+    }
+  }
   // a lookup reads its source dataset by name, which must be declared before it (vega resolves names in order)
   {
     const at = new Map(data.map((d, i) => [d.name as string, i]))
@@ -2025,6 +2045,8 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
       renameFragment(t, renames)
       t.signal = sigMap.get(own)
     }
+    // (a bin that shares another layer's bins signal declares none of its own, but reads the shared extent signal)
+    for (const d of unitData) for (const t of (d.transform as Record<string, unknown>[] | undefined) ?? []) if (t.type === 'bin' && typeof t.signal !== 'string') renameFragment(t, renames)
     renameFragment(projList, renames)
     renameFragment(vg.scales, renames)
     renameFragment(vg.marks, renames)

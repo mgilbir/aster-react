@@ -32,12 +32,12 @@ forEachVariant(['svg', 'interaction'], (Chart, variant) => {
       act(() => { root.render(<Chart spec={spec} width={400} height={300} tooltip />) })
       const svg = container.querySelector('svg')!
       expect(svg).not.toBeNull()
-      // Hover over the first symbol (data-datum stamped on the item element).
-      const sym = svg.querySelector('path[data-datum]') as Element
+      // Hover over the first symbol, at x=1,y=2 on 0..10 scales over 400x300 + 5 padding (the datum comes from the scene hit index; the markup carries no stamp of it).
+      const sym = svg.querySelector('.mark-symbol path') as Element
       expect(sym).not.toBeNull()
       const rect = container.getBoundingClientRect()
       act(() => {
-        sym.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: rect.left + 40, clientY: rect.top + 60 }))
+        sym.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: rect.left + 45, clientY: rect.top + 245 }))
       })
       const tip = container.querySelector('[data-testid="chart-tooltip"]')
       expect(tip).not.toBeNull()
@@ -63,9 +63,9 @@ forEachVariant(['svg', 'interaction'], (Chart, variant) => {
           />,
         )
       })
-      const sym = container.querySelector('svg path[data-datum]') as Element
+      const sym = container.querySelector('svg .mark-symbol path') as Element
       act(() => {
-        sym.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 40, clientY: 60 }))
+        sym.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 45, clientY: 245 }))
       })
       const tip = container.querySelector('[data-testid="chart-tooltip"]')!
       expect(tip.querySelector('[data-testid="custom-tip"]')?.textContent).toBe('point a')
@@ -85,13 +85,13 @@ forEachVariant(['svg', 'interaction'], (Chart, variant) => {
         document.body.appendChild(container)
         const root = createRoot(container)
         act(() => { root.render(<Chart spec={dataSpec} width={400} height={300} tooltip />) })
-        const sym = container.querySelector('svg path[data-datum]') as Element
-        act(() => { sym.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 40, clientY: 60 })) })
+        const sym = container.querySelector('svg .mark-symbol path') as Element
+        act(() => { sym.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 45, clientY: 245 })) })
         const text = container.querySelector('[data-testid="chart-tooltip"]')!.textContent!
         for (const [k, v] of Object.entries(row)) expect(text).toContain(`${k}: ${v}`)
         act(() => { root.render(<Chart spec={dataSpec} width={400} height={300} renderTooltip={(d) => { seen.push(d); return null }} />) })
-        const sym2 = container.querySelector('svg path[data-datum]') as Element
-        act(() => { sym2.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 40, clientY: 60 })) })
+        const sym2 = container.querySelector('svg .mark-symbol path') as Element
+        act(() => { sym2.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 45, clientY: 245 })) })
         expect(seen.at(-1)).toEqual(row)
       })
 

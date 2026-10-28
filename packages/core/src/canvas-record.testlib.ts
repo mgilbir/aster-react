@@ -128,6 +128,12 @@ export function makeRecorder(): { ctx: CanvasLike; records: PaintRecord[] } {
       void x0; void y0; void x1; void y1
       return g as GradientLike
     },
+    createRadialGradient(x0, y0, r0, x1, y1, r1): GradientLike {
+      const stops: string[] = []
+      const g = { addColorStop(o: number, c: string) { stops.push(`${r3(o)}:${c}`) }, get stops() { return stops.join('/') } }
+      void x0; void y0; void r0; void x1; void y1; void r1
+      return g as GradientLike
+    },
     get fillStyle() { return st.fillStyle },
     set fillStyle(v) { st.fillStyle = v },
     get strokeStyle() { return st.strokeStyle },

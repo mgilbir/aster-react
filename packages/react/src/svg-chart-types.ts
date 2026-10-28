@@ -21,7 +21,7 @@ export const SVG_CHART_SHARED_PROPS = [
 /**
  * ChartProps that need the `interaction` capability (hit index and/or the signal event loop):
  * a compile-time error on `<SvgChart>` without `interaction`, and reported at runtime for JS callers.
- *   tooltip, renderTooltip      resolve the hovered datum from `data-datum` stamps (signals) or the hit index
+ *   tooltip, renderTooltip      resolve the hovered datum through the hit index
  *   onPointSelect, selection,   a click resolves the mark under the pointer through the hit index
  *   select, onSelectionChange
  *   preventDefault              only affects the `signal.on` event loop

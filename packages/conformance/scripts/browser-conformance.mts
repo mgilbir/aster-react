@@ -68,7 +68,8 @@ window.__runEntry = async (entry) => {
     host.style.width = '${CONTAINER_W}px'
     host.style.height = '${CONTAINER_H}px'
     document.body.appendChild(host)
-    const result = await embed(host, spec, { actions: false, renderer: 'svg' })
+    // (vega changes the rows of an inline dataset in place -- a force layout rewrites its link rows -- so it gets a copy)
+    const result = await embed(host, structuredClone(spec), { actions: false, renderer: 'svg' })
     // vega's string renderer (view.toSVG): the document Aster's renderSpec is the counterpart of. The DOM SVGRenderer
     // (what embed shows) has no hyperlinks at all: it leaves a link to the view's click handler, so its markup has no <a>.
     const oracleSvg = await result.view.toSVG()

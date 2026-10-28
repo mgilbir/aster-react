@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **Gallery conformance, runtime (the official Vega / Vega-Lite examples against real vega)**: the fixes below take the
+  gallery gate from 37 / 251 (static, Vega / Vega-Lite) and 30 / 186 (React) to 61 / 274 and 45 / 205:
+  - Date expression functions are vega's: `time(x)` is a timestamp (a Vega-Lite `filter {timeUnit, equal}` kept no rows),
+    `year()`, `quarter()` (1-based), `datetime()`, `utc()`, `timeFormat()`, `timeParse()`, `monthFormat()` ... take the raw
+    argument as `new Date(x)` does; a live differential covers every one of them.
+  - Inline primitive `values` are rows `{data: v}`; `dataset.source` may be a list; a dataset's `values`, a `url` and a
+    projection `type` may be `{signal}`s (`loadSpecData` loads a signal url for the signal's initial value); a signal
+    declared without a value exists; datasets are built in the order of the signals they write (`extent`, `bin`) and
+    read; a transform parameter that names a declared signal is that signal (`static`).
+  - A mark may read a group mark's items (`from: {data: <name>}`); a mark's `lookup` / `linkpath` / `force` / `geopath`
+    transforms run on the encoded items; a group that declares its own `height` / `width` signal sizes its scales by it;
+    a facet may be pre-faceted data (`facet.field`); a view with no `width` / `height` is 0 wide / high (it was 500);
+    `autosize: {type: "none", contains: "padding"}` takes the padding out of the size.
+  - Line and area paths are d3's generators over the items (a gap is the curve's own, not a `Z`; stacked areas and
+    curves are vega's to the last digit); trail marks run vega's generator through the d3-path buffer; gradient objects
+    as fills and strokes are defs (linear and radial); a text mark's items always have text bounds; shape and geoshape
+    bound their stroke with the miter expansion; `geoshape` takes a `pointRadius`.
+  - New in the opt-in addons, each compared with the pinned vega package: `tree` / `treelinks` / `treePath` /
+    `treeAncestors`, `force` (d3-force + d3-quadtree, bit-exact), `kde2d`, `isocontour`, `geopath`, `geoArea` /
+    `geoBounds` / `geoCentroid` / `geoScale`, and the normal / log-normal / uniform `sample` / `density` / `cumulative` /
+    `quantile` functions.
+  - The conformance canonicalizer decodes character references in text nodes and reads a radial gradient's pattern.
 - **The cursor of the hovered item** (vega-view `cursor.js`): the chart container shows the `cursor` channel of the item
   under the pointer (a legend-bound Vega-Lite selection makes its symbols, labels and entries `pointer`), the spec's
   `cursor` signal wins unless it is `'default'`, and moving off the items resets it. Rendered as React state through the

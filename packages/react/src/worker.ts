@@ -28,6 +28,7 @@ import {
   type ChartStream, type DataPulse, type ImageUrlPolicy, type SceneRoot, type SpecLimits, type StreamBatch,
   type StreamOptions, type StreamPolicy, type StreamStats, type TextMetricsProvider, type VgSpec,
 } from '@aster/core'
+import { loadAddons, missingAddons, type AddonName } from '@aster/core/addons'
 import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
 import { SCALE_INFO_KEY, serializeScales } from './serialScales.js'
 
@@ -390,8 +391,24 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
       return
     }
     if (w == null) {
-      apply(handleChartWorkerRequest(request))
-      return
+      // No Worker: the request is handled here, so the add-ons the spec needs must be loaded in this realm first. A chart that
+      // needs none (the common case) is handled in this very effect, as before; one that does applies when they arrive.
+      let missing: readonly AddonName[] = []
+      try {
+        const vega = normalizeChartSpec(request.spec)
+        request = { ...request, spec: vega }
+        missing = missingAddons(vega)
+      } catch { /* the request handler reports it */ }
+      if (missing.length === 0) {
+        apply(handleChartWorkerRequest(request))
+        return
+      }
+      let cancelled = false
+      loadAddons(missing).then(
+        () => { if (!cancelled) apply(handleChartWorkerRequest(request)) },
+        (e: unknown) => { if (!cancelled) fail(e instanceof Error ? e : new Error(String(e))) },
+      )
+      return () => { cancelled = true }
     }
     // A new request is in flight: surface it (keep the previous result meanwhile).
     setState((s) => (s.pending ? s : { ...s, pending: true }))
@@ -595,4 +612,71 @@ export function handleWorkerMessage(
   if (!isRecord(data.spec)) return bad('request needs a spec object')
   if (data.input !== undefined && !isRecord(data.input)) return bad('request input must be an object')
   return handleChartWorkerRequest(data as unknown as ChartWorkerRequest)
+}
+
+/**
+ * A worker message with its spec normalized to Vega (compiled once, here, not again by the handler) and the opt-in add-ons that
+ * spec needs and this realm has not loaded. A message without a spec, or with an invalid one (the handler reports it), needs none.
+ */
+export function prepareWorkerMessage(data: unknown): { data: unknown; missing: readonly AddonName[] } {
+  if (!isRecord(data) || !isRecord(data.spec) || (data.kind === 'stream' && data.op !== 'init')) return { data, missing: [] }
+  try {
+    const spec = normalizeChartSpec(data.spec as VgSpec)
+    return { data: { ...data, spec }, missing: missingAddons(spec) }
+  } catch {
+    return { data, missing: [] }
+  }
+}
+
+/**
+ * `handleWorkerMessage` for a worker that loads add-ons on demand: import what `prepareWorkerMessage` found missing, then handle
+ * the message. An import that fails answers that message with a typed error. The worker entry runs messages one after another
+ * (see worker-entry.ts), so a stream's `flush` never overtakes its `init`.
+ */
+export async function handleWorkerMessageWithAddons(
+  data: unknown,
+  missing: readonly AddonName[],
+  streams: Map<number, ChartStream>,
+): Promise<ChartWorkerResponse | ChartWorkerStreamResponse | null> {
+  if (missing.length) {
+    try {
+      await loadAddons(missing)
+    } catch (error) {
+      if (!isRecord(data) || !isId(data.id)) return null
+      return data.kind === 'stream' && isId(data.streamId)
+        ? { kind: 'stream', id: data.id, streamId: data.streamId, error: wireError(error) }
+        : { id: data.id, error: wireError(error) }
+    }
+  }
+  return handleWorkerMessage(data, streams)
+}
+
+/**
+ * The worker entry's message handler: handles messages in arrival order, importing the add-ons a message's spec needs first.
+ * While one waits for an import, later messages queue behind it (a stream's `flush` must not overtake its `init`); with nothing
+ * waiting, a message that needs no import is handled in the same turn, as it always was.
+ */
+export function createWorkerDispatcher(
+  streams: Map<number, ChartStream>,
+  post: (response: ChartWorkerResponse | ChartWorkerStreamResponse) => void,
+): (message: unknown) => void {
+  let waiting = 0
+  let tail: Promise<void> = Promise.resolve()
+  return (message) => {
+    const { data, missing } = prepareWorkerMessage(message)
+    if (waiting === 0 && missing.length === 0) {
+      const response = handleWorkerMessage(data, streams)
+      if (response != null) post(response)
+      return
+    }
+    waiting++
+    tail = tail.then(async () => {
+      try {
+        const response = await handleWorkerMessageWithAddons(data, missing, streams)
+        if (response != null) post(response)
+      } finally {
+        waiting--
+      }
+    })
+  }
 }

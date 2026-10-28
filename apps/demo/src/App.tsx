@@ -21,6 +21,9 @@ import {
 } from './compiled'
 import { compile } from '@aster/vl'
 import { loadSpecData } from '@aster/core/load'
+// The playground takes any spec, so it loads the opt-in addons an app would (rare transforms such as pie, and maps).
+import '@aster/core/transforms'
+import '@aster/core/geo'
 import { Chart, ChartStream, type ChartStreamHandle } from '@aster/react'
 import type { SelectionInterval } from '@aster/react'
 import {
@@ -326,7 +329,9 @@ function SpecPlayground() {
     }, 400)
     return () => { cancelled = true; window.clearTimeout(id) }
   }, [text])
-  const size = vg ? specSize(vg) : {}
+  // Only a numeric top-level size is passed on: a size the spec computes through its width / height signals stays
+  // the spec's (an explicit size would fix the view and override it).
+  const size = vg ? { width: typeof vg.width === 'number' ? vg.width : undefined, height: typeof vg.height === 'number' ? vg.height : undefined } : {}
   return (
     <div className="playground">
       <textarea
@@ -343,7 +348,7 @@ function SpecPlayground() {
               <div className="pane-head"><span className="badge oracle">vega / vega-lite</span></div>
               <div className="chart-container">
                 <React.Suspense fallback={<VegaLoading />}>
-                  {vl && <VegaPane spec={vl} width={size.width ?? 420} height={size.height ?? 300} ariaLabel="Playground — official vega" />}
+                  {vl && <VegaPane spec={vl} width={size.width} height={size.height} ariaLabel="Playground — official vega" />}
                 </React.Suspense>
               </div>
             </div>
@@ -353,8 +358,10 @@ function SpecPlayground() {
                 {vg && (
                   <Chart
                     spec={vg}
-                    width={size.width ?? 420}
-                    height={size.height ?? 300}
+                    // the spec's own size: a forced size would override a spec that sizes itself through its
+                    // width / height signals (an explicit size fixes the view; docs/API.md)
+                    width={size.width}
+                    height={size.height}
                     tooltip
                     ariaLabel="Playground — aster"
                   />

@@ -335,6 +335,8 @@ export async function sceneDiff(spec: Record<string, unknown>): Promise<SceneDif
   // URL datasets are part of the resolved scene; resolve them exactly as the
   // renderer would before comparing.
   spec = await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS) as unknown as Record<string, unknown>
+  // (vega changes the rows of an inline dataset in place -- a force layout rewrites its link rows -- so each engine gets its own copy)
+  const ourSpec = structuredClone(spec)
   const runtime = vega.parse(spec as never)
   const view = new (vega as any).View(runtime, { renderer: 'none' })
   const diffs: string[] = []
@@ -346,7 +348,7 @@ export async function sceneDiff(spec: Record<string, unknown>): Promise<SceneDif
     const realRoot = view.scenegraph().root as SceneNode
     const realNodes = realRootItems(realRoot)
     const realScopes = collectRealScopes(realNodes)
-    const scene = evaluateChart(compileChart(spec as never))
+    const scene = evaluateChart(compileChart(ourSpec as never))
     const ourScopes = collectOurScopes(scene.items)
     // Root scope scales come from the view's own runtime context (the scene's
     // context scales are operator wrappers; `_runtime.scales` is the root map).

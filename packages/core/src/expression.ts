@@ -15,6 +15,7 @@ import { boundedCount, meterBytes, meterTick, guardedRegExp, checkRegexInput, ch
 import { bandSpace } from './scale.js'
 import { selectionIdTest, selectionResolve, selectionTest, selectionTuples } from './selections.js'
 import { parseExpression } from './expr-parser.js'
+import { ADDON_FUNCTIONS } from './addon-functions.js'
 import { expressionInterpreter, DefaultFunctions, ExpressionConstants, EventFunctions } from './expr-interpreter.js'
 import {
   timeOffset, utcOffset, timeSequence, utcSequence,
@@ -52,6 +53,10 @@ export interface ExpressionRuntime {
   data: (name: string) => unknown[] | undefined
   /** Compile an expression string against this runtime. */
   expr: (expr: string) => CompiledExpr
+  /** A projection by name (vega keeps projections among the scales: `geoArea('projection', ...)`), when the host has any. */
+  projection?: (name: string) => unknown
+  /** The tree a dataset is the backing data of (`treePath`, `treeAncestors`): its root and the dataset's rows. */
+  tree?: (name: string) => unknown
   /**
    * The `modify(name, insert, remove, toggle, modify, values)` expression function: queue an edit of the
    * named dataset. Only a host that owns datasets while it runs event handlers (the signal event loop)
@@ -93,92 +98,69 @@ function isValid(value: unknown): boolean {
   return value != null && value === value
 }
 
-function monthFormatValue(month: unknown): string {
-  return L.timeFormat('%B')(new Date(2000, Number(month), 1))
+// vega-functions monthFormat / dayFormat: a non-integer month or day is the empty string; the date is formatted
+// through the dataflow's locale (the upstream reuses one Date object across calls; a fresh one each time
+// is the same unless a day beyond 28 was set by an earlier call).
+function nameFormat(month: unknown, day: unknown, spec: string): string {
+  if (!Number.isInteger(month) || !Number.isInteger(day)) return ''
+  const date = new Date(2000, month as number, day as number)
+  return L.timeFormat(spec)(date)
 }
-
-function dayFormatValue(day: unknown): string {
-  return L.timeFormat('%A')(new Date(2000, 0, 2 + Number(day)))
-}
+const monthFormatValue = (month: unknown): string => nameFormat(month, 1, '%B')
+const dayFormatValue = (day: unknown): string => nameFormat(0, 2 + (day as number), '%A')
 
 // --- numeric/time formatting (vega semantics: null -> "null") ---------------
 
 function fmtNumber(value: unknown, spec?: string): string {
-  // vega-functions wraps d3-format but only maps *null* to "null"; undefined
-  // reaches the formatter and formats as NaN.
-  return value === null ? 'null' : L.format(spec ?? '')(value as number)
+  // vega-functions wraps the locale's formatter but only maps *null* to "null"; undefined
+  // reaches the formatter and formats as NaN. The specifier is passed as given.
+  return value === null ? 'null' : L.format(spec as string)(value as number)
 }
 function fmtTime(value: unknown, spec?: string): string {
-  if (value === null) return 'null'
-  const t = toDate(value)
-  return L.timeFormat(spec ?? '')(t == null ? (value as unknown as Date) : new Date(t))
+  return value === null ? 'null' : L.timeFormat(spec)(value as Date)
 }
 function fmtUtc(value: unknown, spec?: string): string {
-  if (value === null) return 'null'
-  const t = toDate(value)
-  return L.utcFormat(spec ?? '')(t == null ? (value as unknown as Date) : new Date(t))
+  return value === null ? 'null' : L.utcFormat(spec)(value as Date)
 }
 
 // --- date-time accessors -----------------------------------------------------
 
-type DateTimeFn = (value: unknown) => number | undefined
-function asMs(value: unknown): number | undefined {
-  const t = toDate(value)
-  if (t == null) return undefined
-  return t instanceof Date ? +t : (t as number)
-}
-function local(f: (d: Date) => number): DateTimeFn {
-  return (value) => {
-    const t = asMs(value)
-    return t === undefined ? undefined : f(new Date(t))
-  }
-}
-const utc = local
+// vega-expression compiles `year(x)` to `new Date(x).getFullYear()` and vega-util / vega-time define the
+// rest the same way: every accessor builds a Date from the RAW argument (null is the epoch, undefined is an
+// invalid date), nothing is coerced through toDate and nothing short-circuits to undefined.
+const D = (value: unknown): Date => new Date(value as number)
 
-const yearFn = local((d) => d.getFullYear())
-const quarterFn = local((d) => Math.floor(d.getMonth() / 3))
-const monthFn = local((d) => d.getMonth())
-const weekFn = local((d) => week(d))
-const dateFn = local((d) => d.getDate())
-const dayFn = local((d) => d.getDay())
-const dayofyearFn = local((d) => dayofyear(d))
-const hoursFn = local((d) => d.getHours())
-const minutesFn = local((d) => d.getMinutes())
-const secondsFn = local((d) => d.getSeconds())
-const millisFn = local((d) => d.getMilliseconds())
+const yearFn = (v: unknown): number => D(v).getFullYear()
+const quarterFn = (v: unknown): number => 1 + ~~(D(v).getMonth() / 3)
+const monthFn = (v: unknown): number => D(v).getMonth()
+const weekFn = (v: unknown): number => week(v)
+const dateFn = (v: unknown): number => D(v).getDate()
+const dayFn = (v: unknown): number => D(v).getDay()
+const dayofyearFn = (v: unknown): number => dayofyear(v)
+const hoursFn = (v: unknown): number => D(v).getHours()
+const minutesFn = (v: unknown): number => D(v).getMinutes()
+const secondsFn = (v: unknown): number => D(v).getSeconds()
+const millisFn = (v: unknown): number => D(v).getMilliseconds()
 
-const utcYearFn = utc((d) => d.getUTCFullYear())
-const utcQuarterFn = utc((d) => Math.floor(d.getUTCMonth() / 3))
-const utcMonthFn = utc((d) => d.getUTCMonth())
-const utcWeekFn = utc((d) => utcweek(d))
-const utcDateFn = utc((d) => d.getUTCDate())
-const utcDayFn = utc((d) => d.getUTCDay())
-const utcDayofyearFn = utc((d) => utcdayofyear(d))
-const utcHoursFn = utc((d) => d.getUTCHours())
-const utcMinutesFn = utc((d) => d.getUTCMinutes())
-const utcSecondsFn = utc((d) => d.getUTCSeconds())
-const utcMillisFn = utc((d) => d.getUTCMilliseconds())
+const utcYearFn = (v: unknown): number => D(v).getUTCFullYear()
+const utcQuarterFn = (v: unknown): number => 1 + ~~(D(v).getUTCMonth() / 3)
+const utcMonthFn = (v: unknown): number => D(v).getUTCMonth()
+const utcWeekFn = (v: unknown): number => utcweek(v)
+const utcDateFn = (v: unknown): number => D(v).getUTCDate()
+const utcDayFn = (v: unknown): number => D(v).getUTCDay()
+const utcDayofyearFn = (v: unknown): number => utcdayofyear(v)
+const utcHoursFn = (v: unknown): number => D(v).getUTCHours()
+const utcMinutesFn = (v: unknown): number => D(v).getUTCMinutes()
+const utcSecondsFn = (v: unknown): number => D(v).getUTCSeconds()
+const utcMillisFn = (v: unknown): number => D(v).getUTCMilliseconds()
 
-function datetime(y?: unknown, mo?: unknown, d?: unknown, h?: unknown, mi?: unknown, s?: unknown, ms?: unknown): Date {
-  return new Date(
-    Number(y ?? 1970), Number(mo ?? 0), d == null ? 1 : Number(d),
-    Number(h ?? 0), Number(mi ?? 0), Number(s ?? 0), Number(ms ?? 0),
-  )
-}
-function utcDatetime(y?: unknown, mo?: unknown, d?: unknown, h?: unknown, mi?: unknown, s?: unknown, ms?: unknown): number {
-  return Date.UTC(
-    Number(y ?? 1970), Number(mo ?? 0), d == null ? 1 : Number(d),
-    Number(h ?? 0), Number(mi ?? 0), Number(s ?? 0), Number(ms ?? 0),
-  )
-}
-function timeOffsetFn(unit: unknown, date: unknown, step?: unknown): Date | undefined {
-  const d = asMs(date)
-  return d === undefined ? undefined : timeOffset(String(unit), new Date(d), step == null ? 1 : Number(step))
-}
-function utcOffsetFn(unit: unknown, date: unknown, step?: unknown): Date | undefined {
-  const d = asMs(date)
-  return d === undefined ? undefined : utcOffset(String(unit), new Date(d), step == null ? 1 : Number(step))
-}
+// `datetime` is `new Date(...)` with the arguments as given; `utc` is `Date.UTC(...)`.
+const datetime = (...args: unknown[]): Date => new (Date as unknown as new (...a: unknown[]) => Date)(...args)
+const utcDatetime = (...args: unknown[]): number => (Date.UTC as (...a: unknown[]) => number)(...args)
+const timeOffsetFn = (unit: unknown, date: unknown, step?: unknown): Date | undefined =>
+  timeOffset(unit as string, date, step as number)
+const utcOffsetFn = (unit: unknown, date: unknown, step?: unknown): Date | undefined =>
+  utcOffset(unit as string, date, step as number)
 
 // --- string/array utilities (vega semantics) --------------------------------
 
@@ -249,10 +231,45 @@ const REGISTERED = new Map<string, (...args: never[]) => unknown>()
 /** Bumped on every registration change: a compiled expression compiled under an older registry re-validates before it runs. */
 let registryEpoch = 0
 
+/** Functions an addon contributes that read the view they run in (a projection by name): built per runtime. */
+const REGISTERED_BOUND = new Map<string, (runtime: ExpressionRuntime) => (...args: never[]) => unknown>()
+
 function createFunctionContext(runtime: ExpressionRuntime): Record<string, unknown> {
   const fns = createBuiltinFunctions(runtime)
+  for (const [name, make] of REGISTERED_BOUND) fns[name] = make(runtime)
   for (const [name, fn] of REGISTERED) fns[name] = fn
   return fns
+}
+
+/**
+ * For the addons: an expression function that needs the runtime it is evaluated in (the geo addon's `geoCentroid`
+ * reads a projection by name). `make` runs once per runtime. Internal -- not exported from the package barrel.
+ */
+export function registerRuntimeExpressionFunction(name: string, make: (runtime: ExpressionRuntime) => (...args: never[]) => unknown): void {
+  REGISTERED_BOUND.set(name, make)
+  registryEpoch++
+}
+
+/** Every function name an add-on or the host registered (not the built-ins): for the tests that check the add-on tables. */
+export function registeredExpressionFunctionNames(): string[] {
+  return [...new Set([...REGISTERED_BOUND.keys(), ...REGISTERED.keys()])]
+}
+
+/**
+ * Take the named functions out of the registry (the add-ons', as if their module had not been imported); the returned function puts
+ * them back. For the tests of `@aster/core/addons`, which check the detector against an app that has not loaded an add-on.
+ */
+export function withdrawExpressionFunctions(names: readonly string[]): () => void {
+  const bound = names.flatMap((n) => REGISTERED_BOUND.has(n) ? [[n, REGISTERED_BOUND.get(n)!] as const] : [])
+  const plain = names.flatMap((n) => REGISTERED.has(n) ? [[n, REGISTERED.get(n)!] as const] : [])
+  for (const [n] of bound) REGISTERED_BOUND.delete(n)
+  for (const [n] of plain) REGISTERED.delete(n)
+  registryEpoch++
+  return () => {
+    for (const [n, f] of bound) REGISTERED_BOUND.set(n, f)
+    for (const [n, f] of plain) REGISTERED.set(n, f)
+    registryEpoch++
+  }
 }
 
 let builtinNames: Set<string> | undefined
@@ -413,20 +430,16 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     regexp: (pattern: unknown, flags?: unknown) => guardedRegExp(String(pattern), flags == null ? undefined : String(flags)),
     // date-time
     now: () => Date.now(),
-    datetime: (...args: unknown[]) => datetime(...(args as [unknown, unknown, unknown, unknown, unknown, unknown, unknown])),
-    utc: (...args: unknown[]) => utcDatetime(...(args as [unknown, unknown, unknown, unknown, unknown, unknown, unknown])),
-    time: (value: unknown) => toDate(value),
-    timezoneoffset: (value: unknown) => { const t = toDate(value); return t == null ? undefined : new Date(t).getTimezoneOffset() },
+    datetime,
+    utc: utcDatetime,
+    time: (value: unknown) => D(value).getTime(),
+    timezoneoffset: (value: unknown) => D(value).getTimezoneOffset(),
     timeOffset: (unit: unknown, date: unknown, step?: unknown) => timeOffsetFn(unit, date, step),
     utcOffset: (unit: unknown, date: unknown, step?: unknown) => utcOffsetFn(unit, date, step),
-    timeSequence: (unit: unknown, start: unknown, stop: unknown, step?: unknown) => {
-      const a = asMs(start); const b = asMs(stop)
-      return a === undefined || b === undefined ? undefined : timeSequence(String(unit), new Date(a), new Date(b), step == null ? 1 : Number(step))
-    },
-    utcSequence: (unit: unknown, start: unknown, stop: unknown, step?: unknown) => {
-      const a = asMs(start); const b = asMs(stop)
-      return a === undefined || b === undefined ? undefined : utcSequence(String(unit), new Date(a), new Date(b), step == null ? 1 : Number(step))
-    },
+    timeSequence: (unit: unknown, start: unknown, stop: unknown, step?: unknown) =>
+      timeSequence(unit as string, start, stop, step as number),
+    utcSequence: (unit: unknown, start: unknown, stop: unknown, step?: unknown) =>
+      utcSequence(unit as string, start, stop, step as number),
     year: yearFn, quarter: quarterFn, month: monthFn, week: weekFn, date: dateFn, day: dayFn,
     dayofyear: dayofyearFn, hours: hoursFn, minutes: minutesFn, seconds: secondsFn, milliseconds: millisFn,
     utcyear: utcYearFn, utcquarter: utcQuarterFn, utcmonth: utcMonthFn, utcweek: utcWeekFn,
@@ -436,13 +449,13 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     format: (value: unknown, spec?: string) => fmtNumber(value, spec),
     timeFormat: (value: unknown, spec?: string) => fmtTime(value, spec),
     utcFormat: (value: unknown, spec?: string) => fmtUtc(value, spec),
-    timeParse: (value: unknown, spec: string) => L.timeParse(spec)(String(value)) ?? undefined,
-    utcParse: (value: unknown, spec: string) => L.utcParse(spec)(String(value)) ?? undefined,
+    timeParse: (value: unknown, spec: string) => (value === null ? 'null' : L.timeParse(spec)(value as string)),
+    utcParse: (value: unknown, spec: string) => (value === null ? 'null' : L.utcParse(spec)(value as string)),
     timeUnitSpecifier: (units: unknown, specs?: unknown) => timeUnitSpecifier(units as never, specs as never),
     monthFormat: monthFormatValue,
-    monthAbbrevFormat: (month: unknown) => L.timeFormat('%b')(new Date(2000, Number(month), 1)),
+    monthAbbrevFormat: (month: unknown) => nameFormat(month, 1, '%b'),
     dayFormat: dayFormatValue,
-    dayAbbrevFormat: (day: unknown) => L.timeFormat('%a')(new Date(2000, 0, 2 + Number(day))),
+    dayAbbrevFormat: (day: unknown) => nameFormat(0, 2 + (day as number), '%a'),
     // colors
     rgb: (...args: number[] | [string]) => (rgb as unknown as (...a: unknown[]) => unknown)(...args),
     hsl: (...args: number[] | [string]) => (hsl as unknown as (...a: unknown[]) => unknown)(...args),
@@ -516,7 +529,10 @@ function assertKnownFunctions(ast: AstNode, functions: Record<string, unknown>, 
       let name = node.callee.name
       if (name.startsWith('_')) name = name.slice(1)
       if (name !== 'if' && !EventFunctions.includes(name) && !Object.hasOwn(functions, name) && !Object.hasOwn(DefaultFunctions, name)) {
-        throw new ExpressionParseError(`Unrecognized function: ${name}`, expr)
+        const addon = Object.hasOwn(ADDON_FUNCTIONS, name) ? ADDON_FUNCTIONS[name] : undefined
+        throw new ExpressionParseError(addon
+          ? `[aster] this spec calls the expression function "${name}"; load the addon first: await import("@aster/core/${addon}")`
+          : `Unrecognized function: ${name}`, expr)
       }
     }
     for (const k of Object.keys(node)) if (k !== 'type') visit(node[k])

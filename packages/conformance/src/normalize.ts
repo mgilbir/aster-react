@@ -336,6 +336,17 @@ function canonDef(el: XmlEl, m: Mat, ctx: Ctx, seen: string[]): string {
     }
     return `clipPath{${parts.join(';')}}`
   }
+  if (el.tag === 'pattern') {
+    // a pattern (vega wraps a radial gradient in one): its attributes, and its children as the elements they are
+    const attrsStr = (at: Record<string, string>): string =>
+      Object.keys(at).filter((k) => !isNonVisualAttr(k)).sort().map((k) => `${k}=${resolveRefs(roundIn(at[k]!), m, ctx, seen)}`).join(';')
+    const kids: string[] = []
+    for (const c of el.children) {
+      if (typeof c === 'string') continue
+      kids.push(`${c.tag}{${attrsStr(attrsOf(c))}}`)
+    }
+    return `pattern{${attrsStr(a)}}[${kids.join(',')}]`
+  }
   if (el.tag === 'linearGradient' || el.tag === 'radialGradient') {
     const keys = Object.keys(a).filter((k) => !isNonVisualAttr(k)).sort()
     const attrs = keys.map((k) => `${k}=${canonGradAttr(k, a[k]!, ctx, m, seen)}`).join(';')
@@ -445,7 +456,8 @@ function textContent(el: XmlEl, fs: number | null): string {
   const collect = (e: XmlEl) => {
     for (const c of e.children) {
       if (typeof c === 'string') {
-        const t = c.replace(/\s+/g, ' ')
+        // (N-entities: the text a node spells with character references is the same text however it is spelt)
+        const t = decodeEntities(c).replace(/\s+/g, ' ')
         if (t.trim() !== '' || out.length) out.push(t)
       } else if (c.tag === 'tspan') {
         const a = attrsOf(c)

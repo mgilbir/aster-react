@@ -15,6 +15,7 @@ import {
   type VgSpec,
 } from '@aster/core'
 import { isPromiseLike, normalizeChartSpec, useStableContent, useStableSpecRows } from './spec.js'
+import { useAddons } from './addons.js'
 import { validateDataChanges } from './dataChanges.js'
 import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './serialScales.js'
 // The incremental DOM patcher ships as the `@aster/core/dom` addon, which every chart needs. The canvas
@@ -123,7 +124,7 @@ function sameDatum(a: unknown, b: unknown): boolean {
     || subset(b as Record<string, unknown>, a as Record<string, unknown>)
 }
 
-/** True when the spec has `signal.on` event streams (they resolve marks from `data-datum`). */
+/** True when the spec has `signal.on` event streams. */
 function hasEventStreams(scene: SceneRoot | null): boolean {
   const defs = (scene as { compiled?: { signalDefs?: Array<{ on?: unknown[] }> } } | null)?.compiled?.signalDefs
   return defs?.some((d) => (d.on?.length ?? 0) > 0) ?? false
@@ -347,10 +348,13 @@ function ChartView({
   // neither recompiles (Vega-Lite) nor re-evaluates.
   const stableSpec = useStableSpecRows(rawSpec)
   const spec = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
+  // The opt-in add-ons the spec needs (transforms, geo, load) arrive before the first evaluation: this suspends while
+  // they load, so there is no render of the half-ready chart and no error to flash. A failed import is a chart error.
+  const addonError = useAddons(sceneOverride !== undefined ? null : spec)
   const stableLimits = useStableContent(limits)
   // Which scales `view`/`brush`/`selection`'s `x`/`y` refer to.
   const positional = React.useMemo(() => positionalScales(spec), [spec])
-  // Without the interaction capability there is no `data-datum` stamping and no hit index, so a tooltip
+  // Without the interaction capability there is no hit index, so a tooltip
   // cannot resolve its datum: it stays off (and a JS caller that asked for one is told, below).
   const tooltipEnabled = interaction != null && (tooltip || renderTooltip != null)
   // Without the canvas capability the chart renders as SVG (and a JS caller that asked for canvas is told).
@@ -473,15 +477,10 @@ function ChartView({
   // Row counts of the previously evaluated `data`, to validate `dataChanges`.
   const prevLengthsRef = React.useRef<Map<string, number>>(new Map())
   const evaluation = React.useMemo<{ scene: SceneRoot | null; error: Error | null; problems: string[] }>(() => {
-    // Datum attributes must be on the scene items BEFORE the DOM is built:
-    // tooltips and the `signal.on` event loop both read `data-datum` off the
-    // rendered elements, and stamping afterwards (as the bind effect used to)
-    // leaves the first render without them, so mark events never saw a datum.
-    const wantsDatumAttrs = (sc: SceneRoot): boolean => interaction != null && (tooltipEnabled || (interactive && renderer !== 'canvas' && hasEventStreams(sc)))
     if (sceneOverride !== undefined) {
-      if (sceneOverride != null && wantsDatumAttrs(sceneOverride)) interaction?.stampDatumAttrs(sceneOverride.items)
       return { scene: sceneOverride, error: null, problems: [] }
     }
+    if (addonError) return { scene: null, error: addonError, problems: [] }
     try {
       const { changes, problems } = validateDataChanges(dataChanges, inputData, prevLengthsRef.current)
       prevLengthsRef.current = new Map(Object.entries(inputData ?? {}).map(([name, rows]) => [name, rows.length]))
@@ -489,7 +488,6 @@ function ChartView({
         data: inputData, dataChanges: changes, ...sizeInput,
         signals: mergedSignals, limits: stableLimits, urlPolicy, domainRaw, textMetrics, logger: stableLogger,
       })
-      if (wantsDatumAttrs(sc)) interaction?.stampDatumAttrs(sc.items)
       // `maxSvgLength` bounds the serialized output. The DOM patcher never
       // builds that string, so the budget is enforced by measuring one — only
       // when the host asked for it (it costs a serialization per evaluation).
@@ -498,7 +496,7 @@ function ChartView({
     } catch (err) {
       return { scene: null, error: err instanceof Error ? err : new Error(String(err)), problems: [] }
     }
-  }, [sceneOverride, spec, inputData, dataChanges, sizeInput, mergedSignals, tooltipEnabled, interactive, renderer, interaction, stableLimits, urlPolicy, domainRaw, textMetrics, stableLogger])
+  }, [sceneOverride, addonError, spec, inputData, dataChanges, sizeInput, mergedSignals, stableLimits, urlPolicy, domainRaw, textMetrics, stableLogger])
   const scene = evaluation.scene
   sceneRef.current = scene
   const renderError = evaluation.error
@@ -1183,25 +1181,14 @@ function ChartView({
       if (!tooltipEnabled) return
       const rect = containerRef.current?.getBoundingClientRect()
       if (!rect) return
-      if (renderer === 'canvas' || denseSvg) {
-        // Canvas backend (and batched SVG marks): resolve through the scene hit index.
-        const [sx, sy] = pointerMapper.map(e.clientX, e.clientY)
-        const target = hitIndexFor(displayScene)?.queryMark(sx, sy)
-        const datum = target?.item.datum as Record<string, unknown> | undefined
-        setTooltipInfo(datum != null && typeof datum === 'object' ? { datum, x: e.clientX - rect.left, y: e.clientY - rect.top } : null)
-        return
-      }
-      // The hovered element may be a parent/child of the mark (e.g. a tspan or an
-      // axis line above it); walk up to the nearest element carrying data-datum.
-      const el = (e.target as HTMLElement).closest?.('[data-datum]') as HTMLElement | null
-      const raw = el?.dataset?.datum
-      if (!raw) { setTooltipInfo(null); return }
-      try {
-        const datum = JSON.parse(raw) as Record<string, unknown>
-        setTooltipInfo({ datum, x: e.clientX - rect.left, y: e.clientY - rect.top })
-      } catch { setTooltipInfo(null) }
+      // The mark under the pointer, from the scene hit index, whatever the renderer: the SVG carries no per-item
+      // attribute for it (vega's does not either), so SVG, canvas and batched marks all resolve the same way.
+      const [sx, sy] = pointerMapper.map(e.clientX, e.clientY)
+      const target = hitIndexFor(displayScene)?.queryMark(sx, sy)
+      const datum = target?.item.datum as Record<string, unknown> | undefined
+      setTooltipInfo(datum != null && typeof datum === 'object' ? { datum, x: e.clientX - rect.left, y: e.clientY - rect.top } : null)
     },
-    [tooltipEnabled, renderer, denseSvg, displayScene, hitIndexFor, pointerMapper],
+    [tooltipEnabled, displayScene, hitIndexFor, pointerMapper],
   )
 
   const handleTooltipLeave = React.useCallback(() => {

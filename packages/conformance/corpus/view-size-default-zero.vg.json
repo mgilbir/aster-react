@@ -1,0 +1,3 @@
+{"$schema":"https://vega.github.io/schema/vega/v6.json","width":160,"padding":5,
+"marks":[{"type":"rect","encode":{"update":{"x":{"value":10},"y":{"value":-40},"width":{"value":30},"height":{"value":25},"fill":{"value":"tomato"}}}},
+{"type":"text","encode":{"update":{"x":{"value":60},"y":{"value":-20},"text":{"value":"no height"}}}}]}

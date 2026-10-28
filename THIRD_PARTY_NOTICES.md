@@ -16,7 +16,7 @@ is byte-for-byte the `LICENSE` file of every project listed under it.
 
 ## Vega packages (BSD-3-Clause)
 
-Projects: vega@6.3.1, vega-dataflow@6.1.2, vega-encode@5.2.1, vega-event-selector@4.0.0, vega-expression@6.1.0, vega-expression@6.2.1, vega-format@2.1.2, vega-functions@6.1.3, vega-geo@5.1.2, vega-hierarchy@5.1.2, vega-interpreter@2.3.1, vega-label@2.1.2, vega-loader@5.1.2, vega-parser@7.1.2, vega-projection@2.1.2, vega-regression@2.1.2, vega-runtime@7.1.2, vega-scale@8.1.2, vega-scenegraph@5.2.1, vega-selections@6.1.4, vega-statistics@2.0.0, vega-time@3.2.1, vega-transforms@5.2.1, vega-util@2.1.2, vega-view@6.1.2, vega-view-transforms@5.2.1, vega-wordcloud@5.1.2
+Projects: vega@6.3.1, vega-dataflow@6.1.2, vega-encode@5.2.1, vega-event-selector@4.0.0, vega-expression@6.1.0, vega-expression@6.2.1, vega-force@5.1.2, vega-format@2.1.2, vega-functions@6.1.3, vega-geo@5.1.2, vega-hierarchy@5.1.2, vega-interpreter@2.3.1, vega-label@2.1.2, vega-loader@5.1.2, vega-parser@7.1.2, vega-projection@2.1.2, vega-regression@2.1.2, vega-runtime@7.1.2, vega-scale@8.1.2, vega-scenegraph@5.2.1, vega-selections@6.1.4, vega-statistics@2.0.0, vega-time@3.2.1, vega-transforms@5.2.1, vega-util@2.1.2, vega-view@6.1.2, vega-view-transforms@5.2.1, vega-wordcloud@5.1.2
 
 ```text
 Copyright (c) 2015-2023, University of Washington Interactive Data Lab
@@ -290,7 +290,7 @@ THE SOFTWARE.
 
 ## d3-hierarchy and others
 
-Projects: d3-hierarchy@3.1.2, d3-interpolate@3.0.1, d3-scale@4.0.2, d3-time-format@4.1.0, d3-timer@3.0.1
+Projects: d3-force@3.0.0, d3-hierarchy@3.1.2, d3-interpolate@3.0.1, d3-quadtree@3.0.1, d3-scale@4.0.2, d3-time-format@4.1.0, d3-timer@3.0.1
 
 ```text
 Copyright 2010-2021 Mike Bostock
