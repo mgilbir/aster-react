@@ -3,6 +3,19 @@
 Generated from a run of `pnpm conformance:gallery` at the commit that introduced the gate, by `scripts/gallery-triage.mts`
 (per-spec data: `triage.json`). **No engine bug is fixed in the branch that added this**; this is the map for splitting the fixes.
 
+## Update: runtime fixes (branch fix/gallery-runtime)
+
+Gate after the runtime work: static Vega 61 / 93, Vega-Lite 274 / 627; React Vega 45 / 93, Vega-Lite 205 / 627 (from 37 / 251 and
+30 / 186). The tables below are the snapshot the work started from. Closed since: `time()` and the date functions, inline primitive
+`values`, a mark reading a group mark's items (and the mark transforms that read items), line / area breaks and curves (which also
+fixed `stacked_area*` and `interactive_legend*`), values taken from signals / other datasets (source lists, projection type, signal
+url and values, signal order), `tree` / `treelinks` / `force` / `kde2d` / `isocontour` / `geopath` and the missing functions, the
+gradient fill, the trail arc flags, the text mark of an empty signal, the shape stroke bound, `geoshape` `pointRadius`, the `&quot;`
+text. Still open on the runtime side: a root `encode` with `x` / `y` (`vega/radar-chart`), an empty group mark's container
+(`vega/budget-forecasts`), `label` / `wordcloud` (their oracle needs a canvas: `vega/labeled-scatter-plot`, `vega/word-cloud`), the
+`crossfilter` transform, facet cell layout, the timer-driven `vega/donut-chart-labelled` on the React path, and the React-path-only
+differences (a `data-datum` attribute on every item of a chart with event streams, among them `vega/force-directed-layout`).
+
 ## Numbers
 
 | path | grammar | pass | fail | error | unverifiable | total |
