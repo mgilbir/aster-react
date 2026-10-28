@@ -98,6 +98,7 @@ vl/bar_array_aggregate
 vl/bar_axis_orient
 vl/bar_axis_space_saving
 vl/bar_axis_title_quoted
+vl/bar_color_disabled_scale
 vl/bar_column_fold
 vl/bar_column_pivot
 vl/bar_conditional_opacity
@@ -214,6 +215,7 @@ vl/concat_marginal_histograms
 vl/concat_population_pyramid
 vl/concat_weather
 vl/config_numberFormatType_test
+vl/config_numberFormatType_tooltip
 vl/connected_scatterplot
 vl/dynamic_color_legend
 vl/embedded_csv
@@ -223,6 +225,7 @@ vl/errorbar_horizontal_aggregate
 vl/errorbar_tooltip
 vl/facet_custom
 vl/facet_custom_header
+vl/facet_grid_bar
 vl/geo_circle
 vl/geo_constant_value
 vl/geo_custom_projection
@@ -271,6 +274,8 @@ vl/interactive_paintbrush
 vl/interactive_paintbrush_color
 vl/interactive_paintbrush_color_nearest
 vl/interactive_paintbrush_interval
+vl/interactive_paintbrush_simple_false
+vl/interactive_paintbrush_simple_true
 vl/interactive_panzoom_splom
 vl/interactive_point_init
 vl/interactive_query_widgets
@@ -336,14 +341,21 @@ vl/line_color
 vl/line_color_binned
 vl/line_color_label
 vl/line_color_with_scale_domain
+vl/line_concat_facet
 vl/line_conditional_axis
 vl/line_conditional_axis_config
+vl/line_dashed_part
 vl/line_default_format
 vl/line_detail
 vl/line_domainminmax
+vl/line_encoding_impute_keyvals
+vl/line_encoding_impute_keyvals_sequence
+vl/line_impute_frame
 vl/line_impute_keyvals
+vl/line_impute_method
 vl/line_impute_transform_frame
 vl/line_impute_transform_value
+vl/line_impute_value
 vl/line_inside_domain_using_clip
 vl/line_inside_domain_using_transform
 vl/line_invalid_null
@@ -372,9 +384,11 @@ vl/line_skip_invalid_mid_overlay
 vl/line_slope
 vl/line_sort_axis
 vl/line_step
+vl/line_strokedash
 vl/line_timeunit_transform
 vl/lookup
 vl/param_expr
+vl/param_search_input
 vl/point_1d
 vl/point_1d_array
 vl/point_2d
@@ -418,6 +432,8 @@ vl/rect_heatmap_weather
 vl/rect_heatmap_weather_temporal_center_band
 vl/rect_heatmap_weather_temporal_center_band_config
 vl/rect_lasagna
+vl/rect_mosaic_labelled
+vl/rect_mosaic_labelled_with_offset
 vl/rect_mosaic_simple
 vl/repeat_child_layer
 vl/repeat_histogram
@@ -479,6 +495,8 @@ vl/selection_zoom_brush_shift-wheel
 vl/selection_zoom_brush_wheel
 vl/selection_zoom_scatterplot_shift-wheel
 vl/selection_zoom_scatterplot_wheel
+vl/sequence_line
+vl/sequence_line_fold
 vl/square
 vl/stacked_area
 vl/stacked_area_binned
@@ -507,6 +525,7 @@ vl/stacked_bar_unaggregate
 vl/stacked_bar_v
 vl/stacked_bar_v_ascending
 vl/stacked_bar_weather
+vl/stocks-2009-layered-line-point
 vl/test_aggregate_nested
 vl/test_field_with_spaces
 vl/test_invalid_break_paths_show_path_domains
@@ -566,6 +585,7 @@ vl/trellis_scatter
 vl/trellis_scatter_binned_row
 vl/trellis_scatter_small
 vl/trellis_stacked_bar
+vl/vconcat_flatten
 vl/vconcat_weather
 vl/waterfall_chart
 vl/window_cumulative_running_average
