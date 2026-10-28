@@ -78,7 +78,10 @@ import { fileURLToPath } from 'node:url'
 // The @aster/vl compiler ports vega-lite's layout-size, band/bin/time-unit position, path-overlay, stack-order, resolve and
 // legend-merge rules (gallery conformance): Chart + VL 257.6 (+7.7: the binned discrete fields and the layered axis merge came last).
 // Nothing outside the VL row moved.
-// The dataflow-failure containment (a throwing dataset stops the pass like vega's): SvgChart 154.4 (+0.1 over the budget before it).
+// The dataflow-failure containment (a throwing dataset stops the pass like vega's): SvgChart +0.1.
+// Merged with the add-on auto-load and the gallery runtime work (#38, #39), measured (kB gzip): Chart + VL 261.5 (253.5 there, plus the
+// compiler rules above: +8.0); every other row is within its budget: core 135.5, useChart 142.3, Chart 178.4, SvgChart 159.9, SvgChart +
+// interaction 173.4.
 const BUDGETS = {
   '@aster/core': 135.8 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
@@ -94,7 +97,7 @@ const BUDGETS = {
   '@aster/react SvgChart': 160.2 * 1024,
   '@aster/react SvgChart + interaction': 173.7 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 254.0 * 1024,
+  '@aster/react Chart + VL': 262.0 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
