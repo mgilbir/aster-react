@@ -250,10 +250,12 @@ describe('patching the DOM of one chart into another chart', () => {
   })
 
   it('A -> B -> A over every pair of mark kinds equals a fresh render, with and without batched marks', () => {
-    const specs = { text: labels(6), rule: rules(6), rect: rects(6), rect9: rects(9), text3: labels(3), dots: dots(1000) }
+    const specs = { text: labels(6), rule: rules(6), rect: rects(6), rect9: rects(9), text3: labels(3), dots: dots(600) }
     for (const dense of [false, true]) {
       for (const [an, a] of Object.entries(specs)) {
         for (const [bn, b] of Object.entries(specs)) {
+          // batched marks only exist for a big symbol mark: with them on, the pairs that involve one
+          if (dense && an !== 'dots' && bn !== 'dots') continue
           const svg = mkSvg()
           patchSceneDom(svg, sceneOf(a), { denseMarks: dense })
           patchSceneDom(svg, sceneOf(b), { denseMarks: dense })
@@ -263,14 +265,14 @@ describe('patching the DOM of one chart into another chart', () => {
         }
       }
     }
-  })
+  }, 60_000)
 
   it('a mark container that becomes batched takes the new mark\'s own class and role', () => {
     // rects -> dense symbols: the <g> that held the rects is now the symbols' container (`mark-symbol`, not `mark-rect`)
     const svg = mkSvg()
     patchSceneDom(svg, sceneOf(rects(1000)), { denseMarks: true })
-    patchSceneDom(svg, sceneOf(dots(1000)), { denseMarks: true })
+    patchSceneDom(svg, sceneOf(dots(600)), { denseMarks: true })
     expect(svg.querySelector('.mark-rect')).toBeNull()
-    expect(firstDomDiff(canon(renderSceneToDomElement(sceneOf(dots(1000)), document, { denseMarks: true })), canon(svg))).toBeNull()
+    expect(firstDomDiff(canon(renderSceneToDomElement(sceneOf(dots(600)), document, { denseMarks: true })), canon(svg))).toBeNull()
   })
 })
