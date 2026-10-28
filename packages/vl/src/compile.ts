@@ -1609,12 +1609,15 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const facetFrom = (groupby: string[]): Record<string, unknown> => {
     const sorts = [rowSort, colSort, wrapSort].filter((x): x is FacetSortInfo => x !== undefined && x.facetAgg !== undefined)
     const cross = !!rowFd && !!colFd
+    // (facet.ts assembleFacet: the cardinality of each independent step-sized scale first, then the sort fields)
+    const cards = indepScales.filter((i) => i.distinct !== undefined)
+    const aggFields = [...cards.map((i) => i.field!), ...sorts.map((x) => x.facetAgg!.field)]
     return {
       name: 'facet',
       data: baseName,
       groupby,
-      ...(cross || sorts.length
-        ? { aggregate: { ...(cross ? { cross: true } : {}), ...(sorts.length ? { fields: sorts.map((x) => x.facetAgg!.field), ops: sorts.map((x) => x.facetAgg!.op), as: sorts.map((x) => x.facetAgg!.as) } : {}) } }
+      ...(cross || aggFields.length
+        ? { aggregate: { ...(cross ? { cross: true } : {}), ...(aggFields.length ? { fields: aggFields, ops: [...cards.map(() => 'distinct'), ...sorts.map((x) => x.facetAgg!.op)], as: [...cards.map((i) => i.distinct!), ...sorts.map((x) => x.facetAgg!.as)] } : {}) } }
         : {}),
     }
   }
@@ -1627,14 +1630,50 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   for (const sg of innerSignals) {
     if (sg.name !== 'width' && sg.name !== 'height') sizeSigMap.set(sg.name as string, sg.name as string)
   }
+  // --- independent position scales (resolve.scale.x / y: independent; compile/facet.ts, layoutsize/assemble.ts, model.ts getSizeSignalRef) ---
+  // The channel's scale lives in each cell (`child_x`), over the cell's own data; its axis is the cell's, not the header's. A discrete
+  // scale sized by a step makes the cell as wide as its own cardinality: the facet counts the distinct values of the scale's field
+  // (`distinct_age`), and the cell and the header read the count to size themselves.
+  const resolveScaleF = isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).scale) ? ((spec.resolve as Record<string, unknown>).scale as Record<string, unknown>) : {}
+  interface IndepScale { ch: 'x' | 'y'; field?: string; sizeExpr?: string; distinct?: string }
+  const indepScales: IndepScale[] = []
+  for (const ch of ['x', 'y'] as const) {
+    if (resolveScaleF[ch] !== 'independent') continue
+    const sc = ((inner.scales as ScaleSpec[]) ?? []).find((x) => x.name === ch)
+    if (!sc) continue
+    const entry: IndepScale = { ch }
+    if ((sc.type === 'band' || sc.type === 'point') && isObject(sc.range) && 'step' in sc.range) {
+      const dom = sc.domain as { field?: unknown; fields?: unknown }
+      const first = typeof dom?.field === 'string' ? dom.field : Array.isArray(dom?.fields) ? (dom.fields as unknown[]).map((f) => (isObject(f) ? f.field : f)).find((f) => typeof f === 'string') : undefined
+      if (typeof first !== 'string') throw new VLCompileError(`an independent ${ch} scale needs a field to count the cells' sizes from`)
+      const num = (v: unknown): string => (isObject(v) && typeof v.signal === 'string' ? v.signal : String(v))
+      const padding = sc.padding as unknown
+      const paddingOuter = (sc.paddingOuter as unknown) ?? padding
+      const paddingInner = sc.type === 'band' ? ((sc.paddingInner as unknown) ?? padding) : 1
+      entry.field = first
+      entry.distinct = `distinct_${first}`
+      entry.sizeExpr = `bandspace(datum[${JSON.stringify(entry.distinct)}], ${num(paddingInner)}, ${num(paddingOuter)}) * child_${ch}_step`
+      sizeSigMap.set(`${ch}_step`, `child_${ch}_step`)
+    }
+    indepScales.push(entry)
+  }
+  const indepOf = (ch: 'x' | 'y'): IndepScale | undefined => indepScales.find((i) => i.ch === ch)
+  if (wrapDef && indepScales.length) throw new VLCompileError('an independent x / y scale in a wrapped facet (a single `facet` field) is not supported yet; give a row and / or a column')
   const facetChildSignals: Record<string, unknown>[] = []
   for (const sg of innerSignals) {
+    // (a step-sized independent scale has no view size of its own: the cells are sized by their cardinality)
+    if ((sg.name === 'width' && indepOf('x')?.sizeExpr) || (sg.name === 'height' && indepOf('y')?.sizeExpr)) continue
     facetChildSignals.push({ ...sg, name: sizeSigMap.get(sg.name as string) ?? sg.name })
   }
   const hasSig = (n: string): boolean => facetChildSignals.some((x) => x.name === n)
-  if (!hasSig('child_width')) facetChildSignals.push({ name: 'child_width', value: typeof inner.width === 'number' ? inner.width : 300 })
-  if (!hasSig('child_height')) facetChildSignals.push({ name: 'child_height', value: typeof inner.height === 'number' ? inner.height : 300 })
-  const renames = { signals: sizeSigMap, scales: new Map<string, string>() }
+  if (!hasSig('child_width') && !indepOf('x')?.sizeExpr) facetChildSignals.push({ name: 'child_width', value: typeof inner.width === 'number' ? inner.width : 300 })
+  if (!hasSig('child_height') && !indepOf('y')?.sizeExpr) facetChildSignals.push({ name: 'child_height', value: typeof inner.height === 'number' ? inner.height : 300 })
+  // (layoutsize/assemble.ts assembleLayoutSignals: the width's signals, then the height's)
+  if (indepScales.length) {
+    const rank = (n: unknown): number => (n === 'child_width' || n === 'child_x_step' || n === 'x_step' ? 0 : n === 'child_height' || n === 'child_y_step' || n === 'y_step' ? 1 : 2)
+    facetChildSignals.sort((a, b) => rank(a.name) - rank(b.name))
+  }
+  const renames = { signals: sizeSigMap, scales: new Map<string, string>(indepScales.map((i) => [i.ch, `child_${i.ch}`] as [string, string])) }
   if (innerSel) renameFragment(innerSel.unit, renames)
   renameFragment(inner.scales, renames)
   renameFragment(inner.axes ?? [], renames)
@@ -1643,14 +1682,30 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   renameFragment(facetChildSignals, renames)
 
   // split the inner axes: grid axes stay in the cell, label axes move to the
-  // row header (y) / column footer (x)
+  // row header (y) / column footer (x) - an independent scale's stay in the cell, after the grids
   const gridAxes: Record<string, unknown>[] = []
   const yLabelAxes: Record<string, unknown>[] = []
   const xLabelAxes: Record<string, unknown>[] = []
+  const ownAxes: Record<string, unknown>[] = []
   for (const a of (inner.axes ?? []) as Record<string, unknown>[]) {
+    const indepAxis = indepScales.some((i) => a.scale === `child_${i.ch}`)
     if (a.grid === true) gridAxes.push(a)
+    else if (indepAxis) ownAxes.push(a)
     else if (a.orient === 'left' || a.orient === 'right') yLabelAxes.push(a)
     else xLabelAxes.push(a)
+  }
+  pushAll(gridAxes, ownAxes)
+  // axis/assemble.ts assembleAxisSignals: an axis with no grid scale (an x axis over a view with no y scale) draws its grid with the
+  // group's own `height` / `width`, which the cell defines as the child's size
+  const cellAxisSignals: Record<string, unknown>[] = []
+  const hasInnerScale = (ch: 'x' | 'y'): boolean => ((inner.scales as ScaleSpec[]) ?? []).some((sc) => sc.name === ch)
+  for (const a of (inner.axes ?? []) as Record<string, unknown>[]) {
+    const horizontal = a.orient === 'bottom' || a.orient === 'top'
+    // (the axis component has a grid scale whenever the other channel has a scale)
+    if (hasInnerScale(horizontal ? 'y' : 'x')) continue
+    const name = horizontal ? 'height' : 'width'
+    const update = horizontal ? (indepOf('y')?.sizeExpr ? undefined : 'child_height') : (indepOf('x')?.sizeExpr ? undefined : 'child_width')
+    if (update !== undefined && !cellAxisSignals.some((x) => x.name === name)) cellAxisSignals.push({ name, update })
   }
 
   // child marks read the per-cell datasets
@@ -1678,6 +1733,23 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const childMarks = (inner.marks as Record<string, unknown>[]).map(remapFrom).map(prefixNames)
   // resolve.ts defaultScaleResolve: a facet shares every scale but theta, which each cell owns (`child_theta`, over the cell's data)
   const cellScales: Record<string, unknown>[] = []
+  {
+    // the data of a scale's domain is the cell's: the facet's partition, or the dataset the cell derives from it
+    const mapDomain = (dom: unknown): unknown => {
+      if (!isObject(dom)) return dom
+      const out: Record<string, unknown> = { ...dom }
+      if (typeof out.data === 'string') out.data = cellMap.get(out.data) ?? 'facet'
+      if (Array.isArray(out.fields)) out.fields = out.fields.map((f) => (isObject(f) && typeof f.data === 'string' ? { ...f, data: cellMap.get(f.data) ?? 'facet' } : f))
+      return out
+    }
+    const innerScalesAll = (inner.scales as ScaleSpec[]) ?? []
+    for (const i of indepScales) {
+      const at = innerScalesAll.findIndex((sc) => sc.name === i.ch)
+      if (at < 0) continue
+      const sc = innerScalesAll.splice(at, 1)[0]!
+      cellScales.push({ ...sc, name: `child_${i.ch}`, domain: mapDomain(sc.domain) })
+    }
+  }
   {
     const innerScales = (inner.scales as ScaleSpec[]) ?? []
     const at = innerScales.findIndex((sc) => sc.name === 'theta')
@@ -1770,7 +1842,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
         from: { facet: facetFrom(colsOf(wrapFd, wrapField)) },
         sort: { field: [datumRef(wrapSort?.cellField ?? wrapField)], order: [wrapOrder] },
         encode: { update: { width: { signal: 'child_width' }, height: { signal: 'child_height' }, ...cellView } },
-        ...(innerSel ? { signals: assembleFacetSignals(cellName, [...innerSel.unit]) } : {}),
+        ...(innerSel ? { signals: assembleFacetSignals(cellName, [...cellAxisSignals, ...innerSel.unit]) } : cellAxisSignals.length ? { signals: cellAxisSignals } : {}),
         ...(cellData.length ? { data: cellData } : {}),
         ...(gridAxes.length ? { axes: gridAxes } : {}),
         ...(cellScales.length ? { scales: cellScales } : {}),
@@ -1887,8 +1959,8 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   }
 
   const channels: Array<{ ch: 'row' | 'column'; def?: Record<string, unknown>; fd?: FieldDef | null; field?: string; domain: string; order: string; axes: Record<string, unknown>[]; size: string }> = [
-    { ch: 'row', def: rowDef, fd: rowFd, field: rowField, domain: rowDomainName, order: rowOrder, axes: yLabelAxes, size: 'child_height' },
-    { ch: 'column', def: colDef, fd: colFd, field: colField, domain: columnDomainName, order: colOrder, axes: xLabelAxes, size: 'child_width' },
+    { ch: 'row', def: rowDef, fd: rowFd, field: rowField, domain: rowDomainName, order: rowOrder, axes: yLabelAxes, size: indepOf('y')?.sizeExpr ?? 'child_height' },
+    { ch: 'column', def: colDef, fd: colFd, field: colField, domain: columnDomainName, order: colOrder, axes: xLabelAxes, size: indepOf('x')?.sizeExpr ?? 'child_width' },
   ]
   const marks: Record<string, unknown>[] = []
   // title groups first (row, then column), then the header/footer groups per channel
@@ -1933,8 +2005,8 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     style: cellStyle,
     from: { facet: facetFrom(facetGroupby) },
     sort: { field: [rowSort?.cellField ?? rowField, colSort?.cellField ?? colField].filter(Boolean).map((f) => datumRef(f as string)), order: facetSortFields.map((_, i) => (i === 0 && rowField ? rowOrder : colOrder)) },
-    encode: { update: { width: { signal: 'child_width' }, height: { signal: 'child_height' }, ...cellView } },
-    ...(innerSel ? { signals: assembleFacetSignals(cellName, [...innerSel.unit]) } : {}),
+    encode: { update: { width: { signal: indepOf('x')?.sizeExpr ?? 'child_width' }, height: { signal: indepOf('y')?.sizeExpr ?? 'child_height' }, ...cellView } },
+    ...(innerSel ? { signals: assembleFacetSignals(cellName, [...cellAxisSignals, ...innerSel.unit]) } : cellAxisSignals.length ? { signals: cellAxisSignals } : {}),
     ...(cellData.length ? { data: cellData } : {}),
     ...(gridAxes.length ? { axes: gridAxes } : {}),
     ...(cellScales.length ? { scales: cellScales } : {}),
@@ -1947,8 +2019,29 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // every facet reference (cell groupby, domain, stack series, header label)
   // keys on the aggregated name, which the pipeline never computes, so the
   // facet collapses to a single (undefined) group exactly like upstream
-  if (colField) data.push({ name: columnDomainName, source: baseName, transform: [{ type: 'aggregate', groupby: colsOf(colFd, colField), ...domainAggregate(colSort) }] })
-  if (rowField) data.push({ name: rowDomainName, source: baseName, transform: [{ type: 'aggregate', groupby: colsOf(rowFd, rowField), ...domainAggregate(rowSort) }] })
+  // (data/facet.ts assemble: a row x column facet with independent step-sized scales counts the cardinalities per cell, in a crossed dataset)
+  const stepped = indepScales.filter((i) => i.distinct !== undefined)
+  const crossedName = rowFd && colFd && stepped.length ? `cross_${columnDomainName}_${rowDomainName}` : undefined
+  if (crossedName) {
+    const cf = [...stepped.filter((i) => i.ch === 'x'), ...stepped.filter((i) => i.ch === 'y')].map((i) => i.field!)
+    data.push({ name: crossedName, source: baseName, transform: [{ type: 'aggregate', groupby: [...colsOf(rowFd, rowField), ...colsOf(colFd, colField)], fields: cf, ops: cf.map(() => 'distinct') }] })
+  }
+  /** assembleRowColumnHeaderData: the cardinality of the independent scale along the channel, then the sort field */
+  const headerAggregate = (child: 'x' | 'y', sort: FacetSortInfo | undefined): Record<string, unknown> => {
+    const i = indepOf(child)
+    const cardF: string[] = []
+    const cardO: string[] = []
+    const cardA: string[] = []
+    if (i?.distinct !== undefined) {
+      cardF.push(crossedName ? i.distinct : i.field!)
+      cardO.push(crossedName ? 'max' : 'distinct')
+      cardA.push(i.distinct)
+    }
+    const f = [...cardF, ...(sort ? sort.domainFields : [])]
+    return f.length ? { fields: f, ops: [...cardO, ...(sort ? sort.domainOps : [])], as: [...cardA, ...(sort ? sort.domainAs : [])] } : {}
+  }
+  if (colField) data.push({ name: columnDomainName, source: crossedName ?? baseName, transform: [{ type: 'aggregate', groupby: colsOf(colFd, colField), ...headerAggregate('x', colSort) }] })
+  if (rowField) data.push({ name: rowDomainName, source: crossedName ?? baseName, transform: [{ type: 'aggregate', groupby: colsOf(rowFd, rowField), ...headerAggregate('y', rowSort) }] })
 
   const out: Record<string, unknown> = {}
   if (spec.$schema) out.$schema = VEGA_SCHEMA
@@ -1977,7 +2070,9 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     return r !== undefined || c !== undefined ? { ...(r !== undefined ? { row: r } : {}), ...(c !== undefined ? { column: c } : {}) } : undefined
   }
   const layoutSpacing = spec.spacing ?? (rowSpacing != null || colSpacing != null ? { row: rowSpacing ?? 20, column: colSpacing ?? 20 } : 20)
-  const layoutAlign = spec.align ?? (perChannel('align') ? { row: rowDef?.align ?? 'all', column: colDef?.align ?? 'all' } : 'all')
+  // (facet.ts assembleDefaultLayout: cells are not aligned along a direction whose scale is independent, unless both row and column are given)
+  const defaultAlign = !rowFd && indepOf('x') ? 'none' : !colFd && indepOf('y') ? 'none' : 'all'
+  const layoutAlign = spec.align ?? (perChannel('align') ? { row: rowDef?.align ?? 'all', column: colDef?.align ?? 'all' } : defaultAlign)
   const layoutCenter = spec.center ?? (perChannel('center') ? { row: rowDef?.center ?? false, column: colDef?.center ?? false } : undefined)
   const titleOffsets: Record<string, number> = {
     ...(rowField && hasTitle({ def: rowDef }) ? { rowTitle: 10 } : {}),

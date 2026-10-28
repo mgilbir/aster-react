@@ -763,7 +763,13 @@ function validateResolve(r: unknown, path: string, kind: Kind, facetedUnit = fal
   if (kind === 'facet' || facetedUnit) {
     for (const what of ['scale', 'axis', 'legend'] as const) {
       const m = r[what]
-      if (isObj(m)) for (const [ch, v] of Object.entries(m)) if (v === 'independent') fail(`${path}.${what}.${ch}`, 'an independent resolution inside a facet (per-cell scales, axes and legends sized by their cardinality) is not supported yet')
+      if (!isObj(m)) continue
+      for (const [ch, v] of Object.entries(m)) {
+        if (v !== 'independent') continue
+        // only independent x / y scales are laid out (each cell with its own scale and axes); a guide's own resolution is not
+        if (what === 'scale' && (ch === 'x' || ch === 'y')) continue
+        fail(`${path}.${what}.${ch}`, `an independent ${what} resolution of ${ch} inside a facet is not supported yet (independent x and y scales are)`)
+      }
     }
   }
 }

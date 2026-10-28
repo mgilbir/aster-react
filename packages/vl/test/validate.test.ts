@@ -133,8 +133,9 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['resolve on a unit', unit({ resolve: { scale: { y: 'independent' } } }), /no meaning on a single unit/],
   ['a wrapped faceted unit nested in a concat', { data: DATA, hconcat: [unit(), unit({ encoding: { x: xq, y: yq, facet: { ...cn, columns: 2 } } })] }, /wrapped facet.*nested in another composition/],
   ['a wrapped facet operator nested in a concat', { data: DATA, vconcat: [unit(), { facet: cn, spec: unit() }] }, /wrapped facet.*nested in another composition/],
-  ['an independent scale in a facet', { data: DATA, facet: { row: cn }, spec: unit(), resolve: { scale: { y: 'independent' } } }, /independent resolution inside a facet/],
-  ['an independent axis in a faceted unit', unit({ encoding: { x: xq, y: yq, column: cn }, resolve: { axis: { x: 'independent' } } }), /independent resolution inside a facet/],
+  ['an independent colour scale in a facet', { data: DATA, facet: { row: cn }, spec: unit(), resolve: { scale: { color: 'independent' } } }, /independent scale resolution of color inside a facet/],
+  ['an independent axis in a faceted unit', unit({ encoding: { x: xq, y: yq, column: cn }, resolve: { axis: { x: 'independent' } } }), /independent axis resolution of x inside a facet/],
+  ['an independent x scale in a wrapped facet', { data: DATA, facet: cn, spec: unit({ encoding: { x: cn, y: yq } }), resolve: { scale: { x: 'independent' } } }, /wrapped facet/],
 ]
 
 describe('validation layer: unsupported / invalid input throws a VLCompileError naming the feature', () => {

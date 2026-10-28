@@ -628,6 +628,24 @@ const GROUPS: Record<string, Case[]> = {
     ['a halo under coloured lines', { data: DATA, repeat: { layer: ['x', 'y'] }, spec: { layer: [{ mark: { type: 'line', stroke: 'white', strokeWidth: 4 }, encoding: { x: q('v'), y: { field: { repeat: 'layer' }, type: 'quantitative' } } }, { mark: 'line', encoding: { x: q('v'), y: { field: { repeat: 'layer' }, type: 'quantitative' }, stroke: { datum: { repeat: 'layer' }, type: 'nominal' } } }] } }],
     ['two datums in two layers share the scale', { data: DATA, layer: [{ mark: 'line', encoding: { x: q('x'), y: q('y'), stroke: { datum: 'A', type: 'nominal' } } }, { mark: 'line', encoding: { x: q('x'), y: q('v'), stroke: { datum: 'B', type: 'nominal' } } }] }],
   ],
+  // facet.ts getCardinalityAggregateForChild, model.ts getSizeSignalRef, layoutsize/assemble.ts, data/facet.ts: an independent x / y scale lives in
+  // each cell; a step-sized discrete one makes the cell as wide as its own cardinality (facet_independent_scale, facet_cross_independent_scale, facet_bullet)
+  'independent position scales in facets (facet_independent_scale, facet_cross_independent_scale, bar_grouped_facet_independent_scale, facet_bullet)': [
+    ['a column facet with an independent discrete x', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { column: n('g') }, spec: { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } } }],
+    ['a column facet with an independent discrete x and a step', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { column: n('g') }, spec: { width: { step: 17 }, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), color: n('g') } } }],
+    ['a column facet with an independent discrete x of fixed width', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { column: n('g') }, spec: { width: 100, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } } }],
+    ['a row facet with an independent discrete y', { data: DATA, resolve: { scale: { y: 'independent' } }, facet: { row: n('g') }, spec: { mark: 'bar', encoding: { y: n('c'), x: q('v', { aggregate: 'sum' }) } } }],
+    ['a row and column facet with independent x and y', { data: SPARSE, resolve: { scale: { x: 'independent', y: 'independent' } }, facet: { row: n('g'), column: n('c') }, spec: { mark: 'rect', encoding: { x: n('x'), y: n('v') } } }],
+    ['a row and column facet with only x independent', { data: SPARSE, resolve: { scale: { x: 'independent' } }, facet: { row: n('g'), column: n('c') }, spec: { mark: 'rect', encoding: { x: n('x'), y: n('v') } } }],
+    ['an independent point x scale', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { column: n('g') }, spec: { mark: 'point', encoding: { x: n('c'), y: q('v') } } }],
+    ['an independent continuous x', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { column: n('g') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['an independent continuous y in rows', { data: DATA, resolve: { scale: { y: 'independent' } }, facet: { row: n('g') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['an independent x with the header at the bottom', { data: DATA, resolve: { scale: { x: 'independent' } }, mark: 'bar', encoding: { column: n('g', { header: { orient: 'bottom' } }), x: n('c', { axis: null }), y: q('v', { aggregate: 'sum' }), color: n('c') } }],
+    ['an independent x over a layered spec', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { column: n('g') }, spec: { width: { step: 17 }, layer: [{ mark: 'line', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }, { mark: 'point', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }] } }],
+    ['independent continuous x over layers of bars (a bullet)', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { row: n('c') }, spacing: 10, spec: { encoding: { x: { type: 'quantitative', scale: { nice: false }, title: null } }, layer: [{ mark: { type: 'bar', color: '#eee' }, encoding: { x: { field: 'v' } } }, { mark: { type: 'bar', color: 'steelblue', size: 10 }, encoding: { x: { field: 'y' } } }, { mark: { type: 'tick', color: 'black' }, encoding: { x: { field: 'x' } } }] } }],
+    ['shared scales keep the header axes', { data: DATA, facet: { column: n('g') }, spec: { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } } }],
+    ['a facet whose cells have an x axis and no y scale', { data: DATA, facet: { row: n('g') }, spec: { mark: 'point', encoding: { x: q('x', { axis: { grid: true } }) } } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
@@ -824,5 +842,27 @@ describe('@aster/vl == vega-lite: input bindings', () => {
       expect(binds(ours)).toEqual(binds(oracle))
       await check(spec)
     }, 30_000)
+  }
+})
+
+// facet.ts assembleDefaultLayout + axis/assemble.ts assembleAxisSignals: cells are not aligned along an independent direction (unless both row and column
+// are given), and a cell whose axis has no grid scale gets the child's size as its own `width` / `height`
+describe('@aster/vl == vega-lite: the layout and the signals of a faceted cell', () => {
+  const cell = (vg: any): any => (vg.marks ?? []).find((m: any) => m.type === 'group' && m.style === 'cell' || m.name === 'cell')
+  const SPECS: Array<[string, Record<string, any>]> = [
+    ['a column facet with an independent x', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { column: n('g') }, spec: { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } } }],
+    ['a row facet with an independent y', { data: DATA, resolve: { scale: { y: 'independent' } }, facet: { row: n('g') }, spec: { mark: 'bar', encoding: { y: n('c'), x: q('v', { aggregate: 'sum' }) } } }],
+    ['a row facet with an independent x (still aligned)', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { row: n('g') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a row and column facet with independent scales', { data: SPARSE, resolve: { scale: { x: 'independent', y: 'independent' } }, facet: { row: n('g'), column: n('c') }, spec: { mark: 'rect', encoding: { x: n('x'), y: n('v') } } }],
+    ['cells with an x axis and no y scale', { data: DATA, facet: { row: n('g') }, spec: { mark: 'point', encoding: { x: q('x', { axis: { grid: true } }) } } }],
+    ['cells with a y axis and no x scale', { data: DATA, facet: { column: n('g') }, spec: { mark: 'point', encoding: { y: q('y', { axis: { grid: true } }) } } }],
+  ]
+  for (const [name, spec] of SPECS) {
+    it(name, () => {
+      const oracle = (vl as any).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      expect(plain(ours.layout?.align)).toEqual(plain(oracle.layout?.align))
+      expect(plain(cell(ours)?.signals ?? null)).toEqual(plain(cell(oracle)?.signals ?? null))
+    })
   }
 })

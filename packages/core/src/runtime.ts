@@ -4081,6 +4081,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
   if (src.facetName !== undefined) ctx.datasets.set(src.facetName, src.rows!)
   // the group's own datasets (vega: a group's `data`), derived in this item's scope
   const savedData: Array<[string, Row[] | undefined]> = []
+  // the scales this item declares are visible to the expressions of its content (`bandwidth('child_x')`), over the enclosing ones
+  let restoreScaleFns: (() => void) | undefined
   try {
     // this item's signal scope (its own signals, over the enclosing ones; a facet's `parent` is its datum)
     const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
@@ -4120,6 +4122,11 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     for (const sdef of mark.scales ?? []) {
       childScales.set(sdef.name, buildScale(sdef, scaleContext({ ...ctx, width: viewW, height: viewH }, sdef.name)))
       childTypes.set(sdef.name, sdef.type)
+    }
+    if (childScales.size) {
+      const outerScale = ctx.runtime.scale
+      ctx.runtime.scale = (n) => (childScales.get(n) as never) ?? outerScale(n)
+      restoreScaleFns = () => { ctx.runtime.scale = outerScale }
     }
     // vega builds the instances of nested scopes level by level: what an aborted pass did not reach is not made
     const path = [...ctx.scope.path, ctx.scope.nextChild.n++]
@@ -4207,6 +4214,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     }
     return group
   } finally {
+    restoreScaleFns?.()
     for (const [name, prev] of savedData.reverse()) {
       if (prev !== undefined) ctx.datasets.set(name, prev)
       else ctx.datasets.delete(name)
