@@ -421,6 +421,34 @@ const GROUPS: Record<string, Case[]> = {
     ['a faceted unit with a shared resolve (its resolve is the facet\'s)', { data: DATA, mark: 'point', resolve: { scale: { y: 'shared' }, axis: { x: 'shared' } }, encoding: { x: q('x'), y: q('v'), column: n('c') } }],
     ['a facet in the encoding sorted by an aggregate', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('v'), row: n('c', { sort: { op: 'sum', field: 'v' } }) } }],
   ],
+  // normalize/core.ts mergeEncoding: a layer's shared channel defs merge into the layers' (a def with no field is a partial one)
+  'shared layer encodings that merge into the layers (bar_layered_weather, layer_candlestick, layer_likert, stacked_bar_v_ascending)': [
+    ['a shared quantitative y with a scale and an axis, the fields in the layers', { data: DATA, encoding: { x: n('c'), y: { type: 'quantitative', scale: { domain: [0, 12] }, axis: { title: 'Value' } } }, layer: [{ mark: 'bar', encoding: { y: { field: 'v' }, y2: { field: 'y' } } }, { mark: 'point', encoding: { y: { field: 'v' } } }] }],
+    ['a shared x with a scale and no zero, the field in the layers', { data: DATA, encoding: { y: n('c'), x: { type: 'quantitative', scale: { zero: false }, title: 'X' } }, layer: [{ mark: 'point', encoding: { x: { field: 'x' } } }, { mark: 'point', encoding: { x: { field: 'v' } } }] }],
+    ['a partial shared channel that no layer completes', { data: DATA, encoding: { x: q('x'), y: { type: 'quantitative', axis: { title: 'Nothing' } } }, layer: [{ mark: 'rule', encoding: { y: { field: 'v' } } }, { mark: 'point' }] }],
+    ['a shared field def a layer overrides in part', { data: DATA, encoding: { x: q('x', { axis: { grid: false } }), y: q('y') }, layer: [{ mark: 'point' }, { mark: 'line', encoding: { y: { field: 'v' } } }] }],
+    ['a shared colour a layer replaces by a value', { data: DATA, encoding: { x: q('x'), y: q('y'), color: n('c') }, layer: [{ mark: 'point' }, { mark: 'line', encoding: { color: { value: 'black' } } }] }],
+    ['a shared colour a layer drops with null', { data: DATA, encoding: { x: q('x'), y: q('y'), color: n('c') }, layer: [{ mark: 'point' }, { mark: 'line', encoding: { color: null } }] }],
+    ['a nested layer whose parents both share a channel', { data: DATA, encoding: { x: q('x') }, layer: [{ encoding: { y: { type: 'quantitative', scale: { zero: false } } }, layer: [{ mark: 'point', encoding: { y: { field: 'v' } } }, { mark: 'line', encoding: { y: { field: 'y' } } }] }] }],
+    ['a stacked bar with an order that only gives the direction (ascending)', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), color: n('g'), order: { sort: 'ascending' } } }],
+    ['a stacked bar with an order that only gives the direction (descending)', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), color: n('g'), order: { sort: 'descending' } } }],
+    ['a horizontal stacked bar with an order that only gives the direction', { data: DATA, mark: 'bar', encoding: { y: n('c'), x: q('v', { aggregate: 'sum' }), color: n('g'), order: { sort: 'descending' } } }],
+    ['a shared partial order with a sort', { data: DATA, encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), order: { sort: 'ascending' } }, layer: [{ mark: 'bar', encoding: { color: n('g'), order: { field: 'g' } } }] }],
+    ['a shared partial channel under a concat', { data: DATA, vconcat: [{ encoding: { x: { type: 'quantitative', scale: { domain: [0, 8] }, axis: { title: 'T' } } }, layer: [{ mark: 'point', encoding: { x: { field: 'x' }, y: q('y') } }, { mark: 'rule', encoding: { x: { field: 'v' } } }] }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a shared partial channel under a facet', { data: DATA, facet: { column: n('g') }, spec: { encoding: { y: { type: 'quantitative', scale: { zero: false } } }, layer: [{ mark: 'point', encoding: { x: q('x'), y: { field: 'v' } } }, { mark: 'line', encoding: { x: q('x'), y: { field: 'y' } } }] } }],
+  ],
+  // position-point.ts pointPositionDefaultRef / valueref.ts widthHeightValueOrSignalRef: the mark def's x / y position a point-placed mark
+  'positions in the mark def (layer_likert, layer_bar_annotations, layer_bar_labels_grey, interactive_global_development)': [
+    ['a text at a mark-def x and y', { data: DATA, mark: { type: 'text', x: 40, y: 30, text: 'hello' } }],
+    ['a text at the right edge', { data: DATA, layer: [{ mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }, { mark: { type: 'text', align: 'right', baseline: 'bottom', dx: -2, dy: -2, x: 'width', text: 'edge' } }] }],
+    ['a text at the bottom edge', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: { type: 'text', y: 'height', baseline: 'bottom', x: 20, text: 'floor' } }] }],
+    ['texts at a mark-def x beside a y field', { data: DATA, layer: [{ mark: 'bar', encoding: { y: n('c'), x: q('v', { aggregate: 'sum' }) } }, { mark: { type: 'text', align: 'left', x: 5 }, encoding: { y: n('c'), text: n('c') } }] }],
+    ['texts at a mark-def y beside an x field', { data: DATA, layer: [{ mark: 'point', encoding: { x: n('c'), y: q('v') } }, { mark: { type: 'text', y: -5, align: 'center', baseline: 'bottom' }, encoding: { x: n('c'), text: n('c') } }] }],
+    ['a point at a mark-def y', { data: DATA, mark: { type: 'point', y: 100 }, encoding: { x: q('x') } }],
+    ['a circle at the mark-def x', { data: DATA, mark: { type: 'circle', x: 'width' }, encoding: { y: q('y') } }],
+    ['the encoding wins over the mark def', { data: DATA, mark: { type: 'point', x: 5 }, encoding: { x: q('x'), y: q('y') } }],
+    ['a large text at a mark-def position', { data: DATA, mark: { type: 'text', fontSize: 80, x: 150, y: 100, opacity: 0.06 }, encoding: { text: n('c') } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({

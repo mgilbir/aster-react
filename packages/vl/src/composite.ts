@@ -80,6 +80,26 @@ function orientAndInput(spec: Obj, composite: string): { orient: 'vertical' | 'h
   throw new VLCompileError(`${composite} has no ranged axis`)
 }
 
+/**
+ * vega-lite normalize/core.ts mergeEncoding (for a layer): a channel the unit defines as a field / datum def inherits the
+ * properties its layer gives it (`{...parent, ...child}`), a conditional one inherits into its condition, any other definition
+ * (a value, `null`) replaces it, and a channel only the layer defines is the layer's.
+ */
+export function mergeEncoding(parent: Obj, child: unknown): Obj {
+  const own: Obj = isObj(child) ? child : {}
+  const isFieldOrDatum = (d: unknown): d is Obj => isObj(d) && (!!d.field || d.aggregate === 'count' || 'datum' in d)
+  const out: Obj = {}
+  for (const channel of new Set([...Object.keys(parent), ...Object.keys(own)])) {
+    const c = own[channel]
+    const p = parent[channel]
+    if (isFieldOrDatum(c)) out[channel] = { ...(isObj(p) ? p : {}), ...c }
+    else if (isObj(c) && isFieldOrDatum(c.condition)) out[channel] = { ...c, condition: { ...(isObj(p) ? p : {}), ...c.condition } }
+    else if (c || c === null) out[channel] = c
+    else out[channel] = p
+  }
+  return out
+}
+
 const NON_POSITION_SCALE_CHANNELS = new Set(['color', 'fill', 'stroke', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'size', 'angle', 'shape'])
 
 /** Pull aggregate / time-unit out of the remaining channels into transforms (encoding.ts extractTransformsFromEncoding). */
@@ -577,12 +597,12 @@ export function normalizeComposites(node: unknown, userConfig: Obj | undefined, 
   }
   const kind = kindOf(node)
   if (kind) {
-    const spec = { ...node, encoding: withTypes({ ...inherited, ...(node.encoding ?? {}) }) }
+    const spec = { ...node, encoding: withTypes(mergeEncoding(inherited, node.encoding)) }
     if (kind === 'boxplot') return normalizeBoxPlot(spec, userConfig)
     return kind === 'errorbar' ? normalizeErrorBar(spec, config) : normalizeErrorBand(spec, config)
   }
   const out: Obj = { ...node }
-  if (node.layer !== undefined) out.layer = normalizeComposites(node.layer, userConfig, { ...inherited, ...(isObj(node.encoding) ? node.encoding : {}) })
+  if (node.layer !== undefined) out.layer = normalizeComposites(node.layer, userConfig, mergeEncoding(inherited, node.encoding))
   for (const k of ['hconcat', 'vconcat', 'concat']) if (node[k] !== undefined) out[k] = normalizeComposites(node[k], userConfig, {})
   if (node.spec !== undefined) out.spec = normalizeComposites(node.spec, userConfig, {})
   return out
@@ -636,7 +656,7 @@ export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit
   if (Array.isArray(node)) return node.map((n) => normalizePathOverlays(n, config, stackOf, inherited))
   if (!isObj(node)) return node
   if (node.layer !== undefined) {
-    const encoding = { ...inherited, ...(isObj(node.encoding) ? node.encoding : {}) }
+    const encoding = mergeEncoding(inherited, node.encoding)
     return { ...node, layer: (node.layer as unknown[]).map((c) => normalizePathOverlays(c, config, stackOf, encoding)) }
   }
   for (const k of ['hconcat', 'vconcat', 'concat']) {
@@ -659,7 +679,7 @@ export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit
   const { params, projection, mark, name, encoding: own, ...outer } = node
   const markDef: Obj = isObj(mark) ? mark : { type: mark }
   if (!OVERLAY_MARKS.has(markDef.type)) return node
-  const encoding: Obj = { ...inherited, ...(isObj(own) ? own : {}) }
+  const encoding: Obj = mergeEncoding(inherited, own)
   const markConfig: Obj = isObj(config[markDef.type]) ? config[markDef.type] : {}
   const pointOverlay = getPointOverlay(markDef, markConfig, encoding)
   const lineOverlay = markDef.type === 'area' ? getLineOverlay(markDef, markConfig) : undefined
@@ -720,7 +740,7 @@ export function alignStackOrders(node: unknown, stackOf: (unit: Obj) => StackPro
   if (Array.isArray(node)) return node.map((n) => alignStackOrders(n, stackOf, inherited))
   if (!isObj(node)) return node
   if (node.layer !== undefined) {
-    const encoding = { ...inherited, ...(isObj(node.encoding) ? node.encoding : {}) }
+    const encoding = mergeEncoding(inherited, node.encoding)
     return { ...node, layer: alignStackOrders(node.layer, stackOf, encoding) }
   }
   for (const k of ['hconcat', 'vconcat', 'concat']) if (node[k] !== undefined) return { ...node, [k]: alignStackOrders(node[k], stackOf, {}) }
@@ -728,7 +748,7 @@ export function alignStackOrders(node: unknown, stackOf: (unit: Obj) => StackPro
   if (node.mark === undefined) return node
 
   const own: Obj = isObj(node.encoding) ? node.encoding : {}
-  const encoding: Obj = { ...inherited, ...own }
+  const encoding: Obj = mergeEncoding(inherited, own)
   if (encoding.order) return node
   const colorField = encoding.fill ?? encoding.color
   if (!isObj(colorField) || typeof colorField.field !== 'string') return node

@@ -774,6 +774,9 @@ function validateViewBackground(view: unknown, kind: string, at: string): void {
   }
 }
 
+/** The marks pointPosition places (position-point.ts): the mark def's x / y stand for a missing channel. */
+const POINT_POSITIONED_MARKS = set('point circle square text')
+
 function validateMark(mark: unknown, at: string): string {
   let def: Obj
   if (typeof mark === 'string') def = { type: mark }
@@ -787,6 +790,12 @@ function validateMark(mark: unknown, at: string): string {
     for (const k of Object.keys(def)) {
       if (!MARK_DEF_KEYS.has(k)) fail(`${at}.${k}`, `unknown mark property "${k}"`)
       const why = UNSUPPORTED_MARK_KEYS[k]
+      // a point-positioned mark takes its x / y from the mark def: a number, or the view's `width` / `height` (valueref.ts widthHeightValueOrSignalRef)
+      if (why && (k === 'x' || k === 'y') && POINT_POSITIONED_MARKS.has(type)) {
+        const edge = k === 'x' ? 'width' : 'height'
+        if (typeof def[k] !== 'number' && def[k] !== edge) mustBe(`${at}.${k}`, `a number or "${edge}" (an expression or signal is not supported)`)
+        continue
+      }
       if (why) fail(`${at}.${k}`, why)
       if (k === 'order' && def.order !== false && def.order !== null && def.order !== true) fail(`${at}.order`, 'only order: false/null/true is supported')
     }
@@ -894,17 +903,17 @@ function validateEncoding(enc: unknown, path: string, where: 'unit' | 'layer', m
         continue
       }
     } else if (Array.isArray(def)) fail(at, `channel "${ch}" does not accept an array of definitions`)
-    validateChannelDef(ch, def, at)
+    validateChannelDef(ch, def, at, where === 'layer')
   }
 }
 
-function validateChannelDef(ch: string, def: unknown, at: string): void {
+function validateChannelDef(ch: string, def: unknown, at: string, shared = false): void {
   if (!isObj(def)) fail(at, 'a channel definition must be an object')
   keysOf(def, ch === 'row' || ch === 'column' || ch === 'facet' ? FACET_CHANNEL_DEF_KEYS : FIELD_DEF_KEYS, at, 'channel definition')
   if (def.value !== undefined && (def.field !== undefined || def.datum !== undefined)) fail(at, '`value` cannot be combined with `field`/`datum`')
   if (def.field !== undefined && def.datum !== undefined) fail(at, '`field` and `datum` cannot be combined')
   if (def.field !== undefined) checkFieldName(def.field, `${at}.field`)
-  if (def.field === undefined && def.value === undefined && def.datum === undefined && def.aggregate !== 'count' && def.condition === undefined && def.expr === undefined) {
+  if (def.field === undefined && def.value === undefined && def.datum === undefined && def.aggregate !== 'count' && def.condition === undefined && def.expr === undefined && !shared && !(ch === 'order' && def.sort !== undefined)) {
     fail(at, 'a channel definition needs `field`, `value`, `datum` or `aggregate: "count"`')
   }
   if (def.type !== undefined && !['quantitative', 'ordinal', 'nominal', 'temporal', 'geojson'].includes(def.type as string)) {

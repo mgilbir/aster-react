@@ -16,7 +16,7 @@ import {
   assembleFacetSignals, assembleUnitSelectionMarks, assembleUnitSelectionSignals, interactiveLegendSelections, parseUnitSelections, requiresSelectionId, selectionPredicate,
   stringValue, varName, type ParamPredicate, type SelCmpt, type SelUnit, type TimeUnitProjection,
 } from './selection.js'
-import { alignStackOrders, normalizeComposites, normalizePathOverlays } from './composite.js'
+import { alignStackOrders, mergeEncoding, normalizeComposites, normalizePathOverlays } from './composite.js'
 import { timeScaleRange } from './animation.js'
 import { isTimerSelection } from './selection.js'
 import { ASSEMBLED_FROM, GEO_POSITION_CHANNELS, assembleProjection, finalProjectionName, geoDataTransforms, geoshapeTransform, hasProjection, mergeLayerProjections, parseUnitProjection, renameComponentSignals, type GeoUnit, type ProjectionComponent, type UnitGeo } from './geo.js'
@@ -457,7 +457,7 @@ function collectLeaves(root: VLSpec): VLSpec[] {
       transform = []
     }
     if (Array.isArray(node.transform)) pushAll(transform, node.transform as Record<string, unknown>[])
-    const encoding = { ...inh.encoding, ...(isObject(node.encoding) ? (node.encoding as Record<string, unknown>) : {}) }
+    const encoding = mergeEncoding(inh.encoding, node.encoding)
     if (Array.isArray(node.layer)) {
       const projection = node.projection !== undefined ? node.projection : inh.projection
       ;(node.layer as VLSpec[]).forEach((c, i) => visit(c, { encoding, data, transform, projection }, [...path, i]))
@@ -2923,12 +2923,14 @@ function stackByFields(fields: FieldDef[], dimensionChannel: 'x' | 'y'): FieldDe
 }
 
 /** vega-lite's stack sort: the `order` channel when present, else the stack-by fields (descending for y, ascending otherwise). */
-function stackSortParams(fields: FieldDef[], stackBy: FieldDef[], measureChannel: string): { field: string[]; order: string[] } {
+function stackSortParams(fields: FieldDef[], stackBy: FieldDef[], measureChannel: string, enc: Record<string, unknown> = {}): { field: string[]; order: string[] } {
   const orderDefs = fields.filter((f) => f.channel === 'order' && f.field && !f.datumOnly)
   if (orderDefs.length) {
     return { field: orderDefs.map((f) => aggFieldName(f)), order: orderDefs.map((f) => (f.sort === 'descending' ? 'descending' : 'ascending')) }
   }
-  const dflt = measureChannel === 'y' ? 'descending' : 'ascending'
+  // (stack.ts isOrderOnlyDef: an `order` def with only a `sort` gives the direction of the default stack order)
+  const orderOnly = isObject(enc.order) && enc.order.field === undefined && (enc.order.sort === 'ascending' || enc.order.sort === 'descending') ? enc.order.sort : undefined
+  const dflt = orderOnly ?? (measureChannel === 'y' ? 'descending' : 'ascending')
   const seen = new Set<string>()
   const names = stackBy.map((f) => aggFieldName(f)).filter((n) => (seen.has(n) ? false : (seen.add(n), true)))
   return { field: names, order: names.map(() => dflt) }
@@ -3386,7 +3388,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
         field: thetaDef.field,
         // (stack.ts: the order channel sorts the stack, else the stack-by fields)
         sort: fields.some((f) => f.channel === 'order' && f.field && !f.datumOnly)
-          ? stackSortParams(fields, [], 'x')
+          ? stackSortParams(fields, [], 'x', isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {})
           : colorF ? { field: [aggFieldName(colorF)], order: ['ascending'] } : { field: [], order: [] },
         as: [`${thetaDef.field}_start`, `${thetaDef.field}_end`],
         offset: thetaDef.stack === 'normalize' ? 'normalize' : 'zero',
@@ -3445,7 +3447,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
       type: 'stack',
       groupby: [stackDim, ...fields.filter((f) => f.channel === (dimensionChannel === 'x' ? 'xOffset' : 'yOffset')).map((f) => aggFieldName(f))].filter(Boolean),
       field: stackField,
-      sort: stackSortParams(fields, seriesFields, measureChannel),
+      sort: stackSortParams(fields, seriesFields, measureChannel, isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}),
       as: [`${stackField}_start`, `${stackField}_end`],
       offset: measureStackOffset(m),
     })
@@ -5708,6 +5710,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   // (a map unit's positions come from its geopoint output, never from a default)
   if (!GEO_UNITS.has(spec)) {
     const md0 = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+    // position-point.ts pointPositionDefaultRef: the mark def's x / y position a point-placed mark that has no such channel
+    if (mark === 'point' || mark === 'circle' || mark === 'square' || mark === 'text') {
+      for (const [ch, edge] of [['x', 'width'], ['y', 'height']] as const) {
+        const v = md0[ch]
+        if (v !== undefined && update[ch] === undefined && update[`${ch}c`] === undefined) update[ch] = v === edge ? { field: { group: edge } } : { value: v }
+      }
+    }
     fillMissingPositions(update, mark, fields, orient, scaleConfigOf(spec), ruleOrientOut, typeof md0.size === 'number' && md0.size !== 0 ? md0.size : undefined)
   }
 
