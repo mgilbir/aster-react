@@ -266,6 +266,15 @@ const GROUPS: Record<string, Case[]> = {
     ['a repeat in one column keeps the width of its children', { data: DATA, repeat: ['y', 'v'], columns: 1, autosize: { type: 'fit-x', contains: 'padding' }, spec: { mark: 'bar', encoding: { x: { field: { repeat: 'repeat' }, type: 'quantitative', bin: true }, y: { aggregate: 'count' } } } }],
     ['a concat in one column keeps the width of its children', { data: DATA, columns: 1, concat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
   ],
+  // mark/text.ts + valueref.ts positionRef (text on a stack, bandPosition), config.style over text defaults, position2Ref band
+  'text, stacks and ranged rules (layer_arc_label, stacked_bar_h_normalized_labeled, layer_bar_labels_style, waterfall_chart)': [
+    ['a pie with labels in the wedges', { data: DATA, encoding: { theta: q('v', { stack: true }), color: n('c', { legend: null }) }, layer: [{ mark: { type: 'arc', outerRadius: 80 } }, { mark: { type: 'text', radius: 90 }, encoding: { text: n('c') } }] }],
+    ['text on a normalized stacked bar with a band position', { data: DATA, encoding: { y: n('c'), x: q('v', { aggregate: 'sum', stack: 'normalize' }), color: n('g') }, layer: [{ mark: 'bar' }, { mark: 'text', encoding: { x: q('v', { aggregate: 'sum', stack: 'normalize', bandPosition: 0.5 }), text: q('v', { aggregate: 'sum' }) } }] }],
+    ['text at the start of its stack segment', { data: DATA, encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), color: n('g') }, layer: [{ mark: 'bar' }, { mark: 'text', encoding: { y: q('v', { aggregate: 'sum', bandPosition: 0 }), text: q('v', { aggregate: 'sum' }) } }] }],
+    ['a text style overriding the default alignment', { data: DATA, config: { style: { label: { align: 'left', baseline: 'middle', dx: 3 } } }, layer: [{ mark: 'bar', encoding: { y: n('c'), x: q('v', { aggregate: 'sum' }) } }, { mark: { type: 'text', style: 'label' }, encoding: { y: n('c'), x: q('v', { aggregate: 'sum' }), text: q('v', { aggregate: 'sum' }) } }] }],
+    ['config.text alignment replaces the default', { data: DATA, config: { text: { align: 'right', dx: -5, dy: 5 } }, mark: 'text', encoding: { x: q('x'), y: q('y'), text: q('v') } }],
+    ['a rule between two ordinal positions', { data: DATA, layer: [{ mark: 'bar', encoding: { x: { field: 'c', type: 'ordinal', sort: null }, y: q('v') } }, { mark: { type: 'rule', xOffset: -5, x2Offset: 5 }, encoding: { x: { field: 'c', type: 'ordinal', sort: null }, x2: { field: 'g' }, y: q('v') } }] }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
@@ -283,6 +292,18 @@ const DATA_NODES = (vg: any): string[] =>
 const DATA_NODE_KINDS = (vg: any): string[] => [...new Set(DATA_NODES(vg))].sort()
 /** The tick steps of the axes (one entry per axis, in order). */
 const AXIS_STEPS = (vg: any): unknown[] => (vg.axes ?? []).map((a: any) => ({ orient: a.orient, grid: a.grid, tickMinStep: a.tickMinStep }))
+/** Which text-layout properties the text marks encode themselves (the rest is the config's / the style's). */
+const TEXT_PROPS = (vg: any): string[] => {
+  const out: string[] = []
+  const walk = (ms: any[]): void => {
+    for (const m of ms ?? []) {
+      if (m.type === 'text') for (const k of ['align', 'baseline', 'dx', 'dy']) if (m.encode?.update?.[k] !== undefined) out.push(k)
+      walk(m.marks)
+    }
+  }
+  walk(vg.marks)
+  return out.sort()
+}
 const plain = (v: unknown) => JSON.parse(JSON.stringify(v))
 const deepFreeze = <T,>(v: T): T => {
   if (v !== null && typeof v === 'object' && !Object.isFrozen(v)) {
@@ -297,6 +318,7 @@ async function check(spec: Record<string, any>): Promise<void> {
   const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
   expect(plain(SIZE_KEYS(ours)), 'size / layout of the compiled Vega').toEqual(plain(SIZE_KEYS(oracle)))
   expect(plain(AXIS_STEPS(ours)), 'axis tick steps').toEqual(plain(AXIS_STEPS(oracle)))
+  expect(TEXT_PROPS(ours), 'text properties the marks encode').toEqual(TEXT_PROPS(oracle))
   expect(DATA_NODE_KINDS(ours), 'data-shaping transforms').toEqual(DATA_NODE_KINDS(oracle))
   const [ref, mine, refChecked] = await Promise.all([renderWithVega(oracle), renderWithVegaChecked(plain(ours)), renderWithVegaChecked(oracle)])
   const inherited = new Set([...refChecked.errors, ...refChecked.warnings])

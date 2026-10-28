@@ -3453,7 +3453,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   // arc marks: theta stacking (pie layout). vega-lite stacks the theta
   // measure over the whole data (no groupby), sorted by the series field,
   // then filters invalid theta values.
-  if (mark === 'arc' && thetaDef && arcTheta) {
+  if ((mark === 'arc' || mark === 'text') && thetaDef && arcTheta) {
     if (radiusDefP?.aggregate) {
       // an aggregated radius measure: aggregate it (grouped by the raw theta
       // field — the polar dimension), filtering both endpoints
@@ -3664,9 +3664,15 @@ function argValueExpr(f: FieldDef): string {
  *   endAngle = scale zero; a radius channel adds a radius scale driving
  *   outerRadius/innerRadius. */
 function thetaStackInfo(mark: string, fields: FieldDef[]): { stacked: boolean; field: string; offsettedRect?: boolean } | null {
-  if (mark !== 'arc') return null
   const thetaDef = fields.find((f) => f.channel === 'theta' && f.field)
   if (!thetaDef) return null
+  // stack.ts: a text mark stacks its angle only when asked to (stack: true / an offset); labels of a pie sit in their wedge
+  if (mark === 'text') {
+    return thetaDef.stack != null && thetaDef.stack !== false && thetaDef.type === 'quantitative' && !thetaDef.aggregate && !thetaDef.bin
+      ? { stacked: true, field: thetaDef.field }
+      : null
+  }
+  if (mark !== 'arc') return null
   const radiusDef = fields.find((f) => f.channel === 'radius' && f.field)
   if (thetaDef.aggregate) {
     const stackBy = fields.some((f) => f.field && !f.aggregate && f.channel !== 'theta' && f.channel !== 'radius')
@@ -4091,7 +4097,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
       type: 'linear',
       // stacked arcs span the start/end fields; plain text layers and
       // unstacked arcs read the field directly
-      domain: mark === 'arc' && arcThetaS?.stacked
+      domain: arcThetaS?.stacked
         ? { data: dataName, fields: [`${arcThetaS.field}_start`, `${arcThetaS.field}_end`] }
         : { data: dataName, field: arcThetaS?.field ?? thetaDef.field },
       range: Array.isArray(thetaDef.scale?.range) ? thetaDef.scale!.range : [0, 6.283185307179586],
@@ -5551,8 +5557,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const ruleYOff = ruleDef.yOffset as number | undefined
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef), ...(positionalScaleType(mark, xDef) === 'band' ? { band: 0.5 } : {}), ...(ruleXOff !== undefined ? { offset: ruleXOff } : {}) }
     if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef), ...(positionalScaleType(mark, yDef) === 'band' ? { band: 0.5 } : {}), ...(ruleYOff !== undefined ? { offset: ruleYOff } : {}) }
-    if (x2Def) update.x2 = { scale: 'x', field: aggFieldName(x2Def) }
-    if (y2Def) update.y2 = { scale: 'y', field: aggFieldName(y2Def) }
+    // (position2Ref: the secondary ref of a band scale sits at the middle of its band too)
+    if (x2Def) update.x2 = { scale: 'x', field: aggFieldName(x2Def), ...(xDef != null && positionalScaleType(mark, xDef) === 'band' ? { band: 0.5 } : {}) }
+    if (y2Def) update.y2 = { scale: 'y', field: aggFieldName(y2Def), ...(yDef != null && positionalScaleType(mark, yDef) === 'band' ? { band: 0.5 } : {}) }
     // pointPosition2OrSize zeroOrMin (scaledZeroOrMinOrMax): with no explicit
     // x2/y2 (and no width/height encode), the rule spans to scale zero —
     // {value: 0} when the domain definitely contains zero, otherwise the
@@ -5588,7 +5595,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       // radius along theta
       update.x = { signal: 'width', mult: 0.5 }
       update.y = { signal: 'height', mult: 0.5 }
-      update.theta = { scale: 'theta', field: thetaDefT.field }
+      // positionRef: a text on a stacked angle is centred in its wedge (bandPosition 0.5 by default for theta / radius)
+      const thetaStack = thetaStackInfo(mark, fields)
+      const thetaBand = thetaDefT.bandPosition ?? 0.5
+      update.theta = thetaStack?.stacked
+        ? { signal: `scale("theta", ${1 - thetaBand} * datum[${JSON.stringify(`${thetaStack.field}_start`)}] + ${thetaBand} * datum[${JSON.stringify(`${thetaStack.field}_end`)}])` }
+        : { scale: 'theta', field: thetaDefT.field }
       const mRadius = isObject(spec.mark) ? (spec.mark.radius as number | undefined) : undefined
       if (mRadius != null) update.radius = { value: mRadius }
     } else {
@@ -5604,8 +5616,16 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       // the mark def's own `text` (vega-lite passes every mark def property of the Vega mark set through)
       update.text = { value: spec.mark.text }
     }
-    update.align = { value: 'center' }
-    update.baseline = { value: 'middle' }
+    // (the defaults give way to the named styles of the mark: markDef.style over config.style)
+    const styleNames = isObject(spec.mark) ? ([] as unknown[]).concat((spec.mark.style as unknown) ?? []) : []
+    const styleDefines = (prop: string): boolean => {
+      const styles = isObject((spec.config as Record<string, unknown> | undefined)?.style) ? ((spec.config as Record<string, Record<string, unknown>>).style as Record<string, unknown>) : {}
+      return styleNames.some((n) => typeof n === 'string' && isObject(styles[n]) && (styles[n] as Record<string, unknown>)[prop] !== undefined)
+    }
+    // (a config value reaches Vega through config.style, so it replaces the default without being repeated in the encoding)
+    const configDefines = (prop: string): boolean => ((spec.config as Record<string, Record<string, unknown>> | undefined)?.text?.[prop] ?? (spec.config as Record<string, Record<string, unknown>> | undefined)?.mark?.[prop]) !== undefined
+    if (!styleDefines('align') && !configDefines('align') && !(isObject(spec.mark) && spec.mark.align !== undefined)) update.align = { value: 'center' }
+    if (!styleDefines('baseline') && !configDefines('baseline') && !(isObject(spec.mark) && spec.mark.baseline !== undefined)) update.baseline = { value: 'middle' }
     const mFontSize = isObject(spec.mark) ? (spec.mark.fontSize as number | undefined) : undefined
     if (mFontSize != null) update.fontSize = { value: mFontSize }
     const mFontWeight = isObject(spec.mark) ? (spec.mark.fontWeight as unknown) : undefined
@@ -5621,7 +5641,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     else if (textCfgSize != null) update.fontSize = { value: textCfgSize }
     if (sizeDef) update.fontSize = { scale: 'size', field: aggFieldName(sizeDef) }
     for (const p of ['strokeWidth', 'dx', 'dy', 'fillOpacity', 'opacity', 'angle', 'baseline', 'align', 'limit', 'fontStyle', 'lineHeight'] as const) {
-      const v = textProp(p)
+      // (the mark's own value is encoded; config.text / config.mark values are config.style's, Vega applies them)
+      const v = p === 'dx' || p === 'dy' || p === 'baseline' || p === 'align' ? markPaint?.[p] : textProp(p)
       if (v !== undefined) update[p] = { value: v }
     }
     const textFilled = markPaint?.filled ?? cfgType?.filled ?? cfgMark?.filled
@@ -5838,7 +5859,16 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       if (!def || !isStacked(def, mark, orient, fields)) continue
       for (const key of [pos, `${pos}c`]) {
         const ref = update[key] as Record<string, unknown> | undefined
-        if (isObject(ref) && ref.scale === pos && ref.field === aggFieldName(def)) update[key] = { ...ref, field: `${aggFieldName(def)}_end` }
+        if (isObject(ref) && ref.scale === pos && ref.field === aggFieldName(def)) {
+          // positionRef: a bandPosition on the stacked channel places the mark within its stack segment
+          const bp = def.bandPosition
+          const f = aggFieldName(def)
+          update[key] = bp === undefined
+            ? { ...ref, field: `${f}_end` }
+            : bp === 0 || bp === 1
+              ? { ...ref, field: `${f}_${bp === 0 ? 'start' : 'end'}` }
+              : { signal: `scale(${JSON.stringify(pos)}, ${1 - bp} * datum[${JSON.stringify(`${f}_start`)}] + ${bp} * datum[${JSON.stringify(`${f}_end`)}])`, ...(ref.offset !== undefined ? { offset: ref.offset } : {}) }
+        }
       }
     }
   }
