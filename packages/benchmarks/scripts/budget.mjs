@@ -58,6 +58,8 @@ import { fileURLToPath } from 'node:url'
 // The pointer through the svg's screen CTM (core/pointer.ts, one cached map for the cursor, tooltip and gestures), the
 // painted-geometry hit index and the inert flags, merged, measured (kB gzip): hit marginal 5.8, Chart 174.8, SvgChart 154.3,
 // SvgChart + interaction 168.7, Chart + VL 249.9.
+// The @aster/vl compiler ports vega-lite's layout-size, band/bin/time-unit position, path-overlay, stack-order, resolve and
+// legend-merge rules (gallery conformance): Chart + VL 256.9 (+7.0). Nothing outside the VL row moved.
 const BUDGETS = {
   '@aster/core': 134.3 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
@@ -73,7 +75,7 @@ const BUDGETS = {
   '@aster/react SvgChart': 154.4 * 1024,
   '@aster/react SvgChart + interaction': 169.2 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 250.4 * 1024,
+  '@aster/react Chart + VL': 257.4 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
