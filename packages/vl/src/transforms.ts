@@ -144,6 +144,49 @@ export interface TranslateState {
 }
 
 /** Translate one VL transform. Returns the Vega transforms it expands to. */
+/** impute.ts processSequence: `{start, stop, step}` key values are the signal `sequence(start, stop[, step])`. */
+function imputeKeyvals(kv: unknown): unknown {
+  if (Array.isArray(kv)) return copyArr(kv)
+  const { start = 0, stop, step } = kv as { start?: number; stop: number; step?: number }
+  return { signal: `sequence(${[start, stop, ...(step ? [step] : [])].join(',')})` }
+}
+
+/**
+ * compile/data/impute.ts assemble: the Vega impute of an `{impute, key, method, value, frame, keyvals, groupby}` (a transform, or
+ * the channel-level impute with the same keys). A statistical method fills the gap in a following window + formula.
+ */
+export function imputeTransforms(t: Obj): Obj[] {
+  const out: Obj[] = []
+  const impute = t.impute as string
+  const method = t.method as string | undefined
+  const frame = (t.frame as [number | null, number | null] | undefined) ?? [null, null]
+  const it: Obj = {
+    type: 'impute',
+    field: impute,
+    key: t.key,
+    method: 'value',
+    value: !method || method === 'value' ? t.value : null,
+  }
+  if (t.keyvals !== undefined) it.keyvals = imputeKeyvals(t.keyvals)
+  if (t.groupby !== undefined) it.groupby = copyArr(t.groupby)
+  out.push(it)
+  if (method && method !== 'value') {
+    const tmp = `imputed_${safeKey(impute)}_value`
+    out.push({
+      type: 'window',
+      as: [tmp],
+      ops: [method],
+      fields: [impute],
+      frame: [...frame],
+      ignorePeers: false,
+      ...(t.groupby !== undefined ? { groupby: copyArr(t.groupby) } : {}),
+    })
+    const ref = datumPathRef(impute)
+    out.push({ type: 'formula', expr: `${ref} === null ? ${datumPathRef(tmp)} : ${ref}`, as: impute })
+  }
+  return out
+}
+
 export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateState): Obj[] {
   const out: Obj[] = []
   const derived = (names: Iterable<string>): void => {
@@ -301,35 +344,8 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
   } else if (t.sample !== undefined) {
     out.push({ type: 'sample', size: t.sample })
   } else if (t.impute !== undefined) {
-    const impute = t.impute as string
-    const method = t.method as string | undefined
-    const frame = (t.frame as [number | null, number | null] | undefined) ?? [null, null]
-    const kv = t.keyvals
-    const it: Obj = {
-      type: 'impute',
-      field: impute,
-      key: t.key,
-      method: 'value',
-      value: !method || method === 'value' ? t.value : null,
-    }
-    if (kv !== undefined) it.keyvals = copyArr(kv)
-    if (t.groupby !== undefined) it.groupby = copyArr(t.groupby)
-    out.push(it)
-    if (method && method !== 'value') {
-      const tmp = `imputed_${safeKey(impute)}_value`
-      out.push({
-        type: 'window',
-        as: [tmp],
-        ops: [method],
-        fields: [impute],
-        frame: [...frame],
-        ignorePeers: false,
-        ...(t.groupby !== undefined ? { groupby: copyArr(t.groupby) } : {}),
-      })
-      const ref = datumPathRef(impute)
-      out.push({ type: 'formula', expr: `${ref} === null ? ${datumPathRef(tmp)} : ${ref}`, as: impute })
-    }
-    derived([impute])
+    out.push(...imputeTransforms(t))
+    derived([t.impute as string])
   } else if (t.lookup !== undefined) {
     const from = t.from as Obj
     const isParam = typeof from.param === 'string'

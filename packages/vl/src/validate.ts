@@ -956,7 +956,15 @@ function validateChannelDef(ch: string, def: unknown, at: string, shared = false
   if (def.stack !== undefined && !['zero', 'center', 'normalize', 'wiggle', true, false, null].includes(def.stack as never)) {
     fail(`${at}.stack`, `unsupported stack ${JSON.stringify(def.stack)}`)
   }
-  if (def.impute !== undefined) fail(`${at}.impute`, 'channel-level `impute` is not supported')
+  if (def.impute !== undefined) {
+    if (ch !== 'x' && ch !== 'y') fail(`${at}.impute`, '`impute` only applies to the x and y channels')
+    const im = def.impute
+    if (!isObj(im)) mustBe(`${at}.impute`, OBJECT)
+    keysOf(im, set('method value frame keyvals'), `${at}.impute`, 'impute')
+    if (im.method !== undefined && !['value', 'median', 'max', 'min', 'mean'].includes(im.method as string)) fail(`${at}.impute.method`, `unknown impute method ${JSON.stringify(im.method)}`)
+    if (im.frame !== undefined && !(Array.isArray(im.frame) && im.frame.length === 2)) fail(`${at}.impute.frame`, 'must be a [start, end] pair')
+    if (im.keyvals !== undefined) validateImputeKeyvals(im.keyvals, `${at}.impute.keyvals`)
+  }
   if (def.band !== undefined) fail(`${at}.band`, '`band` is not supported')
   if (def.bandPosition !== undefined && typeof def.bandPosition !== 'number') mustBe(`${at}.bandPosition`, 'a number')
   if (def.condition !== undefined) validateCondition(def.condition, `${at}.condition`)
@@ -1160,6 +1168,15 @@ export const TRANSFORM_NAMES = Object.keys(TRANSFORM_KEYS)
 /** The transforms whose key doubles as a secondary key elsewhere, and the key that makes them the primary one. */
 const COMPANION: Record<string, string> = { bin: 'field', timeUnit: 'field', extent: 'param' }
 
+/** `keyvals`: the key values to impute over, a list or a `{start, stop, step}` sequence. */
+function validateImputeKeyvals(kv: unknown, at: string): void {
+  if (Array.isArray(kv)) return
+  if (!isObj(kv)) mustBe(at, 'an array or a {start, stop, step} sequence')
+  keysOf(kv, set('start stop step'), at, 'keyvals sequence')
+  if (typeof kv.stop !== 'number') mustBe(`${at}.stop`, 'a number')
+  for (const k of ['start', 'step'] as const) if (kv[k] !== undefined && typeof kv[k] !== 'number') mustBe(`${at}.${k}`, 'a number')
+}
+
 function validateFieldList(v: unknown, at: string): void {
   if (!Array.isArray(v) || !v.every((s) => typeof s === 'string')) mustBe(at, 'an array of field names')
   for (const f of v as string[]) splitAccessPath(f)
@@ -1280,7 +1297,7 @@ function validateTransform(kind: string, t: Obj, a: string): void {
       needStr('key')
       if (t.method !== undefined && !['value', 'median', 'max', 'min', 'mean'].includes(t.method as string)) fail(`${a}.method`, `unknown impute method ${JSON.stringify(t.method)}`)
       if (t.frame !== undefined && !(Array.isArray(t.frame) && t.frame.length === 2)) fail(`${a}.frame`, 'must be a [start, end] pair')
-      if (t.keyvals !== undefined && !Array.isArray(t.keyvals)) mustBe(`${a}.keyvals`, 'an array (key-value ranges are not supported)')
+      if (t.keyvals !== undefined) validateImputeKeyvals(t.keyvals, `${a}.keyvals`)
       break
     case 'lookup':
       needStr('lookup')

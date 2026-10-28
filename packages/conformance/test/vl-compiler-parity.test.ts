@@ -40,6 +40,12 @@ const SPARSE = {
     { c: 'B', g: 'q', x: 4, v: 6 },
   ],
 }
+const GAPS = {
+  values: [
+    { a: 0, b: 28, c: 0 }, { a: 0, b: 91, c: 1 }, { a: 1, b: 43, c: 0 }, { a: 1, b: 55, c: 1 },
+    { a: 2, b: 81, c: 0 }, { a: 2, b: 53, c: 1 }, { a: 3, b: 19, c: 0 },
+  ],
+}
 const NULLS = {
   values: [
     { a: null, b: 100, c: 5 },
@@ -448,6 +454,20 @@ const GROUPS: Record<string, Case[]> = {
     ['a circle at the mark-def x', { data: DATA, mark: { type: 'circle', x: 'width' }, encoding: { y: q('y') } }],
     ['the encoding wins over the mark def', { data: DATA, mark: { type: 'point', x: 5 }, encoding: { x: q('x'), y: q('y') } }],
     ['a large text at a mark-def position', { data: DATA, mark: { type: 'text', fontSize: 80, x: 150, y: 100, opacity: 0.06 }, encoding: { text: n('c') } }],
+  ],
+  // data/impute.ts makeFromEncoding + assemble: a channel-level impute is the impute transform over the other position channel
+  'channel-level impute (line_encoding_impute_keyvals, line_encoding_impute_keyvals_sequence, line_impute_frame)': [
+    ['an imputed value with key values', { data: GAPS, mark: 'line', encoding: { x: q('a', { scale: { nice: 1 } }), y: q('b', { impute: { value: 100, keyvals: [4] } }), color: n('c') } }],
+    ['an imputed value with a key value sequence', { data: GAPS, mark: 'line', encoding: { x: q('a', { scale: { nice: 1 } }), y: q('b', { impute: { value: 100, keyvals: { start: 4, stop: 6 } } }), color: n('c') } }],
+    ['an imputed value with a stepped sequence', { data: GAPS, mark: 'line', encoding: { x: q('a'), y: q('b', { impute: { value: 0, keyvals: { start: 0, stop: 8, step: 2 } } }), color: n('c') } }],
+    ['an imputed mean over a frame', { data: GAPS, mark: 'line', encoding: { x: q('a', { scale: { nice: 1 } }), y: q('b', { impute: { method: 'mean', frame: [-2, 2] } }), color: n('c') } }],
+    ['an imputed maximum', { data: GAPS, mark: 'line', encoding: { x: q('a'), y: q('b', { impute: { method: 'max', keyvals: [5] } }), color: n('c') } }],
+    ['an imputed x over a y key', { data: GAPS, mark: 'line', encoding: { y: q('a'), x: q('b', { impute: { value: 50, keyvals: [4] } }), color: n('c') }, }],
+    ['an imputed value without a series', { data: GAPS, mark: 'line', encoding: { x: q('a'), y: q('b', { impute: { value: 7, keyvals: [-1] } }) } }],
+    ['an imputed area stacked by colour', { data: GAPS, mark: 'area', encoding: { x: q('a'), y: q('b', { impute: { value: 0, keyvals: [4] } }), color: n('c') } }],
+    ['an imputed aggregate', { data: GAPS, mark: 'line', encoding: { x: q('a'), y: q('b', { aggregate: 'sum', impute: { value: 0, keyvals: [4] } }), color: n('c') } }],
+    ['an imputed value with a detail channel', { data: GAPS, mark: 'line', encoding: { x: q('a'), y: q('b', { impute: { value: 3, keyvals: [4] } }), detail: n('c') } }],
+    ['an imputed point mark', { data: GAPS, mark: 'point', encoding: { x: q('a'), y: q('b', { impute: { value: 3, keyvals: [4] } }), color: n('c') } }],
   ],
 }
 

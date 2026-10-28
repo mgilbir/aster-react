@@ -22,7 +22,7 @@ import { isTimerSelection } from './selection.js'
 import { ASSEMBLED_FROM, GEO_POSITION_CHANNELS, assembleProjection, finalProjectionName, geoDataTransforms, geoshapeTransform, hasProjection, mergeLayerProjections, parseUnitProjection, renameComponentSignals, type GeoUnit, type ProjectionComponent, type UnitGeo } from './geo.js'
 import { scaleConfigOf, discreteStep, viewContinuousSize, viewDiscreteSize, sizeRange, countRange, discreteCount, usesUnaggregatedDomain, type ScaleCfg } from './scaleconfig.js'
 import { getTimeUnitParts, normalizeTimeUnit, timeUnitFieldName, timeUnitTransform, type NormalTimeUnit } from './timeunit.js'
-import { binNames, binTransforms, normalizeBin, translateTransforms, type BinParams, type TransformContext, type TranslateState } from './transforms.js'
+import { binNames, binTransforms, imputeTransforms, normalizeBin, translateTransforms, type BinParams, type TransformContext, type TranslateState } from './transforms.js'
 
 const VEGA_SCHEMA = 'https://vega.github.io/schema/vega/v6.json'
 
@@ -3475,6 +3475,26 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     })
     return out
   }
+  // data/impute.ts makeFromEncoding: an `impute` on x or y (when both are fields) imputes the channel over the other one, per path group,
+  // ahead of the stack
+  const channelImpute: Record<string, unknown>[] = []
+  if (xDef?.field && yDef?.field && !xDef.datumOnly && !yDef.datumOnly) {
+    const imputed = xDef.raw.impute !== undefined ? xDef : yDef.raw.impute !== undefined ? yDef : undefined
+    if (imputed) {
+      const keyDef = imputed === xDef ? yDef : xDef
+      const { method, value, frame, keyvals } = imputed.raw.impute as Record<string, unknown>
+      const groupby = pathGroupingKeys(spec, fields, mark)
+      pushAll(channelImpute, imputeTransforms({
+        impute: imputed.field,
+        key: keyDef.field,
+        ...(method ? { method } : {}),
+        ...(value !== undefined ? { value } : {}),
+        ...(frame ? { frame } : {}),
+        ...(keyvals !== undefined ? { keyvals } : {}),
+        ...(groupby.length ? { groupby } : {}),
+      }))
+    }
+  }
   const stackAfterAggregate = stackable && measure != null && measure.aggregate != null && measure.type === 'quantitative' && !measure.bin && isStacked(measure, mark, orient, fields)
 
   // arcs run their own aggregate+stack law (thetaStackInfo) — the generic
@@ -3533,6 +3553,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     if (measures.length || groupbyUniq.length) {
       pipeline.push({ type: 'aggregate', groupby: groupbyUniq, ops: measures.map((o) => o.op), fields: measures.map((o) => o.field ?? null), as: measures.map((o) => o.as) })
       if (ownSelectionId) pipeline.push(identifierTransform())
+      pushAll(pipeline, channelImpute)
       if (stackAfterAggregate) pushAll(pipeline, stackTransforms(measure!))
       // argmax/argmin leave the winning ROW in the aggregate column; flatten
       // the channel's value out of it (vega-lite reads `argmax_b["a"]`)
@@ -3546,7 +3567,10 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     }
   } else if (stackable && measure && measure.type === 'quantitative' && !measure.bin && isStacked(measure, mark, orient, fields)) {
     // stacked bar/area: continuous dimensions impute gaps; discrete ones filter
+    pushAll(pipeline, channelImpute)
     pushAll(pipeline, stackTransforms(measure))
+  } else {
+    pushAll(pipeline, channelImpute)
   }
 
   // the invalid values the marks must not see (vega-lite FilterInvalidNode): skipped when a generating
