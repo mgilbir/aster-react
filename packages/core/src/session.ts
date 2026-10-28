@@ -32,8 +32,13 @@ function dataRefKey(v: unknown): string {
   return v !== null && (typeof v === 'object' || typeof v === 'function') ? `#${refId(v as object)}` : valueKey(v)
 }
 
-/** Serialize the spec structure, leaving dataset values out (they're tracked by identity). */
-function skeletonOf(spec: VgSpec): string {
+/**
+ * Serialize the spec structure, leaving the top-level datasets' inline values out (they're tracked by identity).
+ * Two specs with the same skeleton compile to the same chart (a session re-evaluates it with the new rows); a different
+ * skeleton is a different chart. Exported for the hosts that must tell the two apart (`@aster/react` keeps a chart's
+ * live state for the first and starts it afresh for the second).
+ */
+export function skeletonOf(spec: VgSpec): string {
   const data = (spec as { data?: unknown }).data
   let stripped: unknown = data
   if (Array.isArray(data)) {

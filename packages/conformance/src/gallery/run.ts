@@ -24,11 +24,12 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { FETCH_COMMAND, readManifest, verifyCache } from './cache.js'
+import type { SwapOutcome } from './react.js'
 import { GALLERY_DIR, listGallery, type GallerySpec, type Kind, type Outcome } from './lib.js'
 
 const argv = process.argv.slice(2)
 const arg = (n: string): string | undefined => argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3)
-const PATHS = (arg('path') ?? 'all') === 'all' ? (['static', 'react'] as const) : ([arg('path')] as ('static' | 'react')[])
+const PATHS = (arg('path') ?? 'all') === 'all' ? (['static', 'react', 'swap'] as const) : ([arg('path')] as ('static' | 'react' | 'swap')[])
 const FILTER = arg('filter')
 const JSON_OUT = arg('json')
 const PRINT_PASSING = argv.includes('--print-passing')
@@ -36,6 +37,8 @@ const PRINT_PASSING = argv.includes('--print-passing')
 interface Floors {
   pass: Record<'static' | 'react', Record<Kind, number>>
   maxUnverifiable: Record<'static' | 'react', Record<Kind, number>>
+  /** the spec-swap path (one mounted <Chart>, spec A then B): pairs equal to a fresh mount of B / also equal to vega's B; unverifiable pairs (B's oracle or fresh mount) */
+  swap: { pass: number; vsOracle: number; maxUnverifiable: number }
 }
 const floors = JSON.parse(readFileSync(join(GALLERY_DIR, 'floors.json'), 'utf8')) as Floors
 const passingList = (p: string): string[] => readFileSync(join(GALLERY_DIR, `passing-${p}.txt`), 'utf8').split('\n').filter(Boolean)
@@ -64,22 +67,31 @@ if (!specs.length) { console.log('GATE FAIL: no specs selected'); process.exit(1
 
 const t0 = Date.now()
 const results: Record<string, Outcome[]> = {}
-const runPath = async (p: 'static' | 'react'): Promise<void> => {
+const swapResults: SwapOutcome[] = []
+const runPath = async (p: 'static' | 'react' | 'swap'): Promise<void> => {
   if (p === 'static') {
     const { runStatic } = await import('./static.js')
     const out: Outcome[] = []
     for (const g of specs) out.push(await runStatic(g))
     results.static = out
+  } else if (p === 'swap') {
+    if (FILTER) return // pairs are not specs; the whole sample runs or none
+    const { runSwap } = await import('./react.js')
+    const { swapPairs } = await import('./swap-pairs.js')
+    swapResults.push(...(await runSwap(swapPairs(), () => undefined, 4)))
   } else {
     const { runReact } = await import('./react.js')
     results.react = await runReact(specs, () => undefined, 4)
   }
 }
-await Promise.all(PATHS.map(runPath))
+await Promise.all(PATHS.filter((p) => p !== 'swap').map(runPath))
+// the swap path runs alone: it is the one that holds a chart across timers and a pointer drag, and the data loads of the other paths in flight would only add load-dependent timeouts to it
+if (PATHS.includes('swap')) await runPath('swap')
 
 const kindOf = (id: string): Kind => (id.startsWith('vega/') ? 'vega' : 'vl')
 const dump: Record<string, Outcome[]> = {}
 for (const p of PATHS) {
+  if (p === 'swap') continue
   const out = results[p]!
   dump[p] = out
   console.log(`\n=== ${p} path ===`)
@@ -108,6 +120,26 @@ for (const p of PATHS) {
     if (regressed.length) problem(`${p}: ${regressed.length} spec(s) that passed at the recorded baseline no longer do: ${regressed.join(', ')}`)
     if (PRINT_PASSING) writeFileSync(join(GALLERY_DIR, `passing-${p}.txt`), [...passed].sort().join('\n') + '\n')
   }
+}
+if (PATHS.includes('swap') && swapResults.length) {
+  const n = (s: string): number => swapResults.filter((o) => o.status === s).length
+  const vsOracle = swapResults.filter((o) => o.status === 'pass' && o.vsOracle).length
+  console.log(`\n=== spec-swap path (one mounted <Chart>: spec A, then spec B, against a fresh mount of B) ===`)
+  console.log(`${n('pass')} pass (${vsOracle} also equal vega's B), ${n('fail')} fail, ${n('error')} error, ${n('unverifiable')} unverifiable / ${swapResults.length} pairs`)
+  for (const o of swapResults.filter((o) => o.status === 'unverifiable')) console.log(`  UNVERIFIABLE ${o.id}: ${o.reason}${o.first ? ` | ${o.first}` : ''}`)
+  for (const o of swapResults.filter((o) => o.status === 'fail' || o.status === 'error')) console.log(`  ${o.status.toUpperCase().padEnd(5)} ${o.id}: ${o.reason ? `[${o.reason}] ` : ''}${o.first ?? ''}${o.firstContent && o.firstContent !== o.first ? `\n        -> ${o.firstContent}` : ''}`)
+  if (!FILTER) {
+    if (swapResults.length < 150) problem(`swap: ${swapResults.length} pairs sampled < 150`)
+    if (n('pass') < floors.swap.pass) problem(`swap: ${n('pass')} passing < floor ${floors.swap.pass}`)
+    else if (n('pass') > floors.swap.pass) console.log(`  (improved: ${n('pass')} > floor ${floors.swap.pass}; raise floors.json and add the pairs to passing-swap.txt)`)
+    if (vsOracle < floors.swap.vsOracle) problem(`swap: ${vsOracle} equal to vega < floor ${floors.swap.vsOracle}`)
+    if (n('unverifiable') > floors.swap.maxUnverifiable) problem(`swap: ${n('unverifiable')} unverifiable > ceiling ${floors.swap.maxUnverifiable}`)
+    const passed = new Set(swapResults.filter((o) => o.status === 'pass').map((o) => o.id))
+    const regressed = readFileSync(join(GALLERY_DIR, 'passing-swap.txt'), 'utf8').split('\n').filter(Boolean).filter((id) => !passed.has(id))
+    if (regressed.length) problem(`swap: ${regressed.length} pair(s) that passed at the recorded baseline no longer do: ${regressed.join(', ')}`)
+    if (PRINT_PASSING) writeFileSync(join(GALLERY_DIR, 'passing-swap.txt'), [...passed].sort().join('\n') + '\n')
+  }
+  dump.swap = swapResults
 }
 if (JSON_OUT) writeFileSync(JSON_OUT, JSON.stringify(dump, null, 1))
 console.log(`\n[gallery] ${specs.length} specs, ${((Date.now() - t0) / 1000).toFixed(0)}s, ${problems ? `${problems} gate failure(s)` : 'ratchet holds'}`)
