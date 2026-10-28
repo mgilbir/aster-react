@@ -55,6 +55,12 @@ const CASES: Record<string, (s: any) => void> = {
     s.axes = [{ orient: 'bottom', scale: 'x' }]
     s.padding = 5
   },
+  'a filter that throws, with a title and a legend': (s) => {
+    s.data[0].transform = [{ type: 'filter', expr: BAD }]
+    s.title = { text: 'T' }
+    s.scales.push({ name: 'col', type: 'ordinal', domain: ['p', 'q'], range: ['red', 'blue'] })
+    s.legends = [{ fill: 'col' }]
+  },
   'a mark encode that throws on its third item': (s) => { s.marks[0].encode.update.y = { signal: 'datum["o"]["v"]' } },
 }
 

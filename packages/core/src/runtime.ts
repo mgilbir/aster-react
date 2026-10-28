@@ -463,6 +463,12 @@ interface EvalContext {
   datasetAborted?: boolean
   /** the rank (see datasetRanksOf) of the first dataset whose transform threw: what is ranked after it never ran (see buildDatasetsOf) */
   failedFrom?: number
+  /** a signal ranked last threw: the pass's post-run work (the layout that grows the padding) did not happen */
+  postRunLost?: boolean
+  /** the pass stopped before the root group's size was encoded (a signal threw): the frame is 0 x 0 */
+  rootUnsized?: boolean
+  /** The error each signal's expression threw the last time it was evaluated (a later evaluation that succeeds clears it). */
+  signalErrors?: Map<string, unknown>
   /** The items of the named marks built so far (a mark may read another mark's items as its data: `from: {data: <mark name>}`). */
   markItems: Map<string, SceneItem[]>
 }
@@ -687,6 +693,10 @@ function prepareChartCtx(
     }
   }
   buildProjections(ctx)
+  // (a view size that is the signal that threw is the signal's value, none: 0)
+  const threw = abortAtThrowingSignal(ctx)
+  if (threw === 'width') { width = 0; ctx.width = 0 }
+  if (threw === 'height') { height = 0; ctx.height = 0 }
 
   // The final context fingerprint: the next evaluation compares its own
   // (scale, mark) inputs against this to decide whether reuse is valid.
@@ -864,6 +874,56 @@ const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspa
  *
  * `staticOnly` resolves just the signals that do not read datasets or scales.
  */
+/** Whether a view signal calls a function that reads data or a scale, or reads a signal that does. */
+function signalReadsDataflow(chart: CompiledChart, defs: ReadonlyMap<string, number>, name: string, seen: Set<string>): boolean {
+  if (seen.has(name)) return false
+  seen.add(name)
+  const i = defs.get(name)
+  if (i === undefined) return false
+  const d = chart.signalDefs![i]!
+  for (const text of [d.update, d.init]) {
+    if (typeof text !== 'string') continue
+    for (const id of expressionIdentifiers(text)) {
+      if (DATAFLOW_FUNCTIONS.has(id) || (defs.has(id) && signalReadsDataflow(chart, defs, id, seen))) return true
+    }
+  }
+  return false
+}
+
+/**
+ * vega runs its signals first, in declaration order, and a signal whose expression throws stops the whole pass: it is logged,
+ * the signals after it never get a value and nothing ranked after the signals runs -- every dataset, scale, mark and guide.
+ * Resolving signals in rounds, a throw is first "a dependency is not there yet"; the one that is still thrown when the last
+ * round has run is a throw -- unless it reads data or a scale (or a signal that does): that is settled only with them, and a
+ * throw there is not told from a dependency that is missing; such a signal is left as it was. One that reads a signal declared
+ * after it is ranked after the datasets (vega re-ranks it past everything): they and the marks ran.
+ */
+function abortAtThrowingSignal(ctx: EvalContext): string | undefined {
+  const errors = ctx.signalErrors
+  if (!errors?.size) return undefined
+  const defs = ctx.chart.signalDefs ?? []
+  const index = new Map<string, number>()
+  defs.forEach((d, i) => { if (!index.has(d.name)) index.set(d.name, i) })
+  for (const def of defs) {
+    if (!errors.has(def.name) || ctx.hostSignals.has(def.name)) continue
+    // (one that reads data or a scale is settled only once they are built, with the signals they feed: not told from a throw)
+    if (signalReadsDataflow(ctx.chart, index, def.name, new Set())) continue
+    reportEvalError(ctx, errors.get(def.name))
+    // (a signal ranked after the datasets throws after them: they and the marks ran, and only the pass's post-run work, the
+    // layout that grows the padding, is lost: see the padding of evaluateChartImpl)
+    if (signalIsLate(ctx.chart, index, def.name, new Set())) { ctx.postRunLost = true; return undefined }
+    ctx.rootUnsized = true
+    for (const d of ctx.chart.data) {
+      ;(ctx.failedDatasets ??= new Set()).add(d.name)
+      ctx.datasets.set(d.name, [])
+      ctx.datasetPulses.set(d.name, null)
+    }
+    ctx.encodeAborted = ctx.datasetAborted = true
+    return def.name
+  }
+  return undefined
+}
+
 function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
   const defs = ctx.chart.signalDefs
   if (!defs?.length) return false
@@ -885,13 +945,16 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
       // `domain('x')` of a scale that is not there yet is `[]`, which is not the value vega's dataflow computes.
       const readsScales = DATA_DEPENDENT_EXPR.test(expr) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
       if (initPending && value !== undefined && !readsScales) ctx.initDone.add(def.name)
+      ctx.signalErrors?.delete(def.name)
       if (value !== undefined && !valuesEqual(value, ctx.signalParams[def.name])) {
         ctx.signalParams[def.name] = value
         ctx.fpMemo = undefined
         changed = true
       }
-    } catch {
-      // Unresolved dependency this round; keep previous value.
+    } catch (e) {
+      // Unresolved dependency this round; keep previous value. (What is still thrown once everything the expression can
+      // read exists is a throw, not a dependency that is missing: see abortAtThrowingSignal.)
+      ;(ctx.signalErrors ??= new Map()).set(def.name, e)
     }
   }
   return changed
@@ -1676,8 +1739,8 @@ function buildContentPass(
     : buildAxisAndLegend(ctx, items)
   for (const g of guideGroups) items.push(g)
 
-  // Top-level title.
-  const titleGroup = stopped ? null : buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx)
+  // Top-level title. (A pass that stopped at a failing dataset or signal never made it: it is ranked after them.)
+  const titleGroup = stopped || ctx.datasetAborted ? null : buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx)
   if (titleGroup) items.push(titleGroup)
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
@@ -1694,6 +1757,7 @@ function buildContentPass(
   // (a scale or an encode that threw stopped vega's run before its ViewLayout: no overflow growth)
   const padding = ctx.layoutState.failed
     || ctx.encodeAborted === true
+    || ctx.postRunLost === true
     || ctx.rawGuides
     || ctx.chart.autosize === 'none'
     ? ctx.chart.padding
@@ -1824,8 +1888,8 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
     height: sceneHeight,
     // the frame background is the root group's own box: the view's width x height
     // (a composition's is the degenerate M0,0h0v0h0Z)
-    plotWidth: width,
-    plotHeight: height,
+    plotWidth: ctx.rootUnsized ? 0 : width,
+    plotHeight: ctx.rootUnsized ? 0 : height,
     background: ctx.chart.background,
     frameStroke: ctx.chart.frameStroke,
     frameFill: (ctx.chart as unknown as { frameFill?: string }).frameFill,
@@ -5018,6 +5082,27 @@ function expressionIdentifiers(text: string): string[] {
 }
 
 /**
+ * Whether a view signal is ranked after the data and scales (see scaleIsLate): it calls a function that reads data or a scale,
+ * or reads a signal defined after it or one that is itself late. A signal that is not is ranked before every dataset.
+ */
+function signalIsLate(chart: CompiledChart, defs: ReadonlyMap<string, number>, name: string, seen: Set<string>): boolean {
+  if (seen.has(name)) return false
+  seen.add(name)
+  const i = defs.get(name)
+  if (i === undefined) return false
+  const d = chart.signalDefs![i]!
+  for (const text of [d.update, d.init]) {
+    if (typeof text !== 'string') continue
+    for (const id of expressionIdentifiers(text)) {
+      if (DATAFLOW_FUNCTIONS.has(id)) return true
+      const j = defs.get(id)
+      if (j !== undefined && (j > i || signalIsLate(chart, defs, id, seen))) return true
+    }
+  }
+  return false
+}
+
+/**
  * Whether vega ranks a scale's operators after the ones of its own scope's axes, so that an axis over it does not find
  * them where its operators run. vega-parser creates the operators of a scope in the order it parses it; a parameter that
  * refers to an operator created later (a forward reference) is re-ranked when the dataflow connects its parameters, and
@@ -5031,22 +5116,7 @@ function scaleIsLate(sdef: CompiledScale, scope: GuideScope, chart: CompiledChar
   const defs = new Map<string, number>()
   ;(chart.signalDefs ?? []).forEach((d, i) => { if (!defs.has(d.name)) defs.set(d.name, i) })
   const known = (name: string): boolean => defs.has(name) || VIEW_SIGNALS.has(name) || name in chart.signals
-  const signalLate = (name: string, seen: Set<string>): boolean => {
-    if (seen.has(name)) return false
-    seen.add(name)
-    const i = defs.get(name)
-    if (i === undefined) return false
-    const d = chart.signalDefs![i]!
-    for (const text of [d.update, d.init]) {
-      if (typeof text !== 'string') continue
-      for (const id of expressionIdentifiers(text)) {
-        if (DATAFLOW_FUNCTIONS.has(id)) return true
-        const j = defs.get(id)
-        if (j !== undefined && (j > i || signalLate(id, seen))) return true
-      }
-    }
-    return false
-  }
+  const signalLate = (name: string, seen: Set<string>): boolean => signalIsLate(chart, defs, name, seen)
   const late = (v: unknown): boolean => {
     if (Array.isArray(v)) return v.some(late)
     if (v === null || typeof v !== 'object') return false
