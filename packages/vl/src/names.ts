@@ -131,7 +131,7 @@ export interface FlatField {
 export function flatField(userPath: string): FlatField {
   const parts = splitAccessPath(userPath) // throws VLCompileError when malformed
   if (parts.length === 1 && parts[0] === userPath && roundTrips(userPath)) return { key: userPath }
-  return { key: safeKey(userPath), expr: datumPathRef(userPath) }
+  return { key: safeKey(userPath), expr: guardedPathRef(userPath) }
 }
 
 /** `datum["key"]` for a flat key (JSON-escaped; never spliced into a quoted literal). */
@@ -142,6 +142,16 @@ export function datumRef(key: string): string {
 /** `datum["a"]["b"]` for a (possibly nested) user field path. */
 export function datumPathRef(userPath: string): string {
   return 'datum' + splitAccessPath(userPath).map((p) => `[${JSON.stringify(p)}]`).join('')
+}
+
+/**
+ * A nested user path read the way vega-lite flattens it (util.ts accessPathWithDatum): every prefix is
+ * tested before the next step, `datum["o"] && datum["o"]["v"]`, so a row that lacks `o` yields a missing
+ * value instead of a TypeError. A one-piece path is just `datum["a"]`.
+ */
+export function guardedPathRef(userPath: string): string {
+  const parts = splitAccessPath(userPath)
+  return parts.map((_, i) => 'datum' + parts.slice(0, i + 1).map((p) => `[${JSON.stringify(p)}]`).join('')).join(' && ')
 }
 
 /** Generated field name `prefix_key` (flat-safe). */

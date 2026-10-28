@@ -426,6 +426,7 @@ vl/test_invalid_opacity_show
 vl/test_invalid_show
 vl/test_single_point_color
 vl/test_subobject
+vl/test_subobject_missing
 vl/test_subobject_nested
 vl/text_format
 vl/text_params

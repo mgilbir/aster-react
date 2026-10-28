@@ -352,3 +352,18 @@ for (const [group, cases] of Object.entries(GROUPS)) {
     for (const [name, spec] of cases) it(name, () => check(spec), 30_000)
   })
 }
+
+// util.ts accessPathWithDatum: a nested field is flattened with every prefix guarded, so a row that lacks `o` is a missing value
+describe('@aster/vl == vega-lite: the guarded flatten expression of a nested field (test_subobject_missing)', () => {
+  const flattenExprs = (vg: any): string[] =>
+    (vg.data ?? []).flatMap((d: any) => d.transform ?? []).filter((t: any) => t.type === 'formula' && /^datum\[[^(]*$/.test(t.expr)).map((t: any) => t.expr).sort()
+  for (const [name, field] of [['two levels', 'o.v'], ['three levels', 'o.p.v'], ['an escaped dot inside a path', 'o.a\\.b']] as const) {
+    it(name, () => {
+      const spec = { data: { values: [{ c: 'A', o: { v: 1, p: { v: 2 }, 'a.b': 3 } }, { c: 'B' }] }, mark: 'point', encoding: { x: { field: 'c', type: 'nominal' }, tooltip: { field, type: 'nominal' } } }
+      const oracle = (vl as any).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      expect(flattenExprs(oracle).length).toBeGreaterThan(0)
+      expect(flattenExprs(ours)).toEqual(flattenExprs(oracle))
+    })
+  }
+})

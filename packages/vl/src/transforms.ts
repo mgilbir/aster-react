@@ -7,7 +7,7 @@
  * later in-place edit of the emitted transforms (e.g. facet group-by
  * injection) cannot reach back into the caller's spec or into a sibling.
  */
-import { pushAll, genSignal, safeKey, splitAccessPath, VLCompileError, datumPathRef } from './names.js'
+import { pushAll, genSignal, safeKey, splitAccessPath, VLCompileError, datumPathRef, guardedPathRef } from './names.js'
 import { predicateExpr, paramLeaves } from './predicate.js'
 import { getTimeUnitParts, normalizeTimeUnit, timeUnitTransform } from './timeunit.js'
 
@@ -156,7 +156,7 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
     const prev = st.parsed.get(key)
     if (prev !== undefined) return
     st.parsed.set(key, type)
-    out.push({ type: 'formula', expr: `${PARSE_FN[type]}(${datumPathRef(field)})`, as: key })
+    out.push({ type: 'formula', expr: `${PARSE_FN[type]}(${guardedPathRef(field)})`, as: key })
   }
 
   if (t.calculate !== undefined) {
@@ -170,7 +170,7 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
       if (prev === undefined || (prev !== type && prev !== 'derived')) {
         if (splitAccessPath(f).length === 1) {
           st.parsed.set(f, type)
-          out.push({ type: 'formula', expr: `${PARSE_FN[type]}(${datumPathRef(f)})`, as: splitAccessPath(f)[0]! })
+          out.push({ type: 'formula', expr: `${PARSE_FN[type]}(${guardedPathRef(f)})`, as: splitAccessPath(f)[0]! })
         }
       }
     }

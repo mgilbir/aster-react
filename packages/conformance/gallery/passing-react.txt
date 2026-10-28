@@ -317,6 +317,7 @@ vl/test_aggregate_nested
 vl/test_field_with_spaces
 vl/test_single_point_color
 vl/test_subobject
+vl/test_subobject_missing
 vl/test_subobject_nested
 vl/text_format
 vl/text_params

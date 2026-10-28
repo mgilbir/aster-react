@@ -79,13 +79,13 @@ describe('field names reach expressions only through JSON-escaped datum[...] rea
     }
   })
 
-  it('dotted paths address nested data: o.v is read as datum["o"]["v"] ONCE and every later reference is a flat key', () => {
+  it('dotted paths address nested data: o.v is read as datum["o"] && datum["o"]["v"] ONCE and every later reference is a flat key', () => {
     const out = compileFrozen({
       data: DATA, mark: 'bar',
       encoding: { x: cn, y: { aggregate: 'sum', field: 'o.v', type: 'quantitative' } },
     })
     const flat = (out.data as Array<{ transform?: Array<Record<string, any>> }>).flatMap((d) => d.transform ?? [])
-    const copy = flat.find((t) => t.type === 'formula' && t.expr === 'datum["o"]["v"]')
+    const copy = flat.find((t) => t.type === 'formula' && t.expr === 'datum["o"] && datum["o"]["v"]')
     expect(copy).toBeDefined()
     expect(splitAccessPath(copy!.as)).toEqual([copy!.as])
     const agg = flat.find((t) => t.type === 'aggregate')!
@@ -118,7 +118,7 @@ describe('names.ts helpers', () => {
     expect(() => flatField("it's")).toThrowError(VLCompileError)
     expect(flatField("it\\'s").expr).toBe('datum["it\'s"]')
     const nested = flatField('o.v')
-    expect(nested.expr).toBe('datum["o"]["v"]')
+    expect(nested.expr).toBe('datum["o"] && datum["o"]["v"]')
     expect(nested.key).not.toMatch(/[.[\]]/)
     expect(flatField('a\\.b').expr).toBe('datum["a.b"]')
     expect(flatField('a\\.b').key).not.toContain('.')
