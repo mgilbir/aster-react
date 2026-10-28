@@ -167,6 +167,7 @@ vl/line
 vl/line_bump
 vl/line_calculate
 vl/line_color
+vl/line_color_binned
 vl/line_color_label
 vl/line_color_with_scale_domain
 vl/line_detail
@@ -201,6 +202,9 @@ vl/point_2d_config_no_zero
 vl/point_2d_tooltip
 vl/point_2d_tooltip_data
 vl/point_aggregate_detail
+vl/point_binned_color
+vl/point_binned_opacity
+vl/point_binned_size
 vl/point_bubble
 vl/point_color
 vl/point_color_custom

@@ -105,6 +105,24 @@ const GROUPS: Record<string, Case[]> = {
     ['vconcat: an explicit colour title and domain beat the implicit ones', { data: DATA, vconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c', { title: 'Letter', scale: { domain: ['C', 'B', 'A'] } }) } }, { mark: 'bar', encoding: { x: { aggregate: 'count' }, y: n('c'), color: n('c') } }] }],
     ['a quantize size scale has no zero', { data: DATA, mark: 'circle', encoding: { x: q('x'), y: q('y'), size: q('v', { scale: { type: 'quantize' } }) } }],
   ],
+  // bin.ts autoMaxBins: 6 bins on color / size / opacity / facets; scale/type.ts: a binned colour is a bin-ordinal scale; no
+  // aggregate node without an aggregate; a binned facet groups by both ends of its bin
+  'binned non-positional channels and facets (point_binned_color, trellis_scatter_binned_row)': [
+    ['binned colour on a point', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), color: q('v', { bin: true }) } }],
+    ['binned size on a point', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), size: q('v', { bin: true }) } }],
+    ['binned opacity on a point', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), opacity: q('v', { bin: true }) } }],
+    ['binned stroke width on a point', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), strokeWidth: q('v', { bin: true }) } }],
+    ['binned colour with explicit maxbins', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), color: q('v', { bin: { maxbins: 3 } }) } }],
+    ['binned colour on a rect', { data: DATA, mark: 'rect', encoding: { x: n('c'), y: n('g'), color: q('v', { bin: true }) } }],
+    ['binned colour on a line with a temporal x', { data: DATA, mark: 'line', encoding: { x: t('t'), y: q('y', { aggregate: 'mean' }), color: q('v', { bin: true }) } }],
+    ['bin only, no aggregate: a bar', { data: DATA, mark: 'bar', encoding: { x: q('x', { bin: true }) } }],
+    ['bin only, no aggregate: a point', { data: DATA, mark: 'point', encoding: { x: q('x', { bin: true }), y: q('y') } }],
+    ['facet row, binned', { data: DATA, mark: 'point', encoding: { row: q('v', { bin: true }), x: q('x'), y: q('y') } }],
+    ['facet column, binned, with a count bar', { data: DATA, mark: 'bar', encoding: { column: q('v', { bin: { maxbins: 3 } }), x: n('c'), y: { aggregate: 'count' } } }],
+    ['wrapped facet, binned', { data: DATA, facet: q('v', { bin: { maxbins: 3 } }), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['facet with a binned size and a temporal x in the child', { data: DATA, mark: 'point', encoding: { x: t('t'), y: q('y'), size: q('v', { bin: true }), facet: n('g') } }],
+    ['custom number format type on a binned tooltip', { data: DATA, usermeta: {}, config: { customFormatTypes: true, numberFormatType: 'pow' }, mark: { type: 'point', tooltip: true }, encoding: { x: q('x'), y: q('y', { bin: true }) } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
@@ -113,6 +131,13 @@ const SIZE_KEYS = (vg: any) => ({
   signals: (vg.signals ?? []).filter((s: any) => /width|height|step/i.test(s.name)).map((s: any) => ({ name: s.name, value: s.value, update: s.update, init: s.init })),
   scales: Object.fromEntries((vg.scales ?? []).filter((s: any) => /^[xy](Offset)?$/.test(s.name)).map((s: any) => [s.name, { type: s.type, range: s.range, paddingInner: s.paddingInner, paddingOuter: s.paddingOuter, padding: s.padding }])),
 })
+/** The kinds of data-shaping node in the spec (formula casts, the dataset layout, naming, order and the sharing of nodes between views are not part of it). */
+const DATA_NODES = (vg: any): string[] =>
+  (vg.data ?? [])
+    .flatMap((d: any) => (d.transform ?? []).map((t: any) => t.type))
+    .filter((ty: string) => ['aggregate', 'bin', 'extent', 'stack', 'impute', 'window', 'joinaggregate', 'timeunit', 'pivot', 'flatten', 'fold', 'lookup', 'sequence'].includes(ty))
+
+const DATA_NODE_KINDS = (vg: any): string[] => [...new Set(DATA_NODES(vg))].sort()
 const plain = (v: unknown) => JSON.parse(JSON.stringify(v))
 const deepFreeze = <T,>(v: T): T => {
   if (v !== null && typeof v === 'object' && !Object.isFrozen(v)) {
@@ -126,6 +151,7 @@ async function check(spec: Record<string, any>): Promise<void> {
   const oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, any> } }).compile(plain(spec)).spec
   const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
   expect(plain(SIZE_KEYS(ours)), 'size / layout of the compiled Vega').toEqual(plain(SIZE_KEYS(oracle)))
+  expect(DATA_NODE_KINDS(ours), 'data-shaping transforms').toEqual(DATA_NODE_KINDS(oracle))
   const [ref, mine, refChecked] = await Promise.all([renderWithVega(oracle), renderWithVegaChecked(plain(ours)), renderWithVegaChecked(oracle)])
   const inherited = new Set([...refChecked.errors, ...refChecked.warnings])
   expect([...mine.errors, ...mine.warnings].filter((m) => !inherited.has(m))).toEqual([])

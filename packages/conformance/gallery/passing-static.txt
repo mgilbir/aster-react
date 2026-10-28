@@ -136,6 +136,7 @@ vl/circle_scale_quantize
 vl/circle_scale_threshold
 vl/concat_marginal_histograms
 vl/concat_weather
+vl/config_numberFormatType_test
 vl/connected_scatterplot
 vl/dynamic_color_legend
 vl/embedded_csv
@@ -206,6 +207,7 @@ vl/line
 vl/line_bump
 vl/line_calculate
 vl/line_color
+vl/line_color_binned
 vl/line_color_label
 vl/line_color_with_scale_domain
 vl/line_detail
@@ -241,6 +243,9 @@ vl/point_2d_config_no_zero
 vl/point_2d_tooltip
 vl/point_2d_tooltip_data
 vl/point_aggregate_detail
+vl/point_binned_color
+vl/point_binned_opacity
+vl/point_binned_size
 vl/point_bubble
 vl/point_color
 vl/point_color_custom
@@ -346,6 +351,7 @@ vl/trellis_bar
 vl/trellis_bar_histogram
 vl/trellis_line_quarter
 vl/trellis_scatter
+vl/trellis_scatter_binned_row
 vl/trellis_scatter_small
 vl/trellis_stacked_bar
 vl/vconcat_weather
