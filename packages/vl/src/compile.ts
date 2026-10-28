@@ -865,6 +865,30 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const resolveScale = isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).scale)
     ? ((spec.resolve as Record<string, Record<string, unknown>>).scale as Record<string, unknown>)
     : {}
+  // resolve.ts / scale/assemble.ts: a scale of a non-position channel is the layer's own when the spec asks for it (resolve.scale) or
+  // when the layers' scales are of different families; it is then named after its layer (`layer_0_color`), and so are its references
+  const indepChannels = new Set<string>()
+  for (const ch of INDEPENDENT_CAPABLE_CHANNELS) {
+    const own = perLayerScales.map((ls) => ls.find((sc) => sc.name === ch)).filter((sc): sc is ScaleSpec => sc !== undefined)
+    if (own.length < 2 && resolveScale[ch] !== 'independent') continue
+    if (resolveScale[ch] === 'independent' || own.some((sc) => !compatibleScaleTypes(String(own[0]!.type), String(sc.type)))) indepChannels.add(ch)
+  }
+  const indepScaleNames = new Set<string>()
+  for (const ch of indepChannels) {
+    parsed.forEach((_p, i) => {
+      const sc = perLayerScales[i]?.find((x) => x.name === ch)
+      if (!sc) return
+      const named = `layer_${i}_${ch}`
+      sc.name = named
+      indepScaleNames.add(named)
+      const rewrite = (m: Record<string, unknown>): void => {
+        const upd = (m.encode as { update?: Record<string, unknown> } | undefined)?.update
+        if (upd) for (const v of Object.values(upd)) for (const r of ([] as unknown[]).concat(v ?? [])) if (isObject(r) && r.scale === ch) r.scale = named
+        for (const sub of (m.marks as Record<string, unknown>[] | undefined) ?? []) rewrite(sub)
+      }
+      for (const m of perLayerMarks[i] ?? []) rewrite(m)
+    })
+  }
   const indepY = resolveScale.y === 'independent'
   if (indepY) {
     const firstY = parsed.findIndex((p) => p.fields.some((f) => f.channel === 'y'))
@@ -895,9 +919,12 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // with independent y, the y scales stay per-layer (renamed); the remaining
   // scales still merge across layers
   const isIndepYScale = (s: ScaleSpec): boolean => s.name.startsWith('layer_') && s.name.endsWith('_y')
+  const isOwnScale = (s: ScaleSpec): boolean => indepScaleNames.has(s.name)
   const scales = indepY
-    ? [...mergeLayerScales(perLayerScales.map((ls) => ls.filter((s) => s.name !== 'y' && !isIndepYScale(s)))), ...perLayerScales.flat().filter(isIndepYScale)]
-    : mergeLayerScales(perLayerScales)
+    ? [...mergeLayerScales(perLayerScales.map((ls) => ls.filter((s) => s.name !== 'y' && !isIndepYScale(s) && !isOwnScale(s)))), ...perLayerScales.flat().filter(isIndepYScale), ...perLayerScales.flat().filter(isOwnScale)]
+    : indepScaleNames.size
+      ? [...mergeLayerScales(perLayerScales.map((ls) => ls.filter((s) => !isOwnScale(s)))), ...perLayerScales.flat().filter(isOwnScale)]
+      : mergeLayerScales(perLayerScales)
   out.scales = scales
   applyScaleConfig(scales, isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined)
   // invalid = "show": a layer positions its invalid values against the scale it shares, not its own (a point's zero-including
@@ -1019,6 +1046,12 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     for (const lg of unitLegends) {
       // one legend per scale channel (vega resolves shared legends across layers)
       const ch = legendChannel(lg)
+      // a layer's own scale has its own legend, which reads that scale
+      if (indepChannels.has(ch)) {
+        for (const k of LEGEND_SCALE_KEYS) if (lg[k] === ch) lg[k] = `layer_${pi}_${ch}`
+        legends.push(lg)
+        continue
+      }
       // resolve.legend: independent - every layer keeps its own legend of this channel (they read the same scale)
       if (isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).legend) && ((spec.resolve as Record<string, Record<string, unknown>>).legend)?.[ch] === 'independent') {
         legends.push(lg)
@@ -1226,6 +1259,23 @@ function domainEntries(domain: unknown): DomainEntry[] | null {
  * references; sorts must agree. Scales whose domains cannot be unioned
  * (differing explicit domains, signal domains) throw rather than pick one.
  */
+/** The non-position channels whose scales layers can keep apart. */
+const INDEPENDENT_CAPABLE_CHANNELS = ['color', 'size', 'opacity', 'shape', 'strokeWidth', 'strokeDash', 'fillOpacity', 'strokeOpacity', 'angle']
+
+/** The family a scale type belongs to; scales of one family merge across layers, the others cannot (scale/assemble.ts). */
+function scaleTypeCategory(t: string): string {
+  return t === 'point' || t === 'band' ? 'ordinal-position'
+    : t === 'time' || t === 'utc' ? 'time'
+    : ['linear', 'log', 'pow', 'sqrt', 'symlog', 'identity', 'sequential'].includes(t) ? 'numeric'
+    : ['ordinal', 'bin-ordinal'].includes(t) ? 'discrete'
+    : 'discretizing'
+}
+const compatibleScaleTypes = (a: string, b: string): boolean => {
+  const ca = scaleTypeCategory(a)
+  const cb = scaleTypeCategory(b)
+  return ca === cb || (ca === 'ordinal-position' && cb === 'time') || (cb === 'ordinal-position' && ca === 'time')
+}
+
 function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
   const byName = new Map<string, ScaleSpec[]>()
   for (const ls of perLayer) {
@@ -1243,16 +1293,8 @@ function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
       continue
     }
     const merged: ScaleSpec = { name, type: first.type, domain: undefined }
-    const category = (t: string): string =>
-      t === 'point' || t === 'band' ? 'ordinal-position'
-      : t === 'time' || t === 'utc' ? 'time'
-      : ['linear', 'log', 'pow', 'sqrt', 'symlog', 'identity', 'sequential'].includes(t) ? 'numeric'
-      : ['ordinal', 'bin-ordinal'].includes(t) ? 'discrete'
-      : 'discretizing'
-    const compatible = (a: string, b: string): boolean =>
-      category(a) === category(b) || (category(a) === 'ordinal-position' && category(b) === 'time') || (category(b) === 'ordinal-position' && category(a) === 'time')
     for (const s2 of list) {
-      if (!compatible(first.type, s2.type)) {
+      if (!compatibleScaleTypes(first.type, s2.type)) {
         throw new VLCompileError(`layers give scale "${name}" incompatible types ("${first.type}" and "${s2.type}"); vega-lite would make them independent scales, which @aster/vl does not support`)
       }
     }

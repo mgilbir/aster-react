@@ -602,6 +602,17 @@ const GROUPS: Record<string, Case[]> = {
     ['a grouped fit parameters', { data: DATA, transform: [{ regression: 'y', on: 'x', groupby: ['g'], params: true }, { calculate: 'datum.rSquared', as: 'r2' }], mark: 'bar', encoding: { x: n('g'), y: q('r2') } }],
     ['params: false is the fitted line', { data: DATA, transform: [{ regression: 'y', on: 'x', params: false }], mark: 'line', encoding: { x: q('x'), y: q('y') } }],
   ],
+  // scale/assemble.ts + resolve.ts: layers whose scales of a channel cannot merge (or that ask for it) keep one each, named after the layer
+  // (layer_text_heatmap_joinaggregate)
+  'independent non-position scales in layers (layer_text_heatmap_joinaggregate)': [
+    ['a quantitative and a nominal colour with an explicit domain', { data: DATA, encoding: { x: n('c'), y: n('g') }, layer: [{ mark: 'rect', encoding: { color: q('v', { title: 'V', legend: { direction: 'horizontal', gradientLength: 120 } }) } }, { mark: 'text', encoding: { text: q('v'), color: { field: 'g', type: 'nominal', scale: { domain: ['p', 'q'], range: ['black', 'white'] }, legend: null } } }] }],
+    ['colour scales kept apart by resolve', { data: DATA, resolve: { scale: { color: 'independent' } }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } }, { mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('g') } }] }],
+    ['colour scales kept apart by resolve, with legends', { data: DATA, resolve: { scale: { color: 'independent' } }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: q('v') } }, { mark: { type: 'tick', thickness: 3 }, encoding: { x: q('x'), y: q('y'), color: n('c') } }] }],
+    ['size scales kept apart by resolve', { data: DATA, resolve: { scale: { size: 'independent' } }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), size: q('v') } }, { mark: 'circle', encoding: { x: q('x'), y: q('v'), size: q('y') } }] }],
+    ['opacity scales kept apart by resolve', { data: DATA, resolve: { scale: { opacity: 'independent' } }, layer: [{ mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), opacity: q('x', { aggregate: 'mean' }) } }, { mark: 'point', encoding: { x: n('c'), y: q('v', { aggregate: 'mean' }), opacity: q('y', { aggregate: 'max' }) } }] }],
+    ['compatible colours still share one scale', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } }, { mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('c') } }] }],
+    ['a layer with no colour next to one with', { data: DATA, resolve: { scale: { color: 'independent' } }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
