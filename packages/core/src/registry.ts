@@ -27,6 +27,8 @@ export interface GeoRegistry {
   /** The unrounded bounds [x1, y1, x2, y2] of a projected shape (what vega's bound pass sees); null until loaded. */
   projectedBounds: ((projection: unknown, geo: unknown) => [number, number, number, number] | null) | null
   /** d3-contour marching squares over a raster grid; null until loaded. */
+  /** vega-projection's `defaultPath`: d3's geoPath with no projection (a `geopath` that names none draws raw coordinates). */
+  defaultPath: (() => unknown) | null
   contourRun: ((values: number[] | Float32Array, thresholds: number[], size: [number, number], smooth: boolean) => ContourFeature[]) | null
 }
 
@@ -34,6 +36,7 @@ export const geoRegistry: GeoRegistry = {
   buildProjection: null,
   projectedPath: null,
   projectedBounds: null,
+  defaultPath: null,
   contourRun: null,
 }
 

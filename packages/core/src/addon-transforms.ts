@@ -11,3 +11,4 @@
  * is missing (see registry.ts `requireTransform`).
  */
 import './transform-extra.js'
+import './stats-functions.js'

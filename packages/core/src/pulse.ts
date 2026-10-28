@@ -58,13 +58,13 @@ export interface RowDiff {
 const ROWWISE = new Set<string>([
   'formula', 'identifier', 'timeunit',
   // 1:1 geo transforms: each output row depends only on its own input row.
-  'geoshape', 'geopoint', 'linkpath', 'project', 'geojson',
+  'geoshape', 'geopath', 'geopoint', 'linkpath', 'project', 'geojson',
 ])
 const GROUPED = new Set<string>(['aggregate', 'joinaggregate', 'window', 'stack'])
 /** Transforms whose output row count/order is independent of the input order. */
 const EXPANDING = new Set<string>([
-  'fold', 'flatten', 'pivot', 'geojson', 'geopoint', 'geoshape', 'contour', 'linkpath',
-  'kde', 'quantile', 'regression', 'loess', 'pack', 'partition', 'treemap', 'wordcloud',
+  'fold', 'flatten', 'pivot', 'geojson', 'geopoint', 'geoshape', 'geopath', 'contour', 'linkpath',
+  'kde', 'quantile', 'regression', 'loess', 'pack', 'partition', 'treemap', 'tree', 'treelinks', 'force', 'kde2d', 'isocontour', 'wordcloud',
   'voronoi', 'cross', 'countpattern', 'dotbin', 'project', 'label', 'stratify', 'sequence',
   'graticule',
 ])
@@ -75,8 +75,8 @@ const EXPANDING = new Set<string>([
  * bins, hierarchical layout). Their output can be spliced by index.
  */
 const INDEX_PRESERVING = new Set<string>([
-  'formula', 'identifier', 'timeunit', 'geoshape', 'geopoint', 'linkpath', 'project',
-  'geojson', 'label', 'pie', 'dotbin', 'pack', 'partition', 'treemap', 'voronoi',
+  'formula', 'identifier', 'timeunit', 'geoshape', 'geopath', 'geopoint', 'linkpath', 'project',
+  'geojson', 'label', 'pie', 'dotbin', 'pack', 'partition', 'treemap', 'tree', 'voronoi',
 ])
 
 /** Transforms that re-derive every output but never change the input mapping. */

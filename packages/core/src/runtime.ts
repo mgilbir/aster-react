@@ -540,6 +540,11 @@ function prepareChartCtx(
   const runtime: ExpressionRuntime = {
     scale: (name) => scales.get(name),
     data: (name) => datasets.get(name),
+    projection: (name) => transformProjections.get(name),
+    tree: (name) => {
+      const root = transformHierarchies.get(name)
+      return root === undefined ? undefined : { root, rows: datasets.get(name) ?? [] }
+    },
     containerSize: () => {
       const c = input.containerSize ?? input.measuredSize
       return c ? [c.width, c.height] : [undefined, undefined]
@@ -1358,6 +1363,29 @@ function dependsOn(chart: CompiledChart, a: string, b: string): boolean {
     }
   }
   return false
+}
+
+/** The datasets some `force` transform (a dataset's or a mark's) takes link rows from. */
+const FORCE_LINKS = new WeakMap<CompiledChart, Set<string>>()
+function forceLinkDatasets(chart: CompiledChart): Set<string> {
+  let out = FORCE_LINKS.get(chart)
+  if (out) return out
+  out = new Set()
+  const visit = (transforms: readonly CompiledTransform[] | undefined): void => {
+    for (const t of transforms ?? []) {
+      if (t.type !== 'force') continue
+      for (const f of (t as { forces?: Array<{ force?: string; links?: unknown }> }).forces ?? []) {
+        if (f.force === 'link' && typeof f.links === 'string') out!.add(f.links)
+      }
+    }
+  }
+  const walk = (marks: readonly CompiledMark[] | undefined): void => {
+    for (const m of marks ?? []) { visit(m.transform); walk(m.marks) }
+  }
+  for (const d of chart.data) visit(d.transform)
+  walk(chart.marks)
+  FORCE_LINKS.set(chart, out)
+  return out
 }
 
 const SIGNAL_PREREQS = new WeakMap<CompiledChart, Map<string, string[]>>()
@@ -2605,7 +2633,7 @@ function rowLocal(t: CompiledTransform, tctx: StepTransformContext): boolean {
     case 'timeunit':
       // without explicit units vega bins the data extent (global); inferUnits looks at every row
       return (t as { units?: unknown }).units != null && !(t as { inferUnits?: unknown }).inferUnits && (t as { extent?: unknown }).extent === undefined
-    case 'geoshape': case 'geopoint':
+    case 'geoshape': case 'geopath': case 'geopoint':
       // a projection that fits data moves with the data: a derived x/y or path is only valid for the fit it was made under
       return !(tctx.projections as ProjectionRegistry | undefined)?.fitNames?.has(String((t as { projection?: unknown }).projection))
     case 'linkpath': case 'project':
@@ -2694,6 +2722,7 @@ function applyStepWithPulse(
     case 'formula':
     case 'timeunit':
     case 'geoshape':
+    case 'geopath':
     case 'geopoint':
     case 'linkpath':
     case 'project':
@@ -2749,6 +2778,7 @@ function applyStepWithPulse(
     case 'pack':
     case 'partition':
     case 'treemap':
+    case 'tree':
     case 'voronoi':
       return rederiveAligned(rows, t, tctx, sourceName, input, prev)
         ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
@@ -2933,6 +2963,9 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       } else {
         rows = build(src, seen).map((r) => ({ ...r }))
         inPulse = ctx.datasetPulses.get(src) ?? null
+        // (vega: the backing tree travels with the source array, `pulse.source.root`, to a dataset derived from it)
+        const root = ctx.hierarchies.get(src)
+        if (root !== undefined && !ctx.hierarchies.has(name)) ctx.hierarchies.set(name, root)
       }
     } else if (d.values != null) {
       const given = ownGet(inputData, name)
@@ -3011,6 +3044,9 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       rows = []
       outPulse = null
     }
+    // a dataset a `force` link force reads gets its link rows rewritten (their ends become the nodes): they are this
+    // evaluation's own copies, never the spec's
+    if (forceLinkDatasets(ctx.chart).has(name)) rows = rows.map((r) => ({ ...r }))
     ctx.datasets.set(name, rows)
     ctx.datasetPulses.set(name, outPulse)
     return rows
@@ -3428,7 +3464,7 @@ function reusablePulse(
 }
 
 /** A mark `transform` vega runs on the encoded items (see evaluateMarkItems). */
-const ITEM_TRANSFORMS: ReadonlySet<string> = new Set(['voronoi', 'lookup', 'linkpath'])
+const ITEM_TRANSFORMS: ReadonlySet<string> = new Set(['voronoi', 'lookup', 'linkpath', 'force', 'geopath'])
 function isItemTransform(t: CompiledTransform): boolean {
   return ITEM_TRANSFORMS.has(String(t.type))
 }
@@ -3621,6 +3657,8 @@ function evaluateMarkItems(
         runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections,
         // (`lookup` `from` is a dataset, or the name of a mark: its items)
         datasets: (n) => ctx.datasets.get(n) ?? (ctx.markItems.get(n) as unknown as Row[] | undefined),
+        // (vega's tuples: a force layout moves the items themselves)
+        inPlace: true,
       }, source)
       if (t.type === 'voronoi') {
         const as = ((t as { as?: string }).as) ?? 'path'
@@ -3794,6 +3832,8 @@ interface GroupSource {
 interface FacetDef {
   name: string
   data: string
+  /** Pre-faceted data: each datum holds the array of the group's rows in this field. */
+  field?: string
   groupby?: string | string[]
   aggregate?: { fields: string[]; ops: string[] }
 }
@@ -3806,6 +3846,17 @@ interface FacetDef {
  */
 function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
   const facet = (mark.from as { facet?: FacetDef } | undefined)?.facet
+  if (facet?.field !== undefined) {
+    // vega-transforms PreFacet: one group item per datum (the datum is the item's datum), its rows the array the
+    // datum holds in `field`
+    const get = fieldOf(facet.field)
+    return (ctx.datasets.get(facet.data) ?? []).map((row, i) => ({
+      datum: row,
+      rows: ingestRows((get(row) as Row[]).map((x) => x)),
+      facetName: facet.name,
+      key: String(i),
+    }))
+  }
   if (facet) {
     const keys = ([] as string[]).concat(facet.groupby ?? [])
     if (!keys.length) return []

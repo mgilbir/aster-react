@@ -51,7 +51,8 @@ async function runOne(entry: CorpusEntry): Promise<{ pass: boolean; diffs: strin
   try {
     const { spec } = vegaSpecFor(entry)
     const [oracleSvg, ourSvg] = await Promise.all([
-      renderWithVega(spec),
+      // (vega changes the rows of an inline dataset in place -- a force layout rewrites its link rows -- so it gets a copy)
+      renderWithVega(structuredClone(spec)),
       // url datasets resolve through the load addon, exactly what a real host does
       loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS).then((loaded) => renderSpec(loaded as never)),
     ])

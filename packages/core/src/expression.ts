@@ -52,6 +52,10 @@ export interface ExpressionRuntime {
   data: (name: string) => unknown[] | undefined
   /** Compile an expression string against this runtime. */
   expr: (expr: string) => CompiledExpr
+  /** A projection by name (vega keeps projections among the scales: `geoArea('projection', ...)`), when the host has any. */
+  projection?: (name: string) => unknown
+  /** The tree a dataset is the backing data of (`treePath`, `treeAncestors`): its root and the dataset's rows. */
+  tree?: (name: string) => unknown
   /**
    * The `modify(name, insert, remove, toggle, modify, values)` expression function: queue an edit of the
    * named dataset. Only a host that owns datasets while it runs event handlers (the signal event loop)
@@ -226,10 +230,23 @@ const REGISTERED = new Map<string, (...args: never[]) => unknown>()
 /** Bumped on every registration change: a compiled expression compiled under an older registry re-validates before it runs. */
 let registryEpoch = 0
 
+/** Functions an addon contributes that read the view they run in (a projection by name): built per runtime. */
+const REGISTERED_BOUND = new Map<string, (runtime: ExpressionRuntime) => (...args: never[]) => unknown>()
+
 function createFunctionContext(runtime: ExpressionRuntime): Record<string, unknown> {
   const fns = createBuiltinFunctions(runtime)
+  for (const [name, make] of REGISTERED_BOUND) fns[name] = make(runtime)
   for (const [name, fn] of REGISTERED) fns[name] = fn
   return fns
+}
+
+/**
+ * For the addons: an expression function that needs the runtime it is evaluated in (the geo addon's `geoCentroid`
+ * reads a projection by name). `make` runs once per runtime. Internal -- not exported from the package barrel.
+ */
+export function registerRuntimeExpressionFunction(name: string, make: (runtime: ExpressionRuntime) => (...args: never[]) => unknown): void {
+  REGISTERED_BOUND.set(name, make)
+  registryEpoch++
 }
 
 let builtinNames: Set<string> | undefined

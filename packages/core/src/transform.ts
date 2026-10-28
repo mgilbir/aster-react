@@ -32,6 +32,11 @@ export interface TransformContext {
   hierarchies?: Map<string, unknown>
   /** Cartographic projections, for the `geoshape` transform's `projection` param. */
   projections?: Map<string, unknown>
+  /**
+   * The rows are the caller's own to change (a mark's encoded items): a layout that vega runs in place (`force`)
+   * does not copy them first.
+   */
+  inPlace?: boolean
 }
 
 export type Row = Record<string, unknown>
@@ -66,6 +71,11 @@ function containsSignal(v: unknown, depth = 0): boolean {
   return Object.keys(o).some((k) => containsSignal(o[k], depth + 1))
 }
 
+/** A parameter value that is a lone `{signal: <expression>}`. */
+function isSignalRef(v: unknown): boolean {
+  return v !== null && typeof v === 'object' && !isArray(v) && typeof (v as { signal?: unknown }).signal === 'string' && Object.keys(v as object).length === 1
+}
+
 const signalParams = new WeakMap<object, boolean>()
 
 /**
@@ -85,7 +95,11 @@ function resolveSignalParams(t: CompiledTransform, ctx: TransformContext): Compi
     if (v === null || typeof v !== 'object' || depth > 6) return v
     if (isArray(v)) return (v as unknown[]).map((x) => resolve(x, depth + 1))
     const o = v as Record<string, unknown>
-    if (typeof o.signal === 'string' && Object.keys(o).length === 1) return ctx.runtime.expr(o.signal)({}, ctx.signals)
+    if (typeof o.signal === 'string' && Object.keys(o).length === 1) {
+      // (vega-parser Scope.signalRef: the name of a declared signal is that signal, not an expression -- `static`,
+      // a reserved word to the expression parser, is a fine signal name)
+      return Object.hasOwn(ctx.signals, o.signal) ? ctx.signals[o.signal] : ctx.runtime.expr(o.signal)({}, ctx.signals)
+    }
     const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>
     for (const k of Object.keys(o)) out[k] = resolve(o[k], depth + 1)
     return out
@@ -170,6 +184,8 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       return requireTransform('countpattern')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'dotbin':
       return requireTransform('dotbin')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'geopath':
+      return requireTransform('geopath')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'geopoint':
       return requireTransform('geopoint')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'geojson':
@@ -206,6 +222,19 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       return requireTransform('pack')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'partition':
       return requireTransform('partition')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'treelinks':
+      return requireTransform('treelinks')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'force': {
+      // (which parameters were `{signal}`s matters to the simulation: see force-layout.ts)
+      const dynamicParams = new Set(Object.keys(t0).filter((k) => {
+        const v = (t0 as Record<string, unknown>)[k]
+        // (an expression, not the bare name of a declared signal: that is the signal's own operator)
+        return isSignalRef(v) && !Object.hasOwn(ctx.signals, (v as { signal: string }).signal)
+      }))
+      return requireTransform('force')(rows, t as Record<string, unknown>, { ...ctx, dynamicParams }, sourceName)
+    }
+    case 'tree':
+      return requireTransform('tree')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'treemap':
       return requireTransform('treemap')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'sequence':
@@ -216,6 +245,10 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       return graticuleRows(t as Record<string, unknown>)
     case 'contour':
       return contourRows(rows, t as Record<string, unknown>, ctx)
+    case 'kde2d':
+      return requireTransform('kde2d')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'isocontour':
+      return requireTransform('isocontour')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'wordcloud':
       return requireTransform('wordcloud')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'voronoi':
@@ -563,7 +596,7 @@ function d3TickStep(start: number, stop: number, count: number): number {
 }
 
 /** vega Contour `quantize(k, nice, zero)` -> threshold generator. */
-function contourQuantize(k: number, nice: boolean, zero: boolean): (values: Float32Array | number[]) => number[] {
+export function contourQuantize(k: number, nice: boolean, zero: boolean): (values: Float32Array | number[]) => number[] {
   return (values) => {
     let mn: number | undefined
     let mx: number | undefined
@@ -587,7 +620,7 @@ function contourQuantize(k: number, nice: boolean, zero: boolean): (values: Floa
   }
 }
 
-function blurX(n: number, m: number, source: Float32Array, target: Float32Array, r: number): void {
+export function blurX(n: number, m: number, source: Float32Array, target: Float32Array, r: number): void {
   const w = (r << 1) + 1
   for (let j = 0; j < m; ++j) {
     for (let i = 0, sr = 0; i < n + r; ++i) {
@@ -599,7 +632,7 @@ function blurX(n: number, m: number, source: Float32Array, target: Float32Array,
     }
   }
 }
-function blurY(n: number, m: number, source: Float32Array, target: Float32Array, r: number): void {
+export function blurY(n: number, m: number, source: Float32Array, target: Float32Array, r: number): void {
   const w = (r << 1) + 1
   for (let i = 0; i < n; ++i) {
     for (let j = 0, sr = 0; j < m + r; ++j) {
@@ -638,7 +671,7 @@ function quartilesOf(values: number[]): number[] {
   ]
 }
 
-function bwRadius(bw: number, data: number[]): number {
+export function bwRadius(bw: number, data: number[]): number {
   const v = bw >= 0 ? bw : estimateBandwidth(data)
   return Math.round((Math.sqrt(4 * v * v + 1) - 1) / 2)
 }
@@ -842,6 +875,8 @@ export interface HierNode {
   y: number
   r: number
   value: number
+  /** On a tree's root: the nodes by their `key` value (vega-hierarchy `lookup`), for `treePath` / `treeAncestors`. */
+  lookup?: Map<string, HierNode>
   /** Treemap bounding rectangle (d3-hierarchy node.x0/x1/y0/y1). */
   x0?: number
   y0?: number
@@ -931,6 +966,10 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
     node.depth = node.parent ? node.parent.depth + 1 : 0
   })
   if (reached < nodes.length) throw new Error('[aster] stratify: cycle')
+  // (vega-hierarchy lookup(): every node by its key, the last of equal keys winning)
+  const lookup = new Map<string, HierNode>()
+  for (const node of nodes) lookup.set(String(node.data[key]), node)
+  root.lookup = lookup
   eachAfter(root, (node) => {
     let h = 0
     for (const c of node.children) if (c.height + 1 > h) h = c.height + 1
