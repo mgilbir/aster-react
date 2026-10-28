@@ -394,6 +394,20 @@ specs:
 import '@aster/react/vl'   // side effect: registers the from-scratch VL compiler
 ```
 
+**Add-ons load themselves.** A spec that needs an opt-in core add-on (`@aster/core/transforms`: `pie`, `treemap`, `kde`, ...;
+`@aster/core/geo`: projections, `contour`; `@aster/core/load`: `csv`/`tsv`/`dsv`/`topojson` formats) renders with nothing imported:
+`<Chart>`, `<SvgChart>`, `useChart`, `useChartStream`, `<ChartStream>` and the worker hooks read what the spec needs
+(`addonsNeeded` in `@aster/core/addons`) and import it. The wait is a Suspense wait, the same as for an async `spec`: put a
+`<Suspense fallback>` above the chart to show something meanwhile (without one the new root commits when the chart is ready; to keep an
+existing chart on screen while a changed spec's add-on loads, update inside `startTransition`). A spec that needs no add-on never
+suspends and imports nothing; an app that imported the add-on itself never loads it twice. A failed import reaches `onError`
+(`error` in the hooks) once. Server rendering: `renderToPipeableStream` / `renderToReadableStream` wait for the import and
+send the chart; `renderToString` renders the `<Suspense>` fallback (the client renders the chart) and `renderChartToStaticMarkup` /
+`hydrateChart` are synchronous, so `await loadAddonsFor(spec)` (or a static `import '@aster/core/geo'` in the server entry) before them.
+In a worker, the shipped `@aster/react/worker-entry` imports what a message's spec needs before handling it; `url` data is never
+fetched automatically (`useSpecData` / `loadSpecData`), only its readers load. Bundlers split the add-ons into chunks fetched on
+demand; the bundle budget counts what loads up front.
+
 The base `@aster/react` entry does not include the Vega-Lite compiler; importing `@aster/react/vl` adds about 54.2 kB
 gzip to the bundle (`<Chart>` 157.2 kB, `<Chart>` + `@aster/react/vl` 211.3 kB, measured by
 `pnpm --filter @aster/benchmarks run budget`; see [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the addon throws an error naming the missing

@@ -15,6 +15,7 @@ import {
   type VgSpec,
 } from '@aster/core'
 import { isPromiseLike, normalizeChartSpec, useStableContent, useStableSpecRows } from './spec.js'
+import { useAddons } from './addons.js'
 import { validateDataChanges } from './dataChanges.js'
 import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './serialScales.js'
 // The incremental DOM patcher ships as the `@aster/core/dom` addon, which every chart needs. The canvas
@@ -347,6 +348,9 @@ function ChartView({
   // neither recompiles (Vega-Lite) nor re-evaluates.
   const stableSpec = useStableSpecRows(rawSpec)
   const spec = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
+  // The opt-in add-ons the spec needs (transforms, geo, load) arrive before the first evaluation: this suspends while
+  // they load, so there is no render of the half-ready chart and no error to flash. A failed import is a chart error.
+  const addonError = useAddons(sceneOverride !== undefined ? null : spec)
   const stableLimits = useStableContent(limits)
   // Which scales `view`/`brush`/`selection`'s `x`/`y` refer to.
   const positional = React.useMemo(() => positionalScales(spec), [spec])
@@ -476,6 +480,7 @@ function ChartView({
     if (sceneOverride !== undefined) {
       return { scene: sceneOverride, error: null, problems: [] }
     }
+    if (addonError) return { scene: null, error: addonError, problems: [] }
     try {
       const { changes, problems } = validateDataChanges(dataChanges, inputData, prevLengthsRef.current)
       prevLengthsRef.current = new Map(Object.entries(inputData ?? {}).map(([name, rows]) => [name, rows.length]))
@@ -491,7 +496,7 @@ function ChartView({
     } catch (err) {
       return { scene: null, error: err instanceof Error ? err : new Error(String(err)), problems: [] }
     }
-  }, [sceneOverride, spec, inputData, dataChanges, sizeInput, mergedSignals, stableLimits, urlPolicy, domainRaw, textMetrics, stableLogger])
+  }, [sceneOverride, addonError, spec, inputData, dataChanges, sizeInput, mergedSignals, stableLimits, urlPolicy, domainRaw, textMetrics, stableLogger])
   const scene = evaluation.scene
   sceneRef.current = scene
   const renderError = evaluation.error

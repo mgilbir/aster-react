@@ -22,6 +22,7 @@ import {
   type VgSpec,
 } from '@aster/core'
 import { normalizeChartSpec, useStableSpec } from './spec.js'
+import { useAddons } from './addons.js'
 
 export interface UseChartStreamOptions extends StreamOptions {
   /** Serialize the scene to SVG on every flush (default true). */
@@ -101,6 +102,8 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
   const { serialize = true, autoFlush = true, flushPolicy = 'microtask', capacity, policy, initial, maxQueuedRows, limits, textMetrics } = options
   const stableSpec = useStableSpec(spec)
   const normalized = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
+  // The add-ons the spec needs load before the stream is created (and primed): suspends meanwhile; a failed import is `error`.
+  const addonError = useAddons(normalized)
   const streamRef = React.useRef<ChartStream | null>(null)
   const streamKey = React.useRef<{ spec: VgSpec; capacity?: number; policy?: StreamOptions['policy']; maxQueuedRows?: number } | null>(null)
   const primedRef = React.useRef<TaggedState | null>(null)
@@ -121,6 +124,7 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
     streamKey.current = { spec: normalized, capacity, policy, maxQueuedRows }
     let primed: StreamState
     try {
+      if (addonError) throw addonError
       const first = created.flush()
       primed = first
         ? { scene: first.scene, svg: serialize ? renderSceneToSvg(first.scene) : null, error: null, flushFailure: null }

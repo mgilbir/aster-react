@@ -3,6 +3,7 @@ import { checkSvgLength, renderSceneToSvg, type RuntimeInput, type SceneRoot, ty
 import { createChartSession } from '@aster/core/dom'
 import type { LoadOptions } from '@aster/core/load'
 import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
+import { useAddons } from './addons.js'
 
 export interface UseChartOptions extends RuntimeInput {
   /** Skip SVG serialization when the host renders the scene itself. */
@@ -29,6 +30,9 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
   const stableSpec = useStableSpec(spec)
   const limits = useStableContent(input.limits)
   const normalized = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
+  // The opt-in add-ons the spec needs load before the first evaluation: the hook suspends meanwhile (a <Suspense> boundary
+  // above shows its fallback), and an import that fails is the result's `error`.
+  const addonError = useAddons(normalized)
   const sessionRef = React.useRef<ReturnType<typeof createChartSession> | null>(null)
   if (sessionRef.current == null) sessionRef.current = createChartSession()
   const session = sessionRef.current
@@ -42,6 +46,7 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
     autoChanges: input.autoChanges, domainRaw: input.domainRaw, logger: input.logger, containerSize: input.containerSize, measuredSize: input.measuredSize,
   }
   return React.useMemo(() => {
+    if (addonError) return { scene: null, svg: null, error: addonError, session }
     try {
       const scene = session.evaluate(normalized, { ...input, limits })
       const svg = serialize ? renderSceneToSvg(scene) : null
@@ -51,7 +56,7 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
     } catch (e) {
       return { scene: null, svg: null, error: e instanceof Error ? e : new Error(String(e)), session }
     }
-  }, [normalized, ...Object.values(deps), serialize, session])
+  }, [normalized, addonError, ...Object.values(deps), serialize, session])
 }
 
 // ---------------------------------------------------------------------------
