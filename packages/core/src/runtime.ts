@@ -1616,7 +1616,17 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
   // Reproduce that by iterating the content size to a fixed point.
   let cw = initialW
   let ch = initialH
-  let built = buildContent(chart, input, cw, ch, txn)
+  let built: BuiltContent
+  if (auto === 'none' && chart.autosizeContains === 'padding') {
+    // autosize `none` with `contains: "padding"`: the view's width / height INCLUDE the padding, so the group (the
+    // width / height signals, every scale and expression that reads them) gets what is left (vega-view-transforms
+    // viewSizeLayout: `width = viewWidth`, the padding taken out of it), as a resize of the view does.
+    cw = Math.max(0, initialW - base.left - base.right)
+    ch = Math.max(0, initialH - base.top - base.bottom)
+    built = buildContent(chart, input, cw, ch, txn, true)
+  } else {
+    built = buildContent(chart, input, cw, ch, txn)
+  }
   if (auto === 'fit' || auto === 'fit-x' || auto === 'fit-y') {
     // A `width`/`height` signal (update or init, e.g. vega-lite's
     // `isFinite(containerSize()[0]) ? ... : 300`) resolves while the first

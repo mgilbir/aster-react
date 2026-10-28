@@ -1,0 +1,6 @@
+{"$schema":"https://vega.github.io/schema/vega/v6.json","width":200,"height":120,"padding":{"left":30,"right":10,"top":20,"bottom":10},
+"autosize":{"type":"none","contains":"padding"},
+"signals":[{"name":"half","update":"width / 2"}],
+"scales":[{"name":"x","type":"linear","domain":[0,10],"range":"width"},{"name":"y","type":"linear","domain":[0,5],"range":"height"}],
+"axes":[{"orient":"bottom","scale":"x"},{"orient":"left","scale":"y"}],
+"marks":[{"type":"symbol","encode":{"update":{"x":{"signal":"half"},"y":{"signal":"height / 2"},"size":{"value":200},"fill":{"value":"purple"}}}}]}

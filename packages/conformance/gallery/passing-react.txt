@@ -33,6 +33,7 @@ vega/violin-plot
 vega/weekly-temperature
 vega/wheat-and-wages
 vega/wheat-plot
+vega/wind-vectors
 vl/arc_color_mappings
 vl/arc_donut
 vl/arc_pie
@@ -168,6 +169,10 @@ vl/line_outside_domain
 vl/line_override_static_format
 vl/line_params
 vl/line_quarter_legend
+vl/line_skip_invalid
+vl/line_skip_invalid_mid
+vl/line_skip_invalid_mid_cap_square
+vl/line_skip_invalid_mid_overlay
 vl/line_step
 vl/line_timeunit_transform
 vl/lookup
@@ -194,8 +199,10 @@ vl/point_params
 vl/point_tooltip
 vl/rect_heatmap
 vl/square
+vl/stacked_area
 vl/stacked_area_normalize
 vl/stacked_area_ordinal
+vl/stacked_area_stream
 vl/stacked_bar_count
 vl/stacked_bar_count_corner_radius_config
 vl/stacked_bar_count_corner_radius_mark

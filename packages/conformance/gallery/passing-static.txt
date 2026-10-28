@@ -40,6 +40,7 @@ vega/watch
 vega/weekly-temperature
 vega/wheat-and-wages
 vega/wheat-plot
+vega/wind-vectors
 vega/zoomable-world-map
 vl/airport_connections
 vl/animated_gapminder
@@ -136,6 +137,8 @@ vl/interactive_area_brush
 vl/interactive_bar_select_highlight
 vl/interactive_brush
 vl/interactive_index_chart
+vl/interactive_legend
+vl/interactive_legend_dblclick
 vl/interactive_multi_line_tooltip
 vl/interactive_paintbrush
 vl/interactive_paintbrush_color
@@ -196,6 +199,10 @@ vl/line_outside_domain
 vl/line_override_static_format
 vl/line_params
 vl/line_quarter_legend
+vl/line_skip_invalid
+vl/line_skip_invalid_mid
+vl/line_skip_invalid_mid_cap_square
+vl/line_skip_invalid_mid_overlay
 vl/line_step
 vl/line_timeunit_transform
 vl/lookup
@@ -261,8 +268,10 @@ vl/selection_zoom_brush_wheel
 vl/selection_zoom_scatterplot_shift-wheel
 vl/selection_zoom_scatterplot_wheel
 vl/square
+vl/stacked_area
 vl/stacked_area_normalize
 vl/stacked_area_ordinal
+vl/stacked_area_stream
 vl/stacked_bar_count
 vl/stacked_bar_count_corner_radius_config
 vl/stacked_bar_count_corner_radius_mark
