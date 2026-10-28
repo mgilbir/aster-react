@@ -529,7 +529,8 @@ function prepareChartCtx(
   // update: ...}]`, without a top-level numeric height. It's resolved later by
   // resolveSignalUpdates, so apply the fallback after that (see below).
   let height = signed?.height ?? resolveSize(chart.height, viewOverride(chart, input, 'height'), signals)
-  const signalParams = dict<unknown>({ width, height }, signals)
+  // (`padding` is the view's own signal like `width` and `height`: the spec's padding, as vega-parser normalises it)
+  const signalParams = dict<unknown>({ width, height, padding: { ...chart.padding } }, signals)
   // A signal the spec declares without a value (it is written by a handler later) exists, with the value undefined
   // (vega-parser refuses a reference to a name that is no signal, not one that holds nothing yet)
   for (const def of chart.signalDefs ?? []) if (!(def.name in signalParams)) signalParams[def.name] = undefined
@@ -644,13 +645,14 @@ function prepareChartCtx(
   // it could never be incremental.
   for (let i = 0; i < 3 && resolveSignalUpdates(ctx, true); i++) { /* to a fixed point */ }
   buildDatasets(ctx, input.data ?? {})
+  const readsScales = datasetsReadScales(chart)
   let changed = true
   let rounds = 0
   while (changed && rounds < 3) {
     // (a map whose projection was consumed before the `geojson` signals it fits were published builds again)
     const geoStale = ctx.geoStale
     ctx.geoStale = false
-    changed = resolveSignalUpdates(ctx) || geoStale
+    changed = resolveSignalUpdates(ctx) || geoStale || (rounds === 0 && readsScales)
     buildScales(ctx)
     if (changed) {
       ctx.datasets.clear()
@@ -1496,6 +1498,22 @@ function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
     }
   }
   SIGNAL_PREREQS.set(chart, out)
+  return out
+}
+
+const READS_SCALES = new WeakMap<CompiledChart, boolean>()
+
+/**
+ * Whether some dataset's transforms read a scale (`domain('x')`, `scale('x', v)`): vega ranks such an operator after the scale,
+ * so it sees the scale as built; the datasets are built before the scales here, and once more after them.
+ */
+function datasetsReadScales(chart: CompiledChart): boolean {
+  let out = READS_SCALES.get(chart)
+  if (out === undefined) {
+    out = false
+    for (const d of chart.data) walkStrings(d.transform, (str) => { if (SCALE_FN_EXPR.test(str)) out = true })
+    READS_SCALES.set(chart, out)
+  }
   return out
 }
 
@@ -2760,7 +2778,8 @@ function rowLocal(t: CompiledTransform, tctx: StepTransformContext): boolean {
       return !DATA_DEPENDENT_EXPR.test((t as { expr?: string }).expr ?? '')
     case 'timeunit':
       // without explicit units vega bins the data extent (global); inferUnits looks at every row
-      return (t as { units?: unknown }).units != null && !(t as { inferUnits?: unknown }).inferUnits && (t as { extent?: unknown }).extent === undefined
+      // (a `signal` output is a side effect a skipped re-run would lose, and covers every row)
+      return (t as { units?: unknown }).units != null && !(t as { inferUnits?: unknown }).inferUnits && (t as { extent?: unknown }).extent === undefined && !(t as { signal?: unknown }).signal
     case 'geoshape': case 'geopath': case 'geopoint':
       // a projection that fits data moves with the data: a derived x/y or path is only valid for the fit it was made under
       return !(tctx.projections as ProjectionRegistry | undefined)?.fitNames?.has(String((t as { projection?: unknown }).projection))
@@ -4020,6 +4039,21 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
     const keys = ([] as string[]).concat(facet.groupby ?? [])
     if (!keys.length) return []
     const rows = ctx.datasets.get(facet.data) ?? []
+    const from = mark.from?.data
+    if (from !== undefined && ctx.datasets.has(from)) {
+      // vega-parser marks/data.js: with `from.data` the items are ITS rows (the datum is the row, not a partition key), and each
+      // item's facet is the rows of `facet.data` that share its key; a row with no partition still gets an item, a partition no
+      // row asks for none
+      const keyOfRow = groupKeyFn(keys)
+      const byKey = new Map<string, Row[]>()
+      for (const r of rows) {
+        const k = keyOfRow(r)
+        const g = byKey.get(k)
+        if (g) g.push(r)
+        else byKey.set(k, [r])
+      }
+      return (ctx.datasets.get(from) ?? []).map((row, i) => ({ datum: row, rows: byKey.get(keyOfRow(row)) ?? [], facetName: facet.name, key: String(i) }))
+    }
     // the keys are vega fields (`a.b`, `a\.b`): partition by the accessor, and name the key
     // tuple's properties by the accessor's own name (Facet: `tuple[fn.fname] = fn(t)`)
     const accessors = fieldsOf(keys)
@@ -4674,14 +4708,24 @@ function entryProperty(p: unknown, datum: Row, ctx: EvalContext, binding?: Encod
   return p !== null && typeof p === 'object' ? resolveEncodeValueInternal(p as EncodeValue, datum, ctx, binding) : p
 }
 
+/**
+ * The name a field reference gives: a path as written, or -- when the reference is itself a reference (`{parent: {datum: 'f'}}`,
+ * vega-parser resolveField's recursion) -- the value that reference reads off the datum, used as a plain key.
+ */
+function fieldName(f: unknown, datum: Row, ctx: EvalContext): { name: unknown; path: boolean } {
+  return typeof f === 'string' ? { name: f, path: true } : { name: encodeFieldValue(f, datum, ctx), path: false }
+}
+
 /** The group a `{group|parent}` field reference points at, `level` groups up (this engine has the enclosing facet group only). */
 function groupFieldValue(ref: { group?: unknown; parent?: unknown }, datum: Row, ctx: EvalContext): unknown {
   if (ref.parent !== undefined) {
     // `item.mark.group.datum[field]`: the facet cell's datum is the `parent` signal there
     const parent = ctx.signalParams['parent']
-    return parent != null && typeof ref.parent === 'string' ? getField(parent as Row, ref.parent) : undefined
+    if (parent == null) return undefined
+    const f = fieldName(ref.parent, datum, ctx)
+    return f.path ? getField(parent as Row, f.name as string) : (parent as Record<string, unknown>)[f.name as string]
   }
-  const key = ref.group
+  const key = fieldName(ref.group, datum, ctx).name
   if (key === 'width') return ctx.width
   if (key === 'height') return ctx.height
   if (key === 'x') return ctx.groupX ?? 0
@@ -4695,7 +4739,10 @@ function encodeFieldValue(ref: unknown, datum: Row, ctx: EvalContext): unknown {
     const r = ref as { signal?: unknown; group?: unknown; parent?: unknown; datum?: unknown }
     if (r.signal) return (datum as Record<string, unknown>)[ctx.runtime.expr(String(r.signal))(datum, ctx.signalParams) as string]
     if (r.group !== undefined || r.parent !== undefined) return groupFieldValue(r, datum, ctx)
-    if (r.datum !== undefined) return encodeFieldValue(r.datum, datum, ctx)
+    if (r.datum !== undefined) {
+      const f = fieldName(r.datum, datum, ctx)
+      return f.path ? getField(datum, f.name as string) : (datum as Record<string, unknown>)[f.name as string]
+    }
     throw new Error('Invalid field reference: ' + JSON.stringify(ref))
   }
   return getField(datum, ref as string)
