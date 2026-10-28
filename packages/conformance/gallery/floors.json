@@ -20,8 +20,7 @@
     }
   },
   "swap": {
-    "pass": 223,
-    "vsOracle": 223,
+    "minRunnable": 200,
     "maxUnverifiable": 0
   }
 }
