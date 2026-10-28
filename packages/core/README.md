@@ -20,7 +20,7 @@ Vega-Lite input goes through `@aster/vl` (`compile(vlSpec)`) or `<Chart>` from `
 
 Addons (each a separate entry, so a chart pays only for what it imports): `@aster/core/dom` (incremental DOM, sessions),
 `/canvas`, `/hit` (hit testing), `/signals` (the `signal.on` event loop), `/load` (URL datasets with a URL policy),
-`/geo` (projections, contours), `/transforms` (kde, regression, loess, pack, partition, treemap, wordcloud, voronoi).
+`/geo` (projections, contours), `/transforms` (kde, kde2d, isocontour, regression, loess, pack, partition, treemap, tree, force, wordcloud, voronoi, geopath, the distribution functions).
 
 Specs from untrusted sources need `limits`; see `docs/LIMITS.md`. See also the
 [repository documentation](https://github.com/mgilbir/aster-react#readme), especially `docs/API.md`, `docs/LIMITS.md`

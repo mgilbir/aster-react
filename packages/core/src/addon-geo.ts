@@ -7,6 +7,9 @@
  *   import '@aster/core/geo'                 // static
  *   await import('@aster/core/geo')          // lazy
  *
+ * It also registers the geo functions of the expression language (geoArea, geoBounds,
+ * geoCentroid, geoScale).
+ *
  * Keeping them out of the core barrel means a plain bar/line chart never
  * bundles the ~17 kB (gzip) of d3-geo projection + clipping machinery.
  */
