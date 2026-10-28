@@ -362,7 +362,6 @@ function compileView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const hasEncFacet = isObject(enc.facet) || enc.row != null || enc.column != null
   if (isObject(spec.facet) || (isObject(spec.spec) && hasTopFacet(spec))) return compileFaceted(spec, ctx)
   if (hasEncFacet && spec.spec == null) return compileFaceted(spec, ctx)
-  if (spec.mark === 'boxplot' || (isObject(spec.mark) && (spec.mark as Record<string, unknown>).type === 'boxplot')) return compileBoxplot(spec, ctx)
   if (spec.repeat != null) return compileRepeat(spec, ctx)
   if (spec.concat || spec.hconcat || spec.vconcat) return compileConcat(spec, ctx)
   return compileUnitView(spec, ctx)
@@ -533,10 +532,34 @@ function containerSizing(spec: VLSpec, w: { container?: boolean }, h: { containe
   }
 }
 
-/** vega-lite `UnitModel.assembleGroupStyle`: a unit with an x or y channel is a `cell` (framed), any other a `view`. */
-function unitGroupStyle(spec: VLSpec): 'cell' | 'view' {
+/**
+ * vega-lite `UnitModel.assembleGroupStyle`: the `style` of the unit's `view` background, else a unit with an x or y channel is a
+ * `cell` (framed) and any other a `view`.
+ */
+function unitGroupStyle(spec: VLSpec): string | string[] {
+  const view = isObject(spec.view) ? spec.view : undefined
+  if (view?.style !== undefined) return view.style as string | string[]
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   return enc.x != null || enc.y != null ? 'cell' : 'view'
+}
+
+/** vega-lite `LayerModel.assembleGroupStyle`: the unique styles of the layers' units, in order (none gives `undefined`). */
+function layeredGroupStyle(leaves: VLSpec[]): string | string[] | undefined {
+  const styles = [...new Set(leaves.flatMap((l) => ([] as string[]).concat(unitGroupStyle(l))))]
+  return styles.length > 1 ? styles : styles[0]
+}
+
+/**
+ * vega-lite `Model.assembleGroupEncodeEntry` (assembleEncodeFromView): the `view` background of a unit or layer, minus its
+ * `style`, becomes the group's own encode (`fill`, `stroke: null`, ...). Undefined when there is none.
+ */
+function viewEncode(spec: VLSpec): { update: Record<string, unknown> } | undefined {
+  if (!isObject(spec.view)) return undefined
+  const update: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(spec.view)) {
+    if (k !== 'style' && v !== undefined) update[k] = { value: v }
+  }
+  return Object.keys(update).length ? { update } : undefined
 }
 
 /** Compile a multi-layer spec: per-source casts, per-layer pipelines,
@@ -562,6 +585,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     group: number
   }
   const parsed: ParsedLayer[] = leaves.map((l) => {
+    liftBandSizeValue(l)
     const markRaw = l.mark
     const mark = typeof markRaw === 'string' ? markRaw : (markRaw as Record<string, unknown>).type as string
     const encoding = isObject(l.encoding) ? (l.encoding as Record<string, unknown>) : {}
@@ -602,8 +626,9 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // theta-only layered views (pie labels) use the unstyled 'view' frame
   // vega-lite assembleGroupStyle: the unique styles of the layers, in order
   {
-    const styles = [...new Set(parsed.map((p) => unitGroupStyle(p.l)))]
-    out.style = styles.length > 1 ? styles : styles[0]
+    out.style = layeredGroupStyle(parsed.map((p) => p.l))
+    const layerView = viewEncode(spec)
+    if (layerView) out.encode = layerView
   }
 
   // Layers are grouped by the data they read: layers sharing a source share
@@ -1460,7 +1485,9 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     }
   }
   // (assembleGroupStyle: a view with an x or y channel is a framed cell, any other a plain view)
-  const cellStyle = (Array.isArray(innerSpec.layer) ? collectLeaves(innerSpec).some((l) => unitGroupStyle(l) === 'cell') : unitGroupStyle(innerSpec) === 'cell') ? 'cell' : 'view'
+  const cellStyle = Array.isArray(innerSpec.layer) ? layeredGroupStyle(collectLeaves(innerSpec)) : unitGroupStyle(innerSpec)
+  // (assembleGroupEncodeEntry(false): the child's width / height, then its view background)
+  const cellView = (inner.encode as { update?: Record<string, unknown> } | undefined)?.update
 
   const facetGroupby = [...colsOf(rowFd, rowField), ...colsOf(colFd, colField), ...colsOf(wrapFd, wrapField)]
   const facetSortFields = [rowField, colField, wrapField].filter(Boolean) as string[]
@@ -1538,7 +1565,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
         style: cellStyle,
         from: { facet: { name: 'facet', data: baseName, groupby: colsOf(wrapFd, wrapField) } },
         sort: { field: [datumRef(wrapField)], order: [wrapOrder] },
-        encode: { update: { width: { signal: 'child_width' }, height: { signal: 'child_height' } } },
+        encode: { update: { width: { signal: 'child_width' }, height: { signal: 'child_height' }, ...cellView } },
         ...(innerSel ? { signals: assembleFacetSignals(cellName, [...innerSel.unit]) } : {}),
         ...(cellData.length ? { data: cellData } : {}),
         ...(gridAxes.length ? { axes: gridAxes } : {}),
@@ -1702,7 +1729,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     style: cellStyle,
     from: { facet: { name: 'facet', data: baseName, groupby: facetGroupby } },
     sort: { field: facetSortFields.map(datumRef), order: facetSortFields.map((_, i) => (i === 0 && rowField ? rowOrder : colOrder)) },
-    encode: { update: { width: { signal: 'child_width' }, height: { signal: 'child_height' } } },
+    encode: { update: { width: { signal: 'child_width' }, height: { signal: 'child_height' }, ...cellView } },
     ...(innerSel ? { signals: assembleFacetSignals(cellName, [...innerSel.unit]) } : {}),
     ...(cellData.length ? { data: cellData } : {}),
     ...(gridAxes.length ? { axes: gridAxes } : {}),
@@ -1784,7 +1811,6 @@ function compileChildFragment(child: VLSpec, ctx: CompileCtx): VLSpec {
   if (child.repeat !== undefined) return compileRepeat(child, ctx)
   if (child.facet !== undefined) return compileFaceted(child, ctx)
   if (Array.isArray(child.layer)) return compileLayered(child, ctx)
-  if (child.mark === 'boxplot' || (isObject(child.mark) && (child.mark as Record<string, unknown>).type === 'boxplot')) return compileBoxplot(child, ctx)
   return compileUnitView(child, ctx)
 }
 
@@ -2011,8 +2037,8 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
       : {
           name: `${prefix}group`,
           type: 'group',
-          style: (vg.style as string | undefined) ?? 'cell',
-          encode: { update: { width: { signal: wName }, height: { signal: hName } } },
+          style: (vg.style as string | string[] | undefined) ?? 'cell',
+          encode: { update: { width: { signal: wName }, height: { signal: hName }, ...(vg.encode as { update?: Record<string, unknown> } | undefined)?.update } },
         }
     if (composite) group.layout = vg.layout
     // (the child's title is assembled already: framed on its group for a unit / layer, anchored at the start for a composition)
@@ -2352,233 +2378,6 @@ function compileRepeat(spec: VLSpec, ctx: CompileCtx): VLSpec {
   out.scales = res.scales
   if (res.legends.length) out.legends = res.legends
   rootChrome(out, spec)
-  return out
-}
-
-// --- boxplot composite -------------------------------------------------------
-
-/** Expand a boxplot composite mark into the layered aggregate structure
- * vega-lite compiles it to: outliers, whisker rules, the box and the median
- * bar. Vertical orientation only; `extent` is a number (outlier fence in IQRs)
- * or "min-max" (whiskers span the data, no outlier layer). */
-function compileBoxplot(spec: VLSpec, ctx: CompileCtx): VLSpec {
-  const markDef = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : { type: 'boxplot' }
-  const extent = (markDef.extent as number | 'min-max' | undefined) ?? 1.5
-  const minMax = extent === 'min-max'
-  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
-  for (const k of Object.keys(enc)) {
-    if (k !== 'x' && k !== 'y') throw new VLCompileError(`encoding.${k}: boxplot only supports the x and y channels`)
-  }
-  const xFd = parseChannel('x', enc.x)
-  const yFd = parseChannel('y', enc.y)
-  if (!xFd || !yFd || xFd.aggregate || yFd.aggregate || xFd.bin || yFd.bin || xFd.timeUnit || yFd.timeUnit) {
-    throw new VLCompileError('boxplot requires plain x and y fields (no aggregate, bin or timeUnit)')
-  }
-  for (const [ch, fd] of [['x', xFd], ['y', yFd]] as const) {
-    for (const k of Object.keys(fd.raw)) {
-      if (k !== 'field' && k !== 'type' && k !== 'title') throw new VLCompileError(`encoding.${ch}.${k}: boxplot supports only field, type and title on x/y`)
-    }
-  }
-  const isDiscreteX = xFd.type === 'nominal' || xFd.type === 'ordinal'
-  if (!isDiscreteX || yFd.type !== 'quantitative') {
-    throw new VLCompileError('boxplot supports only a discrete x with a quantitative y (horizontal boxplots are not supported yet)')
-  }
-  const dim = xFd.field
-  const F = yFd.field
-  const lowerBox = genName('lower_box', F)
-  const upperBox = genName('upper_box', F)
-  const midBox = genName('mid_box', F)
-  const minF = genName('min', F)
-  const maxF = genName('max', F)
-  const lowerW = genName('lower_whisker', F)
-  const upperW = genName('upper_whisker', F)
-  const ref = dref
-  const outlierExpr =
-    `(${ref(F)} < ${ref(lowerBox)} - ${extent} * (${ref(upperBox)} - ${ref(lowerBox)})) || ` +
-    `(${ref(F)} > ${ref(upperBox)} + ${extent} * (${ref(upperBox)} - ${ref(lowerBox)}))`
-  const inlierExpr =
-    `(${ref(lowerBox)} - ${extent} * (${ref(upperBox)} - ${ref(lowerBox)}) <= ${ref(F)}) && ` +
-    `(${ref(F)} <= ${ref(upperBox)} + ${extent} * (${ref(upperBox)} - ${ref(lowerBox)}))`
-
-  const source: Record<string, unknown> = isObject(spec.data) ? dataSource(spec.data, ctx.datasets) : {}
-  const sourceName = typeof source.name === 'string' ? source.name : 'source_0'
-  source.name = sourceName
-
-  // flat copies of nested/escaped fields, then the user's transforms
-  const pre = (): Record<string, unknown>[] => {
-    const out: Record<string, unknown>[] = []
-    const seen = new Set<string>()
-    for (const fd of [xFd, yFd]) {
-      if (fd.flatExpr !== undefined && !seen.has(fd.field)) {
-        seen.add(fd.field)
-        out.push({ type: 'formula', expr: fd.flatExpr, as: fd.field })
-      }
-    }
-    const userT = Array.isArray(spec.transform) ? (spec.transform as Record<string, unknown>[]) : []
-    pushAll(out, translateTransforms(userT, ctx, { parsed: new Map() }))
-    return out
-  }
-
-  const bandX = { scale: 'x', field: dim, band: 0.5 }
-  // the screen-reader text (vega-lite mark/encode/aria.ts over the part's encoding): the category, then the numbers
-  const titleOf = (fd: FieldDef): string => { const t = channelTitle(fd); return (Array.isArray(t) ? t.join(', ') : String(t)).replace(/"/g, '\\"') }
-  const dimText = `isValid(${ref(dim)}) ? isArray(${ref(dim)}) ? join(${ref(dim)}, ' ') : ${ref(dim)} : ""+${ref(dim)}`
-  const num = (f: string): string => `format(${ref(f)}, "")`
-  const dimPart = `"${titleOf(xFd)}: " + (${dimText})`
-  const pointDescription = { signal: `${dimPart} + "; ${titleOf(yFd)}: " + (${num(F)})` }
-  const boxDescription = {
-    signal: `${dimPart} + "; ${titleOf(yFd)}: " + (${num(lowerBox)}) + "; ${upperBox}: " + (${num(upperBox)}) + "; Max of ${F}: " + (${num(minMax ? upperW : maxF)})`
-      + ` + "; Q3 of ${F}: " + (${num(upperBox)}) + "; Median of ${F}: " + (${num(midBox)}) + "; Q1 of ${F}: " + (${num(lowerBox)}) + "; Min of ${F}: " + (${num(minMax ? lowerW : minF)})`,
-  }
-  const ruleStroke = { value: 'black' }
-  const boxFill = { value: '#4c78a8' }
-  const medianMark = (name: string, dataset: string): Record<string, unknown> => ({
-    name,
-    type: 'rect',
-    aria: false,
-    style: ['box'],
-    from: { data: dataset },
-    encode: { update: {
-      opacity: { value: 0.7 },
-      fill: [{ test: `${ref(lowerBox)} >= ${ref(upperBox)}`, value: '#4c78a8' }, { value: 'white' }],
-      xc: bandX,
-      width: { value: 14 },
-      yc: { scale: 'y', field: midBox },
-      height: { value: 1 },
-    } },
-  })
-  const boxMark = (name: string, dataset: string): Record<string, unknown> => ({
-    name,
-    type: 'rect',
-    style: ['box'],
-    from: { data: dataset },
-    encode: { update: {
-      ariaRoleDescription: { value: 'box' },
-      description: boxDescription,
-      fill: boxFill,
-      xc: bandX,
-      width: { value: 14 },
-      y: { scale: 'y', field: lowerBox },
-      y2: { scale: 'y', field: upperBox },
-    } },
-  })
-
-  let marks: Record<string, unknown>[]
-  let data: Record<string, unknown>[]
-  let xDomainData: string[]
-  let yDomain: Array<{ data: string; field: string }>
-  if (minMax) {
-    marks = [
-      { name: 'layer_0_marks', type: 'rule', aria: false, style: ['rule'], from: { data: 'data_1' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: lowerW }, y2: { scale: 'y', field: lowerBox } } } },
-      { name: 'layer_1_marks', type: 'rule', aria: false, style: ['rule'], from: { data: 'data_2' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: upperBox }, y2: { scale: 'y', field: upperW } } } },
-      boxMark('layer_2_marks', 'data_3'),
-      medianMark('layer_3_marks', 'data_4'),
-    ]
-    data = [
-      source,
-      { name: 'data_0', source: sourceName, transform: [...pre(), { type: 'aggregate', groupby: [dim], ops: ['q1', 'q3', 'median', 'min', 'max'], fields: [F, F, F, F, F], as: [lowerBox, upperBox, midBox, lowerW, upperW] }] },
-      { name: 'data_1', source: 'data_0', transform: [{ type: 'filter', expr: validExpr(lowerW) }] },
-      { name: 'data_2', source: 'data_0', transform: [{ type: 'filter', expr: validExpr(upperBox) }] },
-      { name: 'data_3', source: 'data_0', transform: [{ type: 'filter', expr: validExpr(lowerBox) }] },
-      { name: 'data_4', source: 'data_0', transform: [{ type: 'filter', expr: validExpr(midBox) }] },
-    ]
-    xDomainData = ['data_1', 'data_2', 'data_3', 'data_4']
-    yDomain = [
-      { data: 'data_1', field: lowerW }, { data: 'data_1', field: lowerBox },
-      { data: 'data_2', field: upperBox }, { data: 'data_2', field: upperW },
-      { data: 'data_3', field: lowerBox }, { data: 'data_3', field: upperBox },
-      { data: 'data_4', field: midBox },
-    ]
-  } else {
-    if (typeof extent !== 'number' || !Number.isFinite(extent) || extent < 0) throw new VLCompileError(`mark.extent must be a non-negative number or "min-max", got ${JSON.stringify(extent)}`)
-    marks = [
-      {
-        name: 'layer_0_layer_0_marks',
-        type: 'symbol',
-        style: ['point'],
-        from: { data: 'data_2' },
-        encode: { update: {
-          opacity: { value: 0.7 },
-          fill: { value: 'transparent' },
-          stroke: { value: '#4c78a8' },
-          ariaRoleDescription: { value: 'point' },
-          description: pointDescription,
-          x: bandX,
-          y: { scale: 'y', field: F },
-        } },
-      },
-      { name: 'layer_0_layer_1_layer_0_marks', type: 'rule', aria: false, style: ['rule'], from: { data: 'data_4' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: lowerW }, y2: { scale: 'y', field: lowerBox } } } },
-      { name: 'layer_0_layer_1_layer_1_marks', type: 'rule', aria: false, style: ['rule'], from: { data: 'data_5' }, encode: { update: { stroke: ruleStroke, x: bandX, y: { scale: 'y', field: upperBox }, y2: { scale: 'y', field: upperW } } } },
-      boxMark('layer_1_layer_0_marks', 'data_7'),
-      medianMark('layer_1_layer_1_marks', 'data_8'),
-    ]
-    data = [
-      source,
-      { name: 'data_1', source: sourceName, transform: [...pre(), { type: 'joinaggregate', as: [lowerBox, upperBox], ops: ['q1', 'q3'], fields: [F, F], groupby: [dim] }] },
-      { name: 'data_2', source: 'data_1', transform: [{ type: 'filter', expr: outlierExpr }, { type: 'filter', expr: validExpr(F) }] },
-      {
-        name: 'data_3',
-        source: 'data_1',
-        transform: [
-          { type: 'filter', expr: inlierExpr },
-          { type: 'aggregate', groupby: [dim], ops: ['min', 'max', 'min', 'max'], fields: [F, F, lowerBox, upperBox], as: [lowerW, upperW, lowerBox, upperBox] },
-        ],
-      },
-      { name: 'data_4', source: 'data_3', transform: [{ type: 'filter', expr: validExpr(lowerW) }] },
-      { name: 'data_5', source: 'data_3', transform: [{ type: 'filter', expr: validExpr(upperBox) }] },
-      { name: 'data_6', source: sourceName, transform: [...pre(), { type: 'aggregate', groupby: [dim], ops: ['q1', 'q3', 'median', 'min', 'max'], fields: [F, F, F, F, F], as: [lowerBox, upperBox, midBox, minF, maxF] }] },
-      { name: 'data_7', source: 'data_6', transform: [{ type: 'filter', expr: validExpr(lowerBox) }] },
-      { name: 'data_8', source: 'data_6', transform: [{ type: 'filter', expr: validExpr(midBox) }] },
-    ]
-    xDomainData = ['data_2', 'data_4', 'data_5', 'data_7', 'data_8']
-    yDomain = [
-      { data: 'data_2', field: F },
-      { data: 'data_4', field: lowerW }, { data: 'data_4', field: lowerBox },
-      { data: 'data_5', field: upperBox }, { data: 'data_5', field: upperW },
-      { data: 'data_7', field: lowerBox }, { data: 'data_7', field: upperBox },
-      { data: 'data_8', field: midBox },
-    ]
-  }
-
-  const scales: ScaleSpec[] = [
-    {
-      name: 'x',
-      type: 'band',
-      domain: { fields: xDomainData.map((d) => ({ data: d, field: dim })), sort: true },
-      range: [0, { signal: 'width' }],
-      paddingInner: 0,
-      paddingOuter: 0,
-    },
-    {
-      name: 'y',
-      type: 'linear',
-      domain: { fields: yDomain },
-      range: [{ signal: 'height' }, 0],
-      zero: true,
-      nice: true,
-    },
-  ]
-
-  const out: Record<string, unknown> = {}
-  if (spec.$schema) out.$schema = VEGA_SCHEMA
-  out.autosize = autosizeOf(spec)
-  out.background = spec.background ?? 'white'
-  out.padding = spec.padding ?? 5
-  out.width = spec.width ?? 200
-  out.height = spec.height ?? 200
-  out.style = 'cell'
-  const assembledConfig = assembleConfig(spec)
-  if (assembledConfig) out.config = assembledConfig
-  out.data = data
-  out.marks = marks
-  out.scales = scales
-  out.axes = [
-    { scale: 'y', orient: 'left', gridScale: 'x', grid: true, tickCount: { signal: 'ceil(height/40)' }, domain: false, labels: false, aria: false, maxExtent: 0, minExtent: 0, ticks: false, zindex: 0 },
-    { scale: 'x', orient: 'bottom', grid: false, title: channelTitle(xFd), labelAlign: 'right', labelAngle: 270, labelBaseline: 'middle', zindex: 0 },
-    { scale: 'y', orient: 'left', grid: false, title: channelTitle(yFd), labelOverlap: true, tickCount: { signal: 'ceil(height/40)' }, zindex: 0 },
-  ]
-  if (spec.title) out.title = spec.title
-  if (spec.description) out.description = spec.description
   return out
 }
 
@@ -5084,7 +4883,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   let markOpacity = isObject(spec.mark) ? (spec.mark.opacity as number | undefined) : undefined
   const xDef = fields.find((f) => f.channel === 'x')
   const yDef = fields.find((f) => f.channel === 'y')
-  const colorDef = fields.find((f) => f.channel === 'color' && f.field)
+  const colorDef = fields.find((f) => f.channel === 'color' && f.field && !f.fromCondition)
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
   const shapeDef = fields.find((f) => f.channel === 'shape' && f.field && f.type !== 'geojson')
   const opacityDef = fields.find((f) => f.channel === 'opacity' && f.field)
@@ -5152,6 +4951,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
     if (mark === 'bar') update.ariaRoleDescription = { value: 'bar' }
     const stacked = yDef && isStacked(yDef, mark, orient, fields)
+    // channeldef.ts getBandSize: the `size` of the mark def (or of the bar config) is the band's size on a continuous scale too
+    const barSizeProp = mark === 'bar' ? ((markDef?.size ?? cfgType?.size) as number | undefined) : undefined
+    const continuousBand = barSizeProp !== undefined && barSizeProp !== 0 ? barSizeProp : ((cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize)
     if (orient === 'vertical') {
       if (xDef) {
         const sc = positionalScaleType(mark, xDef)
@@ -5167,7 +4969,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           // a plain temporal dimension centers the bar with the continuous
           // band size (vega-lite's continuousBandSize)
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
-          update.width = { value: (cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize }
+          update.width = { value: continuousBand }
         } else if (xDef.timeUnit && sc !== 'band') {
           setBinnedRect(update, 'x', xDef, spec, mark)
         } else if (xDef.bin && !binDiscrete(xDef)) {
@@ -5216,7 +5018,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             update.xc = { scale: 'x', field: aggFieldName(xDef) }
             // a discrete point scale centers a default-step bar (18px); a
             // continuous measure uses the continuous band size
-            update.width = { value: sc === 'point' ? C.defaultStep : C.bandSize }
+            update.width = { value: sc === 'point' ? C.defaultStep : barSizeProp !== undefined && barSizeProp !== 0 ? barSizeProp : C.bandSize }
           }
         }
       }
@@ -5274,7 +5076,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.y2 = zeroOrMinRef('y', yDef, mark)
         } else if (yDef.timeUnit == null && !yDef.bin && yDef.type === 'temporal') {
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
-          update.height = { value: (cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize }
+          update.height = { value: continuousBand }
         } else if (yDef.timeUnit && sc !== 'band') {
           setBinnedRect(update, 'y', yDef, spec, mark)
         } else if (yDef.bin && !binDiscrete(yDef)) {
@@ -5311,7 +5113,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             update.y2 = zeroOrMinRef('y', yDef, mark)
           } else {
             update.yc = { scale: 'y', field: aggFieldName(yDef) }
-            update.height = { value: sc === 'point' ? C.defaultStep : C.bandSize }
+            update.height = { value: sc === 'point' ? C.defaultStep : barSizeProp !== undefined && barSizeProp !== 0 ? barSizeProp : C.bandSize }
           }
         }
       }
@@ -5841,7 +5643,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
   }
   // (a map unit's positions come from its geopoint output, never from a default)
-  if (!GEO_UNITS.has(spec)) fillMissingPositions(update, mark, fields, orient, scaleConfigOf(spec), ruleOrientOut)
+  if (!GEO_UNITS.has(spec)) {
+    const md0 = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+    fillMissingPositions(update, mark, fields, orient, scaleConfigOf(spec), ruleOrientOut, typeof md0.size === 'number' && md0.size !== 0 ? md0.size : undefined)
+  }
 
   {
     // markDef.ariaRoleDescription (vega-lite getMarkPropOrConfig): what a composite mark's parts call themselves
@@ -6228,7 +6033,9 @@ function positionAndSizeRefs(ch: 'x' | 'y', def: FieldDef | undefined, spec: VLS
   const sizeVal = md[sizeProp] ?? md.size ?? markConfigProp(spec, mark, sizeProp) ?? markConfigProp(spec, mark, 'size')
   const relative = isObject(sizeVal) && typeof sizeVal.band === 'number'
   if (!relative && !offDef) return null
-  if (sizeVal !== undefined && !relative) return null
+  // (an absolute size with an offset channel: the mark is centred on its offset sub-band at that size, sizeMixins of positionAndSize)
+  const absolute = !relative && offDef !== undefined && typeof sizeVal === 'number' && sizeVal !== 0
+  if (sizeVal !== undefined && !relative && !absolute) return null
   if (fields.some((f) => f.channel === 'size' && f.field)) return null
   if (def && def.bin) return null
   const hasSecondary = fields.some((f) => f.channel === `${ch}2` && f.field)
@@ -6238,7 +6045,8 @@ function positionAndSizeRefs(ch: 'x' | 'y', def: FieldDef | undefined, spec: VLS
   const offsetType = offDef ? (isDiscreteType(offDef.type) ? (offsetBand ? 'band' : 'point') : 'linear') : undefined
   // channeldef.ts getBandSize
   let band: number
-  if (relative) band = (sizeVal as { band: number }).band
+  if (absolute) band = 1
+  else if (relative) band = (sizeVal as { band: number }).band
   else if (def?.tu) band = typeof markConfigProp(spec, mark, 'timeUnitBandSize') === 'number' ? (markConfigProp(spec, mark, 'timeUnitBandSize') as number) : 1
   else if (['band', 'point'].includes(scaleType ?? offsetType ?? '')) band = 1
   else return null
@@ -6247,7 +6055,8 @@ function positionAndSizeRefs(ch: 'x' | 'y', def: FieldDef | undefined, spec: VLS
   const sizeScaleType = offDef ? offsetType : scaleType
   const minBandSize = typeof markConfigProp(spec, mark, 'minBandSize') === 'number' ? (markConfigProp(spec, mark, 'minBandSize') as number) : 0.25
   let size: Record<string, unknown>
-  if (sizeScale && sizeScaleType === 'band') {
+  if (absolute) size = { value: sizeVal }
+  else if (sizeScale && sizeScaleType === 'band') {
     const bandwidth = band !== 1 ? `${band} * bandwidth('${sizeScale}')` : `bandwidth('${sizeScale}')`
     size = { signal: minBandSize ? `max(${minBandSize}, ${bandwidth})` : bandwidth }
   } else if (!sizeScale) size = { mult: band, field: { group: sizeProp } }
@@ -6256,7 +6065,7 @@ function positionAndSizeRefs(ch: 'x' | 'y', def: FieldDef | undefined, spec: VLS
   const alignProp = ch === 'x' ? 'align' : 'baseline'
   const align = md[alignProp] ?? markConfigProp(spec, mark, alignProp)
   // (the band size is relative here whatever its source: a band scale aligns to the top / left of its band)
-  const top = (scaleType ?? offsetType) === 'band'
+  const top = !absolute && (scaleType ?? offsetType) === 'band'
   const vgChannel = ch === 'x'
     ? ({ left: 'x', center: 'xc', right: 'x2' } as Record<string, string>)[String(align ?? (top ? 'left' : 'center'))]
     : ({ top: 'y', middle: 'yc', bottom: 'y2' } as Record<string, string>)[String(align ?? (top ? 'top' : 'middle'))]
@@ -6404,7 +6213,7 @@ function hasEncodingChannel(spec: VLSpec, channel: string): boolean {
   return enc[channel] != null
 }
 
-function fillMissingPositions(update: Record<string, unknown>, mark: string, fields: FieldDef[], orient: string, scaleCfg: ScaleCfg, ruleOrient?: string): void {
+function fillMissingPositions(update: Record<string, unknown>, mark: string, fields: FieldDef[], orient: string, scaleCfg: ScaleCfg, ruleOrient?: string, explicitSize?: number): void {
   const has = (...ks: string[]): boolean => ks.some((k) => update[k] !== undefined)
   const hasX = has('x', 'xc', 'x2')
   const hasY = has('y', 'yc', 'y2')
@@ -6420,15 +6229,18 @@ function fillMissingPositions(update: Record<string, unknown>, mark: string, fie
       if (!hasY) update.y = midY
       break
     case 'tick':
-      if (!hasX) { update.xc = midX; update.width = { signal: '0.75 * width' } }
-      if (!hasY) { update.yc = midY; update.height = { signal: '0.75 * height' } }
+      // (tick.ts: the size axis is x of a horizontal tick and y of a vertical one; a size of the mark def is its length there)
+      // (the other axis is the thickness axis: pointPosition centres it and `thickness` is its extent, set by the mark)
+      if (!hasX) { update.xc = midX; if (orient === 'horizontal') update.width = explicitSize !== undefined ? { value: explicitSize } : { signal: '0.75 * width' } }
+      if (!hasY) { update.yc = midY; if (orient !== 'horizontal') update.height = explicitSize !== undefined ? { value: explicitSize } : { signal: '0.75 * height' } }
       break
     case 'bar': {
       // position-rect.ts rectPosition: the band channel of the orientation (x of a vertical bar, y of a horizontal one) is
       // centred with a size of (1 - barBandPaddingInner) of the view (defaultSizeRef); the other channel is a range from
       // zeroOrMax to zeroOrMin, i.e. the whole view
       const padding = (scaleCfg.bandPaddingInner ?? scaleCfg.barBandPaddingInner) as number | undefined
-      const span = (size: 'width' | 'height'): unknown => (typeof padding === 'number' ? { signal: `${1 - padding} * ${size}` } : { value: 18 })
+      // (a size of the mark def or the encoding is the band's size: positionAndSize, `sizeMixins`)
+      const span = (size: 'width' | 'height'): unknown => (explicitSize !== undefined ? { value: explicitSize } : typeof padding === 'number' ? { signal: `${1 - padding} * ${size}` } : { value: 18 })
       if (!hasX) {
         if (orient === 'vertical') { update.xc = midX; update.width = span('width') } else { update.x = groupW; update.x2 = { value: 0 } }
       }
@@ -6940,9 +6752,26 @@ function animateMarks(marks: Record<string, unknown>[], dataName: string): void 
   }
 }
 
-function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
+/**
+ * position-rect.ts positionAndSize: a bar's / tick's `size` value (encoding or mark def) is its band size, and the encoding
+ * wins; the unit then reads it from the mark def alone.
+ */
+function liftBandSizeValue(spec: VLSpec): void {
   const markRaw = spec.mark
+  const mark = typeof markRaw === 'string' ? markRaw : isObject(markRaw) ? markRaw.type : undefined
+  const def = (mark === 'bar' || mark === 'tick') && isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>).size : undefined
+  if (!isObject(def) || def.value === undefined || def.field !== undefined || def.datum !== undefined || def.condition !== undefined) return
+  const { size: _size, ...rest } = spec.encoding as Record<string, unknown>
+  void _size
+  spec.encoding = rest
+  spec.mark = { ...(isObject(markRaw) ? markRaw : { type: markRaw }), size: def.value }
+}
+
+function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
+  let markRaw = spec.mark
   const mark = typeof markRaw === 'string' ? markRaw : (markRaw as Record<string, unknown>).type as string
+  liftBandSizeValue(spec)
+  markRaw = spec.mark
   const markSize = isObject(markRaw) ? (markRaw.size as number | undefined) : undefined
   const encoding = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   checkConstChannels(mark, encoding, markIsFilled(spec, mark))
@@ -6998,6 +6827,8 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // theta-only views (pie/donut) get vega-lite's unstyled 'view' frame — no
   // cell stroke, no half-pixel inset
   out.style = unitGroupStyle(spec)
+  const unitView = viewEncode(spec)
+  if (unitView) out.encode = unitView
   // Preserve a declared source dataset name (see compileLayered) — hosts key
   // data overrides/changesets on it.
   const unitSource: Record<string, unknown> = isObject(spec.data) ? dataSource(spec.data, ctx.datasets) : {}

@@ -23,6 +23,15 @@ const DATA = {
     { c: 'C', g: 'q', x: 6, y: 8, v: 6, t: '2006-01-01' },
   ],
 }
+const BOX = {
+  values: Array.from({ length: 48 }, (_, i) => ({
+    c: ['A', 'B', 'C'][i % 3],
+    g: i % 2 ? 'p' : 'q',
+    x: i % 5,
+    v: [3, 5, 4, 6, 5, 4, 7, 5, 6, 4, 5, 6, 40, 5, 6, 4, -30, 5, 4, 6][i % 20] + (i % 7),
+    t: `${2000 + (i % 4)}-01-01`,
+  })),
+}
 const NULLS = {
   values: [
     { a: null, b: 100, c: 5 },
@@ -307,6 +316,74 @@ const GROUPS: Record<string, Case[]> = {
     ['an interval param over a conditional mean on a plain channel', { data: DATA, params: [{ name: 'pts', select: 'interval' }], mark: 'rect', encoding: { y: n('g'), x: n('c'), fill: { condition: { param: 'pts', aggregate: 'mean', field: 'v', type: 'quantitative' }, value: 'grey' } } }],
     ['a point param over a conditional bin', { data: DATA, params: [{ name: 'pts', select: 'point' }], mark: 'point', encoding: { y: q('y'), x: q('x'), color: { condition: { param: 'pts', bin: true, field: 'v', type: 'quantitative' }, value: 'grey' } } }],
     ['a test condition over a conditional count with an explicit type', { data: DATA, mark: 'rect', encoding: { y: n('g'), x: n('c'), color: { condition: { test: 'datum.v > 4', aggregate: 'count', type: 'quantitative' }, value: 'grey' } } }],
+  ],
+  // compositemark/boxplot.ts normalizeBoxPlot (+ common.ts): a boxplot is a layer of simple marks over aggregates, in either
+  // orientation, over any shared channel, with the part switches of the mark def and of config.boxplot
+  'boxplot, every orientation and part (boxplot_2D_horizontal, boxplot_1D_horizontal, boxplot_groupped, boxplot_tooltip_aggregate, layer_boxplot_circle)': [
+    ['a vertical boxplot', { data: BOX, mark: 'boxplot', encoding: { x: n('c'), y: q('v', { scale: { zero: false } }) } }],
+    ['a horizontal boxplot', { data: BOX, mark: 'boxplot', encoding: { y: n('c'), x: q('v', { scale: { zero: false } }) } }],
+    ['a vertical boxplot with a colour field and no legend', { data: BOX, mark: 'boxplot', encoding: { x: n('c'), color: n('c', { legend: null }), y: q('v') } }],
+    ['a horizontal boxplot with a constant size and colour', { data: BOX, mark: 'boxplot', encoding: { y: n('c'), x: q('v'), size: { value: 10 }, color: { value: 'teal' } } }],
+    ['a one-dimensional horizontal boxplot', { data: BOX, mark: 'boxplot', encoding: { x: q('v', { scale: { zero: false } }) } }],
+    ['a one-dimensional vertical boxplot', { data: BOX, mark: 'boxplot', encoding: { y: q('v', { scale: { zero: false } }) } }],
+    ['a one-dimensional boxplot with a custom median and ticks', { data: BOX, mark: { type: 'boxplot', extent: 1.5, median: { color: 'red' }, ticks: true }, encoding: { x: q('v') } }],
+    ['a min-max horizontal boxplot', { data: BOX, mark: { type: 'boxplot', extent: 'min-max' }, encoding: { y: n('c'), x: q('v', { scale: { zero: false } }) } }],
+    ['a min-max vertical boxplot with a colour', { data: BOX, mark: { type: 'boxplot', extent: 'min-max' }, encoding: { x: n('c'), color: n('c', { legend: null }), y: q('v') } }],
+    ['a min-max boxplot with a median colour from config.boxplot', { data: BOX, config: { boxplot: { median: { color: 'orange' } } }, mark: { type: 'boxplot', extent: 'min-max' }, encoding: { y: n('c'), x: q('v') } }],
+    ['a boxplot with an extent of 3 iqr', { data: BOX, mark: { type: 'boxplot', extent: 3 }, encoding: { x: n('c'), y: q('v') } }],
+    ['a boxplot with an aggregate tooltip', { data: BOX, mark: 'boxplot', encoding: { y: n('c'), x: q('v'), tooltip: { field: 'v', aggregate: 'mean' } } }],
+    ['a boxplot with a raw tooltip', { data: BOX, mark: 'boxplot', encoding: { y: n('c'), x: q('v'), tooltip: { field: 'v', type: 'quantitative' } } }],
+    ['a grouped boxplot through an offset', { data: BOX, mark: 'boxplot', encoding: { x: n('c'), color: n('g'), xOffset: n('g'), y: q('v') } }],
+    ['a boxplot with an axis and a title on the dimension', { data: BOX, mark: 'boxplot', encoding: { x: n('c', { axis: { labelAngle: 0 }, title: 'Group' }), y: q('v', { axis: { title: 'Value' } }) } }],
+    ['a boxplot that drops the invalid values', { data: BOX, mark: { type: 'boxplot', invalid: 'filter' }, encoding: { x: q('x', { axis: { labelAngle: 0 } }), y: q('v') } }],
+    ['a boxplot without outliers', { data: BOX, mark: { type: 'boxplot', outliers: false }, encoding: { y: n('c'), x: q('v') } }],
+    ['a boxplot without a box colour but with an opacity and a size', { data: BOX, mark: { type: 'boxplot', opacity: 0.5, size: 20, color: 'purple' }, encoding: { x: n('c'), y: q('v') } }],
+    ['a boxplot after a filter', { data: BOX, transform: [{ filter: 'datum.x > 1' }], mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }],
+    ['a boxplot over an ordinal dimension with an explicit orient', { data: BOX, mark: { type: 'boxplot', orient: 'vertical' }, encoding: { x: { field: 'x', type: 'ordinal' }, y: q('v') } }],
+    ['a boxplot over a time unit', { data: BOX, mark: 'boxplot', encoding: { x: { field: 't', timeUnit: 'year', type: 'ordinal' }, y: q('v') } }],
+    ['a boxplot with data exactly on the whisker fences (the inlier test is inclusive)', { data: { values: Array.from({ length: 11 }, (_, i) => ({ c: 'A', v: i })) }, mark: { type: 'boxplot', extent: 0.5 }, encoding: { x: n('c'), y: q('v') } }],
+    ['a boxplot in a layer with circles', { data: BOX, width: 300, layer: [{ mark: { type: 'boxplot', outliers: false }, encoding: { y: { field: 'c', type: 'ordinal' }, x: q('v', { title: 'population' }) } }, { mark: 'circle', encoding: { y: { field: 'c', type: 'ordinal' }, x: q('v', { title: 'population' }), color: { value: 'black' }, opacity: { value: 0.2 } } }] }],
+    ['a boxplot in a concat', { data: BOX, hconcat: [{ mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }, { mark: 'boxplot', encoding: { x: n('g'), y: q('v') } }] }],
+    ['a boxplot under a shared layer encoding', { data: BOX, encoding: { x: n('c') }, layer: [{ mark: 'boxplot', encoding: { y: q('v') } }, { mark: 'tick', encoding: { y: q('v', { aggregate: 'mean' }) } }] }],
+  ],
+  // channeldef.ts getBandSize + position-rect.ts positionAndSize: the size of a bar / tick (mark def or encoding value) is its band size
+  // on any scale, in the middle of an offset sub-band, and on a view that lacks the band channel
+  'explicit sizes of bars and ticks (boxplot_1D_invalid, boxplot_2D_horizontal_color_size, errorbar_aggregate)': [
+    ['a bar with a size over a quantitative x', { data: DATA, mark: { type: 'bar', size: 14 }, encoding: { x: q('x'), y: q('v') } }],
+    ['a horizontal bar with a size over a quantitative y', { data: DATA, mark: { type: 'bar', size: 9, orient: 'horizontal' }, encoding: { y: q('x'), x: q('v') } }],
+    ['a bar with a size over a temporal x', { data: DATA, mark: { type: 'bar', size: 12 }, encoding: { x: t('t'), y: q('v') } }],
+    ['a bar with a size value in the encoding', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), size: { value: 10 } } }],
+    ['a tick with a size value in the encoding', { data: DATA, mark: 'tick', encoding: { x: n('c'), y: q('v'), size: { value: 10 } } }],
+    ['a bar with an encoding size that overrides the mark size', { data: DATA, mark: { type: 'bar', size: 30 }, encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), size: { value: 8 } } }],
+    ['bars with a size inside an offset sub-band', { data: DATA, mark: { type: 'bar', size: 7 }, encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), xOffset: n('g'), color: n('g') } }],
+    ['horizontal bars with a size inside an offset sub-band', { data: DATA, mark: { type: 'bar', size: 7 }, encoding: { y: n('c'), x: q('v', { aggregate: 'sum' }), yOffset: n('g'), color: n('g') } }],
+    ['ticks with a size inside an offset sub-band', { data: DATA, mark: { type: 'tick', size: 9 }, encoding: { x: n('c'), y: q('v'), xOffset: n('g'), color: n('g') } }],
+    ['a one-dimensional horizontal bar with a size', { data: DATA, mark: { type: 'bar', size: 11 }, encoding: { x: q('v', { aggregate: 'sum' }) } }],
+    ['a one-dimensional vertical bar with a size', { data: DATA, mark: { type: 'bar', size: 11 }, encoding: { y: q('v', { aggregate: 'sum' }) } }],
+    ['a one-dimensional vertical tick with a size', { data: DATA, mark: { type: 'tick', size: 11, orient: 'vertical' }, encoding: { x: q('v') } }],
+    ['a one-dimensional horizontal tick with a size', { data: DATA, mark: { type: 'tick', size: 11, orient: 'horizontal' }, encoding: { y: q('v') } }],
+    ['a one-dimensional horizontal tick with a size on the other axis', { data: DATA, mark: { type: 'tick', size: 11, orient: 'horizontal' }, encoding: { x: q('v') } }],
+    ['a one-dimensional vertical tick with a size on the other axis', { data: DATA, mark: { type: 'tick', size: 11, orient: 'vertical' }, encoding: { y: q('v') } }],
+  ],
+  // model.ts assembleGroupEncodeEntry / assembleEncodeFromView, unit.ts assembleGroupStyle: the `view` background is the view group's own encode
+  'the view background (point_background, layer_likert, trail_comet, concat_population_pyramid, trellis_area_seattle)': [
+    ['a filled unit view', { data: DATA, view: { fill: 'yellow' }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
+    ['a unit view without a stroke', { data: DATA, view: { stroke: null }, mark: 'trail', encoding: { x: q('x'), y: q('y'), size: q('v') } }],
+    ['a unit view with a transparent stroke', { data: DATA, view: { stroke: 'transparent' }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
+    ['a unit view with every group property', { data: DATA, view: { fill: '#eee', fillOpacity: 0.5, stroke: 'red', strokeWidth: 3, strokeOpacity: 0.8, strokeDash: [4, 2], strokeDashOffset: 1, strokeCap: 'round', strokeJoin: 'bevel', cornerRadius: 8, opacity: 0.9 }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
+    ['a layer view without a stroke', { data: DATA, view: { stroke: null }, layer: [{ mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }, { mark: 'rule', encoding: { y: q('v', { aggregate: 'mean' }) } }] }],
+    ['a layer view of a map-less unframed view', { data: DATA, view: { fill: 'lightgray', stroke: null }, encoding: { theta: q('v', { stack: true }), color: n('c') }, layer: [{ mark: { type: 'arc', outerRadius: 80 } }, { mark: { type: 'text', radius: 90 }, encoding: { text: n('c') } }] }],
+    ['a view style', { data: DATA, view: { style: 'view' }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
+    ['a view style list over the fill', { data: DATA, view: { style: ['cell', 'view'], fill: 'pink' }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
+    ['a view style in a layer', { data: DATA, layer: [{ view: { style: 'view' }, mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] }],
+    ['a view on one child of an hconcat', { data: DATA, hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { view: { stroke: null }, mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a view on a layer child of a vconcat', { data: DATA, vconcat: [{ view: { fill: 'lavender' }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a view on the spec of a facet', { data: DATA, facet: { row: n('g') }, spec: { view: { stroke: null }, mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a view on the spec of a column facet', { data: DATA, facet: { column: n('g') }, spec: { view: { fill: 'honeydew' }, mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a view on the spec of a wrapped facet', { data: DATA, facet: n('c'), columns: 2, spec: { view: { stroke: null }, mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a view on a layered spec of a facet', { data: DATA, facet: { row: n('g') }, spec: { view: { fill: 'azure' }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] } }],
+    ['a view on the spec of a repeat', { data: DATA, repeat: ['y', 'v'], spec: { view: { fill: 'ivory' }, mark: 'point', encoding: { x: q('x'), y: { field: { repeat: 'repeat' }, type: 'quantitative' } } } }],
+    ['a view with config.view', { data: DATA, config: { view: { stroke: 'blue' } }, view: { fill: 'cornsilk' }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
   ],
 }
 

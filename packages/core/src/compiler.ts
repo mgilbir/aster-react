@@ -189,6 +189,10 @@ function frameStyleValue(spec: VgSpec, prop: string): unknown {
     const block = config?.style?.[String(name)]
     if (block && prop in block) v = block[prop]
   }
+  // the root group's own `encode.update` (vega-lite's `view` background) wins over its styles: a plain `{value}` is the frame's
+  // value (`null` unsets it); a signal / field reference is not a constant frame value and is left to the style
+  const own = (spec.encode as { update?: Record<string, unknown> } | undefined)?.update?.[prop]
+  if (own !== null && typeof own === 'object' && !Array.isArray(own) && 'value' in own) v = (own as { value: unknown }).value
   return v
 }
 
@@ -200,8 +204,8 @@ function resolveFrameFill(spec: VgSpec): string | undefined {
 
 function resolveFrameStroke(spec: VgSpec): string | undefined {
   const stroke = frameStyleValue(spec, 'stroke')
-  // Vega serializes a 'transparent' frame stroke as no stroke at all.
-  return typeof stroke === 'string' && stroke !== 'transparent' ? stroke : undefined
+  // A 'transparent' stroke is still a stroke to vega (the frame is inset by half a pixel for it); the painters omit its paint.
+  return typeof stroke === 'string' && stroke !== '' ? stroke : undefined
 }
 
 function resolveFrameNumber(spec: VgSpec, prop: string): number | undefined {

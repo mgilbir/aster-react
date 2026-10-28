@@ -271,7 +271,7 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
   if (top && spec.name !== undefined && [...declaredParams].some(([n, k]) => k === 'selection' && !timerNames.has(n))) fail(at('name'), 'a named spec cannot declare selection parameters: vega-lite names its marks, signals and units after the view, which @aster/vl does not reproduce')
   if (spec.resolve !== undefined) validateResolve(spec.resolve, at('resolve'), kind)
   if (spec.projection !== undefined) validateProjection(spec.projection, at('projection'))
-  if (spec.view !== undefined) fail(at('view'), 'the view background property is not supported; set it through config.view')
+  if (spec.view !== undefined) validateViewBackground(spec.view, kind, at('view'))
   if (spec.usermeta !== undefined && !isObj(spec.usermeta)) mustBe(at('usermeta'), OBJECT)
   if (spec.config !== undefined) {
     // (a nested config was rejected above)
@@ -402,7 +402,7 @@ function validateData(spec: Obj, at: (k: string) => string): void {
 const CONFIG_KEYS = set(
   'autosize background padding axis axisBand axisX axisY axisLeft axisRight axisTop axisBottom legend header headerRow headerColumn headerFacet range ' +
     'mark arc area bar circle geoshape image line point rect rule square text tick trail view title font scale style projection ' +
-    'aria countTitle fieldTitle lineBreak normalizedNumberFormat numberFormat timeFormat errorbar errorband ' +
+    'aria countTitle fieldTitle lineBreak normalizedNumberFormat numberFormat timeFormat boxplot errorbar errorband ' +
     'customFormatTypes numberFormatType normalizedNumberFormatType timeFormatType selection',
 )
 const CONFIG_SCALE_KEYS = set(
@@ -428,6 +428,12 @@ function validateConfig(cfg: Obj, path: string): void {
         if (v !== 'zero-or-min' && !(isObj(v) && 'value' in v)) mustBe(`${path}.scale.invalid.${ch}`, '"zero-or-min" or {"value": ...}')
       }
     }
+  }
+  if (cfg.boxplot !== undefined) {
+    if (!isObj(cfg.boxplot)) mustBe(`${path}.boxplot`, OBJECT)
+    keysOf(cfg.boxplot, set('size extent box median outliers rule ticks'), `${path}.boxplot`, 'boxplot config')
+    const ext = cfg.boxplot.extent
+    if (ext !== undefined && ext !== 'min-max' && !(typeof ext === 'number' && Number.isFinite(ext) && ext >= 0)) mustBe(`${path}.boxplot.extent`, '"min-max" or a non-negative number')
   }
   if (cfg.projection !== undefined) validateProjection(cfg.projection, `${path}.projection`)
   if (cfg.selection !== undefined) {
@@ -746,6 +752,19 @@ const UNSUPPORTED_MARK_KEYS: Record<string, string> = {
 const INVALID_MODES = set('filter show break-paths-filter-domains break-paths-show-domains break-paths-show-path-domains')
 function validateInvalidMode(v: unknown, at: string): void {
   if (v !== undefined && v !== null && !(typeof v === 'string' && INVALID_MODES.has(v))) fail(at, `unknown invalid-value mode ${JSON.stringify(v)}: expected ${[...INVALID_MODES].join(', ')} or null`)
+}
+
+/** vega-lite `ViewBackground`: the group's own fill / stroke / opacity ..., on a unit or a layer. */
+const VIEW_BACKGROUND_KEYS = set('cornerRadius fillOpacity opacity strokeCap strokeDash strokeDashOffset strokeJoin strokeMiterLimit strokeOpacity strokeWidth fill stroke cursor style')
+function validateViewBackground(view: unknown, kind: string, at: string): void {
+  if (kind !== 'unit' && kind !== 'layer') fail(at, `\`view\` is a property of a unit or a layer spec, not of a ${kind}`)
+  if (!isObj(view)) mustBe(at, OBJECT)
+  keysOf(view, VIEW_BACKGROUND_KEYS, at, 'view')
+  for (const [k, v] of Object.entries(view)) {
+    if (k === 'style') {
+      if (typeof v !== 'string' && !(Array.isArray(v) && v.every((x) => typeof x === 'string'))) mustBe(`${at}.style`, 'a style name or an array of style names')
+    } else if (isObj(v)) fail(`${at}.${k}`, 'a signal or expression reference is not supported in a view background; give a literal value')
+  }
 }
 
 function validateMark(mark: unknown, at: string): string {
