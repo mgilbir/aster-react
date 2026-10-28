@@ -279,6 +279,7 @@ vl/rect_heatmap_weather
 vl/rect_heatmap_weather_temporal_center_band
 vl/rect_heatmap_weather_temporal_center_band_config
 vl/rect_mosaic_simple
+vl/repeat_layer
 vl/rule_color_mean
 vl/rule_extent
 vl/square

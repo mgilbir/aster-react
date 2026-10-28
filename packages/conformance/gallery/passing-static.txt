@@ -146,6 +146,7 @@ vl/bar_yearmonth_custom_format
 vl/bar_yearmonthdate_minBandSize
 vl/boxplot_preaggregated
 vl/boxplot_preaggregated_with_height
+vl/brush_table
 vl/circle
 vl/circle_binned
 vl/circle_binned_maxbins_2
@@ -158,6 +159,9 @@ vl/circle_opacity
 vl/circle_scale_quantile
 vl/circle_scale_quantize
 vl/circle_scale_threshold
+vl/concat_bar_layer_circle
+vl/concat_bar_scales_discretize
+vl/concat_bar_scales_discretize_2_cols
 vl/concat_marginal_histograms
 vl/concat_weather
 vl/config_numberFormatType_test
@@ -187,6 +191,7 @@ vl/histogram_reverse
 vl/interactive_area_brush
 vl/interactive_bar_select_highlight
 vl/interactive_brush
+vl/interactive_concat_layer
 vl/interactive_crossfilter
 vl/interactive_histogram_full_height_hover
 vl/interactive_index_chart
@@ -326,8 +331,12 @@ vl/rect_heatmap_weather_temporal_center_band_config
 vl/rect_mosaic_simple
 vl/repeat_child_layer
 vl/repeat_histogram
+vl/repeat_histogram_autosize
 vl/repeat_histogram_flights
+vl/repeat_independent_colors
+vl/repeat_layer
 vl/repeat_line_weather
+vl/repeat_splom
 vl/repeat_splom_cars
 vl/rule_color_mean
 vl/rule_extent

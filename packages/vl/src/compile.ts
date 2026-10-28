@@ -884,6 +884,12 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     for (const lg of unitLegends) {
       // one legend per scale channel (vega resolves shared legends across layers)
       const ch = legendChannel(lg)
+      // resolve.legend: independent - every layer keeps its own legend of this channel (they read the same scale)
+      if (isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).legend) && ((spec.resolve as Record<string, Record<string, unknown>>).legend)?.[ch] === 'independent') {
+        legends.push(lg)
+        GROUP_LEGENDS.add(lg)
+        continue
+      }
       const dup = legends.find((x) => legendChannel(x) === ch)
       if (dup) {
         // shared legend: the layers that feed it merge, as for axes
@@ -1799,6 +1805,7 @@ interface CompositeResult {
  * per channel, and sizes follow vega-lite's layout-size merging.
  */
 function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, layout: 'row' | 'column' | 'grid'): CompositeResult {
+  const parentResolve = (isObject(parent.resolve) ? parent.resolve : {}) as { scale?: Record<string, string>; legend?: Record<string, string> }
   const parentData = isObject(parent.data) ? dataSource(parent.data, ctx.datasets) : undefined
   const parentSourceName = parentData && typeof parentData.name === 'string' ? parentData.name : ctx.sn(0)
   const parentTransform = Array.isArray(parent.transform) ? (parent.transform as unknown[]) : []
@@ -1894,8 +1901,9 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     const scaleMap = new Map<string, string>()
     const scales = (vg.scales as ScaleSpec[]) ?? []
     for (const sc of scales) {
-      // everything but the shared (legend-bearing) channels is private to its child
-      if (!SHARED_SCALES.has(sc.name)) scaleMap.set(sc.name, `${prefix}${sc.name}`)
+      // everything but the shared (legend-bearing) channels is private to its child; resolve.scale decides the rest
+      const asked = parentResolve.scale?.[sc.name]
+      if (asked === 'independent' || (asked !== 'shared' && !SHARED_SCALES.has(sc.name))) scaleMap.set(sc.name, `${prefix}${sc.name}`)
     }
     // maps: the geojson transforms' signals and the projections are global names: a cell's own are prefixed
     const geojsonTransforms = unitData.flatMap((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).filter((t) => t.type === 'geojson' && typeof t.signal === 'string'))
@@ -1967,8 +1975,12 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
       }
     }
     // shared legends: the first child that has a channel defines it; titles join
+    const ownLegends: Record<string, unknown>[] = []
     for (const lg of ((vg.legends as Record<string, unknown>[] | undefined) ?? [])) {
       const ch = legendChannel(lg)
+      // resolve.ts parseGuideResolve: an independent scale has independent legends, and resolve.legend can ask for them
+      const channel = ch.startsWith(prefix) ? ch.slice(prefix.length) : ch
+      if (cellPrefixed(ch, prefix) || GROUP_LEGENDS.has(lg) || parentResolve.legend?.[channel] === 'independent') { ownLegends.push(lg); continue }
       const have = legendsByChannel.get(ch)
       if (!have) {
         legendsByChannel.set(ch, lg)
@@ -1995,6 +2007,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     // (a repeat names its marks `child__x_marks` whatever view holds it)
     group.marks = cell.spec.repeat !== undefined ? (vg.marks as Record<string, unknown>[]) : (vg.marks as Record<string, unknown>[]).map((m) => prefixMarkNames(m, prefix))
     if (Array.isArray(vg.axes) && vg.axes.length) group.axes = vg.axes
+    if (ownLegends.length) group.legends = ownLegends
     marks.push(group)
   })
 
@@ -2096,6 +2109,9 @@ function legendChannel(lg: Record<string, unknown>): string {
  * (a legend describing both fill and stroke), titles join, the first legend's
  * other properties win; a symbol default of `fill: transparent` yields to a fill.
  */
+/** Legends a layer keeps to itself (resolve.legend: independent): a composition does not hoist them. */
+const GROUP_LEGENDS = new WeakSet<object>()
+
 /** Legends whose title was written by the user (`legend.title`, or the field def's `title` it shows): vega-lite's explicit title. */
 const EXPLICIT_LEGEND_TITLE = new WeakSet<object>()
 
@@ -2151,7 +2167,7 @@ function compileConcat(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const columns = kind === 'concat' ? spec.columns : undefined
   const layout: 'row' | 'column' | 'grid' = kind === 'hconcat' || (kind === 'concat' && columns === undefined)
     ? 'row'
-    : kind === 'vconcat' ? 'column' : 'grid'
+    : kind === 'vconcat' || columns === 1 ? 'column' : 'grid'
   const res = embedCells(cells, spec, ctx, layout)
   const out: Record<string, unknown> = {}
   if (spec.$schema) out.$schema = VEGA_SCHEMA
@@ -2213,7 +2229,7 @@ function compileRepeat(spec: VLSpec, ctx: CompileCtx): VLSpec {
     if (child.height !== undefined) layered.height = child.height
     const res = compileLayered(layered, ctx)
     // vega-lite names each repeated layer after its repeat value: `child__layer_y_marks`
-    const renames = (rep.layer as unknown[]).map((v, i) => [`layer_${i}_`, `child__layer_${signalSafe(String(v))}_`] as const)
+    const renames = (rep.layer as unknown[]).map((v, i) => [`layer_${i}_`, `child__layer_${varName(String(v))}_`] as const)
     const rename = (n: unknown): unknown => {
       if (typeof n === 'string') {
         for (const [from, to] of renames) {
@@ -2292,17 +2308,18 @@ function compileRepeat(spec: VLSpec, ctx: CompileCtx): VLSpec {
         if (r !== undefined) repMap.row = r
         if (c !== undefined) repMap.column = c
         const key = `${r !== undefined ? `row_${String(r)}` : ''}${c !== undefined ? `column_${String(c)}` : ''}`
-        cells.push({ prefix: `child__${signalSafe(key)}_`, spec: substituteRepeat(child, repMap) as VLSpec })
+        cells.push({ prefix: `child__${varName(key)}_`, spec: substituteRepeat(child, repMap) as VLSpec })
       }
     }
   } else {
-    for (const v of colFields) cells.push({ prefix: `child__${signalSafe(String(v))}_`, spec: substituteRepeat(child, { repeat: v }) as VLSpec })
+    for (const v of colFields) cells.push({ prefix: `child__${varName(String(v))}_`, spec: substituteRepeat(child, { repeat: v }) as VLSpec })
   }
   // vega-lite normalizes a repeat to a concat with `columns` (the column count, or 1 for rows alone): a grid, so the children
   // share both sizes (`childWidth`, `childHeight`) whatever their number
   const columns = isGrid ? (rowFields.length > 0 && colFields.length === 0 ? 1 : colFields.length) : spec.columns
   // (a column of rows alone keeps its own plan: vega-lite sizes those children by its row layout)
-  const layout: 'row' | 'column' | 'grid' = isGrid && rowFields.length > 0 && colFields.length === 0 ? 'column' : columns !== undefined ? 'grid' : 'row'
+  // (layoutsize/parse.ts: with one column the children's width is the composition's own)
+  const layout: 'row' | 'column' | 'grid' = (isGrid && rowFields.length > 0 && colFields.length === 0) || columns === 1 ? 'column' : columns !== undefined ? 'grid' : 'row'
   const res = embedCells(cells, spec, ctx, layout)
   const out: Record<string, unknown> = {}
   if (spec.$schema) out.$schema = VEGA_SCHEMA

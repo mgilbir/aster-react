@@ -255,6 +255,17 @@ const GROUPS: Record<string, Case[]> = {
     ['horizontal bars offset over a time unit', { data: DATA, mark: 'bar', encoding: { y: { timeUnit: 'year', field: 't', type: 'temporal' }, yOffset: n('g'), color: n('g'), x: { aggregate: 'count' } } }],
     ['bars offset with a right alignment', { data: DATA, mark: { type: 'bar', align: 'right' }, encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), xOffset: n('g') } }],
   ],
+  // resolve.ts parseGuideResolve / defaultScaleResolve; header model names (varName); layoutsize/parse.ts (columns: 1)
+  'resolve and repeat (brush_table, repeat_independent_colors, repeat_splom)': [
+    ['independent colour scales in a concat', { data: DATA, resolve: { scale: { color: 'independent' } }, hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } }, { mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('g') } }] }],
+    ['independent colour legends over one scale in a concat', { data: DATA, resolve: { legend: { color: 'independent' } }, hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } }, { mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } }] }],
+    ['a shared x scale in a vconcat', { data: DATA, resolve: { scale: { x: 'shared' } }, vconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['independent size legends in a layer', { data: DATA, resolve: { legend: { size: 'independent' } }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), size: q('v', { title: 'One' }) } }, { mark: 'point', encoding: { x: q('x'), y: q('y'), size: q('v', { title: 'Two' }), color: { value: 'red' } } }] }],
+    ['independent legends in a layer inside a concat', { data: DATA, vconcat: [{ resolve: { legend: { size: 'independent' } }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), size: q('v', { title: 'One' }) } }, { mark: 'point', encoding: { x: q('x'), y: q('y'), size: q('v', { title: 'Two' }) } }] }, { mark: 'point', encoding: { x: q('x'), y: q('y') } }] }],
+    ['a repeat over fields with spaces', { data: { values: [{ 'a b': 1, 'c (d)': 2, k: 'x' }, { 'a b': 3, 'c (d)': 1, k: 'y' }] }, repeat: { row: ['a b', 'c (d)'], column: ['c (d)', 'a b'] }, spec: { width: 60, height: 60, mark: 'point', encoding: { x: { field: { repeat: 'column' }, type: 'quantitative' }, y: { field: { repeat: 'row' }, type: 'quantitative' }, color: n('k') } } }],
+    ['a repeat in one column keeps the width of its children', { data: DATA, repeat: ['y', 'v'], columns: 1, autosize: { type: 'fit-x', contains: 'padding' }, spec: { mark: 'bar', encoding: { x: { field: { repeat: 'repeat' }, type: 'quantitative', bin: true }, y: { aggregate: 'count' } } } }],
+    ['a concat in one column keeps the width of its children', { data: DATA, columns: 1, concat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
