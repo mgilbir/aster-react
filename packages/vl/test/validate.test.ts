@@ -127,6 +127,8 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['an unknown resolve channel', { data: DATA, resolve: { scale: { banana: 'shared' } }, hconcat: [unit()] }, /unknown channel "banana"/],
   ['a bad resolve value', { data: DATA, resolve: { scale: { color: 'both' } }, hconcat: [unit()] }, /"shared" or "independent"/],
   ['resolve on a unit', unit({ resolve: { scale: { y: 'independent' } } }), /no meaning on a single unit/],
+  ['an independent scale in a facet', { data: DATA, facet: { row: cn }, spec: unit(), resolve: { scale: { y: 'independent' } } }, /independent resolution inside a facet/],
+  ['an independent axis in a faceted unit', unit({ encoding: { x: xq, y: yq, column: cn }, resolve: { axis: { x: 'independent' } } }), /independent resolution inside a facet/],
 ]
 
 describe('validation layer: unsupported / invalid input throws a VLCompileError naming the feature', () => {

@@ -486,12 +486,17 @@ vl/time_parse_utc
 vl/time_parse_utc_format
 vl/trellis_anscombe
 vl/trellis_area
+vl/trellis_area_sort_array
 vl/trellis_bar
 vl/trellis_bar_histogram
 vl/trellis_bar_histogram_label_rotated
 vl/trellis_bar_no_header
+vl/trellis_barley_layer_median
 vl/trellis_column_year
+vl/trellis_cross_sort
+vl/trellis_cross_sort_array
 vl/trellis_line_quarter
+vl/trellis_row_column
 vl/trellis_scatter
 vl/trellis_scatter_binned_row
 vl/trellis_scatter_small

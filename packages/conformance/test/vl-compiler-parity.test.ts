@@ -32,6 +32,14 @@ const BOX = {
     t: `${2000 + (i % 4)}-01-01`,
   })),
 }
+const SPARSE = {
+  values: [
+    { c: 'A', g: 'p', x: 1, v: 2 },
+    { c: 'B', g: 'q', x: 2, v: 5 },
+    { c: 'A', g: 'q', x: 3, v: 3 },
+    { c: 'B', g: 'q', x: 4, v: 6 },
+  ],
+}
 const NULLS = {
   values: [
     { a: null, b: 100, c: 5 },
@@ -384,6 +392,34 @@ const GROUPS: Record<string, Case[]> = {
     ['a view on a layered spec of a facet', { data: DATA, facet: { row: n('g') }, spec: { view: { fill: 'azure' }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] } }],
     ['a view on the spec of a repeat', { data: DATA, repeat: ['y', 'v'], spec: { view: { fill: 'ivory' }, mark: 'point', encoding: { x: q('x'), y: { field: { repeat: 'repeat' }, type: 'quantitative' } } } }],
     ['a view with config.view', { data: DATA, config: { view: { stroke: 'blue' } }, view: { fill: 'cornsilk' }, mark: 'point', encoding: { x: q('x'), y: q('y') } }],
+  ],
+  // channeldef.ts defaultType: a facet field def without a type is nominal (facet_row_facet_row_point_future, facet_independent_scale)
+  'facet field defs without a type (facet_column_facet_row_point_future, facet_cross_independent_scale, trellis_cross_sort)': [
+    ['a row facet without a type', { data: DATA, facet: { row: { field: 'g' } }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a column facet without a type', { data: DATA, facet: { column: { field: 'g' } }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a row and a column facet without types', { data: DATA, facet: { row: { field: 'g' }, column: { field: 'c' } }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a wrapped facet without a type', { data: DATA, facet: { field: 'c' }, columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a facet in the encoding without a type', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), row: { field: 'g' } } }],
+    ['a facet in the encoding with a sort and no type', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y'), column: { field: 'c', sort: 'descending' } } }],
+    ['a row facet with a header and no type', { data: DATA, facet: { row: { field: 'g', header: { labelAngle: 0 } } }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+  ],
+  // compile/facet.ts assembleFacet / facetSortFields, data/facet.ts, joinaggregatefacet.ts, calculate.ts sortArrayIndexField:
+  // facet sorts by an aggregate or by a list, and the cross of a row and a column facet (trellis_cross_sort, facet_sort_*)
+  'facet sorts and crossed facets (trellis_cross_sort, trellis_cross_sort_array, facet_cross_sparse)': [
+    ['a row facet sorted by a median', { data: DATA, facet: { row: n('c', { sort: { op: 'median', field: 'v', order: 'descending' } }) }, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a column facet sorted by the default operation', { data: DATA, facet: { column: n('c', { sort: { field: 'v' } }) }, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a column facet sorted by a list', { data: DATA, facet: { column: n('c', { sort: ['C', 'A', 'B'] }) }, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a row facet sorted by a partial list', { data: DATA, facet: { row: n('c', { sort: ['B'] }) }, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a wrapped facet sorted by a mean', { data: DATA, facet: n('c', { sort: { op: 'mean', field: 'v', order: 'descending' } }), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a wrapped facet sorted by a list', { data: DATA, facet: n('c', { sort: ['C', 'B', 'A'] }), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a crossed facet sorted by medians', { data: DATA, facet: { row: n('g', { sort: { op: 'median', field: 'x' } }), column: n('c', { sort: { op: 'median', field: 'v' } }) }, spec: { width: 50, height: 50, mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a crossed facet sorted by lists', { data: DATA, facet: { row: n('g', { sort: ['q', 'p'] }), column: n('c', { sort: ['C', 'A', 'B'] }) }, spec: { width: 50, height: 50, mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a crossed facet with one sorted channel', { data: DATA, facet: { row: n('g'), column: n('c', { sort: { op: 'max', field: 'v', order: 'descending' } }) }, spec: { width: 50, height: 50, mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a crossed facet whose combinations are not all present', { data: SPARSE, facet: { row: n('g'), column: n('c') }, spec: { width: 50, height: 50, mark: 'point', encoding: { x: q('x'), y: q('v') } } }],
+    ['a facet transform that spans the cells, under a layered spec (it runs once, before the facet)', { data: DATA, transform: [{ joinaggregate: [{ op: 'mean', field: 'v', as: 'm' }], groupby: ['g'] }], facet: { row: n('c') }, spec: { width: 80, height: 60, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('v') } }, { mark: 'rule', encoding: { y: q('m', { aggregate: 'mean' }) } }] } }],
+    ['a facet window transform that spans the cells, under a layered spec', { data: DATA, transform: [{ window: [{ op: 'rank', as: 'r' }], sort: [{ field: 'v' }] }], facet: { column: n('c') }, spec: { width: 80, height: 60, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('r') } }, { mark: 'rule', encoding: { y: q('r', { aggregate: 'max' }) } }] } }],
+    ['a faceted unit with a shared resolve (its resolve is the facet\'s)', { data: DATA, mark: 'point', resolve: { scale: { y: 'shared' }, axis: { x: 'shared' } }, encoding: { x: q('x'), y: q('v'), column: n('c') } }],
+    ['a facet in the encoding sorted by an aggregate', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('v'), row: n('c', { sort: { op: 'sum', field: 'v' } }) } }],
   ],
 }
 

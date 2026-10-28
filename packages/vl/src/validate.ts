@@ -269,7 +269,7 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
   if (spec.params !== undefined) validateParams(spec.params, at('params'), kind !== 'layer' && selOk, kind, spec, at('params'))
   checkNamedSelectionView(spec, at)
   if (top && spec.name !== undefined && [...declaredParams].some(([n, k]) => k === 'selection' && !timerNames.has(n))) fail(at('name'), 'a named spec cannot declare selection parameters: vega-lite names its marks, signals and units after the view, which @aster/vl does not reproduce')
-  if (spec.resolve !== undefined) validateResolve(spec.resolve, at('resolve'), kind)
+  if (spec.resolve !== undefined) validateResolve(spec.resolve, at('resolve'), kind, isObj(spec.encoding) && (spec.encoding.row != null || spec.encoding.column != null || spec.encoding.facet != null))
   if (spec.projection !== undefined) validateProjection(spec.projection, at('projection'))
   if (spec.view !== undefined) validateViewBackground(spec.view, kind, at('view'))
   if (spec.usermeta !== undefined && !isObj(spec.usermeta)) mustBe(at('usermeta'), OBJECT)
@@ -711,7 +711,7 @@ function validateSelection(p: Obj, at: string): void {
 
 const RESOLVE_CHANNELS = set('x y xOffset yOffset theta radius color fill stroke opacity fillOpacity strokeOpacity strokeWidth strokeDash size angle shape time')
 
-function validateResolve(r: unknown, path: string, kind: Kind): void {
+function validateResolve(r: unknown, path: string, kind: Kind, facetedUnit = false): void {
   if (!isObj(r)) mustBe(path, OBJECT)
   keysOf(r, set('scale axis legend'), path, 'resolve')
   for (const what of ['scale', 'axis', 'legend'] as const) {
@@ -723,7 +723,14 @@ function validateResolve(r: unknown, path: string, kind: Kind): void {
       if (v !== 'shared' && v !== 'independent') mustBe(`${path}.${what}.${ch}`, `"shared" or "independent", got ${JSON.stringify(v)}`)
     }
   }
-  if (kind === 'unit') fail(path, '`resolve` has no meaning on a single unit spec')
+  // a unit faceted through its encoding is a facet over that unit: its resolve is the facet's
+  if (kind === 'unit' && !facetedUnit) fail(path, '`resolve` has no meaning on a single unit spec')
+  if (kind === 'facet' || facetedUnit) {
+    for (const what of ['scale', 'axis', 'legend'] as const) {
+      const m = r[what]
+      if (isObj(m)) for (const [ch, v] of Object.entries(m)) if (v === 'independent') fail(`${path}.${what}.${ch}`, 'an independent resolution inside a facet (per-cell scales, axes and legends sized by their cardinality) is not supported yet')
+    }
+  }
 }
 
 // --- unit specs --------------------------------------------------------------
@@ -1343,13 +1350,13 @@ function validateFacetOperator(spec: Obj, at: (k: string) => string, selOk: bool
     keysOf(d, set('field type aggregate bin timeUnit sort title header bandPosition'), a, 'facet field definition')
     if (typeof d.field !== 'string') fail(`${a}.field`, 'a facet field definition needs `field`')
     splitAccessPath(d.field)
-    if (d.type === undefined && d.aggregate === undefined && d.bin === undefined && d.timeUnit === undefined) fail(`${a}.type`, 'a facet field definition needs `type`')
     if (d.bin !== undefined) validateBin(d.bin, `${a}.bin`)
     if (d.timeUnit !== undefined) normalizeTimeUnit(d.timeUnit, `${a}.timeUnit`)
     if (d.sort !== undefined) {
       const s = d.sort
       if (!(s === 'ascending' || s === 'descending' || s === null || Array.isArray(s) || isObj(s))) fail(`${a}.sort`, 'unknown facet sort form')
       if (isObj(s) || Array.isArray(s)) validateSort(s, `${a}.sort`, 'row')
+      if (isObj(s) && typeof s.field !== 'string') fail(`${a}.sort.field`, 'a facet sort by an aggregate needs the `field` to aggregate')
     }
     if (d.header !== undefined && !isObj(d.header)) mustBe(`${a}.header`, OBJECT)
   }

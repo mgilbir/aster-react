@@ -1400,6 +1400,19 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const baseName = layeredInner
     ? ((innerData[1]?.source === srcName ? (innerData[1]!.name as string) : srcName))
     : (((inner.marks as Record<string, unknown>[])?.[0]?.from as { data?: string } | undefined)?.data ?? innerDataName)
+  // The facet's own `transform` runs once, before the facet (data/parse.ts: the facet model's pipeline is the parent of its cells).
+  // A layered inner view derives each layer's dataset from the facet's base dataset with these transforms in front, which would run
+  // them again inside every cell (a joinaggregate over one cell's rows, ...): they are hoisted into the base dataset instead.
+  if (layeredInner && isObject(spec.spec) && Array.isArray(spec.transform) && spec.transform.length && (spec.spec as VLSpec).data === undefined) {
+    const hoisted = translateTransforms(spec.transform as Record<string, unknown>[], ctx, { parsed: new Map() })
+    const baseDs0 = innerData.find((d) => d.name === baseName)
+    const derived = innerData.filter((d) => d.source === baseName && Array.isArray(d.transform))
+    const key = JSON.stringify(hoisted)
+    if (baseDs0 && hoisted.length && derived.length && derived.every((d) => JSON.stringify((d.transform as unknown[]).slice(0, hoisted.length)) === key)) {
+      for (const d of derived) d.transform = (d.transform as unknown[]).slice(hoisted.length)
+      baseDs0.transform = [...((baseDs0.transform as Record<string, unknown>[] | undefined) ?? []), ...hoisted]
+    }
+  }
   const cellData: Record<string, unknown>[] = []
   const cellMap = new Map<string, string>([[baseName, 'facet']])
   if (layeredInner) {
@@ -1415,6 +1428,56 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
       }
     }
   }
+
+  // facet sorts (compile/facet.ts assembleFacet / facetSortFields, data/facet.ts, joinaggregatefacet.ts, calculate.ts): a sort by an
+  // aggregate of another field (`{op, field}`) or by a list of values orders the cells and their headers by a field the facet derives
+  interface FacetSortInfo { cellField: string; domainFields: string[]; domainOps: string[]; domainAs: string[]; facetAgg?: { field: string; op: string; as: string }; headerField: string }
+  const facetSortOf = (def: Record<string, unknown> | undefined, field: string | undefined, channel: 'row' | 'column' | 'facet'): FacetSortInfo | undefined => {
+    const sort = def?.sort
+    if (!field || sort === undefined || sort === null || typeof sort === 'string') return undefined
+    const baseDs = innerData.find((d) => d.name === baseName)
+    const addToBase = (t: Record<string, unknown>): void => {
+      if (!baseDs) throw new VLCompileError('a facet sort needs the facet data')
+      ;(baseDs.transform ??= []) as Record<string, unknown>[]
+      ;(baseDs.transform as Record<string, unknown>[]).push(t)
+    }
+    if (Array.isArray(sort)) {
+      const idx = genName(channel, `${field}_sort_index`)
+      const expr = `${(sort as unknown[]).map((v, i) => `datum[${JSON.stringify(field)}]===${JSON.stringify(v)} ? ${i}`).join(' : ')} : ${sort.length}`
+      addToBase({ type: 'formula', expr, as: idx })
+      return { cellField: idx, domainFields: [idx], domainOps: ['max'], domainAs: [idx], facetAgg: { field: idx, op: 'max', as: idx }, headerField: idx }
+    }
+    if (isObject(sort)) {
+      const sf = sort.field as string
+      const op = (sort.op as string | undefined) ?? 'min'
+      const out = genName(`${op}_${sf}`, `by_${field}`)
+      const domainAs = genName(op, sf)
+      if (rowFd && colFd) {
+        // a crossed facet pre-calculates the sort field per channel value, and the cells take its max
+        addToBase({ type: 'joinaggregate', as: [out], ops: [op], fields: [sf], groupby: [field] })
+        return { cellField: out, domainFields: [sf], domainOps: [op], domainAs: [domainAs], facetAgg: { field: out, op: 'max', as: out }, headerField: domainAs }
+      }
+      return { cellField: out, domainFields: [sf], domainOps: [op], domainAs: [domainAs], facetAgg: { field: sf, op, as: out }, headerField: domainAs }
+    }
+    return undefined
+  }
+  const rowSort = facetSortOf(rowDef, rowField, 'row')
+  const colSort = facetSortOf(colDef, colField, 'column')
+  const wrapSort = facetSortOf(wrapDef, wrapField, 'facet')
+  // the cells' source: the facet's grouping, the cross of the row and column values when both are given, the sort fields aggregated
+  const facetFrom = (groupby: string[]): Record<string, unknown> => {
+    const sorts = [rowSort, colSort, wrapSort].filter((x): x is FacetSortInfo => x !== undefined && x.facetAgg !== undefined)
+    const cross = !!rowFd && !!colFd
+    return {
+      name: 'facet',
+      data: baseName,
+      groupby,
+      ...(cross || sorts.length
+        ? { aggregate: { ...(cross ? { cross: true } : {}), ...(sorts.length ? { fields: sorts.map((x) => x.facetAgg!.field), ops: sorts.map((x) => x.facetAgg!.op), as: sorts.map((x) => x.facetAgg!.as) } : {}) } }
+        : {}),
+    }
+  }
+  const domainAggregate = (sort: FacetSortInfo | undefined): Record<string, unknown> => (sort ? { fields: sort.domainFields, ops: sort.domainOps, as: sort.domainAs } : {})
 
   // The child size: the inner view's own width/height (a number, or a step-driven
   // signal over its discrete scale). The facet's own width/height are not used.
@@ -1563,8 +1626,8 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
         type: 'group',
         title: cellTitle,
         style: cellStyle,
-        from: { facet: { name: 'facet', data: baseName, groupby: colsOf(wrapFd, wrapField) } },
-        sort: { field: [datumRef(wrapField)], order: [wrapOrder] },
+        from: { facet: facetFrom(colsOf(wrapFd, wrapField)) },
+        sort: { field: [datumRef(wrapSort?.cellField ?? wrapField)], order: [wrapOrder] },
         encode: { update: { width: { signal: 'child_width' }, height: { signal: 'child_height' }, ...cellView } },
         ...(innerSel ? { signals: assembleFacetSignals(cellName, [...innerSel.unit]) } : {}),
         ...(cellData.length ? { data: cellData } : {}),
@@ -1713,7 +1776,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
         name: `${c.ch}_${t}`,
         type: 'group',
         role: `${c.ch}-${t}`,
-        ...(faceted ? { from: { data: c.domain }, sort: { field: datumRef(c.field!), order: c.order } } : {}),
+        ...(faceted ? { from: { data: c.domain }, sort: { field: datumRef((c.ch === 'row' ? rowSort : colSort)?.headerField ?? c.field!), order: c.order } } : {}),
         ...(title ? { title } : {}),
         encode: { update: { [c.ch === 'row' ? 'height' : 'width']: { signal: c.size } } },
         ...(comp.axes.length ? { axes: comp.axes } : {}),
@@ -1727,8 +1790,8 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     type: 'group',
     ...(cellTitle ? { title: cellTitle } : {}),
     style: cellStyle,
-    from: { facet: { name: 'facet', data: baseName, groupby: facetGroupby } },
-    sort: { field: facetSortFields.map(datumRef), order: facetSortFields.map((_, i) => (i === 0 && rowField ? rowOrder : colOrder)) },
+    from: { facet: facetFrom(facetGroupby) },
+    sort: { field: [rowSort?.cellField ?? rowField, colSort?.cellField ?? colField].filter(Boolean).map((f) => datumRef(f as string)), order: facetSortFields.map((_, i) => (i === 0 && rowField ? rowOrder : colOrder)) },
     encode: { update: { width: { signal: 'child_width' }, height: { signal: 'child_height' }, ...cellView } },
     ...(innerSel ? { signals: assembleFacetSignals(cellName, [...innerSel.unit]) } : {}),
     ...(cellData.length ? { data: cellData } : {}),
@@ -1743,8 +1806,8 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // every facet reference (cell groupby, domain, stack series, header label)
   // keys on the aggregated name, which the pipeline never computes, so the
   // facet collapses to a single (undefined) group exactly like upstream
-  if (colField) data.push({ name: columnDomainName, source: baseName, transform: [{ type: 'aggregate', groupby: colsOf(colFd, colField) }] })
-  if (rowField) data.push({ name: rowDomainName, source: baseName, transform: [{ type: 'aggregate', groupby: colsOf(rowFd, rowField) }] })
+  if (colField) data.push({ name: columnDomainName, source: baseName, transform: [{ type: 'aggregate', groupby: colsOf(colFd, colField), ...domainAggregate(colSort) }] })
+  if (rowField) data.push({ name: rowDomainName, source: baseName, transform: [{ type: 'aggregate', groupby: colsOf(rowFd, rowField), ...domainAggregate(rowSort) }] })
 
   const out: Record<string, unknown> = {}
   if (spec.$schema) out.$schema = VEGA_SCHEMA
