@@ -321,3 +321,122 @@ export function normalizeComposites(node: unknown, userConfig: Obj | undefined):
   if (node.spec !== undefined) out.spec = normalizeComposites(node.spec, userConfig)
   return out
 }
+
+// --- path overlays (normalize/pathoverlay.ts) --------------------------------------------------------------------------
+
+const DEFAULT_REDUCED_OPACITY = 0.7
+const OVERLAY_MARKS = new Set(['line', 'rule', 'trail', 'area'])
+
+const pick = (o: Obj, keys: string[]): Obj => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]))
+const omit = (o: Obj, keys: string[]): Obj => Object.fromEntries(Object.entries(o).filter(([k]) => !keys.includes(k)))
+
+/** The point overlay of a path mark: `point` on the mark, `config.<mark>.point`, or a `shape` channel (getPointOverlay). */
+function getPointOverlay(markDef: Obj, markConfig: Obj, encoding: Obj): Obj | null | undefined {
+  if (markDef.point === 'transparent') return { opacity: 0 }
+  if (markDef.point) return isObj(markDef.point) ? markDef.point : {}
+  if (markDef.point !== undefined) return null
+  if (markConfig.point || encoding.shape) return isObj(markConfig.point) ? markConfig.point : {}
+  return undefined
+}
+
+/** The line overlay of an area mark: `line` on the mark or `config.area.line` (getLineOverlay). */
+function getLineOverlay(markDef: Obj, markConfig: Obj): Obj | null | undefined {
+  if (markDef.line) return markDef.line === true ? {} : markDef.line
+  if (markDef.line !== undefined) return null
+  if (markConfig.line) return markConfig.line === true ? {} : markConfig.line
+  return undefined
+}
+
+export interface StackProps {
+  fieldChannel: string
+  offset?: string
+}
+
+/** The marks a layer of mark + overlay replaces: `point` / `line` leave the mark definition. */
+function dropLineAndPoint(markDef: Obj): Obj | string {
+  const mark = omit(markDef, ['point', 'line'])
+  return Object.keys(mark).length > 1 ? mark : (mark.type as string)
+}
+
+/**
+ * Replace every line / area / rule / trail unit that carries a point (or, for an area, a line) overlay by the layer
+ * vega-lite normalizes it to: the mark, then its line, then its points, over the same encoding (a stacked measure's
+ * `stack` carried over, `x2` / `y2` and `shape` dropped from the overlays).
+ * `stackOf` answers the stack properties of a unit spec; `inherited` is the encoding a parent layer shares.
+ */
+export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit: Obj) => StackProps | undefined, inherited: Obj = {}): unknown {
+  if (Array.isArray(node)) return node.map((n) => normalizePathOverlays(n, config, stackOf, inherited))
+  if (!isObj(node)) return node
+  if (node.layer !== undefined) {
+    const encoding = { ...inherited, ...(isObj(node.encoding) ? node.encoding : {}) }
+    return { ...node, layer: (node.layer as unknown[]).map((c) => normalizePathOverlays(c, config, stackOf, encoding)) }
+  }
+  for (const k of ['hconcat', 'vconcat', 'concat']) {
+    if (node[k] !== undefined) return { ...node, [k]: normalizePathOverlays(node[k], config, stackOf, {}) }
+  }
+  if (node.spec !== undefined) return { ...node, spec: normalizePathOverlays(node.spec, config, stackOf, {}) }
+  if (node.mark === undefined) return node
+
+  // a unit faceted through its encoding becomes a facet over the overlay layer (normalize/facet.ts first)
+  if (isObj(node.encoding) && (node.encoding.row !== undefined || node.encoding.column !== undefined || node.encoding.facet !== undefined)) {
+    const { row, column, facet, ...rest } = node.encoding
+    const { width, height, params, projection, mark, name, ...outerRest } = node
+    const inner = normalizePathOverlays({ ...(width !== undefined ? { width } : {}), ...(height !== undefined ? { height } : {}), ...(params ? { params } : {}), ...(projection !== undefined ? { projection } : {}), ...(name !== undefined ? { name } : {}), mark, encoding: rest }, config, stackOf, inherited)
+    if (inner === undefined || (isObj(inner) && inner.layer === undefined)) return node
+    const { encoding: _e, ...facetOuter } = outerRest
+    void _e
+    return { ...facetOuter, facet: facet !== undefined ? facet : { ...(row !== undefined ? { row } : {}), ...(column !== undefined ? { column } : {}) }, spec: inner }
+  }
+
+  const { params, projection, mark, name, encoding: own, ...outer } = node
+  const markDef: Obj = isObj(mark) ? mark : { type: mark }
+  if (!OVERLAY_MARKS.has(markDef.type)) return node
+  const encoding: Obj = { ...inherited, ...(isObj(own) ? own : {}) }
+  const markConfig: Obj = isObj(config[markDef.type]) ? config[markDef.type] : {}
+  const pointOverlay = getPointOverlay(markDef, markConfig, encoding)
+  const lineOverlay = markDef.type === 'area' ? getLineOverlay(markDef, markConfig) : undefined
+  if (!pointOverlay && !lineOverlay) return node
+
+  const opacitySet = (k: string): boolean => (markDef[k] ?? markConfig[k] ?? (isObj(config.mark) ? config.mark[k] : undefined)) !== undefined
+  const layer: Obj[] = [
+    {
+      ...(name !== undefined ? { name } : {}),
+      ...(params ? { params } : {}),
+      mark: dropLineAndPoint({
+        ...(markDef.type === 'area' && !opacitySet('opacity') && !opacitySet('fillOpacity') ? { opacity: DEFAULT_REDUCED_OPACITY } : {}),
+        ...markDef,
+      }),
+      encoding: omit(own === undefined ? {} : (own as Obj), ['shape']),
+    },
+  ]
+  // a stacked measure stacks the overlays alike
+  const stackProps = stackOf({ ...node, encoding })
+  let overlayEncoding: Obj = encoding
+  if (stackProps) {
+    overlayEncoding = {
+      ...encoding,
+      [stackProps.fieldChannel]: { ...(encoding[stackProps.fieldChannel] as Obj), ...(stackProps.offset ? { stack: stackProps.offset } : {}) },
+    }
+  }
+  // (overlays must not be ranged: x2 / y2 would make them rules)
+  overlayEncoding = omit(overlayEncoding, ['y2', 'x2'])
+  // the overlays carry what the parent layer shares only through their own encoding: drop what the layer would inherit twice
+  const ownOverlay = (e: Obj): Obj => omit(e, Object.keys(inherited).filter((k) => deepEq(inherited[k], e[k])))
+  if (lineOverlay) {
+    layer.push({
+      ...(projection !== undefined ? { projection } : {}),
+      mark: { type: 'line', ...pick(markDef, ['clip', 'interpolate', 'tension', 'tooltip']), ...lineOverlay },
+      encoding: ownOverlay(overlayEncoding),
+    })
+  }
+  if (pointOverlay) {
+    layer.push({
+      ...(projection !== undefined ? { projection } : {}),
+      mark: { type: 'point', opacity: 1, filled: true, ...pick(markDef, ['clip', 'tooltip']), ...pointOverlay },
+      encoding: ownOverlay(overlayEncoding),
+    })
+  }
+  return { ...outer, layer }
+}
+
+const deepEq = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)

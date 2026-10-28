@@ -123,6 +123,28 @@ const GROUPS: Record<string, Case[]> = {
     ['facet with a binned size and a temporal x in the child', { data: DATA, mark: 'point', encoding: { x: t('t'), y: q('y'), size: q('v', { bin: true }), facet: n('g') } }],
     ['custom number format type on a binned tooltip', { data: DATA, usermeta: {}, config: { customFormatTypes: true, numberFormatType: 'pow' }, mark: { type: 'point', tooltip: true }, encoding: { x: q('x'), y: q('y', { bin: true }) } }],
   ],
+  // normalize/pathoverlay.ts: a path mark with a point (or an area with a line) overlay is a layer of the mark and its overlays
+  'path overlays (area_overlay, line_overlay, stacked_area_overlay, line_shape_overlay)': [
+    ['area with a line and points', { data: DATA, mark: { type: 'area', line: true, point: true }, encoding: { x: t('t'), y: q('v') } }],
+    ['area with a styled line', { data: DATA, mark: { type: 'area', line: { color: 'darkgreen' } }, encoding: { x: t('t'), y: q('v') } }],
+    ['line with points', { data: DATA, mark: { type: 'line', point: true }, encoding: { x: q('x'), y: q('y') } }],
+    ['line with coloured points', { data: DATA, mark: { type: 'line', point: true }, encoding: { x: q('x'), y: q('y', { aggregate: 'mean' }), color: n('g') } }],
+    ['line with stroked points', { data: DATA, mark: { type: 'line', point: { filled: false, fill: 'white' } }, encoding: { x: q('x'), y: q('y', { aggregate: 'mean' }), color: n('g') } }],
+    ['line with transparent points', { data: DATA, mark: { type: 'line', point: 'transparent' }, encoding: { x: q('x'), y: q('y') } }],
+    ['line with sized points', { data: DATA, mark: { type: 'line', point: { size: 200 } }, encoding: { x: q('x'), y: q('y'), size: q('v') } }],
+    ['line with points through config', { data: DATA, config: { line: { point: true } }, mark: 'line', encoding: { x: q('x'), y: q('y') } }],
+    ['area with a line through config', { data: DATA, config: { area: { line: true } }, mark: 'area', encoding: { x: q('x'), y: q('y') } }],
+    ['line with a shape channel', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), shape: n('g') } }],
+    ['line with a constant shape', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), shape: { value: 'square' } } }],
+    ['stacked area with a line', { data: DATA, mark: { type: 'area', line: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }), color: n('g') } }],
+    ['stacked area (no aggregate) with points', { data: DATA, mark: { type: 'area', point: true }, encoding: { x: q('x'), y: q('v'), color: n('g') } }],
+    ['normalized stacked area with a line', { data: DATA, mark: { type: 'area', line: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'sum', stack: 'normalize' }), color: n('g') } }],
+    ['area with a line and an opacity', { data: DATA, mark: { type: 'area', line: true, opacity: 0.4 }, encoding: { x: q('x'), y: q('v') } }],
+    ['line with points in a layer', { data: DATA, layer: [{ mark: { type: 'line', point: true }, encoding: { x: q('x'), y: q('y') } }, { mark: 'rule', encoding: { y: { datum: 4 } } }] }],
+    ['line with points under a shared encoding', { data: DATA, encoding: { x: q('x'), y: q('y') }, layer: [{ mark: { type: 'line', point: true } }, { mark: 'text', encoding: { text: q('v') } }] }],
+    ['line with points, faceted by a row channel', { data: DATA, mark: { type: 'line', point: true }, encoding: { x: q('x'), y: q('y'), row: n('g') } }],
+    ['trail with points', { data: DATA, mark: { type: 'trail', point: true }, encoding: { x: q('x'), y: q('y'), size: q('v') } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
