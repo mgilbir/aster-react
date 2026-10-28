@@ -61,6 +61,7 @@ import { fileURLToPath } from 'node:url'
 // The @aster/vl compiler ports vega-lite's layout-size, band/bin/time-unit position, path-overlay, stack-order, resolve and
 // legend-merge rules (gallery conformance): Chart + VL 257.6 (+7.7: the binned discrete fields and the layered axis merge came last).
 // Nothing outside the VL row moved.
+// The dataflow-failure containment (a throwing dataset stops the pass like vega's): SvgChart 154.4 (+0.1 over the budget before it).
 const BUDGETS = {
   '@aster/core': 134.3 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
@@ -73,7 +74,7 @@ const BUDGETS = {
   '@aster/react useChart': 138.2 * 1024,
   '@aster/react Chart': 175.3 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 154.4 * 1024,
+  '@aster/react SvgChart': 154.9 * 1024,
   '@aster/react SvgChart + interaction': 169.2 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
   '@aster/react Chart + VL': 258.1 * 1024,
