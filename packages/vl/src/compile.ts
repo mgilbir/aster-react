@@ -2676,7 +2676,7 @@ function patchDatumRefs(node: unknown, datums: Map<string, unknown>): void {
 function checkConstChannels(mark: string, encoding: Record<string, unknown>, filled?: boolean): void {
   // channels that need their own scale + legend are implemented for colour (fill/stroke alias it);
   // the rest are limited to constants and conditions
-  for (const ch of ['strokeDash', 'angle', 'fillOpacity', 'strokeOpacity']) {
+  for (const ch of ['angle', 'fillOpacity', 'strokeOpacity']) {
     const d = encoding[ch]
     if (isObject(d) && (d.field !== undefined || d.datum !== undefined)) {
       throw new VLCompileError(`encoding.${ch}: a data-driven ${ch} (scale + legend) is not supported; use a constant {"value": ...} or a condition`)
@@ -2753,6 +2753,8 @@ function dropUnallowedCustomFormat(def0: unknown, config: unknown): unknown {
   return def
 }
 
+const STROKE_DASH_MARKS = new Set(['line', 'point', 'tick', 'rule', 'circle', 'square', 'bar', 'geoshape'])
+
 function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown, markDef?: unknown): FieldDef[] {
   const fields: FieldDef[] = []
   // vega-lite parseLegend: `disable = legend !== undefined ? !legend : config.legend.disable`
@@ -2761,6 +2763,11 @@ function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown
   for (const [channel, def] of Object.entries(encoding)) {
     // vega-lite drops the size of an image mark (it is incompatible)
     if (channel === 'size' && isObject(markDef) && markDef.$image) continue
+    // channel.ts supportMark: a stroke dash only exists on these marks; elsewhere vega-lite drops the channel (with a warning)
+    if (channel === 'strokeDash') {
+      const markType = typeof markDef === 'string' ? markDef : isObject(markDef) ? markDef.type : undefined
+      if (typeof markType === 'string' && !STROKE_DASH_MARKS.has(markType)) continue
+    }
     // detail / order / tooltip accept a list of definitions
     for (const d0 of Array.isArray(def) ? def : [def]) {
       const d = dropUnallowedCustomFormat(d0, config)
@@ -4118,6 +4125,17 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
     })
   }
 
+  // stroke dash scale: an ordinal scale over the default dash patterns (scale/range.ts STROKEDASH)
+  const strokeDashDefS = fields.find((f) => f.channel === 'strokeDash' && f.field)
+  if (strokeDashDefS) {
+    scales.push({
+      name: 'strokeDash',
+      type: 'ordinal',
+      domain: sortedDomain(strokeDashDefS, dataName, dc),
+      range: strokeDashDefS.scale?.range ?? [[1, 0], [4, 2], [2, 1], [1, 1], [1, 2, 4, 2]],
+    })
+  }
+
   // theta scale (arc marks): the stacked start/end fields span [0, 2pi]
   const thetaDef = fields.find((f) => f.channel === 'theta' && f.field)
   const arcThetaS = thetaStackInfo(mark, fields)
@@ -4982,6 +5000,21 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     forwardLegendProps(swUser, swLg, false)
     if (swLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) swLg.direction = 'horizontal'
     push('strokeWidth', swLg, strokeWidthLegendDef)
+  }
+  const strokeDashLegendDef = fields.find((f) => f.channel === 'strokeDash' && f.field)
+  if (strokeDashLegendDef && strokeDashLegendDef.legend !== null && !legendSuppressed(strokeDashLegendDef)) {
+    const sdUser = { ...cfgDefaults, ...(strokeDashLegendDef.legend ?? {}) }
+    const sdSym = symbolFor('strokeDash')
+    const sdLg: Record<string, unknown> = {
+      strokeDash: 'strokeDash',
+      symbolType: sdSym.symbolType,
+      title: legendTitle(strokeDashLegendDef, sdUser),
+      encode: { symbols: { update: sdSym.update } },
+    }
+    applyTimeUnitLegend(sdLg, strokeDashLegendDef, sdUser, formats)
+    forwardLegendProps(sdUser, sdLg, false)
+    if (sdLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) sdLg.direction = 'horizontal'
+    push('strokeDash', sdLg, strokeDashLegendDef)
   }
   const opacityLegendDef = fields.find((f) => f.channel === 'opacity' && f.field)
   if (opacityLegendDef && opacityLegendDef.legend !== null && !legendSuppressed(opacityLegendDef)) {
@@ -5852,8 +5885,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   }
   applyTextualChannels(update, spec, fields, (d) => d.stack === 'normalize' && ((d.channel === 'theta' && mark === 'arc' && !d.aggregate) || isStacked(d, mark, orient, fields)))
 
-  // data-driven opacity and stroke width reach every mark
-  for (const prop of ['opacity', 'strokeWidth']) {
+  // data-driven opacity, stroke width and stroke dash reach every mark
+  for (const prop of ['opacity', 'strokeWidth', 'strokeDash']) {
     const def = fields.find((f) => f.channel === prop && f.field)
     if (def && !(isObject(update[prop]) && 'scale' in (update[prop] as object))) update[prop] = { scale: prop, field: aggFieldName(def) }
   }

@@ -512,6 +512,22 @@ const GROUPS: Record<string, Case[]> = {
     ['two axis titles', { data: DATA, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y', { axis: { title: 'One' } }) } }, { mark: 'line', encoding: { x: q('x'), y: q('v', { axis: { title: 'Two' } }) } }] }],
     ['an axis title with a ranged layer', { data: DATA, layer: [{ mark: 'bar', encoding: { x: n('c'), y: q('y'), y2: { field: 'v' } } }, { mark: 'text', encoding: { x: n('c'), y: q('v', { axis: { title: 'Range' } }), text: n('c') } }] }],
   ],
+  // scale/range.ts STROKEDASH + legend/parse.ts: a strokeDash field has an ordinal scale over the dash patterns and a legend
+  'stroke dash scales and legends (line_strokedash, line_dashed_part, stocks-2009-layered-line-point)': [
+    ['a line dashed by a field', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), strokeDash: n('g') } }],
+    ['a line dashed and coloured by the same field', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('g'), strokeDash: n('g') } }],
+    ['a line dashed and coloured by different fields', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('c'), strokeDash: n('g') } }],
+    ['a dashed line with an explicit range', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), strokeDash: n('g', { scale: { range: [[8, 2], [2, 2]] } }) } }],
+    ['a dashed line with no legend', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), strokeDash: n('g', { legend: null }) } }],
+    ['a dashed line with a titled legend', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), strokeDash: n('g', { title: 'Group', legend: { orient: 'bottom' } }) } }],
+    ['a dashed point', { data: DATA, mark: { type: 'point', filled: false }, encoding: { x: q('x'), y: q('y'), strokeDash: n('g') } }],
+    ['a dashed bar outline', { data: DATA, mark: { type: 'bar', stroke: 'black' }, encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), strokeDash: n('g') } }],
+    ['a dashed area', { data: DATA, mark: { type: 'area', stroke: 'black' }, encoding: { x: q('x'), y: q('y'), strokeDash: n('g') } }],
+    ['a layered line (dashed) and point (shaped) over one field', { data: DATA, transform: [{ filter: 'datum.x > 0' }], layer: [{ mark: 'line', encoding: { x: q('x'), y: q('y'), color: n('g'), strokeDash: n('g') } }, { mark: { type: 'point', filled: true, size: 60, opacity: 1 }, encoding: { x: q('x'), y: q('y'), color: n('g'), shape: n('g') } }] }],
+    ['a dashed line in a concat shares the scale', { data: DATA, hconcat: [{ mark: 'line', encoding: { x: q('x'), y: q('y'), strokeDash: n('g') } }, { mark: 'line', encoding: { x: q('x'), y: q('v'), strokeDash: n('g') } }] }],
+    ['a dashed trail', { data: DATA, mark: 'trail', encoding: { x: q('x'), y: q('y'), size: q('v'), strokeDash: n('g') } }],
+    ['a dashed line with a condition on the colour', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), strokeDash: n('g'), color: { value: 'red' } } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({

@@ -52,7 +52,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   // --- channels (C35)
   ['an unknown channel', unit({ encoding: { x: xq, banana: yq } }), /unknown encoding channel "banana"/],
   ['a valid but unimplemented channel', unit({ encoding: { x: xq, key: yq } }), /key.*not supported/],
-  ['a data-driven strokeDash', unit({ encoding: { x: xq, strokeDash: cn } }), /strokeDash/],
+  ['a data-driven fillOpacity', unit({ encoding: { x: xq, fillOpacity: cn } }), /fillOpacity/],
   ['a data-driven angle', unit({ mark: 'text', encoding: { x: xq, angle: yq } }), /angle/],
   ['fill together with color', unit({ mark: 'bar', encoding: { x: cn, color: cn, fill: cn } }), /together with encoding\.color/],
   ['an array on a single-def channel', unit({ encoding: { x: [xq] } }), /does not accept an array/],
