@@ -81,6 +81,8 @@ export interface NormalTimeUnit {
   unit: string
   utc: boolean
   step?: number
+  /** the field already holds the start of the unit (`binnedyearmonth`): no timeunit transform runs on it */
+  binned?: boolean
 }
 
 /**
@@ -90,11 +92,13 @@ export interface NormalTimeUnit {
 export function normalizeTimeUnit(tu: unknown, path = 'timeUnit'): NormalTimeUnit {
   let unit: unknown = tu
   let utc = false
+  let binned = false
   let step: number | undefined
   if (isObj(tu)) {
     keysOf(tu, set('unit utc step maxbins binned'), path, 'timeUnit')
     if (tu.maxbins !== undefined) fail(path, 'timeUnit.maxbins (adaptive time-unit binning) is not supported')
-    if (tu.binned !== undefined) fail(path, 'timeUnit.binned is not supported')
+    if (tu.binned !== undefined && typeof tu.binned !== 'boolean') mustBe(`${path}.binned`, 'a boolean')
+    binned = tu.binned === true
     unit = tu.unit
     utc = tu.utc === true
     if (tu.step !== undefined) {
@@ -104,15 +108,19 @@ export function normalizeTimeUnit(tu: unknown, path = 'timeUnit'): NormalTimeUni
   }
   if (typeof unit !== 'string') fail(path, `timeUnit must be a unit string or {unit}, got ${JSON.stringify(tu)}`)
   let u: string = unit
+  // (timeunit.ts normalizeTimeUnit: "binnedutcyearmonth" is the binned, UTC year-month)
+  if (u.startsWith('binned')) {
+    binned = true
+    u = u.slice(6)
+  }
   if (u.startsWith('utc')) {
     utc = true
     u = u.slice(3)
   }
-  if (u.startsWith('binned')) fail(path, `timeUnit ${JSON.stringify(tu)}: binned time units are not supported`)
   if (!SINGLE_TIME_UNITS.includes(u) && !MULTI_TIME_UNITS.has(u)) {
     fail(path, `unknown timeUnit ${JSON.stringify(tu)}`)
   }
-  return { unit: u, utc, ...(step !== undefined ? { step } : {}) }
+  return { unit: u, utc, ...(step !== undefined ? { step } : {}), ...(binned ? { binned } : {}) }
 }
 
 // --- entry -------------------------------------------------------------------
@@ -979,7 +987,11 @@ function validateChannelDef(ch: string, def: unknown, at: string, shared = false
   }
   if (def.bin !== undefined) validateBin(def.bin, `${at}.bin`, ch === 'x' || ch === 'y')
   if ((def.bin === 'binned' || (isObj(def.bin) && def.bin.binned === true)) && ch !== 'x' && ch !== 'y') fail(`${at}.bin`, 'pre-binned data (bin: "binned") only applies to the x and y channels')
-  if (def.timeUnit !== undefined) normalizeTimeUnit(def.timeUnit, `${at}.timeUnit`)
+  if (def.timeUnit !== undefined) {
+    const tu = normalizeTimeUnit(def.timeUnit, `${at}.timeUnit`)
+    // (a binned time unit on a discrete field leaves its mark without an orientation in vega-lite, which is not reproduced)
+    if (tu.binned && (def.type === 'ordinal' || def.type === 'nominal')) fail(`${at}.timeUnit`, 'a binned time unit on an ordinal or nominal field is not supported yet; use a temporal field')
+  }
   if (def.timeUnit !== undefined && def.bin) fail(at, '`timeUnit` and `bin` cannot be combined')
   if (def.sort !== undefined) validateSort(def.sort, `${at}.sort`, ch)
   // "wiggle" is not in the vega-lite 6 schema but vega-lite 6.4.3 accepts it and

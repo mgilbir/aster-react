@@ -1458,7 +1458,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const alreadyComputed = innerData.some((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).some((t) => t.type === 'bin' && Array.isArray(t.as) && (t.as as string[])[0] === names.start))
     if (!alreadyComputed) pushAll(pre, binTransforms(fd.binParams!, fd.field, names))
   }
-  for (const fd of facetFds.filter((f) => f.tu)) {
+  for (const fd of facetFds.filter((f) => f.tu && !f.tu.binned)) {
     const as = timeUnitField(fd)
     if (preSeen.has(as)) continue
     preSeen.add(as)
@@ -2980,7 +2980,7 @@ export function channelTitle(def: FieldDef): unknown {
   if (def.aggregate === 'count') return 'Count of Records'
   if (def.argAgg) return `${def.source} for ${def.argAgg.op === 'argmax' ? 'max' : 'min'} ${def.argAgg.argSource}`
   if (def.bin && !isPrebinned(def)) return `${def.source} (binned)`
-  if (def.tu) return `${def.source} (${getTimeUnitParts(def.tu.unit).join('-')})`
+  if (def.tu && !def.tu.binned) return `${def.source} (${getTimeUnitParts(def.tu.unit).join('-')})`
   if (def.aggregate) {
     const op = def.aggregate
     const label = op.charAt(0).toUpperCase() + op.slice(1)
@@ -3455,7 +3455,16 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     const as = timeUnitField(f)
     if (tuSeen.has(as)) continue
     tuSeen.add(as)
-    pipeline.push(timeUnitTransform(f.tu!, f.field, as))
+    // timeunit.ts TimeUnitNode (binned): the field is the start already; its end is made only for a rect-based mark or a band position
+    const hasSecondary0 = fields.some((g) => g.channel === `${f.channel}2`)
+    if (f.tu!.binned) {
+      const rectBased = RECT_BASED_MARKS.has(mark)
+      if (rectBased || bandPositionOf(spec, mark, f, hasSecondary0) !== undefined) {
+        pipeline.push({ type: 'formula', expr: binnedEndExpr(f.tu!, f.field), as: `${as}_end` })
+      }
+    } else {
+      pipeline.push(timeUnitTransform(f.tu!, f.field, as))
+    }
     // timeunit.ts offsetedRectFormulas: a rect-based mark's time unit that is not at the middle of its band (bandPosition)
     // reads start / end positions interpolated between the unit and the unit before it
     const hasSecondary = fields.some((g) => g.channel === `${f.channel}2`)
@@ -6224,6 +6233,15 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   return out
 }
 
+
+/** timeunit.ts offsetExpr: the end of a binned time unit, one step of its smallest part after the field. */
+function binnedEndExpr(tu: NormalTimeUnit, field: string): string {
+  const parts = getTimeUnitParts(tu.unit)
+  const smallest = parts[parts.length - 1]!
+  const step = tu.step ?? 1
+  const { part, mult } = smallest === 'quarter' ? { part: 'month', mult: 3 } : smallest === 'dayofyear' ? { part: 'date', mult: 1 } : { part: smallest, mult: 1 }
+  return `${tu.utc ? 'utcOffset' : 'timeOffset'}('${part}', datum['${field.replaceAll("'", "\\'")}'], ${step * mult})`
+}
 
 /** timeunit.ts offsetedRectFormulas (and offsetExpr): the start and end positions of a rect off the middle of its time-unit band. */
 function offsettedRectFormulas(startField: string, rectBandPosition: number, tu: NormalTimeUnit): Record<string, unknown>[] {

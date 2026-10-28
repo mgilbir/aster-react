@@ -114,7 +114,8 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a sort by an unknown encoding', unit({ encoding: { x: { ...cn, sort: { encoding: 'tooltip' } } } }), /unknown sort channel/],
   // --- timeUnit (C74)
   ['an unknown time unit', unit({ encoding: { x: { field: 't', type: 'temporal', timeUnit: 'fortnight' } } }), /unknown timeUnit/],
-  ['a binned time unit', unit({ encoding: { x: { field: 't', type: 'temporal', timeUnit: 'binnedyear' } } }), /binned/],
+  ['a binned time unit on an ordinal field', unit({ encoding: { x: { field: 't', type: 'ordinal', timeUnit: 'binnedyear' } } }), /binned time unit on an ordinal or nominal field/],
+  ['a binned time unit with maxbins', unit({ encoding: { x: { field: 't', type: 'temporal', timeUnit: { unit: 'year', maxbins: 4 } } } }), /maxbins/],
   ['time-unit maxbins', unit({ encoding: { x: { field: 't', type: 'temporal', timeUnit: { maxbins: 6 } } } }), /maxbins/],
   ['a time-unit step of zero', unit({ encoding: { x: { field: 't', type: 'temporal', timeUnit: { unit: 'month', step: 0 } } } }), /step/],
   // --- bin (C74)

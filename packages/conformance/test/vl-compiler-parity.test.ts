@@ -52,6 +52,12 @@ const BINS = {
     { bin_start: 14, bin_end: 16, count: 127, g: 'b' }, { bin_start: 16, bin_end: 18, count: 94, g: 'a' }, { bin_start: 18, bin_end: 20, count: 54, g: 'b' },
   ],
 }
+const MONTHS = {
+  values: [
+    { d: '2005-01-01', v: 5, g: 'p' }, { d: '2005-01-01', v: 7, g: 'q' }, { d: '2005-02-01', v: 6, g: 'p' }, { d: '2005-02-01', v: 3, g: 'q' },
+    { d: '2005-03-01', v: 9, g: 'p' }, { d: '2005-03-01', v: 4, g: 'q' }, { d: '2006-04-01', v: 8, g: 'p' },
+  ],
+}
 const NULLS = {
   values: [
     { a: null, b: 100, c: 5 },
@@ -564,6 +570,23 @@ const GROUPS: Record<string, Case[]> = {
     ['pre-binned bars next to a line over the same position', { data: BINS, encoding: { x: { type: 'quantitative', axis: { tickCount: 4, title: 'Position' } }, y: { type: 'quantitative', axis: { zindex: 1 } } }, layer: [{ mark: 'bar', encoding: { x: { field: 'bin_start', bin: 'binned' }, x2: { field: 'bin_end' }, y: { field: 'count' } } }, { mark: 'line', encoding: { x: { field: 'bin_start' }, y: { field: 'count' } } }, { mark: 'rule', encoding: { x: { field: 'bin_end' } } }] }],
     ['pre-binned bars made by a bin transform', { data: DATA, transform: [{ bin: true, field: 'v', as: 'bv' }], mark: 'bar', encoding: { x: { field: 'bv', bin: { binned: true, step: 2 }, title: 'V (binned)' }, x2: { field: 'bv_end' }, y: { aggregate: 'count' } } }],
     ['cumulative pre-binned bars', { data: DATA, transform: [{ bin: true, field: 'v', as: 'bv' }, { aggregate: [{ op: 'count', as: 'count' }], groupby: ['bv', 'bv_end'] }, { sort: [{ field: 'bv' }], window: [{ op: 'sum', field: 'count', as: 'cum' }], frame: [null, 0] }], encoding: { x: { field: 'bv', type: 'quantitative', scale: { zero: false }, bin: 'binned' }, x2: { field: 'bv_end' } }, layer: [{ mark: 'bar', encoding: { y: q('cum') } }, { mark: { type: 'bar', color: 'yellow', opacity: 0.5 }, encoding: { y: q('count') } }] }],
+  ],
+  // timeunit.ts TimeUnitNode (binned) + predicate.ts: a binned time unit's field already holds the start of its unit; the end is made
+  // only for rect-based marks or a band position (bar_binnedyearmonth, bar_binned_yearmonth_*, layer_bar_tick_binned_time_band_position)
+  'binned time units (bar_binnedyearmonth, bar_binned_yearmonth_grouped, bar_binned_yearmonth_label, time_parse_binnedutc_with_escaped_field)': [
+    ['bars over a binned year-month', { data: MONTHS, mark: 'bar', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['bars over a binned UTC year', { data: MONTHS, mark: 'bar', encoding: { x: { timeUnit: 'binnedutcyear', field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['horizontal bars over a binned UTC year-month-date', { data: MONTHS, mark: 'bar', encoding: { y: { timeUnit: 'binnedutcyearmonthdate', field: 'd', type: 'temporal' }, x: q('v') } }],
+    ['bars over the object form of a binned time unit', { data: MONTHS, mark: 'bar', encoding: { x: { timeUnit: { unit: 'yearmonth', binned: true }, field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['bars over a binned time unit with a step', { data: MONTHS, mark: 'bar', encoding: { x: { timeUnit: { unit: 'yearmonth', binned: true, step: 2 }, field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['grouped bars over a binned year-month', { data: MONTHS, mark: 'bar', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal' }, xOffset: n('g'), color: n('g'), y: q('v') } }],
+    ['a filter over a binned time unit', { data: MONTHS, transform: [{ filter: { timeUnit: 'binnedyearmonth', field: 'd', range: [{ year: 2005, month: 1 }, { year: 2005, month: 3 }] } }], mark: 'bar', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['a filter over a binned time unit reads the raw dates', { data: { values: [{ d: '2005-01-15', v: 5 }, { d: '2005-02-15', v: 6 }, { d: '2005-03-15', v: 9 }, { d: '2005-03-01', v: 4 }] }, transform: [{ filter: { timeUnit: 'binnedyearmonth', field: 'd', range: [{ year: 2005, month: 1 }, { year: 2005, month: 3 }] } }], mark: 'point', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['bars and labels at the middle of a binned unit', { data: MONTHS, encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal', bandPosition: 0.5 }, y: q('v') }, layer: [{ mark: 'bar' }, { mark: { type: 'text', baseline: 'bottom' }, encoding: { text: q('v') } }] }],
+    ['bars and a tick at the start of a binned unit', { data: MONTHS, config: { bar: { timeUnitBandPosition: 0 }, tick: { timeUnitBandPosition: 0 } }, encoding: { x: { timeUnit: 'binnedutcyear', field: 'd', type: 'temporal' }, y: q('v') }, layer: [{ mark: 'bar' }, { mark: { type: 'tick', size: 20 } }] }],
+    ['points over a binned unit (no end is made)', { data: MONTHS, mark: 'point', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['a line over a binned unit', { data: MONTHS, mark: 'line', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['a binned unit on a field with an escaped name', { data: { values: [{ "a(b'c)": '2011-12-10' }, { "a(b'c)": '2011-10-12' }] }, mark: 'bar', encoding: { y: { timeUnit: 'binnedutcyearmonth', field: "a(b\\'c)", type: 'temporal' } } }],
   ],
 }
 
