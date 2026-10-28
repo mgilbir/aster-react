@@ -58,22 +58,28 @@ import { fileURLToPath } from 'node:url'
 // The pointer through the svg's screen CTM (core/pointer.ts, one cached map for the cursor, tooltip and gestures), the
 // painted-geometry hit index and the inert flags, merged, measured (kB gzip): hit marginal 5.8, Chart 174.8, SvgChart 154.3,
 // SvgChart + interaction 168.7, Chart + VL 249.9.
+// The gallery runtime work (docs/CHANGELOG: gallery conformance), measured (kB gzip): core 135.0 (+0.7: date functions as vega
+// has them, ingest of primitive rows, d3's line and area generators over the items, gradient defs, source lists and the
+// signal-ordered dataset build, the item transforms of a mark, trail through the d3-path buffer); geo marginal 14.3 (+1.5: the
+// geo expression functions, the default path, the point radius); transforms marginal 23.2 (+7.6: tree / treelinks, force
+// with the d3-quadtree it needs, kde2d, isocontour, geopath, the distribution functions, treePath); useChart 139.2, Chart 176.4,
+// SvgChart 155.5, SvgChart + interaction 170.0, Chart + VL 251.6.
 const BUDGETS = {
-  '@aster/core': 134.3 * 1024,
+  '@aster/core': 135.5 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
   '+ @aster/core/canvas': 5.3 * 1024,
   '+ @aster/core/hit': 6.1 * 1024,
   '+ @aster/core/signals': 8.3 * 1024,
   '+ @aster/core/load': 5.6 * 1024,
-  '+ @aster/core/geo': 12.8 * 1024,
-  '+ @aster/core/transforms': 15.6 * 1024,
-  '@aster/react useChart': 138.2 * 1024,
-  '@aster/react Chart': 175.3 * 1024,
+  '+ @aster/core/geo': 14.8 * 1024,
+  '+ @aster/core/transforms': 23.7 * 1024,
+  '@aster/react useChart': 139.7 * 1024,
+  '@aster/react Chart': 176.9 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 154.4 * 1024,
-  '@aster/react SvgChart + interaction': 169.2 * 1024,
+  '@aster/react SvgChart': 156.0 * 1024,
+  '@aster/react SvgChart + interaction': 170.5 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 250.4 * 1024,
+  '@aster/react Chart + VL': 252.1 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
