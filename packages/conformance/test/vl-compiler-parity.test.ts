@@ -243,6 +243,18 @@ const GROUPS: Record<string, Case[]> = {
     ['a time unit on the colour with a band end', { data: DATA, config: { bar: { timeUnitBandPosition: 0 } }, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), color: { timeUnit: 'year', field: 't', type: 'temporal' } } }],
     ['a rect between two time-unit values', { data: { values: [{ a: 'May 1, 2010', b: 'July 15, 2010' }] }, mark: 'rect', encoding: { x: { timeUnit: 'month', field: 'a', type: 'temporal' }, x2: { timeUnit: 'month', field: 'b' } } }],
   ],
+  // position-rect.ts positionAndSize + scale/range.ts getOffsetRange (relative band sizes, offsets without / over time units)
+  'band sizes and offsets of bars and ticks (tick_width_band, bar_x_offset_without_x, bar_group_timeunit)': [
+    ['ticks with a relative width', { data: DATA, width: { step: 50 }, mark: { type: 'tick', width: { band: 0.5 } }, encoding: { x: n('c'), y: q('v') } }],
+    ['grouped ticks', { data: DATA, mark: 'tick', encoding: { x: n('c'), y: q('v'), xOffset: n('g'), color: n('g') } }],
+    ['bars with a relative height and a visual offset', { data: DATA, height: { step: 50 }, mark: { type: 'bar', yOffset: 5, height: { band: 0.5 } }, encoding: { y: n('c', { scale: { padding: 0 } }), x: { aggregate: 'count' } } }],
+    ['a relative height with a y axis bandPosition on the grid', { data: DATA, mark: { type: 'bar', height: { band: 0.5 } }, encoding: { y: n('c', { axis: { grid: true, bandPosition: 0 } }), x: { aggregate: 'count' } } }],
+    ['bars offset without an x', { data: DATA, mark: 'bar', encoding: { y: q('v'), xOffset: n('g'), color: n('g') } }],
+    ['bars offset over a time unit', { data: DATA, width: 400, mark: 'bar', encoding: { x: { timeUnit: 'year', field: 't', type: 'temporal' }, xOffset: n('g'), color: n('g'), y: { aggregate: 'count' } } }],
+    ['bars offset over a week time unit', { data: DATA, mark: 'bar', encoding: { x: { timeUnit: 'yearweek', field: 't', type: 'temporal' }, xOffset: n('g'), color: n('g'), y: { aggregate: 'count' } } }],
+    ['horizontal bars offset over a time unit', { data: DATA, mark: 'bar', encoding: { y: { timeUnit: 'year', field: 't', type: 'temporal' }, yOffset: n('g'), color: n('g'), x: { aggregate: 'count' } } }],
+    ['bars offset with a right alignment', { data: DATA, mark: { type: 'bar', align: 'right' }, encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), xOffset: n('g') } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({

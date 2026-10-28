@@ -3727,8 +3727,27 @@ function applyTimeUnitLegend(lg: Record<string, unknown>, def: FieldDef, userLeg
   lg.formatType = 'time'
 }
 
-/** vega-lite's `durationExpr`: the duration of one unit as a datetime difference (tickMinStep). */
-function timeUnitMinStepSignal(tu: NormalTimeUnit): string | null {
+
+/**
+ * scale/range.ts getOffsetRange: the range of an offset scale. Along a band position scale it is the band's width; with no
+ * position scale it is centred on the view; along a continuous position scale with a time unit it is the (padded) duration of
+ * one unit on that scale.
+ */
+function offsetRange(ch: 'xOffset' | 'yOffset', posDef: FieldDef | undefined, spec: VLSpec, mark: string, paddingInner: unknown): unknown[] {
+  const pos = ch === 'xOffset' ? 'x' : 'y'
+  const size = ch === 'xOffset' ? 'width' : 'height'
+  if (!posDef) return [{ signal: `-${size}/2` }, { signal: `${size}/2` }]
+  if (positionalScaleType(mark, posDef) === 'band' || !posDef.tu) return [0, { signal: `bandwidth('${pos}')` }]
+  const wrap = (e: string): string => `scale('${pos}', ${e})`
+  const duration = timeUnitMinStepSignal(posDef.tu, wrap)
+  if (!duration) return [0, { signal: `bandwidth('${pos}')` }]
+  const padding = typeof paddingInner === 'number' ? paddingInner : 0.2
+  const bpOffset = (bandPositionOf(spec, mark, posDef, false) ?? 0.5) - 0.5
+  if (!padding) return [0, { signal: duration }]
+  return [{ signal: `${padding / 2 + bpOffset} * (${duration})` }, { signal: `${1 - padding / 2 + bpOffset} * (${duration})` }]
+}
+
+function timeUnitMinStepSignal(tu: NormalTimeUnit, wrap: (expr: string) => string = (e) => e): string | null {
   const parts = getTimeUnitParts(tu.unit)
   const smallest = parts[parts.length - 1]
   if (!smallest || smallest === 'day') return null
@@ -3748,7 +3767,7 @@ function timeUnitMinStepSignal(tu: NormalTimeUnit): string | null {
     case 'milliseconds': end.milliseconds += step; break
   }
   const fmt = (x: typeof d): string => `datetime(${x.year}, ${x.month}, ${x.date}, ${x.hours}, ${x.minutes}, ${x.seconds}, ${x.milliseconds})`
-  return `${fmt(end)} - ${fmt(d)}`
+  return `${wrap(fmt(end))} - ${wrap(fmt(d))}`
 }
 
 /** The Vega stack offset: `stack: true` is "zero" ("wiggle" compiles unstacked/zero as vega-lite 6.4.3 does). */
@@ -4000,7 +4019,7 @@ function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: str
               name: ch,
               type: 'band',
               domain: sortedDomain(offDef, dataName, dc),
-              range: [0, { signal: `bandwidth('${dimChannel}')` }],
+              range: offsetRange(ch, fields.find((f) => f.channel === dimChannel && f.field), spec, mark, dc.cfg.bandWithNestedOffsetPaddingInner),
               ...(dc.cfg.offsetBandPaddingInner !== undefined ? { paddingInner: dc.cfg.offsetBandPaddingInner } : {}),
               ...(dc.cfg.offsetBandPaddingOuter !== undefined ? { paddingOuter: dc.cfg.offsetBandPaddingOuter } : {}),
             }
@@ -4532,7 +4551,8 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
         orient: orientSide,
         ...(gridScale ? { gridScale } : {}),
         grid: true,
-        ...(suppressTickCount ? {} : { tickCount: tickCountSignal }),
+        // (axis/properties.ts defaultTickCount: a discrete scale has none)
+        ...(suppressTickCount || sc.type === 'band' || sc.type === 'point' ? {} : { tickCount: tickCountSignal }),
         domain: false,
         labels: false,
         aria: false,
@@ -4548,7 +4568,7 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
       // the user's grid-affecting props land on the grid axis too (upstream
       // merges grid+labels into one axis; ours splits them)
       if (userAxis) {
-        for (const gk of ['gridColor', 'gridWidth', 'gridDash', 'gridOpacity', 'gridCap', 'tickOffset', 'translate', 'tickBand', 'tickExtra', 'tickCount', 'tickMinStep', 'tickRound', 'values', 'zindex'] as const) {
+        for (const gk of ['gridColor', 'gridWidth', 'gridDash', 'gridOpacity', 'gridCap', 'tickOffset', 'translate', 'tickBand', 'tickExtra', 'tickCount', 'tickMinStep', 'tickRound', 'values', 'zindex', 'bandPosition'] as const) {
           if ((userAxis as Record<string, unknown>)[gk] !== undefined) gridAxis[gk] = (userAxis as Record<string, unknown>)[gk]
         }
       }
@@ -5253,6 +5273,15 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         }
       }
     }
+    // position-rect.ts positionAndSize: the band channel of a bar with a relative band size or an offset channel
+    if (mark === 'bar') {
+      const bandCh = orient === 'vertical' ? 'x' : 'y'
+      const handled = positionAndSizeRefs(bandCh, bandCh === 'x' ? xDef : yDef, spec, mark, fields)
+      if (handled) {
+        for (const k of [bandCh, `${bandCh}c`, `${bandCh}2`, bandCh === 'x' ? 'width' : 'height']) delete update[k]
+        Object.assign(update, handled)
+      }
+    }
     // position-rect.ts rectPosition: a channel with a secondary channel (x + x2, y + y2) that is not binned is a plain range
     // between the two refs (rangePosition), whatever the scale: the band-size rules above are for single-channel positions
     for (const [pos, def] of [['x', xDef], ['y', yDef]] as const) {
@@ -5459,6 +5488,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       } else {
         update[`${sizeAxis}c`] = { scale: sizeAxis, field: aggFieldName(sizeField) }
         update[sizeVg] = { value: (cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize }
+      }
+    }
+    // position-rect.ts positionAndSize for a tick's size axis with a relative band size or an offset channel
+    {
+      const handled = positionAndSizeRefs(sizeAxis, sizeField, spec, mark, fields)
+      if (handled) {
+        for (const k of [sizeAxis, `${sizeAxis}c`, `${sizeAxis}2`, sizeVg]) delete update[k]
+        Object.assign(update, handled)
       }
     }
     update[thickVg] = { value: thickVal }
@@ -6050,6 +6087,85 @@ function rectBandFields(def: FieldDef, useRectOffsetField: boolean): { start: st
   }
   const start = timeUnitField(def)
   return useRectOffsetField ? { start: `${start}_offsetted_rect_start`, end: `${start}_offsetted_rect_end` } : { start, end: `${start}_end` }
+}
+
+
+/**
+ * position-rect.ts positionAndSize for the band channel of a bar / tick, in the cases that carry a relative band size (a mark
+ * `width` / `height` of `{band}`) or an offset channel: the position (aligned to the top / middle of the band, by the band size
+ * and the offset) and the size (a share of the offset scale's or the position scale's bandwidth). Returns null where the plain
+ * rules of the caller apply (an absolute size, a size channel, ...).
+ */
+function positionAndSizeRefs(ch: 'x' | 'y', def: FieldDef | undefined, spec: VLSpec, mark: string, fields: FieldDef[]): Record<string, unknown> | null {
+  const offsetCh = ch === 'x' ? 'xOffset' : 'yOffset'
+  const offDef = fields.find((f) => f.channel === offsetCh && f.field && !f.datumOnly)
+  const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+  const sizeProp = ch === 'x' ? 'width' : 'height'
+  const sizeVal = md[sizeProp] ?? md.size ?? markConfigProp(spec, mark, sizeProp) ?? markConfigProp(spec, mark, 'size')
+  const relative = isObject(sizeVal) && typeof sizeVal.band === 'number'
+  if (!relative && !offDef) return null
+  if (sizeVal !== undefined && !relative) return null
+  if (fields.some((f) => f.channel === 'size' && f.field)) return null
+  if (def && def.bin) return null
+  const hasSecondary = fields.some((f) => f.channel === `${ch}2` && f.field)
+  if (hasSecondary) return null
+  const scaleType = def ? positionalScaleType(mark, def) : undefined
+  const offsetBand = offDef && isDiscreteType(offDef.type) && ['bar', 'rect', 'image', 'rule', 'tick'].includes(mark)
+  const offsetType = offDef ? (isDiscreteType(offDef.type) ? (offsetBand ? 'band' : 'point') : 'linear') : undefined
+  // channeldef.ts getBandSize
+  let band: number
+  if (relative) band = (sizeVal as { band: number }).band
+  else if (def?.tu) band = typeof markConfigProp(spec, mark, 'timeUnitBandSize') === 'number' ? (markConfigProp(spec, mark, 'timeUnitBandSize') as number) : 1
+  else if (['band', 'point'].includes(scaleType ?? offsetType ?? '')) band = 1
+  else return null
+  // defaultSizeRef: a share of the offset scale's (else the position scale's) bandwidth
+  const sizeScale = offDef ? offsetCh : def ? ch : undefined
+  const sizeScaleType = offDef ? offsetType : scaleType
+  const minBandSize = typeof markConfigProp(spec, mark, 'minBandSize') === 'number' ? (markConfigProp(spec, mark, 'minBandSize') as number) : 0.25
+  let size: Record<string, unknown>
+  if (sizeScale && sizeScaleType === 'band') {
+    const bandwidth = band !== 1 ? `${band} * bandwidth('${sizeScale}')` : `bandwidth('${sizeScale}')`
+    size = { signal: minBandSize ? `max(${minBandSize}, ${bandwidth})` : bandwidth }
+  } else if (!sizeScale) size = { mult: band, field: { group: sizeProp } }
+  else return null
+  // the aligned position channel
+  const alignProp = ch === 'x' ? 'align' : 'baseline'
+  const align = md[alignProp] ?? markConfigProp(spec, mark, alignProp)
+  // (the band size is relative here whatever its source: a band scale aligns to the top / left of its band)
+  const top = (scaleType ?? offsetType) === 'band'
+  const vgChannel = ch === 'x'
+    ? ({ left: 'x', center: 'xc', right: 'x2' } as Record<string, string>)[String(align ?? (top ? 'left' : 'center'))]
+    : ({ top: 'y', middle: 'yc', bottom: 'y2' } as Record<string, string>)[String(align ?? (top ? 'top' : 'middle'))]
+  if (!vgChannel) return null
+  const center = vgChannel === 'xc' || vgChannel === 'yc'
+  // positionOffset: an offset channel (centred in its band), else the mark's visual offset
+  let offset: unknown
+  let offsetKind: 'encoding' | 'visual' | undefined
+  if (offDef) {
+    offsetKind = 'encoding'
+    offset = { scale: offsetCh, field: aggFieldName(offDef), ...(offsetType === 'band' && center ? { band: 0.5 } : {}) }
+  } else if (md[`${ch}Offset`]) {
+    offsetKind = 'visual'
+    offset = md[`${ch}Offset`]
+  }
+  const timeBp = center && offsetKind !== 'encoding' && def?.tu && !hasSecondary ? bandPositionOf(spec, mark, def, hasSecondary) : undefined
+  const bandPosition = timeBp ?? (center ? (offsetKind === 'encoding' ? 0 : 0.5) : (1 - band) / 2)
+  let pos: Record<string, unknown>
+  if (!def) pos = { signal: sizeProp, mult: 0.5, ...(offset ? { offset } : {}) }
+  else if (def.tu && def.type === 'temporal' && bandPosition && bandPosition !== 0 && !isDiscreteType(def.type)) {
+    const start = timeUnitField(def)
+    pos = bandPosition === 1
+      ? { scale: ch, field: `${start}_end`, ...(offset ? { offset } : {}) }
+      : { signal: `scale("${ch}", ${1 - bandPosition} * datum[${JSON.stringify(start)}] + ${bandPosition} * datum[${JSON.stringify(`${start}_end`)}])`, ...(offset ? { offset } : {}) }
+  } else {
+    pos = {
+      scale: ch,
+      field: aggFieldName(def),
+      ...(offset ? { offset } : {}),
+      ...(scaleType === 'band' && bandPosition ? { band: bandPosition } : {}),
+    }
+  }
+  return { [vgChannel]: pos, [sizeProp]: size }
 }
 
 /**

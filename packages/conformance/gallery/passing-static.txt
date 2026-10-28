@@ -74,6 +74,7 @@ vl/bar_aggregate_vertical
 vl/bar_argmax
 vl/bar_array_aggregate
 vl/bar_axis_orient
+vl/bar_axis_space_saving
 vl/bar_column_fold
 vl/bar_column_pivot
 vl/bar_conditional_opacity
@@ -90,6 +91,7 @@ vl/bar_filter_calc
 vl/bar_fit
 vl/bar_gantt
 vl/bar_gantt_config_no_zero
+vl/bar_group_timeunit
 vl/bar_grouped
 vl/bar_grouped_custom_color_domain
 vl/bar_grouped_errorbar
@@ -100,6 +102,7 @@ vl/bar_grouped_label
 vl/bar_grouped_stacked
 vl/bar_grouped_step_for_offset
 vl/bar_grouped_step_for_position
+vl/bar_grouped_timeunit_yearweek
 vl/bar_invalid_color_show
 vl/bar_invalid_color_show_override
 vl/bar_layered_transparent
@@ -136,6 +139,7 @@ vl/bar_title_start
 vl/bar_tooltip
 vl/bar_tooltip_multi
 vl/bar_tooltip_title
+vl/bar_x_offset_without_x
 vl/bar_yearmonth
 vl/bar_yearmonth_center_band
 vl/bar_yearmonth_custom_format
@@ -410,6 +414,7 @@ vl/text_params
 vl/text_scatterplot_colored
 vl/tick_dot
 vl/tick_dot_thickness
+vl/tick_grouped
 vl/tick_histogram
 vl/tick_sort
 vl/tick_strip
@@ -417,6 +422,7 @@ vl/tick_strip_1D_with_height
 vl/tick_strip_tick_band
 vl/tick_strip_with_height
 vl/tick_timeunit
+vl/tick_width_band
 vl/time_custom_step
 vl/time_output_utc_scale
 vl/time_output_utc_timeunit
