@@ -1442,7 +1442,7 @@ function validateFacetOperator(spec: Obj, at: (k: string) => string, selOk: bool
       const s = d.sort
       if (!(s === 'ascending' || s === 'descending' || s === null || Array.isArray(s) || isObj(s))) fail(`${a}.sort`, 'unknown facet sort form')
       if (isObj(s) || Array.isArray(s)) validateSort(s, `${a}.sort`, 'row')
-      if (isObj(s) && typeof s.field !== 'string') fail(`${a}.sort.field`, 'a facet sort by an aggregate needs the `field` to aggregate')
+      if (isObj(s) && typeof s.field !== 'string' && s.op !== 'count') fail(`${a}.sort.field`, 'a facet sort by an aggregate needs the `field` to aggregate')
     }
     if (d.header !== undefined && !isObj(d.header)) mustBe(`${a}.header`, OBJECT)
   }
