@@ -70,6 +70,8 @@ export interface FieldDef {
   paint?: 'fill' | 'stroke'
   /** the field comes from a condition (the channel itself has none) */
   fromCondition?: boolean
+  /** `scale: null`: the field's values are used as they are (no scale, no legend) */
+  noScale?: boolean
   /** a `datum` def (no field): the constant is mapped through the channel's scale */
   datum?: unknown
   datumOnly?: boolean
@@ -2774,7 +2776,8 @@ function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown
       const f = parseChannel(channel === 'fill' || channel === 'stroke' ? 'color' : channel, d)
       if (!f) continue
       const g = { ...(disableLegends && f.legend === undefined && !f.datumOnly && LEGEND_CHANNELS.has(f.channel) ? { ...f, legend: null } : f), ...titleFromConfig(f, config) }
-      fields.push(channel === 'fill' || channel === 'stroke' ? { ...g, paint: channel } : g)
+      const h = (isObject(d) && d.scale === null && g.field ? { ...g, noScale: true } : g) as FieldDef
+      fields.push(channel === 'fill' || channel === 'stroke' ? { ...h, paint: channel } : h)
     }
   }
   for (const f of fields) {
@@ -3884,7 +3887,9 @@ function positionalScaleType(mark: string, def: FieldDef): string {
   return 'linear'
 }
 
-function buildScales(spec: VLSpec, fields: FieldDef[], mark: string, orient: string, dataName: string, wReq: SizeReq, hReq: SizeReq, series: FieldDef[] = [], rawName: string = dataName): ScaleSpec[] {
+function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: string, dataName: string, wReq: SizeReq, hReq: SizeReq, series: FieldDef[] = [], rawName: string = dataName): ScaleSpec[] {
+  // (a `scale: null` field has no scale)
+  const fields = fieldsIn.filter((f) => !f.noScale)
   const scales: ScaleSpec[] = []
   const dc: DomainCtx = { rawName, fields, mark, orient, series, cfg: scaleConfigOf(spec), specConfig: spec.config }
   const userScaleCfg = isObject(spec.config) && isObject((spec.config as Record<string, unknown>).scale)
@@ -4793,7 +4798,7 @@ function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null, fie
 
 // --- legends -----------------------------------------------------------------
 
-function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number, cfgLegendIn?: Record<string, unknown>, markStrokeDash?: number[], formats: { numberFormat?: string; timeFormat?: string; customFormatTypes?: boolean; numberFormatType?: string; timeFormatType?: string } = {}, paint: { fill?: string; stroke?: string; markFill?: string; shape?: string } = {}): Record<string, unknown>[] {
+function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number, cfgLegendIn?: Record<string, unknown>, markStrokeDash?: number[], formats: { numberFormat?: string; timeFormat?: string; customFormatTypes?: boolean; numberFormatType?: string; timeFormatType?: string } = {}, paint: { fill?: string; stroke?: string; markFill?: string; shape?: string; colorScaleless?: boolean } = {}): Record<string, unknown>[] {
   const legends: Record<string, unknown>[] = []
   // config.legend is a defaults layer: orient/direction keys are translated
   // into the compiled `direction`, everything else merges under the channel's
@@ -4926,7 +4931,8 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     // a colour legend colours the symbols only when the channel is a field of its own: a channel whose field is a
     // condition's (`{condition: {test, field}, value: "lightgray"}`) is a value def to the legend, whose constant paints them
     // (legend/encode.ts symbols(): a colour channel that is a field makes the symbols black, whether or not its own legend is shown)
-    const byColor = colorDef != null && !colorDef.fromCondition
+    // (a `scale: null` colour is a field too: the symbols are not painted like the mark)
+    const byColor = (colorDef != null && !colorDef.fromCondition) || paint.colorScaleless === true
     const u: Record<string, unknown> = {}
     if (filled) {
       if (byColor) Object.assign(u, { fill: { value: 'black' }, fillOpacity: { value: opacity ?? 1 } })
@@ -6062,6 +6068,17 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const markSortSpec = markSort(spec, fields, mark, orient)
   if (markSortSpec) markSpec.sort = markSortSpec
 
+  // a `scale: null` channel reads its field as it is: no scale in the reference
+  for (const f of fields) {
+    if (!f.noScale) continue
+    const scaleName = f.channel === 'fill' || f.channel === 'stroke' ? 'color' : f.channel
+    const strip = (v: unknown): void => {
+      if (Array.isArray(v)) { v.forEach(strip); return }
+      if (isObject(v) && v.scale === scaleName) delete v.scale
+    }
+    for (const v of Object.values(update)) strip(v)
+  }
+
   const out: BuiltMarks = [markSpec]
 
   // rounded stacked bars: vega-lite clips the whole stack in a group that carries the
@@ -7155,7 +7172,7 @@ function buildUnitLegends(spec: VLSpec, fields: FieldDef[], mark: string, markRa
   const legendStrokeDash = (cfgMarkBlock?.strokeDash as number[] | undefined)
     ?? (cfgGenericMark?.strokeDash as number[] | undefined)
   return buildLegends(
-    fields,
+    fields.filter((f) => !f.noScale),
     mark,
     markOpacity,
     legendFilled,
@@ -7171,7 +7188,7 @@ function buildUnitLegends(spec: VLSpec, fields: FieldDef[], mark: string, markRa
       numberFormatType: userConfig?.numberFormatType as string | undefined,
       timeFormatType: userConfig?.timeFormatType as string | undefined,
     },
-    legendPaint(spec, markRaw),
+    { ...legendPaint(spec, markRaw), ...(fields.some((f) => f.noScale && f.channel === 'color') ? { colorScaleless: true } : {}) },
   )
 }
 

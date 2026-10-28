@@ -934,6 +934,8 @@ function validateEncoding(enc: unknown, path: string, where: 'unit' | 'layer', m
   }
 }
 
+const NO_SCALE_CHANNELS = set('color fill stroke opacity fillOpacity strokeOpacity strokeWidth')
+
 function validateChannelDef(ch: string, def: unknown, at: string, shared = false): void {
   if (!isObj(def)) fail(at, 'a channel definition must be an object')
   keysOf(def, ch === 'row' || ch === 'column' || ch === 'facet' ? FACET_CHANNEL_DEF_KEYS : FIELD_DEF_KEYS, at, 'channel definition')
@@ -998,7 +1000,8 @@ function validateChannelDef(ch: string, def: unknown, at: string, shared = false
   for (const k of ['axis', 'legend', 'scale'] as const) {
     if (def[k] !== undefined && def[k] !== null && !isObj(def[k])) mustBe(`${at}.${k}`, 'an object or null')
   }
-  if (def.scale === null) fail(`${at}.scale`, '`scale: null` (identity/disabled scale) is not supported')
+  // (`scale: null` reads the field's values as they are; for a position it would need the pixel values to be known)
+  if (def.scale === null && !NO_SCALE_CHANNELS.has(ch)) fail(`${at}.scale`, `\`scale: null\` (identity/disabled scale) is not supported on the ${ch} channel`)
   if (isObj(def.scale)) validateScaleDef(def.scale, `${at}.scale`)
 }
 

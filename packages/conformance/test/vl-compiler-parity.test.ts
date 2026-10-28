@@ -528,6 +528,17 @@ const GROUPS: Record<string, Case[]> = {
     ['a dashed trail', { data: DATA, mark: 'trail', encoding: { x: q('x'), y: q('y'), size: q('v'), strokeDash: n('g') } }],
     ['a dashed line with a condition on the colour', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('y'), strokeDash: n('g'), color: { value: 'red' } } }],
   ],
+  // scale/parse.ts (`scale: null` has no scale component): the field's own values paint the mark (bar_color_disabled_scale, ternary)
+  'identity scales (bar_color_disabled_scale, ternary)': [
+    ['a bar painted by colour names in the data', { data: { values: [{ k: 'a', v: 3, col: 'red' }, { k: 'b', v: 5, col: '#00ff00' }, { k: 'c', v: 2, col: 'steelblue' }] }, mark: 'bar', encoding: { x: n('k'), y: q('v'), color: n('col', { scale: null }) } }],
+    ['points filled by colour names', { data: { values: [{ x: 1, y: 2, col: 'red' }, { x: 2, y: 3, col: 'blue' }] }, mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('col', { scale: null }) } }],
+    ['a fill from the data on a bar', { data: { values: [{ k: 'a', v: 3, col: 'red' }, { k: 'b', v: 5, col: 'green' }] }, mark: 'bar', encoding: { x: n('k'), y: q('v'), fill: n('col', { scale: null }) } }],
+    ['a stroke from the data on a point', { data: { values: [{ x: 1, y: 2, col: 'red' }, { x: 2, y: 3, col: 'blue' }] }, mark: { type: 'point', filled: false }, encoding: { x: q('x'), y: q('y'), stroke: n('col', { scale: null }) } }],
+    ['opacity from the data', { data: { values: [{ x: 1, y: 2, o: 0.2 }, { x: 2, y: 3, o: 0.9 }] }, mark: 'circle', encoding: { x: q('x'), y: q('y'), opacity: q('o', { scale: null }) } }],
+    ['stroke widths from the data', { data: { values: [{ x: 1, y: 2, w: 1 }, { x: 2, y: 3, w: 6 }] }, mark: 'point', encoding: { x: q('x'), y: q('y'), strokeWidth: q('w', { scale: null }) } }],
+    ['an identity colour next to a scaled size', { data: { values: [{ x: 1, y: 2, col: 'red', s: 3 }, { x: 2, y: 3, col: 'blue', s: 9 }] }, mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('col', { scale: null }), size: q('s') } }],
+    ['an identity colour in a layer', { data: { values: [{ x: 1, y: 2, col: 'red' }, { x: 2, y: 3, col: 'blue' }] }, layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('col', { scale: null }) } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
