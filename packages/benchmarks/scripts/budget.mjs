@@ -270,25 +270,43 @@ try {
   }
 
   const sizes = new Map()
+  const lazyKb = new Map()
   let failed = false
   for (const entry of ENTRIES) {
     const entryPath = join(TMP, entry.file)
-    const outPath = join(TMP, 'out.mjs')
+    const outDir = join(TMP, 'out')
+    rmSync(outDir, { recursive: true, force: true })
     writeFileSync(entryPath, entry.src)
-    await build({
+    // Code-split, so an add-on that is only ever `import()`ed (the shells load @aster/core/geo, /transforms and /load on demand,
+    // see @aster/core/addons) is a chunk of its own, as it is in a real build. The row counts what the page loads up front: the
+    // entry and every chunk it imports statically, not the chunks fetched later and only by a spec that needs them.
+    const built = await build({
       entryPoints: [entryPath],
       bundle: true,
       minify: true,
       format: 'esm',
       platform: entry.platform,
+      splitting: true,
       write: true,
-      outfile: outPath,
+      outdir: outDir,
+      metafile: true,
+      absWorkingDir: MONOREPO_ROOT,
       logLevel: 'silent',
       external: entry.external,
       define: { 'process.env.NODE_ENV': '"production"' },
       plugins: IGNORE_SIDE_EFFECTS ? [ignoreSideEffects] : [],
     })
-    const buf = readFileSync(outPath)
+    const outputs = built.metafile.outputs
+    const entryOut = Object.keys(outputs).find((o) => outputs[o].entryPoint)
+    const initial = new Set()
+    const visit = (o) => {
+      if (initial.has(o)) return
+      initial.add(o)
+      for (const imp of outputs[o].imports) if (imp.kind === 'import-statement' && outputs[imp.path]) visit(imp.path)
+    }
+    visit(entryOut)
+    lazyKb.set(entry.name, Object.keys(outputs).filter((o) => !initial.has(o)).reduce((n, o) => n + gzipSync(readFileSync(join(MONOREPO_ROOT, o))).length, 0))
+    const buf = Buffer.concat([...initial].map((o) => readFileSync(join(MONOREPO_ROOT, o))))
     const gz = gzipSync(buf).length
     sizes.set(entry.name, { min: buf.length, gz })
     // Marginal rows report what the addon adds on top of its base row.
@@ -300,7 +318,7 @@ try {
     const pass = measured <= budget
     if (!pass) failed = true
     console.log(
-      `${entry.name.padEnd(26)} min=${KB(base ? buf.length - base.min : buf.length).padStart(7)} kB  gzip=${KB(measured).padStart(6)} kB${base ? ' (marginal)' : '           '}  budget=${KB(budget).padStart(5)} kB  ${pass ? 'PASS' : 'FAIL'}`,
+      `${entry.name.padEnd(26)} min=${KB(base ? buf.length - base.min : buf.length).padStart(7)} kB  gzip=${KB(measured).padStart(6)} kB${base ? ' (marginal)' : '           '}  budget=${KB(budget).padStart(5)} kB  ${pass ? 'PASS' : 'FAIL'}${lazyKb.get(entry.name) ? `  (+${KB(lazyKb.get(entry.name))} kB gzip in chunks loaded on demand)` : ''}`,
     )
   }
   if (failed) process.exit(1)
