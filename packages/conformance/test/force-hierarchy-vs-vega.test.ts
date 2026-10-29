@@ -55,4 +55,23 @@ describe('hierarchy layouts: every layout, tiling method, padding, round, size a
       await agree(spec, `${layout.type} on a ${shape} tree`)
     }
   }, 60_000)
+
+  // equal values and equal radii make every comparison a tie: which side of the packing front is walked first, where a
+  // binary tiling splits, how a row ends
+  it.each([2, 3, 4, 5, 6, 7, 8, 9, 12, 16, 33])('every layout on a root with %i equal children, and on a tree of equal values', async (n) => {
+    const flat = Array.from({ length: n + 1 }, (_, i) => ({ id: 'n' + i, parent: i ? 'n0' : null, v: 1 }))
+    const nested = Array.from({ length: 3 * n + 1 }, (_, i) => ({ id: 'n' + i, parent: i === 0 ? null : i <= n ? 'n0' : 'n' + (1 + (i - n - 1) % n), v: 1 }))
+    const layouts: Array<Record<string, unknown>> = [
+      { type: 'pack', field: 'v' }, { type: 'pack', field: 'v', padding: 2, size: [300, 200] }, { type: 'pack', radius: 'data.v', size: [100, 100] },
+      ...['squarify', 'resquarify', 'binary', 'slice', 'dice', 'slicedice'].map((method) => ({ type: 'treemap', method, field: 'v', size: [400, 300] })),
+      { type: 'treemap', method: 'binary', field: 'v', size: [100, 400], paddingInner: 1 },
+      { type: 'tree', method: 'tidy', size: [100, 100] }, { type: 'tree', method: 'cluster', size: [100, 100] }, { type: 'partition', field: 'v', size: [100, 100] },
+    ]
+    for (const rows of [flat, nested]) {
+      for (const layout of layouts) {
+        const spec = { $schema: SCHEMA, width: 100, height: 100, data: [{ name: 'src', values: rows }, { name: 'out', source: 'src', transform: [{ type: 'stratify', key: 'id', parentKey: 'parent' }, layout] }] }
+        await agree(spec, `${JSON.stringify(layout)} on ${rows.length} equal rows`)
+      }
+    }
+  }, 60_000)
 })
