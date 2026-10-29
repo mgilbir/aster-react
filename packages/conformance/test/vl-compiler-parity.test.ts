@@ -1017,6 +1017,77 @@ describe('@aster/vl == vega-lite: scales bound to a selection in a concat', () =
   }
 })
 
+// compile/selection/interval.ts (the projection branch), project.ts (geo channels), parse.ts: an interval selection over a map brushes
+// longitude / latitude through the projection, by the marks it covers (interactive_1d_geo_brush, interactive_airport_crossfilter)
+describe('@aster/vl == vega-lite: interval selections over a map', () => {
+  const PLACES = {
+    values: [
+      { name: 'a', longitude: -122.3, latitude: 47.6, n: 3 }, { name: 'b', longitude: -118.2, latitude: 34.1, n: 9 }, { name: 'c', longitude: -87.6, latitude: 41.9, n: 5 },
+      { name: 'd', longitude: -74, latitude: 40.7, n: 7 }, { name: 'e', longitude: -95.4, latitude: 29.8, n: 2 }, { name: 'f', longitude: -104.9, latitude: 39.7, n: 6 },
+    ],
+  }
+  const points = (params: unknown[], extra: Record<string, unknown> = {}) => ({
+    data: PLACES, width: 300, height: 200, projection: { type: 'mercator' }, params,
+    mark: 'circle', encoding: { longitude: q('longitude'), latitude: q('latitude'), color: { condition: { param: 'brush', empty: false, value: 'goldenrod' }, value: 'steelblue' }, size: { value: 30 } }, ...extra,
+  })
+  const brush = (select: unknown, value?: unknown) => ({ name: 'brush', select, ...(value !== undefined ? { value } : {}) })
+  const CASES: Array<[string, Record<string, any>]> = [
+    ['a brush on latitude only, with an initial value', points([brush({ type: 'interval', encodings: ['latitude'] }, { latitude: [35, 45] })])],
+    ['a brush on longitude only, with an initial value', points([brush({ type: 'interval', encodings: ['longitude'] }, { longitude: [-110, -80] })])],
+    ['a brush on both, with an initial value', points([brush('interval', { latitude: [30, 40], longitude: [-118, -86] })])],
+    ['a brush on both, no initial value', points([brush('interval')])],
+    ['a brush on longitude, named by the initial value alone', points([brush('interval', { longitude: [-100, -70] })])],
+    ['a brush on latitude with no initial value', points([brush({ type: 'interval', encodings: ['latitude'] })])],
+    ['a brush that cannot be translated or zoomed', points([brush({ type: 'interval', encodings: ['latitude'], translate: false, zoom: false }, { latitude: [30, 45] })])],
+    ['a brush with its own mark', points([brush({ type: 'interval', mark: { fill: 'red', fillOpacity: 0.3, stroke: 'blue' } }, { latitude: [30, 45], longitude: [-120, -80] })])],
+    ['layers: a map under the brushed points', {
+      data: PLACES, width: 300, height: 200, projection: { type: 'mercator' },
+      layer: [
+        { mark: 'circle', encoding: { longitude: q('longitude'), latitude: q('latitude'), size: { value: 80 }, color: { value: 'lightgray' } } },
+        { params: [brush({ type: 'interval', encodings: ['latitude'] }, { latitude: [30, 42] })], mark: 'circle', encoding: { longitude: q('longitude'), latitude: q('latitude'), size: { value: 20 }, color: { condition: { param: 'brush', empty: false, value: 'goldenrod' }, value: 'steelblue' } } },
+      ],
+    }],
+    ['a brush in the second child of a vconcat', {
+      data: PLACES,
+      vconcat: [
+        { mark: 'bar', encoding: { x: n('name'), y: q('n') } },
+        points([brush('interval', { latitude: [30, 45], longitude: [-120, -80] })], { data: undefined }),
+      ],
+    }],
+    ['a brush in a layer in a concat child', {
+      data: PLACES,
+      hconcat: [
+        { width: 200, height: 150, projection: { type: 'mercator' }, layer: [
+          { mark: 'circle', encoding: { longitude: q('longitude'), latitude: q('latitude'), color: { value: 'gray' } } },
+          { params: [brush('interval', { latitude: [30, 45], longitude: [-120, -80] })], mark: 'circle', encoding: { longitude: q('longitude'), latitude: q('latitude'), color: { condition: { param: 'brush', empty: false, value: 'goldenrod' }, value: 'steelblue' } } },
+        ] },
+        { mark: 'bar', encoding: { x: n('name'), y: q('n') } },
+      ],
+    }],
+  ]
+  for (const [name, spec] of CASES) {
+    it(name, async () => {
+      const clean = JSON.parse(JSON.stringify(spec))
+      const oracle = (vl as any).compile(plain(clean)).spec
+      const ours = compile(deepFreeze(plain(clean)) as never) as Record<string, any>
+      const sigs = (vg: any): unknown => {
+        const out: Array<[string, unknown]> = []
+        const walk = (n: any): void => {
+          for (const sg of n.signals ?? []) out.push([sg.name, sg])
+          for (const m of n.marks ?? []) walk(m)
+        }
+        walk(vg)
+        return out
+      }
+      const shape = (v: unknown): unknown => JSON.parse(JSON.stringify(v))
+      expect(shape(sigs(ours)), 'the signals, group by group').toEqual(shape(sigs(oracle)))
+      const store = (vg: any): unknown => (vg.data ?? []).filter((d: any) => /_store$/.test(d.name))
+      expect(shape(store(ours)), 'the selection store').toEqual(shape(store(oracle)))
+      await check(clean)
+    }, 30_000)
+  }
+})
+
 /** The domains of the scales, with the names of the datasets they read left out (how the datasets are named and cut is not what is compared). */
 const DOMAIN_SHAPES = (vg: any): unknown =>
   (vg.scales ?? []).map((s: any) => {

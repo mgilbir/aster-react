@@ -1030,7 +1030,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     if (applyScaleExtents(sel, scales.filter((sc) => sc.domainRaw === undefined), (c) => layerSel[i]?.unit?.scaleName(c) ?? c, ctx)) layerClip = true
   })
   parsed.forEach((p, i) => {
-    if (ctx.anySelection || layerClip) flagSelectionMarks(perLayerMarks[i]!, ctx.anySelection, Object.keys(layerSel[i]?.cmpts ?? {}).length > 0, layerClip)
+    if (ctx.anySelection || layerClip) flagSelectionMarks(perLayerMarks[i]!, ctx.anySelection, interactiveUnit(p.l, p.mark, p.fields, Object.keys(layerSel[i]?.cmpts ?? {}).length > 0), layerClip)
   })
   for (const sel of layerSel) if (sel?.unit) marks = assembleSelectionMarks(sel.unit, sel.cmpts, marks)
   out.marks = marks
@@ -7805,7 +7805,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   applyDomainUnion(fields, out.scales as ScaleSpec[])
   if (domainSel) domainSel.scales = out.scales as ScaleSpec[]
   const clipped = applyScaleExtents(domainSel, out.scales as ScaleSpec[], (c) => c, ctx)
-  if (unitSel || clipped || ctx.anySelection) flagSelectionMarks(builtMarks, ctx.anySelection, unitSel !== undefined, clipped)
+  if (unitSel || clipped || ctx.anySelection) flagSelectionMarks(builtMarks, ctx.anySelection, interactiveUnit(spec, mark, fields, unitSel !== undefined), clipped)
   // discrete-dimension sizing: the scale spans steps and the view size is a
   // signal over the domain cardinality
   const sizeSignals: Record<string, unknown>[] = []
@@ -7986,7 +7986,7 @@ function prepareUnitSelections(
   fields: FieldDef[],
   mark: string,
   ctx: CompileCtx,
-  opts: { unitName: string; scaleName: (channel: string) => string; hasProjection?: boolean },
+  opts: { unitName: string; scaleName: (channel: string) => string },
 ): UnitSel | undefined {
   const params = selectionParamsOf(spec)
   if (!params.length) return undefined
@@ -8034,6 +8034,9 @@ function prepareUnitSelections(
     nested: ctx.compositeDepth > 0,
     ...(ctx.facetFields.length ? { facetFields: ctx.facetFields } : {}),
     mark,
+    hasProjection: hasProjection(mark, isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}),
+    // (the projection's final name: a layer that took the unit's over, a composite that merged it, are known once the view is assembled)
+    projectionName: () => finalProjectionName(GEO_UNITS.get(spec)?.component) ?? 'projection',
     firstMarkName: varName((opts.unitName ? `${opts.unitName}_` : '') + 'marks'),
     bindScale: (channel, extent) => { extents.set(channel, extent) },
     voronoiTooltip: () => {
@@ -8184,6 +8187,15 @@ function applyScaleExtents(sel: UnitSel | undefined, scales: ScaleSpec[], scaleN
     bound = true
   }
   return bound
+}
+
+/**
+ * mark.ts interactiveFlag: once a selection exists somewhere in the view, a unit's marks are interactive when the unit has selections of
+ * its own, draws a geoshape, or has a tooltip (an encoding or the mark definition's).
+ */
+function interactiveUnit(spec: VLSpec, mark: string, fields: FieldDef[], hasSelections: boolean): boolean {
+  const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+  return hasSelections || mark === 'geoshape' || fields.some((f) => f.channel === 'tooltip') || Boolean(md.tooltip)
 }
 
 /** mark.ts: the `interactive` flag, and `clip` for scales that follow a selection, on a unit's main marks. */

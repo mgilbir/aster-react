@@ -624,7 +624,7 @@ const SELECTION_RESOLVE = set('global union intersect')
 const BRUSH_KEYS = set('cursor fill fillOpacity stroke strokeDash strokeDashOffset strokeOpacity strokeWidth')
 /** The channels a selection can project (vega-lite SingleDefUnitChannel). */
 const PROJECTABLE_CHANNELS = set(
-  'x y xOffset yOffset x2 y2 xError yError xError2 yError2 theta theta2 radius radius2 color fill stroke opacity fillOpacity strokeOpacity strokeWidth strokeDash size angle shape key text href url description detail order tooltip',
+  'x y xOffset yOffset x2 y2 xError yError xError2 yError2 theta theta2 radius radius2 longitude latitude longitude2 latitude2 color fill stroke opacity fillOpacity strokeOpacity strokeWidth strokeDash size angle shape key text href url description detail order tooltip',
 )
 
 /** An event stream: a selector string or a stream object; both must parse, and a timer (animation) stream is refused. */
