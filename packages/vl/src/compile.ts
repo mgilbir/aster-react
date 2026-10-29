@@ -3831,7 +3831,8 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     const hasSecondary0 = fields.some((g) => g.channel === `${f.channel}2`)
     if (f.tu!.binned) {
       const rectBased = RECT_BASED_MARKS.has(mark)
-      if (rectBased || bandPositionOf(spec, mark, f, hasSecondary0) !== undefined) {
+      // (`!!bandPosition`: a band position of 0 is no reason to make the end)
+      if (rectBased || !!bandPositionOf(spec, mark, f, hasSecondary0)) {
         pipeline.push({ type: 'formula', expr: binnedEndExpr(f.tu!, f.field), as: `${as}_end` })
       }
     } else {

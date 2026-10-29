@@ -777,6 +777,15 @@ const GROUPS: Record<string, Case[]> = {
     ['a unit with a discrete y and a y2', { data: DATA, mark: 'bar', encoding: { x: q('x'), x2: { field: 'v' }, y: { field: 'c', type: 'ordinal' }, y2: { field: 'g' } } }],
     ['two layers over a parent bin', { data: BOX, transform: [{ bin: { maxbins: 5 }, field: 'v', as: ['b0', 'b1'] }], encoding: { x: { field: 'b0', type: 'quantitative' }, x2: { field: 'b1' }, y: { aggregate: 'count' } }, layer: [{ mark: 'bar' }, { mark: 'rule', encoding: { color: { value: 'red' } } }] }],
   ],
+  // data/timeunit.ts TimeUnitNode.makeFromEncoding: a binned time unit makes its end only for a rect-based mark or a truthy band position
+  // (bar_binned_yearmonth_label_band_center)
+  'the end of a binned time unit (bar_binned_yearmonth_label_band_center)': [
+    ['a bar layer and a text layer sharing a band position of 0', { data: MONTHS, encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal', bandPosition: 0 }, y: q('v') }, layer: [{ mark: 'bar' }, { mark: { type: 'text', baseline: 'bottom' }, encoding: { text: q('v') } }] }],
+    ['a text mark with a band position of 0', { data: MONTHS, mark: 'text', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal', bandPosition: 0 }, y: q('v'), text: q('v') } }],
+    ['a text mark with a band position of 0.5', { data: MONTHS, mark: 'text', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal', bandPosition: 0.5 }, y: q('v'), text: q('v') } }],
+    ['a point mark with no band position', { data: MONTHS, mark: 'point', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['a bar with a band position of 0', { data: MONTHS, mark: 'bar', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal', bandPosition: 0 }, y: q('v') } }],
+  ],
   // mark/encode/scaledZeroOrMinOrMax.ts: the far end of a bar, area or rect is scale zero when the scale definitely holds zero, the
   // domain's start when it definitely does not, and a probe in between (trellis_area_seattle)
   'the baseline of bars, areas and rects (trellis_area_seattle)': [
