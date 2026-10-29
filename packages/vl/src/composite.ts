@@ -102,39 +102,45 @@ export function mergeEncoding(parent: Obj, child: unknown): Obj {
 
 const NON_POSITION_SCALE_CHANNELS = new Set(['color', 'fill', 'stroke', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'size', 'angle', 'shape'])
 
-/** Pull aggregate / time-unit out of the remaining channels into transforms (encoding.ts extractTransformsFromEncoding). */
+/**
+ * Pull aggregate / time-unit out of the remaining channels into transforms (encoding.ts extractTransformsFromEncoding). A channel that
+ * holds a list of definitions (`tooltip`, `detail`) contributes every one of them to the transforms and the groupings; the encoding keeps
+ * the list itself for an entry that needs no transform, and the entry's replacement (alone) for one that does - so the last entry decides
+ * (vega-lite visits the list entry by entry and writes each over the channel).
+ */
 function extractTransforms(old: Obj, composite: string): { timeUnits: Obj[]; aggregate: Obj[]; groupby: string[]; encoding: Obj } {
   const timeUnits: Obj[] = []
   const aggregate: Obj[] = []
   const groupby: string[] = []
   const encoding: Obj = {}
-  for (const [channel, def] of Object.entries(old)) {
-    if (!isObj(def) || Array.isArray(def) || def.field === undefined) {
-      encoding[channel] = def
-      if (isObj(def) && def.field !== undefined) groupby.push(def.field)
-      continue
-    }
-    const { field, aggregate: agg, bin, timeUnit, ...rest } = def
-    if (!agg && !timeUnit && !bin) {
-      groupby.push(field)
-      encoding[channel] = def
-      continue
-    }
-    if (bin) throw new VLCompileError(`${composite} over a binned ${channel} channel is not supported`)
-    if (typeof agg === 'object' && agg !== null) throw new VLCompileError(`${composite}: argmin/argmax on ${channel} is not supported`)
-    const as = timeUnit ? genName(normalizeTimeUnit(timeUnit).unit, field) : genName(String(agg), field)
-    const title = isObj(def.axis) && def.axis.title !== undefined ? undefined : verbalTitle(def)
-    const newDef: Obj = { ...(def.title === undefined && title !== undefined ? { title } : {}), ...rest, field: as }
-    encoding[channel] = newDef
-    if (agg) aggregate.push({ op: agg, ...(field ? { field } : {}), as })
-    else {
-      timeUnits.push({ timeUnit, field, as })
-      groupby.push(as)
-      // (encoding.ts extractTransformsFromEncoding: a time unit on a non-temporal field is formatted as time all the same)
-      if (def.type !== undefined && def.type !== 'temporal') {
-        if (channel === 'text' || channel === 'tooltip') newDef.formatType = 'time'
-        else if (NON_POSITION_SCALE_CHANNELS.has(channel)) newDef.legend = { formatType: 'time', ...(isObj(newDef.legend) ? newDef.legend : {}) }
-        else if (channel === 'x' || channel === 'y') newDef.axis = { formatType: 'time', ...(isObj(newDef.axis) ? newDef.axis : {}) }
+  for (const [channel, defs] of Object.entries(old)) {
+    for (const def of Array.isArray(defs) ? defs : [defs]) {
+      if (!isObj(def) || (def.field === undefined && def.aggregate !== 'count')) {
+        encoding[channel] = defs
+        continue
+      }
+      const { field, aggregate: agg, bin, timeUnit, ...rest } = def
+      if (!agg && !timeUnit && !bin) {
+        groupby.push(field)
+        encoding[channel] = defs
+        continue
+      }
+      if (bin) throw new VLCompileError(`${composite} over a binned ${channel} channel is not supported`)
+      if (typeof agg === 'object' && agg !== null) throw new VLCompileError(`${composite}: argmin/argmax on ${channel} is not supported`)
+      const as = timeUnit ? genName(normalizeTimeUnit(timeUnit).unit, field) : (field === undefined ? '__count' : genName(String(agg), field))
+      const title = isObj(def.axis) && def.axis.title !== undefined ? undefined : verbalTitle(def)
+      const newDef: Obj = { ...(def.title === undefined && title !== undefined ? { title } : {}), ...rest, field: as }
+      encoding[channel] = newDef
+      if (agg) aggregate.push({ op: agg, ...(field ? { field } : {}), as })
+      else {
+        timeUnits.push({ timeUnit, field, as })
+        groupby.push(as)
+        // (encoding.ts extractTransformsFromEncoding: a time unit on a non-temporal field is formatted as time all the same)
+        if (def.type !== undefined && def.type !== 'temporal') {
+          if (channel === 'text' || channel === 'tooltip') newDef.formatType = 'time'
+          else if (NON_POSITION_SCALE_CHANNELS.has(channel)) newDef.legend = { formatType: 'time', ...(isObj(newDef.legend) ? newDef.legend : {}) }
+          else if (channel === 'x' || channel === 'y') newDef.axis = { formatType: 'time', ...(isObj(newDef.axis) ? newDef.axis : {}) }
+        }
       }
     }
   }
@@ -227,28 +233,11 @@ function params(spec: Obj, composite: 'errorbar' | 'errorband', config: Obj): Pa
   const aggregate = [...oldAggregate, ...specific]
   const groupby = inputType !== 'raw' ? [] : oldGroupby
 
-  // the tooltip: the summary fields, then the remaining channels' fields (common.ts getCompositeMarkTooltip)
-  let tooltip: Obj
-  if ('tooltip' in sharedEncoding) tooltip = { tooltip: sharedEncoding.tooltip }
-  else {
-    const main = continuous.title ?? f
-    const summaryDefs = summary.map(({ prefix, title }) => ({
-      field: prefix,
-      type: continuous.type,
-      title: `${title}${titleWithField ? ` of ${main}` : ''}`,
-    }))
-    const seen = new Set<string>()
-    const others: Obj[] = []
-    for (const d of Object.values(sharedEncoding)) {
-      for (const x of Array.isArray(d) ? d : [d]) {
-        if (!isObj(x) || x.field === undefined) continue
-        const { bin: _b, timeUnit: _t, aggregate: _a, sort: _s, scale: _sc, legend: _l, axis: _ax, stack: _st, ...plain } = x
-        const key = JSON.stringify(plain)
-        if (!seen.has(key)) (seen.add(key), others.push(plain))
-      }
-    }
-    tooltip = { tooltip: [...summaryDefs, ...others] }
-  }
+  const main = continuous.title ?? f
+  const tooltip = getCompositeMarkTooltip(
+    summary.map(({ prefix, title }) => ({ field: prefix, type: continuous.type, title: `${title}${titleWithField ? ` of ${main}` : ''}` })),
+    sharedEncoding,
+  )
 
   return {
     transform: [
@@ -267,6 +256,12 @@ function params(spec: Obj, composite: 'errorbar' | 'errorband', config: Obj): Pa
   }
 }
 
+/** The end of a ranged part: its field, titled by the name vega-lite gives it when a safe name stands in for one with a path in it. */
+const endDef = (prefix: string, field: string): Obj => {
+  const field2 = genName(prefix, field)
+  return field2 === `${prefix}_${field}` ? { field: field2 } : { field: field2, title: `${prefix}_${field}` }
+}
+
 /** One part of the composite mark as a unit spec, or none when the part is switched off (common.ts partLayerMixins). */
 function part(p: Params, config: Obj, composite: string, name: string, mark: Obj, positionPrefix: string, endPrefix?: string): Obj[] {
   const cfg: Obj = config[composite] ?? {}
@@ -280,7 +275,7 @@ function part(p: Params, config: Obj, composite: string, name: string, mark: Obj
     {
       encoding: {
         [p.continuousAxis]: { field: genName(positionPrefix, f), type: p.continuous.type, title, ...(scale !== undefined ? { scale } : {}), ...(axis !== undefined ? { axis } : {}) },
-        ...(endPrefix ? { [`${p.continuousAxis}2`]: { field: genName(endPrefix, f) } } : {}),
+        ...(endPrefix ? { [`${p.continuousAxis}2`]: endDef(endPrefix, f) } : {}),
         ...p.encoding,
         ...p.tooltip,
       },
@@ -391,19 +386,31 @@ function fieldDefsOf(encoding: Obj): Obj[] {
   return out
 }
 
-/** common.ts getCompositeMarkTooltip. */
-function getCompositeMarkTooltip(summary: Array<{ fieldPrefix: string; titlePrefix: string }>, continuous: Obj, encodingWithoutContinuousAxis: Obj): Obj {
-  if ('tooltip' in encodingWithoutContinuousAxis) return { tooltip: encodingWithoutContinuousAxis.tooltip }
-  const mainTitle = ` of ${continuous.title ?? continuous.field}`
-  const five = summary.map(({ fieldPrefix, titlePrefix }) => ({ field: fieldPrefix + continuous.field, type: continuous.type, title: titlePrefix + mainTitle }))
+/** The definitions of every distinct field the tooltip lists, as vega-lite's `toStringFieldDef` leaves them. */
+function distinctFieldDefs(encoding: Obj): Obj[] {
   const seen = new Set<string>()
-  const others: Obj[] = []
-  for (const d of fieldDefsOf(encodingWithoutContinuousAxis)) {
+  const out: Obj[] = []
+  for (const d of fieldDefsOf(encoding)) {
     const { legend: _l, axis: _a, header: _h, scale: _s, ...plain } = d
-    const key = JSON.stringify(plain)
-    if (!seen.has(key)) (seen.add(key), others.push(plain))
+    const key = stableStringify(plain)
+    // (a condition's own keys are no part of what a tooltip shows)
+    const { param: _p, test: _t, empty: _e, ...shown } = plain
+    if (!seen.has(key)) (seen.add(key), out.push(shown))
   }
-  return { tooltip: [...five, ...others] }
+  return out
+}
+
+/** JSON with the keys of every object sorted, so two definitions with the same content in another key order are the same. */
+function stableStringify(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(',')}]`
+  if (!isObj(v)) return JSON.stringify(v) ?? 'null'
+  return `{${Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => `${JSON.stringify(k)}:${stableStringify(v[k])}`).join(',')}}`
+}
+
+/** common.ts getCompositeMarkTooltip: a tooltip the spec sets, else the summary statistics followed by the other fields the marks show. */
+function getCompositeMarkTooltip(summary: Obj[], shared: Obj): Obj {
+  if ('tooltip' in shared) return { tooltip: shared.tooltip }
+  return { tooltip: [...summary, ...distinctFieldDefs(shared)] }
 }
 
 function normalizeBoxPlot(spec: Obj, userConfig: Obj | undefined): Obj {
@@ -463,21 +470,19 @@ function normalizeBoxPlot(spec: Obj, userConfig: Obj | undefined): Obj {
     color: { condition: { test: `${dq(`lower_box_${f}`)} >= ${dq(`upper_box_${f}`)}`, ...(color || { value: defaultBoxColor }) } },
   })
 
-  const fiveSummary = getCompositeMarkTooltip(
-    [
-      { fieldPrefix: minMax ? 'upper_whisker_' : 'max_', titlePrefix: 'Max' },
-      { fieldPrefix: 'upper_box_', titlePrefix: 'Q3' },
-      { fieldPrefix: 'mid_box_', titlePrefix: 'Median' },
-      { fieldPrefix: 'lower_box_', titlePrefix: 'Q1' },
-      { fieldPrefix: minMax ? 'lower_whisker_' : 'min_', titlePrefix: 'Min' },
-    ],
-    continuous,
-    encodingWithoutContinuousAxis,
-  )
+  const summaryOf = (parts: Array<{ fieldPrefix: string; titlePrefix: string }>): Obj =>
+    getCompositeMarkTooltip(parts.map(({ fieldPrefix, titlePrefix }) => ({ field: fieldPrefix + continuous.field, type: continuous.type, title: `${titlePrefix} of ${continuous.title ?? continuous.field}` })), encodingWithoutContinuousAxis)
+  const fiveSummary = summaryOf([
+    { fieldPrefix: minMax ? 'upper_whisker_' : 'max_', titlePrefix: 'Max' },
+    { fieldPrefix: 'upper_box_', titlePrefix: 'Q3' },
+    { fieldPrefix: 'mid_box_', titlePrefix: 'Median' },
+    { fieldPrefix: 'lower_box_', titlePrefix: 'Q1' },
+    { fieldPrefix: minMax ? 'lower_whisker_' : 'min_', titlePrefix: 'Min' },
+  ])
   const endTick = { type: 'tick', color: 'black', opacity: 1, orient: ticksOrient, invalid, aria: false }
   const whiskerTooltip = minMax
     ? fiveSummary
-    : getCompositeMarkTooltip([{ fieldPrefix: 'upper_whisker_', titlePrefix: 'Upper Whisker' }, { fieldPrefix: 'lower_whisker_', titlePrefix: 'Lower Whisker' }], continuous, encodingWithoutContinuousAxis)
+    : summaryOf([{ fieldPrefix: 'upper_whisker_', titlePrefix: 'Upper Whisker' }, { fieldPrefix: 'lower_whisker_', titlePrefix: 'Lower Whisker' }])
   const whiskerLayers = [
     ...makeExtent({ partName: 'rule', mark: { type: 'rule', invalid, aria: false }, positionPrefix: 'lower_whisker', endPositionPrefix: 'lower_box', extraEncoding: whiskerTooltip }),
     ...makeExtent({ partName: 'rule', mark: { type: 'rule', invalid, aria: false }, positionPrefix: 'upper_box', endPositionPrefix: 'upper_whisker', extraEncoding: whiskerTooltip }),
