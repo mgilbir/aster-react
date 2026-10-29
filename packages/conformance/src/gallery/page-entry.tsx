@@ -10,6 +10,7 @@
  */
 // (FIRST: the clock shim must be on `window` before vega's d3-timer binds requestAnimationFrame)
 import { clock, realNow, realSleep } from './virtual-clock.js'
+import './data-cache.js'
 import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import * as vega from 'vega'

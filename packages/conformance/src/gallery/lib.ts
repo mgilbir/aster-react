@@ -59,6 +59,26 @@ export function localFileFor(rawUrl: string): string | null {
   return existsSync(file) ? file : null
 }
 
+/**
+ * Every gallery data URL a spec names (absolute, in the form the page fetches): any string of the spec that
+ * {@link localFileFor} resolves to a vendored file. The React path preloads these into the page before the spec runs.
+ */
+export function dataUrlsIn(spec: unknown): string[] {
+  const found = new Set<string>()
+  const visit = (v: unknown): void => {
+    if (typeof v === 'string') {
+      if (!v.includes('data/') || /\s/.test(v)) return
+      try {
+        const abs = new URL(v, BASE_URL).href
+        if (localFileFor(abs) !== null) found.add(abs)
+      } catch { /* not a URL */ }
+    } else if (Array.isArray(v)) v.forEach(visit)
+    else if (v && typeof v === 'object') Object.values(v).forEach(visit)
+  }
+  visit(spec)
+  return [...found].sort()
+}
+
 /** A `fetch` that serves the gallery data from disk (404 for anything else): no network at test time. */
 export const fileFetch: typeof globalThis['fetch'] = async (input) => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
