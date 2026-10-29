@@ -364,8 +364,26 @@ interface AxisAbort {
   cut?: AbortPoint
 }
 
+/**
+ * What a dataflow pass leaves for the next one of the same view (autosize fit runs two): vega's operators keep their state.
+ * The keys of the guide items it made, in item order (see `retainGuideOrder`: the join of the next pass starts from them),
+ * and, per scale, the parameters it was last made with and whether it ended with `bins` (see `ScaleContext.pass`).
+ */
+interface PassRecord {
+  guides: Map<string, string[]>
+  scales: Map<string, { key: string; bins: boolean }>
+}
+
+/** The previous pass's record (undefined for the first) and the one this pass writes. */
+interface PassMemory {
+  prev: PassRecord | undefined
+  cur: PassRecord
+}
+
 interface EvalContext {
   chart: CompiledChart
+  /** Present while an evaluation makes more than one dataflow pass (autosize fit): see `PassMemory`. */
+  passMemory?: PassMemory
   scope: GuideScope
   abort: AxisAbort
   signalParams: Record<string, unknown>
@@ -512,6 +530,8 @@ function prepareChartCtx(
   explicitSize: { width: boolean; height: boolean } = { width: input.width != null, height: input.height != null },
   /** The view size signals as written, negative included (see {@link signedViewSize}): the first autosize pass reads them so. */
   signed?: { width?: number; height?: number },
+  /** Present when the view makes more than one dataflow pass: what the pass before it left (see `PassMemory`). */
+  passMemory?: PassMemory,
 ): { ctx: EvalContext; width: number; height: number } {
   // The deadline belongs to the enclosing limits scope (evaluateChart /
   // getChartInfo / renderSpec / session), so one wall clock covers the whole
@@ -578,7 +598,7 @@ function prepareChartCtx(
   // Inputs besides the signals that change what a reused scale/item would be.
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}`
   const ctx: EvalContext = {
-    chart, scope: rootScope(chart), abort: { failures: [] }, signalParams, width, height, datasets, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
+    chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), signalParams, width, height, datasets, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
@@ -1696,7 +1716,7 @@ function paintOrderOf(items: SceneGroup[]): SceneGroup[] {
  * autosize padding at a given content size. Extracted from evaluateChart so
  * `fit`/`fit-x`/`fit-y` can re-run at a shrinking content size and converge.
  */
-type BuiltContent = { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean; frame: FrameEncode | undefined }
+type BuiltContent = { record: PassRecord | undefined; items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean; frame: FrameEncode | undefined }
 
 /** What the view's own `encode` gives the root group: where it sits, and the paint of its box (see frameEncodeOf). */
 interface FrameEncode { x: number; y: number; paint: Partial<SceneRoot> }
@@ -1713,12 +1733,14 @@ function buildContent(
   txn: EvalTxn,
   fitted = false,
   signed?: { width?: number; height?: number },
+  /** Present: this build is a pass of a view that makes another (fit); `prev`: what the pass before it left. */
+  order?: { prev?: PassRecord },
 ): BuiltContent {
-  const first = buildContentPass(chart, input, cw, ch, txn, fitted, signed)
+  const first = buildContentPass(chart, input, cw, ch, txn, fitted, signed, undefined, order)
   const failures = first.ctx.abort.failures
   if (!failures.length) return first
   const cut = failures.reduce((a, b) => (compareInstances(a.path, b.path) || (a.axis === b.axis ? 0 : a.axis < b.axis ? -1 : 1) || (a.legend ?? 0) - (b.legend ?? 0)) <= 0 ? a : b)
-  return buildContentPass(chart, input, cw, ch, txn, fitted, signed, cut)
+  return buildContentPass(chart, input, cw, ch, txn, fitted, signed, cut, order)
 }
 
 function buildContentPass(
@@ -1730,12 +1752,14 @@ function buildContentPass(
   fitted = false,
   signed?: { width?: number; height?: number },
   cut?: AxisAbort['cut'],
+  order?: { prev?: PassRecord },
 ): BuiltContent {
   const prepared = prepareChartCtx(
     // (the first build reads the size from the spec and the host's input itself; only a fit-resize overrides it)
     chart, fitted ? { ...input, width: cw, height: ch } : input, txn,
     fitted ? { width: true, height: true } : { width: input.width != null, height: input.height != null },
     signed,
+    order !== undefined ? { prev: order.prev, cur: { guides: new Map(), scales: new Map() } } : undefined,
   )
   const { ctx } = prepared
   ctx.abort.cut = cut
@@ -1818,7 +1842,7 @@ function buildContentPass(
     ? ctx.chart.padding
     : computeGuidePadding(items, width, height, ctx.chart.padding)
   const ordered = paintOrderOf(items)
-  return { items: ordered, padding, ctx, width, height, hasLayout, frame }
+  return { record: ctx.passMemory?.cur, items: ordered, padding, ctx, width, height, hasLayout, frame }
 }
 
 /**
@@ -1882,6 +1906,8 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
   // (once: the pass after it sets the width signal with the resize skipped, so the layout does not run again), and the content is
   // built again at the fitted size. The view keeps the padding the first pass found; what the second pass overflows by is not
   // looked at (a title anchored to the bounds, or any overflow that depends on the width, ends up wherever it ends up).
+  // (a fit view makes a second pass over the guides: the items of its first are what the join of the second starts from)
+  const fitting = auto === 'fit' || auto === 'fit-x' || auto === 'fit-y'
   let cw = initialW
   let ch = initialH
   let firstPassPadding: BuiltContent['padding'] | undefined
@@ -1894,7 +1920,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
     ch = Math.max(0, initialH - base.top - base.bottom)
     built = buildContent(chart, input, cw, ch, txn, true)
   } else {
-    built = buildContent(chart, input, cw, ch, txn)
+    built = buildContent(chart, input, cw, ch, txn, false, undefined, fitting ? {} : undefined)
   }
   if (auto === 'fit' || auto === 'fit-x' || auto === 'fit-y') {
     // A `width`/`height` signal (update or init, e.g. vega-lite's
@@ -1924,7 +1950,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
         firstPassPadding = built.padding
         cw = nw
         ch = nh
-        built = buildContent(chart, { ...input, changedDatasets: undefined }, cw, ch, txn, true)
+        built = buildContent(chart, { ...input, changedDatasets: undefined }, cw, ch, txn, true, undefined, built.record !== undefined ? { prev: built.record } : undefined)
       }
     }
   }
@@ -3530,7 +3556,12 @@ function scaleContext(ctx: EvalContext, name: string): ScaleContext {
     dataRows: (dataName) => (ctx.datasets.get(dataName) ?? []) as Record<string, unknown>[],
     hasData: (dataName) => ctx.datasets.has(dataName),
     distinctCache: ctx.distinctCache,
+    ...(ctx.passMemory !== undefined ? { pass: passOfScale(ctx.passMemory, `${ctx.scope.path.join('/')}:${name}`) } : {}),
   }
+}
+
+function passOfScale(memory: PassMemory, id: string): NonNullable<ScaleContext['pass']> {
+  return { prev: memory.prev?.scales.get(id), record: (key, bins) => { memory.cur.scales.set(id, { key, bins }) } }
 }
 
 function buildScales(ctx: EvalContext): void {
@@ -5403,8 +5434,9 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   // `{index: -1, tickIndex: -1, extra: {value}, label: ''}`.
   const band = tickBand(lookup(own, cfg))
   const extra = isSignal(band.extra) ? ctx.runtime.expr(band.extra.signal)({}, ctx.signalParams) : band.extra
-  const rows: Row[] = ticks.map((value, i) => ({ index: i / ((ticks.length - 1) || 1), tickIndex: i, value, label: labelCache[i] }))
+  let rows: Row[] = ticks.map((value, i) => ({ index: i / ((ticks.length - 1) || 1), tickIndex: i, value, label: labelCache[i] }))
   if (extra && ticks.length) rows.push({ index: -1, tickIndex: -1, extra: { value: ticks[0] }, label: '' })
+  if (ctx.passMemory !== undefined) rows = retainGuideOrder(rows, ctx.passMemory, `a${ctx.scope.path.join('/')}:${index}`)
   meterItems(rows.length, 'axis ticks')
 
   const guides = chartGuides(ctx.chart)
@@ -5444,6 +5476,35 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
     ...(href != null ? { href } : {}),
   } as unknown as SceneGroup
   vetGuideLinks(out, ctx)
+  return out
+}
+
+/**
+ * vega-encode DataJoin: the items of a keyed mark (an axis's ticks, labels and grid are keyed by `value`) outlive the dataflow
+ * pass that made them. A second pass (autosize fit) adds its tuples first: one whose key an item already has updates that item
+ * in its place, a new key makes a new item after the others, and only then do the first pass's tuples leave: an item whose
+ * tuple was not replaced exits. The scene's items are what is left, in that order.
+ */
+function retainGuideOrder(rows: Row[], memory: PassMemory, id: string): Row[] {
+  const prev = memory.prev?.guides.get(id)
+  let out = rows
+  if (prev !== undefined) {
+    const byKey = new Map<string, Row>()
+    for (const r of rows) byKey.set(String(r.value), r) // (a repeated key: the last tuple's datum, the first one's place)
+    out = []
+    for (const k of prev) {
+      const r = byKey.get(k)
+      if (r !== undefined) { out.push(r); byKey.delete(k) }
+    }
+    const added = new Set<string>()
+    for (const r of rows) {
+      const k = String(r.value)
+      if (!byKey.has(k) || added.has(k)) continue
+      added.add(k)
+      out.push(byKey.get(k)!)
+    }
+  }
+  memory.cur.guides.set(id, out.map((r) => String(r.value)))
   return out
 }
 

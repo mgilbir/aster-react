@@ -27,6 +27,7 @@ vega/global-development
 vega/grouped-bar-chart
 vega/heatmap
 vega/histogram
+vega/histogram-null-values
 vega/horizon-graph
 vega/interactive-legend
 vega/job-voyager
