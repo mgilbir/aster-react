@@ -1,1 +1,0 @@
-{"data":{"values":[{"c":"A","v":1,"g":"x"},{"c":"B","v":2,"g":"y"}]},"facet":{"column":{"field":"g","type":"nominal"}},"spec":{"transform":[{"aggregate":[{"op":"mean","field":"v","as":"m"}],"groupby":["c"]}],"mark":"bar","encoding":{"x":{"field":"c","type":"nominal"},"y":{"field":"m","type":"quantitative"}}}}
