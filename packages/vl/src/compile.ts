@@ -6583,6 +6583,18 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     for (const v of Object.values(update)) strip(v)
   }
 
+  // color.ts: `nonPosition('fill')` and `nonPosition('stroke')` come after the colour and, when the encoding has no fill / stroke of its
+  // own, read the mark definition's: the definition's paint is what the mark has, whatever the colour channel said (a hover line
+  // drawn transparent over the colour-conditioned lines)
+  {
+    const own = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+    for (const ch of ['fill', 'stroke'] as const) {
+      const v = own[ch]
+      if (v === undefined || fields.some((f) => f.channel === ch)) continue
+      update[ch] = isObject(v) && typeof v.signal === 'string' ? { signal: v.signal } : isObject(v) && typeof v.expr === 'string' ? { signal: v.expr } : { value: v }
+    }
+  }
+
   const out: BuiltMarks = [markSpec]
 
   // rounded stacked bars: vega-lite clips the whole stack in a group that carries the

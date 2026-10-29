@@ -318,6 +318,7 @@ vl/interactive_layered_crossfilter_discrete
 vl/interactive_legend
 vl/interactive_legend_dblclick
 vl/interactive_line_brush_cursor
+vl/interactive_line_hover
 vl/interactive_line_point_hover
 vl/interactive_multi_line_label
 vl/interactive_multi_line_pivot_tooltip

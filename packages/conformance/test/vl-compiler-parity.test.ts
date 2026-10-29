@@ -968,6 +968,30 @@ describe('@aster/vl == vega-lite: the orient, direction and gradient length of a
   }, 30_000)
 })
 
+// compile/mark/encode/color.ts + base.ts: the colour of a mark is the fill of a filled mark and the stroke of an unfilled one; the mark
+// definition's own fill / stroke of that kind is what the mark has, whatever colour the encoding says (interactive_line_hover)
+describe('@aster/vl == vega-lite: a mark definition that sets the paint the colour channel would set', () => {
+  const MARKS = ['line', 'point', 'bar', 'area', 'tick', 'circle', 'square', 'text', 'rule', 'trail'] as const
+  const DEFS: Array<Record<string, unknown>> = [{ stroke: 'red' }, { fill: 'red' }, { color: 'red' }, { stroke: 'red', fill: 'blue' }, { stroke: 'red', filled: true }, { fill: 'red', filled: false }]
+  const ENCODINGS: Array<[string, Record<string, unknown>]> = [
+    ['a colour field', { color: n('c', { legend: null }) }],
+    ['a colour value and a condition', { color: { condition: { test: 'datum.v > 4', field: 'c', type: 'nominal', legend: null }, value: 'grey' } }],
+    ['a colour selection condition', { color: { condition: { param: 'sel', field: 'c', type: 'nominal', legend: null }, value: 'grey' } }],
+  ]
+  for (const mark of MARKS) {
+    for (const def of DEFS) {
+      // (`filled` on a text or a trail mark flips which paint the colour channel sets: @aster/vl does not do that for either yet)
+      if ('filled' in def && (mark === 'text' || mark === 'trail')) continue
+      for (const [label, enc] of ENCODINGS) {
+        it(`${mark} ${JSON.stringify(def)} with ${label}`, async () => {
+          const spec = { data: DATA, params: label.includes('selection') ? [{ name: 'sel', select: { type: 'point', fields: ['c'] } }] : undefined, mark: { type: mark, ...def }, encoding: { x: q('x'), y: q('y'), ...enc } }
+          await check(JSON.parse(JSON.stringify(spec)))
+        }, 30_000)
+      }
+    }
+  }
+})
+
 /** The domains of the scales, with the names of the datasets they read left out (how the datasets are named and cut is not what is compared). */
 const DOMAIN_SHAPES = (vg: any): unknown =>
   (vg.scales ?? []).map((s: any) => {
