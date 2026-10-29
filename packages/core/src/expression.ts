@@ -87,6 +87,12 @@ export interface ExpressionRuntime {
    * engine's seeded stream.
    */
   random?: () => number
+  /**
+   * vega-functions `setdata(name, tuples)`: replace the rows of the named dataset's input (a dataset with no source) by `tuples`; the
+   * datasets that read it run again. Only a host that owns the datasets supplies it; without one `setdata` changes nothing.
+   * Returns 1, as vega does.
+   */
+  setdata?: (name: string, tuples: unknown) => number
 }
 
 export type CompiledExpr = (datum: unknown, params?: Record<string, unknown>, event?: unknown) => unknown
@@ -440,6 +446,7 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     regexp: (pattern: unknown, flags?: unknown) => guardedRegExp(String(pattern), flags == null ? undefined : String(flags)),
     // date-time
     now: () => Date.now(),
+    setdata: (name: unknown, tuples: unknown) => (runtime.setdata ? runtime.setdata(String(name), tuples) : 1),
     // vega-functions codegen.js: `random() { return random(); }`, vega-statistics' (replaceable) source
     random: () => (runtime.random ?? Math.random)(),
     datetime,

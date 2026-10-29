@@ -7,7 +7,7 @@ import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRu
 import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
-import { atRandomSite, replayable } from './random-tape.js'
+import { atRandomSite, contentKey, replayable } from './random-tape.js'
 import { activeMeter, withLimits, boundedCount, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
@@ -399,6 +399,9 @@ interface EvalContext {
   groupX?: number
   groupY?: number
   datasets: Map<string, Row[]>
+  /** The rows `setdata(name, tuples)` put in a dataset's input (see `ExpressionRuntime.setdata`), and whether they changed since the datasets were last built. */
+  setData: Map<string, Row[]>
+  setDataChanged: boolean
   /** A legend tickCount threw: the whole layout aborts (raw-guide mode). */
   rawGuides?: boolean
   /** The guide host of this context (see guideHost). */
@@ -565,6 +568,7 @@ function prepareChartCtx(
   if (explicitSize.height && input.height != null) signalParams.height = height
 
   const datasets = new Map<string, Row[]>()
+  const setData = new Map<string, Row[]>()
   const scales = new Map<string, Scale>()
   const scaleTypes = new Map<string, string>()
   // Expression compile cache: compileExpr parses an AST per call, and the
@@ -582,6 +586,18 @@ function prepareChartCtx(
       return root === undefined ? undefined : { root, rows: datasets.get(name) ?? [] }
     },
     ...(input.random ? { random: input.random } : {}),
+    setdata: (name, tuples) => {
+      const d = chart.data.find((x) => x.name === name)
+      // vega reads `data.input` of the named dataset, which a dataset that does not exist does not have
+      if (d === undefined) throw new TypeError(`Cannot read properties of undefined (reading 'input')`)
+      const rows = ingestRows((Array.isArray(tuples) ? tuples : tuples == null ? [] : [tuples]) as Row[]).map((r) => ({ ...r }))
+      const have = setData.get(name)
+      if (have === undefined || valueKey(have) !== valueKey(rows)) {
+        setData.set(name, rows)
+        ctx.setDataChanged = true
+      }
+      return 1
+    },
     containerSize: () => {
       const c = input.containerSize ?? input.measuredSize
       return c ? [c.width, c.height] : [undefined, undefined]
@@ -602,7 +618,7 @@ function prepareChartCtx(
   // Inputs besides the signals that change what a reused scale/item would be.
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}`
   const ctx: EvalContext = {
-    chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), signalParams, width, height, datasets, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
+    chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), signalParams, width, height, datasets, setData, setDataChanged: false, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
@@ -677,7 +693,8 @@ function prepareChartCtx(
     // (a map whose projection was consumed before the `geojson` signals it fits were published builds again)
     const geoStale = ctx.geoStale
     ctx.geoStale = false
-    changed = resolveSignalUpdates(ctx) || geoStale || (rounds === 0 && readsScales)
+    changed = resolveSignalUpdates(ctx) || geoStale || (rounds === 0 && readsScales) || ctx.setDataChanged
+    ctx.setDataChanged = false
     buildScales(ctx)
     if (changed) {
       ctx.datasets.clear()
@@ -750,6 +767,19 @@ function makeTransformed(
     if (!d?.transform.length) return rows
     return applyTransforms(rows, d.transform, { runtime, signals: signalParams, hierarchies, projections }, name)
   }
+}
+
+/**
+ * What a random-drawing site read, for {@link atRandomSite}: its code (an expression, or a transform's parameters), the rows it was
+ * given when it has any, and the value of every signal its code mentions. The same fingerprint is the same inputs, whose numbers
+ * vega would not have redrawn.
+ */
+function randomFingerprint(code: unknown, rows: readonly unknown[] | Record<string, unknown>, signals: Record<string, unknown>): string {
+  const text = typeof code === 'string' ? code : JSON.stringify(code)
+  const mentioned = new Set(text.match(IDENT))
+  const read: string[] = []
+  for (const k of Object.keys(signals).sort()) if (mentioned.has(k)) read.push(`${k}=${contentKey(signals[k])}`)
+  return `${text}\u0001${Array.isArray(rows) ? contentKey(rows) : ''}\u0001${read.join('\u0002')}`
 }
 
 /** A dataset's inline `values`: the array, or what a `{signal}` holds (vega-parser: a signal-valued `values` loads dynamically). */
@@ -951,11 +981,47 @@ function abortAtThrowingSignal(ctx: EvalContext): string | undefined {
   return undefined
 }
 
+/**
+ * The signals in the order vega's dataflow runs them: an operator after the operators it reads (vega-dataflow ranks by dependency),
+ * the others in the order they were declared. A signal that reads one declared after it (`shiftArray` reading `leftRightCount`)
+ * would otherwise see the other's value from the pass before, and a chain of them lags a pass per link.
+ */
+const SIGNAL_ORDERS = new WeakMap<CompiledChart, CompiledSignalDef[]>()
+function signalsInDataflowOrder(chart: CompiledChart): CompiledSignalDef[] {
+  const defs = chart.signalDefs ?? []
+  let out = SIGNAL_ORDERS.get(chart)
+  if (out) return out
+  const index = new Map(defs.map((d, i) => [d.name, i] as const))
+  const reads = defs.map((d, i) => {
+    const text = `${d.update ?? ''} ${d.init ?? ''}`
+    const deps = new Set<number>()
+    for (const m of text.matchAll(IDENT)) {
+      const j = index.get(m[0])
+      if (j !== undefined && j !== i) deps.add(j)
+    }
+    return deps
+  })
+  const placed = new Set<number>()
+  out = []
+  while (out.length < defs.length) {
+    // the first declared signal whose reads are all placed; in a cycle, the first declared one left
+    let pick = -1
+    for (let i = 0; i < defs.length && pick < 0; i++) {
+      if (!placed.has(i) && [...reads[i]!].every((j) => placed.has(j))) pick = i
+    }
+    if (pick < 0) pick = defs.findIndex((_, i) => !placed.has(i))
+    placed.add(pick)
+    out.push(defs[pick]!)
+  }
+  SIGNAL_ORDERS.set(chart, out)
+  return out
+}
+
 function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
   const defs = ctx.chart.signalDefs
   if (!defs?.length) return false
   let changed = false
-  for (const def of defs) {
+  for (const def of signalsInDataflowOrder(ctx.chart)) {
     // `init` runs once (vega's initonly), never over a value the host or an
     // event handler already set.
     const initPending = def.update === undefined && def.init !== undefined
@@ -974,7 +1040,9 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
         params = dict(ctx.signalParams)
         for (const f of frozen) params[f] = ctx.chart.signalDefs!.find((d) => d.name === f)?.value
       }
-      const value = atRandomSite(ctx.runtime.random, `signal:${def.name}`, () => ctx.runtime.expr(expr)(undefined, params))
+      const value = ctx.runtime.random === undefined
+        ? ctx.runtime.expr(expr)(undefined, params)
+        : atRandomSite(ctx.runtime.random, `signal:${def.name}`, () => randomFingerprint(expr, [], params), () => ctx.runtime.expr(expr)(undefined, params))
       // An `init` that reads a scale or a dataset is only settled once they exist: until the scales are built,
       // `domain('x')` of a scale that is not there yet is `[]`, which is not the value vega's dataflow computes.
       const readsScales = DATA_DEPENDENT_EXPR.test(expr) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
@@ -1889,7 +1957,7 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
 }
 
 function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
-  // an injected random source is drawn from once per site however many passes the evaluation makes (see random-tape.ts)
+  // an injected random source is drawn from once per site and run, however many passes and evaluations repeat it (see random-tape.ts)
   const input: RuntimeInput = hostInput.random ? { ...hostInput, random: replayable(hostInput.random) } : hostInput
   const auto = chart.autosize
   const base = chart.padding
@@ -3192,7 +3260,11 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     let rows: Row[]
     let inPulse: StepPulse | null = null
     const srcNames = sourceNames(d)
-    if (srcNames.length > 1) {
+    const setRows = srcNames.length === 0 ? ctx.setData.get(name) : undefined
+    if (setRows !== undefined) {
+      // `setdata(name, tuples)` replaced this dataset's input
+      rows = setRows.map((r) => ({ ...r }))
+    } else if (srcNames.length > 1) {
       // several sources: their rows, one source after the other (each pulse adds its tuples in turn)
       rows = srcNames.flatMap((n) => build(n, seen).map((r) => ({ ...r })))
     } else if (srcNames.length === 1) {
@@ -3280,7 +3352,9 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         let cur = rows
         for (let k = 0; k < d.transform.length; k++) {
           const from = cur
-          const res = atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => applyOneWithState(from, d.transform[k]!, tctx, name))
+          const res = ctx.runtime.random === undefined
+            ? applyOneWithState(from, d.transform[k]!, tctx, name)
+            : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(d.transform[k]!, from, ctx.signalParams), () => applyOneWithState(from, d.transform[k]!, tctx, name))
           cur = res.rows
           state.steps.push(cur)
           if (res.state !== undefined) state.stepState.set(`${name}#${k}`, res.state)
