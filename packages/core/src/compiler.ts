@@ -63,7 +63,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     sigNames.includes(name) ? { signal: name } : 0
   const width = typeof spec.width === 'number' ? spec.width : (typeof spec.width === 'object' ? spec.width as SizeSpec : defaultSize('width'))
   const height = typeof spec.height === 'number' ? spec.height : (typeof spec.height === 'object' ? spec.height as SizeSpec : defaultSize('height'))
-  const contentSized = (['width', 'height'] as const).filter((d) => spec.layout != null && spec[d] == null && !sigNames.includes(d))
+  const contentSized = (['width', 'height'] as const).filter((d) => spec[d] == null && !sigNames.includes(d))
   const frameStroke = resolveFrameStroke(spec)
   const frameFill = resolveFrameFill(spec)
   const frameStrokeWidth = resolveFrameNumber(spec, 'strokeWidth')

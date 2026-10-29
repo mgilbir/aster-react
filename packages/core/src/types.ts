@@ -191,8 +191,9 @@ export interface CompiledChart {
   /** Root-level trellis layout options (vega spec `layout`), when present. */
   layout?: Record<string, unknown>
   /**
-   * The view dimensions the spec leaves to its own layout: a composition (a top-level `layout`) with no size and no
-   * `width` / `height` signal. Vega sizes that view from the laid-out groups, so a host's container does not size it.
+   * The view dimensions the spec leaves to its content: no size and no `width` / `height` signal. In Vega that dimension is
+   * 0 and the autosize pass grows it to what is drawn (a composition's laid-out groups, text hanging below an axis), so a
+   * host's container does not size it.
    */
   contentSized?: ReadonlyArray<'width' | 'height'>
 }

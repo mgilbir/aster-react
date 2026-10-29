@@ -339,7 +339,7 @@ applies. A host that has a DOM element to fill passes its `clientWidth` / `clien
 
 `measuredSize: { width, height }` is the element a host lets the chart fill. It is the view size of a
 spec with no `width` / `height` signal; a spec that drives those signals keeps doing so (the container
-reaches it through `containerSize()`, which falls back to `measuredSize`). The view size has one value
+reaches it through `containerSize()`, which falls back to `measuredSize`); nor does it size a dimension the spec gives no value at all (no number, no signal): in Vega that is 0 and the autosize pass grows it to the content. The view size has one value
 for every consumer (scales, layout, marks and expressions); from the strongest: a fixed `width` /
 `height`, a value written to the `width` / `height` signal (`signals`), then `measuredSize`.
 

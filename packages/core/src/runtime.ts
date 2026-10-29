@@ -1948,8 +1948,9 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
       if (auto === 'fit') { nw = Math.max(0, initialW - padW - oL - oR); nh = Math.max(0, initialH - padH - oT - oB) }
       else if (auto === 'fit-x') { nw = Math.max(0, initialW - padW - oL - oR); nh = ch }
       else { nw = cw; nh = Math.max(0, initialH - padH - oT - oB) }
+      // (the view is the fitted viewport even when the content does not move: a dimension of 0 stays 0 whatever overflows it)
+      firstPassPadding = built.padding
       if (nw !== cw || nh !== ch) {
-        firstPassPadding = built.padding
         cw = nw
         ch = nh
         built = buildContent(chart, { ...input, changedDatasets: undefined }, cw, ch, txn, true, undefined, built.record !== undefined ? { prev: built.record } : undefined)
