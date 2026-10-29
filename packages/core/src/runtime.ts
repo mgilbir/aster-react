@@ -810,6 +810,13 @@ function inlineValues(ctx: Pick<EvalContext, 'runtime' | 'signalParams'>, values
   return ctx.runtime.expr(expr)(undefined, ctx.signalParams)
 }
 
+/** An item without the bookkeeping of the engine (`__gen` and the like): what a transform of the mark can read of it. */
+function publicProps(item: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const k of Object.keys(item as object)) if (!k.startsWith('__')) out[k] = (item as Record<string, unknown>)[k]
+  return out
+}
+
 /** Fingerprint of the evaluation context that reused scales/items were built under. */
 function ctxFpOf(ctx: EvalContext): string {
   // Memoised: the params only change at the few known write sites, each of
@@ -3926,7 +3933,7 @@ function reusablePulse(
 }
 
 /** A mark `transform` vega runs on the encoded items (see evaluateMarkItems). */
-const ITEM_TRANSFORMS: ReadonlySet<string> = new Set(['voronoi', 'lookup', 'linkpath', 'force', 'geopath', 'label', 'heatmap'])
+const ITEM_TRANSFORMS: ReadonlySet<string> = new Set(['voronoi', 'lookup', 'linkpath', 'force', 'geopath', 'label', 'heatmap', 'wordcloud'])
 function isItemTransform(t: CompiledTransform): boolean {
   return ITEM_TRANSFORMS.has(String(t.type))
 }
@@ -4136,10 +4143,12 @@ function evaluateMarkItems(
   // positions, a lookup of another mark's items by `datum.index`, a link path between looked-up items) run right
   // after the encode: the items are the transform's tuples, so `datum.datum` is the source datum. What they
   // compute is written onto the items, in order (the next transform reads it).
-  for (const t of mark.transform ?? []) {
+  for (const [k, t] of (mark.transform ?? []).entries()) {
     if (!isItemTransform(t) || !source || items.length === 0) continue
     try {
-      const out = applyTransforms(items as unknown as Row[], [t], {
+      // (a transform that draws random numbers - the layout of a word cloud - draws them once for the inputs it is given, as
+      // vega's operator does, not again for every evaluation of the scene: see random-tape.ts)
+      const out = atRandomSite(ctx.runtime.random, `mark:${ctx.scopeId ?? ''}/${markIdOf(mark)}#${k}`, () => randomFingerprint(t, items.map(publicProps), ctx.signalParams), () => applyTransforms(items as unknown as Row[], [t], {
         runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections,
         // (`lookup` `from` is a dataset, or the name of a mark: its items)
         datasets: (n) => ctx.datasets.get(n) ?? (ctx.markItems.get(n) as unknown as Row[] | undefined),
@@ -4147,7 +4156,7 @@ function evaluateMarkItems(
         marks: (n) => ctx.markContainers.get(n),
         // (vega's tuples: a force layout moves the items themselves)
         inPlace: true,
-      }, source)
+      }, source))
       if (t.type === 'voronoi') {
         const as = ((t as { as?: string }).as) ?? 'path'
         items.forEach((it, i) => { (it as unknown as Row)[as] = (out[i] as Row)[as] })

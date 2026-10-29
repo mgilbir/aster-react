@@ -68,6 +68,15 @@ function canvasContext(): CanvasRenderingContext2D | null {
   return ctx2d
 }
 
+/**
+ * A new canvas element of the host (what vega-canvas's `canvas()` is in a browser), or null where the host has none to draw on
+ * (Node, jsdom without a canvas package).
+ */
+export function createHostCanvas(): HTMLCanvasElement | null {
+  if (canvasContext() === null) return null
+  try { return document.createElement('canvas') } catch { return null }
+}
+
 /** True when vega-style canvas measurement is possible in this environment. */
 export function usingCanvasTextMetrics(): boolean {
   return activeProvider != null || canvasContext() != null
