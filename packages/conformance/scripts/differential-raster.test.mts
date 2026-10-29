@@ -14,8 +14,7 @@ import * as d3Contour from 'd3-contour'
 import { applyTransforms, compileExpr, type Row } from '../../core/src/index.ts'
 import '../../core/src/addon-transforms.ts'
 import '../../core/src/addon-geo.ts'
-import contours from '../../core/src/contour.ts'
-const contourPolygons = (v: number[], t: number[], size: [number, number], smooth: boolean) => contours().smooth(smooth).size(size).thresholds(t)(v)
+import { contourPolygons } from '../../core/src/contour.ts'
 import { enc, exact } from './differential-util.mts'
 
 // ---------------------------------------------------------------------------------------------------- generator
