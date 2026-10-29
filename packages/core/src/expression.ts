@@ -405,7 +405,8 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     // root scope's group is the root of every scene item, so any item is in scope (and nothing -- no
     // item under the pointer -- is not); a group scope (`runtime.inScope`) checks the item's group chain.
     inScope: (item: unknown) => runtime.inScope ? runtime.inScope(item) : item != null && typeof item === 'object',
-    span: (arr: unknown) => { const a = arr as number[]; return a[a.length - 1]! - a[0]! },
+    // (vega-util span: `array && (peek(array) - array[0]) || 0`, so a missing or empty array spans nothing)
+    span: (arr: unknown) => { const a = arr as number[] | null | undefined; return (a && (a[a.length - 1]! - a[0]!)) || 0 },
     pluck,
     // strings
     lower: (value: unknown) => String(value).toLowerCase(),
