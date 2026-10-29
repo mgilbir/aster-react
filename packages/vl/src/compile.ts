@@ -657,10 +657,14 @@ function applyCompositionConfig(node: VLSpec, root: VLSpec): void {
     const facetedUnit = n.mark !== undefined && (enc.row != null || enc.column != null || enc.facet != null)
     const type = n.facet !== undefined || facetedUnit ? 'facet' : n.hconcat !== undefined || n.vconcat !== undefined || n.concat !== undefined || n.repeat !== undefined ? 'concat' : undefined
     const c = type && isObject(cfg?.[type]) ? (cfg![type] as Record<string, unknown>) : undefined
+    // (a partial `{row}` / `{column}` spacing fills the other direction from the config, whose default spacing is 20: config.ts defaultConfig)
+    if (type && isObject(n.spacing)) {
+      const dflt = typeof c?.spacing === 'number' ? c.spacing : 20
+      n.spacing = { row: n.spacing.row ?? dflt, column: n.spacing.column ?? dflt }
+    }
     if (c) {
       if (typeof c.spacing === 'number') {
         if (n.spacing === undefined) n.spacing = c.spacing
-        else if (isObject(n.spacing)) n.spacing = { row: n.spacing.row ?? c.spacing, column: n.spacing.column ?? c.spacing }
       }
       const wrapped = type === 'facet' ? (isObject(n.facet) ? n.facet.row === undefined && n.facet.column === undefined : isObject(enc.facet) && enc.row === undefined && enc.column === undefined) : n.concat !== undefined || (n.repeat !== undefined && Array.isArray(n.repeat))
       if (c.columns !== undefined && wrapped && n.columns === undefined && !(isObject(enc.facet) && enc.facet.columns !== undefined)) n.columns = c.columns

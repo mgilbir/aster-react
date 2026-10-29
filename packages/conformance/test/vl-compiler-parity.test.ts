@@ -1034,6 +1034,29 @@ describe('@aster/vl == vega-lite: the layout and the signals of a faceted cell',
   }
 })
 
+// spec/base.ts extractCompositionLayout: a spacing given for one direction takes the config's (20) for the other (trellis_area_seattle)
+describe('@aster/vl == vega-lite: the spacing of a composition', () => {
+  const unit = { mark: 'point', encoding: { x: q('x'), y: q('y') } }
+  const SPECS: Array<[string, Record<string, any>]> = [
+    ['a row facet with a row spacing', { data: DATA, spacing: { row: 1 }, facet: { row: n('g') }, spec: unit }],
+    ['a column facet with a column spacing', { data: DATA, spacing: { column: 3 }, facet: { column: n('g') }, spec: unit }],
+    ['a facet with both spacings', { data: DATA, spacing: { row: 2, column: 4 }, facet: { row: n('g'), column: n('c') }, spec: unit }],
+    ['a facet with one number', { data: DATA, spacing: 7, facet: { row: n('g') }, spec: unit }],
+    ['a wrapped facet with a row spacing', { data: DATA, spacing: { row: 1 }, facet: n('c'), columns: 2, spec: unit }],
+    ['a facet with a row spacing and config.facet.spacing', { data: DATA, config: { facet: { spacing: 9 } }, spacing: { row: 1 }, facet: { row: n('g') }, spec: unit }],
+    ['a hconcat with a partial spacing', { data: DATA, spacing: { row: 1 }, hconcat: [unit, unit] }],
+    ['a concat with a partial spacing and config.concat.spacing', { data: DATA, config: { concat: { spacing: 11 } }, spacing: { column: 2 }, concat: [unit, unit], columns: 2 }],
+    ['a faceted unit with a partial spacing', { data: DATA, spacing: { column: 1 }, mark: 'point', encoding: { x: q('x'), y: q('y'), column: n('g') } }],
+  ]
+  for (const [name, spec] of SPECS) {
+    it(name, () => {
+      const oracle = (vl as any).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      expect(plain(ours.layout?.padding)).toEqual(plain(oracle.layout?.padding))
+    })
+  }
+})
+
 // -------------------------------------------------------------------------------------------------------------------------------
 // The COMPILED EXPRESSIONS, case by case. The cases above compare what vega renders from the two compilers' output; that cannot see a
 // generated expression whose results happen to coincide on the test data (a whisker fence scaled by 1.01 moves no point of a small data
