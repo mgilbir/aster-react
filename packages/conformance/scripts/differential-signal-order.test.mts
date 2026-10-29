@@ -74,4 +74,18 @@ describe('signals resolve in dependency order (Aster vs Vega)', () => {
     expect(svg).toContain('>a<')
     expect(svg).toContain('>4<')
   })
+
+  it('setdata from a signal that is ranked after the dataset is lost in the first run (vega enqueues an operator once per run)', async () => {
+    const svg = await same({
+      width: 120, height: 60, padding: 5,
+      data: [{ name: 'dec', values: [], transform: [{ type: 'collect', sort: { field: 'i' } }] }],
+      signals: [
+        // reads the dataset it fills: ranked after the dataset's input, which has already run when setdata pulses it
+        { name: 'prefs', update: "setdata('dec', [{d: 'b', i: 2}, {d: 'a', i: 1}]) + 0 * length(data('dec'))" },
+        { name: 'first', update: "length(data('dec')) ? data('dec')[0].d : 'none'" },
+      ],
+      marks: [{ type: 'text', encode: { update: { text: { signal: 'first' }, x: { value: 5 }, y: { value: 14 } } } }],
+    })
+    expect(svg).toContain('>none<')
+  })
 })

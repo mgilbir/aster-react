@@ -402,6 +402,8 @@ interface EvalContext {
   /** The rows `setdata(name, tuples)` put in a dataset's input (see `ExpressionRuntime.setdata`), and whether they changed since the datasets were last built. */
   setData: Map<string, Row[]>
   setDataChanged: boolean
+  /** The signal whose update expression is being evaluated (`setdata` asks who calls it). */
+  currentSignal?: string
   /** A legend tickCount threw: the whole layout aborts (raw-guide mode). */
   rawGuides?: boolean
   /** The guide host of this context (see guideHost). */
@@ -592,6 +594,9 @@ function prepareChartCtx(
       const d = chart.data.find((x) => x.name === name)
       // vega reads `data.input` of the named dataset, which a dataset that does not exist does not have
       if (d === undefined) throw new TypeError(`Cannot read properties of undefined (reading 'input')`)
+      // vega-dataflow enqueues an operator only once per run: a signal ranked after the dataset's input (it reads the dataset, or
+      // something derived from it) calls setdata when the input has already run in this first pass, so its pulse is lost
+      if (ctx.currentSignal !== undefined && signalRanksAfterDatasetInput(chart, ctx.currentSignal, name)) return 1
       const rows = ingestRows((Array.isArray(tuples) ? tuples : tuples == null ? [] : [tuples]) as Row[]).map((r) => ({ ...r }))
       const have = setData.get(name)
       if (have === undefined || valueKey(have) !== valueKey(rows)) {
@@ -1072,6 +1077,42 @@ function signalsInDataflowOrder(chart: CompiledChart): CompiledSignalDef[] {
   return out
 }
 
+/**
+ * Whether signal `name` is evaluated after dataset `dataset`'s input in a dataflow run: it reads the dataset's rows (`data('x')`,
+ * `indata`), or a dataset derived from it, or a signal that does -- through its update, its init, or the handlers of its streams.
+ * vega ranks an operator after everything it reads, and the input of a dataset with no source is the first operator of its pipeline.
+ */
+function signalRanksAfterDatasetInput(chart: CompiledChart, name: string, dataset: string): boolean {
+  const defs = new Map((chart.signalDefs ?? []).map((d) => [d.name, d] as const))
+  const sources = new Map(chart.data.map((d) => [d.name, sourceNames(d)] as const))
+  const derivesFrom = (ds: string, seen = new Set<string>()): boolean => {
+    if (ds === dataset) return true
+    if (seen.has(ds)) return false
+    seen.add(ds)
+    return (sources.get(ds) ?? []).some((s) => derivesFrom(s, seen))
+  }
+  const seen = new Set<string>()
+  const visit = (sig: string): boolean => {
+    if (seen.has(sig)) return false
+    seen.add(sig)
+    const d = defs.get(sig)
+    if (d === undefined) return false
+    const texts: string[] = [d.update, d.init].filter((t): t is string => typeof t === 'string')
+    for (const h of d.on ?? []) {
+      texts.push(JSON.stringify(h.events))
+      const u = h.update
+      if (typeof u === 'string') texts.push(u)
+      else if (u !== undefined) texts.push(...[u.expr, u.signal].filter((t): t is string => typeof t === 'string'))
+    }
+    for (const text of texts) {
+      for (const m of text.matchAll(DATA_READ_CALL_ALL)) if (derivesFrom(m[2]!)) return true
+      for (const id of text.match(IDENT) ?? []) if (id !== sig && defs.has(id) && visit(id)) return true
+    }
+    return false
+  }
+  return visit(name)
+}
+
 function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
   const defs = ctx.chart.signalDefs
   if (!defs?.length) return false
@@ -1095,6 +1136,7 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
         params = dict(ctx.signalParams)
         for (const f of frozen) params[f] = ctx.chart.signalDefs!.find((d) => d.name === f)?.value
       }
+      ctx.currentSignal = def.name
       const value = ctx.runtime.random === undefined
         ? ctx.runtime.expr(expr)(undefined, params)
         : atRandomSite(ctx.runtime.random, `signal:${def.name}`, () => randomFingerprint(expr, [], params), () => ctx.runtime.expr(expr)(undefined, params))
@@ -1102,6 +1144,7 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
       // `domain('x')` of a scale that is not there yet is `[]`, which is not the value vega's dataflow computes.
       const readsScales = DATA_DEPENDENT_EXPR.test(expr) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
       if (initPending && value !== undefined && !readsScales) ctx.initDone.add(def.name)
+      ctx.currentSignal = undefined
       ctx.signalErrors?.delete(def.name)
       if (value !== undefined && !valuesEqual(value, ctx.signalParams[def.name])) {
         ctx.signalParams[def.name] = value
@@ -1109,6 +1152,7 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
         changed = true
       }
     } catch (e) {
+      ctx.currentSignal = undefined
       // Unresolved dependency this round; keep previous value. (What is still thrown once everything the expression can
       // read exists is a throw, not a dependency that is missing: see abortAtThrowingSignal.)
       ;(ctx.signalErrors ??= new Map()).set(def.name, e)

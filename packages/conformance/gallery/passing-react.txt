@@ -50,6 +50,7 @@ vega/packed-bubble-chart
 vega/parallel-coordinates
 vega/pi-monte-carlo
 vega/pie-chart
+vega/platformer
 vega/population-pyramid
 vega/probability-density
 vega/projections
