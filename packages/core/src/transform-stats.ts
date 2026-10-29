@@ -772,7 +772,7 @@ export function regressionRows(rows: Row[], p: Params): Row[] {
 }
 
 // ---------------------------------------------------------------------------
-// loess (vega-statistics regression/loess.js — science.js adaptation)
+// loess (vega-statistics regression/loess.js — adapted from science.js by Jason Davies, BSD-3-Clause; see THIRD_PARTY_NOTICES.md)
 // ---------------------------------------------------------------------------
 
 const LOESS_MAX_ITERS = 2

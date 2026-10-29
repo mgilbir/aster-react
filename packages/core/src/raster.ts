@@ -1,3 +1,9 @@
+/*
+ * Derived in part from Skia (https://skia.org), BSD-3-Clause: the edge setup, curve subdivision and conic routines named below
+ * (SkAnalyticEdge::setLine, SkEdge.cpp diff_to_shift and cubic_delta_from_line, SkConic::BuildUnitArc and computeQuadPOW2)
+ * are re-expressed here in TypeScript, and one comment is carried over from them. Skia is Copyright The Android Open
+ * Source Project and Google Inc.; its licence text is reproduced in THIRD_PARTY_NOTICES.md.
+ */
 /**
  * A software 2D context that records only coverage: what a canvas would hold in its alpha channel after the same drawing
  * commands. vega-label draws the marks a label must avoid into an offscreen canvas and reads back which pixels have any
