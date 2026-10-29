@@ -1088,6 +1088,49 @@ describe('@aster/vl == vega-lite: interval selections over a map', () => {
   }
 })
 
+// compile/data/lookup.ts + selection/parse.ts materializeSelections: a lookup from a selection reads the selected rows of the view that
+// declares it, whichever view comes first (interactive_airport_crossfilter); data/source numbering across a concat's children
+describe('@aster/vl == vega-lite: lookups from a selection across views, and source names across children', () => {
+  const unit = (extra: Record<string, unknown> = {}) => ({ mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { param: 'brush', empty: false, value: 'goldenrod' }, value: 'steelblue' } }, ...extra })
+  const brush = { name: 'brush', select: { type: 'interval', encodings: ['x'] } }
+  const looked = { transform: [{ lookup: 'c', from: { param: 'brush', key: 'c' } }], mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }
+  const CASES: Array<[string, Record<string, any>]> = [
+    ['the declaring unit first, a lookup in the second child', { data: DATA, vconcat: [unit({ params: [brush] }), looked] }],
+    ['the declaring unit as a layer, the lookup in the next child', { data: DATA, vconcat: [{ layer: [{ mark: 'line', encoding: { x: q('x'), y: q('y') } }, unit({ params: [brush] })] }, looked] }],
+    ['a lookup in a repeated layer', { data: DATA, vconcat: [{ layer: [{ mark: 'line', encoding: { x: q('x'), y: q('y') } }, unit({ params: [brush] })] }, { transform: [{ lookup: 'c', from: { param: 'brush', key: 'c' } }], repeat: { column: ['v', 'x'] }, spec: { mark: 'bar', encoding: { x: { field: { repeat: 'column' }, bin: { maxbins: 4 } }, y: { aggregate: 'count' } } } }] }],
+  ]
+  for (const [name, spec] of CASES) {
+    it(name, async () => {
+      const oracle = (vl as any).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      // every dataset a mark, scale or lookup reads is declared, and none is declared twice
+      const names = (ours.data ?? []).map((d: any) => d.name)
+      expect(new Set(names).size, 'datasets declared once').toBe(names.length)
+      const declared = new Set<string>(names)
+      for (const d of ours.data ?? []) for (const t of d.transform ?? []) if (t.type === 'lookup') expect(declared.has(t.from), `lookup from ${t.from}`).toBe(true)
+      void oracle
+      await check(spec)
+    }, 30_000)
+  }
+  const mk = (d: unknown) => ({ data: { values: [{ a: d, b: 1 }, { a: 5, b: d }] }, mark: 'point', encoding: { x: q('a'), y: q('b') } })
+  const NAMED: Array<[string, Record<string, any>]> = [
+    ['a vconcat whose children each have data', { vconcat: [mk(1), mk(2)] }],
+    ['a layer with two data sources and a child with another', { vconcat: [{ layer: [mk(1), mk(2)] }, mk(3)] }],
+    ['a child with a layer of its own data, then a unit', { vconcat: [mk(3), { layer: [mk(1), mk(2)] }] }],
+    ['a concat in a concat', { vconcat: [mk(3), { hconcat: [mk(1), mk(2)] }, mk(4)] }],
+    ['a parent with data and children that have their own', { data: { values: [{ a: 0, b: 2 }] }, vconcat: [mk(1), { mark: 'point', encoding: { x: q('a'), y: q('b') } }, mk(2)] }],
+  ]
+  for (const [name, spec] of NAMED) {
+    it(`${name}: every source has a name of its own`, async () => {
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      const sources = (ours.data ?? []).filter((d: any) => d.source === undefined).map((d: any) => d.name)
+      expect(new Set(sources).size).toBe(sources.length)
+      expect(sources.length).toBe(((vl as any).compile(plain(spec)).spec.data as any[]).filter((d) => d.source === undefined).length)
+      await check(spec)
+    }, 30_000)
+  }
+})
+
 /** The domains of the scales, with the names of the datasets they read left out (how the datasets are named and cut is not what is compared). */
 const DOMAIN_SHAPES = (vg: any): unknown =>
   (vg.scales ?? []).map((s: any) => {

@@ -125,11 +125,15 @@ export function compile(input: VLSpec): VLSpec {
   const first = compileOnce(input)
   // model.parse(): every view's selections are parsed BEFORE any view's data, so a predicate may name a selection that a view later in the
   // spec declares (a filter in one concat child, the brush in the next). A first pass finds those names, a second one resolves them.
-  if (first.misses.size === 0 || ![...first.misses].some((n) => first.selections.has(n))) return first.out
-  return compileOnce(input, first.selections).out
+  // The same goes for a lookup from a selection: the view that declares the selection makes the dataset of its selected rows, and
+  // learns that a later view looks it up only from the first pass.
+  const forwardSelections = first.misses.size > 0 && [...first.misses].some((n) => first.selections.has(n)) ? first.selections : undefined
+  const forwardLookups = first.lookups.size > 0 ? first.lookups : undefined
+  if (!forwardSelections && !forwardLookups) return first.out
+  return compileOnce(input, forwardSelections, forwardLookups).out
 }
 
-function compileOnce(input: VLSpec, forward?: ReadonlyMap<string, SelCmpt>): { out: VLSpec; misses: ReadonlySet<string>; selections: ReadonlyMap<string, SelCmpt> } {
+function compileOnce(input: VLSpec, forward?: ReadonlyMap<string, SelCmpt>, forwardLookups?: ReadonlyMap<string, { name: string }>): { out: VLSpec; misses: ReadonlySet<string>; selections: ReadonlyMap<string, SelCmpt>; lookups: ReadonlyMap<string, { name: string }> } {
   const spec = cloneSpec(input)
   validateSpec(spec)
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
@@ -148,6 +152,7 @@ function compileOnce(input: VLSpec, forward?: ReadonlyMap<string, SelCmpt>): { o
   pushSelectionParams(normalized, [])
   const ctx = makeCtx(normalized)
   if (forward) ctx.forwardSelections = forward
+  if (forwardLookups) for (const [param, lookup] of forwardLookups) ctx.selectionLookups.set(param, lookup)
   const compiled = compileView(normalized, ctx)
   const selParts = SEL_PARTS.get(compiled)
   if (selParts) compiled.data = [...selParts.data, ...((compiled.data as Record<string, unknown>[] | undefined) ?? [])]
@@ -167,7 +172,7 @@ function compileOnce(input: VLSpec, forward?: ReadonlyMap<string, SelCmpt>): { o
   }
   assertNoGeoSignalClash(out)
   assembleGuides(out)
-  return { out: exprRefsToSignals(out) as VLSpec, misses: ctx.selectionMisses, selections: ctx.selections }
+  return { out: exprRefsToSignals(out) as VLSpec, misses: ctx.selectionMisses, selections: ctx.selections, lookups: ctx.selectionLookups }
 }
 
 
@@ -772,7 +777,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const source: Record<string, unknown> = dataDef ? dataSource(dataDef, ctx.datasets) : {}
     // vega-lite preserves a declared source dataset name (data: {name: 'table'})
     // — hosts key data overrides/changesets on it, so renaming to source_0 breaks them.
-    const sourceName = typeof source.name === 'string' ? source.name : ctx.sn(gi)
+    const sourceName = typeof source.name === 'string' ? source.name : ctx.takeSource()
     source.name = sourceName
     return { sourceName, castDone: new Set<string>(), casts: [], source, castsName: sourceName }
   })
@@ -2304,7 +2309,7 @@ interface CompositeResult {
 function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, layout: 'row' | 'column' | 'grid'): CompositeResult {
   const parentResolve = (isObject(parent.resolve) ? parent.resolve : {}) as { scale?: Record<string, string>; legend?: Record<string, string> }
   const parentData = isObject(parent.data) ? dataSource(parent.data, ctx.datasets) : undefined
-  const parentSourceName = parentData && typeof parentData.name === 'string' ? parentData.name : ctx.sn(0)
+  const parentSourceName = parentData ? (typeof parentData.name === 'string' ? parentData.name : ctx.takeSource()) : ''
   const parentTransform = Array.isArray(parent.transform) ? (parent.transform as unknown[]) : []
   // (the counter is the compile's, not this embedding's: a nested composite must not reuse a sibling's source names)
   let nextData = 0
@@ -2318,8 +2323,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
       if (parentData) child.data = { ...parentData, name: parentSourceName }
       if (parentTransform.length) child.transform = [...parentTransform, ...(Array.isArray(child.transform) ? child.transform : [])]
     } else if (isObject(child.data) && typeof child.data.name !== 'string') {
-      ctx.nextSource ??= 1
-      child.data = { ...dataSource(child.data, ctx.datasets), name: ctx.sn(ctx.nextSource++) }
+      child.data = { ...dataSource(child.data, ctx.datasets), name: ctx.takeSource() }
     }
     if (parent.config !== undefined) child.config = parent.config
     // (variable parameters are declared once at the root; the selections stay with the units they belong to)
@@ -2360,6 +2364,9 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
 
   frags.forEach(({ cell, vg }) => {
     const { prefix } = cell
+    // (a repeat names its children itself, `child__column_x`: a composite around it does not put its own name in front)
+    const ownNamed = (name: string): boolean => cell.spec.repeat !== undefined && name.startsWith('child__')
+    const prefixed = (name: string): string => (ownNamed(name) ? name : `${prefix}${name}`)
     const dnames = new Map<string, string>()
     const unitData = (vg.data as Record<string, unknown>[]) ?? []
     // datasets: the first is the child's source, the rest derive from it
@@ -2396,21 +2403,21 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     const ownSignals = (vg.signals as Record<string, unknown>[] | undefined) ?? []
     for (const sg of ownSignals) {
       const n = sg.name as string
-      if (n !== 'width' && n !== 'height') sigMap.set(n, `${prefix}${n}`)
+      if (n !== 'width' && n !== 'height') sigMap.set(n, prefixed(n))
     }
     const scaleMap = new Map<string, string>()
     const scales = (vg.scales as ScaleSpec[]) ?? []
     for (const sc of scales) {
       // everything but the shared (legend-bearing) channels is private to its child; resolve.scale decides the rest
       const asked = parentResolve.scale?.[sc.name]
-      if (asked === 'independent' || (asked !== 'shared' && !SHARED_SCALES.has(sc.name))) scaleMap.set(sc.name, `${prefix}${sc.name}`)
+      if (asked === 'independent' || (asked !== 'shared' && !SHARED_SCALES.has(sc.name))) scaleMap.set(sc.name, prefixed(sc.name))
     }
     // maps: the geojson transforms' signals and the projections are global names: a cell's own are prefixed
     const geojsonTransforms = unitData.flatMap((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).filter((t) => t.type === 'geojson' && typeof t.signal === 'string'))
-    for (const t of geojsonTransforms) sigMap.set(t.signal as string, `${prefix}${t.signal as string}`)
+    for (const t of geojsonTransforms) sigMap.set(t.signal as string, prefixed(t.signal as string))
     // a binned field's extent / bins signals are the cell's own as well (bin.ts getBinSignalName names them after the model)
     const binTransforms = unitData.flatMap((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).filter((t) => (t.type === 'bin' || t.type === 'extent') && typeof t.signal === 'string'))
-    for (const t of binTransforms) sigMap.set(t.signal as string, `${prefix}${t.signal as string}`)
+    for (const t of binTransforms) sigMap.set(t.signal as string, prefixed(t.signal as string))
     const projList = (vg.projections as Record<string, unknown>[] | undefined) ?? []
     const projMap = new Map(projList.map((p) => [p.name as string, `${prefix}${p.name as string}`]))
     const renames = { signals: sigMap, scales: scaleMap, datasets: dnames }
@@ -2470,7 +2477,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     // sort the renamed scales into independent (prefixed, already renamed) and shared
     const sharedNames: string[] = []
     for (const sc of scales) {
-      if (cellPrefixed(sc.name, prefix)) independentScales.push(sc)
+      if (cellPrefixed(sc.name, prefix) || ownNamed(sc.name)) independentScales.push(sc)
       else {
         const l = scaleLists.get(sc.name)
         if (l) l.push(sc)
@@ -2484,7 +2491,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
       const ch = legendChannel(lg)
       // resolve.ts parseGuideResolve: an independent scale has independent legends, and resolve.legend can ask for them
       const channel = ch.startsWith(prefix) ? ch.slice(prefix.length) : ch
-      if (cellPrefixed(ch, prefix) || GROUP_LEGENDS.has(lg) || parentResolve.legend?.[channel] === 'independent') { ownLegends.push(lg); continue }
+      if (cellPrefixed(ch, prefix) || ownNamed(ch) || GROUP_LEGENDS.has(lg) || parentResolve.legend?.[channel] === 'independent') { ownLegends.push(lg); continue }
       const have = legendsByChannel.get(ch)
       if (!have) {
         legendsByChannel.set(ch, lg)
@@ -3467,10 +3474,11 @@ interface CompileCtx extends TransformContext {
   datasets: Record<string, unknown>
   /** Generated derived-dataset name `<prefix>_<i>`; never collides with a user dataset name. */
   dn(i: number): string
-  /** Generated name for an unnamed source dataset. */
-  sn(i: number): string
-  /** The next unnamed child source index (`source_<n>`) a composite hands out; shared by nested composites. */
-  nextSource?: number
+  /**
+   * The name of the next unnamed source dataset (`source_<n>`). Vega-lite numbers its sources in the order the views are parsed, a
+   * parent's before its children's, across the whole spec - so a source never takes a name an earlier one has.
+   */
+  takeSource(): string
   /** A generated one-off dataset name (`row_domain`, ...), de-collided from user names. */
   fresh(base: string): string
   /** The selection components of the spec, by (sanitized) parameter name. */
@@ -3563,6 +3571,7 @@ function makeCtx(top: VLSpec): CompileCtx {
   }
   const dataPrefix = prefixFree('data')
   const sourcePrefix = prefixFree('source')
+  let sourceCount = 0
   const ctx: CompileCtx = {
     lookups,
     datasets,
@@ -3575,7 +3584,7 @@ function makeCtx(top: VLSpec): CompileCtx {
     compositeDepth: 0,
     facetFields: [],
     dn: (i) => `${dataPrefix}_${i}`,
-    sn: (i) => `${sourcePrefix}_${i}`,
+    takeSource: () => `${sourcePrefix}_${sourceCount++}`,
     fresh: (base) => {
       let n = base
       while (userNames.has(n)) n = `${n}_`
@@ -7759,7 +7768,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // Preserve a declared source dataset name (see compileLayered) — hosts key
   // data overrides/changesets on it.
   const unitSource: Record<string, unknown> = isObject(spec.data) ? dataSource(spec.data, ctx.datasets) : {}
-  const unitSourceName = typeof unitSource.name === 'string' ? unitSource.name : ctx.sn(0)
+  const unitSourceName = typeof unitSource.name === 'string' ? unitSource.name : ctx.takeSource()
   unitSource.name = unitSourceName
   const pd = pipelineDatasets(data, unitSourceName, unitSourceName, ctx, 0)
   if (animation && pd.datasets.length === 0) {
