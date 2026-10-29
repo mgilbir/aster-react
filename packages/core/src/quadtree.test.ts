@@ -1,16 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { QuadTree, type Cell } from './quadtree.js'
+import { buildQuadTree, NO_CELL, type QuadTree } from './quadtree.js'
 
-interface P { x: number; y: number; name: string }
-const tree = (pts: Array<[number, number, string]>): QuadTree<P> =>
-  new QuadTree<P>(pts.map(([x, y, name]) => ({ x, y, name })), (p) => p.x, (p) => p.y)
+type Pt = [number, number, string]
+const names: string[] = []
+const tree = (pts: Pt[]): QuadTree => {
+  names.length = 0
+  names.push(...pts.map((p) => p[2]))
+  return buildQuadTree(pts, (p) => p[0], (p) => p[1])
+}
+const nameOf = (t: QuadTree, cell: number): string => (t.body[cell]! >= 0 ? names[t.body[cell]!]! : '*')
 /** The visit order as `name@x0,y0,x1,y1` (a branch is `*`). */
-const visits = (t: QuadTree<P>): string[] => {
+const visits = (t: QuadTree): string[] => {
   const out: string[] = []
-  t.walk((c, x0, y0, x1, y1) => { out.push(`${c.body ? c.body.name : '*'}@${x0},${y0},${x1},${y1}`) })
+  t.walk((c, x0, y0, x1, y1) => { out.push(`${nameOf(t, c)}@${x0},${y0},${x1},${y1}`) })
   return out
 }
-const chain = (c: Cell<P>): string[] => { const out: string[] = []; for (let l: Cell<P> | null = c; l; l = l.next) out.push(l.body!.name); return out }
+const chainOf = (t: QuadTree, cell: number): string[] => {
+  const out: string[] = []
+  for (let c = cell; c !== NO_CELL; c = t.chain[c]!) out.push(nameOf(t, c))
+  return out
+}
 
 describe('QuadTree', () => {
   it('starts at the integer corner of the lowest point and doubles to cover the highest', () => {
@@ -27,21 +36,34 @@ describe('QuadTree', () => {
   it('chains bodies on exactly the same point, the newest first, and skips children when asked', () => {
     const t = tree([[2, 2, 'first'], [2, 2, 'second'], [9, 9, 'far'], [2, 2, 'third']])
     const heads: string[] = []
-    t.walk((c) => { if (c.body) heads.push(chain(c).join('>')) })
+    t.walk((c) => { if (t.body[c]! >= 0) heads.push(chainOf(t, c).join('>')) })
     expect(heads).toEqual(['third>second>first', 'far'])
     const seen: string[] = []
-    t.walk((c) => { seen.push(c.body ? c.body.name : '*'); return !c.body }) // skip everything below the root
+    t.walk((c) => { seen.push(nameOf(t, c)); return t.body[c]! < 0 }) // skip everything below the root
     expect(seen).toEqual(['*'])
   })
 
-  it('splits close points down to where they separate, and visits a post-order from the leaves up', () => {
+  it('splits close points down to where they separate, and walks up from the leaves', () => {
     const t = tree([[1, 1, 'a'], [1.001, 1, 'b'], [20, 20, 'c']])
     const up: string[] = []
-    t.walkUp((c) => { up.push(c.body ? c.body.name : '*') })
+    t.walkUp((c) => { up.push(nameOf(t, c)) })
     expect(up[up.length - 1]).toBe('*')
     expect(up.filter((u) => u !== '*').sort()).toEqual(['a', 'b', 'c'])
     // every branch comes after the cells below it
-    expect(up.indexOf('a')).toBeLessThan(up.indexOf('*'))
+    const seenCells = new Set<number>()
+    t.walkUp((c) => {
+      if (t.body[c]! < 0) for (let k = 0; k < 4; ++k) { const q = t.quad[c * 4 + k]!; if (q !== NO_CELL) expect(seenCells.has(q)).toBe(true) }
+      seenCells.add(c)
+    })
+    expect(seenCells.size).toBe(t.size)
+  })
+
+  it('grows its cell storage past the first guess', () => {
+    const pts: Pt[] = Array.from({ length: 300 }, (_, i) => [(i * 37) % 101 + (i % 7) / 8, (i * 53) % 97 + (i % 5) / 8, 'p' + i])
+    const t = tree(pts)
+    let leaves = 0
+    t.walk((c) => { if (t.body[c]! >= 0) leaves += chainOf(t, c).length })
+    expect(leaves).toBe(300)
   })
 
   it('leaves out a body whose point is not a finite number', () => {
@@ -52,8 +74,8 @@ describe('QuadTree', () => {
 
   it('terminates on points so large that the root square overflows', () => {
     const t = tree([[1.7e308, 0, 'a'], [1.6e308, 0, 'b']])
-    const names: string[] = []
-    t.walk((c) => { if (c.body) names.push(...chain(c)) })
-    expect(names.sort()).toEqual(['a', 'b'])
+    const found: string[] = []
+    t.walk((c) => { if (t.body[c]! >= 0) found.push(...chainOf(t, c)) })
+    expect(found.sort()).toEqual(['a', 'b'])
   })
 })

@@ -162,13 +162,6 @@ const roundBox = (node: HierNode): void => {
   node.y1 = Math.round(node.y1!)
 }
 
-/** A rectangle, collapsed to its middle along an axis on which it came out inverted. */
-function collapseInverted(x0: number, y0: number, x1: number, y1: number): [number, number, number, number] {
-  if (x1 < x0) x0 = x1 = (x0 + x1) / 2
-  if (y1 < y0) y0 = y1 = (y0 + y1) / 2
-  return [x0, y0, x1, y1]
-}
-
 /** The `partition` transform: one level per band of the height, a node's children side by side beneath it. */
 export function partitionRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext, sourceName?: string): Row[] {
   return layout('Partition', ['x0', 'y0', 'x1', 'y1', 'depth', 'children'], rows, t, ctx, sourceName, (root) => {
@@ -181,7 +174,13 @@ export function partitionRows(rows: Row[], t: Record<string, unknown>, ctx: Tran
     root.y1 = dy / levels
     walkPreOrder(root, (node) => {
       if (node.children.length) tileColumns(node, node.x0!, dy * (node.depth + 1) / levels, node.x1!, dy * (node.depth + 2) / levels)
-      const [x0, y0, x1, y1] = collapseInverted(node.x0!, node.y0!, node.x1! - padding, node.y1! - padding)
+      // the box less the padding; on an axis where that comes out inverted, its middle
+      let x0 = node.x0!
+      let y0 = node.y0!
+      let x1 = node.x1! - padding
+      let y1 = node.y1! - padding
+      if (x1 < x0) x0 = x1 = (x0 + x1) / 2
+      if (y1 < y0) y0 = y1 = (y0 + y1) / 2
       node.x0 = x0
       node.y0 = y0
       node.x1 = x1
@@ -225,15 +224,26 @@ export function treemapRows(rows: Row[], t: Record<string, unknown>, ctx: Transf
     // the gap a node keeps from its own box, by depth: half the inner padding, set when its parent was laid out
     const gapAtDepth: number[] = [0]
     walkPreOrder(root, (node) => {
+      // the box less the gap kept from its parent; on an axis where that comes out inverted, its middle
       const gap = gapAtDepth[node.depth]!
-      let [x0, y0, x1, y1] = collapseInverted(node.x0! + gap, node.y0! + gap, node.x1! - gap, node.y1! - gap)
+      let x0 = node.x0! + gap
+      let y0 = node.y0! + gap
+      let x1 = node.x1! - gap
+      let y1 = node.y1! - gap
+      if (x1 < x0) x0 = x1 = (x0 + x1) / 2
+      if (y1 < y0) y0 = y1 = (y0 + y1) / 2
       node.x0 = x0
       node.y0 = y0
       node.x1 = x1
       node.y1 = y1
       if (!node.children.length) return
       const childGap = gapAtDepth[node.depth + 1] = inner / 2
-      ;[x0, y0, x1, y1] = collapseInverted(x0 + (left - childGap), y0 + (top - childGap), x1 - (right - childGap), y1 - (bottom - childGap))
+      x0 += left - childGap
+      y0 += top - childGap
+      x1 -= right - childGap
+      y1 -= bottom - childGap
+      if (x1 < x0) x0 = x1 = (x0 + x1) / 2
+      if (y1 < y0) y0 = y1 = (y0 + y1) / 2
       tile(node, x0, y0, x1, y1)
     })
     if (round) walkPreOrder(root, roundBox)

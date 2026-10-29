@@ -15,7 +15,7 @@ import type { Row, TransformContext } from './transform.js'
 import { compileExprTransform } from './transform.js'
 import { meterTick } from './limits.js'
 import { layoutRandom } from './layout-random.js'
-import { QuadTree, type Cell } from './quadtree.js'
+import { buildQuadTree, NO_CELL } from './quadtree.js'
 
 type Node = Row & { index?: number; x: number; y: number; vx: number; vy: number; fx?: number | null; fy?: number | null }
 type Random = () => number
@@ -63,6 +63,7 @@ class CollideForce implements Force {
   private nodes: Node[] = []
   private random: Random = Math.random
   private radii = new Float64Array(0)
+  private cellRadius = new Float64Array(0)
   constructor(
     private readonly radius: Measure<Node>,
     private readonly strength: number,
@@ -80,43 +81,57 @@ class CollideForce implements Force {
     const { nodes, radii, random, strength } = this
     const n = nodes.length
     for (let k = 0; k < this.iterations; ++k) {
-      const tree = new QuadTree<Node>(nodes, (d) => d.x + d.vx, (d) => d.y + d.vy)
+      const tree = buildQuadTree(nodes, (d) => d.x + d.vx, (d) => d.y + d.vy)
+      const { body, quad } = tree
+      if (this.cellRadius.length < tree.size) this.cellRadius = new Float64Array(tree.size)
+      const cellRadius = this.cellRadius
       // a branch's radius is its largest; a leaf's is its head body's (bodies chained behind it are not looked at)
       tree.walkUp((cell) => {
-        if (cell.body) { cell.radius = radii[cell.body.index!]!; return }
-        cell.radius = 0
-        for (const q of cell.quads!) if (q && q.radius > cell.radius) cell.radius = q.radius
+        if (body[cell]! >= 0) { cellRadius[cell] = radii[nodes[body[cell]!]!.index!]!; return }
+        let largest = 0
+        for (let q = 0; q < 4; ++q) {
+          const c = quad[cell * 4 + q]!
+          if (c !== NO_CELL && cellRadius[c]! > largest) largest = cellRadius[c]!
+        }
+        cellRadius[cell] = largest
       })
-      for (let i = 0; i < n; ++i) {
-        const node = nodes[i]!
-        const ri = radii[node.index!]!
-        const ri2 = ri * ri
-        const xi = node.x + node.vx
-        const yi = node.y + node.vy
-        tree.walk((cell, x0, y0, x1, y1) => {
-          const other = cell.body
-          const rj = cell.radius
-          let r = ri + rj
-          if (other) {
-            if (other.index! > node.index!) {
-              let x = xi - other.x - other.vx
-              let y = yi - other.y - other.vy
-              let l = x * x + y * y
-              if (l < r * r) {
-                if (x === 0) { x = jiggle(random); l += x * x }
-                if (y === 0) { y = jiggle(random); l += y * y }
-                l = (r - (l = Math.sqrt(l))) / l * strength
-                let rj2 = rj
-                node.vx += (x *= l) * (r = (rj2 *= rj2) / (ri2 + rj2))
-                node.vy += (y *= l) * r
-                other.vx -= x * (r = 1 - r)
-                other.vy -= y * r
-              }
+      // the body whose collisions are being looked for, and its radius and next position
+      let node = nodes[0]!
+      let ri = 0
+      let ri2 = 0
+      let xi = 0
+      let yi = 0
+      const visit = (cell: number, x0: number, y0: number, x1: number, y1: number): boolean | void => {
+        const rj = cellRadius[cell]!
+        let r = ri + rj
+        if (body[cell]! >= 0) {
+          const other = nodes[body[cell]!]!
+          if (other.index! > node.index!) {
+            let x = xi - other.x - other.vx
+            let y = yi - other.y - other.vy
+            let l = x * x + y * y
+            if (l < r * r) {
+              if (x === 0) { x = jiggle(random); l += x * x }
+              if (y === 0) { y = jiggle(random); l += y * y }
+              l = (r - (l = Math.sqrt(l))) / l * strength
+              let rj2 = rj
+              node.vx += (x *= l) * (r = (rj2 *= rj2) / (ri2 + rj2))
+              node.vy += (y *= l) * r
+              other.vx -= x * (r = 1 - r)
+              other.vy -= y * r
             }
-            return
           }
-          return x0 > xi + r || x1 < xi - r || y0 > yi + r || y1 < yi - r
-        })
+          return
+        }
+        return x0 > xi + r || x1 < xi - r || y0 > yi + r || y1 < yi - r
+      }
+      for (let i = 0; i < n; ++i) {
+        node = nodes[i]!
+        ri = radii[node.index!]!
+        ri2 = ri * ri
+        xi = node.x + node.vx
+        yi = node.y + node.vy
+        tree.walk(visit)
       }
       meterTick('force', n)
     }
@@ -130,6 +145,9 @@ class ManyBodyForce implements Force {
   private nodes: Node[] = []
   private random: Random = Math.random
   private strengths = new Float64Array(0)
+  private mass = new Float64Array(0)
+  private cx = new Float64Array(0)
+  private cy = new Float64Array(0)
   constructor(
     private readonly strength: Measure<Node>,
     private readonly distanceMin2: number,
@@ -147,62 +165,74 @@ class ManyBodyForce implements Force {
   apply(alpha: number): void {
     const { nodes, strengths, random, distanceMin2, distanceMax2, theta2 } = this
     const n = nodes.length
-    const tree = new QuadTree<Node>(nodes, (d) => d.x, (d) => d.y)
+    const tree = buildQuadTree(nodes, (d) => d.x, (d) => d.y)
+    const { body, chain, quad } = tree
+    if (this.mass.length < tree.size) {
+      this.mass = new Float64Array(tree.size)
+      this.cx = new Float64Array(tree.size)
+      this.cy = new Float64Array(tree.size)
+    }
+    const { mass, cx, cy } = this
     // a cell's mass is the sum of the strengths below it, placed at the strength-magnitude weighted mean of its parts
     tree.walkUp((cell) => {
-      let mass = 0
-      if (cell.quads) {
+      let sum = 0
+      if (body[cell]! < 0) {
         let weight = 0
         let x = 0
         let y = 0
-        for (const q of cell.quads) {
+        for (let k = 0; k < 4; ++k) {
+          const q = quad[cell * 4 + k]!
           let c: number
-          if (q && (c = Math.abs(q.mass))) { mass += q.mass; weight += c; x += c * q.cx; y += c * q.cy }
+          if (q !== NO_CELL && (c = Math.abs(mass[q]!))) { sum += mass[q]!; weight += c; x += c * cx[q]!; y += c * cy[q]! }
         }
-        cell.cx = x / weight
-        cell.cy = y / weight
+        cx[cell] = x / weight
+        cy[cell] = y / weight
       } else {
-        cell.cx = cell.body!.x
-        cell.cy = cell.body!.y
-        let leaf: Cell<Node> | null = cell
-        do mass += strengths[leaf.body!.index!]!
-        while (leaf = leaf.next)
+        const head = nodes[body[cell]!]!
+        cx[cell] = head.x
+        cy[cell] = head.y
+        let leaf = cell
+        do sum += strengths[nodes[body[leaf]!]!.index!]!
+        while ((leaf = chain[leaf]!) !== NO_CELL)
       }
-      cell.mass = mass
+      mass[cell] = sum
     })
-    for (let i = 0; i < n; ++i) {
-      const node = nodes[i]!
-      tree.walk((cell, x0, _y0, x1) => {
-        if (!cell.mass) return true
-        let x = cell.cx - node.x
-        let y = cell.cy - node.y
-        let w = x1 - x0
-        let l = x * x + y * y
-        // far enough: the whole cell acts as one body
-        if (w * w / theta2 < l) {
-          if (l < distanceMax2) {
-            if (x === 0) { x = jiggle(random); l += x * x }
-            if (y === 0) { y = jiggle(random); l += y * y }
-            if (l < distanceMin2) l = Math.sqrt(distanceMin2 * l)
-            node.vx += x * cell.mass * alpha / l
-            node.vy += y * cell.mass * alpha / l
-          }
-          return true
-        }
-        if (cell.quads || l >= distanceMax2) return
-        // a leaf close by: each body chained there acts on the node from the leaf's head position
-        if (cell.body !== node || cell.next) {
+    let node = nodes[0]!
+    const visit = (cell: number, x0: number, _y0: number, x1: number): boolean | void => {
+      const m = mass[cell]!
+      if (!m) return true
+      let x = cx[cell]! - node.x
+      let y = cy[cell]! - node.y
+      let w = x1 - x0
+      let l = x * x + y * y
+      // far enough: the whole cell acts as one body
+      if (w * w / theta2 < l) {
+        if (l < distanceMax2) {
           if (x === 0) { x = jiggle(random); l += x * x }
           if (y === 0) { y = jiggle(random); l += y * y }
           if (l < distanceMin2) l = Math.sqrt(distanceMin2 * l)
+          node.vx += x * m * alpha / l
+          node.vy += y * m * alpha / l
         }
-        let leaf: Cell<Node> | null = cell
-        do if (leaf.body !== node) {
-          w = strengths[leaf.body!.index!]! * alpha / l
-          node.vx += x * w
-          node.vy += y * w
-        } while (leaf = leaf.next)
-      })
+        return true
+      }
+      if (body[cell]! < 0 || l >= distanceMax2) return
+      // a leaf close by: each body chained there acts on the node from the leaf's head position
+      if (nodes[body[cell]!] !== node || chain[cell] !== NO_CELL) {
+        if (x === 0) { x = jiggle(random); l += x * x }
+        if (y === 0) { y = jiggle(random); l += y * y }
+        if (l < distanceMin2) l = Math.sqrt(distanceMin2 * l)
+      }
+      let leaf = cell
+      do if (nodes[body[leaf]!] !== node) {
+        w = strengths[nodes[body[leaf]!]!.index!]! * alpha / l
+        node.vx += x * w
+        node.vy += y * w
+      } while ((leaf = chain[leaf]!) !== NO_CELL)
+    }
+    for (let i = 0; i < n; ++i) {
+      node = nodes[i]!
+      tree.walk(visit)
     }
     meterTick('force', n)
   }
