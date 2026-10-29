@@ -21,6 +21,10 @@
  * - A value is stored when it differs (`!==`) from the current one, or when the
  *   entry says `force`; a handler returning a fresh array/object always counts
  *   as a change, like vega's operator `set`.
+ * - What the signals hold after a delivery is decided by vega-dataflow's run loop (signal-dataflow.ts):
+ *   operators are ranked, each is evaluated at most once per stamp, a signal an event handler set is not
+ *   re-evaluated but pulses its dependents, and a `{signal}`-source handler is an operator that follows its
+ *   source and pulses only when it computes something other than last time (or `force`).
  * - An error while a native event is processed (a filter or update expression
  *   throwing) is reported to the logger and abandons the rest of THAT event's
  *   delivery; updates already applied stand, and the loop carries on. Selector

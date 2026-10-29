@@ -42,6 +42,8 @@ from the pinned upstream package, implemented behind the same internal API, repl
 | `vega-transforms`, `vega-statistics`, `vega-hierarchy`, `vega-geo`, `vega-regression`, `vega-label`, `delaunator`/`d3-delaunay` | `src/transform*.ts` |
 | `vega-scenegraph` bounds and SVG path machinery | `src/bounds.ts`, `src/svg-path.ts`, `src/render.ts` |
 | `vega-view` layout, `vega-event-selector`, `vega-runtime` signal loop | `src/trellis.ts`, `src/event-selector.ts`, `src/signals.ts`, `src/runtime.ts` |
+| `vega-dataflow` run loop (ranks, stamps, `skip`, `modified`) for the event-driven signals | `src/signal-dataflow.ts` |
+| `vega-wordcloud`, `d3-cloud` | `src/wordcloud.ts` |
 
 Licences of everything ported: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
@@ -85,8 +87,8 @@ Each item is something the code or the gates show today; none is a plan that has
   `timeUnit.maxbins`, `scale: null`, some composition nestings, horizontal boxplots, argmin/argmax transform ops, ...).
 - **Signals sweep.** Cases where real Vega's second render differs from its own fresh render (the `retained`
   status) are a documented deviation, not a fix; the gate has a ceiling that can only be lowered.
-- **Word clouds.** `wordcloud` is a deterministic stand-in that mirrors d3-cloud's structure and the
-  headless text estimate; it does not rasterize glyphs.
+- **Word clouds.** `wordcloud` is vega-wordcloud / d3-cloud, drawn on the host's canvas as vega does; without a host
+  canvas (Node) the words are boxes of their measured width, a cloud no browser draws.
 - **Known interaction limits.** A zoomed stream-fed chart keeps the last unzoomed base extent until the view is
   reset; pan/zoom picks the first continuous scale per orientation in the root scope only
   ([INTERACTION.md](INTERACTION.md)).

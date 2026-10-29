@@ -190,7 +190,7 @@ canvas renderer, interaction and accessibility tree as `<Chart>`. Measurements a
   [packages/vl/README.md](packages/vl/README.md).
 - **Signals**: a signal written into a running chart renders the fresh result for the new signals; real Vega keeps some
   state from its first run (the `retained` cases, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#deviations-from-vega)).
-- **Word clouds**: `wordcloud` is a deterministic stand-in that mirrors d3-cloud's structure; it does not rasterize glyphs.
+- **Word clouds**: `wordcloud` is vega-wordcloud / d3-cloud, and draws its sprites on the host's canvas as vega does, so a browser lays out the cloud vega lays out. Where the host has no canvas (Node) vega cannot lay one out; the words are then boxes of their measured width, which is deterministic and not a browser's.
 - **Streaming transport**: `createChartStream` and the hooks give a bounded queue, policies and explicit pulses; the host owns the
   network and decides when to flush.
 - **Transforms without an incremental fast path** (for example the global fitters `kde`, `regression`, `loess`) re-derive

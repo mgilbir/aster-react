@@ -3,6 +3,19 @@
 Generated from a run of `pnpm conformance:gallery` at the commit that introduced the gate, by `scripts/gallery-triage.mts`
 (per-spec data: `triage.json`). **No engine bug is fixed in the branch that added this**; this is the map for splitting the fixes.
 
+## Update: the last failures (branch fix/gallery-last)
+
+Gate after: static Vega 89 / 93 (4 unverifiable: their oracle needs a canvas Node lacks), Vega-Lite 627; react Vega 93, Vega-Lite 627
+(swap 223 / 223).
+
+* `vega/pacman` (react): the signal event loop was a fixed-point evaluator; vega runs a ranked dataflow (each operator at most once per
+  stamp, a handler assignment that does not pulse leaves its dependents as they were, `modify` a run of its own). `signals.ts` now runs
+  `signal-dataflow.ts`, a port of vega-dataflow's run loop; differential: `signal-dataflow-vs-vega.test.ts`.
+* `vega/word-cloud` (react): `wordcloud` is vega-wordcloud / d3-cloud now, its sprites drawn on the host's canvas as vega's are;
+  differential: `wordcloud-vs-vega.test.ts`.
+* `vega/time-units` and the other `timeoutMs 10000 exceeded loading data/...` errors under load: the harness, not the engine
+  (see the README: the data is preloaded into the page).
+
 ## Update: the remaining real failures (branch fix/gallery-remaining)
 
 Gate after: static Vega 84 / 93, Vega-Lite 617 / 627; react Vega 82, Vega-Lite 615 (swap 223 / 223). Closed, with the cause:
