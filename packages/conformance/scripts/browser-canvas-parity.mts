@@ -145,6 +145,37 @@ for (const [name, shape] of CUSTOM_SHAPES) {
     },
   })
 }
+// A `heatmap` draws a raster grid into a canvas that the image mark then shows (as a dataset field and as a mark transform). They
+// are not corpus specs: vega in Node has no canvas to draw them into, so only a browser can judge them; the SVG side (the href)
+// is the gallery gate's (`vega/density-heatmaps`, `vega/contour-plot`).
+{
+  const points = Array.from({ length: 90 }, (_, i) => {
+    const g = i % 3
+    const a = (i * 2.399963) % (2 * Math.PI)
+    const r = 4 + ((i * 7) % 11)
+    return { g: ['a', 'b', 'c'][g], x: 30 + 25 * g + r * Math.cos(a), y: 25 + 8 * g + r * Math.sin(a) }
+  })
+  const kde = { type: 'kde2d', groupby: ['g'], size: [90, 60], x: { expr: 'datum.x' }, y: { expr: 'datum.y' }, bandwidth: [6, 6], cellSize: 2, counts: true }
+  const scales = [{ name: 'c', type: 'ordinal', domain: ['a', 'b', 'c'], range: ['red', 'green', 'blue'] }]
+  const box = { x: { value: 0 }, y: { value: 0 }, width: { value: 90 }, height: { value: 60 }, aspect: { value: false } }
+  const base = { $schema: 'https://vega.github.io/schema/vega/v6.json', width: 90, height: 60, padding: 5, autosize: 'none', background: 'white' }
+  synthetic.push({
+    name: 'canvas-heatmap-dataset',
+    spec: {
+      ...base, scales,
+      data: [{ name: 'pts', values: points }, { name: 'hm', source: 'pts', transform: [kde, { type: 'heatmap', field: 'grid', color: { expr: "scale('c', datum.g)" }, resolve: 'shared' }] }],
+      marks: [{ type: 'image', from: { data: 'hm' }, encode: { update: { ...box, image: { field: 'image' }, smooth: { value: false } } } }],
+    },
+  })
+  synthetic.push({
+    name: 'canvas-heatmap-mark',
+    spec: {
+      ...base, scales,
+      data: [{ name: 'pts', values: points }, { name: 'density', source: 'pts', transform: [kde] }],
+      marks: [{ type: 'image', from: { data: 'density' }, encode: { update: box }, transform: [{ type: 'heatmap', field: 'datum.grid', color: { expr: 'rgb(255 * datum.$value / datum.$max, 0, 120)' } }] }],
+    },
+  })
+}
 const all = [...loadCorpus(), ...synthetic].filter((e) => !FILTER || e.name.includes(FILTER))
 const entries = all.filter((e) => !SKIP.has(e.name)).slice(0, LIMIT || undefined)
 const skippedNames = all.filter((e) => SKIP.has(e.name)).map((e) => e.name)

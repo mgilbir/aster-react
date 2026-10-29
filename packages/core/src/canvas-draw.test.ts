@@ -185,3 +185,21 @@ describe('shapes follow vega markItemPath / path / image', () => {
     expect(a.args[2]).toBeCloseTo(4) // sqrt(64) / 2
   })
 })
+
+describe('an image mark whose bitmap holds its own pixels (a heatmap\'s)', () => {
+  it('is drawn from the canvas it keeps them in, at its natural size when the item has none', () => {
+    const { ctx, log } = spy()
+    const source = { canvas: true }
+    const bitmap = { width: 40, height: 20, complete: true, toCanvasSource: () => source }
+    renderSceneToCanvas(scene([mark('image', { x: 10, y: 20, image: bitmap })]), ctx)
+    const d = log.find((e) => e.op === 'drawImage')!
+    expect(d.args[0]).toBe(source)
+    expect(d.args.slice(1)).toEqual([10, 20, 40, 20])
+  })
+  it('is drawn as it is where the host has no canvas to keep them in', () => {
+    const { ctx, log } = spy()
+    const bitmap = { width: 40, height: 20, toCanvasSource: () => null }
+    renderSceneToCanvas(scene([mark('image', { x: 0, y: 0, width: 80, height: 40, aspect: false, image: bitmap })]), ctx)
+    expect(log.find((e) => e.op === 'drawImage')!.args[0]).toBe(bitmap)
+  })
+})

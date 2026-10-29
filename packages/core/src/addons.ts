@@ -27,7 +27,7 @@ export type AddonName = 'transforms' | 'geo' | 'load'
 export const TRANSFORMS_ADDON_TYPES: readonly string[] = [
   'kde', 'density', 'quantile', 'regression', 'loess', 'pack', 'partition', 'treemap', 'wordcloud', 'voronoi',
   'pie', 'cross', 'countpattern', 'dotbin', 'geopoint', 'geojson', 'linkpath',
-  'tree', 'treelinks', 'force', 'kde2d', 'isocontour', 'geopath', 'crossfilter', 'resolvefilter', 'label',
+  'tree', 'treelinks', 'force', 'kde2d', 'isocontour', 'heatmap', 'geopath', 'crossfilter', 'resolvefilter', 'label',
 ]
 /** The expression functions the add-ons register, with the add-on of each (see `addon-functions.ts`). */
 export { ADDON_FUNCTIONS }

@@ -29,6 +29,7 @@
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { Bounds, boundText } from './bounds.js'
+import { imageBox } from './image-box.js'
 import { parsePathData, tracePath, type PathSink } from './path-data.js'
 import { SYMBOL_DEFAULT_SIZE, minOf, maxOf } from './util.js'
 import { arcPath, computeAreaPath, computeLinePath, isInert, rectItemPath, symbolPath, trailPath } from './render.js'
@@ -577,9 +578,8 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       }
       case 'image': {
         if (item.x == null || item.y == null) return
-        const w = (item.width as number | undefined) ?? 0
-        const h = (item.height as number | undefined) ?? 0
-        entries.push({ item, marktype, kind: 'band', x1: tx + item.x, y1: ty + item.y, x2: tx + item.x + w, y2: ty + item.y + h })
+        const b = imageBox(item)
+        entries.push({ item, marktype, kind: 'band', x1: tx + b.x, y1: ty + b.y, x2: tx + b.x + b.w, y2: ty + b.y + b.h })
         return
       }
       default: {

@@ -373,3 +373,12 @@ These are suggestions (a judgement, not measured defaults). Public dashboard: 10
 `maxGeneratedRows: 500_000`. For an unknown spec on a server use smaller numbers
 (10k rows, 250 ms), a `loadSpecData` allowlist, and a **killable worker** for the
 render.
+
+## The `heatmap` image
+
+The `heatmap` transform (`@aster/core/transforms`) draws a raster grid into a bitmap that an image mark shows (`item.image`). vega draws it into a
+`<canvas>`, which Node does not have: there `heatmap` throws. Here the bitmap holds its own pixels, so the transform and the SVG / canvas
+renderers also run where there is no canvas (Node, a worker). The image's `href` is the platform canvas' `toDataURL()` when the document
+has a canvas (the PNG a browser makes is byte for byte vega's), and otherwise a PNG written by the engine: valid, but uncompressed
+(4 bytes per grid cell, base64), and without the premultiplied-alpha rounding a canvas applies to translucent pixels, so a
+server-rendered `href` is not equal to a browser's for those. An explicit superset of vega, not a conformance pass.

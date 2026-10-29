@@ -3729,7 +3729,7 @@ function reusablePulse(
 }
 
 /** A mark `transform` vega runs on the encoded items (see evaluateMarkItems). */
-const ITEM_TRANSFORMS: ReadonlySet<string> = new Set(['voronoi', 'lookup', 'linkpath', 'force', 'geopath', 'label'])
+const ITEM_TRANSFORMS: ReadonlySet<string> = new Set(['voronoi', 'lookup', 'linkpath', 'force', 'geopath', 'label', 'heatmap'])
 function isItemTransform(t: CompiledTransform): boolean {
   return ITEM_TRANSFORMS.has(String(t.type))
 }

@@ -12,6 +12,7 @@ import { itemTextWidth } from './text-metrics.js'
 import { ClipCollector, gradientRef, isGradientPaint, type ClipDef } from './svg-defs.js'
 import { customSymbolPathData } from './svg-path.js'
 import { sanitizeHref } from './url-policy.js'
+import { imageBox, imageHref, itemImage } from './image-box.js'
 import type { ScaleSnapshots } from './guide-caption.js'
 export { ClipCollector, type ClipDef }
 import {
@@ -979,7 +980,7 @@ function renderImages(group: SceneGroup, open: string): string {
   let out = open
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
-    if (it.url == null || it.x == null || it.y == null) continue
+    if ((it.url == null && itemImage(it) == null) || it.x == null || it.y == null) continue
     w.s = ''
     imageAttrs(it, w)
     out += links ? withLink(it, `<image${w.s}/>`) : `<image${w.s}/>`
@@ -996,17 +997,7 @@ function renderImages(group: SceneGroup, open: string): string {
 const IMAGE_PIXELATED = ['image-rendering: optimizeSpeed;', 'image-rendering: pixelated;'] as const
 
 export function imageDesc(it: SceneItem): { x: number; y: number; w: number; h: number; smooth: boolean } {
-  const w = it.width ?? 0
-  const h = it.height ?? 0
-  const align = it.align
-  const baseline = it.baseline
-  return {
-    x: (it.x || 0) - (align === 'center' ? w / 2 : align === 'right' ? w : 0),
-    y: (it.y || 0) - (baseline === 'middle' ? h / 2 : baseline === 'bottom' ? h : 0),
-    w,
-    h,
-    smooth: (it as Record<string, unknown>).smooth !== false,
-  }
+  return { ...imageBox(it), smooth: (it as Record<string, unknown>).smooth !== false }
 }
 
 function renderArcs(group: SceneGroup, open: string): string {
@@ -1690,7 +1681,8 @@ export function imageAttrs(it: SceneItem, w: AttrSink): void {
   const d = imageDesc(it)
   itemDatumAttr(it, w)
   ariaItemAttrs(it, w, 'image')
-  w.v('xlink:href', it.url)
+  const image = itemImage(it)
+  w.v('xlink:href', image ? imageHref(image) : it.url)
   w.t('transform', `translate(${num(d.x)},${num(d.y)})`)
   w.n('width', d.w)
   w.n('height', d.h)

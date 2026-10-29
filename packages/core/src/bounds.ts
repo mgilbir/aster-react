@@ -12,6 +12,7 @@ import type { SceneGroup, SceneItem, SceneNode } from './types.js'
 import { computeAreaPath, computeLinePath, symbolPath, symbolPathExact, trailPath } from './render.js'
 import { itemTextWidth } from './text-metrics.js'
 import { SHAPE_BOUNDS } from './registry.js'
+import { imageBox } from './image-box.js'
 
 // ---------------------------------------------------------------------------
 // Bounds — exact port of vega-scenegraph Bounds.js
@@ -355,9 +356,8 @@ export function boundRule(bounds: Bounds, item: SceneItem): Bounds {
 
 /** marks/image.js — images bound as their rect. */
 function boundImage(bounds: Bounds, item: SceneItem): Bounds {
-  const x = item.x || 0
-  const y = item.y || 0
-  return boundStroke(bounds.set(x, y, (x + (item.width ?? 0)) || 0, (y + (item.height ?? 0)) || 0), item)
+  const { x, y, w, h } = imageBox(item)
+  return boundStroke(bounds.set(x, y, x + w, y + h), item)
 }
 
 // ---------------------------------------------------------------------------
