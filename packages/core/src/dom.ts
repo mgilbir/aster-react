@@ -578,7 +578,6 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
     case 'geoshape': {
       const out: DomDesc[] = []
       for (const it of items) {
-        if (!it.path) continue
         out.push(cachedDesc(it, () => linked(it, { tag: 'path', attrs: pairs((w) => pathItemAttrs(it, w, type === 'geoshape' ? 'shape' : type)), clean: isClean(it) })))
       }
       return out

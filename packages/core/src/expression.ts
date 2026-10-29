@@ -320,8 +320,9 @@ export function registerExpressionFunction(name: string, fn: (...args: never[]) 
 }
 
 function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unknown> {
+  // (vega keeps a view's projections among its scales: `scale('projection', [lon, lat])` is the projected point)
   const scaleObject = (name: unknown): Record<string, unknown> | undefined =>
-    runtime.scale(String(name)) as unknown as Record<string, unknown> | undefined
+    (runtime.scale(String(name)) ?? runtime.projection?.(String(name))) as unknown as Record<string, unknown> | undefined
   return {
     // type checking
     isValid,
@@ -405,7 +406,8 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     // root scope's group is the root of every scene item, so any item is in scope (and nothing -- no
     // item under the pointer -- is not); a group scope (`runtime.inScope`) checks the item's group chain.
     inScope: (item: unknown) => runtime.inScope ? runtime.inScope(item) : item != null && typeof item === 'object',
-    span: (arr: unknown) => { const a = arr as number[]; return a[a.length - 1]! - a[0]! },
+    // (vega-util span: `array && (peek(array) - array[0]) || 0`, so a missing or empty array spans nothing)
+    span: (arr: unknown) => { const a = arr as number[] | null | undefined; return (a && (a[a.length - 1]! - a[0]!)) || 0 },
     pluck,
     // strings
     lower: (value: unknown) => String(value).toLowerCase(),
@@ -475,7 +477,7 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
       return count ? count : undefined
     },
     scale: function (this: unknown, name: string, value?: unknown) {
-      const scale = runtime.scale(name)
+      const scale = scaleObject(name) as ((v: unknown) => unknown) | undefined
       if (scale === undefined) return undefined
       return arguments.length > 1 ? scale(value) : scale
     },
@@ -487,7 +489,9 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     },
     domain: (name: string) => {
       const s = scaleObject(name)
-      return s && s.domain ? (s.domain as () => unknown[])() : []
+      // (a projection has no domain: vega's `s.domain()` throws)
+      if (s && typeof s.domain !== 'function') throw new TypeError('s.domain is not a function')
+      return s ? (s.domain as () => unknown[])() : []
     },
     range: (name: string) => {
       const s = scaleObject(name)

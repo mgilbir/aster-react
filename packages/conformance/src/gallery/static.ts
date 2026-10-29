@@ -62,7 +62,8 @@ export async function runStatic(g: GallerySpec): Promise<Outcome> {
   try {
     const ourVg = g.kind === 'vl' ? (compileOurs(JSON.parse(JSON.stringify(src))) as Record<string, unknown>) : src
     const loaded = await loadSpecData(JSON.parse(JSON.stringify(ourVg)) as never, { ...TRUSTED_LOAD_OPTIONS, fetch: fileFetch, baseURL: BASE_URL })
-    ourSvg = renderSpec(loaded as never) as string
+    // (the host's counterpart of the oracle loader's baseURL: relative image urls resolve against it)
+    ourSvg = renderSpec(loaded as never, { urlPolicy: { baseURL: BASE_URL } }) as string
     await settle()
     if (stray.length) throw new Error(stray[0])
   } catch (e) {

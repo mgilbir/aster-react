@@ -248,6 +248,11 @@ export interface CompiledSignalDef {
    * scope; the group declares no signal of its own.
    */
   push?: 'outer'
+  /**
+   * `react: false`: the signal is not re-evaluated when a signal it reads changes (vega-dataflow does not register it as a
+   * target of its parameters), which is how a cycle through a scale is broken (see `frozenReadsOf`).
+   */
+  react?: false
 }
 
 /**

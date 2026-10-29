@@ -31,6 +31,10 @@ export const BRUSH = '_brush'
 export const SCALE_TRIGGER = '_scale_trigger'
 export const TUPLE_FIELDS = '_tuple_fields'
 const VL_SELECTION_RESOLVE = 'vlSelectionResolve'
+const INIT = '_init'
+const CENTER = '_center'
+/** A timer signal that pulses a map's dataflow once the scenegraph exists (https://github.com/vega/vega/issues/3481). */
+export const GEO_INIT_TICK = 'geo_interval_init_tick'
 const TRANSLATE_ANCHOR = '_translate_anchor'
 const TRANSLATE_DELTA = '_translate_delta'
 const ZOOM_ANCHOR = '_zoom_anchor'
@@ -106,6 +110,8 @@ export interface SelProjection {
   field: string
   index: number
   channel?: string
+  /** a projection over `longitude` / `latitude` is on the view's `x` / `y`: the geographic channel it was asked for */
+  geoChannel?: string
   signals: { data?: string; visual?: string }
   hasLegend?: boolean
 }
@@ -145,6 +151,8 @@ export interface SelCmpt {
   scales?: SelProjection[]
   /** the unit is nested in a concat / facet / repeat view (see {@link SelUnit.nested}) */
   nested?: boolean
+  /** the unit has a projection: an interval selection brushes it by the marks it covers */
+  geo?: boolean
   on?: unknown
   [k: string]: unknown
 }
@@ -181,6 +189,10 @@ export interface SelUnit {
   /** `model.getSizeSignalRef(layout).signal` */
   sizeSignal(layout: 'width' | 'height'): string
   mark: string
+  /** `model.hasProjection`: the unit draws on a map */
+  hasProjection: boolean
+  /** `model.projectionName()`: the name of the projection the unit draws with (known once the projections are merged) */
+  projectionName(): string
   /** `model.component.mark[0].name` */
   firstMarkName: string
   /** a scale bound to the selection: its domain follows the selection (`selectionExtent`) */
@@ -269,7 +281,7 @@ export function parseUnitSelections(unit: SelUnit, defs: Obj[], config: unknown)
 
     const def_ = duplicate(def)
     parsePoint(cmpt)
-    parseInterval(unit, cmpt)
+    parseInterval(unit, cmpt, def_)
     parseProject(unit, cmpt, def_, selectionConfig)
     if (inputsDefined(cmpt)) disableDirectManipulation(cmpt, def_)
     if (scalesDefined(cmpt)) parseScales(unit, cmpt)
@@ -285,8 +297,16 @@ function parsePoint(_c: SelCmpt): void {
 }
 
 /** interval.ts parse: dragging the brush must not start a new brush. */
-function parseInterval(_unit: SelUnit, c: SelCmpt): void {
+function parseInterval(unit: SelUnit, c: SelCmpt, selDef: Obj): void {
   if (c.type !== 'interval') return
+  if (unit.hasProjection) {
+    // on a map the brush is over longitude and latitude (or the channels the initial value names), and is stored by `_vgsid_`
+    const def: Obj = { ...(isObj(selDef.select) ? selDef.select : {}) }
+    def.fields = [SELECTION_ID]
+    if (!def.encodings) def.encodings = selDef.value ? Object.keys(selDef.value as Obj) : ['longitude', 'latitude']
+    selDef.select = { type: 'interval', ...def }
+    c.geo = true
+  }
   if (c.translate && !scalesDefined(c)) {
     const filterExpr = `!event.item || event.item.mark.name !== ${stringValue(c.name + BRUSH)}`
     for (const evt of c.events ?? []) {
@@ -371,7 +391,14 @@ function parseProject(unit: SelUnit, c: SelCmpt, selDef: Obj, selectionConfig: R
       proj.items.push((parsed[field] = p))
       proj.hasField[field] = p
       proj.hasSelectionId = proj.hasSelectionId || field === SELECTION_ID
-      proj.hasChannel[channel] = p
+      if (isGeoPositionChannel(channel)) {
+        // (the signals are named after the geographic channel; the projection is on the view's x / y)
+        p.geoChannel = channel
+        p.channel = getPositionChannelFromLatLong(channel)
+        proj.hasChannel[p.channel] = p
+      } else {
+        proj.hasChannel[channel] = p
+      }
     }
   }
 
@@ -386,7 +413,7 @@ function parseProject(unit: SelUnit, c: SelCmpt, selDef: Obj, selectionConfig: R
 
   if (init) {
     // An initial value is either an object mapping projections to values, or a scalar value.
-    c.init = init.map((v) => proj.items.map((p) => (isObj(v) ? (v[p.channel as string] !== undefined ? v[p.channel as string] : v[p.field]) : v)))
+    c.init = init.map((v) => proj.items.map((p) => (isObj(v) ? (v[(p.geoChannel ?? p.channel) as string] !== undefined ? v[(p.geoChannel ?? p.channel) as string] : v[p.field]) : v)))
   }
   proj.timeUnits = Object.values(timeUnits)
 }
@@ -397,6 +424,10 @@ const SINGLE_DEF_UNIT_CHANNELS = new Set([
   'strokeDash', 'size', 'angle', 'shape', 'key', 'text', 'href', 'url', 'description', 'detail', 'order', 'tooltip', 'time',
 ])
 const isSingleDefUnitChannel = (k: string): boolean => SINGLE_DEF_UNIT_CHANNELS.has(k)
+
+/** channel.ts isGeoPositionChannel / getPositionChannelFromLatLong */
+const isGeoPositionChannel = (c: string): boolean => c === 'longitude' || c === 'latitude' || c === 'longitude2' || c === 'latitude2'
+const getPositionChannelFromLatLong = (c: string): string => ({ longitude: 'x', latitude: 'y', longitude2: 'x2', latitude2: 'y2' })[c] as string
 
 /** scales.ts parse */
 function parseScales(unit: SelUnit, c: SelCmpt): void {
@@ -720,9 +751,10 @@ function clearSignals(c: SelCmpt, signals: Signal[]): Signal[] {
 
 // interval.ts
 function channelSignals(unit: SelUnit, c: SelCmpt, proj: SelProjection, init: unknown): Signal[] {
+  const scaledInterval = !unit.hasProjection
   const channel = proj.channel as string
   const vname = proj.signals.visual as string
-  const scaleName = stringValue(unit.scaleName(channel))
+  const scaleName = stringValue(scaledInterval ? unit.scaleName(channel) : unit.projectionName())
   const scaled = (str: string | number): string => `scale(${scaleName}, ${str})`
 
   const size = unit.sizeSignal(channel === 'x' ? 'width' : 'height')
@@ -732,6 +764,13 @@ function channelSignals(unit: SelUnit, c: SelCmpt, proj: SelProjection, init: un
     { events: (evt.between as StreamDef[])[0], update: `[${coord}, ${coord}]` }, // brush start
     { events: evt, update: `[${vname}[0], clamp(${coord}, 0, ${size})]` }, // brush end
   ], [])
+
+  if (!scaledInterval) {
+    // on a map the visual extent starts from the projected initial value
+    const initIdx = channel === 'x' ? 0 : 1
+    const initSg = c.name + INIT
+    return [{ name: vname, ...(init ? { init: `[${initSg}[0][${initIdx}], ${initSg}[1][${initIdx}]]` } : { value: [] }), on: von }]
+  }
 
   const dname = proj.signals.data as string
   const hasScales = scalesDefined(c)
@@ -764,6 +803,8 @@ function intervalSignals(unit: SelUnit, c: SelCmpt, signals: Signal[]): Signal[]
   const init = c.init ? c.init[0]! : null
 
   for (const proj of channels) for (const s of channelSignals(unit, c, proj, init?.[proj.index])) signals.push(s)
+
+  if (unit.hasProjection) return geoIntervalSignals(unit, c, channels, init, signals)
 
   // Proxy scale reactions so that no infinite loop occurs when an interval selection filter touches the scale.
   if (!scalesDefined(c)) {
@@ -799,6 +840,55 @@ function intervalSignals(unit: SelUnit, c: SelCmpt, signals: Signal[]): Signal[]
           }],
         }
       : {}),
+  })
+}
+
+/** interval.ts signals, the branch of a unit with a projection: the tuples are the marks the brush covers, not a data extent. */
+function geoIntervalSignals(unit: SelUnit, c: SelCmpt, channels: SelProjection[], init: unknown[] | null, signals: Signal[]): Signal[] {
+  const name = c.name
+  const projectionName = unit.projectionName()
+  const projection = stringValue(projectionName)
+  const centerSg = projectionName + CENTER
+  const { x, y } = c.project.hasChannel
+  const xvname = x?.signals.visual
+  const yvname = y?.signals.visual
+  const xinit = (x ? init?.[x.index] : `${centerSg}[0]`) as unknown[] | string
+  const yinit = (y ? init?.[y.index] : `${centerSg}[1]`) as unknown[] | string
+  const bbox =
+    `[` +
+    `[${xvname ? `${xvname}[0]` : '0'}, ${yvname ? `${yvname}[0]` : '0'}],` +
+    `[${xvname ? `${xvname}[1]` : unit.sizeSignal('width')}, ` +
+    `${yvname ? `${yvname}[1]` : unit.sizeSignal('height')}]` +
+    `]`
+
+  if (init) {
+    signals.unshift({
+      name: name + INIT,
+      init:
+        `[scale(${projection}, [${x ? (xinit as unknown[])[0] : xinit}, ${y ? (yinit as unknown[])[0] : yinit}]), ` +
+        `scale(${projection}, [${x ? (xinit as unknown[])[1] : xinit}, ${y ? (yinit as unknown[])[1] : yinit}])]`,
+    })
+    if (!x || !y) {
+      // If initializing a uni-dimensional brush, use the center of the view to determine the other coord
+      if (!signals.find((sg) => sg.name === centerSg)) {
+        signals.unshift({ name: centerSg, update: `invert(${projection}, [${unit.sizeSignal('width')}/2, ${unit.sizeSignal('height')}/2])` })
+      }
+    }
+  }
+
+  const intersect = `intersect(${bbox}, {markname: ${stringValue(unit.getName('marks'))}}, unit.mark)`
+  const base = `{unit: ${unitNameOf(unit)}}`
+  const update = `vlSelectionTuples(${intersect}, ${base})`
+  const visualSignals = channels.map((proj) => proj.signals.visual)
+
+  return signals.concat({
+    name: name + TUPLE,
+    on: [
+      {
+        events: [...(visualSignals.length ? [{ signal: visualSignals.join(' || ') }] : []), ...(init ? [{ signal: GEO_INIT_TICK }] : [])],
+        update,
+      },
+    ],
   })
 }
 
@@ -986,6 +1076,7 @@ export function assembleTopLevelSelectionSignals(cmpts: Record<string, SelCmpt>,
     hasSelections = true
     // point: a timer selection's clock; then inputs, scales (multiview only), legends, clear
     if (c.type === 'point' && isTimerSelection(c)) signals = animationTopLevelSignals(signals) as Signal[]
+    if (c.type === 'interval' && c.geo && c.init) signals = geoIntervalTopLevelSignals(signals)
     if (inputsDefined(c)) signals = inputsTopLevelSignals(c, signals)
     if (scalesDefined(c)) signals = scalesTopLevelSignals(c, signals)
     if (legendsDefined(c)) signals = legendsTopLevelSignals(c, signals)
@@ -995,6 +1086,18 @@ export function assembleTopLevelSelectionSignals(cmpts: Record<string, SelCmpt>,
     signals.unshift({ name: 'unit', value: {}, on: [{ events: 'pointermove', update: 'isTuple(group()) ? group() : unit' }] })
   }
   return cleanupEmptyOn(signals)
+}
+
+/** interval.ts topLevelSignals: the map's brush is initialized once the scenegraph has been drawn, so a timer pulses the dataflow (once). */
+function geoIntervalTopLevelSignals(signals: Signal[]): Signal[] {
+  if (!signals.some((sg) => sg.name === GEO_INIT_TICK)) {
+    signals.unshift({
+      name: GEO_INIT_TICK,
+      value: null,
+      on: [{ events: 'timer{1}', update: `${GEO_INIT_TICK} === null ? {} : ${GEO_INIT_TICK}` }],
+    })
+  }
+  return signals
 }
 
 function cleanupEmptyOn(signals: Signal[]): Signal[] {
@@ -1123,9 +1226,11 @@ function nearestMarks(unit: SelUnit, c: SelCmpt, marks: Obj[]): Obj[] {
 
   let index = 0
   let exists = false
+  // (a view inside a facet names its marks `child_marks` only once the facet has embedded it: until then they are `marks`)
+  const named = marks.some((mark) => mark.name === unit.firstMarkName)
   marks.forEach((mark, i) => {
     const n = (mark.name as string | undefined) ?? ''
-    if (n === unit.firstMarkName) index = i
+    if (n === unit.firstMarkName || (!named && n === 'marks')) index = i
     else if (n.includes(VORONOI)) exists = true
   })
   if (!exists) marks.splice(index + 1, 0, cellDef)

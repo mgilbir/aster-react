@@ -87,6 +87,11 @@ import { fileURLToPath } from 'node:url'
 // abort, the view encode, the config legend layout, bounds traced for every symbol shape and rotated paths, the canvas gradient and
 // bezier arcs in the shared path module), canvas marginal 5.9, hit marginal 6.5, transforms marginal 23.7 (crossfilter), useChart 144.5,
 // Chart 181.7, SvgChart 162.4, SvgChart + interaction 176.3, Chart + VL 264.7. Ceilings are the measured value + 0.5.
+// The runtime work of fix/gallery-runtime-3, measured (kB gzip): core 138.1 (inside its ceiling: the react-false ranks, the passes of a
+// fit view, projections as scales and the label wiring, less the plain-tuple label that left transform.ts), transforms marginal 35.4
+// (+11.7: the `label` transform, vega-label's layout, plus the coverage-only 2D context it draws the marks to avoid into and the
+// drawing of each mark type onto it), useChart 145.2, Chart 182.8, SvgChart 163.4, SvgChart + interaction 177.4, Chart + VL 275.6.
+// (The react rows are the entry alone: it grew by under a kB; the add-on chunks that load on demand are reported beside them.)
 const BUDGETS = {
   '@aster/core': 138.2 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
@@ -95,14 +100,14 @@ const BUDGETS = {
   '+ @aster/core/signals': 8.3 * 1024,
   '+ @aster/core/load': 5.6 * 1024,
   '+ @aster/core/geo': 14.8 * 1024,
-  '+ @aster/core/transforms': 24.2 * 1024,
-  '@aster/react useChart': 144.8 * 1024,
-  '@aster/react Chart': 182.0 * 1024,
+  '+ @aster/core/transforms': 35.9 * 1024,
+  '@aster/react useChart': 145.7 * 1024,
+  '@aster/react Chart': 183.3 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 162.7 * 1024,
-  '@aster/react SvgChart + interaction': 176.7 * 1024,
+  '@aster/react SvgChart': 163.9 * 1024,
+  '@aster/react SvgChart + interaction': 177.9 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 270.8 * 1024,
+  '@aster/react Chart + VL': 279.1 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

@@ -16,6 +16,36 @@ text. Still open on the runtime side: a root `encode` with `x` / `y` (`vega/rada
 `crossfilter` transform, facet cell layout, the timer-driven `vega/donut-chart-labelled` on the React path, and the React-path-only
 differences (a `data-datum` attribute on every item of a chart with event streams, among them `vega/force-directed-layout`).
 
+## Update: runtime fixes (branch fix/gallery-runtime-3)
+
+Gate after: static Vega 82 / 93, Vega-Lite 601 / 627; react Vega 78, Vega-Lite 599 (swap 223 / 223). Closed, with the cause the
+earlier triage had wrong or not found:
+
+* `vl/point_constant_legend_domain`: a `react: false` signal sits in a cycle through a scale (`domain('color')` -> the scale whose domain
+  is the signal). vega-dataflow does not make it a target of the signal it reads, so when that signal is re-ranked past the scale
+  it runs first and reads its initial value: the ordinal domain is undefined and stays implicit (the marks fill it in, the legend
+  lists it). Fixed in `frozenReadsOf` (runtime).
+* `vl/geo_choropleth`, `vl/geo_repeat`, `vl/geo_trellis`, `vl/interactive_geo_facet_species`: not "first-pass items vega keeps". The
+  topology has 467 counties whose geometry is an empty MultiPolygon; vega draws their `<path>` without a `d`, the string and DOM
+  renderers skipped an item with no path.
+* `vl/scatter_image`: not "by design": vega's loader resolves a relative image url against its `baseURL`; the engine's counterpart
+  is the url policy's `baseURL` (now applied to images; the gallery harness hands it to the engine as it hands the base to vega's loader).
+* `vega/flight-passengers`: vega-encode's DataJoin keys axis items by `value`; the second pass of a `fit` view updates the items of the
+  ticks it shares with the first in place and appends the new ones (Sep and May of a padded time scale after Apr). Ported for the ticks,
+  labels and grid of axes (`retainGuideOrder`). Legends are not covered (no case found where it shows).
+* `vega/histogram-null-values`: the same two passes: the Scale operator keeps its scale, and `includeZero` reads the `bins` the first
+  pass left, so the second pass of a scale whose parameters changed leaves the zero out of its domain (`scales.ts` `pass`).
+* `vega/labeled-scatter-plot` (react path): the `label` transform is now vega-label's (`label.ts`, `label-draw.ts`, `raster.ts`); all
+  2260 labels are where vega's are in Chromium. Static path: vega in Node has no canvas, its `label` fails and leaves the labels at
+  `undefined`, so there is nothing to compare with (the placement is tested against vega-label itself in `label-vs-vega.test.ts`).
+* `scale('projection', ...)`: vega keeps projections among the scales. `vl/interactive_airport_crossfilter` and `vl/interactive_1d_geo_brush`
+  are equal to the oracle at runtime on vega-lite's own Vega; what keeps them failing is the compiler (`source_1` is the name of
+  two datasets of one concat: `ctx.nextSource` in `compile.ts` hands out `source_<n>` apart from the counter the other sources use;
+  a selection on `latitude` / `longitude` encodings is rejected).
+* Polar arcs (`arc_radial`, `arc_radial_histogram`, `arc_ordinal_theta`): equal at runtime on vega-lite's own Vega (and the family of
+  `polar-vl-runtime-vs-vega.test.ts`); the Vega `@aster/vl` emits is what differs.
+* `vl/geo_line`, `vl/geo_rule`, `vl/interactive_geo_earthquakes` already passed at the start of this branch.
+
 ## Update: runtime fixes (branch fix/gallery-runtime-2)
 
 Gate after: static Vega 80 / 93, Vega-Lite 476 / 627; react Vega 76 (77 when `vega/zoomable-circle-packing` is not over its 10 s load
@@ -310,3 +340,11 @@ the same Chromium). All 75 are resolved; the React path passes exactly the specs
 4 specs fail statically and pass through `<Chart>` (`vega/flight-passengers`, `top-k-plot`, `top-k-plot-with-others`,
 `vl/bar_axis_title_quoted`): not investigated. The first three pass when `<Chart>` is handed the spec's numeric `width` / `height` and the oracle runs in a host
 (the static path has neither); `bar_axis_title_quoted` passes in the browser (the two serialisations of the quote agree there; not investigated).
+
+## Known compiler gaps outside the gallery (lane 8, not yet fixed)
+These are not exercised by any gallery spec, so the gate cannot see them. They are recorded here so they are not lost.
+- **A discrete x with `sort: "descending"` plus `x2`.** The union of the domain needs the raw dataset's sort; the parity case was dropped rather than shipped failing.
+- **The `theta2` / `radius2` channels** (ranged polar arcs) are still refused with an explicit message. `vl/arc_params` uses `radius2` as a *mark def*, which is supported.
+- **`filled` on a text or trail mark.** The colour paint should flip, as vega-lite does. Found by the paint matrix in `vl-compiler-parity.test.ts`; 12 cases are left out of it.
+- **Field names of `geopoint` outputs** in a unit inside a concat or facet stay unprefixed (`x`, `layer_1_x`), where vega-lite writes `concat_0_x`. No render or expression differs.
+- **The merged bins-signal name** in one repeat-in-concat case is `layer_1` where vega-lite writes `layer_0`. No render differs.

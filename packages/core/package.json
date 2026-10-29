@@ -45,6 +45,7 @@
   },
   "sideEffects": [
     "./dist/guide-caption.js",
+    "./dist/label.js",
     "./dist/addon-geo.js",
     "./dist/addon-load.js",
     "./dist/addon-transforms.js",
