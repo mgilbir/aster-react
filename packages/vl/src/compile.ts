@@ -3689,7 +3689,7 @@ function makeCtx(top: VLSpec): CompileCtx {
     selectionLookups: new Map(),
   }
   ctx.selectionTest = selectionTester(ctx)
-  ctx.selectionTimeUnits = (param) => ctx.selections.get(varName(param))?.project.timeUnits ?? []
+  ctx.selectionTimeUnits = (param) => ctx.selections.get(varName(param))?.fields.timeUnits ?? []
   ctx.addSelectionLookup = (param) => {
     const cmpt = ctx.selections.get(varName(param))
     if (!cmpt) throw new VLCompileError(`cannot look up the variable parameter "${param}": only a selection parameter can be a lookup source`)
