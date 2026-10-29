@@ -42,7 +42,7 @@ from the pinned upstream package, implemented behind the same internal API, repl
 | `vega-transforms`, `vega-statistics`, `vega-hierarchy`, `vega-geo`, `vega-regression`, `vega-label`, `delaunator`/`d3-delaunay` | `src/transform*.ts` |
 | `vega-scenegraph` bounds and SVG path machinery | `src/bounds.ts`, `src/svg-path.ts`, `src/render.ts` |
 | `vega-view` layout, `vega-event-selector`, `vega-runtime` signal loop | `src/trellis.ts`, `src/event-selector.ts`, `src/signals.ts`, `src/runtime.ts` |
-| `vega-dataflow` run loop (ranks, stamps, `skip`, `modified`) for the event-driven signals | `src/signal-dataflow.ts` |
+| `vega-dataflow`'s observable evaluation order for the event-driven signals (modelled, not ported) | `src/signal-propagation.ts` |
 | `vega-wordcloud`, `d3-cloud` | `src/wordcloud.ts` |
 
 Licences of everything ported: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).

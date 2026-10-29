@@ -21,10 +21,10 @@
  * - A value is stored when it differs (`!==`) from the current one, or when the
  *   entry says `force`; a handler returning a fresh array/object always counts
  *   as a change, like vega's operator `set`.
- * - What the signals hold after a delivery is decided by vega-dataflow's run loop (signal-dataflow.ts):
- *   operators are ranked, each is evaluated at most once per stamp, a signal an event handler set is not
- *   re-evaluated but pulses its dependents, and a `{signal}`-source handler is an operator that follows its
- *   source and pulses only when it computes something other than last time (or `force`).
+ * - What the signals hold after a delivery is decided by the propagation (signal-propagation.ts): each signal
+ *   is evaluated at most once per delivery, in the order of the graph, a signal an event handler set is not
+ *   re-evaluated but its dependents are, and a `{signal}`-source handler follows its source and passes the
+ *   change on only when it computes something other than last time (or `force`).
  * - An error while a native event is processed (a filter or update expression
  *   throwing) is reported to the logger and abandons the rest of THAT event's
  *   delivery; updates already applied stand, and the loop carries on. Selector
@@ -41,7 +41,7 @@ import { applyChangeset, newChangeset, planModify, type Changeset } from './modi
 import { parseExpression, type AstNode } from './expr-parser.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
 import { array, dict, heldSignalName, ownGet, setOwn, TUPLE_ID, MARK_NODE, scopedSignalName } from './util.js'
-import { Flow, Op, STOP } from './signal-dataflow.js'
+import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
 import { sceneIntersect } from './scene-intersect.js'
 import { consoleLogger, type Logger } from './logger.js'
 import { timers, type Timer } from './timer.js'
@@ -627,17 +627,17 @@ function bindSignalEventsDefs(
   }
 
   // ---- the dataflow: one native event (or setSignal) is one run of it ---------------------------
-  // The graph the handlers run in is vega-dataflow's (see signal-dataflow.ts): a delivery runs the event handlers (they set
-  // their signals and touch them), then the touched operators are evaluated in rank order, once per stamp.
-  const flow = new Flow({ error: (e) => { if (!(e instanceof Logged)) fail('', e) } })
+  // The graph the handlers run in (see signal-propagation.ts): a delivery runs the event handlers (they set their signals
+  // and touch them), then the touched nodes, and what they reach, are evaluated in order, once each.
+  const flow = new Propagation((e) => { if (!(e instanceof Logged)) fail('', e) })
   /** an error already reported by the operator that raised it: the run is abandoned, the report is not repeated */
   class Logged extends Error {}
   /** the signal operators by store key, the dataset operators by name */
-  const signalOps = new Map<string, Op>()
-  const dataOps = new Map<string, Op>()
+  const signalOps = new Map<string, SignalNode>()
+  const dataOps = new Map<string, SignalNode>()
   /** the `{signal}`-source handlers (vega: `onOperator`), collected while the entries are parsed, built into the graph after them */
   const handlerSpecs: HandlerSpec[] = []
-  const handlerOps: Array<{ op: Op; state: HandlerState }> = []
+  const handlerOps: Array<{ op: SignalNode; state: HandlerState }> = []
   /** the store keys a handler assigned in the run (their dependents may not have been told, see `holdStale`) */
   const assigned = new Set<string>()
   /** the derived signals of the view that read a signal (by its store key), for `holdStale` */
@@ -658,8 +658,8 @@ function bindSignalEventsDefs(
     if (!handling) throw new Error('modify() is only available while an event is being handled')
     return planModify(rawOf(name), () => {
       let m = modifying.get(name)
-      if (!m || m.stamp < flow.stamp()) {
-        const mine = (m = { stamp: flow.stamp(), cs: newChangeset() })
+      if (!m || m.stamp < flow.clock) {
+        const mine = (m = { stamp: flow.clock, cs: newChangeset() })
         modifying.set(name, mine)
         flow.runAfter(() => {
           pulsed.set(name, mine.cs)
@@ -832,7 +832,7 @@ function bindSignalEventsDefs(
       holdStale()
     } finally {
       handling--
-      for (const h of handlerOps) h.state.skip = h.op.skip()
+      for (const h of handlerOps) h.state.skip = h.op.skip
       if (batching === 0) flushNotified()
     }
   }
@@ -1165,9 +1165,9 @@ function bindSignalEventsDefs(
   // (`signalRef` makes one for an expression), then each group scope's signals (a subflow is built after the view's first run).
   // Then every operator is connected to what it reads, in that order, and each entry's handler is made to follow its source.
   {
-    const created: Array<{ op: Op; deps: Set<string>; react: boolean }> = []
+    const created: Array<{ op: SignalNode; deps: Set<string>; react: boolean }> = []
     const defByKey = new Map<string, CompiledSignalDef>()
-    const make = (op: Op, deps: Set<string>, react: boolean): void => {
+    const make = (op: SignalNode, deps: Set<string>, react: boolean): void => {
       flow.add(op)
       created.push({ op, deps, react })
     }
@@ -1176,20 +1176,20 @@ function bindSignalEventsDefs(
     }
     const signalOp = (scope: Scope | null, d: CompiledSignalDef): void => {
       const key = keyOf(scope, d.name)
-      const op = new Op(d.name)
+      const op = node(d.name)
       const code = typeof d.update === 'string' ? d.update : typeof d.init === 'string' ? d.init : null
       let deps = new Set<string>()
       if (code !== null) { try { deps = depKeys(scope, code) } catch { /* an unparsable expression is reported when it evaluates */ } }
       if (typeof d.update === 'string') {
         const code = d.update
         // vega Operator.evaluate: the update's value replaces the operator's when it differs (reference); else nothing pulses
-        op.evaluate = () => {
+        op.run = () => {
           let v: unknown
           try { v = runtimeFor(scope).expr(code)(undefined, params(scope)) } catch (e) { fail(` (update of "${d.name}")`, e); throw new Logged() }
           if (scope === null && Object.hasOwn(signals, heldSignalName(key))) { delete signals[heldSignalName(key)]; writes++ }
           evaluatedAt.set(key, writes)
           if (v !== read(d.name, scope)) markChanged(store(scope, d.name, v))
-          else if (!op.modified()) return STOP
+          else if (!op.forced) return false
         }
         if (scope === null && !d.on?.length) {
           for (const dep of deps) {
@@ -1208,7 +1208,7 @@ function bindSignalEventsDefs(
     for (const d of dataDefs) {
       if (dataOps.has(d.name)) continue
       const name = d.name
-      const op = new Op(dataKey(name), () => {
+      const op = node(dataKey(name), () => {
         const cs = pulsed.get(name)
         if (!cs) return
         pulsed.delete(name)
@@ -1221,9 +1221,9 @@ function bindSignalEventsDefs(
     }
 
     // the source operator of each entry, and the handler that follows it
-    interface Built { spec: HandlerSpec; source: Op; consumedAtInit: boolean }
+    interface Built { spec: HandlerSpec; source: SignalNode; consumedAtInit: boolean }
     const built: Built[] = []
-    const lambdas = new Map<string, { op: Op; first: unknown }>()
+    const lambdas = new Map<string, { op: SignalNode; first: unknown }>()
     const sourceOf = (spec: HandlerSpec): Built | null => {
       const { scope, source } = spec
       const owner = /^[A-Za-z_$][\w$]*$/.test(source) ? ownerOf(scope, source) : null
@@ -1244,12 +1244,12 @@ function bindSignalEventsDefs(
         const deps = depKeys(scope, source)
         let value: unknown = null
         try { value = f(undefined, params(scope)) } catch { /* reported when it evaluates in a run */ }
-        const lambda = new Op('(' + source + ')')
-        lambda.evaluate = () => {
+        const lambda = node('(' + source + ')')
+        lambda.run = () => {
           let v: unknown
           try { v = f(undefined, params(scope)) } catch (e) { fail(spec.where, e); throw new Logged() }
           if (v !== value) value = v
-          else if (!lambda.modified()) return STOP
+          else if (!lambda.forced) return false
         }
         made = { op: lambda, first: value }
         lambdas.set(lambdaKey, made)
@@ -1272,12 +1272,12 @@ function bindSignalEventsDefs(
     }
 
     for (const { op, deps, react } of created) {
-      const sources: Op[] = []
+      const sources: SignalNode[] = []
       for (const k of deps) {
         const s = k.startsWith('data:') ? dataOps.get(k.slice(5)) : signalOps.get(k)
         if (!s || s === op) continue
         sources.push(s)
-        if (react) s.addTarget(op)
+        if (react) follow(s, op)
       }
       guarded(() => flow.connect(op, sources), '')
     }
@@ -1292,25 +1292,25 @@ function bindSignalEventsDefs(
       let state = states.get(spec.id)
       if (!state) states.set(spec.id, (state = { value: defByKey.get(targetKey)?.value, skip: !consumedAtInit }))
       const hs = state
-      const h = new Op(`on ${spec.id}`)
-      h.modified(spec.force)
-      h.evaluate = () => {
+      const h = node(`on ${spec.id}`)
+      h.forced = spec.force
+      h.run = () => {
         let value: unknown
         try { value = spec.update() } catch (e) { fail(spec.where, e); throw new Logged() }
-        if (!targetOp.skip()) {
-          targetOp.skip(value !== hs.value)
+        if (!targetOp.skip) {
+          targetOp.skip = value !== hs.value
           const changed = read(spec.targetName, spec.target) !== value
           store(spec.target, spec.targetName, value)
           assigned.add(targetKey)
-          if (changed || h.modified()) markChanged(targetKey)
+          if (changed || h.forced) markChanged(targetKey)
         }
         if (value !== hs.value) hs.value = value
-        else if (!h.modified()) return STOP
+        else if (!h.forced) return false
       }
-      h.rank = source.rank // immediately follows its source
-      source.addTarget(h)
-      h.skip(hs.skip)
-      h.addTarget(targetOp)
+      h.order = source.order // immediately follows its source
+      follow(source, h)
+      h.skip = hs.skip
+      follow(h, targetOp)
       guarded(() => flow.connect(targetOp, [h]), '')
       handlerOps.push({ op: h, state: hs })
     }

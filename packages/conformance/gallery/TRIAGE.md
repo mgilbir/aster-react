@@ -10,7 +10,7 @@ Gate after: static Vega 89 / 93 (4 unverifiable: their oracle needs a canvas Nod
 
 * `vega/pacman` (react): the signal event loop was a fixed-point evaluator; vega runs a ranked dataflow (each operator at most once per
   stamp, a handler assignment that does not pulse leaves its dependents as they were, `modify` a run of its own). `signals.ts` now runs
-  `signal-dataflow.ts`, a port of vega-dataflow's run loop; differential: `signal-dataflow-vs-vega.test.ts`.
+  `signal-propagation.ts`, which models vega-dataflow's evaluation order (each node once per propagation, in order); differential: `signal-dataflow-vs-vega.test.ts`.
 * `vega/word-cloud` (react): `wordcloud` is vega-wordcloud / d3-cloud now, its sprites drawn on the host's canvas as vega's are;
   differential: `wordcloud-vs-vega.test.ts`.
 * `vega/time-units` and the other `timeoutMs 10000 exceeded loading data/...` errors under load: the harness, not the engine
