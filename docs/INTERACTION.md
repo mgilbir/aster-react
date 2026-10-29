@@ -287,6 +287,20 @@ element is removed from the document, or on `binding.release()` (vega's `view.fi
 animation (the `time` channel and its timer selection, see `packages/vl/README.md`) is a timer stream whose clock
 signal feeds `modify` on the selection's store; the store and the other `modify` semantics are described above.
 
+The selector form `timer:500` hands d3-timer the string `'500'`, and d3's `interval` then adds the delay to it as text: it ticks once
+(and `event.elapsed` is a string), where `timer{500}` and `{"type": "timer", "throttle": 500}` tick every 500 ms. Aster does the
+same, and as vega does the stream of a delay is the one the first of the spellings made.
+
+**Order of evaluation.** What the signals hold after an event is decided by the order and the rules of `src/signal-propagation.ts`,
+which model vega-dataflow's observable behaviour, not its classes: the signals, datasets, `{signal}` sources and `on` handlers of a
+view are nodes of a graph, ordered by when they are made and pushed after what they read; an event is one propagation, which
+runs each node at most once, a signal an event handler set is not re-evaluated but its dependents are, a handler of a signal
+stream (`{"signal": "a"}`) follows its source and passes the change on only when it computes something other than last time
+(or the entry says `force`), `setdata` reaches the nodes ordered after the dataset, and `modify` is a propagation of its own
+after the one that asked for it. A cycle through streams (a game) settles as vega's does for that reason. Not modelled: which of
+two handlers of ONE source vega's queue pops first (their ranks are equal; the order depends on everything else in the queue,
+every mark that reads a signal included): Aster runs them in the order they were queued.
+
 **Deviation from Vega: a signal write is a fresh render.** Aster is a pure function of (spec, data, signals): the scene
 after a write equals the scene a fresh chart renders with those signal values. Vega's own second render can differ from
 its own fresh render of the same signals, because it retains dataflow state: autosize runs once and again only when

@@ -458,13 +458,15 @@ THIS SOFTWARE.
 
 ## d3-cloud (Jason Davies)
 
-`wordcloud` in `packages/core/src/transform-extra.ts` is a deterministic stand-in
-that mirrors the structure of d3-cloud's layout (words sorted by size, an
-archimedean spiral, an overlap test); it is not a line-for-line port. d3-cloud is
-not installed in this repository, so there is no `LICENSE` file to copy. The text
-below is the licence notice that Vega carries in the header of
-`vega-wordcloud@5.1.2/src/CloudLayout.js` (the d3-cloud derivative), copied
-verbatim, and is reproduced here out of caution for the structural derivation.
+`wordcloud` in `packages/core/src/wordcloud.ts` is built on d3-cloud's layout
+algorithm (Jason Davies, after Jonathan Feinberg) as vega-wordcloud@5.1.2 carries
+it in `src/CloudLayout.js`: the spiral, the bit board the words are tested against
+and the way a word's sprite is cut are that algorithm. The code is this project's
+own (it was restructured, not copied), but it is still derived from d3-cloud's
+algorithm, so the notice is kept. d3-cloud is not installed in this repository,
+so there is no `LICENSE` file to copy. The text below is the licence notice that
+Vega carries in the header of `vega-wordcloud@5.1.2/src/CloudLayout.js`, copied
+verbatim; it is also kept in the header of `wordcloud.ts`.
 
 ```text
 Copyright (c) 2013, Jason Davies.

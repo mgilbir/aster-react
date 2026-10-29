@@ -8,10 +8,18 @@ import { join, dirname, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { chromium, type BrowserContext } from 'playwright'
-import { BASE_URL, localFileFor, readSpec, type GallerySpec, type Outcome } from './lib.js'
+import { BASE_URL, dataUrlsIn, localFileFor, readSpec, type GallerySpec, type Outcome } from './lib.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const MIME: Record<string, string> = { '.json': 'application/json', '.csv': 'text/csv', '.tsv': 'text/tab-separated-values', '.png': 'image/png', '.arrow': 'application/octet-stream' }
+
+/** The vendored files, read from disk once for the whole run (not once per request, on the event loop the page is waiting on). */
+const fileBodies = new Map<string, Buffer>()
+const bodyOf = (file: string): Buffer => {
+  let b = fileBodies.get(file)
+  if (b === undefined) fileBodies.set(file, (b = readFileSync(file)))
+  return b
+}
 
 async function routeOffline(ctx: BrowserContext, html: string, js: string): Promise<void> {
   await ctx.route('**/*', async (route) => {
@@ -21,15 +29,21 @@ async function routeOffline(ctx: BrowserContext, html: string, js: string): Prom
     if (url === `${BASE_URL}page.js`) return route.fulfill({ status: 200, contentType: 'text/javascript', body: js })
     const file = localFileFor(url)
     if (file !== null) {
-      return route.fulfill({ status: 200, contentType: MIME[extname(file)] ?? 'application/octet-stream', headers: { 'access-control-allow-origin': '*' }, body: readFileSync(file) })
+      return route.fulfill({ status: 200, contentType: MIME[extname(file)] ?? 'application/octet-stream', headers: { 'access-control-allow-origin': '*' }, body: bodyOf(file) })
     }
     if (u.protocol === 'data:' || u.protocol === 'blob:') return route.continue()
     return route.abort('blockedbyclient')
   })
 }
 
-export async function runReact(specs: GallerySpec[], onResult: (o: Outcome) => void, workers = 3): Promise<Outcome[]> {
-  return runPage(specs, '__runGallery', (g) => ({ id: g.id, kind: g.kind, spec: readSpec(g) }), onResult, workers)
+export async function runReact(specs: GallerySpec[], onResult: (o: Outcome) => void, workers = 3, hooks: RunHooks = {}): Promise<Outcome[]> {
+  return runPage(specs, '__runGallery', (g) => ({ id: g.id, kind: g.kind, spec: readSpec(g) }), onResult, workers, hooks)
+}
+
+/** A Vega spec given inline (not a gallery file): `liveMs` is how much virtual time it runs before the frame is compared. */
+export interface InlineSpec { id: string; spec: Record<string, unknown>; liveMs?: number; clicks?: number[] }
+export async function runInline(specs: InlineSpec[], onResult: (o: Outcome) => void = () => undefined, workers = 3): Promise<Outcome[]> {
+  return runPage(specs, '__runGallery', (g) => ({ id: g.id, kind: 'vega', spec: g.spec, inline: true, ...(g.liveMs !== undefined ? { liveMs: g.liveMs } : {}), ...(g.clicks ? { clicks: g.clicks } : {}) }), onResult, workers)
 }
 
 /** The spec-swap path: ONE mounted <Chart> goes from spec A to spec B; `vsOracle` also says whether it equals vega's B. */
@@ -40,7 +54,10 @@ export async function runSwap(pairs: SwapPair[], onResult: (o: SwapOutcome) => v
   return runPage(pairs, '__runSwap', (p) => ({ a: side(p.a), b: side(p.b) }), onResult, workers)
 }
 
-async function runPage<I extends { id: string }, O extends Outcome>(specs: I[], fn: '__runGallery' | '__runSwap', payload: (i: I) => unknown, onResult: (o: O) => void, workers: number): Promise<O[]> {
+/** Test seam: `whileRunning` is called right after a spec has been sent to the page (the harness may be busy from then on). */
+export interface RunHooks { whileRunning?: () => void }
+
+async function runPage<I extends { id: string }, O extends Outcome>(specs: I[], fn: '__runGallery' | '__runSwap', payload: (i: I) => unknown, onResult: (o: O) => void, workers: number, hooks: RunHooks = {}): Promise<O[]> {
   const tmp = mkdtempSync(join(tmpdir(), 'aster-gallery-'))
   try {
     mkdirSync(tmp, { recursive: true })
@@ -67,7 +84,11 @@ async function runPage<I extends { id: string }, O extends Outcome>(specs: I[], 
         const t0 = Date.now()
         let o: O
         try {
-          const r = await page.evaluate(([name, arg]) => (window as never as Record<string, (s: unknown) => Promise<Record<string, unknown>>>)[name as string]!(arg), [fn, payload(g)] as const)
+          // the files the spec names go into the page first, outside any timeout the chart's loader runs under
+          await page.evaluate((urls) => (window as never as { __preloadData: (u: string[]) => Promise<void> }).__preloadData(urls), dataUrlsIn(payload(g)))
+          const running = page.evaluate(([name, arg]) => (window as never as Record<string, (s: unknown) => Promise<Record<string, unknown>>>)[name as string]!(arg), [fn, payload(g)] as const)
+          hooks.whileRunning?.()
+          const r = await running
           o = { id: g.id, ms: Date.now() - t0, ...(r as object) } as O
         } catch (e) {
           // the page itself died (crash / out of memory): a failure of the spec, and a fresh page for the next one
