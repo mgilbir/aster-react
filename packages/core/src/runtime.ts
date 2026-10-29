@@ -28,6 +28,7 @@ import type {
   CompiledProjection,
   CompiledTitle,
   CompiledScale,
+  CompiledSignalDef,
   CompiledTransform,
   EncodeValue,
   RuntimeInput,
@@ -942,7 +943,14 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
     // before that `scale()` of a missing scale is `undefined`, which would be taken for the initial value
     if (initPending && SCALE_FN_EXPR.test(expr) && !ctx.chart.scales.every((sc) => ctx.scales.has(sc.name))) continue
     try {
-      const value = ctx.runtime.expr(expr)(undefined, ctx.signalParams)
+      // (a `react: false` signal in a cycle through a scale runs before the signals it reads: it sees their initial values)
+      const frozen = def.react === false ? frozenReadsOf(ctx.chart).get(def.name) : undefined
+      let params = ctx.signalParams
+      if (frozen !== undefined) {
+        params = dict(ctx.signalParams)
+        for (const f of frozen) params[f] = ctx.chart.signalDefs!.find((d) => d.name === f)?.value
+      }
+      const value = ctx.runtime.expr(expr)(undefined, params)
       // An `init` that reads a scale or a dataset is only settled once they exist: until the scales are built,
       // `domain('x')` of a scale that is not there yet is `[]`, which is not the value vega's dataflow computes.
       const readsScales = DATA_DEPENDENT_EXPR.test(expr) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
@@ -5234,6 +5242,90 @@ function scaleIsLate(sdef: CompiledScale, scope: GuideScope, chart: CompiledChar
   const domain = params.domain
   if (domain !== null && typeof domain === 'object' && !Array.isArray(domain) && 'fields' in domain) return true
   return late(params)
+}
+
+const SCALE_NAME_CALL = /\b(?:domain|range|scale|bandwidth|bandspace|invert|copy|gradient)\s*\(\s*(?:'([^']*)'|"([^"]*)")/g
+
+interface SpecReads { signals: Set<string>; scales: Set<string>; data: Set<string> }
+const newReads = (): SpecReads => ({ signals: new Set(), scales: new Set(), data: new Set() })
+
+/** Every name a JSON fragment of a spec reads: the signals of its `{signal}` / `{expr}` strings, the scales and datasets it names. */
+function specReads(node: unknown, out: SpecReads, depth = 0): void {
+  if (node === null || typeof node !== 'object' || depth > 40) return
+  if (Array.isArray(node)) { for (const v of node) specReads(v, out, depth + 1); return }
+  for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+    if (typeof v === 'string') {
+      if (k === 'signal' || k === 'expr' || k === 'update' || k === 'init' || k === 'test') {
+        for (const id of expressionIdentifiers(v)) out.signals.add(id)
+        for (const m of v.matchAll(SCALE_NAME_CALL)) out.scales.add((m[1] ?? m[2])!)
+      } else if (k === 'data' || k === 'source' || k === 'from') out.data.add(v)
+      else if (k === 'scale') out.scales.add(v)
+    } else specReads(v, out, depth + 1)
+  }
+}
+
+const FROZEN_READS = new WeakMap<CompiledChart, Map<string, string[]>>()
+
+/**
+ * For each `react: false` view signal, the signals it reads that vega's dataflow has not computed yet when it runs.
+ *
+ * vega-dataflow ranks operators: one that reads an operator ranked after it is re-ranked past it, together with everything
+ * that listens to it. A `react: false` signal listens to nothing, so it is not carried along. When the signal it reads is
+ * pushed past it, it runs first and reads that signal's initial value. That happens when the signal it reads sits in a cycle
+ * through a scale or dataset that reads the `react: false` signal back (`domain('color')` -> a scale whose domain is the
+ * signal): the cycle `react: false` is there to break. A reader outside any cycle is ranked after it and has its value.
+ * (The signals of a group scope are not covered: they are resolved with their group.)
+ */
+function frozenReadsOf(chart: CompiledChart): Map<string, string[]> {
+  const cached = FROZEN_READS.get(chart)
+  if (cached) return cached
+  const out = new Map<string, string[]>()
+  FROZEN_READS.set(chart, out)
+  const defs = new Map<string, CompiledSignalDef>()
+  for (const d of chart.signalDefs ?? []) if (d.push !== 'outer' && !defs.has(d.name)) defs.set(d.name, d)
+  const scales = new Map(chart.scales.map((sc) => [sc.name, sc] as const))
+  const datasets = new Map(chart.data.map((d) => [d.name, d] as const))
+  const readsOfSignal = (d: CompiledSignalDef): SpecReads => {
+    const r = newReads()
+    specReads({ update: d.update, init: d.init }, r)
+    return r
+  }
+  for (const [name, def] of defs) {
+    if (def.react !== false) continue
+    const frozen: string[] = []
+    for (const s of readsOfSignal(def).signals) {
+      const source = defs.get(s)
+      if (source === undefined || s === name || source.react === false) continue
+      // does `source` listen, through reactive edges only, to `name`?
+      const seen = new Set<string>()
+      const listens = (reads: SpecReads): boolean => {
+        for (const id of reads.signals) {
+          if (id === name) return true
+          const d = defs.get(id)
+          if (d !== undefined && d.react !== false && !seen.has(`s:${id}`)) { seen.add(`s:${id}`); if (listens(readsOfSignal(d))) return true }
+        }
+        for (const sc of reads.scales) {
+          const sdef = scales.get(sc)
+          if (sdef === undefined || seen.has(`c:${sc}`)) continue
+          seen.add(`c:${sc}`)
+          const r = newReads()
+          specReads(sdef, r)
+          if (listens(r)) return true
+          for (const ds of r.data) {
+            if (seen.has(`d:${ds}`) || !datasets.has(ds)) continue
+            seen.add(`d:${ds}`)
+            const dr = newReads()
+            specReads(datasets.get(ds), dr)
+            if (listens(dr)) return true
+          }
+        }
+        return false
+      }
+      if (listens(readsOfSignal(source))) frozen.push(s)
+    }
+    if (frozen.length) out.set(name, frozen)
+  }
+  return out
 }
 
 /**

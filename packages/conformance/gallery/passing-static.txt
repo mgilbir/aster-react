@@ -481,6 +481,7 @@ vl/point_color_shape_constant
 vl/point_color_with_shape
 vl/point_colorramp_size
 vl/point_conditional_opacity
+vl/point_constant_legend_domain
 vl/point_diverging_color
 vl/point_dot_timeunit_color
 vl/point_filled

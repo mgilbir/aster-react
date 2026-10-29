@@ -237,6 +237,7 @@ function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSi
       def.bind = s.bind as Record<string, unknown> | string
     }
     if (s.push === 'outer') def.push = 'outer'
+    else if (s.react === false) def.react = false
     if (Array.isArray(s.on)) {
       // An event handler's `update` runs when its event fires; it is NOT a static
       // initial value. (Promoting the first handler to `def.update` made a signal
