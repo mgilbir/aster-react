@@ -28,3 +28,15 @@ export function table(title: string, header: string[], rows: string[][]): string
   for (const r of rows) lines.push(row(r, widths))
   return lines.join('\n')
 }
+
+/**
+ * Per-pair ratio num[i] / den[i], summarized. Use it when the two series were measured back to back
+ * in the same loop iteration: machine load, GC and frequency changes then hit both members of a pair
+ * about equally and cancel in the ratio, which a ratio of two independently taken medians does not give.
+ */
+export function pairedRatio(num: number[], den: number[]): Summary {
+  const n = Math.min(num.length, den.length)
+  const ratios: number[] = []
+  for (let i = 0; i < n; i++) ratios.push((num[i] as number) / Math.max(den[i] as number, 1e-9))
+  return summarize(ratios)
+}
