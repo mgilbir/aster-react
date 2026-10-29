@@ -47,7 +47,7 @@ import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
 import { tickFormat, scaleGradientStops, tickValues, tickCount, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, maxOf, pushAll, lerp, scopedSignalName, TUPLE_ID } from './util.js'
+import { dict, ownGet, maxOf, pushAll, lerp, scopedSignalName, heldSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
@@ -1137,6 +1137,11 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
       && !ctx.initDone.has(def.name) && !ctx.hostSignals.has(def.name)
     const expr = def.update ?? (initPending ? def.init : undefined)
     if (!expr) continue
+    // a signal with `update` AND `on` handlers is a state: an event set it, and its update is not run again until what it reads
+    // pulses (the event loop, which runs that dataflow, writes it down when it does); the store's value is the signal's
+    if (def.update !== undefined && def.on?.length && ctx.hostSignals.has(def.name)) continue
+    // ... and a derived signal the event loop holds as it was keeps the value the store has (see `heldSignalName`)
+    if (def.update !== undefined && ctx.hostSignals.has(heldSignalName(def.name))) continue
     if (staticOnly && DATA_DEPENDENT_EXPR.test(expr)) continue
     // an `init` that reads scales (a selection's initial brush: `[scale("x", 2), scale("x", 4)]`) runs once the scales exist:
     // before that `scale()` of a missing scale is `undefined`, which would be taken for the initial value
