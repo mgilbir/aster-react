@@ -79,6 +79,14 @@ export interface ExpressionRuntime {
    * (like headless vega, which has no container) it is `[undefined, undefined]`.
    */
   containerSize?: () => [number | undefined, number | undefined]
+  /**
+   * The view's source of random numbers: the counterpart of vega's `setRandom(random)`, but per view instead of
+   * global. `random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`, the `sample` transform and the
+   * bootstrap `ci0` / `ci1` aggregate ops all draw from it, one number per draw in vega's order. Absent, the
+   * expression functions draw from `Math.random` (as vega's default does) and the `sample` / `ci` ops from the
+   * engine's seeded stream.
+   */
+  random?: () => number
 }
 
 export type CompiledExpr = (datum: unknown, params?: Record<string, unknown>, event?: unknown) => unknown
@@ -432,6 +440,8 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     regexp: (pattern: unknown, flags?: unknown) => guardedRegExp(String(pattern), flags == null ? undefined : String(flags)),
     // date-time
     now: () => Date.now(),
+    // vega-functions codegen.js: `random() { return random(); }`, vega-statistics' (replaceable) source
+    random: () => (runtime.random ?? Math.random)(),
     datetime,
     utc: utcDatetime,
     time: (value: unknown) => D(value).getTime(),

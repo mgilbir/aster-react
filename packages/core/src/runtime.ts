@@ -7,6 +7,7 @@ import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRu
 import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
+import { atRandomSite, replayable } from './random-tape.js'
 import { activeMeter, withLimits, boundedCount, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
@@ -580,6 +581,7 @@ function prepareChartCtx(
       const root = transformHierarchies.get(name)
       return root === undefined ? undefined : { root, rows: datasets.get(name) ?? [] }
     },
+    ...(input.random ? { random: input.random } : {}),
     containerSize: () => {
       const c = input.containerSize ?? input.measuredSize
       return c ? [c.width, c.height] : [undefined, undefined]
@@ -972,7 +974,7 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
         params = dict(ctx.signalParams)
         for (const f of frozen) params[f] = ctx.chart.signalDefs!.find((d) => d.name === f)?.value
       }
-      const value = ctx.runtime.expr(expr)(undefined, params)
+      const value = atRandomSite(ctx.runtime.random, `signal:${def.name}`, () => ctx.runtime.expr(expr)(undefined, params))
       // An `init` that reads a scale or a dataset is only settled once they exist: until the scales are built,
       // `domain('x')` of a scale that is not there yet is `[]`, which is not the value vega's dataflow computes.
       const readsScales = DATA_DEPENDENT_EXPR.test(expr) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
@@ -1886,7 +1888,9 @@ export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): S
   return pending.scene
 }
 
-function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
+function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
+  // an injected random source is drawn from once per site however many passes the evaluation makes (see random-tape.ts)
+  const input: RuntimeInput = hostInput.random ? { ...hostInput, random: replayable(hostInput.random) } : hostInput
   const auto = chart.autosize
   const base = chart.padding
   // Differential-update generation (`txn.gen`): an unchanged (reused) item keeps
@@ -3275,7 +3279,8 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       } else {
         let cur = rows
         for (let k = 0; k < d.transform.length; k++) {
-          const res = applyOneWithState(cur, d.transform[k]!, tctx, name)
+          const from = cur
+          const res = atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => applyOneWithState(from, d.transform[k]!, tctx, name))
           cur = res.rows
           state.steps.push(cur)
           if (res.state !== undefined) state.stepState.set(`${name}#${k}`, res.state)

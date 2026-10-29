@@ -122,16 +122,17 @@ export function collectRows(rows: Row[], p: Params): Row[] {
 /**
  * vega `sample`: a reservoir of `size` rows (uniform), drawn from a seeded LCG.
  *
- * Deviation from Vega: the reservoir is filled from `lcg(SEED)` instead of
- * `Math.random`, so the sample is a pure function of the rows (an incremental
+ * Deviation from Vega: unless the host injects a source (`RuntimeInput.random`, which
+ * vega's `setRandom` is the counterpart of), the reservoir is filled from `lcg(SEED)`
+ * instead of `Math.random`, so the sample is a pure function of the rows (an incremental
  * evaluation equals a fresh one); with the same stream the draw is identical to
  * Vega's (pinned by the vectors). Like vega 6.3.1's runtime, an omitted `size`
  * is NOT defaulted to the documented 1000: nothing is sampled (the
  * documented default lives only in the transform's schema metadata).
  */
-export function sampleRows(rows: Row[], p: Params): Row[] {
+export function sampleRows(rows: Row[], p: Params, source?: () => number): Row[] {
   const num = p.size as number
-  const random = lcg(SEED)
+  const random = source ?? lcg(SEED)
   const res: Row[] = []
   let cnt = 0
   for (let i = 0; i < rows.length; i++) {

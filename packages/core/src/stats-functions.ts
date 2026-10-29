@@ -4,14 +4,24 @@
  * operation for operation. Registered by the transforms addon, which is where the `quantile` / `kde` / `density`
  * transforms that go with them live; `transform-stats.ts` builds its distributions on the same functions.
  */
-import { registerExpressionFunction } from './expression.js'
+import { registerExpressionFunction, registerRuntimeExpressionFunction } from './expression.js'
+import { normalPairs } from './random-tape.js'
 
 export const SQRT2PI = Math.sqrt(2 * Math.PI)
 const SQRT2 = Math.SQRT2
 
-let nextSample = NaN
+/** A source of numbers in [0, 1): `Math.random`, or the one a host injected ({@link ExpressionRuntime.random}). */
+type Random = () => number
+const MATH_RANDOM: Random = () => Math.random()
 
-export function sampleNormal(mean?: number, stdev?: number): number {
+/**
+ * vega-statistics keeps the second number of a Box-Muller pair in a module variable, shared by every view. Here it
+ * belongs to the SOURCE it was drawn from (one entry per injected source; `Math.random`'s is the module-wide one, as
+ * vega's), so a view given its own stream starts clean and replays the same numbers however many views came before.
+ */
+
+/** vega-statistics `sampleNormal`, drawing from `random` (one Box-Muller pair per two calls, as upstream). */
+export function sampleNormalFrom(random: Random, mean?: number, stdev?: number): number {
   mean = mean || 0
   stdev = stdev == null ? 1 : stdev
 
@@ -19,20 +29,25 @@ export function sampleNormal(mean?: number, stdev?: number): number {
   let y = 0
   let rds: number
   let c: number
-  if (nextSample === nextSample) {
-    x = nextSample
-    nextSample = NaN
+  const next = normalPairs.get(random) ?? NaN
+  if (next === next) {
+    x = next
+    normalPairs.set(random, NaN)
   } else {
     do {
-      x = Math.random() * 2 - 1
-      y = Math.random() * 2 - 1
+      x = random() * 2 - 1
+      y = random() * 2 - 1
       rds = x * x + y * y
     } while (rds === 0 || rds > 1)
     c = Math.sqrt(-2 * Math.log(rds) / rds) // Box-Muller transform
     x *= c
-    nextSample = y * c
+    normalPairs.set(random, y * c)
   }
   return mean + x * stdev
+}
+
+export function sampleNormal(mean?: number, stdev?: number): number {
+  return sampleNormalFrom(MATH_RANDOM, mean, stdev)
 }
 
 export function densityNormal(value: number, mean?: number, stdev?: number): number {
@@ -171,10 +186,14 @@ function erfinv(x: number): number {
   return p * x
 }
 
-export function sampleLogNormal(mean?: number, stdev?: number): number {
+export function sampleLogNormalFrom(random: Random, mean?: number, stdev?: number): number {
   mean = mean || 0
   stdev = stdev == null ? 1 : stdev
-  return Math.exp(mean + sampleNormal() * stdev)
+  return Math.exp(mean + sampleNormalFrom(random) * stdev)
+}
+
+export function sampleLogNormal(mean?: number, stdev?: number): number {
+  return sampleLogNormalFrom(MATH_RANDOM, mean, stdev)
 }
 
 export function densityLogNormal(value: number, mean?: number, stdev?: number): number {
@@ -193,12 +212,16 @@ export function quantileLogNormal(p: number, mean?: number, stdev?: number): num
   return Math.exp(quantileNormal(p, mean, stdev))
 }
 
-export function sampleUniform(min?: number, max?: number): number {
+export function sampleUniformFrom(random: Random, min?: number, max?: number): number {
   if (max == null) {
     max = (min == null ? 1 : min)
     min = 0
   }
-  return (min as number) + (max - (min as number)) * Math.random()
+  return (min as number) + (max - (min as number)) * random()
+}
+
+export function sampleUniform(min?: number, max?: number): number {
+  return sampleUniformFrom(MATH_RANDOM, min, max)
 }
 
 export function densityUniform(value: number, min?: number, max?: number): number {
@@ -226,8 +249,12 @@ export function quantileUniform(p: number, min?: number, max?: number): number {
 }
 
 const FUNCTIONS = {
-  sampleNormal, densityNormal, cumulativeNormal, quantileNormal,
-  sampleLogNormal, densityLogNormal, cumulativeLogNormal, quantileLogNormal,
-  sampleUniform, densityUniform, cumulativeUniform, quantileUniform,
+  densityNormal, cumulativeNormal, quantileNormal,
+  densityLogNormal, cumulativeLogNormal, quantileLogNormal,
+  densityUniform, cumulativeUniform, quantileUniform,
 }
 for (const [name, fn] of Object.entries(FUNCTIONS)) registerExpressionFunction(name, fn as (...args: never[]) => unknown)
+// the three that draw numbers read the view's source (`runtime.random`), at call time
+registerRuntimeExpressionFunction('sampleNormal', (rt) => ((mean?: number, stdev?: number) => sampleNormalFrom(rt.random ?? MATH_RANDOM, mean, stdev)) as (...args: never[]) => unknown)
+registerRuntimeExpressionFunction('sampleLogNormal', (rt) => ((mean?: number, stdev?: number) => sampleLogNormalFrom(rt.random ?? MATH_RANDOM, mean, stdev)) as (...args: never[]) => unknown)
+registerRuntimeExpressionFunction('sampleUniform', (rt) => ((min?: number, max?: number) => sampleUniformFrom(rt.random ?? MATH_RANDOM, min, max)) as (...args: never[]) => unknown)

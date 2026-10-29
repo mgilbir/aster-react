@@ -18,8 +18,8 @@ import {
 export { d3Range }
 
 /** One group's aggregate tuple (the incremental aggregate re-derives only dirty groups). */
-export function aggregateGroup(group: Row[], t: CompiledTransform): Row {
-  return aggregateRows(group, t as AggregateParams)[0]!
+export function aggregateGroup(group: Row[], t: CompiledTransform, random?: () => number): Row {
+  return aggregateRows(group, t as AggregateParams, random)[0]!
 }
 
 export interface TransformContext {
@@ -129,7 +129,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     case 'collect':
       return collectRows(rows, t)
     case 'sample':
-      return sampleRows(rows, t)
+      return sampleRows(rows, t, ctx.runtime.random)
     case 'fold':
       return foldRows(rows, t)
     case 'flatten':
@@ -141,11 +141,11 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     case 'impute':
       return imputeRows(rows, t)
     case 'aggregate':
-      return aggregateRows(rows, t)
+      return aggregateRows(rows, t, ctx.runtime.random)
     case 'joinaggregate':
-      return joinAggregateRows(rows, t)
+      return joinAggregateRows(rows, t, ctx.runtime.random)
     case 'window':
-      return windowRows(rows, t)
+      return windowRows(rows, t, ctx.runtime.random)
     case 'stack':
       return stackRows(rows, t)
     case 'extent': {
