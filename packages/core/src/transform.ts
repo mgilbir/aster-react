@@ -872,14 +872,11 @@ export function extentOf(values: unknown[]): [number, number] | undefined {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// stratify / pack (d3-hierarchy circle packing)
+// stratify and the hierarchy tree
 //
-// The vega `pack` transform wraps d3-hierarchy's `pack` layout, which assigns
-// x/y/r to every node. To match the oracle bit-for-bit the d3 algorithm is
-// ported operation-for-operation (packSiblingsRandom + the Welzl-style
-// minimal-enclosing-circle computation in pack/enclose.js). The layout needs
-// the tree that a preceding `stratify` transform built; vega threads it through
-// `pulse.source.root`, we thread it through `TransformContext.hierarchies`.
+// The layouts of the hierarchy transforms (pack, partition, treemap, tree: hierarchy-layout.ts) work on the tree that a
+// preceding `stratify` built; vega threads it through `pulse.source.root`, we thread it through
+// `TransformContext.hierarchies`.
 // ---------------------------------------------------------------------------
 
 export interface HierNode {
