@@ -648,6 +648,10 @@ function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Reco
   if ((m as any).axes !== undefined) out.axes = compileGuideAxes((m as any).axes as Array<Record<string, unknown>>, cfgAll, inScope)
   if ((m as any).legends !== undefined) out.legends = compileGuideLegends((m as any).legends as Array<Record<string, unknown>>, cfgAll)
   if ((m as any).data !== undefined) out.data = ((m as any).data as Array<Record<string, unknown>>).map(compileData)
+  // a group's own projections (vega: built per group item, in its scope: `type: {signal: "parent.data"}`)
+  if (m.type === 'group' && Array.isArray(m.projections) && m.projections.length) {
+    out.projections = (m.projections as Array<Record<string, unknown>>).map((pr) => compileProjection(pr, (cfgMarktype as unknown as { projection?: Record<string, unknown> } | undefined)?.projection))
+  }
   // a group's own signals (vega: one set per group item, see runtime buildGroupItem)
   if (m.type === 'group' && Array.isArray(m.signals) && m.signals.length) out.signalDefs = compileSignalDefs(m.signals as Array<Record<string, unknown>>)
   if (Array.isArray(m.transform)) {

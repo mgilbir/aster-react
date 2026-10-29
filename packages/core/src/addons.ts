@@ -108,6 +108,8 @@ export function addonsNeeded(spec: VgSpec): readonly AddonName[] {
     }
     if (!isObj(node) || depth > HARD_MAX_SPEC_DEPTH || seen.has(node)) continue
     seen.add(node)
+    // the projections of a group mark are built in its scope (the view's are checked above)
+    if (key === 'projections' && Array.isArray(node) && node.length > 0) found.add('geo')
     if (Array.isArray(node)) {
       for (const x of node) stack.push([x, depth + 1, key])
       continue

@@ -52,3 +52,11 @@ registerRuntimeExpressionFunction('geoArea', geoMethod('area', geoArea))
 registerRuntimeExpressionFunction('geoBounds', geoMethod('bounds', geoBounds))
 registerRuntimeExpressionFunction('geoCentroid', geoMethod('centroid', geoCentroid))
 registerRuntimeExpressionFunction('geoScale', (runtime) => (projection?: unknown): unknown => projectionOf(runtime, projection)?.scale())
+
+// vega-functions shape.js / geo.js: `geoShape(projection, geojson)` and `pathShape(path)` are shapes -- functions that draw into a
+// context, or (given none) are their path string: what a mark's `clip: {signal}` takes, and what `clip: {sphere}` / `{path}` compile to.
+registerRuntimeExpressionFunction('geoShape', (runtime) => (projection?: unknown, geojson?: unknown): unknown => {
+  const p = projectionOf(runtime, projection)
+  return (context: unknown): string => (p && !context ? projectedPath(p as unknown as Parameters<typeof projectedPath>[0], geojson) : '')
+})
+registerRuntimeExpressionFunction('pathShape', () => (path?: unknown): unknown => (context: unknown): string => (context ? '' : String(path)))

@@ -16,7 +16,7 @@ import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ScaleContext
 
 /** Scale types whose domain is an ordered set of discrete values. */
 const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
-import { ITEM_MARK, requireGeo } from './registry.js'
+import { ITEM_MARK, geoRegistry, requireGeo } from './registry.js'
 import { locale } from './locale.js'
 import type {
   GuideEncodeBlock,
@@ -356,7 +356,7 @@ interface GuideScope {
  * Where a pass stopped: an axis of a scope (`axis` is its index), or a legend (`legend` is its index; the scope's axes
  * and marks come before the legends in vega's parse order, so they were all made).
  */
-interface AbortPoint { path: number[]; axis: number; legend?: number; late?: boolean }
+interface AbortPoint { path: number[]; axis: number; legend?: number; late?: boolean; /** a projection of the instance's scope could not be made (nothing else of it was) */ projection?: true }
 
 interface AxisAbort {
   failures: Array<AbortPoint>
@@ -482,6 +482,8 @@ interface EvalContext {
   datasetAborted?: boolean
   /** the rank (see datasetRanksOf) of the first dataset whose transform threw: what is ranked after it never ran (see buildDatasetsOf) */
   failedFrom?: number
+  /** the first of the view's projections that could not be made (see abortAtThrowingProjection) */
+  projectionError?: unknown
   /** a signal ranked last threw: the pass's post-run work (the layout that grows the padding) did not happen */
   postRunLost?: boolean
   /** the pass stopped before the root group's size was encoded (a signal threw): the frame is 0 x 0 */
@@ -722,6 +724,7 @@ function prepareChartCtx(
   const threw = abortAtThrowingSignal(ctx)
   if (threw === 'width') { width = 0; ctx.width = 0 }
   if (threw === 'height') { height = 0; ctx.height = 0 }
+  abortAtThrowingProjection(ctx)
 
   // The final context fingerprint: the next evaluation compares its own
   // (scale, mark) inputs against this to decide whether reuse is valid.
@@ -811,11 +814,63 @@ function buildProjectionOf(ctx: EvalContext, p: CompiledProjection): unknown {
  * changed since (see `refreshProjection`), and once more at the end of preparation.
  */
 function buildProjections(ctx: EvalContext): void {
+  ctx.projectionError = undefined
   if (!ctx.chart.projections?.length) return
   for (const p of ctx.chart.projections) {
-    ctx.projections.set(p.name, buildProjectionOf(ctx, p))
+    try {
+      ctx.projections.set(p.name, buildProjectionOf(ctx, p))
+    } catch (e) {
+      // (vega's Projection transform throws; see abortAtThrowingProjection)
+      if (e instanceof Error && e.message.startsWith('[aster]')) throw e
+      ctx.projectionError = e
+      return
+    }
     ctx.projectionStamp.set(p.name, projectionStampOf(ctx))
   }
+}
+
+/**
+ * A projection of the view that cannot be made (a type vega-projection has not registered) throws in vega's Projection transform,
+ * which is ranked right after the view's signals: the dataflow pass stops there, so no dataset, scale, mark or guide is ever made --
+ * the view is its frame at the size its signals gave, and the error is logged once.
+ */
+function abortAtThrowingProjection(ctx: EvalContext): void {
+  if (ctx.projectionError === undefined || ctx.datasetAborted) return
+  reportEvalError(ctx, ctx.projectionError)
+  for (const d of ctx.chart.data) {
+    ;(ctx.failedDatasets ??= new Set()).add(d.name)
+    ctx.datasets.set(d.name, [])
+    ctx.datasetPulses.set(d.name, null)
+  }
+  ctx.encodeAborted = ctx.datasetAborted = true
+}
+
+/**
+ * The projections a group mark declares, made for one of its items (vega: its scope's Projection operators, ranked right after the
+ * scope's signals; the item's `parent` and signals are in reach: `type: {signal: "parent.data"}`). Over the enclosing scope's, so a
+ * `geoshape` in the item finds its own projection by name. One that cannot be made -- a type vega-projection has not registered --
+ * throws in vega's Projection transform, which stops the whole pass there: the item and the ones after it keep their frame and make
+ * nothing else, and nothing is laid out. The first pass of a build records where (an AbortPoint) and logs it once; the second builds
+ * only what vega had made by then.
+ */
+function scopedProjections(mark: CompiledMark, ctx: EvalContext, params: Record<string, unknown>, path: number[]): { registry?: ProjectionRegistry; failed?: true } {
+  if (!mark.projections?.length) return {}
+  const outer = ctx.projections as ProjectionRegistry
+  const registry = new ProjectionRegistry(outer)
+  registry.fitNames = outer.fitNames
+  const inScope = { ...ctx, signalParams: params }
+  for (const p of mark.projections) {
+    try {
+      registry.set(p.name, buildProjectionOf(inScope, p))
+    } catch (e) {
+      // (vega logs the one error that stopped the pass; what the pass would have found after it never ran)
+      if (!ctx.abort.failures.length) reportEvalError(ctx, e)
+      else if (e instanceof Error && e.message.startsWith('[aster]')) throw e
+      ctx.abort.failures.push({ path, axis: 0, projection: true })
+      return { registry, failed: true }
+    }
+  }
+  return { registry }
 }
 
 /** What a fit projection was built from: the datasets that existed and the fit signals written (geojson transforms). */
@@ -4070,7 +4125,7 @@ function evaluateMarkItems(
     marktype: mark.type,
     name: mark.name,
     role: 'mark',
-    clip: markClip(mark, ctx),
+    ...markClipOf(mark, ctx),
     items,
     __source: mark.from?.data,
     ...(encodesHref(mark) ? { hasLinks: true } : {}),
@@ -4308,13 +4363,37 @@ function groupItems(geo: SceneItem, w: number, h: number, content: SceneItem[]):
   return { items: out, paint: bg.paint }
 }
 
-/** A mark's `clip`: a boolean, or `{signal}` evaluated like any signal (truthiness, as vega). */
-function markClip(mark: CompiledMark, ctx: EvalContext): boolean {
+/**
+ * A mark's `clip` (vega-parser marks/clip.js): a boolean; a `{signal}` (a truthy value clips, and a SHAPE -- what `geoShape()` or
+ * `pathShape()` return -- clips to the path it draws); `{path}`, the clip to an SVG path (`pathShape(path)`); `{sphere}`, the clip to
+ * a projection's sphere (`geoShape(projection, {type: "Sphere"})`, in pixels). A shape's path replaces the frame of the group the
+ * mark sits in as the region the mark is clipped to.
+ */
+function markClipOf(mark: CompiledMark, ctx: EvalContext): { clip: boolean; clipPathD?: string } {
   const c = (mark as { clip?: unknown }).clip
-  if (c !== null && typeof c === 'object' && typeof (c as { signal?: unknown }).signal === 'string') {
-    return !!ctx.runtime.expr((c as { signal: string }).signal)({}, ctx.signalParams)
-  }
-  return !!c
+  if (c === null || typeof c !== 'object') return { clip: !!c }
+  const o = c as { signal?: unknown; path?: unknown; sphere?: unknown }
+  const param = (v: unknown): unknown =>
+    v !== null && typeof v === 'object' && typeof (v as { signal?: unknown }).signal === 'string' ? ctx.runtime.expr((v as { signal: string }).signal)({}, ctx.signalParams) : v
+  let shape: string | undefined
+  let truthy = true
+  if (o.signal) {
+    const v = ctx.runtime.expr(String(o.signal))({}, ctx.signalParams)
+    // (a shape is drawn into the clip: given no context it is its path string)
+    if (typeof v === 'function') shape = String((v as (context: null) => unknown)(null) ?? '')
+    else truthy = !!v
+  } else if (o.path) {
+    shape = String(param(o.path))
+  } else if (o.sphere) {
+    const projection = ctx.runtime.projection?.(String(param(o.sphere)))
+    shape = projection && geoRegistry.projectedPath ? geoRegistry.projectedPath(projection, { type: 'Sphere' }) : ''
+  } else return { clip: !!c }
+  return shape !== undefined ? { clip: true, ...(shape !== '' ? { clipPathD: shape } : {}) } : { clip: truthy }
+}
+
+/** Whether a mark is clipped to the frame of its group (see {@link markClipOf}). */
+function markClip(mark: CompiledMark, ctx: EvalContext): boolean {
+  return markClipOf(mark, ctx).clip
 }
 
 /**
@@ -4361,6 +4440,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
   const savedData: Array<[string, Row[] | undefined]> = []
   // the scales this item declares are visible to the expressions of its content (`bandwidth('child_x')`), over the enclosing ones
   let restoreScaleFns: (() => void) | undefined
+  let restoreProjectionFns: (() => void) | undefined
   try {
     // this item's signal scope (its own signals, over the enclosing ones; a facet's `parent` is its datum)
     const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
@@ -4368,6 +4448,18 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     const scopeId = mark.signalDefs?.length ? `${ctx.scopeId ? ctx.scopeId + '/' : ''}${mark.userName ?? ''}@${markIdOf(mark)}${src.key !== undefined && src.key !== '' ? `[${src.key}]` : ''}` : undefined
     const scoped = scopeId !== undefined ? scopeSignalValues(mark, ctx, scopeId, outerParams) : undefined
     const scopeParams = scoped ? scoped.params : outerParams
+    // vega builds the instances of nested scopes level by level: what an aborted pass did not reach is not made
+    const path = [...ctx.scope.path, ctx.scope.nextChild.n++]
+    const order = ctx.abort.cut === undefined ? -1 : compareInstances(path, ctx.abort.cut.path)
+    // this item's projections (vega: its scope's Projection operators, made right after the signals); the type is a parameter like
+    // any other, in this scope (`type: {signal: "parent.data"}`). One that cannot be made stops the pass there: see AbortPoint.
+    const own = order < 0 ? scopedProjections(mark, ctx, scopeParams, path) : undefined
+    if (order === 0 && ctx.abort.cut!.projection) ctx.failed = true
+    if (own?.registry) {
+      const outerProjection = ctx.runtime.projection
+      ctx.runtime.projection = (n) => own.registry!.get(n) ?? outerProjection?.(n)
+      restoreProjectionFns = () => { ctx.runtime.projection = outerProjection }
+    }
     for (const d of mark.data ?? []) {
       const sources = sourceNames(d)
       let rows: Row[] = sources.length ? sources.flatMap((n) => (ctx.datasets.get(n) ?? []).map((r) => ({ ...r }))) : d.values != null ? readData(inlineValues(ctx, d.values), d.format) : []
@@ -4406,9 +4498,6 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       ctx.runtime.scale = (n) => (childScales.get(n) as never) ?? outerScale(n)
       restoreScaleFns = () => { ctx.runtime.scale = outerScale }
     }
-    // vega builds the instances of nested scopes level by level: what an aborted pass did not reach is not made
-    const path = [...ctx.scope.path, ctx.scope.nextChild.n++]
-    const order = ctx.abort.cut === undefined ? -1 : compareInstances(path, ctx.abort.cut.path)
     // (the instance that failed in its last operator was made whole)
     const whole = order === 0 && ctx.abort.cut!.late === true
     // (nothing laid out a group that has an instance at or after the stopped one in its subtree)
@@ -4428,6 +4517,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       groupY: gy,
       scales: childScales.size ? new Map([...ctx.scales, ...childScales]) : ctx.scales,
       scaleTypes: childTypes.size ? new Map([...ctx.scaleTypes, ...childTypes]) : ctx.scaleTypes,
+      ...(own?.registry ? { projections: own.registry } : {}),
       signalParams: scopeParams,
       ...(scopeId !== undefined ? { scopeId } : {}),
     }
@@ -4493,6 +4583,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     return group
   } finally {
     restoreScaleFns?.()
+    restoreProjectionFns?.()
     for (const [name, prev] of savedData.reverse()) {
       if (prev !== undefined) ctx.datasets.set(name, prev)
       else ctx.datasets.delete(name)
