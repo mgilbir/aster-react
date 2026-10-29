@@ -4045,7 +4045,12 @@ function evaluateMarkItems(
       if (it.url == null) continue
       const vetted = applyImageUrlPolicy(it.url, ctx.urlPolicy)
       if (vetted == null) it.url = undefined
-      else it.url = resolveImageUrl(vetted, ctx.urlPolicy?.baseURL) as string
+      else {
+        const resolved = resolveImageUrl(vetted, ctx.urlPolicy?.baseURL)
+        // (what is drawn is what the policy vetted: the url the base turns it into goes through it too)
+        const final = resolved !== vetted ? applyImageUrlPolicy(resolved, ctx.urlPolicy) : resolved
+        it.url = (final == null ? undefined : final) as string | undefined
+      }
     }
   }
 

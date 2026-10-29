@@ -8,7 +8,8 @@
  *    (`javascript:`, `file:`, `ftp:`, `blob:` ...) is denied;
  *  - URLs carrying credentials (`user:pass@host`) are denied;
  *  - relative URLs resolve against `baseURL`; without one a relative URL is an
- *    error rather than a guess about the environment;
+ *    error rather than a guess about the environment (an image `url` is also drawn
+ *    resolved against it, as vega's loader does: `resolveImageUrl`);
  *  - `allow(url)` is a veto hook consulted for every URL (and every redirect hop).
  */
 

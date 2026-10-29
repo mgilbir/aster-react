@@ -37,3 +37,28 @@ describe('image urls resolve against the base url like vega\'s loader', () => {
     }
   }
 })
+
+describe('the url that is drawn is the url the policy vetted', () => {
+  // against `https://a.example/x`, `img/p.png` is `https://a.example/img/p.png` to the URL parser and
+  // `https://a.example/x/img/p.png` to vega's loader (and so to the picture)
+  const vetted: string[] = []
+  const policy = (extra: Record<string, unknown> = {}): { baseURL: string; allow: (u: URL) => boolean } & Record<string, unknown> => ({
+    baseURL: 'https://a.example/x', allow: (u: URL) => { vetted.push(u.href); return u.pathname.startsWith('/img') }, ...extra,
+  })
+
+  it('an allow hook sees the url that is drawn, and can refuse it', () => {
+    vetted.length = 0
+    const dropped: string[] = []
+    const svg = renderSpec(structuredClone(spec('img/p.png')) as never, { urlPolicy: policy({ onDeny: (u: string) => { dropped.push(u) } }) as never })
+    expect(vetted).toContain('https://a.example/img/p.png')
+    expect(vetted).toContain('https://a.example/x/img/p.png')
+    // refused: the picture has no image
+    expect(svg).not.toContain('<image')
+    expect(dropped.length).toBeGreaterThan(0)
+  })
+
+  it('an image the hook accepts is drawn at the resolved url', () => {
+    const svg = renderSpec(structuredClone(spec('img/p.png')) as never, { urlPolicy: policy({ allow: () => true }) as never })
+    expect(svg).toContain('https://a.example/x/img/p.png')
+  })
+})
