@@ -26,7 +26,8 @@
     "conformance:signals": "tsx scripts/browser-signals.mts --min-cases=64",
     "gallery:fetch": "tsx scripts/gallery-fetch.mts",
     "conformance:gallery": "tsx src/gallery/run.ts",
-    "conformance:selections": "tsx scripts/browser-vl-selections.mts --min-cases=49 --max-retained=13"
+    "conformance:intersect": "tsx scripts/browser-intersect.mts",
+    "conformance:selections": "tsx scripts/browser-vl-selections.mts --min-cases=53 --max-retained=13"
   },
   "dependencies": {
     "@aster/core": "workspace:*",

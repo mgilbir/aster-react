@@ -149,6 +149,8 @@ export interface CompiledChart {
   /** Stroke of the plot frame border (e.g. '#ddd' from style 'cell'). */
   frameStroke?: string
   frameFill?: string
+  /** The frame's fill is `transparent`: the SVG leaves it out, but the root group is still what the pointer meets over the empty plot (vega picks a transparent fill). */
+  frameFillTransparent?: true
   frameStrokeWidth?: number
   frameFillOpacity?: number
   frameOpacity?: number
@@ -652,6 +654,8 @@ export interface SceneRoot {
   background?: string | null
   frameStroke?: string
   frameFill?: string
+  /** The frame's fill is `transparent`: the SVG leaves it out, but the root group is still what the pointer meets over the empty plot (vega picks a transparent fill). */
+  frameFillTransparent?: true
   frameStrokeWidth?: number
   frameFillOpacity?: number
   frameOpacity?: number

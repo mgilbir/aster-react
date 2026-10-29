@@ -36,7 +36,7 @@ import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expres
 import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
-import { dict, ownGet, setOwn, TUPLE_ID, scopedSignalName } from './util.js'
+import { dict, ownGet, setOwn, TUPLE_ID, MARK_NODE, scopedSignalName } from './util.js'
 import { consoleLogger, type Logger } from './logger.js'
 import { timers, type Timer } from './timer.js'
 import { resolveCursor } from './cursor.js'
@@ -71,6 +71,8 @@ export interface PickedItem {
   role?: string
   /** The enclosing group item (vega's `item.mark.group`). */
   group?: PickedItem | null
+  /** The scene node of the item's mark (what `item.mark.items` is in vega): `intersect(..., unit.mark)` walks it. */
+  node?: object
 }
 
 export interface SignalEventHooks {
@@ -618,6 +620,7 @@ function bindSignalEventsDefs(
     data: dataOf,
     modify: modifyData,
     ...(opts.containerSize ? { containerSize: opts.containerSize } : {}),
+    scene: () => opts.scene,
     expr: (code) => compileIn(bindRuntime, code),
   }
   const compiledExprs = new WeakMap<ExpressionRuntime, Map<string, CompiledExpr>>()
@@ -825,7 +828,7 @@ function bindSignalEventsDefs(
     // no picker, or it found nothing under the pointer (e.g. no layout): what the DOM under the event says
     if (!picked) picked = domPick(svg, e.target)
     // the painted frame of the view is the root group's background: vega picks it, so over the empty plot the item is the root group
-    if (!picked && opts.scene && sceneInfo && (opts.scene.frameFill || opts.scene.frameStroke)) {
+    if (!picked && opts.scene && sceneInfo && (opts.scene.frameFill || opts.scene.frameStroke || opts.scene.frameFillTransparent)) {
       const [px, py] = pointOf(e)
       const w = opts.scene.plotWidth ?? opts.scene.width
       const h = opts.scene.plotHeight ?? opts.scene.height
@@ -1148,6 +1151,7 @@ function itemFacade(p: PickedItem): object {
     role: p.role,
     interactive: true,
     get group(): object | null { return p.group ? itemFacade(p.group) : null },
+    ...(p.node ? { [MARK_NODE]: p.node } : {}),
   }
   return Object.create(p.item, { mark: { value: mark, enumerable: true }, [TUPLE_ID]: { value: true } }) as object
 }
@@ -1206,6 +1210,15 @@ function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => Picke
     return (parents = map)
   }
   const isMark = (g: SceneGroup): boolean => g.marktype !== undefined && g.marktype !== 'group'
+  /** The group mark a group item belongs to, as vega has it: a mark holding the group items of that name (the cells of a facet). The scene keeps no such wrapper. */
+  const groupMarkOf = (g: SceneGroup, parent: SceneGroup | undefined): object => {
+    const mark = { marktype: 'group', name: g.name, role: g.role } as { items?: unknown[] }
+    Object.defineProperty(mark, 'items', {
+      enumerable: true,
+      get: () => ((parent ? parent.items : scene.items) ?? []).filter((i) => (i as SceneGroup).marktype === 'group' && (i as SceneGroup).name === g.name),
+    })
+    return mark
+  }
   /** A group item (a SceneGroup that is not a mark container), as a PickedItem with its own group chain. */
   const groupPick = (g: SceneGroup): PickedItem => ({
     item: g,
@@ -1236,6 +1249,8 @@ function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => Picke
         marktype: markGroup?.marktype ?? p.marktype,
         name: markGroup?.name ?? m?.name ?? own?.name,
         role: markGroup?.role ?? m?.role ?? own?.role,
+        // (a group item's mark: vega's group mark holds it and its siblings of the same name)
+        ...((p.item as SceneGroup).marktype === 'group' ? { node: groupMarkOf(p.item as SceneGroup, container) } : {}),
         get group(): PickedItem | null { return enclosing(markGroup ?? p.item) },
       } as PickedItem
     },

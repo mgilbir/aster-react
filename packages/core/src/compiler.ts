@@ -66,6 +66,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
   const contentSized = (['width', 'height'] as const).filter((d) => spec[d] == null && !sigNames.includes(d))
   const frameStroke = resolveFrameStroke(spec)
   const frameFill = resolveFrameFill(spec)
+  const frameFillTransparent = frameStyleValue(spec, 'fill') === 'transparent'
   const frameStrokeWidth = resolveFrameNumber(spec, 'strokeWidth')
   const frameFillOpacity = resolveFrameNumber(spec, 'fillOpacity')
   const frameOpacity = resolveFrameNumber(spec, 'opacity')
@@ -117,6 +118,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     background,
     frameStroke,
     frameFill,
+    ...(frameFillTransparent ? { frameFillTransparent: true as const } : {}),
     frameStrokeWidth,
     frameFillOpacity,
     frameOpacity,
