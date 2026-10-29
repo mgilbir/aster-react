@@ -777,6 +777,24 @@ const GROUPS: Record<string, Case[]> = {
     ['a unit with a discrete y and a y2', { data: DATA, mark: 'bar', encoding: { x: q('x'), x2: { field: 'v' }, y: { field: 'c', type: 'ordinal' }, y2: { field: 'g' } } }],
     ['two layers over a parent bin', { data: BOX, transform: [{ bin: { maxbins: 5 }, field: 'v', as: ['b0', 'b1'] }], encoding: { x: { field: 'b0', type: 'quantitative' }, x2: { field: 'b1' }, y: { aggregate: 'count' } }, layer: [{ mark: 'bar' }, { mark: 'rule', encoding: { color: { value: 'red' } } }] }],
   ],
+  // mark/encode/scaledZeroOrMinOrMax.ts: the far end of a bar, area or rect is scale zero when the scale definitely holds zero, the
+  // domain's start when it definitely does not, and a probe in between (trellis_area_seattle)
+  'the baseline of bars, areas and rects (trellis_area_seattle)': [
+    ['an area over a scale without zero', { data: DATA, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } }],
+    ['a horizontal area over a scale without zero', { data: DATA, mark: { type: 'area', orient: 'horizontal' }, encoding: { y: q('x'), x: q('v', { aggregate: 'mean', scale: { zero: false } }) } }],
+    ['a horizontal area over a scale with zero', { data: DATA, mark: { type: 'area', orient: 'horizontal' }, encoding: { y: q('x'), x: q('v', { aggregate: 'mean' }) } }],
+    ['an area over a log scale', { data: DATA, mark: 'area', encoding: { x: q('x'), y: q('v', { scale: { type: 'log' } }) } }],
+    ['a bar over a scale without zero', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } }],
+    ['a horizontal bar over a scale without zero', { data: DATA, mark: 'bar', encoding: { y: n('c'), x: q('v', { aggregate: 'mean', scale: { zero: false } }) } }],
+    ['a bar over a domain that holds zero', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'mean', scale: { zero: false, domain: [-2, 12] } }) } }],
+    ['a bar over a domain that does not', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'mean', scale: { domain: [3, 12] } }) } }],
+    ['a bar over a log scale', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'mean', scale: { type: 'log' } }) } }],
+    ['a rect over a scale without zero', { data: DATA, mark: 'rect', encoding: { x: n('c'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } }],
+    ['a rect over a sqrt scale', { data: DATA, mark: 'rect', encoding: { x: n('c'), y: q('v', { aggregate: 'mean', scale: { type: 'sqrt' } }) } }],
+    ['a rule over a scale without zero', { data: DATA, mark: 'rule', encoding: { x: n('c'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } }],
+    ['layers over a scale without zero', { data: DATA, layer: [{ mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } }, { mark: 'line', encoding: { x: q('x'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } }] }],
+    ['an area faceted by a row, over a scale without zero', { data: DATA, facet: { row: n('g') }, spec: { height: 40, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({

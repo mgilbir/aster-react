@@ -999,6 +999,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   applyScaleConfig(scales, isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined)
   // invalid = "show": a layer positions its invalid values against the scale it shares, not its own (a point's zero-including
   // scale does not decide for the line it is merged with)
+  perLayerMarks.forEach((ms) => resolveZeroOrMin(ms, scales as ScaleSpec[]))
   parsed.forEach((p, i) => showInvalidValues(p.l, p.fields, p.mark, scales, perLayerMarks[i]!, indepY ? (ch) => ch !== 'y' : undefined))
   centerPointMarksOnBands(marks, scales)
   // selections: scales that follow a param, the marks' interactive flags and clip, the units' brush / voronoi marks
@@ -5763,7 +5764,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.height = { value: markDef.height }
         } else {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
-          if (mark === 'bar') update.y2 = { scale: 'y', value: 0 }
+          if (mark === 'bar') update.y2 = zeroOrMinRef('y')
           else if (mark === 'rect') update.y2 = zeroOrMinRef('y', yDef, mark)
         }
       }
@@ -5842,7 +5843,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.width = { value: markDef.width }
         } else {
           update.x = { scale: 'x', field: aggFieldName(xDef) }
-          if (mark === 'bar') update.x2 = { scale: 'x', value: 0 }
+          if (mark === 'bar') update.x2 = zeroOrMinRef('x')
           else if (mark === 'rect') update.x2 = zeroOrMinRef('x', xDef, mark)
         }
       }
@@ -5970,7 +5971,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         // vertical area: y is the value axis, y2 the baseline
         update.y2 = stacked
           ? { scale: 'y', field: `${aggFieldName(yDef)}_start` }
-          : { scale: 'y', value: 0 }
+          : zeroOrMinRef('y')
       }
     }
     if (xDef && orient === 'horizontal') {
@@ -5981,7 +5982,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         update.x = { scale: 'x', field: `${aggFieldName(xDef)}_end` }
         update.x2 = { scale: 'x', field: `${aggFieldName(xDef)}_start` }
       } else {
-        update.x2 = { signal: "scale('x', domain('x')[0])" }
+        update.x2 = zeroOrMinRef('x')
       }
     }
     { const dfn = definedSignal(spec, fields, mark); if (dfn !== undefined) update.defined = dfn }
@@ -6107,14 +6108,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // x2/y2 (and no width/height encode), the rule spans to scale zero —
     // {value: 0} when the domain definitely contains zero, otherwise the
     // inrange(0, domain) probe signal (nominal/band scales, zero:false)
-    const zeroOrMin = (ch: 'x' | 'y', quantZero: boolean): unknown =>
-      quantZero ? { scale: ch, value: 0 } : { signal: `scale('${ch}', inrange(0, domain('${ch}')) ? 0 : domain('${ch}')[0])` }
-    const xBand = xDef != null && positionalScaleType(mark, xDef) === 'band'
-    const yBand = yDef != null && positionalScaleType(mark, yDef) === 'band'
-    const xQuantZero = !xBand && xDef?.scale?.zero !== false
-    const yQuantZero = !yBand && yDef?.scale?.zero !== false
-    if (!x2Def && ruleOrient !== 'vertical' && xDef) update.x2 = zeroOrMin('x', xQuantZero)
-    if (!y2Def && ruleOrient !== 'horizontal' && yDef) update.y2 = zeroOrMin('y', yQuantZero)
+    if (!x2Def && ruleOrient !== 'vertical' && xDef) update.x2 = zeroOrMinRef('x')
+    if (!y2Def && ruleOrient !== 'horizontal' && yDef) update.y2 = zeroOrMinRef('y')
     // rule paint plumbing: size maps to strokeWidth (rule.ts nonPosition);
     // filled rules paint with fill and drop the stroke; the rest pass through
     const ruleSize = markSize
@@ -6933,14 +6928,44 @@ function binGeometry(spec: VLSpec, mark: string): { spacing: number; minBandSize
 }
 
 /**
- * vega-lite's `zeroOrMin` baseline for the secondary end of a continuous rect/rule
- * (scaledZeroOrMin): scale zero when the domain includes it, else the domain start.
+ * vega-lite's `zeroOrMin` baseline for the secondary end of a continuous rect / bar / area / rule (scaledZeroOrMinOrMax): it reads the
+ * scale the channel ends up with (`domainHasZero`), which is not known while the marks are built. The reference is written as the
+ * 'definitely' form and noted here; `resolveZeroOrMin` rewrites it, once the view's scales are assembled.
  */
-function zeroOrMinRef(ch: 'x' | 'y', def: FieldDef | undefined, mark: string): unknown {
-  if (def?.type === 'temporal') return { signal: `scale('${ch}', domain('${ch}')[0])` }
-  const band = def != null && positionalScaleType(mark, def) === 'band'
-  const quantZero = !band && def?.scale?.zero !== false
-  return quantZero ? { scale: ch, value: 0 } : { signal: `scale('${ch}', inrange(0, domain('${ch}')) ? 0 : domain('${ch}')[0])` }
+const LAZY_ZERO_OR_MIN = new WeakMap<object, 'x' | 'y'>()
+function zeroOrMinRef(ch: 'x' | 'y', _def?: FieldDef | undefined, _mark?: string): Record<string, unknown> {
+  void _def
+  void _mark
+  const ref: Record<string, unknown> = { scale: ch, value: 0 }
+  LAZY_ZERO_OR_MIN.set(ref, ch)
+  return ref
+}
+
+/** The reference scaledZeroOrMinOrMax writes for a scale: zero, the probe, or the domain's start. */
+function zeroOrMinOf(name: string, sc: ScaleSpec | undefined): Record<string, unknown> {
+  const has = sc ? domainHasZero(sc) : 'definitely'
+  return has === 'definitely' ? { scale: name, value: 0 }
+    : has === 'maybe' ? { signal: `scale('${name}', inrange(0, domain('${name}')) ? 0 : domain('${name}')[0])` }
+    : { signal: `scale('${name}', domain('${name}')[0])` }
+}
+
+/** Rewrite the zeroOrMin references of these marks (in place) from the scales the view ended up with (a reference names its scale). */
+function resolveZeroOrMin(marks: Record<string, unknown>[], scales: ScaleSpec[]): void {
+  const rewrite = (v: unknown): void => {
+    if (Array.isArray(v)) { v.forEach(rewrite); return }
+    if (!isObject(v) || !LAZY_ZERO_OR_MIN.has(v)) return
+    LAZY_ZERO_OR_MIN.delete(v)
+    const name = v.scale as string
+    const ref = zeroOrMinOf(name, scales.find((sc) => sc.name === name))
+    for (const k of Object.keys(v)) delete v[k]
+    Object.assign(v, ref)
+  }
+  const visit = (m: Record<string, unknown>): void => {
+    const update = (m.encode as { update?: Record<string, unknown> } | undefined)?.update
+    if (update) for (const v of Object.values(update)) rewrite(v)
+    for (const c of (m.marks as Record<string, unknown>[] | undefined) ?? []) visit(c)
+  }
+  marks.forEach(visit)
 }
 
 /**
@@ -7366,7 +7391,8 @@ function definedSignal(spec: VLSpec, fields: FieldDef[], mark: string): unknown 
 /** scale/component.ts `domainHasZero`, from the scale this compiler emitted. */
 function domainHasZero(sc: ScaleSpec): 'definitely' | 'definitely-not' | 'maybe' {
   if (['log', 'time', 'utc'].includes(sc.type)) return 'definitely-not'
-  if (sc.zero === true) return 'definitely'
+  // (a linear, sqrt or pow scale holds zero unless it says it does not)
+  if (sc.zero === true || (sc.zero === undefined && ['linear', 'sqrt', 'pow'].includes(sc.type))) return 'definitely'
   const doms = Array.isArray(sc.domain) ? [sc.domain] : []
   let withZero = false, without = false
   for (const d of doms) { if (typeof d[0] === 'number' && typeof d[d.length - 1] === 'number') { if (d[0] <= 0 && d[d.length - 1] >= 0) withZero = true; else without = true } }
@@ -7404,10 +7430,7 @@ function showInvalidValues(spec: VLSpec, fields: FieldDef[], mark: string, scale
       if (!main || !sc || main.scale !== scaleCh || main.field !== aggFieldName(def)) continue
       const d = `datum[${JSON.stringify(aggFieldName(def))}]`
       const given = cfgInvalid?.[scaleCh]
-      const zom = domainHasZero(sc)
-      const ref = isObject(given) && 'value' in given ? { value: given.value }
-        : zom === 'definitely' ? { scale: scaleCh, value: 0 }
-        : { signal: `scale('${scaleCh}', ${zom === 'maybe' ? `inrange(0, domain('${scaleCh}')) ? 0 : ` : ''}domain('${scaleCh}')[0])` }
+      const ref = isObject(given) && 'value' in given ? { value: given.value } : zeroOrMinOf(scaleCh, sc)
       const invalid = { test: `!isValid(${d}) || !isFinite(+${d})`, ...ref }
       update[prop] = Array.isArray(cur) ? [...cur.slice(0, -1), invalid, main] : [invalid, main]
     }
@@ -7642,6 +7665,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   out.marks = builtMarks
   out.scales = buildScales(spec, fields, mark, orient, dataName, wSpec, hSpec, data.seriesFields, pd.rawName)
   applyScaleConfig(out.scales as ScaleSpec[], isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined)
+  resolveZeroOrMin(builtMarks, out.scales as ScaleSpec[])
   showInvalidValues(spec, fields, mark, out.scales as ScaleSpec[], builtMarks)
   applyDomainUnion(fields, out.scales as ScaleSpec[])
   if (domainSel) domainSel.scales = out.scales as ScaleSpec[]
