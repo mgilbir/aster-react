@@ -78,10 +78,13 @@ vl/airport_connections
 vl/arc_color_mappings
 vl/arc_donut
 vl/arc_facet
+vl/arc_ordinal_theta
 vl/arc_params
 vl/arc_pie
 vl/arc_pie_normalize_tooltip
 vl/arc_pie_pyramid
+vl/arc_radial
+vl/arc_radial_histogram
 vl/area
 vl/area_cumulative_freq
 vl/area_density
@@ -122,6 +125,7 @@ vl/bar_binned_data
 vl/bar_binned_yearmonth_grouped
 vl/bar_binned_yearmonth_grouped_center_band
 vl/bar_binned_yearmonth_label
+vl/bar_binned_yearmonth_label_band_center
 vl/bar_binnedyearmonth
 vl/bar_bullet_expr_bind
 vl/bar_color_disabled_scale
@@ -160,6 +164,7 @@ vl/bar_grouped_step_for_position
 vl/bar_grouped_thin
 vl/bar_grouped_thin_minBandSize
 vl/bar_grouped_timeunit_yearweek
+vl/bar_heatlane
 vl/bar_invalid_color_show
 vl/bar_invalid_color_show_override
 vl/bar_layered_transparent
@@ -260,12 +265,15 @@ vl/errorbar_aggregate
 vl/errorbar_horizontal_aggregate
 vl/errorbar_tooltip
 vl/facet_bullet
+vl/facet_column_facet_column_point_future
+vl/facet_column_facet_row_point_future
 vl/facet_cross_independent_scale
 vl/facet_custom
 vl/facet_custom_header
 vl/facet_grid_bar
 vl/facet_independent_scale
 vl/facet_independent_scale_layer_broken
+vl/facet_row_facet_row_point_future
 vl/geo_circle
 vl/geo_constant_value
 vl/geo_custom_projection
@@ -310,6 +318,7 @@ vl/interactive_layered_crossfilter_discrete
 vl/interactive_legend
 vl/interactive_legend_dblclick
 vl/interactive_line_brush_cursor
+vl/interactive_line_hover
 vl/interactive_line_point_hover
 vl/interactive_multi_line_label
 vl/interactive_multi_line_pivot_tooltip
@@ -322,6 +331,7 @@ vl/interactive_paintbrush_interval
 vl/interactive_paintbrush_simple_false
 vl/interactive_paintbrush_simple_true
 vl/interactive_panzoom_splom
+vl/interactive_panzoom_vconcat_shared
 vl/interactive_point_domainRaw_binding
 vl/interactive_point_init
 vl/interactive_query_widgets
@@ -596,6 +606,8 @@ vl/stocks-2009-layered-line-point
 vl/ternary
 vl/test_aggregate_nested
 vl/test_field_with_spaces
+vl/test_invalid_break_paths_filter_domains
+vl/test_invalid_break_paths_show_domains
 vl/test_invalid_break_paths_show_path_domains
 vl/test_invalid_color_filter
 vl/test_invalid_color_filter_but_include_in_scale_invalid
@@ -638,8 +650,10 @@ vl/time_parse_local
 vl/time_parse_utc
 vl/time_parse_utc_format
 vl/trail_color
+vl/trail_comet
 vl/trellis_anscombe
 vl/trellis_area
+vl/trellis_area_seattle
 vl/trellis_area_sort_array
 vl/trellis_bar
 vl/trellis_bar_histogram

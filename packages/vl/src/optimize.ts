@@ -125,6 +125,23 @@ function mergeBins(out: Obj): void {
   if (effective.size) renameFragment(out, { signals: effective, scales: new Map() })
 }
 
+/**
+ * A bin's extent and bins signals are declared once, where MergeBins left them (the first of the merged bins keeps its `extent` and
+ * its `signal`; the others read the shared extent): the rows are the same with or without the declarations, so they are not part of
+ * what makes two pipelines the same.
+ */
+function withoutBinDeclarations(ts: Obj[]): Obj[] {
+  const read = new Set(ts.filter((t) => t.type === 'bin' && isObj(t.extent) && typeof (t.extent as Obj).signal === 'string').map((t) => (t.extent as Obj).signal))
+  return ts
+    .filter((t) => !(t.type === 'extent' && typeof t.signal === 'string' && read.has(t.signal)))
+    .map((t) => {
+      if (t.type !== 'bin' || t.signal === undefined) return t
+      const { signal: _s, ...rest } = t
+      void _s
+      return rest
+    })
+}
+
 function mergeIdenticalDatasets(out: Obj, generated: (name: string) => boolean): void {
   const data = (out.data as Obj[] | undefined) ?? []
   const renames = new Map<string, string>()
@@ -137,7 +154,7 @@ function mergeIdenticalDatasets(out: Obj, generated: (name: string) => boolean):
     }
     const source = renames.get(d.source as string) ?? (d.source as string)
     d.source = source
-    const key = JSON.stringify([source, pipelineKey((d.transform as Obj[] | undefined) ?? [])])
+    const key = JSON.stringify([source, pipelineKey(withoutBinDeclarations((d.transform as Obj[] | undefined) ?? []))])
     const have = seen.get(key)
     if (have === undefined) {
       seen.set(key, d.name as string)
@@ -147,6 +164,42 @@ function mergeIdenticalDatasets(out: Obj, generated: (name: string) => boolean):
   if (renames.size === 0) return
   out.data = kept
   renameDatasetRefs(out, renames)
+  dedupeDomainRefs(out, new Set(renames.values()))
+}
+
+/**
+ * Once two datasets are one, the references a scale's domain made to each (`{data: "data_0", field: "y"}` and `{data: "data_1", field:
+ * "y"}`) are the same reference: vega-lite never had two (scale/domain.ts mergeDomains keeps each distinct reference once, and
+ * references to one dataset are written `{data, fields: [...]}`).
+ */
+function dedupeDomainRefs(node: unknown, merged: ReadonlySet<string>): void {
+  if (Array.isArray(node)) {
+    for (const n of node) dedupeDomainRefs(n, merged)
+    return
+  }
+  if (!isObj(node)) return
+  if (Array.isArray(node.scales)) {
+    for (const sc of node.scales as unknown[]) {
+      if (!isObj(sc) || !isObj(sc.domain) || !Array.isArray(sc.domain.fields)) continue
+      const d = sc.domain as Obj
+      const refs = d.fields as unknown[]
+      if (!refs.every((r) => isObj(r) && typeof r.data === 'string' && typeof r.field === 'string')) continue
+      if (!refs.some((r) => merged.has((r as Obj).data as string))) continue
+      const seen = new Set<string>()
+      const unique = refs.filter((r) => {
+        const k = JSON.stringify(r)
+        return seen.has(k) ? false : (seen.add(k), true)
+      })
+      const data = new Set(unique.map((r) => (r as Obj).data))
+      const plain = unique.every((r) => Object.keys(r as Obj).length === 2)
+      if (data.size === 1 && plain) {
+        const names = unique.map((r) => (r as Obj).field)
+        sc.domain = { data: [...data][0], ...(names.length === 1 ? { field: names[0] } : { fields: names }), ...(d.sort !== undefined ? { sort: d.sort } : {}) }
+      }
+      else if (unique.length !== refs.length) d.fields = unique
+    }
+  }
+  for (const v of Object.values(node)) if (v !== null && typeof v === 'object') dedupeDomainRefs(v, merged)
 }
 
 /**
