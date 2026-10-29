@@ -105,10 +105,10 @@ export function quantileNormal(p: number, mean?: number, stdev?: number): number
 }
 
 // Approximate inverse error function. Implementation from "Approximating the erfinv function" by Mike Giles,
-// GPU Computing Gems, volume 2, 2010. Ported from Apache Commons Math (Apache-2.0).
+// GPU Computing Gems, volume 2, 2010. Ported from Apache Commons Math (Apache-2.0; see THIRD_PARTY_NOTICES.md).
 function erfinv(x: number): number {
   // beware that the logarithm argument must be
-  // commputed as (1.0 - x) * (1.0 + x),
+  // computed as (1.0 - x) * (1.0 + x),
   // it must NOT be simplified as 1.0 - x * x as this
   // would induce rounding errors near the boundaries +/-1
   let w = -Math.log((1 - x) * (1 + x))
