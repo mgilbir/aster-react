@@ -78,10 +78,13 @@ vl/airport_connections
 vl/arc_color_mappings
 vl/arc_donut
 vl/arc_facet
+vl/arc_ordinal_theta
 vl/arc_params
 vl/arc_pie
 vl/arc_pie_normalize_tooltip
 vl/arc_pie_pyramid
+vl/arc_radial
+vl/arc_radial_histogram
 vl/area
 vl/area_cumulative_freq
 vl/area_density

@@ -3727,8 +3727,8 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   }
 
   const thetaDef = fields.find((f) => f.channel === 'theta' && f.field)
-  const arcTheta = thetaStackInfo(mark, fields)
-  const radiusDefP = fields.find((f) => f.channel === 'radius' && f.field)
+  // stack.ts: an arc (or a label) stacks along theta or radius
+  const polarStack = polarStackOf(fields, mark)
   // channel roles shared by the pipeline stages below
   const yDef = fields.find((f) => f.channel === 'y')
   const xDef = fields.find((f) => f.channel === 'x')
@@ -3888,62 +3888,6 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     if (bp !== undefined && bp !== 0.5) pushAll(pipeline, offsettedRectFormulas(as, bp, f.tu!))
   }
 
-  // arc marks: theta stacking (pie layout). vega-lite stacks the theta
-  // measure over the whole data (no groupby), sorted by the series field,
-  // then filters invalid theta values.
-  if ((mark === 'arc' || mark === 'text') && thetaDef && arcTheta) {
-    if (radiusDefP?.aggregate) {
-      // an aggregated radius measure: aggregate it (grouped by the raw theta
-      // field — the polar dimension), filtering both endpoints
-      const groupby = fields.filter((f) => f.field && !f.aggregate && f.channel !== 'radius').map((f) => f.field)
-      pipeline.push({ type: 'aggregate', groupby, ops: [radiusDefP.aggregate!], fields: [radiusDefP.field], as: [aggFieldName(radiusDefP)] })
-    } else if (radiusDefP) {
-      // radius stacking (radius.stack): the polar dimension (theta) groups,
-      // the radius measure stacks into radius_start/end
-      if (radiusDefP.stack != null && radiusDefP.stack !== false) {
-        pipeline.push({
-          type: 'stack',
-          groupby: [thetaDef.field],
-          field: radiusDefP.field,
-          sort: { field: [], order: [] },
-          as: [`${radiusDefP.field}_start`, `${radiusDefP.field}_end`],
-          offset: radiusDefP.stack === true ? 'zero' : radiusDefP.stack,
-        })
-      }
-    } else if (thetaDef.aggregate) {
-      // aggregate the theta measure, grouped by the raw (non-aggregated)
-      // field channels, then stack the aggregated field when there is a
-      // series to stack by (probed against the oracle)
-      const rawFields = fields.filter((f) => f.field && !f.aggregate && f.channel !== 'theta' && f.channel !== 'radius')
-      const groupby = rawFields.map((f) => f.field)
-      pipeline.push({ type: 'aggregate', groupby, ops: [thetaDef.aggregate!], fields: [thetaDef.aggregate === 'count' ? null : thetaDef.field], as: [arcTheta.field] })
-      if (ownSelectionId) pipeline.push(identifierTransform())
-      if (groupby.length) {
-        pipeline.push({
-          type: 'stack',
-          groupby: [],
-          field: arcTheta.field,
-          sort: { field: [groupby[0]!], order: ['ascending'] },
-          as: [`${arcTheta.field}_start`, `${arcTheta.field}_end`],
-          offset: 'zero',
-        })
-      }
-    } else if (arcTheta.stacked) {
-      const colorF = fields.find((f) => f.channel === 'color' && f.field)
-      pipeline.push({
-        type: 'stack',
-        groupby: [],
-        field: thetaDef.field,
-        // (stack.ts: the order channel sorts the stack, else the stack-by fields)
-        sort: fields.some((f) => f.channel === 'order' && f.field && !f.datumOnly)
-          ? stackSortParams(fields, [], 'x', isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {})
-          : colorF ? { field: [aggFieldName(colorF)], order: ['ascending'] } : { field: [], order: [] },
-        as: [`${thetaDef.field}_start`, `${thetaDef.field}_end`],
-        offset: thetaDef.stack === 'normalize' ? 'normalize' : 'zero',
-      })
-    }
-  }
-
   // sort arrays: an index column (position in the user's list) that the scale
   // domain sorts by; values missing from the list sort last (vega-lite
   // calculate.ts parseAllForSortIndex)
@@ -4023,10 +3967,8 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   }
   const stackAfterAggregate = stackable && measure != null && measure.aggregate != null && measure.type === 'quantitative' && !measure.bin && isStacked(measure, mark, orient, allFields)
 
-  // arcs run their own aggregate+stack law (thetaStackInfo) — the generic
-  // block would aggregate after the stack and mis-group
   // (aggregate.ts makeFromEncoding: only a field with an aggregate makes an aggregate node; binning alone groups nothing)
-  if (hasAggregate && mark !== 'arc') {
+  if (hasAggregate) {
     const groupby: string[] = []
     const fieldsOut: Record<string, unknown>[] = []
     const argFlats: FieldDef[] = []
@@ -4081,6 +4023,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
       if (ownSelectionId) pipeline.push(identifierTransform())
       pushAll(pipeline, channelImpute)
       if (stackAfterAggregate) pushAll(pipeline, stackTransforms(measure!))
+      if (polarStack) pushAll(pipeline, polarStackTransforms(polarStack, fields, isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}))
       // argmax/argmin leave the winning ROW in the aggregate column; flatten
       // the channel's value out of it (vega-lite reads `argmax_b["a"]`)
       const argDone = new Set<string>()
@@ -4097,6 +4040,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     pushAll(pipeline, stackTransforms(measure))
   } else {
     pushAll(pipeline, channelImpute)
+    if (polarStack) pushAll(pipeline, polarStackTransforms(polarStack, fields, isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}))
   }
 
   // the invalid values the marks must not see (vega-lite FilterInvalidNode): skipped when a generating
@@ -4128,35 +4072,157 @@ function argValueExpr(f: FieldDef): string {
   return dref(argObjName(f)) + splitAccessPath(f.argAgg!.valuePath).map((p) => `[${JSON.stringify(p)}]`).join('')
 }
 
-/** Arc theta layout (vega-lite stack.ts + mark/arc.ts + position-rect.ts):
- * - theta unaggregated, no radius channel → stacked (field_start/end)
- * - theta aggregated with a raw field to stack by (color/detail) → aggregate
- *   first, then stack the aggregated field (agg_start/end)
- * - theta aggregated with nothing to stack by, or a radius channel present
- *   (stacked or not) → not stacked: the arc spans startAngle = field,
- *   endAngle = scale zero; a radius channel adds a radius scale driving
- *   outerRadius/innerRadius. */
-function thetaStackInfo(mark: string, fields: FieldDef[]): { stacked: boolean; field: string; offsettedRect?: boolean } | null {
-  const thetaDef = fields.find((f) => f.channel === 'theta' && f.field)
-  if (!thetaDef) return null
-  // stack.ts: a text mark stacks its angle only when asked to (stack: true / an offset); labels of a pie sit in their wedge
-  if (mark === 'text') {
-    return thetaDef.stack != null && thetaDef.stack !== false && thetaDef.type === 'quantitative' && !thetaDef.aggregate && !thetaDef.bin
-      ? { stacked: true, field: thetaDef.field }
-      : null
+/**
+ * mark/arc.ts + position-rect.ts `rectPosition` for `radius` and `theta`: an arc is a rectangle in polar coordinates. A binned (or time unit)
+ * channel spans its bin's end (outer radius, start angle) to its start; a discrete one sits at the start of its band and spans the band;
+ * any other is positioned by its field - or, stacked, by its stack's end - and runs to its second channel, the mark definition's
+ * inner radius / end angle, or scale zero. Returns the channels a field drove. (theta2 and radius2 channels are refused earlier.)
+ */
+function polarRectPositions(update: Record<string, unknown>, spec: VLSpec, fields: FieldDef[], stack: PolarStack | undefined, markRef: (v: unknown) => Record<string, unknown>, innerFallback: unknown): Set<string> {
+  const handled = new Set<string>()
+  const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+  for (const channel of ['radius', 'theta'] as const) {
+    const def = fields.find((f) => f.channel === channel && f.field && !f.datumOnly)
+    if (!def) continue
+    handled.add(channel)
+    const near = channel === 'theta' ? 'startAngle' : 'outerRadius'
+    const far = channel === 'theta' ? 'endAngle' : 'innerRadius'
+    const discrete = isDiscreteType(def.type)
+    const bandScale = discrete && (def.scale?.type === undefined || def.scale.type === 'band')
+    const offsetValue = md[`${channel}Offset`]
+    const offset = offsetValue ? offsetValue : undefined
+    const withOffset = (ref: Record<string, unknown>): Record<string, unknown> => (offset === undefined ? ref : { ...ref, offset })
+    if ((def.bin || def.tu) && !discrete) {
+      // rectBinPosition: the band size is 1 (a bin, a time unit), so the near key reads the far end of the band
+      let start: string
+      let end: string
+      if (def.bin) {
+        const names = binNames(def.binParams!, def.field)
+        start = names.start
+        end = isPrebinned(def) ? `${def.field}_end` : names.end
+      } else {
+        const base = timeUnitField(def)
+        const rect = bandPositionOf(spec, 'arc', def, false) !== 0.5
+        start = rect ? `${base}_offsetted_rect_start` : base
+        end = rect ? `${base}_offsetted_rect_end` : `${base}_end`
+      }
+      update[near] = { scale: channel, field: end }
+      update[far] = { scale: channel, field: start }
+    } else if (discrete) {
+      // positionAndSize: the start of the band, and the band's width on to its end
+      const size = bandScale ? { signal: `bandwidth('${channel}')` } : { value: C.defaultStep }
+      const sizeRef = offset === undefined ? size : { ...size, offset }
+      update[near] = withOffset({ scale: channel, field: aggFieldName(def) })
+      update[far] = { scale: channel, field: aggFieldName(def), offset: sizeRef }
+    } else {
+      const band = bandScale ? { band: def.bandPosition ?? 0.5 } : {}
+      update[near] = withOffset(stack?.fieldChannel === channel ? { scale: channel, field: `${stack.field}_end` } : { scale: channel, field: aggFieldName(def), ...band })
+      if (stack?.fieldChannel === channel) update[far] = withOffset({ scale: channel, field: `${stack.field}_start` })
+      else {
+        const given = channel === 'theta' ? (md.endAngle ?? md.theta2) : innerFallback
+        update[far] = given !== undefined && given !== null ? markRef(given) : zeroOrMinRef(channel)
+      }
+    }
   }
-  if (mark !== 'arc') return null
-  const radiusDef = fields.find((f) => f.channel === 'radius' && f.field)
-  if (thetaDef.aggregate) {
-    const stackBy = fields.some((f) => f.field && !f.aggregate && f.channel !== 'theta' && f.channel !== 'radius')
-    return { stacked: stackBy, field: aggFieldName(thetaDef) }
+  return handled
+}
+
+/**
+ * position-point.ts `pointPosition` / `positionRef` for the `theta` and `radius` of a label: a stacked channel sits in the middle of its
+ * stack (a label's band position is 0.5 unless it says otherwise), any other at its value; `thetaOffset` / `radiusOffset` move it.
+ */
+function polarPointPositions(update: Record<string, unknown>, spec: VLSpec, fields: FieldDef[], stack: PolarStack | undefined): void {
+  const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+  for (const channel of ['theta', 'radius'] as const) {
+    const def = fields.find((f) => f.channel === channel && f.field && !f.datumOnly)
+    if (!def) continue
+    const offsetValue = md[`${channel}Offset`]
+    const offset = offsetValue ? { offset: offsetValue } : {}
+    if (stack?.fieldChannel === channel) {
+      const bp = def.bandPosition ?? 0.5
+      update[channel] = bp === 0 || bp === 1
+        ? { scale: channel, field: `${stack.field}_${bp === 0 ? 'start' : 'end'}`, ...offset }
+        : { signal: `scale(${JSON.stringify(channel)}, ${1 - bp} * datum[${JSON.stringify(`${stack.field}_start`)}] + ${bp} * datum[${JSON.stringify(`${stack.field}_end`)}])`, ...offset }
+    } else {
+      update[channel] = { scale: channel, field: aggFieldName(def), ...offset }
+    }
   }
-  if (thetaDef.timeUnit) {
-    // timeUnit thetas are not stacked; the angles reference the (never
-    // populated) offsetted-rect fields — an upstream quirk the sweep pins
-    return { stacked: false, field: timeUnitField(thetaDef), offsettedRect: true }
+}
+
+/**
+ * stack.ts `potentialStackedChannel` for a polar or cartesian pair (`x`/`y`, `theta`/`radius`): the channel that is stacked, if any.
+ * An explicit `stack` decides; otherwise the one unaggregated quantitative channel, or the only aggregated one of two.
+ */
+function potentialStackedChannel(fields: FieldDef[], first: 'x' | 'theta'): 'x' | 'y' | 'theta' | 'radius' | undefined {
+  const second = first === 'x' ? 'y' : 'radius'
+  const defOf = (ch: string): FieldDef | undefined => fields.find((f) => f.channel === ch && !f.datumOnly && (f.field !== undefined && f.field !== '' || f.aggregate === 'count'))
+  const unbinnedQuantitative = (f: FieldDef | undefined): f is FieldDef => f !== undefined && f.type === 'quantitative' && !f.bin
+  const a = defOf(first)
+  const b = defOf(second)
+  if (a !== undefined && b !== undefined) {
+    if (unbinnedQuantitative(a) && unbinnedQuantitative(b)) {
+      if (a.stack) return first
+      if (b.stack) return second
+      const aAggregate = !!a.aggregate
+      const bAggregate = !!b.aggregate
+      // (with no explicit stacking, only when exactly one of the two is aggregated)
+      if (aAggregate !== bAggregate) return aAggregate ? first : second
+    } else if (unbinnedQuantitative(a)) return first
+    else if (unbinnedQuantitative(b)) return second
+  } else if (unbinnedQuantitative(a)) return first
+  else if (unbinnedQuantitative(b)) return second
+  return undefined
+}
+
+/** What an arc or a label stacks along theta or radius (stack.ts `stack`). */
+interface PolarStack {
+  fieldChannel: 'theta' | 'radius'
+  field: string
+  /** the dimension the stack restarts for: the other polar channel's field, unless it is the stacked one */
+  groupby: FieldDef[]
+  /** the fields that split the stack (colour, detail, ...), not the dimension's */
+  stackBy: FieldDef[]
+  offset: 'zero' | 'center' | 'normalize'
+}
+
+function polarStackOf(fields: FieldDef[], mark: string): PolarStack | undefined {
+  if (mark !== 'arc' && mark !== 'text') return undefined
+  // stack.ts: the cartesian pair is asked first; a stack of x or y (even one that does not happen) leaves theta alone
+  if (potentialStackedChannel(fields, 'x') !== undefined) return undefined
+  const fieldChannel = potentialStackedChannel(fields, 'theta') as 'theta' | 'radius' | undefined
+  if (fieldChannel === undefined) return undefined
+  const def = fields.find((f) => f.channel === fieldChannel && !f.datumOnly)!
+  const field = aggFieldName(def)
+  const dimensionChannel = fieldChannel === 'theta' ? 'radius' : 'theta'
+  const dimensionDef = fields.find((f) => f.channel === dimensionChannel && !f.datumOnly && f.field)
+  const groupby: FieldDef[] = []
+  const groupFields = new Set<string>()
+  if (dimensionDef !== undefined && aggFieldName(dimensionDef) !== field) {
+    groupby.push(dimensionDef)
+    groupFields.add(aggFieldName(dimensionDef))
   }
-  return { stacked: radiusDef == null, field: thetaDef.field }
+  const stackBy: FieldDef[] = []
+  for (const ch of NONPOSITION_ORDER) {
+    if (ch === 'tooltip') continue
+    for (const f of fields) {
+      if (f.channel !== ch || f.datumOnly || !f.field || f.aggregate || groupFields.has(aggFieldName(f))) continue
+      stackBy.push(f)
+    }
+  }
+  let offset: unknown
+  if (def.stack !== undefined) offset = typeof def.stack === 'boolean' ? (def.stack ? 'zero' : null) : def.stack
+  else if (mark === 'arc') offset = 'zero'
+  if (offset !== 'zero' && offset !== 'center' && offset !== 'normalize') return undefined
+  // an aggregate with nothing to split the stack by, and a ranged mark, do not stack
+  if (fields.some((f) => f.aggregate) && stackBy.length === 0) return undefined
+  if (fields.some((f) => f.channel === `${fieldChannel}2` && f.field)) return undefined
+  return { fieldChannel, field, groupby, stackBy, offset }
+}
+
+/** data/stack.ts StackNode.assemble for an arc or a label. */
+function polarStackTransforms(stack: PolarStack, fields: FieldDef[], encoding: Record<string, unknown>): Record<string, unknown>[] {
+  const groupby = stack.groupby.flatMap((d) => (d.bin ? [binNames(d.binParams!, d.field).start, binNames(d.binParams!, d.field).end] : [aggFieldName(d)]))
+  return [{ type: 'stack', groupby, field: stack.field, sort: stackSortParams(fields, stack.stackBy, 'theta', encoding), as: [`${stack.field}_start`, `${stack.field}_end`], offset: stack.offset }]
 }
 
 /** Pre-binned data (`bin: "binned"`): the field holds the bins' starts and no bin transform is made. */
@@ -4615,38 +4681,25 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
     })
   }
 
-  // theta scale (arc marks): the stacked start/end fields span [0, 2pi]
-  const thetaDef = fields.find((f) => f.channel === 'theta' && f.field)
-  const arcThetaS = thetaStackInfo(mark, fields)
-  if ((mark === 'arc' || mark === 'text') && thetaDef) {
-    scales.push({
-      name: 'theta',
-      type: 'linear',
-      // stacked arcs span the start/end fields; plain text layers and
-      // unstacked arcs read the field directly
-      domain: arcThetaS?.stacked
-        ? { data: dataName, fields: [`${arcThetaS.field}_start`, `${arcThetaS.field}_end`] }
-        : { data: dataName, field: arcThetaS?.field ?? thetaDef.field },
-      range: Array.isArray(thetaDef.scale?.range) ? thetaDef.scale!.range : [0, 6.283185307179586],
-      // the theta def's sort reverses the angular scale
-      reverse: thetaDef.sort === 'descending' ? true : undefined,
-      zero: true,
-    })
-  }
-  // radius scale (arc marks): drives outerRadius/innerRadius
-  const radiusDef = fields.find((f) => f.channel === 'radius' && f.field)
-  if (mark === 'arc' && radiusDef) {
-    const stackedR = radiusDef.stack != null && radiusDef.stack !== false
-    scales.push({
-      name: 'radius',
-      type: 'linear',
-      domain: stackedR
-        ? { data: dataName, fields: [`${aggFieldName(radiusDef)}_start`, `${aggFieldName(radiusDef)}_end`] }
-        : { data: dataName, field: aggFieldName(radiusDef) },
-      range: [0, { signal: 'min(width,height)/2' }],
-      reverse: radiusDef.sort === 'descending' ? true : undefined,
-      zero: true,
-    })
+  // theta and radius (scale/type.ts, range.ts, properties.ts zero, domain.ts): a polar position scale is linear (or the type asked for) over
+  // [0, 2pi] / [0, min(width, height) / 2]; a discrete field is a band scale on an arc and a point scale under a label, a time unit a time scale;
+  // the stacked channel spans its start and end
+  const polarStackS = polarStackOf(fields, mark)
+  for (const channel of ['theta', 'radius'] as const) {
+    const polarDef = fields.find((f) => f.channel === channel && f.field && !f.datumOnly && !f.noScale)
+    if (!polarDef || (mark !== 'arc' && mark !== 'text')) continue
+    const sc = numericScale(channel, polarDef, channel === 'theta' ? [0, 6.283185307179586] : [0, { signal: 'min(width,height)/2' }], !polarDef.bin)
+    const asked = polarDef.scale?.type as string | undefined
+    if (isDiscreteType(polarDef.type)) {
+      sc.type = asked === 'band' || asked === 'point' ? asked : mark === 'arc' ? 'band' : 'point'
+      // (a discrete scale is ordered by its domain's sort, not reversed)
+      delete sc.reverse
+    } else if (polarDef.type === 'temporal' && asked === undefined) {
+      sc.type = polarDef.tu?.utc ? 'utc' : 'time'
+      delete sc.zero
+    }
+    if (polarStackS?.fieldChannel === channel && explicitDomainOf(polarDef) === undefined) sc.domain = { data: dataName, fields: [`${polarStackS.field}_start`, `${polarStackS.field}_end`] }
+    scales.push(sc)
   }
 
   // color scale
@@ -6172,19 +6225,15 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const tStroke = textStroke ?? cfgStroke
     if (tStroke != null) update.stroke = { value: tStroke }
     const thetaDefT = fields.find((f) => f.channel === 'theta' && f.field)
-    if (thetaDefT) {
+    const radiusDefT = fields.find((f) => f.channel === 'radius' && f.field)
+    if (thetaDefT || radiusDefT) {
       // polar text (pie labels): anchored at the view center, offset by
       // radius along theta
       update.x = { signal: 'width', mult: 0.5 }
       update.y = { signal: 'height', mult: 0.5 }
-      // positionRef: a text on a stacked angle is centred in its wedge (bandPosition 0.5 by default for theta / radius)
-      const thetaStack = thetaStackInfo(mark, fields)
-      const thetaBand = thetaDefT.bandPosition ?? 0.5
-      update.theta = thetaStack?.stacked
-        ? { signal: `scale("theta", ${1 - thetaBand} * datum[${JSON.stringify(`${thetaStack.field}_start`)}] + ${thetaBand} * datum[${JSON.stringify(`${thetaStack.field}_end`)}])` }
-        : { scale: 'theta', field: thetaDefT.field }
+      polarPointPositions(update, spec, fields, polarStackOf(fields, mark))
       const mRadius = isObject(spec.mark) ? (spec.mark.radius as number | undefined) : undefined
-      if (mRadius != null) update.radius = { value: mRadius }
+      if (mRadius != null && !radiusDefT) update.radius = { value: mRadius }
     } else {
       if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
       if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef) }
@@ -6276,49 +6325,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         ? { value: (cfgType?.outerRadius as number | undefined) ?? (cfgType?.radius as number | undefined) }
         : { signal: 'min(width,height)/2' }
     update.innerRadius = mInner != null ? markRef(mInner) : { value: (cfgType?.innerRadius as number | undefined) ?? 0 }
-    // stacked arcs close at the series' stacked END angle (startAngle runs
-    // from value_end to value_start); unstacked arcs span field → scale zero.
-    // A channel bandPosition p aligns the start angle within the stacked
-    // band: p=0 pins it to the band start, otherwise a lerp signal; the end
-    // angle pins to the band start either way (probed).
-    const arcThetaE = thetaStackInfo(mark, fields)
-    const thetaBP = thetaDefA?.bandPosition as number | undefined
-    if (arcThetaE?.stacked && thetaBP !== undefined) {
-      update.startAngle = thetaBP === 0
-        ? { scale: 'theta', field: `${arcThetaE.field}_start` }
-        : { signal: `scale("theta", ${thetaBP} * datum["${arcThetaE.field}_start"] + ${1 - thetaBP} * datum["${arcThetaE.field}_end"])` }
-      update.endAngle = { scale: 'theta', field: `${arcThetaE.field}_start` }
-    } else if (arcThetaE?.stacked) {
-      update.startAngle = { scale: 'theta', field: `${arcThetaE.field}_end` }
-      update.endAngle = { scale: 'theta', field: `${arcThetaE.field}_start` }
-    } else if (arcThetaE?.offsettedRect) {
-      update.startAngle = { scale: 'theta', field: `${arcThetaE.field}_offsetted_rect_end` }
-      update.endAngle = { scale: 'theta', field: `${arcThetaE.field}_offsetted_rect_start` }
-    } else if (arcThetaE) {
-      update.startAngle = { scale: 'theta', field: arcThetaE.field }
-      update.endAngle = { scale: 'theta', value: 0 }
-    } else if (isObject(arcMark) && (arcMark.theta !== undefined || arcMark.theta2 !== undefined)) {
+    // theta and radius are rectangles in polar coordinates (arc.ts: rectPosition for each); with neither channel the angles are the mark definition's
+    const polarHandled = polarRectPositions(update, spec, fields, polarStackOf(fields, mark), markRef, mInner)
+    if (!polarHandled.has('theta') && isObject(arcMark) && (arcMark.theta !== undefined || arcMark.theta2 !== undefined)) {
       // no theta channel: the angles are the mark def's (rangePosition: theta, then position2orSize for theta2)
       if (arcMark.theta !== undefined) update.startAngle = markRef(arcMark.theta)
       if (arcMark.theta2 !== undefined) update.endAngle = markRef(arcMark.theta2)
-    }
-    // a radius channel drives the radii through its scale (replacing the
-    // mark/config/extent defaults)
-    const radiusDefE = fields.find((f) => f.channel === 'radius' && f.field)
-    if (radiusDefE) {
-      if (radiusDefE.stack != null && radiusDefE.stack !== false) {
-        update.innerRadius = { scale: 'radius', field: `${aggFieldName(radiusDefE)}_start` }
-        update.outerRadius = { scale: 'radius', field: `${aggFieldName(radiusDefE)}_end` }
-      } else if (radiusDefE.tu) {
-        // vega-lite 6.4.3 positions a time-unit radius as an offsetted rect, and its
-        // own output never materializes those fields (the arcs collapse): reproduced
-        // verbatim so the two renderings agree
-        update.innerRadius = { scale: 'radius', field: `${aggFieldName(radiusDefE)}_offsetted_rect_start` }
-        update.outerRadius = { scale: 'radius', field: `${aggFieldName(radiusDefE)}_offsetted_rect_end` }
-      } else {
-        update.outerRadius = { scale: 'radius', field: aggFieldName(radiusDefE) }
-        update.innerRadius = { scale: 'radius', value: 0 }
-      }
     }
   } else if (mark === 'trail') {
     // trail: a stroked-by-size line — fill default, size channel/def, sorted
@@ -6532,15 +6544,15 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       for (const key of Object.keys(update)) update[key] = midpoint(update[key], scaleName, names.start, names.end, bp)
     }
   }
-  // arc polar offsets apply to the angles/radius channels
-  const thetaOff = markDefP?.thetaOffset as number | undefined
+  // arc polar offsets apply to the angles/radius channels (those a polar channel drives carry theirs already)
+  const thetaOff = fields.some((f) => f.channel === 'theta' && f.field) ? undefined : markDefP?.thetaOffset as number | undefined
   if (thetaOff !== undefined) {
     for (const ch of ['startAngle', 'endAngle']) {
       const enc = update[ch] as Record<string, unknown> | undefined
       if (enc && typeof enc === 'object' && enc.offset === undefined) enc.offset = thetaOff
     }
   }
-  const radiusOff = markDefP?.radiusOffset as number | undefined
+  const radiusOff = fields.some((f) => f.channel === 'radius' && f.field) ? undefined : markDefP?.radiusOffset as number | undefined
   if (radiusOff !== undefined) {
     const enc = update.outerRadius as Record<string, unknown> | undefined
     if (enc && typeof enc === 'object' && enc.offset === undefined) enc.offset = radiusOff
@@ -6988,8 +7000,8 @@ function binGeometry(spec: VLSpec, mark: string): { spacing: number; minBandSize
  * scale the channel ends up with (`domainHasZero`), which is not known while the marks are built. The reference is written as the
  * 'definitely' form and noted here; `resolveZeroOrMin` rewrites it, once the view's scales are assembled.
  */
-const LAZY_ZERO_OR_MIN = new WeakMap<object, 'x' | 'y'>()
-function zeroOrMinRef(ch: 'x' | 'y', _def?: FieldDef | undefined, _mark?: string): Record<string, unknown> {
+const LAZY_ZERO_OR_MIN = new WeakMap<object, string>()
+function zeroOrMinRef(ch: string, _def?: FieldDef | undefined, _mark?: string): Record<string, unknown> {
   void _def
   void _mark
   const ref: Record<string, unknown> = { scale: ch, value: 0 }

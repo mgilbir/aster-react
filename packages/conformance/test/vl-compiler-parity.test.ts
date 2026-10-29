@@ -804,6 +804,29 @@ const GROUPS: Record<string, Case[]> = {
     ['layers over a scale without zero', { data: DATA, layer: [{ mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } }, { mark: 'line', encoding: { x: q('x'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } }] }],
     ['an area faceted by a row, over a scale without zero', { data: DATA, facet: { row: n('g') }, spec: { height: 40, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } } }],
   ],
+  // stack.ts (theta / radius), scale/type.ts + range.ts + properties.ts (theta, radius), mark/arc.ts rectPosition, mark/text.ts pointPosition:
+  // arcs and their labels over every kind of theta and radius (arc_radial, arc_radial_histogram, arc_ordinal_theta)
+  'polar arcs and labels (arc_radial, arc_radial_histogram, arc_ordinal_theta)': [
+    ['an ordinal theta and a quantitative radius', { data: DATA, mark: 'arc', encoding: { theta: { field: 'c', type: 'ordinal' }, radius: q('v'), color: n('c') } }],
+    ['a nominal theta and a summed radius', { data: DATA, mark: 'arc', encoding: { theta: n('c'), radius: q('v', { aggregate: 'sum' }), color: n('c') } }],
+    ['a sorted descending ordinal theta', { data: DATA, mark: 'arc', encoding: { theta: { field: 'c', type: 'ordinal', sort: 'descending' }, radius: q('v'), color: n('c') } }],
+    ['a stacked theta and a sqrt radius with a range minimum', { data: { values: [12, 23, 47, 6, 52, 19].map((v) => ({ data: v })) }, mark: { type: 'arc', innerRadius: 20, stroke: '#fff' }, encoding: { theta: q('data', { stack: true }), radius: { field: 'data', type: 'quantitative', scale: { type: 'sqrt', zero: true, rangeMin: 20 } }, color: { field: 'data', type: 'nominal', legend: null } } }],
+    ['a stacked theta, radius left to its default', { data: DATA, mark: 'arc', encoding: { theta: q('v', { stack: true }), radius: q('v'), color: n('c') } }],
+    ['a binned theta and a counted sqrt radius', { data: BOX, mark: { type: 'arc', stroke: 'white', tooltip: true }, encoding: { theta: q('v', { bin: true }), radius: { aggregate: 'count', scale: { type: 'sqrt' } } } }],
+    ['a binned theta and a counted radius, coloured', { data: BOX, mark: 'arc', encoding: { theta: q('v', { bin: { maxbins: 6 } }), radius: { aggregate: 'count' }, color: n('c') } }],
+    ['a nominal theta, a stacked radius', { data: DATA, mark: 'arc', encoding: { theta: n('c'), radius: q('v', { stack: true }), color: n('g') } }],
+    ['a normalized stacked theta', { data: DATA, mark: 'arc', encoding: { theta: q('v', { stack: 'normalize' }), color: n('c') } }],
+    ['a quantitative theta and an ordinal radius', { data: DATA, mark: 'arc', encoding: { theta: q('v'), radius: { field: 'c', type: 'ordinal' }, color: n('c') } }],
+    ['a time-unit theta', { data: DATA, mark: 'arc', encoding: { theta: { field: 't', type: 'temporal', timeUnit: 'year' }, radius: q('v'), color: n('c') } }],
+    ['a radius whose domain does not hold zero', { data: DATA, mark: 'arc', encoding: { theta: n('c'), radius: q('v', { scale: { zero: false } }), color: n('c') } }],
+    ['a radius with an explicit domain', { data: DATA, mark: 'arc', encoding: { theta: n('c'), radius: q('v', { scale: { domain: [0, 12] } }), color: n('c') } }],
+    ['a radius offset and a theta offset', { data: DATA, mark: { type: 'arc', radiusOffset: 5, thetaOffset: 0.1 }, encoding: { theta: q('v', { stack: true }), radius: q('v', { scale: { type: 'sqrt' } }), color: n('c') } }],
+    ['a pie with a summed theta and labels', { data: DATA, encoding: { theta: q('v', { aggregate: 'sum' }), color: n('c') }, layer: [{ mark: { type: 'arc', outerRadius: 100 } }, { mark: { type: 'text', radius: 120 }, encoding: { text: n('c') } }] }],
+    ['arcs and labels over a stacked theta and a sqrt radius (arc_radial)', { data: { values: [12, 23, 47, 6, 52, 19].map((v) => ({ data: v })) }, layer: [{ mark: { type: 'arc', innerRadius: 20, stroke: '#fff' } }, { mark: { type: 'text', radiusOffset: 10 }, encoding: { text: q('data') } }], encoding: { theta: q('data', { stack: true }), radius: { field: 'data', scale: { type: 'sqrt', zero: true, rangeMin: 20 } }, color: { field: 'data', type: 'nominal', legend: null } } }],
+    ['arcs and labels over a binned theta (arc_radial_histogram)', { data: BOX, layer: [{ mark: { type: 'arc', stroke: 'white', tooltip: true } }, { mark: { type: 'text', radiusOffset: 15, align: 'right' }, encoding: { text: { bin: true, field: 'v' }, angle: { bin: true, field: 'v', scale: { range: [90, 450] } } } }], encoding: { theta: { bin: true, field: 'v' }, radius: { aggregate: 'count', scale: { type: 'sqrt' } } } }],
+    ['labels over an ordinal theta', { data: DATA, mark: { type: 'text', radiusOffset: 8 }, encoding: { theta: { field: 'c', type: 'ordinal' }, radius: q('v'), text: n('c') } }],
+    ['labels over a stacked radius', { data: DATA, mark: 'text', encoding: { theta: n('c'), radius: q('v', { stack: true }), text: n('c'), color: n('g') } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
