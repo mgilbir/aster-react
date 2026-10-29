@@ -4569,7 +4569,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       && isContinuousScaleType(type) && def.scale?.padding == null
     ) sc.padding = ((isObject(specConfigOf(spec).bar) ? (specConfigOf(spec).bar as Record<string, unknown>).continuousBandSize : undefined) as number | undefined) ?? 5
     if (type === 'linear' || type === 'log' || type === 'pow' || type === 'sqrt' || type === 'symlog') {
-      const zeroDefault = explicitDom !== undefined ? zeroForCustomDomain(explicitDom) : type === 'log' ? false : rangedBoth ? true : zeroDefaultFor(mark, channel, orient)
+      const zeroDefault = explicitDom !== undefined ? zeroForCustomDomain(explicitDom) : isParamDomain(def) ? false : type === 'log' ? false : rangedBoth ? true : zeroDefaultFor(mark, channel, orient)
       if (type !== 'log' || def.scale?.zero != null) {
         sc.zero = (def.scale?.zero as boolean | undefined) ?? zeroDefault
       }
@@ -4675,7 +4675,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
     }
     if (def.bin && !discrete && userDomain === undefined) { const b = binsProp(def); if (b) sc.bins = b }
     if (def.sort === 'descending') sc.reverse = true
-    if (!discrete && scalePropApplies(name, type, 'zero')) sc.zero = (def.scale?.zero as boolean | undefined) ?? (explicitDom !== undefined && isContinuousScaleType(type) ? zeroForCustomDomain(explicitDom) : type === 'log' ? false : zero)
+    if (!discrete && scalePropApplies(name, type, 'zero')) sc.zero = (def.scale?.zero as boolean | undefined) ?? (explicitDom !== undefined && isContinuousScaleType(type) ? zeroForCustomDomain(explicitDom) : isParamDomain(def) && isContinuousScaleType(type) ? false : type === 'log' ? false : zero)
     for (const [k, v] of Object.entries(def.scale ?? {})) {
       if (k === 'type' || k === 'domain' || k === 'range' || k === 'zero' || k === 'rangeMin' || k === 'rangeMax' || !scalePropApplies(name, type, k)) continue
       sc[k] = v
@@ -5105,6 +5105,9 @@ function explicitDomainValue(explicit: unknown, def: FieldDef): unknown {
   }
   return explicit.map((v) => (isObject(v) && typeof v.expr === 'string' ? { signal: v.expr } : v))
 }
+
+/** A `domain: {param}` is a custom domain too (scale/properties.ts zero()): the scale does not widen it to include zero. */
+const isParamDomain = (def: FieldDef): boolean => isObject(def.scale?.domain) && typeof (def.scale?.domain as Record<string, unknown>).param === 'string'
 
 /** vega-lite scale/properties.ts zero(): with a custom domain only one that spans 0 keeps zero. */
 function zeroForCustomDomain(explicit: unknown): boolean {
@@ -5788,6 +5791,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const cfgType = isObject(userConfig?.[mark]) ? (userConfig![mark] as Record<string, unknown>) : undefined
   const cfgMark = isObject(userConfig?.mark) ? (userConfig!.mark as Record<string, unknown>) : undefined
   const cfgColor = (cfgType?.color ?? cfgMark?.color) as string | undefined
+  // (config.ts defaultConfig: `rule` and `text` carry a black colour of their own, which keeps config.mark.color off them)
+  const cfgColorBlack = (cfgType?.color ?? 'black') as string
   const cfgFill = (cfgType?.fill ?? cfgMark?.fill) as string | undefined
   const cfgStroke = (cfgType?.stroke ?? cfgMark?.stroke) as string | undefined
   // markDef.opacity ?? config[type].opacity ?? config.mark.opacity
@@ -6158,13 +6163,15 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
     if (xDef && orient === 'horizontal') {
       // horizontal area: x is the value axis; the baseline runs to the start of
-      // the x domain (vega-lite's zeroOrMin rule), and y2 is not emitted.
+      // the x domain (vega-lite's zeroOrMin rule) unless x2 ranges it, and y2 is not emitted.
       const stackedX = isStacked(xDef, mark, orient, fields)
       if (stackedX) {
         update.x = { scale: 'x', field: `${aggFieldName(xDef)}_end` }
         update.x2 = { scale: 'x', field: `${aggFieldName(xDef)}_start` }
       } else {
-        update.x2 = zeroOrMinRef('x')
+        // a ranged area: x2 is the other end
+        const areaX2 = fields.find((f) => f.channel === 'x2' && f.field && !f.datumOnly)
+        update.x2 = areaX2 ? { scale: 'x', field: aggFieldName(areaX2) } : zeroOrMinRef('x')
       }
     }
     { const dfn = definedSignal(spec, fields, mark); if (dfn !== undefined) update.defined = dfn }
@@ -6250,7 +6257,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     update[thickVg] = { value: thickVal }
   } else if (mark === 'rule') {
     const ruleDef = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
-    update.stroke = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: (ruleDef.stroke as string | undefined) ?? markColor ?? cfgStroke ?? cfgColor ?? 'black' }
+    update.stroke = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: (ruleDef.stroke as string | undefined) ?? markColor ?? cfgStroke ?? cfgColorBlack }
     const ruleFill = ruleDef.fill as string | undefined
     if (ruleFill != null) update.fill = { value: ruleFill }
     // vega-lite rule orientation (compile/mark/init.ts, falling through the
@@ -6301,11 +6308,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (ruleDef.fillOpacity !== undefined) update.fillOpacity = { value: ruleDef.fillOpacity }
     if (markOpacity != null) update.opacity = { value: markOpacity }
     if (ruleDef.filled === true) {
-      update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? ruleFill ?? cfgFill ?? cfgColor ?? 'black' }
+      update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? ruleFill ?? cfgFill ?? cfgColorBlack }
       delete update.stroke
     }
   } else if (mark === 'text') {
-    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? markFill ?? cfgFill ?? cfgColor ?? 'black' }
+    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? markFill ?? cfgFill ?? cfgColorBlack }
     const textStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
     const tStroke = textStroke ?? cfgStroke
     if (tStroke != null) update.stroke = { value: tStroke }
@@ -6536,8 +6543,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const v = markDefP?.[p]
     if (v !== undefined && update[p] === undefined) update[p] = isObject(v) && typeof v.signal === 'string' ? { signal: v.signal } : { value: v }
   }
-  // aria.ts ariaRoleDescription: `config.aria: false` leaves the role description out, whatever the mark def says
-  if ((isObject(spec.config) ? (spec.config as Record<string, unknown>).aria : undefined) === false) delete update.ariaRoleDescription
+  // aria.ts: `config.aria: false` leaves the role description out, whatever the mark def says; a mark with `aria: false` (its own, or
+  // its mark type's or config.mark's) is hidden from the accessibility tree and encodes no aria property at all
+  {
+    const cfgAll = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+    const ariaOf = (o: unknown): unknown => (isObject(o) ? o.aria : undefined)
+    const markAria = markDefP?.aria ?? ariaOf(cfgAll[mark]) ?? ariaOf(cfgAll.mark)
+    if (cfgAll.aria === false || markAria === false) delete update.ariaRoleDescription
+  }
   // a link: markDef.href is the mark's href, and any href (mark, config or channel) makes the cursor a pointer
   if (markDefP?.href !== undefined && update.href === undefined) update.href = { value: markDefP.href }
   if ((update.href !== undefined || passProp('href') !== undefined) && update.cursor === undefined) update.cursor = { value: 'pointer' }
@@ -6808,7 +6821,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       marks: [{
         name: 'marks',
         type: markSpec.type,
-        style: [mark],
+        style: markSpec.style,
         ...(markSpec.clip !== undefined ? { clip: markSpec.clip } : {}),
         ...(markSpec.aria !== undefined ? { aria: markSpec.aria } : {}),
         ...(markSortSpec ? { sort: markSortSpec } : {}),
