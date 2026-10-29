@@ -43,8 +43,10 @@ vega/packed-bubble-chart
 vega/pacman
 vega/parallel-coordinates
 vega/pie-chart
+vega/platformer
 vega/population-pyramid
 vega/probability-density
+vega/projections
 vega/quantile-dot-plot
 vega/quantile-quantile-plot
 vega/radar-chart

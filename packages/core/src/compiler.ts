@@ -63,9 +63,10 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     sigNames.includes(name) ? { signal: name } : 0
   const width = typeof spec.width === 'number' ? spec.width : (typeof spec.width === 'object' ? spec.width as SizeSpec : defaultSize('width'))
   const height = typeof spec.height === 'number' ? spec.height : (typeof spec.height === 'object' ? spec.height as SizeSpec : defaultSize('height'))
-  const contentSized = (['width', 'height'] as const).filter((d) => spec.layout != null && spec[d] == null && !sigNames.includes(d))
+  const contentSized = (['width', 'height'] as const).filter((d) => spec[d] == null && !sigNames.includes(d))
   const frameStroke = resolveFrameStroke(spec)
   const frameFill = resolveFrameFill(spec)
+  const frameFillTransparent = frameStyleValue(spec, 'fill') === 'transparent'
   const frameStrokeWidth = resolveFrameNumber(spec, 'strokeWidth')
   const frameFillOpacity = resolveFrameNumber(spec, 'fillOpacity')
   const frameOpacity = resolveFrameNumber(spec, 'opacity')
@@ -117,6 +118,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     background,
     frameStroke,
     frameFill,
+    ...(frameFillTransparent ? { frameFillTransparent: true as const } : {}),
     frameStrokeWidth,
     frameFillOpacity,
     frameOpacity,
@@ -223,6 +225,13 @@ function resolveFrameDash(spec: VgSpec): number[] | undefined {
   return Array.isArray(v) ? v.map(Number) : undefined
 }
 
+/** vega-functions parseExpression's text for a signal's `init` / `update`: a string as it is, anything else truthy as its JSON; a falsy one is none. */
+function signalExprText(v: unknown): string | undefined {
+  if (!v) return undefined
+  if (typeof v === 'string') return v
+  return typeof v === 'object' ? JSON.stringify(v) : String(v)
+}
+
 function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSignalDef[] {
   const out: CompiledSignalDef[] = []
   for (const s of signals ?? []) {
@@ -231,8 +240,12 @@ function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSi
     // a null value is a value (`??` would fall through to `init` for it)
     if (s.value !== undefined) def.value = s.value
     // `init` is an expression (vega signal-updates: `op.initonly`), not a value.
-    if (typeof s.init === 'string' && s.update === undefined) def.init = s.init
-    if (typeof s.update === 'string') def.update = s.update
+    // (vega-parser reads a truthy one as the text of an expression -- a number, a boolean, an array are written out as their JSON --
+    // and ignores a falsy one: `init: 15` is 15, `init: 0` is no init)
+    const init = signalExprText(s.init)
+    if (init !== undefined && s.update === undefined) def.init = init
+    const update = signalExprText(s.update)
+    if (update !== undefined || typeof s.update === 'string') def.update = update ?? (s.update as string)
     if (s.bind != null && (typeof s.bind === 'string' || typeof s.bind === 'object')) {
       def.bind = s.bind as Record<string, unknown> | string
     }
@@ -635,6 +648,10 @@ function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Reco
   if ((m as any).axes !== undefined) out.axes = compileGuideAxes((m as any).axes as Array<Record<string, unknown>>, cfgAll, inScope)
   if ((m as any).legends !== undefined) out.legends = compileGuideLegends((m as any).legends as Array<Record<string, unknown>>, cfgAll)
   if ((m as any).data !== undefined) out.data = ((m as any).data as Array<Record<string, unknown>>).map(compileData)
+  // a group's own projections (vega: built per group item, in its scope: `type: {signal: "parent.data"}`)
+  if (m.type === 'group' && Array.isArray(m.projections) && m.projections.length) {
+    out.projections = (m.projections as Array<Record<string, unknown>>).map((pr) => compileProjection(pr, (cfgMarktype as unknown as { projection?: Record<string, unknown> } | undefined)?.projection))
+  }
   // a group's own signals (vega: one set per group item, see runtime buildGroupItem)
   if (m.type === 'group' && Array.isArray(m.signals) && m.signals.length) out.signalDefs = compileSignalDefs(m.signals as Array<Record<string, unknown>>)
   if (Array.isArray(m.transform)) {

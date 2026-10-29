@@ -2,7 +2,8 @@
  * The raster-grid transforms of vega-geo: `kde2d` (KDE2D: 2D kernel density estimates of point data, one raster
  * grid per group) and `isocontour` (Isocontour: the level sets of raster grids as GeoJSON MultiPolygons), ported
  * operation for operation (vega-geo 5.1.2 `util/density2D.js`, `util/quantize.js`, `util/contours.js` via the geo
- * addon's marching-squares engine). Loaded by the transforms addon; `isocontour` needs the geo addon.
+ * addon's marching-squares engine), and `heatmap` (Heatmap: a raster grid drawn as an image). Loaded by the transforms addon;
+ * `isocontour` needs the geo addon.
  */
 import { error, isArray } from './util.js'
 import { fieldOf } from './transform-agg.js'
@@ -10,6 +11,9 @@ import { blurX, blurY, bwRadius, compileExprTransform, contourQuantize } from '.
 import type { Row, TransformContext } from './transform.js'
 import { boundedCount, meterRows } from './limits.js'
 import { geoRegistry, requireGeo } from './registry.js'
+import { parseExpression, type AstNode } from './expr-parser.js'
+import { rgbConvert } from './color.js'
+import { RasterImage } from './raster-image.js'
 
 type Params = Record<string, unknown>
 type Get = (d: Row) => unknown
@@ -188,4 +192,90 @@ export function isocontourRows(rows: Row[], t: Params, ctx: TransformContext): R
     for (const p of paths) out.push({ ...(as != null ? { [as]: p } : p), ...r })
   }
   return out
+}
+
+/**
+ * The fields of `datum` an expression names (`datum.$x`, `datum['$value']`): what vega's code generator collects, and so what
+ * it calls "depends on the pixel". A use it cannot see by name (`datum[name]`, `datum` handed to a function) is not one.
+ */
+function datumFieldsOf(expr: string): Set<string> {
+  const names = new Set<string>()
+  const visit = (n: unknown): void => {
+    if (n === null || typeof n !== 'object') return
+    if (Array.isArray(n)) { for (const x of n) visit(x); return }
+    const node = n as AstNode
+    if (node.type === 'MemberExpression') {
+      const obj = node.object as AstNode
+      const prop = node.property as AstNode
+      if (obj.type === 'Identifier' && obj.name === 'datum') {
+        if (!node.computed && prop.type === 'Identifier') names.add(String(prop.name))
+        else if (node.computed && prop.type === 'Literal') names.add(String(prop.value))
+      }
+    }
+    for (const k of Object.keys(node)) if (k !== 'type') visit(node[k])
+  }
+  visit(parseExpression(expr))
+  return names
+}
+
+const exprOf = (v: unknown): string | undefined =>
+  v !== null && typeof v === 'object' && typeof (v as { expr?: unknown }).expr === 'string' ? (v as { expr: string }).expr : undefined
+
+interface Pixel { $x: number; $y: number; $value: number; $max: number | undefined; [k: string]: unknown }
+
+/** vega-geo Heatmap: each tuple's raster grid drawn as an image (one pixel per cell: colour from `color`, alpha from `opacity`). */
+export function heatmapRows(rows: Row[], t: Params, ctx: TransformContext): Row[] {
+  const shared = t.resolve === 'shared'
+  const field: Get = t.field == null ? (r) => r : accessorOf(t.field, ctx)
+  const as = (t.as as string | undefined) || 'image'
+
+  // a parameter that is an expression is a function of the pixel; it is evaluated once per grid unless it reads one of these
+  const PIXEL = ['$x', '$y', '$value', '$max']
+  const depends = (e: string): boolean => { const f = datumFieldsOf(e); return PIXEL.some((k) => f.has(k)) }
+  const colorExpr = exprOf(t.color)
+  const colorFn = colorExpr !== undefined ? compileExprTransform(colorExpr, ctx) : undefined
+  const colorDep = colorExpr !== undefined && depends(colorExpr)
+  const color = (o: Pixel): ReturnType<typeof rgbConvert> => rgbConvert(colorFn ? colorFn(o as never) : (t.color || '#888'))
+  const opacityExpr = exprOf(t.opacity)
+  const opacityFn = opacityExpr !== undefined ? compileExprTransform(opacityExpr, ctx) : undefined
+  // (vega: no opacity, or a falsy one, is the [0, max] gradient)
+  const opacityDep = opacityExpr !== undefined ? depends(opacityExpr) : !t.opacity
+  const opacity = (o: Pixel): number => (opacityFn ? (opacityFn(o as never) as number) : t.opacity ? +(t.opacity as number) : (o.$value / (o.$max as number)) || 0)
+
+  const obj: Pixel = {
+    $x: 0, $y: 0, $value: 0,
+    $max: shared ? max(rows.map((r) => max((field(r) as RasterGrid).values) as number)) : 0,
+  }
+  return rows.map((r) => {
+    const grid = field(r) as RasterGrid
+    const o: Pixel = { ...r, ...obj }
+    if (!shared) o.$max = max(grid.values || [])
+    const c0 = colorDep ? undefined : color(o)
+    const a0 = opacityDep ? undefined : opacity(o)
+
+    const n = grid.width
+    const m = grid.height
+    const x1 = grid.x1 || 0
+    const y1 = grid.y1 || 0
+    const x2 = grid.x2 || n
+    const y2 = grid.y2 || m
+    const val = grid.values
+    const w = x2 - x1
+    const h = y2 - y1
+    boundedCount(w * h, 'heatmap pixels')
+    const pix = new Uint8ClampedArray(4 * w * h)
+    for (let j = y1, k = 0; j < y2; ++j) {
+      o.$y = j - y1
+      for (let i = x1, base = j * n; i < x2; ++i, k += 4) {
+        o.$x = i - x1
+        o.$value = val ? val[i + base]! : 0
+        const v = c0 ?? color(o)
+        pix[k] = v.r
+        pix[k + 1] = v.g
+        pix[k + 2] = v.b
+        pix[k + 3] = ~~(255 * (a0 ?? opacity(o)))
+      }
+    }
+    return { ...r, [as]: new RasterImage(w, h, pix) }
+  })
 }

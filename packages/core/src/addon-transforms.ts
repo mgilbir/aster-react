@@ -1,6 +1,6 @@
 /**
  * Opt-in transforms addon. Importing (or dynamic-importing) this module
- * registers the rare-layout transforms — kde/kde2d/isocontour/quantile/regression/loess,
+ * registers the rare-layout transforms — kde/kde2d/isocontour/heatmap/quantile/regression/loess,
  * pack/partition/treemap/tree/treelinks, force, wordcloud, voronoi, geopath — and the distribution
  * functions of the expression language (sample/density/cumulative/quantile for the normal, log-normal
  * and uniform distributions, treePath, treeAncestors) into the core registry:
