@@ -84,6 +84,7 @@ vl/animated_hop
 vl/arc_color_mappings
 vl/arc_donut
 vl/arc_facet
+vl/arc_params
 vl/arc_pie
 vl/arc_pie_normalize_tooltip
 vl/arc_pie_pyramid
@@ -245,6 +246,8 @@ vl/circle_wilkinson_dotplot
 vl/concat_bar_layer_circle
 vl/concat_bar_scales_discretize
 vl/concat_bar_scales_discretize_2_cols
+vl/concat_hover
+vl/concat_hover_filter
 vl/concat_layer_voyager_result
 vl/concat_marginal_histograms
 vl/concat_population_pyramid
@@ -299,6 +302,7 @@ vl/interactive_bin_extent_bottom
 vl/interactive_brush
 vl/interactive_concat_layer
 vl/interactive_crossfilter
+vl/interactive_dashboard_europe_pop
 vl/interactive_geo_earthquakes
 vl/interactive_global_development
 vl/interactive_histogram_full_height_hover
@@ -484,6 +488,7 @@ vl/point_ordinal_color
 vl/point_overlap
 vl/point_params
 vl/point_quantile_quantile
+vl/point_scale_range_field
 vl/point_shape_custom
 vl/point_tooltip
 vl/rect_binned_heatmap
@@ -627,6 +632,7 @@ vl/tick_width_band
 vl/time_custom_step
 vl/time_output_utc_scale
 vl/time_output_utc_timeunit
+vl/time_parse_binnedutc
 vl/time_parse_binnedutc_with_escaped_field
 vl/time_parse_local
 vl/time_parse_utc

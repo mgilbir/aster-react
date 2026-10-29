@@ -395,6 +395,14 @@ function hasTopFacet(spec: VLSpec): boolean {
  * y/y2) have none, which this returns as 'vertical' too.
  */
 function inferOrient(spec: VLSpec, mark: string, markRaw: unknown, fields: FieldDef[]): string {
+  return markOrient(spec, mark, markRaw, fields) ?? 'vertical'
+}
+
+/**
+ * mark/init.ts orient, exactly: undefined when vega-lite settles on none (a bar or tick over two non-measures, say). Marks read
+ * that as "not vertical" (tick.ts) or as neither band channel (position-rect.ts isBarOrTickBand), so `inferOrient` says 'vertical'.
+ */
+function markOrient(spec: VLSpec, mark: string, markRaw: unknown, fields: FieldDef[]): string | undefined {
   if (!['bar', 'area', 'rule', 'tick', 'line', 'text'].includes(mark)) return 'vertical'
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   const xDef = fields.find((f) => f.channel === 'x')
@@ -424,7 +432,7 @@ function inferOrient(spec: VLSpec, mark: string, markRaw: unknown, fields: Field
     phase = 'rule'
   }
   if (phase === 'rule') {
-    if (x2 && y2) return 'vertical' // a line segment has no orientation
+    if (x2 && y2) return undefined // a line segment has no orientation
     phase = 'area'
   }
   if (phase === 'area') {
@@ -452,7 +460,7 @@ function inferOrient(spec: VLSpec, mark: string, markRaw: unknown, fields: Field
   const yIsTemporal = yDef?.type === 'temporal'
   if (xIsTemporal && !yIsTemporal) return 'vertical'
   if (!xIsTemporal && yIsTemporal) return 'horizontal'
-  return 'vertical'
+  return undefined
 }
 
 const LEAF_PATHS = new WeakMap<VLSpec, number[]>()
@@ -1892,14 +1900,16 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     return { ...(cfgHeader ?? {}), ...((d?.header as Record<string, unknown> | undefined) ?? {}) }
   }
   const sizeSignalsOut = facetChildSignals
-  const rowDomainName = ctx.fresh(childModelName(ctx.modelName, 'row_domain'))
-  const columnDomainName = ctx.fresh(childModelName(ctx.modelName, 'column_domain'))
+  // (model.getName: a named root view carries its name in front of every name it makes: `trellis_barley_facet_domain`)
+  const facetModelName = ctx.modelName || (typeof spec.name === 'string' && spec.name !== '' ? signalSafe(spec.name) : '')
+  const rowDomainName = ctx.fresh(childModelName(facetModelName, 'row_domain'))
+  const columnDomainName = ctx.fresh(childModelName(facetModelName, 'column_domain'))
 
   if (wrapFd && wrapField) {
     // wrapped facet: one field laid out left-to-right over `columns` columns
-    const facetDomain = ctx.fresh(childModelName(ctx.modelName, 'facet_domain'))
-    const rowSeq = ctx.fresh(childModelName(ctx.modelName, 'facet_domain_row'))
-    const colSeq = ctx.fresh(childModelName(ctx.modelName, 'facet_domain_column'))
+    const facetDomain = ctx.fresh(childModelName(facetModelName, 'facet_domain'))
+    const rowSeq = ctx.fresh(childModelName(facetModelName, 'facet_domain_row'))
+    const colSeq = ctx.fresh(childModelName(facetModelName, 'facet_domain_column'))
     const hdrW = headerOf(wrapDef)
     const nCols = wrapColumns
     const wrapOrder = facetOrder(wrapDef)
@@ -2509,8 +2519,8 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
 function prefixMarkNames(m: Record<string, unknown>, prefix: string): Record<string, unknown> {
   const out: Record<string, unknown> = { ...m }
   if (isSelectionMark(m)) return out
-  // (the facet header titles are named `row-title` / `column-title` whatever the model)
-  if (typeof m.name === 'string' && m.name !== 'row-title' && m.name !== 'column-title') out.name = `${prefix}${m.name}`
+  // (the facet header titles are named `row-title` / `column-title` / `facet-title` whatever the model)
+  if (typeof m.name === 'string' && m.name !== 'row-title' && m.name !== 'column-title' && m.name !== 'facet-title') out.name = `${prefix}${m.name}`
   if (Array.isArray(m.marks)) out.marks = (m.marks as Record<string, unknown>[]).map((c) => prefixMarkNames(c, prefix))
   return out
 }
@@ -4387,7 +4397,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       name,
       type,
       domain: userDomain ?? (discrete ? sortedDomain(def, dataName, dc) : def.bin ? binsDomain(def) : unaggregatedDomain(def, dataName, cfgS) ?? { data: dataName, field: aggFieldName(def) }),
-      range: def.scale?.range ?? (['quantile', 'quantize', 'threshold'].includes(type) ? countRange(range[0], range[1], discreteCount(type, cfgS, explicitDom)) : range),
+      range: rangeRef(def, dataName, def.scale?.range) ?? (['quantile', 'quantize', 'threshold'].includes(type) ? countRange(range[0], range[1], discreteCount(type, cfgS, explicitDom)) : range),
     }
     if (def.bin && !discrete && userDomain === undefined) { const b = binsProp(def); if (b) sc.bins = b }
     if (def.sort === 'descending') sc.reverse = true
@@ -4467,7 +4477,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       name: 'shape',
       type: 'ordinal',
       domain: sortedDomain(shapeDefS, dataName, dc),
-      range: shapeDefS.scale?.range ?? 'symbol',
+      range: rangeRef(shapeDefS, dataName, shapeDefS.scale?.range) ?? 'symbol',
     })
   }
 
@@ -4478,7 +4488,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       name: 'strokeDash',
       type: 'ordinal',
       domain: sortedDomain(strokeDashDefS, dataName, dc),
-      range: strokeDashDefS.scale?.range ?? [[1, 0], [4, 2], [2, 1], [1, 1], [1, 2, 4, 2]],
+      range: rangeRef(strokeDashDefS, dataName, strokeDashDefS.scale?.range) ?? [[1, 0], [4, 2], [2, 1], [1, 1], [1, 2, 4, 2]],
     })
   }
 
@@ -4528,7 +4538,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
         name: 'color',
         type: 'ordinal',
         domain: sortedDomain(colorDef, dataName, dc),
-        range: (colorDef.scale?.range as unknown) ?? (colorDef.scale?.scheme != null ? schemeRange(colorDef.scale.scheme) : ordinalColor ? 'ordinal' : 'category'),
+        range: rangeRef(colorDef, dataName, colorDef.scale?.range) ?? (colorDef.scale?.scheme != null ? schemeRange(colorDef.scale.scheme) : ordinalColor ? 'ordinal' : 'category'),
         ...(ordinalColor ? { interpolate: 'hcl' } : {}),
       })
     } else {
@@ -4540,7 +4550,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
           name: 'color',
           type: 'bin-ordinal',
           domain: undefined,
-          range: cs.range != null ? cs.range : cs.scheme != null ? schemeRange(cs.scheme) : mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp',
+          range: cs.range != null ? rangeRef(colorDef, dataName, cs.range) : cs.scheme != null ? schemeRange(cs.scheme) : mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp',
           bins: { signal: binNames(colorDef.binParams!, colorDef.field).signal },
           interpolate: 'hcl',
           ...(cs.reverse !== undefined ? { reverse: Boolean(cs.reverse) } : colorDef.sort === 'descending' ? { reverse: true } : {}),
@@ -4564,7 +4574,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
         // rect/geoshape marks, a ramp otherwise; a domainMid makes it
         // diverging; an explicit scheme replaces the range (probed)
         ...(cs.range != null
-          ? { range: cs.range }
+          ? { range: rangeRef(colorDef, dataName, cs.range) }
           : cs.scheme != null
             ? { range: schemeRange(cs.scheme) }
             : { range: cs.domainMid != null ? 'diverging' : mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp' }),
@@ -4642,6 +4652,11 @@ function scalePropApplies(channel: string, type: string, prop: string): boolean 
 }
 
 /** A scale `scheme` (a name or {name, extent, count}) as a Vega range scheme object. */
+function rangeRef(def: FieldDef, dataName: string, range: unknown): unknown {
+  // scale/range.ts: a range given as a field ({field}) is read from the main data, sorted by the scale's own field
+  return isObject(range) && typeof range.field === 'string' ? { data: dataName, field: range.field, sort: { op: 'min', field: aggFieldName(def) } } : range
+}
+
 function schemeRange(scheme: unknown): Record<string, unknown> {
   if (isObject(scheme)) {
     const { name, ...rest } = scheme
@@ -6099,19 +6114,21 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     update.x = cfgArcX != null ? { value: cfgArcX } : { signal: 'width', mult: 0.5 }
     update.y = cfgArcY != null ? { value: cfgArcY } : { signal: 'height', mult: 0.5 }
     const arcMark = spec.mark
-    const mOuter = isObject(arcMark) ? ((arcMark.outerRadius as number | undefined) ?? (arcMark.radius as number | undefined)) : undefined
-    const mInner = (isObject(arcMark) ? (arcMark.innerRadius as number | undefined) : undefined)
+    // (valueref.ts signalOrValueRef: a mark def value is a constant, an expression or a signal is a signal)
+    const markRef = (v: unknown): Record<string, unknown> => (isObject(v) && typeof v.expr === 'string' ? { signal: v.expr } : isObject(v) && typeof v.signal === 'string' ? { signal: v.signal } : { value: v })
+    const mOuter = isObject(arcMark) ? (arcMark.outerRadius ?? arcMark.radius) : undefined
+    const mInner = (isObject(arcMark) ? (arcMark.innerRadius ?? arcMark.radius2) : undefined)
       ?? (cfgType?.innerRadius as number | undefined)
       ?? (cfgType?.radius2 as number | undefined)
       ?? (cfgMark?.innerRadius as number | undefined)
     // outerRadius resolves markDef.outerRadius ?? markDef.radius ??
     // config.arc.outerRadius ?? config.arc.radius ?? the half-extent signal
     update.outerRadius = mOuter != null
-      ? { value: mOuter }
+      ? markRef(mOuter)
       : ((cfgType?.outerRadius as number | undefined) ?? (cfgType?.radius as number | undefined)) != null
         ? { value: (cfgType?.outerRadius as number | undefined) ?? (cfgType?.radius as number | undefined) }
         : { signal: 'min(width,height)/2' }
-    update.innerRadius = { value: mInner ?? (cfgType?.innerRadius as number | undefined) ?? 0 }
+    update.innerRadius = mInner != null ? markRef(mInner) : { value: (cfgType?.innerRadius as number | undefined) ?? 0 }
     // stacked arcs close at the series' stacked END angle (startAngle runs
     // from value_end to value_start); unstacked arcs span field → scale zero.
     // A channel bandPosition p aligns the start angle within the stacked
@@ -6133,6 +6150,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     } else if (arcThetaE) {
       update.startAngle = { scale: 'theta', field: arcThetaE.field }
       update.endAngle = { scale: 'theta', value: 0 }
+    } else if (isObject(arcMark) && (arcMark.theta !== undefined || arcMark.theta2 !== undefined)) {
+      // no theta channel: the angles are the mark def's (rangePosition: theta, then position2orSize for theta2)
+      if (arcMark.theta !== undefined) update.startAngle = markRef(arcMark.theta)
+      if (arcMark.theta2 !== undefined) update.endAngle = markRef(arcMark.theta2)
     }
     // a radius channel drives the radii through its scale (replacing the
     // mark/config/extent defaults)
@@ -6227,7 +6248,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         if (v !== undefined && update[ch] === undefined && update[`${ch}c`] === undefined) update[ch] = v === edge ? { field: { group: edge } } : { value: v }
       }
     }
-    fillMissingPositions(update, mark, fields, orient, scaleConfigOf(spec), ruleOrientOut, typeof md0.size === 'number' && md0.size !== 0 ? md0.size : undefined)
+    fillMissingPositions(update, mark, fields, orient, scaleConfigOf(spec), ruleOrientOut, typeof md0.size === 'number' && md0.size !== 0 ? md0.size : undefined, markOrient(spec, mark, spec.mark, fields) === undefined)
   }
 
   {
@@ -6267,7 +6288,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   }
   // (base.ts markDefProperties: every Vega mark property the mark def sets is the mark's own, an expression as a signal; the text ones
   // are the mark def's alone - a config value reaches Vega through config.style)
-  for (const p of ['font', 'fontStyle', 'fontWeight', 'dir', 'ellipsis', 'limit', 'lineBreak', 'lineHeight', 'startAngle', 'endAngle', 'tension', 'strokeOffset', 'strokeDashOffset', 'shape']) {
+  for (const p of ['font', 'fontStyle', 'fontWeight', 'dir', 'ellipsis', 'limit', 'lineBreak', 'lineHeight', 'startAngle', 'endAngle', 'tension', 'strokeOffset', 'strokeDashOffset', 'shape', ...(mark === 'arc' ? ['radius'] : [])]) {
     const v = markDefP?.[p]
     if (v !== undefined && update[p] === undefined) update[p] = isObject(v) && typeof v.signal === 'string' ? { signal: v.signal } : { value: v }
   }
@@ -6850,7 +6871,7 @@ function hasEncodingChannel(spec: VLSpec, channel: string): boolean {
   return enc[channel] != null
 }
 
-function fillMissingPositions(update: Record<string, unknown>, mark: string, fields: FieldDef[], orient: string, scaleCfg: ScaleCfg, ruleOrient?: string, explicitSize?: number): void {
+function fillMissingPositions(update: Record<string, unknown>, mark: string, fields: FieldDef[], orient: string, scaleCfg: ScaleCfg, ruleOrient?: string, explicitSize?: number, orientUndefined = false): void {
   const has = (...ks: string[]): boolean => ks.some((k) => update[k] !== undefined)
   const hasX = has('x', 'xc', 'x2')
   const hasY = has('y', 'yc', 'y2')
@@ -6878,8 +6899,9 @@ function fillMissingPositions(update: Record<string, unknown>, mark: string, fie
       const padding = (scaleCfg.bandPaddingInner ?? scaleCfg.barBandPaddingInner) as number | undefined
       // (a size of the mark def or the encoding is the band's size: positionAndSize, `sizeMixins`)
       const span = (size: 'width' | 'height'): unknown => (explicitSize !== undefined ? { value: explicitSize } : typeof padding === 'number' ? { signal: `${1 - padding} * ${size}` } : { value: 18 })
+      // (a bar with no orientation - neither axis is a measure - has no band channel: both missing ones are ranges)
       if (!hasX) {
-        if (orient === 'vertical') { update.xc = midX; update.width = span('width') } else { update.x = groupW; update.x2 = { value: 0 } }
+        if (orient === 'vertical' && !orientUndefined) { update.xc = midX; update.width = span('width') } else { update.x = groupW; update.x2 = { value: 0 } }
       }
       if (!hasY) {
         if (orient === 'horizontal') { update.yc = midY; update.height = span('height') } else { update.y = { value: 0 }; update.y2 = groupH }

@@ -239,6 +239,7 @@ export function validateSpec(spec: unknown): void {
   timerNames = new Set()
   collectParams(spec, declaredParams, timerNames)
   paramNamesSeen = new Set()
+  selectionNamesSeen = new Set()
   validateView(spec, '', true, undefined, true)
 }
 
@@ -252,6 +253,7 @@ function checkNamedSelectionView(spec: Obj, at: (k: string) => string): void {
 
 /** Every parameter name must be unique across the whole spec. */
 let paramNamesSeen: Set<string> = new Set()
+let selectionNamesSeen: Set<string> = new Set()
 
 function validateView(spec: Obj, path: string, top: boolean, parent: Kind | undefined, selOk: boolean): void {
   const kind = viewKind(spec, path)
@@ -577,8 +579,11 @@ function validateParams(params: unknown, path: string, selectionOk: boolean, kin
     const at = `${path}[${i}]`
     if (!isObj(p)) mustBe(at, OBJECT)
     if (typeof p.name !== 'string' || !/^[A-Za-z_$][\w$]*$/.test(p.name)) fail(`${at}.name`, `parameter names must be identifiers, got ${JSON.stringify(p.name)}`)
-    if (paramNamesSeen.has(p.name)) fail(`${at}.name`, `duplicate parameter name "${p.name}"`)
+    // (two views may each declare a selection of the same name: every view keeps its own tuples in the one store - concat_hover; a
+    // selection and a variable parameter, or two variable parameters, cannot share a name)
+    if (paramNamesSeen.has(p.name) && !(p.select !== undefined && selectionNamesSeen.has(p.name))) fail(`${at}.name`, `duplicate parameter name "${p.name}"`)
     paramNamesSeen.add(p.name)
+    if (p.select !== undefined) selectionNamesSeen.add(p.name)
     if (p.select !== undefined) {
       if (!selectionOk) {
         fail(`${at}.select`, kind === 'layer'
@@ -792,9 +797,6 @@ const UNSUPPORTED_MARK_KEYS: Record<string, string> = {
   x2: POSITIONAL_MARK_DEF,
   y: POSITIONAL_MARK_DEF,
   y2: POSITIONAL_MARK_DEF,
-  theta: 'mark-def theta is not supported; use encoding',
-  theta2: 'mark-def theta2 is not supported; use encoding',
-  radius2: 'mark-def radius2 is not supported',
 }
 
 const INVALID_MODES = set('filter show break-paths-filter-domains break-paths-show-domains break-paths-show-path-domains')
@@ -994,9 +996,7 @@ function validateChannelDef(ch: string, def: unknown, at: string, shared = false
   if (def.bin !== undefined) validateBin(def.bin, `${at}.bin`, ch === 'x' || ch === 'y')
   if ((def.bin === 'binned' || (isObj(def.bin) && def.bin.binned === true)) && ch !== 'x' && ch !== 'y') fail(`${at}.bin`, 'pre-binned data (bin: "binned") only applies to the x and y channels')
   if (def.timeUnit !== undefined) {
-    const tu = normalizeTimeUnit(def.timeUnit, `${at}.timeUnit`)
-    // (a binned time unit on a discrete field leaves its mark without an orientation in vega-lite, which is not reproduced)
-    if (tu.binned && (def.type === 'ordinal' || def.type === 'nominal')) fail(`${at}.timeUnit`, 'a binned time unit on an ordinal or nominal field is not supported yet; use a temporal field')
+    normalizeTimeUnit(def.timeUnit, `${at}.timeUnit`)
   }
   if (def.timeUnit !== undefined && def.bin) fail(at, '`timeUnit` and `bin` cannot be combined')
   if (def.sort !== undefined) validateSort(def.sort, `${at}.sort`, ch)
