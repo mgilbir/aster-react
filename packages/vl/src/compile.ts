@@ -2355,6 +2355,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
   const legendsByChannel = new Map<string, Record<string, unknown>>()
   const legendOrder: string[] = []
   const independentScales: ScaleSpec[] = []
+  const cellScales: Array<{ marks: Record<string, unknown>[]; shared: string[] }> = []
   const selectionParts: SelParts[] = []
 
   frags.forEach(({ cell, vg }) => {
@@ -2467,12 +2468,14 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     if (planH === 'per-child' && typeof vg.height === 'number') signals.push({ name: hName, value: vg.height })
 
     // sort the renamed scales into independent (prefixed, already renamed) and shared
+    const sharedNames: string[] = []
     for (const sc of scales) {
       if (cellPrefixed(sc.name, prefix)) independentScales.push(sc)
       else {
         const l = scaleLists.get(sc.name)
         if (l) l.push(sc)
         else scaleLists.set(sc.name, [sc])
+        sharedNames.push(sc.name)
       }
     }
     // shared legends: the first child that has a channel defines it; titles join
@@ -2510,7 +2513,16 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     if (Array.isArray(vg.axes) && vg.axes.length) group.axes = vg.axes
     if (ownLegends.length) group.legends = ownLegends
     marks.push(group)
+    cellScales.push({ marks: group.marks as Record<string, unknown>[], shared: sharedNames })
   })
+
+  // mark.ts scaleClip: a unit is clipped when its x or y scale follows a selection - the shared scale of the whole concat included,
+  // whichever sibling's selection it is (`selectionExtent` is a property of the merged scale component)
+  for (const { marks: cellMarks, shared } of cellScales) {
+    if (shared.some((name) => (name === 'x' || name === 'y') && scaleLists.get(name)!.some((sc) => SELECTION_EXTENT_SCALES.has(sc)))) {
+      flagSelectionMarks(cellMarks, false, false, true)
+    }
+  }
 
   // maps: vega-lite's parseNonUnitProjections for a concat / repeat: the children's projections merge into
   // one (fitted to the union of their data) wherever no property conflicts
@@ -2574,7 +2586,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     ...(projectionComp ? { projectionComp } : {}),
     signals,
     marks,
-    scales: [...independentScales, ...mergedShared],
+    scales: [...mergedShared, ...independentScales],
     legends: legendOrder.map((c) => legendsByChannel.get(c)!),
     ...(planW === 'root' ? { rootWidth: sameW } : {}),
     ...(planH === 'root' ? { rootHeight: sameH } : {}),
@@ -8151,6 +8163,9 @@ function mergeDomains(domains: unknown[]): unknown {
   return { fields: unique, ...(sort ? { sort } : {}) }
 }
 
+/** The scales that follow a selection (`bind: scales`): vega-lite's `selectionExtent` scale property. */
+const SELECTION_EXTENT_SCALES = new WeakSet<object>()
+
 /** Selection-driven `domainRaw`s of a unit's scales, and the clip they imply (mark.ts scaleClip). */
 function applyScaleExtents(sel: UnitSel | undefined, scales: ScaleSpec[], scaleName: (channel: string) => string, ctx: CompileCtx): boolean {
   if (!sel || sel.extents.size === 0) return false
@@ -8165,6 +8180,7 @@ function applyScaleExtents(sel: UnitSel | undefined, scales: ScaleSpec[], scaleN
         return have
       },
     }, extent, isContinuousScaleType(sc.type), sc.domain)
+    SELECTION_EXTENT_SCALES.add(sc)
     bound = true
   }
   return bound

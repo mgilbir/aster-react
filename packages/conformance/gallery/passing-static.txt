@@ -331,6 +331,7 @@ vl/interactive_paintbrush_interval
 vl/interactive_paintbrush_simple_false
 vl/interactive_paintbrush_simple_true
 vl/interactive_panzoom_splom
+vl/interactive_panzoom_vconcat_shared
 vl/interactive_point_domainRaw_binding
 vl/interactive_point_init
 vl/interactive_query_widgets

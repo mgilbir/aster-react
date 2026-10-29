@@ -992,6 +992,31 @@ describe('@aster/vl == vega-lite: a mark definition that sets the paint the colo
   }
 })
 
+// compile/mark/mark.ts scaleClip + compile/scale/assemble.ts: a unit is clipped when its x or y scale follows a selection - also when
+// the scale is the one its siblings share and the selection is a sibling's - and the scales of a concat are the shared ones, then
+// each child's own, in order (interactive_panzoom_vconcat_shared)
+describe('@aster/vl == vega-lite: scales bound to a selection in a concat', () => {
+  const bound = (extra: Record<string, unknown> = {}) => ({ params: [{ name: 'region', select: { type: 'interval', ...extra }, bind: 'scales' }] })
+  const CASES: Array<[string, Record<string, any>]> = [
+    ['a vconcat sharing x, the first bound', { data: DATA, vconcat: [{ ...bound(), mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }], resolve: { scale: { x: 'shared' } } }],
+    ['a vconcat sharing x, the second bound', { data: DATA, vconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { ...bound(), mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['an hconcat sharing y, the first bound', { data: DATA, hconcat: [{ ...bound(), mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('v'), y: q('y') } }], resolve: { scale: { y: 'shared' } } }],
+    ['an hconcat with a bound x and independent x scales', { data: DATA, hconcat: [{ ...bound(), mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('y') } }], resolve: { scale: { x: 'independent', y: 'independent' } } }],
+    ['a vconcat of three, the middle bound on x only', { data: DATA, vconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { ...bound({ encodings: ['x'] }), mark: 'point', encoding: { x: q('x'), y: q('v') } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] }],
+    ['a vconcat whose shared x is bound and whose y scales are separate', { data: DATA, vconcat: [{ ...bound({ encodings: ['x'] }), mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'bar', encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }) } }] }],
+  ]
+  for (const [name, spec] of CASES) {
+    it(name, async () => {
+      const oracle = (vl as any).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      expect(plain((ours.scales ?? []).map((sc: any) => sc.name)), 'the order of the scales').toEqual(plain((oracle.scales ?? []).map((sc: any) => sc.name)))
+      const clips = (vg: any): unknown => (vg.marks ?? []).flatMap((g: any) => (g.marks ?? []).map((m: any) => [m.name, m.clip ?? null]))
+      expect(plain(clips(ours)), 'which marks are clipped').toEqual(plain(clips(oracle)))
+      await check(spec)
+    }, 30_000)
+  }
+})
+
 /** The domains of the scales, with the names of the datasets they read left out (how the datasets are named and cut is not what is compared). */
 const DOMAIN_SHAPES = (vg: any): unknown =>
   (vg.scales ?? []).map((s: any) => {
