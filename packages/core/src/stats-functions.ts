@@ -249,12 +249,18 @@ export function quantileUniform(p: number, min?: number, max?: number): number {
 }
 
 const FUNCTIONS = {
-  densityNormal, cumulativeNormal, quantileNormal,
-  densityLogNormal, cumulativeLogNormal, quantileLogNormal,
-  densityUniform, cumulativeUniform, quantileUniform,
+  sampleNormal, densityNormal, cumulativeNormal, quantileNormal,
+  sampleLogNormal, densityLogNormal, cumulativeLogNormal, quantileLogNormal,
+  sampleUniform, densityUniform, cumulativeUniform, quantileUniform,
 }
-for (const [name, fn] of Object.entries(FUNCTIONS)) registerExpressionFunction(name, fn as (...args: never[]) => unknown)
-// the three that draw numbers read the view's source (`runtime.random`), at call time
-registerRuntimeExpressionFunction('sampleNormal', (rt) => ((mean?: number, stdev?: number) => sampleNormalFrom(rt.random ?? MATH_RANDOM, mean, stdev)) as (...args: never[]) => unknown)
-registerRuntimeExpressionFunction('sampleLogNormal', (rt) => ((mean?: number, stdev?: number) => sampleLogNormalFrom(rt.random ?? MATH_RANDOM, mean, stdev)) as (...args: never[]) => unknown)
-registerRuntimeExpressionFunction('sampleUniform', (rt) => ((min?: number, max?: number) => sampleUniformFrom(rt.random ?? MATH_RANDOM, min, max)) as (...args: never[]) => unknown)
+// the three that draw numbers read the view's source (`runtime.random`, at call time); the rest are plain
+const DRAWING: Record<string, (random: Random) => (...args: never[]) => unknown> = {
+  sampleNormal: (random) => (mean?: number, stdev?: number) => sampleNormalFrom(random, mean, stdev),
+  sampleLogNormal: (random) => (mean?: number, stdev?: number) => sampleLogNormalFrom(random, mean, stdev),
+  sampleUniform: (random) => (min?: number, max?: number) => sampleUniformFrom(random, min, max),
+}
+for (const [name, fn] of Object.entries(FUNCTIONS)) {
+  const draw = DRAWING[name]
+  if (draw === undefined) registerExpressionFunction(name, fn as (...args: never[]) => unknown)
+  else registerRuntimeExpressionFunction(name, (rt) => draw(rt.random ?? MATH_RANDOM))
+}
