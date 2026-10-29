@@ -99,7 +99,7 @@ import { fileURLToPath } from 'node:url'
 //
 // The injected random source (RuntimeInput.random: the replayable tapes, the content fingerprint, the per-source Box-Muller pair),
 // vega-functions setdata, and the dataflow order signals resolve in (test/gallery-deterministic), measured (kB gzip): core 140.4,
-// useChart 147.5, Chart 186.4, SvgChart 165.6, SvgChart + interaction 181.3, Chart + VL 282.9; the marginal entries did not move.
+// useChart 147.5, Chart 186.4, SvgChart 165.6, SvgChart + interaction 181.3, Chart + VL 282.9 (core +1.6 over 138.8); the marginal entries did not move.
 const BUDGETS = {
   '@aster/core': 140.9 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
