@@ -174,7 +174,8 @@ const SCHEMA_CHILDREN: Record<Exclude<Kind, 'unit'>, ReadonlySet<Kind>> = {
   hconcat: new Set<Kind>(ANY_VIEW),
   vconcat: new Set<Kind>(ANY_VIEW),
   concat: new Set<Kind>(ANY_VIEW),
-  facet: new Set<Kind>(['unit', 'layer']),
+  // (vega-lite 6.4.3 compiles a facet inside a facet - the `_future` examples - though its schema does not list one)
+  facet: new Set<Kind>(['unit', 'layer', 'facet']),
   repeat: new Set<Kind>(ANY_VIEW),
 }
 /** Implemented (parent -> child) nestings: today every schema-valid nesting is implemented; narrow this as the schema grows. */
@@ -624,7 +625,7 @@ const SELECTION_RESOLVE = set('global union intersect')
 const BRUSH_KEYS = set('cursor fill fillOpacity stroke strokeDash strokeDashOffset strokeOpacity strokeWidth')
 /** The channels a selection can project (vega-lite SingleDefUnitChannel). */
 const PROJECTABLE_CHANNELS = set(
-  'x y xOffset yOffset x2 y2 xError yError xError2 yError2 theta theta2 radius radius2 color fill stroke opacity fillOpacity strokeOpacity strokeWidth strokeDash size angle shape key text href url description detail order tooltip',
+  'x y xOffset yOffset x2 y2 xError yError xError2 yError2 theta theta2 radius radius2 longitude latitude longitude2 latitude2 color fill stroke opacity fillOpacity strokeOpacity strokeWidth strokeDash size angle shape key text href url description detail order tooltip',
 )
 
 /** An event stream: a selector string or a stream object; both must parse, and a timer (animation) stream is refused. */
@@ -861,7 +862,6 @@ function validateUnit(spec: Obj, at: (k: string) => string, top = true): void {
   if ((compositeDepth > 0 || faceted) && mark === 'geoshape' && !(isObj(enc) && isObj(enc.shape) && (enc.shape.field !== undefined || enc.shape.datum !== undefined))) {
     fail(at('mark'), 'a geoshape with no `shape` field inside a facet is not supported: vega-lite 6.4.3 fits its projection to a dataset it never defines (data("child_main")), so there is no output to match')
   }
-  if (!top && isObj(enc) && enc.facet != null) fail(at('encoding.facet'), 'a wrapped facet (the `facet` channel) nested in another composition is not supported yet')
 }
 
 /**
@@ -1440,8 +1440,6 @@ function validateFacetOperator(spec: Obj, at: (k: string) => string, selOk: bool
   if (!isObj(facet)) mustBe(at('facet'), 'a field definition or {row, column}')
   if (!isObj(spec.spec)) fail(at('spec'), 'a facet spec needs a nested `spec`')
   const mapping = facet.row !== undefined || facet.column !== undefined
-  // (a wrapped facet inside another composition lays its cells out differently from vega-lite's here: refused rather than drawn wrong)
-  if (!mapping && !top) fail(at('facet'), 'a wrapped facet (a single `facet` field) nested in another composition is not supported yet')
   const checkFacetDef = (d: unknown, a: string): void => {
     if (!isObj(d)) mustBe(a, 'a field definition')
     keysOf(d, set('field type aggregate bin timeUnit sort title header bandPosition'), a, 'facet field definition')

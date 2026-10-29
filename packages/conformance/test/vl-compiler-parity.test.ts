@@ -770,6 +770,89 @@ const GROUPS: Record<string, Case[]> = {
     ['faceted points on a map by longitude and latitude', { data: { values: [{ g: 'a', lon: 10, lat: 20 }, { g: 'a', lon: 30, lat: 40 }, { g: 'b', lon: -20, lat: 10 }] }, projection: { type: 'mercator' }, mark: 'circle', width: 160, height: 100, encoding: { longitude: q('lon'), latitude: q('lat'), column: n('g') } }],
     ['a text mark with a font and a font style', { data: DATA, mark: { type: 'text', font: 'Verdana', fontStyle: 'italic', fontWeight: 700, fontSize: 13, dx: 4 }, encoding: { x: q('x'), y: q('y'), text: n('c') } }],
   ],
+  // optimizers.ts MergeBins + MergeIdenticalNodes: layers under one parent transform read one pipeline (bar_heatlane)
+  'layers under a parent transform read one dataset (bar_heatlane)': [
+    ['two layers over a parent bin, aggregate and bin', { data: BOX, height: 150, width: 400, transform: [{ bin: true, field: 'v', as: ['bin_v_start', 'bin_v_end'] }, { aggregate: [{ op: 'count', as: 'count' }], groupby: ['bin_v_start', 'bin_v_end'] }, { bin: true, field: 'count', as: ['bin_count_start', 'bin_count_end'] }, { calculate: '-datum.bin_count_end/2', as: 'y2' }, { calculate: 'datum.bin_count_end/2', as: 'y' }, { joinaggregate: [{ field: 'bin_count_end', op: 'max', as: 'max_bin_count_end' }] }], encoding: { x: { field: 'bin_v_start', type: 'quantitative', title: 'v', axis: { grid: false } }, x2: { field: 'bin_v_end' }, y: { field: 'y', axis: null }, y2: { field: 'y2' } }, layer: [{ mark: { type: 'bar', xOffset: 2, x2Offset: -2, cornerRadius: 3 }, encoding: { color: { field: 'max_bin_count_end', type: 'ordinal', title: 'count', scale: { scheme: 'lighttealblue' } } } }, { mark: { type: 'bar', xOffset: 2, x2Offset: -2, yOffset: -3, y2Offset: 3 }, encoding: { color: { field: 'bin_count_end', type: 'ordinal', title: 'count' } } }] }],
+    // scale/domain.ts parseDomainForChannel: a discrete position's domain, widened by its secondary channel's, stays sorted
+    ['a unit with a discrete y and a y2', { data: DATA, mark: 'bar', encoding: { x: q('x'), x2: { field: 'v' }, y: { field: 'c', type: 'ordinal' }, y2: { field: 'g' } } }],
+    ['two layers over a parent bin', { data: BOX, transform: [{ bin: { maxbins: 5 }, field: 'v', as: ['b0', 'b1'] }], encoding: { x: { field: 'b0', type: 'quantitative' }, x2: { field: 'b1' }, y: { aggregate: 'count' } }, layer: [{ mark: 'bar' }, { mark: 'rule', encoding: { color: { value: 'red' } } }] }],
+  ],
+  // data/timeunit.ts TimeUnitNode.makeFromEncoding: a binned time unit makes its end only for a rect-based mark or a truthy band position
+  // (bar_binned_yearmonth_label_band_center)
+  'the end of a binned time unit (bar_binned_yearmonth_label_band_center)': [
+    ['a bar layer and a text layer sharing a band position of 0', { data: MONTHS, encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal', bandPosition: 0 }, y: q('v') }, layer: [{ mark: 'bar' }, { mark: { type: 'text', baseline: 'bottom' }, encoding: { text: q('v') } }] }],
+    ['a text mark with a band position of 0', { data: MONTHS, mark: 'text', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal', bandPosition: 0 }, y: q('v'), text: q('v') } }],
+    ['a text mark with a band position of 0.5', { data: MONTHS, mark: 'text', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal', bandPosition: 0.5 }, y: q('v'), text: q('v') } }],
+    ['a point mark with no band position', { data: MONTHS, mark: 'point', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal' }, y: q('v') } }],
+    ['a bar with a band position of 0', { data: MONTHS, mark: 'bar', encoding: { x: { timeUnit: 'binnedyearmonth', field: 'd', type: 'temporal', bandPosition: 0 }, y: q('v') } }],
+  ],
+  // mark/encode/scaledZeroOrMinOrMax.ts: the far end of a bar, area or rect is scale zero when the scale definitely holds zero, the
+  // domain's start when it definitely does not, and a probe in between (trellis_area_seattle)
+  'the baseline of bars, areas and rects (trellis_area_seattle)': [
+    ['an area over a scale without zero', { data: DATA, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } }],
+    ['a horizontal area over a scale without zero', { data: DATA, mark: { type: 'area', orient: 'horizontal' }, encoding: { y: q('x'), x: q('v', { aggregate: 'mean', scale: { zero: false } }) } }],
+    ['a horizontal area over a scale with zero', { data: DATA, mark: { type: 'area', orient: 'horizontal' }, encoding: { y: q('x'), x: q('v', { aggregate: 'mean' }) } }],
+    ['an area over a log scale', { data: DATA, mark: 'area', encoding: { x: q('x'), y: q('v', { scale: { type: 'log' } }) } }],
+    ['a bar over a scale without zero', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } }],
+    ['a horizontal bar over a scale without zero', { data: DATA, mark: 'bar', encoding: { y: n('c'), x: q('v', { aggregate: 'mean', scale: { zero: false } }) } }],
+    ['a bar over a domain that holds zero', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'mean', scale: { zero: false, domain: [-2, 12] } }) } }],
+    ['a bar over a domain that does not', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'mean', scale: { domain: [3, 12] } }) } }],
+    ['a bar over a log scale', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'mean', scale: { type: 'log' } }) } }],
+    ['a rect over a scale without zero', { data: DATA, mark: 'rect', encoding: { x: n('c'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } }],
+    ['a rect over a sqrt scale', { data: DATA, mark: 'rect', encoding: { x: n('c'), y: q('v', { aggregate: 'mean', scale: { type: 'sqrt' } }) } }],
+    ['a rule over a scale without zero', { data: DATA, mark: 'rule', encoding: { x: n('c'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } }],
+    ['layers over a scale without zero', { data: DATA, layer: [{ mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } }, { mark: 'line', encoding: { x: q('x'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } }] }],
+    ['an area faceted by a row, over a scale without zero', { data: DATA, facet: { row: n('g') }, spec: { height: 40, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'mean', scale: { zero: false } }) } } }],
+  ],
+  // stack.ts (theta / radius), scale/type.ts + range.ts + properties.ts (theta, radius), mark/arc.ts rectPosition, mark/text.ts pointPosition:
+  // arcs and their labels over every kind of theta and radius (arc_radial, arc_radial_histogram, arc_ordinal_theta)
+  'polar arcs and labels (arc_radial, arc_radial_histogram, arc_ordinal_theta)': [
+    ['an ordinal theta and a quantitative radius', { data: DATA, mark: 'arc', encoding: { theta: { field: 'c', type: 'ordinal' }, radius: q('v'), color: n('c') } }],
+    ['a nominal theta and a summed radius', { data: DATA, mark: 'arc', encoding: { theta: n('c'), radius: q('v', { aggregate: 'sum' }), color: n('c') } }],
+    ['a sorted descending ordinal theta', { data: DATA, mark: 'arc', encoding: { theta: { field: 'c', type: 'ordinal', sort: 'descending' }, radius: q('v'), color: n('c') } }],
+    ['a stacked theta and a sqrt radius with a range minimum', { data: { values: [12, 23, 47, 6, 52, 19].map((v) => ({ data: v })) }, mark: { type: 'arc', innerRadius: 20, stroke: '#fff' }, encoding: { theta: q('data', { stack: true }), radius: { field: 'data', type: 'quantitative', scale: { type: 'sqrt', zero: true, rangeMin: 20 } }, color: { field: 'data', type: 'nominal', legend: null } } }],
+    ['a stacked theta, radius left to its default', { data: DATA, mark: 'arc', encoding: { theta: q('v', { stack: true }), radius: q('v'), color: n('c') } }],
+    ['a binned theta and a counted sqrt radius', { data: BOX, mark: { type: 'arc', stroke: 'white', tooltip: true }, encoding: { theta: q('v', { bin: true }), radius: { aggregate: 'count', scale: { type: 'sqrt' } } } }],
+    ['a binned theta and a counted radius, coloured', { data: BOX, mark: 'arc', encoding: { theta: q('v', { bin: { maxbins: 6 } }), radius: { aggregate: 'count' }, color: n('c') } }],
+    ['a nominal theta, a stacked radius', { data: DATA, mark: 'arc', encoding: { theta: n('c'), radius: q('v', { stack: true }), color: n('g') } }],
+    ['a normalized stacked theta', { data: DATA, mark: 'arc', encoding: { theta: q('v', { stack: 'normalize' }), color: n('c') } }],
+    ['a quantitative theta and an ordinal radius', { data: DATA, mark: 'arc', encoding: { theta: q('v'), radius: { field: 'c', type: 'ordinal' }, color: n('c') } }],
+    ['a time-unit theta', { data: DATA, mark: 'arc', encoding: { theta: { field: 't', type: 'temporal', timeUnit: 'year' }, radius: q('v'), color: n('c') } }],
+    ['a radius whose domain does not hold zero', { data: DATA, mark: 'arc', encoding: { theta: n('c'), radius: q('v', { scale: { zero: false } }), color: n('c') } }],
+    ['a radius with an explicit domain', { data: DATA, mark: 'arc', encoding: { theta: n('c'), radius: q('v', { scale: { domain: [0, 12] } }), color: n('c') } }],
+    ['a radius offset and a theta offset', { data: DATA, mark: { type: 'arc', radiusOffset: 5, thetaOffset: 0.1 }, encoding: { theta: q('v', { stack: true }), radius: q('v', { scale: { type: 'sqrt' } }), color: n('c') } }],
+    ['a pie with a summed theta and labels', { data: DATA, encoding: { theta: q('v', { aggregate: 'sum' }), color: n('c') }, layer: [{ mark: { type: 'arc', outerRadius: 100 } }, { mark: { type: 'text', radius: 120 }, encoding: { text: n('c') } }] }],
+    ['arcs and labels over a stacked theta and a sqrt radius (arc_radial)', { data: { values: [12, 23, 47, 6, 52, 19].map((v) => ({ data: v })) }, layer: [{ mark: { type: 'arc', innerRadius: 20, stroke: '#fff' } }, { mark: { type: 'text', radiusOffset: 10 }, encoding: { text: q('data') } }], encoding: { theta: q('data', { stack: true }), radius: { field: 'data', scale: { type: 'sqrt', zero: true, rangeMin: 20 } }, color: { field: 'data', type: 'nominal', legend: null } } }],
+    ['arcs and labels over a binned theta (arc_radial_histogram)', { data: BOX, layer: [{ mark: { type: 'arc', stroke: 'white', tooltip: true } }, { mark: { type: 'text', radiusOffset: 15, align: 'right' }, encoding: { text: { bin: true, field: 'v' }, angle: { bin: true, field: 'v', scale: { range: [90, 450] } } } }], encoding: { theta: { bin: true, field: 'v' }, radius: { aggregate: 'count', scale: { type: 'sqrt' } } } }],
+    ['labels over an ordinal theta', { data: DATA, mark: { type: 'text', radiusOffset: 8 }, encoding: { theta: { field: 'c', type: 'ordinal' }, radius: q('v'), text: n('c') } }],
+    ['labels over a stacked radius', { data: DATA, mark: 'text', encoding: { theta: n('c'), radius: q('v', { stack: true }), text: n('c'), color: n('g') } }],
+  ],
+  // facet.ts FacetModel (a facet whose child is a facet), header/parse.ts parseFacetHeader: the inner facet nests in the outer cell, its names
+  // prefixed `child_`; the headers of one channel join their titles (facet_column_facet_column_point_future and its siblings)
+  'nested facets (facet_column_facet_column_point_future, facet_column_facet_row_point_future, facet_row_facet_row_point_future)': [
+    ['a column facet in a column facet', { data: DATA, facet: { column: n('g') }, spec: { facet: { column: n('c') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } } }],
+    ['a row facet in a column facet', { data: DATA, facet: { column: n('g') }, spec: { facet: { row: n('c') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } } }],
+    ['a row facet in a row facet', { data: DATA, facet: { row: n('g') }, spec: { facet: { row: n('c') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } } }],
+    ['a column facet in a row facet', { data: DATA, facet: { row: n('g') }, spec: { facet: { column: n('c') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } } }],
+    ['a nested facet over a filtered unit', { data: DATA, transform: [{ filter: 'datum.v > 2' }], facet: { column: n('g') }, spec: { facet: { row: n('c') }, spec: { mark: 'bar', encoding: { x: n('t'), y: q('v', { aggregate: 'sum' }) } } } }],
+    ['a nested facet over layers', { data: DATA, facet: { row: n('g') }, spec: { facet: { column: n('c') }, spec: { layer: [{ mark: 'line', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('y') } }] } } }],
+    ['a nested facet whose headers have their own titles', { data: DATA, facet: { column: n('g', { header: { title: 'Group' } }) }, spec: { facet: { column: n('c', { header: { title: 'Letter', labelAngle: 0 } }) }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } } }],
+    ['a nested facet with spacing', { data: DATA, spacing: 3, facet: { column: n('g') }, spec: { spacing: 5, facet: { row: n('c') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } } }],
+    ['a nested facet whose outer field is sorted', { data: DATA, facet: { column: n('g', { sort: 'descending' }) }, spec: { facet: { column: n('c') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } } } }],
+  ],
+  // facet.ts / concat.ts: a wrapped facet (a single `facet` field with `columns`) is a view like any other inside a concat, a repeat or a layer
+  // of a composition (the refusal of a wrapped facet nested in another composition is lifted)
+  'wrapped facets in compositions': [
+    ['a wrapped facet and a unit in an hconcat', { data: DATA, hconcat: [{ facet: n('c'), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a unit and a wrapped facet in a vconcat', { data: DATA, vconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('v') } }, { facet: n('c'), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }] }],
+    ['two wrapped facets in a concat', { data: DATA, concat: [{ facet: n('c'), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }, { facet: n('g'), columns: 1, spec: { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } } }], columns: 1 }],
+    ['a row facet and a wrapped facet in a vconcat', { data: DATA, vconcat: [{ facet: { row: n('g') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }, { facet: n('c'), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }] }],
+    ['a wrapped facet in the spec of a repeat', { data: DATA, repeat: ['x', 'y'], spec: { facet: n('c'), columns: 2, spec: { mark: 'point', encoding: { x: { field: { repeat: 'repeat' }, type: 'quantitative' }, y: q('v') } } } }],
+    ['a wrapped facet with a title in an hconcat', { data: DATA, title: 'All', hconcat: [{ title: 'Wrapped', facet: n('c'), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a wrapped facet of layers in an hconcat', { data: DATA, hconcat: [{ facet: n('c'), columns: 2, spec: { layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a wrapped facet with a sorted field and colour in a vconcat', { data: DATA, vconcat: [{ facet: n('c', { sort: { op: 'count', order: 'descending' } }), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('g') } } }, { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), color: n('g') } }] }],
+    ['a unit with the facet channel in an hconcat', { data: DATA, hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), facet: n('c') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
@@ -828,6 +911,290 @@ for (const [group, cases] of Object.entries(GROUPS)) {
     for (const [name, spec] of cases) it(name, () => check(spec), 30_000)
   })
 }
+
+// compile/invalid/datasources.ts + data/parse.ts: every invalid mode over every kind of mark. The marks read the data the mode gives
+// them, the scales' domains read the data it gives them (a PreFilterInvalid or a PostFilterInvalid dataset when they differ), and what
+// the two compilers draw is the same (test_invalid_break_paths_filter_domains, test_invalid_break_paths_show_domains)
+describe('@aster/vl == vega-lite: the data that marks and scale domains read, per invalid mode', () => {
+  const MODES: Array<string | null> = ['filter', 'show', 'break-paths-filter-domains', 'break-paths-show-domains', 'break-paths-show-path-domains', null]
+  const MARKS: Array<[string, unknown]> = [['point', 'point'], ['bar', 'bar'], ['line', 'line'], ['area', 'area'], ['line with points', { type: 'line', point: true }], ['tick', 'tick']]
+  /** Which dataset (by the number of the transforms behind it) each mark and each scale domain reads. */
+  const reads = (vg: any): unknown => {
+    const byName = new Map<string, any>((vg.data ?? []).map((d: any) => [d.name, d]))
+    const chain = (name: string): string => {
+      const d = byName.get(name)
+      if (!d) return name
+      const own = (d.transform ?? []).map((t: any) => t.type === 'filter' ? 'filter' : t.type).filter((ty: string) => ty !== 'formula').join(',')
+      if (d.source === undefined) return ''
+      return own === '' ? chain(d.source) : `${chain(d.source)}>${own}`
+    }
+    const out: string[] = []
+    const walk = (ms: any[]): void => { for (const m of ms ?? []) { if (m.from?.data) out.push(`mark ${m.name}: ${chain(m.from.data)}`); walk(m.marks) } }
+    walk(vg.marks)
+    for (const sc of vg.scales ?? []) {
+      const d = sc.domain
+      const refs = d?.data ? [d.data] : (d?.fields ?? []).map((f: any) => f.data)
+      out.push(`scale ${sc.name}: ${[...new Set(refs.filter(Boolean).map(chain))].sort().join(' | ')}`)
+    }
+    return out
+  }
+  for (const [label, mark] of MARKS) {
+    for (const mode of MODES) {
+      const spec = { data: NULLS, width: 100, height: 100, config: { mark: { invalid: mode } }, mark, encoding: { x: q('a'), y: q('b') } }
+      it(`${label}, invalid ${JSON.stringify(mode)}`, async () => {
+        const oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, any> } }).compile(plain(spec)).spec
+        const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+        expect(reads(ours), 'what the marks and the scales read').toEqual(reads(oracle))
+        await check(spec)
+      }, 30_000)
+    }
+  }
+  // (getMarkConfig('invalid') decides where the scales read: the config alone, not the mark definition the datasets are made from)
+  for (const [label, mark] of [['point', 'point'], ['line', 'line']] as const) {
+    for (const mode of MODES) {
+      it(`a ${label} whose own definition says invalid ${JSON.stringify(mode)}`, async () => {
+        const spec = { data: NULLS, width: 100, height: 100, mark: { type: mark, invalid: mode }, encoding: { x: q('a'), y: q('b'), size: q('c') } }
+        const oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, any> } }).compile(plain(spec)).spec
+        const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+        expect(reads(ours), 'what the marks and the scales read').toEqual(reads(oracle))
+        await check(spec)
+      }, 30_000)
+    }
+  }
+  const layered = (mode: string | null) => ({ data: NULLS, config: { mark: { invalid: mode } }, layer: [{ mark: 'line', encoding: { x: q('a'), y: q('b') } }, { mark: 'point', encoding: { x: q('a'), y: q('b') } }] })
+  for (const mode of MODES) {
+    it(`a line and a point in layers, invalid ${JSON.stringify(mode)}`, async () => {
+      const spec = layered(mode)
+      const oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, any> } }).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      expect(reads(ours), 'what the marks and the scales read').toEqual(reads(oracle))
+      await check(spec)
+    }, 30_000)
+  }
+  for (const mode of ['break-paths-filter-domains', 'break-paths-show-domains']) {
+    for (const mark of ['line', 'point']) {
+      it(`a ${mark} faceted by a row, invalid ${JSON.stringify(mode)}`, async () => {
+        await check({ data: NULLS, config: { mark: { invalid: mode } }, width: 100, height: 100, mark, encoding: { x: q('a'), y: q('b'), row: n('c') } })
+      }, 30_000)
+    }
+  }
+  it('an ordinal x and a colour, invalid break-paths-filter-domains', async () => {
+    const spec = { data: NULLS, config: { mark: { invalid: 'break-paths-filter-domains' } }, mark: 'line', encoding: { x: { field: 'a', type: 'ordinal' }, y: q('b'), color: q('c') } }
+    const oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, any> } }).compile(plain(spec)).spec
+    const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+    expect(reads(ours), 'what the marks and the scales read').toEqual(reads(oracle))
+    await check(spec)
+  }, 30_000)
+})
+
+// legend/parse.ts + legend/properties.ts: a legend's orient, direction and gradient length, from the legend and from config.legend; a
+// property config.legend sets and the legend does not is left to the config (trail_comet)
+describe('@aster/vl == vega-lite: the orient, direction and gradient length of a legend', () => {
+  const CONFIGS: Array<Record<string, unknown>> = [
+    {}, { orient: 'bottom' }, { orient: 'top' }, { orient: 'top-left' }, { orient: 'left' }, { direction: 'horizontal' }, { gradientDirection: 'horizontal' },
+    { symbolDirection: 'horizontal' }, { orient: 'bottom', direction: 'horizontal' }, { orient: 'bottom', gradientLength: 50 },
+    { orient: 'bottom', gradientHorizontalMinLength: 150, gradientHorizontalMaxLength: 260 }, { gradientVerticalMinLength: 40, gradientVerticalMaxLength: 120 },
+    { orient: 'left', gradientDirection: 'horizontal' }, { orient: 'bottom', direction: 'horizontal', gradientDirection: 'vertical' },
+  ]
+  const LEGENDS: Array<Record<string, unknown> | undefined> = [
+    undefined, { orient: 'bottom' }, { direction: 'horizontal' }, { orient: 'right', direction: 'horizontal' }, { gradientLength: 90 },
+    { orient: 'top', gradientLength: 70 }, { direction: 'vertical', orient: 'bottom' },
+  ]
+  const shape = (v: any) => (v ? { legend: v } : {})
+  const pick = (vg: any): unknown => (vg.legends ?? []).map((l: any) => ({ orient: l.orient, direction: l.direction, gradientLength: l.gradientLength, keys: Object.keys(l).filter((k) => ['fill', 'stroke', 'shape', 'size', 'opacity', 'strokeWidth'].includes(k)).sort() }))
+  for (const cfg of CONFIGS) {
+    for (const lg of LEGENDS) {
+      it(`config.legend ${JSON.stringify(cfg)}, legend ${JSON.stringify(lg ?? null)}`, () => {
+        const spec = { data: DATA, config: { legend: cfg }, mark: 'point', encoding: { x: q('x'), y: q('y'), color: q('v', shape(lg)), shape: n('c', shape(lg)), size: q('x', shape(lg)) } }
+        const oracle = (vl as any).compile(plain(spec)).spec
+        const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+        expect(plain(pick(ours))).toEqual(plain(pick(oracle)))
+      })
+    }
+  }
+  it('a gradient legend in a facet measures the cell', async () => {
+    await check({ data: DATA, config: { legend: { orient: 'bottom', direction: 'horizontal' } }, mark: 'point', encoding: { x: q('x'), y: q('y'), color: q('v'), column: n('g') } })
+  }, 30_000)
+})
+
+// compile/mark/encode/color.ts + base.ts: the colour of a mark is the fill of a filled mark and the stroke of an unfilled one; the mark
+// definition's own fill / stroke of that kind is what the mark has, whatever colour the encoding says (interactive_line_hover)
+describe('@aster/vl == vega-lite: a mark definition that sets the paint the colour channel would set', () => {
+  const MARKS = ['line', 'point', 'bar', 'area', 'tick', 'circle', 'square', 'text', 'rule', 'trail'] as const
+  const DEFS: Array<Record<string, unknown>> = [{ stroke: 'red' }, { fill: 'red' }, { color: 'red' }, { stroke: 'red', fill: 'blue' }, { stroke: 'red', filled: true }, { fill: 'red', filled: false }]
+  const ENCODINGS: Array<[string, Record<string, unknown>]> = [
+    ['a colour field', { color: n('c', { legend: null }) }],
+    ['a colour value and a condition', { color: { condition: { test: 'datum.v > 4', field: 'c', type: 'nominal', legend: null }, value: 'grey' } }],
+    ['a colour selection condition', { color: { condition: { param: 'sel', field: 'c', type: 'nominal', legend: null }, value: 'grey' } }],
+  ]
+  for (const mark of MARKS) {
+    for (const def of DEFS) {
+      // (`filled` on a text or a trail mark flips which paint the colour channel sets: @aster/vl does not do that for either yet)
+      if ('filled' in def && (mark === 'text' || mark === 'trail')) continue
+      for (const [label, enc] of ENCODINGS) {
+        it(`${mark} ${JSON.stringify(def)} with ${label}`, async () => {
+          const spec = { data: DATA, params: label.includes('selection') ? [{ name: 'sel', select: { type: 'point', fields: ['c'] } }] : undefined, mark: { type: mark, ...def }, encoding: { x: q('x'), y: q('y'), ...enc } }
+          await check(JSON.parse(JSON.stringify(spec)))
+        }, 30_000)
+      }
+    }
+  }
+})
+
+// compile/mark/mark.ts scaleClip + compile/scale/assemble.ts: a unit is clipped when its x or y scale follows a selection - also when
+// the scale is the one its siblings share and the selection is a sibling's - and the scales of a concat are the shared ones, then
+// each child's own, in order (interactive_panzoom_vconcat_shared)
+describe('@aster/vl == vega-lite: scales bound to a selection in a concat', () => {
+  const bound = (extra: Record<string, unknown> = {}) => ({ params: [{ name: 'region', select: { type: 'interval', ...extra }, bind: 'scales' }] })
+  const CASES: Array<[string, Record<string, any>]> = [
+    ['a vconcat sharing x, the first bound', { data: DATA, vconcat: [{ ...bound(), mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }], resolve: { scale: { x: 'shared' } } }],
+    ['a vconcat sharing x, the second bound', { data: DATA, vconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { ...bound(), mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['an hconcat sharing y, the first bound', { data: DATA, hconcat: [{ ...bound(), mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('v'), y: q('y') } }], resolve: { scale: { y: 'shared' } } }],
+    ['an hconcat with a bound x and independent x scales', { data: DATA, hconcat: [{ ...bound(), mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('y') } }], resolve: { scale: { x: 'independent', y: 'independent' } } }],
+    ['a vconcat of three, the middle bound on x only', { data: DATA, vconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { ...bound({ encodings: ['x'] }), mark: 'point', encoding: { x: q('x'), y: q('v') } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] }],
+    ['a vconcat whose shared x is bound and whose y scales are separate', { data: DATA, vconcat: [{ ...bound({ encodings: ['x'] }), mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'bar', encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }) } }] }],
+  ]
+  for (const [name, spec] of CASES) {
+    it(name, async () => {
+      const oracle = (vl as any).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      expect(plain((ours.scales ?? []).map((sc: any) => sc.name)), 'the order of the scales').toEqual(plain((oracle.scales ?? []).map((sc: any) => sc.name)))
+      const clips = (vg: any): unknown => (vg.marks ?? []).flatMap((g: any) => (g.marks ?? []).map((m: any) => [m.name, m.clip ?? null]))
+      expect(plain(clips(ours)), 'which marks are clipped').toEqual(plain(clips(oracle)))
+      await check(spec)
+    }, 30_000)
+  }
+})
+
+// compile/selection/interval.ts (the projection branch), project.ts (geo channels), parse.ts: an interval selection over a map brushes
+// longitude / latitude through the projection, by the marks it covers (interactive_1d_geo_brush, interactive_airport_crossfilter)
+describe('@aster/vl == vega-lite: interval selections over a map', () => {
+  const PLACES = {
+    values: [
+      { name: 'a', longitude: -122.3, latitude: 47.6, n: 3 }, { name: 'b', longitude: -118.2, latitude: 34.1, n: 9 }, { name: 'c', longitude: -87.6, latitude: 41.9, n: 5 },
+      { name: 'd', longitude: -74, latitude: 40.7, n: 7 }, { name: 'e', longitude: -95.4, latitude: 29.8, n: 2 }, { name: 'f', longitude: -104.9, latitude: 39.7, n: 6 },
+    ],
+  }
+  const points = (params: unknown[], extra: Record<string, unknown> = {}) => ({
+    data: PLACES, width: 300, height: 200, projection: { type: 'mercator' }, params,
+    mark: 'circle', encoding: { longitude: q('longitude'), latitude: q('latitude'), color: { condition: { param: 'brush', empty: false, value: 'goldenrod' }, value: 'steelblue' }, size: { value: 30 } }, ...extra,
+  })
+  const brush = (select: unknown, value?: unknown) => ({ name: 'brush', select, ...(value !== undefined ? { value } : {}) })
+  const CASES: Array<[string, Record<string, any>]> = [
+    ['a brush on latitude only, with an initial value', points([brush({ type: 'interval', encodings: ['latitude'] }, { latitude: [35, 45] })])],
+    ['a brush on longitude only, with an initial value', points([brush({ type: 'interval', encodings: ['longitude'] }, { longitude: [-110, -80] })])],
+    ['a brush on both, with an initial value', points([brush('interval', { latitude: [30, 40], longitude: [-118, -86] })])],
+    ['a brush on both, no initial value', points([brush('interval')])],
+    ['a brush on longitude, named by the initial value alone', points([brush('interval', { longitude: [-100, -70] })])],
+    ['a brush on latitude with no initial value', points([brush({ type: 'interval', encodings: ['latitude'] })])],
+    ['a brush that cannot be translated or zoomed', points([brush({ type: 'interval', encodings: ['latitude'], translate: false, zoom: false }, { latitude: [30, 45] })])],
+    ['a brush with its own mark', points([brush({ type: 'interval', mark: { fill: 'red', fillOpacity: 0.3, stroke: 'blue' } }, { latitude: [30, 45], longitude: [-120, -80] })])],
+    ['layers: a map under the brushed points', {
+      data: PLACES, width: 300, height: 200, projection: { type: 'mercator' },
+      layer: [
+        { mark: 'circle', encoding: { longitude: q('longitude'), latitude: q('latitude'), size: { value: 80 }, color: { value: 'lightgray' } } },
+        { params: [brush({ type: 'interval', encodings: ['latitude'] }, { latitude: [30, 42] })], mark: 'circle', encoding: { longitude: q('longitude'), latitude: q('latitude'), size: { value: 20 }, color: { condition: { param: 'brush', empty: false, value: 'goldenrod' }, value: 'steelblue' } } },
+      ],
+    }],
+    ['a brush in the second child of a vconcat', {
+      data: PLACES,
+      vconcat: [
+        { mark: 'bar', encoding: { x: n('name'), y: q('n') } },
+        points([brush('interval', { latitude: [30, 45], longitude: [-120, -80] })], { data: undefined }),
+      ],
+    }],
+    ['a brush in a layer in a concat child', {
+      data: PLACES,
+      hconcat: [
+        { width: 200, height: 150, projection: { type: 'mercator' }, layer: [
+          { mark: 'circle', encoding: { longitude: q('longitude'), latitude: q('latitude'), color: { value: 'gray' } } },
+          { params: [brush('interval', { latitude: [30, 45], longitude: [-120, -80] })], mark: 'circle', encoding: { longitude: q('longitude'), latitude: q('latitude'), color: { condition: { param: 'brush', empty: false, value: 'goldenrod' }, value: 'steelblue' } } },
+        ] },
+        { mark: 'bar', encoding: { x: n('name'), y: q('n') } },
+      ],
+    }],
+  ]
+  for (const [name, spec] of CASES) {
+    it(name, async () => {
+      const clean = JSON.parse(JSON.stringify(spec))
+      const oracle = (vl as any).compile(plain(clean)).spec
+      const ours = compile(deepFreeze(plain(clean)) as never) as Record<string, any>
+      const sigs = (vg: any): unknown => {
+        const out: Array<[string, unknown]> = []
+        const walk = (n: any): void => {
+          for (const sg of n.signals ?? []) out.push([sg.name, sg])
+          for (const m of n.marks ?? []) walk(m)
+        }
+        walk(vg)
+        return out
+      }
+      const shape = (v: unknown): unknown => JSON.parse(JSON.stringify(v))
+      expect(shape(sigs(ours)), 'the signals, group by group').toEqual(shape(sigs(oracle)))
+      const store = (vg: any): unknown => (vg.data ?? []).filter((d: any) => /_store$/.test(d.name))
+      expect(shape(store(ours)), 'the selection store').toEqual(shape(store(oracle)))
+      await check(clean)
+    }, 30_000)
+  }
+})
+
+// compile/data/lookup.ts + selection/parse.ts materializeSelections: a lookup from a selection reads the selected rows of the view that
+// declares it, whichever view comes first (interactive_airport_crossfilter); data/source numbering across a concat's children
+describe('@aster/vl == vega-lite: lookups from a selection across views, and source names across children', () => {
+  const unit = (extra: Record<string, unknown> = {}) => ({ mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { param: 'brush', empty: false, value: 'goldenrod' }, value: 'steelblue' } }, ...extra })
+  const brush = { name: 'brush', select: { type: 'interval', encodings: ['x'] } }
+  const looked = { transform: [{ lookup: 'c', from: { param: 'brush', key: 'c' } }], mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }
+  const CASES: Array<[string, Record<string, any>]> = [
+    ['the declaring unit first, a lookup in the second child', { data: DATA, vconcat: [unit({ params: [brush] }), looked] }],
+    ['the declaring unit as a layer, the lookup in the next child', { data: DATA, vconcat: [{ layer: [{ mark: 'line', encoding: { x: q('x'), y: q('y') } }, unit({ params: [brush] })] }, looked] }],
+    ['a lookup in a repeated layer', { data: DATA, vconcat: [{ layer: [{ mark: 'line', encoding: { x: q('x'), y: q('y') } }, unit({ params: [brush] })] }, { transform: [{ lookup: 'c', from: { param: 'brush', key: 'c' } }], repeat: { column: ['v', 'x'] }, spec: { mark: 'bar', encoding: { x: { field: { repeat: 'column' }, bin: { maxbins: 4 } }, y: { aggregate: 'count' } } } }] }],
+  ]
+  for (const [name, spec] of CASES) {
+    it(name, async () => {
+      const oracle = (vl as any).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      // every dataset a mark, scale or lookup reads is declared, and none is declared twice
+      const names = (ours.data ?? []).map((d: any) => d.name)
+      expect(new Set(names).size, 'datasets declared once').toBe(names.length)
+      const declared = new Set<string>(names)
+      for (const d of ours.data ?? []) for (const t of d.transform ?? []) if (t.type === 'lookup') expect(declared.has(t.from), `lookup from ${t.from}`).toBe(true)
+      void oracle
+      await check(spec)
+    }, 30_000)
+  }
+  const mk = (d: unknown) => ({ data: { values: [{ a: d, b: 1 }, { a: 5, b: d }] }, mark: 'point', encoding: { x: q('a'), y: q('b') } })
+  const NAMED: Array<[string, Record<string, any>]> = [
+    ['a vconcat whose children each have data', { vconcat: [mk(1), mk(2)] }],
+    ['a layer with two data sources and a child with another', { vconcat: [{ layer: [mk(1), mk(2)] }, mk(3)] }],
+    ['a child with a layer of its own data, then a unit', { vconcat: [mk(3), { layer: [mk(1), mk(2)] }] }],
+    ['a concat in a concat', { vconcat: [mk(3), { hconcat: [mk(1), mk(2)] }, mk(4)] }],
+    ['a parent with data and children that have their own', { data: { values: [{ a: 0, b: 2 }] }, vconcat: [mk(1), { mark: 'point', encoding: { x: q('a'), y: q('b') } }, mk(2)] }],
+  ]
+  for (const [name, spec] of NAMED) {
+    it(`${name}: every source has a name of its own`, async () => {
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      const sources = (ours.data ?? []).filter((d: any) => d.source === undefined).map((d: any) => d.name)
+      expect(new Set(sources).size).toBe(sources.length)
+      expect(sources.length).toBe(((vl as any).compile(plain(spec)).spec.data as any[]).filter((d) => d.source === undefined).length)
+      await check(spec)
+    }, 30_000)
+  }
+})
+
+/** The domains of the scales, with the names of the datasets they read left out (how the datasets are named and cut is not what is compared). */
+const DOMAIN_SHAPES = (vg: any): unknown =>
+  (vg.scales ?? []).map((s: any) => {
+    const strip = (d: any): any => (Array.isArray(d) ? d.map(strip) : d && typeof d === 'object' ? Object.fromEntries(Object.entries(d).map(([k, v]) => [k, k === 'data' && typeof v === 'string' ? '*' : strip(v)])) : d)
+    return [s.name, strip(s.domain)]
+  })
+describe('@aster/vl == vega-lite: the domains of the scales (the datasets read by name, the references once, the sorts)', () => {
+  for (const [name, spec] of GROUPS['layers under a parent transform read one dataset (bar_heatlane)']!) {
+    it(name, () => {
+      const oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, any> } }).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      expect(plain(DOMAIN_SHAPES(ours))).toEqual(plain(DOMAIN_SHAPES(oracle)))
+    })
+  }
+})
 
 // util.ts accessPathWithDatum: a nested field is flattened with every prefix guarded, so a row that lacks `o` is a missing value
 describe('@aster/vl == vega-lite: the guarded flatten expression of a nested field (test_subobject_missing)', () => {
@@ -989,6 +1356,29 @@ describe('@aster/vl == vega-lite: the layout and the signals of a faceted cell',
       const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
       expect(plain(ours.layout?.align)).toEqual(plain(oracle.layout?.align))
       expect(plain(cell(ours)?.signals ?? null)).toEqual(plain(cell(oracle)?.signals ?? null))
+    })
+  }
+})
+
+// spec/base.ts extractCompositionLayout: a spacing given for one direction takes the config's (20) for the other (trellis_area_seattle)
+describe('@aster/vl == vega-lite: the spacing of a composition', () => {
+  const unit = { mark: 'point', encoding: { x: q('x'), y: q('y') } }
+  const SPECS: Array<[string, Record<string, any>]> = [
+    ['a row facet with a row spacing', { data: DATA, spacing: { row: 1 }, facet: { row: n('g') }, spec: unit }],
+    ['a column facet with a column spacing', { data: DATA, spacing: { column: 3 }, facet: { column: n('g') }, spec: unit }],
+    ['a facet with both spacings', { data: DATA, spacing: { row: 2, column: 4 }, facet: { row: n('g'), column: n('c') }, spec: unit }],
+    ['a facet with one number', { data: DATA, spacing: 7, facet: { row: n('g') }, spec: unit }],
+    ['a wrapped facet with a row spacing', { data: DATA, spacing: { row: 1 }, facet: n('c'), columns: 2, spec: unit }],
+    ['a facet with a row spacing and config.facet.spacing', { data: DATA, config: { facet: { spacing: 9 } }, spacing: { row: 1 }, facet: { row: n('g') }, spec: unit }],
+    ['a hconcat with a partial spacing', { data: DATA, spacing: { row: 1 }, hconcat: [unit, unit] }],
+    ['a concat with a partial spacing and config.concat.spacing', { data: DATA, config: { concat: { spacing: 11 } }, spacing: { column: 2 }, concat: [unit, unit], columns: 2 }],
+    ['a faceted unit with a partial spacing', { data: DATA, spacing: { column: 1 }, mark: 'point', encoding: { x: q('x'), y: q('y'), column: n('g') } }],
+  ]
+  for (const [name, spec] of SPECS) {
+    it(name, () => {
+      const oracle = (vl as any).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      expect(plain(ours.layout?.padding)).toEqual(plain(oracle.layout?.padding))
     })
   }
 })
