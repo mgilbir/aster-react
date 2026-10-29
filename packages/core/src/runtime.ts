@@ -400,10 +400,7 @@ interface EvalContext {
   groupY?: number
   datasets: Map<string, Row[]>
   /** The rows `setdata(name, tuples)` put in a dataset's input (see `ExpressionRuntime.setdata`), and whether they changed since the datasets were last built. */
-  setData: Map<string, Row[]>
-  setDataChanged: boolean
-  /** The signal whose update expression is being evaluated (`setdata` asks who calls it). */
-  currentSignal?: string
+  setData: SetDataState
   /** A legend tickCount threw: the whole layout aborts (raw-guide mode). */
   rawGuides?: boolean
   /** The guide host of this context (see guideHost). */
@@ -572,7 +569,7 @@ function prepareChartCtx(
   if (explicitSize.height && input.height != null) signalParams.height = height
 
   const datasets = new Map<string, Row[]>()
-  const setData = new Map<string, Row[]>()
+  const setData: SetDataState = { rows: new Map(), changed: false, caller: undefined }
   const scales = new Map<string, Scale>()
   const scaleTypes = new Map<string, string>()
   // Expression compile cache: compileExpr parses an AST per call, and the
@@ -590,21 +587,7 @@ function prepareChartCtx(
       return root === undefined ? undefined : { root, rows: datasets.get(name) ?? [] }
     },
     ...(input.random ? { random: input.random } : {}),
-    setdata: (name, tuples) => {
-      const d = chart.data.find((x) => x.name === name)
-      // vega reads `data.input` of the named dataset, which a dataset that does not exist does not have
-      if (d === undefined) throw new TypeError(`Cannot read properties of undefined (reading 'input')`)
-      // vega-dataflow enqueues an operator only once per run: a signal ranked after the dataset's input (it reads the dataset, or
-      // something derived from it) calls setdata when the input has already run in this first pass, so its pulse is lost
-      if (ctx.currentSignal !== undefined && signalRanksAfterDatasetInput(chart, ctx.currentSignal, name)) return 1
-      const rows = ingestRows((Array.isArray(tuples) ? tuples : tuples == null ? [] : [tuples]) as Row[]).map((r) => ({ ...r }))
-      const have = setData.get(name)
-      if (have === undefined || valueKey(have) !== valueKey(rows)) {
-        setData.set(name, rows)
-        ctx.setDataChanged = true
-      }
-      return 1
-    },
+    setdata: makeSetdata(chart, setData),
     containerSize: () => {
       const c = input.containerSize ?? input.measuredSize
       return c ? [c.width, c.height] : [undefined, undefined]
@@ -625,7 +608,7 @@ function prepareChartCtx(
   // Inputs besides the signals that change what a reused scale/item would be.
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}`
   const ctx: EvalContext = {
-    chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), signalParams, width, height, datasets, setData, setDataChanged: false, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
+    chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), signalParams, width, height, datasets, setData, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
@@ -700,8 +683,8 @@ function prepareChartCtx(
     // (a map whose projection was consumed before the `geojson` signals it fits were published builds again)
     const geoStale = ctx.geoStale
     ctx.geoStale = false
-    changed = resolveSignalUpdates(ctx) || geoStale || (rounds === 0 && readsScales) || ctx.setDataChanged
-    ctx.setDataChanged = false
+    changed = resolveSignalUpdates(ctx) || geoStale || (rounds === 0 && readsScales) || ctx.setData.changed
+    ctx.setData.changed = false
     buildScales(ctx)
     if (changed) {
       ctx.datasets.clear()
@@ -755,6 +738,36 @@ function prepareChartCtx(
   ctx.draft.fp = ctxFpOf(ctx)
 
   return { ctx, width, height }
+}
+
+/** What `setdata(name, tuples)` calls put in the datasets' inputs during one evaluation (see {@link makeSetdata}). */
+interface SetDataState {
+  rows: Map<string, Row[]>
+  /** the rows changed since the datasets were last built */
+  changed: boolean
+  /** the signal whose update expression is being evaluated: `setdata` asks who calls it */
+  caller: string | undefined
+}
+
+/**
+ * `ExpressionRuntime.setdata` for one evaluation. A module-level factory, like {@link makeTransformed}: a closure made inside
+ * `prepareChartCtx` would share its context with the evaluation's state and keep the previous scenes alive.
+ */
+function makeSetdata(chart: CompiledChart, state: SetDataState): NonNullable<ExpressionRuntime['setdata']> {
+  return (name, tuples) => {
+    // vega reads `data.input` of the named dataset, which a dataset that does not exist does not have
+    if (!chart.data.some((x) => x.name === name)) throw new TypeError(`Cannot read properties of undefined (reading 'input')`)
+    // vega-dataflow enqueues an operator only once per run: a signal ranked after the dataset's input (it reads the dataset, or
+    // something derived from it) calls setdata when the input has already run in this first pass, so its pulse is lost
+    if (state.caller !== undefined && signalRanksAfterDatasetInput(chart, state.caller, name)) return 1
+    const rows = ingestRows((Array.isArray(tuples) ? tuples : tuples == null ? [] : [tuples]) as Row[]).map((r) => ({ ...r }))
+    const have = state.rows.get(name)
+    if (have === undefined || contentKey(have) !== contentKey(rows)) {
+      state.rows.set(name, rows)
+      state.changed = true
+    }
+    return 1
+  }
 }
 
 /**
@@ -1136,7 +1149,7 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
         params = dict(ctx.signalParams)
         for (const f of frozen) params[f] = ctx.chart.signalDefs!.find((d) => d.name === f)?.value
       }
-      ctx.currentSignal = def.name
+      ctx.setData.caller = def.name
       const value = ctx.runtime.random === undefined
         ? ctx.runtime.expr(expr)(undefined, params)
         : atRandomSite(ctx.runtime.random, `signal:${def.name}`, () => randomFingerprint(expr, [], params), () => ctx.runtime.expr(expr)(undefined, params))
@@ -1144,7 +1157,7 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
       // `domain('x')` of a scale that is not there yet is `[]`, which is not the value vega's dataflow computes.
       const readsScales = DATA_DEPENDENT_EXPR.test(expr) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
       if (initPending && value !== undefined && !readsScales) ctx.initDone.add(def.name)
-      ctx.currentSignal = undefined
+      ctx.setData.caller = undefined
       ctx.signalErrors?.delete(def.name)
       if (value !== undefined && !valuesEqual(value, ctx.signalParams[def.name])) {
         ctx.signalParams[def.name] = value
@@ -1152,7 +1165,7 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
         changed = true
       }
     } catch (e) {
-      ctx.currentSignal = undefined
+      ctx.setData.caller = undefined
       // Unresolved dependency this round; keep previous value. (What is still thrown once everything the expression can
       // read exists is a throw, not a dependency that is missing: see abortAtThrowingSignal.)
       ;(ctx.signalErrors ??= new Map()).set(def.name, e)
@@ -3361,7 +3374,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     let rows: Row[]
     let inPulse: StepPulse | null = null
     const srcNames = sourceNames(d)
-    const setRows = srcNames.length === 0 ? ctx.setData.get(name) : undefined
+    const setRows = srcNames.length === 0 ? ctx.setData.rows.get(name) : undefined
     if (setRows !== undefined) {
       // `setdata(name, tuples)` replaced this dataset's input
       rows = setRows.map((r) => ({ ...r }))
