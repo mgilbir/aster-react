@@ -126,8 +126,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['an unknown resolve channel', { data: DATA, resolve: { scale: { banana: 'shared' } }, hconcat: [unit()] }, /unknown channel "banana"/],
   ['a bad resolve value', { data: DATA, resolve: { scale: { color: 'both' } }, hconcat: [unit()] }, /"shared" or "independent"/],
   ['resolve on a unit', unit({ resolve: { scale: { y: 'independent' } } }), /no meaning on a single unit/],
-  ['a wrapped faceted unit nested in a concat', { data: DATA, hconcat: [unit(), unit({ encoding: { x: xq, y: yq, facet: { ...cn, columns: 2 } } })] }, /wrapped facet.*nested in another composition/],
-  ['a wrapped facet operator nested in a concat', { data: DATA, vconcat: [unit(), { facet: cn, spec: unit() }] }, /wrapped facet.*nested in another composition/],
   ['an independent colour scale in a facet', { data: DATA, facet: { row: cn }, spec: unit(), resolve: { scale: { color: 'independent' } } }, /independent scale resolution of color inside a facet/],
   ['an independent x scale in a wrapped facet', { data: DATA, facet: cn, spec: unit({ encoding: { x: cn, y: yq } }), resolve: { scale: { x: 'independent' } } }, /wrapped facet/],
 ]
@@ -176,6 +174,9 @@ const ACCEPTED: Array<[string, unknown]> = [
   ['a parameter-driven bin extent', { data: DATA, params: [{ name: 'p', value: [0, 5] }], mark: 'bar', encoding: { x: { field: 'x', type: 'quantitative', bin: { extent: { param: 'p' } } }, y: { aggregate: 'count', type: 'quantitative' } } }],
   ['a signal domain and a domainRaw', unit({ params: [{ name: 'd', value: [0, 5] }], encoding: { x: { ...xq, scale: { domain: { signal: 'd' }, domainRaw: { signal: 'd' } } }, y: yq } })],
   ['an independent axis in a faceted unit', unit({ encoding: { x: xq, y: yq, column: cn }, resolve: { axis: { x: 'independent' } } })],
+  ['a wrapped faceted unit nested in a concat', { data: DATA, hconcat: [unit(), unit({ encoding: { x: xq, y: yq, facet: { ...cn, columns: 2 } } })] }],
+  ['a wrapped facet operator nested in a concat', { data: DATA, vconcat: [unit(), { facet: cn, spec: unit() }] }],
+  ['a facet inside a facet', { data: DATA, facet: { column: cn }, spec: { facet: { row: { field: 'g', type: 'nominal' } }, spec: unit() } }],
   ['a selection declared in two views', { data: DATA, hconcat: [unit({ params: [{ name: 'brush', select: 'interval' }] }), unit({ params: [{ name: 'brush', select: 'interval' }] })] }],
 ]
 

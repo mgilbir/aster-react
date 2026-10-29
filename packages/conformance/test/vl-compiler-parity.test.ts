@@ -840,6 +840,19 @@ const GROUPS: Record<string, Case[]> = {
     ['a nested facet with spacing', { data: DATA, spacing: 3, facet: { column: n('g') }, spec: { spacing: 5, facet: { row: n('c') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } } }],
     ['a nested facet whose outer field is sorted', { data: DATA, facet: { column: n('g', { sort: 'descending' }) }, spec: { facet: { column: n('c') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } } } }],
   ],
+  // facet.ts / concat.ts: a wrapped facet (a single `facet` field with `columns`) is a view like any other inside a concat, a repeat or a layer
+  // of a composition (the refusal of a wrapped facet nested in another composition is lifted)
+  'wrapped facets in compositions': [
+    ['a wrapped facet and a unit in an hconcat', { data: DATA, hconcat: [{ facet: n('c'), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a unit and a wrapped facet in a vconcat', { data: DATA, vconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('v') } }, { facet: n('c'), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }] }],
+    ['two wrapped facets in a concat', { data: DATA, concat: [{ facet: n('c'), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }, { facet: n('g'), columns: 1, spec: { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } } }], columns: 1 }],
+    ['a row facet and a wrapped facet in a vconcat', { data: DATA, vconcat: [{ facet: { row: n('g') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }, { facet: n('c'), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }] }],
+    ['a wrapped facet in the spec of a repeat', { data: DATA, repeat: ['x', 'y'], spec: { facet: n('c'), columns: 2, spec: { mark: 'point', encoding: { x: { field: { repeat: 'repeat' }, type: 'quantitative' }, y: q('v') } } } }],
+    ['a wrapped facet with a title in an hconcat', { data: DATA, title: 'All', hconcat: [{ title: 'Wrapped', facet: n('c'), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a wrapped facet of layers in an hconcat', { data: DATA, hconcat: [{ facet: n('c'), columns: 2, spec: { layer: [{ mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+    ['a wrapped facet with a sorted field and colour in a vconcat', { data: DATA, vconcat: [{ facet: n('c', { sort: { op: 'count', order: 'descending' } }), columns: 2, spec: { mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('g') } } }, { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), color: n('g') } }] }],
+    ['a unit with the facet channel in an hconcat', { data: DATA, hconcat: [{ mark: 'point', encoding: { x: q('x'), y: q('y'), facet: n('c') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
