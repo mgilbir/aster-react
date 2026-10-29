@@ -54,6 +54,12 @@ export interface ScaleContext {
    * process-global memo would serve stale domains.
    */
   distinctCache?: WeakMap<unknown[], Map<string, unknown[]>>
+  /**
+   * Present when the scale is made in a pass of a view that makes another (autosize fit). vega's Scale operator keeps its scale
+   * between passes, so a pass that changes its parameters finds `bins` where the pass before left them, and a scale with bins
+   * leaves the zero out of its default domain (`includeZero`): the first pass includes it, the second does not.
+   */
+  pass?: { prev: { key: string; bins: boolean } | undefined; record: (key: string, bins: boolean) => void }
 }
 
 /** Continuous types (the runtime's domain census and gradient legends key on these). */
@@ -464,8 +470,21 @@ export function buildScale(c: CompiledScale, ctx: ScaleContext): Scale {
     if (typeof scale[k] === 'function') (scale[k] as (v: unknown) => unknown)(_[k])
   }
 
+  // (an operator whose parameters did not change does not run again: the scale of the pass before is the scale)
+  const passKey = ctx.pass !== undefined ? paramsKey(_) : ''
+  if (ctx.pass?.prev?.bins === true && ctx.pass.prev.key !== passKey) scale.bins = []
   configureRange(scale, _, configureBins(scale, _, configureDomain(scale, _)))
+  ctx.pass?.record(passKey, !!scale.bins)
   return scale
+}
+
+let unkeyed = 0
+function paramsKey(_: Params): string {
+  try {
+    return JSON.stringify(_, (_k, v) => (typeof v === 'function' ? 'fn:' + v.name : v))
+  } catch {
+    return `#${++unkeyed}` // (not comparable: the scale is made again)
+  }
 }
 
 function includeZero(scale: Scale): boolean {

@@ -305,6 +305,9 @@ console.log(svg.includes('cdn.example.com'), svg.includes('tracker.example.net')
   pass `limits` (which turns the defaults on) or a `urlPolicy` with `allow`.
 - `allow` for images is synchronous. A relative URL needs `baseURL` once `allow`
   is set (fail closed).
+- With a `baseURL` a relative image URL is drawn resolved against it, the way vega's loader
+  does (`base` + `/` + `url`, `//host` getting `http:`); the resolved URL goes through the
+  policy again, so `allow` sees what is drawn. Without one it is drawn as written.
 - Where to pass it: `renderSpec`/`evaluateChart`/sessions take `urlPolicy` in the runtime
   input; `<Chart urlPolicy>`, `useChart(spec, { urlPolicy })` and `<ChartStream urlPolicy>`
   forward it (a denial without `onDeny` is a render error reported through `onError`; the

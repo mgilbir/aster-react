@@ -27,9 +27,11 @@ vega/global-development
 vega/grouped-bar-chart
 vega/heatmap
 vega/histogram
+vega/histogram-null-values
 vega/horizon-graph
 vega/interactive-legend
 vega/job-voyager
+vega/labeled-scatter-plot
 vega/line-chart
 vega/loess-regression
 vega/map-with-tooltip
@@ -274,6 +276,7 @@ vl/facet_grid_bar
 vl/facet_independent_scale
 vl/facet_independent_scale_layer_broken
 vl/facet_row_facet_row_point_future
+vl/geo_choropleth
 vl/geo_circle
 vl/geo_constant_value
 vl/geo_custom_projection
@@ -284,9 +287,11 @@ vl/geo_layer_line_london
 vl/geo_line
 vl/geo_params_projections
 vl/geo_point
+vl/geo_repeat
 vl/geo_rule
 vl/geo_sphere
 vl/geo_text
+vl/geo_trellis
 vl/hconcat_weather
 vl/histogram
 vl/histogram_bin_change
@@ -310,6 +315,7 @@ vl/interactive_concat_layer
 vl/interactive_crossfilter
 vl/interactive_dashboard_europe_pop
 vl/interactive_geo_earthquakes
+vl/interactive_geo_facet_species
 vl/interactive_global_development
 vl/interactive_histogram_full_height_hover
 vl/interactive_index_chart
@@ -485,6 +491,7 @@ vl/point_color_shape_constant
 vl/point_color_with_shape
 vl/point_colorramp_size
 vl/point_conditional_opacity
+vl/point_constant_legend_domain
 vl/point_diverging_color
 vl/point_dot_timeunit_color
 vl/point_filled
@@ -523,6 +530,7 @@ vl/repeat_splom_cars
 vl/rule_color_mean
 vl/rule_extent
 vl/rule_params
+vl/scatter_image
 vl/selection_bind_cylyr
 vl/selection_bind_origin
 vl/selection_brush_timeunit

@@ -891,7 +891,7 @@ function renderPaths(group: SceneGroup, open: string): string {
   let out = open
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
-    if (!it.path) continue
+    // (an item whose path is empty is still a `<path>`, with no `d`: vega draws one element per item)
     // Position the path at its item x/y (vega renders path marks with a
     // translate transform; items whose path already encodes absolute
     // coordinates (e.g. geoshape output) have x=y=0 and emit no transform).

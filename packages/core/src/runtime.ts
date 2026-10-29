@@ -16,7 +16,7 @@ import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ScaleContext
 
 /** Scale types whose domain is an ordered set of discrete values. */
 const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
-import { requireGeo } from './registry.js'
+import { ITEM_MARK, requireGeo } from './registry.js'
 import { locale } from './locale.js'
 import type {
   GuideEncodeBlock,
@@ -28,6 +28,7 @@ import type {
   CompiledProjection,
   CompiledTitle,
   CompiledScale,
+  CompiledSignalDef,
   CompiledTransform,
   EncodeValue,
   RuntimeInput,
@@ -46,13 +47,13 @@ import { tickFormat, scaleGradientStops, tickValues, tickCount, validTicks } fro
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { dict, ownGet, maxOf, pushAll, lerp, scopedSignalName, TUPLE_ID } from './util.js'
-import { applyImageUrlPolicy, applyLinkUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
+import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateRows, fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import { trellisLayout } from './trellis.js'
-import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
+import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
 import { buildAxis as buildAxisGuide, tickBand } from './guide-axis.js'
 import { buildTitle as buildTitleGuide } from './guide-title.js'
@@ -363,8 +364,26 @@ interface AxisAbort {
   cut?: AbortPoint
 }
 
+/**
+ * What a dataflow pass leaves for the next one of the same view (autosize fit runs two): vega's operators keep their state.
+ * The keys of the guide items it made, in item order (see `retainGuideOrder`: the join of the next pass starts from them),
+ * and, per scale, the parameters it was last made with and whether it ended with `bins` (see `ScaleContext.pass`).
+ */
+interface PassRecord {
+  guides: Map<string, string[]>
+  scales: Map<string, { key: string; bins: boolean }>
+}
+
+/** The previous pass's record (undefined for the first) and the one this pass writes. */
+interface PassMemory {
+  prev: PassRecord | undefined
+  cur: PassRecord
+}
+
 interface EvalContext {
   chart: CompiledChart
+  /** Present while an evaluation makes more than one dataflow pass (autosize fit): see `PassMemory`. */
+  passMemory?: PassMemory
   scope: GuideScope
   abort: AxisAbort
   signalParams: Record<string, unknown>
@@ -471,6 +490,8 @@ interface EvalContext {
   signalErrors?: Map<string, unknown>
   /** The items of the named marks built so far (a mark may read another mark's items as its data: `from: {data: <mark name>}`). */
   markItems: Map<string, SceneItem[]>
+  /** The container of each named mark built so far (its type and items; a group mark's are its group items): what a `label` transform avoids or labels. */
+  markContainers: Map<string, { marktype: string; items: SceneItem[] }>
 }
 
 /**
@@ -511,6 +532,8 @@ function prepareChartCtx(
   explicitSize: { width: boolean; height: boolean } = { width: input.width != null, height: input.height != null },
   /** The view size signals as written, negative included (see {@link signedViewSize}): the first autosize pass reads them so. */
   signed?: { width?: number; height?: number },
+  /** Present when the view makes more than one dataflow pass: what the pass before it left (see `PassMemory`). */
+  passMemory?: PassMemory,
 ): { ctx: EvalContext; width: number; height: number } {
   // The deadline belongs to the enclosing limits scope (evaluateChart /
   // getChartInfo / renderSpec / session), so one wall clock covers the whole
@@ -577,13 +600,13 @@ function prepareChartCtx(
   // Inputs besides the signals that change what a reused scale/item would be.
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}`
   const ctx: EvalContext = {
-    chart, scope: rootScope(chart), abort: { failures: [] }, signalParams, width, height, datasets, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
+    chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), signalParams, width, height, datasets, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
       ...(explicitSize.width ? ['width'] : []), ...(explicitSize.height ? ['height'] : []),
     ]),
-    hierarchies: transformHierarchies, affected: new Set(), incremental: false, deadline, checkDeadline, markItems: new Map(),
+    hierarchies: transformHierarchies, affected: new Set(), incremental: false, deadline, checkDeadline, markItems: new Map(), markContainers: new Map(),
     datasetPulses: new Map(),
     prev: txn.prev, draft: newState(txn.gen), gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
@@ -942,7 +965,14 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
     // before that `scale()` of a missing scale is `undefined`, which would be taken for the initial value
     if (initPending && SCALE_FN_EXPR.test(expr) && !ctx.chart.scales.every((sc) => ctx.scales.has(sc.name))) continue
     try {
-      const value = ctx.runtime.expr(expr)(undefined, ctx.signalParams)
+      // (a `react: false` signal in a cycle through a scale runs before the signals it reads: it sees their initial values)
+      const frozen = def.react === false ? frozenReadsOf(ctx.chart).get(def.name) : undefined
+      let params = ctx.signalParams
+      if (frozen !== undefined) {
+        params = dict(ctx.signalParams)
+        for (const f of frozen) params[f] = ctx.chart.signalDefs!.find((d) => d.name === f)?.value
+      }
+      const value = ctx.runtime.expr(expr)(undefined, params)
       // An `init` that reads a scale or a dataset is only settled once they exist: until the scales are built,
       // `domain('x')` of a scale that is not there yet is `[]`, which is not the value vega's dataflow computes.
       const readsScales = DATA_DEPENDENT_EXPR.test(expr) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
@@ -1688,7 +1718,7 @@ function paintOrderOf(items: SceneGroup[]): SceneGroup[] {
  * autosize padding at a given content size. Extracted from evaluateChart so
  * `fit`/`fit-x`/`fit-y` can re-run at a shrinking content size and converge.
  */
-type BuiltContent = { items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean; frame: FrameEncode | undefined }
+type BuiltContent = { record: PassRecord | undefined; items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean; frame: FrameEncode | undefined }
 
 /** What the view's own `encode` gives the root group: where it sits, and the paint of its box (see frameEncodeOf). */
 interface FrameEncode { x: number; y: number; paint: Partial<SceneRoot> }
@@ -1705,12 +1735,14 @@ function buildContent(
   txn: EvalTxn,
   fitted = false,
   signed?: { width?: number; height?: number },
+  /** Present: this build is a pass of a view that makes another (fit); `prev`: what the pass before it left. */
+  order?: { prev?: PassRecord },
 ): BuiltContent {
-  const first = buildContentPass(chart, input, cw, ch, txn, fitted, signed)
+  const first = buildContentPass(chart, input, cw, ch, txn, fitted, signed, undefined, order)
   const failures = first.ctx.abort.failures
   if (!failures.length) return first
   const cut = failures.reduce((a, b) => (compareInstances(a.path, b.path) || (a.axis === b.axis ? 0 : a.axis < b.axis ? -1 : 1) || (a.legend ?? 0) - (b.legend ?? 0)) <= 0 ? a : b)
-  return buildContentPass(chart, input, cw, ch, txn, fitted, signed, cut)
+  return buildContentPass(chart, input, cw, ch, txn, fitted, signed, cut, order)
 }
 
 function buildContentPass(
@@ -1722,12 +1754,14 @@ function buildContentPass(
   fitted = false,
   signed?: { width?: number; height?: number },
   cut?: AxisAbort['cut'],
+  order?: { prev?: PassRecord },
 ): BuiltContent {
   const prepared = prepareChartCtx(
     // (the first build reads the size from the spec and the host's input itself; only a fit-resize overrides it)
     chart, fitted ? { ...input, width: cw, height: ch } : input, txn,
     fitted ? { width: true, height: true } : { width: input.width != null, height: input.height != null },
     signed,
+    order !== undefined ? { prev: order.prev, cur: { guides: new Map(), scales: new Map() } } : undefined,
   )
   const { ctx } = prepared
   ctx.abort.cut = cut
@@ -1810,7 +1844,7 @@ function buildContentPass(
     ? ctx.chart.padding
     : computeGuidePadding(items, width, height, ctx.chart.padding)
   const ordered = paintOrderOf(items)
-  return { items: ordered, padding, ctx, width, height, hasLayout, frame }
+  return { record: ctx.passMemory?.cur, items: ordered, padding, ctx, width, height, hasLayout, frame }
 }
 
 /**
@@ -1874,6 +1908,8 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
   // (once: the pass after it sets the width signal with the resize skipped, so the layout does not run again), and the content is
   // built again at the fitted size. The view keeps the padding the first pass found; what the second pass overflows by is not
   // looked at (a title anchored to the bounds, or any overflow that depends on the width, ends up wherever it ends up).
+  // (a fit view makes a second pass over the guides: the items of its first are what the join of the second starts from)
+  const fitting = auto === 'fit' || auto === 'fit-x' || auto === 'fit-y'
   let cw = initialW
   let ch = initialH
   let firstPassPadding: BuiltContent['padding'] | undefined
@@ -1886,7 +1922,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
     ch = Math.max(0, initialH - base.top - base.bottom)
     built = buildContent(chart, input, cw, ch, txn, true)
   } else {
-    built = buildContent(chart, input, cw, ch, txn)
+    built = buildContent(chart, input, cw, ch, txn, false, undefined, fitting ? {} : undefined)
   }
   if (auto === 'fit' || auto === 'fit-x' || auto === 'fit-y') {
     // A `width`/`height` signal (update or init, e.g. vega-lite's
@@ -1916,7 +1952,7 @@ function evaluateChartImpl(chart: CompiledChart, input: RuntimeInput, txn: EvalT
         firstPassPadding = built.padding
         cw = nw
         ch = nh
-        built = buildContent(chart, { ...input, changedDatasets: undefined }, cw, ch, txn, true)
+        built = buildContent(chart, { ...input, changedDatasets: undefined }, cw, ch, txn, true, undefined, built.record !== undefined ? { prev: built.record } : undefined)
       }
     }
   }
@@ -3522,7 +3558,12 @@ function scaleContext(ctx: EvalContext, name: string): ScaleContext {
     dataRows: (dataName) => (ctx.datasets.get(dataName) ?? []) as Record<string, unknown>[],
     hasData: (dataName) => ctx.datasets.has(dataName),
     distinctCache: ctx.distinctCache,
+    ...(ctx.passMemory !== undefined ? { pass: passOfScale(ctx.passMemory, `${ctx.scope.path.join('/')}:${name}`) } : {}),
   }
+}
+
+function passOfScale(memory: PassMemory, id: string): NonNullable<ScaleContext['pass']> {
+  return { prev: memory.prev?.scales.get(id), record: (key, bins) => { memory.cur.scales.set(id, { key, bins }) } }
 }
 
 function buildScales(ctx: EvalContext): void {
@@ -3687,9 +3728,15 @@ function reusablePulse(
 }
 
 /** A mark `transform` vega runs on the encoded items (see evaluateMarkItems). */
-const ITEM_TRANSFORMS: ReadonlySet<string> = new Set(['voronoi', 'lookup', 'linkpath', 'force', 'geopath'])
+const ITEM_TRANSFORMS: ReadonlySet<string> = new Set(['voronoi', 'lookup', 'linkpath', 'force', 'geopath', 'label'])
 function isItemTransform(t: CompiledTransform): boolean {
   return ITEM_TRANSFORMS.has(String(t.type))
+}
+
+/** The bounds of one item of a mark, in the frame of the mark's group (vega's `item.bounds`). */
+function itemBoundsOf(container: { marktype: string }, item: SceneItem): { x1: number; y1: number; x2: number; y2: number } {
+  const b = container.marktype === 'group' ? boundGroupItem(new Bounds(), item as unknown as SceneGroup) : boundTypedMark(new Bounds(), { marktype: container.marktype, items: [item] } as unknown as SceneGroup)
+  return { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
 }
 
 function evaluateMark(
@@ -3701,8 +3748,15 @@ function evaluateMark(
   // a named mark's items are what a later mark of `from: {data: <name>}` reads
   if (built && typeof mark.name === 'string') {
     // (a group mark's items are the group items themselves, a mark's are the items of its container)
-    if (mark.type === 'group') { if (Array.isArray(built)) ctx.markItems.set(mark.name, built as unknown as SceneItem[]) }
-    else if (!Array.isArray(built)) ctx.markItems.set(mark.name, (built.items ?? []) as SceneItem[])
+    if (mark.type === 'group') {
+      if (Array.isArray(built)) {
+        ctx.markItems.set(mark.name, built as unknown as SceneItem[])
+        ctx.markContainers.set(mark.name, { marktype: 'group', items: built as unknown as SceneItem[] })
+      }
+    } else if (!Array.isArray(built)) {
+      ctx.markItems.set(mark.name, (built.items ?? []) as SceneItem[])
+      ctx.markContainers.set(mark.name, built as unknown as { marktype: string; items: SceneItem[] })
+    }
   }
   return built
 }
@@ -3730,6 +3784,17 @@ function evaluateMarkItems(
   if (source) {
     // (a source that is no dataset but the name of a mark built before: that mark's items, shallow-copied as vega's tuples)
     const rawRows = ctx.datasets.get(source) ?? ctx.markItems.get(source)?.map((it) => ({ ...(it as unknown as Row) })) ?? []
+    // (a `label` transform reads the mark an item is in, and its bounds, off the item it labels: see `ITEM_MARK`)
+    if (!ctx.datasets.has(source) && mark.transform?.some((t) => t.type === 'label')) {
+      const container = ctx.markContainers.get(source)
+      const from = ctx.markItems.get(source)
+      if (container !== undefined && from !== undefined) {
+        rawRows.forEach((row, i) => {
+          const it = from[i]!
+          Object.defineProperty(row, ITEM_MARK, { value: { marktype: container.marktype, container, bounds: () => itemBoundsOf(container, it) }, enumerable: true, configurable: true, writable: true })
+        })
+      }
+    }
     // Only clone rows when the pipeline will re-encode them all (a mark-level
     // transform); the differential path reads the raw rows and clones
     // just the changed indices, so an unchanged row is never copied.
@@ -3880,6 +3945,8 @@ function evaluateMarkItems(
         runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections,
         // (`lookup` `from` is a dataset, or the name of a mark: its items)
         datasets: (n) => ctx.datasets.get(n) ?? (ctx.markItems.get(n) as unknown as Row[] | undefined),
+        // (`label` avoids the marks it names)
+        marks: (n) => ctx.markContainers.get(n),
         // (vega's tuples: a force layout moves the items themselves)
         inPlace: true,
       }, source)
@@ -3978,6 +4045,12 @@ function evaluateMarkItems(
       if (it.url == null) continue
       const vetted = applyImageUrlPolicy(it.url, ctx.urlPolicy)
       if (vetted == null) it.url = undefined
+      else {
+        const resolved = resolveImageUrl(vetted, ctx.urlPolicy?.baseURL)
+        // (what is drawn is what the policy vetted: the url the base turns it into goes through it too)
+        const final = resolved !== vetted ? applyImageUrlPolicy(resolved, ctx.urlPolicy) : resolved
+        it.url = (final == null ? undefined : final) as string | undefined
+      }
     }
   }
 
@@ -5236,6 +5309,90 @@ function scaleIsLate(sdef: CompiledScale, scope: GuideScope, chart: CompiledChar
   return late(params)
 }
 
+const SCALE_NAME_CALL = /\b(?:domain|range|scale|bandwidth|bandspace|invert|copy|gradient)\s*\(\s*(?:'([^']*)'|"([^"]*)")/g
+
+interface SpecReads { signals: Set<string>; scales: Set<string>; data: Set<string> }
+const newReads = (): SpecReads => ({ signals: new Set(), scales: new Set(), data: new Set() })
+
+/** Every name a JSON fragment of a spec reads: the signals of its `{signal}` / `{expr}` strings, the scales and datasets it names. */
+function specReads(node: unknown, out: SpecReads, depth = 0): void {
+  if (node === null || typeof node !== 'object' || depth > 40) return
+  if (Array.isArray(node)) { for (const v of node) specReads(v, out, depth + 1); return }
+  for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+    if (typeof v === 'string') {
+      if (k === 'signal' || k === 'expr' || k === 'update' || k === 'init' || k === 'test') {
+        for (const id of expressionIdentifiers(v)) out.signals.add(id)
+        for (const m of v.matchAll(SCALE_NAME_CALL)) out.scales.add((m[1] ?? m[2])!)
+      } else if (k === 'data' || k === 'source' || k === 'from') out.data.add(v)
+      else if (k === 'scale') out.scales.add(v)
+    } else specReads(v, out, depth + 1)
+  }
+}
+
+const FROZEN_READS = new WeakMap<CompiledChart, Map<string, string[]>>()
+
+/**
+ * For each `react: false` view signal, the signals it reads that vega's dataflow has not computed yet when it runs.
+ *
+ * vega-dataflow ranks operators: one that reads an operator ranked after it is re-ranked past it, together with everything
+ * that listens to it. A `react: false` signal listens to nothing, so it is not carried along. When the signal it reads is
+ * pushed past it, it runs first and reads that signal's initial value. That happens when the signal it reads sits in a cycle
+ * through a scale or dataset that reads the `react: false` signal back (`domain('color')` -> a scale whose domain is the
+ * signal): the cycle `react: false` is there to break. A reader outside any cycle is ranked after it and has its value.
+ * (The signals of a group scope are not covered: they are resolved with their group.)
+ */
+function frozenReadsOf(chart: CompiledChart): Map<string, string[]> {
+  const cached = FROZEN_READS.get(chart)
+  if (cached) return cached
+  const out = new Map<string, string[]>()
+  FROZEN_READS.set(chart, out)
+  const defs = new Map<string, CompiledSignalDef>()
+  for (const d of chart.signalDefs ?? []) if (d.push !== 'outer' && !defs.has(d.name)) defs.set(d.name, d)
+  const scales = new Map(chart.scales.map((sc) => [sc.name, sc] as const))
+  const datasets = new Map(chart.data.map((d) => [d.name, d] as const))
+  const readsOfSignal = (d: CompiledSignalDef): SpecReads => {
+    const r = newReads()
+    specReads({ update: d.update, init: d.init }, r)
+    return r
+  }
+  for (const [name, def] of defs) {
+    if (def.react !== false) continue
+    const frozen: string[] = []
+    for (const s of readsOfSignal(def).signals) {
+      const source = defs.get(s)
+      if (source === undefined || s === name || source.react === false) continue
+      // does `source` listen, through reactive edges only, to `name`?
+      const seen = new Set<string>()
+      const listens = (reads: SpecReads): boolean => {
+        for (const id of reads.signals) {
+          if (id === name) return true
+          const d = defs.get(id)
+          if (d !== undefined && d.react !== false && !seen.has(`s:${id}`)) { seen.add(`s:${id}`); if (listens(readsOfSignal(d))) return true }
+        }
+        for (const sc of reads.scales) {
+          const sdef = scales.get(sc)
+          if (sdef === undefined || seen.has(`c:${sc}`)) continue
+          seen.add(`c:${sc}`)
+          const r = newReads()
+          specReads(sdef, r)
+          if (listens(r)) return true
+          for (const ds of r.data) {
+            if (seen.has(`d:${ds}`) || !datasets.has(ds)) continue
+            seen.add(`d:${ds}`)
+            const dr = newReads()
+            specReads(datasets.get(ds), dr)
+            if (listens(dr)) return true
+          }
+        }
+        return false
+      }
+      if (listens(readsOfSignal(source))) frozen.push(s)
+    }
+    if (frozen.length) out.set(name, frozen)
+  }
+  return out
+}
+
 /**
  * vega's AxisTicks failing (an interval string on a non-time scale, a format that is no specifier) is logged and the
  * axis never gets its ticks; the dataflow pass aborts, and every operator ranked after the failing one never runs.
@@ -5310,8 +5467,9 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   // `{index: -1, tickIndex: -1, extra: {value}, label: ''}`.
   const band = tickBand(lookup(own, cfg))
   const extra = isSignal(band.extra) ? ctx.runtime.expr(band.extra.signal)({}, ctx.signalParams) : band.extra
-  const rows: Row[] = ticks.map((value, i) => ({ index: i / ((ticks.length - 1) || 1), tickIndex: i, value, label: labelCache[i] }))
+  let rows: Row[] = ticks.map((value, i) => ({ index: i / ((ticks.length - 1) || 1), tickIndex: i, value, label: labelCache[i] }))
   if (extra && ticks.length) rows.push({ index: -1, tickIndex: -1, extra: { value: ticks[0] }, label: '' })
+  if (ctx.passMemory !== undefined) rows = retainGuideOrder(rows, ctx.passMemory, `a${ctx.scope.path.join('/')}:${index}`)
   meterItems(rows.length, 'axis ticks')
 
   const guides = chartGuides(ctx.chart)
@@ -5351,6 +5509,35 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
     ...(href != null ? { href } : {}),
   } as unknown as SceneGroup
   vetGuideLinks(out, ctx)
+  return out
+}
+
+/**
+ * vega-encode DataJoin: the items of a keyed mark (an axis's ticks, labels and grid are keyed by `value`) outlive the dataflow
+ * pass that made them. A second pass (autosize fit) adds its tuples first: one whose key an item already has updates that item
+ * in its place, a new key makes a new item after the others, and only then do the first pass's tuples leave: an item whose
+ * tuple was not replaced exits. The scene's items are what is left, in that order.
+ */
+function retainGuideOrder(rows: Row[], memory: PassMemory, id: string): Row[] {
+  const prev = memory.prev?.guides.get(id)
+  let out = rows
+  if (prev !== undefined) {
+    const byKey = new Map<string, Row>()
+    for (const r of rows) byKey.set(String(r.value), r) // (a repeated key: the last tuple's datum, the first one's place)
+    out = []
+    for (const k of prev) {
+      const r = byKey.get(k)
+      if (r !== undefined) { out.push(r); byKey.delete(k) }
+    }
+    const added = new Set<string>()
+    for (const r of rows) {
+      const k = String(r.value)
+      if (!byKey.has(k) || added.has(k)) continue
+      added.add(k)
+      out.push(byKey.get(k)!)
+    }
+  }
+  memory.cur.guides.set(id, out.map((r) => String(r.value)))
   return out
 }
 

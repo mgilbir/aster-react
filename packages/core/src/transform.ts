@@ -37,6 +37,11 @@ export interface TransformContext {
    * does not copy them first.
    */
   inPlace?: boolean
+  /**
+   * A named mark's container (`marktype` and its `items`; for a group mark, the group items): the marks the `label`
+   * transform avoids. Absent where there are no marks (a dataset's transform).
+   */
+  marks?: (name: string) => unknown
 }
 
 export type Row = Record<string, unknown>
@@ -263,7 +268,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     case 'voronoi':
       return requireTransform('voronoi')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'label':
-      return labelRows(rows, t as Record<string, unknown>, ctx)
+      return requireTransform('label')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'timeunit':
       return timeunitRows(rows, t, (info) => {
         if (t.signal) ctx.signals[t.signal as string] = info
@@ -987,220 +992,6 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
     node.height = h
   })
   return root
-}
-
-// ---------------------------------------------------------------------------
-// label (vega-label, plain-data path)
-//
-// The vega `label` transform places each datum's text label relative to its
-// base-mark boundary. For plain data tuples (no mark context — `marktype` is
-// undefined) the boundary is the tuple's own (x, y), and labels are placed
-// anchor-by-anchor (default order starts top-left with offset 1) into a
-// coarse bitmap used for overlap detection. This port covers exactly that
-// path (the mark-based path needs a canvas and is not reachable in a headless
-// process). Output fields default to [x, y, opacity, align, baseline].
-// ---------------------------------------------------------------------------
-
-const LABEL_ANCHOR_CODE: Record<string, number> = {
-  'top-left': 0x0,
-  top: 0x1,
-  'top-right': 0x2,
-  left: 0x4,
-  middle: 0x5,
-  right: 0x6,
-  'bottom-left': 0x8,
-  bottom: 0x9,
-  'bottom-right': 0xa,
-}
-
-const LABEL_ALIGNS = ['right', 'center', 'left']
-const LABEL_BASELINES = ['bottom', 'middle', 'top']
-
-/** Row-major bit array (vega-label `util/Bitmap.js`). */
-function labelBitmap(w: number, h: number) {
-  const SIZE = 32
-  const RIGHT0 = new Uint32Array(SIZE + 1)
-  const RIGHT1 = new Uint32Array(SIZE + 1)
-  RIGHT1[0] = 0
-  RIGHT0[0] = ~RIGHT1[0]
-  for (let i = 1; i <= SIZE; ++i) {
-    RIGHT1[i] = (RIGHT1[i - 1]! << 1) | 1
-    RIGHT0[i] = ~RIGHT1[i]!
-  }
-  // w x h come from the spec's size/padding: bound the bit array first (C9)
-  meterRows((w * h) / SIZE, 'label bitmap')
-  const array = new Uint32Array(~~((w * h + SIZE) / SIZE))
-  return {
-    array,
-    outOfBounds: (x: number, y: number, x2: number, y2: number): boolean => x < 0 || y < 0 || y2 >= h || x2 >= w,
-    getRange: (x: number, y: number, x2: number, y2: number): boolean => {
-      let r = y2
-      for (; r >= y; --r) {
-        const start = r * w + x
-        const end = r * w + x2
-        const indexStart = start >>> 5
-        const indexEnd = end >>> 5
-        if (indexStart === indexEnd) {
-          if (array[indexStart]! & RIGHT0[start & 31]! & RIGHT1[(end & 31) + 1]!) return true
-        } else {
-          if (array[indexStart]! & RIGHT0[start & 31]!) return true
-          if (array[indexEnd]! & RIGHT1[(end & 31) + 1]!) return true
-          for (let i = indexStart + 1; i < indexEnd; ++i) {
-            if (array[i]) return true
-          }
-        }
-      }
-      return false
-    },
-    setRange: (x: number, y: number, x2: number, y2: number): void => {
-      for (; y <= y2; ++y) {
-        const start = y * w + x
-        const end = y * w + x2
-        const indexStart = start >>> 5
-        const indexEnd = end >>> 5
-        if (indexStart === indexEnd) {
-          array[indexStart]! |= RIGHT0[start & 31]! & RIGHT1[(end & 31) + 1]!
-        } else {
-          array[indexStart]! |= RIGHT0[start & 31]!
-          array[indexEnd]! |= RIGHT1[(end & 31) + 1]!
-          for (let i = indexStart + 1; i < indexEnd; ++i) array[i] = 0xffffffff
-        }
-      }
-    },
-  }
-}
-
-/**
- * The vega `label` transform. Each datum's label is placed relative to its own
- * (x, y): the default anchor sweep starts at top-left with offset 1, which for
- * well-separated points is free — each label lands at `x - offset/√2` with
- * `y` NaN (the datum carries no `fontSize`), which vega serializes as `null`.
- */
-function labelRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
-  if (!rows.length) return rows
-  const size = resolveSizeParam(t.size, ctx)
-  if (!size || size.length !== 2) {
-    throw new Error('[aster] label transform requires a [width, height] size parameter')
-  }
-
-  const as = (t.as as string[] | undefined) ?? ['x', 'y', 'opacity', 'align', 'baseline']
-  const rawOffset = t.offset == null ? 1 : t.offset
-  const offsets = (Array.isArray(rawOffset) ? rawOffset : [rawOffset]).map((v) => Number(v) || 0)
-  const anchors = (t.anchor as string[] | undefined) ?? [
-    'top-left', 'left', 'bottom-left', 'top', 'bottom', 'top-right', 'right', 'bottom-right',
-  ]
-  const positions = Math.max(offsets.length, anchors.length)
-  const offs: number[] = []
-  const anc: number[] = []
-  for (let i = 0; i < positions; i++) {
-    offs[i] = offsets[Math.min(i, offsets.length - 1)]!
-    const name = anchors[Math.min(i, anchors.length - 1)]!
-    anc[i] = (Object.hasOwn(LABEL_ANCHOR_CODE, name) ? LABEL_ANCHOR_CODE[name] : undefined) ?? 0
-  }
-
-  // scaler (vega-label `util/scaler.js`) with padding 0.
-  const [width, height] = size
-  const ratio = Math.max(1, Math.sqrt((width * height) / 1e6))
-  const bw = ~~((width + ratio) / ratio)
-  const bh = ~~((height + ratio) / ratio)
-  const scale = (_: number): number => ~~(_ / ratio)
-
-  // baseBitmaps: mark each datum's anchor point (x, y) in the bitmap.
-  const bm = labelBitmap(bw, bh)
-  for (const r of rows) {
-    const x = ~~(Number(r.x) / ratio)
-    const y = ~~(Number(r.y) / ratio)
-    if (x >= 0 && y >= 0 && x < bw && y < bh) {
-      bm.array[(y * bw + x) >>> 5]! |= 1 << ((y * bw + x) & 31)
-    }
-  }
-
-  const n = positions
-  const boundary = (r: Row): number[] => {
-    const x = Number(r.x)
-    const y = Number(r.y)
-    return [x, x, x, y, y, y]
-  }
-
-  const out: Row[] = []
-  for (const r of rows) {
-    const b = boundary(r)
-    const textHeight = r.fontSize as number | undefined
-    const rawText = r.text as string | undefined
-    let placedX: number | undefined
-    let placedY: number | undefined
-    let placedAnchor = -1
-    let textWidth = 0
-
-    for (let i = 0; i < n; ++i) {
-      const dx = (anc[i]! & 0x3) - 1
-      const dy = ((anc[i]! >>> 2) & 0x3) - 1
-
-      const sizeFactor = dx && dy ? Math.SQRT1_2 : 1
-      const insideFactor = offs[i]! < 0 ? -1 : 1
-
-      const x1 = b[1 + dx]! + offs[i]! * dx * sizeFactor
-      // `textHeight` is the datum's fontSize (undefined for plain data → NaN
-      // in the y arithmetic, exactly as vega computes it).
-      const yc = b[4 + dy]! + (insideFactor * (textHeight as number) * dy) / 2 + offs[i]! * dy * sizeFactor
-      const y1 = yc - (textHeight as number) / 2
-      const y2 = yc + (textHeight as number) / 2
-
-      const _x1 = scale(x1)
-      const _y1 = scale(y1)
-      const _y2 = scale(y2)
-
-      if (!textWidth) {
-        if (bm.outOfBounds(_x1, _x1, _y1, _y2) || bm.getRange(_x1, _y1, _x1, _y2)) {
-          continue
-        }
-        // vega textMetrics: canvas measureText when available, the headless
-        // estimate (`0.8 * chars * fontSize`) otherwise.
-        textWidth = nominalTextWidth(String(rawText ?? ''), (textHeight as number | undefined) ?? 11)
-      }
-
-      const xc = x1 + (insideFactor * textWidth * dx) / 2
-      const nx1 = xc - textWidth / 2
-      const nx2 = xc + textWidth / 2
-
-      const _nx1 = scale(nx1)
-      const _nx2 = scale(nx2)
-
-      if (bm.outOfBounds(_nx1, _y1, _nx2, _y2) || bm.getRange(_nx1, _y1, _nx2, _y2)) {
-        continue
-      }
-
-      placedX = !dx ? xc : dx * insideFactor < 0 ? nx2 : nx1
-      placedY = !dy ? yc : dy * insideFactor < 0 ? y2 : y1
-      placedAnchor = i
-      bm.setRange(_nx1, _y1, _nx2, _y2)
-      break
-    }
-
-    if (placedAnchor === -1) {
-      out.push({
-        ...r,
-        [as[0]!]: null,
-        [as[1]!]: null,
-        [as[2]!]: 0,
-        [as[3]!]: undefined,
-        [as[4]!]: undefined,
-      })
-    } else {
-      const dx = (anc[placedAnchor]! & 0x3) - 1
-      const dy = ((anc[placedAnchor]! >>> 2) & 0x3) - 1
-      const insideFactor = offs[placedAnchor]! < 0 ? -1 : 1
-      out.push({
-        ...r,
-        [as[0]!]: placedX ?? null,
-        [as[1]!]: Number.isFinite(placedY as number) ? (placedY as number) : null,
-        [as[2]!]: 1,
-        [as[3]!]: LABEL_ALIGNS[dx * insideFactor + 1],
-        [as[4]!]: LABEL_BASELINES[dy * insideFactor + 1],
-      })
-    }
-  }
-  return out
 }
 
 /**
