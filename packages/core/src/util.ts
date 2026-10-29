@@ -586,3 +586,10 @@ export function isTuple(t: unknown): boolean {
  * from the root (`name@seq`, each plus `[key]` for a facet partition or a datum index): see `SceneGroup.scopeSignals`.
  */
 export const scopedSignalName = (scopeId: string, name: string): string => `${scopeId}:${name}`
+
+/**
+ * The store key that says a derived (`update`) signal HOLDS the value in the store: the event loop's dataflow left it as it was while
+ * something it reads changed (an operator is evaluated only when a source pulses, and a handler's assignment does not always pulse),
+ * so the evaluation must not recompute it from what it reads now. Never a name an expression can read.
+ */
+export const heldSignalName = (name: string): string => `\u0000held:${name}`

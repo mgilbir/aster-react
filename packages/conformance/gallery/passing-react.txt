@@ -47,6 +47,7 @@ vega/map-with-tooltip
 vega/nested-bar-chart
 vega/overview-plus-detail
 vega/packed-bubble-chart
+vega/pacman
 vega/parallel-coordinates
 vega/pi-monte-carlo
 vega/pie-chart
@@ -84,6 +85,7 @@ vega/weekly-temperature
 vega/wheat-and-wages
 vega/wheat-plot
 vega/wind-vectors
+vega/word-cloud
 vega/world-map
 vega/zoomable-binned-plot
 vega/zoomable-circle-packing

@@ -11,6 +11,13 @@ paths a user takes, and compares the canonical SVG exactly (`src/normalize.ts`, 
 Both read the data from the pinned `vega-datasets` package (3.2.1, the version both repositories' lockfiles use) through one offline
 `fetch`; the browser page has every request routed to disk or aborted. There is no network at test time.
 
+The data a spec names is **preloaded into the page before the spec runs** (`src/gallery/data-cache.ts`; the harness reads each file once,
+the page fetches the files the spec mentions with no timeout, and both engines' `fetch` is then answered from page memory). Left lazy,
+each load waited on the harness's Node event loop inside the chart loader's own 10 s `timeoutMs`; that loop is the one the static
+path's synchronous renders block (measured stalls of 4.6 s, a 1.7 MB file taking 5.6 s to be answered), so on a loaded machine a local
+file read as `timeoutMs 10000 exceeded loading data/...json`. A load is now independent of how busy the harness is
+(`src/gallery/data-preload.test.ts` starves the harness's loop for longer than the timeout and the spec still passes).
+
 ## The specs are fetched, not committed
 
 | source      | tag     | commit                                     | files (`*.vg.json` / `*.vl.json`)        |
