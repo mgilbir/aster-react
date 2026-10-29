@@ -1,0 +1,1 @@
+{"data":{"values":[{"c":"A","v":1,"g":"p"},{"c":"B","v":3,"g":"q"}]},"layer":[{"mark":"line","encoding":{"x":{"field":"c","type":"nominal","scale":{"padding":0.4}},"y":{"field":"v","type":"quantitative","aggregate":"mean"}}},{"mark":"tick","encoding":{"x":{"field":"c","type":"nominal"},"y":{"field":"v","type":"quantitative","aggregate":"mean"}}}]}

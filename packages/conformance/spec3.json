@@ -1,0 +1,1 @@
+{"data":{"values":[{"t":"2001-01-01","v":3},{"t":"2005-01-01","v":4}]},"layer":[{"mark":"line","encoding":{"x":{"field":"t","type":"temporal"},"y":{"field":"v","type":"quantitative"}}},{"mark":"rule","encoding":{"x":{"datum":{"year":2003,"month":6},"type":"temporal"}}}]}

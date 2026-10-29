@@ -1,0 +1,1 @@
+{"data":{"values":[{"x":1,"y":2,"c":"A"},{"x":3,"y":1,"c":"B"}]},"params":[{"name":"dom","value":["B","A"]},{"name":"xd","value":[0,5]}],"mark":"point","encoding":{"x":{"field":"x","type":"quantitative","scale":{"domain":{"signal":"xd"}}},"y":{"field":"y","type":"quantitative"},"color":{"field":"c","type":"nominal","scale":{"domain":{"signal":"dom"}}}}}

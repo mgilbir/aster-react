@@ -1026,14 +1026,18 @@ function validateChannelDef(ch: string, def: unknown, at: string, shared = false
 }
 
 const SCALE_KEYS_OK = set(
-  'type domain domainMin domainMax domainMid range reverse nice zero padding paddingInner paddingOuter align base clamp constant exponent round bins interpolate scheme rangeMin rangeMax',
+  'type domain domainRaw domainMin domainMax domainMid range reverse nice zero padding paddingInner paddingOuter align base clamp constant exponent round bins interpolate scheme rangeMin rangeMax',
 )
 const SCALE_TYPES = set('linear log pow sqrt symlog identity sequential time utc quantile quantize threshold bin-ordinal ordinal point band')
 
 function validateScaleDef(scale: Obj, at: string): void {
   for (const k of Object.keys(scale)) {
-    if (k === 'domainRaw') fail(`${at}.${k}`, 'domainRaw is not supported')
     if (!SCALE_KEYS_OK.has(k)) fail(`${at}.${k}`, `unknown scale property "${k}"`)
+  }
+  if (scale.domainRaw !== undefined) {
+    // (scale.ts domainRaw is an ExprRef | SignalRef: the domain as a signal, set aside from the domain the data gives)
+    const r = scale.domainRaw
+    if (!(isObj(r) && (typeof r.signal === 'string' || typeof r.expr === 'string'))) mustBe(`${at}.domainRaw`, 'a signal or an expression')
   }
   if (scale.type !== undefined) {
     if (typeof scale.type !== 'string' || !SCALE_TYPES.has(scale.type)) fail(`${at}.type`, `unknown scale type ${JSON.stringify(scale.type)}`)
@@ -1043,7 +1047,7 @@ function validateScaleDef(scale: Obj, at: string): void {
     // vega-lite passes a domain that is neither an array nor 'unaggregated' nor a {param}/{unionWith}/signal object on to
     // vega as it is (a string, a number, `true`: scale/domain.ts parseSingleChannelDomain), where it fails the
     // scale (vega.parse: "Undefined data set name"). So does this: it compiles, and the runtime refuses it.
-    if (isObj(d) && typeof (d as Obj).signal !== 'string') {
+    if (isObj(d) && typeof (d as Obj).signal !== 'string' && typeof (d as Obj).expr !== 'string') {
       if (d.param !== undefined) {
         keysOf(d, set('param field encoding'), `${at}.domain`, 'domain param')
         checkParamRef(d.param, `${at}.domain.param`)
@@ -1053,7 +1057,7 @@ function validateScaleDef(scale: Obj, at: string): void {
         keysOf(d, set('unionWith'), `${at}.domain`, 'domain')
         if (!Array.isArray(d.unionWith) || d.unionWith.length === 0) mustBe(`${at}.domain.unionWith`, 'a non-empty array of values')
       } else {
-        fail(`${at}.domain`, 'a domain object must be {"param": ...}, {"unionWith": [...]} or a signal; give an array or "unaggregated"')
+        fail(`${at}.domain`, 'a domain object must be {"param": ...}, {"unionWith": [...]}, a signal or an expression; give an array or "unaggregated"')
       }
     }
   }
@@ -1085,9 +1089,13 @@ function validateBin(bin: unknown, at: string, prebinned = false): void {
     const v = bin[k]
     if (v !== undefined && !(Array.isArray(v) && v.length > 0 && v.every((n) => typeof n === 'number' && n > 0))) mustBe(`${at}.${k}`, 'a non-empty array of positive numbers')
   }
-  if (bin.extent !== undefined) {
+  if (isObj(bin.extent) && bin.extent.param !== undefined) {
+    // a parameter's value is the extent (bin.ts parseSelectionExtent): the span of a selection's range or of an array parameter
+    keysOf(bin.extent, set('param field encoding'), `${at}.extent`, 'bin extent parameter')
+    if (typeof bin.extent.param !== 'string' || !/^[A-Za-z_$][\w$]*$/.test(bin.extent.param)) mustBe(`${at}.extent.param`, 'a parameter name')
+  } else if (bin.extent !== undefined) {
     if (!(Array.isArray(bin.extent) && bin.extent.length === 2 && bin.extent.every((n) => typeof n === 'number' && Number.isFinite(n)))) {
-      mustBe(`${at}.extent`, 'a [min, max] pair of numbers (parameter references are not supported)')
+      mustBe(`${at}.extent`, 'a [min, max] pair of numbers or a {"param"} reference')
     }
     if ((bin.extent as number[])[0]! >= (bin.extent as number[])[1]!) fail(`${at}.extent`, 'min must be less than max')
   }

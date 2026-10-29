@@ -19,11 +19,11 @@ import {
 } from './selection.js'
 import { alignStackOrders, mergeEncoding, normalizeComposites, normalizePathOverlays } from './composite.js'
 import { timeScaleRange } from './animation.js'
-import { isTimerSelection } from './selection.js'
+import { isTimerSelection, selectionExtent } from './selection.js'
 import { ASSEMBLED_FROM, GEO_POSITION_CHANNELS, assembleProjection, finalProjectionName, geoDataTransforms, geoshapeTransform, hasProjection, mergeLayerProjections, parseUnitProjection, renameComponentSignals, type GeoUnit, type ProjectionComponent, type UnitGeo } from './geo.js'
 import { scaleConfigOf, discreteStep, viewContinuousSize, viewDiscreteSize, sizeRange, countRange, discreteCount, usesUnaggregatedDomain, type ScaleCfg } from './scaleconfig.js'
 import { getTimeUnitParts, normalizeTimeUnit, timeUnitFieldName, timeUnitTransform, type NormalTimeUnit } from './timeunit.js'
-import { binNames, binTransforms, imputeTransforms, normalizeBin, translateTransforms, type BinParams, type TransformContext, type TranslateState } from './transforms.js'
+import { binNames, binTransforms, isParameterExtent, imputeTransforms, normalizeBin, translateTransforms, type BinParams, type TransformContext, type TranslateState } from './transforms.js'
 
 const VEGA_SCHEMA = 'https://vega.github.io/schema/vega/v6.json'
 
@@ -1579,7 +1579,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     if (preSeen.has(names.start)) continue
     preSeen.add(names.start)
     const alreadyComputed = innerData.some((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).some((t) => t.type === 'bin' && Array.isArray(t.as) && (t.as as string[])[0] === names.start))
-    if (!alreadyComputed) pushAll(pre, binTransforms(fd.binParams!, fd.field, names))
+    if (!alreadyComputed) pushAll(pre, binTransforms(fd.binParams!, fd.field, names, binSpanExpr(ctx, fd.binParams!)))
   }
   for (const fd of facetFds.filter((f) => f.tu && !f.tu.binned)) {
     const as = timeUnitField(fd)
@@ -2926,7 +2926,7 @@ function patchDatumRefs(node: unknown, datums: Map<string, unknown>): void {
 function checkConstChannels(mark: string, encoding: Record<string, unknown>, filled?: boolean): void {
   // channels that need their own scale + legend are implemented for colour (fill/stroke alias it);
   // the rest are limited to constants and conditions
-  for (const ch of ['angle', 'fillOpacity', 'strokeOpacity']) {
+  for (const ch of ['fillOpacity', 'strokeOpacity']) {
     const d = encoding[ch]
     if (isObject(d) && (d.field !== undefined || d.datum !== undefined)) {
       throw new VLCompileError(`encoding.${ch}: a data-driven ${ch} (scale + legend) is not supported; use a constant {"value": ...} or a condition`)
@@ -3606,7 +3606,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   const binPipeline: Record<string, unknown>[] = []
   for (const f of binFields) {
     const names = binNames(f.binParams!, f.field)
-    if (!isPrebinned(f)) pushAll(binPipeline, binTransforms(f.binParams!, f.field, names))
+    if (!isPrebinned(f)) pushAll(binPipeline, binTransforms(f.binParams!, f.field, names, binSpanExpr(ctx, f.binParams!)))
     binSignals.set(f.field, { startField: names.start, endField: names.end, binsSignal: names.signal })
   }
 
@@ -4407,6 +4407,9 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
   if (strokeWidthDef) scales.push(numericScale('strokeWidth', strokeWidthDef, [cfgS.minStrokeWidth, cfgS.maxStrokeWidth], false))
   const opacityDefS = fields.find((f) => f.channel === 'opacity' && f.field)
   if (opacityDefS) scales.push(numericScale('opacity', opacityDefS, [cfgS.minOpacity, cfgS.maxOpacity], false))
+  // angle: a linear scale to degrees (range.ts defaultRange: [0, 360])
+  const angleDefS = fields.find((f) => f.channel === 'angle' && f.field && !f.datumOnly && !f.noScale)
+  if (angleDefS) scales.push(numericScale('angle', angleDefS, [0, 360], false))
   // xOffset/yOffset scales: discrete offsets use a band, continuous ones a
   // linear scale over the same band-width range (vega-lite probes).
   for (const ch of ['xOffset', 'yOffset'] as const) {
@@ -4624,7 +4627,7 @@ function scalePropApplies(channel: string, type: string, prop: string): boolean 
       return type === 'point' || type === 'band'
     case 'paddingInner':
       return type === 'band'
-    case 'domainMax': case 'domainMin': case 'clamp':
+    case 'domainMax': case 'domainMin': case 'domainRaw': case 'clamp':
       return CONTINUOUS_TO_CONTINUOUS.has(type)
     case 'nice':
       return CONTINUOUS_TO_CONTINUOUS.has(type) || type === 'quantize' || type === 'threshold'
@@ -4791,6 +4794,9 @@ function unaggregatedDomain(def: FieldDef, dataName: string, cfg: ScaleCfg): unk
 function explicitDomainOf(def: FieldDef): unknown | undefined {
   const d = def.scale?.domain
   if (Array.isArray(d)) return d
+  // (a signal is the domain; an `{expr}` is one once expression references become signals - init.ts replaceExprRef)
+  if (isObject(d) && typeof d.signal === 'string') return { signal: d.signal }
+  if (isObject(d) && typeof d.expr === 'string') return { signal: d.expr }
   if (d && d !== 'unaggregated' && !isObject(d)) return d
   return undefined
 }
@@ -6234,8 +6240,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   applyTextualChannels(update, spec, fields, (d) => d.stack === 'normalize' && ((d.channel === 'theta' && mark === 'arc' && !d.aggregate) || isStacked(d, mark, orient, fields)))
 
   // data-driven opacity, stroke width and stroke dash reach every mark
-  for (const prop of ['opacity', 'strokeWidth', 'strokeDash']) {
-    const def = fields.find((f) => f.channel === prop && f.field)
+  for (const prop of ['opacity', 'strokeWidth', 'strokeDash', 'angle']) {
+    const def = fields.find((f) => f.channel === prop && f.field && !f.datumOnly)
     if (def && !(isObject(update[prop]) && 'scale' in (update[prop] as object))) update[prop] = { scale: prop, field: aggFieldName(def) }
   }
 
@@ -6261,10 +6267,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   }
   // (base.ts markDefProperties: every Vega mark property the mark def sets is the mark's own, an expression as a signal; the text ones
   // are the mark def's alone - a config value reaches Vega through config.style)
-  for (const p of ['font', 'fontStyle', 'fontWeight', 'dir', 'ellipsis', 'limit', 'lineBreak', 'lineHeight', 'startAngle', 'endAngle', 'tension', 'strokeOffset', 'strokeDashOffset']) {
+  for (const p of ['font', 'fontStyle', 'fontWeight', 'dir', 'ellipsis', 'limit', 'lineBreak', 'lineHeight', 'startAngle', 'endAngle', 'tension', 'strokeOffset', 'strokeDashOffset', 'shape']) {
     const v = markDefP?.[p]
     if (v !== undefined && update[p] === undefined) update[p] = isObject(v) && typeof v.signal === 'string' ? { signal: v.signal } : { value: v }
   }
+  // aria.ts ariaRoleDescription: `config.aria: false` leaves the role description out, whatever the mark def says
+  if ((isObject(spec.config) ? (spec.config as Record<string, unknown>).aria : undefined) === false) delete update.ariaRoleDescription
   // a link: markDef.href is the mark's href, and any href (mark, config or channel) makes the cursor a pointer
   if (markDefP?.href !== undefined && update.href === undefined) update.href = { value: markDefP.href }
   if ((update.href !== undefined || passProp('href') !== undefined) && update.cursor === undefined) update.cursor = { value: 'pointer' }
@@ -7176,7 +7184,7 @@ function channelInvalidMode(spec: VLSpec, mark: string, channel: string): Invali
 }
 
 const COUNTING_AGGREGATES = new Set(['count', 'valid', 'missing', 'distinct'])
-const INVALID_CHANNELS = ['x', 'y', 'theta', 'radius', 'color', 'size', 'opacity', 'strokeWidth', 'xOffset', 'yOffset']
+const INVALID_CHANNELS = ['x', 'y', 'theta', 'radius', 'color', 'size', 'opacity', 'strokeWidth', 'angle', 'xOffset', 'yOffset']
 
 /** The fields (keyed by raw field, the last def winning) whose continuous scale can meet an invalid value. */
 function invalidCandidates(spec: VLSpec, fields: FieldDef[], mark: string): Array<{ def: FieldDef; mode: InvalidMode }> {
@@ -7254,7 +7262,7 @@ function showInvalidValues(spec: VLSpec, fields: FieldDef[], mark: string, scale
     for (const { def } of cands) {
       const ch = def.channel
       const scaleCh = ch === 'x2' || ch === 'y2' ? ch[0]! : ch
-      if ((scaleCh === 'x' || scaleCh === 'y') ? !positional : !['color', 'size', 'opacity', 'strokeWidth'].includes(ch)) continue
+      if ((scaleCh === 'x' || scaleCh === 'y') ? !positional : !['color', 'size', 'opacity', 'strokeWidth', 'angle'].includes(ch)) continue
       // (a centred bar position is `xc` / `yc`)
       const prop = ch === 'color' ? (isObject(update.fill) && (update.fill as Record<string, unknown>).scale === 'color' || Array.isArray(update.fill) ? 'fill' : 'stroke') : ch === 'size' ? vgPropFor('size', mark, filled) : (ch === 'x' || ch === 'y') && update[ch] === undefined && update[`${ch}c`] !== undefined ? `${ch}c` : ch
       const cur = update[prop]
@@ -7652,6 +7660,19 @@ function selectionTester(ctx: CompileCtx): (pred: ParamPredicate) => string {
   }, pred)
 }
 
+/** bin.ts createBinComponent: the expression a parameter extent stands for (parseSelectionExtent), if the bin has one. */
+function binSpanExpr(ctx: CompileCtx, bin: Record<string, unknown>): string | undefined {
+  const ext = bin.extent
+  if (!isParameterExtent(ext)) return undefined
+  return selectionExtent({
+    get: (name) => {
+      const have = ctx.selections.get(name) ?? ctx.forwardSelections?.get(name)
+      if (!have) ctx.selectionMisses.add(name)
+      return have
+    },
+  }, ext.param, ext)
+}
+
 /** `{param}`-aware predicate expression (filter transform, condition `test`). */
 function predicateWithParams(ctx: CompileCtx, p: unknown): string {
   return predicateExpr(p, selectionTester(ctx))
@@ -7744,8 +7765,10 @@ function prepareUnitSelections(
 function collectDomainParams(spec: VLSpec, fields: FieldDef[], ctx: CompileCtx): UnitSel | undefined {
   let sel = UNIT_SEL.get(spec)
   for (const f of fields) {
+    // scale/domain.ts parseSelectionDomain: a `domain: {param}`, else the `{param}` extent of a binned field
     const d = f.scale?.domain
-    const ext = isObject(d) && typeof d.param === 'string' ? d : undefined
+    const binExtent = f.bin && f.binParams && isParameterExtent(f.binParams.extent) ? f.binParams.extent : undefined
+    const ext = isObject(d) && typeof d.param === 'string' ? d : binExtent
     if (!ext) continue
     if (!sel) {
       sel = { cmpts: {}, unit: undefined as unknown as SelUnit, extents: new Map(), pointer: false, ownId: false }
@@ -7848,7 +7871,13 @@ function applyScaleExtents(sel: UnitSel | undefined, scales: ScaleSpec[], scaleN
   for (const [channel, extent] of sel.extents) {
     const sc = scales.find((s) => s.name === scaleName(channel))
     if (!sc) continue
-    sc.domainRaw = assembleSelectionScaleDomain({ get: (n) => ctx.selections.get(n) }, extent, isContinuousScaleType(sc.type), sc.domain)
+    sc.domainRaw = assembleSelectionScaleDomain({
+      get: (n) => {
+        const have = ctx.selections.get(n) ?? ctx.forwardSelections?.get(n)
+        if (!have) ctx.selectionMisses.add(n)
+        return have
+      },
+    }, extent, isContinuousScaleType(sc.type), sc.domain)
     bound = true
   }
   return bound

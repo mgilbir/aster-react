@@ -50,7 +50,14 @@ export function normalizeBin(bin: unknown, maxbinsDefault = 10): BinParams {
 /** vega-lite `binToString`: bin_<param>_<value>... */
 export function binKey(bin: BinParams): string {
   const v = (s: string): string => (/^\d/.test(s) ? '_' : '') + s.replace(/\W/g, '_')
-  return `bin${Object.keys(bin).map((p) => v(`_${p}_${String(bin[p])}`)).join('')}`
+  // (a parameter extent is keyed by its entries: `_extent_param_brush`)
+  const value = (p: string): string => (isParameterExtent(bin[p]) ? Object.entries(bin[p] as Obj).join(',') : String(bin[p]))
+  return `bin${Object.keys(bin).map((p) => v(`_${p}_${value(p)}`)).join('')}`
+}
+
+/** bin.ts isParameterExtent: the extent of a bin is the value of a parameter. */
+export function isParameterExtent(extent: unknown): extent is { param: string; field?: string; encoding?: string } {
+  return isObj(extent) && 'param' in extent
 }
 
 export interface BinNames {
@@ -75,14 +82,16 @@ export function binNames(bin: BinParams, fieldPath: string): BinNames {
 }
 
 /** The Vega `extent` + `bin` transforms for a normalized bin on `fieldPath`. */
-export function binTransforms(bin: BinParams, fieldPath: string, names: BinNames): Obj[] {
+export function binTransforms(bin: BinParams, fieldPath: string, names: BinNames, span?: string): Obj[] {
   const { extent, ...params } = bin
   const out: Obj[] = []
   const t: Obj = { type: 'bin', field: fieldPath, as: [names.start, names.end], signal: names.signal }
-  if (extent !== undefined) t.extent = [...(extent as number[])]
+  if (extent !== undefined && !isParameterExtent(extent)) t.extent = [...(extent as number[])]
   else {
     out.push({ type: 'extent', field: fieldPath, signal: names.extentSignal })
     t.extent = { signal: names.extentSignal }
+    // (bin.ts: a parameter's value is the bin's `span`, the extent over the data is still taken)
+    if (isParameterExtent(extent) && span !== undefined) t.span = { signal: `span(${span})` }
   }
   for (const [k, v] of Object.entries(params)) t[k] = Array.isArray(v) ? [...v] : v
   out.push(t)

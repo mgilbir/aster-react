@@ -1,0 +1,1 @@
+{"data":{"values":[{"t":"2001-01-01","v":3},{"t":"2005-01-01","v":4}]},"mark":"area","encoding":{"x":{"field":"t","type":"temporal"},"y":{"field":"v","type":"quantitative"},"y2":{"datum":0,"type":"quantitative"}}}

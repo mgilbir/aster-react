@@ -1,0 +1,1 @@
+{"data":{"values":[{}]},"mark":"rule","encoding":{"x":{"datum":{"expr":"a"},"type":"quantitative"},"y":{"datum":3, "type":"quantitative"}},"params":[{"name":"a","value":2}]}

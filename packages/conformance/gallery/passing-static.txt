@@ -294,6 +294,8 @@ vl/histogram_rel_freq
 vl/histogram_reverse
 vl/interactive_area_brush
 vl/interactive_bar_select_highlight
+vl/interactive_bin_extent
+vl/interactive_bin_extent_bottom
 vl/interactive_brush
 vl/interactive_concat_layer
 vl/interactive_crossfilter
@@ -318,6 +320,7 @@ vl/interactive_paintbrush_interval
 vl/interactive_paintbrush_simple_false
 vl/interactive_paintbrush_simple_true
 vl/interactive_panzoom_splom
+vl/interactive_point_domainRaw_binding
 vl/interactive_point_init
 vl/interactive_query_widgets
 vl/interactive_seattle_weather
@@ -454,6 +457,7 @@ vl/point_2d_config_no_zero
 vl/point_2d_tooltip
 vl/point_2d_tooltip_data
 vl/point_aggregate_detail
+vl/point_angle_windvector
 vl/point_background
 vl/point_binned_color
 vl/point_binned_opacity

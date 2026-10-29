@@ -696,6 +696,26 @@ const GROUPS: Record<string, Case[]> = {
     ['a line then a tick with an explicit padding on the line', { data: DATA, layer: [{ mark: 'line', encoding: { x: n('c', { scale: { padding: 0.4 } }), y: q('v', { aggregate: 'mean' }) } }, { mark: 'tick', encoding: { x: n('c'), y: q('v', { aggregate: 'mean' }) } }] }],
     ['grouped bars then a line over one nominal axis', { data: DATA, layer: [{ mark: 'bar', encoding: { x: n('c'), xOffset: n('g'), y: q('v'), color: n('g') } }, { mark: { type: 'line', color: 'black' }, encoding: { x: n('c'), y: q('v', { aggregate: 'mean' }) } }] }],
     ['a text then a rect over one nominal axis', { data: DATA, layer: [{ mark: 'text', encoding: { x: n('c'), y: n('g'), text: n('c') } }, { mark: 'rect', encoding: { x: n('c'), y: n('g') } }] }],
+    // bin.ts createBinComponent: the extent of a bin is a parameter's value (its `span`); the scale follows the selection (domainRaw, clip)
+    ['a histogram over the range of a brush in the view above', { data: DATA, vconcat: [{ params: [{ name: 'brush', select: { type: 'interval', encodings: ['x'] } }], mark: 'bar', encoding: { x: q('v', { bin: { maxbins: 6 } }), y: { aggregate: 'count' } } }, { mark: 'bar', encoding: { x: q('v', { bin: { maxbins: 6, extent: { param: 'brush' } } }), y: { aggregate: 'count' } } }] }],
+    ['a histogram over the range of a brush in the view below', { data: DATA, vconcat: [{ mark: 'bar', encoding: { x: q('v', { bin: { maxbins: 6, extent: { param: 'brush' } } }), y: { aggregate: 'count' } } }, { params: [{ name: 'brush', select: { type: 'interval', encodings: ['x'] } }], mark: 'bar', encoding: { x: q('v', { bin: { maxbins: 6 } }), y: { aggregate: 'count' } } }] }],
+    ['a histogram over the range of a brush on another field', { data: DATA, hconcat: [{ params: [{ name: 'brush', select: { type: 'interval', encodings: ['x'] } }], mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'bar', encoding: { x: q('v', { bin: { extent: { param: 'brush', field: 'x' } } }), y: { aggregate: 'count' } } }] }],
+    ['a histogram over the value of a variable parameter', { data: DATA, params: [{ name: 'range', value: [0, 20] }], mark: 'bar', encoding: { x: q('v', { bin: { maxbins: 5, extent: { param: 'range' } } }), y: { aggregate: 'count' } } }],
+    // scale/domain.ts: a signal (or an expression, which init.ts turns into one) is the whole domain
+    ['quantitative domains from a signal and from an expression', { data: DATA, params: [{ name: 'xd', value: [0, 8] }, { name: 'yd', value: [1, 9] }], mark: 'point', encoding: { x: q('x', { scale: { domain: { signal: 'xd' } } }), y: q('y', { scale: { domain: { expr: 'yd' } } }) } }],
+    ['a nominal colour domain from an expression', { data: DATA, params: [{ name: 'dom', value: ['C', 'B', 'A'] }], mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c', { scale: { domain: { expr: 'dom' } } }) } }],
+    ['a band domain from a signal', { data: DATA, params: [{ name: 'order', value: ['B', 'C', 'A'] }], mark: 'bar', encoding: { x: n('c', { scale: { domain: { signal: 'order' } } }), y: q('v', { aggregate: 'sum' }) } }],
+    // scale.ts domainRaw: a domain set aside from the data's (a binding that overrides it)
+    ['a domainRaw that is an expression of parameters', { data: DATA, params: [{ name: 'lo', value: 1, bind: { input: 'range', min: 0, max: 3 } }, { name: 'use', value: true, bind: { input: 'checkbox' } }], mark: { type: 'circle', clip: true }, encoding: { x: q('x', { scale: { domainRaw: { expr: 'use ? [lo, 5] : null' } } }), y: q('y'), size: q('v') } }],
+    ['a domainRaw that is a signal on y', { data: DATA, params: [{ name: 'hi', value: 7 }], mark: 'point', encoding: { x: q('x'), y: q('y', { scale: { domainRaw: { signal: '[0, hi]' } } }) } }],
+    ['a domainRaw on a log scale', { data: DATA, mark: 'point', encoding: { x: q('x'), y: q('y', { scale: { type: 'log', domainRaw: { signal: '[1, 9]' } } }) } }],
+    ['a domainRaw on a band scale (which cannot honour it)', { data: DATA, mark: 'bar', encoding: { x: n('c', { scale: { domainRaw: { signal: "['A', 'B']" } } }), y: q('v', { aggregate: 'sum' }) } }],
+    // channel.ts: angle is a continuous channel with its own linear scale to degrees (no legend)
+    ['wedges pointing along an angle field', { data: DATA, mark: { type: 'point', shape: 'wedge', filled: true }, encoding: { x: q('x'), y: q('y'), angle: q('v', { scale: { domain: [0, 10], range: [180, 540] } }) } }],
+    ['text rotated by an angle field with the default range', { data: DATA, mark: 'text', encoding: { x: q('x'), y: q('y'), text: n('c'), angle: q('v') } }],
+    ['squares rotated by a binned angle', { data: DATA, mark: 'square', encoding: { x: q('x'), y: q('y'), angle: q('v', { bin: true }) } }],
+    ['an angle next to a colour and a size scale', { data: DATA, mark: { type: 'point', shape: 'wedge', filled: true }, config: { aria: false }, encoding: { x: q('x'), y: q('y'), size: q('v'), color: q('x'), angle: q('y') } }],
+    ['an angle on a bar is dropped', { data: DATA, mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }), angle: q('x') } }],
     ['a text mark with a font and a font style', { data: DATA, mark: { type: 'text', font: 'Verdana', fontStyle: 'italic', fontWeight: 700, fontSize: 13, dx: 4 }, encoding: { x: q('x'), y: q('y'), text: n('c') } }],
   ],
 }
