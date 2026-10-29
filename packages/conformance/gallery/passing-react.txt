@@ -31,6 +31,7 @@ vega/histogram-null-values
 vega/horizon-graph
 vega/interactive-legend
 vega/job-voyager
+vega/labeled-scatter-plot
 vega/line-chart
 vega/loess-regression
 vega/map-with-tooltip

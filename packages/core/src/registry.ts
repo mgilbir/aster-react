@@ -84,3 +84,19 @@ export function requireDataFormat(type: string): DataFormatReader {
   if (!reader) throw new Error(`[aster] this spec reads "${type}" data; load the addon first: await import("@aster/core/load")`)
   return reader
 }
+
+/**
+ * What the `label` transform needs of the item a label is placed at, which vega reads off the scenegraph item
+ * (`item.mark.marktype`, `item.bounds`, `item.items`): the type of the mark the item is in, that mark's container (its own
+ * properties, e.g. a line's interpolation) and the item's bounds. Written by the runtime, under the symbol `ITEM_MARK`, on the
+ * items a text mark with a `label` transform reads (an enumerable symbol property, so the copy a text item holds as its
+ * `datum` carries it too); read by the add-on. A plain data tuple has none: no reactive geometry.
+ */
+export interface ItemMark {
+  marktype: string
+  container: object
+  bounds(): { x1: number; y1: number; x2: number; y2: number }
+}
+export const ITEM_MARK: unique symbol = Symbol('aster.itemMark')
+export const itemMarkOf = (datum: unknown): ItemMark | undefined =>
+  datum !== null && typeof datum === 'object' ? (datum as { [ITEM_MARK]?: ItemMark })[ITEM_MARK] : undefined

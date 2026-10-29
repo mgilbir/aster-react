@@ -16,7 +16,7 @@ import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ScaleContext
 
 /** Scale types whose domain is an ordered set of discrete values. */
 const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
-import { requireGeo } from './registry.js'
+import { ITEM_MARK, requireGeo } from './registry.js'
 import { locale } from './locale.js'
 import type {
   GuideEncodeBlock,
@@ -53,7 +53,7 @@ import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateRows, fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import { trellisLayout } from './trellis.js'
-import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
+import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
 import { buildAxis as buildAxisGuide, tickBand } from './guide-axis.js'
 import { buildTitle as buildTitleGuide } from './guide-title.js'
@@ -490,6 +490,8 @@ interface EvalContext {
   signalErrors?: Map<string, unknown>
   /** The items of the named marks built so far (a mark may read another mark's items as its data: `from: {data: <mark name>}`). */
   markItems: Map<string, SceneItem[]>
+  /** The container of each named mark built so far (its type and items; a group mark's are its group items): what a `label` transform avoids or labels. */
+  markContainers: Map<string, { marktype: string; items: SceneItem[] }>
 }
 
 /**
@@ -604,7 +606,7 @@ function prepareChartCtx(
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
       ...(explicitSize.width ? ['width'] : []), ...(explicitSize.height ? ['height'] : []),
     ]),
-    hierarchies: transformHierarchies, affected: new Set(), incremental: false, deadline, checkDeadline, markItems: new Map(),
+    hierarchies: transformHierarchies, affected: new Set(), incremental: false, deadline, checkDeadline, markItems: new Map(), markContainers: new Map(),
     datasetPulses: new Map(),
     prev: txn.prev, draft: newState(txn.gen), gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
@@ -3726,9 +3728,15 @@ function reusablePulse(
 }
 
 /** A mark `transform` vega runs on the encoded items (see evaluateMarkItems). */
-const ITEM_TRANSFORMS: ReadonlySet<string> = new Set(['voronoi', 'lookup', 'linkpath', 'force', 'geopath'])
+const ITEM_TRANSFORMS: ReadonlySet<string> = new Set(['voronoi', 'lookup', 'linkpath', 'force', 'geopath', 'label'])
 function isItemTransform(t: CompiledTransform): boolean {
   return ITEM_TRANSFORMS.has(String(t.type))
+}
+
+/** The bounds of one item of a mark, in the frame of the mark's group (vega's `item.bounds`). */
+function itemBoundsOf(container: { marktype: string }, item: SceneItem): { x1: number; y1: number; x2: number; y2: number } {
+  const b = container.marktype === 'group' ? boundGroupItem(new Bounds(), item as unknown as SceneGroup) : boundTypedMark(new Bounds(), { marktype: container.marktype, items: [item] } as unknown as SceneGroup)
+  return { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
 }
 
 function evaluateMark(
@@ -3740,8 +3748,15 @@ function evaluateMark(
   // a named mark's items are what a later mark of `from: {data: <name>}` reads
   if (built && typeof mark.name === 'string') {
     // (a group mark's items are the group items themselves, a mark's are the items of its container)
-    if (mark.type === 'group') { if (Array.isArray(built)) ctx.markItems.set(mark.name, built as unknown as SceneItem[]) }
-    else if (!Array.isArray(built)) ctx.markItems.set(mark.name, (built.items ?? []) as SceneItem[])
+    if (mark.type === 'group') {
+      if (Array.isArray(built)) {
+        ctx.markItems.set(mark.name, built as unknown as SceneItem[])
+        ctx.markContainers.set(mark.name, { marktype: 'group', items: built as unknown as SceneItem[] })
+      }
+    } else if (!Array.isArray(built)) {
+      ctx.markItems.set(mark.name, (built.items ?? []) as SceneItem[])
+      ctx.markContainers.set(mark.name, built as unknown as { marktype: string; items: SceneItem[] })
+    }
   }
   return built
 }
@@ -3769,6 +3784,17 @@ function evaluateMarkItems(
   if (source) {
     // (a source that is no dataset but the name of a mark built before: that mark's items, shallow-copied as vega's tuples)
     const rawRows = ctx.datasets.get(source) ?? ctx.markItems.get(source)?.map((it) => ({ ...(it as unknown as Row) })) ?? []
+    // (a `label` transform reads the mark an item is in, and its bounds, off the item it labels: see `ITEM_MARK`)
+    if (!ctx.datasets.has(source) && mark.transform?.some((t) => t.type === 'label')) {
+      const container = ctx.markContainers.get(source)
+      const from = ctx.markItems.get(source)
+      if (container !== undefined && from !== undefined) {
+        rawRows.forEach((row, i) => {
+          const it = from[i]!
+          Object.defineProperty(row, ITEM_MARK, { value: { marktype: container.marktype, container, bounds: () => itemBoundsOf(container, it) }, enumerable: true, configurable: true, writable: true })
+        })
+      }
+    }
     // Only clone rows when the pipeline will re-encode them all (a mark-level
     // transform); the differential path reads the raw rows and clones
     // just the changed indices, so an unchanged row is never copied.
@@ -3919,6 +3945,8 @@ function evaluateMarkItems(
         runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections,
         // (`lookup` `from` is a dataset, or the name of a mark: its items)
         datasets: (n) => ctx.datasets.get(n) ?? (ctx.markItems.get(n) as unknown as Row[] | undefined),
+        // (`label` avoids the marks it names)
+        marks: (n) => ctx.markContainers.get(n),
         // (vega's tuples: a force layout moves the items themselves)
         inPlace: true,
       }, source)
