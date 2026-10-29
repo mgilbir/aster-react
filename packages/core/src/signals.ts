@@ -438,7 +438,17 @@ const DATA_READERS = new Set(['data', 'indata', 'vlSelectionTest', 'vlSelectionI
 const dataKey = (name: string): string => `data:${name}`
 
 /** The identifiers an expression reads (signal references, among them), and `data:NAME` for every dataset it reads. */
+const identifiers = new Map<string, Set<string>>()
 function identifiersOf(code: string): Set<string> {
+  // (a host binds again after every render, to the same expressions)
+  let have = identifiers.get(code)
+  if (have === undefined) {
+    if (identifiers.size >= 2048) identifiers.clear()
+    identifiers.set(code, (have = parseIdentifiers(code)))
+  }
+  return have
+}
+function parseIdentifiers(code: string): Set<string> {
   const out = new Set<string>()
   const visit = (n: unknown): void => {
     if (n == null || typeof n !== 'object') return
@@ -624,10 +634,13 @@ function bindSignalEventsDefs(
   /** the `{signal}`-source handlers (vega: `onOperator`), collected while the entries are parsed, built into the graph after them */
   const handlerSpecs: HandlerSpec[] = []
   const handlerOps: Array<{ op: Op; state: HandlerState }> = []
-  /** the signals a handler assigned in the run (their dependents may not have been told, see `holdStale`) */
-  const assigned = new Set<Op>()
-  /** the derived signals of the view (by store key), for `holdStale` */
-  const derivedOps = new Map<string, { op: Op; def: CompiledSignalDef }>()
+  /** the store keys a handler assigned in the run (their dependents may not have been told, see `holdStale`) */
+  const assigned = new Set<string>()
+  /** the derived signals of the view that read a signal (by its store key), for `holdStale` */
+  const readers = new Map<string, Array<{ key: string; def: CompiledSignalDef }>>()
+  /** when (a count of the writes to the store) a signal was last written and a derived signal was last evaluated, in this binding */
+  const wroteAt = new Map<string, number>()
+  const evaluatedAt = new Map<string, number>()
   /** handling an event (or `setSignal`): `modify` is available */
   let handling = 0
   /** the edits `setdata` / `modify` pulse into a dataset, applied when its operator runs */
@@ -754,7 +767,7 @@ function bindSignalEventsDefs(
   const store = (owner: Scope | null, name: string, value: unknown): string => {
     const key = keyOf(owner, name)
     setOwn(signals, key, value)
-    writes++
+    wroteAt.set(key, ++writes)
     return key
   }
   /**
@@ -780,29 +793,22 @@ function bindSignalEventsDefs(
    * A handler assigns its signal's value as it is, and pulses the signal's dependents only if what it computed differs from what
    * it computed last: a dependent can be left as it was while what it reads has changed (vega's operator keeps the value it has
    * until a source pulses it). The scene is evaluated from the signals' values, and would compute that dependent afresh, so the
-   * store says it is HELD (see `heldSignalName`) for as long as the dataflow has not evaluated it.
+   * store says it is HELD (see `heldSignalName`) for as long as the dataflow has not evaluated it. Only a signal that reads one
+   * a handler assigned, and was not evaluated after the assignment, can be so.
    */
   const holdStale = (): void => {
-    if (assigned.size === 0) return
-    const seen = new Set<Op>()
-    const queue = [...assigned]
-    while (queue.length) {
-      const op = queue.pop()!
-      for (const t of op.targets) {
-        if (seen.has(t)) continue
-        seen.add(t)
-        queue.push(t)
+    for (const target of assigned) {
+      for (const entry of readers.get(target) ?? []) {
+        if ((evaluatedAt.get(entry.key) ?? -1) >= (wroteAt.get(target) ?? 0)) continue
+        const { key, def } = entry
+        let fresh: unknown
+        try { fresh = runtimeFor(null).expr(def.update!)(undefined, params(null)) } catch { continue }
+        const held = Object.hasOwn(signals, heldSignalName(key))
+        const current = read(def.name, null)
+        if (fresh !== current) {
+          if (!held) { setOwn(signals, heldSignalName(key), true); store(null, def.name, current) }
+        } else if (held) { delete signals[heldSignalName(key)]; writes++ }
       }
-    }
-    for (const [key, { op, def }] of derivedOps) {
-      if (!seen.has(op)) continue
-      let fresh: unknown
-      try { fresh = runtimeFor(null).expr(def.update!)(undefined, params(null)) } catch { continue }
-      const held = Object.hasOwn(signals, heldSignalName(key))
-      const current = read(def.name, null)
-      if (fresh !== current) {
-        if (!held) { setOwn(signals, heldSignalName(key), true); store(null, def.name, current) }
-      } else if (held) { delete signals[heldSignalName(key)]; writes++ }
     }
   }
 
@@ -1177,10 +1183,17 @@ function bindSignalEventsDefs(
           let v: unknown
           try { v = runtimeFor(scope).expr(code)(undefined, params(scope)) } catch (e) { fail(` (update of "${d.name}")`, e); throw new Logged() }
           if (scope === null && Object.hasOwn(signals, heldSignalName(key))) { delete signals[heldSignalName(key)]; writes++ }
+          evaluatedAt.set(key, writes)
           if (v !== read(d.name, scope)) markChanged(store(scope, d.name, v))
           else if (!op.modified()) return STOP
         }
-        if (scope === null && !d.on?.length) derivedOps.set(key, { op, def: d })
+        if (scope === null && !d.on?.length) {
+          for (const dep of deps) {
+            let list = readers.get(dep)
+            if (list === undefined) readers.set(dep, (list = []))
+            list.push({ key, def: d })
+          }
+        }
       }
       signalOps.set(key, op)
       defByKey.set(key, d)
@@ -1284,7 +1297,7 @@ function bindSignalEventsDefs(
           targetOp.skip(value !== hs.value)
           const changed = read(spec.targetName, spec.target) !== value
           store(spec.target, spec.targetName, value)
-          assigned.add(targetOp)
+          assigned.add(targetKey)
           if (changed || h.modified()) markChanged(targetKey)
         }
         if (value !== hs.value) hs.value = value

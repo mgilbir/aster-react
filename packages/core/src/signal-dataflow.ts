@@ -251,7 +251,10 @@ export class Flow {
           continue
         }
         const next = op.run()
-        if (next !== STOP) for (const t of [...op.targets]) this.enqueue(t)
+        if (next !== STOP) {
+          const targets = op.targets
+          for (let i = 0; i < targets.length; ++i) this.enqueue(targets[i]!)
+        }
       }
     } catch (e) {
       this.heap.clear()
