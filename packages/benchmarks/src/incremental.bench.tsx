@@ -28,6 +28,11 @@
  *                                                                      median, 12x, would have been too close)
  *   DOM patch vs full SVG serialization    3.3x -  5.8x   floor 1.6x  (about half of the slowest run)
  *
+ * Every gated ratio is the MEDIAN OF PER-PAIR RATIOS, where the two members of a pair are timed back to back
+ * in the same loop iteration (dense: in the same round). A ratio of two medians taken in separate phases let
+ * machine load skew numerator and denominator differently (the dense ratio read 164x-198x under load against
+ * 224x-303x idle with the floor at 200x); within a pair load cancels. The floors themselves are unchanged.
+ *
  * Below the calibrated shape (speedup scales with the dataset) only the >1x check applies. Override with
  * --min-append=, --min-replace=, --min-dom= (used to prove the gate bites).
  *
@@ -35,7 +40,7 @@
  */
 import { performance } from 'node:perf_hooks'
 import { ensureBuilt } from './ensure-built.js'
-import { summarize, table, fmt } from './stats.js'
+import { summarize, pairedRatio, table, fmt } from './stats.js'
 
 /** Dense append patch vs a full dense mount (same process). Set from measurements; see the notes at the call site. */
 const DENSE_APPEND_FLOOR = 200
@@ -142,7 +147,8 @@ async function main(): Promise<void> {
 
   const full = summarize(fullTimes)
   const inc = summarize(incTimes)
-  const ratio = full.median / Math.max(inc.median, 1e-9)
+  // Paired: each update times full and incremental back to back, so load cancels in the per-update ratio.
+  const ratio = pairedRatio(fullTimes, incTimes).median
   const vega = vegaTimes.length ? summarize(vegaTimes) : null
   const expectedVegaRows = points + batch * (reps + 1) // includes the warmup append
   const vegaRows = vegaView ? vegaView.data('t').length : 0
@@ -161,7 +167,7 @@ async function main(): Promise<void> {
           ? ([['vega view.change + run', fmt(vega.median), fmt(vega.p95), fmt(vega.max)],
               ['aster vs vega (median)', `${(vega.median / Math.max(inc.median, 1e-9)).toFixed(2)}x`, '—', '—']] as string[][])
           : []),
-        ['speedup vs full (median)', `${ratio.toFixed(2)}x`, '—', '—'],
+        ['speedup vs full (median of per-update ratios)', `${ratio.toFixed(2)}x`, '—', '—'],
       ],
     ),
   )
@@ -174,10 +180,15 @@ async function main(): Promise<void> {
   session.evaluate(spec as never, { data: { t: current } })
   const replaceTimes: number[] = []
   const replaceAppendTimes: number[] = []
+  const replaceFullTimes: number[] = []
   for (let i = 0; i < reps; i++) {
     // Same length, one row replaced; every row object is new (as a fetch yields).
     const next = current.slice()
     next[i % next.length] = { x: 0.5, y: 5 }
+    // Paired full evaluation of the same snapshot, timed adjacent to the session call.
+    const tf = performance.now()
+    evaluateChart(chart, { data: { t: next } })
+    replaceFullTimes.push(performance.now() - tf)
     const t0 = performance.now()
     session.evaluate(spec as never, { data: { t: next } })
     replaceTimes.push(performance.now() - t0)
@@ -191,25 +202,26 @@ async function main(): Promise<void> {
   }
   const replace = summarize(replaceTimes)
   const replaceAppend = summarize(replaceAppendTimes)
+  const replaceFull = summarize(replaceFullTimes)
+  const replaceRatio = pairedRatio(replaceFullTimes, replaceTimes).median
   console.log(
     table(
       `whole-array replacement through a session (no explicit changes) — ${points} pts, ${reps} updates (ms)`,
       ['path', 'median', 'p95', 'max'],
       [
-        ['full evaluateChart (new chart)', fmt(full.median), fmt(full.p95), fmt(full.max)],
+        ['full evaluateChart (same snapshot)', fmt(replaceFull.median), fmt(replaceFull.p95), fmt(replaceFull.max)],
         ['session, same-length replace', fmt(replace.median), fmt(replace.p95), fmt(replace.max)],
         ['session, append row', fmt(replaceAppend.median), fmt(replaceAppend.p95), fmt(replaceAppend.max)],
-        ['speedup (median)', `${(full.median / Math.max(replace.median, 1e-9)).toFixed(2)}x`, '—', '—'],
+        ['speedup (median of per-update ratios)', `${replaceRatio.toFixed(2)}x`, '—', '—'],
       ],
     ),
   )
-  const replaceRatio = full.median / Math.max(replace.median, 1e-9)
-  if (!(replace.median < full.median) || replaceRatio < minReplace) {
+  if (!(replaceRatio > 1) || replaceRatio < minReplace) {
     console.error(`\n[incremental] FAIL: whole-array replacement is ${replaceRatio.toFixed(2)}x cheaper than a full evaluation; floor ${minReplace}x`)
     process.exitCode = 1
   }
 
-  if (!(inc.median < full.median) || ratio < minAppend) {
+  if (!(ratio > 1) || ratio < minAppend) {
     console.error(`\n[incremental] FAIL: incremental append is ${ratio.toFixed(2)}x cheaper than full re-evaluation; floor ${minAppend}x`)
     process.exitCode = 1
     return
@@ -244,6 +256,7 @@ async function main(): Promise<void> {
     renderSceneToSvg(flush.scene)
     serializeTimes.push(performance.now() - t1)
   }
+  const domRatio = pairedRatio(serializeTimes, patchTimes).median
   const patch = summarize(patchTimes)
   const serialize = summarize(serializeTimes)
   console.log(
@@ -253,12 +266,11 @@ async function main(): Promise<void> {
       [
         ['renderSceneToSvg (full string)', fmt(serialize.median), fmt(serialize.p95), fmt(serialize.max)],
         ['patchSceneDom (persistent <svg>)', fmt(patch.median), fmt(patch.p95), fmt(patch.max)],
-        ['speedup (median)', `${(serialize.median / Math.max(patch.median, 1e-9)).toFixed(2)}x`, '—', '—'],
+        ['speedup (median of per-update ratios)', `${domRatio.toFixed(2)}x`, '—', '—'],
       ],
     ),
   )
-  const domRatio = serialize.median / Math.max(patch.median, 1e-9)
-  if (!(patch.median < serialize.median) || domRatio < minDom) {
+  if (!(domRatio > 1) || domRatio < minDom) {
     console.error(`\n[incremental] FAIL: DOM patching is ${domRatio.toFixed(2)}x cheaper than full SVG serialization; floor ${minDom}x`)
     process.exitCode = 1
   } else {
@@ -272,43 +284,67 @@ async function main(): Promise<void> {
   // there); an append that re-scans or rebuilds the whole mark instead of the tail
   // chunk shows up here as a collapsed ratio.
   const denseN = Math.max(5000, Number(arg('dense-points', '100000')))
-  const denseReps = Math.max(20, Math.min(reps, 60))
   const denseStream = createChartStream(spec as never, { capacity: 8 })
   denseStream.push({ data: { t: rows(denseN) } })
   const denseFirst = denseStream.flush()
   if (!denseFirst) throw new Error('dense stream produced no scene')
-  const mountTimes: number[] = []
-  for (let m = 0; m < 3; m++) {
+  // INTERLEAVED rounds: each round times one mount of the full scene and, right next to it, a few
+  // append patches; the round's ratio is mount / median(its patches). A mount is ~300 ms and a patch
+  // ~1 ms, so load, GC and frequency changes that last longer than a patch but shorter than the whole
+  // run hit the two very unequally if they are measured in separate phases (a ratio of two medians
+  // taken minutes apart measured 164x-198x under load against 224x-303x idle); inside a round they
+  // see the same machine state and cancel. The gate statistic is the median over rounds.
+  const denseRounds = Math.max(10, Math.min(12, Math.floor(reps / 2)))
+  const patchesPerRound = 5
+  const mountOnce = (): number => {
     const fresh = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
     host.appendChild(fresh)
     const tm = performance.now()
     patchSceneDom(fresh, denseFirst.scene, { denseMarks: true })
-    mountTimes.push(performance.now() - tm)
+    const dt = performance.now() - tm
     fresh.remove()
+    return dt
   }
+  for (let m = 0; m < 2; m++) mountOnce() // warm the mount path (JIT); not measured
   const denseSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
   host.appendChild(denseSvg)
   patchSceneDom(denseSvg, denseFirst.scene, { denseMarks: true })
-  const denseTimes: number[] = []
-  for (let i = 0; i < denseReps; i++) {
-    denseStream.push({ append: { t: rows(batch, denseN + i * batch) } })
+  let denseAppended = 0
+  const appendPatch = (): number => {
+    denseStream.push({ append: { t: rows(batch, denseN + denseAppended * batch) } })
+    denseAppended++
     const f = denseStream.flush()
-    if (!f) continue
+    if (!f) throw new Error('dense stream flush produced no scene')
     const t0 = performance.now()
     patchSceneDom(denseSvg, f.scene, { denseMarks: true })
-    denseTimes.push(performance.now() - t0)
+    return performance.now() - t0
+  }
+  for (let i = 0; i < 3; i++) appendPatch() // first appends (JIT, first chunk split); not measured
+  const mountTimes: number[] = []
+  const denseTimes: number[] = [] // per-round median patch
+  const roundRatios: number[] = []
+  for (let r = 0; r < denseRounds; r++) {
+    const round: number[] = []
+    // Alternate the order so a GC triggered by the mount does not always land on the patches (or vice versa).
+    if (r % 2 === 0) mountTimes.push(mountOnce())
+    for (let k = 0; k < patchesPerRound; k++) round.push(appendPatch())
+    if (r % 2 === 1) mountTimes.push(mountOnce())
+    const patchMedian = summarize(round).median
+    denseTimes.push(patchMedian)
+    roundRatios.push((mountTimes[r] as number) / Math.max(patchMedian, 1e-9))
   }
   const dMount = summarize(mountTimes)
-  const dPatch = summarize(denseTimes.slice(3)) // drop the first appends (JIT, first chunk split)
-  const dRatio = dMount.median / Math.max(dPatch.median, 1e-9)
+  const dPatch = summarize(denseTimes)
+  const dRatio = summarize(roundRatios).median
+  const denseReps = denseRounds * patchesPerRound
   console.log(
     table(
-      `dense SVG stream DOM — ${denseN} symbols, +${batch}/update, ${denseReps} updates (ms)`,
+      `dense SVG stream DOM — ${denseN} symbols, +${batch}/update, ${denseRounds} rounds x (1 mount + ${patchesPerRound} patches), ${denseReps} updates (ms)`,
       ['path', 'median', 'p95', 'max'],
       [
         ['mount (patchSceneDom into empty <svg>)', fmt(dMount.median), fmt(dMount.p95), fmt(dMount.max)],
-        ['append patch (patchSceneDom, dense)', fmt(dPatch.median, 2), fmt(dPatch.p95, 2), fmt(dPatch.max, 2)],
-        ['speedup (median)', `${dRatio.toFixed(1)}x`, '—', '—'],
+        ['append patch (patchSceneDom, dense; per-round median)', fmt(dPatch.median, 2), fmt(dPatch.p95, 2), fmt(dPatch.max, 2)],
+        ['speedup (median of per-round ratios)', `${dRatio.toFixed(1)}x`, '—', '—'],
       ],
     ),
   )
