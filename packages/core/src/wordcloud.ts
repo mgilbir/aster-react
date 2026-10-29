@@ -1,17 +1,27 @@
 /**
- * The `wordcloud` transform: a port of vega-wordcloud 5.1.2 (`Wordcloud.js`) and of the layout it wraps, Jason Davies' d3-cloud
- * (`CloudLayout.js`, after Jonathan Feinberg's "Wordle" algorithm), statement for statement: the order the words are sprited in,
- * where the spiral starts and how it steps, how a sprite is cut from the sheet and trimmed, the collision test against the board
- * of bits, and the order the injected `random` is drawn in (two draws per word to pick its start, one per word for the direction
- * of the spiral), so that the same random numbers give the same cloud.
+ * The `wordcloud` transform: words packed into a rectangle, largest first, each as near as it can get to a random start point.
  *
- * What d3-cloud draws its sprites on is a canvas: it fills each word's text on a 2048 x 2048 sheet and reads which pixels have any
- * ink (`getImageData`, the red channel of a red fill). The words land where the glyphs of the font that draws them leave room, so
- * the sheet is the host's canvas, as vega's (vega-canvas) is: a browser's `document.createElement('canvas')`. Where the host has
- * none (Node, jsdom without a canvas package) vega has none either and cannot lay a cloud out; this engine then draws the words
- * into the coverage-only context of `raster.ts` (the one the `label` transform draws the marks it avoids into), where a word is
- * the box its advance width and font size make, measured by the engine's text metrics. The cloud is then deterministic and well
- * formed, and not the one a browser draws.
+ * The layout is Jason Davies' d3-cloud (after Jonathan Feinberg's "Wordle"), the one vega-wordcloud runs, and its placements are
+ * what the transform is pinned to: the same words, the same `random` stream and the same host canvas give the same cloud, which is
+ * checked word for word against vega in Chromium (conformance/src/wordcloud-vs-vega.test.ts). What that fixes is shared with it,
+ * and only that:
+ *
+ * - the order the stream is drawn in: two numbers for a word's start (x, then y), then one for the direction of its spiral, in
+ *   order of font size (largest first, ties in data order); a word with no sprite draws no direction. The accessors of a word are
+ *   called in a fixed order too (an expression may draw from the stream);
+ * - the spiral, from the start, in whole pixels, until it leaves the rectangle;
+ * - the sprite of a word: the ink of `text + 'm'` drawn in a cell as wide as that rounds up to 32 pixels (turned, the bounding box
+ *   of it) and twice its size high, on a sheet that holds many words, so that the outline of one reaches into the cell of the next;
+ *   the rows above its first inked row are dropped, and so is its last row;
+ * - collision, the ink of a word against the ink laid so far, once the word lies within the extent of what has been laid.
+ *
+ * Everything else is this engine's: the sheet is planned before anything is drawn on it and only as high as its words, and read
+ * back once; the ink goes straight into rows of 32-bit words (`Word.rows`); the board is one typed array; the extent is four
+ * numbers; spirals step a shared point; a word is a plain object. The sheet is the host's canvas, as in vega, so a browser lays out
+ * the cloud vega does. Where there is none (Node, jsdom without a canvas package) vega cannot lay a cloud out; this engine then
+ * draws each word as the box its advance width and font size make, on the coverage-only canvas of `raster.ts` (the one `label`
+ * avoids marks with), measured by the engine's text metrics. That cloud is deterministic and well formed, and not the one a
+ * browser draws.
  *
  * Registered by `@aster/core/transforms`.
  */
@@ -52,156 +62,11 @@ import type { Row, TransformContext } from './transform.js'
 
 type Rec = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
 
-// --- the sheet ---------------------------------------------------------------------------------
+// --- where a word's ink comes from ---------------------------------------------------------------
 
-/** The part of a canvas 2D context d3-cloud draws its sprites with. */
-export interface CloudContext {
-  fillStyle: unknown
-  strokeStyle: unknown
-  textAlign: string
-  font: string
-  lineWidth: number
-  clearRect(x: number, y: number, w: number, h: number): void
-  save(): void
-  restore(): void
-  translate(x: number, y: number): void
-  rotate(angle: number): void
-  fillText(text: string, x: number, y: number): void
-  strokeText(text: string, x: number, y: number): void
-  measureText(text: string): { width: number }
-  getImageData(x: number, y: number, w: number, h: number): { data: ArrayLike<number> }
-}
-
-/** vega-canvas `canvas()`: a canvas to draw on. */
-export interface CloudCanvas {
-  width: number
-  height: number
-  getContext(kind: '2d'): CloudContext | null
-}
-
-/** The width of a word where the engine measures text (the host's provider, the browser's canvas) or, lacking both, vega's headless estimate. */
-function advance(text: string, font: string): number {
-  if (usingCanvasTextMetrics()) return measureText(text, font)
-  return estimateTextWidth(text, Number(/(\d+(?:\.\d+)?)px/.exec(font)?.[1] ?? 10))
-}
-
-/** A canvas that holds coverage only (see the file header): a word is a box. */
-class HeadlessCanvas implements CloudCanvas {
-  private w = 300
-  private h = 150
-  private inner: AlphaCanvas | null = null
-  private readonly context = new HeadlessContext(() => this.surface())
-
-  get width(): number { return this.w }
-  set width(v: number) { this.w = v >>> 0; this.inner = null }
-  get height(): number { return this.h }
-  set height(v: number) { this.h = v >>> 0; this.inner = null }
-
-  private surface(): AlphaCanvas {
-    return this.inner ?? (this.inner = new AlphaCanvas(this.w, this.h))
-  }
-
-  getContext(): CloudContext { return this.context }
-}
-
-class HeadlessContext implements CloudContext {
-  constructor(private readonly surface: () => AlphaCanvas) {}
-  get fillStyle(): unknown { return this.surface().fillStyle }
-  set fillStyle(v: unknown) { this.surface().fillStyle = v }
-  get strokeStyle(): unknown { return this.surface().strokeStyle }
-  set strokeStyle(v: unknown) { this.surface().strokeStyle = v }
-  get textAlign(): string { return this.surface().textAlign }
-  set textAlign(v: string) { this.surface().textAlign = v }
-  get font(): string { return this.surface().font }
-  set font(v: string) { this.surface().font = v }
-  get lineWidth(): number { return this.surface().lineWidth }
-  set lineWidth(v: number) { this.surface().lineWidth = v }
-
-  clearRect(x: number, y: number, w: number, h: number): void {
-    const s = this.surface()
-    const x0 = Math.max(0, Math.floor(x)), x1 = Math.min(s.width, Math.ceil(x + w))
-    const y0 = Math.max(0, Math.floor(y)), y1 = Math.min(s.height, Math.ceil(y + h))
-    for (let row = y0; row < y1; row++) s.alpha.fill(0, row * s.width + x0, row * s.width + x1)
-  }
-  save(): void { this.surface().save() }
-  restore(): void { this.surface().restore() }
-  translate(x: number, y: number): void { this.surface().translate(x, y) }
-  rotate(angle: number): void { this.surface().rotate(angle) }
-  measureText(text: string): { width: number } { return { width: advance(text, this.font) } }
-
-  /** The box of a word: `pad` more on every side for a stroke. */
-  private box(text: string, x: number, y: number, pad: number): void {
-    const s = this.surface()
-    const size = Number(/(\d+(?:\.\d+)?)px/.exec(this.font)?.[1] ?? 10)
-    const w = advance(text, this.font)
-    const left = this.textAlign === 'center' ? x - w / 2 : this.textAlign === 'right' || this.textAlign === 'end' ? x - w : x
-    s.beginPath()
-    s.rect(left - pad, y - size - pad, w + 2 * pad, size + 2 * pad)
-    s.fill()
-  }
-  fillText(text: string, x: number, y: number): void {
-    if (text !== '') this.box(String(text), x, y, 0)
-  }
-  strokeText(text: string, x: number, y: number): void {
-    if (text !== '') this.box(String(text), x, y, this.lineWidth / 2)
-  }
-
-  getImageData(x: number, y: number, w: number, h: number): { data: ArrayLike<number> } {
-    const s = this.surface()
-    const data = new Uint8ClampedArray(w * h * 4)
-    for (let j = 0; j < h; j++) {
-      for (let i = 0; i < w; i++) {
-        const a = s.alpha[(y + j) * s.width + x + i]!
-        if (a) {
-          const k = (j * w + i) * 4
-          data[k] = 255
-          data[k + 3] = a
-        }
-      }
-    }
-    return { data }
-  }
-}
-
-/** vega-canvas `canvas()`. */
-function newCanvas(): CloudCanvas {
-  return createHostCanvas() ?? new HeadlessCanvas()
-}
-
-// --- d3-cloud ------------------------------------------------------------------------------------
-
-const cloudRadians = Math.PI / 180
-const cw = (1 << 11) >> 5
-const ch = 1 << 11
-
-type Spiral = (size: [number, number]) => (t: number) => [number, number] | undefined
-
-function archimedeanSpiral(size: [number, number]): (t: number) => [number, number] {
-  const e = size[0] / size[1]
-  return (t) => [e * (t *= 0.1) * Math.cos(t), t * Math.sin(t)]
-}
-
-function rectangularSpiral(size: [number, number]): (t: number) => [number, number] {
-  const dy = 4
-  const dx = (dy * size[0]) / size[1]
-  let x = 0
-  let y = 0
-  return (t) => {
-    const sign = t < 0 ? -1 : 1
-    // See triangular numbers: T_n = n * (n + 1) / 2.
-    switch ((Math.sqrt(1 + 4 * sign * t) - sign) & 3) {
-      case 0: x += dx; break
-      case 1: y += dy; break
-      case 2: x -= dx; break
-      default: y -= dy; break
-    }
-    return [x, y]
-  }
-}
-
-const spirals: Record<string, Spiral> = { archimedean: archimedeanSpiral, rectangular: rectangularSpiral }
-
-export interface CloudWord {
+/** A word and the place it takes: its inputs, its box once it has a sprite, its position once it has one. */
+interface Word {
+  datum: Rec
   text: unknown
   font: unknown
   style: unknown
@@ -209,23 +74,212 @@ export interface CloudWord {
   rotate: number
   size: number
   padding: number
-  xoff: number
-  yoff: number
-  x1: number
-  y1: number
-  x0: number
-  y0: number
+  /** The position of the word's centre while it is placed, and the start of its spiral before. */
   x: number
   y: number
-  hasText: boolean
-  sprite: number[] | null
-  width: number
-  height: number
-  datum: Rec
+  /** The box of the sprite, from the centre: x0 = -x1 is the width / 2, y0 the first inked row, y1 the last. */
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+  /** The ink, `rows` rows of `w32` 32-bit words, the leftmost pixel being the high bit. */
+  rows: Int32Array
+  w32: number
+  /** Whether the word has a sprite (READY), is waiting for one (PENDING) or the sheet has no room for it (FAILED). */
+  state: number
 }
 
-export interface CloudOptions {
+const PENDING = 0, READY = 1, FAILED = 2
+
+/** Pixels of a sheet: `stride` entries to a pixel, SHEET pixels to a row; a pixel has ink when its first entry is not 0. */
+interface Ink { data: ArrayLike<number>; stride: number }
+
+/** Where a word is drawn on the sheet: a w x h cell at (x, y), the word in the middle of it. */
+interface Cell { d: Word; text: string; font: string; px: number; x: number; y: number; w: number; h: number }
+
+interface Surface {
+  /** The advance of `text` set in `font` (`px` pixels). */
+  measure(text: string, font: string, px: number): number
+  /** A sheet SHEET pixels wide and `height` high with the cells drawn on it, each word turned by its `rotate`, its outline `padding` wide. */
+  paint(cells: Cell[], height: number): Ink
+}
+
+/** The width of a word where the engine measures text (the host's provider, the browser's canvas) or, lacking both, vega's headless estimate. */
+const advance = (text: string, font: string, px: number): number => (usingCanvasTextMetrics() ? measureText(text, font) : estimateTextWidth(text, px))
+
+const RADIANS = Math.PI / 180
+
+/** The host's canvas, as wide as the sheet and as high as the words on it. */
+function hostSurface(canvas: HTMLCanvasElement): Surface {
+  const ctx = canvas.getContext('2d')!
+  canvas.width = SHEET
+  return {
+    measure: (text, font) => { ctx.font = font; return ctx.measureText(text).width },
+    paint(cells, height) {
+      canvas.height = height // (which also clears it, and resets the state set below)
+      ctx.fillStyle = ctx.strokeStyle = 'red'
+      ctx.textAlign = 'center'
+      for (const { d, text, font, x, y, w, h } of cells) {
+        ctx.save()
+        ctx.font = font
+        ctx.translate(x + (w >> 1), y + (h >> 1))
+        if (d.rotate) ctx.rotate(d.rotate * RADIANS)
+        ctx.fillText(text, 0, 0)
+        if (d.padding) {
+          ctx.lineWidth = 2 * d.padding
+          ctx.strokeText(text, 0, 0)
+        }
+        ctx.restore()
+      }
+      // (the red channel carries the ink)
+      return { data: ctx.getImageData(0, 0, SHEET, height).data, stride: 4 }
+    },
+  }
+}
+
+/** No canvas: a word is the box its advance width and size make (its outline, `padding` more on every side). */
+const boxSurface: Surface = {
+  measure: advance,
+  paint(cells, height) {
+    const c = new AlphaCanvas(SHEET, height)
+    for (const { d, text, font, px, x, y, w, h } of cells) {
+      if (text === '') continue
+      c.save()
+      c.translate(x + (w >> 1), y + (h >> 1))
+      if (d.rotate) c.rotate(d.rotate * RADIANS)
+      const tw = advance(text, font, px)
+      const box = (pad: number): void => {
+        c.beginPath()
+        c.rect(-tw / 2 - pad, -px - pad, tw + 2 * pad, px + 2 * pad)
+        c.fill()
+      }
+      box(0)
+      if (d.padding) box(d.padding)
+      c.restore()
+    }
+    return { data: c.alpha, stride: 1 }
+  },
+}
+
+/** The sheet the words are drawn on and read back from, as wide and as high as vega's: where a word lands depends on the ink around it. */
+const SHEET = 2048
+
+/** The size of the cell a word is drawn in. */
+function cellOf(d: Word, surface: Surface): Cell {
+  const px = ~~(d.size + 1)
+  const font = d.style + ' ' + d.weight + ' ' + px + 'px ' + d.font
+  const text = String(d.text)
+  let w = surface.measure(text + 'm', font, px)
+  let h = d.size << 1
+  if (d.rotate) {
+    const sr = Math.sin(d.rotate * RADIANS)
+    const cr = Math.cos(d.rotate * RADIANS)
+    const wcr = w * cr, wsr = w * sr, hcr = h * cr, hsr = h * sr
+    w = (Math.max(Math.abs(wcr + hsr), Math.abs(wcr - hsr)) + 0x1f) >> 5 << 5
+    h = ~~Math.max(Math.abs(wsr + hcr), Math.abs(wsr - hcr))
+  } else {
+    w = (w + 0x1f) >> 5 << 5
+  }
+  return { d, text, font, px, x: 0, y: 0, w, h }
+}
+
+/**
+ * Cut the sprites of the words from `start` on: they are set in rows on one sheet, left to right, until the next does not fit, and
+ * drawn together, so the outline of a word that reaches into the cell of another is ink there too (the layout is pinned to this).
+ * A word is sprited when its turn comes, and the first of a sheet that does not fit has no sprite (`failed`).
+ */
+function cutSprites(words: Word[], start: number, surface: Surface): void {
+  const cells: Cell[] = []
+  let x = 0, y = 0, rowHeight = 0
+  for (let k = start; k < words.length; k++) {
+    const cell = cellOf(words[k]!, surface)
+    if (cell.h > rowHeight) rowHeight = cell.h
+    if (x + cell.w >= SHEET) { x = 0; y += rowHeight; rowHeight = 0 }
+    if (y + cell.h >= SHEET) break
+    cell.x = x
+    cell.y = y
+    cells.push(cell)
+    x += cell.w
+  }
+  if (!cells.length) { words[start]!.state = FAILED; return }
+  const height = cells.reduce((m, c) => Math.max(m, c.y + c.h + 1), 1)
+  const { data, stride } = surface.paint(cells, Math.min(height, SHEET))
+  for (const { d, x, y, w, h } of cells) {
+    // the box: the rows above the first inked one are dropped, and the last row of the cell (an empty word keeps none)
+    const hh = h >> 1
+    const rows = Math.max(hh, 0) * 2
+    const at = (i: number, j: number): number => data[((y + j) * SHEET + x + i) * stride] ?? 0
+    let top = 0
+    scan: for (; top < rows; top++) for (let i = 0; i < w; i++) if (at(i, top)) break scan
+    d.x1 = w >> 1
+    d.x0 = -d.x1
+    d.y0 = top - hh
+    d.y1 = rows - hh - 1
+    d.w32 = w >> 5
+    d.rows = new Int32Array(Math.max(rows - 1 - top, 0) * d.w32)
+    for (let j = 0, n = d.rows.length / (d.w32 || 1); j < n; j++) {
+      for (let i = 0; i < w; i++) if (at(i, top + j)) d.rows[j * d.w32 + (i >> 5)]! |= 1 << (31 - (i & 31))
+    }
+    d.state = READY
+  }
+}
+
+// --- the layout ----------------------------------------------------------------------------------
+
+/** Where the spiral is: `step(t)` moves `at` to its t-th point (the rectangular one is incremental: t must come in sequence). */
+interface Point { x: number; y: number }
+type Spiral = (size: [number, number], at: Point) => (t: number) => void
+
+const spirals: Record<string, Spiral> = {
+  archimedean: (size, at) => {
+    const e = size[0] / size[1]
+    return (t) => { t *= 0.1; at.x = e * t * Math.cos(t); at.y = t * Math.sin(t) }
+  },
+  rectangular: (size, at) => {
+    const dy = 4
+    const dx = (dy * size[0]) / size[1]
+    at.x = at.y = 0
+    return (t) => {
+      const sign = t < 0 ? -1 : 1
+      // the corner of the square spiral that the triangular numbers T_n = n (n + 1) / 2 mark
+      switch ((Math.sqrt(1 + 4 * sign * t) - sign) & 3) {
+        case 0: at.x += dx; break
+        case 1: at.y += dy; break
+        case 2: at.x -= dx; break
+        default: at.y -= dy; break
+      }
+    }
+  },
+}
+
+/**
+ * The ink of `d`, centred at (x, y), against the board (a bit per pixel, `sw` 32-bit words to a row). When `stamp` is set the ink
+ * is laid on the board, else the answer is whether it meets ink there. A row of the sprite is shifted right by `x0 mod 32` bits
+ * into the cells it overlaps, the bits shifted out of a cell going into the next; for a shift of 0 that carry is not shifted at all
+ * (32 is 0 as a shift count), so the cell takes the whole of the one before: the layout is pinned to this.
+ */
+function overlay(board: Int32Array, sw: number, d: Word, stamp: boolean): boolean {
+  const { rows, w32 } = d
+  const lx = d.x + d.x0
+  const shift = lx & 31
+  const back = 32 - shift
+  const height = w32 ? rows.length / w32 : 0
+  let cell = (d.y + d.y0) * sw + (lx >> 5)
+  for (let j = 0; j < height; j++, cell += sw) {
+    let last = 0
+    for (let i = 0; i <= w32; i++) {
+      const bits = (last << back) | (i < w32 ? (last = rows[j * w32 + i]!) >>> shift : 0)
+      if (stamp) board[cell + i] = (board[cell + i] ?? 0) | bits
+      else if (bits & board[cell + i]!) return true
+    }
+  }
+  return false
+}
+
+interface LayoutOptions {
   size: [number, number]
+  spiral: Spiral
+  random: () => number
   text: (d: Rec) => unknown
   font: (d: Rec) => unknown
   fontStyle: (d: Rec) => unknown
@@ -233,253 +287,70 @@ export interface CloudOptions {
   fontSize: (d: Rec) => number
   rotate: (d: Rec) => number
   padding: (d: Rec) => number
-  spiral: Spiral
-  random: () => number
 }
 
-/** d3-cloud's `cloud.layout()` over `words` (the data). Returns the placed words, in the order they were placed. */
-export function cloudLayout(words: Rec[], o: CloudOptions, makeCanvas: () => CloudCanvas = newCanvas): CloudWord[] {
+/** Place the words of `data`, largest first; returns the ones that found room. */
+function layout(data: Rec[], o: LayoutOptions): Word[] {
   const { size, random } = o
-  const contextAndRatio = getContext(makeCanvas())
-  const board = zeroArray((size[0] >> 5) * size[1])
-  let bounds: Array<{ x: number; y: number }> | null = null
-  const n = words.length
-  let i = -1
-  const tags: CloudWord[] = []
-  const data = words.map((d): CloudWord => ({
-    text: o.text(d),
-    font: o.font(d),
-    style: o.fontStyle(d),
-    weight: o.fontWeight(d),
-    rotate: o.rotate(d),
-    size: ~~(o.fontSize(d) + 1e-14),
-    padding: o.padding(d),
-    xoff: 0,
-    yoff: 0,
-    x1: 0,
-    y1: 0,
-    x0: 0,
-    y0: 0,
-    x: 0,
-    y: 0,
-    hasText: false,
-    sprite: null,
-    width: 0,
-    height: 0,
-    datum: d,
+  const [width, height] = size
+  const canvas = createHostCanvas()
+  const surface = canvas ? hostSurface(canvas) : boxSurface
+  const sw = width >> 5
+  // (one cell past the end: a sprite at the far corner carries into it)
+  const board = new Int32Array(Math.max(0, Math.ceil(sw * height)) + 1)
+  const maxDelta = Math.hypot(width, height)
+  const at: Point = { x: 0, y: 0 }
+  const placed: Word[] = []
+  // the extent of what is placed: a word must touch it to be tried against the board
+  let left = 0, top = 0, right = 0, bottom = 0
+
+  // (the order the accessors are called in is observable: an expression may draw from the stream)
+  const words = data.map((datum): Word => ({
+    datum, text: o.text(datum), font: o.font(datum), style: o.fontStyle(datum), weight: o.fontWeight(datum),
+    rotate: o.rotate(datum), size: ~~(o.fontSize(datum) + 1e-14), padding: o.padding(datum),
+    x: 0, y: 0, x0: 0, y0: 0, x1: 0, y1: 0, rows: new Int32Array(0), w32: 0, state: PENDING,
   })).sort((a, b) => b.size - a.size)
 
-  while (++i < n) {
-    const d = data[i]!
-    d.x = (size[0] * (random() + 0.5)) >> 1
-    d.y = (size[1] * (random() + 0.5)) >> 1
-    cloudSprite(contextAndRatio, d, data, i)
-    if (d.hasText && place(board, d, bounds)) {
-      tags.push(d)
-      if (bounds) cloudBounds(bounds, d)
-      else bounds = [{ x: d.x + d.x0, y: d.y + d.y0 }, { x: d.x + d.x1, y: d.y + d.y1 }]
-      // Temporary hack
-      d.x -= size[0] >> 1
-      d.y -= size[1] >> 1
-    }
-  }
-  return tags
+  for (let i = 0; i < words.length; i++) {
+    const d = words[i]!
+    d.x = (width * (random() + 0.5)) >> 1
+    d.y = (height * (random() + 0.5)) >> 1
+    if (d.state === PENDING) cutSprites(words, i, surface)
+    if (d.state === FAILED) continue
 
-  function getContext(canvas: CloudCanvas): { context: CloudContext; ratio: number } {
-    canvas.width = canvas.height = 1
-    const ratio = Math.sqrt(canvas.getContext('2d')!.getImageData(0, 0, 1, 1).data.length >> 2)
-    canvas.width = (cw << 5) / ratio
-    canvas.height = ch / ratio
-
-    const context = canvas.getContext('2d')!
-    context.fillStyle = context.strokeStyle = 'red'
-    context.textAlign = 'center'
-
-    return { context, ratio }
-  }
-
-  function place(board: number[], tag: CloudWord, bounds: Array<{ x: number; y: number }> | null): boolean {
-    const startX = tag.x
-    const startY = tag.y
-    const maxDelta = Math.hypot(size[0], size[1])
-    const s = o.spiral(size)
+    const startX = d.x
+    const startY = d.y
+    const step = o.spiral(size, at)
     const dt = random() < 0.5 ? 1 : -1
-    let t = -dt
-    let dxdy: [number, number] | undefined
-
-    while ((dxdy = s((t += dt)))) {
+    let found = false
+    for (let t = 0; ; t += dt) {
       meterTick('wordcloud')
-      const dx = ~~dxdy[0]
-      const dy = ~~dxdy[1]
-
+      step(t)
+      const dx = ~~at.x
+      const dy = ~~at.y
       if (Math.min(Math.abs(dx), Math.abs(dy)) >= maxDelta) break
-
-      tag.x = startX + dx
-      tag.y = startY + dy
-
-      if (tag.x + tag.x0 < 0 || tag.y + tag.y0 < 0 || tag.x + tag.x1 > size[0] || tag.y + tag.y1 > size[1]) continue
-      // TODO only check for collisions within current bounds.
-      if (!bounds || !cloudCollide(tag, board, size[0])) {
-        if (!bounds || collideRects(tag, bounds)) {
-          const sprite = tag.sprite!
-          const w = tag.width >> 5
-          const sw = size[0] >> 5
-          const lx = tag.x - (w << 4)
-          const sx = lx & 0x7f
-          const msx = 32 - sx
-          const h = tag.y1 - tag.y0
-          let x = (tag.y + tag.y0) * sw + (lx >> 5)
-          let last: number
-          for (let j = 0; j < h; j++) {
-            last = 0
-            for (let i = 0; i <= w; i++) {
-              board[x + i] = (board[x + i] as number | undefined ?? 0) | (last << msx) | (i < w ? (last = sprite[j * w + i]!) >>> sx : 0)
-            }
-            x += sw
-          }
-          tag.sprite = null
-          return true
-        }
-      }
+      d.x = startX + dx
+      d.y = startY + dy
+      if (d.x + d.x0 < 0 || d.y + d.y0 < 0 || d.x + d.x1 > width || d.y + d.y1 > height) continue
+      if (placed.length && !(d.x + d.x1 > left && d.x + d.x0 < right && d.y + d.y1 > top && d.y + d.y0 < bottom)) continue
+      if (placed.length && overlay(board, sw, d, false)) continue
+      found = true
+      break
     }
-    return false
-  }
-}
-
-// Fetches a monochrome sprite bitmap for the specified text.
-// Load in batches for speed.
-function cloudSprite(contextAndRatio: { context: CloudContext; ratio: number }, d: CloudWord, data: CloudWord[], di: number): void {
-  if (d.sprite) return
-  const c = contextAndRatio.context
-  const ratio = contextAndRatio.ratio
-
-  c.clearRect(0, 0, (cw << 5) / ratio, ch / ratio)
-  let x = 0
-  let y = 0
-  let maxh = 0
-  const n = data.length
-  let w: number, w32: number, h: number, i: number, j: number
-  --di
-  while (++di < n) {
-    d = data[di]!
-    c.save()
-    c.font = d.style + ' ' + d.weight + ' ' + ~~((d.size + 1) / ratio) + 'px ' + d.font
-    w = c.measureText(d.text + 'm').width * ratio
-    h = d.size << 1
-    if (d.rotate) {
-      const sr = Math.sin(d.rotate * cloudRadians)
-      const cr = Math.cos(d.rotate * cloudRadians)
-      const wcr = w * cr
-      const wsr = w * sr
-      const hcr = h * cr
-      const hsr = h * sr
-      w = (Math.max(Math.abs(wcr + hsr), Math.abs(wcr - hsr)) + 0x1f) >> 5 << 5
-      h = ~~Math.max(Math.abs(wsr + hcr), Math.abs(wsr - hcr))
+    if (!found) continue
+    overlay(board, sw, d, true)
+    if (placed.length) {
+      left = Math.min(left, d.x + d.x0); top = Math.min(top, d.y + d.y0)
+      right = Math.max(right, d.x + d.x1); bottom = Math.max(bottom, d.y + d.y1)
     } else {
-      w = (w + 0x1f) >> 5 << 5
+      left = d.x + d.x0; top = d.y + d.y0; right = d.x + d.x1; bottom = d.y + d.y1
     }
-    if (h > maxh) maxh = h
-    if (x + w >= (cw << 5)) {
-      x = 0
-      y += maxh
-      maxh = 0
-    }
-    if (y + h >= ch) break
-    c.translate((x + (w >> 1)) / ratio, (y + (h >> 1)) / ratio)
-    if (d.rotate) c.rotate(d.rotate * cloudRadians)
-    c.fillText(d.text as string, 0, 0)
-    if (d.padding) {
-      c.lineWidth = 2 * d.padding
-      c.strokeText(d.text as string, 0, 0)
-    }
-    c.restore()
-    d.width = w
-    d.height = h
-    d.xoff = x
-    d.yoff = y
-    d.x1 = w >> 1
-    d.y1 = h >> 1
-    d.x0 = -d.x1
-    d.y0 = -d.y1
-    d.hasText = true
-    x += w
+    placed.push(d)
   }
-  const pixels = c.getImageData(0, 0, (cw << 5) / ratio, ch / ratio).data
-  const sprite: number[] = []
-  while (--di >= 0) {
-    d = data[di]!
-    if (!d.hasText) continue
-    w = d.width
-    w32 = w >> 5
-    h = d.y1 - d.y0
-    // Zero the buffer
-    for (i = 0; i < h * w32; i++) sprite[i] = 0
-    x = d.xoff
-    if (x == null) return
-    y = d.yoff
-    let seen = 0
-    let seenRow = -1
-    for (j = 0; j < h; j++) {
-      for (i = 0; i < w; i++) {
-        const k = w32 * j + (i >> 5)
-        const m = pixels[((y + j) * (cw << 5) + (x + i)) << 2] ? 1 << (31 - (i % 32)) : 0
-        sprite[k] = sprite[k]! | m
-        seen |= m
-      }
-      if (seen) seenRow = j
-      else {
-        d.y0++
-        h--
-        j--
-        y++
-      }
-    }
-    d.y1 = d.y0 + seenRow
-    d.sprite = sprite.slice(0, (d.y1 - d.y0) * w32)
-  }
+  return placed
 }
 
-// Use mask-based collision detection.
-function cloudCollide(tag: CloudWord, board: number[], sw: number): boolean {
-  sw >>= 5
-  const sprite = tag.sprite!
-  const w = tag.width >> 5
-  const lx = tag.x - (w << 4)
-  const sx = lx & 0x7f
-  const msx = 32 - sx
-  const h = tag.y1 - tag.y0
-  let x = (tag.y + tag.y0) * sw + (lx >> 5)
-  let last: number
-  for (let j = 0; j < h; j++) {
-    last = 0
-    for (let i = 0; i <= w; i++) {
-      if (((last << msx) | (i < w ? (last = sprite[j * w + i]!) >>> sx : 0)) & board[x + i]!) return true
-    }
-    x += sw
-  }
-  return false
-}
-
-function cloudBounds(bounds: Array<{ x: number; y: number }>, d: CloudWord): void {
-  const b0 = bounds[0]!
-  const b1 = bounds[1]!
-  if (d.x + d.x0 < b0.x) b0.x = d.x + d.x0
-  if (d.y + d.y0 < b0.y) b0.y = d.y + d.y0
-  if (d.x + d.x1 > b1.x) b1.x = d.x + d.x1
-  if (d.y + d.y1 > b1.y) b1.y = d.y + d.y1
-}
-
-function collideRects(a: CloudWord, b: Array<{ x: number; y: number }>): boolean {
-  return a.x + a.x1 > b[0]!.x && a.x + a.x0 < b[1]!.x && a.y + a.y1 > b[0]!.y && a.y + a.y0 < b[1]!.y
-}
-
-// TODO reuse arrays?
-function zeroArray(n: number): number[] {
-  const a: number[] = []
-  let i = -1
-  while (++i < n) a[i] = 0
-  return a
-}
+// --- the transform -------------------------------------------------------------------------------
 
 // --- vega-wordcloud ------------------------------------------------------------------------------
 
@@ -500,7 +371,7 @@ function param(p: unknown, ctx: TransformContext, asField = false): unknown {
 }
 
 /**
- * vega-util `extent(array, f)`, statement for statement: the first value that is not null or NaN starts the extent, null is skipped
+ * vega-util `extent(array, f)`: the first value that is not null or NaN starts the extent, null is skipped
  * after it and NaN fails every comparison. When no value qualifies the search runs one past the end, so `f` is called with
  * `undefined` (a field accessor throws there, which is how a cloud of words with no font size ends in vega).
  */
@@ -588,7 +459,7 @@ export function wordcloudRows(rows: Row[], t: Record<string, unknown>, ctx: Tran
   const layoutSize: [number, number] = [+(size?.[0] ?? 500), +(size?.[1] ?? 500)]
   const random = ctx.runtime.random ?? Math.random
 
-  const words = cloudLayout(data, {
+  const words = layout(data, {
     size: layoutSize,
     text: functor(param(t.text, ctx, true)),
     font: functor(param(t.font, ctx) || 'sans-serif'),
@@ -601,12 +472,10 @@ export function wordcloudRows(rows: Row[], t: Record<string, unknown>, ctx: Tran
     random,
   })
 
-  const dx = layoutSize[0] >> 1
-  const dy = layoutSize[1] >> 1
   for (const w of words) {
     const d = w.datum
-    d[as[0]!] = w.x + dx
-    d[as[1]!] = w.y + dy
+    d[as[0]!] = w.x
+    d[as[1]!] = w.y
     d[as[2]!] = w.font
     d[as[3]!] = w.size
     d[as[4]!] = w.style
