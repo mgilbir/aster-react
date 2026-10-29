@@ -1519,7 +1519,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // the child view's binned fields name their signals after the child model (bin.ts getBinSignalName: `child_bin_..._bins`)
   {
     const sigMap = new Map<string, string>()
-    const ts = ((inner.data as Record<string, unknown>[]) ?? []).flatMap((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).filter((t) => (t.type === 'bin' || t.type === 'extent') && typeof t.signal === 'string'))
+    const ts = ((inner.data as Record<string, unknown>[]) ?? []).flatMap((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).filter((t) => (t.type === 'bin' || t.type === 'extent' || t.type === 'geojson') && typeof t.signal === 'string'))
     for (const t of ts) sigMap.set(t.signal as string, `child_${t.signal as string}`)
     if (sigMap.size) {
       const r = { signals: sigMap, scales: new Map<string, string>() }
@@ -1532,6 +1532,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
       renameFragment(inner.axes ?? [], r)
       renameFragment(inner.marks, r)
       renameFragment(inner.legends ?? [], r)
+      renameFragment(inner.projections ?? [], r)
     }
   }
   // the facet's cells declare the units' signals (and the `facet` signal that tracks the cell the pointer is in)
@@ -1625,9 +1626,26 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // The data the cells facet: a unit's marks dataset, or - for layers, whose marks read several
   // datasets - the first derived dataset; the other datasets are re-derived INSIDE each cell.
   const layeredInner = Array.isArray(innerSpec.layer)
+  const unitMarksData = ((inner.marks as Record<string, unknown>[])?.[0]?.from as { data?: string } | undefined)?.data ?? innerDataName
+  // A facet sorted by an aggregate of a field (`sort: {op: "median", field: "yield"}`) aggregates the facet's own data, the rows BEFORE
+  // the view's pipeline (data/facet.ts: the cells' pipeline runs inside each cell, FacetNode.data is the parse). When the pipeline
+  // aggregates, those rows are not the ones it outputs, so the cells facet the data it derives from and re-derive it inside.
+  const sortsByAggregate = [rowDef, colDef, wrapDef].some((d) => isObject(d?.sort) && !Array.isArray(d!.sort))
+  const unitPipelineDs = innerData.find((d) => d.name === unitMarksData)
+  // (a crossed facet pre-computes its sort field with a joinaggregate on the pipeline's own data, which its aggregate then drops)
+  // The raw table is separate only when the view asks for it (a scale domain sorted by an aggregate reads it: the pipeline is then two
+  // datasets, the raw one and the aggregated one). Otherwise vega-lite merges the whole pipeline into the facet's data, and a sort field the
+  // aggregate drops is missing from the rows the sort aggregates (trellis_area_seattle: every key is undefined, the cells keep their order).
+  const rawFacet = !layeredInner && sortsByAggregate && !(rowDef && colDef) && typeof unitPipelineDs?.source === 'string'
+    && typeof innerData.find((d) => d.name === unitPipelineDs.source)?.source === 'string'
+    && ((unitPipelineDs.transform as Record<string, unknown>[] | undefined) ?? []).some((t) => t.type === 'aggregate')
+  // (the facet's data is that raw dataset - the casts, the calculates, the facet fields' time units; the aggregate that follows runs in
+  // each cell over the cell's rows)
+  const rawBase = rawFacet ? (unitPipelineDs!.source as string) : undefined
+  const rawTail = rawFacet ? (unitPipelineDs!.transform as Record<string, unknown>[]) : undefined
   const baseName = layeredInner
     ? ((innerData[1]?.source === srcName ? (innerData[1]!.name as string) : srcName))
-    : (((inner.marks as Record<string, unknown>[])?.[0]?.from as { data?: string } | undefined)?.data ?? innerDataName)
+    : rawBase !== undefined ? rawBase : unitMarksData
   // The facet's own `transform` runs once, before the facet (data/parse.ts: the facet model's pipeline is the parent of its cells).
   // A layered inner view derives each layer's dataset from the facet's base dataset with these transforms in front, which would run
   // them again inside every cell (a joinaggregate over one cell's rows, ...): they are hoisted into the base dataset instead.
@@ -1643,6 +1661,11 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   }
   const cellData: Record<string, unknown>[] = []
   const cellMap = new Map<string, string>([[baseName, 'facet']])
+  if (rawFacet && rawTail !== undefined) {
+    const cellName = `${unitMarksData}_cell`
+    cellMap.set(unitMarksData, cellName)
+    cellData.push({ name: cellName, source: 'facet', transform: rawTail })
+  }
   if (layeredInner) {
     const sources = new Set(innerData.filter((d) => typeof d.values !== 'undefined' || typeof d.url !== 'undefined' || d.source === undefined).map((d) => d.name))
     if (sources.size > 1) throw new VLCompileError('a facet of layers that read different data sources is not supported')
@@ -1679,8 +1702,10 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
       // (isSortField: `{op: "count"}` sorts by the number of rows and has no field to aggregate: vega-lite puts a null field in the aggregate)
       const sf = (typeof sort.field === 'string' ? sort.field : null) as string
       const op = (sort.op as string | undefined) ?? 'min'
-      const out = sf === null ? genName(op, `by_${field}`) : genName(`${op}_${sf}`, `by_${field}`)
-      const domainAs = sf === null ? op : genName(op, sf)
+      // (facetSortFieldName: vgField of the sort field def, so the op is in the name only when the sort says it: `{field: "order"}` is `order`)
+      const named = sort.op !== undefined
+      const out = sf === null ? genName(op, `by_${field}`) : named ? genName(`${op}_${sf}`, `by_${field}`) : genName(sf, `by_${field}`)
+      const domainAs = sf === null ? op : named ? genName(op, sf) : sf
       if (rowFd && colFd) {
         // a crossed facet pre-calculates the sort field per channel value, and the cells take its max
         addToBase({ type: 'joinaggregate', as: [out], ops: [op], fields: [sf], groupby: [field] })
@@ -1722,6 +1747,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // The channel's scale lives in each cell (`child_x`), over the cell's own data; its axis is the cell's, not the header's. A discrete
   // scale sized by a step makes the cell as wide as its own cardinality: the facet counts the distinct values of the scale's field
   // (`distinct_age`), and the cell and the header read the count to size themselves.
+  const resolveAxisF = isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).axis) ? ((spec.resolve as Record<string, unknown>).axis as Record<string, unknown>) : {}
   const resolveScaleF = isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).scale) ? ((spec.resolve as Record<string, unknown>).scale as Record<string, unknown>) : {}
   interface IndepScale { ch: 'x' | 'y'; field?: string; sizeExpr?: string; distinct?: string }
   const indepScales: IndepScale[] = []
@@ -1757,7 +1783,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (!hasSig('child_width') && !indepOf('x')?.sizeExpr) facetChildSignals.push({ name: 'child_width', value: typeof inner.width === 'number' ? inner.width : 300 })
   if (!hasSig('child_height') && !indepOf('y')?.sizeExpr) facetChildSignals.push({ name: 'child_height', value: typeof inner.height === 'number' ? inner.height : 300 })
   // (layoutsize/assemble.ts assembleLayoutSignals: the width's signals, then the height's)
-  if (indepScales.length) {
+  {
     const rank = (n: unknown): number => (n === 'child_width' || n === 'child_x_step' || n === 'x_step' ? 0 : n === 'child_height' || n === 'child_y_step' || n === 'y_step' ? 1 : 2)
     facetChildSignals.sort((a, b) => rank(a.name) - rank(b.name))
   }
@@ -1767,6 +1793,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   renameFragment(inner.axes ?? [], renames)
   renameFragment(inner.marks, renames)
   renameFragment(inner.legends ?? [], renames)
+  renameFragment(inner.projections ?? [], renames)
   renameFragment(facetChildSignals, renames)
 
   // split the inner axes: grid axes stay in the cell, label axes move to the
@@ -1776,7 +1803,8 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const xLabelAxes: Record<string, unknown>[] = []
   const ownAxes: Record<string, unknown>[] = []
   for (const a of (inner.axes ?? []) as Record<string, unknown>[]) {
-    const indepAxis = indepScales.some((i) => a.scale === `child_${i.ch}`)
+    // (resolve.axis: independent puts the axes of that channel in every cell, over the scale the cells share)
+    const indepAxis = indepScales.some((i) => a.scale === `child_${i.ch}`) || ((a.scale === 'x' || a.scale === 'y') && resolveAxisF[a.scale] === 'independent')
     if (a.grid === true) gridAxes.push(a)
     else if (indepAxis) ownAxes.push(a)
     else if (a.orient === 'left' || a.orient === 'right') yLabelAxes.push(a)
@@ -1921,7 +1949,8 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
       ...(xLabelAxes.length ? [{ name: colSeq, transform: [{ type: 'sequence', start: 0, stop: { signal: nCols === undefined ? `length(data(${JSON.stringify(facetDomain)}))` : `min(length(data(${JSON.stringify(facetDomain)})), ${nCols})` } }] }] : []),
     ]
     const wrapMarks: Record<string, unknown>[] = [
-      { name: 'facet-title', type: 'group', role: 'column-title', title: { text: hdrW.title ?? channelTitle(wrapFd), style: 'guide-title', offset: (hdrW.titlePadding as number | undefined) ?? 10 } },
+      // (header/assemble.ts assembleTitleGroup: an empty title - `header: {title: null}` - is no title group)
+      ...(hdrW.title === null || hdrW.title === '' ? [] : [{ name: 'facet-title', type: 'group', role: 'column-title', title: { text: hdrW.title ?? channelTitle(wrapFd), style: 'guide-title', offset: (hdrW.titlePadding as number | undefined) ?? 10 } }]),
       ...(yLabelAxes.length ? [{ name: 'row_header', type: 'group', role: 'row-header', from: { data: rowSeq }, encode: { update: { height: { signal: 'child_height' } } }, axes: yLabelAxes }] : []),
       ...(xLabelAxes.length ? [{ name: 'column_footer', type: 'group', role: 'column-footer', from: { data: colSeq }, encode: { update: { width: { signal: 'child_width' } } }, axes: xLabelAxes }] : []),
       {
@@ -1948,6 +1977,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     wrapOut.layout = compositeLayout({ ...spec, spacing: spec.spacing ?? wrapDef?.spacing, align: spec.align ?? wrapDef?.align, bounds: spec.bounds ?? wrapDef?.bounds, center: spec.center ?? wrapDef?.center }, { align: 'all', columns: nCols })
     wrapOut.marks = wrapMarks
     wrapOut.scales = inner.scales
+    if (Array.isArray(inner.projections) && inner.projections.length) wrapOut.projections = inner.projections
     if (inner.legends && (inner.legends as unknown[]).length) wrapOut.legends = inner.legends
     rootChrome(wrapOut, spec)
     return wrapOut
@@ -2180,6 +2210,8 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   }
   out.marks = marks
   out.scales = inner.scales
+  // (a map in the cells: the projection is the facet's, fitted to the data the cells share)
+  if (Array.isArray(inner.projections) && inner.projections.length) out.projections = inner.projections
   if (inner.axes == null) delete inner.axes
   if (inner.legends && (inner.legends as unknown[]).length) out.legends = inner.legends
   rootChrome(out, spec)
@@ -3535,6 +3567,16 @@ function dataSource(data: Record<string, unknown>, datasets: Record<string, unkn
     return { ...(typeof data.name === 'string' ? { name: data.name } : {}), transform: [{ type: 'graticule', ...(isObject(data.graticule) ? data.graticule : {}) }] }
   }
   for (const [k, v] of Object.entries(data)) out[k] = v
+  // compile/data/source.ts: a URL's format type is the file's extension (json, csv, tsv, dsv, topojson; json for any other); Vega reads
+  // json when it is not told, so a csv file would not load
+  if (typeof data.url === 'string') {
+    const format: Record<string, unknown> = isObject(data.format) ? { ...(data.format as Record<string, unknown>) } : {}
+    if (!format.type) {
+      const ext = /(?:\.([^.]+))?$/.exec(data.url)![1]
+      format.type = ext !== undefined && ['json', 'csv', 'tsv', 'dsv', 'topojson'].includes(ext) ? ext : 'json'
+    }
+    out.format = format
+  }
   if (typeof data.name === 'string' && data.values === undefined && data.url === undefined && Array.isArray(datasets[data.name])) {
     out.values = datasets[data.name]
   }

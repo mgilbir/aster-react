@@ -733,6 +733,20 @@ const GROUPS: Record<string, Case[]> = {
     // scale/range.ts: a range given as a field is that field's values, sorted by the scale's field
     ['a colour range read from a field', { data: { values: [{ y: 'X', l: 'A', c: 'red' }, { y: 'Y', l: 'B', c: 'blue' }, { y: 'Z', l: 'C', c: 'green' }] }, mark: 'circle', encoding: { y: n('y'), color: n('l', { scale: { range: { field: 'c' } } }) } }],
     ['a size range read from a field', { data: { values: [{ x: 1, y: 2, k: 'a', s: 20 }, { x: 2, y: 3, k: 'b', s: 120 }, { x: 3, y: 1, k: 'c', s: 300 }] }, mark: 'point', encoding: { x: q('x'), y: q('y'), size: n('k', { scale: { range: { field: 's' } } }) } }],
+    // data/facet.ts: the facet's own data is the rows BEFORE the view's pipeline, so a facet sorted by an aggregate of a field orders
+    // by the raw rows even when the view aggregates (trellis_barley); resolve.axis puts the axes in the cells (trellis_barley_independent)
+    ['a wrapped facet ordered by the median of the raw rows (the view aggregates them away)', { data: { values: [50, 50, 50, 50, 0].map((v) => ({ g: 'p', c: 'X', v })).concat([{ g: 'p', c: 'Y', v: 60 }, { g: 'q', c: 'X', v: 10 }, { g: 'q', c: 'X', v: 10 }, { g: 'q', c: 'Y', v: 10 }]) }, facet: n('g', { sort: { op: 'median', field: 'v' } }), columns: 2, spec: { mark: 'point', encoding: { x: q('v', { aggregate: 'median' }), y: n('c', { sort: '-x' }) } } }],
+    ['a wrapped facet sorted by a median over a view that aggregates', { data: DATA, facet: n('g', { sort: { op: 'median', field: 'v' } }), columns: 2, spec: { mark: 'point', encoding: { x: q('v', { aggregate: 'median' }), y: n('c', { sort: '-x' }), color: n('t') } } }],
+    ['a row facet sorted by a mean over a view that aggregates', { data: DATA, mark: 'bar', encoding: { row: n('g', { sort: { op: 'mean', field: 'x' } }), x: n('c'), y: q('v', { aggregate: 'sum' }) } }],
+    ['a crossed facet sorted by an aggregate over a view that aggregates', { data: DATA, mark: 'bar', encoding: { row: n('g', { sort: { op: 'max', field: 'v' } }), column: n('c'), x: n('t'), y: q('v', { aggregate: 'sum' }) } }],
+    ['a wrapped facet with independent axes over shared scales', { data: DATA, facet: n('g'), columns: 2, resolve: { axis: { x: 'independent', y: 'independent' } }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } }],
+    ['a column facet with an independent x axis only', { data: DATA, resolve: { axis: { x: 'independent' } }, mark: 'point', encoding: { column: n('g'), x: q('x'), y: q('y') } }],
+    // selection/nearest.ts: the voronoi mark of a faceted unit sits after the unit's marks (which the facet names `child_marks`)
+    ['a faceted unit with a nearest point selection and a brush', { data: DATA, params: [{ name: 'brush', select: { type: 'interval', encodings: ['x'] } }, { name: 'near', select: { type: 'point', fields: ['x'], on: 'pointerover', nearest: true } }], mark: 'circle', encoding: { column: n('g'), x: q('x'), y: q('y'), color: { condition: { param: 'brush', value: 'red' }, value: 'grey' } } }],
+    // compile/projection: a map in a facet fits its projection to the facet's geojson signal (geo_trellis, interactive_geo_facet_species)
+    ['a faceted map of a geojson field', { data: { values: [{ g: 'a', v: 1, geo: { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]] } } }, { g: 'b', v: 5, geo: { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[[20, 20], [30, 20], [30, 30], [20, 20]]] } } }] }, projection: { type: 'mercator' }, mark: 'geoshape', width: 200, height: 120, encoding: { shape: { field: 'geo', type: 'geojson' }, color: q('v'), row: n('g') } }],
+    ['a wrapped facet of maps', { data: { values: [{ g: 'a', v: 1, geo: { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]] } } }, { g: 'b', v: 5, geo: { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[[20, 20], [30, 20], [30, 30], [20, 20]]] } } }] }, projection: { type: 'mercator' }, mark: 'geoshape', width: 200, height: 120, encoding: { shape: { field: 'geo', type: 'geojson' }, color: q('v'), facet: { field: 'g', type: 'nominal', columns: 2, header: { title: null } } } }],
+    ['faceted points on a map by longitude and latitude', { data: { values: [{ g: 'a', lon: 10, lat: 20 }, { g: 'a', lon: 30, lat: 40 }, { g: 'b', lon: -20, lat: 10 }] }, projection: { type: 'mercator' }, mark: 'circle', width: 160, height: 100, encoding: { longitude: q('lon'), latitude: q('lat'), column: n('g') } }],
     ['a text mark with a font and a font style', { data: DATA, mark: { type: 'text', font: 'Verdana', fontStyle: 'italic', fontWeight: 700, fontSize: 13, dx: 4 }, encoding: { x: q('x'), y: q('y'), text: n('c') } }],
   ],
 }
@@ -1083,4 +1097,20 @@ describe('@aster/vl == vega-lite: the compiled expressions', () => {
       expect(expressionsOf(oracle, 'vega-lite').length, name).toBeGreaterThan(0)
     }
   })
+})
+
+// compile/data/source.ts: the format of a URL source names the file's type (Vega reads json when it is not told, so a csv would not load)
+describe('@aster/vl == vega-lite: the format of a URL source', () => {
+  const URLS = ['data/cars.json', 'data/stocks.csv', 'data/flights.tsv', 'data/world.topojson', 'data/points.dsv', 'data/noextension', 'data/x.csv?v=1', 'https://example.com/a/b.json']
+  for (const url of URLS) {
+    for (const format of [undefined, { parse: { n: 'number' } }, { type: 'tsv' }] as const) {
+      it(`${url} ${JSON.stringify(format ?? null)}`, () => {
+        const spec = { data: { url, ...(format ? { format } : {}) }, mark: 'point', encoding: { x: q('x'), y: q('y') } }
+        const oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, any> } }).compile(plain(spec)).spec
+        const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+        const src = (vg: any): unknown => (vg.data as any[]).find((d) => d.url !== undefined)?.format
+        expect(src(ours)).toEqual(src(oracle))
+      })
+    }
+  }
 })

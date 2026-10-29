@@ -149,9 +149,33 @@ function mergeIdenticalDatasets(out: Obj, generated: (name: string) => boolean):
   renameDatasetRefs(out, renames)
 }
 
+/**
+ * optimizers.ts RemoveUnusedSubtrees: a dataset nothing reads - no mark, scale, expression, or dataset derived from it - is not
+ * emitted. (A facet whose axes sit in its cells has no header groups, so the datasets that lay the headers out are unused.)
+ */
+function removeUnusedDatasets(out: Obj, removable: (name: string) => boolean): void {
+  let data = (out.data as Obj[] | undefined) ?? []
+  const rest = { ...out }
+  delete rest.data
+  const outside = JSON.stringify(rest)
+  for (;;) {
+    // (a name is read when it appears, whole, anywhere in the spec but its own dataset's name: a mark's `from`, a scale's domain, an
+    // expression's `data("name")`, a source, a lookup)
+    const text = outside + data.map((d) => JSON.stringify({ ...d, name: undefined })).join('\n')
+    const reads = (name: string): boolean => new RegExp(`(?<![\\w$])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w$])`).test(text)
+    const keep = data.filter((d) => !(typeof d.name === 'string' && removable(d.name) && !reads(d.name)))
+    if (keep.length === data.length) return
+    data = keep
+    out.data = keep
+  }
+}
+
 /** Run the cross-view optimizations on an assembled spec (in place). `generated` tells the datasets this compiler numbered from the user's. */
 export function optimizeData(out: Obj, generated: (name: string) => boolean): void {
   if (!Array.isArray(out.data) || out.data.length < 2) return
   mergeBins(out)
   mergeIdenticalDatasets(out, generated)
+  // (only the datasets that lay out facet headers: vega-lite keeps the pipeline datasets its scales requested even when a cell's own
+  // scales end up reading the cell's copies)
+  removeUnusedDatasets(out, (name) => /(?:^|_)(?:row|column|facet)_domain(?:_row|_column)?$/.test(name))
 }

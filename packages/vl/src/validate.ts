@@ -771,8 +771,8 @@ function validateResolve(r: unknown, path: string, kind: Kind, facetedUnit = fal
       if (!isObj(m)) continue
       for (const [ch, v] of Object.entries(m)) {
         if (v !== 'independent') continue
-        // only independent x / y scales are laid out (each cell with its own scale and axes); a guide's own resolution is not
-        if (what === 'scale' && (ch === 'x' || ch === 'y')) continue
+        // independent x / y scales are laid out (each cell with its own scale and axes), and so are independent x / y axes over shared scales (the axes sit in the cells); a legend's own resolution is not
+        if ((what === 'scale' || what === 'axis') && (ch === 'x' || ch === 'y')) continue
         fail(`${path}.${what}.${ch}`, `an independent ${what} resolution of ${ch} inside a facet is not supported yet (independent x and y scales are)`)
       }
     }
@@ -855,10 +855,13 @@ function validateUnit(spec: Obj, at: (k: string) => string, top = true): void {
   if (isObj(enc)) validateGeoUnit(mark, enc, at('encoding'))
   validateAnimation(spec, enc, at)
   const faceted = isObj(enc) && (enc.row != null || enc.column != null || enc.facet != null)
-  if (!top && isObj(enc) && enc.facet != null) fail(at('encoding.facet'), 'a wrapped facet (the `facet` channel) nested in another composition is not supported yet')
-  if ((compositeDepth > 0 || faceted) && (mark === 'geoshape' || spec.projection !== undefined || (isObj(enc) && Object.keys(enc).some((c) => GEO_CHANNELS.has(c) && enc[c] != null)))) {
-    fail(at('mark'), 'maps (geoshape marks, projections, longitude / latitude) inside a facet are not supported: vega-lite 6.4.3 fits a facet\'s projection to a dataset it never defines (data("child_main")), so there is no output to match')
+  // A map in a facet fits its projection to the facet's data. With a `shape` field (or longitude / latitude) that is a `geojson`
+  // transform's signal; a geoshape with no shape channel reads its data as the GeoJSON, and vega-lite fits it to
+  // `data("child_main")`, a dataset it never defines (it renders in no engine).
+  if ((compositeDepth > 0 || faceted) && mark === 'geoshape' && !(isObj(enc) && isObj(enc.shape) && (enc.shape.field !== undefined || enc.shape.datum !== undefined))) {
+    fail(at('mark'), 'a geoshape with no `shape` field inside a facet is not supported: vega-lite 6.4.3 fits its projection to a dataset it never defines (data("child_main")), so there is no output to match')
   }
+  if (!top && isObj(enc) && enc.facet != null) fail(at('encoding.facet'), 'a wrapped facet (the `facet` channel) nested in another composition is not supported yet')
 }
 
 /**

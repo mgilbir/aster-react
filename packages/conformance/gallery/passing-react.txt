@@ -639,6 +639,8 @@ vl/trellis_bar
 vl/trellis_bar_histogram
 vl/trellis_bar_histogram_label_rotated
 vl/trellis_bar_no_header
+vl/trellis_barley
+vl/trellis_barley_independent
 vl/trellis_barley_layer_median
 vl/trellis_column_year
 vl/trellis_cross_sort
@@ -648,6 +650,7 @@ vl/trellis_row_column
 vl/trellis_scatter
 vl/trellis_scatter_binned_row
 vl/trellis_scatter_small
+vl/trellis_selections
 vl/trellis_stacked_bar
 vl/vconcat_flatten
 vl/vconcat_weather
