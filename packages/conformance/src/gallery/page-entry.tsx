@@ -40,7 +40,7 @@ const HOST_H = 400
 const TIMER_RUN_MS = 1300
 const isTimeDriven = (vg: Record<string, unknown>): boolean => /\btimer\b|\bnow\(\)/.test(JSON.stringify(vg))
 
-interface In { id: string; kind: 'vega' | 'vl'; spec: Record<string, unknown> }
+interface In { id: string; kind: 'vega' | 'vl'; spec: Record<string, unknown>; /** virtual ms to run before the frame (default: TIMER_RUN_MS for a time-driven spec, else the first frame) */ liveMs?: number; /** virtual instants (ms, ascending, within liveMs) at which a `click` is dispatched on the rendered svg, in both engines */ clicks?: number[]; /** an inline spec: a failure reports its first diffs whole (both sides), not just the first */ inline?: boolean }
 interface Out { status: 'pass' | 'fail' | 'error' | 'unverifiable'; reason?: string; first?: string; firstContent?: string; diffs?: number }
 
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e)).slice(0, 240)
@@ -75,10 +75,30 @@ function makeHost(): HTMLDivElement {
 }
 
 /**
+ * Move the virtual clock to `ms`, dispatching a `click` on the svg `target()` finds at each instant of `clicks` on the way (both engines
+ * get the same native events at the same virtual times; whatever a delivery starts settles before time moves on).
+ */
+async function advanceWithClicks(ms: number, clicks: readonly number[], target: () => Element | null): Promise<void> {
+  let at = 0
+  for (const t of clicks) {
+    if (t > ms) break
+    await clock.advance(t - at)
+    at = t
+    const el = target()
+    if (el) {
+      const r = el.getBoundingClientRect()
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, clientX: r.left + 5, clientY: r.top + 5 }))
+    }
+    await clock.advance(0)
+  }
+  await clock.advance(ms - at)
+}
+
+/**
  * `liveMs`: run the view on the virtual clock for that long (its timers tick, `now()` moves) before the frame is taken; 0 is the first
  * frame. Vega draws from the gallery's seeded stream (`setRandom`, and a seeded `Math.random`).
  */
-async function oracleSvg(vg: Record<string, unknown>, liveMs = 0): Promise<string> {
+async function oracleSvg(vg: Record<string, unknown>, liveMs = 0, clicks: readonly number[] = []): Promise<string> {
   return withOracleRandom(async () => {
     const host = makeHost()
     const loader = vega.loader({ baseURL: BASE })
@@ -87,7 +107,7 @@ async function oracleSvg(vg: Record<string, unknown>, liveMs = 0): Promise<strin
     try {
       view.initialize(host)
       await view.runAsync()
-      if (liveMs > 0) { await clock.advance(liveMs); await view.runAsync() }
+      if (liveMs > 0) { await advanceWithClicks(liveMs, clicks, () => host.querySelector('svg')); await view.runAsync() }
       view.finalize()
       return await view.toSVG()
     } finally {
@@ -126,7 +146,7 @@ const sizeProps = (vg: Record<string, unknown>): Record<string, unknown> => {
   return props
 }
 
-async function chartSvg(vg: Record<string, unknown>, liveMs = 0): Promise<string> {
+async function chartSvg(vg: Record<string, unknown>, liveMs = 0, clicks: readonly number[] = []): Promise<string> {
   // (one seeded stream for the life of the chart, as vega's `setRandom` is for the life of the page)
   const stream = seededRandom()
   const host = makeHost()
@@ -150,7 +170,7 @@ async function chartSvg(vg: Record<string, unknown>, liveMs = 0): Promise<string
     })
     if (liveMs === 0) return first
     // the same virtual run as the oracle's: the chart mounted at virtual time 0, its markup settled there, and now the clock moves
-    await clock.advance(liveMs)
+    await advanceWithClicks(liveMs, clicks, () => host.querySelector('svg'))
     return await settleMarkup(host, () => error)
   } finally {
     root.unmount()
@@ -213,10 +233,10 @@ async function oracleOf(g: In): Promise<{ oracle: ReturnType<typeof canonicalize
     // (vega changes the rows of an inline dataset in place -- a force layout rewrites its link rows -- so each run, and
     // the chart that follows, gets its own copy of the spec)
     const fresh = (): Record<string, unknown> => JSON.parse(JSON.stringify(vgOracle)) as Record<string, unknown>
-    const liveMs = isTimeDriven(vgOracle) ? TIMER_RUN_MS : 0
-    oracle = canonicalizeSvg(await oracleSvg(fresh(), liveMs))
+    const liveMs = g.liveMs ?? (isTimeDriven(vgOracle) ? TIMER_RUN_MS : 0)
+    oracle = canonicalizeSvg(await oracleSvg(fresh(), liveMs, g.clicks))
     await checkStray()
-    const again = diffCanonical(oracle, canonicalizeSvg(await oracleSvg(fresh(), liveMs)))
+    const again = diffCanonical(oracle, canonicalizeSvg(await oracleSvg(fresh(), liveMs, g.clicks)))
     await checkStray()
     if (again.length) return { status: 'unverifiable', reason: 'oracle-nondeterministic', first: again[0]!.slice(0, 240) }
   } catch (e) {
@@ -237,7 +257,7 @@ async function oracleOf(g: In): Promise<{ oracle: ReturnType<typeof canonicalize
     stray.length = 0
     // an app hands <Chart> the spec it has; a Vega-Lite spec goes through the registered compiler (normalizeChartSpec is what <Chart> itself calls)
     const vg = g.kind === 'vl' ? (normalizeChartSpec(JSON.parse(JSON.stringify(g.spec)) as never) as Record<string, unknown>) : JSON.parse(JSON.stringify(g.spec)) as Record<string, unknown>
-    ours = await chartSvg(vg, isTimeDriven(vg) ? TIMER_RUN_MS : 0)
+    ours = await chartSvg(vg, g.liveMs ?? (isTimeDriven(vg) ? TIMER_RUN_MS : 0), g.clicks)
     await checkStray()
   } catch (e) {
     return { status: 'error', reason: 'chart-threw', first: msg(e) }
@@ -245,6 +265,7 @@ async function oracleOf(g: In): Promise<{ oracle: ReturnType<typeof canonicalize
   try {
     const diffs = diffCanonical(oracle, canonicalizeSvg(ours))
     if (diffs.length === 0) return { status: 'pass' }
+    if (g.inline) return { status: 'fail', first: diffs.slice(0, 4).join(' ## '), diffs: diffs.length }
     return { status: 'fail', ...summarizeDiffs(diffs) }
   } catch (e) {
     return { status: 'error', reason: 'chart-svg-not-canonicalizable', first: msg(e) }

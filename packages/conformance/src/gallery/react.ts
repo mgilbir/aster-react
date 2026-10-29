@@ -40,6 +40,12 @@ export async function runReact(specs: GallerySpec[], onResult: (o: Outcome) => v
   return runPage(specs, '__runGallery', (g) => ({ id: g.id, kind: g.kind, spec: readSpec(g) }), onResult, workers, hooks)
 }
 
+/** A Vega spec given inline (not a gallery file): `liveMs` is how much virtual time it runs before the frame is compared. */
+export interface InlineSpec { id: string; spec: Record<string, unknown>; liveMs?: number; clicks?: number[] }
+export async function runInline(specs: InlineSpec[], onResult: (o: Outcome) => void = () => undefined, workers = 3): Promise<Outcome[]> {
+  return runPage(specs, '__runGallery', (g) => ({ id: g.id, kind: 'vega', spec: g.spec, inline: true, ...(g.liveMs !== undefined ? { liveMs: g.liveMs } : {}), ...(g.clicks ? { clicks: g.clicks } : {}) }), onResult, workers)
+}
+
 /** The spec-swap path: ONE mounted <Chart> goes from spec A to spec B; `vsOracle` also says whether it equals vega's B. */
 export interface SwapPair { id: string; a: GallerySpec; b: GallerySpec }
 export type SwapOutcome = Outcome & { vsOracle?: boolean }
