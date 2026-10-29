@@ -11,7 +11,7 @@ import { renameDataRefs, renameExpr, renameFragment } from './embed.js'
 import { optimizeData } from './optimize.js'
 import { VLCompileError, pushAll, signalSafe, flatField, datumRef as dref, genName, safeKey, splitAccessPath, validExpr } from './names.js'
 import { validateGeoUnit, validateSpec } from './validate.js'
-import { predicateExpr, domainValueExpr, paramLeaves, isDateTime as isDateTimeValue } from './predicate.js'
+import { predicateExpr, domainValueExpr, paramLeaves, dateTimeToExpr, isDateTime as isDateTimeValue } from './predicate.js'
 import {
   SELECTION_ID, STORE, assembleSelectionScaleDomain, assembleTopLevelSelectionSignals, assembleUnitSelectionData,
   assembleFacetSignals, assembleUnitSelectionMarks, assembleUnitSelectionSignals, interactiveLegendSelections, parseUnitSelections, requiresSelectionId, selectionPredicate,
@@ -404,6 +404,7 @@ function inferOrient(spec: VLSpec, mark: string, markRaw: unknown, fields: Field
   const cfgType = isObject(cfg?.[mark]) ? (cfg![mark] as Record<string, unknown>) : undefined
   const cfgMark = isObject(cfg?.mark) ? (cfg!.mark as Record<string, unknown>) : undefined
   const specified = ((isObject(markRaw) ? (markRaw.orient as string | undefined) : undefined)
+    ?? (styleConfigProp(spec, mark, 'orient') as string | undefined)
     ?? (cfgType?.orient as string | undefined)
     ?? (cfgMark?.orient as string | undefined))
   const x2 = has('x2')
@@ -1327,6 +1328,9 @@ const compatibleScaleTypes = (a: string, b: string): boolean => {
   return ca === cb || (ca === 'ordinal-position' && cb === 'time') || (cb === 'ordinal-position' && ca === 'time')
 }
 
+/** What a point scale's band padding would be, were its scale a band (a layer that brings none): the unit's mark rule. */
+const POINT_BAND_PADDING = new WeakMap<ScaleSpec, { inner: number; outer: number | undefined }>()
+
 function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
   const byName = new Map<string, ScaleSpec[]>()
   for (const ls of perLayer) {
@@ -1377,6 +1381,29 @@ function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
     // an explicitly specified type wins; otherwise the higher precedence one does (band over point)
     const typed = list.find((s) => EXPLICIT_SCALE_PROPS.get(s)?.has('type'))
     merged.type = (typed ?? (list.some((s) => s.type === 'band') && list.every((s) => s.type === 'band' || s.type === 'point') ? list.find((s) => s.type === 'band')! : first)).type
+    // a point scale that becomes a band: the first layer's inner padding wins (implicit values: the first), the outer follows it
+    // (properties.ts paddingOuter reads the merged paddingInner, so every layer gets `inner / 2` unless one asks for the config's outer)
+    // an explicit `padding` makes the other layers' default paddingInner / paddingOuter none (properties.ts: `paddingValue !== undefined`)
+    {
+      const withPadding = list.find((s) => EXPLICIT_SCALE_PROPS.get(s)?.has('padding') && s.padding !== undefined)
+      const innerOuterExplicit = list.some((s) => EXPLICIT_SCALE_PROPS.get(s)?.has('paddingInner') || EXPLICIT_SCALE_PROPS.get(s)?.has('paddingOuter'))
+      if (merged.type === 'band' && withPadding && !innerOuterExplicit) {
+        merged.padding = withPadding.padding
+        delete merged.paddingInner
+        delete merged.paddingOuter
+        explicitMerged.add('padding')
+      }
+    }
+    if (merged.type === 'band' && first.type === 'point') {
+      const explicitPad = list.some((s) => EXPLICIT_SCALE_PROPS.get(s)?.has('paddingInner') || EXPLICIT_SCALE_PROPS.get(s)?.has('padding') || EXPLICIT_SCALE_PROPS.get(s)?.has('paddingOuter'))
+      const firstInner = list.map((s) => (s.type === 'point' ? POINT_BAND_PADDING.get(s)?.inner : (s.paddingInner as number | undefined)))[0]
+      if (!explicitPad && typeof firstInner === 'number') {
+        merged.paddingInner = firstInner
+        const cfgOuter = list.map((s) => POINT_BAND_PADDING.get(s)?.outer).find((o) => o !== undefined)
+        merged.paddingOuter = cfgOuter ?? firstInner / 2
+        delete merged.padding
+      }
+    }
     // properties that the merged type cannot honour (a point scale's padding on a band scale) are dropped
     for (const k of Object.keys(merged)) {
       if (k !== 'name' && k !== 'type' && k !== 'domain' && k !== 'range' && !scalePropApplies(name, merged.type, k)) delete (merged as Record<string, unknown>)[k]
@@ -2780,12 +2807,12 @@ function parseChannel(channel: string, def: unknown): FieldDef | null {
   }
   if (raw.field === undefined && raw.datum !== undefined) {
     const d = raw.datum
-    if (isObject(d) || raw.type === 'temporal') throw new VLCompileError(`encoding.${channel}.datum: temporal/DateTime datums are not supported`)
+    // (channeldef.ts initDatumDef: the type of a datum without one follows its value)
     return {
       channel,
       field: datumSentinel(channel),
       source: '',
-      type: typeof raw.type === 'string' ? normalizeType(raw.type, raw, channel) : typeof d === 'number' ? 'quantitative' : 'nominal',
+      type: typeof raw.type === 'string' ? normalizeType(raw.type, raw, channel) : typeof d === 'number' ? 'quantitative' : isDateTimeValue(d) ? 'temporal' : 'nominal',
       datum: d,
       datumOnly: true,
       stack: false,
@@ -2860,6 +2887,24 @@ function datumSentinel(channel: string): string {
   return `${DATUM_PREFIX}${channel}`
 }
 
+/**
+ * valueref.ts valueRefForFieldOrDatumDef: the reference a datum is. A DateTime is the expression that builds the date, a signal or an
+ * expression stays one, anything else is the value.
+ */
+function datumValueRef(datum: unknown): Record<string, unknown> {
+  if (isDateTimeValue(datum)) return { signal: dateTimeToExpr(datum as Record<string, unknown>) }
+  if (isObject(datum) && typeof datum.signal === 'string') return { signal: datum.signal }
+  if (isObject(datum) && typeof datum.expr === 'string') return { signal: datum.expr }
+  return { value: datum }
+}
+
+/** scale/domain.ts convertDomainIfItIsDateTime for a datum: the domain a datum alone gives its scale. */
+function datumDomain(def: FieldDef): unknown {
+  // (mapDomainToDataSignal: a time is a signal that gives the domain as a one-row data set)
+  if (def.type === 'temporal' || def.timeUnit) return { signal: `{data: ${domainValueExpr(def.datum, def.type, def.timeUnit)}}` }
+  return [def.datum]
+}
+
 /** Replace every `{scale, field: <datum sentinel>}` in an encode entry with `{scale, value: datum}` (in place). */
 function patchDatumRefs(node: unknown, datums: Map<string, unknown>): void {
   if (Array.isArray(node)) { for (const x of node) patchDatumRefs(x, datums); return }
@@ -2867,7 +2912,7 @@ function patchDatumRefs(node: unknown, datums: Map<string, unknown>): void {
   if (typeof node.field === 'string' && node.field.startsWith(DATUM_PREFIX)) {
     const ch = node.field.slice(DATUM_PREFIX.length)
     delete node.field
-    node.value = datums.get(ch)
+    Object.assign(node, datumValueRef(datums.get(ch)))
     return
   }
   for (const v of Object.values(node)) if (v !== null && typeof v === 'object') patchDatumRefs(v, datums)
@@ -2891,21 +2936,19 @@ function checkConstChannels(mark: string, encoding: Record<string, unknown>, fil
     const d = encoding[ch]
     if (!isObject(d) || (d.field === undefined && d.datum === undefined)) continue
     if (encoding.color !== undefined) throw new VLCompileError(`encoding.${ch} together with encoding.color is not supported`)
-    if (filled !== undefined && (ch === 'fill') !== filled) {
+    // (a `scale: null` field is read as it is - no colour machinery is involved, so the mark's filledness does not matter)
+    if (filled !== undefined && (ch === 'fill') !== filled && d.scale !== null) {
       throw new VLCompileError(`encoding.${ch} on a ${filled ? 'filled' : 'stroked'} "${mark}" mark is not supported; use encoding.color or set mark.filled`)
     }
   }
-  const pointLike = ['point', 'circle', 'square', 'text', 'rule', 'line', 'trail'].includes(mark)
   for (const [ch, def] of Object.entries(encoding)) {
     if (!isObject(def) || def.field !== undefined) continue
     const isDatum = def.datum !== undefined
     const isValue = def.value !== undefined && def.condition === undefined
-    if (isDatum && !['x', 'y', 'x2', 'y2', 'color', 'fill', 'stroke', ...GEO_POSITION_CHANNELS].includes(ch)) {
+    if (isDatum && !['x', 'y', 'x2', 'y2', 'xOffset', 'yOffset', 'color', 'fill', 'stroke', ...GEO_POSITION_CHANNELS].includes(ch)) {
       throw new VLCompileError(`encoding.${ch}.datum is not supported (datum works on x, y, x2, y2, longitude, latitude, color, fill and stroke)`)
     }
-    if ((isDatum || isValue) && ['x', 'y', 'x2', 'y2'].includes(ch) && !pointLike) {
-      throw new VLCompileError(`encoding.${ch}: a constant ${isDatum ? 'datum' : 'value'} position is not supported on the "${mark}" mark`)
-    }
+
   }
 }
 
@@ -3205,7 +3248,8 @@ const isTimeScaleType = (t: string) => t === 'time' || t === 'utc'
 // --- titles ------------------------------------------------------------------
 
 export function channelTitle(def: FieldDef): unknown {
-  if (def.datumOnly) return undefined
+  // (a datum has no default title; its own, if it has one, is the guide's)
+  if (def.datumOnly) return def.title
   if (def.title !== undefined) return def.title
   if (def.autoTitle !== undefined) return def.autoTitle
   if (def.aggregate === 'count') return 'Count of Records'
@@ -3607,7 +3651,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   const generatingEnd = lastUser != null && GENERATING.has(lastUserType ?? '')
     ? !(
         fields.some((f) => f.aggregate) ||
-        (measure != null && isStacked(measure, mark, orient, fields)) ||
+        (measure != null && isStacked(measure, mark, orient, allFields)) ||
         (mark === 'arc' && thetaDef != null)
       )
     : false
@@ -3860,7 +3904,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
       }))
     }
   }
-  const stackAfterAggregate = stackable && measure != null && measure.aggregate != null && measure.type === 'quantitative' && !measure.bin && isStacked(measure, mark, orient, fields)
+  const stackAfterAggregate = stackable && measure != null && measure.aggregate != null && measure.type === 'quantitative' && !measure.bin && isStacked(measure, mark, orient, allFields)
 
   // arcs run their own aggregate+stack law (thetaStackInfo) — the generic
   // block would aggregate after the stack and mis-group
@@ -3930,7 +3974,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
         pipeline.push({ type: 'formula', expr: argValueExpr(f), as: n })
       }
     }
-  } else if (stackable && measure && measure.type === 'quantitative' && !measure.bin && isStacked(measure, mark, orient, fields)) {
+  } else if (stackable && measure && measure.type === 'quantitative' && !measure.bin && isStacked(measure, mark, orient, allFields)) {
     // stacked bar/area: continuous dimensions impute gaps; discrete ones filter
     pushAll(pipeline, channelImpute)
     pushAll(pipeline, stackTransforms(measure))
@@ -4281,6 +4325,12 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       }
     } else if (type === 'point') {
       sc.padding = (def.scale?.padding as number | undefined) ?? dc.cfg.pointPadding
+      // (scale/properties.ts parseUnitScaleProperty rates every property with the MERGED scale type: when a layer next to this one
+      // makes the scale a band, this layer's paddingInner is its mark's band rule)
+      POINT_BAND_PADDING.set(sc, {
+        inner: (dc.cfg.bandPaddingInner ?? (mark === 'bar' ? dc.cfg.barBandPaddingInner : mark === 'tick' ? dc.cfg.tickBandPaddingInner : dc.cfg.rectBandPaddingInner)) as number,
+        outer: dc.cfg.bandPaddingOuter as number | undefined,
+      })
     }
     if (def.scale) {
       for (const [k, v] of Object.entries(def.scale)) {
@@ -4599,8 +4649,8 @@ function schemeRange(scheme: unknown): Record<string, unknown> {
 
 /** A domain over the values of several defs: one data reference each, or a literal list for a datum. */
 function unionDomain(defs: FieldDef[], dataName: string): unknown {
-  const entries = defs.map((d) => (d.datumOnly ? [d.datum] : { data: dataName, field: aggFieldName(d) }))
-  if (entries.every((e) => !Array.isArray(e))) return { data: dataName, fields: (entries as Array<{ field: string }>).map((e) => e.field) }
+  const entries = defs.map((d) => (d.datumOnly ? datumDomain(d) : { data: dataName, field: aggFieldName(d) }))
+  if (entries.every((e) => !Array.isArray(e) && 'field' in (e as object))) return { data: dataName, fields: (entries as Array<{ field: string }>).map((e) => e.field) }
   return { fields: entries }
 }
 
@@ -4615,7 +4665,7 @@ function zeroDefaultFor(mark: string, channel: string, orient: string): boolean 
 }
 
 function positionalDomain(def: FieldDef, dataName: string, mark: string, orient: string, fields: FieldDef[] | undefined, dc: DomainCtx): unknown {
-  if (def.datumOnly) return [def.datum]
+  if (def.datumOnly) return datumDomain(def)
   const unagg = unaggregatedDomain(def, dataName, dc.cfg)
   if (unagg !== undefined) return unagg
   if (def.bin && binDiscrete(def)) return sortedDomain(def, dataName, dc)
@@ -4774,7 +4824,7 @@ function zeroForCustomDomain(explicit: unknown): boolean {
  * index. `sort: null` leaves the domain in data order.
  */
 function sortedDomain(def: FieldDef, dataName: string, dc: DomainCtx): unknown {
-  if (def.datumOnly) return [def.datum]
+  if (def.datumOnly) return datumDomain(def)
   const explicit = explicitDomainOf(def)
   if (explicit !== undefined) return explicitDomainValue(explicit, def)
   const field = aggFieldName(def)
@@ -5402,7 +5452,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   let markOpacity = isObject(spec.mark) ? (spec.mark.opacity as number | undefined) : undefined
   const xDef = fields.find((f) => f.channel === 'x')
   const yDef = fields.find((f) => f.channel === 'y')
-  const colorDef = fields.find((f) => f.channel === 'color' && f.field && !f.fromCondition)
+  // A `fill` / `stroke` field that is read as it is (`scale: null`) and is the paint the mark does NOT use (a stroked point with a
+  // fill field) is just that one property: the mark keeps painting its own (color.ts colorOrFillOrStroke; the channels are independent)
+  const filledMark = markIsFilled(spec, mark)
+  const crossPaint = fields.filter((f) => f.noScale && f.paint !== undefined && f.paint !== (filledMark ? 'fill' : 'stroke'))
+  const colorDef = fields.find((f) => f.channel === 'color' && f.field && !f.fromCondition && !crossPaint.includes(f))
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
   const shapeDef = fields.find((f) => f.channel === 'shape' && f.field && f.type !== 'geojson')
   const opacityDef = fields.find((f) => f.channel === 'opacity' && f.field)
@@ -5676,8 +5730,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // position-rect.ts rectPosition: a channel with a secondary channel (x + x2, y + y2) that is not binned is a plain range
     // between the two refs (rangePosition), whatever the scale: the band-size rules above are for single-channel positions
     for (const [pos, def] of [['x', xDef], ['y', yDef]] as const) {
-      const def2 = fields.find((f) => f.channel === `${pos}2` && f.field && !f.datumOnly)
-      if (!def || !def2 || def.bin || def.datumOnly) continue
+      const def2 = fields.find((f) => f.channel === `${pos}2` && f.field)
+      if (!def || !def2 || def.bin) continue
       const band = positionalScaleType(mark, def) === 'band' ? { band: 0.5 } : {}
       for (const k of [pos, `${pos}c`, `${pos}2`, pos === 'x' ? 'width' : 'height']) delete update[k]
       update[pos] = { scale: pos, field: aggFieldName(def), ...band }
@@ -5815,18 +5869,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       update.stroke = tf
     }
     update.ariaRoleDescription = { value: 'tick' }
-    // Tick orientation is the opposite of bar/line/area's measure inference
-    // (vega-lite mark/init.ts): a quantitative x over a discrete y is a
-    // VERTICAL tick (its size axis is y and its thickness axis is x).
-    const xIsMeasure = xDef != null && xDef.type === 'quantitative' && !xDef.bin
-    const yIsMeasure = yDef != null && yDef.type === 'quantitative' && !yDef.bin
-    const tickOrient = ((tickDef?.orient as string | undefined) ?? (cfgType?.orient as string | undefined) ?? (cfgMark?.orient as string | undefined))
-      ?? (xIsMeasure && !yIsMeasure ? 'vertical'
-        : !xIsMeasure && yIsMeasure ? 'horizontal'
-        : xIsMeasure && yIsMeasure ? 'vertical'
-        : xDef?.type === 'temporal' && yDef?.type !== 'temporal' ? 'vertical'
-        : yDef?.type === 'temporal' && xDef?.type !== 'temporal' ? 'horizontal'
-        : 'vertical')
+    // Tick orientation is the opposite of bar/line/area's measure inference (mark/init.ts orient, which inferOrient ports): a
+    // quantitative x over a discrete y is a VERTICAL tick (its size axis is y and its thickness axis is x). A tick whose
+    // orientation cannot be told is a vertical one (tick.ts reads `orient === 'horizontal'`).
+    const tickOrient = orient
     const sizeAxis = tickOrient === 'horizontal' ? 'x' : 'y'
     const sizeField = sizeAxis === 'x' ? xDef : yDef
     const sizeVg = sizeAxis === 'x' ? 'width' : 'height'
@@ -6158,7 +6204,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
     for (const ch of ['x', 'y', 'x2', 'y2'] as const) {
       const d = enc[ch]
-      if (isObject(d) && d.value !== undefined && d.field === undefined && d.datum === undefined) update[ch] = { value: d.value }
+      if (isObject(d) && d.value !== undefined && d.field === undefined && d.datum === undefined) {
+        // (tick.ts: the thickness axis of a tick is positioned by its centre, `xc` / `yc`)
+        const thickness = mark === 'tick' && ch === (orient === 'horizontal' ? 'y' : 'x')
+        update[thickness ? `${ch}c` : ch] = { value: d.value }
+      }
     }
   }
   // (a map unit's positions come from its geopoint output, never from a default)
@@ -6208,6 +6258,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   ]) {
     const v = passProp(p)
     if (v !== undefined && update[p] === undefined) update[p] = { value: v }
+  }
+  // (base.ts markDefProperties: every Vega mark property the mark def sets is the mark's own, an expression as a signal; the text ones
+  // are the mark def's alone - a config value reaches Vega through config.style)
+  for (const p of ['font', 'fontStyle', 'fontWeight', 'dir', 'ellipsis', 'limit', 'lineBreak', 'lineHeight', 'startAngle', 'endAngle', 'tension', 'strokeOffset', 'strokeDashOffset']) {
+    const v = markDefP?.[p]
+    if (v !== undefined && update[p] === undefined) update[p] = isObject(v) && typeof v.signal === 'string' ? { signal: v.signal } : { value: v }
   }
   // a link: markDef.href is the mark's href, and any href (mark, config or channel) makes the cursor a pointer
   if (markDefP?.href !== undefined && update.href === undefined) update.href = { value: markDefP.href }
@@ -6361,6 +6417,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   if (markSortSpec) markSpec.sort = markSortSpec
 
   // a `scale: null` channel reads its field as it is: no scale in the reference
+  for (const f of crossPaint) update[f.paint!] = { field: aggFieldName(f) }
   for (const f of fields) {
     if (!f.noScale) continue
     const scaleName = f.channel === 'fill' || f.channel === 'stroke' ? 'color' : f.channel
@@ -6533,7 +6590,24 @@ function usesBinMid(spec: VLSpec, def: FieldDef | undefined, mark: string, field
 function markConfigProp(spec: VLSpec, mark: string, prop: string): unknown {
   const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
   const ofType = isObject(cfg[mark]) ? (cfg[mark] as Record<string, unknown>)[prop] : undefined
-  return ofType ?? (isObject(cfg.mark) ? (cfg.mark as Record<string, unknown>)[prop] : undefined)
+  return styleConfigProp(spec, mark, prop) ?? ofType ?? (isObject(cfg.mark) ? (cfg.mark as Record<string, unknown>)[prop] : undefined)
+}
+
+/**
+ * common.ts getMarkStyleConfig: the value a named style gives a mark property. The styles of a mark are its type, then
+ * `mark.style`; a later one wins. It comes before the mark-type and the mark config (getMarkConfig).
+ */
+function styleConfigProp(spec: VLSpec, mark: string, prop: string): unknown {
+  const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+  const styles = isObject(cfg.style) ? (cfg.style as Record<string, unknown>) : undefined
+  if (!styles) return undefined
+  const names = [mark, ...(isObject(spec.mark) ? ([] as unknown[]).concat(spec.mark.style ?? []) : [])]
+  let value: unknown
+  for (const n of names) {
+    const st = typeof n === 'string' ? styles[n] : undefined
+    if (isObject(st) && st[prop] !== undefined) value = st[prop]
+  }
+  return value
 }
 
 const RECT_BASED_MARKS = new Set(['rect', 'bar', 'image', 'arc', 'tick'])

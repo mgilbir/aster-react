@@ -97,6 +97,7 @@ vl/area_gradient
 vl/area_horizon
 vl/area_invalid_null
 vl/area_overlay
+vl/area_overlay_with_y2
 vl/area_params
 vl/area_temperature_range
 vl/area_vertical
@@ -155,6 +156,7 @@ vl/bar_grouped_facet_independent_scale_fixed_width
 vl/bar_grouped_fixed_width
 vl/bar_grouped_horizontal
 vl/bar_grouped_label
+vl/bar_grouped_repeated
 vl/bar_grouped_stacked
 vl/bar_grouped_step_for_offset
 vl/bar_grouped_step_for_position
@@ -339,6 +341,7 @@ vl/layer_bar_line
 vl/layer_bar_line_union
 vl/layer_bar_month
 vl/layer_bar_tick_binned_time_band_position
+vl/layer_bar_tick_datum_grouped
 vl/layer_boxplot_circle
 vl/layer_candlestick
 vl/layer_circle_independent_color
@@ -348,9 +351,11 @@ vl/layer_dual_axis
 vl/layer_falkensee
 vl/layer_histogram
 vl/layer_histogram_global_mean
+vl/layer_likert
 vl/layer_line_co2_concentration
 vl/layer_line_color_rule
 vl/layer_line_datum_rule
+vl/layer_line_datum_rule_datetime
 vl/layer_line_errorband_pre_aggregated
 vl/layer_line_mean_point_raw
 vl/layer_line_rolling_mean_point_raw
@@ -436,6 +441,7 @@ vl/line_timestamp_domain
 vl/line_timeunit_transform
 vl/lookup
 vl/nested_concat_align
+vl/parallel_coordinate
 vl/param_expr
 vl/param_search_input
 vl/point_1d
@@ -485,6 +491,7 @@ vl/rect_lasagna
 vl/rect_mosaic_labelled
 vl/rect_mosaic_labelled_with_offset
 vl/rect_mosaic_simple
+vl/rect_params
 vl/repeat_child_layer
 vl/repeat_histogram
 vl/repeat_histogram_autosize
@@ -496,6 +503,7 @@ vl/repeat_splom
 vl/repeat_splom_cars
 vl/rule_color_mean
 vl/rule_extent
+vl/rule_params
 vl/selection_bind_cylyr
 vl/selection_bind_origin
 vl/selection_brush_timeunit
@@ -576,6 +584,7 @@ vl/stacked_bar_v
 vl/stacked_bar_v_ascending
 vl/stacked_bar_weather
 vl/stocks-2009-layered-line-point
+vl/ternary
 vl/test_aggregate_nested
 vl/test_field_with_spaces
 vl/test_invalid_break_paths_show_path_domains
