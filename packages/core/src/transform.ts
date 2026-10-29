@@ -8,6 +8,7 @@ import type { ExpressionRuntime } from './expression.js'
 import { SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './registry.js'
 import { isArray } from './util.js'
 import { densityGrid, placeContours } from './raster-grid.js'
+import { tickStep } from './arr.js'
 import { activeMeter, boundedCount } from './limits.js'
 import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec, windowRows } from './transform-agg.js'
 import {
@@ -597,16 +598,6 @@ function graticuleRows(t: Record<string, unknown>): Row[] {
 // marching squares -> coordinate post-transform. Ported to match the oracle.
 // ---------------------------------------------------------------------------
 
-function d3TickStep(start: number, stop: number, count: number): number {
-  const step0 = Math.abs(stop - start) / Math.max(0, count)
-  let step1 = Math.pow(10, Math.floor(Math.log(step0) / Math.LN10))
-  const error = step0 / step1
-  if (error >= Math.sqrt(50)) step1 *= 10
-  else if (error >= Math.sqrt(10)) step1 *= 5
-  else if (error >= Math.sqrt(2)) step1 *= 2
-  return stop < start ? -step1 : step1
-}
-
 /** vega Contour `quantize(k, nice, zero)` -> threshold generator. */
 export function contourQuantize(k: number, nice: boolean, zero: boolean): (values: Float32Array | number[]) => number[] {
   return (values) => {
@@ -627,7 +618,7 @@ export function contourQuantize(k: number, nice: boolean, zero: boolean): (value
     const start = zero ? Math.min(mnv, 0) : mnv
     const stop = mxv
     const span = stop - start
-    const step = nice ? d3TickStep(start, stop, k) : span / (k + 1)
+    const step = nice ? tickStep(start, stop, k) : span / (k + 1)
     return d3Range(start + step, stop, step)
   }
 }
