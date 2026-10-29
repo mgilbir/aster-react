@@ -918,12 +918,13 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       if (!d2) continue
       const sc = perLayerScales[i]?.find((s) => s.name === main)
       if (!sc) continue
-      const d = sc.domain as { data?: string; field?: string; fields?: unknown } | undefined
+      const d = sc.domain as { data?: string; field?: string; fields?: unknown; sort?: unknown } | undefined
       if (d && typeof d === 'object' && !Array.isArray(d) && typeof d.data === 'string') {
         const fieldList = Array.isArray(d.fields) ? [...d.fields as string[]] : [d.field as string]
         // (the secondary channel's own field - its aggregate / time unit applied)
         if (!fieldList.includes(aggFieldName(d2))) fieldList.push(aggFieldName(d2))
-        sc.domain = { data: d.data, fields: fieldList }
+        // (the secondary channel's domain is sorted as the primary's is: domain.ts domainSort)
+        sc.domain = { data: d.data, fields: fieldList, ...(d.sort !== undefined ? { sort: d.sort } : {}) }
       }
     }
   })
@@ -4334,7 +4335,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       name: channel,
       type,
       domain: def2 && !def2.bin && !def.stack
-        ? unionDomain([def, def2], dataName)
+        ? unionPositionalDomain(def, def2, dataName, mark, orient, fields, dc)
         : positionalDomain(def, dataName, mark, orient, fields, dc),
       range: effRange,
     }
@@ -4741,6 +4742,20 @@ function unionDomain(defs: FieldDef[], dataName: string): unknown {
   const entries = defs.map((d) => (d.datumOnly ? datumDomain(d) : { data: dataName, field: aggFieldName(d) }))
   if (entries.every((e) => !Array.isArray(e) && 'field' in (e as object))) return { data: dataName, fields: (entries as Array<{ field: string }>).map((e) => e.field) }
   return { fields: entries }
+}
+
+/**
+ * scale/domain.ts parseDomainForChannel: the domain of a position with a secondary channel is the union of the two channels' domains
+ * (mergeDomains). A discrete position's is sorted (domainSort), and so is the secondary's, which has no sort of its own.
+ */
+function unionPositionalDomain(def: FieldDef, def2: FieldDef, dataName: string, mark: string, orient: string, fields: FieldDef[], dc: DomainCtx): unknown {
+  const plain = unionDomain([def, def2], dataName)
+  if (def.datumOnly || def2.datumOnly || !isDiscreteType(def.type)) return plain
+  const first = positionalDomain(def, dataName, mark, orient, fields, dc)
+  // (only the default ascending sort is unioned here: a sort by a field reads the raw rows, which the secondary channel does not)
+  if (!isDataRef(first) || typeof first.field !== 'string' || first.sort !== true) return plain
+  // (the secondary channel has no sort of its own: domain.ts domainSort reads the channel's own field def)
+  return mergeDomains([first, { data: dataName, field: aggFieldName(def2) }])
 }
 
 function zeroDefaultFor(mark: string, channel: string, orient: string): boolean {

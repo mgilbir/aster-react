@@ -770,6 +770,13 @@ const GROUPS: Record<string, Case[]> = {
     ['faceted points on a map by longitude and latitude', { data: { values: [{ g: 'a', lon: 10, lat: 20 }, { g: 'a', lon: 30, lat: 40 }, { g: 'b', lon: -20, lat: 10 }] }, projection: { type: 'mercator' }, mark: 'circle', width: 160, height: 100, encoding: { longitude: q('lon'), latitude: q('lat'), column: n('g') } }],
     ['a text mark with a font and a font style', { data: DATA, mark: { type: 'text', font: 'Verdana', fontStyle: 'italic', fontWeight: 700, fontSize: 13, dx: 4 }, encoding: { x: q('x'), y: q('y'), text: n('c') } }],
   ],
+  // optimizers.ts MergeBins + MergeIdenticalNodes: layers under one parent transform read one pipeline (bar_heatlane)
+  'layers under a parent transform read one dataset (bar_heatlane)': [
+    ['two layers over a parent bin, aggregate and bin', { data: BOX, height: 150, width: 400, transform: [{ bin: true, field: 'v', as: ['bin_v_start', 'bin_v_end'] }, { aggregate: [{ op: 'count', as: 'count' }], groupby: ['bin_v_start', 'bin_v_end'] }, { bin: true, field: 'count', as: ['bin_count_start', 'bin_count_end'] }, { calculate: '-datum.bin_count_end/2', as: 'y2' }, { calculate: 'datum.bin_count_end/2', as: 'y' }, { joinaggregate: [{ field: 'bin_count_end', op: 'max', as: 'max_bin_count_end' }] }], encoding: { x: { field: 'bin_v_start', type: 'quantitative', title: 'v', axis: { grid: false } }, x2: { field: 'bin_v_end' }, y: { field: 'y', axis: null }, y2: { field: 'y2' } }, layer: [{ mark: { type: 'bar', xOffset: 2, x2Offset: -2, cornerRadius: 3 }, encoding: { color: { field: 'max_bin_count_end', type: 'ordinal', title: 'count', scale: { scheme: 'lighttealblue' } } } }, { mark: { type: 'bar', xOffset: 2, x2Offset: -2, yOffset: -3, y2Offset: 3 }, encoding: { color: { field: 'bin_count_end', type: 'ordinal', title: 'count' } } }] }],
+    // scale/domain.ts parseDomainForChannel: a discrete position's domain, widened by its secondary channel's, stays sorted
+    ['a unit with a discrete y and a y2', { data: DATA, mark: 'bar', encoding: { x: q('x'), x2: { field: 'v' }, y: { field: 'c', type: 'ordinal' }, y2: { field: 'g' } } }],
+    ['two layers over a parent bin', { data: BOX, transform: [{ bin: { maxbins: 5 }, field: 'v', as: ['b0', 'b1'] }], encoding: { x: { field: 'b0', type: 'quantitative' }, x2: { field: 'b1' }, y: { aggregate: 'count' } }, layer: [{ mark: 'bar' }, { mark: 'rule', encoding: { color: { value: 'red' } } }] }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({
@@ -828,6 +835,22 @@ for (const [group, cases] of Object.entries(GROUPS)) {
     for (const [name, spec] of cases) it(name, () => check(spec), 30_000)
   })
 }
+
+/** The domains of the scales, with the names of the datasets they read left out (how the datasets are named and cut is not what is compared). */
+const DOMAIN_SHAPES = (vg: any): unknown =>
+  (vg.scales ?? []).map((s: any) => {
+    const strip = (d: any): any => (Array.isArray(d) ? d.map(strip) : d && typeof d === 'object' ? Object.fromEntries(Object.entries(d).map(([k, v]) => [k, k === 'data' && typeof v === 'string' ? '*' : strip(v)])) : d)
+    return [s.name, strip(s.domain)]
+  })
+describe('@aster/vl == vega-lite: the domains of the scales (the datasets read by name, the references once, the sorts)', () => {
+  for (const [name, spec] of GROUPS['layers under a parent transform read one dataset (bar_heatlane)']!) {
+    it(name, () => {
+      const oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, any> } }).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      expect(plain(DOMAIN_SHAPES(ours))).toEqual(plain(DOMAIN_SHAPES(oracle)))
+    })
+  }
+})
 
 // util.ts accessPathWithDatum: a nested field is flattened with every prefix guarded, so a row that lacks `o` is a missing value
 describe('@aster/vl == vega-lite: the guarded flatten expression of a nested field (test_subobject_missing)', () => {

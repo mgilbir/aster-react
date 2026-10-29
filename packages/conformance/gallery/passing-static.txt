@@ -166,6 +166,7 @@ vl/bar_grouped_step_for_position
 vl/bar_grouped_thin
 vl/bar_grouped_thin_minBandSize
 vl/bar_grouped_timeunit_yearweek
+vl/bar_heatlane
 vl/bar_invalid_color_show
 vl/bar_invalid_color_show_override
 vl/bar_layered_transparent
