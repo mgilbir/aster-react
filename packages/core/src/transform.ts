@@ -6,7 +6,6 @@
 import type { CompiledTransform, SortSpec } from './types.js'
 import type { ExpressionRuntime } from './expression.js'
 import { SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './registry.js'
-import { nominalTextWidth } from './text-metrics.js'
 import { isArray } from './util.js'
 import { activeMeter, boundedCount, meterRows } from './limits.js'
 import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec, windowRows } from './transform-agg.js'
@@ -726,8 +725,6 @@ function density2D(
   } else if (ry > 0) {
     blurY(n, m, values0, values1, ry); blurY(n, m, values1, values0, ry); blurY(n, m, values0, values1, ry); values = values1
   }
-  let sum = 0
-  for (let i = 0; i < values.length; i++) sum += values[i]!
   const s = Math.pow(2, -2 * k)
   for (let i = 0; i < values.length; i++) values[i]! *= s
   return { values, scale: 1 << k, width: n, height: m, x1: ox, y1: oy }

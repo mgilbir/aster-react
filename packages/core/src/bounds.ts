@@ -9,7 +9,7 @@
  */
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
-import { computeAreaPath, computeLinePath, symbolPath, symbolPathExact, trailPath } from './render.js'
+import { computeAreaPath, computeLinePath, symbolPathExact, trailPath } from './render.js'
 import { itemTextWidth } from './text-metrics.js'
 import { SHAPE_BOUNDS } from './registry.js'
 import { imageBox } from './image-box.js'

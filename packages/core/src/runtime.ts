@@ -20,10 +20,8 @@ const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
 import { ITEM_MARK, geoRegistry, requireGeo } from './registry.js'
 import { locale } from './locale.js'
 import type {
-  GuideEncodeBlock,
   CompiledAxis,
   CompiledChart,
-  CompiledData,
   CompiledLegend,
   CompiledMark,
   CompiledProjection,
@@ -44,10 +42,10 @@ import type {
   VgSpec,
 } from './types.js'
 import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
-import { tickFormat, scaleGradientStops, tickValues, tickCount, validTicks } from './scale.js'
+import { tickFormat, scaleGradientStops, tickCount, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, maxOf, pushAll, lerp, scopedSignalName, TUPLE_ID } from './util.js'
+import { dict, ownGet, pushAll, lerp, scopedSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
@@ -1530,7 +1528,6 @@ function computeGuidePadding(
   let maxX = width
   let minY = 0
   let maxY = height
-  const EPS = 1e-9
 
   const grow = (b: Bounds, group: SceneGroup): void => {
     if (b.empty()) return

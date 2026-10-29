@@ -858,22 +858,20 @@ function loessFit(data: Row[], x: Get, y: Get, bandwidth: number): number[][] {
     }
   }
 
-  // generate smoothed output points, averaging repeated x values
+  // one output point per distinct x (a run of equal x values is averaged online); the y shift is applied once the run is closed
   const out: number[][] = []
   let cnt = 0
-  let prev: number[] = []
   for (let i = 0; i < n; ++i) {
     const v = xv[i]! + ux
-    if (prev[0] === v) {
-      prev[1] = prev[1]! + (yhat[i]! - prev[1]!) / ++cnt
+    const last = out[out.length - 1]
+    if (last !== undefined && last[0] === v) {
+      last[1] = last[1]! + (yhat[i]! - last[1]!) / ++cnt
     } else {
       cnt = 0
-      prev[1] = prev[1]! + uy
-      prev = [v, yhat[i]!]
-      out.push(prev)
+      out.push([v, yhat[i]!])
     }
   }
-  prev[1] = prev[1]! + uy
+  for (const point of out) point[1] = point[1]! + uy
   return out
 }
 

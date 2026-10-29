@@ -14,7 +14,6 @@
  */
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
 import { dateTimeToExpr, dateTimeToTimestamp, isDateTime } from './predicate.js'
-import { VLCompileError } from './names.js'
 import { animationSignals, animationTopLevelSignals, animationTupleSignal } from './animation.js'
 
 type Obj = Record<string, unknown>
@@ -554,7 +553,6 @@ function unitNameOf(unit: SelUnit, escape = true): string {
   return name
 }
 
-const datumOf = (c: SelCmpt): string => (c.nearest ? '(item().isVoronoi ? datum.datum : datum)' : 'datum')
 
 function signalIndex(signals: Signal[], name: string | undefined): number {
   return signals.findIndex((s) => s.name === name)
@@ -893,13 +891,12 @@ function geoIntervalSignals(unit: SelUnit, c: SelCmpt, channels: SelProjection[]
 }
 
 // translate.ts / zoom.ts
-function panZoomFn(kind: 'pan' | 'zoom', unit: SelUnit, c: SelCmpt, channel: string, boundScales: boolean): { fn: string; arg: string } {
+function panZoomFn(kind: 'pan' | 'zoom', unit: SelUnit, channel: string, boundScales: boolean): { fn: string; arg: string } {
   const type = unit.scaleType(channel)
   const hasScale = type !== undefined
   const cap = kind === 'pan' ? 'pan' : 'zoom'
   const fn = !boundScales || !hasScale ? `${cap}Linear` : type === 'log' ? `${cap}Log` : type === 'symlog' ? `${cap}Symlog` : type === 'pow' ? `${cap}Pow` : `${cap}Linear`
   const arg = !boundScales ? '' : type === 'pow' ? `, ${unit.scaleProp(channel, 'exponent') ?? 1}` : type === 'symlog' ? `, ${unit.scaleProp(channel, 'constant') ?? 1}` : ''
-  void c
   return { fn, arg }
 }
 
@@ -917,7 +914,7 @@ function translateOnDelta(unit: SelUnit, c: SelCmpt, proj: SelProjection, size: 
   const sign = !boundScales ? '' : channel === 'x' ? (reversed ? '' : '-') : reversed ? '-' : ''
   const extent = `${anchor}.extent_${channel}`
   const offset = `${sign}${delta}.${channel} / ${boundScales ? sizeSg : `span(${extent})`}`
-  const { fn, arg } = panZoomFn('pan', unit, c, channel, boundScales)
+  const { fn, arg } = panZoomFn('pan', unit, channel, boundScales)
   const update = `${fn}(${extent}, ${offset}${arg})`
   ;(signal.on as Obj[]).push({ events: { signal: delta }, update: boundScales ? update : `clampRange(${update}, 0, ${sizeSg})` })
 }
@@ -955,7 +952,7 @@ function zoomOnDelta(unit: SelUnit, c: SelCmpt, proj: SelProjection, size: 'widt
   const base = boundScales ? domainOf(unit, channel) : (signal.name as string)
   const delta = name + ZOOM_DELTA
   const anchor = `${name}${ZOOM_ANCHOR}.${channel}`
-  const { fn, arg } = panZoomFn('zoom', unit, c, channel, boundScales)
+  const { fn, arg } = panZoomFn('zoom', unit, channel, boundScales)
   const update = `${fn}(${base}, ${anchor}, ${delta}${arg})`
   ;(signal.on as Obj[]).push({ events: { signal: delta }, update: boundScales ? update : `clampRange(${update}, 0, ${sizeSg})` })
 }
