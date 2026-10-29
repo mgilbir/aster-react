@@ -310,15 +310,82 @@ group('@aster/vl == vega-lite: errorbar and errorband, parts, options, tooltips 
 })
 
 
+
+// --- path overlays and stack order: the other rewrites of composite.ts ------------------------------------------------------------
+
+group('path overlays: line, area, trail and rule with points or a line', (add) => {
+  const POINTS: Array<[string, unknown]> = [['point true', true], ['point transparent', 'transparent'], ['point object', { size: 80, color: 'red' }], ['point false', false]]
+  for (const mark of ['line', 'area', 'trail', 'rule'] as const) {
+    for (const [pn, point] of POINTS) {
+      add(`${mark} with ${pn}`, { data: DATA, mark: { type: mark, point }, encoding: mark === 'rule' ? { x: q('x'), y: q('v'), y2: { field: 'w' } } : { x: q('x'), y: q('v', { aggregate: 'mean' }) } })
+      add(`${mark} with ${pn}, coloured`, { data: DATA, mark: { type: mark, point }, encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }), color: n('g') } })
+    }
+  }
+  for (const [ln, line] of [['line true', true], ['line object', { strokeWidth: 3, color: 'black' }], ['line false', false]] as const) {
+    add(`area with ${ln}`, { data: DATA, mark: { type: 'area', line }, encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }) } })
+    add(`area with ${ln} and a point, coloured and stacked`, { data: DATA, mark: { type: 'area', line, point: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }), color: n('g') } })
+    add(`area with ${ln}, horizontal`, { data: DATA, mark: { type: 'area', line, orient: 'horizontal' }, encoding: { y: q('x'), x: q('v', { aggregate: 'sum' }), color: n('g') } })
+  }
+  add('area with a mark opacity and a line', { data: DATA, mark: { type: 'area', line: true, opacity: 0.4 }, encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }) } })
+  add('area with a mark fillOpacity and a point', { data: DATA, mark: { type: 'area', point: true, fillOpacity: 0.5 }, encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }) } })
+  add('config.line.point', { data: DATA, config: { line: { point: true } }, mark: 'line', encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }) } })
+  add('config.line.point object', { data: DATA, config: { line: { point: { size: 100 } } }, mark: 'line', encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }) } })
+  add('config.area.line and config.area.point', { data: DATA, config: { area: { line: { strokeWidth: 4 }, point: true } }, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }) } })
+  add('a shape channel adds points to a line', { data: DATA, mark: 'line', encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }), shape: n('g') } })
+  add('a line with a point and a selection', { data: DATA, params: [{ name: 'sel', select: 'interval' }], mark: { type: 'line', point: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }) } })
+  add('a ranged area with a line and points', { data: DATA, mark: { type: 'area', line: true, point: true }, encoding: { x: q('x'), y: q('lo'), y2: { field: 'hi' } } })
+  add('a ranged horizontal area with a line', { data: DATA, mark: { type: 'area', line: true, orient: 'horizontal' }, encoding: { y: q('x'), x: q('lo'), x2: { field: 'hi' } } })
+  add('a line with a point and a clip, tooltip and interpolation', { data: DATA, mark: { type: 'line', point: true, clip: true, interpolate: 'monotone', tooltip: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }) } })
+  add('an area with a line and interpolation and tension', { data: DATA, mark: { type: 'area', line: true, interpolate: 'cardinal', tension: 0.5 }, encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }) } })
+  add('a line with a point in a layer sharing the encoding', { data: DATA, encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }) }, layer: [{ mark: { type: 'line', point: true } }, { mark: { type: 'rule', color: 'red' } }] })
+  add('a line with a point in a layer, the layer coloured', { data: DATA, encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }), color: n('g') }, layer: [{ mark: { type: 'line', point: true } }, { mark: 'point' }] })
+  add('a line with a point in a layer, the layer sharing a field only', { data: DATA, encoding: { x: q('x') }, layer: [{ mark: { type: 'line', point: true }, encoding: { y: q('v', { aggregate: 'mean' }) } }] })
+  add('a line with a point faceted by a column', { data: DATA, mark: { type: 'line', point: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }), column: n('g') } })
+  add('a line with a point faceted by a row, with a size', { data: DATA, width: 200, mark: { type: 'line', point: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }), row: n('g') } })
+  add('a line with a point in an hconcat', { data: DATA, hconcat: [{ mark: { type: 'line', point: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }) } }, { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }] })
+  add('a line with a point in a facet spec', { data: DATA, facet: { column: n('g') }, spec: { mark: { type: 'line', point: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }) } } })
+  add('a normalized stacked area with a line', { data: DATA, mark: { type: 'area', line: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'sum', stack: 'normalize' }), color: n('g') } })
+  add('a centred stacked area with points', { data: DATA, mark: { type: 'area', point: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'sum', stack: 'center' }), color: n('g') } })
+  add('an unstacked area with a line', { data: DATA, mark: { type: 'area', line: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'sum', stack: null }), color: n('g') } })
+})
+
+group('stack order follows a colour domain', (add) => {
+  const ORDERS: Array<[string, unknown]> = [['a list', ['C', 'A', 'B']], ['a shorter list', ['B', 'A']], ['a list with an unknown value', ['Z', 'C', 'A', 'B']]]
+  for (const [on, domain] of ORDERS) {
+    add(`a stacked bar, ${on}`, { data: DATA, mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain } }) } })
+    add(`a horizontal stacked bar, ${on}`, { data: DATA, mark: 'bar', encoding: { y: n('g'), x: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain } }) } })
+    add(`a stacked bar with an explicit horizontal orient, ${on}`, { data: DATA, mark: { type: 'bar', orient: 'horizontal' }, encoding: { y: n('g'), x: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain } }) } })
+    add(`a stacked area, ${on}`, { data: DATA, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain } }) } })
+    add(`grouped bars with an x offset, ${on}`, { data: DATA, mark: 'bar', encoding: { x: n('g'), xOffset: n('c'), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain } }) } })
+    add(`grouped bars with a y offset, ${on}`, { data: DATA, mark: 'bar', encoding: { y: n('g'), yOffset: n('c'), x: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain } }) } })
+  }
+  add('a stacked bar with an order channel', { data: DATA, mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }), order: q('w', { aggregate: 'sum' }) } })
+  add('a stacked bar with a quantitative colour domain', { data: DATA, mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), color: q('x', { scale: { domain: [0, 5] } }) } })
+  add('a stacked bar with a sorted offset', { data: DATA, mark: 'bar', encoding: { x: n('g'), xOffset: n('c', { sort: 'descending' }), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } })
+  add('a stacked bar in a layer sharing the encoding', { data: DATA, encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) }, layer: [{ mark: 'bar' }, { mark: { type: 'text', dy: -4 }, encoding: { text: q('v', { aggregate: 'sum' }) } }] })
+  add('stacked bars in a layer, the domain on the second', { data: DATA, layer: [{ mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }) } }, { mark: 'bar', encoding: { x: n('g'), y: q('w', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['B', 'C', 'A'] } }) } }] })
+  add('a stacked bar in an hconcat', { data: DATA, hconcat: [{ mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } }, { mark: 'point', encoding: { x: q('x'), y: q('y' as string) } }] })
+  add('a stacked bar in a facet spec', { data: DATA, facet: { column: n('k') }, spec: { mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } } })
+  add('a stacked bar with a calculate before', { data: DATA, transform: [{ calculate: 'datum.v * 2', as: 'v2' }], mark: 'bar', encoding: { x: n('g'), y: q('v2', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } })
+  add('a normalized stacked bar', { data: DATA, mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum', stack: 'normalize' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } })
+})
+
 /**
  * Specs on which Aster and vega-lite differ today, so they are in no group above. They are compiled by the refactor guards (the compiled
  * Vega is pinned from before a rewrite) and not compared with vega-lite:
  *  - a composite mark inside a repeat: vega-lite substitutes the repeated field before it normalizes the mark; Aster normalizes first;
  *  - a composite mark over a nested field (`o.v`): vega-lite's own render has no data for it (an axis from 0 to 0);
  *  - errorbar over a binned channel: refused by Aster;
- *  - a boxplot whose parts are all switched off: vega-lite draws an empty 10 x 10 view, Aster draws the empty plot.
+ *  - a boxplot whose parts are all switched off: vega-lite draws an empty 10 x 10 view, Aster draws the empty plot;
+ *  - a config opacity: Aster repeats it in the mark's encode, vega-lite leaves it to the config's style (the render is the same);
+ *  - a named line with points: vega-lite names the line's mark after the unit (`lines_marks`), Aster after the layer;
+ *  - a stacked bar coloured by `fill` alone: vega-lite names the scale `fill`, Aster `color`.
  */
 export const ASTER_ONLY: Cases = [
+  ['a named line with points', { data: DATA, mark: { type: 'line', point: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }) }, name: 'lines' }],
+  ['area with config.area.opacity and a line', { data: DATA, config: { area: { line: true, opacity: 0.2 } }, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }) } }],
+  ['area with config.mark.opacity and points', { data: DATA, config: { area: { point: true }, mark: { opacity: 0.9 } }, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }) } }],
+  ['stacked bar with a fill domain', { data: DATA, mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), fill: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } }],
   ['boxplot with every part off', { data: DATA, mark: { type: 'boxplot', box: false, median: false, rule: false, outliers: false }, encoding: { x: n('c'), y: q('v') } }],
   ['boxplot over a nested field', { data: { values: DATA.values.map((d) => ({ ...d, o: { v: d.v } })) }, mark: 'boxplot', encoding: { x: n('c'), y: q('o.v') } }],
   ['errorbar over a nested field', { data: { values: DATA.values.map((d) => ({ ...d, o: { v: d.v } })) }, mark: 'errorbar', encoding: { x: n('c'), y: q('o.v') } }],

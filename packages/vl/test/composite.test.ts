@@ -74,3 +74,32 @@ describe('errorband (vega-lite compositemark/errorband.ts)', () => {
     expect(vg.marks[0].encode.update.opacity).toEqual({ value: 0.3 })
   })
 })
+
+// The messages a composite mark's refusals show are Aster's own text (the rewrite of composite marks must keep them).
+describe('composite marks refuse with their own messages', () => {
+  const q = (field: string, extra: Record<string, unknown> = {}) => ({ field, type: 'quantitative', ...extra })
+  const n = (field: string, extra: Record<string, unknown> = {}) => ({ field, type: 'nominal', ...extra })
+  const refusals: Array<[string, unknown, Record<string, unknown>, RegExp]> = [
+    ['a boxplot over two discrete axes', 'boxplot', { x: n('c'), y: n('g') }, /^\[aster\/vl\] boxplot needs a continuous x or y axis$/],
+    ['an errorbar over two discrete axes', 'errorbar', { x: n('c'), y: n('g') }, /^\[aster\/vl\] errorbar needs a continuous x or y axis$/],
+    ['an errorband with x2 and y2', 'errorband', { x: q('x'), x2: { field: 'v' }, y: q('v'), y2: { field: 'w' } }, /^\[aster\/vl\] errorband cannot have both x2 and y2$/],
+    ['an errorbar with y2 over a nominal y', 'errorbar', { x: n('c'), y: n('g'), y2: { field: 'v' } }, /^\[aster\/vl\] both y and y2 have to be quantitative in errorbar$/],
+    ['an errorbar with x2 over a nominal x', 'errorbar', { x: n('c'), x2: { field: 'v' } }, /^\[aster\/vl\] both x and x2 have to be quantitative in errorbar$/],
+    ['an errorbar with y2 and an error', 'errorbar', { x: n('c'), y: q('v'), y2: { field: 'w' }, yError: { field: 'x' } }, /^\[aster\/vl\] errorbar cannot be both aggregated-upper-lower and aggregated-error$/],
+    ['an errorbar with xError2 alone', 'errorbar', { y: n('c'), x: q('v'), xError2: { field: 'x' } }, /^\[aster\/vl\] errorbar cannot have xError2 without xError$/],
+    ['an errorbar with yError2 alone', 'errorbar', { x: n('c'), y: q('v'), yError2: { field: 'x' } }, /^\[aster\/vl\] errorbar cannot have yError2 without yError$/],
+    ['an errorbar with xError and yError', 'errorbar', { x: q('x'), xError: { field: 'v' }, y: q('v'), yError: { field: 'w' } }, /^\[aster\/vl\] errorbar cannot have both xError and yError$/],
+    ['an errorbar with xError over a nominal x', 'errorbar', { x: n('c'), y: q('v'), xError: { field: 'x' } }, /^\[aster\/vl\] x, xError and xError2 have to be quantitative$/],
+    ['an errorbar with yError over a nominal y', 'errorbar', { y: n('c'), x: q('v'), yError: { field: 'x' } }, /^\[aster\/vl\] y, yError and yError2 have to be quantitative$/],
+    ['a boxplot over a binned dimension', 'boxplot', { x: q('x', { bin: true }), y: q('v') }, /^\[aster\/vl\] boxplot over a binned x channel is not supported$/],
+    ['a boxplot with an argmax colour', 'boxplot', { x: n('c'), y: q('v'), color: n('g', { aggregate: { argmax: 'v' } }) }, /^\[aster\/vl\] boxplot: argmin\/argmax on color is not supported$/],
+    ['a boxplot with a negative extent', { type: 'boxplot', extent: -1 }, { x: n('c'), y: q('v') }, /^\[aster\/vl\] mark\.extent must be a non-negative number or "min-max", got -1$/],
+    ['a boxplot with no field on the continuous axis', 'boxplot', { x: n('c'), y: { aggregate: 'count', type: 'quantitative' } }, /^\[aster\/vl\] boxplot: the y channel needs a field$/],
+    ['a boxplot told its orient with no channel on it', { type: 'boxplot', orient: 'vertical' }, { x: n('c') }, /^\[aster\/vl\] boxplot: the y channel needs a field$/],
+  ]
+  for (const [name, mark, encoding, message] of refusals) {
+    it(name, () => {
+      expect(() => compileFrozen({ data: DATA, mark, encoding })).toThrow(message)
+    })
+  }
+})

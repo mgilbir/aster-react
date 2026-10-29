@@ -151,7 +151,7 @@ const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON
 
 /**
  * Replace every line, area, rule and trail with an overlay (points, or for an area a line too) by the layer of the mark and its
- * overlays over the same encoding: a stacked measure's `stack` goes to the overlays, `x2` / `y2` and `shape` stay off them.
+ * overlays over the same encoding: a stacked measure's `stack` goes to the overlays, `shape` stays off the mark.
  * `stackOf` answers the stack properties of a unit; `inherited` is the encoding a parent layer shares.
  */
 export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit: Obj) => StackProps | undefined, inherited: Obj = {}): unknown {
@@ -195,12 +195,11 @@ export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit
       encoding: omit(own === undefined ? {} : (own as Obj), ['shape']),
     },
   ]
-  // a stacked measure stacks the overlays alike; an overlay is not ranged (x2 / y2 would make it a rule)
+  // a stacked measure stacks the overlays alike
   const stack = stackOf({ ...node, encoding })
-  const stacked: Obj = stack
+  const shared: Obj = stack
     ? { ...encoding, [stack.fieldChannel]: { ...(encoding[stack.fieldChannel] as Obj), ...(stack.offset ? { stack: stack.offset } : {}) } }
     : encoding
-  const shared = omit(stacked, ['y2', 'x2'])
   // what the parent layer would give the overlay anyway is not repeated in it
   const ownOfOverlay = omit(shared, Object.keys(inherited).filter((k) => sameJson(inherited[k], shared[k])))
   if (line) {
