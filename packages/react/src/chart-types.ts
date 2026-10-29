@@ -190,6 +190,14 @@ export interface ChartProps {
    */
   urlPolicy?: ImageUrlPolicy
   /**
+   * The source of random numbers of this chart (`RuntimeInput.random`, the per-chart counterpart of vega's `setRandom`): expression
+   * `random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`, the `sample` transform and the bootstrap `ci0` / `ci1` draw from
+   * it, in vega's order and count. Pass one seeded generator for the life of the chart (memoize it) and the chart is a function of its
+   * inputs: a transform or signal whose inputs did not change keeps its numbers (a resize, an unrelated signal), one whose inputs
+   * changed draws the next ones from the stream, as vega's dataflow does. Without one, expressions use `Math.random`.
+   */
+  random?: () => number
+  /**
    * Where recovered errors go (`RuntimeInput.logger`, vega's logger shape): an expression that
    * throws while the chart is evaluated or while a `signal.on` event is handled is reported here
    * and the chart carries on, like vega. Default: the console. Only its presence is a dependency;

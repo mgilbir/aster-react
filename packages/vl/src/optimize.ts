@@ -3,7 +3,9 @@
  *
  *  - MergeBins: the bins of one field and parameters over the same rows are computed once (one extent, one bins signal, named after the
  *    LAST of them: `MergeBins` pops the last promotable bin and merges the others into it, `renameSignal(other, this)`);
- *  - MergeIdenticalNodes: datasets that derive the same way from the same source are one dataset.
+ *  - MergeIdenticalNodes: datasets that derive the same way from the same source are one dataset, and so is the part of their
+ *    pipelines they share: vega-lite's dataflow is a TREE, a prefix of transforms common to several datasets is one node whose output
+ *    they all read (so a `ci0` / `ci1` aggregate, or a `sample`, that two marks draw from is computed once, and the marks agree on it).
  *
  * Views are compiled one by one here, so each one declares its own copy of what its siblings declare; this pass is what makes the
  * copies one. It only merges what is the same by construction (equal pipelines over equal sources), never what merely looks alike.
@@ -167,6 +169,78 @@ function mergeIdenticalDatasets(out: Obj, generated: (name: string) => boolean):
   dedupeDomainRefs(out, new Set(renames.values()))
 }
 
+/** A transform whose effect is not just its output rows (it declares a signal): it stays with the dataset that declared it. */
+const writesSignal = (t: Obj): boolean => typeof t.signal === 'string'
+
+/**
+ * optimizers.ts MergeIdenticalNodes below the root: datasets derived from one source whose pipelines start with the same transforms
+ * share them. The shared prefix becomes a dataset of its own, and each of them reads it and keeps only what comes after (a dataset
+ * left with nothing after it IS the prefix, and is renamed to it).
+ */
+function mergeCommonPrefixes(out: Obj, generated: (name: string) => boolean): void {
+  const data = (out.data as Obj[] | undefined) ?? []
+  const names = new Set(data.map((d) => d.name as string))
+  let counter = 0
+  let prefix = ''
+  for (const d of data) {
+    const m = isDerived(d, generated) ? /^(.*?)(\d+)$/.exec(d.name as string) : null
+    if (m) { prefix = m[1]!; counter = Math.max(counter, Number(m[2]) + 1) }
+  }
+  if (prefix === '') return
+  const fresh = (): string => {
+    while (names.has(`${prefix}${counter}`)) counter++
+    names.add(`${prefix}${counter}`)
+    return `${prefix}${counter}`
+  }
+  const renames = new Map<string, string>()
+  const added: Array<{ before: Obj; made: Obj }> = []
+  const keyOf = (d: Obj): string[] => ((d.transform as Obj[] | undefined) ?? []).map(transformKey)
+  const work = [...data]
+  for (let w = 0; w < work.length; w++) {
+    const parent = work[w]!
+    const children = data.concat(added.map((a) => a.made)).filter((d) => isDerived(d, generated) && d.source === parent.name && !renames.has(d.name as string))
+    const groups = new Map<string, Obj[]>()
+    for (const c of children) {
+      const ts = (c.transform as Obj[] | undefined) ?? []
+      if (ts.length === 0 || writesSignal(ts[0]!)) continue
+      const first = transformKey(ts[0]!)
+      groups.set(first, [...(groups.get(first) ?? []), c])
+    }
+    for (const group of groups.values()) {
+      if (group.length < 2) continue
+      const keys = group.map(keyOf)
+      const ts0 = group[0]!.transform as Obj[]
+      let len = 0
+      while (len < ts0.length && !writesSignal(ts0[len]!) && keys.every((k) => k[len] === keys[0]![len])) len++
+      if (len === 0) continue
+      const made: Obj = { name: fresh(), source: parent.name, transform: ts0.slice(0, len) }
+      added.push({ before: group[0]!, made })
+      work.push(made)
+      for (const c of group) {
+        const rest = (c.transform as Obj[]).slice(len)
+        if (rest.length === 0) renames.set(c.name as string, made.name as string)
+        else { c.source = made.name; c.transform = rest }
+      }
+    }
+  }
+  if (added.length === 0) return
+  // the shared dataset goes where the first of its readers was, so a pipeline is declared before the datasets that read it
+  const result: Obj[] = []
+  const placed = new Set<Obj>()
+  const place = (made: Obj): void => {
+    if (placed.has(made)) return
+    placed.add(made)
+    result.push(made)
+  }
+  for (const d of data) {
+    for (const a of added) if (a.before === d) place(a.made)
+    if (!renames.has(d.name as string)) result.push(d)
+  }
+  out.data = result
+  renameDatasetRefs(out, renames)
+  dedupeDomainRefs(out, new Set(renames.values()))
+}
+
 /**
  * Once two datasets are one, the references a scale's domain made to each (`{data: "data_0", field: "y"}` and `{data: "data_1", field:
  * "y"}`) are the same reference: vega-lite never had two (scale/domain.ts mergeDomains keeps each distinct reference once, and
@@ -228,6 +302,7 @@ export function optimizeData(out: Obj, generated: (name: string) => boolean): vo
   if (!Array.isArray(out.data) || out.data.length < 2) return
   mergeBins(out)
   mergeIdenticalDatasets(out, generated)
+  mergeCommonPrefixes(out, generated)
   // (only the datasets that lay out facet headers: vega-lite keeps the pipeline datasets its scales requested even when a cell's own
   // scales end up reading the cell's copies)
   removeUnusedDatasets(out, (name) => /(?:^|_)(?:row|column|facet)_domain(?:_row|_column)?$/.test(name))

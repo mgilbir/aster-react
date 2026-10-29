@@ -38,6 +38,16 @@ export interface RuntimeInput {
   logger?: import('./logger.js').Logger
   /** Host text measurement (custom fonts, non-browser hosts). */
   textMetrics?: import('./text-metrics.js').TextMetricsProvider
+  /**
+   * The source of random numbers for this evaluation: a function returning numbers in [0, 1), the per-view
+   * counterpart of vega's `setRandom`. Expression `random()`, `sampleNormal` / `sampleLogNormal` /
+   * `sampleUniform`, the `sample` transform and the bootstrap `ci0` / `ci1` aggregate ops draw from it in
+   * vega's order and count, so a host that gives Aster and vega the same seeded stream gets the same
+   * numbers. Not set, expression functions use `Math.random` and `sample` / `ci` the engine's own seeded stream.
+   * (The engine itself never touches a global: determinism is by injection. A function cannot cross a worker
+   * boundary, so the worker protocol does not carry it.)
+   */
+  random?: () => number
   /** Named datasets. Overrides or fulfills spec data references by name. */
   data?: Record<string, unknown[]>
   /** Static width/height overrides for `{signal: 'width'|'height'}` and spec size. */

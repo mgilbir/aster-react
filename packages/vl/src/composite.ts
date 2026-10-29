@@ -584,12 +584,19 @@ const kindOf = (spec: Obj): 'boxplot' | 'errorbar' | 'errorband' | undefined => 
   return t === 'boxplot' || t === 'errorbar' || t === 'errorband' ? t : undefined
 }
 
+/** Whether a layer tree has a composite mark (errorbar / errorband / boxplot) among its units. */
+function containsComposite(node: unknown): boolean {
+  if (Array.isArray(node)) return node.some(containsComposite)
+  if (!isObj(node)) return false
+  return kindOf(node) !== undefined || containsComposite(node.layer)
+}
+
 /**
  * Replace every errorbar / errorband unit in the spec tree by its layer of simple marks. A unit under a layer shares the
  * layer's encoding (`inherited`), which its dimensions and groupings come from.
  */
-export function normalizeComposites(node: unknown, userConfig: Obj | undefined, inherited: Obj = {}): unknown {
-  if (Array.isArray(node)) return node.map((n) => normalizeComposites(n, userConfig, inherited))
+export function normalizeComposites(node: unknown, userConfig: Obj | undefined, inherited: Obj = {}, pushed = false): unknown {
+  if (Array.isArray(node)) return node.map((n) => normalizeComposites(n, userConfig, inherited, pushed))
   if (!isObj(node)) return node
   const config: Obj = {
     errorbar: { ...DEFAULT_CONFIG.errorbar, ...(userConfig?.errorbar ?? {}) },
@@ -610,7 +617,16 @@ export function normalizeComposites(node: unknown, userConfig: Obj | undefined, 
     return kind === 'errorbar' ? normalizeErrorBar(spec, config) : normalizeErrorBand(spec, config)
   }
   const out: Obj = { ...node }
-  if (node.layer !== undefined) out.layer = normalizeComposites(node.layer, userConfig, mergeEncoding(inherited, node.encoding))
+  if (node.layer !== undefined) {
+    // normalize/core.ts mapLayer: the layer's encoding is merged into each of its units and the layer keeps none. A layer with a
+    // composite mark in it is normalized that way, so a unit beside the composite gets the merged encoding as its own and does not
+    // inherit it a second time (the composite's parts already took its time units and aggregates out of their channels).
+    const drop = pushed || containsComposite(node.layer)
+    out.layer = normalizeComposites(node.layer, userConfig, mergeEncoding(inherited, node.encoding), drop)
+    if (drop) delete out.encoding
+  } else if (pushed && node.mark !== undefined && Object.keys(inherited).length > 0) {
+    out.encoding = mergeEncoding(inherited, node.encoding)
+  }
   for (const k of ['hconcat', 'vconcat', 'concat']) if (node[k] !== undefined) out[k] = normalizeComposites(node[k], userConfig, {})
   if (node.spec !== undefined) out.spec = normalizeComposites(node.spec, userConfig, {})
   return out

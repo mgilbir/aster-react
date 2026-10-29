@@ -78,12 +78,27 @@ Every spec ends in exactly one of:
 * `fail` - they differ. Printed with the first diff (`first`) and the first diff that says WHAT differs (`->`: for a structure
   diff the oracle/aster line pair).
 * `error` - Aster (or `@aster/vl`) threw, or its SVG could not be canonicalised.
-* `unverifiable` - the **oracle** cannot be compared: it is not a function of its inputs (it renders differently when rendered
-  twice: `random()`, bootstrap / sample transforms, timers) or vega itself fails (vega's heatmap needs a canvas on Node). Always
-  listed with the reason; never counted as a pass; capped by a ceiling. On the React path a spec with a `timer` stream or `now()`
-  gets one more measurement: its oracle view is left running for 1.3 s and the document compared with the first frame
-  (`oracle-time-dependent`). `<Chart>` mounts such a view live, so its markup keeps changing (`watch` redraws every 10 ms and used
-  to hang the settle loop); if the oracle's own document moves with time there is no frame to compare against.
+* `unverifiable` - the **oracle** cannot be compared: it is not a function of its inputs even with the gate's determinism (below), or
+  vega itself fails. Always listed with the reason; never counted as a pass; capped by a ceiling. Today that is only the specs whose
+  oracle needs a canvas Node lacks (`oracle-needs-canvas`: heatmap, label, wordcloud transforms); on the React path, in Chromium,
+  nothing is unverifiable.
+
+### Determinism: the same randomness and the same clock for both engines
+
+A spec that draws random numbers or reads the time is compared exactly, not skipped.
+
+* **Randomness.** Every render gets a fresh copy of ONE seeded generator (`src/gallery/seeded.ts`, mulberry32). Vega gets it through
+  `setRandom` (what `random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`, the `sample` transform, the bootstrap `ci0` /
+  `ci1`, `randomKDE` and the wordcloud layout read) and as `Math.random` (the call sites that read it directly); the stale
+  Box-Muller pair vega keeps in a module variable is drained first. Aster gets it as `RuntimeInput.random` / `<Chart random>`.
+  Aster consumes it in vega's order and count, so any difference left is a real divergence
+  (`scripts/differential-random.test.mts` pins the order and count against live vega).
+* **Time, static path.** `Date.now` and `performance.now` are frozen for both engines; the first frame is compared.
+* **Time, React path.** The page's clock is replaceable (`src/gallery/virtual-clock.ts`, installed before d3-timer binds
+  `requestAnimationFrame`). A spec with a `timer` stream or `now()` runs on a virtual clock for BOTH engines: they start together at
+  virtual time 0, the same callbacks fire in the same order as it advances, and the frame at 1300 virtual ms is compared (an
+  oracle that differs between two such renders is `oracle-nondeterministic`). Waits on real I/O (vega's image-ready poll) stay on the
+  real clock.
 
 Nothing is tolerated silently: all `fail` and `error` lines are printed. The runs are deterministic (four consecutive runs gave
 identical outcomes for all 720 specs on both paths).

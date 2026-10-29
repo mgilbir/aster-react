@@ -269,8 +269,9 @@ function extentIndex(arr: ArrayLike<unknown>, f: Get): [number, number] {
 /** Shared per-application environment: the seeded random stream. */
 export interface AggEnv { random: () => number }
 
-export function newEnv(): AggEnv {
-  return { random: lcg(SEED) }
+/** `random`: the host's injected source ({@link ExpressionRuntime.random}); without one, the engine's seeded stream. */
+export function newEnv(random?: () => number): AggEnv {
+  return { random: random ?? lcg(SEED) }
 }
 
 /** The tuples of one aggregation cell, with memoised statistics. */
@@ -788,8 +789,8 @@ function crossCells(a: Aggregator): void {
 }
 
 /** vega `aggregate`: one output tuple per group, in order of first appearance. */
-export function aggregateRows(rows: readonly Row[], p: AggregateParams): Row[] {
-  const a = newAggregator(p, newEnv())
+export function aggregateRows(rows: readonly Row[], p: AggregateParams, random?: () => number): Row[] {
+  const a = newAggregator(p, newEnv(random))
   for (let i = 0; i < rows.length; i++) {
     addTuple(a, rows[i]!)
     if ((i & 255) === 255) meterTick('aggregate', 256)
@@ -799,11 +800,11 @@ export function aggregateRows(rows: readonly Row[], p: AggregateParams): Row[] {
 }
 
 /** vega `joinaggregate`: each tuple gains the aggregate values of its group. */
-export function joinAggregateRows(rows: readonly Row[], p: AggregateParams): Row[] {
+export function joinAggregateRows(rows: readonly Row[], p: AggregateParams, random?: () => number): Row[] {
   const out = rows.map((r) => ({ ...r }))
   // vega's JoinAggregate declares no aggregate_params, drop or cross parameter:
   // they are not read, so exponential measures get no ratio (NaN), as upstream
-  const a = newAggregator({ groupby: p.groupby, fields: p.fields, ops: p.ops, as: p.as, key: p.key }, newEnv())
+  const a = newAggregator({ groupby: p.groupby, fields: p.fields, ops: p.ops, as: p.as, key: p.key }, newEnv(random))
   for (let i = 0; i < out.length; i++) {
     addTuple(a, out[i]!)
     if ((i & 255) === 255) meterTick('joinaggregate', 256)
@@ -1126,9 +1127,9 @@ function bisector(compare: Compare): { left: (a: Row[], x: Row) => number; right
 }
 
 /** vega `window`: running/sliding aggregates and rank ops, written onto copies in source order. */
-export function windowRows(rows: readonly Row[], p: WindowParams): Row[] {
+export function windowRows(rows: readonly Row[], p: WindowParams, random?: () => number): Row[] {
   const out = rows.map((r) => ({ ...r }))
-  const env = newEnv()
+  const env = newEnv(random)
   const sort = compareOf(p.sort) as Compare | null
   const cmp = sort
   const key = groupkey(fieldsOf(p.groupby))

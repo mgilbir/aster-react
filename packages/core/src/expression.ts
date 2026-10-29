@@ -80,6 +80,20 @@ export interface ExpressionRuntime {
    */
   containerSize?: () => [number | undefined, number | undefined]
   /**
+   * The view's source of random numbers: the counterpart of vega's `setRandom(random)`, but per view instead of
+   * global. `random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`, the `sample` transform and the
+   * bootstrap `ci0` / `ci1` aggregate ops all draw from it, one number per draw in vega's order. Absent, the
+   * expression functions draw from `Math.random` (as vega's default does) and the `sample` / `ci` ops from the
+   * engine's seeded stream.
+   */
+  random?: () => number
+  /**
+   * vega-functions `setdata(name, tuples)`: replace the rows of the named dataset's input (a dataset with no source) by `tuples`; the
+   * datasets that read it run again. Only a host that owns the datasets supplies it; without one `setdata` changes nothing.
+   * Returns 1, as vega does.
+   */
+  setdata?: (name: string, tuples: unknown) => number
+  /**
    * `intersect(box, {marktype, markname}, group)`: the items of the scene the view has drawn inside a box. Only a host that has a
    * scene while it runs event handlers (the signal event loop) supplies it; without one `intersect` finds nothing -- vega's root is
    * empty until its marks are built.
@@ -440,6 +454,9 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     regexp: (pattern: unknown, flags?: unknown) => guardedRegExp(String(pattern), flags == null ? undefined : String(flags)),
     // date-time
     now: () => Date.now(),
+    setdata: (name: unknown, tuples: unknown) => (runtime.setdata ? runtime.setdata(String(name), tuples) : 1),
+    // vega-functions codegen.js: `random() { return random(); }`, vega-statistics' (replaceable) source
+    random: () => (runtime.random ?? Math.random)(),
     datetime,
     utc: utcDatetime,
     time: (value: unknown) => D(value).getTime(),

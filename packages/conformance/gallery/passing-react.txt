@@ -4,6 +4,7 @@ vega/annual-temperature
 vega/arc-diagram
 vega/area-chart
 vega/bar-chart
+vega/bar-line-toggle
 vega/barley-trellis-plot
 vega/beeswarm-plot
 vega/binned-scatter-plot
@@ -12,6 +13,7 @@ vega/brushing-scatter-plots
 vega/budget-forecasts
 vega/calendar-view
 vega/circle-packing
+vega/clock
 vega/connected-scatter-plot
 vega/contour-plot
 vega/county-unemployment
@@ -19,10 +21,13 @@ vega/crossfilter-flights
 vega/density-heatmaps
 vega/distortion-comparison
 vega/donut-chart
+vega/donut-chart-labelled
 vega/dorling-cartogram
 vega/dot-plot
 vega/earthquakes
+vega/earthquakes-globe
 vega/edge-bundling
+vega/error-bars
 vega/falkensee-population
 vega/flight-passengers
 vega/force-directed-layout
@@ -32,6 +37,7 @@ vega/heatmap
 vega/histogram
 vega/histogram-null-values
 vega/horizon-graph
+vega/hypothetical-outcome-plots
 vega/interactive-legend
 vega/job-voyager
 vega/labeled-scatter-plot
@@ -42,7 +48,9 @@ vega/nested-bar-chart
 vega/overview-plus-detail
 vega/packed-bubble-chart
 vega/parallel-coordinates
+vega/pi-monte-carlo
 vega/pie-chart
+vega/platformer
 vega/population-pyramid
 vega/probability-density
 vega/projections
@@ -71,6 +79,7 @@ vega/u-district-cuisine
 vega/violin-plot
 vega/volcano-contours
 vega/warming-stripes
+vega/watch
 vega/weekly-temperature
 vega/wheat-and-wages
 vega/wheat-plot
@@ -81,6 +90,8 @@ vega/zoomable-circle-packing
 vega/zoomable-scatter-plot
 vega/zoomable-world-map
 vl/airport_connections
+vl/animated_gapminder
+vl/animated_hop
 vl/arc_color_mappings
 vl/arc_donut
 vl/arc_facet
@@ -266,7 +277,10 @@ vl/config_numberFormatType_tooltip
 vl/connected_scatterplot
 vl/dynamic_color_legend
 vl/embedded_csv
+vl/errorband_2d_horizontal_color_encoding
+vl/errorband_2d_vertical_borders
 vl/errorband_tooltip
+vl/errorbar_2d_vertical_ticks
 vl/errorbar_aggregate
 vl/errorbar_horizontal_aggregate
 vl/errorbar_tooltip
@@ -384,6 +398,8 @@ vl/layer_line_co2_concentration
 vl/layer_line_color_rule
 vl/layer_line_datum_rule
 vl/layer_line_datum_rule_datetime
+vl/layer_line_errorband_2d_horizontal_borders_strokedash
+vl/layer_line_errorband_ci
 vl/layer_line_errorband_pre_aggregated
 vl/layer_line_mean_point_raw
 vl/layer_line_rolling_mean_point_raw
@@ -393,11 +409,13 @@ vl/layer_overlay
 vl/layer_point_errorbar_1d_horizontal
 vl/layer_point_errorbar_1d_vertical
 vl/layer_point_errorbar_2d_horizontal
+vl/layer_point_errorbar_2d_horizontal_ci
 vl/layer_point_errorbar_2d_horizontal_color_encoding
 vl/layer_point_errorbar_2d_horizontal_custom_ticks
 vl/layer_point_errorbar_2d_horizontal_iqr
 vl/layer_point_errorbar_2d_horizontal_stdev
 vl/layer_point_errorbar_2d_vertical
+vl/layer_point_errorbar_ci
 vl/layer_point_errorbar_pre_aggregated_asymmetric_error
 vl/layer_point_errorbar_pre_aggregated_symmetric_error
 vl/layer_point_errorbar_pre_aggregated_upper_lower
@@ -507,6 +525,8 @@ vl/point_invalid_color
 vl/point_invalid_size_show
 vl/point_log
 vl/point_no_axis_domain_grid
+vl/point_offset_random
+vl/point_ordinal_bin_offset_random
 vl/point_ordinal_color
 vl/point_overlap
 vl/point_params
@@ -536,6 +556,7 @@ vl/repeat_splom_cars
 vl/rule_color_mean
 vl/rule_extent
 vl/rule_params
+vl/sample_scatterplot
 vl/scatter_image
 vl/selection_bind_cylyr
 vl/selection_bind_origin

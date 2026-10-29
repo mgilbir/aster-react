@@ -9,6 +9,16 @@ import { BASE_URL, fileFetch } from './lib.js'
 export const stray: string[] = []
 process.on('uncaughtException', (e) => { stray.push(e instanceof Error ? e.message : String(e)) })
 process.on('unhandledRejection', (e) => { stray.push(e instanceof Error ? e.message : String(e)) })
+/** What the view being rendered logged as an error (vega logs a failing operator and carries on; the rendered document is then not what the spec describes). */
+export const logged: string[] = []
+const collector = {
+  level(): number { return 1 },
+  // (the stack too: a null canvas surfaces as `Cannot set properties of null` from a function called getContext)
+  error(...a: unknown[]) { logged.push(a.map((x) => (x as Error)?.stack ?? String(x)).join(' ')); return this },
+  warn() { return this },
+  info() { return this },
+  debug() { return this },
+}
 export const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
 export async function vegaSvg(spec: Record<string, unknown>): Promise<string> {
@@ -22,6 +32,7 @@ export async function vegaSvg(spec: Record<string, unknown>): Promise<string> {
     return (type !== undefined && typeof res[type] === 'function' ? res[type]() : res.text()) as Promise<string>
   }
   const view = new vega.View(vega.parse(spec as never), { renderer: 'none', loader })
+  view.logger(collector as never)
   try {
     await view.runAsync()
     view.finalize() // the first frame: no timer tick between the run and the serialisation

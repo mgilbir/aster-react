@@ -162,6 +162,8 @@ function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   if (input.containerSize) parts.push(`cs=${valueKey(input.containerSize)}`)
   if (input.measuredSize) parts.push(`ms=${valueKey(input.measuredSize)}`)
   if (input.textMetrics) parts.push(`tm=#${refId(input.textMetrics)}`)
+  // another random source is another stream: the numbers a scene was drawn with belong to the one it was evaluated with
+  if (input.random) parts.push(`rnd=#${refId(input.random)}`)
   if (input.limits) parts.push(`lim=${valueKey(input.limits)}`)
   // image urls are vetted while the scene is built: a different policy can reject a scene a looser one accepted
   if (input.urlPolicy) parts.push(`up=${valueKey(input.urlPolicy)}`)

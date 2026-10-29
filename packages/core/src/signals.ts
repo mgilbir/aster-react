@@ -620,6 +620,12 @@ function bindSignalEventsDefs(
     ...sceneRuntime,
     data: dataOf,
     modify: modifyData,
+    // vega-functions data.js setdata: the dataset's input is removed whole and `tuples` inserted, as the pass's edit
+    setdata: (name, tuples) => {
+      if (!datasets.has(name)) throw new TypeError(`Cannot read properties of undefined (reading 'input')`)
+      modifyData(name, tuples, true, undefined, undefined, undefined)
+      return 1
+    },
     ...(opts.containerSize ? { containerSize: opts.containerSize } : {}),
     intersect: (box, opt, group) => sceneIntersect(opts.scene, box, opt, group),
     expr: (code) => compileIn(bindRuntime, code),
