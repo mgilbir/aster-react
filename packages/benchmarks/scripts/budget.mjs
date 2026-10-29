@@ -96,8 +96,12 @@ import { fileURLToPath } from 'node:url'
 // view-size / fit fixes (fix/gallery-remaining), measured (kB gzip): core 138.8, signals marginal 12.2 (+3.9: the scene
 // intersect and the path flattening it shares with the hit index), transforms marginal 36.9 (+1.5: heatmap and its bitmap),
 // useChart 145.9, Chart 184.9, SvgChart 164.1, SvgChart + interaction 179.6, Chart + VL 280.8. Ceilings are the measured value + 0.5.
+//
+// The injected random source (RuntimeInput.random: the replayable tapes, the content fingerprint, the per-source Box-Muller pair),
+// vega-functions setdata, and the dataflow order signals resolve in (test/gallery-deterministic), measured (kB gzip): core 140.4,
+// useChart 147.5, Chart 186.4, SvgChart 165.6, SvgChart + interaction 181.3, Chart + VL 282.9; the marginal entries did not move.
 const BUDGETS = {
-  '@aster/core': 139.3 * 1024,
+  '@aster/core': 140.9 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
   '+ @aster/core/canvas': 6.3 * 1024,
   '+ @aster/core/hit': 7.0 * 1024,
@@ -105,13 +109,13 @@ const BUDGETS = {
   '+ @aster/core/load': 5.6 * 1024,
   '+ @aster/core/geo': 14.8 * 1024,
   '+ @aster/core/transforms': 37.4 * 1024,
-  '@aster/react useChart': 146.4 * 1024,
-  '@aster/react Chart': 185.4 * 1024,
+  '@aster/react useChart': 148.0 * 1024,
+  '@aster/react Chart': 186.9 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 164.6 * 1024,
-  '@aster/react SvgChart + interaction': 180.1 * 1024,
+  '@aster/react SvgChart': 166.1 * 1024,
+  '@aster/react SvgChart + interaction': 181.8 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 281.3 * 1024,
+  '@aster/react Chart + VL': 283.4 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
