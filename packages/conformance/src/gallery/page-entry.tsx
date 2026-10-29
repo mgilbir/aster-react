@@ -23,6 +23,8 @@ import { canonicalizeSvg, diffCanonical } from '../normalize.js'
 const BASE = 'https://gallery.invalid/'
 /** The policy of a host that loads its own trusted specs (what `TRUSTED_LOAD_OPTIONS` of `@aster/core/load` says, which a page that imports no add-on does not import). */
 const TRUSTED = { protocols: ['http:', 'https:', 'data:'], allow: () => true, allowPrivateNetwork: true }
+/** What the host gives <Chart> for vega's loader `baseURL`: relative image urls resolve against it (the oracle's loader has the same base). */
+const URL_POLICY = { baseURL: BASE }
 const ADDONS: readonly AddonName[] = ['transforms', 'geo', 'load']
 const HOST_W = 600
 const HOST_H = 400
@@ -104,7 +106,7 @@ async function chartSvg(vg: Record<string, unknown>): Promise<string> {
     const loaded = (await loadSpecData(JSON.parse(JSON.stringify(vg)) as never, { ...TRUSTED, baseURL: BASE })) as Record<string, unknown>
     // what <Chart> imports on its own: the add-ons loaded now (an earlier spec's, or the data step's) are not its doing
     const before = new Set(ADDONS.filter(isAddonLoaded))
-    root.render(React.createElement(Chart, { spec: loaded as never, onError: (e: Error) => { error = e }, ...sizeProps(vg) }))
+    root.render(React.createElement(Chart, { spec: loaded as never, onError: (e: Error) => { error = e }, urlPolicy: URL_POLICY, ...sizeProps(vg) }))
     return await settleMarkup(host, () => error, () => {
       // <Chart> imported exactly the add-ons `addonsNeeded` names for this spec that the page did not have yet: a plain spec
       // imported nothing, and nothing was imported for nothing. (That `addonsNeeded` is exact is addons-needed.test.ts's
@@ -133,7 +135,7 @@ async function chartSwapSvg(a: Record<string, unknown>, b: Record<string, unknow
     const loadedA = (await loadSpecData(JSON.parse(JSON.stringify(a)) as never, { ...TRUSTED, baseURL: BASE })) as Record<string, unknown>
     const loadedB = (await loadSpecData(JSON.parse(JSON.stringify(b)) as never, { ...TRUSTED, baseURL: BASE })) as Record<string, unknown>
     const onError = (e: Error): void => { error = e }
-    root.render(React.createElement(Chart, { spec: loadedA as never, onError, ...sizeProps(a) }))
+    root.render(React.createElement(Chart, { spec: loadedA as never, onError, urlPolicy: URL_POLICY, ...sizeProps(a) }))
     // A is drawn and has been live for a moment (its timers tick, its signals are bound); an A that errors is simply an A that left nothing behind
     for (let i = 0; i < 40 && !host.querySelector('svg') && !error; i++) await sleep(25)
     await sleep(120)
@@ -150,7 +152,7 @@ async function chartSwapSvg(a: Record<string, unknown>, b: Record<string, unknow
     }
     error = null
     // the same element type at the same position: React updates the mounted <Chart>
-    root.render(React.createElement(Chart, { spec: loadedB as never, onError, ...sizeProps(b) }))
+    root.render(React.createElement(Chart, { spec: loadedB as never, onError, urlPolicy: URL_POLICY, ...sizeProps(b) }))
     return await settleMarkup(host, () => error)
   } finally {
     root.unmount()

@@ -47,7 +47,7 @@ import { tickFormat, scaleGradientStops, tickValues, tickCount, validTicks } fro
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { dict, ownGet, maxOf, pushAll, lerp, scopedSignalName, TUPLE_ID } from './util.js'
-import { applyImageUrlPolicy, applyLinkUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
+import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateRows, fieldsOf, groupKeyFn } from './transform-agg.js'
@@ -3986,6 +3986,7 @@ function evaluateMarkItems(
       if (it.url == null) continue
       const vetted = applyImageUrlPolicy(it.url, ctx.urlPolicy)
       if (vetted == null) it.url = undefined
+      else it.url = resolveImageUrl(vetted, ctx.urlPolicy?.baseURL) as string
     }
   }
 

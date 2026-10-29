@@ -145,3 +145,23 @@ export function sanitizeHref(raw: unknown): string | null {
   if (raw.startsWith('//')) return 'http:' + raw
   return raw
 }
+
+// vega-loader: a uri with a scheme-and-host, `//host`, or `data:` is not relative.
+const HAS_PROTOCOL = /^(data:|([A-Za-z]+:)?\/\/)/
+
+/**
+ * The url an image is drawn with: vega-loader's `sanitize` as the renderer applies it to an image. A relative url is
+ * prefixed with the loader's `baseURL` (here the url policy's), a slash between them when neither has one; `//host`
+ * gets vega's default protocol `http:`; `file://` is stripped to the path. A url that is not a string is left as it is.
+ */
+export function resolveImageUrl(raw: unknown, baseURL: string | undefined): unknown {
+  if (typeof raw !== 'string') return raw
+  let uri = raw
+  if (baseURL && !HAS_PROTOCOL.test(uri)) {
+    if (!uri.startsWith('/') && !baseURL.endsWith('/')) uri = '/' + uri
+    uri = baseURL + uri
+  }
+  if (uri.startsWith('file://')) return uri.slice('file://'.length)
+  if (uri.startsWith('//')) return 'http:' + uri
+  return uri
+}

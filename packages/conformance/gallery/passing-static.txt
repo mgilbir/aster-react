@@ -524,6 +524,7 @@ vl/repeat_splom_cars
 vl/rule_color_mean
 vl/rule_extent
 vl/rule_params
+vl/scatter_image
 vl/selection_bind_cylyr
 vl/selection_bind_origin
 vl/selection_brush_timeunit
