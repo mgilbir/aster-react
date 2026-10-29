@@ -1066,7 +1066,9 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       )
       for (const a2 of buildAxes(otherFields, axisMark(other.markRaw, other.mark), scales as ScaleSpec[], undefined, gridScaleName, userConfig)) {
         const a1 = built.find((a) => a.grid === a2.grid && a.orient === a2.orient)
-        if (a1) for (const [k, v] of Object.entries(a2)) if ((a1 as Record<string, unknown>)[k] === undefined && v !== undefined) (a1 as Record<string, unknown>)[k] = v
+        // (the label align and baseline follow the label angle: an axis that settled its angle settled them too - a null align is a value
+        // there, not a missing one - so another layer's, computed from its own angle, does not fill them in)
+        if (a1) for (const [k, v] of Object.entries(a2)) if ((a1 as Record<string, unknown>)[k] === undefined && v !== undefined && !((k === 'labelAlign' || k === 'labelBaseline') && (a1 as Record<string, unknown>).labelAngle !== undefined)) (a1 as Record<string, unknown>)[k] = v
       }
     }
     for (const a of built) axes.push(a)
@@ -4270,6 +4272,11 @@ function positionalScaleType(mark: string, def: FieldDef): string {
   return 'linear'
 }
 
+/** The spec's config object (empty when it has none). */
+function specConfigOf(spec: VLSpec): Record<string, unknown> {
+  return isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+}
+
 function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: string, dataName: string, wReq: SizeReq, hReq: SizeReq, series: FieldDef[] = [], rawName: string = dataName): ScaleSpec[] {
   // (a `scale: null` field has no scale)
   const fields = fieldsIn.filter((f) => !f.noScale)
@@ -4335,7 +4342,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       && (cfgMarkType?.discreteBandSize ?? cfgMarkBlock?.discreteBandSize) !== 0
       // a continuous bar dimension pads by half a bar; band/point scales pad through paddingInner/Outer
       && isContinuousScaleType(type) && def.scale?.padding == null
-    ) sc.padding = 5
+    ) sc.padding = ((isObject(specConfigOf(spec).bar) ? (specConfigOf(spec).bar as Record<string, unknown>).continuousBandSize : undefined) as number | undefined) ?? 5
     if (type === 'linear' || type === 'log' || type === 'pow' || type === 'sqrt' || type === 'symlog') {
       const zeroDefault = explicitDom !== undefined ? zeroForCustomDomain(explicitDom) : type === 'log' ? false : rangedBoth ? true : zeroDefaultFor(mark, channel, orient)
       if (type !== 'log' || def.scale?.zero != null) {
@@ -5654,7 +5661,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             update.xc = { scale: 'x', field: aggFieldName(xDef) }
             // a discrete point scale centers a default-step bar (18px); a
             // continuous measure uses the continuous band size
-            update.width = { value: sc === 'point' ? C.defaultStep : barSizeProp !== undefined && barSizeProp !== 0 ? barSizeProp : C.bandSize }
+            update.width = { value: sc === 'point' ? C.defaultStep : continuousBand }
           }
         }
       }
@@ -5749,7 +5756,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             update.y2 = zeroOrMinRef('y', yDef, mark)
           } else {
             update.yc = { scale: 'y', field: aggFieldName(yDef) }
-            update.height = { value: sc === 'point' ? C.defaultStep : barSizeProp !== undefined && barSizeProp !== 0 ? barSizeProp : C.bandSize }
+            update.height = { value: sc === 'point' ? C.defaultStep : continuousBand }
           }
         }
       }
@@ -6290,7 +6297,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         if (v !== undefined && update[ch] === undefined && update[`${ch}c`] === undefined) update[ch] = v === edge ? { field: { group: edge } } : { value: v }
       }
     }
-    fillMissingPositions(update, mark, fields, orient, scaleConfigOf(spec), ruleOrientOut, typeof md0.size === 'number' && md0.size !== 0 ? md0.size : undefined, markOrient(spec, mark, spec.mark, fields) === undefined)
+    fillMissingPositions(update, mark, fields, orient, scaleConfigOf(spec), ruleOrientOut, typeof md0.size === 'number' && md0.size !== 0 ? md0.size : isObject(md0.size) && (typeof md0.size.signal === 'string' || typeof md0.size.expr === 'string') ? { signal: (md0.size.signal ?? md0.size.expr) as string } : undefined, markOrient(spec, mark, spec.mark, fields) === undefined)
   }
 
   {
@@ -6913,7 +6920,9 @@ function hasEncodingChannel(spec: VLSpec, channel: string): boolean {
   return enc[channel] != null
 }
 
-function fillMissingPositions(update: Record<string, unknown>, mark: string, fields: FieldDef[], orient: string, scaleCfg: ScaleCfg, ruleOrient?: string, explicitSize?: number, orientUndefined = false): void {
+function fillMissingPositions(update: Record<string, unknown>, mark: string, fields: FieldDef[], orient: string, scaleCfg: ScaleCfg, ruleOrient?: string, explicitSizeRaw?: number | { signal: string }, orientUndefined = false): void {
+  // (a mark def size is a number or an expression, which vega-lite emits as a signal reference)
+  const explicitSize = explicitSizeRaw
   const has = (...ks: string[]): boolean => ks.some((k) => update[k] !== undefined)
   const hasX = has('x', 'xc', 'x2')
   const hasY = has('y', 'yc', 'y2')
@@ -6931,8 +6940,8 @@ function fillMissingPositions(update: Record<string, unknown>, mark: string, fie
     case 'tick':
       // (tick.ts: the size axis is x of a horizontal tick and y of a vertical one; a size of the mark def is its length there)
       // (the other axis is the thickness axis: pointPosition centres it and `thickness` is its extent, set by the mark)
-      if (!hasX) { update.xc = midX; if (orient === 'horizontal') update.width = explicitSize !== undefined ? { value: explicitSize } : { signal: '0.75 * width' } }
-      if (!hasY) { update.yc = midY; if (orient !== 'horizontal') update.height = explicitSize !== undefined ? { value: explicitSize } : { signal: '0.75 * height' } }
+      if (!hasX) { update.xc = midX; if (orient === 'horizontal') update.width = explicitSize !== undefined ? (typeof explicitSize === 'number' ? { value: explicitSize } : explicitSize) : { signal: '0.75 * width' } }
+      if (!hasY) { update.yc = midY; if (orient !== 'horizontal') update.height = explicitSize !== undefined ? (typeof explicitSize === 'number' ? { value: explicitSize } : explicitSize) : { signal: '0.75 * height' } }
       break
     case 'bar': {
       // position-rect.ts rectPosition: the band channel of the orientation (x of a vertical bar, y of a horizontal one) is
@@ -6940,7 +6949,7 @@ function fillMissingPositions(update: Record<string, unknown>, mark: string, fie
       // zeroOrMax to zeroOrMin, i.e. the whole view
       const padding = (scaleCfg.bandPaddingInner ?? scaleCfg.barBandPaddingInner) as number | undefined
       // (a size of the mark def or the encoding is the band's size: positionAndSize, `sizeMixins`)
-      const span = (size: 'width' | 'height'): unknown => (explicitSize !== undefined ? { value: explicitSize } : typeof padding === 'number' ? { signal: `${1 - padding} * ${size}` } : { value: 18 })
+      const span = (size: 'width' | 'height'): unknown => (explicitSize !== undefined ? (typeof explicitSize === 'number' ? { value: explicitSize } : explicitSize) : typeof padding === 'number' ? { signal: `${1 - padding} * ${size}` } : { value: 18 })
       // (a bar with no orientation - neither axis is a measure - has no band channel: both missing ones are ranges)
       if (!hasX) {
         if (orient === 'vertical' && !orientUndefined) { update.xc = midX; update.width = span('width') } else { update.x = groupW; update.x2 = { value: 0 } }
