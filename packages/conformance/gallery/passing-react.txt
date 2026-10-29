@@ -265,12 +265,15 @@ vl/errorbar_aggregate
 vl/errorbar_horizontal_aggregate
 vl/errorbar_tooltip
 vl/facet_bullet
+vl/facet_column_facet_column_point_future
+vl/facet_column_facet_row_point_future
 vl/facet_cross_independent_scale
 vl/facet_custom
 vl/facet_custom_header
 vl/facet_grid_bar
 vl/facet_independent_scale
 vl/facet_independent_scale_layer_broken
+vl/facet_row_facet_row_point_future
 vl/geo_circle
 vl/geo_constant_value
 vl/geo_custom_projection

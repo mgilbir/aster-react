@@ -1506,7 +1506,13 @@ function autosizeOf(spec: VLSpec): unknown {
 // --- facet composition -------------------------------------------------------
 
 /** Compile a faceted chart (encoding.facet / top-level facet + spec). */
-function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
+function compileFaceted(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
+  // (the names of a facet and of everything it makes are its model's: those of a facet inside a facet start with `child`, and its own child
+  // is `child_child`; a composite around the facet puts its own name in front afterwards)
+  const own = (name: string): string => childModelName(nested, name)
+  const CH = own('child')
+  const FACET = own('facet')
+  const CELL = own('cell')
   const facetDef = isObject(spec.facet) ? (spec.facet as Record<string, unknown>) : undefined
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   const encFacet = isObject(enc.facet) ? (enc.facet as Record<string, unknown>) : undefined
@@ -1551,14 +1557,37 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const cellFacetFields = [...nameFacetField('row', rowDef), ...nameFacetField('column', colDef), ...nameFacetField('facet', wrapDef)]
   const savedFacetTransforms = ctx.facetTransformCount
   ctx.facetTransformCount = isObject(spec.spec) && (spec.spec as VLSpec).data === undefined && Array.isArray(spec.transform) ? spec.transform.length : 0
-  const inner = inChildView(ctx, 'child', cellFacetFields, true, () => (Array.isArray(innerSpec.layer) ? compileLayered(innerSpec, ctx) : compileUnitView(innerSpec, ctx)))
+  // a facet inside the facet (facet.ts FacetModel with a FacetModel child): it is made whole, in the names of the child model, and nests in the cell
+  const innerIsFacet = isObject(spec.spec) && (spec.spec as VLSpec).facet !== undefined
+  if (innerIsFacet) {
+    const innerFacet = (spec.spec as VLSpec).facet
+    if (wrapDef !== undefined || !isObject(innerFacet) || (innerFacet.row === undefined && innerFacet.column === undefined)) {
+      throw new VLCompileError('a wrapped facet (a single `facet` field) around or inside another facet is not supported yet; give a row and / or a column')
+    }
+  }
+  const savedNestedFacet = ctx.inNestedFacet
+  ctx.inNestedFacet = nested !== '' && !innerIsFacet
+  const inner = inChildView(ctx, 'child', cellFacetFields, true, () => (innerIsFacet ? compileFaceted(innerSpec, ctx, CH) : Array.isArray(innerSpec.layer) ? compileLayered(innerSpec, ctx) : compileUnitView(innerSpec, ctx)))
+  ctx.inNestedFacet = savedNestedFacet
   ctx.facetTransformCount = savedFacetTransforms
   const innerSel = SEL_PARTS.get(inner)
+  if (innerIsFacet && (innerSel !== undefined || (Array.isArray(inner.projections) && inner.projections.length > 0))) {
+    throw new VLCompileError('a selection or a map inside a facet inside a facet is not supported yet')
+  }
+  // The pieces of the inner facet that become the contents of this facet's cell: its domain datasets (made from the cell's rows), its titles,
+  // headers and footers, and its own cell, which facets what the cell holds
+  const DOMAIN = /(?:^|_)(?:row|column|facet)_domain(?:_row|_column)?$/
+  const nestedDomains: Record<string, unknown>[] = innerIsFacet ? (inner.data as Record<string, unknown>[]).filter((d) => DOMAIN.test(d.name as string)) : []
+  if (innerIsFacet) inner.data = (inner.data as Record<string, unknown>[]).filter((d) => !nestedDomains.includes(d))
+  const nestedCell = innerIsFacet ? (inner.marks as Record<string, unknown>[]).find((m) => m.name === childModelName(CH, 'cell')) : undefined
+  const nestedBase = innerIsFacet ? ((nestedCell?.from as { facet?: { data?: string } } | undefined)?.facet?.data) : undefined
+  if (innerIsFacet && (nestedCell === undefined || nestedBase === undefined)) throw new VLCompileError('a facet inside a facet: the inner facet has no cell')
+  if (nestedCell !== undefined) (nestedCell.from as { facet: { data: string } }).facet.data = FACET
   // the child view's binned fields name their signals after the child model (bin.ts getBinSignalName: `child_bin_..._bins`)
   {
     const sigMap = new Map<string, string>()
     const ts = ((inner.data as Record<string, unknown>[]) ?? []).flatMap((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).filter((t) => (t.type === 'bin' || t.type === 'extent' || t.type === 'geojson') && typeof t.signal === 'string'))
-    for (const t of ts) sigMap.set(t.signal as string, `child_${t.signal as string}`)
+    for (const t of ts) sigMap.set(t.signal as string, `${CH}_${t.signal as string}`)
     if (sigMap.size) {
       const r = { signals: sigMap, scales: new Map<string, string>() }
       for (const t of ts) {
@@ -1637,6 +1666,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     pre.push({ type: 'formula', expr: `toDate(${dref(fd.field)})`, as: fd.field })
     pre.push(timeUnitTransform(fd.tu!, fd.field, as))
   }
+  if (pre.length && innerIsFacet) throw new VLCompileError('a binned, time-unit or nested field as the facet of a facet that holds another facet is not supported yet')
   if (pre.length) {
     const derived = innerData.filter((d) => d.source === srcName)
     if (derived.length === 0) {
@@ -1664,7 +1694,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // The data the cells facet: a unit's marks dataset, or - for layers, whose marks read several
   // datasets - the first derived dataset; the other datasets are re-derived INSIDE each cell.
   const layeredInner = Array.isArray(innerSpec.layer)
-  const unitMarksData = ((inner.marks as Record<string, unknown>[])?.[0]?.from as { data?: string } | undefined)?.data ?? innerDataName
+  const unitMarksData = innerIsFacet ? nestedBase! : ((inner.marks as Record<string, unknown>[])?.[0]?.from as { data?: string } | undefined)?.data ?? innerDataName
   // A facet sorted by an aggregate of a field (`sort: {op: "median", field: "yield"}`) aggregates the facet's own data, the rows BEFORE
   // the view's pipeline (data/facet.ts: the cells' pipeline runs inside each cell, FacetNode.data is the parse). When the pipeline
   // aggregates, those rows are not the ones it outputs, so the cells facet the data it derives from and re-derive it inside.
@@ -1674,7 +1704,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // The raw table is separate only when the view asks for it (a scale domain sorted by an aggregate reads it: the pipeline is then two
   // datasets, the raw one and the aggregated one). Otherwise vega-lite merges the whole pipeline into the facet's data, and a sort field the
   // aggregate drops is missing from the rows the sort aggregates (trellis_area_seattle: every key is undefined, the cells keep their order).
-  const rawFacet = !layeredInner && typeof unitPipelineDs?.source === 'string' && (PRE_FILTER_UNITS.has(inner) || (
+  const rawFacet = !innerIsFacet && !layeredInner && typeof unitPipelineDs?.source === 'string' && (nested !== '' || PRE_FILTER_UNITS.has(inner) || (
     sortsByAggregate && !(rowDef && colDef)
     && typeof innerData.find((d) => d.name === unitPipelineDs.source)?.source === 'string'
     && ((unitPipelineDs.transform as Record<string, unknown>[] | undefined) ?? []).some((t) => t.type === 'aggregate')))
@@ -1699,11 +1729,15 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     }
   }
   const cellData: Record<string, unknown>[] = []
-  const cellMap = new Map<string, string>([[baseName, 'facet']])
+  const cellMap = new Map<string, string>([[baseName, FACET]])
   if (rawFacet && rawTail !== undefined) {
     const cellName = `${unitMarksData}_cell`
     cellMap.set(unitMarksData, cellName)
-    cellData.push({ name: cellName, source: 'facet', transform: rawTail })
+    cellData.push({ name: cellName, source: FACET, transform: rawTail })
+  }
+  if (innerIsFacet) {
+    // the inner facet's domain datasets are made inside this cell, from its rows
+    for (const d of nestedDomains) cellData.push({ ...d, source: FACET })
   }
   if (layeredInner) {
     const sources = new Set(innerData.filter((d) => typeof d.values !== 'undefined' || typeof d.url !== 'undefined' || d.source === undefined).map((d) => d.name))
@@ -1758,18 +1792,27 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const colSort = facetSortOf(colDef, colField, 'column')
   const wrapSort = facetSortOf(wrapDef, wrapField, 'facet')
   // the cells' source: the facet's grouping, the cross of the row and column values when both are given, the sort fields aggregated
+  // the column of the facet inside this one, whose values the cells are laid out by
+  const nestedColumn = innerIsFacet && isObject((spec.spec as VLSpec).facet) && isObject(((spec.spec as VLSpec).facet as Record<string, unknown>).column)
+    ? parseChannel('column', ((spec.spec as VLSpec).facet as Record<string, unknown>).column as Record<string, unknown>)
+    : null
+  const nestedColField = nestedColumn ? aggFieldName(nestedColumn) : undefined
   const facetFrom = (groupby: string[]): Record<string, unknown> => {
     const sorts = [rowSort, colSort, wrapSort].filter((x): x is FacetSortInfo => x !== undefined && x.facetAgg !== undefined)
     const cross = !!rowFd && !!colFd
     // (facet.ts assembleFacet: the cardinality of each independent step-sized scale first, then the sort fields)
-    const cards = indepScales.filter((i) => i.distinct !== undefined)
-    const aggFields = [...cards.map((i) => i.field!), ...sorts.map((x) => x.facetAgg!.field)]
+    // (getCardinalityAggregateForChild: a facet child that is itself faceted by column counts that column's values)
+    const cards: Array<{ field: string; as: string }> = [
+      ...indepScales.filter((i) => i.distinct !== undefined).map((i) => ({ field: i.field!, as: i.distinct! })),
+      ...(nestedColField !== undefined ? [{ field: nestedColField, as: `distinct_${nestedColField}` }] : []),
+    ]
+    const aggFields = [...cards.map((c) => c.field), ...sorts.map((x) => x.facetAgg!.field)]
     return {
-      name: 'facet',
+      name: FACET,
       data: baseName,
       groupby,
       ...(cross || aggFields.length
-        ? { aggregate: { ...(cross ? { cross: true } : {}), ...(aggFields.length ? { fields: aggFields, ops: [...cards.map(() => 'distinct'), ...sorts.map((x) => x.facetAgg!.op)], as: [...cards.map((i) => i.distinct!), ...sorts.map((x) => x.facetAgg!.as)] } : {}) } }
+        ? { aggregate: { ...(cross ? { cross: true } : {}), ...(aggFields.length ? { fields: aggFields, ops: [...cards.map(() => 'distinct'), ...sorts.map((x) => x.facetAgg!.op)], as: [...cards.map((c) => c.as), ...sorts.map((x) => x.facetAgg!.as)] } : {}) } }
         : {}),
     }
   }
@@ -1777,11 +1820,13 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
 
   // The child size: the inner view's own width/height (a number, or a step-driven
   // signal over its discrete scale). The facet's own width/height are not used.
-  const sizeSigMap = new Map([['width', 'child_width'], ['height', 'child_height']])
+  const sizeSigMap = new Map([['width', `${CH}_width`], ['height', `${CH}_height`]])
   const innerSignals = (inner.signals as Record<string, unknown>[] | undefined) ?? []
   for (const sg of innerSignals) {
     if (sg.name !== 'width' && sg.name !== 'height') sizeSigMap.set(sg.name as string, sg.name as string)
   }
+  // (an inner facet's signals - `child_child_width` - are named already)
+  if (innerIsFacet) sizeSigMap.clear()
   // --- independent position scales (resolve.scale.x / y: independent; compile/facet.ts, layoutsize/assemble.ts, model.ts getSizeSignalRef) ---
   // The channel's scale lives in each cell (`child_x`), over the cell's own data; its axis is the cell's, not the header's. A discrete
   // scale sized by a step makes the cell as wide as its own cardinality: the facet counts the distinct values of the scale's field
@@ -1792,6 +1837,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const indepScales: IndepScale[] = []
   for (const ch of ['x', 'y'] as const) {
     if (resolveScaleF[ch] !== 'independent') continue
+    if (innerIsFacet) throw new VLCompileError('independent x / y scales in a facet that holds another facet are not supported yet')
     const sc = ((inner.scales as ScaleSpec[]) ?? []).find((x) => x.name === ch)
     if (!sc) continue
     const entry: IndepScale = { ch }
@@ -1805,8 +1851,8 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
       const paddingInner = sc.type === 'band' ? ((sc.paddingInner as unknown) ?? padding) : 1
       entry.field = first
       entry.distinct = `distinct_${first}`
-      entry.sizeExpr = `bandspace(datum[${JSON.stringify(entry.distinct)}], ${num(paddingInner)}, ${num(paddingOuter)}) * child_${ch}_step`
-      sizeSigMap.set(`${ch}_step`, `child_${ch}_step`)
+      entry.sizeExpr = `bandspace(datum[${JSON.stringify(entry.distinct)}], ${num(paddingInner)}, ${num(paddingOuter)}) * ${CH}_${ch}_step`
+      sizeSigMap.set(`${ch}_step`, `${CH}_${ch}_step`)
     }
     indepScales.push(entry)
   }
@@ -1819,14 +1865,14 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     facetChildSignals.push({ ...sg, name: sizeSigMap.get(sg.name as string) ?? sg.name })
   }
   const hasSig = (n: string): boolean => facetChildSignals.some((x) => x.name === n)
-  if (!hasSig('child_width') && !indepOf('x')?.sizeExpr) facetChildSignals.push({ name: 'child_width', value: typeof inner.width === 'number' ? inner.width : 300 })
-  if (!hasSig('child_height') && !indepOf('y')?.sizeExpr) facetChildSignals.push({ name: 'child_height', value: typeof inner.height === 'number' ? inner.height : 300 })
+  if (!innerIsFacet && !hasSig(`${CH}_width`) && !indepOf('x')?.sizeExpr) facetChildSignals.push({ name: `${CH}_width`, value: typeof inner.width === 'number' ? inner.width : 300 })
+  if (!innerIsFacet && !hasSig(`${CH}_height`) && !indepOf('y')?.sizeExpr) facetChildSignals.push({ name: `${CH}_height`, value: typeof inner.height === 'number' ? inner.height : 300 })
   // (layoutsize/assemble.ts assembleLayoutSignals: the width's signals, then the height's)
   {
-    const rank = (n: unknown): number => (n === 'child_width' || n === 'child_x_step' || n === 'x_step' ? 0 : n === 'child_height' || n === 'child_y_step' || n === 'y_step' ? 1 : 2)
+    const rank = (n: unknown): number => (n === `${CH}_width` || n === `${CH}_x_step` || n === 'x_step' ? 0 : n === `${CH}_height` || n === `${CH}_y_step` || n === 'y_step' ? 1 : 2)
     facetChildSignals.sort((a, b) => rank(a.name) - rank(b.name))
   }
-  const renames = { signals: sizeSigMap, scales: new Map<string, string>(indepScales.map((i) => [i.ch, `child_${i.ch}`] as [string, string])) }
+  const renames = { signals: sizeSigMap, scales: new Map<string, string>(indepScales.map((i) => [i.ch, `${CH}_${i.ch}`] as [string, string])) }
   if (innerSel) renameFragment(innerSel.unit, renames)
   renameFragment(inner.scales, renames)
   renameFragment(inner.axes ?? [], renames)
@@ -1843,7 +1889,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const ownAxes: Record<string, unknown>[] = []
   for (const a of (inner.axes ?? []) as Record<string, unknown>[]) {
     // (resolve.axis: independent puts the axes of that channel in every cell, over the scale the cells share)
-    const indepAxis = indepScales.some((i) => a.scale === `child_${i.ch}`) || ((a.scale === 'x' || a.scale === 'y') && resolveAxisF[a.scale] === 'independent')
+    const indepAxis = indepScales.some((i) => a.scale === `${CH}_${i.ch}`) || ((a.scale === 'x' || a.scale === 'y') && resolveAxisF[a.scale] === 'independent')
     if (a.grid === true) gridAxes.push(a)
     else if (indepAxis) ownAxes.push(a)
     else if (a.orient === 'left' || a.orient === 'right') yLabelAxes.push(a)
@@ -1859,7 +1905,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     // (the axis component has a grid scale whenever the other channel has a scale)
     if (hasInnerScale(horizontal ? 'y' : 'x')) continue
     const name = horizontal ? 'height' : 'width'
-    const update = horizontal ? (indepOf('y')?.sizeExpr ? undefined : 'child_height') : (indepOf('x')?.sizeExpr ? undefined : 'child_width')
+    const update = horizontal ? (indepOf('y')?.sizeExpr ? undefined : `${CH}_height`) : (indepOf('x')?.sizeExpr ? undefined : `${CH}_width`)
     if (update !== undefined && !cellAxisSignals.some((x) => x.name === name)) cellAxisSignals.push({ name, update })
   }
 
@@ -1871,10 +1917,10 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     if (from?.facet !== undefined) {
       // a series group (one path per series) facets the CELL's data; the facet is named after the child model
       const oldName = from.facet.name
-      const newName = typeof oldName === 'string' ? oldName.replace(/^faceted_path_/, 'faceted_path_child_') : oldName
+      const newName = typeof oldName === 'string' ? oldName.replace(/^faceted_path_/, `faceted_path_${CH}_`) : oldName
       if (typeof oldName === 'string' && typeof newName === 'string') cellMap.set(oldName, newName)
-      c.from = { ...from, facet: { ...from.facet, ...(typeof newName === 'string' ? { name: newName } : {}), data: from.facet.data !== undefined && cellMap.has(from.facet.data) ? cellMap.get(from.facet.data) : 'facet' } }
-    } else if (from === undefined || from.data == null) c.from = { ...(from ?? {}), data: 'facet' }
+      c.from = { ...from, facet: { ...from.facet, ...(typeof newName === 'string' ? { name: newName } : {}), data: from.facet.data !== undefined && cellMap.has(from.facet.data) ? cellMap.get(from.facet.data) : FACET } }
+    } else if (from === undefined || from.data == null) c.from = { ...(from ?? {}), data: FACET }
     else if (cellMap.has(from.data)) c.from = { ...from, data: cellMap.get(from.data) }
     if (Array.isArray(c.marks)) c.marks = (c.marks as Record<string, unknown>[]).map(remapFrom)
     return c
@@ -1882,10 +1928,10 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // the facet child's marks carry the "child_" name prefix (vega-lite names a facet's child model that way)
   const prefixNames = (m: Record<string, unknown>): Record<string, unknown> => ({
     ...m,
-    ...(typeof m.name === 'string' && /^(marks|pathgroup|layer_\d+_.+)$/.test(m.name) ? { name: `child_${m.name}` } : {}),
+    ...(typeof m.name === 'string' && /^(marks|pathgroup|layer_\d+_.+)$/.test(m.name) ? { name: `${CH}_${m.name}` } : {}),
     ...(Array.isArray(m.marks) ? { marks: (m.marks as Record<string, unknown>[]).map(prefixNames) } : {}),
   })
-  const childMarks = (inner.marks as Record<string, unknown>[]).map(remapFrom).map(prefixNames)
+  const childMarks = innerIsFacet ? (inner.marks as Record<string, unknown>[]) : (inner.marks as Record<string, unknown>[]).map(remapFrom).map(prefixNames)
   // resolve.ts defaultScaleResolve: a facet shares every scale but theta, which each cell owns (`child_theta`, over the cell's data)
   const cellScales: Record<string, unknown>[] = []
   {
@@ -1893,32 +1939,32 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const mapDomain = (dom: unknown): unknown => {
       if (!isObject(dom)) return dom
       const out: Record<string, unknown> = { ...dom }
-      if (typeof out.data === 'string') out.data = cellMap.get(out.data) ?? 'facet'
-      if (Array.isArray(out.fields)) out.fields = out.fields.map((f) => (isObject(f) && typeof f.data === 'string' ? { ...f, data: cellMap.get(f.data) ?? 'facet' } : f))
+      if (typeof out.data === 'string') out.data = cellMap.get(out.data) ?? FACET
+      if (Array.isArray(out.fields)) out.fields = out.fields.map((f) => (isObject(f) && typeof f.data === 'string' ? { ...f, data: cellMap.get(f.data) ?? FACET } : f))
       return out
     }
     const innerScalesAll = (inner.scales as ScaleSpec[]) ?? []
-    for (const i of indepScales) {
+    for (const i of innerIsFacet ? [] : indepScales) {
       const at = innerScalesAll.findIndex((sc) => sc.name === i.ch)
       if (at < 0) continue
       const sc = innerScalesAll.splice(at, 1)[0]!
-      cellScales.push({ ...sc, name: `child_${i.ch}`, domain: mapDomain(sc.domain) })
+      cellScales.push({ ...sc, name: `${CH}_${i.ch}`, domain: mapDomain(sc.domain) })
     }
   }
   {
     const innerScales = (inner.scales as ScaleSpec[]) ?? []
-    const at = innerScales.findIndex((sc) => sc.name === 'theta')
+    const at = innerIsFacet ? -1 : innerScales.findIndex((sc) => sc.name === 'theta')
     if (at >= 0) {
       const theta = innerScales.splice(at, 1)[0]!
-      const dom = isObject(theta.domain) && typeof theta.domain.data === 'string' ? { ...theta.domain, data: cellMap.get(theta.domain.data) ?? 'facet' } : theta.domain
-      cellScales.push({ ...theta, name: 'child_theta', domain: dom })
-      renameFragment(childMarks, { signals: new Map<string, string>(), scales: new Map([['theta', 'child_theta']]) })
+      const dom = isObject(theta.domain) && typeof theta.domain.data === 'string' ? { ...theta.domain, data: cellMap.get(theta.domain.data) ?? FACET } : theta.domain
+      cellScales.push({ ...theta, name: `${CH}_theta`, domain: dom })
+      renameFragment(childMarks, { signals: new Map<string, string>(), scales: new Map([['theta', `${CH}_theta`]]) })
     }
   }
   // (assembleGroupStyle: a view with an x or y channel is a framed cell, any other a plain view)
-  const cellStyle = Array.isArray(innerSpec.layer) ? layeredGroupStyle(collectLeaves(innerSpec)) : unitGroupStyle(innerSpec)
+  const cellStyle = innerIsFacet ? undefined : Array.isArray(innerSpec.layer) ? layeredGroupStyle(collectLeaves(innerSpec)) : unitGroupStyle(innerSpec)
   // (assembleGroupEncodeEntry(false): the child's width / height, then its view background)
-  const cellView = (inner.encode as { update?: Record<string, unknown> } | undefined)?.update
+  const cellView = innerIsFacet ? undefined : (inner.encode as { update?: Record<string, unknown> } | undefined)?.update
 
   const facetGroupby = [...colsOf(rowFd, rowField), ...colsOf(colFd, colField), ...colsOf(wrapFd, wrapField)]
   const facetSortFields = [rowField, colField, wrapField].filter(Boolean) as string[]
@@ -1990,16 +2036,16 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const wrapMarks: Record<string, unknown>[] = [
       // (header/assemble.ts assembleTitleGroup: an empty title - `header: {title: null}` - is no title group)
       ...(hdrW.title === null || hdrW.title === '' ? [] : [{ name: 'facet-title', type: 'group', role: 'column-title', title: { text: hdrW.title ?? channelTitle(wrapFd), style: 'guide-title', offset: (hdrW.titlePadding as number | undefined) ?? 10 } }]),
-      ...(yLabelAxes.length ? [{ name: 'row_header', type: 'group', role: 'row-header', from: { data: rowSeq }, encode: { update: { height: { signal: 'child_height' } } }, axes: yLabelAxes }] : []),
-      ...(xLabelAxes.length ? [{ name: 'column_footer', type: 'group', role: 'column-footer', from: { data: colSeq }, encode: { update: { width: { signal: 'child_width' } } }, axes: xLabelAxes }] : []),
+      ...(yLabelAxes.length ? [{ name: own('row_header'), type: 'group', role: 'row-header', from: { data: rowSeq }, encode: { update: { height: { signal: `${CH}_height` } } }, axes: yLabelAxes }] : []),
+      ...(xLabelAxes.length ? [{ name: own('column_footer'), type: 'group', role: 'column-footer', from: { data: colSeq }, encode: { update: { width: { signal: `${CH}_width` } } }, axes: xLabelAxes }] : []),
       {
-        name: 'cell',
+        name: CELL,
         type: 'group',
         title: cellTitle,
         style: cellStyle,
         from: { facet: facetFrom(colsOf(wrapFd, wrapField)) },
         sort: { field: [datumRef(wrapSort?.cellField ?? wrapField)], order: [wrapOrder] },
-        encode: { update: { width: { signal: 'child_width' }, height: { signal: 'child_height' }, ...cellView } },
+        encode: { update: { width: { signal: `${CH}_width` }, height: { signal: `${CH}_height` }, ...cellView } },
         ...(innerSel ? { signals: assembleFacetSignals(cellName, [...cellAxisSignals, ...innerSel.unit]) } : cellAxisSignals.length ? { signals: cellAxisSignals } : {}),
         ...(cellData.length ? { data: cellData } : {}),
         ...(gridAxes.length ? { axes: gridAxes } : {}),
@@ -2118,15 +2164,42 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   }
 
   const channels: Array<{ ch: 'row' | 'column'; def?: Record<string, unknown>; fd?: FieldDef | null; field?: string; domain: string; order: string; axes: Record<string, unknown>[]; size: string }> = [
-    { ch: 'row', def: rowDef, fd: rowFd, field: rowField, domain: rowDomainName, order: rowOrder, axes: yLabelAxes, size: indepOf('y')?.sizeExpr ?? 'child_height' },
-    { ch: 'column', def: colDef, fd: colFd, field: colField, domain: columnDomainName, order: colOrder, axes: xLabelAxes, size: indepOf('x')?.sizeExpr ?? 'child_width' },
+    { ch: 'row', def: rowDef, fd: rowFd, field: rowField, domain: rowDomainName, order: rowOrder, axes: yLabelAxes, size: indepOf('y')?.sizeExpr ?? `${CH}_height` },
+    { ch: 'column', def: colDef, fd: colFd, field: colField, domain: columnDomainName, order: colOrder, axes: xLabelAxes, size: indepOf('x')?.sizeExpr ?? `${CH}_width` },
   ]
   const marks: Record<string, unknown>[] = []
   // title groups first (row, then column), then the header/footer groups per channel
   // (a header title that is empty - or a header that is null - is no title group)
   const hasTitle = (c: { def?: Record<string, unknown> }): boolean => c.def?.header !== null && !(isObject(c.def?.header) && 'title' in (c.def!.header as Record<string, unknown>) && !(c.def!.header as Record<string, unknown>).title)
-  for (const c of channels) if (c.field && c.def && hasTitle(c)) marks.push(titleGroup(c.ch, c.def, c.fd, c.field))
+  for (const c of channels) {
+    if (!c.field || !c.def) continue
+    const outerTitle = hasTitle(c) ? titleGroup(c.ch, c.def, c.fd, c.field) : undefined
+    // header/parse.ts parseFacetHeader: the title of the inner facet's header on the same channel joins this one's ("Origin / Cylinders") and
+    // leaves the inner facet (its layout no longer offsets for it)
+    const at = innerIsFacet ? childMarks.findIndex((m) => m.name === `${c.ch}-title`) : -1
+    if (at >= 0) {
+      const innerTitle = (childMarks[at]!.title as { text?: unknown } | undefined)?.text
+      childMarks.splice(at, 1)
+      const offsets = (inner.layout as { offset?: Record<string, number> } | undefined)?.offset
+      if (offsets) {
+        delete offsets[`${c.ch}Title`]
+        if (Object.keys(offsets).length === 0) delete (inner.layout as { offset?: unknown }).offset
+      }
+      if (outerTitle && innerTitle !== undefined && innerTitle !== null && innerTitle !== '') {
+        const t = outerTitle.title as { text?: unknown }
+        t.text = `${Array.isArray(t.text) ? t.text.join(', ') : String(t.text)} / ${Array.isArray(innerTitle) ? innerTitle.join(', ') : String(innerTitle)}`
+      }
+    }
+    if (outerTitle) marks.push(outerTitle)
+  }
   let cellTitle: Record<string, unknown> | undefined
+  // the layout the inner facet gives the cells it holds; with a column facet it takes its column count from the cell (`columns` above)
+  const nestedLayout = (): Record<string, unknown> => {
+    const layout = { ...(inner.layout as Record<string, unknown>) }
+    if (nestedColField !== undefined) delete layout.columns
+    return layout
+  }
+  const headerBands: Partial<Record<'header' | 'footer', Record<string, number>>> = {}
   for (const c of channels) {
     const faceted = c.field !== undefined && c.def !== undefined
     const labelOrient = faceted ? hdrProp('labelOrient', c.def, c.ch) : undefined
@@ -2140,17 +2213,19 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     for (const t of ['header', 'footer'] as const) {
       const comp = types[t]
       if (!comp) continue
+      // (facet.ts getHeaderLayoutMixins: a facet whose child has no size signal - a facet - lays its headers out by their band)
+      if (innerIsFacet && faceted) (headerBands[t] ??= {})[c.ch] = 0.5
       // the label text joins the header when the label orient runs along the channel
       const aligned = faceted && comp.labels && (c.ch === 'row' ? labelOrient !== 'top' && labelOrient !== 'bottom' : labelOrient !== 'left' && labelOrient !== 'right')
       const title = aligned ? labelTitle(c.ch, c.def!, c.fd, c.field!) : undefined
       if (!title && comp.axes.length === 0) continue
       marks.push({
-        name: `${c.ch}_${t}`,
+        name: own(`${c.ch}_${t}`),
         type: 'group',
         role: `${c.ch}-${t}`,
         ...(faceted ? { from: { data: c.domain }, sort: { field: datumRef((c.ch === 'row' ? rowSort : colSort)?.headerField ?? c.field!), order: c.order } } : {}),
         ...(title ? { title } : {}),
-        encode: { update: { [c.ch === 'row' ? 'height' : 'width']: { signal: c.size } } },
+        ...(innerIsFacet ? {} : { encode: { update: { [c.ch === 'row' ? 'height' : 'width']: { signal: c.size } } } }),
         ...(comp.axes.length ? { axes: comp.axes } : {}),
       })
     }
@@ -2158,17 +2233,21 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
     if (faceted && !cellTitle && (c.ch === 'row' ? labelOrient === 'top' || labelOrient === 'bottom' : labelOrient === 'left' || labelOrient === 'right')) cellTitle = labelTitle(c.ch, c.def!, c.fd, c.field!)
   }
   marks.push({
-    name: 'cell',
+    name: CELL,
     type: 'group',
     ...(cellTitle ? { title: cellTitle } : {}),
-    style: cellStyle,
+    ...(innerIsFacet ? {} : { style: cellStyle }),
     from: { facet: facetFrom(facetGroupby) },
     sort: { field: [rowSort?.cellField ?? rowField, colSort?.cellField ?? colField].filter(Boolean).map((f) => datumRef(f as string)), order: facetSortFields.map((_, i) => (i === 0 && rowField ? rowOrder : colOrder)) },
-    encode: { update: { width: { signal: indepOf('x')?.sizeExpr ?? 'child_width' }, height: { signal: indepOf('y')?.sizeExpr ?? 'child_height' }, ...cellView } },
+    // (a cell that holds a facet has no size of its own: the inner cells give it one; the columns it lays them out by are counted by the facet)
+    ...(innerIsFacet
+      ? nestedColField !== undefined ? { encode: { update: { columns: { field: `distinct_${nestedColField}` } } } } : {}
+      : { encode: { update: { width: { signal: indepOf('x')?.sizeExpr ?? `${CH}_width` }, height: { signal: indepOf('y')?.sizeExpr ?? `${CH}_height` }, ...cellView } } }),
     ...(innerSel ? { signals: assembleFacetSignals(cellName, [...cellAxisSignals, ...innerSel.unit]) } : cellAxisSignals.length ? { signals: cellAxisSignals } : {}),
     ...(cellData.length ? { data: cellData } : {}),
     ...(gridAxes.length ? { axes: gridAxes } : {}),
     ...(cellScales.length ? { scales: cellScales } : {}),
+    ...(innerIsFacet ? { layout: nestedLayout() } : {}),
     marks: childMarks,
   })
 
@@ -2240,6 +2319,8 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   out.layout = {
     padding: layoutSpacing,
     ...(Object.keys(layoutTitleAnchor).length ? { titleAnchor: layoutTitleAnchor } : {}),
+    ...(headerBands.header ? { headerBand: headerBands.header } : {}),
+    ...(headerBands.footer ? { footerBand: headerBands.footer } : {}),
     ...(Object.keys(titleOffsets).length ? { offset: titleOffsets } : {}),
     columns: colField ? { signal: `length(data(${JSON.stringify(columnDomainName)}))` } : 1,
     bounds: spec.bounds ?? 'full',
@@ -3500,6 +3581,8 @@ interface CompileCtx extends TransformContext {
   facetTransformCount: number
   /** The unit whose pipeline is being built. */
   currentUnit?: VLSpec
+  /** The view being compiled is the child of a facet that is itself inside a facet: its pipeline stays inside the innermost cell. */
+  inNestedFacet?: boolean
   /** vega-lite's `model.name` of the view being compiled ('' at the root): `concat_0`, `child`, `concat_1_child__column_a`. */
   modelName: string
   /** How many concat / facet / repeat views enclose the view being compiled (a unit inside one declares its signals in a group). */
@@ -3844,6 +3927,8 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   for (const t of userOut) USER_TRANSFORMS.add(t)
   pushAll(pipeline, userOut)
   pushAll(pipeline, lateFlat)
+  // (the facet node of a facet inside a facet sits here: what the encoding adds is made inside the innermost cell)
+  const userLen = pipeline.length
 
   // maps: the geojson (projection fit) and geopoint (longitude / latitude) transforms follow the
   // user's transforms and the implicit parses, ahead of bin / timeUnit / aggregate
@@ -4054,7 +4139,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
 
   const transforms = [...casts, ...pipeline]
   const dataName = transforms.length ? ctx.dn(0) : sourceName
-  return { sourceName, transforms, casts, pipeline, dataName, seriesFields, rawLen, usesRawDomain: fields.some(usesRawDomainSort), ...(invalidSplit ? { invalidSplit } : {}) }
+  return { sourceName, transforms, casts, pipeline, dataName, seriesFields, rawLen: ctx.inNestedFacet ? userLen : rawLen, usesRawDomain: ctx.inNestedFacet === true || fields.some(usesRawDomainSort), ...(invalidSplit ? { invalidSplit } : {}) }
 }
 
 function aggregateAs(f: FieldDef): string {

@@ -827,6 +827,19 @@ const GROUPS: Record<string, Case[]> = {
     ['labels over an ordinal theta', { data: DATA, mark: { type: 'text', radiusOffset: 8 }, encoding: { theta: { field: 'c', type: 'ordinal' }, radius: q('v'), text: n('c') } }],
     ['labels over a stacked radius', { data: DATA, mark: 'text', encoding: { theta: n('c'), radius: q('v', { stack: true }), text: n('c'), color: n('g') } }],
   ],
+  // facet.ts FacetModel (a facet whose child is a facet), header/parse.ts parseFacetHeader: the inner facet nests in the outer cell, its names
+  // prefixed `child_`; the headers of one channel join their titles (facet_column_facet_column_point_future and its siblings)
+  'nested facets (facet_column_facet_column_point_future, facet_column_facet_row_point_future, facet_row_facet_row_point_future)': [
+    ['a column facet in a column facet', { data: DATA, facet: { column: n('g') }, spec: { facet: { column: n('c') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } } }],
+    ['a row facet in a column facet', { data: DATA, facet: { column: n('g') }, spec: { facet: { row: n('c') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } } }],
+    ['a row facet in a row facet', { data: DATA, facet: { row: n('g') }, spec: { facet: { row: n('c') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } } }],
+    ['a column facet in a row facet', { data: DATA, facet: { row: n('g') }, spec: { facet: { column: n('c') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } } }],
+    ['a nested facet over a filtered unit', { data: DATA, transform: [{ filter: 'datum.v > 2' }], facet: { column: n('g') }, spec: { facet: { row: n('c') }, spec: { mark: 'bar', encoding: { x: n('t'), y: q('v', { aggregate: 'sum' }) } } } }],
+    ['a nested facet over layers', { data: DATA, facet: { row: n('g') }, spec: { facet: { column: n('c') }, spec: { layer: [{ mark: 'line', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('y') } }] } } }],
+    ['a nested facet whose headers have their own titles', { data: DATA, facet: { column: n('g', { header: { title: 'Group' } }) }, spec: { facet: { column: n('c', { header: { title: 'Letter', labelAngle: 0 } }) }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } } }],
+    ['a nested facet with spacing', { data: DATA, spacing: 3, facet: { column: n('g') }, spec: { spacing: 5, facet: { row: n('c') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y') } } } }],
+    ['a nested facet whose outer field is sorted', { data: DATA, facet: { column: n('g', { sort: 'descending' }) }, spec: { facet: { column: n('c') }, spec: { mark: 'point', encoding: { x: q('x'), y: q('y'), color: n('c') } } } }],
+  ],
 }
 
 const SIZE_KEYS = (vg: any) => ({

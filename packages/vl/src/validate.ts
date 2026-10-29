@@ -174,7 +174,8 @@ const SCHEMA_CHILDREN: Record<Exclude<Kind, 'unit'>, ReadonlySet<Kind>> = {
   hconcat: new Set<Kind>(ANY_VIEW),
   vconcat: new Set<Kind>(ANY_VIEW),
   concat: new Set<Kind>(ANY_VIEW),
-  facet: new Set<Kind>(['unit', 'layer']),
+  // (vega-lite 6.4.3 compiles a facet inside a facet - the `_future` examples - though its schema does not list one)
+  facet: new Set<Kind>(['unit', 'layer', 'facet']),
   repeat: new Set<Kind>(ANY_VIEW),
 }
 /** Implemented (parent -> child) nestings: today every schema-valid nesting is implemented; narrow this as the schema grows. */
