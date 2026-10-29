@@ -350,6 +350,7 @@ function ChartView({
   renderTooltip,
   limits,
   urlPolicy,
+  random,
   logger,
   preventDefault,
   textMetrics,
@@ -498,6 +499,7 @@ function ChartView({
       const sc = sessionRef.current!.evaluate(spec, {
         data: inputData, dataChanges: changes, ...sizeInput,
         signals: mergedSignals, limits: stableLimits, urlPolicy, domainRaw, textMetrics, logger: stableLogger,
+        ...(random ? { random } : {}),
       })
       // `maxSvgLength` bounds the serialized output. The DOM patcher never
       // builds that string, so the budget is enforced by measuring one — only
@@ -507,7 +509,7 @@ function ChartView({
     } catch (err) {
       return { scene: null, error: err instanceof Error ? err : new Error(String(err)), problems: [] }
     }
-  }, [sceneOverride, addonError, spec, inputData, dataChanges, sizeInput, mergedSignals, stableLimits, urlPolicy, domainRaw, textMetrics, stableLogger])
+  }, [sceneOverride, addonError, spec, inputData, dataChanges, sizeInput, mergedSignals, stableLimits, urlPolicy, random, domainRaw, textMetrics, stableLogger])
   const scene = evaluation.scene
   sceneRef.current = scene
   const renderError = evaluation.error
@@ -596,12 +598,13 @@ function ChartView({
       if (baseSessionRef.current == null) baseSessionRef.current = createChartSession()
       const baseScene = baseSessionRef.current.evaluate(spec, {
         data: inputData, ...sizeInput, signals: mergedSignals, limits: stableLimits, urlPolicy, textMetrics, logger: stableLogger,
+        ...(random ? { random } : {}),
       })
       return baseDomainsOf(chartInfoFromScene(baseScene), positional)
     } catch {
       return null
     }
-  }, [panZoomEnabled, zoomed, fromStream, positional, spec, inputData, sizeInput, mergedSignals, stableLimits, urlPolicy, textMetrics, stableLogger])
+  }, [panZoomEnabled, zoomed, fromStream, positional, spec, inputData, sizeInput, mergedSignals, stableLimits, urlPolicy, random, textMetrics, stableLogger])
   const baseDomains = React.useMemo<ViewDomain>(() => {
     if (!panZoomEnabled || chartInfo == null) return {}
     if (!zoomed) return baseDomainsOf(chartInfo, positional)
