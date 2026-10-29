@@ -3,6 +3,41 @@
 Generated from a run of `pnpm conformance:gallery` at the commit that introduced the gate, by `scripts/gallery-triage.mts`
 (per-spec data: `triage.json`). **No engine bug is fixed in the branch that added this**; this is the map for splitting the fixes.
 
+## Update: the remaining real failures (branch fix/gallery-remaining)
+
+Gate after: static Vega 84 / 93, Vega-Lite 617 / 627; react Vega 82, Vega-Lite 615 (swap 223 / 223). Closed, with the cause:
+
+* `vega/arc-diagram` (react): a view dimension the spec gives no value (no number, no signal) is 0 in vega and autosize grows it to the
+  content; `<Chart>` sized it to the measured container. `contentSized` now covers any such dimension (not only a composition's); autosize
+  `fit` also keeps the viewport of a dimension that is 0 (nothing to shrink) instead of the content-grown size.
+* `vega/contour-plot`, `vega/density-heatmaps` (react): the `heatmap` transform (transforms add-on) and the image mark's bitmap
+  (SVG `href` = the document canvas' own PNG, byte for byte vega's in Chromium; canvas draws the canvas the bitmap keeps its pixels in).
+  The static path stays `unverifiable`: vega's heatmap throws in Node (no canvas), reason `oracle-error`. The pixels are held to
+  vega-geo's own Heatmap in Node with a pixel-keeping canvas stand-in (`heatmap-vs-vega.test.ts`), the canvas renderer to Chromium's.
+* `vl/interactive_1d_geo_brush`, `vl/interactive_airport_crossfilter` (react only: the static path never fires the timer tick): the engine
+  had no `intersect()` expression function (the geo interval selection selects what is drawn inside the brush), and a view whose
+  frame fill is `transparent` was not picked by the pointer over the empty plot (so the brush's `pointerdown` never ran).
+  `scripts/browser-intersect.mts` (every mark type against vega in Chromium) and four geo cases of `browser-vl-selections`.
+* `vega/platformer` (static): not time-driven. A signal's non-string `init` (`init: 15`) was dropped; with vega's timers held off the first
+  frame is equal. It passes on the static path now (its oracle ticks only if a timer fires before the SVG is taken: 12 of 12 runs
+  under CPU load were equal; the deterministic-oracle work owns the rest).
+* `vega/projections`: Aster did not build a group mark's `projections` (every cell drew with mercator). Vega 6.3.1 registers 17 projection
+  types; `airy` and the rest of d3-geo-projection's set are vega-projection-extended's. An unregistered type throws in the Projection
+  transform, which stops the pass: ONE error logged; in a group item's scope the items before it are whole and it and the ones after
+  keep their frame, with no layout (the view is 0 x 0); at the view's scope nothing is made. The engine does exactly that and has no
+  projection beyond vega's 17, so there is no superset to keep: the extended names are refused like vega. The spec now equals vega's
+  own (failing) render on both paths -- a pass in the sense of "same document and same logged error", not of drawing the maps.
+  Needed too: a mark's `clip: {sphere}` / `{path}` / `{signal}` shape, `geoShape` / `pathShape`.
+
+Still open, with the reason:
+
+* `vega/labeled-scatter-plot` (static): vega's `label` needs a canvas in Node. The `canvas` package (node-canvas, cairo) was tried as the
+  oracle (installed outside the repo, run in a child process, text measured by the same canvas on both sides): 4 of 2260 labels are
+  placed differently, because cairo and the browser's Skia rasterise the marks the labels avoid differently and Aster's raster follows
+  Skia (it equals Chromium on the react path). So a Node canvas oracle cannot be equal without breaking the browser match; the
+  spec stays failing on the static path as an oracle limitation, and is held by `label-vs-vega.test.ts` and the react path.
+* `vega/word-cloud` (static): needs a canvas too, and is random.
+
 ## Update: runtime fixes (branch fix/gallery-runtime)
 
 Gate after the runtime work: static Vega 61 / 93, Vega-Lite 274 / 627; React Vega 45 / 93, Vega-Lite 205 / 627 (from 37 / 251 and

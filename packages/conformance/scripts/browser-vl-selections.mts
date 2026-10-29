@@ -68,6 +68,8 @@ interface Case {
   moves: number[]
   /** CSS applied to the page of BOTH engines before the chart mounts: the svg sized, bordered, padded or transformed by its host. */
   css?: string
+  /** Milliseconds both engines are left running after the mount before the first snapshot (a spec that seeds itself from a timer tick: vega's lands a few frames after the mount). */
+  wait?: number
 }
 
 const ROWS = [
@@ -365,8 +367,88 @@ const CASES: Case[] = [
     steps: [{ t: 'clickMark', i: 1, view: 0 }, { t: 'clickMark', i: 3, shift: true, view: 1 }, { t: 'click', x: 0.5, y: 0.97, view: 0 }],
     moves: [0, 1, 2],
   },
+  ...geoCases(),
   ...hostedCases(),
 ]
+
+/**
+ * An interval selection over `latitude` / `longitude` encodings: no scale inverts a projection, so vega-lite selects by what is drawn
+ * inside the brush (`intersect(box, {markname}, unit.mark)`), seeds the brush from its initial value one timer tick after the
+ * view starts (`geo_interval_init_tick`), and filters other views through the store. The brush follows the pointer too.
+ */
+function geoCases(): Case[] {
+  const PLACES = [
+    { id: 'a', lat: 47.6, lon: -122.3, n: 3, k: 'x' }, { id: 'b', lat: 45.5, lon: -122.7, n: 5, k: 'y' }, { id: 'c', lat: 37.8, lon: -122.4, n: 8, k: 'x' },
+    { id: 'd', lat: 34.1, lon: -118.2, n: 2, k: 'z' }, { id: 'e', lat: 40.7, lon: -74.0, n: 9, k: 'y' }, { id: 'f', lat: 41.9, lon: -87.6, n: 4, k: 'x' },
+    { id: 'g', lat: 29.8, lon: -95.4, n: 6, k: 'z' }, { id: 'h', lat: 33.4, lon: -112.1, n: 7, k: 'y' }, { id: 'i', lat: 25.8, lon: -80.2, n: 1, k: 'x' },
+    { id: 'j', lat: 44.9, lon: -93.3, n: 5, k: 'z' }, { id: 'k', lat: 39.7, lon: -105.0, n: 3, k: 'y' }, { id: 'l', lat: 42.4, lon: -71.1, n: 6, k: 'x' },
+  ]
+  const geoUnit = (extra: Record<string, unknown>): Record<string, unknown> => ({
+    width: 300, height: 180, projection: { type: 'mercator' }, data: { values: PLACES }, ...extra,
+  })
+  const ll = { longitude: { field: 'lon', type: 'quantitative' }, latitude: { field: 'lat', type: 'quantitative' } }
+  const gold = (param: string): Record<string, unknown> => ({ condition: { param, empty: false, value: 'goldenrod' }, value: 'steelblue' })
+  return [
+    {
+      name: 'geo interval on latitude: an initial value, a new brush, translate, clear',
+      spec: baseC(geoUnit({
+        params: [sel('brush', { type: 'interval', encodings: ['latitude'] }, { value: { latitude: [33, 43] } })],
+        mark: 'circle', encoding: { ...ll, size: { field: 'n', type: 'quantitative' }, color: gold('brush') },
+      })),
+      steps: [
+        { t: 'drag', x0: 0.2, y0: 0.2, x1: 0.8, y1: 0.55 },
+        { t: 'drag', x0: 0.5, y0: 0.4, x1: 0.5, y1: 0.7 },
+        { t: 'dblclick', x: 0.5, y: 0.9 },
+      ],
+      moves: [0, 1, 2],
+      wait: 300,
+    },
+    {
+      name: 'geo interval on both: an initial value, over squares',
+      spec: baseC(geoUnit({
+        params: [sel('brush', 'interval', { value: { latitude: [30, 45], longitude: [-125, -100] } })],
+        mark: { type: 'square', size: 80 }, encoding: { ...ll, color: gold('brush') },
+      })),
+      steps: [{ t: 'drag', x0: 0.1, y0: 0.2, x1: 0.6, y1: 0.8 }, { t: 'dblclick', x: 0.9, y: 0.9 }],
+      moves: [0, 1],
+      wait: 300,
+    },
+    {
+      name: 'geo interval over text marks',
+      spec: baseC(geoUnit({
+        params: [sel('brush', 'interval', { value: { latitude: [35, 48], longitude: [-100, -70] } })],
+        mark: { type: 'text', fontSize: 12 }, encoding: { ...ll, text: { field: 'id' }, color: gold('brush') },
+      })),
+      steps: [{ t: 'drag', x0: 0.4, y0: 0.2, x1: 0.95, y1: 0.7 }],
+      moves: [0],
+      wait: 300,
+    },
+    {
+      name: 'geo crossfilter: a map brushed (with an initial value) filters a bar chart through its store',
+      spec: baseC({
+        vconcat: [
+          geoUnit({
+            layer: [{
+              params: [sel('brush', 'interval', { value: { latitude: [32, 46], longitude: [-125, -95] } })],
+              mark: 'circle', encoding: { ...ll, size: { field: 'n', type: 'quantitative', legend: null }, color: gold('brush') },
+            }],
+          }),
+          {
+            width: 300, height: 100, data: { values: PLACES },
+            transform: [{ lookup: 'id', from: { param: 'brush', key: 'id' } }],
+            layer: [
+              { mark: 'bar', encoding: { x: { field: 'k', type: 'nominal' }, y: { aggregate: 'count', type: 'quantitative' }, color: { value: 'steelblue' } } },
+              { transform: [{ filter: "data('brush_store').length && isValid(datum.brush)" }], mark: 'bar', encoding: { x: { field: 'k', type: 'nominal' }, y: { aggregate: 'count', type: 'quantitative' }, color: { value: 'goldenrod' } } },
+            ],
+          },
+        ],
+      }),
+      steps: [{ t: 'drag', x0: 0.1, y0: 0.2, x1: 0.5, y1: 0.7, view: 0 }, { t: 'drag', x0: 0.3, y0: 0.45, x1: 0.6, y1: 0.4, view: 0 }, { t: 'dblclick', x: 0.95, y: 0.95, view: 0 }],
+      moves: [0, 1, 2],
+      wait: 300,
+    },
+  ]
+}
 
 /**
  * The brush follows the pointer exactly, wherever the chart sits and however its host sizes it: pointer -> view coordinates is
@@ -737,6 +819,7 @@ async function drive(engine: 'vega' | 'aster', c: Case): Promise<{ snaps: Snapsh
     if (process.env.SEL_DEBUG) console.log(engine, await page.evaluate(() => document.querySelector('#c svg path.background')!.outerHTML + (document.querySelector('#c svg .marks')?.outerHTML.slice(0, 600) ?? '')))
     const settle = (): Promise<unknown> => page.evaluate(() => (window as unknown as { __settle: () => Promise<unknown> }).__settle())
     await settle()
+    if (c.wait) { await page.waitForTimeout(c.wait); await settle() }
     const snaps: Snapshot[] = [await snapshot(page, engine === 'vega' && !process.env.SEL_NOFRESH)]
     for (const s of c.steps) {
       await runStep(page, s, engine)

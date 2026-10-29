@@ -263,6 +263,8 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       return requireTransform('kde2d')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'isocontour':
       return requireTransform('isocontour')(rows, t as Record<string, unknown>, ctx, sourceName)
+    case 'heatmap':
+      return requireTransform('heatmap')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'wordcloud':
       return requireTransform('wordcloud')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'voronoi':

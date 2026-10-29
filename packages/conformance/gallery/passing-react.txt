@@ -1,6 +1,7 @@
 vega/airport-connections
 vega/annual-precipitation
 vega/annual-temperature
+vega/arc-diagram
 vega/area-chart
 vega/bar-chart
 vega/bar-line-toggle
@@ -14,8 +15,10 @@ vega/calendar-view
 vega/circle-packing
 vega/clock
 vega/connected-scatter-plot
+vega/contour-plot
 vega/county-unemployment
 vega/crossfilter-flights
+vega/density-heatmaps
 vega/distortion-comparison
 vega/donut-chart
 vega/donut-chart-labelled
@@ -49,6 +52,7 @@ vega/pi-monte-carlo
 vega/pie-chart
 vega/population-pyramid
 vega/probability-density
+vega/projections
 vega/quantile-dot-plot
 vega/quantile-quantile-plot
 vega/radar-chart
@@ -319,6 +323,8 @@ vl/histogram_ordinal
 vl/histogram_ordinal_sort
 vl/histogram_rel_freq
 vl/histogram_reverse
+vl/interactive_1d_geo_brush
+vl/interactive_airport_crossfilter
 vl/interactive_area_brush
 vl/interactive_bar_select_highlight
 vl/interactive_bin_extent

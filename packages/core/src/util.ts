@@ -570,6 +570,12 @@ export const zoomSymlog = (domain: readonly number[], anchor: Anchor, scale: num
  */
 export const TUPLE_ID: unique symbol = Symbol.for('aster.tuple') as never
 
+/**
+ * On the `mark` of a picked item's facade: the scene node (the mark container, or the group mark for a group item) it stands for,
+ * which `intersect()` walks when handed `unit.mark`.
+ */
+export const MARK_NODE: unique symbol = Symbol.for('aster.markNode') as never
+
 /** vega-dataflow `isTuple`: whether the value is a registered tuple. */
 export function isTuple(t: unknown): boolean {
   return !!(t && (typeof t === 'object' || typeof t === 'function') && (t as Record<symbol, unknown>)[TUPLE_ID])

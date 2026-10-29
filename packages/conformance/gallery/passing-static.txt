@@ -48,8 +48,10 @@ vega/pacman
 vega/parallel-coordinates
 vega/pi-monte-carlo
 vega/pie-chart
+vega/platformer
 vega/population-pyramid
 vega/probability-density
+vega/projections
 vega/quantile-dot-plot
 vega/quantile-quantile-plot
 vega/radar-chart

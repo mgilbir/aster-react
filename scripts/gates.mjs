@@ -50,6 +50,10 @@ export const GATES = [
     why: 'Vega-Lite selections: the same native input (click, shift-click, drag, wheel, legend click, bound inputs, nearest, bound scales) through vega-lite + real vega and through @aster/vl + <Chart>; signals, selection stores and SVG compared after every step',
   },
   {
+    name: 'intersect-browser', args: ['conformance:intersect'], tags: ['browser'],
+    why: 'the intersect() expression function (vega-lite geo interval selections) over every mark type, boxes and filters vs real vega in Chromium (arc and path outlines need a canvas context)',
+  },
+  {
     name: 'react-browser', args: ['--filter', '@aster/react', 'run', 'test:browser'], tags: ['browser'],
     why: '<Chart> and <SvgChart interaction> pointer/keyboard interaction, selection, pan/zoom, signal.on, bound inputs and the a11y overlay in a real Chromium; <SvgChart> without interaction renders and reports the missing event loop',
   },

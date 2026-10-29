@@ -11,5 +11,5 @@ export const ADDON_FUNCTIONS: Readonly<Record<string, 'transforms' | 'geo'>> = O
   sampleUniform: 'transforms', densityUniform: 'transforms', cumulativeUniform: 'transforms', quantileUniform: 'transforms',
   treePath: 'transforms', treeAncestors: 'transforms',
   // @aster/core/geo (addon-geo.ts)
-  geoArea: 'geo', geoBounds: 'geo', geoCentroid: 'geo', geoScale: 'geo',
+  geoArea: 'geo', geoBounds: 'geo', geoCentroid: 'geo', geoScale: 'geo', geoShape: 'geo', pathShape: 'geo',
 })

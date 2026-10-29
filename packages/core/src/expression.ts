@@ -93,6 +93,12 @@ export interface ExpressionRuntime {
    * Returns 1, as vega does.
    */
   setdata?: (name: string, tuples: unknown) => number
+  /**
+   * `intersect(box, {marktype, markname}, group)`: the items of the scene the view has drawn inside a box. Only a host that has a
+   * scene while it runs event handlers (the signal event loop) supplies it; without one `intersect` finds nothing -- vega's root is
+   * empty until its marks are built.
+   */
+  intersect?: (box: unknown, opt?: unknown, group?: unknown) => unknown[]
 }
 
 export type CompiledExpr = (datum: unknown, params?: Record<string, unknown>, event?: unknown) => unknown
@@ -398,6 +404,8 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     vlSelectionResolve: (name: unknown, op?: unknown, isMulti?: unknown, vl5?: unknown) => selectionResolve(runtime.data(String(name)) as never, op, isMulti, vl5),
     vlSelectionTuples: (items: unknown, base: unknown) => selectionTuples(items, base),
     isTuple: (t: unknown) => isTuple(t),
+    // vega-functions intersect.js: the items of the drawn scene inside a box
+    intersect: (b: unknown, opt?: unknown, group?: unknown) => (runtime.intersect ? runtime.intersect(b, opt, group) : []),
     // vega-util pan / zoom of a scale domain
     panLinear: (domain: unknown, delta: unknown) => panLinear(domain as number[], delta as number),
     panLog: (domain: unknown, delta: unknown) => panLog(domain as number[], delta as number),

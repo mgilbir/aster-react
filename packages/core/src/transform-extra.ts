@@ -13,7 +13,7 @@ import { registerRuntimeExpressionFunction, type ExpressionRuntime } from './exp
 import { countpatternRows as countpatternStatsRows, densityRows, kdeRows, loessRows, quantileRows, regressionRows } from './transform-stats.js'
 import { nominalTextWidth } from './text-metrics.js'
 import { forceRows } from './force-layout.js'
-import { isocontourRows, kde2dRows } from './raster-transforms.js'
+import { heatmapRows, isocontourRows, kde2dRows } from './raster-transforms.js'
 import { clusterTree, defaultSeparation, oneSeparation, tidyTree } from './hierarchy-tree.js'
 
 // -- pack / partition / treemap (d3-hierarchy layouts) -----------------------
@@ -2080,6 +2080,7 @@ transformRegistry.set('tree', treeRows)
 transformRegistry.set('force', forceRows)
 transformRegistry.set('kde2d', kde2dRows)
 transformRegistry.set('isocontour', isocontourRows)
+transformRegistry.set('heatmap', heatmapRows)
 transformRegistry.set('treelinks', treelinksRows)
 transformRegistry.set('wordcloud', wordcloudRows)
 transformRegistry.set('voronoi', voronoiRows)

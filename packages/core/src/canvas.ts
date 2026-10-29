@@ -14,6 +14,7 @@ import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneDef, SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { gradientDefOf, isGradientPaint as isGradientObject } from './svg-defs.js'
 import { Bounds, boundLeaf, boundTypedMark } from './bounds.js'
+import { imageBox, itemImage } from './image-box.js'
 import { parsePathData, tracePath, type PathSeg, type PathSink } from './path-data.js'
 
 // Path-data parsing and replay live in path-data.ts (hit.ts needs them without the renderer); the public surface is unchanged.
@@ -1056,22 +1057,14 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       // image loads. The box is offset by align/baseline; with `aspect` on (the
       // default) the bitmap is letterboxed to its own aspect ratio.
       for (const it of group.items ?? []) {
-        const img = (it as Record<string, unknown>).image as { width: number; height: number; complete?: boolean } | undefined
+        const img = itemImage(it)
         if (img == null || img.complete === false) continue
         const opacity = it.opacity == null ? 1 : (it.opacity as number)
         // vega imageWidth/imageHeight: an explicit size, else the bitmap's own (scaled
         // to the other explicit dimension when aspect is on)
-        let w = it.width != null ? it.width
-          : !img.width ? 0
-            : it.aspect !== false && it.height ? (it.height * img.width) / img.height
-              : img.width
-        let h = it.height != null ? it.height
-          : !img.height ? 0
-            : it.aspect !== false && it.width ? (it.width * img.height) / img.width
-              : img.height
+        const box = imageBox(it)
+        let { x, y, w, h } = box
         if (w === 0 || h === 0) continue
-        let x = (it.x || 0) - (it.align === 'center' ? w / 2 : it.align === 'right' ? w : 0)
-        let y = (it.y || 0) - (it.baseline === 'middle' ? h / 2 : it.baseline === 'bottom' ? h : 0)
         if (it.aspect !== false) {
           const ar0 = img.width / img.height
           const ar1 = (it.width as number) / (it.height as number)
@@ -1091,7 +1084,8 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
         if (rec.blend != null) ctx.globalCompositeOperation = String(rec.blend)
         ctx.globalAlpha = opacity
         ctx.imageSmoothingEnabled = rec.smooth !== false
-        ctx.drawImage?.(img, x, y, w, h)
+        // (a bitmap that holds its own pixels, a `heatmap`'s, hands the context the canvas it keeps them in)
+        ctx.drawImage?.(img.toCanvasSource ? (img.toCanvasSource() ?? img) : img, x, y, w, h)
         ctx.globalAlpha = 1
         if (rec.blend != null) ctx.globalCompositeOperation = 'source-over'
       }

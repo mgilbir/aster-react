@@ -76,7 +76,7 @@ const EXPANDING = new Set<string>([
  */
 const INDEX_PRESERVING = new Set<string>([
   'formula', 'identifier', 'timeunit', 'geoshape', 'geopath', 'geopoint', 'linkpath', 'project',
-  'geojson', 'label', 'pie', 'dotbin', 'pack', 'partition', 'treemap', 'tree', 'voronoi',
+  'geojson', 'label', 'heatmap', 'pie', 'dotbin', 'pack', 'partition', 'treemap', 'tree', 'voronoi',
 ])
 
 /** Transforms that re-derive every output but never change the input mapping. */

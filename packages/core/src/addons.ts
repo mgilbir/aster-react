@@ -27,7 +27,7 @@ export type AddonName = 'transforms' | 'geo' | 'load'
 export const TRANSFORMS_ADDON_TYPES: readonly string[] = [
   'kde', 'density', 'quantile', 'regression', 'loess', 'pack', 'partition', 'treemap', 'wordcloud', 'voronoi',
   'pie', 'cross', 'countpattern', 'dotbin', 'geopoint', 'geojson', 'linkpath',
-  'tree', 'treelinks', 'force', 'kde2d', 'isocontour', 'geopath', 'crossfilter', 'resolvefilter', 'label',
+  'tree', 'treelinks', 'force', 'kde2d', 'isocontour', 'heatmap', 'geopath', 'crossfilter', 'resolvefilter', 'label',
 ]
 /** The expression functions the add-ons register, with the add-on of each (see `addon-functions.ts`). */
 export { ADDON_FUNCTIONS }
@@ -108,6 +108,8 @@ export function addonsNeeded(spec: VgSpec): readonly AddonName[] {
     }
     if (!isObj(node) || depth > HARD_MAX_SPEC_DEPTH || seen.has(node)) continue
     seen.add(node)
+    // the projections of a group mark are built in its scope (the view's are checked above)
+    if (key === 'projections' && Array.isArray(node) && node.length > 0) found.add('geo')
     if (Array.isArray(node)) {
       for (const x of node) stack.push([x, depth + 1, key])
       continue
