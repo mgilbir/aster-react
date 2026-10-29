@@ -87,8 +87,8 @@ const EXTENDED = ['airy', 'aitoff', 'armadillo', 'august', 'baker', 'berghaus', 
 
 describe('the projection types are exactly vega-projection\'s', () => {
   it('vega knows the seventeen, in any case, and none of the extended set', () => {
-    for (const t of [...VEGA_TYPES, ...VEGA_TYPES.map((x) => x.toUpperCase())]) expect(vega.projection(t), t).not.toBeNull()
-    for (const t of EXTENDED) expect(vega.projection(t), t).toBeNull()
+    for (const t of [...VEGA_TYPES, ...VEGA_TYPES.map((x) => x.toUpperCase())]) expect((vega.projection as (type: string) => unknown)(t), t).not.toBeNull()
+    for (const t of EXTENDED) expect((vega.projection as (type: string) => unknown)(t), t).toBeNull()
   })
   it('the engine makes the same ones, and refuses the rest with the same error', async () => {
     const probe = (type: string): Spec => ({ width: 40, height: 40, projections: [{ name: 'p', type }], data: [{ name: 'g', values: [{ type: 'Sphere' }] }], marks: [{ type: 'shape', from: { data: 'g' }, transform: [{ type: 'geoshape', projection: 'p' }] }] })

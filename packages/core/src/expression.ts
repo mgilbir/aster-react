@@ -16,7 +16,6 @@ import { bandSpace } from './scale.js'
 import { selectionIdTest, selectionResolve, selectionTest, selectionTuples } from './selections.js'
 import { parseExpression } from './expr-parser.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
-import { sceneIntersect } from './scene-intersect.js'
 import { expressionInterpreter, DefaultFunctions, ExpressionConstants, EventFunctions } from './expr-interpreter.js'
 import {
   timeOffset, utcOffset, timeSequence, utcSequence,
@@ -81,10 +80,11 @@ export interface ExpressionRuntime {
    */
   containerSize?: () => [number | undefined, number | undefined]
   /**
-   * The scene the view has drawn (`intersect()` looks inside it). Only a host that has one while it runs event handlers (the
-   * signal event loop) supplies it; without one, `intersect` finds nothing -- vega's root is empty until its marks are built.
+   * `intersect(box, {marktype, markname}, group)`: the items of the scene the view has drawn inside a box. Only a host that has a
+   * scene while it runs event handlers (the signal event loop) supplies it; without one `intersect` finds nothing -- vega's root is
+   * empty until its marks are built.
    */
-  scene?: () => import('./types.js').SceneRoot | undefined
+  intersect?: (box: unknown, opt?: unknown, group?: unknown) => unknown[]
 }
 
 export type CompiledExpr = (datum: unknown, params?: Record<string, unknown>, event?: unknown) => unknown
@@ -391,7 +391,7 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     vlSelectionTuples: (items: unknown, base: unknown) => selectionTuples(items, base),
     isTuple: (t: unknown) => isTuple(t),
     // vega-functions intersect.js: the items of the drawn scene inside a box
-    intersect: (b: unknown, opt?: unknown, group?: unknown) => sceneIntersect(runtime.scene?.(), b, opt, group),
+    intersect: (b: unknown, opt?: unknown, group?: unknown) => (runtime.intersect ? runtime.intersect(b, opt, group) : []),
     // vega-util pan / zoom of a scale domain
     panLinear: (domain: unknown, delta: unknown) => panLinear(domain as number[], delta as number),
     panLog: (domain: unknown, delta: unknown) => panLog(domain as number[], delta as number),

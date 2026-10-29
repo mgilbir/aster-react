@@ -88,6 +88,7 @@ const SCOPES: Array<{ markname?: string; marktype?: string }> = [
 const entry = `
 import * as vega from 'vega'
 import { compileChart, evaluateChart, compileExpr } from '@aster/core'
+import { sceneIntersect } from '@aster/core/signals'
 import '@aster/core/geo'
 import '@aster/core/transforms'
 
@@ -96,7 +97,7 @@ window.__run = async (spec, boxes, scopes) => {
   const view = new vega.View(vega.parse(structuredClone(spec)), { renderer: 'none', logger: { level() { return this }, error(...a) { errors.push(a.map(String).join(' ')); return this }, warn() { return this }, info() { return this }, debug() { return this } } })
   await view.runAsync()
   const scene = evaluateChart(compileChart(structuredClone(spec)), {})
-  const runtime = { scale: () => undefined, data: () => undefined, scene: () => scene, expr: (e) => compileExpr(e, runtime) }
+  const runtime = { scale: () => undefined, data: () => undefined, intersect: (b, o, g) => sceneIntersect(scene, b, o, g), expr: (e) => compileExpr(e, runtime) }
   const expr = compileExpr("box ? intersect(box, markname ? {markname: markname} : (marktype ? {marktype: marktype} : null)) : []", runtime)
   // (a group item has no datum of its own at the root: it is named by its mark)
   const idOf = (it, vegaSide) => (it.datum ? it.datum.id : 'G:' + (vegaSide ? it.mark.name : it.name))

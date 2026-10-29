@@ -37,6 +37,7 @@ import { applyChangeset, newChangeset, planModify, type Changeset } from './modi
 import { parseExpression, type AstNode } from './expr-parser.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
 import { dict, ownGet, setOwn, TUPLE_ID, MARK_NODE, scopedSignalName } from './util.js'
+import { sceneIntersect } from './scene-intersect.js'
 import { consoleLogger, type Logger } from './logger.js'
 import { timers, type Timer } from './timer.js'
 import { resolveCursor } from './cursor.js'
@@ -620,7 +621,7 @@ function bindSignalEventsDefs(
     data: dataOf,
     modify: modifyData,
     ...(opts.containerSize ? { containerSize: opts.containerSize } : {}),
-    scene: () => opts.scene,
+    intersect: (box, opt, group) => sceneIntersect(opts.scene, box, opt, group),
     expr: (code) => compileIn(bindRuntime, code),
   }
   const compiledExprs = new WeakMap<ExpressionRuntime, Map<string, CompiledExpr>>()
@@ -1321,3 +1322,6 @@ export function bindSceneSignals(
     { originX: scene.padding?.left ?? 0, originY: scene.padding?.top ?? 0, scene, ...opts },
   )
 }
+
+/** @internal vega-scenegraph's intersect over the scene (the `intersect()` expression function's body); exported for the conformance gate. */
+export { sceneIntersect } from './scene-intersect.js'
