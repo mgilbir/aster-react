@@ -266,6 +266,7 @@ vl/facet_custom_header
 vl/facet_grid_bar
 vl/facet_independent_scale
 vl/facet_independent_scale_layer_broken
+vl/geo_choropleth
 vl/geo_circle
 vl/geo_constant_value
 vl/geo_custom_projection
@@ -276,9 +277,11 @@ vl/geo_layer_line_london
 vl/geo_line
 vl/geo_params_projections
 vl/geo_point
+vl/geo_repeat
 vl/geo_rule
 vl/geo_sphere
 vl/geo_text
+vl/geo_trellis
 vl/hconcat_weather
 vl/histogram
 vl/histogram_bin_change
@@ -302,6 +305,7 @@ vl/interactive_concat_layer
 vl/interactive_crossfilter
 vl/interactive_dashboard_europe_pop
 vl/interactive_geo_earthquakes
+vl/interactive_geo_facet_species
 vl/interactive_global_development
 vl/interactive_histogram_full_height_hover
 vl/interactive_index_chart
