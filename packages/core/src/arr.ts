@@ -207,7 +207,7 @@ function compareDefined(compare: (a: number, b: number) => number) {
   }
 }
 
-// Based on https://github.com/mourner/quickselect (ISC, Vladimir Agafonkin).
+// Based on https://github.com/mourner/quickselect (ISC, Vladimir Agafonkin; see THIRD_PARTY_NOTICES.md).
 function quickselect(array: Float64Array, k: number, left = 0, right = Infinity, compare?: (a: number, b: number) => number): Float64Array {
   k = Math.floor(k)
   left = Math.floor(Math.max(0, left))
