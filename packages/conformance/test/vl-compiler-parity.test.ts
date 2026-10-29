@@ -938,6 +938,36 @@ describe('@aster/vl == vega-lite: the data that marks and scale domains read, pe
   }, 30_000)
 })
 
+// legend/parse.ts + legend/properties.ts: a legend's orient, direction and gradient length, from the legend and from config.legend; a
+// property config.legend sets and the legend does not is left to the config (trail_comet)
+describe('@aster/vl == vega-lite: the orient, direction and gradient length of a legend', () => {
+  const CONFIGS: Array<Record<string, unknown>> = [
+    {}, { orient: 'bottom' }, { orient: 'top' }, { orient: 'top-left' }, { orient: 'left' }, { direction: 'horizontal' }, { gradientDirection: 'horizontal' },
+    { symbolDirection: 'horizontal' }, { orient: 'bottom', direction: 'horizontal' }, { orient: 'bottom', gradientLength: 50 },
+    { orient: 'bottom', gradientHorizontalMinLength: 150, gradientHorizontalMaxLength: 260 }, { gradientVerticalMinLength: 40, gradientVerticalMaxLength: 120 },
+    { orient: 'left', gradientDirection: 'horizontal' }, { orient: 'bottom', direction: 'horizontal', gradientDirection: 'vertical' },
+  ]
+  const LEGENDS: Array<Record<string, unknown> | undefined> = [
+    undefined, { orient: 'bottom' }, { direction: 'horizontal' }, { orient: 'right', direction: 'horizontal' }, { gradientLength: 90 },
+    { orient: 'top', gradientLength: 70 }, { direction: 'vertical', orient: 'bottom' },
+  ]
+  const shape = (v: any) => (v ? { legend: v } : {})
+  const pick = (vg: any): unknown => (vg.legends ?? []).map((l: any) => ({ orient: l.orient, direction: l.direction, gradientLength: l.gradientLength, keys: Object.keys(l).filter((k) => ['fill', 'stroke', 'shape', 'size', 'opacity', 'strokeWidth'].includes(k)).sort() }))
+  for (const cfg of CONFIGS) {
+    for (const lg of LEGENDS) {
+      it(`config.legend ${JSON.stringify(cfg)}, legend ${JSON.stringify(lg ?? null)}`, () => {
+        const spec = { data: DATA, config: { legend: cfg }, mark: 'point', encoding: { x: q('x'), y: q('y'), color: q('v', shape(lg)), shape: n('c', shape(lg)), size: q('x', shape(lg)) } }
+        const oracle = (vl as any).compile(plain(spec)).spec
+        const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+        expect(plain(pick(ours))).toEqual(plain(pick(oracle)))
+      })
+    }
+  }
+  it('a gradient legend in a facet measures the cell', async () => {
+    await check({ data: DATA, config: { legend: { orient: 'bottom', direction: 'horizontal' } }, mark: 'point', encoding: { x: q('x'), y: q('y'), color: q('v'), column: n('g') } })
+  }, 30_000)
+})
+
 /** The domains of the scales, with the names of the datasets they read left out (how the datasets are named and cut is not what is compared). */
 const DOMAIN_SHAPES = (vg: any): unknown =>
   (vg.scales ?? []).map((s: any) => {

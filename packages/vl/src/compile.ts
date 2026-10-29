@@ -5311,7 +5311,6 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
   // (upstream leaves them to the channel's own legend definition).
   const cfgDefaults: Record<string, unknown> = {}
   if (cfgLegend.symbolType != null) cfgDefaults.symbolType = cfgLegend.symbolType
-  const cfgHorizontal = cfgLegend.orient === 'top' || cfgLegend.orient === 'bottom'
   // vega-lite's reduced symbol opacity (init.ts opacity()) does not apply
   // when the encoding is aggregate — the mark legend follows the mark.
   const reducedOpacity = fields.some((f) => f.aggregate) ? undefined : C.pointOpacity
@@ -5366,6 +5365,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     lg[legendFilled ? 'fill' : 'stroke'] = 'color'
     const opacity = markOpacity ?? (['point', 'circle', 'square', 'tick'].includes(mark) ? reducedOpacity : undefined)
     if (colorGradient) {
+      GRADIENT_LEGENDS.add(lg)
       lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
       if (opacity) lg.encode = { gradient: { update: { opacity: { value: opacity } } } }
     } else {
@@ -5386,40 +5386,12 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       if (k === 'type' && v === 'gradient') continue
       lg[k] = v
     }
-    // top/bottom gradients measure along the chart width
-    if (colorGradient && (lg.orient === 'top' || lg.orient === 'bottom' || lg.direction === 'horizontal')
-      && userLegend.gradientLength == null && !('gradientLength' in userLegend)) {
-      lg.gradientLength = { signal: 'clamp(width, 100, 200)' }
-    }
     // strip the VL-only keys and the other type's keys (upstream parity): a
     // gradient legend drops symbol*, a symbol legend drops gradient*
     const isGradient = 'gradientLength' in lg
     for (const k of Object.keys(lg)) {
       if (k === 'title' || k === 'encode' || k === 'fill' || k === 'stroke' || k === 'shape' || k === 'size' || k === 'opacity') continue
       if (isGradient ? (k.startsWith('symbol') || k === 'gradientStroke') : k.startsWith('gradient')) delete lg[k]
-    }
-    // top/bottom legends lay their entries out horizontally; a corner-oriented
-    // gradient is horizontal with vega-lite's fixed 100px length, and an
-    // explicit direction:horizontal on any other orient also uses 100px.
-    if (userLegend.direction === 'horizontal' && lg.orient !== 'top' && lg.orient !== 'bottom'
-      && !(typeof lg.orient === 'string' && /^(top|bottom)-(left|right)$/.test(lg.orient))
-      && userLegend.gradientLength == null && 'gradientLength' in lg) {
-      lg.gradientLength = 100
-    }
-    if (lg.orient === 'bottom' || lg.orient === 'top') lg.direction = lg.direction ?? 'horizontal'
-    if (typeof lg.orient === 'string' && /^(top|bottom)-(left|right)$/.test(lg.orient) && 'gradientLength' in lg) {
-      lg.direction = lg.direction ?? 'horizontal'
-      if (userLegend.gradientLength == null) lg.gradientLength = 100
-    }
-    if (lg.direction == null) {
-      if (cfgLegend.gradientDirection === 'horizontal') {
-        lg.direction = 'horizontal'
-        if (isGradient && userLegend.gradientLength == null && 'gradientLength' in lg) lg.gradientLength = 100
-      } else if (cfgLegend.symbolDirection === 'horizontal') {
-        lg.direction = 'horizontal'
-      } else if (cfgHorizontal) {
-        lg.direction = 'horizontal'
-      }
     }
     push('color', lg, colorDef)
   }
@@ -5461,6 +5433,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       }
       applyTimeUnitLegend(glg, sizeDef, sizeUser, formats)
       forwardLegendProps(sizeUser, glg, true)
+      GRADIENT_LEGENDS.add(glg)
       push('size', glg, sizeDef)
     } else {
     const sizeSym = symbolFor('size')
@@ -5474,7 +5447,6 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     }
     applyTimeUnitLegend(sizeLg, sizeDef, sizeUser, formats)
     forwardLegendProps(sizeUser, sizeLg, false)
-    if (sizeLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) sizeLg.direction = 'horizontal'
     push('size', sizeLg, sizeDef)
     }
   }
@@ -5490,7 +5462,6 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     }
     applyTimeUnitLegend(shapeLg, shapeDefL, shapeUser, formats)
     forwardLegendProps(shapeUser, shapeLg, false)
-    if (shapeLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) shapeLg.direction = 'horizontal'
     push('shape', shapeLg, shapeDefL)
   }
   const strokeWidthLegendDef = fields.find((f) => f.channel === 'strokeWidth' && f.field)
@@ -5505,7 +5476,6 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     }
     applyTimeUnitLegend(swLg, strokeWidthLegendDef, swUser, formats)
     forwardLegendProps(swUser, swLg, false)
-    if (swLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) swLg.direction = 'horizontal'
     push('strokeWidth', swLg, strokeWidthLegendDef)
   }
   const strokeDashLegendDef = fields.find((f) => f.channel === 'strokeDash' && f.field)
@@ -5520,7 +5490,6 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     }
     applyTimeUnitLegend(sdLg, strokeDashLegendDef, sdUser, formats)
     forwardLegendProps(sdUser, sdLg, false)
-    if (sdLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) sdLg.direction = 'horizontal'
     push('strokeDash', sdLg, strokeDashLegendDef)
   }
   const opacityLegendDef = fields.find((f) => f.channel === 'opacity' && f.field)
@@ -5535,7 +5504,6 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     }
     applyTimeUnitLegend(opLg, opacityLegendDef, opUser, formats)
     forwardLegendProps(opUser, opLg, false)
-    if (opLg.direction == null && (cfgHorizontal || cfgLegend.symbolDirection === 'horizontal')) opLg.direction = 'horizontal'
     push('opacity', opLg, opacityLegendDef)
   }
   // legends over the SAME domain (a colour and a shape both on `c`) are one legend (legend/assemble.ts assembleLegends: keyed by
@@ -5553,8 +5521,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
   for (const key of order) {
     const lg = legendsByKey[key]
     if (!lg) continue
-    // top/bottom legends of every channel lay their entries out horizontally
-    if ((lg.orient === 'top' || lg.orient === 'bottom') && lg.direction == null) lg.direction = 'horizontal'
+    applyLegendDirection(lg, legendDefs[key]!, cfgLegend)
     // vega-lite's legend labelExpr is a label text encode (vega has no such legend property)
     if (typeof lg.labelExpr === 'string') {
       const enc = (lg.encode ?? (lg.encode = {})) as { labels?: { update?: Record<string, unknown> } }
@@ -5575,6 +5542,33 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     legends.push(lg)
   }
   return legends
+}
+
+/** The legends that are a gradient (a colour or size scale that is continuous to continuous). */
+const GRADIENT_LEGENDS = new WeakSet<object>()
+
+/**
+ * legend/parse.ts + legend/properties.ts getDirection, defaultDirection, defaultGradientLength: a legend's direction and its gradient's
+ * length follow its orient (the legend's, then config.legend's, then 'right'). A property that config.legend sets and the legend does
+ * not is left to the config (parse.ts: `explicit || config.legend[property] === undefined`), so it is not written on the legend.
+ * (`getDirection` reads `legendConfig.gradientDirection` for every legend type: the type is always truthy.)
+ */
+function applyLegendDirection(lg: Record<string, unknown>, def: FieldDef, cfgLegend: Record<string, unknown>): void {
+  const user = (isObject(def.legend) ? def.legend : {}) as Record<string, unknown>
+  const gradient = GRADIENT_LEGENDS.has(lg)
+  const orient = (user.orient ?? cfgLegend.orient ?? 'right') as string
+  const dflt = orient === 'top' || orient === 'bottom' ? 'horizontal' : orient === 'left' || orient === 'right' || orient === 'none' ? undefined : gradient ? 'horizontal' : undefined
+  const direction = user.direction ?? cfgLegend.gradientDirection ?? dflt
+  delete lg.direction
+  if (direction !== undefined && (direction === user.direction || cfgLegend.direction === undefined)) lg.direction = direction
+  if (!gradient) return
+  const num = (v: unknown, d: number): unknown => v ?? d
+  const length = user.gradientLength ?? cfgLegend.gradientLength
+    ?? (direction === 'horizontal'
+      ? (orient === 'top' || orient === 'bottom' ? { signal: `clamp(width, ${String(num(cfgLegend.gradientHorizontalMinLength, 100))}, ${String(num(cfgLegend.gradientHorizontalMaxLength, 200))})` } : num(cfgLegend.gradientHorizontalMinLength, 100))
+      : { signal: `clamp(height, ${String(num(cfgLegend.gradientVerticalMinLength, 64))}, ${String(num(cfgLegend.gradientVerticalMaxLength, 200))})` })
+  delete lg.gradientLength
+  if (length === user.gradientLength || cfgLegend.gradientLength === undefined) lg.gradientLength = length
 }
 
 function legendTitle(def: FieldDef, userLegend: Record<string, unknown>): unknown {
@@ -8190,7 +8184,7 @@ function applyLegendSelections(lg: Record<string, unknown>, def: FieldDef, names
     .join(' || ')
   const unselected = 0.35 // config.legend.unselectedOpacity
   const enc = (lg.encode ?? {}) as Record<string, { update?: Record<string, unknown> }>
-  if (!('gradientLength' in lg) && def.channel !== 'opacity') {
+  if (!GRADIENT_LEGENDS.has(lg) && def.channel !== 'opacity') {
     const symbols = (enc.symbols ??= {})
     const update = (symbols.update ??= {})
     update.opacity = [{ test: condition, value: (update.opacity as { value?: number } | undefined)?.value ?? 1 }, { value: unselected }]

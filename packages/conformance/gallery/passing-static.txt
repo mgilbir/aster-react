@@ -648,6 +648,7 @@ vl/time_parse_local
 vl/time_parse_utc
 vl/time_parse_utc_format
 vl/trail_color
+vl/trail_comet
 vl/trellis_anscombe
 vl/trellis_area
 vl/trellis_area_seattle
