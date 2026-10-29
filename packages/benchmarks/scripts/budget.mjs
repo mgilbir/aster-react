@@ -102,7 +102,7 @@ const BUDGETS = {
   '@aster/react SvgChart': 162.7 * 1024,
   '@aster/react SvgChart + interaction': 176.7 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 270.8 * 1024,
+  '@aster/react Chart + VL': 274.7 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

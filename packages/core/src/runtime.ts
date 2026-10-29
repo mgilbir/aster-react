@@ -1467,6 +1467,9 @@ function forceLinkDatasets(chart: CompiledChart): Set<string> {
 }
 
 const SIGNAL_PREREQS = new WeakMap<CompiledChart, Map<string, string[]>>()
+/** A call that reads a dataset by the name in its first argument (vega-functions' dataVisitor / selectionVisitor). */
+const DATA_READ_CALL = /\b(data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(\s*["']/
+const DATA_READ_CALL_ALL = /\b(data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(\s*["']([^"']+)["']/g
 const IDENT = /[A-Za-z_$][\w$]*/g
 
 function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
@@ -1480,8 +1483,9 @@ function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
       if (typeof sig === 'string') (writers.get(sig) ?? writers.set(sig, []).get(sig)!).push(d.name)
     }
   }
-  if (writers.size) {
+  if (writers.size || (chart.signalDefs ?? []).some((sd) => DATA_READ_CALL.test(`${sd.update ?? ''} ${sd.init ?? ''}`))) {
     const defs = new Map((chart.signalDefs ?? []).map((sd) => [sd.name, sd] as const))
+    const datasetNames = new Set(chart.data.map((d) => d.name))
     const identsOf = (v: unknown, into: Set<string>): void => {
       walkStrings(v, (str) => { for (const m of str.matchAll(IDENT)) into.add(m[0]) })
     }
@@ -1500,6 +1504,19 @@ function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
       }
       const first: string[] = []
       for (const n of read) for (const w of writers.get(n) ?? []) if (w !== d.name && !first.includes(w) && !dependsOn(chart, w, d.name)) first.push(w)
+      // ... and the datasets a signal it reads is computed from (`vlSelectionResolve("brush_store", ...)`: a bin whose span is the
+      // selection's range runs after the store the selection fills)
+      for (const n of read) {
+        const sd = defs.get(n)
+        if (!sd) continue
+        for (const text of [sd.update, sd.init]) {
+          if (typeof text !== 'string') continue
+          for (const m of text.matchAll(DATA_READ_CALL_ALL)) {
+            const w = m[2]!
+            if (datasetNames.has(w) && w !== d.name && !first.includes(w) && !dependsOn(chart, w, d.name)) first.push(w)
+          }
+        }
+      }
       if (first.length) out.set(d.name, first)
     }
   }
@@ -3128,7 +3145,8 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     if (prereqs) {
       let built = false
       for (const w of prereqs) if (!ctx.datasets.has(w) && !seen.has(w)) { build(w, seen); built = true }
-      if (built) resolveSignalUpdates(ctx)
+      // (a prerequisite built earlier still has signals computed from it that this dataset's transforms read)
+      if (built || prereqs.length) resolveSignalUpdates(ctx)
     }
 
     let rows: Row[]

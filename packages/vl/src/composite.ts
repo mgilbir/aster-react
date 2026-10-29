@@ -596,6 +596,14 @@ export function normalizeComposites(node: unknown, userConfig: Obj | undefined, 
     errorband: { ...DEFAULT_CONFIG.errorband, ...(userConfig?.errorband ?? {}) },
   }
   const kind = kindOf(node)
+  // a composite unit faceted through its encoding is a facet over the composite (normalize/core.ts: the faceted unit is mapped first)
+  if (kind && isObj(node.encoding) && (node.encoding.row !== undefined || node.encoding.column !== undefined || node.encoding.facet !== undefined)) {
+    const { row, column, facet, ...rest } = node.encoding
+    const { width, height, params, projection, mark, name, encoding: _e, ...outer } = node
+    void _e
+    const inner = normalizeComposites({ ...(width !== undefined ? { width } : {}), ...(height !== undefined ? { height } : {}), ...(params ? { params } : {}), ...(projection !== undefined ? { projection } : {}), ...(name !== undefined ? { name } : {}), mark, encoding: rest }, userConfig, inherited)
+    return { ...outer, facet: facet !== undefined ? facet : { ...(row !== undefined ? { row } : {}), ...(column !== undefined ? { column } : {}) }, spec: inner }
+  }
   if (kind) {
     const spec = { ...node, encoding: withTypes(mergeEncoding(inherited, node.encoding)) }
     if (kind === 'boxplot') return normalizeBoxPlot(spec, userConfig)

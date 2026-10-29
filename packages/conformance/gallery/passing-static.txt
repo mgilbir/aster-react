@@ -84,6 +84,7 @@ vl/animated_hop
 vl/arc_color_mappings
 vl/arc_donut
 vl/arc_facet
+vl/arc_params
 vl/arc_pie
 vl/arc_pie_normalize_tooltip
 vl/arc_pie_pyramid
@@ -97,6 +98,7 @@ vl/area_gradient
 vl/area_horizon
 vl/area_invalid_null
 vl/area_overlay
+vl/area_overlay_with_y2
 vl/area_params
 vl/area_temperature_range
 vl/area_vertical
@@ -127,6 +129,7 @@ vl/bar_binned_yearmonth_grouped
 vl/bar_binned_yearmonth_grouped_center_band
 vl/bar_binned_yearmonth_label
 vl/bar_binnedyearmonth
+vl/bar_bullet_expr_bind
 vl/bar_color_disabled_scale
 vl/bar_column_fold
 vl/bar_column_pivot
@@ -148,6 +151,7 @@ vl/bar_gantt_config_no_zero
 vl/bar_group_timeunit
 vl/bar_grouped
 vl/bar_grouped_custom_color_domain
+vl/bar_grouped_custom_padding
 vl/bar_grouped_errorbar
 vl/bar_grouped_facet
 vl/bar_grouped_facet_independent_scale
@@ -155,6 +159,7 @@ vl/bar_grouped_facet_independent_scale_fixed_width
 vl/bar_grouped_fixed_width
 vl/bar_grouped_horizontal
 vl/bar_grouped_label
+vl/bar_grouped_repeated
 vl/bar_grouped_stacked
 vl/bar_grouped_step_for_offset
 vl/bar_grouped_step_for_position
@@ -234,15 +239,19 @@ vl/circle_bubble_health_income
 vl/circle_custom_tick_labels
 vl/circle_flatten
 vl/circle_github_punchcard
+vl/circle_labelangle_orient_signal
 vl/circle_natural_disasters
 vl/circle_opacity
 vl/circle_scale_quantile
 vl/circle_scale_quantize
 vl/circle_scale_threshold
 vl/circle_wilkinson_dotplot
+vl/circle_wilkinson_dotplot_stacked
 vl/concat_bar_layer_circle
 vl/concat_bar_scales_discretize
 vl/concat_bar_scales_discretize_2_cols
+vl/concat_hover
+vl/concat_hover_filter
 vl/concat_layer_voyager_result
 vl/concat_marginal_histograms
 vl/concat_population_pyramid
@@ -292,9 +301,12 @@ vl/histogram_rel_freq
 vl/histogram_reverse
 vl/interactive_area_brush
 vl/interactive_bar_select_highlight
+vl/interactive_bin_extent
+vl/interactive_bin_extent_bottom
 vl/interactive_brush
 vl/interactive_concat_layer
 vl/interactive_crossfilter
+vl/interactive_dashboard_europe_pop
 vl/interactive_geo_earthquakes
 vl/interactive_global_development
 vl/interactive_histogram_full_height_hover
@@ -316,6 +328,7 @@ vl/interactive_paintbrush_interval
 vl/interactive_paintbrush_simple_false
 vl/interactive_paintbrush_simple_true
 vl/interactive_panzoom_splom
+vl/interactive_point_domainRaw_binding
 vl/interactive_point_init
 vl/interactive_query_widgets
 vl/interactive_seattle_weather
@@ -329,6 +342,7 @@ vl/joinaggregate_mean_difference_by_year
 vl/joinaggregate_percent_of_total
 vl/joinaggregate_residual_graph
 vl/layer_arc_label
+vl/layer_bar_annotations
 vl/layer_bar_circle_grouped
 vl/layer_bar_fruit
 vl/layer_bar_grouped_line_ungrouped
@@ -339,6 +353,7 @@ vl/layer_bar_line
 vl/layer_bar_line_union
 vl/layer_bar_month
 vl/layer_bar_tick_binned_time_band_position
+vl/layer_bar_tick_datum_grouped
 vl/layer_boxplot_circle
 vl/layer_candlestick
 vl/layer_circle_independent_color
@@ -348,9 +363,11 @@ vl/layer_dual_axis
 vl/layer_falkensee
 vl/layer_histogram
 vl/layer_histogram_global_mean
+vl/layer_likert
 vl/layer_line_co2_concentration
 vl/layer_line_color_rule
 vl/layer_line_datum_rule
+vl/layer_line_datum_rule_datetime
 vl/layer_line_errorband_pre_aggregated
 vl/layer_line_mean_point_raw
 vl/layer_line_rolling_mean_point_raw
@@ -420,6 +437,7 @@ vl/line_narrow_yearquarter_span
 vl/line_outside_domain
 vl/line_overlay
 vl/line_overlay_stroked
+vl/line_override_dynamic_format
 vl/line_override_static_format
 vl/line_params
 vl/line_quarter_legend
@@ -436,6 +454,7 @@ vl/line_timestamp_domain
 vl/line_timeunit_transform
 vl/lookup
 vl/nested_concat_align
+vl/parallel_coordinate
 vl/param_expr
 vl/param_search_input
 vl/point_1d
@@ -448,6 +467,7 @@ vl/point_2d_config_no_zero
 vl/point_2d_tooltip
 vl/point_2d_tooltip_data
 vl/point_aggregate_detail
+vl/point_angle_windvector
 vl/point_background
 vl/point_binned_color
 vl/point_binned_opacity
@@ -474,6 +494,7 @@ vl/point_ordinal_color
 vl/point_overlap
 vl/point_params
 vl/point_quantile_quantile
+vl/point_scale_range_field
 vl/point_shape_custom
 vl/point_tooltip
 vl/rect_binned_heatmap
@@ -485,6 +506,7 @@ vl/rect_lasagna
 vl/rect_mosaic_labelled
 vl/rect_mosaic_labelled_with_offset
 vl/rect_mosaic_simple
+vl/rect_params
 vl/repeat_child_layer
 vl/repeat_histogram
 vl/repeat_histogram_autosize
@@ -496,6 +518,7 @@ vl/repeat_splom
 vl/repeat_splom_cars
 vl/rule_color_mean
 vl/rule_extent
+vl/rule_params
 vl/selection_bind_cylyr
 vl/selection_bind_origin
 vl/selection_brush_timeunit
@@ -576,6 +599,7 @@ vl/stacked_bar_v
 vl/stacked_bar_v_ascending
 vl/stacked_bar_weather
 vl/stocks-2009-layered-line-point
+vl/ternary
 vl/test_aggregate_nested
 vl/test_field_with_spaces
 vl/test_invalid_break_paths_show_path_domains
@@ -614,6 +638,7 @@ vl/tick_width_band
 vl/time_custom_step
 vl/time_output_utc_scale
 vl/time_output_utc_timeunit
+vl/time_parse_binnedutc
 vl/time_parse_binnedutc_with_escaped_field
 vl/time_parse_local
 vl/time_parse_utc
@@ -626,6 +651,8 @@ vl/trellis_bar
 vl/trellis_bar_histogram
 vl/trellis_bar_histogram_label_rotated
 vl/trellis_bar_no_header
+vl/trellis_barley
+vl/trellis_barley_independent
 vl/trellis_barley_layer_median
 vl/trellis_column_year
 vl/trellis_cross_sort
@@ -635,6 +662,7 @@ vl/trellis_row_column
 vl/trellis_scatter
 vl/trellis_scatter_binned_row
 vl/trellis_scatter_small
+vl/trellis_selections
 vl/trellis_stacked_bar
 vl/vconcat_flatten
 vl/vconcat_weather

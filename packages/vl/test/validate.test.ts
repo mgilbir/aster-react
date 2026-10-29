@@ -53,7 +53,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['an unknown channel', unit({ encoding: { x: xq, banana: yq } }), /unknown encoding channel "banana"/],
   ['a valid but unimplemented channel', unit({ encoding: { x: xq, key: yq } }), /key.*not supported/],
   ['a data-driven fillOpacity', unit({ encoding: { x: xq, fillOpacity: cn } }), /fillOpacity/],
-  ['a data-driven angle', unit({ mark: 'text', encoding: { x: xq, angle: yq } }), /angle/],
   ['fill together with color', unit({ mark: 'bar', encoding: { x: cn, color: cn, fill: cn } }), /together with encoding\.color/],
   ['an array on a single-def channel', unit({ encoding: { x: [xq] } }), /does not accept an array/],
   ['a channel def without field/value/datum', unit({ encoding: { x: { type: 'quantitative' } } }), /needs `field`/],
@@ -61,8 +60,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a malformed field path', unit({ encoding: { x: { field: "v'] + 1 + datum['v", type: 'quantitative' } } }), /access path|invalid field/],
   ['an unknown aggregate', unit({ encoding: { x: { field: 'x', type: 'quantitative', aggregate: 'summ' } } }), /unknown aggregate/],
   ['a datum on an unsupported channel', unit({ encoding: { x: xq, y: yq, size: { datum: 4 } } }), /size\.datum/],
-  ['temporal datums', unit({ encoding: { x: { datum: { year: 2020 }, type: 'temporal' } } }), /datum/],
-  ['a constant position on a bar', unit({ mark: 'bar', encoding: { x: cn, y: { value: 10 } } }), /constant value position is not supported/],
   ['scale: null', unit({ encoding: { x: { ...xq, scale: null } } }), /scale: null/],
   ['an unknown scale property', unit({ encoding: { x: { ...xq, scale: { zeroish: true } } } }), /unknown scale property/],
   ['domainRaw', unit({ encoding: { x: { ...xq, scale: { domainRaw: [0, 1] } } } }), /domainRaw/],
@@ -114,7 +111,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a sort by an unknown encoding', unit({ encoding: { x: { ...cn, sort: { encoding: 'tooltip' } } } }), /unknown sort channel/],
   // --- timeUnit (C74)
   ['an unknown time unit', unit({ encoding: { x: { field: 't', type: 'temporal', timeUnit: 'fortnight' } } }), /unknown timeUnit/],
-  ['a binned time unit on an ordinal field', unit({ encoding: { x: { field: 't', type: 'ordinal', timeUnit: 'binnedyear' } } }), /binned time unit on an ordinal or nominal field/],
   ['a binned time unit with maxbins', unit({ encoding: { x: { field: 't', type: 'temporal', timeUnit: { unit: 'year', maxbins: 4 } } } }), /maxbins/],
   ['time-unit maxbins', unit({ encoding: { x: { field: 't', type: 'temporal', timeUnit: { maxbins: 6 } } } }), /maxbins/],
   ['a time-unit step of zero', unit({ encoding: { x: { field: 't', type: 'temporal', timeUnit: { unit: 'month', step: 0 } } } }), /step/],
@@ -126,7 +122,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['an unknown bin option', unit({ encoding: { x: { field: 'x', type: 'quantitative', bin: { buckets: 4 } } } }), /unknown bin property/],
   ['a negative maxbins', unit({ encoding: { x: { field: 'x', type: 'quantitative', bin: { maxbins: -1 } } } }), /positive number/],
   ['a bad extent', unit({ encoding: { x: { field: 'x', type: 'quantitative', bin: { extent: [5, 1] } } } }), /min must be less/],
-  ['a parameter-driven bin extent', unit({ encoding: { x: { field: 'x', type: 'quantitative', bin: { extent: { param: 'p' } } } } }), /pair of numbers/],
   // --- resolve (C72)
   ['an unknown resolve channel', { data: DATA, resolve: { scale: { banana: 'shared' } }, hconcat: [unit()] }, /unknown channel "banana"/],
   ['a bad resolve value', { data: DATA, resolve: { scale: { color: 'both' } }, hconcat: [unit()] }, /"shared" or "independent"/],
@@ -134,7 +129,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a wrapped faceted unit nested in a concat', { data: DATA, hconcat: [unit(), unit({ encoding: { x: xq, y: yq, facet: { ...cn, columns: 2 } } })] }, /wrapped facet.*nested in another composition/],
   ['a wrapped facet operator nested in a concat', { data: DATA, vconcat: [unit(), { facet: cn, spec: unit() }] }, /wrapped facet.*nested in another composition/],
   ['an independent colour scale in a facet', { data: DATA, facet: { row: cn }, spec: unit(), resolve: { scale: { color: 'independent' } } }, /independent scale resolution of color inside a facet/],
-  ['an independent axis in a faceted unit', unit({ encoding: { x: xq, y: yq, column: cn }, resolve: { axis: { x: 'independent' } } }), /independent axis resolution of x inside a facet/],
   ['an independent x scale in a wrapped facet', { data: DATA, facet: cn, spec: unit({ encoding: { x: cn, y: yq } }), resolve: { scale: { x: 'independent' } } }, /wrapped facet/],
 ]
 
@@ -174,6 +168,15 @@ const ACCEPTED: Array<[string, unknown]> = [
   ['layer repeat', { data: DATA, repeat: { layer: ['x', 'y'] }, spec: { mark: 'line', encoding: { x: cn, y: { field: { repeat: 'layer' }, type: 'quantitative' } } } }],
   ['resolve y independent in a layer', { data: DATA, resolve: { scale: { y: 'independent' } }, layer: [unit(), unit()] }],
   ['boxplot, string form', { data: DATA, mark: 'boxplot', encoding: { x: cn, y: { field: 'v', type: 'quantitative' } } }],
+  // forms that were refused and compile now (each has its parity case against vega-lite in conformance/test/vl-compiler-parity.test.ts)
+  ['a data-driven angle', unit({ mark: 'text', encoding: { x: xq, angle: yq } })],
+  ['a DateTime datum', unit({ encoding: { x: { datum: { year: 2020 }, type: 'temporal' } } })],
+  ['a constant position on a bar', unit({ mark: 'bar', encoding: { x: cn, y: { value: 10 } } })],
+  ['a binned time unit on an ordinal field', unit({ encoding: { x: { field: 't', type: 'ordinal', timeUnit: 'binnedyear' } } })],
+  ['a parameter-driven bin extent', { data: DATA, params: [{ name: 'p', value: [0, 5] }], mark: 'bar', encoding: { x: { field: 'x', type: 'quantitative', bin: { extent: { param: 'p' } } }, y: { aggregate: 'count', type: 'quantitative' } } }],
+  ['a signal domain and a domainRaw', unit({ params: [{ name: 'd', value: [0, 5] }], encoding: { x: { ...xq, scale: { domain: { signal: 'd' }, domainRaw: { signal: 'd' } } }, y: yq } })],
+  ['an independent axis in a faceted unit', unit({ encoding: { x: xq, y: yq, column: cn }, resolve: { axis: { x: 'independent' } } })],
+  ['a selection declared in two views', { data: DATA, hconcat: [unit({ params: [{ name: 'brush', select: 'interval' }] }), unit({ params: [{ name: 'brush', select: 'interval' }] })] }],
 ]
 
 describe('validation layer: the supported forms still compile', () => {

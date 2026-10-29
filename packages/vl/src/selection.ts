@@ -1123,9 +1123,11 @@ function nearestMarks(unit: SelUnit, c: SelCmpt, marks: Obj[]): Obj[] {
 
   let index = 0
   let exists = false
+  // (a view inside a facet names its marks `child_marks` only once the facet has embedded it: until then they are `marks`)
+  const named = marks.some((mark) => mark.name === unit.firstMarkName)
   marks.forEach((mark, i) => {
     const n = (mark.name as string | undefined) ?? ''
-    if (n === unit.firstMarkName) index = i
+    if (n === unit.firstMarkName || (!named && n === 'marks')) index = i
     else if (n.includes(VORONOI)) exists = true
   })
   if (!exists) marks.splice(index + 1, 0, cellDef)
