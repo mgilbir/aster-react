@@ -199,6 +199,17 @@ function assembleGuides(node: unknown): void {
       for (const prop of Object.keys(axis)) {
         const value = axis[prop]
         if (!isGrid && GRID_ONLY_AXIS_PROPS.has(prop) && isObject(value) && value.condition !== undefined) { delete axis[prop]; continue }
+        // a property that is a signal, with a Vega counterpart in a part's encode, moves there (assembleAxis); the others take signals themselves
+        if (prop in CONDITIONAL_AXIS_PROPS && isObject(value) && value.condition === undefined && Object.keys(value).length === 1 && typeof (value.signal ?? value.expr) === 'string') {
+          const index = CONDITIONAL_AXIS_PROPS[prop]
+          if (index) {
+            const encode = (isObject(axis.encode) ? axis.encode : (axis.encode = {})) as Record<string, Record<string, Record<string, unknown>>>
+            const part = (encode[index.part] ??= {})
+            ;(part.update ??= {})[index.vgProp] = { signal: (value.signal ?? value.expr) as string }
+            delete axis[prop]
+          }
+          continue
+        }
         if (!(prop in CONDITIONAL_AXIS_PROPS) || !isObject(value) || value.condition === undefined) continue
         const { condition, ...rest } = value
         const test = (c: Record<string, unknown>): Record<string, unknown> => {
@@ -2872,6 +2883,8 @@ function parseChannel(channel: string, def: unknown): FieldDef | null {
         source: '__count',
         type: normalizeType(raw.type, raw, channel),
         aggregate: 'count',
+        stack: raw.stack,
+        bandPosition: raw.bandPosition as number | undefined,
         ...common,
       }
     }
@@ -4173,6 +4186,15 @@ function applyTimeUnitLegend(lg: Record<string, unknown>, def: FieldDef, userLeg
  * position scale it is centred on the view; along a continuous position scale with a time unit it is the (padded) duration of
  * one unit on that scale.
  */
+/** The padding properties of a discrete offset scale (scale/properties.ts padding, paddingInner, paddingOuter). */
+function offsetPaddings(def: FieldDef, type: 'band' | 'point', defaultInner: unknown, defaultOuter: unknown): Record<string, unknown> {
+  const sc = def.scale ?? {}
+  if (sc.padding !== undefined) return { padding: sc.padding, ...(type === 'band' && sc.paddingInner !== undefined ? { paddingInner: sc.paddingInner } : {}), ...(sc.paddingOuter !== undefined ? { paddingOuter: sc.paddingOuter } : {}) }
+  const inner = type === 'band' ? sc.paddingInner ?? defaultInner : undefined
+  const outer = sc.paddingOuter ?? defaultOuter
+  return { ...(inner !== undefined ? { paddingInner: inner } : {}), ...(outer !== undefined ? { paddingOuter: outer } : {}) }
+}
+
 function offsetRange(ch: 'xOffset' | 'yOffset', posDef: FieldDef | undefined, spec: VLSpec, mark: string, paddingInner: unknown): unknown[] {
   const pos = ch === 'xOffset' ? 'x' : 'y'
   const size = ch === 'xOffset' ? 'width' : 'height'
@@ -4485,15 +4507,15 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
               type: 'band',
               domain: sortedDomain(offDef, dataName, dc),
               range: offsetRange(ch, fields.find((f) => f.channel === dimChannel && f.field), spec, mark, dc.cfg.bandWithNestedOffsetPaddingInner),
-              ...(dc.cfg.offsetBandPaddingInner !== undefined ? { paddingInner: dc.cfg.offsetBandPaddingInner } : {}),
-              ...(dc.cfg.offsetBandPaddingOuter !== undefined ? { paddingOuter: dc.cfg.offsetBandPaddingOuter } : {}),
+              // (properties.ts paddingInner / paddingOuter: a padding of the scale replaces both defaults, an explicit inner / outer one its own)
+              ...offsetPaddings(offDef, 'band', dc.cfg.offsetBandPaddingInner, dc.cfg.offsetBandPaddingOuter),
             }
           : {
               name: ch,
               type: 'point',
               domain: sortedDomain(offDef, dataName, dc),
               range: [0, { signal: `bandwidth('${dimChannel}')` }],
-              paddingOuter: 0.5,
+              ...offsetPaddings(offDef, 'point', undefined, 0.5),
             })
       } else {
         scales.push({
@@ -4760,7 +4782,8 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
     ? (potentialStackChannel(mark, orient, fields ?? []) ?? (orient === 'vertical' ? 'y' : 'x'))
     : orient === 'vertical' ? 'y' : 'x'
   const stacked = isStacked(def, mark, orient, fields)
-  if (def.channel === measureChannel && stacked) {
+  // (an explicit stack names its own channel as the measure, whatever the orientation of the mark)
+  if (stacked && (def.channel === measureChannel || (def.stack != null && def.stack !== false))) {
     return { data: dataName, fields: [`${aggFieldName(def)}_start`, `${aggFieldName(def)}_end`] }
   }
   return { data: dataName, field: aggFieldName(def) }
@@ -4967,6 +4990,24 @@ function defaultLabelAlign(angle: number, orient: string, channel: string): stri
   return ((startAngle < angle && angle < 180 + startAngle) === (orient === mainOrient)) ? 'left' : 'right'
 }
 
+/** vega-lite `defaultLabelBaseline` for an angle that is a signal (`labelAngle: {expr}`). */
+function defaultLabelBaselineSignal(angle: { signal: string }, orient: string, channel: string): { signal: string } {
+  const a = `(((${angle.signal} % 360) + 360) % 360)`
+  if (channel === 'x') {
+    return { signal: `(45 < ${a} && ${a} < 135) || (225 < ${a} && ${a} < 315) ? "middle" :(${a} <= 45 || 315 <= ${a}) === ${orient === 'top'} ? "bottom" : "top"` }
+  }
+  return { signal: `${a} <= 45 || 315 <= ${a} || (135 <= ${a} && ${a} <= 225) ? null : (45 <= ${a} && ${a} <= 135) === ${orient === 'left'} ? "top" : "bottom"` }
+}
+
+/** vega-lite `defaultLabelAlign` for an angle that is a signal. */
+function defaultLabelAlignSignal(angle: { signal: string }, orient: string, channel: string): { signal: string } {
+  const isX = channel === 'x'
+  const startAngle = isX ? 0 : 90
+  const mainOrient = isX ? 'bottom' : 'left'
+  const a = `(((${angle.signal} % 360) + 360) % 360)`
+  return { signal: `(${startAngle ? `(${a} + 90)` : a} % 180 === 0) ? ${isX ? null : '"center"'} :(${startAngle} < ${a} && ${a} < ${180 + startAngle}) === ${orient === mainOrient} ? "left" : "right"` }
+}
+
 // --- axes --------------------------------------------------------------------
 
 /** The mark whose axis rules apply: an image mark is laid out as a rect but is not one. */
@@ -5121,8 +5162,11 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
           && (def.type === 'nominal' || def.type === 'ordinal') && !def.timeUnit) {
         angle = 270
       }
-      if (angle !== undefined) {
-        labelAxis.labelAngle = angle
+      const signalAngle = isObject(rawAngle) && (typeof rawAngle.signal === 'string' || typeof rawAngle.expr === 'string')
+        ? { signal: (rawAngle.signal ?? rawAngle.expr) as string }
+        : undefined
+      if (angle !== undefined || signalAngle) {
+        labelAxis.labelAngle = signalAngle ?? angle
         const ua = userAxis as Record<string, unknown> | null | undefined
         // vega-lite's parseAxis computes `orient` from the axis def,
         // config.axisX/axisY, then config.axis — the config.axisBand style
@@ -5137,11 +5181,11 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
               ? cfgAxis.orient as string
               : def.channel === 'x' ? 'bottom' : 'left')
         if (ua?.labelAlign === undefined) {
-          const align = defaultLabelAlign(angle, labelOrient, def.channel)
+          const align = signalAngle ? defaultLabelAlignSignal(signalAngle, labelOrient, def.channel) : defaultLabelAlign(angle!, labelOrient, def.channel)
           if (align != null) labelAxis.labelAlign = align
         }
         if (ua?.labelBaseline === undefined) {
-          const baseline = defaultLabelBaseline(angle, labelOrient, def.channel)
+          const baseline = signalAngle ? defaultLabelBaselineSignal(signalAngle, labelOrient, def.channel) : defaultLabelBaseline(angle!, labelOrient, def.channel)
           if (baseline != null) labelAxis.labelBaseline = baseline
         }
       }
@@ -6371,7 +6415,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       if (!def || !isStacked(def, mark, orient, fields)) continue
       for (const key of [pos, `${pos}c`]) {
         const ref = update[key] as Record<string, unknown> | undefined
-        if (isObject(ref) && ref.scale === pos && ref.field === aggFieldName(def)) {
+        if (isObject(ref) && ref.scale === pos && (ref.field === aggFieldName(def) || ref.field === `${aggFieldName(def)}_end`)) {
           // positionRef: a bandPosition on the stacked channel places the mark within its stack segment
           const bp = def.bandPosition
           const f = aggFieldName(def)
@@ -7058,7 +7102,8 @@ function fieldTextExpr(def: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec;
     if (def.tu && fmt === undefined) return `${timeFn}(${f}, ${timeUnitFormatSignal(def.tu.unit)})`
     // (vega-lite's timeFormatExpression: config.timeFormatType applies to a raw time with no format)
     if (def.tu === undefined && typeof cfg?.timeFormatType === 'string') return customFormatExpr(cfg.timeFormatType, f, fmt)
-    return `${timeFn}(${f}, ${JSON.stringify(fmt ?? cfg?.timeFormat ?? DEFAULT_TIME_FORMAT)})`
+    // (timeFormatExpression: only a string format is used - an object one, a per-unit axis format, falls back to config.timeFormat)
+    return `${timeFn}(${f}, ${JSON.stringify(typeof fmt === 'string' ? fmt : cfg?.timeFormat ?? DEFAULT_TIME_FORMAT)})`
   }
   if (def.bin) return binFormatExpr(f, binEnd, fmt, formatType, binCfg)
   if (opts.normalizeStack && (def.type === 'quantitative' || typeof fmt === 'string')) {

@@ -151,6 +151,7 @@ vl/bar_gantt_config_no_zero
 vl/bar_group_timeunit
 vl/bar_grouped
 vl/bar_grouped_custom_color_domain
+vl/bar_grouped_custom_padding
 vl/bar_grouped_errorbar
 vl/bar_grouped_facet
 vl/bar_grouped_facet_independent_scale
@@ -238,12 +239,14 @@ vl/circle_bubble_health_income
 vl/circle_custom_tick_labels
 vl/circle_flatten
 vl/circle_github_punchcard
+vl/circle_labelangle_orient_signal
 vl/circle_natural_disasters
 vl/circle_opacity
 vl/circle_scale_quantile
 vl/circle_scale_quantize
 vl/circle_scale_threshold
 vl/circle_wilkinson_dotplot
+vl/circle_wilkinson_dotplot_stacked
 vl/concat_bar_layer_circle
 vl/concat_bar_scales_discretize
 vl/concat_bar_scales_discretize_2_cols
@@ -434,6 +437,7 @@ vl/line_narrow_yearquarter_span
 vl/line_outside_domain
 vl/line_overlay
 vl/line_overlay_stroked
+vl/line_override_dynamic_format
 vl/line_override_static_format
 vl/line_params
 vl/line_quarter_legend
