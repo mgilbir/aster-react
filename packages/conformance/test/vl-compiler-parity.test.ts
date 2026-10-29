@@ -863,6 +863,81 @@ for (const [group, cases] of Object.entries(GROUPS)) {
   })
 }
 
+// compile/invalid/datasources.ts + data/parse.ts: every invalid mode over every kind of mark. The marks read the data the mode gives
+// them, the scales' domains read the data it gives them (a PreFilterInvalid or a PostFilterInvalid dataset when they differ), and what
+// the two compilers draw is the same (test_invalid_break_paths_filter_domains, test_invalid_break_paths_show_domains)
+describe('@aster/vl == vega-lite: the data that marks and scale domains read, per invalid mode', () => {
+  const MODES: Array<string | null> = ['filter', 'show', 'break-paths-filter-domains', 'break-paths-show-domains', 'break-paths-show-path-domains', null]
+  const MARKS: Array<[string, unknown]> = [['point', 'point'], ['bar', 'bar'], ['line', 'line'], ['area', 'area'], ['line with points', { type: 'line', point: true }], ['tick', 'tick']]
+  /** Which dataset (by the number of the transforms behind it) each mark and each scale domain reads. */
+  const reads = (vg: any): unknown => {
+    const byName = new Map<string, any>((vg.data ?? []).map((d: any) => [d.name, d]))
+    const chain = (name: string): string => {
+      const d = byName.get(name)
+      if (!d) return name
+      const own = (d.transform ?? []).map((t: any) => t.type === 'filter' ? 'filter' : t.type).filter((ty: string) => ty !== 'formula').join(',')
+      if (d.source === undefined) return ''
+      return own === '' ? chain(d.source) : `${chain(d.source)}>${own}`
+    }
+    const out: string[] = []
+    const walk = (ms: any[]): void => { for (const m of ms ?? []) { if (m.from?.data) out.push(`mark ${m.name}: ${chain(m.from.data)}`); walk(m.marks) } }
+    walk(vg.marks)
+    for (const sc of vg.scales ?? []) {
+      const d = sc.domain
+      const refs = d?.data ? [d.data] : (d?.fields ?? []).map((f: any) => f.data)
+      out.push(`scale ${sc.name}: ${[...new Set(refs.filter(Boolean).map(chain))].sort().join(' | ')}`)
+    }
+    return out
+  }
+  for (const [label, mark] of MARKS) {
+    for (const mode of MODES) {
+      const spec = { data: NULLS, width: 100, height: 100, config: { mark: { invalid: mode } }, mark, encoding: { x: q('a'), y: q('b') } }
+      it(`${label}, invalid ${JSON.stringify(mode)}`, async () => {
+        const oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, any> } }).compile(plain(spec)).spec
+        const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+        expect(reads(ours), 'what the marks and the scales read').toEqual(reads(oracle))
+        await check(spec)
+      }, 30_000)
+    }
+  }
+  // (getMarkConfig('invalid') decides where the scales read: the config alone, not the mark definition the datasets are made from)
+  for (const [label, mark] of [['point', 'point'], ['line', 'line']] as const) {
+    for (const mode of MODES) {
+      it(`a ${label} whose own definition says invalid ${JSON.stringify(mode)}`, async () => {
+        const spec = { data: NULLS, width: 100, height: 100, mark: { type: mark, invalid: mode }, encoding: { x: q('a'), y: q('b'), size: q('c') } }
+        const oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, any> } }).compile(plain(spec)).spec
+        const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+        expect(reads(ours), 'what the marks and the scales read').toEqual(reads(oracle))
+        await check(spec)
+      }, 30_000)
+    }
+  }
+  const layered = (mode: string | null) => ({ data: NULLS, config: { mark: { invalid: mode } }, layer: [{ mark: 'line', encoding: { x: q('a'), y: q('b') } }, { mark: 'point', encoding: { x: q('a'), y: q('b') } }] })
+  for (const mode of MODES) {
+    it(`a line and a point in layers, invalid ${JSON.stringify(mode)}`, async () => {
+      const spec = layered(mode)
+      const oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, any> } }).compile(plain(spec)).spec
+      const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+      expect(reads(ours), 'what the marks and the scales read').toEqual(reads(oracle))
+      await check(spec)
+    }, 30_000)
+  }
+  for (const mode of ['break-paths-filter-domains', 'break-paths-show-domains']) {
+    for (const mark of ['line', 'point']) {
+      it(`a ${mark} faceted by a row, invalid ${JSON.stringify(mode)}`, async () => {
+        await check({ data: NULLS, config: { mark: { invalid: mode } }, width: 100, height: 100, mark, encoding: { x: q('a'), y: q('b'), row: n('c') } })
+      }, 30_000)
+    }
+  }
+  it('an ordinal x and a colour, invalid break-paths-filter-domains', async () => {
+    const spec = { data: NULLS, config: { mark: { invalid: 'break-paths-filter-domains' } }, mark: 'line', encoding: { x: { field: 'a', type: 'ordinal' }, y: q('b'), color: q('c') } }
+    const oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, any> } }).compile(plain(spec)).spec
+    const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
+    expect(reads(ours), 'what the marks and the scales read').toEqual(reads(oracle))
+    await check(spec)
+  }, 30_000)
+})
+
 /** The domains of the scales, with the names of the datasets they read left out (how the datasets are named and cut is not what is compared). */
 const DOMAIN_SHAPES = (vg: any): unknown =>
   (vg.scales ?? []).map((s: any) => {

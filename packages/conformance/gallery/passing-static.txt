@@ -604,6 +604,8 @@ vl/stocks-2009-layered-line-point
 vl/ternary
 vl/test_aggregate_nested
 vl/test_field_with_spaces
+vl/test_invalid_break_paths_filter_domains
+vl/test_invalid_break_paths_show_domains
 vl/test_invalid_break_paths_show_path_domains
 vl/test_invalid_color_filter
 vl/test_invalid_color_filter_but_include_in_scale_invalid

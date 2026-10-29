@@ -701,6 +701,10 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     rawLen: number
     usesRawDomain: boolean
     group: number
+    /** the scales read the rows before / after the invalid filter */
+    invalidSplit?: InvalidScaleSplit
+    /** the dataset the scales' domains read */
+    scaleName: string
   }
   const parsed: ParsedLayer[] = leaves.map((l) => {
     liftBandSizeValue(l)
@@ -712,7 +716,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     validateGeoUnit(mark, encoding, 'encoding')
     const fields = parseEncodingFields(encoding, l.config, markRaw)
     const orient = inferOrient(l, mark, markRaw, fields)
-    return { l, mark, markRaw, markSize: isObject(markRaw) ? (markRaw.size as number | undefined) : undefined, fields, orient, pipeline: [], seriesFields: [], dataName: '', rawName: '', rawLen: 0, usesRawDomain: false, group: 0 }
+    return { l, mark, markRaw, markSize: isObject(markRaw) ? (markRaw.size as number | undefined) : undefined, fields, orient, pipeline: [], seriesFields: [], dataName: '', rawName: '', rawLen: 0, usesRawDomain: false, group: 0, scaleName: '' }
   })
 
   for (const p of parsed) {
@@ -783,6 +787,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     p.seriesFields = d.seriesFields
     p.rawLen = d.rawLen
     p.usesRawDomain = d.usesRawDomain
+    p.invalidSplit = d.invalidSplit
   }
 
   // data: per source group the source + casts dataset, then one derived
@@ -827,6 +832,15 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       p.dataName = g.castsName
       rawName = g.castsName
     }
+    // (data/parse.ts: the scales read the rows before / after the invalid filter when the marks do not)
+    p.scaleName = p.dataName
+    if (p.invalidSplit) {
+      const wasRaw = rawName === p.dataName
+      const split = splitInvalidData(data, p.invalidSplit, p.dataName, g.castsName, () => ctx.dn(nextData++))
+      p.dataName = split.dataName
+      p.scaleName = split.scaleName
+      if (wasRaw && p.invalidSplit.kind === 'pre') rawName = split.scaleName
+    }
     p.rawName = rawName
     // a lookup from this unit's selection reads its data filtered by the selection (materializeSelections)
     for (const c of Object.values(layerSel[i]?.cmpts ?? {})) {
@@ -836,7 +850,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const builtMarks = buildMarks(p.l, p.fields, p.mark, p.orient, p.dataName, p.markSize)
     uniquifyLayerMarks(builtMarks, LEAF_PATHS.get(p.l)?.length ? LEAF_PATHS.get(p.l)!.map((n) => `layer_${n}`).join('_') : i)
     perLayerMarks.push(builtMarks)
-    const layerScales = buildScales(p.l, p.fields, p.mark, p.orient, p.dataName, wSpec, hSpec, p.seriesFields, p.rawName)
+    const layerScales = buildScales(p.l, p.fields, p.mark, p.orient, p.scaleName, wSpec, hSpec, p.seriesFields, p.rawName)
     // (shared scales are judged merged, below; an independent y scale is the layer's own)
     if (isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).scale) && ((spec.resolve as Record<string, Record<string, unknown>>).scale as Record<string, unknown>).y === 'independent') showInvalidValues(p.l, p.fields, p.mark, layerScales, builtMarks, (ch) => ch === 'y')
     perLayerScales.push(layerScales)
@@ -1655,9 +1669,10 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // The raw table is separate only when the view asks for it (a scale domain sorted by an aggregate reads it: the pipeline is then two
   // datasets, the raw one and the aggregated one). Otherwise vega-lite merges the whole pipeline into the facet's data, and a sort field the
   // aggregate drops is missing from the rows the sort aggregates (trellis_area_seattle: every key is undefined, the cells keep their order).
-  const rawFacet = !layeredInner && sortsByAggregate && !(rowDef && colDef) && typeof unitPipelineDs?.source === 'string'
+  const rawFacet = !layeredInner && typeof unitPipelineDs?.source === 'string' && (PRE_FILTER_UNITS.has(inner) || (
+    sortsByAggregate && !(rowDef && colDef)
     && typeof innerData.find((d) => d.name === unitPipelineDs.source)?.source === 'string'
-    && ((unitPipelineDs.transform as Record<string, unknown>[] | undefined) ?? []).some((t) => t.type === 'aggregate')
+    && ((unitPipelineDs.transform as Record<string, unknown>[] | undefined) ?? []).some((t) => t.type === 'aggregate')))
   // (the facet's data is that raw dataset - the casts, the calculates, the facet fields' time units; the aggregate that follows runs in
   // each cell over the cell's rows)
   const rawBase = rawFacet ? (unitPipelineDs!.source as string) : undefined
@@ -3343,6 +3358,13 @@ interface DataPipeline {
   rawLen: number
   /** some scale domain sorts by a field/array and so needs the raw table */
   usesRawDomain: boolean
+  /** the scales read the rows before / after the invalid filter, the marks the others */
+  invalidSplit?: InvalidScaleSplit
+}
+
+interface InvalidScaleSplit {
+  kind: 'pre' | 'post'
+  filter: Record<string, unknown>
 }
 
 /** Object and array sorts read the raw table; ascending/descending/null read the main one. */
@@ -4058,14 +4080,16 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
 
   // the invalid values the marks must not see (vega-lite FilterInvalidNode): skipped when a generating
   // transform replaces the data entirely
+  let invalidSplit: InvalidScaleSplit | undefined
   {
     const invalid = invalidFilter(spec, fields, mark)
     if (invalid) pipeline.push(invalid)
+    invalidSplit = invalidScaleSplit(spec, fields, mark, invalid)
   }
 
   const transforms = [...casts, ...pipeline]
   const dataName = transforms.length ? ctx.dn(0) : sourceName
-  return { sourceName, transforms, casts, pipeline, dataName, seriesFields, rawLen, usesRawDomain: fields.some(usesRawDomainSort) }
+  return { sourceName, transforms, casts, pipeline, dataName, seriesFields, rawLen, usesRawDomain: fields.some(usesRawDomainSort), ...(invalidSplit ? { invalidSplit } : {}) }
 }
 
 function aggregateAs(f: FieldDef): string {
@@ -7370,10 +7394,36 @@ function invalidCandidates(spec: VLSpec, fields: FieldDef[], mark: string): Arra
 const invalidFieldName = (f: FieldDef, mid = false): string => (f.bin ? (mid ? binMidName(f) : binNames(f.binParams!, f.field).start) : aggFieldName(f))
 const validExprOf = (ref: string): string => `isValid(${ref}) && isFinite(+${ref})`
 
-/** The filter that keeps invalid values out of the data (FilterInvalidNode), where the marks must not see them. */
-function invalidFilter(spec: VLSpec, fields: FieldDef[], mark: string): Record<string, unknown> | undefined {
-  const mode = invalidModeOf(spec, mark)
-  if (mode !== 'filter' && (isPathMark(mark) || mode === 'show')) return undefined
+/**
+ * compile/invalid/datasources.ts getDataSourcesForHandlingInvalidValues: whether the marks / the scale domains read the data with the
+ * invalid values filtered out.
+ */
+function invalidDataSources(spec: VLSpec, mark: string): { marks: 'exclude' | 'include'; scales: 'exclude' | 'include' } {
+  return dataSourcesOfMode(invalidModeOf(spec, mark), isPathMark(mark))
+}
+
+function dataSourcesOfMode(mode: InvalidMode, path: boolean): { marks: 'exclude' | 'include'; scales: 'exclude' | 'include' } {
+  if (mode === 'filter') return { marks: 'exclude', scales: 'exclude' }
+  if (mode === 'show') return { marks: 'include', scales: 'include' }
+  if (mode === 'break-paths-show-domains') return { marks: path ? 'include' : 'exclude', scales: 'include' }
+  return { marks: path ? 'include' : 'exclude', scales: 'exclude' }
+}
+
+/**
+ * scale/domain.ts parseSingleChannelDomain: the data the scale domains ask for, from `getMarkConfig('invalid')` - the config alone, not
+ * the mark definition the datasets themselves were made from (so a mark's own `invalid` never changes where its scales read).
+ */
+function scaleDomainSource(spec: VLSpec, mark: string): 'main' | 'pre' | 'post' {
+  const raw = markConfigProp(spec, mark, 'invalid')
+  const mode: InvalidMode = raw === undefined || raw === 'break-paths-show-path-domains' ? (isPathMark(mark) ? 'break-paths-show-domains' : 'filter') : raw === null ? 'show' : (raw as InvalidMode)
+  const { marks, scales } = dataSourcesOfMode(mode, isPathMark(mark))
+  return marks === scales ? 'main' : scales === 'include' ? 'pre' : 'post'
+}
+
+/** data/filterinvalid.ts FilterInvalidNode.assemble: the filter on the fields whose scale cannot take an invalid value. */
+function invalidFilterExpr(spec: VLSpec, fields: FieldDef[], mark: string): Record<string, unknown> | undefined {
+  const { marks, scales } = invalidDataSources(spec, mark)
+  if (marks === 'include' && scales === 'include') return undefined
   const checks = invalidCandidates(spec, fields, mark)
     .filter((c) => c.mode !== 'show')
     .map(({ def }) => {
@@ -7381,6 +7431,51 @@ function invalidFilter(spec: VLSpec, fields: FieldDef[], mark: string): Record<s
       return ((def.raw as Record<string, unknown> | undefined)?.type ?? def.type) === 'temporal' ? `(isDate(${ref}) || (${validExprOf(ref)}))` : validExprOf(ref)
     })
   return checks.length ? { type: 'filter', expr: checks.join(' && ') } : undefined
+}
+
+/** The filter that keeps invalid values out of the data (FilterInvalidNode), where the marks must not see them. */
+function invalidFilter(spec: VLSpec, fields: FieldDef[], mark: string): Record<string, unknown> | undefined {
+  return invalidDataSources(spec, mark).marks === 'exclude' ? invalidFilterExpr(spec, fields, mark) : undefined
+}
+
+/**
+ * data/parse.ts: when the marks and the scale domains read different data, the scales get a dataset of their own - the rows before the
+ * filter (PreFilterInvalid, marks filtered and scales not) or after it (PostFilterInvalid, scales filtered and marks not).
+ */
+function invalidScaleSplit(spec: VLSpec, fields: FieldDef[], mark: string, mainFilter: Record<string, unknown> | undefined): InvalidScaleSplit | undefined {
+  const { marks, scales } = invalidDataSources(spec, mark)
+  if (marks === scales) return undefined
+  // (the dataset exists only when a scale asks for it: vega-lite drops an output node nothing reads)
+  const asked = scaleDomainSource(spec, mark)
+  if (marks === 'exclude') return mainFilter && asked === 'pre' ? { kind: 'pre', filter: mainFilter } : undefined
+  const filter = invalidFilterExpr(spec, fields, mark)
+  return filter && asked === 'post' ? { kind: 'post', filter } : undefined
+}
+
+/**
+ * Give the scales their own dataset of the rows before / after the invalid filter. `data` holds the datasets of the view (the last
+ * one named `mainName` is the marks' one, and for a PreFilterInvalid split ends in the filter); `source` is what that dataset
+ * derives from when it holds nothing else.
+ */
+function splitInvalidData(data: Record<string, unknown>[], split: InvalidScaleSplit, mainName: string, source: string, newName: () => string): { dataName: string; scaleName: string } {
+  const at = data.findIndex((d) => d.name === mainName)
+  if (split.kind === 'post') {
+    const name = newName()
+    data.push({ name, source: mainName, transform: [split.filter] })
+    return { dataName: mainName, scaleName: name }
+  }
+  const main = data[at]
+  const rest = main ? ((main.transform as Record<string, unknown>[]).filter((t) => t !== split.filter)) : []
+  if (!main || rest.length === (main.transform as unknown[]).length) return { dataName: mainName, scaleName: mainName }
+  if (rest.length === 0) {
+    // nothing but the filter was in it: the scales read what it read
+    main.transform = [split.filter]
+    return { dataName: mainName, scaleName: (main.source as string | undefined) ?? source }
+  }
+  main.transform = rest
+  const name = newName()
+  data.splice(at + 1, 0, { name, source: mainName, transform: [split.filter] })
+  return { dataName: name, scaleName: mainName }
 }
 
 /** The `defined` signal of a path mark: the fields whose invalid values break the path. */
@@ -7657,7 +7752,24 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
     pd.rawName = main
     pd.next = 1
   }
-  out.data = [unitSource, ...pd.datasets]
+  // a lookup from this unit's selection reads its data filtered by the selection (materializeSelections)
+  const unitLookups: Record<string, unknown>[] = []
+  for (const c of Object.values(unitSel?.cmpts ?? {})) {
+    const lookup = ctx.selectionLookups.get(c.name)
+    if (lookup) unitLookups.push({ name: lookup.name, source: pd.dataName, transform: [{ type: 'filter', expr: ctx.selectionTest!({ param: c.name }) }] })
+  }
+  // (data/parse.ts: the scales read the rows before / after the invalid filter when the marks do not)
+  let scaleDataName = pd.dataName
+  if (data.invalidSplit) {
+    let next = pd.next
+    const split = splitInvalidData(pd.datasets, data.invalidSplit, pd.dataName, unitSourceName, () => ctx.dn(next++))
+    const wasRaw = pd.rawName === pd.dataName
+    pd.dataName = split.dataName
+    scaleDataName = split.scaleName
+    if (wasRaw && data.invalidSplit.kind === 'pre') pd.rawName = split.scaleName
+    pd.next = next
+  }
+  out.data = [unitSource, ...pd.datasets, ...unitLookups]
   const dataName = pd.dataName
   if (animation) (out.data as Record<string, unknown>[]).push({ name: `${dataName}_curr`, source: dataName, transform: [animation.filter] })
   if (unitProj) {
@@ -7668,7 +7780,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const builtMarks = buildMarks(spec, fields, mark, orient, dataName, markSize)
   if (animation) animateMarks(builtMarks, dataName)
   out.marks = builtMarks
-  out.scales = buildScales(spec, fields, mark, orient, dataName, wSpec, hSpec, data.seriesFields, pd.rawName)
+  out.scales = buildScales(spec, fields, mark, orient, scaleDataName, wSpec, hSpec, data.seriesFields, pd.rawName)
   applyScaleConfig(out.scales as ScaleSpec[], isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined)
   resolveZeroOrMin(builtMarks, out.scales as ScaleSpec[])
   showInvalidValues(spec, fields, mark, out.scales as ScaleSpec[], builtMarks)
@@ -7697,8 +7809,15 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
     SEL_PARTS.set(out, { data: assembled.out.data, top: assembled.out.topSignals, unit: assembled.out.unitSignals })
   }
   rootChrome(out, spec, 'unit')
+  if (data.invalidSplit?.kind === 'pre') PRE_FILTER_UNITS.add(out)
   return out
 }
+
+/**
+ * Units whose scales read the rows before the invalid filter, which the marks' dataset applies: a facet around one is made over the rows
+ * before the filter (the facet node moves down only as far as the scales' dataset), and each cell filters its own.
+ */
+const PRE_FILTER_UNITS = new WeakSet<object>()
 
 /** Legends of one unit: mark-def and config paint propagate onto the legend symbols. */
 function buildUnitLegends(spec: VLSpec, fields: FieldDef[], mark: string, markRaw: unknown): Record<string, unknown>[] {
