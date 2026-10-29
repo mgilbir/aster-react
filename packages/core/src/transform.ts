@@ -9,6 +9,7 @@ import { SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './regis
 import { nominalTextWidth } from './text-metrics.js'
 import { isArray } from './util.js'
 import { activeMeter, boundedCount, meterRows } from './limits.js'
+import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec, windowRows } from './transform-agg.js'
 import {
   binRows, collectRows, d3Range, extentOfField, flattenRows, foldRows, identifierRows, imputeRows,
@@ -902,35 +903,6 @@ export interface HierNode {
   y1?: number
 }
 
-/** Pre-order traversal (d3 `node.eachBefore`). */
-export function eachBefore(root: HierNode, fn: (node: HierNode) => void): void {
-  const nodes: (HierNode | undefined)[] = [root]
-  let node: HierNode | undefined
-  while ((node = nodes.pop()) != null) {
-    fn(node)
-    const children = node.children
-    if (children.length) {
-      for (let i = children.length - 1; i >= 0; i--) nodes.push(children[i])
-    }
-  }
-}
-
-/** Post-order traversal (d3 `node.eachAfter`). */
-export function eachAfter(root: HierNode, fn: (node: HierNode) => void): void {
-  const nodes: (HierNode | undefined)[] = [root]
-  const next: HierNode[] = []
-  let node: HierNode | undefined = root
-  while (node != null) {
-    next.push(node)
-    const children = node.children
-    if (children.length) {
-      for (let i = children.length - 1; i >= 0; i--) nodes.push(children[i])
-    }
-    node = nodes.pop()
-  }
-  while ((node = next.pop()) != null) fn(node)
-}
-
 /**
  * Build a hierarchy tree from flat id/parent-id tuples. Mirrors d3-hierarchy
  * `stratify` as vega-hierarchy drives it (C8): ids and parent ids are
@@ -979,7 +951,7 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
   // Nodes on a cycle are unreachable from the root; counting the reachable
   // ones is how d3 detects it.
   let reached = 0
-  eachBefore(root, (node) => {
+  walkPreOrder(root, (node) => {
     reached++
     node.depth = node.parent ? node.parent.depth + 1 : 0
   })
@@ -988,7 +960,7 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
   const lookup = new Map<string, HierNode>()
   for (const node of nodes) lookup.set(String(node.data[key]), node)
   root.lookup = lookup
-  eachAfter(root, (node) => {
+  walkPostOrder(root, (node) => {
     let h = 0
     for (const c of node.children) if (c.height + 1 > h) h = c.height + 1
     node.height = h
