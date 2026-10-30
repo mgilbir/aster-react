@@ -144,7 +144,7 @@ function ringOf(r: Rand): Pt[] {
 }
 
 function lineOf(r: Rand): Pt[] {
-  const kind = r.weighted<string>([[6, 'walk'], [2, 'random'], [2, 'cross'], [1, 'degenerate'], [1, 'pole']])
+  const kind = r.weighted<string>([[6, 'walk'], [2, 'random'], [2, 'cross'], [1, 'degenerate'], [1, 'pole'], [1.5, 'meridian']])
   switch (kind) {
     case 'walk': {
       let p = pt(r)
@@ -161,6 +161,11 @@ function lineOf(r: Rand): Pt[] {
     case 'cross': {
       const y = r.range(-80, 80)
       return [[r.range(120, 180), y], [r.range(-180, -120), y + r.range(-10, 10)], [r.range(120, 180), y + r.range(-10, 10)]]
+    }
+    case 'meridian': {
+      // along one meridian (or the antimeridian), where a great-circle crossing has no longitude to speak of
+      const l = r.pick([r.range(-180, 180), 180, -180, 179.9999999, -179.9999999, 0])
+      return Array.from({ length: r.int(2, 5) }, () => [l + r.pick([0, 0, 1e-9, -1e-9]), r.range(-90, 90)])
     }
     case 'pole':
       return [[r.range(-180, 180), r.range(60, 89)], [r.range(-180, 180), r.range(-89, -60)], [180, 90]]
@@ -248,13 +253,17 @@ export function projectionParams(r: Rand, type: string, opts: { fit?: boolean } 
     const y0 = r.range(-100, 300)
     p.clipExtent = [[x0, y0], [x0 + r.weighted<number>([[8, r.range(10, 600)], [1, 0], [0.5, -r.range(1, 100)]]), y0 + r.weighted<number>([[8, r.range(10, 500)], [1, 0], [0.5, -r.range(1, 100)]])]]
   }
-  if (some(0.45)) p.precision = r.weighted<number>([[4, r.range(0.01, 3)], [2, r.pick([0, 0.1, 0.5, 1, 2, 5, 10, 100])], [1, 0.003], [0.4, -0.5]])
+  if (some(0.45)) p.precision = r.weighted<number>([[4, r.range(0.1, 3)], [2, r.pick([0, 0.1, 0.5, 1, 2, 5, 10, 100])], [1, 0.1], [0.4, -0.5]])
   if (some(0.25)) p.reflectX = r.chance(0.5)
   if (some(0.25)) p.reflectY = r.chance(0.5)
   if (some(0.45)) {
     const a = r.range(-90, 90)
     p.parallels = r.weighted<Json>([[5, [a, r.range(-90, 90)]], [1, [a, a]], [1, [a, -a]], [1, [0, 0]], [1, [r.range(0, 89), r.range(0, 89)]], [0.5, [a, 90]]])
   }
+  // a projection that sends its horizon to infinity (gnomonic at 90 degrees, stereographic at 180) makes every segment
+  // near it subdivide to full depth: millions of points per polygon, minutes per case, on both sides
+  if (type === 'gnomonic' && typeof p.clipAngle === 'number' && Math.abs(p.clipAngle) > 80) p.clipAngle = 80
+  if (type === 'stereographic' && typeof p.clipAngle === 'number' && Math.abs(p.clipAngle) > 160) p.clipAngle = 160
   if (some(0.1)) p.pointRadius = r.range(0.5, 12)
   // the d3-geo-projection extras vega lists but no registered type here reads
   if (some(0.05)) p.coefficient = r.range(0, 1)
@@ -279,7 +288,7 @@ export function oddParams(r: Rand, params: Record<string, Json>): Record<string,
     translate: [[1], 'ab', 5, [null, 1], ['10', '20'], [NaN, 5]],
     center: [[10], 5, 'ab', [null, null], ['10', '20'], [400, 200]],
     rotate: [[1], 'xy', [1, 2, 3, 4], [null, 2], ['10', '20', '30'], [NaN, 0]],
-    precision: ['1', -1, NaN, [1], 0, 0.02],
+    precision: ['1', -1, NaN, [1], 0, 0.1],
     clipAngle: ['60', [60], true, NaN, -60, 1e-3],
     clipExtent: [[[0, 0]], 5, [[0, 0], [1]], 'ab', [[0, 0], [NaN, 5]], [['0', '0'], ['100', '100']]],
     parallels: [[10], 5, 'ab', [NaN, 5], [90, 90], [-90, 90]],

@@ -677,7 +677,10 @@ export class Rectangle {
     } else emit(to!.x, to!.y)
   }
 
-  /** The winding of a polygon (rings of [x, y] with the first vertex repeated) about the left edge's reference corner. */
+  /**
+   * The winding number of a polygon (rings of [x, y] with the first vertex repeated) about the corner (x0, y1):
+   * non-zero when the rectangle's reference corner lies inside the polygon.
+   */
   private winding(rings: readonly number[][]): number {
     let winding = 0
     for (const ring of rings) {
