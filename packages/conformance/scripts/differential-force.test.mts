@@ -10,6 +10,7 @@ import * as vega from 'vega'
 import '../../core/src/addon-transforms.ts'
 import { compileExpr } from '../../core/src/expression.ts'
 import { applyTransforms, type TransformContext } from '../../core/src/transform.ts'
+import { compileChart, datasetsOfScene, evaluateChart } from '../../core/src/index.ts'
 import { enc } from './differential-util.mts'
 
 type Row = Record<string, unknown>
@@ -71,5 +72,89 @@ describe('force transform vs real vega (live)', () => {
     const ctx = { runtime: { scale: () => undefined, data: () => [], expr: (e: string) => compileExpr(e, {} as never) }, signals: {} } as unknown as TransformContext
     const out = applyTransforms(NODES.map((r) => ({ ...r })), [{ type: 'force', iterations: 50, static: true, forces: [{ force: 'center', x: 100, y: 60 }, { force: 'nbody', strength: -30 }] }] as never, ctx)
     expect(new Set(out.map((d) => d.x)).size).toBeGreaterThan(50)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------- refusals
+//
+// What a spec author sees when the `forces` parameter is wrong. vega refuses while it parses the spec (its
+// sub-parameter key matching), so the message names the offending force object as written, and a force it does not
+// know is "Unsupported parameter", not "Unrecognized force".
+
+type Outcome = { rows: unknown } | { error: string }
+
+async function viaVega(t: Row): Promise<Outcome> {
+  const errors: string[] = []
+  try {
+    const view = new vega.View(vega.parse({ data: [{ name: 'links', values: LINKS.slice(0, 5).map((l) => ({ ...l })) }, { name: 'nodes', values: NODES.slice(0, 8).map((r) => ({ ...r })), transform: [{ type: 'force', iterations: 5, static: true, ...structuredClone(t) }] }] } as never), { renderer: 'none', logLevel: vega.None })
+    view.logger({ level: () => 1, error(...a: unknown[]) { errors.push(a.map((x) => (x as Error)?.message || String(x)).join(' ')); return this }, warn() { return this }, info() { return this }, debug() { return this } } as never)
+    await view.runAsync()
+    view.finalize()
+    return errors.length ? { error: errors[0]!.replace(/^Error: /, '') } : { rows: (view.data('nodes') as Row[]).map((d) => [d.x, d.y].map(enc)) }
+  } catch (e) {
+    return { error: (e as Error).message }
+  }
+}
+
+/** The whole path a spec takes in Aster -- compile (the structural checks) and evaluate -- not just the transform. */
+function viaAster(t: Row): Outcome {
+  try {
+    const spec = { data: [{ name: 'links', values: LINKS.slice(0, 5).map((l) => ({ ...l })) }, { name: 'nodes', values: NODES.slice(0, 8).map((r) => ({ ...r })), transform: [{ type: 'force', iterations: 5, static: true, ...structuredClone(t) }] }], marks: [] }
+    const errors: string[] = []
+    const logger = { error: (...a: unknown[]) => { errors.push(a.map((x) => (x as Error)?.message || String(x)).join(' ')) }, warn() {} }
+    const scene = evaluateChart(compileChart(spec as never), { logger })
+    if (errors.length) return { error: errors[0]!.replace(/^Error: /, '') }
+    return { rows: (datasetsOfScene(scene).get('nodes') as unknown as Row[]).map((d) => [d.x, d.y].map(enc)) }
+  } catch (e) {
+    return { error: (e as Error).message }
+  }
+}
+
+const BAD_FORCES: Array<[string, Row]> = [
+  ['an unknown force name', { forces: [{ force: 'gravity', strength: 1 }] }],
+  ['an unknown name after good forces', { forces: [{ force: 'center' }, { force: 'collide', radius: 3 }, { force: 'swirl', k: 2 }] }],
+  ['a force name in the wrong case', { forces: [{ force: 'Center' }] }],
+  ['a force name that is a built-in property', { forces: [{ force: 'constructor' }] }],
+  ['a force name that is not a string', { forces: [{ force: 7 }] }],
+  ['a null force name', { forces: [{ force: null }] }],
+  ['a force with no name', { forces: [{ x: 1 }] }],
+  ['an empty force object', { forces: [{}] }],
+  ['a force object that is a string', { forces: ['center'] }],
+  ['a force that is null', { forces: [null] }],
+  ['a force that is a number', { forces: [3] }],
+  ['a force that is an array', { forces: [['center']] }],
+  ['forces as an object', { forces: { force: 'center' } }],
+  ['forces as a string', { forces: 'center' }],
+  ['forces as a number', { forces: 5 }],
+  ['forces as null', { forces: null }],
+  ['forces as a signal reference', { forces: { signal: '[{force: "center"}]' } }],
+  ['forces left out', {}],
+  ['forces empty', { forces: [] }],
+  ['a name given as a signal', { forces: [{ force: { signal: '"center"' } }] }],
+  ['extra keys on a known force', { forces: [{ force: 'center', bogus: 1, x: 10 }] }],
+  ['a link force naming a data set that does not exist', { forces: [{ force: 'link', links: 'nowhere' }] }],
+  ['a link force with no links', { forces: [{ force: 'link', distance: 20 }] }],
+  ['a link force whose ends are no node', { forces: [{ force: 'link', links: 'links' }] }],
+  ['a link force with a node id nobody has', { forces: [{ force: 'link', links: 'links', id: 'nope' }] }],
+  ['a radius that calls an unknown function', { forces: [{ force: 'collide', radius: { expr: 'nosuch(datum.size)' } }] }],
+  ['a strength that is a string', { forces: [{ force: 'nbody', strength: 'strong' }] }],
+  ['x without a target field', { forces: [{ force: 'x', strength: 0.5 }] }],
+  ['iterations that are not a number', { iterations: 'many', forces: [{ force: 'center' }] }],
+  ['alpha that is not a number', { alpha: 'high', forces: [{ force: 'center' }] }],
+]
+
+describe('force transform refusals vs real vega (live)', () => {
+  for (const [name, t] of BAD_FORCES) {
+    it(name, async () => {
+      const want = await viaVega(t)
+      const got = viaAster(t)
+      if ('error' in want) expect('error' in got ? got.error : 'no error').toBe(want.error)
+      else expect(got).toEqual(want)
+    })
+  }
+  it('is not trivially passing: some of these cases are refused by vega, some are not', async () => {
+    const outcomes = await Promise.all(BAD_FORCES.map(([, t]) => viaVega(t)))
+    expect(outcomes.filter((o) => 'error' in o).length).toBeGreaterThan(10)
+    expect(outcomes.filter((o) => 'rows' in o).length).toBeGreaterThan(2)
   })
 })

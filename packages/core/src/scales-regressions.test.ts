@@ -56,12 +56,12 @@ describe('the scale registry (C95)', () => {
 describe('geo: the projection path owns pointRadius (C95)', () => {
   it('the radius lands on the bound path; the projection has no pointRadius of its own', () => {
     const p = buildProjection({ name: 'p', type: 'mercator', pointRadius: 7 })
-    expect(p.path.pointRadius()).toBe(7)
-    expect(typeof p.pointRadius).toBe('undefined')
-    expect(buildProjection({ name: 'p', type: 'mercator' }).path.pointRadius()).toBe(4.5)
+    expect(p.path.pointRadius).toBe(7)
+    expect('pointRadius' in p).toBe(false)
+    expect(buildProjection({ name: 'p', type: 'mercator' }).path.pointRadius).toBe(4.5)
   })
   it('a point is drawn as a circle of that radius', () => {
-    const d = buildProjection({ name: 'p', type: 'identity', pointRadius: 3 }).path({ type: 'Point', coordinates: [10, 20] }) as string
+    const d = buildProjection({ name: 'p', type: 'identity', pointRadius: 3 }).path.draw({ type: 'Point', coordinates: [10, 20] }) as string
     expect(d).toContain('a3,3')
   })
 })

@@ -5,9 +5,9 @@
  */
 import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
-import { applyTransforms, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
+import { applyTransforms, applyTransformsToSharedRows, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
-import { atRandomSite, contentKey, replayable } from './random-tape.js'
+import { atRandomSite, contentKey, mayDrawRandom, replayable } from './random-tape.js'
 import { activeMeter, withLimits, boundedCount, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
@@ -1160,7 +1160,7 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
         for (const f of frozen) params[f] = ctx.chart.signalDefs!.find((d) => d.name === f)?.value
       }
       ctx.setData.caller = def.name
-      const value = ctx.runtime.random === undefined
+      const value = ctx.runtime.random === undefined || !mayDrawRandom(expr)
         ? ctx.runtime.expr(expr)(undefined, params)
         : atRandomSite(ctx.runtime.random, `signal:${def.name}`, () => randomFingerprint(expr, [], params), () => ctx.runtime.expr(expr)(undefined, params))
       // An `init` that reads a scale or a dataset is only settled once they exist: until the scales are built,
@@ -1673,8 +1673,11 @@ function forceLinkDatasets(chart: CompiledChart): Set<string> {
   const visit = (transforms: readonly CompiledTransform[] | undefined): void => {
     for (const t of transforms ?? []) {
       if (t.type !== 'force') continue
-      for (const f of (t as { forces?: Array<{ force?: string; links?: unknown }> }).forces ?? []) {
-        if (f.force === 'link' && typeof f.links === 'string') out!.add(f.links)
+      // (a malformed list is the force transform's to refuse, with the message of the parameter check)
+      const forces = (t as { forces?: unknown }).forces
+      if (!Array.isArray(forces)) continue
+      for (const f of forces as Array<{ force?: string; links?: unknown } | null>) {
+        if (f?.force === 'link' && typeof f.links === 'string') out!.add(f.links)
       }
     }
   }
@@ -3475,7 +3478,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         let cur = rows
         for (let k = 0; k < d.transform.length; k++) {
           const from = cur
-          const res = ctx.runtime.random === undefined
+          const res = ctx.runtime.random === undefined || !mayDrawRandom(d.transform[k])
             ? applyOneWithState(from, d.transform[k]!, tctx, name)
             : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(d.transform[k]!, from, ctx.signalParams), () => applyOneWithState(from, d.transform[k]!, tctx, name))
           cur = res.rows
@@ -4145,7 +4148,7 @@ function evaluateMarkItems(
     try {
       // (a transform that draws random numbers - the layout of a word cloud - draws them once for the inputs it is given, as
       // vega's operator does, not again for every evaluation of the scene: see random-tape.ts)
-      const out = atRandomSite(ctx.runtime.random, `mark:${ctx.scopeId ?? ''}/${markIdOf(mark)}#${k}`, () => randomFingerprint(t, items.map(publicProps), ctx.signalParams), () => applyTransforms(items as unknown as Row[], [t], {
+      const out = atRandomSite(mayDrawRandom(t) ? ctx.runtime.random : undefined, `mark:${ctx.scopeId ?? ''}/${markIdOf(mark)}#${k}`, () => randomFingerprint(t, items.map(publicProps), ctx.signalParams), () => applyTransforms(items as unknown as Row[], [t], {
         runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections,
         // (`lookup` `from` is a dataset, or the name of a mark: its items)
         datasets: (n) => ctx.datasets.get(n) ?? (ctx.markItems.get(n) as unknown as Row[] | undefined),
@@ -4178,9 +4181,6 @@ function evaluateMarkItems(
     items = items.filter((it) => (it as { __unencoded?: boolean }).__unencoded !== true)
   }
 
-  // Text marks encoded in polar coordinates (`radius` + `theta`, e.g. pie
-  // labels): vega's text renderer offsets the anchor by
-  // `radius * (cos(theta - π/2), sin(theta - π/2))` from the item's x/y.
   // Vega's mark defaults (vega.js defaults()): line {strokeWidth: 2},
   // area {fill: '#4c78a8'}, text {fill: '#000'} — applied when the encode
   // leaves the property unspecified.
@@ -4194,9 +4194,6 @@ function evaluateMarkItems(
       if (fill !== undefined && rec.fill === undefined) rec.fill = fill
       if (mark.type === 'line' && rec.strokeWidth === undefined) rec.strokeWidth = 2
     }
-  }
-  if (mark.type === 'text') {
-    applyTextPolar(items)
   }
 
   // The vega-lite point/circle/square styles default stroked symbols to
@@ -4609,11 +4606,13 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     }
     for (const d of mark.data ?? []) {
       const sources = sourceNames(d)
-      let rows: Row[] = sources.length ? sources.flatMap((n) => (ctx.datasets.get(n) ?? []).map((r) => ({ ...r }))) : d.values != null ? readData(inlineValues(ctx, d.values), d.format) : []
+      // (a dataset made from others holds copies of their rows: the pipeline starts from the rows themselves while it only reads them)
+      const shared = sources.length > 0
+      let rows: Row[] = shared ? sources.flatMap((n) => ctx.datasets.get(n) ?? []) : d.values != null ? readData(inlineValues(ctx, d.values), d.format) : []
       checkRowCount(rows.length, `dataset "${d.name}"`)
-      if (d.transform?.length) {
-        rows = applyTransforms(rows, d.transform, { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }, d.name)
-      }
+      const tctx = { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }
+      if (d.transform?.length) rows = shared ? applyTransformsToSharedRows(rows, d.transform, tctx, d.name) : applyTransforms(rows, d.transform, tctx, d.name)
+      else if (shared) rows = rows.map((r) => ({ ...r }))
       savedData.push([d.name, ctx.datasets.get(d.name)])
       ctx.datasets.set(d.name, rows)
     }
@@ -4787,25 +4786,6 @@ function applySymbolStyleDefaults(mark: CompiledMark, items: SceneItem[]): void 
   if (!styles.some((s) => s === 'point' || s === 'circle' || s === 'square')) return
   for (const it of items) {
     if (it.strokeWidth == null) it.strokeWidth = 2
-  }
-}
-
-/**
- * Bake a text item's polar `radius`/`theta` encoding into its x/y anchor,
- * mirroring vega-scenegraph's `anchorPoint` (theta is measured clockwise from
- * 12 o'clock, hence the -π/2 offset).
- */
-function applyTextPolar(items: SceneItem[]): void {
-  for (const it of items) {
-    const radius = it.radius
-    if (radius == null || radius === 0) continue
-    const x = it.x ?? 0
-    const y = it.y ?? 0
-    const t = (it.theta ?? 0) - Math.PI / 2
-    it.x = x + radius * Math.cos(t)
-    it.y = y + radius * Math.sin(t)
-    delete (it as Record<string, unknown>).radius
-    delete (it as Record<string, unknown>).theta
   }
 }
 

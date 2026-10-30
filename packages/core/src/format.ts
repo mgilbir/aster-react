@@ -1,84 +1,53 @@
 /**
- * Number formatting — a faithful port of d3-format (3.1.2), pinned by oracle
- * vectors (`testdata/vectors/d3-format.json`).
+ * Number formatting: the `[[fill]align][sign][symbol][0][width][,][.precision][~][type]` mini-language of d3-format,
+ * as Aster's axis labels, legends, `format()` expressions and text encodings use it.
  *
- * The grammar is `[[fill]align][sign][symbol][0][width][,][.precision][~][type]`.
- * Nothing is clamped or "fixed": the quirks are upstream's, e.g. `format("")`
- * is `,.12~g`, the `n` type is an alias for `,g`, `-0` keeps its sign only via
- * `1 / value < 0`, and values ≥ 1e21 go through `toLocaleString("en")`.
+ * How a value becomes text:
+ *   1. `parseSpecifier` reads the grammar into a `FormatSpecifier` (a plain record that prints back as its text);
+ *   2. `compile` settles what the specifier means in a locale (aliases, defaults, the affixes), once;
+ *   3. each call rounds |value| with the type's renderer, trims, signs, splits off the part that must not be grouped
+ *      (fraction, exponent, SI prefix), groups, pads and aligns.
+ *
+ * Output is held identical to d3-format for every input by the vectors in `testdata/vectors/d3-format.json` and the
+ * generated differential `packages/conformance/scripts/differential-format.test.mts`. Behaviour that follows from that
+ * and not from taste:
+ * - `format('')` is `.12~g`, `n` is `,g`, and any unknown type is `.12~g` (trimmed);
+ * - the SI prefix of an `s` format comes from the last number an `s` format rounded, in any locale, and a NaN does not
+ *   refresh it: `format('s')(NaN)` under a locale whose NaN text is empty or numeric still wears the previous prefix;
+ * - a minus sign survives only when the rounded text is not zero (a `-0` shows no sign, `+` excepted);
+ * - the pad is built with `new Array(n + 1).join(fill)` so an absurd width fails with the same RangeError;
+ * - locale fields are read as array-likes (`Array.prototype.map.call`), so `grouping: '3'` works.
  */
-
 import { meterBytes } from './limits.js'
 
-// --- decimal expansion -------------------------------------------------------
+export { tickStep } from './arr.js'
+
+// --- digits ---------------------------------------------------------------------------
+
+interface Decimal {
+  /** The significant digits, no point, e.g. 1.23e4 -> '123'. */
+  digits: string
+  /** The power of ten of the first digit. */
+  power: number
+}
 
 /**
- * The decimal coefficient and exponent of `x` with `p` significant digits,
- * where `x` is positive and `p` is in [1, 21] or undefined.
- * `formatDecimalParts(1.23)` returns `["123", 0]`.
+ * |x| as significant digits and a power of ten, rounded to `significant` digits (all digits when omitted or 0).
+ * `null` for zero and the non-finite numbers, which have no such form.
  */
-export function formatDecimalParts(x: number, p?: number): [string, number] | null {
-  if (!isFinite(x) || x === 0) return null // NaN, ±Infinity, ±0
-  const s = p ? x.toExponential(p - 1) : x.toExponential()
-  const i = s.indexOf('e')
-  const coefficient = s.slice(0, i)
-  // The string returned by toExponential either has the form \d\.\d+e[-+]\d+
-  // (e.g., 1.2e+3) or the form \de[-+]\d+ (e.g., 1e+3).
-  return [
-    coefficient.length > 1 ? coefficient[0]! + coefficient.slice(2) : coefficient,
-    +s.slice(i + 1),
-  ]
+function decimalOf(x: number, significant?: number): Decimal | null {
+  if (!isFinite(x) || x === 0) return null
+  const text = significant ? x.toExponential(significant - 1) : x.toExponential()
+  const e = text.indexOf('e')
+  const mantissa = text.slice(0, e)
+  return { digits: mantissa.length > 1 ? mantissa[0]! + mantissa.slice(2) : mantissa, power: +text.slice(e + 1) }
 }
 
-/** Integer formatting for the `d` type. */
-export function formatDecimal(x: number): string {
-  return Math.abs(x = Math.round(x)) >= 1e21
-    ? x.toLocaleString('en').replace(/,/g, '')
-    : x.toString(10)
-}
+const zeros = (n: number): string => (n > 0 ? '0'.repeat(n) : '')
 
-// --- trim, grouping, numerals ------------------------------------------------
-
-/** Trims insignificant zeros, e.g., replaces 1.2000k with 1.2k. */
-export function formatTrim(s: string): string {
-  let i0 = -1
-  let i1: number | undefined
-  out: for (let n = s.length, i = 1; i < n; ++i) {
-    switch (s[i]) {
-      case '.': i0 = i1 = i; break
-      case '0': if (i0 === 0) i0 = i; i1 = i; break
-      default: if (!+(s[i] as string)) break out; if (i0 > 0) i0 = 0; break
-    }
-  }
-  return i0 > 0 ? s.slice(0, i0) + s.slice((i1 as number) + 1) : s
-}
-
-export function formatGroup(grouping: readonly number[], thousands: string): (value: string, width: number) => string {
-  return function (value, width) {
-    let i = value.length
-    const t: string[] = []
-    let j = 0
-    let g = grouping[0] as number
-    let length = 0
-    while (i > 0 && g > 0) {
-      if (length + g + 1 > width) g = Math.max(1, width - length)
-      t.push(value.substring((i -= g), i + g))
-      if ((length += g + 1) > width) break
-      g = grouping[j = (j + 1) % grouping.length] as number
-    }
-    return t.reverse().join(thousands)
-  }
-}
-
-export function formatNumerals(numerals: readonly string[]): (value: string) => string {
-  return (value) => value.replace(/[0-9]/g, (i) => numerals[+i] as string)
-}
-
-// --- exponent and precisions -------------------------------------------------
-
-export function exponent(x: number): number {
-  const d = formatDecimalParts(Math.abs(x))
-  return d ? d[1] : NaN
+function exponent(x: number): number {
+  const d = decimalOf(Math.abs(x))
+  return d ? d.power : NaN
 }
 
 export function precisionFixed(step: number): number {
@@ -95,33 +64,147 @@ export function precisionRound(step: number, max: number): number {
   return Math.max(0, exponent(max) - exponent(step)) + 1
 }
 
-/** Powers-of-ten thresholds used by `tickStep`'s rounding. */
-const e10 = Math.sqrt(50)
-const e5 = Math.sqrt(10)
-const e2 = Math.sqrt(2)
+// --- the type renderers ---------------------------------------------------------------
 
-/** The "nice" step between `count` ticks of a domain (d3-array's tickStep). */
-export function tickStep(start: number, stop: number, count: number): number {
-  const reverse = stop < start
-  const inc = reverse ? tickIncrement(stop, start, count) : tickIncrement(start, stop, count)
-  return (reverse ? -1 : 1) * (inc < 0 ? 1 / -inc : inc)
+/** The SI power (a multiple of 3 in [-24, 24]) of the last number the `s` renderer rounded; see the header. */
+let lastSiPower: number | undefined
+
+const SI_PREFIXES = ['y', 'z', 'a', 'f', 'p', 'n', 'µ', 'm', '', 'k', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y']
+
+const siPowerOf = (power: number): number => Math.max(-8, Math.min(8, Math.floor(power / 3))) * 3
+
+/** `%` is not here: it only scales. Integer types round half away from the sign like Math.round. */
+function integer(x: number): string {
+  const rounded = Math.round(x)
+  return Math.abs(rounded) >= 1e21 ? rounded.toLocaleString('en').replace(/,/g, '') : rounded.toString(10)
 }
 
-function tickIncrement(start: number, stop: number, count: number): number {
-  const step = (stop - start) / Math.max(0, count)
-  const power = Math.floor(Math.log10(step))
-  const error = step / Math.pow(10, power)
-  return power >= 0
-    ? (error >= e10 ? 10 : error >= e5 ? 5 : error >= e2 ? 2 : 1) * Math.pow(10, power)
-    : -Math.pow(10, -power) / (error >= e10 ? 10 : error >= e5 ? 5 : error >= e2 ? 2 : 1)
+/** Digits at a power of ten laid out positionally: 12345 at power 2 -> '123.45', at power -2 -> '0.0012345'. */
+function positional({ digits, power }: Decimal): string {
+  if (power < 0) return '0.' + zeros(-power - 1) + digits
+  if (digits.length > power + 1) return digits.slice(0, power + 1) + '.' + digits.slice(power + 1)
+  return digits + zeros(power - digits.length + 1)
 }
 
-// --- the specifier -----------------------------------------------------------
+function significant(x: number, precision: number): string {
+  const d = decimalOf(x, precision)
+  return d ? positional(d) : x + ''
+}
 
-// [[fill]align][sign][symbol][0][width][,][.precision][~][type]
-const re = /^(?:(.)?([<>=^]))?([+\-( ])?([$#])?(0)?(\d+)?(,)?(\.\d+)?(~)?([a-z%])?$/i
+/** The `s` type: scale to the SI prefix the magnitude calls for, round to `precision` digits there. */
+function siScaled(x: number, precision: number): string {
+  const d = decimalOf(x, precision)
+  if (!d) {
+    lastSiPower = undefined
+    return x.toPrecision(precision)
+  }
+  const power = (lastSiPower = Math.max(-8, Math.min(8, Math.floor(d.power / 3))) * 3)
+  const intDigits = d.power - power + 1
+  const n = d.digits.length
+  if (intDigits === n) return d.digits
+  if (intDigits > n) return d.digits + zeros(intDigits - n)
+  if (intDigits > 0) return d.digits.slice(0, intDigits) + '.' + d.digits.slice(intDigits)
+  // below one unit of the smallest prefix: re-round to the digits that remain (0 means "all digits" to decimalOf)
+  return '0.' + zeros(-intDigits) + decimalOf(x, Math.max(0, precision + intDigits - 1))!.digits
+}
 
-export class FormatSpecifier {
+const RENDERERS: Record<string, (x: number, precision: number) => string> = {
+  '%': (x, p) => (x * 100).toFixed(p),
+  b: (x) => Math.round(x).toString(2),
+  c: (x) => x + '',
+  d: integer,
+  e: (x, p) => x.toExponential(p),
+  f: (x, p) => x.toFixed(p),
+  g: (x, p) => x.toPrecision(p),
+  o: (x) => Math.round(x).toString(8),
+  p: (x, p) => significant(x * 100, p),
+  r: significant,
+  s: siScaled,
+  X: (x) => Math.round(x).toString(16).toUpperCase(),
+  x: (x) => Math.round(x).toString(16),
+}
+
+// --- trimming, grouping, numerals ------------------------------------------------------
+
+/**
+ * Drop insignificant zeros from the leading run of digits and points: '1.500' -> '1.5', '2.000e+3' -> '2e+3',
+ * '5.' -> '5'. Only text after a point (past the first character) can be trimmed.
+ */
+function trimZeros(text: string): string {
+  // the leading run: the first character whatever it is, then digits and points
+  let end = 1
+  let point = -1
+  for (; end < text.length; end++) {
+    const code = text.charCodeAt(end)
+    if (code === 46) point = end
+    else if (code < 48 || code > 57) break
+  }
+  if (point < 0) return text
+  let zerosFrom = end
+  while (zerosFrom > point + 1 && text.charCodeAt(zerosFrom - 1) === 48) zerosFrom--
+  const cut = zerosFrom === point + 1 ? point : zerosFrom
+  return cut < end ? text.slice(0, cut) + text.slice(end) : text
+}
+
+/**
+ * Insert `separator` between groups of digits counted from the right; `sizes` repeat cyclically. Under a `width` the
+ * groups shrink so the grouped text does not outgrow it (zero-padded numbers group their padding).
+ */
+function grouper(sizes: readonly number[], separator: string): (digits: string, width: number) => string {
+  return (digits, width) => {
+    const chunks: string[] = []
+    let end = digits.length
+    let turn = 0
+    let size = sizes[0]!
+    let used = 0
+    while (end > 0 && size > 0) {
+      if (used + size + 1 > width) size = Math.max(1, width - used)
+      end -= size
+      chunks.push(digits.substring(end, end + size))
+      used += size + 1
+      if (used > width) break
+      turn = (turn + 1) % sizes.length
+      size = sizes[turn]!
+    }
+    return chunks.reverse().join(separator)
+  }
+}
+
+const keepAsIs = (text: string): string => text
+
+/** Replace the ASCII digits of a text with the locale's own numerals. */
+const numeralMapper = (names: readonly string[]) => (text: string): string => text.replace(/[0-9]/g, (digit) => names[+digit]!)
+
+// --- the specifier ----------------------------------------------------------------------
+
+const GRAMMAR = new RegExp(
+  '^(?:(.)?([<>=^]))?' // fill and align
+  + '([+\\-( ])?' // sign
+  + '([$#])?' // symbol
+  + '(0)?' // zero padding
+  + '(\\d+)?' // width
+  + '(,)?' // grouping
+  + '(\\.\\d+)?' // precision
+  + '(~)?' // trim
+  + '([a-z%])?$', // type
+  'i',
+)
+
+export interface FormatSpecifierFields {
+  fill: string
+  align: string
+  sign: string
+  symbol: string
+  zero: boolean
+  width: number | undefined
+  comma: boolean
+  precision: number | undefined
+  trim: boolean
+  type: string
+}
+
+/** A parsed specifier. Mutable on purpose: vega-format fills in a precision and `formatPrefix` forces the type. */
+export class FormatSpecifier implements FormatSpecifierFields {
   fill: string
   align: string
   sign: string
@@ -133,110 +216,47 @@ export class FormatSpecifier {
   trim: boolean
   type: string
 
-  constructor(specifier: Partial<FormatSpecifierSpec>) {
-    this.fill = specifier.fill === undefined ? ' ' : specifier.fill + ''
-    this.align = specifier.align === undefined ? '>' : specifier.align + ''
-    this.sign = specifier.sign === undefined ? '-' : specifier.sign + ''
-    this.symbol = specifier.symbol === undefined ? '' : specifier.symbol + ''
-    this.zero = !!specifier.zero
-    this.width = specifier.width === undefined ? undefined : +specifier.width
-    this.comma = !!specifier.comma
-    this.precision = specifier.precision === undefined ? undefined : +specifier.precision
-    this.trim = !!specifier.trim
-    this.type = specifier.type === undefined ? '' : specifier.type + ''
+  constructor(fields: FormatSpecifierFields) {
+    this.fill = fields.fill
+    this.align = fields.align
+    this.sign = fields.sign
+    this.symbol = fields.symbol
+    this.zero = fields.zero
+    this.width = fields.width
+    this.comma = fields.comma
+    this.precision = fields.precision
+    this.trim = fields.trim
+    this.type = fields.type
   }
 
   toString(): string {
-    return this.fill
-      + this.align
-      + this.sign
-      + this.symbol
-      + (this.zero ? '0' : '')
+    return this.fill + this.align + this.sign + this.symbol + (this.zero ? '0' : '')
       + (this.width === undefined ? '' : Math.max(1, this.width | 0))
       + (this.comma ? ',' : '')
       + (this.precision === undefined ? '' : '.' + Math.max(0, this.precision | 0))
-      + (this.trim ? '~' : '')
-      + this.type
+      + (this.trim ? '~' : '') + this.type
   }
 }
 
-export interface FormatSpecifierSpec {
-  fill?: string
-  align?: string
-  sign?: string
-  symbol?: string
-  zero?: string | boolean
-  width?: string | number
-  comma?: string | boolean
-  precision?: string | number
-  trim?: string | boolean
-  type?: string
-}
-
-/** Parse a specifier string, throwing on a malformed one (as upstream). */
+/** Parse a specifier; the text of anything else is `String()` of it. Malformed text throws `invalid format: ...`. */
 export function formatSpecifier(specifier: unknown): FormatSpecifier {
-  const match = re.exec(String(specifier))
-  if (!match) throw new Error('invalid format: ' + specifier)
+  const m = GRAMMAR.exec(String(specifier))
+  if (!m) throw new Error('invalid format: ' + specifier)
   return new FormatSpecifier({
-    fill: match[1],
-    align: match[2],
-    sign: match[3],
-    symbol: match[4],
-    zero: match[5],
-    width: match[6],
-    comma: match[7],
-    precision: match[8] && match[8].slice(1),
-    trim: match[9],
-    type: match[10],
+    fill: m[1] === undefined ? ' ' : m[1],
+    align: m[2] === undefined ? '>' : m[2],
+    sign: m[3] === undefined ? '-' : m[3],
+    symbol: m[4] === undefined ? '' : m[4],
+    zero: !!m[5],
+    width: m[6] === undefined ? undefined : +m[6],
+    comma: !!m[7],
+    precision: m[8] === undefined ? undefined : +m[8].slice(1),
+    trim: !!m[9],
+    type: m[10] === undefined ? '' : m[10],
   })
 }
 
-// --- the numeric types -------------------------------------------------------
-
-let prefixExponent: number | undefined
-
-/** The `s` type: SI prefixes, chosen by the value's magnitude. */
-export function formatPrefixAuto(x: number, p: number): string {
-  const d = formatDecimalParts(x, p)
-  if (!d) return prefixExponent = undefined, x.toPrecision(p)
-  const coefficient = d[0]
-  const exp = d[1]
-  const i = exp - (prefixExponent = Math.max(-8, Math.min(8, Math.floor(exp / 3))) * 3) + 1
-  const n = coefficient.length
-  return i === n ? coefficient
-    : i > n ? coefficient + new Array(i - n + 1).join('0')
-    : i > 0 ? coefficient.slice(0, i) + '.' + coefficient.slice(i)
-    : '0.' + new Array(1 - i).join('0') + formatDecimalParts(x, Math.max(0, p + i - 1))![0]
-}
-
-/** The `r` and `p` types: rounded to significant digits. */
-export function formatRounded(x: number, p: number): string {
-  const d = formatDecimalParts(x, p)
-  if (!d) return x + ''
-  const coefficient = d[0]
-  const exp = d[1]
-  return exp < 0 ? '0.' + new Array(-exp).join('0') + coefficient
-    : coefficient.length > exp + 1 ? coefficient.slice(0, exp + 1) + '.' + coefficient.slice(exp + 1)
-    : coefficient + new Array(exp - coefficient.length + 2).join('0')
-}
-
-export const formatTypes: Record<string, (x: number, p: number) => string> = {
-  '%': (x, p) => (x * 100).toFixed(p),
-  b: (x) => Math.round(x).toString(2),
-  c: (x) => x + '',
-  d: formatDecimal,
-  e: (x, p) => x.toExponential(p),
-  f: (x, p) => x.toFixed(p),
-  g: (x, p) => x.toPrecision(p),
-  o: (x) => Math.round(x).toString(8),
-  p: (x, p) => formatRounded(x * 100, p),
-  r: formatRounded,
-  s: formatPrefixAuto,
-  X: (x) => Math.round(x).toString(16).toUpperCase(),
-  x: (x) => Math.round(x).toString(16),
-}
-
-// --- the locale --------------------------------------------------------------
+// --- locales -----------------------------------------------------------------------------
 
 export interface FormatLocaleDefinition {
   decimal?: string
@@ -259,157 +279,162 @@ export interface FormatLocale {
   formatPrefix(specifier: unknown, value: number): FormatFunction
 }
 
-const identity = (value: string): string => value
-const prefixes = ['y', 'z', 'a', 'f', 'p', 'n', 'µ', 'm', '', 'k', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y']
+/** A locale's symbols, settled once when the locale is made. */
+interface Symbols {
+  group: (digits: string, width: number) => string
+  currencyPrefix: string
+  currencySuffix: string
+  decimal: string
+  numerals: (text: string) => string
+  percent: string
+  minus: string
+  nan: string
+}
 
-export function formatLocale(locale: FormatLocaleDefinition): FormatLocale {
-  const group = locale.grouping === undefined || locale.thousands === undefined
-    ? identity
-    : formatGroup((locale.grouping as readonly unknown[]).map(Number), locale.thousands + '')
-  const currencyPrefix = locale.currency === undefined ? '' : locale.currency[0] + ''
-  const currencySuffix = locale.currency === undefined ? '' : locale.currency[1] + ''
-  const decimal = locale.decimal === undefined ? '.' : locale.decimal + ''
-  const numerals = locale.numerals === undefined ? identity : formatNumerals((locale.numerals as readonly unknown[]).map(String))
-  const percent = locale.percent === undefined ? '%' : locale.percent + ''
-  const minus = locale.minus === undefined ? '−' : locale.minus + ''
-  const nan = locale.nan === undefined ? 'NaN' : locale.nan + ''
+function symbolsOf(def: FormatLocaleDefinition): Symbols {
+  const text = (value: unknown, fallback: string): string => (value === undefined ? fallback : value + '')
+  return {
+    group: def.grouping === undefined || def.thousands === undefined
+      ? keepAsIs
+      : grouper(Array.prototype.map.call(def.grouping, Number) as number[], def.thousands + ''),
+    currencyPrefix: def.currency === undefined ? '' : def.currency[0] + '',
+    currencySuffix: def.currency === undefined ? '' : def.currency[1] + '',
+    decimal: text(def.decimal, '.'),
+    numerals: def.numerals === undefined ? keepAsIs : numeralMapper(Array.prototype.map.call(def.numerals, String) as string[]),
+    percent: text(def.percent, '%'),
+    minus: text(def.minus, '−'),
+    nan: text(def.nan, 'NaN'),
+  }
+}
 
-  function newFormat(specifier: unknown, options?: { prefix?: string; suffix?: string }): FormatFunction {
-    const spec = formatSpecifier(specifier)
-    // upstream reassigns these while normalising the specifier
-    let { fill, align, sign, symbol, zero, width, comma, precision, trim, type } = spec
-    // The "n" type is an alias for ",g".
-    if (type === 'n') comma = true, type = 'g'
-    // The "" type, and any invalid type, is an alias for ".12~g".
-    else if (!formatTypes[type]) precision === undefined && (precision = 12), trim = true, type = 'g'
-    // If zero fill is specified, padding goes after sign and before digits.
-    if (zero || (fill === '0' && align === '=')) zero = true, fill = '0', align = '='
-    // Compute the prefix and suffix.
-    // For SI-prefix, the suffix is lazily computed.
-    const prefix = (options && options.prefix !== undefined ? options.prefix : '') + (symbol === '$' ? currencyPrefix : symbol === '#' && /[boxX]/.test(type) ? '0' + type.toLowerCase() : '')
-    const suffix = (symbol === '$' ? currencySuffix : /[%p]/.test(type) ? percent : '') + (options && options.suffix !== undefined ? options.suffix : '')
-    // What format function should we use?
-    // Is this an integer type?
-    // Can this type generate exponential notation?
-    const formatType = formatTypes[type]
-    const maybeSuffix = /[defgprs%]/.test(type)
-    // Set the default precision if not specified,
-    // or clamp the specified precision to the supported range.
-    // For significant precision, it must be in [1, 21].
-    // For fixed precision, it must be in [0, 20].
-    precision = precision === undefined ? 6
-      : /[gprs]/.test(type) ? Math.max(1, Math.min(21, precision))
-      : Math.max(0, Math.min(20, precision))
+/** Text attached to every output of a compiled format on top of the specifier's own affixes (`formatPrefix`'s unit). */
+interface Affixes {
+  suffix?: string
+}
 
-    function format(value: unknown): string {
-      let valuePrefix = prefix
-      let valueSuffix = suffix
-      let out: string
-      let i: number, n: number, c: number
-      const formatTypeFn = formatType as (x: number, p: number) => string
-      if (type === 'c') {
-        valueSuffix = formatTypeFn(value as number, precision as number) + valueSuffix
-        out = ''
-      } else {
-        const v = +(value as number)
-        // Determine the sign. -0 is not less than 0, but 1 / -0 is!
-        let valueNegative = v < 0 || 1 / v < 0
-        // Perform the initial formatting.
-        out = isNaN(v) ? nan : formatTypeFn(Math.abs(v), precision as number)
-        // Trim insignificant zeros.
-        if (trim) out = formatTrim(out)
-        // If a negative value rounds to zero after formatting, and no explicit
-        // positive sign is requested, hide the sign.
-        if (valueNegative && +out === 0 && sign !== '+') valueNegative = false
-        // Compute the prefix and suffix.
-        valuePrefix = (valueNegative ? (sign === '(' ? sign : minus) : sign === '-' || sign === '(' ? '' : sign) + valuePrefix
-        valueSuffix = (type === 's' && !isNaN(v) && prefixExponent !== undefined ? prefixes[8 + prefixExponent / 3] as string : '') + valueSuffix + (valueNegative && sign === '(' ? ')' : '')
-        // Break the formatted value into the integer "value" part that can be
-        // grouped, and fractional or exponential "suffix" part that is not.
-        if (maybeSuffix) {
-          i = -1, n = out.length
-          while (++i < n) {
-            c = out.charCodeAt(i)
-            if (48 > c || c > 57) {
-              valueSuffix = (c === 46 ? decimal + out.slice(i + 1) : out.slice(i)) + valueSuffix
-              out = out.slice(0, i)
-              break
-            }
+const SIGNIFICANT_TYPES = /[gprs]/
+const HAS_FRACTION_OR_EXPONENT = /[defgprs%]/
+
+/**
+ * Settle a specifier in a locale and return the formatter. The specifier object is copied, not retained: later
+ * changes to it do not reach the formatter, and `toString` of the result is the specifier as parsed.
+ */
+function compile(spec: FormatSpecifier, symbols: Symbols, affixes?: Affixes): FormatFunction {
+  const { sign, symbol, width, comma } = spec
+  let { fill, align, zero, precision, trim, type } = spec
+  let grouped = comma
+
+  if (type === 'n') {
+    grouped = true
+    type = 'g'
+  } else if (!RENDERERS[type]) {
+    if (precision === undefined) precision = 12
+    trim = true
+    type = 'g'
+  }
+  if (zero || (fill === '0' && align === '=')) {
+    zero = true
+    fill = '0'
+    align = '='
+  }
+
+  const prefix = symbol === '$' ? symbols.currencyPrefix : symbol === '#' && /[boxX]/.test(type) ? '0' + type.toLowerCase() : ''
+  const suffix = (symbol === '$' ? symbols.currencySuffix : /[%p]/.test(type) ? symbols.percent : '') + (affixes?.suffix !== undefined ? affixes.suffix : '')
+  const render = RENDERERS[type]!
+  const splitsTail = HAS_FRACTION_OR_EXPONENT.test(type)
+  const digitsAfter = precision === undefined ? 6
+    : SIGNIFICANT_TYPES.test(type) ? Math.max(1, Math.min(21, precision))
+    : Math.max(0, Math.min(20, precision))
+  const { group, minus, nan, decimal, numerals } = symbols
+  const label = spec + ''
+
+  function format(value: unknown): string {
+    let lead = prefix
+    let tail = suffix
+    let body: string
+
+    if (type === 'c') {
+      tail = render(value as number, digitsAfter) + tail
+      body = ''
+    } else {
+      const v = +(value as number)
+      let negative = v < 0 || 1 / v < 0
+      body = isNaN(v) ? nan : render(Math.abs(v), digitsAfter)
+      if (trim) body = trimZeros(body)
+      if (negative && +body === 0 && sign !== '+') negative = false
+      lead = (negative ? (sign === '(' ? sign : minus) : sign === '-' || sign === '(' ? '' : sign) + lead
+      // the prefix test reads the produced text (a locale's NaN text may be empty or numeric), not the number
+      const siUnit = type === 's' && !isNaN(body as unknown as number) && lastSiPower !== undefined ? SI_PREFIXES[8 + lastSiPower / 3]! : ''
+      tail = siUnit + tail + (negative && sign === '(' ? ')' : '')
+      if (splitsTail) {
+        for (let i = 0; i < body.length; i++) {
+          const code = body.charCodeAt(i)
+          if (code < 48 || code > 57) {
+            tail = (code === 46 ? decimal + body.slice(i + 1) : body.slice(i)) + tail
+            body = body.slice(0, i)
+            break
           }
         }
       }
-      // If the fill character is not "0", grouping is applied before padding.
-      if (comma && !zero) out = group(out, Infinity)
-      // Compute the padding.
-      let length = valuePrefix.length + out.length + valueSuffix.length
-      // The width comes from the specifier string (`%` + digits): under limits an
-      // oversized pad is refused before the string is built (C9).
-      if (length < (width as number)) meterBytes((width as number) - length, 'number format width')
-      let padding = length < (width as number) ? new Array(width as number - length + 1).join(fill) : ''
-      // If the fill character is "0", grouping is applied after padding.
-      if (comma && zero) {
-        out = group(padding + out, padding.length ? (width as number) - valueSuffix.length : Infinity)
-        padding = ''
-      }
-      // Reconstruct the final output based on the desired alignment.
-      switch (align) {
-        case '<': out = valuePrefix + out + valueSuffix + padding; break
-        case '=': out = valuePrefix + padding + out + valueSuffix; break
-        case '^': out = padding.slice(0, length = padding.length >> 1) + valuePrefix + out + valueSuffix + padding.slice(length); break
-        default: out = padding + valuePrefix + out + valueSuffix; break
-      }
-      return numerals(out)
     }
-    format.toString = () => spec + ''
-    return format
-  }
 
-  function formatPrefix(specifier: unknown, value: number): FormatFunction {
-    const e = Math.max(-8, Math.min(8, Math.floor(exponent(value) / 3))) * 3
-    const k = Math.pow(10, -e)
-    const spec = formatSpecifier(specifier)
-    spec.type = 'f'
-    const f = newFormat(spec, { suffix: prefixes[8 + e / 3] as string })
-    return ((v: number) => f(k * v)) as FormatFunction
-  }
+    if (grouped && !zero) body = group(body, Infinity)
 
+    const used = lead.length + body.length + tail.length
+    let padding = ''
+    if (used < (width as number)) {
+      meterBytes((width as number) - used, 'number format width')
+      padding = new Array((width as number) - used + 1).join(fill)
+    }
+    if (grouped && zero) {
+      body = group(padding + body, padding.length ? (width as number) - tail.length : Infinity)
+      padding = ''
+    }
+
+    switch (align) {
+      case '<': return numerals(lead + body + tail + padding)
+      case '=': return numerals(lead + padding + body + tail)
+      case '^': {
+        const before = padding.length >> 1
+        return numerals(padding.slice(0, before) + lead + body + tail + padding.slice(before))
+      }
+      default: return numerals(padding + lead + body + tail)
+    }
+  }
+  format.toString = () => label
+  return format
+}
+
+export function formatLocale(definition: FormatLocaleDefinition): FormatLocale {
+  const symbols = symbolsOf(definition)
   return {
-    format: newFormat as (specifier: unknown) => FormatFunction,
-    formatPrefix,
+    format: (specifier) => compile(formatSpecifier(specifier), symbols),
+    formatPrefix(specifier, value) {
+      const power = siPowerOf(exponent(value))
+      const scale = Math.pow(10, -power)
+      const spec = formatSpecifier(specifier)
+      spec.type = 'f'
+      const fixed = compile(spec, symbols, { suffix: SI_PREFIXES[8 + power / 3] })
+      return ((v: number) => fixed(scale * v)) as FormatFunction
+    },
   }
 }
 
-// --- the default locale ------------------------------------------------------
+// --- the default locale -------------------------------------------------------------------
 
-let locale: FormatLocale
-let formatExport: FormatLocale['format']
-let formatPrefixExport: FormatLocale['formatPrefix']
+let defaultLocale: FormatLocale = /* @__PURE__ */ formatLocale({ thousands: ',', grouping: [3], currency: ['$', ''] })
 
-defaultNumberLocale({
-  thousands: ',',
-  grouping: [3],
-  currency: ['$', ''],
-})
-
-function defaultNumberLocale(definition: FormatLocaleDefinition): FormatLocale {
-  locale = formatLocale(definition)
-  formatExport = locale.format
-  formatPrefixExport = locale.formatPrefix
-  return locale
-}
-
-/** The default locale's `format` (d3-format's module-level `format`). */
+/** The default locale's `format`. */
 export function format(specifier: unknown): FormatFunction {
-  return formatExport!(specifier)
+  return defaultLocale.format(specifier)
 }
 
 /** The default locale's `formatPrefix`. */
 export function formatPrefix(specifier: unknown, value: number): FormatFunction {
-  return formatPrefixExport!(specifier, value)
+  return defaultLocale.formatPrefix(specifier, value)
 }
 
-/** Swap the module-level default locale (d3-format's `defaultLocale`). */
+/** Replace the default locale. */
 export function formatDefaultLocale(definition: FormatLocaleDefinition): FormatLocale {
-  return defaultNumberLocale(definition)
+  return (defaultLocale = formatLocale(definition))
 }
-

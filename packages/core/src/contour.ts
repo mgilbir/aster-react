@@ -2,20 +2,21 @@
  * Contour polygons of a raster grid: the level sets that `contour` and `isocontour` publish as GeoJSON
  * MultiPolygons, found by marching squares. The grid is classified against a level one row at a time, every
  * cell's four corners pick a pair of edge midpoints to join, the segments are stitched into closed rings, and rings
- * are sorted into outer boundaries (positive area) and holes. The method is the classic one that d3-contour
- * implements; the code here is Aster's own, and the d3-contour 4.0.2 differential in `conformance/scripts` pins it.
- * It follows that algorithm closely enough to count as derived from it: d3-contour (ISC, Mike Bostock) stays in
- * THIRD_PARTY_NOTICES.md.
+ * are sorted into outer boundaries (positive area) and holes. The method is the classic one that d3-contour and
+ * vega-geo implement; the code here is Aster's own, and the vega-geo differential in `conformance/scripts` pins it.
+ * It follows that algorithm closely enough to count as derived from it: d3-contour (ISC, Mike Bostock) and vega-geo
+ * (BSD-3-Clause) stay in THIRD_PARTY_NOTICES.md.
  *
  * What the output pins, and so what is not free to change:
  *  - the cells are visited row by row from (-1, -1), and a cell's segments are stitched in table order: the order
  *    in which fragments meet decides which end of a ring is its first point, and so every ring's coordinates;
  *  - a ring closes on a copy of its first point; the smoothing moves a point along a grid line by linear
  *    interpolation between the two cell values that straddle the level, in a fixed operation order;
- *  - thresholds are visited in ascending order whatever order they are given in;
- *  - a missing cell (null, undefined, NaN) lies below every level, except the first cell of the last row, which is
- *    tested as a plain JavaScript comparison (null counts as 0 there); a grid containing nulls reaches that
- *    difference, so it is kept.
+ *  - the thresholds are visited in the order they are given (not sorted, repeats included) and a threshold is
+ *    published as it was given;
+ *  - cells and levels are compared as JavaScript compares them, so a null cell reads as 0, a numeric string as its
+ *    number, and an undefined or NaN cell (or level) is below (above) everything; the smoothing does arithmetic on the
+ *    same raw values, so an unusable neighbour makes a coordinate NaN rather than falling back to the grid line.
  */
 
 export type ContourMultiPolygon = {
@@ -154,21 +155,6 @@ function holeInside(outer: Ring, hole: Ring): boolean {
   return true
 }
 
-/** A cell value as a number, a missing one as -Infinity. */
-function numberOrLowest(v: unknown): number {
-  if (v == null) return -Infinity
-  const n = +(v as number)
-  return n !== n ? -Infinity : n
-}
-
-/** Where, between two cells, the level falls: the offset of a boundary point from the lattice line it sits on. */
-function crossing(at: number, below: number, above: number, level: number): number {
-  const a = level - below
-  const b = above - below
-  const d = isFinite(a) || isFinite(b) ? a / b : Math.sign(a) / Math.sign(b)
-  return d !== d ? at : at + d - 0.5
-}
-
 /** Moves each point that sits on a grid line to where the level crosses between the two cells it separates. */
 function smoothRing(ring: Ring, values: ArrayLike<unknown>, stride: number, height: number, level: number): void {
   for (const point of ring) {
@@ -176,9 +162,15 @@ function smoothRing(ring: Ring, values: ArrayLike<unknown>, stride: number, heig
     const y = point[1]!
     const xt = x | 0
     const yt = y | 0
-    const here = numberOrLowest(values[yt * stride + xt])
-    if (x > 0 && x < stride && xt === x) point[0] = crossing(x, numberOrLowest(values[yt * stride + xt - 1]), here, level)
-    if (y > 0 && y < height && yt === y) point[1] = crossing(y, numberOrLowest(values[(yt - 1) * stride + xt]), here, level)
+    const here = values[yt * stride + xt] as number
+    if (x > 0 && x < stride && xt === x) {
+      const before = values[yt * stride + xt - 1] as number
+      point[0] = x + (level - before) / (here - before) - 0.5
+    }
+    if (y > 0 && y < height && yt === y) {
+      const above = values[(yt - 1) * stride + xt] as number
+      point[1] = y + (level - above) / (here - above) - 0.5
+    }
   }
 }
 
@@ -200,12 +192,9 @@ function polygonsAt(values: ArrayLike<unknown>, level: number, stride: number, h
   for (let y = -1; y < rows; y++) {
     if (y + 1 < rows) {
       for (let c = 0, at = (y + 1) * stride; c < columns; c++) {
-        const v = values[at + c]
-        lower[c + 1] = v != null && +(v as number) >= level ? 1 : 0
+        lower[c + 1] = (values[at + c] as number) >= level ? 1 : 0
       }
     } else lower.fill(0)
-    // The first corner of the last row is compared as it stands (null reads as 0), in both cells that share it.
-    if (y === rows - 1) upper[1] = +((values[y * stride] as number) >= level)
     for (let x = -1; x < columns; x++) stitch(x, y, (upper[x + 1]! << 3) | (upper[x + 2]! << 2) | (lower[x + 2]! << 1) | lower[x + 1]!)
     ;[upper, lower] = [lower, upper]
   }
@@ -218,24 +207,21 @@ function polygonsAt(values: ArrayLike<unknown>, level: number, stride: number, h
 }
 
 /**
- * The contour polygons of `values` (a `size[0]` by `size[1]` grid, row-major) at each threshold, in ascending
- * threshold order. Throws `invalid size` for a negative or NaN size and `invalid value: <v>` for a threshold that
- * is not a number.
+ * The contour polygons of `values` (a `size[0]` by `size[1]` grid, row-major) at each threshold, in the order the
+ * thresholds are given. Throws `invalid size` for a negative or NaN size.
  */
 export function contourPolygons(
   values: ArrayLike<unknown>,
-  thresholds: ArrayLike<number>,
-  size: readonly [number, number],
+  thresholds: ArrayLike<unknown>,
+  size: ArrayLike<number>,
   smooth: boolean,
 ): ContourMultiPolygon[] {
-  const width = Math.floor(size[0])
-  const height = Math.floor(size[1])
+  const width = Math.floor(size[0]!)
+  const height = Math.floor(size[1]!)
   if (!(width >= 0 && height >= 0)) throw new Error('invalid size')
-  return Array.from(thresholds)
-    .sort((a, b) => a - b)
-    .map((value) => {
-      const level = value == null ? NaN : +value
-      if (isNaN(level)) throw new Error(`invalid value: ${value}`)
-      return { type: 'MultiPolygon', value, coordinates: polygonsAt(values, level, width, height, smooth) }
-    })
+  return Array.from(thresholds, (value) => ({
+    type: 'MultiPolygon' as const,
+    value: value as number,
+    coordinates: polygonsAt(values, value as number, width, height, smooth),
+  }))
 }

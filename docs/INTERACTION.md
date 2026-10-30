@@ -277,8 +277,8 @@ export function Signals(): React.ReactElement {
 
 ### Timers and animation
 
-`timer` event streams (`{"type": "timer", "throttle": 16.7}`, `"timer{100}"`) run on a port of d3-timer, the scheduler
-vega-view uses, so ticks fall on the same instants with the same `{timestamp, elapsed}` (`pnpm conformance:signals` drives
+`timer` event streams (`{"type": "timer", "throttle": 16.7}`, `"timer{100}"`) run on a scheduler with d3-timer's schedule (the one
+vega-view uses), so ticks fall on the same instants with the same `{timestamp, elapsed}` (`pnpm conformance:signals` drives
 real vega and Aster on one fake browser clock and compares frames). The timers belong to the chart's host element, not
 to one rendered SVG: a re-bind after each render keeps the schedule, and they stop when the chart unmounts, when the host
 element is removed from the document, or on `binding.release()` (vega's `view.finalize()`); nothing is left scheduled.
