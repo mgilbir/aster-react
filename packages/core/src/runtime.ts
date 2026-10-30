@@ -45,7 +45,7 @@ import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
 import { tickFormat, scaleGradientStops, tickCount, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, pushAll, lerp, scopedSignalName, heldSignalName, TUPLE_ID } from './util.js'
+import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
@@ -1895,7 +1895,7 @@ function paintOrderOf(items: SceneGroup[]): SceneGroup[] {
     g.role === 'axis' ? 0 : g.role === 'legend' ? 2 : g.role === 'title' ? 3 : 1
   const zOf = (g: SceneGroup): number => (g as unknown as { zindex?: number }).zindex || 0
   return items.length > 1
-    ? items.map((g, i) => ({ g, i })).sort((a, b) => {
+    ? sortData(items.map((g, i) => ({ g, i })), (a, b) => {
         const za = zOf(a.g), zb = zOf(b.g)
         if ((za !== 0) !== (zb !== 0)) return za !== 0 ? 1 : -1
         if (za !== 0 && za !== zb) return za - zb

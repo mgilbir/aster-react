@@ -37,7 +37,10 @@ jobs:
   # newest current major. V8's Math.pow/exp/log are not bit-identical across versions,
   # and the oracle differentials (packages/conformance/scripts/differential-*.test.mts)
   # run real Vega in-process, so they are the guard that Aster equals Vega on each
-  # engine. Browsers are not needed here; the gate list in the `ci` job stays on 22.
+  # engine. Only two tests drive Chromium (installed below); the gate list in the `ci` job stays on 22.
+  #
+  # The fetched gallery cache is not here either (and the default run hides it): tests that need it are
+  # `*.gallery.test.ts`, which `pnpm conformance:gallery` runs (nightly). scripts/gallery-isolation.test.mjs guards this.
   #
   # Two Node limits shape this job:
   #  - pnpm 11 itself needs Node >= 22.13, so install and build run under 22 and only
@@ -71,6 +74,12 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      # The unit run includes the tests that drive headless Chromium (the signal-dataflow and word-cloud
+      # differentials against vega, src/gallery/react.ts). Node 20 runs only the jsdom-free differentials.
+      - name: Install Playwright Chromium
+        if: matrix.node != 20
+        run: pnpm --filter @aster/conformance exec playwright install --with-deps chromium
 
       - name: Setup Node.js ${{ matrix.node }} (test runtime)
         uses: actions/setup-node@v7

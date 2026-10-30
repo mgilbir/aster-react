@@ -6,7 +6,7 @@
 import type { CompiledTransform, SortSpec } from './types.js'
 import type { ExpressionRuntime } from './expression.js'
 import { SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './registry.js'
-import { isArray } from './util.js'
+import { isArray, sortData } from './util.js'
 import { densityGrid, placeContours } from './raster-grid.js'
 import { tickStep } from './arr.js'
 import { activeMeter, boundedCount } from './limits.js'
@@ -355,7 +355,7 @@ export function compareRows(a: Row, b: Row, sort?: SortSpec): number {
 export function sortOrder(rows: Row[], sort?: SortSpec, limit = Infinity): number[] {
   const order = rows.map((_, i) => i)
   const c = comparatorOf(sort)
-  if (c) order.sort((a, b) => c(rows[a]!, rows[b]!) || a - b)
+  if (c) sortData(order, (a, b) => c(rows[a]!, rows[b]!) || a - b)
   return Number.isFinite(limit) ? order.slice(0, Math.max(0, limit)) : order
 }
 
