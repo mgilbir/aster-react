@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest'
 import * as d3Geo from 'd3-geo'
 import * as d3Contour from 'd3-contour'
+import * as vega from 'vega'
 import * as geoPort from '../../core/src/geo-projections.ts'
 import { contourPolygons } from '../../core/src/contour.ts'
 import { exact, withTz } from './differential-util.mts'
@@ -79,6 +80,19 @@ const contourOf = (make: () => any, c: Contour) =>
   exact(() => make().smooth(c.smooth).size(c.size).thresholds(c.thresholds)(structuredClone(c.values)))
 const portContourOf = (c: Contour) => exact(() => contourPolygons(structuredClone(c.values), c.thresholds, c.size, c.smooth))
 
+/**
+ * The oracle of record for contours: vega's own `contour` transform over the grid. It is not d3-contour: vega-geo carries an
+ * older marching squares, which smooths a point between a missing cell (NaN) or equal cells (a flat grid) into a NaN or
+ * infinite coordinate where d3-contour 4 falls back to the grid line. Aster follows vega, so every case is judged against
+ * vega, and against d3-contour wherever the two agree (a grid of finite, distinct neighbours, or no smoothing).
+ */
+async function vegaContourOf(c: Contour): Promise<unknown> {
+  const spec = { data: [{ name: 'src', values: [{ a: 1 }], transform: [{ type: 'contour', size: c.size, values: structuredClone(c.values), thresholds: c.thresholds, smooth: c.smooth }] }] }
+  const view = new vega.View(vega.parse(spec as vega.Spec), { renderer: 'none', logLevel: vega.None })
+  await view.runAsync()
+  return exact(() => (view.data('src') as Array<{ type: string; value: number; coordinates: unknown }>).map(({ type, value, coordinates }) => ({ type, value, coordinates })))
+}
+
 describe(`d3-geo ${(d3Geo as unknown as { version?: string }).version ?? '3.1.1'} vs Aster geo-projections.ts (live)`, () => {
   for (const m of MODES) {
     ;(geoPrograms as Array<{ type: string; ops: Op[] }>).forEach(({ type, ops }, i) => {
@@ -91,9 +105,9 @@ describe(`d3-geo ${(d3Geo as unknown as { version?: string }).version ?? '3.1.1'
   }
 
   contourCases.forEach((c: Contour, i: number) => {
-    it(`contour #${i} ${c.grid} ${c.size} smooth=${c.smooth} t=${c.thresholds}`, () => {
-      const want = contourOf(d3Contour.contours as () => any, c)
-      expect(portContourOf(c)).toEqual(want)
+    it(`contour #${i} ${c.grid} ${c.size} smooth=${c.smooth} t=${c.thresholds}`, async () => {
+      expect(portContourOf(c)).toEqual(await vegaContourOf(c))
+      if (c.grid === 'peak' || !c.smooth) expect(portContourOf(c)).toEqual(contourOf(d3Contour.contours as () => any, c))
     })
   })
 
