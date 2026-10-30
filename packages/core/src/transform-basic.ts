@@ -221,9 +221,9 @@ export function lookupRows(rows: Row[], p: Params, source: readonly Row[], owned
     // (the probes read the row being filled: a field written by an earlier probe is what a later one sees)
     fill = (row) => {
       let at = 0
-      for (const probe of probes) {
-        const found = matches.get(String(probe(row)))
-        for (const value of values) row[names[at++]!] = found == null ? fallback : value(found)
+      for (let i = 0; i < probes.length; i++) {
+        const found = matches.get(String(probes[i]!(row)))
+        for (let j = 0; j < values.length; j++) row[names[at++]!] = found == null ? fallback : values[j]!(found)
       }
     }
   } else {
@@ -381,7 +381,7 @@ export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
   let widest = 0
   for (const group of groups) {
     let total = 0
-    for (const row of group.rows) total += Math.abs(valueOf(row) as number)
+    for (let i = 0; i < group.rows.length; i++) total += Math.abs(valueOf(group.rows[i]) as number)
     group.total = total
     if (total > widest) widest = total
     if (sort) group.rows = stableSortBy(group.rows, sort)
@@ -389,10 +389,14 @@ export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
   }
 
   const offset = p.offset
-  for (const { rows: members, total } of groups) {
+  for (let g = 0; g < groups.length; g++) {
+    const members = groups[g]!.rows
+    const total = groups[g]!.total
+    const n = members.length
     if (offset === 'center') {
       let end = (widest - total) / 2
-      for (const row of members) {
+      for (let i = 0; i < n; i++) {
+        const row = members[i]!
         row[lowName] = end
         row[highName] = (end += Math.abs(valueOf(row) as number))
       }
@@ -400,14 +404,16 @@ export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
       const scale = 1 / total
       let end = 0
       let running = 0
-      for (const row of members) {
+      for (let i = 0; i < n; i++) {
+        const row = members[i]!
         row[lowName] = end
         row[highName] = end = scale * (running += Math.abs(valueOf(row) as number))
       }
     } else {
       let above = 0
       let below = 0
-      for (const row of members) {
+      for (let i = 0; i < n; i++) {
+        const row = members[i]!
         const v = +(valueOf(row) as number)
         if (v < 0) {
           row[lowName] = below

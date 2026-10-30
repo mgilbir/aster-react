@@ -135,24 +135,34 @@ export function compareOf(spec: unknown): Accessor<number> | null {
   const { get, sign } = keys
   const read = new Set<string>()
   for (const g of get) for (const name of accessorFields(g) ?? []) read.add(name)
-  const compare: Compare = get.length === 1
-    ? (a, b) => compareValues(get[0]!(a), get[0]!(b)) * sign[0]!
-    : (a, b) => {
-      for (let k = 0; k < get.length; k++) {
+  let compare: Compare
+  if (get.length === 1) {
+    const only = get[0]!
+    const direction = sign[0]!
+    compare = (a, b) => compareValues(only(a), only(b)) * direction
+  } else {
+    const n = get.length
+    compare = (a, b) => {
+      for (let k = 0; k < n; k++) {
         const c = compareValues(get[k]!(a), get[k]!(b))
         if (c !== 0) return c * sign[k]!
       }
       return 0
     }
+  }
   return accessor(compare as (d: unknown) => number, [...read])
 }
 
 /** `items` stably sorted by `compare` (a copy; unsorted without one): ties break by position, and it is the positions that are sorted. */
 export function stableSortBy<T>(items: readonly T[], compare: Compare | null): T[] {
   if (!compare) return items.slice()
-  const order = items.map((_, i) => i)
+  const n = items.length
+  const order = new Array<number>(n)
+  for (let i = 0; i < n; i++) order[i] = i
   sortData(order, (i, j) => compare(items[i], items[j]) || i - j)
-  return order.map((i) => items[i]!)
+  const sorted = new Array<T>(n)
+  for (let i = 0; i < n; i++) sorted[i] = items[order[i]!]!
+  return sorted
 }
 
 // ---------------------------------------------------------------------------
@@ -588,7 +598,8 @@ export class MeasureGroup {
   add(row: Row): void {
     this.size++
     this.rows?.push(row)
-    for (const acc of this.accs) acc.take(acc.plan.get(row), row)
+    const accs = this.accs
+    for (let i = 0; i < accs.length; i++) accs[i]!.take(accs[i]!.plan.get(row), row)
   }
 
   /**
@@ -604,7 +615,8 @@ export class MeasureGroup {
   remove(row: Row): void {
     this.size--
     this.rows?.drop(row)
-    for (const acc of this.accs) acc.release(acc.plan.get(row))
+    const accs = this.accs
+    for (let i = 0; i < accs.length; i++) accs[i]!.release(accs[i]!.plan.get(row))
   }
 
   /** Write the counts, then each field's measures, onto `target`. */
@@ -667,6 +679,8 @@ interface Cell {
   group: MeasureGroup
   /** The group's output row: its group-by values (from the row that opened it), then the measures. */
   tuple: Row
+  /** The names written onto the group's tuple (joinaggregate copies them onto each member). */
+  names?: string[]
 }
 
 interface Grouping {
@@ -785,14 +799,14 @@ export function joinAggregateRows(rows: readonly Row[], p: AggregateParams, rand
   // Vega's JoinAggregate declares no `aggregate_params`, `drop` or `cross`: they are not read (an exponential gets no ratio)
   const g = groupingFor({ groupby: p.groupby, fields: p.fields, ops: p.ops, as: p.as, key: p.key }, random)
   feed(g, out, 'joinaggregate')
-  const written = new Map<Cell, string[]>()
   for (const cell of g.order) {
     finishCell(cell)
-    written.set(cell, Object.keys(cell.tuple))
+    cell.names = Object.keys(cell.tuple)
   }
   for (const row of out) {
     const cell = g.cells[g.keyOf(row)]!
-    for (const name of written.get(cell)!) row[name] = cell.tuple[name]
+    const names = cell.names!
+    for (let i = 0; i < names.length; i++) row[names[i]!] = cell.tuple[names[i]!]
   }
   return out
 }
