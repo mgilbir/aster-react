@@ -20,21 +20,26 @@ import { renderSpec } from '../../core/src/index.ts'
 import '../../core/src/addon-geo.ts'
 import '../../core/src/addon-transforms.ts'
 import { buildProjection } from '../../core/src/geo.ts'
-import * as asterGeo from '../../core/src/geo-lib.ts'
+import { GeoPath } from '../../core/src/geo-path.ts'
+import { sphereArea, sphereBounds, sphereCentroid } from '../../core/src/geo-sphere-measures.ts'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.ts'
 import { enc, exact, quietLogger } from './differential-util.mts'
-import { PROJECTION_TYPES, Rand, geoObject, probePoints, projectionParams, randomSpec, seedOf, type Json } from './geo-gen.mts'
+import { PROJECTION_TYPES, Rand, geoObject, oddParams, probePoints, projectionParams, randomSpec, seedOf, type Json } from './geo-gen.mts'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Any = any
 
 /** how many generated cases each block runs; the floor test below keeps this from being quietly lowered */
-const CASES = { configs: 36, shapes: 7, fits: 14, sphere: 600, specs: 90 }
+const CASES = { configs: 36, shapes: 7, fits: 14, odd: 30, sphere: 600, specs: 90 }
 
 /* ---- the two subjects ---------------------------------------------------------------------- */
 
 /** What both sides expose, so the comparison is one function. */
 interface Probe {
+  /** Make the next measure start from a clean state (d3 keeps pipelines and accumulators between calls; Aster keeps none). */
+  fresh?(): void
+  /** Repair what a call that threw left behind. */
+  recover?(): void
   config(): Record<string, unknown>
   project(p: number[]): unknown
   invert(xy: number[]): unknown
@@ -44,8 +49,35 @@ interface Probe {
 
 const CONFIG_PROPS = ['scale', 'translate', 'center', 'rotate', 'clipAngle', 'clipExtent', 'precision', 'parallels', 'reflectX', 'reflectY']
 
+/**
+ * d3-geo keeps its measuring accumulators, and the pipeline it built for them, in module and projection state: a call
+ * that throws half way (an empty polygon ring does) leaves a polygon half open, and the next measure starts from there.
+ * Aster keeps no state between calls, so the oracle is put back in a known state after a throw: one well-formed polygon
+ * through every measure closes what was left open and empties the sums.
+ */
+const REPAIR = { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] }
+function repairD3(): void {
+  const g = d3Geo.geoPath()
+  for (const run of [() => d3Geo.geoArea(REPAIR as Any), () => d3Geo.geoBounds(REPAIR as Any), () => d3Geo.geoCentroid(REPAIR as Any), () => g.area(REPAIR as Any), () => g.bounds(REPAIR as Any), () => g.centroid(REPAIR as Any), () => g.measure(REPAIR as Any)]) run()
+}
+
+/**
+ * d3's path string remembers the append function of the last circle it drew. A point drawn with `digits(null)` leaves
+ * the unrounded one remembered (a stray point does that in a path that interleaves, albersUsa's does), and every later
+ * default-digits path of the process comes out unrounded. Vega never sets `digits`; asking for two other digit counts
+ * makes d3 forget it.
+ */
+function unpoisonDigits(): void {
+  d3Geo.geoPath().digits(2)
+  d3Geo.geoPath().digits(3)
+}
+
 function d3Probe(p: Any): Probe {
   return {
+    recover: repairD3,
+    // re-setting a reflection drops the cached pipeline and recomputes what derives from the scale, without touching
+    // a cylindrical projection's clip rectangle (re-setting the scale would recompute that one from the current rotation)
+    fresh: () => { if (p.reflectX) p.reflectX(p.reflectX()); else if (p.scale) p.scale(p.scale()) },
     config: () => {
       const o: Record<string, unknown> = {}
       for (const m of CONFIG_PROPS) if (typeof p[m] === 'function') o[m] = exact(() => p[m]())
@@ -57,7 +89,11 @@ function d3Probe(p: Any): Probe {
       const g = d3Geo.geoPath(p)
       if (o.digits !== undefined) g.digits(o.digits)
       if (o.radius !== undefined) g.pointRadius(o.radius as Any)
-      return g(geo as Any)
+      try {
+        return g(geo as Any)
+      } finally {
+        if (o.digits === null) unpoisonDigits()
+      }
     },
     planar: (geo) => {
       const g = d3Geo.geoPath(p).digits(null)
@@ -67,28 +103,32 @@ function d3Probe(p: Any): Probe {
 }
 
 function asterProbe(p: Any): Probe {
+  const pathOf = (o: { digits?: number | null; radius?: number | ((g: unknown) => number) }): GeoPath => {
+    const g = new GeoPath(p)
+    if (o.digits !== undefined) g.digits = o.digits
+    if (o.radius !== undefined) g.pointRadius = o.radius
+    return g
+  }
   return {
     config: () => {
       const o: Record<string, unknown> = {}
-      for (const m of CONFIG_PROPS) if (typeof p[m] === 'function') o[m] = exact(() => p[m]())
+      for (const m of CONFIG_PROPS) if (p[m] !== undefined) o[m] = exact(() => p[m])
       return o
     },
-    project: (pt) => p(pt),
-    invert: (xy) => (p.invert ? p.invert(xy) : 'none'),
-    path: (geo, o) => {
-      const g = asterGeo.geoPath(p)
-      if (o.digits !== undefined) g.digits(o.digits)
-      if (o.radius !== undefined) g.pointRadius(o.radius)
-      return g(geo)
-    },
+    project: (pt) => p.project(pt[0], pt[1]),
+    invert: (xy) => p.invert(xy[0], xy[1]),
+    path: (geo, o) => pathOf(o).draw(geo),
     planar: (geo) => {
-      const g = asterGeo.geoPath(p).digits(null)
+      const g = pathOf({ digits: null })
       return { area: exact(() => g.area(geo)), bounds: exact(() => g.bounds(geo)), centroid: exact(() => g.centroid(geo)), measure: exact(() => g.measure(geo)) }
     },
   }
 }
 
-async function viaVega(params: Record<string, Json>): Promise<Any | null> {
+/** A projection, or the message of the error that building it raised. */
+type Built = { projection: Any } | { error: string }
+
+async function viaVega(params: Record<string, Json>): Promise<Built> {
   try {
     const errors: unknown[][] = []
     const quiet = quietLogger(errors)
@@ -96,18 +136,22 @@ async function viaVega(params: Record<string, Json>): Promise<Any | null> {
     const view = new vega.View(vega.parse(spec as vega.Spec), { renderer: 'none', logLevel: vega.None, logger: quiet as never })
     view.logger(quiet as never)
     await view.runAsync()
-    if (errors.length) return null
-    return view.scale('p')
-  } catch {
-    return null
+    if (errors.length) {
+      repairD3()
+      return { error: String((errors[0]![0] as Error)?.message ?? errors[0]![0]) }
+    }
+    return { projection: view.scale('p') }
+  } catch (e) {
+    repairD3()
+    return { error: (e as Error).message }
   }
 }
 
-function viaAster(params: Record<string, Json>): Any | null {
+function viaAster(params: Record<string, Json>): Built {
   try {
-    return buildProjection({ name: 'p', ...structuredClone(params) } as never)
-  } catch {
-    return null
+    return { projection: buildProjection({ name: 'p', ...structuredClone(params) } as never) }
+  } catch (e) {
+    return { error: (e as Error).message }
   }
 }
 
@@ -126,6 +170,24 @@ function drawsPoints(g: any): boolean {
 }
 
 /**
+ * Whether a GeoJSON object has a polygon ring that streams no vertex (a ring is streamed without its closing position,
+ * so one or no positions leave nothing). d3's measures close such a ring against whatever vertex the previous call left in
+ * module state, so what they report depends on the history of the process: only a thrown error is a stable answer.
+ */
+function hasEmptyRing(g: any): boolean {
+  if (!g || typeof g !== 'object') return false
+  if (g.type === 'Polygon') return g.coordinates.some((r: unknown[]) => r.length <= 1)
+  if (g.type === 'MultiPolygon') return g.coordinates.some((poly: unknown[][]) => poly.some((r) => r.length <= 1))
+  if (g.type === 'Feature') return hasEmptyRing(g.geometry)
+  if (g.type === 'FeatureCollection') return g.features.some((f: any) => hasEmptyRing(f.geometry))
+  if (g.type === 'GeometryCollection') return g.geometries.some(hasEmptyRing)
+  return false
+}
+
+/** `value` unless it is a result that depends on process history (see `hasEmptyRing`), which is replaced by a marker. */
+const stable = (value: unknown): unknown => ((value as Any)?.$ === 'throw' ? value : 'history-dependent')
+
+/**
  * Everything one probe reports about one projection; same keys, same order, on both sides.
  *
  * Full-precision paths (`digits(null)`) are asked of point-free shapes only: d3's path string keeps one
@@ -142,7 +204,11 @@ function observe(probe: Probe, points: number[][], pixels: number[][], shapes: J
     if (!drawsPoints(g)) out[`path-full#${i}`] = exact(() => probe.path(g, { digits: null }))
     out[`path-r#${i}`] = exact(() => probe.path(g, { radius: 3.25 }))
     out[`path-rfn#${i}`] = exact(() => probe.path(g, { radius: radiusFn }))
-    out[`planar#${i}`] = probe.planar(g)
+    probe.fresh?.()
+    let planar = probe.planar(g)
+    if (hasEmptyRing(g)) planar = Object.fromEntries(Object.entries(planar).map(([k, v]) => [k, k === 'bounds' ? v : stable(v)]))
+    out[`planar#${i}`] = planar
+    if (JSON.stringify(planar).includes('"$":"throw"')) probe.recover?.()
   })
   return out
 }
@@ -155,6 +221,12 @@ function firstDiff(want: unknown, got: unknown, at = '$'): string | null {
       if (d) return d
     }
   }
+  if (typeof want === 'string' && typeof got === 'string') {
+    // two long strings: show where they part
+    let i = 0
+    while (want[i] === got[i]) i++
+    return `${at}: vega ...${want.slice(Math.max(0, i - 60), i + 60)} vs aster ...${got.slice(Math.max(0, i - 60), i + 60)} (at ${i} of ${want.length}/${got.length})`
+  }
   const s = (v: unknown) => { const t = JSON.stringify(v); return t === undefined ? 'undefined' : t.length > 400 ? t.slice(0, 400) + '...' : t }
   return `${at}: vega ${s(want)} vs aster ${s(got)}`
 }
@@ -162,15 +234,17 @@ function firstDiff(want: unknown, got: unknown, at = '$'): string | null {
 async function compareProjection(params: Record<string, Json>, r: Rand, label: string, shapesN: number): Promise<void> {
   const theirs = await viaVega(params)
   const ours = viaAster(params)
-  if (theirs === null || ours === null) {
-    expect(ours === null, `${label}: builds in ${theirs === null ? 'neither' : 'vega only'} ${JSON.stringify(params)}`).toBe(theirs === null)
+  if ('error' in theirs || 'error' in ours) {
+    // both refuse, with the same words (a user sees them)
+    const e = (b: Built): string => ('error' in b ? b.error : 'built')
+    if (e(theirs) !== e(ours)) throw new Error(`${label} ${JSON.stringify(params)}\n  vega: ${e(theirs)}\n  aster: ${e(ours)}`)
     return
   }
   const points = probePoints(r, 8)
   const pixels = Array.from({ length: 5 }, () => [r.range(-200, 800), r.range(-200, 600)])
   const shapes = Array.from({ length: shapesN }, () => geoObject(r))
-  const want = enc(observe(d3Probe(theirs), points, pixels, shapes))
-  const got = enc(observe(asterProbe(ours), points, pixels, shapes))
+  const want = enc(observe(d3Probe(theirs.projection), points, pixels, shapes))
+  const got = enc(observe(asterProbe(ours.projection), points, pixels, shapes))
   const d = firstDiff(want, got)
   if (d) throw new Error(`${label} ${JSON.stringify(params)}\n  ${d}\n  shapes ${JSON.stringify(shapes)}`)
 }
@@ -179,7 +253,7 @@ async function compareProjection(params: Record<string, Json>, r: Rand, label: s
 
 describe(`generated geo differential vs vega@${vega.version} / d3-geo@3.1.1 (live)`, () => {
   for (const type of PROJECTION_TYPES) {
-    it(`${type}: random parameters, points, inversion, paths and planar measures`, async () => {
+    it(`${type}: random parameters, points, inversion, paths and planar measures`, { timeout: 120_000 }, async () => {
       const r = new Rand(seedOf(type, 1))
       const failures: string[] = []
       for (let i = 0; i < CASES.configs; i++) {
@@ -187,7 +261,15 @@ describe(`generated geo differential vs vega@${vega.version} / d3-geo@3.1.1 (liv
       }
       expect(failures.length, `${failures.length} of ${CASES.configs} differ; first:\n${failures.slice(0, 3).join('\n')}`).toBe(0)
     })
-    it(`${type}: fit / fitSize / fitExtent against generated data`, async () => {
+    it(`${type}: parameters of the wrong kind build, or fail, as in vega`, { timeout: 120_000 }, async () => {
+      const r = new Rand(seedOf(type, 7))
+      const failures: string[] = []
+      for (let i = 0; i < CASES.odd; i++) {
+        await compareProjection(oddParams(r, projectionParams(r, type)), r, `${type}-odd#${i}`, 3).catch((e: Error) => failures.push(e.message))
+      }
+      expect(failures.length, `${failures.length} of ${CASES.odd} differ; first:\n${failures.slice(0, 3).join('\n')}`).toBe(0)
+    })
+    it(`${type}: fit / fitSize / fitExtent against generated data`, { timeout: 120_000 }, async () => {
       const r = new Rand(seedOf(type, 2))
       const failures: string[] = []
       for (let i = 0; i < CASES.fits; i++) {
@@ -202,15 +284,18 @@ describe(`generated geo differential vs vega@${vega.version} / d3-geo@3.1.1 (liv
       const r = new Rand(seedOf(type, 3))
       for (let i = 0; i < 6; i++) {
         const params = projectionParams(r, type)
-        const theirs = await viaVega(params)
-        const ours = viaAster(params)
-        if (theirs === null || ours === null) continue
+        const built = await viaVega(params)
+        const made = viaAster(params)
+        if ('error' in built || 'error' in made) continue
+        const theirs = built.projection
+        const ours = made.projection
         const data = geoObject(r)
         for (const fit of ['fitWidth', 'fitHeight'] as const) {
           const size = r.range(60, 700)
           const want = exact(() => { theirs[fit](size, data); return [theirs.scale(), theirs.translate(), theirs.clipExtent?.()] })
-          const got = exact(() => { ours[fit](size, data); return [ours.scale(), ours.translate(), ours.clipExtent?.()] })
-          expect(got, `${type}#${i} ${fit} ${JSON.stringify(data)}`).toEqual(want)
+          if ((want as Any)?.$ === 'throw') repairD3()
+          const got = exact(() => { ours[fit](size, data); return [ours.scale, ours.translate, ours.clipExtent] })
+          expect(got, `${type}#${i} ${fit} ${JSON.stringify(params)} ${JSON.stringify(data)}`).toEqual(want)
         }
       }
     }
@@ -220,8 +305,10 @@ describe(`generated geo differential vs vega@${vega.version} / d3-geo@3.1.1 (liv
     const r = new Rand(seedOf('sphere', 4))
     for (let i = 0; i < CASES.sphere; i++) {
       const g = geoObject(r)
-      for (const [name, theirs, ours] of [['geoArea', d3Geo.geoArea, asterGeo.geoArea], ['geoBounds', d3Geo.geoBounds, asterGeo.geoBounds], ['geoCentroid', d3Geo.geoCentroid, asterGeo.geoCentroid]] as const) {
+      if (hasEmptyRing(g)) continue
+      for (const [name, theirs, ours] of [['geoArea', d3Geo.geoArea, sphereArea], ['geoBounds', d3Geo.geoBounds, sphereBounds], ['geoCentroid', d3Geo.geoCentroid, sphereCentroid]] as const) {
         const want = exact(() => (theirs as Any)(structuredClone(g)))
+        if ((want as Any)?.$ === 'throw') repairD3()
         const got = exact(() => (ours as Any)(structuredClone(g)))
         const d = firstDiff(want, got)
         if (d) throw new Error(`${name}#${i} ${JSON.stringify(g)}\n  ${d}`)
@@ -229,11 +316,42 @@ describe(`generated geo differential vs vega@${vega.version} / d3-geo@3.1.1 (liv
     }
   })
 
+  it('the default path (no projection) draws and measures coordinates as they are', () => {
+    const r = new Rand(seedOf('default-path', 6))
+    const failures: string[] = []
+    for (let i = 0; i < 300; i++) {
+      const g = geoObject(r)
+      const dg = d3Geo.geoPath()
+      const ag = new GeoPath()
+      const check = (label: string, want: unknown, got: unknown): void => {
+        const d = firstDiff(enc(want), enc(got))
+        if (d) failures.push(`${label} ${JSON.stringify(g)}\n  ${d}`)
+      }
+      check('draw', exact(() => dg(g as Any)), exact(() => ag.draw(g)))
+      if (!drawsPoints(g)) {
+        const raw = d3Geo.geoPath().digits(null)
+        const own = new GeoPath()
+        own.digits = null
+        check('draw-full', exact(() => raw(g as Any)), exact(() => own.draw(g)))
+      }
+      if (!hasEmptyRing(g)) {
+        check('area', exact(() => dg.area(g as Any)), exact(() => ag.area(g)))
+        check('bounds', exact(() => dg.bounds(g as Any)), exact(() => ag.bounds(g)))
+        check('centroid', exact(() => dg.centroid(g as Any)), exact(() => ag.centroid(g)))
+        check('measure', exact(() => dg.measure(g as Any)), exact(() => ag.measure(g)))
+      }
+      if (JSON.stringify(exact(() => dg.area(g as Any))).includes('throw')) repairD3()
+    }
+    expect(failures.length, failures.slice(0, 3).join('\n')).toBe(0)
+  })
+
   it('the geo expression-level entry points agree on hostile objects', () => {
     const odd = [null, undefined, {}, [], 'x', 5, { type: 'Feature' }, { type: 'Feature', geometry: null }, { type: 'FeatureCollection', features: [] }, { type: 'Polygon', coordinates: [] }, { type: 'Point', coordinates: [] }, { type: 'LineString', coordinates: [[0, 0]] }, { type: 'constructor' }, { type: '__proto__' }]
     for (const g of odd) {
-      for (const [theirs, ours] of [[d3Geo.geoArea, asterGeo.geoArea], [d3Geo.geoBounds, asterGeo.geoBounds], [d3Geo.geoCentroid, asterGeo.geoCentroid]] as const) {
-        expect(exact(() => (ours as Any)(structuredClone(g))), JSON.stringify(g)).toEqual(exact(() => (theirs as Any)(structuredClone(g))))
+      for (const [theirs, ours] of [[d3Geo.geoArea, sphereArea], [d3Geo.geoBounds, sphereBounds], [d3Geo.geoCentroid, sphereCentroid]] as const) {
+        const want = exact(() => (theirs as Any)(structuredClone(g)))
+        if ((want as Any)?.$ === 'throw') repairD3()
+        expect(exact(() => (ours as Any)(structuredClone(g))), JSON.stringify(g)).toEqual(want)
       }
     }
   })
@@ -241,6 +359,7 @@ describe(`generated geo differential vs vega@${vega.version} / d3-geo@3.1.1 (liv
   it('keeps its generated volume (coverage floor)', () => {
     expect(CASES.configs).toBeGreaterThanOrEqual(36)
     expect(CASES.fits).toBeGreaterThanOrEqual(14)
+    expect(CASES.odd).toBeGreaterThanOrEqual(30)
     expect(CASES.sphere).toBeGreaterThanOrEqual(600)
     expect(CASES.specs).toBeGreaterThanOrEqual(90)
     expect(PROJECTION_TYPES.length).toBe(17)

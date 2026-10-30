@@ -268,6 +268,30 @@ export function projectionParams(r: Rand, type: string, opts: { fit?: boolean } 
   return p
 }
 
+/**
+ * Replace some parameters of a projection definition by values of the wrong kind (a number where a pair belongs, a string
+ * where a number does, a missing element, NaN, an extent without its second corner). Vega applies them through the same
+ * setters, so both sides coerce them alike, or fail alike.
+ */
+export function oddParams(r: Rand, params: Record<string, Json>): Record<string, Json> {
+  const odd: Record<string, Json[]> = {
+    scale: ['120', [100], true, NaN, -50, 1e4],
+    translate: [[1], 'ab', 5, [null, 1], ['10', '20'], [NaN, 5]],
+    center: [[10], 5, 'ab', [null, null], ['10', '20'], [400, 200]],
+    rotate: [[1], 'xy', [1, 2, 3, 4], [null, 2], ['10', '20', '30'], [NaN, 0]],
+    precision: ['1', -1, NaN, [1], 0, 0.02],
+    clipAngle: ['60', [60], true, NaN, -60, 1e-3],
+    clipExtent: [[[0, 0]], 5, [[0, 0], [1]], 'ab', [[0, 0], [NaN, 5]], [['0', '0'], ['100', '100']]],
+    parallels: [[10], 5, 'ab', [NaN, 5], [90, 90], [-90, 90]],
+    reflectX: ['false', 0, 1, [], 'true'],
+    reflectY: ['false', 0, 1, [], 'true'],
+    pointRadius: ['5', -3, NaN, 0],
+  }
+  const out = { ...params }
+  for (const key of Object.keys(odd)) if (r.chance(0.12)) out[key] = r.pick(odd[key]!)
+  return out
+}
+
 /** random lon/lat probe points (some at the poles and the antimeridian) */
 export function probePoints(r: Rand, n: number): Pt[] {
   return Array.from({ length: n }, () => (r.chance(0.7) ? [r.range(-180, 180), r.range(-90, 90)] : pt(r)))

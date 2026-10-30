@@ -8,6 +8,8 @@ import { compareOf, fieldOf } from './transform-agg.js'
 import { checkRowCount, meterTick } from './limits.js'
 import type { HierNode, Row, TransformContext } from './transform.js'
 import { compileExprTransform, geoPointRadius, getField, resolveSizeParam } from './transform.js'
+import type { GeoProjection } from './geo-projections.js'
+import type { GeoPath, PointRadius } from './geo-path.js'
 import { geoRegistry, requireGeo, transformRegistry } from './registry.js'
 import { registerRuntimeExpressionFunction, type ExpressionRuntime } from './expression.js'
 import { countpatternRows as countpatternStatsRows, densityRows, kdeRows, loessRows, quantileRows, regressionRows } from './transform-stats.js'
@@ -1354,15 +1356,14 @@ function geoAccessor(f: unknown, ctx: TransformContext): (r: Row) => unknown {
 
 function geopointRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
   const projName = String(t.projection)
-  const projection = ctx.projections?.get(projName)
+  const projection = ctx.projections?.get(projName) as GeoProjection | undefined
   if (!projection) throw new Error(`[aster] geopoint: unknown projection "${projName}"`)
   const fields = (t.fields as [unknown, unknown]) ?? ['lon', 'lat']
   const lon = geoAccessor(fields[0], ctx)
   const lat = geoAccessor(fields[1], ctx)
   const as = (t.as as [string, string]) ?? ['x', 'y']
-  const proj = projection as (p: [number, number]) => [number, number] | null
   return rows.map((r) => {
-    const xy = proj([lon(r) as number, lat(r) as number])
+    const xy = projection.project(lon(r) as number, lat(r) as number)
     return xy ? { ...r, [as[0]!]: xy[0], [as[1]!]: xy[1] } : { ...r, [as[0]!]: undefined, [as[1]!]: undefined }
   })
 }
@@ -1371,30 +1372,22 @@ function geopointRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCon
 // geopath (vega-geo GeoPath) — the SVG path of each row's GeoJSON through a named projection
 // ---------------------------------------------------------------------------
 
-type BoundGeoPath = { (geo: unknown): unknown; pointRadius(): unknown; pointRadius(r: unknown): unknown; context(c: unknown): unknown }
-
 function geopathRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
-  // (a geopath without a projection draws with d3's default path: the coordinates as they are)
-  let path: BoundGeoPath | undefined
+  // (a geopath without a projection draws with the default path: the coordinates as they are)
+  let path: GeoPath | undefined
   if (t.projection == null) {
     if (!geoRegistry.defaultPath) requireGeo() // throws: the geo addon is not loaded
-    path = geoRegistry.defaultPath!() as BoundGeoPath
+    path = geoRegistry.defaultPath!() as GeoPath
   } else {
     const projName = String(t.projection)
-    path = (ctx.projections?.get(projName) as { path?: BoundGeoPath } | undefined)?.path
+    path = (ctx.projections?.get(projName) as GeoProjection | undefined)?.path
     if (!path) throw new Error(`[aster] geopath: unknown projection "${projName}"`)
   }
   // (no field: the row itself is the GeoJSON feature)
   const field = t.field == null ? (r: Row): unknown => r : geoAccessor(t.field, ctx)
   const as = (t.as as string | undefined) || 'path'
-  const prev = path.pointRadius()
-  path.context(null)
-  if (t.pointRadius != null) path.pointRadius(geoPointRadius(t.pointRadius, ctx))
-  try {
-    return rows.map((r) => ({ ...r, [as]: path(field(r)) }))
-  } finally {
-    path.pointRadius(prev)
-  }
+  const radius = t.pointRadius != null ? (geoPointRadius(t.pointRadius, ctx) as PointRadius) : undefined
+  return rows.map((r) => ({ ...r, [as]: path.draw(field(r), radius) }))
 }
 
 // ---------------------------------------------------------------------------

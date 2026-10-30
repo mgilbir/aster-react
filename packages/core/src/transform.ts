@@ -168,17 +168,16 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       return rows.map((r) => {
         // vega's field is read off the scenegraph ITEM (`datum["geo"]` is item.datum.geo); a row here is the item's datum
         const geo = field == null || field === 'datum' ? r : getField({ datum: r }, field as string)
-        const p = projection != null
-          ? geoRegistry.projectedPath!(projection, geo, pointRadius)
-          : geoJSONPath(geo)
+        // a projected shape's path and its unrounded bounds (for the bound pass) come from one pass over the geometry
+        const shape = projection != null && as === 'shape' && geoRegistry.projectedShape ? geoRegistry.projectedShape(projection, geo, pointRadius) : undefined
+        const p = shape
+          ? shape.path
+          : projection != null
+            ? geoRegistry.projectedPath!(projection, geo, pointRadius)
+            : geoJSONPath(geo)
         if (p === undefined) return r
         const out = { ...r, [as as string]: p }
-        // the shape's unrounded bounds, for the bound pass (see projectedBounds)
-        if (projection != null && as === 'shape' && geoRegistry.projectedBounds) {
-          const measure = geoRegistry.projectedBounds
-          let memo: ReturnType<typeof measure> | undefined
-          SHAPE_BOUNDS.set(out, () => (memo === undefined ? (memo = measure(projection, geo, pointRadius)) : memo))
-        }
+        if (shape) SHAPE_BOUNDS.set(out, () => shape.bounds)
         return out
       })
     }

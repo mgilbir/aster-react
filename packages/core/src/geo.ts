@@ -1,82 +1,60 @@
 /**
- * Cartographic projections for geo marks, built on the owned d3-geo port (the
- * same library vega uses). A projection turns lon/lat geometry into pixel
- * coordinates; the geoshape transform / shape marks then render it to an SVG
- * path.
+ * Cartographic projections for geo marks and transforms, as vega builds them. A projection turns
+ * lon/lat geometry into pixel coordinates; the geoshape transform and shape marks then render it to an
+ * SVG path (geo-path.ts), and the geopoint transform projects positions (geo-projections.ts).
  */
 import {
-  geoPath, albers as geoAlbers, albersUsa as geoAlbersUsa, geoIdentity, mollweide as geoMollweide,
-  azimuthalEqualArea as geoAzimuthalEqualArea,
-  azimuthalEquidistant as geoAzimuthalEquidistant,
-  conicConformal as geoConicConformal,
-  conicEqualArea as geoConicEqualArea,
-  conicEquidistant as geoConicEquidistant,
-  equalEarth as geoEqualEarth, equirectangular as geoEquirectangular,
-  gnomonic as geoGnomonic, mercator as geoMercatorDefault,
-  naturalEarth1 as geoNaturalEarth1, orthographic as geoOrthographic,
-  stereographic as geoStereographic, transverseMercator as geoTransverseMercator,
+  albers, albersUsa, azimuthalEqualArea, azimuthalEquidistant, conicConformal, conicEqualArea, conicEquidistant,
+  equalEarth, equirectangular, gnomonic, identity, mercator, mollweide, naturalEarth1, orthographic, stereographic,
+  transverseMercator, type GeoProjection,
 } from './geo-projections.js'
-
-type GeoProjection = any
-
-const geoMercator: () => any = geoMercatorDefault
+import { GeoPath, PathWriter, ShapeBounds, Tee, type PointRadius } from './geo-path.js'
 
 type Factory = () => GeoProjection
 
 /**
- * vega-projection's registry, by lower-cased type. `projection(type)` lower-cases
- * the name it is asked for, so `naturalEarth1`, `NaturalEarth1` and
- * `naturalearth1` are one projection; a name outside this set (`robinson`,
- * `albers-usa`, ...) is unrecognised, and building one throws.
+ * vega-projection's registry, by lower-cased type. `projection(type)` lower-cases the name it is asked
+ * for, so `naturalEarth1`, `NaturalEarth1` and `naturalearth1` are one projection; a name outside this
+ * set (`robinson`, `albers-usa`, ...) is unrecognised, and building one throws.
  */
 const FACTORIES: Record<string, Factory> = Object.assign(Object.create(null), {
-  albers: geoAlbers,
-  albersusa: geoAlbersUsa,
-  azimuthalequalarea: geoAzimuthalEqualArea,
-  azimuthalequidistant: geoAzimuthalEquidistant,
-  conicconformal: geoConicConformal,
-  conicequalarea: geoConicEqualArea,
-  conicequidistant: geoConicEquidistant,
-  equalearth: geoEqualEarth,
-  equirectangular: geoEquirectangular,
-  gnomonic: geoGnomonic,
-  identity: geoIdentity,
-  mercator: geoMercator,
-  mollweide: geoMollweide,
-  naturalearth1: geoNaturalEarth1,
-  orthographic: geoOrthographic,
-  stereographic: geoStereographic,
-  transversemercator: geoTransverseMercator,
+  albers,
+  albersusa: albersUsa,
+  azimuthalequalarea: azimuthalEqualArea,
+  azimuthalequidistant: azimuthalEquidistant,
+  conicconformal: conicConformal,
+  conicequalarea: conicEqualArea,
+  conicequidistant: conicEquidistant,
+  equalearth: equalEarth,
+  equirectangular,
+  gnomonic,
+  identity,
+  mercator,
+  mollweide,
+  naturalearth1: naturalEarth1,
+  orthographic,
+  stereographic,
+  transversemercator: transverseMercator,
 })
-
-/** vega-projection `projectionProperties`, in the order the Projection transform applies them. */
-const PROJECTION_PROPERTIES = [
-  // standard properties in d3-geo
-  'clipAngle', 'clipExtent', 'scale', 'translate', 'center', 'rotate', 'parallels', 'precision', 'reflectX', 'reflectY',
-  // extended properties in d3-geo-projections
-  'coefficient', 'distance', 'fraction', 'lobes', 'parallel', 'radius', 'ratio', 'spacing', 'tilt',
-]
 
 /** A projection spec with all signal values resolved (vega-parser's projection parameters). */
 export interface ResolvedProjection {
   name: string
   type: string
-  /** Every other parameter: the d3 projection properties, `pointRadius`, `fit`, `size`, `extent`. */
+  /** Every other parameter: the projection properties, `pointRadius`, `fit`, `size`, `extent`. */
   [param: string]: unknown
 }
 
-/** vega-projection `projection(type)`: the factory for a type name, case-insensitively; null if unknown. */
+/** The factory for a projection type name, case-insensitively; null if there is none. */
 function projectionFactory(type: string): Factory | null {
   if (!type || typeof type !== 'string') throw new Error('Projection type must be a name string.')
   return FACTORIES[type.toLowerCase()] ?? null
 }
 
-function array(_: unknown): unknown[] {
-  return _ != null ? (Array.isArray(_) ? _ : [_]) : []
-}
+const array = (value: unknown): unknown[] => (value != null ? (Array.isArray(value) ? value : [value]) : [])
 
 function featurize(f: unknown): unknown[] {
-  // `f.type` on a null member throws, as upstream's does
+  // `f.type` on a null member throws, as vega's does
   return (f as { type?: unknown }).type === 'FeatureCollection'
     ? (f as { features: unknown[] }).features
     : array(f)
@@ -84,7 +62,7 @@ function featurize(f: unknown): unknown[] {
         .map((d) => ((d as { type?: unknown }).type === 'Feature' ? d : { type: 'Feature', geometry: d }))
 }
 
-/** vega-geo `collectGeoJSON`: one GeoJSON object out of a GeoJSON value or a list of them. */
+/** One GeoJSON object out of a GeoJSON value or a list of them (several become a FeatureCollection). */
 export function collectGeoJSON(data: unknown): unknown {
   const list = array(data)
   return list.length === 1
@@ -92,19 +70,12 @@ export function collectGeoJSON(data: unknown): unknown {
     : { type: 'FeatureCollection', features: list.reduce<unknown[]>((a, f) => a.concat(featurize(f)), []) }
 }
 
-/** vega-geo Projection transform `fit`: scale/translate the projection to the data's bounds. */
-function fit(proj: GeoProjection, _: Record<string, unknown>): void {
-  const data = collectGeoJSON(_.fit)
-  if (_.extent) proj.fitExtent(_.extent, data)
-  else if (_.size) proj.fitSize(_.size, data)
-}
-
 /**
- * The vega-geo Projection transform: create the projection for `type`, apply the
- * parameters the spec provides (each only when the projection has that property -
- * geoIdentity has no center/rotate, for instance - and otherwise d3's own per-type
- * defaults stay), set the bound path's `pointRadius`, then `fit` to the data when
- * asked. An unrecognised type throws, as upstream.
+ * Make the projection a vega projection definition describes: create the projection for `type`, apply
+ * the parameters the spec provides (each only when the projection has that property -- the identity
+ * projection has no centre or rotation, for instance -- and otherwise the projection's own defaults
+ * stay), set the radius its path draws points with, then fit it to the data when asked. An unrecognised
+ * type throws.
  */
 export function buildProjection(spec: ResolvedProjection, _width?: number, _height?: number): GeoProjection {
   void _width
@@ -113,85 +84,50 @@ export function buildProjection(spec: ResolvedProjection, _width?: number, _heig
   const factory = projectionFactory(type)
   if (!factory) throw new Error('Unrecognized projection type: ' + type)
   const p = factory()
-  p.type = type.toLowerCase() // the registry key, as vega-projection's `create` sets it
-  // vega-projection binds a persistent geoPath to each projection (`p.path`)
-  p.path = geoPath(p)
-  for (const prop of PROJECTION_PROPERTIES) {
-    if (spec[prop] != null && typeof p[prop] === 'function') p[prop](spec[prop])
+  p.type = type.toLowerCase()
+  p.configure(spec)
+  if (spec.pointRadius != null) p.path.pointRadius = typeof spec.pointRadius === 'function' ? (spec.pointRadius as PointRadius) : +(spec.pointRadius as number)
+  if (spec.fit) {
+    const data = collectGeoJSON(spec.fit)
+    if (spec.extent) p.fitExtent(spec.extent as number[][], data)
+    else if (spec.size) p.fitSize(spec.size as number[], data)
   }
-  if (spec.pointRadius != null) p.path.pointRadius(spec.pointRadius)
-  if (spec.fit) fit(p, spec)
   return p
 }
 
 /**
- * Render GeoJSON to an SVG path via a projection. A shape the projection clips
- * away entirely yields '' (vega's geoPath does the same; the empty path keeps
- * the row so its path item bounds stay empty rather than falling back to a
+ * Render GeoJSON to an SVG path through a projection. A shape the projection clips away entirely yields
+ * '' (the empty path keeps the row, so its path item bounds stay empty rather than falling back to a
  * point bound at the origin).
  */
 export function projectedPath(projection: GeoProjection, geo: unknown, pointRadius?: unknown): string {
-  // Use the projection's persistent bound path when present: it carries the
-  // projection's pointRadius (and any per-transform overrides applied to it).
-  const g = (projection as { path?: PointPath }).path
-  if (g && pointRadius != null) return withPointRadius(g, pointRadius, () => g(geo) as string | undefined) ?? ''
-  const d = g ? (g(geo) as string | undefined) : (geoPath(projection)(geo as never) as string | undefined)
-  return d ?? ''
-}
-
-type PointPath = { (geo: unknown): unknown; pointRadius(): unknown; pointRadius(r: unknown): unknown }
-
-/** vega-geo GeoShape: the path draws points with the given radius (a number, or a function of the GeoJSON object) for one shape, then restores it. */
-function withPointRadius<T>(path: PointPath, radius: unknown, run: () => T): T {
-  const prev = path.pointRadius()
-  path.pointRadius(radius)
-  try {
-    return run()
-  } finally {
-    path.pointRadius(prev)
-  }
+  return projection.path.draw(geo, (pointRadius ?? undefined) as PointRadius | undefined) ?? ''
 }
 
 /**
- * The bounds of a projected shape from its UNROUNDED geometry: vega-scenegraph bounds a `shape` item by
- * running the shape generator through a bounding context (boundContext), not by parsing the 3-digit path
- * string it draws, so a shape that touches a pixel boundary can sit a hair past it and move an ulp-exact
- * layout (`ceil`, a grid's row height). `null` for a shape that draws nothing.
+ * What a shape draws: its SVG path, and its bounds from the UNROUNDED geometry. vega-scenegraph bounds a `shape`
+ * item by running the shape generator through a bounding context, not by parsing the 3-digit path string it draws,
+ * so a shape that touches a pixel boundary can sit a hair past it and move an ulp-exact layout (`ceil`, a grid's
+ * row height). `bounds` is null for a shape that draws nothing; `path` is '' then (the empty path keeps the row,
+ * so its path item bounds stay empty rather than falling back to a point bound at the origin).
  */
-export function projectedBounds(projection: GeoProjection, geo: unknown, pointRadius?: unknown): [number, number, number, number] | null {
-  const g = (projection as { path?: { context(c?: unknown): unknown; (geo: unknown): unknown } }).path
-  if (!g) return null
-  let x1 = +Number.MAX_VALUE
-  let y1 = +Number.MAX_VALUE
-  let x2 = -Number.MAX_VALUE
-  let y2 = -Number.MAX_VALUE
-  // vega's boundContext maps every point through its (identity) rotation, `1*x + 0*y`, which turns a point at infinity
-  // (a clip that degenerates: stereographic at clipAngle 0 emits `LInfinity,NaN`) into NaN, and NaN extends nothing
-  const addp = (px: number, py: number): void => add(1 * px + 0 * py, 0 * px + 1 * py)
-  const add = (x: number, y: number): void => {
-    if (x < x1) x1 = x
-    if (x > x2) x2 = x
-    if (y < y1) y1 = y
-    if (y > y2) y2 = y
-  }
-  g.context({
-    beginPath() {},
-    closePath() {},
-    moveTo: addp,
-    lineTo: addp,
-    // d3's point radius is a full circle
-    arc(cx: number, cy: number, r: number) {
-      add(cx - r, cy - r)
-      add(cx + r, cy + r)
-    },
-  })
-  try {
-    if (pointRadius != null) withPointRadius(g as unknown as PointPath, pointRadius, () => g(geo))
-    else g(geo)
-  } finally {
-    g.context(null)
-  }
-  return x1 === +Number.MAX_VALUE ? null : [x1, y1, x2, y2]
+export function projectedShape(
+  projection: GeoProjection,
+  geo: unknown,
+  pointRadius?: unknown,
+): { path: string; bounds: [number, number, number, number] | null } {
+  const path = projection.path
+  if (!geo) return { path: '', bounds: null }
+  const radius = path.radiusFor(geo, (pointRadius ?? undefined) as PointRadius | undefined)
+  const writer = new PathWriter(path.digits, radius)
+  const box = new ShapeBounds(radius)
+  path.feed(geo, new Tee(writer, box))
+  return { path: writer.result() ?? '', bounds: box.result() }
 }
 
-export type { GeoProjection }
+/** The unrounded bounds of a projected shape (see `projectedShape`); null for a shape that draws nothing. */
+export function projectedBounds(projection: GeoProjection, geo: unknown, pointRadius?: unknown): [number, number, number, number] | null {
+  return projectedShape(projection, geo, pointRadius).bounds
+}
+
+export { GeoPath, type GeoProjection }

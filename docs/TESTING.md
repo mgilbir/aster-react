@@ -92,6 +92,7 @@ broke CI once, Node 22 against Node 26):
 |---|---|---|---|
 | vega-scale: op programs, DST programs, scheme registry, tick helpers | `differential-vega-scale.test.mts` | `vega-scale-cases.mjs` | 43 + 2 + 68 + 60 |
 | d3-geo projections and `geoPath`, d3-contour | `differential-d3-geo.test.mts` | `d3-geo-cases.mjs` | 18 + 30 (geo twice, see below) |
+| the geo engine over seeded random GeoJSON and random projection parameters, every projection type, fits, spherical measures, whole specs | `differential-geo-generated.test.mts` | `geo-gen.mts` | 17 types x (36 + 14) + 6 x 17 fit-width/height + 600 spherical + 90 specs |
 | d3-shape lines, areas, curve families | `differential-d3-shape.test.mts` | `d3-shape-cases.mjs` | 247 + 9 (each twice, see below) |
 | vega-expression parser and vega-interpreter evaluator (all five kinds) | `differential-vega-expression.test.mts` | `vega-expression-cases.mjs` | 92 + 23 + 74 + 18 + 10 |
 
