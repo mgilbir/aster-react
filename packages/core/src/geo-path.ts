@@ -8,7 +8,7 @@
  */
 import { Adder } from './arr.js'
 import {
-  Events, LINE_END, LINE_START, POINT, POLYGON_END, POLYGON_START, SPHERE, forEachChunk,
+  BATCH, Events, LINE_END, LINE_START, POINT, POLYGON_END, POLYGON_START, SPHERE, forEachChunk,
 } from './geo-events.js'
 
 /** What a geometry pipeline offers a path: its planar events for a spherical input. */
@@ -68,11 +68,15 @@ export class PathWriter implements PlanarSink {
   }
 
   add(ev: Events): void {
+    for (let i = 0, n = ev.length; i < n; i += BATCH) this.range(ev, i, Math.min(n, i + BATCH))
+  }
+
+  private range(ev: Events, from: number, to: number): void {
     const { k, radius } = this
     let s = this.s
     let inPolygon = this.inPolygon
     let vertex = this.vertex
-    for (let i = 0, n = ev.length; i < n; i++) {
+    for (let i = from; i < to; i++) {
       switch (ev.op[i]) {
         case POLYGON_START:
           inPolygon = true
@@ -143,8 +147,12 @@ export class ShapeBounds implements PlanarSink {
   }
 
   add(ev: Events): void {
+    for (let i = 0, n = ev.length; i < n; i += BATCH) this.range(ev, i, Math.min(n, i + BATCH))
+  }
+
+  private range(ev: Events, from: number, to: number): void {
     const { radius } = this
-    for (let i = 0; i < ev.length; i++) {
+    for (let i = from; i < to; i++) {
       switch (ev.op[i]) {
         case LINE_START:
           this.atLine = true
@@ -209,7 +217,11 @@ abstract class Walker implements PlanarSink {
   protected polygonEnd(): void {}
 
   add(ev: Events): void {
-    for (let i = 0; i < ev.length; i++) {
+    for (let i = 0, n = ev.length; i < n; i += BATCH) this.range(ev, i, Math.min(n, i + BATCH))
+  }
+
+  private range(ev: Events, from: number, to: number): void {
+    for (let i = from; i < to; i++) {
       switch (ev.op[i]) {
         case POLYGON_START:
           this.inPolygon = true
@@ -280,8 +292,12 @@ export class BoundsBox implements PlanarSink {
   private y1 = -Infinity
 
   add(ev: Events): void {
+    for (let i = 0, n = ev.length; i < n; i += BATCH) this.range(ev, i, Math.min(n, i + BATCH))
+  }
+
+  private range(ev: Events, from: number, to: number): void {
     let { x0, y0, x1, y1 } = this
-    for (let i = 0, n = ev.length; i < n; i++) {
+    for (let i = from; i < to; i++) {
       if (ev.op[i] === POINT) {
         const x = ev.x[i]!
         const y = ev.y[i]!

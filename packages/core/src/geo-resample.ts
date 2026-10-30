@@ -6,7 +6,7 @@
  * projection strays from the chord by more than the precision (or the arc spans a long angle, or the
  * midpoint is not near the middle of the chord), down to a bounded depth.
  */
-import { Events, LINE_END, LINE_START, POINT, POLYGON_END, POLYGON_START } from './geo-events.js'
+import { BATCH, Events, LINE_END, LINE_START, POINT, POLYGON_END, POLYGON_START } from './geo-events.js'
 import { EPSILON, RADIANS, asinClamped } from './geo-sphere.js'
 
 /** Something that maps radians (lambda, phi) to planar coordinates, writing them into `out`. */
@@ -99,12 +99,12 @@ class Resampler {
   }
 
   run(ev: Events): Events {
-    // in batches: a loop that runs long inside one call makes V8 compile it a second time for the loop alone
-    for (let i = 0, n = ev.length; i < n; i += 128) this.range(ev, i, Math.min(n, i + 128))
+    // in batches (see BATCH)
+    for (let i = 0, n = ev.length; i < n; i += BATCH) this.resampleRange(ev, i, Math.min(n, i + BATCH))
     return this.out
   }
 
-  private range(ev: Events, from: number, to: number): void {
+  private resampleRange(ev: Events, from: number, to: number): void {
     const { out } = this
     for (let i = from; i < to; i++) {
       const src = (this.src = ev.src[i]!)

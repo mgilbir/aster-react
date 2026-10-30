@@ -7,7 +7,7 @@
  * where pieces leave and re-enter (`rejoin`), so a polygon that crosses the boundary stays a polygon.
  */
 import {
-  Events, LINE_END, LINE_START, POINT, POLYGON_END, POLYGON_START, Run, SPHERE,
+  BATCH, Events, LINE_END, LINE_START, POINT, POLYGON_END, POLYGON_START, Run, SPHERE,
 } from './geo-events.js'
 import {
   EPSILON, HALF_PI, PI, RADIANS, TAU, type Ring, type Vec3, acosClamped, addTo, cross, dot, lonLat, normalize, polygonContains,
@@ -499,9 +499,6 @@ function emitBoundaryRing(clipper: Boundary, out: Events, src: number): void {
   out.mark(LINE_END, src)
 }
 
-/** How many events a stage handles per call of its loop body. */
-const BATCH = 128
-
 /** The state of clipping one buffer to a region of the sphere; one small method per kind of event. */
 class SphereClip {
   readonly out: Events
@@ -583,11 +580,11 @@ class SphereClip {
 
   run(): Events {
     // in batches: a loop that runs long inside one call makes V8 compile it a second time for the loop alone
-    for (let i = 0, n = this.ev.length; i < n; i += BATCH) this.range(i, Math.min(n, i + BATCH))
+    for (let i = 0, n = this.ev.length; i < n; i += BATCH) this.clipRange(i, Math.min(n, i + BATCH))
     return this.out
   }
 
-  private range(from: number, to: number): void {
+  private clipRange(from: number, to: number): void {
     const { ev, out, clipper } = this
     for (let i = from; i < to; i++) {
       const src = ev.src[i]!
@@ -758,9 +755,61 @@ export class Rectangle {
     return winding
   }
 
-  /** Clip planar events to this rectangle. */
+  /**
+   * Whether clipping `ev` could only give it back: every vertex lies strictly inside, every line has a vertex and every polygon a
+   * ring (the clip drops the empty ones), so that no ring can wind about the corner either.
+   */
+  private holds(ev: Events): boolean {
+    const { x0, y0, x1, y1 } = this
+    let line = -1 // the vertices of the open line, -1 outside one
+    let rings = 0
+    for (let i = 0, n = ev.length; i < n; i++) {
+      switch (ev.op[i]) {
+        case POINT: {
+          const x = ev.x[i]!
+          const y = ev.y[i]!
+          if (!(x0 < x && x < x1 && y0 < y && y < y1)) return false
+          if (line >= 0) line++
+          break
+        }
+        case LINE_START:
+          line = 0
+          break
+        case LINE_END:
+          if (line < 1) return false
+          line = -1
+          rings++
+          break
+        case POLYGON_START:
+          rings = 0
+          break
+        case POLYGON_END:
+          if (!rings) return false
+          break
+        default:
+          return false
+      }
+    }
+    return true
+  }
+
+  /**
+   * Clip planar events to this rectangle. Events that the clip would leave as they are come back as they are (`ev` itself),
+   * numbered as the clip would have numbered them: by the vertex a line starts at and the end of a polygon, which is how a
+   * composite of projections merges its parts.
+   */
   clip(ev: Events): Events {
-    return new RectClip(this, ev).run()
+    if (!this.holds(ev)) return new RectClip(this, ev).run()
+    let polygon = -1 // where the polygon being walked starts
+    for (let i = 0, n = ev.length; i < n; i++) {
+      const op = ev.op[i]
+      if (op === POLYGON_START) polygon = i
+      else if (op === POLYGON_END) {
+        ev.src.fill(ev.src[i]!, polygon, i)
+        polygon = -1
+      } else if (op === LINE_START && polygon < 0) ev.src[i] = ev.src[i + 1]!
+    }
+    return ev
   }
 }
 
@@ -886,11 +935,11 @@ class RectClip {
   }
 
   run(): Events {
-    for (let i = 0, n = this.ev.length; i < n; i += BATCH) this.range(i, Math.min(n, i + BATCH))
+    for (let i = 0, n = this.ev.length; i < n; i += BATCH) this.rectRange(i, Math.min(n, i + BATCH))
     return this.out
   }
 
-  private range(from: number, to: number): void {
+  private rectRange(from: number, to: number): void {
     const { ev, rect, out } = this
     for (let i = from; i < to; i++) {
       this.src = ev.src[i]!

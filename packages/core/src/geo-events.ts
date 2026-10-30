@@ -19,6 +19,9 @@ export const POLYGON_START = 3
 export const POLYGON_END = 4
 export const SPHERE = 5
 
+/** How many events a stage handles per call of its loop body: a loop that runs long inside one call makes V8 compile it a second time. */
+export const BATCH = 128
+
 /** Buffers that have been given back, ready to be taken again (typed arrays cost microseconds to allocate). */
 const free: Events[] = []
 /** The recycled buffers hold at most this many events in all (about 3 MB); a buffer that does not fit is left to the garbage collector. */

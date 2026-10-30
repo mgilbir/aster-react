@@ -415,7 +415,7 @@ class SphericalProjection extends PlacedProjection {
     clipped.release()
     if (!this.rect) return projected
     const out = this.rect.clip(projected)
-    projected.release()
+    if (out !== projected) projected.release()
     return out
   }
 
@@ -584,7 +584,7 @@ class IdentityProjection extends PlacedProjection {
     }
     if (!this.rect) return ev
     const out = this.rect.clip(ev)
-    ev.release()
+    if (out !== ev) ev.release()
     return out
   }
 }

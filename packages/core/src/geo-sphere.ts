@@ -5,7 +5,7 @@
  * Longitudes and latitudes are radians here unless a name says degrees.
  */
 import { Adder } from './arr.js'
-import { POINT, type Events, type Run } from './geo-events.js'
+import { BATCH, POINT, type Events, type Run } from './geo-events.js'
 
 export const EPSILON = 1e-6
 export const EPSILON2 = 1e-12
@@ -81,13 +81,18 @@ export class Rotation {
     this.sinGamma = Math.sin(gamma)
   }
 
+  private readonly at = [0, 0]
+
   /** Convert the point events from degrees to radians and rotate them, in place. */
   rotateEvents(ev: Events): void {
+    for (let i = 0, n = ev.length; i < n; i += BATCH) this.rotateRange(ev, i, Math.min(n, i + BATCH))
+  }
+
+  private rotateRange(ev: Events, from: number, to: number): void {
     const { op, x, y } = ev
-    const n = ev.length
     if (this.tilts) {
-      const at = [0, 0]
-      for (let i = 0; i < n; i++) {
+      const { at } = this
+      for (let i = from; i < to; i++) {
         if (op[i] === POINT) {
           this.forward(x[i]! * RADIANS, y[i]! * RADIANS, at)
           x[i] = at[0]!
@@ -98,7 +103,7 @@ export class Rotation {
     }
     // without a tilt a rotation only turns the longitude, and keeps it within a half turn of the meridian
     const turn = this.lambda
-    for (let i = 0; i < n; i++) {
+    for (let i = from; i < to; i++) {
       if (op[i] === POINT) {
         let lambda = x[i]! * RADIANS
         if (turn) lambda += turn
