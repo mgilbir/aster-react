@@ -246,11 +246,11 @@ const prefixes = ['y', 'z', 'a', 'f', 'p', 'n', 'µ', 'm', '', 'k', 'M', 'G', 'T
 export function formatLocale(locale: FormatLocaleDefinition): FormatLocale {
   const group = locale.grouping === undefined || locale.thousands === undefined
     ? identity
-    : formatGroup(Array.prototype.map.call(locale.grouping, Number), locale.thousands + '')
+    : formatGroup(Array.prototype.map.call(locale.grouping, Number) as number[], locale.thousands + '')
   const currencyPrefix = locale.currency === undefined ? '' : locale.currency[0] + ''
   const currencySuffix = locale.currency === undefined ? '' : locale.currency[1] + ''
   const decimal = locale.decimal === undefined ? '.' : locale.decimal + ''
-  const numerals = locale.numerals === undefined ? identity : formatNumerals(Array.prototype.map.call(locale.numerals, String))
+  const numerals = locale.numerals === undefined ? identity : formatNumerals(Array.prototype.map.call(locale.numerals, String) as string[])
   const percent = locale.percent === undefined ? '%' : locale.percent + ''
   const minus = locale.minus === undefined ? '−' : locale.minus + ''
   const nan = locale.nan === undefined ? 'NaN' : locale.nan + ''
