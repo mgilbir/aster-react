@@ -39,13 +39,30 @@ describe('orientation vs robust-predicates orient2d', () => {
       let [bx, by] = p() as [number, number]
       let cx: number
       let cy: number
-      switch (r.int(7)) {
+      switch (r.int(9)) {
         case 0: [cx, cy] = p() as [number, number]; break
         case 1: { const t = r.next(); cx = ax + t * (bx - ax); cy = ay + t * (by - ay); break }
         case 2: { const t = r.next() * 3 - 1; cx = nudge(ax + t * (bx - ax), r.int(5) - 2); cy = nudge(ay + t * (by - ay), r.int(5) - 2); break }
         case 3: { const k = r.pick([1, 2, 3, 0.5, 10]); ax = r.int(50) * k; ay = r.int(50) * k; bx = r.int(50) * k; by = r.int(50) * k; const t = r.int(5); cx = ax + t * (bx - ax); cy = ay + t * (by - ay); break }
         case 4: { const t = r.pick([0.1, 0.3, 0.7]); cx = ax + t * (bx - ax); cy = ay + t * (by - ay); cx = nudge(cx, r.int(3) - 1); break }
         case 5: [cx, cy] = [ax, ay]; break
+        case 6: {
+          // points of very different magnitudes on (nearly) one line: the differences are not exact
+          const big = r.pick([1, 1e3, 1e8, 1e15])
+          const tiny = r.pick([1e-20, 1e-12, 1e-3])
+          ax = r.pick([1, 2, 3]) * big; ay = r.pick([1, 2, 3]) * big
+          bx = ax + r.pick([1, 2, 4]) * big; by = ay + r.pick([1, 2, 4]) * big
+          cx = r.pick([0, 1, 2]) * tiny + (r.int(2) ? ax : bx); cy = r.pick([0, 1, 2]) * tiny + (r.int(2) ? ay : by)
+          break
+        }
+        case 7: {
+          // only one of the four differences is inexact: a = 1 against c = t makes a - c round, the others do not
+          const t = 2 ** -(54 + r.int(16)) * r.pick([1, 3, 5])
+          ;[ax, ay, bx, cx, cy] = [1, 1, 3 * t, t, 0]
+          by = nudge(2 * t, r.int(9) - 4)
+          if (r.int(2)) [ax, ay, bx, by, cx, cy] = [ay, ax, by, bx, cy, cx]
+          break
+        }
         default: { cx = nudge(ax, r.int(7) - 3); cy = nudge(ay, r.int(7) - 3); bx = nudge(ax, r.int(7) - 3); by = nudge(ay, r.int(7) - 3) }
       }
       const want = sign(orient2d(ax, ay, bx, by, cx, cy))
@@ -85,6 +102,19 @@ describe('triangulate vs delaunator', () => {
       expect(triangles).toBeGreaterThanOrEqual(mode === 'equal' || mode === 'diagonal' || mode === 'row' || mode === 'column' || mode === 'oneLine' ? 0 : 400)
     })
   }
+
+  it('large collinear and repeated sets (2000 points) give the same degenerate hull', () => {
+    const r = seeded(7)
+    for (const mode of ['diagonal', 'row', 'column', 'oneLine', 'equal'] as const) {
+      const rows = points(r, mode, 2000)
+      const coords = new Float64Array(rows.length * 2)
+      rows.forEach((row, j) => { coords[2 * j] = row.x as number; coords[2 * j + 1] = row.y as number })
+      const want = new Delaunator(coords.slice())
+      const got = triangulate(coords.slice())
+      expect(Array.from(got.hull), mode).toEqual(Array.from(want.hull))
+      expect(got.triangles.length, mode).toBe(want.triangles.length)
+    }
+  })
 
   it('a large scattered set (20000 points) and a large lattice give the same triangulation', () => {
     const r = seeded(1)
