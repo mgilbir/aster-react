@@ -15,33 +15,11 @@ import { sanitizeHref } from './url-policy.js'
 import { imageBox, imageHref, itemImage } from './image-box.js'
 import type { ScaleSnapshots } from './guide-caption.js'
 export { ClipCollector, type ClipDef }
-import {
-  line as d3Line,
-  area as d3Area,
-  curveLinear,
-  curveBasis,
-  curveBasisClosed,
-  curveBasisOpen,
-  curveBundle,
-  curveCardinal,
-  curveCardinalClosed,
-  curveCardinalOpen,
-  curveCatmullRom,
-  curveCatmullRomClosed,
-  curveCatmullRomOpen,
-  curveLinearClosed,
-  curveMonotoneX,
-  curveMonotoneY,
-  curveNatural,
-  curveStep,
-  curveStepAfter,
-  curveStepBefore,
-  Path,
-} from './shape.js'
+import { areaPath, ArcPathWriter, linePath, resolveCurve } from './shape.js'
 
 /**
- * Path data built only from `num`/`num3` output (or d3 `Path`, which coerces
- * every coordinate with unary plus) and constant command letters: it cannot
+ * Path data built only from `num`/`num3` output (or a `PathWriter`, which writes
+ * only numbers) and constant command letters: it cannot
  * contain markup-significant characters, so `genD` writes it without the
  * escaping scan. Anything not produced by one of the generators below (item
  * `path` fields, clip paths from a scene) is plain `string` and must go through
@@ -55,63 +33,11 @@ const gen = (s: string): GeneratedPath => s as GeneratedPath
 // it is produced (C49). With no limits scope active it is one boolean load.
 const genD = (d: GeneratedPath): string => { if (metering) checkPathLength(d); return d }
 
-/**
- * Map Vega interpolation names to d3-shape curve constructors.
- * Matches vega-scenegraph/src/path/curves.js.
- */
-const CURVE_MAP: Record<string, unknown> = {
-  'basis': curveBasis,
-  'basis-closed': curveBasisClosed,
-  'basis-open': curveBasisOpen,
-  'bundle': curveBundle,
-  'cardinal': curveCardinal,
-  'cardinal-closed': curveCardinalClosed,
-  'cardinal-open': curveCardinalOpen,
-  'catmull-rom': curveCatmullRom,
-  'catmull-rom-closed': curveCatmullRomClosed,
-  'catmull-rom-open': curveCatmullRomOpen,
-  'linear': curveLinear,
-  'linear-closed': curveLinearClosed,
-  'monotone-x': curveMonotoneX,
-  'monotone-y': curveMonotoneY,
-  'natural': curveNatural,
-  'step': curveStep,
-  'step-after': curveStepAfter,
-  'step-before': curveStepBefore,
-}
-
-// vega-scenegraph path/shapes.js: the generators are built once; each call sets its curve (and digits) and runs it
-const itemX = (d: unknown): number => ((d as SceneItem).x as number) || 0
-const itemY = (d: unknown): number => ((d as SceneItem).y as number) || 0
-const itemXW = (d: unknown): number => (((d as SceneItem).x as number) || 0) + (((d as SceneItem).width as number) || 0)
-const itemYH = (d: unknown): number => (((d as SceneItem).y as number) || 0) + (((d as SceneItem).height as number) || 0)
-const itemDefined = (d: unknown): boolean => !((d as SceneItem).defined === false)
-const lineShape = d3Line().x(itemX).y(itemY).defined(itemDefined)
-const areaVShape = d3Area().x(itemX).y1(itemY).y0(itemYH).defined(itemDefined)
-const areaHShape = d3Area().y(itemY).x1(itemX).x0(itemXW).defined(itemDefined)
-
-/**
- * vega-scenegraph path/curves.js: the d3-shape curve named by an `interpolate` value (`monotone` follows the
- * orientation; `bundle` / `cardinal*` / `catmull-rom*` take the tension as beta / tension / alpha). An absent
- * or unknown name is the linear curve.
- */
-function vegaCurve(interpolate: string | undefined, orient: string | undefined, tension: number | undefined): unknown {
-  const type = interpolate || 'linear'
-  let curve: unknown
-  if (type === 'monotone') curve = orient === 'horizontal' ? curveMonotoneY : curveMonotoneX
-  else if (Object.hasOwn(CURVE_MAP, type)) curve = CURVE_MAP[type]
-  else return curveLinear
-  if (tension != null) {
-    const cf = curve as Record<string, ((v: number) => unknown) | undefined>
-    const name = TENSION_PARAM[type]
-    if (name !== undefined && typeof cf[name] === 'function') curve = cf[name]!(tension)
-  }
-  return curve
-}
-const TENSION_PARAM: Record<string, string> = {
-  'bundle': 'beta',
-  'cardinal': 'tension', 'cardinal-open': 'tension', 'cardinal-closed': 'tension',
-  'catmull-rom': 'alpha', 'catmull-rom-open': 'alpha', 'catmull-rom-closed': 'alpha',
+// A line or area mark draws one path through its items, in the curve the first item's `interpolate` names (see
+// `resolveCurve`). Item columns: `x` and `y` are `item.x || 0` and `item.y || 0`, and an item with
+// `defined === false` is a gap (it splits the path, it is not a point).
+function itemCurve(first: Record<string, unknown> | undefined): ReturnType<typeof resolveCurve> {
+  return resolveCurve(first?.interpolate as string | undefined, first?.orient as string | undefined, first?.tension as number | undefined)
 }
 
 /** Vega-scenegraph's rounded-rect path (C = 0.448084975506 bezier circle). */
@@ -354,12 +280,19 @@ export function computeLinePath(group: SceneGroup, exact = false): {
   const items = itemsOf(group)
   if (!items.length) return null
 
-  // vega-scenegraph path/shapes.js: d3's line generator over the items, `x(item) = item.x || 0`, `y` likewise,
-  // `defined(item) = !(item.defined === false)`, the curve named by the first item's `interpolate` (a gap is
-  // the curve's own lineEnd / lineStart, not a closed sub-path)
-  const firstItem = items[0] as Record<string, unknown> | undefined
-  const curve = vegaCurve(firstItem?.interpolate as string | undefined, firstItem?.orient as string | undefined, firstItem?.tension as number | undefined)
-  const path = (lineShape.digits(digits).curve(curve as never)(items as never) ?? '') as string
+  // the items as columns: a gap (`defined === false`) ends the current run of the curve, it is not a closed sub-path
+  const n = items.length
+  const xs = new Float64Array(n)
+  const ys = new Float64Array(n)
+  const live = new Uint8Array(n)
+  for (let i = 0; i < n; i++) {
+    const it = items[i]!
+    if (it.defined === false) continue
+    live[i] = 1
+    xs[i] = (it.x as number) || 0
+    ys[i] = (it.y as number) || 0
+  }
+  const path = linePath(itemCurve(items[0] as Record<string, unknown> | undefined), xs, ys, live, digits)
 
   if (!path) return null
   const stroke = group.items?.[0]?.stroke as string | undefined
@@ -397,12 +330,27 @@ export function computeAreaPath(group: SceneGroup, exact = false): {
   const digits = exact ? null : 3
   const items = itemsOf(group)
 
-  // vega-scenegraph path/shapes.js: d3's area generator, `x(item) = item.x || 0`, the baseline `y + height` (or, for a
-  // horizontal area, `x + width`), `defined(item) = !(item.defined === false)`, the curve named by the first item
-  const firstItem = items[0] as Record<string, unknown> | undefined
-  const curve = vegaCurve(firstItem?.interpolate as string | undefined, firstItem?.orient as string | undefined, firstItem?.tension as number | undefined)
-  const shape = firstItem?.orient === 'horizontal' ? areaHShape : areaVShape
-  const path = (shape.digits(digits).curve(curve as never)(items as never) ?? '') as string
+  // the top boundary is the items' (x, y); the bottom one is at `y + height` (a horizontal area: `x + width`)
+  const first = items[0] as Record<string, unknown> | undefined
+  const horizontal = first?.orient === 'horizontal'
+  const n = items.length
+  const topX = new Float64Array(n)
+  const topY = new Float64Array(n)
+  const baseX = horizontal ? new Float64Array(n) : topX
+  const baseY = horizontal ? topY : new Float64Array(n)
+  const live = new Uint8Array(n)
+  for (let i = 0; i < n; i++) {
+    const it = items[i]!
+    if (it.defined === false) continue
+    live[i] = 1
+    const x = (it.x as number) || 0
+    const y = (it.y as number) || 0
+    topX[i] = x
+    topY[i] = y
+    if (horizontal) baseX[i] = x + ((it.width as number) || 0)
+    else baseY[i] = y + ((it.height as number) || 0)
+  }
+  const path = areaPath(itemCurve(first), topX, topY, baseX, baseY, live, digits)
 
   if (!path) return null
   return {
@@ -926,11 +874,11 @@ function renderTrail(group: SceneGroup, open: string): string {
   return out
 }
 
-/** Compute the vega/d3-trail polygon path for a run of trail items. */
+/** The path of a trail: one capsule per segment of a run of items. */
 export function trailPath(items: SceneItem[]): GeneratedPath {
-  // vega-scenegraph path/trail.js, through the d3-path buffer (full precision: its stringifier emits JS number
-  // strings): x and y are `item.x || 0`, the size `item.size || 1`, an item with `defined === false` ends the run.
-  const context = new Path()
+  // Each segment between consecutive items is a capsule (round caps of the items' widths) written at full precision.
+  // x and y are `item.x || 0`, the size `item.size || 1`; an item with `defined === false` ends the run.
+  const context = new ArcPathWriter()
   let ready = false
   let x1 = 0, y1 = 0, r1 = 0
   const point = (x2: number, y2: number, w2: number): void => {
@@ -970,7 +918,7 @@ export function trailPath(items: SceneItem[]): GeneratedPath {
     }
     if (defined0) point(+((it!.x as number) || 0), +((it!.y as number) || 0), +((it!.size as number) || 1))
   }
-  return gen(context + '')
+  return gen(context.d)
 }
 
 function renderImages(group: SceneGroup, open: string): string {
