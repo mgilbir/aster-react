@@ -9,7 +9,8 @@
  *  - in Chromium, vega on its real canvas against `<Chart>` (runInline compares the pictures), which is what the rasterizer must
  *    reproduce: which pixels of the marks to avoid have any alpha.
  */
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -26,11 +27,14 @@ const SEEDS = Number(process.env.LABEL_SEEDS ?? 160)
 const AREA_SEEDS = Number(process.env.LABEL_AREA_SEEDS ?? 90)
 const BROWSER_SEEDS = Number(process.env.LABEL_BROWSER_SEEDS ?? 40)
 
-function runVega(cases: LabelCase[]): VegaOut {
+// (not execFileSync: the child runs for tens of seconds, and a worker that does not turn its event loop that long loses its RPC to vitest)
+async function runVega(cases: LabelCase[]): Promise<VegaOut> {
   const input = JSON.stringify(cases.map((c) => ({ id: c.id, spec: c.spec, mark: c.mark, dataset: c.dataset })))
-  const out = execFileSync(process.execPath, ['--import', join(HERE, 'label-canvas', 'register.mjs'), join(HERE, 'label-canvas', 'run-vega-batch.mjs')], { input, maxBuffer: 1 << 29 })
-  return JSON.parse(out.toString()) as VegaOut
+  const child = promisify(execFile)(process.execPath, ['--import', join(HERE, 'label-canvas', 'register.mjs'), join(HERE, 'label-canvas', 'run-vega-batch.mjs')], { maxBuffer: 1 << 29, encoding: 'buffer' })
+  child.child.stdin!.end(input)
+  return JSON.parse((await child).stdout.toString()) as VegaOut
 }
+const yieldToLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
 
 function engineRows(c: LabelCase): Row[] {
   const scene = evaluateChart(compileChart(structuredClone(c.spec) as never), {})
@@ -49,7 +53,7 @@ const missing = (v: unknown): boolean => v == null || Number.isNaN(v)
 const same = (a: unknown, b: unknown): boolean => a === b || (typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 1e-9) || (missing(a) && missing(b))
 
 describe('label: generated specs vs vega-label', () => {
-  it(`${SEEDS} generated specs: every label the same x, y, opacity, align and baseline (Node, shared rasterizer)`, { timeout: 600_000 }, () => {
+  it(`${SEEDS} generated specs: every label the same x, y, opacity, align and baseline (Node, shared rasterizer)`, { timeout: 600_000 }, async () => {
     const cases = Array.from({ length: SEEDS }, (_, i) => labelCase(i + 1))
     // the searches for a label inside an area, which the spread above meets a few times: the cells a flood has visited are kept from
     // one label to the next, and whether an area's neighbour has been flooded into shows in one spec of about twelve
@@ -64,12 +68,13 @@ describe('label: generated specs vs vega-label', () => {
       label.size = size
       cases.push({ ...base, id, spec: spec as never })
     }
-    const vega = runVega(cases)
+    const vega = await runVega(cases)
     const bad: string[] = []
     let labels = 0
     let placed = 0
     const kinds = new Set<string>()
     for (const c of cases) {
+      await yieldToLoop()
       const want = vega[c.id]!
       let got: Row[]
       try { got = engineRows(c) } catch (e) {
