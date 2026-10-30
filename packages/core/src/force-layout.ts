@@ -9,7 +9,6 @@
  *  - the placement of a node that has no position (a phyllotaxis spiral by its index).
  * Everything else here (the force objects, how the parameters reach them) is free.
  */
-import { error, hasOwnProperty } from './util.js'
 import { fieldOf } from './transform-agg.js'
 import type { Row, TransformContext } from './transform.js'
 import { compileExprTransform } from './transform.js'
@@ -427,9 +426,9 @@ function numberParam(v: unknown, ctx: TransformContext): unknown {
   return v
 }
 
+// (the kind of every force was checked with the rest of the transform's parameters: see param-rules.ts)
 function buildForce(spec: Record<string, unknown>, ctx: TransformContext): Force {
   const name = spec.force as string
-  if (!hasOwnProperty(FORCE_PARAMS, name)) error('Unrecognized force: ' + name)
   // (only the parameters the spec gives are read: vega-parser does not apply a force's declared defaults, so a collide
   // force has strength 1, not the 0.7 its definition lists)
   const given = (p: string): unknown => (FORCE_PARAMS[name]!.includes(p) ? spec[p] : undefined)

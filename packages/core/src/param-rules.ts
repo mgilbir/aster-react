@@ -71,10 +71,14 @@ const CONTOUR_PARAMS: readonly ParamRule[] = [
   { name: 'thresholds', list: true },
 ]
 const ISOCONTOUR_PARAMS: readonly ParamRule[] = [{ name: 'thresholds', list: true }, { name: 'translate', list: true }]
+const FORCE_PARAMS: readonly ParamRule[] = [
+  { name: 'forces', kinds: ['center', 'collide', 'nbody', 'link', 'x', 'y'].map((force) => ({ force })) },
+]
 
 /** The rules of the transforms that have them, by transform type. */
 export const PARAM_RULES: ReadonlyMap<string, readonly ParamRule[]> = new Map([
   ['kde2d', KDE2D_PARAMS],
   ['contour', CONTOUR_PARAMS],
   ['isocontour', ISOCONTOUR_PARAMS],
+  ['force', FORCE_PARAMS],
 ])
