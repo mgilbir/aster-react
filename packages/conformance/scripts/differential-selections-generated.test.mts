@@ -84,37 +84,32 @@ function scalar(r: Gen, field: string): unknown {
   return r.pick([0, 1, 2, 3, 4, 2.5, -1, null, NaN])
 }
 
-function tuple(r: Gen, unit: string, taken: Set<string> | null): Row | null {
+function tuple(r: Gen, unit: string, enumArrays: boolean): Row {
   const n = 1 + r.int(2)
   const fields: Row[] = []
   const values: unknown[] = []
   for (let i = 0; i < n; i++) {
     const field = r.pick(FIELDS)
-    if (taken) {
-      if (taken.has(field)) continue
-      taken.add(field)
-    }
-    const type = r.pick(TYPES)
+    const type = r.pick(enumArrays ? TYPES : TYPES.filter((t) => t !== 'E-ONE'))
     fields.push({ field, type })
     if (type.startsWith('R')) values.push([scalar(r, field), scalar(r, field)])
     else if (type === 'E-ONE') values.push([scalar(r, field), scalar(r, field)])
-    else if (type === 'E' && r.int(3) === 0) values.push([scalar(r, field), scalar(r, field), scalar(r, field)])
+    else if (type === 'E' && enumArrays && r.int(3) === 0) values.push([scalar(r, field), scalar(r, field), scalar(r, field)])
     else values.push(scalar(r, field))
   }
-  return fields.length ? { unit, fields, values } : null
+  return { unit, fields, values }
 }
 
 /**
- * A random store. With `distinct`, no field occurs in two tuples (or twice in one): upstream's `vlSelectionResolve` grows the
- * value array of the first tuple in place when it merges a second one of the same field (another tuple of the unit, or the
- * same field in another unit) into it, so its result and the store depend on that accident; Aster resolves into fresh arrays and
- * does not reproduce it, so resolve is compared on stores where it cannot arise.
+ * A random store. Without `enumArrays` no tuple enumerates an array of values (`E` with a list, `E-ONE`): upstream's
+ * `vlSelectionResolve` hands the first such tuple's own array out as its accumulator and grows it in place when it merges
+ * another tuple of the same field into it, so its result and the store depend on that accident; Aster resolves into fresh
+ * arrays and does not reproduce it, so resolve is compared on stores where it cannot arise.
  */
-function store(seed: number, distinct: boolean): Row[] {
+function store(seed: number, enumArrays: boolean): Row[] {
   const r = seeded(seed)
   const units = r.pick([[''], ['', 'u1'], ['u1', 'u2'], ['u1', 'u2', 'u3']])
-  const taken = distinct ? new Set<string>() : null
-  return Array.from({ length: r.int(7) }, () => tuple(r, r.pick(units), taken)).filter((t): t is Row => t !== null)
+  return Array.from({ length: r.int(7) }, () => tuple(r, r.pick(units), enumArrays))
 }
 
 function probes(seed: number): Row[] {
@@ -139,9 +134,9 @@ describe('vlSelectionTest / vlSelectionResolve vs vega-selections (generated)', 
       const test = `vlSelectionTest("${STORE}", d${r.pick(OPS)})`
       const resolve = `vlSelectionResolve("${STORE}"${r.pick(RESOLVE)})`
       for (const [expr, ps] of [[test, probes(seed)], [resolve, [null]], [`[${test}, ${resolve}]`, probes(seed + 1)]] as Array<[string, Row[]]>) {
-        const distinct = expr !== test
-        const want = await vegaRun(store(seed, distinct), false, expr, ps)
-        const got = asterRun(store(seed, distinct), false, expr, ps)
+        const enumArrays = expr === test
+        const want = await vegaRun(store(seed, enumArrays), false, expr, ps)
+        const got = asterRun(store(seed, enumArrays), false, expr, ps)
         const mask = (o: Outcome): unknown[] => o.results.map((x, i) => (want.threw[i] ? '(threw)' : x))
         expect({ results: mask(got), store: got.store }, `seed ${seed}: ${expr}`).toEqual({ results: mask(want), store: want.store })
         for (const x of want.results) {
